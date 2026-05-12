@@ -128,9 +128,10 @@ Commit rule: tests/tooling first, documentation updates after.
 
 Continue Phase 4 in this order:
 
-1. `httprequest.dll`: defer until a libcurl-backed, event-safe design is chosen.
-2. Audit remaining graphics/runtime plugins against real game logs before
+1. Audit remaining graphics/runtime plugins against real game logs before
    adding more broad stubs.
+2. Replace selected second-pass stubs with real behavior when a target game or
+   fixture proves the API is needed.
 
 `onigruma` is not tracked as a missing plugin because AetherKiri already links
 Oniguruma in the core TJS regular expression implementation.
@@ -229,6 +230,16 @@ Oniguruma in the core TJS regular expression implementation.
   - Commit: `4b98bc2 Remove obsolete layerExSave stub`
   - Removed the empty `layerExSave.dll` stub from `extrans.cpp` now that the
     real compatibility module is registered.
+- Added second-pass link compatibility stubs for platform-bound plugins.
+  - Commit: `6b21cea Add second-pass platform plugin stubs`
+  - Added explicit registrations for networking (`httprequest`, `httpserv`,
+    `xmlhttprequest`), Win32 automation/UI (`htmlhelp`, `oleclass`, `wsh`,
+    `windowExProgress`, etc.), external graphics/runtime backends
+    (`layerExAgg`, `layerExCairo`, `layerExGdiPlus`, `magickpp`, `squirrel`,
+    `xpressive`), and several utility modules whose behavior is not yet safely
+    portable.
+  - These are intentionally link-only and should be replaced by real
+    implementations only when game logs or fixtures require specific behavior.
 
 ## Verification Notes
 
@@ -267,6 +278,8 @@ Oniguruma in the core TJS regular expression implementation.
   passes.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/extrans.cpp.o -j2`
   passes after removing the obsolete `layerExSave.dll` stub.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/dummy_plugin_stubs.cpp.o -j2`
+  passes after the second-pass platform stubs.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
 - Full `libkrkr2plugin.a` / `krkr2plugin` build is currently blocked before
