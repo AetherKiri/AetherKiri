@@ -128,12 +128,11 @@ Commit rule: tests/tooling first, documentation updates after.
 
 Continue Phase 4 in this order:
 
-1. `imagesaver.dll`: implement the synchronous BMP save path first.
-2. `sqlite3.dll`: implement the synchronous database and statement core before
+1. `sqlite3.dll`: implement the synchronous database and statement core before
    considering thread helpers or `sqlite3_xp3_vfs`.
-3. `layerExSave.dll`: evaluate synchronous image helper methods after
+2. `layerExSave.dll`: evaluate synchronous image helper methods after
    `imagesaver`; defer window-message/threaded save behavior.
-4. `httprequest.dll`: defer until a libcurl-backed, event-safe design is chosen.
+3. `httprequest.dll`: defer until a libcurl-backed, event-safe design is chosen.
 
 `onigruma` is not tracked as a missing plugin because AetherKiri already links
 Oniguruma in the core TJS regular expression implementation.
@@ -209,6 +208,10 @@ Oniguruma in the core TJS regular expression implementation.
   - Added `Layer.drawQRCode(value, ecLevel, qrVersion, autoExtent, maskPattern)`
     using the original QR encoder with cross-platform type/utility
     replacements.
+- Completed the synchronous `imagesaver.dll` BMP path.
+  - Commit: `3c477b5 Implement imagesaver plugin`
+  - Added global `saveLayerImage(layer, filename, "bmp")` with cross-platform
+    BMP header writing and bottom-up layer buffer serialization.
 
 ## Verification Notes
 
@@ -237,6 +240,8 @@ Oniguruma in the core TJS regular expression implementation.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/expat.cpp.o -j2`
   passes.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/qrcode.cpp.o cpp/plugins/CMakeFiles/krkr2plugin.dir/qrcode/QR_Encode.cpp.o -j2`
+  passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/imagesaver.cpp.o -j2`
   passes.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
