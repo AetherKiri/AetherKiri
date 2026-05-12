@@ -183,8 +183,40 @@ REGISTER_EMPTY_PLUGIN(htmlhelp, htmlhelp);
 REGISTER_EMPTY_PLUGIN(httprequest, httprequest);
 
 #undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("drawdevice.dll")
+REGISTER_EMPTY_PLUGIN(drawdevice, drawdevice);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("drawdeviceD3D.dll")
+REGISTER_EMPTY_PLUGIN(drawdeviceD3D, drawdeviceD3D);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("drawdeviceIrrlicht.dll")
+REGISTER_EMPTY_PLUGIN(drawdeviceIrrlicht, drawdeviceIrrlicht);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("drawdeviceOgre.dll")
+REGISTER_EMPTY_PLUGIN(drawdeviceOgre, drawdeviceOgre);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("drawdeviceZ_D3D9.dll")
+REGISTER_EMPTY_PLUGIN(drawdeviceZ_D3D9, drawdeviceZ_D3D9);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("gameswf.dll")
+REGISTER_EMPTY_PLUGIN(gameswf, gameswf);
+
+#undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("httpserv.dll")
 REGISTER_EMPTY_PLUGIN(httpserv, httpserv);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("javascript.dll")
+REGISTER_EMPTY_PLUGIN(javascript, javascript);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("layerEx.dll")
+REGISTER_EMPTY_PLUGIN(layerEx, layerEx);
 
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("xmlhttprequest.dll")
@@ -265,6 +297,14 @@ REGISTER_EMPTY_PLUGIN(layerExGdiPlus, layerExGdiPlus);
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("magickpp.dll")
 REGISTER_EMPTY_PLUGIN(magickpp, magickpp);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("mkpj.dll")
+REGISTER_EMPTY_PLUGIN(mkpj, mkpj);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("onigruma.dll")
+REGISTER_EMPTY_PLUGIN(onigruma, onigruma);
 
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("squirrel.dll")
