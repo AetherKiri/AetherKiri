@@ -6,6 +6,7 @@ TEST_CASE("first-pass compatibility stubs are registered") {
     const tjs_char *modules[] = {
         TJS_W("flashPlayer.dll"),
         TJS_W("layerExSubImage.dll"),
+        TJS_W("layerExSave.dll"),
         TJS_W("gfxEffect.dll"),
         TJS_W("clipboardEx.dll"),
         TJS_W("shellExecute.dll"),
