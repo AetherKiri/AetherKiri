@@ -126,10 +126,8 @@ Commit rule: tests/tooling first, documentation updates after.
 
 ## Current Next Step
 
-Continue Phase 4 with `encode` or `binaryStream`.
+Continue Phase 4 with `binaryStream`.
 
-- `encode` is the lower-risk next port: small API surface and mostly
-  table-driven text conversion.
 - `binaryStream` has broader compatibility value but should be split into core
   read/write/integer/zlib behavior first; Windows DLL filter support should
   remain explicitly unsupported until there is a cross-platform host abstraction.
@@ -164,6 +162,13 @@ Continue Phase 4 with `encode` or `binaryStream`.
   - Commit: `e5fe807 Implement memfile plugin`
   - Added `mem` storage media backed by `tTVPMemoryStream` plus the original
     `Storages.*Memory*` helper methods.
+- Completed a real `encode.dll` implementation.
+  - Commit: `59dd328 Implement encode plugin`
+  - Added global `Encode.encode(str, encoding)` and
+    `Encode.decode(octet, encoding)` for `UTF-8`, `EUC-JP`, and `Shift_JIS`.
+  - Reused the original EUC/JIS mapping tables and implemented Shift_JIS
+    conversion explicitly instead of relying on platform locale narrow-string
+    conversion.
 
 ## Verification Notes
 
@@ -180,6 +185,8 @@ Continue Phase 4 with `encode` or `binaryStream`.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/dummy_plugin_stubs.cpp.o -j2`
   passes after removing the old `clipboardEx.dll` stub registration.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/memfile.cpp.o -j2`
+  passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/encode.cpp.o -j2`
   passes.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
