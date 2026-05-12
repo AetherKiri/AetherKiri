@@ -225,6 +225,10 @@ Oniguruma in the core TJS regular expression implementation.
   - `saveLayerImagePngOctet` remains explicitly unsupported because it needs a
     PNG encoder that returns an octet rather than writing through
     `Layer.saveLayerImage`.
+- Corrected the old link-only `layerExSave.dll` registration.
+  - Commit: `4b98bc2 Remove obsolete layerExSave stub`
+  - Removed the empty `layerExSave.dll` stub from `extrans.cpp` now that the
+    real compatibility module is registered.
 
 ## Verification Notes
 
@@ -261,6 +265,8 @@ Oniguruma in the core TJS regular expression implementation.
   source.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/layerExSaveCompat.cpp.o -j2`
   passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/extrans.cpp.o -j2`
+  passes after removing the obsolete `layerExSave.dll` stub.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
 - Full `libkrkr2plugin.a` / `krkr2plugin` build is currently blocked before
