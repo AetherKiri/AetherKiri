@@ -6,6 +6,7 @@ add_library(${PROJECT_NAME} STATIC)
 target_sources(${PROJECT_NAME} PRIVATE
     scriptsEx.cpp
     base64.cpp
+    lineParser.cpp
     win32dialog.cpp
     dirlist.cpp
     csvParser.cpp
