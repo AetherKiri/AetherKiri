@@ -128,11 +128,9 @@ Commit rule: tests/tooling first, documentation updates after.
 
 Continue Phase 4 in this order:
 
-1. `sqlite3.dll`: implement the synchronous database and statement core before
-   considering thread helpers or `sqlite3_xp3_vfs`.
-2. `layerExSave.dll`: evaluate synchronous image helper methods after
+1. `layerExSave.dll`: evaluate synchronous image helper methods after
    `imagesaver`; defer window-message/threaded save behavior.
-3. `httprequest.dll`: defer until a libcurl-backed, event-safe design is chosen.
+2. `httprequest.dll`: defer until a libcurl-backed, event-safe design is chosen.
 
 `onigruma` is not tracked as a missing plugin because AetherKiri already links
 Oniguruma in the core TJS regular expression implementation.
@@ -212,6 +210,13 @@ Oniguruma in the core TJS regular expression implementation.
   - Commit: `3c477b5 Implement imagesaver plugin`
   - Added global `saveLayerImage(layer, filename, "bmp")` with cross-platform
     BMP header writing and bottom-up layer buffer serialization.
+- Completed the synchronous `sqlite3.dll` core.
+  - Commit: `ad75332 Implement sqlite3 sync plugin core`
+  - Added `Sqlite` and `SqliteStatement`, SQLite constants, exec/value/query
+    stepping, parameter binding, column access, local-file and in-memory
+    database opening, and bundled SQLite amalgamation sources.
+  - Deferred original `SqliteThread`, `sqlite3_xp3_vfs`, and custom extension
+    functions for follow-up compatibility work.
 
 ## Verification Notes
 
@@ -243,6 +248,9 @@ Oniguruma in the core TJS regular expression implementation.
   passes.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/imagesaver.cpp.o -j2`
   passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/sqlitePlugin.cpp.o cpp/plugins/CMakeFiles/krkr2plugin.dir/sqlite/sqlite3.c.o -j2`
+  passes with one macOS SDK deprecation warning from the bundled old SQLite C
+  source.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
 - Full `libkrkr2plugin.a` / `krkr2plugin` build is currently blocked before
