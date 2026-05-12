@@ -126,8 +126,19 @@ Commit rule: tests/tooling first, documentation updates after.
 
 ## Current Next Step
 
-Continue Phase 4 by selecting the next low-risk missing plugin. Candidates:
-`expat`, `imagesaver`, or platform-safe parts of `httprequest`.
+Continue Phase 4 in this order:
+
+1. `qrcode.dll`: low-risk cross-platform port; original encoder code is local
+   and the API surface is a single `Layer.drawQRCode()` method.
+2. `imagesaver.dll`: implement the synchronous BMP save path first.
+3. `sqlite3.dll`: implement the synchronous database and statement core before
+   considering thread helpers or `sqlite3_xp3_vfs`.
+4. `layerExSave.dll`: evaluate synchronous image helper methods after
+   `imagesaver`; defer window-message/threaded save behavior.
+5. `httprequest.dll`: defer until a libcurl-backed, event-safe design is chosen.
+
+`onigruma` is not tracked as a missing plugin because AetherKiri already links
+Oniguruma in the core TJS regular expression implementation.
 
 ## Progress
 
@@ -190,6 +201,11 @@ Continue Phase 4 by selecting the next low-risk missing plugin. Candidates:
   - Commit: `808529c Add minizip storage mounting`
   - Added `Storages.mountZip()`, `Storages.unmountZip()`, and read-only
     `zip://domain/path` storage access backed by in-memory streams.
+- Completed a real `expat.dll` implementation.
+  - Commit: `b3df1e4 Implement expat plugin`
+  - Added `XMLParser`, `parse()`, `parseStorage()`, Expat-backed event
+    callbacks, error/current-position properties, and the original typo
+    compatibility property `currentButeCount`.
 
 ## Verification Notes
 
@@ -214,6 +230,8 @@ Continue Phase 4 by selecting the next low-risk missing plugin. Candidates:
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/json/jsonPlugin.cpp.o -j2`
   passes.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/minizip.cpp.o -j2`
+  passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/expat.cpp.o -j2`
   passes.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
