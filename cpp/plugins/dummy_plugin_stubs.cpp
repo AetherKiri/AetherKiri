@@ -169,3 +169,113 @@ NCB_REGISTER_CLASS(FlashPlayer) {
     NCB_METHOD(enforceLocalSecurity);
     NCB_METHOD(disableLocalSecurity);
 }
+
+#define REGISTER_EMPTY_PLUGIN(id, module) \
+    static void id##_stub() {} \
+    NCB_PRE_REGIST_CALLBACK(id##_stub)
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("htmlhelp.dll")
+REGISTER_EMPTY_PLUGIN(htmlhelp, htmlhelp);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("httprequest.dll")
+REGISTER_EMPTY_PLUGIN(httprequest, httprequest);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("httpserv.dll")
+REGISTER_EMPTY_PLUGIN(httpserv, httpserv);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("xmlhttprequest.dll")
+REGISTER_EMPTY_PLUGIN(xmlhttprequest, xmlhttprequest);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("msgreceiver.dll")
+REGISTER_EMPTY_PLUGIN(msgreceiver, msgreceiver);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("messenger.dll")
+REGISTER_EMPTY_PLUGIN(messenger, messenger);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("oleclass.dll")
+REGISTER_EMPTY_PLUGIN(oleclass, oleclass);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("registory.dll")
+REGISTER_EMPTY_PLUGIN(registory, registory);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("resourceRW.dll")
+REGISTER_EMPTY_PLUGIN(resourceRW, resourceRW);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("shrinkCopy.dll")
+REGISTER_EMPTY_PLUGIN(shrinkCopy, shrinkCopy);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("sigcheck.dll")
+REGISTER_EMPTY_PLUGIN(sigcheck, sigcheck);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("sqlite3_xp3_vfs.dll")
+REGISTER_EMPTY_PLUGIN(sqlite3_xp3_vfs, sqlite3_xp3_vfs);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("stdio.dll")
+REGISTER_EMPTY_PLUGIN(stdio, stdio);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("tftSave.dll")
+REGISTER_EMPTY_PLUGIN(tftSave, tftSave);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("videoEncoder.dll")
+REGISTER_EMPTY_PLUGIN(videoEncoder, videoEncoder);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("windowExProgress.dll")
+REGISTER_EMPTY_PLUGIN(windowExProgress, windowExProgress);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("wmrdump.dll")
+REGISTER_EMPTY_PLUGIN(wmrdump, wmrdump);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("wsh.dll")
+REGISTER_EMPTY_PLUGIN(wsh, wsh);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("wumsadp.dll")
+REGISTER_EMPTY_PLUGIN(wumsadp, wumsadp);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("layerExAgg.dll")
+REGISTER_EMPTY_PLUGIN(layerExAgg, layerExAgg);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("layerExCairo.dll")
+REGISTER_EMPTY_PLUGIN(layerExCairo, layerExCairo);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("layerExGdiPlus.dll")
+REGISTER_EMPTY_PLUGIN(layerExGdiPlus, layerExGdiPlus);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("magickpp.dll")
+REGISTER_EMPTY_PLUGIN(magickpp, magickpp);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("squirrel.dll")
+REGISTER_EMPTY_PLUGIN(squirrel, squirrel);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("xpressive.dll")
+REGISTER_EMPTY_PLUGIN(xpressive, xpressive);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("zlib.dll")
+REGISTER_EMPTY_PLUGIN(zlib, zlib);
+
+#undef REGISTER_EMPTY_PLUGIN
