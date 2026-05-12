@@ -9,6 +9,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     base64.cpp
     encode.cpp
     expat.cpp
+    imagesaver.cpp
     lineParser.cpp
     memfile.cpp
     json/jsonPlugin.cpp
