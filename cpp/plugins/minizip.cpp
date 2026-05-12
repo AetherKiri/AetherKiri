@@ -1,9 +1,12 @@
 #include "ncbind.hpp"
 #include "tp_stub.h"
+#include "UtilStreams.h"
 
 #include <array>
 #include <ctime>
+#include <map>
 #include <memory>
+#include <set>
 #include <string>
 
 #include <minizip/unzip.h>
@@ -37,6 +40,16 @@ ttstr localPathForWrite(const ttstr &name) {
     ttstr local = TVPNormalizeStorageName(name);
     TVPGetLocalName(local);
     return local;
+}
+
+bool splitZipStorageName(const ttstr &name, ttstr &domain, ttstr &path) {
+    const tjs_char *raw = name.c_str();
+    const tjs_char *slash = TJS_strchr(raw, TJS_W('/'));
+    if(!slash)
+        return false;
+    domain = ttstr(raw, slash - raw);
+    path = ttstr(slash + 1);
+    return !domain.IsEmpty() && !path.IsEmpty();
 }
 
 void setProp(iTJSDispatch2 *object, const tjs_char *name, const tTJSVariant &value) {
@@ -251,6 +264,172 @@ private:
     unzFile zip = nullptr;
 };
 
+class ZipStorageMedia : public iTVPStorageMedia {
+public:
+    void AddRef() override { ++refCount; }
+
+    void Release() override {
+        if(refCount == 1)
+            delete this;
+        else
+            --refCount;
+    }
+
+    void GetName(ttstr &name) override { name = TJS_W("zip"); }
+    void NormalizeDomainName(ttstr &) override {}
+    void NormalizePathName(ttstr &) override {}
+
+    bool CheckExistentStorage(const ttstr &name) override {
+        ttstr domain;
+        ttstr path;
+        if(!splitZipStorageName(name, domain, path))
+            return false;
+        return locate(domain, path);
+    }
+
+    tTJSBinaryStream *Open(const ttstr &name, tjs_uint32 flags) override {
+        if((flags & TJS_BS_ACCESS_MASK) != TJS_BS_READ)
+            TVPThrowExceptionMessage(TJS_W("zip storage is read-only"));
+
+        ttstr domain;
+        ttstr path;
+        if(!splitZipStorageName(name, domain, path))
+            TVPThrowExceptionMessage(TJS_W("invalid zip storage path"));
+
+        std::vector<tjs_uint8> data = readEntry(domain, path);
+        return new tTVPMemoryStream(data.empty() ? nullptr : data.data(),
+                                    static_cast<tjs_uint>(data.size()));
+    }
+
+    void GetListAt(const ttstr &name, iTVPStorageLister *lister) override {
+        ttstr domain;
+        ttstr path;
+        if(!splitZipStorageName(name, domain, path))
+            return;
+
+        auto it = mounts.find(domain);
+        if(it == mounts.end())
+            return;
+
+        unzFile zip = unzOpen64(toUtf8(it->second).c_str());
+        if(!zip)
+            return;
+
+        ttstr prefix = path;
+        if(!prefix.IsEmpty() && prefix[prefix.GetLen() - 1] != TJS_W('/'))
+            prefix += TJS_W('/');
+
+        std::set<ttstr> names;
+        if(unzGoToFirstFile(zip) == UNZ_OK) {
+            do {
+                char filename[1024] = {};
+                unz_file_info64 info{};
+                if(unzGetCurrentFileInfo64(zip, &info, filename,
+                                           sizeof(filename), nullptr, 0, nullptr,
+                                           0) == UNZ_OK) {
+                    ttstr item(filename);
+                    if(prefix.IsEmpty() ||
+                       TJS_strncmp(item.c_str(), prefix.c_str(),
+                                   prefix.GetLen()) == 0) {
+                        const tjs_char *rest =
+                            item.c_str() + (prefix.IsEmpty() ? 0 : prefix.GetLen());
+                        const tjs_char *slash = TJS_strchr(rest, TJS_W('/'));
+                        if(!slash && *rest)
+                            names.insert(ttstr(rest));
+                    }
+                }
+            } while(unzGoToNextFile(zip) == UNZ_OK);
+        }
+        unzClose(zip);
+
+        for(const auto &item : names)
+            lister->Add(item);
+    }
+
+    void GetLocallyAccessibleName(ttstr &name) override { name = TJS_W(""); }
+
+    bool mount(const ttstr &domain, const ttstr &zipfile) {
+        if(domain.IsEmpty())
+            return false;
+        mounts[domain] = localPathForRead(zipfile);
+        return true;
+    }
+
+    bool unmount(const ttstr &domain) { return mounts.erase(domain) != 0; }
+
+private:
+    bool locate(const ttstr &domain, const ttstr &path) {
+        auto it = mounts.find(domain);
+        if(it == mounts.end())
+            return false;
+        unzFile zip = unzOpen64(toUtf8(it->second).c_str());
+        if(!zip)
+            return false;
+        const std::string entry = toUtf8(path);
+        const bool found = unzLocateFile(zip, entry.c_str(), 1) == UNZ_OK;
+        unzClose(zip);
+        return found;
+    }
+
+    std::vector<tjs_uint8> readEntry(const ttstr &domain, const ttstr &path) {
+        auto it = mounts.find(domain);
+        if(it == mounts.end())
+            TVPThrowExceptionMessage(TJS_W("zip domain is not mounted"));
+
+        unzFile zip = unzOpen64(toUtf8(it->second).c_str());
+        if(!zip)
+            TVPThrowExceptionMessage(TJS_W("zip archive can't open"));
+
+        std::vector<tjs_uint8> data;
+        const std::string entry = toUtf8(path);
+        if(unzLocateFile(zip, entry.c_str(), 1) != UNZ_OK ||
+           unzOpenCurrentFile(zip) != UNZ_OK) {
+            unzClose(zip);
+            TVPThrowExceptionMessage((path + TJS_W(" not found in zip")).c_str());
+        }
+
+        std::array<tjs_uint8, kBufferSize> buffer{};
+        int read = 0;
+        while((read = unzReadCurrentFile(zip, buffer.data(), buffer.size())) > 0) {
+            data.insert(data.end(), buffer.begin(), buffer.begin() + read);
+        }
+        unzCloseCurrentFile(zip);
+        unzClose(zip);
+        return data;
+    }
+
+    tjs_uint refCount = 1;
+    std::map<ttstr, ttstr> mounts;
+};
+
+ZipStorageMedia *g_zipStorage = nullptr;
+
+class StoragesZip {
+public:
+    static bool mountZip(const tjs_char *name, const tjs_char *zipfile) {
+        return g_zipStorage && g_zipStorage->mount(name, zipfile);
+    }
+
+    static bool unmountZip(const tjs_char *name) {
+        return g_zipStorage && g_zipStorage->unmount(name);
+    }
+};
+
+void InitZipStorage() {
+    if(!g_zipStorage) {
+        g_zipStorage = new ZipStorageMedia();
+        TVPRegisterStorageMedia(g_zipStorage);
+    }
+}
+
+void DoneZipStorage() {
+    if(g_zipStorage) {
+        TVPUnregisterStorageMedia(g_zipStorage);
+        g_zipStorage->Release();
+        g_zipStorage = nullptr;
+    }
+}
+
 NCB_REGISTER_CLASS(Zip) {
     Constructor();
     RawCallback(TJS_W("open"), &Class::open, 0);
@@ -265,3 +444,11 @@ NCB_REGISTER_CLASS(Unzip) {
     RawCallback(TJS_W("list"), &Class::list, 0);
     RawCallback(TJS_W("extract"), &Class::extract, 0);
 }
+
+NCB_ATTACH_CLASS(StoragesZip, Storages) {
+    NCB_METHOD(mountZip);
+    NCB_METHOD(unmountZip);
+}
+
+NCB_PRE_REGIST_CALLBACK(InitZipStorage);
+NCB_POST_UNREGIST_CALLBACK(DoneZipStorage);
