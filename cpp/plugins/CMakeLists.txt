@@ -7,6 +7,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     scriptsEx.cpp
     base64.cpp
     lineParser.cpp
+    memfile.cpp
     win32dialog.cpp
     dirlist.cpp
     csvParser.cpp
