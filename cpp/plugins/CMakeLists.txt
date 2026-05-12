@@ -13,6 +13,8 @@ target_sources(${PROJECT_NAME} PRIVATE
     memfile.cpp
     json/jsonPlugin.cpp
     minizip.cpp
+    qrcode.cpp
+    qrcode/QR_Encode.cpp
     win32dialog.cpp
     dirlist.cpp
     csvParser.cpp
