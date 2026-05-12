@@ -16,6 +16,7 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("systemEx.dll"),
         TJS_W("base64.dll"),
         TJS_W("lineParser.dll"),
+        TJS_W("memfile.dll"),
     };
 
     for(const auto *module : modules)
