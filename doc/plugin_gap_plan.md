@@ -126,8 +126,8 @@ Commit rule: tests/tooling first, documentation updates after.
 
 ## Current Next Step
 
-Continue Phase 4 with the second half of `minizip`: `zip://` storage mounting
-through `Storages.mountZip()` and `Storages.unmountZip()`.
+Continue Phase 4 by selecting the next low-risk missing plugin. Candidates:
+`expat`, `imagesaver`, or platform-safe parts of `httprequest`.
 
 ## Progress
 
@@ -186,6 +186,10 @@ through `Storages.mountZip()` and `Storages.unmountZip()`.
   - Added `Zip.open/add/close` and `Unzip.open/list/extract/close` using the
     existing minizip dependency.
   - Password encryption is explicitly unsupported in this first pass.
+- Completed `minizip.dll` storage mounting.
+  - Commit: `808529c Add minizip storage mounting`
+  - Added `Storages.mountZip()`, `Storages.unmountZip()`, and read-only
+    `zip://domain/path` storage access backed by in-memory streams.
 
 ## Verification Notes
 
