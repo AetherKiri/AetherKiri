@@ -126,11 +126,10 @@ Commit rule: tests/tooling first, documentation updates after.
 
 ## Current Next Step
 
-Continue Phase 4 with `binaryStream`.
-
-- `binaryStream` has broader compatibility value but should be split into core
-  read/write/integer/zlib behavior first; Windows DLL filter support should
-  remain explicitly unsupported until there is a cross-platform host abstraction.
+Continue Phase 4 by selecting the next missing plugin from real logs or
+low-risk data/runtime utilities. Good next candidates are `minizip`,
+`imagesaver`, or `expat`; larger platform bindings such as `httprequest` and
+`sqlite3` need dependency checks first.
 
 ## Progress
 
@@ -169,6 +168,13 @@ Continue Phase 4 with `binaryStream`.
   - Reused the original EUC/JIS mapping tables and implemented Shift_JIS
     conversion explicitly instead of relying on platform locale narrow-string
     conversion.
+- Completed the core cross-platform `binaryStream.dll` implementation.
+  - Commit: `7ad2288 Implement binaryStream core plugin`
+  - Added `BinaryStream`, storage open/close/seek/tell, raw octet/string
+    read/write, integer LE/BE read/write, `copy`, `compress`, `decompress`,
+    progress callback, constants, Adler-32, and optional MD5 digest output.
+  - Explicitly rejects non-empty `setFilter()` and `elm.filter`; original
+    external DLL filter ABI is Windows-only and not portable.
 
 ## Verification Notes
 
@@ -187,6 +193,8 @@ Continue Phase 4 with `binaryStream`.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/memfile.cpp.o -j2`
   passes.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/encode.cpp.o -j2`
+  passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/binaryStream.cpp.o -j2`
   passes.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
