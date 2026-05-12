@@ -35,11 +35,6 @@ static void layerExMosaic_stub() {}
 NCB_PRE_REGIST_CALLBACK(layerExMosaic_stub);
 
 #undef NCB_MODULE_NAME
-#define NCB_MODULE_NAME TJS_W("layerExSave.dll")
-static void layerExSave_stub() {}
-NCB_PRE_REGIST_CALLBACK(layerExSave_stub);
-
-#undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("layerExAVI.dll")
 static void layerExAVI_stub() {}
 NCB_PRE_REGIST_CALLBACK(layerExAVI_stub);
