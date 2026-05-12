@@ -128,10 +128,11 @@ Commit rule: tests/tooling first, documentation updates after.
 
 Continue Phase 4 in this order:
 
-1. Audit remaining graphics/runtime plugins against real game logs before
-   adding more broad stubs.
-2. Replace selected second-pass stubs with real behavior when a target game or
+1. Replace selected second-pass stubs with real behavior when a target game or
    fixture proves the API is needed.
+2. Add focused runtime tests for the higher-value implemented plugins
+   (`sqlite3`, `minizip`, `expat`, `layerExSave`) once the test harness exposes
+   enough script execution coverage.
 
 `onigruma` is not tracked as a missing plugin because AetherKiri already links
 Oniguruma in the core TJS regular expression implementation.
@@ -240,6 +241,16 @@ Oniguruma in the core TJS regular expression implementation.
     portable.
   - These are intentionally link-only and should be replaced by real
     implementations only when game logs or fixtures require specific behavior.
+- Covered the remaining KiriKiri2 reference module names.
+  - Commit: `910bac1 Cover remaining reference plugin module names`
+  - Added link-only registrations for legacy drawdevice backends, `gameswf`,
+    `javascript`, `layerEx`, `mkpj`, and `onigruma`; these names are either
+    replaced by engine/core functionality or need a larger runtime-specific port.
+- Added plugin gap audit tooling.
+  - Commit: `ecb87c5 Add plugin gap audit script`
+  - `tools/plugin_gap_audit.py` compares the KiriKiri2 reference plugin
+    directories with AetherKiri registrations and accounts for known renamed
+    modules such as `psd`, `perspective`, and `ScriptsEx`.
 
 ## Verification Notes
 
@@ -280,6 +291,10 @@ Oniguruma in the core TJS regular expression implementation.
   passes after removing the obsolete `layerExSave.dll` stub.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/dummy_plugin_stubs.cpp.o -j2`
   passes after the second-pass platform stubs.
+- `python3 tools/plugin_gap_audit.py` passes and reports:
+  - reference plugins: 84
+  - covered reference plugins: 84
+  - missing reference plugins: 0
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
 - Full `libkrkr2plugin.a` / `krkr2plugin` build is currently blocked before
