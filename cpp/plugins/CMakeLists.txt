@@ -5,6 +5,7 @@ add_library(${PROJECT_NAME} STATIC)
 
 target_sources(${PROJECT_NAME} PRIVATE
     scriptsEx.cpp
+    binaryStream.cpp
     base64.cpp
     encode.cpp
     lineParser.cpp
