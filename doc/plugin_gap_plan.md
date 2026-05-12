@@ -43,7 +43,6 @@ explicitly conservative.
    - `gfxEffect.dll`
 2. Add low-risk no-op registrations for common platform-only plugins where the
    engine already has native or cross-platform substitutes:
-   - `clipboardEx.dll`
    - `shellExecute.dll`
    - `process.dll`
    - `tasktray.dll`
@@ -96,8 +95,8 @@ Goal: port or reimplement plugins that unlock broad game compatibility.
 
 Priority candidates:
 
-- Data/parsing: `base64`, `binaryStream`, `encode`, `expat`, `lineParser`,
-  `memfile`, `minizip`, `sqlite3`, `sqlite3_xp3_vfs`
+- Data/parsing: `binaryStream`, `encode`, `expat`, `minizip`, `sqlite3`,
+  `sqlite3_xp3_vfs`
 - Network: `httprequest`, `httpserv`, `xmlhttprequest`
 - Graphics/image: `imagesaver`, `layerEx`, `layerExSave`, `layerExGdiPlus`,
   `qrcode`
@@ -127,8 +126,13 @@ Commit rule: tests/tooling first, documentation updates after.
 
 ## Current Next Step
 
-Start with Phase 1. It is low risk, improves game startup compatibility, and
-creates the test harness needed before deeper plugin work.
+Continue Phase 4 with `encode` or `binaryStream`.
+
+- `encode` is the lower-risk next port: small API surface and mostly
+  table-driven text conversion.
+- `binaryStream` has broader compatibility value but should be split into core
+  read/write/integer/zlib behavior first; Windows DLL filter support should
+  remain explicitly unsupported until there is a cross-platform host abstraction.
 
 ## Progress
 
@@ -143,6 +147,23 @@ creates the test harness needed before deeper plugin work.
   - Commit: `dec92b9 Implement base64 plugin`
   - Added `Base64.encode(filename)` and `Base64.decode(base64str, filename)`.
   - `decode` writes the decoded file and returns the MD5 hex digest.
+- Completed a real `lineParser.dll` implementation.
+  - Commit: `9bbdd91 Implement lineParser plugin`
+  - Added `LineParser`, text/storage initialization, `getNextLine()`,
+    `parse()` / `parseStorage()`, `currentLineNumber`, and `doLine(text, lineNo)`
+    callbacks.
+- Replaced the `clipboardEx.dll` link-only stub with a minimal safe
+  compatibility layer.
+  - Commit: `e389b65 Implement clipboardEx compatibility layer`
+  - Added `cbfBitmap`, `cbfTJS`, `Clipboard.hasFormat()`, process-local
+    `Clipboard.asTJS`, `Clipboard.setMultipleData()`, bitmap no-op methods, and
+    `Window.clipboardWatchEnabled` as a safe stub.
+  - Full Win32 bitmap clipboard and clipboard viewer-chain watching remain
+    intentionally unsupported.
+- Completed a cross-platform `memfile.dll` implementation.
+  - Commit: `e5fe807 Implement memfile plugin`
+  - Added `mem` storage media backed by `tTVPMemoryStream` plus the original
+    `Storages.*Memory*` helper methods.
 
 ## Verification Notes
 
@@ -151,6 +172,14 @@ creates the test harness needed before deeper plugin work.
 - `ninja -C out/macos/debug cpp/plugins/CMakeFiles/krkr2plugin.dir/dummy_plugin_stubs.cpp.o`
   passes.
 - `ninja -C out/macos/debug cpp/plugins/CMakeFiles/krkr2plugin.dir/base64.cpp.o`
+  passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/lineParser.cpp.o -j2`
+  passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/clipboardEx.cpp.o -j2`
+  passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/dummy_plugin_stubs.cpp.o -j2`
+  passes after removing the old `clipboardEx.dll` stub registration.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/memfile.cpp.o -j2`
   passes.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
