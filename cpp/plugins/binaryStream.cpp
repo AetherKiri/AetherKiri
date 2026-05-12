@@ -24,6 +24,26 @@ bool hasFilter(ncbPropAccessor &elm) {
     return elm.HasValue(TJS_W("filter"), 0, &type) && type != tvtVoid;
 }
 
+tjs_int parseMode(const tTJSVariant &value) {
+    if(value.Type() == tvtInteger)
+        return static_cast<tjs_int>(value.AsInteger());
+
+    ttstr mode = value.AsStringNoAddRef();
+    if(mode.IsEmpty() || mode == TJS_W("r") || mode == TJS_W("rb") ||
+       mode == TJS_W("read"))
+        return TJS_BS_READ;
+    if(mode == TJS_W("w") || mode == TJS_W("wb") || mode == TJS_W("write"))
+        return TJS_BS_WRITE;
+    if(mode == TJS_W("a") || mode == TJS_W("ab") || mode == TJS_W("append"))
+        return TJS_BS_APPEND;
+    if(mode == TJS_W("u") || mode == TJS_W("r+") || mode == TJS_W("rb+") ||
+       mode == TJS_W("update"))
+        return TJS_BS_UPDATE;
+
+    error(ttstr(TJS_W("unsupported mode: ")) + mode);
+    return TJS_BS_READ;
+}
+
 } // namespace
 
 class BinaryStream {
@@ -36,9 +56,9 @@ public:
         auto *self = new BinaryStream();
         if(numparams >= 1) {
             const tjs_int openMode =
-                numparams >= 2 ? static_cast<tjs_int>(*param[1]) : TJS_BS_READ;
+                numparams >= 2 ? parseMode(*param[1]) : TJS_BS_READ;
             try {
-                self->open(param[0]->GetString(), openMode);
+                self->openRaw(param[0]->GetString(), openMode);
             } catch(...) {
                 delete self;
                 throw;
@@ -48,7 +68,11 @@ public:
         return TJS_S_OK;
     }
 
-    void open(const tjs_char *storageName, tjs_int openMode) {
+    void open(const tjs_char *storageName, tTJSVariant openMode) {
+        openRaw(storageName, parseMode(openMode));
+    }
+
+    void openRaw(const tjs_char *storageName, tjs_int openMode) {
         close();
         stream.reset(TVPCreateStream(storageName, openMode & TJS_BS_ACCESS_MASK));
         if(!stream)
@@ -128,6 +152,14 @@ public:
                             BinaryStream *self) {
         return self ? self->readInteger(r, 1, false) : TJS_E_NATIVECLASSCRASH;
     }
+    static tjs_error readI8LE(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                              BinaryStream *self) {
+        return readI8(r, n, p, self);
+    }
+    static tjs_error readI8BE(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                              BinaryStream *self) {
+        return readI8(r, n, p, self);
+    }
     static tjs_error readI16LE(tTJSVariant *r, tjs_int, tTJSVariant **,
                                BinaryStream *self) {
         return self ? self->readInteger(r, 2, false) : TJS_E_NATIVECLASSCRASH;
@@ -157,6 +189,14 @@ public:
                              BinaryStream *self) {
         return self ? self->writeInteger(r, n, p, 1, false)
                     : TJS_E_NATIVECLASSCRASH;
+    }
+    static tjs_error writeI8LE(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                               BinaryStream *self) {
+        return writeI8(r, n, p, self);
+    }
+    static tjs_error writeI8BE(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                               BinaryStream *self) {
+        return writeI8(r, n, p, self);
     }
     static tjs_error writeI16LE(tTJSVariant *r, tjs_int n, tTJSVariant **p,
                                 BinaryStream *self) {
@@ -512,6 +552,8 @@ NCB_REGISTER_CLASS(BinaryStream) {
     Method(TJS_W("setProgressCallback"), &Class::setProgressCallback);
     Method(TJS_W("setFilter"), &Class::setFilter);
     RawCallback(TJS_W("readI8"), &Class::readI8, 0);
+    RawCallback(TJS_W("readI8LE"), &Class::readI8LE, 0);
+    RawCallback(TJS_W("readI8BE"), &Class::readI8BE, 0);
     RawCallback(TJS_W("readI16LE"), &Class::readI16LE, 0);
     RawCallback(TJS_W("readI32LE"), &Class::readI32LE, 0);
     RawCallback(TJS_W("readI64LE"), &Class::readI64LE, 0);
@@ -519,6 +561,8 @@ NCB_REGISTER_CLASS(BinaryStream) {
     RawCallback(TJS_W("readI32BE"), &Class::readI32BE, 0);
     RawCallback(TJS_W("readI64BE"), &Class::readI64BE, 0);
     RawCallback(TJS_W("writeI8"), &Class::writeI8, 0);
+    RawCallback(TJS_W("writeI8LE"), &Class::writeI8LE, 0);
+    RawCallback(TJS_W("writeI8BE"), &Class::writeI8BE, 0);
     RawCallback(TJS_W("writeI16LE"), &Class::writeI16LE, 0);
     RawCallback(TJS_W("writeI32LE"), &Class::writeI32LE, 0);
     RawCallback(TJS_W("writeI64LE"), &Class::writeI64LE, 0);
@@ -532,4 +576,11 @@ NCB_REGISTER_CLASS(BinaryStream) {
     Variant(TJS_W("bsSeekSet"), static_cast<tjs_int>(TJS_BS_SEEK_SET), 0);
     Variant(TJS_W("bsSeekCur"), static_cast<tjs_int>(TJS_BS_SEEK_CUR), 0);
     Variant(TJS_W("bsSeekEnd"), static_cast<tjs_int>(TJS_BS_SEEK_END), 0);
+    Variant(TJS_W("READ"), static_cast<tjs_int>(TJS_BS_READ), 0);
+    Variant(TJS_W("WRITE"), static_cast<tjs_int>(TJS_BS_WRITE), 0);
+    Variant(TJS_W("APPEND"), static_cast<tjs_int>(TJS_BS_APPEND), 0);
+    Variant(TJS_W("UPDATE"), static_cast<tjs_int>(TJS_BS_UPDATE), 0);
+    Variant(TJS_W("SEEK_SET"), static_cast<tjs_int>(TJS_BS_SEEK_SET), 0);
+    Variant(TJS_W("SEEK_CUR"), static_cast<tjs_int>(TJS_BS_SEEK_CUR), 0);
+    Variant(TJS_W("SEEK_END"), static_cast<tjs_int>(TJS_BS_SEEK_END), 0);
 }
