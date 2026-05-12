@@ -8,6 +8,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     binaryStream.cpp
     base64.cpp
     encode.cpp
+    expat.cpp
     lineParser.cpp
     memfile.cpp
     json/jsonPlugin.cpp
@@ -169,3 +170,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE fmt::fmt)
 
 find_package(spdlog CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE spdlog::spdlog)
+
+find_package(expat CONFIG REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE expat::expat)
