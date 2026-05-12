@@ -126,10 +126,8 @@ Commit rule: tests/tooling first, documentation updates after.
 
 ## Current Next Step
 
-Continue Phase 4 by selecting the next missing plugin from real logs or
-low-risk data/runtime utilities. Good next candidates are `minizip`,
-`imagesaver`, or `expat`; larger platform bindings such as `httprequest` and
-`sqlite3` need dependency checks first.
+Continue Phase 4 with `minizip`. Split it into `Zip` / `Unzip` class support
+first, then `zip://` storage mounting as a separate step.
 
 ## Progress
 
@@ -175,6 +173,14 @@ low-risk data/runtime utilities. Good next candidates are `minizip`,
     progress callback, constants, Adler-32, and optional MD5 digest output.
   - Explicitly rejects non-empty `setFilter()` and `elm.filter`; original
     external DLL filter ABI is Windows-only and not portable.
+- Added extra `binaryStream.dll` compatibility aliases.
+  - Commit: `22667b9 Add binaryStream compatibility aliases`
+  - Added string mode parsing, `readI8LE` / `readI8BE`, `writeI8LE` /
+    `writeI8BE`, and upper-case constant aliases.
+- Replaced the placeholder `json.dll` implementation with real JSON behavior.
+  - Commit: `6cb4b01 Implement json plugin`
+  - Added `Scripts.evalJSON`, `Scripts.evalJSONStorage`, `Scripts.saveJSON`,
+    and `Scripts.toJSONString` with actual JSON parse / stringify behavior.
 
 ## Verification Notes
 
@@ -195,6 +201,8 @@ low-risk data/runtime utilities. Good next candidates are `minizip`,
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/encode.cpp.o -j2`
   passes.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/binaryStream.cpp.o -j2`
+  passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/json/jsonPlugin.cpp.o -j2`
   passes.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
