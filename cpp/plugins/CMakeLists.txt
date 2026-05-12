@@ -10,6 +10,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     encode.cpp
     lineParser.cpp
     memfile.cpp
+    json/jsonPlugin.cpp
     win32dialog.cpp
     dirlist.cpp
     csvParser.cpp

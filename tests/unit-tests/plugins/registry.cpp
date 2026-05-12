@@ -17,6 +17,7 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("binaryStream.dll"),
         TJS_W("base64.dll"),
         TJS_W("encode.dll"),
+        TJS_W("json.dll"),
         TJS_W("lineParser.dll"),
         TJS_W("memfile.dll"),
     };
