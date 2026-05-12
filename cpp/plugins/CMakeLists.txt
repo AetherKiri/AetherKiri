@@ -38,6 +38,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     wfBasicEffectCompat.cpp
     wfTypicalDSPCompat.cpp
     packinone.cpp
+    clipboardEx.cpp
     dummy_plugin_stubs.cpp
 )
 
