@@ -24,6 +24,7 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("memfile.dll"),
         TJS_W("minizip.dll"),
         TJS_W("qrcode.dll"),
+        TJS_W("sqlite3.dll"),
     };
 
     for(const auto *module : modules)
