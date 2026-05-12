@@ -11,6 +11,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     lineParser.cpp
     memfile.cpp
     json/jsonPlugin.cpp
+    minizip.cpp
     win32dialog.cpp
     dirlist.cpp
     csvParser.cpp
