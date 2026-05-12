@@ -33,6 +33,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     layerExPerspective.cpp
     fftgraph.cpp
     LayerExBase.cpp
+    layerExSaveCompat.cpp
     xp3filter.cpp
     extrans.cpp
     extNagano.cpp
