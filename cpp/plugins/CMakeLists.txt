@@ -16,6 +16,8 @@ target_sources(${PROJECT_NAME} PRIVATE
     minizip.cpp
     qrcode.cpp
     qrcode/QR_Encode.cpp
+    sqlitePlugin.cpp
+    sqlite/sqlite3.c
     win32dialog.cpp
     dirlist.cpp
     csvParser.cpp
