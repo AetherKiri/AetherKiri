@@ -128,9 +128,9 @@ Commit rule: tests/tooling first, documentation updates after.
 
 Continue Phase 4 in this order:
 
-1. `layerExSave.dll`: evaluate synchronous image helper methods after
-   `imagesaver`; defer window-message/threaded save behavior.
-2. `httprequest.dll`: defer until a libcurl-backed, event-safe design is chosen.
+1. `httprequest.dll`: defer until a libcurl-backed, event-safe design is chosen.
+2. Audit remaining graphics/runtime plugins against real game logs before
+   adding more broad stubs.
 
 `onigruma` is not tracked as a missing plugin because AetherKiri already links
 Oniguruma in the core TJS regular expression implementation.
@@ -217,6 +217,14 @@ Oniguruma in the core TJS regular expression implementation.
     database opening, and bundled SQLite amalgamation sources.
   - Deferred original `SqliteThread`, `sqlite3_xp3_vfs`, and custom extension
     functions for follow-up compatibility work.
+- Added synchronous `layerExSave.dll` compatibility helpers.
+  - Commit: `8116bdb Add layerExSave sync compatibility helpers`
+  - Added `Layer.saveLayerImagePng`, `saveLayerImageTlg5`, crop/diff helpers,
+    diff pixel marking, blue-to-alpha copy, blank checks, alpha clearing, and
+    average color calculation.
+  - `saveLayerImagePngOctet` remains explicitly unsupported because it needs a
+    PNG encoder that returns an octet rather than writing through
+    `Layer.saveLayerImage`.
 
 ## Verification Notes
 
@@ -251,6 +259,8 @@ Oniguruma in the core TJS regular expression implementation.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/sqlitePlugin.cpp.o cpp/plugins/CMakeFiles/krkr2plugin.dir/sqlite/sqlite3.c.o -j2`
   passes with one macOS SDK deprecation warning from the bundled old SQLite C
   source.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/layerExSaveCompat.cpp.o -j2`
+  passes.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
 - Full `libkrkr2plugin.a` / `krkr2plugin` build is currently blocked before
