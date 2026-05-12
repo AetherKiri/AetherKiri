@@ -126,8 +126,8 @@ Commit rule: tests/tooling first, documentation updates after.
 
 ## Current Next Step
 
-Continue Phase 4 with `minizip`. Split it into `Zip` / `Unzip` class support
-first, then `zip://` storage mounting as a separate step.
+Continue Phase 4 with the second half of `minizip`: `zip://` storage mounting
+through `Storages.mountZip()` and `Storages.unmountZip()`.
 
 ## Progress
 
@@ -181,6 +181,11 @@ first, then `zip://` storage mounting as a separate step.
   - Commit: `6cb4b01 Implement json plugin`
   - Added `Scripts.evalJSON`, `Scripts.evalJSONStorage`, `Scripts.saveJSON`,
     and `Scripts.toJSONString` with actual JSON parse / stringify behavior.
+- Completed the first `minizip.dll` implementation stage.
+  - Commit: `d36b828 Implement minizip Zip and Unzip classes`
+  - Added `Zip.open/add/close` and `Unzip.open/list/extract/close` using the
+    existing minizip dependency.
+  - Password encryption is explicitly unsupported in this first pass.
 
 ## Verification Notes
 
@@ -203,6 +208,8 @@ first, then `zip://` storage mounting as a separate step.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/binaryStream.cpp.o -j2`
   passes.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/json/jsonPlugin.cpp.o -j2`
+  passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/minizip.cpp.o -j2`
   passes.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
