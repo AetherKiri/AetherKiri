@@ -129,3 +129,31 @@ Commit rule: tests/tooling first, documentation updates after.
 
 Start with Phase 1. It is low risk, improves game startup compatibility, and
 creates the test harness needed before deeper plugin work.
+
+## Progress
+
+- Completed Phase 1 first-pass link compatibility stubs.
+  - Commit: `ac85821 Add first-pass plugin compatibility stubs`
+  - Added registrations for `flashPlayer.dll`, `layerExSubImage.dll`,
+    `gfxEffect.dll`, `clipboardEx.dll`, `shellExecute.dll`, `process.dll`,
+    `tasktray.dll`, `adjustMonitor.dll`, `fpslimit.dll`, and `systemEx.dll`.
+- Completed registry coverage for the first-pass compatibility modules.
+  - Commit: `4ad045b Test compatibility stub registrations`
+- Completed a real `base64.dll` implementation.
+  - Commit: `dec92b9 Implement base64 plugin`
+  - Added `Base64.encode(filename)` and `Base64.decode(base64str, filename)`.
+  - `decode` writes the decoded file and returns the MD5 hex digest.
+
+## Verification Notes
+
+- `cmake --preset "MacOS Debug Config" -DENABLE_TESTS=ON` completes local
+  generation.
+- `ninja -C out/macos/debug cpp/plugins/CMakeFiles/krkr2plugin.dir/dummy_plugin_stubs.cpp.o`
+  passes.
+- `ninja -C out/macos/debug cpp/plugins/CMakeFiles/krkr2plugin.dir/base64.cpp.o`
+  passes.
+- `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
+  passes.
+- Full `libkrkr2plugin.a` / `krkr2plugin` build is currently blocked before
+  plugin linkage by the pre-existing `cpp/core/visual/ogl/RenderManager_ogl.cpp`
+  `GL::fGetProcAddress` compile error in the MacOS Debug preset.
