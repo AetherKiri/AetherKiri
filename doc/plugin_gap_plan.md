@@ -128,14 +128,12 @@ Commit rule: tests/tooling first, documentation updates after.
 
 Continue Phase 4 in this order:
 
-1. `qrcode.dll`: low-risk cross-platform port; original encoder code is local
-   and the API surface is a single `Layer.drawQRCode()` method.
-2. `imagesaver.dll`: implement the synchronous BMP save path first.
-3. `sqlite3.dll`: implement the synchronous database and statement core before
+1. `imagesaver.dll`: implement the synchronous BMP save path first.
+2. `sqlite3.dll`: implement the synchronous database and statement core before
    considering thread helpers or `sqlite3_xp3_vfs`.
-4. `layerExSave.dll`: evaluate synchronous image helper methods after
+3. `layerExSave.dll`: evaluate synchronous image helper methods after
    `imagesaver`; defer window-message/threaded save behavior.
-5. `httprequest.dll`: defer until a libcurl-backed, event-safe design is chosen.
+4. `httprequest.dll`: defer until a libcurl-backed, event-safe design is chosen.
 
 `onigruma` is not tracked as a missing plugin because AetherKiri already links
 Oniguruma in the core TJS regular expression implementation.
@@ -206,6 +204,11 @@ Oniguruma in the core TJS regular expression implementation.
   - Added `XMLParser`, `parse()`, `parseStorage()`, Expat-backed event
     callbacks, error/current-position properties, and the original typo
     compatibility property `currentButeCount`.
+- Completed a real `qrcode.dll` implementation.
+  - Commit: `ba6f5d9 Implement qrcode plugin`
+  - Added `Layer.drawQRCode(value, ecLevel, qrVersion, autoExtent, maskPattern)`
+    using the original QR encoder with cross-platform type/utility
+    replacements.
 
 ## Verification Notes
 
@@ -232,6 +235,8 @@ Oniguruma in the core TJS regular expression implementation.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/minizip.cpp.o -j2`
   passes.
 - `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/expat.cpp.o -j2`
+  passes.
+- `cmake --build out/macos/debug --target cpp/plugins/CMakeFiles/krkr2plugin.dir/qrcode.cpp.o cpp/plugins/CMakeFiles/krkr2plugin.dir/qrcode/QR_Encode.cpp.o -j2`
   passes.
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
