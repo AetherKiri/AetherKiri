@@ -20,6 +20,7 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("json.dll"),
         TJS_W("lineParser.dll"),
         TJS_W("memfile.dll"),
+        TJS_W("minizip.dll"),
     };
 
     for(const auto *module : modules)
