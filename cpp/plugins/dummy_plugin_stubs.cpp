@@ -44,11 +44,6 @@ static void layerExSubImage_stub() {}
 NCB_PRE_REGIST_CALLBACK(layerExSubImage_stub);
 
 #undef NCB_MODULE_NAME
-#define NCB_MODULE_NAME TJS_W("clipboardEx.dll")
-static void clipboardEx_stub() {}
-NCB_PRE_REGIST_CALLBACK(clipboardEx_stub);
-
-#undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("shellExecute.dll")
 static void shellExecute_stub() {}
 NCB_PRE_REGIST_CALLBACK(shellExecute_stub);
