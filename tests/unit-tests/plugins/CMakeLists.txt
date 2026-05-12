@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(TestPlugins LANGUAGES CXX)
 
-add_executable(motionplayer-dll motionplayer-dll.cpp main.cpp)
+add_executable(motionplayer-dll motionplayer-dll.cpp registry.cpp main.cpp)
 
 set(_KRKR2PLUGIN_LINK_ITEM "$<LINK_LIBRARY:WHOLE_ARCHIVE,krkr2plugin>")
 
