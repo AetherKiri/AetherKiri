@@ -14,6 +14,7 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("adjustMonitor.dll"),
         TJS_W("fpslimit.dll"),
         TJS_W("systemEx.dll"),
+        TJS_W("base64.dll"),
     };
 
     for(const auto *module : modules)
