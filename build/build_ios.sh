@@ -21,7 +21,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-BUILD_TYPE="${1:-debug}"
+BUILD_TYPE="debug"
+SIMULATOR=false
+
+for arg in "$@"; do
+    case "$arg" in
+        debug|release|Debug|Release)
+            BUILD_TYPE="$arg"
+            ;;
+        --simulator)
+            SIMULATOR=true
+            ;;
+        *)
+            echo "[WARN] Unknown iOS build argument ignored: $arg"
+            ;;
+    esac
+done
+
 BUILD_TYPE_LOWER="$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')"
 
 if [[ "$BUILD_TYPE_LOWER" != "debug" && "$BUILD_TYPE_LOWER" != "release" ]]; then
@@ -32,9 +48,21 @@ fi
 # Capitalize for CMake preset names
 BUILD_TYPE_CAP="$(echo "${BUILD_TYPE_LOWER:0:1}" | tr '[:lower:]' '[:upper:]')${BUILD_TYPE_LOWER:1}"
 
-CMAKE_CONFIG_PRESET="iOS ${BUILD_TYPE_CAP} Config"
-CMAKE_BUILD_PRESET="iOS ${BUILD_TYPE_CAP} Build"
-CMAKE_BUILD_DIR="$PROJECT_ROOT/out/ios/$BUILD_TYPE_LOWER"
+if [[ "$SIMULATOR" == true ]]; then
+    if [[ "$BUILD_TYPE_LOWER" != "debug" ]]; then
+        echo "Error: iOS simulator builds are only configured for debug."
+        exit 1
+    fi
+    CMAKE_CONFIG_PRESET="iOS Simulator Debug Config"
+    CMAKE_BUILD_PRESET="iOS Simulator Debug Build"
+    CMAKE_BUILD_DIR="$PROJECT_ROOT/out/ios-simulator/debug"
+    VCPKG_TRIPLET="arm64-ios-simulator"
+else
+    CMAKE_CONFIG_PRESET="iOS ${BUILD_TYPE_CAP} Config"
+    CMAKE_BUILD_PRESET="iOS ${BUILD_TYPE_CAP} Build"
+    CMAKE_BUILD_DIR="$PROJECT_ROOT/out/ios/$BUILD_TYPE_LOWER"
+    VCPKG_TRIPLET="arm64-ios"
+fi
 
 if [[ -d "$PROJECT_ROOT/.devtools/flutter" ]]; then
     FLUTTER_SDK="$PROJECT_ROOT/.devtools/flutter"
@@ -127,6 +155,7 @@ if [[ ! -d "$VCPKG_ROOT" ]]; then
 fi
 
 log_info "Build type:    $BUILD_TYPE_CAP"
+log_info "Simulator:     $SIMULATOR"
 log_info "Project root:  $PROJECT_ROOT"
 log_info "CMake preset:  $CMAKE_BUILD_PRESET"
 log_info "Flutter SDK:   $FLUTTER_SDK"
@@ -170,12 +199,12 @@ PLUGIN_LIBS_DIR="$PROJECT_ROOT/bridge/flutter_engine_bridge/ios/Libs"
 mkdir -p "$PLUGIN_LIBS_DIR"
 
 # --- Collect project static libraries ---
-# Exclude cpp/plugins/ top-level libs (already in libengine_api.a via CMake).
-# Keep deeply-nested sub-libs (e.g. psdparse/) which have unique .o files.
+# Include project and plugin static libraries. libengine_api.a references plugin
+# anchor symbols, but the plugin archives are built as separate static libs.
 PROJECT_LIBS=()
 while IFS= read -r -d '' lib; do
     PROJECT_LIBS+=("$lib")
-done < <(find "$CMAKE_BUILD_DIR" -name "*.a" -not -path "*/vcpkg_installed/*" -not -path "*/cpp/plugins/*" -print0)
+done < <(find "$CMAKE_BUILD_DIR" -name "*.a" -not -path "*/vcpkg_installed/*" -print0)
 
 # Merge project libs into libengine_project.a
 # For psdparse: only extract its unique .o files (not already in libengine_api.a)
@@ -222,7 +251,7 @@ log_info "Project library -> $PLUGIN_LIBS_DIR/libengine_project.a"
 #   libharfbuzz-subset.a (overlaps heavily with libharfbuzz.a)
 VCPKG_EXCLUDE_LIBS="libpng.a|libjpeg.a|libwebpdecoder.a|libharfbuzz-subset.a"
 
-VCPKG_LIB_DIR="$CMAKE_BUILD_DIR/vcpkg_installed/arm64-ios/lib"
+VCPKG_LIB_DIR="$CMAKE_BUILD_DIR/vcpkg_installed/$VCPKG_TRIPLET/lib"
 VCPKG_LIBS=()
 if [[ -d "$VCPKG_LIB_DIR" ]]; then
     while IFS= read -r -d '' lib; do
@@ -255,7 +284,9 @@ log_info "Running flutter pub get..."
 FLUTTER_BUILD_MODE="$BUILD_TYPE_LOWER"
 log_info "Building Flutter iOS app ($FLUTTER_BUILD_MODE)..."
 
-if [[ "$FLUTTER_BUILD_MODE" == "release" ]]; then
+if [[ "$SIMULATOR" == true ]]; then
+    (cd "$FLUTTER_APP_DIR" && "$FLUTTER_BIN" build ios --simulator --debug)
+elif [[ "$FLUTTER_BUILD_MODE" == "release" ]]; then
     (cd "$FLUTTER_APP_DIR" && "$FLUTTER_BIN" build ios --release --no-codesign)
 else
     (cd "$FLUTTER_APP_DIR" && "$FLUTTER_BIN" build ios --debug --no-codesign)
