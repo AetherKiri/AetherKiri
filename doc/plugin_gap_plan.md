@@ -297,6 +297,8 @@ Oniguruma in the core TJS regular expression implementation.
   - missing reference plugins: 0
 - `ninja -C out/macos/debug tests/unit-tests/plugins/CMakeFiles/motionplayer-dll.dir/registry.cpp.o`
   passes.
-- Full `libkrkr2plugin.a` / `krkr2plugin` build is currently blocked before
-  plugin linkage by the pre-existing `cpp/core/visual/ogl/RenderManager_ogl.cpp`
-  `GL::fGetProcAddress` compile error in the MacOS Debug preset.
+- Full `./build.sh macos debug --jobs=8` now completes after fixing the macOS
+  ANGLE `GL::fGetProcAddress` typedef and the `layerex_draw` libgdiplus
+  `BOOL` compatibility calls.
+- Debug app bundle was built and launched from:
+  `apps/flutter_app/build/macos/Build/Products/Debug/AetherKiri.app`.
