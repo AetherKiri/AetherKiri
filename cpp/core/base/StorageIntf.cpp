@@ -23,10 +23,13 @@
 #include "XP3Archive.h"
 #include "TickCount.h"
 #include "ncbind.hpp"
+#include "UtilStreams.h"
 
 #define TVP_DEFAULT_ARCHIVE_CACHE_NUM 128
 #define TVP_DEFAULT_AUTOPATH_CACHE_NUM 256
 static const tjs_char *TVP_AUTOPATH_CACHE_MISS_MARKER = TJS_W("\x01");
+static const char TVP_GFX_EFFECT_COMPAT_SCRIPT[] =
+    "// AetherKiri gfxEffect.dll compatibility placeholder.\n";
 
 //---------------------------------------------------------------------------
 // global variables
@@ -42,6 +45,23 @@ tjs_char TVPArchiveDelimiter = '>';
 // statics
 //---------------------------------------------------------------------------
 static tTJSStaticCriticalSection TVPCreateStreamCS;
+//---------------------------------------------------------------------------
+
+static bool TVPIsGfxEffectCompanionScript(const ttstr &name) {
+    ttstr storage = TVPExtractStorageName(name).AsLowerCase();
+    return (storage == TJS_W("gfx_fire.tjs") ||
+            storage == TJS_W("gfx_flash.tjs")) &&
+           (TVPRegisteredPlugins.find(TJS_W("gfxeffect.dll")) !=
+                TVPRegisteredPlugins.end() ||
+            TVPRegisteredPlugins.find(TJS_W("gfxfire.dll")) !=
+                TVPRegisteredPlugins.end());
+}
+
+static tTJSBinaryStream *TVPOpenGfxEffectCompanionScript() {
+    return new tTVPMemoryStream(
+        TVP_GFX_EFFECT_COMPAT_SCRIPT,
+        static_cast<tjs_uint>(sizeof(TVP_GFX_EFFECT_COMPAT_SCRIPT) - 1));
+}
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
@@ -786,6 +806,9 @@ bool TVPIsExistentStorageNoSearchNoNormalize(const ttstr &name) {
     // does name contain > ?
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
 
+    if(TVPIsGfxEffectCompanionScript(name))
+        return true;
+
     const tjs_char *sharp_pos = TJS_strchr(name.c_str(), TVPArchiveDelimiter);
     if(sharp_pos) {
         // this storagename indicates a file in an archive
@@ -1130,6 +1153,9 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         }
     }
 
+    if(TVPIsGfxEffectCompanionScript(name))
+        return TVPNormalizeStorageName(name);
+
     ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
     if(incache) {
         if(*incache == TVP_AUTOPATH_CACHE_MISS_MARKER)
@@ -1243,6 +1269,9 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
             TVPRemoveFromStorageCache(_name);
         TVPThrowExceptionMessage(TVPCannotOpenStorage, _name);
     }
+
+    if(access == TJS_BS_READ && TVPIsGfxEffectCompanionScript(name))
+        return TVPOpenGfxEffectCompanionScript();
 
     // does name contain > ?
     const tjs_char *sharp_pos = TJS_strchr(name.c_str(), TVPArchiveDelimiter);

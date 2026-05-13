@@ -302,3 +302,6 @@ Oniguruma in the core TJS regular expression implementation.
   `BOOL` compatibility calls.
 - Debug app bundle was built and launched from:
   `apps/flutter_app/build/macos/Build/Products/Debug/AetherKiri.app`.
+- Added a narrow `gfxEffect.dll` compatibility virtual storage fallback for
+  `GFX_Fire.tjs` and `GFX_Flash.tjs`, which some KAG patch scripts load
+  immediately after linking the plugin.
