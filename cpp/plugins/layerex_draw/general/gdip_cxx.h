@@ -195,10 +195,9 @@ namespace libgdiplus {
         [[nodiscard]] GpStatus GetLastStatus() const { return this->_gpStatus; }
 
         [[nodiscard]] bool IsInvertible() const {
-
-            BOOL r = FALSE;
+            bool r = false;
             this->_gpStatus = GdipIsMatrixInvertible(this->_gpMatrix, &r);
-            return r != FALSE;
+            return r;
         }
 
         GpStatus Invert() {
@@ -207,9 +206,9 @@ namespace libgdiplus {
         }
 
         [[nodiscard]] bool IsIdentity() const {
-            BOOL r = FALSE;
+            bool r = false;
             this->_gpStatus = GdipIsMatrixIdentity(_gpMatrix, &r);
-            return r != FALSE;
+            return r;
         }
 
         GpStatus Multiply(MatrixClass *matrix,
