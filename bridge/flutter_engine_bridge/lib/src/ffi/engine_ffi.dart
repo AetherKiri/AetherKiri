@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:ffi';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
@@ -184,6 +185,30 @@ class EngineFfiBridge {
     final result = _bindings.engineDestroy(current);
     if (result == kEngineResultOk) {
       _handle = nullptr;
+    }
+    return result;
+  }
+
+  Future<int> destroyAsync() async {
+    final current = _handle;
+    if (current == nullptr) {
+      return kEngineResultOk;
+    }
+
+    final handleAddress = current.address;
+    _handle = nullptr;
+
+    final result = await Isolate.run(() {
+      final lib = EngineBindings.tryLoadLibrary();
+      if (lib == null) return kEngineResultNotSupported;
+      final destroy = lib.lookupFunction<
+          Int32 Function(Pointer<Void>),
+          int Function(Pointer<Void>)>('engine_destroy');
+      return destroy(Pointer<Void>.fromAddress(handleAddress));
+    });
+
+    if (result != kEngineResultOk) {
+      _handle = current;
     }
     return result;
   }

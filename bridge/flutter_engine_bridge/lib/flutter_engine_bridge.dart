@@ -69,10 +69,18 @@ class FlutterEngineBridge {
   }
 
   Future<int> engineDestroy() async {
-    return _withFfiCall(
-      apiName: 'engine_destroy',
-      call: (ffi) => ffi.destroy(),
-    );
+    final ffi = _ffiBridge;
+    if (ffi == null) {
+      return kEngineResultNotSupported;
+    }
+
+    final result = await ffi.destroyAsync();
+    if (result != kEngineResultOk) {
+      _fallbackLastError = 'engine_destroy failed with code $result';
+    } else {
+      _fallbackLastError = '';
+    }
+    return result;
   }
 
   Future<int> engineOpenGame(
