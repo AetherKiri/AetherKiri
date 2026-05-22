@@ -6,6 +6,8 @@
 #include "BinaryStream.h"
 #include "krffmpeg.h"
 
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 extern "C" {
 #ifndef __STDC_CONSTANT_MACROS
 #define __STDC_CONSTANT_MACROS

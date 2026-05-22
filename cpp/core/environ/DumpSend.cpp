@@ -159,7 +159,7 @@ void TVPCheckAndSendDumps(const std::string &dumpdir,
         std::string msgfmt =
             LocaleConfigManager::GetInstance()->GetText("crash_report_msg");
         char buf[256];
-        sprintf(buf, msgfmt.c_str(), allDumps.size());
+        snprintf(buf, sizeof(buf), msgfmt.c_str(), allDumps.size());
         if(TVPShowSimpleMessageBoxYesNo(buf, title) == 0) {
             static std::thread dumpthread;
             dumpthread =

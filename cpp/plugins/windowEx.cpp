@@ -637,6 +637,8 @@ struct WindowEx {
                            win->IsInstanceOf(0, 0, 0, TJS_W("Window"), win))
                             GetHWND(win);
                     } break;
+                    default:
+                        break;
                 }
             }
         }
@@ -1124,6 +1126,9 @@ struct MenuItemEx {
                 break;
             case tvtObject:
                 bmptype[sel] = BMT_BMP;
+                break;
+            default:
+                break;
         }
         updateMenuItemInfo();
     }

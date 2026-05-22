@@ -7,9 +7,14 @@
 /**
  * Stream 用の Iterator
  */
-class PSDIterator : public std::iterator<std::random_access_iterator_tag,
-                                         const unsigned char> {
+class PSDIterator {
 public:
+    using iterator_category = std::random_access_iterator_tag;
+    using value_type = const unsigned char;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const unsigned char *;
+    using reference = const unsigned char &;
+
     typedef size_t diff_t;
 
     PSDIterator() : _psd(0), _pos(0), _size(0) {}

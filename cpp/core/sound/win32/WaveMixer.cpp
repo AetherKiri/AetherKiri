@@ -2,6 +2,7 @@
 #include "tjsCommHead.h"
 
 #ifdef __APPLE__
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #include <OpenAL/al.h>
 #include <OpenAL/alc.h>
 #include <TargetConditionals.h>

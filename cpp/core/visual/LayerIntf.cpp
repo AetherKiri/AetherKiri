@@ -4353,7 +4353,7 @@ bool tTJSNI_BaseLayer::GetBltMethodFromOperationModeAndDrawFace(
                 break;
             }
             break;
-        case dfAuto:
+        case (tTVPBlendOperationMode)dfAuto:
             break;
     }
 

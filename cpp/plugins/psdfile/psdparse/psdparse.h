@@ -421,8 +421,7 @@ namespace psd {
                     data.layerBlendingRange);
                 bool r = qi::parse(range.begin(), range.end(), parser);
             } else {
-                std::memset(&data.layerBlendingRange, 0,
-                            sizeof(LayerBlendingRange));
+                data.layerBlendingRange = LayerBlendingRange{};
             }
         }
 

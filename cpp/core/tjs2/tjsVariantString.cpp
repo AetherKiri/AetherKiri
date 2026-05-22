@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <atomic>
 
+#pragma clang diagnostic ignored "-Wundefined-bool-conversion"
+
 static std::atomic<int64_t> sTJSVS_NetBytes{0};
 
 extern "C" int64_t TJS_GetVSNetBytes() {

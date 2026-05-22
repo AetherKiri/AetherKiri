@@ -105,7 +105,7 @@ void TVPCheckMemory() {
         tjs_int freeMem = TVPGetSystemFreeMemory();
         if(freeMem < 24) {
             char buf[256];
-            sprintf(buf,
+            snprintf(buf, sizeof(buf),
                     "Insufficient memory (%dMB available)\nYou can "
                     "diable this "
                     "notice in global preference.",
