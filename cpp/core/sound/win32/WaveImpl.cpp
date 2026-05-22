@@ -1514,12 +1514,12 @@ tTVPWaveSoundBufferThread::tTVPWaveSoundBufferThread() :
 
 //---------------------------------------------------------------------------
 tTVPWaveSoundBufferThread::~tTVPWaveSoundBufferThread() {
+    Terminate();
     SetPriority(ttpNormal);
     Resume();
     Event.Set();
     WaitFor();
     EventQueue.Deallocate();
-    Terminate();
 }
 
 //---------------------------------------------------------------------------
