@@ -123,6 +123,10 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
     opencv_imgproc
     opencv_core
 )
+if(ANDROID)
+    target_link_options(${PROJECT_NAME} PUBLIC -fopenmp)
+    target_link_libraries(${PROJECT_NAME} PUBLIC -static-openmp)
+endif()
 
 find_package(lz4 CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PUBLIC

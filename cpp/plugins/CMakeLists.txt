@@ -78,6 +78,10 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 
 add_definitions(-D__STDC_CONSTANT_MACROS -DTJS_TEXT_OUT_CRLF)
 
+set_source_files_properties(sqlite/sqlite3.c PROPERTIES
+    COMPILE_OPTIONS "-U_FORTIFY_SOURCE;-D_FORTIFY_SOURCE=0"
+)
+
 # ---------------------------------------------------------------------------
 # Live2D Cubism SDK
 # ---------------------------------------------------------------------------
