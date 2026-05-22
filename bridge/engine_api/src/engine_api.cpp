@@ -1072,13 +1072,19 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
 void TeardownEmbeddedRuntime(engine_handle_t handle, engine_handle_s* impl) {
   spdlog::info("TeardownEmbeddedRuntime: begin");
 
-  // 1. Deactivate application
+  // 1. Stop all sound immediately (before anything else)
+  try {
+    TVPReleaseDirectSound();
+  } catch (...) {
+  }
+
+  // 2. Deactivate application
   try {
     Application->OnDeactivate();
   } catch (...) {
   }
 
-  // 2. Clear message queue and handle state
+  // 3. Clear message queue and handle state
   Application->FilterUserMessage(
       [](std::vector<std::tuple<void*, int, tTVPApplication::tMsg>>& queue) {
         queue.clear();
@@ -1096,7 +1102,7 @@ void TeardownEmbeddedRuntime(engine_handle_t handle, engine_handle_s* impl) {
     impl->frame.stride_bytes = 0;
   }
 
-  // 3. Call TVPSystemUninit() — fires at-exit handlers, uninits script engine
+  // 4. Call TVPSystemUninit() — fires at-exit handlers, uninits script engine
   if (!TVPSystemUninitCalled) {
     try {
       TVPSystemUninit();
@@ -1104,31 +1110,30 @@ void TeardownEmbeddedRuntime(engine_handle_t handle, engine_handle_s* impl) {
     }
   }
 
-  // 4. Application exit cleanup (deletes TVPSystemControl)
+  // 5. Application exit cleanup (deletes TVPSystemControl)
   try {
     Application->OnExit();
   } catch (...) {
   }
 
-  // 5. Destroy singletons
+  // 6. Destroy singletons
   TVPResetWindowListForRestart();
   TVPMainScene::DestroyInstance();
   EngineLoop::DestroyInstance();
   TVPEngineBootstrap::Shutdown();
 
-  // 6. Reset subsystem state for re-initialization
+  // 7. Reset subsystem state for re-initialization
   TVPResetStorageStateForRestart();
   TVPResetArchiveHandleCacheForRestart();
   TVPResetEventStateForRestart();
   TVPResetPluginSystemForRestart();
-  TVPUninitDirectSound();
   TVPResetSoundBuffersForRestart();
   TVPResetScriptEngineStateForRestart();
   TVPResetSystemInitStateForRestart();
   TVPResetSysInitImplStateForRestart();
   Application->ResetForRestart();
 
-  // 7. Reset engine_api globals
+  // 8. Reset engine_api globals
   g_runtime_started_once = false;
   g_engine_bootstrapped = false;
 

@@ -1762,6 +1762,8 @@ void TVPResetVolumeToAllSoundBuffer() {
 
 //---------------------------------------------------------------------------
 void TVPReleaseDirectSound() {
+    if(TVPWaveSoundBufferThread)
+        delete TVPWaveSoundBufferThread, TVPWaveSoundBufferThread = nullptr;
     TVPReleaseSoundBuffers(false);
     TVPUninitDirectSound();
 }
