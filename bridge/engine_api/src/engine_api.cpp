@@ -55,6 +55,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "visual/RenderManager.h"
 #include "plugin/PluginImpl.h"
 #include "sound/win32/WaveImpl.h"
+#include "sound/win32/WaveMixer.h"
 #include "psbfile/PSBMedia.h"
 #include "engine_options.h"
 #include "PluginCallTracer.hpp"
@@ -1120,6 +1121,7 @@ void TeardownEmbeddedRuntime(engine_handle_t handle, engine_handle_s* impl) {
   TVPResetArchiveHandleCacheForRestart();
   TVPResetEventStateForRestart();
   TVPResetPluginSystemForRestart();
+  TVPUninitDirectSound();
   TVPResetSoundBuffersForRestart();
   TVPResetScriptEngineStateForRestart();
   TVPResetSystemInitStateForRestart();

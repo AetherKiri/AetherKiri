@@ -240,6 +240,8 @@ protected:
     int _frame_size = 0;
 
 public:
+    virtual ~iTVPAudioRenderer() = default;
+
     iTVPAudioRenderer() {
         memset(&_spec, 0, sizeof(_spec));
         _spec.freq = 48000;
@@ -389,9 +391,14 @@ void tTVPSoundBuffer::FillBuffer(uint8_t *out, int len) {
 }
 
 class tTVPAudioRendererSDL : public iTVPAudioRenderer {
-    SDL_AudioDeviceID _playback_id;
+    SDL_AudioDeviceID _playback_id = 0;
 
 public:
+    ~tTVPAudioRendererSDL() override {
+        if(_playback_id > 0)
+            SDL_CloseAudioDevice(_playback_id);
+    }
+
     bool Init() override {
         InitMixer();
         _playback_id = SDL_OpenAudioDevice(nullptr, false, &_spec, &_spec,
@@ -791,7 +798,8 @@ void TVPInitDirectSound(int freq) {
 }
 
 void TVPUninitDirectSound() {
-    // nothing to do
+    delete TVPAudioRenderer;
+    TVPAudioRenderer = nullptr;
 }
 
 iTVPSoundBuffer *TVPCreateSoundBuffer(tTVPWaveFormat &fmt, int bufcount) {
