@@ -74,7 +74,7 @@ class FlutterEngineBridge {
       return kEngineResultNotSupported;
     }
 
-    final result = await ffi.destroyAsync();
+    final result = ffi.destroy();
     if (result != kEngineResultOk) {
       _fallbackLastError = 'engine_destroy failed with code $result';
     } else {
