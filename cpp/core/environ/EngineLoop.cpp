@@ -9,6 +9,7 @@
 
 #include "EngineLoop.h"
 
+#include <cstring>
 #include <spdlog/spdlog.h>
 
 #include "Application.h"
@@ -97,6 +98,15 @@ EngineLoop* EngineLoop::CreateInstance() {
         s_instance = new EngineLoop();
     }
     return s_instance;
+}
+
+void EngineLoop::DestroyInstance() {
+    if (s_instance) {
+        delete s_instance;
+        s_instance = nullptr;
+    }
+    s_postUpdate = nullptr;
+    std::memset(s_scancode, 0, sizeof(s_scancode));
 }
 
 void EngineLoop::Start() {

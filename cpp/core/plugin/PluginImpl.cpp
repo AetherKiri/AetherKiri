@@ -826,3 +826,11 @@ tTJSNativeClass *TVPCreateNativeClass_Plugins() {
     return cls;
 }
 //---------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------
+void TVPResetPluginSystemForRestart() {
+    TVPRegisteredPlugins.clear();
+    ncbAutoRegister::ResetRegistrationState();
+    TVPAutoLoadPluginCount = 0;
+}
+//---------------------------------------------------------------------------

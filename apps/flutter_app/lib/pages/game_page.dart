@@ -55,6 +55,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   static const MethodChannel _platformChannel = MethodChannel(
     'flutter_engine_bridge',
   );
+  static Future<void> _engineTeardownBarrier = Future<void>.value();
 
   late EngineBridge _bridge;
   final GlobalKey<EngineSurfaceState> _surfaceKey =
@@ -228,6 +229,16 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     await _destroyEngine();
   }
 
+  Future<void> _queueEngineTeardown() {
+    final future = _engineTeardownBarrier.catchError((_) {}).then((_) async {
+      await _waitForTickLoopToSettle();
+      await _finalizePlaySession();
+      await _destroyEngine();
+    });
+    _engineTeardownBarrier = future.catchError((_) {});
+    return future;
+  }
+
   Future<void> _prepareForAppExit() async {
     _appExitRequested = true;
     _stopStartupPolling();
@@ -263,7 +274,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     if (widget.gameManager != null) {
       unawaited(_finalizePlaySession());
     }
-    unawaited(_destroyEngine());
+    unawaited(_queueEngineTeardown());
     unawaited(_restoreSystemUiOverlays());
     _restoreOrientation();
     super.dispose();
@@ -444,6 +455,10 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
       }
     }
 
+    // Wait for any previous engine teardown to complete before re-creating.
+    await _engineTeardownBarrier.catchError((_) {});
+    if (!mounted) return;
+
     setState(() => _phase = _EnginePhase.creating);
     _log('engine_create...');
 
@@ -616,7 +631,8 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
           _stopPlaySessionRun();
           final error = _bridge.engineGetLastError();
           _log('Tick ended: result=$result, error=$error');
-          if (error == 'runtime has been terminated') {
+          if (error == 'runtime has been terminated' ||
+              error == 'runtime requested termination') {
             unawaited(_exitGame());
             return;
           }

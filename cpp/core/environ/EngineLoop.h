@@ -74,6 +74,9 @@ public:
     /** Create the singleton instance (idempotent). */
     static EngineLoop* CreateInstance();
 
+    /** Destroy the singleton instance (for runtime restart). */
+    static void DestroyInstance();
+
     /**
      * Start the engine from the given game path (standalone mode).
      * In host mode (Flutter), engine_open_game calls Application::StartApplication

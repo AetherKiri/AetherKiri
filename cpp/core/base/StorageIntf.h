@@ -393,4 +393,6 @@ public:
     tjs_uint64 GetSize() override { return DataLength; }
 };
 
+extern void TVPResetStorageStateForRestart();
+
 #endif

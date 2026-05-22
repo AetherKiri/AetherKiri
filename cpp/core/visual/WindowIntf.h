@@ -313,6 +313,7 @@ class tTJSNI_Window;
 extern tTJSNI_Window *TVPGetWindowListAt(tjs_int idx);
 extern tjs_int TVPGetWindowCount();
 extern tTJSNI_Window *TVPMainWindow; //  = nullptr; // main window
+extern void TVPResetWindowListForRestart();
 
 //---------------------------------------------------------------------------
 

@@ -687,3 +687,18 @@ static void TVPExecuteAsync(const std::wstring &progname) {}
 static bool TVPWaitWritePermit(const std::wstring &fn) { return false; }
 
 bool TVPExecuteUserConfig() { return false; }
+
+void TVPResetSysInitImplStateForRestart() {
+    TVPNativeProjectDir.Clear();
+    TVPNativeDataPath.Clear();
+    TVPProjectDirSelected = false;
+    TVPProgramArguments.clear();
+    TVPProgramArgumentsInit = false;
+    TVPCommandLineArgumentGeneration = 0;
+    TVPDataPathDirectoryEnsured = false;
+    TVPTerminated = false;
+    TVPTerminateCode = 0;
+    TVPTerminateOnWindowClose = true;
+    TVPTerminateOnNoWindowStartup = true;
+    TVPHostSuppressProcessExit = true;
+}

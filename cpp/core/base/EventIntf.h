@@ -298,6 +298,8 @@ TJS_EXP_FUNC_DEF(void, TVPRemoveCompactEventHook,
 
 extern void TVPDeliverCompactEvent(tjs_int level);
 // must be called by each platforms's implementation
+
+extern void TVPResetEventStateForRestart();
 //---------------------------------------------------------------------------
 
 /*

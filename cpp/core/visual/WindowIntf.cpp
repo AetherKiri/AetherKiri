@@ -69,6 +69,11 @@ tTJSNI_Window *TVPGetWindowListAt(tjs_int idx) { return TVPWindowVector[idx]; }
 //---------------------------------------------------------------------------
 tjs_int TVPGetWindowCount() { return (tjs_int)TVPWindowVector.size(); }
 //---------------------------------------------------------------------------
+void TVPResetWindowListForRestart() {
+    TVPWindowVector.clear();
+    TVPMainWindow = nullptr;
+}
+//---------------------------------------------------------------------------
 void TVPClearAllWindowInputEvents() {
     std::vector<tTJSNI_Window *>::iterator i;
     for(i = TVPWindowVector.begin(); i != TVPWindowVector.end(); i++) {

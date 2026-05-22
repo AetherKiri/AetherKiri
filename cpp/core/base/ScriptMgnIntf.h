@@ -27,6 +27,8 @@ extern void TVPUninitScriptEngine();
 
 extern void TVPRestartScriptEngine();
 
+extern void TVPResetScriptEngineStateForRestart();
+
 extern tTJS *TVPGetScriptEngine();
 
 TJS_EXP_FUNC_DEF(iTJSDispatch2 *, TVPGetScriptDispatch, ());

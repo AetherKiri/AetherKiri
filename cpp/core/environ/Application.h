@@ -180,6 +180,7 @@ public:
     void OnDeactivate();
     void OnExit();
     void OnLowMemory();
+    void ResetForRestart();
 
     [[nodiscard]] bool GetActivating() const { return application_activating_; }
     [[nodiscard]] bool GetNotMinimizing() const;

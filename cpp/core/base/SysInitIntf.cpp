@@ -135,5 +135,16 @@ static void TVPCauseAtExit() {
     }
 
     delete TVPAtExitInfos;
+    TVPAtExitInfos = nullptr;
+}
+//---------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------
+void TVPResetSystemInitStateForRestart() {
+    TVPSystemUninitCalled = false;
+    TVPAtExitShutdown = false;
+    TVPAtExitInfos = nullptr;
+    TVPProjectDir.Clear();
+    TVPDataPath.Clear();
 }
 //---------------------------------------------------------------------------

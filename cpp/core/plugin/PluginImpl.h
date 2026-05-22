@@ -183,4 +183,6 @@ extern bool TVPPluginUnloadedAtSystemExit;
 
 void tvpLoadPlugins();
 
+extern void TVPResetPluginSystemForRestart();
+
 #endif

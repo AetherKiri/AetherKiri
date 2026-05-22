@@ -1506,3 +1506,13 @@ tTJSNativeInstance *tTJSNC_Storages::CreateNativeInstance() {
     return nullptr;
 }
 //---------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------
+void TVPResetStorageStateForRestart() {
+    TVPClearArchiveCache();
+    TVPAutoPathList.clear();
+    TVPAutoPathCache.Clear();
+    TVPAutoPathTable.Clear();
+    AutoPathTableInit = false;
+}
+//---------------------------------------------------------------------------

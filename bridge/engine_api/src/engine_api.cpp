@@ -41,14 +41,20 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "environ/EngineLoop.h"
 #include "environ/MainScene.h"
 #include "base/StorageIntf.h"
+#include "base/XP3Archive.h"
 #include "base/SysInitIntf.h"
 #include "base/impl/SysInitImpl.h"
+#include "base/EventIntf.h"
+#include "base/ScriptMgnIntf.h"
 #include "visual/GraphicsLoaderIntf.h"
+#include "visual/WindowIntf.h"
 #include "visual/ogl/ogl_common.h"
 #include "visual/ogl/krkr_egl_context.h"
 #include "visual/ogl/angle_backend.h"
 #include "visual/impl/WindowImpl.h"
 #include "visual/RenderManager.h"
+#include "plugin/PluginImpl.h"
+#include "sound/win32/WaveImpl.h"
 #include "psbfile/PSBMedia.h"
 #include "engine_options.h"
 #include "PluginCallTracer.hpp"
@@ -1059,6 +1065,74 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
   return ENGINE_RESULT_OK;
 }
 
+// ---------------------------------------------------------------------------
+// TeardownEmbeddedRuntime — full engine teardown for restart support
+// ---------------------------------------------------------------------------
+void TeardownEmbeddedRuntime(engine_handle_t handle, engine_handle_s* impl) {
+  spdlog::info("TeardownEmbeddedRuntime: begin");
+
+  // 1. Deactivate application
+  try {
+    Application->OnDeactivate();
+  } catch (...) {
+  }
+
+  // 2. Clear message queue and handle state
+  Application->FilterUserMessage(
+      [](std::vector<std::tuple<void*, int, tTVPApplication::tMsg>>& queue) {
+        queue.clear();
+      });
+
+  {
+    std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+    impl->input.active_pointer_ids.clear();
+    impl->input.pending_events.clear();
+    impl->frame.rgba.clear();
+    impl->frame.ready = false;
+    impl->frame.rendered_this_tick = false;
+    impl->frame.width = 0;
+    impl->frame.height = 0;
+    impl->frame.stride_bytes = 0;
+  }
+
+  // 3. Call TVPSystemUninit() — fires at-exit handlers, uninits script engine
+  if (!TVPSystemUninitCalled) {
+    try {
+      TVPSystemUninit();
+    } catch (...) {
+    }
+  }
+
+  // 4. Application exit cleanup (deletes TVPSystemControl)
+  try {
+    Application->OnExit();
+  } catch (...) {
+  }
+
+  // 5. Destroy singletons
+  TVPResetWindowListForRestart();
+  TVPMainScene::DestroyInstance();
+  EngineLoop::DestroyInstance();
+  TVPEngineBootstrap::Shutdown();
+
+  // 6. Reset subsystem state for re-initialization
+  TVPResetStorageStateForRestart();
+  TVPResetArchiveHandleCacheForRestart();
+  TVPResetEventStateForRestart();
+  TVPResetPluginSystemForRestart();
+  TVPResetSoundBuffersForRestart();
+  TVPResetScriptEngineStateForRestart();
+  TVPResetSystemInitStateForRestart();
+  TVPResetSysInitImplStateForRestart();
+  Application->ResetForRestart();
+
+  // 7. Reset engine_api globals
+  g_runtime_started_once = false;
+  g_engine_bootstrapped = false;
+
+  spdlog::info("TeardownEmbeddedRuntime: end");
+}
+
 engine_result_t engine_destroy(engine_handle_t handle) {
   if (handle == nullptr) {
     SetThreadError(nullptr);
@@ -1105,18 +1179,7 @@ engine_result_t engine_destroy(engine_handle_t handle) {
   }
 
   if (owned_runtime) {
-    try {
-      Application->OnDeactivate();
-    } catch (...) {
-    }
-    Application->FilterUserMessage(
-        [](std::vector<std::tuple<void*, int, tTVPApplication::tMsg>>& queue) {
-          queue.clear();
-        });
-
-    // Avoid triggering platform exit() path in the host process.
-    TVPTerminated = false;
-    TVPTerminateCode = 0;
+    TeardownEmbeddedRuntime(handle, impl);
   }
 
   delete impl;
@@ -1174,7 +1237,7 @@ engine_result_t engine_open_game(engine_handle_t handle,
     return SetHandleErrorAndReturnLocked(
         impl,
         ENGINE_RESULT_NOT_SUPPORTED,
-        "runtime restart is not supported yet; restart process to open another game");
+        "previous runtime was not torn down; call engine_destroy before opening another game");
   }
   TVPTerminated = false;
   TVPTerminateCode = 0;
@@ -1262,7 +1325,7 @@ engine_result_t engine_open_game_async(engine_handle_t handle,
       return SetHandleErrorAndReturnLocked(
           impl,
           ENGINE_RESULT_NOT_SUPPORTED,
-          "runtime restart is not supported yet; restart process to open another game");
+          "previous runtime was not torn down; call engine_destroy before opening another game");
     }
 
     stale_worker = DetachStartupWorker(impl);

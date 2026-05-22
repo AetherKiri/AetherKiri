@@ -97,3 +97,7 @@ void ncbAutoRegister::LoadAllModules()
 	}
     spdlog::trace("ncbAutoRegister::LoadAllModules: end");
 }
+
+void ncbAutoRegister::ResetRegistrationState() {
+    _internal_plugins.clear();
+}

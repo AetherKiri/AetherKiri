@@ -209,4 +209,6 @@ public:
 };
 //---------------------------------------------------------------------------
 
+extern void TVPResetArchiveHandleCacheForRestart();
+
 #endif

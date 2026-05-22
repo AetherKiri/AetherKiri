@@ -1201,3 +1201,29 @@ tTJSNativeClass *TVPCreateNativeClass_AsyncTrigger() {
     return new tTJSNC_AsyncTrigger();
 }
 //---------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------
+void TVPResetEventStateForRestart() {
+    // Drain event queues
+    TVPDestroyEventQueue();
+    TVPEventQueue.clear();
+    TVPInputEventQueue.clear();
+    TVPWinUpdateEventQueue.clear();
+
+    // Release continuous handler closures
+    TVPDestroyContinuousHandlerVector();
+    TVPContinuousEventVector.clear();
+
+    // Clear compact event vector
+    TVPCompactEventVector.clear();
+
+    // Reset flags and counters
+    TVPExclusiveEventPosted = false;
+    TVPEventSequenceNumber = 0;
+    TVPEventSequenceNumberToProcess = 0;
+    TVPEventDisabled = false;
+    TVPEventInterrupting = false;
+    TVPProcessContinuousHandlerEventFlag = false;
+    TVPContinuousEventProcessing = false;
+}
+//---------------------------------------------------------------------------

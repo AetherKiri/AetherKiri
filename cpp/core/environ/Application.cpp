@@ -827,6 +827,20 @@ void tTVPApplication::OnExit() {
     CloseConsole();
 }
 
+void tTVPApplication::ResetForRestart() {
+    {
+        std::lock_guard<std::mutex> lock(m_msgQueueLock);
+        m_lstUserMsg.clear();
+    }
+    m_activeEvents.clear();
+    tarminate_ = false;
+    application_activating_ = true;
+    _project_startup = false;
+
+    delete image_load_thread_;
+    image_load_thread_ = nullptr;
+}
+
 void tTVPApplication::OnLowMemory() {
     if(!_project_startup)
         return;

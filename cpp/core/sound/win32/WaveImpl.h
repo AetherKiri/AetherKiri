@@ -341,4 +341,6 @@ public:
 };
 //---------------------------------------------------------------------------
 
+extern void TVPResetSoundBuffersForRestart();
+
 #endif

@@ -1049,3 +1049,25 @@ tjs_uint tTVPXP3ArchiveStream::Write(const void *buffer, tjs_uint write_size) {
 //---------------------------------------------------------------------------
 tjs_uint64 tTVPXP3ArchiveStream::GetSize() { return OrgSize; }
 //---------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------
+void TVPResetArchiveHandleCacheForRestart() {
+    tTJSCriticalSectionHolder cs_holder(TVPArchiveHandleCacheCS);
+
+    if(TVPArchiveHandleCacheInit) {
+        for(tjs_int i = 0; i < TVP_MAX_ARCHIVE_HANDLE_CACHE; i++) {
+            if(TVPArchiveHandleCachePool[i].Stream) {
+                delete TVPArchiveHandleCachePool[i].Stream;
+                TVPArchiveHandleCachePool[i].Stream = nullptr;
+            }
+            TVPArchiveHandleCachePool[i].Pointer = nullptr;
+            TVPArchiveHandleCachePool[i].Age = 0;
+        }
+        delete[] TVPArchiveHandleCachePool;
+        TVPArchiveHandleCachePool = nullptr;
+    }
+    TVPArchiveHandleCacheInit = false;
+    TVPArchiveHandleCacheShutdown = false;
+    TVPArchiveHandleCacheAge = 0;
+}
+//---------------------------------------------------------------------------

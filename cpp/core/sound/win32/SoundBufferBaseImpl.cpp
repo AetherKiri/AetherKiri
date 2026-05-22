@@ -93,3 +93,11 @@ void tTJSNI_SoundBuffer::Invalidate() {
     inherited::Invalidate();
 }
 //---------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------
+void TVPResetSoundBuffersForRestart() {
+    TVPSoundBufferVector.clear();
+    delete TVPSoundBufferTimer;
+    TVPSoundBufferTimer = nullptr;
+}
+//---------------------------------------------------------------------------
