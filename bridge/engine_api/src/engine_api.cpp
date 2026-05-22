@@ -1158,10 +1158,6 @@ engine_result_t engine_destroy(engine_handle_t handle) {
     }
 
     std::lock_guard<std::recursive_mutex> guard(impl->mutex);
-    result = ValidateHandleThreadLocked(impl);
-    if (result != ENGINE_RESULT_OK) {
-      return result;
-    }
 
     owned_runtime = (g_runtime_active && g_runtime_owner == handle);
     if (owned_runtime) {
