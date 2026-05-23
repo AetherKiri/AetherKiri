@@ -26,6 +26,8 @@
 #include <emscripten.h>
 #endif
 
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 #include <libavutil/opt.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/common.h>

@@ -40,7 +40,7 @@ using JniMethodInfo = krkr::JniHelper::MethodInfo;
 // as a fallback when KR2Activity is not available.
 extern jobject krkr_GetApplicationContext();
 
-extern unsigned int __page_size = getpagesize();
+unsigned int __page_size = getpagesize();
 
 void TVPPrintLog(const char *str) {
     __android_log_print(ANDROID_LOG_INFO, "kr2 debug info", "%s", str);

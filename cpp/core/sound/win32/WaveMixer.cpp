@@ -282,6 +282,8 @@ public:
         }
     }
 
+    virtual ~iTVPAudioRenderer() = default;
+
     virtual bool Init() = 0;
 
     virtual tTVPSoundBuffer *CreateStream(tTVPWaveFormat &fmt, int bufcount) {
@@ -458,6 +460,8 @@ public:
                     break;
                 case oboe::AudioFormat::Float:
                     _spec.format = AUDIO_F32LSB;
+                    break;
+                default:
                     break;
             }
             _frame_size = SDL_AUDIO_BITSIZE(_spec.format) / 8 * _spec.channels;
