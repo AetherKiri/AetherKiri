@@ -53,6 +53,9 @@
 #include "Platform.h"
 #include "Exception.h"
 #include "ConfigManager/LocaleConfigManager.h"
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 #if defined(__ANDROID__)
 #include <android/log.h>
 #endif
@@ -1027,6 +1030,14 @@ void TVPExecuteStartupScript() {
 #if defined(__ANDROID__)
         __android_log_print(ANDROID_LOG_INFO, "krkr2",
                             "Startup script ended successfully");
+#endif
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+        try {
+            ttstr patch = TVPGetAppPath() + "patch.tjs";
+            if(TVPIsExistentStorageNoSearch(patch))
+                TVPExecuteStorage(patch);
+        } catch(...) {
+        }
 #endif
         try {
             ttstr patch = TVPGetAppPath() + "AfterStartup.tjs";
