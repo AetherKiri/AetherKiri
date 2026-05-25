@@ -49,7 +49,7 @@ class _HomePageState extends State<HomePage> {
   String _angleBackend = PrefsKeys.angleBackendGles;
   bool _forceLandscape = true;
   bool _pluginTrace = false;
-  bool _mockEnabled = false;
+  bool _mockEnabled = true;
   bool _consoleLogFile = true;
   bool _traceLog = false;
   bool _exportScripts = false;
@@ -116,7 +116,7 @@ class _HomePageState extends State<HomePage> {
         prefs.getString(PrefsKeys.angleBackend) ?? PrefsKeys.angleBackendGles;
     _forceLandscape = prefs.getBool(PrefsKeys.forceLandscape) ?? true;
     _pluginTrace = prefs.getBool(PrefsKeys.pluginTrace) ?? false;
-    _mockEnabled = prefs.getBool(PrefsKeys.mockEnabled) ?? false;
+    _mockEnabled = prefs.getBool(PrefsKeys.mockEnabled) ?? true;
     _consoleLogFile = prefs.getBool(PrefsKeys.consoleLogFile) ?? true;
     _traceLog = prefs.getBool(PrefsKeys.traceLog) ?? false;
     _exportScripts = prefs.getBool(PrefsKeys.exportScripts) ?? false;

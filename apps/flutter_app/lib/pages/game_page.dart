@@ -25,7 +25,7 @@ class GamePage extends StatefulWidget {
     this.engineBridgeBuilder = createEngineBridge,
     this.forceLandscape = true,
     this.pluginTrace = false,
-    this.mockEnabled = false,
+    this.mockEnabled = true,
     this.consoleLogFile = true,
     this.traceLog = false,
     this.exportScripts = false,
