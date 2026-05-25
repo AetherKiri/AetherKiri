@@ -6,6 +6,7 @@ import 'dart:ui' show AppExitResponse;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../engine/engine_bridge.dart';
@@ -59,7 +60,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   final GlobalKey<EngineSurfaceState> _surfaceKey =
       GlobalKey<EngineSurfaceState>();
 
-  Timer? _tickTimer;
+  bool _tickFrameScheduled = false;
   bool _tickInFlight = false;
   bool _isTicking = false;
   bool _autoPausedByLifecycle = false;
@@ -587,6 +588,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   // reportFrameDelta receives the true inter-frame interval instead of
   // the vsync interval (which is always ~16ms on a 60Hz display).
   DateTime? _lastRenderedAt;
+  DateTime? _lastTickAt;
 
   void _startTickLoop() {
     if (_isTicking) return;
@@ -595,75 +597,87 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     _log('Tick loop started');
     if (kDebugMode) _startMemoryStatsPolling();
 
-    DateTime? lastTickAt;
+    _lastTickAt = null;
     _lastRenderedAt = null;
-    _tickTimer = Timer.periodic(const Duration(milliseconds: 16), (_) async {
-      if (_tickInFlight) return;
+    _scheduleTickFrame();
+  }
 
-      final now = DateTime.now();
-      final int deltaMs = lastTickAt == null
-          ? 16
-          : now.difference(lastTickAt!).inMilliseconds.clamp(1, 100);
-      lastTickAt = now;
+  void _scheduleTickFrame() {
+    if (_tickFrameScheduled || !_isTicking || !mounted) return;
+    _tickFrameScheduled = true;
+    SchedulerBinding.instance.scheduleFrameCallback((_) {
+      _tickFrameScheduled = false;
+      if (!mounted || !_isTicking || _tickInFlight) return;
+      unawaited(_runTickFrame());
+    });
+  }
 
-      _tickInFlight = true;
-      try {
-        final int result = await _bridge.engineTick(deltaMs: deltaMs);
-        if (!mounted) return;
+  Future<void> _runTickFrame() async {
+    final now = DateTime.now();
+    final int deltaMs = _lastTickAt == null
+        ? 16
+        : now.difference(_lastTickAt!).inMilliseconds.clamp(1, 100);
+    _lastTickAt = now;
 
-        if (result != _engineResultOk) {
-          _tickTimer?.cancel();
-          _stopPlaySessionRun();
-          final error = _bridge.engineGetLastError();
-          _log('Tick ended: result=$result, error=$error');
-          if (error == 'runtime has been terminated') {
-            unawaited(_exitGame());
-            return;
-          }
-          setState(() {
-            _isTicking = false;
-            _phase = _EnginePhase.error;
-            _errorMessage = 'engine_tick failed: $result ($error)';
-          });
+    _tickInFlight = true;
+    try {
+      final int result = await _bridge.engineTick(deltaMs: deltaMs);
+      if (!mounted) return;
+
+      if (result != _engineResultOk) {
+        _stopPlaySessionRun();
+        final error = _bridge.engineGetLastError();
+        _log('Tick ended: result=$result, error=$error');
+        if (error == 'runtime has been terminated') {
+          _isTicking = false;
+          unawaited(_exitGame());
           return;
         }
-
-        // Read the rendered flag exactly once. We pass it to pollFrame()
-        // so that engine_surface does NOT read it a second time (which
-        // would always see false because the flag is reset on read).
-        final bool rendered = await _bridge.engineGetFrameRenderedFlag();
-        if (rendered) {
-          if (_rendererInfo.isEmpty) {
-            _fetchRendererInfo();
-          }
-          // Compute the real inter-render interval for accurate FPS.
-          final int renderDeltaMs = _lastRenderedAt == null
-              ? deltaMs
-              : now.difference(_lastRenderedAt!).inMilliseconds.clamp(1, 200);
-          _lastRenderedAt = now;
-
-          _perfOverlayKey0.currentState?.reportFrameDelta(
-            renderDeltaMs.toDouble(),
-          );
-          // Poll frame immediately after tick, passing the flag so
-          // engine_surface skips its own flag read.
-          await _surfaceKey.currentState?.pollFrame(rendered: true);
-        }
-        _tickCount += 1;
-
-        if (_tickCount % 300 == 0) {
-          _log('Tick alive: count=$_tickCount');
-        }
-      } finally {
-        _tickInFlight = false;
+        setState(() {
+          _isTicking = false;
+          _phase = _EnginePhase.error;
+          _errorMessage = 'engine_tick failed: $result ($error)';
+        });
+        return;
       }
-    });
+
+      // Read the rendered flag exactly once. We pass it to pollFrame()
+      // so that engine_surface does NOT read it a second time (which
+      // would always see false because the flag is reset on read).
+      final bool rendered = await _bridge.engineGetFrameRenderedFlag();
+      if (rendered) {
+        if (_rendererInfo.isEmpty) {
+          _fetchRendererInfo();
+        }
+        // Compute the real inter-render interval for accurate FPS.
+        final int renderDeltaMs = _lastRenderedAt == null
+            ? deltaMs
+            : now.difference(_lastRenderedAt!).inMilliseconds.clamp(1, 200);
+        _lastRenderedAt = now;
+
+        _perfOverlayKey0.currentState?.reportFrameDelta(
+          renderDeltaMs.toDouble(),
+        );
+        // Poll frame immediately after tick, passing the flag so
+        // engine_surface skips its own flag read.
+        await _surfaceKey.currentState?.pollFrame(rendered: true);
+      }
+      _tickCount += 1;
+
+      if (_tickCount % 300 == 0) {
+        _log('Tick alive: count=$_tickCount');
+      }
+    } finally {
+      _tickInFlight = false;
+      if (mounted && _isTicking) {
+        _scheduleTickFrame();
+      }
+    }
   }
 
   void _stopTickLoop({bool notify = true}) {
     _stopPlaySessionRun();
-    _tickTimer?.cancel();
-    _tickTimer = null;
+    _tickFrameScheduled = false;
     _stopMemoryStatsPolling();
 
     _isTicking = false;
@@ -1089,9 +1103,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final bool surfaceActive = _phase == _EnginePhase.running;
-    final EngineSurfaceMode surfaceMode = Platform.isIOS
-        ? EngineSurfaceMode.software
-        : EngineSurfaceMode.gpuZeroCopy;
+    const EngineSurfaceMode surfaceMode = EngineSurfaceMode.gpuZeroCopy;
 
     return Scaffold(
       backgroundColor: Colors.black,
