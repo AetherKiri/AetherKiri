@@ -196,7 +196,8 @@ log_info "Engine static library built: $ENGINE_LIB"
 log_step "Step 2/3: Merging static libraries and copying to Flutter plugin"
 
 PLUGIN_LIBS_DIR="$PROJECT_ROOT/bridge/flutter_engine_bridge/ios/Libs"
-mkdir -p "$PLUGIN_LIBS_DIR"
+ACTIVE_LIBS_DIR="$PLUGIN_LIBS_DIR/$VCPKG_TRIPLET"
+mkdir -p "$PLUGIN_LIBS_DIR" "$ACTIVE_LIBS_DIR"
 
 # --- Collect project static libraries ---
 # Include project and plugin static libraries. libengine_api.a references plugin
@@ -236,12 +237,12 @@ done < <(find "$CMAKE_BUILD_DIR/cpp/plugins" -mindepth 3 -name "*.a" -print0 2>/
 if [[ ${#PSDPARSE_UNIQUE_OBJS[@]} -gt 0 ]]; then
     log_info "  Plugin sub-lib unique .o files: ${#PSDPARSE_UNIQUE_OBJS[@]}"
     # Merge project base + unique plugin objects
-    libtool -static -o "$PLUGIN_LIBS_DIR/libengine_project.a" \
+    libtool -static -o "$ACTIVE_LIBS_DIR/libengine_project.a" \
         "$MERGE_TMPDIR/libengine_project_base.a" "${PSDPARSE_UNIQUE_OBJS[@]}"
 else
-    cp "$MERGE_TMPDIR/libengine_project_base.a" "$PLUGIN_LIBS_DIR/libengine_project.a"
+    cp "$MERGE_TMPDIR/libengine_project_base.a" "$ACTIVE_LIBS_DIR/libengine_project.a"
 fi
-log_info "Project library -> $PLUGIN_LIBS_DIR/libengine_project.a"
+log_info "Project library -> $ACTIVE_LIBS_DIR/libengine_project.a"
 
 # --- Collect vcpkg third-party static libraries ---
 # Exclude redundant subset libraries that cause duplicate symbols:
@@ -266,10 +267,38 @@ fi
 
 log_info "  Vcpkg libs (after exclusion): ${#VCPKG_LIBS[@]}"
 
-# Merge vcpkg libs into libengine_vendors.a
-libtool -static -o "$PLUGIN_LIBS_DIR/libengine_vendors.a" "${VCPKG_LIBS[@]}"
+LIVE2D_CORE_LIB=""
+if [[ "$SIMULATOR" == true ]]; then
+    LIVE2D_CORE_LIB="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphonesimulator-arm64/libLive2DCubismCore.a"
+else
+    LIVE2D_CORE_LIB="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphoneos/libLive2DCubismCore.a"
+fi
+if [[ -f "$LIVE2D_CORE_LIB" ]]; then
+    VCPKG_LIBS+=("$LIVE2D_CORE_LIB")
+    log_info "  Live2D Core: $(basename "$(dirname "$LIVE2D_CORE_LIB")")/$(basename "$LIVE2D_CORE_LIB")"
+elif ar t "$ACTIVE_LIBS_DIR/libengine_project.a" 2>/dev/null | grep -q 'krkrlive2d.cpp.o'; then
+    log_error "Live2D Core library not found: $LIVE2D_CORE_LIB"
+    exit 1
+fi
 
-log_info "Vendors library -> $PLUGIN_LIBS_DIR/libengine_vendors.a"
+# Merge vcpkg libs into libengine_vendors.a
+libtool -static -o "$ACTIVE_LIBS_DIR/libengine_vendors.a" "${VCPKG_LIBS[@]}"
+
+log_info "Vendors library -> $ACTIVE_LIBS_DIR/libengine_vendors.a"
+
+# CocoaPods consumes the flat Libs/*.a paths from the local podspec. Keep a
+# triplet-specific copy for deterministic device/simulator artifacts, then
+# stage the requested triplet into the flat paths for this build.
+rm -f "$PLUGIN_LIBS_DIR/libengine_project.a" "$PLUGIN_LIBS_DIR/libengine_vendors.a"
+cp "$ACTIVE_LIBS_DIR/libengine_project.a" "$PLUGIN_LIBS_DIR/libengine_project.a"
+cp "$ACTIVE_LIBS_DIR/libengine_vendors.a" "$PLUGIN_LIBS_DIR/libengine_vendors.a"
+printf '%s\n' "$VCPKG_TRIPLET" > "$PLUGIN_LIBS_DIR/CURRENT_TRIPLET"
+log_info "Staged $VCPKG_TRIPLET libraries for CocoaPods in $PLUGIN_LIBS_DIR"
+
+if command -v lipo >/dev/null 2>&1; then
+    log_info "  $(lipo -info "$PLUGIN_LIBS_DIR/libengine_project.a")"
+    log_info "  $(lipo -info "$PLUGIN_LIBS_DIR/libengine_vendors.a")"
+fi
 
 # ============================================================
 # Step 3: Build Flutter iOS app
@@ -277,6 +306,15 @@ log_info "Vendors library -> $PLUGIN_LIBS_DIR/libengine_vendors.a"
 log_step "Step 3/3: Building Flutter iOS app"
 
 export PATH="$FLUTTER_SDK/bin:$PATH"
+export LANG="${LANG:-en_US.UTF-8}"
+export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+
+if [[ "$LANG" == "C" || "$LANG" == "POSIX" || "$LANG" == "C.UTF-8" ]]; then
+    export LANG="en_US.UTF-8"
+fi
+if [[ "$LC_ALL" == "C" || "$LC_ALL" == "POSIX" || "$LC_ALL" == "C.UTF-8" ]]; then
+    export LC_ALL="en_US.UTF-8"
+fi
 
 log_info "Running flutter pub get..."
 (cd "$FLUTTER_APP_DIR" && "$FLUTTER_BIN" pub get)
@@ -297,7 +335,8 @@ fi
 # ============================================================
 log_step "Build complete!"
 
-log_info "Engine static library: $PLUGIN_LIBS_DIR/libengine_api.a"
+log_info "Engine project library: $PLUGIN_LIBS_DIR/libengine_project.a"
+log_info "Engine vendors library: $PLUGIN_LIBS_DIR/libengine_vendors.a"
 log_info "Flutter iOS build output: $FLUTTER_APP_DIR/build/ios/"
 echo ""
 log_info "To deploy to a device, open in Xcode:"

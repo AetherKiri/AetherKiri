@@ -403,23 +403,29 @@ FrameReadbackLayout GetFrameReadbackLayoutLocked(engine_handle_s* impl) {
   layout.width = impl->frame.surface_width;
   layout.height = impl->frame.surface_height;
 
-  GLint viewport[4] = {0, 0, 0, 0};
-  glGetIntegerv(GL_VIEWPORT, viewport);
-  if (glGetError() == GL_NO_ERROR && viewport[2] > 0 && viewport[3] > 0) {
-    layout.read_x = viewport[0];
-    layout.read_y = viewport[1];
-    layout.width = static_cast<uint32_t>(viewport[2]);
-    layout.height = static_cast<uint32_t>(viewport[3]);
-  } else {
-    // Fallback: use the EGL surface dimensions
-    auto& egl = krkr::GetEngineEGLContext();
-    if (egl.IsValid()) {
-      const uint32_t egl_w = egl.GetWidth();
-      const uint32_t egl_h = egl.GetHeight();
-      if (egl_w > 0 && egl_h > 0) {
-        layout.width = egl_w;
-        layout.height = egl_h;
-      }
+  // Read back the full render target instead of GL_VIEWPORT. UpdateDrawBuffer()
+  // leaves GL_VIEWPORT set to the game letterbox rectangle, but Flutter's
+  // software path needs a stable full-surface image. Cropping to the viewport
+  // makes iOS rotation/input transitions expose stale side content.
+  auto& egl = krkr::GetEngineEGLContext();
+  if (egl.IsValid()) {
+    uint32_t egl_w = 0;
+    uint32_t egl_h = 0;
+    if (egl.HasIOSurface()) {
+      egl_w = egl.GetIOSurfaceWidth();
+      egl_h = egl.GetIOSurfaceHeight();
+    } else if (egl.HasNativeWindow()) {
+      egl_w = egl.GetNativeWindowWidth();
+      egl_h = egl.GetNativeWindowHeight();
+    } else {
+      egl_w = egl.GetWidth();
+      egl_h = egl.GetHeight();
+    }
+    if (egl_w > 0 && egl_h > 0) {
+      layout.read_x = 0;
+      layout.read_y = 0;
+      layout.width = egl_w;
+      layout.height = egl_h;
     }
   }
 
@@ -462,6 +468,51 @@ bool ReadCurrentFrameRgba(const FrameReadbackLayout& layout, void* out_pixels) {
     std::memcpy(row_buffer.data(), row_top, row_bytes);
     std::memcpy(row_top, row_bottom, row_bytes);
     std::memcpy(row_bottom, row_buffer.data(), row_bytes);
+  }
+
+  static int readback_log_count = 0;
+  if (readback_log_count < 8) {
+    uint32_t min_x = layout.width;
+    uint32_t min_y = layout.height;
+    uint32_t max_x = 0;
+    uint32_t max_y = 0;
+    uint64_t non_black = 0;
+    uint64_t alpha_nonzero = 0;
+    uint64_t r_sum = 0;
+    uint64_t g_sum = 0;
+    uint64_t b_sum = 0;
+    for (uint32_t y = 0; y < layout.height; ++y) {
+      const uint8_t* row = bytes + static_cast<size_t>(y) * row_bytes;
+      for (uint32_t x = 0; x < layout.width; ++x) {
+        const uint8_t* px = row + static_cast<size_t>(x) * 4u;
+        r_sum += px[0];
+        g_sum += px[1];
+        b_sum += px[2];
+        if (px[3] != 0) {
+          alpha_nonzero += 1;
+        }
+        if (px[0] != 0 || px[1] != 0 || px[2] != 0) {
+          non_black += 1;
+          min_x = std::min(min_x, x);
+          min_y = std::min(min_y, y);
+          max_x = std::max(max_x, x);
+          max_y = std::max(max_y, y);
+        }
+      }
+    }
+    if (non_black == 0) {
+      spdlog::info("engine_readback: {}x{} at {},{} all black alpha_nonzero={}",
+                   layout.width, layout.height, layout.read_x, layout.read_y,
+                   alpha_nonzero);
+    } else {
+      spdlog::info(
+          "engine_readback: {}x{} at {},{} non_black={} bbox=({},{} {}x{}) "
+          "rgb_sum=({},{},{}) alpha_nonzero={}",
+          layout.width, layout.height, layout.read_x, layout.read_y,
+          non_black, min_x, min_y, max_x - min_x + 1, max_y - min_y + 1,
+          r_sum, g_sum, b_sum, alpha_nonzero);
+    }
+    readback_log_count += 1;
   }
 
   return true;

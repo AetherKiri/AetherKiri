@@ -17,6 +17,7 @@
 #include "tjsHashSearch.h"
 #include "tjsGlobalStringMap.h"
 #include "tjsDebug.h"
+#include "../base/ScriptMgnIntf.h"
 
 #include <atomic>
 
@@ -33,11 +34,78 @@ extern "C" void TJS_GetObjByHashBits(int64_t out[8]) {
 }
 
 namespace TJS {
+    static tjs_error TJSCompatTouchImage(tTJSVariant *result,
+                                         tjs_int numparams,
+                                         tTJSVariant **param,
+                                         iTJSDispatch2 *) {
+        if(result)
+            *result = (tjs_int)0;
+        return TJS_S_OK;
+    }
+
+    static bool TJSCompatResolveTouchImage(const tjs_char *membername,
+                                           tTJSVariant *result) {
+        if(!membername || !result ||
+           TJS_strcmp(membername, TJS_W("touchImage"))) {
+            return false;
+        }
+        iTJSDispatch2 *method = TJSCreateNativeClassMethod(TJSCompatTouchImage);
+        if(!method)
+            return false;
+        *result = tTJSVariant(method, method);
+        method->Release();
+        return true;
+    }
+
+    static const tjs_char *TJSCompatGlobalFallbackName(const tjs_char *membername) {
+        if(!membername) return nullptr;
+        if(!TJS_strcmp(membername, TJS_W("LayerClass")))
+            return TJS_W("Layer");
+
+        static const tjs_char *const names[] = {
+            TJS_W("System"), TJS_W("Storages"), TJS_W("Scripts"),
+            TJS_W("Dictionary"), TJS_W("Debug"), TJS_W("Math"),
+            TJS_W("Plugins"), TJS_W("Window"), TJS_W("Layer"),
+            TJS_W("AffineSource"), TJS_W("AffineSourceBMPBase"),
+            TJS_W("AffineSourceImage"), TJS_W("AffineSourceBitmap"),
+            TJS_W("AffineSourceStand"), TJS_W("AffineSourceGLES"),
+            TJS_W("clNone"), TJS_W("ltBinder"), TJS_W("ltOpaque"),
+            TJS_W("ltAlpha"), TJS_W("ltAdditive"), TJS_W("ltSubtractive"),
+            TJS_W("omAlpha"), TJS_W("omAuto"),
+            TJS_W("debugWindowEnabled")
+        };
+        for(const tjs_char *name : names) {
+            if(!TJS_strcmp(membername, name))
+                return name;
+        }
+        return nullptr;
+    }
+
+    static bool TJSCompatResolveGlobalFallback(const tjs_char *membername,
+                                               tTJSVariant *result) {
+        if(!result) return false;
+        const tjs_char *globalName = TJSCompatGlobalFallbackName(membername);
+        if(!globalName) return false;
+
+        tTJS *engine = TVPGetScriptEngine();
+        if(!engine) return false;
+        iTJSDispatch2 *global = engine->GetGlobalNoAddRef();
+        if(!global) return false;
+
+        return TJS_SUCCEEDED(
+            global->PropGet(0, globalName, nullptr, result, global));
+    }
+
     static bool TJSIsStartupCompatWritableName(const tjs_char *membername) {
         return membername &&
                (!TJS_strcmp(membername, TJS_W("debugWindowEnabled")) ||
                 !TJS_strcmp(membername, TJS_W("inXP3archivePacked")) ||
-                !TJS_strcmp(membername, TJS_W("convertMode")));
+                !TJS_strcmp(membername, TJS_W("convertMode")) ||
+                !TJS_strcmp(membername, TJS_W("drawDevice")) ||
+                !TJS_strcmp(membername, TJS_W("gpuDrawDevice")) ||
+                !TJS_strcmp(membername, TJS_W("nativeDrawDevice")) ||
+                !TJS_strcmp(membername, TJS_W("OGLDrawDevice")) ||
+                !TJS_strcmp(membername, TJS_W("GLESAdaptor")));
     }
 
     //---------------------------------------------------------------------------
@@ -1250,6 +1318,9 @@ namespace TJS {
         tTJSSymbolData *data = Find(membername, hint);
 
         if(!data) {
+            if(membername && !TJS_strcmp(membername, TJS_W("touchImage"))) {
+                return TJSCompatTouchImage(result, numparams, param, objthis);
+            }
             if(CallMissing && TJS::TVPIsMockEnabled()) {
                 // call 'missing' method
                 tTJSVariant value_func;
@@ -1335,6 +1406,12 @@ namespace TJS {
                 if(CallGetMissing(membername, value))
                     return TJSDefaultPropGet(flag, value, result, objthis);
             }
+            if(TJSCompatResolveTouchImage(membername, result)) {
+                return TJS_S_OK;
+            }
+            if(TJSCompatResolveGlobalFallback(membername, result)) {
+                return TJS_S_OK;
+            }
         }
 
         if(!data && flag & TJS_MEMBERENSURE) {
@@ -1417,6 +1494,12 @@ namespace TJS {
                               // is specified
         else
             data = Find(membername, hint);
+
+        if(!data) {
+            if(TJSIsStartupCompatWritableName(membername)) {
+                data = Add(membername, hint);
+            }
+        }
 
         if(!data) {
             PluginCallTracer::Instance().LogMissingMember(membername, "PropSet", objthis);

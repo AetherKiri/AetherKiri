@@ -10,7 +10,12 @@ namespace TJS {
         return membername &&
                (!TJS_strcmp(membername, TJS_W("debugWindowEnabled")) ||
                 !TJS_strcmp(membername, TJS_W("inXP3archivePacked")) ||
-                !TJS_strcmp(membername, TJS_W("convertMode")));
+                !TJS_strcmp(membername, TJS_W("convertMode")) ||
+                !TJS_strcmp(membername, TJS_W("drawDevice")) ||
+                !TJS_strcmp(membername, TJS_W("gpuDrawDevice")) ||
+                !TJS_strcmp(membername, TJS_W("nativeDrawDevice")) ||
+                !TJS_strcmp(membername, TJS_W("OGLDrawDevice")) ||
+                !TJS_strcmp(membername, TJS_W("GLESAdaptor")));
     }
 
     tTJSExtendableObject::~tTJSExtendableObject() {
@@ -91,7 +96,8 @@ namespace TJS {
                                             iTJSDispatch2 *objthis) {
         tjs_error hr =
             inherited::PropSet(flag, membername, hint, param, objthis);
-        if(hr == TJS_E_ACCESSDENYED && membername != nullptr &&
+        if((hr == TJS_E_ACCESSDENYED || hr == TJS_E_MEMBERNOTFOUND) &&
+           membername != nullptr &&
            TJSIsStartupCompatWritableNameEx(membername)) {
             hr = inherited::PropSet(
                 flag | TJS_MEMBERENSURE | TJS_IGNOREPROP, membername, hint,

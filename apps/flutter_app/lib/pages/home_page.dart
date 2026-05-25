@@ -49,10 +49,12 @@ class _HomePageState extends State<HomePage> {
   String _angleBackend = PrefsKeys.angleBackendGles;
   bool _forceLandscape = true;
   bool _pluginTrace = false;
-  bool _mockEnabled = true;
+  bool _mockEnabled = false;
   bool _consoleLogFile = true;
   bool _traceLog = false;
   bool _exportScripts = false;
+  bool _autoLaunchRequested = false;
+  bool _autoOpenFirstGame = false;
 
   String? _resolveBuiltInDylibPath() {
     if (Platform.isIOS) {
@@ -99,18 +101,22 @@ class _HomePageState extends State<HomePage> {
       _customDylibPath = null;
     } else {
       final modeStr = prefs.getString(PrefsKeys.engineMode);
-      _engineMode = modeStr == PrefsKeys.engineModeCustom ? EngineMode.custom : EngineMode.builtIn;
+      _engineMode = modeStr == PrefsKeys.engineModeCustom
+          ? EngineMode.custom
+          : EngineMode.builtIn;
       _customDylibPath = prefs.getString(PrefsKeys.dylibPath);
     }
     _perfOverlay = prefs.getBool(PrefsKeys.perfOverlay) ?? false;
     _fpsLimitEnabled = prefs.getBool(PrefsKeys.fpsLimitEnabled) ?? false;
     _targetFps = prefs.getInt(PrefsKeys.targetFps) ?? PrefsKeys.defaultFps;
-    if (!PrefsKeys.fpsOptions.contains(_targetFps)) _targetFps = PrefsKeys.defaultFps;
+    if (!PrefsKeys.fpsOptions.contains(_targetFps))
+      _targetFps = PrefsKeys.defaultFps;
     _renderer = prefs.getString(PrefsKeys.renderer) ?? PrefsKeys.rendererOpengl;
-    _angleBackend = prefs.getString(PrefsKeys.angleBackend) ?? PrefsKeys.angleBackendGles;
+    _angleBackend =
+        prefs.getString(PrefsKeys.angleBackend) ?? PrefsKeys.angleBackendGles;
     _forceLandscape = prefs.getBool(PrefsKeys.forceLandscape) ?? true;
     _pluginTrace = prefs.getBool(PrefsKeys.pluginTrace) ?? false;
-    _mockEnabled = prefs.getBool(PrefsKeys.mockEnabled) ?? true;
+    _mockEnabled = prefs.getBool(PrefsKeys.mockEnabled) ?? false;
     _consoleLogFile = prefs.getBool(PrefsKeys.consoleLogFile) ?? true;
     _traceLog = prefs.getBool(PrefsKeys.traceLog) ?? false;
     _exportScripts = prefs.getBool(PrefsKeys.exportScripts) ?? false;
@@ -122,6 +128,36 @@ class _HomePageState extends State<HomePage> {
     }
 
     if (mounted) setState(() => _loading = false);
+
+    _autoOpenFirstGame =
+        Platform.executableArguments.contains('--auto-open-first-game') ||
+        Platform.environment['AETHER_AUTO_OPEN_FIRST_GAME'] == '1' ||
+        await _hasAutoOpenFirstGameMarker();
+    _maybeAutoOpenFirstGame();
+  }
+
+  Future<bool> _hasAutoOpenFirstGameMarker() async {
+    if (!Platform.isIOS) return false;
+    try {
+      final docDir = await getApplicationDocumentsDirectory();
+      return File('${docDir.path}/.aether_auto_open_first_game').exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _maybeAutoOpenFirstGame() {
+    if (!_autoLaunchRequested &&
+        _autoOpenFirstGame &&
+        mounted &&
+        _gameManager.games.isNotEmpty) {
+      _autoLaunchRequested = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _gameManager.games.isNotEmpty) {
+          _launchGame(_sortedGames.first);
+        }
+      });
+    }
   }
 
   Future<void> _initIosGamesDir() async {
@@ -175,14 +211,17 @@ class _HomePageState extends State<HomePage> {
     }
 
     final toRemove = _gameManager.games
-        .where((g) =>
-            g.path.startsWith(_iosGamesDir!) &&
-            !scannedNames.contains(p.basename(g.path)))
+        .where(
+          (g) =>
+              g.path.startsWith(_iosGamesDir!) &&
+              !scannedNames.contains(p.basename(g.path)),
+        )
         .map((g) => g.path)
         .toList();
     for (final path in toRemove) {
       await _gameManager.removeGame(path);
     }
+    _maybeAutoOpenFirstGame();
   }
 
   Future<void> _addGame() async {
@@ -237,10 +276,8 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _addGameDirectory() async {
     final l10n = AppLocalizations.of(context)!;
-    final String? selectedDirectory =
-        await FilePicker.platform.getDirectoryPath(
-      dialogTitle: l10n.selectGameDirectory,
-    );
+    final String? selectedDirectory = await FilePicker.platform
+        .getDirectoryPath(dialogTitle: l10n.selectGameDirectory);
     if (selectedDirectory == null || !mounted) return;
 
     final game = GameInfo(path: selectedDirectory);
@@ -375,15 +412,17 @@ class _HomePageState extends State<HomePage> {
                 children: [
                   Text(l10n.importStep1, style: const TextStyle(fontSize: 13)),
                   const SizedBox(height: 6),
-                  Text(l10n.importStep2,
-                      style: const TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600)),
+                  Text(
+                    l10n.importStep2,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                   const SizedBox(height: 6),
-                  Text(l10n.importStep3,
-                      style: const TextStyle(fontSize: 13)),
+                  Text(l10n.importStep3, style: const TextStyle(fontSize: 13)),
                   const SizedBox(height: 6),
-                  Text(l10n.importStep4,
-                      style: const TextStyle(fontSize: 13)),
+                  Text(l10n.importStep4, style: const TextStyle(fontSize: 13)),
                 ],
               ),
             ),
@@ -393,10 +432,9 @@ class _HomePageState extends State<HomePage> {
               style: TextStyle(
                 fontSize: 12,
                 fontFamily: 'monospace',
-                color: Theme.of(ctx)
-                    .colorScheme
-                    .onSurface
-                    .withValues(alpha: 0.5),
+                color: Theme.of(
+                  ctx,
+                ).colorScheme.onSurface.withValues(alpha: 0.5),
               ),
             ),
           ],
@@ -456,8 +494,14 @@ class _HomePageState extends State<HomePage> {
             ),
             if (game.coverPath != null)
               ListTile(
-                leading: const Icon(Icons.delete_outline, color: AppColors.errorCrimson),
-                title: Text(l10n.coverRemove, style: const TextStyle(color: AppColors.errorCrimson)),
+                leading: const Icon(
+                  Icons.delete_outline,
+                  color: AppColors.errorCrimson,
+                ),
+                title: Text(
+                  l10n.coverRemove,
+                  style: const TextStyle(color: AppColors.errorCrimson),
+                ),
                 onTap: () => Navigator.pop(ctx, 'remove'),
               ),
           ],
@@ -488,7 +532,8 @@ class _HomePageState extends State<HomePage> {
       await coversDir.create(recursive: true);
     }
     final ext = image.path.split('.').last;
-    final fileName = '${game.path.hashCode}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+    final fileName =
+        '${game.path.hashCode}_${DateTime.now().millisecondsSinceEpoch}.$ext';
     final destPath = '${coversDir.path}/$fileName';
     await File(image.path).copy(destPath);
 
@@ -543,7 +588,8 @@ class _HomePageState extends State<HomePage> {
     final l10n = AppLocalizations.of(context)!;
     final dylibPath = _effectiveDylibPath;
     final isSystemLoadedBuiltIn =
-        (Platform.isIOS || Platform.isAndroid) && _engineMode == EngineMode.builtIn;
+        (Platform.isIOS || Platform.isAndroid) &&
+        _engineMode == EngineMode.builtIn;
     if (dylibPath == null && !isSystemLoadedBuiltIn) {
       final msg = _engineMode == EngineMode.builtIn
           ? l10n.engineNotFoundBuiltIn
@@ -581,10 +627,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _openGameDetail(GameInfo game) async {
     final result = await Navigator.of(context).push<GameDetailResult>(
       AppAnimations.spatialRoute<GameDetailResult>(
-        GameDetailPage(
-          game: game,
-          gameManager: _gameManager,
-        ),
+        GameDetailPage(game: game, gameManager: _gameManager),
       ),
     );
     if (result == null || !mounted) return;
@@ -649,8 +692,7 @@ class _HomePageState extends State<HomePage> {
             children: [
               ValueListenableBuilder<double>(
                 valueListenable: progress,
-                builder: (_, value, _) =>
-                    LinearProgressIndicator(value: value),
+                builder: (_, value, _) => LinearProgressIndicator(value: value),
               ),
               const SizedBox(height: 12),
               ValueListenableBuilder<String>(
@@ -848,11 +890,11 @@ class _HomePageState extends State<HomePage> {
                           Tooltip(
                             message: _engineMode == EngineMode.builtIn
                                 ? (_builtInAvailable
-                                    ? l10n.builtInReady
-                                    : l10n.builtInNotReady)
+                                      ? l10n.builtInReady
+                                      : l10n.builtInNotReady)
                                 : (_customDylibPath != null
-                                    ? _customDylibPath!.split('/').last
-                                    : l10n.customNotSet),
+                                      ? _customDylibPath!.split('/').last
+                                      : l10n.customNotSet),
                             child: Icon(
                               _engineMode == EngineMode.builtIn
                                   ? Icons.inventory_2
@@ -969,24 +1011,21 @@ class _HomePageState extends State<HomePage> {
               crossAxisSpacing: 16,
               childAspectRatio: 3 / 4,
             ),
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final game = games[index];
-                return AppAnimations.staggeredEntrance(
-                  index: index,
-                  child: _CoverCard(
-                    game: game,
-                    l10n: l10n,
-                    onTap: () => _openGameDetail(game),
-                    onRename: () => _renameGame(game),
-                    onRemove: () => _removeGame(game),
-                    onSetCover: () => _setCoverImage(game),
-                    onPackUnpack: () => _packUnpackGame(game),
-                  ),
-                );
-              },
-              childCount: games.length,
-            ),
+            delegate: SliverChildBuilderDelegate((context, index) {
+              final game = games[index];
+              return AppAnimations.staggeredEntrance(
+                index: index,
+                child: _CoverCard(
+                  game: game,
+                  l10n: l10n,
+                  onTap: () => _openGameDetail(game),
+                  onRename: () => _renameGame(game),
+                  onRemove: () => _removeGame(game),
+                  onSetCover: () => _setCoverImage(game),
+                  onPackUnpack: () => _packUnpackGame(game),
+                ),
+              );
+            }, childCount: games.length),
           ),
         );
       },
@@ -1036,8 +1075,14 @@ class _CoverCardState extends State<_CoverCard> {
         offset.dy + box.size.height,
       ),
       items: [
-        PopupMenuItem(value: 'cover', child: _menuTile(Icons.image, l10n.setCover)),
-        PopupMenuItem(value: 'rename', child: _menuTile(Icons.edit, l10n.rename)),
+        PopupMenuItem(
+          value: 'cover',
+          child: _menuTile(Icons.image, l10n.setCover),
+        ),
+        PopupMenuItem(
+          value: 'rename',
+          child: _menuTile(Icons.edit, l10n.rename),
+        ),
         PopupMenuItem(
           value: 'pack_unpack',
           child: _menuTile(
@@ -1047,7 +1092,11 @@ class _CoverCardState extends State<_CoverCard> {
         ),
         PopupMenuItem(
           value: 'remove',
-          child: _menuTile(Icons.delete, l10n.remove, color: AppColors.errorCrimson),
+          child: _menuTile(
+            Icons.delete,
+            l10n.remove,
+            color: AppColors.errorCrimson,
+          ),
         ),
       ],
     ).then((value) {
@@ -1153,10 +1202,7 @@ class _CoverCardState extends State<_CoverCard> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Colors.transparent,
-              Color(0x8C141413),
-            ],
+            colors: [Colors.transparent, Color(0x8C141413)],
           ),
         ),
       ),
@@ -1192,7 +1238,8 @@ class _CoverCardState extends State<_CoverCard> {
             Text(
               [
                 if (lastPlayed != null) _formatDate(lastPlayed),
-                if (hasDuration) l10n.playDuration(GameInfo.formatPlayDuration(totalSeconds)),
+                if (hasDuration)
+                  l10n.playDuration(GameInfo.formatPlayDuration(totalSeconds)),
               ].join(' · '),
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.65),

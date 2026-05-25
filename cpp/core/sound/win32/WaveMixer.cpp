@@ -4,6 +4,7 @@
 #ifdef __APPLE__
 #include <OpenAL/al.h>
 #include <OpenAL/alc.h>
+#include <TargetConditionals.h>
 #else
 
 #include <AL/alc.h>
@@ -32,6 +33,12 @@
 class iTVPAudioRenderer;
 
 static iTVPAudioRenderer *TVPAudioRenderer;
+static ALCcontext *TVPALContext = nullptr;
+
+static void TVPEnsureALContext() {
+    if(TVPALContext && alcGetCurrentContext() != TVPALContext)
+        alcMakeContextCurrent(TVPALContext);
+}
 
 template <int ch>
 void MixAudioS16CPP(void *dst, const void *src, int samples, int16_t *volume) {
@@ -179,6 +186,7 @@ public:
 
     void AppendBuffer(const void *_inbuf,
                       unsigned int inlen /*, int tag = 0*/) override {
+        std::lock_guard<std::mutex> lk(_buffer_mtx);
         if(_cvt) {
             std::vector<uint8_t> buffer;
             uint8_t *inbuf = (uint8_t *)_inbuf;
@@ -200,12 +208,10 @@ public:
                 buffer.insert(buffer.end(), _cvt->buf,
                               _cvt->buf + _cvt->len_cvt);
             }
-            std::lock_guard<std::mutex> lk(_buffer_mtx);
             _inCachedSamples += buffer.size() / _frame_size;
             _buffers.emplace_back();
             _buffers.back().swap(buffer);
         } else {
-            std::lock_guard<std::mutex> lk(_buffer_mtx);
             _buffers.emplace_back((uint8_t *)_inbuf,
                                   ((uint8_t *)_inbuf) + inlen);
             _inCachedSamples += inlen / _frame_size;
@@ -389,9 +395,14 @@ void tTVPSoundBuffer::FillBuffer(uint8_t *out, int len) {
 }
 
 class tTVPAudioRendererSDL : public iTVPAudioRenderer {
-    SDL_AudioDeviceID _playback_id;
+    SDL_AudioDeviceID _playback_id = 0;
 
 public:
+    virtual ~tTVPAudioRendererSDL() {
+        if(_playback_id)
+            SDL_CloseAudioDevice(_playback_id);
+    }
+
     bool Init() override {
         InitMixer();
         _playback_id = SDL_OpenAudioDevice(nullptr, false, &_spec, &_spec,
@@ -504,7 +515,9 @@ public:
         _bufferIds = new ALuint[bufcount];
         _bufferIds2 = new ALuint[bufcount];
         _bufferSize = new tjs_uint[bufcount];
+        std::fill(_bufferSize, _bufferSize + _bufferCount, 0);
         _format = desired;
+        TVPEnsureALContext();
         alGenSources(1, &_alSource);
         alGenBuffers(_bufferCount, _bufferIds);
         alSourcef(_alSource, AL_GAIN, 1.0f);
@@ -536,14 +549,24 @@ public:
     }
 
     ~tTVPSoundBufferAL() override {
-        alDeleteBuffers(_bufferCount, _bufferIds);
-        alDeleteSources(1, &_alSource);
+        std::lock_guard<std::mutex> lk(_buffer_mtx);
+        TVPEnsureALContext();
+        if(_alSource) {
+            alSourceStop(_alSource);
+            UnqueueAllBuffersLocked();
+            alSourcei(_alSource, AL_BUFFER, 0);
+            alDeleteSources(1, &_alSource);
+            _alSource = 0;
+        }
+        if(_bufferIds)
+            alDeleteBuffers(_bufferCount, _bufferIds);
         delete[] _bufferIds;
         delete[] _bufferIds2;
         delete[] _bufferSize;
     }
 
     bool IsBufferValid() override {
+        TVPEnsureALContext();
         ALint processed = 0;
         alGetSourcei(_alSource, AL_BUFFERS_PROCESSED, &processed);
         if(processed > 0)
@@ -558,11 +581,14 @@ public:
         if(len <= 0)
             return;
         std::lock_guard<std::mutex> lk(_buffer_mtx);
+        TVPEnsureALContext();
 
         /* First remove any processed buffers. */
         ALint processed = 0;
         alGetSourcei(_alSource, AL_BUFFERS_PROCESSED, &processed);
         if(processed > 0) {
+            if(processed > static_cast<ALint>(_bufferCount))
+                processed = _bufferCount;
             alSourceUnqueueBuffers(_alSource, processed, _bufferIds2);
             checkerr("alSourceUnqueueBuffers");
             for(int i = 0; i < processed; ++i) {
@@ -594,13 +620,23 @@ public:
     }
 
     void Reset() override {
-        inherit::Reset();
         std::lock_guard<std::mutex> lk(_buffer_mtx);
-        alSourceRewind(_alSource);
-        alSourcei(_alSource, AL_BUFFER, 0);
+        _buffers.clear();
+        _inCachedSamples = 0;
+        _sendedFrontBuffer = 0;
+        _sendedSamples = 0;
+        TVPEnsureALContext();
+        if(_alSource) {
+            alSourceStop(_alSource);
+            UnqueueAllBuffersLocked();
+            alSourcei(_alSource, AL_BUFFER, 0);
+        }
+        _bufferIdx = -1;
+        std::fill(_bufferSize, _bufferSize + _bufferCount, 0);
     }
 
     void Pause() override {
+        TVPEnsureALContext();
         alSourcePause(_alSource);
         checkerr("Pause");
         _playing = false;
@@ -609,6 +645,7 @@ public:
     static void checkerr(const char *funcname);
 
     void Play() override {
+        TVPEnsureALContext();
         ALenum state;
         alGetSourcei(_alSource, AL_SOURCE_STATE, &state);
         checkerr("Play");
@@ -621,48 +658,55 @@ public:
     }
 
     void Stop() override {
+        TVPEnsureALContext();
         alSourceStop(_alSource);
         checkerr("Stop");
         Reset();
-        _bufferIdx = -1;
         _playing = false;
     }
 
     void SetVolume(float volume) override {
+        TVPEnsureALContext();
         alSourcef(_alSource, AL_GAIN, volume);
         checkerr("SetVolume");
     }
 
     float GetVolume() override {
+        TVPEnsureALContext();
         float volume = 0;
         alGetSourcef(_alSource, AL_GAIN, &volume);
         return volume;
     }
 
     void SetPan(float pan) override {
+        TVPEnsureALContext();
         float sourcePosAL[] = { pan, 0.0f, 0.0f };
         alSourcefv(_alSource, AL_POSITION, sourcePosAL);
     }
 
     float GetPan() override {
+        TVPEnsureALContext();
         float sourcePosAL[3];
         alGetSourcefv(_alSource, AL_POSITION, sourcePosAL);
         return sourcePosAL[0];
     }
 
     bool IsPlaying() override {
+        TVPEnsureALContext();
         ALenum state;
         alGetSourcei(_alSource, AL_SOURCE_STATE, &state);
         return state == AL_PLAYING;
     }
 
     void SetPosition(float x, float y, float z) override {
+        TVPEnsureALContext();
         float sourcePosAL[] = { x, y, z };
         alSourcefv(_alSource, AL_POSITION, sourcePosAL);
         checkerr("SetPosition");
     }
 
     int GetRemainBuffers() override {
+        TVPEnsureALContext();
         ALint processed, queued = 0;
         alGetSourcei(_alSource, AL_BUFFERS_PROCESSED, &processed);
         alGetSourcei(_alSource, AL_BUFFERS_QUEUED, &queued);
@@ -671,6 +715,7 @@ public:
 
     tjs_uint GetLatencySamples() override {
         std::lock_guard<std::mutex> lk(_buffer_mtx);
+        TVPEnsureALContext();
         ALint offset = 0, queued = 0;
         alGetSourcei(_alSource, AL_BYTE_OFFSET, &offset);
         alGetSourcei(_alSource, AL_BUFFERS_QUEUED, &queued);
@@ -694,9 +739,20 @@ public:
     }
 
     tjs_uint GetCurrentPlaySamples() override {
+        TVPEnsureALContext();
         ALint offset = 0;
         alGetSourcei(_alSource, AL_SAMPLE_OFFSET, &offset);
         return _sendedSamples + offset;
+    }
+
+private:
+    void UnqueueAllBuffersLocked() {
+        ALint queued = 0;
+        alGetSourcei(_alSource, AL_BUFFERS_QUEUED, &queued);
+        while(queued-- > 0) {
+            ALuint bufid = 0;
+            alSourceUnqueueBuffers(_alSource, 1, &bufid);
+        }
     }
 };
 
@@ -708,6 +764,8 @@ public:
     virtual ~tTVPAudioRendererAL() {
         if(_context) {
             // alDeleteSources(TVP_MAX_AUDIO_COUNT, _alSources);
+            if(_context == TVPALContext)
+                TVPALContext = nullptr;
             alcMakeContextCurrent(nullptr);
             alcDestroyContext(_context);
         }
@@ -730,15 +788,19 @@ public:
             while(*devices) {
                 TVPAddImportantLog(log + devices);
                 alldev.emplace_back(devices);
-                devices += alldev.back().length();
+                devices += alldev.back().length() + 1;
             }
-            _device = alcOpenDevice(alldev[0].c_str());
+            _device =
+                alcOpenDevice(alldev.empty() ? nullptr : alldev[0].c_str());
         }
         if(!_device)
             return false;
 
         _context = alcCreateContext(_device, nullptr);
+        if(!_context)
+            return false;
         alcMakeContextCurrent(_context);
+        TVPALContext = _context;
 
         return true;
     }
@@ -754,11 +816,7 @@ public:
 
 void tTVPSoundBufferAL::checkerr(const char *funcname) {
 #if _DEBUG
-    ALCcontext *ctx =
-        static_cast<tTVPAudioRendererAL *>(TVPAudioRenderer)->GetContext();
-    if(alcGetCurrentContext() != ctx) {
-        alcMakeContextCurrent(ctx);
-    }
+    TVPEnsureALContext();
     ALenum err = alGetError();
     if(AL_NO_ERROR == err)
         return;
@@ -777,6 +835,11 @@ static iTVPAudioRenderer *CreateAudioRenderer() {
     renderer = new tTVPAudioRendererSDL;
     renderer->Init();
     return renderer;
+#elif defined(__APPLE__) && TARGET_OS_IPHONE
+    renderer = new tTVPAudioRendererSDL;
+    if(renderer->Init())
+        return renderer;
+    delete renderer;
 #endif
     renderer = new tTVPAudioRendererAL;
     renderer->Init();
