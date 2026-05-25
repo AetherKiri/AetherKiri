@@ -195,6 +195,12 @@ public class FlutterEngineBridgePlugin: NSObject, FlutterPlugin {
     case "getPlatformVersion":
       result("iOS " + UIDevice.current.systemVersion)
 
+    case "forceLandscape":
+      DispatchQueue.main.async {
+        Self.forceLandscapeOrientation()
+        result(nil)
+      }
+
     // --- Legacy RGBA texture ---
     case "createTexture":
       let texture = EngineHostTexture()
@@ -398,5 +404,23 @@ public class FlutterEngineBridgePlugin: NSObject, FlutterPlugin {
     default:
       result(FlutterMethodNotImplemented)
     }
+  }
+
+  private static func forceLandscapeOrientation() {
+    for scene in UIApplication.shared.connectedScenes {
+      guard let windowScene = scene as? UIWindowScene else { continue }
+      if #available(iOS 16.0, *) {
+        windowScene.requestGeometryUpdate(
+          UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: .landscape)
+        ) { error in
+          NSLog("AetherKiri forceLandscape geometry request failed: \(error)")
+        }
+        for window in windowScene.windows {
+          window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        }
+      }
+    }
+
+    UIViewController.attemptRotationToDeviceOrientation()
   }
 }

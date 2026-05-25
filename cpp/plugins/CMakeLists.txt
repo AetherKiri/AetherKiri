@@ -91,13 +91,17 @@ file(GLOB_RECURSE CUBISM_FW_SOURCES
 # Exclude non-OpenGL renderers (already removed from tree, but safety net)
 list(FILTER CUBISM_FW_SOURCES EXCLUDE REGEX ".*/D3D9/.*|.*/D3D11/.*|.*/Vulkan/.*|.*/Metal/.*|.*/Cocos2d/.*")
 
-if(CUBISM_FW_SOURCES)
+if(CUBISM_FW_SOURCES AND (IOS OR ANDROID OR APPLE))
     add_library(CubismFramework STATIC ${CUBISM_FW_SOURCES})
     target_include_directories(CubismFramework PUBLIC
         ${CUBISM_FW_DIR}
+        ${CUBISM_FW_DIR}/src
         ${CUBISM_CORE_DIR}/include
     )
     target_compile_definitions(CubismFramework PUBLIC CSM_TARGET_ANGLE_ES2)
+    if(IOS)
+        target_compile_definitions(CubismFramework PUBLIC CSM_TARGET_IPHONE_ES2 GLES_SILENCE_DEPRECATION)
+    endif()
 
     # ANGLE headers for CubismFramework's OpenGLES2 renderer
     find_package(unofficial-angle CONFIG QUIET)
@@ -124,7 +128,15 @@ if(CUBISM_FW_SOURCES)
         set(CUBISM_CORE_ARCH ${CMAKE_ANDROID_ARCH_ABI})
         set(CUBISM_CORE_LIB ${CUBISM_CORE_DIR}/lib/android/${CUBISM_CORE_ARCH}/libLive2DCubismCore.a)
     elseif(IOS)
-        set(CUBISM_CORE_LIB ${CUBISM_CORE_DIR}/lib/ios/Release-iphoneos/libLive2DCubismCore.a)
+        if(CMAKE_OSX_SYSROOT MATCHES "iphonesimulator")
+            if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+                set(CUBISM_CORE_LIB ${CUBISM_CORE_DIR}/lib/ios/Release-iphonesimulator-x86_64/libLive2DCubismCore.a)
+            else()
+                set(CUBISM_CORE_LIB ${CUBISM_CORE_DIR}/lib/ios/Release-iphonesimulator-arm64/libLive2DCubismCore.a)
+            endif()
+        else()
+            set(CUBISM_CORE_LIB ${CUBISM_CORE_DIR}/lib/ios/Release-iphoneos/libLive2DCubismCore.a)
+        endif()
     elseif(APPLE)
         if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
             set(CUBISM_CORE_LIB ${CUBISM_CORE_DIR}/lib/macos/x86_64/libLive2DCubismCore.a)
@@ -137,9 +149,13 @@ if(CUBISM_FW_SOURCES)
 
     target_include_directories(${PROJECT_NAME} PUBLIC
         ${CUBISM_FW_DIR}
+        ${CUBISM_FW_DIR}/src
         ${CUBISM_CORE_DIR}/include
     )
     target_compile_definitions(${PROJECT_NAME} PUBLIC CSM_TARGET_ANGLE_ES2)
+    if(IOS)
+        target_compile_definitions(${PROJECT_NAME} PUBLIC CSM_TARGET_IPHONE_ES2 GLES_SILENCE_DEPRECATION)
+    endif()
     target_link_libraries(${PROJECT_NAME} PUBLIC CubismFramework)
     # Add the live2d source code to krkr2plugin since the framework is available
     target_sources(${PROJECT_NAME} PRIVATE krkrlive2d.cpp)

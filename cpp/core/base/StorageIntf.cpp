@@ -30,6 +30,25 @@
 static const tjs_char *TVP_AUTOPATH_CACHE_MISS_MARKER = TJS_W("\x01");
 static const char TVP_GFX_EFFECT_COMPAT_SCRIPT[] =
     "// AetherKiri gfxEffect.dll compatibility placeholder.\n";
+static const char TVP_GPU_COMPAT_SCRIPT[] =
+    "// AetherKiri GPULayer/D3D compatibility placeholder.\n"
+    "try { Plugins.link(\"krkrgles.dll\"); } catch(e) { }\n"
+    "try { Plugins.link(\"krkrlive2d.dll\"); } catch(e) { }\n"
+    "try { Window.OGLDrawDevice = OGLDrawDevice; } catch(e) { }\n"
+    "try { Window.GLESAdaptor = GLESAdaptor; } catch(e) { }\n"
+    "function KAGWindow_createDrawDevice() {\n"
+    "    var dd = null;\n"
+    "    try { dd = new OGLDrawDevice(); } catch(e) { try { dd = new GLESAdaptor(); } catch(e2) { dd = null; } }\n"
+    "    try { if(dd !== null) dd.setScreenSize(this.width, this.height); } catch(e) { }\n"
+    "    try { this.gpuDrawDevice = dd; } catch(e) { }\n"
+    "    try { this.OGLDrawDevice = dd; } catch(e) { }\n"
+    "    try { this.GLESAdaptor = dd; } catch(e) { }\n"
+    "    try { return new global.Window.BasicDrawDevice(); } catch(e) { }\n"
+    "    try { return new global.Window.PassThroughDrawDevice(); } catch(e) { }\n"
+    "    return null;\n"
+    "}\n"
+    "try { KAGWindow.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
+    "try { KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n";
 
 //---------------------------------------------------------------------------
 // global variables
@@ -54,7 +73,22 @@ static bool TVPIsGfxEffectCompanionScript(const ttstr &name) {
            (TVPRegisteredPlugins.find(TJS_W("gfxeffect.dll")) !=
                 TVPRegisteredPlugins.end() ||
             TVPRegisteredPlugins.find(TJS_W("gfxfire.dll")) !=
-                TVPRegisteredPlugins.end());
+            TVPRegisteredPlugins.end());
+}
+
+static bool TVPIsGpuCompanionScript(const ttstr &name) {
+    ttstr storage = TVPExtractStorageName(name).AsLowerCase();
+    return storage == TJS_W("gpulayer.tjs") ||
+           storage == TJS_W("gpuaffinelayer.tjs") ||
+           storage == TJS_W("d3d.tjs") ||
+           storage == TJS_W("d3daffinesource.tjs") ||
+           storage == TJS_W("d3daffinesourcepicture.tjs") ||
+           storage == TJS_W("d3daffinesourceimage.tjs") ||
+           storage == TJS_W("d3daffinesourcemotion.tjs") ||
+           storage == TJS_W("d3daffinesourcelive2d.tjs") ||
+           storage == TJS_W("d3daffinesourceemote.tjs") ||
+           storage == TJS_W("affinesourcelive2d.tjs") ||
+           storage == TJS_W("live2d.tjs");
 }
 
 static tTJSBinaryStream *TVPOpenGfxEffectCompanionScript() {
@@ -62,6 +96,13 @@ static tTJSBinaryStream *TVPOpenGfxEffectCompanionScript() {
         TVP_GFX_EFFECT_COMPAT_SCRIPT,
         static_cast<tjs_uint>(sizeof(TVP_GFX_EFFECT_COMPAT_SCRIPT) - 1));
 }
+
+static tTJSBinaryStream *TVPOpenGpuCompanionScript() {
+    return new tTVPMemoryStream(
+        TVP_GPU_COMPAT_SCRIPT,
+        static_cast<tjs_uint>(sizeof(TVP_GPU_COMPAT_SCRIPT) - 1));
+}
+
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
@@ -799,24 +840,12 @@ static tTVPAtExit TVPClearArchiveCacheAtExit(TVP_ATEXIT_PRI_SHUTDOWN,
                                              TVPClearArchiveCache);
 //---------------------------------------------------------------------------
 
-//---------------------------------------------------------------------------
-// TVPIsExistentStorageNoSearch
-//---------------------------------------------------------------------------
-bool TVPIsExistentStorageNoSearchNoNormalize(const ttstr &name) {
-    // does name contain > ?
-    tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
-
-    if(TVPIsGfxEffectCompanionScript(name))
-        return true;
-
+static bool TVPIsRealStorageNoSearchNoNormalize(const ttstr &name) {
     const tjs_char *sharp_pos = TJS_strchr(name.c_str(), TVPArchiveDelimiter);
     if(sharp_pos) {
-        // this storagename indicates a file in an archive
-
         ttstr arcname(name, (int)(sharp_pos - name.c_str()));
 
-        tTVPArchive *arc;
-        arc = TVPArchiveCache.Get(arcname);
+        tTVPArchive *arc = TVPArchiveCache.Get(arcname);
         bool ret;
         try {
             ttstr in_arc_name(sharp_pos + 1);
@@ -831,6 +860,24 @@ bool TVPIsExistentStorageNoSearchNoNormalize(const ttstr &name) {
     }
 
     return TVPStorageMediaManager.CheckExistentStorage(name);
+}
+//---------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------
+// TVPIsExistentStorageNoSearch
+//---------------------------------------------------------------------------
+bool TVPIsExistentStorageNoSearchNoNormalize(const ttstr &name) {
+    // does name contain > ?
+    tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
+
+    if(TVPIsRealStorageNoSearchNoNormalize(name))
+        return true;
+
+    if(TVPIsGfxEffectCompanionScript(name))
+        return true;
+    if(TVPIsGpuCompanionScript(name))
+        return true;
+    return false;
 }
 
 //---------------------------------------------------------------------------
@@ -1070,6 +1117,7 @@ static tjs_uint TVPRebuildAutoPathTable() {
                 if(i != -1) {
                     for(; i < (tjs_int)storagecount; i++) {
                         ttstr name = arc->GetName(i);
+                        tTVPArchive::NormalizeInArchiveStorageName(name);
 
                         if(name.StartsWith(in_arc_name)) {
                             if(!TJS_strchr(name.c_str() + in_arc_name_len,
@@ -1153,9 +1201,6 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         }
     }
 
-    if(TVPIsGfxEffectCompanionScript(name))
-        return TVPNormalizeStorageName(name);
-
     ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
     if(incache) {
         if(*incache == TVP_AUTOPATH_CACHE_MISS_MARKER)
@@ -1167,7 +1212,7 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
 
     ttstr normalized(TVPNormalizeStorageName(name));
 
-    bool found = TVPIsExistentStorageNoSearchNoNormalize(normalized);
+    bool found = TVPIsRealStorageNoSearchNoNormalize(normalized);
     if(found) {
         // found in current folder
         TVPAutoPathCache.Add(name, normalized);
@@ -1187,6 +1232,9 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         TVPAutoPathCache.Add(name, found);
         return found;
     }
+
+    if(TVPIsGfxEffectCompanionScript(name) || TVPIsGpuCompanionScript(name))
+        return normalized;
 
     // not found
     TVPAutoPathCache.Add(name, TVP_AUTOPATH_CACHE_MISS_MARKER);
@@ -1270,8 +1318,12 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
         TVPThrowExceptionMessage(TVPCannotOpenStorage, _name);
     }
 
-    if(access == TJS_BS_READ && TVPIsGfxEffectCompanionScript(name))
+    if(access == TJS_BS_READ && TVPIsGfxEffectCompanionScript(name) &&
+       !TVPIsRealStorageNoSearchNoNormalize(name))
         return TVPOpenGfxEffectCompanionScript();
+    if(access == TJS_BS_READ && TVPIsGpuCompanionScript(name) &&
+       !TVPIsRealStorageNoSearchNoNormalize(name))
+        return TVPOpenGpuCompanionScript();
 
     // does name contain > ?
     const tjs_char *sharp_pos = TJS_strchr(name.c_str(), TVPArchiveDelimiter);
@@ -1411,6 +1463,20 @@ if(result)
 return TJS_S_OK;
 }
 TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ addAutoPath)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ setDefaultPath) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+
+    ttstr path = *param[0];
+    TVPAddAutoPath(path);
+
+    if(result)
+        result->Clear();
+
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ setDefaultPath)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ removeAutoPath) {
     if(numparams < 1)

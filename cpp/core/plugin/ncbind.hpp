@@ -14,6 +14,7 @@
 
 #include "ncb_invoke.hpp"
 #include "PluginCallTracer.hpp"
+#include <algorithm>
 #include <map>
 #include <list>
 
@@ -2137,8 +2138,16 @@ struct ncbAutoRegister {
 		for (ThisClassT const* p = _top[line]; p; p = p->_next) {
 			ttstr name = p->modulename;
 			name.ToLowerCase();
-			_internal_plugins[name].lists[line].push_back(p);//p->Regist();
+			RegisterInternalPluginEntry(name.c_str(), line, p);//p->Regist();
 		}
+	}
+	static void RegisterInternalPluginEntry(NameT name, LineT line, ThisClassT const* entry) {
+		if (!name || !entry) return;
+		ttstr lower = name;
+		lower.ToLowerCase();
+		auto &list = _internal_plugins[lower].lists[line];
+		if (std::find(list.begin(), list.end(), entry) != list.end()) return;
+		list.push_back(entry);
 	}
 	static void AllUnregist(LineT line) {
 		for (ThisClassT const* p = _top[line]; p; p = p->_next)

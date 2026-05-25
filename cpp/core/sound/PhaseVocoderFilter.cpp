@@ -15,6 +15,10 @@
 #include "WaveIntf.h"
 #include "MsgIntf.h"
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 //---------------------------------------------------------------------------
 // tTJSNC_PhaseVocoder : PhaseVocoder TJS native class
 //---------------------------------------------------------------------------
@@ -295,6 +299,14 @@ void tTJSNI_PhaseVocoder::Fill(float *dest, tjs_uint samples, tjs_uint &written,
 void tTJSNI_PhaseVocoder::Decode(void *dest, tjs_uint samples,
                                  tjs_uint &written,
                                  tTVPWaveSegmentQueue &segments) {
+#if defined(__APPLE__)
+    // The phase-vocoder DSP can overrun its internal ring buffer on Apple
+    // targets with some KR3.7S voice filters. Keep playback stable by
+    // preserving the decoded stream and bypassing pitch/time processing.
+    Fill(static_cast<float *>(dest), samples, written, segments);
+    return;
+#endif
+
     if(!PhaseVocoder) {
         // PhaseVocoder を作成
         auto *pv = new tRisaPhaseVocoderDSP(Window, InputFormat.SamplesPerSec,

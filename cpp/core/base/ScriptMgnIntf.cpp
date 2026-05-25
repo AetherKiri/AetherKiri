@@ -934,12 +934,24 @@ void TVPOpenPatchLibUrl();
 //---------------------------------------------------------------------------
 // TVPExecuteStartupScript
 //---------------------------------------------------------------------------
+static void TVPInstallStartupPatchPrerequisites() {
+    TVPExecuteScript(TJS_W(
+        "var inSystemMenuStorages = [];\n"
+        "var kagHookEntries = [];\n"
+        "var afterInitCallback = [];\n"
+        "var COMMAND_SYNC = 0;\n"
+        "var COMMAND_ASYNC = 1;\n"
+        "var COMMAND_WAIT = 2;\n"
+        "var kirikiriz = false;\n"
+        "var kirikiriz_generic = false;\n"),
+        TJS_W("startup_patch_prereq.tjs"), 0,
+        static_cast<tTJSVariant *>(nullptr));
+}
+
 void TVPExecuteStartupScript() {
     ttstr strPatchError;
     try {
-        ttstr patch = TVPGetAppPath() + "patch.tjs";
-        if(TVPIsExistentStorageNoSearch(patch))
-            TVPExecuteStorage(patch);
+        TVPInstallStartupPatchPrerequisites();
     } catch(const TJS::eTJSScriptError &e) {
         ttstr &msg = strPatchError;
         msg += e.GetMessage();

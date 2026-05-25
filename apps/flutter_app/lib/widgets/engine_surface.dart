@@ -122,6 +122,9 @@ class EngineSurfaceState extends State<EngineSurface> with TextInputClient {
   int _frameWidth = 0;
   int _frameHeight = 0;
   double _devicePixelRatio = 1.0;
+  Offset _surfaceDisplayOffset = Offset.zero;
+  Size _surfaceDisplaySize = Size.zero;
+  bool _surfaceDisplayRotatedCounterClockwise = false;
 
   // Legacy texture mode
   int? _textureId;
@@ -415,7 +418,16 @@ class EngineSurfaceState extends State<EngineSurface> with TextInputClient {
           width: requestedWidth,
           height: requestedHeight,
         );
-        if (result != null && mounted) {
+        if (result == null) {
+          widget.onLog?.call(
+            'IOSurface resize unavailable, falling back to legacy texture mode: '
+            '${widget.bridge.engineGetLastError()}',
+          );
+          await _disposeIOSurfaceTexture();
+          await _ensureTexture();
+          return;
+        }
+        if (mounted) {
           final int newIOSurfaceId = result['ioSurfaceID'] as int;
           // Tell the engine about the new IOSurface
           final int setResult = await widget.bridge
@@ -434,9 +446,13 @@ class EngineSurfaceState extends State<EngineSurface> with TextInputClient {
               'IOSurface resized: ${requestedWidth}x$requestedHeight (iosurface=$newIOSurfaceId)',
             );
           } else {
-            _reportError(
-              'engine_set_render_target_iosurface failed after resize: $setResult',
+            widget.onLog?.call(
+              'IOSurface attach failed after resize, falling back to legacy texture mode: '
+              'result=$setResult, error=${widget.bridge.engineGetLastError()}',
             );
+            await _disposeIOSurfaceTexture();
+            await _ensureTexture();
+            return;
           }
         }
       } finally {
@@ -478,8 +494,9 @@ class EngineSurfaceState extends State<EngineSurface> with TextInputClient {
       );
 
       if (setResult != 0) {
-        _reportError(
-          'engine_set_render_target_iosurface failed: $setResult, '
+        widget.onLog?.call(
+          'IOSurface attach failed, falling back to legacy texture mode: '
+          'result=$setResult, '
           'error=${widget.bridge.engineGetLastError()}',
         );
         // Clean up and fall back
@@ -817,6 +834,92 @@ class EngineSurfaceState extends State<EngineSurface> with TextInputClient {
     );
   }
 
+  Widget _buildRawImageView(ui.Image image) {
+    return RawImage(
+      image: image,
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.none,
+    );
+  }
+
+  void _updateSurfaceDisplayGeometry(Size containerSize) {
+    final bool zeroCopyActive =
+        _ioSurfaceTextureId != null || _surfaceTextureId != null;
+    final double dpr = _devicePixelRatio > 0 ? _devicePixelRatio : 1.0;
+    final int physW = zeroCopyActive
+        ? (_surfaceWidth > 0
+              ? _surfaceWidth
+              : (_frameWidth > 0 ? _frameWidth : 1))
+        : (_frameWidth > 0
+              ? _frameWidth
+              : (_surfaceWidth > 0 ? _surfaceWidth : 1));
+    final int physH = zeroCopyActive
+        ? (_surfaceHeight > 0
+              ? _surfaceHeight
+              : (_frameHeight > 0 ? _frameHeight : 1))
+        : (_frameHeight > 0
+              ? _frameHeight
+              : (_surfaceHeight > 0 ? _surfaceHeight : 1));
+    final double logicalW = physW / dpr;
+    final double logicalH = physH / dpr;
+    _surfaceDisplayRotatedCounterClockwise = false;
+    final double displayLogicalW = _surfaceDisplayRotatedCounterClockwise
+        ? logicalH
+        : logicalW;
+    final double displayLogicalH = _surfaceDisplayRotatedCounterClockwise
+        ? logicalW
+        : logicalH;
+    if (containerSize.width <= 0 ||
+        containerSize.height <= 0 ||
+        displayLogicalW <= 0 ||
+        displayLogicalH <= 0) {
+      _surfaceDisplayOffset = Offset.zero;
+      _surfaceDisplaySize = containerSize;
+      return;
+    }
+    final double scale =
+        (containerSize.width / displayLogicalW)
+                .clamp(0.0, double.infinity)
+                .toDouble()
+                .compareTo(containerSize.height / displayLogicalH) <
+            0
+        ? containerSize.width / displayLogicalW
+        : containerSize.height / displayLogicalH;
+    final Size displaySize = Size(
+      displayLogicalW * scale,
+      displayLogicalH * scale,
+    );
+    _surfaceDisplaySize = displaySize;
+    _surfaceDisplayOffset = Offset(
+      (containerSize.width - displaySize.width) / 2,
+      (containerSize.height - displaySize.height) / 2,
+    );
+  }
+
+  Offset _mapLocalPositionToSurfacePixels(Offset localPosition) {
+    final Size displaySize = _surfaceDisplaySize;
+    if (displaySize.width <= 0 ||
+        displaySize.height <= 0 ||
+        _surfaceWidth <= 0 ||
+        _surfaceHeight <= 0) {
+      final double dpr = _devicePixelRatio > 0 ? _devicePixelRatio : 1.0;
+      return Offset(localPosition.dx * dpr, localPosition.dy * dpr);
+    }
+    final Offset displayLocal = localPosition - _surfaceDisplayOffset;
+    final double x = displayLocal.dx.clamp(0.0, displaySize.width);
+    final double y = displayLocal.dy.clamp(0.0, displaySize.height);
+    if (_surfaceDisplayRotatedCounterClockwise) {
+      return Offset(
+        (displaySize.height - y) / displaySize.height * _surfaceWidth,
+        x / displaySize.width * _surfaceHeight,
+      );
+    }
+    return Offset(
+      x / displaySize.width * _surfaceWidth,
+      y / displaySize.height * _surfaceHeight,
+    );
+  }
+
   int _currentModifierFlags({int buttons = 0}) {
     int modifiers = 0;
     final keyboard = HardwareKeyboard.instance;
@@ -1116,14 +1219,24 @@ class EngineSurfaceState extends State<EngineSurface> with TextInputClient {
     //
     // The C++ side (DrawDevice::TransformToPrimaryLayerManager)
     // then maps these surface coordinates → primary layer coordinates.
-    final double dpr = _devicePixelRatio > 0 ? _devicePixelRatio : 1.0;
+    final Offset surfacePosition = _mapLocalPositionToSurfacePixels(
+      event.localPosition,
+    );
     return EngineInputEventData(
       type: type,
       timestampMicros: event.timeStamp.inMicroseconds,
-      x: event.localPosition.dx * dpr,
-      y: event.localPosition.dy * dpr,
-      deltaX: (deltaX ?? event.delta.dx) * dpr,
-      deltaY: (deltaY ?? event.delta.dy) * dpr,
+      x: surfacePosition.dx,
+      y: surfacePosition.dy,
+      deltaX:
+          (deltaX ?? event.delta.dx) *
+          (_surfaceWidth > 0 && _surfaceDisplaySize.width > 0
+              ? _surfaceWidth / _surfaceDisplaySize.width
+              : (_devicePixelRatio > 0 ? _devicePixelRatio : 1.0)),
+      deltaY:
+          (deltaY ?? event.delta.dy) *
+          (_surfaceHeight > 0 && _surfaceDisplaySize.height > 0
+              ? _surfaceHeight / _surfaceDisplaySize.height
+              : (_devicePixelRatio > 0 ? _devicePixelRatio : 1.0)),
       pointerId: event.pointer,
       button: _flutterButtonsToEngineButton(event.buttons),
       modifiers: _currentModifierFlags(buttons: event.buttons),
@@ -1356,6 +1469,7 @@ class EngineSurfaceState extends State<EngineSurface> with TextInputClient {
       builder: (BuildContext context, BoxConstraints constraints) {
         final Size size = Size(constraints.maxWidth, constraints.maxHeight);
         _surfaceLogicalSize = size;
+        _updateSurfaceDisplayGeometry(size);
         if (isVirtualCursorEnabled && !_virtualCursorPositionInitialized) {
           _placeVirtualCursorAtSurfaceCenter();
         }
@@ -1416,11 +1530,7 @@ class EngineSurfaceState extends State<EngineSurface> with TextInputClient {
                   else if (_frameImage == null)
                     const SizedBox.shrink()
                   else
-                    RawImage(
-                      image: _frameImage,
-                      fit: BoxFit.contain,
-                      filterQuality: FilterQuality.none,
-                    ),
+                    _buildRawImageView(_frameImage!),
                   _buildVirtualCursorOverlay(),
                 ],
               ),

@@ -16,6 +16,7 @@ Pod::Spec.new do |s|
   s.source_files     = 'Classes/**/*'
   s.dependency 'Flutter'
   s.platform         = :ios, '15.0'
+  s.static_framework = true
 
   # Pre-built engine static libraries (split to avoid duplicate symbols)
   # libengine_project.a = project code (force-loaded)
@@ -35,11 +36,18 @@ Pod::Spec.new do |s|
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
+    'IPHONEOS_DEPLOYMENT_TARGET' => '15.0',
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',
     # -ObjC: load all .o files containing ObjC classes/categories
     # -force_load: force-load project library to ensure all C++ static initializers run
     # Do NOT use -all_load (causes duplicate symbols from vcpkg libs with overlapping code)
     'OTHER_LDFLAGS' => '-ObjC -force_load "$(PODS_TARGET_SRCROOT)/Libs/libengine_project.a"',
+  }
+  s.user_target_xcconfig = {
+    # The Dart side uses DynamicLibrary.process() on iOS. Force-loading the
+    # project archive into Runner keeps exported engine_* FFI symbols visible in
+    # the final app executable even when no ObjC/Swift code references them.
+    'OTHER_LDFLAGS' => '$(inherited) -force_load "$(PODS_ROOT)/../.symlinks/plugins/flutter_engine_bridge/ios/Libs/libengine_project.a"',
   }
   s.swift_version = '5.0'
 

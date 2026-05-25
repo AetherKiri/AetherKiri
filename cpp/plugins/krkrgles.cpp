@@ -2,7 +2,10 @@
 #include "ncbind.hpp"
 #include "ScriptMgnIntf.h"
 #include "LayerImpl.h"
+#include "BitmapIntf.h"
 #include "RenderManager.h"
+#include "EventIntf.h"
+#include "WindowIntf.h"
 #include <spdlog/spdlog.h>
 #include <unordered_map>
 #include <vector>
@@ -87,6 +90,170 @@ inline void SetObjectMethod(iTJSDispatch2 *o, const tjs_char *n,
     o->PropSet(TJS_MEMBERENSURE, n, nullptr, &v, o);
     m->Release();
 }
+
+static bool ForceSetScriptMember(const tTJSVariant &target,
+                                 const tjs_char *member,
+                                 const tTJSVariant &value) {
+    if (target.Type() != tvtObject || !member) return false;
+    tTJSVariantClosure clo = target.AsObjectClosureNoAddRef();
+    if (!clo.Object) return false;
+    return TJS_SUCCEEDED(clo.Object->PropSet(
+        TJS_MEMBERENSURE | TJS_IGNOREPROP, member, nullptr, &value,
+        clo.ObjThis ? clo.ObjThis : clo.Object));
+}
+
+static bool ForceSetGlobalObjectMember(const tjs_char *globalName,
+                                       const tjs_char *member,
+                                       const tTJSVariant &value) {
+    tTJS *engine = TVPGetScriptEngine();
+    if (!engine || !globalName || !member) return false;
+    iTJSDispatch2 *global = engine->GetGlobalNoAddRef();
+    if (!global) return false;
+
+    tTJSVariant target;
+    if (TJS_FAILED(global->PropGet(0, globalName, nullptr, &target, global)))
+        return false;
+
+    bool installed = ForceSetScriptMember(target, member, value);
+
+    tTJSVariant prototype;
+    tTJSVariantClosure clo = target.AsObjectClosureNoAddRef();
+    if (clo.Object &&
+        TJS_SUCCEEDED(clo.Object->PropGet(0, TJS_W("prototype"), nullptr,
+                                          &prototype, clo.Object))) {
+        installed = ForceSetScriptMember(prototype, member, value) || installed;
+    }
+
+    return installed;
+}
+
+static bool ForceMirrorGlobalToMember(const tjs_char *targetGlobal,
+                                      const tjs_char *sourceGlobal) {
+    tTJS *engine = TVPGetScriptEngine();
+    if (!engine || !targetGlobal || !sourceGlobal) return false;
+    iTJSDispatch2 *global = engine->GetGlobalNoAddRef();
+    if (!global) return false;
+
+    tTJSVariant value;
+    if (TJS_FAILED(global->PropGet(0, sourceGlobal, nullptr, &value, global)))
+        return false;
+    return ForceSetGlobalObjectMember(targetGlobal, sourceGlobal, value);
+}
+
+static bool CreateScriptObject(const tjs_char *expression, tTJSVariant *result) {
+    if (!expression || !result) return false;
+    try {
+        TVPExecuteExpression(ttstr(expression), result);
+        return result->Type() == tvtObject;
+    } catch (...) {
+        *result = tTJSVariant();
+        return false;
+    }
+}
+
+static const tjs_char *const kDrawAliasTargets[] = {
+    TJS_W("KAGWindow"),
+    TJS_W("kag"),
+    TJS_W("KAGWorldPlugin"),
+};
+
+static bool InstallDrawDeviceScriptAliases() {
+    try {
+        TVPExecuteExpression(
+            TJS_W("try {")
+            TJS_W("Window.OGLDrawDevice = OGLDrawDevice;")
+            TJS_W("Window.GLESAdaptor = GLESAdaptor;")
+            TJS_W("} catch(e) { }"),
+            static_cast<tTJSVariant *>(nullptr));
+
+        bool installed = false;
+
+        tTJSVariant gpuDevice;
+        if (CreateScriptObject(TJS_W("new OGLDrawDevice()"), &gpuDevice) ||
+            CreateScriptObject(TJS_W("new GLESAdaptor()"), &gpuDevice)) {
+            for (const tjs_char *target : kDrawAliasTargets) {
+                installed = ForceSetGlobalObjectMember(
+                                target, TJS_W("drawDevice"), gpuDevice) ||
+                            installed;
+                installed = ForceSetGlobalObjectMember(
+                                target, TJS_W("gpuDrawDevice"), gpuDevice) ||
+                            installed;
+                installed = ForceSetGlobalObjectMember(
+                                target, TJS_W("OGLDrawDevice"), gpuDevice) ||
+                            installed;
+                installed = ForceSetGlobalObjectMember(
+                                target, TJS_W("GLESAdaptor"), gpuDevice) ||
+                            installed;
+            }
+        }
+
+        if (TVPMainWindow) {
+            const tTJSVariant &windowDrawDevice =
+                TVPMainWindow->GetDrawDeviceObject();
+            if (windowDrawDevice.Type() == tvtObject) {
+                for (const tjs_char *target : kDrawAliasTargets) {
+                    installed = ForceSetGlobalObjectMember(
+                                    target, TJS_W("nativeDrawDevice"),
+                                    windowDrawDevice) ||
+                                installed;
+                }
+            }
+        }
+
+        static const tjs_char *kKagGlobalFallbacks[] = {
+            TJS_W("System"), TJS_W("Storages"), TJS_W("Scripts"),
+            TJS_W("Dictionary"), TJS_W("Debug"), TJS_W("Math"),
+            TJS_W("Plugins"), TJS_W("Window"), TJS_W("dm")
+        };
+        for (const tjs_char *name : kKagGlobalFallbacks) {
+            for (const tjs_char *target : kDrawAliasTargets) {
+                installed = ForceMirrorGlobalToMember(target, name) ||
+                            installed;
+            }
+        }
+        return installed;
+    } catch (...) {
+        return false;
+    }
+}
+
+extern "C" bool TVPInstallKrkrGlesDrawDeviceAliases() {
+    const bool installed = InstallDrawDeviceScriptAliases();
+    if (installed) {
+        spdlog::info("krkrgles: installed KAGWindow drawDevice aliases");
+    }
+    return installed;
+}
+
+class DrawDeviceAliasContinuousHook final : public tTVPContinuousEventCallbackIntf {
+public:
+    void Start() {
+        if (registered_) return;
+        TVPAddContinuousEventHook(this);
+        registered_ = true;
+        attempts_ = 0;
+        installed_ = false;
+    }
+
+    void OnContinuousCallback(tjs_uint64) override {
+        if (installed_) return;
+        installed_ = InstallDrawDeviceScriptAliases();
+        if (installed_) {
+            spdlog::info("krkrgles: installed runtime KAGWindow drawDevice aliases");
+            return;
+        }
+        if (++attempts_ == 600) {
+            spdlog::warn("krkrgles: runtime KAGWindow drawDevice aliases not installed after 600 ticks");
+        }
+    }
+
+private:
+    bool registered_ = false;
+    bool installed_ = false;
+    tjs_uint32 attempts_ = 0;
+};
+
+static DrawDeviceAliasContinuousHook g_drawDeviceAliasHook;
 
 // ---------------------------------------------------------------------------
 // KTX1 texture loader — uploads compressed or uncompressed KTX to GL
@@ -973,6 +1140,231 @@ static iTJSDispatch2 *FindLayerInParams(tjs_int n, tTJSVariant **p) {
     return nullptr;
 }
 
+static bool IsNumericVariant(const tTJSVariant &value) {
+    tTJSVariantType type = value.Type();
+    return type != tvtVoid && type != tvtString && type != tvtObject;
+}
+
+static void LogDrawCompatArgs(const char *name, tjs_int n, tTJSVariant **p) {
+    static std::unordered_map<std::string, int> counts;
+    int &count = counts[name ? name : "unknown"];
+    if (count >= 40) return;
+    ++count;
+
+    std::string message = std::string("krkrgles: ") + (name ? name : "draw") +
+                          " args #" + std::to_string(count) +
+                          " count=" + std::to_string(n);
+    for (tjs_int i = 0; i < n; ++i) {
+        message += " [";
+        message += std::to_string(i);
+        if (!p || !p[i]) {
+            message += ":null]";
+            continue;
+        }
+        message += ":t";
+        message += std::to_string(static_cast<int>(p[i]->Type()));
+        if (IsNumericVariant(*p[i])) {
+            message += "=";
+            message += std::to_string(static_cast<long long>((tjs_int64)*p[i]));
+        } else if (p[i]->Type() == tvtString || p[i]->Type() == tvtOctet) {
+            std::string s = ttstr(*p[i]).AsStdString();
+            if (s.size() > 48) s.resize(48);
+            message += "=\"";
+            message += s;
+            message += "\"";
+        } else if (p[i]->Type() == tvtObject) {
+            iTJSDispatch2 *obj = p[i]->AsObjectNoAddRef();
+            tTJSVariant width, height;
+            if (obj &&
+                TJS_SUCCEEDED(obj->PropGet(0, TJS_W("imageWidth"), nullptr,
+                                           &width, obj)) &&
+                TJS_SUCCEEDED(obj->PropGet(0, TJS_W("imageHeight"), nullptr,
+                                           &height, obj))) {
+                message += "=Layer(";
+                message += std::to_string(static_cast<long long>((tjs_int64)width));
+                message += "x";
+                message += std::to_string(static_cast<long long>((tjs_int64)height));
+                message += ")";
+            } else {
+                message += "=object";
+            }
+        }
+        message += "]";
+    }
+    spdlog::info("{}", message);
+}
+
+static tTJSNI_BaseLayer *GetNativeLayer(iTJSDispatch2 *obj) {
+    if (!obj) return nullptr;
+    tTJSNI_BaseLayer *layer = nullptr;
+    if (TJS_SUCCEEDED(obj->NativeInstanceSupport(
+            TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+            reinterpret_cast<iTJSNativeInstance **>(&layer)))) {
+        return layer;
+    }
+    return nullptr;
+}
+
+static bool GetBitmapFromObject(iTJSDispatch2 *obj, iTVPBaseBitmap **bitmap,
+                                tTVPBlendOperationMode *mode) {
+    if (!obj || !bitmap) return false;
+    if (tTJSNI_BaseLayer *layer = GetNativeLayer(obj)) {
+        *bitmap = layer->GetMainImage();
+        if (mode) *mode = layer->GetOperationModeFromType();
+        return *bitmap != nullptr;
+    }
+    tTJSNI_Bitmap *srcbmp = nullptr;
+    if (TJS_SUCCEEDED(obj->NativeInstanceSupport(
+            TJS_NIS_GETINSTANCE, tTJSNC_Bitmap::ClassID,
+            reinterpret_cast<iTJSNativeInstance **>(&srcbmp)))) {
+        *bitmap = srcbmp->GetBitmap();
+        if (mode) *mode = omAlpha;
+        return *bitmap != nullptr;
+    }
+    return false;
+}
+
+static bool GetLayerAndObjectArgs(tjs_int n, tTJSVariant **p,
+                                  tTJSNI_BaseLayer **dstLayer,
+                                  iTJSDispatch2 **srcObject,
+                                  tjs_int *dstIndex, tjs_int *srcIndex) {
+    if (!p || !dstLayer || !srcObject) return false;
+    *dstLayer = nullptr;
+    *srcObject = nullptr;
+    if (dstIndex) *dstIndex = -1;
+    if (srcIndex) *srcIndex = -1;
+    for (tjs_int i = 0; i < n; ++i) {
+        if (!p[i] || p[i]->Type() != tvtObject) continue;
+        iTJSDispatch2 *obj = p[i]->AsObjectNoAddRef();
+        if (!obj) continue;
+        if (!*dstLayer) {
+            if (tTJSNI_BaseLayer *layer = GetNativeLayer(obj)) {
+                *dstLayer = layer;
+                if (dstIndex) *dstIndex = i;
+                continue;
+            }
+        }
+        if (!*srcObject) {
+            iTVPBaseBitmap *bitmap = nullptr;
+            if (GetBitmapFromObject(obj, &bitmap, nullptr)) {
+                *srcObject = obj;
+                if (srcIndex) *srcIndex = i;
+            }
+        }
+    }
+    return *dstLayer && *srcObject;
+}
+
+static bool GetNumericArgs(tjs_int n, tTJSVariant **p, tjs_int start,
+                           std::vector<tjs_real> &out) {
+    out.clear();
+    for (tjs_int i = start; i < n; ++i) {
+        if (!p[i] || !IsNumericVariant(*p[i])) continue;
+        out.push_back(static_cast<tjs_real>(*p[i]));
+    }
+    return !out.empty();
+}
+
+static bool DrawLayerNative(tjs_int n, tTJSVariant **p) {
+    tTJSNI_BaseLayer *dstLayer = nullptr;
+    iTJSDispatch2 *srcObject = nullptr;
+    tjs_int dstIndex = -1;
+    tjs_int srcIndex = -1;
+    if (!GetLayerAndObjectArgs(n, p, &dstLayer, &srcObject, &dstIndex,
+                               &srcIndex)) {
+        return false;
+    }
+
+    iTVPBaseBitmap *src = nullptr;
+    tTVPBlendOperationMode automode = omAlpha;
+    if (!GetBitmapFromObject(srcObject, &src, &automode)) return false;
+    const tjs_int firstNumeric =
+        srcIndex > dstIndex ? dstIndex + 1 : srcIndex + 1;
+    std::vector<tjs_real> nums;
+    GetNumericArgs(n, p, firstNumeric, nums);
+
+    tjs_int dx = nums.size() > 0 ? static_cast<tjs_int>(nums[0]) : 0;
+    tjs_int dy = nums.size() > 1 ? static_cast<tjs_int>(nums[1]) : 0;
+    tjs_int dw = nums.size() > 2 ? static_cast<tjs_int>(nums[2])
+                                 : dstLayer->GetWidth();
+    tjs_int dh = nums.size() > 3 ? static_cast<tjs_int>(nums[3])
+                                 : dstLayer->GetHeight();
+    tjs_int sx = nums.size() > 4 ? static_cast<tjs_int>(nums[4]) : 0;
+    tjs_int sy = nums.size() > 5 ? static_cast<tjs_int>(nums[5]) : 0;
+    tjs_int sw = nums.size() > 6 ? static_cast<tjs_int>(nums[6]) : src->GetWidth();
+    tjs_int sh = nums.size() > 7 ? static_cast<tjs_int>(nums[7]) : src->GetHeight();
+
+    if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) return false;
+
+    tTVPRect dest(dx, dy, dx + dw, dy + dh);
+    tTVPRect srcrect(sx, sy, sx + sw, sy + sh);
+    try {
+        dstLayer->StretchCopy(dest, src, srcrect, stNearest, 0.0);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+static bool DrawAffineNative(tjs_int n, tTJSVariant **p) {
+    tTJSNI_BaseLayer *dstLayer = nullptr;
+    iTJSDispatch2 *srcObject = nullptr;
+    tjs_int dstIndex = -1;
+    tjs_int srcIndex = -1;
+    if (!GetLayerAndObjectArgs(n, p, &dstLayer, &srcObject, &dstIndex,
+                               &srcIndex)) {
+        return false;
+    }
+
+    iTVPBaseBitmap *src = nullptr;
+    tTVPBlendOperationMode automode = omAlpha;
+    if (!GetBitmapFromObject(srcObject, &src, &automode)) return false;
+    const tjs_int firstNumeric =
+        srcIndex > dstIndex ? dstIndex + 1 : srcIndex + 1;
+    std::vector<tjs_real> nums;
+    GetNumericArgs(n, p, firstNumeric, nums);
+    if (nums.size() < 12) return false;
+
+    tTVPRect srcrect(static_cast<tjs_int>(nums[0]),
+                     static_cast<tjs_int>(nums[1]),
+                     static_cast<tjs_int>(nums[0] + nums[2]),
+                     static_cast<tjs_int>(nums[1] + nums[3]));
+    if (srcrect.get_width() <= 0 || srcrect.get_height() <= 0) return false;
+
+    tTVPBlendOperationMode mode = automode == omAuto ? omAlpha : automode;
+    tjs_int opa = nums.size() > 13 ? static_cast<tjs_int>(nums[13]) : 255;
+    tTVPBBStretchType type = nums.size() > 14
+                                 ? static_cast<tTVPBBStretchType>(
+                                       static_cast<tjs_int>(nums[14]))
+                                 : stNearest;
+
+    try {
+        const bool matrixMode = static_cast<tjs_int>(nums[4]) != 0;
+        if (matrixMode) {
+            t2DAffineMatrix mat;
+            mat.a = nums[5];
+            mat.b = nums[6];
+            mat.c = nums[7];
+            mat.d = nums[8];
+            mat.tx = nums[9];
+            mat.ty = nums[10];
+            dstLayer->OperateAffine(mat, src, srcrect, mode, opa, type);
+        } else {
+            tTVPPointD points[3];
+            points[0].x = nums[5];
+            points[0].y = nums[6];
+            points[1].x = nums[7];
+            points[1].y = nums[8];
+            points[2].x = nums[9];
+            points[2].y = nums[10];
+            dstLayer->OperateAffine(points, src, srcrect, mode, opa, type);
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GPU fast path: blit FBO → Layer's native GL texture via glBlitFramebuffer.
 // Returns true if GPU path was used, false if not available.
@@ -1044,7 +1436,30 @@ static bool CopyFBOToLayerGPU(GLuint srcFbo, GLsizei srcW, GLsizei srcH,
 // ---------------------------------------------------------------------------
 static void ConvertRGBA_to_BGRA(const uint8_t *src, GLsizei srcW, GLsizei srcH,
                                 uint8_t *dst, tjs_int pitch,
-                                tjs_int copyW, tjs_int copyH) {
+                                tjs_int copyW, tjs_int copyH,
+                                bool premultiplyAlpha) {
+    if (premultiplyAlpha) {
+        for (tjs_int y = 0; y < copyH; ++y) {
+#if defined(__ANDROID__)
+            const size_t srcRowIdx = static_cast<size_t>(y) * srcW * 4;
+#else
+            const size_t srcRowIdx = static_cast<size_t>(srcH - 1 - y) * srcW * 4;
+#endif
+            const uint8_t *srcRow = src + srcRowIdx;
+            uint8_t *dstRow = dst + static_cast<size_t>(y) * pitch;
+            for (tjs_int x = 0; x < copyW; ++x) {
+                const uint32_t r = srcRow[x * 4 + 0];
+                const uint32_t g = srcRow[x * 4 + 1];
+                const uint32_t b = srcRow[x * 4 + 2];
+                const uint32_t a = srcRow[x * 4 + 3];
+                dstRow[x * 4 + 0] = static_cast<uint8_t>((b * a + 127) / 255);
+                dstRow[x * 4 + 1] = static_cast<uint8_t>((g * a + 127) / 255);
+                dstRow[x * 4 + 2] = static_cast<uint8_t>((r * a + 127) / 255);
+                dstRow[x * 4 + 3] = static_cast<uint8_t>(a);
+            }
+        }
+        return;
+    }
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
     const int simdWidth = 16;
     const int simdCopyW = copyW & ~(simdWidth - 1);
@@ -1129,7 +1544,8 @@ struct PBOState {
 // Uses PBO double-buffering when available (GLES 3.0+) to avoid stalls.
 // ---------------------------------------------------------------------------
 static bool CopyFBOToLayerCPU(GLuint fbo, GLsizei srcW, GLsizei srcH,
-                              tTJSNI_Layer *layerNI, GLint prevFbo) {
+                              tTJSNI_Layer *layerNI, GLint prevFbo,
+                              bool premultiplyAlpha) {
     tjs_int layerW = static_cast<tjs_int>(layerNI->GetWidth());
     tjs_int layerH = static_cast<tjs_int>(layerNI->GetHeight());
     auto *dst = reinterpret_cast<uint8_t *>(
@@ -1181,7 +1597,8 @@ static bool CopyFBOToLayerCPU(GLuint fbo, GLsizei srcW, GLsizei srcH,
         srcPixels = s_rgba.data();
     }
 
-    ConvertRGBA_to_BGRA(srcPixels, srcW, srcH, dst, pitch, copyW, copyH);
+    ConvertRGBA_to_BGRA(srcPixels, srcW, srcH, dst, pitch, copyW, copyH,
+                        premultiplyAlpha);
 
     if (mapped) {
         glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
@@ -1198,7 +1615,8 @@ static bool CopyFBOToLayerCPU(GLuint fbo, GLsizei srcW, GLsizei srcH,
 // Resolves native Layer instance once and passes to GPU/CPU paths.
 // ---------------------------------------------------------------------------
 bool CopyFBOToLayer(GLuint fbo, GLsizei srcW, GLsizei srcH,
-                    iTJSDispatch2 *layer, GLint prevFbo) {
+                    iTJSDispatch2 *layer, GLint prevFbo,
+                    bool premultiplyAlpha = false, bool allowGpu = true) {
     if (!fbo || srcW <= 0 || srcH <= 0 || !layer) return false;
     if (prevFbo < 0) glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
 
@@ -1207,8 +1625,10 @@ bool CopyFBOToLayer(GLuint fbo, GLsizei srcW, GLsizei srcH,
             tTJSNC_Layer::ClassID, (iTJSNativeInstance **)&layerNI)) || !layerNI)
         return false;
 
-    if (CopyFBOToLayerGPU(fbo, srcW, srcH, layerNI, prevFbo)) return true;
-    return CopyFBOToLayerCPU(fbo, srcW, srcH, layerNI, prevFbo);
+    if (allowGpu && !premultiplyAlpha &&
+        CopyFBOToLayerGPU(fbo, srcW, srcH, layerNI, prevFbo)) return true;
+    return CopyFBOToLayerCPU(fbo, srcW, srcH, layerNI, prevFbo,
+                             premultiplyAlpha);
 }
 
 // Global registered Layer — set by entryUpdateObject, accessed by krkrlive2d.cpp
@@ -1311,6 +1731,22 @@ static tjs_error DictEntryUpdateObjectCb(tTJSVariant *r, tjs_int n,
     if (r) *r = true; return TJS_S_OK;
 }
 
+static tjs_error DictDrawLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                 iTJSDispatch2 *) {
+    LogDrawCompatArgs("Fallback.drawLayer", n, p);
+    bool drawn = DrawLayerNative(n, p);
+    if (r) *r = drawn;
+    return TJS_S_OK;
+}
+
+static tjs_error DictDrawAffineCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                  iTJSDispatch2 *) {
+    LogDrawCompatArgs("Fallback.drawAffine", n, p);
+    bool drawn = DrawAffineNative(n, p);
+    if (r) *r = drawn;
+    return TJS_S_OK;
+}
+
 static tjs_error CreateFallbackModuleObject(tTJSVariant *result, tjs_int w, tjs_int h) {
     spdlog::warn("krkrgles: using fallback module ({}x{})", w, h);
     iTJSDispatch2 *dict = TJSCreateDictionaryObject();
@@ -1332,9 +1768,10 @@ static tjs_error CreateFallbackModuleObject(tTJSVariant *result, tjs_int w, tjs_
     SetObjectMethod(dict, TJS_W("glesCaptureScreen"), ReturnFirstArgOrTrueCb);
     SetObjectMethod(dict, TJS_W("copyLayer"), ReturnTrueCb);
     SetObjectMethod(dict, TJS_W("glesCopyLayer"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("drawLayer"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("glesDrawLayer"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("drawAffineGLES"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("drawLayer"), DictDrawLayerCb);
+    SetObjectMethod(dict, TJS_W("glesDrawLayer"), DictDrawLayerCb);
+    SetObjectMethod(dict, TJS_W("drawAffine"), DictDrawAffineCb);
+    SetObjectMethod(dict, TJS_W("drawAffineGLES"), DictDrawAffineCb);
     SetObjectMethod(dict, TJS_W("createModel"), DictCreateModelCb);
     SetObjectMethod(dict, TJS_W("createMatrix"), DictCreateMatrixCb);
     SetObjectMethod(dict, TJS_W("createDevice"), DictCreateDeviceCb);
@@ -1426,10 +1863,12 @@ public:
                 GLint prevFbo = s->fbo_.GetPrevFbo();
                 CopyFBOToLayer(s->fbo_.GetFBO(), s->fbo_.GetWidth(),
                                s->fbo_.GetHeight(), layer, prevFbo);
-            } else if (g_live2dRenderTarget.fbo) {
+            }
+            if (g_live2dRenderTarget.fbo) {
                 CopyFBOToLayer(g_live2dRenderTarget.fbo,
                                g_live2dRenderTarget.width,
-                               g_live2dRenderTarget.height, layer, -1);
+                               g_live2dRenderTarget.height, layer, -1,
+                               true, false);
             }
         }
         if (r) *r = true; return TJS_S_OK;
@@ -1439,16 +1878,20 @@ public:
         return copyLayerCb(r, n, p, s);
     }
 
-    static tjs_error drawLayerCb(tTJSVariant *r, tjs_int, tTJSVariant **, GLESModule *) {
-        if (r) *r = true; return TJS_S_OK;
+    static tjs_error drawLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESModule *) {
+        LogDrawCompatArgs("GLESModule.drawLayer", n, p);
+        bool drawn = DrawLayerNative(n, p);
+        if (r) *r = drawn; return TJS_S_OK;
     }
 
     static tjs_error glesDrawLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESModule *s) {
         return drawLayerCb(r, n, p, s);
     }
 
-    static tjs_error drawAffineCb(tTJSVariant *r, tjs_int, tTJSVariant **, GLESModule *) {
-        if (r) *r = true; return TJS_S_OK;
+    static tjs_error drawAffineCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESModule *) {
+        LogDrawCompatArgs("GLESModule.drawAffine", n, p);
+        bool drawn = DrawAffineNative(n, p);
+        if (r) *r = drawn; return TJS_S_OK;
     }
 
     static tjs_error drawAffineGLESCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESModule *s) {
@@ -1642,16 +2085,20 @@ public:
         return copyLayerCb(r, n, p, s);
     }
 
-    static tjs_error drawLayerCb(tTJSVariant *r, tjs_int, tTJSVariant **, GLESAdaptor *) {
-        if (r) *r = true; return TJS_S_OK;
+    static tjs_error drawLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESAdaptor *) {
+        LogDrawCompatArgs("GLESAdaptor.drawLayer", n, p);
+        bool drawn = DrawLayerNative(n, p);
+        if (r) *r = drawn; return TJS_S_OK;
     }
 
     static tjs_error glesDrawLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESAdaptor *s) {
         return drawLayerCb(r, n, p, s);
     }
 
-    static tjs_error drawAffineCb(tTJSVariant *r, tjs_int, tTJSVariant **, GLESAdaptor *) {
-        if (r) *r = true; return TJS_S_OK;
+    static tjs_error drawAffineCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESAdaptor *) {
+        LogDrawCompatArgs("GLESAdaptor.drawAffine", n, p);
+        bool drawn = DrawAffineNative(n, p);
+        if (r) *r = drawn; return TJS_S_OK;
     }
 
     static tjs_error drawAffineGLESCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESAdaptor *s) {
@@ -1706,13 +2153,125 @@ private:
     GLESModule *cachedModule_ = nullptr;
 };
 
+// Older scripts refer to this plugin's draw device as OGLDrawDevice.
+// Keep it as a thin GLESAdaptor-compatible class so it gets its own TJS
+// native class registration while sharing the same implementation.
+class OGLDrawDevice : public GLESAdaptor {
+public:
+    OGLDrawDevice() = default;
+
+    static tjs_error getModuleCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                 OGLDrawDevice *s) {
+        return GLESAdaptor::getModuleCb(r, n, p, s);
+    }
+    static tjs_error setScreenSizeCb(tTJSVariant *r, tjs_int n,
+                                     tTJSVariant **p, OGLDrawDevice *s) {
+        return GLESAdaptor::setScreenSizeCb(r, n, p, s);
+    }
+    static tjs_error makeCurrentCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                   OGLDrawDevice *s) {
+        return GLESAdaptor::makeCurrentCb(r, n, p, s);
+    }
+    static tjs_error beginSceneCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                  OGLDrawDevice *s) {
+        return GLESAdaptor::beginSceneCb(r, n, p, s);
+    }
+    static tjs_error endSceneCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                OGLDrawDevice *s) {
+        return GLESAdaptor::endSceneCb(r, n, p, s);
+    }
+    static tjs_error entryUpdateObjectCb(tTJSVariant *r, tjs_int n,
+                                         tTJSVariant **p, OGLDrawDevice *s) {
+        return GLESAdaptor::entryUpdateObjectCb(r, n, p, s);
+    }
+    static tjs_error captureCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                               OGLDrawDevice *s) {
+        return GLESAdaptor::captureCb(r, n, p, s);
+    }
+    static tjs_error glesCaptureCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                   OGLDrawDevice *s) {
+        return GLESAdaptor::glesCaptureCb(r, n, p, s);
+    }
+    static tjs_error captureScreenCb(tTJSVariant *r, tjs_int n,
+                                     tTJSVariant **p, OGLDrawDevice *s) {
+        return GLESAdaptor::captureScreenCb(r, n, p, s);
+    }
+    static tjs_error glesCaptureScreenCb(tTJSVariant *r, tjs_int n,
+                                         tTJSVariant **p, OGLDrawDevice *s) {
+        return GLESAdaptor::glesCaptureScreenCb(r, n, p, s);
+    }
+    static tjs_error copyLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                 OGLDrawDevice *s) {
+        return GLESAdaptor::copyLayerCb(r, n, p, s);
+    }
+    static tjs_error glesCopyLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                     OGLDrawDevice *s) {
+        return GLESAdaptor::glesCopyLayerCb(r, n, p, s);
+    }
+    static tjs_error drawLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                 OGLDrawDevice *s) {
+        return GLESAdaptor::drawLayerCb(r, n, p, s);
+    }
+    static tjs_error glesDrawLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                     OGLDrawDevice *s) {
+        return GLESAdaptor::glesDrawLayerCb(r, n, p, s);
+    }
+    static tjs_error drawAffineCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                  OGLDrawDevice *s) {
+        return GLESAdaptor::drawAffineCb(r, n, p, s);
+    }
+    static tjs_error drawAffineGLESCb(tTJSVariant *r, tjs_int n,
+                                      tTJSVariant **p, OGLDrawDevice *s) {
+        return GLESAdaptor::drawAffineGLESCb(r, n, p, s);
+    }
+    static tjs_error renderCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                              OGLDrawDevice *s) {
+        return GLESAdaptor::renderCb(r, n, p, s);
+    }
+    static tjs_error setMatrixCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                 OGLDrawDevice *s) {
+        return GLESAdaptor::setMatrixCb(r, n, p, s);
+    }
+    static tjs_error createModelCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                   OGLDrawDevice *s) {
+        return GLESAdaptor::createModelCb(r, n, p, s);
+    }
+    static tjs_error createMatrixCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                    OGLDrawDevice *s) {
+        return GLESAdaptor::createMatrixCb(r, n, p, s);
+    }
+    static tjs_error createDeviceCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                    OGLDrawDevice *s) {
+        return GLESAdaptor::createDeviceCb(r, n, p, s);
+    }
+    static tjs_error finalizeCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                OGLDrawDevice *s) {
+        return GLESAdaptor::finalizeCb(r, n, p, s);
+    }
+    static tjs_error glesEntryCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                 OGLDrawDevice *s) {
+        return GLESAdaptor::glesEntryCb(r, n, p, s);
+    }
+    static tjs_error glesRemoveCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                  OGLDrawDevice *s) {
+        return GLESAdaptor::glesRemoveCb(r, n, p, s);
+    }
+};
+
 } // namespace
 
 // ---------------------------------------------------------------------------
 // NCB Registration
 // ---------------------------------------------------------------------------
 static void KrkrGlesPreRegist() {}
-static void KrkrGlesPostRegist() {}
+static void KrkrGlesPostRegist() {
+    if (InstallDrawDeviceScriptAliases()) {
+        spdlog::info("krkrgles: installed Window draw device aliases");
+    } else {
+        g_drawDeviceAliasHook.Start();
+        spdlog::info("krkrgles: deferred Window draw device aliases");
+    }
+}
 NCB_PRE_REGIST_CALLBACK(KrkrGlesPreRegist);
 NCB_POST_REGIST_CALLBACK(KrkrGlesPostRegist);
 
@@ -1773,9 +2332,60 @@ NCB_REGISTER_CLASS(GLESAdaptor) {
     NCB_METHOD_RAW_CALLBACK(finalize, &GLESAdaptor::finalizeCb, 0);
 }
 
+NCB_REGISTER_CLASS(OGLDrawDevice) {
+    Constructor();
+    NCB_PROPERTY(screenWidth, getScreenWidth, setScreenWidth);
+    NCB_PROPERTY(screenHeight, getScreenHeight, setScreenHeight);
+    NCB_METHOD_RAW_CALLBACK(getModule, &OGLDrawDevice::getModuleCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setScreenSize, &OGLDrawDevice::setScreenSizeCb, 0);
+    NCB_METHOD_RAW_CALLBACK(makeCurrent, &OGLDrawDevice::makeCurrentCb, 0);
+    NCB_METHOD_RAW_CALLBACK(beginScene, &OGLDrawDevice::beginSceneCb, 0);
+    NCB_METHOD_RAW_CALLBACK(endScene, &OGLDrawDevice::endSceneCb, 0);
+    NCB_METHOD_RAW_CALLBACK(entryUpdateObject, &OGLDrawDevice::entryUpdateObjectCb, 0);
+    NCB_METHOD_RAW_CALLBACK(capture, &OGLDrawDevice::captureCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCapture, &OGLDrawDevice::glesCaptureCb, 0);
+    NCB_METHOD_RAW_CALLBACK(captureScreen, &OGLDrawDevice::captureScreenCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCaptureScreen, &OGLDrawDevice::glesCaptureScreenCb, 0);
+    NCB_METHOD_RAW_CALLBACK(copyLayer, &OGLDrawDevice::copyLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCopyLayer, &OGLDrawDevice::glesCopyLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawLayer, &OGLDrawDevice::drawLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesDrawLayer, &OGLDrawDevice::glesDrawLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawAffine, &OGLDrawDevice::drawAffineCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawAffineGLES, &OGLDrawDevice::drawAffineGLESCb, 0);
+    NCB_METHOD_RAW_CALLBACK(render, &OGLDrawDevice::renderCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setMatrix, &OGLDrawDevice::setMatrixCb, 0);
+    NCB_METHOD_RAW_CALLBACK(createModel, &OGLDrawDevice::createModelCb, 0);
+    NCB_METHOD_RAW_CALLBACK(createMatrix, &OGLDrawDevice::createMatrixCb, 0);
+    NCB_METHOD_RAW_CALLBACK(createDevice, &OGLDrawDevice::createDeviceCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesEntry, &OGLDrawDevice::glesEntryCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesRemove, &OGLDrawDevice::glesRemoveCb, 0);
+    NCB_METHOD_RAW_CALLBACK(finalize, &OGLDrawDevice::finalizeCb, 0);
+}
+
 NCB_ATTACH_FUNCTION_WITHTAG(getModule, WindowPassThroughDrawDevice,
                             Window.PassThroughDrawDevice, DrawDeviceGetModuleCb);
 NCB_ATTACH_FUNCTION_WITHTAG(getModule, WindowBasicDrawDevice,
                             Window.BasicDrawDevice, DrawDeviceGetModuleCb);
 
-extern "C" void TVPRegisterKrkrGLESPluginAnchor() {}
+extern "C" void TVPRegisterKrkrGLESPluginAnchor() {
+    ncbAutoRegister::RegisterInternalPluginEntry(
+        TJS_W("krkrgles.dll"),
+        ncbAutoRegister::PreRegist,
+        &ncbCallbackAutoRegister_PreRegist_KrkrGlesPreRegist_0);
+    ncbAutoRegister::RegisterInternalPluginEntry(
+        TJS_W("krkrgles.dll"),
+        ncbAutoRegister::ClassRegist,
+        &ncbNativeClassAutoRegister_GLESModule);
+    ncbAutoRegister::RegisterInternalPluginEntry(
+        TJS_W("krkrgles.dll"),
+        ncbAutoRegister::ClassRegist,
+        &ncbNativeClassAutoRegister_GLESAdaptor);
+    ncbAutoRegister::RegisterInternalPluginEntry(
+        TJS_W("krkrgles.dll"),
+        ncbAutoRegister::ClassRegist,
+        &ncbNativeClassAutoRegister_OGLDrawDevice);
+    ncbAutoRegister::RegisterInternalPluginEntry(
+        TJS_W("krkrgles.dll"),
+        ncbAutoRegister::PostRegist,
+        &ncbCallbackAutoRegister_PostRegist_KrkrGlesPostRegist_0);
+}
