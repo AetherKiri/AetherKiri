@@ -325,6 +325,12 @@ else()
     target_sources(7zip PRIVATE C/7zCrcOpt.c)
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+    target_compile_options(7zip PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-march=armv8-a+crc+sha2+aes>
+    )
+endif()
+
 # AesOpt
 if(VCPKG_TARGET_IS_WINDOWS)
     if(VCPKG_TARGET_ARCHITECTURE STREQUAL "x86" OR VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")

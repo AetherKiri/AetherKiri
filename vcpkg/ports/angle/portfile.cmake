@@ -90,6 +90,7 @@ vcpkg_download_distfile(GNI_TO_CMAKE_PY
 )
 
 # Generate CMake files from GN / GNI files
+set(ENV{PIP_INDEX_URL} "https://pypi.tuna.tsinghua.edu.cn/simple")
 x_vcpkg_get_python_packages(PYTHON_VERSION "3" OUT_PYTHON_VAR "PYTHON3" PACKAGES ply)
 
 # Patch Vulkan BUILD.gn to comment out imports that gni-to-cmake.py cannot resolve.
