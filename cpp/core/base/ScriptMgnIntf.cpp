@@ -951,6 +951,24 @@ static void TVPInstallStartupPatchPrerequisites() {
         static_cast<tTJSVariant *>(nullptr));
 }
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+static void TVPInstallIOSPatchWindowPrerequisites() {
+    TVPExecuteScript(TJS_W(
+        "if(typeof KAGWindow != \"undefined\") {\n"
+        "  if(typeof KAGWindow.inSystemMenuStorages == \"undefined\") KAGWindow.inSystemMenuStorages = inSystemMenuStorages;\n"
+        "  if(typeof KAGWindow.kagHookEntries == \"undefined\") KAGWindow.kagHookEntries = kagHookEntries;\n"
+        "  if(typeof KAGWindow.afterInitCallback == \"undefined\") KAGWindow.afterInitCallback = afterInitCallback;\n"
+        "  if(typeof KAGWindow.COMMAND_SYNC == \"undefined\") KAGWindow.COMMAND_SYNC = COMMAND_SYNC;\n"
+        "  if(typeof KAGWindow.COMMAND_ASYNC == \"undefined\") KAGWindow.COMMAND_ASYNC = COMMAND_ASYNC;\n"
+        "  if(typeof KAGWindow.COMMAND_WAIT == \"undefined\") KAGWindow.COMMAND_WAIT = COMMAND_WAIT;\n"
+        "  if(typeof KAGWindow.kirikiriz == \"undefined\") KAGWindow.kirikiriz = kirikiriz;\n"
+        "  if(typeof KAGWindow.kirikiriz_generic == \"undefined\") KAGWindow.kirikiriz_generic = kirikiriz_generic;\n"
+        "}\n"),
+        TJS_W("ios_patch_window_prereq.tjs"), 0,
+        static_cast<tTJSVariant *>(nullptr));
+}
+#endif
+
 void TVPExecuteStartupScript() {
     ttstr strPatchError;
     try {
@@ -1034,8 +1052,10 @@ void TVPExecuteStartupScript() {
 #if defined(__APPLE__) && TARGET_OS_IPHONE
         try {
             ttstr patch = TVPGetAppPath() + "patch.tjs";
-            if(TVPIsExistentStorageNoSearch(patch))
+            if(TVPIsExistentStorageNoSearch(patch)) {
+                TVPInstallIOSPatchWindowPrerequisites();
                 TVPExecuteStorage(patch);
+            }
         } catch(...) {
         }
 #endif

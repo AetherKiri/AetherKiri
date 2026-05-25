@@ -47,7 +47,7 @@ Pod::Spec.new do |s|
     # The Dart side uses DynamicLibrary.process() on iOS. Force-loading the
     # project archive into Runner keeps exported engine_* FFI symbols visible in
     # the final app executable even when no ObjC/Swift code references them.
-    'OTHER_LDFLAGS' => '$(inherited) -force_load "$(PODS_ROOT)/../.symlinks/plugins/flutter_engine_bridge/ios/Libs/libengine_project.a"',
+    'OTHER_LDFLAGS' => '$(inherited) -Wl,-export_dynamic -force_load "$(PODS_ROOT)/../.symlinks/plugins/flutter_engine_bridge/ios/Libs/libengine_project.a"',
   }
   s.swift_version = '5.0'
 

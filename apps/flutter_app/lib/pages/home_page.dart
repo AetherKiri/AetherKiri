@@ -53,8 +53,6 @@ class _HomePageState extends State<HomePage> {
   bool _consoleLogFile = true;
   bool _traceLog = false;
   bool _exportScripts = false;
-  bool _autoLaunchRequested = false;
-  bool _autoOpenFirstGame = false;
 
   String? _resolveBuiltInDylibPath() {
     if (Platform.isIOS) {
@@ -116,7 +114,9 @@ class _HomePageState extends State<HomePage> {
         prefs.getString(PrefsKeys.angleBackend) ?? PrefsKeys.angleBackendGles;
     _forceLandscape = prefs.getBool(PrefsKeys.forceLandscape) ?? true;
     _pluginTrace = prefs.getBool(PrefsKeys.pluginTrace) ?? false;
-    _mockEnabled = prefs.getBool(PrefsKeys.mockEnabled) ?? true;
+    _mockEnabled = Platform.isIOS
+        ? true
+        : (prefs.getBool(PrefsKeys.mockEnabled) ?? true);
     _consoleLogFile = prefs.getBool(PrefsKeys.consoleLogFile) ?? true;
     _traceLog = prefs.getBool(PrefsKeys.traceLog) ?? false;
     _exportScripts = prefs.getBool(PrefsKeys.exportScripts) ?? false;
@@ -128,36 +128,6 @@ class _HomePageState extends State<HomePage> {
     }
 
     if (mounted) setState(() => _loading = false);
-
-    _autoOpenFirstGame =
-        Platform.executableArguments.contains('--auto-open-first-game') ||
-        Platform.environment['AETHER_AUTO_OPEN_FIRST_GAME'] == '1' ||
-        await _hasAutoOpenFirstGameMarker();
-    _maybeAutoOpenFirstGame();
-  }
-
-  Future<bool> _hasAutoOpenFirstGameMarker() async {
-    if (!Platform.isIOS) return false;
-    try {
-      final docDir = await getApplicationDocumentsDirectory();
-      return File('${docDir.path}/.aether_auto_open_first_game').exists();
-    } catch (_) {
-      return false;
-    }
-  }
-
-  void _maybeAutoOpenFirstGame() {
-    if (!_autoLaunchRequested &&
-        _autoOpenFirstGame &&
-        mounted &&
-        _gameManager.games.isNotEmpty) {
-      _autoLaunchRequested = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _gameManager.games.isNotEmpty) {
-          _launchGame(_sortedGames.first);
-        }
-      });
-    }
   }
 
   Future<void> _initIosGamesDir() async {
@@ -221,7 +191,6 @@ class _HomePageState extends State<HomePage> {
     for (final path in toRemove) {
       await _gameManager.removeGame(path);
     }
-    _maybeAutoOpenFirstGame();
   }
 
   Future<void> _addGame() async {
@@ -614,7 +583,7 @@ class _HomePageState extends State<HomePage> {
           ffiLibraryPath: dylibPath,
           forceLandscape: _forceLandscape,
           pluginTrace: _pluginTrace,
-          mockEnabled: _mockEnabled,
+          mockEnabled: Platform.isIOS ? true : _mockEnabled,
           consoleLogFile: _consoleLogFile,
           traceLog: _traceLog,
           exportScripts: _exportScripts,
@@ -817,7 +786,7 @@ class _HomePageState extends State<HomePage> {
         _angleBackend = result.angleBackend;
         _forceLandscape = result.forceLandscape;
         _pluginTrace = result.pluginTrace;
-        _mockEnabled = result.mockEnabled;
+        _mockEnabled = Platform.isIOS ? true : result.mockEnabled;
         _consoleLogFile = result.consoleLogFile;
         _traceLog = result.traceLog;
         _exportScripts = result.exportScripts;
