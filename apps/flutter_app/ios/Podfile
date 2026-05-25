@@ -28,7 +28,7 @@ require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelpe
 flutter_ios_podfile_setup
 
 target 'Runner' do
-  use_frameworks!
+  use_frameworks! :linkage => :static
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
@@ -39,5 +39,32 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      config.build_settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator'
+    end
+  end
+
+  runner_project = installer.aggregate_targets
+    .map(&:user_project)
+    .compact
+    .find { |project| File.basename(project.path.to_s) == 'Runner.xcodeproj' }
+
+  if runner_project
+    runner_project.targets.each do |target|
+      next unless target.name == 'Runner'
+
+      target.build_configurations.each do |config|
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+        config.build_settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator'
+        flags = Array(config.build_settings['OTHER_LDFLAGS'] || '$(inherited)')
+        force_load_path = '"$(PODS_ROOT)/../.symlinks/plugins/flutter_engine_bridge/ios/Libs/libengine_project.a"'
+        unless flags.include?(force_load_path)
+          flags << '-force_load'
+          flags << force_load_path
+        end
+        config.build_settings['OTHER_LDFLAGS'] = flags
+      end
+    end
   end
 end

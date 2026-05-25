@@ -96,8 +96,10 @@ extern "C"
         csmMocVersion_40 = 3,
         /** moc3 file version 4.2.00 - 4.2.04 */
         csmMocVersion_42 = 4,
-        /** moc3 file version 5.0.00 - */
-        csmMocVersion_50 = 5
+        /** moc3 file version 5.0.00 - 5.2.03 */
+        csmMocVersion_50 = 5,
+        /** moc3 file version 5.3.00 - */
+        csmMocVersion_53 = 6
     };
 
     /** moc3 version identifier. */
@@ -111,6 +113,65 @@ extern "C"
 
         /** Parameter for blend shape. */
         csmParameterType_BlendShape = 1
+    };
+
+    /** Color blend types. */
+    enum
+    {
+        /** Normal blend. */
+        csmColorBlendType_Normal = 0,
+        /** Add blend. */
+        csmColorBlendType_Add = 3,
+        /** AddGlow blend. */
+        csmColorBlendType_AddGlow = 4,
+        /** Darken blend. */
+        csmColorBlendType_Darken = 5,
+        /** Multiply blend. */
+        csmColorBlendType_Multiply = 6,
+        /** ColorBurn blend. */
+        csmColorBlendType_ColorBurn = 7,
+        /** LinearBurn blend. */
+        csmColorBlendType_LinearBurn = 8,
+        /** Lighten blend. */
+        csmColorBlendType_Lighten = 9,
+        /** Screen blend. */
+        csmColorBlendType_Screen = 10,
+        /** ColorDodge blend. */
+        csmColorBlendType_ColorDodge = 11,
+        /** Overlay blend. */
+        csmColorBlendType_Overlay = 12,
+        /** SoftLight blend. */
+        csmColorBlendType_SoftLight = 13,
+        /** HardLight blend. */
+        csmColorBlendType_HardLight = 14,
+        /** LinearLight blend. */
+        csmColorBlendType_LinearLight = 15,
+        /** Hue blend. */
+        csmColorBlendType_Hue = 16,
+        /** Color blend. */
+        csmColorBlendType_Color = 17,
+
+        /** For version 5.2 and earlier. */
+
+        /** Add compatible blend. */
+        csmColorBlendType_AddCompatible = 1,
+        /** Multiply compatible blend. */
+        csmColorBlendType_MultiplyCompatible = 2
+    };
+
+    /** Alpha blend types. */
+    enum
+    {
+        /** Over blend. */
+        csmAlphaBlendType_Over = 0,
+        /** Atop blend. */
+        csmAlphaBlendType_Atop = 1,
+        /** Out blend. */
+        csmAlphaBlendType_Out = 2,
+        /** ConjointOver blend. */
+        csmAlphaBlendType_ConjointOver = 3,
+        /** DisjointOver blend. */
+        csmAlphaBlendType_DisjointOver = 4
     };
 
     /** Parameter type. */
@@ -261,6 +322,15 @@ extern "C"
      */
     csmApi void csmCallingConvention csmUpdateModel(csmModel* model);
 
+    /**
+     * Gets model draw orders.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const int* csmCallingConvention csmGetRenderOrders(const csmModel* model);
+
     /* ------ *
      * CANVAS *
      * ------ */
@@ -349,6 +419,15 @@ extern "C"
     csmApi float* csmCallingConvention csmGetParameterValues(csmModel* model);
 
     /**
+     * Gets Parameter Repeat informations.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const int* csmCallingConvention csmGetParameterRepeats(const csmModel* model);
+
+    /**
      * Gets number of key values of each parameter.
      *
      * @param  model  Model to query.
@@ -408,6 +487,15 @@ extern "C"
      */
     csmApi const int* csmCallingConvention csmGetPartParentPartIndices(const csmModel* model);
 
+    /**
+     * Gets part's offscreen indices.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const int* csmCallingConvention csmGetPartOffscreenIndices(const csmModel* model);
+
     /* --------- *
      * DRAWABLES *
      * --------- */
@@ -450,6 +538,15 @@ extern "C"
     csmApi const csmFlags* csmCallingConvention csmGetDrawableDynamicFlags(const csmModel* model);
 
     /**
+     * Gets drawable blend modes.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const int* csmCallingConvention csmGetDrawableBlendModes(const csmModel* model);
+
+    /**
      * Gets drawable texture indices.
      *
      * @param  model  Model to query.
@@ -466,16 +563,6 @@ extern "C"
      * @return  Valid pointer on success; '0' otherwise.
      */
     csmApi const int* csmCallingConvention csmGetDrawableDrawOrders(const csmModel* model);
-
-    /**
-     * Gets drawable render orders.
-     * The higher the order, the more up front a drawable is.
-     *
-     * @param  model  Model to query.
-     *
-     * @return  Valid pointer on success; '0'otherwise.
-     */
-    csmApi const int* csmCallingConvention csmGetDrawableRenderOrders(const csmModel* model);
 
     /**
      * Gets drawable opacities.
@@ -568,12 +655,12 @@ extern "C"
     csmApi const csmVector4* csmCallingConvention csmGetDrawableScreenColors(const csmModel* model);
 
     /**
-    * Gets drawable's parent part indices.
-    *
-    * @param   model   Model to query.
-    *
-    * @return  Valid pointer on success; '0' otherwise.
-    */
+     * Gets drawable's parent part indices.
+     *
+     * @param   model   Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
     csmApi const int* csmCallingConvention csmGetDrawableParentPartIndices(const csmModel* model);
 
     /**
@@ -582,6 +669,91 @@ extern "C"
      * @param  model  Model containing flags.
      */
     csmApi void csmCallingConvention csmResetDrawableDynamicFlags(csmModel* model);
+
+    /* ---------- *
+     * OFFSCREENS *
+     * ---------- */
+
+    /**
+     * Gets number of offscreens.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid count on success; '-1' otherwise.
+     */
+    csmApi int csmCallingConvention csmGetOffscreenCount(const csmModel* model);
+
+    /**
+     * Gets offscreen blend modes.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const int* csmCallingConvention csmGetOffscreenBlendModes(const csmModel* model);
+
+    /**
+     * Gets offscreen opacities.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const float* csmCallingConvention csmGetOffscreenOpacities(const csmModel* model);
+
+    /**
+     * Gets offscreen owner indices.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const int* csmCallingConvention csmGetOffscreenOwnerIndices(const csmModel* model);
+
+    /**
+     * Gets multiply color data for each offscreen.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const csmVector4* csmCallingConvention csmGetOffscreenMultiplyColors(const csmModel* model);
+
+    /**
+     * Gets screen color data for each offscreen.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const csmVector4* csmCallingConvention csmGetOffscreenScreenColors(const csmModel* model);
+
+    /**
+     * Gets numbers of masks of each offscreen.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const int* csmCallingConvention csmGetOffscreenMaskCounts(const csmModel* model);
+
+    /**
+     * Gets mask indices of each offscreen.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const int** csmCallingConvention csmGetOffscreenMasks(const csmModel* model);
+
+    /**
+     * Gets constant offscreen flags.
+     *
+     * @param  model  Model to query.
+     *
+     * @return  Valid pointer on success; '0' otherwise.
+     */
+    csmApi const csmFlags* csmCallingConvention csmGetOffscreenConstantFlags(const csmModel* model);
 
 #if defined(__cplusplus)
 }

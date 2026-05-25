@@ -6,7 +6,6 @@ import 'dart:ui' show AppExitResponse;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../engine/engine_bridge.dart';
@@ -26,7 +25,7 @@ class GamePage extends StatefulWidget {
     this.engineBridgeBuilder = createEngineBridge,
     this.forceLandscape = true,
     this.pluginTrace = false,
-    this.mockEnabled = true,
+    this.mockEnabled = false,
     this.consoleLogFile = true,
     this.traceLog = false,
     this.exportScripts = false,
@@ -60,7 +59,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   final GlobalKey<EngineSurfaceState> _surfaceKey =
       GlobalKey<EngineSurfaceState>();
 
-  Ticker? _ticker;
+  Timer? _tickTimer;
   bool _tickInFlight = false;
   bool _isTicking = false;
   bool _autoPausedByLifecycle = false;
@@ -122,8 +121,8 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _forceLandscape = widget.forceLandscape;
     _bridge = widget.engineBridgeBuilder(ffiLibraryPath: widget.ffiLibraryPath);
-    _loadSettings();
-    _applyOrientation();
+    unawaited(_loadSettings());
+    unawaited(_applyOrientation());
     unawaited(_enterFullscreenMode());
     _log('Initializing engine for: ${widget.gamePath}');
     if (widget.ffiLibraryPath != null) {
@@ -584,10 +583,10 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
 
   // --- Tick loop (vsync-driven) ---
 
-  // Track the elapsed timestamp of the last *rendered* frame so that
+  // Track the timestamp of the last *rendered* frame so that
   // reportFrameDelta receives the true inter-frame interval instead of
   // the vsync interval (which is always ~16ms on a 60Hz display).
-  Duration _lastRenderedElapsed = Duration.zero;
+  DateTime? _lastRenderedAt;
 
   void _startTickLoop() {
     if (_isTicking) return;
@@ -596,15 +595,16 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     _log('Tick loop started');
     if (kDebugMode) _startMemoryStatsPolling();
 
-    Duration lastElapsed = Duration.zero;
-    _lastRenderedElapsed = Duration.zero;
-    _ticker = Ticker((Duration elapsed) async {
+    DateTime? lastTickAt;
+    _lastRenderedAt = null;
+    _tickTimer = Timer.periodic(const Duration(milliseconds: 16), (_) async {
       if (_tickInFlight) return;
 
-      final int deltaMs = lastElapsed == Duration.zero
+      final now = DateTime.now();
+      final int deltaMs = lastTickAt == null
           ? 16
-          : (elapsed - lastElapsed).inMilliseconds.clamp(1, 100);
-      lastElapsed = elapsed;
+          : now.difference(lastTickAt!).inMilliseconds.clamp(1, 100);
+      lastTickAt = now;
 
       _tickInFlight = true;
       try {
@@ -612,7 +612,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
         if (!mounted) return;
 
         if (result != _engineResultOk) {
-          _ticker?.stop();
+          _tickTimer?.cancel();
           _stopPlaySessionRun();
           final error = _bridge.engineGetLastError();
           _log('Tick ended: result=$result, error=$error');
@@ -637,10 +637,10 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
             _fetchRendererInfo();
           }
           // Compute the real inter-render interval for accurate FPS.
-          final int renderDeltaMs = _lastRenderedElapsed == Duration.zero
+          final int renderDeltaMs = _lastRenderedAt == null
               ? deltaMs
-              : (elapsed - _lastRenderedElapsed).inMilliseconds.clamp(1, 200);
-          _lastRenderedElapsed = elapsed;
+              : now.difference(_lastRenderedAt!).inMilliseconds.clamp(1, 200);
+          _lastRenderedAt = now;
 
           _perfOverlayKey0.currentState?.reportFrameDelta(
             renderDeltaMs.toDouble(),
@@ -658,14 +658,12 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
         _tickInFlight = false;
       }
     });
-    _ticker!.start();
   }
 
   void _stopTickLoop({bool notify = true}) {
     _stopPlaySessionRun();
-    _ticker?.stop();
-    _ticker?.dispose();
-    _ticker = null;
+    _tickTimer?.cancel();
+    _tickTimer = null;
     _stopMemoryStatsPolling();
 
     _isTicking = false;
@@ -741,6 +739,10 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
             _stopStartupPolling();
             _log('engine_open_game => OK');
             await _applyFpsLimit();
+            await _applyOrientation();
+            if (Platform.isIOS) {
+              await Future<void>.delayed(const Duration(milliseconds: 250));
+            }
             if (!mounted) return;
             setState(() => _phase = _EnginePhase.running);
             _startTickLoop();
@@ -862,18 +864,32 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     }
   }
 
-  void _applyOrientation() {
+  Future<void> _applyOrientation() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     if (_forceLandscape) {
-      SystemChrome.setPreferredOrientations([
+      await SystemChrome.setPreferredOrientations([
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,
       ]);
+      if (Platform.isIOS) {
+        try {
+          await _platformChannel.invokeMethod<void>('forceLandscape');
+        } catch (error) {
+          _log('forceLandscape failed: $error');
+        }
+      }
     }
   }
 
   void _restoreOrientation() {
     if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (Platform.isIOS) {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      return;
+    }
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
   }
 
@@ -1062,11 +1078,9 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     _stopMemoryStatsPolling();
     _stopTickLoop(notify: false);
 
-    unawaited(() async {
-      await _waitForTickLoopToSettle();
-      await _finalizePlaySession();
-      await _destroyEngine();
-    }());
+    await _waitForTickLoopToSettle();
+    await _finalizePlaySession();
+    await _destroyEngine();
 
     if (!mounted) return;
     Navigator.of(context).pop();
@@ -1075,6 +1089,9 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final bool surfaceActive = _phase == _EnginePhase.running;
+    final EngineSurfaceMode surfaceMode = Platform.isIOS
+        ? EngineSurfaceMode.software
+        : EngineSurfaceMode.gpuZeroCopy;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -1090,7 +1107,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
                     key: _surfaceKey,
                     bridge: _bridge,
                     active: surfaceActive,
-                    surfaceMode: EngineSurfaceMode.gpuZeroCopy,
+                    surfaceMode: surfaceMode,
                     externalTickDriven: _isTicking,
                     onLog: (msg) => _log('surface: $msg'),
                     onError: (msg) => _log('surface error: $msg'),

@@ -784,7 +784,6 @@ tTJSNativeClass *TVPCreateNativeClass_Plugins() {
     TJS_END_NATIVE_STATIC_METHOD_DECL_OUTER(
         /*object to register*/ cls,
         /*func. name*/ link)
-    //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ unlink) {
         if(numparams < 1)
             return TJS_E_BADPARAMCOUNT;

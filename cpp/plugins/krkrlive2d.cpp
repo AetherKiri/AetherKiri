@@ -387,7 +387,9 @@ public:
             textureIds_.push_back(texId);
         }
 
-        CreateRenderer();
+        csmUint32 rendererWidth = static_cast<csmUint32>(renderWidth_ > 0 ? renderWidth_ : 1920);
+        csmUint32 rendererHeight = static_cast<csmUint32>(renderHeight_ > 0 ? renderHeight_ : 1080);
+        CreateRenderer(rendererWidth, rendererHeight);
         auto *renderer = GetRenderer<Rendering::CubismRenderer_OpenGLES2>();
         if (!renderer) {
             spdlog::error("krkrlive2d: failed to create renderer");
@@ -494,6 +496,25 @@ public:
         if (canvasH <= 0) canvasH = 1080;
         EnsureInternalFBO(canvasW, canvasH);
 
+        GLint savedProgram = 0;
+        GLint savedActiveTexture = GL_TEXTURE0;
+        GLint savedTexture2D = 0;
+        GLint savedBlendSrcRgb = GL_ONE;
+        GLint savedBlendDstRgb = GL_ZERO;
+        GLint savedBlendSrcAlpha = GL_ONE;
+        GLint savedBlendDstAlpha = GL_ZERO;
+        GLboolean savedDepthMask = GL_TRUE;
+        const GLboolean savedBlendEnabled = glIsEnabled(GL_BLEND);
+        const GLboolean savedDepthEnabled = glIsEnabled(GL_DEPTH_TEST);
+        glGetIntegerv(GL_CURRENT_PROGRAM, &savedProgram);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTexture);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture2D);
+        glGetIntegerv(GL_BLEND_SRC_RGB, &savedBlendSrcRgb);
+        glGetIntegerv(GL_BLEND_DST_RGB, &savedBlendDstRgb);
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &savedBlendSrcAlpha);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &savedBlendDstAlpha);
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &savedDepthMask);
+
         glBindFramebuffer(GL_FRAMEBUFFER, internalFbo_);
         glViewport(0, 0, fboW_, fboH_);
         glClearColor(0.f, 0.f, 0.f, 0.f);
@@ -511,6 +532,14 @@ public:
 
         glBindFramebuffer(GL_FRAMEBUFFER, savedFBO);
         glViewport(savedVP[0], savedVP[1], savedVP[2], savedVP[3]);
+        if (savedBlendEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+        glBlendFuncSeparate(savedBlendSrcRgb, savedBlendDstRgb,
+                            savedBlendSrcAlpha, savedBlendDstAlpha);
+        if (savedDepthEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+        glDepthMask(savedDepthMask);
+        glUseProgram(static_cast<GLuint>(savedProgram));
+        glActiveTexture(static_cast<GLenum>(savedActiveTexture));
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(savedTexture2D));
     }
 
     void BlitOverlay(GLint curFBO, const GLint vp[4]) {
@@ -584,9 +613,6 @@ private:
         mosaicRects_.clear();
         mosaicCpuScratch_.clear();
 
-        if (GetModel()) {
-            GetModel()->ClearDrawableForceHiddenFlags();
-        }
         if (!GetModel() || !setting_) return;
 
         std::string userDataPath;
@@ -670,12 +696,8 @@ private:
 
     void UpdateMosaicPartOpacity() {
         if (!GetModel()) return;
-        // Mosaic effect is disabled globally; always hide mosaic-tagged overlay meshes.
-        const bool hideSourceMesh = !mosaicEffectEnabled_ || IsMosaicEnabled();
-        for (csmInt32 drawableIndex : mosaicDrawableIndices_) {
-            if (drawableIndex < 0) continue;
-            GetModel()->SetDrawableForceHidden(drawableIndex, hideSourceMesh);
-        }
+        // Cubism SDK 5 no longer exposes the old force-hidden drawable helper.
+        // Keep the model visible; the optional mosaic overlay can still render separately.
 
         if (mosaicParentPartIndices_.empty()) return;
         for (csmInt32 partIndex : mosaicParentPartIndices_) {
@@ -1113,6 +1135,25 @@ private:
         EnsureBlitProgram();
         if (!blitProgram_ || !fboTex_) return;
 
+        GLint savedProgram = 0;
+        GLint savedActiveTexture = GL_TEXTURE0;
+        GLint savedTexture2D = 0;
+        GLint savedBlendSrcRgb = GL_ONE;
+        GLint savedBlendDstRgb = GL_ZERO;
+        GLint savedBlendSrcAlpha = GL_ONE;
+        GLint savedBlendDstAlpha = GL_ZERO;
+        GLboolean savedDepthMask = GL_TRUE;
+        const GLboolean savedBlendEnabled = glIsEnabled(GL_BLEND);
+        const GLboolean savedDepthEnabled = glIsEnabled(GL_DEPTH_TEST);
+        glGetIntegerv(GL_CURRENT_PROGRAM, &savedProgram);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTexture);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture2D);
+        glGetIntegerv(GL_BLEND_SRC_RGB, &savedBlendSrcRgb);
+        glGetIntegerv(GL_BLEND_DST_RGB, &savedBlendDstRgb);
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &savedBlendSrcAlpha);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &savedBlendDstAlpha);
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &savedDepthMask);
+
         glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
         glViewport(vpX, vpY, vpW, vpH);
 
@@ -1147,6 +1188,14 @@ private:
 
         glBindTexture(GL_TEXTURE_2D, 0);
         glUseProgram(0);
+        if (savedBlendEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+        glBlendFuncSeparate(savedBlendSrcRgb, savedBlendDstRgb,
+                            savedBlendSrcAlpha, savedBlendDstAlpha);
+        if (savedDepthEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+        glDepthMask(savedDepthMask);
+        glUseProgram(static_cast<GLuint>(savedProgram));
+        glActiveTexture(static_cast<GLenum>(savedActiveTexture));
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(savedTexture2D));
     }
 
     bool loaded_ = false;
@@ -1193,7 +1242,6 @@ class Live2DContinuousCallback : public tTVPContinuousEventCallbackIntf {
 public:
     void OnContinuousCallback(tjs_uint64 /*tick*/) override {
         bool anyActive = false;
-        iTJSDispatch2 *layer = KrkrGLES_GetRegisteredLayer();
 
         GLint savedFBO = 0;
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFBO);
@@ -1204,15 +1252,9 @@ public:
             if (m && m->IsLoaded()) {
                 m->ContinuousUpdate(savedFBO, savedVP);
                 anyActive = true;
-                if (layer && g_live2dRenderTarget.fbo) {
-                    CopyFBOToLayer(g_live2dRenderTarget.fbo,
-                                   g_live2dRenderTarget.width,
-                                   g_live2dRenderTarget.height, layer,
-                                   savedFBO);
-                }
             }
         }
-        if (anyActive && !layer && TVPGetWindowCount() > 0) {
+        if (anyActive && !KrkrGLES_GetRegisteredLayer() && TVPGetWindowCount() > 0) {
             tTJSNI_Window *win = TVPGetWindowListAt(0);
             if (win) TVPPostWindowUpdate(win);
         }
@@ -1901,4 +1943,17 @@ NCB_REGISTER_CLASS(Live2DModel) {
     NCB_METHOD_RAW_CALLBACK(resetExpressionVariables, &Live2DModel::resetExpressionVariablesCb, 0);
 }
 
-extern "C" void TVPRegisterKrkrLive2DPluginAnchor() {}
+extern "C" void TVPRegisterKrkrLive2DPluginAnchor() {
+    ncbAutoRegister::RegisterInternalPluginEntry(
+        TJS_W("krkrlive2d.dll"),
+        ncbAutoRegister::ClassRegist,
+        &ncbNativeClassAutoRegister_Live2DMatrix);
+    ncbAutoRegister::RegisterInternalPluginEntry(
+        TJS_W("krkrlive2d.dll"),
+        ncbAutoRegister::ClassRegist,
+        &ncbNativeClassAutoRegister_Live2DDevice);
+    ncbAutoRegister::RegisterInternalPluginEntry(
+        TJS_W("krkrlive2d.dll"),
+        ncbAutoRegister::ClassRegist,
+        &ncbNativeClassAutoRegister_Live2DModel);
+}

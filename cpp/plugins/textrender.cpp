@@ -9,10 +9,13 @@
 
 #include "ncbind.hpp"
 #include "FreeTypeFontRasterizer.h"
+#include "LayerIntf.h"
 #include "RectItf.h"
 #include "tvpfontstruc.h"
 #include "WindowIntf.h"
 #include "krkr_egl_context.h"
+
+#include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <cmath>
@@ -22,6 +25,9 @@
 #include <vector>
 
 #define NCB_MODULE_NAME TJS_W("textrender.dll")
+#ifndef TJS_INTF_METHOD
+#define TJS_INTF_METHOD
+#endif
 
 using tjs_ustring = std::basic_string<tjs_char>;
 using RgbColor = uint32_t;
@@ -75,6 +81,8 @@ struct TextRenderState {
   RgbColor shadowColor = 0x000000;
   bool edge = false;
   RgbColor edgeColor = 0x0080ff;
+  int edgeExtent = 2;
+  int edgeEmphasis = 2048;
   int lineSpacing = 6;
   int pitch = 0;
   int lineSize = 0;
@@ -92,6 +100,8 @@ struct TextRenderState {
     setprop_t(dict, shadowColor, static_cast<tjs_int>);
     setprop(dict, edge);
     setprop_t(dict, edgeColor, static_cast<tjs_int>);
+    setprop(dict, edgeExtent);
+    setprop(dict, edgeEmphasis);
     setprop(dict, lineSpacing);
     setprop(dict, pitch);
     setprop(dict, lineSize);
@@ -119,6 +129,8 @@ struct TextRenderState {
     getprop_t(dict, shadowColor, static_cast<RgbColor>);
     getprop(dict, edge);
     getprop_t(dict, edgeColor, static_cast<RgbColor>);
+    getprop(dict, edgeExtent);
+    getprop(dict, edgeEmphasis);
     getprop(dict, lineSpacing);
     getprop(dict, pitch);
     getprop(dict, lineSize);
@@ -171,6 +183,8 @@ struct CharacterInfo {
   int size = 0;
   RgbColor color = 0xffffff;
   std::optional<RgbColor> edge = std::nullopt;
+  int edgeExtent = 0;
+  int edgeEmphasis = 0;
   std::optional<RgbColor> shadow = std::nullopt;
   tjs_ustring text;
 
@@ -187,6 +201,8 @@ struct CharacterInfo {
     { tTJSVariant v(ttstr(face.c_str())); dict->PropSet(TJS_MEMBERENSURE, TJS_W("face"), nullptr, &v, dict); }
     setprop_t(dict, color, static_cast<tjs_int>);
     setprop_opt_t(dict, edge, static_cast<tjs_int>);
+    setprop(dict, edgeExtent);
+    setprop(dict, edgeEmphasis);
     setprop_opt_t(dict, shadow, static_cast<tjs_int>);
     { tTJSVariant v(ttstr(text.c_str())); dict->PropSet(TJS_MEMBERENSURE, TJS_W("text"), nullptr, &v, dict); }
     auto res = tTJSVariant(dict, dict);
@@ -211,6 +227,180 @@ struct CharacterInfo {
   }
 
 #define property_delegate(name) NCB_PROPERTY(name, get_##name, set_##name);
+
+static bool textRenderVariantIsString(const tTJSVariant &value) {
+  return value.Type() == tvtString || value.Type() == tvtOctet;
+}
+
+static bool textRenderVariantIsNumeric(const tTJSVariant &value) {
+  const tTJSVariantType type = value.Type();
+  return type != tvtVoid && type != tvtString && type != tvtObject;
+}
+
+static tjs_uint32 textRenderColor24(const tTJSVariant &value,
+                                    tjs_uint32 fallback) {
+  if (!textRenderVariantIsNumeric(value)) return fallback;
+  return static_cast<tjs_uint32>((tjs_int64)value) & 0x00ffffff;
+}
+
+static bool textRenderTryIntArg(tjs_int numparams, tTJSVariant **param,
+                                tjs_int index, tjs_int &value) {
+  if (index < 0 || index >= numparams || !param || !param[index] ||
+      !textRenderVariantIsNumeric(*param[index])) {
+    return false;
+  }
+  value = static_cast<tjs_int>(*param[index]);
+  return true;
+}
+
+static tjs_int textRenderFindStringArg(tjs_int numparams, tTJSVariant **param) {
+  for (tjs_int i = 0; i < numparams; ++i) {
+    if (param && param[i] && textRenderVariantIsString(*param[i])) return i;
+  }
+  return -1;
+}
+
+static tTJSNI_BaseLayer *textRenderGetNativeLayer(iTJSDispatch2 *obj) {
+  if (!obj) return nullptr;
+  tTJSNI_BaseLayer *layer = nullptr;
+  if (TJS_SUCCEEDED(obj->NativeInstanceSupport(
+          TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+          reinterpret_cast<iTJSNativeInstance **>(&layer)))) {
+    return layer;
+  }
+  return nullptr;
+}
+
+static tTJSNI_BaseLayer *textRenderFindLayerArg(tjs_int numparams,
+                                                tTJSVariant **param,
+                                                iTJSDispatch2 *objthis) {
+  if (auto *layer = textRenderGetNativeLayer(objthis)) return layer;
+  for (tjs_int i = 0; i < numparams; ++i) {
+    if (!param || !param[i] || param[i]->Type() != tvtObject) continue;
+    iTJSDispatch2 *obj = param[i]->AsObjectNoAddRef();
+    if (auto *layer = textRenderGetNativeLayer(obj)) return layer;
+  }
+  return nullptr;
+}
+
+static void textRenderLogEdgeShadowArgs(tjs_int numparams, tTJSVariant **param,
+                                        tjs_int textIndex) {
+  static int logged = 0;
+  if (logged >= 40) return;
+  ++logged;
+
+  std::string message = "textrender: EdgeShadowDrawText args #" +
+                        std::to_string(logged) + " count=" +
+                        std::to_string(numparams) + " textIndex=" +
+                        std::to_string(textIndex);
+  for (tjs_int i = 0; i < numparams; ++i) {
+    message += " [";
+    message += std::to_string(i);
+    if (!param || !param[i]) {
+      message += ":null]";
+      continue;
+    }
+    message += ":t";
+    message += std::to_string(static_cast<int>(param[i]->Type()));
+    if (textRenderVariantIsNumeric(*param[i])) {
+      message += "=";
+      message += std::to_string(static_cast<long long>((tjs_int64)*param[i]));
+    } else if (textRenderVariantIsString(*param[i])) {
+      std::string s = ttstr(*param[i]).AsStdString();
+      if (s.size() > 48) s.resize(48);
+      message += "=\"";
+      message += s;
+      message += "\"";
+    } else if (param[i]->Type() == tvtObject) {
+      message += "=object";
+    }
+    message += "]";
+  }
+  spdlog::info("{}", message);
+}
+
+static tjs_error TJS_INTF_METHOD
+EdgeShadowDrawTextCompat(tTJSVariant *result, tjs_int numparams,
+                         tTJSVariant **param, iTJSDispatch2 *objthis) {
+  if (!objthis || numparams < 3) return TJS_E_BADPARAMCOUNT;
+
+  const tjs_int textIndex = textRenderFindStringArg(numparams, param);
+  if (textIndex < 0) return TJS_E_BADPARAMCOUNT;
+  textRenderLogEdgeShadowArgs(numparams, param, textIndex);
+
+  tTJSNI_BaseLayer *layer =
+      textRenderFindLayerArg(numparams, param, objthis);
+  if (!layer) {
+    if (result) *result = true;
+    return TJS_S_OK;
+  }
+
+  tjs_int x = 0;
+  tjs_int y = 0;
+  bool haveX = false;
+  bool haveY = false;
+  for (tjs_int i = 0; i < textIndex; ++i) {
+    tjs_int value = 0;
+    if (!textRenderTryIntArg(numparams, param, i, value)) continue;
+    if (!haveX) {
+      x = value;
+      haveX = true;
+    } else if (!haveY) {
+      y = value;
+      haveY = true;
+      break;
+    }
+  }
+
+  tjs_int colorIndex = textIndex + 1;
+  tjs_uint32 color = 0xffffff;
+  if (colorIndex < numparams && param[colorIndex] &&
+      textRenderVariantIsNumeric(*param[colorIndex])) {
+    color = textRenderColor24(*param[colorIndex], color);
+  }
+
+  tjs_uint32 edgeColor = 0xffffff;
+  tjs_int edgeWidth = 2;
+  if (numparams >= 15 && param[14] &&
+      textRenderVariantIsNumeric(*param[14])) {
+    edgeColor = textRenderColor24(*param[14], 0xffffff);
+  } else {
+    for (tjs_int i = numparams - 1; i > colorIndex; --i) {
+      if (!param[i] || !textRenderVariantIsNumeric(*param[i])) continue;
+      const tjs_uint32 candidate = textRenderColor24(*param[i], 0);
+      if (candidate > 0xff) {
+        edgeColor = candidate;
+        break;
+      }
+    }
+  }
+  for (tjs_int i = colorIndex + 1; i < numparams; ++i) {
+    if (!param[i] || !textRenderVariantIsNumeric(*param[i])) continue;
+    const tjs_int candidate = static_cast<tjs_int>(*param[i]);
+    if (candidate >= 1 && candidate <= 6) {
+      edgeWidth = candidate;
+      break;
+    }
+  }
+
+  try {
+    for (tjs_int dy = -edgeWidth; dy <= edgeWidth; ++dy) {
+      for (tjs_int dx = -edgeWidth; dx <= edgeWidth; ++dx) {
+        if (dx == 0 && dy == 0) continue;
+        if (dx * dx + dy * dy > edgeWidth * edgeWidth + 1) continue;
+        layer->DrawText(x + dx, y + dy, *param[textIndex], edgeColor, 255,
+                        true, 0, 0, 0, 0, 0);
+      }
+    }
+    layer->DrawText(x, y, *param[textIndex], color, 255, true, 0, 0, 0, 0, 0);
+  } catch (...) {
+    if (result) *result = false;
+    return TJS_S_OK;
+  }
+
+  if (result) *result = true;
+  return TJS_S_OK;
+}
 
 class TextRenderBase {
 public:
@@ -251,6 +441,9 @@ public:
   property_accessor(shadow, bool, m_state.shadow);
   property_accessor_cast(shadowColor, RgbColor, tjs_int, m_state.shadowColor);
   property_accessor(edge, bool, m_state.edge);
+  property_accessor_cast(edgeColor, RgbColor, tjs_int, m_state.edgeColor);
+  property_accessor(edgeExtent, int, m_state.edgeExtent);
+  property_accessor(edgeEmphasis, int, m_state.edgeEmphasis);
   property_accessor(lineSpacing, int, m_state.lineSpacing);
   property_accessor(pitch, int, m_state.pitch);
   property_accessor(lineSize, int, m_state.lineSize);
@@ -265,6 +458,9 @@ public:
   property_accessor(defaultShadow, bool, m_default.shadow);
   property_accessor_cast(defaultShadowColor, RgbColor, tjs_int, m_default.shadowColor);
   property_accessor(defaultEdge, bool, m_default.edge);
+  property_accessor_cast(defaultEdgeColor, RgbColor, tjs_int, m_default.edgeColor);
+  property_accessor(defaultEdgeExtent, int, m_default.edgeExtent);
+  property_accessor(defaultEdgeEmphasis, int, m_default.edgeEmphasis);
   property_accessor(defaultLineSpacing, int, m_default.lineSpacing);
   property_accessor(defaultPitch, int, m_default.pitch);
   property_accessor(defaultLineSize, int, m_default.lineSize);
@@ -607,6 +803,8 @@ void TextRenderBase::pushCharacter(tjs_char ch) {
   info.size = m_cachedAscentHeight;
   info.color = m_state.chColor;
   info.edge = m_state.edge ? std::make_optional(m_state.edgeColor) : std::nullopt;
+  info.edgeExtent = m_state.edge ? m_state.edgeExtent : 0;
+  info.edgeEmphasis = m_state.edge ? m_state.edgeEmphasis : 0;
   info.shadow = m_state.shadow ? std::make_optional(m_state.shadowColor) : std::nullopt;
   tjs_char tmp[] = { ch, 0 };
   info.text = tmp;
@@ -813,6 +1011,9 @@ NCB_REGISTER_CLASS(TextRenderBase) {
   property_delegate(shadow);
   property_delegate(shadowColor);
   property_delegate(edge);
+  property_delegate(edgeColor);
+  property_delegate(edgeExtent);
+  property_delegate(edgeEmphasis);
   property_delegate(lineSpacing);
   property_delegate(pitch);
   property_delegate(lineSize);
@@ -827,6 +1028,9 @@ NCB_REGISTER_CLASS(TextRenderBase) {
   property_delegate(defaultShadow);
   property_delegate(defaultShadowColor);
   property_delegate(defaultEdge);
+  property_delegate(defaultEdgeColor);
+  property_delegate(defaultEdgeExtent);
+  property_delegate(defaultEdgeEmphasis);
   property_delegate(defaultLineSpacing);
   property_delegate(defaultPitch);
   property_delegate(defaultLineSize);
@@ -839,3 +1043,6 @@ NCB_REGISTER_CLASS(TextRenderBase) {
   NCB_PROPERTY_RO(renderRight, get_renderRight);
   NCB_PROPERTY_RO(renderBottom, get_renderBottom);
 };
+
+NCB_ATTACH_FUNCTION(EdgeShadowDrawText, Layer, EdgeShadowDrawTextCompat);
+NCB_ATTACH_FUNCTION(EdgeShadowDrawTextKinsokuRect, Layer, EdgeShadowDrawTextCompat);
