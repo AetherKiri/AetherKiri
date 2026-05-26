@@ -127,10 +127,7 @@ namespace motion {
     }
 
     void EmotePlayer::assignState() { STUB_WARN(assignState); }
-    void EmotePlayer::initPhysics() {
-        _player.initPhysics();
-        _modified = true;
-    }
+    void EmotePlayer::initPhysics() { STUB_WARN(initPhysics); }
 
     // Aligned to libkrkr2.so sub_5302E4: delegates to Player's rotAnimator
     void EmotePlayer::setRot(double rot, double transition, double ease) {
@@ -435,6 +432,29 @@ namespace motion {
         _player.playTimeline(label, 0);
     }
 
+    bool EmotePlayer::play(ttstr label, tjs_int flags) {
+        const bool started = _player.playMotionLike_0x6B2284(label, flags);
+        _modified = true;
+        return started;
+    }
+
+    void EmotePlayer::draw(tTJSVariant target) {
+        _player.draw(target);
+        _modified = true;
+    }
+
+    tjs_error EmotePlayer::setDrawAffineTranslateMatrixCompat(
+        tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
+        iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        return Player::setDrawAffineTranslateMatrixCompat(
+            result, numparams, param, &self->_player);
+    }
+
     void EmotePlayer::addPlayCallback() {
         _playCallback = true;
     }
@@ -445,16 +465,12 @@ namespace motion {
         _player.stopTimeline(TJS_W(""));
     }
 
-    // Aligned to libkrkr2.so sub_530A5C → sub_67D01C:
-    // Binary progress() delegates to Player's full physics/animation engine.
+    // Aligned to libkrkr2.so sub_6818B4 -> sub_6D2A54:
+    // after wrapper-side animators, EmotePlayer advances its owned Player and
+    // immediately updates layers/calcBounds.
     void EmotePlayer::pass(double dt) {
         _progress += dt;
-        double remaining = dt;
-        while(remaining > 0.0) {
-            const double step = std::min(remaining, 1.1);
-            _player.frameProgress(step);
-            remaining -= step;
-        }
+        _player.progressMsLike_0x6D2A54(dt);
         _modified = true;
     }
 

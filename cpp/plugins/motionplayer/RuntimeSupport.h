@@ -20,6 +20,10 @@
 #include "psbfile/PSBFile.h"
 #include "MotionNode.h"
 
+namespace motion {
+    class SourceCache;
+}
+
 namespace motion::detail {
 
     struct VariableFrameInfo {
@@ -100,16 +104,35 @@ namespace motion::detail {
         float weight = 1.0f;
     };
 
+    // Runtime-owned parameter entry. Aligned to libkrkr2.so's 56-byte
+    // Player+384 parameter table populated inside Player_initNonEmoteMotion
+    // (0x6B365C) via sub_6B1718 / sub_6B202C.
+    struct MotionParameterEntry {
+        std::string id;
+        bool discretization = false;
+        double rangeBegin = 0.0;
+        double rangeEnd = 0.0;
+        double rangeScale = 1.0;
+        double value = 0.0;
+        int mode = 0;
+    };
+
     struct MotionClip {
         std::string label;
         std::string owner;
         bool loop = false;
         double loopTime = -1.0;   // from PSB; >=0 means loop restart point
         double totalFrames = 0.0;
-        std::vector<std::string> layerNames;
-        std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>>
-            layersByName;
+        // Primary layer storage — PSB array order, duplicates preserved.
+        // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0) reading
+        // "layer" from Player+528 as a TJS Array iterated by index.
+        std::vector<std::shared_ptr<const PSB::PSBDictionary>> layerList;
         std::vector<std::string> sourceCandidates;
+        // Raw PSB objects retained for Player_initNonEmoteMotion (0x6B365C).
+        // The parameter table is intentionally not cached here; it is rebuilt
+        // on each player init to mirror libkrkr2.so ownership/lifetime.
+        std::shared_ptr<const PSB::PSBDictionary> motionObject;
+        std::shared_ptr<const PSB::PSBDictionary> contentObject;
     };
 
     struct TimelineState {
@@ -160,10 +183,19 @@ namespace motion::detail {
         std::vector<FixedControllerOutputBinding> fixedControllerOutputs;
         std::vector<ClampControlBinding> clampControls;
         std::vector<std::string> mirrorVariableMatchList;
-        std::vector<std::string> layerNames;
-        std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>> layersByName;
+        // Primary layer storage — PSB array order, duplicates preserved.
+        // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0) which reads
+        // the "layer" TJS Array from Player+528 and iterates by index.
+        std::vector<std::shared_ptr<const PSB::PSBDictionary>> layerList;
         std::vector<std::string> sourceCandidates;
-        std::unordered_map<std::string, MotionClip> clipsByLabel;
+        // Primary clip storage — PSB priority[] order preserved.
+        // Aligned to libkrkr2.so Player+548 (motion.priority TJSArray stored at
+        // 0x6B37D0) + Player+616 (priority[currentIndex].content at 0x6B38FC).
+        // Duplicate clip labels are allowed (index-addressable) but the
+        // auxiliary label→index map below resolves name-based lookups using
+        // last-wins semantics to mirror Player+24 labelMap behaviour.
+        std::vector<MotionClip> clipList;
+        std::unordered_map<std::string, int> clipIndexByLabel;
         std::unordered_map<std::string, TimelineControlBinding>
             timelineControlByLabel;
         std::vector<std::string> resourceAliases;
@@ -171,14 +203,51 @@ namespace motion::detail {
         double height = 0.0;
     };
 
+    // Aligned to libkrkr2.so Player+1296 std::vector<LabelEntry> written by
+    // Player_initVariables (0x6CD750). Each entry is 160 bytes in the binary
+    // with these observed writes (offsets relative to entry base):
+    //   +0   ttstr name   — from entry["scope"], split by ':' and take the
+    //                       right half; empty when no scope / no colon.
+    //   +24  ttstr label  — from entry["label"].
+    //   +68  u8  flag68=1 — observed default (semantics not yet reversed).
+    //   +124 u8  flag124=1 — observed default (semantics not yet reversed).
+    // Read paths in the binary have not been fully traced; the struct exists
+    // so the eager initialisation sequence can land without drifting further.
+    struct VariableLabelEntry {
+        ttstr name;
+        ttstr label;
+        bool flag68 = true;
+        bool flag124 = true;
+    };
+
     struct PlayerRuntime {
         std::unordered_map<std::string, std::shared_ptr<MotionSnapshot>> motionsByKey;
-        std::unordered_map<std::string, tTJSVariant> sourcesByKey;
+        // Aligned to libkrkr2.so player+656: SourceCache object variant.
+        motion::SourceCache *sourceCacheNative = nullptr;
+        tTJSVariant sourceCacheObject;
         std::shared_ptr<MotionSnapshot> activeMotion;
         std::unordered_map<std::string, TimelineState> timelines;
         std::vector<std::string> playingTimelineLabels;
         std::unordered_map<std::string, tjs_int> layerIdsByName;
         std::unordered_map<tjs_int, std::string> layerNamesById;
+        tjs_int nextLayerAbsolute = 1;
+        struct LayerRenderState {
+            tjs_int layerId = 0;
+            bool clipEnabled = true;
+            bool initialized = false;
+            bool isDirty = false;
+            tjs_int absolute = 0;
+            tjs_int hitThreshold = 256;
+            tTJSVariant layerObject;
+            tTJSVariant layerGetter;
+            std::array<float, 4> clipRect{0.f, 0.f, 0.f, 0.f};
+            std::array<float, 4> worldRect{0.f, 0.f, 0.f, 0.f};
+            std::array<float, 4> localRect{0.f, 0.f, 0.f, 0.f};
+            std::array<std::uint32_t, 4> packedColors{
+                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
+            };
+        };
+        std::unordered_map<tjs_int, LayerRenderState> renderLayerStates;
         std::vector<tTJSVariant> backgrounds;
         std::vector<tTJSVariant> captions;
         std::unordered_map<std::string, bool> disabledSelectorTargets;
@@ -203,94 +272,123 @@ namespace motion::detail {
         double slant = 0.0;
         double zoom = 1.0;
         std::vector<MotionEvent> pendingEvents;
-        // Persistent node tree for updateLayers pipeline
-        std::vector<MotionNode> nodes;
-        bool nodesBuilt = false;
-        // Node label → index map. Aligned to binary's std::map<ttstr,int> at player+24.
-        // Populated after buildNodeTree, queried by sub_6F2228 equivalent.
+        std::vector<MotionParameterEntry> parameterEntries;
+        std::unordered_map<std::string, size_t> parameterEntryById;
+        MotionParameterEntry defaultParameterEntry;
+        MotionParameterEntry *defaultParameterEntryPtr = nullptr;
+        int defaultParameterEntryIndex = -1;
+        const MotionClip *activeClip = nullptr;
+        // Persistent node tree for updateLayers pipeline. Aligned to
+        // libkrkr2.so Player+200 (std::deque of MotionNode). The constructor
+        // creates index 0 as the root node; loaded layer trees append real
+        // nodes at indices [1,end) during Player_buildNodeTree (0x6B51F0).
+        std::deque<MotionNode> nodes;
+        // Aligned to libkrkr2.so Player+1296 std::vector<LabelEntry>.
+        // Populated eagerly by Player_initVariables (0x6CD750) right after
+        // buildNodeTree on the play / setMotion path.
+        std::vector<VariableLabelEntry> variableLabelEntries;
+        // Node label → index map. Aligned to binary's std::map<ttstr,int> at
+        // player+24. Populated during recursive build with last-write-wins
+        // assignment, queried by sub_6F2228 equivalent.
         std::map<std::string, int> nodeLabelMap;
 
-        struct PreparedRenderItem {
+        // Native render-item fields from the anonymous 0x1B0 item built by
+        // libkrkr2.so 0x6C2334 and consumed in-place by 0x6C4E28 / 0x6C7440.
+        // These fields intentionally keep the native write lifecycle: +21 and
+        // +216..228 are not blanket-cleared every frame.
+        struct NativeRenderItemFields {
+            bool rawFlag16 = false; // original item +16 = node+201
+            bool skipFlag0 = false; // original render item +17 (0x6C2334 / 0x6C7440)
+            bool skipFlag1 = false; // original render item +18 (0x6C2334 / 0x6C7440)
+            bool drawFlag = false;  // original render item +19
+            bool rawFlag20 = false; // original item +20, set by sub_6C4E28 requireLayerId path
+            bool rawFlag21 = false; // original item +21, drawable clip valid after sub_6C4E28
+            std::uint8_t stencilMaskRef = 0; // original item +22
+            std::uint8_t stencilWriteRef = 0; // original item +23
+            std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f}; // item+184..196
+            std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f}; // item+200..212
+            std::array<int, 4> clipRect{0, 0, 0, 0}; // item+216..228
+            std::array<int, 4> dirtyRect{0, 0, 0, 0};
+            int opacity = 255; // item+232
+            // item+244 in libkrkr2.so sub_6C2334 @ 0x6C2A90 — stencil/composite
+            // flags copied from node.stencilType; consumed by sub_6C7440 alpha
+            // mask path `(item+244 & 4)` / `(item+244 & 3)==1`.
+            int stencilComposite = 0;
+        };
+
+        struct RenderItemNativeFieldLifetime {
+            bool rawFlag20 = false;
+            bool rawFlag21 = false;
+            std::array<int, 4> clipRect{0, 0, 0, 0};
+            std::array<int, 4> dirtyRect{0, 0, 0, 0};
+            std::array<float, 8> localCorners{};
+            std::vector<float> localMeshPoints;
+        };
+
+        struct PreparedRenderItem : NativeRenderItemFields {
             int nodeIndex = 0;
             tTJSVariant srcRef;
             std::string sourceKey;
             bool hasOwnSource = false;
             bool groupOnly = false;
-            bool skipFlag0 = false;
-            bool skipFlag1 = false;
-            bool clipFlag = false;
-            bool drawFlag = false;
+            bool topLevelList = true;
+            bool groupList = false;
+            bool selfSeedChildList = false;
+            PlayerRuntime *nativeLifetimeOwner = nullptr;
+            int nativeLifetimeKey = 0;
             double sortKey = 0.0;
             int blendMode = 16;
+            tTJSVariant contextVariant; // original item +248 (player+1012 copy)
             std::array<float, 8> corners{};
+            std::array<float, 8> localCorners{};
             std::array<std::uint32_t, 4> packedColors{
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
             };
-            std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f};
-            std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f};
             bool hasViewport = false;
-            int opacity = 255;
-            int updateCount = 0;
+            int coordinateMode = 0;
+            int objTriPriority = 0;
             int visibleAncestorIndex = -1;
             int meshDivX = 0;
             int meshDivY = 0;
             int meshType = 0;
             std::vector<float> meshPoints;
-            int layerId = 0;
-        };
-        struct RenderCommand {
-            int nodeIndex = 0;
-            tTJSVariant srcRef;
-            std::string sourceKey;
-            bool hasOwnSource = false;
-            bool groupOnly = false;
-            int blendMode = 16;
-            int opacity = 255;
-            int itemFlags = 0;
-            int parentNodeIndex = -1;
-            bool hasRenderParent = false;
-            std::array<std::uint32_t, 4> packedColors{
-                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
-            };
-            int visibleAncestorIndex = -1;
-            bool clearEnabled = false;
-            std::array<int, 4> clipRect{0, 0, 0, 0};
-            std::array<int, 4> dirtyRect{0, 0, 0, 0};
-            std::array<float, 8> worldCorners{};
-            std::array<float, 8> localCorners{};
-            std::vector<float> worldMeshPoints;
             std::vector<float> localMeshPoints;
-            int meshDivX = 0;
-            int meshDivY = 0;
-            int meshType = 0;
             int layerId = 0;
-            std::vector<int> childCommandIndices;
-            tTJSVariant leafLayer;
-            tTJSVariant composedLayer;
+            int layerId2 = 0;
+            PreparedRenderItem *parentItem = nullptr; // semantic mapping of item +264
+            std::vector<PreparedRenderItem *> childItems; // semantic mapping of item +24
+            tTJSVariant leafLayer;      // item+304 variant
+            tTJSVariant composedLayer;  // item+324 variant
             std::array<int, 4> builtRect{0, 0, 0, 0};
             bool leafBuilt = false;
             bool composedBuilt = false;
             bool executedDirect = false;
         };
         std::vector<PreparedRenderItem> preparedRenderItems;  // player+936/944
-        std::vector<RenderCommand> renderCommands;
+        // Native-shaped a2/a3 split passed through sub_6C2334 -> sub_6C4E28
+        // -> sub_6C7440. Both lists point directly into preparedRenderItems.
+        std::vector<PreparedRenderItem *> preparedRenderItemsTopLevel;
+        std::vector<PreparedRenderItem *> preparedRenderItemsGroup;
+        std::unordered_map<int, RenderItemNativeFieldLifetime>
+            renderItemNativeFieldLifetimeByNode;
 
-        // Per-node evaluation time array.
-        // Aligned to libkrkr2.so player+384: 56-byte-per-node entries.
-        // Each node's node+8 pointer points into this array.
-        // Offset 40 within each entry stores the per-node eval time.
-        // Offset 48 stores the per-node dirty flag (cleared in post-loop).
+        // Legacy local scratch for old diagnostics. libkrkr2.so player+384 is
+        // the parameter table initialized by Player_initNonEmoteMotion
+        // (0x6B365C), not per-node storage; node+8 resolves into
+        // parameterEntries via MotionNode::parameterizeIndex.
         struct PerNodeEvalData {
             double padding[5] = {};   // offsets 0-39 (unused in our current scope)
-            double evalTime = 0.0;    // offset 40: per-node evaluation time
-            int dirtyFlag = 0;        // offset 48: cleared in post-loop
+            double evalTime = 0.0;
+            int dirtyFlag = 0;
         };
-        std::vector<PerNodeEvalData> perNodeEvalData;  // player+384/392
+        std::vector<PerNodeEvalData> perNodeEvalData;
         // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
         // PSB root "type" field: 0=non-emote (motion), 1=emote
         bool isEmoteMode = false;
     };
 
+    void ensureRootNodeLike_0x6CED30(PlayerRuntime &runtime);
+    void resetNodeTreeKeepRootLike_0x6B56F8(PlayerRuntime &runtime);
     std::shared_ptr<PlayerRuntime> makePlayerRuntime();
 
     std::string narrow(const ttstr &value);

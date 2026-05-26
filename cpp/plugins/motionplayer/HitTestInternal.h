@@ -84,10 +84,10 @@ namespace motion::detail {
                 const double winding = cross(x0, y0, x1, y1, x2, y2) >= 0.0
                     ? 1.0
                     : -1.0;
-                return winding * cross(x0, y0, x1, y1, x, y) <= 0.0 &&
-                    winding * cross(x1, y1, x2, y2, x, y) <= 0.0 &&
-                    winding * cross(x2, y2, x3, y3, x, y) <= 0.0 &&
-                    winding * cross(x3, y3, x0, y0, x, y) <= 0.0;
+                return winding * cross(x0, y0, x1, y1, x, y) >= 0.0 &&
+                    winding * cross(x1, y1, x2, y2, x, y) >= 0.0 &&
+                    winding * cross(x2, y2, x3, y3, x, y) >= 0.0 &&
+                    winding * cross(x3, y3, x0, y0, x, y) >= 0.0;
             }
             default:
                 return false;

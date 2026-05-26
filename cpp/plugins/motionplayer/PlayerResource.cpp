@@ -2,6 +2,7 @@
 // Split from Player.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "SourceCache.h"
 
 using namespace motion::internal;
 
@@ -28,24 +29,22 @@ namespace motion {
             }
         }
 
-        for(auto it = _runtime->sourcesByKey.begin();
-            it != _runtime->sourcesByKey.end();) {
-            if(it->first == key) {
-                it = _runtime->sourcesByKey.erase(it);
-            } else {
-                ++it;
-            }
+        if(_runtime->sourceCacheNative) {
+            _runtime->sourceCacheNative->eraseSource(name);
         }
     }
 
     void Player::unloadAll() {
         _runtime->motionsByKey.clear();
-        _runtime->sourcesByKey.clear();
+        if(_runtime->sourceCacheNative) {
+            _runtime->sourceCacheNative->clearCache();
+        }
         _runtime->activeMotion.reset();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
         _runtime->layerIdsByName.clear();
         _runtime->layerNamesById.clear();
+        _resourceManagerNative.clearCache();
         _runtime->lastCanvas.Clear();
         _runtime->lastViewParam.Clear();
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
@@ -81,23 +80,25 @@ namespace motion {
 
     tjs_int Player::requireLayerId(ttstr name) {
         const auto key = detail::narrow(name);
-        if(const auto it = _runtime->layerIdsByName.find(key);
-           it != _runtime->layerIdsByName.end()) {
-            return it->second;
+        // Aligned to libkrkr2.so: after eager Player_buildNodeTree, the
+        // label map is authoritative for any loaded motion; an empty
+        // nodeLabelMap simply means no motion is loaded yet.
+        if(_runtime) {
+            if(const auto it = _runtime->nodeLabelMap.find(key);
+               it != _runtime->nodeLabelMap.end()) {
+                const auto nodeIndex = it->second;
+                if(nodeIndex >= 0 &&
+                   nodeIndex < static_cast<int>(_runtime->nodes.size()) &&
+                   _runtime->nodes[nodeIndex].layerId1 != 0) {
+                    return _runtime->nodes[nodeIndex].layerId1;
+                }
+            }
         }
-
-        const auto id = _runtime->nextLayerId++;
-        _runtime->layerIdsByName[key] = id;
-        _runtime->layerNamesById[id] = key;
-        return id;
+        return _resourceManagerNative.requireLayerIdForName(name);
     }
 
     void Player::releaseLayerId(tjs_int id) {
-        if(const auto it = _runtime->layerNamesById.find(id);
-           it != _runtime->layerNamesById.end()) {
-            _runtime->layerIdsByName.erase(it->second);
-            _runtime->layerNamesById.erase(it);
-        }
+        _resourceManagerNative.releaseLayerId(id);
     }
 
 

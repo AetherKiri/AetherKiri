@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -868,11 +869,10 @@ namespace motion::detail {
                 return;
             }
 
-            if(snapshot.layersByName.find(*label) ==
-               snapshot.layersByName.end()) {
-                snapshot.layersByName[*label] = dic;
-                snapshot.layerNames.push_back(*label);
-            }
+            // Aligned to libkrkr2.so Player_buildNodeTree_recursive (0x6B4A6C):
+            // layer[] is iterated by index, duplicates preserved. Store every
+            // occurrence into layerList in PSB order.
+            snapshot.layerList.push_back(dic);
         }
 
         void maybeRecordTimeline(const std::vector<std::string> &path,
@@ -962,9 +962,24 @@ namespace motion::detail {
                 return;
             }
 
-            auto &clip = snapshot.clipsByLabel[label];
+            // Aligned to libkrkr2.so Player+548 priority[] ordering:
+            // store each motion/priority entry by PSB array index (duplicate
+            // labels preserved) with auxiliary label→index map resolving via
+            // last-wins to mirror the binary's labelMap semantics.
+            auto existingIt = snapshot.clipIndexByLabel.find(label);
+            int clipIndex;
+            if(existingIt != snapshot.clipIndexByLabel.end()) {
+                clipIndex = existingIt->second;
+            } else {
+                clipIndex = static_cast<int>(snapshot.clipList.size());
+                snapshot.clipList.emplace_back();
+            }
+            snapshot.clipIndexByLabel[label] = clipIndex;
+            auto &clip = snapshot.clipList[clipIndex];
             clip.label = label;
             clip.owner = path[path.size() - 3];
+            clip.motionObject = dic;
+            clip.contentObject = dic;
             clip.totalFrames =
                 dictionaryNumber(dic, { "lastTime", "frameCount", "frame_count",
                                         "totalFrameCount", "total_frame_count",
@@ -992,11 +1007,10 @@ namespace motion::detail {
                         continue;
                     }
 
-                    if(clip.layersByName.find(*layerLabel) ==
-                       clip.layersByName.end()) {
-                        clip.layersByName[*layerLabel] = layer;
-                        clip.layerNames.push_back(*layerLabel);
-                    }
+                    // Aligned to libkrkr2.so: motion.priority[*].layer[] is
+                    // iterated by index, duplicates preserved.
+                    clip.layerList.push_back(layer);
+                    (void)layerLabel;
                     collectValueSources(layer, clip.sourceCandidates);
                 }
             }
@@ -1170,8 +1184,36 @@ namespace motion::detail {
 
     } // namespace
 
+    void ensureRootNodeLike_0x6CED30(PlayerRuntime &runtime) {
+        if(!runtime.nodes.empty()) {
+            runtime.nodes.front().index = 0;
+            runtime.nodes.front().parentIndex = -1;
+            return;
+        }
+        MotionNode root;
+        root.index = 0;
+        root.parentIndex = -1;
+        runtime.nodes.emplace_back(std::move(root));
+    }
+
+    void resetNodeTreeKeepRootLike_0x6B56F8(PlayerRuntime &runtime) {
+        ensureRootNodeLike_0x6CED30(runtime);
+        auto &root = runtime.nodes.front();
+        root.index = 0;
+        root.parentIndex = -1;
+        if(runtime.nodes.size() > 1) {
+            runtime.nodes.erase(std::next(runtime.nodes.begin()), runtime.nodes.end());
+        }
+        runtime.nodeLabelMap.clear();
+        runtime.renderItemNativeFieldLifetimeByNode.clear();
+    }
+
     std::shared_ptr<PlayerRuntime> makePlayerRuntime() {
-        return std::make_shared<PlayerRuntime>();
+        auto runtime = std::make_shared<PlayerRuntime>();
+        runtime->defaultParameterEntry.rangeScale = 1.0;
+        runtime->defaultParameterEntry.mode = 0;
+        ensureRootNodeLike_0x6CED30(*runtime);
+        return runtime;
     }
 
     std::string narrow(const ttstr &value) { return value.AsStdString(); }
@@ -1262,10 +1304,32 @@ namespace motion::detail {
         collectControlMetadata(*snapshot);
         collectRootResources(root, *snapshot);
         if(logoChainTraceEnabled(snapshot)) {
+            const auto rootParameterList =
+                dictionaryList(snapshot->root, {"parameter"});
+            const auto rootParameterizeValue =
+                (*snapshot->root)["parameterize"];
+            const auto contentNode =
+                navigateDictionaryPath(snapshot->root, "content");
+            const auto contentParameterList = contentNode
+                ? dictionaryList(contentNode, {"parameter"})
+                : nullptr;
+            const auto contentParameterizeValue = contentNode
+                ? (*contentNode)["parameterize"]
+                : std::shared_ptr<PSB::IPSBValue>{};
+            const auto describeValue =
+                [](const std::shared_ptr<PSB::IPSBValue> &value) -> std::string {
+                    if(!value) return "<none>";
+                    if(std::dynamic_pointer_cast<PSB::PSBList>(value)) return "list";
+                    if(std::dynamic_pointer_cast<PSB::PSBDictionary>(value)) return "dict";
+                    if(std::dynamic_pointer_cast<PSB::PSBString>(value)) return "string";
+                    if(std::dynamic_pointer_cast<PSB::PSBNumber>(value)) return "number";
+                    if(std::dynamic_pointer_cast<PSB::PSBBool>(value)) return "bool";
+                    return "other";
+                };
             logoChainTraceLogf(
                 snapshot->path, "snapshot.parsed", "PSB parse", -1.0,
-                "path={} clipCount={} mainLabels={} sourceCount={} resourceAliases={} variableCount={} controllerBindings={} fixedControllerOutputs={} selectorControls={} timelineControls={} instantVariables={} clampControls={} mirrorMatches={}",
-                snapshot->path, snapshot->clipsByLabel.size(),
+                "path={} clipCount={} mainLabels={} sourceCount={} resourceAliases={} variableCount={} controllerBindings={} fixedControllerOutputs={} selectorControls={} timelineControls={} instantVariables={} clampControls={} mirrorMatches={} rootParameterCount={} rootParameterize={} contentParameterCount={} contentParameterize={}",
+                snapshot->path, snapshot->clipList.size(),
                 joinStrings(snapshot->mainTimelineLabels),
                 snapshot->sourceCandidates.size(),
                 joinStrings(snapshot->resourceAliases),
@@ -1276,7 +1340,11 @@ namespace motion::detail {
                 snapshot->timelineControlByLabel.size(),
                 snapshot->instantVariableLabels.size(),
                 snapshot->clampControls.size(),
-                snapshot->mirrorVariableMatchList.size());
+                snapshot->mirrorVariableMatchList.size(),
+                rootParameterList ? rootParameterList->size() : 0,
+                describeValue(rootParameterizeValue),
+                contentParameterList ? contentParameterList->size() : 0,
+                describeValue(contentParameterizeValue));
             for(const auto &[resourcePath, resource] : snapshot->resourcesByPath) {
                 if(!hasSuffix(resourcePath, "/pixel") &&
                    !hasSuffix(resourcePath, "/pal")) {
@@ -1595,12 +1663,22 @@ namespace motion::detail {
     void scanLayerActions(const MotionSnapshot &snapshot,
                           double prevTime, double newTime,
                           std::vector<MotionEvent> &events) {
-        // Walk all layers in the snapshot
-        for(const auto &[name, layerDict] : snapshot.layersByName) {
-            if(!layerDict) continue;
+        // Helper: read the layer label from the PSB dict (via "label"/"name"/"id").
+        const auto readLabel = [](const std::shared_ptr<const PSB::PSBDictionary> &dic)
+            -> std::string {
+            if(!dic) return {};
+            if(const auto s = dictionaryString(dic, { "label", "name", "id" }))
+                return *s;
+            return {};
+        };
+
+        // Emit events for a single layer dict's frameList crossing [prevTime, newTime].
+        const auto scanLayer = [&](const std::shared_ptr<const PSB::PSBDictionary> &layerDict) {
+            if(!layerDict) return;
+            const std::string layerLabel = readLabel(layerDict);
             auto frameList = std::dynamic_pointer_cast<PSB::PSBList>(
                 (*layerDict)["frameList"]);
-            if(!frameList) continue;
+            if(!frameList) return;
 
             for(size_t i = 0; i < frameList->size(); ++i) {
                 auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
@@ -1622,22 +1700,19 @@ namespace motion::detail {
                         frameTime = static_cast<double>(timeVal->getValue<tjs_int64>()); break;
                 }
 
-                // Only fire for frames crossed: prevTime < frameTime <= newTime
                 if(frameTime <= prevTime || frameTime > newTime) continue;
 
                 auto content = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                     (*frame)["content"]);
                 if(!content) continue;
 
-                // Check for action
                 if(auto actionStr = std::dynamic_pointer_cast<PSB::PSBString>(
                     (*content)["action"])) {
                     if(!actionStr->value.empty()) {
-                        events.push_back({0, actionStr->value, name});
+                        events.push_back({0, actionStr->value, layerLabel});
                     }
                 }
 
-                // Check for sync
                 if(auto syncVal = std::dynamic_pointer_cast<PSB::PSBNumber>(
                     (*content)["sync"])) {
                     double sv = 0.0;
@@ -1649,48 +1724,21 @@ namespace motion::detail {
                         default: break;
                     }
                     if(sv != 0.0) {
-                        events.push_back({1, name, {}});
+                        events.push_back({1, layerLabel, {}});
                     }
                 }
             }
+        };
+
+        // Iterate the PSB "layer" array in index order (libkrkr2.so alignment).
+        for(const auto &layerDict : snapshot.layerList) {
+            scanLayer(layerDict);
         }
 
-        // Also scan clips' layers
-        for(const auto &[clipLabel, clip] : snapshot.clipsByLabel) {
-            for(const auto &[layerName, layerDict] : clip.layersByName) {
-                if(!layerDict) continue;
-                auto frameList = std::dynamic_pointer_cast<PSB::PSBList>(
-                    (*layerDict)["frameList"]);
-                if(!frameList) continue;
-
-                for(size_t i = 0; i < frameList->size(); ++i) {
-                    auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                        (*frameList)[static_cast<int>(i)]);
-                    if(!frame) continue;
-
-                    auto timeVal = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                        (*frame)["time"]);
-                    if(!timeVal) continue;
-                    double frameTime = static_cast<double>(
-                        timeVal->numberType == PSB::PSBNumberType::Float
-                            ? timeVal->getValue<float>()
-                            : timeVal->numberType == PSB::PSBNumberType::Double
-                                ? timeVal->getValue<double>()
-                                : static_cast<double>(timeVal->getValue<int>()));
-
-                    if(frameTime <= prevTime || frameTime > newTime) continue;
-
-                    auto content = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                        (*frame)["content"]);
-                    if(!content) continue;
-
-                    if(auto actionStr = std::dynamic_pointer_cast<PSB::PSBString>(
-                        (*content)["action"])) {
-                        if(!actionStr->value.empty()) {
-                            events.push_back({0, actionStr->value, layerName});
-                        }
-                    }
-                }
+        // Also scan every clip's layer[] in PSB priority[] order.
+        for(const auto &clip : snapshot.clipList) {
+            for(const auto &layerDict : clip.layerList) {
+                scanLayer(layerDict);
             }
         }
     }

@@ -14,6 +14,7 @@
 #include <cstring>
 #include <optional>
 #include <random>
+#include <stdexcept>
 #include <sstream>
 #include <unordered_set>
 #include <vector>
@@ -202,13 +203,27 @@ namespace internal {
 
         inline std::shared_ptr<detail::MotionSnapshot>
         activateMotion(detail::PlayerRuntime &runtime,
-                       const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
+                       const std::shared_ptr<detail::MotionSnapshot> &snapshot,
+                       ResourceManager *resourceManager = nullptr) {
             runtime.activeMotion = snapshot;
             runtime.timelines.clear();
             // Reset persistent node tree so it gets rebuilt for new motion
-            runtime.nodes.clear();
-            runtime.nodesBuilt = false;
-            runtime.nodeLabelMap.clear();
+            // by the subsequent eager Player_buildNodeTree call (no gate).
+            // Mirrors Player_resetAndReleaseNodes (0x6B56F8) shape: keep the
+            // constructor-created root node and drop runtime children.
+            if(resourceManager) {
+                for(size_t i = 1; i < runtime.nodes.size(); ++i) {
+                    resourceManager->releaseLayerId(runtime.nodes[i].layerId1);
+                    resourceManager->releaseLayerId(runtime.nodes[i].layerId2);
+                }
+            }
+            detail::resetNodeTreeKeepRootLike_0x6B56F8(runtime);
+            runtime.parameterEntries.clear();
+            runtime.parameterEntryById.clear();
+            runtime.defaultParameterEntry = {};
+            runtime.defaultParameterEntryPtr = nullptr;
+            runtime.defaultParameterEntryIndex = -1;
+            runtime.activeClip = nullptr;
             // Detect emote mode from PSB root "type" field.
             // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
             //   type=0 → non-emote (motion), type=1 → emote
@@ -266,6 +281,27 @@ namespace internal {
             }
 
             return nullptr;
+        }
+
+        inline detail::MotionParameterEntry *
+        resolveNodeParameterEntry(detail::PlayerRuntime &runtime,
+                                  const detail::MotionNode &node) {
+            if(node.parameterEntry != nullptr) {
+                return node.parameterEntry;
+            }
+            if(node.parameterizeIndex >= 0 &&
+               static_cast<size_t>(node.parameterizeIndex) <
+                   runtime.parameterEntries.size()) {
+                return &runtime.parameterEntries[static_cast<size_t>(
+                    node.parameterizeIndex)];
+            }
+            if(node.parameterizeIndex >= 0) {
+                throw std::out_of_range("parameter id out of range.");
+            }
+            if(runtime.defaultParameterEntryPtr != nullptr) {
+                return runtime.defaultParameterEntryPtr;
+            }
+            return &runtime.defaultParameterEntry;
         }
 
         inline std::vector<ttstr> buildSourceCandidates(
@@ -342,9 +378,13 @@ namespace internal {
             if(object.Type() != tvtObject || object.AsObjectNoAddRef() == nullptr) {
                 return false;
             }
-            return TJS_SUCCEEDED(object.AsObjectNoAddRef()->PropGet(
-                TJS_IGNOREPROP, name, nullptr, &result,
-                object.AsObjectNoAddRef()));
+            const auto closure = object.AsObjectClosureNoAddRef();
+            iTJSDispatch2 *dispatch =
+                closure.Object ? closure.Object : object.AsObjectNoAddRef();
+            iTJSDispatch2 *objthis =
+                closure.ObjThis ? closure.ObjThis : dispatch;
+            return TJS_SUCCEEDED(dispatch->PropGet(
+                0, name, nullptr, &result, objthis));
         }
 
         inline tjs_int getObjectCount(const tTJSVariant &object) {
@@ -382,53 +422,23 @@ namespace internal {
             return false;
         }
 
-        // Resolve a real Layer dispatch from a TJS value that might be
-        // a SeparateLayerAdaptor, an AffineLayer wrapper, or a raw Layer.
+        // Resolve a real Layer dispatch like libkrkr2.so sub_A7A050:
+        // use only the variant's Object and ask it for the Layer native
+        // instance. Do not chase ObjThis, SeparateLayerAdaptor owner, or TJS
+        // properties here; Player_ResolveSLATarget @ 0x6D5948 only applies
+        // this coercion to SLA+20 targetLayer.
         inline iTJSDispatch2 *tryResolveLayerDispatch(const tTJSVariant &value) {
             if(value.Type() != tvtObject || value.AsObjectNoAddRef() == nullptr) {
                 return nullptr;
             }
 
             iTJSDispatch2 *obj = value.AsObjectNoAddRef();
-
-            // Direct Layer check
-            {
-                tTJSNI_BaseLayer *layer = nullptr;
-                if(TJS_SUCCEEDED(obj->NativeInstanceSupport(
-                       TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                       reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
-                   layer) {
-                    return obj;
-                }
-            }
-
-            // ncb SeparateLayerAdaptor → owner
-            if(auto *adaptor =
-                   ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
-                       obj, false)) {
-                auto *ownerObj = adaptor->getOwner();
-                if(ownerObj) {
-                    auto ownerResolved = tryResolveLayerDispatch(
-                        tTJSVariant(ownerObj, ownerObj));
-                    if(ownerResolved) return ownerResolved;
-                }
-            }
-
-            // TJS property chain: owner, _owner, targetLayer
-            static const tjs_char *propNames[] = {
-                TJS_W("owner"), TJS_W("_owner"), TJS_W("targetLayer"),
-                TJS_W("layer"), TJS_W("_layer"), TJS_W("baseLayer"),
-                TJS_W("_base"), TJS_W("parent"), nullptr };
-
-            for(int i = 0; propNames[i]; ++i) {
-                tTJSVariant propVal;
-                if(getObjectProperty(value, propNames[i], propVal) &&
-                   propVal.Type() == tvtObject &&
-                   propVal.AsObjectNoAddRef() != nullptr &&
-                   propVal.AsObjectNoAddRef() != obj) {
-                    auto *resolved = tryResolveLayerDispatch(propVal);
-                    if(resolved) return resolved;
-                }
+            tTJSNI_BaseLayer *layer = nullptr;
+            if(TJS_SUCCEEDED(obj->NativeInstanceSupport(
+                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                   reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
+               layer) {
+                return obj;
             }
 
             return nullptr;
@@ -436,25 +446,6 @@ namespace internal {
 
         inline iTJSDispatch2 *tryResolveSeparateAdaptorOwner(const tTJSVariant &value) {
             return tryResolveLayerDispatch(value);
-        }
-
-        inline void pushGraphicCandidates(std::vector<ttstr> &candidates,
-                                   const ttstr &base) {
-            if(base.IsEmpty()) {
-                return;
-            }
-
-            candidates.push_back(base);
-            const auto raw = detail::narrow(base);
-            if(raw.find('.') != std::string::npos) {
-                return;
-            }
-
-            static const char *exts[] = { ".png",  ".webp", ".jpg", ".jpeg",
-                                          ".bmp",  ".tlg",  ".pimg", ".psb" };
-            for(const auto *ext : exts) {
-                candidates.emplace_back(base + ttstr{ ext });
-            }
         }
 
         inline bool getArrayItem(const tTJSVariant &object, tjs_int index,
@@ -826,24 +817,6 @@ namespace internal {
             return std::dynamic_pointer_cast<PSB::PSBDictionary>((*dic)[key]);
         }
 
-        inline double activeClipTime(const detail::PlayerRuntime &runtime,
-                              const detail::MotionClip *clip) {
-            if(clip) {
-                if(const auto it = runtime.timelines.find(clip->label);
-                   it != runtime.timelines.end()) {
-                    return it->second.currentTime;
-                }
-            }
-
-            for(const auto &label : runtime.playingTimelineLabels) {
-                if(const auto it = runtime.timelines.find(label);
-                   it != runtime.timelines.end()) {
-                    return it->second.currentTime;
-                }
-            }
-            return 0.0;
-        }
-
         inline void mergeFrameContent(const std::shared_ptr<PSB::PSBDictionary> &content,
                                FrameContentState &state,
                                int nodeType) {
@@ -1060,6 +1033,10 @@ namespace internal {
             // Full read: mask → flags/dt/docmpl/dofst/dtgt + timeOffset
             if(mask & 0x80000) {
                 if(auto md = psbDictionaryValue(content, "motion")) {
+                    // sub_692AB0 @ 0x693988 initializes the motion block with
+                    // flags=0, dt=1, docmpl=false, dofst=0 before applying the
+                    // motion sub-mask overrides.
+                    state.motionDt = 1;
                     int mm = static_cast<int>(
                         psbDictionaryNumber(md, "mask").value_or(0));
                     state.motionMask = mm;
@@ -1227,6 +1204,7 @@ namespace internal {
         inline FrameContentState
         interpolateSlots(const FrameContentState &slotA,
                          const FrameContentState &slotB,
+                         int coordinateMode,
                          double t) {
             FrameContentState state = slotA;
 
@@ -1238,35 +1216,31 @@ namespace internal {
             // Aligned to sub_699AE4: if curve data exists, t is transformed
             // through sub_69A754 bezier evaluation before interpolation.
 
-            // ccc: eases opacity and color (sub_69A4D4 at 0x69A55C)
-            const double t_ccc = !state.ccc.empty()
-                ? evaluateBezierCurve(state.ccc, t) : t;
-
             // acc: eases angle (sub_699AE4 at 0x699DE8)
             const double t_acc = !state.acc.empty()
                 ? evaluateBezierCurve(state.acc, t) : t;
 
-            // Position uses PLAIN t (sub_699AE4 at 0x699BB0~BC0).
-            // Note: "cc" position curve is NOT applied in interpolateSlots.
-            // It's only used by sub_69A4D4 (called from sub_6C1540/case 3 for
-            // position derivative computation), separate from normal frame interpolation.
-            state.x = lerp(state.x, slotB.x, t);
-            state.y = lerp(state.y, slotB.y, t);
-            state.z = lerp(state.z, slotB.z, t);
+            // Player_evaluateTimeline @ 0x699AE4 calls sub_69A4D4 for
+            // position, using the active slot ccc/cp blocks.
+            const double srcPos[3] = { state.x, state.y, state.z };
+            const double dstPos[3] = { slotB.x, slotB.y, slotB.z };
+            double outPos[3] = {};
+            interpolatePosition69A4D4(
+                state.ccc, dstPos, srcPos, outPos,
+                coordinateMode, state.cp, t);
+            state.x = outPos[0];
+            state.y = outPos[1];
+            state.z = outPos[2];
             state.ox = lerp(state.ox, slotB.ox, t);
             state.oy = lerp(state.oy, slotB.oy, t);
 
-            // Opacity — uses ccc-eased t (sub_69A4D4 at 0x69A624)
-            // Also supports occ (opacity-specific curve, mask 0x8000)
-            // sub_699AE4 at 0x69A004: lerp as int, then round via
-            // floor(v+0.5) or ceil(v-0.5)
+            // Opacity: sub_699AE4 (0x69A004..0x69A054) uses the raw slot
+            // ratio, then rounds via floor(v+0.5) / ceil(v-0.5). The earlier
+            // sub_69A4D4 call feeds color data, not opacity easing.
             if(state.opacity != slotB.opacity) {
-                const double t_opa = !state.occ.empty()
-                    ? evaluateBezierCurve(state.occ, t)
-                    : t_ccc;  // fall back to ccc if no occ
                 const double opaA = state.opacity * 255.0;
                 const double opaB = slotB.opacity * 255.0;
-                double opaInterp = lerp(opaA, opaB, t_opa);
+                double opaInterp = lerp(opaA, opaB, t);
                 // Integer rounding aligned to sub_699AE4 at 0x69A040:
                 // if (v < 0) ceil(v - 0.5) else floor(v + 0.5)
                 int opaInt = opaInterp < 0.0
@@ -1454,7 +1428,7 @@ namespace internal {
             }
 
             // Step 4: Interpolate via sub_699AE4
-            state = interpolateSlots(state, frameB.slot, t);
+            state = interpolateSlots(state, frameB.slot, 0, t);
             state.visible = true;
             state.debugEvaluated = true;
             state.debugActiveIndex = activeIndex;
@@ -1483,6 +1457,19 @@ namespace internal {
 
             return state;
         }
+
+        // Phase-2 frame selection is split to match libkrkr2.so:
+        // sub_6926B4/sub_692AB0 advance PSB frameList data into node clip slots,
+        // then Player_evaluateTimeline (0x699AE4) consumes those slots and writes
+        // node runtime state. These are intentionally non-inline in
+        // PlayerUpdateLayers.cpp so native LLDB can hook the 0x699AE4 boundary.
+        FrameContentState
+        advanceNodeFrameSelectionLike_0x6926B4(detail::MotionNode &node,
+                                               double currentTime);
+
+        bool evaluateTimelineLike_0x699AE4(detail::MotionNode &node,
+                                           bool dirtyArg,
+                                           double currentTime);
 
 
         // -----------------------------------------------------------------
@@ -1571,7 +1558,100 @@ namespace internal {
                             outOriginX = *ox;
                         if(auto oy = psbDictionaryNumber(iconNode, "originY"))
                             outOriginY = *oy;
-                        // Get the pixel resource
+
+                        const auto iconLeft =
+                            static_cast<int>(
+                                psbDictionaryNumber(iconNode, "left")
+                                    .value_or(0.0));
+                        const auto iconTop =
+                            static_cast<int>(
+                                psbDictionaryNumber(iconNode, "top")
+                                    .value_or(0.0));
+                        const auto texturePath =
+                            "source/" + group + "/texture";
+                        auto textureNode =
+                            navigatePSBPath(snapshot.root, texturePath);
+                        if(textureNode && outWidth > 0 && outHeight > 0) {
+                            int textureWidth = 0;
+                            int textureHeight = 0;
+                            if(auto w =
+                                   psbDictionaryNumber(textureNode, "width"))
+                                textureWidth = static_cast<int>(*w);
+                            if(auto h =
+                                   psbDictionaryNumber(textureNode, "height"))
+                                textureHeight = static_cast<int>(*h);
+                            if(textureWidth <= 0) {
+                                if(auto tw = psbDictionaryNumber(
+                                       textureNode, "truncated_width"))
+                                    textureWidth = static_cast<int>(*tw);
+                            }
+                            if(textureHeight <= 0) {
+                                if(auto th = psbDictionaryNumber(
+                                       textureNode, "truncated_height"))
+                                    textureHeight = static_cast<int>(*th);
+                            }
+
+                            const auto texturePixelPath =
+                                texturePath + "/pixel";
+                            auto textureResIt =
+                                snapshot.resourcesByPath.find(texturePixelPath);
+                            if(textureResIt != snapshot.resourcesByPath.end() &&
+                               textureResIt->second &&
+                               !textureResIt->second->data.empty() &&
+                               textureWidth > 0 && textureHeight > 0 &&
+                               iconLeft >= 0 && iconTop >= 0 &&
+                               iconLeft + outWidth <= textureWidth &&
+                               iconTop + outHeight <= textureHeight) {
+                                bool texturePixelsAreBgra = false;
+                                std::vector<std::uint8_t> texturePixels;
+                                const auto textureCompress =
+                                    psbDictionaryString(textureNode,
+                                                        "compress");
+                                decodePsbPixelResource(
+                                    snapshot, texturePath,
+                                    *textureResIt->second,
+                                    textureWidth, textureHeight,
+                                    textureCompress == "RL",
+                                    texturePixels, &texturePixelsAreBgra);
+                                const auto &pixelData =
+                                    texturePixels.empty()
+                                        ? textureResIt->second->data
+                                        : texturePixels;
+                                const size_t requiredSize =
+                                    static_cast<size_t>(textureWidth) *
+                                    static_cast<size_t>(textureHeight) * 4u;
+                                if(pixelData.size() >= requiredSize) {
+                                    decompressedOut.assign(
+                                        static_cast<size_t>(outWidth) *
+                                            static_cast<size_t>(outHeight) * 4u,
+                                        0);
+                                    const size_t targetStride =
+                                        static_cast<size_t>(outWidth) * 4u;
+                                    for(int y = 0; y < outHeight; ++y) {
+                                        const size_t sourceOffset =
+                                            (static_cast<size_t>(iconTop + y) *
+                                                 static_cast<size_t>(
+                                                     textureWidth) +
+                                             static_cast<size_t>(iconLeft)) *
+                                            4u;
+                                        std::memcpy(
+                                            decompressedOut.data() +
+                                                static_cast<size_t>(y) *
+                                                    targetStride,
+                                            pixelData.data() + sourceOffset,
+                                            targetStride);
+                                    }
+                                    if(outDecodedIsBgra) {
+                                        *outDecodedIsBgra =
+                                            !texturePixels.empty() &&
+                                            texturePixelsAreBgra;
+                                    }
+                                    return textureResIt->second.get();
+                                }
+                            }
+                        }
+
+                        // Fallback: older local assets may carry per-icon pixels.
                         const auto pixelPath = iconPath + "/pixel";
                         auto resIt = snapshot.resourcesByPath.find(pixelPath);
                         if(resIt != snapshot.resourcesByPath.end() &&
@@ -1688,204 +1768,6 @@ namespace internal {
                 dst[3] = src[i * 4 + 3]; // A ← src A
             }
             return true;
-        }
-
-        // Try to resolve a source image path for the given source name in the
-        // motion snapshot. Uses the same candidate generation logic as
-        // loadMotionSourceImage but without OpenCV.
-        inline ttstr resolveMotionSourcePath(
-            const detail::MotionSnapshot &snapshot,
-            const std::string &source) {
-            if(source.empty() || isMotionCrossReference(source)) {
-                return {};
-            }
-
-            std::vector<ttstr> candidates;
-            const auto sourcePath = detail::widen(source);
-            candidates.push_back(sourcePath);
-            pushGraphicCandidates(candidates, sourcePath);
-            detail::appendEmbeddedSourceCandidates(snapshot, source, candidates);
-            for(const auto &alias : snapshot.resourceAliases) {
-                const auto embeddedBase = ttstr{ TJS_W("psb://") } +
-                    detail::widen(alias) + TJS_W("/") + sourcePath;
-                pushGraphicCandidates(candidates, embeddedBase);
-            }
-
-            // PSB motion resources are stored in a tree like:
-            //   source/<group>/<subgroup>/<name>/pixel
-            // but motion layers reference them as:
-            //   src/<group>/<name>
-            // Scan resourcesByPath for matching resource paths.
-            {
-                const auto lastSlash = source.rfind('/');
-                const auto baseName = (lastSlash != std::string::npos)
-                    ? source.substr(lastSlash + 1) : source;
-
-                for(const auto &[resPath, _] : snapshot.resourcesByPath) {
-                    const auto targetSuffix = "/" + baseName + "/pixel";
-                    if(resPath.size() >= targetSuffix.size() &&
-                       resPath.compare(resPath.size() - targetSuffix.size(),
-                                       targetSuffix.size(), targetSuffix) == 0) {
-                        for(const auto &alias : snapshot.resourceAliases) {
-                            const auto psbPath = ttstr{ TJS_W("psb://") } +
-                                detail::widen(alias) + TJS_W("/") +
-                                detail::widen(resPath);
-                            pushGraphicCandidates(candidates, psbPath);
-                        }
-                    }
-                }
-            }
-
-            std::unordered_set<std::string> seen;
-            for(const auto &candidate : candidates) {
-                const auto candidateKey = detail::narrow(candidate);
-                if(!seen.insert(candidateKey).second || candidate.IsEmpty()) {
-                    continue;
-                }
-                if(candidateKey.rfind("psb://", 0) == 0) {
-                    if(TVPIsExistentStorage(candidate)) {
-                        return candidate;
-                    }
-                    continue;
-                }
-                if(const auto placed = TVPGetPlacedPath(candidate);
-                   !placed.IsEmpty()) {
-                    return placed;
-                }
-            }
-            return {};
-        }
-
-        // Flatten a PSB layer node tree into a list of render nodes.
-        // Aligned to libkrkr2.so sub_6C4E28: converts tree into flat list
-        // with pre-computed positions for the sub_6C7440 render loop.
-        // Aligned to libkrkr2.so: full 2x3 affine [m11,m21,m12,m22,tx,ty]
-        using Affine2x3 = std::array<double, 6>;
-
-        // Compose: result = parent * Translate(lx, ly)
-        inline Affine2x3 affineTranslate(const Affine2x3 &p, double lx, double ly) {
-            return {p[0], p[1], p[2], p[3],
-                    p[0]*lx + p[2]*ly + p[4],
-                    p[1]*lx + p[3]*ly + p[5]};
-        }
-
-        // Compose: result = a * Scale(sx, sy)
-        inline Affine2x3 affineScale(const Affine2x3 &a, double sx, double sy) {
-            return {a[0]*sx, a[1]*sx, a[2]*sy, a[3]*sy, a[4], a[5]};
-        }
-
-        // Compose: result = a * Rotate(angleDeg)
-        // Aligned to libkrkr2.so Player_updateLayers 2x2 matrix multiply
-        inline Affine2x3 affineRotate(const Affine2x3 &a, double angleDeg) {
-            if(angleDeg == 0.0) return a;
-            const double rad = angleDeg * 3.14159265358979323846 / 180.0;
-            const double c = std::cos(rad);
-            const double s = std::sin(rad);
-            // Rotation matrix R = [c -s; s c]
-            // A * R: new_m11 = a.m11*c + a.m12*s, new_m12 = -a.m11*s + a.m12*c
-            return {a[0]*c + a[2]*s, a[1]*c + a[3]*s,
-                    -a[0]*s + a[2]*c, -a[1]*s + a[3]*c,
-                    a[4], a[5]};
-        }
-
-        // Build local 2x2 matrix and right-multiply into affine.
-        // Exactly replicates libkrkr2.so sub_699940 (0x699940):
-        //   Starts from identity, LEFT-multiplies transforms in order
-        //   [0=Flip, 1=Angle, 2=Zoom, 3=Slant] (default transformOrder).
-        //   Then composes: affine = affine × local_2x2
-        //
-        // sub_699940 variable mapping (verified from decompilation):
-        //   v5→m11(+120), v6→m12(+128), v4→m21(+136), v7→m22(+144)
-        //   case 0 flipX: negate v5,v6 (row1) = left-multiply [-1,0;0,1]
-        //   case 0 flipY: negate v4,v7 (row2) = left-multiply [1,0;0,-1]
-        //   case 1 angle: left-multiply [cos,-sin;sin,cos]
-        //   case 2 zoom:  left-multiply [zoomX,0;0,zoomY]
-        //   case 3 slant: left-multiply [1,slantX;slantY,1]
-        inline void applyLocalTransform(
-            Affine2x3 &a,
-            bool flipX,
-            bool flipY,
-            double angle,
-            double scaleX,
-            double scaleY,
-            double slantX,
-            double slantY,
-            const int (&transformOrder)[4]) {
-            // Build local 2x2 from identity via left-multiplication.
-            // Exactly replicates sub_699940 (0x699940): iterates
-            // transformOrder[0..3] and applies each transform case.
-            // Default order [0,1,2,3] = [Flip, Angle, Zoom, Slant].
-            double l11 = 1.0, l12 = 0.0, l21 = 0.0, l22 = 1.0;
-
-            for(int step = 0; step < 4; step++) {
-                const int op = transformOrder[step];
-                switch(op) {
-                    case 0: // Flip (left-multiply [-1,0;0,1] / [1,0;0,-1])
-                        if(flipX) { l11 = -l11; l12 = -l12; }
-                        if(flipY) { l21 = -l21; l22 = -l22; }
-                        break;
-                    case 1: // Angle (left-multiply [c,-s;s,c])
-                        if(angle != 0.0) {
-                            const double rad = angle * 2.0 * 3.14159265358979323846 / 360.0;
-                            const double c = std::cos(rad);
-                            const double s = std::sin(rad);
-                            const double t11 = c*l11 - s*l21;
-                            const double t12 = c*l12 - s*l22;
-                            const double t21 = s*l11 + c*l21;
-                            const double t22 = s*l12 + c*l22;
-                            l11 = t11; l12 = t12; l21 = t21; l22 = t22;
-                        }
-                        break;
-                    case 2: // Zoom (left-multiply [zx,0;0,zy]) — 0x699A50
-                        if(scaleX != 1.0 || scaleY != 1.0) {
-                            l11 *= scaleX; l12 *= scaleX;
-                            l21 *= scaleY; l22 *= scaleY;
-                        }
-                        break;
-                    case 3: // Slant (left-multiply [1,sx;sy,1]) — 0x699A7C
-                        if(slantX != 0.0 || slantY != 0.0) {
-                            const double t12 = l22*slantX + l12;
-                            const double t21 = l11*slantY + l21;
-                            const double t22 = l22 + l12*slantY;
-                            const double t11 = l11 + slantX*l21;
-                            l11 = t11; l12 = t12; l21 = t21; l22 = t22;
-                        }
-                        break;
-                }
-            }
-
-            // Right-multiply local 2x2 into affine: A_new = A × L
-            // (tx,ty unchanged; only 2x2 part is affected)
-            const double m11 = a[0]*l11 + a[2]*l21;
-            const double m21 = a[1]*l11 + a[3]*l21;
-            const double m12 = a[0]*l12 + a[2]*l22;
-            const double m22 = a[1]*l12 + a[3]*l22;
-            a[0] = m11; a[1] = m21; a[2] = m12; a[3] = m22;
-        }
-
-        inline void applyLocalTransform(Affine2x3 &a,
-                                 const FrameContentState &state) {
-            applyLocalTransform(a,
-                                state.flipX, state.flipY,
-                                state.angle,
-                                state.scaleX, state.scaleY,
-                                state.slantX, state.slantY,
-                                state.transformOrder);
-        }
-
-        // sub_699940 (0x699940) rebuilds the local 2x2 from node fields
-        // after Player_updateLayers has already applied inheritFlags.
-        inline void applyLocalTransform(Affine2x3 &a,
-                                 const detail::MotionNode &node) {
-            applyLocalTransform(a,
-                                node.accumulated.flipX,
-                                node.accumulated.flipY,
-                                node.accumulated.angle,
-                                node.accumulated.scaleX,
-                                node.accumulated.scaleY,
-                                node.accumulated.slantX,
-                                node.accumulated.slantY,
-                                node.transformOrder);
         }
 
 } // namespace internal

@@ -24,7 +24,12 @@ using namespace motion;
 // Subclass registrations (used as Motion.XXX)
 // ============================================================
 
-NCB_REGISTER_SUBCLASS_DELAY(SourceCache) { NCB_CONSTRUCTOR(()); }
+NCB_REGISTER_SUBCLASS_DELAY(SourceCache) {
+    NCB_CONSTRUCTOR((tTJSVariant, tjs_int));
+    NCB_METHOD(loadSource);
+    NCB_METHOD(clearCache);
+    NCB_PROPERTY_RO(bufLayer, getBufLayer);
+}
 NCB_REGISTER_SUBCLASS_DELAY(ObjSource) { NCB_CONSTRUCTOR(()); }
 
 // Aligned to libkrkr2.so Motion.Point/Circle/Rect/Quad/LayerGetter (0x690FBC~0x69B350)
@@ -93,8 +98,11 @@ NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) {
     Factory(&SeparateLayerAdaptor::factory);
     NCB_PROPERTY(absolute, getAbsolute, setAbsolute);
     NCB_PROPERTY(targetLayer, getTargetLayer, setTargetLayer);
-    NCB_METHOD(c);
+    NCB_METHOD(clear);
     RawCallback(TJS_W("assign"), &SeparateLayerAdaptor::assignCompat, 0);
+    RawCallback(TJS_W("layerTreeOwnerInterface"),
+                &SeparateLayerAdaptor::getLayerTreeOwnerInterfaceCompat,
+                (int)0, TJS_HIDDENMEMBER);
 }
 NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
     Factory(&D3DAdaptor::factory);
@@ -118,9 +126,6 @@ NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
 NCB_REGISTER_CLASS(Player) {
     NCB_CONSTRUCTOR((ResourceManager));
 
-    NCB_PROPERTY_RAW_CALLBACK(useD3D, Player::getUseD3DStatic,
-                              Player::setUseD3DStatic, TJS_STATICMEMBER);
-
     // Properties
     // Root node position — aligned to libkrkr2.so NCB registration (0x6D69C8)
     NCB_PROPERTY(x, getX, setX);
@@ -143,12 +148,12 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(loopTime, getLoopTime, setLoopTime);
     NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
                  setProcessedMeshVerticesNum);
-    NCB_PROPERTY(playing, getAllplaying, setAllplaying);
+    NCB_PROPERTY_RO(playing, getPlaying);
     NCB_PROPERTY(queuing, getQueuing, setQueuing);
     NCB_PROPERTY(directEdit, getDirectEdit, setDirectEdit);
     NCB_PROPERTY(selectorEnabled, getSelectorEnabled, setSelectorEnabled);
     NCB_PROPERTY(variableKeys, getVariableKeys, setVariableKeys);
-    NCB_PROPERTY(allplaying, getAllplaying, setAllplaying);
+    NCB_PROPERTY_RO(allplaying, getAllplaying);
     NCB_PROPERTY(syncWaiting, getSyncWaiting, setSyncWaiting);
     NCB_PROPERTY(syncActive, getSyncActive, setSyncActive);
     NCB_PROPERTY(hasCamera, getHasCamera, setHasCamera);
@@ -224,7 +229,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(setSize);
     NCB_METHOD(copyRect);
     NCB_METHOD(adjustGamma);
-    NCB_METHOD_RAW_CALLBACK(draw, &Player::drawCompat, 0);
+    NCB_METHOD_DETAIL(draw, Class, void, Class::draw, (tTJSVariant));
     NCB_METHOD(frameProgress);
 
     // Viewport/display
@@ -294,6 +299,18 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
 
     // Properties
     NCB_PROPERTY_RO(module, getModule);
+    NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
+    NCB_PROPERTY(chara, getChara, setChara);
+    NCB_PROPERTY(motion, getMotion, setMotion);
+    NCB_PROPERTY(motionKey, getMotionKey, setMotionKey);
+    NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
+    NCB_PROPERTY(outline, getOutline, setOutline);
+    NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);
+    NCB_PROPERTY(frameLastTime, getFrameLastTime, setFrameLastTime);
+    NCB_PROPERTY(frameLoopTime, getFrameLoopTime, setFrameLoopTime);
+    NCB_PROPERTY(loopTime, getLoopTime, setLoopTime);
+    NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
+                 setProcessedMeshVerticesNum);
     NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(smoothing, getSmoothing, setSmoothing);
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
@@ -345,6 +362,7 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_METHOD(getPlayingTimelineFlagsAt);
     NCB_METHOD(isLoopTimeline);
     NCB_METHOD(getTimelineTotalFrameCount);
+    NCB_METHOD(play);
     NCB_METHOD(playTimeline);
     NCB_METHOD(isTimelinePlaying);
     NCB_METHOD(stopTimeline);
@@ -357,6 +375,9 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_METHOD(addPlayCallback);
     NCB_METHOD(pass);
     NCB_METHOD(progress);
+    NCB_METHOD_DETAIL(draw, Class, void, Class::draw, (tTJSVariant));
+    NCB_METHOD_RAW_CALLBACK(setDrawAffineTranslateMatrix,
+                            &EmotePlayer::setDrawAffineTranslateMatrixCompat, 0);
     NCB_METHOD_RAW_CALLBACK(setOuterForce, &EmotePlayer::setOuterForceCompat, 0);
     NCB_METHOD(getOuterForce);
     NCB_METHOD_RAW_CALLBACK(contains, &EmotePlayer::containsCompat, 0);
@@ -369,8 +390,12 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
 NCB_REGISTER_SUBCLASS(ResourceManager) {
     NCB_CONSTRUCTOR((iTJSDispatch2 *, tjs_int));
     NCB_METHOD(load);
+    NCB_METHOD(loadSource);
     NCB_METHOD(unload);
     NCB_METHOD(clearCache);
+    NCB_METHOD(findSource);
+    NCB_METHOD(requireLayerId);
+    NCB_METHOD(releaseLayerId);
     NCB_METHOD_RAW_CALLBACK(setEmotePSBDecryptSeed,
                             &ResourceManager::setEmotePSBDecryptSeed,
                             TJS_STATICMEMBER);
@@ -443,6 +468,28 @@ static void PostRegistCallback() {
     iTJSDispatch2 *global = TVPGetScriptDispatch();
     if (!global) return;
 
+    auto ensurePlayerClassUseD3DProbe = [](iTJSDispatch2 *playerClass) {
+        if(!playerClass) {
+            return;
+        }
+        tTJSVariant marker;
+        try {
+            TVPExecuteExpression(TJS_W("%[]"), &marker);
+        } catch(...) {
+            return;
+        }
+        if(marker.Type() != tvtObject) {
+            return;
+        }
+
+        // Player_ncb_registerMembers @ 0x6D69C8 registers useD3D as a
+        // property object on the Player class; game scripts probe that with
+        // typeof Motion.Player.useD3D. This restores the class-level NCB shape
+        // without adding a mutable static useD3D state.
+        playerClass->PropSet(TJS_MEMBERENSURE | TJS_STATICMEMBER,
+                             TJS_W("useD3D"), nullptr, &marker, playerClass);
+    };
+
     // Alias Player class into Motion namespace
     tTJSVariant motionVar;
     if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Motion"), nullptr, &motionVar, global))) {
@@ -452,14 +499,12 @@ static void PostRegistCallback() {
             if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Player"), nullptr, &playerVar, global))) {
                 if (playerVar.Type() == tvtObject &&
                     playerVar.AsObjectNoAddRef() != nullptr) {
+                    ensurePlayerClassUseD3DProbe(playerVar.AsObjectNoAddRef());
                     motion->PropSet(TJS_MEMBERENSURE, TJS_W("Player"),
                                     nullptr, &playerVar, motion);
                 }
             }
 
-            tTJSVariant enableD3D{(tjs_int)1};
-            motion->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP | TJS_STATICMEMBER,
-                            TJS_W("enableD3D"), nullptr, &enableD3D, motion);
         }
     }
 
@@ -536,6 +581,18 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
 
     // Properties (same as EmotePlayer subclass, matching IDA registration order)
     NCB_PROPERTY_RO(module, getModule);
+    NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
+    NCB_PROPERTY(chara, getChara, setChara);
+    NCB_PROPERTY(motion, getMotion, setMotion);
+    NCB_PROPERTY(motionKey, getMotionKey, setMotionKey);
+    NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
+    NCB_PROPERTY(outline, getOutline, setOutline);
+    NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);
+    NCB_PROPERTY(frameLastTime, getFrameLastTime, setFrameLastTime);
+    NCB_PROPERTY(frameLoopTime, getFrameLoopTime, setFrameLoopTime);
+    NCB_PROPERTY(loopTime, getLoopTime, setLoopTime);
+    NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
+                 setProcessedMeshVerticesNum);
     NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(smoothing, getSmoothing, setSmoothing);
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
@@ -587,6 +644,7 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(getPlayingTimelineFlagsAt);
     NCB_METHOD(isLoopTimeline);
     NCB_METHOD(getTimelineTotalFrameCount);
+    NCB_METHOD(play);
     NCB_METHOD(playTimeline);
     NCB_METHOD(isTimelinePlaying);
     NCB_METHOD(stopTimeline);
@@ -599,9 +657,10 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(addPlayCallback);
     NCB_METHOD(pass);
     NCB_METHOD(progress);
+    NCB_METHOD_DETAIL(draw, Class, void, Class::draw, (tTJSVariant));
+    NCB_METHOD_RAW_CALLBACK(setDrawAffineTranslateMatrix,
+                            &EmotePlayer::setDrawAffineTranslateMatrixCompat, 0);
     NCB_METHOD_RAW_CALLBACK(setOuterForce, &EmotePlayer::setOuterForceCompat, 0);
     NCB_METHOD(getOuterForce);
     NCB_METHOD_RAW_CALLBACK(contains, &EmotePlayer::containsCompat, 0);
 }
-
-extern "C" void TVPRegisterMotionPlayerPluginAnchor() {}

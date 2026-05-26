@@ -7,8 +7,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdint>
-#include <cstring>
 
 #include <spdlog/spdlog.h>
 
@@ -23,61 +21,6 @@ namespace {
                            return static_cast<char>(std::tolower(ch));
                        });
         return value;
-    }
-
-    bool tryParseDecryptSeed(const tTJSVariant &value, tjs_int &outSeed) {
-        switch(value.Type()) {
-            case tvtInteger:
-                outSeed = static_cast<tjs_int>(value.AsInteger());
-                return true;
-
-            case tvtReal:
-                outSeed = static_cast<tjs_int>(value.AsReal());
-                return true;
-
-            case tvtString: {
-                const auto seedText = ttstr(value).AsStdString();
-                if(seedText.empty()) {
-                    outSeed = 0;
-                    return true;
-                }
-                char *end = nullptr;
-                const auto parsed =
-                    std::strtoll(seedText.c_str(), &end, 0);
-                if(end == seedText.c_str()) {
-                    return false;
-                }
-                outSeed = static_cast<tjs_int>(parsed);
-                return true;
-            }
-
-            case tvtOctet: {
-                auto *octet = value.AsOctetNoAddRef();
-                if(!octet) {
-                    return false;
-                }
-                const auto *data =
-                    static_cast<const std::uint8_t *>(octet->GetData());
-                const auto length =
-                    static_cast<size_t>(octet->GetLength());
-                if(data == nullptr || length == 0) {
-                    outSeed = 0;
-                    return true;
-                }
-
-                std::uint64_t accum = 0;
-                const auto limit = std::min(length, sizeof(accum));
-                for(size_t index = 0; index < limit; ++index) {
-                    accum |= static_cast<std::uint64_t>(data[index])
-                        << (index * 8);
-                }
-                outSeed = static_cast<tjs_int>(accum);
-                return true;
-            }
-
-            default:
-                return false;
-        }
     }
 }
 
@@ -125,11 +68,10 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptSeed(tTJSVariant *,
     if(count != 1) {
         return TJS_E_BADPARAMCOUNT;
     }
-    tjs_int parsedSeed = 0;
-    if(!tryParseDecryptSeed(*p[0], parsedSeed)) {
+    if((*p)->Type() != tvtInteger) {
         return TJS_E_INVALIDPARAM;
     }
-    _decryptSeed = parsedSeed;
+    _decryptSeed = static_cast<tjs_int>(*p[0]);
     LOGGER->info("setEmotePSBDecryptSeed: {}", _decryptSeed);
     return TJS_S_OK;
 }
@@ -138,24 +80,7 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *r,
                                                           tjs_int n,
                                                           tTJSVariant **p,
                                                           iTJSDispatch2 *obj) {
-    if(n == 0) {
-        _decryptFunc.Clear();
-        LOGGER->info("setEmotePSBDecryptFunc: cleared");
-        return TJS_S_OK;
-    }
-    if(n != 1) {
-        return TJS_E_BADPARAMCOUNT;
-    }
-    if((*p)->Type() != tvtObject && (*p)->Type() != tvtVoid) {
-        return TJS_E_INVALIDPARAM;
-    }
-
-    _decryptFunc = *p[0];
-    if(_decryptFunc.Type() == tvtObject && _decryptFunc.AsObjectNoAddRef()) {
-        LOGGER->info("setEmotePSBDecryptFunc: callback registered");
-    } else {
-        LOGGER->info("setEmotePSBDecryptFunc: cleared");
-    }
+    LOGGER->critical("setEmotePSBDecryptFunc no implement!");
     return TJS_S_OK;
 }
 
@@ -173,6 +98,10 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
         _state->lastLoadedModule = loaded;
     }
     return loaded;
+}
+
+tTJSVariant motion::ResourceManager::loadSource(ttstr path) const {
+    return load(path);
 }
 
 void motion::ResourceManager::unload(ttstr path) const {
@@ -198,6 +127,10 @@ void motion::ResourceManager::clearCache() const {
     _state->loadedModules.clear();
     _state->lastLoadedPath.clear();
     _state->lastLoadedModule.Clear();
+    _state->layerIdsByName.clear();
+    _state->layerNamesById.clear();
+    _state->usedLayerIds.clear();
+    _state->nextLayerId = 1;
 }
 
 tTJSVariant motion::ResourceManager::getLastLoadedModule() const {
@@ -211,4 +144,51 @@ tTJSVariant motion::ResourceManager::findLoaded(ttstr path) const {
 
     const auto it = _state->loadedModules.find(path.AsStdString());
     return it != _state->loadedModules.end() ? it->second : tTJSVariant{};
+}
+
+tTJSVariant motion::ResourceManager::findSource(ttstr path) const {
+    return findLoaded(path);
+}
+
+tjs_int motion::ResourceManager::requireLayerId() {
+    if(!_state) {
+        return 0;
+    }
+
+    while(_state->usedLayerIds.find(_state->nextLayerId) !=
+          _state->usedLayerIds.end()) {
+        ++_state->nextLayerId;
+    }
+    const auto id = _state->nextLayerId;
+    _state->usedLayerIds.insert(id);
+    ++_state->nextLayerId;
+    return id;
+}
+
+tjs_int motion::ResourceManager::requireLayerIdForName(ttstr name) {
+    if(!_state) {
+        return 0;
+    }
+    const auto key = name.AsStdString();
+    if(const auto it = _state->layerIdsByName.find(key);
+       it != _state->layerIdsByName.end()) {
+        return it->second;
+    }
+
+    const auto id = requireLayerId();
+    _state->layerIdsByName[key] = id;
+    _state->layerNamesById[id] = key;
+    return id;
+}
+
+void motion::ResourceManager::releaseLayerId(tjs_int id) {
+    if(!_state || id == 0) {
+        return;
+    }
+    _state->usedLayerIds.erase(id);
+    if(const auto it = _state->layerNamesById.find(id);
+       it != _state->layerNamesById.end()) {
+        _state->layerIdsByName.erase(it->second);
+        _state->layerNamesById.erase(it);
+    }
 }

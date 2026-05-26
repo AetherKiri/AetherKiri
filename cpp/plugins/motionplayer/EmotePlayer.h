@@ -30,6 +30,39 @@ namespace motion {
         void setUseD3D(bool v) { _useD3D = v; }
         [[nodiscard]] bool getUseD3D() const { return _useD3D; }
 
+        void setCompletionType(int v) { _player.setCompletionType(v); }
+        [[nodiscard]] int getCompletionType() const { return _player.getCompletionType(); }
+
+        void setChara(ttstr v) { _player.setChara(v); }
+        [[nodiscard]] ttstr getChara() const { return _player.getChara(); }
+
+        void setMotion(ttstr v) { _player.playMotionLike_0x6B2284(v, 0); }
+        [[nodiscard]] ttstr getMotion() const { return _player.getMotion(); }
+
+        void setMotionKey(ttstr v) { _player.setMotionKey(v); }
+        [[nodiscard]] ttstr getMotionKey() const { return _player.getMotionKey(); }
+
+        void setMaskMode(tjs_int v) { _player.setMaskMode(v); }
+        [[nodiscard]] tjs_int getMaskMode() const { return _player.getMaskMode(); }
+
+        void setOutline(ttstr v) { _player.setOutline(v); }
+        [[nodiscard]] ttstr getOutline() const { return _player.getOutline(); }
+
+        void setPriorDraw(double v) { _player.setPriorDraw(v); }
+        [[nodiscard]] double getPriorDraw() const { return _player.getPriorDraw(); }
+
+        void setFrameLastTime(double v) { _player.setFrameLastTime(v); }
+        [[nodiscard]] double getFrameLastTime() const { return _player.getFrameLastTime(); }
+
+        void setFrameLoopTime(double v) { _player.setFrameLoopTime(v); }
+        [[nodiscard]] double getFrameLoopTime() const { return _player.getFrameLoopTime(); }
+
+        void setLoopTime(double v) { _player.setLoopTime(v); }
+        [[nodiscard]] double getLoopTime() const { return _player.getLoopTime(); }
+
+        void setProcessedMeshVerticesNum(int v) { _player.setProcessedMeshVerticesNum(v); }
+        [[nodiscard]] int getProcessedMeshVerticesNum() const { return _player.getProcessedMeshVerticesNum(); }
+
         void setSmoothing(bool v) { _smoothing = v; }
         [[nodiscard]] bool getSmoothing() const { return _smoothing; }
 
@@ -155,6 +188,12 @@ namespace motion {
         void fadeOutTimeline(ttstr label, double duration, tjs_int flags);
 
         void setTimeline(ttstr label, bool loop);
+
+        bool play(ttstr label, tjs_int flags = 0);
+        void draw(tTJSVariant target);
+        static tjs_error setDrawAffineTranslateMatrixCompat(
+            tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
+            iTJSDispatch2 *objthis);
 
         void skip();
         void addPlayCallback();

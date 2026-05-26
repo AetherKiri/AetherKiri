@@ -35,10 +35,14 @@ namespace motion {
 
 namespace motion::detail {
 
+    struct MotionParameterEntry;
+
     struct MotionNode {
         // Identity (from PSB, set once during tree build)
         int index = 0;
         int parentIndex = -1;          // node+36
+        int layerId1 = 0;              // node+16: first requireLayerId result
+        int layerId2 = 0;              // node+20: second requireLayerId result
         int nodeType = 0;              // node+28
         int coordinateMode = 0;        // node+24
         int inheritFlags = 0x1FC;      // node+40. Player_updateLayers (0x6BB33C)
@@ -59,6 +63,12 @@ namespace motion::detail {
         int meshDivision = 0;         // "meshDivision" from PSB (node+2008)
         int meshDivX = 0;             // node+2012: computed grid width
         int meshDivY = 0;             // node+2016: computed grid height
+        int objTriPriority = 0;       // node+2136: "objTriPriority" for type==0
+        // Aligned to libkrkr2.so Player_initNodeFields (0x6B3C78):
+        // node+8 points to an entry selected from the player's 56-byte
+        // parameter table using the PSB "parameterize" index.
+        int parameterizeIndex = -1;
+        MotionParameterEntry *parameterEntry = nullptr;
         // Mesh inverse matrix for sub_69AE74 child deformation (node+2096..2132)
         double meshInvM11 = 0, meshInvM12 = 0;  // node+2096, node+2104
         double meshInvM21 = 0, meshInvM22 = 0;  // node+2112, node+2120
@@ -67,13 +77,17 @@ namespace motion::detail {
         bool hasMeshData = false;        // node+1962: has active mesh data
         bool stencilCompositeMaskReferenced = false; // node+1961: post-build mask-layer reference
         bool meshCombineEnabled = false; // node+1963: mesh combines with children
-        // libkrkr2.so seeds node+52 from PSB "stencilType" in Player_initNodeFields
-        // (0x6B3C78), but later visibility/render-tree stages consume the same slot as
-        // a per-frame non-zero update mask while still preserving deflector bit 4.
-        // Keep both the raw PSB seed and the runtime-composed value explicitly.
+        // libkrkr2.so seeds node+52 from PSB "stencilType" in
+        // Player_initNodeFields (0x6B3C78) and later runtime stages only read
+        // the field; they do not rebuild it from frame state.
         int stencilTypeBase = 0;      // raw PSB "stencilType"
-        int stencilType = 0;          // runtime node+52-compatible mask
+        int stencilType = 0;          // runtime node+52, init-time owned
         int currentFrameType = 0;     // current frameList type (0/2/3), for trace
+        bool hasLastActivePayload = false;
+        int lastActiveFrameIndex = -1;
+        std::string lastActiveSrc;
+        int lastActiveMotionFlags = 0;
+        std::string lastActiveMotionDtgt;
 
         // Mesh control points (node+2024..2032 in libkrkr2.so).
         // For meshType=1: 16 × 2 floats (Bezier patch 4×4 control grid) = 32 floats.
@@ -114,6 +128,8 @@ namespace motion::detail {
             bool done = true;
             bool crossfading = false;      // slot+25: currently blending with other slot
             bool hasEasing = false;         // slot+544: has easing curve for crossfade
+            int frameIndex = -1;            // cached frameList index for this slot
+            int frameType = 0;              // frame["type"]: 0 invisible, 2 static, 3 interpolate
 
             // Source (slot+36)
             std::string src;
@@ -171,18 +187,23 @@ namespace motion::detail {
         const ClipSlot& activeSlot() const { return slots[activeSlotIndex]; }
         ClipSlot& otherSlot() { return slots[activeSlotIndex ^ 1]; }
         const ClipSlot& otherSlot() const { return slots[activeSlotIndex ^ 1]; }
+        // Player_evaluateTimeline (0x699AE4) caches the last slot blend ratio
+        // and can replace currentTime with a node parameter entry value.
+        double timelineEvalRatio = 0.0;
+        bool hasTimelineEvalRatio = false;
+        bool timelineParameterOverride = false;
+        double timelineParameterValue = 0.0;
 
         // PSB reference (for evaluateLayerContent calls)
         std::shared_ptr<const PSB::PSBDictionary> psbNode;
 
-        // Per-node source/override state.
-        // Aligned to libkrkr2.so node+0x630..0x678 block consumed by
-        // Player_updateLayers (0x6BB630..0x6BB700). Root setters write here
-        // (e.g. Player_setRootX 0x6CD028, Player_setRootFlipX 0x6CD068), and
-        // the main loop folds it into the working block after timeline eval.
+        // Per-node post-interpolation mirror for render/debug consumers.
+        // The binary phase2 logic consumes node+1584..+1660 instead; this
+        // local copy mirrors the current evaluated frame state without owning
+        // the persistent setter/camera override semantics.
         struct LocalState {
-            bool visible = false;
-            bool active = false;
+            bool visible = true;
+            bool active = true;
             bool dirty = false;
             bool flipX = false;
             bool flipY = false;
@@ -198,14 +219,36 @@ namespace motion::detail {
             int blendMode = 16;
         } localState;
 
+        // TJS setter / camera velocity override block.
+        // Aligned to libkrkr2.so node+1584..+1660: delta block consumed by
+        // Player_updateLayers phase2 (0x6BB630..0x6BB700). Written by root
+        // TJS setters (setX/setY/setFlipX @ 0x6CD028/0x6CD048/0x6CD068) and
+        // camera velocity @ 0x6BB378..0x6BB3DC.
+        struct DeltaState {
+            bool dirty = true;               // node+1584
+            bool activeOverride = true;      // node+1585
+            bool visibleOverride = true;     // node+1586
+            bool flipX = false;              // node+1587
+            bool flipY = false;              // node+1588
+            double posX = 0.0;               // node+1592
+            double posY = 0.0;               // node+1600
+            double posZ = 0.0;               // node+1608
+            double angle = 0.0;              // node+1616
+            double scaleX = 1.0;             // node+1624
+            double scaleY = 1.0;             // node+1632
+            double slantX = 0.0;             // node+1640
+            double slantY = 0.0;             // node+1648
+            int opacity = 255;               // node+1656
+        } delta;
+
         // Working/evaluated state (built during updateLayers inheritance loop)
         // Aligned to libkrkr2.so node+0x5E0..0x628 block written by
         // Player_evaluateTimeline (0x699AE4) and further composed by
         // Player_updateLayers (0x6BB33C).
         struct AccumulatedState {
-            bool visible = false;
-            bool active = false;
-            bool dirty = false;     // node+1584: set when state changes, cleared by consumer
+            bool visible = true;
+            bool active = true;
+            bool dirty = true;      // node+1504
             bool flipX = false;
             bool flipY = false;
             double posX = 0.0;
@@ -230,8 +273,24 @@ namespace motion::detail {
         double prevPosY = 0.0;
         double prevPosZ = 0.0;
 
-        // Draw flag (computed in post-loop visibility pass, sub_6BD8DC)
+        // Path B visibility flag (node+1960), written by sub_6BD8DC @
+        // 0x6BD958. Consumed by: the visibleAncestor chain walk in the
+        // same sub_6BD8DC pass (PlayerUpdateLayerEval.cpp), copied to
+        // PreparedRenderItem::drawFlag (item+19) in sub_6C2334's item
+        // build, and exposed to TJS via the layerVisible getter
+        // (PlayerLayerQuery.cpp). NOT read by Player_calcBounds — that
+        // function gates on nodeType mask + renderTreeFlag200 instead
+        // (see PlayerRenderItems.cpp comment). NOT the Path A main
+        // render gate either.
         bool drawFlag = false;
+
+        // node+1944 in libkrkr2.so sub_6C2334 — set to 1 when a node
+        // enters the Path A render list (mainList), cleared at the top
+        // of the outer loop. Mirrors a real native field for parity but
+        // currently has no port consumer; kept for the Phase 4
+        // motion_playback differential oracle.
+        bool drawnThisFrame = false;
+
         int forceVisible = 0;              // node+1996
         int visibleAncestorIndex = -1;     // replaces pointer at node+1952
 
@@ -327,7 +386,20 @@ namespace motion::detail {
         // Parent clip region index (replaces node+1936 pointer)
         int parentClipIndex = -1;
 
-        // Anchor enabled flag (node+200 in sub_6C0528 context)
+        // node+200 / node+201 are consumed by sub_6BC4F0 and sub_6C2334.
+        // Current-turn evidence:
+        // - node+200 is zero-initialized by sub_699390 via STRB [node,#0xC8]
+        // - node+200 is later written by sub_6C0528 (anchor path) via STRB [node,#0xC8]
+        // - node+201 is read by sub_6C2334 via LDRB [node,#0xC9]
+        // - current ctor/deque/build-node review found no standalone init writer
+        //   for node+201 inside the motionplayer node lifecycle
+        bool renderTreeFlag200 = false; // node+200 / 0xC8
+        // node+201 / 0xC9. Read by 0x6BC4F0 and copied into item+16 by
+        // 0x6C2334. There is no standalone init writer on the current reachable
+        // motionplayer node ctor/build paths; the byte behaves as a default-zero
+        // state that propagates through the native copy chain via 0x6F468C
+        // (`*(_WORD *)(dst + 200) = *(_WORD *)(src + 200)`).
+        bool renderTreeFlag201 = false;
         bool anchorEnabled = false;
 
         // Color bytes for anchor damping (node+100..115: 4 sets of RGBA)

@@ -6,6 +6,8 @@
 #include <cmath>
 
 #include "PlayerInternal.h"
+#include "SourceCache.h"
+#include "ncbind.hpp"
 
 using namespace motion::internal;
 
@@ -173,10 +175,32 @@ namespace motion {
         }
     }
 
-    Player::Player(ResourceManager rm) :
+    Player::Player(ResourceManager rm, Player *parentPlayer) :
         _runtime(detail::makePlayerRuntime()),
-        _resourceManagerNative(std::move(rm)) {
+        _resourceManagerNative(std::move(rm)),
+        _parentPlayer(parentPlayer) {
         LOGGER->info("Motion.Player constructor called");
+        using ResourceManagerAdaptor = ncbInstanceAdaptor<ResourceManager>;
+        if(auto *dispatch =
+               ResourceManagerAdaptor::CreateAdaptor(
+                   new ResourceManager(_resourceManagerNative))) {
+            _resourceManager = tTJSVariant(dispatch, dispatch);
+            dispatch->Release();
+        }
+        // Aligned to libkrkr2.so SourceCache constructor/owner lifetime
+        // (0x6A78F4): Player stores a TJS SourceCache object and calls through
+        // that dispatch for source resolution rather than owning a map directly.
+        using SourceCacheAdaptor = ncbInstanceAdaptor<SourceCache>;
+        auto *sourceCache = new SourceCache();
+        sourceCache->bindRuntime(_runtime.get(), &_resourceManagerNative);
+        if(auto *dispatch = SourceCacheAdaptor::CreateAdaptor(sourceCache)) {
+            _runtime->sourceCacheNative = sourceCache;
+            _runtime->sourceCacheObject = tTJSVariant(dispatch, dispatch);
+            sourceCache->setSelfObject(_runtime->sourceCacheObject);
+            dispatch->Release();
+        } else {
+            delete sourceCache;
+        }
         // Aligned to sub_6A88CC (0x6A8988): create TJS Math.RandomGenerator
         // and store at player+992. Child Players inherit via sub_6CED30.
         try {
@@ -190,10 +214,62 @@ namespace motion {
 
     Player::~Player() = default;
 
-    // Aligned to libkrkr2.so Player_getRootX (0x6D98A8) / Player_setRootX (0x6CD028)
+    bool Player::getPlaying() const {
+        // Player_getPlaying @ 0x6D9794: return byte player+1099.
+        static int traceCount = 0;
+        if(_runtime && detail::logoChainTraceEnabled(_runtime->activeMotion) &&
+           traceCount < 80) {
+            ++traceCount;
+            detail::logoChainTraceLogf(
+                _runtime->activeMotion->path, "getPlaying", "0x6D9794",
+                _clampedEvalTime, "value={} timelineCount={} playingLabels={}",
+                _allplaying ? 1 : 0, _runtime->timelines.size(),
+                _runtime->playingTimelineLabels.size());
+        }
+        return _allplaying;
+    }
+
+    bool Player::getAllplaying() const {
+        // Player_getAllplaying @ 0x6CCE34: child Motion players can keep the
+        // aggregate playing state true after the owner-level flag is clear.
+        static int traceCount = 0;
+        if(_runtime) {
+            for(const auto &node : _runtime->nodes) {
+                if(auto *child = node.getChildPlayer()) {
+                    if(child->getAllplaying()) {
+                        if(detail::logoChainTraceEnabled(_runtime->activeMotion) &&
+                           traceCount < 80) {
+                            ++traceCount;
+                            detail::logoChainTraceLogf(
+                                _runtime->activeMotion->path, "getAllplaying",
+                                "0x6CCE34", _clampedEvalTime,
+                                "value=1 reason=child nodeIndex={} localPlaying={} labels={}",
+                                node.index, _allplaying ? 1 : 0,
+                                _runtime->playingTimelineLabels.size());
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+        if(_runtime && detail::logoChainTraceEnabled(_runtime->activeMotion) &&
+           traceCount < 80) {
+            ++traceCount;
+            detail::logoChainTraceLogf(
+                _runtime->activeMotion->path, "getAllplaying", "0x6CCE34",
+                _clampedEvalTime, "value={} reason=local labels={}",
+                _allplaying ? 1 : 0,
+                _runtime->playingTimelineLabels.size());
+        }
+        return _allplaying;
+    }
+
+    // Aligned to libkrkr2.so Player_getRootX (0x6D98A8) / Player_setRootX (0x6CD028):
+    //   sub_6CD028: if (root.delta.posX != v) { root.delta.posX = v; root.delta.dirty = 1; }
+    //   — writes node+1592 (delta.posX) and sets node+1584 (delta.dirty).
     double Player::getX() const {
         if (_runtime && !_runtime->nodes.empty())
-            return _runtime->nodes[0].localState.posX;
+            return _runtime->nodes[0].delta.posX;
         return _hasPendingRootPos ? _pendingRootX : 0.0;
     }
     void Player::setX(double v) {
@@ -201,17 +277,17 @@ namespace motion {
         _hasPendingRootPos = true;
         if (_runtime && !_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
-            if (root.localState.posX != v) {
-                root.localState.posX = v;
-                root.localState.dirty = true;
-                root.accumulated.dirty = true;
+            if (root.delta.posX != v) {
+                root.delta.posX = v;
+                root.delta.dirty = true;
             }
         }
     }
-    // Aligned to libkrkr2.so Player_getRootY (0x6D98B4) / Player_setRootY (0x6CD048)
+    // Aligned to libkrkr2.so Player_getRootY (0x6D98B4) / Player_setRootY (0x6CD048):
+    // same shape as setRootX but at node+1600 (delta.posY).
     double Player::getY() const {
         if (_runtime && !_runtime->nodes.empty())
-            return _runtime->nodes[0].localState.posY;
+            return _runtime->nodes[0].delta.posY;
         return _hasPendingRootPos ? _pendingRootY : 0.0;
     }
     void Player::setY(double v) {
@@ -219,10 +295,9 @@ namespace motion {
         _hasPendingRootPos = true;
         if (_runtime && !_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
-            if (root.localState.posY != v) {
-                root.localState.posY = v;
-                root.localState.dirty = true;
-                root.accumulated.dirty = true;
+            if (root.delta.posY != v) {
+                root.delta.posY = v;
+                root.delta.dirty = true;
             }
         }
     }
@@ -247,7 +322,7 @@ namespace motion {
         _mirrorNegativeCache.clear();
 
         if(snapshot) {
-            activateMotion(*_runtime, snapshot);
+            activateMotion(*_runtime, snapshot, &_resourceManagerNative);
             syncVariableKeysFromActiveMotion();
         }
     }
@@ -278,7 +353,9 @@ namespace motion {
         _evalResultListIndex.clear();
         _mirrorPositiveCache.clear();
         _mirrorNegativeCache.clear();
-        ensureMotionLoaded();
+        if(ensureMotionLoaded()) {
+            initNonEmoteMotionLike_0x6B365C(0);
+        }
     }
 
     // Aligned to libkrkr2.so 0x681CAC → 0x6B0F10:
@@ -336,7 +413,9 @@ namespace motion {
         self->_runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         self->_variableKeys.Clear();
         self->_variableValues.clear();
-        self->ensureMotionLoaded();
+        if(self->ensureMotionLoaded()) {
+            self->initNonEmoteMotionLike_0x6B365C(0);
+        }
 
         return TJS_S_OK;
     }
@@ -345,6 +424,8 @@ namespace motion {
                                       tTJSVariant **, iTJSDispatch2 *objthis) {
         auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
         if(!self) return TJS_E_INVALIDOBJECT;
+        // Player_getMotion_ncb @ 0x6D9544 returns native player+976.
+        // _motionKey is the local mirror of that getter-visible slot.
         if(result) *result = tTJSVariant(self->_motionKey);
         return TJS_S_OK;
     }
@@ -362,7 +443,7 @@ namespace motion {
 
         if(_project.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(_project)) {
-                activateMotion(*_runtime, snapshot);
+                activateMotion(*_runtime, snapshot, &_resourceManagerNative);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -371,7 +452,7 @@ namespace motion {
         if(motionKeyLooksLikeStorage) {
             if(const auto snapshot =
                    resolveMotion(*_runtime, _motionKey, &_resourceManagerNative)) {
-                activateMotion(*_runtime, snapshot);
+                activateMotion(*_runtime, snapshot, &_resourceManagerNative);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -380,7 +461,7 @@ namespace motion {
         if(const auto loaded = _resourceManagerNative.getLastLoadedModule();
            loaded.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
-                activateMotion(*_runtime, snapshot);
+                activateMotion(*_runtime, snapshot, &_resourceManagerNative);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -392,12 +473,95 @@ namespace motion {
 
         if(const auto snapshot =
                resolveMotion(*_runtime, _motionKey, &_resourceManagerNative)) {
-            activateMotion(*_runtime, snapshot);
+            activateMotion(*_runtime, snapshot, &_resourceManagerNative);
             syncVariableKeysFromActiveMotion();
             return true;
         }
 
         return false;
+    }
+
+    void Player::initNonEmoteMotionLike_0x6B365C(std::uint32_t playFlags) {
+        if(!_runtime || !_runtime->activeMotion || _runtime->isEmoteMode) {
+            return;
+        }
+
+        const auto *clip = selectActiveClip();
+        _runtime->activeClip = clip;
+
+        resetNodeTreeForBuildLike_0x6B56F8();
+        _runtime->parameterEntries.clear();
+        _runtime->parameterEntryById.clear();
+        _runtime->defaultParameterEntry = {};
+        _runtime->defaultParameterEntry.rangeScale = 1.0;
+        _runtime->defaultParameterEntry.mode = 0;
+        _runtime->defaultParameterEntryPtr = nullptr;
+        _runtime->defaultParameterEntryIndex = -1;
+
+        if(clip != nullptr) {
+            _loopTime = clip->loopTime;
+            _cachedTotalFrames = clip->totalFrames;
+        }
+
+        const auto motionObject = clip ? clip->motionObject : nullptr;
+        if(motionObject) {
+            const auto parameterizeValue = (*motionObject)["parameterize"];
+            if(auto parameterizeObject =
+                   std::dynamic_pointer_cast<const PSB::PSBDictionary>(
+                       parameterizeValue)) {
+                appendParameterEntryLike_0x6B1718(parameterizeObject);
+                finalizeParameterTableLike_0x6B1ECC();
+                if(!_runtime->parameterEntries.empty()) {
+                    _runtime->defaultParameterEntryIndex = 0;
+                    _runtime->defaultParameterEntryPtr =
+                        &_runtime->parameterEntries.front();
+                }
+            } else {
+                parseParameterListLike_0x6B202C((*motionObject)["parameter"]);
+                if(auto numeric =
+                       std::dynamic_pointer_cast<PSB::PSBNumber>(
+                           parameterizeValue)) {
+                    int index = 0;
+                    switch(numeric->numberType) {
+                        case PSB::PSBNumberType::Float:
+                            index = static_cast<int>(
+                                numeric->getValue<float>());
+                            break;
+                        case PSB::PSBNumberType::Double:
+                            index = static_cast<int>(
+                                numeric->getValue<double>());
+                            break;
+                        case PSB::PSBNumberType::Int:
+                            index = numeric->getValue<int>();
+                            break;
+                        case PSB::PSBNumberType::Long:
+                        default:
+                            index = static_cast<int>(
+                                numeric->getValue<tjs_int64>());
+                            break;
+                    }
+                    if(index < 0 ||
+                       static_cast<size_t>(index) >=
+                           _runtime->parameterEntries.size()) {
+                        throw std::out_of_range("parameter id out of range.");
+                    }
+                    _runtime->defaultParameterEntryIndex = index;
+                    _runtime->defaultParameterEntryPtr =
+                        &_runtime->parameterEntries[static_cast<size_t>(index)];
+                }
+            }
+        }
+
+        buildNodeTree();
+        initVariables();
+
+        if((playFlags & PlayFlagChain) == 0) {
+            _frameLoopTime = 0.0;
+            _clampedEvalTime = std::min(_cachedTotalFrames, 0.0);
+            _queuing = true;
+            _allplaying = true;
+        }
+        _allplaying = true;
     }
 
     void Player::syncVariableKeysFromActiveMotion() {
@@ -491,9 +655,10 @@ namespace motion {
 
         if(_runtime && !_runtime->nodes.empty()) {
             auto &root = _runtime->nodes.front();
-            root.localState.flipX = _rootFlipX;
-            root.localState.dirty = true;
-            root.accumulated.dirty = true;
+            // Aligned to libkrkr2.so Player_setRootFlipX (0x6CD068):
+            // writes node+1587 (delta.flipX), sets node+1584 (delta.dirty).
+            root.delta.flipX = _rootFlipX;
+            root.delta.dirty = true;
             root.interpolatedCache.flipX = _rootFlipX;
         }
 
@@ -508,16 +673,31 @@ namespace motion {
             return nullptr;
         }
 
+        const auto &motion = *_runtime->activeMotion;
         const auto selectByLabel =
-            [this](const std::string &label) -> const detail::MotionClip * {
+            [&motion](const std::string &label) -> const detail::MotionClip * {
                 if(label.empty()) {
                     return nullptr;
                 }
-                const auto it = _runtime->activeMotion->clipsByLabel.find(label);
-                return it != _runtime->activeMotion->clipsByLabel.end()
-                    ? &it->second
-                    : nullptr;
+                const auto it = motion.clipIndexByLabel.find(label);
+                if(it == motion.clipIndexByLabel.end()) return nullptr;
+                const int idx = it->second;
+                if(idx < 0 || idx >= static_cast<int>(motion.clipList.size()))
+                    return nullptr;
+                return &motion.clipList[idx];
             };
+
+        // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
+        // the requested motion/timeline label is stored on the player before
+        // the non-emote init path rebuilds content/node state. In the local
+        // architecture, this is the closest equivalent to the binary's
+        // selected content object, so prefer _motionKey before falling back to
+        // the playing-timeline list or primary label ordering.
+        if(!_motionKey.IsEmpty()) {
+            if(const auto *clip = selectByLabel(detail::narrow(_motionKey))) {
+                return clip;
+            }
+        }
 
         for(const auto &label : _runtime->playingTimelineLabels) {
             if(const auto *clip = selectByLabel(label)) {
@@ -526,49 +706,25 @@ namespace motion {
         }
 
         const auto &primaryLabels =
-            !_runtime->activeMotion->mainTimelineLabels.empty()
-                ? _runtime->activeMotion->mainTimelineLabels
-                : _runtime->activeMotion->diffTimelineLabels;
+            !motion.mainTimelineLabels.empty()
+                ? motion.mainTimelineLabels
+                : motion.diffTimelineLabels;
         for(const auto &label : primaryLabels) {
             if(const auto *clip = selectByLabel(label)) {
                 return clip;
             }
         }
 
-        if(_runtime->activeMotion->clipsByLabel.size() == 1) {
-            return &_runtime->activeMotion->clipsByLabel.begin()->second;
+        // Fallback — aligned to libkrkr2.so Player_initNonEmoteMotion reading
+        // priority[0].content at 0x6B38FC when no explicit selection exists.
+        if(motion.clipList.size() == 1) {
+            return &motion.clipList.front();
+        }
+        if(!motion.clipList.empty()) {
+            return &motion.clipList.front();
         }
 
         return nullptr;
-    }
-
-    const std::vector<std::string> &Player::activeLayerNames() const {
-        static const std::vector<std::string> empty;
-        if(!_runtime->activeMotion) {
-            return empty;
-        }
-
-        if(const auto *clip = selectActiveClip();
-           clip && !clip->layerNames.empty()) {
-            return clip->layerNames;
-        }
-
-        return _runtime->activeMotion->layerNames;
-    }
-
-    const std::unordered_map<
-        std::string, std::shared_ptr<const PSB::PSBDictionary>> *
-    Player::activeLayersByName() const {
-        if(!_runtime->activeMotion) {
-            return nullptr;
-        }
-
-        if(const auto *clip = selectActiveClip();
-           clip && !clip->layersByName.empty()) {
-            return &clip->layersByName;
-        }
-
-        return &_runtime->activeMotion->layersByName;
     }
 
     const std::vector<std::string> &Player::activeSourceCandidates() const {
@@ -1008,7 +1164,9 @@ namespace motion {
     void Player::debugPrint() {
         LOGGER->info("motionKey={}, motions={}, sources={}, timelines={}",
                      _motionKey.AsStdString(), _runtime->motionsByKey.size(),
-                     _runtime->sourcesByKey.size(), _runtime->timelines.size());
+                     _runtime->sourceCacheNative ? _runtime->sourceCacheNative->size()
+                                                 : 0,
+                     _runtime->timelines.size());
     }
 
 

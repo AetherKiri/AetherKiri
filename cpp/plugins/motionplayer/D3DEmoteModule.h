@@ -4,6 +4,8 @@
 //
 #pragma once
 
+#include <spdlog/spdlog.h>
+
 namespace motion {
 
     class D3DEmoteModule {
@@ -33,8 +35,8 @@ namespace motion {
         static int getPixelateDivision() { return _pixelateDivision; }
 
         static void setMaxTextureSize(int w, int h) {
-            _maxTextureWidth = w > 0 ? w : 0;
-            _maxTextureHeight = h > 0 ? h : 0;
+            spdlog::get("plugin")->warn(
+                "D3DEmoteModule::setMaxTextureSize({}, {}) stub called", w, h);
         }
 
     private:
@@ -44,8 +46,6 @@ namespace motion {
         inline static int _alphaOp = 0;
         inline static bool _protectTranslucentTextureColor = false;
         inline static int _pixelateDivision = 1;
-        inline static int _maxTextureWidth = 0;
-        inline static int _maxTextureHeight = 0;
     };
 
 } // namespace motion
