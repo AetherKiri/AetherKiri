@@ -907,6 +907,87 @@ bool tTVPNativeBaseBitmap::InternalBlendText(tTVPCharacterData *data,
     return true;
 }
 
+static tjs_uint32 TVPLerpColor24(tjs_uint32 top, tjs_uint32 bottom,
+                                 tjs_int row, tjs_int rowCount) {
+    if(rowCount <= 1)
+        return top;
+    const tjs_int den = rowCount - 1;
+    const tjs_int inv = den - row;
+    tjs_uint32 result = 0;
+    for(int shift = 0; shift <= 16; shift += 8) {
+        const tjs_int a = static_cast<tjs_int>((top >> shift) & 0xff);
+        const tjs_int b = static_cast<tjs_int>((bottom >> shift) & 0xff);
+        const tjs_int v = (a * inv + b * row + den / 2) / den;
+        result |= static_cast<tjs_uint32>(std::max(0, std::min(255, v)))
+                  << shift;
+    }
+    return result;
+}
+
+bool tTVPNativeBaseBitmap::InternalBlendTextVerticalGradient(
+    tTVPCharacterData *data, tTVPDrawTextData *dtdata, tjs_uint32 topcolor,
+    tjs_uint32 bottomcolor, const tTVPRect &srect, tTVPRect &drect,
+    tjs_int gradientTop, tjs_int gradientHeight) {
+    if(dtdata->bltmode != bmAlphaOnAlpha || dtdata->opa <= 0)
+        return InternalBlendText(data, dtdata, bottomcolor, srect, drect);
+
+    const tjs_int pitch = data->Pitch;
+    const tjs_int h = drect.bottom - drect.top;
+    const tjs_int w = drect.right - drect.left;
+    const tjs_uint8 *bp = data->GetData() + pitch * srect.top + srect.left;
+    gradientHeight = std::max<tjs_int>(1, gradientHeight);
+
+    tTVPBitmap *tmp = new tTVPBitmap(w, h, 32);
+    const tjs_int dpitch = tmp->GetPitch();
+    tjs_uint8 *dst = (tjs_uint8 *)tmp->GetBits();
+    for(tjs_int y = 0; y < h; ++y) {
+        tjs_uint32 *out = reinterpret_cast<tjs_uint32 *>(dst);
+        const tjs_uint8 *src = bp + pitch * y;
+        const tjs_int row = std::max<tjs_int>(
+            0, std::min<tjs_int>(gradientHeight - 1, drect.top + y - gradientTop));
+        const tjs_uint32 color =
+            TVPLerpColor24(topcolor, bottomcolor, row, gradientHeight);
+        for(tjs_int x = 0; x < w; ++x)
+            out[x] = (color & 0x00ffffff) | (src[x] << 24);
+        TVPConvertAlphaToAdditiveAlpha(out, w);
+        dst += dpitch;
+    }
+
+    if(_CharacterTextureRGBA) {
+        if(_CharacterTextureRGBA->GetFormat() != TVPTextureFormat::RGBA) {
+            _CharacterTextureRGBA->Release();
+            _CharacterTextureRGBA = nullptr;
+        }
+    }
+    if(!_CharacterTextureRGBA) {
+        _CharacterTextureRGBA = GetRenderManager()->CreateTexture2D(
+            tmp->GetBits(), dpitch, w, h, TVPTextureFormat::RGBA,
+            RENDER_CREATE_TEXTURE_FLAG_NO_COMPRESS);
+    } else if(_CharacterTextureRGBA->GetInternalWidth() < w ||
+              _CharacterTextureRGBA->GetInternalHeight() < h) {
+        _CharacterTextureRGBA->Release();
+        _CharacterTextureRGBA = GetRenderManager()->CreateTexture2D(
+            tmp->GetBits(), dpitch, w, h, TVPTextureFormat::RGBA,
+            RENDER_CREATE_TEXTURE_FLAG_NO_COMPRESS);
+    } else {
+        _CharacterTextureRGBA->Update(tmp->GetBits(), TVPTextureFormat::RGBA,
+                                      dpitch, tTVPRect(0, 0, w, h));
+    }
+    tmp->Release();
+
+    static iTVPRenderMethod *method =
+        TVPGetRenderManager()->GetRenderMethod("AlphaBlend_a");
+    static int opa_id = method->EnumParameterID("opacity");
+    method->SetParameterOpa(opa_id, dtdata->opa);
+
+    tRenderTexRectArray::Element src_tex[] = {tRenderTexRectArray::Element(
+        _CharacterTextureRGBA, tTVPRect(0, 0, w, h))};
+    TVPGetRenderManager()->OperateRect(
+        method, GetTextureForRender(method->IsBlendTarget(), &drect), nullptr,
+        drect, tRenderTexRectArray(src_tex));
+    return true;
+}
+
 bool tTVPNativeBaseBitmap::InternalDrawText(tTVPCharacterData *data, tjs_int x,
                                             tjs_int y, tjs_uint32 color,
                                             tTVPDrawTextData *dtdata,
@@ -950,6 +1031,47 @@ bool tTVPNativeBaseBitmap::InternalDrawText(tTVPCharacterData *data, tjs_int x,
         return false; // not drawable
 
     return InternalBlendText(data, dtdata, color, srect, drect);
+}
+
+bool tTVPNativeBaseBitmap::InternalDrawTextVerticalGradient(
+    tTVPCharacterData *data, tjs_int x, tjs_int y, tjs_uint32 topcolor,
+    tjs_uint32 bottomcolor, tTVPDrawTextData *dtdata, tTVPRect &drect,
+    tjs_int gradientHeight) {
+    drect.left = x + data->OriginX;
+    drect.top = y + data->OriginY;
+    drect.right = drect.left + data->BlackBoxX;
+    drect.bottom = drect.top + data->BlackBoxY;
+
+    tTVPRect srect;
+    srect.left = srect.top = 0;
+    srect.right = data->BlackBoxX;
+    srect.bottom = data->BlackBoxY;
+
+    if(drect.left < dtdata->rect.left) {
+        srect.left += (dtdata->rect.left - drect.left);
+        drect.left = dtdata->rect.left;
+    }
+    if(drect.right > dtdata->rect.right) {
+        srect.right -= (drect.right - dtdata->rect.right);
+        drect.right = dtdata->rect.right;
+    }
+    if(srect.left >= srect.right)
+        return false;
+
+    if(drect.top < dtdata->rect.top) {
+        srect.top += (dtdata->rect.top - drect.top);
+        drect.top = dtdata->rect.top;
+    }
+    if(drect.bottom > dtdata->rect.bottom) {
+        srect.bottom -= (drect.bottom - dtdata->rect.bottom);
+        drect.bottom = dtdata->rect.bottom;
+    }
+    if(srect.top >= srect.bottom)
+        return false;
+
+    return InternalBlendTextVerticalGradient(data, dtdata, topcolor,
+                                             bottomcolor, srect, drect, y,
+                                             gradientHeight);
 }
 //---------------------------------------------------------------------------
 void tTVPNativeBaseBitmap::DrawGlyph(
@@ -1226,6 +1348,75 @@ void tTVPNativeBaseBitmap::DrawTextSingle(
         data->Release();
     if(shadow)
         shadow->Release();
+}
+
+void tTVPNativeBaseBitmap::DrawTextVerticalGradient(
+    const tTVPRect &destrect, tjs_int x, tjs_int y, const ttstr &text,
+    tjs_uint32 topcolor, tjs_uint32 bottomcolor, tTVPBBBltMethod bltmode,
+    tjs_int opa, bool holdalpha, bool aa, tjs_int gradientHeight,
+    tTVPComplexRect *updaterects) {
+    if(!Is32BPP())
+        TVPThrowExceptionMessage(TVPInvalidOperationFor8BPP);
+
+    if(bltmode == bmAlphaOnAlpha) {
+        if(opa < -255)
+            opa = -255;
+        if(opa > 255)
+            opa = 255;
+    } else {
+        if(opa < 0)
+            opa = 0;
+        if(opa > 255)
+            opa = 255;
+    }
+    if(opa == 0)
+        return;
+
+    Independ();
+    ApplyFont();
+
+    tTVPDrawTextData dtdata;
+    dtdata.rect = destrect;
+    dtdata.bmppitch = GetPitchBytes();
+    dtdata.bltmode = bltmode;
+    dtdata.opa = opa;
+    dtdata.holdalpha = holdalpha;
+
+    tTVPFontAndCharacterData font;
+    font.Font = Font;
+    font.Antialiased = aa;
+    font.Hinting = true;
+    font.BlurLevel = 0;
+    font.BlurWidth = 0;
+    font.FontHash = FontHash;
+    font.Blured = false;
+
+    const tjs_char *p = text.c_str();
+    const tjs_int len = text.GetLen();
+    tjs_int cursorX = x;
+    for(tjs_int i = 0; i < len; ++i) {
+        font.Character = p[i];
+        tTVPCharacterData *data =
+            TVPGetCharacter(font, this, PrerenderedFont, AscentOfsX, AscentOfsY);
+        try {
+            if(data && data->BlackBoxX != 0 && data->BlackBoxY != 0) {
+                tTVPRect drect;
+                const bool drawn = InternalDrawTextVerticalGradient(
+                    data, cursorX, y, topcolor, bottomcolor, &dtdata, drect,
+                    gradientHeight);
+                if(drawn && updaterects)
+                    updaterects->Or(drect);
+            }
+            if(data)
+                cursorX += data->Metrics.CellIncX;
+        } catch(...) {
+            if(data)
+                data->Release();
+            throw;
+        }
+        if(data)
+            data->Release();
+    }
 }
 //---------------------------------------------------------------------------
 // structure for holding data for a character
