@@ -4532,6 +4532,48 @@ void tTJSNI_BaseLayer::DrawText(tjs_int x, tjs_int y, const ttstr &text,
     Update(r);
 }
 
+void tTJSNI_BaseLayer::DrawTextVerticalGradient(
+    tjs_int x, tjs_int y, const ttstr &text, tjs_uint32 topcolor,
+    tjs_uint32 bottomcolor, tjs_int opa, bool aa, tjs_int gradientHeight) {
+    if(!MainImage)
+        TVPThrowExceptionMessage(TVPNotDrawableLayerType);
+
+    tTVPBBBltMethod met;
+    switch(DrawFace) {
+        case dfAlpha:
+            met = bmAlphaOnAlpha;
+            break;
+        case dfAddAlpha:
+            if(opa < 0)
+                TVPThrowExceptionMessage(
+                    TVPNegativeOpacityNotSupportedOnThisFace);
+            met = bmAlphaOnAddAlpha;
+            break;
+        case dfOpaque:
+            met = bmAlpha;
+            break;
+        default:
+            TVPThrowExceptionMessage(TVPNotDrawableFaceType, TJS_W("drawText"));
+    }
+
+    ApplyFont();
+
+    tTVPComplexRect r;
+    topcolor = TVPToActualColor(topcolor);
+    bottomcolor = TVPToActualColor(bottomcolor);
+
+    MainImage->DrawTextVerticalGradient(ClipRect, x, y, text, topcolor,
+                                        bottomcolor, met, opa, HoldAlpha, aa,
+                                        gradientHeight, &r);
+
+    if(r.GetCount())
+        ImageModified = true;
+
+    if(ImageLeft != 0 || ImageTop != 0)
+        r.AddOffsets(ImageLeft, ImageTop);
+    Update(r);
+}
+
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::DrawGlyph(tjs_int x, tjs_int y, iTJSDispatch2 *glyph,
                                  tjs_uint32 color, tjs_int opa, bool aa,
