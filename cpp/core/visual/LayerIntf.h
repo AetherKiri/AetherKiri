@@ -790,6 +790,10 @@ public:
                   tjs_int opa, bool aa, tjs_int shadowlevel,
                   tjs_uint32 shadowcolor, tjs_int shadowwidth,
                   tjs_int shadowofsx, tjs_int shadowofsy);
+    void DrawTextVerticalGradient(tjs_int x, tjs_int y, const ttstr &text,
+                                  tjs_uint32 topcolor,
+                                  tjs_uint32 bottomcolor, tjs_int opa,
+                                  bool aa, tjs_int gradientHeight);
 
     void DrawGlyph(tjs_int x, tjs_int y, iTJSDispatch2 *glyph, tjs_uint32 color,
                    tjs_int opa, bool aa, tjs_int shadowlevel,

@@ -31,6 +31,7 @@
 
 using tjs_ustring = std::basic_string<tjs_char>;
 using RgbColor = uint32_t;
+using TextColor = uint64_t;
 
 #define setprop_t(d, p, ty) \
   { tTJSVariant v(ty(p)); d->PropSet(TJS_MEMBERENSURE, TJS_W(#p), nullptr, &v, d); }
@@ -237,10 +238,60 @@ static bool textRenderVariantIsNumeric(const tTJSVariant &value) {
   return type != tvtVoid && type != tvtString && type != tvtObject;
 }
 
+static TextColor textRenderColorRaw(const tTJSVariant &value,
+                                    TextColor fallback) {
+  if (!textRenderVariantIsNumeric(value)) return fallback;
+  return static_cast<TextColor>((tjs_int64)value);
+}
+
 static tjs_uint32 textRenderColor24(const tTJSVariant &value,
                                     tjs_uint32 fallback) {
-  if (!textRenderVariantIsNumeric(value)) return fallback;
-  return static_cast<tjs_uint32>((tjs_int64)value) & 0x00ffffff;
+  return static_cast<tjs_uint32>(textRenderColorRaw(value, fallback)) &
+         0x00ffffff;
+}
+
+static tjs_uint32 textRenderColorBottom24(TextColor color) {
+  return static_cast<tjs_uint32>(color) & 0x00ffffff;
+}
+
+static tjs_uint32 textRenderColorTop24(TextColor color) {
+  return static_cast<tjs_uint32>((color >> 24) & 0x00ffffff);
+}
+
+static bool textRenderIsPackedGradient(TextColor color) {
+  return (color & 0x8000000000000000ULL) != 0;
+}
+
+static bool textRenderTryObjectProp(iTJSDispatch2 *object,
+                                    const tjs_char *name,
+                                    tTJSVariant &value) {
+  return object &&
+         TJS_SUCCEEDED(object->PropGet(0, name, nullptr, &value, object)) &&
+         value.Type() != tvtVoid;
+}
+
+static bool textRenderTryNumericObjectProp(iTJSDispatch2 *object,
+                                           const tjs_char *name,
+                                           TextColor &value) {
+  tTJSVariant prop;
+  if (!textRenderTryObjectProp(object, name, prop) ||
+      !textRenderVariantIsNumeric(prop)) {
+    return false;
+  }
+  value = textRenderColorRaw(prop, value);
+  return true;
+}
+
+static bool textRenderTryIntObjectProp(iTJSDispatch2 *object,
+                                       const tjs_char *name,
+                                       tjs_int &value) {
+  tTJSVariant prop;
+  if (!textRenderTryObjectProp(object, name, prop) ||
+      !textRenderVariantIsNumeric(prop)) {
+    return false;
+  }
+  value = static_cast<tjs_int>(prop);
+  return true;
 }
 
 static bool textRenderTryIntArg(tjs_int numparams, tTJSVariant **param,
@@ -316,7 +367,22 @@ static void textRenderLogEdgeShadowArgs(tjs_int numparams, tTJSVariant **param,
     }
     message += "]";
   }
-  spdlog::info("{}", message);
+  spdlog::debug("{}", message);
+}
+
+static void textRenderDrawTextWithColor(tTJSNI_BaseLayer *layer, tjs_int x,
+                                        tjs_int y, const tTJSVariant &text,
+                                        TextColor color,
+                                        tjs_int textHeight) {
+  if (!textRenderIsPackedGradient(color)) {
+    layer->DrawText(x, y, text, textRenderColorBottom24(color), 255, true, 0,
+                    0, 0, 0, 0);
+    return;
+  }
+
+  layer->DrawTextVerticalGradient(x, y, text, textRenderColorTop24(color),
+                                  textRenderColorBottom24(color), 255, true,
+                                  std::clamp<tjs_int>(textHeight, 8, 128));
 }
 
 static tjs_error TJS_INTF_METHOD
@@ -352,22 +418,24 @@ EdgeShadowDrawTextCompat(tTJSVariant *result, tjs_int numparams,
     }
   }
 
-  tjs_int colorIndex = textIndex + 1;
-  tjs_uint32 color = 0xffffff;
+  const tjs_int colorIndex = textIndex + 1;
+  const bool isNameLayerTextCall = numparams == 5 && textIndex == 2;
+  TextColor color = 0xffffff;
   if (colorIndex < numparams && param[colorIndex] &&
       textRenderVariantIsNumeric(*param[colorIndex])) {
-    color = textRenderColor24(*param[colorIndex], color);
+    color = textRenderColorRaw(*param[colorIndex], color);
   }
 
-  tjs_uint32 edgeColor = 0xffffff;
+  TextColor edgeColor = 0xffffff;
   tjs_int edgeWidth = 2;
+  tjs_int textHeight = 24;
   if (numparams >= 15 && param[14] &&
       textRenderVariantIsNumeric(*param[14])) {
-    edgeColor = textRenderColor24(*param[14], 0xffffff);
+    edgeColor = textRenderColorRaw(*param[14], 0xffffff);
   } else {
     for (tjs_int i = numparams - 1; i > colorIndex; --i) {
       if (!param[i] || !textRenderVariantIsNumeric(*param[i])) continue;
-      const tjs_uint32 candidate = textRenderColor24(*param[i], 0);
+      const TextColor candidate = textRenderColorRaw(*param[i], 0);
       if (candidate > 0xff) {
         edgeColor = candidate;
         break;
@@ -382,17 +450,48 @@ EdgeShadowDrawTextCompat(tTJSVariant *result, tjs_int numparams,
       break;
     }
   }
+  for (tjs_int i = 0; i < numparams; ++i) {
+    if (!param || !param[i] || param[i]->Type() != tvtObject) continue;
+    iTJSDispatch2 *object = param[i]->AsObjectNoAddRef();
+    if (i > textIndex) {
+      if (isNameLayerTextCall) {
+        textRenderTryNumericObjectProp(object, TJS_W("color"), edgeColor);
+        textRenderTryNumericObjectProp(object, TJS_W("nameLayerDefaultColor"),
+                                       edgeColor);
+      } else {
+        textRenderTryNumericObjectProp(object, TJS_W("color"), color);
+        textRenderTryNumericObjectProp(object, TJS_W("chColor"), color);
+        textRenderTryNumericObjectProp(object, TJS_W("fontColor"), color);
+        textRenderTryNumericObjectProp(object, TJS_W("textColor"), color);
+      }
+    }
+    TextColor objectEdgeColor = edgeColor;
+    if (textRenderTryNumericObjectProp(object, TJS_W("edgeColor"),
+                                       objectEdgeColor)) {
+      edgeColor = objectEdgeColor;
+    }
+    textRenderTryIntObjectProp(object, TJS_W("edgeExtent"), edgeWidth);
+    textRenderTryIntObjectProp(object, TJS_W("edgeWidth"), edgeWidth);
+    textRenderTryIntObjectProp(object, TJS_W("fontheight"), textHeight);
+    textRenderTryIntObjectProp(object, TJS_W("fontHeight"), textHeight);
+    textRenderTryIntObjectProp(object, TJS_W("fontSize"), textHeight);
+    textRenderTryIntObjectProp(object, TJS_W("size"), textHeight);
+  }
+  edgeWidth = std::clamp<tjs_int>(edgeWidth, 0, 12);
+  textHeight = std::clamp<tjs_int>(textHeight, 8, 128);
 
   try {
     for (tjs_int dy = -edgeWidth; dy <= edgeWidth; ++dy) {
       for (tjs_int dx = -edgeWidth; dx <= edgeWidth; ++dx) {
         if (dx == 0 && dy == 0) continue;
         if (dx * dx + dy * dy > edgeWidth * edgeWidth + 1) continue;
-        layer->DrawText(x + dx, y + dy, *param[textIndex], edgeColor, 255,
-                        true, 0, 0, 0, 0, 0);
+        layer->DrawText(x + dx, y + dy, *param[textIndex],
+                        textRenderColorBottom24(edgeColor), 255, true, 0, 0,
+                        0, 0, 0);
       }
     }
-    layer->DrawText(x, y, *param[textIndex], color, 255, true, 0, 0, 0, 0, 0);
+    textRenderDrawTextWithColor(layer, x, y, *param[textIndex], color,
+                                textHeight);
   } catch (...) {
     if (result) *result = false;
     return TJS_S_OK;

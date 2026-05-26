@@ -188,10 +188,24 @@ private:
     bool InternalBlendText(tTVPCharacterData *data, tTVPDrawTextData *dtdata,
                            tjs_uint32 color, const tTVPRect &srect,
                            tTVPRect &drect);
+    bool InternalBlendTextVerticalGradient(tTVPCharacterData *data,
+                                           tTVPDrawTextData *dtdata,
+                                           tjs_uint32 topcolor,
+                                           tjs_uint32 bottomcolor,
+                                           const tTVPRect &srect,
+                                           tTVPRect &drect,
+                                           tjs_int gradientTop,
+                                           tjs_int gradientHeight);
 
     bool InternalDrawText(tTVPCharacterData *data, tjs_int x, tjs_int y,
                           tjs_uint32 shadowcolor, tTVPDrawTextData *dtdata,
                           tTVPRect &drect);
+    bool InternalDrawTextVerticalGradient(tTVPCharacterData *data, tjs_int x,
+                                          tjs_int y, tjs_uint32 topcolor,
+                                          tjs_uint32 bottomcolor,
+                                          tTVPDrawTextData *dtdata,
+                                          tTVPRect &drect,
+                                          tjs_int gradientHeight);
 
 public:
     void DrawTextSingle(const tTVPRect &destrect, tjs_int x, tjs_int y,
@@ -228,6 +242,14 @@ public:
                            aa, shlevel, shadowcolor, shwidth, shofsx, shofsy,
                            updaterects);
     }
+    void DrawTextVerticalGradient(const tTVPRect &destrect, tjs_int x,
+                                  tjs_int y, const ttstr &text,
+                                  tjs_uint32 topcolor,
+                                  tjs_uint32 bottomcolor,
+                                  tTVPBBBltMethod bltmode, tjs_int opa = 255,
+                                  bool holdalpha = true, bool aa = true,
+                                  tjs_int gradientHeight = 24,
+                                  tTVPComplexRect *updaterects = nullptr);
     void DrawGlyph(iTJSDispatch2 *glyph, const tTVPRect &destrect, tjs_int x,
                    tjs_int y, tjs_uint32 color, tTVPBBBltMethod bltmode,
                    tjs_int opa = 255, bool holdalpha = true, bool aa = true,
