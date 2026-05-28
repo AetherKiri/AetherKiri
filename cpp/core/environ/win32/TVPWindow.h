@@ -313,7 +313,7 @@ enum {
     orientLandscape,
 };
 
-// Scene-tree based rendering is removed; Flutter handles display.
+// Scene-tree based rendering is removed; Godot handles display.
 using TVPOverlayNode = void;
 
 class iWindowLayer {

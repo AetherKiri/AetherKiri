@@ -6,6 +6,7 @@
 #include "PluginCallTracer.hpp"
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
+#include <cstdlib>
 #include <cstring>
 #include <sys/stat.h>
 
@@ -606,12 +607,12 @@ void PluginCallTracer::LogMissingMember(const tjs_char *membername,
         }
     }
 
-    extern bool TVPIsConsoleLogFileEnabled();
-    if (TVPIsConsoleLogFileEnabled()) {
+    const char *verbose_missing = std::getenv("AETHERKIRI_TRACE_MISSING_MEMBERS");
+    if (verbose_missing && *verbose_missing) {
         if (className.empty()) {
-            spdlog::error("TJS script error: missing member {} at {}", ns.operator const char *(), operation);
+            spdlog::debug("TJS missing member {} at {}", ns.operator const char *(), operation);
         } else {
-            spdlog::error("TJS script error: missing member {}.{} at {}", className, ns.operator const char *(), operation);
+            spdlog::debug("TJS missing member {}.{} at {}", className, ns.operator const char *(), operation);
         }
     }
 }

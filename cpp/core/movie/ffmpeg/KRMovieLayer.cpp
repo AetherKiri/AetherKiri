@@ -3,6 +3,8 @@
 #include "LayerBitmapIntf.h"
 #include "Application.h"
 #include "VideoOvlImpl.h"
+#include <algorithm>
+#include <cstdlib>
 
 extern "C" {
 #include "libswscale/swscale.h"
@@ -10,23 +12,74 @@ extern "C" {
 
 NS_KRMOVIE_BEGIN
 
-VideoPresentLayer::~VideoPresentLayer() { TVPRemoveContinuousEventHook(this); }
+static inline uint8_t ClampByte(int value) {
+    if(value < 0)
+        return 0;
+    if(value > 255)
+        return 255;
+    return static_cast<uint8_t>(value);
+}
+
+static void ConvertYuv420ToRgba(const DVDVideoPicture &pic, uint8_t *dst,
+                                int dstWidth, int dstHeight,
+                                int dstStride) {
+    const int copyWidth = std::min<int>(dstWidth, pic.iWidth);
+    const int copyHeight = std::min<int>(dstHeight, pic.iHeight);
+    for(int y = 0; y < copyHeight; ++y) {
+        const uint8_t *yRow = pic.data[0] + y * pic.iLineSize[0];
+        const uint8_t *uRow = pic.data[1] + (y / 2) * pic.iLineSize[1];
+        const uint8_t *vRow = pic.data[2] + (y / 2) * pic.iLineSize[2];
+        uint8_t *out = dst + static_cast<size_t>(y) * dstStride;
+        for(int x = 0; x < copyWidth; ++x) {
+            int c = static_cast<int>(yRow[x]) - 16;
+            int d = static_cast<int>(uRow[x / 2]) - 128;
+            int e = static_cast<int>(vRow[x / 2]) - 128;
+            if(c < 0)
+                c = 0;
+            out[x * 4 + 0] = ClampByte((298 * c + 409 * e + 128) >> 8);
+            out[x * 4 + 1] =
+                ClampByte((298 * c - 100 * d - 208 * e + 128) >> 8);
+            out[x * 4 + 2] = ClampByte((298 * c + 516 * d + 128) >> 8);
+            out[x * 4 + 3] = 0xff;
+        }
+    }
+}
+
+static double VideoSubmitMaxFps() {
+    const char *value = std::getenv("AETHERKIRI_GODOT_VIDEO_SUBMIT_FPS");
+    if(value == nullptr || value[0] == '\0')
+        return 45.0;
+    char *end = nullptr;
+    double parsed = std::strtod(value, &end);
+    if(end == value)
+        return 45.0;
+    return parsed;
+}
+
+VideoPresentLayer::~VideoPresentLayer() {
+    if(m_continuousHookRegistered)
+        TVPRemoveContinuousEventHook(this);
+}
 
 tTVPBaseTexture *VideoPresentLayer::GetFrontBuffer() {
     BitmapPicture pic;
-    if(!m_usedPicture) {
-        return nullptr;
-    }
     {
         std::lock_guard<std::mutex> lk(m_mtxPicture);
+        if(!m_usedPicture) {
+            return nullptr;
+        }
         BitmapPicture &picbuf = m_picture[m_curPicture];
-        picbuf.swap(pic);
+        pic.MoveFrom(picbuf);
         m_curPicture = (m_curPicture + 1) & (MAX_BUFFER_COUNT - 1);
         --m_usedPicture;
         assert(m_usedPicture >= 0);
         m_condPicture.notify_all();
     }
     FrameMove();
+    if(!pic.data[0] || pic.width <= 0 || pic.height <= 0 ||
+       !m_BmpBits[0] || !m_BmpBits[1]) {
+        return nullptr;
+    }
     int n = m_nCurBmpBuff;
     m_nCurBmpBuff = !m_nCurBmpBuff;
     m_BmpBits[n]->Update(pic.data[0], pic.width * 4, 0, 0, pic.width,
@@ -39,7 +92,11 @@ void VideoPresentLayer::SetVideoBuffer(tTVPBaseTexture *buff1,
     m_BmpBits[0] = buff1;
     m_BmpBits[1] = buff2;
     m_nCurBmpBuff = 0;
-    //	TVPAddContinuousEventHook(this);
+    m_lastQueuedPicturePts = -1.0;
+    if(!m_continuousHookRegistered) {
+        TVPAddContinuousEventHook(this);
+        m_continuousHookRegistered = true;
+    }
 }
 
 void VideoPresentLayer::OnContinuousCallback(tjs_uint64 tick) {
@@ -73,6 +130,13 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     if(pic.pts == DVD_NOPTS_VALUE)
         return 0;
 
+    const double pts = pic.pts / DVD_TIME_BASE;
+    const double maxSubmitFps = VideoSubmitMaxFps();
+    if(maxSubmitFps > 0.0 && m_lastQueuedPicturePts >= 0.0 &&
+       pts - m_lastQueuedPicturePts < (1.0 / maxSubmitFps)) {
+        return MAX_BUFFER_COUNT - m_usedPicture;
+    }
+
     if(m_usedPicture >= MAX_BUFFER_COUNT) {
         std::unique_lock<std::mutex> lk(m_mtxPicture);
         m_condPicture.wait(lk);
@@ -80,19 +144,29 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     if(m_usedPicture >= MAX_BUFFER_COUNT)
         return -1;
 
-    int width = pic.iWidth, height = pic.iHeight;
+    int srcWidth = pic.iWidth;
+    int srcHeight = pic.iHeight;
+    int width = m_BmpBits[0] ? m_BmpBits[0]->GetWidth()
+                             : (pic.iDisplayWidth > 0 ? pic.iDisplayWidth
+                                                      : pic.iWidth);
+    int height = m_BmpBits[0] ? m_BmpBits[0]->GetHeight()
+                              : (pic.iDisplayHeight > 0 ? pic.iDisplayHeight
+                                                        : pic.iHeight);
 
     uint8_t *data = (uint8_t *)TJSAlignedAlloc(width * height * 4, 4);
-    int datasize = width * 4;
+    uint8_t *dstData[4] = {data, nullptr, nullptr, nullptr};
+    int dstLineSize[4] = {width * 4, 0, 0, 0};
 
     img_convert_ctx = sws_getCachedContext(
-        img_convert_ctx, width, height, AV_PIX_FMT_YUV420P, width, height,
+        img_convert_ctx, srcWidth, srcHeight, AV_PIX_FMT_YUV420P, width, height,
         AV_PIX_FMT_RGBA, /*sws_flags*/ SWS_FAST_BILINEAR, nullptr, nullptr,
         nullptr);
     assert(img_convert_ctx);
     int processed = sws_scale(img_convert_ctx, pic.data, pic.iLineSize, 0,
-                              pic.iHeight, &data, &datasize);
-
+                              srcHeight, dstData, dstLineSize);
+    if(processed <= 0) {
+        ConvertYuv420ToRgba(pic, data, width, height, dstLineSize[0]);
+    }
     {
         std::lock_guard<std::mutex> lk(m_mtxPicture);
         BitmapPicture &picbuf =
@@ -101,8 +175,9 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
         picbuf.width = width;
         picbuf.height = height;
         picbuf.data[0] = data;
-        picbuf.pts = pic.pts / DVD_TIME_BASE;
+        picbuf.pts = pts;
         ++m_usedPicture;
+        m_lastQueuedPicturePts = pts;
     }
 
     return MAX_BUFFER_COUNT - m_usedPicture;
@@ -126,7 +201,7 @@ void MoviePlayerLayer::OnPlayEvent(KRMovieEvent msg, void *p) {
         int frame;
         GetFrame(&frame);
         ev.LParam = frame;
-        m_pCallbackWin->WndProc(ev); // in the same thread
+        m_pCallbackWin->PostEvent(ev);
     } else if(msg == KRMovieEvent::Ended) {
         NativeEvent ev(WM_GRAPHNOTIFY);
         ev.WParam = EC_COMPLETE;
@@ -137,7 +212,6 @@ void MoviePlayerLayer::OnPlayEvent(KRMovieEvent msg, void *p) {
 
 void MoviePlayerLayer::Play() {
     inherit::Play();
-    TVPAddContinuousEventHook(this);
 }
 
 NS_KRMOVIE_END

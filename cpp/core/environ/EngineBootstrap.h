@@ -1,10 +1,9 @@
 /**
  * @file EngineBootstrap.h
  * @brief Engine bootstrapper — replaces original AppDelegate for host-mode
- *        startup (e.g. Flutter FFI).
+ *        startup (e.g. host FFI).
  *
- * Uses ANGLE EGL Pbuffer surface for headless OpenGL ES 2.0 rendering,
- * completely independent of any external framework.
+ * Uses a legacy EGL pbuffer surface for bridge rendering when enabled.
  */
 #pragma once
 
@@ -19,7 +18,7 @@ public:
      *
      * This replaces TVPAppDelegate::bootstrapForHostRuntime() and performs:
      *   1. SDL initialization
-     *   2. ANGLE EGL context creation (Pbuffer surface)
+     *   2. Bridge graphics context creation when enabled
      *   3. Search path configuration
      *   4. UI extension initialization
      *   5. Locale configuration

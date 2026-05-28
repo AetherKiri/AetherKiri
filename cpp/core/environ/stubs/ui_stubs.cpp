@@ -4,11 +4,11 @@
  *        functions that were previously provided by MainScene.cpp,
  *        AppDelegate.cpp, and the environ/ui/ directory.
  *
- * With the migration to Flutter-based UI, all of these are replaced by
+ * With the migration to host-managed UI, all of these are replaced by
  * minimal stubs that either log a warning or return a sensible default.
  *
  * Functions stubbed here are called from the engine core and must link,
- * but their functionality will be provided by the Flutter host layer.
+ * but their functionality will be provided by the host layer.
  */
 
 #include <spdlog/spdlog.h>
@@ -16,6 +16,9 @@
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#include <cstdint>
+#include <cstring>
+#include <mutex>
 
 #include "tjsCommHead.h"
 #include "tjsConfig.h"
@@ -26,10 +29,12 @@
 #include "TVPWindow.h"
 #include "Application.h"
 #include "RenderManager.h"
+#include "GodotRenderManager.h"
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
 #include "krkr_egl_context.h"
-#include "SysInitImpl.h"
-
 #include <GLES3/gl3.h>
+#endif
+#include "SysInitImpl.h"
 
 // ---------------------------------------------------------------------------
 // Live2D post-draw hook — called after scene blit in UpdateDrawBuffer
@@ -37,17 +42,106 @@
 static void (*g_postDrawHook)() = nullptr;
 void TVPSetPostDrawHook(void (*hook)()) { g_postDrawHook = hook; }
 
+namespace {
+std::mutex g_host_frame_mutex;
+std::vector<uint8_t> g_host_frame_rgba;
+uint32_t g_host_frame_width = 0;
+uint32_t g_host_frame_height = 0;
+uint32_t g_host_frame_stride = 0;
+uint64_t g_host_frame_serial = 0;
+uint64_t g_host_gpu_texture = 0;
+uint32_t g_host_gpu_width = 0;
+uint32_t g_host_gpu_height = 0;
+uint64_t g_host_gpu_serial = 0;
+uint32_t g_host_surface_width = 1280;
+uint32_t g_host_surface_height = 720;
+bool g_host_prefer_gpu_frame = true;
+}
+
+extern "C" void TVPHostSetPreferGpuFrame(bool prefer_gpu_frame) {
+    std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+    g_host_prefer_gpu_frame = prefer_gpu_frame;
+    if (!prefer_gpu_frame) {
+        g_host_gpu_texture = 0;
+        g_host_gpu_width = 0;
+        g_host_gpu_height = 0;
+    }
+}
+
+extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height) {
+    if(width == 0 || height == 0) return;
+    g_host_surface_width = width;
+    g_host_surface_height = height;
+}
+
+extern "C" bool TVPHostGetLatestGodotGpuFrame(uint64_t *texture,
+                                               uint32_t *width,
+                                               uint32_t *height,
+                                               uint64_t *serial) {
+    std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+    if(g_host_gpu_texture == 0 || g_host_gpu_width == 0 ||
+       g_host_gpu_height == 0) {
+        return false;
+    }
+    if(texture) *texture = g_host_gpu_texture;
+    if(width) *width = g_host_gpu_width;
+    if(height) *height = g_host_gpu_height;
+    if(serial) *serial = g_host_gpu_serial;
+    return true;
+}
+
+extern "C" bool TVPHostGetLatestFrameDesc(uint32_t *width, uint32_t *height,
+                                           uint32_t *stride_bytes,
+                                           uint64_t *serial) {
+    std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+    if(g_host_frame_rgba.empty() || g_host_frame_width == 0 ||
+       g_host_frame_height == 0 || g_host_frame_stride == 0) {
+        if(g_host_gpu_texture == 0 || g_host_gpu_width == 0 ||
+           g_host_gpu_height == 0) {
+            return false;
+        }
+        if(width) *width = g_host_gpu_width;
+        if(height) *height = g_host_gpu_height;
+        if(stride_bytes) *stride_bytes = g_host_gpu_width * 4u;
+        if(serial) *serial = g_host_gpu_serial;
+        return true;
+    }
+    if(width) *width = g_host_frame_width;
+    if(height) *height = g_host_frame_height;
+    if(stride_bytes) *stride_bytes = g_host_frame_stride;
+    if(serial) *serial = g_host_frame_serial;
+    return true;
+}
+
+extern "C" bool TVPHostCopyLatestFrameRGBA(void *out_pixels,
+                                            size_t out_pixels_size,
+                                            uint32_t *width, uint32_t *height,
+                                            uint32_t *stride_bytes,
+                                            uint64_t *serial) {
+    if(!out_pixels) return false;
+    std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+    if(g_host_frame_rgba.empty() || out_pixels_size < g_host_frame_rgba.size()) {
+        return false;
+    }
+    std::memcpy(out_pixels, g_host_frame_rgba.data(), g_host_frame_rgba.size());
+    if(width) *width = g_host_frame_width;
+    if(height) *height = g_host_frame_height;
+    if(stride_bytes) *stride_bytes = g_host_frame_stride;
+    if(serial) *serial = g_host_frame_serial;
+    return true;
+}
+
 // ---------------------------------------------------------------------------
-// FlutterWindowLayer — concrete iWindowLayer for Flutter host mode.
-// Provides a logical window backed by the ANGLE EGL Pbuffer surface.
+// HostWindowLayer — concrete iWindowLayer for embedded host mode.
+// Provides a logical window backed by the host pbuffer surface.
 // Rendering output goes through glReadPixels in the engine_api layer.
 // ---------------------------------------------------------------------------
-class FlutterWindowLayer : public iWindowLayer {
+class HostWindowLayer : public iWindowLayer {
 public:
-    explicit FlutterWindowLayer(tTJSNI_Window *owner)
+    explicit HostWindowLayer(tTJSNI_Window *owner)
         : owner_(owner), visible_(true), caption_("krkr2"),
           width_(0), height_(0), active_(true), closing_(false) {
-        // Get initial size from EGL context
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
         auto& egl = krkr::GetEngineEGLContext();
         if (egl.IsValid()) {
             width_  = static_cast<tjs_int>(egl.GetWidth());
@@ -56,10 +150,15 @@ public:
             width_  = 1280;
             height_ = 720;
         }
-        spdlog::info("FlutterWindowLayer created: {}x{}", width_, height_);
+#else
+        width_ = static_cast<tjs_int>(g_host_surface_width);
+        height_ = static_cast<tjs_int>(g_host_surface_height);
+#endif
+        spdlog::info("HostWindowLayer created: {}x{}", width_, height_);
     }
 
-    ~FlutterWindowLayer() {
+    ~HostWindowLayer() {
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
         if(blit_program_) {
             glDeleteProgram(blit_program_);
             blit_program_ = 0;
@@ -72,7 +171,8 @@ public:
             glDeleteTextures(1, &blit_texture_);
             blit_texture_ = 0;
         }
-        spdlog::debug("FlutterWindowLayer destroyed");
+#endif
+        spdlog::debug("HostWindowLayer destroyed");
     }
 
     // -- Pure virtual implementations --
@@ -86,17 +186,21 @@ public:
         auto* dd = owner_->GetDrawDevice();
         if (!dd) return;
 
-        width_ = w;
-        height_ = h;
-
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
         auto& egl = krkr::GetEngineEGLContext();
         tjs_int surf_w = egl.IsValid() ? static_cast<tjs_int>(egl.GetWidth())  : w;
         tjs_int surf_h = egl.IsValid() ? static_cast<tjs_int>(egl.GetHeight()) : h;
+#else
+        tjs_int surf_w = static_cast<tjs_int>(g_host_surface_width);
+        tjs_int surf_h = static_cast<tjs_int>(g_host_surface_height);
+#endif
         if (surf_w <= 0) surf_w = w;
         if (surf_h <= 0) surf_h = h;
+        width_ = surf_w;
+        height_ = surf_h;
 
         dd->SetWindowSize(surf_w, surf_h);
-        spdlog::debug("FlutterWindowLayer::SetPaintBoxSize: layer={}x{}, surface={}x{}",
+        spdlog::debug("HostWindowLayer::SetPaintBoxSize: layer={}x{}, surface={}x{}",
                       w, h, surf_w, surf_h);
     }
 
@@ -132,7 +236,7 @@ public:
     void BringToFront() override {}
 
     void ShowWindowAsModal() override {
-        spdlog::warn("FlutterWindowLayer::ShowWindowAsModal: stub");
+        spdlog::warn("HostWindowLayer::ShowWindowAsModal: stub");
     }
 
     bool GetVisible() override { return visible_; }
@@ -143,13 +247,17 @@ public:
 
     void SetCaption(const std::string &cap) override { caption_ = cap; }
 
-    void SetWidth(tjs_int w) override { width_ = w; }
+    void SetWidth(tjs_int) override {
+        width_ = static_cast<tjs_int>(g_host_surface_width);
+    }
 
-    void SetHeight(tjs_int h) override { height_ = h; }
+    void SetHeight(tjs_int) override {
+        height_ = static_cast<tjs_int>(g_host_surface_height);
+    }
 
-    void SetSize(tjs_int w, tjs_int h) override {
-        width_ = w;
-        height_ = h;
+    void SetSize(tjs_int, tjs_int) override {
+        width_ = static_cast<tjs_int>(g_host_surface_width);
+        height_ = static_cast<tjs_int>(g_host_surface_height);
     }
 
     void GetSize(tjs_int &w, tjs_int &h) override {
@@ -172,9 +280,85 @@ public:
     }
 
     void UpdateDrawBuffer(iTVPTexture2D *tex) override {
+#if !defined(KRKR_ENABLE_GPU_BRIDGE)
+        if (!tex || !owner_) return;
+        const tjs_uint tw = tex->GetWidth();
+        const tjs_uint th = tex->GetHeight();
+        if(tw == 0 || th == 0) return;
+
+        if(g_host_prefer_gpu_frame) {
+        if(auto *godot_tex = dynamic_cast<GodotTexture2D *>(tex);
+           godot_tex != nullptr && godot_tex->EnsureGpuHandle() &&
+           godot_tex->UploadCpuToGpu()) {
+            {
+                std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+                g_host_gpu_texture = godot_tex->GetGodotGpuHandle();
+                g_host_gpu_width = static_cast<uint32_t>(tw);
+                g_host_gpu_height = static_cast<uint32_t>(th);
+                g_host_gpu_serial += 1;
+                g_host_frame_rgba.clear();
+                g_host_frame_width = static_cast<uint32_t>(tw);
+                g_host_frame_height = static_cast<uint32_t>(th);
+                g_host_frame_stride = static_cast<uint32_t>(tw * 4u);
+                g_host_frame_serial = g_host_gpu_serial;
+            }
+
+            auto* dd = owner_->GetDrawDevice();
+            if (!dd) return;
+            tTVPRect dest(0, 0, static_cast<tjs_int>(tex->GetWidth()),
+                          static_cast<tjs_int>(tex->GetHeight()));
+            dd->SetDestRectangle(dest);
+            dd->SetClipRectangle(dest);
+            dd->SetViewport(dest);
+            dd->SetWindowSize(dest.get_width(), dest.get_height());
+            if (g_postDrawHook) g_postDrawHook();
+            return;
+        }
+        }
+
+        const uint32_t dst_stride = static_cast<uint32_t>(tw * 4u);
+        std::vector<uint8_t> frame(static_cast<size_t>(dst_stride) * th);
+        const tjs_int src_pitch = tex->GetPitch();
+        const void *pixel_data = tex->GetPixelData();
+        if(pixel_data) {
+            const auto *src = static_cast<const uint8_t *>(pixel_data);
+            for(tjs_uint y = 0; y < th; ++y) {
+                std::memcpy(frame.data() + static_cast<size_t>(y) * dst_stride,
+                            src + static_cast<size_t>(y) * src_pitch,
+                            dst_stride);
+            }
+        } else {
+            for(tjs_uint y = 0; y < th; ++y) {
+                const void *line = tex->GetScanLineForRead(y);
+                if(line) {
+                    std::memcpy(frame.data() + static_cast<size_t>(y) * dst_stride,
+                                line, dst_stride);
+                }
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+            g_host_frame_rgba.swap(frame);
+            g_host_frame_width = static_cast<uint32_t>(tw);
+            g_host_frame_height = static_cast<uint32_t>(th);
+            g_host_frame_stride = dst_stride;
+            g_host_frame_serial += 1;
+        }
+
+        auto* dd = owner_->GetDrawDevice();
+        if (!dd) return;
+        tTVPRect dest(0, 0, static_cast<tjs_int>(tex->GetWidth()),
+                      static_cast<tjs_int>(tex->GetHeight()));
+        dd->SetDestRectangle(dest);
+        dd->SetClipRectangle(dest);
+        dd->SetViewport(dest);
+        dd->SetWindowSize(dest.get_width(), dest.get_height());
+        if (g_postDrawHook) g_postDrawHook();
+        return;
+#else
         // Blit the composited scene texture to the render target.
         // When an IOSurface is attached, this goes directly to the shared
-        // IOSurface (zero-copy to Flutter). Otherwise, falls back to
+        // IOSurface (zero-copy to Application host). Otherwise, falls back to
         // the EGL Pbuffer for glReadPixels-based retrieval.
         if (!tex) return;
 
@@ -319,7 +503,7 @@ public:
         // In IOSurface mode, the surface has a top-down coordinate system
         // while OpenGL renders bottom-up, so we need to flip Y.
         // Android SurfaceTexture (WindowSurface) does NOT need flipping
-        // because eglSwapBuffers → SurfaceTexture → Flutter Texture widget
+        // because eglSwapBuffers → SurfaceTexture → host texture
         // handles the coordinate transform automatically.
         // When using a native OGL texture from the engine (GPU path), the
         // texture is already in OGL convention (bottom-up), so we may need
@@ -378,6 +562,7 @@ public:
         // double-buffer flicker (alternating between current and stale
         // back-buffer contents).
         egl.MarkFrameDirty();
+#endif
     }
 
     void InvalidateClose() override {
@@ -388,7 +573,7 @@ public:
 
     void Close() override {
         closing_ = true;
-        spdlog::debug("FlutterWindowLayer::Close called");
+        spdlog::debug("HostWindowLayer::Close called");
         TVPTerminateAsync(0);
     }
 
@@ -433,13 +618,16 @@ public:
     }
 
     void TickBeat() override {
-        // Called every ~50ms; nothing to do in Flutter mode
+        // Called every ~50ms; nothing to do in embedded host mode
     }
 
     TVPOverlayNode *GetPrimaryArea() override { return nullptr; }
 
 private:
     void EnsureBlitResources() {
+#if !defined(KRKR_ENABLE_GPU_BRIDGE)
+        return;
+#else
         if (blit_program_ != 0) return;
 
         // Vertex shader: fullscreen quad with optional Y flip and UV scale
@@ -529,8 +717,9 @@ private:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glBindTexture(GL_TEXTURE_2D, 0);
 
-        spdlog::info("FlutterWindowLayer: blit resources initialized (program={})",
+        spdlog::info("HostWindowLayer: blit resources initialized (program={})",
                      blit_program_);
+#endif
     }
 
     tTJSNI_Window *owner_;
@@ -546,7 +735,8 @@ private:
     tjs_int last_mouse_x_ = 0;
     tjs_int last_mouse_y_ = 0;
 
-    // Blit resources for rendering to EGL pbuffer
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
+    // Blit resources for rendering to external GPU targets.
     GLuint blit_program_ = 0;
     GLuint blit_vbo_ = 0;
     GLuint blit_texture_ = 0;
@@ -556,6 +746,7 @@ private:
     GLint  blit_flipy_uniform_ = -1;
     GLint  blit_uvscale_uniform_ = -1;
     std::vector<uint8_t> blit_pixel_buf_;
+#endif
 };
 
 // ---------------------------------------------------------------------------
@@ -563,16 +754,16 @@ private:
 // Registered custom UI widgets (PageView, etc.)
 // ---------------------------------------------------------------------------
 void TVPInitUIExtension() {
-    spdlog::debug("TVPInitUIExtension: stub (UI handled by Flutter)");
+    spdlog::debug("TVPInitUIExtension: stub (UI handled by host)");
 }
 
 // ---------------------------------------------------------------------------
 // TVPCreateAndAddWindow — originally in MainScene.cpp
-// Creates a FlutterWindowLayer and registers it with the application.
+// Creates a HostWindowLayer and registers it with the application.
 // ---------------------------------------------------------------------------
 iWindowLayer *TVPCreateAndAddWindow(tTJSNI_Window *w) {
-    auto *layer = new FlutterWindowLayer(w);
-    spdlog::info("TVPCreateAndAddWindow: created FlutterWindowLayer ({}x{})",
+    auto *layer = new HostWindowLayer(w);
+    spdlog::info("TVPCreateAndAddWindow: created HostWindowLayer ({}x{})",
                  layer->GetWidth(), layer->GetHeight());
     return layer;
 }
@@ -703,23 +894,23 @@ bool TVPCopyFile(const std::string &from, const std::string &to) {
 
 // ---------------------------------------------------------------------------
 // TVPShowFileSelector — originally in ui/FileSelectorForm.cpp
-// Shows a file selection dialog. In Flutter mode, this is handled by the
-// Flutter host layer. Returns empty string (no selection).
+// Shows a file selection dialog. In host mode, this is handled by the host
+// layer. Returns empty string (no selection).
 // ---------------------------------------------------------------------------
 std::string TVPShowFileSelector(const std::string &title,
                                 const std::string &init_dir,
                                 std::string default_ext,
                                 bool is_save) {
-    spdlog::warn("TVPShowFileSelector: stub — file selection handled by Flutter");
+    spdlog::warn("TVPShowFileSelector: stub - file selection handled by host");
     return "";
 }
 
 // ---------------------------------------------------------------------------
 // TVPShowPopMenu — originally in ui/InGameMenuForm.cpp
-// Shows a popup context menu. In Flutter mode, handled by Flutter host.
+// Shows a popup context menu. In host mode, handled by host UI.
 // ---------------------------------------------------------------------------
 void TVPShowPopMenu(tTJSNI_MenuItem *menu) {
-    spdlog::warn("TVPShowPopMenu: stub — popup menus handled by Flutter");
+    spdlog::warn("TVPShowPopMenu: stub - popup menus handled by host");
 }
 
 // ---------------------------------------------------------------------------
@@ -727,5 +918,5 @@ void TVPShowPopMenu(tTJSNI_MenuItem *menu) {
 // Opens the URL for the patch library website.
 // ---------------------------------------------------------------------------
 void TVPOpenPatchLibUrl() {
-    spdlog::warn("TVPOpenPatchLibUrl: stub — URL opening handled by Flutter");
+    spdlog::warn("TVPOpenPatchLibUrl: stub - URL opening handled by host");
 }

@@ -4,6 +4,7 @@
 #include "VideoPlayer.h"
 #include "krmovie.h"
 #include "ComplexRect.h"
+#include "EventIntf.h"
 
 struct SwsContext;
 
@@ -12,7 +13,7 @@ class iTVPSoundBuffer;
 class TVPYUVSprite;
 
 // Forward-declare a generic node pointer.
-// These are opaque pointers wired up via the Flutter rendering path.
+// These are opaque pointers wired up via the Godot rendering path.
 using OverlayNode = void;
 
 NS_KRMOVIE_BEGIN
@@ -205,9 +206,12 @@ protected:
                 data[i] = nullptr;
         }
 
+        BitmapPicture(const BitmapPicture &) = delete;
+        BitmapPicture &operator=(const BitmapPicture &) = delete;
+
         ~BitmapPicture() { Clear(); }
 
-        void swap(BitmapPicture &r);
+        void MoveFrom(BitmapPicture &source);
 
         void Clear();
     };
@@ -218,13 +222,16 @@ protected:
     std::condition_variable m_condPicture;
     struct SwsContext *img_convert_ctx = nullptr;
     double m_curpts = 0;
+    double m_lastQueuedPicturePts = -1.0;
 };
 
-class VideoPresentOverlay : public TVPMoviePlayer // video display overlay
+class VideoPresentOverlay : public TVPMoviePlayer,
+                            public tTVPContinuousEventCallbackIntf // video display overlay
 {
 protected:
     OverlayNode *m_pRootNode = nullptr;
     TVPYUVSprite *m_pSprite = nullptr;
+    tTVPBaseTexture *m_frameBitmap = nullptr;
 
     ~VideoPresentOverlay() override;
 
@@ -232,6 +239,7 @@ protected:
 
 public:
     void PresentPicture(float dt);
+    void OnContinuousCallback(tjs_uint64 tick) override;
 
     void Stop() override;
 
@@ -251,6 +259,7 @@ public:
     ~MoviePlayerOverlay() override;
 
     void SetWindow(class tTJSNI_Window *window) override;
+    class tTJSNI_Window *GetOwnerWindow() const { return m_pOwnerWindow; }
 
     void BuildGraph(tTJSNI_VideoOverlay *callbackwin, IStream *stream,
                     const tjs_char *streamname, const tjs_char *type,

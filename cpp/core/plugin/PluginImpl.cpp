@@ -50,6 +50,47 @@ bool TVPRegisterGlobalObject(const tjs_char *name, iTJSDispatch2 *dsp);
 static iTJSDispatch2 *s_ProxyStorageMap = nullptr;
 static iTVPStorageMedia *s_ProxyStorageMedia = nullptr;
 
+class tTJSNC_BootstrapLinkZResult : public tTJSDispatch {
+    tjs_uint RefCount = 1;
+
+public:
+    tjs_uint AddRef() override { return ++RefCount; }
+    tjs_uint Release() override {
+        if(--RefCount == 0) {
+            delete this;
+            return 0;
+        }
+        return RefCount;
+    }
+
+    tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                       tTJSVariant *result, tjs_int, tTJSVariant **,
+                       iTJSDispatch2 *) override {
+        if(result)
+            *result = static_cast<tjs_int>(1);
+        return TJS_S_OK;
+    }
+
+    tjs_error PropGet(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                      tTJSVariant *result, iTJSDispatch2 *) override {
+        if(result) {
+            AddRef();
+            *result = tTJSVariant(this, this);
+        }
+        return TJS_S_OK;
+    }
+
+    tjs_error PropSet(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                      const tTJSVariant *, iTJSDispatch2 *) override {
+        return TJS_S_OK;
+    }
+
+    tjs_error IsValid(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                      iTJSDispatch2 *) override {
+        return TJS_S_TRUE;
+    }
+};
+
 class tTJSNI_GamepadStub : public tTJSNativeInstance {
 public:
     tjs_error Construct(tjs_int, tTJSVariant **, iTJSDispatch2 *) override {
@@ -781,9 +822,65 @@ tTJSNativeClass *TVPCreateNativeClass_Plugins() {
 
         return TJS_S_OK;
     }
-    TJS_END_NATIVE_STATIC_METHOD_DECL_OUTER(
+TJS_END_NATIVE_STATIC_METHOD_DECL_OUTER(
         /*object to register*/ cls,
         /*func. name*/ link)
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ linkZ) {
+        if(numparams < 1)
+            return TJS_E_BADPARAMCOUNT;
+
+        ttstr name = *param[0];
+        const ttstr lower_name = name.AsLowerCase();
+        if(lower_name.StartsWith(TJS_W("bres://"))) {
+            const tjs_char *path = name.c_str() + 7;
+            if(path[0] == TJS_W('/')) {
+                while(path[0] == TJS_W('/'))
+                    ++path;
+            } else {
+                const tjs_char *slash = TJS_strchr(path, TJS_W('/'));
+                path = slash != nullptr ? slash + 1 : path;
+            }
+            name = ttstr(path);
+        }
+
+        ttstr normalized = TVPExtractStorageName(name);
+        ttstr lower = normalized.AsLowerCase();
+        const tjs_char *raw = lower.c_str();
+        const tjs_int len = lower.length();
+        bool is_plugin = false;
+        if(len >= 4) {
+            const tjs_char *suffix = raw + len - 4;
+            is_plugin = !TJS_strcmp(suffix, TJS_W(".dll")) ||
+                        !TJS_strcmp(suffix, TJS_W(".tpm"));
+        }
+
+        if(is_plugin) {
+            TVPLoadPlugin(name);
+        } else {
+            TVPExecuteStorage(name);
+            PluginCallTracer::Instance().LogPluginLoad(
+                name.AsStdString(), true, "linkZ resource executed");
+        }
+
+        if(result) {
+            iTJSDispatch2 *bootstrap = new tTJSNC_BootstrapLinkZResult();
+            *result = tTJSVariant(bootstrap, bootstrap);
+            bootstrap->Release();
+        }
+
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_STATIC_METHOD_DECL_OUTER(
+        /*object to register*/ cls,
+        /*func. name*/ linkZ)
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ bootStrap) {
+        if(result)
+            *result = static_cast<tjs_int>(1);
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_STATIC_METHOD_DECL_OUTER(
+        /*object to register*/ cls,
+        /*func. name*/ bootStrap)
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ unlink) {
         if(numparams < 1)
             return TJS_E_BADPARAMCOUNT;

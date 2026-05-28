@@ -29,27 +29,12 @@
     "minizip",
     "tinyxml2",
     {
-      "name": "angle",
-      "default-features": false,
-      "features": [
-        "metal"
-      ],
-      "platform": "osx | ios"
-    },
-    {
-      "name": "angle",
-      "default-features": false,
-      "features": [
-        "vulkan"
-      ],
-      "platform": "linux | windows | android"
-    },
-    {
       "name": "dirent",
       "platform": "windows"
     },
     "ffmpeg",
     "fmt",
+    "godot-cpp",
     "jxrlib",
     "libarchive",
     "libxml2",

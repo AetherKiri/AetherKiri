@@ -104,7 +104,7 @@ tjs_int TVPResolveBudgetMB(tjs_int configured_budget_mb) {
     const tjs_int total_mb = TVPGetSystemTotalMemoryMB();
     if(total_mb <= 0)
         return 768;
-    return TVPClampInt(total_mb / 4, 512, 1024);
+    return TVPClampInt(total_mb / 4, 512, 4096);
 }
 } // namespace
 
@@ -265,7 +265,7 @@ void tTVPSystemControl::RunMemoryGovernor(uint32_t tick) {
 
 #ifdef __APPLE__
     {
-        const tjs_int heap_ceiling_mb = budget_mb * 45 / 100;
+        const tjs_int heap_ceiling_mb = budget_mb * 75 / 100;
         if(heap_in_use_mb > heap_ceiling_mb &&
            tick - LastHeapCeilingTick >= 30000) {
             LastHeapCeilingTick = tick;

@@ -80,7 +80,7 @@ static int64_t TVPCalcMainImageBytes(tTVPBaseTexture *img) {
 //---------------------------------------------------------------------------
 
 static bool IsGPU() {
-    static bool isGPU = !TVPIsSoftwareRenderManager() &&
+    const bool isGPU = !TVPIsSoftwareRenderManager() &&
         !IndividualConfigManager::GetInstance()->GetValue<bool>(
             "ogl_accurate_render", false);
     return isGPU;
@@ -2893,8 +2893,47 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
     iTJSDispatch2 *metainfo = nullptr;
 
     int64_t oldBytes = TVPCalcMainImageBytes(MainImage);
-    TVPLoadGraphic(MainImage, name, colorkey, 0, 0, glmNormal, &provincename,
-                   &metainfo);
+    ttstr load_name = name;
+    ttstr load_ext = TVPExtractStorageExt(load_name);
+    load_ext.ToLowerCase();
+    if(load_ext == TJS_W(".dref")) {
+        ttstr fallback = TVPChopStorageExt(load_name) + TJS_W(".png");
+        if(TVPIsExistentStorage(fallback)) {
+            spdlog::warn("Layer.loadImages dref fallback: {} -> {}",
+                         load_name.AsStdString(), fallback.AsStdString());
+            load_name = fallback;
+        }
+    }
+
+    try {
+        TVPLoadGraphic(MainImage, load_name, colorkey, 0, 0, glmNormal,
+                       &provincename, &metainfo);
+    } catch(...) {
+        ttstr ext = TVPExtractStorageExt(name);
+        ext.ToLowerCase();
+
+        ttstr fallback =
+            ext.IsEmpty() || ext == TJS_W(".dref")
+                ? (ext.IsEmpty() ? name : TVPChopStorageExt(name)) + TJS_W(".png")
+                : name;
+        if(!TVPIsExistentStorage(fallback)) {
+            throw;
+        }
+
+        if(fallback != name) {
+            spdlog::warn("Layer.loadImages fallback: {} -> {}",
+                         name.AsStdString(), fallback.AsStdString());
+        }
+        try {
+            TVPLoadGraphic(MainImage, fallback, colorkey, 0, 0, glmNormal,
+                           &provincename, &metainfo);
+        } catch(...) {
+            spdlog::warn("Layer.loadImages placeholder for unreadable image: {}",
+                         fallback.AsStdString());
+            MainImage->SetSize(1, 1, false);
+            MainImage->Fill(tTVPRect(0, 0, 1, 1), 0x00000000);
+        }
+    }
     TVPLayerBitmapTotalBytes.fetch_add(TVPCalcMainImageBytes(MainImage) - oldBytes,
                                        std::memory_order_relaxed);
 

@@ -10,14 +10,14 @@
 
 /* ── Option Keys ────────────────────────────────────────────────── */
 
-/** ANGLE EGL backend selection (Android only; other platforms ignore). */
-#define ENGINE_OPTION_ANGLE_BACKEND       "angle_backend"
-
 /** Frame rate limit (0 = unlimited / follow vsync). */
 #define ENGINE_OPTION_FPS_LIMIT           "fps_limit"
 
-/** Render pipeline selection ("opengl" or "software"). */
+/** Render pipeline selection. */
 #define ENGINE_OPTION_RENDERER            "renderer"
+
+/** Host-facing render backend selection. */
+#define ENGINE_OPTION_RENDER_BACKEND      "render_backend"
 
 /** Memory profile ("balanced" / "aggressive").
  *  Consumed by the C++ memory governor via TVPGetCommandLine(). */
@@ -63,18 +63,16 @@
  *  When enabled, disassembles bytecode and exports scripts during game load. */
 #define ENGINE_OPTION_EXPORT_SCRIPTS "export_scripts"
 
-/* ── ANGLE Backend Values ───────────────────────────────────────── */
-
-/** Use ANGLE's OpenGL ES backend (default). */
-#define ENGINE_ANGLE_BACKEND_GLES         "gles"
-
-/** Use ANGLE's Vulkan backend. */
-#define ENGINE_ANGLE_BACKEND_VULKAN       "vulkan"
-
 /* ── Renderer Values ────────────────────────────────────────────── */
 
-#define ENGINE_RENDERER_OPENGL            "opengl"
+#define ENGINE_RENDERER_GODOT_NATIVE      "godot_native"
+#define ENGINE_RENDERER_GPU_BRIDGE        "gpu_bridge"
+#define ENGINE_RENDERER_DEBUG_CPU         "debug_cpu"
 #define ENGINE_RENDERER_SOFTWARE          "software"
+
+#define ENGINE_RENDER_BACKEND_GODOT_NATIVE "GodotNative"
+#define ENGINE_RENDER_BACKEND_GPU_BRIDGE   "GpuBridge"
+#define ENGINE_RENDER_BACKEND_DEBUG_CPU    "DebugCpu"
 
 #define ENGINE_MEMORY_PROFILE_BALANCED    "balanced"
 #define ENGINE_MEMORY_PROFILE_AGGRESSIVE  "aggressive"

@@ -1957,7 +1957,8 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
 #if defined(__APPLE__) || defined(__linux__) || defined(__ANDROID__)
             TVPDecodeArena::Instance().Begin();
 #endif
-            if(mode == glmNormal && keyidx == TVP_clNone && !desw && !desh) {
+            if(mode == glmNormal && keyidx == TVP_clNone && !desw && !desh &&
+               ext == TJS_W(".pvr")) {
                 texture = TVPInternalLoadTexture(nname, &mi, &pn);
             }
             if(!texture) {

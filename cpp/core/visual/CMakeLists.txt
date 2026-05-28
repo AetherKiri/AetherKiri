@@ -43,14 +43,11 @@ set(VISUAL_SOURCE_FILES
     ${VISUAL_PATH}/gl/ResampleImage.cpp
     ${VISUAL_PATH}/gl/WeightFunctor.cpp
 
-    ${VISUAL_PATH}/ogl/astcrt.cpp
     ${VISUAL_PATH}/ogl/etcpak.cpp
-    ${VISUAL_PATH}/ogl/imagepacker.cpp
-    ${VISUAL_PATH}/ogl/pvrtc.cpp
     ${VISUAL_PATH}/ogl/PVRTDecompress.cpp
-    ${VISUAL_PATH}/ogl/RenderManager_ogl.cpp
-    ${VISUAL_PATH}/ogl/krkr_gl.cpp
-    ${VISUAL_PATH}/ogl/krkr_egl_context.cpp
+
+    ${VISUAL_PATH}/godot/GodotGpuBridge.cpp
+    ${VISUAL_PATH}/godot/GodotRenderManager.cpp
 
     ${VISUAL_PATH}/impl/BasicDrawDevice.cpp
     ${VISUAL_PATH}/impl/BitmapBitsAlloc.cpp
@@ -75,6 +72,7 @@ set(VISUAL_HEADERS_DIR
     ${VISUAL_PATH}/
     ${VISUAL_PATH}/gl
     ${VISUAL_PATH}/ogl
+    ${VISUAL_PATH}/godot
     ${VISUAL_PATH}/impl
 )
 
@@ -84,28 +82,24 @@ target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_
 
 target_link_libraries(${PROJECT_NAME} PRIVATE libbpg)
 
+if(BUILD_GPU_BRIDGE)
+    target_sources(${PROJECT_NAME} PRIVATE
+        ${VISUAL_PATH}/ogl/astcrt.cpp
+        ${VISUAL_PATH}/ogl/imagepacker.cpp
+        ${VISUAL_PATH}/ogl/pvrtc.cpp
+        ${VISUAL_PATH}/ogl/RenderManager_ogl.cpp
+        ${VISUAL_PATH}/ogl/krkr_gl.cpp
+        ${VISUAL_PATH}/ogl/krkr_egl_context.cpp
+    )
+    target_compile_definitions(${PROJECT_NAME} PRIVATE KRKR_ENABLE_GPU_BRIDGE=1)
+    if(ANDROID)
+        target_link_libraries(${PROJECT_NAME} PRIVATE EGL GLESv2)
+    endif()
+endif()
+
 find_package(WebP CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} INTERFACE WebP::webp WebP::webpdecoder WebP::webpdemux)
 
-# ANGLE (EGL + GLES2) — provides GL context and rendering.
-# All platforms (including Android) use ANGLE for consistent EGL/GLES2.
-find_package(unofficial-angle CONFIG QUIET)
-if(unofficial-angle_FOUND)
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        unofficial::angle::libEGL
-        unofficial::angle::libGLESv2
-    )
-    target_compile_definitions(${PROJECT_NAME} PRIVATE KRKR_USE_ANGLE=1)
-    message(STATUS "ANGLE found — EGL + GLES2 libraries linked")
-else()
-    if(ANDROID)
-        # Fallback: link system EGL/GLES2 on Android if ANGLE is not available
-        target_link_libraries(${PROJECT_NAME} PRIVATE EGL GLESv2)
-        message(STATUS "ANGLE not found — Android fallback to system EGL/GLES2")
-    else()
-        message(WARNING "ANGLE not found — GL rendering may not work")
-    endif()
-endif()
 
 find_package(JXR REQUIRED)
 target_compile_definitions(${PROJECT_NAME} PRIVATE -D__ANSI__)

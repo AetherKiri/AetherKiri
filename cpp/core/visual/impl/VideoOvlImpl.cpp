@@ -595,17 +595,22 @@ void tTJSNI_VideoOverlay::WndProc(NativeEvent &ev) {
                                 }
                                 tTVPBaseTexture *buff =
                                     VideoOverlay->GetFrontBuffer();
+                                if(buff == nullptr) {
+                                    return;
+                                }
                                 if(buff == Bitmap[0]) {
                                     if(l1)
                                         l1->AssignMainImage(Bitmap[0]);
                                     if(l2)
                                         l2->AssignMainImage(Bitmap[0]);
-                                } else // 0じゃなかったら、1とみなす。
+                                } else if(buff == Bitmap[1])
                                 {
                                     if(l1)
                                         l1->AssignMainImage(Bitmap[1]);
                                     if(l2)
                                         l2->AssignMainImage(Bitmap[1]);
+                                } else {
+                                    return;
                                 }
                                 if(l1)
                                     l1->Update();

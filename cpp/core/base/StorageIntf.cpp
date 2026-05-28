@@ -49,6 +49,7 @@ static const char TVP_GPU_COMPAT_SCRIPT[] =
     "}\n"
     "try { KAGWindow.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
     "try { KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n";
+static tTJSVariant TVPStoragesArchiveUniqueKeyCompat;
 
 //---------------------------------------------------------------------------
 // global variables
@@ -254,6 +255,10 @@ tTVPStorageMediaManager::tTVPStorageMediaManager() {
     iTVPStorageMedia *filemedia = TVPCreateFileMedia();
     Register(filemedia);
     filemedia->Release();
+
+    iTVPStorageMedia *arcmedia = TVPCreateArcMedia();
+    Register(arcmedia);
+    arcmedia->Release();
 }
 
 //---------------------------------------------------------------------------
@@ -1464,12 +1469,41 @@ return TJS_S_OK;
 }
 TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ addAutoPath)
 //----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ addAutoToolsPath) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+
+    ttstr path = *param[0];
+    TVPAddAutoPath(path);
+
+    if(result)
+        result->Clear();
+
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ addAutoToolsPath)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ addArchive) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+
+    ttstr path = *param[0];
+    TVPAddAutoPath(path);
+
+    if(result)
+        result->Clear();
+
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ addArchive)
+//----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ setDefaultPath) {
     if(numparams < 1)
         return TJS_E_BADPARAMCOUNT;
 
     ttstr path = *param[0];
     TVPAddAutoPath(path);
+    TVPSetCurrentDirectory(path);
 
     if(result)
         result->Clear();
@@ -1531,6 +1565,51 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ isExistentStorage) {
     return TJS_S_OK;
 }
 TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ isExistentStorage)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ isExistentStorageNoSearchNoNormalize) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+
+    ttstr path = *param[0];
+
+    bool exists = TVPIsExistentStorageNoSearchNoNormalize(path);
+    ttstr lower = path.AsLowerCase();
+    if(exists && lower.GetLen() >= 4 &&
+       !TJS_strcmp(lower.c_str() + lower.GetLen() - 4, TJS_W(".xp3"))) {
+        // PackinOne startup scripts use this method to decide whether to parse
+        // a proprietary archive index. Native XP3 auto-mount already populated
+        // the search table, so skip that plugin-only branch.
+        exists = false;
+    }
+
+    if(result)
+        *result = (tjs_int)exists;
+
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ isExistentStorageNoSearchNoNormalize)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_PROP_DECL(archiveUniqueKey) {
+    TJS_BEGIN_NATIVE_PROP_GETTER {
+        if(TVPStoragesArchiveUniqueKeyCompat.Type() == tvtVoid) {
+            iTJSDispatch2 *array = TJSCreateArrayObject();
+            if(!array)
+                return TJS_E_FAIL;
+            TVPStoragesArchiveUniqueKeyCompat = tTJSVariant(array, array);
+            array->Release();
+        }
+        *result = TVPStoragesArchiveUniqueKeyCompat;
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_GETTER
+
+    TJS_BEGIN_NATIVE_PROP_SETTER {
+        TVPStoragesArchiveUniqueKeyCompat = *param;
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_PROP_SETTER
+}
+TJS_END_NATIVE_STATIC_PROP_DECL(archiveUniqueKey)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ extractStorageExt) {
     if(numparams < 1)

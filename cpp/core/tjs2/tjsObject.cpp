@@ -11,6 +11,8 @@
 #include "tjsCommHead.h"
 
 #include "tjsObject.h"
+#include "tjsArray.h"
+#include "tjsDictionary.h"
 #include "tjsUtils.h"
 #include "tjsNative.h"
 #include "../plugin/PluginCallTracer.hpp"
@@ -55,6 +57,188 @@ namespace TJS {
         *result = tTJSVariant(method, method);
         method->Release();
         return true;
+    }
+
+    static bool TJSCompatIsStartupNoOpFunction(const tjs_char *membername) {
+        return membername &&
+               (!TJS_strcmp(membername, TJS_W("bootStrap")) ||
+                !TJS_strcmp(membername, TJS_W("commitSavedata")) ||
+                !TJS_strcmp(membername, TJS_W("addDllDirectory")) ||
+                !TJS_strcmp(membername, TJS_W("loadResolutionInfo")) ||
+                !TJS_strcmp(membername, TJS_W("parseArchiveIndex")) ||
+                !TJS_strcmp(membername, TJS_W("setDefaultDllDirectories")) ||
+                !TJS_strcmp(membername, TJS_W("pathHash")));
+    }
+
+    static tjs_error TJSCompatStartupNoOpFunction(tTJSVariant *result,
+                                                  tjs_int,
+                                                  tTJSVariant **,
+                                                  iTJSDispatch2 *) {
+        if(result)
+            *result = static_cast<tjs_int>(1);
+        return TJS_S_OK;
+    }
+
+    static iTJSDispatch2 *TJSCompatCreateCompoundStorageMediaObject() {
+        iTJSDispatch2 *object = TJSCreateDictionaryObject();
+        if(!object)
+            return nullptr;
+
+        const tjs_char *const methods[] = {
+            TJS_W("addArchive"), TJS_W("addStorage"),
+            TJS_W("addAutoToolsPath"), TJS_W("setCurrentDirectory"),
+            TJS_W("register"), TJS_W("unregister"),
+            TJS_W("parseArchiveIndex"),
+            TJS_W("getLocallyAccessibleName")
+        };
+        for(const tjs_char *method_name : methods) {
+            iTJSDispatch2 *method =
+                TJSCreateNativeClassMethod(TJSCompatStartupNoOpFunction);
+            if(method) {
+                tTJSVariant value(method, method);
+                object->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                method_name, nullptr, &value, object);
+                method->Release();
+            }
+        }
+
+        tTJSVariant archive_key(TJS_W("AetherKiri.CompoundStorageMedia"));
+        object->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                        TJS_W("archiveUniqueKey"), nullptr, &archive_key,
+                        object);
+
+        return object;
+    }
+
+    static bool TJSCompatCreateCompoundStorageMediaVariant(tTJSVariant *result) {
+        if(!result)
+            return true;
+
+        iTJSDispatch2 *object = TJSCompatCreateCompoundStorageMediaObject();
+        if(!object)
+            return false;
+
+        *result = tTJSVariant(object, object);
+        object->Release();
+        return true;
+    }
+
+    static tjs_error TJSCompatCompoundStorageMediaFactory(tTJSVariant *result,
+                                                          tjs_int,
+                                                          tTJSVariant **,
+                                                          iTJSDispatch2 *) {
+        return TJSCompatCreateCompoundStorageMediaVariant(result) ? TJS_S_OK
+                                                                 : TJS_E_FAIL;
+    }
+
+    class TJSCompatCompoundStorageMediaClass : public tTJSDispatch {
+    public:
+        tjs_error FuncCall(tjs_uint32, const tjs_char *membername,
+                           tjs_uint32 *, tTJSVariant *result, tjs_int,
+                           tTJSVariant **, iTJSDispatch2 *) override {
+            if(membername)
+                return TJS_E_MEMBERNOTFOUND;
+            return TJSCompatCreateCompoundStorageMediaVariant(result) ? TJS_S_OK
+                                                                     : TJS_E_FAIL;
+        }
+
+        tjs_error CreateNew(tjs_uint32, const tjs_char *membername,
+                            tjs_uint32 *, iTJSDispatch2 **result, tjs_int,
+                            tTJSVariant **, iTJSDispatch2 *) override {
+            if(membername)
+                return TJS_E_MEMBERNOTFOUND;
+            if(!result)
+                return TJS_E_INVALIDPARAM;
+
+            tTJSVariant variant;
+            if(!TJSCompatCreateCompoundStorageMediaVariant(&variant))
+                return TJS_E_FAIL;
+
+            tTJSVariantClosure closure = variant.AsObjectClosure();
+            *result = closure.Object;
+            if(*result)
+                (*result)->AddRef();
+            closure.Release();
+            return *result ? TJS_S_OK : TJS_E_FAIL;
+        }
+    };
+
+    static bool TJSCompatResolveStartupFallback(const tjs_char *membername,
+                                                tTJSVariant *result) {
+        if(!membername || !result)
+            return false;
+
+        if(TJSCompatIsStartupNoOpFunction(membername)) {
+            iTJSDispatch2 *method =
+                TJSCreateNativeClassMethod(TJSCompatStartupNoOpFunction);
+            if(!method)
+                return false;
+            *result = tTJSVariant(method, method);
+            method->Release();
+            return true;
+        }
+
+        if(!TJS_strcmp(membername, TJS_W("ShortCutInitialPadKeyMap")) ||
+           !TJS_strcmp(membername, TJS_W("ShortCutInitialGamePadKeyMap"))) {
+            iTJSDispatch2 *array = TJSCreateArrayObject();
+            if(!array)
+                return false;
+            *result = tTJSVariant(array, array);
+            array->Release();
+            return true;
+        }
+
+        if(!TJS_strcmp(membername, TJS_W("CompoundStorageMedia"))) {
+            iTJSDispatch2 *klass = new TJSCompatCompoundStorageMediaClass();
+            *result = tTJSVariant(klass, klass);
+            klass->Release();
+            return true;
+        }
+
+        if(!TJS_strcmp(membername, TJS_W("archiveUniqueKey"))) {
+            *result = TJS_W("AetherKiri.CompoundStorageMedia");
+            return true;
+        }
+
+        if(!TJS_strcmp(membername, TJS_W("kirikiriz")) ||
+           !TJS_strcmp(membername, TJS_W("inXP3archivePacked"))) {
+            *result = static_cast<tjs_int>(1);
+            return true;
+        }
+
+        if(!TJS_strcmp(membername, TJS_W("llsDllLoadDir"))) {
+            *result = static_cast<tjs_int>(0x00000100);
+            return true;
+        }
+
+        if(!TJS_strcmp(membername, TJS_W("llsApplicationDir"))) {
+            *result = static_cast<tjs_int>(0x00000200);
+            return true;
+        }
+
+        if(!TJS_strcmp(membername, TJS_W("llsUserDirs"))) {
+            *result = static_cast<tjs_int>(0x00000400);
+            return true;
+        }
+
+        if(!TJS_strcmp(membername, TJS_W("llsSystem32"))) {
+            *result = static_cast<tjs_int>(0x00000800);
+            return true;
+        }
+
+        if(!TJS_strcmp(membername, TJS_W("llsDefaultDirs"))) {
+            *result = static_cast<tjs_int>(0x00001000);
+            return true;
+        }
+
+        if(!TJS_strcmp(membername, TJS_W("kirikiriz_generic")) ||
+           !TJS_strcmp(membername, TJS_W("debugWindowEnabled")) ||
+           !TJS_strcmp(membername, TJS_W("developMode"))) {
+            *result = static_cast<tjs_int>(0);
+            return true;
+        }
+
+        return false;
     }
 
     static const tjs_char *TJSCompatGlobalFallbackName(const tjs_char *membername) {
@@ -1321,6 +1505,10 @@ namespace TJS {
             if(membername && !TJS_strcmp(membername, TJS_W("touchImage"))) {
                 return TJSCompatTouchImage(result, numparams, param, objthis);
             }
+            if(TJSCompatIsStartupNoOpFunction(membername)) {
+                return TJSCompatStartupNoOpFunction(result, numparams, param,
+                                                   objthis);
+            }
             if(CallMissing && TJS::TVPIsMockEnabled()) {
                 // call 'missing' method
                 tTJSVariant value_func;
@@ -1333,8 +1521,9 @@ namespace TJS {
             return TJS_E_MEMBERNOTFOUND; // member not found
         }
 
-        return TJSDefaultFuncCall(flag, GetValue(data), result, numparams,
-                                  param, objthis);
+        tjs_error hr = TJSDefaultFuncCall(flag, GetValue(data), result,
+                                          numparams, param, objthis);
+        return hr;
     }
 
     //---------------------------------------------------------------------------
@@ -1407,6 +1596,9 @@ namespace TJS {
                     return TJSDefaultPropGet(flag, value, result, objthis);
             }
             if(TJSCompatResolveTouchImage(membername, result)) {
+                return TJS_S_OK;
+            }
+            if(TJSCompatResolveStartupFallback(membername, result)) {
                 return TJS_S_OK;
             }
             if(TJSCompatResolveGlobalFallback(membername, result)) {
@@ -1806,6 +1998,18 @@ namespace TJS {
         tTJSSymbolData *data = Find(membername, hint);
 
         if(!data) {
+            if(membername &&
+               !TJS_strcmp(membername, TJS_W("CompoundStorageMedia"))) {
+                iTJSDispatch2 *object =
+                    TJSCompatCreateCompoundStorageMediaObject();
+                if(!object)
+                    return TJS_E_FAIL;
+                if(result)
+                    *result = object;
+                else
+                    object->Release();
+                return TJS_S_OK;
+            }
             if(CallMissing && TJS::TVPIsMockEnabled()) {
                 // call 'missing' method
                 tTJSVariant value;

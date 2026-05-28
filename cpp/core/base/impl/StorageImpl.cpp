@@ -416,6 +416,10 @@ void tTVPFileMedia::GetLocallyAccessibleName(ttstr &name) {
     if(!TJS_strncmp(ptr, TJS_W("./"), 2)) {
         ptr += 2; // skip "./"
         newname.Clear();
+        if(!*ptr) {
+            name = TJS_W("/");
+            return;
+        }
     }
 #if defined(__APPLE__) && TARGET_OS_IPHONE
     {
@@ -496,6 +500,22 @@ void tTVPFileMedia::GetLocalName(ttstr &name) {
 
 //---------------------------------------------------------------------------
 iTVPStorageMedia *TVPCreateFileMedia() { return new tTVPFileMedia; }
+//---------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------
+// tTVPArcMedia
+//---------------------------------------------------------------------------
+// Some KiriKiri-Z games using PackinOne register a CompoundStorageMedia named
+// "arc". The real plugin builds a compound virtual filesystem; for the Godot
+// host we keep the media available and route local accesses through the normal
+// file media so startup scripts can resolve paths without CPU-side packaging
+// assumptions.
+class tTVPArcMedia : public tTVPFileMedia {
+public:
+    void GetName(ttstr &name) override { name = TJS_W("arc"); }
+};
+
+iTVPStorageMedia *TVPCreateArcMedia() { return new tTVPArcMedia; }
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
@@ -1487,7 +1507,7 @@ void TVPAutoMountSiblingXP3Archives() {
     if(TVPProjectDir.GetLastChar() != TJS_W('/'))
         return;
 
-    // In modern Kirikiri2-Next architecture (e.g., Flutter frontend), games are often launched 
+    // In modern Kirikiri2-Next architecture (e.g., Godot frontend), games are often launched 
     // by pointing directly to a directory. When TVPProjectDir ends with '/', it means we are 
     // looking inside the project folder itself, so we should search for sibling XP3 archives 
     // *inside* this directory, not its parent.

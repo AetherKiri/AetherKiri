@@ -19,6 +19,7 @@
 #include "tjsUtils.h"
 #include "tjsBinarySerializer.h"
 #include "tjsOctPack.h"
+#include "../base/ScriptMgnIntf.h"
 
 static std::atomic<int64_t> sTJSArrayCreateCount{0};
 static std::atomic<int64_t> sTJSArrayDestroyCount{0};
@@ -1598,6 +1599,14 @@ tjs_error tTJSArrayObject::FuncCallByNum(tjs_uint32 flag, tjs_int num,
 tjs_error tTJSArrayObject::PropGet(tjs_uint32 flag, const tjs_char *membername,
                                    tjs_uint32 *hint, tTJSVariant *result,
                                    iTJSDispatch2 *objthis) {
+    if(membername && !TJS_strcmp(membername, TJS_W("Exception"))) {
+        tTJS *engine = TVPGetScriptEngine();
+        iTJSDispatch2 *global =
+            engine ? engine->GetGlobalNoAddRef() : nullptr;
+        if(global)
+            return global->PropGet(flag, membername, hint, result, global);
+    }
+
     tjs_int idx;
     if(membername && IsNumber(membername, idx))
         return PropGetByNum(flag, idx, result, objthis);

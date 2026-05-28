@@ -48,10 +48,10 @@ show_help() {
     echo "  ./build.sh                          # Interactive platform selection"
     echo ""
     echo "Platforms:"
-    echo "  android    Build Android APK (Flutter + native engine)"
-    echo "  ios        Build iOS app (C++ static lib + Flutter)"
-    echo "  macos      Build macOS app (C++ dylib + Flutter)"
-    echo "  linux      Build Linux x64 app (C++ .so + Flutter)"
+    echo "  android    Build Android app (future Godot target)"
+    echo "  ios        Build iOS Godot app/export project"
+    echo "  macos      Build macOS Godot app"
+    echo "  linux      Build Linux app (future Godot target)"
     echo ""
     echo "Options:"
     echo "  debug|release       Build type (default: debug)"
@@ -161,18 +161,18 @@ if [[ "$CLEAN" == true ]]; then
     echo -e "${CYAN}Cleaning build artifacts for $PLATFORM...${NC}"
     case "$PLATFORM" in
         android)
-            rm -rf "$SCRIPT_DIR/apps/flutter_app/build/app"
-            rm -rf "$SCRIPT_DIR/apps/flutter_app/build/.cxx"
+            rm -rf "$SCRIPT_DIR/out/android/$BUILD_TYPE"
+            rm -rf "$SCRIPT_DIR/out/godot/android/$BUILD_TYPE"
             echo -e "${GREEN}[INFO]${NC} Android build artifacts cleaned."
             ;;
         ios)
             rm -rf "$SCRIPT_DIR/out/ios/$BUILD_TYPE"
-            rm -rf "$SCRIPT_DIR/apps/flutter_app/build/ios"
+            rm -rf "$SCRIPT_DIR/out/godot/ios/$BUILD_TYPE"
             echo -e "${GREEN}[INFO]${NC} iOS build artifacts cleaned."
             ;;
         macos)
             rm -rf "$SCRIPT_DIR/out/macos/$BUILD_TYPE"
-            rm -rf "$SCRIPT_DIR/apps/flutter_app/build/macos"
+            rm -rf "$SCRIPT_DIR/out/godot/macos/$BUILD_TYPE"
             echo -e "${GREEN}[INFO]${NC} macOS build artifacts cleaned."
             ;;
     esac

@@ -1,0 +1,13 @@
+diff --git a/cmake/macos.cmake b/cmake/macos.cmake
+index bdd3516d..04b89f01 100644
+--- a/cmake/macos.cmake
++++ b/cmake/macos.cmake
+@@ -13,7 +13,7 @@ This file contains functions for options and configuration for targeting the
+ ]=======================================================================]
+ 
+ # Find Requirements
+-IF(APPLE)
++IF(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+     set( CMAKE_OSX_SYSROOT $ENV{SDKROOT} )
+     find_library( COCOA_LIBRARY REQUIRED
+         NAMES Cocoa

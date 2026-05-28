@@ -76,7 +76,7 @@ public:
 
     /**
      * Start the engine from the given game path (standalone mode).
-     * In host mode (Flutter), engine_open_game calls Application::StartApplication
+     * In host mode (Application host), engine_open_game calls Application::StartApplication
      * directly, so this may not be used.
      */
     bool StartupFrom(const std::string& path);

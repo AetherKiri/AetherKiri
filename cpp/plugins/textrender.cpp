@@ -13,7 +13,9 @@
 #include "RectItf.h"
 #include "tvpfontstruc.h"
 #include "WindowIntf.h"
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
 #include "krkr_egl_context.h"
+#endif
 
 #include <spdlog/spdlog.h>
 
@@ -679,9 +681,10 @@ double TextRenderBase::getEffectiveFontScale() const {
     if (srcW <= 0 || srcH <= 0) return scale;
   }
 
-  auto &egl = krkr::GetEngineEGLContext();
   uint32_t fbW = 0;
   uint32_t fbH = 0;
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
+  auto &egl = krkr::GetEngineEGLContext();
   if (egl.HasIOSurface()) {
     fbW = egl.GetIOSurfaceWidth();
     fbH = egl.GetIOSurfaceHeight();
@@ -692,6 +695,7 @@ double TextRenderBase::getEffectiveFontScale() const {
     fbW = egl.GetWidth();
     fbH = egl.GetHeight();
   }
+#endif
 
   if (fbW == 0 || fbH == 0) return scale;
 
