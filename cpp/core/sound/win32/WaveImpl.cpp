@@ -1515,11 +1515,11 @@ tTVPWaveSoundBufferThread::tTVPWaveSoundBufferThread() :
 //---------------------------------------------------------------------------
 tTVPWaveSoundBufferThread::~tTVPWaveSoundBufferThread() {
     SetPriority(ttpNormal);
+    Terminate();
     Resume();
     Event.Set();
     WaitFor();
     EventQueue.Deallocate();
-    Terminate();
 }
 
 //---------------------------------------------------------------------------
@@ -1703,6 +1703,29 @@ static void TVPShutdownWaveSoundBuffers() {
 static tTVPAtExit
     TVPShutdownWaveSoundBuffersAtExit(TVP_ATEXIT_PRI_PREPARE,
                                       TVPShutdownWaveSoundBuffers);
+
+void TVPShutdownSoundForHost() {
+    TVPPrimaryBufferPlayingByProgram = false;
+    TVPPrimarySoundBufferPlaying = false;
+    if(TVPWaveSoundBufferThread)
+        delete TVPWaveSoundBufferThread, TVPWaveSoundBufferThread = nullptr;
+    std::vector<tTJSNI_WaveSoundBuffer *> buffers;
+    {
+        tTJSCriticalSectionHolder holder(TVPWaveSoundBufferVectorCS);
+        buffers = TVPWaveSoundBufferVector;
+    }
+    for(auto *buffer : buffers) {
+        if(buffer) {
+            buffer->FreeDirectSoundBuffer();
+        }
+    }
+    for(auto *buffer : buffers) {
+        if(buffer) {
+            buffer->StopDecodeThreadForHostShutdown();
+        }
+    }
+    TVPUninitDirectSound();
+}
 
 //---------------------------------------------------------------------------
 static void TVPEnsureWaveSoundBufferWorking() {
@@ -1948,6 +1971,13 @@ tTJSNI_WaveSoundBuffer::tTJSNI_WaveSoundBuffer() {
     L2BufferEnded = false;
     LastCheckedDecodePos = -1;
     LastCheckedTick = 0;
+}
+
+void tTJSNI_WaveSoundBuffer::StopDecodeThreadForHostShutdown() {
+    if(Thread) {
+        delete Thread;
+        Thread = nullptr;
+    }
 }
 
 //---------------------------------------------------------------------------

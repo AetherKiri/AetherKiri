@@ -18,7 +18,9 @@
 #include "LayerManager.h"
 #include "WindowIntf.h"
 #include "DebugIntf.h"
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
 #include "krkr_egl_context.h"
+#endif
 
 //---------------------------------------------------------------------------
 tTVPDrawDevice::tTVPDrawDevice() {
@@ -82,10 +84,9 @@ bool tTVPDrawDevice::TransformToPrimaryLayerManager(tjs_int &x, tjs_int &y) {
             src_w = WinWidth;
             src_h = WinHeight;
         } else {
-            // Fallback: query EGL surface size directly (always up-to-date)
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
             auto& egl = krkr::GetEngineEGLContext();
             if(egl.IsValid()) {
-                // Use IOSurface dimensions if attached, else Pbuffer dimensions
                 if(egl.HasIOSurface()) {
                     src_w = static_cast<tjs_int>(egl.GetIOSurfaceWidth());
                     src_h = static_cast<tjs_int>(egl.GetIOSurfaceHeight());
@@ -94,6 +95,7 @@ bool tTVPDrawDevice::TransformToPrimaryLayerManager(tjs_int &x, tjs_int &y) {
                     src_h = static_cast<tjs_int>(egl.GetHeight());
                 }
             }
+#endif
             if(src_w <= 0 || src_h <= 0) {
                 src_w = pl_w;
                 src_h = pl_h;
@@ -142,6 +144,7 @@ bool tTVPDrawDevice::TransformFromPrimaryLayerManager(tjs_int &x, tjs_int &y) {
             dst_w = WinWidth;
             dst_h = WinHeight;
         } else {
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
             auto& egl = krkr::GetEngineEGLContext();
             if(egl.IsValid()) {
                 if(egl.HasIOSurface()) {
@@ -152,6 +155,7 @@ bool tTVPDrawDevice::TransformFromPrimaryLayerManager(tjs_int &x, tjs_int &y) {
                     dst_h = static_cast<tjs_int>(egl.GetHeight());
                 }
             }
+#endif
             if(dst_w <= 0 || dst_h <= 0) {
                 dst_w = pl_w;
                 dst_h = pl_h;
@@ -201,6 +205,7 @@ bool tTVPDrawDevice::TransformToPrimaryLayerManager(tjs_real &x, tjs_real &y) {
             src_w = static_cast<tjs_real>(WinWidth);
             src_h = static_cast<tjs_real>(WinHeight);
         } else {
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
             auto& egl = krkr::GetEngineEGLContext();
             if(egl.IsValid()) {
                 if(egl.HasIOSurface()) {
@@ -211,6 +216,7 @@ bool tTVPDrawDevice::TransformToPrimaryLayerManager(tjs_real &x, tjs_real &y) {
                     src_h = static_cast<tjs_real>(egl.GetHeight());
                 }
             }
+#endif
             if(src_w <= 0.0 || src_h <= 0.0) {
                 src_w = static_cast<tjs_real>(pl_w);
                 src_h = static_cast<tjs_real>(pl_h);

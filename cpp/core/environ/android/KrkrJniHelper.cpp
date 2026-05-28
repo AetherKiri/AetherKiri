@@ -23,7 +23,7 @@ static std::mutex g_jvm_mutex;
 
 namespace {
 
-// Try to get an application context even before Flutter plugin JNI has run.
+// Try to get an application context even before host plugin JNI has run.
 jobject ResolveApplicationContext(JNIEnv* env) {
     if (!env) return nullptr;
     jobject appContextGlobal = krkr_GetApplicationContext();

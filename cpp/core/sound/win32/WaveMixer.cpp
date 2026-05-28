@@ -259,6 +259,7 @@ public:
         _spec.size = 4;
         _frame_size = 4;
     }
+    virtual ~iTVPAudioRenderer() = default;
 
     void InitMixer() {
         if(SDL_Init(SDL_INIT_AUDIO) < 0) { // for format converter
@@ -854,7 +855,10 @@ void TVPInitDirectSound(int freq) {
 }
 
 void TVPUninitDirectSound() {
-    // nothing to do
+    delete TVPAudioRenderer;
+    TVPAudioRenderer = nullptr;
+    TVPALContext = nullptr;
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
 iTVPSoundBuffer *TVPCreateSoundBuffer(tTVPWaveFormat &fmt, int bufcount) {

@@ -444,7 +444,7 @@ void TVPExitApplication(int code) {
     TVPTerminated = true;
     TVPTerminateCode = code;
     // iOS: Don't call exit(). The app lifecycle is managed by the system.
-    // Let Flutter handle the shutdown gracefully.
+    // Let Application host handle the shutdown gracefully.
 }
 
 void TVPForceSwapBuffer() { /* pass */ }

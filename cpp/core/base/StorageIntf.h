@@ -174,6 +174,9 @@ void TVPPreNormalizeStorageName(ttstr &name);
 
 iTVPStorageMedia *TVPCreateFileMedia();
 // create basic default "file:" storage media
+
+iTVPStorageMedia *TVPCreateArcMedia();
+// create PackinOne-compatible "arc:" storage media backed by local files.
 // /*
 // extern void TVPPreNormalizeStorageName(ttstr &name);
 //

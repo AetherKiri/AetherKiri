@@ -1,0 +1,9 @@
+[configuration]
+entry_symbol = "aether_kiri_library_init"
+compatibility_minimum = "4.6"
+
+[libraries]
+macos.debug = "res://bin/macos/debug/libaether_kiri_godot.dylib"
+macos.release = "res://bin/macos/release/libaether_kiri_godot.dylib"
+ios.debug = "res://bin/ios/debug/libaether_kiri_godot.a"
+ios.release = "res://bin/ios/release/libaether_kiri_godot.a"

@@ -56,6 +56,7 @@ extern void TVPSetWaveSoundBufferUse3DMode(bool b);
 extern bool TVPGetWaveSoundBufferUse3DMode();
 
 extern void TVPWaveSoundBufferCommitSettings();
+extern void TVPShutdownSoundForHost();
 
 #if 0
 extern tjs_int TVPVolumeToDSAttenuate(tjs_int volume);
@@ -130,6 +131,7 @@ public:
         DestroySoundBuffer();
         CanDeliverEvents = b;
     }
+    void StopDecodeThreadForHostShutdown();
 
     //-- playing stuff
     //----------------------------------------------------

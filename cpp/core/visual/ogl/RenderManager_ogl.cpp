@@ -110,7 +110,7 @@ static void TVPInitGLExtensionInfo() {
         return;
     TVPGLExtensionInfoInited = true;
     const char *ext_str = (const char *)glGetString(GL_EXTENSIONS);
-    if(!ext_str) return; // No GL context (e.g. Flutter mode without EGL surface)
+    if(!ext_str) return; // No GL context (e.g. embedded host mode without EGL surface)
     std::string gl_extensions = ext_str;
     const char *p = gl_extensions.c_str();
     for(char &c : gl_extensions) {
@@ -519,7 +519,7 @@ static void _RestoreGLStatues() {
     }
     krkr::gl::BlendResetToCache();
     TVPSetRenderTarget(0);
-    // viewport will be set by the host rendering system (Flutter)
+    // viewport will be set by the host rendering system (Application host)
 }
 
 static tjs_uint8 *TVPShrinkXYBy2(tjs_uint *dpitch, const tjs_uint8 *src,

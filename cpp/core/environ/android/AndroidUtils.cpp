@@ -36,7 +36,7 @@ using JniMethodInfo = krkr::JniHelper::MethodInfo;
 #define KR2ActJavaPath "org/tvp/kirikiri2/KR2Activity"
 // #define KR2EntryJavaPath "org/tvp/kirikiri2/Kirikiroid2"
 
-// Declared in krkr2_android.cpp – provides the Flutter Application Context
+// Declared in krkr2_android.cpp – provides the host Application Context
 // as a fallback when KR2Activity is not available.
 extern jobject krkr_GetApplicationContext();
 
@@ -210,8 +210,8 @@ static jobject GetKR2ActInstance() {
         methodInfo.env->DeleteLocalRef(methodInfo.classID);
         return ret;
     }
-    // Fallback for Flutter mode: KR2Activity doesn't exist,
-    // use the Application Context stored by the Flutter plugin.
+    // Fallback for embedded host mode: KR2Activity doesn't exist,
+    // use the Application Context stored by the host plugin.
     // Create a new local ref so callers can safely DeleteLocalRef on it.
     jobject ctx = krkr_GetApplicationContext();
     if (ctx) {
@@ -469,7 +469,7 @@ std::vector<std::string> TVPGetDriverPath() {
     if(!ret.empty())
         return ret;
 
-    // Flutter mode fallback: prefer app-scoped directories from Context APIs.
+    // embedded host mode fallback: prefer app-scoped directories from Context APIs.
     std::vector<std::string> app_paths = TVPGetAppStoragePath();
     for(const auto &p : app_paths) {
         if(!p.empty()) ret.emplace_back(p);
@@ -909,7 +909,7 @@ bool TVPCreateFolders(const ttstr &folder) {
         methodInfo.env->DeleteLocalRef(methodInfo.classID);
         return ret;
     }
-    // POSIX fallback for Flutter mode (no KR2Activity)
+    // POSIX fallback for embedded host mode (no KR2Activity)
     return _posix_mkdirs(folder.AsStdString());
 }
 
@@ -986,7 +986,7 @@ std::string TVPGetCurrentLanguage() {
         t.env->DeleteLocalRef(str);
     }
 
-    // Fallback for Flutter mode: use standard Java Locale API
+    // Fallback for embedded host mode: use standard Java Locale API
     if(ret.empty()) {
         ret = TVPGetDeviceLanguage();
     }
@@ -999,7 +999,7 @@ void TVPExitApplication(int code) {
     // Guard: only recycle textures if the render manager was already
     // initialised.  Calling TVPIsSoftwareRenderManager() when no
     // render manager exists would trigger OpenGL init (which needs a
-    // valid GL context that may not exist in Flutter mode).
+    // valid GL context that may not exist in embedded host mode).
     try {
         if(!TVPIsSoftwareRenderManager())
             iTVPTexture2D::RecycleProcess();
@@ -1013,7 +1013,7 @@ void TVPExitApplication(int code) {
         t.env->DeleteLocalRef(t.classID);
         return;
     }
-    // In Android/Flutter mode, forcing process-wide exit can race with
+    // In Android/embedded host mode, forcing process-wide exit can race with
     // worker threads and trigger FORTIFY mutex checks.
     (void)code;
 }
@@ -1052,7 +1052,7 @@ bool TVPDeleteFile(const std::string &filename) {
         methodInfo.env->DeleteLocalRef(methodInfo.classID);
         return ret;
     }
-    // POSIX fallback for Flutter mode
+    // POSIX fallback for embedded host mode
     return remove(filename.c_str()) == 0;
 }
 
@@ -1070,7 +1070,7 @@ bool TVPRenameFile(const std::string &from, const std::string &to) {
         methodInfo.env->DeleteLocalRef(methodInfo.classID);
         return ret;
     }
-    // POSIX fallback for Flutter mode
+    // POSIX fallback for embedded host mode
     return rename(from.c_str(), to.c_str()) == 0;
 }
 

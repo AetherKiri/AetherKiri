@@ -1,347 +1,174 @@
 #!/usr/bin/env bash
-#
-# build_ios.sh — One-step build script for krkr2 iOS (Flutter)
-#
-# Usage:
-#   ./build_ios.sh [debug|release]
-#
-# Output: Flutter iOS .app (unsigned, for development/archive)
-#
-# This script will:
-#   1. Build the C++ engine static library (libengine_api.a) via CMake/Ninja
-#   2. Copy the static library to the Flutter plugin's Libs directory
-#   3. Build the Flutter iOS application
-#
-
 set -euo pipefail
 
-# ============================================================
-# Configuration
-# ============================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BUILD_TYPE="debug"
 SIMULATOR=false
-
+SIMULATOR_ARCH="${IOS_SIMULATOR_ARCH:-x86_64}"
 for arg in "$@"; do
     case "$arg" in
-        debug|release|Debug|Release)
-            BUILD_TYPE="$arg"
-            ;;
-        --simulator)
-            SIMULATOR=true
-            ;;
-        *)
-            echo "[WARN] Unknown iOS build argument ignored: $arg"
-            ;;
+        debug|release|Debug|Release) BUILD_TYPE="$arg" ;;
+        --simulator) SIMULATOR=true ;;
+        --simulator-arch=*) SIMULATOR_ARCH="${arg#*=}" ;;
+        *) echo "[WARN] Unknown iOS build argument ignored: $arg" ;;
     esac
 done
 
 BUILD_TYPE_LOWER="$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')"
-
-if [[ "$BUILD_TYPE_LOWER" != "debug" && "$BUILD_TYPE_LOWER" != "release" ]]; then
-    echo "Error: Invalid build type '$BUILD_TYPE'. Use 'debug' or 'release'."
-    exit 1
-fi
-
-# Capitalize for CMake preset names
 BUILD_TYPE_CAP="$(echo "${BUILD_TYPE_LOWER:0:1}" | tr '[:lower:]' '[:upper:]')${BUILD_TYPE_LOWER:1}"
 
 if [[ "$SIMULATOR" == true ]]; then
-    if [[ "$BUILD_TYPE_LOWER" != "debug" ]]; then
-        echo "Error: iOS simulator builds are only configured for debug."
+    if [[ "$SIMULATOR_ARCH" == "x86_64" || "$SIMULATOR_ARCH" == "x64" ]]; then
+        SIMULATOR_ARCH="x86_64"
+        CMAKE_CONFIG_PRESET="iOS Simulator x64 Debug Config"
+        CMAKE_BUILD_PRESET="iOS Simulator x64 Debug Build"
+        CMAKE_BUILD_DIR="$PROJECT_ROOT/out/ios-simulator-x64/debug"
+        GODOT_TRIPLET_DIR="ios-simulator-x64/debug"
+        VCPKG_TRIPLET_DIR="x64-ios-simulator"
+    elif [[ "$SIMULATOR_ARCH" == "arm64" ]]; then
+        CMAKE_CONFIG_PRESET="iOS Simulator Debug Config"
+        CMAKE_BUILD_PRESET="iOS Simulator Debug Build"
+        CMAKE_BUILD_DIR="$PROJECT_ROOT/out/ios-simulator/debug"
+        GODOT_TRIPLET_DIR="ios-simulator/debug"
+        VCPKG_TRIPLET_DIR="arm64-ios-simulator"
+    else
+        echo "Error: Invalid simulator arch '$SIMULATOR_ARCH'. Use x86_64 or arm64." >&2
         exit 1
     fi
-    CMAKE_CONFIG_PRESET="iOS Simulator Debug Config"
-    CMAKE_BUILD_PRESET="iOS Simulator Debug Build"
-    CMAKE_BUILD_DIR="$PROJECT_ROOT/out/ios-simulator/debug"
-    VCPKG_TRIPLET="arm64-ios-simulator"
 else
     CMAKE_CONFIG_PRESET="iOS ${BUILD_TYPE_CAP} Config"
     CMAKE_BUILD_PRESET="iOS ${BUILD_TYPE_CAP} Build"
     CMAKE_BUILD_DIR="$PROJECT_ROOT/out/ios/$BUILD_TYPE_LOWER"
-    VCPKG_TRIPLET="arm64-ios"
+    GODOT_TRIPLET_DIR="ios/$BUILD_TYPE_LOWER"
+    VCPKG_TRIPLET_DIR="arm64-ios"
 fi
 
-if [[ -d "$PROJECT_ROOT/.devtools/flutter" ]]; then
-    FLUTTER_SDK="$PROJECT_ROOT/.devtools/flutter"
-    FLUTTER_BIN="$FLUTTER_SDK/bin/flutter"
-elif command -v flutter >/dev/null 2>&1; then
-    FLUTTER_BIN="$(command -v flutter)"
-    if command -v realpath >/dev/null 2>&1; then
-        RESOLVED_BIN="$(realpath "$FLUTTER_BIN")"
-    elif command -v python3 >/dev/null 2>&1; then
-        RESOLVED_BIN="$(python3 -c "import os, sys; print(os.path.realpath(sys.argv[1]))" "$FLUTTER_BIN")"
-    else
-        RESOLVED_BIN="$FLUTTER_BIN"
-    fi
-    FLUTTER_SDK="$(dirname "$(dirname "$RESOLVED_BIN")")"
-else
-    echo "Error: Flutter SDK not found in .devtools and not in PATH."
-    exit 1
-fi
-
-FLUTTER_APP_DIR="$PROJECT_ROOT/apps/flutter_app"
-
-if [[ -d "$PROJECT_ROOT/.devtools/vcpkg/.git" ]]; then
-    VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
-elif [[ -n "${VCPKG_ROOT:-}" && -f "$VCPKG_ROOT/.vcpkg-root" ]]; then
-    # Keep the environment VCPKG_ROOT if set
-    :
-else
-    echo "[INFO] vcpkg not found. Automatically setting up vcpkg in .devtools/vcpkg..."
-    mkdir -p "$PROJECT_ROOT/.devtools"
-    git clone https://github.com/microsoft/vcpkg.git "$PROJECT_ROOT/.devtools/vcpkg"
-    (cd "$PROJECT_ROOT/.devtools/vcpkg" && ./bootstrap-vcpkg.sh -disableMetrics)
-    VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
-fi
-
+GODOT_BIN="${GODOT_BIN:-/Applications/Godot.app/Contents/MacOS/Godot}"
+GODOT_EXPORT_TEMPLATE="${GODOT_EXPORT_TEMPLATE:-$HOME/Library/Application Support/Godot/export_templates/4.6.3.stable/ios.zip}"
+GODOT_APP_DIR="$PROJECT_ROOT/apps/godot_app"
+GODOT_BIN_DIR="$GODOT_APP_DIR/bin/$GODOT_TRIPLET_DIR"
 PARALLEL_JOBS="${JOBS:-8}"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+if [[ -d "$PROJECT_ROOT/.devtools/vcpkg/.git" ]]; then
+    export VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
+elif [[ -z "${VCPKG_ROOT:-}" ]]; then
+    echo "Error: VCPKG_ROOT is not set and .devtools/vcpkg is missing." >&2
+    exit 1
+fi
 
-# ============================================================
-# Helper functions
-# ============================================================
-log_step() {
-    echo ""
-    echo -e "${CYAN}========================================${NC}"
-    echo -e "${CYAN}  $1${NC}"
-    echo -e "${CYAN}========================================${NC}"
+command -v cmake >/dev/null
+command -v ninja >/dev/null
+
+combine_ios_static_extension() {
+    local output="$1"
+    local triplet="$2"
+    local vcpkg_lib_dir="$CMAKE_BUILD_DIR/vcpkg_installed/$triplet/lib"
+    local godot_cpp_lib="$vcpkg_lib_dir/libgodot-cpp.ios.template_release.arm64.a"
+    local libs=(
+        "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a"
+        "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a"
+        "$CMAKE_BUILD_DIR/cpp/core/base/libcore_base_module.a"
+        "$CMAKE_BUILD_DIR/cpp/core/environ/libcore_environ_module.a"
+        "$CMAKE_BUILD_DIR/cpp/core/extension/libcore_extension_module.a"
+        "$CMAKE_BUILD_DIR/cpp/core/movie/libcore_movie_module.a"
+        "$CMAKE_BUILD_DIR/cpp/core/plugin/libcore_plugin_module.a"
+        "$CMAKE_BUILD_DIR/cpp/core/sound/libcore_sound_module.a"
+        "$CMAKE_BUILD_DIR/cpp/core/tjs2/libtjs2.a"
+        "$CMAKE_BUILD_DIR/cpp/core/utils/libcore_utils_module.a"
+        "$CMAKE_BUILD_DIR/cpp/core/visual/libcore_visual_module.a"
+        "$CMAKE_BUILD_DIR/cpp/core/visual/simd/libtvpgl_simd.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/libkrkr2plugin.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/kagparserex/libkagparserex.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/layerex_draw/liblayerExDraw.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/motionplayer/libmotionplayer.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/psbfile/libpsbfile.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/psdfile/libpsdfile.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/psdfile/psdparse/libpsdparse.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/libCubismFramework.a"
+        "$CMAKE_BUILD_DIR/cpp/external/libbpg/liblibbpg.a"
+    )
+
+    if [[ "$triplet" == "x64-ios-simulator" ]]; then
+        godot_cpp_lib="$vcpkg_lib_dir/libgodot-cpp.ios.template_release.x86_64.a"
+    fi
+    libs=("$godot_cpp_lib" "${libs[@]}")
+
+    while IFS= read -r lib; do
+        libs+=("$lib")
+    done < <(find "$vcpkg_lib_dir" -maxdepth 1 -name 'lib*.a' \
+        ! -name 'libgodot-cpp*.a' \
+        ! -name 'libSDL2main.a' | sort)
+
+    local existing_libs=()
+    local lib
+    for lib in "${libs[@]}"; do
+        if [[ -f "$lib" ]]; then
+            existing_libs+=("$lib")
+        else
+            echo "warning: skipping missing optional static library: $lib" >&2
+        fi
+    done
+
+    local tmp
+    tmp="$(mktemp /tmp/aetherkiri-ios-static.XXXXXX).a"
+    libtool -static -o "$tmp" "${existing_libs[@]}"
+    mv "$tmp" "$output"
 }
 
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+patch_ios_export_project() {
+    local project_file="$1/project.pbxproj"
+    local dummy_cpp="$1/AetherKiri/dummy.cpp"
+    local arch="$2"
+    local flags
+    flags='$(LD_CLASSIC_$(XCODE_VERSION_ACTUAL)) -Wl,-U,_aether_kiri_library_init -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework OpenGLES -framework Security -framework SystemConfiguration -framework MobileCoreServices'
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
+    if [[ -f "$project_file" ]]; then
+        FLAGS="$flags" perl -0pi -e 's/OTHER_LDFLAGS = "[^"]*";/"OTHER_LDFLAGS = \"" . $ENV{FLAGS} . "\";"/eg' "$project_file"
+        if [[ "$arch" == "x86_64" ]]; then
+            perl -0pi -e 's/ARCHS = "arm64";/ARCHS = "x86_64";/g' "$project_file"
+            perl -0pi -e 's/VALID_ARCHS = "arm64 x86_64";/VALID_ARCHS = "x86_64";/g' "$project_file"
+        fi
+    fi
+    if [[ "$arch" == "x86_64" && -f "$dummy_cpp" ]] && ! grep -q "__swift_FORCE_LOAD_\\$_swift_Builtin_float" "$dummy_cpp"; then
+        cat >> "$dummy_cpp" <<'EOF'
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-check_command() {
-    if ! command -v "$1" &>/dev/null; then
-        log_error "'$1' is not installed or not in PATH."
-        exit 1
+extern "C" void aether_kiri_swift_builtin_float_force_load(void) __asm("__swift_FORCE_LOAD_$_swift_Builtin_float");
+extern "C" void aether_kiri_swift_builtin_float_force_load(void) {}
+EOF
     fi
 }
 
-# ============================================================
-# Pre-flight checks
-# ============================================================
-log_step "Pre-flight checks"
-
-check_command cmake
-check_command ninja
-
-if [[ ! -x "$FLUTTER_BIN" ]]; then
-    log_error "Flutter SDK not found at: $FLUTTER_SDK"
-    log_info "Expected path: $FLUTTER_BIN"
-    exit 1
-fi
-
-if [[ ! -d "$VCPKG_ROOT" ]]; then
-    log_error "vcpkg not found at: $VCPKG_ROOT"
-    exit 1
-fi
-
-log_info "Build type:    $BUILD_TYPE_CAP"
-log_info "Simulator:     $SIMULATOR"
-log_info "Project root:  $PROJECT_ROOT"
-log_info "CMake preset:  $CMAKE_BUILD_PRESET"
-log_info "Flutter SDK:   $FLUTTER_SDK"
-log_info "Parallel jobs: $PARALLEL_JOBS"
-
-# ============================================================
-# Step 1: Build C++ engine (static library for iOS)
-# ============================================================
-log_step "Step 1/3: Building C++ engine (static library)"
-
-export VCPKG_ROOT
-
-# Configure (only if needed)
-if [[ ! -f "$CMAKE_BUILD_DIR/build.ninja" ]]; then
-    log_info "Running CMake configure..."
-    cmake --preset "$CMAKE_CONFIG_PRESET"
-else
-    log_info "Build directory already configured, skipping configure."
-fi
-
-# Build
-log_info "Building C++ engine with $PARALLEL_JOBS parallel jobs..."
+echo "==> Building native engine and Godot extension"
+cmake --preset "$CMAKE_CONFIG_PRESET" --fresh
 cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 
-# Verify the static library was built
-ENGINE_LIB="$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a"
-if [[ ! -f "$ENGINE_LIB" ]]; then
-    log_error "Engine static library not found at: $ENGINE_LIB"
-    log_error "C++ engine build may have failed."
-    exit 1
+mkdir -p "$GODOT_BIN_DIR"
+cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a" "$GODOT_BIN_DIR/" 2>/dev/null || true
+cp -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a" "$GODOT_BIN_DIR/" 2>/dev/null || true
+if [[ -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a" ]]; then
+    combine_ios_static_extension "$GODOT_BIN_DIR/libaether_kiri_godot.a" "$VCPKG_TRIPLET_DIR"
 fi
-
-log_info "Engine static library built: $ENGINE_LIB"
-
-# ============================================================
-# Step 2: Merge all static libraries and copy to Flutter plugin
-# ============================================================
-log_step "Step 2/3: Merging static libraries and copying to Flutter plugin"
-
-PLUGIN_LIBS_DIR="$PROJECT_ROOT/bridge/flutter_engine_bridge/ios/Libs"
-ACTIVE_LIBS_DIR="$PLUGIN_LIBS_DIR/$VCPKG_TRIPLET"
-mkdir -p "$PLUGIN_LIBS_DIR" "$ACTIVE_LIBS_DIR"
-
-# --- Collect project static libraries ---
-# Include project and plugin static libraries. libengine_api.a references plugin
-# anchor symbols, but the plugin archives are built as separate static libs.
-PROJECT_LIBS=()
-while IFS= read -r -d '' lib; do
-    PROJECT_LIBS+=("$lib")
-done < <(find "$CMAKE_BUILD_DIR" -name "*.a" -not -path "*/vcpkg_installed/*" -print0)
-
-# Merge project libs into libengine_project.a
-# For psdparse: only extract its unique .o files (not already in libengine_api.a)
-MERGE_TMPDIR=$(mktemp -d)
-trap "rm -rf '$MERGE_TMPDIR'" EXIT
-
-# First, merge all project libs normally
-libtool -static -o "$MERGE_TMPDIR/libengine_project_base.a" "${PROJECT_LIBS[@]}"
-
-# Build a set of .o names already in the project library
-ar t "$MERGE_TMPDIR/libengine_project_base.a" | sort -u > "$MERGE_TMPDIR/project_objs.txt"
-
-# Extract only unique .o files from psdparse (and other deep plugin sub-libs)
-PSDPARSE_UNIQUE_OBJS=()
-while IFS= read -r -d '' sublib; do
-    sublibname="$(basename "$sublib" .a)"
-    extractdir="$MERGE_TMPDIR/extract_${sublibname}"
-    mkdir -p "$extractdir"
-    (cd "$extractdir" && ar x "$sublib")
-    for obj in "$extractdir"/*.o; do
-        [[ -f "$obj" ]] || continue
-        objname="$(basename "$obj")"
-        if ! grep -qx "$objname" "$MERGE_TMPDIR/project_objs.txt"; then
-            PSDPARSE_UNIQUE_OBJS+=("$obj")
-        fi
-    done
-done < <(find "$CMAKE_BUILD_DIR/cpp/plugins" -mindepth 3 -name "*.a" -print0 2>/dev/null)
-
-if [[ ${#PSDPARSE_UNIQUE_OBJS[@]} -gt 0 ]]; then
-    log_info "  Plugin sub-lib unique .o files: ${#PSDPARSE_UNIQUE_OBJS[@]}"
-    # Merge project base + unique plugin objects
-    libtool -static -o "$ACTIVE_LIBS_DIR/libengine_project.a" \
-        "$MERGE_TMPDIR/libengine_project_base.a" "${PSDPARSE_UNIQUE_OBJS[@]}"
-else
-    cp "$MERGE_TMPDIR/libengine_project_base.a" "$ACTIVE_LIBS_DIR/libengine_project.a"
-fi
-log_info "Project library -> $ACTIVE_LIBS_DIR/libengine_project.a"
-
-# --- Collect vcpkg third-party static libraries ---
-# Exclude redundant subset libraries that cause duplicate symbols:
-#   libpng.a             (duplicate of libpng16.a)
-#   libjpeg.a            (subset of libturbojpeg.a which has extra tj* APIs)
-#   libwebpdecoder.a     (subset of libwebp.a)
-#   libharfbuzz-subset.a (overlaps heavily with libharfbuzz.a)
-VCPKG_EXCLUDE_LIBS="libpng.a|libjpeg.a|libwebpdecoder.a|libharfbuzz-subset.a"
-
-VCPKG_LIB_DIR="$CMAKE_BUILD_DIR/vcpkg_installed/$VCPKG_TRIPLET/lib"
-VCPKG_LIBS=()
-if [[ -d "$VCPKG_LIB_DIR" ]]; then
-    while IFS= read -r -d '' lib; do
-        libbase="$(basename "$lib")"
-        if echo "$libbase" | grep -qE "^($VCPKG_EXCLUDE_LIBS)$"; then
-            log_info "  Skipping redundant: $libbase"
-            continue
-        fi
-        VCPKG_LIBS+=("$lib")
-    done < <(find "$VCPKG_LIB_DIR" -maxdepth 1 -name "*.a" -print0)
-fi
-
-log_info "  Vcpkg libs (after exclusion): ${#VCPKG_LIBS[@]}"
-
-LIVE2D_CORE_LIB=""
 if [[ "$SIMULATOR" == true ]]; then
-    LIVE2D_CORE_LIB="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphonesimulator-arm64/libLive2DCubismCore.a"
+    GODOT_EXPORT_BIN_DIR="$GODOT_APP_DIR/bin/ios/$BUILD_TYPE_LOWER"
+    mkdir -p "$GODOT_EXPORT_BIN_DIR"
+    cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a" "$GODOT_EXPORT_BIN_DIR/" 2>/dev/null || true
+    cp -f "$GODOT_BIN_DIR/libaether_kiri_godot.a" "$GODOT_EXPORT_BIN_DIR/" 2>/dev/null || true
+fi
+
+if [[ ! -x "$GODOT_BIN" ]]; then
+    echo "Warning: Godot not found at $GODOT_BIN; native libraries were staged only." >&2
+elif [[ ! -f "$GODOT_EXPORT_TEMPLATE" ]]; then
+    echo "Warning: Godot iOS export template missing at $GODOT_EXPORT_TEMPLATE; native libraries were staged only." >&2
 else
-    LIVE2D_CORE_LIB="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphoneos/libLive2DCubismCore.a"
-fi
-if [[ -f "$LIVE2D_CORE_LIB" ]]; then
-    VCPKG_LIBS+=("$LIVE2D_CORE_LIB")
-    log_info "  Live2D Core: $(basename "$(dirname "$LIVE2D_CORE_LIB")")/$(basename "$LIVE2D_CORE_LIB")"
-elif ar t "$ACTIVE_LIBS_DIR/libengine_project.a" 2>/dev/null | grep -q 'krkrlive2d.cpp.o'; then
-    log_error "Live2D Core library not found: $LIVE2D_CORE_LIB"
-    exit 1
-fi
-
-# Merge vcpkg libs into libengine_vendors.a
-libtool -static -o "$ACTIVE_LIBS_DIR/libengine_vendors.a" "${VCPKG_LIBS[@]}"
-
-log_info "Vendors library -> $ACTIVE_LIBS_DIR/libengine_vendors.a"
-
-# CocoaPods consumes the flat Libs/*.a paths from the local podspec. Keep a
-# triplet-specific copy for deterministic device/simulator artifacts, then
-# stage the requested triplet into the flat paths for this build.
-rm -f "$PLUGIN_LIBS_DIR/libengine_project.a" "$PLUGIN_LIBS_DIR/libengine_vendors.a"
-cp "$ACTIVE_LIBS_DIR/libengine_project.a" "$PLUGIN_LIBS_DIR/libengine_project.a"
-cp "$ACTIVE_LIBS_DIR/libengine_vendors.a" "$PLUGIN_LIBS_DIR/libengine_vendors.a"
-printf '%s\n' "$VCPKG_TRIPLET" > "$PLUGIN_LIBS_DIR/CURRENT_TRIPLET"
-log_info "Staged $VCPKG_TRIPLET libraries for CocoaPods in $PLUGIN_LIBS_DIR"
-
-if command -v lipo >/dev/null 2>&1; then
-    log_info "  $(lipo -info "$PLUGIN_LIBS_DIR/libengine_project.a")"
-    log_info "  $(lipo -info "$PLUGIN_LIBS_DIR/libengine_vendors.a")"
+    echo "==> Exporting Godot iOS project"
+    mkdir -p "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER"
+    "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
+        --export-debug "iOS Debug" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj"
+    if [[ "$SIMULATOR" == true ]]; then
+        patch_ios_export_project "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj" "$SIMULATOR_ARCH"
+    fi
 fi
 
-# ============================================================
-# Step 3: Build Flutter iOS app
-# ============================================================
-log_step "Step 3/3: Building Flutter iOS app"
-
-export PATH="$FLUTTER_SDK/bin:$PATH"
-export LANG="${LANG:-en_US.UTF-8}"
-export LC_ALL="${LC_ALL:-en_US.UTF-8}"
-
-if [[ "$LANG" == "C" || "$LANG" == "POSIX" || "$LANG" == "C.UTF-8" ]]; then
-    export LANG="en_US.UTF-8"
-fi
-if [[ "$LC_ALL" == "C" || "$LC_ALL" == "POSIX" || "$LC_ALL" == "C.UTF-8" ]]; then
-    export LC_ALL="en_US.UTF-8"
-fi
-
-log_info "Running flutter pub get..."
-(cd "$FLUTTER_APP_DIR" && "$FLUTTER_BIN" pub get)
-
-FLUTTER_BUILD_MODE="$BUILD_TYPE_LOWER"
-log_info "Building Flutter iOS app ($FLUTTER_BUILD_MODE)..."
-
-if [[ "$SIMULATOR" == true ]]; then
-    (cd "$FLUTTER_APP_DIR" && "$FLUTTER_BIN" build ios --simulator --debug)
-elif [[ "$FLUTTER_BUILD_MODE" == "release" ]]; then
-    (cd "$FLUTTER_APP_DIR" && "$FLUTTER_BIN" build ios --release --no-codesign)
-else
-    (cd "$FLUTTER_APP_DIR" && "$FLUTTER_BIN" build ios --debug --no-codesign)
-fi
-
-# ============================================================
-# Done
-# ============================================================
-log_step "Build complete!"
-
-log_info "Engine project library: $PLUGIN_LIBS_DIR/libengine_project.a"
-log_info "Engine vendors library: $PLUGIN_LIBS_DIR/libengine_vendors.a"
-log_info "Flutter iOS build output: $FLUTTER_APP_DIR/build/ios/"
-echo ""
-log_info "To deploy to a device, open in Xcode:"
-echo "  open \"$FLUTTER_APP_DIR/ios/Runner.xcworkspace\""
-echo ""
-log_info "Or use flutter run for development:"
-echo "  cd \"$FLUTTER_APP_DIR\" && flutter run -d <device_id>"
-echo ""
+echo "iOS build output: $PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER"

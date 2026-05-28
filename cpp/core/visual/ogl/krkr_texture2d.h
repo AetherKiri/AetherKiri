@@ -20,9 +20,24 @@
  */
 #pragma once
 
-#include "ogl_common.h"
 #include <cstddef>   // size_t, ssize_t
 #include <cstring>   // memcpy
+#include <cstdint>
+#include <vector>
+
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
+#include "ogl_common.h"
+#else
+using GLenum = unsigned int;
+using GLuint = unsigned int;
+#define GL_RGBA 0x1908
+#define GL_RGB 0x1907
+#define GL_UNSIGNED_BYTE 0x1401
+#define GL_UNSIGNED_SHORT_4_4_4_4 0x8033
+#define GL_UNSIGNED_SHORT_5_6_5 0x8363
+#define GL_LUMINANCE 0x1909
+#define GL_LUMINANCE_ALPHA 0x190A
+#endif
 
 namespace krkr {
 
@@ -67,9 +82,11 @@ class Texture2D {
 public:
     Texture2D() = default;
     virtual ~Texture2D() {
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
         if (_name && _ownsTexture) {
             glDeleteTextures(1, &_name);
         }
+#endif
     }
 
     // --- Reference counting (simplified autorelease pool is not needed) ---
@@ -103,6 +120,7 @@ public:
         GLenum glType   = GL_UNSIGNED_BYTE;
         resolveGLFormat(format, glFormat, glType);
 
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
         if (_name == 0) {
             glGenTextures(1, &_name);
             _ownsTexture = true;
@@ -116,6 +134,15 @@ public:
 
         glTexImage2D(GL_TEXTURE_2D, 0, glFormat, pixelsWide, pixelsHigh, 0,
                      glFormat, glType, data);
+#else
+        _cpuPixels.assign(static_cast<size_t>(pixelsWide) * pixelsHigh * 4, 0);
+        if (data != nullptr) {
+            const size_t copyLen = dataLen > 0
+                ? static_cast<size_t>(dataLen)
+                : _cpuPixels.size();
+            std::memcpy(_cpuPixels.data(), data, copyLen < _cpuPixels.size() ? copyLen : _cpuPixels.size());
+        }
+#endif
         return true;
     }
 
@@ -124,15 +151,26 @@ public:
      */
     bool updateWithData(const void *data, int offsetX, int offsetY,
                         int width, int height) {
-        if (_name == 0) return false;
-
         GLenum glFormat = GL_RGBA;
         GLenum glType   = GL_UNSIGNED_BYTE;
         resolveGLFormat(_pixelFormat, glFormat, glType);
 
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
+        if (_name == 0) return false;
         glBindTexture(GL_TEXTURE_2D, _name);
         glTexSubImage2D(GL_TEXTURE_2D, 0, offsetX, offsetY, width, height,
                         glFormat, glType, data);
+#else
+        if (data == nullptr || _cpuPixels.empty()) return false;
+        const auto *src = static_cast<const uint8_t *>(data);
+        for (int y = 0; y < height; ++y) {
+            const size_t dstOffset =
+                (static_cast<size_t>(offsetY + y) * _pixelsWide + offsetX) * 4;
+            const size_t srcOffset = static_cast<size_t>(y) * width * 4;
+            std::memcpy(_cpuPixels.data() + dstOffset, src + srcOffset,
+                        static_cast<size_t>(width) * 4);
+        }
+#endif
         return true;
     }
 
@@ -159,6 +197,7 @@ public:
 protected:
     bool _ownsTexture = false;
     bool _autoreleased = false;
+    std::vector<uint8_t> _cpuPixels;
 
     static void resolveGLFormat(PixelFormat format, GLenum &glFormat, GLenum &glType) {
         switch (format) {

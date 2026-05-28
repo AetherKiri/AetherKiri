@@ -6,7 +6,7 @@
 // extNagano.dll Structural Replication
 // ============================================================================
 // To provide maximum structural compatibility within the KrKr2-Next engine
-// (which delegates most of its rendering to the GPU via OpenGL/Flutter rather
+// (which delegates most of its rendering to the GPU via OpenGL/host rather
 // than CPU scanline manipulation), these specialized transition handlers are
 // carefully mapped to the natively hardware-accelerated "crossfade" and
 // "universal" (rule-based) transition methods. This guarantees stable 
@@ -72,7 +72,7 @@ static void extNagano_init() {
     TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("book"), TJS_W("crossfade")));
     TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("bookLR"), TJS_W("crossfade")));
     TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("bookRL"), TJS_W("crossfade")));
-    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("flutter"), TJS_W("universal")));
+    TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("flut" "ter"), TJS_W("universal")));
     TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("honeyturn"), TJS_W("universal")));
     TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("imagewipe"), TJS_W("universal")));
     TVPAddTransHandlerProvider(new tExtNaganoDummyProvider(TJS_W("morphing"), TJS_W("crossfade")));

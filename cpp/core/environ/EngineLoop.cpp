@@ -107,6 +107,7 @@ void EngineLoop::Tick(float delta) {
     if (!started_)
         return;
     ::Application->Run();
+    TVPDeliverContinuousEvent();
     iTVPTexture2D::RecycleProcess();
     if (s_postUpdate)
         s_postUpdate();

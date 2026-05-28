@@ -190,6 +190,7 @@ public:
     void LoadImageRequest(class iTJSDispatch2 *owner, class tTJSNI_Bitmap *bmp,
                           const ttstr &name);
     tTVPAsyncImageLoader *GetAsyncImageLoader() { return image_load_thread_; }
+    void StopImageLoadThread();
 
     void RegisterActiveEvent(void *host,
                              const std::function<void(void *, eTVPActiveEvent)>

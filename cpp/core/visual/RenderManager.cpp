@@ -24,7 +24,7 @@ extern "C" {
 #include "Platform.h"
 #include "ConfigManager/IndividualConfigManager.h"
 
-// Inline XXH32 implementation to avoid symbol conflicts with ANGLE's
+// Inline XXH32 implementation to avoid symbol conflicts with graphics backends'
 // built-in xxhash. Only XXH32() is used in this file.
 namespace {
 static inline uint32_t XXH32_round(uint32_t acc, uint32_t input) {
@@ -346,7 +346,9 @@ void iTVPTexture2D::RecycleProcess() {
         delete tex;
     }
     _toDeleteTextures.clear();
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
     glFlush();
+#endif
 }
 static tTVPAtExit TVPReleaseTexture2D(TVP_ATEXIT_PRI_RELEASE + 500,
                                       iTVPTexture2D::RecycleProcess);
@@ -397,6 +399,8 @@ public:
         return 0;
     }
     const void *GetScanLineForRead(tjs_uint l) override {
+        if(l >= static_cast<tjs_uint>(Height) || !BmpData)
+            return nullptr;
         return BmpData + Pitch * l;
     }
     tjs_int GetPitch() const override { return Pitch; }
@@ -497,7 +501,11 @@ public:
     }
 
     const void *GetScanLineForRead(tjs_uint l) override {
+        if(l >= static_cast<tjs_uint>(Height))
+            return nullptr;
         GetPixelData();
+        if(!BmpData)
+            return nullptr;
         return BmpData + l * Pitch;
     }
 
@@ -585,6 +593,11 @@ public:
     }
 
     const void *GetScanLineForRead(tjs_uint l) override {
+        if(l >= static_cast<tjs_uint>(Height) || _scanline.empty())
+            return nullptr;
+        const tjs_uint index = l / 2;
+        if(index >= _scanline.size())
+            return nullptr;
         return _scanline[l / 2];
     }
 
@@ -1220,7 +1233,9 @@ public:
         tjs_int h = rect.bottom - rect.top;
         tjs_int w = rect.right - rect.left;
 
-        tjs_int taskNum = GetAdaptiveThreadNum(w * h, THREAD_FACTOR);
+        tjs_int taskNum = THREAD_FACTOR == 52
+            ? 1
+            : GetAdaptiveThreadNum(w * h, THREAD_FACTOR);
         TVPExecThreadTask(taskNum, [=](int i) {
             tjs_int y0, y1;
             y0 = h * i / taskNum;
@@ -1310,7 +1325,9 @@ public:
         tjs_int h = rect.bottom - rect.top;
         tjs_int w = rect.right - rect.left;
 
-        tjs_int taskNum = GetAdaptiveThreadNum(w * h, THREAD_FACTOR);
+        tjs_int taskNum = THREAD_FACTOR == 52
+            ? 1
+            : GetAdaptiveThreadNum(w * h, THREAD_FACTOR);
         TVPExecThreadTask(taskNum, [&](int i) {
             tjs_int y0, y1;
             y0 = h * i / taskNum;
@@ -1598,6 +1615,47 @@ public:
 
         tjs_int sx = rcsrc.left, dx = rctar.left, sy = rcsrc.top,
                 dy = rctar.top;
+        if(!_tar || !_src || w <= 0 || h <= 0) return;
+
+        const tjs_int dst_w = static_cast<tjs_int>(_tar->GetWidth());
+        const tjs_int dst_h = static_cast<tjs_int>(_tar->GetHeight());
+        const tjs_int src_w = static_cast<tjs_int>(_src->GetWidth());
+        const tjs_int src_h = static_cast<tjs_int>(_src->GetHeight());
+
+        if(dx < 0) {
+            sx -= dx;
+            w += dx;
+            dx = 0;
+        }
+        if(dy < 0) {
+            sy -= dy;
+            h += dy;
+            dy = 0;
+        }
+        if(sx < 0) {
+            dx -= sx;
+            w += sx;
+            sx = 0;
+        }
+        if(sy < 0) {
+            dy -= sy;
+            h += sy;
+            sy = 0;
+        }
+        const tjs_int dst_clip_w = dst_w - dx;
+        const tjs_int dst_clip_h = dst_h - dy;
+        const tjs_int src_clip_w = src_w - sx;
+        const tjs_int src_clip_h = src_h - sy;
+        if(w > dst_clip_w) w = dst_clip_w;
+        if(h > dst_clip_h) h = dst_clip_h;
+        if(w > src_clip_w) w = src_clip_w;
+        if(h > src_clip_h) h = src_clip_h;
+        if(w <= 0 || h <= 0) return;
+
+        if(THREAD_FACTOR == 52) {
+            this->PartialFill(_tar, _src, sx, sy, dx, dy, w, h);
+            return;
+        }
 
         tjs_int taskNum = GetAdaptiveThreadNum(w * h, THREAD_FACTOR);
         TVPExecThreadTask(
@@ -1624,8 +1682,15 @@ class tTVPRenderMethod_Blt
                      tjs_int sy, tjs_int dx, tjs_int dy, tjs_int w,
                      tjs_int h) override {
         for(tjs_int y = 0; y < h; ++y) {
-            Func(((tjs_uint32 *)dst->GetScanLineForWrite(dy + y)) + dx,
-                 ((const tjs_uint32 *)src->GetScanLineForRead(sy + y)) + sx, w);
+            auto *dst_line = static_cast<tjs_uint32 *>(dst->GetScanLineForWrite(dy + y));
+            const auto *src_line =
+                static_cast<const tjs_uint32 *>(src->GetScanLineForRead(sy + y));
+            if(!dst_line || !src_line) continue;
+
+            tjs_int row_w = w;
+            if(row_w <= 0) continue;
+
+            Func(dst_line + dx, src_line + sx, row_w);
         }
         // 		tjs_uint8 *dst = p->dest, *src = p->src;
         // 		tjs_int width = p->w;
@@ -1847,20 +1912,42 @@ public:
                      tjs_int h) override {
         if(opa == 255) {
             for(tjs_int y = 0; y < h; ++y) {
-                tjs_uint32 *dst =
-                    ((tjs_uint32 *)_dst->GetScanLineForWrite(dy + y)) + dx;
-                Func(dst,
-                     ((const tjs_uint32 *)src->GetScanLineForRead(sy + y)) + sx,
-                     w);
+                auto *dst_line = static_cast<tjs_uint32 *>(_dst->GetScanLineForWrite(dy + y));
+                const auto *src_line =
+                    static_cast<const tjs_uint32 *>(src->GetScanLineForRead(sy + y));
+                if(!dst_line || !src_line) continue;
+
+                tjs_int row_w = w;
+                if(row_w <= 0) continue;
+
+                tjs_uint32 *dst = dst_line + dx;
+                const tjs_uint32 *src_pixels_ptr = src_line + sx;
+                if(Func == TVPAlphaBlend_a) {
+                    for(tjs_int x = 0; x < row_w; ++x)
+                        dst[x] = TVPAddAlphaBlend_a_d(dst[x], src_pixels_ptr[x]);
+                } else {
+                    Func(dst, src_pixels_ptr, row_w);
+                }
             }
         } else {
             for(tjs_int y = 0; y < h; ++y) {
-                tjs_uint32 *dst =
-                    ((tjs_uint32 *)_dst->GetScanLineForWrite(dy + y)) + dx;
-                FuncWithOpa(
-                    dst,
-                    ((const tjs_uint32 *)src->GetScanLineForRead(sy + y)) + sx,
-                    w, opa);
+                auto *dst_line = static_cast<tjs_uint32 *>(_dst->GetScanLineForWrite(dy + y));
+                const auto *src_line =
+                    static_cast<const tjs_uint32 *>(src->GetScanLineForRead(sy + y));
+                if(!dst_line || !src_line) continue;
+
+                tjs_int row_w = w;
+                if(row_w <= 0) continue;
+
+                tjs_uint32 *dst = dst_line + dx;
+                const tjs_uint32 *src_pixels_ptr = src_line + sx;
+                if(FuncWithOpa == TVPAlphaBlend_ao) {
+                    for(tjs_int x = 0; x < row_w; ++x)
+                        dst[x] =
+                            TVPAddAlphaBlend_a_d_o(dst[x], src_pixels_ptr[x], opa);
+                } else {
+                    FuncWithOpa(dst, src_pixels_ptr, row_w, opa);
+                }
             }
         }
     }
@@ -4941,7 +5028,7 @@ iTVPRenderManager *TVPGetRenderManager() {
         }
         if(str.IsEmpty()) {
             str = IndividualConfigManager::GetInstance()
-                      ->GetValue<std::string>("renderer", "opengl");
+                      ->GetValue<std::string>("renderer", "godot_native");
         }
         _RenderManager = TVPGetRenderManager(str);
         _RenderManagerInitialized = true;
@@ -4951,8 +5038,7 @@ iTVPRenderManager *TVPGetRenderManager() {
 
 bool TVPIsSoftwareRenderManager() {
     if(!_RenderManagerInitialized) return true; // assume software if not yet initialized
-    static bool ret = TVPGetRenderManager()->IsSoftware();
-    return ret;
+    return TVPGetRenderManager()->IsSoftware();
 }
 
 iTVPRenderManager *TVPGetSoftwareRenderManager() { // for province image process

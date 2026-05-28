@@ -10,6 +10,7 @@
 //---------------------------------------------------------------------------
 
 #include "tjsCommHead.h"
+#include <spdlog/spdlog.h>
 
 #include "tjsInterCodeExec.h"
 #include "tjsInterCodeGen.h"
@@ -30,7 +31,6 @@
 
 #include <thread>
 #include <fmt/format.h>
-#include <spdlog/spdlog.h>
 
 namespace TJS {
     //---------------------------------------------------------------------------

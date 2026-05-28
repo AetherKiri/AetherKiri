@@ -1,4 +1,5 @@
 #include "ncbind.hpp"
+#include "ScriptMgnIntf.h"
 
 // Stub modules — register empty entries so Plugins.link() succeeds.
 // The engine already has built-in support for the functionality these
@@ -72,6 +73,217 @@ NCB_PRE_REGIST_CALLBACK(fpslimit_stub);
 #define NCB_MODULE_NAME TJS_W("systemEx.dll")
 static void systemEx_stub() {}
 NCB_PRE_REGIST_CALLBACK(systemEx_stub);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("dmmcloud.dll")
+static void dmmcloud_stub() {}
+NCB_PRE_REGIST_CALLBACK(dmmcloud_stub);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("libegl.dll")
+static void libegl_stub() {}
+NCB_PRE_REGIST_CALLBACK(libegl_stub);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("libglesv2.dll")
+static void libglesv2_stub() {}
+NCB_PRE_REGIST_CALLBACK(libglesv2_stub);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("m2vdec.dll")
+static void m2vdec_stub() {}
+NCB_PRE_REGIST_CALLBACK(m2vdec_stub);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("version.dll")
+static void version_stub() {}
+NCB_PRE_REGIST_CALLBACK(version_stub);
+
+#if !defined(KRKR_ENABLE_GPU_BRIDGE)
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("krkrgles.dll")
+namespace {
+
+static void SetGlesCompatInt(tTJSVariant *result, tjs_int value = 0) {
+    if(result)
+        *result = value;
+}
+
+static tjs_error CreateGlesCompatObject(tTJSVariant *result,
+                                        const tjs_char *expression) {
+    if(!result)
+        return TJS_S_OK;
+    try {
+        TVPExecuteExpression(ttstr(expression), result);
+    } catch(...) {
+        result->Clear();
+    }
+    return TJS_S_OK;
+}
+
+} // namespace
+
+class GLESAdaptor {
+public:
+    GLESAdaptor() = default;
+
+    tjs_int getScreenWidth() const { return screenWidth_; }
+    void setScreenWidth(tjs_int value) { screenWidth_ = value; }
+    tjs_int getScreenHeight() const { return screenHeight_; }
+    void setScreenHeight(tjs_int value) { screenHeight_ = value; }
+
+    static tjs_error noOpCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                            GLESAdaptor *) {
+        SetGlesCompatInt(result, 1);
+        return TJS_S_OK;
+    }
+
+    static tjs_error getModuleCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                                 GLESAdaptor *) {
+        SetGlesCompatInt(result, 0);
+        return TJS_S_OK;
+    }
+
+    static tjs_error setScreenSizeCb(tTJSVariant *result, tjs_int numparams,
+                                     tTJSVariant **param, GLESAdaptor *self) {
+        if(self && numparams >= 2) {
+            self->screenWidth_ = static_cast<tjs_int>(*param[0]);
+            self->screenHeight_ = static_cast<tjs_int>(*param[1]);
+        }
+        SetGlesCompatInt(result, 1);
+        return TJS_S_OK;
+    }
+
+    static tjs_error createModelCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                                   GLESAdaptor *) {
+        return CreateGlesCompatObject(result, TJS_W("new Live2DModel()"));
+    }
+
+    static tjs_error createMatrixCb(tTJSVariant *result, tjs_int,
+                                    tTJSVariant **, GLESAdaptor *) {
+        return CreateGlesCompatObject(result, TJS_W("new Live2DMatrix()"));
+    }
+
+    static tjs_error createDeviceCb(tTJSVariant *result, tjs_int,
+                                    tTJSVariant **, GLESAdaptor *) {
+        return CreateGlesCompatObject(result, TJS_W("new Live2DDevice()"));
+    }
+
+private:
+    tjs_int screenWidth_ = 0;
+    tjs_int screenHeight_ = 0;
+};
+
+class OGLDrawDevice {
+public:
+    OGLDrawDevice() = default;
+
+    tjs_int getScreenWidth() const { return adaptor_.getScreenWidth(); }
+    void setScreenWidth(tjs_int value) { adaptor_.setScreenWidth(value); }
+    tjs_int getScreenHeight() const { return adaptor_.getScreenHeight(); }
+    void setScreenHeight(tjs_int value) { adaptor_.setScreenHeight(value); }
+
+    static tjs_error noOpCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                            OGLDrawDevice *) {
+        SetGlesCompatInt(result, 1);
+        return TJS_S_OK;
+    }
+
+    static tjs_error getModuleCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                                 OGLDrawDevice *) {
+        SetGlesCompatInt(result, 0);
+        return TJS_S_OK;
+    }
+
+    static tjs_error setScreenSizeCb(tTJSVariant *result, tjs_int numparams,
+                                     tTJSVariant **param, OGLDrawDevice *self) {
+        if(self && numparams >= 2) {
+            self->setScreenWidth(static_cast<tjs_int>(*param[0]));
+            self->setScreenHeight(static_cast<tjs_int>(*param[1]));
+        }
+        SetGlesCompatInt(result, 1);
+        return TJS_S_OK;
+    }
+
+    static tjs_error createModelCb(tTJSVariant *result, tjs_int numparams,
+                                   tTJSVariant **param, OGLDrawDevice *) {
+        return GLESAdaptor::createModelCb(result, numparams, param, nullptr);
+    }
+
+    static tjs_error createMatrixCb(tTJSVariant *result, tjs_int numparams,
+                                    tTJSVariant **param, OGLDrawDevice *) {
+        return GLESAdaptor::createMatrixCb(result, numparams, param, nullptr);
+    }
+
+    static tjs_error createDeviceCb(tTJSVariant *result, tjs_int numparams,
+                                    tTJSVariant **param, OGLDrawDevice *) {
+        return GLESAdaptor::createDeviceCb(result, numparams, param, nullptr);
+    }
+
+private:
+    GLESAdaptor adaptor_;
+};
+
+NCB_REGISTER_CLASS(GLESAdaptor) {
+    Constructor();
+    NCB_PROPERTY(screenWidth, getScreenWidth, setScreenWidth);
+    NCB_PROPERTY(screenHeight, getScreenHeight, setScreenHeight);
+    NCB_METHOD_RAW_CALLBACK(getModule, &GLESAdaptor::getModuleCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setScreenSize, &GLESAdaptor::setScreenSizeCb, 0);
+    NCB_METHOD_RAW_CALLBACK(makeCurrent, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(beginScene, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(endScene, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(entryUpdateObject, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(capture, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCapture, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(captureScreen, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCaptureScreen, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(copyLayer, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCopyLayer, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawLayer, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesDrawLayer, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawAffine, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawAffineGLES, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(render, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setMatrix, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(createModel, &GLESAdaptor::createModelCb, 0);
+    NCB_METHOD_RAW_CALLBACK(createMatrix, &GLESAdaptor::createMatrixCb, 0);
+    NCB_METHOD_RAW_CALLBACK(createDevice, &GLESAdaptor::createDeviceCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesEntry, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesRemove, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(finalize, &GLESAdaptor::noOpCb, 0);
+}
+
+NCB_REGISTER_CLASS(OGLDrawDevice) {
+    Constructor();
+    NCB_PROPERTY(screenWidth, getScreenWidth, setScreenWidth);
+    NCB_PROPERTY(screenHeight, getScreenHeight, setScreenHeight);
+    NCB_METHOD_RAW_CALLBACK(getModule, &OGLDrawDevice::getModuleCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setScreenSize, &OGLDrawDevice::setScreenSizeCb, 0);
+    NCB_METHOD_RAW_CALLBACK(makeCurrent, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(beginScene, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(endScene, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(entryUpdateObject, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(capture, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCapture, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(captureScreen, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCaptureScreen, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(copyLayer, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCopyLayer, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawLayer, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesDrawLayer, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawAffine, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawAffineGLES, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(render, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setMatrix, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(createModel, &OGLDrawDevice::createModelCb, 0);
+    NCB_METHOD_RAW_CALLBACK(createMatrix, &OGLDrawDevice::createMatrixCb, 0);
+    NCB_METHOD_RAW_CALLBACK(createDevice, &OGLDrawDevice::createDeviceCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesEntry, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesRemove, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(finalize, &OGLDrawDevice::noOpCb, 0);
+}
+#endif
 
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("gfxEffect.dll")
