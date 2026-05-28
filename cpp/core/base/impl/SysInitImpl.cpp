@@ -419,7 +419,7 @@ void TVPTerminateAsync(int code) {
 void TVPTerminateSync(int code) {
     // do synchronous temination of application (never return)
     if(TVPHostSuppressProcessExit) {
-        // In embedded host mode (Flutter), calling TVPSystemUninit() here
+        // In embedded host mode (Application host), calling TVPSystemUninit() here
         // would destroy the TJS engine while still inside a TJS call stack,
         // causing undefined behavior (hang/crash) since exit() is suppressed.
         // Instead, mark as terminated and throw EAbort to safely unwind the

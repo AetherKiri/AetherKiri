@@ -1,6 +1,6 @@
 /**
  * @file krkr_egl_context.cpp
- * @brief Headless EGL context manager using ANGLE.
+ * @brief Headless EGL context manager for the legacy bridge backend.
  */
 
 #include "krkr_egl_context.h"
@@ -189,7 +189,7 @@ bool EGLContextManager::Initialize(uint32_t width, uint32_t height,
     }
     EGL_LOGI("MakeCurrent OK");
 
-    spdlog::info("ANGLE EGL context created successfully: {}x{}", width, height);
+    spdlog::info("Legacy EGL context created successfully: {}x{}", width, height);
     spdlog::default_logger()->flush();
 
     // glGetString may return nullptr if the context is not fully ready
@@ -356,7 +356,7 @@ bool EGLContextManager::AttachIOSurface(uint32_t iosurface_id,
         glTextureTarget = GL_TEXTURE_RECTANGLE_ANGLE;
     }
 
-    // Create a Pbuffer from the IOSurface using ANGLE's extension
+    // Create a Pbuffer from the IOSurface using the client-buffer extension.
     // EGL_ANGLE_iosurface_client_buffer
     const EGLint pbufferAttribs[] = {
         EGL_WIDTH,                         static_cast<EGLint>(width),
@@ -609,9 +609,9 @@ bool EGLContextManager::InitializeWithWindow(void* window,
     }
     EGL_LOGI("InitializeWithWindow: MakeCurrent OK");
 
-    // Disable VSync wait — Flutter already controls frame pacing via its own
+    // Disable VSync wait — host already controls frame pacing via its own
     // Choreographer / VSync signal.  Without this, eglSwapBuffers blocks for
-    // one VSync period which desynchronises from Flutter's tick and causes
+    // one VSync period which desynchronises from Application host's tick and causes
     // visible flicker.
     eglSwapInterval(display_, 0);
 
@@ -688,7 +688,7 @@ bool EGLContextManager::AttachNativeWindow(void* window,
         return false;
     }
 
-    // Disable VSync wait — Flutter controls frame pacing
+    // Disable VSync wait — host controls frame pacing
     eglSwapInterval(display_, 0);
 
     native_window_ = nativeWindow;

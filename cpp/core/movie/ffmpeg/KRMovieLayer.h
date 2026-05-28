@@ -10,6 +10,7 @@ class VideoPresentLayer : public TVPMoviePlayer,
 protected:
     tTVPBaseTexture *m_BmpBits[2]{};
     int m_nCurBmpBuff = 0;
+    bool m_continuousHookRegistered = false;
 
 public:
     ~VideoPresentLayer() override;

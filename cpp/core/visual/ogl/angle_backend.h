@@ -1,6 +1,6 @@
 /**
  * @file angle_backend.h
- * @brief ANGLE EGL backend type enumeration.
+ * @brief Legacy EGL backend type enumeration.
  *
  * Separated from krkr_egl_context.h so that higher-level modules
  * (EngineBootstrap, engine_api) can reference the backend type
@@ -11,7 +11,7 @@
 namespace krkr {
 
 /**
- * ANGLE EGL backend type for Android platform.
+ * Legacy EGL backend type for Android platform.
  * On macOS/iOS, Metal is always used regardless of this setting.
  */
 enum class AngleBackend {

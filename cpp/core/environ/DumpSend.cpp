@@ -131,7 +131,7 @@ uint32_t convert_to_dos_date(const struct tm *time) {
 #define FLAG_UTF8 (1 << 11)
 static void SendDumps(std::string dumpdir, std::vector<std::string> allDumps,
                       std::string packageName, std::string versionStr) {
-    // Dump upload will be re-implemented via platform-native HTTP or Flutter channel.
+    // Dump upload will be re-implemented via platform-native HTTP or host channel.
     spdlog::warn("SendDumps: HTTP upload is currently disabled.");
     spdlog::warn("SendDumps: {} dump file(s) will be deleted without uploading.", allDumps.size());
     for (const std::string &filename : allDumps) {

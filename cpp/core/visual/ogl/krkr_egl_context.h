@@ -1,10 +1,10 @@
 /**
  * @file krkr_egl_context.h
- * @brief Headless EGL context manager using ANGLE.
+ * @brief Headless EGL context manager for the legacy bridge backend.
  *
  * Replaces GLFW window + GLViewImpl with an offscreen
  * EGL Pbuffer surface, providing a pure headless OpenGL ES 2.0
- * context that works on all platforms via ANGLE:
+ * context for compatibility backends:
  *   - macOS  → Metal backend
  *   - Windows → D3D11 backend
  *   - Linux  → Desktop GL / Vulkan backend
@@ -14,7 +14,7 @@
 
 #include <cstdint>
 
-// ANGLE / native EGL — always available (all platforms use ANGLE)
+// Legacy bridge EGL path.
 #define KRKR_HAS_EGL 1
 #include <EGL/egl.h>
 
@@ -207,7 +207,7 @@ private:
     void DestroyNativeWindowResources();
 
     /**
-     * Acquire ANGLE EGL display with the specified backend.
+     * Acquire an EGL display with the specified backend.
      * On Android, uses eglGetPlatformDisplayEXT with Vulkan → OpenGLES fallback.
      * On other platforms, falls back to eglGetDisplay(EGL_DEFAULT_DISPLAY).
      * Updates `backend` in-place if a fallback was triggered.
@@ -221,7 +221,7 @@ private:
     uint32_t   width_     = 0;
     uint32_t   height_    = 0;
 
-    // ANGLE backend type (Android only; macOS/iOS always use Metal)
+    // Bridge backend type (Android only; macOS/iOS always use Metal)
     AngleBackend angle_backend_ = AngleBackend::OpenGLES;
 
     // IOSurface FBO resources (macOS zero-copy rendering)

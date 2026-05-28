@@ -4,7 +4,6 @@ extern "C" {
 #include "libswscale/swscale.h"
 }
 
-#include <spdlog/spdlog.h>
 #include "KRMoviePlayer.h"
 #include "VideoCodec.h"
 #include "CodecUtils.h"
@@ -12,12 +11,61 @@ extern "C" {
 #include "WaveMixer.h"
 #include "WindowImpl.h"
 #include "VideoOvlImpl.h"
+#include "LayerIntf.h"
+#include <algorithm>
+#include <cstdlib>
 
 extern std::thread::id TVPMainThreadID;
 
 NS_KRMOVIE_BEGIN
 
-TVPMoviePlayer::TVPMoviePlayer() { m_pPlayer = new BasePlayer(this); }
+static inline uint8_t ClampByte(int value) {
+    if(value < 0)
+        return 0;
+    if(value > 255)
+        return 255;
+    return static_cast<uint8_t>(value);
+}
+
+static void ConvertYuv420ToRgba(const DVDVideoPicture &pic, uint8_t *dst,
+                                int dstWidth, int dstHeight,
+                                int dstStride) {
+    const int copyWidth = std::min<int>(dstWidth, pic.iWidth);
+    const int copyHeight = std::min<int>(dstHeight, pic.iHeight);
+    for(int y = 0; y < copyHeight; ++y) {
+        const uint8_t *yRow = pic.data[0] + y * pic.iLineSize[0];
+        const uint8_t *uRow = pic.data[1] + (y / 2) * pic.iLineSize[1];
+        const uint8_t *vRow = pic.data[2] + (y / 2) * pic.iLineSize[2];
+        uint8_t *out = dst + static_cast<size_t>(y) * dstStride;
+        for(int x = 0; x < copyWidth; ++x) {
+            int c = static_cast<int>(yRow[x]) - 16;
+            int d = static_cast<int>(uRow[x / 2]) - 128;
+            int e = static_cast<int>(vRow[x / 2]) - 128;
+            if(c < 0)
+                c = 0;
+            out[x * 4 + 0] = ClampByte((298 * c + 409 * e + 128) >> 8);
+            out[x * 4 + 1] =
+                ClampByte((298 * c - 100 * d - 208 * e + 128) >> 8);
+            out[x * 4 + 2] = ClampByte((298 * c + 516 * d + 128) >> 8);
+            out[x * 4 + 3] = 0xff;
+        }
+    }
+}
+
+static double VideoSubmitMaxFps() {
+    const char *value = std::getenv("AETHERKIRI_GODOT_VIDEO_SUBMIT_FPS");
+    if(value == nullptr || value[0] == '\0')
+        return 45.0;
+    char *end = nullptr;
+    double parsed = std::strtod(value, &end);
+    if(end == value)
+        return 45.0;
+    return parsed;
+}
+
+TVPMoviePlayer::TVPMoviePlayer() {
+    m_pPlayer = new BasePlayer(this);
+}
 
 TVPMoviePlayer::~TVPMoviePlayer() {
     delete m_pPlayer;
@@ -164,6 +212,7 @@ void TVPMoviePlayer::Flush() {
     }
     m_curpts = 0.0;
     m_usedPicture = 0;
+    m_lastQueuedPicturePts = -1.0;
 }
 
 void TVPMoviePlayer::FrameMove() { m_pPlayer->FrameMove(); }
@@ -179,6 +228,13 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     if(pic.pts == DVD_NOPTS_VALUE)
         return 0;
 
+    const double pts = pic.pts / DVD_TIME_BASE;
+    const double maxSubmitFps = VideoSubmitMaxFps();
+    if(maxSubmitFps > 0.0 && m_lastQueuedPicturePts >= 0.0 &&
+       pts - m_lastQueuedPicturePts < (1.0 / maxSubmitFps)) {
+        return MAX_BUFFER_COUNT - m_usedPicture;
+    }
+
     if(m_usedPicture >= MAX_BUFFER_COUNT) {
         std::unique_lock<std::mutex> lk(m_mtxPicture);
         m_condPicture.wait(lk);
@@ -186,24 +242,22 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     if(m_usedPicture >= MAX_BUFFER_COUNT)
         return -1;
 
-    int width = pic.iWidth, height = pic.iHeight;
-    // YUV data passthrough
-    int yuvwidth[3] = { width, width / 2, width / 2 };
-    int yuvheight[3] = { height, height / 2, height / 2 };
-    uint8_t *yuvdata[3] = { nullptr };
-    for(int i = 0; i < sizeof(yuvdata) / sizeof(yuvdata[0]); ++i) {
-        int size = yuvwidth[i] * yuvheight[i];
-        yuvdata[i] = (uint8_t *)TJSAlignedAlloc(size, 4);
-        if(yuvwidth[i] == pic.iLineSize[i]) {
-            memcpy(yuvdata[i], pic.data[i], size);
-        } else {
-            uint8_t *d = yuvdata[i], *s = pic.data[i];
-            for(int y = 0; y < yuvheight[i]; ++y) {
-                memcpy(d, s, yuvwidth[i]);
-                d += yuvwidth[i];
-                s += pic.iLineSize[i];
-            }
-        }
+    int srcWidth = pic.iWidth;
+    int srcHeight = pic.iHeight;
+    int width = pic.iDisplayWidth > 0 ? pic.iDisplayWidth : pic.iWidth;
+    int height = pic.iDisplayHeight > 0 ? pic.iDisplayHeight : pic.iHeight;
+    uint8_t *data = (uint8_t *)TJSAlignedAlloc(width * height * 4, 4);
+    uint8_t *dstData[4] = {data, nullptr, nullptr, nullptr};
+    int dstLineSize[4] = {width * 4, 0, 0, 0};
+
+    img_convert_ctx = sws_getCachedContext(
+        img_convert_ctx, srcWidth, srcHeight, AV_PIX_FMT_YUV420P, width, height,
+        AV_PIX_FMT_RGBA, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+    assert(img_convert_ctx);
+    int processed = sws_scale(img_convert_ctx, pic.data, pic.iLineSize, 0,
+                              srcHeight, dstData, dstLineSize);
+    if(processed <= 0) {
+        ConvertYuv420ToRgba(pic, data, width, height, dstLineSize[0]);
     }
 
     {
@@ -213,11 +267,10 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
         picbuf.Clear();
         picbuf.width = width;
         picbuf.height = height;
-        for(int i = 0; i < sizeof(yuvdata) / sizeof(yuvdata[0]); ++i) {
-            picbuf.yuv[i] = yuvdata[i];
-        }
-        picbuf.pts = pic.pts / DVD_TIME_BASE;
+        picbuf.rgba = data;
+        picbuf.pts = pts;
         ++m_usedPicture;
+        m_lastQueuedPicturePts = pts;
         return MAX_BUFFER_COUNT - m_usedPicture;
     }
 
@@ -226,23 +279,31 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     // this, std::placeholders::_1), 0, sckey);
 }
 
-VideoPresentOverlay::~VideoPresentOverlay() { ClearNode(); }
+VideoPresentOverlay::~VideoPresentOverlay() {
+    TVPRemoveContinuousEventHook(this);
+    ClearNode();
+}
 
 void VideoPresentOverlay::ClearNode() {
-    // Overlay lifecycle is managed by Flutter.
+    // Overlay lifecycle is managed by Application host.
     m_pRootNode = nullptr;
     m_pSprite = nullptr;
+    if(m_frameBitmap) {
+        delete m_frameBitmap;
+        m_frameBitmap = nullptr;
+    }
 }
 
 // Replace VideoPresentOverlay::PresentPicture with stub
 void VideoPresentOverlay::PresentPicture(float dt) {
     BitmapPicture pic;
+    m_curpts = m_pPlayer->GetClock() / DVD_TIME_BASE;
     {
         std::unique_lock<std::mutex> lk(m_mtxPicture);
         if(m_usedPicture <= 0)
             return;
         do {
-            m_picture[m_curPicture].swap(pic);
+            pic.MoveFrom(m_picture[m_curPicture]);
             --m_usedPicture;
             if(++m_curPicture >= MAX_BUFFER_COUNT)
                 m_curPicture = 0;
@@ -254,15 +315,63 @@ void VideoPresentOverlay::PresentPicture(float dt) {
     if(!pic.rgba) {
         return;
     }
-    // Video frames are decoded but display overlay is not rendered.
-    // This will be re-implemented via Flutter texture sharing.
+    if(!Visible) {
+        return;
+    }
+
+    tTJSNI_Window *window = nullptr;
+    if(auto *overlay = dynamic_cast<MoviePlayerOverlay *>(this)) {
+        window = overlay->GetOwnerWindow();
+    }
+    if(!window || !window->GetDrawDevice()) {
+        return;
+    }
+    tTJSNI_BaseLayer *primary = window->GetDrawDevice()->GetPrimaryLayer();
+    if(!primary || !primary->GetMainImage()) {
+        return;
+    }
+
+    if(!m_frameBitmap || m_frameBitmap->GetWidth() != pic.width ||
+       m_frameBitmap->GetHeight() != pic.height) {
+        if(m_frameBitmap)
+            delete m_frameBitmap;
+        m_frameBitmap = new tTVPBaseTexture(pic.width, pic.height, 32);
+    }
+    m_frameBitmap->Update(pic.rgba, pic.width * 4, 0, 0, pic.width,
+                          pic.height);
+
+    tTVPBaseTexture *target = primary->GetMainImage();
+    tTVPRect dest = GetBounds();
+    if(dest.get_width() <= 0 || dest.get_height() <= 0) {
+        dest = tTVPRect(0, 0, target->GetWidth(), target->GetHeight());
+    }
+    tTVPRect clip(0, 0, target->GetWidth(), target->GetHeight());
+    tTVPRect src(0, 0, pic.width, pic.height);
+    target->StretchBlt(clip, dest, m_frameBitmap, src, bmCopy, 255, false,
+                       stLinear);
+    primary->Update(dest);
+}
+
+void VideoPresentOverlay::OnContinuousCallback(tjs_uint64 tick) {
+    if(!m_usedPicture)
+        return;
+    double curpts = m_pPlayer->GetClock() / DVD_TIME_BASE;
+    {
+        std::lock_guard<std::mutex> lk(m_mtxPicture);
+        BitmapPicture &picbuf = m_picture[m_curPicture];
+        if(picbuf.pts > curpts)
+            return;
+    }
+    PresentPicture(0.0f);
 }
 
 void KRMovie::VideoPresentOverlay::Play() {
     TVPMoviePlayer::Play();
+    TVPAddContinuousEventHook(this);
 }
 
 void KRMovie::VideoPresentOverlay::Stop() {
+    TVPRemoveContinuousEventHook(this);
     TVPMoviePlayer::Stop();
 }
 
@@ -276,9 +385,6 @@ MoviePlayerOverlay::~MoviePlayerOverlay() {
 void MoviePlayerOverlay::SetWindow(tTJSNI_Window *window) {
     ClearNode();
     m_pOwnerWindow = window;
-    // Video overlay will be connected via Flutter rendering path.
-    spdlog::warn("MoviePlayerOverlay::SetWindow: video overlay display is "
-                 "currently disabled (scene tree removed)");
 }
 
 void MoviePlayerOverlay::BuildGraph(tTJSNI_VideoOverlay *callbackwin,
@@ -301,7 +407,17 @@ void KRMovie::MoviePlayerOverlay::SetVisible(bool b) {
 }
 
 void MoviePlayerOverlay::OnPlayEvent(KRMovieEvent msg, void *p) {
-    if(msg == KRMovieEvent::Ended) {
+    if(msg == KRMovieEvent::Update) {
+        PresentPicture(0.0f);
+        if(m_pCallbackWin) {
+            int frame;
+            GetFrame(&frame);
+            NativeEvent ev(WM_GRAPHNOTIFY);
+            ev.WParam = EC_UPDATE;
+            ev.LParam = frame;
+            m_pCallbackWin->PostEvent(ev);
+        }
+    } else if(msg == KRMovieEvent::Ended) {
         NativeEvent ev(WM_GRAPHNOTIFY);
         ev.WParam = EC_COMPLETE;
         ev.LParam = 0;
@@ -309,16 +425,33 @@ void MoviePlayerOverlay::OnPlayEvent(KRMovieEvent msg, void *p) {
     }
 }
 
-void VideoPresentOverlay::BitmapPicture::swap(BitmapPicture &r) {
-    std::swap(data, r.data);
-    std::swap(width, r.width);
-    std::swap(height, r.height);
+void TVPMoviePlayer::BitmapPicture::MoveFrom(BitmapPicture &source) {
+    if(this == &source)
+        return;
+    Clear();
+    fmt = source.fmt;
+    width = source.width;
+    height = source.height;
+    pts = source.pts;
+    for(int i = 0; i < sizeof(data) / sizeof(data[0]); ++i) {
+        data[i] = source.data[i];
+        source.data[i] = nullptr;
+    }
+    source.fmt = RENDER_FMT_NONE;
+    source.width = 0;
+    source.height = 0;
+    source.pts = 0.0;
 }
 
 void TVPMoviePlayer::BitmapPicture::Clear() {
-    for(int i = 0; i < sizeof(data) / sizeof(data[0]); ++i)
+    for(int i = 0; i < sizeof(data) / sizeof(data[0]); ++i) {
         if(data[i])
             TJSAlignedDealloc(data[i]), data[i] = nullptr;
+    }
+    fmt = RENDER_FMT_NONE;
+    width = 0;
+    height = 0;
+    pts = 0.0;
 }
 
 void VideoPresentOverlay2::SetRootNode(OverlayNode *node) {

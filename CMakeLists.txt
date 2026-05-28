@@ -62,6 +62,8 @@ endif()
 option(ENABLE_TESTS "enable tests execute build(exclude android)" ON)
 option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
 option(BUILD_ENGINE_API "build engine_api bridge shared library" ON)
+option(BUILD_GODOT_EXTENSION "build Godot GDExtension host library" ON)
+option(BUILD_GPU_BRIDGE "build legacy external GPU bridge renderer" OFF)
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
@@ -78,7 +80,7 @@ endif()
 
 if(ANDROID)
     if(BUILD_ENGINE_API)
-        # When BUILD_ENGINE_API is ON (Flutter build), krkr2_android.cpp is compiled
+        # When BUILD_ENGINE_API is ON, krkr2_android.cpp is compiled
         # directly into libengine_api.so, so we don't need a separate libkrkr2.so.
         # Just skip building the standalone krkr2 target.
     else()
@@ -94,11 +96,9 @@ elseif(WINDOWS)
         ${CMAKE_CURRENT_SOURCE_DIR}/platforms/windows/game.rc
     )
 elseif(IOS)
-    # iOS uses Flutter as the app shell; only build engine libraries.
-    # engine_api is built as a static library and linked into the Flutter Runner.
+    # iOS uses Godot as the app shell; only build native engine libraries.
 elseif(MACOS)
-    # macOS uses Flutter as the app shell; only build engine libraries.
-    # The standalone krkr2 executable (cocos2dx) is no longer produced.
+    # macOS uses Godot as the app shell; only build native engine libraries.
 endif()
 
 # external lib
@@ -110,8 +110,11 @@ add_subdirectory(${KRKR2PLUGIN_PATH})
 if(BUILD_ENGINE_API)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api)
 endif()
+if(BUILD_GODOT_EXTENSION)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/godot_extension)
+endif()
 
-# Link the standalone executable target (not needed on macOS where Flutter is the app shell)
+# Link the standalone executable target.
 if(TARGET ${PROJECT_NAME})
     # Keep static NCB registration objects from krkr2plugin alive.
     set(_KRKR2PLUGIN_LINK_ITEM "$<LINK_LIBRARY:WHOLE_ARCHIVE,krkr2plugin>")

@@ -797,7 +797,7 @@ bool tTVPNativeBaseBitmap::InternalBlendText(tTVPCharacterData *data,
     opa_id = _opa_id;                                                          \
     clr_id = _clr_id;
 
-    static bool fastGPURoute = !TVPIsSoftwareRenderManager() &&
+    const bool fastGPURoute = !TVPIsSoftwareRenderManager() &&
         !IndividualConfigManager::GetInstance()->GetValue<bool>(
             "ogl_accurate_render", false);
 
@@ -934,6 +934,25 @@ bool tTVPNativeBaseBitmap::InternalBlendTextVerticalGradient(
     const tjs_int pitch = data->Pitch;
     const tjs_int h = drect.bottom - drect.top;
     const tjs_int w = drect.right - drect.left;
+    if(TVPIsSoftwareRenderManager()) {
+        bool drawn = false;
+        gradientHeight = std::max<tjs_int>(1, gradientHeight);
+        for(tjs_int y = 0; y < h; ++y) {
+            tTVPRect row_srect(srect.left, srect.top + y, srect.right,
+                               srect.top + y + 1);
+            tTVPRect row_drect(drect.left, drect.top + y, drect.right,
+                               drect.top + y + 1);
+            const tjs_int row = std::max<tjs_int>(
+                0, std::min<tjs_int>(gradientHeight - 1,
+                                      drect.top + y - gradientTop));
+            const tjs_uint32 color =
+                TVPLerpColor24(topcolor, bottomcolor, row, gradientHeight);
+            drawn = InternalBlendText(data, dtdata, color, row_srect,
+                                      row_drect) || drawn;
+        }
+        return drawn;
+    }
+
     const tjs_uint8 *bp = data->GetData() + pitch * srect.top + srect.left;
     gradientHeight = std::max<tjs_int>(1, gradientHeight);
 

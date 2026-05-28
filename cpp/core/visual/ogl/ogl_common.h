@@ -1,9 +1,9 @@
 #pragma once
 
 // ---------------------------------------------------------------------------
-// OpenGL headers — all platforms use ANGLE GLES2 + EGL
+// OpenGL headers for the legacy bridge GLES2 + EGL path.
 // ---------------------------------------------------------------------------
-// ANGLE provides a consistent GLES2 + EGL interface across all platforms:
+// This path provides a GLES2 + EGL interface across compatibility platforms:
 //   macOS   → Metal backend
 //   Windows → D3D11 backend
 //   Linux   → Desktop GL / Vulkan backend

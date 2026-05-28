@@ -263,6 +263,10 @@ if (VCPKG_TARGET_IS_IOS)
     set(OPTIONS "${OPTIONS} --extra-ldflags=-isysroot\"${vcpkg_osx_sysroot}\"")
 endif ()
 
+if (VCPKG_TARGET_IS_IOS AND VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
+    set(OPTIONS "${OPTIONS} --disable-yasm")
+endif ()
+
 set(OPTIONS_DEBUG "--disable-optimizations --disable-stripping")
 set(OPTIONS_RELEASE "--enable-optimizations --enable-stripping")
 

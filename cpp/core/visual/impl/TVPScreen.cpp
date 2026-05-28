@@ -2,11 +2,13 @@
 
 #include "TVPScreen.h"
 #include "Application.h"
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
 #include "krkr_egl_context.h"
+#endif
 
 int tTVPScreen::GetWidth() { return 2048; }
 int tTVPScreen::GetHeight() {
-    // Use EGL surface dimensions if available, otherwise fallback to width
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
     auto& egl = krkr::GetEngineEGLContext();
     if (egl.IsValid()) {
         uint32_t w = egl.GetWidth();
@@ -16,6 +18,7 @@ int tTVPScreen::GetHeight() {
             return baseW * static_cast<int>(h) / static_cast<int>(w);
         }
     }
+#endif
     return GetWidth();
 }
 

@@ -33,7 +33,7 @@ set(ENVIRON_SOURCE_FILES
     ${ENVIRON_PATH}/ConfigManager/LocaleConfigManager.cpp
     ${ENVIRON_PATH}/sdl/tvpsdl.cpp
 
-    # ui/ — all removed (Flutter handles UI now).
+    # ui/ — all removed (Godot handles UI now).
     # Stub implementations are in stubs/ui_stubs.cpp
     ${ENVIRON_PATH}/stubs/ui_stubs.cpp
 

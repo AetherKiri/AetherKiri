@@ -242,6 +242,16 @@ ENGINE_API_EXPORT engine_result_t engine_read_frame_rgba(
     engine_handle_t handle, void* out_pixels, size_t out_pixels_size);
 
 /*
+ * Gets the current Godot-native GPU texture id for zero-copy display.
+ * The id is owned by the Godot GDExtension render bridge and can be
+ * resolved to a Texture2DRD there. Returns NOT_SUPPORTED when the current
+ * frame is not backed by a Godot RenderingDevice texture.
+ */
+ENGINE_API_EXPORT engine_result_t engine_get_godot_native_frame_texture(
+    engine_handle_t handle, uint64_t* out_texture_id, uint32_t* out_width,
+    uint32_t* out_height, uint64_t* out_frame_serial);
+
+/*
  * Gets host-native render window handle.
  * On macOS runtime build this is NSWindow*.
  * Returns ENGINE_RESULT_NOT_SUPPORTED on unsupported platforms/builds.
@@ -298,8 +308,8 @@ ENGINE_API_EXPORT engine_result_t engine_set_render_target_iosurface(
 /*
  * Sets an Android Surface (from SurfaceTexture) as the render target.
  * When set, engine_tick renders to an EGL WindowSurface created from the
- * ANativeWindow. eglSwapBuffers() delivers frames directly to Flutter's
- * SurfaceTexture (GPU zero-copy).
+ * ANativeWindow. The GPU bridge can deliver frames directly to the host
+ * texture path.
  *
  * native_window: ANativeWindow* obtained from ANativeWindow_fromSurface().
  *                Pass NULL to detach and revert to the default Pbuffer mode.
@@ -319,8 +329,8 @@ ENGINE_API_EXPORT engine_result_t engine_set_render_target_surface(
  *   - 0: no new frame since last query
  *   - 1: a new frame was rendered
  *
- * This is useful in IOSurface mode to know when to call
- * textureFrameAvailable() on the Flutter side.
+ * This is useful in external texture modes to know when to notify the host
+ * display path.
  */
 ENGINE_API_EXPORT engine_result_t engine_get_frame_rendered_flag(
     engine_handle_t handle, uint32_t* out_

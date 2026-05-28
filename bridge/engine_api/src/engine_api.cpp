@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <new>
 #include <string>
 #include <unordered_set>
@@ -44,12 +45,16 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "base/SysInitIntf.h"
 #include "base/impl/SysInitImpl.h"
 #include "visual/GraphicsLoaderIntf.h"
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
 #include "visual/ogl/ogl_common.h"
 #include "visual/ogl/krkr_egl_context.h"
+#endif
 #include "visual/ogl/angle_backend.h"
 #include "visual/impl/WindowImpl.h"
 #include "visual/RenderManager.h"
+#include "visual/godot/GodotRenderManager.h"
 #include "psbfile/PSBMedia.h"
+#include "sound/win32/WaveImpl.h"
 #include "engine_options.h"
 #include "PluginCallTracer.hpp"
 
@@ -69,6 +74,21 @@ extern "C" void TVPRegisterPSDPluginAnchor();
 extern "C" void TVPRegisterMotionPlayerPluginAnchor();
 extern "C" void TVPRegisterLayerExDrawPluginAnchor();
 extern "C" void TVPRegisterKAGParserExPluginAnchor();
+extern "C" bool TVPHostGetLatestFrameDesc(uint32_t* width, uint32_t* height,
+                                           uint32_t* stride_bytes,
+                                           uint64_t* serial);
+extern "C" bool TVPHostCopyLatestFrameRGBA(void* out_pixels,
+                                            size_t out_pixels_size,
+                                            uint32_t* width,
+                                            uint32_t* height,
+                                            uint32_t* stride_bytes,
+                                            uint64_t* serial);
+extern "C" bool TVPHostGetLatestGodotGpuFrame(uint64_t* texture,
+                                               uint32_t* width,
+                                               uint32_t* height,
+                                               uint64_t* serial);
+extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height);
+extern "C" void TVPHostSetPreferGpuFrame(bool prefer_gpu_frame);
 
 struct engine_handle_s {
   std::recursive_mutex mutex;
@@ -109,6 +129,7 @@ struct engine_handle_s {
   // Render target state
   struct RenderTargetState {
     krkr::AngleBackend angle_backend = krkr::AngleBackend::OpenGLES;
+    std::string renderer = ENGINE_RENDERER_GODOT_NATIVE;
     bool iosurface_attached = false;
     bool native_window_attached = false;
   } render;
@@ -204,7 +225,41 @@ void CrashSignalHandler(int sig) {
   raise(sig);
 }
 
+void PrintNativeBacktrace(const char* prefix) {
+#if !defined(__ANDROID__)
+  void* frames[48];
+  int count = backtrace(frames, 48);
+  char** symbols = backtrace_symbols(frames, count);
+  if (symbols) {
+    for (int i = 0; i < count; ++i) {
+      spdlog::critical("{} [{}] {}", prefix, i, symbols[i]);
+    }
+    free(symbols);
+  }
+#else
+  (void)prefix;
+#endif
+}
+
+void CrashTerminateHandler() {
+  try {
+    auto ex = std::current_exception();
+    if (ex) {
+      std::rethrow_exception(ex);
+    }
+    spdlog::critical("std::terminate called without active exception");
+  } catch (const std::exception& e) {
+    spdlog::critical("std::terminate called after exception: {}", e.what());
+  } catch (...) {
+    spdlog::critical("std::terminate called after unknown exception");
+  }
+  PrintNativeBacktrace("terminate");
+  spdlog::default_logger()->flush();
+  std::abort();
+}
+
 void InstallCrashSignalHandlers() {
+  std::set_terminate(CrashTerminateHandler);
   signal(SIGSEGV, CrashSignalHandler);
   signal(SIGABRT, CrashSignalHandler);
   signal(SIGBUS,  CrashSignalHandler);
@@ -212,7 +267,9 @@ void InstallCrashSignalHandlers() {
 }
 
 void EnsureInternalPluginAnchorsLinked() {
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
   TVPRegisterKrkrGLESPluginAnchor();
+#endif
   TVPRegisterKrkrLive2DPluginAnchor();
   TVPRegisterPSDPluginAnchor();
   TVPRegisterMotionPlayerPluginAnchor();
@@ -222,9 +279,8 @@ void EnsureInternalPluginAnchorsLinked() {
 
 void EnsureRuntimeLoggersInitialized() {
   std::call_once(g_loggers_init_once, []() {
-    spdlog::set_level(spdlog::level::debug);
-    // Flush every log message so crash logs are never lost
-    spdlog::flush_on(spdlog::level::debug);
+    spdlog::set_level(spdlog::level::info);
+    spdlog::flush_on(spdlog::level::warn);
     auto core_logger = EnsureNamedLogger("core");
     auto tjs2_logger = EnsureNamedLogger("tjs2");
     auto plugin_logger = EnsureNamedLogger("plugin");
@@ -404,9 +460,10 @@ FrameReadbackLayout GetFrameReadbackLayoutLocked(engine_handle_s* impl) {
   layout.height = impl->frame.surface_height;
 
   // Read back the full render target instead of GL_VIEWPORT. UpdateDrawBuffer()
-  // leaves GL_VIEWPORT set to the game letterbox rectangle, but Flutter's
+  // leaves GL_VIEWPORT set to the game letterbox rectangle, but the host's
   // software path needs a stable full-surface image. Cropping to the viewport
   // makes iOS rotation/input transitions expose stale side content.
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
   auto& egl = krkr::GetEngineEGLContext();
   if (egl.IsValid()) {
     uint32_t egl_w = 0;
@@ -428,6 +485,7 @@ FrameReadbackLayout GetFrameReadbackLayoutLocked(engine_handle_s* impl) {
       layout.height = egl_h;
     }
   }
+#endif
 
   if (layout.width == 0) {
     layout.width = 1;
@@ -444,6 +502,7 @@ bool ReadCurrentFrameRgba(const FrameReadbackLayout& layout, void* out_pixels) {
     return false;
   }
 
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
   glFinish();
   glPixelStorei(GL_PACK_ALIGNMENT, 4);
   glReadPixels(static_cast<GLint>(layout.read_x),
@@ -515,6 +574,64 @@ bool ReadCurrentFrameRgba(const FrameReadbackLayout& layout, void* out_pixels) {
     readback_log_count += 1;
   }
 
+  return true;
+#else
+  (void)layout;
+  (void)out_pixels;
+  return false;
+#endif
+}
+
+bool CopyHostFrameLocked(engine_handle_s* impl) {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t stride = 0;
+  uint64_t serial = 0;
+  if (!TVPHostGetLatestFrameDesc(&width, &height, &stride, &serial) ||
+      width == 0 || height == 0 || stride == 0) {
+    return false;
+  }
+
+  const size_t required_size =
+      static_cast<size_t>(stride) * static_cast<size_t>(height);
+  if (required_size == 0) {
+    return false;
+  }
+
+  impl->frame.rgba.resize(required_size);
+  if (!TVPHostCopyLatestFrameRGBA(impl->frame.rgba.data(), required_size,
+                                  &width, &height, &stride, &serial)) {
+    return false;
+  }
+
+  impl->frame.width = width;
+  impl->frame.height = height;
+  impl->frame.stride_bytes = stride;
+  impl->frame.serial = serial;
+  impl->frame.ready = true;
+  return true;
+}
+
+bool CaptureGodotNativeGpuFrameLocked(engine_handle_s* impl) {
+  if (impl == nullptr ||
+      (impl->render.renderer != ENGINE_RENDERER_GODOT_NATIVE &&
+       impl->render.renderer != ENGINE_RENDERER_GPU_BRIDGE)) {
+    return false;
+  }
+  uint64_t texture = 0;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint64_t serial = 0;
+  if (!TVPHostGetLatestGodotGpuFrame(&texture, &width, &height, &serial) ||
+      texture == 0 || width == 0 || height == 0) {
+    return false;
+  }
+  impl->frame.rgba.clear();
+  impl->frame.width = width;
+  impl->frame.height = height;
+  impl->frame.stride_bytes = width * 4u;
+  impl->frame.serial = serial;
+  impl->frame.ready = true;
   return true;
 }
 
@@ -998,6 +1115,7 @@ engine_result_t OpenGameCore(engine_handle_t handle,
   impl->frame.stride_bytes = 0;
   impl->frame.rgba.clear();
   impl->frame.ready = false;
+  TVPHostSetSurfaceSize(impl->frame.surface_width, impl->frame.surface_height);
   impl->input.active_pointer_ids.clear();
   impl->input.pending_events.clear();
   impl->state = ToStateValue(EngineState::kOpened);
@@ -1021,10 +1139,12 @@ void RunOpenGameAsync(engine_handle_t handle,
 
   // Startup runs on a worker thread; release current GL context here so the
   // owner thread can safely make it current before ticking/rendering.
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
   auto& egl = krkr::GetEngineEGLContext();
   if (egl.IsValid()) {
     egl.ReleaseCurrent();
   }
+#endif
 
   if (open_result == ENGINE_RESULT_OK) {
     PushStartupLog(impl, "engine_open_game => OK");
@@ -1160,10 +1280,30 @@ engine_result_t engine_destroy(engine_handle_t handle) {
       Application->OnDeactivate();
     } catch (...) {
     }
-    Application->FilterUserMessage(
-        [](std::vector<std::tuple<void*, int, tTVPApplication::tMsg>>& queue) {
-          queue.clear();
-        });
+    try {
+      TVPShutdownSoundForHost();
+    } catch (const std::exception& e) {
+      spdlog::warn("engine_destroy: TVPShutdownSoundForHost ignored exception: {}", e.what());
+    } catch (...) {
+      spdlog::warn("engine_destroy: TVPShutdownSoundForHost ignored unknown exception");
+    }
+    try {
+      Application->StopImageLoadThread();
+    } catch (const std::exception& e) {
+      spdlog::warn("engine_destroy: StopImageLoadThread ignored exception: {}", e.what());
+    } catch (...) {
+      spdlog::warn("engine_destroy: StopImageLoadThread ignored unknown exception");
+    }
+    try {
+      Application->FilterUserMessage(
+          [](std::vector<std::tuple<void*, int, tTVPApplication::tMsg>>& queue) {
+            queue.clear();
+          });
+    } catch (const std::exception& e) {
+      spdlog::warn("engine_destroy: FilterUserMessage ignored exception: {}", e.what());
+    } catch (...) {
+      spdlog::warn("engine_destroy: FilterUserMessage ignored unknown exception");
+    }
 
     // Avoid triggering platform exit() path in the host process.
     TVPTerminated = false;
@@ -1473,12 +1613,12 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
     }
   }
 
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) && defined(KRKR_ENABLE_GPU_BRIDGE)
   // Auto-attach pending ANativeWindow from JNI bridge.
   // The Kotlin plugin calls nativeSetSurface() which stores the
   // ANativeWindow in a global variable. Here we detect it and
   // attach it as the EGL WindowSurface render target so that
-  // eglSwapBuffers delivers frames to Flutter's SurfaceTexture.
+  // eglSwapBuffers delivers frames to the host external texture.
   if (!impl->render.native_window_attached) {
     ANativeWindow* pending_window = krkr_GetNativeWindow();
     if (pending_window) {
@@ -1599,6 +1739,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
 
   // Async startup may have made the EGL context current on a worker thread.
   // Ensure the owner/tick thread has a current context before any GL work.
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
   {
     auto& egl = krkr::GetEngineEGLContext();
     if (egl.IsValid() && !egl.MakeCurrent()) {
@@ -1608,6 +1749,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
           "failed to make EGL context current before engine_tick");
     }
   }
+#endif
 
   // Drive one full frame (scene update + render + swap). In host mode
   // we must call Application->Run() which processes messages, triggers
@@ -1643,10 +1785,23 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   if (impl->render.native_window_attached) {
     // Android WindowSurface mode — TVPForceSwapBuffer() (called by
     // TVPDrawSceneOnce above) already performed eglSwapBuffers to deliver
-    // the frame to Flutter's SurfaceTexture. Just update frame tracking.
+    // the frame to the host external texture. Just update frame tracking.
     impl->frame.serial += 1;
     impl->frame.ready = true;
   } else if (!impl->render.iosurface_attached) {
+    // GodotNative/DebugCpu host path: BasicDrawDevice handed the final
+    // composited texture to HostWindowLayer::UpdateDrawBuffer().
+    if (CaptureGodotNativeGpuFrameLocked(impl)) {
+      ClearHandleErrorLocked(impl);
+      SetThreadError(nullptr);
+      return ENGINE_RESULT_OK;
+    }
+    if (CopyHostFrameLocked(impl)) {
+      ClearHandleErrorLocked(impl);
+      SetThreadError(nullptr);
+      return ENGINE_RESULT_OK;
+    }
+
     // Legacy Pbuffer readback path (slow, for backward compatibility)
     const FrameReadbackLayout layout = GetFrameReadbackLayoutLocked(impl);
     const size_t required_size =
@@ -1674,7 +1829,9 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   } else {
     // IOSurface mode — just increment frame serial, no readback needed.
     // The render output is already in the shared IOSurface.
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
     glFlush(); // Ensure GPU commands are submitted
+#endif
     impl->frame.serial += 1;
     impl->frame.ready = true;
   }
@@ -1814,19 +1971,24 @@ engine_result_t engine_set_option(engine_handle_t handle,
     return ENGINE_RESULT_OK;
   }
 
-  // Handle angle_backend option: controls ANGLE EGL backend (Android only)
-  if (key == ENGINE_OPTION_ANGLE_BACKEND) {
+  if (key == ENGINE_OPTION_RENDER_BACKEND || key == ENGINE_OPTION_RENDERER) {
+    const std::string value(option->value_utf8);
+    const char *renderer = ENGINE_RENDERER_GODOT_NATIVE;
+    if (value == ENGINE_RENDER_BACKEND_GPU_BRIDGE || value == ENGINE_RENDERER_GPU_BRIDGE) {
+      renderer = ENGINE_RENDERER_GPU_BRIDGE;
+    } else if (value == ENGINE_RENDER_BACKEND_DEBUG_CPU || value == ENGINE_RENDERER_DEBUG_CPU ||
+               value == ENGINE_RENDERER_SOFTWARE) {
+      renderer = ENGINE_RENDERER_DEBUG_CPU;
+      spdlog::warn("engine_set_option: DebugCpu renderer selected; this is a fallback path");
+    }
     if (g_engine_bootstrapped) {
-      spdlog::warn("engine_set_option: angle_backend changed after engine initialization, "
-                   "restart required to apply new backend");
+      spdlog::warn("engine_set_option: renderer changed after engine initialization; "
+                   "restart current game session to apply");
     }
-    const std::string val(option->value_utf8);
-    if (val == ENGINE_ANGLE_BACKEND_VULKAN) {
-      impl->render.angle_backend = krkr::AngleBackend::Vulkan;
-    } else {
-      impl->render.angle_backend = krkr::AngleBackend::OpenGLES;
-    }
-    spdlog::info("engine_set_option: angle_backend={}", option->value_utf8);
+    impl->render.renderer = renderer;
+    TVPHostSetPreferGpuFrame(impl->render.renderer != ENGINE_RENDERER_DEBUG_CPU);
+    TVPSetCommandLine(TJS_W("renderer"), ttstr(renderer).c_str());
+    spdlog::info("engine_set_option: renderer={}", renderer);
     ClearHandleErrorLocked(impl);
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;
@@ -1969,9 +2131,11 @@ engine_result_t engine_set_surface_size(engine_handle_t handle,
   impl->frame.stride_bytes = 0;
   impl->frame.rgba.clear();
   impl->frame.ready = false;
+  TVPHostSetSurfaceSize(width, height);
 
-  // Propagate the new surface size to the EGL context and viewport.
+  // Propagate the new surface size to the bridge context and viewport.
   if (g_runtime_active && g_runtime_owner == handle) {
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
     auto& egl = krkr::GetEngineEGLContext();
     if (egl.IsValid()) {
       if (egl.HasNativeWindow()) {
@@ -1991,6 +2155,7 @@ engine_result_t engine_set_surface_size(engine_handle_t handle,
         }
       }
     }
+#endif
 
     // Only update WindowSize here — DestRect is exclusively managed by
     // UpdateDrawBuffer() which calculates the correct letterbox viewport.
@@ -2040,6 +2205,10 @@ engine_result_t engine_get_frame_desc(engine_handle_t handle,
   if (impl->state == ToStateValue(EngineState::kDestroyed)) {
     return SetHandleErrorAndReturnLocked(impl, ENGINE_RESULT_INVALID_STATE,
                                          "engine is already destroyed");
+  }
+
+  if (!impl->frame.ready) {
+    CopyHostFrameLocked(impl);
   }
 
   FrameReadbackLayout layout;
@@ -2094,6 +2263,10 @@ engine_result_t engine_read_frame_rgba(engine_handle_t handle,
         "engine_open_game must succeed before engine_read_frame_rgba");
   }
 
+  if (!impl->frame.ready) {
+    CopyHostFrameLocked(impl);
+  }
+
   FrameReadbackLayout layout;
   if (impl->frame.ready && impl->frame.width > 0 && impl->frame.height > 0 &&
       impl->frame.stride_bytes > 0) {
@@ -2132,6 +2305,61 @@ engine_result_t engine_read_frame_rgba(engine_handle_t handle,
   return ENGINE_RESULT_OK;
 }
 
+engine_result_t engine_get_godot_native_frame_texture(
+    engine_handle_t handle, uint64_t* out_texture_id, uint32_t* out_width,
+    uint32_t* out_height, uint64_t* out_frame_serial) {
+  if (out_texture_id == nullptr || out_width == nullptr ||
+      out_height == nullptr || out_frame_serial == nullptr) {
+    return SetThreadErrorAndReturn(
+        ENGINE_RESULT_INVALID_ARGUMENT,
+        "out_texture_id/out_width/out_height/out_frame_serial must be non-null");
+  }
+  *out_texture_id = 0;
+  *out_width = 0;
+  *out_height = 0;
+  *out_frame_serial = 0;
+
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) {
+    return result;
+  }
+
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  result = ValidateHandleThreadLocked(impl);
+  if (result != ENGINE_RESULT_OK) {
+    return result;
+  }
+
+  if (impl->state != ToStateValue(EngineState::kOpened) &&
+      impl->state != ToStateValue(EngineState::kPaused)) {
+    return SetHandleErrorAndReturnLocked(
+        impl,
+        ENGINE_RESULT_INVALID_STATE,
+        "engine_open_game must succeed before engine_get_godot_native_frame_texture");
+  }
+
+  uint64_t texture = 0;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint64_t serial = 0;
+  if (!TVPHostGetLatestGodotGpuFrame(&texture, &width, &height, &serial) ||
+      texture == 0 || width == 0 || height == 0) {
+    return SetHandleErrorAndReturnLocked(
+        impl, ENGINE_RESULT_NOT_SUPPORTED,
+        "current frame is not backed by a Godot native GPU texture");
+  }
+
+  *out_texture_id = texture;
+  *out_width = width;
+  *out_height = height;
+  *out_frame_serial = serial;
+  ClearHandleErrorLocked(impl);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
 engine_result_t engine_get_host_native_window(engine_handle_t handle,
                                               void** out_window_handle) {
   if (out_window_handle == nullptr) {
@@ -2161,11 +2389,11 @@ engine_result_t engine_get_host_native_window(engine_handle_t handle,
   }
 
 #if defined(TARGET_OS_MAC) && TARGET_OS_MAC && !TARGET_OS_IPHONE
-  // No native GLFW window in ANGLE Pbuffer mode.
+  // No native GLFW window in headless pbuffer mode.
   return SetHandleErrorAndReturnLocked(
       impl,
       ENGINE_RESULT_NOT_SUPPORTED,
-      "engine_get_host_native_window is not supported in headless ANGLE mode");
+      "engine_get_host_native_window is not supported in headless pbuffer mode");
 #else
   return SetHandleErrorAndReturnLocked(
       impl,
@@ -2202,11 +2430,11 @@ engine_result_t engine_get_host_native_view(engine_handle_t handle,
         "engine_open_game must succeed before engine_get_host_native_view");
   }
 
-  // No native GLFW window in ANGLE Pbuffer mode — native view is unavailable.
+  // No native GLFW window in headless pbuffer mode; native view is unavailable.
   return SetHandleErrorAndReturnLocked(
       impl,
       ENGINE_RESULT_NOT_SUPPORTED,
-      "engine_get_host_native_view is not supported in headless ANGLE mode");
+      "engine_get_host_native_view is not supported in headless pbuffer mode");
 }
 
 engine_result_t engine_send_input(engine_handle_t handle,
@@ -2410,7 +2638,7 @@ engine_result_t engine_set_render_target_iosurface(engine_handle_t handle,
         "engine_open_game must succeed before engine_set_render_target_iosurface");
   }
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && defined(KRKR_ENABLE_GPU_BRIDGE)
   auto& egl = krkr::GetEngineEGLContext();
   if (!egl.IsValid()) {
     return SetHandleErrorAndReturnLocked(
@@ -2468,7 +2696,7 @@ engine_result_t engine_set_render_target_iosurface(engine_handle_t handle,
   return SetHandleErrorAndReturnLocked(
       impl,
       ENGINE_RESULT_NOT_SUPPORTED,
-      "IOSurface render target is only supported on macOS");
+      "IOSurface render target requires the GPU Bridge backend");
 #endif
 }
 
@@ -2496,7 +2724,7 @@ engine_result_t engine_set_render_target_surface(engine_handle_t handle,
         "engine_open_game must succeed before engine_set_render_target_surface");
   }
 
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) && defined(KRKR_ENABLE_GPU_BRIDGE)
   auto& egl = krkr::GetEngineEGLContext();
   if (!egl.IsValid()) {
     return SetHandleErrorAndReturnLocked(
@@ -2546,7 +2774,7 @@ engine_result_t engine_set_render_target_surface(engine_handle_t handle,
   return SetHandleErrorAndReturnLocked(
       impl,
       ENGINE_RESULT_NOT_SUPPORTED,
-      "Surface render target is only supported on Android");
+      "Surface render target requires the GPU Bridge backend");
 #endif
 }
 
@@ -2603,28 +2831,44 @@ engine_result_t engine_get_renderer_info(engine_handle_t handle,
         "engine_open_game must succeed before engine_get_renderer_info");
   }
 
-  auto& egl = krkr::GetEngineEGLContext();
-  if (!egl.IsValid()) {
-    return SetHandleErrorAndReturnLocked(
-        impl,
-        ENGINE_RESULT_INVALID_STATE,
-        "EGL context not initialized");
-  }
-  if (!egl.MakeCurrent()) {
-    return SetHandleErrorAndReturnLocked(
-        impl,
-        ENGINE_RESULT_INVALID_STATE,
-        "failed to make EGL context current");
-  }
+  const std::string& selected_renderer = impl->render.renderer;
 
-  // Query GL renderer and version strings from the active ANGLE context.
-  const char* gl_renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
-  const char* gl_version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-  if (!gl_renderer) gl_renderer = "(unknown)";
-  if (!gl_version) gl_version = "(unknown)";
-
-  // Build a combined info string.
-  std::string info = std::string(gl_renderer) + " | " + std::string(gl_version);
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
+  std::string gpu_info;
+  if (selected_renderer == ENGINE_RENDERER_GPU_BRIDGE) {
+    auto& egl = krkr::GetEngineEGLContext();
+    if (egl.IsValid() && egl.MakeCurrent()) {
+      const char* gl_renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+      const char* gl_version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+      gpu_info = " gpu_renderer=" + std::string(gl_renderer ? gl_renderer : "(unknown)") +
+                 " gpu_api=" + std::string(gl_version ? gl_version : "(unknown)");
+    } else {
+      gpu_info = " bridge=egl_unavailable";
+    }
+  }
+  std::string info = "backend=" + selected_renderer +
+                     " path=godot_rendering_device host_frame=" +
+                     (selected_renderer == ENGINE_RENDERER_GODOT_NATIVE ||
+                      selected_renderer == ENGINE_RENDERER_GPU_BRIDGE ?
+                     "godot_native_texture" : "rgba_copy") +
+                     " fallback=" +
+                     (selected_renderer == ENGINE_RENDERER_DEBUG_CPU ? "debug_cpu" :
+                      selected_renderer == ENGINE_RENDERER_GPU_BRIDGE ? "gpu_bridge_godot_texture" :
+                      "see_fallback_ops final_upload=godot_rd") +
+                     gpu_info +
+                     TVPGetGodotRenderManagerFallbackStats();
+#else
+  std::string info = "backend=" + selected_renderer +
+                     " path=godot_rendering_device host_frame=" +
+                     (selected_renderer == ENGINE_RENDERER_GODOT_NATIVE ||
+                      selected_renderer == ENGINE_RENDERER_GPU_BRIDGE ?
+                     "godot_native_texture" : "rgba_copy") +
+                     " fallback=" +
+                     (selected_renderer == ENGINE_RENDERER_DEBUG_CPU ? "debug_cpu" :
+                      selected_renderer == ENGINE_RENDERER_GPU_BRIDGE ? "gpu_bridge_godot_texture" :
+                      "see_fallback_ops final_upload=godot_rd") +
+                     TVPGetGodotRenderManagerFallbackStats();
+#endif
   std::strncpy(out_buffer, info.c_str(), buffer_size - 1);
   out_buffer[buffer_size - 1] = '\0';
 

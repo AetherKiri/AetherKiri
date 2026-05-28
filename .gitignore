@@ -29,4 +29,5 @@ bridge/flutter_engine_bridge/ios/Libs/*.a
 bridge/flutter_engine_bridge/ios/Libs/CURRENT_TRIPLET
 bridge/flutter_engine_bridge/ios/Libs/*/*.a
 apps/flutter_app/devtools_options.yaml
+apps/godot_app/.godot/
 plugin_trace.log

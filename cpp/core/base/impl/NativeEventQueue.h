@@ -48,6 +48,7 @@ class NativeEventQueueImplement /* : public
 
 public:
     //	NativeEventQueueImplement() : window_handle_(nullptr) {}
+    virtual ~NativeEventQueueImplement();
 
     // デフォルトハンドラ
     void HandlerDefault(NativeEvent &event) {}
@@ -56,7 +57,7 @@ public:
     void Allocate() {}
 
     // Queue の削除
-    void Deallocate() {}
+    void Deallocate() { Clear(); }
 
     void PostEvent(const NativeEvent &event);
 

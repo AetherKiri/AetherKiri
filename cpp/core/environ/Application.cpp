@@ -301,6 +301,11 @@ tTVPApplication::~tTVPApplication() {
     delete image_load_thread_;
 }
 
+void tTVPApplication::StopImageLoadThread() {
+    delete image_load_thread_;
+    image_load_thread_ = nullptr;
+}
+
 bool tTVPApplication::StartApplication(ttstr path) {
     //	_set_se_translator(se_translator_function);
 
@@ -591,13 +596,22 @@ void tTVPApplication::Run() {
 }
 
 void tTVPApplication::ProcessMessages() {
-    std::vector<std::tuple<void *, int, tMsg>> lstUserMsg;
+    size_t remaining = 0;
     {
         std::lock_guard<std::mutex> cs(m_msgQueueLock);
-        m_lstUserMsg.swap(lstUserMsg);
+        remaining = m_lstUserMsg.size();
     }
-    for(std::tuple<void *, int, tMsg> &it : lstUserMsg) {
-        std::get<2>(it)();
+    while(remaining-- > 0) {
+        tMsg msg;
+        {
+            std::lock_guard<std::mutex> cs(m_msgQueueLock);
+            if(m_lstUserMsg.empty())
+                break;
+            msg = std::move(std::get<2>(m_lstUserMsg.front()));
+            m_lstUserMsg.erase(m_lstUserMsg.begin());
+        }
+        if(msg)
+            msg();
     }
     TVPTimer::ProgressAllTimer();
 }

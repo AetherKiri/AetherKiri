@@ -3,7 +3,7 @@
  * @brief Engine bootstrapper implementation.
  *
  * Replaces the original AppDelegate for host-mode startup.
- * Creates an ANGLE EGL Pbuffer context for headless rendering.
+ * Creates a legacy EGL pbuffer context for bridge rendering when enabled.
  */
 
 #include "EngineBootstrap.h"
@@ -13,16 +13,19 @@
 
 #include "Application.h"
 #include "ConfigManager/LocaleConfigManager.h"
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
 #include "krkr_egl_context.h"
 #include "krkr_gl.h"
 #include "ogl_common.h"
+#endif
 
 // Forward declaration — defined in stubs/ui_stubs.cpp
 void TVPInitUIExtension();
 
-// Forward declaration — forces linker to include the OpenGL render manager
-// translation unit (which would otherwise be dead-stripped in static library builds)
+extern void TVPForceRegisterGodotRenderManager();
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
 extern void TVPForceRegisterOpenGLRenderManager();
+#endif
 
 extern "C" void SDL_SetMainReady();
 extern std::thread::id TVPMainThreadID;
@@ -51,14 +54,14 @@ bool TVPEngineBootstrap::Initialize(uint32_t width, uint32_t height,
     spdlog::debug("EngineBootstrap: starting initialization");
     spdlog::default_logger()->flush();
 
-    // 2. Create ANGLE EGL context for headless rendering
+    // 2. Initialize host graphics state.
     InitializeGraphics(width, height, backend);
     spdlog::default_logger()->flush();
 
-    // 2.5. Force-link the OpenGL render manager so it survives static library
-    //      dead-stripping.  Must happen after EGL context is ready but before
-    //      TVPGetRenderManager() is first called.
+    TVPForceRegisterGodotRenderManager();
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
     TVPForceRegisterOpenGLRenderManager();
+#endif
 
     // 3. Initialize UI extensions
     TVPInitUIExtension();
@@ -78,7 +81,9 @@ void TVPEngineBootstrap::Shutdown() {
     }
 
     spdlog::info("EngineBootstrap: shutting down");
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
     krkr::GetEngineEGLContext().Destroy();
+#endif
     s_initialized = false;
 }
 
@@ -88,6 +93,7 @@ bool TVPEngineBootstrap::Resize(uint32_t width, uint32_t height) {
         return false;
     }
 
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
     auto& egl = krkr::GetEngineEGLContext();
     if (!egl.Resize(width, height)) {
         spdlog::error("EngineBootstrap::Resize failed for {}x{}", width, height);
@@ -96,6 +102,7 @@ bool TVPEngineBootstrap::Resize(uint32_t width, uint32_t height) {
 
     // Update the viewport to match the new surface size
     glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+#endif
     spdlog::info("EngineBootstrap: resized to {}x{}", width, height);
     return true;
 }
@@ -110,6 +117,7 @@ bool TVPEngineBootstrap::IsInitialized() {
 
 void TVPEngineBootstrap::InitializeGraphics(uint32_t width, uint32_t height,
                                              krkr::AngleBackend backend) {
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
     auto& egl = krkr::GetEngineEGLContext();
     if (!egl.Initialize(width, height, backend)) {
         spdlog::error("EngineBootstrap: EGL context initialization failed, "
@@ -124,7 +132,12 @@ void TVPEngineBootstrap::InitializeGraphics(uint32_t width, uint32_t height,
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    spdlog::info("EngineBootstrap: ANGLE EGL context ready");
+    spdlog::info("EngineBootstrap: legacy EGL context ready");
+#else
+    (void)backend;
+    spdlog::info("EngineBootstrap: Godot host graphics selected ({}x{})",
+                 width, height);
+#endif
 }
 
 void TVPEngineBootstrap::InitializeLocale() {
