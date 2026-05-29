@@ -39,6 +39,9 @@ var log_drain_accum := 0.0
 var perf_accum := 0.0
 var perf_log_accum := 0.0
 var state_log_accum := 0.0
+var perf_log_interval := PERF_LOG_INTERVAL
+var frame_spike_ms := 0.0
+var verbose_render_log := false
 var perf_log_file: FileAccess
 var log_lines: PackedStringArray = []
 const LOG_DRAIN_INTERVAL := 0.25
@@ -48,6 +51,12 @@ const MAX_LOG_LINES := 240
 const RENDER_SURFACE_SIZE := Vector2i(1280, 720)
 
 func _ready() -> void:
+    var perf_interval_env := OS.get_environment("AETHERKIRI_PERF_LOG_INTERVAL")
+    if not perf_interval_env.is_empty():
+        perf_log_interval = maxf(0.05, perf_interval_env.to_float())
+    frame_spike_ms = maxf(0.0, OS.get_environment("AETHERKIRI_FRAME_SPIKE_MS").to_float())
+    verbose_render_log = OS.get_environment("AETHERKIRI_VERBOSE_RENDER_LOG") == "1"
+
     var live_fps_log_path := OS.get_environment("AETHERKIRI_LIVE_FPS_LOG")
     if live_fps_log_path.is_empty():
         live_fps_log_path = _default_output_path("aetherkiri-live-fps.log")
@@ -142,6 +151,7 @@ func _process(delta: float) -> void:
                 _update_frame()
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
                 _log_live_perf(delta, tick_ms, update_ms)
+                _log_frame_spike(delta, tick_ms, update_ms)
         elif startup_state == STARTUP_FAILED:
             restart_notice.text = "Game startup failed."
             game_running = false
@@ -168,13 +178,14 @@ func _process(delta: float) -> void:
         perf_accum = 0.0
         var frame_ms := delta * 1000.0
         var renderer := player.get_renderer_info() if game_running else selected_backend
-        if game_running and not renderer.is_empty() and renderer != last_renderer_info_logged:
-            last_renderer_info_logged = renderer
+        var renderer_summary := _renderer_summary(renderer)
+        if verbose_render_log and game_running and not renderer.is_empty() and renderer_summary != last_renderer_info_logged:
+            last_renderer_info_logged = renderer_summary
             _append_log("Renderer info: %s" % renderer)
         var fallback := _renderer_fallback(renderer)
         var texture_backend := player.get_frame_texture_backend() if game_running else "none"
         perf.text = "Backend: %s | FPS: %d | Frame: %.2f ms | Texture: %s | Size: %dx%d | Fallback: %s | Errors: %d" % [
-            renderer if not renderer.is_empty() else selected_backend,
+            renderer_summary,
             Engine.get_frames_per_second(),
             frame_ms,
             texture_backend,
@@ -185,12 +196,35 @@ func _process(delta: float) -> void:
         ]
 func _log_live_perf(delta: float, tick_ms: float, update_ms: float) -> void:
     perf_log_accum += delta
-    if perf_log_accum < PERF_LOG_INTERVAL:
+    if perf_log_accum < perf_log_interval:
         return
     perf_log_accum = 0.0
     var line := "live_perf fps=%d frame_ms=%.2f tick_ms=%.2f update_ms=%.2f texture=%s size=%dx%d renderer=\"%s\" errors=%d" % [
         Engine.get_frames_per_second(),
         delta * 1000.0,
+        tick_ms,
+        update_ms,
+        player.get_frame_texture_backend(),
+        last_texture_size.x,
+        last_texture_size.y,
+        player.get_renderer_info(),
+        render_errors,
+    ]
+    print(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+
+func _log_frame_spike(delta: float, tick_ms: float, update_ms: float) -> void:
+    if frame_spike_ms <= 0.0:
+        return
+    var frame_ms := delta * 1000.0
+    var work_ms := tick_ms + update_ms
+    if frame_ms < frame_spike_ms and work_ms < frame_spike_ms:
+        return
+    var line := "frame_spike fps=%d frame_ms=%.2f tick_ms=%.2f update_ms=%.2f texture=%s size=%dx%d renderer=\"%s\" errors=%d" % [
+        Engine.get_frames_per_second(),
+        frame_ms,
         tick_ms,
         update_ms,
         player.get_frame_texture_backend(),
@@ -251,6 +285,18 @@ func _renderer_fallback(renderer: String) -> String:
     if end < 0:
         end = renderer.length()
     return renderer.substr(start, end - start)
+
+func _renderer_summary(renderer: String) -> String:
+    if renderer.is_empty():
+        return selected_backend
+    if renderer.contains("backend=godot_native"):
+        return "Godot Native GPU"
+    if renderer.contains("backend=gpu_bridge"):
+        return "GPU Bridge"
+    if renderer.contains("backend=debug_cpu"):
+        return "Debug CPU"
+    return selected_backend
+
 
 func _on_open_game() -> void:
     var path := game_path.text.strip_edges()
