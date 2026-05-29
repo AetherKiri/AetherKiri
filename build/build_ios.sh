@@ -203,19 +203,23 @@ patch_ios_export_project() {
     export_root="$(dirname "$1")"
     local dummy_cpp="$export_root/AetherKiri/dummy.cpp"
     local arch="$2"
+    local export_build_type="$3"
     local flags
     flags='$(LD_CLASSIC_$(XCODE_VERSION_ACTUAL)) -Wl,-U,_aether_kiri_library_init'
     local archive
     for archive in "${FORCE_LOAD_PLUGIN_ARCHIVES[@]}"; do
-        flags+=" -Wl,-force_load,AetherKiri/bin/ios/debug/$archive"
+        flags+=" -Wl,-force_load,AetherKiri/bin/ios/$export_build_type/$archive"
     done
-    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework OpenGLES -framework Security -framework SystemConfiguration -framework MobileCoreServices'
+    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework Security -framework SystemConfiguration -framework MobileCoreServices'
 
     if [[ -f "$project_file" ]]; then
         FLAGS="$flags" perl -0pi -e 's/OTHER_LDFLAGS = "[^"]*";/"OTHER_LDFLAGS = \"" . $ENV{FLAGS} . "\";"/eg' "$project_file"
         if [[ "$arch" == "x86_64" ]]; then
             perl -0pi -e 's/ARCHS = "arm64";/ARCHS = "x86_64";/g' "$project_file"
             perl -0pi -e 's/VALID_ARCHS = "arm64 x86_64";/VALID_ARCHS = "x86_64";/g' "$project_file"
+        else
+            perl -0pi -e 's/ARCHS = "x86_64";/ARCHS = "arm64";/g' "$project_file"
+            perl -0pi -e 's/VALID_ARCHS = "x86_64";/VALID_ARCHS = "arm64";/g' "$project_file"
         fi
     fi
     if [[ "$arch" == "x86_64" && -f "$dummy_cpp" ]] && ! grep -Fq '__swift_FORCE_LOAD_$_swift_Builtin_float' "$dummy_cpp"; then
@@ -257,9 +261,13 @@ else
         --export-debug "iOS Debug" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj"
     if [[ "$SIMULATOR" == true ]]; then
         verify_exported_simulator_template_arch "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER" "$SIMULATOR_ARCH"
-        stage_force_load_plugin_archives "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri/bin/ios/$BUILD_TYPE_LOWER"
-        patch_ios_export_project "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj" "$SIMULATOR_ARCH"
     fi
+    stage_force_load_plugin_archives "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri/bin/ios/$BUILD_TYPE_LOWER"
+    PATCH_ARCH="arm64"
+    if [[ "$SIMULATOR" == true ]]; then
+        PATCH_ARCH="$SIMULATOR_ARCH"
+    fi
+    patch_ios_export_project "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj" "$PATCH_ARCH" "$BUILD_TYPE_LOWER"
 fi
 
 echo "iOS build output: $PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER"
