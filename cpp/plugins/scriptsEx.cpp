@@ -1006,3 +1006,5 @@ NCB_ATTACH_CLASS(ScriptsAdd, Scripts) {
 };
 
 NCB_ATTACH_FUNCTION(rehash, Scripts, TJSDoRehash);
+
+extern "C" void TVPRegisterScriptsExPluginAnchor() {}

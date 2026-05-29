@@ -30,6 +30,11 @@ var last_renderer_info_logged := ""
 var last_texture_size := Vector2i.ZERO
 var capture_after_open_path := ""
 var capture_after_open_done := false
+var capture_after_open_delay_sec := 0.0
+var capture_after_open_ready_usec := 0
+var auto_probe_clicks: Array[Vector2] = []
+var auto_probe_running := false
+var auto_probe_done := false
 var log_drain_accum := 0.0
 var perf_accum := 0.0
 var perf_log_accum := 0.0
@@ -43,7 +48,10 @@ const MAX_LOG_LINES := 240
 const RENDER_SURFACE_SIZE := Vector2i(1280, 720)
 
 func _ready() -> void:
-    perf_log_file = FileAccess.open("/tmp/aetherkiri-live-fps.log", FileAccess.WRITE)
+    var live_fps_log_path := OS.get_environment("AETHERKIRI_LIVE_FPS_LOG")
+    if live_fps_log_path.is_empty():
+        live_fps_log_path = _default_output_path("aetherkiri-live-fps.log")
+    perf_log_file = FileAccess.open(live_fps_log_path, FileAccess.WRITE)
     if perf_log_file != null:
         perf_log_file.store_line("live fps log started")
         perf_log_file.flush()
@@ -64,9 +72,12 @@ func _ready() -> void:
 
     var configured_game_path := OS.get_environment("AETHERKIRI_GAME_PATH")
     if configured_game_path.is_empty():
-        configured_game_path = ProjectSettings.get_setting(
-            GAME_PATH_KEY, "/Users/liuyu/gal/奶牛5 KR3.7S"
-        )
+        if OS.get_name() == "iOS":
+            configured_game_path = _default_game_path()
+        else:
+            configured_game_path = ProjectSettings.get_setting(
+                GAME_PATH_KEY, _default_game_path()
+            )
     game_path.text = configured_game_path
 
     backend.item_selected.connect(_on_backend_selected)
@@ -89,8 +100,14 @@ func _ready() -> void:
 
     _apply_backend(false)
     _append_log("Debug CPU is a fallback backend and is not part of performance acceptance.")
+    _write_probe_marker("ready")
 
     capture_after_open_path = OS.get_environment("AETHERKIRI_CAPTURE_AFTER_OPEN")
+    capture_after_open_delay_sec = maxf(
+        0.0,
+        OS.get_environment("AETHERKIRI_CAPTURE_DELAY_SEC").to_float()
+    )
+    auto_probe_clicks = _parse_click_points(OS.get_environment("AETHERKIRI_AUTO_PROBE_CLICKS"))
     if OS.get_environment("AETHERKIRI_AUTO_OPEN") == "1":
         call_deferred("_on_open_game")
 
@@ -237,6 +254,7 @@ func _renderer_fallback(renderer: String) -> String:
 
 func _on_open_game() -> void:
     var path := game_path.text.strip_edges()
+    _write_probe_marker("open_game path=%s" % path)
     if path.is_empty():
         render_errors += 1
         _append_log("Game path is empty.")
@@ -251,6 +269,10 @@ func _on_open_game() -> void:
     var result := player.open_game(path, async_open)
     if result != ENGINE_RESULT_OK:
         render_errors += 1
+        _write_probe_marker("open_game_failed result=%s error=%s" % [
+            player.get_last_result(),
+            player.get_last_error(),
+        ])
         _append_log("Game launch failed: %s %s" % [
             player.get_last_result(),
             player.get_last_error(),
@@ -260,6 +282,9 @@ func _on_open_game() -> void:
     game_running = true
     last_texture_size = Vector2i.ZERO
     capture_after_open_done = false
+    capture_after_open_ready_usec = 0
+    auto_probe_running = false
+    auto_probe_done = false
     last_renderer_info_logged = ""
     restart_notice.text = "Starting..."
     _append_log("Game launch requested with backend: %s" % selected_backend)
@@ -278,12 +303,22 @@ func _update_frame() -> void:
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+        if not auto_probe_clicks.is_empty() and not auto_probe_running and not auto_probe_done:
+            auto_probe_running = true
+            call_deferred("_run_auto_probe")
         if not capture_after_open_path.is_empty() and not capture_after_open_done:
-            var frame := player.read_frame_rgba()
-            var frame_stats := _frame_stats(frame)
-            if int(frame_stats.get("visible", 0)) > 0:
-                capture_after_open_done = true
-                call_deferred("_capture_main_view", frame_stats)
+            if capture_after_open_ready_usec == 0:
+                capture_after_open_ready_usec = Time.get_ticks_usec() + int(capture_after_open_delay_sec * 1000000.0)
+            if Time.get_ticks_usec() < capture_after_open_ready_usec:
+                return
+            capture_after_open_done = true
+            var frame_stats := {
+                "source": "viewport_texture",
+                "texture_width": last_texture_size.x,
+                "texture_height": last_texture_size.y,
+                "texture_backend": player.get_frame_texture_backend(),
+            }
+            call_deferred("_capture_main_view", frame_stats)
 
 func _capture_main_view(frame_stats: Dictionary) -> void:
     await get_tree().process_frame
@@ -292,8 +327,12 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
     var screenshot_stats := _image_stats(image)
     var output_path := capture_after_open_path
     if output_path.is_empty():
-        output_path = OS.get_user_data_dir().path_join("main_render_probe.png")
+        output_path = _default_output_path("main_render_probe.png")
     image.save_png(output_path)
+    _write_probe_marker("capture output=%s stats=%s" % [
+        output_path,
+        JSON.stringify(screenshot_stats),
+    ])
     print("main probe renderer=\"%s\" texture_backend=%s texture_width=%d frame_stats=%s screenshot=%s screenshot_stats=%s" % [
         player.get_renderer_info(),
         player.get_frame_texture_backend(),
@@ -305,6 +344,70 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
     if OS.get_environment("AETHERKIRI_QUIT_AFTER_CAPTURE") == "1":
         var visible := int(screenshot_stats.get("visible", 0))
         get_tree().quit(0 if visible > 0 else 2)
+
+func _run_auto_probe() -> void:
+    await _auto_probe_wait_frames(_env_int("AETHERKIRI_AUTO_PROBE_WARMUP_FRAMES", 180))
+    await _save_auto_probe_step(0, "startup")
+    var step := 1
+    for pos in auto_probe_clicks:
+        _send_probe_click(pos)
+        await _auto_probe_wait_frames(_env_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180))
+        await _save_auto_probe_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+    auto_probe_done = true
+    auto_probe_running = false
+    _write_probe_marker("auto_probe_done steps=%d renderer=%s" % [
+        step,
+        player.get_renderer_info(),
+    ])
+    if OS.get_environment("AETHERKIRI_QUIT_AFTER_AUTO_PROBE") == "1":
+        get_tree().quit(0)
+
+func _auto_probe_wait_frames(frames: int) -> void:
+    for i in range(max(1, frames)):
+        await get_tree().process_frame
+
+func _save_auto_probe_step(index: int, label: String) -> void:
+    await get_tree().process_frame
+    await get_tree().process_frame
+    var image := get_viewport().get_texture().get_image()
+    var path := _default_output_path("aetherkiri-auto-step-%02d-%s.png" % [index, label])
+    image.save_png(path)
+    _write_probe_marker("auto_step index=%d label=%s output=%s stats=%s renderer=%s" % [
+        index,
+        label,
+        path,
+        JSON.stringify(_image_stats(image)),
+        player.get_renderer_info(),
+    ])
+
+func _send_probe_click(window_pos: Vector2) -> void:
+    var mapped := _map_probe_window_point(window_pos)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        _write_probe_marker("auto_click_skipped window=%s mapped=%s" % [window_pos, mapped])
+        return
+    player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    _write_probe_marker("auto_click window=%s mapped=%s" % [window_pos, mapped])
+
+func _map_probe_window_point(pos: Vector2) -> Vector2:
+    var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
+    var panel_size := Vector2(
+        float(_env_int("AETHERKIRI_AUTO_PROBE_COORD_W", 1600)),
+        float(_env_int("AETHERKIRI_AUTO_PROBE_COORD_H", 900))
+    )
+    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
+    if scale <= 0.0:
+        return Vector2(-1.0, -1.0)
+    var drawn_size := tex_size * scale
+    var offset := (panel_size - drawn_size) * 0.5
+    var inside := pos - offset
+    if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
+        return Vector2(-1.0, -1.0)
+    return inside / scale
 
 func _frame_stats(frame: Dictionary) -> Dictionary:
     var data: PackedByteArray = frame.get("rgba", PackedByteArray())
@@ -340,6 +443,44 @@ func _image_stats(image: Image) -> Dictionary:
         "sampled": sampled,
         "visible": visible,
     }
+
+func _default_game_path() -> String:
+    if OS.get_name() == "iOS":
+        return ProjectSettings.globalize_path("user://Games/KR3.7S")
+    return "/Users/liuyu/gal/奶牛5 KR3.7S"
+
+func _default_output_path(file_name: String) -> String:
+    if OS.get_name() == "iOS":
+        return "user://".path_join(file_name)
+    return "/tmp".path_join(file_name)
+
+func _parse_click_points(spec: String) -> Array[Vector2]:
+    var clicks: Array[Vector2] = []
+    if spec.is_empty():
+        return clicks
+    for item in spec.split(";"):
+        var parts := item.split(",")
+        if parts.size() == 2:
+            clicks.push_back(Vector2(float(parts[0]), float(parts[1])))
+    return clicks
+
+func _env_int(name: String, fallback: int) -> int:
+    var value := OS.get_environment(name)
+    if value.is_empty():
+        return fallback
+    return int(value)
+
+func _write_probe_marker(line: String) -> void:
+    if OS.get_name() != "iOS":
+        return
+    var marker := FileAccess.open(_default_output_path("aetherkiri-device-probe.log"), FileAccess.READ_WRITE)
+    if marker == null:
+        marker = FileAccess.open(_default_output_path("aetherkiri-device-probe.log"), FileAccess.WRITE)
+    if marker == null:
+        return
+    marker.seek_end()
+    marker.store_line("%d %s" % [Time.get_ticks_msec(), line])
+    marker.flush()
 
 func _on_viewport_input(event: InputEvent) -> void:
     if not game_running:
@@ -423,6 +564,7 @@ func _unhandled_input(event: InputEvent) -> void:
         player.send_key_event(key.pressed, key.keycode, key.get_modifiers_mask(), key.unicode)
 
 func _append_log(line: String) -> void:
+    _write_probe_marker("log %s" % line)
     log_lines.append(line)
     while log_lines.size() > MAX_LOG_LINES:
         log_lines.remove_at(0)

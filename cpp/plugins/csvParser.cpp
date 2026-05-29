@@ -464,3 +464,5 @@ void InitPlugin_CSVParser() {
 // }
 
 NCB_PRE_REGIST_CALLBACK(InitPlugin_CSVParser);
+
+extern "C" void TVPRegisterCSVParserPluginAnchor() {}
