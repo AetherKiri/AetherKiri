@@ -222,7 +222,7 @@ patch_ios_export_project() {
             perl -0pi -e 's/VALID_ARCHS = "x86_64";/VALID_ARCHS = "arm64";/g' "$project_file"
         fi
     fi
-    if [[ "$arch" == "x86_64" && -f "$dummy_cpp" ]] && ! grep -Fq '__swift_FORCE_LOAD_$_swift_Builtin_float' "$dummy_cpp"; then
+    if [[ -f "$dummy_cpp" ]] && ! grep -Fq '__swift_FORCE_LOAD_$_swift_Builtin_float' "$dummy_cpp"; then
         cat >> "$dummy_cpp" <<'EOF'
 
 extern "C" void aether_kiri_swift_builtin_float_force_load(void) __asm("__swift_FORCE_LOAD_$_swift_Builtin_float");
@@ -257,8 +257,14 @@ elif [[ ! -f "$GODOT_EXPORT_TEMPLATE" ]]; then
 else
     echo "==> Exporting Godot iOS project"
     mkdir -p "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER"
+    EXPORT_PRESET="iOS Debug"
+    EXPORT_MODE="--export-debug"
+    if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+        EXPORT_PRESET="iOS Release"
+        EXPORT_MODE="--export-release"
+    fi
     "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
-        --export-debug "iOS Debug" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj"
+        "$EXPORT_MODE" "$EXPORT_PRESET" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj"
     if [[ "$SIMULATOR" == true ]]; then
         verify_exported_simulator_template_arch "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER" "$SIMULATOR_ARCH"
     fi
