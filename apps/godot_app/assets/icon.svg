@@ -1,5 +1,3 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <rect width="1024" height="1024" rx="192" fill="#151923"/>
-  <path d="M256 728 448 296h128l192 432H640l-32-80H416l-32 80H256Zm200-184h112l-56-144-56 144Z" fill="#f7c948"/>
-  <path d="M268 248h488v96H268z" fill="#39c5bb"/>
+  <image href="icon.png" x="0" y="0" width="1024" height="1024"/>
 </svg>
