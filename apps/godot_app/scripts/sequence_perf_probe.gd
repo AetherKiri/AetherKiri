@@ -1,5 +1,6 @@
 extends SceneTree
 
+const ProbeConfig = preload("res://scripts/probe_config.gd")
 const STARTUP_SUCCEEDED := 2
 const STARTUP_FAILED := 3
 const POINTER_DOWN := 1
@@ -7,7 +8,8 @@ const POINTER_MOVE := 2
 const POINTER_UP := 3
 
 func _initialize() -> void:
-    root.size = Vector2i(1280, 720)
+    var config := ProbeConfig.load()
+    root.size = ProbeConfig.window_size(config, Vector2i(1280, 720))
 
     var rect := TextureRect.new()
     rect.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -26,19 +28,21 @@ func _initialize() -> void:
         quit(1)
         return
 
-    player.set_render_backend("Godot Native")
-    player.set_surface_size(1280, 720)
+    player.set_render_backend(ProbeConfig.backend(config, "AETHERKIRI_PROBE_BACKEND"))
+    var surface_size: Vector2i = ProbeConfig.surface_size(config)
+    player.set_surface_size(surface_size.x, surface_size.y)
 
-    var game_path := OS.get_environment("AETHERKIRI_SMOKE_GAME")
+    var game_path: String = ProbeConfig.require_game_path(config)
     if game_path.is_empty():
-        game_path = "/Users/liuyu/gal/奶牛5 KR3.7S"
+        quit(2)
+        return
     var result: int = player.open_game(game_path, true)
     if result != 0:
         printerr("open_game failed: %s" % player.get_last_error())
         quit(1)
         return
 
-    for i in range(900):
+    for i in range(ProbeConfig.int_value(config, "startup_timeout_frames", 900)):
         var state: int = player.get_startup_state()
         if state == STARTUP_SUCCEEDED:
             break
@@ -48,18 +52,19 @@ func _initialize() -> void:
             return
         await process_frame
 
-    for i in range(_env_int("AETHERKIRI_PROBE_WARMUP_FRAMES", 180)):
+    for i in range(ProbeConfig.int_value(config, "warmup_frames", _env_int("AETHERKIRI_PROBE_WARMUP_FRAMES", 180))):
         _tick_and_update(player, rect)
         await process_frame
 
-    var click_spec := OS.get_environment("AETHERKIRI_PROBE_CLICKS")
-    for pos in _parse_clicks(click_spec):
+    for click in ProbeConfig.clicks(config):
+        var pos := ProbeConfig.click_position(click)
         _send_click(player, pos)
-        for i in range(_env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 120)):
+        var after_frames := int(click.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 120))))
+        for i in range(after_frames):
             _tick_and_update(player, rect)
             await process_frame
 
-    var measured_frames: int = _env_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 180)
+    var measured_frames: int = ProbeConfig.int_value(config, "measure_frames", _env_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 180))
     var start_ticks: int = Time.get_ticks_usec()
     for i in range(measured_frames):
         _tick_and_update(player, rect)

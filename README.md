@@ -1,21 +1,23 @@
 # AetherKiri
 
-AetherKiri is a Godot-hosted KiriKiri2 runtime. The project is migrating to a
-C++ engine core loaded by a Godot 4.6 GDExtension, with Godot-owned rendering as
-the default product path.
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+AetherKiri is a Godot-hosted KiriKiri2 runtime. The project uses a C++ engine
+core loaded by a Godot 4.6 GDExtension, with Godot-owned rendering as the
+default product path.
 
 ## Architecture
 
-```
+```text
 Godot App Shell
   -> GDExtension Host
     -> C++ Engine Core
       -> KiriKiri Runtime / Plugins
 ```
 
-The default renderer is **Godot Native**. It is intended to render through
-Godot `RenderingDevice` resources owned by the Godot app. **GPU Bridge** remains
-as an explicit compatibility/performance backend for external native GPU render
+The default renderer is **Godot Native**. It renders through Godot
+`RenderingDevice` resources owned by the Godot app. **GPU Bridge** remains an
+explicit compatibility/performance backend for external native GPU render
 targets imported by Godot. **Debug CPU** is a visible fallback path only and is
 not accepted as a performance target.
 
@@ -29,6 +31,8 @@ not accepted as a performance target.
   support.
 - `cpp/plugins/` - bundled native plugin implementations and compatibility
   stubs.
+- `tests/profiles/` - per-game probe profiles. Committed profiles must not
+  contain machine-local game paths.
 
 ## Render Backends
 
@@ -51,21 +55,107 @@ Prerequisites:
 - Godot at `/Applications/Godot.app` or `GODOT_BIN=/path/to/Godot`
 - Xcode for macOS/iOS exports
 
+Common builds:
+
 ```bash
 ./build.sh macos debug
+./build.sh macos release
 ./build.sh ios debug --simulator
+./build.sh ios release
 ```
 
 The scripts build the native engine and Godot host library, stage them under
 `apps/godot_app/bin/`, then run the matching Godot export preset when Godot is
 available.
 
+## Testing Build Artifacts
+
+### macOS App
+
+Build and launch the exported app:
+
+```bash
+./build.sh macos release
+open out/godot/macos/release/AetherKiri.app
+```
+
+For debug logging from the terminal:
+
+```bash
+./build.sh macos debug
+out/godot/macos/debug/AetherKiri.app/Contents/MacOS/AetherKiri
+```
+
+Add a game through the app UI, or pass a local test game only for the current
+run:
+
+```bash
+AETHERKIRI_GAME_PATH="/path/to/game" \
+out/godot/macos/debug/AetherKiri.app/Contents/MacOS/AetherKiri
+```
+
+### iOS Simulator
+
+Build the simulator export:
+
+```bash
+./build.sh ios debug --simulator
+```
+
+Open the generated Xcode project or install the built app with `simctl` after
+building it from Xcode:
+
+```bash
+xcrun simctl boot "iPad Pro 11-inch (M4)"
+xcrun simctl install booted /path/to/AetherKiri.app
+xcrun simctl launch booted com.example.aetherkiri
+```
+
+The bundle identifier depends on the export preset and signing configuration.
+
+### iOS Device
+
+Build the iOS export project:
+
+```bash
+./build.sh ios release
+```
+
+Then build and install with Xcode or command line tools:
+
+```bash
+xcodebuild \
+  -project out/godot/ios/release/AetherKiri.xcodeproj \
+  -scheme AetherKiri \
+  -configuration Release \
+  -destination 'generic/platform=iOS' \
+  -allowProvisioningUpdates \
+  build
+```
+
+After Xcode creates `AetherKiri.app`, install it to a paired device:
+
+```bash
+xcrun devicectl list devices
+xcrun devicectl device install app \
+  --device <device-identifier> \
+  /path/to/AetherKiri.app
+```
+
+On iOS/iPadOS, copy games through the Files app into:
+
+```text
+On My iPhone/iPad -> AetherKiri -> Games
+```
+
+Return to AetherKiri and tap refresh.
+
 ## Validation
 
 Useful migration checks:
 
 ```bash
-rg "F[l]utter|f[l]utter|A[N]GLE|Platform[ ]Graphics" README.md apps bridge build CMakeLists.txt
+rg "F[l]utter|f[l]utter|A[N]GLE|Platform[ ]Graphics" README.md README.zh-CN.md apps bridge build CMakeLists.txt
 rg "u[n]official-angle|l[i]bEGL|l[i]bGLESv2" CMakeLists.txt bridge cpp build vcpkg.json
 ./build.sh macos debug
 ./build.sh ios debug --simulator
@@ -73,11 +163,55 @@ build/validate_godot_native.sh
 build/validate_gpu_bridge.sh
 ```
 
-Game smoke target:
+Godot script checks:
 
-```text
-/Users/liuyu/gal/奶牛5 KR3.7S
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot \
+  --headless \
+  --path apps/godot_app \
+  --check-only \
+  --quit
 ```
+
+## Per-Game Probe Profiles
+
+Probe scripts can be driven by `AETHERKIRI_TEST_CONFIG`. Keep committed profiles
+generic; do not commit local absolute game paths. Use `AETHERKIRI_SMOKE_GAME` or
+an untracked local profile for machine-specific paths.
+
+Example smoke test:
+
+```bash
+AETHERKIRI_TEST_CONFIG="$PWD/tests/profiles/kr37s.json" \
+AETHERKIRI_SMOKE_GAME="/path/to/game" \
+/Applications/Godot.app/Contents/MacOS/Godot \
+  --path apps/godot_app \
+  --script res://scripts/smoke_test.gd
+```
+
+Example render/interaction probe:
+
+```bash
+AETHERKIRI_TEST_CONFIG="$PWD/tests/profiles/kr37s.json" \
+AETHERKIRI_SMOKE_GAME="/path/to/game" \
+/Applications/Godot.app/Contents/MacOS/Godot \
+  --path apps/godot_app \
+  --script res://scripts/step_render_probe.gd
+```
+
+Profile fields:
+
+- `game_path`: optional game directory or XP3 path. Keep blank in committed
+  profiles unless the path is portable.
+- `backend`: render backend, usually `Godot Native`.
+- `surface_size`: engine render surface, for example `[1280, 720]`.
+- `window_size`: probe window size.
+- `coord_size`: coordinate space used by recorded click points.
+- `startup_timeout_frames`, `warmup_frames`, `after_click_frames`,
+  `measure_frames`: timing knobs.
+- `clicks`: ordered interaction steps with `name`, `x`, `y`, and optional
+  `after_frames`.
+- `perf_input`: compatibility settings for `perf_input_probe.gd`.
 
 Acceptance requires startup, rendering, input, menu operations, audio, save
 paths, clean exit, and performance parity from Godot Native or GPU Bridge. Debug

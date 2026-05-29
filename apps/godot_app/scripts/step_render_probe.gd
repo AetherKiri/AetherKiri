@@ -1,5 +1,6 @@
 extends SceneTree
 
+const ProbeConfig = preload("res://scripts/probe_config.gd")
 const STARTUP_SUCCEEDED := 2
 const STARTUP_FAILED := 3
 const POINTER_DOWN := 1
@@ -8,10 +9,14 @@ const POINTER_UP := 3
 
 var player: AetherKiriPlayer
 var rect: TextureRect
+var test_config := {}
 
 func _initialize() -> void:
-    root.size = Vector2i(_env_int("AETHERKIRI_PROBE_WINDOW_W", 1600),
-                         _env_int("AETHERKIRI_PROBE_WINDOW_H", 900))
+    test_config = ProbeConfig.load()
+    root.size = ProbeConfig.window_size(test_config, Vector2i(
+        _env_int("AETHERKIRI_PROBE_WINDOW_W", 1600),
+        _env_int("AETHERKIRI_PROBE_WINDOW_H", 900)
+    ))
 
     rect = TextureRect.new()
     rect.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -30,15 +35,15 @@ func _initialize() -> void:
         quit(1)
         return
 
-    var backend := OS.get_environment("AETHERKIRI_PROBE_BACKEND")
-    if backend.is_empty():
-        backend = "Godot Native"
+    var backend: String = ProbeConfig.backend(test_config, "AETHERKIRI_PROBE_BACKEND")
     player.set_render_backend(backend)
-    player.set_surface_size(1280, 720)
+    var surface_size: Vector2i = ProbeConfig.surface_size(test_config)
+    player.set_surface_size(surface_size.x, surface_size.y)
 
-    var game_path := OS.get_environment("AETHERKIRI_SMOKE_GAME")
+    var game_path: String = ProbeConfig.require_game_path(test_config)
     if game_path.is_empty():
-        game_path = "/Users/liuyu/gal/奶牛5 KR3.7S"
+        quit(2)
+        return
     var result: int = player.open_game(game_path, true)
     if result != 0:
         printerr("open_game failed: %s" % player.get_last_error())
@@ -49,17 +54,18 @@ func _initialize() -> void:
         quit(1)
         return
 
-    await _advance(_env_int("AETHERKIRI_PROBE_WARMUP_FRAMES", 180))
+    await _advance(ProbeConfig.int_value(test_config, "warmup_frames", _env_int("AETHERKIRI_PROBE_WARMUP_FRAMES", 180)))
     await _save_step(0, "startup")
 
     var step := 1
-    for pos in _parse_clicks(OS.get_environment("AETHERKIRI_PROBE_CLICKS")):
+    for click in ProbeConfig.clicks(test_config):
+        var pos := ProbeConfig.click_position(click)
         _send_window_click(pos)
-        await _advance(_env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))
+        await _advance(int(click.get("after_frames", ProbeConfig.int_value(test_config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)))))
         await _save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
         step += 1
 
-    var measured_frames: int = _env_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 120)
+    var measured_frames: int = ProbeConfig.int_value(test_config, "measure_frames", _env_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 120))
     var start_ticks: int = Time.get_ticks_usec()
     await _advance(measured_frames)
     var fps: float = float(measured_frames) / max(0.0001, float(Time.get_ticks_usec() - start_ticks) / 1000000.0)
@@ -81,7 +87,7 @@ func _destroy_player() -> void:
     player.destroy_engine()
 
 func _wait_startup() -> bool:
-    for i in range(900):
+    for i in range(ProbeConfig.int_value(test_config, "startup_timeout_frames", 900)):
         var state: int = player.get_startup_state()
         if state == STARTUP_SUCCEEDED:
             return true
@@ -132,8 +138,11 @@ func _map_window_point(pos: Vector2) -> Vector2:
         return pos
     var tex_size := Vector2(max(1.0, float(rect.texture.get_width())),
                             max(1.0, float(rect.texture.get_height())))
-    var panel_size := Vector2(_env_int("AETHERKIRI_PROBE_COORD_W", 1600),
-                              _env_int("AETHERKIRI_PROBE_COORD_H", 900))
+    var coord := ProbeConfig.coord_size(test_config, Vector2i(
+        _env_int("AETHERKIRI_PROBE_COORD_W", 1600),
+        _env_int("AETHERKIRI_PROBE_COORD_H", 900)
+    ))
+    var panel_size := Vector2(coord)
     var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
     if scale <= 0.0:
         return Vector2(-1.0, -1.0)
