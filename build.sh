@@ -102,6 +102,9 @@ for arg in "$@"; do
         --simulator)
             EXTRA_ARGS+=("$arg")
             ;;
+        --simulator-arch=*)
+            EXTRA_ARGS+=("$arg")
+            ;;
         *)
             echo -e "${YELLOW}[WARN]${NC} Unknown argument: $arg (passing through)"
             EXTRA_ARGS+=("$arg")

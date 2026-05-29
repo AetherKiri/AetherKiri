@@ -198,6 +198,21 @@ RenderingDevice *MainRenderingDevice() {
     return server != nullptr ? server->get_rendering_device() : nullptr;
 }
 
+bool SupportsGodotRenderingDeviceGpu() {
+    RenderingServer *server = RenderingServer::get_singleton();
+    RenderingDevice *rd = MainRenderingDevice();
+    if (server == nullptr || rd == nullptr) return false;
+
+    const std::string method =
+        std::string(server->get_current_rendering_method().utf8().get_data());
+    const std::string driver =
+        std::string(server->get_current_rendering_driver_name().utf8().get_data());
+    return method.find("compatibility") == std::string::npos &&
+           method.find("gl_compatibility") == std::string::npos &&
+           driver.find("opengl") == std::string::npos &&
+           driver.find("OpenGL") == std::string::npos;
+}
+
 PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
     PackedByteArray data;
     data.resize(48);
@@ -1153,7 +1168,10 @@ Ref<RDTextureFormat> MakeRgbaTextureFormat(uint32_t width, uint32_t height) {
 uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
                           uint32_t stride_bytes) {
     RenderingDevice *rd = MainRenderingDevice();
-    if (rd == nullptr || width == 0 || height == 0) return 0;
+    if (rd == nullptr || !SupportsGodotRenderingDeviceGpu() ||
+        width == 0 || height == 0) {
+        return 0;
+    }
 
     Ref<RDTextureView> view;
     view.instantiate();
@@ -2365,7 +2383,7 @@ private:
     Ref<Texture2D> update_rd_texture(const engine_frame_desc_t &desc,
                                      const PackedByteArray &data) {
         RenderingDevice *rd = main_rendering_device();
-        if (rd == nullptr) {
+        if (rd == nullptr || !SupportsGodotRenderingDeviceGpu()) {
             return Ref<Texture2D>();
         }
 
@@ -2421,7 +2439,8 @@ private:
                                                       uint32_t width,
                                                       uint32_t height) {
         RenderingDevice *rd = main_rendering_device();
-        if (rd == nullptr || texture_id == 0 || width == 0 || height == 0) {
+        if (rd == nullptr || !SupportsGodotRenderingDeviceGpu() ||
+            texture_id == 0 || width == 0 || height == 0) {
             return Ref<Texture2D>();
         }
         if (frame_imported_texture_.is_valid() &&

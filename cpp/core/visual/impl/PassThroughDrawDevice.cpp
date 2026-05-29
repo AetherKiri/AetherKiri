@@ -399,6 +399,15 @@ void tTVPPassThroughDrawDevice::NotifyLayerResize(iTVPLayerManager *manager) {
 
 //---------------------------------------------------------------------------
 void tTVPPassThroughDrawDevice::Show() {
+    if(Window) {
+        iWindowLayer *form = Window->GetForm();
+        if(form && !Managers.empty()) {
+            iTVPBaseBitmap *buf = Managers.back()->GetDrawBuffer();
+            if(buf) {
+                form->UpdateDrawBuffer(buf->GetTexture());
+            }
+        }
+    }
     if(Drawer) {
         // TVPDrawCursor();
         Drawer->Show();

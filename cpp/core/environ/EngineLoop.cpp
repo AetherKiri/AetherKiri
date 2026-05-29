@@ -31,6 +31,7 @@
 // Forward declarations for functions used by the engine core
 extern bool TVPCheckStartupPath(const std::string& path);
 extern void TVPForceSwapBuffer();
+extern void TVPHostForceDrawDeviceShow();
 
 // ---------------------------------------------------------------------------
 // Global state — previously in MainScene.cpp, now owned by EngineLoop
@@ -66,6 +67,7 @@ int TVPDrawSceneOnce(int interval) {
     if (remain <= 0) {
         if (s_postUpdate)
             s_postUpdate();
+        TVPHostForceDrawDeviceShow();
         TVPForceSwapBuffer();
         lastTick = curTick;
         return 0;

@@ -31,4 +31,7 @@ enabled=PackedStringArray()
 
 [rendering]
 
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="mobile"
+rendering_device/driver.ios="metal"
 textures/vram_compression/import_etc2_astc=true

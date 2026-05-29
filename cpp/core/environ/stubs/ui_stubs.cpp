@@ -56,6 +56,54 @@ uint64_t g_host_gpu_serial = 0;
 uint32_t g_host_surface_width = 1280;
 uint32_t g_host_surface_height = 720;
 bool g_host_prefer_gpu_frame = true;
+tTJSNI_Window *g_host_window_owner = nullptr;
+
+bool StoreLatestCpuFrameFromTexture(iTVPTexture2D *tex) {
+    if (!tex) return false;
+    const tjs_uint tw = tex->GetWidth();
+    const tjs_uint th = tex->GetHeight();
+    if (tw == 0 || th == 0) return false;
+
+    const uint32_t dst_stride = static_cast<uint32_t>(tw * 4u);
+    std::vector<uint8_t> frame(static_cast<size_t>(dst_stride) * th);
+    const tjs_int src_pitch = tex->GetPitch();
+    const void *pixel_data = tex->GetPixelData();
+    if (pixel_data) {
+        const auto *src = static_cast<const uint8_t *>(pixel_data);
+        for (tjs_uint y = 0; y < th; ++y) {
+            std::memcpy(frame.data() + static_cast<size_t>(y) * dst_stride,
+                        src + static_cast<size_t>(y) * src_pitch,
+                        dst_stride);
+        }
+    } else {
+        for (tjs_uint y = 0; y < th; ++y) {
+            const void *line = tex->GetScanLineForRead(y);
+            if (line) {
+                std::memcpy(frame.data() + static_cast<size_t>(y) * dst_stride,
+                            line, dst_stride);
+            }
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+    g_host_frame_rgba.swap(frame);
+    g_host_frame_width = static_cast<uint32_t>(tw);
+    g_host_frame_height = static_cast<uint32_t>(th);
+    g_host_frame_stride = dst_stride;
+    g_host_frame_serial += 1;
+    g_host_gpu_texture = 0;
+    g_host_gpu_width = 0;
+    g_host_gpu_height = 0;
+    return true;
+}
+
+}
+
+void TVPHostForceDrawDeviceShow() {
+    if (g_host_window_owner != nullptr) {
+        g_host_window_owner->UpdateContent();
+        g_host_window_owner->DeliverDrawDeviceShow();
+    }
 }
 
 extern "C" void TVPHostSetPreferGpuFrame(bool prefer_gpu_frame) {
@@ -316,34 +364,7 @@ public:
         }
         }
 
-        const uint32_t dst_stride = static_cast<uint32_t>(tw * 4u);
-        std::vector<uint8_t> frame(static_cast<size_t>(dst_stride) * th);
-        const tjs_int src_pitch = tex->GetPitch();
-        const void *pixel_data = tex->GetPixelData();
-        if(pixel_data) {
-            const auto *src = static_cast<const uint8_t *>(pixel_data);
-            for(tjs_uint y = 0; y < th; ++y) {
-                std::memcpy(frame.data() + static_cast<size_t>(y) * dst_stride,
-                            src + static_cast<size_t>(y) * src_pitch,
-                            dst_stride);
-            }
-        } else {
-            for(tjs_uint y = 0; y < th; ++y) {
-                const void *line = tex->GetScanLineForRead(y);
-                if(line) {
-                    std::memcpy(frame.data() + static_cast<size_t>(y) * dst_stride,
-                                line, dst_stride);
-                }
-            }
-        }
-        {
-            std::lock_guard<std::mutex> lock(g_host_frame_mutex);
-            g_host_frame_rgba.swap(frame);
-            g_host_frame_width = static_cast<uint32_t>(tw);
-            g_host_frame_height = static_cast<uint32_t>(th);
-            g_host_frame_stride = dst_stride;
-            g_host_frame_serial += 1;
-        }
+        StoreLatestCpuFrameFromTexture(tex);
 
         auto* dd = owner_->GetDrawDevice();
         if (!dd) return;
@@ -365,6 +386,51 @@ public:
         const tjs_uint tw = tex->GetWidth();
         const tjs_uint th = tex->GetHeight();
         if (tw == 0 || th == 0) return;
+
+        if (auto *godot_tex = dynamic_cast<GodotTexture2D *>(tex)) {
+            if (g_host_prefer_gpu_frame && godot_tex->EnsureGpuHandle() &&
+                godot_tex->UploadCpuToGpu()) {
+                {
+                    std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+                    g_host_gpu_texture = godot_tex->GetGodotGpuHandle();
+                    g_host_gpu_width = static_cast<uint32_t>(tw);
+                    g_host_gpu_height = static_cast<uint32_t>(th);
+                    g_host_gpu_serial += 1;
+                    g_host_frame_rgba.clear();
+                    g_host_frame_width = static_cast<uint32_t>(tw);
+                    g_host_frame_height = static_cast<uint32_t>(th);
+                    g_host_frame_stride = static_cast<uint32_t>(tw * 4u);
+                    g_host_frame_serial = g_host_gpu_serial;
+                }
+            } else {
+                StoreLatestCpuFrameFromTexture(tex);
+            }
+
+            auto* dd = owner_->GetDrawDevice();
+            if (!dd) return;
+            tTVPRect dest(0, 0, static_cast<tjs_int>(tex->GetWidth()),
+                          static_cast<tjs_int>(tex->GetHeight()));
+            dd->SetDestRectangle(dest);
+            dd->SetClipRectangle(dest);
+            dd->SetViewport(dest);
+            dd->SetWindowSize(dest.get_width(), dest.get_height());
+            if (g_postDrawHook) g_postDrawHook();
+            return;
+        }
+
+        if (tex->GetNativeGLTextureId() == 0) {
+            StoreLatestCpuFrameFromTexture(tex);
+            auto* dd = owner_->GetDrawDevice();
+            if (!dd) return;
+            tTVPRect dest(0, 0, static_cast<tjs_int>(tex->GetWidth()),
+                          static_cast<tjs_int>(tex->GetHeight()));
+            dd->SetDestRectangle(dest);
+            dd->SetClipRectangle(dest);
+            dd->SetViewport(dest);
+            dd->SetWindowSize(dest.get_width(), dest.get_height());
+            if (g_postDrawHook) g_postDrawHook();
+            return;
+        }
 
         EnsureBlitResources();
 
@@ -762,6 +828,7 @@ void TVPInitUIExtension() {
 // Creates a HostWindowLayer and registers it with the application.
 // ---------------------------------------------------------------------------
 iWindowLayer *TVPCreateAndAddWindow(tTJSNI_Window *w) {
+    g_host_window_owner = w;
     auto *layer = new HostWindowLayer(w);
     spdlog::info("TVPCreateAndAddWindow: created HostWindowLayer ({}x{})",
                  layer->GetWidth(), layer->GetHeight());

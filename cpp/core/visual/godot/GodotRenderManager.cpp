@@ -262,6 +262,9 @@ void GodotTexture2D::CreateGpuHandle(const void *pixel, int pitch) {
     gpu_handle_ = bridge->create_rgba(static_cast<uint32_t>(Width),
                                       static_cast<uint32_t>(Height),
                                       src, stride);
+    if (gpu_handle_ == 0) {
+        return;
+    }
     gpu_dirty_ = false;
     cpu_dirty_ = false;
     DiscardCpuStorage();
