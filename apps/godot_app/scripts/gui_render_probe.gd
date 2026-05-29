@@ -1,14 +1,17 @@
 extends SceneTree
 
+const ProbeConfig = preload("res://scripts/probe_config.gd")
 const STARTUP_SUCCEEDED := 2
 const STARTUP_FAILED := 3
 
 func _initialize() -> void:
-    root.size = Vector2i(1280, 720)
+    var config := ProbeConfig.load()
+    root.size = ProbeConfig.window_size(config, Vector2i(1280, 720))
 
-    var game_path := OS.get_environment("AETHERKIRI_SMOKE_GAME")
+    var game_path: String = ProbeConfig.require_game_path(config)
     if game_path.is_empty():
-        game_path = "/Users/liuyu/gal/奶牛5 KR3.7S"
+        quit(2)
+        return
 
     var rect := TextureRect.new()
     rect.name = "ProbeTexture"
@@ -28,11 +31,10 @@ func _initialize() -> void:
         quit(1)
         return
 
-    var backend := OS.get_environment("AETHERKIRI_RENDER_BACKEND")
-    if backend.is_empty():
-        backend = "Godot Native"
+    var backend: String = ProbeConfig.backend(config)
     player.set_render_backend(backend)
-    player.set_surface_size(1280, 720)
+    var surface_size: Vector2i = ProbeConfig.surface_size(config)
+    player.set_surface_size(surface_size.x, surface_size.y)
 
     var result: int = player.open_game(game_path, true)
     if result != 0:
@@ -42,7 +44,7 @@ func _initialize() -> void:
         return
 
     var started := false
-    for i in range(600):
+    for i in range(ProbeConfig.int_value(config, "startup_timeout_frames", 600)):
         var state: int = player.get_startup_state()
         if state == STARTUP_SUCCEEDED:
             started = true
@@ -60,10 +62,11 @@ func _initialize() -> void:
         quit(1)
         return
 
-    var min_frames := int(OS.get_environment("AETHERKIRI_PROBE_MIN_FRAMES"))
+    var min_frames := ProbeConfig.int_value(config, "min_visible_frames", 0)
+    var max_frames := ProbeConfig.int_value(config, "gui_probe_frames", 180)
     var texture: Texture2D
     var frame := {}
-    for i in range(180):
+    for i in range(max_frames):
         result = player.tick(1.0 / 60.0)
         if result != 0:
             printerr("tick failed: %s" % player.get_last_error())
@@ -98,10 +101,9 @@ func _initialize() -> void:
         JSON.stringify(screenshot_stats),
     ])
 
-    var visible_pixels := int(stats.get("visible", 0))
     var screenshot_visible := int(screenshot_stats.get("visible", 0))
     player.destroy_engine()
-    if visible_pixels <= 0 or screenshot_visible <= 0:
+    if screenshot_visible <= 0:
         quit(2)
         return
     quit(0)

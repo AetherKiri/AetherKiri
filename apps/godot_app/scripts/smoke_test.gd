@@ -1,7 +1,10 @@
 extends SceneTree
 
+const ProbeConfig = preload("res://scripts/probe_config.gd")
+
 func _initialize() -> void:
-    var game_path := OS.get_environment("AETHERKIRI_SMOKE_GAME")
+    var config := ProbeConfig.load()
+    var game_path: String = ProbeConfig.require_game_path(config)
     if game_path.is_empty():
         printerr("AETHERKIRI_SMOKE_GAME is not set")
         quit(2)
@@ -17,13 +20,12 @@ func _initialize() -> void:
         quit(1)
         return
 
-    var backend := OS.get_environment("AETHERKIRI_RENDER_BACKEND")
-    if backend.is_empty():
-        backend = "godot_native"
+    var backend: String = ProbeConfig.backend(config)
     player.set_render_backend(backend)
-    if OS.get_environment("AETHERKIRI_EXPORT_SCRIPTS") == "1":
+    if OS.get_environment("AETHERKIRI_EXPORT_SCRIPTS") == "1" or ProbeConfig.bool_value(config, "export_scripts", false):
         player.set_engine_option("export_scripts", "1")
-    player.set_surface_size(1280, 720)
+    var surface_size: Vector2i = ProbeConfig.surface_size(config)
+    player.set_surface_size(surface_size.x, surface_size.y)
 
     var result: int = player.open_game(game_path, true)
     if result != 0:
@@ -33,7 +35,7 @@ func _initialize() -> void:
         return
 
     var started := false
-    for i in range(600):
+    for i in range(ProbeConfig.int_value(config, "startup_timeout_frames", 600)):
         var state: int = player.get_startup_state()
         if state == 2:
             started = true
@@ -51,7 +53,7 @@ func _initialize() -> void:
         quit(1)
         return
 
-    for i in range(5):
+    for i in range(ProbeConfig.int_value(config, "smoke_tick_frames", 5)):
         result = player.tick(1.0 / 60.0)
         if result != 0:
             printerr("tick failed: %s" % player.get_last_error())

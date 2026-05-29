@@ -1,0 +1,34 @@
+{
+  "name": "kr37s",
+  "game_path": "",
+  "backend": "Godot Native",
+  "surface_size": [1280, 720],
+  "window_size": [1600, 900],
+  "coord_size": [1600, 900],
+  "startup_timeout_frames": 2400,
+  "warmup_frames": 180,
+  "after_click_frames": 180,
+  "measure_frames": 180,
+  "gui_probe_frames": 240,
+  "min_visible_frames": 0,
+  "smoke_tick_frames": 5,
+  "export_scripts": false,
+  "clicks": [
+    {
+      "name": "continue",
+      "x": 450,
+      "y": 880,
+      "after_frames": 180
+    },
+    {
+      "name": "first_scene",
+      "x": 1350,
+      "y": 240,
+      "after_frames": 600
+    }
+  ],
+  "perf_input": {
+    "post_click_frames": 180,
+    "second_post_click_frames": 600
+  }
+}

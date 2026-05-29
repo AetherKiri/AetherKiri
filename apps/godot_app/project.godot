@@ -10,7 +10,7 @@ config_version=5
 
 [aether_kiri]
 
-game_path="/Users/liuyu/gal/奶牛5 KR3.7S"
+game_path=""
 
 [application]
 

@@ -1156,10 +1156,8 @@ func _load_game_list() -> Array[Dictionary]:
     var file := FileAccess.open(GAME_LIST_FILE, FileAccess.READ)
     if file == null:
         var fallback: String = String(ProjectSettings.get_setting(GAME_PATH_KEY, ""))
-        if fallback.is_empty() or not _path_exists(fallback):
-            fallback = _default_game_path()
         var initial_games: Array[Dictionary] = []
-        if _path_exists(fallback):
+        if not fallback.is_empty() and _path_exists(fallback):
             initial_games.append(_game_info_from_path(fallback))
         return initial_games
     var parsed = JSON.parse_string(file.get_as_text())
@@ -1502,12 +1500,7 @@ func _ready() -> void:
 
     var configured_game_path := OS.get_environment("AETHERKIRI_GAME_PATH")
     if configured_game_path.is_empty():
-        if OS.get_name() == "iOS":
-            configured_game_path = _default_game_path()
-        else:
-            configured_game_path = ProjectSettings.get_setting(
-                GAME_PATH_KEY, _default_game_path()
-            )
+        configured_game_path = ProjectSettings.get_setting(GAME_PATH_KEY, "")
     game_path.text = configured_game_path
 
     backend.item_selected.connect(_on_backend_selected)
@@ -1954,8 +1947,8 @@ func _image_stats(image: Image) -> Dictionary:
 
 func _default_game_path() -> String:
     if OS.get_name() == "iOS":
-        return ProjectSettings.globalize_path("user://Games/KR3.7S")
-    return "/Users/liuyu/gal/奶牛5 KR3.7S"
+        return ProjectSettings.globalize_path("user://Games")
+    return ""
 
 func _default_output_path(file_name: String) -> String:
     if OS.get_name() == "iOS":
