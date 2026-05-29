@@ -1032,3 +1032,5 @@ static void PreUnregistCallback() {
 
 NCB_POST_REGIST_CALLBACK(PostRegistCallback);
 NCB_PRE_UNREGIST_CALLBACK(PreUnregistCallback);
+
+extern "C" void TVPRegisterFstatPluginAnchor() {}

@@ -74,6 +74,9 @@ extern "C" void TVPRegisterPSDPluginAnchor();
 extern "C" void TVPRegisterMotionPlayerPluginAnchor();
 extern "C" void TVPRegisterLayerExDrawPluginAnchor();
 extern "C" void TVPRegisterKAGParserExPluginAnchor();
+extern "C" void TVPRegisterScriptsExPluginAnchor();
+extern "C" void TVPRegisterCSVParserPluginAnchor();
+extern "C" void TVPRegisterFstatPluginAnchor();
 extern "C" bool TVPHostGetLatestFrameDesc(uint32_t* width, uint32_t* height,
                                            uint32_t* stride_bytes,
                                            uint64_t* serial);
@@ -275,6 +278,9 @@ void EnsureInternalPluginAnchorsLinked() {
   TVPRegisterMotionPlayerPluginAnchor();
   TVPRegisterLayerExDrawPluginAnchor();
   TVPRegisterKAGParserExPluginAnchor();
+  TVPRegisterScriptsExPluginAnchor();
+  TVPRegisterCSVParserPluginAnchor();
+  TVPRegisterFstatPluginAnchor();
 }
 
 void EnsureRuntimeLoggersInitialized() {
