@@ -5,6 +5,7 @@ const SETTINGS_KEY := "aether_kiri/render_backend"
 const GAME_PATH_KEY := "aether_kiri/game_path"
 
 const ENGINE_RESULT_OK := 0
+const STARTUP_IDLE := 0
 const STARTUP_RUNNING := 1
 const STARTUP_SUCCEEDED := 2
 const STARTUP_FAILED := 3
@@ -32,6 +33,7 @@ var capture_after_open_done := false
 var log_drain_accum := 0.0
 var perf_accum := 0.0
 var perf_log_accum := 0.0
+var state_log_accum := 0.0
 var perf_log_file: FileAccess
 var log_lines: PackedStringArray = []
 const LOG_DRAIN_INTERVAL := 0.25
@@ -52,13 +54,20 @@ func _ready() -> void:
     for item in BACKENDS:
         backend.add_item(item)
 
-    selected_backend = ProjectSettings.get_setting(SETTINGS_KEY, "Godot Native")
+    selected_backend = OS.get_environment("AETHERKIRI_BACKEND")
+    if selected_backend.is_empty():
+        selected_backend = ProjectSettings.get_setting(SETTINGS_KEY, "Godot Native")
+    if not selected_backend in BACKENDS:
+        selected_backend = "Godot Native"
     var index := BACKENDS.find(selected_backend)
     backend.select(max(index, 0))
 
-    game_path.text = ProjectSettings.get_setting(
-        GAME_PATH_KEY, "/Users/liuyu/gal/奶牛5 KR3.7S"
-    )
+    var configured_game_path := OS.get_environment("AETHERKIRI_GAME_PATH")
+    if configured_game_path.is_empty():
+        configured_game_path = ProjectSettings.get_setting(
+            GAME_PATH_KEY, "/Users/liuyu/gal/奶牛5 KR3.7S"
+        )
+    game_path.text = configured_game_path
 
     backend.item_selected.connect(_on_backend_selected)
     $Root/Toolbar/OpenButton.pressed.connect(_on_open_game)
@@ -86,13 +95,14 @@ func _ready() -> void:
         call_deferred("_on_open_game")
 
 func _process(delta: float) -> void:
+    var startup_state := STARTUP_IDLE
     if game_running:
         log_drain_accum += delta
         if log_drain_accum >= LOG_DRAIN_INTERVAL:
             log_drain_accum = 0.0
             _drain_logs()
 
-        var startup_state := player.get_startup_state()
+        startup_state = player.get_startup_state()
         if startup_state == STARTUP_SUCCEEDED:
             restart_notice.text = ""
             var tick_start := Time.get_ticks_usec()
@@ -100,10 +110,15 @@ func _process(delta: float) -> void:
             var tick_ms := float(Time.get_ticks_usec() - tick_start) / 1000.0
             if tick_result != ENGINE_RESULT_OK:
                 render_errors += 1
-                _append_log("Tick failed: %s %s" % [
+                var tick_error_line := "Tick failed: %s %s" % [
                     player.get_last_result(),
                     player.get_last_error(),
-                ])
+                ]
+                _append_log(tick_error_line)
+                print(tick_error_line)
+                if perf_log_file != null:
+                    perf_log_file.store_line(tick_error_line)
+                    perf_log_file.flush()
                 game_running = false
             else:
                 var update_start := Time.get_ticks_usec()
@@ -117,6 +132,21 @@ func _process(delta: float) -> void:
             _append_log("Startup failed: %s" % player.get_last_error())
 
     perf_accum += delta
+    state_log_accum += delta
+    if game_running and state_log_accum >= 1.0:
+        state_log_accum = 0.0
+        var state_line := "main_state startup=%d last_result=%s last_error=\"%s\" texture=%s size=%dx%d" % [
+            startup_state,
+            player.get_last_result(),
+            player.get_last_error(),
+            player.get_frame_texture_backend(),
+            last_texture_size.x,
+            last_texture_size.y,
+        ]
+        print(state_line)
+        if perf_log_file != null:
+            perf_log_file.store_line(state_line)
+            perf_log_file.flush()
     if perf_accum >= PERF_UPDATE_INTERVAL:
         perf_accum = 0.0
         var frame_ms := delta * 1000.0
@@ -217,7 +247,8 @@ func _on_open_game() -> void:
     _apply_backend(false)
     player.set_surface_size(RENDER_SURFACE_SIZE.x, RENDER_SURFACE_SIZE.y)
 
-    var result := player.open_game(path, true)
+    var async_open := OS.get_environment("AETHERKIRI_SYNC_OPEN") != "1"
+    var result := player.open_game(path, async_open)
     if result != ENGINE_RESULT_OK:
         render_errors += 1
         _append_log("Game launch failed: %s %s" % [

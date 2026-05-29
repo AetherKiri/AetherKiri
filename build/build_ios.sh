@@ -50,6 +50,24 @@ GODOT_EXPORT_TEMPLATE="${GODOT_EXPORT_TEMPLATE:-$HOME/Library/Application Suppor
 GODOT_APP_DIR="$PROJECT_ROOT/apps/godot_app"
 GODOT_BIN_DIR="$GODOT_APP_DIR/bin/$GODOT_TRIPLET_DIR"
 PARALLEL_JOBS="${JOBS:-8}"
+FORCE_LOAD_PLUGIN_ARCHIVES=(
+    "libkrkr2plugin.a"
+    "libkagparserex.a"
+    "liblayerExDraw.a"
+    "libmotionplayer.a"
+    "libpsbfile.a"
+    "libpsdfile.a"
+    "libpsdparse.a"
+)
+FORCE_LOAD_PLUGIN_SOURCES=(
+    "cpp/plugins/libkrkr2plugin.a"
+    "cpp/plugins/kagparserex/libkagparserex.a"
+    "cpp/plugins/layerex_draw/liblayerExDraw.a"
+    "cpp/plugins/motionplayer/libmotionplayer.a"
+    "cpp/plugins/psbfile/libpsbfile.a"
+    "cpp/plugins/psdfile/libpsdfile.a"
+    "cpp/plugins/psdfile/psdparse/libpsdparse.a"
+)
 
 if [[ -d "$PROJECT_ROOT/.devtools/vcpkg/.git" ]]; then
     export VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
@@ -60,6 +78,38 @@ fi
 
 command -v cmake >/dev/null
 command -v ninja >/dev/null
+
+preflight_simulator_template_arch() {
+    local arch="$1"
+    local template="$2"
+    local tmpdir
+    local libgodot
+    local info
+
+    if [[ ! -f "$template" ]]; then
+        return
+    fi
+
+    tmpdir="$(mktemp -d /tmp/aetherkiri-ios-template.XXXXXX)"
+    libgodot="$tmpdir/libgodot.ios.debug.xcframework/ios-arm64_x86_64-simulator/libgodot.a"
+    unzip -q "$template" \
+        'libgodot.ios.debug.xcframework/ios-arm64_x86_64-simulator/libgodot.a' \
+        -d "$tmpdir"
+    info="$(lipo -archs "$libgodot" 2>/dev/null || true)"
+    rm -rf "$tmpdir"
+
+    if [[ " $info " != *" $arch "* ]]; then
+        echo "Error: Godot iOS simulator export template does not contain '$arch'." >&2
+        echo "       $template" >&2
+        echo "       architectures: ${info:-unknown}" >&2
+        echo "       Install or build a Godot export template with an $arch simulator slice, or use --simulator-arch=x86_64." >&2
+        exit 1
+    fi
+}
+
+if [[ "$SIMULATOR" == true ]]; then
+    preflight_simulator_template_arch "$SIMULATOR_ARCH" "$GODOT_EXPORT_TEMPLATE"
+fi
 
 combine_ios_static_extension() {
     local output="$1"
@@ -117,12 +167,49 @@ combine_ios_static_extension() {
     mv "$tmp" "$output"
 }
 
+stage_force_load_plugin_archives() {
+    local destination="$1"
+    local source
+    mkdir -p "$destination"
+    for source in "${FORCE_LOAD_PLUGIN_SOURCES[@]}"; do
+        cp -f "$CMAKE_BUILD_DIR/$source" "$destination/" 2>/dev/null || true
+    done
+}
+
+verify_exported_simulator_template_arch() {
+    local export_root="$1"
+    local arch="$2"
+    local libgodot="$export_root/AetherKiri.xcframework/ios-arm64_x86_64-simulator/libgodot.a"
+    local info
+
+    if [[ ! -f "$libgodot" ]]; then
+        echo "Error: exported Godot simulator template is missing: $libgodot" >&2
+        exit 1
+    fi
+
+    info="$(lipo -archs "$libgodot" 2>/dev/null || true)"
+    if [[ " $info " != *" $arch "* ]]; then
+        echo "Error: Godot iOS simulator export template does not contain '$arch'." >&2
+        echo "       $libgodot" >&2
+        echo "       architectures: ${info:-unknown}" >&2
+        echo "       Install or build a Godot export template with an $arch simulator slice, or use --simulator-arch=x86_64." >&2
+        exit 1
+    fi
+}
+
 patch_ios_export_project() {
     local project_file="$1/project.pbxproj"
-    local dummy_cpp="$1/AetherKiri/dummy.cpp"
+    local export_root
+    export_root="$(dirname "$1")"
+    local dummy_cpp="$export_root/AetherKiri/dummy.cpp"
     local arch="$2"
     local flags
-    flags='$(LD_CLASSIC_$(XCODE_VERSION_ACTUAL)) -Wl,-U,_aether_kiri_library_init -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework OpenGLES -framework Security -framework SystemConfiguration -framework MobileCoreServices'
+    flags='$(LD_CLASSIC_$(XCODE_VERSION_ACTUAL)) -Wl,-U,_aether_kiri_library_init'
+    local archive
+    for archive in "${FORCE_LOAD_PLUGIN_ARCHIVES[@]}"; do
+        flags+=" -Wl,-force_load,AetherKiri/bin/ios/debug/$archive"
+    done
+    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework OpenGLES -framework Security -framework SystemConfiguration -framework MobileCoreServices'
 
     if [[ -f "$project_file" ]]; then
         FLAGS="$flags" perl -0pi -e 's/OTHER_LDFLAGS = "[^"]*";/"OTHER_LDFLAGS = \"" . $ENV{FLAGS} . "\";"/eg' "$project_file"
@@ -131,7 +218,7 @@ patch_ios_export_project() {
             perl -0pi -e 's/VALID_ARCHS = "arm64 x86_64";/VALID_ARCHS = "x86_64";/g' "$project_file"
         fi
     fi
-    if [[ "$arch" == "x86_64" && -f "$dummy_cpp" ]] && ! grep -q "__swift_FORCE_LOAD_\\$_swift_Builtin_float" "$dummy_cpp"; then
+    if [[ "$arch" == "x86_64" && -f "$dummy_cpp" ]] && ! grep -Fq '__swift_FORCE_LOAD_$_swift_Builtin_float' "$dummy_cpp"; then
         cat >> "$dummy_cpp" <<'EOF'
 
 extern "C" void aether_kiri_swift_builtin_float_force_load(void) __asm("__swift_FORCE_LOAD_$_swift_Builtin_float");
@@ -147,6 +234,7 @@ cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 mkdir -p "$GODOT_BIN_DIR"
 cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a" "$GODOT_BIN_DIR/" 2>/dev/null || true
 cp -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a" "$GODOT_BIN_DIR/" 2>/dev/null || true
+stage_force_load_plugin_archives "$GODOT_BIN_DIR"
 if [[ -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a" ]]; then
     combine_ios_static_extension "$GODOT_BIN_DIR/libaether_kiri_godot.a" "$VCPKG_TRIPLET_DIR"
 fi
@@ -155,6 +243,7 @@ if [[ "$SIMULATOR" == true ]]; then
     mkdir -p "$GODOT_EXPORT_BIN_DIR"
     cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a" "$GODOT_EXPORT_BIN_DIR/" 2>/dev/null || true
     cp -f "$GODOT_BIN_DIR/libaether_kiri_godot.a" "$GODOT_EXPORT_BIN_DIR/" 2>/dev/null || true
+    stage_force_load_plugin_archives "$GODOT_EXPORT_BIN_DIR"
 fi
 
 if [[ ! -x "$GODOT_BIN" ]]; then
@@ -167,6 +256,8 @@ else
     "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
         --export-debug "iOS Debug" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj"
     if [[ "$SIMULATOR" == true ]]; then
+        verify_exported_simulator_template_arch "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER" "$SIMULATOR_ARCH"
+        stage_force_load_plugin_archives "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri/bin/ios/$BUILD_TYPE_LOWER"
         patch_ios_export_project "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj" "$SIMULATOR_ARCH"
     fi
 fi
