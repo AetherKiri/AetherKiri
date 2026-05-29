@@ -202,6 +202,7 @@ patch_ios_export_project() {
     local export_root
     export_root="$(dirname "$1")"
     local dummy_cpp="$export_root/AetherKiri/dummy.cpp"
+    local info_plist="$export_root/AetherKiri/AetherKiri-Info.plist"
     local arch="$2"
     local export_build_type="$3"
     local flags
@@ -228,6 +229,12 @@ patch_ios_export_project() {
 extern "C" void aether_kiri_swift_builtin_float_force_load(void) __asm("__swift_FORCE_LOAD_$_swift_Builtin_float");
 extern "C" void aether_kiri_swift_builtin_float_force_load(void) {}
 EOF
+    fi
+    if [[ -f "$info_plist" ]]; then
+        /usr/libexec/PlistBuddy -c 'Set :UIFileSharingEnabled true' "$info_plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c 'Add :UIFileSharingEnabled bool true' "$info_plist"
+        /usr/libexec/PlistBuddy -c 'Set :LSSupportsOpeningDocumentsInPlace true' "$info_plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c 'Add :LSSupportsOpeningDocumentsInPlace bool true' "$info_plist"
     fi
 }
 
