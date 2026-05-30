@@ -7,3 +7,17 @@ macos.debug = "res://bin/macos/debug/libaether_kiri_godot.dylib"
 macos.release = "res://bin/macos/release/libaether_kiri_godot.dylib"
 ios.debug = "res://bin/ios/debug/libaether_kiri_godot.a"
 ios.release = "res://bin/ios/release/libaether_kiri_godot.a"
+android.debug.arm64 = "res://bin/android/arm64-v8a/debug/libaether_kiri_godot.so"
+android.release.arm64 = "res://bin/android/arm64-v8a/release/libaether_kiri_godot.so"
+
+[dependencies]
+android.debug.arm64 = {
+  "res://bin/android/arm64-v8a/debug/libengine_api.so": "",
+  "res://bin/android/arm64-v8a/debug/libSDL2.so": "",
+  "res://bin/android/arm64-v8a/debug/libomp.so": ""
+}
+android.release.arm64 = {
+  "res://bin/android/arm64-v8a/release/libengine_api.so": "",
+  "res://bin/android/arm64-v8a/release/libSDL2.so": "",
+  "res://bin/android/arm64-v8a/release/libomp.so": ""
+}

@@ -16,6 +16,7 @@
 #include "tjs.h"
 
 #include <atomic>
+#include <unordered_map>
 
 static std::atomic<int64_t> sTJSScriptBlockCount{0};
 

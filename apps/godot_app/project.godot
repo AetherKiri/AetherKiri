@@ -33,5 +33,7 @@ enabled=PackedStringArray()
 
 renderer/rendering_method="mobile"
 renderer/rendering_method.mobile="mobile"
+renderer/rendering_method.android="gl_compatibility"
 rendering_device/driver.ios="metal"
+rendering_device/driver.android="opengl3"
 textures/vram_compression/import_etc2_astc=true

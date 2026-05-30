@@ -82,6 +82,10 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 
 add_definitions(-D__STDC_CONSTANT_MACROS -DTJS_TEXT_OUT_CRLF)
 
+if(ANDROID)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE SQLITE_DISABLE_UMASK)
+endif()
+
 # ---------------------------------------------------------------------------
 # Live2D Cubism SDK
 # ---------------------------------------------------------------------------

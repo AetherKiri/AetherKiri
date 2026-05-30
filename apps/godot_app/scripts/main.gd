@@ -1508,6 +1508,12 @@ func _ready() -> void:
     viewport.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
     viewport.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 
+    _append_log("AetherKiri shell ready. Initializing engine...")
+    call_deferred("_finish_ready_after_first_frame")
+
+func _finish_ready_after_first_frame() -> void:
+    await get_tree().process_frame
+
     var user_dir := OS.get_user_data_dir()
     var cache_dir := user_dir.path_join("cache")
     DirAccess.make_dir_recursive_absolute(cache_dir)
