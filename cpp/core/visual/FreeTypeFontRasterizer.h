@@ -5,6 +5,7 @@
 #include "tjsCommHead.h"
 #include "CharacterData.h"
 #include "FontRasterizer.h"
+#include <string>
 
 class FreeTypeFontRasterizer : public FontRasterizer {
     tjs_int RefCount;
@@ -12,6 +13,7 @@ class FreeTypeFontRasterizer : public FontRasterizer {
     class tFreeTypeFace *FaceFallback = nullptr;
     class tTVPNativeBaseBitmap *LastBitmap;
     tTVPFont CurrentFont;
+    std::string CurrentExtentCacheFontKey;
     void ApplyFallbackFace();
 
 public:

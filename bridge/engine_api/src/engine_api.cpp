@@ -188,6 +188,28 @@ constexpr size_t kMaxStartupLogs = 4000;
 
 void PushRuntimeSpdlogToStartupQueue(const spdlog::details::log_msg& msg);
 
+uint64_t DurationUs(std::chrono::steady_clock::time_point begin,
+                    std::chrono::steady_clock::time_point end) {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
+          .count());
+}
+
+uint64_t EngineTickSpikeThresholdUs() {
+  static const uint64_t threshold = []() -> uint64_t {
+    const char* value = std::getenv("AETHERKIRI_ENGINE_TICK_SPIKE_MS");
+    if (value == nullptr || *value == '\0') {
+      return 0;
+    }
+    const double ms = std::atof(value);
+    if (ms <= 0.0) {
+      return 0;
+    }
+    return static_cast<uint64_t>(ms * 1000.0);
+  }();
+  return threshold;
+}
+
 class StartupLogSink final : public spdlog::sinks::sink {
  public:
   void log(const spdlog::details::log_msg& msg) override {
@@ -1605,9 +1627,12 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   }
   impl->tick_count += 1;
 
+  const auto tick_start = std::chrono::steady_clock::now();
+  size_t dispatched_inputs = 0;
   while (!impl->input.pending_events.empty()) {
     const engine_input_event_t queued_event = impl->input.pending_events.front();
     impl->input.pending_events.pop_front();
+    dispatched_inputs += 1;
 
     const char* dispatch_error = nullptr;
     const engine_result_t dispatch_result =
@@ -1618,6 +1643,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
           dispatch_error != nullptr ? dispatch_error : "input dispatch failed");
     }
   }
+  const auto after_input = std::chrono::steady_clock::now();
 
 #if defined(__ANDROID__) && defined(KRKR_ENABLE_GPU_BRIDGE)
   // Auto-attach pending ANativeWindow from JNI bridge.
@@ -1766,7 +1792,9 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   if (::Application) {
     ::Application->Run();
   }
+  const auto after_application_run = std::chrono::steady_clock::now();
   ::TVPDrawSceneOnce(0);
+  const auto after_draw_scene = std::chrono::steady_clock::now();
 
   // Process deferred texture deletions. iTVPTexture2D::Release() uses
   // delayed deletion — textures are queued in _toDeleteTextures and only
@@ -1775,6 +1803,30 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   // indefinitely, causing a memory leak — especially visible in OpenGL
   // mode where each texture also holds GPU resources.
   iTVPTexture2D::RecycleProcess();
+  const auto after_recycle = std::chrono::steady_clock::now();
+
+  auto log_tick_spike = [&](const char* frame_backend) {
+    const uint64_t threshold_us = EngineTickSpikeThresholdUs();
+    if (threshold_us == 0) {
+      return;
+    }
+    const auto tick_end = std::chrono::steady_clock::now();
+    const uint64_t total_us = DurationUs(tick_start, tick_end);
+    if (total_us < threshold_us) {
+      return;
+    }
+    spdlog::warn(
+        "engine_tick_spike tick={} total_us={} input_us={} app_us={} "
+        "draw_us={} recycle_us={} capture_us={} inputs={} renderer={} "
+        "frame_backend={}",
+        static_cast<unsigned long long>(impl->tick_count), total_us,
+        DurationUs(tick_start, after_input),
+        DurationUs(after_input, after_application_run),
+        DurationUs(after_application_run, after_draw_scene),
+        DurationUs(after_draw_scene, after_recycle),
+        DurationUs(after_recycle, tick_end), dispatched_inputs,
+        impl->render.renderer, frame_backend);
+  };
 
   if (TVPTerminated) {
     return SetHandleErrorAndReturnLocked(
@@ -1798,11 +1850,13 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
     // GodotNative/DebugCpu host path: BasicDrawDevice handed the final
     // composited texture to HostWindowLayer::UpdateDrawBuffer().
     if (CaptureGodotNativeGpuFrameLocked(impl)) {
+      log_tick_spike("godot_native_gpu");
       ClearHandleErrorLocked(impl);
       SetThreadError(nullptr);
       return ENGINE_RESULT_OK;
     }
     if (CopyHostFrameLocked(impl)) {
+      log_tick_spike("host_copy");
       ClearHandleErrorLocked(impl);
       SetThreadError(nullptr);
       return ENGINE_RESULT_OK;
@@ -1844,6 +1898,10 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
 
   ClearHandleErrorLocked(impl);
   SetThreadError(nullptr);
+  log_tick_spike(impl->render.native_window_attached
+                     ? "native_window"
+                     : (impl->render.iosurface_attached ? "iosurface"
+                                                        : "readback"));
 #if defined(__ANDROID__)
   if (impl->tick_count % 120 == 0) {
     AndroidInfoLog("engine_tick: tick=%llu rendered=%d serial=%llu native_window=%d iosurface=%d frame_ready=%d",

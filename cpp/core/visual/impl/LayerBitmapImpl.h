@@ -16,6 +16,8 @@
 
 #include "BitmapInfomation.h"
 
+#include <vector>
+
 //---------------------------------------------------------------------------
 extern void TVPSetFontCacheForLowMem();
 //---------------------------------------------------------------------------
@@ -150,7 +152,10 @@ public:
     [[nodiscard]] bool IsIndependent() const;
 
     /* other utilities */
-    [[nodiscard]] iTVPTexture2D *GetTexture() const { return Bitmap; }
+    [[nodiscard]] iTVPTexture2D *GetTexture() const {
+        const_cast<tTVPNativeBaseBitmap *>(this)->FlushPendingTextDraws();
+        return Bitmap;
+    }
     virtual iTVPTexture2D *GetTextureForRender(bool isBlendTarget,
                                                const tTVPRect *rc);
     void CompactGPUCache();
@@ -173,7 +178,28 @@ private:
     tjs_uint32 FontHash;
     // ^---
 
+    struct tTVPPendingTextDraw {
+        tTVPRect DestRect;
+        tjs_int X = 0;
+        tjs_int Y = 0;
+        tjs_uint32 Color = 0;
+        tTVPBBBltMethod BltMode = bmCopy;
+        tjs_int Opa = 255;
+        bool HoldAlpha = true;
+        tjs_uint32 ShadowColor = 0;
+        tjs_int ShLevel = 0;
+        tjs_int ShWidth = 0;
+        tjs_int ShOfsX = 0;
+        tjs_int ShOfsY = 0;
+        tTVPCharacterData *Data = nullptr;
+        tTVPCharacterData *Shadow = nullptr;
+    };
+    std::vector<tTVPPendingTextDraw> PendingTextDraws;
+    bool FlushingPendingTextDraws = false;
+
     void ApplyFont();
+    void FlushPendingTextDraws();
+    void ClearPendingTextDraws();
 
 public:
     void SetFont(const tTVPFont &font);

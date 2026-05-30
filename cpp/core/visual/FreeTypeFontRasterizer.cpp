@@ -13,10 +13,46 @@
 #include "MsgIntf.h"
 #include "FontSystem.h"
 #include <complex>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 
 extern void TVPUninitializeFreeFont();
 extern FontSystem *TVPFontSystem;
 extern const ttstr &TVPGetDefaultFontName();
+
+namespace {
+struct GlyphExtentCacheKey {
+    std::string font;
+    tjs_char ch = 0;
+
+    bool operator==(const GlyphExtentCacheKey &other) const {
+        return ch == other.ch && font == other.font;
+    }
+};
+
+struct GlyphExtentCacheKeyHash {
+    std::size_t operator()(const GlyphExtentCacheKey &key) const {
+        const auto font_hash = std::hash<std::string>{}(key.font);
+        const auto char_hash = std::hash<tjs_uint32>{}(
+            static_cast<tjs_uint32>(key.ch));
+        return font_hash ^ (char_hash + 0x9e3779b9u + (font_hash << 6) +
+                            (font_hash >> 2));
+    }
+};
+
+struct GlyphExtentCacheValue {
+    tjs_int w = 0;
+    tjs_int h = 0;
+};
+
+std::mutex TVPGlyphExtentCacheMutex;
+std::unordered_map<GlyphExtentCacheKey, GlyphExtentCacheValue,
+                   GlyphExtentCacheKeyHash>
+    TVPGlyphExtentCache;
+constexpr std::size_t TVPGlyphExtentCacheLimit = 32768;
+} // namespace
+
 void FreeTypeFontRasterizer::ApplyFallbackFace() {
     if(!FaceFallback && Face &&
        Face->GetFontName() != TVPGetDefaultFontName()) {
@@ -134,21 +170,51 @@ void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
             Face->ClearOption(TVP_TF_STRIKEOUT);
         }
     }
+    const tjs_int height = font.Height < 0 ? -font.Height : font.Height;
+    const ttstr &resolved_face = Face ? Face->GetFontName() : font.Face;
+    CurrentExtentCacheFontKey = resolved_face.AsStdString() + "|" +
+                                std::to_string(height) + "|" +
+                                std::to_string(font.Flags);
     LastBitmap = nullptr;
 }
 //---------------------------------------------------------------------------
 void FreeTypeFontRasterizer::GetTextExtent(tjs_char ch, tjs_int &w,
                                            tjs_int &h) {
+    if(!Face)
+        return;
+
+    GlyphExtentCacheKey key{CurrentExtentCacheFontKey, ch};
+    {
+        std::lock_guard<std::mutex> lock(TVPGlyphExtentCacheMutex);
+        auto it = TVPGlyphExtentCache.find(key);
+        if(it != TVPGlyphExtentCache.end()) {
+            w = it->second.w;
+            h = it->second.h;
+            return;
+        }
+    }
+
+    tjs_int resolved_w = 0;
+    tjs_int resolved_h = 0;
     if(Face) {
         tGlyphMetrics metrics{};
         if(Face->GetGlyphSizeFromCharcode(ch, metrics)) {
-            w = metrics.CellIncX;
-            h = metrics.CellIncY;
+            resolved_w = metrics.CellIncX;
+            resolved_h = metrics.CellIncY;
         } else {
-            w = Face->GetHeight();
-            h = w;
+            resolved_w = Face->GetHeight();
+            resolved_h = resolved_w;
         }
     }
+    w = resolved_w;
+    h = resolved_h;
+
+    std::lock_guard<std::mutex> lock(TVPGlyphExtentCacheMutex);
+    if(TVPGlyphExtentCache.size() >= TVPGlyphExtentCacheLimit) {
+        TVPGlyphExtentCache.clear();
+    }
+    TVPGlyphExtentCache.emplace(std::move(key),
+                                GlyphExtentCacheValue{resolved_w, resolved_h});
 }
 //---------------------------------------------------------------------------
 tjs_int FreeTypeFontRasterizer::GetAscentHeight() {
