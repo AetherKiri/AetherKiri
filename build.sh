@@ -164,7 +164,7 @@ if [[ "$CLEAN" == true ]]; then
     echo -e "${CYAN}Cleaning build artifacts for $PLATFORM...${NC}"
     case "$PLATFORM" in
         android)
-            rm -rf "$SCRIPT_DIR/out/android/$BUILD_TYPE"
+            rm -rf "$SCRIPT_DIR/out/android"
             rm -rf "$SCRIPT_DIR/out/godot/android/$BUILD_TYPE"
             echo -e "${GREEN}[INFO]${NC} Android build artifacts cleaned."
             ;;

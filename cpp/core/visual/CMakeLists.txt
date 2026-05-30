@@ -82,6 +82,14 @@ target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_
 
 target_link_libraries(${PROJECT_NAME} PRIVATE libbpg)
 
+if(ANDROID AND NOT BUILD_GPU_BRIDGE)
+    target_sources(${PROJECT_NAME} PRIVATE
+        ${VISUAL_PATH}/ogl/krkr_gl.cpp
+        ${VISUAL_PATH}/ogl/krkr_egl_context.cpp
+    )
+    target_link_libraries(${PROJECT_NAME} PRIVATE EGL GLESv2)
+endif()
+
 if(BUILD_GPU_BRIDGE)
     target_sources(${PROJECT_NAME} PRIVATE
         ${VISUAL_PATH}/ogl/astcrt.cpp

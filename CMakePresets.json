@@ -196,6 +196,41 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "Android arm64 Config",
+      "generator": "Ninja",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/out/android/arm64-v8a/${presetName}",
+      "cacheVariables": {
+        "VCPKG_TARGET_ANDROID": true,
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-24",
+        "ANDROID_STL": "c++_shared",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/vcpkg/triplets",
+        "VCPKG_BUILD_TYPE": "release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "BUILD_TOOLS": false,
+        "ENABLE_TESTS": false,
+        "BUILD_ENGINE_API": true,
+        "BUILD_GODOT_EXTENSION": true
+      }
+    },
+    {
+      "name": "Android arm64 Debug Config",
+      "inherits": "Android arm64 Config",
+      "binaryDir": "${sourceDir}/out/android/arm64-v8a/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "Android arm64 Release Config",
+      "inherits": "Android arm64 Config",
+      "binaryDir": "${sourceDir}/out/android/arm64-v8a/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -238,6 +273,14 @@
     {
       "name": "iOS Release Build",
       "configurePreset": "iOS Release Config"
+    },
+    {
+      "name": "Android arm64 Debug Build",
+      "configurePreset": "Android arm64 Debug Config"
+    },
+    {
+      "name": "Android arm64 Release Build",
+      "configurePreset": "Android arm64 Release Config"
     }
   ]
 }
