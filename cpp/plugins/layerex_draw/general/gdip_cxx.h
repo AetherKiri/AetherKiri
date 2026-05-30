@@ -195,10 +195,13 @@ namespace libgdiplus {
         [[nodiscard]] GpStatus GetLastStatus() const { return this->_gpStatus; }
 
         [[nodiscard]] bool IsInvertible() const {
-
+#if TARGET_OS_MAC || TARGET_OS_IPHONE
+            bool r = false;
+#else
             BOOL r = FALSE;
+#endif
             this->_gpStatus = GdipIsMatrixInvertible(this->_gpMatrix, &r);
-            return r != FALSE;
+            return r != 0;
         }
 
         GpStatus Invert() {
@@ -207,9 +210,13 @@ namespace libgdiplus {
         }
 
         [[nodiscard]] bool IsIdentity() const {
+#if TARGET_OS_MAC || TARGET_OS_IPHONE
+            bool r = false;
+#else
             BOOL r = FALSE;
+#endif
             this->_gpStatus = GdipIsMatrixIdentity(_gpMatrix, &r);
-            return r != FALSE;
+            return r != 0;
         }
 
         GpStatus Multiply(MatrixClass *matrix,
