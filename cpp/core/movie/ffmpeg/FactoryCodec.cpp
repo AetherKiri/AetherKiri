@@ -128,7 +128,7 @@ CDVDVideoCodec *CDVDFactoryCodec::CreateVideoCodec(CDVDStreamInfo &hint,
 #endif
 
     char value[32];
-    sprintf(value, "%d", info.max_buffer_size);
+    snprintf(value, sizeof(value), "%d", info.max_buffer_size);
     options.m_keys.emplace_back("surfaces", value);
     pCodec = OpenCodec(new CDVDVideoCodecFFmpeg(processInfo), hint, options);
     if(pCodec)
