@@ -50,6 +50,7 @@ if(ANDROID)
         log
         android
         OpenSLES
+        EGL
     )
 endif()
 

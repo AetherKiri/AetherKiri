@@ -54,6 +54,9 @@ Prerequisites:
 - vcpkg, either in `.devtools/vcpkg` or via `VCPKG_ROOT`
 - Godot at `/Applications/Godot.app` or `GODOT_BIN=/path/to/Godot`
 - Xcode for macOS/iOS exports
+- Android SDK/NDK for Android exports. The script uses
+  `ANDROID_HOME`/`ANDROID_SDK_ROOT` when set, otherwise
+  `$HOME/Library/Android/sdk`, and picks the newest installed NDK.
 
 Common builds:
 
@@ -62,11 +65,13 @@ Common builds:
 ./build.sh macos release
 ./build.sh ios debug --simulator
 ./build.sh ios release
+./build.sh android debug --abi=arm64-v8a
+./build.sh android release --abi=arm64-v8a
 ```
 
 The scripts build the native engine and Godot host library, stage them under
 `apps/godot_app/bin/`, then run the matching Godot export preset when Godot is
-available.
+available. Android is currently wired for `arm64-v8a`.
 
 ## Testing Build Artifacts
 
@@ -150,6 +155,52 @@ On My iPhone/iPad -> AetherKiri -> Games
 
 Return to AetherKiri and tap refresh.
 
+### Android
+
+Build the debug APK:
+
+```bash
+./build.sh android debug --abi=arm64-v8a
+```
+
+The APK is written to:
+
+```text
+out/godot/android/debug/AetherKiri-debug.apk
+```
+
+Install and launch it on a connected device or emulator:
+
+```bash
+adb install -r out/godot/android/debug/AetherKiri-debug.apk
+adb shell monkey -p org.github.krkr2.aetherkiri \
+  -c android.intent.category.LAUNCHER 1
+```
+
+Build the release APK:
+
+```bash
+./build.sh android release --abi=arm64-v8a
+```
+
+The release APK is written to:
+
+```text
+out/godot/android/release/AetherKiri-release.apk
+```
+
+The release preset is intentionally unsigned until a project release keystore is
+configured. Sign it before installing or distributing it:
+
+```bash
+apksigner sign --ks /path/to/release.keystore \
+  out/godot/android/release/AetherKiri-release.apk
+```
+
+On Android, import games through the app UI on platforms with file-system
+access. On restricted devices, copy the game directory into the app's
+documents/storage location and use refresh.
+
 ## Validation
 
 Useful migration checks:
@@ -159,6 +210,7 @@ rg "F[l]utter|f[l]utter|A[N]GLE|Platform[ ]Graphics" README.md README.zh-CN.md a
 rg "u[n]official-angle|l[i]bEGL|l[i]bGLESv2" CMakeLists.txt bridge cpp build vcpkg.json
 ./build.sh macos debug
 ./build.sh ios debug --simulator
+./build.sh android debug --abi=arm64-v8a
 build/validate_godot_native.sh
 build/validate_gpu_bridge.sh
 ```
