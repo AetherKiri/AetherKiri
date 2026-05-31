@@ -480,6 +480,8 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetConfirmableSelectionLayerAt(
                                  bool require_pixel_hit) -> tTJSNI_BaseLayer * {
         if(!TVPIsConfirmableSelectionLayer(candidate))
             return nullptr;
+        if(!candidate->GetNodeVisible() || !candidate->GetNodeEnabled())
+            return nullptr;
         scanned++;
         tjs_int local_x = x;
         tjs_int local_y = y;
@@ -509,6 +511,8 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetConfirmableSelectionLayerAt(
     scanned = 0;
     for(tTJSNI_BaseLayer *candidate : nodes) {
         if(!TVPIsConfirmableSelectionLayer(candidate))
+            continue;
+        if(!candidate->GetNodeVisible() || !candidate->GetNodeEnabled())
             continue;
         tjs_int local_x = x;
         tjs_int local_y = y;
