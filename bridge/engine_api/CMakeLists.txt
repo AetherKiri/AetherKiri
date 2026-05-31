@@ -12,7 +12,7 @@ elseif(ANDROID)
     # triggers JNI_OnLoad and registers JNI native methods.
     add_library(engine_api SHARED
         src/engine_api.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../platforms/android/cpp/krkr2_android.cpp
+        src/android_jni_bridge.cpp
     )
 else()
     add_library(engine_api SHARED

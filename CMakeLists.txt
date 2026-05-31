@@ -51,9 +51,7 @@ else()
     set(CMAKE_TOOLCHAIN_FILE $ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake)
 endif()
 
-set(APP_NAME krkr2)
-
-project(${APP_NAME})
+project(krkr2)
 
 if(ANDROID)
     add_compile_options(-Wno-inconsistent-missing-override)
@@ -78,28 +76,8 @@ if(MSVC)
     # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-if(ANDROID)
-    if(BUILD_ENGINE_API)
-        # When BUILD_ENGINE_API is ON, krkr2_android.cpp is compiled
-        # directly into libengine_api.so, so we don't need a separate libkrkr2.so.
-        # Just skip building the standalone krkr2 target.
-    else()
-        add_library(${PROJECT_NAME} SHARED ${CMAKE_CURRENT_SOURCE_DIR}/platforms/android/cpp/krkr2_android.cpp)
-        find_package(unofficial-breakpad CONFIG REQUIRED)
-        target_link_libraries(${PROJECT_NAME} PUBLIC unofficial::breakpad::libbreakpad_client)
-    endif()
-elseif(LINUX)
-    add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/linux/main.cpp)
-elseif(WINDOWS)
-    add_executable(${PROJECT_NAME}
-        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/windows/main.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/windows/game.rc
-    )
-elseif(IOS)
-    # iOS uses Godot as the app shell; only build native engine libraries.
-elseif(MACOS)
-    # macOS uses Godot as the app shell; only build native engine libraries.
-endif()
+# Godot is the product app shell on the wired platforms. This native build
+# produces engine libraries and the GDExtension host, not standalone launchers.
 
 # external lib
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/external)
@@ -112,26 +90,6 @@ if(BUILD_ENGINE_API)
 endif()
 if(BUILD_GODOT_EXTENSION)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/godot_extension)
-endif()
-
-# Link the standalone executable target.
-if(TARGET ${PROJECT_NAME})
-    # Keep static NCB registration objects from krkr2plugin alive.
-    set(_KRKR2PLUGIN_LINK_ITEM "$<LINK_LIBRARY:WHOLE_ARCHIVE,krkr2plugin>")
-    target_link_libraries(${PROJECT_NAME} PUBLIC
-        krkr2core
-        ${_KRKR2PLUGIN_LINK_ITEM}
-    )
-
-    ## app config
-    if(APPLE)
-        set_target_properties(${APP_NAME} PROPERTIES RESOURCE "${APP_UI_RES}")
-        if(MACOSX)
-            set_target_properties(${APP_NAME} PROPERTIES
-                    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/platforms/apple/macos/Info.plist"
-            )
-        endif()
-    endif()
 endif()
 
 if(ENABLE_TESTS AND NOT (IOS OR ANDROID))

@@ -33,6 +33,8 @@ not accepted as a performance target.
   stubs.
 - `tests/profiles/` - per-game probe profiles. Committed profiles must not
   contain machine-local game paths.
+- `doc/development.md` - full developer guide covering architecture, file roles,
+  build, testing, probes, and debugging.
 
 ## Render Backends
 

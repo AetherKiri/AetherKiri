@@ -23,7 +23,7 @@
 #if defined(__ANDROID__)
 #include <android/log.h>
 #include <android/native_window.h>
-// Defined in krkr2_android.cpp (C++ linkage)
+// Defined in android_jni_bridge.cpp (C++ linkage)
 ANativeWindow* krkr_GetNativeWindow();
 void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #endif
