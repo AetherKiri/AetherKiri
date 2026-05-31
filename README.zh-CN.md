@@ -27,6 +27,7 @@ Godot App Shell
 - `cpp/core/` - KiriKiri2 运行时、视觉系统、音频、存储、VM 和插件支持。
 - `cpp/plugins/` - 内置 native 插件实现和兼容 stub。
 - `tests/profiles/` - 单游戏测试 profile。提交到仓库的 profile 不能包含机器本地路径。
+- `doc/development.zh-CN.md` - 完整开发文档，覆盖架构、文件作用、构建、测试、probe 和调试。
 
 ## 渲染后端
 
