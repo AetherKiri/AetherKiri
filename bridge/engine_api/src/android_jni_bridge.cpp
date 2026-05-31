@@ -1,9 +1,9 @@
 /**
- * @file krkr2_android.cpp
- * @brief Android JNI entry point for the krkr2 engine.
+ * @file android_jni_bridge.cpp
+ * @brief Android JNI entry point for the Godot-hosted engine bridge.
  *
- * In Flutter mode, engine_api.so is loaded by Dart FFI.
- * This .so provides Android-specific JNI initialization needed
+ * engine_api.so is loaded by the Godot Android app. This file provides
+ * Android-specific JNI initialization needed
  * by the engine runtime, including JavaVM storage for JNI calls
  * from native threads and the SurfaceTexture bridge.
  */
@@ -57,10 +57,10 @@ static uint32_t g_surface_height = 0;
 static std::mutex g_surface_mutex;
 
 // ---------------------------------------------------------------------------
-// Global Application Context (Flutter mode)
-// When running inside Flutter, KR2Activity does not exist. The Flutter plugin
-// passes in an Application Context via JNI so that engine code (AndroidUtils.cpp)
-// can call Context methods like getExternalFilesDirs, getFilesDir, etc.
+// Global Application Context
+// The Godot Android host loads engine_api.so directly; the bridge can receive
+// an Application Context via JNI so engine code can call Context methods like
+// getExternalFilesDirs, getFilesDir, etc.
 // ---------------------------------------------------------------------------
 
 static jobject g_app_context = nullptr;  // global ref
@@ -105,12 +105,12 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
 }
 
 // ---------------------------------------------------------------------------
-// JNI bridge: Flutter Kotlin plugin → C++ engine
+// JNI bridge: Android host -> C++ engine
 // Sets the Android Surface (from SurfaceTexture) as the render target.
 // ---------------------------------------------------------------------------
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_github_krkr2_flutter_1engine_1bridge_FlutterEngineBridgePlugin_nativeSetSurface(
+Java_org_github_krkr2_aetherkiri_EngineBridge_nativeSetSurface(
     JNIEnv* env, jobject /* thiz */, jobject surface, jint width, jint height) {
 
     std::lock_guard<std::mutex> lock(g_surface_mutex);
@@ -138,7 +138,7 @@ Java_org_github_krkr2_flutter_1engine_1bridge_FlutterEngineBridgePlugin_nativeSe
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_github_krkr2_flutter_1engine_1bridge_FlutterEngineBridgePlugin_nativeDetachSurface(
+Java_org_github_krkr2_aetherkiri_EngineBridge_nativeDetachSurface(
     JNIEnv* /* env */, jobject /* thiz */) {
 
     std::lock_guard<std::mutex> lock(g_surface_mutex);
@@ -152,13 +152,13 @@ Java_org_github_krkr2_flutter_1engine_1bridge_FlutterEngineBridgePlugin_nativeDe
 }
 
 // ---------------------------------------------------------------------------
-// JNI bridge: Flutter Kotlin plugin → C++ engine
+// JNI bridge: Android host -> C++ engine
 // Passes the Android Application Context for use by engine code that
 // needs a Context (storage paths, font enumeration, etc.)
 // ---------------------------------------------------------------------------
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_github_krkr2_flutter_1engine_1bridge_FlutterEngineBridgePlugin_nativeSetApplicationContext(
+Java_org_github_krkr2_aetherkiri_EngineBridge_nativeSetApplicationContext(
     JNIEnv* env, jobject /* thiz */, jobject context) {
 
     std::lock_guard<std::mutex> lock(g_context_mutex);

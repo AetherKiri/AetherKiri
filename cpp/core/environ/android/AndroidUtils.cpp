@@ -36,7 +36,7 @@ using JniMethodInfo = krkr::JniHelper::MethodInfo;
 #define KR2ActJavaPath "org/tvp/kirikiri2/KR2Activity"
 // #define KR2EntryJavaPath "org/tvp/kirikiri2/Kirikiroid2"
 
-// Declared in krkr2_android.cpp – provides the host Application Context
+// Declared in android_jni_bridge.cpp; provides the host Application Context
 // as a fallback when KR2Activity is not available.
 extern jobject krkr_GetApplicationContext();
 
