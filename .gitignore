@@ -23,6 +23,8 @@ local.properties
 java_pid*.hprof
 .DS_Store
 *.pdb
+*.log
+latest_log_path.txt
 
 # Cubism SDK (proprietary binary, download from live2d.com)
 cpp/plugins/cubism/Core/lib/
