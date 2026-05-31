@@ -107,6 +107,7 @@ func _build_ui() -> void:
     viewport = TextureRect.new()
     viewport.name = "GameViewport"
     viewport.set_anchors_preset(Control.PRESET_FULL_RECT)
+    viewport.mouse_filter = Control.MOUSE_FILTER_STOP
     viewport.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
     viewport.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
     viewport.visible = false
@@ -1504,7 +1505,6 @@ func _ready() -> void:
     game_path.text = configured_game_path
 
     backend.item_selected.connect(_on_backend_selected)
-    viewport.gui_input.connect(_on_viewport_input)
     viewport.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
     viewport.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 
@@ -1990,6 +1990,11 @@ func _write_probe_marker(line: String) -> void:
     marker.flush()
 
 func _input(event: InputEvent) -> void:
+    if game_running and viewport.visible:
+        if _handle_game_pointer_event(event):
+            get_viewport().set_input_as_handled()
+            return
+
     if detail_view == null or detail_scroll == null or not detail_view.visible:
         return
 
@@ -2034,18 +2039,29 @@ func _scroll_detail_by(delta: float) -> void:
     detail_scroll.scroll_vertical = int(next)
 
 func _on_viewport_input(event: InputEvent) -> void:
-    if not game_running:
-        return
+    _handle_game_pointer_event(event)
 
+func _handle_game_pointer_event(event: InputEvent) -> bool:
     if event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
         var mapped := _map_viewport_point(mouse_button.position)
         if mapped.x < 0.0 or mapped.y < 0.0:
-            return
+            return false
         var event_type := POINTER_DOWN if mouse_button.pressed else POINTER_UP
         if mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP or mouse_button.button_index == MOUSE_BUTTON_WHEEL_DOWN:
             event_type = POINTER_SCROLL
         var button := _map_mouse_button(mouse_button.button_index)
+        if event_type == POINTER_DOWN:
+            player.send_pointer_event(
+                POINTER_MOVE,
+                0,
+                mapped.x,
+                mapped.y,
+                0.0,
+                0.0,
+                button
+            )
+            _pump_pointer_event_tick(1.0 / 60.0)
         player.send_pointer_event(
             event_type,
             0,
@@ -2055,11 +2071,14 @@ func _on_viewport_input(event: InputEvent) -> void:
             -1.0 if mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0,
             button
         )
+        if event_type != POINTER_SCROLL:
+            _pump_pointer_event_tick(1.0 / 60.0)
+        return true
     elif event is InputEventMouseMotion:
         var motion := event as InputEventMouseMotion
         var mapped := _map_viewport_point(motion.position)
         if mapped.x < 0.0 or mapped.y < 0.0:
-            return
+            return false
         var rel := _map_viewport_delta(motion.relative)
         player.send_pointer_event(
             POINTER_MOVE,
@@ -2070,6 +2089,28 @@ func _on_viewport_input(event: InputEvent) -> void:
             rel.y,
             0
         )
+        return true
+    elif event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        var mapped := _map_viewport_point(touch.position)
+        if mapped.x < 0.0 or mapped.y < 0.0:
+            return false
+        var event_type := POINTER_DOWN if touch.pressed else POINTER_UP
+        if event_type == POINTER_DOWN:
+            player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+            _pump_pointer_event_tick(1.0 / 60.0)
+        player.send_pointer_event(event_type, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+        _pump_pointer_event_tick(1.0 / 60.0)
+        return true
+    elif event is InputEventScreenDrag:
+        var drag := event as InputEventScreenDrag
+        var mapped := _map_viewport_point(drag.position)
+        if mapped.x < 0.0 or mapped.y < 0.0:
+            return false
+        var rel := _map_viewport_delta(drag.relative)
+        player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, rel.x, rel.y, 0)
+        return true
+    return false
 
 func _map_viewport_point(pos: Vector2) -> Vector2:
     if viewport.texture == null:
@@ -2088,6 +2129,19 @@ func _map_viewport_point(pos: Vector2) -> Vector2:
     if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
         return Vector2(-1.0, -1.0)
     return inside / scale
+
+func _pump_pointer_event_tick(delta: float) -> void:
+    if not game_running:
+        return
+    if player.get_startup_state() != STARTUP_SUCCEEDED:
+        return
+    var result := player.tick(delta)
+    if result != ENGINE_RESULT_OK:
+        render_errors += 1
+        print("Pointer event pump failed: %s %s" % [
+            player.get_last_result(),
+            player.get_last_error(),
+        ])
 
 func _map_viewport_delta(delta: Vector2) -> Vector2:
     if viewport.texture == null:

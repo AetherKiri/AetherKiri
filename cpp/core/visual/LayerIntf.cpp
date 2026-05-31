@@ -4601,9 +4601,10 @@ void tTJSNI_BaseLayer::DrawTextVerticalGradient(
     topcolor = TVPToActualColor(topcolor);
     bottomcolor = TVPToActualColor(bottomcolor);
 
-    MainImage->DrawTextVerticalGradient(ClipRect, x, y, text, topcolor,
-                                        bottomcolor, met, opa, HoldAlpha, aa,
-                                        gradientHeight, &r);
+    MainImage->DrawTextVerticalGradient(ClipRect, x, y, text,
+                                        TVP_REVRGB(topcolor),
+                                        TVP_REVRGB(bottomcolor), met, opa,
+                                        HoldAlpha, aa, gradientHeight, &r);
 
     if(r.GetCount())
         ImageModified = true;

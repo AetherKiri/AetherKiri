@@ -9,6 +9,8 @@
 
 #include "EngineLoop.h"
 
+#include <chrono>
+#include <cstdlib>
 #include <spdlog/spdlog.h>
 
 #include "Application.h"
@@ -38,6 +40,23 @@ extern void TVPHostForceDrawDeviceShow();
 // ---------------------------------------------------------------------------
 
 static void (*s_postUpdate)() = nullptr;
+
+namespace {
+int64_t NowMs() {
+    using clock = std::chrono::steady_clock;
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               clock::now().time_since_epoch())
+        .count();
+}
+
+bool InputTraceEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("AETHERKIRI_INPUT_TRACE");
+        return value && value[0] && value[0] != '0';
+    }();
+    return enabled;
+}
+} // namespace
 void TVPSetPostUpdateEvent(void (*f)()) { s_postUpdate = f; }
 
 // Async key/mouse state table — indexed by Windows VK code
@@ -109,6 +128,11 @@ void EngineLoop::Tick(float delta) {
     if (!started_)
         return;
     ::Application->Run();
+    if (pending_mouse_release_vk_ != 0 &&
+        pending_mouse_release_vk_ < sizeof(s_scancode) / sizeof(s_scancode[0])) {
+        s_scancode[pending_mouse_release_vk_] &= ~1;
+        pending_mouse_release_vk_ = 0;
+    }
     TVPDeliverContinuousEvent();
     iTVPTexture2D::RecycleProcess();
     if (s_postUpdate)
@@ -226,6 +250,8 @@ void EngineLoop::HandlePointerDown(const EngineInputEvent& event) {
     }
     if (vk < sizeof(s_scancode) / sizeof(s_scancode[0])) {
         s_scancode[vk] = 0x11; // pressed + was-pressed
+        if (pending_mouse_release_vk_ == vk)
+            pending_mouse_release_vk_ = 0;
     }
 
     // Combine mouse button state into shift flags
@@ -239,6 +265,25 @@ void EngineLoop::HandlePointerDown(const EngineInputEvent& event) {
 
     last_mouse_down_x_ = x;
     last_mouse_down_y_ = y;
+
+    // Windows sends WM_LBUTTONDBLCLK before the second WM_LBUTTONDOWN, and the
+    // following WM_LBUTTONUP suppresses the normal click event.
+    if (mb == mbLeft) {
+        const int64_t now = NowMs();
+        const int32_t dx = x - last_click_x_;
+        const int32_t dy = y - last_click_y_;
+        const bool is_double_click =
+            last_click_time_ms_ > 0 && now - last_click_time_ms_ <= 500 &&
+            dx * dx + dy * dy <= 64;
+        suppress_next_left_click_ = is_double_click;
+        if (is_double_click) {
+            if (InputTraceEnabled()) {
+                spdlog::info("EngineLoop pointer double-click x={} y={}", x, y);
+            }
+            TVPPostInputEvent(new tTVPOnDoubleClickInputEvent(win, x, y));
+            last_click_time_ms_ = 0;
+        }
+    }
 
     TVPPostInputEvent(
         new tTVPOnMouseDownInputEvent(win, x, y, mb, flags));
@@ -278,7 +323,8 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
     else if (event.button == 2)
         mb = mbMiddle;
 
-    // Update scancode: clear pressed bit
+    // Defer scancode release until the next Tick has delivered queued click/up
+    // events. Some KAG widgets query the async mouse state in click handlers.
     uint16_t vk = 0;
     switch (mb) {
         case mbLeft:   vk = 0x01; break;
@@ -286,21 +332,31 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
         case mbMiddle: vk = 0x04; break;
         default: break;
     }
-    if (vk < sizeof(s_scancode) / sizeof(s_scancode[0])) {
-        s_scancode[vk] &= ~1; // clear current-pressed, keep was-pressed
+
+    // Match the original Windows event order: WM_LBUTTONUP calls click-like
+    // handlers before OnMouseUp. Some KAG UI widgets use the click event while
+    // the button state is still considered pressed.
+    if (mb == mbLeft) {
+        if (suppress_next_left_click_) {
+            suppress_next_left_click_ = false;
+        } else {
+            if (InputTraceEnabled()) {
+                spdlog::info("EngineLoop pointer click x={} y={}",
+                             last_mouse_down_x_, last_mouse_down_y_);
+            }
+            TVPPostInputEvent(
+                new tTVPOnClickInputEvent(win, last_mouse_down_x_,
+                                          last_mouse_down_y_));
+            last_click_time_ms_ = NowMs();
+            last_click_x_ = x;
+            last_click_y_ = y;
+        }
     }
 
     TVPPostInputEvent(
         new tTVPOnMouseUpInputEvent(win, x, y, mb, shift));
 
-    // Post click event after mouse-up, matching the original Windows engine
-    // which fires OnMouseClick (→ Window.onClick → PrimaryClick) after
-    // OnMouseUp.  Uses the stored down position per original behavior.
-    if (mb == mbLeft) {
-        TVPPostInputEvent(
-            new tTVPOnClickInputEvent(win, last_mouse_down_x_,
-                                      last_mouse_down_y_));
-    }
+    pending_mouse_release_vk_ = vk;
 }
 
 void EngineLoop::HandlePointerScroll(const EngineInputEvent& event) {
