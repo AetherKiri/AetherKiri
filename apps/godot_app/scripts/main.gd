@@ -76,11 +76,13 @@ var frame_spike_ms := 0.0
 var verbose_render_log := false
 var perf_log_file: FileAccess
 var log_lines: PackedStringArray = []
+var suppress_mouse_until_msec := 0
 const LOG_DRAIN_INTERVAL := 0.25
 const PERF_UPDATE_INTERVAL := 0.25
 const PERF_LOG_INTERVAL := 2.0
 const MAX_LOG_LINES := 240
 const RENDER_SURFACE_SIZE := Vector2i(1280, 720)
+const TOUCH_MOUSE_SUPPRESS_MS := 700
 const COLOR_BG := Color(0.944, 0.932, 0.895, 1.0)
 const COLOR_CARD := Color(0.985, 0.98, 0.955, 1.0)
 const COLOR_TEXT := Color(0.12, 0.11, 0.10, 1.0)
@@ -2044,6 +2046,8 @@ func _on_viewport_input(event: InputEvent) -> void:
 func _handle_game_pointer_event(event: InputEvent) -> bool:
     if event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
+        if _is_touch_platform() and mouse_button.button_index != MOUSE_BUTTON_WHEEL_UP and mouse_button.button_index != MOUSE_BUTTON_WHEEL_DOWN:
+            return Time.get_ticks_msec() < suppress_mouse_until_msec
         var mapped := _map_viewport_point(mouse_button.position)
         if mapped.x < 0.0 or mapped.y < 0.0:
             return false
@@ -2075,6 +2079,8 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             _pump_pointer_event_tick(1.0 / 60.0)
         return true
     elif event is InputEventMouseMotion:
+        if _is_touch_platform():
+            return Time.get_ticks_msec() < suppress_mouse_until_msec
         var motion := event as InputEventMouseMotion
         var mapped := _map_viewport_point(motion.position)
         if mapped.x < 0.0 or mapped.y < 0.0:
@@ -2092,18 +2098,18 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         return true
     elif event is InputEventScreenTouch:
         var touch := event as InputEventScreenTouch
+        suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
         var mapped := _map_viewport_point(touch.position)
         if mapped.x < 0.0 or mapped.y < 0.0:
             return false
         var event_type := POINTER_DOWN if touch.pressed else POINTER_UP
         if event_type == POINTER_DOWN:
             player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
-            _pump_pointer_event_tick(1.0 / 60.0)
         player.send_pointer_event(event_type, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
-        _pump_pointer_event_tick(1.0 / 60.0)
         return true
     elif event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
+        suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
         var mapped := _map_viewport_point(drag.position)
         if mapped.x < 0.0 or mapped.y < 0.0:
             return false
@@ -2111,6 +2117,10 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, rel.x, rel.y, 0)
         return true
     return false
+
+func _is_touch_platform() -> bool:
+    var platform := OS.get_name()
+    return platform == "iOS" or platform == "Android"
 
 func _map_viewport_point(pos: Vector2) -> Vector2:
     if viewport.texture == null:
