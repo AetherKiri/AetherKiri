@@ -14,6 +14,7 @@
 #include "LayerIntf.h"
 #include "drawable.h"
 #include <algorithm>
+#include <string>
 #include <vector>
 
 /*[*/
@@ -297,6 +298,12 @@ class tTVPLayerManager : public iTVPLayerManager, public tTVPDrawable {
     tjs_int LastMouseMoveY;
 
     bool ReleaseCaptureCalled;
+    tjs_uint64 PendingSaveLoadEnterTick = 0;
+    tjs_uint64 PendingSaveLoadEnterReleaseTick = 0;
+    tjs_int PendingConfirmX = 0;
+    tjs_int PendingConfirmY = 0;
+    bool PendingConfirmRequiresSameSelection = false;
+    std::string PendingConfirmLayerName;
 
     bool InNotifyingHintOrCursorChange;
     bool HoldAlpha = true;
@@ -458,6 +465,11 @@ public:
     tTJSNI_BaseLayer *GetMostFrontChildAt(tjs_int x, tjs_int y,
                                           tTJSNI_BaseLayer *except = nullptr,
                                           bool get_disabled = false);
+    tTJSNI_BaseLayer *GetClickableLayerAt(tjs_int x, tjs_int y);
+    tTJSNI_BaseLayer *GetConfirmableSelectionLayerAt(tjs_int x, tjs_int y);
+    bool IsPendingConfirmStillOnSameSelection();
+    bool ShouldSynthesizeEnterForSaveLoadButton(
+        tTJSNI_BaseLayer *layer, tjs_int x, tjs_int y);
 
     void PrimaryClick(tjs_int x, tjs_int y);
     void PrimaryDoubleClick(tjs_int x, tjs_int y);

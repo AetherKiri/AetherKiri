@@ -11,6 +11,8 @@
 
 #include "tjsCommHead.h"
 
+#include <cstdlib>
+
 #include "tjsArray.h"
 #include "LayerManager.h"
 #include "MsgIntf.h"
@@ -21,6 +23,71 @@
 #include "TickCount.h"
 #include "DebugIntf.h"
 #include "LayerTreeOwner.h"
+#include "WindowIntf.h"
+#include "EngineLoop.h"
+#include "spdlog/spdlog.h"
+
+#include <cctype>
+
+namespace {
+bool TVPInputTraceEnabled() {
+    static const bool enabled = std::getenv("AETHERKIRI_INPUT_TRACE") != nullptr;
+    return enabled;
+}
+
+void TVPTraceLayerHit(const char *event, tjs_int x, tjs_int y,
+                      tTJSNI_BaseLayer *layer) {
+    if(!TVPInputTraceEnabled()) return;
+    if(layer) {
+        const auto action_owner = layer->GetActionOwnerNoAddRef();
+        spdlog::info("LayerManager {} hit primary=({}, {}) layer={} rect={}x{}+{}+{} action={}",
+                     event, x, y, layer->GetName().AsStdString(),
+                     layer->GetWidth(), layer->GetHeight(), layer->GetLeft(),
+                     layer->GetTop(), action_owner.Object ? "yes" : "no");
+    } else {
+        spdlog::info("LayerManager {} hit primary=({}, {}) layer=<none>",
+                     event, x, y);
+    }
+}
+
+bool TVPIsSaveLoadButtonLayer(tTJSNI_BaseLayer *layer) {
+    if(!layer) return false;
+    const std::string name = layer->GetName().AsStdString();
+    return name == "save" || name == "load" || name == "qload" ||
+           name == "back" || name == "return" || name == "yes" ||
+           name == "no";
+}
+
+bool TVPIsSaveLoadItemLayer(tTJSNI_BaseLayer *layer) {
+    if(!layer) return false;
+    const std::string name = layer->GetName().AsStdString();
+    return name.rfind("item", 0) == 0 && layer->GetWidth() >= 300 &&
+           layer->GetHeight() >= 80;
+}
+
+bool TVPIsGalleryItemLayer(tTJSNI_BaseLayer *layer) {
+    if(!layer) return false;
+    const std::string name = layer->GetName().AsStdString();
+    if(name.size() < 5 || name.rfind("item", 0) != 0)
+        return false;
+    for(size_t i = 4; i < name.size(); ++i) {
+        if(!std::isdigit(static_cast<unsigned char>(name[i])))
+            return false;
+    }
+    return layer->GetWidth() >= 120 && layer->GetWidth() <= 360 &&
+           layer->GetHeight() >= 80 && layer->GetHeight() <= 240;
+}
+
+bool TVPIsConfirmableSelectionLayer(tTJSNI_BaseLayer *layer) {
+    return TVPIsSaveLoadItemLayer(layer) || TVPIsGalleryItemLayer(layer);
+}
+
+bool TVPIsMessageLayer(tTJSNI_BaseLayer *layer) {
+    if(!layer) return false;
+    return layer->GetName().AsStdString().find("メッセージ") !=
+           std::string::npos;
+}
+}
 
 //---------------------------------------------------------------------------
 // tTVPLayerManager
@@ -355,16 +422,189 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetMostFrontChildAt(
     return lay;
 }
 //---------------------------------------------------------------------------
+tTJSNI_BaseLayer *tTVPLayerManager::GetClickableLayerAt(tjs_int x, tjs_int y) {
+    tTJSNI_BaseLayer *layer = GetMostFrontChildAt(x, y);
+    if(!layer || !TVPIsMessageLayer(layer) || !Primary)
+        return layer;
+
+    const tjs_int lower_control_band = (tjs_int)(Primary->GetHeight() * 3 / 4);
+    if(y < lower_control_band)
+        return layer;
+
+    tTJSNI_BaseLayer *under = GetMostFrontChildAt(x, y, layer);
+    if(TVPInputTraceEnabled() && under) {
+        spdlog::info("LayerManager passthrough candidate top={} under={}",
+                     layer->GetName().AsStdString(),
+                     under->GetName().AsStdString());
+    }
+    if(TVPIsSaveLoadButtonLayer(under))
+        return under;
+
+    auto &nodes = GetAllNodes();
+    for(auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
+        tTJSNI_BaseLayer *candidate = *it;
+        if(!TVPIsSaveLoadButtonLayer(candidate) || !candidate->GetNodeVisible() ||
+           !candidate->GetNodeEnabled()) {
+            continue;
+        }
+        tjs_int local_x = x;
+        tjs_int local_y = y;
+        candidate->FromPrimaryCoordinates(local_x, local_y);
+        if(candidate->HitTestNoVisibleCheck(local_x, local_y)) {
+            if(TVPInputTraceEnabled()) {
+                spdlog::info("LayerManager save/load candidate through message={}",
+                             candidate->GetName().AsStdString());
+            }
+            return candidate;
+        }
+    }
+    return layer;
+}
+
+bool tTVPLayerManager::IsPendingConfirmStillOnSameSelection() {
+    if(!Primary || PendingConfirmLayerName.empty())
+        return false;
+
+    tTJSNI_BaseLayer *layer =
+        GetConfirmableSelectionLayerAt(PendingConfirmX, PendingConfirmY);
+    if(!TVPIsConfirmableSelectionLayer(layer))
+        return false;
+    return layer->GetName().AsStdString() == PendingConfirmLayerName;
+}
+
+tTJSNI_BaseLayer *tTVPLayerManager::GetConfirmableSelectionLayerAt(
+    tjs_int x, tjs_int y) {
+    auto &nodes = GetAllNodes();
+    int scanned = 0;
+    auto inspect_candidate = [&](tTJSNI_BaseLayer *candidate,
+                                 bool require_pixel_hit) -> tTJSNI_BaseLayer * {
+        if(!TVPIsConfirmableSelectionLayer(candidate))
+            return nullptr;
+        scanned++;
+        tjs_int local_x = x;
+        tjs_int local_y = y;
+        candidate->FromPrimaryCoordinates(local_x, local_y);
+        const bool rect_hit =
+            local_x >= 0 && local_y >= 0 && local_x < candidate->GetWidth() &&
+            local_y < candidate->GetHeight();
+        if(!rect_hit)
+            return nullptr;
+        if(TVPInputTraceEnabled()) {
+            const auto action_owner = candidate->GetActionOwnerNoAddRef();
+            spdlog::info("LayerManager selection rect candidate={} local=({}, {}) size={}x{} owner={} action={}",
+                         candidate->GetName().AsStdString(), local_x, local_y,
+                         candidate->GetWidth(), candidate->GetHeight(),
+                         candidate->GetOwnerNoAddRef() ? "yes" : "no",
+                         action_owner.Object ? "yes" : "no");
+        }
+        if(require_pixel_hit && !candidate->HitTestNoVisibleCheck(local_x, local_y))
+            return nullptr;
+        return candidate;
+    };
+
+    for(auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
+        if(tTJSNI_BaseLayer *candidate = inspect_candidate(*it, true))
+            return candidate;
+    }
+    scanned = 0;
+    for(tTJSNI_BaseLayer *candidate : nodes) {
+        if(!TVPIsConfirmableSelectionLayer(candidate))
+            continue;
+        tjs_int local_x = x;
+        tjs_int local_y = y;
+        candidate->FromPrimaryCoordinates(local_x, local_y);
+        const bool rect_hit =
+            local_x >= 0 && local_y >= 0 && local_x < candidate->GetWidth() &&
+            local_y < candidate->GetHeight();
+        if(!rect_hit)
+            continue;
+        scanned++;
+        if(TVPInputTraceEnabled()) {
+            const auto action_owner = candidate->GetActionOwnerNoAddRef();
+            spdlog::info("LayerManager selection rect candidate={} local=({}, {}) size={}x{} owner={} action={}",
+                         candidate->GetName().AsStdString(), local_x, local_y,
+                         candidate->GetWidth(), candidate->GetHeight(),
+                         candidate->GetOwnerNoAddRef() ? "yes" : "no",
+                         action_owner.Object ? "yes" : "no");
+        }
+        return candidate;
+    }
+    if(TVPInputTraceEnabled())
+        spdlog::info("LayerManager selection scan none at ({}, {}) candidates={}",
+                     x, y, scanned);
+    return nullptr;
+}
+
+bool tTVPLayerManager::ShouldSynthesizeEnterForSaveLoadButton(
+    tTJSNI_BaseLayer *layer, tjs_int x, tjs_int y) {
+    if(!Primary || !TVPIsMessageLayer(layer))
+        return false;
+
+    const tjs_int w = (tjs_int)Primary->GetWidth();
+    const tjs_int h = (tjs_int)Primary->GetHeight();
+    if(w <= 0 || h <= 0)
+        return false;
+
+    // Some KAG save/load screens draw bottom command buttons into the message
+    // layer instead of separate button layers. The Load command is also bound
+    // to Enter; use that path when the pointer lands in the bottom Load button
+    // band so mouse input matches keyboard behavior.
+    return x >= w * 52 / 100 && x <= w * 70 / 100 &&
+           y >= h * 90 / 100;
+}
+//---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
-    tTJSNI_BaseLayer *l = GetMostFrontChildAt(x, y);
+    tTJSNI_BaseLayer *l = GetClickableLayerAt(x, y);
+    TVPTraceLayerHit("click", x, y, l);
     if(l /*&& CaptureOwner == l*/) {
+        if(ShouldSynthesizeEnterForSaveLoadButton(l, x, y) && TVPMainWindow) {
+            if(TVPInputTraceEnabled()) {
+                spdlog::info("LayerManager save/load command click -> Enter primary=({}, {})",
+                             x, y);
+            }
+            PendingConfirmRequiresSameSelection = false;
+            PendingConfirmLayerName.clear();
+            PendingSaveLoadEnterTick = TVPGetRoughTickCount32() + 100;
+            return;
+        }
+        bool selection_passthrough = false;
+        if(!TVPIsConfirmableSelectionLayer(l) && !TVPIsSaveLoadButtonLayer(l)) {
+            if(tTJSNI_BaseLayer *selection = GetConfirmableSelectionLayerAt(x, y)) {
+                if(TVPInputTraceEnabled()) {
+                    spdlog::info("LayerManager selection passthrough top={} selection={}",
+                                 l->GetName().AsStdString(),
+                                 selection->GetName().AsStdString());
+                }
+                l = selection;
+                selection_passthrough = true;
+            }
+        }
+        const bool should_confirm_selection = TVPIsConfirmableSelectionLayer(l);
+        const std::string selection_layer_name =
+            should_confirm_selection ? l->GetName().AsStdString() : std::string();
+        const tjs_int selection_x = x;
+        const tjs_int selection_y = y;
         l->FromPrimaryCoordinates(x, y);
+        if(selection_passthrough)
+            l->FireMouseDown(x, y, mbLeft, 0);
         l->FireClick(x, y);
+        if(selection_passthrough)
+            l->FireMouseUp(x, y, mbLeft, 0);
+        if(should_confirm_selection && TVPMainWindow) {
+            if(TVPInputTraceEnabled()) {
+                spdlog::info("LayerManager selectable item click -> pending confirm fallback");
+            }
+            PendingConfirmX = selection_x;
+            PendingConfirmY = selection_y;
+            PendingConfirmRequiresSameSelection = true;
+            PendingConfirmLayerName = selection_layer_name;
+            PendingSaveLoadEnterTick = TVPGetRoughTickCount32() + 100;
+        }
     }
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryDoubleClick(tjs_int x, tjs_int y) {
-    tTJSNI_BaseLayer *l = GetMostFrontChildAt(x, y);
+    tTJSNI_BaseLayer *l = GetClickableLayerAt(x, y);
     if(l /*&& CaptureOwner == l*/) {
         l->FromPrimaryCoordinates(x, y);
         l->FireDoubleClick(x, y);
@@ -375,7 +615,8 @@ void tTVPLayerManager::PrimaryMouseDown(tjs_int x, tjs_int y,
                                         tTVPMouseButton mb, tjs_uint32 flags) {
     PrimaryMouseMove(x, y, flags);
     tTJSNI_BaseLayer *l =
-        CaptureOwner ? CaptureOwner : GetMostFrontChildAt(x, y);
+        CaptureOwner ? CaptureOwner : GetClickableLayerAt(x, y);
+    TVPTraceLayerHit("down", x, y, l);
     if(l) {
         l->FromPrimaryCoordinates(x, y);
         ReleaseCaptureCalled = false;
@@ -406,6 +647,7 @@ void tTVPLayerManager::PrimaryMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
         l = CaptureOwner;
     else
         l = GetMostFrontChildAt(x, y);
+    TVPTraceLayerHit("up", x, y, l);
 
     if(l) {
         int orig_x = x, orig_y = y;
@@ -1008,6 +1250,12 @@ void tTVPLayerManager::NotifyNodeEnabledState() {
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryKeyDown(tjs_uint key, tjs_uint32 shift) {
+    if(TVPInputTraceEnabled()) {
+        spdlog::info("LayerManager keydown key={} focused={} primary={}",
+                     key,
+                     FocusedLayer ? FocusedLayer->GetName().AsStdString() : "<none>",
+                     Primary ? Primary->GetName().AsStdString() : "<none>");
+    }
     if(FocusedLayer)
         FocusedLayer->FireKeyDown(key, shift);
     else if(Primary)
@@ -1051,6 +1299,40 @@ void tTVPLayerManager::UpdateToDrawDevice() {
     // drawdevice -> layer
     if(!Primary)
         return;
+    if(PendingSaveLoadEnterTick > 0 &&
+       TVPGetRoughTickCount32() >= PendingSaveLoadEnterTick && TVPMainWindow) {
+        PendingSaveLoadEnterTick = 0;
+        if(PendingConfirmRequiresSameSelection &&
+           !IsPendingConfirmStillOnSameSelection()) {
+            if(TVPInputTraceEnabled())
+                spdlog::info("LayerManager selectable item confirm fallback canceled");
+            PendingConfirmRequiresSameSelection = false;
+            PendingConfirmLayerName.clear();
+        } else {
+            PendingConfirmRequiresSameSelection = false;
+            PendingConfirmLayerName.clear();
+            if(TVPInputTraceEnabled())
+                spdlog::info("LayerManager selectable item confirm fallback dispatch Enter");
+            EngineInputEvent event;
+            event.type = kEngineInputKeyDown;
+            event.key_code = 13;
+            if(auto *loop = EngineLoop::GetInstance()) {
+                loop->HandleInputEvent(event);
+                PendingSaveLoadEnterReleaseTick = TVPGetRoughTickCount32() + 100;
+            } else {
+                TVPPostInputEvent(new tTVPOnKeyDownInputEvent(TVPMainWindow, 13, 0));
+            }
+        }
+    }
+    if(PendingSaveLoadEnterReleaseTick > 0 &&
+       TVPGetRoughTickCount32() >= PendingSaveLoadEnterReleaseTick) {
+        PendingSaveLoadEnterReleaseTick = 0;
+        EngineInputEvent event;
+        event.type = kEngineInputKeyUp;
+        event.key_code = 13;
+        if(auto *loop = EngineLoop::GetInstance())
+            loop->HandleInputEvent(event);
+    }
     Primary->CompleteForWindow(this);
 }
 //---------------------------------------------------------------------------

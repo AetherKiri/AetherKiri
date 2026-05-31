@@ -1399,6 +1399,34 @@ void TVPInitializeStartupScript() {
 //---------------------------------------------------------------------------
 tjs_uint32 tTJSNC_Scripts::ClassID = -1;
 
+namespace {
+
+class tTJSObjectKeysEnumCaller : public tTJSDispatch {
+public:
+    explicit tTJSObjectKeysEnumCaller(iTJSDispatch2 *array) : array_(array) {}
+
+    tjs_error FuncCall(tjs_uint32 flag, const tjs_char *membername,
+                       tjs_uint32 *hint, tTJSVariant *result,
+                       tjs_int numparams, tTJSVariant **param,
+                       iTJSDispatch2 *objthis) override {
+        if(numparams > 1) {
+            tTVInteger memberflag = param[1]->AsInteger();
+            if(!(memberflag & TJS_HIDDENMEMBER)) {
+                static tjs_uint addhint = 0;
+                array_->FuncCall(0, TJS_W("add"), &addhint, nullptr, 1,
+                                 &param[0], array_);
+            }
+        }
+        if(result) *result = true;
+        return TJS_S_OK;
+    }
+
+private:
+    iTJSDispatch2 *array_;
+};
+
+} // namespace
+
 tTJSNC_Scripts::tTJSNC_Scripts() :
     inherited(TJS_W("Scripts")){
         // registration of native members
@@ -1636,6 +1664,50 @@ TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/
                                   getClassNames) /* UNDOCUMENTED:
                                                     subject to change
                                                   */
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ getObjectKeys) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+
+    if(result) {
+        iTJSDispatch2 *array = TJSCreateArrayObject();
+        try {
+            tTJSObjectKeysEnumCaller *caller =
+                new tTJSObjectKeysEnumCaller(array);
+            tTJSVariantClosure closure(caller);
+            param[0]->AsObjectClosureNoAddRef().EnumMembers(
+                TJS_IGNOREPROP | TJS_ENUM_NO_VALUE, &closure, nullptr);
+            caller->Release();
+
+            static tjs_uint sorthint = 0;
+            array->FuncCall(0, TJS_W("sort"), &sorthint, nullptr, 0, nullptr,
+                            array);
+            *result = tTJSVariant(array, array);
+        } catch(...) {
+            array->Release();
+            throw;
+        }
+        array->Release();
+    }
+
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ getObjectKeys)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ getObjectCount) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+
+    if(result) {
+        tjs_int count = 0;
+        param[0]->AsObjectClosureNoAddRef().GetCount(&count, nullptr, nullptr,
+                                                     nullptr);
+        *result = count;
+    }
+
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ getObjectCount)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_PROP_DECL(textEncoding){
     TJS_BEGIN_NATIVE_PROP_GETTER{ *result = TVPGetDefaultReadEncoding();

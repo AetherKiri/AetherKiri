@@ -65,6 +65,22 @@ func _initialize() -> void:
         await _save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
         step += 1
 
+    for key_event in test_config.get("keys", []):
+        var key_code := int(key_event.get("key_code", 13))
+        player.send_key_event(true, key_code, int(key_event.get("modifiers", 0)), int(key_event.get("unicode", 0)))
+        player.tick(1.0 / 60.0)
+        player.send_key_event(false, key_code, int(key_event.get("modifiers", 0)), 0)
+        await _advance(int(key_event.get("after_frames", ProbeConfig.int_value(test_config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)))))
+        await _save_step(step, "key_%d" % key_code)
+        step += 1
+
+    for click in test_config.get("clicks_after_keys", []):
+        var pos := ProbeConfig.click_position(click)
+        _send_window_click(pos)
+        await _advance(int(click.get("after_frames", ProbeConfig.int_value(test_config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)))))
+        await _save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+
     var measured_frames: int = ProbeConfig.int_value(test_config, "measure_frames", _env_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 120))
     var start_ticks: int = Time.get_ticks_usec()
     await _advance(measured_frames)
