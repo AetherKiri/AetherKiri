@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <string>
@@ -338,6 +339,8 @@ static tTJSNI_BaseLayer *textRenderFindLayerArg(tjs_int numparams,
 
 static void textRenderLogEdgeShadowArgs(tjs_int numparams, tTJSVariant **param,
                                         tjs_int textIndex) {
+  static const bool enabled = std::getenv("AETHERKIRI_TEXT_TRACE") != nullptr;
+  if (!enabled) return;
   static int logged = 0;
   if (logged >= 40) return;
   ++logged;
@@ -369,22 +372,24 @@ static void textRenderLogEdgeShadowArgs(tjs_int numparams, tTJSVariant **param,
     }
     message += "]";
   }
-  spdlog::debug("{}", message);
+  spdlog::info("{}", message);
 }
 
 static void textRenderDrawTextWithColor(tTJSNI_BaseLayer *layer, tjs_int x,
                                         tjs_int y, const tTJSVariant &text,
                                         TextColor color,
-                                        tjs_int textHeight) {
+                                        tjs_int opacity, tjs_int textHeight) {
+  if (opacity <= 0) return;
+  opacity = std::clamp<tjs_int>(opacity, 0, 255);
   if (!textRenderIsPackedGradient(color)) {
-    layer->DrawText(x, y, text, textRenderColorBottom24(color), 255, true, 0,
-                    0, 0, 0, 0);
+    layer->DrawText(x, y, text, textRenderColorBottom24(color), opacity, true,
+                    0, 0, 0, 0, 0);
     return;
   }
 
-  layer->DrawTextVerticalGradient(x, y, text, textRenderColorTop24(color),
-                                  textRenderColorBottom24(color), 255, true,
-                                  std::clamp<tjs_int>(textHeight, 8, 128));
+  const tjs_uint32 textColor = textRenderColorTop24(color);
+  layer->DrawTextVerticalGradient(x, y, text, textColor, textColor, opacity,
+                                  true, std::clamp<tjs_int>(textHeight, 8, 128));
 }
 
 static tjs_error TJS_INTF_METHOD
@@ -427,13 +432,22 @@ EdgeShadowDrawTextCompat(tTJSVariant *result, tjs_int numparams,
       textRenderVariantIsNumeric(*param[colorIndex])) {
     color = textRenderColorRaw(*param[colorIndex], color);
   }
+  tjs_int textOpacity = 255;
+  textRenderTryIntArg(numparams, param, colorIndex + 1, textOpacity);
+  textOpacity = std::clamp<tjs_int>(textOpacity, 0, 255);
 
   TextColor edgeColor = 0xffffff;
-  tjs_int edgeWidth = 2;
+  tjs_int edgeWidth = 0;
   tjs_int textHeight = 24;
   if (numparams >= 15 && param[14] &&
       textRenderVariantIsNumeric(*param[14])) {
     edgeColor = textRenderColorRaw(*param[14], 0xffffff);
+    tjs_int edgeX = 0;
+    tjs_int edgeY = 0;
+    if (textRenderTryIntArg(numparams, param, 11, edgeX) &&
+        textRenderTryIntArg(numparams, param, 12, edgeY)) {
+      edgeWidth = std::max(edgeX, edgeY);
+    }
   } else {
     for (tjs_int i = numparams - 1; i > colorIndex; --i) {
       if (!param[i] || !textRenderVariantIsNumeric(*param[i])) continue;
@@ -442,14 +456,6 @@ EdgeShadowDrawTextCompat(tTJSVariant *result, tjs_int numparams,
         edgeColor = candidate;
         break;
       }
-    }
-  }
-  for (tjs_int i = colorIndex + 1; i < numparams; ++i) {
-    if (!param[i] || !textRenderVariantIsNumeric(*param[i])) continue;
-    const tjs_int candidate = static_cast<tjs_int>(*param[i]);
-    if (candidate >= 1 && candidate <= 6) {
-      edgeWidth = candidate;
-      break;
     }
   }
   for (tjs_int i = 0; i < numparams; ++i) {
@@ -482,6 +488,16 @@ EdgeShadowDrawTextCompat(tTJSVariant *result, tjs_int numparams,
   edgeWidth = std::clamp<tjs_int>(edgeWidth, 0, 12);
   textHeight = std::clamp<tjs_int>(textHeight, 8, 128);
 
+  if (std::getenv("AETHERKIRI_TEXT_TRACE") != nullptr) {
+    const std::string text = ttstr(*param[textIndex]).AsStdString();
+    spdlog::info(
+        "textrender EdgeShadowDrawText resolved text=\"{}\" x={} y={} color=0x{:016x} "
+        "edgeColor=0x{:016x} edgeWidth={} textOpacity={} textHeight={} packed={}",
+        text.substr(0, 96), x, y, static_cast<unsigned long long>(color),
+        static_cast<unsigned long long>(edgeColor), edgeWidth, textOpacity,
+        textHeight, textRenderIsPackedGradient(color));
+  }
+
   try {
     for (tjs_int dy = -edgeWidth; dy <= edgeWidth; ++dy) {
       for (tjs_int dx = -edgeWidth; dx <= edgeWidth; ++dx) {
@@ -493,7 +509,7 @@ EdgeShadowDrawTextCompat(tTJSVariant *result, tjs_int numparams,
       }
     }
     textRenderDrawTextWithColor(layer, x, y, *param[textIndex], color,
-                                textHeight);
+                                textOpacity, textHeight);
   } catch (...) {
     if (result) *result = false;
     return TJS_S_OK;

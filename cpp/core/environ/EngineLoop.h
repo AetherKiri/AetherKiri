@@ -137,4 +137,9 @@ private:
     // LastMouseDownX/Y).  OnClick uses the down position, not up position.
     int32_t last_mouse_down_x_ = 0;
     int32_t last_mouse_down_y_ = 0;
+    int64_t last_click_time_ms_ = 0;
+    int32_t last_click_x_ = 0;
+    int32_t last_click_y_ = 0;
+    bool suppress_next_left_click_ = false;
+    uint16_t pending_mouse_release_vk_ = 0;
 };

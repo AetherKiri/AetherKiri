@@ -12,12 +12,14 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include "DrawDevice.h"
 #include "MsgIntf.h"
 #include "LayerIntf.h"
 #include "LayerManager.h"
 #include "WindowIntf.h"
 #include "DebugIntf.h"
+#include "spdlog/spdlog.h"
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
 #include "krkr_egl_context.h"
 #endif
@@ -103,9 +105,21 @@ bool tTVPDrawDevice::TransformToPrimaryLayerManager(tjs_int &x, tjs_int &y) {
         }
     }
 
+    const tjs_int original_x = x;
+    const tjs_int original_y = y;
+
     // Map from source (surface) coordinates to primary layer coordinates
     x = src_w ? ((x - src_left) * pl_w / src_w) : 0;
     y = src_h ? ((y - src_top)  * pl_h / src_h) : 0;
+
+    static bool input_trace_enabled =
+        std::getenv("AETHERKIRI_INPUT_TRACE") != nullptr;
+    if(input_trace_enabled) {
+        spdlog::info("DrawDevice input map in=({}, {}) src=({}, {}, {}x{}) "
+                     "primary={}x{} out=({}, {})",
+                     original_x, original_y, src_left, src_top, src_w, src_h,
+                     pl_w, pl_h, x, y);
+    }
 
     return true;
 }

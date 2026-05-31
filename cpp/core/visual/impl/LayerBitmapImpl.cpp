@@ -974,8 +974,7 @@ bool tTVPNativeBaseBitmap::InternalBlendTextVerticalGradient(
             tTVPRect row_drect(drect.left, drect.top + y, drect.right,
                                drect.top + y + 1);
             const tjs_int row = std::max<tjs_int>(
-                0, std::min<tjs_int>(gradientHeight - 1,
-                                      drect.top + y - gradientTop));
+                0, std::min<tjs_int>(gradientHeight - 1, srect.top + y));
             const tjs_uint32 color =
                 TVPLerpColor24(topcolor, bottomcolor, row, gradientHeight);
             drawn = InternalBlendText(data, dtdata, color, row_srect,
@@ -994,7 +993,7 @@ bool tTVPNativeBaseBitmap::InternalBlendTextVerticalGradient(
         tjs_uint32 *out = reinterpret_cast<tjs_uint32 *>(dst);
         const tjs_uint8 *src = bp + pitch * y;
         const tjs_int row = std::max<tjs_int>(
-            0, std::min<tjs_int>(gradientHeight - 1, drect.top + y - gradientTop));
+            0, std::min<tjs_int>(gradientHeight - 1, srect.top + y));
         const tjs_uint32 color =
             TVPLerpColor24(topcolor, bottomcolor, row, gradientHeight);
         for(tjs_int x = 0; x < w; ++x)
@@ -1123,7 +1122,7 @@ bool tTVPNativeBaseBitmap::InternalDrawTextVerticalGradient(
         return false;
 
     return InternalBlendTextVerticalGradient(data, dtdata, topcolor,
-                                             bottomcolor, srect, drect, y,
+                                             bottomcolor, srect, drect, drect.top,
                                              gradientHeight);
 }
 //---------------------------------------------------------------------------
