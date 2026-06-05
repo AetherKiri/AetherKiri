@@ -282,6 +282,8 @@ namespace motion {
         // Aligned to libkrkr2.so: EmoteObject_init (sub_67DBAC) sets Player's
         // activeMotion directly from loaded PSB data without file I/O.
         void loadFromSnapshot(std::shared_ptr<detail::MotionSnapshot> snapshot);
+        void bindMotionModuleKey(ttstr storageKey);
+        [[nodiscard]] bool hasActiveMotion() const;
 
         // Resource management
         void unload(ttstr name);
@@ -366,6 +368,7 @@ namespace motion {
         bool getD3DAvailable();
         void doAlphaMaskOperation();
         void onFindMotion(ttstr name, int flags = 0);
+        bool playMotionLike_0x6B2284(ttstr label, tjs_int flags);
         // Aligned to libkrkr2.so 0x681CAC: motion property as raw callback
         // so we have objthis to call onFindMotion TJS callback.
         static tjs_error setMotionCompat(tTJSVariant *result, tjs_int numparams,
@@ -399,6 +402,13 @@ namespace motion {
                                     tTJSVariant **param, iTJSDispatch2 *objthis);
         tTJSVariant motionList();
         void emoteEdit(tTJSVariant args);
+
+        ResourceManager &getResourceManagerNative() {
+            return _resourceManagerNative;
+        }
+        const ResourceManager &getResourceManagerNative() const {
+            return _resourceManagerNative;
+        }
 
         // Public accessor for EmotePlayer delegation
         double getActiveMotionWidth() const;

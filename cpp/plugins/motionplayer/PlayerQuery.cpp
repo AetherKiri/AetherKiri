@@ -850,6 +850,90 @@ namespace motion {
         return detail::makeArray(timelineInfoVariants(*_runtime));
     }
 
+    bool Player::playMotionLike_0x6B2284(ttstr label, tjs_int flags) {
+        if(!_runtime->activeMotion && _project.Type() == tvtObject) {
+            if(const auto snapshot = detail::lookupModuleSnapshot(_project)) {
+                activateMotion(*_runtime, snapshot);
+                syncVariableKeysFromActiveMotion();
+            }
+        }
+
+        ensureMotionLoaded();
+        if(_runtime->activeMotion && _runtime->timelines.empty()) {
+            detail::primeTimelineStates(_runtime->timelines,
+                                        *_runtime->activeMotion);
+        }
+
+        if(!label.IsEmpty() && !_runtime->activeMotion) {
+            setMotion(label);
+            ensureMotionLoaded();
+            if(_runtime->activeMotion && _runtime->timelines.empty()) {
+                detail::primeTimelineStates(_runtime->timelines,
+                                            *_runtime->activeMotion);
+            }
+        }
+
+        if(!_runtime->activeMotion) {
+            return false;
+        }
+
+        if((flags & PlayFlagForce) != 0) {
+            stopTimeline(TJS_W(""));
+        }
+
+        const bool chainMode = (flags & PlayFlagChain) != 0;
+        const auto playOne = [&](const std::string &timelineLabel) {
+            auto &state = _runtime->timelines[timelineLabel];
+            state.label = timelineLabel;
+            state.flags = flags;
+            state.blendRatio = 1.0;
+            state.playing = true;
+            if(!chainMode) {
+                state.currentTime = 0.0;
+                state.controlInitialized = false;
+                state.controlLastAppliedTime = 0.0;
+                state.controlFrameCursor.clear();
+                state.controlTrackValues.clear();
+                state.controlTrackAnimators.clear();
+            }
+            if(std::find(_runtime->playingTimelineLabels.begin(),
+                         _runtime->playingTimelineLabels.end(),
+                         timelineLabel) == _runtime->playingTimelineLabels.end()) {
+                _runtime->playingTimelineLabels.push_back(timelineLabel);
+            }
+            if(state.totalFrames <= 0.0 && _runtime->activeMotion) {
+                const auto it =
+                    _runtime->activeMotion->timelineTotalFrames.find(timelineLabel);
+                if(it != _runtime->activeMotion->timelineTotalFrames.end()) {
+                    state.totalFrames = it->second;
+                }
+            }
+        };
+
+        bool started = false;
+        if(!label.IsEmpty()) {
+            const auto key = detail::narrow(label);
+            if(_runtime->timelines.find(key) != _runtime->timelines.end()) {
+                playOne(key);
+                started = true;
+            }
+        }
+
+        if(!started) {
+            const auto &primary =
+                !_runtime->activeMotion->mainTimelineLabels.empty()
+                ? _runtime->activeMotion->mainTimelineLabels
+                : _runtime->activeMotion->diffTimelineLabels;
+            for(const auto &timelineLabel : primary) {
+                playOne(timelineLabel);
+                started = true;
+            }
+        }
+
+        _allplaying = !_runtime->playingTimelineLabels.empty();
+        return started;
+    }
+
     // --- Selector ---
     bool Player::isSelectorTarget(ttstr name) {
         const auto *layers = activeLayersByName();
