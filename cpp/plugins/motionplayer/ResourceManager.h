@@ -4,6 +4,8 @@
 #pragma once
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #include "tjs.h"
 
 namespace motion {
@@ -19,6 +21,14 @@ namespace motion {
         void clearCache() const;
         tTJSVariant getLastLoadedModule() const;
         tTJSVariant findLoaded(ttstr path) const;
+        tTJSVariant findLoadedModule(ttstr path) const;
+        tTJSVariant findSource(ttstr path) const;
+        [[nodiscard]] std::size_t uniqueCachedModuleCount() const;
+        struct CachedModuleEntry {
+            std::string key;
+            tTJSVariant module;
+        };
+        [[nodiscard]] std::vector<CachedModuleEntry> uniqueCachedModules() const;
         [[nodiscard]] static tjs_int getEmotePSBDecryptSeed();
         [[nodiscard]] static tjs_int getDecryptSeed() {
             return getEmotePSBDecryptSeed();

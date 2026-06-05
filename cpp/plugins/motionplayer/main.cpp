@@ -294,6 +294,9 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
 
     // Properties
     NCB_PROPERTY_RO(module, getModule);
+    NCB_PROPERTY(chara, getChara, setChara);
+    NCB_PROPERTY(motion, getMotion, setMotion);
+    NCB_PROPERTY(motionKey, getMotionKey, setMotionKey);
     NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(smoothing, getSmoothing, setSmoothing);
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
@@ -334,26 +337,34 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_METHOD(getVariableFrameValueAt);
     NCB_METHOD_RAW_CALLBACK(setVariable, &EmotePlayer::setVariableCompat, 0);
     NCB_METHOD(getVariable);
+    NCB_METHOD(getVariableFrameList);
     NCB_METHOD_RAW_CALLBACK(startWind, &EmotePlayer::startWindCompat, 0);
     NCB_METHOD_RAW_CALLBACK(stopWind, &EmotePlayer::stopWindCompat, 0);
     NCB_METHOD(countMainTimelines);
     NCB_METHOD(getMainTimelineLabelAt);
+    NCB_METHOD(getMainTimelineLabelList);
     NCB_METHOD(countDiffTimelines);
     NCB_METHOD(getDiffTimelineLabelAt);
+    NCB_METHOD(getDiffTimelineLabelList);
     NCB_METHOD(countPlayingTimelines);
     NCB_METHOD(getPlayingTimelineLabelAt);
     NCB_METHOD(getPlayingTimelineFlagsAt);
     NCB_METHOD(isLoopTimeline);
+    NCB_METHOD(getLoopTimeline);
     NCB_METHOD(getTimelineTotalFrameCount);
+    NCB_METHOD(play);
     NCB_METHOD(playTimeline);
     NCB_METHOD(isTimelinePlaying);
+    NCB_METHOD(getTimelinePlaying);
     NCB_METHOD(stopTimeline);
     NCB_METHOD(setTimeline);
     NCB_METHOD(setTimelineBlendRatio);
     NCB_METHOD(getTimelineBlendRatio);
     NCB_METHOD(fadeInTimeline);
     NCB_METHOD(fadeOutTimeline);
+    NCB_METHOD(getPlayingTimelineInfoList);
     NCB_METHOD(skip);
+    NCB_METHOD(skipToSync);
     NCB_METHOD(addPlayCallback);
     NCB_METHOD(pass);
     NCB_METHOD(progress);
@@ -371,6 +382,7 @@ NCB_REGISTER_SUBCLASS(ResourceManager) {
     NCB_METHOD(load);
     NCB_METHOD(unload);
     NCB_METHOD(clearCache);
+    NCB_METHOD(findSource);
     NCB_METHOD_RAW_CALLBACK(setEmotePSBDecryptSeed,
                             &ResourceManager::setEmotePSBDecryptSeed,
                             TJS_STATICMEMBER);
@@ -536,6 +548,9 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
 
     // Properties (same as EmotePlayer subclass, matching IDA registration order)
     NCB_PROPERTY_RO(module, getModule);
+    NCB_PROPERTY(chara, getChara, setChara);
+    NCB_PROPERTY(motion, getMotion, setMotion);
+    NCB_PROPERTY(motionKey, getMotionKey, setMotionKey);
     NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(smoothing, getSmoothing, setSmoothing);
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
@@ -576,26 +591,34 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(getVariableFrameValueAt);
     NCB_METHOD_RAW_CALLBACK(setVariable, &EmotePlayer::setVariableCompat, 0);
     NCB_METHOD(getVariable);
+    NCB_METHOD(getVariableFrameList);
     NCB_METHOD_RAW_CALLBACK(startWind, &EmotePlayer::startWindCompat, 0);
     NCB_METHOD_RAW_CALLBACK(stopWind, &EmotePlayer::stopWindCompat, 0);
     NCB_METHOD(countMainTimelines);
     NCB_METHOD(getMainTimelineLabelAt);
+    NCB_METHOD(getMainTimelineLabelList);
     NCB_METHOD(countDiffTimelines);
     NCB_METHOD(getDiffTimelineLabelAt);
+    NCB_METHOD(getDiffTimelineLabelList);
     NCB_METHOD(countPlayingTimelines);
     NCB_METHOD(getPlayingTimelineLabelAt);
     NCB_METHOD(getPlayingTimelineFlagsAt);
     NCB_METHOD(isLoopTimeline);
+    NCB_METHOD(getLoopTimeline);
     NCB_METHOD(getTimelineTotalFrameCount);
+    NCB_METHOD(play);
     NCB_METHOD(playTimeline);
     NCB_METHOD(isTimelinePlaying);
+    NCB_METHOD(getTimelinePlaying);
     NCB_METHOD(stopTimeline);
     NCB_METHOD(setTimeline);
     NCB_METHOD(setTimelineBlendRatio);
     NCB_METHOD(getTimelineBlendRatio);
     NCB_METHOD(fadeInTimeline);
     NCB_METHOD(fadeOutTimeline);
+    NCB_METHOD(getPlayingTimelineInfoList);
     NCB_METHOD(skip);
+    NCB_METHOD(skipToSync);
     NCB_METHOD(addPlayCallback);
     NCB_METHOD(pass);
     NCB_METHOD(progress);

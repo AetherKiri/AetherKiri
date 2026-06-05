@@ -6,13 +6,82 @@
 //
 
 #include <algorithm>
+#include <stdexcept>
 
 #include "EmotePlayer.h"
 #include "RuntimeSupport.h"
 #include "ncbind.hpp"
+#include "psbfile/PSBFile.h"
 
 #define LOGGER spdlog::get("plugin")
 #define STUB_WARN(name) LOGGER->warn("EmotePlayer::" #name "() stub called")
+
+namespace {
+    enum class Sdl3PlayMode {
+        None,
+        MotionKey,
+        SingleCache,
+        MultiCache
+    };
+
+    ttstr readMetadataBaseField(const tTJSVariant &module, const ttstr &field) {
+        if(module.Type() != tvtObject) {
+            return {};
+        }
+        iTJSDispatch2 *root = module.AsObjectNoAddRef();
+        if(!root) {
+            return {};
+        }
+
+        tTJSVariant metadata;
+        if(TJS_FAILED(root->PropGet(0, TJS_W("metadata"), nullptr, &metadata, root)) ||
+           metadata.Type() != tvtObject) {
+            return {};
+        }
+        iTJSDispatch2 *metaObj = metadata.AsObjectNoAddRef();
+        if(!metaObj) {
+            return {};
+        }
+
+        tTJSVariant base;
+        if(TJS_FAILED(metaObj->PropGet(0, TJS_W("base"), nullptr, &base, metaObj)) ||
+           base.Type() != tvtObject) {
+            return {};
+        }
+        iTJSDispatch2 *baseObj = base.AsObjectNoAddRef();
+        if(!baseObj) {
+            return {};
+        }
+
+        tTJSVariant value;
+        if(TJS_FAILED(baseObj->PropGet(0, field.c_str(), nullptr, &value, baseObj)) ||
+           value.Type() == tvtVoid) {
+            return {};
+        }
+        return ttstr(value);
+    }
+
+    bool isMotionModule(const tTJSVariant &module) {
+        const auto snapshot = motion::detail::lookupModuleSnapshot(module);
+        if(!snapshot || !snapshot->root) {
+            return false;
+        }
+        const auto typeVal = (*snapshot->root)["type"];
+        if(const auto num =
+               std::dynamic_pointer_cast<const PSB::PSBNumber>(typeVal)) {
+            return num->getValue<int>() == 0;
+        }
+        return false;
+    }
+
+    tTJSVariant boundModuleVariant(const motion::EmotePlayer &self) {
+        const tTJSVariant module = self.getModule();
+        if(module.Type() == tvtObject) {
+            return module;
+        }
+        return self.getPlayer().getProject();
+    }
+} // namespace
 
 namespace motion {
 
@@ -51,11 +120,35 @@ namespace motion {
 
     tTJSVariant EmotePlayer::getModule() const { return _module; }
 
+    void EmotePlayer::setMotionKey(ttstr v) {
+        _storageKey = v;
+        _player.bindMotionModuleKey(v);
+        const auto loaded = _player.getProject();
+        if(loaded.Type() == tvtObject) {
+            _module = loaded;
+        }
+        _modified = true;
+    }
+
+    void EmotePlayer::setMotion(ttstr v) {
+        _clipLabel = v;
+        _modified = true;
+    }
+
+    ttstr EmotePlayer::getMotion() const {
+        if(!_clipLabel.IsEmpty()) {
+            return _clipLabel;
+        }
+        return _player.getMotion();
+    }
+
     // --- Methods ---
 
     // Aligned to libkrkr2.so sub_52FD84: create() is actually "destroy/reset"
     void EmotePlayer::create() {
         _module.Clear();
+        _storageKey.Clear();
+        _clipLabel.Clear();
         _player.loadFromSnapshot(nullptr);
         _modified = true;
     }
@@ -75,6 +168,8 @@ namespace motion {
         auto *copy = new EmotePlayer(ResourceManager{});
         // Copy EmotePlayer-specific state
         copy->_module = _module;
+        copy->_storageKey = _storageKey;
+        copy->_clipLabel = _clipLabel;
         copy->_useD3D = _useD3D;
         copy->_smoothing = _smoothing;
         copy->_meshDivisionRatio = _meshDivisionRatio;
@@ -90,6 +185,7 @@ namespace motion {
         copy->_opengl = _opengl;
         copy->_visible = _visible;
         copy->_playCallback = _playCallback;
+        copy->_isSelfClear = _isSelfClear;
         copy->_baseScale = _baseScale;
         copy->_userScale = _userScale;
         copy->_rot = _rot;
@@ -297,6 +393,10 @@ namespace motion {
         return _player.getVariable(label);
     }
 
+    tTJSVariant EmotePlayer::getVariableFrameList(ttstr label) {
+        return _player.getVariableFrameList(label);
+    }
+
     tjs_int EmotePlayer::countVariables() {
         return _player.countVariables();
     }
@@ -371,12 +471,20 @@ namespace motion {
         return _player.getMainTimelineLabelAt(idx);
     }
 
+    tTJSVariant EmotePlayer::getMainTimelineLabelList() {
+        return _player.getMainTimelineLabelList();
+    }
+
     tjs_int EmotePlayer::countDiffTimelines() {
         return _player.countDiffTimelines();
     }
 
     ttstr EmotePlayer::getDiffTimelineLabelAt(tjs_int idx) {
         return _player.getDiffTimelineLabelAt(idx);
+    }
+
+    tTJSVariant EmotePlayer::getDiffTimelineLabelList() {
+        return _player.getDiffTimelineLabelList();
     }
 
     tjs_int EmotePlayer::countPlayingTimelines() {
@@ -395,6 +503,10 @@ namespace motion {
         return _player.getLoopTimeline(label);
     }
 
+    bool EmotePlayer::getLoopTimeline(ttstr label) {
+        return isLoopTimeline(label);
+    }
+
     tjs_int EmotePlayer::getTimelineTotalFrameCount(ttstr label) {
         return _player.getTimelineTotalFrameCount(label);
     }
@@ -408,12 +520,18 @@ namespace motion {
         return _player.getTimelinePlaying(label);
     }
 
+    bool EmotePlayer::getTimelinePlaying(ttstr label) {
+        return isTimelinePlaying(label);
+    }
+
     void EmotePlayer::stopTimeline(ttstr label) {
         _player.stopTimeline(label);
+        _modified = true;
     }
 
     void EmotePlayer::setTimelineBlendRatio(ttstr label, double ratio) {
         _player.setTimelineBlendRatio(label, ratio);
+        _modified = true;
     }
 
     double EmotePlayer::getTimelineBlendRatio(ttstr label) {
@@ -422,12 +540,26 @@ namespace motion {
 
     void EmotePlayer::fadeInTimeline(ttstr label, double duration,
                                      tjs_int flags) {
+        if(duration <= 0.0) {
+            playTimeline(label, flags);
+            return;
+        }
         _player.fadeInTimeline(label, duration, flags);
+        _modified = true;
     }
 
     void EmotePlayer::fadeOutTimeline(ttstr label, double duration,
                                       tjs_int flags) {
+        if(duration <= 0.0) {
+            stopTimeline(label);
+            return;
+        }
         _player.fadeOutTimeline(label, duration, flags);
+        _modified = true;
+    }
+
+    tTJSVariant EmotePlayer::getPlayingTimelineInfoList() {
+        return _player.getPlayingTimelineInfoList();
     }
 
     void EmotePlayer::setTimeline(ttstr label, bool loop) {
@@ -435,14 +567,121 @@ namespace motion {
         _player.playTimeline(label, 0);
     }
 
+    bool EmotePlayer::play(ttstr label, tjs_int flags) {
+        if(label.IsEmpty()) {
+            label = _clipLabel;
+        }
+
+        Sdl3PlayMode mode = Sdl3PlayMode::None;
+        ttstr clipLookupLabel;
+        bool selfClear = true;
+        auto &rm = _player.getResourceManagerNative();
+        const tTJSVariant module = boundModuleVariant(*this);
+
+        if(_player.hasActiveMotion() || module.Type() == tvtObject) {
+            if(!_player.hasActiveMotion() && module.Type() == tvtObject) {
+                if(const auto snapshot = detail::lookupModuleSnapshot(module)) {
+                    _player.loadFromSnapshot(snapshot);
+                }
+            }
+            if(_player.hasActiveMotion()) {
+                mode = Sdl3PlayMode::MotionKey;
+                const ttstr metaMotion =
+                    readMetadataBaseField(module, TJS_W("motion"));
+                clipLookupLabel = !metaMotion.IsEmpty() ? metaMotion : label;
+                LOGGER->debug(
+                    "EmotePlayer::play mode=MotionKey storageKey={} clipLookup={} playLabel={}",
+                    _storageKey.AsStdString(), clipLookupLabel.AsStdString(),
+                    label.AsStdString());
+            }
+        }
+
+        if(mode == Sdl3PlayMode::None) {
+            const auto cached = rm.uniqueCachedModules();
+            if(cached.size() == 1 && isMotionModule(cached.front().module)) {
+                mode = Sdl3PlayMode::SingleCache;
+                const auto &entry = cached.front();
+                if(!_player.hasActiveMotion()) {
+                    _player.bindMotionModuleKey(ttstr(entry.key.c_str()));
+                    _storageKey = ttstr(entry.key.c_str());
+                    _module = entry.module;
+                }
+                clipLookupLabel = label;
+                LOGGER->debug(
+                    "EmotePlayer::play mode=SingleCache key={} chara={} clipLookup={}",
+                    entry.key, _player.getChara().AsStdString(),
+                    clipLookupLabel.AsStdString());
+            } else if(!cached.empty()) {
+                mode = Sdl3PlayMode::MultiCache;
+                selfClear = false;
+                for(const auto &entry : cached) {
+                    const ttstr metaChara =
+                        readMetadataBaseField(entry.module, TJS_W("chara"));
+                    const ttstr metaMotion =
+                        readMetadataBaseField(entry.module, TJS_W("motion"));
+                    if(metaChara.IsEmpty() || metaMotion.IsEmpty()) {
+                        continue;
+                    }
+                    _player.bindMotionModuleKey(ttstr(entry.key.c_str()));
+                    _storageKey = ttstr(entry.key.c_str());
+                    _module = entry.module;
+                    clipLookupLabel = metaMotion;
+                    LOGGER->warn(
+                        "EmotePlayer::play mode=MultiCache key={}: selected first metadata match",
+                        entry.key);
+                    break;
+                }
+            }
+        }
+
+        if(clipLookupLabel.IsEmpty()) {
+            if(label.IsEmpty()) {
+                LOGGER->error(
+                    "EmotePlayer::play(): no module/motion resolved in any SDL3 play mode");
+                throw std::runtime_error(
+                    "motionplayer: EmotePlayer.play() could not resolve motion module");
+            }
+            clipLookupLabel = label;
+            LOGGER->warn("EmotePlayer::play: fallback to playLabel={}",
+                         label.AsStdString());
+        }
+
+        _clipLabel = label;
+        _progress = 0.0;
+        _isSelfClear = selfClear;
+        _player.setTickCount(0.0);
+        _player.setFrameLoopTime(0.0);
+        _player.setSpeed(true);
+
+        const bool started =
+            _player.playMotionLike_0x6B2284(clipLookupLabel, flags);
+        if(!started && !label.IsEmpty() && clipLookupLabel != label) {
+            LOGGER->debug(
+                "EmotePlayer::play: clipLookup={} failed; retry playLabel={}",
+                clipLookupLabel.AsStdString(), label.AsStdString());
+            const bool retryStarted =
+                _player.playMotionLike_0x6B2284(label, flags);
+            _player.setAllplaying(true);
+            _modified = true;
+            return retryStarted;
+        }
+
+        _player.setAllplaying(true);
+        _modified = true;
+        return started;
+    }
+
     void EmotePlayer::addPlayCallback() {
         _playCallback = true;
     }
 
     void EmotePlayer::skip() {
-        // Aligned to libkrkr2.so sub_66EB8C: skip to end of all timelines
-        // Player doesn't expose skip() directly, stop all timelines
-        _player.stopTimeline(TJS_W(""));
+        skipToSync();
+    }
+
+    void EmotePlayer::skipToSync() {
+        _player.skipToSync();
+        _modified = true;
     }
 
     // Aligned to libkrkr2.so sub_530A5C → sub_67D01C:

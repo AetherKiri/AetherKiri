@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <stdexcept>
 
 #include "PlayerInternal.h"
 
@@ -250,6 +251,47 @@ namespace motion {
             activateMotion(*_runtime, snapshot);
             syncVariableKeysFromActiveMotion();
         }
+    }
+
+    bool Player::hasActiveMotion() const {
+        return _runtime && _runtime->activeMotion != nullptr;
+    }
+
+    void Player::bindMotionModuleKey(ttstr storageKey) {
+        const auto loaded = _resourceManagerNative.findLoadedModule(storageKey);
+        if(loaded.Type() != tvtObject) {
+            LOGGER->warn(
+                "Player::bindMotionModuleKey({}): module not in "
+                "ResourceManager cache; call ResourceManager.load() first",
+                storageKey.AsStdString());
+            return;
+        }
+
+        _project = loaded;
+        if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
+            loadFromSnapshot(snapshot);
+            LOGGER->debug(
+                "Player::bindMotionModuleKey({}): bound snapshot path={}",
+                storageKey.AsStdString(), snapshot->path);
+            return;
+        }
+
+        if(const auto snapshot =
+               resolveMotion(*_runtime, storageKey, &_resourceManagerNative)) {
+            activateMotion(*_runtime, snapshot);
+            syncVariableKeysFromActiveMotion();
+            LOGGER->debug(
+                "Player::bindMotionModuleKey({}): resolved snapshot path={}",
+                storageKey.AsStdString(), snapshot->path);
+            return;
+        }
+
+        LOGGER->error(
+            "Player::bindMotionModuleKey({}): loaded object has no motion "
+            "snapshot",
+            storageKey.AsStdString());
+        throw std::runtime_error(
+            "motionplayer: motionKey module has no parseable motion snapshot");
     }
 
     double Player::getActiveMotionWidth() const {
