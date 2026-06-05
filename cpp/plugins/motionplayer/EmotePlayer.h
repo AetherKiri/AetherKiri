@@ -74,6 +74,15 @@ namespace motion {
         void setModule(tTJSVariant v);
         [[nodiscard]] tTJSVariant getModule() const;
 
+        void setChara(ttstr v) { _player.setChara(v); }
+        [[nodiscard]] ttstr getChara() const { return _player.getChara(); }
+
+        void setMotion(ttstr v);
+        [[nodiscard]] ttstr getMotion() const;
+
+        void setMotionKey(ttstr v);
+        [[nodiscard]] ttstr getMotionKey() const { return _storageKey; }
+
         [[nodiscard]] bool getPlayCallback() const { return _playCallback; }
 
         // --- Methods ---
@@ -124,6 +133,7 @@ namespace motion {
                                            tTJSVariant **param,
                                            iTJSDispatch2 *objthis);
         double getVariable(ttstr label);
+        tTJSVariant getVariableFrameList(ttstr label);
 
         void startWind(double minAngle, double maxAngle, double amplitude,
                        double freqX = 0.0, double freqY = 0.0);
@@ -137,26 +147,33 @@ namespace motion {
 
         tjs_int countMainTimelines();
         ttstr getMainTimelineLabelAt(tjs_int idx);
+        tTJSVariant getMainTimelineLabelList();
         tjs_int countDiffTimelines();
         ttstr getDiffTimelineLabelAt(tjs_int idx);
+        tTJSVariant getDiffTimelineLabelList();
         tjs_int countPlayingTimelines();
         ttstr getPlayingTimelineLabelAt(tjs_int idx);
         tjs_int getPlayingTimelineFlagsAt(tjs_int idx);
 
         bool isLoopTimeline(ttstr label);
+        bool getLoopTimeline(ttstr label);
         tjs_int getTimelineTotalFrameCount(ttstr label);
         void playTimeline(ttstr label, tjs_int flags);
         bool isTimelinePlaying(ttstr label);
+        bool getTimelinePlaying(ttstr label);
         void stopTimeline(ttstr label);
 
         void setTimelineBlendRatio(ttstr label, double ratio);
         double getTimelineBlendRatio(ttstr label);
         void fadeInTimeline(ttstr label, double duration, tjs_int flags);
         void fadeOutTimeline(ttstr label, double duration, tjs_int flags);
+        tTJSVariant getPlayingTimelineInfoList();
 
         void setTimeline(ttstr label, bool loop);
 
+        bool play(ttstr label, tjs_int flags = 0);
         void skip();
+        void skipToSync();
         void addPlayCallback();
         void pass(double dt);
         void progress(double dt);
@@ -186,6 +203,8 @@ namespace motion {
 
         // EmotePlayer-specific state (not on Player)
         tTJSVariant _module;
+        ttstr _storageKey;
+        ttstr _clipLabel;
         bool _useD3D = false;
         bool _smoothing = true;
         double _meshDivisionRatio = 1.0;
@@ -201,6 +220,7 @@ namespace motion {
         bool _opengl = false;
         bool _visible = true;
         bool _playCallback = false;
+        bool _isSelfClear = true;
 
         // Aligned to libkrkr2.so sub_530260: finalScale = baseScale * userScale
         float _baseScale = 1.0f;   // +40 in binary D3DEmotePlayer wrapper

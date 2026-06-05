@@ -11,24 +11,33 @@ if(WINDOWS)
             windows/LayerExDraw.cpp
     )
 else()
-    target_sources(${PROJECT_NAME} PRIVATE
-            general/main.cpp
-            general/LayerExDraw.cpp
-            general/DrawPath.cpp
-    )
-
-    find_package(libgdiplus CONFIG REQUIRED)
-    target_link_libraries(${PROJECT_NAME} PRIVATE libgdiplus::libgdiplus)
-
-    if(VCPKG_ROOT)
-        set(VCPKG_INSTALL_DIR "${VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}")
+    find_package(blend2d CONFIG QUIET)
+    if(blend2d_FOUND)
+        target_link_libraries(${PROJECT_NAME} PRIVATE blend2d::blend2d)
+        target_sources(${PROJECT_NAME} PRIVATE
+                blend2d/LayerExDraw.cpp
+        )
     else()
-        set(VCPKG_INSTALL_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
-    endif()
+        message(STATUS "blend2d not found; using libgdiplus layerExDraw backend")
+        target_sources(${PROJECT_NAME} PRIVATE
+                general/main.cpp
+                general/LayerExDraw.cpp
+                general/DrawPath.cpp
+        )
 
-    # glibconfig
-    # https://invent.kde.org/frameworks/extra-cmake-modules/-/blob/master/find-modules/FindGLIB2.cmake
-    target_include_directories(${PROJECT_NAME} PUBLIC "${VCPKG_INSTALL_DIR}/lib/glib-2.0/include")
-    target_include_directories(${PROJECT_NAME} PUBLIC "${VCPKG_INSTALL_DIR}/include/glib-2.0")
+        find_package(libgdiplus CONFIG REQUIRED)
+        target_link_libraries(${PROJECT_NAME} PRIVATE libgdiplus::libgdiplus)
+
+        if(VCPKG_ROOT)
+            set(VCPKG_INSTALL_DIR "${VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}")
+        else()
+            set(VCPKG_INSTALL_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
+        endif()
+
+        # glibconfig
+        # https://invent.kde.org/frameworks/extra-cmake-modules/-/blob/master/find-modules/FindGLIB2.cmake
+        target_include_directories(${PROJECT_NAME} PUBLIC "${VCPKG_INSTALL_DIR}/lib/glib-2.0/include")
+        target_include_directories(${PROJECT_NAME} PUBLIC "${VCPKG_INSTALL_DIR}/include/glib-2.0")
+    endif()
 
 endif ()

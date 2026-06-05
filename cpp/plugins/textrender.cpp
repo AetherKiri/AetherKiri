@@ -536,6 +536,7 @@ public:
   tTJSVariant getCharacters(int start, int end);
   void clear();
   void done();
+  void newline();
 
   tTJSVariant getKeyWait();
   tTJSVariant renderDelay();
@@ -1020,6 +1021,12 @@ void TextRenderBase::done() {
   flush();
 }
 
+void TextRenderBase::newline() {
+  if (auto logger = spdlog::get("plugin")) {
+    logger->warn("TextRenderBase::newline() is not supported");
+  }
+}
+
 void TextRenderBase::resetStyle() {
   m_state = m_default;
   m_fontDirty = true;
@@ -1108,6 +1115,7 @@ NCB_REGISTER_CLASS(TextRenderBase) {
   NCB_METHOD(getCharacters);
   NCB_METHOD(clear);
   NCB_METHOD(done);
+  NCB_METHOD(newline);
 
   NCB_METHOD(getKeyWait);
   NCB_METHOD(renderDelay);
