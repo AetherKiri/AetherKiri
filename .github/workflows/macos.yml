@@ -4,6 +4,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
     name: Build macOS App
@@ -23,6 +27,12 @@ jobs:
           brew install cmake ninja pkg-config autoconf automake autoconf-archive gettext coreutils bison ccache
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+
+      - name: Install NuGet runtime
+        run: |
+          if ! command -v mono >/dev/null; then
+            brew install mono
+          fi
 
       - name: Install Godot export tools
         run: |
@@ -63,6 +73,27 @@ jobs:
             .devtools/vcpkg
             ~/.cache/vcpkg/archives
           key: ${{ runner.os }}-macos-vcpkg
+
+      - name: Bootstrap vcpkg
+        run: |
+          set -euo pipefail
+          if [[ -d ".devtools/vcpkg" && ! -f ".devtools/vcpkg/.vcpkg-root" ]]; then
+            rm -rf .devtools/vcpkg
+          fi
+          if [[ ! -d ".devtools/vcpkg/.git" ]]; then
+            mkdir -p .devtools
+            git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
+          fi
+          if [[ ! -x ".devtools/vcpkg/vcpkg" ]]; then
+            (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
+          fi
+          echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure vcpkg GitHub Packages cache
+        env:
+          VCPKG_NUGET_TOKEN: ${{ github.token }}
+          VCPKG_BINARY_CACHE_MODE: ${{ github.event_name == 'pull_request' && 'read' || 'readwrite' }}
+        run: bash .github/scripts/configure-vcpkg-github-packages.sh
 
       - name: Build macOS Release
         run: |

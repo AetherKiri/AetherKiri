@@ -41,6 +41,7 @@ var selected_game := {}
 var known_games: Array[Dictionary] = []
 var show_perf_monitor := true
 var lock_landscape := true
+var accurate_text_render := true
 var frame_limit_enabled := false
 var target_fps := 80
 var plugin_trace := false
@@ -165,6 +166,7 @@ func _load_shell_settings() -> void:
     upscale_algorithm = String(cfg.get_value("rendering", "upscale_algorithm", upscale_algorithm))
     if not upscale_algorithm in ["sharp", "nearest", "linear"]:
         upscale_algorithm = "sharp"
+    accurate_text_render = bool(cfg.get_value("rendering", "accurate_text_render", accurate_text_render))
     show_perf_monitor = bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
     frame_limit_enabled = bool(cfg.get_value("rendering", "fps_limit_enabled", frame_limit_enabled))
     target_fps = int(cfg.get_value("rendering", "target_fps", target_fps))
@@ -179,6 +181,7 @@ func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
+    cfg.set_value("rendering", "accurate_text_render", accurate_text_render)
     cfg.set_value("rendering", "perf_overlay", show_perf_monitor)
     cfg.set_value("rendering", "fps_limit_enabled", frame_limit_enabled)
     cfg.set_value("rendering", "target_fps", target_fps)
@@ -206,6 +209,7 @@ func _apply_engine_options() -> void:
     if player == null:
         return
     player.set_engine_option("fps_limit", str(target_fps) if frame_limit_enabled else "0")
+    player.set_engine_option("accurate_text_render", "1" if accurate_text_render else "0")
     player.set_engine_option("plugin_trace", "1" if plugin_trace else "0")
     player.set_engine_option("mock_enabled", "1" if mock_enabled else "0")
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
@@ -519,6 +523,7 @@ func _rebuild_settings_view() -> void:
     page.add_child(render_card)
     render_card.add_child(_settings_block("渲染管线", "未运行游戏时立即生效；运行中切换需重启当前游戏", _backend_segment()))
     render_card.add_child(_settings_block("缩放算法", "拉伸低分辨率游戏画面时使用；超分会重建边缘并做轻度锐化", _upscale_select()))
+    render_card.add_child(_settings_toggle_row("精确文字渲染", "让游戏文字绕过 Godot GPU 批处理，优先保证边缘清晰", accurate_text_render, "accurate_text"))
     render_card.add_child(_settings_toggle_row("性能监控", "显示帧率和图形 API 信息", show_perf_monitor, "perf"))
     render_card.add_child(_settings_toggle_row("帧率限制", "开启后使用下方目标帧率；关闭时交给显示刷新率", frame_limit_enabled, "fps_limit"))
     if frame_limit_enabled:
@@ -863,6 +868,8 @@ func _on_setting_toggle(key: String, value: bool) -> void:
         perf.visible = game_running and show_perf_monitor
     elif key == "fps_limit":
         frame_limit_enabled = value
+    elif key == "accurate_text":
+        accurate_text_render = value
     elif key == "landscape":
         lock_landscape = value
     elif key == "plugin_trace":
