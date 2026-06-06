@@ -1,0 +1,35 @@
+name: CI Checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  scripts-and-workflows:
+    name: Build scripts and workflows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check shell script syntax
+        run: |
+          set -euo pipefail
+          for script in build.sh build/*.sh; do
+            bash -n "$script"
+            echo "OK $script"
+          done
+
+      - name: Check workflow YAML syntax
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; ARGV.each { |f| YAML.load_file(f); puts "OK #{f}" }' .github/workflows/*.yml
+
+      - name: Check for stale Flutter build paths
+        run: |
+          set -euo pipefail
+          if grep -R -n --exclude=ci-checks.yml -E 'apps/flutter_app|flutter config|subosito/flutter-action|outputs/flutter-apk|build/ios/iphoneos|find apps/flutter_app' .github/workflows build build.sh; then
+            echo "Stale Flutter build path found in CI/build scripts." >&2
+            exit 1
+          fi
