@@ -184,6 +184,7 @@ jobs:
 
           echo "Restored Android vcpkg bundle is missing godot-cpp; installing only that overlay port."
           "${VCPKG_ROOT}/vcpkg" install godot-cpp \
+            --classic \
             --triplet arm64-android \
             --x-install-root="${VCPKG_ROOT}/installed" \
             --overlay-ports="${GITHUB_WORKSPACE}/vcpkg/ports" \
