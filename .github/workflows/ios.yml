@@ -98,10 +98,20 @@ jobs:
 
       - name: Build iOS Release
         run: |
+          set -euo pipefail
           chmod +x ./build.sh
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          ./build.sh ios release --jobs=4
+          for attempt in 1 2 3; do
+            if ./build.sh ios release --jobs=4; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "iOS build failed on attempt ${attempt}, retrying..."
+            sleep $((attempt * 20))
+          done
 
       - name: Verify exported Xcode project
         run: |
