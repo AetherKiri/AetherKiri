@@ -55,6 +55,7 @@ var active_game_started_msec := 0
 var detail_touch_scroll_active := false
 var rounded_card_shader: Shader
 var upscale_shader: Shader
+var opaque_frame_shader: Shader
 
 var player: AetherKiriPlayer
 var selected_backend := "Godot Native"
@@ -328,12 +329,27 @@ void fragment() {
     vec3 local_max = max(center.rgb, max(max(left.rgb, right.rgb), max(up.rgb, down.rgb)));
     vec3 blur = (left.rgb + right.rgb + up.rgb + down.rgb) * 0.25;
     vec3 sharpened = center.rgb + (center.rgb - blur) * sharpness;
-    COLOR = vec4(clamp(sharpened, local_min, local_max), center.a);
+    COLOR = vec4(clamp(sharpened, local_min, local_max), 1.0);
 }
 """
     var material := ShaderMaterial.new()
     material.shader = upscale_shader
     material.set_shader_parameter("sharpness", 0.38)
+    return material
+
+func _opaque_frame_material() -> ShaderMaterial:
+    if opaque_frame_shader == null:
+        opaque_frame_shader = Shader.new()
+        opaque_frame_shader.code = """
+shader_type canvas_item;
+
+void fragment() {
+    vec4 tex = texture(TEXTURE, UV);
+    COLOR = vec4(tex.rgb, 1.0);
+}
+"""
+    var material := ShaderMaterial.new()
+    material.shader = opaque_frame_shader
     return material
 
 func _apply_upscale_algorithm() -> void:
@@ -342,10 +358,10 @@ func _apply_upscale_algorithm() -> void:
     match upscale_algorithm:
         "nearest":
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-            viewport.material = null
+            viewport.material = _opaque_frame_material()
         "linear":
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
-            viewport.material = null
+            viewport.material = _opaque_frame_material()
         _:
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
             viewport.material = _upscale_material()
