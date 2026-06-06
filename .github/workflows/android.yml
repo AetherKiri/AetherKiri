@@ -168,6 +168,26 @@ jobs:
             exit 1
           fi
 
+      - name: Repair Android godot-cpp dependency
+        run: |
+          set -euo pipefail
+          export VCPKG_ROOT="${GITHUB_WORKSPACE}/.devtools/vcpkg"
+          export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
+          export ANDROID_NDK_HOME="${ANDROID_NDK_HOME}"
+
+          if [[ -d "${VCPKG_ROOT}/installed/arm64-android/include/godot_cpp" ]] && \
+             compgen -G "${VCPKG_ROOT}/installed/arm64-android/lib/libgodot-cpp*.a" >/dev/null; then
+            echo "godot-cpp already present in restored Android vcpkg bundle."
+            exit 0
+          fi
+
+          echo "Restored Android vcpkg bundle is missing godot-cpp; installing only that overlay port."
+          "${VCPKG_ROOT}/vcpkg" install godot-cpp \
+            --triplet arm64-android \
+            --x-install-root="${VCPKG_ROOT}/installed" \
+            --overlay-ports="${GITHUB_WORKSPACE}/vcpkg/ports" \
+            --overlay-triplets="${GITHUB_WORKSPACE}/vcpkg/triplets"
+
       - name: Build Android Release
         run: |
           set -euo pipefail
