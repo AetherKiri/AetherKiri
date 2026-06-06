@@ -28,12 +28,36 @@ if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
     GODOT_EXPORT_MODE="--export-release"
 fi
 
-if [[ -d "$PROJECT_ROOT/.devtools/vcpkg/.git" ]]; then
-    export VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
-elif [[ -z "${VCPKG_ROOT:-}" ]]; then
-    echo "Error: VCPKG_ROOT is not set and .devtools/vcpkg is missing." >&2
-    exit 1
-fi
+ensure_vcpkg() {
+    if [[ -d "$PROJECT_ROOT/.devtools/vcpkg/.git" ]]; then
+        export VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
+    elif [[ -n "${VCPKG_ROOT:-}" && -f "$VCPKG_ROOT/.vcpkg-root" ]]; then
+        export VCPKG_ROOT
+    else
+        echo "[INFO] vcpkg not found. Automatically setting up vcpkg in .devtools/vcpkg..."
+        mkdir -p "$PROJECT_ROOT/.devtools"
+        rm -rf "$PROJECT_ROOT/.devtools/vcpkg"
+        git clone https://github.com/microsoft/vcpkg.git "$PROJECT_ROOT/.devtools/vcpkg"
+        (cd "$PROJECT_ROOT/.devtools/vcpkg" && ./bootstrap-vcpkg.sh -disableMetrics)
+        export VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
+    fi
+
+    if [[ ! -x "$VCPKG_ROOT/vcpkg" ]]; then
+        if [[ -x "$VCPKG_ROOT/bootstrap-vcpkg.sh" ]]; then
+            echo "[INFO] vcpkg binary missing. Bootstrapping existing vcpkg tree..."
+            (cd "$VCPKG_ROOT" && ./bootstrap-vcpkg.sh -disableMetrics)
+        else
+            echo "[INFO] vcpkg tree is incomplete. Recreating .devtools/vcpkg..."
+            mkdir -p "$PROJECT_ROOT/.devtools"
+            rm -rf "$PROJECT_ROOT/.devtools/vcpkg"
+            git clone https://github.com/microsoft/vcpkg.git "$PROJECT_ROOT/.devtools/vcpkg"
+            (cd "$PROJECT_ROOT/.devtools/vcpkg" && ./bootstrap-vcpkg.sh -disableMetrics)
+            export VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
+        fi
+    fi
+}
+
+ensure_vcpkg
 
 command -v cmake >/dev/null
 command -v ninja >/dev/null
