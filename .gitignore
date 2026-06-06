@@ -2,7 +2,7 @@
 /**/cmake-build-android/
 /**/cmake-build-android-release/
 /**/cmake-build-android-debug/
-/**/build/
+/*/build/
 /**/out/
 /**/bin/
 vcpkg_installed/
