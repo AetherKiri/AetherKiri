@@ -865,7 +865,6 @@ bool tTVPNativeBaseBitmap::InternalBlendText(tTVPCharacterData *data,
             for(tjs_int x = 0; x < w; ++x) {
                 ((tjs_uint32 *)dst)[x] = (color & 0xFFFFFF) | (src[x] << 24);
             }
-            TVPConvertAlphaToAdditiveAlpha((tjs_uint32 *)dst, w);
             dst += dpitch;
             src += spitch;
         }
@@ -1024,7 +1023,6 @@ bool tTVPNativeBaseBitmap::InternalBlendTextVerticalGradient(
             TVPLerpColor24(topcolor, bottomcolor, row, gradientHeight);
         for(tjs_int x = 0; x < w; ++x)
             out[x] = (color & 0x00ffffff) | (src[x] << 24);
-        TVPConvertAlphaToAdditiveAlpha(out, w);
         dst += dpitch;
     }
 
@@ -1891,12 +1889,6 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
                     }
                 }
 
-                for(tjs_int yy = 0; yy < batch_h; ++yy) {
-                    TVPConvertAlphaToAdditiveAlpha(
-                        reinterpret_cast<tjs_uint32 *>(bits + yy * dpitch),
-                        batch_w);
-                }
-
                 if(_CharacterTextureRGBA) {
                     if(_CharacterTextureRGBA->GetFormat() !=
                        TVPTextureFormat::RGBA) {
@@ -2189,12 +2181,6 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
                     src += data->Pitch;
                     dst += dpitch;
                 }
-            }
-
-            for(tjs_int yy = 0; yy < batch_h; ++yy) {
-                TVPConvertAlphaToAdditiveAlpha(
-                    reinterpret_cast<tjs_uint32 *>(bits + yy * dpitch),
-                    batch_w);
             }
 
             if(_CharacterTextureRGBA) {

@@ -3,6 +3,7 @@
 #include "GraphicsLoaderIntf.h"
 #include "MsgIntf.h"
 #include "tjsDictionary.h"
+#include <cstring>
 #include <memory>
 
 void TVPLoadWEBP(void *formatdata, void *callbackdata,
@@ -37,22 +38,38 @@ void TVPLoadWEBP(void *formatdata, void *callbackdata,
 
 	WebPDemuxDelete(demux);
 #endif
-    uint8_t *scanline = (uint8_t *)scanlinecallback(callbackdata, 0);
     if(glmNormal == mode) {
+        const size_t image_size =
+            static_cast<size_t>(config.input.height) * stride;
+        std::unique_ptr<uint8_t[]> image(new uint8_t[image_size]);
+
         config.output.colorspace = MODE_RGBA;
-        config.output.u.RGBA.rgba = scanline;
+        config.output.u.RGBA.rgba = image.get();
         config.output.u.RGBA.stride = stride;
-        config.output.u.RGBA.size = config.input.height * stride;
+        config.output.u.RGBA.size = image_size;
         config.output.is_external_memory = 1;
         if(WebPDecode(data.get(), datasize, &config) != VP8_STATUS_OK) {
             TVPThrowExceptionMessage(TJS_W("Invalid WebP image(RGBA mode)"));
         }
+
+        for(int y = 0; y < config.input.height; y++) {
+            void *scanline = scanlinecallback(callbackdata, y);
+            if(!scanline)
+                break;
+            memcpy(scanline, image.get() + static_cast<size_t>(y) * stride,
+                   stride);
+            scanlinecallback(callbackdata, -1);
+        }
     } else if(glmGrayscale == mode) {
+        const size_t image_size =
+            static_cast<size_t>(config.input.height) * stride;
+        std::unique_ptr<uint8_t[]> image(new uint8_t[image_size]);
+
         config.output.colorspace = MODE_YUV;
         unsigned int uvSize = config.input.width * config.input.height / 4 +
             config.input.width + config.input.width;
         std::unique_ptr<uint8_t[]> dummy(new uint8_t[uvSize]);
-        config.output.u.YUVA.y = scanline;
+        config.output.u.YUVA.y = image.get();
         config.output.u.YUVA.u = dummy.get();
         config.output.u.YUVA.v = dummy.get();
         config.output.u.YUVA.a = nullptr;
@@ -60,7 +77,7 @@ void TVPLoadWEBP(void *formatdata, void *callbackdata,
         config.output.u.YUVA.u_stride = config.input.width / 2;
         config.output.u.YUVA.v_stride = config.input.width / 2;
         config.output.u.YUVA.a_stride = 0;
-        config.output.u.YUVA.y_size = config.input.height * stride;
+        config.output.u.YUVA.y_size = image_size;
         config.output.u.YUVA.u_size = uvSize;
         config.output.u.YUVA.v_size = uvSize;
         config.output.u.YUVA.a_size = 0;
@@ -70,11 +87,19 @@ void TVPLoadWEBP(void *formatdata, void *callbackdata,
             TVPThrowExceptionMessage(
                 TJS_W("Invalid WebP image(Grayscale Mode)"));
         }
+
+        for(int y = 0; y < config.input.height; y++) {
+            void *scanline = scanlinecallback(callbackdata, y);
+            if(!scanline)
+                break;
+            memcpy(scanline, image.get() + static_cast<size_t>(y) * stride,
+                   stride);
+            scanlinecallback(callbackdata, -1);
+        }
     } else {
         TVPThrowExceptionMessage(
             TJS_W("WebP does not support palettized image"));
     }
-    scanlinecallback(callbackdata, -1); // image was written
 }
 
 void TVPLoadHeaderWEBP(void *formatdata, tTJSBinaryStream *src,
