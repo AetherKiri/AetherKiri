@@ -21,6 +21,8 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       CCACHE_DIR: ${{ github.workspace }}/.ccache
+      GODOT_RELEASE: 4.6.3-stable
+      GODOT_TEMPLATE_VERSION: 4.6.3.stable
 
     steps:
       - name: Checkout Repository
@@ -51,17 +53,32 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Disable Analytics
+      - name: Install Godot export tools
         run: |
-          flutter config --no-analytics
+          set -euo pipefail
+          mkdir -p .godot "${RUNNER_TEMP}/godot-templates"
+          curl -L -o "${RUNNER_TEMP}/godot-linux.zip" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          unzip -q "${RUNNER_TEMP}/godot-linux.zip" -d .godot
+          godot_bin="$(find .godot -maxdepth 1 -type f -name 'Godot*_linux.x86_64' | head -1)"
+          if [[ -z "$godot_bin" ]]; then
+            echo "Godot Linux binary not found after unzip" >&2
+            exit 1
+          fi
+          chmod +x "$godot_bin"
+
+          curl -L -o "${RUNNER_TEMP}/godot-export-templates.tpz" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          unzip -q "${RUNNER_TEMP}/godot-export-templates.tpz" -d "${RUNNER_TEMP}/godot-templates"
+          template_dir="${HOME}/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+          mkdir -p "${template_dir}"
+          cp -a "${RUNNER_TEMP}/godot-templates/templates/." "${template_dir}/"
+
+          echo "GODOT_BIN=${GITHUB_WORKSPACE}/${godot_bin}" >> "$GITHUB_ENV"
+          echo "GODOT_TEMPLATE_DIR=${template_dir}" >> "$GITHUB_ENV"
 
       - name: Detect Android SDK and NDK
         run: |
@@ -173,12 +190,17 @@ jobs:
             sleep $((attempt * 20))
           done
 
+      - name: Verify exported APK
+        run: |
+          set -euo pipefail
+          test -f out/godot/android/release/AetherKiri-release.apk
+
       - name: Upload Artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: AetherKiri-Android-APK
-          path: apps/flutter_app/build/app/outputs/flutter-apk/app-release.apk
+          path: out/godot/android/release/AetherKiri-release.apk
           retention-days: 7
 
       - name: Save ccache

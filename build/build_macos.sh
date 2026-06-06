@@ -29,7 +29,7 @@ if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
 fi
 
 ensure_vcpkg() {
-    if [[ -d "$PROJECT_ROOT/.devtools/vcpkg/.git" ]]; then
+    if [[ -f "$PROJECT_ROOT/.devtools/vcpkg/.vcpkg-root" ]]; then
         export VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
     elif [[ -n "${VCPKG_ROOT:-}" && -f "$VCPKG_ROOT/.vcpkg-root" ]]; then
         export VCPKG_ROOT
@@ -89,6 +89,7 @@ else
             "$GODOT_EXPORT_APP/Contents/Frameworks/libaether_kiri_godot.dylib" \
             >/dev/null 2>&1 || true
         codesign --force --deep --sign - "$GODOT_EXPORT_APP" >/dev/null 2>&1 || true
+        codesign --verify --deep --strict --verbose=2 "$GODOT_EXPORT_APP"
     fi
 fi
 

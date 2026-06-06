@@ -13,6 +13,8 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       CCACHE_DIR: ${{ github.workspace }}/.ccache
+      GODOT_RELEASE: 4.6.3-stable
+      GODOT_TEMPLATE_VERSION: 4.6.3.stable
 
     steps:
       - name: Checkout Repository
@@ -23,6 +25,25 @@ jobs:
           brew install cmake ninja pkg-config autoconf automake autoconf-archive gettext coreutils bison ccache
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+
+      - name: Install Godot export tools
+        run: |
+          set -euo pipefail
+          mkdir -p .godot "${RUNNER_TEMP}/godot-templates"
+          curl -L -o "${RUNNER_TEMP}/godot-macos.zip" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_macos.universal.zip"
+          unzip -q "${RUNNER_TEMP}/godot-macos.zip" -d .godot
+          chmod +x ".godot/Godot.app/Contents/MacOS/Godot"
+
+          curl -L -o "${RUNNER_TEMP}/godot-export-templates.tpz" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          unzip -q "${RUNNER_TEMP}/godot-export-templates.tpz" -d "${RUNNER_TEMP}/godot-templates"
+          template_dir="${HOME}/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+          mkdir -p "${template_dir}"
+          cp -a "${RUNNER_TEMP}/godot-templates/templates/." "${template_dir}/"
+
+          echo "GODOT_BIN=${GITHUB_WORKSPACE}/.godot/Godot.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
+          echo "GODOT_EXPORT_TEMPLATE=${template_dir}/macos.zip" >> "$GITHUB_ENV"
 
       - name: Restore ccache
         id: restore-ccache
@@ -35,15 +56,6 @@ jobs:
         run: |
           ccache --max-size=1000M
           ccache -z
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-
-      - name: Disable Analytics
-        run: |
-          flutter config --no-analytics
 
       - name: Restore vcpkg cache
         id: restore-vcpkg
@@ -61,22 +73,22 @@ jobs:
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh macos release --jobs=4
 
-      - name: Find built .app
-        id: find_app
+      - name: Verify built .app
         run: |
-          APP_PATH=$(find apps/flutter_app/build/macos -name "*.app" -type d | head -1)
-          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
-            echo "Built .app bundle not found"
+          set -euo pipefail
+          APP_PATH="out/godot/macos/release/AetherKiri.app"
+          if [[ ! -d "$APP_PATH" ]]; then
+            echo "Built Godot .app bundle not found: $APP_PATH" >&2
             exit 1
           fi
-          echo "app_path=$APP_PATH" >> $GITHUB_OUTPUT
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
       - name: Upload Artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: AetherKiri-macOS
-          path: ${{ steps.find_app.outputs.app_path }}
+          path: out/godot/macos/release/AetherKiri.app
           retention-days: 7
 
       - name: Save vcpkg cache
