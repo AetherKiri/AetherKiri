@@ -70,7 +70,7 @@ FORCE_LOAD_PLUGIN_SOURCES=(
 )
 
 ensure_vcpkg() {
-    if [[ -d "$PROJECT_ROOT/.devtools/vcpkg/.git" ]]; then
+    if [[ -f "$PROJECT_ROOT/.devtools/vcpkg/.vcpkg-root" ]]; then
         export VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
     elif [[ -n "${VCPKG_ROOT:-}" && -f "$VCPKG_ROOT/.vcpkg-root" ]]; then
         export VCPKG_ROOT

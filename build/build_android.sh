@@ -29,7 +29,7 @@ GODOT_APP_DIR="$PROJECT_ROOT/apps/godot_app"
 PARALLEL_JOBS="${JOBS:-8}"
 
 ensure_vcpkg() {
-    if [[ -d "$PROJECT_ROOT/.devtools/vcpkg/.git" ]]; then
+    if [[ -f "$PROJECT_ROOT/.devtools/vcpkg/.vcpkg-root" ]]; then
         export VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
     elif [[ -n "${VCPKG_ROOT:-}" && -f "$VCPKG_ROOT/.vcpkg-root" ]]; then
         export VCPKG_ROOT
