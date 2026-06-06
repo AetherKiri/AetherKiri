@@ -52,6 +52,7 @@ public:
     }
     uint64_t GetGodotGpuHandle() const { return gpu_handle_; }
     bool HasGodotGpuHandle() const { return gpu_handle_ != 0; }
+    bool HasPendingGpuWrites() const { return gpu_dirty_ && !cpu_dirty_; }
     bool EnsureGpuHandle();
     bool ClearGpu(uint32_t rgba, const tTVPRect &rc);
     bool CopyGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
