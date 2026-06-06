@@ -53,9 +53,11 @@ var active_game_path := ""
 var active_game_started_msec := 0
 var detail_touch_scroll_active := false
 var rounded_card_shader: Shader
+var upscale_shader: Shader
 
 var player: AetherKiriPlayer
 var selected_backend := "Godot Native"
+var upscale_algorithm := "sharp"
 var game_running := false
 var render_errors := 0
 var last_renderer_info_logged := ""
@@ -121,6 +123,7 @@ func _build_ui() -> void:
     viewport.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
     viewport.visible = false
     add_child(viewport)
+    _apply_upscale_algorithm()
 
     game_view = Control.new()
     game_view.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -159,6 +162,9 @@ func _load_shell_settings() -> void:
     if cfg.load(SETTINGS_FILE) != OK:
         return
     selected_backend = String(cfg.get_value("rendering", "backend", selected_backend))
+    upscale_algorithm = String(cfg.get_value("rendering", "upscale_algorithm", upscale_algorithm))
+    if not upscale_algorithm in ["sharp", "nearest", "linear"]:
+        upscale_algorithm = "sharp"
     show_perf_monitor = bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
     frame_limit_enabled = bool(cfg.get_value("rendering", "fps_limit_enabled", frame_limit_enabled))
     target_fps = int(cfg.get_value("rendering", "target_fps", target_fps))
@@ -172,6 +178,7 @@ func _load_shell_settings() -> void:
 func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
     cfg.set_value("rendering", "backend", selected_backend)
+    cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
     cfg.set_value("rendering", "perf_overlay", show_perf_monitor)
     cfg.set_value("rendering", "fps_limit_enabled", frame_limit_enabled)
     cfg.set_value("rendering", "target_fps", target_fps)
@@ -269,6 +276,75 @@ func _max_game_view_scale() -> float:
     if not value.is_empty():
         return clampf(value.to_float(), 0.25, 8.0)
     return 8.0
+
+func _upscale_material() -> ShaderMaterial:
+    if upscale_shader == null:
+        upscale_shader = Shader.new()
+        upscale_shader.code = """
+shader_type canvas_item;
+uniform float sharpness = 0.38;
+
+float cubic_weight(float x, float offset) {
+    float t = x - offset;
+    float at = abs(t);
+    if (at <= 1.0) {
+        return 1.5 * at * at * at - 2.5 * at * at + 1.0;
+    }
+    if (at < 2.0) {
+        return -0.5 * at * at * at + 2.5 * at * at - 4.0 * at + 2.0;
+    }
+    return 0.0;
+}
+
+void fragment() {
+    vec2 px = TEXTURE_PIXEL_SIZE;
+    vec2 source_size = vec2(1.0) / px;
+    vec2 pos = UV * source_size - vec2(0.5);
+    vec2 base = floor(pos);
+    vec2 f = pos - base;
+    vec4 center = vec4(0.0);
+    float weight_sum = 0.0;
+    for (int y = -1; y <= 2; y++) {
+        float wy = cubic_weight(f.y, float(y));
+        for (int x = -1; x <= 2; x++) {
+            float wx = cubic_weight(f.x, float(x));
+            float w = wx * wy;
+            vec2 sample_uv = (base + vec2(float(x), float(y)) + vec2(0.5)) * px;
+            sample_uv = clamp(sample_uv, px * 0.5, vec2(1.0) - px * 0.5);
+            center += texture(TEXTURE, sample_uv) * w;
+            weight_sum += w;
+        }
+    }
+    center /= max(weight_sum, 0.0001);
+    vec4 left = texture(TEXTURE, clamp(UV + vec2(-px.x, 0.0), px * 0.5, vec2(1.0) - px * 0.5));
+    vec4 right = texture(TEXTURE, clamp(UV + vec2(px.x, 0.0), px * 0.5, vec2(1.0) - px * 0.5));
+    vec4 up = texture(TEXTURE, clamp(UV + vec2(0.0, -px.y), px * 0.5, vec2(1.0) - px * 0.5));
+    vec4 down = texture(TEXTURE, clamp(UV + vec2(0.0, px.y), px * 0.5, vec2(1.0) - px * 0.5));
+    vec3 local_min = min(center.rgb, min(min(left.rgb, right.rgb), min(up.rgb, down.rgb)));
+    vec3 local_max = max(center.rgb, max(max(left.rgb, right.rgb), max(up.rgb, down.rgb)));
+    vec3 blur = (left.rgb + right.rgb + up.rgb + down.rgb) * 0.25;
+    vec3 sharpened = center.rgb + (center.rgb - blur) * sharpness;
+    COLOR = vec4(clamp(sharpened, local_min, local_max), center.a);
+}
+"""
+    var material := ShaderMaterial.new()
+    material.shader = upscale_shader
+    material.set_shader_parameter("sharpness", 0.38)
+    return material
+
+func _apply_upscale_algorithm() -> void:
+    if viewport == null:
+        return
+    match upscale_algorithm:
+        "nearest":
+            viewport.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+            viewport.material = null
+        "linear":
+            viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+            viewport.material = null
+        _:
+            viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+            viewport.material = _upscale_material()
 
 func _set_game_background(active: bool) -> void:
     var color := COLOR_GAME_BG if active else COLOR_BG
@@ -442,6 +518,7 @@ func _rebuild_settings_view() -> void:
     var render_card := _settings_card()
     page.add_child(render_card)
     render_card.add_child(_settings_block("渲染管线", "未运行游戏时立即生效；运行中切换需重启当前游戏", _backend_segment()))
+    render_card.add_child(_settings_block("缩放算法", "拉伸低分辨率游戏画面时使用；超分会重建边缘并做轻度锐化", _upscale_select()))
     render_card.add_child(_settings_toggle_row("性能监控", "显示帧率和图形 API 信息", show_perf_monitor, "perf"))
     render_card.add_child(_settings_toggle_row("帧率限制", "开启后使用下方目标帧率；关闭时交给显示刷新率", frame_limit_enabled, "fps_limit"))
     if frame_limit_enabled:
@@ -719,6 +796,26 @@ func _settings_fps_row() -> HBoxContainer:
     row.add_child(fps_select)
     return row
 
+func _upscale_select() -> OptionButton:
+    var select := OptionButton.new()
+    select.custom_minimum_size = Vector2(360, 58)
+    var options := [
+        {"label": "Catmull-Rom 超分", "value": "sharp"},
+        {"label": "Nearest", "value": "nearest"},
+        {"label": "Linear", "value": "linear"},
+    ]
+    var selected_index := 0
+    for i in range(options.size()):
+        select.add_item(String(options[i]["label"]))
+        select.set_item_metadata(i, String(options[i]["value"]))
+        if String(options[i]["value"]) == upscale_algorithm:
+            selected_index = i
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_upscale_algorithm(String(select.get_item_metadata(index)))
+    )
+    return select
+
 func _segment_button(text: String, selected: bool) -> Button:
     var button := Button.new()
     button.text = text
@@ -792,6 +889,13 @@ func _select_backend(value: String) -> void:
     _on_backend_selected(index)
     _mark_settings_dirty()
     call_deferred("_rebuild_settings_view")
+
+func _select_upscale_algorithm(value: String) -> void:
+    if not value in ["sharp", "nearest", "linear"]:
+        return
+    upscale_algorithm = value
+    _apply_upscale_algorithm()
+    _mark_settings_dirty()
 
 func _empty_help_text() -> String:
     if OS.get_name() == "iOS":
@@ -1572,6 +1676,7 @@ func _ready() -> void:
     viewport.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
     viewport.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
     get_viewport().canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_NEAREST
+    _apply_upscale_algorithm()
 
     _append_log("AetherKiri shell ready. Initializing engine...")
     call_deferred("_finish_ready_after_first_frame")
