@@ -8,6 +8,16 @@
 #include "gdip_dt.h"
 #include <win32_dt.h>
 
+#if TARGET_OS_MAC || TARGET_OS_IPHONE
+using BOOL = bool;
+#else
+using BOOL = int;
+#endif
+
+#ifndef FALSE
+#define FALSE 0
+#endif
+
 namespace libgdiplus {
     class PointFClass : public PointF {
     public:
