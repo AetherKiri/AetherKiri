@@ -77,13 +77,19 @@ var verbose_render_log := false
 var perf_log_file: FileAccess
 var log_lines: PackedStringArray = []
 var suppress_mouse_until_msec := 0
+var current_surface_size := Vector2i.ZERO
+var render_surface_max_size := RENDER_SURFACE_MAX_SIZE
 const LOG_DRAIN_INTERVAL := 0.25
 const PERF_UPDATE_INTERVAL := 0.25
 const PERF_LOG_INTERVAL := 2.0
 const MAX_LOG_LINES := 240
 const RENDER_SURFACE_SIZE := Vector2i(1280, 720)
+const RENDER_SURFACE_MAX_SIZE := Vector2i(3200, 1800)
+const INITIAL_WINDOW_SIZE := Vector2i(2240, 1260)
+const DEFAULT_UI_DPI_SCALE := 1.35
 const TOUCH_MOUSE_SUPPRESS_MS := 700
 const COLOR_BG := Color(0.944, 0.932, 0.895, 1.0)
+const COLOR_GAME_BG := Color(0, 0, 0, 1)
 const COLOR_CARD := Color(0.985, 0.98, 0.955, 1.0)
 const COLOR_TEXT := Color(0.12, 0.11, 0.10, 1.0)
 const COLOR_MUTED := Color(0.46, 0.45, 0.42, 1.0)
@@ -112,6 +118,7 @@ func _build_ui() -> void:
     viewport.mouse_filter = Control.MOUSE_FILTER_STOP
     viewport.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
     viewport.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+    viewport.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
     viewport.visible = false
     add_child(viewport)
 
@@ -211,7 +218,7 @@ func _fit_full_rects() -> void:
     anchor_bottom = 0.0
     position = Vector2.ZERO
     size = window_size
-    var controls: Array[Control] = [bg_rect, viewport, game_view, shell_root, home_view, settings_view, detail_view, detail_scroll, modal_layer]
+    var controls: Array[Control] = [bg_rect, game_view, shell_root, home_view, settings_view, detail_view, detail_scroll, modal_layer]
     for control in controls:
         if control == null:
             continue
@@ -220,7 +227,54 @@ func _fit_full_rects() -> void:
         control.offset_top = 0.0
         control.offset_right = 0.0
         control.offset_bottom = 0.0
+    _layout_game_viewport(window_size)
     _layout_home_view(window_size)
+
+func _layout_game_viewport(window_size: Vector2) -> void:
+    if viewport == null:
+        return
+    viewport.anchor_left = 0.0
+    viewport.anchor_top = 0.0
+    viewport.anchor_right = 0.0
+    viewport.anchor_bottom = 0.0
+    viewport.offset_left = 0.0
+    viewport.offset_top = 0.0
+    viewport.offset_right = 0.0
+    viewport.offset_bottom = 0.0
+
+    var tex_size := Vector2(
+        max(1.0, float(last_texture_size.x)),
+        max(1.0, float(last_texture_size.y))
+    )
+    if viewport.texture != null:
+        tex_size = Vector2(
+            max(1.0, float(viewport.texture.get_width())),
+            max(1.0, float(viewport.texture.get_height()))
+        )
+
+    var scale := minf(window_size.x / tex_size.x, window_size.y / tex_size.y)
+    scale = minf(scale, _max_game_view_scale())
+    if scale <= 0.0:
+        scale = 1.0
+    var draw_size := Vector2(
+        floor(tex_size.x * scale),
+        floor(tex_size.y * scale)
+    )
+    viewport.position = ((window_size - draw_size) * 0.5).floor()
+    viewport.size = draw_size
+    viewport.custom_minimum_size = draw_size
+
+func _max_game_view_scale() -> float:
+    var value := OS.get_environment("AETHERKIRI_GAME_VIEW_MAX_SCALE").strip_edges()
+    if not value.is_empty():
+        return clampf(value.to_float(), 0.25, 8.0)
+    return 8.0
+
+func _set_game_background(active: bool) -> void:
+    var color := COLOR_GAME_BG if active else COLOR_BG
+    if bg_rect != null:
+        bg_rect.color = color
+    RenderingServer.set_default_clear_color(color)
 
 func _layout_home_view(window_size: Vector2) -> void:
     if game_scroll == null or game_list == null:
@@ -747,6 +801,7 @@ func _empty_help_text() -> String:
 func _show_home() -> void:
     if dirty_settings:
         _save_shell_settings()
+    _set_game_background(false)
     home_view.visible = true
     settings_view.visible = false
     detail_view.visible = false
@@ -754,6 +809,7 @@ func _show_home() -> void:
     _refresh_games()
 
 func _show_settings() -> void:
+    _set_game_background(false)
     _rebuild_settings_view()
     home_view.visible = false
     settings_view.visible = true
@@ -761,6 +817,7 @@ func _show_settings() -> void:
     modal_layer.visible = false
 
 func _show_detail(game: Dictionary) -> void:
+    _set_game_background(false)
     selected_game = game
     home_view.visible = false
     settings_view.visible = false
@@ -1447,6 +1504,7 @@ func _start_selected_game() -> void:
     active_game_path = path
     active_game_started_msec = Time.get_ticks_msec()
     game_path.text = path
+    _set_game_background(true)
     shell_root.visible = false
     viewport.visible = true
     viewport.move_to_front()
@@ -1467,6 +1525,8 @@ func _finalize_active_game_session() -> void:
 
 func _ready() -> void:
     DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_TRANSPARENT, false)
+    _apply_initial_window_size()
+    _apply_global_dpi_scale()
     get_viewport().transparent_bg = false
     RenderingServer.set_default_clear_color(COLOR_BG)
     var perf_interval_env := OS.get_environment("AETHERKIRI_PERF_LOG_INTERVAL")
@@ -1474,6 +1534,7 @@ func _ready() -> void:
         perf_log_interval = maxf(0.05, perf_interval_env.to_float())
     frame_spike_ms = maxf(0.0, OS.get_environment("AETHERKIRI_FRAME_SPIKE_MS").to_float())
     verbose_render_log = OS.get_environment("AETHERKIRI_VERBOSE_RENDER_LOG") == "1"
+    render_surface_max_size = _env_vector2i("AETHERKIRI_SURFACE_MAX_SIZE", RENDER_SURFACE_MAX_SIZE)
 
     var live_fps_log_path := OS.get_environment("AETHERKIRI_LIVE_FPS_LOG")
     if live_fps_log_path.is_empty():
@@ -1509,6 +1570,8 @@ func _ready() -> void:
     backend.item_selected.connect(_on_backend_selected)
     viewport.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
     viewport.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+    viewport.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+    get_viewport().canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_NEAREST
 
     _append_log("AetherKiri shell ready. Initializing engine...")
     call_deferred("_finish_ready_after_first_frame")
@@ -1569,10 +1632,43 @@ func _capture_ui_after_ready() -> void:
     if OS.get_environment("AETHERKIRI_QUIT_AFTER_CAPTURE") == "1":
         get_tree().quit(0)
 
+func _apply_initial_window_size() -> void:
+    if OS.get_name() == "iOS" or OS.get_name() == "Android":
+        return
+    var screen_size := DisplayServer.screen_get_size(DisplayServer.window_get_current_screen())
+    if screen_size.x <= 0 or screen_size.y <= 0:
+        return
+    var requested_size := _env_vector2i("AETHERKIRI_WINDOW_SIZE", INITIAL_WINDOW_SIZE)
+    var max_window := Vector2(
+        float(screen_size.x) * 0.88,
+        float(screen_size.y) * 0.82
+    )
+    var scale := minf(
+        max_window.x / float(requested_size.x),
+        max_window.y / float(requested_size.y)
+    )
+    scale = minf(scale, 1.0)
+    var target_size := Vector2i(
+        int(round(float(requested_size.x) * scale)),
+        int(round(float(requested_size.y) * scale))
+    )
+    DisplayServer.window_set_size(target_size)
+    DisplayServer.window_set_position((screen_size - target_size) / 2)
+
+func _apply_global_dpi_scale() -> void:
+    var scale_text := OS.get_environment("AETHERKIRI_UI_DPI_SCALE").strip_edges()
+    var scale := DEFAULT_UI_DPI_SCALE
+    if not scale_text.is_empty():
+        scale = scale_text.to_float()
+    scale = clampf(scale, 0.75, 2.0)
+    var window := get_window()
+    window.content_scale_factor = scale
+
 func _process(delta: float) -> void:
     _fit_full_rects()
     var startup_state := STARTUP_IDLE
     if game_running:
+        _sync_player_surface_size(false)
         log_drain_accum += delta
         if log_drain_accum >= LOG_DRAIN_INTERVAL:
             log_drain_accum = 0.0
@@ -1606,6 +1702,7 @@ func _process(delta: float) -> void:
         elif startup_state == STARTUP_FAILED:
             restart_notice.text = "Game startup failed."
             loading_panel.visible = false
+            _set_game_background(false)
             shell_root.visible = true
             viewport.visible = false
             game_view.visible = false
@@ -1768,7 +1865,7 @@ func _on_open_game() -> void:
     ProjectSettings.set_setting(GAME_PATH_KEY, path)
     ProjectSettings.save()
     _apply_backend(false)
-    player.set_surface_size(RENDER_SURFACE_SIZE.x, RENDER_SURFACE_SIZE.y)
+    _sync_player_surface_size(true)
 
     var async_open := OS.get_environment("AETHERKIRI_SYNC_OPEN") != "1"
     var result := player.open_game(path, async_open)
@@ -1799,6 +1896,89 @@ func _on_open_game() -> void:
     _append_log("Game launch requested with backend: %s" % selected_backend)
     _append_log("Path: %s" % path)
 
+func _desired_render_surface_size() -> Vector2i:
+    var window_size := DisplayServer.window_get_size()
+    if window_size.x < 1 or window_size.y < 1:
+        return RENDER_SURFACE_SIZE
+    var pixel_scale := _surface_pixel_scale()
+    var target_pixel_size := Vector2(
+        float(window_size.x) * pixel_scale,
+        float(window_size.y) * pixel_scale
+    )
+    var scale := minf(
+        target_pixel_size.x / float(RENDER_SURFACE_SIZE.x),
+        target_pixel_size.y / float(RENDER_SURFACE_SIZE.y)
+    )
+    if scale <= 0.0:
+        return RENDER_SURFACE_SIZE
+    scale = minf(
+        scale,
+        minf(
+            float(render_surface_max_size.x) / float(RENDER_SURFACE_SIZE.x),
+            float(render_surface_max_size.y) / float(RENDER_SURFACE_SIZE.y)
+        )
+    )
+    return Vector2i(
+        maxi(1, int(round(float(RENDER_SURFACE_SIZE.x) * scale))),
+        maxi(1, int(round(float(RENDER_SURFACE_SIZE.y) * scale)))
+    )
+
+func _surface_pixel_scale() -> float:
+    var env_scale := OS.get_environment("AETHERKIRI_SURFACE_PIXEL_SCALE").strip_edges()
+    if not env_scale.is_empty():
+        return clampf(env_scale.to_float(), 0.5, 4.0)
+    if OS.get_name() == "macOS":
+        var screen := DisplayServer.window_get_current_screen()
+        return clampf(DisplayServer.screen_get_scale(screen), 1.0, 4.0)
+    return 1.0
+
+func _env_vector2i(key: String, fallback: Vector2i) -> Vector2i:
+    var value := OS.get_environment(key).strip_edges().to_lower()
+    if value.is_empty():
+        return fallback
+    value = value.replace("x", ",")
+    var parts := value.split(",", false)
+    if parts.size() != 2:
+        return fallback
+    var width := int(parts[0])
+    var height := int(parts[1])
+    if width <= 0 or height <= 0:
+        return fallback
+    return Vector2i(width, height)
+
+func _sync_player_surface_size(force: bool) -> void:
+    if player == null:
+        return
+    var target_size := _desired_render_surface_size()
+    if not force and target_size == current_surface_size:
+        return
+    var result := player.set_surface_size(target_size.x, target_size.y)
+    if result != ENGINE_RESULT_OK:
+        render_errors += 1
+        _append_log("Surface resize failed: %s %s" % [
+            player.get_last_result(),
+            player.get_last_error(),
+        ])
+        return
+    if current_surface_size != target_size:
+        last_texture_size = Vector2i.ZERO
+        var window_size := DisplayServer.window_get_size()
+        var screen := DisplayServer.window_get_current_screen()
+        var line := "surface_resize window=%dx%d screen_scale=%.2f target=%dx%d max=%dx%d" % [
+            window_size.x,
+            window_size.y,
+            DisplayServer.screen_get_scale(screen),
+            target_size.x,
+            target_size.y,
+            render_surface_max_size.x,
+            render_surface_max_size.y,
+        ]
+        print(line)
+        if perf_log_file != null:
+            perf_log_file.store_line(line)
+            perf_log_file.flush()
+    current_surface_size = target_size
+
 func _drain_logs() -> void:
     var logs := player.drain_startup_logs()
     if logs.is_empty():
@@ -1812,6 +1992,7 @@ func _update_frame() -> void:
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+        _layout_game_viewport(get_viewport_rect().size)
         if not auto_probe_clicks.is_empty() and not auto_probe_running and not auto_probe_done:
             auto_probe_running = true
             call_deferred("_run_auto_probe")
@@ -2125,6 +2306,7 @@ func _is_touch_platform() -> bool:
 func _map_viewport_point(pos: Vector2) -> Vector2:
     if viewport.texture == null:
         return pos
+    var local_pos := pos - viewport.get_global_rect().position
     var tex_size: Vector2 = Vector2(
         max(1.0, float(viewport.texture.get_width())),
         max(1.0, float(viewport.texture.get_height()))
@@ -2135,7 +2317,7 @@ func _map_viewport_point(pos: Vector2) -> Vector2:
         return Vector2(-1.0, -1.0)
     var drawn_size: Vector2 = tex_size * scale
     var offset: Vector2 = (panel_size - drawn_size) * 0.5
-    var inside: Vector2 = pos - offset
+    var inside: Vector2 = local_pos - offset
     if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
         return Vector2(-1.0, -1.0)
     return inside / scale
