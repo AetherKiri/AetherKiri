@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     name: Build macOS App
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ci:run_macos'
     runs-on: macos-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
