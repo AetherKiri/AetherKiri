@@ -139,6 +139,40 @@ copy_android_so() {
     fi
 }
 
+ensure_android_godot_cpp_package_config() {
+    local triplet_root="$1"
+    local config_dir="$triplet_root/share/unofficial-godot-cpp"
+    local config_file="$config_dir/unofficial-godot-cpp-config.cmake"
+    local include_dir="$triplet_root/include/godot_cpp"
+    local lib_file
+
+    if [[ -f "$config_file" ]]; then
+        return
+    fi
+
+    lib_file="$(find "$triplet_root/lib" -maxdepth 1 -name 'libgodot-cpp*.a' -print -quit)"
+    if [[ -z "$lib_file" || ! -d "$include_dir" ]]; then
+        echo "Error: restored Android vcpkg bundle is missing godot-cpp package files." >&2
+        echo "       Expected include directory: $include_dir" >&2
+        echo "       Expected static library matching: $triplet_root/lib/libgodot-cpp*.a" >&2
+        exit 1
+    fi
+
+    mkdir -p "$config_dir"
+    cat > "$config_file" <<EOF
+get_filename_component(_godot_cpp_prefix "\${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+if(NOT TARGET unofficial::godot::cpp)
+    add_library(unofficial::godot::cpp STATIC IMPORTED)
+    set_target_properties(unofficial::godot::cpp PROPERTIES
+        IMPORTED_LOCATION "\${_godot_cpp_prefix}/lib/$(basename "$lib_file")"
+        INTERFACE_INCLUDE_DIRECTORIES "\${_godot_cpp_prefix}/include"
+    )
+endif()
+unset(_godot_cpp_prefix)
+EOF
+    echo "[INFO] Recreated missing godot-cpp CMake package config: $config_file"
+}
+
 build_abi() {
     local abi="$1"
     local cmake_config_preset
@@ -173,6 +207,7 @@ build_abi() {
         mkdir -p "$cmake_build_dir"
         rm -rf "$cmake_build_dir/vcpkg_installed"
         ln -s "$VCPKG_ROOT/installed" "$cmake_build_dir/vcpkg_installed"
+        ensure_android_godot_cpp_package_config "$cmake_build_dir/vcpkg_installed/arm64-android"
         cmake_config_args+=(
             -D "VCPKG_MANIFEST_INSTALL=OFF"
             -D "VCPKG_INSTALLED_DIR=$cmake_build_dir/vcpkg_installed"
