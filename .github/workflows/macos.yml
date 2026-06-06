@@ -1,6 +1,7 @@
 name: macOS Build
 
 on:
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -81,7 +82,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
       - name: Upload Artifact
-        if: success()
+        if: success() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: AetherKiri-macOS
@@ -89,7 +90,7 @@ jobs:
           retention-days: 7
 
       - name: Save vcpkg cache
-        if: success() && steps.restore-vcpkg.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
         uses: actions/cache/save@v4
         with:
           path: |
@@ -98,7 +99,7 @@ jobs:
           key: ${{ runner.os }}-macos-vcpkg
 
       - name: Save ccache
-        if: success() && steps.restore-ccache.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
         uses: actions/cache/save@v4
         with:
           path: .ccache

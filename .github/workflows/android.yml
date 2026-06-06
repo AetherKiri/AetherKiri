@@ -1,6 +1,7 @@
 name: Android Build
 
 on:
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -193,7 +194,7 @@ jobs:
           test -f out/godot/android/release/AetherKiri-release.apk
 
       - name: Upload Artifact
-        if: success()
+        if: success() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: AetherKiri-Android-APK
@@ -201,7 +202,7 @@ jobs:
           retention-days: 7
 
       - name: Save ccache
-        if: always() && !cancelled()
+        if: always() && !cancelled() && github.event_name != 'pull_request'
         uses: actions/cache/save@v4
         with:
           path: .ccache
