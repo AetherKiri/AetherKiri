@@ -41,7 +41,6 @@ var selected_game := {}
 var known_games: Array[Dictionary] = []
 var show_perf_monitor := true
 var lock_landscape := true
-var accurate_text_render := true
 var frame_limit_enabled := false
 var target_fps := 80
 var plugin_trace := false
@@ -75,6 +74,8 @@ var log_drain_accum := 0.0
 var perf_accum := 0.0
 var perf_log_accum := 0.0
 var state_log_accum := 0.0
+var startup_poll_accum := 0.0
+var cached_startup_state := STARTUP_IDLE
 var perf_log_interval := PERF_LOG_INTERVAL
 var frame_spike_ms := 0.0
 var verbose_render_log := false
@@ -83,7 +84,8 @@ var log_lines: PackedStringArray = []
 var suppress_mouse_until_msec := 0
 var current_surface_size := Vector2i.ZERO
 var render_surface_max_size := RENDER_SURFACE_MAX_SIZE
-const LOG_DRAIN_INTERVAL := 0.25
+const LOG_DRAIN_INTERVAL := 0.50
+const STARTUP_POLL_INTERVAL := 0.16
 const PERF_UPDATE_INTERVAL := 0.25
 const PERF_LOG_INTERVAL := 2.0
 const MAX_LOG_LINES := 240
@@ -167,7 +169,6 @@ func _load_shell_settings() -> void:
     upscale_algorithm = String(cfg.get_value("rendering", "upscale_algorithm", upscale_algorithm))
     if not upscale_algorithm in ["sharp", "nearest", "linear"]:
         upscale_algorithm = "sharp"
-    accurate_text_render = bool(cfg.get_value("rendering", "accurate_text_render", accurate_text_render))
     show_perf_monitor = bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
     frame_limit_enabled = bool(cfg.get_value("rendering", "fps_limit_enabled", frame_limit_enabled))
     target_fps = int(cfg.get_value("rendering", "target_fps", target_fps))
@@ -182,7 +183,6 @@ func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
-    cfg.set_value("rendering", "accurate_text_render", accurate_text_render)
     cfg.set_value("rendering", "perf_overlay", show_perf_monitor)
     cfg.set_value("rendering", "fps_limit_enabled", frame_limit_enabled)
     cfg.set_value("rendering", "target_fps", target_fps)
@@ -210,7 +210,6 @@ func _apply_engine_options() -> void:
     if player == null:
         return
     player.set_engine_option("fps_limit", str(target_fps) if frame_limit_enabled else "0")
-    player.set_engine_option("accurate_text_render", "1" if accurate_text_render else "0")
     player.set_engine_option("plugin_trace", "1" if plugin_trace else "0")
     player.set_engine_option("mock_enabled", "1" if mock_enabled else "0")
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
@@ -539,7 +538,6 @@ func _rebuild_settings_view() -> void:
     page.add_child(render_card)
     render_card.add_child(_settings_block("渲染管线", "未运行游戏时立即生效；运行中切换需重启当前游戏", _backend_segment()))
     render_card.add_child(_settings_block("缩放算法", "拉伸低分辨率游戏画面时使用；超分会重建边缘并做轻度锐化", _upscale_select()))
-    render_card.add_child(_settings_toggle_row("精确文字渲染", "让游戏文字绕过 Godot GPU 批处理，优先保证边缘清晰", accurate_text_render, "accurate_text"))
     render_card.add_child(_settings_toggle_row("性能监控", "显示帧率和图形 API 信息", show_perf_monitor, "perf"))
     render_card.add_child(_settings_toggle_row("帧率限制", "开启后使用下方目标帧率；关闭时交给显示刷新率", frame_limit_enabled, "fps_limit"))
     if frame_limit_enabled:
@@ -884,8 +882,6 @@ func _on_setting_toggle(key: String, value: bool) -> void:
         perf.visible = game_running and show_perf_monitor
     elif key == "fps_limit":
         frame_limit_enabled = value
-    elif key == "accurate_text":
-        accurate_text_render = value
     elif key == "landscape":
         lock_landscape = value
     elif key == "plugin_trace":
@@ -1664,12 +1660,11 @@ func _ready() -> void:
     render_surface_max_size = _env_vector2i("AETHERKIRI_SURFACE_MAX_SIZE", RENDER_SURFACE_MAX_SIZE)
 
     var live_fps_log_path := OS.get_environment("AETHERKIRI_LIVE_FPS_LOG")
-    if live_fps_log_path.is_empty():
-        live_fps_log_path = _default_output_path("aetherkiri-live-fps.log")
-    perf_log_file = FileAccess.open(live_fps_log_path, FileAccess.WRITE)
-    if perf_log_file != null:
-        perf_log_file.store_line("live fps log started")
-        perf_log_file.flush()
+    if not live_fps_log_path.is_empty():
+        perf_log_file = FileAccess.open(live_fps_log_path, FileAccess.WRITE)
+        if perf_log_file != null:
+            perf_log_file.store_line("live fps log started")
+            perf_log_file.flush()
 
     selected_backend = OS.get_environment("AETHERKIRI_BACKEND")
     if selected_backend.is_empty():
@@ -1794,7 +1789,7 @@ func _apply_global_dpi_scale() -> void:
 
 func _process(delta: float) -> void:
     _fit_full_rects()
-    var startup_state := STARTUP_IDLE
+    var startup_state := cached_startup_state
     if game_running:
         _sync_player_surface_size(false)
         log_drain_accum += delta
@@ -1802,7 +1797,11 @@ func _process(delta: float) -> void:
             log_drain_accum = 0.0
             _drain_logs()
 
-        startup_state = player.get_startup_state()
+        startup_poll_accum += delta
+        if cached_startup_state == STARTUP_SUCCEEDED or startup_poll_accum >= STARTUP_POLL_INTERVAL:
+            startup_poll_accum = 0.0
+            cached_startup_state = player.get_startup_state()
+            startup_state = cached_startup_state
         if startup_state == STARTUP_SUCCEEDED:
             restart_notice.text = ""
             loading_panel.visible = false
@@ -1857,7 +1856,7 @@ func _process(delta: float) -> void:
     if perf_accum >= PERF_UPDATE_INTERVAL:
         perf_accum = 0.0
         var frame_ms := delta * 1000.0
-        var renderer := player.get_renderer_info() if game_running else selected_backend
+        var renderer := player.get_renderer_info() if game_running and startup_state == STARTUP_SUCCEEDED else selected_backend
         var renderer_summary := _renderer_summary(renderer)
         if verbose_render_log and game_running and not renderer.is_empty() and renderer_summary != last_renderer_info_logged:
             last_renderer_info_logged = renderer_summary
@@ -1994,11 +1993,14 @@ func _on_open_game() -> void:
     ProjectSettings.save()
     _apply_backend(false)
     _sync_player_surface_size(true)
+    cached_startup_state = STARTUP_RUNNING
+    startup_poll_accum = STARTUP_POLL_INTERVAL
 
     var async_open := OS.get_environment("AETHERKIRI_SYNC_OPEN") != "1"
     var result := player.open_game(path, async_open)
     if result != ENGINE_RESULT_OK:
         render_errors += 1
+        cached_startup_state = STARTUP_FAILED
         _write_probe_marker("open_game_failed result=%s error=%s" % [
             player.get_last_result(),
             player.get_last_error(),
