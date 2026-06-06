@@ -123,7 +123,7 @@ jobs:
       - name: Configure vcpkg GitHub Packages cache
         env:
           VCPKG_NUGET_TOKEN: ${{ github.token }}
-          VCPKG_BINARY_CACHE_MODE: ${{ github.event_name == 'pull_request' && 'read' || 'readwrite' }}
+          VCPKG_BINARY_CACHE_MODE: readwrite
         run: bash .github/scripts/configure-vcpkg-github-packages.sh
 
       - name: Build Android Release
