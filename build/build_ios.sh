@@ -101,7 +101,12 @@ ensure_vcpkg() {
 ensure_vcpkg
 
 command -v cmake >/dev/null
-command -v ninja >/dev/null
+NINJA_BIN="${CMAKE_MAKE_PROGRAM:-$(command -v ninja || command -v ninja-build || true)}"
+if [[ -z "$NINJA_BIN" ]]; then
+    echo "Error: Ninja build tool not found. Install ninja and ensure it is available in PATH." >&2
+    exit 1
+fi
+export CMAKE_MAKE_PROGRAM="$NINJA_BIN"
 
 preflight_simulator_template_arch() {
     local arch="$1"
@@ -263,7 +268,7 @@ EOF
 }
 
 echo "==> Building native engine and Godot extension"
-cmake --preset "$CMAKE_CONFIG_PRESET" --fresh
+cmake --preset "$CMAKE_CONFIG_PRESET" --fresh -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
 cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 
 mkdir -p "$GODOT_BIN_DIR"

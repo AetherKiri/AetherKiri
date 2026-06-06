@@ -91,7 +91,12 @@ export ANDROID_NDK_HOME="$ANDROID_NDK_HOME_RESOLVED"
 export ANDROID_NDK="$ANDROID_NDK_HOME_RESOLVED"
 
 command -v cmake >/dev/null
-command -v ninja >/dev/null
+NINJA_BIN="${CMAKE_MAKE_PROGRAM:-$(command -v ninja || command -v ninja-build || true)}"
+if [[ -z "$NINJA_BIN" ]]; then
+    echo "Error: Ninja build tool not found. Install ninja and ensure it is available in PATH." >&2
+    exit 1
+fi
+export CMAKE_MAKE_PROGRAM="$NINJA_BIN"
 
 if [[ ! -d "$ANDROID_HOME" ]]; then
     echo "Error: Android SDK not found at $ANDROID_HOME." >&2
@@ -171,7 +176,7 @@ build_abi() {
         rm -f "$PROJECT_ROOT/out/android/$abi/debug/vcpkg_installed"
     fi
 
-    cmake --preset "$cmake_config_preset" --fresh
+    cmake --preset "$cmake_config_preset" --fresh -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
     cmake --build --preset "$cmake_build_preset" -- -j"$PARALLEL_JOBS"
 
     mkdir -p "$godot_bin_dir"
