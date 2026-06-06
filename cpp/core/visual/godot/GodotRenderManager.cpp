@@ -5,6 +5,7 @@
 #include "MsgIntf.h"
 #include "tjsHashSearch.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -42,6 +43,7 @@ std::unordered_map<std::string, uint64_t> g_method_stats;
 uint64_t g_texture_create_count = 0;
 uint64_t g_software_fallback_count = 0;
 uint64_t g_gpu_fastpath_count = 0;
+std::atomic<bool> g_gpu_fastpath_enabled{true};
 std::unordered_map<std::string, uint64_t> g_gpu_method_stats;
 std::unordered_map<std::string, uint64_t> g_copy_fallback_stats;
 
@@ -69,6 +71,9 @@ bool TraceGpuFallback() {
 }
 
 bool IsGpuRectFastPathEnabled(const char *name) {
+    if (!g_gpu_fastpath_enabled.load(std::memory_order_relaxed)) {
+        return false;
+    }
     const auto is_default_enabled = [&]() {
         return std::strcmp(name, "FillARGB") == 0 ||
                std::strcmp(name, "Copy") == 0 ||
@@ -1028,3 +1033,7 @@ public:
 } // namespace
 
 void TVPForceRegisterGodotRenderManager() {}
+
+void TVPSetGodotRenderManagerGpuFastPathEnabled(bool enabled) {
+    g_gpu_fastpath_enabled.store(enabled, std::memory_order_relaxed);
+}
