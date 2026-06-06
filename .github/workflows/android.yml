@@ -183,6 +183,16 @@ jobs:
           fi
 
           echo "Restored Android vcpkg bundle is missing godot-cpp; installing only that overlay port."
+          if [[ ! -d "${VCPKG_ROOT}/ports/vcpkg-cmake-config" ]]; then
+            echo "Restored vcpkg bundle is missing builtin ports; fetching vcpkg registry metadata."
+            tmp_vcpkg="${RUNNER_TEMP}/vcpkg-registry"
+            rm -rf "${tmp_vcpkg}"
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git "${tmp_vcpkg}"
+            rm -rf "${VCPKG_ROOT}/ports" "${VCPKG_ROOT}/versions"
+            cp -a "${tmp_vcpkg}/ports" "${VCPKG_ROOT}/ports"
+            cp -a "${tmp_vcpkg}/versions" "${VCPKG_ROOT}/versions"
+          fi
+
           "${VCPKG_ROOT}/vcpkg" install godot-cpp \
             --classic \
             --triplet arm64-android \
