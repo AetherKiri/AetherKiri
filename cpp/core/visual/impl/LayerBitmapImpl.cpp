@@ -12,9 +12,11 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
-#include <stdlib.h>
+#include <string>
 #include <math.h>
 
 #include "LayerBitmapIntf.h"
@@ -800,6 +802,29 @@ static tjs_int TVPTextScratchTextureMinSize() {
     return static_cast<tjs_int>(parsed);
 }
 
+static bool TVPTextOptionIsFalsy(const std::string &value) {
+    std::string normalized = value;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char c) {
+                       return static_cast<char>(std::tolower(c));
+                   });
+    return normalized == "0" || normalized == "false" ||
+        normalized == "off" || normalized == "no";
+}
+
+static bool TVPUseGodotTextGpuFastPath() {
+    tTJSVariant opt;
+    if(TVPGetCommandLine(TJS_W("accurate_text_render"), &opt)) {
+        return TVPTextOptionIsFalsy(ttstr(opt).AsStdString());
+    }
+
+    const char *env = std::getenv("AETHERKIRI_ACCURATE_TEXT_RENDER");
+    if(env != nullptr && env[0] != '\0')
+        return TVPTextOptionIsFalsy(env);
+
+    return false;
+}
+
 bool tTVPNativeBaseBitmap::InternalBlendText(tTVPCharacterData *data,
                                              tTVPDrawTextData *dtdata,
                                              tjs_uint32 color,
@@ -824,6 +849,7 @@ bool tTVPNativeBaseBitmap::InternalBlendText(tTVPCharacterData *data,
     clr_id = _clr_id;
 
     const bool fastGPURoute = !TVPIsSoftwareRenderManager() &&
+        TVPUseGodotTextGpuFastPath() &&
         !IndividualConfigManager::GetInstance()->GetValue<bool>(
             "ogl_accurate_render", false);
 
@@ -1249,6 +1275,7 @@ void tTVPNativeBaseBitmap::DrawGlyph(
                 tTVPRect shadowdrect;
 
                 const bool queueGPURoute = !TVPIsSoftwareRenderManager() &&
+                    TVPUseGodotTextGpuFastPath() &&
                     !IndividualConfigManager::GetInstance()->GetValue<bool>(
                         "ogl_accurate_render", false) &&
                     bltmode == bmAlphaOnAlpha && opa > 0;
@@ -1401,6 +1428,7 @@ void tTVPNativeBaseBitmap::DrawTextSingle(
         return; // nothing to do
 
     const bool queueGPURoute = !TVPIsSoftwareRenderManager() &&
+        TVPUseGodotTextGpuFastPath() &&
         !IndividualConfigManager::GetInstance()->GetValue<bool>(
             "ogl_accurate_render", false) &&
         bltmode == bmAlphaOnAlpha && opa > 0;
@@ -2051,6 +2079,7 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
     }
 
     const bool batchGPURoute = !TVPIsSoftwareRenderManager() &&
+        TVPUseGodotTextGpuFastPath() &&
         !IndividualConfigManager::GetInstance()->GetValue<bool>(
             "ogl_accurate_render", false) &&
         bltmode == bmAlphaOnAlpha && opa > 0 && !drawdata.empty();
