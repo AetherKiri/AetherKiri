@@ -1,64 +1,115 @@
-# AetherKiri
+<p align="center">
+  <img src="apps/godot_app/assets/icon.png" width="112" alt="AetherKiri app icon">
+</p>
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+<h1 align="center">AetherKiri</h1>
 
-AetherKiri is a Godot-hosted KiriKiri2 runtime. The project uses a C++ engine
-core loaded by a Godot 4.6 GDExtension, with Godot-owned rendering as the
-default product path.
+<p align="center">
+  A Godot-hosted KiriKiri2 runtime with a C++ engine core and native mobile/desktop exports.
+</p>
 
-## Architecture
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/ci-checks.yml"><img alt="CI Checks" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/ci-checks.yml/badge.svg"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/macos.yml"><img alt="macOS Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/macos.yml/badge.svg"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/ios.yml"><img alt="iOS Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/ios.yml/badge.svg"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/android.yml"><img alt="Android Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/android.yml/badge.svg"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/AetherKiri/AetherKiri/blob/main/LICENSE"><img alt="GitHub License" src="https://img.shields.io/github/license/AetherKiri/AetherKiri?logo=gnu&label=license"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/commits/main"><img alt="GitHub Last Commit" src="https://img.shields.io/github/last-commit/AetherKiri/AetherKiri?logo=github"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/issues"><img alt="GitHub Issues" src="https://img.shields.io/github/issues/AetherKiri/AetherKiri?logo=github"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/pulls"><img alt="GitHub Pull Requests" src="https://img.shields.io/github/issues-pr/AetherKiri/AetherKiri?logo=github"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri"><img alt="GitHub Repository Size" src="https://img.shields.io/github/repo-size/AetherKiri/AetherKiri?logo=github"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri"><img alt="GitHub Top Language" src="https://img.shields.io/github/languages/top/AetherKiri/AetherKiri?logo=github"></a>
+</p>
+
+## Overview
+
+AetherKiri runs KiriKiri2 content inside a Godot 4.6 application shell. The
+runtime is split into a native C++17 engine core, a C ABI bridge, and a Godot
+GDExtension host that owns the product UI, render resources, settings, export
+presets, and platform packaging.
+
+The default product renderer is **Godot Native**: engine frames are rendered
+through Godot-owned `RenderingDevice` resources. **GPU Bridge** remains an
+explicit compatibility and performance comparison backend for external native
+GPU render targets imported by Godot. **Debug CPU** is available as a visible
+diagnostic fallback only.
 
 ```text
 Godot App Shell
   -> GDExtension Host
-    -> C++ Engine Core
-      -> KiriKiri Runtime / Plugins
+    -> C ABI Engine API
+      -> C++ Engine Core
+        -> KiriKiri Runtime / Plugins
 ```
 
-The default renderer is **Godot Native**. It renders through Godot
-`RenderingDevice` resources owned by the Godot app. **GPU Bridge** remains an
-explicit compatibility/performance backend for external native GPU render
-targets imported by Godot. **Debug CPU** is a visible fallback path only and is
-not accepted as a performance target.
+## Highlights
+
+- Godot 4.6 app shell with native GDExtension integration.
+- C++17 KiriKiri2 runtime core with visual, audio, storage, VM, and plugin
+  support.
+- Export paths for macOS, iOS/iPadOS, and Android.
+- Runtime-selectable render backend with persisted settings.
+- Probe scripts for smoke, render, interaction, performance, and manual repro
+  sessions.
+- GPL-3.0-or-later source distribution.
 
 ## Repository Layout
 
-- `apps/godot_app/` - Godot project, scenes, settings UI, performance/log panel,
-  and export presets.
-- `bridge/godot_extension/` - Godot native host library entry points.
-- `bridge/engine_api/` - C ABI used by the host layer to drive the C++ engine.
-- `cpp/core/` - KiriKiri2 runtime, visual system, audio, storage, VM, and plugin
-  support.
-- `cpp/plugins/` - bundled native plugin implementations and compatibility
-  stubs.
-- `tests/profiles/` - per-game probe profiles. Committed profiles must not
-  contain machine-local game paths.
-- `doc/development.md` - full developer guide covering architecture, file roles,
-  build, testing, probes, and debugging.
+| Path | Purpose |
+| --- | --- |
+| `apps/godot_app/` | Godot project, scenes, settings UI, performance/log panel, icons, and export presets. |
+| `bridge/godot_extension/` | Godot native host library entry points. |
+| `bridge/engine_api/` | C ABI used by the host layer to drive the C++ engine. |
+| `cpp/core/` | KiriKiri2 runtime, visual system, audio, storage, VM, and plugin support. |
+| `cpp/plugins/` | Bundled native plugin implementations and compatibility stubs. |
+| `tests/profiles/` | Per-game probe profiles. Committed profiles must not contain machine-local game paths. |
+| `tools/` | Developer and compatibility tools built outside iOS/Android targets. |
+| `doc/development.md` | Full developer guide for architecture, file roles, build, testing, probes, and debugging. |
 
 ## Render Backends
 
-| Backend | Purpose |
-| --- | --- |
-| Godot Native | Default Godot-owned GPU rendering path. |
-| GPU Bridge | Explicit external GPU render-target bridge for comparison and compatibility. |
-| Debug CPU | RGBA readback/upload fallback for debugging only. |
+| Backend | Role | Status |
+| --- | --- | --- |
+| Godot Native | Godot-owned GPU rendering path. | Default product path |
+| GPU Bridge | External GPU render-target bridge for comparison and compatibility. | Optional backend |
+| Debug CPU | RGBA readback/upload fallback. | Debugging only |
 
 The Godot settings UI persists the selected backend and warns when changing it
 while a game session is active, because render resources must be recreated.
 
-## Building
+## Icon and Assets
 
-Prerequisites:
+The app icon shown above is the same icon configured by the Godot project:
+
+- App icon: `apps/godot_app/assets/icon.png`
+- SVG source used by the Godot project: `apps/godot_app/assets/icon.svg`
+- Export icon set: `apps/godot_app/assets/icons/`
+- Design source assets: `assets/sharks.svg` and `assets/apple_icon_mask.svg`
+
+iOS and Android export presets reference the generated PNG sizes under
+`apps/godot_app/assets/icons/`, including App Store and launcher sizes.
+
+## Requirements
 
 - CMake 3.28+
 - Ninja
-- vcpkg, either in `.devtools/vcpkg` or via `VCPKG_ROOT`
+- vcpkg in `.devtools/vcpkg` or available through `VCPKG_ROOT`
 - Godot at `/Applications/Godot.app` or `GODOT_BIN=/path/to/Godot`
 - Xcode for macOS/iOS exports
-- Android SDK/NDK for Android exports. The script uses
-  `ANDROID_HOME`/`ANDROID_SDK_ROOT` when set, otherwise
-  `$HOME/Library/Android/sdk`, and picks the newest installed NDK.
+- Android SDK/NDK for Android exports
+
+Android builds use `ANDROID_HOME` or `ANDROID_SDK_ROOT` when set, otherwise
+`$HOME/Library/Android/sdk`, and pick the newest installed NDK.
+
+## Build
 
 Common builds:
 
@@ -75,9 +126,9 @@ The scripts build the native engine and Godot host library, stage them under
 `apps/godot_app/bin/`, then run the matching Godot export preset when Godot is
 available. Android is currently wired for `arm64-v8a`.
 
-## Testing Build Artifacts
+## Run and Test Artifacts
 
-### macOS App
+### macOS
 
 Build and launch the exported app:
 
@@ -86,7 +137,7 @@ Build and launch the exported app:
 open out/godot/macos/release/AetherKiri.app
 ```
 
-For debug logging from the terminal:
+Run the debug build from a terminal to inspect logs:
 
 ```bash
 ./build.sh macos debug
@@ -109,7 +160,7 @@ Build the simulator export:
 ./build.sh ios debug --simulator
 ```
 
-Open the generated Xcode project or install the built app with `simctl` after
+Open the generated Xcode project, or install the built app with `simctl` after
 building it from Xcode:
 
 ```bash
@@ -283,3 +334,14 @@ Profile fields:
 Acceptance requires startup, rendering, input, menu operations, audio, save
 paths, clean exit, and performance parity from Godot Native or GPU Bridge. Debug
 CPU is only a diagnostic fallback.
+
+## Documentation
+
+- Developer guide: `doc/development.md`
+- Plugin notes: `doc/krkr2_plugins.md`
+- Tools: `tools/README.md`
+
+## License
+
+AetherKiri is distributed under GPL-3.0-or-later. See `LICENSE` for the full
+license text.
