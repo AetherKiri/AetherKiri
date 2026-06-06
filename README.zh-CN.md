@@ -14,7 +14,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/ci-checks.yml"><img alt="CI Checks" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/ci-checks.yml/badge.svg"></a>
   <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/macos.yml"><img alt="macOS Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/macos.yml/badge.svg"></a>
   <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/ios.yml"><img alt="iOS Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/ios.yml/badge.svg"></a>
   <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/android.yml"><img alt="Android Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/android.yml/badge.svg"></a>
