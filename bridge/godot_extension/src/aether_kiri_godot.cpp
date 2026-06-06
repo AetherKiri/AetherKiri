@@ -1215,10 +1215,13 @@ void BridgeReleaseTexture(uint64_t texture) {
 bool BridgeUpdateRgba(uint64_t texture, const void *pixels,
                       uint32_t stride_bytes, const tTVPRect *rect) {
     if (pixels == nullptr) return false;
-    std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
-    auto it = g_gpu_textures.find(texture);
-    if (it == g_gpu_textures.end()) return false;
-    const auto &record = it->second;
+    GodotGpuTextureRecord record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        auto it = g_gpu_textures.find(texture);
+        if (it == g_gpu_textures.end()) return false;
+        record = it->second;
+    }
     if (rect == nullptr || rect->left != 0 || rect->top != 0 ||
         rect->right != static_cast<int>(record.width) ||
         rect->bottom != static_cast<int>(record.height)) {
@@ -1230,14 +1233,17 @@ bool BridgeUpdateRgba(uint64_t texture, const void *pixels,
     op->type = GodotGpuOp::Type::Update;
     op->dst = record.rid;
     op->data = data;
-    return RunGodotGpuOpSync(op);
+    return RunGodotGpuOpAsync(op);
 }
 
 bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {
-    std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
-    auto it = g_gpu_textures.find(texture);
-    if (it == g_gpu_textures.end()) return false;
-    const auto &record = it->second;
+    GodotGpuTextureRecord record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        auto it = g_gpu_textures.find(texture);
+        if (it == g_gpu_textures.end()) return false;
+        record = it->second;
+    }
     if (rect == nullptr) {
         return false;
     }
@@ -1271,17 +1277,23 @@ bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {
         op->opacity = 255;
         op->color = argb;
     }
-    return RunGodotGpuOpSync(op);
+    return RunGodotGpuOpAsync(op);
 }
 
 bool BridgeCopyRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
                     const tTVPRect *src_rect) {
     if (dst_rect == nullptr || src_rect == nullptr) return false;
-    std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
-    auto dst_it = g_gpu_textures.find(dst);
-    auto src_it = g_gpu_textures.find(src);
-    if (dst_it == g_gpu_textures.end() || src_it == g_gpu_textures.end()) {
-        return false;
+    GodotGpuTextureRecord dst_record;
+    GodotGpuTextureRecord src_record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        auto dst_it = g_gpu_textures.find(dst);
+        auto src_it = g_gpu_textures.find(src);
+        if (dst_it == g_gpu_textures.end() || src_it == g_gpu_textures.end()) {
+            return false;
+        }
+        dst_record = dst_it->second;
+        src_record = src_it->second;
     }
     const int width = dst_rect->right - dst_rect->left;
     const int height = dst_rect->bottom - dst_rect->top;
@@ -1292,12 +1304,12 @@ bool BridgeCopyRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
     }
     auto op = std::make_shared<GodotGpuOp>();
     op->type = dst == src ? GodotGpuOp::Type::CopySelf : GodotGpuOp::Type::Copy;
-    op->src = src_it->second.rid;
-    op->dst = dst_it->second.rid;
+    op->src = src_record.rid;
+    op->dst = dst_record.rid;
     op->src_pos = Vector3(src_rect->left, src_rect->top, 0);
     op->dst_pos = Vector3(dst_rect->left, dst_rect->top, 0);
     op->size = Vector3(width, height, 1);
-    return RunGodotGpuOpSync(op);
+    return RunGodotGpuOpAsync(op);
 }
 
 bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
@@ -1308,11 +1320,17 @@ bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
         triangle_count == 0) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
-    auto dst_it = g_gpu_textures.find(dst);
-    auto src_it = g_gpu_textures.find(src);
-    if (dst_it == g_gpu_textures.end() || src_it == g_gpu_textures.end()) {
-        return false;
+    GodotGpuTextureRecord dst_record;
+    GodotGpuTextureRecord src_record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        auto dst_it = g_gpu_textures.find(dst);
+        auto src_it = g_gpu_textures.find(src);
+        if (dst_it == g_gpu_textures.end() || src_it == g_gpu_textures.end()) {
+            return false;
+        }
+        dst_record = dst_it->second;
+        src_record = src_it->second;
     }
     const int width = clip_rect->right - clip_rect->left;
     const int height = clip_rect->bottom - clip_rect->top;
@@ -1322,12 +1340,12 @@ bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
 
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::CopyTriangles;
-    op->src = src_it->second.rid;
-    op->dst = dst_it->second.rid;
+    op->src = src_record.rid;
+    op->dst = dst_record.rid;
     op->dst_pos = Vector3(clip_rect->left, clip_rect->top, 0);
     op->src_pos = Vector3(0, 0, 0);
     op->size = Vector3(width, height, 1);
-    op->src_size = Vector3(src_it->second.width, src_it->second.height, 1);
+    op->src_size = Vector3(src_record.width, src_record.height, 1);
     op->mode = triangle_count;
     op->vertices.reserve(static_cast<size_t>(triangle_count) * 12u);
     for (uint32_t i = 0; i < triangle_count * 3u; ++i) {
@@ -1343,11 +1361,17 @@ bool BridgeBlendRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
                      const tTVPRect *src_rect, uint32_t mode, int opacity,
                      uint32_t color) {
     if (dst_rect == nullptr || src_rect == nullptr) return false;
-    std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
-    auto dst_it = g_gpu_textures.find(dst);
-    auto src_it = g_gpu_textures.find(src);
-    if (dst_it == g_gpu_textures.end() || src_it == g_gpu_textures.end()) {
-        return false;
+    GodotGpuTextureRecord dst_record;
+    GodotGpuTextureRecord src_record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        auto dst_it = g_gpu_textures.find(dst);
+        auto src_it = g_gpu_textures.find(src);
+        if (dst_it == g_gpu_textures.end() || src_it == g_gpu_textures.end()) {
+            return false;
+        }
+        dst_record = dst_it->second;
+        src_record = src_it->second;
     }
     const int width = dst_rect->right - dst_rect->left;
     const int height = dst_rect->bottom - dst_rect->top;
@@ -1359,8 +1383,8 @@ bool BridgeBlendRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
 
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Blend;
-    op->src = src_it->second.rid;
-    op->dst = dst_it->second.rid;
+    op->src = src_record.rid;
+    op->dst = dst_record.rid;
     op->src_pos = Vector3(src_rect->left, src_rect->top, 0);
     op->dst_pos = Vector3(dst_rect->left, dst_rect->top, 0);
     op->size = Vector3(width, height, 1);
@@ -1377,13 +1401,21 @@ bool BridgeBlendRect2(uint64_t dst, uint64_t src1, uint64_t src2,
     if (dst_rect == nullptr || src1_rect == nullptr || src2_rect == nullptr) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
-    auto dst_it = g_gpu_textures.find(dst);
-    auto src1_it = g_gpu_textures.find(src1);
-    auto src2_it = g_gpu_textures.find(src2);
-    if (dst_it == g_gpu_textures.end() || src1_it == g_gpu_textures.end() ||
-        src2_it == g_gpu_textures.end()) {
-        return false;
+    GodotGpuTextureRecord dst_record;
+    GodotGpuTextureRecord src1_record;
+    GodotGpuTextureRecord src2_record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        auto dst_it = g_gpu_textures.find(dst);
+        auto src1_it = g_gpu_textures.find(src1);
+        auto src2_it = g_gpu_textures.find(src2);
+        if (dst_it == g_gpu_textures.end() || src1_it == g_gpu_textures.end() ||
+            src2_it == g_gpu_textures.end()) {
+            return false;
+        }
+        dst_record = dst_it->second;
+        src1_record = src1_it->second;
+        src2_record = src2_it->second;
     }
     const int width = dst_rect->right - dst_rect->left;
     const int height = dst_rect->bottom - dst_rect->top;
@@ -1397,9 +1429,9 @@ bool BridgeBlendRect2(uint64_t dst, uint64_t src1, uint64_t src2,
 
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Blend2;
-    op->src = src1_it->second.rid;
-    op->src2 = src2_it->second.rid;
-    op->dst = dst_it->second.rid;
+    op->src = src1_record.rid;
+    op->src2 = src2_record.rid;
+    op->dst = dst_record.rid;
     op->src_pos = Vector3(src1_rect->left, src1_rect->top, 0);
     op->src2_pos = Vector3(src2_rect->left, src2_rect->top, 0);
     op->dst_pos = Vector3(dst_rect->left, dst_rect->top, 0);
@@ -1413,10 +1445,13 @@ bool BridgeBlendRect2(uint64_t dst, uint64_t src1, uint64_t src2,
 bool BridgeReadRgba(uint64_t texture, void *out_pixels, size_t out_pixels_size,
                     uint32_t stride_bytes) {
     if (out_pixels == nullptr) return false;
-    std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
-    auto it = g_gpu_textures.find(texture);
-    if (it == g_gpu_textures.end()) return false;
-    const auto &record = it->second;
+    GodotGpuTextureRecord record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        auto it = g_gpu_textures.find(texture);
+        if (it == g_gpu_textures.end()) return false;
+        record = it->second;
+    }
     const uint32_t tight_stride = record.width * 4u;
     const uint32_t dst_stride = stride_bytes != 0 ? stride_bytes : tight_stride;
     if (out_pixels_size < static_cast<size_t>(dst_stride) * record.height) {
