@@ -253,6 +253,19 @@ AETHERKIRI_SMOKE_GAME="/path/to/game" \
   --script res://scripts/step_render_probe.gd
 ```
 
+Manual render probe for clicking through a repro:
+
+```bash
+AETHERKIRI_TEST_CONFIG="$PWD/tests/profiles/kr37s.json" \
+AETHERKIRI_SMOKE_GAME="/path/to/game" \
+/Applications/Godot.app/Contents/MacOS/Godot \
+  --path apps/godot_app \
+  --script res://scripts/manual_render_probe.gd
+```
+
+The manual probe forwards mouse, wheel, touch, and keyboard input to the game.
+Press `F12` to save `/tmp/aetherkiri-manual-*.png`; press `Esc` to exit.
+
 Profile fields:
 
 - `game_path`: optional game directory or XP3 path. Keep blank in committed
