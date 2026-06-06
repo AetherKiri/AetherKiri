@@ -125,7 +125,9 @@
       "inherits": "MacOS Config",
       "binaryDir": "${sourceDir}/out/macos/debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS_DEBUG": "-Og -g",
+        "CMAKE_CXX_FLAGS_DEBUG": "-Og -g"
       }
     },
     {
@@ -221,7 +223,9 @@
       "inherits": "Android arm64 Config",
       "binaryDir": "${sourceDir}/out/android/arm64-v8a/debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS_DEBUG": "-Og -g",
+        "CMAKE_CXX_FLAGS_DEBUG": "-Og -g"
       }
     },
     {
