@@ -147,6 +147,7 @@ build_abi() {
     local godot_bin_dir
     local vcpkg_triplet_dir
     local libomp_path
+    local cmake_config_args=()
 
     case "$abi" in
         arm64-v8a)
@@ -164,6 +165,20 @@ build_abi() {
     vcpkg_triplet_dir="$cmake_build_dir/vcpkg_installed/arm64-android"
 
     echo "==> Building Android native libraries ($abi, $BUILD_TYPE_LOWER)"
+    if [[ "${SKIP_ANDROID_VCPKG_INSTALL:-}" == "1" ]]; then
+        if [[ ! -d "$VCPKG_ROOT/installed/arm64-android" ]]; then
+            echo "Error: SKIP_ANDROID_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/arm64-android" >&2
+            exit 1
+        fi
+        mkdir -p "$cmake_build_dir"
+        rm -rf "$cmake_build_dir/vcpkg_installed"
+        ln -s "$VCPKG_ROOT/installed" "$cmake_build_dir/vcpkg_installed"
+        cmake_config_args+=(
+            -D "VCPKG_MANIFEST_INSTALL=OFF"
+            -D "VCPKG_INSTALLED_DIR=$cmake_build_dir/vcpkg_installed"
+        )
+    fi
+
     if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
         # Some vcpkg Android packages embed absolute pkg-config paths from the
         # first local install. Keep that compatibility path available so
@@ -176,7 +191,7 @@ build_abi() {
         rm -f "$PROJECT_ROOT/out/android/$abi/debug/vcpkg_installed"
     fi
 
-    cmake --preset "$cmake_config_preset" --fresh -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
+    cmake --preset "$cmake_config_preset" --fresh -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" "${cmake_config_args[@]}"
     cmake --build --preset "$cmake_build_preset" -- -j"$PARALLEL_JOBS"
 
     mkdir -p "$godot_bin_dir"
