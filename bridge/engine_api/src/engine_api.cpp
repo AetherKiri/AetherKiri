@@ -1112,6 +1112,15 @@ engine_result_t OpenGameCore(engine_handle_t handle,
     PluginCallTracer::Instance().InitLogger(trace_path);
   }
 
+  const bool prefer_gpu_after_startup =
+      impl->render.renderer != ENGINE_RENDERER_DEBUG_CPU;
+  TVPSetGodotRenderManagerGpuFastPathEnabled(false);
+  TVPHostSetPreferGpuFrame(false);
+  auto restore_startup_gpu_path = [&]() {
+    TVPSetGodotRenderManagerGpuFastPathEnabled(prefer_gpu_after_startup);
+    TVPHostSetPreferGpuFrame(prefer_gpu_after_startup);
+  };
+
   try {
     spdlog::debug("engine_open_game: calling Application->StartApplication...");
 #if defined(__ANDROID__)
@@ -1125,17 +1134,20 @@ engine_result_t OpenGameCore(engine_handle_t handle,
     AndroidInfoLog("engine_open_game: StartApplication returned successfully");
 #endif
   } catch (const std::exception& e) {
+    restore_startup_gpu_path();
     spdlog::error("engine_open_game: StartApplication threw std::exception: {}",
                   e.what());
     std::lock_guard<std::recursive_mutex> guard(impl->mutex);
     SetHandleErrorLocked(impl, "StartApplication threw an exception");
     return ENGINE_RESULT_INTERNAL_ERROR;
   } catch (...) {
+    restore_startup_gpu_path();
     spdlog::error("engine_open_game: StartApplication threw unknown exception");
     std::lock_guard<std::recursive_mutex> guard(impl->mutex);
     SetHandleErrorLocked(impl, "StartApplication threw an exception");
     return ENGINE_RESULT_INTERNAL_ERROR;
   }
+  restore_startup_gpu_path();
 
   if (TVPTerminated) {
     std::lock_guard<std::recursive_mutex> guard(impl->mutex);

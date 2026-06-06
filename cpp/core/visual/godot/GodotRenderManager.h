@@ -133,4 +133,5 @@ private:
 };
 
 void TVPForceRegisterGodotRenderManager();
+void TVPSetGodotRenderManagerGpuFastPathEnabled(bool enabled);
 std::string TVPGetGodotRenderManagerFallbackStats();
