@@ -18,6 +18,8 @@
 #include <fstream>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
+#include <chrono>
 #include <mutex>
 
 #include "tjsCommHead.h"
@@ -57,6 +59,38 @@ uint32_t g_host_surface_width = 1280;
 uint32_t g_host_surface_height = 720;
 bool g_host_prefer_gpu_frame = true;
 tTJSNI_Window *g_host_window_owner = nullptr;
+
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
+GLint HostTextureFilter() {
+    const char *value = std::getenv("AETHERKIRI_HOST_TEXTURE_FILTER");
+    if (value != nullptr && (std::strcmp(value, "linear") == 0 ||
+                             std::strcmp(value, "LINEAR") == 0)) {
+        return GL_LINEAR;
+    }
+    return GL_NEAREST;
+}
+
+void ApplyHostTextureFilter(GLenum target) {
+    const GLint filter = HostTextureFilter();
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, filter);
+}
+
+bool HostRenderTraceEnabled() {
+    return std::getenv("AETHERKIRI_RENDER_TRACE") != nullptr;
+}
+
+bool ShouldLogHostRenderTrace() {
+    static auto last_log = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    if (last_log.time_since_epoch().count() != 0 &&
+        now - last_log < std::chrono::seconds(1)) {
+        return false;
+    }
+    last_log = now;
+    return true;
+}
+#endif
 
 bool StoreLatestCpuFrameFromTexture(iTVPTexture2D *tex) {
     if (!tex) return false;
@@ -386,6 +420,14 @@ public:
         const tjs_uint tw = tex->GetWidth();
         const tjs_uint th = tex->GetHeight();
         if (tw == 0 || th == 0) return;
+        tjs_int primary_w = 0;
+        tjs_int primary_h = 0;
+        if (owner_ != nullptr) {
+            auto *dd = owner_->GetDrawDevice();
+            if (dd != nullptr) {
+                dd->GetSrcSize(primary_w, primary_h);
+            }
+        }
 
         if (auto *godot_tex = dynamic_cast<GodotTexture2D *>(tex)) {
             if (g_host_prefer_gpu_frame && godot_tex->EnsureGpuHandle() &&
@@ -419,6 +461,11 @@ public:
         }
 
         if (tex->GetNativeGLTextureId() == 0) {
+            if (HostRenderTraceEnabled() && ShouldLogHostRenderTrace()) {
+                spdlog::info(
+                    "host_render_trace path=cpu_no_native primary={}x{} tex={}x{}",
+                    primary_w, primary_h, tw, th);
+            }
             StoreLatestCpuFrameFromTexture(tex);
             auto* dd = owner_->GetDrawDevice();
             if (!dd) return;
@@ -532,7 +579,6 @@ public:
             vpW = static_cast<GLsizei>(static_cast<float>(fbH) * texAspect);
             vpX = static_cast<GLsizei>((fbW - vpW) / 2);
         }
-
         // Clear entire framebuffer to black (produces the letterbox bars)
         glViewport(0, 0, static_cast<GLsizei>(fbW), static_cast<GLsizei>(fbH));
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -562,6 +608,7 @@ public:
         // Bind the source texture for the fullscreen blit
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, blitSrcTexture);
+        ApplyHostTextureFilter(GL_TEXTURE_2D);
 
         // Draw fullscreen quad
         glUseProgram(blit_program_);
@@ -587,6 +634,13 @@ public:
                 uvScaleU = static_cast<float>(tw) / static_cast<float>(intW);
                 uvScaleV = static_cast<float>(th) / static_cast<float>(intH);
             }
+        }
+        if (HostRenderTraceEnabled() && ShouldLogHostRenderTrace()) {
+            spdlog::info(
+                "host_render_trace path=gl_blit primary={}x{} tex={}x{} native_gl={} fb={}x{} viewport={}x{}+{},{} uv_scale={:.4f},{:.4f} filter={}",
+                primary_w, primary_h, tw, th, nativeGLTex, fbW, fbH, vpW, vpH,
+                vpX, vpY, uvScaleU, uvScaleV,
+                HostTextureFilter() == GL_NEAREST ? "nearest" : "linear");
         }
         glUniform2f(blit_uvscale_uniform_, uvScaleU, uvScaleV);
 
@@ -777,8 +831,7 @@ private:
         // Create blit texture
         glGenTextures(1, &blit_texture_);
         glBindTexture(GL_TEXTURE_2D, blit_texture_);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        ApplyHostTextureFilter(GL_TEXTURE_2D);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glBindTexture(GL_TEXTURE_2D, 0);

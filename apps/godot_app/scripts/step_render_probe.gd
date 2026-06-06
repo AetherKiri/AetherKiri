@@ -22,6 +22,7 @@ func _initialize() -> void:
     rect.set_anchors_preset(Control.PRESET_FULL_RECT)
     rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
     rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+    rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
     root.add_child(rect)
 
     player = AetherKiriPlayer.new()

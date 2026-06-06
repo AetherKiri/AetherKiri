@@ -23,7 +23,10 @@ config/icon="res://assets/icon.png"
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
-window/stretch/mode="canvas_items"
+window/size/window_width_override=2240
+window/size/window_height_override=1260
+window/dpi/allow_hidpi=true
+window/stretch/mode="disabled"
 
 [editor_plugins]
 
@@ -36,4 +39,5 @@ renderer/rendering_method.mobile="mobile"
 renderer/rendering_method.android="gl_compatibility"
 rendering_device/driver.ios="metal"
 rendering_device/driver.android="opengl3"
+textures/canvas_textures/default_texture_filter=0
 textures/vram_compression/import_etc2_astc=true
