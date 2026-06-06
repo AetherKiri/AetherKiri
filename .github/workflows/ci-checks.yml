@@ -1,7 +1,6 @@
 name: CI Checks
 
 on:
-  pull_request:
   workflow_dispatch:
 
 jobs:
