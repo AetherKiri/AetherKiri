@@ -184,6 +184,9 @@ bool g_runtime_startup_active = false;
 engine_handle_t g_runtime_startup_owner = nullptr;
 std::once_flag g_loggers_init_once;
 std::shared_ptr<spdlog::sinks::sink> g_startup_log_sink;
+std::mutex g_game_log_file_sink_mutex;
+std::shared_ptr<spdlog::sinks::sink> g_game_log_file_sink;
+std::string g_game_log_file_path;
 constexpr size_t kMaxStartupLogs = 4000;
 
 void PushRuntimeSpdlogToStartupQueue(const spdlog::details::log_msg& msg);
@@ -335,6 +338,45 @@ void EnsureRuntimeLoggersInitialized() {
     }
     InstallCrashSignalHandlers();
   });
+}
+
+void AttachGameLogFileSink(const std::string& log_file_path) {
+  std::lock_guard<std::mutex> sink_guard(g_game_log_file_sink_mutex);
+
+  if (g_game_log_file_sink == nullptr ||
+      g_game_log_file_path != log_file_path) {
+    if (g_game_log_file_sink != nullptr) {
+      for (const char* name : {"core", "tjs2", "plugin"}) {
+        if (auto logger = spdlog::get(name)) {
+          auto& sinks = logger->sinks();
+          sinks.erase(
+              std::remove_if(
+                  sinks.begin(), sinks.end(),
+                  [](const std::shared_ptr<spdlog::sinks::sink>& sink) {
+                    return sink.get() == g_game_log_file_sink.get();
+                  }),
+              sinks.end());
+        }
+      }
+    }
+    g_game_log_file_sink =
+        std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_file_path, true);
+    g_game_log_file_path = log_file_path;
+  }
+
+  for (const char* name : {"core", "tjs2", "plugin"}) {
+    if (auto logger = spdlog::get(name)) {
+      auto& sinks = logger->sinks();
+      const auto already_attached = std::any_of(
+          sinks.begin(), sinks.end(),
+          [](const std::shared_ptr<spdlog::sinks::sink>& sink) {
+            return sink.get() == g_game_log_file_sink.get();
+          });
+      if (!already_attached) {
+        sinks.push_back(g_game_log_file_sink);
+      }
+    }
+  }
 }
 
 void SetThreadError(const char* message) {
@@ -1054,15 +1096,7 @@ engine_result_t OpenGameCore(engine_handle_t handle,
       log_file_path += "/";
     }
     log_file_path += "krkr2.log";
-    auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_file_path, true);
-    auto attach_sink = [&](const char* name) {
-      if (auto logger = spdlog::get(name)) {
-        logger->sinks().push_back(file_sink);
-      }
-    };
-    attach_sink("core");
-    attach_sink("tjs2");
-    attach_sink("plugin");
+    AttachGameLogFileSink(log_file_path);
     spdlog::info("engine_open_game: File logger successfully attached to {}", log_file_path);
   } catch (const std::exception& e) {
     spdlog::error("engine_open_game: Failed to create log file: {}", e.what());

@@ -63,10 +63,6 @@
  *  When enabled, disassembles bytecode and exports scripts during game load. */
 #define ENGINE_OPTION_EXPORT_SCRIPTS "export_scripts"
 
-/** Enable/disable CPU-accurate native text composition ("0"/"1", default "1").
- *  When enabled, glyphs bypass the Godot GPU text fast path to avoid soft text. */
-#define ENGINE_OPTION_ACCURATE_TEXT_RENDER "accurate_text_render"
-
 /* ── Renderer Values ────────────────────────────────────────────── */
 
 #define ENGINE_RENDERER_GODOT_NATIVE      "godot_native"
