@@ -122,8 +122,6 @@ jobs:
           export VCPKG_ROOT="${GITHUB_WORKSPACE}/.devtools/vcpkg"
           export SKIP_ANDROID_VCPKG_INSTALL=1
           export CMAKE_MAKE_PROGRAM="$(command -v ninja || command -v ninja-build)"
-          export CMAKE_C_COMPILER_LAUNCHER=ccache
-          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
 
           cmake --preset "Android arm64 Release Config" --fresh \
             -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" \
