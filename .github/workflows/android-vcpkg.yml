@@ -116,6 +116,28 @@ jobs:
           VCPKG_TRIPLET: arm64-android
         run: bash .github/scripts/pack-vcpkg-release-bundle.sh
 
+      - name: Smoke test Android vcpkg bundle layout
+        run: |
+          set -euo pipefail
+          export VCPKG_ROOT="${GITHUB_WORKSPACE}/.devtools/vcpkg"
+          export SKIP_ANDROID_VCPKG_INSTALL=1
+          export CMAKE_MAKE_PROGRAM="$(command -v ninja || command -v ninja-build)"
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+          cmake --preset "Android arm64 Release Config" --fresh \
+            -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" \
+            -D "VCPKG_MANIFEST_INSTALL=OFF" \
+            -D "VCPKG_INSTALLED_DIR=${GITHUB_WORKSPACE}/out/android/arm64-v8a/release/vcpkg_installed"
+
+          rm -rf "${GITHUB_WORKSPACE}/out/android/arm64-v8a/debug/vcpkg_installed"
+          mkdir -p "${GITHUB_WORKSPACE}/out/android/arm64-v8a/debug"
+          ln -s "${VCPKG_ROOT}/installed" "${GITHUB_WORKSPACE}/out/android/arm64-v8a/debug/vcpkg_installed"
+          cmake --preset "Android arm64 Debug Config" --fresh \
+            -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" \
+            -D "VCPKG_MANIFEST_INSTALL=OFF" \
+            -D "VCPKG_INSTALLED_DIR=${GITHUB_WORKSPACE}/out/android/arm64-v8a/debug/vcpkg_installed"
+
       - name: Publish single shared Android vcpkg bundle
         env:
           GH_TOKEN: ${{ github.token }}
