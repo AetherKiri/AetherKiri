@@ -15,6 +15,7 @@
 /* #include "tjsCommHead.h" */
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
 #include "tjsTypes.h"
 #include "tvpgl.h"
 #include <float.h>
@@ -105,6 +106,19 @@ char TVPTLG6GolombBitLengthTable[TVP_TLG6_GOLOMB_N_COUNT * 2 * 128]
                                 [TVP_TLG6_GOLOMB_N_COUNT] = { { 0 } };
 
 static void TVPPsMakeTable();
+
+static bool TVPShouldUseHighwaySIMD() {
+    const char *value = getenv("AETHERKIRI_TVPGL_SIMD");
+    if(value != nullptr && value[0] != '\0') {
+        return strcmp(value, "1") == 0 || strcmp(value, "true") == 0 ||
+            strcmp(value, "on") == 0 || strcmp(value, "yes") == 0;
+    }
+#if defined(__EMSCRIPTEN__)
+    return false;
+#else
+    return true;
+#endif
+}
 
 static void TVPTLG6InitLeadingZeroTable() {
     /* table which indicates first set bit position + 1. */
@@ -14130,7 +14144,9 @@ TVP_GL_FUNC_DECL(void, TVPInitTVPGL, ()) {
 #endif
     TVPCreateTable();
     TVPGL_C_Init();
-    TVPGL_SIMD_Init();  // Highway SIMD override
+    if(TVPShouldUseHighwaySIMD()) {
+        TVPGL_SIMD_Init();  // Highway SIMD override
+    }
 }
 
 /*export*/

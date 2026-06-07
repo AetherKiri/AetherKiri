@@ -37,7 +37,7 @@ target_compile_definitions(${PROJECT_NAME} INTERFACE
     -DUSE_UNICODE_FSTRING
 )
 
-if(NOT APPLE)
+if(NOT APPLE AND NOT WEB AND NOT EMSCRIPTEN)
     # 启用 OpenMP 支持
     find_package(OpenMP REQUIRED)
 

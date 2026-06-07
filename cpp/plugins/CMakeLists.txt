@@ -170,7 +170,9 @@ target_link_libraries(${PROJECT_NAME} PUBLIC krkr2core)
 
 add_subdirectory(psdfile)
 add_subdirectory(psbfile)
-add_subdirectory(layerex_draw)
+if(NOT WEB AND NOT EMSCRIPTEN)
+    add_subdirectory(layerex_draw)
+endif()
 add_subdirectory(motionplayer)
 add_subdirectory(kagparserex)
 
@@ -180,11 +182,13 @@ add_subdirectory(kagparserex)
 target_link_libraries(${PROJECT_NAME} PUBLIC
         psdfile
         psbfile
-        layerExDraw
         motionplayer
         kagparserex
 #        json steam DrawDeviceForSteam
 )
+if(NOT WEB AND NOT EMSCRIPTEN)
+    target_link_libraries(${PROJECT_NAME} PUBLIC layerExDraw)
+endif()
 
 find_package(fmt CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE fmt::fmt)

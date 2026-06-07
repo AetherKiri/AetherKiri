@@ -690,13 +690,16 @@ public:
 
     void SetData(unsigned long outsize, tTJSBinaryStream *instream,
                  unsigned long insize) {
+        if((tjs_uint)insize != insize || (tjs_uint)outsize != outsize)
+            TVPThrowExceptionMessage(TVPReadError);
+
 #ifdef TVP_USE_MMAP_TEMP
         tjs_uint8 *indata = (tjs_uint8 *)TVPMmapAlloc(insize);
 #else
         tjs_uint8 *indata = new tjs_uint8[insize];
 #endif
         try {
-            instream->Read(indata, insize);
+            instream->ReadBuffer(indata, (tjs_uint)insize);
 
 #ifdef TVP_USE_MMAP_TEMP
             Data = (tjs_uint8 *)TVPMmapAlloc(outsize);
@@ -704,11 +707,11 @@ public:
             Data = new tjs_uint8[outsize];
 #endif
             unsigned long destlen = outsize;
-            int result = uncompress((unsigned char *)Data, &outsize,
+            int result = uncompress((unsigned char *)Data, &destlen,
                                     (unsigned char *)indata, insize);
             if(result != Z_OK || destlen != outsize)
                 TVPThrowExceptionMessage(TVPUncompressionFailed);
-            Size = outsize;
+            Size = (tjs_uint)destlen;
         } catch(...) {
 #ifdef TVP_USE_MMAP_TEMP
             TVPMmapFree(indata);

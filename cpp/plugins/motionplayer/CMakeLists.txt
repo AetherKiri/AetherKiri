@@ -19,3 +19,8 @@ target_sources(${PROJECT_NAME} PRIVATE
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE krkr2plugin)
+
+if(EMSCRIPTEN)
+    target_compile_options(${PROJECT_NAME} PRIVATE -msimd128)
+    target_link_options(${PROJECT_NAME} INTERFACE -msimd128)
+endif()

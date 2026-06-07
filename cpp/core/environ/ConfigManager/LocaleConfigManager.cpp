@@ -5,14 +5,21 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#if defined(__EMSCRIPTEN__)
+#include <unistd.h>
+#endif
 #include <spdlog/spdlog.h>
 
 LocaleConfigManager::LocaleConfigManager() = default;
 
 // Helper: check if a file exists using std::filesystem
 static bool FileExists(const std::string &path) {
+#if defined(__EMSCRIPTEN__)
+    return access(path.c_str(), F_OK) == 0;
+#else
     std::error_code ec;
     return std::filesystem::exists(path, ec);
+#endif
 }
 
 // Helper: read entire file to string

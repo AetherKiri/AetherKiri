@@ -13,7 +13,10 @@
       "name": "boost-locale",
       "default-features": false
     },
-    "bullet3",
+    {
+      "name": "bullet3",
+      "platform": "!emscripten"
+    },
     "boost-phoenix",
     "boost-spirit",
     {
@@ -24,7 +27,7 @@
     {
       "name": "catch2",
       "default-features": false,
-      "platform": "!android & !ios"
+      "platform": "!android & !ios & !emscripten"
     },
     "minizip",
     "tinyxml2",
@@ -33,14 +36,16 @@
       "platform": "windows"
     },
     "ffmpeg",
+    "expat",
     "fmt",
+    "freetype",
     "godot-cpp",
     "jxrlib",
     "libarchive",
     "libxml2",
     {
       "name": "libgdiplus",
-      "platform": "!windows"
+      "platform": "!windows & !emscripten"
     },
     "libjpeg-turbo",
     {
@@ -66,7 +71,7 @@
       "features": [
         {
           "name": "openmp",
-          "platform": "!ios"
+          "platform": "!ios & !emscripten"
         }
       ]
     },

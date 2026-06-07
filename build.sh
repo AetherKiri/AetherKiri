@@ -7,7 +7,7 @@
 #   ./build.sh                          # Interactive platform selection
 #
 # Platforms:
-#   android, ios, macos, linux
+#   android, ios, macos, linux, web
 #
 # Options:
 #   debug|release       Build type (default: debug)
@@ -21,6 +21,7 @@
 #   ./build.sh android debug --abi=arm64-v8a
 #   ./build.sh ios release
 #   ./build.sh macos debug --jobs=16
+#   ./build.sh web release
 #   ./build.sh --clean android release
 #
 
@@ -52,6 +53,7 @@ show_help() {
     echo "  ios        Build iOS Godot app/export project"
     echo "  macos      Build macOS Godot app"
     echo "  linux      Not wired yet; placeholder target"
+    echo "  web        Build Godot Web export with GDExtension side module"
     echo ""
     echo "Options:"
     echo "  debug|release       Build type (default: debug)"
@@ -66,6 +68,7 @@ show_help() {
     echo "  ./build.sh android debug --abi=arm64-v8a"
     echo "  ./build.sh ios release"
     echo "  ./build.sh macos debug --jobs=16"
+    echo "  ./build.sh web release"
     echo "  ./build.sh --clean android release"
     echo ""
 }
@@ -90,7 +93,7 @@ for arg in "$@"; do
         --jobs=*)
             export JOBS="${arg#*=}"
             ;;
-        android|ios|macos|linux)
+        android|ios|macos|linux|web)
             PLATFORM="$arg"
             ;;
         debug|release|Debug|Release)
@@ -127,13 +130,15 @@ if [[ -z "$PLATFORM" ]]; then
     echo "  2) ios"
     echo "  3) macos"
     echo "  4) linux"
+    echo "  5) web"
     echo ""
-    read -rp "Enter choice [1-4]: " choice
+    read -rp "Enter choice [1-5]: " choice
     case "$choice" in
         1|android)  PLATFORM="android" ;;
         2|ios)      PLATFORM="ios" ;;
         3|macos)    PLATFORM="macos" ;;
         4|linux)    PLATFORM="linux" ;;
+        5|web)      PLATFORM="web" ;;
         *)
             echo -e "${RED}[ERROR]${NC} Invalid choice: $choice"
             exit 1
@@ -177,6 +182,11 @@ if [[ "$CLEAN" == true ]]; then
             rm -rf "$SCRIPT_DIR/out/macos/$BUILD_TYPE"
             rm -rf "$SCRIPT_DIR/out/godot/macos/$BUILD_TYPE"
             echo -e "${GREEN}[INFO]${NC} macOS build artifacts cleaned."
+            ;;
+        web)
+            rm -rf "$SCRIPT_DIR/out/web/$BUILD_TYPE"
+            rm -rf "$SCRIPT_DIR/out/godot/web/$BUILD_TYPE"
+            echo -e "${GREEN}[INFO]${NC} Web build artifacts cleaned."
             ;;
     esac
     echo ""

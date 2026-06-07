@@ -58,6 +58,8 @@ Godot App Shell
 - Runtime-selectable render backend with persisted settings.
 - Probe scripts for smoke, render, interaction, performance, and manual repro
   sessions.
+- Manual compatibility notes for tested titles in
+  [`doc/verified_games.md`](doc/verified_games.md).
 - GPL-3.0-or-later source distribution.
 
 ## Repository Layout
@@ -72,6 +74,7 @@ Godot App Shell
 | `tests/profiles/` | Per-game probe profiles. Committed profiles must not contain machine-local game paths. |
 | `tools/` | Developer and compatibility tools built outside iOS/Android targets. |
 | `doc/development.md` | Full developer guide for architecture, file roles, build, testing, probes, and debugging. |
+| `doc/verified_games.md` | Manual list of games that have been smoke-tested with the current runtime. |
 
 ## Render Backends
 
@@ -103,10 +106,13 @@ iOS and Android export presets reference the generated PNG sizes under
 - vcpkg in `.devtools/vcpkg` or available through `VCPKG_ROOT`
 - Godot at `/Applications/Godot.app` or `GODOT_BIN=/path/to/Godot`
 - Xcode for macOS/iOS exports
-- Android SDK/NDK for Android exports
-
-Android builds use `ANDROID_HOME` or `ANDROID_SDK_ROOT` when set, otherwise
-`$HOME/Library/Android/sdk`, and pick the newest installed NDK.
+- Android SDK/NDK for Android exports. The script uses
+  `ANDROID_HOME`/`ANDROID_SDK_ROOT` when set, otherwise
+  `$HOME/Library/Android/sdk`, and picks the newest installed NDK.
+- Emscripten/emsdk for Web exports, with `emcc`, `em++`, and `emar` on `PATH`.
+- Godot Web GDExtension/dlink export templates installed as
+  `web_dlink_debug.zip` and `web_dlink_release.zip`.
+- Node.js and npm for the TypeScript/Vite local Web server.
 
 ## Build
 
@@ -119,6 +125,8 @@ Common builds:
 ./build.sh ios release
 ./build.sh android debug --abi=arm64-v8a
 ./build.sh android release --abi=arm64-v8a
+./build.sh web debug
+./build.sh web release
 ```
 
 The scripts build the native engine and Godot host library, stage them under
@@ -126,6 +134,15 @@ The scripts build the native engine and Godot host library, stage them under
 available. Android is currently wired for `arm64-v8a`.
 
 ## Run and Test Artifacts
+
+Web builds produce an Emscripten GDExtension side module at
+`apps/godot_app/bin/web/<debug|release>/aether_kiri_godot.wasm`, then export
+the Godot Web app to `out/godot/web/<debug|release>/index.html` when the dlink
+template is installed. The Web export is built for threaded, SIMD-enabled
+WebAssembly, so the served app needs cross-origin isolation headers. Cloud
+deployments import local games through the browser's file/directory picker and
+mount the authorized `File`/`Blob` objects with on-demand Range reads instead
+of copying multi-GB game packages into the Emscripten virtual filesystem.
 
 ### macOS
 
@@ -253,6 +270,50 @@ On Android, import games through the app UI on platforms with file-system
 access. On restricted devices, copy the game directory into the app's
 documents/storage location and use refresh.
 
+### Web
+
+Activate Emscripten before building:
+
+```bash
+source /path/to/emsdk/emsdk_env.sh
+./build.sh web debug
+```
+
+The export is written to:
+
+```text
+out/godot/web/debug/index.html
+```
+
+Run it from an HTTP server, not by opening the file directly:
+
+```bash
+npm install
+npm run web:dev:debug
+```
+
+Vite serves the exported static files with the COOP/COEP headers required by
+`SharedArrayBuffer` and Godot's threaded Web export. For a release export, run
+`npm run web:dev:release`.
+
+Cloud deployments do not configure server-side game paths. Users click Import
+in the browser and authorize a local game directory or XP3 file. Imported game
+files are mounted as read-only inputs; saves, game configuration, and other
+runtime writes are persisted in the current site's IndexedDB-backed `/userfs`,
+not written back to the user's original game directory. For local development
+only, Vite can expose a read-only test game root:
+
+```bash
+AETHERKIRI_GAME_ROOT=/absolute/path/to/game \
+AETHERKIRI_WEB_AUTO_START=1 \
+npm run web:dev:release
+```
+
+Use `AETHERKIRI_GAME_ROOTS` with the platform path delimiter for multiple roots.
+`AETHERKIRI_WEB_AUTO_START_INDEX=1` or `AETHERKIRI_WEB_AUTO_START_NAME=title`
+selects a specific configured root. These environment variables are developer
+shortcuts, not the product import path.
+
 ## Validation
 
 Useful migration checks:
@@ -263,6 +324,7 @@ rg "u[n]official-angle|l[i]bEGL|l[i]bGLESv2" CMakeLists.txt bridge cpp build vcp
 ./build.sh macos debug
 ./build.sh ios debug --simulator
 ./build.sh android debug --abi=arm64-v8a
+./build.sh web debug
 build/validate_godot_native.sh
 build/validate_gpu_bridge.sh
 ```

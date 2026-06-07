@@ -6,15 +6,18 @@
 #include "CharacterData.h"
 #include "FontRasterizer.h"
 #include <string>
+#include <vector>
 
 class FreeTypeFontRasterizer : public FontRasterizer {
     tjs_int RefCount;
     class tFreeTypeFace *Face; //!< Faceオブジェクト
-    class tFreeTypeFace *FaceFallback = nullptr;
+    std::vector<class tFreeTypeFace *> FaceFallbacks;
     class tTVPNativeBaseBitmap *LastBitmap;
     tTVPFont CurrentFont;
     std::string CurrentExtentCacheFontKey;
-    void ApplyFallbackFace();
+    void ApplyFallbackFaces();
+    void ClearFallbackFaces();
+    void ApplyFaceOptions(class tFreeTypeFace *face);
 
 public:
     FreeTypeFontRasterizer();

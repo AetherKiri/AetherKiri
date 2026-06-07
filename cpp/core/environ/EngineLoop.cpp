@@ -121,6 +121,7 @@ EngineLoop* EngineLoop::CreateInstance() {
 }
 
 void EngineLoop::Start() {
+    started_ = true;
     update_enabled_ = true;
 }
 

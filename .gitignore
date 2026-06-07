@@ -2,7 +2,13 @@
 /**/cmake-build-android/
 /**/cmake-build-android-release/
 /**/cmake-build-android-debug/
-/*/build/
+/**/build/
+!/build/
+/build/*
+!/build/build_web.sh
+!/build/patch_web_export.mjs
+!/build/web_export_local_picker.js
+!/build/web_export_range_fs.js
 /**/out/
 /**/bin/
 vcpkg_installed/
@@ -16,9 +22,23 @@ vcpkg_installed/
 *.md
 !README.md
 !README.zh-CN.md
+!doc/verified_games.md
 *.lock
+!package-lock.json
+node_modules/
+.vite/
 /stats_server
 local.properties
+
+# Live2D Cubism Core is distributed under Live2D's proprietary license.
+third_party/live2d/Core/live2dcubismcore*.js
+third_party/live2d/Core/live2dcubismcore*.wasm
+third_party/live2d/Core/*.map
+!third_party/live2d/Core/README.md
+!third_party/live2d/CubismWebFramework/LICENSE.md
+!third_party/live2d/CubismWebFramework/README.md
+!third_party/live2d/CubismWebFramework/README.ja.md
+!third_party/live2d/CubismWebFramework/CHANGELOG.md
 
 # Android signing secrets
 *.keystore

@@ -1,6 +1,8 @@
 #pragma once
 #include "tjs.h"
 #include "tjsNative.h"
+#include "DebugIntf.h"
+#include "ScriptMgnIntf.h"
 #include "DrawDevice.h"
 #include <dlfcn.h>
 #include <unordered_map>
@@ -36,6 +38,102 @@ inline tjs_error ReturnFirstArgOrTrueCb(tTJSVariant *result, tjs_int numparams,
     return TJS_S_OK;
 }
 
+inline const tjs_char *VariantTypeName(tTJSVariantType type) {
+    switch(type) {
+    case tvtVoid: return TJS_W("void");
+    case tvtObject: return TJS_W("object");
+    case tvtString: return TJS_W("string");
+    case tvtOctet: return TJS_W("octet");
+    case tvtInteger: return TJS_W("integer");
+    case tvtReal: return TJS_W("real");
+    default: return TJS_W("unknown");
+    }
+}
+
+inline void LogCompatArgsOnce(const tjs_char *tag, tjs_int numparams,
+                              tTJSVariant **param) {
+    static tjs_int logCount = 0;
+    if(logCount++ >= 12)
+        return;
+    ttstr msg = ttstr(TJS_W("DrawDeviceGLESModule.")) + tag +
+                TJS_W(": argc=") + ttstr(numparams);
+    for(tjs_int i = 0; i < numparams; ++i) {
+        msg += TJS_W(" [");
+        msg += ttstr(i);
+        msg += TJS_W(":");
+        msg += (param && param[i]) ? VariantTypeName(param[i]->Type())
+                                   : TJS_W("null");
+        msg += TJS_W("]");
+    }
+    TVPAddLog(msg);
+}
+
+inline tjs_error EntryUpdateObjectCb(tTJSVariant *result, tjs_int numparams,
+                                     tTJSVariant **param, iTJSDispatch2 *) {
+    LogCompatArgsOnce(TJS_W("entryUpdateObject"), numparams, param);
+    if(result) *result = true;
+    return TJS_S_OK;
+}
+
+inline tjs_error CopyLayerCb(tTJSVariant *result, tjs_int numparams,
+                             tTJSVariant **param, iTJSDispatch2 *) {
+    LogCompatArgsOnce(TJS_W("copyLayer"), numparams, param);
+    if(result) *result = true;
+    return TJS_S_OK;
+}
+
+inline tjs_error DrawAffineCb(tTJSVariant *result, tjs_int numparams,
+                              tTJSVariant **param, iTJSDispatch2 *) {
+    LogCompatArgsOnce(TJS_W("drawAffine"), numparams, param);
+    if(result) *result = true;
+    return TJS_S_OK;
+}
+
+inline tjs_error CreateObjectByExpression(tTJSVariant *result,
+                                          const tjs_char *expression) {
+    if(!result || !expression) return TJS_S_OK;
+    try {
+        TVPExecuteExpression(ttstr(expression), result);
+    } catch(...) {
+        result->Clear();
+        return TJS_E_FAIL;
+    }
+    return TJS_S_OK;
+}
+
+inline void InvokeLoadIfPresent(tTJSVariant &object, tjs_int numparams,
+                                tTJSVariant **param) {
+    if(numparams <= 0 || !param || object.Type() != tvtObject) return;
+    iTJSDispatch2 *dispatch = object.AsObjectNoAddRef();
+    if(!dispatch) return;
+    tjs_uint hint = 0;
+    dispatch->FuncCall(0, TJS_W("load"), &hint, nullptr, numparams, param,
+                       dispatch);
+}
+
+inline tjs_error CreateModelCb(tTJSVariant *result, tjs_int numparams,
+                               tTJSVariant **param, iTJSDispatch2 *) {
+    tTJSVariant model;
+    tjs_error er = CreateObjectByExpression(&model, TJS_W("new Live2DModel()"));
+    if(TJS_FAILED(er)) {
+        if(result) result->Clear();
+        return er;
+    }
+    InvokeLoadIfPresent(model, numparams, param);
+    if(result) *result = model;
+    return TJS_S_OK;
+}
+
+inline tjs_error CreateMatrixCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                                iTJSDispatch2 *) {
+    return CreateObjectByExpression(result, TJS_W("new Live2DMatrix()"));
+}
+
+inline tjs_error CreateDeviceCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                                iTJSDispatch2 *) {
+    return CreateObjectByExpression(result, TJS_W("new Live2DDevice()"));
+}
+
 inline void SetObjectMethod(iTJSDispatch2 *obj, const tjs_char *name,
                             tTJSNativeClassMethodCallback cb) {
     if(!obj || !name || !cb) return;
@@ -55,21 +153,29 @@ inline tjs_error CreateFallbackModuleObject(tTJSVariant *result, tjs_int width,
     dict->PropSet(TJS_MEMBERENSURE, TJS_W("screenWidth"), nullptr, &wv, dict);
     dict->PropSet(TJS_MEMBERENSURE, TJS_W("screenHeight"), nullptr, &hv, dict);
 
-    SetObjectMethod(dict, TJS_W("entryUpdateObject"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("entryUpdateObject"), EntryUpdateObjectCb);
     SetObjectMethod(dict, TJS_W("setScreenSize"), ReturnTrueCb);
     SetObjectMethod(dict, TJS_W("makeCurrent"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("beginScene"), ReturnTrueCb);
     SetObjectMethod(dict, TJS_W("endScene"), ReturnTrueCb);
     SetObjectMethod(dict, TJS_W("finalize"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("render"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("glesEntry"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("glesRemove"), ReturnTrueCb);
     SetObjectMethod(dict, TJS_W("capture"), ReturnFirstArgOrTrueCb);
     SetObjectMethod(dict, TJS_W("captureScreen"), ReturnFirstArgOrTrueCb);
     SetObjectMethod(dict, TJS_W("glesCapture"), ReturnFirstArgOrTrueCb);
     SetObjectMethod(dict, TJS_W("glesCaptureScreen"), ReturnFirstArgOrTrueCb);
-    SetObjectMethod(dict, TJS_W("copyLayer"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("glesCopyLayer"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("copyLayer"), CopyLayerCb);
+    SetObjectMethod(dict, TJS_W("glesCopyLayer"), CopyLayerCb);
     SetObjectMethod(dict, TJS_W("drawLayer"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("drawAffine"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("drawAffineGLES"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("glesDrawLayer"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("drawAffine"), DrawAffineCb);
+    SetObjectMethod(dict, TJS_W("drawAffineGLES"), DrawAffineCb);
     SetObjectMethod(dict, TJS_W("setMatrix"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("createModel"), CreateModelCb);
+    SetObjectMethod(dict, TJS_W("createMatrix"), CreateMatrixCb);
+    SetObjectMethod(dict, TJS_W("createDevice"), CreateDeviceCb);
 
     if(result) *result = tTJSVariant(dict, dict);
     dict->Release();

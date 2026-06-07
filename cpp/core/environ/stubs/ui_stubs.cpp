@@ -12,6 +12,7 @@
  */
 
 #include <spdlog/spdlog.h>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -21,6 +22,10 @@
 #include <cstdlib>
 #include <chrono>
 #include <mutex>
+#include <sstream>
+#if defined(__EMSCRIPTEN__)
+#include <sys/stat.h>
+#endif
 
 #include "tjsCommHead.h"
 #include "tjsConfig.h"
@@ -37,6 +42,10 @@
 #include <GLES3/gl3.h>
 #endif
 #include "SysInitImpl.h"
+
+#if defined(__EMSCRIPTEN__)
+extern "C" void TVPEngineApiNotifyWebStartupReady() __attribute__((weak));
+#endif
 
 // ---------------------------------------------------------------------------
 // Live2D post-draw hook — called after scene blit in UpdateDrawBuffer
@@ -92,6 +101,107 @@ bool ShouldLogHostRenderTrace() {
 }
 #endif
 
+struct HostFrameStats {
+    size_t sampled = 0;
+    size_t alpha = 0;
+    size_t visible = 0;
+    size_t color = 0;
+    size_t any = 0;
+    int maxAlpha = 0;
+    int maxColor = 0;
+};
+
+HostFrameStats SampleHostFrameRegion(const uint8_t *rgba, uint32_t width,
+                                     uint32_t height, uint32_t stride,
+                                     uint32_t left, uint32_t top,
+                                     uint32_t right, uint32_t bottom) {
+    HostFrameStats stats;
+    if (rgba == nullptr || width == 0 || height == 0 || stride < width * 4u) {
+        return stats;
+    }
+    left = std::min(left, width);
+    right = std::min(right, width);
+    top = std::min(top, height);
+    bottom = std::min(bottom, height);
+    if (left >= right || top >= bottom) {
+        return stats;
+    }
+
+    const size_t region_width = static_cast<size_t>(right - left);
+    const size_t region_height = static_cast<size_t>(bottom - top);
+    const size_t pixels = region_width * region_height;
+    const size_t step = std::max<size_t>(1u, pixels / 4096u);
+    for (size_t index = 0; index < pixels; index += step) {
+        const size_t local_y = index / region_width;
+        const size_t local_x = index - local_y * region_width;
+        const uint32_t x = left + static_cast<uint32_t>(local_x);
+        const uint32_t y = top + static_cast<uint32_t>(local_y);
+        const uint8_t *px = rgba + static_cast<size_t>(y) * stride +
+                            static_cast<size_t>(x) * 4u;
+        const int r = px[0];
+        const int g = px[1];
+        const int b = px[2];
+        const int a = px[3];
+        const int max_rgb = std::max(r, std::max(g, b));
+        ++stats.sampled;
+        if (a != 0) ++stats.alpha;
+        if (max_rgb != 0) ++stats.color;
+        if ((r | g | b | a) != 0) ++stats.any;
+        if (a != 0 && max_rgb != 0) ++stats.visible;
+        stats.maxAlpha = std::max(stats.maxAlpha, a);
+        stats.maxColor = std::max(stats.maxColor, max_rgb);
+    }
+    return stats;
+}
+
+std::string FormatHostFrameStats(const HostFrameStats &stats) {
+    std::ostringstream out;
+    out << "sampled=" << stats.sampled
+        << " alpha=" << stats.alpha
+        << " visible=" << stats.visible
+        << " color=" << stats.color
+        << " any=" << stats.any
+        << " maxA=" << stats.maxAlpha
+        << " maxC=" << stats.maxColor;
+    return out.str();
+}
+
+void LogHostFinalFrameStats(const char *source, const uint8_t *rgba,
+                            uint32_t width, uint32_t height, uint32_t stride,
+                            uint64_t serial) {
+    if (rgba == nullptr || width == 0 || height == 0 || stride == 0) {
+        return;
+    }
+    const HostFrameStats full =
+        SampleHostFrameRegion(rgba, width, height, stride, 0, 0, width, height);
+    const HostFrameStats title_region =
+        SampleHostFrameRegion(rgba, width, height, stride, 160, 800, 1620, 1060);
+
+    static int log_count = 0;
+    static bool had_previous_visibility = false;
+    static bool previous_full_visible = false;
+    static bool previous_title_visible = false;
+    const bool full_visible = full.visible > 0;
+    const bool title_visible = title_region.visible > 0;
+    const bool visibility_changed =
+        !had_previous_visibility || full_visible != previous_full_visible ||
+        title_visible != previous_title_visible;
+    const bool periodic = serial % 120u == 0;
+    const bool should_log = log_count < 18 || visibility_changed || periodic;
+    had_previous_visibility = true;
+    previous_full_visible = full_visible;
+    previous_title_visible = title_visible;
+    if (!should_log || (log_count >= 500 && !periodic && !visibility_changed)) {
+        return;
+    }
+    ++log_count;
+    spdlog::info("host final frame: source={} serial={} size={}x{} full=[{}] "
+                 "title_region=[{}]",
+                 source, static_cast<unsigned long long>(serial), width, height,
+                 FormatHostFrameStats(full),
+                 FormatHostFrameStats(title_region));
+}
+
 bool StoreLatestCpuFrameFromTexture(iTVPTexture2D *tex) {
     if (!tex) return false;
     const tjs_uint tw = tex->GetWidth();
@@ -119,15 +229,22 @@ bool StoreLatestCpuFrameFromTexture(iTVPTexture2D *tex) {
         }
     }
 
-    std::lock_guard<std::mutex> lock(g_host_frame_mutex);
-    g_host_frame_rgba.swap(frame);
-    g_host_frame_width = static_cast<uint32_t>(tw);
-    g_host_frame_height = static_cast<uint32_t>(th);
-    g_host_frame_stride = dst_stride;
-    g_host_frame_serial += 1;
-    g_host_gpu_texture = 0;
-    g_host_gpu_width = 0;
-    g_host_gpu_height = 0;
+    uint64_t serial = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+        serial = g_host_frame_serial + 1;
+        LogHostFinalFrameStats("cpu_store", frame.data(),
+                               static_cast<uint32_t>(tw),
+                               static_cast<uint32_t>(th), dst_stride, serial);
+        g_host_frame_rgba.swap(frame);
+        g_host_frame_width = static_cast<uint32_t>(tw);
+        g_host_frame_height = static_cast<uint32_t>(th);
+        g_host_frame_stride = dst_stride;
+        g_host_frame_serial = serial;
+        g_host_gpu_texture = 0;
+        g_host_gpu_width = 0;
+        g_host_gpu_height = 0;
+    }
     return true;
 }
 
@@ -137,6 +254,18 @@ void TVPHostForceDrawDeviceShow() {
     if (g_host_window_owner != nullptr) {
         g_host_window_owner->UpdateContent();
         g_host_window_owner->DeliverDrawDeviceShow();
+    }
+}
+
+extern "C" void TVPHostActivateMainWindow() {
+    if (Application != nullptr) {
+        Application->OnActivate();
+    }
+    if (g_host_window_owner != nullptr) {
+        g_host_window_owner->FireOnActivate(true);
+        g_host_window_owner->UpdateContent();
+        g_host_window_owner->DeliverDrawDeviceShow();
+        spdlog::info("TVPHostActivateMainWindow: dispatched activate event");
     }
 }
 
@@ -885,6 +1014,10 @@ iWindowLayer *TVPCreateAndAddWindow(tTJSNI_Window *w) {
     auto *layer = new HostWindowLayer(w);
     spdlog::info("TVPCreateAndAddWindow: created HostWindowLayer ({}x{})",
                  layer->GetWidth(), layer->GetHeight());
+#if defined(__EMSCRIPTEN__)
+    if(TVPEngineApiNotifyWebStartupReady)
+        TVPEngineApiNotifyWebStartupReady();
+#endif
     return layer;
 }
 
@@ -946,7 +1079,11 @@ static std::string s_internalPreferencePath;
 
 const std::string &TVPGetInternalPreferencePath() {
     if (s_internalPreferencePath.empty()) {
-#if defined(__APPLE__)
+#if defined(__EMSCRIPTEN__)
+        s_internalPreferencePath = "/userfs/krkr2/";
+        mkdir("/userfs", 0777);
+        mkdir("/userfs/krkr2", 0777);
+#elif defined(__APPLE__)
         const char *home = getenv("HOME");
         if (home) {
             s_internalPreferencePath = std::string(home) + "/Library/Application Support/krkr2/";
@@ -972,7 +1109,9 @@ const std::string &TVPGetInternalPreferencePath() {
 #else
         s_internalPreferencePath = "/tmp/krkr2/";
 #endif
+#if !defined(__EMSCRIPTEN__)
         std::filesystem::create_directories(s_internalPreferencePath);
+#endif
     }
     return s_internalPreferencePath;
 }
@@ -991,7 +1130,11 @@ const std::vector<std::string> &TVPGetApplicationHomeDirectory() {
                 dir.pop_back();
             s_appHomeDirs.push_back(dir);
         } else {
+#if defined(__EMSCRIPTEN__)
+            s_appHomeDirs.push_back("/userfs");
+#else
             s_appHomeDirs.push_back(std::filesystem::current_path().string());
+#endif
         }
     }
     return s_appHomeDirs;

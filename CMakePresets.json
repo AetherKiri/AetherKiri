@@ -242,6 +242,44 @@
         "CMAKE_BUILD_TYPE": "Release",
         "VCPKG_BUILD_TYPE": "release"
       }
+    },
+    {
+      "name": "Web Config",
+      "generator": "Ninja",
+      "hidden": true,
+      "cacheVariables": {
+        "WEB": true,
+        "VCPKG_TARGET_TRIPLET": "wasm32-emscripten",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/vcpkg/triplets",
+        "VCPKG_BUILD_TYPE": "release",
+        "CMAKE_POSITION_INDEPENDENT_CODE": true,
+        "CMAKE_C_FLAGS": "-fPIC -pthread -msimd128",
+        "CMAKE_CXX_FLAGS": "-fPIC -pthread -msimd128",
+        "CMAKE_EXE_LINKER_FLAGS": "-pthread -msimd128",
+        "CMAKE_SHARED_LINKER_FLAGS": "-pthread -msimd128",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "BUILD_TOOLS": false,
+        "ENABLE_TESTS": false,
+        "BUILD_ENGINE_API": true,
+        "BUILD_GODOT_EXTENSION": true,
+        "BUILD_GPU_BRIDGE": false
+      }
+    },
+    {
+      "name": "Web Debug Config",
+      "inherits": "Web Config",
+      "binaryDir": "${sourceDir}/out/web/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "Web Release Config",
+      "inherits": "Web Config",
+      "binaryDir": "${sourceDir}/out/web/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -292,6 +330,14 @@
     {
       "name": "Android arm64 Release Build",
       "configurePreset": "Android arm64 Release Config"
+    },
+    {
+      "name": "Web Debug Build",
+      "configurePreset": "Web Debug Config"
+    },
+    {
+      "name": "Web Release Build",
+      "configurePreset": "Web Release Config"
     }
   ]
 }
