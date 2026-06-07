@@ -63,6 +63,10 @@
  *  When enabled, disassembles bytecode and exports scripts during game load. */
 #define ENGINE_OPTION_EXPORT_SCRIPTS "export_scripts"
 
+/** Enable/disable appending recent engine logs to fatal error dialogs
+ *  ("0"/"1", default "0"). */
+#define ENGINE_OPTION_ERROR_DIALOG_LOGS "error_dialog_logs"
+
 /** Internal plugin startup policy ("krkrsdl3" / "aether_all"). */
 #define ENGINE_OPTION_PLUGIN_LOAD_MODE "plugin_load_mode"
 
