@@ -222,7 +222,7 @@ build_abi() {
         if [[ ! -e "$PROJECT_ROOT/out/android/$abi/debug/vcpkg_installed" ]]; then
             ln -s ../release/vcpkg_installed "$PROJECT_ROOT/out/android/$abi/debug/vcpkg_installed"
         fi
-    elif [[ -L "$PROJECT_ROOT/out/android/$abi/debug/vcpkg_installed" ]]; then
+    elif [[ "${SKIP_ANDROID_VCPKG_INSTALL:-}" != "1" && -L "$PROJECT_ROOT/out/android/$abi/debug/vcpkg_installed" ]]; then
         rm -f "$PROJECT_ROOT/out/android/$abi/debug/vcpkg_installed"
     fi
 
