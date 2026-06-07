@@ -104,7 +104,7 @@ jobs:
             exit 1
           fi
 
-          (cd "${GITHUB_WORKSPACE}" && VCPKG_BUILD_TYPE=release "$VCPKG_BIN" install \
+          (cd "${GITHUB_WORKSPACE}" && "$VCPKG_BIN" install \
             --triplet arm64-android \
             --x-install-root="$VCPKG_ROOT/installed" \
             --x-manifest-root="${GITHUB_WORKSPACE}" \

@@ -214,18 +214,6 @@ build_abi() {
         )
     fi
 
-    if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
-        # Some vcpkg Android packages embed absolute pkg-config paths from the
-        # first local install. Keep that compatibility path available so
-        # release configure can consume restored binary packages.
-        mkdir -p "$PROJECT_ROOT/out/android/$abi/debug"
-        if [[ ! -e "$PROJECT_ROOT/out/android/$abi/debug/vcpkg_installed" ]]; then
-            ln -s ../release/vcpkg_installed "$PROJECT_ROOT/out/android/$abi/debug/vcpkg_installed"
-        fi
-    elif [[ "${SKIP_ANDROID_VCPKG_INSTALL:-}" != "1" && -L "$PROJECT_ROOT/out/android/$abi/debug/vcpkg_installed" ]]; then
-        rm -f "$PROJECT_ROOT/out/android/$abi/debug/vcpkg_installed"
-    fi
-
     cmake --preset "$cmake_config_preset" --fresh -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" "${cmake_config_args[@]}"
     cmake --build --preset "$cmake_build_preset" -- -j"$PARALLEL_JOBS"
 
