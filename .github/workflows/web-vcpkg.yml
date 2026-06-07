@@ -122,6 +122,9 @@ jobs:
           export VCPKG_ROOT="${GITHUB_WORKSPACE}/.devtools/vcpkg"
           export CMAKE_MAKE_PROGRAM="$(command -v ninja || command -v ninja-build)"
           EMSCRIPTEN_TOOLCHAIN="${EMSCRIPTEN_ROOT}/cmake/Modules/Platform/Emscripten.cmake"
+          embuilder --pic build libunwind-mt-legacyexcept
+          embuilder --pic build libc++abi-mt-legacyexcept
+          embuilder --pic build libc++-mt-legacyexcept
 
           rm -rf "${GITHUB_WORKSPACE}/out/web/release/vcpkg_installed"
           mkdir -p "${GITHUB_WORKSPACE}/out/web/release"

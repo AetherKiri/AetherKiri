@@ -70,60 +70,36 @@ set_target_properties(aether_kiri_godot PROPERTIES
 )
 
 if(WEB OR EMSCRIPTEN)
-    execute_process(
-        COMMAND
-            ${CMAKE_CXX_COMPILER}
-            -fPIC
-            -pthread
-            -fwasm-exceptions
-            -sWASM_LEGACY_EXCEPTIONS=1
-            -sSIDE_MODULE=1
-            --print-file-name=libc++-mt-legacyexcept.a
-        OUTPUT_VARIABLE AETHERKIRI_WEB_LIBCXX_LEGACYEXCEPT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    execute_process(
-        COMMAND
-            ${CMAKE_CXX_COMPILER}
-            -fPIC
-            -pthread
-            -fwasm-exceptions
-            -sWASM_LEGACY_EXCEPTIONS=1
-            -sSIDE_MODULE=1
-            --print-file-name=libunwind-mt-legacyexcept.a
-        OUTPUT_VARIABLE AETHERKIRI_WEB_LIBUNWIND_LEGACYEXCEPT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    execute_process(
-        COMMAND
-            ${CMAKE_CXX_COMPILER}
-            -fPIC
-            -pthread
-            -fwasm-exceptions
-            -sWASM_LEGACY_EXCEPTIONS=1
-            -sSIDE_MODULE=1
-            --print-file-name=libc++abi-mt-legacyexcept.a
-        OUTPUT_VARIABLE AETHERKIRI_WEB_LIBCXXABI_LEGACYEXCEPT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    if(NOT EXISTS "${AETHERKIRI_WEB_LIBCXX_LEGACYEXCEPT}")
-        message(FATAL_ERROR
-            "libc++-mt-legacyexcept.a was not found. "
-            "Run `embuilder --pic build libc++-mt-legacyexcept` after activating Emscripten."
+    function(aetherkiri_find_web_pic_system_archive out_var archive_name)
+        execute_process(
+            COMMAND
+                ${CMAKE_CXX_COMPILER}
+                -pthread
+                -fwasm-exceptions
+                -sWASM_LEGACY_EXCEPTIONS=1
+                -sSIDE_MODULE=1
+                --print-file-name=${archive_name}
+            OUTPUT_VARIABLE _archive_path
+            OUTPUT_STRIP_TRAILING_WHITESPACE
         )
-    endif()
-    if(NOT EXISTS "${AETHERKIRI_WEB_LIBUNWIND_LEGACYEXCEPT}")
-        message(FATAL_ERROR
-            "libunwind-mt-legacyexcept.a was not found. "
-            "Run `embuilder --pic build libunwind-mt-legacyexcept` after activating Emscripten."
-        )
-    endif()
-    if(NOT EXISTS "${AETHERKIRI_WEB_LIBCXXABI_LEGACYEXCEPT}")
-        message(FATAL_ERROR
-            "libc++abi-mt-legacyexcept.a was not found. "
-            "Run `embuilder --pic build libc++abi-mt-legacyexcept` after activating Emscripten."
-        )
-    endif()
+        get_filename_component(_archive_dir "${_archive_path}" DIRECTORY)
+        set(_pic_archive_path "${_archive_dir}/pic/${archive_name}")
+        if(EXISTS "${_pic_archive_path}")
+            set(${out_var} "${_pic_archive_path}" PARENT_SCOPE)
+        elseif(EXISTS "${_archive_path}" AND _archive_path MATCHES "/pic/")
+            set(${out_var} "${_archive_path}" PARENT_SCOPE)
+        else()
+            string(REGEX REPLACE "\\.a$" "" _embuilder_name "${archive_name}")
+            message(FATAL_ERROR
+                "${archive_name} PIC archive was not found. "
+                "Run `embuilder --pic build ${_embuilder_name}` after activating Emscripten."
+            )
+        endif()
+    endfunction()
+
+    aetherkiri_find_web_pic_system_archive(AETHERKIRI_WEB_LIBCXX_LEGACYEXCEPT libc++-mt-legacyexcept.a)
+    aetherkiri_find_web_pic_system_archive(AETHERKIRI_WEB_LIBUNWIND_LEGACYEXCEPT libunwind-mt-legacyexcept.a)
+    aetherkiri_find_web_pic_system_archive(AETHERKIRI_WEB_LIBCXXABI_LEGACYEXCEPT libc++abi-mt-legacyexcept.a)
     target_sources(aether_kiri_godot PRIVATE
         src/web_longjmp_stubs.cpp
     )
