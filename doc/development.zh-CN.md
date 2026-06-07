@@ -55,8 +55,9 @@ CPU 上传只能作为 debug fallback。性能优化应优先落到 Godot Native
 | `build/build_macos.sh` | 构建 macOS C++ core/GDExtension，复制 dylib，并导出 Godot macOS app。 |
 | `build/build_ios.sh` | 构建 iOS 真机或模拟器静态库，导出并 patch Xcode 工程。 |
 | `build/build_android.sh` | 构建 Android native 库，并通过 Godot 导出 APK。 |
+| `build/build_web.sh` | 构建 Emscripten Web GDExtension side module，并在 dlink 模板可用时导出 Godot Web app。 |
 | `CMakeLists.txt` | 顶层 native build，组织 engine API、GDExtension、core、plugins、tests 和 tools。 |
-| `CMakePresets.json` | macOS、iOS、Android 等平台的 CMake preset 和输出目录。 |
+| `CMakePresets.json` | macOS、iOS、Android、Web 等平台的 CMake preset 和输出目录。 |
 | `vcpkg.json` | native 依赖清单。Godot Native 默认路径不能依赖 ANGLE。 |
 | `apps/godot_app/project.godot` | Godot 项目设置和默认输入/导出配置。不要提交本地游戏路径。 |
 | `apps/godot_app/export_presets.cfg` | Godot 导出 preset。签名相关配置可能需要本地覆盖。 |
@@ -99,13 +100,25 @@ Android 还需要：
 - Android SDK 和 NDK。
 - `ANDROID_HOME` 或 `ANDROID_SDK_ROOT`。未设置时脚本会尝试 `$HOME/Library/Android/sdk`。
 
+Web 还需要：
+
+- Emscripten/emsdk，并确保 `emcc`、`em++`、`emar` 在 `PATH` 中。
+- Godot Web GDExtension/dlink export templates，放在 Godot export template
+  目录下并命名为 `web_dlink_debug.zip` 和
+  `web_dlink_release.zip`。
+- 本地 Web dev server 使用 TypeScript/Vite，需要 Node.js 和 npm。
+
 常用环境变量：
 
 | 变量 | 作用 |
 | --- | --- |
 | `GODOT_BIN` | 覆盖 Godot 可执行文件路径。 |
 | `GODOT_EXPORT_TEMPLATE` | 覆盖平台 export template zip。 |
+| `GODOT_TEMPLATE_DIR` | 覆盖 Godot export template 目录，Web dlink 模板常用。 |
 | `VCPKG_ROOT` | 覆盖 vcpkg checkout。 |
+| `EMSDK` / `EMSCRIPTEN_ROOT` | Web 构建使用的 Emscripten SDK/toolchain 位置。 |
+| `AETHERKIRI_GAME_ROOT` / `AETHERKIRI_GAME_ROOTS` | 仅 Vite 本地 Web 调试使用，只读 RangeFS 游戏根目录。 |
+| `AETHERKIRI_WEB_AUTO_START` | 仅 Vite 本地 Web 调试使用，启动后自动挂载并进入配置的游戏。 |
 | `JOBS` | native 并行构建任务数。 |
 | `IOS_SIMULATOR_ARCH` | iOS 模拟器架构，`arm64` 或 `x86_64`。 |
 | `AETHERKIRI_TEST_CONFIG` | JSON probe profile 路径。 |
@@ -128,6 +141,8 @@ Android 还需要：
 ./build.sh ios release
 ./build.sh android debug --abi=arm64-v8a
 ./build.sh android release --abi=arm64-v8a
+./build.sh web debug
+./build.sh web release
 ```
 
 清理某个平台构建：
@@ -197,6 +212,53 @@ Android Release：
 ```
 
 release APK 默认未配置正式签名。安装或分发前需要用 release keystore 签名。
+
+Web Debug：
+
+```bash
+source /path/to/emsdk/emsdk_env.sh
+./build.sh web debug
+npm install
+npm run web:dev:debug
+```
+
+Web Release：
+
+```bash
+source /path/to/emsdk/emsdk_env.sh
+npm install
+npm run web:build:release
+npm run web:dev:release
+```
+
+原生 side module 输出到
+`apps/godot_app/bin/web/<debug|release>/aether_kiri_godot.wasm`。完整的 Godot
+Web 导出产物在 `out/godot/web/<debug|release>/`，浏览器入口是 `index.html`。
+正式发布时把 `out/godot/web/release/` 里的内容上传到静态服务器或 CDN。
+
+Web 导出按线程 + wasm SIMD 优先构建，浏览器部署时需要跨源隔离相关 HTTP 头；
+本地测试默认由 TypeScript/Vite dev server 提供这些头。生产服务器需要给
+HTML、JavaScript、wasm、pck 和资源文件返回：
+
+```text
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+Cross-Origin-Resource-Policy: same-origin
+```
+
+同时需要配置 `.wasm` 的 MIME 为 `application/wasm`，`.pck` 为
+`application/octet-stream`。Web 当前通过 `cpp/core/environ/web/Platform.cpp`
+里的保守 platform shim 使用 Emscripten 虚拟文件系统。云端 Web 版不能依赖服务器
+环境变量读取用户电脑上的游戏；正式导入路径是浏览器文件/目录选择器，用户授权后将
+本地 `File`/`Blob` 对象以只读 Range FS 挂载到 `/webgames/<id>`。这样 2-3G 游戏包
+不会进入 `copyToFS` 或 MEMFS。存档、游戏配置和其他运行时写入会持久化到当前站点
+IndexedDB 支持的 `/userfs`。
+
+本地自动化调试可用
+`AETHERKIRI_GAME_ROOT=/absolute/path AETHERKIRI_WEB_AUTO_START=1 npm run web:dev:release`。
+多个根目录可配合 `AETHERKIRI_WEB_AUTO_START_INDEX` 或
+`AETHERKIRI_WEB_AUTO_START_NAME` 选择自动启动项。这些变量只作为 Vite 本地调试挂载，
+不能作为云端部署方案。
 
 iOS/iPadOS 上通过“文件”App 把游戏复制到：
 
@@ -296,6 +358,7 @@ out/godot/macos/debug/AetherKiri.app/Contents/MacOS/AetherKiri \
 ./build.sh ios debug --simulator
 ./build.sh ios release
 ./build.sh android debug --abi=arm64-v8a
+./build.sh web debug
 ```
 
 渲染迁移检查：

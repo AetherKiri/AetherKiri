@@ -28,6 +28,21 @@ namespace PSB {
             return total;
         }
 
+        bool IsDebugPSBKey(const std::string &key) {
+            return key.rfind("main.psb/", 0) == 0 ||
+                key.rfind("title.psb/", 0) == 0 ||
+                key.rfind("title.pimg/", 0) == 0 ||
+                key.rfind("chapter.psb/", 0) == 0 ||
+                key.rfind("autoskip.psb/", 0) == 0;
+        }
+
+        bool IsDebugPSBArchive(const std::string &archiveKey) {
+            return archiveKey == "main.psb" || archiveKey == "title.psb" ||
+                archiveKey == "title.pimg" ||
+                archiveKey == "chapter.psb" ||
+                archiveKey == "autoskip.psb";
+        }
+
         bool IsSupportedImageHeader(const std::vector<uint8_t> &data) {
             if(data.size() >= 8 && data[0] == 0x89 && data[1] == 0x50 &&
                data[2] == 0x4e && data[3] == 0x47) {
@@ -195,10 +210,8 @@ namespace PSB {
                 }
             }
 
-            if(LOGGER && (info.debugKey.rfind("main.psb/", 0) == 0 ||
-                          info.debugKey.rfind("title.psb/", 0) == 0 ||
-                          info.debugKey.rfind("chapter.psb/", 0) == 0 ||
-                          info.debugKey.rfind("autoskip.psb/", 0) == 0)) {
+            const bool debugKey = IsDebugPSBKey(info.debugKey);
+            if(LOGGER && debugKey) {
                 LOGGER->info(
                     "psb build: key={} decodedAlign={} decodedSize={} rawSize={}",
                     info.debugKey, decodedAlign, src->size(), rawSrc.size());
@@ -778,9 +791,7 @@ namespace PSB {
                     if(!resource)
                         continue;
                     media.add(archiveKey + "/" + name, resource);
-                    if(logger && logged < 40 &&
-                       (archiveKey == "main.psb" || archiveKey == "title.psb" ||
-                        archiveKey == "chapter.psb" || archiveKey == "autoskip.psb")) {
+                    if(logger && logged < 40 && IsDebugPSBArchive(archiveKey)) {
                         logger->info("psb register: {}/{}", archiveKey, name);
                         ++logged;
                     }
@@ -803,9 +814,7 @@ namespace PSB {
                 if(name.empty())
                     continue;
                 media.add(archiveKey + "/" + name, resource, image);
-                if(logger && logged < 120 &&
-                   (archiveKey == "main.psb" || archiveKey == "title.psb" ||
-                    archiveKey == "chapter.psb" || archiveKey == "autoskip.psb")) {
+                if(logger && logged < 120 && IsDebugPSBArchive(archiveKey)) {
                     logger->info("psb register: {}/{}", archiveKey, name);
                     ++logged;
                 }
@@ -1122,10 +1131,7 @@ namespace PSB {
                                      name);
             return nullptr;
         }
-        if(LOGGER && (resolvedKey.rfind("main.psb/", 0) == 0 ||
-                      resolvedKey.rfind("title.psb/", 0) == 0 ||
-                      resolvedKey.rfind("chapter.psb/", 0) == 0 ||
-                      resolvedKey.rfind("autoskip.psb/", 0) == 0)) {
+        if(LOGGER && IsDebugPSBKey(resolvedKey)) {
             const uint32_t header =
                 res->data.size() >= 4
                 ? static_cast<uint32_t>(res->data[0]) |
@@ -1142,10 +1148,7 @@ namespace PSB {
         }
         if(!convertedImage && hasImageInfo && !IsSupportedImageHeader(res->data)) {
             convertedImage = BuildBmpFromRaw(imageInfo, res);
-            if(LOGGER && (resolvedKey.rfind("main.psb/", 0) == 0 ||
-                          resolvedKey.rfind("title.psb/", 0) == 0 ||
-                          resolvedKey.rfind("chapter.psb/", 0) == 0 ||
-                          resolvedKey.rfind("autoskip.psb/", 0) == 0)) {
+            if(LOGGER && IsDebugPSBKey(resolvedKey)) {
                 LOGGER->info(
                     "psb open: convert key={} ok={} converted={} type={}",
                     resolvedKey, convertedImage ? 1 : 0,
@@ -1168,10 +1171,7 @@ namespace PSB {
 
         const auto &streamBytes =
             convertedImage ? *convertedImage : res->data;
-        if(LOGGER && (resolvedKey.rfind("main.psb/", 0) == 0 ||
-                      resolvedKey.rfind("title.psb/", 0) == 0 ||
-                      resolvedKey.rfind("chapter.psb/", 0) == 0 ||
-                      resolvedKey.rfind("autoskip.psb/", 0) == 0)) {
+        if(LOGGER && IsDebugPSBKey(resolvedKey)) {
             const uint32_t outHeader =
                 streamBytes.size() >= 4
                 ? static_cast<uint32_t>(streamBytes[0]) |

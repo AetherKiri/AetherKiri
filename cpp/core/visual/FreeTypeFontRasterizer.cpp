@@ -12,6 +12,7 @@
 #endif
 #include "MsgIntf.h"
 #include "FontSystem.h"
+#include "FontImpl.h"
 #include <complex>
 #include <mutex>
 #include <string>
@@ -19,7 +20,6 @@
 
 extern void TVPUninitializeFreeFont();
 extern FontSystem *TVPFontSystem;
-extern const ttstr &TVPGetDefaultFontName();
 
 namespace {
 struct GlyphExtentCacheKey {
@@ -53,34 +53,68 @@ std::unordered_map<GlyphExtentCacheKey, GlyphExtentCacheValue,
 constexpr std::size_t TVPGlyphExtentCacheLimit = 32768;
 } // namespace
 
-void FreeTypeFontRasterizer::ApplyFallbackFace() {
-    if(!FaceFallback && Face &&
-       Face->GetFontName() != TVPGetDefaultFontName()) {
-        FaceFallback = new tFreeTypeFace(TVPGetDefaultFontName(), 0);
-    }
-    if(!FaceFallback)
+void FreeTypeFontRasterizer::ApplyFaceOptions(tFreeTypeFace *face) {
+    if(!face)
         return;
-    FaceFallback->SetHeight(CurrentFont.Height < 0 ? -CurrentFont.Height
-                                                   : CurrentFont.Height);
+    face->SetHeight(CurrentFont.Height < 0 ? -CurrentFont.Height
+                                           : CurrentFont.Height);
     if(CurrentFont.Flags & TVP_TF_ITALIC) {
-        FaceFallback->SetOption(TVP_TF_ITALIC);
+        face->SetOption(TVP_TF_ITALIC);
     } else {
-        FaceFallback->ClearOption(TVP_TF_ITALIC);
+        face->ClearOption(TVP_TF_ITALIC);
     }
     if(CurrentFont.Flags & TVP_TF_BOLD) {
-        FaceFallback->SetOption(TVP_TF_BOLD);
+        face->SetOption(TVP_TF_BOLD);
     } else {
-        FaceFallback->ClearOption(TVP_TF_BOLD);
+        face->ClearOption(TVP_TF_BOLD);
     }
     if(CurrentFont.Flags & TVP_TF_UNDERLINE) {
-        FaceFallback->SetOption(TVP_TF_UNDERLINE);
+        face->SetOption(TVP_TF_UNDERLINE);
     } else {
-        FaceFallback->ClearOption(TVP_TF_UNDERLINE);
+        face->ClearOption(TVP_TF_UNDERLINE);
     }
     if(CurrentFont.Flags & TVP_TF_STRIKEOUT) {
-        FaceFallback->SetOption(TVP_TF_STRIKEOUT);
+        face->SetOption(TVP_TF_STRIKEOUT);
     } else {
-        FaceFallback->ClearOption(TVP_TF_STRIKEOUT);
+        face->ClearOption(TVP_TF_STRIKEOUT);
+    }
+}
+
+void FreeTypeFontRasterizer::ClearFallbackFaces() {
+    for(auto *face : FaceFallbacks) {
+        delete face;
+    }
+    FaceFallbacks.clear();
+}
+
+void FreeTypeFontRasterizer::ApplyFallbackFaces() {
+    if(!Face || !FaceFallbacks.empty())
+        return;
+
+    std::vector<ttstr> candidates;
+    const ttstr &current = Face->GetFontName();
+    const ttstr &default_font = TVPGetDefaultFontName();
+    auto append_unique = [&](const ttstr &name) {
+        if(name.IsEmpty() || name == current)
+            return;
+        for(const auto &existing : candidates) {
+            if(existing == name)
+                return;
+        }
+        candidates.emplace_back(name);
+    };
+
+    append_unique(default_font);
+    std::vector<ttstr> all_fonts;
+    TVPGetAllFontList(all_fonts);
+    for(const auto &name : all_fonts) {
+        append_unique(name);
+    }
+
+    for(const auto &name : candidates) {
+        auto *fallback = new tFreeTypeFace(name, 0);
+        ApplyFaceOptions(fallback);
+        FaceFallbacks.emplace_back(fallback);
     }
 }
 
@@ -92,10 +126,7 @@ FreeTypeFontRasterizer::~FreeTypeFontRasterizer() {
 
     delete Face;
     Face = nullptr;
-    if(FaceFallback) {
-        delete FaceFallback;
-        FaceFallback = nullptr;
-    }
+    ClearFallbackFaces();
     TVPUninitializeFreeFont();
 }
 void FreeTypeFontRasterizer::AddRef() { RefCount++; }
@@ -107,10 +138,7 @@ void FreeTypeFontRasterizer::Release() {
 
         delete Face;
         Face = nullptr;
-        if(FaceFallback) {
-            delete FaceFallback;
-            FaceFallback = nullptr;
-        }
+        ClearFallbackFaces();
         delete this;
     }
 }
@@ -140,11 +168,13 @@ void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
         if(Face->GetFontName() != stdname) {
             delete Face;
             Face = nullptr;
+            ClearFallbackFaces();
             Face = new tFreeTypeFace(stdname, opt);
             recreate = true;
         }
     } else {
         Face = new tFreeTypeFace(stdname, opt);
+        ClearFallbackFaces();
         recreate = true;
     }
     Face->SetHeight(font.Height < 0 ? -font.Height : font.Height);
@@ -170,14 +200,19 @@ void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
             Face->ClearOption(TVP_TF_STRIKEOUT);
         }
     }
+    for(auto *fallback : FaceFallbacks) {
+        ApplyFaceOptions(fallback);
+    }
     const tjs_int height = font.Height < 0 ? -font.Height : font.Height;
     const ttstr &resolved_face = Face ? Face->GetFontName() : font.Face;
     CurrentExtentCacheFontKey = resolved_face.AsStdString() + "|" +
                                 std::to_string(height) + "|" +
-                                std::to_string(font.Flags);
+                                std::to_string(font.Flags) + "|" +
+                                std::to_string(TVPFontNames.GetCount());
     LastBitmap = nullptr;
 }
 //---------------------------------------------------------------------------
+static bool isUnicodeSpace(char16_t ch);
 void FreeTypeFontRasterizer::GetTextExtent(tjs_char ch, tjs_int &w,
                                            tjs_int &h) {
     if(!Face)
@@ -201,6 +236,19 @@ void FreeTypeFontRasterizer::GetTextExtent(tjs_char ch, tjs_int &w,
         if(Face->GetGlyphSizeFromCharcode(ch, metrics)) {
             resolved_w = metrics.CellIncX;
             resolved_h = metrics.CellIncY;
+        } else if(!isUnicodeSpace(ch)) {
+            ApplyFallbackFaces();
+            for(auto *fallback : FaceFallbacks) {
+                if(fallback->GetGlyphSizeFromCharcode(ch, metrics)) {
+                    resolved_w = metrics.CellIncX;
+                    resolved_h = metrics.CellIncY;
+                    break;
+                }
+            }
+            if(resolved_w == 0 && resolved_h == 0) {
+                resolved_w = Face->GetHeight();
+                resolved_h = resolved_w;
+            }
         } else {
             resolved_w = Face->GetHeight();
             resolved_h = resolved_w;
@@ -248,9 +296,11 @@ FreeTypeFontRasterizer::GetBitmap(const tTVPFontAndCharacterData &font,
     }
     tTVPCharacterData *data = Face->GetGlyphFromCharcode(font.Character);
     if(!data && !isUnicodeSpace(font.Character)) {
-        ApplyFallbackFace();
-        if(FaceFallback) {
-            data = FaceFallback->GetGlyphFromCharcode(font.Character);
+        ApplyFallbackFaces();
+        for(auto *fallback : FaceFallbacks) {
+            data = fallback->GetGlyphFromCharcode(font.Character);
+            if(data)
+                break;
         }
     }
     if(data == nullptr) {
@@ -309,6 +359,14 @@ void FreeTypeFontRasterizer::GetGlyphDrawRect(const ttstr &text,
         tjs_int ax, ay;
         tTVPRect rt(0, 0, 0, 0);
         bool result = Face->GetGlyphRectFromCharcode(rt, ch, ax, ay);
+        if(result == false && !isUnicodeSpace(ch)) {
+            ApplyFallbackFaces();
+            for(auto *fallback : FaceFallbacks) {
+                result = fallback->GetGlyphRectFromCharcode(rt, ch, ax, ay);
+                if(result)
+                    break;
+            }
+        }
         if(result == false)
             result = Face->GetGlyphRectFromCharcode(rt, Face->GetDefaultChar(),
                                                     ax, ay);

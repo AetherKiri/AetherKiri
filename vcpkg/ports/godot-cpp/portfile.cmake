@@ -17,6 +17,7 @@ vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS
         "-DPython3_EXECUTABLE=${PYTHON3}"
+        "-DGODOTCPP_DISABLE_EXCEPTIONS=OFF"
 )
 
 vcpkg_cmake_install()

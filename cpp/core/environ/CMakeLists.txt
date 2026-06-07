@@ -26,6 +26,8 @@ set(ENVIRON_SOURCE_FILES
 
     $<$<BOOL:${IOS}>:${ENVIRON_PATH}/apple/ios/platform.mm>
 
+    $<$<OR:$<BOOL:${WEB}>,$<BOOL:${EMSCRIPTEN}>>:${ENVIRON_PATH}/web/Platform.cpp>
+
     ${ENVIRON_PATH}/MainScene.cpp
 
     ${ENVIRON_PATH}/ConfigManager/GlobalConfigManager.cpp
@@ -44,6 +46,7 @@ set(ENVIRON_HEADERS_DIR
     ${ENVIRON_PATH}/
     ${ENVIRON_PATH}/win32
     $<$<BOOL:${ANDROID}>:${ENVIRON_PATH}/android>
+    $<$<OR:$<BOOL:${WEB}>,$<BOOL:${EMSCRIPTEN}>>:${ENVIRON_PATH}/web>
     ${ENVIRON_PATH}/sdl
 )
 

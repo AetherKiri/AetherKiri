@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 project(engine_api LANGUAGES C CXX)
 
-if(IOS)
+if(IOS OR WEB OR EMSCRIPTEN)
     add_library(engine_api STATIC
         src/engine_api.cpp
     )
@@ -22,9 +22,9 @@ endif()
 
 target_compile_features(engine_api PRIVATE cxx_std_17)
 
-if(IOS)
+if(IOS OR WEB OR EMSCRIPTEN)
     # iOS static library: ensure symbols are visible when linked into the
-    # Godot host export.
+    # Godot host export. Web links this static API into the side module.
     target_compile_definitions(engine_api PRIVATE ENGINE_API_EXPORT_SYMBOLS)
 else()
     target_compile_definitions(engine_api PRIVATE ENGINE_API_BUILD_SHARED)

@@ -5,6 +5,8 @@ const SETTINGS_KEY := "aether_kiri/render_backend"
 const GAME_PATH_KEY := "aether_kiri/game_path"
 const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
+const UI_FONT := preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
+const UI_SYMBOL_FONT := preload("res://assets/fonts/aetherkiri-runtime-symbols.ttf")
 
 const ENGINE_RESULT_OK := 0
 const STARTUP_IDLE := 0
@@ -78,7 +80,11 @@ var startup_poll_accum := 0.0
 var cached_startup_state := STARTUP_IDLE
 var perf_log_interval := PERF_LOG_INTERVAL
 var frame_spike_ms := 0.0
+var frame_probe_enabled := false
+var frame_probe_interval := 1.0
+var frame_probe_accum := 0.0
 var verbose_render_log := false
+var web_auto_start_attempted := false
 var perf_log_file: FileAccess
 var log_lines: PackedStringArray = []
 var suppress_mouse_until_msec := 0
@@ -103,6 +109,13 @@ const COLOR_ACCENT := Color(0.78, 0.35, 0.22, 1.0)
 const COLOR_ACCENT_SOFT := Color(0.90, 0.72, 0.64, 1.0)
 const COLOR_LINE := Color(0.84, 0.82, 0.76, 1.0)
 const HOME_CARD_SIZE := Vector2(260, 350)
+
+func _apply_ui_font() -> void:
+    var fallbacks: Array[Font] = [UI_SYMBOL_FONT]
+    UI_FONT.set_fallbacks(fallbacks)
+    var ui_theme := Theme.new()
+    ui_theme.set_default_font(UI_FONT)
+    theme = ui_theme
 
 func _build_ui() -> void:
     bg_rect = ColorRect.new()
@@ -411,7 +424,7 @@ func _build_home_view() -> void:
     title.add_theme_color_override("font_color", COLOR_TEXT)
     home_view.add_child(title)
 
-    var settings_button := _icon_button("⚙")
+    var settings_button := _icon_button("☰")
     settings_button.anchor_left = 1.0
     settings_button.anchor_right = 1.0
     settings_button.position = Vector2(-86, 92)
@@ -919,6 +932,8 @@ func _select_upscale_algorithm(value: String) -> void:
 func _empty_help_text() -> String:
     if OS.get_name() == "iOS":
         return "使用「文件」App 将游戏文件夹复制到：\n我的 iPhone / iPad > AetherKiri > Games\n然后点击「刷新」"
+    if OS.get_name() == "Web":
+        return "点击「导入」选择本地游戏目录或 XP3 文件"
     return "点击「导入」选择游戏目录或 XP3 文件"
 
 func _show_home() -> void:
@@ -1261,6 +1276,9 @@ func _on_refresh_or_import() -> void:
     if OS.get_name() == "iOS":
         _refresh_games()
         return
+    if OS.get_name() == "Web":
+        _show_web_import_picker()
+        return
     _show_import_picker()
 
 func _show_import_picker() -> void:
@@ -1300,6 +1318,283 @@ func _show_import_picker() -> void:
         _open_import_dialog(true)
     )
     box.add_child(xp3_button)
+    var cancel := Button.new()
+    cancel.text = "取消"
+    cancel.flat = true
+    cancel.pressed.connect(func(): modal_layer.visible = false)
+    box.add_child(cancel)
+
+func _web_eval_string(source: String) -> String:
+    if OS.get_name() != "Web":
+        return ""
+    var value = JavaScriptBridge.eval(source, true)
+    if value == null:
+        return ""
+    return String(value)
+
+func _web_sync_get_json(path: String):
+    var source := "(function(){var xhr=new XMLHttpRequest();xhr.open('GET',%s,false);xhr.send(null);if(xhr.status>=200&&xhr.status<300)return xhr.responseText;return JSON.stringify({error:'HTTP '+xhr.status});})()" % JSON.stringify(path)
+    var text := _web_eval_string(source)
+    if text.is_empty():
+        return null
+    return JSON.parse_string(text)
+
+func _web_game_from_mount_info(info: Dictionary) -> Dictionary:
+    return {
+        "name": String(info.get("name", "本地游戏")),
+        "path": String(info.get("gamePath", info.get("path", ""))),
+        "type": String(info.get("type", "Directory")),
+        "lastPlayed": 0,
+        "playDurationSeconds": 0,
+        "coverPath": "",
+        "developer": "",
+        "title": String(info.get("title", "")),
+        "webMountBackend": String(info.get("webMountBackend", "http")),
+        "webMountBaseUrl": String(info.get("baseUrl", "")),
+        "webMountGameId": String(info.get("webMountGameId", "")),
+        "webMountPoint": String(info.get("mountPoint", info.get("webMountPoint", ""))),
+    }
+
+func _mount_web_game(game: Dictionary) -> bool:
+    if OS.get_name() != "Web":
+        return true
+    var backend := String(game.get("webMountBackend", "http"))
+    var base_url := String(game.get("webMountBaseUrl", ""))
+    var game_id := String(game.get("webMountGameId", ""))
+    var mount_point := String(game.get("webMountPoint", ""))
+    if mount_point.is_empty() or (backend == "http" and base_url.is_empty()) or (backend == "blob" and game_id.is_empty()):
+        return true
+    var mounted_source := "(function(){return typeof AetherKiriIsHttpGameMounted==='function'&&AetherKiriIsHttpGameMounted(%s)?'1':'0';})()" % JSON.stringify(mount_point)
+    if _web_eval_string(mounted_source) == "1":
+        return true
+    var mount_source := ""
+    if backend == "blob":
+        mount_source = "(function(){if(typeof AetherKiriMountLocalBlobGame!=='function')return JSON.stringify({ok:false,error:'Browser local mount API is not ready'});return AetherKiriMountLocalBlobGame(%s,%s);})()" % [
+            JSON.stringify(mount_point),
+            JSON.stringify(game_id),
+        ]
+    else:
+        var manifest = _web_sync_get_json(base_url + "/manifest")
+        if not manifest is Dictionary or not manifest.has("files"):
+            _show_message("无法读取 Web 游戏挂载清单")
+            return false
+        var manifest_text := JSON.stringify(manifest)
+        mount_source = "(function(){if(typeof AetherKiriMountHttpGame!=='function')return JSON.stringify({ok:false,error:'Web mount API is not ready'});return AetherKiriMountHttpGame(%s,%s,%s);})()" % [
+            JSON.stringify(mount_point),
+            JSON.stringify(base_url),
+            JSON.stringify(manifest_text),
+        ]
+    var result_text := _web_eval_string(mount_source)
+    var result = JSON.parse_string(result_text)
+    if result is Dictionary and bool(result.get("ok", false)):
+        return true
+    var error := "未知错误"
+    if result is Dictionary:
+        error = String(result.get("error", error))
+    _show_message("Web 本地挂载失败：%s" % error)
+    return false
+
+func _web_local_picker_support() -> Dictionary:
+    var source := "(function(){if(typeof AetherKiriLocalPickerSupport!=='function')return JSON.stringify({directory:false,archive:false});return AetherKiriLocalPickerSupport();})()"
+    var text := _web_eval_string(source)
+    var parsed = JSON.parse_string(text)
+    return parsed if parsed is Dictionary else {}
+
+func _web_local_game_restore_state() -> Dictionary:
+    var source := "(function(){if(typeof AetherKiriLocalGameRestoreState!=='function')return JSON.stringify({done:true});return AetherKiriLocalGameRestoreState();})()"
+    var text := _web_eval_string(source)
+    var parsed = JSON.parse_string(text)
+    return parsed if parsed is Dictionary else {"done": true}
+
+func _web_dev_mounts() -> Array:
+    var response = _web_sync_get_json("/__aetherkiri/games")
+    if not response is Dictionary or not response.has("games"):
+        return []
+    var games = response.get("games", [])
+    return games if games is Array else []
+
+func _web_dev_config() -> Dictionary:
+    var response = _web_sync_get_json("/__aetherkiri/config")
+    return response if response is Dictionary else {}
+
+func _select_web_auto_start_mount(config: Dictionary, games: Array) -> Dictionary:
+    var desired_name := String(config.get("autoStartName", "")).strip_edges()
+    if not desired_name.is_empty():
+        for item in games:
+            if not item is Dictionary:
+                continue
+            var name := String(item.get("name", ""))
+            var id := String(item.get("id", ""))
+            var path := String(item.get("gamePath", item.get("path", "")))
+            if name == desired_name or id == desired_name or path == desired_name:
+                var named_match: Dictionary = item
+                return named_match
+        return {}
+
+    var index := int(config.get("autoStartIndex", 0))
+    if index < 0:
+        index = 0
+    if index < games.size() and games[index] is Dictionary:
+        var indexed_match: Dictionary = games[index]
+        return indexed_match
+    for item in games:
+        if item is Dictionary:
+            var fallback_match: Dictionary = item
+            return fallback_match
+    return {}
+
+func _save_game_dictionary_silent(game: Dictionary) -> bool:
+    var path := String(game.get("path", ""))
+    if path.is_empty() or not _path_exists(path):
+        return false
+    var games := _load_game_list()
+    var next: Array[Dictionary] = []
+    var replaced := false
+    for existing in games:
+        if String(existing.get("path", "")) != path:
+            next.append(existing)
+            continue
+        var merged := _merge_game_dictionary(existing, game)
+        next.append(merged)
+        replaced = true
+    if not replaced:
+        next.append(game)
+    _save_game_list(_dedupe_games(next))
+    ProjectSettings.set_setting(GAME_PATH_KEY, path)
+    ProjectSettings.save()
+    game_path.text = path
+    return true
+
+func _auto_start_web_dev_game() -> void:
+    if OS.get_name() != "Web" or web_auto_start_attempted:
+        return
+    web_auto_start_attempted = true
+    var config := _web_dev_config()
+    if not bool(config.get("autoStartGame", false)):
+        return
+    var dev_games := _web_dev_mounts()
+    if dev_games.is_empty():
+        _append_log("Web dev auto-start requested, but no AETHERKIRI_GAME_ROOT(S) mount is configured.")
+        print("AetherKiri Web dev auto-start requested, but no AETHERKIRI_GAME_ROOT(S) mount is configured.")
+        return
+    var mount_info := _select_web_auto_start_mount(config, dev_games)
+    if mount_info.is_empty():
+        _append_log("Web dev auto-start did not find a matching game mount.")
+        print("AetherKiri Web dev auto-start did not find a matching game mount.")
+        return
+    var game := _web_game_from_mount_info(mount_info)
+    _append_log("Web dev auto-start mounting: %s" % _game_display_title(game))
+    if not _mount_web_game(game):
+        return
+    selected_game = game
+    if not _save_game_dictionary_silent(game):
+        _append_log("Web dev auto-start could not persist the selected game.")
+    _refresh_games()
+    call_deferred("_start_selected_game")
+
+func _pick_web_local_game(kind: String) -> void:
+    var start_source := "(function(){if(typeof AetherKiriPickLocalGame!=='function')return JSON.stringify({ok:false,error:'Browser local picker is not ready'});return AetherKiriPickLocalGame(%s);})()" % JSON.stringify(kind)
+    var start_result = JSON.parse_string(_web_eval_string(start_source))
+    if not start_result is Dictionary or not bool(start_result.get("ok", false)):
+        var start_error := "当前浏览器不支持本地文件选择"
+        if start_result is Dictionary:
+            start_error = String(start_result.get("error", start_error))
+        _show_message(start_error)
+        return
+
+    var ticket := String(start_result.get("ticket", ""))
+    if ticket.is_empty():
+        _show_message("浏览器没有返回导入任务")
+        return
+
+    var deadline_msec := Time.get_ticks_msec() + 5 * 60 * 1000
+    while Time.get_ticks_msec() < deadline_msec:
+        await get_tree().create_timer(0.25).timeout
+        var poll_source := "(function(){if(typeof AetherKiriTakeLocalGamePickResult!=='function')return JSON.stringify({status:'error',error:'Browser local picker is not ready'});return AetherKiriTakeLocalGamePickResult(%s);})()" % JSON.stringify(ticket)
+        var poll_result = JSON.parse_string(_web_eval_string(poll_source))
+        if not poll_result is Dictionary:
+            continue
+        var status := String(poll_result.get("status", ""))
+        if status == "pending":
+            continue
+        if status == "cancelled":
+            return
+        if status == "error" or status == "missing":
+            _show_message("本地游戏导入失败：%s" % String(poll_result.get("error", "未知错误")))
+            return
+        if status == "ok":
+            var game_data = poll_result.get("game", {})
+            if not game_data is Dictionary:
+                _show_message("浏览器返回的游戏信息无效")
+                return
+            var game := _web_game_from_mount_info(game_data)
+            if not _mount_web_game(game):
+                return
+            _add_game_dictionary(game)
+            return
+    _show_message("本地游戏导入超时")
+
+func _show_web_import_picker() -> void:
+    var support := _web_local_picker_support()
+    var dev_games := _web_dev_mounts()
+    if not bool(support.get("directory", false)) and not bool(support.get("archive", false)) and dev_games.is_empty():
+        _show_message("当前浏览器不支持直接选择本地游戏文件。请使用支持 File System Access 或目录上传的浏览器。")
+        return
+
+    modal_layer.visible = true
+    for child in modal_layer.get_children():
+        child.queue_free()
+    var dim := ColorRect.new()
+    dim.color = Color(0, 0, 0, 0.45)
+    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+    modal_layer.add_child(dim)
+    var dialog := PanelContainer.new()
+    dialog.anchor_left = 0.5
+    dialog.anchor_top = 0.5
+    dialog.anchor_right = 0.5
+    dialog.anchor_bottom = 0.5
+    dialog.position = Vector2(-340, -220)
+    dialog.size = Vector2(680, 440)
+    dialog.add_theme_stylebox_override("panel", _panel_style(20, COLOR_CARD, Color(0, 0, 0, 0.06), 1))
+    modal_layer.add_child(dialog)
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 14)
+    dialog.add_child(box)
+    var title := Label.new()
+    title.text = "导入游戏"
+    title.add_theme_font_size_override("font_size", 28)
+    title.add_theme_color_override("font_color", COLOR_TEXT)
+    box.add_child(title)
+
+    if bool(support.get("directory", false)):
+        var dir_button := _pill_button("选择本地游戏目录")
+        dir_button.pressed.connect(func():
+            modal_layer.visible = false
+            _pick_web_local_game("directory")
+        )
+        box.add_child(dir_button)
+
+    if bool(support.get("archive", false)):
+        var archive_button := _pill_button("选择 XP3 文件")
+        archive_button.pressed.connect(func():
+            modal_layer.visible = false
+            _pick_web_local_game("archive")
+        )
+        box.add_child(archive_button)
+
+    for item in dev_games:
+        if not item is Dictionary:
+            continue
+        var game := _web_game_from_mount_info(item)
+        var captured_game := game.duplicate(true)
+        var button := _pill_button("开发挂载  %s" % String(game.get("name", "")))
+        button.pressed.connect(func():
+            modal_layer.visible = false
+            if not _mount_web_game(captured_game):
+                return
+            _add_game_dictionary(captured_game)
+        )
+        box.add_child(button)
     var cancel := Button.new()
     cancel.text = "取消"
     cancel.flat = true
@@ -1348,7 +1643,7 @@ func _load_game_list() -> Array[Dictionary]:
         return []
     var games: Array[Dictionary] = []
     for item in parsed:
-        if item is Dictionary and item.has("path") and _path_exists(String(item.get("path", ""))):
+        if item is Dictionary and item.has("path") and _path_exists(String(item.get("path", ""))) and _web_game_entry_available(item):
             games.append(item)
     return games
 
@@ -1386,20 +1681,48 @@ func _add_game_path(path: String) -> bool:
     if not _path_exists(path):
         _show_message("游戏路径不存在")
         return false
+    return _add_game_dictionary(_game_info_from_path(path))
+
+func _add_game_dictionary(game: Dictionary) -> bool:
+    var path := String(game.get("path", ""))
+    if not _path_exists(path):
+        _show_message("游戏路径不存在")
+        return false
     var games := _load_game_list()
-    for game in games:
-        if String(game.get("path", "")) == path:
-            _show_message("游戏已存在：%s" % _game_display_title(game))
-            return false
-    var game := _game_info_from_path(path)
-    games.append(game)
-    _save_game_list(_dedupe_games(games))
+    var next: Array[Dictionary] = []
+    var final_game := game
+    var replaced := false
+    for existing in games:
+        if String(existing.get("path", "")) == path:
+            if OS.get_name() != "Web":
+                _show_message("游戏已存在：%s" % _game_display_title(existing))
+                return false
+            final_game = _merge_game_dictionary(existing, game)
+            next.append(final_game)
+            replaced = true
+        else:
+            next.append(existing)
+    if not replaced:
+        next.append(final_game)
+    _save_game_list(_dedupe_games(next))
     ProjectSettings.set_setting(GAME_PATH_KEY, path)
     ProjectSettings.save()
     game_path.text = path
     _refresh_games()
-    _offer_scrape_after_add(game)
+    if not replaced:
+        _offer_scrape_after_add(final_game)
     return true
+
+func _merge_game_dictionary(existing: Dictionary, game: Dictionary) -> Dictionary:
+    var merged := existing.duplicate(true)
+    for key in game.keys():
+        var value = game[key]
+        if (key == "lastPlayed" or key == "playDurationSeconds") and int(value) == 0:
+            continue
+        if (key == "coverPath" or key == "developer" or key == "title") and String(value).is_empty():
+            continue
+        merged[key] = value
+    return merged
 
 func _dedupe_games(games: Array[Dictionary]) -> Array[Dictionary]:
     var seen := {}
@@ -1423,7 +1746,36 @@ func _sorted_games(games: Array[Dictionary]) -> Array[Dictionary]:
     return games
 
 func _path_exists(path: String) -> bool:
+    if OS.get_name() == "Web" and path.begins_with("/webgames/"):
+        return true
     return DirAccess.dir_exists_absolute(path) or FileAccess.file_exists(path)
+
+func _web_game_entry_available(game: Dictionary) -> bool:
+    if OS.get_name() != "Web":
+        return true
+    var backend := String(game.get("webMountBackend", ""))
+    if backend.is_empty() and not String(game.get("webMountBaseUrl", "")).is_empty():
+        backend = "http"
+    if backend.is_empty() and not String(game.get("webMountGameId", "")).is_empty():
+        backend = "blob"
+    if backend.is_empty() and String(game.get("path", "")).begins_with("/webgames/"):
+        return false
+    if backend == "http":
+        var base_url := String(game.get("webMountBaseUrl", ""))
+        if base_url.begins_with("/__aetherkiri/game/"):
+            var manifest = _web_sync_get_json(base_url + "/manifest")
+            return manifest is Dictionary and manifest.has("files")
+        return true
+    if backend != "blob":
+        return true
+    var game_id := String(game.get("webMountGameId", ""))
+    if game_id.is_empty():
+        return false
+    var source := "(function(){if(typeof AetherKiriLocalGameAvailable==='function')return AetherKiriLocalGameAvailable(%s)?'1':'0';var g=typeof window!=='undefined'?window:globalThis;var s=g.AetherKiriLocalGameStore;return s&&s.games&&s.games[%s]?'1':'0';})()" % [
+        JSON.stringify(game_id),
+        JSON.stringify(game_id),
+    ]
+    return _web_eval_string(source) == "1"
 
 func _game_info_from_path(path: String) -> Dictionary:
     var name := path.get_file()
@@ -1623,7 +1975,11 @@ func _start_selected_game() -> void:
     var path := String(selected_game.get("path", ""))
     if path.is_empty():
         return
-    selected_game = _mark_game_played(path)
+    if not _mount_web_game(selected_game):
+        return
+    var played_game := _mark_game_played(path)
+    if not played_game.is_empty():
+        selected_game = played_game
     active_game_path = path
     active_game_started_msec = Time.get_ticks_msec()
     game_path.text = path
@@ -1647,6 +2003,7 @@ func _finalize_active_game_session() -> void:
     active_game_started_msec = 0
 
 func _ready() -> void:
+    _apply_ui_font()
     DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_TRANSPARENT, false)
     _apply_initial_window_size()
     _apply_global_dpi_scale()
@@ -1658,6 +2015,8 @@ func _ready() -> void:
     frame_spike_ms = maxf(0.0, OS.get_environment("AETHERKIRI_FRAME_SPIKE_MS").to_float())
     verbose_render_log = OS.get_environment("AETHERKIRI_VERBOSE_RENDER_LOG") == "1"
     render_surface_max_size = _env_vector2i("AETHERKIRI_SURFACE_MAX_SIZE", RENDER_SURFACE_MAX_SIZE)
+    frame_probe_enabled = _runtime_flag("AETHERKIRI_FRAME_PROBE")
+    frame_probe_interval = maxf(0.05, _runtime_float("AETHERKIRI_FRAME_PROBE_INTERVAL", 1.0))
 
     var live_fps_log_path := OS.get_environment("AETHERKIRI_LIVE_FPS_LOG")
     if not live_fps_log_path.is_empty():
@@ -1666,9 +2025,10 @@ func _ready() -> void:
             perf_log_file.store_line("live fps log started")
             perf_log_file.flush()
 
-    selected_backend = OS.get_environment("AETHERKIRI_BACKEND")
-    if selected_backend.is_empty():
-        selected_backend = ProjectSettings.get_setting(SETTINGS_KEY, "Godot Native")
+    selected_backend = _runtime_string(
+        "AETHERKIRI_BACKEND",
+        ProjectSettings.get_setting(SETTINGS_KEY, "Godot Native")
+    )
     _load_shell_settings()
     if not selected_backend in BACKENDS:
         selected_backend = "Godot Native"
@@ -1720,17 +2080,31 @@ func _finish_ready_after_first_frame() -> void:
     _append_log("Debug CPU is a fallback backend and is not part of performance acceptance.")
     _write_probe_marker("ready")
     _refresh_games()
+    call_deferred("_refresh_games_after_web_local_restore")
+    call_deferred("_auto_start_web_dev_game")
 
-    capture_after_open_path = OS.get_environment("AETHERKIRI_CAPTURE_AFTER_OPEN")
+    capture_after_open_path = _runtime_string("AETHERKIRI_CAPTURE_AFTER_OPEN")
     capture_after_open_delay_sec = maxf(
         0.0,
-        OS.get_environment("AETHERKIRI_CAPTURE_DELAY_SEC").to_float()
+        _runtime_float("AETHERKIRI_CAPTURE_DELAY_SEC", 0.0)
     )
-    auto_probe_clicks = _parse_click_points(OS.get_environment("AETHERKIRI_AUTO_PROBE_CLICKS"))
-    if OS.get_environment("AETHERKIRI_AUTO_OPEN") == "1":
+    auto_probe_clicks = _parse_click_points(_runtime_string("AETHERKIRI_AUTO_PROBE_CLICKS"))
+    if _runtime_flag("AETHERKIRI_AUTO_OPEN"):
         call_deferred("_on_open_game")
     if not OS.get_environment("AETHERKIRI_CAPTURE_UI").is_empty():
         call_deferred("_capture_ui_after_ready")
+
+func _refresh_games_after_web_local_restore() -> void:
+    if OS.get_name() != "Web":
+        return
+    var deadline_msec := Time.get_ticks_msec() + 30 * 1000
+    while Time.get_ticks_msec() < deadline_msec:
+        var state := _web_local_game_restore_state()
+        if bool(state.get("done", true)):
+            _refresh_games()
+            return
+        await get_tree().create_timer(0.25).timeout
+    _refresh_games()
 
 func _capture_ui_after_ready() -> void:
     var action := OS.get_environment("AETHERKIRI_CAPTURE_UI_ACTION")
@@ -1826,6 +2200,7 @@ func _process(delta: float) -> void:
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
                 _log_live_perf(delta, tick_ms, update_ms)
                 _log_frame_spike(delta, tick_ms, update_ms)
+                _log_frame_probe(delta)
         elif startup_state == STARTUP_FAILED:
             restart_notice.text = "Game startup failed."
             loading_panel.visible = false
@@ -1909,6 +2284,28 @@ func _log_frame_spike(delta: float, tick_ms: float, update_ms: float) -> void:
         player.get_frame_texture_backend(),
         last_texture_size.x,
         last_texture_size.y,
+        player.get_renderer_info(),
+        render_errors,
+    ]
+    print(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+
+func _log_frame_probe(delta: float) -> void:
+    if not frame_probe_enabled:
+        return
+    frame_probe_accum += delta
+    if frame_probe_accum < frame_probe_interval:
+        return
+    frame_probe_accum = 0.0
+    var frame := player.read_frame_rgba()
+    var line := "frame_probe texture=%s size=%dx%d serial=%d stats=%s renderer=\"%s\" errors=%d" % [
+        player.get_frame_texture_backend(),
+        int(frame.get("width", 0)),
+        int(frame.get("height", 0)),
+        int(frame.get("frame_serial", 0)),
+        JSON.stringify(_frame_stats(frame)),
         player.get_renderer_info(),
         render_errors,
     ]
@@ -2166,12 +2563,12 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
         get_tree().quit(0 if visible > 0 else 2)
 
 func _run_auto_probe() -> void:
-    await _auto_probe_wait_frames(_env_int("AETHERKIRI_AUTO_PROBE_WARMUP_FRAMES", 180))
+    await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_WARMUP_FRAMES", 180))
     await _save_auto_probe_step(0, "startup")
     var step := 1
     for pos in auto_probe_clicks:
         _send_probe_click(pos)
-        await _auto_probe_wait_frames(_env_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180))
+        await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180))
         await _save_auto_probe_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
         step += 1
     auto_probe_done = true
@@ -2180,7 +2577,7 @@ func _run_auto_probe() -> void:
         step,
         player.get_renderer_info(),
     ])
-    if OS.get_environment("AETHERKIRI_QUIT_AFTER_AUTO_PROBE") == "1":
+    if _runtime_flag("AETHERKIRI_QUIT_AFTER_AUTO_PROBE"):
         get_tree().quit(0)
 
 func _auto_probe_wait_frames(frames: int) -> void:
@@ -2190,16 +2587,29 @@ func _auto_probe_wait_frames(frames: int) -> void:
 func _save_auto_probe_step(index: int, label: String) -> void:
     await get_tree().process_frame
     await get_tree().process_frame
+    var frame := player.read_frame_rgba()
+    var frame_stats := _frame_stats(frame)
     var image := get_viewport().get_texture().get_image()
+    var screenshot_stats := _image_stats(image)
     var path := _default_output_path("aetherkiri-auto-step-%02d-%s.png" % [index, label])
     image.save_png(path)
-    _write_probe_marker("auto_step index=%d label=%s output=%s stats=%s renderer=%s" % [
+    var line := "auto_step index=%d label=%s output=%s texture=%s frame=%dx%d serial=%d frame_stats=%s screenshot_stats=%s renderer=\"%s\"" % [
         index,
         label,
         path,
-        JSON.stringify(_image_stats(image)),
+        player.get_frame_texture_backend(),
+        int(frame.get("width", 0)),
+        int(frame.get("height", 0)),
+        int(frame.get("frame_serial", 0)),
+        JSON.stringify(frame_stats),
+        JSON.stringify(screenshot_stats),
         player.get_renderer_info(),
-    ])
+    ]
+    _write_probe_marker(line)
+    print(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
 
 func _send_probe_click(window_pos: Vector2) -> void:
     var mapped := _map_probe_window_point(window_pos)
@@ -2216,8 +2626,8 @@ func _send_probe_click(window_pos: Vector2) -> void:
 func _map_probe_window_point(pos: Vector2) -> Vector2:
     var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
     var panel_size := Vector2(
-        float(_env_int("AETHERKIRI_AUTO_PROBE_COORD_W", 1600)),
-        float(_env_int("AETHERKIRI_AUTO_PROBE_COORD_H", 900))
+        float(_runtime_int("AETHERKIRI_AUTO_PROBE_COORD_W", 1600)),
+        float(_runtime_int("AETHERKIRI_AUTO_PROBE_COORD_H", 900))
     )
     var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
     if scale <= 0.0:
@@ -2284,8 +2694,34 @@ func _parse_click_points(spec: String) -> Array[Vector2]:
             clicks.push_back(Vector2(float(parts[0]), float(parts[1])))
     return clicks
 
-func _env_int(name: String, fallback: int) -> int:
+func _runtime_string(name: String, fallback: String = "") -> String:
     var value := OS.get_environment(name)
+    if not value.is_empty():
+        return value
+    if OS.get_name() != "Web":
+        return fallback
+    var aliases: Array[String] = [name, name.to_lower()]
+    if name.begins_with("AETHERKIRI_"):
+        aliases.append(name.substr("AETHERKIRI_".length()).to_lower())
+    var source := "(function(names){var p=new URLSearchParams(window.location.search);for(var i=0;i<names.length;i++){if(p.has(names[i]))return p.get(names[i])||'';}return '';})(" + JSON.stringify(aliases) + ")"
+    value = _web_eval_string(source)
+    return fallback if value.is_empty() else value
+
+func _runtime_flag(name: String, fallback: bool = false) -> bool:
+    var value := _runtime_string(name)
+    if value.is_empty():
+        return fallback
+    value = value.strip_edges().to_lower()
+    return value == "1" or value == "true" or value == "yes" or value == "on"
+
+func _runtime_float(name: String, fallback: float) -> float:
+    var value := _runtime_string(name)
+    if value.is_empty():
+        return fallback
+    return value.to_float()
+
+func _runtime_int(name: String, fallback: int) -> int:
+    var value := _runtime_string(name)
     if value.is_empty():
         return fallback
     return int(value)

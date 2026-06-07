@@ -562,11 +562,16 @@ bool GodotTexture2D::UploadCpuToGpu() {
         }
         return true;
     }
-    if (!EnsureGpuHandle() || format_ != TVPTextureFormat::RGBA || pixels_.empty()) {
+    if (format_ != TVPTextureFormat::RGBA || pixels_.empty()) {
         return false;
     }
     const auto *bridge = TVPGodotGpuBridgeGet();
-    if (bridge == nullptr || bridge->update_rgba == nullptr) return false;
+    if (bridge == nullptr) return false;
+    if (gpu_handle_ == 0) {
+        CreateGpuHandle(pixels_.data(), pitch_);
+        return gpu_handle_ != 0;
+    }
+    if (bridge->update_rgba == nullptr) return false;
     const tTVPRect full_rect(0, 0, Width, Height);
     if (!bridge->update_rgba(gpu_handle_, pixels_.data(),
                              static_cast<uint32_t>(pitch_), &full_rect)) {

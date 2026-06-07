@@ -3,12 +3,14 @@
 #include "tjsHashSearch.h"
 #include <functional>
 #include <freetype/freetype.h>
+#include <vector>
 
 const FT_Library TVPGetFontLibrary();
 
 void TVPInitFontNames();
 int TVPEnumFontsProc(const ttstr &FontPath);
 const ttstr &TVPGetDefaultFontName();
+void TVPGetAllFontList(std::vector<ttstr> &list);
 tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname);
 struct TVPFontNamePathInfo {
     ttstr Path;

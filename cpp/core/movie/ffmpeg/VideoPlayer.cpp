@@ -220,19 +220,54 @@ void BasePlayer::Pause() {
 }
 
 void BasePlayer::GetVideoSize(long *width, long *height) {
+    auto set_size = [&](long w, long h) -> bool {
+        if(w <= 0 || h <= 0)
+            return false;
+        *width = w;
+        *height = h;
+        return true;
+    };
+
     std::lock_guard<std::recursive_mutex> lock(m_SelectionStreams.m_section);
+
+    if(set_size(m_CurrentVideo.hint.width, m_CurrentVideo.hint.height))
+        return;
+
     int streamId = GetVideoStream();
 
-    if(streamId < 0) {
-        *width = 0;
-        *height = 0;
-        return;
+    if(streamId >= 0) {
+        SelectionStream &s = m_SelectionStreams.Get(STREAM_VIDEO, streamId);
+        if(set_size(s.width, s.height))
+            return;
     }
 
-    SelectionStream &s = m_SelectionStreams.Get(STREAM_VIDEO, streamId);
+    if(m_pDemuxer && m_CurrentVideo.demuxerId >= 0 && m_CurrentVideo.id >= 0) {
+        CDemuxStream *stream =
+            m_pDemuxer->GetStream(m_CurrentVideo.demuxerId, m_CurrentVideo.id);
+        if(stream && stream->type == STREAM_VIDEO) {
+            auto *videoStream = static_cast<CDemuxStreamVideo *>(stream);
+            if(set_size(videoStream->iWidth, videoStream->iHeight))
+                return;
+        }
+    }
 
-    *width = s.width;
-    *height = s.height;
+    for(const auto &s : m_SelectionStreams.Get(STREAM_VIDEO)) {
+        if(set_size(s.width, s.height))
+            return;
+    }
+
+    if(m_pDemuxer) {
+        for(auto *stream : m_pDemuxer->GetStreams()) {
+            if(stream && stream->type == STREAM_VIDEO) {
+                auto *videoStream = static_cast<CDemuxStreamVideo *>(stream);
+                if(set_size(videoStream->iWidth, videoStream->iHeight))
+                    return;
+            }
+        }
+    }
+
+    *width = 0;
+    *height = 0;
 }
 
 void BasePlayer::SetLoopSegement(int beginFrame, unsigned int endFrame) {

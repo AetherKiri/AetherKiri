@@ -16,7 +16,8 @@
 // use 'gcc -dM -E - < /dev/nullptr' or similar to find them.
 
 #if defined(__ppc__) || defined(__powerpc__) || defined(__mips__) ||           \
-    defined(__arm__) || defined(__aarch64__)
+    defined(__arm__) || defined(__aarch64__) || defined(__EMSCRIPTEN__) ||     \
+    defined(__wasm__) || defined(__wasm32__) || defined(__wasm64__)
 #define DISABLE_MATHUTILS_ASM_ROUND_INT
 #endif
 NS_KRMOVIE_BEGIN

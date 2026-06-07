@@ -146,6 +146,8 @@ public:
 private:
     tTVPWaveDecoder *Decoder;
     tTVPWaveSoundBufferDecodeThread *Thread;
+    bool EnsureDecodeThread();
+    bool IsDecodeThreadRunning() const;
 
 public:
     bool ThreadCallbackEnabled;

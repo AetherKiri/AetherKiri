@@ -31,6 +31,7 @@ int TVPShowSimpleInputBox(ttstr &text, const ttstr &caption,
                           const std::vector<ttstr> &vecButtons);
 
 std::vector<std::string> TVPGetDriverPath();
+std::string TVPGetDefaultFileDir();
 std::vector<std::string> TVPGetAppStoragePath();
 bool TVPCheckStartupPath(const std::string &path);
 std::string TVPGetPackageVersionString();

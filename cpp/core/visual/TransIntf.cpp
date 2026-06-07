@@ -800,6 +800,16 @@ public:
         if(time < 2)
             time = 2; // too small time may cause problem
 
+#if defined(__EMSCRIPTEN__)
+        static bool logged_web_universal_fallback = false;
+        if(!logged_web_universal_fallback) {
+            logged_web_universal_fallback = true;
+            spdlog::info("web: using crossfade fallback for universal transitions");
+        }
+        return (iTVPBaseTransHandler *)(new tTVPCrossFadeTransHandler(
+            options, layertype, time));
+#endif
+
         // retrieve "vague" option
         tjs_int64 vague;
         er = options->GetAsNumber(TJS_W("vague"), (tjs_int64 *)&vague);

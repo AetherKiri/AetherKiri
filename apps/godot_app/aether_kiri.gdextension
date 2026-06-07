@@ -9,6 +9,8 @@ ios.debug = "res://bin/ios/debug/libaether_kiri_godot.a"
 ios.release = "res://bin/ios/release/libaether_kiri_godot.a"
 android.debug.arm64 = "res://bin/android/arm64-v8a/debug/libaether_kiri_godot.so"
 android.release.arm64 = "res://bin/android/arm64-v8a/release/libaether_kiri_godot.so"
+web.debug.wasm32 = "res://bin/web/debug/aether_kiri_godot.wasm"
+web.release.wasm32 = "res://bin/web/release/aether_kiri_godot.wasm"
 
 [dependencies]
 macos.debug = {
