@@ -7,7 +7,7 @@ const POINTER_DOWN := 1
 const POINTER_MOVE := 2
 const POINTER_UP := 3
 
-var player: AetherKiriPlayer
+var player
 var rect: TextureRect
 var test_config := {}
 
@@ -25,8 +25,8 @@ func _initialize() -> void:
     rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
     root.add_child(rect)
 
-    player = AetherKiriPlayer.new()
-    root.add_child(player)
+    player = ClassDB.instantiate("AetherKiriPlayer")
+    root.add_child(player as Node)
 
     var user_dir := OS.get_user_data_dir()
     var cache_dir := user_dir.path_join("cache")
