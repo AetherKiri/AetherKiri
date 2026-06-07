@@ -6,6 +6,8 @@
 #include "ncbind.hpp"
 #include "tjsDictionary.h"
 
+#include <cstring>
+
 extern tTJS *TVPScriptEngine;
 
 namespace {
@@ -53,8 +55,20 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("KAGParserEx.dll"),
         TJS_W("ExtKAGParser.dll"),
         TJS_W("extrans.dll"),
+        TJS_W("k2compat.dll"),
+        TJS_W("kagexopt.dll"),
+        TJS_W("krmovie.dll"),
+        TJS_W("kztouch.dll"),
+        TJS_W("lzfs.dll"),
+        TJS_W("dmmcloud.dll"),
+        TJS_W("libegl.dll"),
+        TJS_W("libglesv2.dll"),
+        TJS_W("m2vdec.dll"),
+        TJS_W("version.dll"),
         TJS_W("flashPlayer.dll"),
         TJS_W("layerExSubImage.dll"),
+        TJS_W("layerExColor.dll"),
+        TJS_W("layerExMosaic.dll"),
         TJS_W("layerExSave.dll"),
         TJS_W("gfxEffect.dll"),
         TJS_W("clipboardEx.dll"),
@@ -91,6 +105,8 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("wmrdump.dll"),
         TJS_W("wsh.dll"),
         TJS_W("wumsadp.dll"),
+        TJS_W("wuflac.dll"),
+        TJS_W("wuopus.dll"),
         TJS_W("layerExAgg.dll"),
         TJS_W("layerExCairo.dll"),
         TJS_W("layerExGdiPlus.dll"),
@@ -119,6 +135,44 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         INFO(ttstr(module).AsStdString());
         CHECK(ncbAutoRegister::HasModule(module));
     }
+}
+
+TEST_CASE("legacy compatibility plugins expose observable behavior") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("zlib.dll")));
+    tTJSVariant version;
+    REQUIRE_NOTHROW(TVPExecuteExpression(TJS_W("zlibVersion()"), &version));
+    CHECK(ttstr(version).GetLen() > 0);
+
+    tTJSVariant compressFn = getGlobalProp(TJS_W("zlibCompress"));
+    tTJSVariant uncompressFn = getGlobalProp(TJS_W("zlibUncompress"));
+
+    tTJSVariant input(TJS_W("AetherKiri"));
+    tTJSVariant *compressArgs[] = { &input };
+    tTJSVariant compressed;
+    REQUIRE(TJS_SUCCEEDED(compressFn.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &compressed, 1, compressArgs, nullptr)));
+    REQUIRE(compressed.Type() == tvtOctet);
+
+    tTJSVariant expectedSize(static_cast<tTVInteger>(64));
+    tTJSVariant *uncompressArgs[] = { &compressed, &expectedSize };
+    tTJSVariant roundTrip;
+    REQUIRE(TJS_SUCCEEDED(uncompressFn.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &roundTrip, 2, uncompressArgs, nullptr)));
+    REQUIRE(roundTrip.Type() == tvtOctet);
+
+    tTJSVariantOctet *octet = roundTrip.AsOctetNoAddRef();
+    REQUIRE(octet->GetLength() == 10);
+    CHECK(std::memcmp(octet->GetData(), "AetherKiri", 10) == 0);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("version.dll")));
+    tTJSVariant versionClass = getGlobalProp(TJS_W("Version"));
+    CHECK(versionClass.Type() == tvtObject);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("kztouch.dll")));
+    tTJSVariant touchClass = getGlobalProp(TJS_W("KZTouch"));
+    CHECK(touchClass.Type() == tvtObject);
 }
 
 TEST_CASE("plugin load mode defaults to krkrsdl3 and can select all modules") {

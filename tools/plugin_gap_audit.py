@@ -58,20 +58,42 @@ def split_module_blocks(text: str) -> list[tuple[str, str]]:
 
 def classify_module_block(block: str, path: Path) -> str:
     lower = block.lower()
-    if "register_empty_plugin" in lower:
+    if re.search(r"(?m)^\s*register_empty_plugin\s*\(", lower):
         return "empty_stub"
     if re.search(r"static\s+void\s+\w*stub\w*\s*\(\s*\)\s*\{\s*\}", block):
         return "empty_stub"
+    if path.name in {
+        "compatLegacyPlugins.cpp",
+        "compatSystemPlugins.cpp",
+        "compatMediaLayerPlugins.cpp",
+    }:
+        return "compat_stub"
+    if "aetherkiri_compat_stub" in lower:
+        return "compat_stub"
+    if path.name == "dummy_plugin_stubs.cpp":
+        return "compat_stub"
 
     real_markers = (
         "ncb_register_class",
+        "ncb_attach_class",
+        "ncb_attach_class_with_hook",
         "ncb_attach_function",
         "ncb_register_function",
+        "ncb_method(",
+        "ncb_method_raw_callback",
+        "ncb_method_detail",
+        "ncb_property(",
+        "ncb_property_ro",
+        "ncb_property_proxy",
+        "ncb_constructor",
         "tvpregisterstoragemedia",
         "tvpaddtranshandlerprovider",
         "sqlite3_vfs_register",
         "tvpcreatestream",
         "tvpcreatenativeclass",
+        "tjscreatenativeclassmethod",
+        "tjscreatearrayobject",
+        "tjscreatedictionaryobject",
         "registerwavetranshandlerprovider",
         "registermosaictranshandlerprovider",
         "registerturntranshandlerprovider",
@@ -96,8 +118,6 @@ def classify_module_block(block: str, path: Path) -> str:
         "fallback",
     )
     if any(marker in lower for marker in compat_markers):
-        return "compat_stub"
-    if path.name == "dummy_plugin_stubs.cpp":
         return "compat_stub"
 
     return "compat_stub"

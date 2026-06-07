@@ -60,6 +60,9 @@ target_sources(${PROJECT_NAME} PRIVATE
     wfTypicalDSPCompat.cpp
     packinone.cpp
     clipboardEx.cpp
+    compatLegacyPlugins.cpp
+    compatMediaLayerPlugins.cpp
+    compatSystemPlugins.cpp
     dummy_plugin_stubs.cpp
     pluginAnchors.cpp
     fstat/main.cpp
