@@ -100,9 +100,15 @@ jobs:
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
 
-      - name: Build macOS Release
+      - name: Build macOS Debug
         run: |
           chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ./build.sh macos debug --jobs=4
+
+      - name: Build macOS Release
+        run: |
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh macos release --jobs=4
@@ -110,19 +116,23 @@ jobs:
       - name: Verify built .app
         run: |
           set -euo pipefail
-          APP_PATH="out/godot/macos/release/AetherKiri.app"
-          if [[ ! -d "$APP_PATH" ]]; then
-            echo "Built Godot .app bundle not found: $APP_PATH" >&2
-            exit 1
-          fi
-          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          for build_type in debug release; do
+            APP_PATH="out/godot/macos/${build_type}/AetherKiri.app"
+            if [[ ! -d "$APP_PATH" ]]; then
+              echo "Built Godot ${build_type} .app bundle not found: $APP_PATH" >&2
+              exit 1
+            fi
+            codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          done
 
       - name: Upload Artifact
         if: success()
         uses: actions/upload-artifact@v7
         with:
           name: AetherKiri-macOS
-          path: out/godot/macos/release/AetherKiri.app
+          path: |
+            out/godot/macos/debug/AetherKiri.app
+            out/godot/macos/release/AetherKiri.app
           retention-days: 7
 
       - name: Save vcpkg cache

@@ -100,9 +100,15 @@ jobs:
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
 
-      - name: Build iOS Release
+      - name: Build iOS Debug
         run: |
           chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ./build.sh ios debug --jobs=4
+
+      - name: Build iOS Release
+        run: |
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh ios release --jobs=4
@@ -110,14 +116,16 @@ jobs:
       - name: Verify exported Xcode project
         run: |
           set -euo pipefail
-          if [[ ! -d "out/godot/ios/release/AetherKiri.xcodeproj" ]]; then
-            echo "Godot iOS Xcode project not found" >&2
-            exit 1
-          fi
-          if [[ ! -d "out/godot/ios/release/AetherKiri" ]]; then
-            echo "Godot iOS project sources not found" >&2
-            exit 1
-          fi
+          for build_type in debug release; do
+            if [[ ! -d "out/godot/ios/${build_type}/AetherKiri.xcodeproj" ]]; then
+              echo "Godot iOS ${build_type} Xcode project not found" >&2
+              exit 1
+            fi
+            if [[ ! -d "out/godot/ios/${build_type}/AetherKiri" ]]; then
+              echo "Godot iOS ${build_type} project sources not found" >&2
+              exit 1
+            fi
+          done
 
       - name: Upload Artifact
         if: success()
@@ -125,6 +133,8 @@ jobs:
         with:
           name: AetherKiri-iOS-XcodeProject
           path: |
+            out/godot/ios/debug/AetherKiri.xcodeproj
+            out/godot/ios/debug/AetherKiri
             out/godot/ios/release/AetherKiri.xcodeproj
             out/godot/ios/release/AetherKiri
           retention-days: 7
