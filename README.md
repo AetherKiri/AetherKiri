@@ -17,6 +17,7 @@
   <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/macos.yml"><img alt="macOS Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/macos.yml/badge.svg"></a>
   <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/ios.yml"><img alt="iOS Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/ios.yml/badge.svg"></a>
   <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/android.yml"><img alt="Android Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/android.yml/badge.svg"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/web.yml"><img alt="Web Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/web.yml/badge.svg"></a>
 </p>
 
 <p align="center">
@@ -54,7 +55,7 @@ Godot App Shell
 - Godot 4.6 app shell with native GDExtension integration.
 - C++17 KiriKiri2 runtime core with visual, audio, storage, VM, and plugin
   support.
-- Export paths for macOS, iOS/iPadOS, and Android.
+- Export paths for macOS, iOS/iPadOS, Android, and Web.
 - Runtime-selectable render backend with persisted settings.
 - Probe scripts for smoke, render, interaction, performance, and manual repro
   sessions.

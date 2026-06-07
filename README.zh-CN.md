@@ -17,6 +17,7 @@
   <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/macos.yml"><img alt="macOS Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/macos.yml/badge.svg"></a>
   <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/ios.yml"><img alt="iOS Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/ios.yml/badge.svg"></a>
   <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/android.yml"><img alt="Android Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/android.yml/badge.svg"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/web.yml"><img alt="Web Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/web.yml/badge.svg"></a>
 </p>
 
 <p align="center">
@@ -51,7 +52,7 @@ Godot App Shell
 
 - Godot 4.6 应用外壳，使用原生 GDExtension 集成。
 - C++17 KiriKiri2 运行时核心，覆盖视觉、音频、存储、VM 和插件支持。
-- 已接入 macOS、iOS/iPadOS 和 Android 导出链路。
+- 已接入 macOS、iOS/iPadOS、Android 和 Web 导出链路。
 - 可在运行时选择渲染后端，并持久化设置。
 - 提供 smoke、渲染、交互、性能和手动复现 probe 脚本。
 - 已手动验证过的游戏记录在 [`doc/verified_games.zh-CN.md`](doc/verified_games.zh-CN.md)。
