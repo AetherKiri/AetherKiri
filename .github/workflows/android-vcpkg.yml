@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 concurrency:
   group: ${{ github.repository }}-android-vcpkg-bundle
@@ -35,7 +34,7 @@ jobs:
       - name: Install Build Systems
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd jq mono-complete
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd jq
 
       - name: Restore existing Android vcpkg bundle
         env:
@@ -101,12 +100,6 @@ jobs:
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
-
-      - name: Configure vcpkg GitHub Packages cache
-        env:
-          VCPKG_NUGET_TOKEN: ${{ github.token }}
-          VCPKG_BINARY_CACHE_MODE: readwrite
-        run: bash .github/scripts/configure-vcpkg-github-packages.sh
 
       - name: Build Android vcpkg dependencies
         run: |
