@@ -20,6 +20,13 @@ vcpkg_installed/
 /stats_server
 local.properties
 
+# Android signing secrets
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+
 java_pid*.hprof
 .DS_Store
 *.pdb
