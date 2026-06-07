@@ -83,7 +83,7 @@ jobs:
           rm -rf "${GITHUB_WORKSPACE}/out/macos/release/vcpkg_installed"
           mkdir -p "${GITHUB_WORKSPACE}/out/macos/release"
           ln -s "${VCPKG_ROOT}/installed" "${GITHUB_WORKSPACE}/out/macos/release/vcpkg_installed"
-          cmake --preset "macOS Release Config" --fresh \
+          cmake --preset "MacOS Release Config" --fresh \
             -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" \
             -D "VCPKG_MANIFEST_INSTALL=OFF" \
             -D "VCPKG_INSTALLED_DIR=${GITHUB_WORKSPACE}/out/macos/release/vcpkg_installed"
@@ -91,7 +91,7 @@ jobs:
           rm -rf "${GITHUB_WORKSPACE}/out/macos/debug/vcpkg_installed"
           mkdir -p "${GITHUB_WORKSPACE}/out/macos/debug"
           ln -s "${VCPKG_ROOT}/installed" "${GITHUB_WORKSPACE}/out/macos/debug/vcpkg_installed"
-          cmake --preset "macOS Debug Config" --fresh \
+          cmake --preset "MacOS Debug Config" --fresh \
             -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" \
             -D "VCPKG_MANIFEST_INSTALL=OFF" \
             -D "VCPKG_INSTALLED_DIR=${GITHUB_WORKSPACE}/out/macos/debug/vcpkg_installed"
