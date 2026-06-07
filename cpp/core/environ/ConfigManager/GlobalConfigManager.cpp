@@ -171,14 +171,14 @@ iSysConfigManager::GetValue<std::string>(const std::string &name,
 
 void iSysConfigManager::SetValueInt(const std::string &name, int val) {
     char buf[16];
-    sprintf(buf, "%d", val);
+    snprintf(buf, sizeof(buf), "%d", val);
     AllConfig[name] = buf;
     ConfigUpdated = true;
 }
 
 void iSysConfigManager::SetValueFloat(const std::string &name, float val) {
     char buf[24];
-    sprintf(buf, "%g", val);
+    snprintf(buf, sizeof(buf), "%g", val);
     AllConfig[name] = buf;
     ConfigUpdated = true;
 }

@@ -13,7 +13,7 @@ const POINTER_SCROLL := 4
 
 const TOUCH_MOUSE_SUPPRESS_MS := 700
 
-var player: AetherKiriPlayer
+var player
 var rect: TextureRect
 var config := {}
 var started := false
@@ -40,8 +40,8 @@ func _initialize() -> void:
     rect.gui_input.connect(_on_rect_gui_input)
     root.add_child(rect)
 
-    player = AetherKiriPlayer.new()
-    root.add_child(player)
+    player = ClassDB.instantiate("AetherKiriPlayer")
+    root.add_child(player as Node)
 
     var user_dir := OS.get_user_data_dir()
     var cache_dir := user_dir.path_join("cache")
@@ -141,7 +141,7 @@ func _tick_and_update(delta: float) -> void:
     var tick_delta := delta
     if tick_delta <= 0.0 or tick_delta > 0.1:
         tick_delta = 1.0 / 60.0
-    var result := player.tick(tick_delta)
+    var result: int = player.tick(tick_delta)
     if result != ENGINE_RESULT_OK:
         printerr("tick failed: %s %s" % [player.get_last_result(), player.get_last_error()])
         _exit_probe(1)
@@ -256,7 +256,7 @@ func _map_viewport_delta(delta: Vector2) -> Vector2:
 func _pump_pointer_event_tick() -> void:
     if player == null or not started:
         return
-    var result := player.tick(1.0 / 60.0)
+    var result: int = player.tick(1.0 / 60.0)
     if result != ENGINE_RESULT_OK:
         printerr("pointer tick failed: %s %s" % [player.get_last_result(), player.get_last_error()])
 

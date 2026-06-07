@@ -1,5 +1,7 @@
 #include "AudioCodecFFmpeg.h"
 
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 #ifdef TARGET_POSIX
 #include "XMemUtils.h"
 #endif

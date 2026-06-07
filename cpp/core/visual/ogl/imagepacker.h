@@ -66,7 +66,8 @@ namespace ImagePacker {
         rect_wh(const rect_ltrb &);
         rect_wh(const rect_xywh &);
         rect_wh(int w = 0, int h = 0);
-        [[nodiscard]] int w, h, area(), perimeter(),
+        int w, h;
+        [[nodiscard]] int area(), perimeter(),
             fits(const rect_wh &bigger)
                 const; // 0 - no, 1 - yes, 2 - flipped, 3 -
                        // perfectly, 4 perfectly flipped
@@ -77,8 +78,8 @@ namespace ImagePacker {
     struct rect_ltrb {
         rect_ltrb();
         rect_ltrb(int left, int top, int right, int bottom);
-        [[nodiscard]] [[nodiscard]] [[nodiscard]] [[nodiscard]] int l, t, r, b,
-            w() const, h() const, area() const, perimeter() const;
+        int l, t, r, b;
+        [[nodiscard]] int w() const, h() const, area() const, perimeter() const;
         void w(int), h(int);
     };
 
@@ -88,7 +89,8 @@ namespace ImagePacker {
         rect_xywh(int x, int y, int width, int height);
         operator rect_ltrb();
 
-        [[nodiscard]] [[nodiscard]] int x, y, r() const, b() const;
+        int x, y;
+        [[nodiscard]] int r() const, b() const;
         void r(int), b(int);
     };
 

@@ -4,6 +4,8 @@
 #include <algorithm>
 #include "AEFactory.h"
 
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 extern "C" {
 #include "libavcodec/avcodec.h"
 }

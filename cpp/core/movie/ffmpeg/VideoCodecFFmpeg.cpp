@@ -2,6 +2,8 @@
 
 #include "ThreadIntf.h"
 
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 #ifndef TARGET_POSIX
 #define RINT(x) ((x) >= 0 ? ((int)((x) + 0.5)) : ((int)((x) - 0.5)))
 #else
@@ -940,7 +942,7 @@ int CDVDVideoCodecFFmpeg::FilterOpen(const std::string &filters, bool scale) {
         "buffersink"); // should be last filter in the graph for now
 
     char args[128];
-    sprintf(args, "%d:%d:%d:%d:%d:%d:%d", m_pCodecContext->width,
+    snprintf(args, sizeof(args), "%d:%d:%d:%d:%d:%d:%d", m_pCodecContext->width,
             m_pCodecContext->height, m_pCodecContext->pix_fmt,
             m_pCodecContext->time_base.num ? m_pCodecContext->time_base.num : 1,
             m_pCodecContext->time_base.num ? m_pCodecContext->time_base.den : 1,

@@ -86,6 +86,8 @@ namespace PSB {
             case PSBObjType::Double:
                 data = BitConverter::toByteArray(stream->ReadI64LE());
                 return;
+            default:
+                break;
         }
     }
 

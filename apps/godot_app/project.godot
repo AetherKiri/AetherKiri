@@ -18,6 +18,7 @@ config/name="AetherKiri"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.6")
 config/icon="res://assets/icon.png"
+boot_splash/fullsize=false
 
 [display]
 

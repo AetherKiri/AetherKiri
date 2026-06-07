@@ -18,8 +18,8 @@ func _initialize() -> void:
     rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
     root.add_child(rect)
 
-    var player := AetherKiriPlayer.new()
-    root.add_child(player)
+    var player = ClassDB.instantiate("AetherKiriPlayer")
+    root.add_child(player as Node)
 
     var user_dir := OS.get_user_data_dir()
     var cache_dir := user_dir.path_join("cache")
@@ -85,7 +85,7 @@ func _initialize() -> void:
         player.destroy_engine()
     quit(0)
 
-func _tick_and_update(player: AetherKiriPlayer, rect: TextureRect) -> void:
+func _tick_and_update(player, rect: TextureRect) -> void:
     if player.tick(1.0 / 60.0) != 0:
         return
     var texture: Texture2D = player.update_frame_texture()
@@ -93,7 +93,7 @@ func _tick_and_update(player: AetherKiriPlayer, rect: TextureRect) -> void:
         rect.texture = texture
         rect.queue_redraw()
 
-func _send_click(player: AetherKiriPlayer, pos: Vector2) -> void:
+func _send_click(player, pos: Vector2) -> void:
     player.send_pointer_event(POINTER_MOVE, 0, pos.x, pos.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_DOWN, 0, pos.x, pos.y, 0.0, 0.0, 0)

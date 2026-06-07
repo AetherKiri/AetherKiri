@@ -26,6 +26,8 @@
 #include <emscripten.h>
 #endif
 
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 #include <libavutil/opt.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/common.h>
@@ -40,7 +42,7 @@
 //#define DEBUG
 #endif
 
-#if !defined(DEBUG)
+#if !defined(DEBUG) && !defined(NDEBUG)
 #define NDEBUG
 #endif
 

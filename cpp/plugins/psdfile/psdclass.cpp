@@ -52,6 +52,8 @@ static int convBlendMode(psd::BlendMode mode) {
         case psd::BLEND_MODE_DIVIDE:
             // not supported;
             break;
+        default:
+            break;
     }
     return ltPsNormal;
 }

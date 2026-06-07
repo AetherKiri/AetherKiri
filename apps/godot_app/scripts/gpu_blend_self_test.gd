@@ -1,8 +1,8 @@
 extends SceneTree
 
 func _initialize() -> void:
-    var player := AetherKiriPlayer.new()
-    root.add_child(player)
+    var player = ClassDB.instantiate("AetherKiriPlayer")
+    root.add_child(player as Node)
 
     var modes := ["AlphaBlend", "AlphaBlend_d", "AlphaBlend_a", "CopyColor", "FillARGB", "RemoveConstOpacity", "ConstAlphaBlend_d"]
     var failed := false

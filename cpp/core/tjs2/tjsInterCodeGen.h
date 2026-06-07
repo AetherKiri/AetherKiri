@@ -209,8 +209,9 @@ namespace TJS {
         tjs_int GetPosition() const { return Position; }
 
         tTJSVariant &GetValue() {
+            static tTJSVariant dummy;
             if(!Val)
-                return *(tTJSVariant *)nullptr;
+                return dummy;
             return *Val;
         }
 

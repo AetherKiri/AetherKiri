@@ -27,7 +27,7 @@ static tjs_int inline TVPWideCharToUtf8(tjs_char in, char *out) {
             out[1] = (char)(0x80 | (in & 0x3f));
         }
         return 2;
-    } else if(in < (1 << 16)) {
+    } else {
         if(out) {
             out[0] = (char)(0xe0 | (in >> 12));
             out[1] = (char)(0x80 | ((in >> 6) & 0x3f));
@@ -35,43 +35,6 @@ static tjs_int inline TVPWideCharToUtf8(tjs_char in, char *out) {
         }
         return 3;
     }
-#if 1
-    else {
-        TVPThrowExceptionMessage(
-            TJS_W("Out of UTF-16 range conversion from UTF-8 code"));
-    }
-#else
-    // 以下オリジナルのコードだけど、通らないはず。
-    else if(in < (1 << 21)) {
-        if(out) {
-            out[0] = (char)(0xf0 | (in >> 18));
-            out[1] = (char)(0x80 | ((in >> 12) & 0x3f));
-            out[2] = (char)(0x80 | ((in >> 6) & 0x3f));
-            out[3] = (char)(0x80 | (in & 0x3f));
-        }
-        return 4;
-    } else if(in < (1 << 26)) {
-        if(out) {
-            out[0] = (char)(0xf8 | (in >> 24));
-            out[1] = (char)(0x80 | ((in >> 16) & 0x3f));
-            out[2] = (char)(0x80 | ((in >> 12) & 0x3f));
-            out[3] = (char)(0x80 | ((in >> 6) & 0x3f));
-            out[4] = (char)(0x80 | (in & 0x3f));
-        }
-        return 5;
-    } else if(in < (1 << 31)) {
-        if(out) {
-            out[0] = (char)(0xfc | (in >> 30));
-            out[1] = (char)(0x80 | ((in >> 24) & 0x3f));
-            out[2] = (char)(0x80 | ((in >> 18) & 0x3f));
-            out[3] = (char)(0x80 | ((in >> 12) & 0x3f));
-            out[4] = (char)(0x80 | ((in >> 6) & 0x3f));
-            out[5] = (char)(0x80 | (in & 0x3f));
-        }
-        return 6;
-    }
-#endif
-    return -1;
 }
 
 //---------------------------------------------------------------------------

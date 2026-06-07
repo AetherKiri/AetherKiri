@@ -56,7 +56,7 @@ var rounded_card_shader: Shader
 var upscale_shader: Shader
 var opaque_frame_shader: Shader
 
-var player: AetherKiriPlayer
+var player
 var selected_backend := "Godot Native"
 var upscale_algorithm := "sharp"
 var game_running := false
@@ -1675,8 +1675,11 @@ func _ready() -> void:
 
     _build_ui()
 
-    player = AetherKiriPlayer.new()
-    add_child(player)
+    player = ClassDB.instantiate("AetherKiriPlayer")
+    if player == null:
+        push_error("AetherKiriPlayer extension class is not available.")
+        return
+    add_child(player as Node)
 
     for item in BACKENDS:
         backend.add_item(item)
@@ -1806,7 +1809,7 @@ func _process(delta: float) -> void:
             restart_notice.text = ""
             loading_panel.visible = false
             var tick_start := Time.get_ticks_usec()
-            var tick_result := player.tick(delta)
+            var tick_result: int = player.tick(delta)
             var tick_ms := float(Time.get_ticks_usec() - tick_start) / 1000.0
             if tick_result != ENGINE_RESULT_OK:
                 render_errors += 1
@@ -1856,13 +1859,13 @@ func _process(delta: float) -> void:
     if perf_accum >= PERF_UPDATE_INTERVAL:
         perf_accum = 0.0
         var frame_ms := delta * 1000.0
-        var renderer := player.get_renderer_info() if game_running and startup_state == STARTUP_SUCCEEDED else selected_backend
+        var renderer: String = player.get_renderer_info() if game_running and startup_state == STARTUP_SUCCEEDED else selected_backend
         var renderer_summary := _renderer_summary(renderer)
         if verbose_render_log and game_running and not renderer.is_empty() and renderer_summary != last_renderer_info_logged:
             last_renderer_info_logged = renderer_summary
             _append_log("Renderer info: %s" % renderer)
         var fallback := _renderer_fallback(renderer)
-        var texture_backend := player.get_frame_texture_backend() if game_running else "none"
+        var texture_backend: String = player.get_frame_texture_backend() if game_running else "none"
         perf.text = "Backend: %s | FPS: %d | Frame: %.2f ms | Texture: %s | Size: %dx%d | Fallback: %s | Errors: %d" % [
             renderer_summary,
             Engine.get_frames_per_second(),
@@ -1940,7 +1943,7 @@ func _on_backend_selected(index: int) -> void:
     _apply_backend(true)
 
 func _apply_backend(log_selection: bool) -> void:
-    var result := player.set_render_backend(selected_backend)
+    var result: int = player.set_render_backend(selected_backend)
     if result != ENGINE_RESULT_OK:
         render_errors += 1
         _append_log("Renderer selection failed: %s %s" % [
@@ -1997,7 +2000,7 @@ func _on_open_game() -> void:
     startup_poll_accum = STARTUP_POLL_INTERVAL
 
     var async_open := OS.get_environment("AETHERKIRI_SYNC_OPEN") != "1"
-    var result := player.open_game(path, async_open)
+    var result: int = player.open_game(path, async_open)
     if result != ENGINE_RESULT_OK:
         render_errors += 1
         cached_startup_state = STARTUP_FAILED
@@ -2082,7 +2085,7 @@ func _sync_player_surface_size(force: bool) -> void:
     var target_size := _desired_render_surface_size()
     if not force and target_size == current_surface_size:
         return
-    var result := player.set_surface_size(target_size.x, target_size.y)
+    var result: int = player.set_surface_size(target_size.x, target_size.y)
     if result != ENGINE_RESULT_OK:
         render_errors += 1
         _append_log("Surface resize failed: %s %s" % [
@@ -2110,7 +2113,7 @@ func _sync_player_surface_size(force: bool) -> void:
     current_surface_size = target_size
 
 func _drain_logs() -> void:
-    var logs := player.drain_startup_logs()
+    var logs: String = player.drain_startup_logs()
     if logs.is_empty():
         return
     for line in logs.split("\n", false):
@@ -2457,7 +2460,7 @@ func _pump_pointer_event_tick(delta: float) -> void:
         return
     if player.get_startup_state() != STARTUP_SUCCEEDED:
         return
-    var result := player.tick(delta)
+    var result: int = player.tick(delta)
     if result != ENGINE_RESULT_OK:
         render_errors += 1
         print("Pointer event pump failed: %s %s" % [

@@ -464,7 +464,7 @@ namespace TJS {
     //---------------------------------------------------------------------------
 } // namespace TJS
 
-static TJS::tTJSString operator"" _tss(const char *str, size_t len) {
+static TJS::tTJSString operator""_tss(const char *str, size_t len) {
     return TJS::tTJSString{ str, len };
 }
 

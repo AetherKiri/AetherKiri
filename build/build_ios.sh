@@ -267,6 +267,31 @@ EOF
     fi
 }
 
+with_ios_only_gdextension() {
+    local gdextension_file="$GODOT_APP_DIR/aether_kiri.gdextension"
+    local backup_file
+    backup_file="$(mktemp /tmp/aetherkiri-gdextension.XXXXXX)"
+
+    cp "$gdextension_file" "$backup_file"
+    restore_gdextension() {
+        trap - RETURN
+        cp "$backup_file" "$gdextension_file"
+        rm -f "$backup_file"
+    }
+    trap restore_gdextension RETURN
+
+    awk '
+        BEGIN { skip = 0 }
+        /^\[dependencies\]/ { skip = 1 }
+        /^\[/ && $0 != "[dependencies]" { skip = 0 }
+        skip && /^macos\./ { while (getline line && line !~ /^}/) {} ; next }
+        !skip || !/^macos\./ { print }
+    ' "$backup_file" | grep -v '^macos\.' > "$gdextension_file"
+
+    "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
+        "$EXPORT_MODE" "$EXPORT_PRESET" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj"
+}
+
 echo "==> Building native engine and Godot extension"
 cmake_config_args=()
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
@@ -314,8 +339,7 @@ else
         EXPORT_PRESET="iOS Release"
         EXPORT_MODE="--export-release"
     fi
-    "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
-        "$EXPORT_MODE" "$EXPORT_PRESET" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj"
+    with_ios_only_gdextension
     if [[ "$SIMULATOR" == true ]]; then
         verify_exported_simulator_template_arch "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER" "$SIMULATOR_ARCH"
     fi

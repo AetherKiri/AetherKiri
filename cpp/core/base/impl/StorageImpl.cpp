@@ -817,7 +817,7 @@ tTVPLocalFileStream::tTVPLocalFileStream(const ttstr &origname,
     if(Handle < 0) {
         if(access == TJS_BS_APPEND || access == TJS_BS_UPDATE) {
             // use whole file writing
-            Handle = open(holder, O_RDONLY, 0666);
+            Handle = open(holder, O_RDONLY);
             if(Handle >= 0) {
                 tjs_uint64 size = tTVPLocalFileStream::GetSize();
                 if(size < 4 * 1024 * 1024) { // only support file size <= 4M

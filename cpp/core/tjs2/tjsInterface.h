@@ -113,6 +113,8 @@ namespace TJS {
         */
 
     public:
+        virtual ~iTJSDispatch2() = default;
+
         virtual tjs_uint AddRef() = 0;
 
         virtual tjs_uint Release() = 0;

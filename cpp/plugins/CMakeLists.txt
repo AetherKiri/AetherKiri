@@ -86,6 +86,10 @@ if(ANDROID)
     target_compile_definitions(${PROJECT_NAME} PRIVATE SQLITE_DISABLE_UMASK)
 endif()
 
+if(APPLE)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE SQLITE_WITHOUT_ZONEMALLOC)
+endif()
+
 # ---------------------------------------------------------------------------
 # Live2D Cubism SDK
 # ---------------------------------------------------------------------------

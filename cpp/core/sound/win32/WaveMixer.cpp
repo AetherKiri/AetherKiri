@@ -2,6 +2,7 @@
 #include "tjsCommHead.h"
 
 #ifdef __APPLE__
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #include <OpenAL/al.h>
 #include <OpenAL/alc.h>
 #include <TargetConditionals.h>
@@ -457,6 +458,8 @@ public:
                     break;
                 case oboe::AudioFormat::Float:
                     _spec.format = AUDIO_F32LSB;
+                    break;
+                default:
                     break;
             }
             _frame_size = SDL_AUDIO_BITSIZE(_spec.format) / 8 * _spec.channels;

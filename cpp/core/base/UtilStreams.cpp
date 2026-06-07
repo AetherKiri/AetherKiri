@@ -848,7 +848,7 @@ public:
                 break;
             }
 
-            _totalSize += (headerData.UnpSizeHigh << 32) | headerData.UnpSize;
+            _totalSize += ((tjs_uint64)headerData.UnpSizeHigh << 32) | headerData.UnpSize;
             _filelist.emplace_back(headerData.FileName);
             // Find next file
             result = RARProcessFile(arc._handle, RAR_SKIP, nullptr, nullptr);
@@ -892,7 +892,7 @@ public:
 
             // _filelist.emplace_back(headerData.FileName);
             _callbacks->FuncOnNewFile(counter, headerData.FileName,
-                                      (headerData.UnpSizeHigh << 32) |
+                                      ((tjs_uint64)headerData.UnpSizeHigh << 32) |
                                           headerData.UnpSize);
             _curProcessedBytes = 0;
             // Find next file

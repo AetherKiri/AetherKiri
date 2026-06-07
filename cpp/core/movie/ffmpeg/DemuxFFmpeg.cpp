@@ -1,5 +1,7 @@
 #include "DemuxFFmpeg.h"
 
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 extern "C" {
 #include "libavutil/dict.h"
 #include "libavutil/opt.h"
