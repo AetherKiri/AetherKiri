@@ -7,6 +7,7 @@ const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const UI_FONT := preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
 const UI_SYMBOL_FONT := preload("res://assets/fonts/aetherkiri-runtime-symbols.ttf")
+const ProbeConfig = preload("res://scripts/probe_config.gd")
 
 const ENGINE_RESULT_OK := 0
 const STARTUP_IDLE := 0
@@ -46,6 +47,7 @@ var lock_landscape := true
 var frame_limit_enabled := false
 var target_fps := 80
 var plugin_trace := false
+var plugin_load_mode := "krkrsdl3"
 var mock_enabled := true
 var console_log_file := true
 var trace_log := false
@@ -83,6 +85,7 @@ var frame_spike_ms := 0.0
 var frame_probe_enabled := false
 var frame_probe_interval := 1.0
 var frame_probe_accum := 0.0
+var cli_probe_script := ""
 var verbose_render_log := false
 var web_auto_start_attempted := false
 var perf_log_file: FileAccess
@@ -109,6 +112,32 @@ const COLOR_ACCENT := Color(0.78, 0.35, 0.22, 1.0)
 const COLOR_ACCENT_SOFT := Color(0.90, 0.72, 0.64, 1.0)
 const COLOR_LINE := Color(0.84, 0.82, 0.76, 1.0)
 const HOME_CARD_SIZE := Vector2(260, 350)
+
+func _detect_cli_probe_script() -> String:
+    var args := OS.get_cmdline_args()
+    for i in range(args.size()):
+        var arg := String(args[i])
+        if arg == "--script" or arg == "-s":
+            if i + 1 < args.size():
+                return _normalize_cli_probe_script(String(args[i + 1]))
+        elif arg.begins_with("--script="):
+            return _normalize_cli_probe_script(arg.substr("--script=".length()))
+    return ""
+
+func _normalize_cli_probe_script(path: String) -> String:
+    var normalized := path.strip_edges()
+    if normalized.is_empty():
+        return ""
+    var known := [
+        "res://scripts/smoke_test.gd",
+        "res://scripts/step_render_probe.gd",
+        "res://scripts/gui_render_probe.gd",
+        "res://scripts/perf_input_probe.gd",
+    ]
+    for item in known:
+        if normalized == item or normalized.ends_with("/" + item.get_file()):
+            return item
+    return ""
 
 func _apply_ui_font() -> void:
     var fallbacks: Array[Font] = [UI_SYMBOL_FONT]
@@ -187,6 +216,9 @@ func _load_shell_settings() -> void:
     target_fps = int(cfg.get_value("rendering", "target_fps", target_fps))
     lock_landscape = bool(cfg.get_value("rendering", "force_landscape", lock_landscape))
     plugin_trace = bool(cfg.get_value("developer", "plugin_trace", plugin_trace))
+    plugin_load_mode = String(cfg.get_value("developer", "plugin_load_mode", plugin_load_mode))
+    if not plugin_load_mode in ["krkrsdl3", "aether_all"]:
+        plugin_load_mode = "krkrsdl3"
     mock_enabled = bool(cfg.get_value("developer", "mock_enabled", mock_enabled))
     console_log_file = bool(cfg.get_value("developer", "console_log_file", console_log_file))
     trace_log = bool(cfg.get_value("developer", "trace_log", trace_log))
@@ -201,6 +233,7 @@ func _save_shell_settings() -> void:
     cfg.set_value("rendering", "target_fps", target_fps)
     cfg.set_value("rendering", "force_landscape", lock_landscape)
     cfg.set_value("developer", "plugin_trace", plugin_trace)
+    cfg.set_value("developer", "plugin_load_mode", plugin_load_mode)
     cfg.set_value("developer", "mock_enabled", mock_enabled)
     cfg.set_value("developer", "console_log_file", console_log_file)
     cfg.set_value("developer", "trace_log", trace_log)
@@ -222,8 +255,13 @@ func _mark_settings_dirty() -> void:
 func _apply_engine_options() -> void:
     if player == null:
         return
+    var effective_plugin_load_mode := _runtime_string("AETHERKIRI_PLUGIN_LOAD_MODE", plugin_load_mode)
+    if not effective_plugin_load_mode in ["krkrsdl3", "aether_all"]:
+        effective_plugin_load_mode = "krkrsdl3"
+    var effective_plugin_trace := plugin_trace or _runtime_flag("AETHERKIRI_PLUGIN_TRACE", false)
     player.set_engine_option("fps_limit", str(target_fps) if frame_limit_enabled else "0")
-    player.set_engine_option("plugin_trace", "1" if plugin_trace else "0")
+    player.set_engine_option("plugin_load_mode", effective_plugin_load_mode)
+    player.set_engine_option("plugin_trace", "1" if effective_plugin_trace else "0")
     player.set_engine_option("mock_enabled", "1" if mock_enabled else "0")
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if trace_log else "0")
@@ -561,6 +599,7 @@ func _rebuild_settings_view() -> void:
     page.add_child(_section_title("▱  开发者"))
     var dev_card := _settings_card()
     page.add_child(dev_card)
+    dev_card.add_child(_settings_block("插件加载模式", "krkrsdl3 只预加载核心兼容插件；aether_all 保留旧全量注册", _plugin_load_mode_select()))
     dev_card.add_child(_settings_toggle_row("插件调用追踪", "将所有插件原生调用记录到 plugin_trace.log 用于调试", plugin_trace, "plugin_trace"))
     dev_card.add_child(_settings_toggle_row("Mock 绕过", "为缺失插件返回 mock 对象以抑制错误。关闭可暴露真实错误用于调试。", mock_enabled, "mock"))
     dev_card.add_child(_settings_toggle_row("控制台日志文件", "将引擎控制台日志写入 krkr.console.log 文件", console_log_file, "console_log"))
@@ -848,6 +887,25 @@ func _upscale_select() -> OptionButton:
     )
     return select
 
+func _plugin_load_mode_select() -> OptionButton:
+    var select := OptionButton.new()
+    select.custom_minimum_size = Vector2(360, 58)
+    var options := [
+        {"label": "krkrsdl3", "value": "krkrsdl3"},
+        {"label": "aether_all", "value": "aether_all"},
+    ]
+    var selected_index := 0
+    for i in range(options.size()):
+        select.add_item(String(options[i]["label"]))
+        select.set_item_metadata(i, String(options[i]["value"]))
+        if String(options[i]["value"]) == plugin_load_mode:
+            selected_index = i
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_plugin_load_mode(String(select.get_item_metadata(index)))
+    )
+    return select
+
 func _segment_button(text: String, selected: bool) -> Button:
     var button := Button.new()
     button.text = text
@@ -928,6 +986,13 @@ func _select_upscale_algorithm(value: String) -> void:
     upscale_algorithm = value
     _apply_upscale_algorithm()
     _mark_settings_dirty()
+
+func _select_plugin_load_mode(value: String) -> void:
+    if not value in ["krkrsdl3", "aether_all"]:
+        return
+    plugin_load_mode = value
+    _mark_settings_dirty()
+    _apply_engine_options()
 
 func _empty_help_text() -> String:
     if OS.get_name() == "iOS":
@@ -2003,6 +2068,7 @@ func _finalize_active_game_session() -> void:
     active_game_started_msec = 0
 
 func _ready() -> void:
+    cli_probe_script = _detect_cli_probe_script()
     _apply_ui_font()
     DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_TRANSPARENT, false)
     _apply_initial_window_size()
@@ -2079,6 +2145,7 @@ func _finish_ready_after_first_frame() -> void:
     var user_dir := OS.get_user_data_dir()
     var cache_dir := user_dir.path_join("cache")
     DirAccess.make_dir_recursive_absolute(cache_dir)
+    var engine_initialized := false
     if not player.initialize_engine(user_dir, cache_dir):
         render_errors += 1
         _append_log("Engine init failed: %s %s" % [
@@ -2086,11 +2153,20 @@ func _finish_ready_after_first_frame() -> void:
             player.get_last_error(),
         ])
     else:
+        engine_initialized = true
         _append_log("AetherKiri engine initialized.")
 
     _apply_backend(false)
     _apply_engine_options()
     _apply_shell_runtime_settings()
+    if not cli_probe_script.is_empty():
+        if not engine_initialized:
+            printerr("initialize_engine failed: %s" % player.get_last_error())
+            get_tree().quit(1)
+            return
+        call_deferred("_run_cli_script_probe")
+        return
+
     _append_log("Debug CPU is a fallback backend and is not part of performance acceptance.")
     _write_probe_marker("ready")
     _refresh_games()
@@ -2142,6 +2218,400 @@ func _capture_ui_after_ready() -> void:
     print("ui_capture output=%s stats=%s" % [path, JSON.stringify(_image_stats(image))])
     if OS.get_environment("AETHERKIRI_QUIT_AFTER_CAPTURE") == "1":
         get_tree().quit(0)
+
+func _run_cli_script_probe() -> void:
+    var config := ProbeConfig.load()
+    var target_game_path: String = ProbeConfig.require_game_path(config)
+    if target_game_path.is_empty():
+        printerr("AETHERKIRI_SMOKE_GAME is not set")
+        await _probe_cleanup_and_quit(2)
+        return
+
+    _prepare_cli_probe_view(config)
+    if cli_probe_script == "res://scripts/smoke_test.gd":
+        await _run_cli_smoke_probe(config, target_game_path)
+    elif cli_probe_script == "res://scripts/step_render_probe.gd":
+        await _run_cli_step_probe(config, target_game_path)
+    elif cli_probe_script == "res://scripts/gui_render_probe.gd":
+        await _run_cli_gui_probe(config, target_game_path)
+    elif cli_probe_script == "res://scripts/perf_input_probe.gd":
+        await _run_cli_perf_input_probe(config, target_game_path)
+    else:
+        printerr("unsupported probe script: %s" % cli_probe_script)
+        await _probe_cleanup_and_quit(2)
+
+func _prepare_cli_probe_view(config: Dictionary) -> void:
+    var window_size := ProbeConfig.window_size(config, Vector2i(1280, 720))
+    if window_size.x > 0 and window_size.y > 0:
+        DisplayServer.window_set_size(window_size)
+        size = Vector2(window_size)
+    shell_root.visible = false
+    home_view.visible = false
+    settings_view.visible = false
+    detail_view.visible = false
+    detail_scroll.visible = false
+    modal_layer.visible = false
+    bg_rect.color = COLOR_GAME_BG
+    viewport.visible = true
+    game_view.visible = true
+    loading_panel.visible = false
+    perf.visible = false
+    restart_notice.visible = false
+    viewport.texture = null
+    last_texture_size = Vector2i.ZERO
+    game_running = false
+    _fit_full_rects()
+
+func _probe_open_game(config: Dictionary, target_game_path: String, backend_env: String) -> bool:
+    selected_backend = ProbeConfig.backend(config, backend_env)
+    if not selected_backend in BACKENDS:
+        selected_backend = "Godot Native"
+    _apply_backend(false)
+    var surface_size := ProbeConfig.surface_size(config)
+    var surface_result: int = int(player.set_surface_size(surface_size.x, surface_size.y))
+    if surface_result != ENGINE_RESULT_OK:
+        printerr("set_surface_size failed: %s" % player.get_last_error())
+        return false
+    current_surface_size = surface_size
+    game_path.text = target_game_path
+    var result: int = int(player.open_game(target_game_path, true))
+    if result != ENGINE_RESULT_OK:
+        printerr("open_game failed: %s" % player.get_last_error())
+        return false
+    return true
+
+func _probe_wait_startup(config: Dictionary, fallback_frames: int = 900) -> bool:
+    for i in range(ProbeConfig.int_value(config, "startup_timeout_frames", fallback_frames)):
+        var state: int = int(player.get_startup_state())
+        if state == STARTUP_SUCCEEDED:
+            return true
+        if state == STARTUP_FAILED:
+            printerr("startup failed: %s" % player.get_last_error())
+            return false
+        await get_tree().process_frame
+    printerr("startup timed out")
+    return false
+
+func _probe_tick_and_update() -> bool:
+    var result: int = int(player.tick(1.0 / 60.0))
+    if result != ENGINE_RESULT_OK:
+        printerr("tick failed: %s" % player.get_last_error())
+        return false
+    var texture: Texture2D = player.update_frame_texture()
+    if texture != null:
+        viewport.texture = texture
+        viewport.queue_redraw()
+        last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+        _layout_game_viewport(get_viewport_rect().size)
+    return true
+
+func _probe_advance(frames: int) -> bool:
+    for i in range(max(0, frames)):
+        if not _probe_tick_and_update():
+            return false
+        await get_tree().process_frame
+    return true
+
+func _run_cli_smoke_probe(config: Dictionary, target_game_path: String) -> void:
+    var backend_name: String = ProbeConfig.backend(config)
+    if not _probe_open_game(config, target_game_path, "AETHERKIRI_RENDER_BACKEND"):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_wait_startup(config, 600):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_advance(ProbeConfig.int_value(config, "smoke_tick_frames", 5)):
+        await _probe_cleanup_and_quit(1)
+        return
+
+    var frame: Dictionary = player.read_frame_rgba()
+    var bytes: int = frame.get("rgba", PackedByteArray()).size()
+    var width: int = int(frame.get("width", 0))
+    var height: int = int(frame.get("height", 0))
+    if width <= 0 or height <= 0 or bytes <= 0:
+        printerr("empty frame backend=%s frame=%dx%d bytes=%d renderer=%s" % [
+            backend_name,
+            width,
+            height,
+            bytes,
+            player.get_renderer_info(),
+        ])
+        await _probe_cleanup_and_quit(1)
+        return
+
+    var texture: Texture2D = player.update_frame_texture()
+    if texture == null or texture.get_width() != width or texture.get_height() != height:
+        printerr("texture update failed backend=%s frame=%dx%d renderer=%s" % [
+            backend_name,
+            width,
+            height,
+            player.get_renderer_info(),
+        ])
+        await _probe_cleanup_and_quit(1)
+        return
+
+    print("smoke ok backend=%s renderer=\"%s\" texture_backend=%s frame=%dx%d texture=%dx%d serial=%d bytes=%d" % [
+        backend_name,
+        player.get_renderer_info(),
+        player.get_frame_texture_backend(),
+        width,
+        height,
+        texture.get_width(),
+        texture.get_height(),
+        int(frame.get("frame_serial", 0)),
+        bytes,
+    ])
+    await _probe_cleanup_and_quit(0)
+
+func _run_cli_step_probe(config: Dictionary, target_game_path: String) -> void:
+    if not _probe_open_game(config, target_game_path, "AETHERKIRI_PROBE_BACKEND"):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_wait_startup(config, 900):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_advance(ProbeConfig.int_value(config, "warmup_frames", _runtime_int("AETHERKIRI_PROBE_WARMUP_FRAMES", 180))):
+        await _probe_cleanup_and_quit(1)
+        return
+    await _probe_save_step(0, "startup")
+
+    var step := 1
+    for click in ProbeConfig.clicks(config):
+        var click_dict: Dictionary = click
+        var pos := ProbeConfig.click_position(click_dict)
+        _probe_send_mapped_click(pos, config)
+        var after_frames := int(click_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        if not await _probe_advance(after_frames):
+            await _probe_cleanup_and_quit(1)
+            return
+        await _probe_save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+
+    for key_event in config.get("keys", []):
+        if not key_event is Dictionary:
+            continue
+        var key_dict: Dictionary = key_event
+        var key_code := int(key_dict.get("key_code", 13))
+        player.send_key_event(true, key_code, int(key_dict.get("modifiers", 0)), int(key_dict.get("unicode", 0)))
+        player.tick(1.0 / 60.0)
+        player.send_key_event(false, key_code, int(key_dict.get("modifiers", 0)), 0)
+        var key_after_frames := int(key_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        if not await _probe_advance(key_after_frames):
+            await _probe_cleanup_and_quit(1)
+            return
+        await _probe_save_step(step, "key_%d" % key_code)
+        step += 1
+
+    for click in config.get("clicks_after_keys", []):
+        if not click is Dictionary:
+            continue
+        var click_dict: Dictionary = click
+        var pos := ProbeConfig.click_position(click_dict)
+        _probe_send_mapped_click(pos, config)
+        var after_frames := int(click_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        if not await _probe_advance(after_frames):
+            await _probe_cleanup_and_quit(1)
+            return
+        await _probe_save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+
+    var measured_frames: int = ProbeConfig.int_value(config, "measure_frames", _runtime_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 120))
+    var start_ticks: int = Time.get_ticks_usec()
+    if not await _probe_advance(measured_frames):
+        await _probe_cleanup_and_quit(1)
+        return
+    var fps: float = float(measured_frames) / max(0.0001, float(Time.get_ticks_usec() - start_ticks) / 1000000.0)
+    print("step probe fps=%.2f texture_backend=%s renderer=\"%s\" steps=%d output=/tmp/aetherkiri-step-*.png" % [
+        fps,
+        player.get_frame_texture_backend(),
+        player.get_renderer_info(),
+        step,
+    ])
+    await _probe_cleanup_and_quit(0)
+
+func _probe_save_step(index: int, label: String) -> void:
+    await get_tree().process_frame
+    await get_tree().process_frame
+    var image := _probe_capture_image()
+    var path := "/tmp/aetherkiri-step-%02d-%s.png" % [index, label]
+    image.save_png(path)
+    print("step %02d label=%s texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
+        index,
+        label,
+        player.get_frame_texture_backend(),
+        player.get_renderer_info(),
+        path,
+        JSON.stringify(_image_stats(image)),
+    ])
+
+func _probe_send_mapped_click(window_pos: Vector2, config: Dictionary) -> void:
+    var mapped := _probe_map_window_point(window_pos, config)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip click outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+
+func _probe_map_window_point(pos: Vector2, config: Dictionary) -> Vector2:
+    var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
+    var coord := ProbeConfig.coord_size(config, Vector2i(
+        _runtime_int("AETHERKIRI_PROBE_COORD_W", 1600),
+        _runtime_int("AETHERKIRI_PROBE_COORD_H", 900)
+    ))
+    var panel_size := Vector2(coord)
+    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
+    if scale <= 0.0:
+        return Vector2(-1.0, -1.0)
+    var drawn_size := tex_size * scale
+    var offset := (panel_size - drawn_size) * 0.5
+    var inside := pos - offset
+    if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
+        return Vector2(-1.0, -1.0)
+    return inside / scale
+
+func _run_cli_gui_probe(config: Dictionary, target_game_path: String) -> void:
+    if not _probe_open_game(config, target_game_path, "AETHERKIRI_RENDER_BACKEND"):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_wait_startup(config, 600):
+        await _probe_cleanup_and_quit(1)
+        return
+
+    var min_frames := ProbeConfig.int_value(config, "min_visible_frames", 0)
+    var max_frames := ProbeConfig.int_value(config, "gui_probe_frames", 180)
+    var frame := {}
+    for i in range(max_frames):
+        if not _probe_tick_and_update():
+            await _probe_cleanup_and_quit(1)
+            return
+        frame = player.read_frame_rgba()
+        if i >= min_frames and int(_frame_stats(frame).get("visible", 0)) > 0:
+            break
+        await get_tree().process_frame
+
+    await get_tree().process_frame
+    await get_tree().process_frame
+    var stats := _frame_stats(frame)
+    var screenshot := _probe_capture_image()
+    var screenshot_stats := _image_stats(screenshot)
+    var output_path := OS.get_user_data_dir().path_join("gui_render_probe.png")
+    screenshot.save_png(output_path)
+    print("gui probe renderer=\"%s\" texture_backend=%s frame=%dx%d serial=%d stats=%s screenshot=%s screenshot_stats=%s" % [
+        player.get_renderer_info(),
+        player.get_frame_texture_backend(),
+        int(frame.get("width", 0)),
+        int(frame.get("height", 0)),
+        int(frame.get("frame_serial", 0)),
+        JSON.stringify(stats),
+        output_path,
+        JSON.stringify(screenshot_stats),
+    ])
+    await _probe_cleanup_and_quit(0 if int(screenshot_stats.get("visible", 0)) > 0 else 2)
+
+func _run_cli_perf_input_probe(config: Dictionary, target_game_path: String) -> void:
+    if not _probe_open_game(config, target_game_path, "AETHERKIRI_PROBE_BACKEND"):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_wait_startup(config, 900):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_advance(ProbeConfig.int_value(config, "warmup_frames", 180)):
+        await _probe_cleanup_and_quit(1)
+        return
+
+    var before := _probe_capture_image()
+    before.save_png("/tmp/aetherkiri-before-click.png")
+
+    var measured_frames: int = ProbeConfig.int_value(config, "measure_frames", _runtime_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 180))
+    var start_ticks: int = Time.get_ticks_usec()
+    if not await _probe_advance(measured_frames):
+        await _probe_cleanup_and_quit(1)
+        return
+    var fps: float = float(measured_frames) / max(0.0001, float(Time.get_ticks_usec() - start_ticks) / 1000000.0)
+
+    var clicks := ProbeConfig.clicks(config)
+    var click_pos: Vector2 = ProbeConfig.click_position(clicks[0]) if not clicks.is_empty() else ProbeConfig.perf_click(config, "click", Vector2(
+        _runtime_float("AETHERKIRI_PROBE_CLICK_X", 450.0),
+        _runtime_float("AETHERKIRI_PROBE_CLICK_Y", 880.0)
+    ))
+    _probe_send_direct_click(click_pos)
+    var post_click_frames: int = int(clicks[0].get("after_frames", 180)) if not clicks.is_empty() else ProbeConfig.nested_int(config, "perf_input", "post_click_frames", _runtime_int("AETHERKIRI_PROBE_POST_CLICK_FRAMES", 180))
+    if not await _probe_advance(post_click_frames):
+        await _probe_cleanup_and_quit(1)
+        return
+
+    var has_second_click := clicks.size() > 1 or OS.get_environment("AETHERKIRI_PROBE_SECOND_CLICK") == "1"
+    if has_second_click:
+        var second_click_pos := ProbeConfig.click_position(clicks[1]) if clicks.size() > 1 else ProbeConfig.perf_click(config, "second_click", Vector2(
+            _runtime_float("AETHERKIRI_PROBE_SECOND_CLICK_X", 1350.0),
+            _runtime_float("AETHERKIRI_PROBE_SECOND_CLICK_Y", 240.0)
+        ))
+        _probe_send_direct_click(second_click_pos)
+        var second_post_click_frames: int = int(clicks[1].get("after_frames", 600)) if clicks.size() > 1 else ProbeConfig.nested_int(config, "perf_input", "second_post_click_frames", _runtime_int("AETHERKIRI_PROBE_SECOND_POST_CLICK_FRAMES", 600))
+        if not await _probe_advance(second_post_click_frames):
+            await _probe_cleanup_and_quit(1)
+            return
+
+    var after := _probe_capture_image()
+    after.save_png("/tmp/aetherkiri-after-click.png")
+    var diff: float = _probe_image_diff_score(before, after)
+    print("perf_input probe fps=%.2f texture_backend=%s renderer=\"%s\" click_diff=%.5f before=/tmp/aetherkiri-before-click.png after=/tmp/aetherkiri-after-click.png" % [
+        fps,
+        player.get_frame_texture_backend(),
+        player.get_renderer_info(),
+        diff,
+    ])
+    await _probe_cleanup_and_quit(0 if diff > 0.01 else 2)
+
+func _probe_send_direct_click(pos: Vector2) -> void:
+    player.send_pointer_event(POINTER_MOVE, 0, pos.x, pos.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_DOWN, 0, pos.x, pos.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_UP, 0, pos.x, pos.y, 0.0, 0.0, 0)
+
+func _probe_capture_image() -> Image:
+    var frame: Dictionary = player.read_frame_rgba()
+    var data: PackedByteArray = frame.get("rgba", PackedByteArray())
+    var width := int(frame.get("width", 0))
+    var height := int(frame.get("height", 0))
+    if width > 0 and height > 0 and data.size() >= width * height * 4:
+        return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
+
+    var texture := get_viewport().get_texture()
+    if texture != null:
+        var viewport_image := texture.get_image()
+        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
+            return viewport_image
+    return Image.create(1, 1, false, Image.FORMAT_RGBA8)
+
+func _probe_image_diff_score(a: Image, b: Image) -> float:
+    var width: int = min(a.get_width(), b.get_width())
+    var height: int = min(a.get_height(), b.get_height())
+    if width <= 0 or height <= 0:
+        return 0.0
+    var step_x: int = max(1, width / 160)
+    var step_y: int = max(1, height / 90)
+    var total := 0.0
+    var samples := 0
+    for y in range(0, height, step_y):
+        for x in range(0, width, step_x):
+            var ca := a.get_pixel(x, y)
+            var cb := b.get_pixel(x, y)
+            total += absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b) + absf(ca.a - cb.a)
+            samples += 1
+    return total / max(1.0, float(samples))
+
+func _probe_cleanup_and_quit(code: int) -> void:
+    if player != null:
+        viewport.texture = null
+        await get_tree().process_frame
+        player.release_frame_texture()
+        player.destroy_engine()
+    get_tree().quit(code)
 
 func _apply_initial_window_size() -> void:
     if OS.get_name() == "iOS" or OS.get_name() == "Android":

@@ -856,6 +856,44 @@ namespace motion {
         return _runtime->lastCanvas;
     }
 
+    tTJSVariant makeCanvasSummary(const detail::PlayerRuntime &runtime) {
+        std::vector<iTJSDispatch2 *> uniqueSources;
+        for(const auto &[_, source] : runtime.sourcesByKey) {
+            if(source.Type() != tvtObject)
+                continue;
+            auto *object = source.AsObjectNoAddRef();
+            if(!object)
+                continue;
+            if(std::find(uniqueSources.begin(), uniqueSources.end(), object) ==
+               uniqueSources.end()) {
+                uniqueSources.push_back(object);
+            }
+        }
+
+        const tjs_int width =
+            runtime.width > 0
+                ? runtime.width
+                : (runtime.activeMotion
+                       ? static_cast<tjs_int>(runtime.activeMotion->width)
+                       : 0);
+        const tjs_int height =
+            runtime.height > 0
+                ? runtime.height
+                : (runtime.activeMotion
+                       ? static_cast<tjs_int>(runtime.activeMotion->height)
+                       : 0);
+
+        return detail::makeDictionary({
+            { "width", width },
+            { "height", height },
+            { "sourceCount", static_cast<tjs_int>(uniqueSources.size()) },
+            { "backgroundCount", static_cast<tjs_int>(runtime.backgrounds.size()) },
+            { "captionCount", static_cast<tjs_int>(runtime.captions.size()) },
+            { "flip", runtime.flip },
+            { "opacity", runtime.opacity },
+        });
+    }
+
     void Player::ensureNodeTreeBuilt() {
         ensureMotionLoaded();
         if(!_runtime->activeMotion || _runtime->nodesBuilt) {
@@ -2298,6 +2336,9 @@ namespace motion {
         ensureNodeTreeBuilt();
         calcViewParam();
         prepareRenderItems();
+        if(_canvasCaptureEnabled) {
+            _runtime->lastCanvas = makeCanvasSummary(*_runtime);
+        }
     }
 
     void Player::scheduleTimelineControlAnimatorLike_0x671A50(

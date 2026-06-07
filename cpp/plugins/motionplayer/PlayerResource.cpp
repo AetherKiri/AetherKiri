@@ -62,8 +62,12 @@ namespace motion {
     }
 
     bool Player::isExistMotion(ttstr name) {
-        return static_cast<bool>(
-            resolveMotion(*_runtime, name, &_resourceManagerNative));
+        try {
+            return static_cast<bool>(
+                resolveMotion(*_runtime, name, &_resourceManagerNative));
+        } catch(...) {
+            return false;
+        }
     }
 
     tTJSVariant Player::findMotion(ttstr name) {

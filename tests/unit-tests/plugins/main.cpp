@@ -6,6 +6,8 @@
 
 #include <spdlog/sinks/stdout_color_sinks.h>
 
+bool TVPIsConsoleLogFileEnabled() { return false; }
+
 int main(int argc, char *argv[]) {
 
     static auto core_logger = spdlog::stdout_color_mt("core");

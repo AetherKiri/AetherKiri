@@ -1,13 +1,29 @@
 #include "ncbind.hpp"
+#include "extrans_precise/mosaic.h"
+#include "extrans_precise/ripple.h"
+#include "extrans_precise/rotatetrans.h"
+#include "extrans_precise/turn.h"
+#include "extrans_precise/wave.h"
 
-// Stub modules — register empty entries so Plugins.link() succeeds.
-// The engine already has built-in support for the functionality these
-// plugins originally provided (vorbis/opus decoding, transitions),
-// but some games explicitly link them by name.
+void initExtrans() {
+    RegisterWaveTransHandlerProvider();
+    RegisterMosaicTransHandlerProvider();
+    RegisterTurnTransHandlerProvider();
+    RegisterRotateTransHandlerProvider();
+    RegisterRippleTransHandlerProvider();
+}
+
+void doneExtrans() {
+    UnregisterWaveTransHandlerProvider();
+    UnregisterMosaicTransHandlerProvider();
+    UnregisterTurnTransHandlerProvider();
+    UnregisterRotateTransHandlerProvider();
+    UnregisterRippleTransHandlerProvider();
+}
 
 #define NCB_MODULE_NAME TJS_W("extrans.dll")
-static void extrans_stub() {}
-NCB_PRE_REGIST_CALLBACK(extrans_stub);
+NCB_PRE_REGIST_CALLBACK(initExtrans);
+NCB_POST_UNREGIST_CALLBACK(doneExtrans);
 
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("wuvorbis.dll")

@@ -65,6 +65,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "sound/win32/WaveImpl.h"
 #include "engine_options.h"
 #include "PluginCallTracer.hpp"
+#include "PluginImpl.h"
 
 // Mock bypass toggle (defined in tjsVariant.cpp, namespace TJS)
 namespace TJS { void TVPSetMockEnabled(bool enabled); }
@@ -2218,6 +2219,19 @@ engine_result_t engine_set_option(engine_handle_t handle,
     spdlog::info("engine_set_option: plugin_trace={}", enabled);
     // Also store in command line so TVPLoadInternalPlugins can read it
     TVPSetCommandLine(ttstr(option->key_utf8).c_str(), ttstr(option->value_utf8));
+    ClearHandleErrorLocked(impl);
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+
+  if (key == ENGINE_OPTION_PLUGIN_LOAD_MODE) {
+    const std::string v(option->value_utf8);
+    const char* mode = (v == ENGINE_PLUGIN_LOAD_MODE_AETHER_ALL)
+                           ? ENGINE_PLUGIN_LOAD_MODE_AETHER_ALL
+                           : ENGINE_PLUGIN_LOAD_MODE_KRKRSDL3;
+    TVPSetPluginLoadMode(ttstr(mode));
+    TVPSetCommandLine(ttstr(option->key_utf8).c_str(), ttstr(mode));
+    spdlog::info("engine_set_option: plugin_load_mode={}", mode);
     ClearHandleErrorLocked(impl);
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;

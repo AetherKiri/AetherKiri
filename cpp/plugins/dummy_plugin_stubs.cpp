@@ -486,10 +486,12 @@ NCB_REGISTER_CLASS(OGLDrawDevice) {
 #define NCB_MODULE_NAME TJS_W("gfxEffect.dll")
 class gfxFire {
 public:
-    gfxFire() = default;
+    gfxFire() { TVPAddLog(TJS_W("gfxFire construct")); }
+    void finalize() { TVPAddLog(TJS_W("gfxFire finalize")); }
 };
 NCB_REGISTER_CLASS(gfxFire) {
     Constructor();
+    NCB_METHOD(finalize);
 }
 
 #undef NCB_MODULE_NAME
@@ -597,7 +599,13 @@ REGISTER_EMPTY_PLUGIN(drawdevice, drawdevice);
 
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("drawdeviceD3D.dll")
-REGISTER_EMPTY_PLUGIN(drawdeviceD3D, drawdeviceD3D);
+static void drawdeviceD3D_init() {
+    try {
+        ncbAutoRegister::LoadModule(TJS_W("emoteplayer.dll"));
+    } catch(...) {
+    }
+}
+NCB_PRE_REGIST_CALLBACK(drawdeviceD3D_init);
 
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("drawdeviceIrrlicht.dll")
@@ -652,16 +660,8 @@ REGISTER_EMPTY_PLUGIN(registory, registory);
 REGISTER_EMPTY_PLUGIN(resourceRW, resourceRW);
 
 #undef NCB_MODULE_NAME
-#define NCB_MODULE_NAME TJS_W("shrinkCopy.dll")
-REGISTER_EMPTY_PLUGIN(shrinkCopy, shrinkCopy);
-
-#undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("sigcheck.dll")
 REGISTER_EMPTY_PLUGIN(sigcheck, sigcheck);
-
-#undef NCB_MODULE_NAME
-#define NCB_MODULE_NAME TJS_W("sqlite3_xp3_vfs.dll")
-REGISTER_EMPTY_PLUGIN(sqlite3_xp3_vfs, sqlite3_xp3_vfs);
 
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("stdio.dll")

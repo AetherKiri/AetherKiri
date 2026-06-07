@@ -29,7 +29,8 @@
 #define TVP_DEFAULT_AUTOPATH_CACHE_NUM 256
 static const tjs_char *TVP_AUTOPATH_CACHE_MISS_MARKER = TJS_W("\x01");
 static const char TVP_GFX_EFFECT_COMPAT_SCRIPT[] =
-    "// AetherKiri gfxEffect.dll compatibility placeholder.\n";
+    "// AetherKiri gfxEffect.dll compatibility placeholder.\n"
+    "try { Plugins.link(\"gfxEffect.dll\"); } catch(e) { }\n";
 static const char TVP_GPU_COMPAT_SCRIPT[] =
     "// AetherKiri GPULayer/D3D compatibility placeholder.\n"
     "try { Plugins.link(\"krkrgles.dll\"); } catch(e) { }\n"
@@ -74,7 +75,9 @@ static bool TVPIsGfxEffectCompanionScript(const ttstr &name) {
            (TVPRegisteredPlugins.find(TJS_W("gfxeffect.dll")) !=
                 TVPRegisteredPlugins.end() ||
             TVPRegisteredPlugins.find(TJS_W("gfxfire.dll")) !=
-            TVPRegisteredPlugins.end());
+                TVPRegisteredPlugins.end() ||
+            ncbAutoRegister::HasModule(TJS_W("gfxeffect.dll")) ||
+            ncbAutoRegister::HasModule(TJS_W("gfxfire.dll")));
 }
 
 static bool TVPIsGpuCompanionScript(const ttstr &name) {

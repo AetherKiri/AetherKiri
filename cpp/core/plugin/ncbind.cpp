@@ -54,6 +54,44 @@ bool ncbAutoRegister::LoadModule(const ttstr &_name)
 	return false;
 }
 
+bool ncbAutoRegister::UnloadModule(const ttstr &_name)
+{
+	ttstr name = _name.AsLowerCase();
+	auto it = _internal_plugins.find(name);
+	if (it == _internal_plugins.end()) {
+        spdlog::warn("ncbAutoRegister::UnloadModule('{}'): module not found in internal plugin map",
+                     name.AsStdString());
+		return false;
+	}
+	if (TVPRegisteredPlugins.find(name) == TVPRegisteredPlugins.end()) {
+        spdlog::trace("ncbAutoRegister::UnloadModule('{}'): not registered",
+                      name.AsStdString());
+		return true;
+	}
+	for (int line = 0; line < LINE_COUNT; ++line) {
+        const auto &plugin_list = it->second.lists[line];
+		for (auto i : plugin_list) {
+            const ttstr module = i->modulename ? ttstr(i->modulename) : ttstr();
+            spdlog::trace(
+                "ncbAutoRegister::UnloadModule('{}'): Unregist begin line={} entry='{}'",
+                name.AsStdString(), line, module.AsStdString());
+            try {
+			    i->Unregist();
+            } catch(...) {
+                spdlog::error(
+                    "ncbAutoRegister::UnloadModule('{}'): Unregist threw at line={} entry='{}'",
+                    name.AsStdString(), line, module.AsStdString());
+                throw;
+            }
+            spdlog::trace(
+                "ncbAutoRegister::UnloadModule('{}'): Unregist end line={} entry='{}'",
+                name.AsStdString(), line, module.AsStdString());
+		}
+	}
+	TVPRegisteredPlugins.erase(name);
+	return true;
+}
+
 bool ncbAutoRegister::HasModule(const ttstr &_name)
 {
 	ttstr name = _name.AsLowerCase();

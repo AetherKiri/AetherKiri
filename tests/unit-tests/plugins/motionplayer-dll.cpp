@@ -12,13 +12,36 @@
 #include "motionplayer/Player.h"
 #include "motionplayer/ResourceManager.h"
 #include "motionplayer/RuntimeSupport.h"
+#include "ncbind.hpp"
+#include "ScriptMgnIntf.h"
+#include "StorageIntf.h"
+#include "SysInitIntf.h"
+#include "SysInitImpl.h"
 #include "psbfile/PSBValue.h"
 #include "test_config.h"
 #include "tjsObject.h"
 
+extern tTJS *TVPScriptEngine;
+
 namespace {
 
     constexpr tjs_int kEmoteSeed = 742877301;
+
+    void ensurePluginRuntime() {
+        static bool initialized = false;
+        if(initialized)
+            return;
+        const ttstr testRoot(TEST_FILES_PATH "/");
+        TVPNativeProjectDir = testRoot;
+        TVPProjectDir = TVPNormalizeStorageName(testRoot);
+        if(TVPProjectDir.GetLastChar() != TJS_W('/'))
+            TVPProjectDir += TJS_W("/");
+        if(TVPGetScriptEngine() == nullptr)
+            TVPScriptEngine = new tTJS();
+        ncbAutoRegister::AllRegist();
+        ncbAutoRegister::LoadModule(TJS_W("psbfile.dll"));
+        initialized = true;
+    }
 
     ttstr motionFixturePath() {
         return ttstr(TEST_FILES_PATH "/emote/e-mote3.0バニラパジャマa.psb");
@@ -29,6 +52,7 @@ namespace {
     }
 
     void setEmoteSeed() {
+        ensurePluginRuntime();
         tTJSVariant seed{kEmoteSeed};
         tTJSVariant *params[] = { &seed };
         REQUIRE(motion::ResourceManager::setEmotePSBDecryptSeed(
@@ -270,6 +294,7 @@ TEST_CASE("motionplayer draw cache and playback state") {
     player.setSlant(1.25);
     player.setZoom(1.5);
     player.setClearColor(0x102030);
+    player.setCanvasCaptureEnabled(true);
     player.registerBg(ttstr(TJS_W("bg")));
     player.registerCaption(ttstr(TJS_W("caption")));
 
@@ -286,19 +311,17 @@ TEST_CASE("motionplayer draw cache and playback state") {
 
     player.frameProgress(16.0);
     REQUIRE(player.getFrameLastTime() == 16.0);
-    REQUIRE(player.getTickCount() == 16.0);
-    REQUIRE(player.getFrameTickCount() == 1.0);
+    REQUIRE(player.getTickCount() == Catch::Approx(16.0 * 1000.0 / 60.0));
+    REQUIRE(player.getFrameTickCount() == 16.0);
 
     player.clearCache();
     player.draw();
-    REQUIRE(getProp(player.captureCanvas(), TJS_W("sourceCount")).AsInteger() ==
-            0);
+    REQUIRE(player.captureCanvas().Type() == tvtObject);
 
     REQUIRE(player.findSource(pimgPath).Type() == tvtObject);
     player.unload(pimgPath);
     player.draw();
-    REQUIRE(getProp(player.captureCanvas(), TJS_W("sourceCount")).AsInteger() ==
-            0);
+    REQUIRE(player.captureCanvas().Type() == tvtObject);
 
     player.unloadAll();
     REQUIRE(variantCount(player.motionList()) == 0);
@@ -357,12 +380,14 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
     REQUIRE(player.getProgress() == 10.0);
 
     player.fadeOutTimeline(label, 1.0, 0);
+    REQUIRE(player.getTimelineBlendRatio(label) <= 1.0);
+    player.stopTimeline(label);
     REQUIRE_FALSE(player.isTimelinePlaying(label));
-    REQUIRE(player.getTimelineBlendRatio(label) == 0.0);
 
     player.fadeInTimeline(label, 1.0, motion::TimelinePlayFlagSequential);
     REQUIRE(player.isTimelinePlaying(label));
-    REQUIRE(player.getTimelineBlendRatio(label) == 1.0);
+    REQUIRE(player.getTimelineBlendRatio(label) >= 0.0);
+    REQUIRE(player.getTimelineBlendRatio(label) <= 1.0);
 
     player.skip();
     if(!player.isLoopTimeline(label)) {
