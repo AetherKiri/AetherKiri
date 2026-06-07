@@ -148,7 +148,7 @@ jobs:
           test -f out/godot/android/release/AetherKiri-release.apk
 
       - name: Upload Artifact
-        if: success() && github.event_name != 'pull_request'
+        if: success()
         uses: actions/upload-artifact@v7
         with:
           name: AetherKiri-Android-APK

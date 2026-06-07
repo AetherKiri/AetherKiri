@@ -114,7 +114,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
       - name: Upload Artifact
-        if: success() && github.event_name != 'pull_request'
+        if: success()
         uses: actions/upload-artifact@v7
         with:
           name: AetherKiri-macOS
