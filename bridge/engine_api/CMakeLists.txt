@@ -36,13 +36,18 @@ target_include_directories(engine_api
 
 if(TARGET krkr2core AND TARGET krkr2plugin)
     target_compile_definitions(engine_api PRIVATE ENGINE_API_USE_KRKR2_RUNTIME)
-    # Keep static NCB registration objects from krkr2plugin alive in the
-    # final engine_api link as well. Sub-plugin targets reference krkr2plugin
-    # transitively, so force every occurrence of that target to use the same
-    # feature instead of mixing DEFAULT and WHOLE_ARCHIVE.
-    set(_KRKR2PLUGIN_LINK_ITEM "$<LINK_LIBRARY:WHOLE_ARCHIVE,krkr2plugin>")
-    target_link_libraries(engine_api PRIVATE krkr2core ${_KRKR2PLUGIN_LINK_ITEM})
-    set_property(TARGET engine_api PROPERTY LINK_LIBRARY_OVERRIDE_krkr2plugin WHOLE_ARCHIVE)
+    if(WEB OR EMSCRIPTEN)
+        # The Web side module force-loads krkr2plugin once at the final link.
+        # Keep this dependency normal here so CMake can repeat cyclic static
+        # libs without whole-archive duplicate symbols.
+        target_link_libraries(engine_api PRIVATE krkr2core krkr2plugin)
+    else()
+        # Keep static NCB registration objects from krkr2plugin alive in the
+        # final native engine_api link as well.
+        set(_KRKR2PLUGIN_LINK_ITEM "$<LINK_LIBRARY:WHOLE_ARCHIVE,krkr2plugin>")
+        target_link_libraries(engine_api PRIVATE krkr2core ${_KRKR2PLUGIN_LINK_ITEM})
+        set_property(TARGET engine_api PROPERTY LINK_LIBRARY_OVERRIDE_krkr2plugin WHOLE_ARCHIVE)
+    endif()
 endif()
 
 if(BUILD_GPU_BRIDGE)

@@ -47,7 +47,18 @@ if(TARGET engine_api)
     target_link_libraries(aether_kiri_godot PRIVATE engine_api)
 endif()
 if(TARGET krkr2plugin)
-    set_property(TARGET aether_kiri_godot PROPERTY LINK_LIBRARY_OVERRIDE_krkr2plugin WHOLE_ARCHIVE)
+    if(WEB OR EMSCRIPTEN)
+        # krkr2plugin has cyclic static dependencies with sub-plugin targets.
+        # Force-load the archive by path exactly once; leave target-based
+        # krkr2plugin links as normal archives so repeated dependency scans do
+        # not produce duplicate symbols under wasm-ld.
+        add_dependencies(aether_kiri_godot krkr2plugin)
+        target_link_libraries(aether_kiri_godot PRIVATE
+            "$<LINK_LIBRARY:WHOLE_ARCHIVE,$<TARGET_FILE:krkr2plugin>>"
+        )
+    else()
+        set_property(TARGET aether_kiri_godot PROPERTY LINK_LIBRARY_OVERRIDE_krkr2plugin WHOLE_ARCHIVE)
+    endif()
 endif()
 
 target_link_libraries(aether_kiri_godot PRIVATE unofficial::godot::cpp)
