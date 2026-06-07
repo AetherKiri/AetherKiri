@@ -43,13 +43,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .godot "${RUNNER_TEMP}/godot-templates"
-          curl -L -o "${RUNNER_TEMP}/godot-macos.zip" \
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "${RUNNER_TEMP}/godot-macos.zip" \
             "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_macos.universal.zip"
+          unzip -tq "${RUNNER_TEMP}/godot-macos.zip"
           unzip -q "${RUNNER_TEMP}/godot-macos.zip" -d .godot
           chmod +x ".godot/Godot.app/Contents/MacOS/Godot"
 
-          curl -L -o "${RUNNER_TEMP}/godot-export-templates.tpz" \
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "${RUNNER_TEMP}/godot-export-templates.tpz" \
             "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          unzip -tq "${RUNNER_TEMP}/godot-export-templates.tpz"
           unzip -q "${RUNNER_TEMP}/godot-export-templates.tpz" -d "${RUNNER_TEMP}/godot-templates"
           template_dir="${HOME}/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATE_VERSION}"
           mkdir -p "${template_dir}"
