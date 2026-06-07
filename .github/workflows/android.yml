@@ -133,6 +133,56 @@ jobs:
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
 
+      - name: Configure Android signing
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_KEYSTORE_ALIAS: ${{ secrets.ANDROID_RELEASE_KEYSTORE_ALIAS }}
+          ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          signing_dir="${RUNNER_TEMP}/android-signing"
+          mkdir -p "$signing_dir"
+
+          debug_keystore="${signing_dir}/debug.keystore"
+          keytool -genkeypair \
+            -keystore "$debug_keystore" \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          {
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$debug_keystore"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android"
+          } >> "$GITHUB_ENV"
+
+          release_secret_count=0
+          [[ -n "${ANDROID_RELEASE_KEYSTORE_BASE64}" ]] && release_secret_count=$((release_secret_count + 1))
+          [[ -n "${ANDROID_RELEASE_KEYSTORE_ALIAS}" ]] && release_secret_count=$((release_secret_count + 1))
+          [[ -n "${ANDROID_RELEASE_KEYSTORE_PASSWORD}" ]] && release_secret_count=$((release_secret_count + 1))
+
+          if [[ "$release_secret_count" -ne 3 ]]; then
+            echo "Android release signing secrets are incomplete. Configure ANDROID_RELEASE_KEYSTORE_BASE64, ANDROID_RELEASE_KEYSTORE_ALIAS, and ANDROID_RELEASE_KEYSTORE_PASSWORD." >&2
+            exit 1
+          fi
+
+          release_keystore="${signing_dir}/release.keystore"
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 -d > "$release_keystore"
+          chmod 600 "$release_keystore"
+          keytool -list \
+            -keystore "$release_keystore" \
+            -storepass "$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+            -alias "$ANDROID_RELEASE_KEYSTORE_ALIAS" >/dev/null
+          {
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$release_keystore"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$ANDROID_RELEASE_KEYSTORE_ALIAS"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+          } >> "$GITHUB_ENV"
+          perl -0pi -e 's/(name="Android Release".*?package\/signed=)false/${1}true/s' apps/godot_app/export_presets.cfg
+
       - name: Build Android Release
         run: |
           set -euo pipefail
@@ -142,17 +192,35 @@ jobs:
           export NDK_CCACHE=ccache
           ./build.sh android release --jobs=4
 
-      - name: Verify exported APK
+      - name: Build Android Debug
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          export NDK_CCACHE=ccache
+          ./build.sh android debug --jobs=4
+
+      - name: Verify exported APKs
         run: |
           set -euo pipefail
           test -f out/godot/android/release/AetherKiri-release.apk
+          test -f out/godot/android/debug/AetherKiri-debug.apk
 
-      - name: Upload Artifact
+      - name: Upload Release APK
         if: success()
         uses: actions/upload-artifact@v7
         with:
           name: AetherKiri-Android-APK
           path: out/godot/android/release/AetherKiri-release.apk
+          retention-days: 7
+
+      - name: Upload Debug APK
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-Android-Debug-APK
+          path: out/godot/android/debug/AetherKiri-debug.apk
           retention-days: 7
 
       - name: Save vcpkg cache
