@@ -406,6 +406,14 @@ Manual game smoke:
 - Exit back to shell.
 - Check FPS and frame spike logs.
 
+When a game has been manually smoke-tested or flow-tested, update
+`doc/verified_games.md` before committing the validation work. Record the exact
+game title, platform/build, import path, verified scope, result, and the
+verifier's GitHub handle or profile link. Do not record machine-local game
+paths in the verified-games list. Keep the localized
+`doc/verified_games.zh-CN.md` list in sync when updating public compatibility
+notes.
+
 ## Debugging Notes
 
 Useful traces:

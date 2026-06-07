@@ -23,6 +23,7 @@ vcpkg_installed/
 !README.md
 !README.zh-CN.md
 !doc/verified_games.md
+!doc/verified_games.zh-CN.md
 *.lock
 !package-lock.json
 node_modules/

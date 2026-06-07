@@ -54,7 +54,7 @@ Godot App Shell
 - 已接入 macOS、iOS/iPadOS 和 Android 导出链路。
 - 可在运行时选择渲染后端，并持久化设置。
 - 提供 smoke、渲染、交互、性能和手动复现 probe 脚本。
-- 已手动验证过的游戏记录在 [`doc/verified_games.md`](doc/verified_games.md)。
+- 已手动验证过的游戏记录在 [`doc/verified_games.zh-CN.md`](doc/verified_games.zh-CN.md)。
 - 以 GPL-3.0-or-later 分发源码。
 
 ## 仓库结构
@@ -69,7 +69,7 @@ Godot App Shell
 | `tests/profiles/` | 单游戏 probe profile。提交到仓库的 profile 不能包含机器本地路径。 |
 | `tools/` | 不参与 iOS/Android 目标构建的开发和兼容工具。 |
 | `doc/development.zh-CN.md` | 完整开发文档，覆盖架构、文件作用、构建、测试、probe 和调试。 |
-| `doc/verified_games.md` | 当前运行时已手动 smoke test 的游戏清单。 |
+| `doc/verified_games.zh-CN.md` | 当前运行时已手动 smoke test 的游戏清单。 |
 
 ## 渲染后端
 

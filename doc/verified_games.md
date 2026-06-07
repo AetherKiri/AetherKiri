@@ -1,5 +1,7 @@
 # Verified Games
 
+[简体中文](verified_games.zh-CN.md)
+
 Last updated: 2026-06-07
 
 This document tracks games that have been manually smoke-tested with
@@ -19,6 +21,8 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | Game | Platform / build | Import path | Verified scope | Result | Verifier | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | Web release, Chrome, Vite local server | Browser local directory import | Startup, script/plugin loading, title/menu rendering, basic input, continue/save-load route smoke, CJK/symbol font rendering, and IndexedDB-backed userfs persistence behavior | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. Web deployment still requires COOP/COEP headers. Live2D Cubism Core for Web remains an external proprietary runtime and must be supplied separately when a title needs it. |
+| もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | macOS release app | App UI local directory import | Startup, title/menu rendering, basic input, save/load smoke, and CJK/symbol font rendering | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | iOS/iPadOS app build | Files app import | Startup, title/menu rendering, touch input, save/load smoke, and CJK/symbol font rendering | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 
 ## How To Add A Game
 

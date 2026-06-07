@@ -385,6 +385,11 @@ build/validate_gpu_bridge.sh
 - 退出回 shell。
 - 查看 FPS 和慢帧日志。
 
+手动 smoke test 或 flow test 验证过游戏后，提交验证相关改动前需要更新
+`doc/verified_games.zh-CN.md`，并同步英文 `doc/verified_games.md`。记录准确游戏名、
+平台/构建、导入方式、验证范围、验证结果，以及验证人的 GitHub handle 或主页链接。
+已验证游戏清单里不要记录本机游戏路径。
+
 ## 调试说明
 
 常用 trace：
