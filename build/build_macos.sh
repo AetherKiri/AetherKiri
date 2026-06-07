@@ -68,7 +68,7 @@ fi
 export CMAKE_MAKE_PROGRAM="$NINJA_BIN"
 
 echo "==> Building native engine and Godot extension"
-cmake_config_args=()
+cmake_config_args=(-D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM")
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
     if [[ ! -d "$VCPKG_ROOT/installed/arm64-osx" ]]; then
         echo "Error: SKIP_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/arm64-osx" >&2
@@ -83,7 +83,7 @@ if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
     )
 fi
 
-cmake --preset "$CMAKE_CONFIG_PRESET" --fresh -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" "${cmake_config_args[@]}"
+cmake --preset "$CMAKE_CONFIG_PRESET" --fresh "${cmake_config_args[@]}"
 cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 
 mkdir -p "$GODOT_BIN_DIR"

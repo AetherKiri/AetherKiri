@@ -105,16 +105,27 @@ jobs:
 
       - name: Build iOS Debug
         run: |
+          set -euo pipefail
           chmod +x ./build.sh
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          ./build.sh ios debug --jobs=4
+          ./build.sh ios debug --jobs=4 2>&1 | tee "${RUNNER_TEMP}/ios-debug-build.log"
+          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/ios-debug-build.log"; then
+            echo "Godot iOS debug export logged script or GDExtension load errors." >&2
+            exit 1
+          fi
 
       - name: Build iOS Release
         run: |
+          set -euo pipefail
+          chmod +x ./build.sh
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          ./build.sh ios release --jobs=4
+          ./build.sh ios release --jobs=4 2>&1 | tee "${RUNNER_TEMP}/ios-build.log"
+          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/ios-build.log"; then
+            echo "Godot iOS release export logged script or GDExtension load errors." >&2
+            exit 1
+          fi
 
       - name: Verify exported Xcode project
         run: |

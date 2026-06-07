@@ -1,9 +1,12 @@
-vcpkg_from_github(
-    OUT_SOURCE_PATH SOURCE_PATH
-    REPO libarchive/libarchive
-    REF "v${VERSION}"
-    SHA512 95c6232d178b26daa0eeba43d64ea4235aa96fa279c85fff715ac5e6cc73b2e65f276770f91c3538cb8ca989380555169497628d73e120bfa52e12f657049ff0
-    HEAD_REF master
+vcpkg_download_distfile(ARCHIVE
+    URLS "https://libarchive.org/downloads/libarchive-${VERSION}.tar.xz"
+    FILENAME "libarchive-${VERSION}.tar.xz"
+    SHA512 2524f71f4c2ebc254a1927279be3394e820d0a0c6dec7ef835a862aa08c35756edaa4208bcdc710dd092872b59c200b555b78670372e2830822e278ff1ec4e4a
+)
+
+vcpkg_extract_source_archive(
+    SOURCE_PATH
+    ARCHIVE "${ARCHIVE}"
 )
 
 vcpkg_cmake_configure(

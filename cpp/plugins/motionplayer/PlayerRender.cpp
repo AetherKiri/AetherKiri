@@ -45,6 +45,89 @@ namespace {
         return copy;
     }
 
+    std::string renderDebugLowercase(std::string value) {
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        return value;
+    }
+
+    bool shouldDebugTitleRender(const std::string &motionPath,
+                                const std::string &sourceKey = {},
+                                const std::string &origin = {}) {
+        const auto motion = renderDebugLowercase(motionPath);
+        const auto source = renderDebugLowercase(sourceKey);
+        const auto resolved = renderDebugLowercase(origin);
+        return motion.find("title.pimg") != std::string::npos ||
+            motion.find("title.psb") != std::string::npos ||
+            source.find("title") != std::string::npos ||
+            resolved.find("title.pimg") != std::string::npos ||
+            resolved.find("title.psb") != std::string::npos;
+    }
+
+    bool markRenderDebugLogged(const std::string &key) {
+        static std::unordered_set<std::string> loggedKeys;
+        return loggedKeys.insert(key).second;
+    }
+
+    std::string sampleBitmapStats(const iTVPBaseBitmap *bitmap) {
+        if(!bitmap || bitmap->GetWidth() <= 0 || bitmap->GetHeight() <= 0) {
+            return "bitmap=0x0 sampled=0 alpha=0 visible=0 color=0 any=0 maxA=0 maxC=0";
+        }
+        const size_t width = static_cast<size_t>(bitmap->GetWidth());
+        const size_t height = static_cast<size_t>(bitmap->GetHeight());
+        const size_t pixels = width * height;
+        const size_t stride = std::max<size_t>(1u, pixels / 4096u);
+        size_t sampled = 0;
+        size_t alpha = 0;
+        size_t visible = 0;
+        size_t color = 0;
+        size_t any = 0;
+        int maxAlpha = 0;
+        int maxColor = 0;
+        for(size_t index = 0; index < pixels; index += stride) {
+            const size_t y = index / width;
+            const size_t x = index - y * width;
+            const auto *row = static_cast<const std::uint8_t *>(
+                bitmap->GetScanLine(static_cast<tjs_uint>(y)));
+            if(!row) {
+                continue;
+            }
+            const auto *pixel = row + x * 4u;
+            const int b = pixel[0];
+            const int g = pixel[1];
+            const int r = pixel[2];
+            const int a = pixel[3];
+            const int maxRgb = std::max(r, std::max(g, b));
+            ++sampled;
+            if(a != 0) {
+                ++alpha;
+            }
+            if(maxRgb != 0) {
+                ++color;
+            }
+            if((r | g | b | a) != 0) {
+                ++any;
+            }
+            if(a != 0 && maxRgb != 0) {
+                ++visible;
+            }
+            maxAlpha = std::max(maxAlpha, a);
+            maxColor = std::max(maxColor, maxRgb);
+        }
+        std::ostringstream out;
+        out << "bitmap=" << width << "x" << height
+            << " sampled=" << sampled
+            << " alpha=" << alpha
+            << " visible=" << visible
+            << " color=" << color
+            << " any=" << any
+            << " maxA=" << maxAlpha
+            << " maxC=" << maxColor;
+        return out.str();
+    }
+
     template <typename AnimatorState>
     bool stepQueuedAnimatorLike_0x67D01C(AnimatorState &state, double dt,
                                          double &outValue) {
@@ -1125,6 +1208,17 @@ namespace motion {
                     if(bmp->GetWidth() > 0 && bmp->GetHeight() > 0) {
                         srcBmp = bmp;
                         sourceOrigin = detail::narrow(loadPath);
+                        if(LOGGER &&
+                           shouldDebugTitleRender(motionPath, command.sourceKey,
+                                                  sourceOrigin) &&
+                           markRenderDebugLogged("load|" + motionPath + "|" +
+                                                 command.sourceKey + "|" +
+                                                 sourceOrigin)) {
+                            LOGGER->info(
+                                "motion bitmap load: motion={} source={} resolved={} stats=[{}]",
+                                motionPath, command.sourceKey, sourceOrigin,
+                                sampleBitmapStats(srcBmp.get()));
+                        }
                     }
                 } catch(...) {
                 }
@@ -1176,6 +1270,17 @@ namespace motion {
                         "psb:{}:{}x{}:origin=({:.3f},{:.3f}):bgra={}",
                         command.sourceKey, width, height, originX, originY,
                         decodedPixelsAreBgra ? 1 : 0);
+                    if(LOGGER &&
+                       shouldDebugTitleRender(motionPath, command.sourceKey,
+                                              sourceOrigin) &&
+                       markRenderDebugLogged("load-psb|" + motionPath + "|" +
+                                             command.sourceKey + "|" +
+                                             sourceOrigin)) {
+                        LOGGER->info(
+                            "motion bitmap load-psb: motion={} source={} resolved={} stats=[{}]",
+                            motionPath, command.sourceKey, sourceOrigin,
+                            sampleBitmapStats(srcBmp.get()));
+                    }
                 }
             }
 
@@ -1233,6 +1338,17 @@ namespace motion {
             auto tinted = cloneBitmap32(*srcBmp);
             applyPackedCornerTintLike_0x6A7518(*tinted, command.packedColors,
                                               useHalfAlphaTint);
+            if(LOGGER &&
+               shouldDebugTitleRender(motionPath, command.sourceKey) &&
+               markRenderDebugLogged("tint|" + motionPath + "|" + tintKey)) {
+                LOGGER->info(
+                    "motion bitmap tint: motion={} source={} halfAlpha={} packed=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] before=[{}] after=[{}]",
+                    motionPath, command.sourceKey, useHalfAlphaTint ? 1 : 0,
+                    command.packedColors[0], command.packedColors[1],
+                    command.packedColors[2], command.packedColors[3],
+                    sampleBitmapStats(srcBmp.get()),
+                    sampleBitmapStats(tinted.get()));
+            }
             detail::logoChainTraceLogf(
                 motionPath, "execute.sourceTint", "0x6C1B70/0x6A7518",
                 _clampedEvalTime,
@@ -1401,6 +1517,20 @@ namespace motion {
                                            srcBmp, sourceRect,
                                            "item.leaf.affineCopy")) {
                 return false;
+            }
+            if(LOGGER &&
+               shouldDebugTitleRender(motionPath, command.sourceKey) &&
+               markRenderDebugLogged(
+                   fmt::format("leaf|{}|{}|{}", motionPath, command.nodeIndex,
+                               command.sourceKey))) {
+                LOGGER->info(
+                    "motion render leaf: motion={} node={} source={} clip=[{},{},{},{}] opacity={} blend={} flags={} src=[{}] leaf=[{}]",
+                    motionPath, command.nodeIndex, command.sourceKey,
+                    command.clipRect[0], command.clipRect[1],
+                    command.clipRect[2], command.clipRect[3],
+                    command.opacity, command.blendMode, command.itemFlags,
+                    sampleBitmapStats(srcBmp.get()),
+                    sampleBitmapStats(leafLayer->GetMainImage()));
             }
             command.leafBuilt = true;
             command.builtRect = command.clipRect;
@@ -1572,6 +1702,21 @@ namespace motion {
                             continue;
                         }
                     }
+                    if(LOGGER &&
+                       shouldDebugTitleRender(motionPath, command.sourceKey) &&
+                       markRenderDebugLogged(
+                           fmt::format("direct-copy|{}|{}|{}",
+                                       motionPath, command.nodeIndex,
+                                       command.sourceKey))) {
+                        LOGGER->info(
+                            "motion render direct-copy: motion={} node={} source={} clip=[{},{},{},{}] opacity={} blend={} src=[{}] render=[{}]",
+                            motionPath, command.nodeIndex, command.sourceKey,
+                            command.clipRect[0], command.clipRect[1],
+                            command.clipRect[2], command.clipRect[3],
+                            opa, command.blendMode,
+                            sampleBitmapStats(srcBmp.get()),
+                            sampleBitmapStats(renderLayer->GetMainImage()));
+                    }
                     detail::logoChainTraceLogf(
                         motionPath, "execute.copy", "0x6C7440",
                         _clampedEvalTime,
@@ -1613,6 +1758,21 @@ namespace motion {
                 renderLayer->OperateRect(command.clipRect[0], command.clipRect[1],
                                          outputLayer->GetMainImage(), localRect,
                                          blendMode, opa);
+                if(LOGGER &&
+                   shouldDebugTitleRender(motionPath, command.sourceKey) &&
+                   markRenderDebugLogged(
+                       fmt::format("buffered-copy|{}|{}|{}",
+                                   motionPath, command.nodeIndex,
+                                   command.sourceKey))) {
+                    LOGGER->info(
+                        "motion render buffered-copy: motion={} node={} source={} clip=[{},{},{},{}] opacity={} blend={} output=[{}] render=[{}]",
+                        motionPath, command.nodeIndex, command.sourceKey,
+                        command.clipRect[0], command.clipRect[1],
+                        command.clipRect[2], command.clipRect[3],
+                        opa, command.blendMode,
+                        sampleBitmapStats(outputLayer->GetMainImage()),
+                        sampleBitmapStats(renderLayer->GetMainImage()));
+                }
                 detail::logoChainTraceLogf(
                     motionPath, "execute.copy", "0x6C7440", _clampedEvalTime,
                     "branch={} nodeIndex={} clipRect=[{},{},{},{}] dirtyRect=[{},{},{},{}] blendMode={} opacity={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] effectiveColor=[{},{},{},{}] visibleAncestorIndex={} clearEnabled={} renderPath=buffered outputLayer={}x{} renderLayer={}x{} childCount={}",

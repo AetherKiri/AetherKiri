@@ -57,6 +57,24 @@ if(ANDROID)
     add_compile_options(-Wno-inconsistent-missing-override)
 endif()
 
+if(WEB OR EMSCRIPTEN)
+    add_compile_options(
+        -fPIC
+        -pthread
+        -msimd128
+        -sSUPPORT_LONGJMP=wasm
+        -sWASM_LEGACY_EXCEPTIONS=1
+        $<$<COMPILE_LANGUAGE:CXX>:-fwasm-exceptions>
+    )
+    add_link_options(
+        -pthread
+        -msimd128
+        -sSUPPORT_LONGJMP=wasm
+        -sWASM_LEGACY_EXCEPTIONS=1
+        -fwasm-exceptions
+    )
+endif()
+
 option(ENABLE_TESTS "enable tests execute build(exclude android)" ON)
 option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
 option(BUILD_ENGINE_API "build engine_api bridge shared library" ON)
@@ -92,13 +110,13 @@ if(BUILD_GODOT_EXTENSION)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/godot_extension)
 endif()
 
-if(ENABLE_TESTS AND NOT (IOS OR ANDROID))
+if(ENABLE_TESTS AND NOT (IOS OR ANDROID OR WEB OR EMSCRIPTEN))
     enable_testing()
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
         add_subdirectory(tests)
     endif()
 endif()
 
-if(BUILD_TOOLS AND NOT (IOS OR ANDROID))
+if(BUILD_TOOLS AND NOT (IOS OR ANDROID OR WEB OR EMSCRIPTEN))
     add_subdirectory(tools)
 endif()

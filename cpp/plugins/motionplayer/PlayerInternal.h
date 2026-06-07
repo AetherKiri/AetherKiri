@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstddef>
 #include <cmath>
 #include "WindowIntf.h"
 #include <cstring>
@@ -45,6 +46,100 @@ namespace internal {
         // (e.g. "motion/title_bg/char_move"), not an image source.
         inline bool isMotionCrossReference(const std::string &src) {
             return src.rfind("motion/", 0) == 0;
+        }
+
+        inline bool isPsbRLCompressName(const std::optional<std::string> &name) {
+            if(!name) {
+                return false;
+            }
+            std::string lowered = *name;
+            std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                           [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            return lowered == "rl";
+        }
+
+        inline std::string psbDebugLowercase(std::string value) {
+            std::transform(value.begin(), value.end(), value.begin(),
+                           [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            return value;
+        }
+
+        inline bool shouldDebugPsbSource(
+            const detail::MotionSnapshot &snapshot,
+            const std::string &source) {
+            const auto path = psbDebugLowercase(snapshot.path);
+            const auto src = psbDebugLowercase(source);
+            return path.find("title.pimg") != std::string::npos ||
+                path.find("title.psb") != std::string::npos ||
+                src.find("title") != std::string::npos;
+        }
+
+        inline std::string samplePsbPixelStats(
+            const std::vector<std::uint8_t> &data) {
+            const size_t pixels = data.size() / 4u;
+            if(pixels == 0) {
+                return "pixels=0 sampled=0 alpha=0 visible=0 color=0 any=0 maxA=0 maxC=0";
+            }
+            const size_t stride = std::max<size_t>(1u, pixels / 4096u);
+            size_t sampled = 0;
+            size_t alpha = 0;
+            size_t visible = 0;
+            size_t color = 0;
+            size_t any = 0;
+            int maxAlpha = 0;
+            int maxColor = 0;
+            for(size_t i = 0; i < pixels; i += stride) {
+                const size_t offset = i * 4u;
+                if(offset + 3u >= data.size()) {
+                    break;
+                }
+                const int c0 = data[offset + 0u];
+                const int c1 = data[offset + 1u];
+                const int c2 = data[offset + 2u];
+                const int a = data[offset + 3u];
+                const int maxRgb = std::max(c0, std::max(c1, c2));
+                ++sampled;
+                if(a != 0) {
+                    ++alpha;
+                }
+                if(maxRgb != 0) {
+                    ++color;
+                }
+                if((c0 | c1 | c2 | a) != 0) {
+                    ++any;
+                }
+                if(a != 0 && maxRgb != 0) {
+                    ++visible;
+                }
+                maxAlpha = std::max(maxAlpha, a);
+                maxColor = std::max(maxColor, maxRgb);
+            }
+            std::ostringstream out;
+            out << "pixels=" << pixels << " sampled=" << sampled
+                << " alpha=" << alpha << " visible=" << visible
+                << " color=" << color << " any=" << any
+                << " maxA=" << maxAlpha << " maxC=" << maxColor;
+            return out.str();
+        }
+
+        inline std::uint32_t psbDataHeader(
+            const std::vector<std::uint8_t> &data) {
+            if(data.size() < 4u) {
+                return 0;
+            }
+            return static_cast<std::uint32_t>(data[0]) |
+                (static_cast<std::uint32_t>(data[1]) << 8u) |
+                (static_cast<std::uint32_t>(data[2]) << 16u) |
+                (static_cast<std::uint32_t>(data[3]) << 24u);
+        }
+
+        inline bool markPsbDebugLogged(const std::string &key) {
+            static std::unordered_set<std::string> loggedKeys;
+            return loggedKeys.insert(key).second;
         }
 
         // PSB RL decompression: each RGBA channel is separately RL-compressed.
@@ -166,6 +261,13 @@ namespace internal {
             if(isRLCompressed) {
                 decodedOut = decompressPsbRL(pixelResource.data, pixelCount, 4);
                 return !decodedOut.empty();
+            }
+
+            if(pixelResource.data.size() >= pixelCount * 4u) {
+                decodedOut.assign(pixelResource.data.begin(),
+                                  pixelResource.data.begin() +
+                                      static_cast<std::ptrdiff_t>(pixelCount * 4u));
+                return true;
             }
 
             return false;
@@ -1579,11 +1681,44 @@ namespace internal {
                            outWidth > 0 && outHeight > 0) {
                             auto compressStr =
                                 psbDictionaryString(iconNode, "compress");
-                            decodePsbPixelResource(
+                            const bool isRL =
+                                isPsbRLCompressName(compressStr);
+                            const bool decoded = decodePsbPixelResource(
                                 snapshot, iconPath, *resIt->second,
-                                outWidth, outHeight, compressStr == "RL",
+                                outWidth, outHeight,
+                                isRL,
                                 decompressedOut, outDecodedIsBgra);
-                            return resIt->second.get();
+                            if(LOGGER && shouldDebugPsbSource(snapshot, source) &&
+                               markPsbDebugLogged(snapshot.path + "|" +
+                                                  source + "|" + pixelPath)) {
+                                const auto palPath = iconPath + "/pal";
+                                const auto palIt =
+                                    snapshot.resourcesByPath.find(palPath);
+                                const size_t palBytes =
+                                    (palIt != snapshot.resourcesByPath.end() &&
+                                     palIt->second)
+                                    ? palIt->second->data.size()
+                                    : 0u;
+                                LOGGER->info(
+                                    "motion psb source: path={} source={} pixel={} size={}x{} raw={} expected={} header=0x{:08x} compress={} isRL={} pal={} decoded={} decodedBytes={} decodedBgra={} rawStats=[{}] decodedStats=[{}]",
+                                    snapshot.path, source, pixelPath,
+                                    outWidth, outHeight,
+                                    resIt->second->data.size(),
+                                    static_cast<size_t>(outWidth) *
+                                        static_cast<size_t>(outHeight) * 4u,
+                                    psbDataHeader(resIt->second->data),
+                                    compressStr.empty() ? "<none>" : compressStr,
+                                    isRL ? 1 : 0,
+                                    palBytes,
+                                    decoded ? 1 : 0,
+                                    decompressedOut.size(),
+                                    outDecodedIsBgra && *outDecodedIsBgra ? 1 : 0,
+                                    samplePsbPixelStats(resIt->second->data),
+                                    samplePsbPixelStats(decompressedOut));
+                            }
+                            if(decoded) {
+                                return resIt->second.get();
+                            }
                         }
                     }
                 }
@@ -1623,10 +1758,45 @@ namespace internal {
                             auto compressStr =
                                 psbDictionaryString(node, "compress");
                             if(outWidth > 0 && outHeight > 0) {
-                                decodePsbPixelResource(
+                                const bool isRL =
+                                    isPsbRLCompressName(compressStr);
+                                const bool decoded = decodePsbPixelResource(
                                     snapshot, parentPath, *resource,
-                                    outWidth, outHeight, compressStr == "RL",
+                                    outWidth, outHeight,
+                                    isRL,
                                     decompressedOut, outDecodedIsBgra);
+                                if(LOGGER &&
+                                   shouldDebugPsbSource(snapshot, source) &&
+                                   markPsbDebugLogged(snapshot.path + "|" +
+                                                      source + "|" + resPath)) {
+                                    const auto palPath = parentPath + "/pal";
+                                    const auto palIt =
+                                        snapshot.resourcesByPath.find(palPath);
+                                    const size_t palBytes =
+                                        (palIt != snapshot.resourcesByPath.end() &&
+                                         palIt->second)
+                                        ? palIt->second->data.size()
+                                        : 0u;
+                                    LOGGER->info(
+                                        "motion psb source fallback: path={} source={} pixel={} size={}x{} raw={} expected={} header=0x{:08x} compress={} isRL={} pal={} decoded={} decodedBytes={} decodedBgra={} rawStats=[{}] decodedStats=[{}]",
+                                        snapshot.path, source, resPath,
+                                        outWidth, outHeight,
+                                        resource->data.size(),
+                                        static_cast<size_t>(outWidth) *
+                                            static_cast<size_t>(outHeight) * 4u,
+                                        psbDataHeader(resource->data),
+                                        compressStr.empty() ? "<none>" : compressStr,
+                                        isRL ? 1 : 0,
+                                        palBytes,
+                                        decoded ? 1 : 0,
+                                        decompressedOut.size(),
+                                        outDecodedIsBgra && *outDecodedIsBgra ? 1 : 0,
+                                        samplePsbPixelStats(resource->data),
+                                        samplePsbPixelStats(decompressedOut));
+                                }
+                                if(!decoded) {
+                                    continue;
+                                }
                             }
                         }
                     }

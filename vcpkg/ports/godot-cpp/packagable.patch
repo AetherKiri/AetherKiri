@@ -124,14 +124,26 @@ diff --git a/cmake/web.cmake b/cmake/web.cmake
 index 996a1e52..170c6ac9 100644
 --- a/cmake/web.cmake
 +++ b/cmake/web.cmake
-@@ -26,7 +26,6 @@ function( web_generate )
+@@ -26,15 +26,18 @@ function( web_generate )
              PUBLIC
              -sSIDE_MODULE
              -sSUPPORT_LONGJMP=wasm
++            -sWASM_LEGACY_EXCEPTIONS=1
 -            -fno-exceptions
++            -fwasm-exceptions
              $<${THREADS_ENABLED}:-sUSE_PTHREADS=1>
      )
  
+     target_link_options( ${TARGET_NAME}
+             INTERFACE
+             -sWASM_BIGINT
+             -sSUPPORT_LONGJMP=wasm
++            -sWASM_LEGACY_EXCEPTIONS=1
++            -fwasm-exceptions
+             -fvisibility=hidden
+             -shared
+     )
+
 diff --git a/cmake/windows.cmake b/cmake/windows.cmake
 index 8e37e7e4..02a24fde 100644
 --- a/cmake/windows.cmake

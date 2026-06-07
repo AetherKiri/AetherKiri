@@ -6,6 +6,8 @@
 #include "FilePathUtil.h"
 #include "StorageIntf.h"
 
+#include <string>
+
 class ApplicationSpecialPath {
 public:
 #if 0
@@ -55,10 +57,48 @@ public:
 #endif
     static ttstr GetDataPathDirectory(const ttstr &datapath,
                                       const ttstr &exename) {
+#if defined(__EMSCRIPTEN__)
+        std::string project = exename.AsStdString();
+        while(!project.empty() && project.back() == '/')
+            project.pop_back();
+        if(project.size() >= 4) {
+            std::string lower = project;
+            for(char &ch : lower) {
+                if(ch >= 'A' && ch <= 'Z')
+                    ch = static_cast<char>(ch + ('a' - 'A'));
+            }
+            if(lower.size() >= 4 &&
+               lower.compare(lower.size() - 4, 4, ".xp3") == 0) {
+                const size_t slash = project.find_last_of('/');
+                project = slash == std::string::npos ? std::string() :
+                                                      project.substr(0, slash);
+                while(!project.empty() && project.back() == '/')
+                    project.pop_back();
+            }
+        }
+        std::string key = "default";
+        const size_t slash = project.find_last_of('/');
+        if(slash == std::string::npos)
+            key = project.empty() ? key : project;
+        else if(slash + 1 < project.size())
+            key = project.substr(slash + 1);
+        for(char &ch : key) {
+            const bool ok = (ch >= '0' && ch <= '9') ||
+                            (ch >= 'A' && ch <= 'Z') ||
+                            (ch >= 'a' && ch <= 'z') || ch == '_' ||
+                            ch == '-';
+            if(!ok)
+                ch = '_';
+        }
+        if(key.empty())
+            key = "default";
+        return ttstr(("/userfs/aetherkiri/savedata/" + key + "/").c_str());
+#else
         ttstr nativeDataPath = TVPGetAppPath();
         TVPGetLocalName(nativeDataPath);
         nativeDataPath += "/savedata/";
         return nativeDataPath;
+#endif
 #if 0
 		if(datapath == L"" ) datapath = std::wstring(L"$(exepath)\\savedata");
 

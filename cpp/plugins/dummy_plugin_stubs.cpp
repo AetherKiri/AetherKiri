@@ -1,4 +1,5 @@
 #include "ncbind.hpp"
+#include "DebugIntf.h"
 #include "ScriptMgnIntf.h"
 
 // Stub modules — register empty entries so Plugins.link() succeeds.
@@ -8,6 +9,15 @@
 #define NCB_MODULE_NAME TJS_W("k2compat.dll")
 static void k2compat_stub() {}
 NCB_PRE_REGIST_CALLBACK(k2compat_stub);
+
+#if defined(__EMSCRIPTEN__)
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("layerExDraw.dll")
+static void layerExDraw_stub() {}
+NCB_PRE_REGIST_CALLBACK(layerExDraw_stub);
+
+extern "C" void TVPRegisterLayerExDrawPluginAnchor() {}
+#endif
 
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("kagexopt.dll")
@@ -121,6 +131,182 @@ static tjs_error CreateGlesCompatObject(tTJSVariant *result,
     return TJS_S_OK;
 }
 
+static void SetGlesCompatMethod(iTJSDispatch2 *obj, const tjs_char *name,
+                                tTJSNativeClassMethodCallback cb) {
+    if(!obj || !name || !cb)
+        return;
+    iTJSDispatch2 *method = TJSCreateNativeClassMethod(cb);
+    if(!method)
+        return;
+    tTJSVariant value(method, method);
+    obj->PropSet(TJS_MEMBERENSURE, name, nullptr, &value, obj);
+    method->Release();
+}
+
+static tjs_error GlesCompatReturnTrueCb(tTJSVariant *result, tjs_int,
+                                        tTJSVariant **, iTJSDispatch2 *) {
+    if(result)
+        *result = true;
+    return TJS_S_OK;
+}
+
+static tjs_error GlesCompatReturnFirstArgOrTrueCb(tTJSVariant *result,
+                                                  tjs_int numparams,
+                                                  tTJSVariant **param,
+                                                  iTJSDispatch2 *) {
+    if(!result)
+        return TJS_S_OK;
+    if(numparams > 0 && param && param[0])
+        *result = *param[0];
+    else
+        *result = true;
+    return TJS_S_OK;
+}
+
+static const tjs_char *GlesCompatVariantTypeName(tTJSVariantType type) {
+    switch(type) {
+    case tvtVoid: return TJS_W("void");
+    case tvtObject: return TJS_W("object");
+    case tvtString: return TJS_W("string");
+    case tvtOctet: return TJS_W("octet");
+    case tvtInteger: return TJS_W("integer");
+    case tvtReal: return TJS_W("real");
+    default: return TJS_W("unknown");
+    }
+}
+
+static void LogGlesCompatArgsOnce(const tjs_char *tag, tjs_int numparams,
+                                  tTJSVariant **param) {
+    static tjs_int logCount = 0;
+    if(logCount++ >= 12)
+        return;
+    ttstr msg = ttstr(TJS_W("GLESCompat.")) + tag + TJS_W(": argc=") +
+                ttstr(numparams);
+    for(tjs_int i = 0; i < numparams; ++i) {
+        msg += TJS_W(" [");
+        msg += ttstr(i);
+        msg += TJS_W(":");
+        msg += (param && param[i])
+                   ? GlesCompatVariantTypeName(param[i]->Type())
+                   : TJS_W("null");
+        msg += TJS_W("]");
+    }
+    TVPAddLog(msg);
+}
+
+static tjs_error GlesCompatEntryUpdateObjectCb(tTJSVariant *result,
+                                               tjs_int numparams,
+                                               tTJSVariant **param,
+                                               iTJSDispatch2 *) {
+    LogGlesCompatArgsOnce(TJS_W("entryUpdateObject"), numparams, param);
+    if(result)
+        *result = true;
+    return TJS_S_OK;
+}
+
+static tjs_error GlesCompatCopyLayerCb(tTJSVariant *result, tjs_int numparams,
+                                       tTJSVariant **param, iTJSDispatch2 *) {
+    LogGlesCompatArgsOnce(TJS_W("copyLayer"), numparams, param);
+    if(result)
+        *result = true;
+    return TJS_S_OK;
+}
+
+static tjs_error GlesCompatDrawAffineCb(tTJSVariant *result, tjs_int numparams,
+                                        tTJSVariant **param, iTJSDispatch2 *) {
+    LogGlesCompatArgsOnce(TJS_W("drawAffine"), numparams, param);
+    if(result)
+        *result = true;
+    return TJS_S_OK;
+}
+
+static void GlesCompatInvokeLoadIfPresent(tTJSVariant &object,
+                                          tjs_int numparams,
+                                          tTJSVariant **param) {
+    if(numparams <= 0 || !param || object.Type() != tvtObject)
+        return;
+    iTJSDispatch2 *dispatch = object.AsObjectNoAddRef();
+    if(!dispatch)
+        return;
+    tjs_uint hint = 0;
+    dispatch->FuncCall(0, TJS_W("load"), &hint, nullptr, numparams, param,
+                       dispatch);
+}
+
+static tjs_error GlesCompatCreateModelCb(tTJSVariant *result,
+                                         tjs_int numparams,
+                                         tTJSVariant **param,
+                                         iTJSDispatch2 *) {
+    tTJSVariant model;
+    tjs_error er = CreateGlesCompatObject(&model, TJS_W("new Live2DModel()"));
+    if(TJS_FAILED(er) || model.Type() != tvtObject) {
+        if(result)
+            result->Clear();
+        return TJS_FAILED(er) ? er : TJS_E_FAIL;
+    }
+    GlesCompatInvokeLoadIfPresent(model, numparams, param);
+    if(result)
+        *result = model;
+    return TJS_S_OK;
+}
+
+static tjs_error GlesCompatCreateMatrixCb(tTJSVariant *result, tjs_int,
+                                          tTJSVariant **, iTJSDispatch2 *) {
+    return CreateGlesCompatObject(result, TJS_W("new Live2DMatrix()"));
+}
+
+static tjs_error GlesCompatCreateDeviceCb(tTJSVariant *result, tjs_int,
+                                          tTJSVariant **, iTJSDispatch2 *) {
+    return CreateGlesCompatObject(result, TJS_W("new Live2DDevice()"));
+}
+
+static tjs_error CreateGlesCompatModule(tTJSVariant *result, tjs_int width,
+                                        tjs_int height) {
+    iTJSDispatch2 *dict = TJSCreateDictionaryObject();
+    if(!dict) {
+        if(result)
+            result->Clear();
+        return TJS_E_FAIL;
+    }
+
+    tTJSVariant wv(width), hv(height);
+    dict->PropSet(TJS_MEMBERENSURE, TJS_W("screenWidth"), nullptr, &wv, dict);
+    dict->PropSet(TJS_MEMBERENSURE, TJS_W("screenHeight"), nullptr, &hv, dict);
+
+    SetGlesCompatMethod(dict, TJS_W("entryUpdateObject"),
+                        GlesCompatEntryUpdateObjectCb);
+    SetGlesCompatMethod(dict, TJS_W("setScreenSize"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("makeCurrent"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("beginScene"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("endScene"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("finalize"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("render"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("glesEntry"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("glesRemove"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("capture"), GlesCompatReturnFirstArgOrTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("captureScreen"),
+                        GlesCompatReturnFirstArgOrTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("glesCapture"),
+                        GlesCompatReturnFirstArgOrTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("glesCaptureScreen"),
+                        GlesCompatReturnFirstArgOrTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("copyLayer"), GlesCompatCopyLayerCb);
+    SetGlesCompatMethod(dict, TJS_W("glesCopyLayer"), GlesCompatCopyLayerCb);
+    SetGlesCompatMethod(dict, TJS_W("drawLayer"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("glesDrawLayer"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("drawAffine"), GlesCompatDrawAffineCb);
+    SetGlesCompatMethod(dict, TJS_W("drawAffineGLES"), GlesCompatDrawAffineCb);
+    SetGlesCompatMethod(dict, TJS_W("setMatrix"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("createModel"), GlesCompatCreateModelCb);
+    SetGlesCompatMethod(dict, TJS_W("createMatrix"), GlesCompatCreateMatrixCb);
+    SetGlesCompatMethod(dict, TJS_W("createDevice"), GlesCompatCreateDeviceCb);
+
+    if(result)
+        *result = tTJSVariant(dict, dict);
+    dict->Release();
+    return TJS_S_OK;
+}
+
 } // namespace
 
 class GLESAdaptor {
@@ -139,9 +325,10 @@ public:
     }
 
     static tjs_error getModuleCb(tTJSVariant *result, tjs_int, tTJSVariant **,
-                                 GLESAdaptor *) {
-        SetGlesCompatInt(result, 0);
-        return TJS_S_OK;
+                                 GLESAdaptor *self) {
+        const tjs_int width = self ? self->screenWidth_ : 0;
+        const tjs_int height = self ? self->screenHeight_ : 0;
+        return CreateGlesCompatModule(result, width, height);
     }
 
     static tjs_error setScreenSizeCb(tTJSVariant *result, tjs_int numparams,
@@ -154,9 +341,19 @@ public:
         return TJS_S_OK;
     }
 
-    static tjs_error createModelCb(tTJSVariant *result, tjs_int, tTJSVariant **,
-                                   GLESAdaptor *) {
-        return CreateGlesCompatObject(result, TJS_W("new Live2DModel()"));
+    static tjs_error createModelCb(tTJSVariant *result, tjs_int numparams,
+                                   tTJSVariant **param, GLESAdaptor *) {
+        tTJSVariant model;
+        tjs_error er = CreateGlesCompatObject(&model, TJS_W("new Live2DModel()"));
+        if(TJS_FAILED(er) || model.Type() != tvtObject) {
+            if(result)
+                result->Clear();
+            return TJS_FAILED(er) ? er : TJS_E_FAIL;
+        }
+        GlesCompatInvokeLoadIfPresent(model, numparams, param);
+        if(result)
+            *result = model;
+        return TJS_S_OK;
     }
 
     static tjs_error createMatrixCb(tTJSVariant *result, tjs_int,
@@ -189,10 +386,10 @@ public:
         return TJS_S_OK;
     }
 
-    static tjs_error getModuleCb(tTJSVariant *result, tjs_int, tTJSVariant **,
-                                 OGLDrawDevice *) {
-        SetGlesCompatInt(result, 0);
-        return TJS_S_OK;
+    static tjs_error getModuleCb(tTJSVariant *result, tjs_int numparams,
+                                 tTJSVariant **param, OGLDrawDevice *self) {
+        return GLESAdaptor::getModuleCb(result, numparams, param,
+                                        self ? &self->adaptor_ : nullptr);
     }
 
     static tjs_error setScreenSizeCb(tTJSVariant *result, tjs_int numparams,

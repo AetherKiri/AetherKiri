@@ -181,7 +181,7 @@ build_abi() {
     local godot_bin_dir
     local vcpkg_triplet_dir
     local libomp_path
-    local cmake_config_args=()
+    local cmake_config_args=(-D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM")
 
     case "$abi" in
         arm64-v8a)
@@ -214,7 +214,7 @@ build_abi() {
         )
     fi
 
-    cmake --preset "$cmake_config_preset" --fresh -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" "${cmake_config_args[@]}"
+    cmake --preset "$cmake_config_preset" --fresh "${cmake_config_args[@]}"
     cmake --build --preset "$cmake_build_preset" -- -j"$PARALLEL_JOBS"
 
     mkdir -p "$godot_bin_dir"

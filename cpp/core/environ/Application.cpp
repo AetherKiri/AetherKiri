@@ -389,10 +389,28 @@ bool tTVPApplication::StartApplication(ttstr path) {
     } catch(const EAbort &) {
         // nothing to do
     } catch(const Exception &exception) {
+        spdlog::error("StartApplication: Exception: {}", exception.what().AsStdString());
+        spdlog::default_logger()->flush();
         TVPOnError();
         if(!TVPSystemUninitCalled)
             ShowException(exception.what());
     } catch(const TJS::eTJSScriptError &e) {
+        ttstr logMsg;
+        logMsg += e.GetMessage();
+        const tjs_char *pszBlockName = e.GetBlockName();
+        if(pszBlockName && *pszBlockName) {
+            logMsg += TJS_W("\n@line(");
+            tjs_char tmp[34];
+            logMsg += TJS_int_to_str(e.GetSourceLine(), tmp);
+            logMsg += TJS_W(") ");
+            logMsg += pszBlockName;
+        }
+        if(e.GetTrace().GetLen() != 0) {
+            logMsg += TJS_W("\n");
+            logMsg += e.GetTrace();
+        }
+        spdlog::error("StartApplication: TJS script error:\n{}", logMsg.AsStdString());
+        spdlog::default_logger()->flush();
         TVPOnError();
         if(!TVPSystemUninitCalled) {
             ttstr msg;
@@ -414,16 +432,26 @@ bool tTVPApplication::StartApplication(ttstr path) {
             ShowException(msg);
         }
     } catch(const TJS::eTJS &e) {
+        spdlog::error("StartApplication: TJS error: {}", e.GetMessage().AsStdString());
+        spdlog::default_logger()->flush();
         TVPOnError();
         if(!TVPSystemUninitCalled)
             ShowException(e.GetMessage());
     } catch(const std::exception &e) {
+        spdlog::error("StartApplication: std::exception: {}", e.what());
+        spdlog::default_logger()->flush();
         ShowException(e.what());
     } catch(const char *e) {
+        spdlog::error("StartApplication: const char exception: {}", e);
+        spdlog::default_logger()->flush();
         ShowException(e);
     } catch(const tjs_char *e) {
+        spdlog::error("StartApplication: tjs_char exception: {}", ttstr(e).AsStdString());
+        spdlog::default_logger()->flush();
         ShowException(e);
     } catch(...) {
+        spdlog::error("StartApplication: unknown exception");
+        spdlog::default_logger()->flush();
         ShowException((const tjs_char *)TVPUnknownError);
     }
 

@@ -27,8 +27,16 @@
 ANativeWindow* krkr_GetNativeWindow();
 void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #endif
-#if !defined(__ANDROID__)
+#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+#if defined(__has_include)
+#if __has_include(<execinfo.h>)
+#define ENGINE_API_HAS_EXECINFO 1
 #include <execinfo.h>
+#endif
+#else
+#define ENGINE_API_HAS_EXECINFO 1
+#include <execinfo.h>
+#endif
 #endif
 
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -90,6 +98,7 @@ extern "C" bool TVPHostGetLatestGodotGpuFrame(uint64_t* texture,
                                                uint32_t* width,
                                                uint32_t* height,
                                                uint64_t* serial);
+extern "C" void TVPHostActivateMainWindow();
 extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height);
 extern "C" void TVPHostSetPreferGpuFrame(bool prefer_gpu_frame);
 
@@ -234,8 +243,8 @@ std::shared_ptr<spdlog::logger> EnsureNamedLogger(const char* name) {
 void CrashSignalHandler(int sig) {
   spdlog::critical("FATAL SIGNAL {} received!", sig);
 
-  // Print a mini backtrace (not available on Android)
-#if !defined(__ANDROID__)
+  // Print a mini backtrace where libc provides execinfo.
+#if defined(ENGINE_API_HAS_EXECINFO)
   void* frames[32];
   int count = backtrace(frames, 32);
   char** symbols = backtrace_symbols(frames, count);
@@ -254,7 +263,7 @@ void CrashSignalHandler(int sig) {
 }
 
 void PrintNativeBacktrace(const char* prefix) {
-#if !defined(__ANDROID__)
+#if defined(ENGINE_API_HAS_EXECINFO)
   void* frames[48];
   int count = backtrace(frames, 48);
   char** symbols = backtrace_symbols(frames, count);
@@ -444,13 +453,19 @@ void PushRuntimeSpdlogToStartupQueue(const spdlog::details::log_msg& msg) {
   engine_handle_s* target = nullptr;
   {
     std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
-    if (!g_runtime_startup_active || g_runtime_startup_owner == nullptr) {
+    engine_handle_t target_handle = nullptr;
+    if (g_runtime_startup_active && g_runtime_startup_owner != nullptr) {
+      target_handle = g_runtime_startup_owner;
+    } else if (g_runtime_active && g_runtime_owner != nullptr) {
+      target_handle = g_runtime_owner;
+    }
+    if (target_handle == nullptr) {
       return;
     }
-    if (!IsHandleLiveLocked(g_runtime_startup_owner)) {
+    if (!IsHandleLiveLocked(target_handle)) {
       return;
     }
-    target = reinterpret_cast<engine_handle_s*>(g_runtime_startup_owner);
+    target = reinterpret_cast<engine_handle_s*>(target_handle);
   }
   if (target == nullptr) {
     return;
@@ -514,6 +529,90 @@ bool EnsureEngineRuntimeInitialized(uint32_t width, uint32_t height,
   }
   g_engine_bootstrapped = true;
   return true;
+}
+
+void StartHostEngineLoop(engine_handle_s* impl) {
+  EngineLoop::CreateInstance();
+  if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
+    loop->Start();
+  }
+  if (auto* scene = TVPMainScene::GetInstance(); scene != nullptr) {
+    scene->scheduleUpdate();
+  }
+  TVPHostSetSurfaceSize(impl->frame.surface_width, impl->frame.surface_height);
+}
+
+void MarkRuntimeOpenedForHost(engine_handle_t handle,
+                              engine_handle_s* impl,
+                              const char* startup_log_message,
+                              bool mark_startup_succeeded) {
+  StartHostEngineLoop(impl);
+
+  bool should_log = startup_log_message != nullptr &&
+                    startup_log_message[0] != '\0';
+  {
+    std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+    if (!IsHandleLiveLocked(handle)) {
+      return;
+    }
+
+    std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+    if (impl->state == ToStateValue(EngineState::kDestroyed)) {
+      return;
+    }
+
+    should_log = should_log &&
+                 !(g_runtime_active && g_runtime_owner == handle &&
+                   impl->state == ToStateValue(EngineState::kOpened));
+
+    if (g_runtime_startup_active && g_runtime_startup_owner == handle) {
+      g_runtime_startup_active = false;
+      g_runtime_startup_owner = nullptr;
+    }
+    g_runtime_active = true;
+    g_runtime_owner = handle;
+    g_runtime_started_once = true;
+
+    impl->runtime_owner = true;
+    impl->input.native_mouse_callbacks_disabled = true;
+    impl->frame.width = 0;
+    impl->frame.height = 0;
+    impl->frame.stride_bytes = 0;
+    impl->frame.rgba.clear();
+    impl->frame.ready = false;
+    impl->input.active_pointer_ids.clear();
+    impl->input.pending_events.clear();
+    impl->state = ToStateValue(EngineState::kOpened);
+    ClearHandleErrorLocked(impl);
+  }
+
+  if (mark_startup_succeeded) {
+    SetStartupState(impl, ENGINE_STARTUP_STATE_SUCCEEDED);
+  }
+  if (should_log) {
+    PushStartupLog(impl, startup_log_message);
+  }
+}
+
+void ClearRuntimeOwnerIfMatching(engine_handle_t handle, engine_handle_s* impl) {
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  if (!IsHandleLiveLocked(handle)) {
+    return;
+  }
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (g_runtime_active && g_runtime_owner == handle) {
+    g_runtime_active = false;
+    g_runtime_owner = nullptr;
+    g_runtime_started_once = false;
+    impl->runtime_owner = false;
+    if (impl->state == ToStateValue(EngineState::kOpened)) {
+      impl->state = ToStateValue(EngineState::kCreated);
+    }
+  }
+  if (g_runtime_startup_active && g_runtime_startup_owner == handle) {
+    g_runtime_startup_active = false;
+    g_runtime_startup_owner = nullptr;
+  }
 }
 
 struct FrameReadbackLayout {
@@ -1091,7 +1190,11 @@ engine_result_t OpenGameCore(engine_handle_t handle,
 #endif
 
   try {
+#if defined(__EMSCRIPTEN__)
+    std::string log_file_path = TVPGetDefaultFileDir();
+#else
     std::string log_file_path = normalized_game_root_path;
+#endif
     if (!log_file_path.empty() && log_file_path.back() != '/') {
       log_file_path += "/";
     }
@@ -1106,7 +1209,11 @@ engine_result_t OpenGameCore(engine_handle_t handle,
   // Only initialize plugin trace logger when tracing is enabled.
   // The toggle is set via engine_set_option before engine_open_game.
   if (PluginCallTracer::Instance().IsEnabled()) {
+#if defined(__EMSCRIPTEN__)
+    std::string trace_path = TVPGetDefaultFileDir();
+#else
     std::string trace_path = normalized_game_root_path;
+#endif
     if (!trace_path.empty() && trace_path.back() != '/') trace_path += "/";
     trace_path += "plugin_trace.log";
     PluginCallTracer::Instance().InitLogger(trace_path);
@@ -1130,6 +1237,9 @@ engine_result_t OpenGameCore(engine_handle_t handle,
     spdlog::default_logger()->flush();
     Application->StartApplication(ttstr(normalized_game_root_path.c_str()));
     spdlog::info("engine_open_game: StartApplication returned successfully");
+#if defined(__EMSCRIPTEN__)
+    TVPHostActivateMainWindow();
+#endif
 #if defined(__ANDROID__)
     AndroidInfoLog("engine_open_game: StartApplication returned successfully");
 #endif
@@ -1155,45 +1265,7 @@ engine_result_t OpenGameCore(engine_handle_t handle,
     return ENGINE_RESULT_INVALID_STATE;
   }
 
-  EngineLoop::CreateInstance();
-  if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
-    loop->Start();
-  }
-
-  if (auto* scene = TVPMainScene::GetInstance(); scene != nullptr) {
-    scene->scheduleUpdate();
-  }
-
-  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
-  if (!IsHandleLiveLocked(handle)) {
-    return ENGINE_RESULT_INVALID_STATE;
-  }
-
-  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
-  if (impl->state == ToStateValue(EngineState::kDestroyed)) {
-    return ENGINE_RESULT_INVALID_STATE;
-  }
-
-  if (g_runtime_startup_active && g_runtime_startup_owner == handle) {
-    g_runtime_startup_active = false;
-    g_runtime_startup_owner = nullptr;
-  }
-  g_runtime_active = true;
-  g_runtime_owner = handle;
-  g_runtime_started_once = true;
-
-  impl->runtime_owner = true;
-  impl->input.native_mouse_callbacks_disabled = true;
-  impl->frame.width = 0;
-  impl->frame.height = 0;
-  impl->frame.stride_bytes = 0;
-  impl->frame.rgba.clear();
-  impl->frame.ready = false;
-  TVPHostSetSurfaceSize(impl->frame.surface_width, impl->frame.surface_height);
-  impl->input.active_pointer_ids.clear();
-  impl->input.pending_events.clear();
-  impl->state = ToStateValue(EngineState::kOpened);
-  ClearHandleErrorLocked(impl);
+  MarkRuntimeOpenedForHost(handle, impl, nullptr, false);
   return ENGINE_RESULT_OK;
 }
 
@@ -1233,12 +1305,8 @@ void RunOpenGameAsync(engine_handle_t handle,
       error_text = "unknown startup error";
     }
     PushStartupLog(impl, "ERROR: " + error_text);
+    ClearRuntimeOwnerIfMatching(handle, impl);
     SetStartupState(impl, ENGINE_STARTUP_STATE_FAILED);
-    std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
-    if (g_runtime_startup_active && g_runtime_startup_owner == handle) {
-      g_runtime_startup_active = false;
-      g_runtime_startup_owner = nullptr;
-    }
   }
   MarkStartupWorkerRunning(impl, false);
 }
@@ -1248,6 +1316,31 @@ void RunOpenGameAsync(engine_handle_t handle,
 extern std::string TVPEngineApi_GetGlobalException();
 
 extern "C" {
+
+void TVPEngineApiNotifyWebStartupReady() {
+#if defined(__EMSCRIPTEN__)
+  engine_handle_t handle = nullptr;
+  engine_handle_s* impl = nullptr;
+  {
+    std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+    if (!g_runtime_startup_active || g_runtime_startup_owner == nullptr) {
+      return;
+    }
+    if (!IsHandleLiveLocked(g_runtime_startup_owner)) {
+      return;
+    }
+    handle = g_runtime_startup_owner;
+    impl = reinterpret_cast<engine_handle_s*>(handle);
+  }
+  if (impl == nullptr) {
+    return;
+  }
+  spdlog::info("engine_open_game_async: Web HostWindowLayer is available; waiting for startup script to finish");
+  PushStartupLog(
+      impl,
+      "engine_open_game_async: Web HostWindowLayer is available; waiting for startup script to finish");
+#endif
+}
 
 engine_result_t engine_get_runtime_api_version(uint32_t* out_api_version) {
   if (out_api_version == nullptr) {
@@ -1470,8 +1563,7 @@ engine_result_t engine_open_game(engine_handle_t handle,
   } else {
     SetHandleErrorLocked(impl, "engine_open_game failed");
   }
-  g_runtime_startup_active = false;
-  g_runtime_startup_owner = nullptr;
+  ClearRuntimeOwnerIfMatching(handle, impl);
   SetStartupState(impl, ENGINE_STARTUP_STATE_FAILED);
   PushStartupLog(impl, std::string("ERROR: ") + impl->last_error);
   return open_result;
@@ -1541,7 +1633,21 @@ engine_result_t engine_open_game_async(engine_handle_t handle,
     try {
       impl->startup.worker =
           std::thread([handle, impl, game_root_copy]() mutable {
-            RunOpenGameAsync(handle, impl, std::move(game_root_copy));
+            try {
+              RunOpenGameAsync(handle, impl, std::move(game_root_copy));
+            } catch (const std::exception& e) {
+              spdlog::critical("engine_open_game_async: startup thread exception: {}", e.what());
+              PushStartupLog(impl, std::string("ERROR: startup thread exception: ") + e.what());
+              ClearRuntimeOwnerIfMatching(handle, impl);
+              SetStartupState(impl, ENGINE_STARTUP_STATE_FAILED);
+              MarkStartupWorkerRunning(impl, false);
+            } catch (...) {
+              spdlog::critical("engine_open_game_async: startup thread unknown exception");
+              PushStartupLog(impl, "ERROR: startup thread unknown exception");
+              ClearRuntimeOwnerIfMatching(handle, impl);
+              SetStartupState(impl, ENGINE_STARTUP_STATE_FAILED);
+              MarkStartupWorkerRunning(impl, false);
+            }
           });
     } catch (...) {
       MarkStartupWorkerRunning(impl, false);
@@ -2395,7 +2501,7 @@ engine_result_t engine_read_frame_rgba(engine_handle_t handle,
     impl->frame.ready = true;
   }
 
-  const size_t required_size =
+  size_t required_size =
       static_cast<size_t>(layout.stride_bytes) *
       static_cast<size_t>(layout.height);
   if (out_pixels_size < required_size) {
@@ -2403,6 +2509,24 @@ engine_result_t engine_read_frame_rgba(engine_handle_t handle,
         impl,
         ENGINE_RESULT_INVALID_ARGUMENT,
         "out_pixels_size is smaller than required frame buffer size");
+  }
+
+  if (impl->frame.rgba.size() < required_size) {
+    if (CopyHostFrameLocked(impl) && impl->frame.width > 0 &&
+        impl->frame.height > 0 && impl->frame.stride_bytes > 0) {
+      layout.width = impl->frame.width;
+      layout.height = impl->frame.height;
+      layout.stride_bytes = impl->frame.stride_bytes;
+      required_size =
+          static_cast<size_t>(layout.stride_bytes) *
+          static_cast<size_t>(layout.height);
+      if (out_pixels_size < required_size) {
+        return SetHandleErrorAndReturnLocked(
+            impl,
+            ENGINE_RESULT_INVALID_ARGUMENT,
+            "out_pixels_size is smaller than required frame buffer size");
+      }
+    }
   }
 
   if (impl->frame.rgba.size() < required_size) {

@@ -59,11 +59,12 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | `build/build_macos.sh` | Builds C++ core/GDExtension for macOS, stages dylibs, exports the Godot macOS app. |
 | `build/build_ios.sh` | Builds iOS device or simulator static libraries, exports and patches the Xcode project. |
 | `build/build_android.sh` | Builds Android native libraries and exports APKs through Godot. |
+| `build/build_web.sh` | Builds the Emscripten Web GDExtension side module and exports the Godot Web app when dlink templates are installed. |
 | `CMakeLists.txt` | Top-level native build. Adds engine API, GDExtension, core, plugins, tests, and tools. |
-| `CMakePresets.json` | Named CMake presets for macOS, iOS, Android, and related build directories. |
+| `CMakePresets.json` | Named CMake presets for macOS, iOS, Android, Web, and related build directories. |
 | `vcpkg.json` | Native dependency manifest. Godot Native must not depend on ANGLE. |
 | `apps/godot_app/project.godot` | Godot project settings and input/export defaults. Do not commit local game paths here. |
-| `apps/godot_app/export_presets.cfg` | Godot export presets for macOS, iOS, and Android. Signing-sensitive values may need local overrides. |
+| `apps/godot_app/export_presets.cfg` | Godot export presets for macOS, iOS, Android, and Web. Signing-sensitive values may need local overrides. |
 | `apps/godot_app/aether_kiri.gdextension` | GDExtension library map for debug/release and target platforms. |
 | `apps/godot_app/scenes/main.tscn` | Main scene. Most UI is currently built by script. |
 | `apps/godot_app/scripts/main.gd` | Main app shell: home UI, settings, game detail page, loading console, renderer selection, input forwarding, performance overlay. |
@@ -104,13 +105,25 @@ Android also needs:
 - `ANDROID_HOME` or `ANDROID_SDK_ROOT`, otherwise the scripts try
   `$HOME/Library/Android/sdk`.
 
+Web also needs:
+
+- Emscripten/emsdk with `emcc`, `em++`, and `emar` on `PATH`.
+- Godot Web GDExtension/dlink export templates installed under the Godot export
+  template directory as `web_dlink_debug.zip` and
+  `web_dlink_release.zip`.
+- Node.js and npm for the TypeScript/Vite local Web server.
+
 Useful environment variables:
 
 | Variable | Purpose |
 | --- | --- |
 | `GODOT_BIN` | Override Godot executable path. |
 | `GODOT_EXPORT_TEMPLATE` | Override a platform export template zip. |
+| `GODOT_TEMPLATE_DIR` | Override the Godot export template directory, useful for Web dlink templates. |
 | `VCPKG_ROOT` | Override vcpkg checkout. |
+| `EMSDK` / `EMSCRIPTEN_ROOT` | Emscripten SDK/toolchain location for Web builds. |
+| `AETHERKIRI_GAME_ROOT` / `AETHERKIRI_GAME_ROOTS` | Vite-only local Web game roots for read-only RangeFS testing. |
+| `AETHERKIRI_WEB_AUTO_START` | Vite-only local Web switch to mount and start the configured game automatically. |
 | `JOBS` | Parallel native build jobs. |
 | `IOS_SIMULATOR_ARCH` | `arm64` or `x86_64` simulator build selection. |
 | `AETHERKIRI_TEST_CONFIG` | JSON probe profile path. |
@@ -133,6 +146,8 @@ Use `./build.sh <platform> <debug|release>`.
 ./build.sh ios release
 ./build.sh android debug --abi=arm64-v8a
 ./build.sh android release --abi=arm64-v8a
+./build.sh web debug
+./build.sh web release
 ```
 
 Clean a platform build:
@@ -202,6 +217,64 @@ Android release:
 ```
 
 The release APK is unsigned unless a release keystore is configured.
+
+Web debug:
+
+```bash
+source /path/to/emsdk/emsdk_env.sh
+./build.sh web debug
+npm install
+npm run web:dev:debug
+```
+
+Web release:
+
+```bash
+source /path/to/emsdk/emsdk_env.sh
+npm install
+npm run web:build:release
+npm run web:dev:release
+```
+
+The native side module is written to
+`apps/godot_app/bin/web/<debug|release>/aether_kiri_godot.wasm`. The complete
+Godot Web export is written to `out/godot/web/<debug|release>/`, with
+`index.html` as the browser entry point. Upload the contents of
+`out/godot/web/release/` to static hosting or a CDN for production.
+
+Web exports are built for threaded, SIMD-enabled WebAssembly. They need
+cross-origin isolation headers when served in a browser, which the
+TypeScript/Vite dev server provides for local testing. Production servers must
+send these headers on the app shell, JavaScript, wasm, pck, and asset files:
+
+```text
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+Cross-Origin-Resource-Policy: same-origin
+```
+
+Also configure `application/wasm` for `.wasm` files and
+`application/octet-stream` for `.pck` files. Web currently uses Emscripten's
+virtual filesystem through a conservative platform shim in
+`cpp/core/environ/web/Platform.cpp`. Cloud Web deployments cannot read user game
+files from server environment variables; the product import path is the browser
+file/directory picker. After user authorization, local `File`/`Blob` objects are
+mounted read-only under `/webgames/<id>` with Range reads, so multi-GB packages
+do not pass through `copyToFS` or MEMFS. Saves, game configuration, and other
+runtime writes are persisted under the current site's IndexedDB-backed
+`/userfs`.
+
+For automated local testing only, run
+`AETHERKIRI_GAME_ROOT=/absolute/path AETHERKIRI_WEB_AUTO_START=1 npm run web:dev:release`.
+Use `AETHERKIRI_WEB_AUTO_START_INDEX` or `AETHERKIRI_WEB_AUTO_START_NAME` when
+multiple roots are configured. These are only Vite local-development shortcuts.
+
+GitHub Actions Web builds restore `web-vcpkg-bundle` when it exists. Run the
+manual `Web Vcpkg Bundle` workflow after changing Web vcpkg ports, triplets, or
+dependency versions; otherwise the first Web Build must compile the full
+wasm32-emscripten dependency set and can take tens of minutes. The Web Build
+workflow also saves vcpkg, emsdk, and ccache state on failure so reruns do not
+throw away a completed dependency build.
 
 On iOS/iPadOS, copy games through the Files app into:
 
@@ -313,6 +386,7 @@ Build checks:
 ./build.sh ios debug --simulator
 ./build.sh ios release
 ./build.sh android debug --abi=arm64-v8a
+./build.sh web debug
 ```
 
 Renderer migration checks:
@@ -338,6 +412,14 @@ Manual game smoke:
 - Save once.
 - Exit back to shell.
 - Check FPS and frame spike logs.
+
+When a game has been manually smoke-tested or flow-tested, update
+`doc/verified_games.md` before committing the validation work. Record the exact
+game title, platform/build, import path, verified scope, result, and the
+verifier's GitHub handle or profile link. Do not record machine-local game
+paths in the verified-games list. Keep the localized
+`doc/verified_games.zh-CN.md` list in sync when updating public compatibility
+notes.
 
 ## Debugging Notes
 

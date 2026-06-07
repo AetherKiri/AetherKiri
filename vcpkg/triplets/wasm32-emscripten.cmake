@@ -1,0 +1,76 @@
+set(VCPKG_ENV_PASSTHROUGH_UNTRACKED EMSCRIPTEN_ROOT EMSDK EMSDK_PYTHON PATH)
+
+if(NOT DEFINED ENV{EMSCRIPTEN_ROOT})
+    find_path(EMSCRIPTEN_ROOT "emcc")
+else()
+    set(EMSCRIPTEN_ROOT "$ENV{EMSCRIPTEN_ROOT}")
+endif()
+
+if(NOT EMSCRIPTEN_ROOT AND DEFINED ENV{EMSDK})
+    set(EMSCRIPTEN_ROOT "$ENV{EMSDK}/upstream/emscripten")
+endif()
+
+if(NOT EXISTS "${EMSCRIPTEN_ROOT}/cmake/Modules/Platform/Emscripten.cmake")
+    find_program(EMCC_EXECUTABLE emcc)
+    if(EMCC_EXECUTABLE)
+        get_filename_component(EMCC_DIR "${EMCC_EXECUTABLE}" DIRECTORY)
+        foreach(candidate
+            "${EMCC_DIR}"
+            "${EMCC_DIR}/../libexec"
+            "/opt/homebrew/opt/emscripten/libexec"
+            "/usr/local/opt/emscripten/libexec"
+        )
+            if(EXISTS "${candidate}/cmake/Modules/Platform/Emscripten.cmake")
+                set(EMSCRIPTEN_ROOT "${candidate}")
+                break()
+            endif()
+        endforeach()
+    endif()
+endif()
+
+if(NOT EXISTS "${EMSCRIPTEN_ROOT}/cmake/Modules/Platform/Emscripten.cmake")
+    message(FATAL_ERROR "Emscripten toolchain not found. Set EMSCRIPTEN_ROOT or run emsdk_env.sh before configuring.")
+endif()
+
+set(VCPKG_TARGET_ARCHITECTURE wasm32)
+set(VCPKG_CRT_LINKAGE static)
+set(VCPKG_LIBRARY_LINKAGE static)
+set(VCPKG_CMAKE_SYSTEM_NAME Emscripten)
+set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "${EMSCRIPTEN_ROOT}/cmake/Modules/Platform/Emscripten.cmake")
+set(VCPKG_BUILD_TYPE release)
+
+set(AETHERKIRI_WEB_C_COMPILE_FLAGS "-fPIC -pthread -msimd128 -sSUPPORT_LONGJMP=wasm -sWASM_LEGACY_EXCEPTIONS=1")
+set(AETHERKIRI_WEB_CXX_COMPILE_FLAGS "${AETHERKIRI_WEB_C_COMPILE_FLAGS} -fwasm-exceptions")
+set(AETHERKIRI_WEB_LINK_FLAGS "-pthread -msimd128 -sSUPPORT_LONGJMP=wasm -sWASM_LEGACY_EXCEPTIONS=1 -fwasm-exceptions")
+
+set(VCPKG_C_FLAGS "${AETHERKIRI_WEB_C_COMPILE_FLAGS}")
+set(VCPKG_CXX_FLAGS "${AETHERKIRI_WEB_CXX_COMPILE_FLAGS}")
+set(VCPKG_C_FLAGS_RELEASE "${AETHERKIRI_WEB_C_COMPILE_FLAGS}")
+set(VCPKG_CXX_FLAGS_RELEASE "${AETHERKIRI_WEB_CXX_COMPILE_FLAGS}")
+
+list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS
+    "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"
+    "-DCMAKE_C_FLAGS=${AETHERKIRI_WEB_C_COMPILE_FLAGS}"
+    "-DCMAKE_CXX_FLAGS=${AETHERKIRI_WEB_CXX_COMPILE_FLAGS}"
+    "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG ${AETHERKIRI_WEB_C_COMPILE_FLAGS}"
+    "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG ${AETHERKIRI_WEB_CXX_COMPILE_FLAGS}"
+    "-DCMAKE_EXE_LINKER_FLAGS=${AETHERKIRI_WEB_LINK_FLAGS}"
+    "-DCMAKE_SHARED_LINKER_FLAGS=${AETHERKIRI_WEB_LINK_FLAGS}"
+)
+
+if(PORT STREQUAL "opencv4")
+    set(AETHERKIRI_OPENCV_C_COMPILE_FLAGS "${AETHERKIRI_WEB_C_COMPILE_FLAGS} -include emscripten/version.h")
+    set(AETHERKIRI_OPENCV_CXX_COMPILE_FLAGS "${AETHERKIRI_WEB_CXX_COMPILE_FLAGS} -include emscripten/version.h")
+    list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS
+        "-DCMAKE_C_FLAGS=${AETHERKIRI_OPENCV_C_COMPILE_FLAGS}"
+        "-DCMAKE_CXX_FLAGS=${AETHERKIRI_OPENCV_CXX_COMPILE_FLAGS}"
+        "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG ${AETHERKIRI_OPENCV_C_COMPILE_FLAGS}"
+        "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG ${AETHERKIRI_OPENCV_CXX_COMPILE_FLAGS}"
+        -DCV_ENABLE_INTRINSICS=ON
+        -DOPENCV_DISABLE_THREAD_SUPPORT=OFF
+        -DWITH_PTHREADS_PF=ON
+        -DCV_ENABLE_UNROLLED=ON
+        -DCPU_BASELINE=
+        -DCPU_DISPATCH=
+    )
+endif()
