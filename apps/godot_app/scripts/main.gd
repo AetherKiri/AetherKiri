@@ -50,6 +50,8 @@ var mock_enabled := true
 var console_log_file := true
 var trace_log := false
 var export_scripts := false
+var log_alerts := false
+var error_dialog_logs := false
 var dirty_settings := false
 var active_game_path := ""
 var active_game_started_msec := 0
@@ -192,6 +194,8 @@ func _load_shell_settings() -> void:
     console_log_file = bool(cfg.get_value("developer", "console_log_file", console_log_file))
     trace_log = bool(cfg.get_value("developer", "trace_log", trace_log))
     export_scripts = bool(cfg.get_value("developer", "export_scripts", export_scripts))
+    log_alerts = bool(cfg.get_value("developer", "log_alerts", log_alerts))
+    error_dialog_logs = bool(cfg.get_value("developer", "error_dialog_logs", error_dialog_logs))
 
 func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
@@ -206,6 +210,8 @@ func _save_shell_settings() -> void:
     cfg.set_value("developer", "console_log_file", console_log_file)
     cfg.set_value("developer", "trace_log", trace_log)
     cfg.set_value("developer", "export_scripts", export_scripts)
+    cfg.set_value("developer", "log_alerts", log_alerts)
+    cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
     cfg.save(SETTINGS_FILE)
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
     ProjectSettings.save()
@@ -229,6 +235,7 @@ func _apply_engine_options() -> void:
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if trace_log else "0")
     player.set_engine_option("export_scripts", "1" if export_scripts else "0")
+    player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
 
 func _apply_shell_runtime_settings() -> void:
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
@@ -567,6 +574,8 @@ func _rebuild_settings_view() -> void:
     dev_card.add_child(_settings_toggle_row("控制台日志文件", "将引擎控制台日志写入 krkr.console.log 文件", console_log_file, "console_log"))
     dev_card.add_child(_settings_toggle_row("追踪日志", "启用 spdlog trace 级别详细日志，输出最大调试信息", trace_log, "trace_log"))
     dev_card.add_child(_settings_toggle_row("导出 TJS 脚本", "游戏加载时自动从 XP3 中导出反汇编的 TJS 字节码脚本", export_scripts, "export_tjs"))
+    dev_card.add_child(_settings_toggle_row("日志级别弹窗", "将 warning/error/fatal 等日志行额外显示为系统提示；默认关闭", log_alerts, "log_alerts"))
+    dev_card.add_child(_settings_toggle_row("错误弹窗附带日志", "真正异常弹窗中追加最近 20 行引擎日志；默认关闭", error_dialog_logs, "error_dialog_logs"))
 
     page.add_child(_section_title("ⓘ  关于"))
     var about_card := _settings_card()
@@ -908,6 +917,10 @@ func _on_setting_toggle(key: String, value: bool) -> void:
         trace_log = value
     elif key == "export_tjs":
         export_scripts = value
+    elif key == "log_alerts":
+        log_alerts = value
+    elif key == "error_dialog_logs":
+        error_dialog_logs = value
     _mark_settings_dirty()
     _apply_engine_options()
     _apply_shell_runtime_settings()
@@ -1118,6 +1131,8 @@ func _show_system_alert_once(key: String, message: String, title: String = "Aeth
     _show_system_alert(message, title)
 
 func _maybe_show_log_alert(line: String) -> void:
+    if not log_alerts:
+        return
     var message := line.strip_edges()
     if message.is_empty():
         return
