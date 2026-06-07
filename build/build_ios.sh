@@ -268,7 +268,22 @@ EOF
 }
 
 echo "==> Building native engine and Godot extension"
-cmake --preset "$CMAKE_CONFIG_PRESET" --fresh -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
+cmake_config_args=()
+if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
+    if [[ ! -d "$VCPKG_ROOT/installed/$VCPKG_TRIPLET_DIR" ]]; then
+        echo "Error: SKIP_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/$VCPKG_TRIPLET_DIR" >&2
+        exit 1
+    fi
+    mkdir -p "$CMAKE_BUILD_DIR"
+    rm -rf "$CMAKE_BUILD_DIR/vcpkg_installed"
+    ln -s "$VCPKG_ROOT/installed" "$CMAKE_BUILD_DIR/vcpkg_installed"
+    cmake_config_args+=(
+        -D "VCPKG_MANIFEST_INSTALL=OFF"
+        -D "VCPKG_INSTALLED_DIR=$CMAKE_BUILD_DIR/vcpkg_installed"
+    )
+fi
+
+cmake --preset "$CMAKE_CONFIG_PRESET" --fresh -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" "${cmake_config_args[@]}"
 cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 
 mkdir -p "$GODOT_BIN_DIR"

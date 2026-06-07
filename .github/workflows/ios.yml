@@ -20,6 +20,8 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       GODOT_RELEASE: 4.6.3-stable
       GODOT_TEMPLATE_VERSION: 4.6.3.stable
+      VCPKG_BUNDLE_TAG: ios-vcpkg-bundle
+      VCPKG_BUNDLE_ASSET: ios-vcpkg-bundle.tar.zst
 
     steps:
       - name: Checkout Repository
@@ -30,6 +32,12 @@ jobs:
           brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+
+      - name: Restore vcpkg release bundle
+        id: restore-vcpkg-bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/restore-vcpkg-release-bundle.sh
 
       - name: Install Godot export tools
         run: |
@@ -63,6 +71,7 @@ jobs:
           ccache -z
 
       - name: Restore vcpkg cache
+        if: steps.restore-vcpkg-bundle.outputs.restored != '1'
         id: restore-vcpkg
         uses: actions/cache/restore@v4
         with:
@@ -72,6 +81,7 @@ jobs:
           key: ${{ runner.os }}-ios-vcpkg
 
       - name: Bootstrap vcpkg
+        if: steps.restore-vcpkg-bundle.outputs.restored != '1'
         run: |
           set -euo pipefail
           if [[ -d ".devtools/vcpkg" && ! -f ".devtools/vcpkg/.vcpkg-root" ]]; then
@@ -116,7 +126,7 @@ jobs:
           retention-days: 7
 
       - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg-bundle.outputs.restored != '1' && steps.restore-vcpkg.outputs.cache-matched-key == ''
         uses: actions/cache/save@v4
         with:
           path: |

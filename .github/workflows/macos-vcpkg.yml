@@ -1,0 +1,79 @@
+name: macOS Vcpkg Bundle
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.repository }}-macos-vcpkg-bundle
+  cancel-in-progress: false
+
+env:
+  VCPKG_BUNDLE_TAG: macos-vcpkg-bundle
+  VCPKG_BUNDLE_ASSET: macos-vcpkg-bundle.tar.zst
+
+jobs:
+  build-vcpkg:
+    name: Build macOS vcpkg bundle
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Build Systems
+        run: |
+          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison
+          echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+
+      - name: Restore existing macOS vcpkg bundle
+        id: restore-vcpkg-bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/restore-vcpkg-release-bundle.sh
+
+      - name: Bootstrap vcpkg if needed
+        run: |
+          set -euo pipefail
+          if [[ -d ".devtools/vcpkg" && ( ! -d ".devtools/vcpkg/ports" || ! -d ".devtools/vcpkg/versions" ) ]]; then
+            rm -rf .devtools/vcpkg
+          elif [[ -d ".devtools/vcpkg" && ! -x ".devtools/vcpkg/bootstrap-vcpkg.sh" && ! -x ".devtools/vcpkg/vcpkg" ]]; then
+            rm -rf .devtools/vcpkg
+          fi
+          if [[ ! -d ".devtools/vcpkg/.git" ]]; then
+            mkdir -p .devtools
+            git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
+          fi
+          if [[ ! -x ".devtools/vcpkg/vcpkg" ]]; then
+            if [[ ! -x ".devtools/vcpkg/bootstrap-vcpkg.sh" ]]; then
+              rm -rf .devtools/vcpkg
+              git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
+            fi
+            (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
+          fi
+          echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Build macOS vcpkg dependencies
+        run: |
+          set -euo pipefail
+          export VCPKG_ROOT="${GITHUB_WORKSPACE}/.devtools/vcpkg"
+          VCPKG_BIN="${VCPKG_ROOT}/vcpkg"
+          (cd "${GITHUB_WORKSPACE}" && VCPKG_BUILD_TYPE=release "$VCPKG_BIN" install \
+            --triplet arm64-osx \
+            --x-install-root="$VCPKG_ROOT/installed" \
+            --x-manifest-root="${GITHUB_WORKSPACE}" \
+            --overlay-ports="${GITHUB_WORKSPACE}/vcpkg/ports" \
+            --overlay-triplets="${GITHUB_WORKSPACE}/vcpkg/triplets")
+
+      - name: Pack macOS vcpkg bundle
+        env:
+          VCPKG_TRIPLET: arm64-osx
+        run: bash .github/scripts/pack-vcpkg-release-bundle.sh
+
+      - name: Publish macOS vcpkg bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/publish-vcpkg-release-bundle.sh
