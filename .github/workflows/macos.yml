@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Build Systems
         run: |
@@ -60,7 +60,7 @@ jobs:
 
       - name: Restore ccache
         id: restore-ccache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: .ccache
           key: ${{ runner.os }}-macos-ccache
@@ -73,7 +73,7 @@ jobs:
       - name: Restore vcpkg cache
         if: steps.restore-vcpkg-bundle.outputs.restored != '1'
         id: restore-vcpkg
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             .devtools/vcpkg
@@ -115,7 +115,7 @@ jobs:
 
       - name: Upload Artifact
         if: success() && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: AetherKiri-macOS
           path: out/godot/macos/release/AetherKiri.app
@@ -123,7 +123,7 @@ jobs:
 
       - name: Save vcpkg cache
         if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg-bundle.outputs.restored != '1' && steps.restore-vcpkg.outputs.cache-matched-key == ''
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             .devtools/vcpkg
@@ -132,7 +132,7 @@ jobs:
 
       - name: Save ccache
         if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: .ccache
           key: ${{ runner.os }}-macos-ccache

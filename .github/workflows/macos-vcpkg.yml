@@ -11,6 +11,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
   VCPKG_BUNDLE_TAG: macos-vcpkg-bundle
   VCPKG_BUNDLE_ASSET: macos-vcpkg-bundle.tar.zst
 
@@ -21,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Build Systems
         run: |
