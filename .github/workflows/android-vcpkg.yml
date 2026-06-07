@@ -111,6 +111,15 @@ jobs:
             --overlay-ports="$OVERLAY_PORTS" \
             --overlay-triplets="$OVERLAY_TRIPLETS")
 
+      - name: Verify Android vcpkg debug and release dependencies
+        run: |
+          set -euo pipefail
+          triplet_dir="${GITHUB_WORKSPACE}/.devtools/vcpkg/installed/arm64-android"
+          test -d "$triplet_dir/lib"
+          test -d "$triplet_dir/debug/lib"
+          echo "Release library count: $(find "$triplet_dir/lib" -maxdepth 1 -type f | wc -l | xargs)"
+          echo "Debug library count: $(find "$triplet_dir/debug/lib" -maxdepth 1 -type f | wc -l | xargs)"
+
       - name: Pack Android vcpkg bundle
         env:
           VCPKG_TRIPLET: arm64-android

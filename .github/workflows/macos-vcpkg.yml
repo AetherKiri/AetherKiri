@@ -62,7 +62,7 @@ jobs:
           set -euo pipefail
           export VCPKG_ROOT="${GITHUB_WORKSPACE}/.devtools/vcpkg"
           VCPKG_BIN="${VCPKG_ROOT}/vcpkg"
-          (cd "${GITHUB_WORKSPACE}" && VCPKG_BUILD_TYPE=release "$VCPKG_BIN" install \
+          (cd "${GITHUB_WORKSPACE}" && "$VCPKG_BIN" install \
             --triplet arm64-osx \
             --x-install-root="$VCPKG_ROOT/installed" \
             --x-manifest-root="${GITHUB_WORKSPACE}" \
@@ -73,6 +73,28 @@ jobs:
         env:
           VCPKG_TRIPLET: arm64-osx
         run: bash .github/scripts/pack-vcpkg-release-bundle.sh
+
+      - name: Smoke test macOS vcpkg bundle layout
+        run: |
+          set -euo pipefail
+          export VCPKG_ROOT="${GITHUB_WORKSPACE}/.devtools/vcpkg"
+          export CMAKE_MAKE_PROGRAM="$(command -v ninja)"
+
+          rm -rf "${GITHUB_WORKSPACE}/out/macos/release/vcpkg_installed"
+          mkdir -p "${GITHUB_WORKSPACE}/out/macos/release"
+          ln -s "${VCPKG_ROOT}/installed" "${GITHUB_WORKSPACE}/out/macos/release/vcpkg_installed"
+          cmake --preset "macOS Release Config" --fresh \
+            -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" \
+            -D "VCPKG_MANIFEST_INSTALL=OFF" \
+            -D "VCPKG_INSTALLED_DIR=${GITHUB_WORKSPACE}/out/macos/release/vcpkg_installed"
+
+          rm -rf "${GITHUB_WORKSPACE}/out/macos/debug/vcpkg_installed"
+          mkdir -p "${GITHUB_WORKSPACE}/out/macos/debug"
+          ln -s "${VCPKG_ROOT}/installed" "${GITHUB_WORKSPACE}/out/macos/debug/vcpkg_installed"
+          cmake --preset "macOS Debug Config" --fresh \
+            -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" \
+            -D "VCPKG_MANIFEST_INSTALL=OFF" \
+            -D "VCPKG_INSTALLED_DIR=${GITHUB_WORKSPACE}/out/macos/debug/vcpkg_installed"
 
       - name: Publish macOS vcpkg bundle
         env:
