@@ -42,7 +42,7 @@
 //#define DEBUG
 #endif
 
-#if !defined(DEBUG)
+#if !defined(DEBUG) && !defined(NDEBUG)
 #define NDEBUG
 #endif
 
