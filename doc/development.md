@@ -269,6 +269,13 @@ For automated local testing only, run
 Use `AETHERKIRI_WEB_AUTO_START_INDEX` or `AETHERKIRI_WEB_AUTO_START_NAME` when
 multiple roots are configured. These are only Vite local-development shortcuts.
 
+GitHub Actions Web builds restore `web-vcpkg-bundle` when it exists. Run the
+manual `Web Vcpkg Bundle` workflow after changing Web vcpkg ports, triplets, or
+dependency versions; otherwise the first Web Build must compile the full
+wasm32-emscripten dependency set and can take tens of minutes. The Web Build
+workflow also saves vcpkg, emsdk, and ccache state on failure so reruns do not
+throw away a completed dependency build.
+
 On iOS/iPadOS, copy games through the Files app into:
 
 ```text

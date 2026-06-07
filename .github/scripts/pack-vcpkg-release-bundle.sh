@@ -17,7 +17,7 @@ if [[ ! -d "$VCPKG_ROOT/installed/$VCPKG_TRIPLET" ]]; then
     echo "Missing installed vcpkg triplet: $VCPKG_ROOT/installed/$VCPKG_TRIPLET" >&2
     exit 1
 fi
-if [[ ! -d "$VCPKG_ROOT/installed/$VCPKG_TRIPLET/debug" ]]; then
+if [[ "${VCPKG_BUNDLE_REQUIRE_DEBUG:-1}" != "0" && ! -d "$VCPKG_ROOT/installed/$VCPKG_TRIPLET/debug" ]]; then
     echo "Missing debug vcpkg dependencies for triplet: $VCPKG_ROOT/installed/$VCPKG_TRIPLET/debug" >&2
     echo "The bundle must contain both release dependencies and debug dependencies." >&2
     exit 1

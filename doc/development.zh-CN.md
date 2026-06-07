@@ -260,6 +260,12 @@ IndexedDB 支持的 `/userfs`。
 `AETHERKIRI_WEB_AUTO_START_NAME` 选择自动启动项。这些变量只作为 Vite 本地调试挂载，
 不能作为云端部署方案。
 
+GitHub Actions 的 Web Build 会优先恢复 `web-vcpkg-bundle`。修改 Web vcpkg
+ports、triplets 或依赖版本后，先手动运行 `Web Vcpkg Bundle` workflow 生成新的
+release asset；否则第一次 Web Build 需要现场编译完整 wasm32-emscripten 依赖集，
+可能耗时数十分钟。Web Build 在失败时也会保存 vcpkg、emsdk 和 ccache 状态，避免
+rerun 丢掉已经完成的依赖构建。
+
 iOS/iPadOS 上通过“文件”App 把游戏复制到：
 
 ```text

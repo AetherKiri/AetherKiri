@@ -59,7 +59,12 @@ if [[ -z "${EMSDK_PYTHON:-}" ]] && command -v python3 >/dev/null 2>&1; then
 fi
 
 command -v cmake >/dev/null
-command -v ninja >/dev/null
+NINJA_BIN="${CMAKE_MAKE_PROGRAM:-$(command -v ninja || command -v ninja-build || true)}"
+if [[ -z "$NINJA_BIN" ]]; then
+    echo "Error: Ninja build tool not found. Install ninja and ensure it is available in PATH." >&2
+    exit 1
+fi
+export CMAKE_MAKE_PROGRAM="$NINJA_BIN"
 command -v emcc >/dev/null || {
     echo "Error: emcc not found. Activate Emscripten first, for example: source /path/to/emsdk/emsdk_env.sh" >&2
     exit 1
@@ -89,13 +94,30 @@ embuilder --pic build libc++-mt-legacyexcept
 WEB_C_FLAGS="-fPIC -pthread -msimd128 -sSUPPORT_LONGJMP=wasm -sWASM_LEGACY_EXCEPTIONS=1"
 WEB_CXX_FLAGS="$WEB_C_FLAGS -fwasm-exceptions"
 WEB_LINK_FLAGS="-pthread -msimd128 -sSUPPORT_LONGJMP=wasm -sWASM_LEGACY_EXCEPTIONS=1 -fwasm-exceptions"
-cmake --preset "$CMAKE_CONFIG_PRESET" --fresh \
-    -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$EMSCRIPTEN_TOOLCHAIN" \
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -DCMAKE_C_FLAGS="$WEB_C_FLAGS" \
-    -DCMAKE_CXX_FLAGS="$WEB_CXX_FLAGS" \
-    -DCMAKE_EXE_LINKER_FLAGS="$WEB_LINK_FLAGS" \
+cmake_config_args=(
+    -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$EMSCRIPTEN_TOOLCHAIN"
+    -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+    -DCMAKE_C_FLAGS="$WEB_C_FLAGS"
+    -DCMAKE_CXX_FLAGS="$WEB_CXX_FLAGS"
+    -DCMAKE_EXE_LINKER_FLAGS="$WEB_LINK_FLAGS"
     -DCMAKE_SHARED_LINKER_FLAGS="$WEB_LINK_FLAGS"
+)
+if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
+    if [[ ! -d "$VCPKG_ROOT/installed/wasm32-emscripten" ]]; then
+        echo "Error: SKIP_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/wasm32-emscripten" >&2
+        exit 1
+    fi
+    mkdir -p "$CMAKE_BUILD_DIR"
+    rm -rf "$CMAKE_BUILD_DIR/vcpkg_installed"
+    ln -s "$VCPKG_ROOT/installed" "$CMAKE_BUILD_DIR/vcpkg_installed"
+    cmake_config_args+=(
+        -D "VCPKG_MANIFEST_INSTALL=OFF"
+        -D "VCPKG_INSTALLED_DIR=$CMAKE_BUILD_DIR/vcpkg_installed"
+    )
+fi
+
+cmake --preset "$CMAKE_CONFIG_PRESET" --fresh "${cmake_config_args[@]}"
 cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 
 mkdir -p "$GODOT_BIN_DIR"

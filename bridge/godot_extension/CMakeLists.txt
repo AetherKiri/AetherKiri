@@ -46,6 +46,9 @@ target_include_directories(aether_kiri_godot PRIVATE
 if(TARGET engine_api)
     target_link_libraries(aether_kiri_godot PRIVATE engine_api)
 endif()
+if(TARGET krkr2plugin)
+    set_property(TARGET aether_kiri_godot PROPERTY LINK_LIBRARY_OVERRIDE_krkr2plugin WHOLE_ARCHIVE)
+endif()
 
 target_link_libraries(aether_kiri_godot PRIVATE unofficial::godot::cpp)
 
