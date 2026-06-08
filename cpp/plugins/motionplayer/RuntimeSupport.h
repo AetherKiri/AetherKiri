@@ -214,6 +214,7 @@ namespace motion::detail {
 
         struct PreparedRenderItem {
             int nodeIndex = 0;
+            std::string nodeLabel;
             tTJSVariant srcRef;
             std::string sourceKey;
             bool hasOwnSource = false;
@@ -242,6 +243,7 @@ namespace motion::detail {
         };
         struct RenderCommand {
             int nodeIndex = 0;
+            std::string nodeLabel;
             tTJSVariant srcRef;
             std::string sourceKey;
             bool hasOwnSource = false;

@@ -3350,6 +3350,7 @@ namespace motion {
 
             detail::PlayerRuntime::PreparedRenderItem entry;
             entry.nodeIndex = static_cast<int>(i);
+            entry.nodeLabel = node.layerName;
             entry.hasOwnSource = hasOwnSource;
             entry.groupOnly = !hasOwnSource && needsGroupEntry;
             if(hasOwnSource) {

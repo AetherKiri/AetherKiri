@@ -79,6 +79,295 @@ namespace {
         return loggedKeys.insert(key).second;
     }
 
+    bool isYuzuTitlePresentationMotion(const std::string &motionPath) {
+        const auto motion = renderDebugLowercase(motionPath);
+        return motion.find("title_bg") != std::string::npos ||
+            motion.find("titlebg") != std::string::npos;
+    }
+
+    bool isYuzuTitleWhiteUtilityLayer(const std::string &motionPath,
+                                      const std::string &nodeLabel,
+                                      const std::string &sourceKey) {
+        if(!isYuzuTitlePresentationMotion(motionPath)) {
+            return false;
+        }
+        const auto source = renderDebugLowercase(sourceKey);
+        if(source != "src/title/white" &&
+           source.find("/title/white") == std::string::npos &&
+           source.find("/white") == std::string::npos) {
+            return false;
+        }
+        const auto label = renderDebugLowercase(nodeLabel);
+        return label == "bg" || label == "mask" ||
+            label.find("mask") != std::string::npos;
+    }
+
+    bool validRenderPaintBox(const std::array<float, 4> &box) {
+        return std::isfinite(box[0]) && std::isfinite(box[1]) &&
+            std::isfinite(box[2]) && std::isfinite(box[3]) &&
+            box[2] > box[0] && box[3] > box[1];
+    }
+
+    std::array<float, 4> boundsFromRenderCorners(
+        const std::array<float, 8> &corners) {
+        std::array<float, 4> bounds{
+            corners[0], corners[1], corners[0], corners[1]
+        };
+        for(size_t i = 0; i + 1 < corners.size(); i += 2) {
+            if(!std::isfinite(corners[i]) || !std::isfinite(corners[i + 1])) {
+                return {0.0f, 0.0f, 0.0f, 0.0f};
+            }
+            bounds[0] = std::min(bounds[0], corners[i]);
+            bounds[1] = std::min(bounds[1], corners[i + 1]);
+            bounds[2] = std::max(bounds[2], corners[i]);
+            bounds[3] = std::max(bounds[3], corners[i + 1]);
+        }
+        return bounds;
+    }
+
+    void adjustPreparedRenderItemsForYuzuTitlePresentation(
+        motion::detail::PlayerRuntime &runtime,
+        const std::string &motionPath,
+        tjs_int canvasWidth,
+        tjs_int canvasHeight) {
+        if(!isYuzuTitlePresentationMotion(motionPath) ||
+           canvasWidth <= 0 || canvasHeight <= 0 ||
+           runtime.preparedRenderItems.empty()) {
+            return;
+        }
+
+        for(auto &entry : runtime.preparedRenderItems) {
+            const auto source = renderDebugLowercase(entry.sourceKey);
+            if(source == "src/title/pos2" ||
+               source == "src/title/title2_ch" ||
+               source == "src/title/logo") {
+                entry.opacity = 255;
+            }
+        }
+
+        bool usesCenteredPresentationOrigin = false;
+        auto considerCenteredOrigin =
+            [&](const motion::detail::PlayerRuntime::PreparedRenderItem &entry,
+                int referenceKind) {
+                if(usesCenteredPresentationOrigin || !entry.drawFlag ||
+                   entry.opacity <= 0 ||
+                   isYuzuTitleWhiteUtilityLayer(motionPath, entry.nodeLabel,
+                                                entry.sourceKey)) {
+                    return;
+                }
+                const auto source = renderDebugLowercase(entry.sourceKey);
+                switch(referenceKind) {
+                    case 0:
+                        if(source.find("bg_title") == std::string::npos ||
+                           source.find("_bottom") != std::string::npos ||
+                           source.find("_top") != std::string::npos) {
+                            return;
+                        }
+                        break;
+                    case 1:
+                        if(source != "src/title/pos2") {
+                            return;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+
+                auto referenceBox = boundsFromRenderCorners(entry.corners);
+                if(!validRenderPaintBox(referenceBox)) {
+                    referenceBox = entry.paintBox;
+                }
+                if(!validRenderPaintBox(referenceBox)) {
+                    return;
+                }
+                const float width = referenceBox[2] - referenceBox[0];
+                const float height = referenceBox[3] - referenceBox[1];
+                const float centerX = (referenceBox[0] + referenceBox[2]) * 0.5f;
+                const float centerY = (referenceBox[1] + referenceBox[3]) * 0.5f;
+                const float widthRatio =
+                    width / static_cast<float>(canvasWidth);
+                const float heightRatio =
+                    height / static_cast<float>(canvasHeight);
+                usesCenteredPresentationOrigin =
+                    referenceBox[0] < 0.0f && referenceBox[1] < 0.0f &&
+                    referenceBox[2] > 0.0f && referenceBox[3] > 0.0f &&
+                    widthRatio >= 0.75f && widthRatio <= 1.25f &&
+                    heightRatio >= 0.75f && heightRatio <= 1.25f &&
+                    std::fabs(centerX) <= static_cast<float>(canvasWidth) * 0.1f &&
+                    std::fabs(centerY) <= static_cast<float>(canvasHeight) * 0.1f;
+            };
+
+        for(const auto &entry : runtime.preparedRenderItems) {
+            considerCenteredOrigin(entry, 0);
+        }
+        if(!usesCenteredPresentationOrigin) {
+            for(const auto &entry : runtime.preparedRenderItems) {
+                considerCenteredOrigin(entry, 1);
+            }
+        }
+        if(usesCenteredPresentationOrigin) {
+            const float translateX = static_cast<float>(canvasWidth) * 0.5f;
+            const float translateY = static_cast<float>(canvasHeight) * 0.5f;
+            auto translatePointArray = [](auto &points, float dx, float dy) {
+                for(size_t i = 0; i + 1 < points.size(); i += 2) {
+                    points[i] += dx;
+                    points[i + 1] += dy;
+                }
+            };
+            for(auto &entry : runtime.preparedRenderItems) {
+                translatePointArray(entry.corners, translateX, translateY);
+                translatePointArray(entry.meshPoints, translateX, translateY);
+                if(validRenderPaintBox(entry.paintBox)) {
+                    entry.paintBox[0] += translateX;
+                    entry.paintBox[1] += translateY;
+                    entry.paintBox[2] += translateX;
+                    entry.paintBox[3] += translateY;
+                }
+                if(entry.hasViewport && validRenderPaintBox(entry.viewport)) {
+                    entry.viewport[0] += translateX;
+                    entry.viewport[1] += translateY;
+                    entry.viewport[2] += translateX;
+                    entry.viewport[3] += translateY;
+                }
+            }
+            if(LOGGER && shouldDebugTitleRender(motionPath) &&
+               markRenderDebugLogged("title-presentation-origin:" + motionPath)) {
+                LOGGER->info(
+                    "motion title presentation origin: motion={} centered=1 translate={:.1f},{:.1f} canvas={}x{}",
+                    motionPath, translateX, translateY, canvasWidth,
+                    canvasHeight);
+            }
+        }
+
+        float refWidth = 0.0f;
+        float refHeight = 0.0f;
+        float refArea = 0.0f;
+        auto considerReference =
+            [&](const motion::detail::PlayerRuntime::PreparedRenderItem &entry,
+                int referenceKind) {
+                if(!entry.drawFlag || entry.opacity <= 0 ||
+                   isYuzuTitleWhiteUtilityLayer(motionPath, entry.nodeLabel,
+                                                entry.sourceKey)) {
+                    return;
+                }
+                const auto source = renderDebugLowercase(entry.sourceKey);
+                switch(referenceKind) {
+                    case 0:
+                        if(source != "src/title/pos2") {
+                            return;
+                        }
+                        break;
+                    case 1:
+                        if(source.find("bg_title") == std::string::npos ||
+                           source.find("_bottom") != std::string::npos ||
+                           source.find("_top") != std::string::npos) {
+                            return;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+
+                auto referenceBox = boundsFromRenderCorners(entry.corners);
+                if(!validRenderPaintBox(referenceBox) &&
+                   entry.hasViewport && validRenderPaintBox(entry.viewport)) {
+                    referenceBox = entry.viewport;
+                }
+                if(!validRenderPaintBox(referenceBox) &&
+                   validRenderPaintBox(entry.paintBox)) {
+                    referenceBox = entry.paintBox;
+                }
+                if(!validRenderPaintBox(referenceBox)) {
+                    return;
+                }
+                const float width = referenceBox[2] - referenceBox[0];
+                const float height = referenceBox[3] - referenceBox[1];
+                const float area = width * height;
+                if(area > refArea) {
+                    refArea = area;
+                    refWidth = width;
+                    refHeight = height;
+                }
+            };
+
+        for(const auto &entry : runtime.preparedRenderItems) {
+            considerReference(entry, 0);
+        }
+        if(refWidth <= 0.0f || refHeight <= 0.0f) {
+            for(const auto &entry : runtime.preparedRenderItems) {
+                considerReference(entry, 1);
+            }
+        }
+        if(refWidth <= 0.0f || refHeight <= 0.0f) {
+            for(const auto &entry : runtime.preparedRenderItems) {
+                considerReference(entry, 2);
+            }
+        }
+        if(refWidth <= 0.0f || refHeight <= 0.0f) {
+            return;
+        }
+
+        const float scaleX = static_cast<float>(canvasWidth) / refWidth;
+        const float scaleY = static_cast<float>(canvasHeight) / refHeight;
+        if(LOGGER && shouldDebugTitleRender(motionPath) &&
+           markRenderDebugLogged("title-presentation-scale-candidate:" +
+                                 motionPath)) {
+            LOGGER->info(
+                "motion title presentation scale candidate: motion={} ref={:.1f}x{:.1f} canvas={}x{} scale={:.3f},{:.3f}",
+                motionPath, refWidth, refHeight, canvasWidth, canvasHeight,
+                scaleX, scaleY);
+        }
+        if(scaleX < 1.25f || scaleY < 1.25f ||
+           scaleX > 3.25f || scaleY > 3.25f) {
+            return;
+        }
+
+        auto scalePointArray = [](auto &points, float sx, float sy) {
+            for(size_t i = 0; i + 1 < points.size(); i += 2) {
+                points[i] *= sx;
+                points[i + 1] *= sy;
+            }
+        };
+        auto shouldScaleBox = [&](const std::array<float, 4> &box) {
+            if(!validRenderPaintBox(box)) {
+                return false;
+            }
+            const float width = box[2] - box[0];
+            const float height = box[3] - box[1];
+            return width <= refWidth * 1.25f &&
+                height <= refHeight * 1.25f;
+        };
+
+        for(auto &entry : runtime.preparedRenderItems) {
+            const bool scaleGeometry =
+                shouldScaleBox(boundsFromRenderCorners(entry.corners));
+            if(scaleGeometry) {
+                scalePointArray(entry.corners, scaleX, scaleY);
+                scalePointArray(entry.meshPoints, scaleX, scaleY);
+            }
+            if(shouldScaleBox(entry.paintBox)) {
+                entry.paintBox[0] *= scaleX;
+                entry.paintBox[1] *= scaleY;
+                entry.paintBox[2] *= scaleX;
+                entry.paintBox[3] *= scaleY;
+            }
+            if(entry.hasViewport && shouldScaleBox(entry.viewport)) {
+                entry.viewport[0] *= scaleX;
+                entry.viewport[1] *= scaleY;
+                entry.viewport[2] *= scaleX;
+                entry.viewport[3] *= scaleY;
+            }
+        }
+
+        if(LOGGER && shouldDebugTitleRender(motionPath) &&
+           markRenderDebugLogged("title-presentation-scale:" + motionPath)) {
+            LOGGER->info(
+                "motion title presentation scale: motion={} ref={:.1f}x{:.1f} canvas={}x{} scale={:.3f},{:.3f}",
+                motionPath, refWidth, refHeight, canvasWidth, canvasHeight,
+                scaleX, scaleY);
+        }
+    }
+
     std::string describeLayerForDebug(tTJSNI_BaseLayer *layer) {
         if(!layer) {
             return "<null>";
@@ -628,6 +917,11 @@ namespace {
         }
 
         int score = 100;
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(child->GetName()));
+        if(name.find("trans_syslay") != std::string::npos) {
+            score += 200;
+        }
         if(child->GetOrderIndex() == 0) {
             score += 20;
         }
@@ -650,19 +944,34 @@ namespace {
             return nullptr;
         }
 
-        tTJSNI_BaseLayer *best = nullptr;
-        int bestScore = -1;
-        const auto childCount = parent->GetCount();
-        for(tjs_uint i = 0; i < childCount; ++i) {
-            auto *child = parent->GetChildren(static_cast<tjs_int>(i));
-            const int score = scoreMotionPresentationChild(
-                parent, child, canvasWidth, canvasHeight, i);
-            if(score > bestScore) {
-                best = child;
-                bestScore = score;
+        struct Candidate {
+            tTJSNI_BaseLayer *layer = nullptr;
+            int score = -1;
+        };
+        Candidate best;
+        auto visit = [&](auto &&self,
+                         tTJSNI_BaseLayer *current,
+                         int depth) -> void {
+            if(!current || current->GetCount() <= 0) {
+                return;
             }
-        }
-        return best;
+            const auto childCount = current->GetCount();
+            for(tjs_uint i = 0; i < childCount; ++i) {
+                auto *child = current->GetChildren(static_cast<tjs_int>(i));
+                int score = scoreMotionPresentationChild(
+                    current, child, canvasWidth, canvasHeight, i);
+                if(score >= 0) {
+                    score -= depth * 3;
+                    if(score > best.score) {
+                        best.layer = child;
+                        best.score = score;
+                    }
+                }
+                self(self, child, depth + 1);
+            }
+        };
+        visit(visit, parent, 0);
+        return best.layer;
     }
 
     bool prepareMotionPresentationLayerForRender(tTJSNI_BaseLayer *layer,
@@ -1266,6 +1575,19 @@ namespace motion {
                entry.opacity <= 0) {
                 continue;
             }
+            if(isYuzuTitleWhiteUtilityLayer(motionPath, entry.nodeLabel,
+                                            entry.sourceKey)) {
+                if(LOGGER && shouldDebugTitleRender(motionPath, entry.sourceKey) &&
+                   markRenderDebugLogged(
+                       "title-white-utility:" + motionPath + ":" +
+                       entry.nodeLabel + ":" + entry.sourceKey)) {
+                    LOGGER->info(
+                        "motion skip title white utility layer: motion={} node={} label={} source={}",
+                        motionPath, entry.nodeIndex, entry.nodeLabel,
+                        entry.sourceKey);
+                }
+                continue;
+            }
 
             RenderClipRect clipRect;
             std::string clipFailureReason;
@@ -1293,6 +1615,7 @@ namespace motion {
 
             detail::PlayerRuntime::RenderCommand command;
             command.nodeIndex = entry.nodeIndex;
+            command.nodeLabel = entry.nodeLabel;
             command.srcRef = entry.srcRef;
             command.sourceKey = entry.sourceKey;
             command.hasOwnSource = entry.hasOwnSource;
@@ -2241,6 +2564,8 @@ namespace motion {
         ensureNodeTreeBuilt();
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
+        adjustPreparedRenderItemsForYuzuTitlePresentation(
+            *_runtime, motionPath, adaptor->getWidth(), adaptor->getHeight());
 
         iTJSDispatch2 *renderLayerObject =
             ensureReusableLayerObject(_runtime->internalRenderLayer,
@@ -2364,6 +2689,8 @@ namespace motion {
 	        ensureNodeTreeBuilt();
 	        prepareRenderItems();
 	        applyPreparedRenderItemTranslateOffsets();
+	        adjustPreparedRenderItemsForYuzuTitlePresentation(
+	            *_runtime, motionPath, canvasWidth, canvasHeight);
 
 	        iTJSDispatch2 *renderLayerObject = finalLayerObject;
 	        if(_needsInternalAssignImages && !skipUpdate) {
@@ -2510,6 +2837,8 @@ namespace motion {
         ensureNodeTreeBuilt();
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
+        adjustPreparedRenderItemsForYuzuTitlePresentation(
+            *_runtime, motionPath, canvasWidth, canvasHeight);
 
         if(!renderMotionFrameToTarget(renderTarget, canvasWidth, canvasHeight,
                                       isAccurateSlaRenderEnabled()

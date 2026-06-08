@@ -1294,12 +1294,18 @@ namespace motion {
             }
             if(LOGGER && motionDebugEnabled()) {
                 LOGGER->info(
-                    "motion drawCompat route: motion={} object={} resolvedObject={} route={} d3dDrawModeBefore={} targetLayer={}",
+                    "motion drawCompat route: motion={} object={} resolvedObject={} route={} d3dDrawModeBefore={} targetLayer={} drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
                     motionPath, static_cast<const void *>(paramObj),
                     static_cast<const void *>(drawTargetObject),
                     nativeInstance->_d3dDrawMode ? "layer-via-d3d" : "layer",
                     nativeInstance->_d3dDrawMode ? 1 : 0,
-                    static_cast<const void *>(argLayer));
+                    static_cast<const void *>(argLayer),
+                    nativeInstance->_runtime->drawAffineMatrix[0],
+                    nativeInstance->_runtime->drawAffineMatrix[1],
+                    nativeInstance->_runtime->drawAffineMatrix[2],
+                    nativeInstance->_runtime->drawAffineMatrix[3],
+                    nativeInstance->_runtime->drawAffineMatrix[4],
+                    nativeInstance->_runtime->drawAffineMatrix[5]);
             }
             detail::logoChainTraceCheck(
                 motionPath, "drawCompat.dispatch", "0x6D5FB8",
