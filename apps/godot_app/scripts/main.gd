@@ -7,6 +7,7 @@ const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const ANDROID_READ_EXTERNAL_STORAGE := "android.permission.READ_EXTERNAL_STORAGE"
 const ANDROID_MANAGE_EXTERNAL_STORAGE := "android.permission.MANAGE_EXTERNAL_STORAGE"
+const ANDROID_EXTERNAL_STORAGE_DOCUMENTS := "com.android.externalstorage.documents"
 
 const ENGINE_RESULT_OK := 0
 const STARTUP_IDLE := 0
@@ -1820,18 +1821,10 @@ func _ensure_android_game_path_access(path: String) -> bool:
     if _can_read_game_path(path):
         return true
     _android_request_storage_permissions()
-    var games_dir := _android_game_storage_root()
-    DirAccess.make_dir_recursive_absolute(games_dir)
-    var permission_note := "请授予存储读取权限后重试。"
-    if android_storage_permission_requested and not _android_storage_permission_granted():
-        permission_note = "如果系统没有弹出权限，请到系统设置中授予 AetherKiri 文件/存储访问权限。"
-    _show_message(
-        "无法读取游戏文件，Android 可能限制了外部存储访问。\n\n%s\n\n也可以将游戏目录或 XP3 复制到：\n%s\n然后回到本应用刷新。" % [
-            permission_note,
-            games_dir,
-        ]
+    _append_log(
+        "Android direct-read preflight failed for %s; trying native open anyway. Grant all-files access if startup fails." % path
     )
-    return false
+    return true
 
 func _maybe_show_log_alert(line: String) -> void:
     if not log_alerts:
@@ -2329,6 +2322,8 @@ func _show_web_import_picker() -> void:
     box.add_child(cancel)
 
 func _open_import_dialog(xp3: bool) -> void:
+    if OS.get_name() == "Android":
+        _android_request_storage_permissions()
     var filters := PackedStringArray(["*.xp3,*.XP3;KiriKiri XP3 archive"]) if xp3 else PackedStringArray()
     var dialog := _create_file_dialog(
         "选择 XP3 文件" if xp3 else "选择游戏目录",
@@ -2360,7 +2355,7 @@ func _refresh_games() -> void:
 func _load_game_list() -> Array[Dictionary]:
     var file := FileAccess.open(GAME_LIST_FILE, FileAccess.READ)
     if file == null:
-        var fallback: String = String(ProjectSettings.get_setting(GAME_PATH_KEY, ""))
+        var fallback: String = _android_resolve_picker_path(String(ProjectSettings.get_setting(GAME_PATH_KEY, "")))
         var initial_games: Array[Dictionary] = []
         if not fallback.is_empty() and _path_exists(fallback):
             initial_games.append(_game_info_from_path(fallback))
@@ -2370,7 +2365,11 @@ func _load_game_list() -> Array[Dictionary]:
         return []
     var games: Array[Dictionary] = []
     for item in parsed:
-        if item is Dictionary and item.has("path") and _path_exists(String(item.get("path", ""))) and _web_game_entry_available(item):
+        if item is Dictionary and item.has("path") and _web_game_entry_available(item):
+            var resolved_path := _android_resolve_picker_path(String(item.get("path", "")))
+            if not _path_exists(resolved_path):
+                continue
+            item["path"] = resolved_path
             games.append(item)
     return games
 
@@ -2404,14 +2403,47 @@ func _scan_mobile_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
         entry = dir.get_next()
     return _dedupe_games(next)
 
+func _android_resolve_picker_path(path: String) -> String:
+    if OS.get_name() != "Android" or not path.begins_with("content://"):
+        return path
+    var marker := "/" + ANDROID_EXTERNAL_STORAGE_DOCUMENTS + "/"
+    var marker_index := path.find(marker)
+    if marker_index < 0:
+        return ""
+    var encoded_doc_id := ""
+    var document_marker := "/document/"
+    var document_index := path.find(document_marker, marker_index)
+    if document_index >= 0:
+        encoded_doc_id = path.substr(document_index + document_marker.length())
+    else:
+        var tree_marker := "/tree/"
+        var tree_index := path.find(tree_marker, marker_index)
+        if tree_index >= 0:
+            encoded_doc_id = path.substr(tree_index + tree_marker.length())
+    if encoded_doc_id.is_empty():
+        return ""
+    var doc_id := encoded_doc_id.split("?")[0].uri_decode()
+    var colon := doc_id.find(":")
+    if colon < 0:
+        return ""
+    var storage_type := doc_id.substr(0, colon)
+    var relative_path := doc_id.substr(colon + 1)
+    var root := "/storage/emulated/0" if storage_type.to_lower() == "primary" else "/storage/%s" % storage_type
+    return root if relative_path.is_empty() else root.path_join(relative_path)
+
 func _add_game_path(path: String) -> bool:
+    path = _android_resolve_picker_path(path)
+    if path.is_empty():
+        _show_message("无法解析 Android 选择器返回的路径。请从内部存储/SD 卡选择 XP3，或在系统设置中授予文件访问权限后重试。")
+        return false
     if not _path_exists(path):
         _show_message("游戏路径不存在")
         return false
     return _add_game_dictionary(_game_info_from_path(path))
 
 func _add_game_dictionary(game: Dictionary) -> bool:
-    var path := String(game.get("path", ""))
+    var path := _android_resolve_picker_path(String(game.get("path", "")))
+    game["path"] = path
     if not _path_exists(path):
         _show_message("游戏路径不存在")
         return false
@@ -2506,6 +2538,8 @@ func _web_game_entry_available(game: Dictionary) -> bool:
 
 func _game_info_from_path(path: String) -> Dictionary:
     var name := path.get_file()
+    if name.is_empty():
+        name = "Android Picker Game"
     if name.to_lower().ends_with(".xp3"):
         name = name.substr(0, name.length() - 4)
     return {
@@ -2699,9 +2733,12 @@ func _load_cover_texture(game: Dictionary) -> Texture2D:
     return ImageTexture.create_from_image(image)
 
 func _start_selected_game() -> void:
-    var path := String(selected_game.get("path", ""))
+    var path := _android_resolve_picker_path(String(selected_game.get("path", "")))
     if path.is_empty():
         return
+    if String(selected_game.get("path", "")) != path:
+        _update_game(String(selected_game.get("path", "")), {"path": path})
+        selected_game["path"] = path
     if not _mount_web_game(selected_game):
         return
     if not _ensure_android_game_path_access(path):
