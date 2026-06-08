@@ -35,6 +35,9 @@ else()
 endif()
 
 target_compile_features(aether_kiri_godot PRIVATE cxx_std_17)
+target_compile_definitions(aether_kiri_godot PRIVATE
+    $<$<CONFIG:Debug>:DEBUG_ENABLED DEBUG_METHODS_ENABLED HOT_RELOAD_ENABLED>
+)
 target_include_directories(aether_kiri_godot PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine_api/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/core/visual/godot
@@ -61,7 +64,9 @@ if(TARGET krkr2plugin)
     endif()
 endif()
 
-target_link_libraries(aether_kiri_godot PRIVATE unofficial::godot::cpp)
+target_link_libraries(aether_kiri_godot PRIVATE
+    "$<LINK_LIBRARY:WHOLE_ARCHIVE,unofficial::godot::cpp>"
+)
 
 set_target_properties(aether_kiri_godot PROPERTIES
     OUTPUT_NAME "aether_kiri_godot"
