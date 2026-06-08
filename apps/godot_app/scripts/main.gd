@@ -271,9 +271,10 @@ func _apply_engine_options() -> void:
 func _apply_shell_runtime_settings() -> void:
     if not _is_touch_platform():
         return
-    if (game_running or not active_game_path.is_empty()) and lock_landscape:
-        DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
-        return
+    if game_running or not active_game_path.is_empty():
+        if _is_phone_layout() or lock_landscape:
+            DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
+            return
     if _is_phone_layout():
         DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_PORTRAIT)
         return
@@ -678,9 +679,7 @@ func _build_game_menu_dialog() -> void:
     game_menu_back_button.custom_minimum_size = Vector2(48, 48)
     game_menu_back_button.add_theme_font_size_override("font_size", 24)
     game_menu_back_button.pressed.connect(func():
-        if not game_menu_stack.is_empty():
-            game_menu_stack.remove_at(game_menu_stack.size() - 1)
-            _rebuild_game_menu_dialog()
+        _go_back_in_game_menu()
     )
     header.add_child(game_menu_back_button)
 
@@ -772,6 +771,29 @@ func _open_game_menu() -> void:
     _rebuild_game_menu_dialog()
     game_menu_dialog.visible = true
     game_menu_dialog.move_to_front()
+
+func _go_back_in_game_menu() -> bool:
+    if game_menu_stack.size() > 1:
+        game_menu_stack.remove_at(game_menu_stack.size() - 1)
+        _rebuild_game_menu_dialog()
+        return true
+    if game_menu_dialog != null and game_menu_dialog.visible:
+        game_menu_dialog.visible = false
+        return true
+    return false
+
+func _handle_runtime_back() -> bool:
+    if game_menu_dialog != null and game_menu_dialog.visible:
+        return _go_back_in_game_menu()
+    if runtime_overlay_visible:
+        _hide_runtime_overlay()
+        return true
+    if debug_panel != null and debug_panel.visible:
+        debug_panel_visible = false
+        debug_panel.visible = false
+        _rebuild_runtime_overlay()
+        return true
+    return false
 
 func _visible_menu_entries(entries: Array) -> Array[Dictionary]:
     var result: Array[Dictionary] = []
@@ -1189,7 +1211,7 @@ func _rebuild_settings_view() -> void:
     if frame_limit_enabled:
         render_card.add_child(_settings_fps_row())
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        render_card.add_child(_settings_toggle_row("锁定横屏", "游戏运行时强制横屏显示（手机推荐开启）", lock_landscape, "landscape"))
+        render_card.add_child(_settings_toggle_row("锁定横屏", "平板和大屏触控设备运行游戏时强制横屏；手机进游戏始终横屏", lock_landscape, "landscape"))
 
     page.add_child(_section_title("▱  开发者"))
     var dev_card := _settings_card()
@@ -3561,7 +3583,6 @@ func _write_probe_marker(line: String) -> void:
 func _input(event: InputEvent) -> void:
     if game_running and viewport.visible:
         if _runtime_pointer_event_on_ui(event):
-            get_viewport().set_input_as_handled()
             return
         if _handle_game_pointer_event(event):
             get_viewport().set_input_as_handled()
@@ -3813,6 +3834,14 @@ func _unhandled_input(event: InputEvent) -> void:
         return
     if event is InputEventKey:
         var key := event as InputEventKey
+        if key.keycode == KEY_BACK:
+            if key.pressed:
+                if not _handle_runtime_back():
+                    player.send_key_event(true, key.keycode, key.get_modifiers_mask(), key.unicode)
+            else:
+                player.send_key_event(false, key.keycode, key.get_modifiers_mask(), key.unicode)
+            get_viewport().set_input_as_handled()
+            return
         player.send_key_event(key.pressed, key.keycode, key.get_modifiers_mask(), key.unicode)
 
 func _append_log(line: String) -> void:

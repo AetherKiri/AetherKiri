@@ -21,13 +21,11 @@ macos.release = {
 }
 
 android.debug.arm64 = {
-  "res://bin/android/arm64-v8a/debug/libc++_shared.so": "",
   "res://bin/android/arm64-v8a/debug/libengine_api.so": "",
   "res://bin/android/arm64-v8a/debug/libSDL2.so": "",
   "res://bin/android/arm64-v8a/debug/libomp.so": ""
 }
 android.release.arm64 = {
-  "res://bin/android/arm64-v8a/release/libc++_shared.so": "",
   "res://bin/android/arm64-v8a/release/libengine_api.so": "",
   "res://bin/android/arm64-v8a/release/libSDL2.so": "",
   "res://bin/android/arm64-v8a/release/libomp.so": ""
