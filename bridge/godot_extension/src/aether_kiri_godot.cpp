@@ -33,6 +33,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -40,6 +41,10 @@
 #include <vector>
 #include <unordered_map>
 #include <mutex>
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 namespace godot {
 namespace {
@@ -2602,13 +2607,22 @@ GDExtensionBool GDE_EXPORT aether_kiri_library_init(
     GDExtensionInterfaceGetProcAddress get_proc_address,
     GDExtensionClassLibraryPtr library,
     GDExtensionInitialization *initialization) {
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "AetherKiri",
+                        "aether_kiri_library_init called");
+#endif
     godot::GDExtensionBinding::InitObject init_obj(
         get_proc_address, library, initialization);
     init_obj.register_initializer(godot::InitializeAetherKiri);
     init_obj.register_terminator(godot::DeinitializeAetherKiri);
     init_obj.set_minimum_library_initialization_level(
         godot::MODULE_INITIALIZATION_LEVEL_SCENE);
-    return init_obj.init();
+    GDExtensionBool result = init_obj.init();
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "AetherKiri",
+                        "aether_kiri_library_init result=%d", (int)result);
+#endif
+    return result;
 }
 
 engine_result_t aether_kiri_set_render_backend(engine_handle_t handle,

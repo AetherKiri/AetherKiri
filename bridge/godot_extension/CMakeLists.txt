@@ -64,6 +64,10 @@ if(TARGET krkr2plugin)
     endif()
 endif()
 
+if(ANDROID)
+    target_link_libraries(aether_kiri_godot PRIVATE log)
+endif()
+
 target_link_libraries(aether_kiri_godot PRIVATE
     "$<LINK_LIBRARY:WHOLE_ARCHIVE,unofficial::godot::cpp>"
 )

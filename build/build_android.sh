@@ -139,6 +139,155 @@ copy_android_so() {
     fi
 }
 
+find_android_libcxx_shared() {
+    local abi="$1"
+    local lib_arch
+    local libcxx_path
+
+    case "$abi" in
+        arm64-v8a) lib_arch="aarch64-linux-android" ;;
+        *)
+            echo "Error: Android ABI '$abi' does not have a libc++_shared.so mapping." >&2
+            exit 1
+            ;;
+    esac
+
+    libcxx_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/lib/$lib_arch/libc++_shared.so"
+    if [[ ! -f "$libcxx_path" ]]; then
+        libcxx_path="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" \
+            -path "*/sysroot/usr/lib/$lib_arch/libc++_shared.so" -print -quit)"
+    fi
+    if [[ -z "$libcxx_path" || ! -f "$libcxx_path" ]]; then
+        echo "Error: Android libc++_shared.so not found for ABI '$abi' under $ANDROID_NDK_HOME." >&2
+        exit 1
+    fi
+    printf '%s\n' "$libcxx_path"
+}
+
+find_android_build_tool() {
+    local tool_name="$1"
+    local tool_path
+
+    tool_path="$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f -name "$tool_name" 2>/dev/null | sort -V | tail -1)"
+    if [[ -z "$tool_path" || ! -x "$tool_path" ]]; then
+        echo "Error: Android build tool '$tool_name' not found under $ANDROID_HOME/build-tools." >&2
+        exit 1
+    fi
+    printf '%s\n' "$tool_path"
+}
+
+apk_has_duplicate_entries() {
+    local apk_path="$1"
+
+    zipinfo -1 "$apk_path" | sort | uniq -d | grep -q .
+}
+
+normalize_apk_zip_entries() {
+    local apk_path="$1"
+    local normalized_path="${apk_path%.apk}.dedup.apk"
+    local aligned_path="${apk_path%.apk}.aligned.apk"
+    local zipalign_bin
+
+    echo "[INFO] Removing duplicate APK ZIP entries before signing."
+    python3 - "$apk_path" "$normalized_path" <<'PY'
+import sys
+import zipfile
+
+source, destination = sys.argv[1], sys.argv[2]
+seen = set()
+with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(destination, "w") as dst:
+    for info in src.infolist():
+        if info.filename in seen:
+            continue
+        seen.add(info.filename)
+        with src.open(info) as entry:
+            dst.writestr(info, entry.read())
+PY
+
+    zipalign_bin="$(find_android_build_tool zipalign)"
+    "$zipalign_bin" -p -f 4 "$normalized_path" "$aligned_path"
+    mv "$aligned_path" "$apk_path"
+    rm -f "$normalized_path"
+}
+
+replace_apk_entry() {
+    local apk_path="$1"
+    local entry_name="$2"
+    local source_path="$3"
+    local replaced_path="${apk_path%.apk}.replace.apk"
+    local aligned_path="${apk_path%.apk}.aligned.apk"
+    local zipalign_bin
+
+    echo "[INFO] Replacing APK entry '$entry_name' with the NDK-matched runtime."
+    python3 - "$apk_path" "$replaced_path" "$entry_name" "$source_path" <<'PY'
+import sys
+import zipfile
+
+source_apk, destination_apk, entry_name, replacement_path = sys.argv[1:5]
+seen = set()
+with zipfile.ZipFile(source_apk, "r") as src, zipfile.ZipFile(destination_apk, "w") as dst:
+    for info in src.infolist():
+        if info.filename in seen or info.filename == entry_name:
+            continue
+        if info.filename.startswith("META-INF/") and (
+            info.filename.endswith(".RSA")
+            or info.filename.endswith(".DSA")
+            or info.filename.endswith(".EC")
+            or info.filename.endswith(".SF")
+            or info.filename.endswith(".MF")
+        ):
+            continue
+        seen.add(info.filename)
+        with src.open(info) as entry:
+            dst.writestr(info, entry.read())
+    dst.write(replacement_path, entry_name)
+PY
+
+    zipalign_bin="$(find_android_build_tool zipalign)"
+    "$zipalign_bin" -p -f 4 "$replaced_path" "$aligned_path"
+    mv "$aligned_path" "$apk_path"
+    rm -f "$replaced_path"
+}
+
+sign_debug_apk() {
+    local apk_path="$1"
+    local apksigner_bin
+    local debug_keystore="${ANDROID_DEBUG_KEYSTORE:-$HOME/.android/debug.keystore}"
+
+    if [[ ! -f "$debug_keystore" ]]; then
+        echo "Error: Android debug keystore not found at $debug_keystore." >&2
+        exit 1
+    fi
+
+    apksigner_bin="$(find_android_build_tool apksigner)"
+    "$apksigner_bin" sign \
+        --ks "$debug_keystore" \
+        --ks-pass pass:android \
+        --key-pass pass:android \
+        --ks-key-alias androiddebugkey \
+        "$apk_path"
+}
+
+repair_android_apk() {
+    local apk_path="$1"
+    local needs_signing=0
+    local staged_libcxx="$GODOT_APP_DIR/bin/android/arm64-v8a/$BUILD_TYPE_LOWER/libc++_shared.so"
+
+    if [[ -f "$apk_path" ]] && apk_has_duplicate_entries "$apk_path"; then
+        normalize_apk_zip_entries "$apk_path"
+        needs_signing=1
+    fi
+
+    if [[ -f "$staged_libcxx" ]]; then
+        replace_apk_entry "$apk_path" "lib/arm64-v8a/libc++_shared.so" "$staged_libcxx"
+        needs_signing=1
+    fi
+
+    if [[ "$needs_signing" == "1" && "$BUILD_TYPE_LOWER" == "debug" ]]; then
+        sign_debug_apk "$apk_path"
+    fi
+}
+
 ensure_android_godot_cpp_package_config() {
     local triplet_root="$1"
     local config_dir="$triplet_root/share/unofficial-godot-cpp"
@@ -180,6 +329,7 @@ build_abi() {
     local cmake_build_dir
     local godot_bin_dir
     local vcpkg_triplet_dir
+    local libcxx_path
     local libomp_path
     local cmake_config_args=(-D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM")
 
@@ -220,6 +370,8 @@ build_abi() {
     mkdir -p "$godot_bin_dir"
     copy_android_so "$cmake_build_dir/bridge/engine_api/libengine_api.so" "$godot_bin_dir/libengine_api.so"
     copy_android_so "$cmake_build_dir/bridge/godot_extension/libaether_kiri_godot.so" "$godot_bin_dir/libaether_kiri_godot.so"
+    libcxx_path="$(find_android_libcxx_shared "$abi")"
+    copy_android_so "$libcxx_path" "$godot_bin_dir/libc++_shared.so"
     copy_android_so "$vcpkg_triplet_dir/lib/libSDL2.so" "$godot_bin_dir/libSDL2.so"
     libomp_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/lib/clang/19/lib/linux/aarch64/libomp.so"
     if [[ ! -f "$libomp_path" ]]; then
@@ -251,8 +403,23 @@ else
     if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
         export_mode="--export-release"
     fi
-    "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
-        "$export_mode" "$export_preset" "$export_path"
+    set +e
+    godot_export_output="$("$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
+        "$export_mode" "$export_preset" "$export_path" 2>&1)"
+    godot_export_status=$?
+    set -e
+    printf '%s\n' "$godot_export_output"
+
+    if [[ "$godot_export_status" -ne 0 ]]; then
+        if [[ ! -f "$export_path" ]] || ! grep -q "Multiple ZIP entries with the same name" <<< "$godot_export_output"; then
+            exit "$godot_export_status"
+        fi
+        echo "[INFO] Godot export produced an APK with duplicate ZIP entries; repairing export."
+    fi
+
+    if [[ -f "$export_path" ]]; then
+        repair_android_apk "$export_path"
+    fi
 fi
 
 echo "Android build output: $PROJECT_ROOT/out/godot/android/$BUILD_TYPE_LOWER"
