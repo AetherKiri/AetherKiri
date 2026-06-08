@@ -176,10 +176,52 @@ find_android_build_tool() {
     printf '%s\n' "$tool_path"
 }
 
+find_android_platform_jar() {
+    local jar_path
+
+    jar_path="$(find "$ANDROID_HOME/platforms" -maxdepth 2 -type f -name android.jar 2>/dev/null | sort -V | tail -1)"
+    if [[ -z "$jar_path" || ! -f "$jar_path" ]]; then
+        echo "Error: Android platform android.jar not found under $ANDROID_HOME/platforms." >&2
+        exit 1
+    fi
+    printf '%s\n' "$jar_path"
+}
+
+find_javac() {
+    local javac_path
+
+    javac_path="${JAVAC:-$(command -v javac || true)}"
+    if [[ -z "$javac_path" || ! -x "$javac_path" ]]; then
+        echo "Error: javac not found. Install a JDK and ensure javac is available in PATH." >&2
+        exit 1
+    fi
+    printf '%s\n' "$javac_path"
+}
+
 apk_has_duplicate_entries() {
     local apk_path="$1"
 
     zipinfo -1 "$apk_path" | sort | uniq -d | grep -q .
+}
+
+android_apk_next_dex_entry() {
+    local apk_path="$1"
+    local max_index=1
+    local entry
+    local base
+    local suffix
+
+    while IFS= read -r entry; do
+        base="$(basename "$entry")"
+        if [[ "$base" == "classes.dex" ]]; then
+            (( max_index < 1 )) && max_index=1
+        elif [[ "$base" =~ ^classes([0-9]+)\.dex$ ]]; then
+            suffix="${BASH_REMATCH[1]}"
+            (( suffix > max_index )) && max_index="$suffix"
+        fi
+    done < <(zipinfo -1 "$apk_path" | grep -E '^classes([0-9]+)?\.dex$' || true)
+
+    printf 'classes%d.dex\n' "$((max_index + 1))"
 }
 
 normalize_apk_zip_entries() {
@@ -249,6 +291,88 @@ PY
     rm -f "$replaced_path"
 }
 
+add_apk_entry() {
+    local apk_path="$1"
+    local entry_name="$2"
+    local source_path="$3"
+    local replaced_path="${apk_path%.apk}.add.apk"
+    local aligned_path="${apk_path%.apk}.aligned.apk"
+    local zipalign_bin
+
+    echo "[INFO] Adding APK entry '$entry_name'."
+    python3 - "$apk_path" "$replaced_path" "$entry_name" "$source_path" <<'PY'
+import sys
+import zipfile
+
+source_apk, destination_apk, entry_name, addition_path = sys.argv[1:5]
+seen = set()
+with zipfile.ZipFile(source_apk, "r") as src, zipfile.ZipFile(destination_apk, "w") as dst:
+    for info in src.infolist():
+        if info.filename in seen or info.filename == entry_name:
+            continue
+        if info.filename.startswith("META-INF/") and (
+            info.filename.endswith(".RSA")
+            or info.filename.endswith(".DSA")
+            or info.filename.endswith(".EC")
+            or info.filename.endswith(".SF")
+            or info.filename.endswith(".MF")
+        ):
+            continue
+        seen.add(info.filename)
+        with src.open(info) as entry:
+            dst.writestr(info, entry.read())
+    dst.write(addition_path, entry_name)
+PY
+
+    zipalign_bin="$(find_android_build_tool zipalign)"
+    "$zipalign_bin" -p -f 4 "$replaced_path" "$aligned_path"
+    mv "$aligned_path" "$apk_path"
+    rm -f "$replaced_path"
+}
+
+build_android_bridge_dex() {
+    local build_dir="$PROJECT_ROOT/out/android/java_bridge/$BUILD_TYPE_LOWER"
+    local classes_dir="$build_dir/classes"
+    local dex_dir="$build_dir/dex"
+    local android_jar
+    local d8_bin
+    local javac_bin
+    local source_root="$PROJECT_ROOT/platforms/android/java"
+    local sources_file="$build_dir/sources.list"
+
+    if [[ ! -d "$source_root" ]]; then
+        echo "Error: Android Java bridge source directory missing: $source_root" >&2
+        exit 1
+    fi
+
+    rm -rf "$build_dir"
+    mkdir -p "$classes_dir" "$dex_dir"
+    find "$source_root" -type f -name '*.java' | sort > "$sources_file"
+    if [[ ! -s "$sources_file" ]]; then
+        echo "Error: Android Java bridge has no Java sources under $source_root." >&2
+        exit 1
+    fi
+
+    android_jar="$(find_android_platform_jar)"
+    d8_bin="$(find_android_build_tool d8)"
+    javac_bin="$(find_javac)"
+
+    echo "[INFO] Building Android Java bridge dex." >&2
+    "$javac_bin" -encoding UTF-8 -source 8 -target 8 \
+        -bootclasspath "$android_jar" \
+        -d "$classes_dir" \
+        @"$sources_file"
+    "$d8_bin" --min-api 23 --classpath "$android_jar" \
+        --output "$dex_dir" \
+        $(find "$classes_dir" -type f -name '*.class' | sort)
+
+    if [[ ! -f "$dex_dir/classes.dex" ]]; then
+        echo "Error: d8 did not produce classes.dex for Android Java bridge." >&2
+        exit 1
+    fi
+    printf '%s\n' "$dex_dir/classes.dex"
+}
+
 sign_android_apk() {
     local apk_path="$1"
     local signing_profile="$2"
@@ -295,10 +419,19 @@ sign_android_apk() {
         "$apk_path"
 }
 
+should_sign_repaired_apk() {
+    if [[ "$BUILD_TYPE_LOWER" == "debug" ]]; then
+        return 0
+    fi
+    [[ -n "${GODOT_ANDROID_KEYSTORE_RELEASE_PATH:-${ANDROID_RELEASE_KEYSTORE:-}}" ]]
+}
+
 repair_android_apk() {
     local apk_path="$1"
     local needs_signing=0
     local staged_libcxx="$GODOT_APP_DIR/bin/android/arm64-v8a/$BUILD_TYPE_LOWER/libc++_shared.so"
+    local bridge_dex
+    local bridge_dex_entry
 
     if [[ -f "$apk_path" ]] && apk_has_duplicate_entries "$apk_path"; then
         normalize_apk_zip_entries "$apk_path"
@@ -310,8 +443,17 @@ repair_android_apk() {
         needs_signing=1
     fi
 
+    bridge_dex="$(build_android_bridge_dex)"
+    bridge_dex_entry="$(android_apk_next_dex_entry "$apk_path")"
+    add_apk_entry "$apk_path" "$bridge_dex_entry" "$bridge_dex"
+    needs_signing=1
+
     if [[ "$needs_signing" == "1" ]]; then
-        sign_android_apk "$apk_path" "$BUILD_TYPE_LOWER"
+        if should_sign_repaired_apk; then
+            sign_android_apk "$apk_path" "$BUILD_TYPE_LOWER"
+        else
+            echo "[INFO] Leaving repaired release APK unsigned; no release keystore is configured."
+        fi
     fi
 }
 

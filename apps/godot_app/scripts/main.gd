@@ -36,7 +36,8 @@ var game_menu_list: VBoxContainer
 var game_menu_title: Label
 var game_menu_back_button: Button
 var debug_panel: PanelContainer
-var debug_text: Label
+var debug_log_view: TextEdit
+var debug_title: Label
 var soft_keyboard_input: LineEdit
 var virtual_cursor: Label
 var log_view: TextEdit
@@ -560,7 +561,7 @@ func _layout_game_overlay() -> void:
         game_menu_dialog.size = dialog_size
         game_menu_dialog.position = safe.position + (safe.size - dialog_size) * 0.5
     if debug_panel != null:
-        var panel_size := Vector2(minf(720.0, safe.size.x - 32.0), minf(260.0, safe.size.y - 32.0))
+        var panel_size := Vector2(minf(760.0, safe.size.x - 32.0), minf(260.0, safe.size.y - 32.0))
         debug_panel.size = panel_size
         debug_panel.position = safe.position + Vector2(16, safe.size.y - panel_size.y - 16)
     if soft_keyboard_input != null:
@@ -575,7 +576,7 @@ func _build_runtime_controls() -> void:
 
     runtime_overlay = PanelContainer.new()
     runtime_overlay.visible = false
-    runtime_overlay.size = Vector2(360, 430)
+    runtime_overlay.size = Vector2(300, 262)
     runtime_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
     runtime_overlay.add_theme_stylebox_override("panel", _panel_style(24, Color(0, 0, 0, 0.90), Color(1, 1, 1, 0.10), 1))
     game_view.add_child(runtime_overlay)
@@ -608,8 +609,8 @@ func _runtime_action(text: String, callback: Callable, destructive: bool = false
     button.text = text
     button.alignment = HORIZONTAL_ALIGNMENT_LEFT
     button.clip_text = true
-    button.custom_minimum_size = Vector2(320, 62)
-    button.add_theme_font_size_override("font_size", 24)
+    button.custom_minimum_size = Vector2(252, 54)
+    button.add_theme_font_size_override("font_size", 22)
     button.add_theme_color_override("font_color", Color(0.86, 0.86, 0.82, 1) if not destructive else Color(0.92, 0.25, 0.25, 1))
     _apply_button_style(
         button,
@@ -631,15 +632,25 @@ func _rebuild_runtime_overlay() -> void:
         return
     for child in runtime_overlay_box.get_children():
         child.queue_free()
-    runtime_overlay_box.add_child(_runtime_action("▤   Game Menu", _open_game_menu))
+    runtime_overlay_box.add_child(_runtime_action("▤   游戏菜单", _open_game_menu))
     if _is_touch_platform():
-        runtime_overlay_box.add_child(_runtime_action(("☞   Disable Mouse Cursor" if virtual_cursor_enabled else "◖   Enable Mouse Cursor"), _toggle_virtual_cursor))
-        runtime_overlay_box.add_child(_runtime_action(("⌨   Hide Keyboard" if soft_keyboard_visible else "⌨   Show Keyboard"), _toggle_soft_keyboard))
+        runtime_overlay_box.add_child(_runtime_action(("☞   关闭鼠标光标" if virtual_cursor_enabled else "◖   开启鼠标光标"), _toggle_virtual_cursor))
+        runtime_overlay_box.add_child(_runtime_action(("⌨   隐藏键盘" if soft_keyboard_visible else "⌨   显示键盘"), _toggle_soft_keyboard))
     runtime_overlay_box.add_child(_runtime_separator())
-    runtime_overlay_box.add_child(_runtime_action(("⚙   Hide Debug" if debug_panel_visible else "⚙   Show Debug"), _toggle_debug_panel))
-    runtime_overlay_box.add_child(_runtime_action(("▶   Resume" if game_paused else "Ⅱ   Pause"), _toggle_game_pause))
+    runtime_overlay_box.add_child(_runtime_action(("⚙   隐藏调试" if debug_panel_visible else "⚙   显示调试"), _toggle_debug_panel))
+    runtime_overlay_box.add_child(_runtime_action(("▶   继续" if game_paused else "Ⅱ   暂停"), _toggle_game_pause))
     runtime_overlay_box.add_child(_runtime_separator())
-    runtime_overlay_box.add_child(_runtime_action("↪   Exit Game", _exit_current_game, true))
+    runtime_overlay_box.add_child(_runtime_action("↪   退出游戏", _exit_current_game, true))
+    if runtime_overlay != null:
+        var action_count := 0
+        var separator_count := 0
+        for child in runtime_overlay_box.get_children():
+            if child is Button:
+                action_count += 1
+            else:
+                separator_count += 1
+        runtime_overlay.size = Vector2(300, 44.0 + float(action_count) * 54.0 + float(separator_count))
+        _layout_game_overlay()
 
 func _toggle_runtime_overlay() -> void:
     runtime_overlay_visible = not runtime_overlay_visible
@@ -684,7 +695,7 @@ func _build_game_menu_dialog() -> void:
     header.add_child(game_menu_back_button)
 
     game_menu_title = Label.new()
-    game_menu_title.text = "Game Menu"
+    game_menu_title.text = "游戏菜单"
     game_menu_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     game_menu_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     game_menu_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -715,22 +726,79 @@ func _build_game_menu_dialog() -> void:
 func _build_debug_panel() -> void:
     debug_panel = PanelContainer.new()
     debug_panel.visible = false
-    debug_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    debug_panel.add_theme_stylebox_override("panel", _panel_style(10, Color(0, 0, 0, 0.72), Color(1, 1, 1, 0.12), 1))
+    debug_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+    debug_panel.add_theme_stylebox_override("panel", _panel_style(10, Color(0, 0, 0, 0.85), Color(1, 1, 1, 0.12), 1))
     game_view.add_child(debug_panel)
 
     var margin := MarginContainer.new()
-    margin.add_theme_constant_override("margin_left", 14)
-    margin.add_theme_constant_override("margin_top", 12)
-    margin.add_theme_constant_override("margin_right", 14)
-    margin.add_theme_constant_override("margin_bottom", 12)
+    margin.add_theme_constant_override("margin_left", 0)
+    margin.add_theme_constant_override("margin_top", 0)
+    margin.add_theme_constant_override("margin_right", 0)
+    margin.add_theme_constant_override("margin_bottom", 0)
     debug_panel.add_child(margin)
 
-    debug_text = Label.new()
-    debug_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    debug_text.add_theme_font_size_override("font_size", 14)
-    debug_text.add_theme_color_override("font_color", Color(0.90, 0.92, 0.88, 1))
-    margin.add_child(debug_text)
+    var layout := VBoxContainer.new()
+    layout.add_theme_constant_override("separation", 0)
+    margin.add_child(layout)
+
+    var header_panel := PanelContainer.new()
+    header_panel.custom_minimum_size = Vector2(0, 36)
+    var header_style := _panel_style(0, Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 0)
+    header_style.content_margin_left = 12
+    header_style.content_margin_top = 3
+    header_style.content_margin_right = 6
+    header_style.content_margin_bottom = 3
+    header_panel.add_theme_stylebox_override("panel", header_style)
+    layout.add_child(header_panel)
+
+    var header := HBoxContainer.new()
+    header.add_theme_constant_override("separation", 8)
+    header_panel.add_child(header)
+
+    debug_title = Label.new()
+    debug_title.text = "调试日志"
+    debug_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    debug_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    debug_title.add_theme_font_size_override("font_size", 12)
+    debug_title.add_theme_color_override("font_color", Color(1, 1, 1, 0.70))
+    header.add_child(debug_title)
+
+    var clear_button := _debug_header_button("清空")
+    clear_button.pressed.connect(_clear_debug_logs)
+    header.add_child(clear_button)
+
+    var close_button := _debug_header_button("×")
+    close_button.custom_minimum_size = Vector2(34, 30)
+    close_button.add_theme_font_size_override("font_size", 18)
+    close_button.pressed.connect(_hide_debug_panel)
+    header.add_child(close_button)
+
+    debug_log_view = TextEdit.new()
+    debug_log_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    debug_log_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    debug_log_view.editable = false
+    debug_log_view.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+    debug_log_view.scroll_fit_content_height = false
+    debug_log_view.add_theme_font_size_override("font_size", 11)
+    debug_log_view.add_theme_color_override("font_color", Color(1, 1, 1, 0.54))
+    debug_log_view.add_theme_color_override("background_color", Color(0, 0, 0, 0))
+    debug_log_view.add_theme_color_override("caret_color", Color(0, 0, 0, 0))
+    layout.add_child(debug_log_view)
+
+func _debug_header_button(text: String) -> Button:
+    var button := Button.new()
+    button.text = text
+    button.custom_minimum_size = Vector2(58, 30)
+    button.clip_text = true
+    button.add_theme_font_size_override("font_size", 12)
+    button.add_theme_color_override("font_color", Color(1, 1, 1, 0.54))
+    _apply_button_style(
+        button,
+        _panel_style(4, Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0),
+        _panel_style(4, Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 0),
+        _panel_style(4, Color(1, 1, 1, 0.13), Color(0, 0, 0, 0), 0)
+    )
+    return button
 
 func _build_mobile_input_helpers() -> void:
     if not _is_touch_platform():
@@ -764,10 +832,10 @@ func _open_game_menu() -> void:
     var menu_json := String(player.get_main_menu_json())
     var parsed = JSON.parse_string(menu_json)
     if not (parsed is Array):
-        _append_log("Game menu unavailable: %s" % player.get_last_error())
+        _append_log("游戏菜单不可用: %s" % player.get_last_error())
         return
     game_menu_stack.clear()
-    game_menu_stack.append({"caption": "Game Menu", "children": _visible_menu_entries(parsed as Array)})
+    game_menu_stack.append({"caption": "游戏菜单", "children": _visible_menu_entries(parsed as Array)})
     _rebuild_game_menu_dialog()
     game_menu_dialog.visible = true
     game_menu_dialog.move_to_front()
@@ -789,9 +857,7 @@ func _handle_runtime_back() -> bool:
         _hide_runtime_overlay()
         return true
     if debug_panel != null and debug_panel.visible:
-        debug_panel_visible = false
-        debug_panel.visible = false
-        _rebuild_runtime_overlay()
+        _hide_debug_panel()
         return true
     return false
 
@@ -815,12 +881,12 @@ func _rebuild_game_menu_dialog() -> void:
         child.queue_free()
 
     var current := game_menu_stack[game_menu_stack.size() - 1]
-    game_menu_title.text = String(current.get("caption", "Game Menu"))
+    game_menu_title.text = String(current.get("caption", "游戏菜单"))
     game_menu_back_button.visible = game_menu_stack.size() > 1
     var entries: Array = current.get("children", [])
     if entries.is_empty():
         var empty := Label.new()
-        empty.text = "No menu items"
+        empty.text = "无菜单项"
         empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
         empty.add_theme_font_size_override("font_size", 18)
         empty.add_theme_color_override("font_color", Color(1, 1, 1, 0.45))
@@ -833,26 +899,52 @@ func _rebuild_game_menu_dialog() -> void:
             continue
         var item := entry as Dictionary
         var children: Array = item.get("children", [])
-        var caption := String(item.get("caption", ""))
-        if caption.strip_edges().is_empty() and children.is_empty():
-            game_menu_list.add_child(_runtime_separator())
+        if _is_game_menu_separator(item):
+            game_menu_list.add_child(_game_menu_separator())
             continue
         game_menu_list.add_child(_game_menu_entry_button(item))
+
+func _is_menu_separator_caption(caption: String) -> bool:
+    var text := caption.strip_edges()
+    if text.is_empty():
+        return true
+    for i in range(text.length()):
+        if text.substr(i, 1) != "-":
+            return false
+    return true
+
+func _is_game_menu_separator(entry: Dictionary) -> bool:
+    var children: Array = entry.get("children", [])
+    if not children.is_empty():
+        return false
+    if bool(entry.get("separator", false)):
+        return true
+    return _is_menu_separator_caption(String(entry.get("caption", "")))
+
+func _game_menu_separator() -> Control:
+    var margin := MarginContainer.new()
+    margin.custom_minimum_size = Vector2(0, 14)
+    margin.add_theme_constant_override("margin_left", 6)
+    margin.add_theme_constant_override("margin_top", 6)
+    margin.add_theme_constant_override("margin_right", 6)
+    margin.add_theme_constant_override("margin_bottom", 6)
+    margin.add_child(_runtime_separator())
+    return margin
 
 func _game_menu_entry_button(entry: Dictionary) -> Button:
     var button := Button.new()
     var children: Array = entry.get("children", [])
     var enabled := bool(entry.get("enabled", true))
     var caption := String(entry.get("caption", "(Unnamed)"))
-    var prefix := ""
-    if bool(entry.get("checked", false)):
-        prefix = "●  " if bool(entry.get("radio", false)) else "✓  "
-    var suffix := "  >" if not children.is_empty() else ""
-    button.text = "%s%s%s" % [prefix, caption, suffix]
+    var shortcut := String(entry.get("shortcut", ""))
+    var checked := bool(entry.get("checked", false))
+    var checkable := bool(entry.get("checkable", false))
+    var radio := checkable and bool(entry.get("radio", false))
+    button.text = ""
     button.alignment = HORIZONTAL_ALIGNMENT_LEFT
     button.clip_text = true
     button.disabled = not enabled
-    button.custom_minimum_size = Vector2(0, 52)
+    button.custom_minimum_size = Vector2(0, 54)
     button.add_theme_font_size_override("font_size", 18)
     button.add_theme_color_override("font_color", Color(0.92, 0.92, 0.88, 1))
     button.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.35))
@@ -862,6 +954,56 @@ func _game_menu_entry_button(entry: Dictionary) -> Button:
         _panel_style(4, Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 0),
         _panel_style(4, Color(1, 1, 1, 0.14), Color(0, 0, 0, 0), 0)
     )
+
+    var row := HBoxContainer.new()
+    row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    row.set_anchors_preset(Control.PRESET_FULL_RECT)
+    row.offset_left = 10
+    row.offset_top = 0
+    row.offset_right = -10
+    row.offset_bottom = 0
+    row.add_theme_constant_override("separation", 10)
+    button.add_child(row)
+
+    var state_kind := ""
+    if radio:
+        state_kind = "radio"
+    elif checkable:
+        state_kind = "checkbox"
+    row.add_child(_game_menu_state_glyph(state_kind, checked, enabled))
+
+    var title := Label.new()
+    title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    title.text = caption
+    title.clip_text = true
+    title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    title.add_theme_font_size_override("font_size", 18)
+    title.add_theme_color_override("font_color", Color(0.92, 0.92, 0.88, 1) if enabled else Color(1, 1, 1, 0.35))
+    row.add_child(title)
+
+    if not shortcut.is_empty():
+        var shortcut_label := Label.new()
+        shortcut_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        shortcut_label.text = shortcut
+        shortcut_label.clip_text = true
+        shortcut_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+        shortcut_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+        shortcut_label.custom_minimum_size = Vector2(72, 0)
+        shortcut_label.add_theme_font_size_override("font_size", 15)
+        shortcut_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.54) if enabled else Color(1, 1, 1, 0.28))
+        row.add_child(shortcut_label)
+
+    var arrow := Label.new()
+    arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    arrow.text = "›" if not children.is_empty() else ""
+    arrow.custom_minimum_size = Vector2(24, 0)
+    arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+    arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    arrow.add_theme_font_size_override("font_size", 28)
+    arrow.add_theme_color_override("font_color", Color(0.82, 0.82, 0.78, 1) if enabled else Color(1, 1, 1, 0.30))
+    row.add_child(arrow)
+
     button.pressed.connect(func():
         if not children.is_empty():
             game_menu_stack.append(entry)
@@ -873,10 +1015,36 @@ func _game_menu_entry_button(entry: Dictionary) -> Button:
         var result: int = int(player.activate_menu_item(path))
         if result != ENGINE_RESULT_OK:
             render_errors += 1
-            _append_log("Menu action failed: %s %s" % [player.get_last_result(), player.get_last_error()])
+            _append_log("菜单操作失败: %s %s" % [player.get_last_result(), player.get_last_error()])
         game_menu_dialog.visible = false
     )
     return button
+
+func _game_menu_state_glyph(kind: String, checked: bool, enabled: bool) -> Control:
+    var glyph := Control.new()
+    glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    glyph.custom_minimum_size = Vector2(30, 0)
+    if kind.is_empty():
+        return glyph
+
+    glyph.draw.connect(func():
+        var color := Color(0.92, 0.92, 0.88, 1) if enabled else Color(1, 1, 1, 0.35)
+        var center := glyph.size * 0.5
+        if kind == "radio":
+            glyph.draw_circle(center, 8.0, Color(0, 0, 0, 0))
+            glyph.draw_arc(center, 8.0, 0.0, TAU, 32, color, 2.0, true)
+            if checked:
+                glyph.draw_circle(center, 4.5, color)
+            return
+
+        var box_size := Vector2(17, 17)
+        var rect := Rect2(center - box_size * 0.5, box_size)
+        glyph.draw_rect(rect, color, false, 2.0)
+        if checked:
+            glyph.draw_line(rect.position + Vector2(3.0, box_size.y * 0.55), rect.position + Vector2(box_size.x * 0.42, box_size.y - 4.0), color, 2.5, true)
+            glyph.draw_line(rect.position + Vector2(box_size.x * 0.42, box_size.y - 4.0), rect.position + Vector2(box_size.x - 3.0, 4.0), color, 2.5, true)
+    )
+    return glyph
 
 func _toggle_virtual_cursor() -> void:
     if not _is_touch_platform():
@@ -910,9 +1078,22 @@ func _toggle_debug_panel() -> void:
     if debug_panel != null:
         debug_panel.visible = debug_panel_visible
         if debug_panel_visible:
-            _update_debug_panel()
+            _update_debug_log_panel()
             debug_panel.move_to_front()
     _rebuild_runtime_overlay()
+
+func _hide_debug_panel() -> void:
+    debug_panel_visible = false
+    if debug_panel != null:
+        debug_panel.visible = false
+    _rebuild_runtime_overlay()
+
+func _clear_debug_logs() -> void:
+    log_lines.clear()
+    if log_view != null:
+        log_view.text = ""
+        log_view.scroll_vertical = 0
+    _update_debug_log_panel()
 
 func _toggle_game_pause() -> void:
     if player == null:
@@ -920,10 +1101,10 @@ func _toggle_game_pause() -> void:
     var result: int = int(player.resume() if game_paused else player.pause())
     if result != ENGINE_RESULT_OK:
         render_errors += 1
-        _append_log("Pause toggle failed: %s %s" % [player.get_last_result(), player.get_last_error()])
+        _append_log("暂停切换失败: %s %s" % [player.get_last_result(), player.get_last_error()])
         return
     game_paused = not game_paused
-    restart_notice.text = "Paused" if game_paused else ""
+    restart_notice.text = "已暂停" if game_paused else ""
     _hide_runtime_overlay()
     _rebuild_runtime_overlay()
 
@@ -994,33 +1175,23 @@ func _place_virtual_cursor_at_center() -> void:
     virtual_cursor_position = rect.position + rect.size * 0.5
     virtual_cursor_initialized = true
 
-func _update_debug_panel() -> void:
-    if debug_text == null:
+func _update_debug_log_panel() -> void:
+    if debug_log_view == null:
         return
-    var startup_state := cached_startup_state
-    var renderer := selected_backend
-    var texture_backend := "none"
-    var last_result := ""
-    var last_error := ""
-    if player != null:
-        last_result = String(player.get_last_result())
-        last_error = String(player.get_last_error())
-        if game_running and startup_state == STARTUP_SUCCEEDED:
-            renderer = String(player.get_renderer_info())
-        texture_backend = String(player.get_frame_texture_backend()) if game_running else "none"
-    debug_text.text = "FPS: %d\nState: %d%s\nRenderer: %s\nTexture: %s %dx%d\nErrors: %d\nGame: %s\nLast: %s %s" % [
-        Engine.get_frames_per_second(),
-        startup_state,
-        " paused" if game_paused else "",
-        _renderer_summary(renderer),
-        texture_backend,
-        last_texture_size.x,
-        last_texture_size.y,
-        render_errors,
-        active_game_path,
-        last_result,
-        last_error,
-    ]
+    if debug_title != null:
+        debug_title.text = "调试日志  |  状态: %d  |  FPS: %d  |  Tick: %s" % [
+            cached_startup_state,
+            Engine.get_frames_per_second(),
+            "停止" if game_paused else "运行",
+        ]
+    if log_lines.is_empty():
+        debug_log_view.text = "暂无日志"
+    else:
+        var newest_first := PackedStringArray()
+        for i in range(log_lines.size() - 1, -1, -1):
+            newest_first.append(log_lines[i])
+        debug_log_view.text = "\n".join(newest_first)
+    debug_log_view.scroll_vertical = 0
 
 func _on_soft_keyboard_text_changed(text: String) -> void:
     if soft_keyboard_input == null:
@@ -3001,7 +3172,7 @@ func _process(delta: float) -> void:
             cached_startup_state = player.get_startup_state()
             startup_state = cached_startup_state
         if startup_state == STARTUP_SUCCEEDED:
-            restart_notice.text = "Paused" if game_paused else ""
+            restart_notice.text = "已暂停" if game_paused else ""
             loading_panel.visible = false
             if not game_paused:
                 var tick_start := Time.get_ticks_usec()
@@ -3028,7 +3199,7 @@ func _process(delta: float) -> void:
                     _log_frame_spike(delta, tick_ms, update_ms)
                     _log_frame_probe(delta)
         elif startup_state == STARTUP_FAILED:
-            restart_notice.text = "Game startup failed."
+            restart_notice.text = "游戏启动失败。"
             loading_panel.visible = false
             _set_game_background(false)
             shell_root.visible = true
@@ -3079,7 +3250,7 @@ func _process(delta: float) -> void:
             render_errors,
         ]
         if debug_panel_visible:
-            _update_debug_panel()
+            _update_debug_log_panel()
 func _log_live_perf(delta: float, tick_ms: float, update_ms: float) -> void:
     perf_log_accum += delta
     if perf_log_accum < perf_log_interval:
@@ -3851,6 +4022,8 @@ func _append_log(line: String) -> void:
     while log_lines.size() > MAX_LOG_LINES:
         log_lines.remove_at(0)
     log_view.text = "\n".join(log_lines)
+    if debug_panel_visible:
+        _update_debug_log_panel()
     call_deferred("_scroll_log_to_bottom")
 
 func _scroll_log_to_bottom() -> void:

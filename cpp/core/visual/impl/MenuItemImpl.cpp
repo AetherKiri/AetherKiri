@@ -94,9 +94,11 @@ tjs_error WindowMenuProperty::PropSet(tjs_uint32 flag,
 //---------------------------------------------------------------------------
 tTJSNI_MenuItem::tTJSNI_MenuItem() {
     IsChecked = false;
+    IsCheckable = false;
     IsAttched = true;
     IsEnabled = true;
     IsRadio = false;
+    IsRadioExplicit = false;
     IsVisible = true;
     GroupIndex = 0;
 }
@@ -226,6 +228,7 @@ void tTJSNI_MenuItem::GetCaption(ttstr &caption) const {
 void tTJSNI_MenuItem::SetChecked(bool b) {
     // if(!MenuItem) return;
     // MenuItem->setChecked (b);
+    IsCheckable = true;
     if(b && IsRadio && Parent) {
         for(tTJSNI_BaseMenuItem *_item : Parent->Children) {
             auto *item = dynamic_cast<tTJSNI_MenuItem *>(_item);
@@ -240,6 +243,10 @@ bool tTJSNI_MenuItem::GetChecked() const {
     // 	if(!MenuItem) return false;
     // 	return MenuItem->getChecked();
     return IsChecked;
+}
+//---------------------------------------------------------------------------
+bool tTJSNI_MenuItem::GetCheckable() const {
+    return IsCheckable || (IsRadioExplicit && IsRadio);
 }
 //---------------------------------------------------------------------------
 void tTJSNI_MenuItem::SetEnabled(bool b) {
@@ -268,6 +275,7 @@ tjs_int tTJSNI_MenuItem::GetGroup() const {
 //---------------------------------------------------------------------------
 void tTJSNI_MenuItem::SetRadio(bool b) {
     IsRadio = b;
+    IsRadioExplicit = true;
     // 	if(!MenuItem) return;
     // 	MenuItem->setRadioItem (b);
 }
@@ -280,12 +288,13 @@ bool tTJSNI_MenuItem::GetRadio() const {
 //---------------------------------------------------------------------------
 void tTJSNI_MenuItem::SetShortcut(const ttstr &shortcut) {
     // if(!MenuItem) return;
+    Shortcut = shortcut;
     //	MenuItem->setShortCut
     //(TextToShortCut(shortcut.AsAnsiString()));
 }
 //---------------------------------------------------------------------------
 void tTJSNI_MenuItem::GetShortcut(ttstr &shortcut) const {
-    /*if(!MenuItem)*/ shortcut.Clear();
+    /*if(!MenuItem)*/ shortcut = Shortcut;
     //	shortcut = ShortCutToText(MenuItem->getShortCut());
 }
 //---------------------------------------------------------------------------

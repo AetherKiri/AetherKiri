@@ -33,11 +33,11 @@
 using JniHelper = krkr::JniHelper;
 using JniMethodInfo = krkr::JniHelper::MethodInfo;
 
-#define KR2ActJavaPath "org/tvp/kirikiri2/KR2Activity"
+#define AetherKiriBridgeJavaPath "org/github/krkr2/aetherkiri/EngineBridge"
 // #define KR2EntryJavaPath "org/tvp/kirikiri2/Kirikiroid2"
 
 // Declared in android_jni_bridge.cpp; provides the host Application Context
-// as a fallback when KR2Activity is not available.
+// for storage and package metadata lookups.
 extern jobject krkr_GetApplicationContext();
 
 unsigned int __page_size = getpagesize();
@@ -52,14 +52,14 @@ static void updateMemoryInfo() {
     if(TVPGetRoughTickCount32() - _lastMemoryInfoQuery > 3000) { // freq in 3s
 
         JniMethodInfo methodInfo;
-        if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath,
+        if(JniHelper::getStaticMethodInfo(methodInfo, AetherKiriBridgeJavaPath,
                                           "updateMemoryInfo", "()V")) {
             methodInfo.env->CallStaticVoidMethod(methodInfo.classID,
                                                  methodInfo.methodID);
             methodInfo.env->DeleteLocalRef(methodInfo.classID);
         }
 
-        if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath,
+        if(JniHelper::getStaticMethodInfo(methodInfo, AetherKiriBridgeJavaPath,
                                           "getAvailMemory", "()J")) {
             _availMemory = methodInfo.env->CallStaticLongMethod(
                                methodInfo.classID, methodInfo.methodID) /
@@ -67,7 +67,7 @@ static void updateMemoryInfo() {
             methodInfo.env->DeleteLocalRef(methodInfo.classID);
         }
 
-        if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath,
+        if(JniHelper::getStaticMethodInfo(methodInfo, AetherKiriBridgeJavaPath,
                                           "getUsedMemory", "()J")) {
             // in kB
             usedMemory = methodInfo.env->CallStaticLongMethod(
@@ -119,100 +119,29 @@ void TVPForceSwapBuffer() {
 std::string TVPGetDeviceID() {
     std::string ret;
 
-    // use pure jni to avoid java code
-    // 	jclass classID = pEnv->FindClass(KR2EntryJavaPath);
-    // 	std::string strtmp("()L"); strtmp += KR2EntryJavaPath; strtmp
-    // += ";"; 	jmethodID methodGetInstance =
-    // pEnv->GetStaticMethodID(classID, "GetInstance",
-    // strtmp.c_str()); 	jobject sInstance =
-    // pEnv->CallStaticObjectMethod(classID, methodGetInstance);
-    // jmethodID getSystemService = pEnv->GetMethodID(classID,
-    // "getSystemService",
-    // "(Ljava/lang/String;)Ljava/lang/Object;"); 	jstring jstrPhone
-    // = pEnv->NewStringUTF("phone"); 	jobject telephonyManager =
-    // pEnv->CallObjectMethod(sInstance, getSystemService, jstrPhone);
-    // 	pEnv->DeleteLocalRef(jstrPhone);
-    //
-    // 	jclass clsTelephonyManager =
-    // pEnv->FindClass("android/telephony/TelephonyManager");
-    // jmethodID getDeviceId = pEnv->GetMethodID(clsTelephonyManager,
-    // "getDeviceId",
-    // "()Ljava/lang/String;"); 	jstring jstrDevID =
-    // (jstring)pEnv->CallObjectMethod(telephonyManager, getDeviceId);
-    // if (jstrDevID) { 		const char *p =
-    // pEnv->GetStringUTFChars(jstrDevID, 0); if (p
-    // && *p) { 			ret = "DevID="; 			ret +=
-    // p; pEnv->ReleaseStringUTFChars(jstrDevID, p); 		} else {
-    // if (p) {
-    // pEnv->ReleaseStringUTFChars(jstrDevID, p);
-    // 			}
-    // 			jmethodID getContentResolver =
-    // pEnv->GetMethodID(classID, "getContentResolver",
-    // "()Landroid/content/ContentResolver;"); 			jobject
-    // contentResolver = pEnv->CallObjectMethod(sInstance,
-    // getContentResolver);
-    //
-    // 			jclass clsSecure =
-    // pEnv->FindClass("android/provider/Settings/Secure");
-    // if (clsSecure) { 				jmethodID Secure_getString =
-    // pEnv->GetMethodID(clsSecure, "getString",
-    // "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;");
-    // 				jstring jastrAndroid_ID =
-    // pEnv->NewStringUTF("android_id"); 				jstring
-    // jstrAndroidID =
-    // (jstring)pEnv->CallStaticObjectMethod(clsSecure,
-    // Secure_getString, contentResolver, jastrAndroid_ID);
-    // if (jstrAndroidID) { 					const char *p =
-    // pEnv->GetStringUTFChars(jstrAndroidID, 0); if (p && strlen(p) >
-    // 8 && strcmp(p, "9774d56d682e549c")) { ret = "AndroidID="; ret
-    // += p;
-    // 					}
-    // 				}
-    // 				pEnv->ReleaseStringUTFChars(jstrAndroidID, p);
-    // 				pEnv->DeleteLocalRef(jastrAndroid_ID);
-    // 			}
-    // 		}
-    // 	}
-    // 	if (ret.empty())
-    {
-        JniMethodInfo methodInfo;
-        if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath,
-                                          "getDeviceId",
-                                          "()Ljava/lang/String;")) {
-            auto result = (jstring)methodInfo.env->CallStaticObjectMethod(
-                methodInfo.classID, methodInfo.methodID);
-            ret = JniHelper::jstring2string(result);
-            methodInfo.env->DeleteLocalRef(result);
-            methodInfo.env->DeleteLocalRef(methodInfo.classID);
-            char *t = (char *)ret.c_str();
-            while(*t) {
-                if(*t == ':') {
-                    *t = '=';
-                    break;
-                }
-                t++;
+    JniMethodInfo methodInfo;
+    if(JniHelper::getStaticMethodInfo(methodInfo, AetherKiriBridgeJavaPath,
+                                      "getDeviceId",
+                                      "()Ljava/lang/String;")) {
+        auto result = (jstring)methodInfo.env->CallStaticObjectMethod(
+            methodInfo.classID, methodInfo.methodID);
+        ret = JniHelper::jstring2string(result);
+        methodInfo.env->DeleteLocalRef(result);
+        methodInfo.env->DeleteLocalRef(methodInfo.classID);
+        char *t = (char *)ret.c_str();
+        while(*t) {
+            if(*t == ':') {
+                *t = '=';
+                break;
             }
+            t++;
         }
     }
 
     return ret;
 }
 
-static jobject GetKR2ActInstance() {
-    JniMethodInfo methodInfo;
-    std::string strtmp("()L");
-    strtmp += KR2ActJavaPath;
-    strtmp += ";";
-    if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath, "GetInstance",
-                                      strtmp.c_str())) {
-        jobject ret = methodInfo.env->CallStaticObjectMethod(
-            methodInfo.classID, methodInfo.methodID);
-        methodInfo.env->DeleteLocalRef(methodInfo.classID);
-        return ret;
-    }
-    // Fallback for embedded host mode: KR2Activity doesn't exist,
-    // use the Application Context stored by the host plugin.
-    // Create a new local ref so callers can safely DeleteLocalRef on it.
+static jobject GetAndroidApplicationContext() {
     jobject ctx = krkr_GetApplicationContext();
     if (ctx) {
         JNIEnv* env = JniHelper::getEnv();
@@ -220,14 +149,44 @@ static jobject GetKR2ActInstance() {
             return env->NewLocalRef(ctx);
         }
     }
+
+    JNIEnv* env = JniHelper::getEnv();
+    if(!env) return 0;
+    jclass activityThreadClass = env->FindClass("android/app/ActivityThread");
+    if(!activityThreadClass) {
+        env->ExceptionClear();
+        return 0;
+    }
+    jmethodID currentApplication = env->GetStaticMethodID(
+        activityThreadClass, "currentApplication",
+        "()Landroid/app/Application;");
+    if(!currentApplication) {
+        env->ExceptionClear();
+        env->DeleteLocalRef(activityThreadClass);
+        return 0;
+    }
+    jobject app = env->CallStaticObjectMethod(activityThreadClass,
+                                             currentApplication);
+    env->DeleteLocalRef(activityThreadClass);
+    if(env->ExceptionCheck() || !app) {
+        env->ExceptionClear();
+        return 0;
+    }
+    return app;
+}
+
+static jobject GetAndroidContextInstance() {
+    jobject ctx = GetAndroidApplicationContext();
+    if(ctx) return ctx;
     __android_log_print(ANDROID_LOG_ERROR, "krkr2",
-        "GetKR2ActInstance: no KR2Activity and no Application Context available");
+        "GetAndroidContextInstance: no Application Context available");
     return 0;
 }
 
 static std::string GetApkStoragePath() {
     JniMethodInfo methodInfo;
-    jobject sInstance = GetKR2ActInstance();
+    jobject sInstance = GetAndroidContextInstance();
+    if(!sInstance) return "";
     if(!JniHelper::getMethodInfo(methodInfo, "android/content/Context",
                                  "getApplicationInfo",
                                  "()Landroid/content/pm/ApplicationInfo;")) {
@@ -247,7 +206,8 @@ static std::string GetApkStoragePath() {
 
 static std::string GetPackageName() {
     JniMethodInfo methodInfo;
-    jobject sInstance = GetKR2ActInstance();
+    jobject sInstance = GetAndroidContextInstance();
+    if(!sInstance) return "";
     if(!JniHelper::getMethodInfo(methodInfo, "android/content/ContextWrapper",
                                  "getPackageName", "()Ljava/lang/String;")) {
         methodInfo.env->DeleteLocalRef(sInstance);
@@ -345,11 +305,15 @@ std::string TVPGetDeviceLanguage() {
 
 std::string TVPGetPackageVersionString() {
     JniMethodInfo methodInfo;
-    if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath, "GetVersion",
+    if(JniHelper::getStaticMethodInfo(methodInfo, AetherKiriBridgeJavaPath,
+                                      "GetVersion",
                                       "()Ljava/lang/String;")) {
-        return JniHelper::jstring2string(
-            (jstring)methodInfo.env->CallStaticObjectMethod(
-                methodInfo.classID, methodInfo.methodID));
+        jstring version = (jstring)methodInfo.env->CallStaticObjectMethod(
+            methodInfo.classID, methodInfo.methodID);
+        std::string result = JniHelper::jstring2string(version);
+        methodInfo.env->DeleteLocalRef(version);
+        methodInfo.env->DeleteLocalRef(methodInfo.classID);
+        return result;
     }
     return "";
 }
@@ -382,7 +346,8 @@ static std::string File_getAbsolutePath(jobject FileObj) {
 }
 
 static std::string GetInternalStoragePath() {
-    jobject sInstance = GetKR2ActInstance();
+    jobject sInstance = GetAndroidContextInstance();
+    if(!sInstance) return "";
     JniMethodInfo methodInfo;
     if(!JniHelper::getMethodInfo(methodInfo, "android/content/ContextWrapper",
                                  "getFilesDir", "()Ljava/io/File;")) {
@@ -412,7 +377,8 @@ static int InsertFilepathInto(JNIEnv *env, std::vector<std::string> &vec,
 static int GetExternalStoragePath(std::vector<std::string> &ret) {
     int count = 0;
     JniMethodInfo methodInfo;
-    jobject sInstance = GetKR2ActInstance();
+    jobject sInstance = GetAndroidContextInstance();
+    if(!sInstance) return 0;
     // 	if (JniHelper::getMethodInfo(methodInfo,
     // "android/content/Context", "getExternalMediaDirs",
     // "()[Ljava/io/File;")) { 		jobjectArray FileObjs =
@@ -449,12 +415,12 @@ std::vector<std::string> TVPGetAppStoragePath() {
 
 std::vector<std::string> TVPGetDriverPath() {
     std::vector<std::string> ret;
-    jobject sInstance = GetKR2ActInstance();
     JniMethodInfo methodInfo;
-    if(JniHelper::getMethodInfo(methodInfo, KR2ActJavaPath, "getStoragePath",
-                                "()[Ljava/lang/String;")) {
-        jobjectArray PathObjs = (jobjectArray)methodInfo.env->CallObjectMethod(
-            sInstance, methodInfo.methodID);
+    if(JniHelper::getStaticMethodInfo(methodInfo, AetherKiriBridgeJavaPath,
+                                      "getStoragePath",
+                                      "()[Ljava/lang/String;")) {
+        jobjectArray PathObjs = (jobjectArray)methodInfo.env->CallStaticObjectMethod(
+            methodInfo.classID, methodInfo.methodID);
         if(PathObjs) {
             int count = methodInfo.env->GetArrayLength(PathObjs);
             for(int i = 0; i < count; ++i) {
@@ -464,6 +430,7 @@ std::vector<std::string> TVPGetDriverPath() {
                     ret.emplace_back(JniHelper::jstring2string(path));
             }
         }
+        methodInfo.env->DeleteLocalRef(methodInfo.classID);
     }
 
     if(!ret.empty())
@@ -570,193 +537,6 @@ void ClearJniException(JNIEnv *env) {
     }
 }
 
-jobject GetApplicationContextLocal(JNIEnv *env) {
-    if(env == nullptr) return nullptr;
-
-    jobject ctx = krkr_GetApplicationContext();
-    if(ctx != nullptr) {
-        return env->NewLocalRef(ctx);
-    }
-
-    jclass activityThreadClass = env->FindClass("android/app/ActivityThread");
-    if(activityThreadClass == nullptr) {
-        ClearJniException(env);
-        return nullptr;
-    }
-
-    jmethodID currentApplication = env->GetStaticMethodID(
-        activityThreadClass, "currentApplication",
-        "()Landroid/app/Application;");
-    if(currentApplication == nullptr) {
-        ClearJniException(env);
-        env->DeleteLocalRef(activityThreadClass);
-        return nullptr;
-    }
-
-    jobject app = env->CallStaticObjectMethod(activityThreadClass,
-                                             currentApplication);
-    env->DeleteLocalRef(activityThreadClass);
-    if(env->ExceptionCheck() || app == nullptr) {
-        ClearJniException(env);
-        return nullptr;
-    }
-    return app;
-}
-
-jclass FindClassWithAppClassLoader(JNIEnv *env, const char *className) {
-    if(env == nullptr || className == nullptr) return nullptr;
-
-    jclass cls = env->FindClass(className);
-    if(cls != nullptr && !env->ExceptionCheck()) {
-        return cls;
-    }
-    ClearJniException(env);
-
-    jobject appContext = GetApplicationContextLocal(env);
-    if(appContext == nullptr) return nullptr;
-
-    jclass contextClass = env->FindClass("android/content/Context");
-    if(contextClass == nullptr) {
-        ClearJniException(env);
-        env->DeleteLocalRef(appContext);
-        return nullptr;
-    }
-
-    jmethodID getClassLoader = env->GetMethodID(
-        contextClass, "getClassLoader", "()Ljava/lang/ClassLoader;");
-    if(getClassLoader == nullptr) {
-        ClearJniException(env);
-        env->DeleteLocalRef(contextClass);
-        env->DeleteLocalRef(appContext);
-        return nullptr;
-    }
-
-    jobject classLoader = env->CallObjectMethod(appContext, getClassLoader);
-    env->DeleteLocalRef(contextClass);
-    env->DeleteLocalRef(appContext);
-    if(env->ExceptionCheck() || classLoader == nullptr) {
-        ClearJniException(env);
-        return nullptr;
-    }
-
-    jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
-    if(classLoaderClass == nullptr) {
-        ClearJniException(env);
-        env->DeleteLocalRef(classLoader);
-        return nullptr;
-    }
-
-    jmethodID loadClass = env->GetMethodID(
-        classLoaderClass, "loadClass",
-        "(Ljava/lang/String;)Ljava/lang/Class;");
-    if(loadClass == nullptr) {
-        ClearJniException(env);
-        env->DeleteLocalRef(classLoaderClass);
-        env->DeleteLocalRef(classLoader);
-        return nullptr;
-    }
-
-    std::string dottedName(className);
-    for(char &c : dottedName) {
-        if(c == '/') c = '.';
-    }
-    jstring classNameJava = env->NewStringUTF(dottedName.c_str());
-    jobject classObject =
-        env->CallObjectMethod(classLoader, loadClass, classNameJava);
-
-    env->DeleteLocalRef(classNameJava);
-    env->DeleteLocalRef(classLoaderClass);
-    env->DeleteLocalRef(classLoader);
-
-    if(env->ExceptionCheck() || classObject == nullptr) {
-        ClearJniException(env);
-        return nullptr;
-    }
-
-    return static_cast<jclass>(classObject);
-}
-
-jobject GetGodotActivity(JNIEnv *env) {
-    if(env == nullptr) return nullptr;
-
-    jobject appContext = GetApplicationContextLocal(env);
-    if(appContext == nullptr) return nullptr;
-
-    jclass godotClass = FindClassWithAppClassLoader(env,
-                                                    "org/godotengine/godot/Godot");
-    if(godotClass == nullptr) {
-        env->DeleteLocalRef(appContext);
-        return nullptr;
-    }
-
-    jmethodID getInstance = env->GetStaticMethodID(
-        godotClass, "getInstance",
-        "(Landroid/content/Context;)Lorg/godotengine/godot/Godot;");
-    if(getInstance == nullptr) {
-        ClearJniException(env);
-        env->DeleteLocalRef(godotClass);
-        env->DeleteLocalRef(appContext);
-        return nullptr;
-    }
-
-    jobject godot = env->CallStaticObjectMethod(godotClass, getInstance,
-                                                appContext);
-    env->DeleteLocalRef(appContext);
-    if(env->ExceptionCheck() || godot == nullptr) {
-        ClearJniException(env);
-        env->DeleteLocalRef(godotClass);
-        return nullptr;
-    }
-
-    jmethodID getActivity = env->GetMethodID(
-        godotClass, "getActivity", "()Landroid/app/Activity;");
-    if(getActivity == nullptr) {
-        ClearJniException(env);
-        env->DeleteLocalRef(godot);
-        env->DeleteLocalRef(godotClass);
-        return nullptr;
-    }
-
-    jobject activity = env->CallObjectMethod(godot, getActivity);
-    env->DeleteLocalRef(godot);
-    env->DeleteLocalRef(godotClass);
-    if(env->ExceptionCheck() || activity == nullptr) {
-        ClearJniException(env);
-        return nullptr;
-    }
-    return activity;
-}
-
-void JNICALL GodotDialogCallback(JNIEnv * /* env */, jclass /* clazz */,
-                                 jint result) {
-    std::lock_guard<std::mutex> lk(MessageBoxLock);
-    MsgBoxRet = static_cast<int>(result);
-    MessageBoxCond.notify_all();
-}
-
-bool RegisterGodotDialogCallback(JNIEnv *env, jclass dialogUtilsClass) {
-    static std::mutex registerMutex;
-    static bool registered = false;
-
-    if(env == nullptr || dialogUtilsClass == nullptr) return false;
-    std::lock_guard<std::mutex> guard(registerMutex);
-    if(registered) return true;
-
-    JNINativeMethod methods[] = {
-        {const_cast<char *>("dialogCallback"), const_cast<char *>("(I)V"),
-         reinterpret_cast<void *>(&GodotDialogCallback)},
-    };
-    if(env->RegisterNatives(dialogUtilsClass, methods, 1) != JNI_OK) {
-        ClearJniException(env);
-        __android_log_print(ANDROID_LOG_WARN, "krkr2",
-                            "RegisterNatives(DialogUtils.dialogCallback) failed");
-        return false;
-    }
-
-    registered = true;
-    return true;
-}
-
 jobjectArray NewJavaButtonArray(JNIEnv *env, unsigned int nButton,
                                 const char **btnText) {
     if(env == nullptr) return nullptr;
@@ -788,31 +568,6 @@ jobjectArray NewJavaButtonArray(JNIEnv *env, unsigned int nButton,
     return btns;
 }
 
-jobject GetStaticObjectFieldByName(JNIEnv *env, jclass cls,
-                                   const char *firstName,
-                                   const char *secondName,
-                                   const char *signature) {
-    if(env == nullptr || cls == nullptr || signature == nullptr) return nullptr;
-
-    jfieldID field = nullptr;
-    if(firstName != nullptr) {
-        field = env->GetStaticFieldID(cls, firstName, signature);
-        if(field == nullptr) ClearJniException(env);
-    }
-    if(field == nullptr && secondName != nullptr) {
-        field = env->GetStaticFieldID(cls, secondName, signature);
-        if(field == nullptr) ClearJniException(env);
-    }
-    if(field == nullptr) return nullptr;
-
-    jobject value = env->GetStaticObjectField(cls, field);
-    if(env->ExceptionCheck() || value == nullptr) {
-        ClearJniException(env);
-        return nullptr;
-    }
-    return value;
-}
-
 int WaitForMessageBoxResult() {
     std::unique_lock<std::mutex> lk(MessageBoxLock);
     while(MsgBoxRet == -2) {
@@ -824,86 +579,95 @@ int WaitForMessageBoxResult() {
     return MsgBoxRet;
 }
 
-bool ShowGodotMessageBox(const char *pszText, const char *pszTitle,
-                         unsigned int nButton, const char **btnText) {
-    JNIEnv *env = JniHelper::getEnv();
-    if(env == nullptr) return false;
-
-    jobject activity = GetGodotActivity(env);
-    if(activity == nullptr) return false;
-
-    jclass dialogUtilsClass = FindClassWithAppClassLoader(
-        env, "org/godotengine/godot/utils/DialogUtils");
-    if(dialogUtilsClass == nullptr) {
-        env->DeleteLocalRef(activity);
+bool ShowBridgeMessageBox(const char *pszText, const char *pszTitle,
+                          unsigned int nButton, const char **btnText) {
+    JniMethodInfo methodInfo;
+    if(!JniHelper::getStaticMethodInfo(
+           methodInfo, AetherKiriBridgeJavaPath, "ShowMessageBox",
+           "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)V")) {
         return false;
     }
 
-    if(!RegisterGodotDialogCallback(env, dialogUtilsClass)) {
-        env->DeleteLocalRef(dialogUtilsClass);
-        env->DeleteLocalRef(activity);
-        return false;
-    }
-
-    jobject companion = GetStaticObjectFieldByName(
-        env, dialogUtilsClass, "INSTANCE", "Companion",
-        "Lorg/godotengine/godot/utils/DialogUtils$Companion;");
-    if(companion == nullptr) {
-        env->DeleteLocalRef(dialogUtilsClass);
-        env->DeleteLocalRef(activity);
-        return false;
-    }
-
-    jclass companionClass = env->GetObjectClass(companion);
-    if(companionClass == nullptr) {
-        ClearJniException(env);
-        env->DeleteLocalRef(companion);
-        env->DeleteLocalRef(dialogUtilsClass);
-        env->DeleteLocalRef(activity);
-        return false;
-    }
-
-    jmethodID showDialog = env->GetMethodID(
-        companionClass, "showDialog$lib_templateDebug",
-        "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;"
-        "[Ljava/lang/String;)V");
-    if(showDialog == nullptr) {
-        ClearJniException(env);
-        env->DeleteLocalRef(companionClass);
-        env->DeleteLocalRef(companion);
-        env->DeleteLocalRef(dialogUtilsClass);
-        env->DeleteLocalRef(activity);
-        return false;
-    }
-
-    jstring jstrTitle = env->NewStringUTF(pszTitle != nullptr ? pszTitle : "");
-    jstring jstrText = env->NewStringUTF(pszText != nullptr ? pszText : "");
-    jobjectArray btns = NewJavaButtonArray(env, nButton, btnText);
+    jstring jstrTitle =
+        methodInfo.env->NewStringUTF(pszTitle != nullptr ? pszTitle : "");
+    jstring jstrText =
+        methodInfo.env->NewStringUTF(pszText != nullptr ? pszText : "");
+    jobjectArray btns = NewJavaButtonArray(methodInfo.env, nButton, btnText);
     if(jstrTitle == nullptr || jstrText == nullptr || btns == nullptr) {
-        ClearJniException(env);
-        if(jstrTitle != nullptr) env->DeleteLocalRef(jstrTitle);
-        if(jstrText != nullptr) env->DeleteLocalRef(jstrText);
-        if(btns != nullptr) env->DeleteLocalRef(btns);
-        env->DeleteLocalRef(companionClass);
-        env->DeleteLocalRef(companion);
-        env->DeleteLocalRef(dialogUtilsClass);
-        env->DeleteLocalRef(activity);
+        ClearJniException(methodInfo.env);
+        if(jstrTitle != nullptr) methodInfo.env->DeleteLocalRef(jstrTitle);
+        if(jstrText != nullptr) methodInfo.env->DeleteLocalRef(jstrText);
+        if(btns != nullptr) methodInfo.env->DeleteLocalRef(btns);
+        methodInfo.env->DeleteLocalRef(methodInfo.classID);
         return false;
     }
 
     MsgBoxRet = -2;
-    env->CallVoidMethod(companion, showDialog, activity, jstrTitle, jstrText,
-                        btns);
-    const bool ok = !env->ExceptionCheck();
-    ClearJniException(env);
+    methodInfo.env->CallStaticVoidMethod(methodInfo.classID,
+                                         methodInfo.methodID, jstrTitle,
+                                         jstrText, btns);
+    const bool ok = !methodInfo.env->ExceptionCheck();
+    ClearJniException(methodInfo.env);
 
-    env->DeleteLocalRef(jstrTitle);
-    env->DeleteLocalRef(jstrText);
-    env->DeleteLocalRef(btns);
-    env->DeleteLocalRef(companionClass);
-    env->DeleteLocalRef(companion);
-    env->DeleteLocalRef(dialogUtilsClass);
-    env->DeleteLocalRef(activity);
+    methodInfo.env->DeleteLocalRef(jstrTitle);
+    methodInfo.env->DeleteLocalRef(jstrText);
+    methodInfo.env->DeleteLocalRef(btns);
+    methodInfo.env->DeleteLocalRef(methodInfo.classID);
+    return ok;
+}
+
+bool ShowBridgeInputBox(const ttstr &text, const ttstr &caption,
+                        const ttstr &prompt,
+                        const std::vector<ttstr> &vecButtons) {
+    JniMethodInfo methodInfo;
+    if(!JniHelper::getStaticMethodInfo(
+           methodInfo, AetherKiriBridgeJavaPath, "ShowInputBox",
+           "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
+           "[Ljava/lang/String;)V")) {
+        return false;
+    }
+
+    std::vector<const char *> btnText;
+    btnText.reserve(vecButtons.size());
+    std::vector<std::string> btnTextHold;
+    btnTextHold.reserve(vecButtons.size());
+    for(const ttstr &btn : vecButtons) {
+        btnTextHold.emplace_back(btn.AsStdString());
+        btnText.emplace_back(btnTextHold.back().c_str());
+    }
+
+    jstring jstrTitle =
+        methodInfo.env->NewStringUTF(caption.AsStdString().c_str());
+    jstring jstrPrompt =
+        methodInfo.env->NewStringUTF(prompt.AsStdString().c_str());
+    jstring jstrText =
+        methodInfo.env->NewStringUTF(text.AsStdString().c_str());
+    jobjectArray btns = NewJavaButtonArray(
+        methodInfo.env, btnText.size(), btnText.empty() ? nullptr : &btnText[0]);
+    if(jstrTitle == nullptr || jstrPrompt == nullptr || jstrText == nullptr ||
+       btns == nullptr) {
+        ClearJniException(methodInfo.env);
+        if(jstrTitle != nullptr) methodInfo.env->DeleteLocalRef(jstrTitle);
+        if(jstrPrompt != nullptr) methodInfo.env->DeleteLocalRef(jstrPrompt);
+        if(jstrText != nullptr) methodInfo.env->DeleteLocalRef(jstrText);
+        if(btns != nullptr) methodInfo.env->DeleteLocalRef(btns);
+        methodInfo.env->DeleteLocalRef(methodInfo.classID);
+        return false;
+    }
+
+    MsgBoxRet = -2;
+    MessageBoxRetText = text.AsStdString();
+    methodInfo.env->CallStaticVoidMethod(methodInfo.classID,
+                                         methodInfo.methodID, jstrTitle,
+                                         jstrPrompt, jstrText, btns);
+    const bool ok = !methodInfo.env->ExceptionCheck();
+    ClearJniException(methodInfo.env);
+
+    methodInfo.env->DeleteLocalRef(jstrTitle);
+    methodInfo.env->DeleteLocalRef(jstrPrompt);
+    methodInfo.env->DeleteLocalRef(jstrText);
+    methodInfo.env->DeleteLocalRef(btns);
+    methodInfo.env->DeleteLocalRef(methodInfo.classID);
     return ok;
 }
 
@@ -911,28 +675,7 @@ bool ShowGodotMessageBox(const char *pszText, const char *pszTitle,
 
 int TVPShowSimpleMessageBox(const char *pszText, const char *pszTitle,
                             unsigned int nButton, const char **btnText) {
-    JniMethodInfo methodInfo;
-    if(JniHelper::getStaticMethodInfo(
-           methodInfo, "org/tvp/kirikiri2/KR2Activity", "ShowMessageBox",
-           "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/"
-           "String;)V")) {
-        MsgBoxRet = -2;
-        jstring jstrTitle = methodInfo.env->NewStringUTF(pszTitle);
-        jstring jstrText = methodInfo.env->NewStringUTF(pszText);
-        jobjectArray btns = NewJavaButtonArray(methodInfo.env, nButton, btnText);
-
-        methodInfo.env->CallStaticVoidMethod(
-            methodInfo.classID, methodInfo.methodID, jstrTitle, jstrText, btns);
-
-        methodInfo.env->DeleteLocalRef(jstrTitle);
-        methodInfo.env->DeleteLocalRef(jstrText);
-        if(btns != nullptr) methodInfo.env->DeleteLocalRef(btns);
-        methodInfo.env->DeleteLocalRef(methodInfo.classID);
-
-        return WaitForMessageBoxResult();
-    }
-
-    if(ShowGodotMessageBox(pszText, pszTitle, nButton, btnText)) {
+    if(ShowBridgeMessageBox(pszText, pszTitle, nButton, btnText)) {
         return WaitForMessageBoxResult();
     }
     return -1;
@@ -940,7 +683,7 @@ int TVPShowSimpleMessageBox(const char *pszText, const char *pszTitle,
 
 #ifdef __ANDROID__
 extern "C" JNIEXPORT void JNICALL
-Java_org_tvp_kirikiri2_KR2Activity_nativeOnMessageBoxResult(
+Java_org_github_krkr2_aetherkiri_EngineBridge_nativeOnMessageBoxResult(
     JNIEnv* /* env */, jclass /* clazz */, jint result) {
     std::lock_guard<std::mutex> lk(MessageBoxLock);
     MsgBoxRet = static_cast<int>(result);
@@ -948,18 +691,12 @@ Java_org_tvp_kirikiri2_KR2Activity_nativeOnMessageBoxResult(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_tvp_kirikiri2_KR2Activity_nativeOnInputBoxResult(
+Java_org_github_krkr2_aetherkiri_EngineBridge_nativeOnInputBoxResult(
     JNIEnv* /* env */, jclass /* clazz */, jint result, jstring text) {
     std::lock_guard<std::mutex> lk(MessageBoxLock);
     MsgBoxRet = static_cast<int>(result);
     MessageBoxRetText = JniHelper::jstring2string(text);
     MessageBoxCond.notify_all();
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_org_godotengine_godot_utils_DialogUtils_dialogCallback(
-    JNIEnv* env, jclass clazz, jint result) {
-    GodotDialogCallback(env, clazz, result);
 }
 #endif
 
@@ -982,49 +719,10 @@ int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
 int TVPShowSimpleInputBox(ttstr &text, const ttstr &caption,
                           const ttstr &prompt,
                           const std::vector<ttstr> &vecButtons) {
-    JniMethodInfo methodInfo;
-    if(JniHelper::getStaticMethodInfo(
-           methodInfo, "org/tvp/kirikiri2/KR2Activity", "ShowInputBox",
-           "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/"
-           "String;[Ljava/"
-           "lang/"
-           "String;)V")) {
-        jstring jstrTitle =
-            methodInfo.env->NewStringUTF(caption.AsStdString().c_str());
-        jstring jstrText =
-            methodInfo.env->NewStringUTF(text.AsStdString().c_str());
-        jstring jstrPrompt =
-            methodInfo.env->NewStringUTF(prompt.AsStdString().c_str());
-        jclass strcls = methodInfo.env->FindClass("java/lang/String");
-        jobjectArray btns =
-            methodInfo.env->NewObjectArray(vecButtons.size(), strcls, nullptr);
-        for(unsigned int i = 0; i < vecButtons.size(); ++i) {
-            jstring jstrBtn = methodInfo.env->NewStringUTF(
-                vecButtons[i].AsStdString().c_str());
-            methodInfo.env->SetObjectArrayElement(btns, i, jstrBtn);
-            methodInfo.env->DeleteLocalRef(jstrBtn);
-        }
-
-        MsgBoxRet = -2;
-        methodInfo.env->CallStaticVoidMethod(methodInfo.classID,
-                                             methodInfo.methodID, jstrTitle,
-                                             jstrPrompt, jstrText, btns);
-
-        methodInfo.env->DeleteLocalRef(jstrTitle);
-        methodInfo.env->DeleteLocalRef(jstrText);
-        methodInfo.env->DeleteLocalRef(jstrPrompt);
-        methodInfo.env->DeleteLocalRef(btns);
-        methodInfo.env->DeleteLocalRef(methodInfo.classID);
-
-        std::unique_lock<std::mutex> lk(MessageBoxLock);
-        while(MsgBoxRet == -2) {
-            MessageBoxCond.wait_for(lk, std::chrono::milliseconds(200));
-            if(MsgBoxRet == -2) {
-                TVPForceSwapBuffer(); // update opengl events
-            }
-        }
+    if(ShowBridgeInputBox(text, caption, prompt, vecButtons)) {
+        const int result = WaitForMessageBoxResult();
         text = MessageBoxRetText;
-        return MsgBoxRet;
+        return result;
     }
     return -1;
 }
@@ -1132,7 +830,7 @@ bool TVPCheckStartupArg() {
 void TVPControlAdDialog(int adType, int arg1, int arg2) {
     JniMethodInfo methodInfo;
     if(JniHelper::getStaticMethodInfo(methodInfo,
-                                      "org/tvp/kirikiri2/KR2Activity",
+                                      AetherKiriBridgeJavaPath,
                                       "MessageController", "(III)V")) {
         methodInfo.env->CallStaticVoidMethod(
             methodInfo.classID, methodInfo.methodID, adType, arg1, arg2);
@@ -1166,7 +864,7 @@ bool TVPCheckStartupPath(const std::string &path) {
     JniMethodInfo methodInfo;
     bool success = false;
     if(JniHelper::getStaticMethodInfo(
-           methodInfo, "org/tvp/kirikiri2/KR2Activity", "isWritableNormalOrSaf",
+           methodInfo, AetherKiriBridgeJavaPath, "isWritableNormalOrSaf",
            "(Ljava/lang/String;)Z")) {
         jstring jstrPath = methodInfo.env->NewStringUTF(parent.c_str());
         success = methodInfo.env->CallStaticBooleanMethod(
@@ -1242,7 +940,7 @@ static bool _posix_mkdirs(const std::string &path) {
 bool TVPCreateFolders(const ttstr &folder) {
     JniMethodInfo methodInfo;
     if(JniHelper::getStaticMethodInfo(
-           methodInfo, "org/tvp/kirikiri2/KR2Activity", "CreateFolders",
+           methodInfo, AetherKiriBridgeJavaPath, "CreateFolders",
            "(Ljava/lang/String;)Z")) {
         jstring jstr =
             methodInfo.env->NewStringUTF(folder.AsStdString().c_str());
@@ -1252,7 +950,7 @@ bool TVPCreateFolders(const ttstr &folder) {
         methodInfo.env->DeleteLocalRef(methodInfo.classID);
         return ret;
     }
-    // POSIX fallback for embedded host mode (no KR2Activity)
+    // POSIX fallback for embedded host mode.
     return _posix_mkdirs(folder.AsStdString());
 }
 
@@ -1260,20 +958,16 @@ static bool TVPWriteDataToFileJava(const std::string &filename,
                                    const void *data, unsigned int size) {
     JniMethodInfo methodInfo;
     if(JniHelper::getStaticMethodInfo(methodInfo,
-                                      "org/tvp/kirikiri2/KR2Activity",
+                                      AetherKiriBridgeJavaPath,
                                       "WriteFile", "(Ljava/lang/String;[B)Z")) {
-        bool ret = false;
-        int retry = 3;
-        do {
-            jstring jstr = methodInfo.env->NewStringUTF(filename.c_str());
-            jbyteArray arr = methodInfo.env->NewByteArray(size);
-            methodInfo.env->SetByteArrayRegion(arr, 0, size, (jbyte *)data);
-            ret = methodInfo.env->CallStaticBooleanMethod(
-                methodInfo.classID, methodInfo.methodID, jstr, arr);
-            methodInfo.env->DeleteLocalRef(arr);
-            methodInfo.env->DeleteLocalRef(jstr);
-            methodInfo.env->DeleteLocalRef(methodInfo.classID);
-        } while(access(filename.c_str(), F_OK) != 0 && --retry);
+        jstring jstr = methodInfo.env->NewStringUTF(filename.c_str());
+        jbyteArray arr = methodInfo.env->NewByteArray(size);
+        methodInfo.env->SetByteArrayRegion(arr, 0, size, (jbyte *)data);
+        bool ret = methodInfo.env->CallStaticBooleanMethod(
+            methodInfo.classID, methodInfo.methodID, jstr, arr);
+        methodInfo.env->DeleteLocalRef(arr);
+        methodInfo.env->DeleteLocalRef(jstr);
+        methodInfo.env->DeleteLocalRef(methodInfo.classID);
         return ret;
     }
     return false;
@@ -1319,7 +1013,7 @@ std::string TVPGetCurrentLanguage() {
     JniMethodInfo t;
     std::string ret("");
 
-    if(JniHelper::getStaticMethodInfo(t, "org/tvp/kirikiri2/KR2Activity",
+    if(JniHelper::getStaticMethodInfo(t, AetherKiriBridgeJavaPath,
                                       "getLocaleName",
                                       "()Ljava/lang/String;")) {
         jstring str =
@@ -1350,7 +1044,7 @@ void TVPExitApplication(int code) {
         // Ignore – we are shutting down anyway.
     }
     JniMethodInfo t;
-    if(JniHelper::getStaticMethodInfo(t, "org/tvp/kirikiri2/KR2Activity",
+    if(JniHelper::getStaticMethodInfo(t, AetherKiriBridgeJavaPath,
                                       "exit", "()V")) {
         t.env->CallStaticVoidMethod(t.classID, t.methodID);
         t.env->DeleteLocalRef(t.classID);
@@ -1364,7 +1058,7 @@ void TVPExitApplication(int code) {
 void TVPHideIME() {
     JniMethodInfo methodInfo;
     if(JniHelper::getStaticMethodInfo(methodInfo,
-                                      "org/tvp/kirikiri2/KR2Activity",
+                                      AetherKiriBridgeJavaPath,
                                       "hideTextInput", "()V")) {
         methodInfo.env->CallStaticVoidMethod(methodInfo.classID,
                                              methodInfo.methodID);
@@ -1374,7 +1068,7 @@ void TVPHideIME() {
 void TVPShowIME(int x, int y, int w, int h) {
     JniMethodInfo methodInfo;
     if(JniHelper::getStaticMethodInfo(methodInfo,
-                                      "org/tvp/kirikiri2/KR2Activity",
+                                      AetherKiriBridgeJavaPath,
                                       "showTextInput", "(IIII)V")) {
         methodInfo.env->CallStaticVoidMethod(methodInfo.classID,
                                              methodInfo.methodID, x, y, w, h);
@@ -1386,7 +1080,7 @@ void TVPProcessInputEvents() {}
 bool TVPDeleteFile(const std::string &filename) {
     JniMethodInfo methodInfo;
     if(JniHelper::getStaticMethodInfo(methodInfo,
-                                      "org/tvp/kirikiri2/KR2Activity",
+                                      AetherKiriBridgeJavaPath,
                                       "DeleteFile", "(Ljava/lang/String;)Z")) {
         jstring jstr = methodInfo.env->NewStringUTF(filename.c_str());
         bool ret = methodInfo.env->CallStaticBooleanMethod(
@@ -1402,7 +1096,7 @@ bool TVPDeleteFile(const std::string &filename) {
 bool TVPRenameFile(const std::string &from, const std::string &to) {
     JniMethodInfo methodInfo;
     if(JniHelper::getStaticMethodInfo(
-           methodInfo, "org/tvp/kirikiri2/KR2Activity", "RenameFile",
+           methodInfo, AetherKiriBridgeJavaPath, "RenameFile",
            "(Ljava/lang/String;Ljava/lang/String;)Z")) {
         jstring jstr = methodInfo.env->NewStringUTF(from.c_str());
         jstring jstr2 = methodInfo.env->NewStringUTF(to.c_str());
