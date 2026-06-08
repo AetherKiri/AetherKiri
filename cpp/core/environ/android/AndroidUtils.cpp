@@ -562,6 +562,353 @@ namespace kr2android {
 } // namespace kr2android
 using namespace kr2android;
 
+namespace {
+
+void ClearJniException(JNIEnv *env) {
+    if(env != nullptr && env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
+}
+
+jobject GetApplicationContextLocal(JNIEnv *env) {
+    if(env == nullptr) return nullptr;
+
+    jobject ctx = krkr_GetApplicationContext();
+    if(ctx != nullptr) {
+        return env->NewLocalRef(ctx);
+    }
+
+    jclass activityThreadClass = env->FindClass("android/app/ActivityThread");
+    if(activityThreadClass == nullptr) {
+        ClearJniException(env);
+        return nullptr;
+    }
+
+    jmethodID currentApplication = env->GetStaticMethodID(
+        activityThreadClass, "currentApplication",
+        "()Landroid/app/Application;");
+    if(currentApplication == nullptr) {
+        ClearJniException(env);
+        env->DeleteLocalRef(activityThreadClass);
+        return nullptr;
+    }
+
+    jobject app = env->CallStaticObjectMethod(activityThreadClass,
+                                             currentApplication);
+    env->DeleteLocalRef(activityThreadClass);
+    if(env->ExceptionCheck() || app == nullptr) {
+        ClearJniException(env);
+        return nullptr;
+    }
+    return app;
+}
+
+jclass FindClassWithAppClassLoader(JNIEnv *env, const char *className) {
+    if(env == nullptr || className == nullptr) return nullptr;
+
+    jclass cls = env->FindClass(className);
+    if(cls != nullptr && !env->ExceptionCheck()) {
+        return cls;
+    }
+    ClearJniException(env);
+
+    jobject appContext = GetApplicationContextLocal(env);
+    if(appContext == nullptr) return nullptr;
+
+    jclass contextClass = env->FindClass("android/content/Context");
+    if(contextClass == nullptr) {
+        ClearJniException(env);
+        env->DeleteLocalRef(appContext);
+        return nullptr;
+    }
+
+    jmethodID getClassLoader = env->GetMethodID(
+        contextClass, "getClassLoader", "()Ljava/lang/ClassLoader;");
+    if(getClassLoader == nullptr) {
+        ClearJniException(env);
+        env->DeleteLocalRef(contextClass);
+        env->DeleteLocalRef(appContext);
+        return nullptr;
+    }
+
+    jobject classLoader = env->CallObjectMethod(appContext, getClassLoader);
+    env->DeleteLocalRef(contextClass);
+    env->DeleteLocalRef(appContext);
+    if(env->ExceptionCheck() || classLoader == nullptr) {
+        ClearJniException(env);
+        return nullptr;
+    }
+
+    jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
+    if(classLoaderClass == nullptr) {
+        ClearJniException(env);
+        env->DeleteLocalRef(classLoader);
+        return nullptr;
+    }
+
+    jmethodID loadClass = env->GetMethodID(
+        classLoaderClass, "loadClass",
+        "(Ljava/lang/String;)Ljava/lang/Class;");
+    if(loadClass == nullptr) {
+        ClearJniException(env);
+        env->DeleteLocalRef(classLoaderClass);
+        env->DeleteLocalRef(classLoader);
+        return nullptr;
+    }
+
+    std::string dottedName(className);
+    for(char &c : dottedName) {
+        if(c == '/') c = '.';
+    }
+    jstring classNameJava = env->NewStringUTF(dottedName.c_str());
+    jobject classObject =
+        env->CallObjectMethod(classLoader, loadClass, classNameJava);
+
+    env->DeleteLocalRef(classNameJava);
+    env->DeleteLocalRef(classLoaderClass);
+    env->DeleteLocalRef(classLoader);
+
+    if(env->ExceptionCheck() || classObject == nullptr) {
+        ClearJniException(env);
+        return nullptr;
+    }
+
+    return static_cast<jclass>(classObject);
+}
+
+jobject GetGodotActivity(JNIEnv *env) {
+    if(env == nullptr) return nullptr;
+
+    jobject appContext = GetApplicationContextLocal(env);
+    if(appContext == nullptr) return nullptr;
+
+    jclass godotClass = FindClassWithAppClassLoader(env,
+                                                    "org/godotengine/godot/Godot");
+    if(godotClass == nullptr) {
+        env->DeleteLocalRef(appContext);
+        return nullptr;
+    }
+
+    jmethodID getInstance = env->GetStaticMethodID(
+        godotClass, "getInstance",
+        "(Landroid/content/Context;)Lorg/godotengine/godot/Godot;");
+    if(getInstance == nullptr) {
+        ClearJniException(env);
+        env->DeleteLocalRef(godotClass);
+        env->DeleteLocalRef(appContext);
+        return nullptr;
+    }
+
+    jobject godot = env->CallStaticObjectMethod(godotClass, getInstance,
+                                                appContext);
+    env->DeleteLocalRef(appContext);
+    if(env->ExceptionCheck() || godot == nullptr) {
+        ClearJniException(env);
+        env->DeleteLocalRef(godotClass);
+        return nullptr;
+    }
+
+    jmethodID getActivity = env->GetMethodID(
+        godotClass, "getActivity", "()Landroid/app/Activity;");
+    if(getActivity == nullptr) {
+        ClearJniException(env);
+        env->DeleteLocalRef(godot);
+        env->DeleteLocalRef(godotClass);
+        return nullptr;
+    }
+
+    jobject activity = env->CallObjectMethod(godot, getActivity);
+    env->DeleteLocalRef(godot);
+    env->DeleteLocalRef(godotClass);
+    if(env->ExceptionCheck() || activity == nullptr) {
+        ClearJniException(env);
+        return nullptr;
+    }
+    return activity;
+}
+
+void JNICALL GodotDialogCallback(JNIEnv * /* env */, jclass /* clazz */,
+                                 jint result) {
+    std::lock_guard<std::mutex> lk(MessageBoxLock);
+    MsgBoxRet = static_cast<int>(result);
+    MessageBoxCond.notify_all();
+}
+
+bool RegisterGodotDialogCallback(JNIEnv *env, jclass dialogUtilsClass) {
+    static std::mutex registerMutex;
+    static bool registered = false;
+
+    if(env == nullptr || dialogUtilsClass == nullptr) return false;
+    std::lock_guard<std::mutex> guard(registerMutex);
+    if(registered) return true;
+
+    JNINativeMethod methods[] = {
+        {const_cast<char *>("dialogCallback"), const_cast<char *>("(I)V"),
+         reinterpret_cast<void *>(&GodotDialogCallback)},
+    };
+    if(env->RegisterNatives(dialogUtilsClass, methods, 1) != JNI_OK) {
+        ClearJniException(env);
+        __android_log_print(ANDROID_LOG_WARN, "krkr2",
+                            "RegisterNatives(DialogUtils.dialogCallback) failed");
+        return false;
+    }
+
+    registered = true;
+    return true;
+}
+
+jobjectArray NewJavaButtonArray(JNIEnv *env, unsigned int nButton,
+                                const char **btnText) {
+    if(env == nullptr) return nullptr;
+    jclass strcls = env->FindClass("java/lang/String");
+    if(strcls == nullptr) {
+        ClearJniException(env);
+        return nullptr;
+    }
+
+    jobjectArray btns = env->NewObjectArray(nButton, strcls, nullptr);
+    env->DeleteLocalRef(strcls);
+    if(btns == nullptr) {
+        ClearJniException(env);
+        return nullptr;
+    }
+
+    for(unsigned int i = 0; i < nButton; ++i) {
+        const char *text = (btnText != nullptr && btnText[i] != nullptr)
+            ? btnText[i]
+            : "";
+        jstring jstrBtn = env->NewStringUTF(text);
+        if(jstrBtn == nullptr) {
+            ClearJniException(env);
+            continue;
+        }
+        env->SetObjectArrayElement(btns, i, jstrBtn);
+        env->DeleteLocalRef(jstrBtn);
+    }
+    return btns;
+}
+
+jobject GetStaticObjectFieldByName(JNIEnv *env, jclass cls,
+                                   const char *firstName,
+                                   const char *secondName,
+                                   const char *signature) {
+    if(env == nullptr || cls == nullptr || signature == nullptr) return nullptr;
+
+    jfieldID field = nullptr;
+    if(firstName != nullptr) {
+        field = env->GetStaticFieldID(cls, firstName, signature);
+        if(field == nullptr) ClearJniException(env);
+    }
+    if(field == nullptr && secondName != nullptr) {
+        field = env->GetStaticFieldID(cls, secondName, signature);
+        if(field == nullptr) ClearJniException(env);
+    }
+    if(field == nullptr) return nullptr;
+
+    jobject value = env->GetStaticObjectField(cls, field);
+    if(env->ExceptionCheck() || value == nullptr) {
+        ClearJniException(env);
+        return nullptr;
+    }
+    return value;
+}
+
+int WaitForMessageBoxResult() {
+    std::unique_lock<std::mutex> lk(MessageBoxLock);
+    while(MsgBoxRet == -2) {
+        MessageBoxCond.wait_for(lk, std::chrono::milliseconds(200));
+        if(MsgBoxRet == -2) {
+            TVPForceSwapBuffer(); // update opengl events
+        }
+    }
+    return MsgBoxRet;
+}
+
+bool ShowGodotMessageBox(const char *pszText, const char *pszTitle,
+                         unsigned int nButton, const char **btnText) {
+    JNIEnv *env = JniHelper::getEnv();
+    if(env == nullptr) return false;
+
+    jobject activity = GetGodotActivity(env);
+    if(activity == nullptr) return false;
+
+    jclass dialogUtilsClass = FindClassWithAppClassLoader(
+        env, "org/godotengine/godot/utils/DialogUtils");
+    if(dialogUtilsClass == nullptr) {
+        env->DeleteLocalRef(activity);
+        return false;
+    }
+
+    if(!RegisterGodotDialogCallback(env, dialogUtilsClass)) {
+        env->DeleteLocalRef(dialogUtilsClass);
+        env->DeleteLocalRef(activity);
+        return false;
+    }
+
+    jobject companion = GetStaticObjectFieldByName(
+        env, dialogUtilsClass, "INSTANCE", "Companion",
+        "Lorg/godotengine/godot/utils/DialogUtils$Companion;");
+    if(companion == nullptr) {
+        env->DeleteLocalRef(dialogUtilsClass);
+        env->DeleteLocalRef(activity);
+        return false;
+    }
+
+    jclass companionClass = env->GetObjectClass(companion);
+    if(companionClass == nullptr) {
+        ClearJniException(env);
+        env->DeleteLocalRef(companion);
+        env->DeleteLocalRef(dialogUtilsClass);
+        env->DeleteLocalRef(activity);
+        return false;
+    }
+
+    jmethodID showDialog = env->GetMethodID(
+        companionClass, "showDialog$lib_templateDebug",
+        "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;"
+        "[Ljava/lang/String;)V");
+    if(showDialog == nullptr) {
+        ClearJniException(env);
+        env->DeleteLocalRef(companionClass);
+        env->DeleteLocalRef(companion);
+        env->DeleteLocalRef(dialogUtilsClass);
+        env->DeleteLocalRef(activity);
+        return false;
+    }
+
+    jstring jstrTitle = env->NewStringUTF(pszTitle != nullptr ? pszTitle : "");
+    jstring jstrText = env->NewStringUTF(pszText != nullptr ? pszText : "");
+    jobjectArray btns = NewJavaButtonArray(env, nButton, btnText);
+    if(jstrTitle == nullptr || jstrText == nullptr || btns == nullptr) {
+        ClearJniException(env);
+        if(jstrTitle != nullptr) env->DeleteLocalRef(jstrTitle);
+        if(jstrText != nullptr) env->DeleteLocalRef(jstrText);
+        if(btns != nullptr) env->DeleteLocalRef(btns);
+        env->DeleteLocalRef(companionClass);
+        env->DeleteLocalRef(companion);
+        env->DeleteLocalRef(dialogUtilsClass);
+        env->DeleteLocalRef(activity);
+        return false;
+    }
+
+    MsgBoxRet = -2;
+    env->CallVoidMethod(companion, showDialog, activity, jstrTitle, jstrText,
+                        btns);
+    const bool ok = !env->ExceptionCheck();
+    ClearJniException(env);
+
+    env->DeleteLocalRef(jstrTitle);
+    env->DeleteLocalRef(jstrText);
+    env->DeleteLocalRef(btns);
+    env->DeleteLocalRef(companionClass);
+    env->DeleteLocalRef(companion);
+    env->DeleteLocalRef(dialogUtilsClass);
+    env->DeleteLocalRef(activity);
+    return ok;
+}
+
+} // namespace
+
 int TVPShowSimpleMessageBox(const char *pszText, const char *pszTitle,
                             unsigned int nButton, const char **btnText) {
     JniMethodInfo methodInfo;
@@ -572,31 +919,21 @@ int TVPShowSimpleMessageBox(const char *pszText, const char *pszTitle,
         MsgBoxRet = -2;
         jstring jstrTitle = methodInfo.env->NewStringUTF(pszTitle);
         jstring jstrText = methodInfo.env->NewStringUTF(pszText);
-        jclass strcls = methodInfo.env->FindClass("java/lang/String");
-        jobjectArray btns =
-            methodInfo.env->NewObjectArray(nButton, strcls, nullptr);
-        for(unsigned int i = 0; i < nButton; ++i) {
-            jstring jstrBtn = methodInfo.env->NewStringUTF(btnText[i]);
-            methodInfo.env->SetObjectArrayElement(btns, i, jstrBtn);
-            methodInfo.env->DeleteLocalRef(jstrBtn);
-        }
+        jobjectArray btns = NewJavaButtonArray(methodInfo.env, nButton, btnText);
 
         methodInfo.env->CallStaticVoidMethod(
             methodInfo.classID, methodInfo.methodID, jstrTitle, jstrText, btns);
 
         methodInfo.env->DeleteLocalRef(jstrTitle);
         methodInfo.env->DeleteLocalRef(jstrText);
-        methodInfo.env->DeleteLocalRef(btns);
+        if(btns != nullptr) methodInfo.env->DeleteLocalRef(btns);
         methodInfo.env->DeleteLocalRef(methodInfo.classID);
 
-        std::unique_lock<std::mutex> lk(MessageBoxLock);
-        while(MsgBoxRet == -2) {
-            MessageBoxCond.wait_for(lk, std::chrono::milliseconds(200));
-            if(MsgBoxRet == -2) {
-                TVPForceSwapBuffer(); // update opengl events
-            }
-        }
-        return MsgBoxRet;
+        return WaitForMessageBoxResult();
+    }
+
+    if(ShowGodotMessageBox(pszText, pszTitle, nButton, btnText)) {
+        return WaitForMessageBoxResult();
     }
     return -1;
 }
@@ -618,6 +955,12 @@ Java_org_tvp_kirikiri2_KR2Activity_nativeOnInputBoxResult(
     MessageBoxRetText = JniHelper::jstring2string(text);
     MessageBoxCond.notify_all();
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_godotengine_godot_utils_DialogUtils_dialogCallback(
+    JNIEnv* env, jclass clazz, jint result) {
+    GodotDialogCallback(env, clazz, result);
+}
 #endif
 
 int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
@@ -633,7 +976,7 @@ int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
         btnText.emplace_back(btnTextHold.back().c_str());
     }
     return TVPShowSimpleMessageBox(pszText, pszTitle, btnText.size(),
-                                   &btnText[0]);
+                                   btnText.empty() ? nullptr : &btnText[0]);
 }
 
 int TVPShowSimpleInputBox(ttstr &text, const ttstr &caption,
