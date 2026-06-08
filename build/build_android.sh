@@ -249,22 +249,49 @@ PY
     rm -f "$replaced_path"
 }
 
-sign_debug_apk() {
+sign_android_apk() {
     local apk_path="$1"
+    local signing_profile="$2"
     local apksigner_bin
-    local debug_keystore="${ANDROID_DEBUG_KEYSTORE:-$HOME/.android/debug.keystore}"
+    local keystore_path
+    local key_alias
+    local store_password
+    local key_password
 
-    if [[ ! -f "$debug_keystore" ]]; then
-        echo "Error: Android debug keystore not found at $debug_keystore." >&2
+    case "$signing_profile" in
+        debug)
+            keystore_path="${GODOT_ANDROID_KEYSTORE_DEBUG_PATH:-${ANDROID_DEBUG_KEYSTORE:-$HOME/.android/debug.keystore}}"
+            key_alias="${GODOT_ANDROID_KEYSTORE_DEBUG_USER:-${ANDROID_DEBUG_KEYSTORE_ALIAS:-androiddebugkey}}"
+            store_password="${GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD:-${ANDROID_DEBUG_KEYSTORE_PASSWORD:-android}}"
+            key_password="${GODOT_ANDROID_KEYSTORE_DEBUG_KEY_PASSWORD:-${ANDROID_DEBUG_KEY_PASSWORD:-$store_password}}"
+            ;;
+        release)
+            keystore_path="${GODOT_ANDROID_KEYSTORE_RELEASE_PATH:-${ANDROID_RELEASE_KEYSTORE:-}}"
+            key_alias="${GODOT_ANDROID_KEYSTORE_RELEASE_USER:-${ANDROID_RELEASE_KEYSTORE_ALIAS:-}}"
+            store_password="${GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD:-${ANDROID_RELEASE_KEYSTORE_PASSWORD:-}}"
+            key_password="${GODOT_ANDROID_KEYSTORE_RELEASE_KEY_PASSWORD:-${ANDROID_RELEASE_KEY_PASSWORD:-$store_password}}"
+            ;;
+        *)
+            echo "Error: Unsupported Android signing profile '$signing_profile'." >&2
+            exit 1
+            ;;
+    esac
+
+    if [[ -z "$keystore_path" || ! -f "$keystore_path" ]]; then
+        echo "Error: Android $signing_profile keystore not found at ${keystore_path:-<unset>}." >&2
+        exit 1
+    fi
+    if [[ -z "$key_alias" || -z "$store_password" || -z "$key_password" ]]; then
+        echo "Error: Android $signing_profile signing credentials are incomplete." >&2
         exit 1
     fi
 
     apksigner_bin="$(find_android_build_tool apksigner)"
     "$apksigner_bin" sign \
-        --ks "$debug_keystore" \
-        --ks-pass pass:android \
-        --key-pass pass:android \
-        --ks-key-alias androiddebugkey \
+        --ks "$keystore_path" \
+        --ks-pass "pass:$store_password" \
+        --key-pass "pass:$key_password" \
+        --ks-key-alias "$key_alias" \
         "$apk_path"
 }
 
@@ -283,8 +310,8 @@ repair_android_apk() {
         needs_signing=1
     fi
 
-    if [[ "$needs_signing" == "1" && "$BUILD_TYPE_LOWER" == "debug" ]]; then
-        sign_debug_apk "$apk_path"
+    if [[ "$needs_signing" == "1" ]]; then
+        sign_android_apk "$apk_path" "$BUILD_TYPE_LOWER"
     fi
 }
 
