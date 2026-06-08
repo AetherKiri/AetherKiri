@@ -5,8 +5,9 @@ const SETTINGS_KEY := "aether_kiri/render_backend"
 const GAME_PATH_KEY := "aether_kiri/game_path"
 const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
-const UI_FONT := preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
-const UI_SYMBOL_FONT := preload("res://assets/fonts/aetherkiri-runtime-symbols.ttf")
+const ANDROID_READ_EXTERNAL_STORAGE := "android.permission.READ_EXTERNAL_STORAGE"
+const ANDROID_MANAGE_EXTERNAL_STORAGE := "android.permission.MANAGE_EXTERNAL_STORAGE"
+const ANDROID_EXTERNAL_STORAGE_DOCUMENTS := "com.android.externalstorage.documents"
 
 const ENGINE_RESULT_OK := 0
 const STARTUP_IDLE := 0
@@ -18,12 +19,27 @@ const POINTER_DOWN := 1
 const POINTER_MOVE := 2
 const POINTER_UP := 3
 const POINTER_SCROLL := 4
+const KEY_BACKSPACE := 0x08
+const KEY_ENTER := 0x0D
+const SOFT_KEYBOARD_MARKER := " "
 
 var backend: OptionButton
 var game_path: LineEdit
 var restart_notice: Label
 var viewport: TextureRect
 var perf: Label
+var runtime_menu_button: Button
+var runtime_overlay: PanelContainer
+var runtime_overlay_box: VBoxContainer
+var game_menu_dialog: PanelContainer
+var game_menu_list: VBoxContainer
+var game_menu_title: Label
+var game_menu_back_button: Button
+var debug_panel: PanelContainer
+var debug_log_view: TextEdit
+var debug_title: Label
+var soft_keyboard_input: LineEdit
+var virtual_cursor: Label
 var log_view: TextEdit
 var shell_root: Control
 var home_view: Control
@@ -36,8 +52,11 @@ var loading_panel: PanelContainer
 var game_scroll: ScrollContainer
 var game_list: GridContainer
 var home_actions: HBoxContainer
+var home_title: Label
+var home_settings_button: Button
 var empty_state: Control
 var save_button: Button
+var loading_margin: MarginContainer
 var bg_rect: ColorRect
 var selected_game := {}
 var known_games: Array[Dictionary] = []
@@ -60,6 +79,18 @@ var rounded_card_shader: Shader
 var upscale_shader: Shader
 var opaque_frame_shader: Shader
 var shown_system_alerts := {}
+var android_storage_permission_requested := false
+var runtime_overlay_visible := false
+var game_menu_stack: Array[Dictionary] = []
+var debug_panel_visible := false
+var game_paused := false
+var soft_keyboard_visible := false
+var soft_keyboard_shadow_text := ""
+var virtual_cursor_enabled := false
+var virtual_cursor_position := Vector2.ZERO
+var virtual_cursor_initialized := false
+var virtual_cursor_active := false
+var virtual_cursor_dragged := false
 
 var player = null
 var selected_backend := "Godot Native"
@@ -93,6 +124,7 @@ var log_lines: PackedStringArray = []
 var suppress_mouse_until_msec := 0
 var current_surface_size := Vector2i.ZERO
 var render_surface_max_size := RENDER_SURFACE_MAX_SIZE
+var cached_device_form := ""
 const LOG_DRAIN_INTERVAL := 0.50
 const STARTUP_POLL_INTERVAL := 0.16
 const PERF_UPDATE_INTERVAL := 0.25
@@ -103,6 +135,9 @@ const RENDER_SURFACE_MAX_SIZE := Vector2i(3200, 1800)
 const INITIAL_WINDOW_SIZE := Vector2i(2240, 1260)
 const DEFAULT_UI_DPI_SCALE := 1.35
 const TOUCH_MOUSE_SUPPRESS_MS := 700
+const VIRTUAL_CURSOR_HOTSPOT := Vector2(6, 6)
+const PHONE_SHORT_SIDE_MAX := 1180.0
+const PHONE_ASPECT_MIN := 1.35
 const COLOR_BG := Color(0.944, 0.932, 0.895, 1.0)
 const COLOR_GAME_BG := Color(0, 0, 0, 1)
 const COLOR_CARD := Color(0.985, 0.98, 0.955, 1.0)
@@ -114,11 +149,7 @@ const COLOR_LINE := Color(0.84, 0.82, 0.76, 1.0)
 const HOME_CARD_SIZE := Vector2(260, 350)
 
 func _apply_ui_font() -> void:
-    var fallbacks: Array[Font] = [UI_SYMBOL_FONT]
-    UI_FONT.set_fallbacks(fallbacks)
-    var ui_theme := Theme.new()
-    ui_theme.set_default_font(UI_FONT)
-    theme = ui_theme
+    theme = Theme.new()
 
 func _build_ui() -> void:
     bg_rect = ColorRect.new()
@@ -174,6 +205,7 @@ func _build_ui() -> void:
     restart_notice.visible = false
     game_view.add_child(restart_notice)
 
+    _build_runtime_controls()
     _build_loading_panel()
     _fit_full_rects()
 
@@ -238,12 +270,75 @@ func _apply_engine_options() -> void:
     player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
 
 func _apply_shell_runtime_settings() -> void:
-    if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        var orientation := DisplayServer.SCREEN_LANDSCAPE if lock_landscape else DisplayServer.SCREEN_SENSOR
-        DisplayServer.screen_set_orientation(orientation)
+    if not _is_touch_platform():
+        return
+    if game_running or not active_game_path.is_empty():
+        if _is_phone_layout() or lock_landscape:
+            DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
+            return
+    if _is_phone_layout():
+        DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_PORTRAIT)
+        return
+    DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR)
+
+func _window_safe_area() -> Rect2:
+    if not _is_touch_platform():
+        return Rect2(Vector2.ZERO, get_viewport_rect().size)
+    var safe := DisplayServer.get_display_safe_area()
+    if safe.size.x <= 0 or safe.size.y <= 0:
+        return Rect2(Vector2.ZERO, get_viewport_rect().size)
+    return Rect2(Vector2(safe.position), Vector2(safe.size))
+
+func _safe_insets() -> Vector4:
+    var window_size := get_viewport_rect().size
+    var safe := _window_safe_area()
+    return Vector4(
+        maxf(0.0, safe.position.x),
+        maxf(0.0, safe.position.y),
+        maxf(0.0, window_size.x - safe.position.x - safe.size.x),
+        maxf(0.0, window_size.y - safe.position.y - safe.size.y)
+    )
+
+func _safe_content_rect(extra_margin: float = 0.0) -> Rect2:
+    var window_size := get_viewport_rect().size
+    var insets := _safe_insets()
+    var left := insets.x + extra_margin
+    var top := insets.y + extra_margin
+    var right := insets.z + extra_margin
+    var bottom := insets.w + extra_margin
+    return Rect2(
+        Vector2(left, top),
+        Vector2(maxf(1.0, window_size.x - left - right), maxf(1.0, window_size.y - top - bottom))
+    )
+
+func _is_phone_layout() -> bool:
+    if not _is_touch_platform():
+        return false
+    var window_size := get_viewport_rect().size
+    if window_size.x <= 0.0 or window_size.y <= 0.0:
+        window_size = Vector2(DisplayServer.window_get_size())
+    var short_side := minf(window_size.x, window_size.y)
+    var long_side := maxf(window_size.x, window_size.y)
+    return short_side <= PHONE_SHORT_SIDE_MAX and (long_side / maxf(short_side, 1.0)) >= PHONE_ASPECT_MIN
+
+func _device_form() -> String:
+    if _is_phone_layout():
+        return "phone"
+    if _is_touch_platform():
+        return "large_touch"
+    return "large"
+
+func _update_device_form() -> void:
+    var next := _device_form()
+    if cached_device_form == next:
+        return
+    cached_device_form = next
+    if settings_view != null and settings_view.visible:
+        call_deferred("_rebuild_settings_view")
 
 func _fit_full_rects() -> void:
     var window_size := get_viewport_rect().size
+    _update_device_form()
     anchor_left = 0.0
     anchor_top = 0.0
     anchor_right = 0.0
@@ -261,6 +356,8 @@ func _fit_full_rects() -> void:
         control.offset_bottom = 0.0
     _layout_game_viewport(window_size)
     _layout_home_view(window_size)
+    _layout_loading_panel()
+    _layout_game_overlay()
 
 func _layout_game_viewport(window_size: Vector2) -> void:
     if viewport == null:
@@ -284,7 +381,10 @@ func _layout_game_viewport(window_size: Vector2) -> void:
             max(1.0, float(viewport.texture.get_height()))
         )
 
-    var scale := minf(window_size.x / tex_size.x, window_size.y / tex_size.y)
+    var content_rect := Rect2(Vector2.ZERO, window_size)
+    if _is_phone_layout() and not game_running:
+        content_rect = _safe_content_rect(0.0)
+    var scale := minf(content_rect.size.x / tex_size.x, content_rect.size.y / tex_size.y)
     scale = minf(scale, _max_game_view_scale())
     if scale <= 0.0:
         scale = 1.0
@@ -292,7 +392,7 @@ func _layout_game_viewport(window_size: Vector2) -> void:
         floor(tex_size.x * scale),
         floor(tex_size.y * scale)
     )
-    viewport.position = ((window_size - draw_size) * 0.5).floor()
+    viewport.position = (content_rect.position + (content_rect.size - draw_size) * 0.5).floor()
     viewport.size = draw_size
     viewport.custom_minimum_size = draw_size
 
@@ -395,49 +495,765 @@ func _set_game_background(active: bool) -> void:
 func _layout_home_view(window_size: Vector2) -> void:
     if game_scroll == null or game_list == null:
         return
-    var margin := 32.0
-    var list_top := 164.0
-    var bottom_reserved := 132.0
-    var list_width := maxf(260.0, window_size.x - margin * 2.0)
-    var list_height := maxf(160.0, window_size.y - list_top - bottom_reserved)
-    game_scroll.position = Vector2(margin, list_top)
+    var safe := _safe_content_rect(0.0)
+    var is_phone := _is_phone_layout()
+    var margin := 20.0 if is_phone else 32.0
+    var top_bar := 92.0 if is_phone else 132.0
+    var bottom_reserved := 100.0 if is_phone else 132.0
+    var list_top := safe.position.y + top_bar
+    var list_width := maxf(260.0, safe.size.x - margin * 2.0)
+    var safe_bottom := window_size.y - safe.position.y - safe.size.y
+    var list_height := maxf(160.0, window_size.y - list_top - bottom_reserved - safe_bottom)
+    game_scroll.position = Vector2(safe.position.x + margin, list_top)
     game_scroll.size = Vector2(list_width, list_height)
     game_scroll.custom_minimum_size = game_scroll.size
 
-    var gap := 18.0
-    var columns := maxi(1, int(floor((list_width + gap) / (HOME_CARD_SIZE.x + gap))))
+    var gap := 14.0 if is_phone else 18.0
+    var columns := 1 if is_phone else maxi(1, int(floor((list_width + gap) / (HOME_CARD_SIZE.x + gap))))
     game_list.columns = columns
+    game_list.add_theme_constant_override("h_separation", gap)
+    game_list.add_theme_constant_override("v_separation", gap)
     game_list.custom_minimum_size = Vector2(list_width, 0)
 
+    if home_title != null:
+        home_title.position = Vector2(safe.position.x + margin + (0.0 if is_phone else 6.0), safe.position.y + (24.0 if is_phone else 96.0))
+        home_title.add_theme_font_size_override("font_size", 28 if is_phone else 28)
+
+    if home_settings_button != null:
+        home_settings_button.anchor_left = 0.0
+        home_settings_button.anchor_right = 0.0
+        home_settings_button.position = Vector2(safe.position.x + safe.size.x - margin - 64.0, safe.position.y + (14.0 if is_phone else 88.0))
+
     if home_actions != null:
-        home_actions.anchor_left = 1.0
+        home_actions.anchor_left = 0.0
         home_actions.anchor_top = 1.0
-        home_actions.anchor_right = 1.0
+        home_actions.anchor_right = 0.0
         home_actions.anchor_bottom = 1.0
-        home_actions.offset_left = -390.0
-        home_actions.offset_top = -108.0
-        home_actions.offset_right = -32.0
-        home_actions.offset_bottom = -44.0
+        var action_width := minf(358.0, safe.size.x - margin * 2.0)
+        home_actions.offset_left = safe.position.x + safe.size.x - margin - action_width
+        home_actions.offset_top = -safe_bottom - 84.0
+        home_actions.offset_right = home_actions.offset_left + action_width
+        home_actions.offset_bottom = -safe_bottom - 20.0
         home_actions.move_to_front()
+
+func _layout_loading_panel() -> void:
+    if loading_margin == null:
+        return
+    var safe := _safe_content_rect(0.0)
+    var inset := 24.0 if _is_phone_layout() else 34.0
+    loading_margin.add_theme_constant_override("margin_left", int(safe.position.x + inset))
+    loading_margin.add_theme_constant_override("margin_top", int(safe.position.y + inset))
+    loading_margin.add_theme_constant_override("margin_right", int(_safe_insets().z + inset))
+    loading_margin.add_theme_constant_override("margin_bottom", int(_safe_insets().w + inset))
+
+func _layout_game_overlay() -> void:
+    var safe := _safe_content_rect(0.0)
+    if perf != null:
+        perf.position = safe.position + Vector2(24, 18)
+    if restart_notice != null:
+        restart_notice.position = safe.position + Vector2(24, 44)
+    if runtime_menu_button != null:
+        runtime_menu_button.position = Vector2(safe.position.x + safe.size.x - 84.0, safe.position.y + 16.0)
+    if runtime_overlay != null:
+        runtime_overlay.position = Vector2(safe.position.x + safe.size.x - runtime_overlay.size.x - 16.0, safe.position.y + 86.0)
+    if game_menu_dialog != null:
+        var dialog_size := Vector2(minf(520.0, safe.size.x - 32.0), minf(620.0, safe.size.y - 48.0))
+        game_menu_dialog.size = dialog_size
+        game_menu_dialog.position = safe.position + (safe.size - dialog_size) * 0.5
+    if debug_panel != null:
+        var panel_size := Vector2(minf(760.0, safe.size.x - 32.0), minf(260.0, safe.size.y - 32.0))
+        debug_panel.size = panel_size
+        debug_panel.position = safe.position + Vector2(16, safe.size.y - panel_size.y - 16)
+    if soft_keyboard_input != null:
+        soft_keyboard_input.position = safe.position + Vector2(8, safe.size.y - 36.0)
+    _layout_virtual_cursor()
+
+func _build_runtime_controls() -> void:
+    runtime_menu_button = _runtime_icon_button("☰")
+    runtime_menu_button.visible = false
+    runtime_menu_button.pressed.connect(_toggle_runtime_overlay)
+    game_view.add_child(runtime_menu_button)
+
+    runtime_overlay = PanelContainer.new()
+    runtime_overlay.visible = false
+    runtime_overlay.size = Vector2(300, 262)
+    runtime_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+    runtime_overlay.add_theme_stylebox_override("panel", _panel_style(24, Color(0, 0, 0, 0.90), Color(1, 1, 1, 0.10), 1))
+    game_view.add_child(runtime_overlay)
+
+    runtime_overlay_box = VBoxContainer.new()
+    runtime_overlay_box.add_theme_constant_override("separation", 0)
+    runtime_overlay.add_child(runtime_overlay_box)
+
+    _rebuild_runtime_overlay()
+    _build_game_menu_dialog()
+    _build_debug_panel()
+    _build_mobile_input_helpers()
+
+func _runtime_icon_button(text: String) -> Button:
+    var button := Button.new()
+    button.text = text
+    button.custom_minimum_size = Vector2(68, 68)
+    button.add_theme_font_size_override("font_size", 36)
+    button.add_theme_color_override("font_color", Color(0.86, 0.86, 0.82, 1))
+    _apply_button_style(
+        button,
+        _panel_style(18, Color(0, 0, 0, 0.62), Color(1, 1, 1, 0.05), 1),
+        _panel_style(18, Color(0.08, 0.08, 0.08, 0.82), Color(1, 1, 1, 0.12), 1),
+        _panel_style(18, Color(0.16, 0.16, 0.16, 0.92), Color(1, 1, 1, 0.12), 1)
+    )
+    return button
+
+func _runtime_action(text: String, callback: Callable, destructive: bool = false) -> Button:
+    var button := Button.new()
+    button.text = text
+    button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    button.clip_text = true
+    button.custom_minimum_size = Vector2(252, 54)
+    button.add_theme_font_size_override("font_size", 22)
+    button.add_theme_color_override("font_color", Color(0.86, 0.86, 0.82, 1) if not destructive else Color(0.92, 0.25, 0.25, 1))
+    _apply_button_style(
+        button,
+        _panel_style(6, Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0),
+        _panel_style(6, Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 0),
+        _panel_style(6, Color(1, 1, 1, 0.13), Color(0, 0, 0, 0), 0)
+    )
+    button.pressed.connect(callback)
+    return button
+
+func _runtime_separator() -> Control:
+    var line := ColorRect.new()
+    line.color = Color(1, 1, 1, 0.24)
+    line.custom_minimum_size = Vector2(0, 1)
+    return line
+
+func _rebuild_runtime_overlay() -> void:
+    if runtime_overlay_box == null:
+        return
+    for child in runtime_overlay_box.get_children():
+        child.queue_free()
+    runtime_overlay_box.add_child(_runtime_action("▤   游戏菜单", _open_game_menu))
+    if _is_touch_platform():
+        runtime_overlay_box.add_child(_runtime_action(("☞   关闭鼠标光标" if virtual_cursor_enabled else "◖   开启鼠标光标"), _toggle_virtual_cursor))
+        runtime_overlay_box.add_child(_runtime_action(("⌨   隐藏键盘" if soft_keyboard_visible else "⌨   显示键盘"), _toggle_soft_keyboard))
+    runtime_overlay_box.add_child(_runtime_separator())
+    runtime_overlay_box.add_child(_runtime_action(("⚙   隐藏调试" if debug_panel_visible else "⚙   显示调试"), _toggle_debug_panel))
+    runtime_overlay_box.add_child(_runtime_action(("▶   继续" if game_paused else "Ⅱ   暂停"), _toggle_game_pause))
+    runtime_overlay_box.add_child(_runtime_separator())
+    runtime_overlay_box.add_child(_runtime_action("↪   退出游戏", _exit_current_game, true))
+    if runtime_overlay != null:
+        var action_count := 0
+        var separator_count := 0
+        for child in runtime_overlay_box.get_children():
+            if child is Button:
+                action_count += 1
+            else:
+                separator_count += 1
+        runtime_overlay.size = Vector2(300, 44.0 + float(action_count) * 54.0 + float(separator_count))
+        _layout_game_overlay()
+
+func _toggle_runtime_overlay() -> void:
+    runtime_overlay_visible = not runtime_overlay_visible
+    runtime_overlay.visible = runtime_overlay_visible
+    if runtime_overlay_visible:
+        _rebuild_runtime_overlay()
+        runtime_overlay.move_to_front()
+
+func _hide_runtime_overlay() -> void:
+    runtime_overlay_visible = false
+    if runtime_overlay != null:
+        runtime_overlay.visible = false
+
+func _build_game_menu_dialog() -> void:
+    game_menu_dialog = PanelContainer.new()
+    game_menu_dialog.visible = false
+    game_menu_dialog.mouse_filter = Control.MOUSE_FILTER_STOP
+    game_menu_dialog.add_theme_stylebox_override("panel", _panel_style(14, Color(0, 0, 0, 0.94), Color(1, 1, 1, 0.12), 1))
+    game_view.add_child(game_menu_dialog)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 12)
+    margin.add_theme_constant_override("margin_top", 10)
+    margin.add_theme_constant_override("margin_right", 12)
+    margin.add_theme_constant_override("margin_bottom", 12)
+    game_menu_dialog.add_child(margin)
+
+    var layout := VBoxContainer.new()
+    layout.add_theme_constant_override("separation", 10)
+    margin.add_child(layout)
+
+    var header := HBoxContainer.new()
+    header.custom_minimum_size = Vector2(0, 54)
+    layout.add_child(header)
+
+    game_menu_back_button = _runtime_icon_button("<")
+    game_menu_back_button.custom_minimum_size = Vector2(48, 48)
+    game_menu_back_button.add_theme_font_size_override("font_size", 24)
+    game_menu_back_button.pressed.connect(func():
+        _go_back_in_game_menu()
+    )
+    header.add_child(game_menu_back_button)
+
+    game_menu_title = Label.new()
+    game_menu_title.text = "游戏菜单"
+    game_menu_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    game_menu_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    game_menu_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    game_menu_title.clip_text = true
+    game_menu_title.add_theme_font_size_override("font_size", 22)
+    game_menu_title.add_theme_color_override("font_color", Color(0.92, 0.92, 0.88, 1))
+    header.add_child(game_menu_title)
+
+    var close := _runtime_icon_button("×")
+    close.custom_minimum_size = Vector2(48, 48)
+    close.add_theme_font_size_override("font_size", 30)
+    close.pressed.connect(func(): game_menu_dialog.visible = false)
+    header.add_child(close)
+
+    var line := _runtime_separator()
+    layout.add_child(line)
+
+    var scroll := ScrollContainer.new()
+    scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    layout.add_child(scroll)
+
+    game_menu_list = VBoxContainer.new()
+    game_menu_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    game_menu_list.add_theme_constant_override("separation", 2)
+    scroll.add_child(game_menu_list)
+
+func _build_debug_panel() -> void:
+    debug_panel = PanelContainer.new()
+    debug_panel.visible = false
+    debug_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+    debug_panel.add_theme_stylebox_override("panel", _panel_style(10, Color(0, 0, 0, 0.85), Color(1, 1, 1, 0.12), 1))
+    game_view.add_child(debug_panel)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 0)
+    margin.add_theme_constant_override("margin_top", 0)
+    margin.add_theme_constant_override("margin_right", 0)
+    margin.add_theme_constant_override("margin_bottom", 0)
+    debug_panel.add_child(margin)
+
+    var layout := VBoxContainer.new()
+    layout.add_theme_constant_override("separation", 0)
+    margin.add_child(layout)
+
+    var header_panel := PanelContainer.new()
+    header_panel.custom_minimum_size = Vector2(0, 36)
+    var header_style := _panel_style(0, Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 0)
+    header_style.content_margin_left = 12
+    header_style.content_margin_top = 3
+    header_style.content_margin_right = 6
+    header_style.content_margin_bottom = 3
+    header_panel.add_theme_stylebox_override("panel", header_style)
+    layout.add_child(header_panel)
+
+    var header := HBoxContainer.new()
+    header.add_theme_constant_override("separation", 8)
+    header_panel.add_child(header)
+
+    debug_title = Label.new()
+    debug_title.text = "调试日志"
+    debug_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    debug_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    debug_title.add_theme_font_size_override("font_size", 12)
+    debug_title.add_theme_color_override("font_color", Color(1, 1, 1, 0.70))
+    header.add_child(debug_title)
+
+    var clear_button := _debug_header_button("清空")
+    clear_button.pressed.connect(_clear_debug_logs)
+    header.add_child(clear_button)
+
+    var close_button := _debug_header_button("×")
+    close_button.custom_minimum_size = Vector2(34, 30)
+    close_button.add_theme_font_size_override("font_size", 18)
+    close_button.pressed.connect(_hide_debug_panel)
+    header.add_child(close_button)
+
+    debug_log_view = TextEdit.new()
+    debug_log_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    debug_log_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    debug_log_view.editable = false
+    debug_log_view.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+    debug_log_view.scroll_fit_content_height = false
+    debug_log_view.add_theme_font_size_override("font_size", 11)
+    debug_log_view.add_theme_color_override("font_color", Color(1, 1, 1, 0.54))
+    debug_log_view.add_theme_color_override("background_color", Color(0, 0, 0, 0))
+    debug_log_view.add_theme_color_override("caret_color", Color(0, 0, 0, 0))
+    layout.add_child(debug_log_view)
+
+func _debug_header_button(text: String) -> Button:
+    var button := Button.new()
+    button.text = text
+    button.custom_minimum_size = Vector2(58, 30)
+    button.clip_text = true
+    button.add_theme_font_size_override("font_size", 12)
+    button.add_theme_color_override("font_color", Color(1, 1, 1, 0.54))
+    _apply_button_style(
+        button,
+        _panel_style(4, Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0),
+        _panel_style(4, Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 0),
+        _panel_style(4, Color(1, 1, 1, 0.13), Color(0, 0, 0, 0), 0)
+    )
+    return button
+
+func _build_mobile_input_helpers() -> void:
+    if not _is_touch_platform():
+        return
+    soft_keyboard_input = LineEdit.new()
+    soft_keyboard_input.visible = false
+    soft_keyboard_input.size = Vector2(1, 1)
+    soft_keyboard_input.modulate = Color(1, 1, 1, 0.01)
+    soft_keyboard_input.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    soft_keyboard_input.virtual_keyboard_enabled = true
+    soft_keyboard_input.text_changed.connect(_on_soft_keyboard_text_changed)
+    soft_keyboard_input.text_submitted.connect(func(_text: String): _send_key_tap(KEY_ENTER, KEY_ENTER))
+    game_view.add_child(soft_keyboard_input)
+
+    virtual_cursor = Label.new()
+    virtual_cursor.visible = false
+    virtual_cursor.text = "◢"
+    virtual_cursor.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    virtual_cursor.custom_minimum_size = Vector2(48, 48)
+    virtual_cursor.add_theme_font_size_override("font_size", 42)
+    virtual_cursor.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
+    virtual_cursor.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))
+    virtual_cursor.add_theme_constant_override("shadow_offset_x", 2)
+    virtual_cursor.add_theme_constant_override("shadow_offset_y", 2)
+    game_view.add_child(virtual_cursor)
+
+func _open_game_menu() -> void:
+    _hide_runtime_overlay()
+    if player == null:
+        return
+    var menu_json := String(player.get_main_menu_json())
+    var parsed = JSON.parse_string(menu_json)
+    if not (parsed is Array):
+        _append_log("游戏菜单不可用: %s" % player.get_last_error())
+        return
+    game_menu_stack.clear()
+    game_menu_stack.append({"caption": "游戏菜单", "children": _visible_menu_entries(parsed as Array)})
+    _rebuild_game_menu_dialog()
+    game_menu_dialog.visible = true
+    game_menu_dialog.move_to_front()
+
+func _go_back_in_game_menu() -> bool:
+    if game_menu_stack.size() > 1:
+        game_menu_stack.remove_at(game_menu_stack.size() - 1)
+        _rebuild_game_menu_dialog()
+        return true
+    if game_menu_dialog != null and game_menu_dialog.visible:
+        game_menu_dialog.visible = false
+        return true
+    return false
+
+func _handle_runtime_back() -> bool:
+    if game_menu_dialog != null and game_menu_dialog.visible:
+        return _go_back_in_game_menu()
+    if runtime_overlay_visible:
+        _hide_runtime_overlay()
+        return true
+    if debug_panel != null and debug_panel.visible:
+        _hide_debug_panel()
+        return true
+    return false
+
+func _visible_menu_entries(entries: Array) -> Array[Dictionary]:
+    var result: Array[Dictionary] = []
+    for item in entries:
+        if not (item is Dictionary):
+            continue
+        var entry := item as Dictionary
+        if not bool(entry.get("visible", true)):
+            continue
+        var raw_children = entry.get("children", [])
+        entry["children"] = _visible_menu_entries(raw_children if raw_children is Array else [])
+        result.append(entry)
+    return result
+
+func _rebuild_game_menu_dialog() -> void:
+    if game_menu_list == null or game_menu_stack.is_empty():
+        return
+    for child in game_menu_list.get_children():
+        child.queue_free()
+
+    var current := game_menu_stack[game_menu_stack.size() - 1]
+    game_menu_title.text = String(current.get("caption", "游戏菜单"))
+    game_menu_back_button.visible = game_menu_stack.size() > 1
+    var entries: Array = current.get("children", [])
+    if entries.is_empty():
+        var empty := Label.new()
+        empty.text = "无菜单项"
+        empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+        empty.add_theme_font_size_override("font_size", 18)
+        empty.add_theme_color_override("font_color", Color(1, 1, 1, 0.45))
+        empty.custom_minimum_size = Vector2(0, 72)
+        game_menu_list.add_child(empty)
+        return
+
+    for entry in entries:
+        if not (entry is Dictionary):
+            continue
+        var item := entry as Dictionary
+        var children: Array = item.get("children", [])
+        if _is_game_menu_separator(item):
+            game_menu_list.add_child(_game_menu_separator())
+            continue
+        game_menu_list.add_child(_game_menu_entry_button(item))
+
+func _is_menu_separator_caption(caption: String) -> bool:
+    var text := caption.strip_edges()
+    if text.is_empty():
+        return true
+    for i in range(text.length()):
+        if text.substr(i, 1) != "-":
+            return false
+    return true
+
+func _is_game_menu_separator(entry: Dictionary) -> bool:
+    var children: Array = entry.get("children", [])
+    if not children.is_empty():
+        return false
+    if bool(entry.get("separator", false)):
+        return true
+    return _is_menu_separator_caption(String(entry.get("caption", "")))
+
+func _game_menu_separator() -> Control:
+    var margin := MarginContainer.new()
+    margin.custom_minimum_size = Vector2(0, 14)
+    margin.add_theme_constant_override("margin_left", 6)
+    margin.add_theme_constant_override("margin_top", 6)
+    margin.add_theme_constant_override("margin_right", 6)
+    margin.add_theme_constant_override("margin_bottom", 6)
+    margin.add_child(_runtime_separator())
+    return margin
+
+func _game_menu_entry_button(entry: Dictionary) -> Button:
+    var button := Button.new()
+    var children: Array = entry.get("children", [])
+    var enabled := bool(entry.get("enabled", true))
+    var caption := String(entry.get("caption", "(Unnamed)"))
+    var shortcut := String(entry.get("shortcut", ""))
+    var checked := bool(entry.get("checked", false))
+    var checkable := bool(entry.get("checkable", false))
+    var radio := checkable and bool(entry.get("radio", false))
+    button.text = ""
+    button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    button.clip_text = true
+    button.disabled = not enabled
+    button.custom_minimum_size = Vector2(0, 54)
+    button.add_theme_font_size_override("font_size", 18)
+    button.add_theme_color_override("font_color", Color(0.92, 0.92, 0.88, 1))
+    button.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.35))
+    _apply_button_style(
+        button,
+        _panel_style(4, Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0),
+        _panel_style(4, Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 0),
+        _panel_style(4, Color(1, 1, 1, 0.14), Color(0, 0, 0, 0), 0)
+    )
+
+    var row := HBoxContainer.new()
+    row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    row.set_anchors_preset(Control.PRESET_FULL_RECT)
+    row.offset_left = 10
+    row.offset_top = 0
+    row.offset_right = -10
+    row.offset_bottom = 0
+    row.add_theme_constant_override("separation", 10)
+    button.add_child(row)
+
+    var state_kind := ""
+    if radio:
+        state_kind = "radio"
+    elif checkable:
+        state_kind = "checkbox"
+    row.add_child(_game_menu_state_glyph(state_kind, checked, enabled))
+
+    var title := Label.new()
+    title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    title.text = caption
+    title.clip_text = true
+    title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    title.add_theme_font_size_override("font_size", 18)
+    title.add_theme_color_override("font_color", Color(0.92, 0.92, 0.88, 1) if enabled else Color(1, 1, 1, 0.35))
+    row.add_child(title)
+
+    if not shortcut.is_empty():
+        var shortcut_label := Label.new()
+        shortcut_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        shortcut_label.text = shortcut
+        shortcut_label.clip_text = true
+        shortcut_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+        shortcut_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+        shortcut_label.custom_minimum_size = Vector2(72, 0)
+        shortcut_label.add_theme_font_size_override("font_size", 15)
+        shortcut_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.54) if enabled else Color(1, 1, 1, 0.28))
+        row.add_child(shortcut_label)
+
+    var arrow := Label.new()
+    arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    arrow.text = "›" if not children.is_empty() else ""
+    arrow.custom_minimum_size = Vector2(24, 0)
+    arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+    arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    arrow.add_theme_font_size_override("font_size", 28)
+    arrow.add_theme_color_override("font_color", Color(0.82, 0.82, 0.78, 1) if enabled else Color(1, 1, 1, 0.30))
+    row.add_child(arrow)
+
+    button.pressed.connect(func():
+        if not children.is_empty():
+            game_menu_stack.append(entry)
+            _rebuild_game_menu_dialog()
+            return
+        var path := String(entry.get("path", ""))
+        if path.is_empty():
+            return
+        var result: int = int(player.activate_menu_item(path))
+        if result != ENGINE_RESULT_OK:
+            render_errors += 1
+            _append_log("菜单操作失败: %s %s" % [player.get_last_result(), player.get_last_error()])
+        game_menu_dialog.visible = false
+    )
+    return button
+
+func _game_menu_state_glyph(kind: String, checked: bool, enabled: bool) -> Control:
+    var glyph := Control.new()
+    glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    glyph.custom_minimum_size = Vector2(30, 0)
+    if kind.is_empty():
+        return glyph
+
+    glyph.draw.connect(func():
+        var color := Color(0.92, 0.92, 0.88, 1) if enabled else Color(1, 1, 1, 0.35)
+        var center := glyph.size * 0.5
+        if kind == "radio":
+            glyph.draw_circle(center, 8.0, Color(0, 0, 0, 0))
+            glyph.draw_arc(center, 8.0, 0.0, TAU, 32, color, 2.0, true)
+            if checked:
+                glyph.draw_circle(center, 4.5, color)
+            return
+
+        var box_size := Vector2(17, 17)
+        var rect := Rect2(center - box_size * 0.5, box_size)
+        glyph.draw_rect(rect, color, false, 2.0)
+        if checked:
+            glyph.draw_line(rect.position + Vector2(3.0, box_size.y * 0.55), rect.position + Vector2(box_size.x * 0.42, box_size.y - 4.0), color, 2.5, true)
+            glyph.draw_line(rect.position + Vector2(box_size.x * 0.42, box_size.y - 4.0), rect.position + Vector2(box_size.x - 3.0, 4.0), color, 2.5, true)
+    )
+    return glyph
+
+func _toggle_virtual_cursor() -> void:
+    if not _is_touch_platform():
+        return
+    virtual_cursor_enabled = not virtual_cursor_enabled
+    virtual_cursor_active = false
+    virtual_cursor_dragged = false
+    if virtual_cursor_enabled and not virtual_cursor_initialized:
+        _place_virtual_cursor_at_center()
+    _layout_virtual_cursor()
+    _rebuild_runtime_overlay()
+
+func _toggle_soft_keyboard() -> void:
+    if not _is_touch_platform() or soft_keyboard_input == null:
+        return
+    if soft_keyboard_visible:
+        soft_keyboard_visible = false
+        soft_keyboard_input.release_focus()
+        soft_keyboard_input.visible = false
+    else:
+        soft_keyboard_visible = true
+        soft_keyboard_shadow_text = SOFT_KEYBOARD_MARKER
+        soft_keyboard_input.visible = true
+        soft_keyboard_input.text = SOFT_KEYBOARD_MARKER
+        soft_keyboard_input.caret_column = soft_keyboard_input.text.length()
+        soft_keyboard_input.grab_focus()
+    _rebuild_runtime_overlay()
+
+func _toggle_debug_panel() -> void:
+    debug_panel_visible = not debug_panel_visible
+    if debug_panel != null:
+        debug_panel.visible = debug_panel_visible
+        if debug_panel_visible:
+            _update_debug_log_panel()
+            debug_panel.move_to_front()
+    _rebuild_runtime_overlay()
+
+func _hide_debug_panel() -> void:
+    debug_panel_visible = false
+    if debug_panel != null:
+        debug_panel.visible = false
+    _rebuild_runtime_overlay()
+
+func _clear_debug_logs() -> void:
+    log_lines.clear()
+    if log_view != null:
+        log_view.text = ""
+        log_view.scroll_vertical = 0
+    _update_debug_log_panel()
+
+func _toggle_game_pause() -> void:
+    if player == null:
+        return
+    var result: int = int(player.resume() if game_paused else player.pause())
+    if result != ENGINE_RESULT_OK:
+        render_errors += 1
+        _append_log("暂停切换失败: %s %s" % [player.get_last_result(), player.get_last_error()])
+        return
+    game_paused = not game_paused
+    restart_notice.text = "已暂停" if game_paused else ""
+    _hide_runtime_overlay()
+    _rebuild_runtime_overlay()
+
+func _exit_current_game() -> void:
+    _hide_runtime_overlay()
+    if game_menu_dialog != null:
+        game_menu_dialog.visible = false
+    if debug_panel != null:
+        debug_panel.visible = false
+    debug_panel_visible = false
+    game_paused = false
+    virtual_cursor_enabled = false
+    virtual_cursor_initialized = false
+    soft_keyboard_visible = false
+    if soft_keyboard_input != null:
+        soft_keyboard_input.release_focus()
+        soft_keyboard_input.visible = false
+    if virtual_cursor != null:
+        virtual_cursor.visible = false
+    _stop_runtime_player()
+    _show_home()
+
+func _stop_runtime_player() -> void:
+    game_running = false
+    cached_startup_state = STARTUP_IDLE
+    current_surface_size = Vector2i.ZERO
+    last_texture_size = Vector2i.ZERO
+    _finalize_active_game_session()
+    viewport.texture = null
+    viewport.visible = false
+    game_view.visible = false
+    loading_panel.visible = false
+    perf.visible = false
+    restart_notice.visible = false
+    if player != null:
+        player.release_frame_texture()
+        player.destroy_engine()
+        player.queue_free()
+        player = null
+    if _create_runtime_player():
+        call_deferred("_initialize_recreated_runtime_player")
+
+func _initialize_recreated_runtime_player() -> void:
+    if player == null:
+        return
+    var user_dir := OS.get_user_data_dir()
+    var cache_dir := user_dir.path_join("cache")
+    DirAccess.make_dir_recursive_absolute(cache_dir)
+    if not player.initialize_engine(user_dir, cache_dir):
+        render_errors += 1
+        _append_log("Engine reinit failed: %s %s" % [player.get_last_result(), player.get_last_error()])
+        return
+    _apply_backend(false)
+    _apply_engine_options()
+    _apply_shell_runtime_settings()
+
+func _layout_virtual_cursor() -> void:
+    if virtual_cursor == null:
+        return
+    virtual_cursor.visible = virtual_cursor_enabled and virtual_cursor_initialized
+    if not virtual_cursor.visible:
+        return
+    virtual_cursor.position = virtual_cursor_position - VIRTUAL_CURSOR_HOTSPOT
+    virtual_cursor.move_to_front()
+
+func _place_virtual_cursor_at_center() -> void:
+    var rect := viewport.get_global_rect()
+    virtual_cursor_position = rect.position + rect.size * 0.5
+    virtual_cursor_initialized = true
+
+func _update_debug_log_panel() -> void:
+    if debug_log_view == null:
+        return
+    if debug_title != null:
+        debug_title.text = "调试日志  |  状态: %d  |  FPS: %d  |  Tick: %s" % [
+            cached_startup_state,
+            Engine.get_frames_per_second(),
+            "停止" if game_paused else "运行",
+        ]
+    if log_lines.is_empty():
+        debug_log_view.text = "暂无日志"
+    else:
+        var newest_first := PackedStringArray()
+        for i in range(log_lines.size() - 1, -1, -1):
+            newest_first.append(log_lines[i])
+        debug_log_view.text = "\n".join(newest_first)
+    debug_log_view.scroll_vertical = 0
+
+func _on_soft_keyboard_text_changed(text: String) -> void:
+    if soft_keyboard_input == null:
+        return
+    if text == soft_keyboard_shadow_text:
+        return
+    if text.length() < SOFT_KEYBOARD_MARKER.length():
+        _send_key_tap(KEY_BACKSPACE, 0)
+    else:
+        var typed := text.substr(SOFT_KEYBOARD_MARKER.length())
+        for index in range(typed.length()):
+            var codepoint := typed.unicode_at(index)
+            if codepoint > 0:
+                _send_key_tap(codepoint, codepoint)
+    soft_keyboard_shadow_text = SOFT_KEYBOARD_MARKER
+    soft_keyboard_input.set_deferred("text", SOFT_KEYBOARD_MARKER)
+    soft_keyboard_input.set_deferred("caret_column", SOFT_KEYBOARD_MARKER.length())
+
+func _send_key_tap(key_code: int, unicode_codepoint: int) -> void:
+    if player == null or not game_running:
+        return
+    player.send_key_event(true, key_code, 0, unicode_codepoint)
+    player.send_key_event(false, key_code, 0, unicode_codepoint)
+
+func _runtime_ui_contains_point(point: Vector2) -> bool:
+    var controls: Array[Control] = [runtime_menu_button, runtime_overlay, game_menu_dialog, debug_panel]
+    for control in controls:
+        if control == null or not control.visible:
+            continue
+        if control.get_global_rect().has_point(point):
+            return true
+    return false
+
+func _runtime_pointer_event_on_ui(event: InputEvent) -> bool:
+    if event is InputEventMouseButton:
+        return _runtime_ui_contains_point((event as InputEventMouseButton).position)
+    if event is InputEventMouseMotion:
+        return _runtime_ui_contains_point((event as InputEventMouseMotion).position)
+    if event is InputEventScreenTouch:
+        return _runtime_ui_contains_point((event as InputEventScreenTouch).position)
+    if event is InputEventScreenDrag:
+        return _runtime_ui_contains_point((event as InputEventScreenDrag).position)
+    return false
 
 func _build_home_view() -> void:
     home_view = Control.new()
     home_view.set_anchors_preset(Control.PRESET_FULL_RECT)
     shell_root.add_child(home_view)
 
-    var title := Label.new()
-    title.text = "AetherKiri"
-    title.position = Vector2(38, 96)
-    title.add_theme_font_size_override("font_size", 28)
-    title.add_theme_color_override("font_color", COLOR_TEXT)
-    home_view.add_child(title)
+    home_title = Label.new()
+    home_title.text = "AetherKiri"
+    home_title.position = Vector2(38, 96)
+    home_title.add_theme_font_size_override("font_size", 28)
+    home_title.add_theme_color_override("font_color", COLOR_TEXT)
+    home_view.add_child(home_title)
 
-    var settings_button := _icon_button("☰")
-    settings_button.anchor_left = 1.0
-    settings_button.anchor_right = 1.0
-    settings_button.position = Vector2(-86, 92)
-    settings_button.pressed.connect(_show_settings)
-    home_view.add_child(settings_button)
+    home_settings_button = _icon_button("☰")
+    home_settings_button.anchor_left = 1.0
+    home_settings_button.anchor_right = 1.0
+    home_settings_button.position = Vector2(-86, 92)
+    home_settings_button.pressed.connect(_show_settings)
+    home_view.add_child(home_settings_button)
 
     game_scroll = ScrollContainer.new()
     game_scroll.position = Vector2(32, 164)
@@ -518,11 +1334,13 @@ func _rebuild_settings_view() -> void:
         child.queue_free()
 
     var margin := MarginContainer.new()
+    var safe := _safe_content_rect(0.0)
+    var page_margin := 20 if _is_phone_layout() else 32
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 32)
-    margin.add_theme_constant_override("margin_top", 24)
-    margin.add_theme_constant_override("margin_right", 32)
-    margin.add_theme_constant_override("margin_bottom", 40)
+    margin.add_theme_constant_override("margin_left", int(safe.position.x) + page_margin)
+    margin.add_theme_constant_override("margin_top", int(safe.position.y) + (14 if _is_phone_layout() else 24))
+    margin.add_theme_constant_override("margin_right", int(_safe_insets().z) + page_margin)
+    margin.add_theme_constant_override("margin_bottom", int(_safe_insets().w) + 40)
     settings_view.add_child(margin)
 
     var page := VBoxContainer.new()
@@ -531,7 +1349,7 @@ func _rebuild_settings_view() -> void:
     margin.add_child(page)
 
     var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 120)
+    top.custom_minimum_size = Vector2(0, 92 if _is_phone_layout() else 120)
     page.add_child(top)
 
     var back := _icon_button("‹")
@@ -550,7 +1368,7 @@ func _rebuild_settings_view() -> void:
 
     save_button = _pill_button("▣  保存")
     save_button.disabled = not dirty_settings
-    save_button.custom_minimum_size = Vector2(150, 72)
+    save_button.custom_minimum_size = Vector2(118 if _is_phone_layout() else 150, 64 if _is_phone_layout() else 72)
     save_button.pressed.connect(_save_shell_settings)
     top.add_child(save_button)
 
@@ -564,7 +1382,7 @@ func _rebuild_settings_view() -> void:
     if frame_limit_enabled:
         render_card.add_child(_settings_fps_row())
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        render_card.add_child(_settings_toggle_row("锁定横屏", "游戏运行时强制横屏显示（手机推荐开启）", lock_landscape, "landscape"))
+        render_card.add_child(_settings_toggle_row("锁定横屏", "平板和大屏触控设备运行游戏时强制横屏；手机进游戏始终横屏", lock_landscape, "landscape"))
 
     page.add_child(_section_title("▱  开发者"))
     var dev_card := _settings_card()
@@ -611,18 +1429,18 @@ func _build_loading_panel() -> void:
     loading_panel.add_theme_stylebox_override("panel", _panel_style(0, Color(0.08, 0.075, 0.065, 0.96), Color(0, 0, 0, 0), 0))
     add_child(loading_panel)
 
-    var margin := MarginContainer.new()
-    margin.add_theme_constant_override("margin_left", 34)
-    margin.add_theme_constant_override("margin_top", 30)
-    margin.add_theme_constant_override("margin_right", 34)
-    margin.add_theme_constant_override("margin_bottom", 30)
-    loading_panel.add_child(margin)
+    loading_margin = MarginContainer.new()
+    loading_margin.add_theme_constant_override("margin_left", 34)
+    loading_margin.add_theme_constant_override("margin_top", 30)
+    loading_margin.add_theme_constant_override("margin_right", 34)
+    loading_margin.add_theme_constant_override("margin_bottom", 30)
+    loading_panel.add_child(loading_margin)
 
     var box := VBoxContainer.new()
     box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     box.size_flags_vertical = Control.SIZE_EXPAND_FILL
     box.add_theme_constant_override("separation", 16)
-    margin.add_child(box)
+    loading_margin.add_child(box)
 
     var title := Label.new()
     title.text = "正在启动游戏..."
@@ -954,6 +1772,7 @@ func _show_home() -> void:
     if dirty_settings:
         _save_shell_settings()
     _set_game_background(false)
+    _apply_shell_runtime_settings()
     home_view.visible = true
     settings_view.visible = false
     detail_view.visible = false
@@ -962,6 +1781,7 @@ func _show_home() -> void:
 
 func _show_settings() -> void:
     _set_game_background(false)
+    _apply_shell_runtime_settings()
     _rebuild_settings_view()
     home_view.visible = false
     settings_view.visible = true
@@ -970,6 +1790,7 @@ func _show_settings() -> void:
 
 func _show_detail(game: Dictionary) -> void:
     _set_game_background(false)
+    _apply_shell_runtime_settings()
     selected_game = game
     home_view.visible = false
     settings_view.visible = false
@@ -978,19 +1799,27 @@ func _show_detail(game: Dictionary) -> void:
     for child in detail_scroll.get_children():
         child.queue_free()
 
+    var safe := _safe_content_rect(0.0)
+    var is_phone := _is_phone_layout()
+    var margin := 20.0 if is_phone else 32.0
+    var content_width := safe.size.x
+    var detail_width := maxf(320.0, content_width - margin * 2.0)
+    var content_height := 760.0 if is_phone else 920.0
+
     var content := Control.new()
-    content.custom_minimum_size = Vector2(1280, 920)
+    content.custom_minimum_size = Vector2(content_width, content_height + safe.position.y + _safe_insets().w)
     content.mouse_filter = Control.MOUSE_FILTER_PASS
     detail_scroll.add_child(content)
 
     var back := _icon_button("‹")
-    back.position = Vector2(30, 42)
+    back.position = Vector2(safe.position.x + margin - 8.0, safe.position.y + (14.0 if is_phone else 42.0))
     back.pressed.connect(_show_home)
     content.add_child(back)
 
     var cover := PanelContainer.new()
-    cover.position = Vector2(510, 100)
-    cover.size = Vector2(260, 190)
+    var cover_size := Vector2(minf(260.0, detail_width * 0.66), 190.0 if not is_phone else 150.0)
+    cover.position = Vector2(safe.position.x + margin + (detail_width - cover_size.x) * 0.5, safe.position.y + (92.0 if is_phone else 100.0))
+    cover.size = cover_size
     cover.add_theme_stylebox_override("panel", _panel_style(18, Color(0.90, 0.89, 0.84, 1), Color(0, 0, 0, 0.04), 1))
     content.add_child(cover)
     var cover_texture := _load_cover_texture(game)
@@ -1011,16 +1840,16 @@ func _show_detail(game: Dictionary) -> void:
 
     var title := Label.new()
     title.text = _game_display_title(game)
-    title.position = Vector2(320, 310)
-    title.size = Vector2(640, 54)
+    title.position = Vector2(safe.position.x + margin, cover.position.y + cover_size.y + 18.0)
+    title.size = Vector2(detail_width, 54)
     title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    title.add_theme_font_size_override("font_size", 34)
+    title.add_theme_font_size_override("font_size", 28 if is_phone else 34)
     title.add_theme_color_override("font_color", COLOR_TEXT)
     content.add_child(title)
 
     var info := VBoxContainer.new()
-    info.position = Vector2(38, 370)
-    info.size = Vector2(max(600, int(size.x) - 76), 170)
+    info.position = Vector2(safe.position.x + margin, title.position.y + 62.0)
+    info.size = Vector2(detail_width, 170)
     info.add_theme_constant_override("separation", 12)
     content.add_child(info)
     info.add_child(_detail_line("□", String(game.get("path", ""))))
@@ -1029,14 +1858,14 @@ func _show_detail(game: Dictionary) -> void:
     info.add_child(_detail_line("▤", String(game.get("type", "Directory"))))
 
     var start := _pill_button("▶  启动游戏")
-    start.position = Vector2(38, 500)
-    start.size = Vector2(1204, 72)
+    start.position = Vector2(safe.position.x + margin, info.position.y + 130.0)
+    start.size = Vector2(detail_width, 68 if is_phone else 72)
     start.pressed.connect(_start_selected_game)
     content.add_child(start)
 
     var tools := VBoxContainer.new()
-    tools.position = Vector2(32, 600)
-    tools.size = Vector2(1216, 260)
+    tools.position = Vector2(safe.position.x + margin, start.position.y + start.size.y + 28.0)
+    tools.size = Vector2(detail_width, 260)
     tools.add_theme_constant_override("separation", 1)
     content.add_child(tools)
     tools.add_child(_detail_action("▧", "设置封面", func(): _set_cover_for_selected()))
@@ -1129,6 +1958,66 @@ func _show_system_alert_once(key: String, message: String, title: String = "Aeth
         return
     shown_system_alerts[key] = true
     _show_system_alert(message, title)
+
+func _android_request_storage_permissions() -> void:
+    if OS.get_name() != "Android" or android_storage_permission_requested:
+        return
+    android_storage_permission_requested = true
+    OS.request_permissions()
+
+func _on_request_permissions_result(permission: String, granted: bool) -> void:
+    if OS.get_name() != "Android":
+        return
+    _append_log("Android permission result: %s=%s" % [permission, str(granted)])
+    if granted:
+        _refresh_games()
+
+func _android_granted_permissions() -> PackedStringArray:
+    if OS.get_name() != "Android":
+        return PackedStringArray()
+    return OS.get_granted_permissions()
+
+func _android_storage_permission_granted() -> bool:
+    if OS.get_name() != "Android":
+        return true
+    var granted := _android_granted_permissions()
+    return granted.has(ANDROID_READ_EXTERNAL_STORAGE) or granted.has(ANDROID_MANAGE_EXTERNAL_STORAGE)
+
+func _android_game_storage_root() -> String:
+    return ProjectSettings.globalize_path("user://Games")
+
+func _android_path_is_app_storage(path: String) -> bool:
+    var normalized := path.simplify_path()
+    var user_dir := OS.get_user_data_dir().simplify_path()
+    var games_dir := _android_game_storage_root().simplify_path()
+    return normalized.begins_with(user_dir) or normalized.begins_with(games_dir)
+
+func _can_read_game_path(path: String) -> bool:
+    if path.is_empty():
+        return false
+    if path.to_lower().ends_with(".xp3"):
+        var file := FileAccess.open(path, FileAccess.READ)
+        if file == null:
+            return false
+        file.close()
+        return true
+    var dir := DirAccess.open(path)
+    if dir == null:
+        return false
+    dir.list_dir_begin()
+    dir.list_dir_end()
+    return true
+
+func _ensure_android_game_path_access(path: String) -> bool:
+    if OS.get_name() != "Android" or path.is_empty() or _android_path_is_app_storage(path):
+        return true
+    if _can_read_game_path(path):
+        return true
+    _android_request_storage_permissions()
+    _append_log(
+        "Android direct-read preflight failed for %s; trying native open anyway. Grant all-files access if startup fails." % path
+    )
+    return true
 
 func _maybe_show_log_alert(line: String) -> void:
     if not log_alerts:
@@ -1298,6 +2187,8 @@ func _on_refresh_or_import() -> void:
     if OS.get_name() == "iOS":
         _refresh_games()
         return
+    if OS.get_name() == "Android":
+        _android_request_storage_permissions()
     if OS.get_name() == "Web":
         _show_web_import_picker()
         return
@@ -1624,6 +2515,8 @@ func _show_web_import_picker() -> void:
     box.add_child(cancel)
 
 func _open_import_dialog(xp3: bool) -> void:
+    if OS.get_name() == "Android":
+        _android_request_storage_permissions()
     var filters := PackedStringArray(["*.xp3,*.XP3;KiriKiri XP3 archive"]) if xp3 else PackedStringArray()
     var dialog := _create_file_dialog(
         "选择 XP3 文件" if xp3 else "选择游戏目录",
@@ -1641,8 +2534,8 @@ func _open_import_dialog(xp3: bool) -> void:
 
 func _refresh_games() -> void:
     known_games = _load_game_list()
-    if OS.get_name() == "iOS":
-        known_games = _scan_ios_games_dir(known_games)
+    if OS.get_name() == "iOS" or OS.get_name() == "Android":
+        known_games = _scan_mobile_games_dir(known_games)
         _save_game_list(known_games)
     known_games = _sorted_games(known_games)
     for child in game_list.get_children():
@@ -1655,7 +2548,7 @@ func _refresh_games() -> void:
 func _load_game_list() -> Array[Dictionary]:
     var file := FileAccess.open(GAME_LIST_FILE, FileAccess.READ)
     if file == null:
-        var fallback: String = String(ProjectSettings.get_setting(GAME_PATH_KEY, ""))
+        var fallback: String = _android_resolve_picker_path(String(ProjectSettings.get_setting(GAME_PATH_KEY, "")))
         var initial_games: Array[Dictionary] = []
         if not fallback.is_empty() and _path_exists(fallback):
             initial_games.append(_game_info_from_path(fallback))
@@ -1665,7 +2558,11 @@ func _load_game_list() -> Array[Dictionary]:
         return []
     var games: Array[Dictionary] = []
     for item in parsed:
-        if item is Dictionary and item.has("path") and _path_exists(String(item.get("path", ""))) and _web_game_entry_available(item):
+        if item is Dictionary and item.has("path") and _web_game_entry_available(item):
+            var resolved_path := _android_resolve_picker_path(String(item.get("path", "")))
+            if not _path_exists(resolved_path):
+                continue
+            item["path"] = resolved_path
             games.append(item)
     return games
 
@@ -1674,7 +2571,7 @@ func _save_game_list(games: Array[Dictionary]) -> void:
     if file != null:
         file.store_string(JSON.stringify(games))
 
-func _scan_ios_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
+func _scan_mobile_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
     var root := ProjectSettings.globalize_path("user://Games")
     DirAccess.make_dir_recursive_absolute(root)
     var by_name := {}
@@ -1699,14 +2596,47 @@ func _scan_ios_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
         entry = dir.get_next()
     return _dedupe_games(next)
 
+func _android_resolve_picker_path(path: String) -> String:
+    if OS.get_name() != "Android" or not path.begins_with("content://"):
+        return path
+    var marker := "/" + ANDROID_EXTERNAL_STORAGE_DOCUMENTS + "/"
+    var marker_index := path.find(marker)
+    if marker_index < 0:
+        return ""
+    var encoded_doc_id := ""
+    var document_marker := "/document/"
+    var document_index := path.find(document_marker, marker_index)
+    if document_index >= 0:
+        encoded_doc_id = path.substr(document_index + document_marker.length())
+    else:
+        var tree_marker := "/tree/"
+        var tree_index := path.find(tree_marker, marker_index)
+        if tree_index >= 0:
+            encoded_doc_id = path.substr(tree_index + tree_marker.length())
+    if encoded_doc_id.is_empty():
+        return ""
+    var doc_id := encoded_doc_id.split("?")[0].uri_decode()
+    var colon := doc_id.find(":")
+    if colon < 0:
+        return ""
+    var storage_type := doc_id.substr(0, colon)
+    var relative_path := doc_id.substr(colon + 1)
+    var root := "/storage/emulated/0" if storage_type.to_lower() == "primary" else "/storage/%s" % storage_type
+    return root if relative_path.is_empty() else root.path_join(relative_path)
+
 func _add_game_path(path: String) -> bool:
+    path = _android_resolve_picker_path(path)
+    if path.is_empty():
+        _show_message("无法解析 Android 选择器返回的路径。请从内部存储/SD 卡选择 XP3，或在系统设置中授予文件访问权限后重试。")
+        return false
     if not _path_exists(path):
         _show_message("游戏路径不存在")
         return false
     return _add_game_dictionary(_game_info_from_path(path))
 
 func _add_game_dictionary(game: Dictionary) -> bool:
-    var path := String(game.get("path", ""))
+    var path := _android_resolve_picker_path(String(game.get("path", "")))
+    game["path"] = path
     if not _path_exists(path):
         _show_message("游戏路径不存在")
         return false
@@ -1801,6 +2731,8 @@ func _web_game_entry_available(game: Dictionary) -> bool:
 
 func _game_info_from_path(path: String) -> Dictionary:
     var name := path.get_file()
+    if name.is_empty():
+        name = "Android Picker Game"
     if name.to_lower().ends_with(".xp3"):
         name = name.substr(0, name.length() - 4)
     return {
@@ -1994,10 +2926,15 @@ func _load_cover_texture(game: Dictionary) -> Texture2D:
     return ImageTexture.create_from_image(image)
 
 func _start_selected_game() -> void:
-    var path := String(selected_game.get("path", ""))
+    var path := _android_resolve_picker_path(String(selected_game.get("path", "")))
     if path.is_empty():
         return
+    if String(selected_game.get("path", "")) != path:
+        _update_game(String(selected_game.get("path", "")), {"path": path})
+        selected_game["path"] = path
     if not _mount_web_game(selected_game):
+        return
+    if not _ensure_android_game_path_access(path):
         return
     var played_game := _mark_game_played(path)
     if not played_game.is_empty():
@@ -2006,23 +2943,39 @@ func _start_selected_game() -> void:
     active_game_started_msec = Time.get_ticks_msec()
     game_path.text = path
     _set_game_background(true)
+    _apply_shell_runtime_settings()
     shell_root.visible = false
     viewport.visible = true
     viewport.move_to_front()
     game_view.visible = true
+    game_view.move_to_front()
+    runtime_menu_button.visible = true
+    runtime_overlay_visible = false
+    game_paused = false
+    if runtime_overlay != null:
+        runtime_overlay.visible = false
+    if game_menu_dialog != null:
+        game_menu_dialog.visible = false
+    if debug_panel != null:
+        debug_panel.visible = debug_panel_visible
     loading_panel.visible = true
     loading_panel.move_to_front()
+    runtime_menu_button.move_to_front()
     perf.visible = show_perf_monitor
     restart_notice.visible = true
     _on_open_game()
 
 func _finalize_active_game_session() -> void:
     if active_game_path.is_empty() or active_game_started_msec <= 0:
+        active_game_path = ""
+        active_game_started_msec = 0
+        _apply_shell_runtime_settings()
         return
     var elapsed := int((Time.get_ticks_msec() - active_game_started_msec) / 1000)
     _add_play_duration(active_game_path, elapsed)
     active_game_path = ""
     active_game_started_msec = 0
+    _apply_shell_runtime_settings()
 
 func _ready() -> void:
     _apply_ui_font()
@@ -2056,6 +3009,7 @@ func _ready() -> void:
         selected_backend = "Godot Native"
 
     _build_ui()
+    _android_request_storage_permissions()
 
     if not _create_runtime_player():
         return
@@ -2218,38 +3172,41 @@ func _process(delta: float) -> void:
             cached_startup_state = player.get_startup_state()
             startup_state = cached_startup_state
         if startup_state == STARTUP_SUCCEEDED:
-            restart_notice.text = ""
+            restart_notice.text = "已暂停" if game_paused else ""
             loading_panel.visible = false
-            var tick_start := Time.get_ticks_usec()
-            var tick_result: int = int(player.tick(delta))
-            var tick_ms := float(Time.get_ticks_usec() - tick_start) / 1000.0
-            if tick_result != ENGINE_RESULT_OK:
-                render_errors += 1
-                var tick_error_line := "Tick failed: %s %s" % [
-                    player.get_last_result(),
-                    player.get_last_error(),
-                ]
-                _append_log(tick_error_line)
-                print(tick_error_line)
-                if perf_log_file != null:
-                    perf_log_file.store_line(tick_error_line)
-                    perf_log_file.flush()
-                game_running = false
-            else:
-                var update_start := Time.get_ticks_usec()
-                _update_frame()
-                var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
-                _log_live_perf(delta, tick_ms, update_ms)
-                _log_frame_spike(delta, tick_ms, update_ms)
-                _log_frame_probe(delta)
+            if not game_paused:
+                var tick_start := Time.get_ticks_usec()
+                var tick_result: int = int(player.tick(delta))
+                var tick_ms := float(Time.get_ticks_usec() - tick_start) / 1000.0
+                if tick_result != ENGINE_RESULT_OK:
+                    render_errors += 1
+                    var tick_error_line := "Tick failed: %s %s" % [
+                        player.get_last_result(),
+                        player.get_last_error(),
+                    ]
+                    _append_log(tick_error_line)
+                    print(tick_error_line)
+                    if perf_log_file != null:
+                        perf_log_file.store_line(tick_error_line)
+                        perf_log_file.flush()
+                    game_running = false
+                    _finalize_active_game_session()
+                else:
+                    var update_start := Time.get_ticks_usec()
+                    _update_frame()
+                    var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
+                    _log_live_perf(delta, tick_ms, update_ms)
+                    _log_frame_spike(delta, tick_ms, update_ms)
+                    _log_frame_probe(delta)
         elif startup_state == STARTUP_FAILED:
-            restart_notice.text = "Game startup failed."
+            restart_notice.text = "游戏启动失败。"
             loading_panel.visible = false
             _set_game_background(false)
             shell_root.visible = true
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            _finalize_active_game_session()
             render_errors += 1
             var startup_error := "Startup failed: %s" % player.get_last_error()
             _append_log(startup_error)
@@ -2292,6 +3249,8 @@ func _process(delta: float) -> void:
             fallback,
             render_errors,
         ]
+        if debug_panel_visible:
+            _update_debug_log_panel()
 func _log_live_perf(delta: float, tick_ms: float, update_ms: float) -> void:
     perf_log_accum += delta
     if perf_log_accum < perf_log_interval:
@@ -2452,6 +3411,13 @@ func _on_open_game() -> void:
             player.get_last_error(),
         ]
         _append_log(launch_error_message)
+        loading_panel.visible = false
+        _set_game_background(false)
+        shell_root.visible = true
+        viewport.visible = false
+        game_view.visible = false
+        game_running = false
+        _finalize_active_game_session()
         return
 
     game_running = true
@@ -2787,6 +3753,8 @@ func _write_probe_marker(line: String) -> void:
 
 func _input(event: InputEvent) -> void:
     if game_running and viewport.visible:
+        if _runtime_pointer_event_on_ui(event):
+            return
         if _handle_game_pointer_event(event):
             get_viewport().set_input_as_handled()
             return
@@ -2893,6 +3861,8 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
     elif event is InputEventScreenTouch:
         var touch := event as InputEventScreenTouch
         suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
+        if _handle_virtual_cursor_touch(touch):
+            return true
         var mapped := _map_viewport_point(touch.position)
         if mapped.x < 0.0 or mapped.y < 0.0:
             return false
@@ -2904,6 +3874,8 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
     elif event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
         suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
+        if _handle_virtual_cursor_drag(drag):
+            return true
         var mapped := _map_viewport_point(drag.position)
         if mapped.x < 0.0 or mapped.y < 0.0:
             return false
@@ -2911,6 +3883,68 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, rel.x, rel.y, 0)
         return true
     return false
+
+func _handle_virtual_cursor_touch(touch: InputEventScreenTouch) -> bool:
+    if not _is_touch_platform() or not virtual_cursor_enabled:
+        return false
+    if touch.pressed:
+        if not virtual_cursor_initialized:
+            virtual_cursor_position = _clamp_virtual_cursor_position(touch.position)
+            virtual_cursor_initialized = true
+        virtual_cursor_active = true
+        virtual_cursor_dragged = false
+        _send_virtual_cursor_move(Vector2.ZERO)
+        _layout_virtual_cursor()
+        return true
+
+    if not virtual_cursor_active:
+        return true
+    virtual_cursor_active = false
+    if not virtual_cursor_dragged:
+        _send_virtual_cursor_click(0)
+    virtual_cursor_dragged = false
+    _layout_virtual_cursor()
+    return true
+
+func _handle_virtual_cursor_drag(drag: InputEventScreenDrag) -> bool:
+    if not _is_touch_platform() or not virtual_cursor_enabled:
+        return false
+    if not virtual_cursor_active:
+        return true
+    var previous := virtual_cursor_position
+    virtual_cursor_position = _clamp_virtual_cursor_position(virtual_cursor_position + drag.relative)
+    var applied_delta := virtual_cursor_position - previous
+    if applied_delta.length_squared() > 1.0:
+        virtual_cursor_dragged = true
+    _send_virtual_cursor_move(applied_delta)
+    _layout_virtual_cursor()
+    return true
+
+func _clamp_virtual_cursor_position(position_to_clamp: Vector2) -> Vector2:
+    var rect := viewport.get_global_rect()
+    if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+        return position_to_clamp
+    return Vector2(
+        clampf(position_to_clamp.x, rect.position.x, rect.position.x + rect.size.x),
+        clampf(position_to_clamp.y, rect.position.y, rect.position.y + rect.size.y)
+    )
+
+func _send_virtual_cursor_move(global_delta: Vector2) -> void:
+    var mapped := _map_viewport_point(virtual_cursor_position)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        return
+    var rel := _map_viewport_delta(global_delta)
+    player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, rel.x, rel.y, 0)
+
+func _send_virtual_cursor_click(button: int) -> void:
+    var mapped := _map_viewport_point(virtual_cursor_position)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        return
+    player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, button)
+    _pump_pointer_event_tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, button)
+    _pump_pointer_event_tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, button)
 
 func _is_touch_platform() -> bool:
     var platform := OS.get_name()
@@ -2971,6 +4005,14 @@ func _unhandled_input(event: InputEvent) -> void:
         return
     if event is InputEventKey:
         var key := event as InputEventKey
+        if key.keycode == KEY_BACK:
+            if key.pressed:
+                if not _handle_runtime_back():
+                    player.send_key_event(true, key.keycode, key.get_modifiers_mask(), key.unicode)
+            else:
+                player.send_key_event(false, key.keycode, key.get_modifiers_mask(), key.unicode)
+            get_viewport().set_input_as_handled()
+            return
         player.send_key_event(key.pressed, key.keycode, key.get_modifiers_mask(), key.unicode)
 
 func _append_log(line: String) -> void:
@@ -2980,6 +4022,8 @@ func _append_log(line: String) -> void:
     while log_lines.size() > MAX_LOG_LINES:
         log_lines.remove_at(0)
     log_view.text = "\n".join(log_lines)
+    if debug_panel_visible:
+        _update_debug_log_panel()
     call_deferred("_scroll_log_to_bottom")
 
 func _scroll_log_to_bottom() -> void:

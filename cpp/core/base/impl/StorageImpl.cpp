@@ -326,6 +326,23 @@ static int _utf8_strcasecmp_nfc(const char *a, const char *b) {
 #include <TargetConditionals.h>
 #endif
 
+#if defined(__ANDROID__)
+static ttstr TVPBuildDirectPosixLocalName(const tjs_char *ptr) {
+    if(!TJS_strncmp(ptr, TJS_W("./"), 2)) {
+        ptr += 2;
+        if(*ptr) {
+            if(*ptr == TJS_W('/'))
+                return ttstr(ptr);
+            return ttstr(TJS_W("/")) + ttstr(ptr);
+        }
+        return TJS_W("/");
+    }
+    if(*ptr == TJS_W('/'))
+        return ttstr(ptr);
+    return {};
+}
+#endif
+
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 const std::vector<std::string> &TVPGetApplicationHomeDirectory();
 const std::vector<ttstr> &_getPrefixPath() {
@@ -392,29 +409,27 @@ void tTVPFileMedia::GetLocallyAccessibleName(ttstr &name) {
     // }
 #else // posix
 #if defined(__ANDROID__)
-    // Android sandbox frequently denies directory probing from "/" and we
-    // don't need case-insensitive recovery there. Fast-path absolute storage
-    // names to a direct POSIX path.
-    if(!TJS_strncmp(ptr, TJS_W("./"), 2)) {
-        ptr += 2; // skip "./"
-        if(*ptr) {
-            if(*ptr == TJS_W('/')) {
-                name = ttstr(ptr);
-            } else {
-                name = ttstr(TJS_W("/")) + ttstr(ptr);
+    {
+        ttstr exactname = TVPBuildDirectPosixLocalName(ptr);
+        if(!exactname.IsEmpty()) {
+            tTVP_stat stat_buf{};
+            if(TVP_stat(exactname.c_str(), stat_buf)) {
+                name = exactname;
+                return;
             }
-        } else {
-            name = TJS_W("/");
         }
-        return;
-    }
-    if(*ptr == TJS_W('/')) {
-        name = ttstr(ptr);
-        return;
     }
 #endif
     if(!TJS_strncmp(ptr, TJS_W("./"), 2)) {
         ptr += 2; // skip "./"
+        newname.Clear();
+        if(!*ptr) {
+            name = TJS_W("/");
+            return;
+        }
+    } else if(*ptr == TJS_W('/')) {
+        while(*ptr == TJS_W('/'))
+            ++ptr;
         newname.Clear();
         if(!*ptr) {
             name = TJS_W("/");

@@ -166,19 +166,46 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
     if(loweredPath.find(".mtn") != std::string::npos) {
         LOGGER->warn("Motion resource manager load: {}", rawPath);
     }
-    const auto loaded = detail::loadPSBVariant(path, _decryptSeed);
+
+    std::vector<ttstr> candidates = detail::buildMotionLookupCandidates(path);
+    if(candidates.empty()) {
+        candidates.push_back(path);
+    }
+
+    ttstr loadPath;
+    ttstr placedPath;
+    for(const auto &candidate : candidates) {
+        const ttstr placed = TVPGetPlacedPath(candidate);
+        if(!placed.IsEmpty()) {
+            loadPath = placed;
+            placedPath = placed;
+            break;
+        }
+    }
+    if(loadPath.IsEmpty()) {
+        loadPath = candidates.front();
+    }
+
+    const auto loaded = detail::loadPSBVariant(loadPath, _decryptSeed);
     if(loaded.Type() != tvtVoid && _state) {
-        const auto key = rawPath;
-        _state->loadedModules[key] = loaded;
+        _state->loadedModules[rawPath] = loaded;
+        _state->loadedModules[loadPath.AsStdString()] = loaded;
+        for(const auto &candidate : candidates) {
+            _state->loadedModules[candidate.AsStdString()] = loaded;
+        }
         ttstr trimmed = path;
         if(path.StartsWith(TJS_W("lzfs://./"))) {
             trimmed = path.SubString(9, path.GetLen() - 9);
         }
-        const ttstr placed = TVPGetPlacedPath(trimmed);
-        if(!placed.IsEmpty()) {
-            _state->loadedModules[placed.AsStdString()] = loaded;
+        if(!placedPath.IsEmpty()) {
+            _state->loadedModules[placedPath.AsStdString()] = loaded;
+        } else {
+            const ttstr placed = TVPGetPlacedPath(trimmed);
+            if(!placed.IsEmpty()) {
+                _state->loadedModules[placed.AsStdString()] = loaded;
+            }
         }
-        _state->lastLoadedPath = key;
+        _state->lastLoadedPath = rawPath;
         _state->lastLoadedModule = loaded;
     }
     return loaded;

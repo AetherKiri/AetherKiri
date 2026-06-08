@@ -883,6 +883,19 @@ ttstr GetStringProperty(iTJSDispatch2* object, const tjs_char* name) {
   return ttstr(value);
 }
 
+bool IsMenuSeparatorCaption(const ttstr& caption) {
+  const std::string text = caption.AsStdString();
+  if (text.empty()) {
+    return true;
+  }
+  for (const char ch : text) {
+    if (ch != '-' && ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool TryGetMainMenuObject(tTJSVariant* out_menu_variant) {
   if (out_menu_variant == nullptr) {
     return false;
@@ -915,18 +928,34 @@ bool TryGetMainMenuObject(tTJSVariant* out_menu_variant) {
 
 void AppendMenuJsonNode(iTJSDispatch2* item, const std::string& path,
                         std::string& out) {
+  const ttstr caption = GetStringProperty(item, TJS_W("caption"));
+  const bool separator = IsMenuSeparatorCaption(caption);
   out += "{\"path\":";
   AppendEscapedJsonString(out, path);
   out += ",\"caption\":";
-  AppendEscapedJsonString(out, GetStringProperty(item, TJS_W("caption")));
+  AppendEscapedJsonString(out, caption);
+  out += ",\"separator\":";
+  out += separator ? "true" : "false";
   out += ",\"enabled\":";
   out += TryGetBoolProperty(item, TJS_W("enabled"), true) ? "true" : "false";
   out += ",\"visible\":";
   out += TryGetBoolProperty(item, TJS_W("visible"), true) ? "true" : "false";
   out += ",\"checked\":";
   out += TryGetBoolProperty(item, TJS_W("checked"), false) ? "true" : "false";
+  out += ",\"checkable\":";
+  out += TryGetBoolProperty(item, TJS_W("checkable"), false) ? "true" : "false";
   out += ",\"radio\":";
   out += TryGetBoolProperty(item, TJS_W("radio"), false) ? "true" : "false";
+  out += ",\"group\":";
+  tTJSVariant group_value;
+  if (TryGetProperty(item, TJS_W("group"), &group_value) &&
+      group_value.Type() != tvtVoid) {
+    out += std::to_string(static_cast<tjs_int>(group_value));
+  } else {
+    out += "0";
+  }
+  out += ",\"shortcut\":";
+  AppendEscapedJsonString(out, GetStringProperty(item, TJS_W("shortcut")));
   out += ",\"children\":";
 
   tTJSVariant children_variant;
@@ -2831,6 +2860,10 @@ engine_result_t engine_activate_menu_item(engine_handle_t handle,
   }
 
   iTJSDispatch2* item = item_variant.AsObjectNoAddRef();
+  if (IsMenuSeparatorCaption(GetStringProperty(item, TJS_W("caption")))) {
+    return SetHandleErrorAndReturnLocked(impl, ENGINE_RESULT_INVALID_ARGUMENT,
+                                         "menu separator cannot be activated");
+  }
   if (!TryGetBoolProperty(item, TJS_W("enabled"), true) ||
       !TryGetBoolProperty(item, TJS_W("visible"), true)) {
     return SetHandleErrorAndReturnLocked(impl, ENGINE_RESULT_INVALID_STATE,

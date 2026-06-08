@@ -28,8 +28,10 @@ class tTJSNI_MenuItem : public tTJSNI_BaseMenuItem {
     ttstr Shortcut;
     bool IsAttched;
     bool IsChecked;
+    bool IsCheckable;
     bool IsEnabled;
     bool IsRadio;
+    bool IsRadioExplicit;
     bool IsVisible;
 
     tjs_int GroupIndex;
@@ -57,6 +59,7 @@ public:
 
     void SetChecked(bool b);
     [[nodiscard]] bool GetChecked() const;
+    [[nodiscard]] bool GetCheckable() const;
 
     void SetEnabled(bool b);
     [[nodiscard]] bool GetEnabled() const;

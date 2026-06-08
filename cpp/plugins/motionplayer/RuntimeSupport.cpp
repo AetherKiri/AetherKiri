@@ -1188,8 +1188,11 @@ namespace motion::detail {
         const bool hasPathSeparator =
             raw.find('/') != std::string::npos || raw.find('\\') != std::string::npos;
         const bool hasKnownExtension = hasExtension(raw);
-        if(hasPathSeparator || hasKnownExtension) {
+        if(hasPathSeparator) {
             candidates.push_back(name);
+        } else if(hasKnownExtension) {
+            candidates.push_back(name);
+            candidates.emplace_back(ttstr{ "motion/" + raw });
         } else {
             candidates.emplace_back(ttstr{ raw + ".mtn" });
             candidates.emplace_back(ttstr{ raw + ".psb" });

@@ -139,6 +139,324 @@ copy_android_so() {
     fi
 }
 
+find_android_libcxx_shared() {
+    local abi="$1"
+    local lib_arch
+    local libcxx_path
+
+    case "$abi" in
+        arm64-v8a) lib_arch="aarch64-linux-android" ;;
+        *)
+            echo "Error: Android ABI '$abi' does not have a libc++_shared.so mapping." >&2
+            exit 1
+            ;;
+    esac
+
+    libcxx_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/lib/$lib_arch/libc++_shared.so"
+    if [[ ! -f "$libcxx_path" ]]; then
+        libcxx_path="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" \
+            -path "*/sysroot/usr/lib/$lib_arch/libc++_shared.so" -print -quit)"
+    fi
+    if [[ -z "$libcxx_path" || ! -f "$libcxx_path" ]]; then
+        echo "Error: Android libc++_shared.so not found for ABI '$abi' under $ANDROID_NDK_HOME." >&2
+        exit 1
+    fi
+    printf '%s\n' "$libcxx_path"
+}
+
+find_android_build_tool() {
+    local tool_name="$1"
+    local tool_path
+
+    tool_path="$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f -name "$tool_name" 2>/dev/null | sort -V | tail -1)"
+    if [[ -z "$tool_path" || ! -x "$tool_path" ]]; then
+        echo "Error: Android build tool '$tool_name' not found under $ANDROID_HOME/build-tools." >&2
+        exit 1
+    fi
+    printf '%s\n' "$tool_path"
+}
+
+find_android_platform_jar() {
+    local jar_path
+
+    jar_path="$(find "$ANDROID_HOME/platforms" -maxdepth 2 -type f -name android.jar 2>/dev/null | sort -V | tail -1)"
+    if [[ -z "$jar_path" || ! -f "$jar_path" ]]; then
+        echo "Error: Android platform android.jar not found under $ANDROID_HOME/platforms." >&2
+        exit 1
+    fi
+    printf '%s\n' "$jar_path"
+}
+
+find_javac() {
+    local javac_path
+
+    javac_path="${JAVAC:-$(command -v javac || true)}"
+    if [[ -z "$javac_path" || ! -x "$javac_path" ]]; then
+        echo "Error: javac not found. Install a JDK and ensure javac is available in PATH." >&2
+        exit 1
+    fi
+    printf '%s\n' "$javac_path"
+}
+
+apk_has_duplicate_entries() {
+    local apk_path="$1"
+
+    zipinfo -1 "$apk_path" | sort | uniq -d | grep -q .
+}
+
+android_apk_next_dex_entry() {
+    local apk_path="$1"
+    local max_index=1
+    local entry
+    local base
+    local suffix
+
+    while IFS= read -r entry; do
+        base="$(basename "$entry")"
+        if [[ "$base" == "classes.dex" ]]; then
+            (( max_index < 1 )) && max_index=1
+        elif [[ "$base" =~ ^classes([0-9]+)\.dex$ ]]; then
+            suffix="${BASH_REMATCH[1]}"
+            (( suffix > max_index )) && max_index="$suffix"
+        fi
+    done < <(zipinfo -1 "$apk_path" | grep -E '^classes([0-9]+)?\.dex$' || true)
+
+    printf 'classes%d.dex\n' "$((max_index + 1))"
+}
+
+normalize_apk_zip_entries() {
+    local apk_path="$1"
+    local normalized_path="${apk_path%.apk}.dedup.apk"
+    local aligned_path="${apk_path%.apk}.aligned.apk"
+    local zipalign_bin
+
+    echo "[INFO] Removing duplicate APK ZIP entries before signing."
+    python3 - "$apk_path" "$normalized_path" <<'PY'
+import sys
+import zipfile
+
+source, destination = sys.argv[1], sys.argv[2]
+seen = set()
+with zipfile.ZipFile(source, "r") as src, zipfile.ZipFile(destination, "w") as dst:
+    for info in src.infolist():
+        if info.filename in seen:
+            continue
+        seen.add(info.filename)
+        with src.open(info) as entry:
+            dst.writestr(info, entry.read())
+PY
+
+    zipalign_bin="$(find_android_build_tool zipalign)"
+    "$zipalign_bin" -p -f 4 "$normalized_path" "$aligned_path"
+    mv "$aligned_path" "$apk_path"
+    rm -f "$normalized_path"
+}
+
+replace_apk_entry() {
+    local apk_path="$1"
+    local entry_name="$2"
+    local source_path="$3"
+    local replaced_path="${apk_path%.apk}.replace.apk"
+    local aligned_path="${apk_path%.apk}.aligned.apk"
+    local zipalign_bin
+
+    echo "[INFO] Replacing APK entry '$entry_name' with the NDK-matched runtime."
+    python3 - "$apk_path" "$replaced_path" "$entry_name" "$source_path" <<'PY'
+import sys
+import zipfile
+
+source_apk, destination_apk, entry_name, replacement_path = sys.argv[1:5]
+seen = set()
+with zipfile.ZipFile(source_apk, "r") as src, zipfile.ZipFile(destination_apk, "w") as dst:
+    for info in src.infolist():
+        if info.filename in seen or info.filename == entry_name:
+            continue
+        if info.filename.startswith("META-INF/") and (
+            info.filename.endswith(".RSA")
+            or info.filename.endswith(".DSA")
+            or info.filename.endswith(".EC")
+            or info.filename.endswith(".SF")
+            or info.filename.endswith(".MF")
+        ):
+            continue
+        seen.add(info.filename)
+        with src.open(info) as entry:
+            dst.writestr(info, entry.read())
+    dst.write(replacement_path, entry_name)
+PY
+
+    zipalign_bin="$(find_android_build_tool zipalign)"
+    "$zipalign_bin" -p -f 4 "$replaced_path" "$aligned_path"
+    mv "$aligned_path" "$apk_path"
+    rm -f "$replaced_path"
+}
+
+add_apk_entry() {
+    local apk_path="$1"
+    local entry_name="$2"
+    local source_path="$3"
+    local replaced_path="${apk_path%.apk}.add.apk"
+    local aligned_path="${apk_path%.apk}.aligned.apk"
+    local zipalign_bin
+
+    echo "[INFO] Adding APK entry '$entry_name'."
+    python3 - "$apk_path" "$replaced_path" "$entry_name" "$source_path" <<'PY'
+import sys
+import zipfile
+
+source_apk, destination_apk, entry_name, addition_path = sys.argv[1:5]
+seen = set()
+with zipfile.ZipFile(source_apk, "r") as src, zipfile.ZipFile(destination_apk, "w") as dst:
+    for info in src.infolist():
+        if info.filename in seen or info.filename == entry_name:
+            continue
+        if info.filename.startswith("META-INF/") and (
+            info.filename.endswith(".RSA")
+            or info.filename.endswith(".DSA")
+            or info.filename.endswith(".EC")
+            or info.filename.endswith(".SF")
+            or info.filename.endswith(".MF")
+        ):
+            continue
+        seen.add(info.filename)
+        with src.open(info) as entry:
+            dst.writestr(info, entry.read())
+    dst.write(addition_path, entry_name)
+PY
+
+    zipalign_bin="$(find_android_build_tool zipalign)"
+    "$zipalign_bin" -p -f 4 "$replaced_path" "$aligned_path"
+    mv "$aligned_path" "$apk_path"
+    rm -f "$replaced_path"
+}
+
+build_android_bridge_dex() {
+    local build_dir="$PROJECT_ROOT/out/android/java_bridge/$BUILD_TYPE_LOWER"
+    local classes_dir="$build_dir/classes"
+    local dex_dir="$build_dir/dex"
+    local android_jar
+    local d8_bin
+    local javac_bin
+    local source_root="$PROJECT_ROOT/platforms/android/java"
+    local sources_file="$build_dir/sources.list"
+
+    if [[ ! -d "$source_root" ]]; then
+        echo "Error: Android Java bridge source directory missing: $source_root" >&2
+        exit 1
+    fi
+
+    rm -rf "$build_dir"
+    mkdir -p "$classes_dir" "$dex_dir"
+    find "$source_root" -type f -name '*.java' | sort > "$sources_file"
+    if [[ ! -s "$sources_file" ]]; then
+        echo "Error: Android Java bridge has no Java sources under $source_root." >&2
+        exit 1
+    fi
+
+    android_jar="$(find_android_platform_jar)"
+    d8_bin="$(find_android_build_tool d8)"
+    javac_bin="$(find_javac)"
+
+    echo "[INFO] Building Android Java bridge dex." >&2
+    "$javac_bin" -encoding UTF-8 -source 8 -target 8 \
+        -bootclasspath "$android_jar" \
+        -d "$classes_dir" \
+        @"$sources_file"
+    "$d8_bin" --min-api 23 --classpath "$android_jar" \
+        --output "$dex_dir" \
+        $(find "$classes_dir" -type f -name '*.class' | sort)
+
+    if [[ ! -f "$dex_dir/classes.dex" ]]; then
+        echo "Error: d8 did not produce classes.dex for Android Java bridge." >&2
+        exit 1
+    fi
+    printf '%s\n' "$dex_dir/classes.dex"
+}
+
+sign_android_apk() {
+    local apk_path="$1"
+    local signing_profile="$2"
+    local apksigner_bin
+    local keystore_path
+    local key_alias
+    local store_password
+    local key_password
+
+    case "$signing_profile" in
+        debug)
+            keystore_path="${GODOT_ANDROID_KEYSTORE_DEBUG_PATH:-${ANDROID_DEBUG_KEYSTORE:-$HOME/.android/debug.keystore}}"
+            key_alias="${GODOT_ANDROID_KEYSTORE_DEBUG_USER:-${ANDROID_DEBUG_KEYSTORE_ALIAS:-androiddebugkey}}"
+            store_password="${GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD:-${ANDROID_DEBUG_KEYSTORE_PASSWORD:-android}}"
+            key_password="${GODOT_ANDROID_KEYSTORE_DEBUG_KEY_PASSWORD:-${ANDROID_DEBUG_KEY_PASSWORD:-$store_password}}"
+            ;;
+        release)
+            keystore_path="${GODOT_ANDROID_KEYSTORE_RELEASE_PATH:-${ANDROID_RELEASE_KEYSTORE:-}}"
+            key_alias="${GODOT_ANDROID_KEYSTORE_RELEASE_USER:-${ANDROID_RELEASE_KEYSTORE_ALIAS:-}}"
+            store_password="${GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD:-${ANDROID_RELEASE_KEYSTORE_PASSWORD:-}}"
+            key_password="${GODOT_ANDROID_KEYSTORE_RELEASE_KEY_PASSWORD:-${ANDROID_RELEASE_KEY_PASSWORD:-$store_password}}"
+            ;;
+        *)
+            echo "Error: Unsupported Android signing profile '$signing_profile'." >&2
+            exit 1
+            ;;
+    esac
+
+    if [[ -z "$keystore_path" || ! -f "$keystore_path" ]]; then
+        echo "Error: Android $signing_profile keystore not found at ${keystore_path:-<unset>}." >&2
+        exit 1
+    fi
+    if [[ -z "$key_alias" || -z "$store_password" || -z "$key_password" ]]; then
+        echo "Error: Android $signing_profile signing credentials are incomplete." >&2
+        exit 1
+    fi
+
+    apksigner_bin="$(find_android_build_tool apksigner)"
+    "$apksigner_bin" sign \
+        --ks "$keystore_path" \
+        --ks-pass "pass:$store_password" \
+        --key-pass "pass:$key_password" \
+        --ks-key-alias "$key_alias" \
+        "$apk_path"
+}
+
+should_sign_repaired_apk() {
+    if [[ "$BUILD_TYPE_LOWER" == "debug" ]]; then
+        return 0
+    fi
+    [[ -n "${GODOT_ANDROID_KEYSTORE_RELEASE_PATH:-${ANDROID_RELEASE_KEYSTORE:-}}" ]]
+}
+
+repair_android_apk() {
+    local apk_path="$1"
+    local needs_signing=0
+    local staged_libcxx="$GODOT_APP_DIR/bin/android/arm64-v8a/$BUILD_TYPE_LOWER/libc++_shared.so"
+    local bridge_dex
+    local bridge_dex_entry
+
+    if [[ -f "$apk_path" ]] && apk_has_duplicate_entries "$apk_path"; then
+        normalize_apk_zip_entries "$apk_path"
+        needs_signing=1
+    fi
+
+    if [[ -f "$staged_libcxx" ]]; then
+        replace_apk_entry "$apk_path" "lib/arm64-v8a/libc++_shared.so" "$staged_libcxx"
+        needs_signing=1
+    fi
+
+    bridge_dex="$(build_android_bridge_dex)"
+    bridge_dex_entry="$(android_apk_next_dex_entry "$apk_path")"
+    add_apk_entry "$apk_path" "$bridge_dex_entry" "$bridge_dex"
+    needs_signing=1
+
+    if [[ "$needs_signing" == "1" ]]; then
+        if should_sign_repaired_apk; then
+            sign_android_apk "$apk_path" "$BUILD_TYPE_LOWER"
+        else
+            echo "[INFO] Leaving repaired release APK unsigned; no release keystore is configured."
+        fi
+    fi
+}
+
 ensure_android_godot_cpp_package_config() {
     local triplet_root="$1"
     local config_dir="$triplet_root/share/unofficial-godot-cpp"
@@ -180,6 +498,7 @@ build_abi() {
     local cmake_build_dir
     local godot_bin_dir
     local vcpkg_triplet_dir
+    local libcxx_path
     local libomp_path
     local cmake_config_args=(-D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM")
 
@@ -220,6 +539,8 @@ build_abi() {
     mkdir -p "$godot_bin_dir"
     copy_android_so "$cmake_build_dir/bridge/engine_api/libengine_api.so" "$godot_bin_dir/libengine_api.so"
     copy_android_so "$cmake_build_dir/bridge/godot_extension/libaether_kiri_godot.so" "$godot_bin_dir/libaether_kiri_godot.so"
+    libcxx_path="$(find_android_libcxx_shared "$abi")"
+    copy_android_so "$libcxx_path" "$godot_bin_dir/libc++_shared.so"
     copy_android_so "$vcpkg_triplet_dir/lib/libSDL2.so" "$godot_bin_dir/libSDL2.so"
     libomp_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/lib/clang/19/lib/linux/aarch64/libomp.so"
     if [[ ! -f "$libomp_path" ]]; then
@@ -251,8 +572,23 @@ else
     if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
         export_mode="--export-release"
     fi
-    "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
-        "$export_mode" "$export_preset" "$export_path"
+    set +e
+    godot_export_output="$("$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
+        "$export_mode" "$export_preset" "$export_path" 2>&1)"
+    godot_export_status=$?
+    set -e
+    printf '%s\n' "$godot_export_output"
+
+    if [[ "$godot_export_status" -ne 0 ]]; then
+        if [[ ! -f "$export_path" ]] || ! grep -q "Multiple ZIP entries with the same name" <<< "$godot_export_output"; then
+            exit "$godot_export_status"
+        fi
+        echo "[INFO] Godot export produced an APK with duplicate ZIP entries; repairing export."
+    fi
+
+    if [[ -f "$export_path" ]]; then
+        repair_android_apk "$export_path"
+    fi
 fi
 
 echo "Android build output: $PROJECT_ROOT/out/godot/android/$BUILD_TYPE_LOWER"

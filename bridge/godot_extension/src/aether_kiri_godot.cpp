@@ -33,6 +33,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -40,6 +41,10 @@
 #include <vector>
 #include <unordered_map>
 #include <mutex>
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 namespace godot {
 namespace {
@@ -1964,6 +1969,33 @@ public:
         return result;
     }
 
+    String get_main_menu_json() {
+        if (handle_ == nullptr) {
+            return String();
+        }
+        std::vector<char> buffer(256 * 1024);
+        uint32_t bytes_written = 0;
+        const engine_result_t result = engine_get_main_menu_json(
+            handle_, buffer.data(), static_cast<uint32_t>(buffer.size()),
+            &bytes_written);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK || bytes_written == 0) {
+            return String();
+        }
+        return String::utf8(buffer.data(), bytes_written);
+    }
+
+    int activate_menu_item(const String &item_path) {
+        if (handle_ == nullptr) {
+            return ENGINE_RESULT_INVALID_STATE;
+        }
+        const CharString item_path_utf8 = item_path.utf8();
+        const engine_result_t result = engine_activate_menu_item(
+            handle_, item_path_utf8.get_data());
+        update_last_error(result);
+        return result;
+    }
+
     int get_startup_state() {
         if (handle_ == nullptr) {
             return ENGINE_STARTUP_STATE_IDLE;
@@ -2350,6 +2382,10 @@ protected:
         ClassDB::bind_method(D_METHOD("send_key_event", "pressed", "key_code",
                                       "modifiers", "unicode_codepoint"),
                              &AetherKiriPlayer::send_key_event);
+        ClassDB::bind_method(D_METHOD("get_main_menu_json"),
+                             &AetherKiriPlayer::get_main_menu_json);
+        ClassDB::bind_method(D_METHOD("activate_menu_item", "item_path"),
+                             &AetherKiriPlayer::activate_menu_item);
         ClassDB::bind_method(D_METHOD("get_startup_state"),
                              &AetherKiriPlayer::get_startup_state);
         ClassDB::bind_method(D_METHOD("drain_startup_logs"),
@@ -2571,13 +2607,22 @@ GDExtensionBool GDE_EXPORT aether_kiri_library_init(
     GDExtensionInterfaceGetProcAddress get_proc_address,
     GDExtensionClassLibraryPtr library,
     GDExtensionInitialization *initialization) {
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "AetherKiri",
+                        "aether_kiri_library_init called");
+#endif
     godot::GDExtensionBinding::InitObject init_obj(
         get_proc_address, library, initialization);
     init_obj.register_initializer(godot::InitializeAetherKiri);
     init_obj.register_terminator(godot::DeinitializeAetherKiri);
     init_obj.set_minimum_library_initialization_level(
         godot::MODULE_INITIALIZATION_LEVEL_SCENE);
-    return init_obj.init();
+    GDExtensionBool result = init_obj.init();
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "AetherKiri",
+                        "aether_kiri_library_init result=%d", (int)result);
+#endif
+    return result;
 }
 
 engine_result_t aether_kiri_set_render_backend(engine_handle_t handle,
