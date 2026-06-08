@@ -5,8 +5,8 @@ const SETTINGS_KEY := "aether_kiri/render_backend"
 const GAME_PATH_KEY := "aether_kiri/game_path"
 const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
-const UI_FONT := preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
-const UI_SYMBOL_FONT := preload("res://assets/fonts/aetherkiri-runtime-symbols.ttf")
+const ANDROID_READ_EXTERNAL_STORAGE := "android.permission.READ_EXTERNAL_STORAGE"
+const ANDROID_MANAGE_EXTERNAL_STORAGE := "android.permission.MANAGE_EXTERNAL_STORAGE"
 
 const ENGINE_RESULT_OK := 0
 const STARTUP_IDLE := 0
@@ -36,8 +36,11 @@ var loading_panel: PanelContainer
 var game_scroll: ScrollContainer
 var game_list: GridContainer
 var home_actions: HBoxContainer
+var home_title: Label
+var home_settings_button: Button
 var empty_state: Control
 var save_button: Button
+var loading_margin: MarginContainer
 var bg_rect: ColorRect
 var selected_game := {}
 var known_games: Array[Dictionary] = []
@@ -60,6 +63,7 @@ var rounded_card_shader: Shader
 var upscale_shader: Shader
 var opaque_frame_shader: Shader
 var shown_system_alerts := {}
+var android_storage_permission_requested := false
 
 var player = null
 var selected_backend := "Godot Native"
@@ -93,6 +97,7 @@ var log_lines: PackedStringArray = []
 var suppress_mouse_until_msec := 0
 var current_surface_size := Vector2i.ZERO
 var render_surface_max_size := RENDER_SURFACE_MAX_SIZE
+var cached_device_form := ""
 const LOG_DRAIN_INTERVAL := 0.50
 const STARTUP_POLL_INTERVAL := 0.16
 const PERF_UPDATE_INTERVAL := 0.25
@@ -103,6 +108,8 @@ const RENDER_SURFACE_MAX_SIZE := Vector2i(3200, 1800)
 const INITIAL_WINDOW_SIZE := Vector2i(2240, 1260)
 const DEFAULT_UI_DPI_SCALE := 1.35
 const TOUCH_MOUSE_SUPPRESS_MS := 700
+const PHONE_SHORT_SIDE_MAX := 1180.0
+const PHONE_ASPECT_MIN := 1.35
 const COLOR_BG := Color(0.944, 0.932, 0.895, 1.0)
 const COLOR_GAME_BG := Color(0, 0, 0, 1)
 const COLOR_CARD := Color(0.985, 0.98, 0.955, 1.0)
@@ -114,11 +121,7 @@ const COLOR_LINE := Color(0.84, 0.82, 0.76, 1.0)
 const HOME_CARD_SIZE := Vector2(260, 350)
 
 func _apply_ui_font() -> void:
-    var fallbacks: Array[Font] = [UI_SYMBOL_FONT]
-    UI_FONT.set_fallbacks(fallbacks)
-    var ui_theme := Theme.new()
-    ui_theme.set_default_font(UI_FONT)
-    theme = ui_theme
+    theme = Theme.new()
 
 func _build_ui() -> void:
     bg_rect = ColorRect.new()
@@ -238,12 +241,74 @@ func _apply_engine_options() -> void:
     player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
 
 func _apply_shell_runtime_settings() -> void:
-    if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        var orientation := DisplayServer.SCREEN_LANDSCAPE if lock_landscape else DisplayServer.SCREEN_SENSOR
-        DisplayServer.screen_set_orientation(orientation)
+    if not _is_touch_platform():
+        return
+    if (game_running or not active_game_path.is_empty()) and lock_landscape:
+        DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
+        return
+    if _is_phone_layout():
+        DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_PORTRAIT)
+        return
+    DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR)
+
+func _window_safe_area() -> Rect2:
+    if not _is_touch_platform():
+        return Rect2(Vector2.ZERO, get_viewport_rect().size)
+    var safe := DisplayServer.get_display_safe_area()
+    if safe.size.x <= 0 or safe.size.y <= 0:
+        return Rect2(Vector2.ZERO, get_viewport_rect().size)
+    return Rect2(Vector2(safe.position), Vector2(safe.size))
+
+func _safe_insets() -> Vector4:
+    var window_size := get_viewport_rect().size
+    var safe := _window_safe_area()
+    return Vector4(
+        maxf(0.0, safe.position.x),
+        maxf(0.0, safe.position.y),
+        maxf(0.0, window_size.x - safe.position.x - safe.size.x),
+        maxf(0.0, window_size.y - safe.position.y - safe.size.y)
+    )
+
+func _safe_content_rect(extra_margin: float = 0.0) -> Rect2:
+    var window_size := get_viewport_rect().size
+    var insets := _safe_insets()
+    var left := insets.x + extra_margin
+    var top := insets.y + extra_margin
+    var right := insets.z + extra_margin
+    var bottom := insets.w + extra_margin
+    return Rect2(
+        Vector2(left, top),
+        Vector2(maxf(1.0, window_size.x - left - right), maxf(1.0, window_size.y - top - bottom))
+    )
+
+func _is_phone_layout() -> bool:
+    if not _is_touch_platform():
+        return false
+    var window_size := get_viewport_rect().size
+    if window_size.x <= 0.0 or window_size.y <= 0.0:
+        window_size = Vector2(DisplayServer.window_get_size())
+    var short_side := minf(window_size.x, window_size.y)
+    var long_side := maxf(window_size.x, window_size.y)
+    return short_side <= PHONE_SHORT_SIDE_MAX and (long_side / maxf(short_side, 1.0)) >= PHONE_ASPECT_MIN
+
+func _device_form() -> String:
+    if _is_phone_layout():
+        return "phone"
+    if _is_touch_platform():
+        return "large_touch"
+    return "large"
+
+func _update_device_form() -> void:
+    var next := _device_form()
+    if cached_device_form == next:
+        return
+    cached_device_form = next
+    if settings_view != null and settings_view.visible:
+        call_deferred("_rebuild_settings_view")
 
 func _fit_full_rects() -> void:
     var window_size := get_viewport_rect().size
+    _update_device_form()
     anchor_left = 0.0
     anchor_top = 0.0
     anchor_right = 0.0
@@ -261,6 +326,8 @@ func _fit_full_rects() -> void:
         control.offset_bottom = 0.0
     _layout_game_viewport(window_size)
     _layout_home_view(window_size)
+    _layout_loading_panel()
+    _layout_game_overlay()
 
 func _layout_game_viewport(window_size: Vector2) -> void:
     if viewport == null:
@@ -284,7 +351,10 @@ func _layout_game_viewport(window_size: Vector2) -> void:
             max(1.0, float(viewport.texture.get_height()))
         )
 
-    var scale := minf(window_size.x / tex_size.x, window_size.y / tex_size.y)
+    var content_rect := Rect2(Vector2.ZERO, window_size)
+    if _is_phone_layout() and not game_running:
+        content_rect = _safe_content_rect(0.0)
+    var scale := minf(content_rect.size.x / tex_size.x, content_rect.size.y / tex_size.y)
     scale = minf(scale, _max_game_view_scale())
     if scale <= 0.0:
         scale = 1.0
@@ -292,7 +362,7 @@ func _layout_game_viewport(window_size: Vector2) -> void:
         floor(tex_size.x * scale),
         floor(tex_size.y * scale)
     )
-    viewport.position = ((window_size - draw_size) * 0.5).floor()
+    viewport.position = (content_rect.position + (content_rect.size - draw_size) * 0.5).floor()
     viewport.size = draw_size
     viewport.custom_minimum_size = draw_size
 
@@ -395,49 +465,82 @@ func _set_game_background(active: bool) -> void:
 func _layout_home_view(window_size: Vector2) -> void:
     if game_scroll == null or game_list == null:
         return
-    var margin := 32.0
-    var list_top := 164.0
-    var bottom_reserved := 132.0
-    var list_width := maxf(260.0, window_size.x - margin * 2.0)
-    var list_height := maxf(160.0, window_size.y - list_top - bottom_reserved)
-    game_scroll.position = Vector2(margin, list_top)
+    var safe := _safe_content_rect(0.0)
+    var is_phone := _is_phone_layout()
+    var margin := 20.0 if is_phone else 32.0
+    var top_bar := 92.0 if is_phone else 132.0
+    var bottom_reserved := 100.0 if is_phone else 132.0
+    var list_top := safe.position.y + top_bar
+    var list_width := maxf(260.0, safe.size.x - margin * 2.0)
+    var safe_bottom := window_size.y - safe.position.y - safe.size.y
+    var list_height := maxf(160.0, window_size.y - list_top - bottom_reserved - safe_bottom)
+    game_scroll.position = Vector2(safe.position.x + margin, list_top)
     game_scroll.size = Vector2(list_width, list_height)
     game_scroll.custom_minimum_size = game_scroll.size
 
-    var gap := 18.0
-    var columns := maxi(1, int(floor((list_width + gap) / (HOME_CARD_SIZE.x + gap))))
+    var gap := 14.0 if is_phone else 18.0
+    var columns := 1 if is_phone else maxi(1, int(floor((list_width + gap) / (HOME_CARD_SIZE.x + gap))))
     game_list.columns = columns
+    game_list.add_theme_constant_override("h_separation", gap)
+    game_list.add_theme_constant_override("v_separation", gap)
     game_list.custom_minimum_size = Vector2(list_width, 0)
 
+    if home_title != null:
+        home_title.position = Vector2(safe.position.x + margin + (0.0 if is_phone else 6.0), safe.position.y + (24.0 if is_phone else 96.0))
+        home_title.add_theme_font_size_override("font_size", 28 if is_phone else 28)
+
+    if home_settings_button != null:
+        home_settings_button.anchor_left = 0.0
+        home_settings_button.anchor_right = 0.0
+        home_settings_button.position = Vector2(safe.position.x + safe.size.x - margin - 64.0, safe.position.y + (14.0 if is_phone else 88.0))
+
     if home_actions != null:
-        home_actions.anchor_left = 1.0
+        home_actions.anchor_left = 0.0
         home_actions.anchor_top = 1.0
-        home_actions.anchor_right = 1.0
+        home_actions.anchor_right = 0.0
         home_actions.anchor_bottom = 1.0
-        home_actions.offset_left = -390.0
-        home_actions.offset_top = -108.0
-        home_actions.offset_right = -32.0
-        home_actions.offset_bottom = -44.0
+        var action_width := minf(358.0, safe.size.x - margin * 2.0)
+        home_actions.offset_left = safe.position.x + safe.size.x - margin - action_width
+        home_actions.offset_top = -safe_bottom - 84.0
+        home_actions.offset_right = home_actions.offset_left + action_width
+        home_actions.offset_bottom = -safe_bottom - 20.0
         home_actions.move_to_front()
+
+func _layout_loading_panel() -> void:
+    if loading_margin == null:
+        return
+    var safe := _safe_content_rect(0.0)
+    var inset := 24.0 if _is_phone_layout() else 34.0
+    loading_margin.add_theme_constant_override("margin_left", int(safe.position.x + inset))
+    loading_margin.add_theme_constant_override("margin_top", int(safe.position.y + inset))
+    loading_margin.add_theme_constant_override("margin_right", int(_safe_insets().z + inset))
+    loading_margin.add_theme_constant_override("margin_bottom", int(_safe_insets().w + inset))
+
+func _layout_game_overlay() -> void:
+    var safe := _safe_content_rect(0.0)
+    if perf != null:
+        perf.position = safe.position + Vector2(24, 18)
+    if restart_notice != null:
+        restart_notice.position = safe.position + Vector2(24, 44)
 
 func _build_home_view() -> void:
     home_view = Control.new()
     home_view.set_anchors_preset(Control.PRESET_FULL_RECT)
     shell_root.add_child(home_view)
 
-    var title := Label.new()
-    title.text = "AetherKiri"
-    title.position = Vector2(38, 96)
-    title.add_theme_font_size_override("font_size", 28)
-    title.add_theme_color_override("font_color", COLOR_TEXT)
-    home_view.add_child(title)
+    home_title = Label.new()
+    home_title.text = "AetherKiri"
+    home_title.position = Vector2(38, 96)
+    home_title.add_theme_font_size_override("font_size", 28)
+    home_title.add_theme_color_override("font_color", COLOR_TEXT)
+    home_view.add_child(home_title)
 
-    var settings_button := _icon_button("☰")
-    settings_button.anchor_left = 1.0
-    settings_button.anchor_right = 1.0
-    settings_button.position = Vector2(-86, 92)
-    settings_button.pressed.connect(_show_settings)
-    home_view.add_child(settings_button)
+    home_settings_button = _icon_button("☰")
+    home_settings_button.anchor_left = 1.0
+    home_settings_button.anchor_right = 1.0
+    home_settings_button.position = Vector2(-86, 92)
+    home_settings_button.pressed.connect(_show_settings)
+    home_view.add_child(home_settings_button)
 
     game_scroll = ScrollContainer.new()
     game_scroll.position = Vector2(32, 164)
@@ -518,11 +621,13 @@ func _rebuild_settings_view() -> void:
         child.queue_free()
 
     var margin := MarginContainer.new()
+    var safe := _safe_content_rect(0.0)
+    var page_margin := 20 if _is_phone_layout() else 32
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 32)
-    margin.add_theme_constant_override("margin_top", 24)
-    margin.add_theme_constant_override("margin_right", 32)
-    margin.add_theme_constant_override("margin_bottom", 40)
+    margin.add_theme_constant_override("margin_left", int(safe.position.x) + page_margin)
+    margin.add_theme_constant_override("margin_top", int(safe.position.y) + (14 if _is_phone_layout() else 24))
+    margin.add_theme_constant_override("margin_right", int(_safe_insets().z) + page_margin)
+    margin.add_theme_constant_override("margin_bottom", int(_safe_insets().w) + 40)
     settings_view.add_child(margin)
 
     var page := VBoxContainer.new()
@@ -531,7 +636,7 @@ func _rebuild_settings_view() -> void:
     margin.add_child(page)
 
     var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 120)
+    top.custom_minimum_size = Vector2(0, 92 if _is_phone_layout() else 120)
     page.add_child(top)
 
     var back := _icon_button("‹")
@@ -550,7 +655,7 @@ func _rebuild_settings_view() -> void:
 
     save_button = _pill_button("▣  保存")
     save_button.disabled = not dirty_settings
-    save_button.custom_minimum_size = Vector2(150, 72)
+    save_button.custom_minimum_size = Vector2(118 if _is_phone_layout() else 150, 64 if _is_phone_layout() else 72)
     save_button.pressed.connect(_save_shell_settings)
     top.add_child(save_button)
 
@@ -611,18 +716,18 @@ func _build_loading_panel() -> void:
     loading_panel.add_theme_stylebox_override("panel", _panel_style(0, Color(0.08, 0.075, 0.065, 0.96), Color(0, 0, 0, 0), 0))
     add_child(loading_panel)
 
-    var margin := MarginContainer.new()
-    margin.add_theme_constant_override("margin_left", 34)
-    margin.add_theme_constant_override("margin_top", 30)
-    margin.add_theme_constant_override("margin_right", 34)
-    margin.add_theme_constant_override("margin_bottom", 30)
-    loading_panel.add_child(margin)
+    loading_margin = MarginContainer.new()
+    loading_margin.add_theme_constant_override("margin_left", 34)
+    loading_margin.add_theme_constant_override("margin_top", 30)
+    loading_margin.add_theme_constant_override("margin_right", 34)
+    loading_margin.add_theme_constant_override("margin_bottom", 30)
+    loading_panel.add_child(loading_margin)
 
     var box := VBoxContainer.new()
     box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     box.size_flags_vertical = Control.SIZE_EXPAND_FILL
     box.add_theme_constant_override("separation", 16)
-    margin.add_child(box)
+    loading_margin.add_child(box)
 
     var title := Label.new()
     title.text = "正在启动游戏..."
@@ -954,6 +1059,7 @@ func _show_home() -> void:
     if dirty_settings:
         _save_shell_settings()
     _set_game_background(false)
+    _apply_shell_runtime_settings()
     home_view.visible = true
     settings_view.visible = false
     detail_view.visible = false
@@ -962,6 +1068,7 @@ func _show_home() -> void:
 
 func _show_settings() -> void:
     _set_game_background(false)
+    _apply_shell_runtime_settings()
     _rebuild_settings_view()
     home_view.visible = false
     settings_view.visible = true
@@ -970,6 +1077,7 @@ func _show_settings() -> void:
 
 func _show_detail(game: Dictionary) -> void:
     _set_game_background(false)
+    _apply_shell_runtime_settings()
     selected_game = game
     home_view.visible = false
     settings_view.visible = false
@@ -978,19 +1086,27 @@ func _show_detail(game: Dictionary) -> void:
     for child in detail_scroll.get_children():
         child.queue_free()
 
+    var safe := _safe_content_rect(0.0)
+    var is_phone := _is_phone_layout()
+    var margin := 20.0 if is_phone else 32.0
+    var content_width := safe.size.x
+    var detail_width := maxf(320.0, content_width - margin * 2.0)
+    var content_height := 760.0 if is_phone else 920.0
+
     var content := Control.new()
-    content.custom_minimum_size = Vector2(1280, 920)
+    content.custom_minimum_size = Vector2(content_width, content_height + safe.position.y + _safe_insets().w)
     content.mouse_filter = Control.MOUSE_FILTER_PASS
     detail_scroll.add_child(content)
 
     var back := _icon_button("‹")
-    back.position = Vector2(30, 42)
+    back.position = Vector2(safe.position.x + margin - 8.0, safe.position.y + (14.0 if is_phone else 42.0))
     back.pressed.connect(_show_home)
     content.add_child(back)
 
     var cover := PanelContainer.new()
-    cover.position = Vector2(510, 100)
-    cover.size = Vector2(260, 190)
+    var cover_size := Vector2(minf(260.0, detail_width * 0.66), 190.0 if not is_phone else 150.0)
+    cover.position = Vector2(safe.position.x + margin + (detail_width - cover_size.x) * 0.5, safe.position.y + (92.0 if is_phone else 100.0))
+    cover.size = cover_size
     cover.add_theme_stylebox_override("panel", _panel_style(18, Color(0.90, 0.89, 0.84, 1), Color(0, 0, 0, 0.04), 1))
     content.add_child(cover)
     var cover_texture := _load_cover_texture(game)
@@ -1011,16 +1127,16 @@ func _show_detail(game: Dictionary) -> void:
 
     var title := Label.new()
     title.text = _game_display_title(game)
-    title.position = Vector2(320, 310)
-    title.size = Vector2(640, 54)
+    title.position = Vector2(safe.position.x + margin, cover.position.y + cover_size.y + 18.0)
+    title.size = Vector2(detail_width, 54)
     title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    title.add_theme_font_size_override("font_size", 34)
+    title.add_theme_font_size_override("font_size", 28 if is_phone else 34)
     title.add_theme_color_override("font_color", COLOR_TEXT)
     content.add_child(title)
 
     var info := VBoxContainer.new()
-    info.position = Vector2(38, 370)
-    info.size = Vector2(max(600, int(size.x) - 76), 170)
+    info.position = Vector2(safe.position.x + margin, title.position.y + 62.0)
+    info.size = Vector2(detail_width, 170)
     info.add_theme_constant_override("separation", 12)
     content.add_child(info)
     info.add_child(_detail_line("□", String(game.get("path", ""))))
@@ -1029,14 +1145,14 @@ func _show_detail(game: Dictionary) -> void:
     info.add_child(_detail_line("▤", String(game.get("type", "Directory"))))
 
     var start := _pill_button("▶  启动游戏")
-    start.position = Vector2(38, 500)
-    start.size = Vector2(1204, 72)
+    start.position = Vector2(safe.position.x + margin, info.position.y + 130.0)
+    start.size = Vector2(detail_width, 68 if is_phone else 72)
     start.pressed.connect(_start_selected_game)
     content.add_child(start)
 
     var tools := VBoxContainer.new()
-    tools.position = Vector2(32, 600)
-    tools.size = Vector2(1216, 260)
+    tools.position = Vector2(safe.position.x + margin, start.position.y + start.size.y + 28.0)
+    tools.size = Vector2(detail_width, 260)
     tools.add_theme_constant_override("separation", 1)
     content.add_child(tools)
     tools.add_child(_detail_action("▧", "设置封面", func(): _set_cover_for_selected()))
@@ -1129,6 +1245,74 @@ func _show_system_alert_once(key: String, message: String, title: String = "Aeth
         return
     shown_system_alerts[key] = true
     _show_system_alert(message, title)
+
+func _android_request_storage_permissions() -> void:
+    if OS.get_name() != "Android" or android_storage_permission_requested:
+        return
+    android_storage_permission_requested = true
+    OS.request_permissions()
+
+func _on_request_permissions_result(permission: String, granted: bool) -> void:
+    if OS.get_name() != "Android":
+        return
+    _append_log("Android permission result: %s=%s" % [permission, str(granted)])
+    if granted:
+        _refresh_games()
+
+func _android_granted_permissions() -> PackedStringArray:
+    if OS.get_name() != "Android":
+        return PackedStringArray()
+    return OS.get_granted_permissions()
+
+func _android_storage_permission_granted() -> bool:
+    if OS.get_name() != "Android":
+        return true
+    var granted := _android_granted_permissions()
+    return granted.has(ANDROID_READ_EXTERNAL_STORAGE) or granted.has(ANDROID_MANAGE_EXTERNAL_STORAGE)
+
+func _android_game_storage_root() -> String:
+    return ProjectSettings.globalize_path("user://Games")
+
+func _android_path_is_app_storage(path: String) -> bool:
+    var normalized := path.simplify_path()
+    var user_dir := OS.get_user_data_dir().simplify_path()
+    var games_dir := _android_game_storage_root().simplify_path()
+    return normalized.begins_with(user_dir) or normalized.begins_with(games_dir)
+
+func _can_read_game_path(path: String) -> bool:
+    if path.is_empty():
+        return false
+    if path.to_lower().ends_with(".xp3"):
+        var file := FileAccess.open(path, FileAccess.READ)
+        if file == null:
+            return false
+        file.close()
+        return true
+    var dir := DirAccess.open(path)
+    if dir == null:
+        return false
+    dir.list_dir_begin()
+    dir.list_dir_end()
+    return true
+
+func _ensure_android_game_path_access(path: String) -> bool:
+    if OS.get_name() != "Android" or path.is_empty() or _android_path_is_app_storage(path):
+        return true
+    if _can_read_game_path(path):
+        return true
+    _android_request_storage_permissions()
+    var games_dir := _android_game_storage_root()
+    DirAccess.make_dir_recursive_absolute(games_dir)
+    var permission_note := "请授予存储读取权限后重试。"
+    if android_storage_permission_requested and not _android_storage_permission_granted():
+        permission_note = "如果系统没有弹出权限，请到系统设置中授予 AetherKiri 文件/存储访问权限。"
+    _show_message(
+        "无法读取游戏文件，Android 可能限制了外部存储访问。\n\n%s\n\n也可以将游戏目录或 XP3 复制到：\n%s\n然后回到本应用刷新。" % [
+            permission_note,
+            games_dir,
+        ]
+    )
+    return false
 
 func _maybe_show_log_alert(line: String) -> void:
     if not log_alerts:
@@ -1298,6 +1482,8 @@ func _on_refresh_or_import() -> void:
     if OS.get_name() == "iOS":
         _refresh_games()
         return
+    if OS.get_name() == "Android":
+        _android_request_storage_permissions()
     if OS.get_name() == "Web":
         _show_web_import_picker()
         return
@@ -1641,8 +1827,8 @@ func _open_import_dialog(xp3: bool) -> void:
 
 func _refresh_games() -> void:
     known_games = _load_game_list()
-    if OS.get_name() == "iOS":
-        known_games = _scan_ios_games_dir(known_games)
+    if OS.get_name() == "iOS" or OS.get_name() == "Android":
+        known_games = _scan_mobile_games_dir(known_games)
         _save_game_list(known_games)
     known_games = _sorted_games(known_games)
     for child in game_list.get_children():
@@ -1674,7 +1860,7 @@ func _save_game_list(games: Array[Dictionary]) -> void:
     if file != null:
         file.store_string(JSON.stringify(games))
 
-func _scan_ios_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
+func _scan_mobile_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
     var root := ProjectSettings.globalize_path("user://Games")
     DirAccess.make_dir_recursive_absolute(root)
     var by_name := {}
@@ -1999,6 +2185,8 @@ func _start_selected_game() -> void:
         return
     if not _mount_web_game(selected_game):
         return
+    if not _ensure_android_game_path_access(path):
+        return
     var played_game := _mark_game_played(path)
     if not played_game.is_empty():
         selected_game = played_game
@@ -2006,6 +2194,7 @@ func _start_selected_game() -> void:
     active_game_started_msec = Time.get_ticks_msec()
     game_path.text = path
     _set_game_background(true)
+    _apply_shell_runtime_settings()
     shell_root.visible = false
     viewport.visible = true
     viewport.move_to_front()
@@ -2018,11 +2207,15 @@ func _start_selected_game() -> void:
 
 func _finalize_active_game_session() -> void:
     if active_game_path.is_empty() or active_game_started_msec <= 0:
+        active_game_path = ""
+        active_game_started_msec = 0
+        _apply_shell_runtime_settings()
         return
     var elapsed := int((Time.get_ticks_msec() - active_game_started_msec) / 1000)
     _add_play_duration(active_game_path, elapsed)
     active_game_path = ""
     active_game_started_msec = 0
+    _apply_shell_runtime_settings()
 
 func _ready() -> void:
     _apply_ui_font()
@@ -2056,6 +2249,7 @@ func _ready() -> void:
         selected_backend = "Godot Native"
 
     _build_ui()
+    _android_request_storage_permissions()
 
     if not _create_runtime_player():
         return
@@ -2235,6 +2429,7 @@ func _process(delta: float) -> void:
                     perf_log_file.store_line(tick_error_line)
                     perf_log_file.flush()
                 game_running = false
+                _finalize_active_game_session()
             else:
                 var update_start := Time.get_ticks_usec()
                 _update_frame()
@@ -2250,6 +2445,7 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            _finalize_active_game_session()
             render_errors += 1
             var startup_error := "Startup failed: %s" % player.get_last_error()
             _append_log(startup_error)
@@ -2452,6 +2648,13 @@ func _on_open_game() -> void:
             player.get_last_error(),
         ]
         _append_log(launch_error_message)
+        loading_panel.visible = false
+        _set_game_background(false)
+        shell_root.visible = true
+        viewport.visible = false
+        game_view.visible = false
+        game_running = false
+        _finalize_active_game_session()
         return
 
     game_running = true
