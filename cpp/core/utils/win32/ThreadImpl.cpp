@@ -22,6 +22,7 @@
 #include "ThreadImpl.h"
 #include "MsgIntf.h"
 #include "DebugIntf.h"
+#include "SysInitIntf.h"
 
 #if defined(CC_TARGET_OS_IPHONE) || defined(__aarch64__)
 #else
@@ -49,6 +50,19 @@ tjs_int TVPGetWebThreadLimit() {
     return 4;
 }
 #endif
+
+bool TVPThreadShouldLog() noexcept {
+    return !TVPSystemUninitCalled;
+}
+
+void TVPThreadAddLog(const ttstr &line) noexcept {
+    if(!TVPThreadShouldLog())
+        return;
+    try {
+        TVPAddLog(line);
+    } catch(...) {
+    }
+}
 
 } // namespace
 
@@ -80,14 +94,18 @@ tTVPThread::~tTVPThread() {
         Terminated = true;
         _cond.notify_one(); // wake up if suspended
         if(Handle.get_id() == std::this_thread::get_id()) {
-            TVPAddLog(TJS_W("Warning: tTVPThread detached itself during destruction"));
+            TVPThreadAddLog(
+                TJS_W("Warning: tTVPThread detached itself during destruction"));
             Handle.detach();
         } else {
             try {
                 Handle.join();
             } catch(const std::system_error &e) {
-                TVPAddLog(ttstr(TJS_W("Warning: failed to join tTVPThread: ")) +
-                          ttstr(e.what()));
+                if(TVPThreadShouldLog()) {
+                    TVPThreadAddLog(
+                        ttstr(TJS_W("Warning: failed to join tTVPThread: ")) +
+                        ttstr(e.what()));
+                }
                 if(Handle.joinable())
                     Handle.detach();
             }
@@ -105,9 +123,10 @@ void *tTVPThread::StartProc(void *arg) {
         }
         _this->Execute();
     } catch(const std::exception &e) {
-        TVPAddLog(ttstr(TJS_W("Thread exception: ")) + ttstr(e.what()));
+        if(TVPThreadShouldLog())
+            TVPThreadAddLog(ttstr(TJS_W("Thread exception: ")) + ttstr(e.what()));
     } catch(...) {
-        TVPAddLog(TJS_W("Thread exception: unknown exception"));
+        TVPThreadAddLog(TJS_W("Thread exception: unknown exception"));
     }
     _this->Finished.store(true, std::memory_order_release);
     TVPOnThreadExited();
@@ -118,14 +137,17 @@ void *tTVPThread::StartProc(void *arg) {
 void tTVPThread::WaitFor() {
     if(Handle.joinable()) {
         if(Handle.get_id() == std::this_thread::get_id()) {
-            TVPAddLog(TJS_W("Warning: tTVPThread tried to wait for itself"));
+            TVPThreadAddLog(TJS_W("Warning: tTVPThread tried to wait for itself"));
             return;
         }
         try {
             Handle.join();
         } catch(const std::system_error &e) {
-            TVPAddLog(ttstr(TJS_W("Warning: failed to wait for tTVPThread: ")) +
-                      ttstr(e.what()));
+            if(TVPThreadShouldLog()) {
+                TVPThreadAddLog(
+                    ttstr(TJS_W("Warning: failed to wait for tTVPThread: ")) +
+                    ttstr(e.what()));
+            }
             if(Handle.joinable())
                 Handle.detach();
             return;
@@ -199,8 +221,8 @@ static tjs_int GetProcesserNum() {
         processor_num = std::min<tjs_int>(processor_num, TVPGetWebThreadLimit());
 #endif
         tjs_char tmp[34];
-        TVPAddLog(ttstr(TJS_W("Detected CPU core(s): ")) +
-                  TJS_tTVInt_to_str(processor_num, tmp));
+        TVPThreadAddLog(ttstr(TJS_W("Detected CPU core(s): ")) +
+                        TJS_tTVInt_to_str(processor_num, tmp));
     }
     return processor_num;
 }
@@ -241,7 +263,9 @@ void TVPExecThreadTask(int numThreads, TVP_THREAD_TASK_FUNC func) {
         for(auto &it : futures)
             it.get();
     } catch(const std::exception &e) {
-        TVPAddLog(ttstr(TJS_W("Thread task fallback: ")) + ttstr(e.what()));
+        if(TVPThreadShouldLog())
+            TVPThreadAddLog(ttstr(TJS_W("Thread task fallback: ")) +
+                            ttstr(e.what()));
         for(int i = 0; i < numThreads; ++i)
             func(i);
         return;

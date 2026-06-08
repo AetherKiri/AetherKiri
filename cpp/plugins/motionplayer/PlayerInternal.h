@@ -463,22 +463,36 @@ namespace internal {
                 return false;
             }
 
-            iTJSDispatch2 *obj = value.AsObjectNoAddRef();
-            if(TJS_SUCCEEDED(obj->NativeInstanceSupport(
-                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                   reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
-               layer != nullptr) {
-                return true;
-            }
-
-            // Fallback: try via closure's Object member (may differ from
-            // AsObjectNoAddRef for certain TJS value representations)
-            const auto closure = value.AsObjectClosureNoAddRef();
-            if(closure.Object && closure.Object != obj) {
-                return TJS_SUCCEEDED(closure.Object->NativeInstanceSupport(
+            auto tryDispatch = [&](iTJSDispatch2 *obj) {
+                if(!obj) {
+                    return false;
+                }
+                layer = nullptr;
+                return TJS_SUCCEEDED(obj->NativeInstanceSupport(
                            TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
                            reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
                     layer != nullptr;
+            };
+
+            iTJSDispatch2 *obj = value.AsObjectNoAddRef();
+            if(tryDispatch(obj)) {
+                return true;
+            }
+
+            // Fallback: try both closure sides. Some TJS calls pass a closure
+            // whose Object is a method/class dispatch while ObjThis is the
+            // actual Layer instance.
+            const auto closure = value.AsObjectClosureNoAddRef();
+            if(closure.Object && closure.Object != obj) {
+                if(tryDispatch(closure.Object)) {
+                    return true;
+                }
+            }
+            if(closure.ObjThis && closure.ObjThis != obj &&
+               closure.ObjThis != closure.Object) {
+                if(tryDispatch(closure.ObjThis)) {
+                    return true;
+                }
             }
 
             return false;
@@ -492,27 +506,42 @@ namespace internal {
             }
 
             iTJSDispatch2 *obj = value.AsObjectNoAddRef();
+            const auto closure = value.AsObjectClosureNoAddRef();
+            iTJSDispatch2 *candidates[] = {
+                obj,
+                closure.ObjThis,
+                closure.Object,
+                nullptr,
+            };
 
             // Direct Layer check
-            {
+            for(auto *candidate : candidates) {
+                if(!candidate) {
+                    continue;
+                }
                 tTJSNI_BaseLayer *layer = nullptr;
-                if(TJS_SUCCEEDED(obj->NativeInstanceSupport(
+                if(TJS_SUCCEEDED(candidate->NativeInstanceSupport(
                        TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
                        reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
                    layer) {
-                    return obj;
+                    return candidate;
                 }
             }
 
             // ncb SeparateLayerAdaptor → owner
-            if(auto *adaptor =
-                   ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
-                       obj, false)) {
-                auto *ownerObj = adaptor->getOwner();
-                if(ownerObj) {
-                    auto ownerResolved = tryResolveLayerDispatch(
-                        tTJSVariant(ownerObj, ownerObj));
-                    if(ownerResolved) return ownerResolved;
+            for(auto *candidate : candidates) {
+                if(!candidate) {
+                    continue;
+                }
+                if(auto *adaptor =
+                       ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
+                           candidate, false)) {
+                    auto *ownerObj = adaptor->getOwner();
+                    if(ownerObj) {
+                        auto ownerResolved = tryResolveLayerDispatch(
+                            tTJSVariant(ownerObj, ownerObj));
+                        if(ownerResolved) return ownerResolved;
+                    }
                 }
             }
 
@@ -944,6 +973,20 @@ namespace internal {
                 }
             }
             return 0.0;
+        }
+
+        inline double motionClipEndTimeLikeKrkrsdl3(
+            const detail::MotionClip *clip) {
+            if(!clip) {
+                return 0.0;
+            }
+            if(clip->syncTime > 0.0) {
+                return clip->syncTime;
+            }
+            if(clip->selfSyncTime > 0.0) {
+                return clip->selfSyncTime;
+            }
+            return clip->totalFrames;
         }
 
         inline void mergeFrameContent(const std::shared_ptr<PSB::PSBDictionary> &content,

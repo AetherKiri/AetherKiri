@@ -127,7 +127,7 @@ namespace motion {
         void setVariableKeys(tTJSVariant v) { _variableKeys = v; }
         tTJSVariant getVariableKeys();
 
-        void setAllplaying(bool v) { _allplaying = v; }
+        void setAllplaying(bool v);
         bool getAllplaying() const { return _allplaying; }
 
         void setSyncWaiting(bool v) { _syncWaiting = v; }
@@ -312,6 +312,10 @@ namespace motion {
         void adjustGamma(tTJSVariant args);
         void draw();
         void frameProgress(double dt);
+        void autoProgressFromContinuousTick(tjs_uint64 tick);
+        iTJSDispatch2 *getAutoProgressDispatchForCompat() const {
+            return _autoProgressDispatch;
+        }
 
         // Viewport/display
         void setFlip(bool v);
@@ -504,9 +508,13 @@ namespace motion {
         void applyPreparedRenderItemTranslateOffsets();
         bool buildRenderCommands(tjs_int canvasWidth, tjs_int canvasHeight);
         bool executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
-                                        bool skipUpdate);
+                                         bool skipUpdate);
         bool updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject);
         bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
+        void enableAutoProgress(iTJSDispatch2 *objthis);
+        void disableAutoProgress();
+        void noteManualProgress();
+        void dispatchPendingEvents(iTJSDispatch2 *objthis);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);
@@ -573,6 +581,11 @@ namespace motion {
         inline static bool _useD3D;
         ttstr _meshline;  // Aligned to libkrkr2.so +1052: ttstr
         bool _busy = false;
+        iTJSDispatch2 *_autoProgressDispatch = nullptr;
+        tjs_uint64 _autoProgressLastTick = 0;
+        tjs_uint64 _manualProgressLastTick = 0;
+        bool _autoProgressHasLastTick = false;
+        bool _autoProgressRegistered = false;
 
         // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
         // Camera velocity at player+784/792/800, damping at player+600
@@ -725,5 +738,7 @@ namespace motion {
         // Propagated to child particle players (sub_6BF0DC at 0x6BF9C0).
         tTJSVariant _emoteEditVariant;    // player+1012
     };
+
+    std::vector<tTJSVariant> SnapshotAutoProgressPlayerDispatchesForCompat();
 
 } // namespace motion

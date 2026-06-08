@@ -1,6 +1,13 @@
 #include "ncbind.hpp"
 #include "DebugIntf.h"
+#include "EventIntf.h"
+#include "LayerImpl.h"
 #include "ScriptMgnIntf.h"
+#include "motionplayer/Player.h"
+
+#include <algorithm>
+#include <mutex>
+#include <vector>
 
 // Stub modules — register empty entries so Plugins.link() succeeds.
 // The engine already has built-in support for the functionality these
@@ -194,27 +201,428 @@ static void LogGlesCompatArgsOnce(const tjs_char *tag, tjs_int numparams,
     TVPAddLog(msg);
 }
 
+static iTJSDispatch2 *g_glesCompatRegisteredLayer = nullptr;
+
+struct GlesCompatRenderable {
+    tTJSVariant player;
+    tTJSVariant layer;
+    uintptr_t ownerKey = 0;
+};
+
+static std::mutex &GlesCompatRenderMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+static std::vector<GlesCompatRenderable> &GlesCompatRenderables() {
+    static std::vector<GlesCompatRenderable> renderables;
+    return renderables;
+}
+
+static bool GlesCompatGetObjectProperty(const tTJSVariant &object,
+                                        const tjs_char *name,
+                                        tTJSVariant &result) {
+    result.Clear();
+    if(object.Type() != tvtObject || !object.AsObjectNoAddRef() || !name)
+        return false;
+    iTJSDispatch2 *dispatch = object.AsObjectNoAddRef();
+    return TJS_SUCCEEDED(dispatch->PropGet(
+        TJS_IGNOREPROP, name, nullptr, &result, dispatch));
+}
+
+static bool GlesCompatIsLayerDispatch(iTJSDispatch2 *object) {
+    if(!object)
+        return false;
+
+    tTJSNI_BaseLayer *layer = nullptr;
+    if(TJS_SUCCEEDED(object->NativeInstanceSupport(
+           TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+           reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
+       layer) {
+        return true;
+    }
+
+    tTJSVariant imageWidth;
+    return TJS_SUCCEEDED(object->PropGet(
+        TJS_IGNOREPROP, TJS_W("imageWidth"), nullptr, &imageWidth, object)) &&
+        imageWidth.Type() != tvtVoid;
+}
+
+static iTJSDispatch2 *GlesCompatResolveLayerDispatch(const tTJSVariant &value,
+                                                     int depth = 0) {
+    if(depth > 4 || value.Type() != tvtObject || !value.AsObjectNoAddRef())
+        return nullptr;
+
+    iTJSDispatch2 *object = value.AsObjectNoAddRef();
+    if(GlesCompatIsLayerDispatch(object))
+        return object;
+
+    static const tjs_char *kLayerProps[] = {
+        TJS_W("owner"), TJS_W("_owner"), TJS_W("targetLayer"),
+        TJS_W("layer"), TJS_W("_layer"), TJS_W("baseLayer"),
+        TJS_W("_base"), TJS_W("base"), TJS_W("fore"),
+        TJS_W("back"), TJS_W("primaryLayer"), TJS_W("parent"),
+        nullptr
+    };
+
+    for(int i = 0; kLayerProps[i]; ++i) {
+        tTJSVariant prop;
+        if(!GlesCompatGetObjectProperty(value, kLayerProps[i], prop) ||
+           prop.Type() != tvtObject || !prop.AsObjectNoAddRef() ||
+           prop.AsObjectNoAddRef() == object) {
+            continue;
+        }
+        if(auto *resolved = GlesCompatResolveLayerDispatch(prop, depth + 1))
+            return resolved;
+    }
+    return nullptr;
+}
+
+static iTJSDispatch2 *GlesCompatFindLayerInParams(tjs_int numparams,
+                                                  tTJSVariant **param) {
+    if(!param)
+        return nullptr;
+    for(tjs_int i = 0; i < numparams; ++i) {
+        if(!param[i])
+            continue;
+        if(auto *layer = GlesCompatResolveLayerDispatch(*param[i]))
+            return layer;
+    }
+    return nullptr;
+}
+
+static iTJSDispatch2 *GlesCompatResolveMainWindowPrimaryLayer() {
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if(!global)
+        return nullptr;
+
+    iTJSDispatch2 *resolved = nullptr;
+    tTJSVariant windowClass;
+    tTJSVariant mainWindow;
+    tTJSVariant primaryLayer;
+    if(TJS_SUCCEEDED(global->PropGet(0, TJS_W("Window"), nullptr,
+                                     &windowClass, global)) &&
+       windowClass.Type() == tvtObject && windowClass.AsObjectNoAddRef() &&
+       TJS_SUCCEEDED(windowClass.AsObjectNoAddRef()->PropGet(
+           0, TJS_W("mainWindow"), nullptr, &mainWindow,
+           windowClass.AsObjectNoAddRef())) &&
+       mainWindow.Type() == tvtObject && mainWindow.AsObjectNoAddRef() &&
+       TJS_SUCCEEDED(mainWindow.AsObjectNoAddRef()->PropGet(
+           0, TJS_W("primaryLayer"), nullptr, &primaryLayer,
+           mainWindow.AsObjectNoAddRef())) &&
+       primaryLayer.Type() == tvtObject && primaryLayer.AsObjectNoAddRef()) {
+        resolved = GlesCompatResolveLayerDispatch(primaryLayer);
+        if(!resolved)
+            resolved = primaryLayer.AsObjectNoAddRef();
+    }
+
+    global->Release();
+    return resolved;
+}
+
+static iTJSDispatch2 *GlesCompatDefaultLayer() {
+    if(g_glesCompatRegisteredLayer)
+        return g_glesCompatRegisteredLayer;
+    g_glesCompatRegisteredLayer = GlesCompatResolveMainWindowPrimaryLayer();
+    return g_glesCompatRegisteredLayer;
+}
+
+static motion::Player *GlesCompatNativeMotionPlayer(iTJSDispatch2 *object) {
+    return object ? ncbInstanceAdaptor<motion::Player>::GetNativeInstance(
+                        object, false)
+                  : nullptr;
+}
+
+static iTJSDispatch2 *GlesCompatResolveMotionPlayerDispatch(
+    const tTJSVariant &value, int depth = 0) {
+    if(depth > 3 || value.Type() != tvtObject || !value.AsObjectNoAddRef())
+        return nullptr;
+
+    iTJSDispatch2 *object = value.AsObjectNoAddRef();
+    if(GlesCompatNativeMotionPlayer(object))
+        return object;
+
+    static const tjs_char *kPlayerProps[] = {
+        TJS_W("player"), TJS_W("motionPlayer"), TJS_W("motion"),
+        TJS_W("object"), TJS_W("target"), TJS_W("owner"),
+        TJS_W("_owner"), nullptr
+    };
+
+    for(int i = 0; kPlayerProps[i]; ++i) {
+        tTJSVariant prop;
+        if(!GlesCompatGetObjectProperty(value, kPlayerProps[i], prop) ||
+           prop.Type() != tvtObject || !prop.AsObjectNoAddRef() ||
+           prop.AsObjectNoAddRef() == object) {
+            continue;
+        }
+        if(auto *resolved =
+               GlesCompatResolveMotionPlayerDispatch(prop, depth + 1)) {
+            return resolved;
+        }
+    }
+    return nullptr;
+}
+
+static iTJSDispatch2 *GlesCompatFindMotionPlayerInParams(tjs_int numparams,
+                                                         tTJSVariant **param) {
+    if(!param)
+        return nullptr;
+    for(tjs_int i = 0; i < numparams; ++i) {
+        if(!param[i])
+            continue;
+        if(auto *player = GlesCompatResolveMotionPlayerDispatch(*param[i]))
+            return player;
+    }
+    return nullptr;
+}
+
+static bool GlesCompatInvokeMotionDraw(iTJSDispatch2 *player,
+                                       iTJSDispatch2 *targetLayer,
+                                       const tjs_char *tag) {
+    if(!player || !targetLayer || !GlesCompatNativeMotionPlayer(player))
+        return false;
+
+    static bool rendering = false;
+    if(rendering)
+        return false;
+    rendering = true;
+    struct Guard {
+        ~Guard() { rendering = false; }
+    } guard;
+
+    try {
+        tTJSVariant result;
+        tTJSVariant layerArg(targetLayer, targetLayer);
+        tTJSVariant *args[] = { &layerArg };
+        tjs_uint hint = 0;
+        const tjs_error er = player->FuncCall(
+            0, TJS_W("draw"), &hint, &result, 1, args, player);
+        if(TJS_SUCCEEDED(er))
+            return true;
+        TVPAddLog(ttstr(TJS_W("GLESCompat.")) +
+                  (tag ? tag : TJS_W("render")) +
+                  TJS_W(": Motion.Player.draw failed"));
+    } catch(const eTJS &e) {
+        TVPAddLog(ttstr(TJS_W("GLESCompat.")) +
+                  (tag ? tag : TJS_W("render")) +
+                  TJS_W(": Motion.Player.draw threw ") + e.GetMessage());
+    } catch(...) {
+        TVPAddLog(ttstr(TJS_W("GLESCompat.")) +
+                  (tag ? tag : TJS_W("render")) +
+                  TJS_W(": Motion.Player.draw threw unknown exception"));
+    }
+    return false;
+}
+
+class GlesCompatMotionRenderHook final :
+    public tTVPContinuousEventCallbackIntf {
+public:
+    void Start() {
+        if(registered_)
+            return;
+        TVPAddContinuousEventHook(this);
+        registered_ = true;
+    }
+    void Stop() {
+        if(!registered_)
+            return;
+        TVPRemoveContinuousEventHook(this);
+        registered_ = false;
+    }
+    void OnContinuousCallback(tjs_uint64) override;
+
+private:
+    bool registered_ = false;
+};
+
+static GlesCompatMotionRenderHook &GlesCompatRenderHook() {
+    static GlesCompatMotionRenderHook hook;
+    return hook;
+}
+
+static void GlesCompatRegisterRenderable(tjs_int numparams,
+                                         tTJSVariant **param,
+                                         uintptr_t ownerKey,
+                                         const tjs_char *tag) {
+    iTJSDispatch2 *layer = GlesCompatFindLayerInParams(numparams, param);
+    if(layer)
+        g_glesCompatRegisteredLayer = layer;
+
+    iTJSDispatch2 *player =
+        GlesCompatFindMotionPlayerInParams(numparams, param);
+    if(!player)
+        return;
+
+    std::lock_guard<std::mutex> lock(GlesCompatRenderMutex());
+    auto &items = GlesCompatRenderables();
+    auto it = std::find_if(items.begin(), items.end(),
+        [player](const GlesCompatRenderable &item) {
+            return item.player.Type() == tvtObject &&
+                item.player.AsObjectNoAddRef() == player;
+        });
+    if(it == items.end()) {
+        if(items.size() >= 64)
+            items.erase(items.begin());
+        GlesCompatRenderable item;
+        item.player = tTJSVariant(player, player);
+        if(layer)
+            item.layer = tTJSVariant(layer, layer);
+        item.ownerKey = ownerKey;
+        items.push_back(item);
+        TVPAddLog(ttstr(TJS_W("GLESCompat.")) +
+                  (tag ? tag : TJS_W("entry")) +
+                  TJS_W(": registered Motion.Player render target"));
+    } else {
+        if(layer)
+            it->layer = tTJSVariant(layer, layer);
+        it->ownerKey = ownerKey;
+    }
+    GlesCompatRenderHook().Start();
+}
+
+static void GlesCompatRemoveRenderable(tjs_int numparams, tTJSVariant **param,
+                                       uintptr_t ownerKey) {
+    iTJSDispatch2 *player =
+        GlesCompatFindMotionPlayerInParams(numparams, param);
+    std::lock_guard<std::mutex> lock(GlesCompatRenderMutex());
+    auto &items = GlesCompatRenderables();
+    items.erase(std::remove_if(items.begin(), items.end(),
+        [player, ownerKey](const GlesCompatRenderable &item) {
+            const bool playerMatches =
+                player && item.player.Type() == tvtObject &&
+                item.player.AsObjectNoAddRef() == player;
+            const bool ownerMatches = ownerKey && item.ownerKey == ownerKey;
+            return playerMatches || (!player && ownerMatches);
+        }), items.end());
+}
+
+static tjs_int GlesCompatRenderMotionPlayers(const tjs_char *tag) {
+    std::vector<GlesCompatRenderable> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(GlesCompatRenderMutex());
+        snapshot = GlesCompatRenderables();
+    }
+
+    tjs_int rendered = 0;
+    iTJSDispatch2 *defaultLayer = GlesCompatDefaultLayer();
+    for(const auto &item : snapshot) {
+        iTJSDispatch2 *player = item.player.Type() == tvtObject
+            ? item.player.AsObjectNoAddRef()
+            : nullptr;
+        iTJSDispatch2 *layer = item.layer.Type() == tvtObject
+            ? item.layer.AsObjectNoAddRef()
+            : defaultLayer;
+        if(GlesCompatInvokeMotionDraw(player, layer, tag))
+            ++rendered;
+    }
+
+    if(snapshot.empty() && defaultLayer) {
+        for(const auto &playerVar :
+            motion::SnapshotAutoProgressPlayerDispatchesForCompat()) {
+            iTJSDispatch2 *player = playerVar.Type() == tvtObject
+                ? playerVar.AsObjectNoAddRef()
+                : nullptr;
+            if(GlesCompatInvokeMotionDraw(player, defaultLayer, tag))
+                ++rendered;
+        }
+    }
+
+    static tjs_int logCount = 0;
+    if(rendered > 0 && logCount++ < 8) {
+        TVPAddLog(ttstr(TJS_W("GLESCompat.")) +
+                  (tag ? tag : TJS_W("render")) +
+                  TJS_W(": rendered Motion.Player count=") + ttstr(rendered));
+    }
+    return rendered;
+}
+
+void GlesCompatMotionRenderHook::OnContinuousCallback(tjs_uint64) {
+    GlesCompatRenderMotionPlayers(TJS_W("continuous"));
+}
+
 static tjs_error GlesCompatEntryUpdateObjectCb(tTJSVariant *result,
                                                tjs_int numparams,
                                                tTJSVariant **param,
-                                               iTJSDispatch2 *) {
+                                               iTJSDispatch2 *objthis) {
     LogGlesCompatArgsOnce(TJS_W("entryUpdateObject"), numparams, param);
+    GlesCompatRegisterRenderable(
+        numparams, param, reinterpret_cast<uintptr_t>(objthis),
+        TJS_W("entryUpdateObject"));
     if(result)
         *result = true;
     return TJS_S_OK;
 }
 
 static tjs_error GlesCompatCopyLayerCb(tTJSVariant *result, tjs_int numparams,
-                                       tTJSVariant **param, iTJSDispatch2 *) {
+                                       tTJSVariant **param,
+                                       iTJSDispatch2 *objthis) {
     LogGlesCompatArgsOnce(TJS_W("copyLayer"), numparams, param);
+    if(auto *layer = GlesCompatFindLayerInParams(numparams, param))
+        g_glesCompatRegisteredLayer = layer;
+    GlesCompatRegisterRenderable(
+        numparams, param, reinterpret_cast<uintptr_t>(objthis),
+        TJS_W("copyLayer"));
+    GlesCompatRenderMotionPlayers(TJS_W("copyLayer"));
     if(result)
         *result = true;
     return TJS_S_OK;
 }
 
 static tjs_error GlesCompatDrawAffineCb(tTJSVariant *result, tjs_int numparams,
-                                        tTJSVariant **param, iTJSDispatch2 *) {
+                                        tTJSVariant **param,
+                                        iTJSDispatch2 *objthis) {
     LogGlesCompatArgsOnce(TJS_W("drawAffine"), numparams, param);
+    if(auto *layer = GlesCompatFindLayerInParams(numparams, param))
+        g_glesCompatRegisteredLayer = layer;
+    GlesCompatRegisterRenderable(
+        numparams, param, reinterpret_cast<uintptr_t>(objthis),
+        TJS_W("drawAffine"));
+    GlesCompatRenderMotionPlayers(TJS_W("drawAffine"));
+    if(result)
+        *result = true;
+    return TJS_S_OK;
+}
+
+static tjs_error GlesCompatDrawLayerCb(tTJSVariant *result, tjs_int numparams,
+                                       tTJSVariant **param,
+                                       iTJSDispatch2 *objthis) {
+    LogGlesCompatArgsOnce(TJS_W("drawLayer"), numparams, param);
+    if(auto *layer = GlesCompatFindLayerInParams(numparams, param))
+        g_glesCompatRegisteredLayer = layer;
+    GlesCompatRegisterRenderable(
+        numparams, param, reinterpret_cast<uintptr_t>(objthis),
+        TJS_W("drawLayer"));
+    GlesCompatRenderMotionPlayers(TJS_W("drawLayer"));
+    if(result)
+        *result = true;
+    return TJS_S_OK;
+}
+
+static tjs_error GlesCompatRenderCb(tTJSVariant *result, tjs_int,
+                                    tTJSVariant **, iTJSDispatch2 *) {
+    GlesCompatRenderMotionPlayers(TJS_W("render"));
+    if(result)
+        *result = true;
+    return TJS_S_OK;
+}
+
+static tjs_error GlesCompatGlesEntryCb(tTJSVariant *result, tjs_int numparams,
+                                       tTJSVariant **param,
+                                       iTJSDispatch2 *objthis) {
+    LogGlesCompatArgsOnce(TJS_W("glesEntry"), numparams, param);
+    GlesCompatRegisterRenderable(
+        numparams, param, reinterpret_cast<uintptr_t>(objthis),
+        TJS_W("glesEntry"));
+    if(result)
+        *result = true;
+    return TJS_S_OK;
+}
+
+static tjs_error GlesCompatGlesRemoveCb(tTJSVariant *result, tjs_int numparams,
+                                        tTJSVariant **param,
+                                        iTJSDispatch2 *objthis) {
+    GlesCompatRemoveRenderable(
+        numparams, param, reinterpret_cast<uintptr_t>(objthis));
     if(result)
         *result = true;
     return TJS_S_OK;
@@ -279,10 +687,10 @@ static tjs_error CreateGlesCompatModule(tTJSVariant *result, tjs_int width,
     SetGlesCompatMethod(dict, TJS_W("makeCurrent"), GlesCompatReturnTrueCb);
     SetGlesCompatMethod(dict, TJS_W("beginScene"), GlesCompatReturnTrueCb);
     SetGlesCompatMethod(dict, TJS_W("endScene"), GlesCompatReturnTrueCb);
-    SetGlesCompatMethod(dict, TJS_W("finalize"), GlesCompatReturnTrueCb);
-    SetGlesCompatMethod(dict, TJS_W("render"), GlesCompatReturnTrueCb);
-    SetGlesCompatMethod(dict, TJS_W("glesEntry"), GlesCompatReturnTrueCb);
-    SetGlesCompatMethod(dict, TJS_W("glesRemove"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("finalize"), GlesCompatGlesRemoveCb);
+    SetGlesCompatMethod(dict, TJS_W("render"), GlesCompatRenderCb);
+    SetGlesCompatMethod(dict, TJS_W("glesEntry"), GlesCompatGlesEntryCb);
+    SetGlesCompatMethod(dict, TJS_W("glesRemove"), GlesCompatGlesRemoveCb);
     SetGlesCompatMethod(dict, TJS_W("capture"), GlesCompatReturnFirstArgOrTrueCb);
     SetGlesCompatMethod(dict, TJS_W("captureScreen"),
                         GlesCompatReturnFirstArgOrTrueCb);
@@ -292,8 +700,8 @@ static tjs_error CreateGlesCompatModule(tTJSVariant *result, tjs_int width,
                         GlesCompatReturnFirstArgOrTrueCb);
     SetGlesCompatMethod(dict, TJS_W("copyLayer"), GlesCompatCopyLayerCb);
     SetGlesCompatMethod(dict, TJS_W("glesCopyLayer"), GlesCompatCopyLayerCb);
-    SetGlesCompatMethod(dict, TJS_W("drawLayer"), GlesCompatReturnTrueCb);
-    SetGlesCompatMethod(dict, TJS_W("glesDrawLayer"), GlesCompatReturnTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("drawLayer"), GlesCompatDrawLayerCb);
+    SetGlesCompatMethod(dict, TJS_W("glesDrawLayer"), GlesCompatDrawLayerCb);
     SetGlesCompatMethod(dict, TJS_W("drawAffine"), GlesCompatDrawAffineCb);
     SetGlesCompatMethod(dict, TJS_W("drawAffineGLES"), GlesCompatDrawAffineCb);
     SetGlesCompatMethod(dict, TJS_W("setMatrix"), GlesCompatReturnTrueCb);
@@ -321,6 +729,85 @@ public:
     static tjs_error noOpCb(tTJSVariant *result, tjs_int, tTJSVariant **,
                             GLESAdaptor *) {
         SetGlesCompatInt(result, 1);
+        return TJS_S_OK;
+    }
+
+    static tjs_error entryUpdateObjectCb(tTJSVariant *result,
+                                         tjs_int numparams,
+                                         tTJSVariant **param,
+                                         GLESAdaptor *self) {
+        LogGlesCompatArgsOnce(TJS_W("adaptor.entryUpdateObject"),
+                              numparams, param);
+        GlesCompatRegisterRenderable(
+            numparams, param, reinterpret_cast<uintptr_t>(self),
+            TJS_W("adaptor.entryUpdateObject"));
+        if(result)
+            *result = true;
+        return TJS_S_OK;
+    }
+
+    static tjs_error copyLayerCb(tTJSVariant *result, tjs_int numparams,
+                                 tTJSVariant **param, GLESAdaptor *self) {
+        LogGlesCompatArgsOnce(TJS_W("adaptor.copyLayer"), numparams, param);
+        if(auto *layer = GlesCompatFindLayerInParams(numparams, param))
+            g_glesCompatRegisteredLayer = layer;
+        GlesCompatRegisterRenderable(
+            numparams, param, reinterpret_cast<uintptr_t>(self),
+            TJS_W("adaptor.copyLayer"));
+        GlesCompatRenderMotionPlayers(TJS_W("adaptor.copyLayer"));
+        if(result)
+            *result = true;
+        return TJS_S_OK;
+    }
+
+    static tjs_error drawLayerCb(tTJSVariant *result, tjs_int numparams,
+                                 tTJSVariant **param, GLESAdaptor *self) {
+        LogGlesCompatArgsOnce(TJS_W("adaptor.drawLayer"), numparams, param);
+        if(auto *layer = GlesCompatFindLayerInParams(numparams, param))
+            g_glesCompatRegisteredLayer = layer;
+        GlesCompatRegisterRenderable(
+            numparams, param, reinterpret_cast<uintptr_t>(self),
+            TJS_W("adaptor.drawLayer"));
+        GlesCompatRenderMotionPlayers(TJS_W("adaptor.drawLayer"));
+        if(result)
+            *result = true;
+        return TJS_S_OK;
+    }
+
+    static tjs_error renderCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                              GLESAdaptor *) {
+        GlesCompatRenderMotionPlayers(TJS_W("adaptor.render"));
+        if(result)
+            *result = true;
+        return TJS_S_OK;
+    }
+
+    static tjs_error finalizeCb(tTJSVariant *result, tjs_int,
+                                tTJSVariant **, GLESAdaptor *self) {
+        GlesCompatRemoveRenderable(0, nullptr,
+                                   reinterpret_cast<uintptr_t>(self));
+        if(result)
+            *result = true;
+        return TJS_S_OK;
+    }
+
+    static tjs_error glesEntryCb(tTJSVariant *result, tjs_int numparams,
+                                 tTJSVariant **param, GLESAdaptor *self) {
+        LogGlesCompatArgsOnce(TJS_W("adaptor.glesEntry"), numparams, param);
+        GlesCompatRegisterRenderable(
+            numparams, param, reinterpret_cast<uintptr_t>(self),
+            TJS_W("adaptor.glesEntry"));
+        if(result)
+            *result = true;
+        return TJS_S_OK;
+    }
+
+    static tjs_error glesRemoveCb(tTJSVariant *result, tjs_int numparams,
+                                  tTJSVariant **param, GLESAdaptor *self) {
+        GlesCompatRemoveRenderable(
+            numparams, param, reinterpret_cast<uintptr_t>(self));
+        if(result)
+            *result = true;
         return TJS_S_OK;
     }
 
@@ -386,6 +873,50 @@ public:
         return TJS_S_OK;
     }
 
+    static tjs_error entryUpdateObjectCb(tTJSVariant *result,
+                                         tjs_int numparams,
+                                         tTJSVariant **param,
+                                         OGLDrawDevice *self) {
+        return GLESAdaptor::entryUpdateObjectCb(
+            result, numparams, param, self ? &self->adaptor_ : nullptr);
+    }
+
+    static tjs_error copyLayerCb(tTJSVariant *result, tjs_int numparams,
+                                 tTJSVariant **param, OGLDrawDevice *self) {
+        return GLESAdaptor::copyLayerCb(
+            result, numparams, param, self ? &self->adaptor_ : nullptr);
+    }
+
+    static tjs_error drawLayerCb(tTJSVariant *result, tjs_int numparams,
+                                 tTJSVariant **param, OGLDrawDevice *self) {
+        return GLESAdaptor::drawLayerCb(
+            result, numparams, param, self ? &self->adaptor_ : nullptr);
+    }
+
+    static tjs_error renderCb(tTJSVariant *result, tjs_int numparams,
+                              tTJSVariant **param, OGLDrawDevice *self) {
+        return GLESAdaptor::renderCb(
+            result, numparams, param, self ? &self->adaptor_ : nullptr);
+    }
+
+    static tjs_error finalizeCb(tTJSVariant *result, tjs_int numparams,
+                                tTJSVariant **param, OGLDrawDevice *self) {
+        return GLESAdaptor::finalizeCb(
+            result, numparams, param, self ? &self->adaptor_ : nullptr);
+    }
+
+    static tjs_error glesEntryCb(tTJSVariant *result, tjs_int numparams,
+                                 tTJSVariant **param, OGLDrawDevice *self) {
+        return GLESAdaptor::glesEntryCb(
+            result, numparams, param, self ? &self->adaptor_ : nullptr);
+    }
+
+    static tjs_error glesRemoveCb(tTJSVariant *result, tjs_int numparams,
+                                  tTJSVariant **param, OGLDrawDevice *self) {
+        return GLESAdaptor::glesRemoveCb(
+            result, numparams, param, self ? &self->adaptor_ : nullptr);
+    }
+
     static tjs_error getModuleCb(tTJSVariant *result, tjs_int numparams,
                                  tTJSVariant **param, OGLDrawDevice *self) {
         return GLESAdaptor::getModuleCb(result, numparams, param,
@@ -430,25 +961,25 @@ NCB_REGISTER_CLASS(GLESAdaptor) {
     NCB_METHOD_RAW_CALLBACK(makeCurrent, &GLESAdaptor::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(beginScene, &GLESAdaptor::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(endScene, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(entryUpdateObject, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(entryUpdateObject, &GLESAdaptor::entryUpdateObjectCb, 0);
     NCB_METHOD_RAW_CALLBACK(capture, &GLESAdaptor::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(glesCapture, &GLESAdaptor::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(captureScreen, &GLESAdaptor::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(glesCaptureScreen, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(copyLayer, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesCopyLayer, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(drawLayer, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesDrawLayer, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(drawAffine, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(drawAffineGLES, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(render, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(copyLayer, &GLESAdaptor::copyLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCopyLayer, &GLESAdaptor::copyLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawLayer, &GLESAdaptor::drawLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesDrawLayer, &GLESAdaptor::drawLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawAffine, &GLESAdaptor::drawLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawAffineGLES, &GLESAdaptor::drawLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(render, &GLESAdaptor::renderCb, 0);
     NCB_METHOD_RAW_CALLBACK(setMatrix, &GLESAdaptor::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(createModel, &GLESAdaptor::createModelCb, 0);
     NCB_METHOD_RAW_CALLBACK(createMatrix, &GLESAdaptor::createMatrixCb, 0);
     NCB_METHOD_RAW_CALLBACK(createDevice, &GLESAdaptor::createDeviceCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesEntry, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesRemove, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(finalize, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesEntry, &GLESAdaptor::glesEntryCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesRemove, &GLESAdaptor::glesRemoveCb, 0);
+    NCB_METHOD_RAW_CALLBACK(finalize, &GLESAdaptor::finalizeCb, 0);
 }
 
 NCB_REGISTER_CLASS(OGLDrawDevice) {
@@ -460,26 +991,54 @@ NCB_REGISTER_CLASS(OGLDrawDevice) {
     NCB_METHOD_RAW_CALLBACK(makeCurrent, &OGLDrawDevice::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(beginScene, &OGLDrawDevice::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(endScene, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(entryUpdateObject, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(entryUpdateObject, &OGLDrawDevice::entryUpdateObjectCb, 0);
     NCB_METHOD_RAW_CALLBACK(capture, &OGLDrawDevice::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(glesCapture, &OGLDrawDevice::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(captureScreen, &OGLDrawDevice::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(glesCaptureScreen, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(copyLayer, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesCopyLayer, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(drawLayer, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesDrawLayer, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(drawAffine, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(drawAffineGLES, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(render, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(copyLayer, &OGLDrawDevice::copyLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCopyLayer, &OGLDrawDevice::copyLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawLayer, &OGLDrawDevice::drawLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesDrawLayer, &OGLDrawDevice::drawLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawAffine, &OGLDrawDevice::drawLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(drawAffineGLES, &OGLDrawDevice::drawLayerCb, 0);
+    NCB_METHOD_RAW_CALLBACK(render, &OGLDrawDevice::renderCb, 0);
     NCB_METHOD_RAW_CALLBACK(setMatrix, &OGLDrawDevice::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(createModel, &OGLDrawDevice::createModelCb, 0);
     NCB_METHOD_RAW_CALLBACK(createMatrix, &OGLDrawDevice::createMatrixCb, 0);
     NCB_METHOD_RAW_CALLBACK(createDevice, &OGLDrawDevice::createDeviceCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesEntry, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesRemove, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(finalize, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesEntry, &OGLDrawDevice::glesEntryCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesRemove, &OGLDrawDevice::glesRemoveCb, 0);
+    NCB_METHOD_RAW_CALLBACK(finalize, &OGLDrawDevice::finalizeCb, 0);
 }
+
+static tjs_error GlesCompatDrawDeviceGetModuleCb(tTJSVariant *result,
+                                                 tjs_int, tTJSVariant **,
+                                                 iTJSDispatch2 *) {
+    return CreateGlesCompatModule(result, 0, 0);
+}
+
+static void GlesCompatPostRegist() {
+    try {
+        TVPExecuteExpression(
+            TJS_W("try { Window.OGLDrawDevice = OGLDrawDevice; } catch(e) { }\n")
+            TJS_W("try { Window.GLESAdaptor = GLESAdaptor; } catch(e) { }\n")
+            TJS_W("try { KAGWindow.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n")
+            TJS_W("try { KAGWindow.prototype.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"),
+            static_cast<tTJSVariant *>(nullptr));
+    } catch(...) {
+    }
+    GlesCompatRenderHook().Start();
+}
+
+NCB_POST_REGIST_CALLBACK(GlesCompatPostRegist);
+
+NCB_ATTACH_FUNCTION_WITHTAG(getModule, WindowPassThroughDrawDeviceGlesCompat,
+                            Window.PassThroughDrawDevice,
+                            GlesCompatDrawDeviceGetModuleCb);
+NCB_ATTACH_FUNCTION_WITHTAG(getModule, WindowBasicDrawDeviceGlesCompat,
+                            Window.BasicDrawDevice,
+                            GlesCompatDrawDeviceGetModuleCb);
 #endif
 
 #undef NCB_MODULE_NAME

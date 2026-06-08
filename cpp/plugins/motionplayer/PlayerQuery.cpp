@@ -4,9 +4,87 @@
 #include "PlayerInternal.h"
 #include "HitTestInternal.h"
 
+#include <cstdlib>
+#include <cstring>
+
 using namespace motion::internal;
 
 namespace {
+    bool motionDebugEnabled() {
+        const char *enabled = std::getenv("AETHERKIRI_MOTION_DEBUG");
+        return enabled && *enabled && std::strcmp(enabled, "0") != 0;
+    }
+
+    std::string describeLayerForQueryDebug(tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return "<null>";
+        }
+        std::ostringstream out;
+        out << "ptr=" << static_cast<const void *>(layer)
+            << ",name=" << motion::detail::narrow(layer->GetName())
+            << ",primary=" << (layer->IsPrimary() ? 1 : 0)
+            << ",visible=" << (layer->GetVisible() ? 1 : 0)
+            << ",parentVisible=" << (layer->GetParentVisible() ? 1 : 0)
+            << ",opacity=" << layer->GetOpacity()
+            << ",order=" << layer->GetOrderIndex()
+            << ",overall=" << layer->GetOverallOrderIndex()
+            << ",rect=[" << layer->GetLeft() << "," << layer->GetTop()
+            << "," << layer->GetWidth() << "x" << layer->GetHeight() << "]"
+            << ",image=" << layer->GetImageWidth() << "x"
+            << layer->GetImageHeight()
+            << ",hasImage=" << (layer->GetHasImage() ? 1 : 0)
+            << ",type=" << static_cast<int>(layer->GetType())
+            << ",children=" << layer->GetCount();
+        return out.str();
+    }
+
+    std::string describeLayerAncestryForQueryDebug(tTJSNI_BaseLayer *layer) {
+        std::ostringstream out;
+        int depth = 0;
+        while(layer && depth < 12) {
+            if(depth != 0) {
+                out << " <- ";
+            }
+            out << "[" << depth << ":"
+                << describeLayerForQueryDebug(layer) << "]";
+            layer = layer->GetParent();
+            ++depth;
+        }
+        if(layer) {
+            out << " <- ...";
+        }
+        return out.str();
+    }
+
+    iTJSDispatch2 *selectVariantDispatchTarget(tTJSVariant *value) {
+        if(!value || value->Type() != tvtObject) {
+            return nullptr;
+        }
+        auto closure = value->AsObjectClosureNoAddRef();
+        if(closure.ObjThis) {
+            return closure.ObjThis;
+        }
+        if(closure.Object) {
+            return closure.Object;
+        }
+        return value->AsObjectNoAddRef();
+    }
+
+    std::string describeDispatchLayerProbe(iTJSDispatch2 *dispatch) {
+        if(!dispatch) {
+            return "<null>";
+        }
+        tTJSNI_BaseLayer *layer = nullptr;
+        const tjs_error er = dispatch->NativeInstanceSupport(
+            TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+            reinterpret_cast<iTJSNativeInstance **>(&layer));
+        std::ostringstream out;
+        out << "dispatch=" << static_cast<const void *>(dispatch)
+            << ",nis=" << er
+            << ",layer=[" << describeLayerForQueryDebug(layer) << "]";
+        return out.str();
+    }
+
     float variableEaseWeightLike_0x671228(double ease) {
         if(ease > 0.0) {
             return static_cast<float>(ease + 1.0);
@@ -190,6 +268,9 @@ namespace motion {
         _syncWaiting = false;
         _syncActive = false;
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        if(!_allplaying) {
+            disableAutoProgress();
+        }
     }
 
     void Player::setStereovisionCameraPosition(double x, double y, double z) {
@@ -764,6 +845,9 @@ namespace motion {
                 it->second, controlIt->second, 0.0);
         }
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        if(!_allplaying) {
+            disableAutoProgress();
+        }
     }
 
     void Player::stopTimeline(ttstr label) {
@@ -802,6 +886,9 @@ namespace motion {
         }
 
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        if(!_allplaying) {
+            disableAutoProgress();
+        }
     }
 
     void Player::setTimelineBlendRatio(ttstr label, double ratio) {
@@ -1130,6 +1217,15 @@ namespace motion {
             result->Clear();
         }
         auto *nativeInstance = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(LOGGER && motionDebugEnabled()) {
+            LOGGER->info(
+                "motion drawCompat entered: objthis={} native={} numparams={} firstArgType={}",
+                static_cast<const void *>(objthis),
+                static_cast<const void *>(nativeInstance), numparams,
+                (numparams > 0 && param && param[0])
+                    ? static_cast<int>(param[0]->Type())
+                    : -1);
+        }
         if(!nativeInstance) {
             return TJS_E_INVALIDOBJECT;
         }
@@ -1139,8 +1235,34 @@ namespace motion {
                 ? nativeInstance->_runtime->activeMotion->path
                 : std::string{};
         tTJSVariant *arg = (numparams > 0 && param) ? param[0] : nullptr;
-        iTJSDispatch2 *paramObj =
-            (arg && arg->Type() == tvtObject) ? arg->AsObjectNoAddRef() : nullptr;
+        iTJSDispatch2 *paramObj = selectVariantDispatchTarget(arg);
+        tTJSNI_BaseLayer *argLayer = nullptr;
+        const bool argIsLayer = arg && tryGetLayerObject(*arg, argLayer);
+        iTJSDispatch2 *resolvedLayerObject =
+            arg ? tryResolveLayerDispatch(*arg) : nullptr;
+        if(LOGGER && motionDebugEnabled()) {
+            static int probeCount = 0;
+            const bool titleProbe =
+                motionPath.find("title") != std::string::npos;
+            if(!argIsLayer && (titleProbe || probeCount < 32)) {
+                ++probeCount;
+                tTJSVariantClosure closure;
+                if(arg && arg->Type() == tvtObject) {
+                    closure = arg->AsObjectClosureNoAddRef();
+                } else {
+                    closure.Object = nullptr;
+                    closure.ObjThis = nullptr;
+                }
+                LOGGER->info(
+                    "motion drawCompat target probe: motion={} argType={} object=[{}] objThis=[{}] selected=[{}] valueLayer=[{}] resolvedObject={}",
+                    motionPath, arg ? static_cast<int>(arg->Type()) : -1,
+                    describeDispatchLayerProbe(closure.Object),
+                    describeDispatchLayerProbe(closure.ObjThis),
+                    describeDispatchLayerProbe(paramObj),
+                    describeLayerForQueryDebug(argLayer),
+                    static_cast<const void *>(resolvedLayerObject));
+            }
+        }
 
         if(!paramObj) {
             detail::logoChainTraceLogf(
@@ -1160,12 +1282,66 @@ namespace motion {
             return TJS_S_OK;
         }
 
+        // Direct Layer fast path. TJS may pass Layer as a closure object that
+        // also confuses unrelated ncbind native-instance probes, so resolve it
+        // before checking D3DAdaptor/SLA wrappers.
+        if(argIsLayer || resolvedLayerObject == paramObj) {
+            auto *drawTargetObject =
+                resolvedLayerObject ? resolvedLayerObject : paramObj;
+            if(!argLayer && resolvedLayerObject) {
+                tTJSVariant resolvedVar(resolvedLayerObject, resolvedLayerObject);
+                tryGetLayerObject(resolvedVar, argLayer);
+            }
+            if(LOGGER && motionDebugEnabled()) {
+                LOGGER->info(
+                    "motion drawCompat route: motion={} object={} resolvedObject={} route={} d3dDrawModeBefore={} targetLayer={}",
+                    motionPath, static_cast<const void *>(paramObj),
+                    static_cast<const void *>(drawTargetObject),
+                    nativeInstance->_d3dDrawMode ? "layer-via-d3d" : "layer",
+                    nativeInstance->_d3dDrawMode ? 1 : 0,
+                    static_cast<const void *>(argLayer));
+            }
+            detail::logoChainTraceCheck(
+                motionPath, "drawCompat.dispatch", "0x6D5FB8",
+                nativeInstance->_clampedEvalTime,
+                "Layer -> renderToLayer/renderViaSharedD3DAdaptor",
+                nativeInstance->_d3dDrawMode
+                    ? "Layer -> renderViaSharedD3DAdaptor"
+                    : "Layer -> renderToLayer",
+                true, "drawCompat Layer routing mismatch");
+            detail::logoChainTraceLogf(
+                motionPath, "drawCompat.matrix", "0x6D5FB8",
+                nativeInstance->_clampedEvalTime,
+                "route={} drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f}) sampleExpectedYuzu=[1,0,0,1,960,540]",
+                nativeInstance->_d3dDrawMode ? "layer-via-d3d" : "layer",
+                nativeInstance->_runtime->drawAffineMatrix[0],
+                nativeInstance->_runtime->drawAffineMatrix[1],
+                nativeInstance->_runtime->drawAffineMatrix[2],
+                nativeInstance->_runtime->drawAffineMatrix[3],
+                nativeInstance->_runtime->drawAffineMatrix[4],
+                nativeInstance->_runtime->drawAffineMatrix[5],
+                nativeInstance->_cameraOffsetX, nativeInstance->_cameraOffsetY);
+            if(nativeInstance->_d3dDrawMode) {
+                nativeInstance->renderViaSharedD3DAdaptor(drawTargetObject);
+            } else {
+                nativeInstance->renderToLayer(drawTargetObject);
+            }
+            if(result) *result = *arg;
+            return TJS_S_OK;
+        }
+
         // Step 1: Check if param is D3DAdaptor (libkrkr2.so checks NIS with
         // D3DAdaptor classID). If so, set _d3dDrawMode and render immediately.
         {
             auto *d3dAdaptor =
                 ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(paramObj, false);
             if(d3dAdaptor) {
+                if(LOGGER && motionDebugEnabled()) {
+                    LOGGER->info(
+                        "motion drawCompat route: motion={} object={} route=d3d d3dDrawModeBefore={}",
+                        motionPath, static_cast<const void *>(paramObj),
+                        nativeInstance->_d3dDrawMode ? 1 : 0);
+                }
                 detail::logoChainTraceCheck(
                     motionPath, "drawCompat.dispatch", "0x6D5FB8",
                     nativeInstance->_clampedEvalTime,
@@ -1200,6 +1376,18 @@ namespace motion {
                 ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
                     paramObj, false);
             if(sla) {
+                tTJSNI_BaseLayer *ownerLayer = nullptr;
+                if(auto *owner = sla->getOwner()) {
+                    tTJSVariant ownerVar(owner, owner);
+                    tryGetLayerObject(ownerVar, ownerLayer);
+                }
+                if(LOGGER && motionDebugEnabled()) {
+                    LOGGER->info(
+                        "motion drawCompat route: motion={} object={} route=sla owner=[{}] ancestry=[{}]",
+                        motionPath, static_cast<const void *>(paramObj),
+                        describeLayerForQueryDebug(ownerLayer),
+                        describeLayerAncestryForQueryDebug(ownerLayer));
+                }
                 detail::logoChainTraceCheck(
                     motionPath, "drawCompat.dispatch", "0x6D5FB8",
                     nativeInstance->_clampedEvalTime,
@@ -1225,42 +1413,25 @@ namespace motion {
             }
         }
 
-        // Step 3: param is a Layer (or resolves to one)
-        tTJSNI_BaseLayer *layer = nullptr;
-        if(tryGetLayerObject(*arg, layer)) {
-            detail::logoChainTraceCheck(
-                motionPath, "drawCompat.dispatch", "0x6D5FB8",
-                nativeInstance->_clampedEvalTime,
-                "Layer -> renderToLayer/renderViaSharedD3DAdaptor",
-                nativeInstance->_d3dDrawMode
-                    ? "Layer -> renderViaSharedD3DAdaptor"
-                    : "Layer -> renderToLayer",
-                true, "drawCompat Layer routing mismatch");
-            detail::logoChainTraceLogf(
-                motionPath, "drawCompat.matrix", "0x6D5FB8",
-                nativeInstance->_clampedEvalTime,
-                "route={} drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f}) sampleExpectedYuzu=[1,0,0,1,960,540]",
-                nativeInstance->_d3dDrawMode ? "layer-via-d3d" : "layer",
-                nativeInstance->_runtime->drawAffineMatrix[0],
-                nativeInstance->_runtime->drawAffineMatrix[1],
-                nativeInstance->_runtime->drawAffineMatrix[2],
-                nativeInstance->_runtime->drawAffineMatrix[3],
-                nativeInstance->_runtime->drawAffineMatrix[4],
-                nativeInstance->_runtime->drawAffineMatrix[5],
-                nativeInstance->_cameraOffsetX, nativeInstance->_cameraOffsetY);
-            if(nativeInstance->_d3dDrawMode) {
-                nativeInstance->renderViaSharedD3DAdaptor(paramObj);
-            } else {
-                nativeInstance->renderToLayer(paramObj);
-            }
-            if(result) *result = *arg;
-            return TJS_S_OK;
-        }
-
         // Step 4: param resolves to a Layer via property chain
         {
             iTJSDispatch2 *resolved = tryResolveSeparateAdaptorOwner(*arg);
             if(resolved) {
+                tTJSNI_BaseLayer *resolvedLayer = nullptr;
+                tTJSVariant resolvedVar(resolved, resolved);
+                tryGetLayerObject(resolvedVar, resolvedLayer);
+                if(LOGGER && motionDebugEnabled()) {
+                    LOGGER->info(
+                        "motion drawCompat route: motion={} object={} resolvedObject={} route={} d3dDrawModeBefore={} target=[{}] ancestry=[{}]",
+                        motionPath, static_cast<const void *>(paramObj),
+                        static_cast<const void *>(resolved),
+                        nativeInstance->_d3dDrawMode
+                            ? "resolved-layer-via-d3d"
+                            : "resolved-layer",
+                        nativeInstance->_d3dDrawMode ? 1 : 0,
+                        describeLayerForQueryDebug(resolvedLayer),
+                        describeLayerAncestryForQueryDebug(resolvedLayer));
+                }
                 detail::logoChainTraceCheck(
                     motionPath, "drawCompat.dispatch", "0x6D5FB8",
                     nativeInstance->_clampedEvalTime,
@@ -1280,6 +1451,11 @@ namespace motion {
         }
 
         // Fallback: no SLA/Layer match
+        if(LOGGER && motionDebugEnabled()) {
+            LOGGER->info(
+                "motion drawCompat unresolved target: motion={} selected=[{}]",
+                motionPath, describeDispatchLayerProbe(paramObj));
+        }
         detail::logoChainTraceCheck(
             motionPath, "drawCompat.dispatch", "0x6D5FB8",
             nativeInstance->_clampedEvalTime,
@@ -1396,6 +1572,11 @@ namespace motion {
         }
 
         self->_allplaying = !self->_runtime->playingTimelineLabels.empty();
+        if(self->_allplaying) {
+            self->enableAutoProgress(objthis);
+        } else {
+            self->disableAutoProgress();
+        }
 
         if(result) {
             *result = tTJSVariant(started);
@@ -1412,6 +1593,7 @@ namespace motion {
         }
 
         self->ensureMotionLoaded();
+        self->noteManualProgress();
 
         double delta = 0.0;
         if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid) {
@@ -1459,26 +1641,9 @@ namespace motion {
                          motionPath.c_str(), self->_clampedEvalTime);
         }
 
-        // Aligned to libkrkr2.so Player_dispatchEvents (0x6C4490):
-        // After stepping timelines, dispatch queued onAction/onSync events.
-        if(!self->_runtime->pendingEvents.empty()) {
-            for(const auto &ev : self->_runtime->pendingEvents) {
-                try {
-                    if(ev.type == 0) {
-                        // onAction(param1, param2)
-                        tTJSVariant p1(detail::widen(ev.param1));
-                        tTJSVariant p2(detail::widen(ev.param2));
-                        tTJSVariant *args[] = { &p1, &p2 };
-                        objthis->FuncCall(0, TJS_W("onAction"),
-                            nullptr, nullptr, 2, args, objthis);
-                    } else if(ev.type == 1) {
-                        // onSync()
-                        objthis->FuncCall(0, TJS_W("onSync"),
-                            nullptr, nullptr, 0, nullptr, objthis);
-                    }
-                } catch(...) {}
-            }
-            self->_runtime->pendingEvents.clear();
+        self->dispatchPendingEvents(objthis);
+        if(!self->_allplaying && self->_runtime->playingTimelineLabels.empty()) {
+            self->disableAutoProgress();
         }
 
         if(result) {
@@ -1515,7 +1680,7 @@ namespace motion {
         }
 
         const bool playing = !self->_runtime->playingTimelineLabels.empty();
-        self->_allplaying = playing;
+        self->setAllplaying(playing);
         if(result) {
             *result = tTJSVariant(playing);
         }
@@ -1534,6 +1699,7 @@ namespace motion {
         // Timeline state is left intact; TJS polls `playing` for edge-triggered
         // stop detection and may still inspect the final motion pose afterward.
         self->_allplaying = false;
+        self->disableAutoProgress();
 
         if(result) {
             *result = tTJSVariant(true);

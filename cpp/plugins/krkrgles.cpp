@@ -6,7 +6,10 @@
 #include "RenderManager.h"
 #include "EventIntf.h"
 #include "WindowIntf.h"
+#include "motionplayer/Player.h"
 #include <spdlog/spdlog.h>
+#include <algorithm>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 #include <cstring>
@@ -1122,6 +1125,9 @@ private:
 
 } // end anonymous namespace (for exported symbols below)
 
+// Global registered Layer — set by entryUpdateObject, accessed by krkrlive2d.cpp
+static iTJSDispatch2 *g_registeredLayer = nullptr;
+
 // ---------------------------------------------------------------------------
 // Find the first Layer object among the callback parameters.
 // The game may pass (intFlag, layer, ...) instead of (layer).
@@ -1139,6 +1145,165 @@ static iTJSDispatch2 *FindLayerInParams(tjs_int n, tTJSVariant **p) {
     }
     return nullptr;
 }
+
+namespace {
+
+struct YuzuMotionRenderable {
+    tTJSVariant player;
+    tTJSVariant layer;
+    uintptr_t ownerKey = 0;
+};
+
+std::mutex &YuzuMotionRenderMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::vector<YuzuMotionRenderable> &YuzuMotionRenderables() {
+    static std::vector<YuzuMotionRenderable> renderables;
+    return renderables;
+}
+
+class YuzuMotionRenderHook final : public tTVPContinuousEventCallbackIntf {
+public:
+    void Start();
+    void Stop();
+    void OnContinuousCallback(tjs_uint64) override;
+
+private:
+    bool registered_ = false;
+};
+
+YuzuMotionRenderHook &GetYuzuMotionRenderHook() {
+    static YuzuMotionRenderHook hook;
+    return hook;
+}
+
+static motion::Player *NativeMotionPlayerFromObject(iTJSDispatch2 *obj) {
+    if(!obj) return nullptr;
+    return ncbInstanceAdaptor<motion::Player>::GetNativeInstance(obj, false);
+}
+
+static iTJSDispatch2 *FindMotionPlayerInParams(tjs_int n, tTJSVariant **p) {
+    if(!p) return nullptr;
+    for(tjs_int i = 0; i < n; ++i) {
+        if(!p[i] || p[i]->Type() != tvtObject) continue;
+        iTJSDispatch2 *obj = p[i]->AsObjectNoAddRef();
+        if(NativeMotionPlayerFromObject(obj)) return obj;
+    }
+    return nullptr;
+}
+
+static bool InvokeMotionPlayerDraw(iTJSDispatch2 *player,
+                                   iTJSDispatch2 *targetLayer,
+                                   const char *tag) {
+    if(!player || !targetLayer) return false;
+    if(!NativeMotionPlayerFromObject(player)) return false;
+
+    tTJSVariant result;
+    tTJSVariant layerVar(targetLayer, targetLayer);
+    tTJSVariant *args[] = { &layerVar };
+    tjs_uint hint = 0;
+    try {
+        const tjs_error er = player->FuncCall(
+            0, TJS_W("draw"), &hint, &result, 1, args, player);
+        if(TJS_SUCCEEDED(er)) return true;
+        spdlog::debug("krkrgles: {} Motion.Player.draw failed er={}",
+                      tag ? tag : "render", er);
+    } catch(const eTJS &e) {
+        spdlog::warn("krkrgles: {} Motion.Player.draw threw {}",
+                     tag ? tag : "render", ttstr(e.GetMessage()).AsStdString());
+    } catch(...) {
+        spdlog::warn("krkrgles: {} Motion.Player.draw threw unknown exception",
+                     tag ? tag : "render");
+    }
+    return false;
+}
+
+static void RegisterYuzuMotionRenderable(tjs_int n, tTJSVariant **p,
+                                         uintptr_t ownerKey,
+                                         const char *tag) {
+    iTJSDispatch2 *player = FindMotionPlayerInParams(n, p);
+    iTJSDispatch2 *layer = FindLayerInParams(n, p);
+    if(layer) g_registeredLayer = layer;
+    if(!player) return;
+
+    std::lock_guard<std::mutex> lock(YuzuMotionRenderMutex());
+    auto &items = YuzuMotionRenderables();
+    auto samePlayer = [player](const YuzuMotionRenderable &item) {
+        return item.player.Type() == tvtObject &&
+               item.player.AsObjectNoAddRef() == player;
+    };
+    auto it = std::find_if(items.begin(), items.end(), samePlayer);
+    if(it == items.end()) {
+        if(items.size() >= 64) items.erase(items.begin());
+        YuzuMotionRenderable item;
+        item.player = tTJSVariant(player, player);
+        if(layer) item.layer = tTJSVariant(layer, layer);
+        item.ownerKey = ownerKey;
+        items.push_back(item);
+        spdlog::info("krkrgles: registered Motion.Player auto-render via {} layer={}",
+                     tag ? tag : "entry", static_cast<const void *>(layer));
+    } else {
+        if(layer) it->layer = tTJSVariant(layer, layer);
+        it->ownerKey = ownerKey;
+    }
+    GetYuzuMotionRenderHook().Start();
+}
+
+static void RemoveYuzuMotionRenderable(tjs_int n, tTJSVariant **p,
+                                       uintptr_t ownerKey) {
+    iTJSDispatch2 *player = FindMotionPlayerInParams(n, p);
+    std::lock_guard<std::mutex> lock(YuzuMotionRenderMutex());
+    auto &items = YuzuMotionRenderables();
+    items.erase(std::remove_if(items.begin(), items.end(),
+        [player, ownerKey](const YuzuMotionRenderable &item) {
+            const bool playerMatches =
+                player && item.player.Type() == tvtObject &&
+                item.player.AsObjectNoAddRef() == player;
+            const bool ownerMatches = ownerKey != 0 && item.ownerKey == ownerKey;
+            return playerMatches || (!player && ownerMatches);
+        }), items.end());
+    if(items.empty()) GetYuzuMotionRenderHook().Stop();
+}
+
+static tjs_int RenderYuzuMotionRenderables(const char *tag) {
+    std::vector<YuzuMotionRenderable> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(YuzuMotionRenderMutex());
+        snapshot = YuzuMotionRenderables();
+    }
+
+    tjs_int rendered = 0;
+    for(const auto &item : snapshot) {
+        iTJSDispatch2 *player = item.player.Type() == tvtObject
+            ? item.player.AsObjectNoAddRef()
+            : nullptr;
+        iTJSDispatch2 *layer = item.layer.Type() == tvtObject
+            ? item.layer.AsObjectNoAddRef()
+            : g_registeredLayer;
+        if(InvokeMotionPlayerDraw(player, layer, tag)) ++rendered;
+    }
+    return rendered;
+}
+
+void YuzuMotionRenderHook::Start() {
+    if(registered_) return;
+    TVPAddContinuousEventHook(this);
+    registered_ = true;
+}
+
+void YuzuMotionRenderHook::Stop() {
+    if(!registered_) return;
+    TVPRemoveContinuousEventHook(this);
+    registered_ = false;
+}
+
+void YuzuMotionRenderHook::OnContinuousCallback(tjs_uint64) {
+    RenderYuzuMotionRenderables("continuous");
+}
+
+} // namespace
 
 static bool IsNumericVariant(const tTJSVariant &value) {
     tTJSVariantType type = value.Type();
@@ -1631,8 +1796,6 @@ bool CopyFBOToLayer(GLuint fbo, GLsizei srcW, GLsizei srcH,
                              premultiplyAlpha);
 }
 
-// Global registered Layer — set by entryUpdateObject, accessed by krkrlive2d.cpp
-static iTJSDispatch2 *g_registeredLayer = nullptr;
 iTJSDispatch2 *KrkrGLES_GetRegisteredLayer() { return g_registeredLayer; }
 
 namespace { // reopen anonymous namespace
@@ -1691,6 +1854,40 @@ static tjs_error ReturnTrueCb(tTJSVariant *r, tjs_int, tTJSVariant **, iTJSDispa
     if (r) *r = true; return TJS_S_OK;
 }
 
+static tjs_error DictRenderCb(tTJSVariant *r, tjs_int, tTJSVariant **,
+                              iTJSDispatch2 *) {
+    RenderYuzuMotionRenderables("Fallback.render");
+    if (r) *r = true;
+    return TJS_S_OK;
+}
+
+static tjs_error DictCopyLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                 iTJSDispatch2 *) {
+    if (n > 0 && p) {
+        iTJSDispatch2 *layer = FindLayerInParams(n, p);
+        if (layer) g_registeredLayer = layer;
+    }
+    RenderYuzuMotionRenderables("Fallback.copyLayer");
+    if (r) *r = true;
+    return TJS_S_OK;
+}
+
+static tjs_error DictGlesEntryCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                 iTJSDispatch2 *obj) {
+    LogDrawCompatArgs("Fallback.glesEntry", n, p);
+    RegisterYuzuMotionRenderable(n, p, reinterpret_cast<uintptr_t>(obj),
+                                 "Fallback.glesEntry");
+    if (r) *r = true;
+    return TJS_S_OK;
+}
+
+static tjs_error DictGlesRemoveCb(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                  iTJSDispatch2 *obj) {
+    RemoveYuzuMotionRenderable(n, p, reinterpret_cast<uintptr_t>(obj));
+    if (r) *r = true;
+    return TJS_S_OK;
+}
+
 static tjs_error ReturnFirstArgOrTrueCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, iTJSDispatch2 *) {
     if (!r) return TJS_S_OK;
     *r = (n > 0 && p) ? *p[0] : tTJSVariant(true);
@@ -1723,11 +1920,14 @@ static tjs_error DictCreateDeviceCb(tTJSVariant *r, tjs_int, tTJSVariant **, iTJ
 }
 
 static tjs_error DictEntryUpdateObjectCb(tTJSVariant *r, tjs_int n,
-                                         tTJSVariant **p, iTJSDispatch2 *) {
+                                         tTJSVariant **p, iTJSDispatch2 *obj) {
+    LogDrawCompatArgs("Fallback.entryUpdateObject", n, p);
     if (n > 0 && p) {
         iTJSDispatch2 *layer = FindLayerInParams(n, p);
         if (layer) g_registeredLayer = layer;
     }
+    RegisterYuzuMotionRenderable(n, p, reinterpret_cast<uintptr_t>(obj),
+                                 "Fallback.entryUpdateObject");
     if (r) *r = true; return TJS_S_OK;
 }
 
@@ -1759,15 +1959,15 @@ static tjs_error CreateFallbackModuleObject(tTJSVariant *result, tjs_int w, tjs_
     SetObjectMethod(dict, TJS_W("beginScene"), ReturnTrueCb);
     SetObjectMethod(dict, TJS_W("endScene"), ReturnTrueCb);
     SetObjectMethod(dict, TJS_W("finalize"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("render"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("glesEntry"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("glesRemove"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("render"), DictRenderCb);
+    SetObjectMethod(dict, TJS_W("glesEntry"), DictGlesEntryCb);
+    SetObjectMethod(dict, TJS_W("glesRemove"), DictGlesRemoveCb);
     SetObjectMethod(dict, TJS_W("capture"), ReturnFirstArgOrTrueCb);
     SetObjectMethod(dict, TJS_W("captureScreen"), ReturnFirstArgOrTrueCb);
     SetObjectMethod(dict, TJS_W("glesCapture"), ReturnFirstArgOrTrueCb);
     SetObjectMethod(dict, TJS_W("glesCaptureScreen"), ReturnFirstArgOrTrueCb);
-    SetObjectMethod(dict, TJS_W("copyLayer"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("glesCopyLayer"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("copyLayer"), DictCopyLayerCb);
+    SetObjectMethod(dict, TJS_W("glesCopyLayer"), DictCopyLayerCb);
     SetObjectMethod(dict, TJS_W("drawLayer"), DictDrawLayerCb);
     SetObjectMethod(dict, TJS_W("glesDrawLayer"), DictDrawLayerCb);
     SetObjectMethod(dict, TJS_W("drawAffine"), DictDrawAffineCb);
@@ -1791,13 +1991,16 @@ public:
     OffscreenFBO &GetFBO() { return fbo_; }
 
     static tjs_error entryUpdateObjectCb(tTJSVariant *r, tjs_int n,
-                                         tTJSVariant **p, GLESModule *) {
+                                         tTJSVariant **p, GLESModule *s) {
+        LogDrawCompatArgs("GLESModule.entryUpdateObject", n, p);
         if (n > 0 && p) {
             iTJSDispatch2 *layer = FindLayerInParams(n, p);
             if (layer) {
                 g_registeredLayer = layer;
             }
         }
+        RegisterYuzuMotionRenderable(n, p, reinterpret_cast<uintptr_t>(s),
+                                     "GLESModule.entryUpdateObject");
         if (r) *r = true; return TJS_S_OK;
     }
 
@@ -1832,7 +2035,10 @@ public:
     }
 
     static tjs_error finalizeCb(tTJSVariant *r, tjs_int, tTJSVariant **, GLESModule *s) {
-        if (s) s->fbo_.Destroy();
+        if (s) {
+            RemoveYuzuMotionRenderable(0, nullptr, reinterpret_cast<uintptr_t>(s));
+            s->fbo_.Destroy();
+        }
         if (r) *r = true; return TJS_S_OK;
     }
 
@@ -1859,6 +2065,7 @@ public:
     static tjs_error copyLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESModule *s) {
         iTJSDispatch2 *layer = FindLayerInParams(n, p);
         if (layer) {
+            g_registeredLayer = layer;
             if (s && s->fbo_.GetFBO()) {
                 GLint prevFbo = s->fbo_.GetPrevFbo();
                 CopyFBOToLayer(s->fbo_.GetFBO(), s->fbo_.GetWidth(),
@@ -1871,6 +2078,7 @@ public:
                                true, false);
             }
         }
+        RenderYuzuMotionRenderables("GLESModule.copyLayer");
         if (r) *r = true; return TJS_S_OK;
     }
 
@@ -1899,6 +2107,7 @@ public:
     }
 
     static tjs_error renderCb(tTJSVariant *r, tjs_int, tTJSVariant **, GLESModule *) {
+        RenderYuzuMotionRenderables("GLESModule.render");
         if (r) *r = true; return TJS_S_OK;
     }
 
@@ -2047,11 +2256,14 @@ public:
     }
 
     static tjs_error entryUpdateObjectCb(tTJSVariant *r, tjs_int n,
-                                         tTJSVariant **p, GLESAdaptor *) {
+                                         tTJSVariant **p, GLESAdaptor *s) {
+        LogDrawCompatArgs("GLESAdaptor.entryUpdateObject", n, p);
         if (n > 0 && p) {
             iTJSDispatch2 *layer = FindLayerInParams(n, p);
             if (layer) g_registeredLayer = layer;
         }
+        RegisterYuzuMotionRenderable(n, p, reinterpret_cast<uintptr_t>(s),
+                                     "GLESAdaptor.entryUpdateObject");
         if (r) *r = true; return TJS_S_OK;
     }
 
@@ -2078,6 +2290,11 @@ public:
     static tjs_error copyLayerCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESAdaptor *s) {
         auto *mod = s ? s->FindModule() : nullptr;
         if (mod) return GLESModule::copyLayerCb(r, n, p, mod);
+        if (n > 0 && p) {
+            iTJSDispatch2 *layer = FindLayerInParams(n, p);
+            if (layer) g_registeredLayer = layer;
+        }
+        RenderYuzuMotionRenderables("GLESAdaptor.copyLayer");
         if (r) *r = true; return TJS_S_OK;
     }
 
@@ -2106,6 +2323,7 @@ public:
     }
 
     static tjs_error renderCb(tTJSVariant *r, tjs_int, tTJSVariant **, GLESAdaptor *) {
+        RenderYuzuMotionRenderables("GLESAdaptor.render");
         if (r) *r = true; return TJS_S_OK;
     }
 
@@ -2130,15 +2348,20 @@ public:
         return CreateObjectByExpression(r, TJS_W("new Live2DDevice()"), "GLESAdaptor.createDevice");
     }
 
-    static tjs_error finalizeCb(tTJSVariant *r, tjs_int, tTJSVariant **, GLESAdaptor *) {
+    static tjs_error finalizeCb(tTJSVariant *r, tjs_int, tTJSVariant **, GLESAdaptor *s) {
+        RemoveYuzuMotionRenderable(0, nullptr, reinterpret_cast<uintptr_t>(s));
         if (r) *r = true; return TJS_S_OK;
     }
 
-    static tjs_error glesEntryCb(tTJSVariant *r, tjs_int, tTJSVariant **, GLESAdaptor *) {
+    static tjs_error glesEntryCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESAdaptor *s) {
+        LogDrawCompatArgs("GLESAdaptor.glesEntry", n, p);
+        RegisterYuzuMotionRenderable(n, p, reinterpret_cast<uintptr_t>(s),
+                                     "GLESAdaptor.glesEntry");
         if (r) *r = true; return TJS_S_OK;
     }
 
-    static tjs_error glesRemoveCb(tTJSVariant *r, tjs_int, tTJSVariant **, GLESAdaptor *) {
+    static tjs_error glesRemoveCb(tTJSVariant *r, tjs_int n, tTJSVariant **p, GLESAdaptor *s) {
+        RemoveYuzuMotionRenderable(n, p, reinterpret_cast<uintptr_t>(s));
         if (r) *r = true; return TJS_S_OK;
     }
 

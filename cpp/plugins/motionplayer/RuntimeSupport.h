@@ -106,6 +106,8 @@ namespace motion::detail {
         bool loop = false;
         double loopTime = -1.0;   // from PSB; >=0 means loop restart point
         double totalFrames = 0.0;
+        double selfSyncTime = 0.0;
+        double syncTime = 0.0;
         std::vector<std::string> layerNames;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>>
             layersByName;

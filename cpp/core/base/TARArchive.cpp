@@ -50,7 +50,12 @@ class TARArchive : public tTVPArchive {
 public:
     TARArchive(const ttstr &arcname) : tTVPArchive(arcname) {}
 
-    ~TARArchive() override { TVPFreeArchiveHandlePoolByPointer(this); }
+    ~TARArchive() override {
+        try {
+            TVPFreeArchiveHandlePoolByPointer(this);
+        } catch(...) {
+        }
+    }
 
     bool init(tTJSBinaryStream *_instr, bool normalizeFileName) {
         if(_instr) {

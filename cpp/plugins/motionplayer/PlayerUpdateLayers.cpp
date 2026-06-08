@@ -4,6 +4,7 @@
 #include "PlayerInternal.h"
 #include "ncbind.hpp"    // ncbInstanceAdaptor<Player>::CreateAdaptor for TJS bridge
 #include "tjsArray.h"    // TJSCreateArrayObject, TJSGetArrayElementCount
+#include <cstdlib>
 #ifdef __EMSCRIPTEN__
 #include <wasm_simd128.h>
 #endif
@@ -96,6 +97,43 @@ namespace {
         slot.action = s.action; slot.hasSync = s.hasSync;
         // hasEasing derived from acc curve presence
         slot.hasEasing = !s.acc.empty();
+    }
+
+    inline bool needsSlotRebind(
+        const motion::detail::MotionNode::ClipSlot &slot,
+        const motion::internal::FrameContentState &state,
+        int nodeType) {
+        const bool newDone = !state.visible;
+        if(slot.done != newDone) {
+            return true;
+        }
+        if(slot.src != state.src || slot.srcList != state.srcList) {
+            return true;
+        }
+
+        if(nodeType == 3 || nodeType == 6) {
+            return slot.motionDt != state.motionDt ||
+                slot.motionFlags != state.motionFlags ||
+                slot.motionDofst != state.motionDofst ||
+                slot.motionDocmpl != state.motionDocmpl ||
+                slot.motionTimeOffset != state.motionTimeOffset ||
+                slot.motionDtgt != state.motionDtgt;
+        }
+
+        if(nodeType == 4) {
+            return slot.prtTrigger != state.prtTrigger ||
+                slot.prtFmin != state.prtFmin ||
+                slot.prtF != state.prtF ||
+                slot.prtVmin != state.prtVmin ||
+                slot.prtV != state.prtV ||
+                slot.prtAmin != state.prtAmin ||
+                slot.prtA != state.prtA ||
+                slot.prtZmin != state.prtZmin ||
+                slot.prtZ != state.prtZ ||
+                slot.prtRange != state.prtRange;
+        }
+
+        return false;
     }
 } // anonymous namespace
 
@@ -422,6 +460,9 @@ namespace motion {
             }
 
             // Populate active clip slot from evaluated state
+            if(needsSlotRebind(node.activeSlot(), state, node.nodeType)) {
+                node.flags |= 0x01;
+            }
             populateSlotFromState(node.activeSlot(), state);
             populateTransformStateFromFrameState(node.accumulated, state);
             node.accumulated.dirty = true;
@@ -1526,6 +1567,9 @@ namespace motion {
 
     void Player::updateLayersPhase3_MotionSubNode(double currentTime) {
         auto &nodes = _runtime->nodes;
+        const std::string motionPath = _runtime->activeMotion
+            ? _runtime->activeMotion->path
+            : std::string();
         // Motion sub-node processing — aligned to sub_6BE0C0 (0x6BE0C0).
         // For each nodeType=3 (Motion) node, create/manage child Player instance.
         // Only runs when !isEmoteMode (0x6BE104).
@@ -1598,28 +1642,62 @@ namespace motion {
                         // once and uses it unchanged throughout). Slot flip is managed
                         // elsewhere in the clip evaluation pipeline.
 
-                        // Resolve motion and play (0x6BE3B4..0x6BE46C)
-                        // Binary: splits src by "/" via sub_697D34.
-                        // 1-element (no "/"): sub_6B29C0(child, 0, src) + Player_play(child, flags, src)
-                        //   → setChara(src), play the motion named src
-                        // 2-element ("chara/motion"): sub_6B29C0(child, 0, split[1]) + Player_play(child, flags, split[2])
-                        //   → setChara(split[0]=chara part), play motion split[1]
+                        // Resolve motion and play (0x6BE3B4..0x6BE46C).
+                        // Yuzu motion sources commonly use "motion/chara/clip",
+                        // where the child player should reuse the current PSB
+                        // snapshot and play the named clip instead of looking
+                        // for a separate "clip.mtn" storage.
                         {
-                            auto slashPos = src.find('/');
+                            std::string motionRef = src;
+                            if(motionRef.rfind("motion/", 0) == 0) {
+                                motionRef = motionRef.substr(7);
+                            }
+                            const auto slashPos = motionRef.find_last_of("/\\");
+                            std::string charaPart;
+                            std::string motionPart;
                             if (slashPos == std::string::npos) {
+                                charaPart = motionRef;
+                                motionPart = motionRef;
+                            } else {
+                                charaPart = motionRef.substr(0, slashPos);
+                                motionPart = motionRef.substr(slashPos + 1);
+                            }
+
+                            const int playFlags =
+                                mn.activeSlot().motionFlags | v12;
+                            const bool canReuseCurrentSnapshot =
+                                _runtime && _runtime->activeMotion &&
+                                _runtime->activeMotion->clipsByLabel.find(
+                                    motionPart) !=
+                                    _runtime->activeMotion->clipsByLabel.end();
+                            if(LOGGER &&
+                               std::getenv("AETHERKIRI_MOTION_DEBUG") &&
+                               motionPath.find("title") != std::string::npos) {
+                                LOGGER->info(
+                                    "motion child resolve: parent={} node={} src={} chara={} motion={} reuseSnapshot={} flags={}",
+                                    motionPath, mn.layerName, src, charaPart,
+                                    motionPart, canReuseCurrentSnapshot ? 1 : 0,
+                                    playFlags);
+                            }
+
+                            if(canReuseCurrentSnapshot) {
+                                child.setChara(detail::widen(charaPart));
+                                child._motionKey = detail::widen(motionPart);
+                                child.loadFromSnapshot(_runtime->activeMotion);
+                                child.playMotionLike_0x6B2284(
+                                    detail::widen(motionPart), playFlags);
+                            } else if (slashPos == std::string::npos) {
                                 // Single segment: binary sets chara to src itself
                                 // then Player_play with raw src (no "/" prefix)
-                                child.setChara(detail::widen(src));
-                                child.onFindMotion(detail::widen(src),
-                                                   mn.activeSlot().motionFlags | v12);
+                                child.setChara(detail::widen(motionRef));
+                                child.onFindMotion(detail::widen(motionRef),
+                                                   playFlags);
                             } else {
                                 // Multi-segment: "chara/motion" format
                                 // Binary: setChara(chara), Player_play(motion)
-                                std::string charaPart = src.substr(0, slashPos);
-                                std::string motionPart = src.substr(slashPos + 1);
                                 child.setChara(detail::widen(charaPart));
                                 child.onFindMotion(detail::widen(motionPart),
-                                                   mn.activeSlot().motionFlags | v12);
+                                                   playFlags);
                             }
                         }
                         // Stealth motion (0x6BE41C..0x6BE44C): binary reads from

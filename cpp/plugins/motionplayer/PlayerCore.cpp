@@ -4,13 +4,69 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <mutex>
 #include <stdexcept>
+#include <vector>
 
 #include "PlayerInternal.h"
+#include "TickCount.h"
 
 using namespace motion::internal;
 
 namespace {
+    class MotionPlayerAutoProgressHook :
+        public tTVPContinuousEventCallbackIntf {
+    public:
+        void OnContinuousCallback(tjs_uint64 tick) override;
+    };
+
+    std::mutex g_autoProgressMutex;
+    std::vector<motion::Player *> g_autoProgressPlayers;
+    MotionPlayerAutoProgressHook g_autoProgressHook;
+    bool g_autoProgressHookRegistered = false;
+
+    void registerAutoProgressPlayer(motion::Player *player) {
+        if(!player) {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(g_autoProgressMutex);
+        if(std::find(g_autoProgressPlayers.begin(), g_autoProgressPlayers.end(),
+                     player) == g_autoProgressPlayers.end()) {
+            g_autoProgressPlayers.push_back(player);
+        }
+        if(!g_autoProgressHookRegistered) {
+            TVPAddContinuousEventHook(&g_autoProgressHook);
+            g_autoProgressHookRegistered = true;
+        }
+    }
+
+    void unregisterAutoProgressPlayer(motion::Player *player) {
+        std::lock_guard<std::mutex> lock(g_autoProgressMutex);
+        g_autoProgressPlayers.erase(
+            std::remove(g_autoProgressPlayers.begin(), g_autoProgressPlayers.end(),
+                        player),
+            g_autoProgressPlayers.end());
+        if(g_autoProgressHookRegistered && g_autoProgressPlayers.empty()) {
+            TVPRemoveContinuousEventHook(&g_autoProgressHook);
+            g_autoProgressHookRegistered = false;
+        }
+    }
+
+    void MotionPlayerAutoProgressHook::OnContinuousCallback(tjs_uint64 tick) {
+        std::vector<motion::Player *> players;
+        {
+            std::lock_guard<std::mutex> lock(g_autoProgressMutex);
+            players = g_autoProgressPlayers;
+        }
+
+        for(auto *player : players) {
+            if(player) {
+                player->autoProgressFromContinuousTick(tick);
+            }
+        }
+    }
+
     std::string lowerAscii(std::string value) {
         for(char &ch : value) {
             ch = static_cast<char>(
@@ -27,6 +83,23 @@ namespace {
 }
 
 namespace motion {
+
+    std::vector<tTJSVariant> SnapshotAutoProgressPlayerDispatchesForCompat() {
+        std::vector<tTJSVariant> snapshot;
+        std::lock_guard<std::mutex> lock(g_autoProgressMutex);
+        snapshot.reserve(g_autoProgressPlayers.size());
+        for(auto *player : g_autoProgressPlayers) {
+            if(!player) {
+                continue;
+            }
+            iTJSDispatch2 *dispatch =
+                player->getAutoProgressDispatchForCompat();
+            if(dispatch) {
+                snapshot.emplace_back(dispatch, dispatch);
+            }
+        }
+        return snapshot;
+    }
 
     std::unordered_map<std::string, Player::VariableAnimatorState> *
     Player::controllerAnimatorBucketLike_0x671228(int type) {
@@ -189,7 +262,156 @@ namespace motion {
         }
     }
 
-    Player::~Player() = default;
+    Player::~Player() {
+        disableAutoProgress();
+    }
+
+    void Player::setAllplaying(bool v) {
+        _allplaying = v;
+        if(!_allplaying) {
+            disableAutoProgress();
+        }
+    }
+
+    void Player::enableAutoProgress(iTJSDispatch2 *objthis) {
+        if(!objthis) {
+            return;
+        }
+
+        if(_autoProgressDispatch != objthis) {
+            objthis->AddRef();
+            auto *oldDispatch = _autoProgressDispatch;
+            _autoProgressDispatch = objthis;
+            if(oldDispatch) {
+                oldDispatch->Release();
+            }
+        }
+
+        _autoProgressLastTick = 0;
+        _autoProgressHasLastTick = false;
+        if(!_autoProgressRegistered) {
+            registerAutoProgressPlayer(this);
+            _autoProgressRegistered = true;
+        }
+    }
+
+    void Player::disableAutoProgress() {
+        if(_autoProgressRegistered) {
+            unregisterAutoProgressPlayer(this);
+            _autoProgressRegistered = false;
+        }
+
+        _autoProgressLastTick = 0;
+        _autoProgressHasLastTick = false;
+
+        auto *dispatch = _autoProgressDispatch;
+        _autoProgressDispatch = nullptr;
+        if(dispatch) {
+            dispatch->Release();
+        }
+    }
+
+    void Player::noteManualProgress() {
+        _manualProgressLastTick = TVPGetTickCount();
+        _autoProgressLastTick = _manualProgressLastTick;
+        _autoProgressHasLastTick = true;
+    }
+
+    void Player::dispatchPendingEvents(iTJSDispatch2 *objthis) {
+        if(!_runtime || _runtime->pendingEvents.empty()) {
+            return;
+        }
+
+        const auto pendingEvents = _runtime->pendingEvents;
+        _runtime->pendingEvents.clear();
+        if(!objthis) {
+            return;
+        }
+
+        for(const auto &ev : pendingEvents) {
+            try {
+                if(ev.type == 0) {
+                    tTJSVariant p1(detail::widen(ev.param1));
+                    tTJSVariant p2(detail::widen(ev.param2));
+                    tTJSVariant *args[] = { &p1, &p2 };
+                    objthis->FuncCall(0, TJS_W("onAction"), nullptr, nullptr,
+                                      2, args, objthis);
+                } else if(ev.type == 1) {
+                    objthis->FuncCall(0, TJS_W("onSync"), nullptr, nullptr, 0,
+                                      nullptr, objthis);
+                }
+            } catch(...) {
+            }
+        }
+    }
+
+    void Player::autoProgressFromContinuousTick(tjs_uint64 tick) {
+        if(!_runtime) {
+            disableAutoProgress();
+            return;
+        }
+
+        iTJSDispatch2 *dispatch = _autoProgressDispatch;
+        if(dispatch) {
+            dispatch->AddRef();
+        }
+
+        const auto releaseDispatch = [&]() {
+            if(dispatch) {
+                dispatch->Release();
+                dispatch = nullptr;
+            }
+        };
+
+        const bool playing =
+            _allplaying || !_runtime->playingTimelineLabels.empty();
+        if(!playing || !_speed) {
+            _autoProgressLastTick = tick;
+            _autoProgressHasLastTick = true;
+            if(!playing) {
+                disableAutoProgress();
+            }
+            releaseDispatch();
+            return;
+        }
+
+        if(_manualProgressLastTick != 0 &&
+           tick <= _manualProgressLastTick + 120) {
+            _autoProgressLastTick = tick;
+            _autoProgressHasLastTick = true;
+            releaseDispatch();
+            return;
+        }
+
+        double deltaMs = 1000.0 / 60.0;
+        if(_autoProgressHasLastTick) {
+            deltaMs = tick >= _autoProgressLastTick
+                ? static_cast<double>(tick - _autoProgressLastTick)
+                : 0.0;
+        }
+        _autoProgressLastTick = tick;
+        _autoProgressHasLastTick = true;
+
+        if(deltaMs <= 0.0) {
+            releaseDispatch();
+            return;
+        }
+        deltaMs = std::clamp(deltaMs, 0.0, 100.0);
+
+        _runtime->pendingEvents.clear();
+        frameProgress(deltaMs * kMotionFramesPerMillisecond);
+        ensureNodeTreeBuilt();
+        if(!_runtime->nodes.empty()) {
+            updateLayers();
+        }
+        calcBounds();
+        dispatchPendingEvents(dispatch);
+
+        if(!_allplaying && _runtime->playingTimelineLabels.empty()) {
+            disableAutoProgress();
+        }
+        releaseDispatch();
+    }
 
     // Aligned to libkrkr2.so Player_getRootX (0x6D98A8) / Player_setRootX (0x6CD028)
     double Player::getX() const {
@@ -246,6 +468,7 @@ namespace motion {
         _evalResultListIndex.clear();
         _mirrorPositiveCache.clear();
         _mirrorNegativeCache.clear();
+        disableAutoProgress();
 
         if(snapshot) {
             activateMotion(*_runtime, snapshot);
@@ -658,6 +881,9 @@ namespace motion {
             }
         }
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        if(!_allplaying) {
+            disableAutoProgress();
+        }
     }
 
     double Player::getProgressCompat() const {

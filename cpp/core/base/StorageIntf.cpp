@@ -27,6 +27,7 @@
 
 #define TVP_DEFAULT_ARCHIVE_CACHE_NUM 128
 #define TVP_DEFAULT_AUTOPATH_CACHE_NUM 256
+static constexpr tjs_int TVP_MAX_STORAGE_NAME_LENGTH = 1 << 20;
 static const tjs_char *TVP_AUTOPATH_CACHE_MISS_MARKER = TJS_W("\x01");
 static const char TVP_GFX_EFFECT_COMPAT_SCRIPT[] =
     "// AetherKiri gfxEffect.dll compatibility placeholder.\n"
@@ -49,6 +50,7 @@ static const char TVP_GPU_COMPAT_SCRIPT[] =
     "    return null;\n"
     "}\n"
     "try { KAGWindow.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
+    "try { KAGWindow.prototype.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
     "try { KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n";
 static tTJSVariant TVPStoragesArchiveUniqueKeyCompat;
 
@@ -322,6 +324,9 @@ ttstr tTVPStorageMediaManager::NormalizeStorageName(const ttstr &name,
     // empty check
     if(name.IsEmpty())
         return name; // empty name is empty name
+    if(name.GetLen() > TVP_MAX_STORAGE_NAME_LENGTH)
+        TVPThrowExceptionMessage(TVPInvalidPathName,
+                                 TJS_W("<storage path too long>"));
 
     // pre-normalize
     const tjs_char *pca; //, *pcb, *pcc;

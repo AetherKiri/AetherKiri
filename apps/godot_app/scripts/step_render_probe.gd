@@ -38,6 +38,13 @@ func _initialize() -> void:
 
     var backend: String = ProbeConfig.backend(test_config, "AETHERKIRI_PROBE_BACKEND")
     player.set_render_backend(backend)
+    if ProbeConfig.bool_value(test_config, "plugin_trace", false):
+        player.set_engine_option("plugin_trace", "1")
+    if ProbeConfig.bool_value(test_config, "export_scripts", false):
+        player.set_engine_option("export_scripts", "1")
+    var plugin_load_mode := ProbeConfig.string_value(test_config, "plugin_load_mode", "")
+    if plugin_load_mode in ["krkrsdl3", "aether_all"]:
+        player.set_engine_option("plugin_load_mode", plugin_load_mode)
     var surface_size: Vector2i = ProbeConfig.surface_size(test_config)
     player.set_surface_size(surface_size.x, surface_size.y)
 

@@ -3,12 +3,15 @@
 //
 #include "PlayerInternal.h"
 #include "ConfigManager/IndividualConfigManager.h"
+#include <cstdlib>
+#include <cstring>
 
 using namespace motion::internal;
 
 namespace {
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
+    std::string sampleBitmapStats(const iTVPBaseBitmap *bitmap);
 
     bool packedColorsAreDefault(std::uint32_t c0, std::uint32_t c1,
                                 std::uint32_t c2, std::uint32_t c3) {
@@ -56,11 +59,16 @@ namespace {
     bool shouldDebugTitleRender(const std::string &motionPath,
                                 const std::string &sourceKey = {},
                                 const std::string &origin = {}) {
+        const char *enabled = std::getenv("AETHERKIRI_MOTION_DEBUG");
+        if(!enabled || !*enabled || std::strcmp(enabled, "0") == 0) {
+            return false;
+        }
         const auto motion = renderDebugLowercase(motionPath);
         const auto source = renderDebugLowercase(sourceKey);
         const auto resolved = renderDebugLowercase(origin);
         return motion.find("title.pimg") != std::string::npos ||
             motion.find("title.psb") != std::string::npos ||
+            motion.find("title") != std::string::npos ||
             source.find("title") != std::string::npos ||
             resolved.find("title.pimg") != std::string::npos ||
             resolved.find("title.psb") != std::string::npos;
@@ -69,6 +77,106 @@ namespace {
     bool markRenderDebugLogged(const std::string &key) {
         static std::unordered_set<std::string> loggedKeys;
         return loggedKeys.insert(key).second;
+    }
+
+    std::string describeLayerForDebug(tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return "<null>";
+        }
+        auto safeInt = [](auto &&fn, const char *fallback = "?") {
+            try {
+                return std::to_string(fn());
+            } catch(...) {
+                return std::string(fallback);
+            }
+        };
+        auto safeBool = [](auto &&fn, const char *fallback = "?") {
+            try {
+                return fn() ? std::string("1") : std::string("0");
+            } catch(...) {
+                return std::string(fallback);
+            }
+        };
+        auto safeName = [&]() {
+            try {
+                return motion::detail::narrow(layer->GetName());
+            } catch(...) {
+                return std::string("?");
+            }
+        };
+        std::ostringstream out;
+        out << "ptr=" << static_cast<const void *>(layer)
+            << ",name=" << safeName()
+            << ",primary=" << safeBool([&]() { return layer->IsPrimary(); })
+            << ",visible=" << safeBool([&]() { return layer->GetVisible(); })
+            << ",parentVisible=" << safeBool([&]() { return layer->GetParentVisible(); })
+            << ",opacity=" << safeInt([&]() { return layer->GetOpacity(); })
+            << ",order=" << safeInt([&]() { return layer->GetOrderIndex(); })
+            << ",overall=" << safeInt([&]() { return layer->GetOverallOrderIndex(); })
+            << ",rect=[" << safeInt([&]() { return layer->GetLeft(); })
+            << "," << safeInt([&]() { return layer->GetTop(); })
+            << "," << safeInt([&]() { return layer->GetWidth(); })
+            << "x" << safeInt([&]() { return layer->GetHeight(); }) << "]"
+            << ",image=" << safeInt([&]() { return layer->GetImageWidth(); })
+            << "x" << safeInt([&]() { return layer->GetImageHeight(); })
+            << ",hasImage=" << safeBool([&]() { return layer->GetHasImage(); })
+            << ",type=" << safeInt([&]() { return static_cast<int>(layer->GetType()); })
+            << ",children=" << safeInt([&]() { return layer->GetCount(); });
+        return out.str();
+    }
+
+    std::string describeLayerAncestryForDebug(tTJSNI_BaseLayer *layer) {
+        std::ostringstream out;
+        int depth = 0;
+        while(layer && depth < 12) {
+            if(depth != 0) {
+                out << " <- ";
+            }
+            out << "[" << depth << ":" << describeLayerForDebug(layer) << "]";
+            layer = layer->GetParent();
+            ++depth;
+        }
+        if(layer) {
+            out << " <- ...";
+        }
+        return out.str();
+    }
+
+    void describeLayerTreeForDebug(std::ostringstream &out,
+                                   tTJSNI_BaseLayer *layer,
+                                   int depth = 0) {
+        if(!layer || depth > 3) {
+            return;
+        }
+        out << "\n";
+        for(int i = 0; i < depth; ++i) {
+            out << "  ";
+        }
+        out << "- " << describeLayerForDebug(layer);
+        const auto childCount = std::min<tjs_uint>(layer->GetCount(), 12);
+        for(tjs_uint i = 0; i < childCount; ++i) {
+            describeLayerTreeForDebug(out, layer->GetChildren(static_cast<tjs_int>(i)),
+                                      depth + 1);
+        }
+        if(layer->GetCount() > childCount) {
+            out << "\n";
+            for(int i = 0; i <= depth; ++i) {
+                out << "  ";
+            }
+            out << "... " << (layer->GetCount() - childCount) << " more children";
+        }
+    }
+
+    std::string joinRenderStrings(const std::vector<std::string> &values,
+                                  const char *separator = ",") {
+        std::ostringstream out;
+        for(size_t i = 0; i < values.size(); ++i) {
+            if(i != 0) {
+                out << separator;
+            }
+            out << values[i];
+        }
+        return out.str();
     }
 
     std::string sampleBitmapStats(const iTVPBaseBitmap *bitmap) {
@@ -466,6 +574,125 @@ namespace {
             }
         }
         return width > 0 && height > 0;
+    }
+
+    bool motionLayerNameSuggestsPresentationTarget(tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return false;
+        }
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        return name.find("background") != std::string::npos ||
+            name.find("back") != std::string::npos ||
+            name.find("bg") != std::string::npos ||
+            name.find("haikei") != std::string::npos ||
+            name.find("trans_syslay") != std::string::npos ||
+            name.find("背景") != std::string::npos;
+    }
+
+    bool motionLayerCoversCanvas(tTJSNI_BaseLayer *layer,
+                                 int canvasWidth,
+                                 int canvasHeight) {
+        if(!layer || canvasWidth <= 0 || canvasHeight <= 0) {
+            return false;
+        }
+        const int width = std::max(static_cast<int>(layer->GetWidth()),
+                                   static_cast<int>(layer->GetImageWidth()));
+        const int height = std::max(static_cast<int>(layer->GetHeight()),
+                                    static_cast<int>(layer->GetImageHeight()));
+        if(width <= 0 || height <= 0) {
+            return false;
+        }
+        const int left = static_cast<int>(layer->GetLeft());
+        const int top = static_cast<int>(layer->GetTop());
+        return left <= 0 && top <= 0 &&
+            left + width >= canvasWidth &&
+            top + height >= canvasHeight;
+    }
+
+    int scoreMotionPresentationChild(tTJSNI_BaseLayer *parent,
+                                     tTJSNI_BaseLayer *child,
+                                     int canvasWidth,
+                                     int canvasHeight,
+                                     tjs_uint index) {
+        if(!parent || !child || child == parent || !child->GetOwnerNoAddRef()) {
+            return -1;
+        }
+        if(!child->GetVisible() || child->GetOpacity() <= 0 ||
+           !child->GetHasImage() ||
+           !motionLayerCoversCanvas(child, canvasWidth, canvasHeight)) {
+            return -1;
+        }
+        if(!motionLayerNameSuggestsPresentationTarget(child)) {
+            return -1;
+        }
+
+        int score = 100;
+        if(child->GetOrderIndex() == 0) {
+            score += 20;
+        }
+        if(index == 0) {
+            score += 10;
+        }
+        if(child->GetCount() > 0) {
+            score += 5;
+        }
+        if(!child->IsPrimary() && parent->GetParent()) {
+            score += 5;
+        }
+        return score;
+    }
+
+    tTJSNI_BaseLayer *findMotionPresentationChild(tTJSNI_BaseLayer *parent,
+                                                  int canvasWidth,
+                                                  int canvasHeight) {
+        if(!parent || parent->GetCount() <= 0) {
+            return nullptr;
+        }
+
+        tTJSNI_BaseLayer *best = nullptr;
+        int bestScore = -1;
+        const auto childCount = parent->GetCount();
+        for(tjs_uint i = 0; i < childCount; ++i) {
+            auto *child = parent->GetChildren(static_cast<tjs_int>(i));
+            const int score = scoreMotionPresentationChild(
+                parent, child, canvasWidth, canvasHeight, i);
+            if(score > bestScore) {
+                best = child;
+                bestScore = score;
+            }
+        }
+        return best;
+    }
+
+    bool prepareMotionPresentationLayerForRender(tTJSNI_BaseLayer *layer,
+                                                 int canvasWidth,
+                                                 int canvasHeight) {
+        if(!layer || canvasWidth <= 0 || canvasHeight <= 0) {
+            return false;
+        }
+        if(!layer->GetHasImage()) {
+            layer->SetHasImage(true);
+        }
+        const tjs_uint imageWidth = std::max(
+            static_cast<tjs_uint>(canvasWidth),
+            static_cast<tjs_uint>(std::max<tjs_int>(layer->GetImageWidth(), 0)));
+        const tjs_uint imageHeight = std::max(
+            static_cast<tjs_uint>(canvasHeight),
+            static_cast<tjs_uint>(std::max<tjs_int>(layer->GetImageHeight(), 0)));
+        if(layer->GetImageWidth() < imageWidth ||
+           layer->GetImageHeight() < imageHeight) {
+            layer->SetImageSize(imageWidth, imageHeight);
+        }
+        layer->SetClip(0, 0,
+                       std::max<tjs_int>(canvasWidth, layer->GetWidth()),
+                       std::max<tjs_int>(canvasHeight, layer->GetHeight()));
+        layer->SetVisible(true);
+        // Yuzu/KAG motion presentation layers are visual canvases. Keep them
+        // out of mouse hit testing so title buttons and message layers behind
+        // the full-screen background can still receive input.
+        layer->SetHitThreshold(256);
+        return true;
     }
 
     bool prepareLayerForRender(iTJSDispatch2 *layerObject,
@@ -905,6 +1132,20 @@ namespace motion {
             clipLabel = clip->label;
         }
 
+        if(LOGGER && shouldDebugTitleRender(_runtime->activeMotion->path)) {
+            LOGGER->info("motion build node tree: motion={} clip={} playing={}",
+                         _runtime->activeMotion->path,
+                         clipLabel.empty() ? std::string("<root>") : clipLabel,
+                         joinRenderStrings(_runtime->playingTimelineLabels));
+            if(const auto *clip = selectActiveClip()) {
+                LOGGER->info(
+                    "motion build node tree layers: motion={} clip={} clipLayers=[{}] rootLayers=[{}]",
+                    _runtime->activeMotion->path, clip->label,
+                    joinRenderStrings(clip->layerNames),
+                    joinRenderStrings(_runtime->activeMotion->layerNames));
+            }
+        }
+
         _runtime->nodes = detail::buildNodeTree(*_runtime->activeMotion, clipLabel);
         _runtime->nodesBuilt = true;
 
@@ -924,6 +1165,26 @@ namespace motion {
             if(!label.empty()) {
                 _runtime->nodeLabelMap.emplace(label, static_cast<int>(ni));
             }
+        }
+
+        if(LOGGER && shouldDebugTitleRender(_runtime->activeMotion->path)) {
+            std::ostringstream nodeSummary;
+            const size_t limit = std::min<size_t>(_runtime->nodes.size(), 24);
+            for(size_t ni = 0; ni < limit; ++ni) {
+                const auto &node = _runtime->nodes[ni];
+                if(ni != 0) {
+                    nodeSummary << ";";
+                }
+                nodeSummary << ni << ":"
+                            << (node.layerName.empty() ? std::string("<root>")
+                                                       : node.layerName)
+                            << ":t" << node.nodeType
+                            << ":src" << (node.hasSource ? 1 : 0)
+                            << ":p" << node.parentIndex;
+            }
+            LOGGER->info("motion build nodes: motion={} count={} nodes=[{}]",
+                         _runtime->activeMotion->path, _runtime->nodes.size(),
+                         nodeSummary.str());
         }
 
         if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {
@@ -1697,45 +1958,70 @@ namespace motion {
             }
 
             try {
-                if(command.executedDirect) {
-                    auto srcBmp = resolveSourceBitmap(command);
-                    if(!srcBmp || srcBmp->GetWidth() <= 0 ||
-                       srcBmp->GetHeight() <= 0) {
-                        continue;
-                    }
-                    const tTVPRect sourceRect(
-                        0, 0, static_cast<tjs_int>(srcBmp->GetWidth()),
-                        static_cast<tjs_int>(srcBmp->GetHeight()));
-                    std::string branch("direct.operateAffine");
-                    if(command.meshType == 0) {
-                        const auto worldPts =
-                            buildAffineTrianglePoints(command.worldCorners,
-                                                     -0.5f, -0.5f);
+            if(command.executedDirect) {
+                auto srcBmp = resolveSourceBitmap(command);
+                if(!srcBmp || srcBmp->GetWidth() <= 0 ||
+                   srcBmp->GetHeight() <= 0) {
+                    continue;
+                }
+                const tTVPRect sourceRect(
+                    0, 0, static_cast<tjs_int>(srcBmp->GetWidth()),
+                    static_cast<tjs_int>(srcBmp->GetHeight()));
+                std::string branch("direct.operateAffine");
+                const bool directCopyWithoutOpacity =
+                    ((command.blendMode & 0x0F) == 0) && opa >= 255;
+                if(command.meshType == 0) {
+                    const auto worldPts =
+                        buildAffineTrianglePoints(command.worldCorners,
+                                                   -0.5f, -0.5f);
+                    if(directCopyWithoutOpacity) {
+                        branch = "direct.affineCopy";
+                        renderLayer->AffineCopy(worldPts.data(), srcBmp.get(),
+                                                sourceRect, stNearest,
+                                                command.clearEnabled);
+                    } else {
                         renderLayer->OperateAffine(worldPts.data(), srcBmp.get(),
                                                    sourceRect, blendMode, opa,
                                                    stNearest);
-                    } else {
-                        if(command.worldMeshPoints.empty() ||
-                           command.meshDivX < 2 || command.meshDivY < 2) {
-                            continue;
-                        }
+                    }
+                } else {
+                    if(command.worldMeshPoints.empty() ||
+                       command.meshDivX < 2 || command.meshDivY < 2) {
+                        continue;
+                    }
                         auto worldMeshPoints =
                             buildMeshPoints(command.worldMeshPoints,
                                             -0.5f, -0.5f);
                         if(command.meshType == 1) {
-                            branch = "direct.operateBezierPatch";
-                            renderLayer->OperateBezierPatch(
-                                worldMeshPoints.data(), command.meshDivX,
-                                command.meshDivY, srcBmp.get(), sourceRect,
-                                blendMode, opa, stNearest,
-                                command.clearEnabled);
+                            if(directCopyWithoutOpacity) {
+                                branch = "direct.bezierPatchCopy";
+                                renderLayer->BezierPatchCopy(
+                                    worldMeshPoints.data(), command.meshDivX,
+                                    command.meshDivY, srcBmp.get(), sourceRect,
+                                    stNearest, command.clearEnabled);
+                            } else {
+                                branch = "direct.operateBezierPatch";
+                                renderLayer->OperateBezierPatch(
+                                    worldMeshPoints.data(), command.meshDivX,
+                                    command.meshDivY, srcBmp.get(), sourceRect,
+                                    blendMode, opa, stNearest,
+                                    command.clearEnabled);
+                            }
                         } else if(command.meshType == 2) {
-                            branch = "direct.operateMesh";
-                            renderLayer->OperateMesh(
-                                worldMeshPoints.data(), command.meshDivX,
-                                command.meshDivY, srcBmp.get(), sourceRect,
-                                blendMode, opa, stNearest,
-                                command.clearEnabled);
+                            if(directCopyWithoutOpacity) {
+                                branch = "direct.meshCopy";
+                                renderLayer->MeshCopy(
+                                    worldMeshPoints.data(), command.meshDivX,
+                                    command.meshDivY, srcBmp.get(), sourceRect,
+                                    stNearest, command.clearEnabled);
+                            } else {
+                                branch = "direct.operateMesh";
+                                renderLayer->OperateMesh(
+                                    worldMeshPoints.data(), command.meshDivX,
+                                    command.meshDivY, srcBmp.get(), sourceRect,
+                                    blendMode, opa, stNearest,
+                                    command.clearEnabled);
+                            }
                         } else {
                             continue;
                         }
@@ -2033,8 +2319,9 @@ namespace motion {
 
         int canvasWidth = 0;
         int canvasHeight = 0;
-        if(!queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight) &&
-           _runtime->activeMotion) {
+        const bool queriedCanvas =
+            queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight);
+        if(!queriedCanvas && _runtime->activeMotion) {
             canvasWidth = static_cast<int>(_runtime->activeMotion->width);
             canvasHeight = static_cast<int>(_runtime->activeMotion->height);
         }
@@ -2047,47 +2334,117 @@ namespace motion {
             canvasWidth, canvasHeight, skipUpdate ? 1 : 0,
             _needsInternalAssignImages ? 1 : 0);
 
-        ensureNodeTreeBuilt();
-        prepareRenderItems();
-        applyPreparedRenderItemTranslateOffsets();
+	        iTJSDispatch2 *finalLayerObject = resolvedLayerObject;
+	        tTJSNI_BaseLayer *finalNativeLayer = resolveNativeLayer(finalLayerObject);
+	        if(auto *presentationChild = findMotionPresentationChild(
+	               finalNativeLayer, canvasWidth, canvasHeight)) {
+	            if(auto *presentationObject = presentationChild->GetOwnerNoAddRef()) {
+	                finalLayerObject = presentationObject;
+	                finalNativeLayer = presentationChild;
+	                detail::logoChainTraceLogf(
+	                    motionPath, "draw.layer.presentationTarget",
+	                    "KAGWorldPlugin/Yuzu layer adaptor", _clampedEvalTime,
+	                    "source=[{}] target=[{}] canvas={}x{}",
+	                    describeLayerForDebug(resolveNativeLayer(resolvedLayerObject)),
+	                    describeLayerForDebug(finalNativeLayer),
+	                    canvasWidth, canvasHeight);
+	                if(LOGGER && shouldDebugTitleRender(motionPath) &&
+	                   markRenderDebugLogged("presentation-target:" + motionPath)) {
+	                    LOGGER->info(
+	                        "motion presentation target: motion={} source=[{}] target=[{}]",
+	                        motionPath,
+	                        describeLayerForDebug(resolveNativeLayer(resolvedLayerObject)),
+	                        describeLayerForDebug(finalNativeLayer));
+	                }
+	            }
+	        }
+	        const bool usingPresentationTarget =
+	            finalLayerObject && finalLayerObject != resolvedLayerObject;
 
-        iTJSDispatch2 *renderLayerObject = resolvedLayerObject;
-        if(_needsInternalAssignImages && !skipUpdate) {
-            renderLayerObject = ensureReusableLayerObject(
-                _runtime->internalRenderLayer,
-                resolveLayerTreeOwnerObject(resolvedLayerObject),
-                resolvedLayerObject,
-                static_cast<tTVPLayerType>(ltAlpha),
-                false);
-        }
-        if(renderLayerObject != resolvedLayerObject) {
-            if(!prepareLayerForRender(renderLayerObject, canvasWidth, canvasHeight,
-                                      0x00000000)) {
-                return false;
-            }
-        } else if(auto *targetLayer = resolveNativeLayer(resolvedLayerObject)) {
-            if(targetLayer->GetWidth() != canvasWidth ||
-               targetLayer->GetHeight() != canvasHeight) {
-                targetLayer->SetSize(canvasWidth, canvasHeight);
-            }
-        } else {
-            return false;
-        }
+	        ensureNodeTreeBuilt();
+	        prepareRenderItems();
+	        applyPreparedRenderItemTranslateOffsets();
+
+	        iTJSDispatch2 *renderLayerObject = finalLayerObject;
+	        if(_needsInternalAssignImages && !skipUpdate) {
+	            auto *treeOwner = resolveLayerTreeOwnerObject(finalLayerObject);
+	            if(!treeOwner) {
+	                treeOwner = resolveLayerTreeOwnerObject(resolvedLayerObject);
+	            }
+	            renderLayerObject = ensureReusableLayerObject(
+	                _runtime->internalRenderLayer,
+	                treeOwner,
+	                finalLayerObject,
+	                static_cast<tTVPLayerType>(ltAlpha),
+	                false);
+	        }
+	        if(renderLayerObject != finalLayerObject) {
+	            if(!prepareLayerForRender(renderLayerObject, canvasWidth, canvasHeight,
+	                                      0x00000000)) {
+	                return false;
+	            }
+	        } else if(auto *targetLayer = resolveNativeLayer(finalLayerObject)) {
+	            if(usingPresentationTarget) {
+	                if(!prepareMotionPresentationLayerForRender(targetLayer, canvasWidth,
+	                                                            canvasHeight)) {
+	                    return false;
+	                }
+	            } else {
+	                if(targetLayer->GetWidth() != canvasWidth ||
+	                   targetLayer->GetHeight() != canvasHeight) {
+	                    targetLayer->SetSize(canvasWidth, canvasHeight);
+	                }
+	            }
+	        } else {
+	            return false;
+	        }
 
         buildRenderCommands(canvasWidth, canvasHeight);
         if(!executeLayerRenderCommands(renderLayerObject, true)) {
             return false;
         }
+        auto *renderLayer = resolveNativeLayer(renderLayerObject);
+        if(LOGGER && shouldDebugTitleRender(motionPath) &&
+           markRenderDebugLogged("render-target-check:" + motionPath)) {
+            LOGGER->info(
+                "motion render target check: motion={} object={} native={}",
+                motionPath,
+                static_cast<const void *>(renderLayerObject),
+                static_cast<const void *>(renderLayer));
+        }
+        if(renderLayer && LOGGER && shouldDebugTitleRender(motionPath)) {
+            static int titleTreeLogCount = 0;
+            if(titleTreeLogCount < 3) {
+                ++titleTreeLogCount;
+                try {
+                    std::ostringstream out;
+                    out << "motion render target tree: motion=" << motionPath
+                        << " renderLayer="
+                        << static_cast<const void *>(renderLayer)
+                        << " layer=" << describeLayerForDebug(renderLayer)
+                        << " ancestry="
+                        << describeLayerAncestryForDebug(renderLayer);
+                    describeLayerTreeForDebug(out, renderLayer);
+                    LOGGER->info("{}", out.str());
+                } catch(const std::exception &e) {
+                    LOGGER->warn("motion render target tree failed: motion={} error={}",
+                                 motionPath, e.what());
+                } catch(...) {
+                    LOGGER->warn("motion render target tree failed: motion={} error=<unknown>",
+                                 motionPath);
+                }
+            }
+        }
 
-        if(!skipUpdate) {
-            if(renderLayerObject != resolvedLayerObject) {
-                updateLayerAfterDraw(resolvedLayerObject);
-            } else if(auto *layer = resolveNativeLayer(resolvedLayerObject)) {
-                layer->Update(false);
-                detail::logoChainTraceLogf(
-                    motionPath, "post.layer", "0x6CE7D8", _clampedEvalTime,
-                    "targetLayer.Update(false) size={}x{}",
-                    layer->GetWidth(), layer->GetHeight());
+	        if(!skipUpdate) {
+	            if(renderLayerObject != finalLayerObject) {
+	                updateLayerAfterDraw(finalLayerObject);
+	            } else if(auto *layer = resolveNativeLayer(finalLayerObject)) {
+	                layer->Update(false);
+	                detail::logoChainTraceLogf(
+	                    motionPath, "post.layer", "0x6CE7D8", _clampedEvalTime,
+	                    "targetLayer.Update(false) size={}x{}",
+	                    layer->GetWidth(), layer->GetHeight());
             }
         }
 
@@ -3029,6 +3386,7 @@ namespace motion {
         if(!_speed) {
             return;
         }
+        const auto *activeClipBeforeProgress = selectActiveClip();
         const double actualDelta = dt;
         _frameLastTime = actualDelta;
         _frameLoopTime += actualDelta;
@@ -3078,6 +3436,34 @@ namespace motion {
         // player+456 is the selected clip/timeline eval time consumed by
         // Player_updateLayers (0x6BB33C), not an arbitrary primary-label entry.
         _clampedEvalTime = activeClipTime(*_runtime, selectActiveClip());
+
+        // krkrsdl3's Player (isMotion=true) stops non-loop motion clips by
+        // syncTime, then selfSyncTime, then lastTime. Yuzu logo clips rely on
+        // this Player-level flag becoming false; timeline-only state is not
+        // enough for scripts polling .playing or waiting for onSync().
+        if(!_runtime->isEmoteMode && activeClipBeforeProgress &&
+           !activeClipBeforeProgress->loop) {
+            const double endTime =
+                motionClipEndTimeLikeKrkrsdl3(activeClipBeforeProgress);
+            double clipTime = activeClipTime(*_runtime, activeClipBeforeProgress);
+            if(clipTime <= 0.0) {
+                clipTime = _frameLoopTime;
+            }
+            if(endTime > 0.0 && clipTime >= endTime) {
+                const bool wasPlaying =
+                    _allplaying || !_runtime->playingTimelineLabels.empty();
+                for(auto &[_, state] : _runtime->timelines) {
+                    state.currentTime = std::min(state.currentTime, endTime);
+                    state.playing = false;
+                    state.wasPlaying = false;
+                }
+                _runtime->playingTimelineLabels.clear();
+                if(wasPlaying) {
+                    _runtime->pendingEvents.push_back(
+                        {1, activeClipBeforeProgress->label, {}});
+                }
+            }
+        }
 
         // Scan PSB layers for action/sync events crossed this frame
         // Aligned to libkrkr2.so: updateLayers queues events during evaluation

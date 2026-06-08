@@ -492,3 +492,48 @@ TEST_CASE("motionplayer can play internal logo motion clips") {
     verifyOne(yuzuPath, TJS_W("yuzulogo"), 4, 241);
     verifyOne(m2Path, TJS_W("back_white"), 2, 91);
 }
+
+TEST_CASE("motionplayer non-loop motion clips finish at sync boundary") {
+    setEmoteSeed();
+
+    auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+    snapshot->path = "unit/yuzu-like-logo.mtn";
+    snapshot->mainTimelineLabels.push_back("logo");
+    snapshot->loopTimelines["logo"] = false;
+    snapshot->timelineLoopTimes["logo"] = -1.0;
+    snapshot->timelineTotalFrames["logo"] = 120.0;
+
+    auto &clip = snapshot->clipsByLabel["logo"];
+    clip.label = "logo";
+    clip.loop = false;
+    clip.loopTime = -1.0;
+    clip.totalFrames = 120.0;
+    clip.selfSyncTime = 30.0;
+
+    motion::Player player;
+    player.loadFromSnapshot(snapshot);
+    player.playTimeline(TJS_W("logo"), motion::PlayFlagForce);
+    REQUIRE(player.getTimelinePlaying(TJS_W("logo")));
+
+    player.frameProgress(29.0);
+    REQUIRE(player.getTimelinePlaying(TJS_W("logo")));
+    REQUIRE(player.getAllplaying());
+
+    player.frameProgress(1.0);
+    REQUIRE_FALSE(player.getTimelinePlaying(TJS_W("logo")));
+    REQUIRE_FALSE(player.getAllplaying());
+    REQUIRE(player.getProgressCompat() == Catch::Approx(1.0));
+
+    motion::Player autoPlayer;
+    autoPlayer.loadFromSnapshot(snapshot);
+    autoPlayer.playTimeline(TJS_W("logo"), motion::PlayFlagForce);
+    REQUIRE(autoPlayer.getTimelinePlaying(TJS_W("logo")));
+
+    for(int i = 0; i < 31; ++i) {
+        autoPlayer.autoProgressFromContinuousTick(
+            static_cast<tjs_uint64>(1000 + i * 17));
+    }
+    REQUIRE_FALSE(autoPlayer.getTimelinePlaying(TJS_W("logo")));
+    REQUIRE_FALSE(autoPlayer.getAllplaying());
+    REQUIRE(autoPlayer.getProgressCompat() == Catch::Approx(1.0));
+}
