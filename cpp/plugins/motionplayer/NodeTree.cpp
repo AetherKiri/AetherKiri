@@ -97,7 +97,8 @@ namespace motion::detail {
         bool nodeTreeIsYuzuTitlePersistentRootLayer(const std::string &name) {
             const auto lower = nodeTreeLowercase(name);
             return nodeTreeIsYuzuTitleRootCharacterLayer(lower) ||
-                lower == "logo";
+                lower == "logo" || lower == "bg2_bottom" ||
+                lower == "bg2_top";
         }
 
         bool nodeTreeLayerSetReferencesYuzuTitleCharacters(
@@ -502,10 +503,10 @@ namespace motion::detail {
                 return false;
             };
 
-            // CafeStella's title char_move clip only lists the animated ch3
-            // and logo layers. The final static title characters and logo live
-            // in the root layer list and must stay present as siblings until
-            // the full title presentation settles.
+            // CafeStella's title char_move clip animates a subset of the
+            // title. Final static characters, logo, and frame strips live in
+            // the root layer list and must stay present as siblings until the
+            // full title presentation settles.
             for (const auto &name : snapshot.layerNames) {
                 if (!nodeTreeIsYuzuTitlePersistentRootLayer(name)) {
                     continue;
