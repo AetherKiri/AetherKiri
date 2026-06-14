@@ -1201,7 +1201,7 @@ static std::string TVPLayerAsciiLower(std::string text) {
 
 static bool TVPLayerStorageNameLooksExtraThumbnail(const ttstr &name) {
     const std::string text = TVPLayerAsciiLower(name.AsStdString());
-    return text.find("thum_ev") != std::string::npos;
+    return text.find("thum_") != std::string::npos;
 }
 
 static bool TVPLayerStorageNameLooksCafeStellaSaveThumbnail(const ttstr &name) {
@@ -1217,7 +1217,24 @@ static bool TVPLayerStorageNameLooksThumbnail(const ttstr &name) {
 
 static bool TVPLayerTargetSizeLooksExtraThumbnail(tjs_uint width,
                                                   tjs_uint height) {
-    return width >= 120 && width <= 360 && height >= 70 && height <= 240;
+    return width >= 120 && width <= 512 && height >= 70 && height <= 320;
+}
+
+static bool TVPLayerSourceSizeLooksDownscaleThumbnail(tjs_uint source_width,
+                                                      tjs_uint source_height,
+                                                      tjs_uint target_width,
+                                                      tjs_uint target_height) {
+    if(!source_width || !source_height || !target_width || !target_height) {
+        return false;
+    }
+    if(source_width <= target_width || source_height <= target_height) {
+        return false;
+    }
+    const double source_aspect =
+        static_cast<double>(source_width) / source_height;
+    const double target_aspect =
+        static_cast<double>(target_width) / target_height;
+    return std::fabs(source_aspect - target_aspect) <= 0.05;
 }
 
 static bool TVPCafeStellaSourceSizeLooksSaveThumbnail(tjs_uint width,
@@ -1276,6 +1293,16 @@ static bool TVPLayerLoadThumbnailFitted(tTVPBaseTexture *dest,
         // through the original 587x330 save screenshot.
         target_width = TVPCafeStellaSaveThumbnailWidth;
         target_height = TVPCafeStellaSaveThumbnailHeight;
+    } else if(extra_thumbnail) {
+        if(!TVPLayerSourceSizeLooksDownscaleThumbnail(
+               source.GetWidth(), source.GetHeight(), target_width,
+               target_height)) {
+            return false;
+        }
+        // Gallery scripts commonly load a full-size thumbnail into an already
+        // sized thumbnail layer, then copy that layer's target rect. Keep the
+        // script's rect behavior while avoiding a top-left crop of larger
+        // same-aspect source images.
     }
 
     if(TVPLayerDebugEnabled() && TVPLayerDebugTake()) {
