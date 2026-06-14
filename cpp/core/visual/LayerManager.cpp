@@ -694,19 +694,6 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
         }
         const bool message_command_band =
             IsSaveLoadMessageCommandBand(l, x, y);
-        bool selection_passthrough = false;
-        if(!message_command_band && !TVPIsConfirmableSelectionLayer(l) &&
-           !TVPIsSaveLoadButtonLayer(l)) {
-            if(tTJSNI_BaseLayer *selection = GetConfirmableSelectionLayerAt(x, y)) {
-                if(TVPInputTraceEnabled()) {
-                    spdlog::info("LayerManager selection passthrough top={} selection={}",
-                                 l->GetName().AsStdString(),
-                                 selection->GetName().AsStdString());
-                }
-                l = selection;
-                selection_passthrough = true;
-            }
-        }
         const bool should_confirm_selection =
             TVPIsConfirmableSelectionLayer(l) && !TVPIsSaveLoadItemLayer(l);
         const std::string selection_layer_name =
@@ -714,11 +701,7 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
         const tjs_int selection_x = x;
         const tjs_int selection_y = y;
         l->FromPrimaryCoordinates(x, y);
-        if(selection_passthrough)
-            l->FireMouseDown(x, y, mbLeft, 0);
         l->FireClick(x, y);
-        if(selection_passthrough)
-            l->FireMouseUp(x, y, mbLeft, 0);
         if(should_confirm_selection && TVPMainWindow) {
             if(TVPInputTraceEnabled()) {
                 spdlog::info("LayerManager selectable item click -> pending confirm fallback");

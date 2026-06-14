@@ -116,7 +116,7 @@ func _advance(frames: int) -> void:
 func _save_step(index: int, label: String) -> void:
     await process_frame
     await process_frame
-    var image := root.get_viewport().get_texture().get_image()
+    var image := _capture_frame_image()
     var path := "/tmp/aetherkiri-step-%02d-%s.png" % [index, label]
     image.save_png(path)
     print("step %02d label=%s texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
@@ -127,6 +127,26 @@ func _save_step(index: int, label: String) -> void:
         path,
         JSON.stringify(_image_stats(image)),
     ])
+
+func _capture_frame_image() -> Image:
+    var frame: Dictionary = player.read_frame_rgba()
+    var data: PackedByteArray = frame.get("rgba", PackedByteArray())
+    var width := int(frame.get("width", 0))
+    var height := int(frame.get("height", 0))
+    if width > 0 and height > 0 and data.size() >= width * height * 4:
+        return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
+
+    if rect.texture != null:
+        var rect_image := rect.texture.get_image()
+        if rect_image != null and rect_image.get_width() > 0 and rect_image.get_height() > 0:
+            return rect_image
+
+    var texture := root.get_viewport().get_texture()
+    if texture != null:
+        var viewport_image := texture.get_image()
+        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
+            return viewport_image
+    return Image.create(1, 1, false, Image.FORMAT_RGBA8)
 
 func _run_legacy_steps(step: int) -> int:
     for click in ProbeConfig.clicks(test_config):

@@ -16,8 +16,10 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <string>
+#include <vector>
 #include <spdlog/spdlog.h>
 
 #include "tjsArray.h"
@@ -160,9 +162,29 @@ static void TVPTraceObjectForButtonClick(const char *label,
     TVPTraceObjectProperty(label, object, TJS_W("current"));
     TVPTraceObjectProperty(label, object, TJS_W("Current"));
     TVPTraceObjectProperty(label, object, TJS_W("_current"));
+    TVPTraceObjectProperty(label, object, TJS_W("onClick"));
+    TVPTraceObjectProperty(label, object, TJS_W("onExecute"));
+    TVPTraceObjectProperty(label, object, TJS_W("onButton"));
+    TVPTraceObjectProperty(label, object, TJS_W("onButtonClick"));
+    TVPTraceObjectProperty(label, object, TJS_W("click"));
+    TVPTraceObjectProperty(label, object, TJS_W("execute"));
+    TVPTraceObjectProperty(label, object, TJS_W("exp"));
+    TVPTraceObjectProperty(label, object, TJS_W("expression"));
+    TVPTraceObjectProperty(label, object, TJS_W("cmd"));
+    TVPTraceObjectProperty(label, object, TJS_W("command"));
+    TVPTraceObjectProperty(label, object, TJS_W("func"));
+    TVPTraceObjectProperty(label, object, TJS_W("sename"));
+    TVPTraceObjectProperty(label, object, TJS_W("names"));
+    TVPTraceObjectProperty(label, object, TJS_W("call"));
+    TVPTraceObjectProperty(label, object, TJS_W("global"));
+    TVPTraceObjectProperty(label, object, TJS_W("_up"));
+    TVPTraceObjectProperty(label, object, TJS_W("_down"));
+    TVPTraceObjectProperty(label, object, TJS_W("_click"));
+    TVPTraceObjectProperty(label, object, TJS_W("params"));
 }
 
 static thread_local tTJSNI_BaseLayer *TVPLayerEventSource = nullptr;
+static thread_local tTJSNI_BaseLayer *TVPLayerRecentEventSource = nullptr;
 static thread_local bool TVPCafeStellaSyntheticClickActive = false;
 
 struct tTVPLayerMouseUpContext {
@@ -226,20 +248,44 @@ static bool TVPLayerNameLooksNumberedItem(const ttstr &name) {
     return true;
 }
 
-static bool TVPGetNumberedItemIndex(tTJSNI_BaseLayer *layer, tjs_int &index) {
-    if(!layer)
+static bool TVPLayerNameLooksNumberedPrefix(const ttstr &name,
+                                            const char *prefix) {
+    const std::string text = name.AsStdString();
+    const size_t prefix_len = std::strlen(prefix);
+    if(text.size() <= prefix_len || text.compare(0, prefix_len, prefix) != 0)
         return false;
-    const std::string text = layer->GetName().AsStdString();
-    if(text.size() <= 4 || text.compare(0, 4, "item") != 0)
+    for(size_t i = prefix_len; i < text.size(); ++i) {
+        if(text[i] < '0' || text[i] > '9')
+            return false;
+    }
+    return true;
+}
+
+static bool TVPGetNumberedPrefixIndex(const ttstr &name, const char *prefix,
+                                      tjs_int &index) {
+    const std::string text = name.AsStdString();
+    const size_t prefix_len = std::strlen(prefix);
+    if(text.size() <= prefix_len || text.compare(0, prefix_len, prefix) != 0)
         return false;
     tjs_int value = 0;
-    for(size_t i = 4; i < text.size(); ++i) {
+    for(size_t i = prefix_len; i < text.size(); ++i) {
         if(text[i] < '0' || text[i] > '9')
             return false;
         value = value * 10 + (text[i] - '0');
     }
     index = value;
     return true;
+}
+
+static bool TVPLayerNameLooksCafeStellaIndexedButton(const ttstr &name) {
+    return TVPLayerNameLooksNumberedPrefix(name, "item") ||
+        TVPLayerNameLooksNumberedPrefix(name, "mitem");
+}
+
+static bool TVPGetNumberedItemIndex(tTJSNI_BaseLayer *layer, tjs_int &index) {
+    if(!layer)
+        return false;
+    return TVPGetNumberedPrefixIndex(layer->GetName(), "item", index);
 }
 
 static bool TVPLayerLooksCafeStellaSaveLoadGridItem(tTJSNI_BaseLayer *layer) {
@@ -262,6 +308,21 @@ static bool TVPGetCafeStellaSaveLoadGridItemIndex(tTJSNI_BaseLayer *layer,
     return TVPGetNumberedItemIndex(TVPLayerEventSource, item_index);
 }
 
+static tTJSNI_BaseLayer *TVPGetButtonClickSourceLayer() {
+    if(TVPLayerEventSource)
+        return TVPLayerEventSource;
+    if(TVPLayerCurrentMouseUp.Active && TVPLayerCurrentMouseUp.Layer)
+        return TVPLayerCurrentMouseUp.Layer;
+    return TVPLayerRecentEventSource;
+}
+
+static bool TVPLayerLooksCafeStellaParentHackSource(
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer) {
+    return TVPLayerNameEquals(parent_layer, "ParentHackLayer") &&
+        source_layer && source_layer != parent_layer &&
+        TVPLayerNameLooksCafeStellaIndexedButton(source_layer->GetName());
+}
+
 static iTJSDispatch2 *TVPGetButtonClickEventTarget(tTJSNI_BaseLayer *layer,
                                                    iTJSDispatch2 *fallback) {
     tjs_int item_index = 0;
@@ -273,6 +334,18 @@ static iTJSDispatch2 *TVPGetButtonClickEventTarget(tTJSNI_BaseLayer *layer,
                              layer->GetName().AsStdString(),
                              TVPLayerEventSource->GetName().AsStdString(),
                              item_index);
+            }
+            return source_owner;
+        }
+    }
+    tTJSNI_BaseLayer *source_layer = TVPGetButtonClickSourceLayer();
+    if(TVPLayerLooksCafeStellaParentHackSource(layer, source_layer)) {
+        if(iTJSDispatch2 *source_owner =
+               source_layer->GetOwnerNoAddRef()) {
+            if(TVPLayerInputTraceEnabled()) {
+                spdlog::info("LayerIntf onButtonClick remap target parent={} source={}",
+                             layer->GetName().AsStdString(),
+                             source_layer->GetName().AsStdString());
             }
             return source_owner;
         }
@@ -294,6 +367,23 @@ TVPGetButtonClickActionOwner(tTJSNI_BaseLayer *layer,
                              layer->GetName().AsStdString(),
                              TVPLayerEventSource->GetName().AsStdString(),
                              item_index,
+                             source_action.Object == fallback.Object &&
+                                     source_action.ObjThis == fallback.ObjThis
+                                 ? "yes"
+                                 : "no");
+            }
+            return source_action;
+        }
+    }
+    tTJSNI_BaseLayer *source_layer = TVPGetButtonClickSourceLayer();
+    if(TVPLayerLooksCafeStellaParentHackSource(layer, source_layer)) {
+        tTJSVariantClosure source_action =
+            source_layer->GetActionOwnerNoAddRef();
+        if(source_action.Object) {
+            if(TVPLayerInputTraceEnabled()) {
+                spdlog::info("LayerIntf onButtonClick remap action parent={} source={} same={}",
+                             layer->GetName().AsStdString(),
+                             source_layer->GetName().AsStdString(),
                              source_action.Object == fallback.Object &&
                                      source_action.ObjThis == fallback.ObjThis
                                  ? "yes"
@@ -991,6 +1081,42 @@ static bool TVPInvokeCafeStellaSourceButtonClick(
                      parent_layer ? parent_layer->GetName().AsStdString() : "",
                      source_layer ? source_layer->GetName().AsStdString() : "",
                      item_index, x, y, button, shift, hr);
+    }
+    return TJS_SUCCEEDED(hr);
+}
+
+static bool TVPInvokeParentHackMessageLayerButtonClick(
+    tTJSNI_BaseLayer *parent_hack_layer, tjs_int numparams,
+    tTJSVariant **param, tTJSVariant *result) {
+    if(numparams < 1)
+        return false;
+
+    tTJSNI_BaseLayer *source_layer = TVPLayerEventSource;
+    if(!source_layer && TVPLayerCurrentMouseUp.Active)
+        source_layer = TVPLayerCurrentMouseUp.Layer;
+    if(!TVPLayerLooksCafeStellaParentHackSource(parent_hack_layer,
+                                                source_layer))
+        return false;
+
+    tTJSNI_BaseLayer *message_layer = parent_hack_layer->GetParent();
+    iTJSDispatch2 *message_owner =
+        message_layer ? message_layer->GetOwnerNoAddRef() : nullptr;
+    if(!message_owner)
+        return false;
+
+    static ttstr on_button_click(TJS_W("onButtonClick"));
+    tTJSVariantClosure message_object(message_owner, message_owner);
+    tTJSVariant *args[1] = { param[0] };
+    const tjs_error hr =
+        message_object.FuncCall(0, on_button_click.c_str(),
+                                on_button_click.GetHint(), result, 1, args,
+                                nullptr);
+    if(TVPLayerInputTraceEnabled()) {
+        spdlog::info("LayerIntf onButtonClick parent-hack forward parent={} source={} message={} link={} hr={}",
+                     parent_hack_layer ? parent_hack_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     message_layer ? message_layer->GetName().AsStdString() : "",
+                     ttstr(*param[0]).AsStdString(), hr);
     }
     return TJS_SUCCEEDED(hr);
 }
@@ -4646,6 +4772,7 @@ tTJSNI_BaseLayer *tTJSNI_BaseLayer::GetMostFrontChildAt(tjs_int x, tjs_int y,
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::FireClick(tjs_int x, tjs_int y) {
     if(Owner && !Shutdown) {
+        TVPLayerRecentEventSource = this;
         tTJSVariant param[2];
         param[0] = x;
         param[1] = y;
@@ -4683,6 +4810,7 @@ void tTJSNI_BaseLayer::FireMouseDown(tjs_int x, tjs_int y, tTVPMouseButton mb,
 void tTJSNI_BaseLayer::FireMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
                                    tjs_uint32 flags) {
     if(Owner && !Shutdown) {
+        TVPLayerRecentEventSource = this;
         TVPLayerEventSourceScope event_source_scope(this);
         tTJSVariant param[4];
         param[0] = x;
@@ -9973,6 +10101,36 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             spdlog::info("LayerIntf onButtonClick args layer={} count={} first={}",
                          _this->GetName().AsStdString(), numparams,
                          ttstr(*param[0]).AsStdString());
+            tTJSNI_BaseLayer *source_layer = TVPGetButtonClickSourceLayer();
+            auto layer_name = [](tTJSNI_BaseLayer *layer) {
+                return layer ? layer->GetName().AsStdString()
+                             : std::string("<null>");
+            };
+            spdlog::info("LayerIntf onButtonClick source layer={} event={} mouseup={} recent={}",
+                         layer_name(source_layer),
+                         layer_name(TVPLayerEventSource),
+                         TVPLayerCurrentMouseUp.Active
+                             ? layer_name(TVPLayerCurrentMouseUp.Layer)
+                             : std::string("<inactive>"),
+                         layer_name(TVPLayerRecentEventSource));
+            if(source_layer) {
+                tTJSVariantClosure source_action =
+                    source_layer->GetActionOwnerNoAddRef();
+                spdlog::info("LayerIntf onButtonClick source details layer={} size={}x{} owner={} action={}",
+                             source_layer->GetName().AsStdString(),
+                             source_layer->GetWidth(), source_layer->GetHeight(),
+                             source_layer->GetOwnerNoAddRef() ? "yes" : "no",
+                             source_action.Object ? "yes" : "no");
+                if(iTJSDispatch2 *source_owner =
+                       source_layer->GetOwnerNoAddRef()) {
+                    tTJSVariantClosure source_object(source_owner,
+                                                     source_owner);
+                    TVPTraceObjectForButtonClick("button.source",
+                                                 source_object);
+                }
+                TVPTraceObjectForButtonClick("button.sourceActionOwner",
+                                             source_action);
+            }
             tTJSVariantClosure this_object(objthis, objthis);
             TVPTraceObjectForButtonClick("button.this", this_object);
             TVPTraceObjectForButtonClick("button.parentActionOwner",
@@ -9980,6 +10138,9 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             TVPTraceObjectForButtonClick("button.actionOwner", obj);
         }
         if(TVPInvokeCafeStellaSaveLoadGridItem(_this, result))
+            return TJS_S_OK;
+        if(TVPInvokeParentHackMessageLayerButtonClick(_this, numparams, param,
+                                                      result))
             return TJS_S_OK;
         if(obj.Object) {
             if(numparams < 1)
@@ -11456,6 +11617,7 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
                                 /*var. type*/ tTJSNI_Layer);
 
+        TVPLayerEventSourceScope event_source(_this);
         TVPLayerMouseUpContextScope mouse_up_context(_this, numparams, param);
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
         TVPTraceLayerInputEvent("onMouseUp", _this, obj);

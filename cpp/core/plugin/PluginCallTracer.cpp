@@ -15,13 +15,17 @@
 // ===========================================================================
 
 PluginCallTracer &PluginCallTracer::Instance() {
-    static PluginCallTracer instance;
-    return instance;
+    static PluginCallTracer *instance = []() {
+        auto *tracer = new PluginCallTracer();
+        std::atexit([]() { PluginCallTracer::Instance().Shutdown(); });
+        return tracer;
+    }();
+    return *instance;
 }
 
 void PluginCallTracer::InitLogger(const std::string &logFilePath) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_loggerInitialized) return;
+    if (m_shuttingDown || m_loggerInitialized) return;
     m_logFilePath = logFilePath;
 
     try {
@@ -40,20 +44,58 @@ void PluginCallTracer::InitLogger(const std::string &logFilePath) {
 }
 
 void PluginCallTracer::SetEnabled(bool enabled) {
+    std::shared_ptr<spdlog::logger> logger;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_shuttingDown) return;
+    }
     m_enabled = enabled;
     if (enabled && !m_loggerInitialized && !m_logFilePath.empty()) {
         InitLogger(m_logFilePath);
     }
-    if (m_logger) {
-        m_logger->info("=== Plugin tracing {} ===", enabled ? "enabled" : "disabled");
-        m_logger->flush();
+    logger = GetActiveLogger();
+    if (logger) {
+        try {
+            logger->info("=== Plugin tracing {} ===",
+                         enabled ? "enabled" : "disabled");
+            logger->flush();
+        } catch (...) {
+        }
     }
 }
 
 void PluginCallTracer::EnsureLogger() {
-    if (!m_loggerInitialized && !m_logFilePath.empty()) {
+    if (!m_shuttingDown && !m_loggerInitialized && !m_logFilePath.empty()) {
         InitLogger(m_logFilePath);
     }
+}
+
+void PluginCallTracer::Shutdown() {
+    std::shared_ptr<spdlog::logger> logger;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_shuttingDown) return;
+        m_shuttingDown = true;
+        m_enabled = false;
+        logger = m_logger;
+        m_logger.reset();
+        m_loggerInitialized = false;
+    }
+    if (logger) {
+        try {
+            logger->info("=== Plugin tracing disabled for shutdown ===");
+            logger->flush();
+            spdlog::drop("plugin_trace");
+        } catch (...) {
+        }
+    }
+}
+
+std::shared_ptr<spdlog::logger> PluginCallTracer::GetActiveLogger() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_enabled || m_shuttingDown || !m_logger)
+        return nullptr;
+    return m_logger;
 }
 
 iTJSDispatch2 *PluginCallTracer::WrapDispatch(const ttstr &className,
@@ -84,7 +126,8 @@ void PluginCallTracer::LogMethodCall(const std::string &className,
                                      const std::string &memberName,
                                      tjs_int numparams,
                                      tTJSVariant **param) {
-    if (!m_enabled || !m_logger) return;
+    auto logger = GetActiveLogger();
+    if (!logger) return;
     std::string msg = className + "." + memberName + "(argc=" +
                       std::to_string(numparams);
 
@@ -107,19 +150,27 @@ void PluginCallTracer::LogMethodCall(const std::string &className,
     if (numparams > 4) msg += ", ...";
     msg += ")";
 
-    m_logger->info(msg);
+    try {
+        logger->info(msg);
+    } catch (...) {
+    }
 }
 
 void PluginCallTracer::LogPropGet(const std::string &className,
                                   const std::string &memberName) {
-    if (!m_enabled || !m_logger) return;
-    m_logger->info("{}.{} [GET]", className, memberName);
+    auto logger = GetActiveLogger();
+    if (!logger) return;
+    try {
+        logger->info("{}.{} [GET]", className, memberName);
+    } catch (...) {
+    }
 }
 
 void PluginCallTracer::LogPropSet(const std::string &className,
                                   const std::string &memberName,
                                   const tTJSVariant *value) {
-    if (!m_enabled || !m_logger) return;
+    auto logger = GetActiveLogger();
+    if (!logger) return;
     std::string valStr;
     if (value) {
         try {
@@ -133,7 +184,10 @@ void PluginCallTracer::LogPropSet(const std::string &className,
     } else {
         valStr = "(null)";
     }
-    m_logger->info("{}.{} [SET] {}", className, memberName, valStr);
+    try {
+        logger->info("{}.{} [SET] {}", className, memberName, valStr);
+    } catch (...) {
+    }
 }
 
 // ===========================================================================
@@ -537,21 +591,30 @@ static const char *TypeToStr(tTJSNativeInstanceType type) {
 }
 
 void PluginCallTracer::LogRegistrationStart() {
-    if (!m_enabled || !m_logger) return;
-    m_logger->info("");
-    m_logger->info("====== Plugin Registration ======");
+    auto logger = GetActiveLogger();
+    if (!logger) return;
+    try {
+        logger->info("");
+        logger->info("====== Plugin Registration ======");
+    } catch (...) {
+    }
 }
 
 void PluginCallTracer::LogModuleStart(const std::string &moduleName) {
-    if (!m_enabled || !m_logger) return;
-    m_logger->info("--- Module: {} ---", moduleName);
+    auto logger = GetActiveLogger();
+    if (!logger) return;
+    try {
+        logger->info("--- Module: {} ---", moduleName);
+    } catch (...) {
+    }
 }
 
 void PluginCallTracer::LogRegistration(const ttstr &className,
                                        const ttstr &memberName,
                                        tTJSNativeInstanceType type,
                                        tjs_uint32 flags) {
-    if (!m_enabled || !m_logger) return;
+    auto logger = GetActiveLogger();
+    if (!logger) return;
     tTJSNarrowStringHolder nc(className.c_str());
     tTJSNarrowStringHolder nm(memberName.c_str());
     std::string cn = nc.operator const char *();
@@ -559,27 +622,39 @@ void PluginCallTracer::LogRegistration(const ttstr &className,
     const char *ts = TypeToStr(type);
     bool isStatic = (flags & TJS_STATICMEMBER) != 0;
 
-    m_logger->info("  [{}] {}.{}{}", ts, cn, mn, isStatic ? " (static)" : "");
+    try {
+        logger->info("  [{}] {}.{}{}", ts, cn, mn,
+                     isStatic ? " (static)" : "");
+    } catch (...) {
+    }
 }
 
 void PluginCallTracer::LogRegistrationEnd() {
-    if (!m_enabled || !m_logger) return;
-    m_logger->info("====== Registration Complete ======");
-    m_logger->info("");
-    m_logger->flush();
+    auto logger = GetActiveLogger();
+    if (!logger) return;
+    try {
+        logger->info("====== Registration Complete ======");
+        logger->info("");
+        logger->flush();
+    } catch (...) {
+    }
 }
 
 void PluginCallTracer::LogPluginLoad(const std::string &name, bool success,
                                      const char *stub) {
-    if (!m_enabled || !m_logger) return;
-    if (success) {
-        m_logger->info("[Plugin] {} loaded OK", name);
-    } else if (stub) {
-        m_logger->info("[Plugin] {} MISSING → fallback: {}", name, stub);
-    } else {
-        m_logger->info("[Plugin] {} MISSING (no fallback)", name);
+    auto logger = GetActiveLogger();
+    if (!logger) return;
+    try {
+        if (success) {
+            logger->info("[Plugin] {} loaded OK", name);
+        } else if (stub) {
+            logger->info("[Plugin] {} MISSING → fallback: {}", name, stub);
+        } else {
+            logger->info("[Plugin] {} MISSING (no fallback)", name);
+        }
+        logger->flush();
+    } catch (...) {
     }
-    m_logger->flush();
 }
 
 void PluginCallTracer::LogMissingMember(const tjs_char *membername,
@@ -597,13 +672,16 @@ void PluginCallTracer::LogMissingMember(const tjs_char *membername,
         }
     }
 
-    if (m_enabled && m_logger) {
-        if (className.empty()) {
-            m_logger->info("[MISSING] {} \"{}\"", operation,
-                           ns.operator const char *());
-        } else {
-            m_logger->info("[MISSING] {}.{} \"{}\"", className, operation,
-                           ns.operator const char *());
+    if (auto logger = GetActiveLogger()) {
+        try {
+            if (className.empty()) {
+                logger->info("[MISSING] {} \"{}\"", operation,
+                             ns.operator const char *());
+            } else {
+                logger->info("[MISSING] {}.{} \"{}\"", className, operation,
+                             ns.operator const char *());
+            }
+        } catch (...) {
         }
     }
 

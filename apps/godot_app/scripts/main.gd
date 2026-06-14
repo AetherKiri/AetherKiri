@@ -2627,17 +2627,17 @@ func _probe_send_direct_click(pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, pos.x, pos.y, 0.0, 0.0, 0)
 
 func _probe_capture_image() -> Image:
-    if viewport.texture != null:
-        var viewport_image := viewport.texture.get_image()
-        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
-            return viewport_image
-
     var frame: Dictionary = player.read_frame_rgba()
     var data: PackedByteArray = frame.get("rgba", PackedByteArray())
     var width := int(frame.get("width", 0))
     var height := int(frame.get("height", 0))
     if width > 0 and height > 0 and data.size() >= width * height * 4:
         return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
+
+    if viewport.texture != null:
+        var viewport_image := viewport.texture.get_image()
+        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
+            return viewport_image
 
     var texture := get_viewport().get_texture()
     if texture != null:

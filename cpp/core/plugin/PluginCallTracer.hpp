@@ -262,7 +262,10 @@ public:
     /// Enable/disable tracing at runtime.
     void SetEnabled(bool enabled);
 
-    bool IsEnabled() const { return m_enabled; }
+    bool IsEnabled() const { return m_enabled && !m_shuttingDown; }
+
+    /// Disable tracing during process shutdown before plugin proxy finalizers run.
+    void Shutdown();
 
     /// Direct logger access (used by proxy objects for diagnostics).
     void EnsureLogger();
@@ -305,11 +308,14 @@ private:
     PluginCallTracer(const PluginCallTracer &) = delete;
     PluginCallTracer &operator=(const PluginCallTracer &) = delete;
 
+    std::shared_ptr<spdlog::logger> GetActiveLogger();
+
     std::shared_ptr<spdlog::logger> m_logger;
     std::string m_logFilePath;
     std::mutex m_mutex;
     bool m_enabled = false;
     bool m_loggerInitialized = false;
+    bool m_shuttingDown = false;
 };
 
 #endif // AETHERKiri_PLUGIN_CALL_TRACER_HPP
