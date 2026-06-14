@@ -361,6 +361,36 @@ namespace {
         return label.find("title_char") != std::string::npos;
     }
 
+    bool isYuzuTitleStandaloneCharacterLayer(const std::string &nodeLabel,
+                                             const std::string &sourceKey) {
+        if(isYuzuTitlePositionLayer(nodeLabel, sourceKey)) {
+            return false;
+        }
+        const auto source = renderDebugLowercase(sourceKey);
+        if(source.find("src/title/ch") != std::string::npos ||
+           source.find("/title/ch") != std::string::npos ||
+           source.find("title2_ch") != std::string::npos) {
+            return true;
+        }
+        const auto label = renderDebugLowercase(nodeLabel);
+        return label == "ch0" || label == "ch1" || label == "ch2" ||
+            label == "ch3";
+    }
+
+    bool isYuzuTitleClipAnimatedCharacterLayer(
+        const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
+        if(entry.visibleAncestorIndex < 0) {
+            return false;
+        }
+        const auto label = renderDebugLowercase(entry.nodeLabel);
+        if(label != "ch3") {
+            return false;
+        }
+        const auto source = renderDebugLowercase(entry.sourceKey);
+        return source.find("src/title/ch04") != std::string::npos ||
+            source.find("/title/ch04") != std::string::npos;
+    }
+
     int yuzuTitlePresentationDrawRank(
         const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
         if(isYuzuTitleBackgroundLayer(entry.nodeLabel, entry.sourceKey)) {
@@ -524,6 +554,56 @@ namespace {
                 LOGGER->info(
                     "motion title presentation draw order normalized: motion={}",
                     motionPath);
+            }
+
+            int suppressedClipCharacters = 0;
+            for(auto &entry : runtime.preparedRenderItems) {
+                if(entry.drawFlag && !entry.skipFlag0 && !entry.skipFlag1 &&
+                   entry.opacity > 0 &&
+                   isYuzuTitleClipAnimatedCharacterLayer(entry)) {
+                    entry.skipFlag0 = true;
+                    ++suppressedClipCharacters;
+                }
+            }
+            if(suppressedClipCharacters > 0 && LOGGER &&
+               shouldDebugTitleRender(motionPath) &&
+               markRenderDebugLogged(fmt::format(
+                   "yuzu-title-clip-character-suppressed:{}:{}",
+                   motionPath, suppressedClipCharacters))) {
+                LOGGER->info(
+                    "motion title clip character layer suppressed: motion={} suppressedClipCharacters={}",
+                    motionPath, suppressedClipCharacters);
+            }
+
+            const bool hasActiveCompositeCharacterLayer = std::any_of(
+                runtime.preparedRenderItems.begin(),
+                runtime.preparedRenderItems.end(),
+                [](const auto &entry) {
+                    return entry.drawFlag && !entry.skipFlag0 &&
+                        !entry.skipFlag1 && entry.opacity >= 250 &&
+                        isYuzuTitlePositionLayer(entry.nodeLabel,
+                                                 entry.sourceKey);
+                });
+            if(hasActiveCompositeCharacterLayer) {
+                int suppressed = 0;
+                for(auto &entry : runtime.preparedRenderItems) {
+                    if(entry.drawFlag && !entry.skipFlag0 &&
+                       !entry.skipFlag1 && entry.opacity > 0 &&
+                       isYuzuTitleStandaloneCharacterLayer(entry.nodeLabel,
+                                                           entry.sourceKey)) {
+                        entry.skipFlag0 = true;
+                        ++suppressed;
+                    }
+                }
+                if(suppressed > 0 && LOGGER &&
+                   shouldDebugTitleRender(motionPath) &&
+                   markRenderDebugLogged(fmt::format(
+                       "yuzu-title-composite-suppressed:{}:{}",
+                       motionPath, suppressed))) {
+                    LOGGER->info(
+                        "motion title composite character layer active: motion={} suppressedStandaloneCharacters={}",
+                        motionPath, suppressed);
+                }
             }
         }
 
@@ -1673,6 +1753,54 @@ namespace {
         }};
     }
 
+    bool axisAlignedIntegerRectFromCorners(
+        const std::array<float, 8> &corners,
+        float xOffset,
+        float yOffset,
+        tTVPRect &outRect) {
+        constexpr float kEpsilon = 0.02f;
+        for(float value : corners) {
+            if(!std::isfinite(value)) {
+                return false;
+            }
+        }
+
+        const float left = corners[0] + xOffset;
+        const float top = corners[1] + yOffset;
+        const float right = corners[2] + xOffset;
+        const float bottom = corners[5] + yOffset;
+        if(!(right > left && bottom > top)) {
+            return false;
+        }
+        if(std::fabs((corners[3] + yOffset) - top) > kEpsilon ||
+           std::fabs((corners[4] + xOffset) - right) > kEpsilon ||
+           std::fabs((corners[6] + xOffset) - left) > kEpsilon ||
+           std::fabs((corners[7] + yOffset) - bottom) > kEpsilon) {
+            return false;
+        }
+
+        auto roundToInt = [&](float value, int &out) {
+            const float rounded = std::round(value);
+            if(std::fabs(value - rounded) > kEpsilon) {
+                return false;
+            }
+            out = static_cast<int>(rounded);
+            return true;
+        };
+
+        int il = 0;
+        int it = 0;
+        int ir = 0;
+        int ib = 0;
+        if(!roundToInt(left, il) || !roundToInt(top, it) ||
+           !roundToInt(right, ir) || !roundToInt(bottom, ib) ||
+           ir <= il || ib <= it) {
+            return false;
+        }
+        outRect = tTVPRect(il, it, ir, ib);
+        return true;
+    }
+
     std::vector<tTVPPointD> buildMeshPoints(
         const std::vector<float> &points,
         float xOffset,
@@ -2700,11 +2828,24 @@ namespace motion {
                 return true;
             }
             if(command.meshType == 0) {
-                const auto localPts =
-                    buildAffineTrianglePoints(command.localCorners, 0.0f, 0.0f);
-                targetLayer->AffineCopy(localPts.data(), srcBmp.get(),
-                                        sourceRect, stNearest,
-                                        command.clearEnabled);
+                tTVPRect localRect;
+                const bool canUseRectCopy =
+                    axisAlignedIntegerRectFromCorners(command.localCorners,
+                                                      0.5f, 0.5f,
+                                                      localRect) &&
+                    localRect.get_width() == sourceRect.get_width() &&
+                    localRect.get_height() == sourceRect.get_height();
+                if(canUseRectCopy) {
+                    targetLayer->CopyRect(localRect.left, localRect.top,
+                                          srcBmp.get(), nullptr, sourceRect);
+                } else {
+                    const auto localPts =
+                        buildAffineTrianglePoints(command.localCorners, 0.0f,
+                                                  0.0f);
+                    targetLayer->AffineCopy(localPts.data(), srcBmp.get(),
+                                            sourceRect, stNearest,
+                                            command.clearEnabled);
+                }
             } else {
                 if(command.localMeshPoints.empty() || command.meshDivX < 2 ||
                    command.meshDivY < 2) {
@@ -2979,18 +3120,40 @@ namespace motion {
                     ((command.blendMode & 0x0F) == 0) && opa >= 255 &&
                     !bitmapHasTransparentPixels(*srcBmp);
                 if(command.meshType == 0) {
-                    const auto worldPts =
-                        buildAffineTrianglePoints(command.worldCorners,
-                                                   -0.5f, -0.5f);
-                    if(directCopyWithoutOpacity) {
-                        branch = "direct.affineCopy";
-                        renderLayer->AffineCopy(worldPts.data(), srcBmp.get(),
-                                                sourceRect, stNearest,
-                                                command.clearEnabled);
+                    tTVPRect destinationRect;
+                    const bool canUseRectCopy =
+                        axisAlignedIntegerRectFromCorners(command.worldCorners,
+                                                          0.0f, 0.0f,
+                                                          destinationRect) &&
+                        destinationRect.get_width() == sourceRect.get_width() &&
+                        destinationRect.get_height() == sourceRect.get_height();
+                    if(canUseRectCopy && directCopyWithoutOpacity) {
+                        branch = "direct.copyRect";
+                        renderLayer->CopyRect(destinationRect.left,
+                                              destinationRect.top,
+                                              srcBmp.get(), nullptr,
+                                              sourceRect);
+                    } else if(canUseRectCopy) {
+                        branch = "direct.operateRect";
+                        renderLayer->OperateRect(destinationRect.left,
+                                                 destinationRect.top,
+                                                 srcBmp.get(), sourceRect,
+                                                 blendMode, opa);
                     } else {
-                        renderLayer->OperateAffine(worldPts.data(), srcBmp.get(),
-                                                   sourceRect, blendMode, opa,
-                                                   stNearest);
+                        const auto worldPts =
+                            buildAffineTrianglePoints(command.worldCorners,
+                                                       -0.5f, -0.5f);
+                        if(directCopyWithoutOpacity) {
+                            branch = "direct.affineCopy";
+                            renderLayer->AffineCopy(worldPts.data(), srcBmp.get(),
+                                                    sourceRect, stNearest,
+                                                    command.clearEnabled);
+                        } else {
+                            renderLayer->OperateAffine(worldPts.data(),
+                                                       srcBmp.get(), sourceRect,
+                                                       blendMode, opa,
+                                                       stNearest);
+                        }
                     }
                 } else {
                     if(command.worldMeshPoints.empty() ||

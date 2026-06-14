@@ -77,9 +77,178 @@ namespace motion::detail {
             return path.find("yuzulogo") != std::string::npos;
         }
 
+        bool nodeTreeIsYuzuTitlePresentation(const MotionSnapshot &snapshot) {
+            const auto path = nodeTreeLowercase(snapshot.path);
+            return path.find("title_bg") != std::string::npos ||
+                path.find("titlebg") != std::string::npos;
+        }
+
         bool nodeTreeIsYuzuLogoRootTextLayer(const std::string &name) {
             const auto lower = nodeTreeLowercase(name);
             return lower == "software" || lower.rfind("moji_", 0) == 0;
+        }
+
+        bool nodeTreeIsYuzuTitleRootCharacterLayer(const std::string &name) {
+            const auto lower = nodeTreeLowercase(name);
+            return lower == "ch0" || lower == "ch1" || lower == "ch2" ||
+                lower == "ch3";
+        }
+
+        bool nodeTreeIsYuzuTitlePersistentRootLayer(const std::string &name) {
+            const auto lower = nodeTreeLowercase(name);
+            return nodeTreeIsYuzuTitleRootCharacterLayer(lower) ||
+                lower == "logo";
+        }
+
+        bool nodeTreeLayerSetReferencesYuzuTitleCharacters(
+            const std::vector<std::string> &names) {
+            for (const auto &name : names) {
+                const auto lower = nodeTreeLowercase(name);
+                if (lower == "title_charall" ||
+                    nodeTreeIsYuzuTitleRootCharacterLayer(lower)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        std::shared_ptr<PSB::PSBDictionary>
+        nodeTreeCopyDictionaryWithoutKeys(
+            const std::shared_ptr<const PSB::PSBDictionary> &source,
+            const std::unordered_set<std::string> &skipKeys) {
+            auto copy = std::make_shared<PSB::PSBDictionary>();
+            if (!source) return copy;
+            for (const auto &[key, value] : *source) {
+                if (skipKeys.find(key) != skipKeys.end()) {
+                    continue;
+                }
+                copy->emplace(key, value);
+            }
+            return copy;
+        }
+
+        std::shared_ptr<PSB::PSBDictionary>
+        nodeTreeMakeNumberFrame(
+            int time,
+            int type,
+            const std::shared_ptr<PSB::PSBDictionary> &content = nullptr) {
+            auto frame = std::make_shared<PSB::PSBDictionary>();
+            frame->emplace("time", std::make_shared<PSB::PSBNumber>(time));
+            frame->emplace("type", std::make_shared<PSB::PSBNumber>(type));
+            if (content) {
+                frame->emplace("content", content);
+            }
+            return frame;
+        }
+
+        std::shared_ptr<PSB::PSBDictionary>
+        nodeTreeTitleIntroContent(
+            const std::shared_ptr<const PSB::PSBDictionary> &sourceContent,
+            int opacity) {
+            auto content = nodeTreeCopyDictionaryWithoutKeys(
+                sourceContent, { "mask", "opa" });
+            // Keep source/position fields from the root static layer, but add
+            // opacity so these synthetic intro layers fade in before the full
+            // title_charall composite takes over.
+            content->emplace("mask", std::make_shared<PSB::PSBNumber>(0x403));
+            content->emplace("opa", std::make_shared<PSB::PSBNumber>(opacity));
+            return content;
+        }
+
+        std::shared_ptr<const PSB::PSBDictionary>
+        nodeTreeMakeYuzuTitleIntroLayer(
+            const std::shared_ptr<const PSB::PSBDictionary> &rootLayer,
+            const std::string &label,
+            int startFrame,
+            int endFrame,
+            int hideFrame) {
+            if (!rootLayer) return nullptr;
+            const auto frames = nodeTreePsbList(rootLayer, "frameList");
+            if (!frames || frames->size() == 0) return nullptr;
+            const auto firstFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*frames)[0]);
+            if (!firstFrame) return nullptr;
+            const auto sourceContent =
+                std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*firstFrame)["content"]);
+            if (!sourceContent) return nullptr;
+
+            auto introLayer = nodeTreeCopyDictionaryWithoutKeys(
+                rootLayer, { "label", "frameList", "children" });
+            introLayer->emplace("label", std::make_shared<PSB::PSBString>(label));
+
+            auto introFrames = std::make_shared<PSB::PSBList>(3);
+            introFrames->push_back(nodeTreeMakeNumberFrame(
+                startFrame, 3, nodeTreeTitleIntroContent(sourceContent, 0)));
+            introFrames->push_back(nodeTreeMakeNumberFrame(
+                endFrame, 2, nodeTreeTitleIntroContent(sourceContent, 255)));
+            introFrames->push_back(nodeTreeMakeNumberFrame(hideFrame, 0));
+            introLayer->emplace("frameList", introFrames);
+            return introLayer;
+        }
+
+        void walkTree(const std::shared_ptr<const PSB::PSBDictionary> &psbNode,
+                      int parentIdx,
+                      std::vector<MotionNode> &nodes);
+
+        bool nodeTreeYuzuTitleIntroTiming(
+            const std::string &rootLabel,
+            std::string &introLabel,
+            int &startFrame,
+            int &endFrame) {
+            const auto lower = nodeTreeLowercase(rootLabel);
+            introLabel = lower + "_intro";
+            if (lower == "ch0") {
+                startFrame = 56;
+                endFrame = 72;
+                return true;
+            }
+            if (lower == "ch1") {
+                startFrame = 72;
+                endFrame = 88;
+                return true;
+            }
+            if (lower == "ch2") {
+                startFrame = 88;
+                endFrame = 104;
+                return true;
+            }
+            if (lower == "ch3") {
+                startFrame = 104;
+                endFrame = 120;
+                return true;
+            }
+            return false;
+        }
+
+        void nodeTreeAppendYuzuTitleIntroLayers(
+            const MotionSnapshot &snapshot,
+            std::vector<MotionNode> &nodes) {
+            constexpr int kCompositeReadyFrame = 136;
+
+            // Fade timings follow the character numbers, while draw order must
+            // follow the original root layer list. In CafeStella that root
+            // order carries the title character occlusion relationship.
+            for (const auto &rootLabel : snapshot.layerNames) {
+                std::string introLabel;
+                int startFrame = 0;
+                int endFrame = 0;
+                if (!nodeTreeYuzuTitleIntroTiming(rootLabel, introLabel,
+                                                  startFrame, endFrame)) {
+                    continue;
+                }
+                const auto it = snapshot.layersByName.find(rootLabel);
+                if (it == snapshot.layersByName.end()) {
+                    continue;
+                }
+                const auto introLayer = nodeTreeMakeYuzuTitleIntroLayer(
+                    it->second, introLabel, startFrame, endFrame,
+                    kCompositeReadyFrame);
+                if (!introLayer) {
+                    continue;
+                }
+                walkTree(introLayer, 0, nodes);
+            }
         }
 
         // Check if any frame in frameList has a non-empty "src" in its "content".
@@ -313,6 +482,38 @@ namespace motion::detail {
                         includedLabels.insert(nodes[i].layerName);
                     }
                 }
+            }
+        }
+
+        if (layersByName != &snapshot.layersByName &&
+            nodeTreeIsYuzuTitlePresentation(snapshot) &&
+            nodeTreeLayerSetReferencesYuzuTitleCharacters(*layerNames)) {
+            nodeTreeAppendYuzuTitleIntroLayers(snapshot, nodes);
+
+            auto hasIncludedRootLayer =
+                [&](const std::string &label,
+                    const std::shared_ptr<const PSB::PSBDictionary> &layer) {
+                for (const auto &node : nodes) {
+                    if (node.parentIndex == 0 && node.layerName == label &&
+                        node.psbNode == layer) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            // CafeStella's title char_move clip only lists the animated ch3
+            // and logo layers. The final static title characters and logo live
+            // in the root layer list and must stay present as siblings until
+            // the full title presentation settles.
+            for (const auto &name : snapshot.layerNames) {
+                if (!nodeTreeIsYuzuTitlePersistentRootLayer(name)) {
+                    continue;
+                }
+                auto it = snapshot.layersByName.find(name);
+                if (it == snapshot.layersByName.end()) continue;
+                if (hasIncludedRootLayer(name, it->second)) continue;
+                walkTree(it->second, 0, nodes);
             }
         }
 
