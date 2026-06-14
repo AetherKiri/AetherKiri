@@ -20,10 +20,21 @@ namespace {
         void OnContinuousCallback(tjs_uint64 tick) override;
     };
 
+    class MotionPlayerPresentationHoldHook :
+        public tTVPContinuousEventCallbackIntf {
+    public:
+        void OnContinuousCallback(tjs_uint64 tick) override;
+    };
+
     std::mutex g_autoProgressMutex;
     std::vector<motion::Player *> g_autoProgressPlayers;
     MotionPlayerAutoProgressHook g_autoProgressHook;
     bool g_autoProgressHookRegistered = false;
+
+    std::mutex g_presentationHoldMutex;
+    std::vector<motion::Player *> g_presentationHoldPlayers;
+    MotionPlayerPresentationHoldHook g_presentationHoldHook;
+    bool g_presentationHoldHookRegistered = false;
 
     void registerAutoProgressPlayer(motion::Player *player) {
         if(!player) {
@@ -53,6 +64,36 @@ namespace {
         }
     }
 
+    void registerPresentationHoldPlayer(motion::Player *player) {
+        if(!player) {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(g_presentationHoldMutex);
+        if(std::find(g_presentationHoldPlayers.begin(),
+                     g_presentationHoldPlayers.end(),
+                     player) == g_presentationHoldPlayers.end()) {
+            g_presentationHoldPlayers.push_back(player);
+        }
+        if(!g_presentationHoldHookRegistered) {
+            TVPAddContinuousEventHook(&g_presentationHoldHook);
+            g_presentationHoldHookRegistered = true;
+        }
+    }
+
+    void unregisterPresentationHoldPlayer(motion::Player *player) {
+        std::lock_guard<std::mutex> lock(g_presentationHoldMutex);
+        g_presentationHoldPlayers.erase(
+            std::remove(g_presentationHoldPlayers.begin(),
+                        g_presentationHoldPlayers.end(), player),
+            g_presentationHoldPlayers.end());
+        if(g_presentationHoldHookRegistered &&
+           g_presentationHoldPlayers.empty()) {
+            TVPRemoveContinuousEventHook(&g_presentationHoldHook);
+            g_presentationHoldHookRegistered = false;
+        }
+    }
+
     void MotionPlayerAutoProgressHook::OnContinuousCallback(tjs_uint64 tick) {
         std::vector<motion::Player *> players;
         {
@@ -65,6 +106,34 @@ namespace {
                 player->autoProgressFromContinuousTick(tick);
             }
         }
+    }
+
+    void MotionPlayerPresentationHoldHook::OnContinuousCallback(
+        tjs_uint64 tick) {
+        std::vector<motion::Player *> players;
+        {
+            std::lock_guard<std::mutex> lock(g_presentationHoldMutex);
+            players = g_presentationHoldPlayers;
+        }
+
+        for(auto *player : players) {
+            if(player) {
+                player->presentationHoldFromContinuousTick(tick);
+            }
+        }
+    }
+
+    tTJSNI_BaseLayer *resolvePresentationHoldLayer(iTJSDispatch2 *layerObject) {
+        if(!layerObject) {
+            return nullptr;
+        }
+        tTJSNI_BaseLayer *layer = nullptr;
+        if(TJS_FAILED(layerObject->NativeInstanceSupport(
+               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+               reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
+            return nullptr;
+        }
+        return layer;
     }
 
     std::string lowerAscii(std::string value) {
@@ -264,6 +333,7 @@ namespace motion {
 
     Player::~Player() {
         disableAutoProgress();
+        disablePresentationHold();
     }
 
     void Player::setAllplaying(bool v) {
@@ -308,6 +378,85 @@ namespace motion {
         _autoProgressDispatch = nullptr;
         if(dispatch) {
             dispatch->Release();
+        }
+    }
+
+    void Player::enablePresentationHold(iTJSDispatch2 *targetLayerObject,
+                                        tjs_uint64 durationMs) {
+        if(!targetLayerObject || durationMs == 0) {
+            return;
+        }
+
+        const tjs_uint64 now = TVPGetTickCount();
+        _presentationHoldLayer =
+            tTJSVariant(targetLayerObject, targetLayerObject);
+        _presentationHoldUntilTick =
+            std::max(_presentationHoldUntilTick, now + durationMs);
+
+        if(!_presentationHoldRegistered) {
+            registerPresentationHoldPlayer(this);
+            _presentationHoldRegistered = true;
+            _presentationHoldLastTick = 0;
+        }
+    }
+
+    void Player::disablePresentationHold() {
+        if(_presentationHoldRegistered) {
+            unregisterPresentationHoldPlayer(this);
+            _presentationHoldRegistered = false;
+        }
+
+        _presentationHoldLayer.Clear();
+        _presentationHoldUntilTick = 0;
+        _presentationHoldLastTick = 0;
+        _presentationHoldRendering = false;
+    }
+
+    void Player::presentationHoldFromContinuousTick(tjs_uint64 tick) {
+        if(!_runtime || _presentationHoldRendering ||
+           _presentationHoldLayer.Type() != tvtObject) {
+            disablePresentationHold();
+            return;
+        }
+
+        if(tick > _presentationHoldUntilTick) {
+            disablePresentationHold();
+            return;
+        }
+        if(_presentationHoldLastTick != 0 &&
+           tick < _presentationHoldLastTick + 33) {
+            return;
+        }
+
+        iTJSDispatch2 *target = _presentationHoldLayer.AsObjectNoAddRef();
+        auto *layer = resolvePresentationHoldLayer(target);
+        if(!layer || !layer->GetVisible() || !layer->GetParentVisible() ||
+           layer->GetOpacity() <= 0) {
+            disablePresentationHold();
+            return;
+        }
+
+        _presentationHoldLastTick = tick;
+        _presentationHoldRendering = true;
+        bool rendered = false;
+        try {
+            rendered = renderToLayer(target);
+        } catch(const std::exception &e) {
+            if(LOGGER) {
+                LOGGER->warn(
+                    "motion presentation hold render failed: error={}",
+                    e.what());
+            }
+        } catch(...) {
+            if(LOGGER) {
+                LOGGER->warn(
+                    "motion presentation hold render failed: error=<unknown>");
+            }
+        }
+        _presentationHoldRendering = false;
+
+        if(!rendered) {
+            disablePresentationHold();
         }
     }
 
@@ -1138,11 +1287,11 @@ namespace motion {
                                double ease) {
         _emoteColorState.packed = color;
         _emoteColorState.rgbaBytes[0] =
-            static_cast<float>(static_cast<std::uint8_t>(color));
+            static_cast<float>(static_cast<std::uint8_t>(color >> 16));
         _emoteColorState.rgbaBytes[1] =
             static_cast<float>(static_cast<std::uint8_t>(color >> 8));
         _emoteColorState.rgbaBytes[2] =
-            static_cast<float>(static_cast<std::uint8_t>(color >> 16));
+            static_cast<float>(static_cast<std::uint8_t>(color));
         _emoteColorState.rgbaBytes[3] =
             static_cast<float>(static_cast<std::uint8_t>(color >> 24));
         _emoteColorState.transition = transition;

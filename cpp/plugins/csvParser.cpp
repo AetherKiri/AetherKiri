@@ -1,5 +1,7 @@
 #include "PluginStub.h"
+#include <memory>
 #include <string>
+#include <vector>
 #include "ncbind.hpp"
 
 #define NCB_MODULE_NAME TJS_W("csvParser.dll")
@@ -257,7 +259,7 @@ public:
     /**
      * パーサの初期化処理
      */
-    void init(tTJSVariantString *text) {
+    void init(const ttstr &text) {
         clear();
         file = new IFileStr(text);
         lineNo = 0;
@@ -266,23 +268,47 @@ public:
     /**
      * 初期化処理
      */
-    void initStorage(tTJSVariantString *filename, bool utf8 = false) {
+    void initStorage(const ttstr &filename, bool utf8 = false) {
         clear();
         ttstr text;
         if(utf8) {
-            tTJSBinaryStream *pStream = TVPCreateStream(filename, TJS_BS_READ);
-            tjs_uint streamsize = pStream->GetSize();
-            char *buff = new char[streamsize + 1];
-            buff[streamsize] = 0;
-            pStream->ReadBuffer(buff, streamsize);
-            text = buff;
-            delete[] buff;
-            delete pStream;
+            std::unique_ptr<tTJSBinaryStream> pStream(
+                TVPCreateStream(filename, TJS_BS_READ));
+            if(!pStream) {
+                TVPThrowExceptionMessage(
+                    (ttstr(TJS_W("cannot open : ")) + filename).c_str());
+            }
+
+            const tjs_uint64 streamsize64 = pStream->GetSize();
+            if(streamsize64 >
+               static_cast<tjs_uint64>(static_cast<tjs_uint>(-1))) {
+                TVPThrowExceptionMessage(TJS_W("storage too large"));
+            }
+
+            const auto streamsize = static_cast<tjs_uint>(streamsize64);
+            std::string buff(streamsize, '\0');
+            if(streamsize > 0) {
+                pStream->ReadBuffer(buff.data(), streamsize);
+            }
+
+            tjs_int length = TVPUtf8ToWideCharString(
+                buff.data(), streamsize, static_cast<tjs_char *>(nullptr));
+            if(length < 0) {
+                TVPThrowExceptionMessage(TJS_W("invalid UTF-8 storage"));
+            }
+            std::vector<tjs_char> wide(static_cast<size_t>(length) + 1, 0);
+            if(length > 0) {
+                TVPUtf8ToWideCharString(buff.data(), streamsize, wide.data());
+            }
+            text = ttstr(wide.data());
         } else {
-            iTJSTextReadStream *pStream =
-                TVPCreateTextStreamForRead(filename, TJS_W(""));
+            std::unique_ptr<iTJSTextReadStream> pStream(
+                TVPCreateTextStreamForRead(filename, TJS_W("")));
+            if(!pStream) {
+                TVPThrowExceptionMessage(
+                    (ttstr(TJS_W("cannot open : ")) + filename).c_str());
+            }
             pStream->Read(text, 0);
-            delete pStream;
         }
         file = new IFileStr(text);
         lineNo = 0;

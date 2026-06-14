@@ -541,6 +541,9 @@ public:
   tTJSVariant getKeyWait();
   tTJSVariant renderDelay();
   int calcShowCount(int elapsed);
+  int get_renderCount() const;
+  void set_renderCount(int value);
+  void redraw();
   tTJSVariant renderText(tTJSString text);
   void resetStyle();
   void resetFont();
@@ -616,6 +619,7 @@ private:
   int m_y = 0;
   int m_indent = 0;
   int m_autoIndent = 0;
+  int m_renderCountOverride = -1;
   bool m_overflow = false;
   bool m_isBeginningOfLine = true;
   bool m_vertical = false;
@@ -1058,6 +1062,20 @@ int TextRenderBase::calcShowCount(int elapsed) {
   return static_cast<int>(m_characters.size());
 }
 
+int TextRenderBase::get_renderCount() const {
+  if (m_renderCountOverride >= 0) return m_renderCountOverride;
+  return static_cast<int>(m_characters.size() + m_buffer.size());
+}
+
+void TextRenderBase::set_renderCount(int value) {
+  m_renderCountOverride = std::max(value, 0);
+}
+
+void TextRenderBase::redraw() {
+  done();
+  m_renderCountOverride = -1;
+}
+
 tTJSVariant TextRenderBase::renderText(tTJSString text) {
   clear();
   render(text, 0, 0, 1, false);
@@ -1120,6 +1138,7 @@ NCB_REGISTER_CLASS(TextRenderBase) {
   NCB_METHOD(getKeyWait);
   NCB_METHOD(renderDelay);
   NCB_METHOD(calcShowCount);
+  NCB_METHOD(redraw);
   NCB_METHOD(renderText);
   NCB_METHOD(resetStyle);
   NCB_METHOD(resetFont);
@@ -1163,6 +1182,7 @@ NCB_REGISTER_CLASS(TextRenderBase) {
   property_delegate(defaultLineSize);
 
   NCB_PROPERTY(fontScale, get_fontScale, set_fontScale);
+  NCB_PROPERTY(renderCount, get_renderCount, set_renderCount);
   NCB_PROPERTY_RO(renderLeft, get_renderLeft);
   NCB_PROPERTY_RO(renderTop, get_renderTop);
   NCB_PROPERTY_RO(renderWidth, get_renderWidth);

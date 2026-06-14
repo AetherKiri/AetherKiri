@@ -3,8 +3,10 @@
 #include "ncbind.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <memory>
 #include <vector>
+#include <spdlog/spdlog.h>
 
 #ifndef TJS_INTF_METHOD
 #define TJS_INTF_METHOD
@@ -13,6 +15,14 @@
 #define NCB_MODULE_NAME TJS_W("imagesaver.dll")
 
 namespace {
+
+bool saveTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_SAVE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
 
 void addMember(iTJSDispatch2 *dispatch, const tjs_char *name,
                iTJSDispatch2 *member) {
@@ -145,9 +155,14 @@ public:
             TJS_W("invoking of Layer.mainImageBufferPitch failed.")));
 
         const ttstr format = param[2]->AsStringNoAddRef();
+        const ttstr filename = param[1]->AsStringNoAddRef();
+        if(saveTraceEnabled()) {
+            spdlog::info("SaveTrace saveLayerImage file={} format={} size={}x{} pitch={}",
+                         filename.AsStdString(), format.AsStdString(), width,
+                         height, pitch);
+        }
         if(format == TJS_W("bmp")) {
-            saveAsBmp(param[1]->AsStringNoAddRef(), width, height, buffer,
-                      pitch);
+            saveAsBmp(filename, width, height, buffer, pitch);
         } else {
             TVPThrowExceptionMessage(TJS_W("Not supported format."));
         }

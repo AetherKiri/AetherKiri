@@ -35,6 +35,9 @@ else()
 endif()
 
 target_compile_features(aether_kiri_godot PRIVATE cxx_std_17)
+target_compile_definitions(aether_kiri_godot PRIVATE
+    $<$<CONFIG:Debug>:HOT_RELOAD_ENABLED>
+)
 target_include_directories(aether_kiri_godot PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine_api/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/core/visual/godot

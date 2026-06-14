@@ -468,6 +468,9 @@ public:
     tTJSNI_BaseLayer *GetClickableLayerAt(tjs_int x, tjs_int y);
     tTJSNI_BaseLayer *GetConfirmableSelectionLayerAt(tjs_int x, tjs_int y);
     bool IsPendingConfirmStillOnSameSelection();
+    tTJSNI_BaseLayer *GetPendingConfirmSelectionLayer();
+    bool IsSaveLoadMessageCommandBand(tTJSNI_BaseLayer *layer, tjs_int x,
+                                      tjs_int y);
     bool ShouldSynthesizeEnterForSaveLoadButton(
         tTJSNI_BaseLayer *layer, tjs_int x, tjs_int y);
 

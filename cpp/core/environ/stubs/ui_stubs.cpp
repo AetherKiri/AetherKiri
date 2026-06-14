@@ -166,6 +166,14 @@ std::string FormatHostFrameStats(const HostFrameStats &stats) {
     return out.str();
 }
 
+bool HostMotionDebugEnabled() {
+    static bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_MOTION_DEBUG");
+        return value != nullptr && *value != '\0' && std::string(value) != "0";
+    }();
+    return enabled;
+}
+
 void LogHostFinalFrameStats(const char *source, const uint8_t *rgba,
                             uint32_t width, uint32_t height, uint32_t stride,
                             uint64_t serial) {
@@ -200,6 +208,12 @@ void LogHostFinalFrameStats(const char *source, const uint8_t *rgba,
                  source, static_cast<unsigned long long>(serial), width, height,
                  FormatHostFrameStats(full),
                  FormatHostFrameStats(title_region));
+    if (HostMotionDebugEnabled() && g_host_window_owner != nullptr &&
+        (serial == 3000 || serial == 4200 || serial == 5160)) {
+        spdlog::info("host final frame layer tree dump: serial={}",
+                     static_cast<unsigned long long>(serial));
+        g_host_window_owner->DumpPrimaryLayerStructure();
+    }
 }
 
 bool StoreLatestCpuFrameFromTexture(iTVPTexture2D *tex) {

@@ -38,6 +38,29 @@ inline tjs_error ReturnFirstArgOrTrueCb(tTJSVariant *result, tjs_int numparams,
     return TJS_S_OK;
 }
 
+inline void SetObjectProperty(iTJSDispatch2 *obj, const tjs_char *name,
+                              const tTJSVariant &value) {
+    if(!obj || !name) return;
+    auto copy = value;
+    obj->PropSet(TJS_MEMBERENSURE, name, nullptr, &copy, obj);
+}
+
+inline void IncrementRenderCount(iTJSDispatch2 *obj) {
+    if(!obj) return;
+    tTJSVariant current;
+    tjs_int value = 0;
+    if(TJS_SUCCEEDED(obj->PropGet(TJS_IGNOREPROP, TJS_W("renderCount"),
+                                  nullptr, &current, obj)) &&
+       current.Type() != tvtVoid) {
+        try {
+            value = static_cast<tjs_int>(current);
+        } catch(...) {
+            value = 0;
+        }
+    }
+    SetObjectProperty(obj, TJS_W("renderCount"), tTJSVariant(value + 1));
+}
+
 inline const tjs_char *VariantTypeName(tTJSVariantType type) {
     switch(type) {
     case tvtVoid: return TJS_W("void");
@@ -69,22 +92,40 @@ inline void LogCompatArgsOnce(const tjs_char *tag, tjs_int numparams,
 }
 
 inline tjs_error EntryUpdateObjectCb(tTJSVariant *result, tjs_int numparams,
-                                     tTJSVariant **param, iTJSDispatch2 *) {
+                                     tTJSVariant **param, iTJSDispatch2 *obj) {
     LogCompatArgsOnce(TJS_W("entryUpdateObject"), numparams, param);
+    IncrementRenderCount(obj);
     if(result) *result = true;
     return TJS_S_OK;
 }
 
 inline tjs_error CopyLayerCb(tTJSVariant *result, tjs_int numparams,
-                             tTJSVariant **param, iTJSDispatch2 *) {
+                             tTJSVariant **param, iTJSDispatch2 *obj) {
     LogCompatArgsOnce(TJS_W("copyLayer"), numparams, param);
+    IncrementRenderCount(obj);
     if(result) *result = true;
     return TJS_S_OK;
 }
 
 inline tjs_error DrawAffineCb(tTJSVariant *result, tjs_int numparams,
-                              tTJSVariant **param, iTJSDispatch2 *) {
+                              tTJSVariant **param, iTJSDispatch2 *obj) {
     LogCompatArgsOnce(TJS_W("drawAffine"), numparams, param);
+    IncrementRenderCount(obj);
+    if(result) *result = true;
+    return TJS_S_OK;
+}
+
+inline tjs_error DrawLayerCb(tTJSVariant *result, tjs_int numparams,
+                             tTJSVariant **param, iTJSDispatch2 *obj) {
+    LogCompatArgsOnce(TJS_W("drawLayer"), numparams, param);
+    IncrementRenderCount(obj);
+    if(result) *result = true;
+    return TJS_S_OK;
+}
+
+inline tjs_error RenderCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                          iTJSDispatch2 *obj) {
+    IncrementRenderCount(obj);
     if(result) *result = true;
     return TJS_S_OK;
 }
@@ -149,9 +190,9 @@ inline tjs_error CreateFallbackModuleObject(tTJSVariant *result, tjs_int width,
     iTJSDispatch2 *dict = TJSCreateCustomObject();
     if(!dict) return TJS_E_FAIL;
 
-    tTJSVariant wv(width), hv(height);
-    dict->PropSet(TJS_MEMBERENSURE, TJS_W("screenWidth"), nullptr, &wv, dict);
-    dict->PropSet(TJS_MEMBERENSURE, TJS_W("screenHeight"), nullptr, &hv, dict);
+    SetObjectProperty(dict, TJS_W("screenWidth"), tTJSVariant(width));
+    SetObjectProperty(dict, TJS_W("screenHeight"), tTJSVariant(height));
+    SetObjectProperty(dict, TJS_W("renderCount"), tTJSVariant(0));
 
     SetObjectMethod(dict, TJS_W("entryUpdateObject"), EntryUpdateObjectCb);
     SetObjectMethod(dict, TJS_W("setScreenSize"), ReturnTrueCb);
@@ -159,7 +200,7 @@ inline tjs_error CreateFallbackModuleObject(tTJSVariant *result, tjs_int width,
     SetObjectMethod(dict, TJS_W("beginScene"), ReturnTrueCb);
     SetObjectMethod(dict, TJS_W("endScene"), ReturnTrueCb);
     SetObjectMethod(dict, TJS_W("finalize"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("render"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("render"), RenderCb);
     SetObjectMethod(dict, TJS_W("glesEntry"), ReturnTrueCb);
     SetObjectMethod(dict, TJS_W("glesRemove"), ReturnTrueCb);
     SetObjectMethod(dict, TJS_W("capture"), ReturnFirstArgOrTrueCb);
@@ -168,8 +209,8 @@ inline tjs_error CreateFallbackModuleObject(tTJSVariant *result, tjs_int width,
     SetObjectMethod(dict, TJS_W("glesCaptureScreen"), ReturnFirstArgOrTrueCb);
     SetObjectMethod(dict, TJS_W("copyLayer"), CopyLayerCb);
     SetObjectMethod(dict, TJS_W("glesCopyLayer"), CopyLayerCb);
-    SetObjectMethod(dict, TJS_W("drawLayer"), ReturnTrueCb);
-    SetObjectMethod(dict, TJS_W("glesDrawLayer"), ReturnTrueCb);
+    SetObjectMethod(dict, TJS_W("drawLayer"), DrawLayerCb);
+    SetObjectMethod(dict, TJS_W("glesDrawLayer"), DrawLayerCb);
     SetObjectMethod(dict, TJS_W("drawAffine"), DrawAffineCb);
     SetObjectMethod(dict, TJS_W("drawAffineGLES"), DrawAffineCb);
     SetObjectMethod(dict, TJS_W("setMatrix"), ReturnTrueCb);

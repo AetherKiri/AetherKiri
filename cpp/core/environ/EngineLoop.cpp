@@ -334,9 +334,8 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
         default: break;
     }
 
-    // Match the original Windows event order: WM_LBUTTONUP calls click-like
-    // handlers before OnMouseUp. Some KAG UI widgets use the click event while
-    // the button state is still considered pressed.
+    // Match the original Kirikiri/Windows event order: WM_LBUTTONUP emits the
+    // click-like handler before OnMouseUp.
     if (mb == mbLeft) {
         if (suppress_next_left_click_) {
             suppress_next_left_click_ = false;

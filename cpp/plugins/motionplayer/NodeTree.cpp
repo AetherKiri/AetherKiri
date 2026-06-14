@@ -11,8 +11,10 @@
 #include "tjsArray.h"
 #include "psbfile/PSBFile.h"
 
+#include <cctype>
 #include <spdlog/spdlog.h>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace motion::detail {
 
@@ -60,6 +62,24 @@ namespace motion::detail {
                         const char *key) {
             if (!dic) return nullptr;
             return std::dynamic_pointer_cast<PSB::PSBList>((*dic)[key]);
+        }
+
+        std::string nodeTreeLowercase(std::string value) {
+            for (auto &ch : value) {
+                ch = static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(ch)));
+            }
+            return value;
+        }
+
+        bool nodeTreeIsYuzuStartupLogo(const MotionSnapshot &snapshot) {
+            const auto path = nodeTreeLowercase(snapshot.path);
+            return path.find("yuzulogo") != std::string::npos;
+        }
+
+        bool nodeTreeIsYuzuLogoRootTextLayer(const std::string &name) {
+            const auto lower = nodeTreeLowercase(name);
+            return lower == "software" || lower.rfind("moji_", 0) == 0;
         }
 
         // Check if any frame in frameList has a non-empty "src" in its "content".
@@ -264,6 +284,36 @@ namespace motion::detail {
             auto it = layersByName->find(name);
             if (it == layersByName->end()) continue;
             walkTree(it->second, 0, nodes);
+        }
+
+        if (layersByName != &snapshot.layersByName &&
+            nodeTreeIsYuzuStartupLogo(snapshot)) {
+            std::unordered_set<std::string> includedLabels;
+            includedLabels.reserve(nodes.size());
+            for (const auto &node : nodes) {
+                if (!node.layerName.empty()) {
+                    includedLabels.insert(node.layerName);
+                }
+            }
+
+            // Yuzu's startup logo clip lists the animated shape layers, while
+            // the static "software creation" and logo glyph masks stay in the
+            // root layer list. Keep those root layers live for this presentation.
+            for (const auto &name : snapshot.layerNames) {
+                if (!nodeTreeIsYuzuLogoRootTextLayer(name) ||
+                    includedLabels.find(name) != includedLabels.end()) {
+                    continue;
+                }
+                auto it = snapshot.layersByName.find(name);
+                if (it == snapshot.layersByName.end()) continue;
+                const size_t previousSize = nodes.size();
+                walkTree(it->second, 0, nodes);
+                for (size_t i = previousSize; i < nodes.size(); ++i) {
+                    if (!nodes[i].layerName.empty()) {
+                        includedLabels.insert(nodes[i].layerName);
+                    }
+                }
+            }
         }
 
         std::unordered_map<std::string, int> nodeIndexByLabel;

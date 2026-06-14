@@ -28,9 +28,9 @@ namespace {
 
     inline std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor) {
         return {
-            static_cast<int>(packedColor & 0xFFu),
-            static_cast<int>((packedColor >> 8) & 0xFFu),
             static_cast<int>((packedColor >> 16) & 0xFFu),
+            static_cast<int>((packedColor >> 8) & 0xFFu),
+            static_cast<int>(packedColor & 0xFFu),
             static_cast<int>((packedColor >> 24) & 0xFFu),
         };
     }
@@ -1607,6 +1607,26 @@ namespace motion {
             // Binary: calls cleanup (sub_6C0DE8, sub_6B56F8), releases TJS variants,
             // then goes to LABEL_3 (next loop iteration), SKIPPING frameProgress/updateLayers.
             if (mn.activeSlot().done) {
+                const bool retainTitlePresentationChild =
+                    motionPath.find("title_bg") != std::string::npos &&
+                    child._runtime &&
+                    child._runtime->activeMotion &&
+                    child._runtime->nodesBuilt &&
+                    child._runtime->nodes.size() > 1;
+                if(retainTitlePresentationChild) {
+                    child._allplaying = false;
+                    child._queuing = false;
+                    if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG")) {
+                        LOGGER->info(
+                            "motion child retain final title frame: parent={} node={} childMotion={} nodes={}",
+                            motionPath, mn.layerName,
+                            child._runtime->activeMotion
+                                ? child._runtime->activeMotion->path
+                                : std::string("<none>"),
+                            child._runtime->nodes.size());
+                    }
+                    continue;
+                }
                 // Binary cleanup at 0x6BE328..0x6BE354:
                 // 1. child._allplaying = false (player+1099)
                 // 2. sub_6C0DE8(child+1296) — resets timeline keyframe cache
@@ -1682,10 +1702,29 @@ namespace motion {
 
                             if(canReuseCurrentSnapshot) {
                                 child.setChara(detail::widen(charaPart));
-                                child._motionKey = detail::widen(motionPart);
-                                child.loadFromSnapshot(_runtime->activeMotion);
-                                child.playMotionLike_0x6B2284(
-                                    detail::widen(motionPart), playFlags);
+                                const auto motionKey = detail::widen(motionPart);
+                                const bool sameSnapshot =
+                                    child._runtime &&
+                                    child._runtime->activeMotion ==
+                                        _runtime->activeMotion;
+                                const bool sameMotion =
+                                    detail::narrow(child._motionKey) ==
+                                    motionPart;
+                                const bool hasTimeline =
+                                    child._runtime &&
+                                    child._runtime->timelines.find(motionPart) !=
+                                        child._runtime->timelines.end();
+                                const bool hasBuiltNodes =
+                                    child._runtime &&
+                                    child._runtime->nodesBuilt &&
+                                    child._runtime->nodes.size() > 1;
+                                if(!sameSnapshot || !sameMotion ||
+                                   !hasTimeline || !hasBuiltNodes) {
+                                    child._motionKey = motionKey;
+                                    child.loadFromSnapshot(_runtime->activeMotion);
+                                    child.playMotionLike_0x6B2284(
+                                        motionKey, playFlags);
+                                }
                             } else if (slashPos == std::string::npos) {
                                 // Single segment: binary sets chara to src itself
                                 // then Player_play with raw src (no "/" prefix)

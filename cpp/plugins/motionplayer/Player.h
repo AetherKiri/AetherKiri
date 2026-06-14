@@ -431,6 +431,7 @@ namespace motion {
         double getTop() const { return getY(); }
         void setLeft(double v) { setX(v); }
         void setTop(double v) { setY(v); }
+        void presentationHoldFromContinuousTick(tjs_uint64 tick);
 
     private:
         bool ensureMotionLoaded();
@@ -513,6 +514,9 @@ namespace motion {
         bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
         void enableAutoProgress(iTJSDispatch2 *objthis);
         void disableAutoProgress();
+        void enablePresentationHold(iTJSDispatch2 *targetLayerObject,
+                                    tjs_uint64 durationMs);
+        void disablePresentationHold();
         void noteManualProgress();
         void dispatchPendingEvents(iTJSDispatch2 *objthis);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
@@ -586,6 +590,11 @@ namespace motion {
         tjs_uint64 _manualProgressLastTick = 0;
         bool _autoProgressHasLastTick = false;
         bool _autoProgressRegistered = false;
+        tTJSVariant _presentationHoldLayer;
+        tjs_uint64 _presentationHoldUntilTick = 0;
+        tjs_uint64 _presentationHoldLastTick = 0;
+        bool _presentationHoldRegistered = false;
+        bool _presentationHoldRendering = false;
 
         // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
         // Camera velocity at player+784/792/800, damping at player+600

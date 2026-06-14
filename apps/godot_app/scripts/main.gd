@@ -2376,44 +2376,13 @@ func _run_cli_step_probe(config: Dictionary, target_game_path: String) -> void:
     await _probe_save_step(0, "startup")
 
     var step := 1
-    for click in ProbeConfig.clicks(config):
-        var click_dict: Dictionary = click
-        var pos := ProbeConfig.click_position(click_dict)
-        _probe_send_mapped_click(pos, config)
-        var after_frames := int(click_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
-        if not await _probe_advance(after_frames):
-            await _probe_cleanup_and_quit(1)
-            return
-        await _probe_save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
-        step += 1
-
-    for key_event in config.get("keys", []):
-        if not key_event is Dictionary:
-            continue
-        var key_dict: Dictionary = key_event
-        var key_code := int(key_dict.get("key_code", 13))
-        player.send_key_event(true, key_code, int(key_dict.get("modifiers", 0)), int(key_dict.get("unicode", 0)))
-        player.tick(1.0 / 60.0)
-        player.send_key_event(false, key_code, int(key_dict.get("modifiers", 0)), 0)
-        var key_after_frames := int(key_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
-        if not await _probe_advance(key_after_frames):
-            await _probe_cleanup_and_quit(1)
-            return
-        await _probe_save_step(step, "key_%d" % key_code)
-        step += 1
-
-    for click in config.get("clicks_after_keys", []):
-        if not click is Dictionary:
-            continue
-        var click_dict: Dictionary = click
-        var pos := ProbeConfig.click_position(click_dict)
-        _probe_send_mapped_click(pos, config)
-        var after_frames := int(click_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
-        if not await _probe_advance(after_frames):
-            await _probe_cleanup_and_quit(1)
-            return
-        await _probe_save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
-        step += 1
+    if config.has("actions") and config["actions"] is Array:
+        step = await _probe_run_actions(config, step)
+    else:
+        step = await _probe_run_legacy_steps(config, step)
+    if step < 0:
+        await _probe_cleanup_and_quit(1)
+        return
 
     var measured_frames: int = ProbeConfig.int_value(config, "measure_frames", _runtime_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 120))
     var start_ticks: int = Time.get_ticks_usec()
@@ -2428,6 +2397,82 @@ func _run_cli_step_probe(config: Dictionary, target_game_path: String) -> void:
         step,
     ])
     await _probe_cleanup_and_quit(0)
+
+func _probe_run_legacy_steps(config: Dictionary, step: int) -> int:
+    for click in ProbeConfig.clicks(config):
+        var click_dict: Dictionary = click
+        var pos := ProbeConfig.click_position(click_dict)
+        _probe_send_mapped_click(pos, config)
+        var after_frames := int(click_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        if not await _probe_advance(after_frames):
+            return -1
+        await _probe_save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+
+    for key_event in config.get("keys", []):
+        if not key_event is Dictionary:
+            continue
+        var key_dict: Dictionary = key_event
+        var key_code := int(key_dict.get("key_code", 13))
+        player.send_key_event(true, key_code, int(key_dict.get("modifiers", 0)), int(key_dict.get("unicode", 0)))
+        player.tick(1.0 / 60.0)
+        player.send_key_event(false, key_code, int(key_dict.get("modifiers", 0)), 0)
+        var key_after_frames := int(key_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        if not await _probe_advance(key_after_frames):
+            return -1
+        await _probe_save_step(step, "key_%d" % key_code)
+        step += 1
+
+    for click in config.get("clicks_after_keys", []):
+        if not click is Dictionary:
+            continue
+        var click_dict: Dictionary = click
+        var pos := ProbeConfig.click_position(click_dict)
+        _probe_send_mapped_click(pos, config)
+        var after_frames := int(click_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        if not await _probe_advance(after_frames):
+            return -1
+        await _probe_save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+    return step
+
+func _probe_run_actions(config: Dictionary, step: int) -> int:
+    for raw_action in config["actions"]:
+        if not raw_action is Dictionary:
+            continue
+        var action: Dictionary = raw_action
+        var kind := String(action.get("type", "click"))
+        var label := String(action.get("label", kind))
+        if kind == "click":
+            var pos := ProbeConfig.click_position(action)
+            _probe_send_mapped_click(pos, config)
+            if label.is_empty() or label == "click":
+                label = "click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "move":
+            var pos := ProbeConfig.click_position(action)
+            _probe_send_mapped_move(pos, config)
+            if label.is_empty() or label == "move":
+                label = "move_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "key":
+            var key_code := int(action.get("key_code", 13))
+            player.send_key_event(true, key_code, int(action.get("modifiers", 0)), int(action.get("unicode", 0)))
+            player.tick(1.0 / 60.0)
+            player.send_key_event(false, key_code, int(action.get("modifiers", 0)), 0)
+            if label.is_empty() or label == "key":
+                label = "key_%d" % key_code
+        elif kind == "wait" or kind == "capture":
+            pass
+        else:
+            print("skip unknown action: %s" % kind)
+            continue
+
+        var after_frames := int(action.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        if not await _probe_advance(after_frames):
+            return -1
+        if bool(action.get("capture", true)):
+            await _probe_save_step(step, label)
+            step += 1
+    return step
 
 func _probe_save_step(index: int, label: String) -> void:
     await get_tree().process_frame
@@ -2454,6 +2499,14 @@ func _probe_send_mapped_click(window_pos: Vector2, config: Dictionary) -> void:
     player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+
+func _probe_send_mapped_move(window_pos: Vector2, config: Dictionary) -> void:
+    var mapped := _probe_map_window_point(window_pos, config)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip move outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
 
 func _probe_map_window_point(pos: Vector2, config: Dictionary) -> Vector2:
     var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
@@ -2574,6 +2627,11 @@ func _probe_send_direct_click(pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, pos.x, pos.y, 0.0, 0.0, 0)
 
 func _probe_capture_image() -> Image:
+    if viewport.texture != null:
+        var viewport_image := viewport.texture.get_image()
+        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
+            return viewport_image
+
     var frame: Dictionary = player.read_frame_rgba()
     var data: PackedByteArray = frame.get("rgba", PackedByteArray())
     var width := int(frame.get("width", 0))

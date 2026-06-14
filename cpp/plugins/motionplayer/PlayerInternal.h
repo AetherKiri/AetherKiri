@@ -545,22 +545,31 @@ namespace internal {
                 }
             }
 
-            // TJS property chain: owner, _owner, targetLayer
-            static const tjs_char *propNames[] = {
-                TJS_W("owner"), TJS_W("_owner"), TJS_W("targetLayer"),
+            static const tjs_char *explicitLayerProps[] = {
+                TJS_W("targetLayer"), TJS_W("_targetLayer"),
+                TJS_W("renderTarget"), TJS_W("_renderTarget"),
                 TJS_W("layer"), TJS_W("_layer"), TJS_W("baseLayer"),
-                TJS_W("_base"), TJS_W("parent"), nullptr };
+                TJS_W("_base"), TJS_W("base"), TJS_W("fore"),
+                TJS_W("back"), TJS_W("primaryLayer"), nullptr };
+            static const tjs_char *ownerLayerProps[] = {
+                TJS_W("owner"), TJS_W("_owner"), TJS_W("parent"), nullptr };
 
-            for(int i = 0; propNames[i]; ++i) {
-                tTJSVariant propVal;
-                if(getObjectProperty(value, propNames[i], propVal) &&
-                   propVal.Type() == tvtObject &&
-                   propVal.AsObjectNoAddRef() != nullptr &&
-                   propVal.AsObjectNoAddRef() != obj) {
-                    auto *resolved = tryResolveLayerDispatch(propVal);
-                    if(resolved) return resolved;
+            auto tryProps = [&](const tjs_char *const *propNames) -> iTJSDispatch2 * {
+                for(int i = 0; propNames[i]; ++i) {
+                    tTJSVariant propVal;
+                    if(getObjectProperty(value, propNames[i], propVal) &&
+                       propVal.Type() == tvtObject &&
+                       propVal.AsObjectNoAddRef() != nullptr &&
+                       propVal.AsObjectNoAddRef() != obj) {
+                        auto *resolved = tryResolveLayerDispatch(propVal);
+                        if(resolved) return resolved;
+                    }
                 }
-            }
+                return nullptr;
+            };
+
+            if(auto *resolved = tryProps(explicitLayerProps)) return resolved;
+            if(auto *resolved = tryProps(ownerLayerProps)) return resolved;
 
             return nullptr;
         }

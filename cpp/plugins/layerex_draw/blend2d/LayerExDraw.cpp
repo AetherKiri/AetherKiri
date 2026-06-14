@@ -2322,28 +2322,60 @@ RectF LayerExDraw::drawImageAffine(GdipImage *src, tjs_real sleft,
                                    tjs_real B, tjs_real C, tjs_real D,
                                    tjs_real E, tjs_real F) {
     RectF bounds;
+    if(!src || swidth == 0.0 || sheight == 0.0) {
+        return bounds;
+    }
+
+    const RectF srcBounds = src->GetBounds();
+    const tjs_real srcLeft = srcBounds.X;
+    const tjs_real srcTop = srcBounds.Y;
+    const tjs_real srcRight = srcBounds.X + srcBounds.Width;
+    const tjs_real srcBottom = srcBounds.Y + srcBounds.Height;
+    const tjs_real reqLeft = sleft;
+    const tjs_real reqTop = stop;
+    const tjs_real reqRight = sleft + swidth;
+    const tjs_real reqBottom = stop + sheight;
+    const tjs_real clipLeft = std::max(reqLeft, srcLeft);
+    const tjs_real clipTop = std::max(reqTop, srcTop);
+    const tjs_real clipRight = std::min(reqRight, srcRight);
+    const tjs_real clipBottom = std::min(reqBottom, srcBottom);
+    if(clipRight <= clipLeft || clipBottom <= clipTop) {
+        return bounds;
+    }
+
+    const tjs_real localLeft = clipLeft - reqLeft;
+    const tjs_real localTop = clipTop - reqTop;
+    const tjs_real localRight = clipRight - reqLeft;
+    const tjs_real localBottom = clipBottom - reqTop;
+    const tjs_real clipWidth = clipRight - clipLeft;
+    const tjs_real clipHeight = clipBottom - clipTop;
 
     BLMatrix2D matrix;
     if(affine) {
         matrix.reset(A, B, C, D, E, F);
     } else {
-        tjs_real a = C - A;
-        tjs_real b = D - B;
-        tjs_real c = E - A;
-        tjs_real d = F - B;
+        tjs_real a = (C - A) / swidth;
+        tjs_real b = (D - B) / swidth;
+        tjs_real c = (E - A) / sheight;
+        tjs_real d = (F - B) / sheight;
         tjs_real e = A;
         tjs_real f = B;
         matrix.reset(a, b, c, d, e, f);
     }
+    BLMatrix2D drawMatrix = matrix;
+    drawMatrix.translate(localLeft, localTop);
 
     if(src->type == 0) // 常规图像
     {
         if(!src->_core || src->_core.empty())
             return RectF();
 
-        BLRectI srcRect(sleft, stop, swidth, sheight);
+        BLRectI srcRect(static_cast<int>(std::floor(clipLeft)),
+                        static_cast<int>(std::floor(clipTop)),
+                        static_cast<int>(std::ceil(clipWidth)),
+                        static_cast<int>(std::ceil(clipHeight)));
         context->begin(*bitmap);
-        context->setTransform(matrix);
+        context->setTransform(drawMatrix);
         context->blitImage(BLPoint(0, 0), src->_core, srcRect);
         context->end();
         if(metaGraphics) {
@@ -2352,11 +2384,11 @@ RectF LayerExDraw::drawImageAffine(GdipImage *src, tjs_real sleft,
         }
     } else if(src->type == 1) {
         BLMatrix2D savedMtx = calcTransform;
-        calcTransform = matrix;
+        calcTransform = drawMatrix;
         BLMatrix2D srcRectTransform = BLMatrix2D::makeIdentity();
-        srcRectTransform.scale(swidth / src->GetWidth(),
-                               sheight / src->GetHeight());
-        srcRectTransform.translate(-sleft, -stop);
+        srcRectTransform.scale(clipWidth / src->GetWidth(),
+                               clipHeight / src->GetHeight());
+        srcRectTransform.translate(-clipLeft, -clipTop);
         calcTransform.transform(srcRectTransform);
         calcTransform.transform(src->transMtx);
         for(auto infoItm : src->vectorGraph) {

@@ -99,6 +99,7 @@ else
     echo "==> Exporting Godot macOS app"
     GODOT_EXPORT_APP="$PROJECT_ROOT/out/godot/macos/$BUILD_TYPE_LOWER/AetherKiri.app"
     mkdir -p "$PROJECT_ROOT/out/godot/macos/$BUILD_TYPE_LOWER"
+    rm -rf "$GODOT_EXPORT_APP"
     "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
         "$GODOT_EXPORT_MODE" "$GODOT_EXPORT_PRESET" "$GODOT_EXPORT_APP"
     if [[ -d "$GODOT_EXPORT_APP/Contents/Frameworks" ]]; then

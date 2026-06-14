@@ -26,9 +26,9 @@ namespace {
 
     std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor) {
         return {
-            static_cast<int>(packedColor & 0xFFu),
-            static_cast<int>((packedColor >> 8) & 0xFFu),
             static_cast<int>((packedColor >> 16) & 0xFFu),
+            static_cast<int>((packedColor >> 8) & 0xFFu),
+            static_cast<int>(packedColor & 0xFFu),
             static_cast<int>((packedColor >> 24) & 0xFFu),
         };
     }
@@ -48,12 +48,155 @@ namespace {
         return copy;
     }
 
+    bool bitmapLooksAlphaOnlyMask(const tTVPBaseBitmap &bitmap) {
+        const int width = static_cast<int>(bitmap.GetWidth());
+        const int height = static_cast<int>(bitmap.GetHeight());
+        if(width <= 0 || height <= 0) {
+            return false;
+        }
+
+        const size_t total =
+            static_cast<size_t>(width) * static_cast<size_t>(height);
+        const size_t step = std::max<size_t>(1, total / 4096u);
+        size_t alphaPixels = 0;
+        size_t colorPixels = 0;
+        for(size_t i = 0; i < total; i += step) {
+            const int y = static_cast<int>(i / static_cast<size_t>(width));
+            const int x = static_cast<int>(i % static_cast<size_t>(width));
+            const auto *row = static_cast<const std::uint8_t *>(
+                bitmap.GetScanLine(static_cast<tjs_uint>(y)));
+            const auto *pixel = row + static_cast<size_t>(x) * 4u;
+            if(pixel[3] == 0) {
+                continue;
+            }
+            ++alphaPixels;
+            if(pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0) {
+                ++colorPixels;
+            }
+        }
+
+        return alphaPixels >= 8 && colorPixels * 32u <= alphaPixels;
+    }
+
+    bool pixelLooksWhiteMask(const std::uint8_t *pixel) {
+        if(!pixel || pixel[3] == 0) {
+            return false;
+        }
+        const int minChannel = std::min({ pixel[0], pixel[1], pixel[2] });
+        const int maxChannel = std::max({ pixel[0], pixel[1], pixel[2] });
+        const int spread = maxChannel - minChannel;
+        if(minChannel >= 210 && spread <= 48) {
+            return true;
+        }
+
+        // Some PSB logo masks are already alpha-multiplied before the
+        // motion color command is applied, so their antialiased text pixels
+        // are neutral gray rather than pure white.
+        const int threshold = pixel[3] >= 200 ? 176 : 72;
+        return maxChannel >= threshold && minChannel >= threshold &&
+            spread <= 80;
+    }
+
+    bool bitmapHasTransparentPixels(const tTVPBaseBitmap &bitmap) {
+        const int width = static_cast<int>(bitmap.GetWidth());
+        const int height = static_cast<int>(bitmap.GetHeight());
+        if(width <= 0 || height <= 0) {
+            return false;
+        }
+
+        const size_t total =
+            static_cast<size_t>(width) * static_cast<size_t>(height);
+        const size_t step = std::max<size_t>(1, total / 4096u);
+        for(size_t i = 0; i < total; i += step) {
+            const int y = static_cast<int>(i / static_cast<size_t>(width));
+            const int x = static_cast<int>(i % static_cast<size_t>(width));
+            const auto *row = static_cast<const std::uint8_t *>(
+                bitmap.GetScanLine(static_cast<tjs_uint>(y)));
+            const auto *pixel = row + static_cast<size_t>(x) * 4u;
+            if(pixel[3] < 250) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool bitmapLooksWhiteMask(const tTVPBaseBitmap &bitmap) {
+        const int width = static_cast<int>(bitmap.GetWidth());
+        const int height = static_cast<int>(bitmap.GetHeight());
+        if(width <= 0 || height <= 0) {
+            return false;
+        }
+
+        const size_t total =
+            static_cast<size_t>(width) * static_cast<size_t>(height);
+        const size_t step = std::max<size_t>(1, total / 4096u);
+        size_t visiblePixels = 0;
+        size_t whitePixels = 0;
+        for(size_t i = 0; i < total; i += step) {
+            const int y = static_cast<int>(i / static_cast<size_t>(width));
+            const int x = static_cast<int>(i % static_cast<size_t>(width));
+            const auto *row = static_cast<const std::uint8_t *>(
+                bitmap.GetScanLine(static_cast<tjs_uint>(y)));
+            const auto *pixel = row + static_cast<size_t>(x) * 4u;
+            if(pixel[3] == 0) {
+                continue;
+            }
+            ++visiblePixels;
+            if(pixelLooksWhiteMask(pixel)) {
+                ++whitePixels;
+            }
+        }
+
+        return visiblePixels >= 8 && whitePixels * 4u >= visiblePixels * 3u;
+    }
+
+    bool bitmapHasWhiteMaskPixels(const tTVPBaseBitmap &bitmap) {
+        const int width = static_cast<int>(bitmap.GetWidth());
+        const int height = static_cast<int>(bitmap.GetHeight());
+        if(width <= 0 || height <= 0) {
+            return false;
+        }
+
+        const size_t total =
+            static_cast<size_t>(width) * static_cast<size_t>(height);
+        const size_t step = std::max<size_t>(1, total / 4096u);
+        size_t whitePixels = 0;
+        for(size_t i = 0; i < total; i += step) {
+            const int y = static_cast<int>(i / static_cast<size_t>(width));
+            const int x = static_cast<int>(i % static_cast<size_t>(width));
+            const auto *row = static_cast<const std::uint8_t *>(
+                bitmap.GetScanLine(static_cast<tjs_uint>(y)));
+            const auto *pixel = row + static_cast<size_t>(x) * 4u;
+            if(pixelLooksWhiteMask(pixel) && ++whitePixels >= 8) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+
     std::string renderDebugLowercase(std::string value) {
         std::transform(value.begin(), value.end(), value.begin(),
                        [](unsigned char ch) {
                            return static_cast<char>(std::tolower(ch));
                        });
         return value;
+    }
+
+    constexpr const char *kYuzuStartupLogoMotion = "yuzulogo.mtn";
+    constexpr const char *kM2StartupLogoMotion = "m2logo.mtn";
+
+    bool loweredPathContainsYuzuStartupLogo(const std::string &loweredPath) {
+        return loweredPath.find(kYuzuStartupLogoMotion) != std::string::npos;
+    }
+
+    bool loweredPathContainsM2StartupLogo(const std::string &loweredPath) {
+        return loweredPath.find(kM2StartupLogoMotion) != std::string::npos;
+    }
+
+    bool loweredPathContainsStartupLogo(const std::string &loweredPath) {
+        return loweredPathContainsYuzuStartupLogo(loweredPath) ||
+            loweredPathContainsM2StartupLogo(loweredPath);
     }
 
     bool shouldDebugTitleRender(const std::string &motionPath,
@@ -69,9 +212,12 @@ namespace {
         return motion.find("title.pimg") != std::string::npos ||
             motion.find("title.psb") != std::string::npos ||
             motion.find("title") != std::string::npos ||
+            loweredPathContainsStartupLogo(motion) ||
             source.find("title") != std::string::npos ||
+            source.find("yuzu") != std::string::npos ||
             resolved.find("title.pimg") != std::string::npos ||
-            resolved.find("title.psb") != std::string::npos;
+            resolved.find("title.psb") != std::string::npos ||
+            loweredPathContainsStartupLogo(resolved);
     }
 
     bool markRenderDebugLogged(const std::string &key) {
@@ -83,6 +229,76 @@ namespace {
         const auto motion = renderDebugLowercase(motionPath);
         return motion.find("title_bg") != std::string::npos ||
             motion.find("titlebg") != std::string::npos;
+    }
+
+    bool isYuzuStartupLogoMotion(const std::string &motionPath) {
+        const auto motion = renderDebugLowercase(motionPath);
+        return loweredPathContainsYuzuStartupLogo(motion);
+    }
+
+    bool isM2StartupLogoMotion(const std::string &motionPath) {
+        const auto motion = renderDebugLowercase(motionPath);
+        return loweredPathContainsM2StartupLogo(motion);
+    }
+
+    bool isYuzuLogoPresentationMotion(const std::string &motionPath) {
+        return isM2StartupLogoMotion(motionPath) ||
+            isYuzuStartupLogoMotion(motionPath);
+    }
+
+    std::array<int, 4> neutralStartupLogoTint(
+        const std::string &motionPath) {
+        if(isYuzuStartupLogoMotion(motionPath)) {
+            return { 54, 158, 248, 255 };
+        }
+        return { 255, 255, 255, 255 };
+    }
+
+    std::array<int, 4> yuzuStartupLogoDisplayTextTint(
+        const std::string &motionPath) {
+        if(isYuzuStartupLogoMotion(motionPath)) {
+            return { 248, 158, 54, 255 };
+        }
+        return { 255, 255, 255, 255 };
+    }
+
+    bool isYuzuLogoTextMaskSource(const std::string &motionPath,
+                                  const std::string &sourceKey) {
+        if(!isYuzuStartupLogoMotion(motionPath)) {
+            return false;
+        }
+        const auto source = renderDebugLowercase(sourceKey);
+        return source.find("moji") != std::string::npos ||
+            source.find("text") != std::string::npos ||
+            source.find("letter") != std::string::npos;
+    }
+
+    bool isYuzuLogoCompositeSource(const std::string &motionPath,
+                                   const std::string &sourceKey) {
+        if(!isYuzuStartupLogoMotion(motionPath)) {
+            return false;
+        }
+        const auto source = renderDebugLowercase(sourceKey);
+        return source.find("yuzu_logo") != std::string::npos;
+    }
+
+    bool motionSourcePixelsAreBGRA(const std::string &motionPath,
+                                   bool decodedPixelsAreBgra) {
+        if(decodedPixelsAreBgra) {
+            return true;
+        }
+
+        const auto motion = renderDebugLowercase(motionPath);
+        if(loweredPathContainsStartupLogo(motion)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    bool isYuzuPresentationMotion(const std::string &motionPath) {
+        return isYuzuTitlePresentationMotion(motionPath) ||
+            isYuzuLogoPresentationMotion(motionPath);
     }
 
     bool isYuzuTitleWhiteUtilityLayer(const std::string &motionPath,
@@ -97,9 +313,167 @@ namespace {
            source.find("/white") == std::string::npos) {
             return false;
         }
+        return true;
+    }
+
+    bool isYuzuTitlePositionLayer(const std::string &nodeLabel,
+                                  const std::string &sourceKey) {
+        const auto source = renderDebugLowercase(sourceKey);
+        if(source == "src/title/pos" ||
+           source == "src/title/pos2" ||
+           source == "src/title/pos3" ||
+           source == "src/title/pos4" ||
+           source.find("/title/pos") != std::string::npos) {
+            return true;
+        }
         const auto label = renderDebugLowercase(nodeLabel);
-        return label == "bg" || label == "mask" ||
-            label.find("mask") != std::string::npos;
+        return label == "title_charall" &&
+            source.find("title") != std::string::npos &&
+            source.find("pos") != std::string::npos;
+    }
+
+    bool isYuzuTitleBackgroundLayer(const std::string &nodeLabel,
+                                    const std::string &sourceKey) {
+        const auto label = renderDebugLowercase(nodeLabel);
+        if(label == "bg") {
+            return true;
+        }
+        const auto source = renderDebugLowercase(sourceKey);
+        return source.find("bg_title") != std::string::npos ||
+            source == "src/title/bg" ||
+            source == "src/title/bg1" ||
+            source == "src/title/bg2" ||
+            source.find("/title/bg") != std::string::npos;
+    }
+
+    bool isYuzuTitleCharacterOrLogoLayer(const std::string &nodeLabel,
+                                         const std::string &sourceKey) {
+        const auto source = renderDebugLowercase(sourceKey);
+        if(source.find("src/title/logo") != std::string::npos ||
+           source.find("/title/logo") != std::string::npos ||
+           source.find("src/title/ch") != std::string::npos ||
+           source.find("/title/ch") != std::string::npos ||
+           source.find("title2_ch") != std::string::npos ||
+           source.find("title_char") != std::string::npos) {
+            return true;
+        }
+        const auto label = renderDebugLowercase(nodeLabel);
+        return label.find("title_char") != std::string::npos;
+    }
+
+    int yuzuTitlePresentationDrawRank(
+        const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
+        if(isYuzuTitleBackgroundLayer(entry.nodeLabel, entry.sourceKey)) {
+            return 0;
+        }
+        if(isYuzuTitlePositionLayer(entry.nodeLabel, entry.sourceKey)) {
+            return 1;
+        }
+        return 2;
+    }
+
+    bool isYuzuTitleRenderablePresentationLayer(
+        const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
+        if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+           entry.opacity <= 0) {
+            return false;
+        }
+        if(isYuzuTitleWhiteUtilityLayer("title_bg", entry.nodeLabel,
+                                        entry.sourceKey)) {
+            return false;
+        }
+        if(isYuzuTitleBackgroundLayer(entry.nodeLabel, entry.sourceKey) ||
+           isYuzuTitlePositionLayer(entry.nodeLabel, entry.sourceKey)) {
+            return true;
+        }
+        return isYuzuTitleCharacterOrLogoLayer(entry.nodeLabel,
+                                               entry.sourceKey);
+    }
+
+    bool hasYuzuTitleRenderablePresentationFrame(
+        const motion::detail::PlayerRuntime &runtime) {
+        return std::any_of(
+            runtime.preparedRenderItems.begin(),
+            runtime.preparedRenderItems.end(),
+            [](const auto &entry) {
+                return isYuzuTitleRenderablePresentationLayer(entry);
+            });
+    }
+
+    bool hasYuzuTitleFinalPresentationFrame(
+        const motion::detail::PlayerRuntime &runtime) {
+        return std::any_of(
+            runtime.preparedRenderItems.begin(),
+            runtime.preparedRenderItems.end(),
+            [](const auto &entry) {
+                return entry.drawFlag && !entry.skipFlag0 && !entry.skipFlag1 &&
+                    entry.opacity > 0 &&
+                    (isYuzuTitlePositionLayer(entry.nodeLabel,
+                                              entry.sourceKey) ||
+                     isYuzuTitleCharacterOrLogoLayer(entry.nodeLabel,
+                                                     entry.sourceKey));
+            });
+    }
+
+    void logYuzuTitlePreparedSummary(
+        const motion::detail::PlayerRuntime &runtime,
+        const std::string &motionPath,
+        double frameTick) {
+        if(!LOGGER || !shouldDebugTitleRender(motionPath)) {
+            return;
+        }
+        const int frameBucket =
+            static_cast<int>(std::floor(frameTick / 30.0));
+        if(!markRenderDebugLogged(fmt::format(
+               "title-prepared-summary|{}|{}", motionPath, frameBucket))) {
+            return;
+        }
+
+        std::ostringstream summary;
+        int logged = 0;
+        for(const auto &entry : runtime.preparedRenderItems) {
+            const auto source = renderDebugLowercase(entry.sourceKey);
+            if(source.find("src/title/") == std::string::npos &&
+               source.find("/title/") == std::string::npos &&
+               source.find("title") == std::string::npos &&
+               source.find("src/yuzu/") == std::string::npos &&
+               source.find("/yuzu/") == std::string::npos &&
+               source.find("logo") == std::string::npos) {
+                continue;
+            }
+            if(logged++ > 0) {
+                summary << ";";
+            }
+            summary << entry.nodeIndex << ":"
+                    << (entry.nodeLabel.empty() ? std::string("<none>")
+                                                : entry.nodeLabel)
+                    << ":src=" << (entry.sourceKey.empty() ? std::string("<none>")
+                                                           : entry.sourceKey)
+                    << ":draw=" << (entry.drawFlag ? 1 : 0)
+                    << ":skip=" << (entry.skipFlag0 ? 1 : 0)
+                    << (entry.skipFlag1 ? 1 : 0)
+                    << ":group=" << (entry.groupOnly ? 1 : 0)
+                    << ":opa=" << entry.opacity
+                    << ":blend=" << entry.blendMode
+                    << ":mesh=" << entry.meshType << "/" << entry.meshDivX
+                    << "x" << entry.meshDivY
+                    << ":color=[" << fmt::format(
+                           "0x{:08x},0x{:08x},0x{:08x},0x{:08x}",
+                           entry.packedColors[0], entry.packedColors[1],
+                           entry.packedColors[2], entry.packedColors[3])
+                    << "]"
+                    << ":paint=[" << entry.paintBox[0] << ","
+                    << entry.paintBox[1] << "," << entry.paintBox[2]
+                    << "," << entry.paintBox[3] << "]";
+            if(logged >= 24) {
+                break;
+            }
+        }
+        LOGGER->info(
+            "motion title prepared summary: motion={} frameTick={:.2f} items={} renderable={} entries=[{}]",
+            motionPath, frameTick, runtime.preparedRenderItems.size(),
+            hasYuzuTitleRenderablePresentationFrame(runtime) ? 1 : 0,
+            summary.str());
     }
 
     bool validRenderPaintBox(const std::array<float, 4> &box) {
@@ -125,27 +499,35 @@ namespace {
         return bounds;
     }
 
-    void adjustPreparedRenderItemsForYuzuTitlePresentation(
+    void adjustPreparedRenderItemsForYuzuPresentation(
         motion::detail::PlayerRuntime &runtime,
         const std::string &motionPath,
         tjs_int canvasWidth,
         tjs_int canvasHeight) {
-        if(!isYuzuTitlePresentationMotion(motionPath) ||
+        if(!isYuzuPresentationMotion(motionPath) ||
            canvasWidth <= 0 || canvasHeight <= 0 ||
            runtime.preparedRenderItems.empty()) {
             return;
         }
+        const bool isTitleMotion = isYuzuTitlePresentationMotion(motionPath);
+        const bool isLogoMotion = isYuzuLogoPresentationMotion(motionPath);
 
-        for(auto &entry : runtime.preparedRenderItems) {
-            const auto source = renderDebugLowercase(entry.sourceKey);
-            if(source == "src/title/pos2" ||
-               source == "src/title/title2_ch" ||
-               source == "src/title/logo") {
-                entry.opacity = 255;
+        if(isTitleMotion) {
+            std::stable_sort(runtime.preparedRenderItems.begin(),
+                             runtime.preparedRenderItems.end(),
+                             [](const auto &lhs, const auto &rhs) {
+                                 return yuzuTitlePresentationDrawRank(lhs) <
+                                     yuzuTitlePresentationDrawRank(rhs);
+                             });
+            if(LOGGER && shouldDebugTitleRender(motionPath) &&
+               markRenderDebugLogged("yuzu-title-draw-rank:" + motionPath)) {
+                LOGGER->info(
+                    "motion title presentation draw order normalized: motion={}",
+                    motionPath);
             }
         }
 
-        bool usesCenteredPresentationOrigin = false;
+        bool usesCenteredPresentationOrigin = isLogoMotion;
         auto considerCenteredOrigin =
             [&](const motion::detail::PlayerRuntime::PreparedRenderItem &entry,
                 int referenceKind) {
@@ -156,16 +538,22 @@ namespace {
                     return;
                 }
                 const auto source = renderDebugLowercase(entry.sourceKey);
+                const bool isLogoBackdrop =
+                    isLogoMotion &&
+                    (source == "src/logo/icon50" ||
+                     source.find("/logo/icon/icon50") != std::string::npos);
                 switch(referenceKind) {
                     case 0:
-                        if(source.find("bg_title") == std::string::npos ||
-                           source.find("_bottom") != std::string::npos ||
-                           source.find("_top") != std::string::npos) {
+                        if(isTitleMotion &&
+                           (!isYuzuTitleBackgroundLayer(entry.nodeLabel,
+                                                        entry.sourceKey) ||
+                            source.find("_bottom") != std::string::npos ||
+                            source.find("_top") != std::string::npos)) {
                             return;
                         }
                         break;
                     case 1:
-                        if(source != "src/title/pos2") {
+                        if(!isTitleMotion || source != "src/title/pos2") {
                             return;
                         }
                         break;
@@ -188,11 +576,24 @@ namespace {
                     width / static_cast<float>(canvasWidth);
                 const float heightRatio =
                     height / static_cast<float>(canvasHeight);
-                usesCenteredPresentationOrigin =
+                const float maxCenteredWidthRatio = isLogoMotion ? 1.55f : 1.25f;
+                const float maxCenteredHeightRatio = isLogoMotion ? 1.55f : 1.25f;
+                const float minCenteredHeightRatio = isLogoMotion ? 0.70f : 0.75f;
+                const bool crossesOrigin =
                     referenceBox[0] < 0.0f && referenceBox[1] < 0.0f &&
+                    referenceBox[2] > 0.0f && referenceBox[3] > 0.0f;
+                if(isLogoBackdrop && crossesOrigin) {
+                    usesCenteredPresentationOrigin = true;
+                    return;
+                }
+                usesCenteredPresentationOrigin =
+                    crossesOrigin &&
                     referenceBox[2] > 0.0f && referenceBox[3] > 0.0f &&
-                    widthRatio >= 0.75f && widthRatio <= 1.25f &&
-                    heightRatio >= 0.75f && heightRatio <= 1.25f &&
+                    widthRatio >= 0.75f &&
+                    (heightRatio >= minCenteredHeightRatio ||
+                     (isLogoBackdrop && heightRatio >= 0.55f)) &&
+                    widthRatio <= maxCenteredWidthRatio &&
+                    heightRatio <= maxCenteredHeightRatio &&
                     std::fabs(centerX) <= static_cast<float>(canvasWidth) * 0.1f &&
                     std::fabs(centerY) <= static_cast<float>(canvasHeight) * 0.1f;
             };
@@ -231,9 +632,9 @@ namespace {
                 }
             }
             if(LOGGER && shouldDebugTitleRender(motionPath) &&
-               markRenderDebugLogged("title-presentation-origin:" + motionPath)) {
+               markRenderDebugLogged("yuzu-presentation-origin:" + motionPath)) {
                 LOGGER->info(
-                    "motion title presentation origin: motion={} centered=1 translate={:.1f},{:.1f} canvas={}x{}",
+                    "motion presentation origin: motion={} centered=1 translate={:.1f},{:.1f} canvas={}x{}",
                     motionPath, translateX, translateY, canvasWidth,
                     canvasHeight);
             }
@@ -253,12 +654,14 @@ namespace {
                 const auto source = renderDebugLowercase(entry.sourceKey);
                 switch(referenceKind) {
                     case 0:
-                        if(source != "src/title/pos2") {
+                        if(!isTitleMotion || source != "src/title/pos2") {
                             return;
                         }
                         break;
                     case 1:
-                        if(source.find("bg_title") == std::string::npos ||
+                        if(!isTitleMotion ||
+                           !isYuzuTitleBackgroundLayer(entry.nodeLabel,
+                                                       entry.sourceKey) ||
                            source.find("_bottom") != std::string::npos ||
                            source.find("_top") != std::string::npos) {
                             return;
@@ -310,10 +713,10 @@ namespace {
         const float scaleX = static_cast<float>(canvasWidth) / refWidth;
         const float scaleY = static_cast<float>(canvasHeight) / refHeight;
         if(LOGGER && shouldDebugTitleRender(motionPath) &&
-           markRenderDebugLogged("title-presentation-scale-candidate:" +
+           markRenderDebugLogged("yuzu-presentation-scale-candidate:" +
                                  motionPath)) {
             LOGGER->info(
-                "motion title presentation scale candidate: motion={} ref={:.1f}x{:.1f} canvas={}x{} scale={:.3f},{:.3f}",
+                "motion presentation scale candidate: motion={} ref={:.1f}x{:.1f} canvas={}x{} scale={:.3f},{:.3f}",
                 motionPath, refWidth, refHeight, canvasWidth, canvasHeight,
                 scaleX, scaleY);
         }
@@ -322,10 +725,19 @@ namespace {
             return;
         }
 
-        auto scalePointArray = [](auto &points, float sx, float sy) {
+        const bool scaleAroundCanvasCenter =
+            isLogoMotion && usesCenteredPresentationOrigin;
+        const float scaleOriginX =
+            scaleAroundCanvasCenter ? static_cast<float>(canvasWidth) * 0.5f
+                                    : 0.0f;
+        const float scaleOriginY =
+            scaleAroundCanvasCenter ? static_cast<float>(canvasHeight) * 0.5f
+                                    : 0.0f;
+        auto scalePointArray = [&](auto &points, float sx, float sy) {
             for(size_t i = 0; i + 1 < points.size(); i += 2) {
-                points[i] *= sx;
-                points[i + 1] *= sy;
+                points[i] = scaleOriginX + (points[i] - scaleOriginX) * sx;
+                points[i + 1] =
+                    scaleOriginY + (points[i + 1] - scaleOriginY) * sy;
             }
         };
         auto shouldScaleBox = [&](const std::array<float, 4> &box) {
@@ -346,23 +758,31 @@ namespace {
                 scalePointArray(entry.meshPoints, scaleX, scaleY);
             }
             if(shouldScaleBox(entry.paintBox)) {
-                entry.paintBox[0] *= scaleX;
-                entry.paintBox[1] *= scaleY;
-                entry.paintBox[2] *= scaleX;
-                entry.paintBox[3] *= scaleY;
+                entry.paintBox[0] =
+                    scaleOriginX + (entry.paintBox[0] - scaleOriginX) * scaleX;
+                entry.paintBox[1] =
+                    scaleOriginY + (entry.paintBox[1] - scaleOriginY) * scaleY;
+                entry.paintBox[2] =
+                    scaleOriginX + (entry.paintBox[2] - scaleOriginX) * scaleX;
+                entry.paintBox[3] =
+                    scaleOriginY + (entry.paintBox[3] - scaleOriginY) * scaleY;
             }
             if(entry.hasViewport && shouldScaleBox(entry.viewport)) {
-                entry.viewport[0] *= scaleX;
-                entry.viewport[1] *= scaleY;
-                entry.viewport[2] *= scaleX;
-                entry.viewport[3] *= scaleY;
+                entry.viewport[0] =
+                    scaleOriginX + (entry.viewport[0] - scaleOriginX) * scaleX;
+                entry.viewport[1] =
+                    scaleOriginY + (entry.viewport[1] - scaleOriginY) * scaleY;
+                entry.viewport[2] =
+                    scaleOriginX + (entry.viewport[2] - scaleOriginX) * scaleX;
+                entry.viewport[3] =
+                    scaleOriginY + (entry.viewport[3] - scaleOriginY) * scaleY;
             }
         }
 
         if(LOGGER && shouldDebugTitleRender(motionPath) &&
-           markRenderDebugLogged("title-presentation-scale:" + motionPath)) {
+           markRenderDebugLogged("yuzu-presentation-scale:" + motionPath)) {
             LOGGER->info(
-                "motion title presentation scale: motion={} ref={:.1f}x{:.1f} canvas={}x{} scale={:.3f},{:.3f}",
+                "motion presentation scale: motion={} ref={:.1f}x{:.1f} canvas={}x{} scale={:.3f},{:.3f}",
                 motionPath, refWidth, refHeight, canvasWidth, canvasHeight,
                 scaleX, scaleY);
         }
@@ -483,6 +903,11 @@ namespace {
         size_t any = 0;
         int maxAlpha = 0;
         int maxColor = 0;
+        std::uint64_t sumR = 0;
+        std::uint64_t sumG = 0;
+        std::uint64_t sumB = 0;
+        size_t white = 0;
+        size_t yellow = 0;
         for(size_t index = 0; index < pixels; index += stride) {
             const size_t y = index / width;
             const size_t x = index - y * width;
@@ -509,6 +934,15 @@ namespace {
             }
             if(a != 0 && maxRgb != 0) {
                 ++visible;
+                sumR += static_cast<std::uint64_t>(r);
+                sumG += static_cast<std::uint64_t>(g);
+                sumB += static_cast<std::uint64_t>(b);
+                if(pixelLooksWhiteMask(pixel)) {
+                    ++white;
+                }
+                if(r >= 220 && g >= 170 && b <= 160) {
+                    ++yellow;
+                }
             }
             maxAlpha = std::max(maxAlpha, a);
             maxColor = std::max(maxColor, maxRgb);
@@ -521,7 +955,13 @@ namespace {
             << " color=" << color
             << " any=" << any
             << " maxA=" << maxAlpha
-            << " maxC=" << maxColor;
+            << " maxC=" << maxColor
+            << " avgRGB=("
+            << (visible ? static_cast<int>(sumR / visible) : 0) << ","
+            << (visible ? static_cast<int>(sumG / visible) : 0) << ","
+            << (visible ? static_cast<int>(sumB / visible) : 0) << ")"
+            << " white=" << white
+            << " yellow=" << yellow;
         return out.str();
     }
 
@@ -594,27 +1034,37 @@ namespace {
     void applyPackedCornerTintLike_0x6A7518(
         tTVPBaseBitmap &bitmap,
         const std::array<std::uint32_t, 4> &packedColors,
-        bool halfAlphaBlend) {
+        bool halfAlphaBlend,
+        bool tintDefaultNeutralMask,
+        bool tintOnlyWhitePixels,
+        const std::array<int, 4> &neutralTint) {
         const auto c0 = packedColors[0];
         const auto c1 = packedColors[1];
         const auto c2 = packedColors[2];
         const auto c3 = packedColors[3];
-        if(packedColorsAreDefault(c0, c1, c2, c3) ||
-           packedColorsAreOpaqueWhite(c0, c1, c2, c3)) {
+        const bool alphaOnlyMask = bitmapLooksAlphaOnlyMask(bitmap);
+        const bool colorsAreNeutral = packedColorsAreDefault(c0, c1, c2, c3) ||
+            packedColorsAreOpaqueWhite(c0, c1, c2, c3);
+        if(colorsAreNeutral && !tintDefaultNeutralMask) {
             return;
         }
 
-        const auto topLeft = unpackPackedRgba(c0);
-        const auto topRight = unpackPackedRgba(c1);
-        const auto bottomRight = unpackPackedRgba(c2);
-        const auto bottomLeft = unpackPackedRgba(c3);
+        const auto topLeft =
+            colorsAreNeutral ? neutralTint : unpackPackedRgba(c0);
+        const auto topRight =
+            colorsAreNeutral ? neutralTint : unpackPackedRgba(c1);
+        const auto bottomRight =
+            colorsAreNeutral ? neutralTint : unpackPackedRgba(c2);
+        const auto bottomLeft =
+            colorsAreNeutral ? neutralTint : unpackPackedRgba(c3);
         const int width = static_cast<int>(bitmap.GetWidth());
         const int height = static_cast<int>(bitmap.GetHeight());
         if(width <= 0 || height <= 0) {
             return;
         }
 
-        const int colorDivisor = halfAlphaBlend ? 128 : 255;
+        const int colorDivisor =
+            (halfAlphaBlend && !colorsAreNeutral) ? 128 : 255;
         const int spanX = std::max(width - 1, 1);
         const int spanY = std::max(height - 1, 1);
         const auto lerpChannel = [](int a, int b, int pos, int span) -> int {
@@ -646,6 +1096,10 @@ namespace {
 
             for(int x = 0; x < width; ++x) {
                 auto *dst = row + static_cast<size_t>(x) * 4u;
+                const bool whiteMaskPixel = pixelLooksWhiteMask(dst);
+                if(tintOnlyWhitePixels && !whiteMaskPixel) {
+                    continue;
+                }
                 const int tintR =
                     lerpChannel(rowLeftR, rowRightR, x, spanX);
                 const int tintG =
@@ -654,17 +1108,68 @@ namespace {
                     lerpChannel(rowLeftB, rowRightB, x, spanX);
                 const int tintA =
                     lerpChannel(rowLeftA, rowRightA, x, spanX);
+                if(colorsAreNeutral && tintOnlyWhitePixels && whiteMaskPixel) {
+                    const int srcA = static_cast<int>(dst[3]);
+                    dst[2] = static_cast<std::uint8_t>(tintR);
+                    dst[1] = static_cast<std::uint8_t>(tintG);
+                    dst[0] = static_cast<std::uint8_t>(tintB);
+                    dst[3] = static_cast<std::uint8_t>(
+                        std::min(255, tintA * srcA / 255));
+                    continue;
+                }
+                const int srcR = alphaOnlyMask ? 255 : static_cast<int>(dst[2]);
+                const int srcG = alphaOnlyMask ? 255 : static_cast<int>(dst[1]);
+                const int srcB = alphaOnlyMask ? 255 : static_cast<int>(dst[0]);
                 dst[2] = static_cast<std::uint8_t>(std::min(
-                    255, tintR * static_cast<int>(dst[2]) / colorDivisor));
+                    255, tintR * srcR / colorDivisor));
                 dst[1] = static_cast<std::uint8_t>(std::min(
-                    255, tintG * static_cast<int>(dst[1]) / colorDivisor));
+                    255, tintG * srcG / colorDivisor));
                 dst[0] = static_cast<std::uint8_t>(std::min(
-                    255, tintB * static_cast<int>(dst[0]) / colorDivisor));
+                    255, tintB * srcB / colorDivisor));
                 dst[3] = static_cast<std::uint8_t>(std::min(
                     255, tintA * static_cast<int>(dst[3]) / 255));
+            }
+        }
     }
 
-}
+    void recolorYuzuCompositeLogoText(tTVPBaseBitmap &bitmap,
+                                      const std::array<int, 4> &textTint) {
+        const int width = static_cast<int>(bitmap.GetWidth());
+        const int height = static_cast<int>(bitmap.GetHeight());
+        if(width <= 0 || height <= 0) {
+            return;
+        }
+
+        for(int y = 0; y < height; ++y) {
+            auto *row = static_cast<std::uint8_t *>(
+                bitmap.GetScanLineForWrite(static_cast<tjs_uint>(y)));
+            for(int x = 0; x < width; ++x) {
+                auto *dst = row + static_cast<size_t>(x) * 4u;
+                const int a = static_cast<int>(dst[3]);
+                if(a == 0) {
+                    continue;
+                }
+
+                const int r = static_cast<int>(dst[0]);
+                const int g = static_cast<int>(dst[1]);
+                const int b = static_cast<int>(dst[2]);
+                const int maxRgb = std::max(r, std::max(g, b));
+                const bool blueLogoText =
+                    b >= 170 && g >= 80 && r <= 180 && b > r + 35 &&
+                    b >= g + 8;
+                if(!blueLogoText) {
+                    continue;
+                }
+
+                const int scale = std::max(96, maxRgb);
+                dst[0] = static_cast<std::uint8_t>(
+                    std::min(255, textTint[0] * scale / 255));
+                dst[1] = static_cast<std::uint8_t>(
+                    std::min(255, textTint[1] * scale / 255));
+                dst[2] = static_cast<std::uint8_t>(
+                    std::min(255, textTint[2] * scale / 255));
+            }
+        }
     }
 
     iTJSDispatch2 *resolveLayerTreeOwnerObject(iTJSDispatch2 *object) {
@@ -865,12 +1370,17 @@ namespace {
         return width > 0 && height > 0;
     }
 
-    bool motionLayerNameSuggestsPresentationTarget(tTJSNI_BaseLayer *layer) {
+    bool motionLayerNameSuggestsPresentationTarget(tTJSNI_BaseLayer *layer,
+                                                   bool allowTransientLayer) {
         if(!layer) {
             return false;
         }
         const auto name =
             renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        if(!allowTransientLayer &&
+           name.find("trans_syslay") != std::string::npos) {
+            return false;
+        }
         return name.find("background") != std::string::npos ||
             name.find("back") != std::string::npos ||
             name.find("bg") != std::string::npos ||
@@ -899,27 +1409,35 @@ namespace {
             top + height >= canvasHeight;
     }
 
+    bool motionLayerIsVisiblePresentationSurface(tTJSNI_BaseLayer *layer) {
+        return layer && layer->GetOwnerNoAddRef() && layer->GetVisible() &&
+            layer->GetParentVisible() && layer->GetOpacity() > 0;
+    }
+
     int scoreMotionPresentationChild(tTJSNI_BaseLayer *parent,
                                      tTJSNI_BaseLayer *child,
                                      int canvasWidth,
                                      int canvasHeight,
-                                     tjs_uint index) {
+                                     tjs_uint index,
+                                     bool allowTransientLayer) {
         if(!parent || !child || child == parent || !child->GetOwnerNoAddRef()) {
             return -1;
         }
-        if(!child->GetVisible() || child->GetOpacity() <= 0 ||
+        if(!motionLayerIsVisiblePresentationSurface(child) ||
            !child->GetHasImage() ||
            !motionLayerCoversCanvas(child, canvasWidth, canvasHeight)) {
             return -1;
         }
-        if(!motionLayerNameSuggestsPresentationTarget(child)) {
+        if(!motionLayerNameSuggestsPresentationTarget(child,
+                                                      allowTransientLayer)) {
             return -1;
         }
 
         int score = 100;
         const auto name =
             renderDebugLowercase(motion::detail::narrow(child->GetName()));
-        if(name.find("trans_syslay") != std::string::npos) {
+        if(allowTransientLayer &&
+           name.find("trans_syslay") != std::string::npos) {
             score += 200;
         }
         if(child->GetOrderIndex() == 0) {
@@ -937,9 +1455,64 @@ namespace {
         return score;
     }
 
+    bool yuzuTitleLayerNameMatches(tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return false;
+        }
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        return name == "title_bg" ||
+            name.find("title_bg") != std::string::npos ||
+            (name.find("title") != std::string::npos &&
+             name.find("bg") != std::string::npos);
+    }
+
+    tTJSNI_BaseLayer *findYuzuTitlePresentationLayer(tTJSNI_BaseLayer *parent,
+                                                     int canvasWidth,
+                                                     int canvasHeight) {
+        if(!parent || parent->GetCount() <= 0) {
+            return nullptr;
+        }
+
+        struct Candidate {
+            tTJSNI_BaseLayer *layer = nullptr;
+            int score = -1;
+        };
+        Candidate best;
+        auto visit = [&](auto &&self,
+                         tTJSNI_BaseLayer *current,
+                         int depth) -> void {
+            if(!current || current->GetCount() <= 0) {
+                return;
+            }
+            const auto childCount = current->GetCount();
+            for(tjs_uint i = 0; i < childCount; ++i) {
+                auto *child = current->GetChildren(static_cast<tjs_int>(i));
+                if(motionLayerIsVisiblePresentationSurface(child) &&
+                   child->GetHasImage() &&
+                   motionLayerCoversCanvas(child, canvasWidth, canvasHeight) &&
+                   yuzuTitleLayerNameMatches(child)) {
+                    int score = 500;
+                    if(child->GetOrderIndex() == 0) {
+                        score += 20;
+                    }
+                    score -= depth * 4;
+                    if(score > best.score) {
+                        best.layer = child;
+                        best.score = score;
+                    }
+                }
+                self(self, child, depth + 1);
+            }
+        };
+        visit(visit, parent, 0);
+        return best.layer;
+    }
+
     tTJSNI_BaseLayer *findMotionPresentationChild(tTJSNI_BaseLayer *parent,
                                                   int canvasWidth,
-                                                  int canvasHeight) {
+                                                  int canvasHeight,
+                                                  bool allowTransientLayer) {
         if(!parent || parent->GetCount() <= 0) {
             return nullptr;
         }
@@ -959,7 +1532,8 @@ namespace {
             for(tjs_uint i = 0; i < childCount; ++i) {
                 auto *child = current->GetChildren(static_cast<tjs_int>(i));
                 int score = scoreMotionPresentationChild(
-                    current, child, canvasWidth, canvasHeight, i);
+                    current, child, canvasWidth, canvasHeight, i,
+                    allowTransientLayer);
                 if(score >= 0) {
                     score -= depth * 3;
                     if(score > best.score) {
@@ -1002,6 +1576,36 @@ namespace {
         // the full-screen background can still receive input.
         layer->SetHitThreshold(256);
         return true;
+    }
+
+    iTJSDispatch2 *ensureYuzuTitlePresentationRenderLayer(
+        motion::detail::PlayerRuntime &runtime,
+        iTJSDispatch2 *layerTreeOwnerObject,
+        iTJSDispatch2 *parentLayerObject) {
+        if(!parentLayerObject) {
+            return nullptr;
+        }
+        if(!layerTreeOwnerObject) {
+            layerTreeOwnerObject =
+                resolveLayerTreeOwnerObject(parentLayerObject);
+        }
+        auto *layerObject = ensureReusableLayerObject(
+            runtime.presentationRenderLayer,
+            layerTreeOwnerObject,
+            parentLayerObject,
+            static_cast<tTVPLayerType>(ltAlpha),
+            true);
+        auto *layer = resolveNativeLayer(layerObject);
+        if(!layer) {
+            return nullptr;
+        }
+        layer->SetName(TJS_W("AetherKiriYuzuTitlePresentation"));
+        layer->SetHitThreshold(256);
+        try {
+            layer->BringToFront();
+        } catch(...) {
+        }
+        return layerObject;
     }
 
     bool prepareLayerForRender(iTJSDispatch2 *layerObject,
@@ -1653,6 +2257,43 @@ namespace motion {
                     entry.meshPoints[pi + 1] - 0.5f - static_cast<float>(clipRect.top));
             }
 
+            if(LOGGER && shouldDebugTitleRender(motionPath, entry.sourceKey)) {
+                const auto source = renderDebugLowercase(entry.sourceKey);
+                const bool isTrackedTitleLayer =
+                    source.find("src/title/") != std::string::npos ||
+                    source == "src/title/title2_ch" ||
+                    source == "src/title/logo" ||
+                    source == "src/title/pos2" ||
+                    source == "src/title/pos" ||
+                    source == "src/title/pos4" ||
+                    isYuzuLogoPresentationMotion(motionPath);
+                if(isTrackedTitleLayer) {
+                    const int frameBucket =
+                        static_cast<int>(std::floor(_frameTickCount / 30.0));
+                    const int opacityBucket =
+                        std::clamp(command.opacity, 0, 255) / 16;
+                    if(markRenderDebugLogged(fmt::format(
+                           "title-prepared|{}|{}|{}|{}", motionPath,
+                           source, frameBucket, opacityBucket))) {
+                        LOGGER->info(
+                            "motion title prepared item: motion={} source={} node={} label={} frameTick={:.2f} opacity={} blend={} meshType={} mesh={}x{} parent={} flags={} clip=[{},{},{},{}] paint=[{:.1f},{:.1f},{:.1f},{:.1f}] world=[{:.1f},{:.1f},{:.1f},{:.1f},{:.1f},{:.1f},{:.1f},{:.1f}]",
+                            motionPath, entry.sourceKey, entry.nodeIndex,
+                            entry.nodeLabel, _frameTickCount, command.opacity,
+                            command.blendMode, command.meshType,
+                            command.meshDivX, command.meshDivY,
+                            command.parentNodeIndex, command.itemFlags,
+                            command.clipRect[0], command.clipRect[1],
+                            command.clipRect[2], command.clipRect[3],
+                            entry.paintBox[0], entry.paintBox[1],
+                            entry.paintBox[2], entry.paintBox[3],
+                            command.worldCorners[0], command.worldCorners[1],
+                            command.worldCorners[2], command.worldCorners[3],
+                            command.worldCorners[4], command.worldCorners[5],
+                            command.worldCorners[6], command.worldCorners[7]);
+                    }
+                }
+            }
+
             {
                 std::array<float, 8> expectedLocalCorners{};
                 bool cornersOk = true;
@@ -1742,6 +2383,18 @@ namespace motion {
             "canvas={}x{} preparedItems={} renderCommands={}",
             canvasWidth, canvasHeight, _runtime->preparedRenderItems.size(),
             _runtime->renderCommands.size());
+        if(LOGGER && shouldDebugTitleRender(motionPath)) {
+            const int frameBucket =
+                static_cast<int>(std::floor(_frameTickCount / 30.0));
+            if(markRenderDebugLogged(fmt::format(
+                   "title-command-count|{}|{}", motionPath, frameBucket))) {
+                LOGGER->info(
+                    "motion title command count: motion={} frameTick={:.2f} preparedItems={} renderCommands={}",
+                    motionPath, _frameTickCount,
+                    _runtime->preparedRenderItems.size(),
+                    _runtime->renderCommands.size());
+            }
+        }
         return !_runtime->renderCommands.empty();
     }
 
@@ -1857,6 +2510,9 @@ namespace motion {
                     *_runtime->activeMotion, command.sourceKey, width, height,
                     decodedPixels, originX, originY, &decodedPixelsAreBgra);
                 if(resource && width > 0 && height > 0 && !resource->data.empty()) {
+                    const bool sourcePixelsAreBgra =
+                        motionSourcePixelsAreBGRA(motionPath,
+                                                  decodedPixelsAreBgra);
                     const auto &pixelData =
                         decodedPixels.empty() ? resource->data : decodedPixels;
                     auto bmp = std::make_shared<tTVPBaseBitmap>(
@@ -1875,7 +2531,7 @@ namespace motion {
                                 break;
                             }
                             auto *dst = row + x * 4;
-                            if(decodedPixelsAreBgra) {
+                            if(sourcePixelsAreBgra) {
                                 dst[0] = src[sourceIndex + 0];
                                 dst[1] = src[sourceIndex + 1];
                                 dst[2] = src[sourceIndex + 2];
@@ -1891,7 +2547,7 @@ namespace motion {
                     sourceOrigin = fmt::format(
                         "psb:{}:{}x{}:origin=({:.3f},{:.3f}):bgra={}",
                         command.sourceKey, width, height, originX, originY,
-                        decodedPixelsAreBgra ? 1 : 0);
+                        sourcePixelsAreBgra ? 1 : 0);
                     if(LOGGER &&
                        shouldDebugTitleRender(motionPath, command.sourceKey,
                                               sourceOrigin) &&
@@ -1943,7 +2599,8 @@ namespace motion {
                 return nullptr;
             }
 
-            const bool needsTint =
+            const bool sourceIsAlphaOnlyMask = bitmapLooksAlphaOnlyMask(*srcBmp);
+            const bool colorsCarryTint =
                 !packedColorsAreDefault(command.packedColors[0],
                                         command.packedColors[1],
                                         command.packedColors[2],
@@ -1952,14 +2609,41 @@ namespace motion {
                                             command.packedColors[1],
                                             command.packedColors[2],
                                             command.packedColors[3]);
-            if(!needsTint) {
+            const bool tintDefaultAlphaMask =
+                sourceIsAlphaOnlyMask &&
+                isYuzuStartupLogoMotion(motionPath);
+            const bool yuzuLogoTextSource =
+                isYuzuLogoTextMaskSource(motionPath, command.sourceKey);
+            const bool yuzuLogoCompositeSource =
+                isYuzuLogoCompositeSource(motionPath, command.sourceKey);
+            const bool tintDefaultLogoTextMask =
+                yuzuLogoTextSource &&
+                bitmapLooksWhiteMask(*srcBmp);
+            const bool tintDefaultLogoWhitePixels =
+                yuzuLogoTextSource &&
+                bitmapHasWhiteMaskPixels(*srcBmp);
+            const bool tintOnlyWhitePixels =
+                tintDefaultLogoWhitePixels && !sourceIsAlphaOnlyMask;
+            const bool tintDefaultNeutralMask =
+                tintDefaultAlphaMask || tintDefaultLogoTextMask ||
+                tintDefaultLogoWhitePixels;
+            const bool needsTint = tintDefaultNeutralMask || colorsCarryTint;
+            if(!needsTint && !yuzuLogoCompositeSource) {
                 preparedSourceCache.emplace(tintKey, srcBmp);
                 return srcBmp;
             }
 
             auto tinted = cloneBitmap32(*srcBmp);
-            applyPackedCornerTintLike_0x6A7518(*tinted, command.packedColors,
-                                              useHalfAlphaTint);
+            if(needsTint) {
+                applyPackedCornerTintLike_0x6A7518(
+                    *tinted, command.packedColors, useHalfAlphaTint,
+                    tintDefaultNeutralMask, tintOnlyWhitePixels,
+                    neutralStartupLogoTint(motionPath));
+            }
+            if(yuzuLogoCompositeSource) {
+                recolorYuzuCompositeLogoText(
+                    *tinted, yuzuStartupLogoDisplayTextTint(motionPath));
+            }
             if(LOGGER &&
                shouldDebugTitleRender(motionPath, command.sourceKey) &&
                markRenderDebugLogged("tint|" + motionPath + "|" + tintKey)) {
@@ -2292,7 +2976,8 @@ namespace motion {
                     static_cast<tjs_int>(srcBmp->GetHeight()));
                 std::string branch("direct.operateAffine");
                 const bool directCopyWithoutOpacity =
-                    ((command.blendMode & 0x0F) == 0) && opa >= 255;
+                    ((command.blendMode & 0x0F) == 0) && opa >= 255 &&
+                    !bitmapHasTransparentPixels(*srcBmp);
                 if(command.meshType == 0) {
                     const auto worldPts =
                         buildAffineTrianglePoints(command.worldCorners,
@@ -2382,7 +3067,7 @@ namespace motion {
                         command.clearEnabled ? 1 : 0,
                         renderLayer->GetWidth(), renderLayer->GetHeight());
                     if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
-                       motionPath.find("m2logo.mtn") != std::string::npos &&
+                       isM2StartupLogoMotion(motionPath) &&
                        _clampedEvalTime >= 30.0 && _clampedEvalTime <= 40.0) {
                         std::fprintf(stderr,
                                      "SNAPCOPY order=%d frame=%.3f nodeIndex=%d branch=%s clipRect=[%d,%d,%d,%d] opacity=%d blend=%d\n",
@@ -2441,7 +3126,7 @@ namespace motion {
                     renderLayer->GetWidth(), renderLayer->GetHeight(),
                     command.childCommandIndices.size());
                 if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
-                   motionPath.find("m2logo.mtn") != std::string::npos &&
+                   isM2StartupLogoMotion(motionPath) &&
                    _clampedEvalTime >= 30.0 && _clampedEvalTime <= 40.0) {
                     const char *snapBranch = command.composedBuilt
                         ? "buffered.operateRect.composed"
@@ -2564,7 +3249,7 @@ namespace motion {
         ensureNodeTreeBuilt();
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
-        adjustPreparedRenderItemsForYuzuTitlePresentation(
+        adjustPreparedRenderItemsForYuzuPresentation(
             *_runtime, motionPath, adaptor->getWidth(), adaptor->getHeight());
 
         iTJSDispatch2 *renderLayerObject =
@@ -2659,72 +3344,137 @@ namespace motion {
             canvasWidth, canvasHeight, skipUpdate ? 1 : 0,
             _needsInternalAssignImages ? 1 : 0);
 
-	        iTJSDispatch2 *finalLayerObject = resolvedLayerObject;
-	        tTJSNI_BaseLayer *finalNativeLayer = resolveNativeLayer(finalLayerObject);
-	        if(auto *presentationChild = findMotionPresentationChild(
-	               finalNativeLayer, canvasWidth, canvasHeight)) {
-	            if(auto *presentationObject = presentationChild->GetOwnerNoAddRef()) {
-	                finalLayerObject = presentationObject;
-	                finalNativeLayer = presentationChild;
-	                detail::logoChainTraceLogf(
-	                    motionPath, "draw.layer.presentationTarget",
-	                    "KAGWorldPlugin/Yuzu layer adaptor", _clampedEvalTime,
-	                    "source=[{}] target=[{}] canvas={}x{}",
-	                    describeLayerForDebug(resolveNativeLayer(resolvedLayerObject)),
-	                    describeLayerForDebug(finalNativeLayer),
-	                    canvasWidth, canvasHeight);
-	                if(LOGGER && shouldDebugTitleRender(motionPath) &&
-	                   markRenderDebugLogged("presentation-target:" + motionPath)) {
-	                    LOGGER->info(
-	                        "motion presentation target: motion={} source=[{}] target=[{}]",
-	                        motionPath,
-	                        describeLayerForDebug(resolveNativeLayer(resolvedLayerObject)),
-	                        describeLayerForDebug(finalNativeLayer));
-	                }
-	            }
-	        }
-	        const bool usingPresentationTarget =
-	            finalLayerObject && finalLayerObject != resolvedLayerObject;
+        iTJSDispatch2 *finalLayerObject = resolvedLayerObject;
+        tTJSNI_BaseLayer *finalNativeLayer = resolveNativeLayer(finalLayerObject);
+        const bool yuzuTitlePresentation =
+            isYuzuTitlePresentationMotion(motionPath);
+        if(yuzuTitlePresentation && _runtime->activeMotion &&
+           _runtime->activeMotion->width > 0 &&
+           _runtime->activeMotion->height > 0) {
+            canvasWidth = static_cast<int>(_runtime->activeMotion->width);
+            canvasHeight = static_cast<int>(_runtime->activeMotion->height);
+        }
+        const bool allowTransientPresentationLayer =
+            !yuzuTitlePresentation;
+        tTJSNI_BaseLayer *presentationChild = nullptr;
+        if(yuzuTitlePresentation) {
+            presentationChild = findMotionPresentationChild(
+                finalNativeLayer, canvasWidth, canvasHeight, true);
+            if(!presentationChild) {
+                presentationChild = findYuzuTitlePresentationLayer(
+                    finalNativeLayer, canvasWidth, canvasHeight);
+            }
+        } else {
+            presentationChild = findMotionPresentationChild(
+                finalNativeLayer, canvasWidth, canvasHeight,
+                allowTransientPresentationLayer);
+        }
+        if(presentationChild) {
+            if(auto *presentationObject = presentationChild->GetOwnerNoAddRef()) {
+                finalLayerObject = presentationObject;
+                finalNativeLayer = presentationChild;
+                detail::logoChainTraceLogf(
+                    motionPath, "draw.layer.presentationTarget",
+                    "KAGWorldPlugin/Yuzu layer adaptor", _clampedEvalTime,
+                    "source=[{}] target=[{}] canvas={}x{} transientAllowed={}",
+                    describeLayerForDebug(resolveNativeLayer(resolvedLayerObject)),
+                    describeLayerForDebug(finalNativeLayer),
+                    canvasWidth, canvasHeight,
+                    allowTransientPresentationLayer ? 1 : 0);
+                if(LOGGER && shouldDebugTitleRender(motionPath) &&
+                   markRenderDebugLogged("presentation-target:" + motionPath)) {
+                    LOGGER->info(
+                        "motion presentation target: motion={} source=[{}] target=[{}] transientAllowed={}",
+                        motionPath,
+                        describeLayerForDebug(resolveNativeLayer(resolvedLayerObject)),
+                        describeLayerForDebug(finalNativeLayer),
+                        allowTransientPresentationLayer ? 1 : 0);
+                }
+            }
+        }
+        ensureNodeTreeBuilt();
+        prepareRenderItems();
+        applyPreparedRenderItemTranslateOffsets();
+        adjustPreparedRenderItemsForYuzuPresentation(
+            *_runtime, motionPath, canvasWidth, canvasHeight);
+        if(yuzuTitlePresentation) {
+            logYuzuTitlePreparedSummary(*_runtime, motionPath, _frameTickCount);
+        }
+        const bool yuzuTitleHasFinalFrame =
+            yuzuTitlePresentation &&
+            hasYuzuTitleFinalPresentationFrame(*_runtime);
+        if(yuzuTitlePresentation &&
+           !hasYuzuTitleRenderablePresentationFrame(*_runtime)) {
+            if(LOGGER && shouldDebugTitleRender(motionPath) &&
+               markRenderDebugLogged("presentation-skip-empty:" + motionPath)) {
+                LOGGER->info(
+                    "motion presentation skip empty title frame: motion={} target=[{}]",
+                    motionPath, describeLayerForDebug(finalNativeLayer));
+            }
+            _runtime->lastCanvas =
+                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+            return true;
+        }
+        if(yuzuTitlePresentation &&
+           _runtime->yuzuTitleFinalFrameRendered &&
+           !yuzuTitleHasFinalFrame) {
+            if(LOGGER && shouldDebugTitleRender(motionPath) &&
+               markRenderDebugLogged("presentation-skip-tail:" + motionPath)) {
+                LOGGER->info(
+                    "motion presentation skip title tail frame: motion={} target=[{}]",
+                    motionPath, describeLayerForDebug(finalNativeLayer));
+            }
+            _runtime->lastCanvas =
+                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+            return true;
+        }
 
-	        ensureNodeTreeBuilt();
-	        prepareRenderItems();
-	        applyPreparedRenderItemTranslateOffsets();
-	        adjustPreparedRenderItemsForYuzuTitlePresentation(
-	            *_runtime, motionPath, canvasWidth, canvasHeight);
+        const bool usingPresentationTarget =
+            finalLayerObject && finalLayerObject != resolvedLayerObject;
 
-	        iTJSDispatch2 *renderLayerObject = finalLayerObject;
-	        if(_needsInternalAssignImages && !skipUpdate) {
-	            auto *treeOwner = resolveLayerTreeOwnerObject(finalLayerObject);
-	            if(!treeOwner) {
-	                treeOwner = resolveLayerTreeOwnerObject(resolvedLayerObject);
-	            }
-	            renderLayerObject = ensureReusableLayerObject(
-	                _runtime->internalRenderLayer,
-	                treeOwner,
-	                finalLayerObject,
-	                static_cast<tTVPLayerType>(ltAlpha),
-	                false);
-	        }
-	        if(renderLayerObject != finalLayerObject) {
-	            if(!prepareLayerForRender(renderLayerObject, canvasWidth, canvasHeight,
-	                                      0x00000000)) {
-	                return false;
-	            }
-	        } else if(auto *targetLayer = resolveNativeLayer(finalLayerObject)) {
-	            if(usingPresentationTarget) {
-	                if(!prepareMotionPresentationLayerForRender(targetLayer, canvasWidth,
-	                                                            canvasHeight)) {
-	                    return false;
-	                }
-	            } else {
-	                if(targetLayer->GetWidth() != canvasWidth ||
-	                   targetLayer->GetHeight() != canvasHeight) {
-	                    targetLayer->SetSize(canvasWidth, canvasHeight);
-	                }
-	            }
-	        } else {
-	            return false;
-	        }
+        const bool bypassInternalAssignForYuzuTitle =
+            yuzuTitlePresentation && _needsInternalAssignImages && !skipUpdate;
+        iTJSDispatch2 *renderLayerObject = finalLayerObject;
+        if(_needsInternalAssignImages && !skipUpdate &&
+           !bypassInternalAssignForYuzuTitle) {
+            auto *treeOwner = resolveLayerTreeOwnerObject(finalLayerObject);
+            if(!treeOwner) {
+                treeOwner = resolveLayerTreeOwnerObject(resolvedLayerObject);
+            }
+            renderLayerObject = ensureReusableLayerObject(
+                _runtime->internalRenderLayer,
+                treeOwner,
+                finalLayerObject,
+                static_cast<tTVPLayerType>(ltAlpha),
+                false);
+        }
+        if(bypassInternalAssignForYuzuTitle && LOGGER &&
+           shouldDebugTitleRender(motionPath) &&
+           markRenderDebugLogged("presentation-direct-target:" + motionPath)) {
+            LOGGER->info(
+                "motion presentation direct target: motion={} target=[{}]",
+                motionPath, describeLayerForDebug(finalNativeLayer));
+        }
+        if(renderLayerObject != finalLayerObject) {
+            if(!prepareLayerForRender(renderLayerObject, canvasWidth, canvasHeight,
+                                      0x00000000)) {
+                return false;
+            }
+        } else if(auto *targetLayer = resolveNativeLayer(finalLayerObject)) {
+            if(usingPresentationTarget) {
+                if(!prepareMotionPresentationLayerForRender(targetLayer, canvasWidth,
+                                                            canvasHeight)) {
+                    return false;
+                }
+            } else {
+                if(targetLayer->GetWidth() != canvasWidth ||
+                   targetLayer->GetHeight() != canvasHeight) {
+                    targetLayer->SetSize(canvasWidth, canvasHeight);
+                }
+            }
+        } else {
+            return false;
+        }
 
         buildRenderCommands(canvasWidth, canvasHeight);
         if(!executeLayerRenderCommands(renderLayerObject, true)) {
@@ -2763,16 +3513,27 @@ namespace motion {
             }
         }
 
-	        if(!skipUpdate) {
-	            if(renderLayerObject != finalLayerObject) {
-	                updateLayerAfterDraw(finalLayerObject);
-	            } else if(auto *layer = resolveNativeLayer(finalLayerObject)) {
+        if(!skipUpdate) {
+            if(renderLayerObject != finalLayerObject) {
+                updateLayerAfterDraw(finalLayerObject);
+            } else if(auto *layer = resolveNativeLayer(finalLayerObject)) {
 	                layer->Update(false);
 	                detail::logoChainTraceLogf(
 	                    motionPath, "post.layer", "0x6CE7D8", _clampedEvalTime,
 	                    "targetLayer.Update(false) size={}x{}",
-	                    layer->GetWidth(), layer->GetHeight());
+                    layer->GetWidth(), layer->GetHeight());
             }
+        }
+        if(bypassInternalAssignForYuzuTitle) {
+            _needsInternalAssignImages = false;
+        }
+        if(yuzuTitleHasFinalFrame) {
+            _runtime->yuzuTitleFinalFrameRendered = true;
+        }
+
+        if(yuzuTitlePresentation && !_presentationHoldRendering &&
+           finalLayerObject) {
+            enablePresentationHold(finalLayerObject, 3000);
         }
 
         _runtime->lastCanvas =
@@ -2837,7 +3598,7 @@ namespace motion {
         ensureNodeTreeBuilt();
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
-        adjustPreparedRenderItemsForYuzuTitlePresentation(
+        adjustPreparedRenderItemsForYuzuPresentation(
             *_runtime, motionPath, canvasWidth, canvasHeight);
 
         if(!renderMotionFrameToTarget(renderTarget, canvasWidth, canvasHeight,

@@ -3,6 +3,8 @@
 //
 
 #include <algorithm>
+#include <cstdint>
+#include <cstdlib>
 #include <spdlog/spdlog.h>
 
 #include "PSBMedia.h"
@@ -28,7 +30,18 @@ namespace PSB {
             return total;
         }
 
+        bool IsVerbosePSBDebugEnabled() {
+            static const bool enabled = [] {
+                const char *value = std::getenv("AETHERKIRI_PSB_DEBUG");
+                return value && *value && *value != '0';
+            }();
+            return enabled;
+        }
+
         bool IsDebugPSBKey(const std::string &key) {
+            if(IsVerbosePSBDebugEnabled()) {
+                return true;
+            }
             return key.rfind("main.psb/", 0) == 0 ||
                 key.rfind("title.psb/", 0) == 0 ||
                 key.rfind("title.pimg/", 0) == 0 ||
@@ -37,10 +50,76 @@ namespace PSB {
         }
 
         bool IsDebugPSBArchive(const std::string &archiveKey) {
+            if(IsVerbosePSBDebugEnabled()) {
+                return true;
+            }
             return archiveKey == "main.psb" || archiveKey == "title.psb" ||
                 archiveKey == "title.pimg" ||
                 archiveKey == "chapter.psb" ||
                 archiveKey == "autoskip.psb";
+        }
+
+        bool IsLogoMotionPSBKey(const std::string &key) {
+            return key.rfind("yuzulogo.mtn/", 0) == 0 ||
+                key.rfind("m2logo.mtn/", 0) == 0;
+        }
+
+        std::string JoinResourcePath(const std::vector<std::string> &path) {
+            std::string result;
+            for(size_t index = 0; index < path.size(); ++index) {
+                if(index != 0) {
+                    result += '/';
+                }
+                result += path[index];
+            }
+            return result;
+        }
+
+        void RegisterValueResourcesIntoMedia(
+            PSBMedia &media, const std::string &archiveKey,
+            const std::shared_ptr<IPSBValue> &value,
+            std::vector<std::string> &path,
+            const std::shared_ptr<spdlog::logger> &logger,
+            size_t &logged) {
+            if(!value) {
+                return;
+            }
+
+            const auto resource = std::dynamic_pointer_cast<PSBResource>(value);
+            if(resource) {
+                if(path.empty()) {
+                    return;
+                }
+                const std::string name = JoinResourcePath(path);
+                media.add(archiveKey + "/" + name, resource);
+                if(logger && logged < 120 && IsDebugPSBArchive(archiveKey)) {
+                    logger->info("psb register: {}/{}", archiveKey, name);
+                    ++logged;
+                }
+                return;
+            }
+
+            const auto dict = std::dynamic_pointer_cast<PSBDictionary>(value);
+            if(dict) {
+                for(const auto &[key, child] : *dict) {
+                    path.push_back(key);
+                    RegisterValueResourcesIntoMedia(
+                        media, archiveKey, child, path, logger, logged);
+                    path.pop_back();
+                }
+                return;
+            }
+
+            const auto list = std::dynamic_pointer_cast<PSBList>(value);
+            if(list) {
+                for(size_t index = 0; index < list->size(); ++index) {
+                    path.push_back(std::to_string(index));
+                    RegisterValueResourcesIntoMedia(
+                        media, archiveKey,
+                        (*list)[static_cast<int>(index)], path, logger, logged);
+                    path.pop_back();
+                }
+            }
         }
 
         bool IsSupportedImageHeader(const std::vector<uint8_t> &data) {
@@ -210,13 +289,6 @@ namespace PSB {
                 }
             }
 
-            const bool debugKey = IsDebugPSBKey(info.debugKey);
-            if(LOGGER && debugKey) {
-                LOGGER->info(
-                    "psb build: key={} decodedAlign={} decodedSize={} rawSize={}",
-                    info.debugKey, decodedAlign, src->size(), rawSrc.size());
-            }
-
             PSBPixelFormat format =
                 Extension::toPSBPixelFormat(info.type.empty() ? "RGBA8" : info.type,
                                             info.spec);
@@ -242,6 +314,7 @@ namespace PSB {
 
             const auto paletteFormat = Extension::toPSBPixelFormat(
                 info.paletteType, info.spec);
+            const bool logoPaletteIsBgra = IsLogoMotionPSBKey(info.debugKey);
 
             const auto build32Bmp = [&](auto &&pixelWriter) {
                 const size_t pitch = static_cast<size_t>(info.width) * 4;
@@ -303,9 +376,9 @@ namespace PSB {
                             dstPx[3] = 0xff;
                             return;
                         }
-                        dstPx[0] = info.palette[index + 2];
+                        dstPx[0] = info.palette[index + (logoPaletteIsBgra ? 0 : 2)];
                         dstPx[1] = info.palette[index + 1];
-                        dstPx[2] = info.palette[index + 0];
+                        dstPx[2] = info.palette[index + (logoPaletteIsBgra ? 2 : 0)];
                         dstPx[3] = info.palette[index + 3];
                         return;
                     }
@@ -785,17 +858,11 @@ namespace PSB {
             size_t logged = 0;
             const auto objs = psb.getObjects();
             if(objs) {
-                for(const auto &[name, value] : *objs) {
-                    const auto resource =
-                        std::dynamic_pointer_cast<PSBResource>(value);
-                    if(!resource)
-                        continue;
-                    media.add(archiveKey + "/" + name, resource);
-                    if(logger && logged < 40 && IsDebugPSBArchive(archiveKey)) {
-                        logger->info("psb register: {}/{}", archiveKey, name);
-                        ++logged;
-                    }
-                }
+                std::vector<std::string> path;
+                RegisterValueResourcesIntoMedia(
+                    media, archiveKey,
+                    std::const_pointer_cast<PSBDictionary>(objs),
+                    path, logger, logged);
             }
 
             auto *handler = psb.getTypeHandler();
@@ -817,6 +884,22 @@ namespace PSB {
                 if(logger && logged < 120 && IsDebugPSBArchive(archiveKey)) {
                     logger->info("psb register: {}/{}", archiveKey, name);
                     ++logged;
+                }
+
+                const std::uint32_t resourceIndex = image->getIndex();
+                if(resourceIndex != UINT32_MAX) {
+                    const std::string indexedName =
+                        std::to_string(resourceIndex) + ".tlg";
+                    if(indexedName != name) {
+                        media.add(archiveKey + "/" + indexedName, resource,
+                                  image);
+                        if(logger && logged < 120 &&
+                           IsDebugPSBArchive(archiveKey)) {
+                            logger->info("psb register alias: {}/{} -> {}",
+                                         archiveKey, indexedName, name);
+                            ++logged;
+                        }
+                    }
                 }
             }
 

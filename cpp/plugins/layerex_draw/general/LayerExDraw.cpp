@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <spdlog/spdlog.h>
+#include <cmath>
 #include <filesystem>
 
 #include "common/Defer.h"
@@ -11,6 +13,82 @@
 
 using namespace layerex;
 using namespace libgdiplus;
+
+static layerExBase::GeometryT recordMaxGeometry(layerExBase::GeometryT a,
+                                                layerExBase::GeometryT b) {
+    return a > b ? a : b;
+}
+
+static REAL recordMinReal(REAL a, REAL b) { return a < b ? a : b; }
+static REAL recordMaxReal(REAL a, REAL b) { return a > b ? a : b; }
+
+static bool pointsAlmostEqual(const GpPointF &a, const GpPointF &b) {
+    return std::fabs(a.X - b.X) <= 0.01f && std::fabs(a.Y - b.Y) <= 0.01f;
+}
+
+static bool pathHasClosedSubpath(GpPath *path) {
+    if(!path) {
+        return false;
+    }
+    int count = 0;
+    if(GdipGetPointCount(path, &count) != Ok || count <= 0) {
+        return false;
+    }
+    std::vector<BYTE> types(static_cast<size_t>(count));
+    if(GdipGetPathTypes(path, types.data(), count) != Ok) {
+        return false;
+    }
+    for(BYTE type : types) {
+        if((type & PathPointTypeCloseSubpath) != 0) {
+            return true;
+        }
+    }
+
+    std::vector<GpPointF> points(static_cast<size_t>(count));
+    if(GdipGetPathPoints(path, points.data(), count) != Ok) {
+        return false;
+    }
+    int figureStart = 0;
+    for(int i = 1; i < count; ++i) {
+        if((types[static_cast<size_t>(i)] & PathPointTypePathTypeMask) ==
+           PathPointTypeStart) {
+            if(i - figureStart > 2 &&
+               pointsAlmostEqual(points[static_cast<size_t>(figureStart)],
+                                 points[static_cast<size_t>(i - 1)])) {
+                return true;
+            }
+            figureStart = i;
+        }
+    }
+    return count - figureStart > 2 &&
+        pointsAlmostEqual(points[static_cast<size_t>(figureStart)],
+                          points[static_cast<size_t>(count - 1)]);
+}
+
+static GpPen *penForPathDraw(const Pen *pen, bool closedPath) {
+    if(!pen || !closedPath) {
+        return pen ? static_cast<GpPen *>(*pen) : nullptr;
+    }
+
+    GpPen *source = static_cast<GpPen *>(*pen);
+    GpPen *clone = nullptr;
+    if(GdipClonePen(source, &clone) != Ok || !clone) {
+        return source;
+    }
+    // libgdiplus draws custom caps even on closed paths, which makes closed
+    // selection boxes sprout arrow/line artifacts. Windows GDI+ does not.
+    GdipSetPenCustomStartCap(clone, nullptr);
+    GdipSetPenCustomEndCap(clone, nullptr);
+    GdipSetPenStartCap(clone, LineCapFlat);
+    GdipSetPenEndCap(clone, LineCapFlat);
+    return clone;
+}
+
+static void releasePathDrawPen(const Pen *pen, GpPen *drawPen) {
+    if(drawPen && pen && drawPen != static_cast<GpPen *>(*pen)) {
+        GdipDeletePen(drawPen);
+    }
+}
 
 // GDI+ 基本情報
 static GdiplusStartupInput gdiplusStartupInput;
@@ -825,7 +903,9 @@ LayerExDraw::LayerExDraw(DispatchT obj) :
     graphics(nullptr), clipLeft(-1), clipTop(-1), clipWidth(-1), clipHeight(-1),
     smoothingMode(SmoothingModeAntiAlias),
     textRenderingHint(TextRenderingHintAntiAlias), metafile(nullptr),
-    /*metaGraphics(nullptr),*/ updateWhenDraw(true) {}
+    /*metaGraphics(nullptr),*/ recordBitmap(nullptr), recordGraphics(nullptr),
+    recordWidth(0), recordHeight(0), recordOriginX(0), recordOriginY(0),
+    recordEnabled(false), updateWhenDraw(true) {}
 
 /**
  * デストラクタ
@@ -853,6 +933,9 @@ void LayerExDraw::reset() {
         GdipSetCompositingMode(this->graphics, CompositingModeSourceOver);
         GdipSetWorldTransform(this->graphics,
                               static_cast<GpMatrix *>(calcTransform));
+        if(recordGraphics) {
+            setRecordGraphicsTransform(recordGraphics);
+        }
         clipWidth = clipHeight = -1;
     }
     // クリッピング領域変更の場合は設定しなおし
@@ -876,6 +959,9 @@ void LayerExDraw::updateViewTransform() {
     calcTransform.Multiply(&viewTransform, MatrixOrderAppend);
     GdipSetWorldTransform(this->graphics,
                           static_cast<GpMatrix *>(calcTransform));
+    if(recordGraphics) {
+        setRecordGraphicsTransform(recordGraphics);
+    }
     redrawRecord();
 }
 
@@ -917,6 +1003,9 @@ void LayerExDraw::updateTransform() {
     calcTransform.Multiply(&viewTransform, MatrixOrderAppend);
     GdipSetWorldTransform(this->graphics,
                           static_cast<GpMatrix *>(calcTransform));
+    if(recordGraphics) {
+        setRecordGraphicsTransform(recordGraphics);
+    }
     //    if (metaGraphics) {
     //        GdipSetWorldTransform(this->metaGraphics,
     //                              static_cast<GpMatrix
@@ -961,12 +1050,115 @@ void LayerExDraw::translateTransform(REAL dx, REAL dy) {
  * @param argb 消去色
  */
 void LayerExDraw::clear(ARGB argb) {
+    if(recordEnabled) {
+        if(ensureRecordSurface(width, height)) {
+            GdipGraphicsClear(this->recordGraphics, argb);
+        }
+        return;
+    }
     GdipGraphicsClear(this->graphics, argb);
     //    if (metaGraphics) {
     //        createRecord();
     //        GdipGraphicsClear(this->metaGraphics, argb);
     //    }
     layerExBase::redraw();
+}
+
+void LayerExDraw::setRecordGraphicsTransform(GpGraphics *target) {
+    if(!target) {
+        return;
+    }
+    MatrixClass recordTransform{ calcTransform };
+    recordTransform.Translate(-recordOriginX, -recordOriginY,
+                              MatrixOrderAppend);
+    GdipSetWorldTransform(target, static_cast<GpMatrix *>(recordTransform));
+}
+
+bool LayerExDraw::ensureRecordBounds(REAL left, REAL top, REAL right,
+                                     REAL bottom) {
+    if(right < left) {
+        std::swap(left, right);
+    }
+    if(bottom < top) {
+        std::swap(top, bottom);
+    }
+
+    const REAL requiredLeft = recordMinReal(left, 0.0f);
+    const REAL requiredTop = recordMinReal(top, 0.0f);
+    const REAL requiredRight =
+        recordMaxReal(right, static_cast<REAL>(recordMaxGeometry(width, 1)));
+    const REAL requiredBottom =
+        recordMaxReal(bottom, static_cast<REAL>(recordMaxGeometry(height, 1)));
+    const REAL currentRight = recordOriginX + static_cast<REAL>(recordWidth);
+    const REAL currentBottom = recordOriginY + static_cast<REAL>(recordHeight);
+    if(recordBitmap && recordGraphics && recordOriginX <= requiredLeft &&
+       recordOriginY <= requiredTop && currentRight >= requiredRight &&
+       currentBottom >= requiredBottom) {
+        return true;
+    }
+
+    auto grow = [](GeometryT current, GeometryT required) {
+        GeometryT value = recordMaxGeometry(current, 1);
+        while(value < required && value < 32768) {
+            value *= 2;
+        }
+        return recordMaxGeometry(value, required);
+    };
+
+    const REAL newOriginX = recordBitmap ? recordMinReal(recordOriginX, requiredLeft)
+                                         : requiredLeft;
+    const REAL newOriginY = recordBitmap ? recordMinReal(recordOriginY, requiredTop)
+                                         : requiredTop;
+    const GeometryT requiredWidth = recordMaxGeometry(
+        static_cast<GeometryT>(std::ceil(requiredRight - newOriginX)), 1);
+    const GeometryT requiredHeight = recordMaxGeometry(
+        static_cast<GeometryT>(std::ceil(requiredBottom - newOriginY)), 1);
+    const GeometryT baseWidth = recordMaxGeometry(
+        recordWidth > 0 ? recordWidth : width, requiredWidth);
+    const GeometryT baseHeight = recordMaxGeometry(
+        recordHeight > 0 ? recordHeight : height, requiredHeight);
+    const GeometryT newWidth =
+        grow(recordWidth > 0 ? recordWidth : baseWidth, requiredWidth);
+    const GeometryT newHeight =
+        grow(recordHeight > 0 ? recordHeight : baseHeight, requiredHeight);
+
+    GpBitmap *newBitmap = nullptr;
+    if(GdipCreateBitmapFromScan0(newWidth, newHeight, 0, PixelFormat32bppARGB,
+                                 nullptr, &newBitmap) != Ok ||
+       !newBitmap) {
+        return false;
+    }
+
+    GpGraphics *newGraphics = nullptr;
+    if(GdipGetImageGraphicsContext(newBitmap, &newGraphics) != Ok ||
+       !newGraphics) {
+        GdipDisposeImage(reinterpret_cast<GpImage *>(newBitmap));
+        return false;
+    }
+
+    GdipSetCompositingMode(newGraphics, CompositingModeSourceOver);
+    GdipGraphicsClear(newGraphics, 0x00000000);
+    if(recordBitmap) {
+        const REAL copyX = recordOriginX - newOriginX;
+        const REAL copyY = recordOriginY - newOriginY;
+        GdipDrawImageRect(newGraphics, reinterpret_cast<GpImage *>(recordBitmap),
+                          copyX, copyY, recordWidth, recordHeight);
+    }
+
+    GdipDeleteGraphics(recordGraphics);
+    GdipDisposeImage(reinterpret_cast<GpImage *>(recordBitmap));
+    recordBitmap = newBitmap;
+    recordGraphics = newGraphics;
+    recordWidth = newWidth;
+    recordHeight = newHeight;
+    recordOriginX = newOriginX;
+    recordOriginY = newOriginY;
+    setRecordGraphicsTransform(recordGraphics);
+    return true;
+}
+
+bool LayerExDraw::ensureRecordSurface(GeometryT minWidth, GeometryT minHeight) {
+    return ensureRecordBounds(0, 0, minWidth, minHeight);
 }
 
 /**
@@ -1029,8 +1221,10 @@ void LayerExDraw::draw(GpGraphics *graphics, const Pen *pen,
     GdipMultiplyWorldTransform(graphics, static_cast<GpMatrix *>(*matrix),
                                MatrixOrderPrepend);
     GdipSetSmoothingMode(graphics, smoothingMode);
-    GdipDrawPath(graphics, static_cast<GpPen *>(*pen),
-                 const_cast<GpPath *>(path));
+    auto *mutablePath = const_cast<GpPath *>(path);
+    GpPen *drawPen = penForPathDraw(pen, pathHasClosedSubpath(mutablePath));
+    GdipDrawPath(graphics, drawPen, mutablePath);
+    releasePathDrawPen(pen, drawPen);
     GdipEndContainer(graphics, container);
 }
 
@@ -1054,7 +1248,7 @@ void LayerExDraw::fill(GpGraphics *graphics, const BrushBase *brush,
  */
 RectFClass LayerExDraw::_drawPath(const Appearance *app, GpPath *path) {
     // 領域記録用
-    RectFClass rect;
+    RectFClass rect{};
 
     // 描画情報を使って次々描画
     bool first = true;
@@ -1065,50 +1259,185 @@ RectFClass LayerExDraw::_drawPath(const Appearance *app, GpPath *path) {
             switch(i->type) {
                 case 0: {
                     auto *pen = (Pen *)i->info;
-                    draw(graphics, pen, &matrix, path);
+                    MatrixClass boundsMatrix = matrix;
+                    boundsMatrix.Multiply(&calcTransform, MatrixOrderAppend);
+                    RectFClass drawBounds{};
+                    GdipGetPathWorldBounds(path, &drawBounds,
+                                           static_cast<GpMatrix *>(boundsMatrix),
+                                           static_cast<GpPen *>(*pen));
+                    GpGraphics *targetGraphics = graphics;
+                    if(recordEnabled) {
+                        const auto needWidth = static_cast<GeometryT>(std::ceil(
+                            recordMaxReal(drawBounds.X + drawBounds.Width,
+                                          static_cast<REAL>(width))));
+                        const auto needHeight = static_cast<GeometryT>(std::ceil(
+                            recordMaxReal(drawBounds.Y + drawBounds.Height,
+                                          static_cast<REAL>(height))));
+                        if(!ensureRecordBounds(drawBounds.X - 16,
+                                               drawBounds.Y - 16,
+                                               needWidth + 16,
+                                               needHeight + 16)) {
+                            return rect;
+                        }
+                        targetGraphics = recordGraphics;
+                    }
+                    draw(targetGraphics, pen, &matrix, path);
                     //                if (metaGraphics) {
                     //                    draw(metaGraphics, pen,
                     //                    &matrix, path);
                     //                }
-                    matrix.Multiply(&calcTransform, MatrixOrderAppend);
                     if(first) {
-                        GdipGetPathWorldBounds(path, &rect,
-                                               static_cast<GpMatrix *>(matrix),
-                                               static_cast<GpPen *>(*pen));
+                        rect = drawBounds;
                         first = false;
                     } else {
-                        RectFClass r{};
-                        GdipGetPathWorldBounds(path, &r,
-                                               static_cast<GpMatrix *>(matrix),
-                                               static_cast<GpPen *>(*pen));
-                        RectFClass::Union(rect, rect, r);
+                        RectFClass::Union(rect, rect, drawBounds);
                     }
                 } break;
-                case 1:
-                    fill(graphics, (BrushBase *)i->info, &matrix, path);
+                case 1: {
+                    MatrixClass boundsMatrix = matrix;
+                    boundsMatrix.Multiply(&calcTransform, MatrixOrderAppend);
+                    RectFClass drawBounds{};
+                    GdipGetPathWorldBounds(path, &drawBounds,
+                                           static_cast<GpMatrix *>(boundsMatrix),
+                                           nullptr);
+                    GpGraphics *targetGraphics = graphics;
+                    if(recordEnabled) {
+                        const auto needWidth = static_cast<GeometryT>(std::ceil(
+                            recordMaxReal(drawBounds.X + drawBounds.Width,
+                                          static_cast<REAL>(width))));
+                        const auto needHeight = static_cast<GeometryT>(std::ceil(
+                            recordMaxReal(drawBounds.Y + drawBounds.Height,
+                                          static_cast<REAL>(height))));
+                        if(!ensureRecordBounds(drawBounds.X - 16,
+                                               drawBounds.Y - 16,
+                                               needWidth + 16,
+                                               needHeight + 16)) {
+                            return rect;
+                        }
+                        targetGraphics = recordGraphics;
+                    }
+                    fill(targetGraphics, (BrushBase *)i->info, &matrix, path);
                     //                if (metaGraphics) {
                     //                    fill(metaGraphics,
                     //                    (BrushBase *)i->info,
                     //                    &matrix, path);
                     //                }
-                    matrix.Multiply(&calcTransform, MatrixOrderAppend);
                     if(first) {
-                        GdipGetPathWorldBounds(path, &rect,
-                                               static_cast<GpMatrix *>(matrix),
-                                               nullptr);
+                        rect = drawBounds;
                         first = false;
                     } else {
-                        RectFClass r;
-                        GdipGetPathWorldBounds(
-                            path, &r, static_cast<GpMatrix *>(matrix), nullptr);
-                        RectFClass::Union(rect, rect, r);
+                        RectFClass::Union(rect, rect, drawBounds);
                     }
-                    break;
+                } break;
             }
         }
         i++;
     }
-    updateRect(rect);
+    if(!recordEnabled) {
+        updateRect(rect);
+    }
+    return rect;
+}
+
+RectFClass LayerExDraw::_drawRectangles(const Appearance *app,
+                                        const RectFClass *rects, int count) {
+    RectFClass rect{};
+    if(!app || !rects || count <= 0) {
+        return rect;
+    }
+
+    bool first = true;
+    for(const auto &drawInfo : app->drawInfos) {
+        if(!drawInfo.info) {
+            continue;
+        }
+
+        MatrixClass matrix{ 1, 0, 0, 1, drawInfo.ox, drawInfo.oy };
+        MatrixClass boundsMatrix = matrix;
+        boundsMatrix.Multiply(&calcTransform, MatrixOrderAppend);
+
+        RectFClass drawBounds{};
+        for(int n = 0; n < count; ++n) {
+            PointFClass points[4] = {
+                { rects[n].X, rects[n].Y },
+                { rects[n].X + rects[n].Width, rects[n].Y },
+                { rects[n].X, rects[n].Y + rects[n].Height },
+                { rects[n].X + rects[n].Width,
+                  rects[n].Y + rects[n].Height },
+            };
+            boundsMatrix.TransformPoints(points, 4);
+            REAL minx = points[0].X;
+            REAL maxx = points[0].X;
+            REAL miny = points[0].Y;
+            REAL maxy = points[0].Y;
+            for(int p = 1; p < 4; ++p) {
+                if(points[p].X < minx) minx = points[p].X;
+                if(points[p].X > maxx) maxx = points[p].X;
+                if(points[p].Y < miny) miny = points[p].Y;
+                if(points[p].Y > maxy) maxy = points[p].Y;
+            }
+            RectFClass transformed{ minx, miny, maxx - minx, maxy - miny };
+            if(n == 0) {
+                drawBounds = transformed;
+            } else {
+                RectFClass::Union(drawBounds, drawBounds, transformed);
+            }
+        }
+
+        if(drawInfo.type == 0) {
+            REAL penWidth = 1.0f;
+            auto *pen = static_cast<Pen *>(drawInfo.info);
+            GdipGetPenWidth(static_cast<GpPen *>(*pen), &penWidth);
+            const REAL pad = std::ceil(penWidth * 2.0f) + 4.0f;
+            drawBounds.X -= pad;
+            drawBounds.Y -= pad;
+            drawBounds.Width += pad * 2.0f;
+            drawBounds.Height += pad * 2.0f;
+        }
+
+        GpGraphics *targetGraphics = graphics;
+        if(recordEnabled) {
+            const auto needWidth = static_cast<GeometryT>(std::ceil(
+                recordMaxReal(drawBounds.X + drawBounds.Width,
+                              static_cast<REAL>(width))));
+            const auto needHeight = static_cast<GeometryT>(std::ceil(
+                recordMaxReal(drawBounds.Y + drawBounds.Height,
+                              static_cast<REAL>(height))));
+            if(!ensureRecordBounds(drawBounds.X - 16, drawBounds.Y - 16,
+                                   needWidth + 16, needHeight + 16)) {
+                return rect;
+            }
+            targetGraphics = recordGraphics;
+        }
+
+        GraphicsContainer container{};
+        GdipBeginContainer2(targetGraphics, &container);
+        GdipMultiplyWorldTransform(targetGraphics,
+                                   static_cast<GpMatrix *>(matrix),
+                                   MatrixOrderPrepend);
+        GdipSetSmoothingMode(targetGraphics, smoothingMode);
+        if(drawInfo.type == 0) {
+            auto *pen = static_cast<Pen *>(drawInfo.info);
+            GdipDrawRectangles(targetGraphics, static_cast<GpPen *>(*pen),
+                               rects, count);
+        } else {
+            auto *brush = static_cast<BrushBase *>(drawInfo.info);
+            GdipFillRectangles(targetGraphics, static_cast<GpBrush *>(*brush),
+                               rects, count);
+        }
+        GdipEndContainer(targetGraphics, container);
+
+        if(first) {
+            rect = drawBounds;
+            first = false;
+        } else {
+            RectFClass::Union(rect, rect, drawBounds);
+        }
+    }
+
+    if(!recordEnabled) {
+        updateRect(rect);
+    }
     return rect;
 }
 
@@ -1383,12 +1712,8 @@ RectFClass LayerExDraw::drawPolygon(const Appearance *app, tTJSVariant points) {
  */
 RectFClass LayerExDraw::drawRectangle(const Appearance *app, REAL x, REAL y,
                                       REAL width, REAL height) {
-    GpPath *path{};
-    GdipCreatePath(FillModeAlternate, &path);
-    GdipAddPathRectangle(path, x, y, width, height);
-    auto r = _drawPath(app, path);
-    GdipDeletePath(path);
-    return r;
+    RectFClass rect{ x, y, width, height };
+    return _drawRectangles(app, &rect, 1);
 }
 
 /**
@@ -1401,12 +1726,10 @@ RectFClass LayerExDraw::drawRectangles(const Appearance *app,
                                        tTJSVariant rects) {
     std::vector<RectFClass> rs{};
     getRects(rects, rs);
-    GpPath *path{};
-    GdipCreatePath(FillModeAlternate, &path);
-    GdipAddPathRectangles(path, &rs[0], (int)rs.size());
-    auto r = _drawPath(app, path);
-    GdipDeletePath(path);
-    return r;
+    if(rs.empty()) {
+        return {};
+    }
+    return _drawRectangles(app, &rs[0], (int)rs.size());
 }
 
 /**
@@ -1661,7 +1984,8 @@ RectFClass LayerExDraw::drawImage(REAL x, REAL y, ImageClass *src) {
     RectFClass rect;
     if(src) {
         RectFClass *bounds = getBounds(src);
-        rect = drawImageRect(x + bounds->X, y + bounds->Y, src, 0, 0,
+        rect = drawImageRect(x + bounds->X, y + bounds->Y, src, bounds->X,
+                             bounds->Y,
                              bounds->Width, bounds->Height);
         delete bounds;
         updateRect(rect);
@@ -1725,10 +2049,35 @@ RectFClass LayerExDraw::drawImageAffine(ImageClass *src, REAL sleft, REAL stop,
                                         REAL F) {
     RectFClass rect;
     if(src) {
+        if(swidth == 0 || sheight == 0) {
+            return rect;
+        }
+        RectFClass *bounds = getBounds(src);
+        const REAL srcLeft = bounds->X;
+        const REAL srcTop = bounds->Y;
+        const REAL srcRight = bounds->X + bounds->Width;
+        const REAL srcBottom = bounds->Y + bounds->Height;
+        delete bounds;
+
+        const REAL reqLeft = sleft;
+        const REAL reqTop = stop;
+        const REAL reqRight = sleft + swidth;
+        const REAL reqBottom = stop + sheight;
+        const REAL clipLeft = reqLeft < srcLeft ? srcLeft : reqLeft;
+        const REAL clipTop = reqTop < srcTop ? srcTop : reqTop;
+        const REAL clipRight = reqRight > srcRight ? srcRight : reqRight;
+        const REAL clipBottom = reqBottom > srcBottom ? srcBottom : reqBottom;
+        if(clipRight <= clipLeft || clipBottom <= clipTop) {
+            return rect;
+        }
+
+        const REAL clipWidth = clipRight - clipLeft;
+        const REAL clipHeight = clipBottom - clipTop;
+
         PointFClass points[4]; // 元座標値
         if(affine) {
-#define AFFINEX(x, y) (A * x + C * y + E)
-#define AFFINEY(x, y) (B * x + D * y + F)
+#define AFFINEX(x, y) (A * (x) + C * (y) + E)
+#define AFFINEY(x, y) (B * (x) + D * (y) + F)
             points[0].X = AFFINEX(0, 0);
             points[0].Y = AFFINEY(0, 0);
             points[1].X = AFFINEX(swidth, 0);
@@ -1737,6 +2086,8 @@ RectFClass LayerExDraw::drawImageAffine(ImageClass *src, REAL sleft, REAL stop,
             points[2].Y = AFFINEY(0, sheight);
             points[3].X = AFFINEX(swidth, sheight);
             points[3].Y = AFFINEY(swidth, sheight);
+#undef AFFINEX
+#undef AFFINEY
         } else {
             points[0].X = A;
             points[0].Y = B;
@@ -1747,9 +2098,29 @@ RectFClass LayerExDraw::drawImageAffine(ImageClass *src, REAL sleft, REAL stop,
             points[3].X = C - A + E;
             points[3].Y = D - B + F;
         }
+        const REAL safeSourceWidth = swidth != 0 ? swidth : 1;
+        const REAL safeSourceHeight = sheight != 0 ? sheight : 1;
+        const REAL clipOffsetX = clipLeft - reqLeft;
+        const REAL clipOffsetY = clipTop - reqTop;
+        const PointFClass requestedTopLeft = points[0];
+        const REAL ux = (points[1].X - requestedTopLeft.X) / safeSourceWidth;
+        const REAL uy = (points[1].Y - requestedTopLeft.Y) / safeSourceWidth;
+        const REAL vx = (points[2].X - requestedTopLeft.X) / safeSourceHeight;
+        const REAL vy = (points[2].Y - requestedTopLeft.Y) / safeSourceHeight;
+        points[0].X = requestedTopLeft.X + ux * clipOffsetX + vx * clipOffsetY;
+        points[0].Y = requestedTopLeft.Y + uy * clipOffsetX + vy * clipOffsetY;
+        points[1].X = points[0].X + ux * clipWidth;
+        points[1].Y = points[0].Y + uy * clipWidth;
+        points[2].X = points[0].X + vx * clipHeight;
+        points[2].Y = points[0].Y + vy * clipHeight;
+        points[3].X = points[1].X + vx * clipHeight;
+        points[3].Y = points[1].Y + vy * clipHeight;
+        const REAL bitmapSourceLeft = clipLeft - srcLeft;
+        const REAL bitmapSourceTop = clipTop - srcTop;
         GdipDrawImagePointsRect(this->graphics, static_cast<GpImage *>(*src),
-                                points, 3, sleft, stop, swidth, sheight,
-                                UnitPixel, nullptr, nullptr, nullptr);
+                                points, 3, bitmapSourceLeft, bitmapSourceTop,
+                                clipWidth, clipHeight, UnitPixel, nullptr,
+                                nullptr, nullptr);
         //        if (metaGraphics) {
         //
         //            GdipDrawImagePointsRect(this->metaGraphics,
@@ -1805,7 +2176,10 @@ void LayerExDraw::createRecord() {
     //         metaGraphics->SetTransform(&transform);
     //     }
     // }
+    reset();
     destroyRecord();
+    recordEnabled = true;
+    ensureRecordSurface(width, height);
     //    GpMetafile *emfMetafile{};
     //    GdipCreateMetafileFromFile((WCHAR
     //    *)TJS_W("krkr2_layerexdraw_emf.metafile"),
@@ -1824,7 +2198,22 @@ void LayerExDraw::createRecord() {
 void LayerExDraw::destroyRecord() {
     //    GdipDeleteGraphics(this->metaGraphics);
     //    metaGraphics = nullptr;
-    GdipDisposeImage((GpImage *)&metafile);
+    if(recordGraphics) {
+        GdipDeleteGraphics(recordGraphics);
+    }
+    recordGraphics = nullptr;
+    if(recordBitmap) {
+        GdipDisposeImage(reinterpret_cast<GpImage *>(recordBitmap));
+    }
+    recordBitmap = nullptr;
+    recordWidth = 0;
+    recordHeight = 0;
+    recordOriginX = 0;
+    recordOriginY = 0;
+    recordEnabled = false;
+    if(metafile) {
+        GdipDisposeImage(reinterpret_cast<GpImage *>(metafile));
+    }
     metafile = nullptr;
 }
 
@@ -1833,11 +2222,11 @@ void LayerExDraw::destroyRecord() {
  */
 void LayerExDraw::setRecord(bool record) {
     if(record) {
-        if(!metafile) {
+        if(!recordEnabled) {
             createRecord();
         }
     } else {
-        if(metafile) {
+        if(recordEnabled) {
             destroyRecord();
         }
     }
@@ -1865,6 +2254,13 @@ bool LayerExDraw::redraw(ImageClass *image) {
 
         GdipDrawImageRect(this->graphics, static_cast<GpImage *>(*image),
                           bounds->X, bounds->Y, bounds->Width, bounds->Height);
+        if(recordEnabled && ensureRecordSurface(bounds->X + bounds->Width,
+                                                bounds->Y + bounds->Height)) {
+            GdipGraphicsClear(this->recordGraphics, 0);
+            GdipDrawImageRect(this->recordGraphics, static_cast<GpImage *>(*image),
+                              bounds->X, bounds->Y, bounds->Width,
+                              bounds->Height);
+        }
         GdipSetWorldTransform(this->graphics,
                               static_cast<GpMatrix *>(calcTransform));
         delete bounds;
@@ -1880,7 +2276,19 @@ bool LayerExDraw::redraw(ImageClass *image) {
  * @return 成功したら true
  */
 ImageClass *LayerExDraw::getRecordImage() {
-    ImageClass *image = nullptr;
+    reset();
+    if(recordEnabled) {
+        ensureRecordSurface(width, height);
+    }
+    if(!recordBitmap) {
+        return nullptr;
+    }
+    GpImage *cloned = nullptr;
+    if(GdipCloneImage(reinterpret_cast<GpImage *>(recordBitmap), &cloned) != Ok ||
+       !cloned) {
+        return nullptr;
+    }
+    ImageClass *image = new ImageClass{ cloned, recordOriginX, recordOriginY };
     //    if (metafile) {
     // メタ情報を取得するには一度閉じる必要がある
     //        if (metaGraphics) {
@@ -1916,8 +2324,12 @@ ImageClass *LayerExDraw::getRecordImage() {
 bool LayerExDraw::redrawRecord() {
     // 再描画処理
     ImageClass *image = getRecordImage();
-    delete image;
-    return image;
+    const bool hasImage = image != nullptr;
+    if(image) {
+        redraw(image);
+        delete image;
+    }
+    return hasImage;
 }
 
 /**

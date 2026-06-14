@@ -66,28 +66,10 @@ func _initialize() -> void:
     await _save_step(0, "startup")
 
     var step := 1
-    for click in ProbeConfig.clicks(test_config):
-        var pos := ProbeConfig.click_position(click)
-        _send_window_click(pos)
-        await _advance(int(click.get("after_frames", ProbeConfig.int_value(test_config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)))))
-        await _save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
-        step += 1
-
-    for key_event in test_config.get("keys", []):
-        var key_code := int(key_event.get("key_code", 13))
-        player.send_key_event(true, key_code, int(key_event.get("modifiers", 0)), int(key_event.get("unicode", 0)))
-        player.tick(1.0 / 60.0)
-        player.send_key_event(false, key_code, int(key_event.get("modifiers", 0)), 0)
-        await _advance(int(key_event.get("after_frames", ProbeConfig.int_value(test_config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)))))
-        await _save_step(step, "key_%d" % key_code)
-        step += 1
-
-    for click in test_config.get("clicks_after_keys", []):
-        var pos := ProbeConfig.click_position(click)
-        _send_window_click(pos)
-        await _advance(int(click.get("after_frames", ProbeConfig.int_value(test_config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)))))
-        await _save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
-        step += 1
+    if test_config.has("actions") and test_config["actions"] is Array:
+        step = await _run_actions(step)
+    else:
+        step = await _run_legacy_steps(step)
 
     var measured_frames: int = ProbeConfig.int_value(test_config, "measure_frames", _env_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 120))
     var start_ticks: int = Time.get_ticks_usec()
@@ -146,6 +128,67 @@ func _save_step(index: int, label: String) -> void:
         JSON.stringify(_image_stats(image)),
     ])
 
+func _run_legacy_steps(step: int) -> int:
+    for click in ProbeConfig.clicks(test_config):
+        var pos := ProbeConfig.click_position(click)
+        _send_window_click(pos)
+        await _advance(int(click.get("after_frames", ProbeConfig.int_value(test_config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)))))
+        await _save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+
+    for key_event in test_config.get("keys", []):
+        var key_code := int(key_event.get("key_code", 13))
+        player.send_key_event(true, key_code, int(key_event.get("modifiers", 0)), int(key_event.get("unicode", 0)))
+        player.tick(1.0 / 60.0)
+        player.send_key_event(false, key_code, int(key_event.get("modifiers", 0)), 0)
+        await _advance(int(key_event.get("after_frames", ProbeConfig.int_value(test_config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)))))
+        await _save_step(step, "key_%d" % key_code)
+        step += 1
+
+    for click in test_config.get("clicks_after_keys", []):
+        var pos := ProbeConfig.click_position(click)
+        _send_window_click(pos)
+        await _advance(int(click.get("after_frames", ProbeConfig.int_value(test_config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)))))
+        await _save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+    return step
+
+func _run_actions(step: int) -> int:
+    for raw_action in test_config["actions"]:
+        if not raw_action is Dictionary:
+            continue
+        var action: Dictionary = raw_action
+        var kind := String(action.get("type", "click"))
+        var label := String(action.get("label", kind))
+        if kind == "click":
+            var pos := ProbeConfig.click_position(action)
+            _send_window_click(pos)
+            if label.is_empty() or label == "click":
+                label = "click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "move":
+            var pos := ProbeConfig.click_position(action)
+            _send_window_move(pos)
+            if label.is_empty() or label == "move":
+                label = "move_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "key":
+            var key_code := int(action.get("key_code", 13))
+            player.send_key_event(true, key_code, int(action.get("modifiers", 0)), int(action.get("unicode", 0)))
+            player.tick(1.0 / 60.0)
+            player.send_key_event(false, key_code, int(action.get("modifiers", 0)), 0)
+            if label.is_empty() or label == "key":
+                label = "key_%d" % key_code
+        elif kind == "wait" or kind == "capture":
+            pass
+        else:
+            print("skip unknown action: %s" % kind)
+            continue
+
+        await _advance(int(action.get("after_frames", ProbeConfig.int_value(test_config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)))))
+        if bool(action.get("capture", true)):
+            await _save_step(step, label)
+            step += 1
+    return step
+
 func _send_window_click(window_pos: Vector2) -> void:
     var mapped := _map_window_point(window_pos)
     if mapped.x < 0.0 or mapped.y < 0.0:
@@ -156,6 +199,14 @@ func _send_window_click(window_pos: Vector2) -> void:
     player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+
+func _send_window_move(window_pos: Vector2) -> void:
+    var mapped := _map_window_point(window_pos)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip move outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
 
 func _map_window_point(pos: Vector2) -> Vector2:
     if rect.texture == null:

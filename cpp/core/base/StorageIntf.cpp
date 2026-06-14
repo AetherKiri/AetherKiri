@@ -11,6 +11,7 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 #include <memory>
 #include "StorageIntf.h"
@@ -24,6 +25,7 @@
 #include "TickCount.h"
 #include "ncbind.hpp"
 #include "UtilStreams.h"
+#include "spdlog/spdlog.h"
 
 #define TVP_DEFAULT_ARCHIVE_CACHE_NUM 128
 #define TVP_DEFAULT_AUTOPATH_CACHE_NUM 256
@@ -53,6 +55,16 @@ static const char TVP_GPU_COMPAT_SCRIPT[] =
     "try { KAGWindow.prototype.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
     "try { KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n";
 static tTJSVariant TVPStoragesArchiveUniqueKeyCompat;
+
+namespace {
+bool TVPSaveTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_SAVE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+} // namespace
 
 //---------------------------------------------------------------------------
 // global variables
@@ -1320,10 +1332,16 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
     ttstr name;
 
     tjs_uint32 access = flags & TJS_BS_ACCESS_MASK;
-    if(access == TJS_BS_WRITE)
+    if(access == TJS_BS_WRITE || access == TJS_BS_APPEND ||
+       access == TJS_BS_UPDATE)
         name = TVPNormalizeStorageName(_name);
     else
         name = TVPGetPlacedPath(_name); // file must exist
+
+    if(TVPSaveTraceEnabled() && access != TJS_BS_READ) {
+        spdlog::info("SaveTrace TVPCreateStream request={} normalized={} flags={} access={}",
+                     _name.AsStdString(), name.AsStdString(), flags, access);
+    }
 
     if(name.IsEmpty()) {
         if(access >= 1)

@@ -22,6 +22,18 @@
 #include "StorageImpl.h"
 #include "LayerBitmapIntf.h"
 #include "MsgIntf.h"
+#include <cstdlib>
+#include <spdlog/spdlog.h>
+
+namespace {
+bool TVPSaveTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_SAVE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+} // namespace
 
 void tTVPGraphicHandlerType::Load(void *formatdata, void *callbackdata,
                                   tTVPGraphicSizeCallback sizecallback,
@@ -61,6 +73,10 @@ void tTVPGraphicHandlerType::Save(const ttstr &storagename, const ttstr &mode,
 
     tTJSBinaryStream *stream =
         TVPCreateStream(TVPNormalizeStorageName(storagename), TJS_BS_WRITE);
+    if(TVPSaveTraceEnabled()) {
+        spdlog::info("SaveTrace GraphicHandler.Save file={} mode={}",
+                     storagename.AsStdString(), mode.AsStdString());
+    }
 #if 0
 	if (IsPlugin)
 	{
