@@ -11,10 +11,14 @@
 #include "tjsArray.h"
 #include "psbfile/PSBFile.h"
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <optional>
 #include <spdlog/spdlog.h>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace motion::detail {
 
@@ -88,29 +92,119 @@ namespace motion::detail {
             return lower == "software" || lower.rfind("moji_", 0) == 0;
         }
 
-        bool nodeTreeIsYuzuTitleRootCharacterLayer(const std::string &name) {
-            const auto lower = nodeTreeLowercase(name);
-            return lower == "ch0" || lower == "ch1" || lower == "ch2" ||
-                lower == "ch3";
+        bool nodeTreeIsYuzuTitleCharacterSource(const std::string &source) {
+            const auto lower = nodeTreeLowercase(source);
+            return lower.find("src/title/ch") != std::string::npos ||
+                lower.find("/title/ch") != std::string::npos ||
+                lower.find("title2_ch") != std::string::npos;
         }
 
-        bool nodeTreeIsYuzuTitlePersistentRootLayer(const std::string &name) {
-            const auto lower = nodeTreeLowercase(name);
-            return nodeTreeIsYuzuTitleRootCharacterLayer(lower) ||
-                lower == "logo" || lower == "bg2_bottom" ||
-                lower == "bg2_top";
+        bool nodeTreeIsYuzuTitleCompositeLayer(
+            const std::string &name,
+            const std::string &source = {}) {
+            const auto lowerName = nodeTreeLowercase(name);
+            const auto lowerSource = nodeTreeLowercase(source);
+            return lowerName.find("title_char") != std::string::npos ||
+                lowerSource.find("src/title/pos") != std::string::npos ||
+                lowerSource.find("/title/pos") != std::string::npos ||
+                lowerSource.find("title_char") != std::string::npos;
         }
 
-        bool nodeTreeLayerSetReferencesYuzuTitleCharacters(
-            const std::vector<std::string> &names) {
+        std::string nodeTreeFirstLayerSource(
+            const std::shared_ptr<const PSB::PSBDictionary> &layer) {
+            const auto frames = nodeTreePsbList(layer, "frameList");
+            if(!frames) return {};
+            for(int i = 0; i < static_cast<int>(frames->size()); ++i) {
+                const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*frames)[i]);
+                if(!frame) continue;
+                const auto content =
+                    std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                        (*frame)["content"]);
+                const auto src = nodeTreePsbString(content, "src");
+                if(!src.empty()) {
+                    return src;
+                }
+            }
+            return {};
+        }
+
+        bool nodeTreeLayerReferencesTitlePresentation(
+            const std::shared_ptr<const PSB::PSBDictionary> &layer);
+
+        bool nodeTreeFrameContentReferencesTitlePresentation(
+            const std::shared_ptr<const PSB::PSBDictionary> &frame,
+            const std::string &layerName) {
+            const auto content =
+                std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*frame)["content"]);
+            const auto src = nodeTreePsbString(content, "src");
+            return nodeTreeIsYuzuTitleCompositeLayer(layerName, src) ||
+                nodeTreeIsYuzuTitleCharacterSource(src);
+        }
+
+        bool nodeTreeLayerReferencesTitlePresentation(
+            const std::shared_ptr<const PSB::PSBDictionary> &layer) {
+            if(!layer) return false;
+            const auto layerName = nodeTreePsbString(layer, "label");
+            if(nodeTreeIsYuzuTitleCompositeLayer(layerName)) {
+                return true;
+            }
+            const auto frames = nodeTreePsbList(layer, "frameList");
+            if(frames) {
+                for(int i = 0; i < static_cast<int>(frames->size()); ++i) {
+                    const auto frame =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                            (*frames)[i]);
+                    if(frame &&
+                       nodeTreeFrameContentReferencesTitlePresentation(
+                           frame, layerName)) {
+                        return true;
+                    }
+                }
+            }
+            const auto children = nodeTreePsbList(layer, "children");
+            if(children) {
+                for(int i = 0; i < static_cast<int>(children->size()); ++i) {
+                    const auto child =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                            (*children)[i]);
+                    if(nodeTreeLayerReferencesTitlePresentation(child)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        bool nodeTreeLayerSetReferencesYuzuTitlePresentation(
+            const std::vector<std::string> &names,
+            const std::unordered_map<
+                std::string,
+                std::shared_ptr<const PSB::PSBDictionary>> &layersByName) {
             for (const auto &name : names) {
-                const auto lower = nodeTreeLowercase(name);
-                if (lower == "title_charall" ||
-                    nodeTreeIsYuzuTitleRootCharacterLayer(lower)) {
+                const auto it = layersByName.find(name);
+                if (it != layersByName.end() &&
+                    nodeTreeLayerReferencesTitlePresentation(it->second)) {
                     return true;
                 }
             }
             return false;
+        }
+
+        bool nodeTreeIsYuzuTitlePersistentRootLayer(
+            const std::string &name,
+            const std::shared_ptr<const PSB::PSBDictionary> &layer) {
+            const auto lowerName = nodeTreeLowercase(name);
+            const auto source = nodeTreeFirstLayerSource(layer);
+            const auto lowerSource = nodeTreeLowercase(source);
+            return nodeTreeIsYuzuTitleCharacterSource(source) ||
+                lowerName == "logo" ||
+                lowerSource.find("src/title/logo") != std::string::npos ||
+                lowerSource.find("/title/logo") != std::string::npos ||
+                lowerName.rfind("bg2_", 0) == 0 ||
+                lowerSource.find("src/title/bg2_") != std::string::npos ||
+                lowerSource.find("/title/bg2_") != std::string::npos;
         }
 
         std::shared_ptr<PSB::PSBDictionary>
@@ -192,64 +286,276 @@ namespace motion::detail {
                       int parentIdx,
                       std::vector<MotionNode> &nodes);
 
-        bool nodeTreeYuzuTitleIntroTiming(
-            const std::string &rootLabel,
-            std::string &introLabel,
-            int &startFrame,
-            int &endFrame) {
-            const auto lower = nodeTreeLowercase(rootLabel);
-            introLabel = lower + "_intro";
-            if (lower == "ch0") {
-                startFrame = 56;
-                endFrame = 72;
-                return true;
+        struct TitleCharacterRootLayer {
+            std::string label;
+            std::string source;
+            std::shared_ptr<const PSB::PSBDictionary> layer;
+            size_t rootOrder = 0;
+            int sequenceOrder = 0;
+            double introStartFrame = 0.0;
+            double introEndFrame = 0.0;
+        };
+
+        std::optional<int> nodeTreeExtractTitleCharacterNumber(
+            const std::string &value) {
+            const auto lower = nodeTreeLowercase(value);
+            const auto marker = lower.find("ch");
+            if(marker == std::string::npos) {
+                return std::nullopt;
             }
-            if (lower == "ch1") {
-                startFrame = 72;
-                endFrame = 88;
-                return true;
+            size_t pos = marker + 2;
+            if(pos >= lower.size() ||
+               !std::isdigit(static_cast<unsigned char>(lower[pos]))) {
+                return std::nullopt;
             }
-            if (lower == "ch2") {
-                startFrame = 88;
-                endFrame = 104;
-                return true;
+            int result = 0;
+            while(pos < lower.size() &&
+                  std::isdigit(static_cast<unsigned char>(lower[pos]))) {
+                result = result * 10 + (lower[pos] - '0');
+                ++pos;
             }
-            if (lower == "ch3") {
-                startFrame = 104;
-                endFrame = 120;
-                return true;
-            }
-            return false;
+            return result;
         }
 
-        void nodeTreeAppendYuzuTitleIntroLayers(
-            const MotionSnapshot &snapshot,
-            std::vector<MotionNode> &nodes) {
-            constexpr int kCompositeReadyFrame = 136;
-
-            // Fade timings follow the character numbers, while draw order must
-            // follow the original root layer list. In CafeStella that root
-            // order carries the title character occlusion relationship.
-            for (const auto &rootLabel : snapshot.layerNames) {
-                std::string introLabel;
-                int startFrame = 0;
-                int endFrame = 0;
-                if (!nodeTreeYuzuTitleIntroTiming(rootLabel, introLabel,
-                                                  startFrame, endFrame)) {
+        std::vector<TitleCharacterRootLayer>
+        nodeTreeCollectTitleCharacterRootLayers(
+            const MotionSnapshot &snapshot) {
+            std::vector<TitleCharacterRootLayer> result;
+            for(size_t index = 0; index < snapshot.layerNames.size(); ++index) {
+                const auto &name = snapshot.layerNames[index];
+                const auto it = snapshot.layersByName.find(name);
+                if(it == snapshot.layersByName.end()) {
                     continue;
                 }
-                const auto it = snapshot.layersByName.find(rootLabel);
-                if (it == snapshot.layersByName.end()) {
+                const auto source = nodeTreeFirstLayerSource(it->second);
+                if(!nodeTreeIsYuzuTitleCharacterSource(source)) {
+                    continue;
+                }
+                TitleCharacterRootLayer candidate;
+                candidate.label = name;
+                candidate.source = source;
+                candidate.layer = it->second;
+                candidate.rootOrder = index;
+                candidate.sequenceOrder =
+                    nodeTreeExtractTitleCharacterNumber(source)
+                        .value_or(nodeTreeExtractTitleCharacterNumber(name)
+                                      .value_or(static_cast<int>(index)));
+                result.push_back(std::move(candidate));
+            }
+            return result;
+        }
+
+        void nodeTreeCollectTitleCharacterSources(
+            const std::shared_ptr<const PSB::PSBDictionary> &layer,
+            std::unordered_set<std::string> &sources,
+            bool includeCompositeLayers) {
+            if(!layer) return;
+            const auto layerName = nodeTreePsbString(layer, "label");
+            if(!includeCompositeLayers &&
+               nodeTreeIsYuzuTitleCompositeLayer(layerName,
+                                                 nodeTreeFirstLayerSource(layer))) {
+                return;
+            }
+            const auto frames = nodeTreePsbList(layer, "frameList");
+            if(frames) {
+                for(int i = 0; i < static_cast<int>(frames->size()); ++i) {
+                    const auto frame =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                            (*frames)[i]);
+                    if(!frame) continue;
+                    const auto content =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                            (*frame)["content"]);
+                    const auto src = nodeTreePsbString(content, "src");
+                    if(nodeTreeIsYuzuTitleCharacterSource(src)) {
+                        sources.insert(nodeTreeLowercase(src));
+                    }
+                }
+            }
+            const auto children = nodeTreePsbList(layer, "children");
+            if(children) {
+                for(int i = 0; i < static_cast<int>(children->size()); ++i) {
+                    const auto child =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                            (*children)[i]);
+                    nodeTreeCollectTitleCharacterSources(
+                        child, sources, includeCompositeLayers);
+                }
+            }
+        }
+
+        std::unordered_set<std::string>
+        nodeTreeCollectTitleCharacterSources(
+            const std::unordered_map<
+                std::string,
+                std::shared_ptr<const PSB::PSBDictionary>> &layersByName,
+            bool includeCompositeLayers) {
+            std::unordered_set<std::string> sources;
+            for(const auto &[_, layer] : layersByName) {
+                nodeTreeCollectTitleCharacterSources(
+                    layer, sources, includeCompositeLayers);
+            }
+            return sources;
+        }
+
+        struct TitleCompositeFadeWindow {
+            double startFrame = 0.0;
+            double endFrame = 0.0;
+        };
+
+        std::optional<TitleCompositeFadeWindow>
+        nodeTreeFindTitleCompositeFadeWindow(
+            const std::unordered_map<
+                std::string,
+                std::shared_ptr<const PSB::PSBDictionary>> &layersByName) {
+            for(const auto &[layerName, layer] : layersByName) {
+                if(!layer) continue;
+                const auto firstSource = nodeTreeFirstLayerSource(layer);
+                if(!nodeTreeIsYuzuTitleCompositeLayer(layerName, firstSource)) {
+                    continue;
+                }
+                const auto frames = nodeTreePsbList(layer, "frameList");
+                if(!frames) continue;
+
+                std::optional<double> startFrame;
+                for(int i = 0; i < static_cast<int>(frames->size()); ++i) {
+                    const auto frame =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                            (*frames)[i]);
+                    if(!frame) continue;
+                    const auto type =
+                        static_cast<int>(nodeTreePsbNumber(frame, "type")
+                                             .value_or(0.0));
+                    if(type == 0) {
+                        continue;
+                    }
+                    const auto content =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                            (*frame)["content"]);
+                    if(!content) {
+                        continue;
+                    }
+                    const auto time =
+                        nodeTreePsbNumber(frame, "time").value_or(0.0);
+                    // Runtime frame parsing treats omitted opacity as the
+                    // default fully opaque slot value.
+                    const auto opacity =
+                        nodeTreePsbNumber(content, "opa").value_or(255.0);
+                    if(!startFrame && opacity <= 16.0) {
+                        startFrame = time;
+                        continue;
+                    }
+                    if(startFrame && time > *startFrame &&
+                       opacity >= 250.0) {
+                        return TitleCompositeFadeWindow{ *startFrame, time };
+                    }
+                }
+            }
+            return std::nullopt;
+        }
+
+        bool nodeTreeAppendYuzuTitleIntroLayers(
+            const MotionSnapshot &snapshot,
+            const std::unordered_map<
+                std::string,
+                std::shared_ptr<const PSB::PSBDictionary>> &clipLayersByName,
+            std::vector<MotionNode> &nodes) {
+            auto rootCharacters =
+                nodeTreeCollectTitleCharacterRootLayers(snapshot);
+            if(rootCharacters.empty()) {
+                return false;
+            }
+
+            const auto clipCharacterSources =
+                nodeTreeCollectTitleCharacterSources(clipLayersByName, false);
+            bool clipAlreadyHasAllRootCharacters = !clipCharacterSources.empty();
+            for(const auto &character : rootCharacters) {
+                if(clipCharacterSources.find(nodeTreeLowercase(
+                       character.source)) == clipCharacterSources.end()) {
+                    clipAlreadyHasAllRootCharacters = false;
+                    break;
+                }
+            }
+            if(clipAlreadyHasAllRootCharacters) {
+                return false;
+            }
+
+            const auto compositeFade =
+                nodeTreeFindTitleCompositeFadeWindow(clipLayersByName);
+            if(!compositeFade ||
+               compositeFade->endFrame <= compositeFade->startFrame ||
+               compositeFade->startFrame <= 0.0) {
+                return false;
+            }
+
+            double segmentFrames =
+                compositeFade->endFrame - compositeFade->startFrame;
+            if(segmentFrames * rootCharacters.size() >
+               compositeFade->startFrame) {
+                segmentFrames =
+                    compositeFade->startFrame /
+                    static_cast<double>(rootCharacters.size());
+            }
+
+            std::vector<size_t> sequence;
+            sequence.reserve(rootCharacters.size());
+            for(size_t index = 0; index < rootCharacters.size(); ++index) {
+                sequence.push_back(index);
+            }
+            std::stable_sort(
+                sequence.begin(), sequence.end(),
+                [&](size_t lhs, size_t rhs) {
+                    const auto &left = rootCharacters[lhs];
+                    const auto &right = rootCharacters[rhs];
+                    if(left.sequenceOrder != right.sequenceOrder) {
+                        return left.sequenceOrder < right.sequenceOrder;
+                    }
+                    return left.rootOrder < right.rootOrder;
+                });
+
+            for(size_t order = 0; order < sequence.size(); ++order) {
+                auto &character = rootCharacters[sequence[order]];
+                character.introStartFrame =
+                    compositeFade->startFrame -
+                    segmentFrames *
+                        static_cast<double>(sequence.size() - order);
+                character.introEndFrame =
+                    character.introStartFrame + segmentFrames;
+                if(character.introStartFrame < 0.0) {
+                    character.introStartFrame = 0.0;
+                }
+                if(character.introEndFrame <= character.introStartFrame) {
+                    character.introEndFrame = character.introStartFrame + 1.0;
+                }
+            }
+
+            // Fade timings follow character source numbering, while draw order
+            // follows the original root layer list, which carries the title
+            // character occlusion relationship.
+            std::stable_sort(
+                rootCharacters.begin(), rootCharacters.end(),
+                [](const auto &lhs, const auto &rhs) {
+                    return lhs.rootOrder < rhs.rootOrder;
+                });
+            const int hideFrame = static_cast<int>(
+                std::lround(compositeFade->endFrame));
+            bool appended = false;
+            for (const auto &character : rootCharacters) {
+                if (!character.layer) {
                     continue;
                 }
                 const auto introLayer = nodeTreeMakeYuzuTitleIntroLayer(
-                    it->second, introLabel, startFrame, endFrame,
-                    kCompositeReadyFrame);
+                    character.layer, character.label + "_intro",
+                    static_cast<int>(std::lround(character.introStartFrame)),
+                    static_cast<int>(std::lround(character.introEndFrame)),
+                    hideFrame);
                 if (!introLayer) {
                     continue;
                 }
                 walkTree(introLayer, 0, nodes);
+                appended = true;
             }
+            return appended;
         }
 
         // Check if any frame in frameList has a non-empty "src" in its "content".
@@ -488,33 +794,38 @@ namespace motion::detail {
 
         if (layersByName != &snapshot.layersByName &&
             nodeTreeIsYuzuTitlePresentation(snapshot) &&
-            nodeTreeLayerSetReferencesYuzuTitleCharacters(*layerNames)) {
-            nodeTreeAppendYuzuTitleIntroLayers(snapshot, nodes);
-
-            auto hasIncludedRootLayer =
-                [&](const std::string &label,
-                    const std::shared_ptr<const PSB::PSBDictionary> &layer) {
-                for (const auto &node : nodes) {
-                    if (node.parentIndex == 0 && node.layerName == label &&
-                        node.psbNode == layer) {
-                        return true;
+            nodeTreeLayerSetReferencesYuzuTitlePresentation(*layerNames,
+                                                            *layersByName)) {
+            const bool appendedTitleIntro =
+                nodeTreeAppendYuzuTitleIntroLayers(snapshot, *layersByName,
+                                                   nodes);
+            if(appendedTitleIntro) {
+                auto hasIncludedRootLayer =
+                    [&](const std::string &label,
+                        const std::shared_ptr<const PSB::PSBDictionary> &layer) {
+                    for (const auto &node : nodes) {
+                        if (node.parentIndex == 0 && node.layerName == label &&
+                            node.psbNode == layer) {
+                            return true;
+                        }
                     }
-                }
-                return false;
-            };
+                    return false;
+                };
 
-            // CafeStella's title char_move clip animates a subset of the
-            // title. Final static characters, logo, and frame strips live in
-            // the root layer list and must stay present as siblings until the
-            // full title presentation settles.
-            for (const auto &name : snapshot.layerNames) {
-                if (!nodeTreeIsYuzuTitlePersistentRootLayer(name)) {
-                    continue;
+                // Some Yuzu title clips animate only the hand-off/composite
+                // subset. Final static characters, logo, and frame strips live
+                // in the root layer list and must stay present as siblings
+                // until the full title presentation settles.
+                for (const auto &name : snapshot.layerNames) {
+                    auto it = snapshot.layersByName.find(name);
+                    if (it == snapshot.layersByName.end()) continue;
+                    if (!nodeTreeIsYuzuTitlePersistentRootLayer(name,
+                                                                it->second)) {
+                        continue;
+                    }
+                    if (hasIncludedRootLayer(name, it->second)) continue;
+                    walkTree(it->second, 0, nodes);
                 }
-                auto it = snapshot.layersByName.find(name);
-                if (it == snapshot.layersByName.end()) continue;
-                if (hasIncludedRootLayer(name, it->second)) continue;
-                walkTree(it->second, 0, nodes);
             }
         }
 

@@ -3,6 +3,8 @@
 //
 #include "PlayerInternal.h"
 #include "ConfigManager/IndividualConfigManager.h"
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 
@@ -373,22 +375,33 @@ namespace {
             return true;
         }
         const auto label = renderDebugLowercase(nodeLabel);
-        return label == "ch0" || label == "ch1" || label == "ch2" ||
-            label == "ch3";
+        if(label.rfind("ch", 0) != 0 || label.size() <= 2) {
+            return false;
+        }
+        return std::all_of(
+            label.begin() + 2, label.end(),
+            [](char ch) {
+                return std::isdigit(static_cast<unsigned char>(ch));
+            });
+    }
+
+    bool isYuzuTitleSyntheticIntroLayer(
+        const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
+        const auto label = renderDebugLowercase(entry.nodeLabel);
+        constexpr const char *kSuffix = "_intro";
+        constexpr size_t kSuffixLength = 6;
+        return label.size() > kSuffixLength &&
+            label.compare(label.size() - kSuffixLength, kSuffixLength,
+                          kSuffix) == 0 &&
+            isYuzuTitleStandaloneCharacterLayer(entry.nodeLabel,
+                                                entry.sourceKey);
     }
 
     bool isYuzuTitleClipAnimatedCharacterLayer(
         const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
-        if(entry.visibleAncestorIndex < 0) {
-            return false;
-        }
-        const auto label = renderDebugLowercase(entry.nodeLabel);
-        if(label != "ch3") {
-            return false;
-        }
-        const auto source = renderDebugLowercase(entry.sourceKey);
-        return source.find("src/title/ch04") != std::string::npos ||
-            source.find("/title/ch04") != std::string::npos;
+        return entry.visibleAncestorIndex >= 0 &&
+            isYuzuTitleStandaloneCharacterLayer(entry.nodeLabel,
+                                                entry.sourceKey);
     }
 
     int yuzuTitlePresentationDrawRank(
@@ -556,23 +569,33 @@ namespace {
                     motionPath);
             }
 
-            int suppressedClipCharacters = 0;
-            for(auto &entry : runtime.preparedRenderItems) {
-                if(entry.drawFlag && !entry.skipFlag0 && !entry.skipFlag1 &&
-                   entry.opacity > 0 &&
-                   isYuzuTitleClipAnimatedCharacterLayer(entry)) {
-                    entry.skipFlag0 = true;
-                    ++suppressedClipCharacters;
+            const bool hasSyntheticIntroLayer = std::any_of(
+                runtime.preparedRenderItems.begin(),
+                runtime.preparedRenderItems.end(),
+                [](const auto &entry) {
+                    return entry.drawFlag && !entry.skipFlag0 &&
+                        !entry.skipFlag1 && entry.opacity > 0 &&
+                        isYuzuTitleSyntheticIntroLayer(entry);
+                });
+            if(hasSyntheticIntroLayer) {
+                int suppressedClipCharacters = 0;
+                for(auto &entry : runtime.preparedRenderItems) {
+                    if(entry.drawFlag && !entry.skipFlag0 && !entry.skipFlag1 &&
+                       entry.opacity > 0 &&
+                       isYuzuTitleClipAnimatedCharacterLayer(entry)) {
+                        entry.skipFlag0 = true;
+                        ++suppressedClipCharacters;
+                    }
                 }
-            }
-            if(suppressedClipCharacters > 0 && LOGGER &&
-               shouldDebugTitleRender(motionPath) &&
-               markRenderDebugLogged(fmt::format(
-                   "yuzu-title-clip-character-suppressed:{}:{}",
-                   motionPath, suppressedClipCharacters))) {
-                LOGGER->info(
-                    "motion title clip character layer suppressed: motion={} suppressedClipCharacters={}",
-                    motionPath, suppressedClipCharacters);
+                if(suppressedClipCharacters > 0 && LOGGER &&
+                   shouldDebugTitleRender(motionPath) &&
+                   markRenderDebugLogged(fmt::format(
+                       "yuzu-title-clip-character-suppressed:{}:{}",
+                       motionPath, suppressedClipCharacters))) {
+                    LOGGER->info(
+                        "motion title clip character layer suppressed: motion={} suppressedClipCharacters={}",
+                        motionPath, suppressedClipCharacters);
+                }
             }
 
             const bool hasActiveCompositeCharacterLayer = std::any_of(
