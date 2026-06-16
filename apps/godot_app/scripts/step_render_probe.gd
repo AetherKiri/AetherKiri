@@ -22,7 +22,7 @@ func _initialize() -> void:
     rect.set_anchors_preset(Control.PRESET_FULL_RECT)
     rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
     rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-    rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+    rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
     root.add_child(rect)
 
     player = ClassDB.instantiate("AetherKiriPlayer")
@@ -134,18 +134,22 @@ func _capture_frame_image() -> Image:
     var width := int(frame.get("width", 0))
     var height := int(frame.get("height", 0))
     if width > 0 and height > 0 and data.size() >= width * height * 4:
-        return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
+        var frame_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
+        if int(_image_stats(frame_image).get("visible", 0)) > 0:
+            return frame_image
 
     if rect.texture != null:
         var rect_image := rect.texture.get_image()
         if rect_image != null and rect_image.get_width() > 0 and rect_image.get_height() > 0:
-            return rect_image
+            if int(_image_stats(rect_image).get("visible", 0)) > 0:
+                return rect_image
 
     var texture := root.get_viewport().get_texture()
     if texture != null:
         var viewport_image := texture.get_image()
         if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
-            return viewport_image
+            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
+                return viewport_image
     return Image.create(1, 1, false, Image.FORMAT_RGBA8)
 
 func _run_legacy_steps(step: int) -> int:

@@ -324,7 +324,7 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
     else if (event.button == 2)
         mb = mbMiddle;
 
-    // Defer scancode release until the next Tick has delivered queued click/up
+    // Defer scancode release until the next Tick has delivered queued up/click
     // events. Some KAG widgets query the async mouse state in click handlers.
     uint16_t vk = 0;
     switch (mb) {
@@ -334,8 +334,13 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
         default: break;
     }
 
-    // Match the original Kirikiri/Windows event order: WM_LBUTTONUP emits the
-    // click-like handler before OnMouseUp.
+    TVPPostInputEvent(
+        new tTVPOnMouseUpInputEvent(win, x, y, mb, shift));
+
+    // Match the original Kirikiri/Windows path: mouse-up handlers run before
+    // click handlers. Several in-game dialogs are opened from onClick; opening
+    // them while the source button is still captured leaves a one-frame pressed
+    // redraw that looks like a flicker on touch devices.
     if (mb == mbLeft) {
         if (suppress_next_left_click_) {
             suppress_next_left_click_ = false;
@@ -352,9 +357,6 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
             last_click_y_ = y;
         }
     }
-
-    TVPPostInputEvent(
-        new tTVPOnMouseUpInputEvent(win, x, y, mb, shift));
 
     pending_mouse_release_vk_ = vk;
 }

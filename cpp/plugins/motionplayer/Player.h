@@ -83,6 +83,9 @@ namespace motion {
         void setMetadata(tTJSVariant v) { _metadata = v; }
         tTJSVariant getMetadata() const { return _metadata; }
 
+        void setResolution(double v) { _resolution = v; }
+        double getResolution() const { return _resolution; }
+
         void setChara(ttstr v) { _chara = v; }
         ttstr getChara() const { return _chara; }
 
@@ -537,6 +540,7 @@ namespace motion {
         ResourceManager _resourceManagerNative;
         int _completionType = 0;
         tTJSVariant _metadata;
+        double _resolution = 0.0;
         ttstr _chara;
         ttstr _motionKey;
         ttstr _outline;  // Aligned to libkrkr2.so +1032: ttstr

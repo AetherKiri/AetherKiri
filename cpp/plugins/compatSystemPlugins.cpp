@@ -25,6 +25,7 @@
 #if defined(__APPLE__)
 #include <signal.h>
 #include <spawn.h>
+#include <TargetConditionals.h>
 extern char **environ;
 #endif
 
@@ -325,7 +326,12 @@ tjs_error invokeMethodIfPresent(iTJSDispatch2 *target, const tjs_char *name,
 }
 
 void openExternal(const ttstr &target, const ttstr &args = ttstr()) {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    (void)target;
+    (void)args;
+    logCompatOnce(TJS_W("process.dll"),
+                  TJS_W("external process launch is unavailable on iOS"));
+#elif defined(__APPLE__)
     std::string command = "open " + shellQuote(toUtf8(target));
     if(!args.IsEmpty())
         command += " --args " + toUtf8(args);
@@ -336,7 +342,11 @@ void openExternal(const ttstr &target, const ttstr &args = ttstr()) {
 }
 
 tjs_int spawnShellCommand(const std::string &command) {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    (void)command;
+    logCompatOnce(TJS_W("process.dll"),
+                  TJS_W("shell command launch is unavailable on iOS"));
+#elif defined(__APPLE__)
     pid_t pid = -1;
     const char *argv[] = {"/bin/sh", "-c", command.c_str(), nullptr};
     if(posix_spawn(&pid, "/bin/sh", nullptr, nullptr,

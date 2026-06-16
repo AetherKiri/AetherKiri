@@ -1118,6 +1118,7 @@ namespace motion {
         return detail::makeDictionary({
             { "chara", _chara },
             { "motion", _motionKey },
+            { "resolution", _resolution },
             { "tickcount", getTickCount() },
             { "speed", _speed },
             { "outline", tTJSVariant(_outline) },
@@ -1141,6 +1142,11 @@ namespace motion {
            value.Type() != tvtVoid) {
             _motionKey = value;
             ensureMotionLoaded();
+        }
+
+        if(getObjectProperty(data, TJS_W("resolution"), value) &&
+           value.Type() != tvtVoid) {
+            _resolution = value.AsReal();
         }
 
         if(getObjectProperty(data, TJS_W("tickcount"), value) &&

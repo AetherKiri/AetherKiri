@@ -30,6 +30,7 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
+#include <array>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstdint>
@@ -672,6 +673,28 @@ float edge(vec2 a, vec2 b, vec2 p) {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
+vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
+    vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
+    ivec2 p0 = ivec2(floor(center_coord));
+    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
+    vec2 f = clamp(fract(center_coord), vec2(0.0), vec2(1.0));
+    vec4 c00 = imageLoad(src_img, p0);
+    vec4 c10 = imageLoad(src_img, ivec2(p1.x, p0.y));
+    vec4 c01 = imageLoad(src_img, ivec2(p0.x, p1.y));
+    vec4 c11 = imageLoad(src_img, p1);
+    c00.rgb *= c00.a;
+    c10.rgb *= c10.a;
+    c01.rgb *= c01.a;
+    c11.rgb *= c11.a;
+    vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    if (premul.a > 0.00001) {
+        premul.rgb /= premul.a;
+    } else {
+        premul.rgb = vec3(0.0);
+    }
+    return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
 void main() {
     ivec2 local = ivec2(gl_GlobalInvocationID.xy);
     if (local.x >= pc.rect1.x || local.y >= pc.rect1.y) {
@@ -699,8 +722,7 @@ void main() {
         float w2 = edge(d0, d1, p) / area;
         if (w0 >= -0.0001 && w1 >= -0.0001 && w2 >= -0.0001) {
             vec2 src_pos_f = v0.zw * w0 + v1.zw * w1 + v2.zw * w2;
-            ivec2 src_pos = clamp(ivec2(floor(src_pos_f)), ivec2(0), src_limit);
-            imageStore(dst_img, dst_pos, imageLoad(src_img, src_pos));
+            imageStore(dst_img, dst_pos, load_bilinear(src_limit, src_pos_f));
             return;
         }
     }
@@ -1823,6 +1845,7 @@ public:
 
     void release_frame_texture() {
         release_rd_texture(true);
+        release_presentation_textures(true);
         frame_texture_.unref();
         frame_texture_backend_ = "none";
     }
@@ -2052,6 +2075,15 @@ public:
                 handle_, &texture_id, &width, &height, &serial);
             if (gpu_result == ENGINE_RESULT_OK && texture_id != 0) {
                 if (normalized_backend == ENGINE_RENDERER_GPU_BRIDGE) {
+                    Ref<Texture2D> presented_texture =
+                        update_presented_bridge_texture(
+                            texture_id, width, height, serial,
+                            "godot_external_presented");
+                    if (presented_texture.is_valid()) {
+                        frame_texture_.unref();
+                        release_imported_texture();
+                        return presented_texture;
+                    }
                     Ref<Texture2D> imported_texture =
                         update_imported_gpu_bridge_texture(texture_id, width,
                                                            height);
@@ -2069,6 +2101,15 @@ public:
                         return bridge_texture;
                     }
                 } else {
+                    Ref<Texture2D> presented_texture =
+                        update_presented_bridge_texture(
+                            texture_id, width, height, serial,
+                            "godot_native_gpu_presented");
+                    if (presented_texture.is_valid()) {
+                        frame_texture_.unref();
+                        release_imported_texture();
+                        return presented_texture;
+                    }
                     Ref<Texture2D> native_texture = ResolveBridgeTexture(texture_id);
                     if (native_texture.is_valid()) {
                         release_imported_texture();
@@ -2415,6 +2456,29 @@ private:
         }
     }
 
+    void release_presentation_textures(bool free_rids) {
+        for (size_t i = 0; i < frame_present_textures_.size(); ++i) {
+            frame_present_textures_[i].unref();
+            if (frame_present_rids_[i].is_valid()) {
+                if (free_rids) {
+                    auto op = std::make_shared<GodotGpuOp>();
+                    op->type = GodotGpuOp::Type::Release;
+                    op->dst = frame_present_rids_[i];
+                    RunGodotGpuOpSync(op);
+                }
+                frame_present_rids_[i] = RID();
+            }
+        }
+        frame_present_width_ = 0;
+        frame_present_height_ = 0;
+        frame_present_current_slot_ = 0;
+        frame_present_serial_ = UINT64_MAX;
+        if (frame_texture_backend_ == "godot_native_gpu_presented" ||
+            frame_texture_backend_ == "godot_external_presented") {
+            frame_texture_backend_ = "none";
+        }
+    }
+
     Ref<Texture2D> update_rd_texture(const engine_frame_desc_t &desc,
                                      const PackedByteArray &data) {
         RenderingDevice *rd = main_rendering_device();
@@ -2468,6 +2532,92 @@ private:
         }
 
         return frame_rd_texture_;
+    }
+
+    bool ensure_presentation_textures(uint32_t width, uint32_t height) {
+        RenderingDevice *rd = main_rendering_device();
+        if (rd == nullptr || !SupportsGodotRenderingDeviceGpu() ||
+            width == 0 || height == 0) {
+            return false;
+        }
+
+        const bool reusable =
+            frame_present_width_ == width &&
+            frame_present_height_ == height &&
+            frame_present_rids_[0].is_valid() &&
+            frame_present_rids_[1].is_valid() &&
+            frame_present_textures_[0].is_valid() &&
+            frame_present_textures_[1].is_valid();
+        if (reusable) {
+            return true;
+        }
+
+        release_presentation_textures(true);
+        Ref<RDTextureFormat> format = MakeRgbaTextureFormat(width, height);
+        Ref<RDTextureView> view;
+        view.instantiate();
+        TypedArray<PackedByteArray> initial_data;
+
+        for (size_t i = 0; i < frame_present_rids_.size(); ++i) {
+            frame_present_rids_[i] = rd->texture_create(format, view, initial_data);
+            if (!frame_present_rids_[i].is_valid()) {
+                release_presentation_textures(true);
+                return false;
+            }
+            frame_present_textures_[i].instantiate();
+            frame_present_textures_[i]->set_texture_rd_rid(frame_present_rids_[i]);
+        }
+
+        frame_present_width_ = width;
+        frame_present_height_ = height;
+        frame_present_current_slot_ = 0;
+        frame_present_serial_ = UINT64_MAX;
+        return true;
+    }
+
+    Ref<Texture2D> update_presented_bridge_texture(uint64_t texture_id,
+                                                   uint32_t width,
+                                                   uint32_t height,
+                                                   uint64_t serial,
+                                                   const char *backend_name) {
+        if (texture_id == 0 || width == 0 || height == 0) {
+            return Ref<Texture2D>();
+        }
+        if (frame_present_serial_ == serial &&
+            frame_present_width_ == width &&
+            frame_present_height_ == height &&
+            frame_present_textures_[frame_present_current_slot_].is_valid()) {
+            frame_texture_serial_ = serial;
+            frame_texture_backend_ = backend_name;
+            return frame_present_textures_[frame_present_current_slot_];
+        }
+
+        GodotGpuTextureRecord source;
+        if (!ResolveBridgeTextureRecord(texture_id, source) ||
+            !source.rid.is_valid()) {
+            return Ref<Texture2D>();
+        }
+        if (!ensure_presentation_textures(width, height)) {
+            return Ref<Texture2D>();
+        }
+
+        const size_t next_slot = 1u - frame_present_current_slot_;
+        auto op = std::make_shared<GodotGpuOp>();
+        op->type = GodotGpuOp::Type::Copy;
+        op->src = source.rid;
+        op->dst = frame_present_rids_[next_slot];
+        op->src_pos = Vector3();
+        op->dst_pos = Vector3();
+        op->size = Vector3(width, height, 1);
+        if (!RunGodotGpuOpSync(op)) {
+            return Ref<Texture2D>();
+        }
+
+        frame_present_current_slot_ = next_slot;
+        frame_present_serial_ = serial;
+        frame_texture_serial_ = serial;
+        frame_texture_backend_ = backend_name;
+        return frame_present_textures_[frame_present_current_slot_];
     }
 
     Ref<Texture2D> update_imported_gpu_bridge_texture(uint64_t texture_id,
@@ -2543,6 +2693,12 @@ private:
     uint64_t frame_imported_source_id_ = 0;
     uint32_t frame_imported_width_ = 0;
     uint32_t frame_imported_height_ = 0;
+    std::array<Ref<Texture2DRD>, 2> frame_present_textures_;
+    std::array<RID, 2> frame_present_rids_;
+    uint32_t frame_present_width_ = 0;
+    uint32_t frame_present_height_ = 0;
+    size_t frame_present_current_slot_ = 0;
+    uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
 };
 

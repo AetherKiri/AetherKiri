@@ -189,9 +189,7 @@ bool IsOpaqueAlphaBlendCopyEnabled() {
 bool IsGpuCopyTrianglesEnabled() {
     static const bool enabled = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_COPY_TRIANGLES");
-        // Keep triangle-copy acceleration opt-in until scaled copies have a
-        // narrow repro and can be re-enabled without thumbnail regressions.
-        return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+        return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }
@@ -200,6 +198,45 @@ bool RectAbsSizeMatches(const tTVPRect &dst, const tTVPRect &src) {
     return dst.get_width() > 0 && dst.get_height() > 0 &&
            std::abs(src.get_width()) == dst.get_width() &&
            std::abs(src.get_height()) == dst.get_height();
+}
+
+bool RectNeedsAreaDownsample(const tTVPRect &dst, const tTVPRect &src) {
+    return dst.get_width() > 0 && dst.get_height() > 0 &&
+           (dst.get_width() < std::abs(src.get_width()) ||
+            dst.get_height() < std::abs(src.get_height()));
+}
+
+bool TrianglesNeedAreaDownsample(uint32_t triangle_count,
+                                 const tTVPPointD *dst_points,
+                                 const tTVPPointD *src_points) {
+    if (triangle_count == 0 || dst_points == nullptr || src_points == nullptr) {
+        return false;
+    }
+    double dst_left = dst_points[0].x;
+    double dst_right = dst_points[0].x;
+    double dst_top = dst_points[0].y;
+    double dst_bottom = dst_points[0].y;
+    double src_left = src_points[0].x;
+    double src_right = src_points[0].x;
+    double src_top = src_points[0].y;
+    double src_bottom = src_points[0].y;
+    const uint32_t point_count = triangle_count * 3u;
+    for (uint32_t i = 1; i < point_count; ++i) {
+        dst_left = std::min(dst_left, dst_points[i].x);
+        dst_right = std::max(dst_right, dst_points[i].x);
+        dst_top = std::min(dst_top, dst_points[i].y);
+        dst_bottom = std::max(dst_bottom, dst_points[i].y);
+        src_left = std::min(src_left, src_points[i].x);
+        src_right = std::max(src_right, src_points[i].x);
+        src_top = std::min(src_top, src_points[i].y);
+        src_bottom = std::max(src_bottom, src_points[i].y);
+    }
+    const double dst_w = dst_right - dst_left;
+    const double dst_h = dst_bottom - dst_top;
+    const double src_w = src_right - src_left;
+    const double src_h = src_bottom - src_top;
+    return dst_w > 0.0 && dst_h > 0.0 &&
+           (dst_w + 0.001 < src_w || dst_h + 0.001 < src_h);
 }
 
 bool RectBoundsInsideTexture(const tTVPRect &rc, const GodotTexture2D *texture) {
@@ -685,6 +722,26 @@ bool GodotRenderManager::GetTextureStat(iTVPTexture2D *texture,
     return SoftwareDelegate()->GetTextureStat(texture, vmemsize);
 }
 
+int GodotRenderManager::EnumParameterID(const char *name) {
+    return SoftwareDelegate()->EnumParameterID(name);
+}
+
+void GodotRenderManager::SetParameterUInt(int id, unsigned int Value) {
+    SoftwareDelegate()->SetParameterUInt(id, Value);
+}
+
+void GodotRenderManager::SetParameterInt(int id, int Value) {
+    SoftwareDelegate()->SetParameterInt(id, Value);
+}
+
+void GodotRenderManager::SetParameterPtr(int id, const void *Value) {
+    SoftwareDelegate()->SetParameterPtr(id, Value);
+}
+
+void GodotRenderManager::SetParameterFloat(int id, float Value) {
+    SoftwareDelegate()->SetParameterFloat(id, Value);
+}
+
 void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *tar,
                                      iTVPTexture2D *reftar,
                                      const tTVPRect &rctar,
@@ -728,7 +785,9 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             CountGpuFastPath(method_name);
             return;
         }
-        if (!src_rc.is_empty() && IsGpuCopyTrianglesEnabled()) {
+        const bool needs_area_downsample = RectNeedsAreaDownsample(rctar, src_rc);
+        if (!needs_area_downsample && !src_rc.is_empty() &&
+            IsGpuCopyTrianglesEnabled()) {
             const tTVPPointD dst_pt[6] = {
                 {static_cast<double>(rctar.left), static_cast<double>(rctar.top)},
                 {static_cast<double>(rctar.right), static_cast<double>(rctar.top)},
@@ -751,9 +810,11 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             }
         }
         if (!RectAbsSizeMatches(rctar, src_rc)) {
-            CountCopyFallbackReason(IsGpuCopyTrianglesEnabled()
-                                        ? "scaled_copy_bridge_failed"
-                                        : "scaled_copy_cpu");
+            CountCopyFallbackReason(needs_area_downsample
+                                        ? "scaled_copy_area_downsample"
+                                        : IsGpuCopyTrianglesEnabled()
+                                              ? "scaled_copy_bridge_failed"
+                                              : "scaled_copy_cpu");
             CountMethodFallback(method);
             SoftwareDelegate()->OperateRect(delegate_method, tar, reftar, rctar, textures);
             if (dst != nullptr) {
@@ -870,7 +931,10 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
                 CountGpuFastPath(method_name + ":CopyOpaque");
                 return;
             }
-            if (!src_rc.is_empty() && IsGpuCopyTrianglesEnabled()) {
+            const bool needs_area_downsample =
+                RectNeedsAreaDownsample(rctar, src_rc);
+            if (!needs_area_downsample && !src_rc.is_empty() &&
+                IsGpuCopyTrianglesEnabled()) {
                 const tTVPPointD dst_pt[6] = {
                     {static_cast<double>(rctar.left), static_cast<double>(rctar.top)},
                     {static_cast<double>(rctar.right), static_cast<double>(rctar.top)},
@@ -894,9 +958,11 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             }
         }
         if (!RectAbsSizeMatches(rctar, src_rc)) {
-            CountCopyFallbackReason(IsGpuCopyTrianglesEnabled()
-                                        ? "alpha_blend_a_scaled"
-                                        : "alpha_blend_a_scaled_cpu");
+            CountCopyFallbackReason(RectNeedsAreaDownsample(rctar, src_rc)
+                                        ? "alpha_blend_a_area_downsample"
+                                        : IsGpuCopyTrianglesEnabled()
+                                              ? "alpha_blend_a_scaled"
+                                              : "alpha_blend_a_scaled_cpu");
             CountMethodFallback(method);
             SoftwareDelegate()->OperateRect(delegate_method, tar, reftar, rctar, textures);
             if (dst != nullptr) {
@@ -1025,6 +1091,8 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
         if (dst != nullptr && src != nullptr &&
             IsGpuRectFastPathEnabled("Copy") &&
             IsGpuCopyTrianglesEnabled() &&
+            !TrianglesNeedAreaDownsample(static_cast<uint32_t>(nTriangles),
+                                         pttar, textures[0].second) &&
             dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
             src->UploadCpuToGpu() &&
             dst->CopyTrianglesGpuFrom(src, static_cast<uint32_t>(nTriangles),

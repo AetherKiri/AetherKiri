@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 
 using namespace motion::internal;
 
@@ -207,6 +208,10 @@ namespace {
         const char *enabled = std::getenv("AETHERKIRI_MOTION_DEBUG");
         if(!enabled || !*enabled || std::strcmp(enabled, "0") == 0) {
             return false;
+        }
+        const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
+        if(debugAll && *debugAll && std::strcmp(debugAll, "0") != 0) {
+            return true;
         }
         const auto motion = renderDebugLowercase(motionPath);
         const auto source = renderDebugLowercase(sourceKey);
@@ -542,6 +547,231 @@ namespace {
         return bounds;
     }
 
+    bool isCenteredGameMotion(const std::string &motionPath) {
+        const auto motion = renderDebugLowercase(motionPath);
+        const auto slash = motion.find_last_of("/\\");
+        const std::string name =
+            slash == std::string::npos ? motion : motion.substr(slash + 1);
+        if(name.rfind("sd", 0) != 0 || name.size() < 4) {
+            return false;
+        }
+        return std::isdigit(static_cast<unsigned char>(name[2]));
+    }
+
+    double readMotionResolutionValue(const tTJSVariant &value) {
+        if(value.Type() == tvtInteger || value.Type() == tvtReal) {
+            return value.AsReal();
+        }
+        if(value.Type() != tvtObject || value.AsObjectNoAddRef() == nullptr) {
+            return 0.0;
+        }
+        tTJSVariant resolution;
+        if(getObjectProperty(value, TJS_W("resolution"), resolution) &&
+           resolution.Type() != tvtVoid) {
+            return resolution.AsReal();
+        }
+        return 0.0;
+    }
+
+    double resolveCenteredGameMotionResolution(
+        double explicitResolution,
+        const tTJSVariant &tags,
+        const tTJSVariant &metadata,
+        const std::string &motionPath) {
+        if(std::isfinite(explicitResolution) && explicitResolution > 0.0) {
+            return explicitResolution;
+        }
+        const double tagResolution = readMotionResolutionValue(tags);
+        if(std::isfinite(tagResolution) && tagResolution > 0.0) {
+            return tagResolution;
+        }
+        const double metadataResolution = readMotionResolutionValue(metadata);
+        if(std::isfinite(metadataResolution) && metadataResolution > 0.0) {
+            return metadataResolution;
+        }
+        return isCenteredGameMotion(motionPath) ? 133.33 : 100.0;
+    }
+
+    void translatePreparedRenderItem(
+        motion::detail::PlayerRuntime::PreparedRenderItem &entry,
+        float dx,
+        float dy) {
+        auto translatePointArray = [dx, dy](auto &points) {
+            for(size_t i = 0; i + 1 < points.size(); i += 2) {
+                points[i] += dx;
+                points[i + 1] += dy;
+            }
+        };
+        translatePointArray(entry.corners);
+        translatePointArray(entry.meshPoints);
+        if(validRenderPaintBox(entry.paintBox)) {
+            entry.paintBox[0] += dx;
+            entry.paintBox[1] += dy;
+            entry.paintBox[2] += dx;
+            entry.paintBox[3] += dy;
+        }
+        if(entry.hasViewport && validRenderPaintBox(entry.viewport)) {
+            entry.viewport[0] += dx;
+            entry.viewport[1] += dy;
+            entry.viewport[2] += dx;
+            entry.viewport[3] += dy;
+        }
+    }
+
+    void scalePreparedRenderItem(
+        motion::detail::PlayerRuntime::PreparedRenderItem &entry,
+        float originX,
+        float originY,
+        float scale) {
+        auto scalePointArray = [originX, originY, scale](auto &points) {
+            for(size_t i = 0; i + 1 < points.size(); i += 2) {
+                points[i] = originX + (points[i] - originX) * scale;
+                points[i + 1] = originY + (points[i + 1] - originY) * scale;
+            }
+        };
+        scalePointArray(entry.corners);
+        scalePointArray(entry.meshPoints);
+        if(validRenderPaintBox(entry.paintBox)) {
+            entry.paintBox[0] = originX + (entry.paintBox[0] - originX) * scale;
+            entry.paintBox[1] = originY + (entry.paintBox[1] - originY) * scale;
+            entry.paintBox[2] = originX + (entry.paintBox[2] - originX) * scale;
+            entry.paintBox[3] = originY + (entry.paintBox[3] - originY) * scale;
+        }
+        if(entry.hasViewport && validRenderPaintBox(entry.viewport)) {
+            entry.viewport[0] = originX + (entry.viewport[0] - originX) * scale;
+            entry.viewport[1] = originY + (entry.viewport[1] - originY) * scale;
+            entry.viewport[2] = originX + (entry.viewport[2] - originX) * scale;
+            entry.viewport[3] = originY + (entry.viewport[3] - originY) * scale;
+        }
+    }
+
+    void adjustPreparedRenderItemsForCenteredGameMotion(
+        motion::detail::PlayerRuntime &runtime,
+        const std::string &motionPath,
+        tjs_int canvasWidth,
+        tjs_int canvasHeight,
+        double configuredResolution) {
+        if(!isCenteredGameMotion(motionPath) ||
+           canvasWidth <= 0 || canvasHeight <= 0 ||
+           runtime.preparedRenderItems.empty()) {
+            return;
+        }
+
+        std::array<float, 4> bounds{0.0f, 0.0f, 0.0f, 0.0f};
+        bool haveBounds = false;
+        for(const auto &entry : runtime.preparedRenderItems) {
+            if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+               entry.opacity <= 0 || !entry.hasOwnSource) {
+                continue;
+            }
+            auto entryBounds = boundsFromRenderCorners(entry.corners);
+            if(!validRenderPaintBox(entryBounds)) {
+                entryBounds = entry.paintBox;
+            }
+            if(!validRenderPaintBox(entryBounds)) {
+                continue;
+            }
+            if(!haveBounds) {
+                bounds = entryBounds;
+                haveBounds = true;
+            } else {
+                bounds[0] = std::min(bounds[0], entryBounds[0]);
+                bounds[1] = std::min(bounds[1], entryBounds[1]);
+                bounds[2] = std::max(bounds[2], entryBounds[2]);
+                bounds[3] = std::max(bounds[3], entryBounds[3]);
+            }
+        }
+        if(!haveBounds || !validRenderPaintBox(bounds)) {
+            if(LOGGER && shouldDebugTitleRender(motionPath) &&
+               markRenderDebugLogged("centered-game-motion-no-bounds:" + motionPath)) {
+                LOGGER->info(
+                    "motion centered game presentation skipped: motion={} reason=no_bounds canvas={}x{} preparedItems={}",
+                    motionPath, canvasWidth, canvasHeight,
+                    runtime.preparedRenderItems.size());
+            }
+            return;
+        }
+
+        const float width = bounds[2] - bounds[0];
+        const float height = bounds[3] - bounds[1];
+        const float canvasW = static_cast<float>(canvasWidth);
+        const float canvasH = static_cast<float>(canvasHeight);
+        if(LOGGER && shouldDebugTitleRender(motionPath) &&
+           markRenderDebugLogged("centered-game-motion-candidate:" + motionPath)) {
+            LOGGER->info(
+                "motion centered game presentation candidate: motion={} bounds=[{:.1f},{:.1f},{:.1f},{:.1f}] size={:.1f}x{:.1f} canvas={}x{} preparedItems={}",
+                motionPath, bounds[0], bounds[1], bounds[2], bounds[3],
+                width, height, canvasWidth, canvasHeight,
+                runtime.preparedRenderItems.size());
+        }
+        if(width < canvasW * 0.08f || height < canvasH * 0.08f ||
+           width > canvasW * 0.90f || height > canvasH * 0.90f) {
+            return;
+        }
+
+        const float currentCenterX = (bounds[0] + bounds[2]) * 0.5f;
+        const float currentCenterY = (bounds[1] + bounds[3]) * 0.5f;
+        const float originToleranceX = std::max(16.0f, canvasW * 0.02f);
+        const float originToleranceY = std::max(16.0f, canvasH * 0.02f);
+        const bool topLeftOrigin =
+            std::fabs(bounds[0]) <= originToleranceX &&
+            std::fabs(bounds[1]) <= originToleranceY;
+        const bool centeredOrigin =
+            bounds[0] < 0.0f && bounds[1] < 0.0f &&
+            bounds[2] > 0.0f && bounds[3] > 0.0f &&
+            std::fabs(currentCenterX) <= originToleranceX &&
+            std::fabs(currentCenterY) <= originToleranceY;
+        if(!topLeftOrigin && !centeredOrigin) {
+            return;
+        }
+
+        const float motionScale =
+            (std::isfinite(configuredResolution) && configuredResolution > 0.0)
+                ? static_cast<float>(100.0 / configuredResolution)
+                : 1.0f;
+        float scaledCenterX = currentCenterX;
+        float scaledCenterY = currentCenterY;
+        std::array<float, 4> scaledBounds = bounds;
+        if(std::isfinite(motionScale) && motionScale > 0.0f &&
+           std::fabs(motionScale - 1.0f) >= 0.0001f) {
+            for(auto &entry : runtime.preparedRenderItems) {
+                scalePreparedRenderItem(entry, currentCenterX, currentCenterY,
+                                        motionScale);
+            }
+            scaledBounds[0] = currentCenterX +
+                (bounds[0] - currentCenterX) * motionScale;
+            scaledBounds[1] = currentCenterY +
+                (bounds[1] - currentCenterY) * motionScale;
+            scaledBounds[2] = currentCenterX +
+                (bounds[2] - currentCenterX) * motionScale;
+            scaledBounds[3] = currentCenterY +
+                (bounds[3] - currentCenterY) * motionScale;
+            scaledCenterX = (scaledBounds[0] + scaledBounds[2]) * 0.5f;
+            scaledCenterY = (scaledBounds[1] + scaledBounds[3]) * 0.5f;
+        }
+
+        const float targetCenterX = canvasW * 0.5f;
+        const float targetCenterY = canvasH * 0.5f;
+        const float translateX = std::round(targetCenterX - scaledCenterX);
+        const float translateY = std::round(targetCenterY - scaledCenterY);
+        if(std::fabs(translateX) < 0.5f && std::fabs(translateY) < 0.5f) {
+            return;
+        }
+
+        for(auto &entry : runtime.preparedRenderItems) {
+            translatePreparedRenderItem(entry, translateX, translateY);
+        }
+        if(LOGGER && shouldDebugTitleRender(motionPath) &&
+           markRenderDebugLogged("centered-game-motion:" + motionPath)) {
+            LOGGER->info(
+                "motion centered game presentation: motion={} bounds=[{:.1f},{:.1f},{:.1f},{:.1f}] scaledBounds=[{:.1f},{:.1f},{:.1f},{:.1f}] canvas={}x{} resolution={:.2f} scale={:.4f} translate={:.1f},{:.1f}",
+                motionPath, bounds[0], bounds[1], bounds[2], bounds[3],
+                scaledBounds[0], scaledBounds[1], scaledBounds[2],
+                scaledBounds[3], canvasWidth, canvasHeight,
+                configuredResolution, motionScale, translateX, translateY);
+        }
+    }
+
     void adjustPreparedRenderItemsForYuzuPresentation(
         motion::detail::PlayerRuntime &runtime,
         const std::string &motionPath,
@@ -712,27 +942,8 @@ namespace {
         if(usesCenteredPresentationOrigin) {
             const float translateX = static_cast<float>(canvasWidth) * 0.5f;
             const float translateY = static_cast<float>(canvasHeight) * 0.5f;
-            auto translatePointArray = [](auto &points, float dx, float dy) {
-                for(size_t i = 0; i + 1 < points.size(); i += 2) {
-                    points[i] += dx;
-                    points[i + 1] += dy;
-                }
-            };
             for(auto &entry : runtime.preparedRenderItems) {
-                translatePointArray(entry.corners, translateX, translateY);
-                translatePointArray(entry.meshPoints, translateX, translateY);
-                if(validRenderPaintBox(entry.paintBox)) {
-                    entry.paintBox[0] += translateX;
-                    entry.paintBox[1] += translateY;
-                    entry.paintBox[2] += translateX;
-                    entry.paintBox[3] += translateY;
-                }
-                if(entry.hasViewport && validRenderPaintBox(entry.viewport)) {
-                    entry.viewport[0] += translateX;
-                    entry.viewport[1] += translateY;
-                    entry.viewport[2] += translateX;
-                    entry.viewport[3] += translateY;
-                }
+                translatePreparedRenderItem(entry, translateX, translateY);
             }
             if(LOGGER && shouldDebugTitleRender(motionPath) &&
                markRenderDebugLogged("yuzu-presentation-origin:" + motionPath)) {
@@ -1558,6 +1769,70 @@ namespace {
         return score;
     }
 
+    bool genericMotionLayerNameLooksLikeUiChrome(const std::string &name) {
+        return name.find("bar") != std::string::npos ||
+            name.find("frame") != std::string::npos ||
+            name.find("grad") != std::string::npos ||
+            name.find("eff") != std::string::npos ||
+            name.find("mask") != std::string::npos ||
+            name.find("sq_") != std::string::npos ||
+            name.find("square") != std::string::npos ||
+            name.find("logo") != std::string::npos ||
+            name.find("date") != std::string::npos ||
+            name.find("passive") != std::string::npos ||
+            name.find("message") != std::string::npos ||
+            name.find("text") != std::string::npos ||
+            name.find("trans") != std::string::npos ||
+            name.find("クリック") != std::string::npos ||
+            name.find("待ち") != std::string::npos ||
+            name.find("メッセージ") != std::string::npos ||
+            name.find("テキスト") != std::string::npos ||
+            name.find("名前") != std::string::npos;
+    }
+
+    int scoreGenericMotionPresentationChild(tTJSNI_BaseLayer *parent,
+                                            tTJSNI_BaseLayer *child,
+                                            int canvasWidth,
+                                            int canvasHeight,
+                                            int depth) {
+        if(!parent || !child || child == parent || !child->GetOwnerNoAddRef()) {
+            return -1;
+        }
+        if(!motionLayerIsVisiblePresentationSurface(child) ||
+           !child->GetHasImage() ||
+           !motionLayerCoversCanvas(child, canvasWidth, canvasHeight)) {
+            return -1;
+        }
+        if(child->GetCount() > 0) {
+            return -1;
+        }
+
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(child->GetName()));
+        if(genericMotionLayerNameLooksLikeUiChrome(name)) {
+            return -1;
+        }
+
+        int score = 100;
+        if(name == "ev") {
+            score += 700;
+        } else if(name.find("ev") != std::string::npos ||
+                  name.find("event") != std::string::npos ||
+                  name.find("cg") != std::string::npos) {
+            score += 500;
+        } else if(name == "stage" || name.find("stage") != std::string::npos) {
+            score += 350;
+        } else if(name.find("背景") != std::string::npos ||
+                  name.find("background") != std::string::npos ||
+                  name.find("bg") != std::string::npos) {
+            score += 80;
+        }
+        score += static_cast<int>(child->GetOverallOrderIndex());
+        score += static_cast<int>(child->GetOrderIndex()) * 2;
+        score -= depth * 4;
+        return score;
+    }
+
     bool yuzuTitleLayerNameMatches(tTJSNI_BaseLayer *layer) {
         if(!layer) {
             return false;
@@ -1643,6 +1918,41 @@ namespace {
                         best.layer = child;
                         best.score = score;
                     }
+                }
+                self(self, child, depth + 1);
+            }
+        };
+        visit(visit, parent, 0);
+        return best.layer;
+    }
+
+    tTJSNI_BaseLayer *findGenericMotionPresentationChild(
+        tTJSNI_BaseLayer *parent,
+        int canvasWidth,
+        int canvasHeight) {
+        if(!parent || parent->GetCount() <= 0) {
+            return nullptr;
+        }
+
+        struct Candidate {
+            tTJSNI_BaseLayer *layer = nullptr;
+            int score = -1;
+        };
+        Candidate best;
+        auto visit = [&](auto &&self,
+                         tTJSNI_BaseLayer *current,
+                         int depth) -> void {
+            if(!current || current->GetCount() <= 0) {
+                return;
+            }
+            const auto childCount = current->GetCount();
+            for(tjs_uint i = 0; i < childCount; ++i) {
+                auto *child = current->GetChildren(static_cast<tjs_int>(i));
+                const int score = scoreGenericMotionPresentationChild(
+                    current, child, canvasWidth, canvasHeight, depth);
+                if(score > best.score) {
+                    best.layer = child;
+                    best.score = score;
                 }
                 self(self, child, depth + 1);
             }
@@ -2866,7 +3176,7 @@ namespace motion {
                         buildAffineTrianglePoints(command.localCorners, 0.0f,
                                                   0.0f);
                     targetLayer->AffineCopy(localPts.data(), srcBmp.get(),
-                                            sourceRect, stNearest,
+                                            sourceRect, stLinear,
                                             command.clearEnabled);
                 }
             } else {
@@ -2879,12 +3189,12 @@ namespace motion {
                 if(command.meshType == 1) {
                     targetLayer->BezierPatchCopy(
                         localMeshPoints.data(), command.meshDivX,
-                        command.meshDivY, srcBmp.get(), sourceRect, stNearest,
+                        command.meshDivY, srcBmp.get(), sourceRect, stLinear,
                         command.clearEnabled);
                 } else if(command.meshType == 2) {
                     targetLayer->MeshCopy(localMeshPoints.data(),
                                           command.meshDivX, command.meshDivY,
-                                          srcBmp.get(), sourceRect, stNearest,
+                                          srcBmp.get(), sourceRect, stLinear,
                                           command.clearEnabled);
                 } else {
                     return false;
@@ -3169,13 +3479,13 @@ namespace motion {
                         if(directCopyWithoutOpacity) {
                             branch = "direct.affineCopy";
                             renderLayer->AffineCopy(worldPts.data(), srcBmp.get(),
-                                                    sourceRect, stNearest,
+                                                    sourceRect, stLinear,
                                                     command.clearEnabled);
                         } else {
                             renderLayer->OperateAffine(worldPts.data(),
                                                        srcBmp.get(), sourceRect,
                                                        blendMode, opa,
-                                                       stNearest);
+                                                       stLinear);
                         }
                     }
                 } else {
@@ -3192,13 +3502,13 @@ namespace motion {
                                 renderLayer->BezierPatchCopy(
                                     worldMeshPoints.data(), command.meshDivX,
                                     command.meshDivY, srcBmp.get(), sourceRect,
-                                    stNearest, command.clearEnabled);
+                                    stLinear, command.clearEnabled);
                             } else {
                                 branch = "direct.operateBezierPatch";
                                 renderLayer->OperateBezierPatch(
                                     worldMeshPoints.data(), command.meshDivX,
                                     command.meshDivY, srcBmp.get(), sourceRect,
-                                    blendMode, opa, stNearest,
+                                    blendMode, opa, stLinear,
                                     command.clearEnabled);
                             }
                         } else if(command.meshType == 2) {
@@ -3207,13 +3517,13 @@ namespace motion {
                                 renderLayer->MeshCopy(
                                     worldMeshPoints.data(), command.meshDivX,
                                     command.meshDivY, srcBmp.get(), sourceRect,
-                                    stNearest, command.clearEnabled);
+                                    stLinear, command.clearEnabled);
                             } else {
                                 branch = "direct.operateMesh";
                                 renderLayer->OperateMesh(
                                     worldMeshPoints.data(), command.meshDivX,
                                     command.meshDivY, srcBmp.get(), sourceRect,
-                                    blendMode, opa, stNearest,
+                                    blendMode, opa, stLinear,
                                     command.clearEnabled);
                             }
                         } else {
@@ -3437,6 +3747,10 @@ namespace motion {
         applyPreparedRenderItemTranslateOffsets();
         adjustPreparedRenderItemsForYuzuPresentation(
             *_runtime, motionPath, adaptor->getWidth(), adaptor->getHeight());
+        adjustPreparedRenderItemsForCenteredGameMotion(
+            *_runtime, motionPath, adaptor->getWidth(), adaptor->getHeight(),
+            resolveCenteredGameMotionResolution(_resolution, _tags, _metadata,
+                                                motionPath));
 
         iTJSDispatch2 *renderLayerObject =
             ensureReusableLayerObject(_runtime->internalRenderLayer,
@@ -3534,6 +3848,8 @@ namespace motion {
         tTJSNI_BaseLayer *finalNativeLayer = resolveNativeLayer(finalLayerObject);
         const bool yuzuTitlePresentation =
             isYuzuTitlePresentationMotion(motionPath);
+        const bool yuzuLogoPresentation =
+            isYuzuLogoPresentationMotion(motionPath);
         if(yuzuTitlePresentation && _runtime->activeMotion &&
            _runtime->activeMotion->width > 0 &&
            _runtime->activeMotion->height > 0) {
@@ -3541,7 +3857,7 @@ namespace motion {
             canvasHeight = static_cast<int>(_runtime->activeMotion->height);
         }
         const bool allowTransientPresentationLayer =
-            !yuzuTitlePresentation;
+            yuzuLogoPresentation && !yuzuTitlePresentation;
         tTJSNI_BaseLayer *presentationChild = nullptr;
         if(yuzuTitlePresentation) {
             presentationChild = findMotionPresentationChild(
@@ -3550,10 +3866,13 @@ namespace motion {
                 presentationChild = findYuzuTitlePresentationLayer(
                     finalNativeLayer, canvasWidth, canvasHeight);
             }
-        } else {
+        } else if(yuzuLogoPresentation) {
             presentationChild = findMotionPresentationChild(
                 finalNativeLayer, canvasWidth, canvasHeight,
                 allowTransientPresentationLayer);
+        } else {
+            presentationChild = findGenericMotionPresentationChild(
+                finalNativeLayer, canvasWidth, canvasHeight);
         }
         if(presentationChild) {
             if(auto *presentationObject = presentationChild->GetOwnerNoAddRef()) {
@@ -3583,6 +3902,10 @@ namespace motion {
         applyPreparedRenderItemTranslateOffsets();
         adjustPreparedRenderItemsForYuzuPresentation(
             *_runtime, motionPath, canvasWidth, canvasHeight);
+        adjustPreparedRenderItemsForCenteredGameMotion(
+            *_runtime, motionPath, canvasWidth, canvasHeight,
+            resolveCenteredGameMotionResolution(_resolution, _tags, _metadata,
+                                                motionPath));
         if(yuzuTitlePresentation) {
             logYuzuTitlePreparedSummary(*_runtime, motionPath, _frameTickCount);
         }
@@ -3676,9 +3999,10 @@ namespace motion {
                 static_cast<const void *>(renderLayer));
         }
         if(renderLayer && LOGGER && shouldDebugTitleRender(motionPath)) {
-            static int titleTreeLogCount = 0;
-            if(titleTreeLogCount < 3) {
-                ++titleTreeLogCount;
+            static std::unordered_map<std::string, int> treeLogCountByMotion;
+            auto &treeLogCount = treeLogCountByMotion[motionPath];
+            if(treeLogCount < 2) {
+                ++treeLogCount;
                 try {
                     std::ostringstream out;
                     out << "motion render target tree: motion=" << motionPath
@@ -3786,6 +4110,10 @@ namespace motion {
         applyPreparedRenderItemTranslateOffsets();
         adjustPreparedRenderItemsForYuzuPresentation(
             *_runtime, motionPath, canvasWidth, canvasHeight);
+        adjustPreparedRenderItemsForCenteredGameMotion(
+            *_runtime, motionPath, canvasWidth, canvasHeight,
+            resolveCenteredGameMotionResolution(_resolution, _tags, _metadata,
+                                                motionPath));
 
         if(!renderMotionFrameToTarget(renderTarget, canvasWidth, canvasHeight,
                                       isAccurateSlaRenderEnabled()

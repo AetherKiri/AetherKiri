@@ -2,24 +2,43 @@
 
 #include "TVPScreen.h"
 #include "Application.h"
+#include <cstdint>
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
 #include "krkr_egl_context.h"
 #endif
 
-int tTVPScreen::GetWidth() { return 2048; }
-int tTVPScreen::GetHeight() {
+namespace {
+bool GetHostSurfaceSize(uint32_t &width, uint32_t &height) {
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
     auto& egl = krkr::GetEngineEGLContext();
     if (egl.IsValid()) {
-        uint32_t w = egl.GetWidth();
-        uint32_t h = egl.GetHeight();
-        if (w > 0 && h > 0) {
-            int baseW = GetWidth();
-            return baseW * static_cast<int>(h) / static_cast<int>(w);
+        width = egl.GetWidth();
+        height = egl.GetHeight();
+        if (width > 0 && height > 0) {
+            return true;
         }
     }
 #endif
-    return GetWidth();
+    return false;
+}
+} // namespace
+
+int tTVPScreen::GetWidth() {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    if (GetHostSurfaceSize(width, height)) {
+        return static_cast<int>(width);
+    }
+    return 1920;
+}
+
+int tTVPScreen::GetHeight() {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    if (GetHostSurfaceSize(width, height)) {
+        return static_cast<int>(height);
+    }
+    return 1080;
 }
 
 int tTVPScreen::GetDesktopLeft() { return 0; }

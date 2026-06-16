@@ -16,6 +16,8 @@ fi
 GODOT_BIN="${GODOT_BIN:-/Applications/Godot.app/Contents/MacOS/Godot}"
 GODOT_EXPORT_TEMPLATE="${GODOT_EXPORT_TEMPLATE:-$HOME/Library/Application Support/Godot/export_templates/4.6.3.stable/macos.zip}"
 GODOT_APP_DIR="$PROJECT_ROOT/apps/godot_app"
+RUNTIME_CJK_FONT_SOURCE="$GODOT_APP_DIR/assets/fonts/aetherkiri-runtime-cjk.otf"
+RUNTIME_SYMBOL_FONT_SOURCE="$GODOT_APP_DIR/assets/fonts/aetherkiri-runtime-symbols.ttf"
 CMAKE_CONFIG_PRESET="MacOS ${BUILD_TYPE_CAP} Config"
 CMAKE_BUILD_PRESET="MacOS ${BUILD_TYPE_CAP} Build"
 CMAKE_BUILD_DIR="$PROJECT_ROOT/out/macos/$BUILD_TYPE_LOWER"
@@ -67,6 +69,25 @@ if [[ -z "$NINJA_BIN" ]]; then
 fi
 export CMAKE_MAKE_PROGRAM="$NINJA_BIN"
 
+stage_macos_runtime_fonts() {
+    local app_bundle="$1"
+    local resource_dir="$app_bundle/Contents/Resources"
+    local font_dir="$resource_dir/fonts"
+
+    mkdir -p "$font_dir"
+    if [[ -f "$RUNTIME_CJK_FONT_SOURCE" ]]; then
+        cp -f "$RUNTIME_CJK_FONT_SOURCE" "$resource_dir/default.otf"
+        cp -f "$RUNTIME_CJK_FONT_SOURCE" "$font_dir/default.otf"
+    else
+        echo "Warning: runtime CJK font missing: $RUNTIME_CJK_FONT_SOURCE" >&2
+    fi
+    if [[ -f "$RUNTIME_SYMBOL_FONT_SOURCE" ]]; then
+        cp -f "$RUNTIME_SYMBOL_FONT_SOURCE" "$font_dir/symbols.ttf"
+    else
+        echo "Warning: runtime symbol font missing: $RUNTIME_SYMBOL_FONT_SOURCE" >&2
+    fi
+}
+
 echo "==> Building native engine and Godot extension"
 cmake_config_args=(-D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM")
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
@@ -103,6 +124,7 @@ else
     "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
         "$GODOT_EXPORT_MODE" "$GODOT_EXPORT_PRESET" "$GODOT_EXPORT_APP"
     if [[ -d "$GODOT_EXPORT_APP/Contents/Frameworks" ]]; then
+        stage_macos_runtime_fonts "$GODOT_EXPORT_APP"
         cp -f "$GODOT_BIN_DIR/libengine_api.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
         cp -f "$GODOT_BIN_DIR/libaether_kiri_godot.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
         codesign --force --sign - \

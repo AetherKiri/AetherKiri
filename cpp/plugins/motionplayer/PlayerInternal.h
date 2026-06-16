@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cmath>
+#include <cstdlib>
 #include "WindowIntf.h"
 #include <cstring>
 #include <optional>
@@ -71,6 +72,10 @@ namespace internal {
         inline bool shouldDebugPsbSource(
             const detail::MotionSnapshot &snapshot,
             const std::string &source) {
+            const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
+            if(debugAll && *debugAll && std::strcmp(debugAll, "0") != 0) {
+                return true;
+            }
             const auto path = psbDebugLowercase(snapshot.path);
             const auto src = psbDebugLowercase(source);
             return path.find("title.pimg") != std::string::npos ||

@@ -49,6 +49,8 @@ GODOT_BIN="${GODOT_BIN:-/Applications/Godot.app/Contents/MacOS/Godot}"
 GODOT_EXPORT_TEMPLATE="${GODOT_EXPORT_TEMPLATE:-$HOME/Library/Application Support/Godot/export_templates/4.6.3.stable/ios.zip}"
 GODOT_APP_DIR="$PROJECT_ROOT/apps/godot_app"
 GODOT_BIN_DIR="$GODOT_APP_DIR/bin/$GODOT_TRIPLET_DIR"
+RUNTIME_CJK_FONT_SOURCE="$GODOT_APP_DIR/assets/fonts/aetherkiri-runtime-cjk.otf"
+RUNTIME_SYMBOL_FONT_SOURCE="$GODOT_APP_DIR/assets/fonts/aetherkiri-runtime-symbols.ttf"
 PARALLEL_JOBS="${JOBS:-8}"
 FORCE_LOAD_PLUGIN_ARCHIVES=(
     "libkrkr2plugin.a"
@@ -143,8 +145,15 @@ fi
 combine_ios_static_extension() {
     local output="$1"
     local triplet="$2"
-    local vcpkg_lib_dir="$CMAKE_BUILD_DIR/vcpkg_installed/$triplet/lib"
-    local godot_cpp_lib="$vcpkg_lib_dir/libgodot-cpp.ios.template_release.arm64.a"
+    local vcpkg_triplet_root="$CMAKE_BUILD_DIR/vcpkg_installed/$triplet"
+    local vcpkg_lib_dir="$vcpkg_triplet_root/lib"
+    local godot_cpp_config="template_release"
+    local godot_cpp_lib_dir="$vcpkg_lib_dir"
+    if [[ "$BUILD_TYPE_LOWER" == "debug" ]]; then
+        godot_cpp_config="template_debug"
+        godot_cpp_lib_dir="$vcpkg_triplet_root/debug/lib"
+    fi
+    local godot_cpp_lib="$godot_cpp_lib_dir/libgodot-cpp.ios.$godot_cpp_config.arm64.a"
     local libs=(
         "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a"
         "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a"
@@ -170,7 +179,11 @@ combine_ios_static_extension() {
     )
 
     if [[ "$triplet" == "x64-ios-simulator" ]]; then
-        godot_cpp_lib="$vcpkg_lib_dir/libgodot-cpp.ios.template_release.x86_64.a"
+        godot_cpp_lib="$godot_cpp_lib_dir/libgodot-cpp.ios.$godot_cpp_config.x86_64.a"
+    fi
+    if [[ ! -f "$godot_cpp_lib" ]]; then
+        echo "Error: missing Godot C++ iOS archive for $BUILD_TYPE_LOWER build: $godot_cpp_lib" >&2
+        exit 1
     fi
     libs=("$godot_cpp_lib" "${libs[@]}")
 
@@ -226,6 +239,40 @@ verify_exported_simulator_template_arch() {
     fi
 }
 
+stage_ios_runtime_fonts() {
+    local export_root="$1"
+    local app_source_dir="$export_root/AetherKiri"
+    local font_dir="$app_source_dir/fonts"
+
+    mkdir -p "$font_dir"
+    if [[ -f "$RUNTIME_CJK_FONT_SOURCE" ]]; then
+        cp -f "$RUNTIME_CJK_FONT_SOURCE" "$app_source_dir/default.otf"
+        cp -f "$RUNTIME_CJK_FONT_SOURCE" "$font_dir/default.otf"
+    else
+        echo "Warning: runtime CJK font missing: $RUNTIME_CJK_FONT_SOURCE" >&2
+    fi
+    if [[ -f "$RUNTIME_SYMBOL_FONT_SOURCE" ]]; then
+        cp -f "$RUNTIME_SYMBOL_FONT_SOURCE" "$font_dir/symbols.ttf"
+    else
+        echo "Warning: runtime symbol font missing: $RUNTIME_SYMBOL_FONT_SOURCE" >&2
+    fi
+}
+
+patch_ios_runtime_font_resources() {
+    local project_file="$1"
+    if [[ ! -f "$project_file" ]]; then
+        return
+    fi
+    if grep -Fq 'A3F001000000000000000002 /* default.otf */' "$project_file"; then
+        return
+    fi
+
+    perl -0pi -e 's@(/\* Begin PBXBuildFile section \*/\n)@$1\t\tA3F001000000000000000001 /* default.otf in Resources */ = {isa = PBXBuildFile; fileRef = A3F001000000000000000002 /* default.otf */; };\n\t\tA3F001000000000000000003 /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = A3F001000000000000000004 /* fonts */; };\n@' "$project_file"
+    perl -0pi -e 's@(/\* Begin PBXFileReference section \*/\n)@$1\t\tA3F001000000000000000002 /* default.otf */ = {isa = PBXFileReference; lastKnownFileType = file; path = default.otf; sourceTree = "<group>"; };\n\t\tA3F001000000000000000004 /* fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = fonts; sourceTree = "<group>"; };\n@' "$project_file"
+    perl -0pi -e 's@(\t\tD0BCFE4118AEBDA2004A7AAE /\* AetherKiri \*/ = \{\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = \(\n)@$1\t\t\t\tA3F001000000000000000002 /* default.otf */,\n\t\t\t\tA3F001000000000000000004 /* fonts */,\n@' "$project_file"
+    perl -0pi -e 's@(\t\tD0BCFE3218AEBDA2004A7AAE /\* Resources \*/ = \{\n\t\t\tisa = PBXResourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = \(\n)@$1\t\t\t\tA3F001000000000000000001 /* default.otf in Resources */,\n\t\t\t\tA3F001000000000000000003 /* fonts in Resources */,\n@' "$project_file"
+}
+
 patch_ios_export_project() {
     local project_file="$1/project.pbxproj"
     local export_root
@@ -251,6 +298,8 @@ patch_ios_export_project() {
             perl -0pi -e 's/ARCHS = "x86_64";/ARCHS = "arm64";/g' "$project_file"
             perl -0pi -e 's/VALID_ARCHS = "x86_64";/VALID_ARCHS = "arm64";/g' "$project_file"
         fi
+        stage_ios_runtime_fonts "$export_root"
+        patch_ios_runtime_font_resources "$project_file"
     fi
     if [[ -f "$dummy_cpp" ]] && ! grep -Fq '__swift_FORCE_LOAD_$_swift_Builtin_float' "$dummy_cpp"; then
         cat >> "$dummy_cpp" <<'EOF'
