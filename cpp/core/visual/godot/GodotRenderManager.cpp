@@ -100,12 +100,12 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "RemoveConstOpacity") == 0 ||
                std::strcmp(name, "AlphaBlend") == 0 ||
                std::strcmp(name, "AlphaBlend_a") == 0 ||
-               // AlphaBlend_d is formula-correct in isolation, but rapid title
-               // transitions can corrupt the real GPU dependency chain.
+               std::strcmp(name, "AlphaBlend_d") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_d") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD_d") == 0 ||
-               std::strcmp(name, "CopyColor") == 0;
+               std::strcmp(name, "CopyColor") == 0 ||
+               std::strcmp(name, "PsScreenBlend") == 0;
     };
     static const std::string setting = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_RECT_FASTPATH");
@@ -935,6 +935,21 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         src->UploadCpuToGpu() &&
         dst->BlendGpuFrom(src, rctar, textures[0].second,
                           TVP_GODOT_GPU_BLEND_CONST_ALPHA_D,
+                          godot_method != nullptr ? godot_method->Opacity() : 255,
+                          0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
+    if (method_name == "PsScreenBlend" && dst != nullptr && src != nullptr &&
+        IsGpuRectFastPathEnabled("PsScreenBlend") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
+        RectAbsSizeMatches(rctar, textures[0].second) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu() &&
+        dst->BlendGpuFrom(src, rctar, textures[0].second,
+                          TVP_GODOT_GPU_BLEND_PS_SCREEN,
                           godot_method != nullptr ? godot_method->Opacity() : 255,
                           0)) {
         CountGpuFastPath(method_name);

@@ -27,6 +27,7 @@
 // TVP input event classes + TVPPostInputEvent
 #include "WindowIntf.h"
 #include "WindowImpl.h"
+#include "LayerManager.h"
 #include "tvpinputdefs.h"
 #include "EventIntf.h"
 
@@ -245,6 +246,12 @@ void EngineLoop::HandlePointerDown(const EngineInputEvent& event) {
     else if (event.button == 2)
         mb = mbMiddle;
 
+    if (mb == mbLeft && TVPShouldDropTitleMenuBackgroundPointer(x, y)) {
+        suppress_title_background_gesture_ = true;
+        return;
+    }
+    suppress_title_background_gesture_ = false;
+
     // Update scancode for mouse button async state
     uint16_t vk = 0;
     switch (mb) {
@@ -327,6 +334,11 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
         mb = mbRight;
     else if (event.button == 2)
         mb = mbMiddle;
+
+    if (mb == mbLeft && suppress_title_background_gesture_) {
+        suppress_title_background_gesture_ = false;
+        return;
+    }
 
     // Defer scancode release until the next Tick has delivered queued up/click
     // events. Some KAG widgets query the async mouse state in click handlers.

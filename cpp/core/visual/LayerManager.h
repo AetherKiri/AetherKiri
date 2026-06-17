@@ -304,6 +304,7 @@ class tTVPLayerManager : public iTVPLayerManager, public tTVPDrawable {
     tjs_int PendingConfirmY = 0;
     bool PendingConfirmRequiresSameSelection = false;
     std::string PendingConfirmLayerName;
+    bool SuppressCurrentTitleMenuPointerGesture = false;
 
     bool InNotifyingHintOrCursorChange;
     bool HoldAlpha = true;
@@ -473,6 +474,8 @@ public:
                                       tjs_int y);
     bool ShouldSynthesizeEnterForSaveLoadButton(
         tTJSNI_BaseLayer *layer, tjs_int x, tjs_int y);
+    bool IsTitleMenuInputState(tTJSNI_BaseLayer *layer);
+    bool IsTitleMenuControlPoint(tjs_int x, tjs_int y);
 
     void PrimaryClick(tjs_int x, tjs_int y);
     void PrimaryDoubleClick(tjs_int x, tjs_int y);
@@ -577,6 +580,8 @@ private:
     }
     void SetTouchCapture(tjs_uint32 id, tTJSNI_BaseLayer *layer);
 };
+//---------------------------------------------------------------------------
+bool TVPShouldDropTitleMenuBackgroundPointer(tjs_int x, tjs_int y);
 //---------------------------------------------------------------------------
 
 #endif

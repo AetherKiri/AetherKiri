@@ -43,6 +43,7 @@ enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY = 8,
     TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D = 9,
     TVP_GODOT_GPU_BLEND_CONST_ALPHA_D = 10,
+    TVP_GODOT_GPU_BLEND_PS_SCREEN = 11,
 };
 
 extern "C" void TVPGodotGpuBridgeRegister(

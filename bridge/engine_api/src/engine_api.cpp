@@ -62,6 +62,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #endif
 #include "visual/ogl/angle_backend.h"
 #include "visual/impl/WindowImpl.h"
+#include "visual/LayerManager.h"
 #include "visual/RenderManager.h"
 #include "visual/godot/GodotRenderManager.h"
 #include "psbfile/PSBMedia.h"
@@ -139,6 +140,7 @@ struct engine_handle_s {
   struct InputState {
     std::deque<engine_input_event_t> pending_events;
     std::unordered_set<intptr_t> active_pointer_ids;
+    intptr_t dropped_title_background_pointer_id = -1;
     bool native_mouse_callbacks_disabled = false;
   } input;
 
@@ -235,6 +237,46 @@ bool EnvFlagEnabled(const char* name) {
          std::strcmp(value, "false") != 0 &&
          std::strcmp(value, "off") != 0 &&
          std::strcmp(value, "no") != 0;
+}
+
+bool IsPointerInputEvent(const engine_input_event_t& event) {
+  return event.type == ENGINE_INPUT_EVENT_POINTER_DOWN ||
+         event.type == ENGINE_INPUT_EVENT_POINTER_MOVE ||
+         event.type == ENGINE_INPUT_EVENT_POINTER_UP ||
+         event.type == ENGINE_INPUT_EVENT_POINTER_SCROLL;
+}
+
+bool ShouldDropTitleMenuBackgroundInput(engine_handle_s* impl,
+                                        const engine_input_event_t& event) {
+  if (impl == nullptr || !IsPointerInputEvent(event)) {
+    return false;
+  }
+
+  const intptr_t pointer_id = static_cast<intptr_t>(event.pointer_id);
+  if (impl->input.dropped_title_background_pointer_id == pointer_id) {
+    if (event.type == ENGINE_INPUT_EVENT_POINTER_UP) {
+      impl->input.dropped_title_background_pointer_id = -1;
+    }
+    return true;
+  }
+
+  if (event.type != ENGINE_INPUT_EVENT_POINTER_DOWN || event.button != 0) {
+    return false;
+  }
+
+  const tjs_int x = static_cast<tjs_int>(event.x);
+  const tjs_int y = static_cast<tjs_int>(event.y);
+  if (!TVPShouldDropTitleMenuBackgroundPointer(x, y)) {
+    return false;
+  }
+
+  impl->input.dropped_title_background_pointer_id = pointer_id;
+  if (EnvFlagEnabled("AETHERKIRI_INPUT_TRACE")) {
+    spdlog::info(
+        "engine_send_input drop title background pointer id={} primary=({}, {})",
+        pointer_id, x, y);
+  }
+  return true;
 }
 
 bool ShouldUseGodotGpuFrameForRenderer(const std::string& renderer) {
@@ -608,6 +650,7 @@ void MarkRuntimeOpenedForHost(engine_handle_t handle,
     impl->frame.ready = false;
     impl->input.active_pointer_ids.clear();
     impl->input.pending_events.clear();
+    impl->input.dropped_title_background_pointer_id = -1;
     impl->state = ToStateValue(EngineState::kOpened);
     ClearHandleErrorLocked(impl);
   }
@@ -2129,6 +2172,7 @@ engine_result_t engine_pause(engine_handle_t handle) {
   Application->OnDeactivate();
   impl->input.active_pointer_ids.clear();
   impl->input.pending_events.clear();
+  impl->input.dropped_title_background_pointer_id = -1;
   impl->state = ToStateValue(EngineState::kPaused);
   ClearHandleErrorLocked(impl);
   SetThreadError(nullptr);
@@ -2774,6 +2818,11 @@ engine_result_t engine_send_input(engine_handle_t handle,
       return SetHandleErrorAndReturnLocked(
           impl, ENGINE_RESULT_INVALID_ARGUMENT,
           "pointer coordinates contain non-finite values");
+    }
+    if (ShouldDropTitleMenuBackgroundInput(impl, *event)) {
+      ClearHandleErrorLocked(impl);
+      SetThreadError(nullptr);
+      return ENGINE_RESULT_OK;
     }
   }
 

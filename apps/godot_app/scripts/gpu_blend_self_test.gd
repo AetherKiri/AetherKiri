@@ -4,7 +4,7 @@ func _initialize() -> void:
     var player = ClassDB.instantiate("AetherKiriPlayer")
     root.add_child(player as Node)
 
-    var modes := ["AlphaBlend", "AlphaBlend_d", "AlphaBlend_a", "CopyColor", "FillARGB", "RemoveConstOpacity", "ConstAlphaBlend_d"]
+    var modes := ["AlphaBlend", "AlphaBlend_d", "AlphaBlend_a", "CopyColor", "FillARGB", "RemoveConstOpacity", "ConstAlphaBlend_d", "PsScreenBlend"]
     var failed := false
     for mode in modes:
         for opacity in [255, 192, 96]:

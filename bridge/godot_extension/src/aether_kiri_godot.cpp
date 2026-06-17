@@ -429,6 +429,21 @@ uint const_alpha_blend_d(uint d, uint s, uint opa) {
     return (out_alpha << 24) | r | (g << 8) | (b << 16);
 }
 
+uint ps_screen_blend(uint d, uint s, uint opa) {
+    uint src_alpha = (s >> 24) & 0xffu;
+    uint a = opa == 255u ? src_alpha : ((src_alpha * opa) >> 8);
+    uint dr = d & 0xffu;
+    uint dg = (d >> 8) & 0xffu;
+    uint db = (d >> 16) & 0xffu;
+    uint sr = s & 0xffu;
+    uint sg = (s >> 8) & 0xffu;
+    uint sb = (s >> 16) & 0xffu;
+    uint r = min(dr + (((sr - ((sr * dr) >> 8)) * a) >> 8), 255u);
+    uint g = min(dg + (((sg - ((sg * dg) >> 8)) * a) >> 8), 255u);
+    uint b = min(db + (((sb - ((sb * db) >> 8)) * a) >> 8), 255u);
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint remove_const_opacity(uint d, uint strength) {
     uint inv_strength = 255u - clamp(strength, 0u, 255u);
     uint a = (((d >> 24) & 0xffu) * inv_strength) >> 8;
@@ -466,6 +481,9 @@ void main() {
         } else if (pc.rect1.z == 10) {
         uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
         out_color = const_alpha_blend_d(d, s, opa);
+        } else if (pc.rect1.z == 11) {
+        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
+        out_color = ps_screen_blend(d, s, opa);
         } else if (pc.rect1.z == 8) {
         out_color = remove_const_opacity(d, opa);
         }
@@ -1816,6 +1834,25 @@ uint32_t CpuConstAlphaBlendSDD(uint32_t s1, uint32_t s2, int opacity) {
     return s1_rb | ((s1_g + ((s2_g - s1_g) * alpha >> 8)) & 0xff00u);
 }
 
+uint32_t CpuPsScreenBlend(uint32_t d, uint32_t s, int opacity) {
+    const uint32_t src_alpha = (s >> 24) & 0xffu;
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    const uint32_t a = opa == 255u ? src_alpha : ((src_alpha * opa) >> 8);
+    const uint32_t dr = d & 0xffu;
+    const uint32_t dg = (d >> 8) & 0xffu;
+    const uint32_t db = (d >> 16) & 0xffu;
+    const uint32_t sr = s & 0xffu;
+    const uint32_t sg = (s >> 8) & 0xffu;
+    const uint32_t sb = (s >> 16) & 0xffu;
+    const uint32_t r =
+        std::min(dr + (((sr - ((sr * dr) >> 8)) * a) >> 8), 255u);
+    const uint32_t g =
+        std::min(dg + (((sg - ((sg * dg) >> 8)) * a) >> 8), 255u);
+    const uint32_t b =
+        std::min(db + (((sb - ((sb * db) >> 8)) * a) >> 8), 255u);
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
                            int opacity, uint32_t color) {
     switch (mode) {
@@ -1833,6 +1870,8 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
             return CpuAlphaBlendA(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_CONST_ALPHA_D:
             return CpuConstAlphaBlendD(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_PS_SCREEN:
+            return CpuPsScreenBlend(d, s, opacity);
         default:
             return s;
     }
@@ -1878,6 +1917,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     }
     if (lower == "constalphablend_sd_d" || lower == "const_alpha_blend_sd_d") {
         return TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D;
+    }
+    if (lower == "psscreenblend" || lower == "ps_screen_blend") {
+        return TVP_GODOT_GPU_BLEND_PS_SCREEN;
     }
     return 0;
 }

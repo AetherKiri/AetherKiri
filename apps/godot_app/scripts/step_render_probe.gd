@@ -38,6 +38,8 @@ func _initialize() -> void:
 
     var backend: String = ProbeConfig.backend(test_config, "AETHERKIRI_PROBE_BACKEND")
     player.set_render_backend(backend)
+    var fps_limit := ProbeConfig.int_value(test_config, "fps_limit", _env_int("AETHERKIRI_PROBE_FPS_LIMIT", 0))
+    player.set_engine_option("fps_limit", str(maxi(0, fps_limit)))
     if ProbeConfig.bool_value(test_config, "plugin_trace", false):
         player.set_engine_option("plugin_trace", "1")
     if ProbeConfig.bool_value(test_config, "export_scripts", false):
@@ -129,6 +131,19 @@ func _save_step(index: int, label: String) -> void:
     ])
 
 func _capture_frame_image() -> Image:
+    var texture := root.get_viewport().get_texture()
+    if texture != null:
+        var viewport_image := texture.get_image()
+        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
+            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
+                return viewport_image
+
+    if rect.texture != null:
+        var rect_image := rect.texture.get_image()
+        if rect_image != null and rect_image.get_width() > 0 and rect_image.get_height() > 0:
+            if int(_image_stats(rect_image).get("visible", 0)) > 0:
+                return rect_image
+
     var frame: Dictionary = player.read_frame_rgba()
     var data: PackedByteArray = frame.get("rgba", PackedByteArray())
     var width := int(frame.get("width", 0))
@@ -138,18 +153,6 @@ func _capture_frame_image() -> Image:
         if int(_image_stats(frame_image).get("visible", 0)) > 0:
             return frame_image
 
-    if rect.texture != null:
-        var rect_image := rect.texture.get_image()
-        if rect_image != null and rect_image.get_width() > 0 and rect_image.get_height() > 0:
-            if int(_image_stats(rect_image).get("visible", 0)) > 0:
-                return rect_image
-
-    var texture := root.get_viewport().get_texture()
-    if texture != null:
-        var viewport_image := texture.get_image()
-        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
-            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
-                return viewport_image
     return Image.create(1, 1, false, Image.FORMAT_RGBA8)
 
 func _run_legacy_steps(step: int) -> int:
@@ -211,6 +214,9 @@ func _run_actions(step: int) -> int:
                     await _advance(per_click_frames)
             if label.is_empty() or label == "repeat_click":
                 label = "repeat_click_%d_%d_%d" % [count, int(pos.x), int(pos.y)]
+        elif kind == "click_stream":
+            step = await _run_click_stream(step, label, action)
+            continue
         elif kind == "wait" or kind == "capture":
             pass
         else:
@@ -221,6 +227,128 @@ func _run_actions(step: int) -> int:
         if bool(action.get("capture", true)):
             await _save_step(step, label)
             step += 1
+    return step
+
+func _run_click_stream(step: int, label: String, action: Dictionary) -> int:
+    var pos := ProbeConfig.click_position(action)
+    var mapped := _map_window_point(pos)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip click_stream outside texture window=%s mapped=%s" % [pos, mapped])
+        return step
+
+    var frames: int = max(1, int(action.get("frames", 180)))
+    var clicks_per_frame: int = max(0, int(action.get("clicks_per_frame", 1)))
+    var capture_every: int = max(0, int(action.get("capture_every", 0)))
+    var spike_ms: float = max(0.0, float(action.get("spike_ms", 20.0)))
+    var pointer_id: int = int(action.get("pointer_id", 100000))
+    var tick_total := 0.0
+    var update_total := 0.0
+    var input_total := 0.0
+    var frame_total := 0.0
+    var tick_max := 0.0
+    var update_max := 0.0
+    var input_max := 0.0
+    var frame_max := 0.0
+    var spikes := 0
+    var input_events := 0
+    var measured_frames := 0
+
+    if label.is_empty() or label == "click_stream":
+        label = "click_stream_%d_%d_%d" % [frames, int(pos.x), int(pos.y)]
+
+    player.send_pointer_event(POINTER_MOVE, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+    input_events += 1
+    for frame_index in range(frames):
+        var frame_start := Time.get_ticks_usec()
+        var input_start := frame_start
+        for i in range(clicks_per_frame):
+            player.send_pointer_event(POINTER_DOWN, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+            player.send_pointer_event(POINTER_UP, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+            input_events += 2
+
+        var after_input := Time.get_ticks_usec()
+        var tick_start := after_input
+        var tick_result: int = int(player.tick(1.0 / 60.0))
+        var after_tick := Time.get_ticks_usec()
+        if tick_result != 0:
+            printerr("click_stream tick failed: %s" % player.get_last_error())
+            break
+        var texture: Texture2D = player.update_frame_texture()
+        if texture != null:
+            rect.texture = texture
+            rect.queue_redraw()
+        var frame_end := Time.get_ticks_usec()
+
+        var input_ms := float(after_input - input_start) / 1000.0
+        var tick_ms := float(after_tick - tick_start) / 1000.0
+        var update_ms := float(frame_end - after_tick) / 1000.0
+        var frame_ms := float(frame_end - frame_start) / 1000.0
+        input_total += input_ms
+        tick_total += tick_ms
+        update_total += update_ms
+        frame_total += frame_ms
+        measured_frames += 1
+        input_max = maxf(input_max, input_ms)
+        tick_max = maxf(tick_max, tick_ms)
+        update_max = maxf(update_max, update_ms)
+        frame_max = maxf(frame_max, frame_ms)
+        if spike_ms > 0.0 and frame_ms >= spike_ms:
+            spikes += 1
+            print("click_stream_spike label=%s frame=%d input_ms=%.2f tick_ms=%.2f update_ms=%.2f frame_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+                label,
+                frame_index,
+                input_ms,
+                tick_ms,
+                update_ms,
+                frame_ms,
+                player.get_frame_texture_backend(),
+                player.get_renderer_info(),
+            ])
+
+        if capture_every > 0 and (frame_index % capture_every) == 0:
+            var image := _capture_frame_image()
+            var capture_path := "/tmp/aetherkiri-step-%02d-%s_f%03d.png" % [
+                step,
+                label,
+                frame_index,
+            ]
+            image.save_png(capture_path)
+            print("step %02d label=%s frame=%d texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
+                step,
+                label,
+                frame_index,
+                player.get_frame_texture_backend(),
+                player.get_renderer_info(),
+                capture_path,
+                JSON.stringify(_image_stats(image)),
+            ])
+            step += 1
+        await process_frame
+
+    var divisor := float(max(1, measured_frames))
+    print("click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d input_events=%d avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+        label,
+        frames,
+        measured_frames,
+        clicks_per_frame,
+        input_events,
+        input_total / divisor,
+        input_max,
+        tick_total / divisor,
+        tick_max,
+        update_total / divisor,
+        update_max,
+        frame_total / divisor,
+        frame_max,
+        spikes,
+        spike_ms,
+        player.get_frame_texture_backend(),
+        player.get_renderer_info(),
+    ])
+
+    if bool(action.get("capture_final", true)):
+        await _save_step(step, "%s_final" % label)
+        step += 1
     return step
 
 func _send_window_click(window_pos: Vector2) -> void:
