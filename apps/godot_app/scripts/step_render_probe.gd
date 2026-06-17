@@ -201,6 +201,16 @@ func _run_actions(step: int) -> int:
             player.send_key_event(false, key_code, int(action.get("modifiers", 0)), 0)
             if label.is_empty() or label == "key":
                 label = "key_%d" % key_code
+        elif kind == "repeat_click":
+            var pos := ProbeConfig.click_position(action)
+            var count: int = max(1, int(action.get("count", 1)))
+            var per_click_frames: int = max(0, int(action.get("per_click_frames", 0)))
+            for i in range(count):
+                _send_window_click(pos)
+                if per_click_frames > 0:
+                    await _advance(per_click_frames)
+            if label.is_empty() or label == "repeat_click":
+                label = "repeat_click_%d_%d_%d" % [count, int(pos.x), int(pos.y)]
         elif kind == "wait" or kind == "capture":
             pass
         else:

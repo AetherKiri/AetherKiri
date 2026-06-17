@@ -30,13 +30,16 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
+#include <chrono>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <deque>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -94,6 +97,16 @@ struct GodotGpuOp {
 std::mutex g_gpu_op_queue_mutex;
 std::deque<std::shared_ptr<GodotGpuOp>> g_gpu_op_queue;
 bool g_gpu_op_drain_scheduled = false;
+std::atomic<uint64_t> g_gpu_op_submitted{0};
+std::atomic<uint64_t> g_gpu_op_completed{0};
+std::atomic<uint64_t> g_gpu_op_failed{0};
+std::atomic<uint64_t> g_gpu_blend_op_submitted{0};
+std::atomic<uint64_t> g_gpu_queue_peak{0};
+std::atomic<uint64_t> g_gpu_barriers{0};
+std::atomic<uint64_t> g_gpu_alias_sources{0};
+std::atomic<uint64_t> g_gpu_sync_timeouts{0};
+
+constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
 
 struct GodotGpuPipelineState {
     RID blend_shader;
@@ -139,6 +152,8 @@ struct GodotGpuUniformSetKeyHash {
 
 std::unordered_map<GodotGpuUniformSetKey, RID, GodotGpuUniformSetKeyHash>
     g_gpu_uniform_set_cache;
+
+Ref<RDTextureFormat> MakeRgbaTextureFormat(uint32_t width, uint32_t height);
 
 const char *NormalizeBackend(const String &backend) {
     const String lower = backend.to_lower();
@@ -212,6 +227,61 @@ bool SupportsGodotRenderingDeviceGpu() {
            method.find("gl_compatibility") == std::string::npos &&
            driver.find("opengl") == std::string::npos &&
            driver.find("OpenGL") == std::string::npos;
+}
+
+void UpdateGpuQueuePeak(size_t value) {
+    uint64_t current = g_gpu_queue_peak.load(std::memory_order_relaxed);
+    while (value > current &&
+           !g_gpu_queue_peak.compare_exchange_weak(
+               current, static_cast<uint64_t>(value), std::memory_order_relaxed)) {
+    }
+}
+
+void CountGpuOpResult(bool result) {
+    g_gpu_op_completed.fetch_add(1, std::memory_order_relaxed);
+    if (!result) {
+        g_gpu_op_failed.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+String GetGodotGpuBridgeDebugInfo() {
+    size_t queue_size = 0;
+    bool scheduled = false;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
+        queue_size = g_gpu_op_queue.size();
+        scheduled = g_gpu_op_drain_scheduled;
+    }
+
+    std::ostringstream out;
+    out << " bridge_queue=" << queue_size
+        << " bridge_scheduled=" << (scheduled ? 1 : 0)
+        << " bridge_peak=" << g_gpu_queue_peak.load(std::memory_order_relaxed)
+        << " bridge_ops=" << g_gpu_op_submitted.load(std::memory_order_relaxed)
+        << " bridge_done=" << g_gpu_op_completed.load(std::memory_order_relaxed)
+        << " bridge_failed=" << g_gpu_op_failed.load(std::memory_order_relaxed)
+        << " bridge_blends=" << g_gpu_blend_op_submitted.load(std::memory_order_relaxed)
+        << " bridge_barriers=" << g_gpu_barriers.load(std::memory_order_relaxed)
+        << " bridge_alias_sources=" << g_gpu_alias_sources.load(std::memory_order_relaxed)
+        << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed);
+    return String::utf8(out.str().c_str());
+}
+
+void ApplyGodotGpuBarrier(RenderingDevice *rd) {
+    if (rd == nullptr) return;
+    rd->full_barrier();
+    g_gpu_barriers.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool IsBatchableBlendOp(const std::shared_ptr<GodotGpuOp> &op) {
+    if (op == nullptr) return false;
+    if (op->type == GodotGpuOp::Type::Blend) {
+        return op->src != op->dst;
+    }
+    if (op->type == GodotGpuOp::Type::Blend2) {
+        return op->src != op->dst && op->src2 != op->dst;
+    }
+    return false;
 }
 
 PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
@@ -373,29 +443,32 @@ void main() {
 
     ivec2 dst_pos = pc.rect0.xy + local;
     ivec2 src_pos = pc.rect0.zw + local;
-    uint d = pack_u8(vec4_to_u8(imageLoad(dst_img, dst_pos)));
     uint opa = uint(clamp(pc.rect1.w, 0, 255));
-    uint out_color = d;
+    uint out_color = 0u;
 
-    if (pc.rect1.z == 1) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
-        out_color = alpha_blend_hda_o(d, s, opa);
-    } else if (pc.rect1.z == 2) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
-        out_color = alpha_blend_d(d, s, opa);
-    } else if (pc.rect1.z == 3) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
-        out_color = (d & 0xff000000u) + (s & 0x00ffffffu);
-    } else if (pc.rect1.z == 10) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
-        out_color = const_alpha_blend_d(d, s, opa);
-    } else if (pc.rect1.z == 5) {
+    if (pc.rect1.z == 5) {
         out_color = (uint(pc.color0.x) & 0xffu) |
                     ((uint(pc.color0.y) & 0xffu) << 8) |
                     ((uint(pc.color0.z) & 0xffu) << 16) |
                     ((uint(pc.color0.w) & 0xffu) << 24);
-    } else if (pc.rect1.z == 8) {
+    } else {
+        uint d = pack_u8(vec4_to_u8(imageLoad(dst_img, dst_pos)));
+        out_color = d;
+        if (pc.rect1.z == 1) {
+        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
+        out_color = alpha_blend_hda_o(d, s, opa);
+        } else if (pc.rect1.z == 2) {
+        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
+        out_color = alpha_blend_d(d, s, opa);
+        } else if (pc.rect1.z == 3) {
+        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
+        out_color = (d & 0xff000000u) + (s & 0x00ffffffu);
+        } else if (pc.rect1.z == 10) {
+        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
+        out_color = const_alpha_blend_d(d, s, opa);
+        } else if (pc.rect1.z == 8) {
         out_color = remove_const_opacity(d, opa);
+        }
     }
 
     imageStore(dst_img, dst_pos, unpack_u8(out_color));
@@ -885,10 +958,23 @@ bool DispatchGodotGpuBlend2(RenderingDevice *rd,
 
 bool ExecuteGodotGpuBlend(RenderingDevice *rd,
                           const std::shared_ptr<GodotGpuOp> &op) {
+    if (rd == nullptr || op == nullptr) return false;
+    if (op->src == op->dst &&
+        op->mode != TVP_GODOT_GPU_BLEND_FILL_ARGB) {
+        g_gpu_alias_sources.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
     std::vector<RID> uniform_sets;
     int64_t compute_list = rd->compute_list_begin();
     const bool ok = DispatchGodotGpuBlend(rd, op, compute_list, uniform_sets);
+    if (ok) {
+        rd->compute_list_add_barrier(compute_list);
+    }
     rd->compute_list_end();
+    if (ok) {
+        ApplyGodotGpuBarrier(rd);
+    }
     for (const RID &uniform_set : uniform_sets) {
         rd->free_rid(uniform_set);
     }
@@ -897,17 +983,27 @@ bool ExecuteGodotGpuBlend(RenderingDevice *rd,
 
 bool ExecuteGodotGpuBlend2(RenderingDevice *rd,
                            const std::shared_ptr<GodotGpuOp> &op) {
+    if (rd == nullptr || op == nullptr) return false;
+    if (op->src == op->dst || op->src2 == op->dst) {
+        g_gpu_alias_sources.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
     std::vector<RID> uniform_sets;
     int64_t compute_list = rd->compute_list_begin();
     const bool ok = DispatchGodotGpuBlend2(rd, op, compute_list, uniform_sets);
+    if (ok) {
+        rd->compute_list_add_barrier(compute_list);
+    }
     rd->compute_list_end();
+    if (ok) {
+        ApplyGodotGpuBarrier(rd);
+    }
     for (const RID &uniform_set : uniform_sets) {
         rd->free_rid(uniform_set);
     }
     return ok;
 }
-
-Ref<RDTextureFormat> MakeRgbaTextureFormat(uint32_t width, uint32_t height);
 
 bool ExecuteGodotGpuCopyTriangles(RenderingDevice *rd,
                                   const std::shared_ptr<GodotGpuOp> &op) {
@@ -945,6 +1041,7 @@ bool ExecuteGodotGpuCopyTriangles(RenderingDevice *rd,
             rd->free_rid(vertex_buffer);
             return false;
         }
+        ApplyGodotGpuBarrier(rd);
         sample_src = temp_src;
     }
 
@@ -988,7 +1085,9 @@ bool ExecuteGodotGpuCopyTriangles(RenderingDevice *rd,
                               static_cast<uint32_t>((op->size.x + 7) / 8),
                               static_cast<uint32_t>((op->size.y + 7) / 8),
                               1);
+    rd->compute_list_add_barrier(compute_list);
     rd->compute_list_end();
+    ApplyGodotGpuBarrier(rd);
     rd->free_rid(uniform_set);
     if (temp_src.is_valid()) rd->free_rid(temp_src);
     rd->free_rid(vertex_buffer);
@@ -997,14 +1096,22 @@ bool ExecuteGodotGpuCopyTriangles(RenderingDevice *rd,
 
 bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &op) {
     if (rd == nullptr || op == nullptr) return false;
+    bool result = false;
+    bool wrote_texture = false;
     switch (op->type) {
         case GodotGpuOp::Type::Update:
-            return rd->texture_update(op->dst, 0, op->data) == OK;
+            result = rd->texture_update(op->dst, 0, op->data) == OK;
+            wrote_texture = true;
+            break;
         case GodotGpuOp::Type::Clear:
-            return rd->texture_clear(op->dst, op->clear_color, 0, 1, 0, 1) == OK;
+            result = rd->texture_clear(op->dst, op->clear_color, 0, 1, 0, 1) == OK;
+            wrote_texture = true;
+            break;
         case GodotGpuOp::Type::Copy:
-            return rd->texture_copy(op->src, op->dst, op->src_pos, op->dst_pos,
-                                    op->size, 0, 0, 0, 0) == OK;
+            result = rd->texture_copy(op->src, op->dst, op->src_pos, op->dst_pos,
+                                      op->size, 0, 0, 0, 0) == OK;
+            wrote_texture = true;
+            break;
         case GodotGpuOp::Type::CopySelf: {
             Ref<RDTextureView> view;
             view.instantiate();
@@ -1017,13 +1124,22 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             const Error copy_to_temp =
                 rd->texture_copy(op->src, temp, op->src_pos, Vector3(), op->size,
                                  0, 0, 0, 0);
+            if (copy_to_temp == OK) {
+                ApplyGodotGpuBarrier(rd);
+            }
             const Error copy_to_dst =
                 copy_to_temp == OK
                     ? rd->texture_copy(temp, op->dst, Vector3(), op->dst_pos,
                                        op->size, 0, 0, 0, 0)
                     : FAILED;
+            result = copy_to_temp == OK && copy_to_dst == OK;
+            wrote_texture = true;
+            if (result) {
+                ApplyGodotGpuBarrier(rd);
+            }
             rd->free_rid(temp);
-            return copy_to_temp == OK && copy_to_dst == OK;
+            wrote_texture = false;
+            break;
         }
         case GodotGpuOp::Type::CopyTriangles:
             return ExecuteGodotGpuCopyTriangles(rd, op);
@@ -1039,12 +1155,17 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             rd->free_rid(op->dst);
             return true;
         case GodotGpuOp::Type::Flush:
+            ApplyGodotGpuBarrier(rd);
             return true;
     }
-    return false;
+    if (result && wrote_texture) {
+        ApplyGodotGpuBarrier(rd);
+    }
+    return result;
 }
 
 void FinishGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool result) {
+    CountGpuOpResult(result);
     {
         std::lock_guard<std::mutex> done_lock(op->done_mutex);
         op->result = result;
@@ -1065,13 +1186,25 @@ void ExecuteGodotGpuBlendBatch(
     }
 
     std::vector<RID> uniform_sets;
-    uniform_sets.reserve(ops.size());
     std::vector<bool> results(ops.size(), false);
+    bool any_dispatched = false;
     int64_t compute_list = rd->compute_list_begin();
     for (size_t i = 0; i < ops.size(); ++i) {
-        results[i] = DispatchGodotGpuBlend(rd, ops[i], compute_list, uniform_sets);
+        const auto &op = ops[i];
+        if (op->type == GodotGpuOp::Type::Blend) {
+            results[i] = DispatchGodotGpuBlend(rd, op, compute_list, uniform_sets);
+        } else if (op->type == GodotGpuOp::Type::Blend2) {
+            results[i] = DispatchGodotGpuBlend2(rd, op, compute_list, uniform_sets);
+        }
+        if (results[i]) {
+            any_dispatched = true;
+            rd->compute_list_add_barrier(compute_list);
+        }
     }
     rd->compute_list_end();
+    if (any_dispatched) {
+        ApplyGodotGpuBarrier(rd);
+    }
     for (const RID &uniform_set : uniform_sets) {
         rd->free_rid(uniform_set);
     }
@@ -1095,13 +1228,16 @@ void DrainGodotGpuOpsOnRenderThread() {
             g_gpu_op_queue.pop_front();
         }
 
-        if (op->type == GodotGpuOp::Type::Blend) {
+        if (IsBatchableBlendOp(op)) {
             blend_batch.push_back(op);
             continue;
         }
 
         ExecuteGodotGpuBlendBatch(rd, blend_batch);
         blend_batch.clear();
+
+        // Alias blends are executed separately because sampling and writing the
+        // same storage image in one dispatch is undefined on Metal/Vulkan.
         FinishGodotGpuOp(op, ExecuteGodotGpuOp(rd, op));
     }
     ExecuteGodotGpuBlendBatch(rd, blend_batch);
@@ -1110,15 +1246,27 @@ void DrainGodotGpuOpsOnRenderThread() {
 bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
     RenderingServer *server = RenderingServer::get_singleton();
     RenderingDevice *rd = MainRenderingDevice();
-    if (server == nullptr || rd == nullptr || op == nullptr) return false;
+    if (op == nullptr) return false;
+    g_gpu_op_submitted.fetch_add(1, std::memory_order_relaxed);
+    if (op->type == GodotGpuOp::Type::Blend ||
+        op->type == GodotGpuOp::Type::Blend2) {
+        g_gpu_blend_op_submitted.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (server == nullptr || rd == nullptr) {
+        CountGpuOpResult(false);
+        return false;
+    }
     if (server->is_on_render_thread()) {
-        return ExecuteGodotGpuOp(rd, op);
+        const bool result = ExecuteGodotGpuOp(rd, op);
+        CountGpuOpResult(result);
+        return result;
     }
 
     bool should_schedule = false;
     {
         std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
         g_gpu_op_queue.push_back(op);
+        UpdateGpuQueuePeak(g_gpu_op_queue.size());
         if (!g_gpu_op_drain_scheduled) {
             g_gpu_op_drain_scheduled = true;
             should_schedule = true;
@@ -1133,7 +1281,11 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
         return true;
     }
     std::unique_lock<std::mutex> done_lock(op->done_mutex);
-    op->done_cv.wait(done_lock, [&]() { return op->done; });
+    if (!op->done_cv.wait_for(done_lock, kGodotGpuSyncWaitTimeout,
+                              [&]() { return op->done; })) {
+        g_gpu_sync_timeouts.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
     return op->result;
 }
 
@@ -2021,7 +2173,10 @@ public:
         const engine_result_t result =
             engine_get_renderer_info(handle_, buffer, sizeof(buffer));
         update_last_error(result);
-        return result == ENGINE_RESULT_OK ? String::utf8(buffer) : String();
+        if (result != ENGINE_RESULT_OK) {
+            return String();
+        }
+        return String::utf8(buffer) + GetGodotGpuBridgeDebugInfo();
     }
 
     String get_frame_texture_backend() const { return frame_texture_backend_; }
@@ -2610,6 +2765,10 @@ private:
         op->dst_pos = Vector3();
         op->size = Vector3(width, height, 1);
         if (!RunGodotGpuOpSync(op)) {
+            frame_texture_backend_ = "godot_native_gpu_present_timeout";
+            if (frame_present_textures_[frame_present_current_slot_].is_valid()) {
+                return frame_present_textures_[frame_present_current_slot_];
+            }
             return Ref<Texture2D>();
         }
 

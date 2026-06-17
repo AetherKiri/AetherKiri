@@ -222,6 +222,10 @@ bool EngineLoop::HandleInputEvent(const EngineInputEvent& event) {
     }
 }
 
+bool EngineLoop::IsTouchPointerEvent(const EngineInputEvent& event) {
+    return event.pointer_id >= 100000;
+}
+
 void EngineLoop::HandlePointerDown(const EngineInputEvent& event) {
     auto* win = TVPMainWindow;
     if (!win) return;
@@ -269,7 +273,7 @@ void EngineLoop::HandlePointerDown(const EngineInputEvent& event) {
 
     // Windows sends WM_LBUTTONDBLCLK before the second WM_LBUTTONDOWN, and the
     // following WM_LBUTTONUP suppresses the normal click event.
-    if (mb == mbLeft) {
+    if (mb == mbLeft && !IsTouchPointerEvent(event)) {
         const int64_t now = NowMs();
         const int32_t dx = x - last_click_x_;
         const int32_t dy = y - last_click_y_;

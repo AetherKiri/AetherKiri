@@ -71,6 +71,7 @@ var selected_backend := "Godot Native"
 var upscale_algorithm := "smooth"
 var render_surface_mode := "display"
 var game_running := false
+var app_lifecycle_paused := false
 var render_errors := 0
 var last_renderer_info_logged := ""
 var last_texture_size := Vector2i.ZERO
@@ -92,6 +93,25 @@ var frame_spike_ms := 0.0
 var frame_probe_enabled := false
 var frame_probe_interval := 1.0
 var frame_probe_accum := 0.0
+var input_trace_enabled := false
+var input_trace_accum := 0.0
+var input_trace_received := 0
+var input_trace_forwarded := 0
+var input_trace_blocked := 0
+var input_trace_throttled := 0
+var input_trace_busy := 0
+var input_trace_outside := 0
+var input_trace_send_failed := 0
+var input_trace_present_holds := 0
+var input_trace_move_suppressed := 0
+var tick_trace_serial := 0
+var tick_trace_active_serial := 0
+var tick_trace_until_msec := 0
+var black_frame_guard_until_msec := 0
+var black_frame_next_sample_msec := 0
+var black_frame_consecutive := 0
+var black_frame_last_log_msec := 0
+var black_frame_guard_enabled := false
 var cli_probe_script := ""
 var verbose_render_log := false
 var web_auto_start_attempted := false
@@ -100,9 +120,16 @@ var log_lines: PackedStringArray = []
 var suppress_mouse_until_msec := 0
 var active_touch_points := {}
 var active_mouse_buttons := {}
+var suppressed_touch_points := {}
+var touch_down_points := {}
+var last_forwarded_touch_down_msec := 0
+var last_forwarded_touch_up_msec := 0
+var last_forwarded_touch_move_msec_by_id := {}
+var touch_input_busy_until_msec := 0
 var device_probe_enabled := false
 var follow_texture_surface_size := false
 var present_hold_frames := 0
+var last_present_hold_msec := 0
 var current_surface_size := Vector2i.ZERO
 var render_surface_base_size := RENDER_SURFACE_SIZE
 var render_surface_max_size := RENDER_SURFACE_MAX_SIZE
@@ -115,7 +142,18 @@ const RENDER_SURFACE_SIZE := Vector2i(1920, 1080)
 const RENDER_SURFACE_MAX_SIZE := Vector2i(3200, 1800)
 const RENDER_SURFACE_MODE_GAME := "game"
 const RENDER_SURFACE_MODE_DISPLAY := "display"
-const POST_INPUT_PRESENT_HOLD_FRAMES := 4
+const POST_INPUT_PRESENT_HOLD_FRAMES := 1
+const POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS := 120
+const TOUCH_TAP_MIN_INTERVAL_MS := 0
+const TOUCH_ACTION_COOLDOWN_MS := 0
+const TOUCH_DRAG_MIN_INTERVAL_MS := 80
+const TOUCH_DRAG_DISTANCE_THRESHOLD := 18.0
+const TOUCH_BUSY_TICK_MS := 120.0
+const TOUCH_BUSY_SUPPRESS_MS := 0
+const TOUCH_POINTER_ID_OFFSET := 100000
+const BLACK_FRAME_GUARD_MS := 3200
+const BLACK_FRAME_SAMPLE_INTERVAL_MS := 120
+const BLACK_FRAME_VISIBLE_MIN := 8
 const INITIAL_WINDOW_SIZE := Vector2i(2240, 1260)
 const DEFAULT_UI_DPI_SCALE := 1.35
 const TOUCH_MOUSE_SUPPRESS_MS := 700
@@ -650,6 +688,7 @@ func _build_modal_layer() -> void:
 func _build_loading_panel() -> void:
     loading_panel = PanelContainer.new()
     loading_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+    loading_panel.mouse_filter = Control.MOUSE_FILTER_STOP
     loading_panel.visible = false
     loading_panel.add_theme_stylebox_override("panel", _panel_style(0, Color(0.08, 0.075, 0.065, 0.96), Color(0, 0, 0, 0), 0))
     add_child(loading_panel)
@@ -676,6 +715,7 @@ func _build_loading_panel() -> void:
     log_view = TextEdit.new()
     log_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     log_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    log_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
     log_view.editable = false
     log_view.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
     log_view.scroll_fit_content_height = false
@@ -2147,10 +2187,17 @@ func _ready() -> void:
     _apply_global_dpi_scale()
     get_viewport().transparent_bg = false
     RenderingServer.set_default_clear_color(COLOR_BG)
+    var ios_diagnostics_enabled := OS.get_name() == "iOS" and _runtime_flag("AETHERKIRI_IOS_DIAGNOSTICS")
     var perf_interval_env := OS.get_environment("AETHERKIRI_PERF_LOG_INTERVAL")
     if not perf_interval_env.is_empty():
         perf_log_interval = maxf(0.05, perf_interval_env.to_float())
-    frame_spike_ms = maxf(0.0, OS.get_environment("AETHERKIRI_FRAME_SPIKE_MS").to_float())
+    elif ios_diagnostics_enabled:
+        perf_log_interval = 0.5
+    var frame_spike_env := OS.get_environment("AETHERKIRI_FRAME_SPIKE_MS")
+    if not frame_spike_env.is_empty():
+        frame_spike_ms = maxf(0.0, frame_spike_env.to_float())
+    elif ios_diagnostics_enabled:
+        frame_spike_ms = 20.0
     verbose_render_log = OS.get_environment("AETHERKIRI_VERBOSE_RENDER_LOG") == "1"
     device_probe_enabled = _runtime_flag("AETHERKIRI_DEVICE_PROBE")
     render_surface_mode = _default_render_surface_mode()
@@ -2159,7 +2206,10 @@ func _ready() -> void:
     follow_texture_surface_size = _runtime_flag("AETHERKIRI_FOLLOW_TEXTURE_SURFACE")
     frame_probe_enabled = _runtime_flag("AETHERKIRI_FRAME_PROBE")
     frame_probe_interval = maxf(0.05, _runtime_float("AETHERKIRI_FRAME_PROBE_INTERVAL", 1.0))
+    black_frame_guard_enabled = _runtime_flag("AETHERKIRI_BLACK_FRAME_GUARD")
+    input_trace_enabled = _runtime_flag("AETHERKIRI_INPUT_TRACE") or ios_diagnostics_enabled
     device_probe_enabled = device_probe_enabled or frame_probe_enabled
+    device_probe_enabled = device_probe_enabled or input_trace_enabled
     device_probe_enabled = device_probe_enabled or _runtime_flag("AETHERKIRI_AUTO_OPEN")
     device_probe_enabled = device_probe_enabled or _runtime_flag("AETHERKIRI_AUTO_START_GAME")
     device_probe_enabled = device_probe_enabled or not OS.get_environment("AETHERKIRI_CAPTURE_UI").is_empty()
@@ -2168,10 +2218,16 @@ func _ready() -> void:
     device_probe_enabled = device_probe_enabled or not cli_probe_script.is_empty()
 
     var live_fps_log_path := OS.get_environment("AETHERKIRI_LIVE_FPS_LOG")
+    if live_fps_log_path.is_empty() and ios_diagnostics_enabled:
+        live_fps_log_path = "user://aetherkiri-ios-live.log"
     if not live_fps_log_path.is_empty():
         perf_log_file = FileAccess.open(live_fps_log_path, FileAccess.WRITE)
         if perf_log_file != null:
-            perf_log_file.store_line("live fps log started")
+            perf_log_file.store_line("live fps log started path=%s input_trace=%s frame_spike_ms=%.2f" % [
+                live_fps_log_path,
+                str(input_trace_enabled),
+                frame_spike_ms,
+            ])
             perf_log_file.flush()
 
     selected_backend = _runtime_string(
@@ -2824,6 +2880,9 @@ func _process(delta: float) -> void:
             log_drain_accum = 0.0
             _drain_logs()
 
+        if app_lifecycle_paused:
+            return
+
         startup_poll_accum += delta
         if cached_startup_state == STARTUP_SUCCEEDED or startup_poll_accum >= STARTUP_POLL_INTERVAL:
             startup_poll_accum = 0.0
@@ -2832,9 +2891,20 @@ func _process(delta: float) -> void:
         if startup_state == STARTUP_SUCCEEDED:
             restart_notice.text = ""
             loading_panel.visible = false
+            tick_trace_serial += 1
+            tick_trace_active_serial = tick_trace_serial
+            if _should_log_tick_trace():
+                _log_tick_trace("tick_begin serial=%d delta_ms=%.2f pending_touch=%d suppressed=%d busy_left_ms=%d" % [
+                    tick_trace_serial,
+                    delta * 1000.0,
+                    active_touch_points.size(),
+                    suppressed_touch_points.size(),
+                    maxi(0, touch_input_busy_until_msec - Time.get_ticks_msec()),
+                ])
             var tick_start := Time.get_ticks_usec()
             var tick_result: int = int(player.tick(delta))
             var tick_ms := float(Time.get_ticks_usec() - tick_start) / 1000.0
+            tick_trace_active_serial = 0
             if tick_result != ENGINE_RESULT_OK:
                 render_errors += 1
                 var tick_error_line := "Tick failed: %s %s" % [
@@ -2847,13 +2917,22 @@ func _process(delta: float) -> void:
                     perf_log_file.store_line(tick_error_line)
                     perf_log_file.flush()
                 game_running = false
+                app_lifecycle_paused = false
             else:
+                if tick_ms >= frame_spike_ms and frame_spike_ms > 0.0:
+                    _log_tick_trace("tick_end serial=%d tick_ms=%.2f renderer=\"%s\"" % [
+                        tick_trace_serial,
+                        tick_ms,
+                        player.get_renderer_info(),
+                    ])
                 var update_start := Time.get_ticks_usec()
                 _update_frame()
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
+                _update_touch_busy_gate(maxf(delta * 1000.0, tick_ms + update_ms))
                 _log_live_perf(delta, tick_ms, update_ms)
                 _log_frame_spike(delta, tick_ms, update_ms)
                 _log_frame_probe(delta)
+                _log_input_trace(delta, tick_ms, update_ms)
         elif startup_state == STARTUP_FAILED:
             restart_notice.text = "Game startup failed."
             loading_panel.visible = false
@@ -2862,6 +2941,7 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            app_lifecycle_paused = false
             render_errors += 1
             _append_log("Startup failed: %s" % player.get_last_error())
 
@@ -2954,6 +3034,21 @@ func _log_frame_spike(delta: float, tick_ms: float, update_ms: float) -> void:
         perf_log_file.store_line(line)
         perf_log_file.flush()
 
+func _should_log_tick_trace() -> bool:
+    return input_trace_enabled and Time.get_ticks_msec() < tick_trace_until_msec
+
+func _arm_tick_trace() -> void:
+    if input_trace_enabled:
+        tick_trace_until_msec = maxi(tick_trace_until_msec, Time.get_ticks_msec() + 1200)
+
+func _log_tick_trace(line: String) -> void:
+    if not input_trace_enabled:
+        return
+    print(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+
 func _log_frame_probe(delta: float) -> void:
     if not frame_probe_enabled:
         return
@@ -2976,18 +3071,113 @@ func _log_frame_probe(delta: float) -> void:
         perf_log_file.store_line(line)
         perf_log_file.flush()
 
+func _log_input_trace(delta: float, tick_ms: float, update_ms: float) -> void:
+    if not input_trace_enabled:
+        return
+    input_trace_accum += delta
+    if input_trace_accum < 0.5:
+        return
+    if input_trace_received == 0 and input_trace_blocked == 0 and input_trace_throttled == 0 and input_trace_busy == 0 and input_trace_present_holds == 0 and input_trace_move_suppressed == 0:
+        input_trace_accum = 0.0
+        return
+    var line := "input_probe fps=%d frame_ms=%.2f tick_ms=%.2f update_ms=%.2f recv=%d fwd=%d blocked=%d throttled=%d busy=%d move_suppressed=%d outside=%d send_failed=%d active_touch=%d suppressed=%d present_holds=%d texture=%s renderer=\"%s\"" % [
+        Engine.get_frames_per_second(),
+        delta * 1000.0,
+        tick_ms,
+        update_ms,
+        input_trace_received,
+        input_trace_forwarded,
+        input_trace_blocked,
+        input_trace_throttled,
+        input_trace_busy,
+        input_trace_move_suppressed,
+        input_trace_outside,
+        input_trace_send_failed,
+        active_touch_points.size(),
+        suppressed_touch_points.size(),
+        input_trace_present_holds,
+        player.get_frame_texture_backend(),
+        player.get_renderer_info(),
+    ]
+    print(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+    input_trace_accum = 0.0
+    input_trace_received = 0
+    input_trace_forwarded = 0
+    input_trace_blocked = 0
+    input_trace_throttled = 0
+    input_trace_busy = 0
+    input_trace_move_suppressed = 0
+    input_trace_outside = 0
+    input_trace_send_failed = 0
+    input_trace_present_holds = 0
+
 func _notification(what: int) -> void:
     if what == NOTIFICATION_RESIZED:
         _fit_full_rects()
         return
     if player == null:
         return
+    if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+        _pause_game_for_lifecycle("notification_%d" % what)
+        return
+    if what == NOTIFICATION_APPLICATION_RESUMED or what == NOTIFICATION_APPLICATION_FOCUS_IN:
+        _resume_game_for_lifecycle("notification_%d" % what)
+        return
     if what == NOTIFICATION_WM_CLOSE_REQUEST:
+        if app_lifecycle_paused:
+            player.resume()
+            app_lifecycle_paused = false
         _clear_game_input_capture()
         _finalize_active_game_session()
         viewport.texture = null
         player.release_frame_texture()
         player.destroy_engine()
+
+func _pause_game_for_lifecycle(reason: String) -> void:
+    if not _is_touch_platform():
+        return
+    if app_lifecycle_paused or not game_running or cached_startup_state != STARTUP_SUCCEEDED:
+        return
+    _clear_game_input_capture()
+    var result: int = int(player.pause())
+    if result != ENGINE_RESULT_OK:
+        render_errors += 1
+        _log_lifecycle_line("app_pause_failed reason=%s result=%s error=\"%s\"" % [
+            reason,
+            player.get_last_result(),
+            player.get_last_error(),
+        ])
+        return
+    app_lifecycle_paused = true
+    _log_lifecycle_line("app_paused reason=%s" % reason)
+
+func _resume_game_for_lifecycle(reason: String) -> void:
+    if not _is_touch_platform():
+        return
+    if not app_lifecycle_paused:
+        return
+    var result: int = int(player.resume())
+    if result != ENGINE_RESULT_OK:
+        render_errors += 1
+        _log_lifecycle_line("app_resume_failed reason=%s result=%s error=\"%s\"" % [
+            reason,
+            player.get_last_result(),
+            player.get_last_error(),
+        ])
+        return
+    app_lifecycle_paused = false
+    _clear_game_input_capture()
+    _log_lifecycle_line("app_resumed reason=%s" % reason)
+
+func _log_lifecycle_line(line: String) -> void:
+    print(line)
+    _write_probe_marker(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
 
 func _on_backend_selected(index: int) -> void:
     selected_backend = BACKENDS[index]
@@ -3075,6 +3265,7 @@ func _on_open_game() -> void:
         return
 
     game_running = true
+    app_lifecycle_paused = false
     log_lines.clear()
     _clear_game_input_capture()
     if log_view != null:
@@ -3245,6 +3436,8 @@ func _update_frame() -> void:
         return
     var texture: Texture2D = player.update_frame_texture()
     if texture != null:
+        if _should_hold_suspect_black_frame():
+            return
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
@@ -3295,8 +3488,31 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
 func _clear_game_input_capture() -> void:
     active_touch_points.clear()
     active_mouse_buttons.clear()
+    suppressed_touch_points.clear()
+    touch_down_points.clear()
+    last_forwarded_touch_move_msec_by_id.clear()
+    last_forwarded_touch_down_msec = 0
+    last_forwarded_touch_up_msec = 0
     suppress_mouse_until_msec = 0
     present_hold_frames = 0
+    last_present_hold_msec = 0
+    tick_trace_until_msec = 0
+    tick_trace_active_serial = 0
+    input_trace_accum = 0.0
+    input_trace_received = 0
+    input_trace_forwarded = 0
+    input_trace_blocked = 0
+    input_trace_throttled = 0
+    input_trace_busy = 0
+    input_trace_move_suppressed = 0
+    input_trace_outside = 0
+    input_trace_send_failed = 0
+    input_trace_present_holds = 0
+    touch_input_busy_until_msec = 0
+    black_frame_guard_until_msec = 0
+    black_frame_next_sample_msec = 0
+    black_frame_consecutive = 0
+    black_frame_last_log_msec = 0
 
 func _run_auto_probe() -> void:
     await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_WARMUP_FRAMES", 180))
@@ -3411,6 +3627,65 @@ func _image_stats(image: Image) -> Dictionary:
         "visible": visible,
     }
 
+func _arm_black_frame_guard() -> void:
+    if not _is_touch_platform() or not black_frame_guard_enabled:
+        return
+    var now := Time.get_ticks_msec()
+    black_frame_guard_until_msec = maxi(black_frame_guard_until_msec, now + BLACK_FRAME_GUARD_MS)
+    black_frame_next_sample_msec = 0
+
+func _should_hold_suspect_black_frame() -> bool:
+    if not _is_touch_platform() or player == null:
+        return false
+    if not black_frame_guard_enabled and not frame_probe_enabled:
+        black_frame_consecutive = 0
+        return false
+    var now := Time.get_ticks_msec()
+    var guard_active := now < black_frame_guard_until_msec
+    if not guard_active and not frame_probe_enabled:
+        black_frame_consecutive = 0
+        return false
+    if black_frame_next_sample_msec > 0 and now < black_frame_next_sample_msec:
+        return false
+
+    black_frame_next_sample_msec = now + BLACK_FRAME_SAMPLE_INTERVAL_MS
+    var frame: Dictionary = player.read_frame_rgba()
+    var stats := _frame_stats(frame)
+    var visible := int(stats.get("visible", 0))
+    var sampled := int(stats.get("sampled", 0))
+    var is_black := sampled > 0 and visible < BLACK_FRAME_VISIBLE_MIN
+    if is_black:
+        black_frame_consecutive += 1
+    else:
+        black_frame_consecutive = 0
+
+    if guard_active or is_black or frame_probe_enabled:
+        _log_frame_guard_sample(stats, is_black, guard_active)
+
+    if guard_active and is_black and viewport != null and viewport.texture != null:
+        return true
+    return false
+
+func _log_frame_guard_sample(stats: Dictionary, is_black: bool, guard_active: bool) -> void:
+    if not input_trace_enabled and not frame_probe_enabled:
+        return
+    var now := Time.get_ticks_msec()
+    if not is_black and black_frame_last_log_msec > 0 and now - black_frame_last_log_msec < 500:
+        return
+    black_frame_last_log_msec = now
+    var line := "frame_guard black=%d guard=%d consecutive=%d texture=%s stats=%s renderer=\"%s\"" % [
+        1 if is_black else 0,
+        1 if guard_active else 0,
+        black_frame_consecutive,
+        player.get_frame_texture_backend(),
+        JSON.stringify(stats),
+        player.get_renderer_info(),
+    ]
+    print(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+
 func _default_game_path() -> String:
     if OS.get_name() == "iOS":
         return ProjectSettings.globalize_path("user://Games")
@@ -3477,7 +3752,12 @@ func _write_probe_marker(line: String) -> void:
 
 func _input(event: InputEvent) -> void:
     if game_running and viewport.visible:
-        if _handle_game_pointer_event(event):
+        if not _can_forward_game_input():
+            if _is_game_pointer_event(event):
+                _trace_input_blocked()
+                get_viewport().set_input_as_handled()
+                return
+        elif _handle_game_pointer_event(event):
             get_viewport().set_input_as_handled()
             return
 
@@ -3525,19 +3805,35 @@ func _scroll_detail_by(delta: float) -> void:
     detail_scroll.scroll_vertical = int(next)
 
 func _on_viewport_input(event: InputEvent) -> void:
+    if not _can_forward_game_input():
+        if _is_game_pointer_event(event):
+            _trace_input_blocked()
+            get_viewport().set_input_as_handled()
+        return
     if _handle_game_pointer_event(event):
         get_viewport().set_input_as_handled()
 
+func _can_forward_game_input() -> bool:
+    return game_running and viewport.visible and cached_startup_state == STARTUP_SUCCEEDED and (
+        loading_panel == null or not loading_panel.visible
+    )
+
+func _is_game_pointer_event(event: InputEvent) -> bool:
+    return event is InputEventMouseButton or event is InputEventMouseMotion or event is InputEventScreenTouch or event is InputEventScreenDrag or event is InputEventPanGesture
+
 func _handle_game_pointer_event(event: InputEvent) -> bool:
     # Input callbacks only enqueue events; _process owns engine ticking and frame updates.
+    _trace_input_received()
     if event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
         if _is_touch_platform() and mouse_button.button_index != MOUSE_BUTTON_WHEEL_UP and mouse_button.button_index != MOUSE_BUTTON_WHEEL_DOWN:
+            _trace_input_throttled()
             return true
         var is_scroll := mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP or mouse_button.button_index == MOUSE_BUTTON_WHEEL_DOWN
         var captured := active_mouse_buttons.has(mouse_button.button_index)
         var mapped := _map_viewport_point(mouse_button.position, captured and not is_scroll)
         if mapped.x < 0.0 or mapped.y < 0.0:
+            _trace_input_outside()
             return false
         var event_type := POINTER_DOWN if mouse_button.pressed else POINTER_UP
         if is_scroll:
@@ -3547,7 +3843,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         else:
             active_mouse_buttons.erase(mouse_button.button_index)
         var button := _map_mouse_button(mouse_button.button_index)
-        player.send_pointer_event(
+        _send_game_pointer_event(
             event_type,
             0,
             mapped.x,
@@ -3565,9 +3861,10 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         var motion := event as InputEventMouseMotion
         var mapped := _map_viewport_point(motion.position)
         if mapped.x < 0.0 or mapped.y < 0.0:
+            _trace_input_outside()
             return false
         var rel := _map_viewport_delta(motion.relative)
-        player.send_pointer_event(
+        _send_game_pointer_event(
             POINTER_MOVE,
             0,
             mapped.x,
@@ -3581,36 +3878,172 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         var touch := event as InputEventScreenTouch
         suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
         var pointer_id := touch.index
-        var captured := active_touch_points.has(pointer_id)
-        var mapped := _map_viewport_point(touch.position, captured and not touch.pressed)
-        if mapped.x < 0.0 or mapped.y < 0.0:
-            return false
-        var event_type := POINTER_DOWN if touch.pressed else POINTER_UP
-        if event_type == POINTER_DOWN:
+        if touch.pressed:
+            if _is_touch_input_busy():
+                suppressed_touch_points[pointer_id] = true
+                active_touch_points.erase(pointer_id)
+                touch_down_points.erase(pointer_id)
+                _trace_input_busy()
+                return true
+            if not active_touch_points.is_empty():
+                suppressed_touch_points[pointer_id] = true
+                _trace_input_throttled()
+                return true
+            if _should_suppress_touch_press():
+                suppressed_touch_points[pointer_id] = true
+                active_touch_points.erase(pointer_id)
+                touch_down_points.erase(pointer_id)
+                _trace_input_throttled()
+                return true
+            suppressed_touch_points.erase(pointer_id)
+            var mapped := _map_viewport_point(touch.position)
+            if mapped.x < 0.0 or mapped.y < 0.0:
+                _trace_input_outside()
+                return false
             active_touch_points[pointer_id] = mapped
-        else:
+            touch_down_points[pointer_id] = mapped
+            last_forwarded_touch_down_msec = Time.get_ticks_msec()
+            _send_game_pointer_event(
+                POINTER_DOWN,
+                _touch_engine_pointer_id(pointer_id),
+                mapped.x,
+                mapped.y,
+                0.0,
+                0.0,
+                0
+            )
+            _arm_tick_trace()
+            _arm_black_frame_guard()
+            return true
+        if suppressed_touch_points.has(pointer_id):
+            suppressed_touch_points.erase(pointer_id)
             active_touch_points.erase(pointer_id)
-        player.send_pointer_event(event_type, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
-        if event_type == POINTER_UP:
-            _hold_next_present_after_input()
+            touch_down_points.erase(pointer_id)
+            _trace_input_throttled()
+            return true
+        var captured := active_touch_points.has(pointer_id)
+        if not captured:
+            _trace_input_throttled()
+            return true
+        var mapped := _map_viewport_point(touch.position, true)
+        if mapped.x < 0.0 or mapped.y < 0.0:
+            mapped = active_touch_points.get(pointer_id, Vector2.ZERO)
+        var down_mapped: Vector2 = touch_down_points.get(pointer_id, mapped)
+        active_touch_points.erase(pointer_id)
+        touch_down_points.erase(pointer_id)
+        last_forwarded_touch_move_msec_by_id.erase(pointer_id)
+        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
+        last_forwarded_touch_up_msec = Time.get_ticks_msec()
+        _apply_touch_action_cooldown()
+        _arm_black_frame_guard()
+        _hold_next_present_after_input()
         return true
     elif event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
         suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
         var pointer_id := drag.index
+        if suppressed_touch_points.has(pointer_id):
+            _trace_input_throttled()
+            return true
         var captured := active_touch_points.has(pointer_id)
         var mapped := _map_viewport_point(drag.position, captured)
         if mapped.x < 0.0 or mapped.y < 0.0:
+            _trace_input_outside()
             return false
         if captured:
             active_touch_points[pointer_id] = mapped
-        var rel := _map_viewport_delta(drag.relative)
-        player.send_pointer_event(POINTER_MOVE, pointer_id, mapped.x, mapped.y, rel.x, rel.y, 0)
+        _trace_input_move_suppressed()
         return true
     return false
 
+func _touch_engine_pointer_id(pointer_id: int) -> int:
+    return TOUCH_POINTER_ID_OFFSET + pointer_id
+
+func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: float, delta_x: float, delta_y: float, button: int) -> void:
+    var result := int(player.send_pointer_event(event_type, pointer_id, x, y, delta_x, delta_y, button))
+    if not input_trace_enabled:
+        return
+    input_trace_forwarded += 1
+    if result != ENGINE_RESULT_OK:
+        input_trace_send_failed += 1
+
+func _trace_input_received() -> void:
+    if input_trace_enabled:
+        input_trace_received += 1
+
+func _trace_input_blocked() -> void:
+    if input_trace_enabled:
+        input_trace_blocked += 1
+
+func _trace_input_throttled() -> void:
+    if input_trace_enabled:
+        input_trace_throttled += 1
+
+func _trace_input_busy() -> void:
+    if input_trace_enabled:
+        input_trace_busy += 1
+
+func _trace_input_move_suppressed() -> void:
+    if input_trace_enabled:
+        input_trace_move_suppressed += 1
+
+func _trace_input_outside() -> void:
+    if input_trace_enabled:
+        input_trace_outside += 1
+
+func _apply_touch_action_cooldown() -> void:
+    if not _is_touch_platform() or TOUCH_ACTION_COOLDOWN_MS <= 0:
+        return
+    touch_input_busy_until_msec = maxi(
+        touch_input_busy_until_msec,
+        Time.get_ticks_msec() + TOUCH_ACTION_COOLDOWN_MS
+    )
+
+func _update_touch_busy_gate(tick_ms: float) -> void:
+    if not _is_touch_platform() or TOUCH_BUSY_SUPPRESS_MS <= 0:
+        return
+    if tick_ms < TOUCH_BUSY_TICK_MS:
+        return
+    touch_input_busy_until_msec = maxi(
+        touch_input_busy_until_msec,
+        Time.get_ticks_msec() + TOUCH_BUSY_SUPPRESS_MS
+    )
+
+func _is_touch_input_busy() -> bool:
+    return _is_touch_platform() and TOUCH_BUSY_SUPPRESS_MS > 0 and Time.get_ticks_msec() < touch_input_busy_until_msec
+
+func _should_suppress_touch_press() -> bool:
+    if not _is_touch_platform() or TOUCH_TAP_MIN_INTERVAL_MS <= 0:
+        return false
+    var now := Time.get_ticks_msec()
+    if last_forwarded_touch_down_msec > 0 and now - last_forwarded_touch_down_msec < TOUCH_TAP_MIN_INTERVAL_MS:
+        return true
+    if last_forwarded_touch_up_msec > 0 and now - last_forwarded_touch_up_msec < TOUCH_TAP_MIN_INTERVAL_MS:
+        return true
+    return false
+
+func _should_suppress_touch_drag(pointer_id: int) -> bool:
+    if not _is_touch_platform():
+        return false
+    var now := Time.get_ticks_msec()
+    var last_move := int(last_forwarded_touch_move_msec_by_id.get(pointer_id, 0))
+    if last_move > 0 and now - last_move < TOUCH_DRAG_MIN_INTERVAL_MS:
+        return true
+    last_forwarded_touch_move_msec_by_id[pointer_id] = now
+    return false
+
 func _hold_next_present_after_input() -> void:
-    present_hold_frames = maxi(present_hold_frames, POST_INPUT_PRESENT_HOLD_FRAMES)
+    if POST_INPUT_PRESENT_HOLD_FRAMES <= 0:
+        return
+    var now := Time.get_ticks_msec()
+    if present_hold_frames > 0:
+        return
+    if last_present_hold_msec > 0 and now - last_present_hold_msec < POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS:
+        return
+    present_hold_frames = POST_INPUT_PRESENT_HOLD_FRAMES
+    last_present_hold_msec = now
+    if input_trace_enabled:
+        input_trace_present_holds += 1
 
 func _is_touch_platform() -> bool:
     var platform := OS.get_name()

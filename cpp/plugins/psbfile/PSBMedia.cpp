@@ -59,6 +59,24 @@ namespace PSB {
                 archiveKey == "autoskip.psb";
         }
 
+        std::string ArchiveKeyFromResourceKey(const std::string &key) {
+            const auto slashPos = key.find('/');
+            if(slashPos == std::string::npos) {
+                return key;
+            }
+            return key.substr(0, slashPos);
+        }
+
+        bool IsPinnedPSBArchive(const std::string &archiveKey) {
+            return archiveKey == "window.pimg" ||
+                archiveKey == "title.pimg" ||
+                archiveKey == "quickmenu.pimg" ||
+                archiveKey == "voicebar.pimg" ||
+                archiveKey == "chapter.pimg" ||
+                archiveKey == "file.pimg" ||
+                archiveKey == "autoskip.psb";
+        }
+
         bool IsLogoMotionPSBKey(const std::string &key) {
             return key.rfind("yuzulogo.mtn/", 0) == 0 ||
                 key.rfind("m2logo.mtn/", 0) == 0;
@@ -1100,8 +1118,9 @@ namespace PSB {
 
         size_t evictedCount = 0;
         size_t evictedBytes = 0;
+        size_t pinnedScans = 0;
         while((_resources.size() > _maxEntryCount || _bytesInUse > _maxByteSize) &&
-              !_lru.empty()) {
+              !_lru.empty() && pinnedScans < _lru.size()) {
             const std::string victimKey = _lru.back();
             _lru.pop_back();
 
@@ -1109,7 +1128,14 @@ namespace PSB {
             if(it == _resources.end()) {
                 continue;
             }
+            if(IsPinnedPSBArchive(ArchiveKeyFromResourceKey(victimKey))) {
+                _lru.push_front(victimKey);
+                it->second.lruIt = _lru.begin();
+                ++pinnedScans;
+                continue;
+            }
 
+            pinnedScans = 0;
             evictedCount++;
             evictedBytes += it->second.sizeBytes;
             _bytesInUse -= it->second.sizeBytes;
@@ -1140,7 +1166,7 @@ namespace PSB {
             if(found)
                 return true;
         }
-        if(!tryLazyLoadArchive(key))
+        if(!tryLazyLoadArchive(key, true))
             return false;
         std::lock_guard<std::mutex> lock(_mutex);
         if(_resources.find(key) != _resources.end()) {
@@ -1185,7 +1211,7 @@ namespace PSB {
             }
         }
 
-        if(!res && tryLazyLoadArchive(key)) {
+        if(!res && tryLazyLoadArchive(key, true)) {
             std::lock_guard<std::mutex> lock(_mutex);
             auto it = _resources.find(key);
             if(it == _resources.end()) {
@@ -1271,7 +1297,8 @@ namespace PSB {
         return memoryStream;
     }
 
-    bool PSBMedia::tryLazyLoadArchive(const std::string &key) {
+    bool PSBMedia::tryLazyLoadArchive(const std::string &key,
+                                      bool reloadIfLoaded) {
         const auto slashPos = key.find('/');
         if(slashPos == std::string::npos || slashPos == 0)
             return false;
@@ -1280,8 +1307,26 @@ namespace PSB {
         bool shouldAttemptLoad = false;
         {
             std::lock_guard<std::mutex> lock(_mutex);
+            if(_missingResourceKeys.find(key) != _missingResourceKeys.end()) {
+                return false;
+            }
+            const std::string archivePrefix = archiveKey + "/";
+            bool archiveHasLiveResources = false;
+            for(const auto &entry : _resources) {
+                if(entry.first.rfind(archivePrefix, 0) == 0) {
+                    archiveHasLiveResources = true;
+                    break;
+                }
+            }
+            const bool knownResource =
+                _knownResourceKeys.find(key) != _knownResourceKeys.end();
+            const bool firstLoad = _loadedArchives.insert(archiveKey).second;
             shouldAttemptLoad =
-                _loadedArchives.insert(archiveKey).second;
+                firstLoad ||
+                (reloadIfLoaded && (knownResource || !archiveHasLiveResources));
+            if(!shouldAttemptLoad && !knownResource) {
+                _missingResourceKeys.insert(key);
+            }
         }
         if(!shouldAttemptLoad)
             return false;
@@ -1298,6 +1343,16 @@ namespace PSB {
             }
             LOGGER->info("PSB lazy-load archive: {}", archiveKey);
             RegisterPSBResourcesIntoMedia(*this, psb, archiveKey);
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                const bool found = _resources.find(key) != _resources.end() ||
+                    findBySuffixLocked(key) != _resources.end();
+                if(found) {
+                    _missingResourceKeys.erase(key);
+                } else {
+                    _missingResourceKeys.insert(key);
+                }
+            }
             return true;
         } catch(const std::exception &e) {
             std::lock_guard<std::mutex> lock(_mutex);
@@ -1332,6 +1387,8 @@ namespace PSB {
         const size_t incomingSize = resource->data.size();
 
         std::lock_guard<std::mutex> lock(_mutex);
+        _knownResourceKeys.insert(key);
+        _missingResourceKeys.erase(key);
         auto it = _resources.find(key);
         if(it != _resources.end()) {
             _bytesInUse -= it->second.sizeBytes;
@@ -1419,10 +1476,17 @@ namespace PSB {
             if(it->first.rfind(normalizedPrefix, 0) == 0) {
                 _bytesInUse -= it->second.sizeBytes;
                 _lru.erase(it->second.lruIt);
+                _knownResourceKeys.erase(it->first);
+                _missingResourceKeys.erase(it->first);
                 it = _resources.erase(it);
                 continue;
             }
             ++it;
+        }
+        if(!normalizedPrefix.empty()) {
+            std::string archiveKey = normalizedPrefix;
+            archiveKey.pop_back();
+            _loadedArchives.erase(archiveKey);
         }
     }
 
@@ -1433,6 +1497,9 @@ namespace PSB {
         _bytesInUse = 0;
         _hitCount = 0;
         _missCount = 0;
+        _loadedArchives.clear();
+        _knownResourceKeys.clear();
+        _missingResourceKeys.clear();
     }
 
     std::vector<PSBMedia::ImageInfoEntry> PSBMedia::getImagesByPrefix(

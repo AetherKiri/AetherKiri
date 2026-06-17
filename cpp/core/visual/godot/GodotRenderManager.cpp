@@ -100,7 +100,8 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "RemoveConstOpacity") == 0 ||
                std::strcmp(name, "AlphaBlend") == 0 ||
                std::strcmp(name, "AlphaBlend_a") == 0 ||
-               std::strcmp(name, "AlphaBlend_d") == 0 ||
+               // AlphaBlend_d is formula-correct in isolation, but rapid title
+               // transitions can corrupt the real GPU dependency chain.
                std::strcmp(name, "ConstAlphaBlend_d") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD_d") == 0 ||
@@ -206,6 +207,12 @@ bool RectNeedsAreaDownsample(const tTVPRect &dst, const tTVPRect &src) {
             dst.get_height() < std::abs(src.get_height()));
 }
 
+bool RectNeedsAlphaAreaDownsample(const tTVPRect &dst, const tTVPRect &src,
+                                  const GodotTexture2D *texture) {
+    return texture != nullptr && texture->HasKnownTransparency() &&
+           RectNeedsAreaDownsample(dst, src);
+}
+
 bool TrianglesNeedAreaDownsample(uint32_t triangle_count,
                                  const tTVPPointD *dst_points,
                                  const tTVPPointD *src_points) {
@@ -237,6 +244,14 @@ bool TrianglesNeedAreaDownsample(uint32_t triangle_count,
     const double src_h = src_bottom - src_top;
     return dst_w > 0.0 && dst_h > 0.0 &&
            (dst_w + 0.001 < src_w || dst_h + 0.001 < src_h);
+}
+
+bool TrianglesNeedAlphaAreaDownsample(uint32_t triangle_count,
+                                      const tTVPPointD *dst_points,
+                                      const tTVPPointD *src_points,
+                                      const GodotTexture2D *texture) {
+    return texture != nullptr && texture->HasKnownTransparency() &&
+           TrianglesNeedAreaDownsample(triangle_count, dst_points, src_points);
 }
 
 bool RectBoundsInsideTexture(const tTVPRect &rc, const GodotTexture2D *texture) {
@@ -355,9 +370,26 @@ void GodotTexture2D::DiscardCpuStorage() {
 }
 
 void GodotTexture2D::SetOpacityFromPixels(const void *pixel, int pitch) {
-    (void)pixel;
-    (void)pitch;
-    MarkOpacityUnknown();
+    if (format_ != TVPTextureFormat::RGBA) {
+        MarkOpaqueKnown();
+        return;
+    }
+    if (pixel == nullptr || Width <= 0 || Height <= 0) {
+        MarkOpacityUnknown();
+        return;
+    }
+    const int stride = pitch > 0 ? pitch : pitch_;
+    const auto *bytes = static_cast<const uint8_t *>(pixel);
+    for (int y = 0; y < Height; ++y) {
+        const uint8_t *row = bytes + static_cast<size_t>(y) * stride;
+        for (int x = 0; x < Width; ++x) {
+            if (row[x * 4 + 3] != 0xff) {
+                MarkTransparentKnown();
+                return;
+            }
+        }
+    }
+    MarkOpaqueKnown();
 }
 
 void GodotTexture2D::MarkOpacityUnknown() {
@@ -454,6 +486,7 @@ const void *GodotTexture2D::GetScanLineForRead(tjs_uint l) {
 void *GodotTexture2D::GetScanLineForWrite(tjs_uint l) {
     EnsureCpuReadable();
     if (l >= static_cast<tjs_uint>(Height) || pixels_.empty()) return nullptr;
+    MarkOpacityUnknown();
     MarkCpuDirty();
     return pixels_.data() + static_cast<size_t>(l) * pitch_;
 }
@@ -496,6 +529,7 @@ void GodotTexture2D::SetPoint(int x, int y, uint32_t clr) {
     }
     EnsureCpuReadable();
     std::memcpy(pixels_.data() + static_cast<size_t>(y) * pitch_ + x * 4, &clr, 4);
+    MarkOpacityUnknown();
     MarkCpuDirty();
 }
 
@@ -574,7 +608,7 @@ bool GodotTexture2D::BlendGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
     if (src == nullptr || gpu_handle_ == 0 || src->gpu_handle_ == 0) {
         return false;
     }
-    if (src == this && mode != TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY) {
+    if (src == this) {
         return false;
     }
     const auto *bridge = TVPGodotGpuBridgeGet();
@@ -785,7 +819,8 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             CountGpuFastPath(method_name);
             return;
         }
-        const bool needs_area_downsample = RectNeedsAreaDownsample(rctar, src_rc);
+        const bool needs_area_downsample =
+            RectNeedsAlphaAreaDownsample(rctar, src_rc, src);
         if (!needs_area_downsample && !src_rc.is_empty() &&
             IsGpuCopyTrianglesEnabled()) {
             const tTVPPointD dst_pt[6] = {
@@ -932,7 +967,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
                 return;
             }
             const bool needs_area_downsample =
-                RectNeedsAreaDownsample(rctar, src_rc);
+                RectNeedsAlphaAreaDownsample(rctar, src_rc, src);
             if (!needs_area_downsample && !src_rc.is_empty() &&
                 IsGpuCopyTrianglesEnabled()) {
                 const tTVPPointD dst_pt[6] = {
@@ -958,7 +993,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             }
         }
         if (!RectAbsSizeMatches(rctar, src_rc)) {
-            CountCopyFallbackReason(RectNeedsAreaDownsample(rctar, src_rc)
+            CountCopyFallbackReason(RectNeedsAlphaAreaDownsample(rctar, src_rc, src)
                                         ? "alpha_blend_a_area_downsample"
                                         : IsGpuCopyTrianglesEnabled()
                                               ? "alpha_blend_a_scaled"
@@ -1091,8 +1126,8 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
         if (dst != nullptr && src != nullptr &&
             IsGpuRectFastPathEnabled("Copy") &&
             IsGpuCopyTrianglesEnabled() &&
-            !TrianglesNeedAreaDownsample(static_cast<uint32_t>(nTriangles),
-                                         pttar, textures[0].second) &&
+            !TrianglesNeedAlphaAreaDownsample(static_cast<uint32_t>(nTriangles),
+                                              pttar, textures[0].second, src) &&
             dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
             src->UploadCpuToGpu() &&
             dst->CopyTrianglesGpuFrom(src, static_cast<uint32_t>(nTriangles),

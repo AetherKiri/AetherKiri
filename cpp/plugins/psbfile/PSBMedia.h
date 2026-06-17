@@ -129,7 +129,8 @@ namespace PSB {
 
         std::string canonicalizeKey(const std::string &key) const;
         ResourceMap::iterator findBySuffixLocked(const std::string &key);
-        bool tryLazyLoadArchive(const std::string &key);
+        bool tryLazyLoadArchive(const std::string &key,
+                                bool reloadIfLoaded = false);
         void touchLocked(CacheEntry &entry);
         void adaptBudgetByMemoryPressureLocked();
         void evictIfNeededLocked();
@@ -146,6 +147,8 @@ namespace PSB {
         uint64_t _hitCount = 0;
         uint64_t _missCount = 0;
         std::unordered_set<std::string> _loadedArchives;
+        std::unordered_set<std::string> _knownResourceKeys;
+        std::unordered_set<std::string> _missingResourceKeys;
         std::unordered_map<std::string, std::vector<LayerPosition>> _layerPositions;
         std::unordered_map<std::string, std::vector<ButtonBoundInfo>> _buttonBoundsMap;
     };
