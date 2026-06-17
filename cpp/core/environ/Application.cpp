@@ -552,8 +552,18 @@ void TVPEngineApi_SetGlobalException(const std::string& msg) { g_EngineApiGlobal
 
 void tTVPApplication::ShowException(const ttstr &e) {
     ttstr msg = e;
-    msg += TJS_W("\n\n--- Recent Engine Logs ---\n");
-    msg += TVPGetLastLog(20);
+
+    tTJSVariant includeLogsOpt;
+    bool includeLogs = false;
+    if(TVPGetCommandLine(TJS_W("error_dialog_logs"), &includeLogsOpt)) {
+        ttstr val = includeLogsOpt.AsStringNoAddRef();
+        includeLogs = (val == TJS_W("1") || val == TJS_W("true"));
+    }
+    if(includeLogs) {
+        msg += TJS_W("\n\n--- Recent Engine Logs ---\n");
+        msg += TVPGetLastLog(20);
+    }
+
     TVPEngineApi_SetGlobalException(msg.AsStdString());
     spdlog::error("FATAL SCRIPT EXCEPTION:\n{}", msg.AsStdString());
 

@@ -57,12 +57,15 @@ var mock_enabled := true
 var console_log_file := true
 var trace_log := false
 var export_scripts := false
+var log_alerts := false
+var error_dialog_logs := false
 var dirty_settings := false
 var active_game_path := ""
 var active_game_started_msec := 0
 var detail_touch_scroll_active := false
 var rounded_card_shader: Shader
 var opaque_frame_shader: Shader
+var shown_system_alerts := {}
 
 var player = null
 var runtime_default_font_path := ""
@@ -328,6 +331,8 @@ func _load_shell_settings() -> void:
     console_log_file = bool(cfg.get_value("developer", "console_log_file", console_log_file))
     trace_log = bool(cfg.get_value("developer", "trace_log", trace_log))
     export_scripts = bool(cfg.get_value("developer", "export_scripts", export_scripts))
+    log_alerts = bool(cfg.get_value("developer", "log_alerts", log_alerts))
+    error_dialog_logs = bool(cfg.get_value("developer", "error_dialog_logs", error_dialog_logs))
 
 func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
@@ -344,6 +349,8 @@ func _save_shell_settings() -> void:
     cfg.set_value("developer", "console_log_file", console_log_file)
     cfg.set_value("developer", "trace_log", trace_log)
     cfg.set_value("developer", "export_scripts", export_scripts)
+    cfg.set_value("developer", "log_alerts", log_alerts)
+    cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
     cfg.save(SETTINGS_FILE)
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
     _apply_engine_options()
@@ -375,6 +382,7 @@ func _apply_engine_options() -> void:
         player.set_engine_option("default_font", runtime_default_font_path)
     if not runtime_font_dir_path.is_empty():
         player.set_engine_option("font_dir", runtime_font_dir_path)
+    player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
 
 func _apply_shell_runtime_settings() -> void:
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
@@ -660,6 +668,8 @@ func _rebuild_settings_view() -> void:
     dev_card.add_child(_settings_toggle_row("控制台日志文件", "将引擎控制台日志写入 krkr.console.log 文件", console_log_file, "console_log"))
     dev_card.add_child(_settings_toggle_row("追踪日志", "启用 spdlog trace 级别详细日志，输出最大调试信息", trace_log, "trace_log"))
     dev_card.add_child(_settings_toggle_row("导出 TJS 脚本", "游戏加载时自动从 XP3 中导出反汇编的 TJS 字节码脚本", export_scripts, "export_tjs"))
+    dev_card.add_child(_settings_toggle_row("日志级别弹窗", "将 warning/error/fatal 等日志行额外显示为系统提示；默认关闭", log_alerts, "log_alerts"))
+    dev_card.add_child(_settings_toggle_row("错误弹窗附带日志", "真正异常弹窗中追加最近 20 行引擎日志；默认关闭", error_dialog_logs, "error_dialog_logs"))
 
     page.add_child(_section_title("ⓘ  关于"))
     var about_card := _settings_card()
@@ -1041,6 +1051,10 @@ func _on_setting_toggle(key: String, value: bool) -> void:
         trace_log = value
     elif key == "export_tjs":
         export_scripts = value
+    elif key == "log_alerts":
+        log_alerts = value
+    elif key == "error_dialog_logs":
+        error_dialog_logs = value
     _mark_settings_dirty()
     _apply_engine_options()
     _apply_shell_runtime_settings()
@@ -1261,34 +1275,42 @@ func _show_import_guide() -> void:
     box.add_child(ok)
 
 func _show_message(message: String) -> void:
-    modal_layer.visible = true
-    for child in modal_layer.get_children():
-        child.queue_free()
-    var dim := ColorRect.new()
-    dim.color = Color(0, 0, 0, 0.38)
-    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-    modal_layer.add_child(dim)
-    var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.position = Vector2(-260, -120)
-    dialog.size = Vector2(520, 240)
-    dialog.add_theme_stylebox_override("panel", _panel_style(20, COLOR_CARD, Color(0, 0, 0, 0.06), 1))
-    modal_layer.add_child(dialog)
-    var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 18)
-    dialog.add_child(box)
-    var label := Label.new()
-    label.text = message
-    label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    label.add_theme_font_size_override("font_size", 22)
-    label.add_theme_color_override("font_color", COLOR_TEXT)
-    box.add_child(label)
-    var ok := _pill_button("知道了")
-    ok.pressed.connect(func(): modal_layer.visible = false)
-    box.add_child(ok)
+    _show_system_alert(message, "AetherKiri")
+
+func _show_system_alert(message: String, title: String = "AetherKiri") -> void:
+    if message.strip_edges().is_empty():
+        return
+    OS.alert(message, title)
+
+func _show_system_alert_once(key: String, message: String, title: String = "AetherKiri") -> void:
+    if shown_system_alerts.has(key):
+        return
+    shown_system_alerts[key] = true
+    _show_system_alert(message, title)
+
+func _maybe_show_log_alert(line: String) -> void:
+    if not log_alerts:
+        return
+    var message := line.strip_edges()
+    if message.is_empty():
+        return
+    var lower := message.to_lower()
+    var is_warning := lower.contains("warning") or lower.contains("(warning)") or lower.contains("警告")
+    var is_error := lower.contains("error") or lower.contains("exception") or lower.contains("fatal") or lower.contains("failed") or lower.contains("错误") or lower.contains("失败")
+    if not is_warning and not is_error:
+        return
+    var title := "AetherKiri 错误" if is_error else "AetherKiri 警告"
+    _show_system_alert_once("log:%s" % message, message, title)
+
+func _create_file_dialog(title: String, file_mode: int, filters: PackedStringArray = PackedStringArray()) -> FileDialog:
+    var dialog := FileDialog.new()
+    dialog.file_mode = file_mode
+    dialog.access = FileDialog.ACCESS_FILESYSTEM
+    dialog.use_native_dialog = true
+    dialog.title = title
+    for filter in filters:
+        dialog.add_filter(filter)
+    return dialog
 
 func _offer_scrape_after_add(game: Dictionary) -> void:
     modal_layer.visible = true
@@ -1340,11 +1362,11 @@ func _set_cover_for_selected() -> void:
     var path := String(selected_game.get("path", ""))
     if path.is_empty():
         return
-    var dialog := FileDialog.new()
-    dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-    dialog.access = FileDialog.ACCESS_FILESYSTEM
-    dialog.title = "选择封面图片"
-    dialog.add_filter("*.png, *.jpg, *.jpeg, *.webp;Image")
+    var dialog := _create_file_dialog(
+        "选择封面图片",
+        FileDialog.FILE_MODE_OPEN_FILE,
+        PackedStringArray(["*.png,*.jpg,*.jpeg,*.webp;Image;image/png,image/jpeg,image/webp"])
+    )
     dialog.file_selected.connect(func(cover_path: String):
         _update_game(path, {"coverPath": cover_path})
         _show_detail(selected_game)
@@ -1759,12 +1781,12 @@ func _show_web_import_picker() -> void:
     box.add_child(cancel)
 
 func _open_import_dialog(xp3: bool) -> void:
-    var dialog := FileDialog.new()
-    dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE if xp3 else FileDialog.FILE_MODE_OPEN_DIR
-    dialog.access = FileDialog.ACCESS_FILESYSTEM
-    dialog.title = "选择 XP3 文件" if xp3 else "选择游戏目录"
-    if xp3:
-        dialog.add_filter("*.xp3, *.XP3;KiriKiri XP3 archive")
+    var filters := PackedStringArray(["*.xp3,*.XP3;KiriKiri XP3 archive"]) if xp3 else PackedStringArray()
+    var dialog := _create_file_dialog(
+        "选择 XP3 文件" if xp3 else "选择游戏目录",
+        FileDialog.FILE_MODE_OPEN_FILE if xp3 else FileDialog.FILE_MODE_OPEN_DIR,
+        filters
+    )
     dialog.dir_selected.connect(func(path: String):
         _add_game_path(path)
     )
@@ -2275,13 +2297,17 @@ func _ready() -> void:
 
 func _create_runtime_player() -> bool:
     if not ClassDB.class_exists("AetherKiriPlayer"):
-        _append_log("AetherKiri runtime extension class is unavailable.")
-        _show_message("运行时扩展加载失败：AetherKiriPlayer 不可用")
+        var message := "AetherKiri runtime extension class is unavailable."
+        push_error(message)
+        _append_log(message)
+        _show_system_alert("运行时扩展加载失败：AetherKiriPlayer 不可用", "AetherKiri 错误")
         return false
     var instance: Object = ClassDB.instantiate("AetherKiriPlayer")
     if instance == null or not (instance is Node):
-        _append_log("AetherKiri runtime extension could not create AetherKiriPlayer.")
-        _show_message("运行时扩展加载失败：无法创建 AetherKiriPlayer")
+        var create_message := "AetherKiri runtime extension could not create AetherKiriPlayer."
+        push_error(create_message)
+        _append_log(create_message)
+        _show_system_alert("运行时扩展加载失败：无法创建 AetherKiriPlayer", "AetherKiri 错误")
         return false
     player = instance
     add_child(instance as Node)
@@ -2296,10 +2322,11 @@ func _finish_ready_after_first_frame() -> void:
     var engine_initialized := false
     if not player.initialize_engine(user_dir, cache_dir):
         render_errors += 1
-        _append_log("Engine init failed: %s %s" % [
+        var init_error_message := "Engine init failed: %s %s" % [
             player.get_last_result(),
             player.get_last_error(),
-        ])
+        ]
+        _append_log(init_error_message)
     else:
         engine_initialized = true
         _append_log("AetherKiri engine initialized.")
@@ -3056,7 +3083,8 @@ func _process(delta: float) -> void:
             game_running = false
             app_lifecycle_paused = false
             render_errors += 1
-            _append_log("Startup failed: %s" % player.get_last_error())
+            var startup_error := "Startup failed: %s" % player.get_last_error()
+            _append_log(startup_error)
 
     perf_accum += delta
     state_log_accum += delta
@@ -3305,10 +3333,11 @@ func _apply_backend(log_selection: bool) -> void:
     var result: int = int(player.set_render_backend(selected_backend))
     if result != ENGINE_RESULT_OK:
         render_errors += 1
-        _append_log("Renderer selection failed: %s %s" % [
+        var backend_error_message := "Renderer selection failed: %s %s" % [
             player.get_last_result(),
             player.get_last_error(),
-        ])
+        ]
+        _append_log(backend_error_message)
         return
     restart_notice.text = ""
     if log_selection:
@@ -3371,10 +3400,11 @@ func _on_open_game() -> void:
             player.get_last_result(),
             player.get_last_error(),
         ])
-        _append_log("Game launch failed: %s %s" % [
+        var launch_error_message := "Game launch failed: %s %s" % [
             player.get_last_result(),
             player.get_last_error(),
-        ])
+        ]
+        _append_log(launch_error_message)
         return
 
     game_running = true
@@ -3475,10 +3505,11 @@ func _sync_player_surface_size(force: bool) -> void:
     var result: int = int(player.set_surface_size(target_size.x, target_size.y))
     if result != ENGINE_RESULT_OK:
         render_errors += 1
-        _append_log("Surface resize failed: %s %s" % [
+        var surface_error_message := "Surface resize failed: %s %s" % [
             player.get_last_result(),
             player.get_last_error(),
-        ])
+        ]
+        _append_log(surface_error_message)
         return
     if current_surface_size != target_size:
         last_texture_size = Vector2i.ZERO
@@ -4324,6 +4355,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _append_log(line: String) -> void:
     _write_probe_marker("log %s" % line)
+    _maybe_show_log_alert(line)
     log_lines.append(line)
     while log_lines.size() > MAX_LOG_LINES:
         log_lines.remove_at(0)

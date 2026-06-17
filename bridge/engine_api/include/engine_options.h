@@ -66,6 +66,10 @@
 /** Internal plugin startup policy ("krkrsdl3" / "aether_all"). */
 #define ENGINE_OPTION_PLUGIN_LOAD_MODE "plugin_load_mode"
 
+/** Enable/disable appending recent engine logs to fatal error dialogs
+ *  ("0"/"1", default "0"). */
+#define ENGINE_OPTION_ERROR_DIALOG_LOGS "error_dialog_logs"
+
 /* ── Renderer Values ────────────────────────────────────────────── */
 
 #define ENGINE_RENDERER_GODOT_NATIVE      "godot_native"

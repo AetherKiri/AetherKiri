@@ -361,17 +361,18 @@ tjs_int TVPGetSystemFreeMemory() {
 
 int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
                             const std::vector<ttstr> &vecButtons) {
-    std::string utf8Text = text.AsStdString();
-    std::string utf8Caption = caption.AsStdString();
-
     // 确保在主线程执行UI操作
     if (![NSThread isMainThread]) {
-        spdlog::warn("TVPShowSimpleMessageBox from background thread: {} - {}",
-                     utf8Caption, utf8Text);
-        return vecButtons.empty() ? -1 : 0;
+        __block int result = -1;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            result = TVPShowSimpleMessageBox(text, caption, vecButtons);
+        });
+        return result;
     }
 
     // 转换文本
+    std::string utf8Text = text.AsStdString();
+    std::string utf8Caption = caption.AsStdString();
     NSString *nsText = [NSString stringWithUTF8String:utf8Text.c_str()];
     NSString *nsCaption = [NSString stringWithUTF8String:utf8Caption.c_str()];
 

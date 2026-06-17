@@ -103,6 +103,18 @@ jobs:
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
 
+      - name: Build iOS Release
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ./build.sh ios release --jobs=4 2>&1 | tee "${RUNNER_TEMP}/ios-release-build.log"
+          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/ios-release-build.log"; then
+            echo "Godot iOS release export logged script or GDExtension load errors." >&2
+            exit 1
+          fi
+
       - name: Build iOS Debug
         run: |
           set -euo pipefail
@@ -115,22 +127,10 @@ jobs:
             exit 1
           fi
 
-      - name: Build iOS Release
-        run: |
-          set -euo pipefail
-          chmod +x ./build.sh
-          export CMAKE_C_COMPILER_LAUNCHER=ccache
-          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          ./build.sh ios release --jobs=4 2>&1 | tee "${RUNNER_TEMP}/ios-build.log"
-          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/ios-build.log"; then
-            echo "Godot iOS release export logged script or GDExtension load errors." >&2
-            exit 1
-          fi
-
       - name: Verify exported Xcode project
         run: |
           set -euo pipefail
-          for build_type in debug release; do
+          for build_type in release debug; do
             if [[ ! -d "out/godot/ios/${build_type}/AetherKiri.xcodeproj" ]]; then
               echo "Godot iOS ${build_type} Xcode project not found" >&2
               exit 1
@@ -141,16 +141,24 @@ jobs:
             fi
           done
 
-      - name: Upload Artifact
+      - name: Upload Release Xcode Project
         if: success()
         uses: actions/upload-artifact@v7
         with:
           name: AetherKiri-iOS-XcodeProject
           path: |
-            out/godot/ios/debug/AetherKiri.xcodeproj
-            out/godot/ios/debug/AetherKiri
             out/godot/ios/release/AetherKiri.xcodeproj
             out/godot/ios/release/AetherKiri
+          retention-days: 7
+
+      - name: Upload Debug Xcode Project
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-iOS-Debug-XcodeProject
+          path: |
+            out/godot/ios/debug/AetherKiri.xcodeproj
+            out/godot/ios/debug/AetherKiri
           retention-days: 7
 
       - name: Save vcpkg cache
