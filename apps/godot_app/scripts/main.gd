@@ -24,6 +24,7 @@ const POINTER_DOWN := 1
 const POINTER_MOVE := 2
 const POINTER_UP := 3
 const POINTER_SCROLL := 4
+const POINTER_MOD_LEFT := 0x08
 
 var backend: OptionButton
 var game_path: LineEdit
@@ -4123,7 +4124,8 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             mapped.y,
             rel.x,
             rel.y,
-            0
+            0,
+            POINTER_MOD_LEFT if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) else 0
         )
         return true
     elif event is InputEventScreenTouch:
@@ -4200,19 +4202,33 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         var captured := active_touch_points.has(pointer_id)
         var mapped := _map_viewport_point(drag.position, captured)
         if mapped.x < 0.0 or mapped.y < 0.0:
-            _trace_input_outside()
-            return false
+            if not captured:
+                _trace_input_outside()
+                return false
+            mapped = active_touch_points.get(pointer_id, Vector2.ZERO)
         if captured:
             active_touch_points[pointer_id] = mapped
-        _trace_input_move_suppressed()
+            var rel := _map_viewport_delta(drag.relative)
+            _send_game_pointer_event(
+                POINTER_MOVE,
+                _touch_engine_pointer_id(pointer_id),
+                mapped.x,
+                mapped.y,
+                rel.x,
+                rel.y,
+                0,
+                POINTER_MOD_LEFT
+            )
+        else:
+            _trace_input_throttled()
         return true
     return false
 
 func _touch_engine_pointer_id(pointer_id: int) -> int:
     return TOUCH_POINTER_ID_OFFSET + pointer_id
 
-func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: float, delta_x: float, delta_y: float, button: int) -> void:
-    var result := int(player.send_pointer_event(event_type, pointer_id, x, y, delta_x, delta_y, button))
+func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: float, delta_x: float, delta_y: float, button: int, modifiers: int = 0) -> void:
+    var result := int(player.send_pointer_event(event_type, pointer_id, x, y, delta_x, delta_y, button, modifiers))
     if not input_trace_enabled:
         return
     input_trace_forwarded += 1

@@ -123,6 +123,13 @@ bool TVPScriptReportsTitleMenu() {
     return cached_value;
 }
 
+bool TVPIsTitleMenuBackgroundLayer(tTJSNI_BaseLayer *layer) {
+    if(!layer)
+        return false;
+    const std::string name = layer->GetName().AsStdString();
+    return name == "SysCoverLayer" || name == "title_bg";
+}
+
 void TVPTraceLayerHit(const char *event, tjs_int x, tjs_int y,
                       tTJSNI_BaseLayer *layer) {
     if(!TVPInputTraceEnabled()) return;
@@ -764,25 +771,8 @@ bool tTVPLayerManager::IsSaveLoadMessageCommandBand(tTJSNI_BaseLayer *layer,
 }
 
 bool tTVPLayerManager::IsTitleMenuInputState(tTJSNI_BaseLayer *layer) {
-    if(TVPScriptReportsTitleMenu())
-        return true;
-
-    if(layer) {
-        const std::string hit_name = layer->GetName().AsStdString();
-        if(hit_name == "SysCoverLayer" && layer->GetNodeVisible() &&
-           layer->GetOpacity() > 0)
-            return true;
-    }
-    auto &nodes = GetAllNodes();
-    for(tTJSNI_BaseLayer *candidate : nodes) {
-        if(!candidate)
-            continue;
-        const std::string name = candidate->GetName().AsStdString();
-        if(name == "title_bg" && candidate->GetNodeVisible() &&
-           candidate->GetOpacity() > 0)
-            return true;
-    }
-    return false;
+    (void)layer;
+    return TVPScriptReportsTitleMenu();
 }
 
 bool tTVPLayerManager::IsTitleMenuControlPoint(tjs_int x, tjs_int y) {
@@ -803,34 +793,6 @@ bool tTVPLayerManager::IsTitleMenuControlPoint(tjs_int x, tjs_int y) {
     return right_title_controls || far_right_switcher;
 }
 
-bool TVPShouldDropTitleMenuBackgroundPointer(tjs_int x, tjs_int y) {
-    if(!TVPMainWindow)
-        return false;
-
-    auto *draw_device =
-        dynamic_cast<tTVPDrawDevice *>(TVPMainWindow->GetDrawDevice());
-    if(!draw_device)
-        return false;
-
-    auto *manager =
-        dynamic_cast<tTVPLayerManager *>(draw_device->GetLayerManagerAt(0));
-    if(!manager)
-        return false;
-
-    if(manager->IsTitleMenuControlPoint(x, y))
-        return false;
-
-    if(!manager->IsTitleMenuInputState(nullptr))
-        return false;
-
-    if(TVPInputTraceEnabled()) {
-        spdlog::info(
-            "LayerManager drop title background pointer before queue primary=({}, {})",
-            x, y);
-    }
-    return true;
-}
-//---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
     if(SuppressCurrentTitleMenuPointerGesture) {
         if(TVPInputTraceEnabled()) {
@@ -889,10 +851,10 @@ void tTVPLayerManager::PrimaryDoubleClick(tjs_int x, tjs_int y) {
 //---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryMouseDown(tjs_int x, tjs_int y,
                                         tTVPMouseButton mb, tjs_uint32 flags) {
-    const bool title_state_before_move =
-        mb == mbLeft && IsTitleMenuInputState(nullptr);
-    if(title_state_before_move) {
-        if(!IsTitleMenuControlPoint(x, y)) {
+    if(mb == mbLeft && !IsTitleMenuControlPoint(x, y)) {
+        tTJSNI_BaseLayer *title_hit = GetClickableLayerAt(x, y);
+        if(IsTitleMenuInputState(title_hit) &&
+           TVPIsTitleMenuBackgroundLayer(title_hit)) {
             if(TVPInputTraceEnabled()) {
                 spdlog::info(
                     "LayerManager suppress title background pointer primary=({}, {})",

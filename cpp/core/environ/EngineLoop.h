@@ -142,6 +142,5 @@ private:
     int32_t last_click_x_ = 0;
     int32_t last_click_y_ = 0;
     bool suppress_next_left_click_ = false;
-    bool suppress_title_background_gesture_ = false;
     uint16_t pending_mouse_release_vk_ = 0;
 };

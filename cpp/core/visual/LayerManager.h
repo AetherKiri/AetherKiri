@@ -581,7 +581,5 @@ private:
     void SetTouchCapture(tjs_uint32 id, tTJSNI_BaseLayer *layer);
 };
 //---------------------------------------------------------------------------
-bool TVPShouldDropTitleMenuBackgroundPointer(tjs_int x, tjs_int y);
-//---------------------------------------------------------------------------
 
 #endif

@@ -2146,7 +2146,8 @@ public:
     }
 
     int send_pointer_event(int type, int pointer_id, double x, double y,
-                           double delta_x, double delta_y, int button) {
+                           double delta_x, double delta_y, int button,
+                           int modifiers = 0) {
         if (handle_ == nullptr) {
             return ENGINE_RESULT_INVALID_STATE;
         }
@@ -2159,6 +2160,7 @@ public:
         event.delta_y = delta_y;
         event.pointer_id = pointer_id;
         event.button = button;
+        event.modifiers = modifiers;
         const engine_result_t result = engine_send_input(handle_, &event);
         update_last_error(result);
         return result;
@@ -2583,8 +2585,10 @@ protected:
         ClassDB::bind_method(D_METHOD("pause"), &AetherKiriPlayer::pause);
         ClassDB::bind_method(D_METHOD("resume"), &AetherKiriPlayer::resume);
         ClassDB::bind_method(D_METHOD("send_pointer_event", "type", "pointer_id",
-                                      "x", "y", "delta_x", "delta_y", "button"),
-                             &AetherKiriPlayer::send_pointer_event);
+                                      "x", "y", "delta_x", "delta_y", "button",
+                                      "modifiers"),
+                             &AetherKiriPlayer::send_pointer_event,
+                             DEFVAL(0));
         ClassDB::bind_method(D_METHOD("send_key_event", "pressed", "key_code",
                                       "modifiers", "unicode_codepoint"),
                              &AetherKiriPlayer::send_key_event);
