@@ -456,6 +456,20 @@ namespace {
         return source.find("yuzu_logo") != std::string::npos;
     }
 
+    bool isYuzuStartupLogoWhiteWashLayer(const std::string &motionPath,
+                                         const std::string &nodeLabel,
+                                         const std::string &sourceKey) {
+        if(!isYuzuStartupLogoMotion(motionPath)) {
+            return false;
+        }
+        const auto source = renderDebugLowercase(sourceKey);
+        if(source.find("moji_white") != std::string::npos) {
+            return true;
+        }
+        const auto label = renderDebugLowercase(nodeLabel);
+        return label == "white" && source.find("/yuzu/") != std::string::npos;
+    }
+
     bool motionSourcePixelsAreBGRA(const std::string &motionPath,
                                    bool decodedPixelsAreBgra) {
         if(decodedPixelsAreBgra) {
@@ -520,11 +534,21 @@ namespace {
             source.find("/title/bg") != std::string::npos;
     }
 
+    bool isYuzuTitleLogoLayer(const std::string &nodeLabel,
+                              const std::string &sourceKey) {
+        const auto source = renderDebugLowercase(sourceKey);
+        if(source.find("src/title/logo") != std::string::npos ||
+           source.find("/title/logo") != std::string::npos) {
+            return true;
+        }
+        const auto label = renderDebugLowercase(nodeLabel);
+        return label == "logo" || label == "logoover";
+    }
+
     bool isYuzuTitleCharacterOrLogoLayer(const std::string &nodeLabel,
                                          const std::string &sourceKey) {
         const auto source = renderDebugLowercase(sourceKey);
-        if(source.find("src/title/logo") != std::string::npos ||
-           source.find("/title/logo") != std::string::npos ||
+        if(isYuzuTitleLogoLayer(nodeLabel, sourceKey) ||
            source.find("src/title/ch") != std::string::npos ||
            source.find("/title/ch") != std::string::npos ||
            source.find("title2_ch") != std::string::npos ||
@@ -574,6 +598,24 @@ namespace {
         return entry.visibleAncestorIndex >= 0 &&
             isYuzuTitleStandaloneCharacterLayer(entry.nodeLabel,
                                                 entry.sourceKey);
+    }
+
+    int yuzuTitleIntroDrawPriority(
+        const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
+        if(isYuzuTitleBackgroundLayer(entry.nodeLabel, entry.sourceKey)) {
+            return 0;
+        }
+        if(isYuzuTitlePositionLayer(entry.nodeLabel, entry.sourceKey)) {
+            return 1;
+        }
+        if(isYuzuTitleStandaloneCharacterLayer(entry.nodeLabel,
+                                               entry.sourceKey)) {
+            return 2;
+        }
+        if(isYuzuTitleLogoLayer(entry.nodeLabel, entry.sourceKey)) {
+            return 3;
+        }
+        return 1;
     }
 
     bool isYuzuTitleRenderablePresentationLayer(
@@ -950,14 +992,57 @@ namespace {
                         !entry.skipFlag1 && entry.opacity > 0 &&
                         isYuzuTitleSyntheticIntroLayer(entry);
                 });
+            const bool hasLayerNeedingStableOrdering = std::any_of(
+                runtime.preparedRenderItems.begin(),
+                runtime.preparedRenderItems.end(),
+                [](const auto &entry) {
+                    if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+                       entry.opacity <= 0) {
+                        return false;
+                    }
+                    return isYuzuTitlePositionLayer(entry.nodeLabel,
+                                                    entry.sourceKey) ||
+                        isYuzuTitleStandaloneCharacterLayer(entry.nodeLabel,
+                                                            entry.sourceKey) ||
+                        isYuzuTitleLogoLayer(entry.nodeLabel, entry.sourceKey);
+                });
+            if(hasLayerNeedingStableOrdering) {
+                std::stable_sort(
+                    runtime.preparedRenderItems.begin(),
+                    runtime.preparedRenderItems.end(),
+                    [](const auto &lhs, const auto &rhs) {
+                        return yuzuTitleIntroDrawPriority(lhs) <
+                            yuzuTitleIntroDrawPriority(rhs);
+                    });
+            }
             if(hasSyntheticIntroLayer) {
+                std::vector<std::string> syntheticIntroSources;
+                syntheticIntroSources.reserve(runtime.preparedRenderItems.size());
+                for(const auto &entry : runtime.preparedRenderItems) {
+                    if(entry.drawFlag && !entry.skipFlag0 && !entry.skipFlag1 &&
+                       entry.opacity > 0 && isYuzuTitleSyntheticIntroLayer(entry)) {
+                        syntheticIntroSources.push_back(
+                            renderDebugLowercase(entry.sourceKey));
+                    }
+                }
                 int suppressedClipCharacters = 0;
+                int suppressedCompositeLayers = 0;
                 for(auto &entry : runtime.preparedRenderItems) {
                     if(entry.drawFlag && !entry.skipFlag0 && !entry.skipFlag1 &&
                        entry.opacity > 0 &&
-                       isYuzuTitleClipAnimatedCharacterLayer(entry)) {
+                       isYuzuTitleClipAnimatedCharacterLayer(entry) &&
+                       std::find(syntheticIntroSources.begin(),
+                                 syntheticIntroSources.end(),
+                                 renderDebugLowercase(entry.sourceKey)) !=
+                           syntheticIntroSources.end()) {
                         entry.skipFlag0 = true;
                         ++suppressedClipCharacters;
+                    } else if(entry.drawFlag && !entry.skipFlag0 &&
+                              !entry.skipFlag1 && entry.opacity > 0 &&
+                              isYuzuTitlePositionLayer(entry.nodeLabel,
+                                                       entry.sourceKey)) {
+                        entry.skipFlag0 = true;
+                        ++suppressedCompositeLayers;
                     }
                 }
                 if(suppressedClipCharacters > 0 && LOGGER &&
@@ -968,6 +1053,15 @@ namespace {
                     LOGGER->info(
                         "motion title clip character layer suppressed: motion={} suppressedClipCharacters={}",
                         motionPath, suppressedClipCharacters);
+                }
+                if(suppressedCompositeLayers > 0 && LOGGER &&
+                   shouldDebugTitleRender(motionPath) &&
+                   markRenderDebugLogged(fmt::format(
+                       "yuzu-title-composite-delayed:{}:{}",
+                       motionPath, suppressedCompositeLayers))) {
+                    LOGGER->info(
+                        "motion title composite layer delayed until intro completes: motion={} suppressedCompositeLayers={}",
+                        motionPath, suppressedCompositeLayers);
                 }
             }
 
@@ -985,7 +1079,8 @@ namespace {
                 for(auto &entry : runtime.preparedRenderItems) {
                     if(entry.drawFlag && !entry.skipFlag0 &&
                        !entry.skipFlag1 && entry.opacity > 0 &&
-                       isYuzuTitleSyntheticIntroLayer(entry)) {
+                       isYuzuTitleStandaloneCharacterLayer(entry.nodeLabel,
+                                                           entry.sourceKey)) {
                         entry.skipFlag0 = true;
                         ++suppressed;
                     }
@@ -996,7 +1091,7 @@ namespace {
                        "yuzu-title-composite-suppressed:{}:{}",
                        motionPath, suppressed))) {
                     LOGGER->info(
-                        "motion title composite character layer active: motion={} suppressedSyntheticIntroCharacters={}",
+                        "motion title composite character layer active: motion={} suppressedStandaloneCharacters={}",
                         motionPath, suppressed);
                 }
             }
@@ -2020,6 +2115,84 @@ namespace {
         return score;
     }
 
+    int scoreStartupLogoPresentationChild(tTJSNI_BaseLayer *parent,
+                                          tTJSNI_BaseLayer *child,
+                                          int canvasWidth,
+                                          int canvasHeight,
+                                          int depth) {
+        if(!parent || !child || child == parent || !child->GetOwnerNoAddRef()) {
+            return -1;
+        }
+        if(!motionLayerIsVisiblePresentationSurface(child) ||
+           !child->GetHasImage() ||
+           !motionLayerCoversCanvas(child, canvasWidth, canvasHeight)) {
+            return -1;
+        }
+        if(child->GetCount() > 0) {
+            return -1;
+        }
+
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(child->GetName()));
+        if(genericMotionLayerNameLooksLikeUiChrome(name)) {
+            return -1;
+        }
+
+        int score = 100;
+        if(name == "ev") {
+            score += 900;
+        } else if(name.find("ev") != std::string::npos ||
+                  name.find("event") != std::string::npos ||
+                  name.find("cg") != std::string::npos) {
+            score += 700;
+        } else if(name == "stage" || name.find("stage") != std::string::npos) {
+            score += 600;
+        } else if(name.find("背景") != std::string::npos ||
+                  name.find("background") != std::string::npos ||
+                  name.find("bg") != std::string::npos) {
+            score += 80;
+        }
+        score += static_cast<int>(child->GetOverallOrderIndex());
+        score += static_cast<int>(child->GetOrderIndex()) * 2;
+        score -= depth * 4;
+        return score;
+    }
+
+    tTJSNI_BaseLayer *findStartupLogoPresentationLayer(
+        tTJSNI_BaseLayer *parent,
+        int canvasWidth,
+        int canvasHeight) {
+        if(!parent || parent->GetCount() <= 0) {
+            return nullptr;
+        }
+
+        struct Candidate {
+            tTJSNI_BaseLayer *layer = nullptr;
+            int score = -1;
+        };
+        Candidate best;
+        auto visit = [&](auto &&self,
+                         tTJSNI_BaseLayer *current,
+                         int depth) -> void {
+            if(!current || current->GetCount() <= 0) {
+                return;
+            }
+            const auto childCount = current->GetCount();
+            for(tjs_uint i = 0; i < childCount; ++i) {
+                auto *child = current->GetChildren(static_cast<tjs_int>(i));
+                const int score = scoreStartupLogoPresentationChild(
+                    current, child, canvasWidth, canvasHeight, depth);
+                if(score > best.score) {
+                    best.layer = child;
+                    best.score = score;
+                }
+                self(self, child, depth + 1);
+            }
+        };
+        visit(visit, parent, 0);
+        return best.layer;
+    }
+
     bool yuzuTitleLayerNameMatches(tTJSNI_BaseLayer *layer) {
         if(!layer) {
             return false;
@@ -2901,6 +3074,19 @@ namespace motion {
                        entry.nodeLabel + ":" + entry.sourceKey)) {
                     LOGGER->info(
                         "motion skip title white utility layer: motion={} node={} label={} source={}",
+                        motionPath, entry.nodeIndex, entry.nodeLabel,
+                        entry.sourceKey);
+                }
+                continue;
+            }
+            if(isYuzuStartupLogoWhiteWashLayer(motionPath, entry.nodeLabel,
+                                               entry.sourceKey)) {
+                if(LOGGER && shouldDebugTitleRender(motionPath, entry.sourceKey) &&
+                   markRenderDebugLogged(
+                       "yuzu-logo-white-wash:" + motionPath + ":" +
+                       entry.nodeLabel + ":" + entry.sourceKey)) {
+                    LOGGER->info(
+                        "motion skip yuzu logo white wash layer: motion={} node={} label={} source={}",
                         motionPath, entry.nodeIndex, entry.nodeLabel,
                         entry.sourceKey);
                 }
@@ -4196,9 +4382,13 @@ namespace motion {
                     finalNativeLayer, canvasWidth, canvasHeight);
             }
         } else if(yuzuLogoPresentation) {
-            presentationChild = findMotionPresentationChild(
-                finalNativeLayer, canvasWidth, canvasHeight,
-                allowTransientPresentationLayer);
+            presentationChild = findStartupLogoPresentationLayer(
+                finalNativeLayer, canvasWidth, canvasHeight);
+            if(!presentationChild) {
+                presentationChild = findMotionPresentationChild(
+                    finalNativeLayer, canvasWidth, canvasHeight,
+                    allowTransientPresentationLayer);
+            }
         } else {
             presentationChild = findGenericMotionPresentationChild(
                 finalNativeLayer, canvasWidth, canvasHeight);
