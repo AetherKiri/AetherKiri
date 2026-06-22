@@ -137,6 +137,9 @@ var device_probe_enabled := false
 var follow_texture_surface_size := false
 var present_hold_frames := 0
 var last_present_hold_msec := 0
+var present_hold_snapshot_texture: Texture2D
+var present_hold_snapshot_image: Image
+var post_input_minor_hold_frames := 0
 var current_surface_size := Vector2i.ZERO
 var render_surface_base_size := RENDER_SURFACE_SIZE
 var render_surface_max_size := RENDER_SURFACE_MAX_SIZE
@@ -150,6 +153,9 @@ const RENDER_SURFACE_MAX_SIZE := Vector2i(1920, 1080)
 const RENDER_SURFACE_MODE_GAME := "game"
 const RENDER_SURFACE_MODE_DISPLAY := "display"
 const POST_INPUT_PRESENT_HOLD_FRAMES := 1
+const POST_CLICK_PRESENT_HOLD_FRAMES := 4
+const POST_CLICK_MINOR_FRAME_SUPPRESS_FRAMES := 8
+const POST_CLICK_MINOR_FRAME_DIFF_THRESHOLD := 0.01
 const POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS := 120
 const TOUCH_TAP_MIN_INTERVAL_MS := 0
 const TOUCH_ACTION_COOLDOWN_MS := 0
@@ -2513,8 +2519,14 @@ func _probe_tick_and_update() -> bool:
     if result != ENGINE_RESULT_OK:
         printerr("tick failed: %s" % player.get_last_error())
         return false
+    if present_hold_frames > 0:
+        present_hold_frames -= 1
+        return true
     var texture: Texture2D = player.update_frame_texture()
     if texture != null:
+        if _should_suppress_minor_post_input_frame(texture):
+            return true
+        _clear_present_hold_snapshot()
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
@@ -2815,9 +2827,10 @@ func _probe_send_mapped_click(window_pos: Vector2, config: Dictionary) -> void:
     player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    _hold_next_present_after_input()
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
-    _hold_next_present_after_input()
+    _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
 
 func _probe_send_mapped_move(window_pos: Vector2, config: Dictionary) -> void:
     var mapped := _probe_map_window_point(window_pos, config)
@@ -2946,6 +2959,19 @@ func _probe_send_direct_click(pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, pos.x, pos.y, 0.0, 0.0, 0)
 
 func _probe_capture_image() -> Image:
+    var texture := get_viewport().get_texture()
+    if texture != null:
+        var viewport_image := texture.get_image()
+        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
+            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
+                return viewport_image
+
+    if viewport.texture != null:
+        var viewport_image := viewport.texture.get_image()
+        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
+            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
+                return viewport_image
+
     var frame: Dictionary = player.read_frame_rgba()
     var data: PackedByteArray = frame.get("rgba", PackedByteArray())
     var width := int(frame.get("width", 0))
@@ -2954,19 +2980,6 @@ func _probe_capture_image() -> Image:
         var frame_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
         if int(_image_stats(frame_image).get("visible", 0)) > 0:
             return frame_image
-
-    if viewport.texture != null:
-        var viewport_image := viewport.texture.get_image()
-        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
-            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
-                return viewport_image
-
-    var texture := get_viewport().get_texture()
-    if texture != null:
-        var viewport_image := texture.get_image()
-        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
-            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
-                return viewport_image
     return Image.create(1, 1, false, Image.FORMAT_RGBA8)
 
 func _probe_image_diff_score(a: Image, b: Image) -> float:
@@ -3432,6 +3445,7 @@ func _on_open_game() -> void:
         log_view.scroll_vertical = 0
     last_texture_size = Vector2i.ZERO
     present_hold_frames = 0
+    _clear_present_hold_snapshot()
     capture_after_open_done = false
     capture_after_open_ready_usec = 0
     auto_probe_running = false
@@ -3603,6 +3617,9 @@ func _update_frame() -> void:
     if texture != null:
         if _should_hold_suspect_black_frame():
             return
+        if _should_suppress_minor_post_input_frame(texture):
+            return
+        _clear_present_hold_snapshot()
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
@@ -3661,6 +3678,7 @@ func _clear_game_input_capture() -> void:
     suppress_mouse_until_msec = 0
     present_hold_frames = 0
     last_present_hold_msec = 0
+    _clear_present_hold_snapshot()
     tick_trace_until_msec = 0
     tick_trace_active_serial = 0
     input_trace_accum = 0.0
@@ -3830,9 +3848,10 @@ func _send_probe_click(window_pos: Vector2) -> void:
     player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    _hold_next_present_after_input()
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
-    _hold_next_present_after_input()
+    _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
     _write_probe_marker("auto_click window=%s mapped=%s" % [window_pos, mapped])
 
 func _map_probe_window_point(pos: Vector2) -> Vector2:
@@ -4120,8 +4139,10 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             -1.0 if mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0,
             button
         )
-        if event_type == POINTER_UP:
+        if event_type == POINTER_DOWN:
             _hold_next_present_after_input()
+        elif event_type == POINTER_UP:
+            _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
         return true
     elif event is InputEventMouseMotion:
         if _is_touch_platform():
@@ -4183,6 +4204,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             )
             _arm_tick_trace()
             _arm_black_frame_guard()
+            _hold_next_present_after_input()
             return true
         if suppressed_touch_points.has(pointer_id):
             suppressed_touch_points.erase(pointer_id)
@@ -4205,7 +4227,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         last_forwarded_touch_up_msec = Time.get_ticks_msec()
         _apply_touch_action_cooldown()
         _arm_black_frame_guard()
-        _hold_next_present_after_input()
+        _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
         return true
     elif event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
@@ -4318,15 +4340,80 @@ func _should_suppress_touch_drag(pointer_id: int) -> bool:
     last_forwarded_touch_move_msec_by_id[pointer_id] = now
     return false
 
-func _hold_next_present_after_input() -> void:
-    if POST_INPUT_PRESENT_HOLD_FRAMES <= 0:
+func _freeze_current_presented_frame() -> void:
+    if viewport == null or present_hold_snapshot_texture != null:
+        return
+
+    var image: Image = null
+    if viewport.texture != null:
+        image = viewport.texture.get_image()
+    if (image == null or image.get_width() <= 0 or image.get_height() <= 0) and player != null:
+        var frame: Dictionary = player.read_frame_rgba()
+        var data: PackedByteArray = frame.get("rgba", PackedByteArray())
+        var width := int(frame.get("width", 0))
+        var height := int(frame.get("height", 0))
+        if width > 0 and height > 0 and data.size() >= width * height * 4:
+            image = Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
+    if image == null or image.get_width() <= 0 or image.get_height() <= 0:
+        return
+
+    present_hold_snapshot_image = image.duplicate()
+    present_hold_snapshot_texture = ImageTexture.create_from_image(present_hold_snapshot_image)
+    if present_hold_snapshot_texture != null:
+        viewport.texture = present_hold_snapshot_texture
+        viewport.queue_redraw()
+
+func _clear_present_hold_snapshot() -> void:
+    present_hold_snapshot_texture = null
+    present_hold_snapshot_image = null
+    post_input_minor_hold_frames = 0
+
+func _should_suppress_minor_post_input_frame(texture: Texture2D) -> bool:
+    if post_input_minor_hold_frames <= 0 or present_hold_snapshot_image == null or texture == null:
+        return false
+    var image := texture.get_image()
+    if image == null or image.get_width() <= 0 or image.get_height() <= 0:
+        return false
+    if image.get_width() != present_hold_snapshot_image.get_width() or image.get_height() != present_hold_snapshot_image.get_height():
+        return false
+
+    var diff := _sample_image_diff(present_hold_snapshot_image, image, 80, 45)
+    if diff <= POST_CLICK_MINOR_FRAME_DIFF_THRESHOLD:
+        post_input_minor_hold_frames -= 1
+        return true
+    return false
+
+func _sample_image_diff(a: Image, b: Image, samples_x: int, samples_y: int) -> float:
+    var width := mini(a.get_width(), b.get_width())
+    var height := mini(a.get_height(), b.get_height())
+    if width <= 0 or height <= 0:
+        return 1.0
+    var sx := maxi(1, samples_x)
+    var sy := maxi(1, samples_y)
+    var total := 0.0
+    var count := 0
+    for yi in range(sy):
+        var y := int(round(float(yi) * float(height - 1) / float(maxi(1, sy - 1))))
+        for xi in range(sx):
+            var x := int(round(float(xi) * float(width - 1) / float(maxi(1, sx - 1))))
+            var ca := a.get_pixel(x, y)
+            var cb := b.get_pixel(x, y)
+            total += absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b)
+            count += 3
+    return total / float(maxi(1, count))
+
+func _hold_next_present_after_input(frames: int = POST_INPUT_PRESENT_HOLD_FRAMES, force: bool = false) -> void:
+    if frames <= 0:
         return
     var now := Time.get_ticks_msec()
-    if present_hold_frames > 0:
+    if present_hold_frames > 0 and not force:
         return
-    if last_present_hold_msec > 0 and now - last_present_hold_msec < POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS:
+    if not force and last_present_hold_msec > 0 and now - last_present_hold_msec < POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS:
         return
-    present_hold_frames = POST_INPUT_PRESENT_HOLD_FRAMES
+    _freeze_current_presented_frame()
+    present_hold_frames = maxi(present_hold_frames, frames)
+    if force:
+        post_input_minor_hold_frames = maxi(post_input_minor_hold_frames, POST_CLICK_MINOR_FRAME_SUPPRESS_FRAMES)
     last_present_hold_msec = now
     if input_trace_enabled:
         input_trace_present_holds += 1
