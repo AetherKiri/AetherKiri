@@ -64,6 +64,8 @@ namespace TJS {
                (!TJS_strcmp(membername, TJS_W("bootStrap")) ||
                 !TJS_strcmp(membername, TJS_W("commitSavedata")) ||
                 !TJS_strcmp(membername, TJS_W("addDllDirectory")) ||
+                !TJS_strcmp(membername, TJS_W("KAGLayerConstructor")) ||
+                !TJS_strcmp(membername, TJS_W("KAGLayerFinalizer")) ||
                 !TJS_strcmp(membername, TJS_W("loadResolutionInfo")) ||
                 !TJS_strcmp(membername, TJS_W("parseArchiveIndex")) ||
                 !TJS_strcmp(membername, TJS_W("setDefaultDllDirectories")) ||
@@ -250,6 +252,10 @@ namespace TJS {
             TJS_W("System"), TJS_W("Storages"), TJS_W("Scripts"),
             TJS_W("Dictionary"), TJS_W("Debug"), TJS_W("Math"),
             TJS_W("Plugins"), TJS_W("Window"), TJS_W("Layer"),
+            TJS_W("inSystemMenuStorages"), TJS_W("kagHookEntries"),
+            TJS_W("afterInitCallback"), TJS_W("COMMAND_SYNC"),
+            TJS_W("COMMAND_ASYNC"), TJS_W("COMMAND_WAIT"),
+            TJS_W("kirikiriz"), TJS_W("kirikiriz_generic"),
             TJS_W("AffineSource"), TJS_W("AffineSourceBMPBase"),
             TJS_W("AffineSourceImage"), TJS_W("AffineSourceBitmap"),
             TJS_W("AffineSourceStand"), TJS_W("AffineSourceGLES"),
@@ -278,6 +284,77 @@ namespace TJS {
 
         return TJS_SUCCEEDED(
             global->PropGet(0, globalName, nullptr, result, global));
+    }
+
+    static bool TJSCompatResolveWindowDrawDeviceFallback(
+        const tjs_char *membername, tTJSVariant *result) {
+        if(!result || !membername)
+            return false;
+        if(TJS_strcmp(membername, TJS_W("drawDevice")) &&
+           TJS_strcmp(membername, TJS_W("nativeDrawDevice")))
+            return false;
+
+        static thread_local bool resolving = false;
+        if(resolving)
+            return false;
+
+        resolving = true;
+        try {
+            tTJS *engine = TVPGetScriptEngine();
+            if(!engine) {
+                resolving = false;
+                return false;
+            }
+            iTJSDispatch2 *global = engine->GetGlobalNoAddRef();
+            if(!global) {
+                resolving = false;
+                return false;
+            }
+
+            tTJSVariant windowClass;
+            if(TJS_FAILED(global->PropGet(0, TJS_W("Window"), nullptr,
+                                          &windowClass, global)) ||
+               windowClass.Type() != tvtObject) {
+                resolving = false;
+                return false;
+            }
+
+            tTJSVariantClosure windowClosure =
+                windowClass.AsObjectClosureNoAddRef();
+            if(!windowClosure.Object) {
+                resolving = false;
+                return false;
+            }
+
+            tTJSVariant mainWindow;
+            iTJSDispatch2 *windowObjThis = windowClosure.ObjThis
+                                               ? windowClosure.ObjThis
+                                               : windowClosure.Object;
+            if(TJS_FAILED(windowClosure.Object->PropGet(
+                   0, TJS_W("mainWindow"), nullptr, &mainWindow,
+                   windowObjThis)) ||
+               mainWindow.Type() != tvtObject) {
+                resolving = false;
+                return false;
+            }
+
+            tTJSVariantClosure mainClosure =
+                mainWindow.AsObjectClosureNoAddRef();
+            if(!mainClosure.Object) {
+                resolving = false;
+                return false;
+            }
+
+            iTJSDispatch2 *mainObjThis =
+                mainClosure.ObjThis ? mainClosure.ObjThis : mainClosure.Object;
+            const bool ok = TJS_SUCCEEDED(mainClosure.Object->PropGet(
+                0, TJS_W("drawDevice"), nullptr, result, mainObjThis));
+            resolving = false;
+            return ok;
+        } catch(...) {
+            resolving = false;
+            return false;
+        }
     }
 
     static bool TJSCompatIsTextRenderObject(iTJSDispatch2 *target,
@@ -1636,6 +1713,9 @@ namespace TJS {
                 return TJS_S_OK;
             }
             if(TJSCompatResolveStartupFallback(membername, result)) {
+                return TJS_S_OK;
+            }
+            if(TJSCompatResolveWindowDrawDeviceFallback(membername, result)) {
                 return TJS_S_OK;
             }
             if(TJSCompatResolveGlobalFallback(membername, result)) {

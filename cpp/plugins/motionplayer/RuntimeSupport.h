@@ -212,6 +212,9 @@ namespace motion::detail {
         std::vector<MotionNode> nodes;
         bool nodesBuilt = false;
         bool yuzuTitleFinalFrameRendered = false;
+        bool yuzuPresentationCenteredOriginConfirmed = false;
+        float yuzuPresentationTranslateX = 0.0f;
+        float yuzuPresentationTranslateY = 0.0f;
         // Node label → index map. Aligned to binary's std::map<ttstr,int> at player+24.
         // Populated after buildNodeTree, queried by sub_6F2228 equivalent.
         std::map<std::string, int> nodeLabelMap;

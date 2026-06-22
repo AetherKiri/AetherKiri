@@ -860,17 +860,37 @@ namespace {
             }
         }
 
-        bool usesCenteredPresentationOrigin = isLogoMotion;
+        bool usesCenteredPresentationOrigin = isLogoMotion || isTitleMotion;
+        float centeredPresentationTranslateX =
+            static_cast<float>(canvasWidth) * 0.5f;
+        float centeredPresentationTranslateY =
+            static_cast<float>(canvasHeight) * 0.5f;
+        bool centeredOriginFromReference = false;
+        if(isTitleMotion &&
+           runtime.yuzuPresentationCenteredOriginConfirmed) {
+            usesCenteredPresentationOrigin = true;
+            centeredOriginFromReference = true;
+            centeredPresentationTranslateX =
+                runtime.yuzuPresentationTranslateX;
+            centeredPresentationTranslateY =
+                runtime.yuzuPresentationTranslateY;
+        }
         auto considerCenteredOrigin =
             [&](const motion::detail::PlayerRuntime::PreparedRenderItem &entry,
                 int referenceKind) {
-                if(usesCenteredPresentationOrigin || !entry.drawFlag ||
-                   entry.opacity <= 0 ||
+                if(!entry.drawFlag || entry.opacity <= 0 ||
                    isYuzuTitleWhiteUtilityLayer(motionPath, entry.nodeLabel,
                                                 entry.sourceKey)) {
                     return;
                 }
                 const auto source = renderDebugLowercase(entry.sourceKey);
+                const bool isTitlePositionReference =
+                    isTitleMotion &&
+                    isYuzuTitlePositionLayer(entry.nodeLabel, entry.sourceKey);
+                if(usesCenteredPresentationOrigin &&
+                   (!isTitlePositionReference || centeredOriginFromReference)) {
+                    return;
+                }
                 const bool isLogoBackdrop =
                     isLogoMotion &&
                     (source == "src/logo/icon50" ||
@@ -878,6 +898,7 @@ namespace {
                 switch(referenceKind) {
                     case 0:
                         if(isTitleMotion &&
+                           !isTitlePositionReference &&
                            (!isYuzuTitleBackgroundLayer(entry.nodeLabel,
                                                         entry.sourceKey) ||
                             source.find("_bottom") != std::string::npos ||
@@ -886,7 +907,9 @@ namespace {
                         }
                         break;
                     case 1:
-                        if(!isTitleMotion || source != "src/title/pos2") {
+                        if(!isTitleMotion ||
+                           (!isTitlePositionReference &&
+                            source != "src/title/pos2")) {
                             return;
                         }
                         break;
@@ -919,6 +942,23 @@ namespace {
                     usesCenteredPresentationOrigin = true;
                     return;
                 }
+                if(isTitlePositionReference && crossesOrigin &&
+                   widthRatio >= 0.75f &&
+                   heightRatio >= 0.55f &&
+                   widthRatio <= maxCenteredWidthRatio &&
+                   heightRatio <= maxCenteredHeightRatio &&
+                   std::fabs(centerX) <=
+                       static_cast<float>(canvasWidth) * 0.1f &&
+                   std::fabs(centerY) <=
+                       static_cast<float>(canvasHeight) * 0.1f) {
+                    usesCenteredPresentationOrigin = true;
+                    centeredOriginFromReference = true;
+                    centeredPresentationTranslateX =
+                        std::round(-referenceBox[0]);
+                    centeredPresentationTranslateY =
+                        std::round(-referenceBox[1]);
+                    return;
+                }
                 usesCenteredPresentationOrigin =
                     crossesOrigin &&
                     referenceBox[2] > 0.0f && referenceBox[3] > 0.0f &&
@@ -940,17 +980,22 @@ namespace {
             }
         }
         if(usesCenteredPresentationOrigin) {
-            const float translateX = static_cast<float>(canvasWidth) * 0.5f;
-            const float translateY = static_cast<float>(canvasHeight) * 0.5f;
+            const float translateX = centeredPresentationTranslateX;
+            const float translateY = centeredPresentationTranslateY;
+            if(isTitleMotion && centeredOriginFromReference) {
+                runtime.yuzuPresentationCenteredOriginConfirmed = true;
+                runtime.yuzuPresentationTranslateX = translateX;
+                runtime.yuzuPresentationTranslateY = translateY;
+            }
             for(auto &entry : runtime.preparedRenderItems) {
                 translatePreparedRenderItem(entry, translateX, translateY);
             }
             if(LOGGER && shouldDebugTitleRender(motionPath) &&
                markRenderDebugLogged("yuzu-presentation-origin:" + motionPath)) {
                 LOGGER->info(
-                    "motion presentation origin: motion={} centered=1 translate={:.1f},{:.1f} canvas={}x{}",
+                    "motion presentation origin: motion={} centered=1 translate={:.1f},{:.1f} canvas={}x{} reference={}",
                     motionPath, translateX, translateY, canvasWidth,
-                    canvasHeight);
+                    canvasHeight, centeredOriginFromReference ? 1 : 0);
             }
         }
 

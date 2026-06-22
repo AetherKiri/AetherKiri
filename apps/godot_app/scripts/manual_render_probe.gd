@@ -20,6 +20,7 @@ var started := false
 var frame_count := 0
 var screenshot_index := 0
 var suppress_mouse_until_msec := 0
+var auto_capture_frames: Array[int] = []
 
 func _initialize() -> void:
     config = ProbeConfig.load()
@@ -28,6 +29,7 @@ func _initialize() -> void:
         _env_int("AETHERKIRI_MANUAL_PROBE_WINDOW_H", 900)
     ))
     root.title = "AetherKiri Manual Render Probe"
+    auto_capture_frames = _parse_frame_list(OS.get_environment("AETHERKIRI_MANUAL_PROBE_AUTO_CAPTURE_FRAMES"))
 
     rect = TextureRect.new()
     rect.name = "ManualProbeTexture"
@@ -95,6 +97,8 @@ func _process(delta: float) -> bool:
     var auto_capture_frame := _env_int("AETHERKIRI_MANUAL_PROBE_AUTO_CAPTURE_FRAME", 0)
     if auto_capture_frame > 0 and frame_count == auto_capture_frame:
         _save_screenshot("auto")
+    if frame_count in auto_capture_frames:
+        _save_screenshot("auto_%04d" % frame_count)
 
     var auto_quit_frames := _env_int("AETHERKIRI_MANUAL_PROBE_AUTO_QUIT_FRAMES", 0)
     if auto_quit_frames > 0 and frame_count >= auto_quit_frames:
@@ -272,6 +276,15 @@ func _save_screenshot(label: String) -> void:
         JSON.stringify(_image_stats(image)),
         player.get_renderer_info() if player != null else "",
     ])
+
+func _parse_frame_list(value: String) -> Array[int]:
+    var frames: Array[int] = []
+    for part in value.split(",", false):
+        var frame := part.strip_edges().to_int()
+        if frame > 0 and not frames.has(frame):
+            frames.append(frame)
+    frames.sort()
+    return frames
 
 func _image_stats(image: Image) -> Dictionary:
     var visible := 0

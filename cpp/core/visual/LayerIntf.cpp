@@ -89,6 +89,14 @@ static bool TVPLayerDebugEnabled() {
     return enabled;
 }
 
+static bool TVPLayerLoadTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_IMAGE_LOAD_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
 static bool TVPLayerDebugTake() {
     if(!TVPLayerDebugEnabled()) {
         return false;
@@ -793,6 +801,33 @@ static bool TVPInvokeCafeStellaCurrentCommandFunction(
     return TJS_SUCCEEDED(hr);
 }
 
+static tjs_int TVPGetCafeStellaSaveLoadDataIndex(
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index) {
+    tTJSVariant offset_value;
+    try {
+        if(TVPExecuteCafeStellaCurrentExpression(
+               TJS_W("Current.propget(\"offset\")"), parent_layer,
+               source_layer, item_index, &offset_value) &&
+           offset_value.Type() != tvtVoid) {
+            const tjs_int offset =
+                static_cast<tjs_int>(offset_value.AsInteger());
+            const tjs_int data_index = item_index + offset;
+            if(TVPLayerInputTraceEnabled()) {
+                spdlog::info("LayerIntf onButtonClick save-load index raw={} offset={} data={}",
+                             item_index, offset, data_index);
+            }
+            return data_index;
+        }
+    } catch(...) {
+    }
+    if(TVPLayerInputTraceEnabled()) {
+        spdlog::info("LayerIntf onButtonClick save-load index raw={} offset=<unavailable>",
+                     item_index);
+    }
+    return item_index;
+}
+
 static bool TVPInvokeCafeStellaObjectPropertyMethod(
     const char *label, const tTJSVariantClosure &owner,
     tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
@@ -859,32 +894,37 @@ static bool TVPInvokeCafeStellaSaveLoadCurrentCommand(
     tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
     tjs_int item_index, const std::string &mode_text, tTJSVariant *result) {
     tTJSVariant ignored;
+    const tjs_int data_index =
+        TVPGetCafeStellaSaveLoadDataIndex(parent_layer, source_layer,
+                                          item_index);
     auto exec_numeric = [&](const tjs_char *command,
+                            tjs_int command_index,
                             tTJSVariant *command_result) {
         ttstr command_name(command);
-        ttstr index_text(item_index);
+        ttstr index_text(command_index);
         if(TVPInvokeCafeStellaCurrentMethod(
-               parent_layer, source_layer, item_index, command,
+               parent_layer, source_layer, command_index, command,
                command_result)) {
             return true;
         }
         if(TVPInvokeCafeStellaCurrentPropertyMethod(
-               parent_layer, source_layer, item_index, TJS_W("_obj"),
+               parent_layer, source_layer, command_index, TJS_W("_obj"),
                command, command_result)) {
             return true;
         }
         if(TVPExecuteCafeStellaCurrentExpression(
                ttstr(TJS_W("Current.func(\"")) + command_name +
                    TJS_W("\")(") + index_text + TJS_W(")"),
-               parent_layer, source_layer, item_index, command_result)) {
+               parent_layer, source_layer, command_index, command_result)) {
             return true;
         }
         return TVPInvokeCafeStellaCurrentCommandFunction(
-            parent_layer, source_layer, item_index, command, command_result);
+            parent_layer, source_layer, command_index, command,
+            command_result);
     };
 
-    exec_numeric(TJS_W("onItemEnter"), &ignored);
-    exec_numeric(TJS_W("setIt"), &ignored);
+    exec_numeric(TJS_W("onItemEnter"), item_index, &ignored);
+    exec_numeric(TJS_W("setIt"), item_index, &ignored);
 
     const tjs_char *candidate_commands[] = {
         TJS_W("onSelect"),
@@ -896,7 +936,7 @@ static bool TVPInvokeCafeStellaSaveLoadCurrentCommand(
         TJS_W("internalDef"),
     };
     for(const tjs_char *candidate_command : candidate_commands) {
-        if(exec_numeric(candidate_command, result))
+        if(exec_numeric(candidate_command, data_index, result))
             return true;
     }
     return false;
@@ -4251,7 +4291,8 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
     try {
 
         InternalSetImageSize(MainImage->GetWidth(), MainImage->GetHeight());
-        if(TVPLayerDebugTake() || TVPLayerDebugNameLooksThumbnail(name) ||
+        if(TVPLayerLoadTraceEnabled() || TVPLayerDebugTake() ||
+           TVPLayerDebugNameLooksThumbnail(name) ||
            TVPLayerDebugNameLooksThumbnail(load_name)) {
             spdlog::info(
                 "Layer.loadImages name={} loaded={} size={}x{} colorkey=0x{:08x}",

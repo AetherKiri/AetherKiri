@@ -888,12 +888,47 @@ static void TVPRegisterStartupCompatGlobals() {
                         global);
     };
 
+    auto set_int = [global](const tjs_char *name, tjs_int value) {
+        tTJSVariant val(value);
+        global->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP, name, nullptr, &val,
+                        global);
+    };
+
     // Older games often assign these as plain writable globals during
     // initialize.tjs startup. Pre-create them to avoid access-denied failures
     // against native/read-only properties on non-Windows platforms.
     set_bool(TJS_W("debugWindowEnabled"), false);
     set_bool(TJS_W("inXP3archivePacked"), true);
     set_string(TJS_W("convertMode"), TJS_W(""));
+
+    set_int(TJS_W("MB_OK"), 0x00000000);
+    set_int(TJS_W("MB_OKCANCEL"), 0x00000001);
+    set_int(TJS_W("MB_ABORTRETRYIGNORE"), 0x00000002);
+    set_int(TJS_W("MB_YESNOCANCEL"), 0x00000003);
+    set_int(TJS_W("MB_YESNO"), 0x00000004);
+    set_int(TJS_W("MB_RETRYCANCEL"), 0x00000005);
+    set_int(TJS_W("MB_CANCELTRYCONTINUE"), 0x00000006);
+    set_int(TJS_W("MB_ICONHAND"), 0x00000010);
+    set_int(TJS_W("MB_ICONSTOP"), 0x00000010);
+    set_int(TJS_W("MB_ICONERROR"), 0x00000010);
+    set_int(TJS_W("MB_ICONQUESTION"), 0x00000020);
+    set_int(TJS_W("MB_ICONEXCLAMATION"), 0x00000030);
+    set_int(TJS_W("MB_ICONWARNING"), 0x00000030);
+    set_int(TJS_W("MB_ICONASTERISK"), 0x00000040);
+    set_int(TJS_W("MB_ICONINFORMATION"), 0x00000040);
+    set_int(TJS_W("MB_DEFBUTTON1"), 0x00000000);
+    set_int(TJS_W("MB_DEFBUTTON2"), 0x00000100);
+    set_int(TJS_W("MB_DEFBUTTON3"), 0x00000200);
+    set_int(TJS_W("MB_DEFBUTTON4"), 0x00000300);
+    set_int(TJS_W("IDOK"), 1);
+    set_int(TJS_W("IDCANCEL"), 2);
+    set_int(TJS_W("IDABORT"), 3);
+    set_int(TJS_W("IDRETRY"), 4);
+    set_int(TJS_W("IDIGNORE"), 5);
+    set_int(TJS_W("IDYES"), 6);
+    set_int(TJS_W("IDNO"), 7);
+    set_int(TJS_W("IDTRYAGAIN"), 10);
+    set_int(TJS_W("IDCONTINUE"), 11);
 
     TVPRegisterCompatFunction(global, TJS_W("addFont"));
     TVPRegisterCompatFunction(global, TJS_W("AddFont"));
@@ -951,18 +986,6 @@ static void TVPRegisterStartupCompatGlobals() {
             static_cast<tTJSVariant *>(nullptr));
     } catch(...) {
         spdlog::warn("Failed to install CompoundStorageMedia startup compatibility class");
-    }
-
-    iTJSDispatch2 *preRenderFontEx = TJSCreateDictionaryObject();
-    if(preRenderFontEx) {
-        TVPRegisterCompatFunction(preRenderFontEx, TJS_W("addFont"));
-        TVPRegisterCompatFunction(preRenderFontEx, TJS_W("AddFont"));
-        TVPRegisterCompatFunction(preRenderFontEx, TJS_W("AddTrueTypeFont"));
-        TVPRegisterCompatFunction(preRenderFontEx, TJS_W("AddAlias"), true);
-        tTJSVariant val(preRenderFontEx);
-        global->PropSet(TJS_MEMBERENSURE, TJS_W("PreRenderFontEx"), nullptr,
-                        &val, global);
-        preRenderFontEx->Release();
     }
 
     global->Release();

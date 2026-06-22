@@ -50,11 +50,12 @@ namespace TJS {
         // select shorter length over strlen(str) and max
         if(!str)
             return 0;
-        const tjs_char *p = str;
-        max++;
-        while(*p && --max)
-            p++;
-        return (tjs_int)(p - str);
+        if(max <= 0)
+            return 0;
+        ssize_t len = 0;
+        while(len < max && str[len])
+            len++;
+        return (tjs_int)len;
     }
 //---------------------------------------------------------------------------
 

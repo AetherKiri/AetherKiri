@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <memory>
+#include <string>
 #include "StorageIntf.h"
 #include "tjsUtils.h"
 #include "MsgIntf.h"
@@ -63,6 +64,24 @@ bool TVPSaveTraceEnabled() {
         return value && *value && *value != '0';
     }();
     return enabled;
+}
+
+bool TVPStorageTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_STORAGE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+bool TVPStorageTraceName(const ttstr &name) {
+    std::string text = name.AsStdString();
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    return text.find(".pbd") != std::string::npos ||
+        text.find("patch2.xp3") != std::string::npos;
 }
 } // namespace
 
@@ -1075,8 +1094,16 @@ void TVPAddAutoPath(const ttstr &name) {
 
     auto i =
         std::find(TVPAutoPathList.begin(), TVPAutoPathList.end(), normalized);
-    if(i == TVPAutoPathList.end())
-        TVPAutoPathList.push_back(normalized);
+    const bool moved = i != TVPAutoPathList.end();
+    if(moved)
+        TVPAutoPathList.erase(i);
+    TVPAutoPathList.push_back(normalized);
+
+    if(TVPStorageTraceEnabled() && TVPStorageTraceName(normalized)) {
+        spdlog::info("StorageTrace addAutoPath request={} normalized={} moved={} count={}",
+                     name.AsStdString(), normalized.AsStdString(), moved,
+                     TVPAutoPathList.size());
+    }
 
     TVPClearAutoPathCache();
 }
@@ -1149,6 +1176,13 @@ static tjs_uint TVPRebuildAutoPathTable() {
                                            TJS_W('/'))) {
                                 ttstr sname = TVPExtractStorageName(name);
                                 TVPAutoPathTable.Add(sname, path);
+                                if(TVPStorageTraceEnabled() &&
+                                   TVPStorageTraceName(sname)) {
+                                    spdlog::info(
+                                        "StorageTrace table archive short={} path={} full={}",
+                                        sname.AsStdString(), path.AsStdString(),
+                                        name.AsStdString());
+                                }
                                 count++;
                             }
                         } else {
@@ -1173,6 +1207,10 @@ static tjs_uint TVPRebuildAutoPathTable() {
             TVPStorageMediaManager.GetListAt(path, &lister);
             for(auto &i : lister.list) {
                 TVPAutoPathTable.Add(i, path);
+                if(TVPStorageTraceEnabled() && TVPStorageTraceName(i)) {
+                    spdlog::info("StorageTrace table folder short={} path={}",
+                                 i.AsStdString(), path.AsStdString());
+                }
                 count++;
             }
         }
@@ -1228,6 +1266,10 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
 
     ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
     if(incache) {
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info("StorageTrace cache request={} result={}",
+                         name.AsStdString(), incache->AsStdString());
+        }
         if(*incache == TVP_AUTOPATH_CACHE_MISS_MARKER)
             return {};
         return *incache; // found in cache
@@ -1241,6 +1283,10 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
     if(found) {
         // found in current folder
         TVPAutoPathCache.Add(name, normalized);
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info("StorageTrace direct request={} normalized={}",
+                         name.AsStdString(), normalized.AsStdString());
+        }
         return normalized;
     }
 
@@ -1255,6 +1301,12 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         // found in table
         ttstr found = *result + storagename;
         TVPAutoPathCache.Add(name, found);
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info(
+                "StorageTrace table-hit request={} short={} base={} found={}",
+                name.AsStdString(), storagename.AsStdString(),
+                result->AsStdString(), found.AsStdString());
+        }
         return found;
     }
 
@@ -1263,6 +1315,10 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
 
     // not found
     TVPAutoPathCache.Add(name, TVP_AUTOPATH_CACHE_MISS_MARKER);
+    if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+        spdlog::info("StorageTrace miss request={} short={}",
+                     name.AsStdString(), storagename.AsStdString());
+    }
     return {};
 }
 //---------------------------------------------------------------------------

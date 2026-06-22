@@ -15,6 +15,7 @@
 #include "tjsDictionary.h"
 #include "DebugIntf.h"
 #include "TextStream.h"
+#include <atomic>
 #include <cstdlib>
 #include <spdlog/spdlog.h>
 
@@ -25,6 +26,54 @@ bool TVPSaveTraceEnabled() {
         return value && *value && *value != '0';
     }();
     return enabled;
+}
+
+bool TVPKagTagTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_KAG_TAG_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+const char *TVPKagTagTraceNames() {
+    static const char *value = std::getenv("AETHERKIRI_KAG_TAG_TRACE_NAMES");
+    return value && *value ? value : nullptr;
+}
+
+const char *TVPKagTagTraceStorageFilter() {
+    static const char *value = std::getenv("AETHERKIRI_KAG_TAG_TRACE_STORAGE");
+    return value && *value ? value : nullptr;
+}
+
+int TVPKagTagTraceMax() {
+    static const int max = [] {
+        const char *value = std::getenv("AETHERKIRI_KAG_TAG_TRACE_MAX");
+        if(!value || !*value) return 2000;
+        return std::atoi(value);
+    }();
+    return max;
+}
+
+bool TVPKagTagTraceNameAllowed(const std::string &name) {
+    const char *filter = TVPKagTagTraceNames();
+    if(!filter) return true;
+    std::string list(filter);
+    size_t start = 0;
+    while(start <= list.size()) {
+        size_t end = list.find(',', start);
+        std::string token = list.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        if(token == name) return true;
+        if(end == std::string::npos) break;
+        start = end + 1;
+    }
+    return false;
+}
+
+bool TVPKagTagTraceStorageAllowed(const std::string &storage) {
+    const char *filter = TVPKagTagTraceStorageFilter();
+    return !filter || storage.find(filter) != std::string::npos;
 }
 } // namespace
 
@@ -1775,6 +1824,32 @@ parse_start:
             tTJSVariant Value;
         };
         std::vector<tAttrEntry> parsed_attributes;
+        auto trace_returned_tag = [&]() {
+            if(!TVPKagTagTraceEnabled())
+                return;
+            const std::string tag = tagname.AsStdString();
+            if(!TVPKagTagTraceNameAllowed(tag))
+                return;
+            const std::string storage = StorageName.AsStdString();
+            if(!TVPKagTagTraceStorageAllowed(storage))
+                return;
+
+            std::string attrs;
+            for(const auto &entry : parsed_attributes) {
+                if(!attrs.empty())
+                    attrs += " ";
+                attrs += entry.Name.AsStdString();
+            }
+
+            static std::atomic<int> trace_count{0};
+            const int index = trace_count.fetch_add(1) + 1;
+            const int max = TVPKagTagTraceMax();
+            if(max > 0 && index > max)
+                return;
+
+            spdlog::info("KAGTrace #{} tag={} storage={} line={} pos={} attr_names={}",
+                         index, tag, storage, TagLine + 1, tagstartpos, attrs);
+        };
 
 #define TVP_KAG_STEP_NEXT                                                      \
     if(ldelim == 0) {                                                          \
@@ -1880,6 +1955,7 @@ parse_start:
                     TVP_KAG_STEP_NEXT;
 
                     if(condition && ExcludeLevel == -1) {
+                        trace_returned_tag();
                         DicObj->AddRef();
                         return DicObj;
                     }

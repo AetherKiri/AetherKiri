@@ -312,7 +312,7 @@ func _load_shell_settings() -> void:
         if not env_surface_mode.is_empty():
             _select_config_surface_mode(env_surface_mode)
         return
-    selected_backend = String(cfg.get_value("rendering", "backend", selected_backend))
+    selected_backend = _normalize_backend_name(String(cfg.get_value("rendering", "backend", selected_backend)))
     upscale_algorithm = String(cfg.get_value("rendering", "upscale_algorithm", upscale_algorithm))
     if upscale_algorithm == "sharp" or upscale_algorithm == "nearest":
         upscale_algorithm = "smooth"
@@ -334,6 +334,17 @@ func _load_shell_settings() -> void:
     export_scripts = bool(cfg.get_value("developer", "export_scripts", export_scripts))
     log_alerts = bool(cfg.get_value("developer", "log_alerts", log_alerts))
     error_dialog_logs = bool(cfg.get_value("developer", "error_dialog_logs", error_dialog_logs))
+
+func _normalize_backend_name(value: String) -> String:
+    var backend_name := value.strip_edges()
+    var key := backend_name.to_lower().replace("_", "").replace(" ", "")
+    if key == "debugcpu":
+        return "Debug CPU"
+    if key == "gpubridge":
+        return "GPU Bridge"
+    if key == "godotnative":
+        return "Godot Native"
+    return backend_name
 
 func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
@@ -2259,11 +2270,14 @@ func _ready() -> void:
             ])
             perf_log_file.flush()
 
-    selected_backend = _runtime_string(
+    selected_backend = _normalize_backend_name(_runtime_string(
         "AETHERKIRI_BACKEND",
         ProjectSettings.get_setting(SETTINGS_KEY, "Godot Native")
-    )
+    ))
     _load_shell_settings()
+    var env_backend := _runtime_string("AETHERKIRI_BACKEND", "")
+    if not env_backend.is_empty():
+        selected_backend = _normalize_backend_name(env_backend)
     if not selected_backend in BACKENDS:
         selected_backend = "Godot Native"
 

@@ -1,0 +1,23 @@
+{
+  "name": "riddle_joker_title_motion_local",
+  "game_path": "",
+  "backend": "Godot Native",
+  "surface_size": [1920, 1080],
+  "window_size": [1600, 900],
+  "coord_size": [1600, 900],
+  "startup_timeout_frames": 2400,
+  "warmup_frames": 30,
+  "after_click_frames": 60,
+  "measure_frames": 1,
+  "export_scripts": false,
+  "actions": [
+    {"type": "wait", "label": "boot_motion_090", "after_frames": 60},
+    {"type": "wait", "label": "boot_motion_150", "after_frames": 60},
+    {"type": "wait", "label": "boot_motion_210", "after_frames": 60},
+    {"type": "wait", "label": "title_motion_270", "after_frames": 60},
+    {"type": "wait", "label": "title_motion_330", "after_frames": 60},
+    {"type": "wait", "label": "title_motion_420", "after_frames": 90},
+    {"type": "wait", "label": "title_motion_540", "after_frames": 120},
+    {"type": "wait", "label": "title_motion_720", "after_frames": 180}
+  ]
+}

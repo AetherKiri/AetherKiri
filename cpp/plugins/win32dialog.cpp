@@ -4,9 +4,52 @@
 #define NCB_MODULE_NAME TJS_W("win32dialog.dll")
 
 static void InitPlugin_WIN32Dialog() {
-    TVPExecuteScript(TJS_W("class WIN32Dialog {") TJS_W(
-        "	function messageBox(message, caption, type) {return "
-        "!System.inform(message, caption, 2);}") TJS_W("}"));
+    TVPExecuteScript(TJS_W(
+        "class WIN32Dialog {\n"
+        "    function messageBox(a, b, c, d) {\n"
+        "        var message, caption, type;\n"
+        "        if(d === void) {\n"
+        "            message = a; caption = b; type = c;\n"
+        "        } else {\n"
+        "            message = b; caption = c; type = d;\n"
+        "        }\n"
+        "        if(message === void) message = '';\n"
+        "        if(caption === void) caption = 'Information';\n"
+        "        if(type === void) type = 0;\n"
+        "        var yesno = (type & WIN32Dialog.MB_YESNO) != 0;\n"
+        "        var ret = System.inform(message, caption, yesno ? 2 : 1);\n"
+        "        if(yesno) return ret == 0 ? WIN32Dialog.IDYES : WIN32Dialog.IDNO;\n"
+        "        return ret == 0 ? WIN32Dialog.IDOK : WIN32Dialog.IDCANCEL;\n"
+        "    }\n"
+        "}\n"
+        "WIN32Dialog.MB_OK = 0;\n"
+        "WIN32Dialog.MB_OKCANCEL = 1;\n"
+        "WIN32Dialog.MB_ABORTRETRYIGNORE = 2;\n"
+        "WIN32Dialog.MB_YESNOCANCEL = 3;\n"
+        "WIN32Dialog.MB_YESNO = 4;\n"
+        "WIN32Dialog.MB_RETRYCANCEL = 5;\n"
+        "WIN32Dialog.MB_CANCELTRYCONTINUE = 6;\n"
+        "WIN32Dialog.MB_ICONHAND = 0x10;\n"
+        "WIN32Dialog.MB_ICONSTOP = 0x10;\n"
+        "WIN32Dialog.MB_ICONERROR = 0x10;\n"
+        "WIN32Dialog.MB_ICONQUESTION = 0x20;\n"
+        "WIN32Dialog.MB_ICONEXCLAMATION = 0x30;\n"
+        "WIN32Dialog.MB_ICONWARNING = 0x30;\n"
+        "WIN32Dialog.MB_ICONASTERISK = 0x40;\n"
+        "WIN32Dialog.MB_ICONINFORMATION = 0x40;\n"
+        "WIN32Dialog.MB_DEFBUTTON1 = 0;\n"
+        "WIN32Dialog.MB_DEFBUTTON2 = 0x100;\n"
+        "WIN32Dialog.MB_DEFBUTTON3 = 0x200;\n"
+        "WIN32Dialog.MB_DEFBUTTON4 = 0x300;\n"
+        "WIN32Dialog.IDOK = 1;\n"
+        "WIN32Dialog.IDCANCEL = 2;\n"
+        "WIN32Dialog.IDABORT = 3;\n"
+        "WIN32Dialog.IDRETRY = 4;\n"
+        "WIN32Dialog.IDIGNORE = 5;\n"
+        "WIN32Dialog.IDYES = 6;\n"
+        "WIN32Dialog.IDNO = 7;\n"
+        "WIN32Dialog.IDTRYAGAIN = 10;\n"
+        "WIN32Dialog.IDCONTINUE = 11;\n"));
 }
 
 NCB_PRE_REGIST_CALLBACK(InitPlugin_WIN32Dialog);

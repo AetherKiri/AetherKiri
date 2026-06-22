@@ -234,6 +234,8 @@ namespace TJS // following is in the namespace
         Parent = parent;
 
         PropGetter = PropSetter = SuperClassGetter = nullptr;
+        ExecutingCount = 0;
+        DeferredFinalize = false;
 
         CodeArea = nullptr;
         CodeAreaCapa = 0;
@@ -439,6 +441,12 @@ namespace TJS // following is in the namespace
 
     //---------------------------------------------------------------------------
     void tTJSInterCodeContext::Finalize() {
+        if(ExecutingCount > 0) {
+            DeferredFinalize = true;
+            return;
+        }
+        DeferredFinalize = false;
+
         if(!Block)
             UnregisterOrphanICC(this);
 
@@ -482,6 +490,34 @@ namespace TJS // following is in the namespace
         }
 #endif // _DEBUG
         inherited::Finalize();
+    }
+
+    //---------------------------------------------------------------------------
+    void tTJSInterCodeContext::EnterExecution() { ExecutingCount++; }
+
+    //---------------------------------------------------------------------------
+    void tTJSInterCodeContext::LeaveExecution() {
+        if(ExecutingCount <= 0)
+            return;
+
+        ExecutingCount--;
+        if(ExecutingCount > 0 || !DeferredFinalize)
+            return;
+
+        DeferredFinalize = false;
+        const bool was_invalidating = IsInvalidating;
+        const bool was_invalidated = IsInvalidated;
+        IsInvalidating = true;
+        try {
+            Finalize();
+            IsInvalidated = true;
+        } catch(...) {
+            DeferredFinalize = true;
+            IsInvalidated = was_invalidated;
+            spdlog::error("Deferred tTJSInterCodeContext finalization failed: {}",
+                          static_cast<void *>(this));
+        }
+        IsInvalidating = was_invalidating;
     }
 
     //---------------------------------------------------------------------------

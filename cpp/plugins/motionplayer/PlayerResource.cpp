@@ -21,6 +21,9 @@ namespace motion {
                     _runtime->activeMotion.reset();
                     _runtime->timelines.clear();
                     _runtime->playingTimelineLabels.clear();
+                    _runtime->yuzuPresentationCenteredOriginConfirmed = false;
+                    _runtime->yuzuPresentationTranslateX = 0.0f;
+                    _runtime->yuzuPresentationTranslateY = 0.0f;
                     _allplaying = false;
                     disableAutoProgress();
                 }
@@ -46,6 +49,9 @@ namespace motion {
         _runtime->activeMotion.reset();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
+        _runtime->yuzuPresentationCenteredOriginConfirmed = false;
+        _runtime->yuzuPresentationTranslateX = 0.0f;
+        _runtime->yuzuPresentationTranslateY = 0.0f;
         _runtime->layerIdsByName.clear();
         _runtime->layerNamesById.clear();
         _runtime->lastCanvas.Clear();

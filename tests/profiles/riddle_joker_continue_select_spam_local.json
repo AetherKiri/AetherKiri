@@ -1,0 +1,31 @@
+{
+  "name": "riddle_joker_continue_select_spam_local",
+  "game_path": "",
+  "backend": "Godot Native",
+  "surface_size": [1920, 1080],
+  "window_size": [1600, 900],
+  "coord_size": [1600, 900],
+  "startup_timeout_frames": 2400,
+  "warmup_frames": 210,
+  "after_click_frames": 120,
+  "measure_frames": 1,
+  "export_scripts": false,
+  "actions": [
+    {"type": "click", "label": "skip_1", "pos": [800, 820], "after_frames": 120},
+    {"type": "click", "label": "skip_2", "pos": [800, 820], "after_frames": 120},
+    {"type": "click", "label": "skip_3", "pos": [800, 820], "after_frames": 180},
+    {"type": "move", "label": "hover_continue", "pos": [270, 550], "after_frames": 60},
+    {"type": "click", "label": "continue_click", "pos": [270, 550], "after_frames": 180},
+    {"type": "click", "label": "select_choice_1", "pos": [800, 260], "after_frames": 300},
+    {
+      "type": "click_stream",
+      "label": "post_choice_dialogue_spam",
+      "pos": [800, 820],
+      "frames": 1200,
+      "clicks_per_frame": 1,
+      "capture_every": 120,
+      "capture_final": true,
+      "spike_ms": 33.0
+    }
+  ]
+}

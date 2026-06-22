@@ -319,7 +319,6 @@ namespace motion {
     Player::Player(ResourceManager rm) :
         _runtime(detail::makePlayerRuntime()),
         _resourceManagerNative(std::move(rm)) {
-        LOGGER->info("Motion.Player constructor called");
         // Aligned to sub_6A88CC (0x6A8988): create TJS Math.RandomGenerator
         // and store at player+992. Child Players inherit via sub_6CED30.
         try {
@@ -607,6 +606,9 @@ namespace motion {
         _runtime->activeMotion.reset();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
+        _runtime->yuzuPresentationCenteredOriginConfirmed = false;
+        _runtime->yuzuPresentationTranslateX = 0.0f;
+        _runtime->yuzuPresentationTranslateY = 0.0f;
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         _variableValues.clear();
@@ -682,6 +684,9 @@ namespace motion {
         _runtime->activeMotion.reset();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
+        _runtime->yuzuPresentationCenteredOriginConfirmed = false;
+        _runtime->yuzuPresentationTranslateX = 0.0f;
+        _runtime->yuzuPresentationTranslateY = 0.0f;
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         _variableValues.clear();
@@ -747,6 +752,9 @@ namespace motion {
         self->_runtime->activeMotion.reset();
         self->_runtime->timelines.clear();
         self->_runtime->playingTimelineLabels.clear();
+        self->_runtime->yuzuPresentationCenteredOriginConfirmed = false;
+        self->_runtime->yuzuPresentationTranslateX = 0.0f;
+        self->_runtime->yuzuPresentationTranslateY = 0.0f;
         self->_runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         self->_variableKeys.Clear();
         self->_variableValues.clear();

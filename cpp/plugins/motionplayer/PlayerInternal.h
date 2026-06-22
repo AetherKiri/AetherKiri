@@ -316,6 +316,9 @@ namespace internal {
             runtime.nodes.clear();
             runtime.nodesBuilt = false;
             runtime.nodeLabelMap.clear();
+            runtime.yuzuPresentationCenteredOriginConfirmed = false;
+            runtime.yuzuPresentationTranslateX = 0.0f;
+            runtime.yuzuPresentationTranslateY = 0.0f;
             // Detect emote mode from PSB root "type" field.
             // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
             //   type=0 → non-emote (motion), type=1 → emote

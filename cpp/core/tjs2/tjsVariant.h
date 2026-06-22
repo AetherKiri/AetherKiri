@@ -868,6 +868,8 @@ namespace TJS {
                 case tvtVoid:
                     return 0;
                 case tvtObject:
+                    if(!Object.Object && !Object.ObjThis)
+                        return 0;
                     TJSThrowVariantConvertError(*this, tvtInteger);
                 case tvtString:
                     return String ? String->ToInteger() : 0;
@@ -888,6 +890,10 @@ namespace TJS {
                     targ = (tjs_int)0;
                     return;
                 case tvtObject:
+                    if(!Object.Object && !Object.ObjThis) {
+                        targ = (tjs_int)0;
+                        return;
+                    }
                     TJSThrowVariantConvertError(*this, tvtInteger, tvtReal);
                 case tvtString:
                     if(String) String->ToNumber(targ); else targ = (tjs_int)0;
@@ -945,6 +951,8 @@ namespace TJS {
                 case tvtVoid:
                     return 0;
                 case tvtObject:
+                    if(!Object.Object && !Object.ObjThis)
+                        return 0;
                     TJSThrowVariantConvertError(*this, tvtReal);
                 case tvtString:
                     return String ? String->ToReal() : 0;

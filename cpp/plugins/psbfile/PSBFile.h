@@ -94,7 +94,7 @@ namespace PSB {
         PSBType getType() const { return _type; }
 
     private:
-        int _seed;
+        int _seed = 0;
         PSBHeader _header{};
         std::shared_ptr<IPSBValue> _root{};
         PSBType _type{ PSBType::PSB };
