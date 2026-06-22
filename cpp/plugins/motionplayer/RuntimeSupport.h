@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -19,6 +20,8 @@
 #include "tjs.h"
 #include "psbfile/PSBFile.h"
 #include "MotionNode.h"
+
+class tTVPBaseBitmap;
 
 namespace motion::detail {
 
@@ -194,6 +197,22 @@ namespace motion::detail {
         tTJSVariant presentationRenderLayer;
         // Reusable work layer for sub_6C4E28-style per-item local clipping.
         tTJSVariant scratchWorkLayer;
+        // Source bitmaps decoded for the active motion. Building these from PSB
+        // resources is expensive enough to be visible during title animations.
+        std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
+            motionSourceBitmapCache;
+        std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
+            motionPreparedBitmapCache;
+        struct PresentationRenderCacheEntry {
+            std::string motion;
+            double frame = 0.0;
+            tjs_int canvasWidth = 0;
+            tjs_int canvasHeight = 0;
+            std::size_t commandSignature = 0;
+        };
+        std::unordered_map<iTJSDispatch2 *, PresentationRenderCacheEntry>
+            presentationRenderCache;
+        int presentationRenderReuseSkips = 0;
         std::array<double, 6> drawAffineMatrix{ 1.0, 0.0, 0.0,
                                                 1.0, 0.0, 0.0 };
         tjs_int nextLayerId = 1;
@@ -300,6 +319,25 @@ namespace motion::detail {
         // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
         // PSB root "type" field: 0=non-emote (motion), 1=emote
         bool isEmoteMode = false;
+
+        void clearPresentationRenderReuse() {
+            presentationRenderCache.clear();
+            presentationRenderReuseSkips = 0;
+        }
+
+        void invalidatePresentationRenderTarget(iTJSDispatch2 *target) {
+            if(target) {
+                presentationRenderCache.erase(target);
+            } else {
+                clearPresentationRenderReuse();
+            }
+        }
+
+        void clearMotionBitmapCaches() {
+            motionSourceBitmapCache.clear();
+            motionPreparedBitmapCache.clear();
+            clearPresentationRenderReuse();
+        }
     };
 
     std::shared_ptr<PlayerRuntime> makePlayerRuntime();

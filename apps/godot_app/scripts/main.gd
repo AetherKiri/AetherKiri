@@ -73,7 +73,7 @@ var runtime_default_font_path := ""
 var runtime_font_dir_path := ""
 var selected_backend := "Godot Native"
 var upscale_algorithm := "smooth"
-var render_surface_mode := "display"
+var render_surface_mode := "game"
 var game_running := false
 var app_lifecycle_paused := false
 var render_errors := 0
@@ -146,7 +146,7 @@ const PERF_UPDATE_INTERVAL := 0.25
 const PERF_LOG_INTERVAL := 2.0
 const MAX_LOG_LINES := 240
 const RENDER_SURFACE_SIZE := Vector2i(1920, 1080)
-const RENDER_SURFACE_MAX_SIZE := Vector2i(3200, 1800)
+const RENDER_SURFACE_MAX_SIZE := Vector2i(1920, 1080)
 const RENDER_SURFACE_MODE_GAME := "game"
 const RENDER_SURFACE_MODE_DISPLAY := "display"
 const POST_INPUT_PRESENT_HOLD_FRAMES := 1
@@ -1091,7 +1091,7 @@ func _select_upscale_algorithm(value: String) -> void:
     _mark_settings_dirty()
 
 func _default_render_surface_mode() -> String:
-    return RENDER_SURFACE_MODE_GAME if _is_touch_platform() else RENDER_SURFACE_MODE_DISPLAY
+    return RENDER_SURFACE_MODE_GAME
 
 func _select_config_surface_mode(value: String) -> void:
     if value in [RENDER_SURFACE_MODE_GAME, RENDER_SURFACE_MODE_DISPLAY]:

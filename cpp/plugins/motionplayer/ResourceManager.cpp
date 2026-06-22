@@ -80,6 +80,14 @@ namespace {
                 return false;
         }
     }
+
+    bool motionResourceDebugEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_MOTION_DEBUG");
+            return value && *value && std::strcmp(value, "0") != 0;
+        }();
+        return enabled;
+    }
 }
 
 motion::ResourceManager::ResourceManager() : _state(std::make_shared<State>()) {}
@@ -163,8 +171,9 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *r,
 tTJSVariant motion::ResourceManager::load(ttstr path) const {
     const auto rawPath = path.AsStdString();
     const auto loweredPath = lowercase(rawPath);
-    if(loweredPath.find(".mtn") != std::string::npos) {
-        LOGGER->warn("Motion resource manager load: {}", rawPath);
+    if(loweredPath.find(".mtn") != std::string::npos &&
+       motionResourceDebugEnabled()) {
+        LOGGER->info("Motion resource manager load: {}", rawPath);
     }
     const auto loaded = detail::loadPSBVariant(path, _decryptSeed);
     if(loaded.Type() != tvtVoid && _state) {
@@ -267,8 +276,10 @@ tTJSVariant motion::ResourceManager::findLoadedModule(ttstr path) const {
         }
     }
 
-    LOGGER->warn("ResourceManager::findLoadedModule({}): cache miss",
-                 path.AsStdString());
+    if(motionResourceDebugEnabled()) {
+        LOGGER->info("ResourceManager::findLoadedModule({}): cache miss",
+                     path.AsStdString());
+    }
     return {};
 }
 

@@ -39,24 +39,13 @@ namespace PSB {
         }
 
         bool IsDebugPSBKey(const std::string &key) {
-            if(IsVerbosePSBDebugEnabled()) {
-                return true;
-            }
-            return key.rfind("main.psb/", 0) == 0 ||
-                key.rfind("title.psb/", 0) == 0 ||
-                key.rfind("title.pimg/", 0) == 0 ||
-                key.rfind("chapter.psb/", 0) == 0 ||
-                key.rfind("autoskip.psb/", 0) == 0;
+            (void)key;
+            return IsVerbosePSBDebugEnabled();
         }
 
         bool IsDebugPSBArchive(const std::string &archiveKey) {
-            if(IsVerbosePSBDebugEnabled()) {
-                return true;
-            }
-            return archiveKey == "main.psb" || archiveKey == "title.psb" ||
-                archiveKey == "title.pimg" ||
-                archiveKey == "chapter.psb" ||
-                archiveKey == "autoskip.psb";
+            (void)archiveKey;
+            return IsVerbosePSBDebugEnabled();
         }
 
         std::string ArchiveKeyFromResourceKey(const std::string &key) {
@@ -872,7 +861,7 @@ namespace PSB {
 
         void RegisterPSBResourcesIntoMedia(
             PSBMedia &media, PSBFile &psb, const std::string &archiveKey) {
-            auto logger = LOGGER;
+            auto logger = IsDebugPSBArchive(archiveKey) ? LOGGER : nullptr;
             size_t logged = 0;
             const auto objs = psb.getObjects();
             if(objs) {
@@ -1341,7 +1330,11 @@ namespace PSB {
                 LOGGER->debug("PSB lazy-load failed: {}", archiveKey);
                 return false;
             }
-            LOGGER->info("PSB lazy-load archive: {}", archiveKey);
+            if(IsDebugPSBArchive(archiveKey)) {
+                LOGGER->info("PSB lazy-load archive: {}", archiveKey);
+            } else {
+                LOGGER->debug("PSB lazy-load archive: {}", archiveKey);
+            }
             RegisterPSBResourcesIntoMedia(*this, psb, archiveKey);
             {
                 std::lock_guard<std::mutex> lock(_mutex);

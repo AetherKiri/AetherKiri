@@ -229,6 +229,14 @@ bool SupportsGodotRenderingDeviceGpu() {
            driver.find("OpenGL") == std::string::npos;
 }
 
+bool DirectPresentGodotNativeFrameEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_GODOT_DIRECT_PRESENT");
+        return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
 void UpdateGpuQueuePeak(size_t value) {
     uint64_t current = g_gpu_queue_peak.load(std::memory_order_relaxed);
     while (value > current &&
@@ -269,7 +277,9 @@ String GetGodotGpuBridgeDebugInfo() {
 
 void ApplyGodotGpuBarrier(RenderingDevice *rd) {
     if (rd == nullptr) return;
-    rd->full_barrier();
+    // Godot 4.6 inserts RenderingDevice barriers automatically. Calling the
+    // deprecated global barrier after every small bridge op floods startup
+    // with warnings and stalls the title animation path.
     g_gpu_barriers.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -280,6 +290,74 @@ bool IsBatchableBlendOp(const std::shared_ptr<GodotGpuOp> &op) {
     }
     if (op->type == GodotGpuOp::Type::Blend2) {
         return op->src != op->dst && op->src2 != op->dst;
+    }
+    return false;
+}
+
+bool HazardTrackedBlendBarriersEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_GODOT_HAZARD_BARRIERS");
+        return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+bool DeferredGodotGpuDrainEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_GODOT_DEFER_GPU_DRAIN");
+        return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+bool ShouldScheduleGodotGpuDrainNow(const std::shared_ptr<GodotGpuOp> &op,
+                                    bool wait) {
+    if (wait || !DeferredGodotGpuDrainEnabled()) return true;
+    return op != nullptr && op->type == GodotGpuOp::Type::Flush;
+}
+
+struct GodotGpuPendingWrite {
+    RID rid;
+    int32_t left = 0;
+    int32_t top = 0;
+    int32_t right = 0;
+    int32_t bottom = 0;
+};
+
+GodotGpuPendingWrite PendingWriteForRect(
+    const RID &rid, const Vector3 &pos, const Vector3 &size) {
+    GodotGpuPendingWrite write;
+    write.rid = rid;
+    write.left = static_cast<int32_t>(pos.x);
+    write.top = static_cast<int32_t>(pos.y);
+    write.right = write.left + static_cast<int32_t>(size.x);
+    write.bottom = write.top + static_cast<int32_t>(size.y);
+    return write;
+}
+
+bool PendingWritesOverlap(const GodotGpuPendingWrite &a,
+                          const GodotGpuPendingWrite &b) {
+    return a.rid == b.rid && a.left < b.right && b.left < a.right &&
+           a.top < b.bottom && b.top < a.bottom;
+}
+
+bool BlendOpNeedsBarrierBeforeDispatch(
+    const GodotGpuOp &op, const std::vector<GodotGpuPendingWrite> &writes) {
+    if (writes.empty()) return false;
+    const GodotGpuPendingWrite dst_rect =
+        PendingWriteForRect(op.dst, op.dst_pos, op.size);
+    const GodotGpuPendingWrite src_rect =
+        PendingWriteForRect(op.src, op.src_pos, op.size);
+    const bool dual_source = op.type == GodotGpuOp::Type::Blend2;
+    const GodotGpuPendingWrite src2_rect =
+        dual_source ? PendingWriteForRect(op.src2, op.src2_pos, op.size)
+                    : GodotGpuPendingWrite{};
+    for (const auto &write : writes) {
+        if (PendingWritesOverlap(write, dst_rect) ||
+            PendingWritesOverlap(write, src_rect) ||
+            (dual_source && PendingWritesOverlap(write, src2_rect))) {
+            return true;
+        }
     }
     return false;
 }
@@ -1205,10 +1283,17 @@ void ExecuteGodotGpuBlendBatch(
 
     std::vector<RID> uniform_sets;
     std::vector<bool> results(ops.size(), false);
+    std::vector<GodotGpuPendingWrite> pending_writes;
     bool any_dispatched = false;
+    const bool hazard_tracked_barriers = HazardTrackedBlendBarriersEnabled();
     int64_t compute_list = rd->compute_list_begin();
     for (size_t i = 0; i < ops.size(); ++i) {
         const auto &op = ops[i];
+        if (hazard_tracked_barriers &&
+            BlendOpNeedsBarrierBeforeDispatch(*op, pending_writes)) {
+            rd->compute_list_add_barrier(compute_list);
+            pending_writes.clear();
+        }
         if (op->type == GodotGpuOp::Type::Blend) {
             results[i] = DispatchGodotGpuBlend(rd, op, compute_list, uniform_sets);
         } else if (op->type == GodotGpuOp::Type::Blend2) {
@@ -1216,8 +1301,16 @@ void ExecuteGodotGpuBlendBatch(
         }
         if (results[i]) {
             any_dispatched = true;
-            rd->compute_list_add_barrier(compute_list);
+            if (hazard_tracked_barriers) {
+                pending_writes.push_back(
+                    PendingWriteForRect(op->dst, op->dst_pos, op->size));
+            } else {
+                rd->compute_list_add_barrier(compute_list);
+            }
         }
+    }
+    if (hazard_tracked_barriers && any_dispatched) {
+        rd->compute_list_add_barrier(compute_list);
     }
     rd->compute_list_end();
     if (any_dispatched) {
@@ -1275,6 +1368,18 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
         return false;
     }
     if (server->is_on_render_thread()) {
+        if (DeferredGodotGpuDrainEnabled()) {
+            {
+                std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
+                g_gpu_op_queue.push_back(op);
+                UpdateGpuQueuePeak(g_gpu_op_queue.size());
+            }
+            if (!wait && op->type != GodotGpuOp::Type::Flush) {
+                return true;
+            }
+            DrainGodotGpuOpsOnRenderThread();
+            return wait ? op->result : true;
+        }
         const bool result = ExecuteGodotGpuOp(rd, op);
         CountGpuOpResult(result);
         return result;
@@ -1285,7 +1390,8 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
         std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
         g_gpu_op_queue.push_back(op);
         UpdateGpuQueuePeak(g_gpu_op_queue.size());
-        if (!g_gpu_op_drain_scheduled) {
+        if (ShouldScheduleGodotGpuDrainNow(op, wait) &&
+            !g_gpu_op_drain_scheduled) {
             g_gpu_op_drain_scheduled = true;
             should_schedule = true;
         }
@@ -2300,6 +2406,18 @@ public:
                         return bridge_texture;
                     }
                 } else {
+                    if (DirectPresentGodotNativeFrameEnabled()) {
+                        Ref<Texture2D> native_texture =
+                            ResolveBridgeTexture(texture_id);
+                        if (native_texture.is_valid()) {
+                            release_imported_texture();
+                            release_presentation_textures(true);
+                            frame_texture_.unref();
+                            frame_texture_serial_ = serial;
+                            frame_texture_backend_ = "godot_native_gpu_direct";
+                            return native_texture;
+                        }
+                    }
                     Ref<Texture2D> presented_texture =
                         update_presented_bridge_texture(
                             texture_id, width, height, serial,

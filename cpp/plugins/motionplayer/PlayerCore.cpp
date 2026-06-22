@@ -604,6 +604,7 @@ namespace motion {
     void Player::loadFromSnapshot(
         std::shared_ptr<detail::MotionSnapshot> snapshot) {
         _runtime->activeMotion.reset();
+        _runtime->clearMotionBitmapCaches();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
         _runtime->yuzuPresentationCenteredOriginConfirmed = false;
@@ -682,6 +683,7 @@ namespace motion {
         }
         _motionKey = v;
         _runtime->activeMotion.reset();
+        _runtime->clearMotionBitmapCaches();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
         _runtime->yuzuPresentationCenteredOriginConfirmed = false;
@@ -750,6 +752,7 @@ namespace motion {
         // Reset state and load
         self->_motionKey = motionValue;
         self->_runtime->activeMotion.reset();
+        self->_runtime->clearMotionBitmapCaches();
         self->_runtime->timelines.clear();
         self->_runtime->playingTimelineLabels.clear();
         self->_runtime->yuzuPresentationCenteredOriginConfirmed = false;

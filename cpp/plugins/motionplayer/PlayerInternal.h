@@ -72,8 +72,16 @@ namespace internal {
         inline bool shouldDebugPsbSource(
             const detail::MotionSnapshot &snapshot,
             const std::string &source) {
+            const char *enabled = std::getenv("AETHERKIRI_MOTION_DEBUG");
+            const bool debugEnabled =
+                enabled && *enabled && std::strcmp(enabled, "0") != 0;
             const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
-            if(debugAll && *debugAll && std::strcmp(debugAll, "0") != 0) {
+            const bool debugAllEnabled =
+                debugAll && *debugAll && std::strcmp(debugAll, "0") != 0;
+            if(!debugEnabled && !debugAllEnabled) {
+                return false;
+            }
+            if(debugAllEnabled) {
                 return true;
             }
             const auto path = psbDebugLowercase(snapshot.path);
@@ -310,6 +318,7 @@ namespace internal {
         inline std::shared_ptr<detail::MotionSnapshot>
         activateMotion(detail::PlayerRuntime &runtime,
                        const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
+            runtime.clearMotionBitmapCaches();
             runtime.activeMotion = snapshot;
             runtime.timelines.clear();
             // Reset persistent node tree so it gets rebuilt for new motion

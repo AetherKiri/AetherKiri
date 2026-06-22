@@ -19,6 +19,7 @@ namespace motion {
             if(it->first == key || it->second->path == key) {
                 if(_runtime->activeMotion == it->second) {
                     _runtime->activeMotion.reset();
+                    _runtime->clearMotionBitmapCaches();
                     _runtime->timelines.clear();
                     _runtime->playingTimelineLabels.clear();
                     _runtime->yuzuPresentationCenteredOriginConfirmed = false;
@@ -47,6 +48,7 @@ namespace motion {
         _runtime->motionsByKey.clear();
         _runtime->sourcesByKey.clear();
         _runtime->activeMotion.reset();
+        _runtime->clearMotionBitmapCaches();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
         _runtime->yuzuPresentationCenteredOriginConfirmed = false;

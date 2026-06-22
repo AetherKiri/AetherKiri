@@ -69,7 +69,7 @@ public:
                        const tTVPRect &dst_rc, const tTVPRect &src1_rc,
                        const tTVPRect &src2_rc, uint32_t mode, int opacity,
                        uint32_t color);
-    bool UploadCpuToGpu();
+    bool UploadCpuToGpu(bool flush_pending_gpu_writes = true);
     void MarkGpuDirty() { gpu_dirty_ = true; }
     void MarkCpuDirty() { cpu_dirty_ = true; gpu_dirty_ = false; }
     void EnsureCpuReadable();
