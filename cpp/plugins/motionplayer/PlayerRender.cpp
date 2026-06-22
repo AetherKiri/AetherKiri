@@ -576,17 +576,6 @@ namespace {
                                                 entry.sourceKey);
     }
 
-    int yuzuTitlePresentationDrawRank(
-        const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
-        if(isYuzuTitleBackgroundLayer(entry.nodeLabel, entry.sourceKey)) {
-            return 0;
-        }
-        if(isYuzuTitlePositionLayer(entry.nodeLabel, entry.sourceKey)) {
-            return 1;
-        }
-        return 2;
-    }
-
     bool isYuzuTitleRenderablePresentationLayer(
         const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
         if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
@@ -953,19 +942,6 @@ namespace {
         const bool isLogoMotion = isYuzuLogoPresentationMotion(motionPath);
 
         if(isTitleMotion) {
-            std::stable_sort(runtime.preparedRenderItems.begin(),
-                             runtime.preparedRenderItems.end(),
-                             [](const auto &lhs, const auto &rhs) {
-                                 return yuzuTitlePresentationDrawRank(lhs) <
-                                     yuzuTitlePresentationDrawRank(rhs);
-                             });
-            if(LOGGER && shouldDebugTitleRender(motionPath) &&
-               markRenderDebugLogged("yuzu-title-draw-rank:" + motionPath)) {
-                LOGGER->info(
-                    "motion title presentation draw order normalized: motion={}",
-                    motionPath);
-            }
-
             const bool hasSyntheticIntroLayer = std::any_of(
                 runtime.preparedRenderItems.begin(),
                 runtime.preparedRenderItems.end(),
@@ -1009,8 +985,7 @@ namespace {
                 for(auto &entry : runtime.preparedRenderItems) {
                     if(entry.drawFlag && !entry.skipFlag0 &&
                        !entry.skipFlag1 && entry.opacity > 0 &&
-                       isYuzuTitleStandaloneCharacterLayer(entry.nodeLabel,
-                                                           entry.sourceKey)) {
+                       isYuzuTitleSyntheticIntroLayer(entry)) {
                         entry.skipFlag0 = true;
                         ++suppressed;
                     }
@@ -1021,7 +996,7 @@ namespace {
                        "yuzu-title-composite-suppressed:{}:{}",
                        motionPath, suppressed))) {
                     LOGGER->info(
-                        "motion title composite character layer active: motion={} suppressedStandaloneCharacters={}",
+                        "motion title composite character layer active: motion={} suppressedSyntheticIntroCharacters={}",
                         motionPath, suppressed);
                 }
             }
@@ -2226,8 +2201,11 @@ namespace {
         }
         layer->SetName(TJS_W("AetherKiriYuzuTitlePresentation"));
         layer->SetHitThreshold(256);
+        // title_bg is a background/event surface. A fallback presentation layer
+        // must stay behind title UI and character layers instead of becoming a
+        // full-screen foreground overlay.
         try {
-            layer->BringToFront();
+            layer->BringToBack();
         } catch(...) {
         }
         return layerObject;
@@ -4526,7 +4504,9 @@ namespace motion {
 
         if(yuzuTitlePresentation && !_presentationHoldRendering &&
            finalLayerObject) {
-            enablePresentationHold(finalLayerObject, 3000);
+            // Keep a short tail for the last animation frame; a multi-second
+            // hold can leave title_bg above later scene layers during startup.
+            enablePresentationHold(finalLayerObject, 250);
         }
 
         _runtime->lastCanvas =
