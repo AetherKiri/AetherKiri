@@ -357,6 +357,64 @@ namespace TJS {
         }
     }
 
+    static bool TJSCompatIsKagRuntimeDefaultName(const tjs_char *membername) {
+        return membername &&
+               (!TJS_strcmp(membername, TJS_W("autoMode")) ||
+                !TJS_strcmp(membername, TJS_W("skipMode")) ||
+                !TJS_strcmp(membername, TJS_W("autoModePageWait")) ||
+                !TJS_strcmp(membername, TJS_W("autoModeLineWait")) ||
+                !TJS_strcmp(membername, TJS_W("userChSpeed")) ||
+                !TJS_strcmp(membername, TJS_W("autoModeWaitVoice")));
+    }
+
+    static bool TJSCompatIsGlobalKagReceiver(iTJSDispatch2 *target,
+                                             iTJSDispatch2 *objthis) {
+        static thread_local bool resolving = false;
+        if(resolving)
+            return false;
+
+        resolving = true;
+        tTJS *engine = TVPGetScriptEngine();
+        if(!engine) {
+            resolving = false;
+            return false;
+        }
+        iTJSDispatch2 *global = engine->GetGlobalNoAddRef();
+        if(!global) {
+            resolving = false;
+            return false;
+        }
+
+        tTJSVariant kagVariant;
+        if(TJS_FAILED(global->PropGet(0, TJS_W("kag"), nullptr, &kagVariant,
+                                      global)) ||
+           kagVariant.Type() != tvtObject) {
+            resolving = false;
+            return false;
+        }
+
+        tTJSVariantClosure kag = kagVariant.AsObjectClosure();
+        const bool matches =
+            kag.Object == target || kag.ObjThis == target ||
+            (objthis && (kag.Object == objthis || kag.ObjThis == objthis));
+        kag.Release();
+        resolving = false;
+        return matches;
+    }
+
+    static bool TJSCompatResolveKagRuntimeFallback(const tjs_char *membername,
+                                                   tTJSVariant *result,
+                                                   iTJSDispatch2 *target,
+                                                   iTJSDispatch2 *objthis) {
+        if(!TJSCompatIsKagRuntimeDefaultName(membername) || !result ||
+           !TJSCompatIsGlobalKagReceiver(target, objthis)) {
+            return false;
+        }
+
+        *result = static_cast<tjs_int>(0);
+        return true;
+    }
+
     static bool TJSCompatIsTextRenderObject(iTJSDispatch2 *target,
                                             iTJSDispatch2 *objthis) {
         iTJSDispatch2 *dispatch = objthis ? objthis : target;
@@ -1716,6 +1774,10 @@ namespace TJS {
                 return TJS_S_OK;
             }
             if(TJSCompatResolveWindowDrawDeviceFallback(membername, result)) {
+                return TJS_S_OK;
+            }
+            if(TJSCompatResolveKagRuntimeFallback(membername, result, this,
+                                                 objthis)) {
                 return TJS_S_OK;
             }
             if(TJSCompatResolveGlobalFallback(membername, result)) {

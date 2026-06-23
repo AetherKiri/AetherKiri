@@ -315,6 +315,81 @@ namespace internal {
             return snapshot;
         }
 
+        inline bool stripSuffixInPlace(std::string &value,
+                                       const std::string &suffix) {
+            if(value.size() < suffix.size()) {
+                return false;
+            }
+            if(value.compare(value.size() - suffix.size(), suffix.size(),
+                             suffix) != 0) {
+                return false;
+            }
+            value.resize(value.size() - suffix.size());
+            return true;
+        }
+
+        inline bool splitEmoteCandidateBase(const ttstr &candidate,
+                                            std::string &base) {
+            std::string storage = detail::narrow(TVPExtractStorageName(candidate));
+            if(storage.empty()) {
+                storage = detail::narrow(candidate);
+                const auto slash = storage.find_last_of("/\\");
+                if(slash != std::string::npos) {
+                    storage = storage.substr(slash + 1);
+                }
+            }
+
+            storage = psbDebugLowercase(storage);
+            if(!stripSuffixInPlace(storage, ".mtn") &&
+               !stripSuffixInPlace(storage, ".psb")) {
+                stripSuffixInPlace(storage, ".mt");
+            }
+            if(storage.size() <= 3 ||
+               storage.compare(storage.size() - 3, 3, "emo") != 0) {
+                return false;
+            }
+
+            base = storage.substr(0, storage.size() - 3);
+            return !base.empty();
+        }
+
+        inline bool motionSnapshotHasTimelineSuffix(
+            const detail::MotionSnapshot &snapshot,
+            const std::string &loweredSuffix) {
+            const auto matches = [&loweredSuffix](const std::string &label) {
+                const auto lowered = psbDebugLowercase(label);
+                return lowered == loweredSuffix ||
+                    (lowered.size() > loweredSuffix.size() &&
+                     lowered.compare(lowered.size() - loweredSuffix.size(),
+                                     loweredSuffix.size(), loweredSuffix) == 0);
+            };
+
+            return std::any_of(snapshot.mainTimelineLabels.begin(),
+                               snapshot.mainTimelineLabels.end(), matches) ||
+                std::any_of(snapshot.diffTimelineLabels.begin(),
+                            snapshot.diffTimelineLabels.end(), matches);
+        }
+
+        inline std::shared_ptr<detail::MotionSnapshot>
+        fallbackSplitEmoteMotion(const ResourceManager &resourceManager,
+                                 const ttstr &candidate) {
+            std::string base;
+            if(!splitEmoteCandidateBase(candidate, base)) {
+                return nullptr;
+            }
+
+            const auto loaded = resourceManager.getLastLoadedModule();
+            const auto snapshot = detail::lookupModuleSnapshot(loaded);
+            if(!snapshot || !motionSnapshotHasTimelineSuffix(*snapshot, base)) {
+                return nullptr;
+            }
+
+            LOGGER->info(
+                "motion resolve split emote candidate from cached module: request={} source={}",
+                candidate.AsStdString(), snapshot->path);
+            return snapshot;
+        }
+
         inline std::shared_ptr<detail::MotionSnapshot>
         activateMotion(detail::PlayerRuntime &runtime,
                        const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
@@ -376,6 +451,25 @@ namespace internal {
 
             if(resourceManager != nullptr) {
                 for(const auto &candidate : candidates) {
+                    if(const auto loaded =
+                           resourceManager->findLoadedModule(candidate);
+                       loaded.Type() == tvtObject) {
+                        if(const auto snapshot =
+                               detail::lookupModuleSnapshot(loaded)) {
+                            return cacheMotion(runtime, requestKey,
+                                               detail::narrow(candidate),
+                                               snapshot);
+                        }
+                    }
+                    if(const auto snapshot =
+                           fallbackSplitEmoteMotion(*resourceManager,
+                                                    candidate)) {
+                        return cacheMotion(runtime, requestKey,
+                                           detail::narrow(candidate), snapshot);
+                    }
+                    if(TVPGetPlacedPath(candidate).IsEmpty()) {
+                        continue;
+                    }
                     const auto loaded = resourceManager->load(candidate);
                     if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
                         return cacheMotion(runtime, requestKey,

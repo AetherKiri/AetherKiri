@@ -7,12 +7,17 @@
 #include "tjsDebug.h"
 #include "xp3filter.h"
 #include "ThreadIntf.h"
+#include <map>
 #include <memory>
+#include <mutex>
 #include <thread>
+#include <vector>
 
 #include "TextStream.h"
 
 #define NCB_MODULE_NAME TJS_W("xp3filter.dll")
+
+extern std::thread::id TVPMainThreadID;
 
 tjs_error CBinaryAccessor::OperationByNum(
     /* operation with member by index number */ tjs_uint32 flag,
@@ -424,34 +429,98 @@ static std::map<std::thread::id, XP3FilterDecoder *> _thread_decoders;
 #if 1 || (defined(_MSC_VER) /*&& _MSC_VER <= 1800*/) ||                        \
     defined(CC_TARGET_OS_IPHONE)
 static std::mutex _decoders_mtx;
+static std::mutex _decoder_call_mtx;
 static std::vector<XP3FilterDecoder *> _cached_decoders;
-static XP3FilterDecoder *FetchXP3Decoder() {
-    std::lock_guard<std::mutex> lk(_decoders_mtx);
-    auto it = _thread_decoders.find(std::this_thread::get_id());
-    if(it != _thread_decoders.end()) {
-        XP3FilterDecoder *ret = it->second;
-        return ret;
-    }
+static XP3FilterDecoder *_shared_decoder = nullptr;
+
+static constexpr std::size_t XP3_FILTER_PREWARM_DECODER_COUNT = 32;
+
+static void RegisterXP3DecoderThreadExitEventLocked() {
     static bool Inited = false;
-    if(!Inited) {
-        Inited = true;
-        TVPAddOnThreadExitEvent([]() {
-            std::lock_guard<std::mutex> lk(_decoders_mtx);
-            auto it = _thread_decoders.find(std::this_thread::get_id());
-            if(it != _thread_decoders.end()) {
-                _cached_decoders.emplace_back(it->second);
-                _thread_decoders.erase(it);
-            }
-        });
+    if(Inited)
+        return;
+
+    Inited = true;
+    TVPAddOnThreadExitEvent([]() {
+        std::lock_guard<std::mutex> lk(_decoders_mtx);
+        auto it = _thread_decoders.find(std::this_thread::get_id());
+        if(it != _thread_decoders.end()) {
+            _cached_decoders.emplace_back(it->second);
+            _thread_decoders.erase(it);
+        }
+    });
+}
+
+static void PrewarmXP3Decoders(std::size_t count) {
+    if(sXP3FilterScript.IsEmpty())
+        return;
+
+    std::size_t needed = 0;
+    bool needShared = false;
+    {
+        std::lock_guard<std::mutex> lk(_decoders_mtx);
+        RegisterXP3DecoderThreadExitEventLocked();
+        needShared = _shared_decoder == nullptr;
+        if(_cached_decoders.size() < count)
+            needed = count - _cached_decoders.size();
     }
-    XP3FilterDecoder *ret;
-    if(!_cached_decoders.empty()) {
-        ret = _cached_decoders.back();
-        _cached_decoders.pop_back();
-    } else {
-        ret = AddXP3Decoder();
+
+    std::vector<XP3FilterDecoder *> created;
+    created.reserve(needed + (needShared ? 1 : 0));
+    for(std::size_t i = 0; i < needed + (needShared ? 1 : 0); ++i) {
+        created.emplace_back(AddXP3Decoder());
     }
-    _thread_decoders[std::this_thread::get_id()] = ret;
+
+    std::lock_guard<std::mutex> lk(_decoders_mtx);
+    if(needShared && _shared_decoder == nullptr && !created.empty()) {
+        _shared_decoder = created.back();
+        created.pop_back();
+    }
+    for(auto *decoder : created) {
+        _cached_decoders.emplace_back(decoder);
+    }
+}
+
+static void ClearXP3Decoders() {
+    std::lock_guard<std::mutex> lk(_decoders_mtx);
+    for(auto &it : _thread_decoders) {
+        delete it.second;
+    }
+    _thread_decoders.clear();
+    for(auto *decoder : _cached_decoders) {
+        delete decoder;
+    }
+    _cached_decoders.clear();
+    delete _shared_decoder;
+    _shared_decoder = nullptr;
+}
+
+static XP3FilterDecoder *FetchXP3Decoder() {
+    const auto threadId = std::this_thread::get_id();
+    {
+        std::lock_guard<std::mutex> lk(_decoders_mtx);
+        auto it = _thread_decoders.find(threadId);
+        if(it != _thread_decoders.end()) {
+            XP3FilterDecoder *ret = it->second;
+            return ret;
+        }
+        RegisterXP3DecoderThreadExitEventLocked();
+        if(!_cached_decoders.empty()) {
+            XP3FilterDecoder *ret = _cached_decoders.back();
+            _cached_decoders.pop_back();
+            _thread_decoders[threadId] = ret;
+            return ret;
+        }
+        if(_shared_decoder && threadId != TVPMainThreadID) {
+            return _shared_decoder;
+        }
+    }
+
+    XP3FilterDecoder *ret = AddXP3Decoder();
+    {
+        std::lock_guard<std::mutex> lk(_decoders_mtx);
+        _thread_decoders[threadId] = ret;
+    }
     return ret;
 }
 #else
@@ -477,9 +546,12 @@ tjs_int TVPXP3ArchiveContentFilterWrapper(const ttstr &filepath,
     tTJSVariant FileSize((tjs_int64)filesize);
     tTJSVariant *vars[] = { &FilePath, &ArcName, &FileSize };
     tTJSVariant result;
-    decoder->ManagedFilter.FuncCall(0, nullptr, nullptr, &result,
-                                    sizeof(vars) / sizeof(vars[0]), vars,
-                                    nullptr);
+    {
+        std::lock_guard<std::mutex> lk(_decoder_call_mtx);
+        decoder->ManagedFilter.FuncCall(0, nullptr, nullptr, &result,
+                                        sizeof(vars) / sizeof(vars[0]), vars,
+                                        nullptr);
+    }
     tjs_int ret = 0;
     if(result.Type() == tvtObject) {
         iTJSDispatch2 *arr = result.AsObjectNoAddRef();
@@ -513,9 +585,12 @@ TVPXP3ArchiveExtractionFilterWrapper(tTVPXP3ExtractionFilterInfo *info,
                       *pBuffer = (unsigned char *)info->Buffer;
         memcpy(pBackup, info->Buffer, info->BufferSize);
 #endif
-        decoder->ManagedDecoder.FuncCall(0, nullptr, nullptr, nullptr,
-                                         sizeof(vars) / sizeof(vars[0]), vars,
-                                         nullptr);
+        {
+            std::lock_guard<std::mutex> lk(_decoder_call_mtx);
+            decoder->ManagedDecoder.FuncCall(0, nullptr, nullptr, nullptr,
+                                             sizeof(vars) / sizeof(vars[0]),
+                                             vars, nullptr);
+        }
 #if defined(WIN32) && defined(CHECK_CXDEC)
         cxdec_decode(&dec_callback, info->FileHash, info->Offset, pBackup,
                      info->BufferSize);
@@ -532,19 +607,17 @@ TVPXP3ArchiveExtractionFilterWrapper(tTVPXP3ExtractionFilterInfo *info,
 
 void TVPSetXP3FilterScript(ttstr content) {
     if(sXP3FilterScript != content) {
-        for(auto it : _thread_decoders) {
-            delete it.second;
-        }
-        _thread_decoders.clear();
+        ClearXP3Decoders();
+        sXP3FilterScript = content;
     }
     if(content.IsEmpty()) {
         TVPSetXP3ArchiveExtractionFilter(nullptr);
         TVPSetXP3ArchiveContentFilter(nullptr);
     } else {
+        PrewarmXP3Decoders(XP3_FILTER_PREWARM_DECODER_COUNT);
         TVPSetXP3ArchiveExtractionFilter(TVPXP3ArchiveExtractionFilterWrapper);
         TVPSetXP3ArchiveContentFilter(TVPXP3ArchiveContentFilterWrapper);
     }
-    sXP3FilterScript = content;
 }
 
 static void PostRegistCallback() {
@@ -558,7 +631,7 @@ static void PostRegistCallback() {
             throw;
         }
         stream->Destruct();
-        //    AddXP3Decoder();
+        PrewarmXP3Decoders(XP3_FILTER_PREWARM_DECODER_COUNT);
         TVPSetXP3ArchiveExtractionFilter(TVPXP3ArchiveExtractionFilterWrapper);
         TVPSetXP3ArchiveContentFilter(TVPXP3ArchiveContentFilterWrapper);
     }
