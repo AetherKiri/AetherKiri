@@ -277,13 +277,31 @@ namespace TJS {
         const tjs_char *globalName = TJSCompatGlobalFallbackName(membername);
         if(!globalName) return false;
 
-        tTJS *engine = TVPGetScriptEngine();
-        if(!engine) return false;
-        iTJSDispatch2 *global = engine->GetGlobalNoAddRef();
-        if(!global) return false;
+        static thread_local bool resolving = false;
+        if(resolving)
+            return false;
 
-        return TJS_SUCCEEDED(
-            global->PropGet(0, globalName, nullptr, result, global));
+        resolving = true;
+        tTJS *engine = TVPGetScriptEngine();
+        if(!engine) {
+            resolving = false;
+            return false;
+        }
+        iTJSDispatch2 *global = engine->GetGlobalNoAddRef();
+        if(!global) {
+            resolving = false;
+            return false;
+        }
+
+        try {
+            const bool ok = TJS_SUCCEEDED(
+                global->PropGet(0, globalName, nullptr, result, global));
+            resolving = false;
+            return ok;
+        } catch(...) {
+            resolving = false;
+            throw;
+        }
     }
 
     static bool TJSCompatResolveWindowDrawDeviceFallback(

@@ -31,7 +31,7 @@ var game_path: LineEdit
 var restart_notice: Label
 var viewport: TextureRect
 var perf: Label
-var log_view: TextEdit
+var log_view = null
 var shell_root: Control
 var home_view: Control
 var settings_view: ScrollContainer
@@ -129,6 +129,9 @@ var active_touch_points := {}
 var active_mouse_buttons := {}
 var suppressed_touch_points := {}
 var touch_down_points := {}
+var pending_touch_index := -1
+var pending_touch_mapped := Vector2.ZERO
+var pending_touch_down_msec := 0
 var last_forwarded_touch_down_msec := 0
 var last_forwarded_touch_up_msec := 0
 var last_forwarded_touch_move_msec_by_id := {}
@@ -164,6 +167,9 @@ const TOUCH_DRAG_DISTANCE_THRESHOLD := 18.0
 const TOUCH_BUSY_TICK_MS := 120.0
 const TOUCH_BUSY_SUPPRESS_MS := 0
 const TOUCH_POINTER_ID_OFFSET := 100000
+const TOUCH_SECONDARY_POINTER_ID := 0
+const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
+const TOUCH_SINGLE_TAP_DELAY_MS := 90
 const BLACK_FRAME_GUARD_MS := 3200
 const BLACK_FRAME_SAMPLE_INTERVAL_MS := 120
 const BLACK_FRAME_VISIBLE_MIN := 8
@@ -181,6 +187,9 @@ const COLOR_LINE := Color(0.84, 0.82, 0.76, 1.0)
 const HOME_CARD_SIZE := Vector2(260, 350)
 
 func _detect_cli_probe_script() -> String:
+    var env_script := _normalize_cli_probe_script(OS.get_environment("AETHERKIRI_CLI_PROBE_SCRIPT"))
+    if not env_script.is_empty():
+        return env_script
     var args := OS.get_cmdline_args()
     for i in range(args.size()):
         var arg := String(args[i])
@@ -205,6 +214,10 @@ func _normalize_cli_probe_script(path: String) -> String:
         if normalized == item or normalized.ends_with("/" + item.get_file()):
             return item
     return ""
+
+func _mobile_runtime() -> bool:
+    var platform := OS.get_name()
+    return platform == "iOS" or platform == "Android"
 
 func _apply_ui_font() -> void:
     var fallbacks: Array[Font] = [UI_SYMBOL_FONT]
@@ -744,17 +757,18 @@ func _build_loading_panel() -> void:
     title.add_theme_color_override("font_color", Color(0.95, 0.93, 0.86, 1))
     box.add_child(title)
 
-    log_view = TextEdit.new()
-    log_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    log_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
-    log_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    log_view.editable = false
-    log_view.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-    log_view.scroll_fit_content_height = false
-    log_view.add_theme_font_size_override("font_size", 18)
-    log_view.add_theme_color_override("font_color", Color(0.90, 0.90, 0.82, 1))
-    log_view.add_theme_color_override("background_color", Color(0, 0, 0, 0))
-    box.add_child(log_view)
+    if not _mobile_runtime():
+        log_view = TextEdit.new()
+        log_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        log_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+        log_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        log_view.editable = false
+        log_view.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+        log_view.scroll_fit_content_height = false
+        log_view.add_theme_font_size_override("font_size", 18)
+        log_view.add_theme_color_override("font_color", Color(0.90, 0.90, 0.82, 1))
+        log_view.add_theme_color_override("background_color", Color(0, 0, 0, 0))
+        box.add_child(log_view)
 
 func _panel_style(radius: int, fill: Color, border: Color, border_width: int = 1) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
@@ -2255,7 +2269,7 @@ func _ready() -> void:
     device_probe_enabled = device_probe_enabled or frame_probe_enabled
     device_probe_enabled = device_probe_enabled or input_trace_enabled
     device_probe_enabled = device_probe_enabled or _runtime_flag("AETHERKIRI_AUTO_OPEN")
-    device_probe_enabled = device_probe_enabled or _runtime_flag("AETHERKIRI_AUTO_START_GAME")
+    device_probe_enabled = device_probe_enabled or not _runtime_string("AETHERKIRI_AUTO_START_GAME").is_empty()
     startup_click_stream_enabled = _runtime_flag("AETHERKIRI_STARTUP_CLICK_STREAM")
     device_probe_enabled = device_probe_enabled or startup_click_stream_enabled
     device_probe_enabled = device_probe_enabled or not OS.get_environment("AETHERKIRI_CAPTURE_UI").is_empty()
@@ -2264,7 +2278,7 @@ func _ready() -> void:
     device_probe_enabled = device_probe_enabled or not cli_probe_script.is_empty()
 
     var live_fps_log_path := OS.get_environment("AETHERKIRI_LIVE_FPS_LOG")
-    if live_fps_log_path.is_empty() and ios_diagnostics_enabled:
+    if live_fps_log_path.is_empty() and ios_diagnostics_enabled and _runtime_flag("AETHERKIRI_IOS_FILE_LOG"):
         live_fps_log_path = "user://aetherkiri-ios-live.log"
     if not live_fps_log_path.is_empty():
         perf_log_file = FileAccess.open(live_fps_log_path, FileAccess.WRITE)
@@ -2376,18 +2390,31 @@ func _finish_ready_after_first_frame() -> void:
         _runtime_float("AETHERKIRI_CAPTURE_DELAY_SEC", 0.0)
     )
     auto_probe_clicks = _parse_click_points(_runtime_string("AETHERKIRI_AUTO_PROBE_CLICKS"))
-    if _runtime_flag("AETHERKIRI_AUTO_START_GAME"):
-        call_deferred("_auto_start_configured_game")
+    var auto_start_game_spec := _runtime_string("AETHERKIRI_AUTO_START_GAME")
+    if not auto_start_game_spec.is_empty():
+        call_deferred("_auto_start_configured_game", auto_start_game_spec)
     elif _runtime_flag("AETHERKIRI_AUTO_OPEN"):
         call_deferred("_on_open_game")
     if not OS.get_environment("AETHERKIRI_CAPTURE_UI").is_empty():
         call_deferred("_capture_ui_after_ready")
 
-func _auto_start_configured_game() -> void:
-    var path := _resolve_game_path(game_path.text.strip_edges())
-    var game := _find_known_game_by_path(path)
-    if game.is_empty() and not path.is_empty() and _path_exists(path):
-        game = _game_info_from_path(path)
+func _auto_start_configured_game(spec: String = "") -> void:
+    _refresh_known_games_for_auto_start()
+    var game := {}
+    var selectors: Array[String] = []
+    var env_path := _runtime_string("AETHERKIRI_GAME_PATH")
+    if not env_path.is_empty():
+        selectors.append(env_path)
+    if not _auto_start_spec_is_toggle(spec):
+        selectors.append(spec)
+    var configured_path := game_path.text.strip_edges()
+    if not configured_path.is_empty():
+        selectors.append(configured_path)
+    selectors.append("RIDDLE JOKER")
+    for selector in selectors:
+        game = _find_known_game_by_query(selector)
+        if not game.is_empty():
+            break
     if game.is_empty() and not known_games.is_empty():
         game = known_games[0]
     if game.is_empty():
@@ -2396,6 +2423,17 @@ func _auto_start_configured_game() -> void:
     selected_game = game
     _start_selected_game()
 
+func _refresh_known_games_for_auto_start() -> void:
+    known_games = _load_game_list()
+    if OS.get_name() == "iOS":
+        known_games = _scan_ios_games_dir(known_games)
+        _save_game_list(known_games)
+    known_games = _sorted_games(known_games)
+
+func _auto_start_spec_is_toggle(spec: String) -> bool:
+    var value := spec.strip_edges().to_lower()
+    return value == "1" or value == "true" or value == "yes" or value == "on"
+
 func _find_known_game_by_path(path: String) -> Dictionary:
     if path.is_empty():
         return {}
@@ -2403,6 +2441,34 @@ func _find_known_game_by_path(path: String) -> Dictionary:
         if String(game.get("path", "")) == path:
             return game
     return {}
+
+func _find_known_game_by_query(query: String) -> Dictionary:
+    var normalized := query.strip_edges()
+    if normalized.is_empty():
+        return {}
+    var resolved_path := _resolve_game_path(normalized)
+    var game := _find_known_game_by_path(resolved_path)
+    if not game.is_empty():
+        return game
+    if not resolved_path.is_empty() and _path_exists(resolved_path):
+        return _game_info_from_path(resolved_path)
+    var needle := normalized.to_lower()
+    var partial := {}
+    for item in known_games:
+        var path := String(item.get("path", ""))
+        var title := _game_display_title(item)
+        var name := String(item.get("name", ""))
+        var file_name := path.get_file()
+        if title.to_lower() == needle or name.to_lower() == needle or file_name.to_lower() == needle:
+            return item
+        if partial.is_empty() and (
+            title.to_lower().find(needle) >= 0
+            or name.to_lower().find(needle) >= 0
+            or file_name.to_lower().find(needle) >= 0
+            or path.to_lower().find(needle) >= 0
+        ):
+            partial = item
+    return partial
 
 func _refresh_games_after_web_local_restore() -> void:
     if OS.get_name() != "Web":
@@ -2440,9 +2506,20 @@ func _capture_ui_after_ready() -> void:
         get_tree().quit(0)
 
 func _run_cli_script_probe() -> void:
+    _write_probe_marker("cli_probe start script=%s" % cli_probe_script)
     var config := ProbeConfig.load()
     var target_game_path: String = ProbeConfig.require_game_path(config)
+    var requested_game_path := target_game_path
+    if OS.get_name() == "iOS" and not target_game_path.is_empty():
+        _refresh_known_games_for_auto_start()
+        var game := _find_known_game_by_query(target_game_path)
+        if not game.is_empty():
+            target_game_path = String(game.get("path", target_game_path))
+        else:
+            target_game_path = _resolve_game_path(target_game_path)
+    _write_probe_marker("cli_probe target requested=%s resolved=%s" % [requested_game_path, target_game_path])
     if target_game_path.is_empty():
+        _write_probe_marker("cli_probe missing_game")
         printerr("AETHERKIRI_SMOKE_GAME is not set")
         await _probe_cleanup_and_quit(2)
         return
@@ -2457,6 +2534,7 @@ func _run_cli_script_probe() -> void:
     elif cli_probe_script == "res://scripts/perf_input_probe.gd":
         await _run_cli_perf_input_probe(config, target_game_path)
     else:
+        _write_probe_marker("cli_probe unsupported script=%s" % cli_probe_script)
         printerr("unsupported probe script: %s" % cli_probe_script)
         await _probe_cleanup_and_quit(2)
 
@@ -2486,37 +2564,48 @@ func _probe_open_game(config: Dictionary, target_game_path: String, backend_env:
     selected_backend = ProbeConfig.backend(config, backend_env)
     if not selected_backend in BACKENDS:
         selected_backend = "Godot Native"
+    _write_probe_marker("probe_open_game backend=%s target=%s" % [selected_backend, target_game_path])
     _apply_backend(false)
     var fps_limit := ProbeConfig.int_value(config, "fps_limit", _runtime_int("AETHERKIRI_PROBE_FPS_LIMIT", 0))
     player.set_engine_option("fps_limit", str(maxi(0, fps_limit)))
     var surface_size := ProbeConfig.surface_size(config)
+    _write_probe_marker("probe_open_game surface=%dx%d fps_limit=%d" % [surface_size.x, surface_size.y, fps_limit])
     var surface_result: int = int(player.set_surface_size(surface_size.x, surface_size.y))
     if surface_result != ENGINE_RESULT_OK:
+        _write_probe_marker("probe_open_game set_surface_failed error=%s" % player.get_last_error())
         printerr("set_surface_size failed: %s" % player.get_last_error())
         return false
     current_surface_size = surface_size
     game_path.text = target_game_path
     var result: int = int(player.open_game(target_game_path, true))
     if result != ENGINE_RESULT_OK:
+        _write_probe_marker("probe_open_game failed error=%s" % player.get_last_error())
         printerr("open_game failed: %s" % player.get_last_error())
         return false
+    _write_probe_marker("probe_open_game opened")
     return true
 
 func _probe_wait_startup(config: Dictionary, fallback_frames: int = 900) -> bool:
-    for i in range(ProbeConfig.int_value(config, "startup_timeout_frames", fallback_frames)):
+    var timeout_frames := ProbeConfig.int_value(config, "startup_timeout_frames", fallback_frames)
+    _write_probe_marker("probe_wait_startup frames=%d" % timeout_frames)
+    for i in range(timeout_frames):
         var state: int = int(player.get_startup_state())
         if state == STARTUP_SUCCEEDED:
+            _write_probe_marker("probe_wait_startup succeeded frame=%d" % i)
             return true
         if state == STARTUP_FAILED:
+            _write_probe_marker("probe_wait_startup failed frame=%d error=%s" % [i, player.get_last_error()])
             printerr("startup failed: %s" % player.get_last_error())
             return false
         await get_tree().process_frame
+    _write_probe_marker("probe_wait_startup timed_out")
     printerr("startup timed out")
     return false
 
 func _probe_tick_and_update() -> bool:
     var result: int = int(player.tick(1.0 / 60.0))
     if result != ENGINE_RESULT_OK:
+        _write_probe_marker("probe_tick failed error=%s" % player.get_last_error())
         printerr("tick failed: %s" % player.get_last_error())
         return false
     if present_hold_frames > 0:
@@ -2618,12 +2707,15 @@ func _run_cli_step_probe(config: Dictionary, target_game_path: String) -> void:
         await _probe_cleanup_and_quit(1)
         return
     var fps: float = float(measured_frames) / max(0.0001, float(Time.get_ticks_usec() - start_ticks) / 1000000.0)
-    print("step probe fps=%.2f texture_backend=%s renderer=\"%s\" steps=%d output=/tmp/aetherkiri-step-*.png" % [
+    var line := "step probe fps=%.2f texture_backend=%s renderer=\"%s\" steps=%d output=%s" % [
         fps,
         player.get_frame_texture_backend(),
         player.get_renderer_info(),
         step,
-    ])
+        _default_output_path("aetherkiri-step-*.png"),
+    ]
+    print(line)
+    _write_probe_marker(line)
     await _probe_cleanup_and_quit(0)
 
 func _probe_run_legacy_steps(config: Dictionary, step: int) -> int:
@@ -2676,6 +2768,11 @@ func _probe_run_actions(config: Dictionary, step: int) -> int:
             _probe_send_mapped_click(pos, config)
             if label.is_empty() or label == "click":
                 label = "click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "right_click":
+            var pos := ProbeConfig.click_position(action)
+            _probe_send_mapped_click(pos, config, 1)
+            if label.is_empty() or label == "right_click":
+                label = "right_click_%d_%d" % [int(pos.x), int(pos.y)]
         elif kind == "move":
             var pos := ProbeConfig.click_position(action)
             _probe_send_mapped_move(pos, config)
@@ -2808,28 +2905,30 @@ func _probe_save_step(index: int, label: String) -> void:
     await get_tree().process_frame
     await get_tree().process_frame
     var image := _probe_capture_image()
-    var path := "/tmp/aetherkiri-step-%02d-%s.png" % [index, label]
+    var path := _default_output_path("aetherkiri-step-%02d-%s.png" % [index, label])
     image.save_png(path)
-    print("step %02d label=%s texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
+    var line := "step %02d label=%s texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
         index,
         label,
         player.get_frame_texture_backend(),
         player.get_renderer_info(),
         path,
         JSON.stringify(_image_stats(image)),
-    ])
+    ]
+    print(line)
+    _write_probe_marker(line)
 
-func _probe_send_mapped_click(window_pos: Vector2, config: Dictionary) -> void:
+func _probe_send_mapped_click(window_pos: Vector2, config: Dictionary, button: int = 0) -> void:
     var mapped := _probe_map_window_point(window_pos, config)
     if mapped.x < 0.0 or mapped.y < 0.0:
         print("skip click outside texture window=%s mapped=%s" % [window_pos, mapped])
         return
     player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
-    player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, button)
     _hold_next_present_after_input()
     player.tick(1.0 / 60.0)
-    player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, button)
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
 
 func _probe_send_mapped_move(window_pos: Vector2, config: Dictionary) -> void:
@@ -2908,7 +3007,8 @@ func _run_cli_perf_input_probe(config: Dictionary, target_game_path: String) -> 
         return
 
     var before := _probe_capture_image()
-    before.save_png("/tmp/aetherkiri-before-click.png")
+    var before_path := _default_output_path("aetherkiri-before-click.png")
+    before.save_png(before_path)
 
     var measured_frames: int = ProbeConfig.int_value(config, "measure_frames", _runtime_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 180))
     var start_ticks: int = Time.get_ticks_usec()
@@ -2941,13 +3041,16 @@ func _run_cli_perf_input_probe(config: Dictionary, target_game_path: String) -> 
             return
 
     var after := _probe_capture_image()
-    after.save_png("/tmp/aetherkiri-after-click.png")
+    var after_path := _default_output_path("aetherkiri-after-click.png")
+    after.save_png(after_path)
     var diff: float = _probe_image_diff_score(before, after)
-    print("perf_input probe fps=%.2f texture_backend=%s renderer=\"%s\" click_diff=%.5f before=/tmp/aetherkiri-before-click.png after=/tmp/aetherkiri-after-click.png" % [
+    print("perf_input probe fps=%.2f texture_backend=%s renderer=\"%s\" click_diff=%.5f before=%s after=%s" % [
         fps,
         player.get_frame_texture_backend(),
         player.get_renderer_info(),
         diff,
+        before_path,
+        after_path,
     ])
     await _probe_cleanup_and_quit(0 if diff > 0.01 else 2)
 
@@ -3000,6 +3103,7 @@ func _probe_image_diff_score(a: Image, b: Image) -> float:
     return total / max(1.0, float(samples))
 
 func _probe_cleanup_and_quit(code: int) -> void:
+    _write_probe_marker("probe_cleanup code=%d" % code)
     if player != null:
         viewport.texture = null
         await get_tree().process_frame
@@ -3060,6 +3164,7 @@ func _process(delta: float) -> void:
         if startup_state == STARTUP_SUCCEEDED:
             restart_notice.text = ""
             loading_panel.visible = false
+            _flush_pending_touch_press_if_ready()
             tick_trace_serial += 1
             tick_trace_active_serial = tick_trace_serial
             if _should_log_tick_trace():
@@ -3672,6 +3777,9 @@ func _clear_game_input_capture() -> void:
     active_mouse_buttons.clear()
     suppressed_touch_points.clear()
     touch_down_points.clear()
+    pending_touch_index = -1
+    pending_touch_mapped = Vector2.ZERO
+    pending_touch_down_msec = 0
     last_forwarded_touch_move_msec_by_id.clear()
     last_forwarded_touch_down_msec = 0
     last_forwarded_touch_up_msec = 0
@@ -3772,6 +3880,11 @@ func _run_startup_click_stream_probe() -> void:
     if _runtime_flag("AETHERKIRI_QUIT_AFTER_STARTUP_CLICK_STREAM"):
         get_tree().quit(0)
 
+func _can_write_probe_files() -> bool:
+    if OS.get_name() != "iOS":
+        return true
+    return _runtime_flag("AETHERKIRI_IOS_FILE_LOG")
+
 func _send_startup_probe_mouse_click(pos: Vector2) -> bool:
     var down := InputEventMouseButton.new()
     down.button_index = MOUSE_BUTTON_LEFT
@@ -3790,6 +3903,8 @@ func _send_startup_probe_mouse_click(pos: Vector2) -> bool:
     return down_captured
 
 func _save_startup_click_stream_capture(frame_index: int) -> void:
+    if not _can_write_probe_files():
+        return
     var texture := get_viewport().get_texture()
     if texture == null:
         return
@@ -3821,7 +3936,10 @@ func _save_auto_probe_step(index: int, label: String) -> void:
     var image := get_viewport().get_texture().get_image()
     var screenshot_stats := _image_stats(image)
     var path := _default_output_path("aetherkiri-auto-step-%02d-%s.png" % [index, label])
-    image.save_png(path)
+    if _can_write_probe_files():
+        image.save_png(path)
+    else:
+        path = "<disabled-on-ios>"
     var line := "auto_step index=%d label=%s output=%s texture=%s frame=%dx%d serial=%d frame_stats=%s screenshot_stats=%s renderer=\"%s\"" % [
         index,
         label,
@@ -4017,7 +4135,7 @@ func _runtime_int(name: String, fallback: int) -> int:
     return int(value)
 
 func _write_probe_marker(line: String) -> void:
-    if OS.get_name() != "iOS" or not device_probe_enabled:
+    if OS.get_name() != "iOS" or not device_probe_enabled or not _can_write_probe_files():
         return
     var marker := FileAccess.open(_default_output_path("aetherkiri-device-probe.log"), FileAccess.READ_WRITE)
     if marker == null:
@@ -4170,47 +4288,37 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         var pointer_id := touch.index
         if touch.pressed:
             if _is_touch_input_busy():
-                suppressed_touch_points[pointer_id] = true
-                active_touch_points.erase(pointer_id)
-                touch_down_points.erase(pointer_id)
+                _suppress_touch_pointer(pointer_id)
                 _trace_input_busy()
                 return true
-            if not active_touch_points.is_empty():
-                suppressed_touch_points[pointer_id] = true
-                _trace_input_throttled()
-                return true
-            if _should_suppress_touch_press():
-                suppressed_touch_points[pointer_id] = true
-                active_touch_points.erase(pointer_id)
-                touch_down_points.erase(pointer_id)
-                _trace_input_throttled()
-                return true
-            suppressed_touch_points.erase(pointer_id)
             var mapped := _map_viewport_point(touch.position)
             if mapped.x < 0.0 or mapped.y < 0.0:
                 _trace_input_outside()
                 return false
-            active_touch_points[pointer_id] = mapped
-            touch_down_points[pointer_id] = mapped
-            last_forwarded_touch_down_msec = Time.get_ticks_msec()
-            _send_game_pointer_event(
-                POINTER_DOWN,
-                _touch_engine_pointer_id(pointer_id),
-                mapped.x,
-                mapped.y,
-                0.0,
-                0.0,
-                0
-            )
-            _arm_tick_trace()
-            _arm_black_frame_guard()
-            _hold_next_present_after_input()
+            if _handle_secondary_touch_press(pointer_id, mapped):
+                return true
+            if not active_touch_points.is_empty():
+                _suppress_touch_pointer(pointer_id)
+                _trace_input_throttled()
+                return true
+            if _should_suppress_touch_press():
+                _suppress_touch_pointer(pointer_id)
+                _trace_input_throttled()
+                return true
+            _set_pending_touch(pointer_id, mapped)
             return true
         if suppressed_touch_points.has(pointer_id):
             suppressed_touch_points.erase(pointer_id)
             active_touch_points.erase(pointer_id)
             touch_down_points.erase(pointer_id)
+            _clear_pending_touch_if_matches(pointer_id)
             _trace_input_throttled()
+            return true
+        if pointer_id == pending_touch_index:
+            var pending_up_mapped := _map_viewport_point(touch.position, true)
+            if pending_up_mapped.x < 0.0 or pending_up_mapped.y < 0.0:
+                pending_up_mapped = pending_touch_mapped
+            _send_pending_touch_click(pointer_id, pending_up_mapped)
             return true
         var captured := active_touch_points.has(pointer_id)
         if not captured:
@@ -4236,6 +4344,14 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         if suppressed_touch_points.has(pointer_id):
             _trace_input_throttled()
             return true
+        if pointer_id == pending_touch_index:
+            var pending_drag_mapped := _map_viewport_point(drag.position, true)
+            if pending_drag_mapped.x < 0.0 or pending_drag_mapped.y < 0.0:
+                pending_drag_mapped = pending_touch_mapped
+            if pending_drag_mapped.distance_to(pending_touch_mapped) < TOUCH_DRAG_DISTANCE_THRESHOLD:
+                _trace_input_move_suppressed()
+                return true
+            _flush_pending_touch_press(true)
         var captured := active_touch_points.has(pointer_id)
         var mapped := _map_viewport_point(drag.position, captured)
         if mapped.x < 0.0 or mapped.y < 0.0:
@@ -4260,6 +4376,130 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             _trace_input_throttled()
         return true
     return false
+
+func _suppress_touch_pointer(pointer_id: int) -> void:
+    suppressed_touch_points[pointer_id] = true
+    active_touch_points.erase(pointer_id)
+    touch_down_points.erase(pointer_id)
+    last_forwarded_touch_move_msec_by_id.erase(pointer_id)
+    _clear_pending_touch_if_matches(pointer_id)
+
+func _set_pending_touch(pointer_id: int, mapped: Vector2) -> void:
+    suppressed_touch_points.erase(pointer_id)
+    active_touch_points.erase(pointer_id)
+    touch_down_points.erase(pointer_id)
+    last_forwarded_touch_move_msec_by_id.erase(pointer_id)
+    pending_touch_index = pointer_id
+    pending_touch_mapped = mapped
+    pending_touch_down_msec = Time.get_ticks_msec()
+
+func _clear_pending_touch() -> void:
+    pending_touch_index = -1
+    pending_touch_mapped = Vector2.ZERO
+    pending_touch_down_msec = 0
+
+func _clear_pending_touch_if_matches(pointer_id: int) -> void:
+    if pending_touch_index == pointer_id:
+        _clear_pending_touch()
+
+func _handle_secondary_touch_press(pointer_id: int, mapped: Vector2) -> bool:
+    var now := Time.get_ticks_msec()
+    if pending_touch_index >= 0 and pending_touch_index != pointer_id:
+        if now - pending_touch_down_msec <= TOUCH_SECONDARY_TAP_WINDOW_MS:
+            _send_touch_secondary_click(pointer_id, mapped)
+            return true
+        _flush_pending_touch_press(true)
+        return false
+
+    if active_touch_points.size() == 1 and last_forwarded_touch_down_msec > 0:
+        if now - last_forwarded_touch_down_msec <= TOUCH_SECONDARY_TAP_WINDOW_MS:
+            _send_touch_secondary_click(pointer_id, mapped)
+            return true
+    return false
+
+func _flush_pending_touch_press_if_ready() -> void:
+    _flush_pending_touch_press(false)
+
+func _flush_pending_touch_press(force: bool = false) -> bool:
+    if pending_touch_index < 0:
+        return false
+    var now := Time.get_ticks_msec()
+    if not force and now - pending_touch_down_msec < TOUCH_SINGLE_TAP_DELAY_MS:
+        return false
+
+    var pointer_id := pending_touch_index
+    var mapped := pending_touch_mapped
+    _clear_pending_touch()
+    suppressed_touch_points.erase(pointer_id)
+    active_touch_points[pointer_id] = mapped
+    touch_down_points[pointer_id] = mapped
+    last_forwarded_touch_down_msec = now
+    _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
+    _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
+    _arm_tick_trace()
+    _arm_black_frame_guard()
+    _hold_next_present_after_input()
+    return true
+
+func _send_pending_touch_click(pointer_id: int, up_mapped: Vector2) -> void:
+    var down_mapped := pending_touch_mapped
+    _clear_pending_touch()
+    suppressed_touch_points.erase(pointer_id)
+    active_touch_points.erase(pointer_id)
+    touch_down_points.erase(pointer_id)
+    last_forwarded_touch_move_msec_by_id.erase(pointer_id)
+
+    last_forwarded_touch_down_msec = Time.get_ticks_msec()
+    _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), down_mapped.x, down_mapped.y, 0.0, 0.0, 0)
+    _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), down_mapped.x, down_mapped.y, 0.0, 0.0, 0)
+    if up_mapped.distance_to(down_mapped) > 0.5:
+        _send_game_pointer_event(
+            POINTER_MOVE,
+            _touch_engine_pointer_id(pointer_id),
+            up_mapped.x,
+            up_mapped.y,
+            up_mapped.x - down_mapped.x,
+            up_mapped.y - down_mapped.y,
+            0,
+            POINTER_MOD_LEFT
+        )
+    _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), up_mapped.x, up_mapped.y, 0.0, 0.0, 0)
+    last_forwarded_touch_up_msec = Time.get_ticks_msec()
+    _apply_touch_action_cooldown()
+    _arm_tick_trace()
+    _arm_black_frame_guard()
+    _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
+
+func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
+    var click_mapped := mapped
+    if pending_touch_index >= 0:
+        var first_id := pending_touch_index
+        click_mapped = (pending_touch_mapped + mapped) * 0.5
+        suppressed_touch_points[first_id] = true
+        touch_down_points.erase(first_id)
+        last_forwarded_touch_move_msec_by_id.erase(first_id)
+        _clear_pending_touch()
+    elif not active_touch_points.is_empty():
+        var first_id := int(active_touch_points.keys()[0])
+        var first_mapped: Vector2 = active_touch_points.get(first_id, mapped)
+        click_mapped = (first_mapped + mapped) * 0.5
+        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(first_id), first_mapped.x, first_mapped.y, 0.0, 0.0, 0)
+        active_touch_points.erase(first_id)
+        touch_down_points.erase(first_id)
+        last_forwarded_touch_move_msec_by_id.erase(first_id)
+        suppressed_touch_points[first_id] = true
+        last_forwarded_touch_up_msec = Time.get_ticks_msec()
+
+    _suppress_touch_pointer(pointer_id)
+    _send_game_pointer_event(POINTER_MOVE, TOUCH_SECONDARY_POINTER_ID, click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
+    last_forwarded_touch_down_msec = Time.get_ticks_msec()
+    _send_game_pointer_event(POINTER_DOWN, TOUCH_SECONDARY_POINTER_ID, click_mapped.x, click_mapped.y, 0.0, 0.0, 1)
+    _send_game_pointer_event(POINTER_UP, TOUCH_SECONDARY_POINTER_ID, click_mapped.x, click_mapped.y, 0.0, 0.0, 1)
+    last_forwarded_touch_up_msec = Time.get_ticks_msec()
+    _apply_touch_action_cooldown()
+    _arm_tick_trace()
+    _arm_black_frame_guard()
+    _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
 
 func _touch_engine_pointer_id(pointer_id: int) -> int:
     return TOUCH_POINTER_ID_OFFSET + pointer_id
@@ -4477,6 +4717,8 @@ func _append_log(line: String) -> void:
     log_lines.append(line)
     while log_lines.size() > MAX_LOG_LINES:
         log_lines.remove_at(0)
+    if log_view == null:
+        return
     log_view.text = "\n".join(log_lines)
     call_deferred("_scroll_log_to_bottom")
 

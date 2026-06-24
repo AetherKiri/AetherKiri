@@ -100,6 +100,81 @@ namespace motion::detail {
             return slash == std::string::npos ? value : value.substr(slash + 1);
         }
 
+        void appendMotionCandidate(std::vector<ttstr> &candidates,
+                                   const std::string &value) {
+            if(value.empty()) {
+                return;
+            }
+            const auto exists =
+                std::any_of(candidates.begin(), candidates.end(),
+                            [&value](const ttstr &candidate) {
+                                return narrow(candidate) == value;
+                            });
+            if(!exists) {
+                candidates.emplace_back(ttstr{ value });
+            }
+        }
+
+        void appendSplitEmoteBaseCandidates(std::vector<ttstr> &candidates,
+                                            const std::string &raw) {
+            if(raw.empty()) {
+                return;
+            }
+
+            const auto lowered = lowercase(raw);
+            const auto slash = raw.find_last_of("/\\");
+            const auto nameStart =
+                slash == std::string::npos ? std::string::size_type{ 0 }
+                                           : slash + 1;
+            auto stemEnd = raw.size();
+            std::string preferredExt;
+            if(const auto dot = lowered.find_last_of('.');
+               dot != std::string::npos && dot > nameStart) {
+                const auto ext = lowered.substr(dot);
+                if(ext == ".mtn" || ext == ".psb" || ext == ".mt") {
+                    preferredExt = ext;
+                    stemEnd = dot;
+                }
+            }
+
+            const auto stemLength = stemEnd - nameStart;
+            if(stemLength <= 3) {
+                return;
+            }
+            const auto stemLower = lowered.substr(nameStart, stemLength);
+            if(stemLower.compare(stemLower.size() - 3, 3, "emo") != 0) {
+                return;
+            }
+
+            const auto prefix = raw.substr(0, nameStart);
+            const auto baseStem = raw.substr(nameStart, stemLength - 3);
+            if(baseStem.empty()) {
+                return;
+            }
+
+            std::vector<std::string> extensions;
+            if(!preferredExt.empty()) {
+                extensions.push_back(preferredExt);
+            }
+            for(const auto *ext : { ".mtn", ".psb", ".mt" }) {
+                if(std::find(extensions.begin(), extensions.end(), ext) ==
+                   extensions.end()) {
+                    extensions.emplace_back(ext);
+                }
+            }
+
+            for(const auto &ext : extensions) {
+                appendMotionCandidate(candidates, prefix + baseStem + ext);
+            }
+
+            if(slash == std::string::npos) {
+                for(const auto &ext : extensions) {
+                    appendMotionCandidate(candidates,
+                                          "motion/" + baseStem + ext);
+                }
+            }
+        }
+
         bool isTargetLogoMotionPath(const std::string &motionPath) {
             const auto lowered = lowercase(motionPath);
             return lowered.find("yuzulogo.mtn") != std::string::npos ||
@@ -1253,6 +1328,7 @@ namespace motion::detail {
             candidates.emplace_back(ttstr{ "motion/" + raw + ".mtn" });
             candidates.emplace_back(ttstr{ "motion/" + raw + ".psb" });
         }
+        appendSplitEmoteBaseCandidates(candidates, raw);
 
         return candidates;
     }

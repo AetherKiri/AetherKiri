@@ -358,16 +358,26 @@ namespace internal {
             const std::string &loweredSuffix) {
             const auto matches = [&loweredSuffix](const std::string &label) {
                 const auto lowered = psbDebugLowercase(label);
+                const auto emoteSuffix = loweredSuffix + "emo";
                 return lowered == loweredSuffix ||
+                    lowered == emoteSuffix ||
                     (lowered.size() > loweredSuffix.size() &&
                      lowered.compare(lowered.size() - loweredSuffix.size(),
-                                     loweredSuffix.size(), loweredSuffix) == 0);
+                                     loweredSuffix.size(), loweredSuffix) == 0) ||
+                    (lowered.size() > emoteSuffix.size() &&
+                     lowered.compare(lowered.size() - emoteSuffix.size(),
+                                     emoteSuffix.size(), emoteSuffix) == 0);
             };
 
             return std::any_of(snapshot.mainTimelineLabels.begin(),
                                snapshot.mainTimelineLabels.end(), matches) ||
                 std::any_of(snapshot.diffTimelineLabels.begin(),
-                            snapshot.diffTimelineLabels.end(), matches);
+                            snapshot.diffTimelineLabels.end(), matches) ||
+                std::any_of(snapshot.clipsByLabel.begin(),
+                            snapshot.clipsByLabel.end(),
+                            [&matches](const auto &entry) {
+                                return matches(entry.first);
+                            });
         }
 
         inline std::shared_ptr<detail::MotionSnapshot>
@@ -445,6 +455,12 @@ namespace internal {
                 const auto snapshot = detail::loadMotionSnapshot(
                     resolved, ResourceManager::getEmotePSBDecryptSeed());
                 if(snapshot) {
+                    if(resourceManager != nullptr) {
+                        resourceManager->rememberLoadedModule(
+                            resolved, snapshot->moduleValue);
+                        resourceManager->rememberLoadedModule(
+                            name, snapshot->moduleValue);
+                    }
                     return cacheMotion(runtime, requestKey, resolvedKey, snapshot);
                 }
             }
@@ -464,6 +480,8 @@ namespace internal {
                     if(const auto snapshot =
                            fallbackSplitEmoteMotion(*resourceManager,
                                                     candidate)) {
+                        resourceManager->rememberLoadedModule(
+                            candidate, snapshot->moduleValue);
                         return cacheMotion(runtime, requestKey,
                                            detail::narrow(candidate), snapshot);
                     }

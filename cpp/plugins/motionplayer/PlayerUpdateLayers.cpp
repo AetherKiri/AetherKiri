@@ -3349,9 +3349,21 @@ namespace motion {
             }
             if(!node.hasSource || node.interpolatedCache.src.empty()) continue;
 
+            std::unordered_set<int> visitedAncestors;
             for(int ancestorIndex = node.visibleAncestorIndex;
                 ancestorIndex >= 0 &&
                 ancestorIndex < static_cast<int>(nodes.size()); ) {
+                if(!visitedAncestors.insert(ancestorIndex).second) {
+                    if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG")) {
+                        LOGGER->warn(
+                            "motion prepare ancestor cycle skipped: motion={} node={} ancestor={}",
+                            _runtime->activeMotion
+                                ? _runtime->activeMotion->path
+                                : std::string("<none>"),
+                            node.layerName, ancestorIndex);
+                    }
+                    break;
+                }
                 const auto &ancestor = nodes[ancestorIndex];
                 const bool isSpecialCompositeParent =
                     ancestor.nodeType == 12 && (ancestor.stencilType & 4) != 0;
@@ -3639,8 +3651,21 @@ namespace motion {
             };
 
         for(const auto &childEntry : entries) {
+            std::unordered_set<int> visitedAncestors;
             for(int ancestorIndex = childEntry.visibleAncestorIndex;
-                ancestorIndex >= 0; ) {
+                ancestorIndex >= 0 &&
+                ancestorIndex < static_cast<int>(nodes.size()); ) {
+                if(!visitedAncestors.insert(ancestorIndex).second) {
+                    if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG")) {
+                        LOGGER->warn(
+                            "motion prepare paintBox ancestor cycle skipped: motion={} childNode={} ancestor={}",
+                            _runtime->activeMotion
+                                ? _runtime->activeMotion->path
+                                : std::string("<none>"),
+                            childEntry.nodeLabel, ancestorIndex);
+                    }
+                    break;
+                }
                 const auto parentIt = entryIndexByNode.find(ancestorIndex);
                 if(parentIt == entryIndexByNode.end()) {
                     break;
@@ -3662,6 +3687,39 @@ namespace motion {
             return false;
         }
 
+        static thread_local std::vector<const Player *> s_prepareStack;
+        for(const Player *preparing : s_prepareStack) {
+            if(preparing == this) {
+                if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG")) {
+                    LOGGER->warn(
+                        "motion prepareRenderItems recursive player skipped: player={} motion={} depth={}",
+                        static_cast<const void *>(this),
+                        _runtime->activeMotion ? _runtime->activeMotion->path
+                                               : std::string("<none>"),
+                        s_prepareStack.size());
+                }
+                _runtime->preparedRenderItems.clear();
+                return false;
+            }
+        }
+        if(s_prepareStack.size() >= 32) {
+            if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG")) {
+                LOGGER->warn(
+                    "motion prepareRenderItems depth limit skipped: player={} motion={} depth={}",
+                    static_cast<const void *>(this),
+                    _runtime->activeMotion ? _runtime->activeMotion->path
+                                           : std::string("<none>"),
+                    s_prepareStack.size());
+            }
+            _runtime->preparedRenderItems.clear();
+            return false;
+        }
+        s_prepareStack.push_back(this);
+        struct PrepareStackGuard {
+            std::vector<const Player *> &stack;
+            ~PrepareStackGuard() { stack.pop_back(); }
+        } prepareStackGuard{ s_prepareStack };
+
         _runtime->preparedRenderItems.clear();
         const auto motionPath =
             _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
@@ -3670,7 +3728,9 @@ namespace motion {
             if(!child || !child->_runtime) {
                 return;
             }
-            child->prepareRenderItems();
+            if(!child->prepareRenderItems()) {
+                return;
+            }
             auto &childEntries = child->_runtime->preparedRenderItems;
             if(childEntries.empty()) {
                 return;

@@ -81,7 +81,42 @@ bool TVPStorageTraceName(const ttstr &name) {
                        return static_cast<char>(std::tolower(ch));
                    });
     return text.find(".pbd") != std::string::npos ||
-        text.find("patch2.xp3") != std::string::npos;
+        text.find("patch2.xp3") != std::string::npos ||
+        text.find("aaemo") != std::string::npos;
+}
+
+bool TVPIsSplitEmoteVirtualStorage(const ttstr &name) {
+    std::string storage = TVPExtractStorageName(name).AsStdString();
+    if(storage.empty()) {
+        storage = name.AsStdString();
+        const auto slash = storage.find_last_of("/\\");
+        if(slash != std::string::npos) {
+            storage = storage.substr(slash + 1);
+        }
+    }
+    std::transform(storage.begin(), storage.end(), storage.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    if(storage.rfind("dx_", 0) == 0) {
+        storage = storage.substr(3);
+    }
+
+    const auto stripSuffix = [](std::string &value,
+                                const std::string &suffix) {
+        if(value.size() < suffix.size() ||
+           value.compare(value.size() - suffix.size(), suffix.size(), suffix) !=
+               0) {
+            return false;
+        }
+        value.resize(value.size() - suffix.size());
+        return true;
+    };
+    if(!stripSuffix(storage, ".mtn") && !stripSuffix(storage, ".psb")) {
+        stripSuffix(storage, ".mt");
+    }
+    return storage.size() > 3 &&
+        storage.compare(storage.size() - 3, 3, "emo") == 0;
 }
 } // namespace
 
@@ -1264,6 +1299,16 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         }
     }
 
+    ttstr normalized(TVPNormalizeStorageName(name));
+
+    if(TVPIsSplitEmoteVirtualStorage(name)) {
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info("StorageTrace virtual split-emote request={} normalized={}",
+                         name.AsStdString(), normalized.AsStdString());
+        }
+        return normalized;
+    }
+
     ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
     if(incache) {
         if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
@@ -1276,8 +1321,6 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
     }
 
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
-
-    ttstr normalized(TVPNormalizeStorageName(name));
 
     bool found = TVPIsRealStorageNoSearchNoNormalize(normalized);
     if(found) {
@@ -1339,6 +1382,8 @@ ttstr TVPSearchPlacedPath(const ttstr &name) {
 //---------------------------------------------------------------------------
 bool TVPIsExistentStorage(const ttstr &name) {
     if(!TVPGetPlacedPath(name).IsEmpty())
+        return true;
+    if(TVPIsSplitEmoteVirtualStorage(name))
         return true;
     ttstr pure = TVPExtractStorageName(name);
     if(pure.GetLen() > 4) {
@@ -1411,6 +1456,14 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
     if(access == TJS_BS_READ && TVPIsGpuCompanionScript(name) &&
        !TVPIsRealStorageNoSearchNoNormalize(name))
         return TVPOpenGpuCompanionScript();
+    if(access == TJS_BS_READ && TVPIsSplitEmoteVirtualStorage(name) &&
+       !TVPIsRealStorageNoSearchNoNormalize(name)) {
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info("StorageTrace open virtual split-emote: {}",
+                         name.AsStdString());
+        }
+        return new tTVPMemoryStream();
+    }
 
     // does name contain > ?
     const tjs_char *sharp_pos = TJS_strchr(name.c_str(), TVPArchiveDelimiter);

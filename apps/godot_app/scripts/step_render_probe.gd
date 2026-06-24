@@ -192,6 +192,11 @@ func _run_actions(step: int) -> int:
             _send_window_click(pos)
             if label.is_empty() or label == "click":
                 label = "click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "right_click":
+            var pos := ProbeConfig.click_position(action)
+            _send_window_click(pos, 1)
+            if label.is_empty() or label == "right_click":
+                label = "right_click_%d_%d" % [int(pos.x), int(pos.y)]
         elif kind == "move":
             var pos := ProbeConfig.click_position(action)
             _send_window_move(pos)
@@ -351,16 +356,16 @@ func _run_click_stream(step: int, label: String, action: Dictionary) -> int:
         step += 1
     return step
 
-func _send_window_click(window_pos: Vector2) -> void:
+func _send_window_click(window_pos: Vector2, button: int = 0) -> void:
     var mapped := _map_window_point(window_pos)
     if mapped.x < 0.0 or mapped.y < 0.0:
         print("skip click outside texture window=%s mapped=%s" % [window_pos, mapped])
         return
     player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
-    player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, button)
     player.tick(1.0 / 60.0)
-    player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, button)
 
 func _send_window_move(window_pos: Vector2) -> void:
     var mapped := _map_window_point(window_pos)

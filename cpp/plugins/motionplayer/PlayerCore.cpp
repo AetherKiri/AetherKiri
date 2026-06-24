@@ -623,6 +623,10 @@ namespace motion {
         disableAutoProgress();
 
         if(snapshot) {
+            if(!snapshot->path.empty()) {
+                _resourceManagerNative.rememberLoadedModule(
+                    detail::widen(snapshot->path), snapshot->moduleValue);
+            }
             activateMotion(*_runtime, snapshot);
             syncVariableKeysFromActiveMotion();
         }

@@ -20,6 +20,7 @@ namespace motion {
         void unload(ttstr path) const;
         void clearCache() const;
         tTJSVariant getLastLoadedModule() const;
+        void rememberLoadedModule(ttstr path, const tTJSVariant &loaded) const;
         tTJSVariant findLoaded(ttstr path) const;
         tTJSVariant findLoadedModule(ttstr path) const;
         tTJSVariant findSource(ttstr path) const;
