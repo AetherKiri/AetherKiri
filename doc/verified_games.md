@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-06-18
+Last updated: 2026-06-25
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -25,6 +25,8 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | iOS/iPadOS app build | Files app import | Startup, title/menu rendering, touch input, save/load smoke, and CJK/symbol font rendering | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 喫茶ステラと死神の蝶 | macOS release app | App UI local directory import | Startup, title/menu rendering, rapid title background switching/input stress, continue flow, scene/text rendering, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 喫茶ステラと死神の蝶 | iOS/iPadOS release app build on iPad | Files app import | Startup, title/menu rendering, touch input, rapid title background switching/input stress, continue flow, scene/text rendering, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| RIDDLE JOKER | macOS release app | App UI local directory import | Startup, title/menu rendering, title motion/layering, continue flow, scene/text rendering, dialogue input stress, save/load smoke, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| RIDDLE JOKER | iOS/iPadOS release app build on iPad | Files app import | Startup, title/menu rendering, touch input, title motion/layering, continue flow, scene/text rendering, dialogue input stress, save/load smoke, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 
 ## How To Add A Game
 

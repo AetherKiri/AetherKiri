@@ -140,9 +140,6 @@ var device_probe_enabled := false
 var follow_texture_surface_size := false
 var present_hold_frames := 0
 var last_present_hold_msec := 0
-var present_hold_snapshot_texture: Texture2D
-var present_hold_snapshot_image: Image
-var post_input_minor_hold_frames := 0
 var current_surface_size := Vector2i.ZERO
 var render_surface_base_size := RENDER_SURFACE_SIZE
 var render_surface_max_size := RENDER_SURFACE_MAX_SIZE
@@ -156,9 +153,7 @@ const RENDER_SURFACE_MAX_SIZE := Vector2i(1920, 1080)
 const RENDER_SURFACE_MODE_GAME := "game"
 const RENDER_SURFACE_MODE_DISPLAY := "display"
 const POST_INPUT_PRESENT_HOLD_FRAMES := 1
-const POST_CLICK_PRESENT_HOLD_FRAMES := 4
-const POST_CLICK_MINOR_FRAME_SUPPRESS_FRAMES := 8
-const POST_CLICK_MINOR_FRAME_DIFF_THRESHOLD := 0.01
+const POST_CLICK_PRESENT_HOLD_FRAMES := 1
 const POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS := 120
 const TOUCH_TAP_MIN_INTERVAL_MS := 0
 const TOUCH_ACTION_COOLDOWN_MS := 0
@@ -2613,9 +2608,6 @@ func _probe_tick_and_update() -> bool:
         return true
     var texture: Texture2D = player.update_frame_texture()
     if texture != null:
-        if _should_suppress_minor_post_input_frame(texture):
-            return true
-        _clear_present_hold_snapshot()
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
@@ -3550,7 +3542,6 @@ func _on_open_game() -> void:
         log_view.scroll_vertical = 0
     last_texture_size = Vector2i.ZERO
     present_hold_frames = 0
-    _clear_present_hold_snapshot()
     capture_after_open_done = false
     capture_after_open_ready_usec = 0
     auto_probe_running = false
@@ -3722,9 +3713,6 @@ func _update_frame() -> void:
     if texture != null:
         if _should_hold_suspect_black_frame():
             return
-        if _should_suppress_minor_post_input_frame(texture):
-            return
-        _clear_present_hold_snapshot()
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
@@ -3786,7 +3774,6 @@ func _clear_game_input_capture() -> void:
     suppress_mouse_until_msec = 0
     present_hold_frames = 0
     last_present_hold_msec = 0
-    _clear_present_hold_snapshot()
     tick_trace_until_msec = 0
     tick_trace_active_serial = 0
     input_trace_accum = 0.0
@@ -4580,68 +4567,6 @@ func _should_suppress_touch_drag(pointer_id: int) -> bool:
     last_forwarded_touch_move_msec_by_id[pointer_id] = now
     return false
 
-func _freeze_current_presented_frame() -> void:
-    if viewport == null or present_hold_snapshot_texture != null:
-        return
-
-    var image: Image = null
-    if viewport.texture != null:
-        image = viewport.texture.get_image()
-    if (image == null or image.get_width() <= 0 or image.get_height() <= 0) and player != null:
-        var frame: Dictionary = player.read_frame_rgba()
-        var data: PackedByteArray = frame.get("rgba", PackedByteArray())
-        var width := int(frame.get("width", 0))
-        var height := int(frame.get("height", 0))
-        if width > 0 and height > 0 and data.size() >= width * height * 4:
-            image = Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
-    if image == null or image.get_width() <= 0 or image.get_height() <= 0:
-        return
-
-    present_hold_snapshot_image = image.duplicate()
-    present_hold_snapshot_texture = ImageTexture.create_from_image(present_hold_snapshot_image)
-    if present_hold_snapshot_texture != null:
-        viewport.texture = present_hold_snapshot_texture
-        viewport.queue_redraw()
-
-func _clear_present_hold_snapshot() -> void:
-    present_hold_snapshot_texture = null
-    present_hold_snapshot_image = null
-    post_input_minor_hold_frames = 0
-
-func _should_suppress_minor_post_input_frame(texture: Texture2D) -> bool:
-    if post_input_minor_hold_frames <= 0 or present_hold_snapshot_image == null or texture == null:
-        return false
-    var image := texture.get_image()
-    if image == null or image.get_width() <= 0 or image.get_height() <= 0:
-        return false
-    if image.get_width() != present_hold_snapshot_image.get_width() or image.get_height() != present_hold_snapshot_image.get_height():
-        return false
-
-    var diff := _sample_image_diff(present_hold_snapshot_image, image, 80, 45)
-    if diff <= POST_CLICK_MINOR_FRAME_DIFF_THRESHOLD:
-        post_input_minor_hold_frames -= 1
-        return true
-    return false
-
-func _sample_image_diff(a: Image, b: Image, samples_x: int, samples_y: int) -> float:
-    var width := mini(a.get_width(), b.get_width())
-    var height := mini(a.get_height(), b.get_height())
-    if width <= 0 or height <= 0:
-        return 1.0
-    var sx := maxi(1, samples_x)
-    var sy := maxi(1, samples_y)
-    var total := 0.0
-    var count := 0
-    for yi in range(sy):
-        var y := int(round(float(yi) * float(height - 1) / float(maxi(1, sy - 1))))
-        for xi in range(sx):
-            var x := int(round(float(xi) * float(width - 1) / float(maxi(1, sx - 1))))
-            var ca := a.get_pixel(x, y)
-            var cb := b.get_pixel(x, y)
-            total += absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b)
-            count += 3
-    return total / float(maxi(1, count))
-
 func _hold_next_present_after_input(frames: int = POST_INPUT_PRESENT_HOLD_FRAMES, force: bool = false) -> void:
     if frames <= 0:
         return
@@ -4650,10 +4575,7 @@ func _hold_next_present_after_input(frames: int = POST_INPUT_PRESENT_HOLD_FRAMES
         return
     if not force and last_present_hold_msec > 0 and now - last_present_hold_msec < POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS:
         return
-    _freeze_current_presented_frame()
     present_hold_frames = maxi(present_hold_frames, frames)
-    if force:
-        post_input_minor_hold_frames = maxi(post_input_minor_hold_frames, POST_CLICK_MINOR_FRAME_SUPPRESS_FRAMES)
     last_present_hold_msec = now
     if input_trace_enabled:
         input_trace_present_holds += 1

@@ -2091,6 +2091,11 @@ namespace {
             name.find("mask") != std::string::npos ||
             name.find("fade") != std::string::npos ||
             name.find("fader") != std::string::npos ||
+            name.find("load trigger") != std::string::npos ||
+            name.find("trigger") != std::string::npos ||
+            name.find("systembaselayer") != std::string::npos ||
+            name.find("system base") != std::string::npos ||
+            name.find("system") != std::string::npos ||
             name.find("sq_") != std::string::npos ||
             name.find("square") != std::string::npos ||
             name.find("logo") != std::string::npos ||
@@ -2100,11 +2105,27 @@ namespace {
             name.find("title") != std::string::npos ||
             name.find("text") != std::string::npos ||
             name.find("trans") != std::string::npos ||
+            name == "face" ||
+            name == "msgwin" ||
+            name == "character" ||
+            name == "character2" ||
+            name == "chara" ||
+            name.find("msgwin") != std::string::npos ||
+            name.find("character") != std::string::npos ||
+            name.find("portrait") != std::string::npos ||
             name.find("クリック") != std::string::npos ||
             name.find("待ち") != std::string::npos ||
             name.find("メッセージ") != std::string::npos ||
             name.find("テキスト") != std::string::npos ||
             name.find("名前") != std::string::npos;
+    }
+
+    bool genericMotionLayerNameLooksLikeEventSurface(const std::string &name) {
+        return name == "ev" ||
+            name == "event" ||
+            name == "cg" ||
+            name.find("event") != std::string::npos ||
+            name.find("cg") != std::string::npos;
     }
 
     int scoreGenericMotionPresentationChild(tTJSNI_BaseLayer *parent,
@@ -2120,13 +2141,13 @@ namespace {
            !motionLayerCoversCanvas(child, canvasWidth, canvasHeight)) {
             return -1;
         }
-        if(child->GetCount() > 0) {
-            return -1;
-        }
-
         const auto name =
             renderDebugLowercase(motion::detail::narrow(child->GetName()));
         if(genericMotionLayerNameLooksLikeUiChrome(name)) {
+            return -1;
+        }
+        if(child->GetCount() > 0 &&
+           !genericMotionLayerNameLooksLikeEventSurface(name)) {
             return -1;
         }
         if(name == "stage" || name.find("stage") != std::string::npos) {
@@ -4670,6 +4691,18 @@ namespace motion {
         const bool clearGenericPresentationLayer =
             usingPresentationTarget && renderLayerObject == finalLayerObject &&
             !yuzuTitlePresentation && !yuzuLogoPresentation;
+        if(clearGenericPresentationLayer && _runtime->renderCommands.empty()) {
+            if(LOGGER && shouldDebugTitleRender(motionPath) &&
+               markRenderDebugLogged("presentation-skip-empty-generic:" +
+                                     motionPath)) {
+                LOGGER->info(
+                    "motion presentation skip empty generic frame: motion={} target=[{}]",
+                    motionPath, describeLayerForDebug(finalNativeLayer));
+            }
+            _runtime->lastCanvas =
+                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+            return true;
+        }
         if(clearGenericPresentationLayer &&
            shouldPreservePreviousGenericPresentationFrame(
                *_runtime, finalNativeLayer, canvasWidth, canvasHeight)) {

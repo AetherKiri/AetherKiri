@@ -232,7 +232,7 @@ bool SupportsGodotRenderingDeviceGpu() {
 bool DirectPresentGodotNativeFrameEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_GODOT_DIRECT_PRESENT");
-        return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
+        return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }
