@@ -2010,6 +2010,38 @@ namespace {
             layer->GetParentVisible() && layer->GetOpacity() > 0;
     }
 
+    bool motionLayerIsDrawableCgViewSurface(tTJSNI_BaseLayer *layer) {
+        return layer && layer->GetOwnerNoAddRef() && layer->GetVisible() &&
+            layer->GetOpacity() > 0;
+    }
+
+    bool layerNameContains(tTJSNI_BaseLayer *layer, const std::string &needle) {
+        if(!layer) {
+            return false;
+        }
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        return name.find(needle) != std::string::npos;
+    }
+
+    bool layerIsCgViewContainer(tTJSNI_BaseLayer *layer) {
+        return layerNameContains(layer, "cg view layer");
+    }
+
+    bool layerIsSpecificCgViewContainer(tTJSNI_BaseLayer *layer) {
+        return layerNameContains(layer, "cg view layer :");
+    }
+
+    bool layerIsCgViewAffineSurface(tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return false;
+        }
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        return name.find("affinelayer") != std::string::npos &&
+            layerIsCgViewContainer(layer);
+    }
+
     int scoreMotionPresentationChild(tTJSNI_BaseLayer *parent,
                                      tTJSNI_BaseLayer *child,
                                      int canvasWidth,
@@ -2057,12 +2089,15 @@ namespace {
             name.find("grad") != std::string::npos ||
             name.find("eff") != std::string::npos ||
             name.find("mask") != std::string::npos ||
+            name.find("fade") != std::string::npos ||
+            name.find("fader") != std::string::npos ||
             name.find("sq_") != std::string::npos ||
             name.find("square") != std::string::npos ||
             name.find("logo") != std::string::npos ||
             name.find("date") != std::string::npos ||
             name.find("passive") != std::string::npos ||
             name.find("message") != std::string::npos ||
+            name.find("title") != std::string::npos ||
             name.find("text") != std::string::npos ||
             name.find("trans") != std::string::npos ||
             name.find("クリック") != std::string::npos ||
@@ -2094,6 +2129,9 @@ namespace {
         if(genericMotionLayerNameLooksLikeUiChrome(name)) {
             return -1;
         }
+        if(name == "stage" || name.find("stage") != std::string::npos) {
+            return -1;
+        }
 
         int score = 100;
         if(name == "ev") {
@@ -2102,8 +2140,6 @@ namespace {
                   name.find("event") != std::string::npos ||
                   name.find("cg") != std::string::npos) {
             score += 500;
-        } else if(name == "stage" || name.find("stage") != std::string::npos) {
-            score += 350;
         } else if(name.find("背景") != std::string::npos ||
                   name.find("background") != std::string::npos ||
                   name.find("bg") != std::string::npos) {
@@ -2319,6 +2355,134 @@ namespace {
         };
         visit(visit, parent, 0);
         return best.layer;
+    }
+
+    tTJSNI_BaseLayer *findCgViewMotionPresentationChild(
+        tTJSNI_BaseLayer *parent,
+        int canvasWidth,
+        int canvasHeight) {
+        if(!parent || parent->GetCount() <= 0) {
+            return nullptr;
+        }
+
+        struct Candidate {
+            tTJSNI_BaseLayer *layer = nullptr;
+            int score = -1;
+        };
+        Candidate best;
+        auto visit = [&](auto &&self,
+                         tTJSNI_BaseLayer *current,
+                         int depth) -> void {
+            if(!current || current->GetCount() <= 0) {
+                return;
+            }
+            const auto childCount = current->GetCount();
+            for(tjs_uint i = 0; i < childCount; ++i) {
+                auto *child = current->GetChildren(static_cast<tjs_int>(i));
+                if(child && layerIsCgViewAffineSurface(child) &&
+                   layerIsCgViewContainer(current) &&
+                   motionLayerIsDrawableCgViewSurface(child) &&
+                   child->GetHasImage() &&
+                   motionLayerCoversCanvas(child, canvasWidth, canvasHeight)) {
+                    int score = 1000;
+                    if(layerIsSpecificCgViewContainer(current)) {
+                        score += 500;
+                    }
+                    if(current->GetVisible() && current->GetOpacity() > 0) {
+                        score += 100;
+                    }
+                    if(current->GetParentVisible()) {
+                        score += 50;
+                    }
+                    score += static_cast<int>(current->GetOverallOrderIndex());
+                    score += static_cast<int>(child->GetOrderIndex()) * 2;
+                    score -= depth * 4;
+                    if(score > best.score) {
+                        best.layer = child;
+                        best.score = score;
+                    }
+                }
+                self(self, child, depth + 1);
+            }
+        };
+        visit(visit, parent, 0);
+        return best.layer;
+    }
+
+    bool motionPresentationLayerHasVisibleSamples(tTJSNI_BaseLayer *layer) {
+        if(!layer || !layer->GetHasImage()) {
+            return false;
+        }
+        auto *image = layer->GetMainImage();
+        if(!image || image->GetWidth() <= 0 || image->GetHeight() <= 0) {
+            return false;
+        }
+
+        const tjs_int width = static_cast<tjs_int>(image->GetWidth());
+        const tjs_int height = static_cast<tjs_int>(image->GetHeight());
+        for(tjs_int yStep = 0; yStep < 8; ++yStep) {
+            const tjs_int y = std::min<tjs_int>(
+                height - 1, std::max<tjs_int>(0, yStep * height / 7));
+            for(tjs_int xStep = 0; xStep < 8; ++xStep) {
+                const tjs_int x = std::min<tjs_int>(
+                    width - 1, std::max<tjs_int>(0, xStep * width / 7));
+                if((image->GetPoint(x, y) & 0xff000000u) != 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    bool shouldPreservePreviousGenericPresentationFrame(
+        const motion::detail::PlayerRuntime &runtime,
+        tTJSNI_BaseLayer *targetLayer,
+        int canvasWidth,
+        int canvasHeight) {
+        if(canvasWidth <= 0 || canvasHeight <= 0 ||
+           runtime.renderCommands.empty() ||
+           !motionPresentationLayerHasVisibleSamples(targetLayer)) {
+            return false;
+        }
+
+        int maxRight = 0;
+        int maxBottom = 0;
+        bool hasOffscreenSource = false;
+        for(const auto &command : runtime.renderCommands) {
+            if(command.clipRect[0] != 0 || command.clipRect[1] != 0) {
+                return false;
+            }
+            maxRight = std::max(maxRight, command.clipRect[2]);
+            maxBottom = std::max(maxBottom, command.clipRect[3]);
+            for(size_t i = 0; i + 1 < command.worldCorners.size(); i += 2) {
+                if(command.worldCorners[i] < -1.0f ||
+                   command.worldCorners[i + 1] < -1.0f) {
+                    hasOffscreenSource = true;
+                    break;
+                }
+            }
+        }
+
+        if(!hasOffscreenSource) {
+            return false;
+        }
+
+        return maxRight > 0 && maxBottom > 0 &&
+            maxRight <= std::max(1, canvasWidth * 2 / 5) &&
+            maxBottom <= std::max(1, canvasHeight * 2 / 5);
+    }
+
+    void clearMotionPresentationLayer(tTJSNI_BaseLayer *layer,
+                                      int canvasWidth,
+                                      int canvasHeight) {
+        if(!layer || canvasWidth <= 0 || canvasHeight <= 0) {
+            return;
+        }
+        const tTVPRect clearRect(
+            0, 0,
+            std::max<tjs_int>(canvasWidth, layer->GetImageWidth()),
+            std::max<tjs_int>(canvasHeight, layer->GetImageHeight()));
+        layer->FillRect(clearRect, 0x00000000);
     }
 
     bool prepareMotionPresentationLayerForRender(tTJSNI_BaseLayer *layer,
@@ -3933,6 +4097,16 @@ namespace motion {
             if(opa <= 0) {
                 continue;
             }
+            if(command.hasRenderParent) {
+                detail::logoChainTraceLogf(
+                    motionPath, "execute.skipChild", "0x6C7440",
+                    _clampedEvalTime,
+                    "nodeIndex={} parentNodeIndex={} clipRect=[{},{},{},{}]",
+                    command.nodeIndex, command.parentNodeIndex,
+                    command.clipRect[0], command.clipRect[1],
+                    command.clipRect[2], command.clipRect[3]);
+                continue;
+            }
 
             if(!buildCommandOutput(buildCommandOutput, i)) {
                 continue;
@@ -4390,8 +4564,12 @@ namespace motion {
                     allowTransientPresentationLayer);
             }
         } else {
-            presentationChild = findGenericMotionPresentationChild(
+            presentationChild = findCgViewMotionPresentationChild(
                 finalNativeLayer, canvasWidth, canvasHeight);
+            if(!presentationChild) {
+                presentationChild = findGenericMotionPresentationChild(
+                    finalNativeLayer, canvasWidth, canvasHeight);
+            }
         }
         if(presentationChild) {
             if(auto *presentationObject = presentationChild->GetOwnerNoAddRef()) {
@@ -4489,6 +4667,16 @@ namespace motion {
         }
 
         buildRenderCommands(canvasWidth, canvasHeight);
+        const bool clearGenericPresentationLayer =
+            usingPresentationTarget && renderLayerObject == finalLayerObject &&
+            !yuzuTitlePresentation && !yuzuLogoPresentation;
+        if(clearGenericPresentationLayer &&
+           shouldPreservePreviousGenericPresentationFrame(
+               *_runtime, finalNativeLayer, canvasWidth, canvasHeight)) {
+            _runtime->lastCanvas =
+                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+            return true;
+        }
         const auto presentationCommandSignature =
             renderCommandReuseSignature(_runtime->renderCommands);
         const bool canReuseYuzuPresentation =
@@ -4599,11 +4787,15 @@ namespace motion {
             }
         } else if(auto *targetLayer = resolveNativeLayer(finalLayerObject)) {
             if(usingPresentationTarget) {
-                if(!prepareMotionPresentationLayerForRender(targetLayer, canvasWidth,
-                                                            canvasHeight)) {
+                if(!prepareMotionPresentationLayerForRender(
+                       targetLayer, canvasWidth, canvasHeight)) {
                     _runtime->invalidatePresentationRenderTarget(renderLayerObject);
                     invalidateGlobalPresentationRenderTarget(renderLayerObject);
                     return false;
+                }
+                if(clearGenericPresentationLayer) {
+                    clearMotionPresentationLayer(targetLayer, canvasWidth,
+                                                 canvasHeight);
                 }
             } else {
                 if(targetLayer->GetWidth() != canvasWidth ||

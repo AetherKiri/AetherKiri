@@ -113,6 +113,139 @@ static bool TVPLayerInputTraceEnabled() {
     return enabled;
 }
 
+static bool TVPLayerDrawTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_LAYER_DRAW_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+static bool TVPLayerDrawTraceTake() {
+    if(!TVPLayerDrawTraceEnabled())
+        return false;
+    static std::atomic<int> count{0};
+    return count.fetch_add(1, std::memory_order_relaxed) < 60000;
+}
+
+static bool TVPLayerDrawTraceName(const ttstr &name) {
+    if(!TVPLayerDrawTraceEnabled())
+        return false;
+    const std::string s = name.AsStdString();
+    return s.find("表-背景") != std::string::npos ||
+           s.find("表メッセージレイヤ1") != std::string::npos ||
+           s.find("表メッセージレイヤ2") != std::string::npos ||
+           s.find("CG View Layer") != std::string::npos ||
+           s == "item3" || s == "item6";
+}
+
+static std::atomic<bool> TVPLayerDrawTraceArmedFlag{false};
+
+static bool TVPLayerDrawTraceIsPreviewLayer(tTJSNI_BaseLayer *layer) {
+    if(!layer)
+        return false;
+    const std::string s = layer->GetName().AsStdString();
+    return s.find("CG View Layer") != std::string::npos ||
+           (s.find("表メッセージレイヤ2") != std::string::npos &&
+            layer->GetVisible() && layer->DebugGetVisibleChildrenCount() > 0);
+}
+
+static bool TVPLayerDrawTraceScriptPreviewActive() {
+    try {
+        tTJSVariant result;
+        TVPExecuteExpression(
+            TJS_W("typeof kag == \"Object\" && kag && "
+                  "kag.currentStorage == \"cgmode.ks\" && "
+                  "(kag.currentLabel == \"*viewtrans\" || "
+                  "kag.currentLabel == \"*view_rclick\")"),
+            &result);
+        return result.operator bool();
+    } catch(...) {
+        return false;
+    }
+}
+
+static bool TVPLayerDrawTraceArmed() {
+    if(!TVPLayerDrawTraceEnabled())
+        return false;
+    if(TVPLayerDrawTraceArmedFlag.load(std::memory_order_relaxed))
+        return true;
+    if(TVPLayerDrawTraceScriptPreviewActive()) {
+        TVPLayerDrawTraceArmedFlag.store(true, std::memory_order_relaxed);
+        spdlog::info("LayerDrawGPU trace armed by cgmode preview script");
+        return true;
+    }
+    return false;
+}
+
+static bool TVPLayerDrawTraceArmIfNeeded(tTJSNI_BaseLayer *layer) {
+    if(TVPLayerDrawTraceArmed())
+        return true;
+    if(TVPLayerDrawTraceIsPreviewLayer(layer)) {
+        TVPLayerDrawTraceArmedFlag.store(true, std::memory_order_relaxed);
+        spdlog::info("LayerDrawGPU trace armed by layer={}",
+                     layer->GetName().AsStdString());
+        return true;
+    }
+    return false;
+}
+
+static void TVPTraceLayerDrawGpu(const char *event,
+                                 tTJSNI_BaseLayer *layer,
+                                 const tTVPRect &dest,
+                                 const tTVPRect &clip,
+                                 tTVPDrawable *target) {
+    if(!layer || !TVPLayerDrawTraceName(layer->GetName()) ||
+       !TVPLayerDrawTraceArmIfNeeded(layer) ||
+       !TVPLayerDrawTraceTake())
+        return;
+    spdlog::info(
+        "LayerDrawGPU {} layer={} target={} dest=({},{} {}x{}) clip=({},{} {}x{}) "
+        "pos=({}, {}) size={}x{} visible={} opacity={} image={} children={} "
+        "visible_children={} transition={} trans_children={}",
+        event, layer->GetName().AsStdString(), static_cast<const void *>(target),
+        dest.left, dest.top, dest.get_width(), dest.get_height(), clip.left,
+        clip.top, clip.get_width(), clip.get_height(), layer->GetLeft(),
+        layer->GetTop(), layer->GetWidth(), layer->GetHeight(),
+        layer->GetVisible() ? "yes" : "no", layer->GetOpacity(),
+        layer->GetMainImage() ? "yes" : "no", layer->GetCount(),
+        layer->DebugGetVisibleChildrenCount(),
+        layer->DebugIsInTransition() ? "yes" : "no",
+        layer->DebugIsTransWithChildren() ? "yes" : "no");
+}
+
+static void TVPTraceLayerDrawGpuChild(tTJSNI_BaseLayer *parent,
+                                      tTJSNI_BaseLayer *child,
+                                      const tTVPRect &intersect,
+                                      bool will_draw) {
+    const bool parent_focus =
+        parent && TVPLayerDrawTraceName(parent->GetName()) &&
+        parent->GetName() != TJS_W("表-背景");
+    const bool child_focus = child && TVPLayerDrawTraceName(child->GetName());
+    if(!parent_focus && !child_focus)
+        return;
+    if(!TVPLayerDrawTraceArmIfNeeded(parent) &&
+       !TVPLayerDrawTraceArmIfNeeded(child))
+        return;
+    if(!TVPLayerDrawTraceTake())
+        return;
+    spdlog::info(
+        "LayerDrawGPU child parent={} child={} will_draw={} child_visible={} "
+        "intersect=({},{} {}x{}) child_pos=({}, {}) child_size={}x{} "
+        "child_image={} child_children={} child_visible_children={} child_order={}",
+        parent ? parent->GetName().AsStdString() : "<null>",
+        child ? child->GetName().AsStdString() : "<null>",
+        will_draw ? "yes" : "no",
+        child && child->GetVisible() ? "yes" : "no", intersect.left,
+        intersect.top, intersect.get_width(), intersect.get_height(),
+        child ? child->GetLeft() : 0, child ? child->GetTop() : 0,
+        child ? child->GetWidth() : 0, child ? child->GetHeight() : 0,
+        child && child->GetMainImage() ? "yes" : "no",
+        child ? child->GetCount() : 0,
+        child ? child->DebugGetVisibleChildrenCount() : 0,
+        child ? child->GetOrderIndex() : 0);
+}
+
 static void TVPTraceLayerInputEvent(const char *event,
                                     tTJSNI_BaseLayer *layer,
                                     const tTJSVariantClosure &action_owner) {
@@ -8292,6 +8425,8 @@ void tTJSNI_BaseLayer::DrawSelf(tTVPDrawable *target, tTVPRect &pr,
                          bitmaprect); // this fills temp with neutral color
 
                 // send completion message
+                TVPTraceLayerDrawGpu("drawself-complete", this, pr,
+                                     bitmaprect, target);
                 target->DrawCompleted(pr, temp, bitmaprect, DisplayType,
                                       Opacity);
             } catch(...) {
@@ -8319,6 +8454,8 @@ void tTJSNI_BaseLayer::DrawSelf(tTVPDrawable *target, tTVPRect &pr,
             DoDivisibleTransition(temp, 0, 0, cr);
 
             // send completion message
+            TVPTraceLayerDrawGpu("drawself-complete", this, pr, bitmaprect,
+                                 target);
             target->DrawCompleted(pr, temp, bitmaprect, DisplayType, Opacity);
         } catch(...) {
             tTVPTempBitmapHolder::FreeTemp();
@@ -8326,6 +8463,7 @@ void tTJSNI_BaseLayer::DrawSelf(tTVPDrawable *target, tTVPRect &pr,
         }
         tTVPTempBitmapHolder::FreeTemp();
     } else {
+        TVPTraceLayerDrawGpu("drawself-complete", this, pr, cr, target);
         target->DrawCompleted(pr, MainImage, cr, DisplayType, Opacity);
     }
 }
@@ -8422,6 +8560,7 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
     CurrentDrawTarget = target;
 
     ParentRectToChildRect(rect); // to this layer based axis
+    TVPTraceLayerDrawGpu("begin", this, rctar, rect, target);
 
     // process drawing
     DirectTransferToParent = false;
@@ -8444,18 +8583,16 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
             } else {
                 useTemp = true;
                 UpdateBitmapForChild = tTVPTempBitmapHolder::GetTemp(
-                    rect.get_width(), rect.get_height());
+                    Rect.get_width(), Rect.get_height());
             }
-            // copy self image to UpdateBitmapForChild
-            if(MainImage != nullptr) {
-                // 				if (UpdateExcludeRect.top <=
-                // rect.top
-                // && UpdateExcludeRect.bottom >= rect.bottom &&
-                // rect.left >= UpdateExcludeRect.left && rect.right
-                // <= UpdateExcludeRect.right) { 				} else
-                CopySelfForRect(UpdateBitmapForChild, 0, 0,
-                                rect); // transfer self image
-            }
+            tTVPRect rectForChild(0, 0, Rect.get_width(), Rect.get_height());
+
+            // Initialize the child composition target with this layer's own
+            // pixels, or transparent/neutral pixels when the layer has no main
+            // image. Transparent parent layers still need a known base before
+            // children are drawn into the temporary texture.
+            CopySelfForRect(UpdateBitmapForChild, 0, 0,
+                            rectForChild); // transfer self image
 
             TVP_LAYER_FOR_EACH_CHILD_BEGIN(child) {
                 // for each child...
@@ -8465,8 +8602,14 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
                     continue;
 
                 // intersection check
-                if(!TVPIntersectRect(&UpdateRectForChild, rect, child->Rect))
+                if(!TVPIntersectRect(&UpdateRectForChild, rectForChild,
+                                     child->Rect)) {
+                    tTVPRect empty;
+                    TVPTraceLayerDrawGpuChild(this, child, empty, false);
                     continue;
+                }
+                TVPTraceLayerDrawGpuChild(this, child, UpdateRectForChild,
+                                          true);
 
                 // setup UpdateOfsX/Y UpdateRectForChildOfsX/Y
                 UpdateOfsX = 0;
@@ -8481,7 +8624,6 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
                                 UpdateRectForChild.top, UpdateRectForChild);
             }
             TVP_LAYER_FOR_EACH_CHILD_END
-            rect.set_offsets(0, 0);
             target->DrawCompleted(rctar, UpdateBitmapForChild, rect,
                                   DisplayType, Opacity);
             if(useTemp)
@@ -8513,8 +8655,12 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
 
                 // intersection check
                 tTVPRect chrect;
-                if(!TVPIntersectRect(&chrect, rect, child->Rect))
+                if(!TVPIntersectRect(&chrect, rect, child->Rect)) {
+                    tTVPRect empty;
+                    TVPTraceLayerDrawGpuChild(this, child, empty, false);
                     continue;
+                }
+                TVPTraceLayerDrawGpuChild(this, child, chrect, true);
 
                 // call children's "Draw" method
                 child->Draw_GPU(target, x, y, rect);
@@ -8977,6 +9123,8 @@ void tTJSNI_BaseLayer::DrawCompleted(const tTVPRect &destrect,
                                      tTVPBaseTexture *bmp,
                                      const tTVPRect &cliprect,
                                      tTVPLayerType type, tjs_int opacity) {
+    TVPTraceLayerDrawGpu("child-complete-in", this, destrect, cliprect,
+                         CurrentDrawTarget);
     // called from children to notify that the image drawing is
     // completed. blend the image to the target unless bmp is the same
     // as UpdateBitmapForChild.

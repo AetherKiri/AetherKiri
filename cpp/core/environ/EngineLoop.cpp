@@ -338,13 +338,10 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
         default: break;
     }
 
-    TVPPostInputEvent(
-        new tTVPOnMouseUpInputEvent(win, x, y, mb, shift));
-
-    // Match the original Kirikiri/Windows path: mouse-up handlers run before
-    // click handlers. Several in-game dialogs are opened from onClick; opening
-    // them while the source button is still captured leaves a one-frame pressed
-    // redraw that looks like a flicker on touch devices.
+    // Match the original Kirikiri/Windows path: WM_LBUTTONUP posts the click
+    // at the mouse-down coordinates before mouse-up releases capture. Some
+    // Yuzu gallery/page buttons use the captured button state to distinguish
+    // selection from confirmation.
     if (mb == mbLeft) {
         if (suppress_next_left_click_) {
             suppress_next_left_click_ = false;
@@ -361,6 +358,9 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
             last_click_y_ = y;
         }
     }
+
+    TVPPostInputEvent(
+        new tTVPOnMouseUpInputEvent(win, x, y, mb, shift));
 
     pending_mouse_release_vk_ = vk;
 }

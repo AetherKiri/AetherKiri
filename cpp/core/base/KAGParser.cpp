@@ -55,6 +55,14 @@ int TVPKagTagTraceMax() {
     return max;
 }
 
+bool TVPKagTagTraceValuesEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_KAG_TAG_TRACE_VALUES");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
 bool TVPKagTagTraceNameAllowed(const std::string &name) {
     const char *filter = TVPKagTagTraceNames();
     if(!filter) return true;
@@ -1839,6 +1847,16 @@ parse_start:
                 if(!attrs.empty())
                     attrs += " ";
                 attrs += entry.Name.AsStdString();
+                if(TVPKagTagTraceValuesEnabled()) {
+                    std::string value = ttstr(entry.Value).AsStdString();
+                    for(char &ch : value) {
+                        if(ch == '\n' || ch == '\r' || ch == '\t')
+                            ch = ' ';
+                    }
+                    if(value.size() > 240)
+                        value = value.substr(0, 240) + "...";
+                    attrs += "=" + value;
+                }
             }
 
             static std::atomic<int> trace_count{0};
