@@ -8,7 +8,6 @@ vcpkg_from_github(
     HEAD_REF "master"
     PATCHES
         "packagable.patch"
-        "ios-no-cocoa.patch"
 )
 
 vcpkg_find_acquire_program(PYTHON3)
