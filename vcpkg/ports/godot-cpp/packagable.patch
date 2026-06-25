@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 0d64057..0f11eee 100644
+index 0d64057..7f74bd6 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -73,3 +73,35 @@ endif()
+@@ -73,3 +73,32 @@ endif()
  USE_FOLDERS flag will organize godot-cpp targets under a subfolder named
  'godot-cpp'. This is enable by default from CMake version 3.26 ]]
  set_property(GLOBAL PROPERTY USE_FOLDERS ON)
@@ -20,9 +20,6 @@ index 0d64057..0f11eee 100644
 +    DIRECTORY
 +        "${CMAKE_CURRENT_SOURCE_DIR}/include/"
 +        "${CMAKE_CURRENT_BINARY_DIR}/gen/include/"
-+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-+)
-+install(FILES "${GODOTCPP_GDEXTENSION_DIR}/gdextension_interface.h"
 +    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
 +)
 +
