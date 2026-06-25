@@ -30,6 +30,9 @@ struct TVPGodotGpuBridgeCallbacks {
         const tTVPRect *clip_rect, const tTVPPointD *dst_points,
         const tTVPPointD *src_points, const tTVPPointD *mask_points,
         float opacity, uint32_t blend_mode, bool inverted_mask);
+    bool (*mosaic_rects)(uint64_t texture, const tTVPRect *rects,
+                         uint32_t rect_count, uint32_t block_x,
+                         uint32_t block_y);
     bool (*blend_rect)(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
                        const tTVPRect *src_rect, uint32_t mode,
                        int opacity, uint32_t color);

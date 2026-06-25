@@ -69,6 +69,7 @@ struct GodotGpuOp {
         CopyTriangles,
         DrawTriangles,
         DrawMaskedTriangles,
+        Mosaic,
         Read,
         Blend,
         Blend2,
@@ -124,6 +125,8 @@ struct GodotGpuPipelineState {
     RID draw_triangles_pipeline;
     RID draw_masked_triangles_shader;
     RID draw_masked_triangles_pipeline;
+    RID mosaic_shader;
+    RID mosaic_pipeline;
 };
 
 GodotGpuPipelineState *g_gpu_pipeline_state = nullptr;
@@ -378,6 +381,8 @@ PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
     const bool triangles = op.type == GodotGpuOp::Type::CopyTriangles ||
                            op.type == GodotGpuOp::Type::DrawTriangles ||
                            op.type == GodotGpuOp::Type::DrawMaskedTriangles;
+    const bool mosaic = op.type == GodotGpuOp::Type::Mosaic;
+    const bool dimensioned = triangles || mosaic;
     int32_t values[12] = {
         static_cast<int32_t>(op.dst_pos.x),
         static_cast<int32_t>(op.dst_pos.y),
@@ -387,15 +392,17 @@ PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
         static_cast<int32_t>(op.size.y),
         static_cast<int32_t>(op.mode),
         static_cast<int32_t>(std::clamp(op.opacity, 0, 255)),
-        triangles ? static_cast<int32_t>(op.src_size.x) :
+        dimensioned ? static_cast<int32_t>(op.src_size.x) :
         dual_source ? static_cast<int32_t>(op.src2_pos.x)
                     : static_cast<int32_t>(op.color & 0xffu),
-        triangles ? static_cast<int32_t>(op.src_size.y) :
+        dimensioned ? static_cast<int32_t>(op.src_size.y) :
         dual_source ? static_cast<int32_t>(op.src2_pos.y)
                     : static_cast<int32_t>((op.color >> 8) & 0xffu),
         triangles ? static_cast<int32_t>(op.color) :
+        mosaic ? 0 :
         dual_source ? 0 : static_cast<int32_t>((op.color >> 16) & 0xffu),
-        (dual_source || triangles) ? 0 : static_cast<int32_t>((op.color >> 24) & 0xffu),
+        (dual_source || triangles || mosaic) ? 0
+                                             : static_cast<int32_t>((op.color >> 24) & 0xffu),
     };
     std::memcpy(bytes, values, sizeof(values));
     return data;
@@ -884,6 +891,8 @@ void main() {
     vec2 p = vec2(dst_pos) + vec2(0.5);
     int tri_count = pc.rect1.z;
     ivec2 src_limit = max(pc.color0.xy - ivec2(1), ivec2(0));
+    vec4 out_color = imageLoad(dst_img, dst_pos);
+    bool covered = false;
 
     for (int tri = 0; tri < tri_count; ++tri) {
         vec4 v0 = vertices.vertex[tri * 3 + 0];
@@ -901,9 +910,12 @@ void main() {
         float w2 = edge(d0, d1, p) / area;
         if (w0 >= -0.0001 && w1 >= -0.0001 && w2 >= -0.0001) {
             vec2 src_pos_f = v0.zw * w0 + v1.zw * w1 + v2.zw * w2;
-            imageStore(dst_img, dst_pos, load_bilinear(src_limit, src_pos_f));
-            return;
+            out_color = load_bilinear(src_limit, src_pos_f);
+            covered = true;
         }
+    }
+    if (covered) {
+        imageStore(dst_img, dst_pos, out_color);
     }
 }
 )GLSL");
@@ -976,26 +988,165 @@ vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
 
+vec4 straight_from_premul(vec3 rgb, float a) {
+    return clamp(vec4(a > 0.00001 ? rgb / a : vec3(0.0), a),
+                 vec4(0.0), vec4(1.0));
+}
+
 vec4 blend_over(vec4 dst, vec4 src) {
     float out_a = src.a + dst.a * (1.0 - src.a);
     vec3 premul = src.rgb * src.a + dst.rgb * dst.a * (1.0 - src.a);
-    vec3 out_rgb = out_a > 0.00001 ? premul / out_a : vec3(0.0);
-    return clamp(vec4(out_rgb, out_a), vec4(0.0), vec4(1.0));
+    return straight_from_premul(premul, out_a);
 }
 
-vec4 blend_add(vec4 dst, vec4 src) {
-    float out_a = src.a + dst.a * (1.0 - src.a);
+vec4 blend_add_compatible(vec4 dst, vec4 src) {
+    float out_a = dst.a;
     vec3 premul = dst.rgb * dst.a + src.rgb * src.a;
-    vec3 out_rgb = out_a > 0.00001 ? premul / out_a : vec3(0.0);
-    return clamp(vec4(out_rgb, out_a), vec4(0.0), vec4(1.0));
+    return straight_from_premul(premul, out_a);
 }
 
-vec4 blend_multiply(vec4 dst, vec4 src) {
-    float out_a = src.a + dst.a * (1.0 - src.a);
-    vec3 multiplied = dst.rgb * mix(vec3(1.0), src.rgb, src.a);
-    vec3 premul = multiplied * dst.a + src.rgb * src.a * (1.0 - dst.a);
-    vec3 out_rgb = out_a > 0.00001 ? premul / out_a : vec3(0.0);
-    return clamp(vec4(out_rgb, out_a), vec4(0.0), vec4(1.0));
+vec4 blend_multiply_compatible(vec4 dst, vec4 src) {
+    float out_a = dst.a;
+    vec3 dst_premul = dst.rgb * dst.a;
+    vec3 src_premul = src.rgb * src.a;
+    vec3 premul = src_premul * dst_premul + dst_premul * (1.0 - src.a);
+    return straight_from_premul(premul, out_a);
+}
+
+float color_burn(float src, float dst) {
+    if (abs(dst - 1.0) < 0.000001) {
+        return 1.0;
+    }
+    if (abs(src) < 0.000001) {
+        return 0.0;
+    }
+    return 1.0 - min(1.0, (1.0 - dst) / src);
+}
+
+float color_dodge(float src, float dst) {
+    if (dst <= 0.0) {
+        return 0.0;
+    }
+    if (abs(src - 1.0) < 0.000001) {
+        return 1.0;
+    }
+    return min(1.0, dst / (1.0 - src));
+}
+
+float overlay(float src, float dst) {
+    float mul = 2.0 * src * dst;
+    float scr = 1.0 - 2.0 * (1.0 - src) * (1.0 - dst);
+    return dst < 0.5 ? mul : scr;
+}
+
+float soft_light(float src, float dst) {
+    float val1 = dst - (1.0 - 2.0 * src) * dst * (1.0 - dst);
+    float val2 = dst + (2.0 * src - 1.0) * dst *
+                         ((16.0 * dst - 12.0) * dst + 3.0);
+    float val3 = dst + (2.0 * src - 1.0) * (sqrt(dst) - dst);
+    if (src <= 0.5) {
+        return val1;
+    }
+    if (dst <= 0.25) {
+        return val2;
+    }
+    return val3;
+}
+
+float hard_light(float src, float dst) {
+    float mul = 2.0 * src * dst;
+    float scr = 1.0 - 2.0 * (1.0 - src) * (1.0 - dst);
+    return src < 0.5 ? mul : scr;
+}
+
+float linear_light(float src, float dst) {
+    float burn = max(0.0, 2.0 * src + dst - 1.0);
+    float dodge = min(1.0, 2.0 * (src - 0.5) + dst);
+    return src < 0.5 ? burn : dodge;
+}
+
+vec3 color_blend(int mode, vec3 src, vec3 dst) {
+    if (mode == 3) {
+        return min(src + dst, vec3(1.0));
+    }
+    if (mode == 4) {
+        return src + dst;
+    }
+    if (mode == 5) {
+        return min(src, dst);
+    }
+    if (mode == 6) {
+        return src * dst;
+    }
+    if (mode == 7) {
+        return vec3(color_burn(src.r, dst.r), color_burn(src.g, dst.g),
+                    color_burn(src.b, dst.b));
+    }
+    if (mode == 8) {
+        return max(vec3(0.0), src + dst - vec3(1.0));
+    }
+    if (mode == 9) {
+        return max(src, dst);
+    }
+    if (mode == 10) {
+        return src + dst - src * dst;
+    }
+    if (mode == 11) {
+        return vec3(color_dodge(src.r, dst.r), color_dodge(src.g, dst.g),
+                    color_dodge(src.b, dst.b));
+    }
+    if (mode == 12) {
+        return vec3(overlay(src.r, dst.r), overlay(src.g, dst.g),
+                    overlay(src.b, dst.b));
+    }
+    if (mode == 13) {
+        return vec3(soft_light(src.r, dst.r), soft_light(src.g, dst.g),
+                    soft_light(src.b, dst.b));
+    }
+    if (mode == 14) {
+        return vec3(hard_light(src.r, dst.r), hard_light(src.g, dst.g),
+                    hard_light(src.b, dst.b));
+    }
+    if (mode == 15) {
+        return vec3(linear_light(src.r, dst.r), linear_light(src.g, dst.g),
+                    linear_light(src.b, dst.b));
+    }
+    return src;
+}
+
+vec4 blend_cubism(vec4 dst, vec4 src, int flags) {
+    int color_mode = flags & 255;
+    int alpha_mode = (flags >> 8) & 255;
+    if (color_mode == 0 && alpha_mode == 0) {
+        return blend_over(dst, src);
+    }
+    if (color_mode == 1 && alpha_mode == 0) {
+        return blend_add_compatible(dst, src);
+    }
+    if (color_mode == 2 && alpha_mode == 0) {
+        return blend_multiply_compatible(dst, src);
+    }
+    vec3 color = color_blend(color_mode, src.rgb, dst.rgb);
+    vec3 parameter;
+    if (alpha_mode == 1) {
+        parameter = vec3(src.a * dst.a, 0.0, dst.a * (1.0 - src.a));
+    } else if (alpha_mode == 2) {
+        parameter = vec3(0.0, 0.0, dst.a * (1.0 - src.a));
+    } else if (alpha_mode == 3) {
+        parameter = vec3(min(src.a, dst.a), max(src.a - dst.a, 0.0),
+                         max(dst.a - src.a, 0.0));
+    } else if (alpha_mode == 4) {
+        parameter = vec3(max(src.a + dst.a - 1.0, 0.0),
+                         min(src.a, 1.0 - dst.a),
+                         min(dst.a, 1.0 - src.a));
+    } else {
+        parameter = vec3(src.a * dst.a, src.a * (1.0 - dst.a),
+                         dst.a * (1.0 - src.a));
+    }
+    return straight_from_premul(color * parameter.x +
+                                src.rgb * parameter.y +
+                                dst.rgb * parameter.z,
+                                parameter.x + parameter.y + parameter.z);
 }
 
 void main() {
@@ -1009,7 +1160,9 @@ void main() {
     int tri_count = pc.rect1.z;
     ivec2 src_limit = max(pc.color0.xy - ivec2(1), ivec2(0));
     float opacity = clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
-    int blend_mode = pc.color0.z;
+    int blend_flags = pc.color0.z;
+    vec4 dst = imageLoad(dst_img, dst_pos);
+    bool covered = false;
 
     for (int tri = 0; tri < tri_count; ++tri) {
         vec4 v0 = vertices.vertex[tri * 3 + 0];
@@ -1033,18 +1186,14 @@ void main() {
             }
             src.a *= opacity;
             if (src.a <= 0.00001) {
-                return;
+                continue;
             }
-            vec4 dst = imageLoad(dst_img, dst_pos);
-            vec4 out_color = blend_over(dst, src);
-            if (blend_mode == 1) {
-                out_color = blend_add(dst, src);
-            } else if (blend_mode == 2) {
-                out_color = blend_multiply(dst, src);
-            }
-            imageStore(dst_img, dst_pos, out_color);
-            return;
+            dst = blend_cubism(dst, src, blend_flags);
+            covered = true;
         }
+    }
+    if (covered) {
+        imageStore(dst_img, dst_pos, dst);
     }
 }
 )GLSL");
@@ -1134,26 +1283,165 @@ float load_mask(vec2 edge_coord) {
                  0.0, 1.0);
 }
 
+vec4 straight_from_premul(vec3 rgb, float a) {
+    return clamp(vec4(a > 0.00001 ? rgb / a : vec3(0.0), a),
+                 vec4(0.0), vec4(1.0));
+}
+
 vec4 blend_over(vec4 dst, vec4 src) {
     float out_a = src.a + dst.a * (1.0 - src.a);
     vec3 premul = src.rgb * src.a + dst.rgb * dst.a * (1.0 - src.a);
-    vec3 out_rgb = out_a > 0.00001 ? premul / out_a : vec3(0.0);
-    return clamp(vec4(out_rgb, out_a), vec4(0.0), vec4(1.0));
+    return straight_from_premul(premul, out_a);
 }
 
-vec4 blend_add(vec4 dst, vec4 src) {
-    float out_a = src.a + dst.a * (1.0 - src.a);
+vec4 blend_add_compatible(vec4 dst, vec4 src) {
+    float out_a = dst.a;
     vec3 premul = dst.rgb * dst.a + src.rgb * src.a;
-    vec3 out_rgb = out_a > 0.00001 ? premul / out_a : vec3(0.0);
-    return clamp(vec4(out_rgb, out_a), vec4(0.0), vec4(1.0));
+    return straight_from_premul(premul, out_a);
 }
 
-vec4 blend_multiply(vec4 dst, vec4 src) {
-    float out_a = src.a + dst.a * (1.0 - src.a);
-    vec3 multiplied = dst.rgb * mix(vec3(1.0), src.rgb, src.a);
-    vec3 premul = multiplied * dst.a + src.rgb * src.a * (1.0 - dst.a);
-    vec3 out_rgb = out_a > 0.00001 ? premul / out_a : vec3(0.0);
-    return clamp(vec4(out_rgb, out_a), vec4(0.0), vec4(1.0));
+vec4 blend_multiply_compatible(vec4 dst, vec4 src) {
+    float out_a = dst.a;
+    vec3 dst_premul = dst.rgb * dst.a;
+    vec3 src_premul = src.rgb * src.a;
+    vec3 premul = src_premul * dst_premul + dst_premul * (1.0 - src.a);
+    return straight_from_premul(premul, out_a);
+}
+
+float color_burn(float src, float dst) {
+    if (abs(dst - 1.0) < 0.000001) {
+        return 1.0;
+    }
+    if (abs(src) < 0.000001) {
+        return 0.0;
+    }
+    return 1.0 - min(1.0, (1.0 - dst) / src);
+}
+
+float color_dodge(float src, float dst) {
+    if (dst <= 0.0) {
+        return 0.0;
+    }
+    if (abs(src - 1.0) < 0.000001) {
+        return 1.0;
+    }
+    return min(1.0, dst / (1.0 - src));
+}
+
+float overlay(float src, float dst) {
+    float mul = 2.0 * src * dst;
+    float scr = 1.0 - 2.0 * (1.0 - src) * (1.0 - dst);
+    return dst < 0.5 ? mul : scr;
+}
+
+float soft_light(float src, float dst) {
+    float val1 = dst - (1.0 - 2.0 * src) * dst * (1.0 - dst);
+    float val2 = dst + (2.0 * src - 1.0) * dst *
+                         ((16.0 * dst - 12.0) * dst + 3.0);
+    float val3 = dst + (2.0 * src - 1.0) * (sqrt(dst) - dst);
+    if (src <= 0.5) {
+        return val1;
+    }
+    if (dst <= 0.25) {
+        return val2;
+    }
+    return val3;
+}
+
+float hard_light(float src, float dst) {
+    float mul = 2.0 * src * dst;
+    float scr = 1.0 - 2.0 * (1.0 - src) * (1.0 - dst);
+    return src < 0.5 ? mul : scr;
+}
+
+float linear_light(float src, float dst) {
+    float burn = max(0.0, 2.0 * src + dst - 1.0);
+    float dodge = min(1.0, 2.0 * (src - 0.5) + dst);
+    return src < 0.5 ? burn : dodge;
+}
+
+vec3 color_blend(int mode, vec3 src, vec3 dst) {
+    if (mode == 3) {
+        return min(src + dst, vec3(1.0));
+    }
+    if (mode == 4) {
+        return src + dst;
+    }
+    if (mode == 5) {
+        return min(src, dst);
+    }
+    if (mode == 6) {
+        return src * dst;
+    }
+    if (mode == 7) {
+        return vec3(color_burn(src.r, dst.r), color_burn(src.g, dst.g),
+                    color_burn(src.b, dst.b));
+    }
+    if (mode == 8) {
+        return max(vec3(0.0), src + dst - vec3(1.0));
+    }
+    if (mode == 9) {
+        return max(src, dst);
+    }
+    if (mode == 10) {
+        return src + dst - src * dst;
+    }
+    if (mode == 11) {
+        return vec3(color_dodge(src.r, dst.r), color_dodge(src.g, dst.g),
+                    color_dodge(src.b, dst.b));
+    }
+    if (mode == 12) {
+        return vec3(overlay(src.r, dst.r), overlay(src.g, dst.g),
+                    overlay(src.b, dst.b));
+    }
+    if (mode == 13) {
+        return vec3(soft_light(src.r, dst.r), soft_light(src.g, dst.g),
+                    soft_light(src.b, dst.b));
+    }
+    if (mode == 14) {
+        return vec3(hard_light(src.r, dst.r), hard_light(src.g, dst.g),
+                    hard_light(src.b, dst.b));
+    }
+    if (mode == 15) {
+        return vec3(linear_light(src.r, dst.r), linear_light(src.g, dst.g),
+                    linear_light(src.b, dst.b));
+    }
+    return src;
+}
+
+vec4 blend_cubism(vec4 dst, vec4 src, int flags) {
+    int color_mode = flags & 255;
+    int alpha_mode = (flags >> 8) & 255;
+    if (color_mode == 0 && alpha_mode == 0) {
+        return blend_over(dst, src);
+    }
+    if (color_mode == 1 && alpha_mode == 0) {
+        return blend_add_compatible(dst, src);
+    }
+    if (color_mode == 2 && alpha_mode == 0) {
+        return blend_multiply_compatible(dst, src);
+    }
+    vec3 color = color_blend(color_mode, src.rgb, dst.rgb);
+    vec3 parameter;
+    if (alpha_mode == 1) {
+        parameter = vec3(src.a * dst.a, 0.0, dst.a * (1.0 - src.a));
+    } else if (alpha_mode == 2) {
+        parameter = vec3(0.0, 0.0, dst.a * (1.0 - src.a));
+    } else if (alpha_mode == 3) {
+        parameter = vec3(min(src.a, dst.a), max(src.a - dst.a, 0.0),
+                         max(dst.a - src.a, 0.0));
+    } else if (alpha_mode == 4) {
+        parameter = vec3(max(src.a + dst.a - 1.0, 0.0),
+                         min(src.a, 1.0 - dst.a),
+                         min(dst.a, 1.0 - src.a));
+    } else {
+        parameter = vec3(src.a * dst.a, src.a * (1.0 - dst.a),
+                         dst.a * (1.0 - src.a));
+    }
+    return straight_from_premul(color * parameter.x +
+                                src.rgb * parameter.y +
+                                dst.rgb * parameter.z,
+                                parameter.x + parameter.y + parameter.z);
 }
 
 vec2 vertex_dst(int base, int vertex) {
@@ -1183,8 +1471,10 @@ void main() {
     ivec2 src_limit = max(pc.color0.xy - ivec2(1), ivec2(0));
     float opacity = clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
     int blend_flags = pc.color0.z;
-    int blend_mode = blend_flags & 255;
-    bool inverted_mask = (blend_flags & 256) != 0;
+    bool inverted_mask = (blend_flags & 65536) != 0;
+    blend_flags = blend_flags & 65535;
+    vec4 dst = imageLoad(dst_img, dst_pos);
+    bool covered = false;
 
     for (int tri = 0; tri < tri_count; ++tri) {
         int base = tri * 18;
@@ -1205,12 +1495,12 @@ void main() {
             vec2 mask_pos_f = vertex_mask(base, 0) * w0 +
                               vertex_mask(base, 1) * w1 +
                               vertex_mask(base, 2) * w2;
-            float mask_val = load_mask(mask_pos_f);
+            float mask_val = 1.0 - load_mask(mask_pos_f);
             if (inverted_mask) {
                 mask_val = 1.0 - mask_val;
             }
             if (mask_val <= 0.00001) {
-                return;
+                continue;
             }
             vec4 src = load_bilinear(src_limit, src_pos_f);
             if (src.g >= 0.70 && src.g > src.r + 0.20 && src.g > src.b + 0.20) {
@@ -1218,18 +1508,14 @@ void main() {
             }
             src.a *= opacity * mask_val;
             if (src.a <= 0.00001) {
-                return;
+                continue;
             }
-            vec4 dst = imageLoad(dst_img, dst_pos);
-            vec4 out_color = blend_over(dst, src);
-            if (blend_mode == 1) {
-                out_color = blend_add(dst, src);
-            } else if (blend_mode == 2) {
-                out_color = blend_multiply(dst, src);
-            }
-            imageStore(dst_img, dst_pos, out_color);
-            return;
+            dst = blend_cubism(dst, src, blend_flags);
+            covered = true;
         }
+    }
+    if (covered) {
+        imageStore(dst_img, dst_pos, dst);
     }
 }
 )GLSL");
@@ -1253,6 +1539,82 @@ void main() {
         rd->compute_pipeline_create(
             g_gpu_pipeline_state->draw_masked_triangles_shader);
     return g_gpu_pipeline_state->draw_masked_triangles_pipeline.is_valid();
+}
+
+bool EnsureMosaicPipeline(RenderingDevice *rd) {
+    if (rd == nullptr) return false;
+    if (g_gpu_pipeline_state == nullptr) {
+        g_gpu_pipeline_state = new GodotGpuPipelineState();
+    }
+    if (g_gpu_pipeline_state->mosaic_pipeline.is_valid()) return true;
+
+    Ref<RDShaderSource> source;
+    source.instantiate();
+    source->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
+    source->set_stage_source(
+        RenderingDevice::SHADER_STAGE_COMPUTE,
+        R"GLSL(#version 450
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer Rects {
+    float value[];
+} rects;
+layout(rgba8, set = 0, binding = 1) uniform readonly image2D src_img;
+layout(rgba8, set = 0, binding = 2) uniform image2D dst_img;
+layout(push_constant, std430) uniform Params {
+    ivec4 rect0;
+    ivec4 rect1;
+    ivec4 color0;
+} pc;
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 limit = max(pc.rect1.xy, ivec2(0));
+    if (pos.x >= limit.x || pos.y >= limit.y) {
+        return;
+    }
+
+    ivec2 block = max(pc.color0.xy, ivec2(1));
+    int rect_count = max(pc.rect1.z, 0);
+    for (int i = 0; i < rect_count; ++i) {
+        int base = i * 4;
+        ivec4 rect = ivec4(round(vec4(rects.value[base + 0],
+                                      rects.value[base + 1],
+                                      rects.value[base + 2],
+                                      rects.value[base + 3])));
+        if (rect.z <= 0 || rect.w <= 0) {
+            continue;
+        }
+        ivec2 rect_min = rect.xy;
+        ivec2 rect_max = rect.xy + rect.zw;
+        if (pos.x < rect_min.x || pos.y < rect_min.y ||
+            pos.x >= rect_max.x || pos.y >= rect_max.y) {
+            continue;
+        }
+
+        ivec2 rel = pos - rect_min;
+        ivec2 sample_pos = rect_min + (rel / block) * block + block / 2;
+        sample_pos = clamp(sample_pos, rect_min, rect_max - ivec2(1));
+        imageStore(dst_img, pos, imageLoad(src_img, sample_pos));
+        return;
+    }
+}
+)GLSL");
+
+    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
+    if (spirv.is_null()) return false;
+    const String compile_error =
+        spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
+    if (!compile_error.is_empty()) {
+        UtilityFunctions::printerr("Godot GPU mosaic shader compile error: ",
+                                   compile_error);
+        return false;
+    }
+    g_gpu_pipeline_state->mosaic_shader =
+        rd->shader_create_from_spirv(spirv, "AetherKiriMosaic");
+    if (!g_gpu_pipeline_state->mosaic_shader.is_valid()) return false;
+    g_gpu_pipeline_state->mosaic_pipeline =
+        rd->compute_pipeline_create(g_gpu_pipeline_state->mosaic_shader);
+    return g_gpu_pipeline_state->mosaic_pipeline.is_valid();
 }
 
 void ClearGodotGpuUniformSetCache(RenderingDevice *rd) {
@@ -1604,6 +1966,91 @@ bool ExecuteGodotGpuMaskedTriangles(RenderingDevice *rd,
     return true;
 }
 
+bool ExecuteGodotGpuMosaic(RenderingDevice *rd,
+                           const std::shared_ptr<GodotGpuOp> &op) {
+    if (rd == nullptr || op == nullptr || op->vertices.empty() ||
+        op->size.x <= 0 || op->size.y <= 0 || !EnsureMosaicPipeline(rd)) {
+        return false;
+    }
+
+    PackedByteArray rect_data;
+    rect_data.resize(static_cast<int64_t>(op->vertices.size() * sizeof(float)));
+    if (uint8_t *bytes = rect_data.ptrw()) {
+        std::memcpy(bytes, op->vertices.data(),
+                    op->vertices.size() * sizeof(float));
+    }
+    RID rect_buffer = rd->storage_buffer_create(rect_data.size(), rect_data);
+    if (!rect_buffer.is_valid()) return false;
+
+    Ref<RDTextureView> view;
+    view.instantiate();
+    TypedArray<PackedByteArray> initial_data;
+    RID sample_src = rd->texture_create(
+        MakeRgbaTextureFormat(static_cast<uint32_t>(op->size.x),
+                              static_cast<uint32_t>(op->size.y)),
+        view, initial_data);
+    if (!sample_src.is_valid()) {
+        rd->free_rid(rect_buffer);
+        return false;
+    }
+    const Error copied = rd->texture_copy(op->dst, sample_src, Vector3(),
+                                          Vector3(), op->size, 0, 0, 0, 0);
+    if (copied != OK) {
+        rd->free_rid(sample_src);
+        rd->free_rid(rect_buffer);
+        return false;
+    }
+    ApplyGodotGpuBarrier(rd);
+
+    Ref<RDUniform> rect_uniform;
+    rect_uniform.instantiate();
+    rect_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+    rect_uniform->set_binding(0);
+    rect_uniform->add_id(rect_buffer);
+
+    Ref<RDUniform> src_uniform;
+    src_uniform.instantiate();
+    src_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
+    src_uniform->set_binding(1);
+    src_uniform->add_id(sample_src);
+
+    Ref<RDUniform> dst_uniform;
+    dst_uniform.instantiate();
+    dst_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
+    dst_uniform->set_binding(2);
+    dst_uniform->add_id(op->dst);
+
+    TypedArray<RDUniform> uniforms;
+    uniforms.push_back(rect_uniform);
+    uniforms.push_back(src_uniform);
+    uniforms.push_back(dst_uniform);
+    RID uniform_set = rd->uniform_set_create(
+        uniforms, g_gpu_pipeline_state->mosaic_shader, 0);
+    if (!uniform_set.is_valid()) {
+        rd->free_rid(sample_src);
+        rd->free_rid(rect_buffer);
+        return false;
+    }
+
+    const PackedByteArray push_constants = PackGpuPushConstants(*op);
+    int64_t compute_list = rd->compute_list_begin();
+    rd->compute_list_bind_compute_pipeline(
+        compute_list, g_gpu_pipeline_state->mosaic_pipeline);
+    rd->compute_list_bind_uniform_set(compute_list, uniform_set, 0);
+    rd->compute_list_set_push_constant(compute_list, push_constants, 48);
+    rd->compute_list_dispatch(compute_list,
+                              static_cast<uint32_t>((op->size.x + 7) / 8),
+                              static_cast<uint32_t>((op->size.y + 7) / 8),
+                              1);
+    rd->compute_list_add_barrier(compute_list);
+    rd->compute_list_end();
+    ApplyGodotGpuBarrier(rd);
+    rd->free_rid(uniform_set);
+    rd->free_rid(sample_src);
+    rd->free_rid(rect_buffer);
+    return true;
+}
+
 bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &op) {
     if (rd == nullptr || op == nullptr) return false;
     bool result = false;
@@ -1657,6 +2104,8 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             return ExecuteGodotGpuTriangles(rd, op, true);
         case GodotGpuOp::Type::DrawMaskedTriangles:
             return ExecuteGodotGpuMaskedTriangles(rd, op);
+        case GodotGpuOp::Type::Mosaic:
+            return ExecuteGodotGpuMosaic(rd, op);
         case GodotGpuOp::Type::Read:
             op->data = rd->texture_get_data(op->src, 0);
             return !op->data.is_empty();
@@ -2167,7 +2616,7 @@ bool BridgeDrawMaskedTriangles(uint64_t dst, uint64_t src, uint64_t mask,
     op->mode = triangle_count;
     op->opacity = static_cast<int>(
         std::round(std::clamp(opacity, 0.0f, 1.0f) * 255.0f));
-    op->color = (blend_mode & 0xffu) | (inverted_mask ? 0x100u : 0u);
+    op->color = (blend_mode & 0xffffu) | (inverted_mask ? 0x10000u : 0u);
     op->vertices.reserve(static_cast<size_t>(triangle_count) * 18u);
     for (uint32_t i = 0; i < triangle_count * 3u; ++i) {
         op->vertices.push_back(static_cast<float>(dst_points[i].x));
@@ -2177,6 +2626,54 @@ bool BridgeDrawMaskedTriangles(uint64_t dst, uint64_t src, uint64_t mask,
         op->vertices.push_back(static_cast<float>(mask_points[i].x));
         op->vertices.push_back(static_cast<float>(mask_points[i].y));
     }
+    return RunGodotGpuOpAsync(op);
+}
+
+bool BridgeMosaicRects(uint64_t texture, const tTVPRect *rects,
+                       uint32_t rect_count, uint32_t block_x,
+                       uint32_t block_y) {
+    if (rects == nullptr || rect_count == 0 ||
+        (block_x <= 1 && block_y <= 1)) {
+        return false;
+    }
+
+    GodotGpuTextureRecord record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        auto it = g_gpu_textures.find(texture);
+        if (it == g_gpu_textures.end()) return false;
+        record = it->second;
+    }
+    if (record.width == 0 || record.height == 0) return false;
+
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::Mosaic;
+    op->dst = record.rid;
+    op->size = Vector3(record.width, record.height, 1);
+    op->src_size = Vector3(std::max<uint32_t>(block_x, 1u),
+                           std::max<uint32_t>(block_y, 1u), 1);
+    op->vertices.reserve(static_cast<size_t>(rect_count) * 4u);
+
+    uint32_t valid_count = 0;
+    for (uint32_t i = 0; i < rect_count; ++i) {
+        const int left = std::clamp(rects[i].left, 0,
+                                    static_cast<int>(record.width));
+        const int top = std::clamp(rects[i].top, 0,
+                                   static_cast<int>(record.height));
+        const int right = std::clamp(rects[i].right, 0,
+                                     static_cast<int>(record.width));
+        const int bottom = std::clamp(rects[i].bottom, 0,
+                                      static_cast<int>(record.height));
+        if (right <= left || bottom <= top) continue;
+        op->vertices.push_back(static_cast<float>(left));
+        op->vertices.push_back(static_cast<float>(top));
+        op->vertices.push_back(static_cast<float>(right - left));
+        op->vertices.push_back(static_cast<float>(bottom - top));
+        ++valid_count;
+    }
+
+    if (valid_count == 0) return false;
+    op->mode = valid_count;
     return RunGodotGpuOpAsync(op);
 }
 
@@ -2596,6 +3093,12 @@ void ReleaseGodotGpuPipeline() {
         if (g_gpu_pipeline_state->draw_masked_triangles_shader.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->draw_masked_triangles_shader);
         }
+        if (g_gpu_pipeline_state->mosaic_pipeline.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->mosaic_pipeline);
+        }
+        if (g_gpu_pipeline_state->mosaic_shader.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->mosaic_shader);
+        }
     }
     delete g_gpu_pipeline_state;
     g_gpu_pipeline_state = nullptr;
@@ -2646,6 +3149,7 @@ public:
         callbacks.copy_triangles = BridgeCopyTriangles;
         callbacks.draw_triangles = BridgeDrawTriangles;
         callbacks.draw_masked_triangles = BridgeDrawMaskedTriangles;
+        callbacks.mosaic_rects = BridgeMosaicRects;
         callbacks.blend_rect = BridgeBlendRect;
         callbacks.blend_rect2 = BridgeBlendRect2;
         callbacks.read_rgba = BridgeReadRgba;

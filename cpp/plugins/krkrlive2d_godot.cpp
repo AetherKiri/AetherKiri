@@ -6,8 +6,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <map>
+#include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <minizip/ioapi.h>
@@ -36,6 +39,7 @@
 #include "Math/CubismMatrix44.hpp"
 #include "Model/CubismMoc.hpp"
 #include "Model/CubismModel.hpp"
+#include "Model/CubismModelUserData.hpp"
 #include "Model/CubismUserModel.hpp"
 #include "Motion/CubismMotion.hpp"
 #include "Motion/CubismMotionManager.hpp"
@@ -204,6 +208,15 @@ std::string Stem(const std::string &path) {
     std::string base = Basename(path);
     const size_t dot = base.find_last_of('.');
     return dot == std::string::npos ? base : base.substr(0, dot);
+}
+
+std::string MotionLookupKey(const std::string &path) {
+    std::string key = Stem(path);
+    std::transform(key.begin(), key.end(), key.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    return key;
 }
 
 ZipArchive::const_iterator FindArchiveEntry(const ZipArchive &archive,
@@ -381,6 +394,10 @@ ttstr ToTTStr(const tTJSVariant &v) {
     return v.Type() == tvtVoid ? ttstr() : ttstr(v);
 }
 
+std::string ToKey(const tTJSVariant &v) {
+    return ToTTStr(v).AsStdString();
+}
+
 tjs_real ToReal(const tTJSVariant &v, tjs_real fallback = 0.0) {
     switch (v.Type()) {
         case tvtInteger:
@@ -414,11 +431,35 @@ void SetStringResult(tTJSVariant *result, const tjs_char *value = TJS_W("")) {
     if (result) *result = value;
 }
 
+void SetResultObject(tTJSVariant *result, iTJSDispatch2 *object) {
+    if (result && object) *result = tTJSVariant(object, object);
+}
+
 void SetArrayResult(tTJSVariant *result) {
     if (!result) return;
     iTJSDispatch2 *array = TJSCreateArrayObject();
     *result = tTJSVariant(array, array);
     array->Release();
+}
+
+iTJSDispatch2 *CreateIdNameDict(const ttstr &id, const ttstr &name) {
+    iTJSDispatch2 *dict = TJSCreateDictionaryObject();
+    if (!dict) return nullptr;
+    tTJSVariant idValue(id);
+    tTJSVariant nameValue(name);
+    dict->PropSet(TJS_MEMBERENSURE, TJS_W("id"), nullptr, &idValue, dict);
+    dict->PropSet(TJS_MEMBERENSURE, TJS_W("name"), nullptr, &nameValue, dict);
+    return dict;
+}
+
+iTJSDispatch2 *CreateStringArray(const std::vector<ttstr> &items) {
+    iTJSDispatch2 *array = TJSCreateArrayObject();
+    if (!array) return nullptr;
+    for (tjs_int i = 0; i < static_cast<tjs_int>(items.size()); ++i) {
+        tTJSVariant value(items[static_cast<size_t>(i)]);
+        array->PropSetByNum(TJS_MEMBERENSURE, i, &value, array);
+    }
+    return array;
 }
 
 tjs_error CreateLive2DObject(tTJSVariant *result, const tjs_char *expr) {
@@ -467,6 +508,13 @@ public:
         float boundsW = 1.0f;
         float boundsH = 1.0f;
         bool usingMask = false;
+    };
+
+    struct MosaicRect {
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
     };
 
     GodotLive2DModel() { g_activeModels.push_back(this); }
@@ -543,8 +591,10 @@ public:
         }
 
         if (!LoadTextures(archive)) return false;
+        CaptureDefaultState();
         BuildMaskContexts();
         LoadEyeBlinkAndMotions(archive);
+        DetectMosaicDrawables(archive);
 
         loaded_ = true;
         visible_ = true;
@@ -555,27 +605,102 @@ public:
                 if (maskCounts[i] > 0) ++maskedDrawables;
             }
         }
+        int maskedOffscreens = 0;
+        if (const csmInt32 *maskCounts = GetModel()->GetOffscreenMaskCounts()) {
+            const csmInt32 offscreenCount = GetModel()->GetOffscreenCount();
+            for (csmInt32 i = 0; i < offscreenCount; ++i) {
+                if (maskCounts[i] > 0) ++maskedOffscreens;
+            }
+        }
         spdlog::info(
-            "krkrlive2d_godot: loaded {} ({} drawables, {} masked, {} textures, {} motions) canvas={:.2f}x{:.2f} canvasPx={}x{} ppu={:.0f}",
+            "krkrlive2d_godot: loaded {} ({} drawables, {} masked, {} offscreens, {} masked offscreens, {} textures, {} motions) canvas={:.2f}x{:.2f} canvasPx={}x{} ppu={:.0f}",
             baseName_, GetModel()->GetDrawableCount(), maskedDrawables,
+            GetModel()->GetOffscreenCount(), maskedOffscreens,
             static_cast<int>(textures_.size()), static_cast<int>(motions_.size()),
             GetModel()->GetCanvasWidth(), GetModel()->GetCanvasHeight(),
             static_cast<int>(GetModel()->GetCanvasWidthPixel()),
             static_cast<int>(GetModel()->GetCanvasHeightPixel()),
             GetModel()->GetPixelsPerUnit());
+        LogDrawableBlendStats();
+        LogMaskContexts();
         return true;
     }
 
     void SetVisible(bool visible) { visible_ = visible; }
     bool IsVisible() const { return visible_; }
     bool IsLoaded() const { return loaded_ && GetModel() != nullptr; }
+    CubismModel *Cubism() { return GetModel(); }
+
+    void SetMosaicSize(float x, float y) {
+        mosaicSizeX_ = x;
+        mosaicSizeY_ = y;
+    }
+
+    bool HasMosaicDrawables() const { return !mosaicDrawableIndices_.empty(); }
 
     void Progress() { UpdateModel(); }
+
+    void ResetPartsToDefaults() {
+        CubismModel *model = GetModel();
+        if (!model) return;
+        const csmInt32 count = model->GetPartCount();
+        const csmInt32 defaults =
+            static_cast<csmInt32>(defaultPartOpacities_.size());
+        for (csmInt32 i = 0; i < count; ++i) {
+            const csmFloat32 opacity =
+                (i < defaults) ? defaultPartOpacities_[static_cast<size_t>(i)]
+                               : 1.0f;
+            model->SetPartOpacity(i, opacity);
+        }
+        spdlog::info("krkrlive2d_godot: reset {} parts to defaults", count);
+    }
+
+    bool SetPartOpacityByKey(const std::string &key, csmFloat32 value) {
+        CubismModel *model = GetModel();
+        if (!model || key.empty()) return false;
+        CubismIdHandle id = CubismFramework::GetIdManager()->GetId(key.c_str());
+        const csmInt32 index = model->GetPartIndex(id);
+        if (index < 0) return false;
+        model->SetPartOpacity(index, value);
+        return true;
+    }
+
+    bool StartMotionByName(const std::string &motionName) {
+        if (!_motionManager || motionName.empty()) return false;
+        ACubismMotion *selected = nullptr;
+        const std::string keyName = MotionLookupKey(motionName);
+        auto exact = motionNames_.find(keyName);
+        if (exact != motionNames_.end()) selected = exact->second;
+        if (!selected) {
+            for (const auto &entry : motionNames_) {
+                const std::string &key = entry.first;
+                if (key == keyName ||
+                    (key.size() > keyName.size() &&
+                     key.compare(key.size() - keyName.size(), keyName.size(),
+                                 keyName) == 0 &&
+                     key[key.size() - keyName.size() - 1] == '/')) {
+                    selected = entry.second;
+                    break;
+                }
+            }
+        }
+        if (!selected) {
+            spdlog::warn(
+                "krkrlive2d_godot: motion lookup failed name='{}' key='{}' registered={}",
+                motionName, keyName, motionNames_.size());
+            return false;
+        }
+        _motionManager->StartMotionPriority(selected, false, 2);
+        spdlog::info("krkrlive2d_godot: started motion '{}' key='{}'",
+                     motionName, keyName);
+        return true;
+    }
 
     void StartMotion(const std::string &group, const std::string &motion) {
         if (!_motionManager) return;
         ACubismMotion *selected = nullptr;
         if (!motion.empty()) {
+            if (StartMotionByName(motion)) return;
             auto named = motionNames_.find(group + "/" + motion);
             if (named != motionNames_.end()) selected = named->second;
             if (!selected) {
@@ -593,7 +718,11 @@ public:
             if (it != firstMotionByGroup_.end()) selected = it->second;
         }
         if (!selected && !motions_.empty()) selected = motions_.begin()->second;
-        if (selected) _motionManager->StartMotionPriority(selected, false, 2);
+        if (selected) {
+            _motionManager->StartMotionPriority(selected, false, 2);
+            spdlog::info("krkrlive2d_godot: started motion group='{}' motion='{}'",
+                         group, motion);
+        }
     }
 
     void StartMotionByIndex(const std::string &group, int index) {
@@ -601,6 +730,8 @@ public:
         auto it = motions_.find(key);
         if (it != motions_.end() && _motionManager) {
             _motionManager->StartMotionPriority(it->second, false, 2);
+            spdlog::info("krkrlive2d_godot: started motion group='{}' index={}",
+                         group, index);
         } else {
             StartMotion(group, std::string());
         }
@@ -846,7 +977,13 @@ private:
                 const std::string key = group + "_" + std::to_string(m);
                 motions_[key] = motion;
                 firstMotionByGroup_.try_emplace(group, motion);
-                motionNames_[group + "/" + Stem(motionPath)] = motion;
+                const std::string stem = Stem(motionPath);
+                const std::string lookupKey = MotionLookupKey(motionPath);
+                motionNames_[MotionLookupKey(group + "/" + stem)] = motion;
+                motionNames_[lookupKey] = motion;
+                spdlog::debug(
+                    "krkrlive2d_godot: registered motion group='{}' file='{}' key='{}'",
+                    group, motionPath, lookupKey);
             }
         }
 
@@ -854,6 +991,216 @@ private:
             _motionManager->StartMotionPriority(motions_.begin()->second,
                                                 false, 1);
         }
+    }
+
+    void CaptureDefaultState() {
+        defaultPartOpacities_.clear();
+        CubismModel *model = GetModel();
+        if (!model) return;
+        const csmInt32 partCount = model->GetPartCount();
+        defaultPartOpacities_.reserve(static_cast<size_t>(partCount));
+        for (csmInt32 i = 0; i < partCount; ++i) {
+            defaultPartOpacities_.push_back(model->GetPartOpacity(i));
+        }
+    }
+
+    static bool EqualsAsciiIgnoreCase(const char *lhs, const char *rhs) {
+        if (!lhs || !rhs) return false;
+        while (*lhs && *rhs) {
+            if (std::tolower(static_cast<unsigned char>(*lhs)) !=
+                std::tolower(static_cast<unsigned char>(*rhs))) {
+                return false;
+            }
+            ++lhs;
+            ++rhs;
+        }
+        return *lhs == '\0' && *rhs == '\0';
+    }
+
+    void DetectMosaicDrawables(const ZipArchive &archive) {
+        mosaicDrawableIndices_.clear();
+        mosaicParentPartIndices_.clear();
+        mosaicParentOpacityDefaults_.clear();
+        mosaicRects_.clear();
+
+        if (!GetModel() || !setting_) return;
+
+        std::string userDataPath;
+        if (setting_->GetUserDataFile()) {
+            csmString s = setting_->GetUserDataFile();
+            userDataPath = s.GetRawString();
+        }
+        if (userDataPath.empty()) userDataPath = baseName_ + ".userdata3.json";
+
+        auto userDataIt = FindArchiveEntry(archive, userDataPath);
+        if (userDataIt == archive.end()) return;
+
+        CubismModelUserData *userData = CubismModelUserData::Create(
+            userDataIt->second.data(),
+            static_cast<csmSizeInt>(userDataIt->second.size()));
+        if (!userData) return;
+
+        std::unordered_set<csmInt32> drawableSet;
+        std::unordered_set<csmInt32> partSet;
+        const auto &nodes = userData->GetArtMeshUserDatas();
+        for (csmUint32 i = 0; i < nodes.GetSize(); ++i) {
+            const auto *node = nodes[i];
+            if (!node) continue;
+            if (!EqualsAsciiIgnoreCase(node->Value.GetRawString(), "mosaic")) {
+                continue;
+            }
+
+            const csmInt32 drawableIndex =
+                GetModel()->GetDrawableIndex(node->TargetId);
+            if (drawableIndex < 0) continue;
+
+            if (drawableSet.insert(drawableIndex).second) {
+                mosaicDrawableIndices_.push_back(drawableIndex);
+            }
+
+            const csmInt32 partIndex =
+                GetModel()->GetDrawableParentPartIndex(
+                    static_cast<csmUint32>(drawableIndex));
+            if (partIndex >= 0 && partSet.insert(partIndex).second) {
+                mosaicParentPartIndices_.push_back(partIndex);
+                mosaicParentOpacityDefaults_[partIndex] =
+                    GetModel()->GetPartOpacity(partIndex);
+            }
+        }
+        CubismModelUserData::Delete(userData);
+
+        if (!mosaicDrawableIndices_.empty()) {
+            spdlog::info(
+                "krkrlive2d_godot: detected {} mosaic drawables ({} parent parts) in {}",
+                static_cast<int>(mosaicDrawableIndices_.size()),
+                static_cast<int>(mosaicParentPartIndices_.size()), baseName_);
+        }
+    }
+
+    bool IsMosaicEnabled() const {
+        if (mosaicDrawableIndices_.empty()) return false;
+        const float x = (mosaicSizeX_ > 0.0f) ? mosaicSizeX_ : mosaicSizeY_;
+        const float y = (mosaicSizeY_ > 0.0f) ? mosaicSizeY_ : mosaicSizeX_;
+        return x >= 2.0f || y >= 2.0f;
+    }
+
+    int GetMosaicBlockX() const {
+        float value = (mosaicSizeX_ > 0.0f) ? mosaicSizeX_ : mosaicSizeY_;
+        value = std::clamp(value, 1.0f, 256.0f);
+        return std::max(1, static_cast<int>(std::lround(value)));
+    }
+
+    int GetMosaicBlockY() const {
+        float value = (mosaicSizeY_ > 0.0f) ? mosaicSizeY_ : mosaicSizeX_;
+        value = std::clamp(value, 1.0f, 256.0f);
+        return std::max(1, static_cast<int>(std::lround(value)));
+    }
+
+    static bool RectsOverlapOrTouch(const MosaicRect &a, const MosaicRect &b,
+                                    int pad) {
+        const int ax1 = a.x + a.w + pad;
+        const int ay1 = a.y + a.h + pad;
+        const int bx1 = b.x + b.w + pad;
+        const int by1 = b.y + b.h + pad;
+        return !(ax1 < b.x || bx1 < a.x || ay1 < b.y || by1 < a.y);
+    }
+
+    static MosaicRect MergeRects(const MosaicRect &a, const MosaicRect &b) {
+        const int x0 = std::min(a.x, b.x);
+        const int y0 = std::min(a.y, b.y);
+        const int x1 = std::max(a.x + a.w, b.x + b.w);
+        const int y1 = std::max(a.y + a.h, b.y + b.h);
+        return MosaicRect{x0, y0, x1 - x0, y1 - y0};
+    }
+
+    void CollectMosaicRects(int width, int height) {
+        mosaicRects_.clear();
+        CubismModel *model = GetModel();
+        if (!model || mosaicDrawableIndices_.empty() || width <= 0 || height <= 0) {
+            return;
+        }
+
+        constexpr int pad = 2;
+        for (const csmInt32 drawableIndex : mosaicDrawableIndices_) {
+            if (drawableIndex < 0 ||
+                drawableIndex >= model->GetDrawableCount() ||
+                !model->GetDrawableDynamicFlagIsVisible(drawableIndex)) {
+                continue;
+            }
+
+            const csmInt32 vertexCount =
+                model->GetDrawableVertexCount(drawableIndex);
+            const auto *positions =
+                model->GetDrawableVertexPositions(drawableIndex);
+            if (vertexCount <= 0 || !positions) continue;
+
+            float minX = std::numeric_limits<float>::max();
+            float minY = std::numeric_limits<float>::max();
+            float maxX = std::numeric_limits<float>::lowest();
+            float maxY = std::numeric_limits<float>::lowest();
+
+            for (csmInt32 i = 0; i < vertexCount; ++i) {
+                const float ndcX = projMatrix_.TransformX(positions[i].X);
+                const float ndcY = projMatrix_.TransformY(positions[i].Y);
+                const float px =
+                    (ndcX * 0.5f + 0.5f) * static_cast<float>(width);
+                const float py =
+                    (0.5f - ndcY * 0.5f) * static_cast<float>(height);
+                minX = std::min(minX, px);
+                minY = std::min(minY, py);
+                maxX = std::max(maxX, px);
+                maxY = std::max(maxY, py);
+            }
+
+            if (maxX <= minX || maxY <= minY) continue;
+            const int x0 = std::max(0, static_cast<int>(std::floor(minX)) - pad);
+            const int y0 = std::max(0, static_cast<int>(std::floor(minY)) - pad);
+            const int x1 =
+                std::min(width, static_cast<int>(std::ceil(maxX)) + pad);
+            const int y1 =
+                std::min(height, static_cast<int>(std::ceil(maxY)) + pad);
+            if (x1 <= x0 || y1 <= y0) continue;
+            mosaicRects_.push_back(MosaicRect{x0, y0, x1 - x0, y1 - y0});
+        }
+
+        bool merged = true;
+        while (merged) {
+            merged = false;
+            for (size_t i = 0; i < mosaicRects_.size() && !merged; ++i) {
+                for (size_t j = i + 1; j < mosaicRects_.size(); ++j) {
+                    if (!RectsOverlapOrTouch(mosaicRects_[i], mosaicRects_[j],
+                                             2)) {
+                        continue;
+                    }
+                    mosaicRects_[i] = MergeRects(mosaicRects_[i], mosaicRects_[j]);
+                    mosaicRects_.erase(mosaicRects_.begin() + j);
+                    merged = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    bool ApplyMosaicPostEffect(GodotTexture2D *target, int width, int height) {
+        if (!IsMosaicEnabled() || !target || target->GetGodotGpuHandle() == 0) {
+            return false;
+        }
+        const auto *bridge = TVPGodotGpuBridgeGet();
+        if (!bridge || !bridge->mosaic_rects) return false;
+
+        CollectMosaicRects(width, height);
+        if (mosaicRects_.empty()) return false;
+
+        std::vector<tTVPRect> rects;
+        rects.reserve(mosaicRects_.size());
+        for (const MosaicRect &rect : mosaicRects_) {
+            rects.emplace_back(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
+        }
+        return bridge->mosaic_rects(
+            target->GetGodotGpuHandle(), rects.data(),
+            static_cast<uint32_t>(rects.size()),
+            static_cast<uint32_t>(GetMosaicBlockX()),
+            static_cast<uint32_t>(GetMosaicBlockY()));
     }
 
     void ReleaseTextures() {
@@ -920,7 +1267,9 @@ private:
         float maxY = 0.0f;
         bool haveBounds = false;
         for (csmInt32 drawable : context.clippedDrawables) {
-            if (!model->GetDrawableDynamicFlagIsVisible(drawable)) continue;
+            // Cubism computes clipping bounds from the clipped meshes even when
+            // a drawable is currently invisible; visibility only controls final
+            // drawable output, not mask-space layout.
             const csmInt32 vertexCount =
                 model->GetDrawableVertexCount(drawable);
             const auto *positions = model->GetDrawableVertexPositions(drawable);
@@ -945,7 +1294,40 @@ private:
         float width = maxX - minX;
         float height = maxY - minY;
         if (width <= 0.00001f || height <= 0.00001f) return false;
-        const float margin = 0.05f;
+
+        if (model->IsBlendModeEnabled()) {
+            // Cubism forces high precision masks for blend-mode models. In that
+            // path small clipped bounds are not stretched to fill the mask
+            // texture; they keep model pixel density and are anchored at the
+            // clipped bounds origin.
+            constexpr float margin = 0.05f;
+            const float ppu = std::max(model->GetPixelsPerUnit(), 1.0f);
+            const float maskPixelW = static_cast<float>(kMaskTextureSize);
+            const float maskPixelH = static_cast<float>(kMaskTextureSize);
+            float scaleX = ppu / maskPixelW;
+            float scaleY = ppu / maskPixelH;
+
+            if (width * ppu > maskPixelW) {
+                minX -= width * margin;
+                maxX += width * margin;
+                width = maxX - minX;
+                scaleX = 1.0f / std::max(width, 0.00001f);
+            }
+            if (height * ppu > maskPixelH) {
+                minY -= height * margin;
+                maxY += height * margin;
+                height = maxY - minY;
+                scaleY = 1.0f / std::max(height, 0.00001f);
+            }
+
+            context.boundsX = minX;
+            context.boundsY = minY;
+            context.boundsW = std::max(1.0f / scaleX, 0.00001f);
+            context.boundsH = std::max(1.0f / scaleY, 0.00001f);
+            return true;
+        }
+
+        constexpr float margin = 0.05f;
         minX -= width * margin;
         maxX += width * margin;
         minY -= height * margin;
@@ -961,15 +1343,14 @@ private:
     }
 
     static void CompositeMaskAlpha(uint8_t &dst, uint8_t src) {
-        dst = static_cast<uint8_t>(
-            255 - (((255 - static_cast<int>(dst)) *
-                    (255 - static_cast<int>(src)) + 127) /
-                   255));
+        dst = static_cast<uint8_t>((static_cast<int>(dst) *
+                                    (255 - static_cast<int>(src)) + 127) /
+                                   255);
     }
 
     void RasterizeMaskDrawable(MaskContext &context, csmInt32 drawable) {
         CubismModel *model = GetModel();
-        if (!model || !model->GetDrawableDynamicFlagIsVisible(drawable)) return;
+        if (!model) return;
 
         const csmInt32 textureIndex = model->GetDrawableTextureIndex(drawable);
         if (textureIndex < 0 ||
@@ -1068,7 +1449,7 @@ private:
         const tTVPRect full(0, 0, kMaskTextureSize, kMaskTextureSize);
         for (MaskContext &context : maskContexts_) {
             context.usingMask = UpdateMaskBounds(context);
-            std::fill(context.pixels.begin(), context.pixels.end(), 0);
+            std::fill(context.pixels.begin(), context.pixels.end(), 255);
             if (context.usingMask) {
                 for (csmInt32 maskDrawable : context.maskDrawables) {
                     RasterizeMaskDrawable(context, maskDrawable);
@@ -1124,20 +1505,236 @@ private:
         projMatrix_.MultiplyByMatrix(&modelProjection);
     }
 
-    uint32_t BlendModeForDrawable(csmInt32 drawableIndex) const {
+    uint32_t BlendFlagsForDrawable(csmInt32 drawableIndex) const {
         if (!GetModel()) return 0;
         const csmBlendMode blend = GetModel()->GetDrawableBlendModeType(drawableIndex);
-        const csmInt32 color = blend.GetColorBlendType();
-        if (color == Live2D::Cubism::Core::csmColorBlendType_Add ||
-            color == Live2D::Cubism::Core::csmColorBlendType_AddGlow ||
-            color == Live2D::Cubism::Core::csmColorBlendType_AddCompatible) {
-            return 1;
+        return (static_cast<uint32_t>(blend.GetColorBlendType()) & 0xffu) |
+               ((static_cast<uint32_t>(blend.GetAlphaBlendType()) & 0xffu)
+                << 8u);
+    }
+
+    void LogDrawableBlendStats() {
+        CubismModel *model = GetModel();
+        if (!model) return;
+
+        const csmInt32 drawableCount = model->GetDrawableCount();
+        const csmInt32 *renderOrders = model->GetRenderOrders();
+        std::map<csmInt32, int> colorCounts;
+        std::map<csmInt32, int> alphaCounts;
+        std::map<csmInt32, int> orderCounts;
+        int nonDefaultBlend = 0;
+        int duplicateOrders = 0;
+        int nonDefaultColors = 0;
+        int cullingDrawables = 0;
+
+        for (csmInt32 i = 0; i < drawableCount; ++i) {
+            const csmBlendMode blend = model->GetDrawableBlendModeType(i);
+            const csmInt32 color = blend.GetColorBlendType();
+            const csmInt32 alpha = blend.GetAlphaBlendType();
+            ++colorCounts[color];
+            ++alphaCounts[alpha];
+            if (renderOrders) ++orderCounts[renderOrders[i]];
+            if (model->GetDrawableCulling(i) != 0) ++cullingDrawables;
+
+            const auto multiply = model->GetDrawableMultiplyColor(i);
+            const auto screen = model->GetDrawableScreenColor(i);
+            const bool customColor =
+                std::fabs(multiply.X - 1.0f) > 0.0001f ||
+                std::fabs(multiply.Y - 1.0f) > 0.0001f ||
+                std::fabs(multiply.Z - 1.0f) > 0.0001f ||
+                std::fabs(screen.X) > 0.0001f ||
+                std::fabs(screen.Y) > 0.0001f ||
+                std::fabs(screen.Z) > 0.0001f;
+            if (customColor) ++nonDefaultColors;
+
+            if (color != Live2D::Cubism::Core::csmColorBlendType_Normal ||
+                alpha != Live2D::Cubism::Core::csmAlphaBlendType_Over ||
+                customColor) {
+                ++nonDefaultBlend;
+                if (nonDefaultBlend <= 80) {
+                    const CubismIdHandle id = model->GetDrawableId(i);
+                    const char *idText =
+                        id ? id->GetString().GetRawString() : "<null>";
+                    spdlog::info(
+                        "krkrlive2d_godot: drawable blend idx={} id={} order={} color={} alpha={} mul={:.3f},{:.3f},{:.3f},{:.3f} screen={:.3f},{:.3f},{:.3f},{:.3f}",
+                        i, idText, renderOrders ? renderOrders[i] : i, color,
+                        alpha, multiply.X, multiply.Y, multiply.Z, multiply.W,
+                        screen.X, screen.Y, screen.Z, screen.W);
+                }
+            }
         }
-        if (color == Live2D::Cubism::Core::csmColorBlendType_Multiply ||
-            color == Live2D::Cubism::Core::csmColorBlendType_MultiplyCompatible) {
-            return 2;
+
+        for (const auto &entry : orderCounts) {
+            if (entry.second > 1) ++duplicateOrders;
         }
-        return 0;
+
+        const auto mapToString = [](const std::map<csmInt32, int> &values) {
+            std::ostringstream out;
+            bool first = true;
+            for (const auto &entry : values) {
+                if (!first) out << ",";
+                first = false;
+                out << entry.first << ":" << entry.second;
+            }
+            return out.str();
+        };
+        spdlog::info(
+            "krkrlive2d_godot: drawable blend stats colors=[{}] alphas=[{}] non_default={} custom_colors={} duplicate_orders={} culling={}",
+            mapToString(colorCounts), mapToString(alphaCounts),
+            nonDefaultBlend, nonDefaultColors, duplicateOrders,
+            cullingDrawables);
+    }
+
+    void LogMaskContexts() {
+        CubismModel *model = GetModel();
+        if (!model || maskContexts_.empty()) return;
+
+        const csmInt32 *renderOrders = model->GetRenderOrders();
+        const auto drawableLabel = [&](csmInt32 drawable) {
+            std::ostringstream out;
+            const CubismIdHandle id = model->GetDrawableId(drawable);
+            out << drawable << ":"
+                << (id ? id->GetString().GetRawString() : "<null>");
+            if (renderOrders) out << "@" << renderOrders[drawable];
+            if (model->GetDrawableInvertedMask(drawable)) out << "!";
+            return out.str();
+        };
+
+        for (size_t i = 0; i < maskContexts_.size(); ++i) {
+            const MaskContext &context = maskContexts_[i];
+            std::ostringstream masks;
+            for (size_t j = 0; j < context.maskDrawables.size(); ++j) {
+                if (j > 0) masks << ",";
+                masks << drawableLabel(context.maskDrawables[j]);
+            }
+            std::ostringstream clipped;
+            for (size_t j = 0; j < context.clippedDrawables.size(); ++j) {
+                if (j > 0) clipped << ",";
+                clipped << drawableLabel(context.clippedDrawables[j]);
+            }
+            spdlog::info(
+                "krkrlive2d_godot: mask context {} masks=[{}] clipped=[{}]",
+                i, masks.str(), clipped.str());
+        }
+
+        for (const csmInt32 drawable : mosaicDrawableIndices_) {
+            if (drawable < 0 || drawable >= model->GetDrawableCount()) continue;
+            const CubismIdHandle id = model->GetDrawableId(drawable);
+            spdlog::info(
+                "krkrlive2d_godot: mosaic drawable idx={} id={} order={} mask_context={} inverted={}",
+                drawable, id ? id->GetString().GetRawString() : "<null>",
+                renderOrders ? renderOrders[drawable] : drawable,
+                drawable < static_cast<csmInt32>(drawableMaskContext_.size())
+                    ? drawableMaskContext_[drawable]
+                    : -1,
+                model->GetDrawableInvertedMask(drawable));
+        }
+    }
+
+    void MaybeLogDrawableOrderWindow(int width, int height) {
+        CubismModel *model = GetModel();
+        if (!model || width <= 0 || height <= 0 ||
+            mosaicDrawableIndices_.empty() || orderWindowLogCount_ >= 6) {
+            return;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (orderWindowLogCount_ > 0 &&
+            now - lastOrderWindowLog_ < std::chrono::seconds(2)) {
+            return;
+        }
+        lastOrderWindowLog_ = now;
+        ++orderWindowLogCount_;
+
+        const csmInt32 *renderOrders = model->GetRenderOrders();
+        csmInt32 centerOrder = 90;
+        if (renderOrders && !mosaicDrawableIndices_.empty()) {
+            const csmInt32 marker = mosaicDrawableIndices_.front();
+            if (marker >= 0 && marker < model->GetDrawableCount()) {
+                centerOrder = renderOrders[marker];
+            }
+        }
+        const csmInt32 minOrder = centerOrder - 25;
+        const csmInt32 maxOrder = centerOrder + 25;
+
+        std::vector<std::pair<csmInt32, csmInt32>> ordered;
+        const csmInt32 drawableCount = model->GetDrawableCount();
+        ordered.reserve(static_cast<size_t>(drawableCount));
+        for (csmInt32 i = 0; i < drawableCount; ++i) {
+            ordered.emplace_back(renderOrders ? renderOrders[i] : i, i);
+        }
+        std::sort(ordered.begin(), ordered.end());
+
+        spdlog::info(
+            "krkrlive2d_godot: order window snapshot {} model={} center_order={} range={}..{}",
+            orderWindowLogCount_, baseName_, centerOrder, minOrder, maxOrder);
+
+        for (const auto &entry : ordered) {
+            const csmInt32 order = entry.first;
+            if (order < minOrder || order > maxOrder) continue;
+
+            const csmInt32 drawable = entry.second;
+            const CubismIdHandle id = model->GetDrawableId(drawable);
+            const bool visible =
+                model->GetDrawableDynamicFlagIsVisible(drawable);
+            const bool mosaic =
+                std::find(mosaicDrawableIndices_.begin(),
+                          mosaicDrawableIndices_.end(),
+                          drawable) != mosaicDrawableIndices_.end();
+            const csmInt32 part = model->GetDrawableParentPartIndex(
+                static_cast<csmUint32>(drawable));
+            const float partOpacity =
+                part >= 0 ? model->GetPartOpacity(part) : -1.0f;
+            const int maskIndex =
+                drawable < static_cast<csmInt32>(drawableMaskContext_.size())
+                    ? drawableMaskContext_[static_cast<size_t>(drawable)]
+                    : -1;
+            const uint32_t blend = BlendFlagsForDrawable(drawable);
+
+            int x0 = 0;
+            int y0 = 0;
+            int w = 0;
+            int h = 0;
+            if (visible) {
+                const csmInt32 vertexCount =
+                    model->GetDrawableVertexCount(drawable);
+                const auto *positions =
+                    model->GetDrawableVertexPositions(drawable);
+                if (vertexCount > 0 && positions) {
+                    float minX = std::numeric_limits<float>::max();
+                    float minY = std::numeric_limits<float>::max();
+                    float maxX = std::numeric_limits<float>::lowest();
+                    float maxY = std::numeric_limits<float>::lowest();
+                    for (csmInt32 i = 0; i < vertexCount; ++i) {
+                        const float ndcX = projMatrix_.TransformX(positions[i].X);
+                        const float ndcY = projMatrix_.TransformY(positions[i].Y);
+                        const float px =
+                            (ndcX * 0.5f + 0.5f) * static_cast<float>(width);
+                        const float py =
+                            (0.5f - ndcY * 0.5f) * static_cast<float>(height);
+                        minX = std::min(minX, px);
+                        minY = std::min(minY, py);
+                        maxX = std::max(maxX, px);
+                        maxY = std::max(maxY, py);
+                    }
+                    if (maxX > minX && maxY > minY) {
+                        x0 = static_cast<int>(std::floor(minX));
+                        y0 = static_cast<int>(std::floor(minY));
+                        w = static_cast<int>(std::ceil(maxX - minX));
+                        h = static_cast<int>(std::ceil(maxY - minY));
+                    }
+                }
+            }
+
+            spdlog::info(
+                "krkrlive2d_godot: order drawable snap={} order={} idx={} id={}{} vis={} op={:.3f} part={} part_op={:.3f} mask={} inv={} blend=0x{:x} bounds={}x{}+{},{}",
+                orderWindowLogCount_, order, drawable,
+                id ? id->GetString().GetRawString() : "<null>",
+                mosaic ? " mosaic" : "", visible,
+                model->GetDrawableOpacity(drawable), part, partOpacity,
+                maskIndex, model->GetDrawableInvertedMask(drawable), blend, w,
+                h, x0, y0);
+        }
     }
 
     bool DrawModelToTexture(GodotTexture2D *target, int width, int height) {
@@ -1156,6 +1753,8 @@ private:
             drawables.emplace_back(renderOrders ? renderOrders[i] : i, i);
         }
         std::sort(drawables.begin(), drawables.end());
+
+        MaybeLogDrawableOrderWindow(width, height);
 
         bool drewAny = false;
         for (const auto &ordered : drawables) {
@@ -1238,13 +1837,13 @@ private:
                         target->GetGodotGpuHandle(), texture.handle,
                         maskContext->handle, triCount, &clip, dst.data(),
                         src.data(), mask.data(), opacity,
-                        BlendModeForDrawable(drawableIndex),
+                        BlendFlagsForDrawable(drawableIndex),
                         model->GetDrawableInvertedMask(drawableIndex));
                 } else {
                     ok = bridge->draw_triangles(
                         target->GetGodotGpuHandle(), texture.handle, triCount,
                         &clip, dst.data(), src.data(), opacity,
-                        BlendModeForDrawable(drawableIndex));
+                        BlendFlagsForDrawable(drawableIndex));
                 }
                 dst.clear();
                 src.clear();
@@ -1253,10 +1852,14 @@ private:
                 return ok;
             };
 
+            const bool culling = model->GetDrawableCulling(drawableIndex) != 0;
             for (csmInt32 i = 0; i + 2 < indexCount; i += 3) {
                 if (dst.size() >= 64u * 3u) {
                     drewAny = flushChunk() || drewAny;
                 }
+                std::array<tTVPPointD, 3> triDst{};
+                std::array<tTVPPointD, 3> triSrc{};
+                std::array<tTVPPointD, 3> triMask{};
                 for (int j = 0; j < 3; ++j) {
                     const csmUint16 vi = indices[i + j];
                     const float ndcX = projMatrix_.TransformX(positions[vi].X);
@@ -1265,13 +1868,14 @@ private:
                                      static_cast<double>(width);
                     const double y = (0.5 - static_cast<double>(ndcY) * 0.5) *
                                      static_cast<double>(height);
-                    dst.push_back({x, y});
-                    src.push_back({static_cast<double>(uvs[vi].X) *
-                                       static_cast<double>(texture.width),
-                                   static_cast<double>(1.0f - uvs[vi].Y) *
-                                       static_cast<double>(texture.height)});
+                    triDst[static_cast<size_t>(j)] = {x, y};
+                    triSrc[static_cast<size_t>(j)] = {
+                        static_cast<double>(uvs[vi].X) *
+                            static_cast<double>(texture.width),
+                        static_cast<double>(1.0f - uvs[vi].Y) *
+                            static_cast<double>(texture.height)};
                     if (useMask) {
-                        mask.push_back({
+                        triMask[static_cast<size_t>(j)] = {
                             ((static_cast<double>(positions[vi].X) -
                               maskContext->boundsX) /
                              maskContext->boundsW) *
@@ -1280,17 +1884,35 @@ private:
                               maskContext->boundsY) /
                              maskContext->boundsH) *
                                 static_cast<double>(kMaskTextureSize),
-                        });
+                        };
                     }
+                }
+
+                const double area = static_cast<double>(Edge(
+                    static_cast<float>(triDst[0].x),
+                    static_cast<float>(triDst[0].y),
+                    static_cast<float>(triDst[1].x),
+                    static_cast<float>(triDst[1].y),
+                    static_cast<float>(triDst[2].x),
+                    static_cast<float>(triDst[2].y)));
+                if (culling && area <= 0.00001) {
+                    continue;
+                }
+
+                for (int j = 0; j < 3; ++j) {
+                    const auto &point = triDst[static_cast<size_t>(j)];
+                    dst.push_back(point);
+                    src.push_back(triSrc[static_cast<size_t>(j)]);
+                    if (useMask) mask.push_back(triMask[static_cast<size_t>(j)]);
                     if (!haveBounds) {
-                        minX = maxX = x;
-                        minY = maxY = y;
+                        minX = maxX = point.x;
+                        minY = maxY = point.y;
                         haveBounds = true;
                     } else {
-                        minX = std::min(minX, x);
-                        minY = std::min(minY, y);
-                        maxX = std::max(maxX, x);
-                        maxY = std::max(maxY, y);
+                        minX = std::min(minX, point.x);
+                        minY = std::min(minY, point.y);
+                        maxX = std::max(maxX, point.x);
+                        maxY = std::max(maxY, point.y);
                     }
                 }
             }
@@ -1310,9 +1932,18 @@ private:
     std::unordered_map<std::string, ACubismMotion *> motions_;
     std::unordered_map<std::string, ACubismMotion *> motionNames_;
     std::unordered_map<std::string, ACubismMotion *> firstMotionByGroup_;
+    std::vector<csmFloat32> defaultPartOpacities_;
     csmVector<CubismIdHandle> _eyeBlinkIds;
     csmVector<CubismIdHandle> _lipSyncIds;
     CubismMatrix44 projMatrix_;
+    std::vector<csmInt32> mosaicDrawableIndices_;
+    std::vector<csmInt32> mosaicParentPartIndices_;
+    std::unordered_map<csmInt32, csmFloat32> mosaicParentOpacityDefaults_;
+    std::vector<MosaicRect> mosaicRects_;
+    float mosaicSizeX_ = 24.0f;
+    float mosaicSizeY_ = 24.0f;
+    int orderWindowLogCount_ = 0;
+    std::chrono::steady_clock::time_point lastOrderWindowLog_;
     std::chrono::steady_clock::time_point lastUpdateTime_;
 };
 
@@ -1400,6 +2031,8 @@ public:
         if (!ok) {
             CSM_DELETE(newModel);
         } else {
+            newModel->SetMosaicSize(static_cast<float>(self->mosaicX_),
+                                    static_cast<float>(self->mosaicY_));
             GodotLive2DModel *oldModel = self->model_;
             self->model_ = newModel;
             if (oldModel) CSM_DELETE(oldModel);
@@ -1439,22 +2072,316 @@ public:
     static tjs_error startMotionCb(tTJSVariant *result, tjs_int numparams,
                                    tTJSVariant **param, Live2DModel *self) {
         if (self && self->model_) {
-            const std::string group =
-                (numparams > 0 && param && param[0])
-                    ? ToTTStr(*param[0]).AsStdString()
-                    : std::string("main");
-            if (numparams > 1 && param && param[1] &&
-                param[1]->Type() == tvtInteger) {
+            self->playing_ = true;
+            self->currentMotions_.clear();
+            if (numparams == 1 && param && param[0]) {
+                const ttstr motion = ToTTStr(*param[0]);
+                self->currentMotions_.push_back(motion);
+                const std::string motionName = motion.AsStdString();
+                if (!self->model_->StartMotionByName(motionName)) {
+                    self->model_->StartMotion(std::string(), motionName);
+                }
+            } else if (numparams > 1 && param && param[1] &&
+                       param[1]->Type() == tvtInteger) {
+                const std::string group = param[0]
+                                              ? ToTTStr(*param[0]).AsStdString()
+                                              : std::string();
+                if (param[0]) self->currentMotions_.push_back(ToTTStr(*param[0]));
                 self->model_->StartMotionByIndex(group, ToInt(*param[1], 0));
             } else {
+                const std::string group =
+                    (numparams > 0 && param && param[0])
+                        ? ToTTStr(*param[0]).AsStdString()
+                        : std::string();
                 const std::string motion =
                     (numparams > 1 && param && param[1])
                         ? ToTTStr(*param[1]).AsStdString()
                         : std::string();
+                if (!motion.empty()) self->currentMotions_.push_back(ToTTStr(*param[1]));
                 self->model_->StartMotion(group, motion);
             }
         }
         SetIntResult(result, 1);
+        return TJS_S_OK;
+    }
+
+    static tjs_error setMosaicParamCb(tTJSVariant *result, tjs_int numparams,
+                                      tTJSVariant **param, Live2DModel *self) {
+        if (self && param) {
+            if (numparams > 0 && param[0]) {
+                self->mosaicX_ = ToReal(*param[0], self->mosaicX_);
+            }
+            if (numparams > 1 && param[1]) {
+                self->mosaicY_ = ToReal(*param[1], self->mosaicY_);
+            }
+            if (self->model_) {
+                self->model_->SetMosaicSize(
+                    static_cast<float>(self->mosaicX_),
+                    static_cast<float>(self->mosaicY_));
+            }
+        }
+        SetIntResult(result, 1);
+        return TJS_S_OK;
+    }
+
+    static tjs_error isMosaicModelCb(tTJSVariant *result, tjs_int,
+                                     tTJSVariant **, Live2DModel *self) {
+        SetBoolResult(result, self && self->model_ &&
+                                  self->model_->HasMosaicDrawables());
+        return TJS_S_OK;
+    }
+
+    static tjs_error stopMotionCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                                  Live2DModel *self) {
+        if (self) {
+            self->playing_ = false;
+            self->currentMotions_.clear();
+        }
+        SetBoolResult(result, true);
+        return TJS_S_OK;
+    }
+
+    static tjs_error getCurrentMotionsCb(tTJSVariant *result, tjs_int,
+                                         tTJSVariant **, Live2DModel *self) {
+        if (!result || !self) return TJS_S_OK;
+        iTJSDispatch2 *array = CreateStringArray(self->currentMotions_);
+        SetResultObject(result, array);
+        if (array) array->Release();
+        return TJS_S_OK;
+    }
+
+    static tjs_error isPlayingCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                                 Live2DModel *self) {
+        SetBoolResult(result, self && self->playing_);
+        return TJS_S_OK;
+    }
+
+    static tjs_error getParameterCountCb(tTJSVariant *result, tjs_int,
+                                         tTJSVariant **, Live2DModel *self) {
+        if (!result) return TJS_S_OK;
+        if (self && self->model_ && self->model_->Cubism()) {
+            *result = self->model_->Cubism()->GetParameterCount();
+        } else {
+            *result = static_cast<tjs_int>(0);
+        }
+        return TJS_S_OK;
+    }
+
+    static tjs_error getParameterInfoCb(tTJSVariant *result, tjs_int numparams,
+                                        tTJSVariant **param,
+                                        Live2DModel *self) {
+        if (!result || !self || !self->model_ || !self->model_->Cubism()) {
+            if (result) result->Clear();
+            return TJS_S_OK;
+        }
+        const tjs_int index =
+            (numparams > 0 && param && param[0]) ? ToInt(*param[0], 0) : 0;
+        CubismModel *model = self->model_->Cubism();
+        if (index >= 0 && index < model->GetParameterCount()) {
+            const char *id =
+                model->GetParameterId(index)->GetString().GetRawString();
+            const ttstr tid(id);
+            iTJSDispatch2 *dict = CreateIdNameDict(tid, tid);
+            SetResultObject(result, dict);
+            if (dict) dict->Release();
+        } else {
+            result->Clear();
+        }
+        return TJS_S_OK;
+    }
+
+    static tjs_error getParameterValueCb(tTJSVariant *result, tjs_int numparams,
+                                         tTJSVariant **param,
+                                         Live2DModel *self) {
+        if (!result || !self || !param || numparams <= 0) return TJS_S_OK;
+        const std::string key = ToKey(*param[0]);
+        if (self->model_ && self->model_->Cubism()) {
+            CubismIdHandle id = CubismFramework::GetIdManager()->GetId(key.c_str());
+            const csmInt32 index = self->model_->Cubism()->GetParameterIndex(id);
+            if (index >= 0) {
+                *result = static_cast<tjs_real>(
+                    self->model_->Cubism()->GetParameterValue(index));
+                return TJS_S_OK;
+            }
+        }
+        auto stored = self->parameterValues_.find(key);
+        *result = stored == self->parameterValues_.end() ? 0.0 : stored->second;
+        return TJS_S_OK;
+    }
+
+    static tjs_error setParameterValueCb(tTJSVariant *result, tjs_int numparams,
+                                         tTJSVariant **param,
+                                         Live2DModel *self) {
+        if (self && param && numparams > 1) {
+            const std::string key = ToKey(*param[0]);
+            const tjs_real value = ToReal(*param[1], 0.0);
+            if (self->model_ && self->model_->Cubism()) {
+                CubismIdHandle id =
+                    CubismFramework::GetIdManager()->GetId(key.c_str());
+                const csmInt32 index =
+                    self->model_->Cubism()->GetParameterIndex(id);
+                if (index >= 0) {
+                    self->model_->Cubism()->SetParameterValue(
+                        index, static_cast<csmFloat32>(value));
+                }
+            }
+            self->parameterValues_[key] = value;
+        }
+        SetBoolResult(result, true);
+        return TJS_S_OK;
+    }
+
+    static tjs_error setParameterTypeCb(tTJSVariant *result, tjs_int numparams,
+                                        tTJSVariant **param,
+                                        Live2DModel *self) {
+        if (self && param && numparams > 1) {
+            self->parameterTypes_[ToKey(*param[0])] = ToInt(*param[1], 0);
+        }
+        SetBoolResult(result, true);
+        return TJS_S_OK;
+    }
+
+    static tjs_error setDiffParameterValueCb(tTJSVariant *result,
+                                             tjs_int numparams,
+                                             tTJSVariant **param,
+                                             Live2DModel *self) {
+        if (self && param && numparams > 1) {
+            self->diffParameterValues_[ToKey(*param[0])] =
+                ToReal(*param[1], 0.0);
+        }
+        SetBoolResult(result, true);
+        return TJS_S_OK;
+    }
+
+    static tjs_error getDiffParameterValueCb(tTJSVariant *result,
+                                             tjs_int numparams,
+                                             tTJSVariant **param,
+                                             Live2DModel *self) {
+        if (!result || !self || !param || numparams <= 0) return TJS_S_OK;
+        auto stored = self->diffParameterValues_.find(ToKey(*param[0]));
+        *result = stored == self->diffParameterValues_.end() ? 0.0
+                                                             : stored->second;
+        return TJS_S_OK;
+    }
+
+    static tjs_error getPartCountCb(tTJSVariant *result, tjs_int,
+                                    tTJSVariant **, Live2DModel *self) {
+        if (!result) return TJS_S_OK;
+        if (self && self->model_ && self->model_->Cubism()) {
+            *result = self->model_->Cubism()->GetPartCount();
+        } else {
+            *result = static_cast<tjs_int>(0);
+        }
+        return TJS_S_OK;
+    }
+
+    static tjs_error getPartInfoCb(tTJSVariant *result, tjs_int numparams,
+                                   tTJSVariant **param, Live2DModel *self) {
+        if (!result || !self || !self->model_ || !self->model_->Cubism()) {
+            if (result) result->Clear();
+            return TJS_S_OK;
+        }
+        const tjs_int index =
+            (numparams > 0 && param && param[0]) ? ToInt(*param[0], 0) : 0;
+        CubismModel *model = self->model_->Cubism();
+        if (index >= 0 && index < model->GetPartCount()) {
+            const char *id = model->GetPartId(index)->GetString().GetRawString();
+            const ttstr tid(id);
+            iTJSDispatch2 *dict = CreateIdNameDict(tid, tid);
+            SetResultObject(result, dict);
+            if (dict) dict->Release();
+        } else {
+            result->Clear();
+        }
+        return TJS_S_OK;
+    }
+
+    static tjs_error getPartValueCb(tTJSVariant *result, tjs_int numparams,
+                                    tTJSVariant **param, Live2DModel *self) {
+        if (!result || !self || !param || numparams <= 0) return TJS_S_OK;
+        const std::string key = ToKey(*param[0]);
+        if (self->model_ && self->model_->Cubism()) {
+            CubismIdHandle id = CubismFramework::GetIdManager()->GetId(key.c_str());
+            const csmInt32 index = self->model_->Cubism()->GetPartIndex(id);
+            if (index >= 0) {
+                *result = static_cast<tjs_real>(
+                    self->model_->Cubism()->GetPartOpacity(index));
+                return TJS_S_OK;
+            }
+        }
+        auto stored = self->partValues_.find(key);
+        *result = stored == self->partValues_.end() ? 1.0 : stored->second;
+        return TJS_S_OK;
+    }
+
+    static tjs_error setPartValueCb(tTJSVariant *result, tjs_int numparams,
+                                    tTJSVariant **param, Live2DModel *self) {
+        if (self && param && numparams > 1) {
+            const std::string key = ToKey(*param[0]);
+            const tjs_real value = ToReal(*param[1], 1.0);
+            bool applied = false;
+            if (self->model_) {
+                applied = self->model_->SetPartOpacityByKey(
+                    key, static_cast<csmFloat32>(value));
+            }
+            self->partValues_[key] = value;
+            const std::string logKey =
+                key + "=" + std::to_string(static_cast<int>(value * 1000.0));
+            if (self->loggedPartSets_.insert(logKey).second) {
+                spdlog::info("krkrlive2d_godot: setPart key='{}' value={:.3f} applied={}",
+                             key, value, applied);
+            }
+        }
+        SetBoolResult(result, true);
+        return TJS_S_OK;
+    }
+
+    static tjs_error setPartFadeTimeCb(tTJSVariant *result, tjs_int numparams,
+                                       tTJSVariant **param,
+                                       Live2DModel *self) {
+        if (self && param && numparams > 0) {
+            self->partFadeTime_ = ToReal(*param[0], self->partFadeTime_);
+        }
+        SetBoolResult(result, true);
+        return TJS_S_OK;
+    }
+
+    static tjs_error getVariableCb(tTJSVariant *result, tjs_int numparams,
+                                   tTJSVariant **param, Live2DModel *self) {
+        if (!result || !self || !param || numparams <= 0) return TJS_S_OK;
+        auto stored = self->variables_.find(ToKey(*param[0]));
+        if (stored == self->variables_.end()) {
+            result->Clear();
+        } else {
+            *result = stored->second;
+        }
+        return TJS_S_OK;
+    }
+
+    static tjs_error setVariableCb(tTJSVariant *result, tjs_int numparams,
+                                   tTJSVariant **param, Live2DModel *self) {
+        if (self && param && numparams > 1) {
+            self->variables_[ToKey(*param[0])] = *param[1];
+        }
+        SetBoolResult(result, true);
+        return TJS_S_OK;
+    }
+
+    static tjs_error resetPartsCb(tTJSVariant *result, tjs_int, tTJSVariant **,
+                                  Live2DModel *self) {
+        if (self) {
+            self->partValues_.clear();
+            self->loggedPartSets_.clear();
+            if (self->model_) self->model_->ResetPartsToDefaults();
+        }
+        SetBoolResult(result, true);
+        return TJS_S_OK;
+    }
+
+    static tjs_error resetVariablesCb(tTJSVariant *result, tjs_int,
+                                      tTJSVariant **, Live2DModel *self) {
+        if (self) self->variables_.clear();
+        SetBoolResult(result, true);
         return TJS_S_OK;
     }
 
@@ -1487,6 +2414,17 @@ public:
 
 private:
     GodotLive2DModel *model_ = nullptr;
+    tjs_real mosaicX_ = 24.0;
+    tjs_real mosaicY_ = 24.0;
+    bool playing_ = false;
+    tjs_real partFadeTime_ = 0.0;
+    std::vector<ttstr> currentMotions_;
+    std::unordered_map<std::string, tjs_real> parameterValues_;
+    std::unordered_map<std::string, tjs_real> diffParameterValues_;
+    std::unordered_map<std::string, tjs_real> partValues_;
+    std::unordered_map<std::string, tjs_int> parameterTypes_;
+    std::unordered_set<std::string> loggedPartSets_;
+    std::unordered_map<std::string, tTJSVariant> variables_;
 };
 
 extern "C" bool TVPGodotLive2DRenderToLayer(iTJSDispatch2 *layerDispatch) {
@@ -1537,7 +2475,7 @@ NCB_REGISTER_CLASS(Live2DModel) {
     NCB_METHOD_RAW_CALLBACK(setBlinkingInterval, &Live2DModel::okCb, 0);
     NCB_METHOD_RAW_CALLBACK(setBlinkingSettings, &Live2DModel::okCb, 0);
     NCB_METHOD_RAW_CALLBACK(setBlinkingMode, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(setMosaicParam, &Live2DModel::okCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setMosaicParam, &Live2DModel::setMosaicParamCb, 0);
     NCB_METHOD_RAW_CALLBACK(getExpressionCount, &Live2DModel::zeroCb, 0);
     NCB_METHOD_RAW_CALLBACK(getExpressionName, &Live2DModel::emptyStringCb, 0);
     NCB_METHOD_RAW_CALLBACK(setExpression, &Live2DModel::okCb, 0);
@@ -1548,26 +2486,35 @@ NCB_REGISTER_CLASS(Live2DModel) {
     NCB_METHOD_RAW_CALLBACK(getMotionCount, &Live2DModel::zeroCb, 0);
     NCB_METHOD_RAW_CALLBACK(getMotionName, &Live2DModel::emptyStringCb, 0);
     NCB_METHOD_RAW_CALLBACK(startMotion, &Live2DModel::startMotionCb, 0);
-    NCB_METHOD_RAW_CALLBACK(stopMotion, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getCurrentMotions, &Live2DModel::emptyArrayCb, 0);
-    NCB_METHOD_RAW_CALLBACK(isPlaying, &Live2DModel::falseCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getParameterCount, &Live2DModel::zeroCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getParameterInfo, &Live2DModel::emptyStringCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getParameterValue, &Live2DModel::zeroCb, 0);
-    NCB_METHOD_RAW_CALLBACK(setParameterValue, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(setParameterType, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(setDiffParameterValue, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getDiffParameterValue, &Live2DModel::zeroCb, 0);
+    NCB_METHOD_RAW_CALLBACK(stopMotion, &Live2DModel::stopMotionCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getCurrentMotions,
+                            &Live2DModel::getCurrentMotionsCb, 0);
+    NCB_METHOD_RAW_CALLBACK(isPlaying, &Live2DModel::isPlayingCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getParameterCount,
+                            &Live2DModel::getParameterCountCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getParameterInfo,
+                            &Live2DModel::getParameterInfoCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getParameterValue,
+                            &Live2DModel::getParameterValueCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setParameterValue,
+                            &Live2DModel::setParameterValueCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setParameterType,
+                            &Live2DModel::setParameterTypeCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setDiffParameterValue,
+                            &Live2DModel::setDiffParameterValueCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getDiffParameterValue,
+                            &Live2DModel::getDiffParameterValueCb, 0);
     NCB_METHOD_RAW_CALLBACK(addEyeBlinkId, &Live2DModel::okCb, 0);
     NCB_METHOD_RAW_CALLBACK(addLipSyncId, &Live2DModel::okCb, 0);
     NCB_METHOD_RAW_CALLBACK(canSync, &Live2DModel::falseCb, 0);
     NCB_METHOD_RAW_CALLBACK(sync, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getPartCount, &Live2DModel::zeroCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getPartInfo, &Live2DModel::emptyStringCb, 0);
-    NCB_METHOD_RAW_CALLBACK(setPart, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getPartValue, &Live2DModel::zeroCb, 0);
-    NCB_METHOD_RAW_CALLBACK(setPartValue, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(setPartFadeTime, &Live2DModel::okCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getPartCount, &Live2DModel::getPartCountCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getPartInfo, &Live2DModel::getPartInfoCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setPart, &Live2DModel::setPartValueCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getPartValue, &Live2DModel::getPartValueCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setPartValue, &Live2DModel::setPartValueCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setPartFadeTime,
+                            &Live2DModel::setPartFadeTimeCb, 0);
     NCB_METHOD_RAW_CALLBACK(getEventCount, &Live2DModel::zeroCb, 0);
     NCB_METHOD_RAW_CALLBACK(getEventName, &Live2DModel::emptyStringCb, 0);
     NCB_METHOD_RAW_CALLBACK(addVriableMotion, &Live2DModel::okCb, 0);
@@ -1575,12 +2522,12 @@ NCB_REGISTER_CLASS(Live2DModel) {
     NCB_METHOD_RAW_CALLBACK(getVariableMotionCount, &Live2DModel::zeroCb, 0);
     NCB_METHOD_RAW_CALLBACK(getVariableMotionName, &Live2DModel::emptyStringCb, 0);
     NCB_METHOD_RAW_CALLBACK(getVariableMotionInfo, &Live2DModel::emptyStringCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getVariable, &Live2DModel::zeroCb, 0);
-    NCB_METHOD_RAW_CALLBACK(setVariable, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(isMosaicModel, &Live2DModel::falseCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getVariable, &Live2DModel::getVariableCb, 0);
+    NCB_METHOD_RAW_CALLBACK(setVariable, &Live2DModel::setVariableCb, 0);
+    NCB_METHOD_RAW_CALLBACK(isMosaicModel, &Live2DModel::isMosaicModelCb, 0);
     NCB_METHOD_RAW_CALLBACK(reload, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(resetParts, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(resetVariables, &Live2DModel::okCb, 0);
+    NCB_METHOD_RAW_CALLBACK(resetParts, &Live2DModel::resetPartsCb, 0);
+    NCB_METHOD_RAW_CALLBACK(resetVariables, &Live2DModel::resetVariablesCb, 0);
     NCB_METHOD_RAW_CALLBACK(resetExpressionVariables, &Live2DModel::okCb, 0);
 }
 
