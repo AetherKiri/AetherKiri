@@ -38,15 +38,7 @@ if [[ -d "$bundle_root/.git" ]]; then
     git -C "$bundle_root" gc --prune=now >/dev/null 2>&1 || true
 fi
 
-installed_tmp="${RUNNER_TEMP:-/tmp}/vcpkg-installed-selected"
-rm -rf "$installed_tmp"
-mkdir -p "$installed_tmp"
-cp -a "$VCPKG_ROOT/installed/$VCPKG_TRIPLET" "$installed_tmp/"
-if [[ -d "$VCPKG_ROOT/installed/vcpkg" ]]; then
-    cp -a "$VCPKG_ROOT/installed/vcpkg" "$installed_tmp/"
-fi
-rm -rf "$bundle_root/installed"
-mv "$installed_tmp" "$bundle_root/installed"
+# Keep the entire installed directory to preserve host dependencies.
 
 bundle_path="${RUNNER_TEMP:-/tmp}/$VCPKG_BUNDLE_ASSET"
 tar --zstd -cf "$bundle_path" -C "$payload_dir" workspace
