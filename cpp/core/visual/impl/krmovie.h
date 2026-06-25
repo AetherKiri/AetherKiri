@@ -34,6 +34,7 @@ class iTVPVideoOverlay // this is not a COM object
 public:
     virtual void __stdcall AddRef() = 0;
     virtual void __stdcall Release() = 0;
+    virtual void __stdcall ShutdownPlayer() = 0;
 
     virtual void __stdcall SetWindow(class tTJSNI_Window *window) = 0;
     virtual void __stdcall SetMessageDrainWindow(void *window) = 0;

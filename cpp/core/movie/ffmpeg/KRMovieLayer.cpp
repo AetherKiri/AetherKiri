@@ -4,6 +4,8 @@
 #include "Application.h"
 #include "VideoOvlImpl.h"
 #include <algorithm>
+#include <chrono>
+#include <cstring>
 #include <cstdlib>
 
 extern "C" {
@@ -57,8 +59,7 @@ static double VideoSubmitMaxFps() {
 }
 
 VideoPresentLayer::~VideoPresentLayer() {
-    if(m_continuousHookRegistered)
-        TVPRemoveContinuousEventHook(this);
+    ShutdownPlayer();
 }
 
 tTVPBaseTexture *VideoPresentLayer::GetFrontBuffer() {
@@ -76,10 +77,12 @@ tTVPBaseTexture *VideoPresentLayer::GetFrontBuffer() {
         m_condPicture.notify_all();
     }
     FrameMove();
-    if(!pic.data[0] || pic.width <= 0 || pic.height <= 0 ||
-       !m_BmpBits[0] || !m_BmpBits[1]) {
+    if(!pic.data[0] || pic.width <= 0 || pic.height <= 0) {
         return nullptr;
     }
+    std::lock_guard<std::mutex> videoLock(m_mtxVideoBuffer);
+    if(!m_videoBufferActive || !m_BmpBits[0] || !m_BmpBits[1])
+        return nullptr;
     int n = m_nCurBmpBuff;
     m_nCurBmpBuff = !m_nCurBmpBuff;
     m_BmpBits[n]->Update(pic.data[0], pic.width * 4, 0, 0, pic.width,
@@ -89,22 +92,59 @@ tTVPBaseTexture *VideoPresentLayer::GetFrontBuffer() {
 
 void VideoPresentLayer::SetVideoBuffer(tTVPBaseTexture *buff1,
                                        tTVPBaseTexture *buff2, long size) {
-    m_BmpBits[0] = buff1;
-    m_BmpBits[1] = buff2;
-    m_nCurBmpBuff = 0;
-    m_lastQueuedPicturePts = -1.0;
-    if(!m_continuousHookRegistered) {
+    int width = 0;
+    int height = 0;
+    if(buff1) {
+        width = buff1->GetWidth();
+        height = buff1->GetHeight();
+    }
+    {
+        std::lock_guard<std::mutex> videoLock(m_mtxVideoBuffer);
+        m_BmpBits[0] = buff1;
+        m_BmpBits[1] = buff2;
+        m_nCurBmpBuff = 0;
+        m_videoBufferWidth = width;
+        m_videoBufferHeight = height;
+        m_videoBufferActive = buff1 && buff2 && width > 0 && height > 0;
+    }
+    Flush();
+    if(m_videoBufferActive && !m_continuousHookRegistered) {
         TVPAddContinuousEventHook(this);
         m_continuousHookRegistered = true;
     }
 }
 
+void VideoPresentLayer::ClearVideoBuffer() {
+    if(m_continuousHookRegistered) {
+        TVPRemoveContinuousEventHook(this);
+        m_continuousHookRegistered = false;
+    }
+    {
+        std::lock_guard<std::mutex> videoLock(m_mtxVideoBuffer);
+        m_videoBufferActive = false;
+        m_BmpBits[0] = nullptr;
+        m_BmpBits[1] = nullptr;
+        m_nCurBmpBuff = 0;
+        m_videoBufferWidth = 0;
+        m_videoBufferHeight = 0;
+    }
+    Flush();
+    m_condPicture.notify_all();
+}
+
+void VideoPresentLayer::ShutdownPlayer() {
+    ClearVideoBuffer();
+    TVPMoviePlayer::ShutdownPlayer();
+}
+
 void VideoPresentLayer::OnContinuousCallback(tjs_uint64 tick) {
-    if(!m_usedPicture)
+    if(!m_pPlayer)
         return;
     double m_curpts = m_pPlayer->GetClock() / DVD_TIME_BASE;
     {
         std::lock_guard<std::mutex> lk(m_mtxPicture);
+        if(!m_usedPicture)
+            return;
         BitmapPicture &picbuf = m_picture[m_curPicture];
         // check pts
         if(picbuf.pts > m_curpts) { // present in future
@@ -125,6 +165,18 @@ void VideoPresentLayer::OnContinuousCallback(tjs_uint64 tick) {
 
 int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     // from other thread
+    int width = 0;
+    int height = 0;
+    {
+        std::lock_guard<std::mutex> videoLock(m_mtxVideoBuffer);
+        if(!m_videoBufferActive || !m_BmpBits[0] || !m_BmpBits[1])
+            return -1;
+        width = m_videoBufferWidth;
+        height = m_videoBufferHeight;
+    }
+    if(width <= 0 || height <= 0)
+        return -1;
+
     if(pic.format != RENDER_FMT_YUV420P)
         return -2;
     if(pic.pts == DVD_NOPTS_VALUE)
@@ -132,28 +184,37 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
 
     const double pts = pic.pts / DVD_TIME_BASE;
     const double maxSubmitFps = VideoSubmitMaxFps();
-    if(maxSubmitFps > 0.0 && m_lastQueuedPicturePts >= 0.0 &&
-       pts - m_lastQueuedPicturePts < (1.0 / maxSubmitFps)) {
-        return MAX_BUFFER_COUNT - m_usedPicture;
+    int usedPicture = 0;
+    double lastQueuedPicturePts = -1.0;
+    {
+        std::lock_guard<std::mutex> lk(m_mtxPicture);
+        usedPicture = m_usedPicture;
+        lastQueuedPicturePts = m_lastQueuedPicturePts;
+    }
+    if(maxSubmitFps > 0.0 && lastQueuedPicturePts >= 0.0 &&
+       pts - lastQueuedPicturePts < (1.0 / maxSubmitFps)) {
+        return MAX_BUFFER_COUNT - usedPicture;
     }
 
-    if(m_usedPicture >= MAX_BUFFER_COUNT) {
+    if(usedPicture >= MAX_BUFFER_COUNT) {
         std::unique_lock<std::mutex> lk(m_mtxPicture);
-        m_condPicture.wait(lk);
+        m_condPicture.wait_for(
+            lk, std::chrono::milliseconds(10),
+            [this]() { return m_usedPicture < MAX_BUFFER_COUNT; });
+        usedPicture = m_usedPicture;
     }
-    if(m_usedPicture >= MAX_BUFFER_COUNT)
+    if(usedPicture >= MAX_BUFFER_COUNT)
         return -1;
 
     int srcWidth = pic.iWidth;
     int srcHeight = pic.iHeight;
-    int width = m_BmpBits[0] ? m_BmpBits[0]->GetWidth()
-                             : (pic.iDisplayWidth > 0 ? pic.iDisplayWidth
-                                                      : pic.iWidth);
-    int height = m_BmpBits[0] ? m_BmpBits[0]->GetHeight()
-                              : (pic.iDisplayHeight > 0 ? pic.iDisplayHeight
-                                                        : pic.iHeight);
+    if(srcWidth <= 0 || srcHeight <= 0 || !pic.data[0] || !pic.data[1] ||
+       !pic.data[2])
+        return -1;
 
     uint8_t *data = (uint8_t *)TJSAlignedAlloc(width * height * 4, 4);
+    if(!data)
+        return -1;
     uint8_t *dstData[4] = {data, nullptr, nullptr, nullptr};
     int dstLineSize[4] = {width * 4, 0, 0, 0};
 
@@ -161,14 +222,26 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
         img_convert_ctx, srcWidth, srcHeight, AV_PIX_FMT_YUV420P, width, height,
         AV_PIX_FMT_RGBA, /*sws_flags*/ SWS_FAST_BILINEAR, nullptr, nullptr,
         nullptr);
-    assert(img_convert_ctx);
-    int processed = sws_scale(img_convert_ctx, pic.data, pic.iLineSize, 0,
+    int processed = 0;
+    if(img_convert_ctx) {
+        processed = sws_scale(img_convert_ctx, pic.data, pic.iLineSize, 0,
                               srcHeight, dstData, dstLineSize);
+    }
     if(processed <= 0) {
+        std::memset(data, 0, static_cast<size_t>(width) * height * 4);
         ConvertYuv420ToRgba(pic, data, width, height, dstLineSize[0]);
     }
     {
+        std::lock_guard<std::mutex> videoLock(m_mtxVideoBuffer);
+        if(!m_videoBufferActive || !m_BmpBits[0] || !m_BmpBits[1]) {
+            TJSAlignedDealloc(data);
+            return -1;
+        }
         std::lock_guard<std::mutex> lk(m_mtxPicture);
+        if(m_usedPicture >= MAX_BUFFER_COUNT) {
+            TJSAlignedDealloc(data);
+            return -1;
+        }
         BitmapPicture &picbuf =
             m_picture[(m_curPicture + m_usedPicture) & (MAX_BUFFER_COUNT - 1)];
         picbuf.Clear();
@@ -178,9 +251,8 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
         picbuf.pts = pts;
         ++m_usedPicture;
         m_lastQueuedPicturePts = pts;
+        return MAX_BUFFER_COUNT - m_usedPicture;
     }
-
-    return MAX_BUFFER_COUNT - m_usedPicture;
 }
 
 void MoviePlayerLayer::BuildGraph(tTJSNI_VideoOverlay *callbackwin,

@@ -2,6 +2,7 @@
 
 #include "KRMoviePlayer.h"
 #include "EventIntf.h"
+#include <mutex>
 
 NS_KRMOVIE_BEGIN
 
@@ -10,7 +11,11 @@ class VideoPresentLayer : public TVPMoviePlayer,
 protected:
     tTVPBaseTexture *m_BmpBits[2]{};
     int m_nCurBmpBuff = 0;
+    int m_videoBufferWidth = 0;
+    int m_videoBufferHeight = 0;
     bool m_continuousHookRegistered = false;
+    bool m_videoBufferActive = false;
+    std::mutex m_mtxVideoBuffer;
 
 public:
     ~VideoPresentLayer() override;
@@ -19,6 +24,8 @@ public:
 
     void SetVideoBuffer(tTVPBaseTexture *buff1, tTVPBaseTexture *buff2,
                         long size) override;
+    void ClearVideoBuffer();
+    void ShutdownPlayer() override;
 
     void OnContinuousCallback(tjs_uint64 tick) override;
 

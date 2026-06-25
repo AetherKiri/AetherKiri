@@ -51,6 +51,14 @@ extern void GetMFVideoOverlayObject(tTJSNI_VideoOverlay *callbackwin,
                                     const tjs_char *type, uint64_t size,
                                     class iTVPVideoOverlay **out);
 
+static void TVPShutdownAndReleaseVideoOverlay(iTVPVideoOverlay *&overlay) {
+    if(!overlay)
+        return;
+    overlay->ShutdownPlayer();
+    overlay->Release();
+    overlay = nullptr;
+}
+
 //---------------------------------------------------------------------------
 static std::vector<tTJSNI_VideoOverlay *> TVPVideoOverlayVector;
 //---------------------------------------------------------------------------
@@ -123,8 +131,7 @@ void tTJSNI_VideoOverlay::Invalidate() {
 
     Close();
     if(CachedOverlay) {
-        CachedOverlay->Release();
-        CachedOverlay = nullptr;
+        TVPShutdownAndReleaseVideoOverlay(CachedOverlay);
     }
     EventQueue.Deallocate();
 }
@@ -183,8 +190,7 @@ void tTJSNI_VideoOverlay::Open(const ttstr &_name) {
             VideoOverlay->Rewind();
         } else {
             if(CachedOverlay) {
-                CachedOverlay->Release();
-                CachedOverlay = nullptr;
+                TVPShutdownAndReleaseVideoOverlay(CachedOverlay);
             }
             if(Mode == vomLayer)
                 GetVideoLayerObject(EventQueue.GetOwner(), istream,
@@ -248,13 +254,11 @@ void tTJSNI_VideoOverlay::Open(const ttstr &_name) {
 void tTJSNI_VideoOverlay::Close() {
     if(VideoOverlay) {
         if(CachedOverlay) {
-            CachedOverlay->Release();
-            CachedOverlay = nullptr;
+            TVPShutdownAndReleaseVideoOverlay(CachedOverlay);
         }
         VideoOverlay->SetVisible(false);
         VideoOverlay->Pause();
-        VideoOverlay->Release();
-        VideoOverlay = nullptr;
+        TVPShutdownAndReleaseVideoOverlay(VideoOverlay);
     }
     if(LocalTempStorageHolder)
         delete LocalTempStorageHolder, LocalTempStorageHolder = nullptr;
@@ -277,13 +281,11 @@ void tTJSNI_VideoOverlay::Shutdown() {
     try {
         if(VideoOverlay) {
             if(CachedOverlay) {
-                CachedOverlay->Release();
-                CachedOverlay = nullptr;
+                TVPShutdownAndReleaseVideoOverlay(CachedOverlay);
             }
             VideoOverlay->SetVisible(false);
             VideoOverlay->Pause();
-            VideoOverlay->Release();
-            VideoOverlay = nullptr;
+            TVPShutdownAndReleaseVideoOverlay(VideoOverlay);
         }
     } catch(...) {
         CanDeliverEvents = c;
@@ -532,11 +534,9 @@ void tTJSNI_VideoOverlay::WndProc(NativeEvent &ev) {
                                     SetStatusAsync(ssStop);
                                     VideoOverlay->Stop();
                                     if(CachedOverlay) {
-                                        CachedOverlay->Release();
-                                        CachedOverlay = nullptr;
+                                        TVPShutdownAndReleaseVideoOverlay(CachedOverlay);
                                     }
-                                    VideoOverlay->Release();
-                                    VideoOverlay = nullptr;
+                                    TVPShutdownAndReleaseVideoOverlay(VideoOverlay);
                                     if(Bitmap[0]) { delete Bitmap[0]; Bitmap[0] = nullptr; }
                                     if(Bitmap[1]) { delete Bitmap[1]; Bitmap[1] = nullptr; }
                                     BmpBits[0] = BmpBits[1] = nullptr;

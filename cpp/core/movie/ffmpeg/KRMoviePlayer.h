@@ -27,6 +27,8 @@ public:
 
     void Release() override;
 
+    void ShutdownPlayer() override;
+
     void SetVisible(bool b) override { Visible = b; }
 
     void Play() override { m_pPlayer->Play(); }

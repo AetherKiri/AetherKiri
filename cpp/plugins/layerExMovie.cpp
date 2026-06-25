@@ -140,6 +140,8 @@ layerExMovie::~layerExMovie() {
 
 void layerExMovie::clearMovie() {
     if(VideoOverlay) {
+        VideoOverlay->ClearVideoBuffer();
+        VideoOverlay->ShutdownPlayer();
         VideoOverlay->Release(), VideoOverlay = nullptr;
     }
     if(in) {
