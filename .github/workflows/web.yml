@@ -1,6 +1,9 @@
 name: Web Build
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
@@ -181,7 +184,7 @@ jobs:
           retention-days: 7
 
       - name: Save vcpkg cache
-        if: always() && steps.restore-vcpkg-bundle.outputs.restored != '1' && steps.restore-vcpkg.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg-bundle.outputs.restored != '1' && steps.restore-vcpkg.outputs.cache-matched-key == ''
         uses: actions/cache/save@v5
         with:
           path: |
@@ -190,14 +193,14 @@ jobs:
           key: ${{ runner.os }}-web-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
 
       - name: Save Emscripten cache
-        if: always() && steps.restore-emsdk.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-emsdk.outputs.cache-matched-key == ''
         uses: actions/cache/save@v5
         with:
           path: .devtools/emsdk
           key: ${{ runner.os }}-emsdk-${{ env.EMSDK_VERSION }}
 
       - name: Save ccache
-        if: always() && steps.restore-ccache.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
         uses: actions/cache/save@v5
         with:
           path: .ccache
