@@ -214,3 +214,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE spdlog::spdlog)
 
 find_package(expat CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE expat::expat)
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE ZLIB::ZLIB)

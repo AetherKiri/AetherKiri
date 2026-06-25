@@ -121,9 +121,13 @@ var black_frame_last_log_msec := 0
 var black_frame_guard_enabled := false
 var cli_probe_script := ""
 var verbose_render_log := false
+var diagnostics_enabled := false
+var ui_log_enabled := false
 var web_auto_start_attempted := false
 var perf_log_file: FileAccess
 var log_lines: PackedStringArray = []
+var log_view_dirty := false
+var log_view_flush_accum := 0.0
 var suppress_mouse_until_msec := 0
 var active_touch_points := {}
 var active_mouse_buttons := {}
@@ -147,6 +151,7 @@ const LOG_DRAIN_INTERVAL := 0.50
 const STARTUP_POLL_INTERVAL := 0.16
 const PERF_UPDATE_INTERVAL := 0.25
 const PERF_LOG_INTERVAL := 2.0
+const UI_LOG_FLUSH_INTERVAL := 0.50
 const MAX_LOG_LINES := 240
 const RENDER_SURFACE_SIZE := Vector2i(1920, 1080)
 const RENDER_SURFACE_MAX_SIZE := Vector2i(1920, 1080)
@@ -348,6 +353,17 @@ func _load_shell_settings() -> void:
     export_scripts = bool(cfg.get_value("developer", "export_scripts", export_scripts))
     log_alerts = bool(cfg.get_value("developer", "log_alerts", log_alerts))
     error_dialog_logs = bool(cfg.get_value("developer", "error_dialog_logs", error_dialog_logs))
+
+func _configure_runtime_diagnostics() -> void:
+    diagnostics_enabled = _runtime_flag("AETHERKIRI_DIAGNOSTICS")
+    diagnostics_enabled = diagnostics_enabled or device_probe_enabled
+    diagnostics_enabled = diagnostics_enabled or verbose_render_log
+    diagnostics_enabled = diagnostics_enabled or trace_log
+    diagnostics_enabled = diagnostics_enabled or frame_probe_enabled
+    diagnostics_enabled = diagnostics_enabled or input_trace_enabled
+    diagnostics_enabled = diagnostics_enabled or frame_spike_ms > 0.0
+    diagnostics_enabled = diagnostics_enabled or perf_log_file != null
+    ui_log_enabled = _runtime_flag("AETHERKIRI_UI_LOG")
 
 func _normalize_backend_name(value: String) -> String:
     var backend_name := value.strip_edges()
@@ -752,7 +768,7 @@ func _build_loading_panel() -> void:
     title.add_theme_color_override("font_color", Color(0.95, 0.93, 0.86, 1))
     box.add_child(title)
 
-    if not _mobile_runtime():
+    if ui_log_enabled and not _mobile_runtime():
         log_view = TextEdit.new()
         log_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         log_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2290,6 +2306,7 @@ func _ready() -> void:
         ProjectSettings.get_setting(SETTINGS_KEY, "Godot Native")
     ))
     _load_shell_settings()
+    _configure_runtime_diagnostics()
     var env_backend := _runtime_string("AETHERKIRI_BACKEND", "")
     if not env_backend.is_empty():
         selected_backend = _normalize_backend_name(env_backend)
@@ -3137,13 +3154,15 @@ func _apply_global_dpi_scale() -> void:
 
 func _process(delta: float) -> void:
     _fit_full_rects()
+    _flush_log_view_if_needed(delta)
     var startup_state := cached_startup_state
     if game_running:
         _sync_player_surface_size(false)
-        log_drain_accum += delta
-        if log_drain_accum >= LOG_DRAIN_INTERVAL:
-            log_drain_accum = 0.0
-            _drain_logs()
+        if _should_process_runtime_logs():
+            log_drain_accum += delta
+            if log_drain_accum >= LOG_DRAIN_INTERVAL:
+                log_drain_accum = 0.0
+                _drain_logs()
 
         if app_lifecycle_paused:
             return
@@ -3216,24 +3235,27 @@ func _process(delta: float) -> void:
     state_log_accum += delta
     if game_running and state_log_accum >= 1.0:
         state_log_accum = 0.0
-        var state_line := "main_state startup=%d last_result=%s last_error=\"%s\" texture=%s texture_size=%dx%d surface_mode=%s surface=%dx%d" % [
-            startup_state,
-            player.get_last_result(),
-            player.get_last_error(),
-            player.get_frame_texture_backend(),
-            last_texture_size.x,
-            last_texture_size.y,
-            render_surface_mode,
-            current_surface_size.x,
-            current_surface_size.y,
-        ]
-        print(state_line)
-        _write_probe_marker(state_line)
-        if perf_log_file != null:
-            perf_log_file.store_line(state_line)
-            perf_log_file.flush()
+        if _should_emit_runtime_perf_logs():
+            var state_line := "main_state startup=%d last_result=%s last_error=\"%s\" texture=%s texture_size=%dx%d surface_mode=%s surface=%dx%d" % [
+                startup_state,
+                player.get_last_result(),
+                player.get_last_error(),
+                player.get_frame_texture_backend(),
+                last_texture_size.x,
+                last_texture_size.y,
+                render_surface_mode,
+                current_surface_size.x,
+                current_surface_size.y,
+            ]
+            print(state_line)
+            _write_probe_marker(state_line)
+            if perf_log_file != null:
+                perf_log_file.store_line(state_line)
+                perf_log_file.flush()
     if perf_accum >= PERF_UPDATE_INTERVAL:
         perf_accum = 0.0
+        if not perf.visible and not verbose_render_log:
+            return
         var frame_ms := delta * 1000.0
         var renderer: String = selected_backend
         if game_running and startup_state == STARTUP_SUCCEEDED:
@@ -3242,6 +3264,8 @@ func _process(delta: float) -> void:
         if verbose_render_log and game_running and not renderer.is_empty() and renderer_summary != last_renderer_info_logged:
             last_renderer_info_logged = renderer_summary
             _append_log("Renderer info: %s" % renderer)
+        if not perf.visible:
+            return
         var fallback := _renderer_fallback(renderer)
         var texture_backend: String = String(player.get_frame_texture_backend()) if game_running else "none"
         perf.text = "Backend: %s | FPS: %d | Frame: %.2f ms | Texture: %s | Size: %dx%d | Surface: %s %dx%d | Fallback: %s | Errors: %d" % [
@@ -3258,6 +3282,8 @@ func _process(delta: float) -> void:
             render_errors,
         ]
 func _log_live_perf(delta: float, tick_ms: float, update_ms: float) -> void:
+    if not _should_emit_runtime_perf_logs():
+        return
     perf_log_accum += delta
     if perf_log_accum < perf_log_interval:
         return
@@ -3536,6 +3562,8 @@ func _on_open_game() -> void:
     game_running = true
     app_lifecycle_paused = false
     log_lines.clear()
+    log_view_dirty = false
+    log_view_flush_accum = 0.0
     _clear_game_input_capture()
     if log_view != null:
         log_view.text = ""
@@ -3702,8 +3730,37 @@ func _drain_logs() -> void:
     var logs: String = String(player.drain_startup_logs())
     if logs.is_empty():
         return
+    if not _should_process_runtime_logs():
+        return
     for line in logs.split("\n", false):
         _append_log(line)
+
+func _should_process_runtime_logs() -> bool:
+    return diagnostics_enabled or ui_log_enabled or log_alerts or error_dialog_logs
+
+func _should_collect_log_lines() -> bool:
+    return ui_log_enabled or error_dialog_logs
+
+func _should_emit_runtime_perf_logs() -> bool:
+    return diagnostics_enabled or perf_log_file != null
+
+func _flush_log_view_if_needed(delta: float) -> void:
+    if not ui_log_enabled or not log_view_dirty or log_view == null:
+        return
+    if game_running and not log_view.is_visible_in_tree():
+        return
+    log_view_flush_accum += delta
+    if game_running and log_view_flush_accum < UI_LOG_FLUSH_INTERVAL:
+        return
+    _flush_log_view()
+
+func _flush_log_view() -> void:
+    if log_view == null:
+        return
+    log_view_flush_accum = 0.0
+    log_view_dirty = false
+    log_view.text = "\n".join(log_lines)
+    call_deferred("_scroll_log_to_bottom")
 
 func _update_frame() -> void:
     if present_hold_frames > 0:
@@ -4634,15 +4691,16 @@ func _unhandled_input(event: InputEvent) -> void:
         player.send_key_event(key.pressed, key.keycode, key.get_modifiers_mask(), key.unicode)
 
 func _append_log(line: String) -> void:
-    _write_probe_marker("log %s" % line)
+    if device_probe_enabled:
+        _write_probe_marker("log %s" % line)
     _maybe_show_log_alert(line)
+    if not _should_collect_log_lines():
+        return
     log_lines.append(line)
     while log_lines.size() > MAX_LOG_LINES:
         log_lines.remove_at(0)
-    if log_view == null:
-        return
-    log_view.text = "\n".join(log_lines)
-    call_deferred("_scroll_log_to_bottom")
+    if ui_log_enabled and log_view != null:
+        log_view_dirty = true
 
 func _scroll_log_to_bottom() -> void:
     if log_view == null:

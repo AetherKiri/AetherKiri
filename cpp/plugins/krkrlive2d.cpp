@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <spdlog/spdlog.h>
+#include <zlib.h>
 #if defined(__ANDROID__)
 #include <android/log.h>
 #define L2D_LOGI(...) __android_log_print(ANDROID_LOG_INFO, "krkrlive2d", __VA_ARGS__)
@@ -28,9 +29,6 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
-
-#include <minizip/unzip.h>
-#include <minizip/ioapi.h>
 
 // Cubism SDK
 #include "CubismFramework.hpp"
@@ -115,82 +113,127 @@ void EnsureCubismInitialized() {
 
 // ---------------------------------------------------------------------------
 // ZIP helper — extract ALL entries from a ZIP archive in one pass.
-// Uses minizip custom IO to read directly from memory (no temp file).
+// Keep this local to avoid mixing the project's ZIPArchive symbols with minizip.
 // ---------------------------------------------------------------------------
 using ZipArchive = std::unordered_map<std::string, std::vector<uint8_t>>;
 
-struct MemZipStream {
-    const uint8_t *data;
-    size_t         size;
-    size_t         pos;
-};
+static uint16_t ReadLe16(const uint8_t *p) {
+    return static_cast<uint16_t>(p[0]) |
+           static_cast<uint16_t>(p[1] << 8);
+}
 
-static voidpf ZCALLBACK mem_open_func(voidpf opaque, const char *, int) {
-    return opaque;
+static uint32_t ReadLe32(const uint8_t *p) {
+    return static_cast<uint32_t>(p[0]) |
+           (static_cast<uint32_t>(p[1]) << 8) |
+           (static_cast<uint32_t>(p[2]) << 16) |
+           (static_cast<uint32_t>(p[3]) << 24);
 }
-static uLong ZCALLBACK mem_read_func(voidpf, voidpf stream, void *buf, uLong sz) {
-    auto *s = static_cast<MemZipStream *>(stream);
-    size_t avail = (s->pos < s->size) ? s->size - s->pos : 0;
-    size_t n = (sz < avail) ? sz : avail;
-    if (n > 0) { std::memcpy(buf, s->data + s->pos, n); s->pos += n; }
-    return static_cast<uLong>(n);
-}
-static uLong ZCALLBACK mem_write_func(voidpf, voidpf, const void *, uLong) {
-    return 0;
-}
-static long ZCALLBACK mem_tell_func(voidpf, voidpf stream) {
-    return static_cast<long>(static_cast<MemZipStream *>(stream)->pos);
-}
-static long ZCALLBACK mem_seek_func(voidpf, voidpf stream, uLong offset, int origin) {
-    auto *s = static_cast<MemZipStream *>(stream);
-    size_t newpos = 0;
-    switch (origin) {
-    case ZLIB_FILEFUNC_SEEK_SET: newpos = offset; break;
-    case ZLIB_FILEFUNC_SEEK_CUR: newpos = s->pos + offset; break;
-    case ZLIB_FILEFUNC_SEEK_END: newpos = s->size + offset; break;
-    default: return -1;
+
+static bool InflateRawDeflate(const uint8_t *input, size_t inputSize,
+                              std::vector<uint8_t> &output) {
+    if (inputSize > std::numeric_limits<uInt>::max() ||
+        output.size() > std::numeric_limits<uInt>::max()) {
+        return false;
     }
-    if (newpos > s->size) return -1;
-    s->pos = newpos;
-    return 0;
+
+    z_stream stream{};
+    stream.next_in =
+        const_cast<Bytef *>(reinterpret_cast<const Bytef *>(input));
+    stream.avail_in = static_cast<uInt>(inputSize);
+    stream.next_out = reinterpret_cast<Bytef *>(output.data());
+    stream.avail_out = static_cast<uInt>(output.size());
+
+    if (inflateInit2(&stream, -MAX_WBITS) != Z_OK) return false;
+    const int ret = inflate(&stream, Z_FINISH);
+    const bool ok = ret == Z_STREAM_END &&
+                    stream.total_out == static_cast<uLong>(output.size());
+    inflateEnd(&stream);
+    return ok;
 }
-static int ZCALLBACK mem_close_func(voidpf, voidpf) { return 0; }
-static int ZCALLBACK mem_error_func(voidpf, voidpf) { return 0; }
 
 static bool ExtractZipToMemory(const uint8_t *zipData, size_t zipSize,
                                ZipArchive &out) {
     out.clear();
-    MemZipStream ms = { zipData, zipSize, 0 };
+    if (!zipData || zipSize < 22) return false;
 
-    zlib_filefunc_def funcs = {};
-    funcs.zopen_file  = mem_open_func;
-    funcs.zread_file  = mem_read_func;
-    funcs.zwrite_file = mem_write_func;
-    funcs.ztell_file  = mem_tell_func;
-    funcs.zseek_file  = mem_seek_func;
-    funcs.zclose_file = mem_close_func;
-    funcs.zerror_file = mem_error_func;
-    funcs.opaque      = &ms;
+    constexpr uint32_t kEndCentralDirSig = 0x06054b50;
+    constexpr uint32_t kCentralFileSig = 0x02014b50;
+    constexpr uint32_t kLocalFileSig = 0x04034b50;
+    const size_t searchStart =
+        zipSize > 0xffffu + 22u ? zipSize - (0xffffu + 22u) : 0;
 
-    unzFile zf = unzOpen2(nullptr, &funcs);
-    if (!zf) return false;
-
-    int ret = unzGoToFirstFile(zf);
-    while (ret == UNZ_OK) {
-        char name[512];
-        unz_file_info info;
-        unzGetCurrentFileInfo(zf, &info, name, sizeof(name), nullptr, 0, nullptr, 0);
-        if (info.uncompressed_size > 0 && unzOpenCurrentFile(zf) == UNZ_OK) {
-            std::vector<uint8_t> buf(info.uncompressed_size);
-            int bytesRead = unzReadCurrentFile(zf, buf.data(),
-                                               static_cast<unsigned>(buf.size()));
-            if (bytesRead == static_cast<int>(buf.size()))
-                out[std::string(name)] = std::move(buf);
-            unzCloseCurrentFile(zf);
+    size_t eocd = std::string::npos;
+    for (size_t pos = zipSize - 22;; --pos) {
+        if (ReadLe32(zipData + pos) == kEndCentralDirSig) {
+            eocd = pos;
+            break;
         }
-        ret = unzGoToNextFile(zf);
+        if (pos == searchStart) break;
     }
-    unzClose(zf);
+    if (eocd == std::string::npos) return false;
+
+    const uint16_t entryCount = ReadLe16(zipData + eocd + 10);
+    const uint32_t centralSize = ReadLe32(zipData + eocd + 12);
+    const uint32_t centralOffset = ReadLe32(zipData + eocd + 16);
+    if (centralOffset == 0xffffffffu || centralSize == 0xffffffffu) {
+        spdlog::warn("krkrlive2d: zip64 Live2D archives are unsupported");
+        return false;
+    }
+    if (static_cast<size_t>(centralOffset) + centralSize > zipSize) {
+        return false;
+    }
+
+    size_t pos = centralOffset;
+    for (uint16_t entry = 0; entry < entryCount; ++entry) {
+        if (pos + 46 > zipSize || ReadLe32(zipData + pos) != kCentralFileSig) {
+            return false;
+        }
+
+        const uint16_t method = ReadLe16(zipData + pos + 10);
+        const uint32_t compressedSize = ReadLe32(zipData + pos + 20);
+        const uint32_t uncompressedSize = ReadLe32(zipData + pos + 24);
+        const uint16_t nameLen = ReadLe16(zipData + pos + 28);
+        const uint16_t extraLen = ReadLe16(zipData + pos + 30);
+        const uint16_t commentLen = ReadLe16(zipData + pos + 32);
+        const uint32_t localOffset = ReadLe32(zipData + pos + 42);
+        const size_t nextPos = pos + 46u + nameLen + extraLen + commentLen;
+        if (nextPos > zipSize || pos + 46u + nameLen > zipSize) return false;
+
+        std::string name(reinterpret_cast<const char *>(zipData + pos + 46),
+                         nameLen);
+        pos = nextPos;
+        if (name.empty() || name.back() == '/') continue;
+        if (uncompressedSize == 0) {
+            out[name] = {};
+            continue;
+        }
+        if (static_cast<size_t>(localOffset) + 30u > zipSize ||
+            ReadLe32(zipData + localOffset) != kLocalFileSig) {
+            return false;
+        }
+        const uint16_t localNameLen = ReadLe16(zipData + localOffset + 26);
+        const uint16_t localExtraLen = ReadLe16(zipData + localOffset + 28);
+        const size_t dataOffset = static_cast<size_t>(localOffset) + 30u +
+                                  localNameLen + localExtraLen;
+        if (dataOffset + compressedSize > zipSize) return false;
+
+        std::vector<uint8_t> bytes(uncompressedSize);
+        const uint8_t *compressed = zipData + dataOffset;
+        if (method == 0) {
+            if (compressedSize != uncompressedSize) return false;
+            std::memcpy(bytes.data(), compressed, uncompressedSize);
+        } else if (method == 8) {
+            if (!InflateRawDeflate(compressed, compressedSize, bytes)) {
+                spdlog::warn("krkrlive2d: failed to inflate {}", name);
+                continue;
+            }
+        } else {
+            spdlog::warn("krkrlive2d: unsupported zip method {} for {}",
+                         method, name);
+            continue;
+        }
+        out[name] = std::move(bytes);
+    }
     return !out.empty();
 }
 

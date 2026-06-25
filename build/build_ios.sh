@@ -147,6 +147,7 @@ combine_ios_static_extension() {
     local triplet="$2"
     local vcpkg_triplet_root="$CMAKE_BUILD_DIR/vcpkg_installed/$triplet"
     local vcpkg_lib_dir="$vcpkg_triplet_root/lib"
+    local cubism_core_lib="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphoneos/libLive2DCubismCore.a"
     local godot_cpp_config="template_release"
     local godot_cpp_lib_dir="$vcpkg_lib_dir"
     if [[ "$BUILD_TYPE_LOWER" == "debug" ]]; then
@@ -180,12 +181,16 @@ combine_ios_static_extension() {
 
     if [[ "$triplet" == "x64-ios-simulator" ]]; then
         godot_cpp_lib="$godot_cpp_lib_dir/libgodot-cpp.ios.$godot_cpp_config.x86_64.a"
+        cubism_core_lib="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphonesimulator-x86_64/libLive2DCubismCore.a"
+    elif [[ "$triplet" == "arm64-ios-simulator" ]]; then
+        cubism_core_lib="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphonesimulator-arm64/libLive2DCubismCore.a"
     fi
     if [[ ! -f "$godot_cpp_lib" ]]; then
         echo "Error: missing Godot C++ iOS archive for $BUILD_TYPE_LOWER build: $godot_cpp_lib" >&2
         exit 1
     fi
     libs=("$godot_cpp_lib" "${libs[@]}")
+    libs+=("$cubism_core_lib")
 
     while IFS= read -r lib; do
         libs+=("$lib")
