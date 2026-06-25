@@ -9,7 +9,13 @@
 #include <algorithm>
 #include <cstdlib>
 #include <mutex>
+#include <string>
 #include <vector>
+
+#if defined(__GNUC__)
+extern "C" bool TVPGodotLive2DRenderToLayer(iTJSDispatch2 *layerDispatch)
+    __attribute__((weak));
+#endif
 
 // Stub modules — register empty entries so Plugins.link() succeeds.
 // The engine already has built-in support for the functionality these
@@ -122,6 +128,15 @@ NCB_PRE_REGIST_CALLBACK(version_stub);
 #undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("krkrgles.dll")
 namespace {
+
+static bool GlesCompatRenderGodotLive2D(iTJSDispatch2 *layerDispatch) {
+#if defined(__GNUC__)
+    if(TVPGodotLive2DRenderToLayer)
+        return TVPGodotLive2DRenderToLayer(layerDispatch);
+#endif
+    (void)layerDispatch;
+    return false;
+}
 
 static void SetGlesCompatInt(tTJSVariant *result, tjs_int value = 0) {
     if(result)
@@ -892,6 +907,29 @@ static tjs_error GlesCompatRenderCb(tTJSVariant *result, tjs_int,
     return TJS_S_OK;
 }
 
+static tjs_error GlesCompatCaptureCb(tTJSVariant *result, tjs_int numparams,
+                                     tTJSVariant **param,
+                                     iTJSDispatch2 *objthis) {
+    LogGlesCompatArgsOnce(TJS_W("capture"), numparams, param);
+    iTJSDispatch2 *layerDispatch = GlesCompatFindLayerInParams(numparams, param);
+    if(layerDispatch)
+        g_glesCompatRegisteredLayer = layerDispatch;
+	    GlesCompatRegisterRenderable(
+	        numparams, param, reinterpret_cast<uintptr_t>(objthis),
+	        TJS_W("capture"));
+	    GlesCompatRenderMotionPlayers(TJS_W("capture"));
+	    if(layerDispatch)
+	        GlesCompatRenderGodotLive2D(layerDispatch);
+	    GlesCompatIncrementRenderCount(objthis);
+    if(result) {
+        if(numparams > 0 && param && param[0])
+            *result = *param[0];
+        else
+            *result = true;
+    }
+    return TJS_S_OK;
+}
+
 static tjs_error GlesCompatGlesEntryCb(tTJSVariant *result, tjs_int numparams,
                                        tTJSVariant **param,
                                        iTJSDispatch2 *objthis) {
@@ -978,13 +1016,10 @@ static tjs_error CreateGlesCompatModule(tTJSVariant *result, tjs_int width,
     SetGlesCompatMethod(dict, TJS_W("render"), GlesCompatRenderCb);
     SetGlesCompatMethod(dict, TJS_W("glesEntry"), GlesCompatGlesEntryCb);
     SetGlesCompatMethod(dict, TJS_W("glesRemove"), GlesCompatGlesRemoveCb);
-    SetGlesCompatMethod(dict, TJS_W("capture"), GlesCompatReturnFirstArgOrTrueCb);
-    SetGlesCompatMethod(dict, TJS_W("captureScreen"),
-                        GlesCompatReturnFirstArgOrTrueCb);
-    SetGlesCompatMethod(dict, TJS_W("glesCapture"),
-                        GlesCompatReturnFirstArgOrTrueCb);
-    SetGlesCompatMethod(dict, TJS_W("glesCaptureScreen"),
-                        GlesCompatReturnFirstArgOrTrueCb);
+    SetGlesCompatMethod(dict, TJS_W("capture"), GlesCompatCaptureCb);
+    SetGlesCompatMethod(dict, TJS_W("captureScreen"), GlesCompatCaptureCb);
+    SetGlesCompatMethod(dict, TJS_W("glesCapture"), GlesCompatCaptureCb);
+    SetGlesCompatMethod(dict, TJS_W("glesCaptureScreen"), GlesCompatCaptureCb);
     SetGlesCompatMethod(dict, TJS_W("copyLayer"), GlesCompatCopyLayerCb);
     SetGlesCompatMethod(dict, TJS_W("glesCopyLayer"), GlesCompatCopyLayerCb);
     SetGlesCompatMethod(dict, TJS_W("drawLayer"), GlesCompatDrawLayerCb);
@@ -1101,6 +1136,30 @@ public:
             ++self->renderCount_;
         if(result)
             *result = true;
+        return TJS_S_OK;
+    }
+
+    static tjs_error captureCb(tTJSVariant *result, tjs_int numparams,
+                               tTJSVariant **param, GLESAdaptor *self) {
+        LogGlesCompatArgsOnce(TJS_W("adaptor.capture"), numparams, param);
+        iTJSDispatch2 *layerDispatch =
+            GlesCompatFindLayerInParams(numparams, param);
+        if(layerDispatch)
+            g_glesCompatRegisteredLayer = layerDispatch;
+	    GlesCompatRegisterRenderable(
+	        numparams, param, reinterpret_cast<uintptr_t>(self),
+	        TJS_W("adaptor.capture"));
+	    GlesCompatRenderMotionPlayers(TJS_W("adaptor.capture"));
+	    if(layerDispatch)
+	        GlesCompatRenderGodotLive2D(layerDispatch);
+	    if(self)
+	        ++self->renderCount_;
+        if(result) {
+            if(numparams > 0 && param && param[0])
+                *result = *param[0];
+            else
+                *result = true;
+        }
         return TJS_S_OK;
     }
 
@@ -1230,6 +1289,12 @@ public:
             result, numparams, param, self ? &self->adaptor_ : nullptr);
     }
 
+    static tjs_error captureCb(tTJSVariant *result, tjs_int numparams,
+                               tTJSVariant **param, OGLDrawDevice *self) {
+        return GLESAdaptor::captureCb(
+            result, numparams, param, self ? &self->adaptor_ : nullptr);
+    }
+
     static tjs_error finalizeCb(tTJSVariant *result, tjs_int numparams,
                                 tTJSVariant **param, OGLDrawDevice *self) {
         return GLESAdaptor::finalizeCb(
@@ -1294,10 +1359,10 @@ NCB_REGISTER_CLASS(GLESAdaptor) {
     NCB_METHOD_RAW_CALLBACK(beginScene, &GLESAdaptor::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(endScene, &GLESAdaptor::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(entryUpdateObject, &GLESAdaptor::entryUpdateObjectCb, 0);
-    NCB_METHOD_RAW_CALLBACK(capture, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesCapture, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(captureScreen, &GLESAdaptor::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesCaptureScreen, &GLESAdaptor::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(capture, &GLESAdaptor::captureCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCapture, &GLESAdaptor::captureCb, 0);
+    NCB_METHOD_RAW_CALLBACK(captureScreen, &GLESAdaptor::captureCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCaptureScreen, &GLESAdaptor::captureCb, 0);
     NCB_METHOD_RAW_CALLBACK(copyLayer, &GLESAdaptor::copyLayerCb, 0);
     NCB_METHOD_RAW_CALLBACK(glesCopyLayer, &GLESAdaptor::copyLayerCb, 0);
     NCB_METHOD_RAW_CALLBACK(drawLayer, &GLESAdaptor::drawLayerCb, 0);
@@ -1325,10 +1390,10 @@ NCB_REGISTER_CLASS(OGLDrawDevice) {
     NCB_METHOD_RAW_CALLBACK(beginScene, &OGLDrawDevice::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(endScene, &OGLDrawDevice::noOpCb, 0);
     NCB_METHOD_RAW_CALLBACK(entryUpdateObject, &OGLDrawDevice::entryUpdateObjectCb, 0);
-    NCB_METHOD_RAW_CALLBACK(capture, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesCapture, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(captureScreen, &OGLDrawDevice::noOpCb, 0);
-    NCB_METHOD_RAW_CALLBACK(glesCaptureScreen, &OGLDrawDevice::noOpCb, 0);
+    NCB_METHOD_RAW_CALLBACK(capture, &OGLDrawDevice::captureCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCapture, &OGLDrawDevice::captureCb, 0);
+    NCB_METHOD_RAW_CALLBACK(captureScreen, &OGLDrawDevice::captureCb, 0);
+    NCB_METHOD_RAW_CALLBACK(glesCaptureScreen, &OGLDrawDevice::captureCb, 0);
     NCB_METHOD_RAW_CALLBACK(copyLayer, &OGLDrawDevice::copyLayerCb, 0);
     NCB_METHOD_RAW_CALLBACK(glesCopyLayer, &OGLDrawDevice::copyLayerCb, 0);
     NCB_METHOD_RAW_CALLBACK(drawLayer, &OGLDrawDevice::drawLayerCb, 0);

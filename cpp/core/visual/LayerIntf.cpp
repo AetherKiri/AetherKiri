@@ -4434,7 +4434,6 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
                 static_cast<int>(MainImage->GetHeight()),
                 static_cast<unsigned int>(colorkey));
         }
-
         if(!provincename.IsEmpty()) {
             // province image exists
             AllocateProvinceImage();

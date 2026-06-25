@@ -20,6 +20,16 @@ struct TVPGodotGpuBridgeCallbacks {
                            const tTVPRect *clip_rect,
                            const tTVPPointD *dst_points,
                            const tTVPPointD *src_points);
+    bool (*draw_triangles)(uint64_t dst, uint64_t src, uint32_t triangle_count,
+                           const tTVPRect *clip_rect,
+                           const tTVPPointD *dst_points,
+                           const tTVPPointD *src_points, float opacity,
+                           uint32_t blend_mode);
+    bool (*draw_masked_triangles)(
+        uint64_t dst, uint64_t src, uint64_t mask, uint32_t triangle_count,
+        const tTVPRect *clip_rect, const tTVPPointD *dst_points,
+        const tTVPPointD *src_points, const tTVPPointD *mask_points,
+        float opacity, uint32_t blend_mode, bool inverted_mask);
     bool (*blend_rect)(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
                        const tTVPRect *src_rect, uint32_t mode,
                        int opacity, uint32_t color);

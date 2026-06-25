@@ -530,16 +530,11 @@ void tTJSNI_VideoOverlay::WndProc(NativeEvent &ev) {
                                         perLoop); // fire period event
                                                   // by loop rewind
                                 } else {
-                                    TVPAddLog(TJS_W("(info) Video EC_COMPLETE: releasing video resources"));
-                                    SetStatusAsync(ssStop);
+                                    // Keep the layer bitmaps alive until script-side
+                                    // Close(); Layer1/Layer2 may still reference the
+                                    // most recent video frame after completion.
                                     VideoOverlay->Stop();
-                                    if(CachedOverlay) {
-                                        TVPShutdownAndReleaseVideoOverlay(CachedOverlay);
-                                    }
-                                    TVPShutdownAndReleaseVideoOverlay(VideoOverlay);
-                                    if(Bitmap[0]) { delete Bitmap[0]; Bitmap[0] = nullptr; }
-                                    if(Bitmap[1]) { delete Bitmap[1]; Bitmap[1] = nullptr; }
-                                    BmpBits[0] = BmpBits[1] = nullptr;
+                                    SetStatusAsync(ssStop); // All data has been rendered
                                 }
                             }
                             break;
