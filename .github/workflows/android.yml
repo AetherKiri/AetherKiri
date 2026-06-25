@@ -150,22 +150,6 @@ jobs:
           signing_dir="${RUNNER_TEMP}/android-signing"
           mkdir -p "$signing_dir"
 
-          debug_keystore="${signing_dir}/debug.keystore"
-          keytool -genkeypair \
-            -keystore "$debug_keystore" \
-            -storepass android \
-            -keypass android \
-            -alias androiddebugkey \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
-          {
-            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$debug_keystore"
-            echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey"
-            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android"
-          } >> "$GITHUB_ENV"
-
           release_secret_count=0
           [[ -n "${ANDROID_RELEASE_KEYSTORE_BASE64}" ]] && release_secret_count=$((release_secret_count + 1))
           [[ -n "${ANDROID_RELEASE_KEYSTORE_ALIAS}" ]] && release_secret_count=$((release_secret_count + 1))
@@ -183,7 +167,11 @@ jobs:
             -keystore "$release_keystore" \
             -storepass "$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
             -alias "$ANDROID_RELEASE_KEYSTORE_ALIAS" >/dev/null
+            
           {
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$release_keystore"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=$ANDROID_RELEASE_KEYSTORE_ALIAS"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=$ANDROID_RELEASE_KEYSTORE_PASSWORD"
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$release_keystore"
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$ANDROID_RELEASE_KEYSTORE_ALIAS"
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$ANDROID_RELEASE_KEYSTORE_PASSWORD"
