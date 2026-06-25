@@ -31,7 +31,7 @@
 
 ## Overview
 
-AetherKiri runs KiriKiri2 content inside a Godot 4.6 application shell. The
+AetherKiri runs KiriKiri2 content inside a Godot 4.7 application shell. The
 runtime is split into a native C++17 engine core, a C ABI bridge, and a Godot
 GDExtension host that owns the product UI, render resources, settings, export
 presets, and platform packaging.
@@ -52,7 +52,7 @@ Godot App Shell
 
 ## Highlights
 
-- Godot 4.6 app shell with native GDExtension integration.
+- Godot 4.7 app shell with native GDExtension integration.
 - C++17 KiriKiri2 runtime core with visual, audio, storage, VM, and plugin
   support.
 - Export paths for macOS, iOS/iPadOS, Android, and Web.
