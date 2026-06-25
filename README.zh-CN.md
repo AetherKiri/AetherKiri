@@ -31,7 +31,7 @@
 
 ## 项目概览
 
-AetherKiri 用 Godot 4.6 作为应用外壳，在其中运行 KiriKiri2 内容。项目由
+AetherKiri 用 Godot 4.7 作为应用外壳，在其中运行 KiriKiri2 内容。项目由
 C++17 引擎核心、C ABI 桥接层和 Godot GDExtension 宿主组成；Godot 侧负责
 产品 UI、渲染资源、设置页、导出配置和平台打包。
 
@@ -50,7 +50,7 @@ Godot App Shell
 
 ## 亮点
 
-- Godot 4.6 应用外壳，使用原生 GDExtension 集成。
+- Godot 4.7 应用外壳，使用原生 GDExtension 集成。
 - C++17 KiriKiri2 运行时核心，覆盖视觉、音频、存储、VM 和插件支持。
 - 已接入 macOS、iOS/iPadOS、Android 和 Web 导出链路。
 - 可在运行时选择渲染后端，并持久化设置。

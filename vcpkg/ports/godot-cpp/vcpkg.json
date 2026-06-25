@@ -1,6 +1,6 @@
 {
   "name": "godot-cpp",
-  "version": "4.4",
+  "version": "10.0.0-rc1",
   "description": "C++ bindings for the Godot script API",
   "homepage": "https://github.com/godotengine/godot-cpp",
   "license": "MIT",

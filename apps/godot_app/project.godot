@@ -16,9 +16,9 @@ game_path=""
 
 config/name="AetherKiri"
 run/main_scene="res://scenes/main.tscn"
-config/features=PackedStringArray("4.6")
+config/features=PackedStringArray("4.7")
+boot_splash/stretch_mode=0
 config/icon="res://assets/icon.png"
-boot_splash/fullsize=false
 
 [display]
 
@@ -26,8 +26,6 @@ window/size/viewport_width=1280
 window/size/viewport_height=720
 window/size/window_width_override=2240
 window/size/window_height_override=1260
-window/dpi/allow_hidpi=true
-window/stretch/mode="disabled"
 
 [editor_plugins]
 
@@ -35,11 +33,7 @@ enabled=PackedStringArray()
 
 [rendering]
 
-renderer/rendering_method="mobile"
-renderer/rendering_method.mobile="mobile"
-renderer/rendering_method.android="gl_compatibility"
-renderer/rendering_method.web="gl_compatibility"
-rendering_device/driver.ios="metal"
 rendering_device/driver.android="opengl3"
-textures/canvas_textures/default_texture_filter=1
+renderer/rendering_method="mobile"
 textures/vram_compression/import_etc2_astc=true
+renderer/rendering_method.android="gl_compatibility"
