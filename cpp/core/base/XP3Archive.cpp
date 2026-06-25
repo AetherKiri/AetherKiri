@@ -57,6 +57,15 @@ static bool TVPArchiveHandleCacheInit = false;
 static bool TVPArchiveHandleCacheShutdown = false;
 static tTJSCriticalSection TVPArchiveHandleCacheCS;
 
+static void TVPDeleteArchiveStreamNoThrow(tTJSBinaryStream *&stream) noexcept {
+    tTJSBinaryStream *stream_to_delete = stream;
+    stream = nullptr;
+    try {
+        delete stream_to_delete;
+    } catch(...) {
+    }
+}
+
 //---------------------------------------------------------------------------
 tTJSBinaryStream *TVPGetCachedArchiveHandle(void *pointer, const ttstr &name) {
     // get cached archive file handle from the pool
@@ -134,7 +143,7 @@ tTJSBinaryStream *TVPGetCachedArchiveHandle(void *pointer, const ttstr &name) {
     // free oldest cell and fill it
     tTVPArchiveHandleCacheItem *oldest_item =
         TVPArchiveHandleCachePool + oldest;
-    delete oldest_item->Stream, oldest_item->Stream = nullptr;
+    TVPDeleteArchiveStreamNoThrow(oldest_item->Stream);
     oldest_item->Pointer = pointer;
     oldest_item->Stream = stream;
     oldest_item->Age = ++TVPArchiveHandleCacheAge;
@@ -152,7 +161,7 @@ tTJSBinaryStream *TVPGetCachedArchiveHandle(void *pointer, const ttstr &name) {
     for(tjs_int i = 0; i < TVP_MAX_ARCHIVE_HANDLE_CACHE; i++) {
         tTVPArchiveHandleCacheItem *item = TVPArchiveHandleCachePool + i;
         if(item->Stream && item->Pointer == pointer) {
-            delete item->Stream, item->Stream = nullptr;
+            TVPDeleteArchiveStreamNoThrow(item->Stream);
             item->Pointer = nullptr;
             item->Age = 0;
         }
@@ -172,7 +181,7 @@ static void TVPFreeArchiveHandlePool() {
     for(tjs_int i = 0; i < TVP_MAX_ARCHIVE_HANDLE_CACHE; i++) {
         tTVPArchiveHandleCacheItem *item = TVPArchiveHandleCachePool + i;
         if(item->Stream) {
-            delete item->Stream, item->Stream = nullptr;
+            TVPDeleteArchiveStreamNoThrow(item->Stream);
             item->Pointer = nullptr;
             item->Age = 0;
         }
@@ -532,7 +541,12 @@ tTVPXP3Archive::tTVPXP3Archive(const ttstr &name, tTJSBinaryStream *st,
 }
 
 //---------------------------------------------------------------------------
-tTVPXP3Archive::~tTVPXP3Archive() { TVPFreeArchiveHandlePoolByPointer(this); }
+tTVPXP3Archive::~tTVPXP3Archive() {
+    try {
+        TVPFreeArchiveHandlePoolByPointer(this);
+    } catch(...) {
+    }
+}
 
 tTVPArchive *tTVPXP3Archive::Create(const ttstr &name, tTJSBinaryStream *st,
                                     bool normalizeFileName) {

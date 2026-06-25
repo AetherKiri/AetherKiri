@@ -12,6 +12,8 @@
 
 #define NCB_MODULE_NAME TJS_W("sqlite3.dll")
 
+void AetherKiriRegisterXp3SqliteVfs();
+
 namespace {
 
 std::string toUtf8(const tjs_char *text) {
@@ -137,14 +139,26 @@ void getColumnData(sqlite3_stmt *stmt, tTJSVariant &variant, int column) {
     }
 }
 
-ttstr localDatabaseName(const tjs_char *database) {
+ttstr localDatabaseName(const tjs_char *database, bool readonly, bool &useXp3) {
+    useXp3 = false;
     if(!database || *database == 0 || *database == TJS_W(':'))
         return ttstr(database ? database : TJS_W(""));
 
     ttstr filename = TVPNormalizeStorageName(ttstr(database));
-    ttstr local = TVPGetLocallyAccessibleName(filename);
+    ttstr local;
+    try {
+        local = TVPGetLocallyAccessibleName(filename);
+    } catch(...) {
+        local.Clear();
+    }
     if(filename.length() && local.length())
         return local;
+
+    if(readonly && filename.length() && TVPIsExistentStorage(filename)) {
+        AetherKiriRegisterXp3SqliteVfs();
+        useXp3 = true;
+        return filename;
+    }
 
     TVPThrowExceptionMessage(
         (ttstr(TJS_W("Unable to open the database file: ")) + filename).c_str());
@@ -156,11 +170,12 @@ ttstr localDatabaseName(const tjs_char *database) {
 class Sqlite {
 public:
     Sqlite(const tjs_char *database, bool readonly = false) {
-        const ttstr name = localDatabaseName(database);
+        bool useXp3 = false;
+        const ttstr name = localDatabaseName(database, readonly, useXp3);
         const int flags = readonly ? SQLITE_OPEN_READONLY
                                    : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
         int ret = sqlite3_open_v2(toUtf8(name.c_str()).c_str(), &db_, flags,
-                                  nullptr);
+                                  useXp3 ? "xp3" : nullptr);
         if(ret != SQLITE_OK && db_) {
             errorCode_ = ret;
             errorMessage_ =

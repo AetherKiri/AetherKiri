@@ -824,16 +824,20 @@ bool tTVPBaseBitmap::CopyRect(tjs_int x, tjs_int y, const iTVPBaseBitmap *ref,
     bmpw = ref->GetWidth();
     bmph = ref->GetHeight();
 
-    if(refrect.left < 0)
-        x -= refrect.left, refrect.left = 0;
+    if(refrect.left < 0) {
+        x -= refrect.left;
+        refrect.left = 0;
+    }
     if(refrect.right > bmpw)
         refrect.right = bmpw;
 
     if(refrect.left >= refrect.right)
         return false;
 
-    if(refrect.top < 0)
-        y -= refrect.top, refrect.top = 0;
+    if(refrect.top < 0) {
+        y -= refrect.top;
+        refrect.top = 0;
+    }
     if(refrect.bottom > bmph)
         refrect.bottom = bmph;
 
@@ -985,16 +989,20 @@ bool iTVPBaseBitmap::CopyRect(tjs_int x, tjs_int y, const iTVPBaseBitmap *ref,
     bmpw = ref->GetWidth();
     bmph = ref->GetHeight();
 
-    if(refrect.left < 0)
-        x -= refrect.left, refrect.left = 0;
+    if(refrect.left < 0) {
+        x -= refrect.left;
+        refrect.left = 0;
+    }
     if(refrect.right > bmpw)
         refrect.right = bmpw;
 
     if(refrect.left >= refrect.right)
         return false;
 
-    if(refrect.top < 0)
-        y -= refrect.top, refrect.top = 0;
+    if(refrect.top < 0) {
+        y -= refrect.top;
+        refrect.top = 0;
+    }
     if(refrect.bottom > bmph)
         refrect.bottom = bmph;
 

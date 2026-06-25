@@ -46,7 +46,8 @@ public:
     void SetPoint(int x, int y, uint32_t clr) override;
     void SetSize(unsigned int w, unsigned int h) override;
     bool IsStatic() override { return false; }
-    bool IsOpaque() override { return false; }
+    bool IsOpaque() override { return opacity_known_ && opaque_; }
+    bool HasKnownTransparency() const { return opacity_known_ && !opaque_; }
     krkr::Texture2D *GetAdapterTexture(krkr::Texture2D *origTex) override {
         return origTex;
     }
@@ -110,6 +111,11 @@ public:
     const char *GetName() override { return "GodotNative"; }
     bool GetRenderStat(unsigned int &drawCount, uint64_t &vmemsize) override;
     bool GetTextureStat(iTVPTexture2D *texture, uint64_t &vmemsize) override;
+    int EnumParameterID(const char *name) override;
+    void SetParameterUInt(int id, unsigned int Value) override;
+    void SetParameterInt(int id, int Value) override;
+    void SetParameterPtr(int id, const void *Value) override;
+    void SetParameterFloat(int id, float Value) override;
 
     void OperateRect(iTVPRenderMethod *method, iTVPTexture2D *tar,
                      iTVPTexture2D *reftar, const tTVPRect &rctar,

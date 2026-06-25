@@ -14,11 +14,11 @@ DEFAULT_MANIFEST = Path(__file__).with_name("plugin_gap_reference_plugins.txt")
 
 ALIASES = {
     "json": "json",
-    "layerExDraw": "layerExDraw",
-    "layerExPerspective": "perspective",
+    "layerexdraw": "layerexdraw",
+    "layerexperspective": "perspective",
     "libpsd": "psd",
     "psdfile": "psd",
-    "scriptsEx": "ScriptsEx",
+    "scriptsex": "scriptsex",
     "steam": "krkrsteam",
 }
 
@@ -34,26 +34,122 @@ IGNORED_REFERENCE_DIRS = {
 }
 
 
-def registered_modules(plugin_root: Path) -> set[str]:
-    names: set[str] = set()
+def normalize_plugin_name(name: str) -> str:
+    name = name.strip().lower()
+    for suffix in (".dll", ".tpm"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    return name
+
+
+def split_module_blocks(text: str) -> list[tuple[str, str]]:
+    pattern = re.compile(
+        r'(?:NCB_MODULE_NAME\s+TJS_W\("([^"]+)"\)|'
+        r'ncbCallbackAutoRegister\s+\w+\s*\(\s*TJS_W\("([^"]+)"\))'
+    )
+    matches = list(pattern.finditer(text))
+    blocks: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        module = match.group(1) or match.group(2)
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        blocks.append((normalize_plugin_name(module), text[match.start() : end]))
+    return blocks
+
+
+def classify_module_block(block: str, path: Path) -> str:
+    lower = block.lower()
+    if re.search(r"(?m)^\s*register_empty_plugin\s*\(", lower):
+        return "empty_stub"
+    if re.search(r"static\s+void\s+\w*stub\w*\s*\(\s*\)\s*\{\s*\}", block):
+        return "empty_stub"
+    if path.name in {
+        "compatLegacyPlugins.cpp",
+        "compatSystemPlugins.cpp",
+        "compatMediaLayerPlugins.cpp",
+    }:
+        return "compat_stub"
+    if "aetherkiri_compat_stub" in lower:
+        return "compat_stub"
+    if path.name == "dummy_plugin_stubs.cpp":
+        return "compat_stub"
+
+    real_markers = (
+        "ncb_register_class",
+        "ncb_attach_class",
+        "ncb_attach_class_with_hook",
+        "ncb_attach_function",
+        "ncb_register_function",
+        "ncb_method(",
+        "ncb_method_raw_callback",
+        "ncb_method_detail",
+        "ncb_property(",
+        "ncb_property_ro",
+        "ncb_property_proxy",
+        "ncb_constructor",
+        "tvpregisterstoragemedia",
+        "tvpaddtranshandlerprovider",
+        "sqlite3_vfs_register",
+        "tvpcreatestream",
+        "tvpcreatenativeclass",
+        "tjscreatenativeclassmethod",
+        "tjscreatearrayobject",
+        "tjscreatedictionaryobject",
+        "registerwavetranshandlerprovider",
+        "registermosaictranshandlerprovider",
+        "registerturntranshandlerprovider",
+        "registerrotatetranshandlerprovider",
+        "registerrippletranshandlerprovider",
+        "ncb_pre_regist_callback(initextrans",
+        "ncb_pre_regist_callback(linkkagparsercompatibility",
+        "ncb_post_unregist_callback(unlinkkagparsercompatibility",
+        "&linkkagparsercompatibility",
+        "&unlinkkagparsercompatibility",
+    )
+    if any(marker in lower for marker in real_markers):
+        return "real"
+
+    compat_markers = (
+        "compat",
+        "stub",
+        "dummy",
+        "noop",
+        "no-op",
+        "placeholder",
+        "fallback",
+    )
+    if any(marker in lower for marker in compat_markers):
+        return "compat_stub"
+
+    return "compat_stub"
+
+
+def merge_classification(old: str | None, new: str) -> str:
+    rank = {"empty_stub": 0, "compat_stub": 1, "real": 2}
+    if old is None or rank[new] > rank[old]:
+        return new
+    return old
+
+
+def registered_modules(plugin_root: Path) -> dict[str, str]:
+    names: dict[str, str] = {}
     patterns = [
         re.compile(r'NCB_MODULE_NAME\s+TJS_W\("([^"]+)"\)'),
         re.compile(r'ncbCallbackAutoRegister\s+\w+\s*\(\s*TJS_W\("([^"]+)"\)'),
     ]
     for path in list(plugin_root.rglob("*.cpp")) + list(plugin_root.rglob("*.h")):
         text = path.read_text(errors="ignore")
-        for pattern in patterns:
-            for match in pattern.finditer(text):
-                name = match.group(1)
-                if name.lower().endswith(".dll"):
-                    name = name[:-4]
-                names.add(name)
+        if not any(pattern.search(text) for pattern in patterns):
+            continue
+        for name, block in split_module_blocks(text):
+            names[name] = merge_classification(
+                names.get(name), classify_module_block(block, path)
+            )
     return names
 
 
 def reference_plugins(reference_root: Path) -> set[str]:
     return {
-        path.name
+        normalize_plugin_name(path.name)
         for path in reference_root.iterdir()
         if path.is_dir() and path.name not in IGNORED_REFERENCE_DIRS
     }
@@ -64,7 +160,7 @@ def manifest_plugins(manifest: Path) -> set[str]:
     for line in manifest.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line and not line.startswith("#"):
-            names.add(line)
+            names.add(normalize_plugin_name(line))
     return names
 
 
@@ -126,24 +222,49 @@ def main() -> int:
     registered = registered_modules(plugin_root)
 
     covered: set[str] = set()
+    compat: list[str] = []
+    empty: list[str] = []
     missing: list[str] = []
     for name in sorted(reference):
         module = ALIASES.get(name, name)
-        if module in registered:
+        state = registered.get(module)
+        if state == "real":
             covered.add(name)
+        elif state == "compat_stub":
+            covered.add(name)
+            compat.append(name)
+        elif state == "empty_stub":
+            empty.append(name)
         else:
             missing.append(name)
 
     print(f"reference: {len(reference)}")
     print(f"registered modules: {len(registered)}")
     print(f"covered reference plugins: {len(covered)}")
+    print(f"compat stub coverage: {len(compat)}")
+    print(f"empty stubs: {len(empty)}")
     print(f"missing reference plugins: {len(missing)}")
+    print(
+        "registered by class: "
+        + ", ".join(
+            f"{state}={sum(1 for value in registered.values() if value == state)}"
+            for state in ("real", "compat_stub", "empty_stub")
+        )
+    )
+    if compat:
+        print("\ncompat_stub")
+        for name in compat:
+            print(name)
+    if empty:
+        print("\nempty_stub")
+        for name in empty:
+            print(name)
     if missing:
-        print()
+        print("\nmissing")
         for name in missing:
             print(name)
 
-    return 1 if missing else 0
+    return 1 if missing or empty else 0
 
 
 if __name__ == "__main__":

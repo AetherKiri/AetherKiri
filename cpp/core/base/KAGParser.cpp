@@ -15,6 +15,18 @@
 #include "tjsDictionary.h"
 #include "DebugIntf.h"
 #include "TextStream.h"
+#include <cstdlib>
+#include <spdlog/spdlog.h>
+
+namespace {
+bool TVPSaveTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_SAVE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+} // namespace
 
 namespace TJS {
     ttstr TJSMapGlobalStringMap(const ttstr &string);
@@ -478,6 +490,11 @@ void tTJSNI_KAGParser::operator=(const tTJSNI_KAGParser &ref) {
 
 //---------------------------------------------------------------------------
 iTJSDispatch2 *tTJSNI_KAGParser::Store() {
+    if(TVPSaveTraceEnabled()) {
+        spdlog::info("SaveTrace KAGParser::Store storage={} label={} page={} line={} pos={}",
+                     StorageName.AsStdString(), CurLabel.AsStdString(),
+                     CurPage.AsStdString(), CurLine, CurPos);
+    }
     // store current status into newly created dictionary object
     // and return the dictionary object.
     iTJSDispatch2 *dic = TJSCreateDictionaryObject();

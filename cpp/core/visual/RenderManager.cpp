@@ -2748,6 +2748,81 @@ static int cvFlags[4] = {
     cv::INTER_CUBIC, // stCubic
 };
 
+static tTVPBBStretchType TVPNormalizeStretchTypeForSampling(
+    tTVPBBStretchType type) {
+    if (type == stNearest) {
+        const char *value = std::getenv("AETHERKIRI_FORCE_NEAREST_STRETCH");
+        if (value == nullptr || value[0] == '\0' || std::strcmp(value, "0") == 0) {
+            return stLinear;
+        }
+    }
+    if (type == stFastLinear || type == stSemiFastLinear) {
+        return stLinear;
+    }
+    if (type < stNearest) {
+        return stLinear;
+    }
+    if (type > stCubic) {
+        return stCubic;
+    }
+    return type;
+}
+
+static int TVPCvResizeInterpolation(tTVPBBStretchType type, int sw, int sh,
+                                    int dw, int dh) {
+    if (type == stNearest) {
+        return cv::INTER_NEAREST;
+    }
+    if (dw < sw || dh < sh) {
+        return cv::INTER_AREA;
+    }
+    if (type == stCubic) {
+        return cv::INTER_CUBIC;
+    }
+    return cv::INTER_LINEAR;
+}
+
+static void TVPResizeRgbaForLayerSampling(const cv::Mat &src_img,
+                                          cv::Mat &dst_img,
+                                          const cv::Size &dsize,
+                                          int interpolation) {
+    if (interpolation != cv::INTER_AREA || src_img.type() != CV_8UC4) {
+        cv::resize(src_img, dst_img, dsize, 0, 0, interpolation);
+        return;
+    }
+
+    cv::Mat premul(src_img.rows, src_img.cols, CV_32FC4);
+    for (int y = 0; y < src_img.rows; ++y) {
+        const uint8_t *src = src_img.ptr<uint8_t>(y);
+        cv::Vec4f *dst = premul.ptr<cv::Vec4f>(y);
+        for (int x = 0; x < src_img.cols; ++x) {
+            const float a = src[x * 4 + 3] * (1.0f / 255.0f);
+            dst[x][0] = src[x * 4 + 0] * (1.0f / 255.0f) * a;
+            dst[x][1] = src[x * 4 + 1] * (1.0f / 255.0f) * a;
+            dst[x][2] = src[x * 4 + 2] * (1.0f / 255.0f) * a;
+            dst[x][3] = a;
+        }
+    }
+
+    cv::Mat resized;
+    cv::resize(premul, resized, dsize, 0, 0, interpolation);
+    for (int y = 0; y < resized.rows; ++y) {
+        const cv::Vec4f *src = resized.ptr<cv::Vec4f>(y);
+        uint8_t *dst = dst_img.ptr<uint8_t>(y);
+        for (int x = 0; x < resized.cols; ++x) {
+            const float a = std::max(0.0f, std::min(1.0f, src[x][3]));
+            const float inv_a = a > 0.00001f ? 1.0f / a : 0.0f;
+            const float r = std::max(0.0f, std::min(1.0f, src[x][0] * inv_a));
+            const float g = std::max(0.0f, std::min(1.0f, src[x][1] * inv_a));
+            const float b = std::max(0.0f, std::min(1.0f, src[x][2] * inv_a));
+            dst[x * 4 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
+            dst[x * 4 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
+            dst[x * 4 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
+            dst[x * 4 + 3] = static_cast<uint8_t>(a * 255.0f + 0.5f);
+        }
+    }
+}
+
 static double tTVPPointD_distQ(const tTVPPointD &p0, const tTVPPointD &p1) {
     double dx = p0.x - p1.x, dy = p0.y - p1.y;
     return dx * dx + dy * dy;
@@ -3153,12 +3228,8 @@ public:
     void SetParameterInt(int id, int Value) override {
         switch(id) {
             case eParameters::StretchType:
-                StretchType = (tTVPBBStretchType)Value;
-                if(StretchType > sizeof(cvFlags) / sizeof(cvFlags[0])) {
-                    StretchType = (tTVPBBStretchType)(sizeof(cvFlags) /
-                                                          sizeof(cvFlags[0]) -
-                                                      1);
-                }
+                StretchType = TVPNormalizeStretchTypeForSampling(
+                    (tTVPBBStretchType)Value);
                 break;
             default:
                 break;
@@ -3230,7 +3301,9 @@ public:
             cv::Size dsize(dw, dh);
             cv::Mat src_img(sh, sw, CV_8UC4, (void *)sdata, spitch);
             cv::Mat dst_img(dh, dw, CV_8UC4, (void *)ddata, dpitch);
-            cv::resize(src_img, dst_img, dsize, 0, 0, cvFlags[StretchType]);
+            TVPResizeRgbaForLayerSampling(
+                src_img, dst_img, dsize,
+                TVPCvResizeInterpolation(StretchType, sw, sh, dw, dh));
 #endif
             tTVPRect rc(0, 0, dw, dh);
             ((tTVPRenderMethod_Software *)method)

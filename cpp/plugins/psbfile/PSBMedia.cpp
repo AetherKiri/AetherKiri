@@ -3,6 +3,8 @@
 //
 
 #include <algorithm>
+#include <cstdint>
+#include <cstdlib>
 #include <spdlog/spdlog.h>
 
 #include "PSBMedia.h"
@@ -28,7 +30,18 @@ namespace PSB {
             return total;
         }
 
+        bool IsVerbosePSBDebugEnabled() {
+            static const bool enabled = [] {
+                const char *value = std::getenv("AETHERKIRI_PSB_DEBUG");
+                return value && *value && *value != '0';
+            }();
+            return enabled;
+        }
+
         bool IsDebugPSBKey(const std::string &key) {
+            if(IsVerbosePSBDebugEnabled()) {
+                return true;
+            }
             return key.rfind("main.psb/", 0) == 0 ||
                 key.rfind("title.psb/", 0) == 0 ||
                 key.rfind("title.pimg/", 0) == 0 ||
@@ -37,10 +50,94 @@ namespace PSB {
         }
 
         bool IsDebugPSBArchive(const std::string &archiveKey) {
+            if(IsVerbosePSBDebugEnabled()) {
+                return true;
+            }
             return archiveKey == "main.psb" || archiveKey == "title.psb" ||
                 archiveKey == "title.pimg" ||
                 archiveKey == "chapter.psb" ||
                 archiveKey == "autoskip.psb";
+        }
+
+        std::string ArchiveKeyFromResourceKey(const std::string &key) {
+            const auto slashPos = key.find('/');
+            if(slashPos == std::string::npos) {
+                return key;
+            }
+            return key.substr(0, slashPos);
+        }
+
+        bool IsPinnedPSBArchive(const std::string &archiveKey) {
+            return archiveKey == "window.pimg" ||
+                archiveKey == "title.pimg" ||
+                archiveKey == "quickmenu.pimg" ||
+                archiveKey == "voicebar.pimg" ||
+                archiveKey == "chapter.pimg" ||
+                archiveKey == "file.pimg" ||
+                archiveKey == "autoskip.psb";
+        }
+
+        bool IsLogoMotionPSBKey(const std::string &key) {
+            return key.rfind("yuzulogo.mtn/", 0) == 0 ||
+                key.rfind("m2logo.mtn/", 0) == 0;
+        }
+
+        std::string JoinResourcePath(const std::vector<std::string> &path) {
+            std::string result;
+            for(size_t index = 0; index < path.size(); ++index) {
+                if(index != 0) {
+                    result += '/';
+                }
+                result += path[index];
+            }
+            return result;
+        }
+
+        void RegisterValueResourcesIntoMedia(
+            PSBMedia &media, const std::string &archiveKey,
+            const std::shared_ptr<IPSBValue> &value,
+            std::vector<std::string> &path,
+            const std::shared_ptr<spdlog::logger> &logger,
+            size_t &logged) {
+            if(!value) {
+                return;
+            }
+
+            const auto resource = std::dynamic_pointer_cast<PSBResource>(value);
+            if(resource) {
+                if(path.empty()) {
+                    return;
+                }
+                const std::string name = JoinResourcePath(path);
+                media.add(archiveKey + "/" + name, resource);
+                if(logger && logged < 120 && IsDebugPSBArchive(archiveKey)) {
+                    logger->info("psb register: {}/{}", archiveKey, name);
+                    ++logged;
+                }
+                return;
+            }
+
+            const auto dict = std::dynamic_pointer_cast<PSBDictionary>(value);
+            if(dict) {
+                for(const auto &[key, child] : *dict) {
+                    path.push_back(key);
+                    RegisterValueResourcesIntoMedia(
+                        media, archiveKey, child, path, logger, logged);
+                    path.pop_back();
+                }
+                return;
+            }
+
+            const auto list = std::dynamic_pointer_cast<PSBList>(value);
+            if(list) {
+                for(size_t index = 0; index < list->size(); ++index) {
+                    path.push_back(std::to_string(index));
+                    RegisterValueResourcesIntoMedia(
+                        media, archiveKey,
+                        (*list)[static_cast<int>(index)], path, logger, logged);
+                    path.pop_back();
+                }
+            }
         }
 
         bool IsSupportedImageHeader(const std::vector<uint8_t> &data) {
@@ -210,13 +307,6 @@ namespace PSB {
                 }
             }
 
-            const bool debugKey = IsDebugPSBKey(info.debugKey);
-            if(LOGGER && debugKey) {
-                LOGGER->info(
-                    "psb build: key={} decodedAlign={} decodedSize={} rawSize={}",
-                    info.debugKey, decodedAlign, src->size(), rawSrc.size());
-            }
-
             PSBPixelFormat format =
                 Extension::toPSBPixelFormat(info.type.empty() ? "RGBA8" : info.type,
                                             info.spec);
@@ -242,6 +332,7 @@ namespace PSB {
 
             const auto paletteFormat = Extension::toPSBPixelFormat(
                 info.paletteType, info.spec);
+            const bool logoPaletteIsBgra = IsLogoMotionPSBKey(info.debugKey);
 
             const auto build32Bmp = [&](auto &&pixelWriter) {
                 const size_t pitch = static_cast<size_t>(info.width) * 4;
@@ -303,9 +394,9 @@ namespace PSB {
                             dstPx[3] = 0xff;
                             return;
                         }
-                        dstPx[0] = info.palette[index + 2];
+                        dstPx[0] = info.palette[index + (logoPaletteIsBgra ? 0 : 2)];
                         dstPx[1] = info.palette[index + 1];
-                        dstPx[2] = info.palette[index + 0];
+                        dstPx[2] = info.palette[index + (logoPaletteIsBgra ? 2 : 0)];
                         dstPx[3] = info.palette[index + 3];
                         return;
                     }
@@ -785,17 +876,11 @@ namespace PSB {
             size_t logged = 0;
             const auto objs = psb.getObjects();
             if(objs) {
-                for(const auto &[name, value] : *objs) {
-                    const auto resource =
-                        std::dynamic_pointer_cast<PSBResource>(value);
-                    if(!resource)
-                        continue;
-                    media.add(archiveKey + "/" + name, resource);
-                    if(logger && logged < 40 && IsDebugPSBArchive(archiveKey)) {
-                        logger->info("psb register: {}/{}", archiveKey, name);
-                        ++logged;
-                    }
-                }
+                std::vector<std::string> path;
+                RegisterValueResourcesIntoMedia(
+                    media, archiveKey,
+                    std::const_pointer_cast<PSBDictionary>(objs),
+                    path, logger, logged);
             }
 
             auto *handler = psb.getTypeHandler();
@@ -817,6 +902,22 @@ namespace PSB {
                 if(logger && logged < 120 && IsDebugPSBArchive(archiveKey)) {
                     logger->info("psb register: {}/{}", archiveKey, name);
                     ++logged;
+                }
+
+                const std::uint32_t resourceIndex = image->getIndex();
+                if(resourceIndex != UINT32_MAX) {
+                    const std::string indexedName =
+                        std::to_string(resourceIndex) + ".tlg";
+                    if(indexedName != name) {
+                        media.add(archiveKey + "/" + indexedName, resource,
+                                  image);
+                        if(logger && logged < 120 &&
+                           IsDebugPSBArchive(archiveKey)) {
+                            logger->info("psb register alias: {}/{} -> {}",
+                                         archiveKey, indexedName, name);
+                            ++logged;
+                        }
+                    }
                 }
             }
 
@@ -1017,8 +1118,9 @@ namespace PSB {
 
         size_t evictedCount = 0;
         size_t evictedBytes = 0;
+        size_t pinnedScans = 0;
         while((_resources.size() > _maxEntryCount || _bytesInUse > _maxByteSize) &&
-              !_lru.empty()) {
+              !_lru.empty() && pinnedScans < _lru.size()) {
             const std::string victimKey = _lru.back();
             _lru.pop_back();
 
@@ -1026,7 +1128,14 @@ namespace PSB {
             if(it == _resources.end()) {
                 continue;
             }
+            if(IsPinnedPSBArchive(ArchiveKeyFromResourceKey(victimKey))) {
+                _lru.push_front(victimKey);
+                it->second.lruIt = _lru.begin();
+                ++pinnedScans;
+                continue;
+            }
 
+            pinnedScans = 0;
             evictedCount++;
             evictedBytes += it->second.sizeBytes;
             _bytesInUse -= it->second.sizeBytes;
@@ -1057,7 +1166,7 @@ namespace PSB {
             if(found)
                 return true;
         }
-        if(!tryLazyLoadArchive(key))
+        if(!tryLazyLoadArchive(key, true))
             return false;
         std::lock_guard<std::mutex> lock(_mutex);
         if(_resources.find(key) != _resources.end()) {
@@ -1102,7 +1211,7 @@ namespace PSB {
             }
         }
 
-        if(!res && tryLazyLoadArchive(key)) {
+        if(!res && tryLazyLoadArchive(key, true)) {
             std::lock_guard<std::mutex> lock(_mutex);
             auto it = _resources.find(key);
             if(it == _resources.end()) {
@@ -1188,7 +1297,8 @@ namespace PSB {
         return memoryStream;
     }
 
-    bool PSBMedia::tryLazyLoadArchive(const std::string &key) {
+    bool PSBMedia::tryLazyLoadArchive(const std::string &key,
+                                      bool reloadIfLoaded) {
         const auto slashPos = key.find('/');
         if(slashPos == std::string::npos || slashPos == 0)
             return false;
@@ -1197,8 +1307,26 @@ namespace PSB {
         bool shouldAttemptLoad = false;
         {
             std::lock_guard<std::mutex> lock(_mutex);
+            if(_missingResourceKeys.find(key) != _missingResourceKeys.end()) {
+                return false;
+            }
+            const std::string archivePrefix = archiveKey + "/";
+            bool archiveHasLiveResources = false;
+            for(const auto &entry : _resources) {
+                if(entry.first.rfind(archivePrefix, 0) == 0) {
+                    archiveHasLiveResources = true;
+                    break;
+                }
+            }
+            const bool knownResource =
+                _knownResourceKeys.find(key) != _knownResourceKeys.end();
+            const bool firstLoad = _loadedArchives.insert(archiveKey).second;
             shouldAttemptLoad =
-                _loadedArchives.insert(archiveKey).second;
+                firstLoad ||
+                (reloadIfLoaded && (knownResource || !archiveHasLiveResources));
+            if(!shouldAttemptLoad && !knownResource) {
+                _missingResourceKeys.insert(key);
+            }
         }
         if(!shouldAttemptLoad)
             return false;
@@ -1215,6 +1343,16 @@ namespace PSB {
             }
             LOGGER->info("PSB lazy-load archive: {}", archiveKey);
             RegisterPSBResourcesIntoMedia(*this, psb, archiveKey);
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                const bool found = _resources.find(key) != _resources.end() ||
+                    findBySuffixLocked(key) != _resources.end();
+                if(found) {
+                    _missingResourceKeys.erase(key);
+                } else {
+                    _missingResourceKeys.insert(key);
+                }
+            }
             return true;
         } catch(const std::exception &e) {
             std::lock_guard<std::mutex> lock(_mutex);
@@ -1249,6 +1387,8 @@ namespace PSB {
         const size_t incomingSize = resource->data.size();
 
         std::lock_guard<std::mutex> lock(_mutex);
+        _knownResourceKeys.insert(key);
+        _missingResourceKeys.erase(key);
         auto it = _resources.find(key);
         if(it != _resources.end()) {
             _bytesInUse -= it->second.sizeBytes;
@@ -1336,10 +1476,17 @@ namespace PSB {
             if(it->first.rfind(normalizedPrefix, 0) == 0) {
                 _bytesInUse -= it->second.sizeBytes;
                 _lru.erase(it->second.lruIt);
+                _knownResourceKeys.erase(it->first);
+                _missingResourceKeys.erase(it->first);
                 it = _resources.erase(it);
                 continue;
             }
             ++it;
+        }
+        if(!normalizedPrefix.empty()) {
+            std::string archiveKey = normalizedPrefix;
+            archiveKey.pop_back();
+            _loadedArchives.erase(archiveKey);
         }
     }
 
@@ -1350,6 +1497,9 @@ namespace PSB {
         _bytesInUse = 0;
         _hitCount = 0;
         _missCount = 0;
+        _loadedArchives.clear();
+        _knownResourceKeys.clear();
+        _missingResourceKeys.clear();
     }
 
     std::vector<PSBMedia::ImageInfoEntry> PSBMedia::getImagesByPrefix(

@@ -64,19 +64,29 @@ uint64_t g_host_gpu_texture = 0;
 uint32_t g_host_gpu_width = 0;
 uint32_t g_host_gpu_height = 0;
 uint64_t g_host_gpu_serial = 0;
-uint32_t g_host_surface_width = 1280;
-uint32_t g_host_surface_height = 720;
+uint32_t g_host_surface_width = 1920;
+uint32_t g_host_surface_height = 1080;
 bool g_host_prefer_gpu_frame = true;
 tTJSNI_Window *g_host_window_owner = nullptr;
+
+std::mutex g_host_video_overlay_mutex;
+std::vector<uint8_t> g_host_video_overlay_rgba;
+uint32_t g_host_video_overlay_width = 0;
+uint32_t g_host_video_overlay_height = 0;
+int32_t g_host_video_overlay_left = 0;
+int32_t g_host_video_overlay_top = 0;
+int32_t g_host_video_overlay_right = 0;
+int32_t g_host_video_overlay_bottom = 0;
+bool g_host_video_overlay_active = false;
 
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
 GLint HostTextureFilter() {
     const char *value = std::getenv("AETHERKIRI_HOST_TEXTURE_FILTER");
-    if (value != nullptr && (std::strcmp(value, "linear") == 0 ||
-                             std::strcmp(value, "LINEAR") == 0)) {
-        return GL_LINEAR;
+    if (value != nullptr && (std::strcmp(value, "nearest") == 0 ||
+                             std::strcmp(value, "NEAREST") == 0)) {
+        return GL_NEAREST;
     }
-    return GL_NEAREST;
+    return GL_LINEAR;
 }
 
 void ApplyHostTextureFilter(GLenum target) {
@@ -166,6 +176,137 @@ std::string FormatHostFrameStats(const HostFrameStats &stats) {
     return out.str();
 }
 
+bool HostMotionDebugEnabled() {
+    static bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_MOTION_DEBUG");
+        return value != nullptr && *value != '\0' && std::string(value) != "0";
+    }();
+    return enabled;
+}
+
+struct HostVideoOverlaySnapshot {
+    std::vector<uint8_t> rgba;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    int32_t left = 0;
+    int32_t top = 0;
+    int32_t right = 0;
+    int32_t bottom = 0;
+    bool active = false;
+};
+
+bool GetHostVideoOverlaySnapshot(HostVideoOverlaySnapshot &snapshot) {
+    std::lock_guard<std::mutex> lock(g_host_video_overlay_mutex);
+    if(!g_host_video_overlay_active || g_host_video_overlay_rgba.empty() ||
+       g_host_video_overlay_width == 0 || g_host_video_overlay_height == 0) {
+        return false;
+    }
+    snapshot.rgba = g_host_video_overlay_rgba;
+    snapshot.width = g_host_video_overlay_width;
+    snapshot.height = g_host_video_overlay_height;
+    snapshot.left = g_host_video_overlay_left;
+    snapshot.top = g_host_video_overlay_top;
+    snapshot.right = g_host_video_overlay_right;
+    snapshot.bottom = g_host_video_overlay_bottom;
+    snapshot.active = true;
+    return true;
+}
+
+bool HasHostVideoOverlayFrame() {
+    std::lock_guard<std::mutex> lock(g_host_video_overlay_mutex);
+    return g_host_video_overlay_active && !g_host_video_overlay_rgba.empty() &&
+        g_host_video_overlay_width != 0 && g_host_video_overlay_height != 0;
+}
+
+void CompositeHostVideoOverlay(std::vector<uint8_t> &frame, uint32_t width,
+                               uint32_t height, uint32_t stride) {
+    HostVideoOverlaySnapshot overlay;
+    if(!GetHostVideoOverlaySnapshot(overlay))
+        return;
+    if(frame.empty() || width == 0 || height == 0 || stride < width * 4u)
+        return;
+
+    int32_t left = overlay.left;
+    int32_t top = overlay.top;
+    int32_t right = overlay.right;
+    int32_t bottom = overlay.bottom;
+    if(right <= left || bottom <= top) {
+        left = 0;
+        top = 0;
+        right = static_cast<int32_t>(width);
+        bottom = static_cast<int32_t>(height);
+    }
+
+    const int32_t clipped_left = std::max<int32_t>(0, left);
+    const int32_t clipped_top = std::max<int32_t>(0, top);
+    const int32_t clipped_right =
+        std::min<int32_t>(static_cast<int32_t>(width), right);
+    const int32_t clipped_bottom =
+        std::min<int32_t>(static_cast<int32_t>(height), bottom);
+    if(clipped_left >= clipped_right || clipped_top >= clipped_bottom)
+        return;
+
+    const uint32_t dest_width = static_cast<uint32_t>(right - left);
+    const uint32_t dest_height = static_cast<uint32_t>(bottom - top);
+    if(dest_width == 0 || dest_height == 0)
+        return;
+
+    // Full-screen videos are decoded as opaque RGBA. Avoid per-pixel blend math
+    // on the common OP/movie path and only scale vertically when needed.
+    if(clipped_left == 0 && clipped_top == 0 &&
+       clipped_right == static_cast<int32_t>(width) &&
+       clipped_bottom == static_cast<int32_t>(height) &&
+       overlay.width == width) {
+        const size_t row_bytes = static_cast<size_t>(width) * 4u;
+        for(uint32_t y = 0; y < height; ++y) {
+            const uint32_t sy = std::min<uint32_t>(
+                overlay.height - 1,
+                static_cast<uint32_t>(
+                    (static_cast<uint64_t>(y) * overlay.height) /
+                    dest_height));
+            const uint8_t *src_row = overlay.rgba.data() +
+                static_cast<size_t>(sy) * overlay.width * 4u;
+            uint8_t *dst_row = frame.data() + static_cast<size_t>(y) * stride;
+            std::memcpy(dst_row, src_row, row_bytes);
+        }
+        return;
+    }
+
+    for(int32_t y = clipped_top; y < clipped_bottom; ++y) {
+        const uint32_t sy = std::min<uint32_t>(
+            overlay.height - 1,
+            static_cast<uint32_t>(
+                (static_cast<uint64_t>(y - top) * overlay.height) /
+                dest_height));
+        const uint8_t *src_row =
+            overlay.rgba.data() + static_cast<size_t>(sy) * overlay.width * 4u;
+        uint8_t *dst_row = frame.data() + static_cast<size_t>(y) * stride;
+        for(int32_t x = clipped_left; x < clipped_right; ++x) {
+            const uint32_t sx = std::min<uint32_t>(
+                overlay.width - 1,
+                static_cast<uint32_t>(
+                    (static_cast<uint64_t>(x - left) * overlay.width) /
+                    dest_width));
+            const uint8_t *src = src_row + static_cast<size_t>(sx) * 4u;
+            uint8_t *dst = dst_row + static_cast<size_t>(x) * 4u;
+            const uint32_t alpha = src[3];
+            if(alpha == 255u) {
+                dst[0] = src[0];
+                dst[1] = src[1];
+                dst[2] = src[2];
+                dst[3] = 255u;
+            } else if(alpha != 0u) {
+                const uint32_t inv = 255u - alpha;
+                dst[0] = static_cast<uint8_t>((src[0] * alpha + dst[0] * inv) / 255u);
+                dst[1] = static_cast<uint8_t>((src[1] * alpha + dst[1] * inv) / 255u);
+                dst[2] = static_cast<uint8_t>((src[2] * alpha + dst[2] * inv) / 255u);
+                dst[3] = static_cast<uint8_t>(std::min<uint32_t>(
+                    255u, alpha + (static_cast<uint32_t>(dst[3]) * inv) / 255u));
+            }
+        }
+    }
+}
+
 void LogHostFinalFrameStats(const char *source, const uint8_t *rgba,
                             uint32_t width, uint32_t height, uint32_t stride,
                             uint64_t serial) {
@@ -200,6 +341,12 @@ void LogHostFinalFrameStats(const char *source, const uint8_t *rgba,
                  source, static_cast<unsigned long long>(serial), width, height,
                  FormatHostFrameStats(full),
                  FormatHostFrameStats(title_region));
+    if (HostMotionDebugEnabled() && g_host_window_owner != nullptr &&
+        (serial == 3000 || serial == 4200 || serial == 5160)) {
+        spdlog::info("host final frame layer tree dump: serial={}",
+                     static_cast<unsigned long long>(serial));
+        g_host_window_owner->DumpPrimaryLayerStructure();
+    }
 }
 
 bool StoreLatestCpuFrameFromTexture(iTVPTexture2D *tex) {
@@ -228,6 +375,8 @@ bool StoreLatestCpuFrameFromTexture(iTVPTexture2D *tex) {
             }
         }
     }
+    CompositeHostVideoOverlay(frame, static_cast<uint32_t>(tw),
+                              static_cast<uint32_t>(th), dst_stride);
 
     uint64_t serial = 0;
     {
@@ -246,6 +395,44 @@ bool StoreLatestCpuFrameFromTexture(iTVPTexture2D *tex) {
         g_host_gpu_height = 0;
     }
     return true;
+}
+
+void GetHostSurfaceSize(tjs_int fallback_w, tjs_int fallback_h,
+                        tjs_int &width, tjs_int &height) {
+#if defined(KRKR_ENABLE_GPU_BRIDGE)
+    auto& egl = krkr::GetEngineEGLContext();
+    width = egl.IsValid() ? static_cast<tjs_int>(egl.GetWidth()) :
+                            static_cast<tjs_int>(g_host_surface_width);
+    height = egl.IsValid() ? static_cast<tjs_int>(egl.GetHeight()) :
+                             static_cast<tjs_int>(g_host_surface_height);
+#else
+    width = static_cast<tjs_int>(g_host_surface_width);
+    height = static_cast<tjs_int>(g_host_surface_height);
+#endif
+    if (width <= 0) width = fallback_w;
+    if (height <= 0) height = fallback_h;
+}
+
+void PublishHostGpuFrame(uint64_t texture, uint32_t width, uint32_t height) {
+    std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+    g_host_gpu_texture = texture;
+    g_host_gpu_width = width;
+    g_host_gpu_height = height;
+    g_host_gpu_serial += 1;
+    g_host_frame_rgba.clear();
+    g_host_frame_width = width;
+    g_host_frame_height = height;
+    g_host_frame_stride = width * 4u;
+    g_host_frame_serial = g_host_gpu_serial;
+}
+
+void ApplyDrawDeviceSurfaceRect(iTVPDrawDevice *dd, const tTVPRect &rect,
+                                tjs_int surface_w, tjs_int surface_h) {
+    if (dd == nullptr) return;
+    dd->SetDestRectangle(rect);
+    dd->SetClipRectangle(rect);
+    dd->SetViewport(rect);
+    dd->SetWindowSize(surface_w, surface_h);
 }
 
 }
@@ -283,6 +470,46 @@ extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height) {
     if(width == 0 || height == 0) return;
     g_host_surface_width = width;
     g_host_surface_height = height;
+}
+
+extern "C" bool TVPHostSubmitVideoOverlayFrame(const void *rgba,
+                                                uint32_t width,
+                                                uint32_t height,
+                                                uint32_t stride_bytes,
+                                                int32_t left,
+                                                int32_t top,
+                                                int32_t right,
+                                                int32_t bottom) {
+    if(!rgba || width == 0 || height == 0 || stride_bytes < width * 4u)
+        return false;
+
+    std::vector<uint8_t> copy(static_cast<size_t>(width) * height * 4u);
+    const auto *src = static_cast<const uint8_t *>(rgba);
+    const uint32_t dst_stride = width * 4u;
+    for(uint32_t y = 0; y < height; ++y) {
+        std::memcpy(copy.data() + static_cast<size_t>(y) * dst_stride,
+                    src + static_cast<size_t>(y) * stride_bytes,
+                    dst_stride);
+    }
+
+    std::lock_guard<std::mutex> lock(g_host_video_overlay_mutex);
+    g_host_video_overlay_rgba.swap(copy);
+    g_host_video_overlay_width = width;
+    g_host_video_overlay_height = height;
+    g_host_video_overlay_left = left;
+    g_host_video_overlay_top = top;
+    g_host_video_overlay_right = right;
+    g_host_video_overlay_bottom = bottom;
+    g_host_video_overlay_active = true;
+    return true;
+}
+
+extern "C" void TVPHostClearVideoOverlayFrame() {
+    std::lock_guard<std::mutex> lock(g_host_video_overlay_mutex);
+    g_host_video_overlay_active = false;
+    g_host_video_overlay_rgba.clear();
+    g_host_video_overlay_width = 0;
+    g_host_video_overlay_height = 0;
 }
 
 extern "C" bool TVPHostGetLatestGodotGpuFrame(uint64_t *texture,
@@ -369,6 +596,8 @@ public:
     }
 
     ~HostWindowLayer() {
+        delete surface_texture_;
+        surface_texture_ = nullptr;
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
         if(blit_program_) {
             glDeleteProgram(blit_program_);
@@ -397,16 +626,9 @@ public:
         auto* dd = owner_->GetDrawDevice();
         if (!dd) return;
 
-#if defined(KRKR_ENABLE_GPU_BRIDGE)
-        auto& egl = krkr::GetEngineEGLContext();
-        tjs_int surf_w = egl.IsValid() ? static_cast<tjs_int>(egl.GetWidth())  : w;
-        tjs_int surf_h = egl.IsValid() ? static_cast<tjs_int>(egl.GetHeight()) : h;
-#else
-        tjs_int surf_w = static_cast<tjs_int>(g_host_surface_width);
-        tjs_int surf_h = static_cast<tjs_int>(g_host_surface_height);
-#endif
-        if (surf_w <= 0) surf_w = w;
-        if (surf_h <= 0) surf_h = h;
+        tjs_int surf_w = 0;
+        tjs_int surf_h = 0;
+        GetHostSurfaceSize(w, h, surf_w, surf_h);
         width_ = surf_w;
         height_ = surf_h;
 
@@ -497,31 +719,30 @@ public:
         const tjs_uint th = tex->GetHeight();
         if(tw == 0 || th == 0) return;
 
-        if(g_host_prefer_gpu_frame) {
+        tjs_int surface_w = 0;
+        tjs_int surface_h = 0;
+        GetHostSurfaceSize(static_cast<tjs_int>(tw), static_cast<tjs_int>(th),
+                           surface_w, surface_h);
+        tTVPRect surface_rect(0, 0, surface_w, surface_h);
+
+        if(g_host_prefer_gpu_frame && !HasHostVideoOverlayFrame()) {
         if(auto *godot_tex = dynamic_cast<GodotTexture2D *>(tex);
            godot_tex != nullptr && godot_tex->EnsureGpuHandle() &&
            godot_tex->UploadCpuToGpu()) {
-            {
-                std::lock_guard<std::mutex> lock(g_host_frame_mutex);
-                g_host_gpu_texture = godot_tex->GetGodotGpuHandle();
-                g_host_gpu_width = static_cast<uint32_t>(tw);
-                g_host_gpu_height = static_cast<uint32_t>(th);
-                g_host_gpu_serial += 1;
-                g_host_frame_rgba.clear();
-                g_host_frame_width = static_cast<uint32_t>(tw);
-                g_host_frame_height = static_cast<uint32_t>(th);
-                g_host_frame_stride = static_cast<uint32_t>(tw * 4u);
-                g_host_frame_serial = g_host_gpu_serial;
-            }
+            GodotTexture2D *output_tex =
+                PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
+                                           surface_h);
+            if (output_tex == nullptr) output_tex = godot_tex;
+            PublishHostGpuFrame(output_tex->GetGodotGpuHandle(),
+                                static_cast<uint32_t>(output_tex->GetWidth()),
+                                static_cast<uint32_t>(output_tex->GetHeight()));
 
             auto* dd = owner_->GetDrawDevice();
             if (!dd) return;
-            tTVPRect dest(0, 0, static_cast<tjs_int>(tex->GetWidth()),
-                          static_cast<tjs_int>(tex->GetHeight()));
-            dd->SetDestRectangle(dest);
-            dd->SetClipRectangle(dest);
-            dd->SetViewport(dest);
-            dd->SetWindowSize(dest.get_width(), dest.get_height());
+            tTVPRect dest(0, 0, static_cast<tjs_int>(output_tex->GetWidth()),
+                          static_cast<tjs_int>(output_tex->GetHeight()));
+            ApplyDrawDeviceSurfaceRect(dd, dest, dest.get_width(),
+                                       dest.get_height());
             if (g_postDrawHook) g_postDrawHook();
             return;
         }
@@ -531,12 +752,7 @@ public:
 
         auto* dd = owner_->GetDrawDevice();
         if (!dd) return;
-        tTVPRect dest(0, 0, static_cast<tjs_int>(tex->GetWidth()),
-                      static_cast<tjs_int>(tex->GetHeight()));
-        dd->SetDestRectangle(dest);
-        dd->SetClipRectangle(dest);
-        dd->SetViewport(dest);
-        dd->SetWindowSize(dest.get_width(), dest.get_height());
+        ApplyDrawDeviceSurfaceRect(dd, surface_rect, surface_w, surface_h);
         if (g_postDrawHook) g_postDrawHook();
         return;
 #else
@@ -549,6 +765,22 @@ public:
         const tjs_uint tw = tex->GetWidth();
         const tjs_uint th = tex->GetHeight();
         if (tw == 0 || th == 0) return;
+
+        tjs_int surface_w = 0;
+        tjs_int surface_h = 0;
+        GetHostSurfaceSize(static_cast<tjs_int>(tw), static_cast<tjs_int>(th),
+                           surface_w, surface_h);
+        tTVPRect surface_rect(0, 0, surface_w, surface_h);
+
+        if(HasHostVideoOverlayFrame()) {
+            StoreLatestCpuFrameFromTexture(tex);
+            auto* dd = owner_ ? owner_->GetDrawDevice() : nullptr;
+            if (!dd) return;
+            ApplyDrawDeviceSurfaceRect(dd, surface_rect, surface_w, surface_h);
+            if (g_postDrawHook) g_postDrawHook();
+            return;
+        }
+
         tjs_int primary_w = 0;
         tjs_int primary_h = 0;
         if (owner_ != nullptr) {
@@ -559,32 +791,24 @@ public:
         }
 
         if (auto *godot_tex = dynamic_cast<GodotTexture2D *>(tex)) {
-            if (g_host_prefer_gpu_frame && godot_tex->EnsureGpuHandle() &&
+            if (g_host_prefer_gpu_frame && !HasHostVideoOverlayFrame() &&
+                godot_tex->EnsureGpuHandle() &&
                 godot_tex->UploadCpuToGpu()) {
-                {
-                    std::lock_guard<std::mutex> lock(g_host_frame_mutex);
-                    g_host_gpu_texture = godot_tex->GetGodotGpuHandle();
-                    g_host_gpu_width = static_cast<uint32_t>(tw);
-                    g_host_gpu_height = static_cast<uint32_t>(th);
-                    g_host_gpu_serial += 1;
-                    g_host_frame_rgba.clear();
-                    g_host_frame_width = static_cast<uint32_t>(tw);
-                    g_host_frame_height = static_cast<uint32_t>(th);
-                    g_host_frame_stride = static_cast<uint32_t>(tw * 4u);
-                    g_host_frame_serial = g_host_gpu_serial;
-                }
+                GodotTexture2D *output_tex =
+                    PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
+                                               surface_h);
+                if (output_tex == nullptr) output_tex = godot_tex;
+                PublishHostGpuFrame(
+                    output_tex->GetGodotGpuHandle(),
+                    static_cast<uint32_t>(output_tex->GetWidth()),
+                    static_cast<uint32_t>(output_tex->GetHeight()));
             } else {
                 StoreLatestCpuFrameFromTexture(tex);
             }
 
             auto* dd = owner_->GetDrawDevice();
             if (!dd) return;
-            tTVPRect dest(0, 0, static_cast<tjs_int>(tex->GetWidth()),
-                          static_cast<tjs_int>(tex->GetHeight()));
-            dd->SetDestRectangle(dest);
-            dd->SetClipRectangle(dest);
-            dd->SetViewport(dest);
-            dd->SetWindowSize(dest.get_width(), dest.get_height());
+            ApplyDrawDeviceSurfaceRect(dd, surface_rect, surface_w, surface_h);
             if (g_postDrawHook) g_postDrawHook();
             return;
         }
@@ -598,12 +822,7 @@ public:
             StoreLatestCpuFrameFromTexture(tex);
             auto* dd = owner_->GetDrawDevice();
             if (!dd) return;
-            tTVPRect dest(0, 0, static_cast<tjs_int>(tex->GetWidth()),
-                          static_cast<tjs_int>(tex->GetHeight()));
-            dd->SetDestRectangle(dest);
-            dd->SetClipRectangle(dest);
-            dd->SetViewport(dest);
-            dd->SetWindowSize(dest.get_width(), dest.get_height());
+            ApplyDrawDeviceSurfaceRect(dd, surface_rect, surface_w, surface_h);
             if (g_postDrawHook) g_postDrawHook();
             return;
         }
@@ -873,6 +1092,55 @@ public:
     TVPOverlayNode *GetPrimaryArea() override { return nullptr; }
 
 private:
+    GodotTexture2D *PrepareGodotSurfaceTexture(GodotTexture2D *source,
+                                               tjs_uint source_w,
+                                               tjs_uint source_h,
+                                               tjs_int surface_w,
+                                               tjs_int surface_h) {
+        if (source == nullptr || surface_w <= 0 || surface_h <= 0) {
+            return nullptr;
+        }
+        if (static_cast<tjs_uint>(surface_w) == source_w &&
+            static_cast<tjs_uint>(surface_h) == source_h) {
+            return source;
+        }
+        if (surface_texture_ == nullptr ||
+            surface_texture_->GetWidth() != surface_w ||
+            surface_texture_->GetHeight() != surface_h) {
+            delete surface_texture_;
+            surface_texture_ = new GodotTexture2D(
+                nullptr, 0, static_cast<unsigned int>(surface_w),
+                static_cast<unsigned int>(surface_h), TVPTextureFormat::RGBA);
+        }
+        if (!surface_texture_->EnsureGpuHandle()) {
+            return nullptr;
+        }
+
+        const tTVPRect clip(0, 0, surface_w, surface_h);
+        const tTVPPointD dst_pt[6] = {
+            {0.0, 0.0},
+            {static_cast<double>(surface_w), 0.0},
+            {0.0, static_cast<double>(surface_h)},
+            {static_cast<double>(surface_w), 0.0},
+            {0.0, static_cast<double>(surface_h)},
+            {static_cast<double>(surface_w), static_cast<double>(surface_h)},
+        };
+        const tTVPPointD src_pt[6] = {
+            {0.0, 0.0},
+            {static_cast<double>(source_w), 0.0},
+            {0.0, static_cast<double>(source_h)},
+            {static_cast<double>(source_w), 0.0},
+            {0.0, static_cast<double>(source_h)},
+            {static_cast<double>(source_w), static_cast<double>(source_h)},
+        };
+        if (!surface_texture_->CopyTrianglesGpuFrom(source, 2, clip, dst_pt,
+                                                    src_pt)) {
+            return nullptr;
+        }
+        surface_texture_->UploadCpuToGpu();
+        return surface_texture_;
+    }
+
     void EnsureBlitResources() {
 #if !defined(KRKR_ENABLE_GPU_BRIDGE)
         return;
@@ -982,6 +1250,7 @@ private:
     // Updated by EngineLoop on pointer events, read by GetCursorPos().
     tjs_int last_mouse_x_ = 0;
     tjs_int last_mouse_y_ = 0;
+    GodotTexture2D *surface_texture_ = nullptr;
 
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
     // Blit resources for rendering to external GPU targets.

@@ -124,6 +124,7 @@ private:
     void HandleKeyDown(const EngineInputEvent& event);
     void HandleKeyUp(const EngineInputEvent& event);
     void HandleTextInput(const EngineInputEvent& event);
+    static bool IsTouchPointerEvent(const EngineInputEvent& event);
 
     /**
      * Convert modifier flags to TVP shift state flags (TVP_SS_*).

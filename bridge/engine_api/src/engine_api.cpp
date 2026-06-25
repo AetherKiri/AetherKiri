@@ -20,6 +20,9 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 #if defined(__ANDROID__)
 #include <android/log.h>
 #include <android/native_window.h>
@@ -65,6 +68,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "sound/win32/WaveImpl.h"
 #include "engine_options.h"
 #include "PluginCallTracer.hpp"
+#include "PluginImpl.h"
 
 // Mock bypass toggle (defined in tjsVariant.cpp, namespace TJS)
 namespace TJS { void TVPSetMockEnabled(bool enabled); }
@@ -220,6 +224,28 @@ uint64_t EngineTickSpikeThresholdUs() {
     return static_cast<uint64_t>(ms * 1000.0);
   }();
   return threshold;
+}
+
+bool EnvFlagEnabled(const char* name) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || *value == '\0') {
+    return false;
+  }
+  return std::strcmp(value, "0") != 0 &&
+         std::strcmp(value, "false") != 0 &&
+         std::strcmp(value, "off") != 0 &&
+         std::strcmp(value, "no") != 0;
+}
+
+bool ShouldUseGodotGpuFrameForRenderer(const std::string& renderer) {
+  if (renderer == ENGINE_RENDERER_DEBUG_CPU) {
+    return false;
+  }
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+  return !EnvFlagEnabled("AETHERKIRI_IOS_DISABLE_GODOT_GPU_FASTPATH");
+#else
+  return true;
+#endif
 }
 
 class StartupLogSink final : public spdlog::sinks::sink {
@@ -1220,7 +1246,7 @@ engine_result_t OpenGameCore(engine_handle_t handle,
   }
 
   const bool prefer_gpu_after_startup =
-      impl->render.renderer != ENGINE_RENDERER_DEBUG_CPU;
+      ShouldUseGodotGpuFrameForRenderer(impl->render.renderer);
   TVPSetGodotRenderManagerGpuFastPathEnabled(false);
   TVPHostSetPreferGpuFrame(false);
   auto restore_startup_gpu_path = [&]() {
@@ -2202,9 +2228,12 @@ engine_result_t engine_set_option(engine_handle_t handle,
                    "restart current game session to apply");
     }
     impl->render.renderer = renderer;
-    TVPHostSetPreferGpuFrame(impl->render.renderer != ENGINE_RENDERER_DEBUG_CPU);
+    const bool prefer_gpu = ShouldUseGodotGpuFrameForRenderer(impl->render.renderer);
+    TVPHostSetPreferGpuFrame(prefer_gpu);
+    TVPSetGodotRenderManagerGpuFastPathEnabled(prefer_gpu);
     TVPSetCommandLine(TJS_W("renderer"), ttstr(renderer).c_str());
-    spdlog::info("engine_set_option: renderer={}", renderer);
+    spdlog::info("engine_set_option: renderer={} prefer_gpu_frame={}",
+                 renderer, prefer_gpu);
     ClearHandleErrorLocked(impl);
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;
@@ -2218,6 +2247,19 @@ engine_result_t engine_set_option(engine_handle_t handle,
     spdlog::info("engine_set_option: plugin_trace={}", enabled);
     // Also store in command line so TVPLoadInternalPlugins can read it
     TVPSetCommandLine(ttstr(option->key_utf8).c_str(), ttstr(option->value_utf8));
+    ClearHandleErrorLocked(impl);
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+
+  if (key == ENGINE_OPTION_PLUGIN_LOAD_MODE) {
+    const std::string v(option->value_utf8);
+    const char* mode = (v == ENGINE_PLUGIN_LOAD_MODE_AETHER_ALL)
+                           ? ENGINE_PLUGIN_LOAD_MODE_AETHER_ALL
+                           : ENGINE_PLUGIN_LOAD_MODE_KRKRSDL3;
+    TVPSetPluginLoadMode(ttstr(mode));
+    TVPSetCommandLine(ttstr(option->key_utf8).c_str(), ttstr(mode));
+    spdlog::info("engine_set_option: plugin_load_mode={}", mode);
     ClearHandleErrorLocked(impl);
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;
@@ -3076,6 +3118,22 @@ engine_result_t engine_get_renderer_info(engine_handle_t handle,
   }
 
   const std::string& selected_renderer = impl->render.renderer;
+  const bool prefer_gpu_frame =
+      ShouldUseGodotGpuFrameForRenderer(selected_renderer);
+  const bool native_frame_renderer =
+      selected_renderer == ENGINE_RENDERER_GODOT_NATIVE ||
+      selected_renderer == ENGINE_RENDERER_GPU_BRIDGE;
+  const std::string host_frame =
+      native_frame_renderer && prefer_gpu_frame ? "godot_native_texture"
+                                                : "rgba_copy";
+  const std::string fallback =
+      selected_renderer == ENGINE_RENDERER_DEBUG_CPU
+          ? "debug_cpu"
+          : selected_renderer == ENGINE_RENDERER_GPU_BRIDGE && prefer_gpu_frame
+                ? "gpu_bridge_godot_texture"
+                : native_frame_renderer && !prefer_gpu_frame
+                      ? "cpu_composite final_upload=godot_rd"
+                      : "see_fallback_ops final_upload=godot_rd";
 
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
   std::string gpu_info;
@@ -3091,26 +3149,16 @@ engine_result_t engine_get_renderer_info(engine_handle_t handle,
     }
   }
   std::string info = "backend=" + selected_renderer +
-                     " path=godot_rendering_device host_frame=" +
-                     (selected_renderer == ENGINE_RENDERER_GODOT_NATIVE ||
-                      selected_renderer == ENGINE_RENDERER_GPU_BRIDGE ?
-                     "godot_native_texture" : "rgba_copy") +
-                     " fallback=" +
-                     (selected_renderer == ENGINE_RENDERER_DEBUG_CPU ? "debug_cpu" :
-                      selected_renderer == ENGINE_RENDERER_GPU_BRIDGE ? "gpu_bridge_godot_texture" :
-                      "see_fallback_ops final_upload=godot_rd") +
+                     " path=godot_rendering_device host_frame=" + host_frame +
+                     " fallback=" + fallback +
+                     " gpu_fastpath=" + (prefer_gpu_frame ? "1" : "0") +
                      gpu_info +
                      TVPGetGodotRenderManagerFallbackStats();
 #else
   std::string info = "backend=" + selected_renderer +
-                     " path=godot_rendering_device host_frame=" +
-                     (selected_renderer == ENGINE_RENDERER_GODOT_NATIVE ||
-                      selected_renderer == ENGINE_RENDERER_GPU_BRIDGE ?
-                     "godot_native_texture" : "rgba_copy") +
-                     " fallback=" +
-                     (selected_renderer == ENGINE_RENDERER_DEBUG_CPU ? "debug_cpu" :
-                      selected_renderer == ENGINE_RENDERER_GPU_BRIDGE ? "gpu_bridge_godot_texture" :
-                      "see_fallback_ops final_upload=godot_rd") +
+                     " path=godot_rendering_device host_frame=" + host_frame +
+                     " fallback=" + fallback +
+                     " gpu_fastpath=" + (prefer_gpu_frame ? "1" : "0") +
                      TVPGetGodotRenderManagerFallbackStats();
 #endif
   std::strncpy(out_buffer, info.c_str(), buffer_size - 1);

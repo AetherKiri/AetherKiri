@@ -181,6 +181,11 @@ TJS_EXP_FUNC_DEF(void, TVPDoTryBlock,
 //---------------------------------------------------------------------------
 extern bool TVPPluginUnloadedAtSystemExit;
 
+void TVPSetPluginLoadMode(const ttstr &mode);
+const ttstr &TVPGetPluginLoadMode();
+bool TVPIsKrkrsdl3PluginLoadMode();
+bool TVPIsAetherAllPluginLoadMode();
+
 void tvpLoadPlugins();
 
 #endif

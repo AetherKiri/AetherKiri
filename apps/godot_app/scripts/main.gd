@@ -7,6 +7,12 @@ const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const UI_FONT := preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
 const UI_SYMBOL_FONT := preload("res://assets/fonts/aetherkiri-runtime-symbols.ttf")
+const RUNTIME_CJK_FONT_SOURCE := "res://assets/fonts/aetherkiri-runtime-cjk.otf"
+const RUNTIME_SYMBOL_FONT_SOURCE := "res://assets/fonts/aetherkiri-runtime-symbols.ttf"
+const RUNTIME_FONT_DIR := "user://runtime_fonts"
+const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
+const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
+const ProbeConfig = preload("res://scripts/probe_config.gd")
 
 const ENGINE_RESULT_OK := 0
 const STARTUP_IDLE := 0
@@ -18,6 +24,7 @@ const POINTER_DOWN := 1
 const POINTER_MOVE := 2
 const POINTER_UP := 3
 const POINTER_SCROLL := 4
+const POINTER_MOD_LEFT := 0x08
 
 var backend: OptionButton
 var game_path: LineEdit
@@ -46,6 +53,7 @@ var lock_landscape := true
 var frame_limit_enabled := false
 var target_fps := 80
 var plugin_trace := false
+var plugin_load_mode := "krkrsdl3"
 var mock_enabled := true
 var console_log_file := true
 var trace_log := false
@@ -57,14 +65,17 @@ var active_game_path := ""
 var active_game_started_msec := 0
 var detail_touch_scroll_active := false
 var rounded_card_shader: Shader
-var upscale_shader: Shader
 var opaque_frame_shader: Shader
 var shown_system_alerts := {}
 
 var player = null
+var runtime_default_font_path := ""
+var runtime_font_dir_path := ""
 var selected_backend := "Godot Native"
-var upscale_algorithm := "sharp"
+var upscale_algorithm := "smooth"
+var render_surface_mode := "display"
 var game_running := false
+var app_lifecycle_paused := false
 var render_errors := 0
 var last_renderer_info_logged := ""
 var last_texture_size := Vector2i.ZERO
@@ -75,6 +86,9 @@ var capture_after_open_ready_usec := 0
 var auto_probe_clicks: Array[Vector2] = []
 var auto_probe_running := false
 var auto_probe_done := false
+var startup_click_stream_enabled := false
+var startup_click_stream_running := false
+var startup_click_stream_done := false
 var log_drain_accum := 0.0
 var perf_accum := 0.0
 var perf_log_accum := 0.0
@@ -86,20 +100,67 @@ var frame_spike_ms := 0.0
 var frame_probe_enabled := false
 var frame_probe_interval := 1.0
 var frame_probe_accum := 0.0
+var input_trace_enabled := false
+var input_trace_accum := 0.0
+var input_trace_received := 0
+var input_trace_forwarded := 0
+var input_trace_blocked := 0
+var input_trace_throttled := 0
+var input_trace_busy := 0
+var input_trace_outside := 0
+var input_trace_send_failed := 0
+var input_trace_present_holds := 0
+var input_trace_move_suppressed := 0
+var tick_trace_serial := 0
+var tick_trace_active_serial := 0
+var tick_trace_until_msec := 0
+var black_frame_guard_until_msec := 0
+var black_frame_next_sample_msec := 0
+var black_frame_consecutive := 0
+var black_frame_last_log_msec := 0
+var black_frame_guard_enabled := false
+var cli_probe_script := ""
 var verbose_render_log := false
 var web_auto_start_attempted := false
 var perf_log_file: FileAccess
 var log_lines: PackedStringArray = []
 var suppress_mouse_until_msec := 0
+var active_touch_points := {}
+var active_mouse_buttons := {}
+var suppressed_touch_points := {}
+var touch_down_points := {}
+var last_forwarded_touch_down_msec := 0
+var last_forwarded_touch_up_msec := 0
+var last_forwarded_touch_move_msec_by_id := {}
+var touch_input_busy_until_msec := 0
+var device_probe_enabled := false
+var follow_texture_surface_size := false
+var present_hold_frames := 0
+var last_present_hold_msec := 0
 var current_surface_size := Vector2i.ZERO
+var render_surface_base_size := RENDER_SURFACE_SIZE
 var render_surface_max_size := RENDER_SURFACE_MAX_SIZE
 const LOG_DRAIN_INTERVAL := 0.50
 const STARTUP_POLL_INTERVAL := 0.16
 const PERF_UPDATE_INTERVAL := 0.25
 const PERF_LOG_INTERVAL := 2.0
 const MAX_LOG_LINES := 240
-const RENDER_SURFACE_SIZE := Vector2i(1280, 720)
+const RENDER_SURFACE_SIZE := Vector2i(1920, 1080)
 const RENDER_SURFACE_MAX_SIZE := Vector2i(3200, 1800)
+const RENDER_SURFACE_MODE_GAME := "game"
+const RENDER_SURFACE_MODE_DISPLAY := "display"
+const POST_INPUT_PRESENT_HOLD_FRAMES := 1
+const POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS := 120
+const TOUCH_TAP_MIN_INTERVAL_MS := 0
+const TOUCH_ACTION_COOLDOWN_MS := 0
+const TOUCH_DRAG_MIN_INTERVAL_MS := 80
+const TOUCH_DRAG_DISTANCE_THRESHOLD := 18.0
+const TOUCH_BUSY_TICK_MS := 120.0
+const TOUCH_BUSY_SUPPRESS_MS := 0
+const TOUCH_POINTER_ID_OFFSET := 100000
+const BLACK_FRAME_GUARD_MS := 3200
+const BLACK_FRAME_SAMPLE_INTERVAL_MS := 120
+const BLACK_FRAME_VISIBLE_MIN := 8
 const INITIAL_WINDOW_SIZE := Vector2i(2240, 1260)
 const DEFAULT_UI_DPI_SCALE := 1.35
 const TOUCH_MOUSE_SUPPRESS_MS := 700
@@ -113,12 +174,79 @@ const COLOR_ACCENT_SOFT := Color(0.90, 0.72, 0.64, 1.0)
 const COLOR_LINE := Color(0.84, 0.82, 0.76, 1.0)
 const HOME_CARD_SIZE := Vector2(260, 350)
 
+func _detect_cli_probe_script() -> String:
+    var args := OS.get_cmdline_args()
+    for i in range(args.size()):
+        var arg := String(args[i])
+        if arg == "--script" or arg == "-s":
+            if i + 1 < args.size():
+                return _normalize_cli_probe_script(String(args[i + 1]))
+        elif arg.begins_with("--script="):
+            return _normalize_cli_probe_script(arg.substr("--script=".length()))
+    return ""
+
+func _normalize_cli_probe_script(path: String) -> String:
+    var normalized := path.strip_edges()
+    if normalized.is_empty():
+        return ""
+    var known := [
+        "res://scripts/smoke_test.gd",
+        "res://scripts/step_render_probe.gd",
+        "res://scripts/gui_render_probe.gd",
+        "res://scripts/perf_input_probe.gd",
+    ]
+    for item in known:
+        if normalized == item or normalized.ends_with("/" + item.get_file()):
+            return item
+    return ""
+
 func _apply_ui_font() -> void:
     var fallbacks: Array[Font] = [UI_SYMBOL_FONT]
     UI_FONT.set_fallbacks(fallbacks)
     var ui_theme := Theme.new()
     ui_theme.set_default_font(UI_FONT)
     theme = ui_theme
+
+func _copy_runtime_font(source_path: String, target_path: String) -> bool:
+    var input := FileAccess.open(source_path, FileAccess.READ)
+    if input == null:
+        return false
+    var data := input.get_buffer(input.get_length())
+    if data.is_empty():
+        return false
+    var output := FileAccess.open(target_path, FileAccess.WRITE)
+    if output == null:
+        return false
+    output.store_buffer(data)
+    output.flush()
+    return true
+
+func _stage_runtime_fonts() -> void:
+    runtime_default_font_path = ""
+    runtime_font_dir_path = ""
+    if OS.get_name() == "Web":
+        return
+
+    var native_dir := ProjectSettings.globalize_path(RUNTIME_FONT_DIR)
+    DirAccess.make_dir_recursive_absolute(native_dir)
+
+    var default_target := RUNTIME_FONT_DIR.path_join(RUNTIME_DEFAULT_FONT_FILE)
+    var symbols_target := RUNTIME_FONT_DIR.path_join(RUNTIME_SYMBOL_FONT_FILE)
+    var copied_any := false
+
+    if _copy_runtime_font(RUNTIME_CJK_FONT_SOURCE, default_target):
+        runtime_default_font_path = ProjectSettings.globalize_path(default_target)
+        copied_any = true
+    else:
+        _append_log("Runtime CJK font staging failed.")
+
+    if _copy_runtime_font(RUNTIME_SYMBOL_FONT_SOURCE, symbols_target):
+        copied_any = true
+    else:
+        _append_log("Runtime symbol font staging failed.")
+
+    if copied_any:
+        runtime_font_dir_path = native_dir
 
 func _build_ui() -> void:
     bg_rect = ColorRect.new()
@@ -140,7 +268,7 @@ func _build_ui() -> void:
     viewport.mouse_filter = Control.MOUSE_FILTER_STOP
     viewport.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
     viewport.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-    viewport.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+    viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
     viewport.visible = false
     add_child(viewport)
     _apply_upscale_algorithm()
@@ -180,16 +308,26 @@ func _build_ui() -> void:
 func _load_shell_settings() -> void:
     var cfg := ConfigFile.new()
     if cfg.load(SETTINGS_FILE) != OK:
+        var env_surface_mode := _runtime_string("AETHERKIRI_SURFACE_MODE", "")
+        if not env_surface_mode.is_empty():
+            _select_config_surface_mode(env_surface_mode)
         return
     selected_backend = String(cfg.get_value("rendering", "backend", selected_backend))
     upscale_algorithm = String(cfg.get_value("rendering", "upscale_algorithm", upscale_algorithm))
-    if not upscale_algorithm in ["sharp", "nearest", "linear"]:
-        upscale_algorithm = "sharp"
+    if upscale_algorithm == "sharp" or upscale_algorithm == "nearest":
+        upscale_algorithm = "smooth"
+    if not upscale_algorithm in ["smooth", "nearest", "linear"]:
+        upscale_algorithm = "smooth"
+    render_surface_mode = String(cfg.get_value("rendering", "surface_mode", render_surface_mode))
+    _select_config_surface_mode(_runtime_string("AETHERKIRI_SURFACE_MODE", render_surface_mode))
     show_perf_monitor = bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
     frame_limit_enabled = bool(cfg.get_value("rendering", "fps_limit_enabled", frame_limit_enabled))
     target_fps = int(cfg.get_value("rendering", "target_fps", target_fps))
     lock_landscape = bool(cfg.get_value("rendering", "force_landscape", lock_landscape))
     plugin_trace = bool(cfg.get_value("developer", "plugin_trace", plugin_trace))
+    plugin_load_mode = String(cfg.get_value("developer", "plugin_load_mode", plugin_load_mode))
+    if not plugin_load_mode in ["krkrsdl3", "aether_all"]:
+        plugin_load_mode = "krkrsdl3"
     mock_enabled = bool(cfg.get_value("developer", "mock_enabled", mock_enabled))
     console_log_file = bool(cfg.get_value("developer", "console_log_file", console_log_file))
     trace_log = bool(cfg.get_value("developer", "trace_log", trace_log))
@@ -201,11 +339,13 @@ func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
+    cfg.set_value("rendering", "surface_mode", render_surface_mode)
     cfg.set_value("rendering", "perf_overlay", show_perf_monitor)
     cfg.set_value("rendering", "fps_limit_enabled", frame_limit_enabled)
     cfg.set_value("rendering", "target_fps", target_fps)
     cfg.set_value("rendering", "force_landscape", lock_landscape)
     cfg.set_value("developer", "plugin_trace", plugin_trace)
+    cfg.set_value("developer", "plugin_load_mode", plugin_load_mode)
     cfg.set_value("developer", "mock_enabled", mock_enabled)
     cfg.set_value("developer", "console_log_file", console_log_file)
     cfg.set_value("developer", "trace_log", trace_log)
@@ -214,7 +354,6 @@ func _save_shell_settings() -> void:
     cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
     cfg.save(SETTINGS_FILE)
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
-    ProjectSettings.save()
     _apply_engine_options()
     _apply_shell_runtime_settings()
     dirty_settings = false
@@ -229,12 +368,21 @@ func _mark_settings_dirty() -> void:
 func _apply_engine_options() -> void:
     if player == null:
         return
+    var effective_plugin_load_mode := _runtime_string("AETHERKIRI_PLUGIN_LOAD_MODE", plugin_load_mode)
+    if not effective_plugin_load_mode in ["krkrsdl3", "aether_all"]:
+        effective_plugin_load_mode = "krkrsdl3"
+    var effective_plugin_trace := plugin_trace or _runtime_flag("AETHERKIRI_PLUGIN_TRACE", false)
     player.set_engine_option("fps_limit", str(target_fps) if frame_limit_enabled else "0")
-    player.set_engine_option("plugin_trace", "1" if plugin_trace else "0")
+    player.set_engine_option("plugin_load_mode", effective_plugin_load_mode)
+    player.set_engine_option("plugin_trace", "1" if effective_plugin_trace else "0")
     player.set_engine_option("mock_enabled", "1" if mock_enabled else "0")
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if trace_log else "0")
     player.set_engine_option("export_scripts", "1" if export_scripts else "0")
+    if not runtime_default_font_path.is_empty():
+        player.set_engine_option("default_font", runtime_default_font_path)
+    if not runtime_font_dir_path.is_empty():
+        player.set_engine_option("font_dir", runtime_font_dir_path)
     player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
 
 func _apply_shell_runtime_settings() -> void:
@@ -302,61 +450,6 @@ func _max_game_view_scale() -> float:
         return clampf(value.to_float(), 0.25, 8.0)
     return 8.0
 
-func _upscale_material() -> ShaderMaterial:
-    if upscale_shader == null:
-        upscale_shader = Shader.new()
-        upscale_shader.code = """
-shader_type canvas_item;
-uniform float sharpness = 0.38;
-
-float cubic_weight(float x, float offset) {
-    float t = x - offset;
-    float at = abs(t);
-    if (at <= 1.0) {
-        return 1.5 * at * at * at - 2.5 * at * at + 1.0;
-    }
-    if (at < 2.0) {
-        return -0.5 * at * at * at + 2.5 * at * at - 4.0 * at + 2.0;
-    }
-    return 0.0;
-}
-
-void fragment() {
-    vec2 px = TEXTURE_PIXEL_SIZE;
-    vec2 source_size = vec2(1.0) / px;
-    vec2 pos = UV * source_size - vec2(0.5);
-    vec2 base = floor(pos);
-    vec2 f = pos - base;
-    vec4 center = vec4(0.0);
-    float weight_sum = 0.0;
-    for (int y = -1; y <= 2; y++) {
-        float wy = cubic_weight(f.y, float(y));
-        for (int x = -1; x <= 2; x++) {
-            float wx = cubic_weight(f.x, float(x));
-            float w = wx * wy;
-            vec2 sample_uv = (base + vec2(float(x), float(y)) + vec2(0.5)) * px;
-            sample_uv = clamp(sample_uv, px * 0.5, vec2(1.0) - px * 0.5);
-            center += texture(TEXTURE, sample_uv) * w;
-            weight_sum += w;
-        }
-    }
-    center /= max(weight_sum, 0.0001);
-    vec4 left = texture(TEXTURE, clamp(UV + vec2(-px.x, 0.0), px * 0.5, vec2(1.0) - px * 0.5));
-    vec4 right = texture(TEXTURE, clamp(UV + vec2(px.x, 0.0), px * 0.5, vec2(1.0) - px * 0.5));
-    vec4 up = texture(TEXTURE, clamp(UV + vec2(0.0, -px.y), px * 0.5, vec2(1.0) - px * 0.5));
-    vec4 down = texture(TEXTURE, clamp(UV + vec2(0.0, px.y), px * 0.5, vec2(1.0) - px * 0.5));
-    vec3 local_min = min(center.rgb, min(min(left.rgb, right.rgb), min(up.rgb, down.rgb)));
-    vec3 local_max = max(center.rgb, max(max(left.rgb, right.rgb), max(up.rgb, down.rgb)));
-    vec3 blur = (left.rgb + right.rgb + up.rgb + down.rgb) * 0.25;
-    vec3 sharpened = center.rgb + (center.rgb - blur) * sharpness;
-    COLOR = vec4(clamp(sharpened, local_min, local_max), 1.0);
-}
-"""
-    var material := ShaderMaterial.new()
-    material.shader = upscale_shader
-    material.set_shader_parameter("sharpness", 0.38)
-    return material
-
 func _opaque_frame_material() -> ShaderMaterial:
     if opaque_frame_shader == null:
         opaque_frame_shader = Shader.new()
@@ -379,12 +472,12 @@ func _apply_upscale_algorithm() -> void:
         "nearest":
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
             viewport.material = _opaque_frame_material()
-        "linear":
+        "linear", "smooth":
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
             viewport.material = _opaque_frame_material()
         _:
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
-            viewport.material = _upscale_material()
+            viewport.material = _opaque_frame_material()
 
 func _set_game_background(active: bool) -> void:
     var color := COLOR_GAME_BG if active else COLOR_BG
@@ -558,7 +651,8 @@ func _rebuild_settings_view() -> void:
     var render_card := _settings_card()
     page.add_child(render_card)
     render_card.add_child(_settings_block("渲染管线", "未运行游戏时立即生效；运行中切换需重启当前游戏", _backend_segment()))
-    render_card.add_child(_settings_block("缩放算法", "拉伸低分辨率游戏画面时使用；超分会重建边缘并做轻度锐化", _upscale_select()))
+    render_card.add_child(_settings_block("画布尺寸", "Game Native 按游戏基准画布运行；Display Fit 按设备显示尺寸运行", _surface_mode_select()))
+    render_card.add_child(_settings_block("缩放算法", "外层拉伸画面时使用；Smooth/Linear 会做平滑采样", _upscale_select()))
     render_card.add_child(_settings_toggle_row("性能监控", "显示帧率和图形 API 信息", show_perf_monitor, "perf"))
     render_card.add_child(_settings_toggle_row("帧率限制", "开启后使用下方目标帧率；关闭时交给显示刷新率", frame_limit_enabled, "fps_limit"))
     if frame_limit_enabled:
@@ -569,6 +663,7 @@ func _rebuild_settings_view() -> void:
     page.add_child(_section_title("▱  开发者"))
     var dev_card := _settings_card()
     page.add_child(dev_card)
+    dev_card.add_child(_settings_block("插件加载模式", "krkrsdl3 只预加载核心兼容插件；aether_all 保留旧全量注册", _plugin_load_mode_select()))
     dev_card.add_child(_settings_toggle_row("插件调用追踪", "将所有插件原生调用记录到 plugin_trace.log 用于调试", plugin_trace, "plugin_trace"))
     dev_card.add_child(_settings_toggle_row("Mock 绕过", "为缺失插件返回 mock 对象以抑制错误。关闭可暴露真实错误用于调试。", mock_enabled, "mock"))
     dev_card.add_child(_settings_toggle_row("控制台日志文件", "将引擎控制台日志写入 krkr.console.log 文件", console_log_file, "console_log"))
@@ -607,6 +702,7 @@ func _build_modal_layer() -> void:
 func _build_loading_panel() -> void:
     loading_panel = PanelContainer.new()
     loading_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+    loading_panel.mouse_filter = Control.MOUSE_FILTER_STOP
     loading_panel.visible = false
     loading_panel.add_theme_stylebox_override("panel", _panel_style(0, Color(0.08, 0.075, 0.065, 0.96), Color(0, 0, 0, 0), 0))
     add_child(loading_panel)
@@ -633,6 +729,7 @@ func _build_loading_panel() -> void:
     log_view = TextEdit.new()
     log_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     log_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    log_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
     log_view.editable = false
     log_view.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
     log_view.scroll_fit_content_height = false
@@ -842,9 +939,9 @@ func _upscale_select() -> OptionButton:
     var select := OptionButton.new()
     select.custom_minimum_size = Vector2(360, 58)
     var options := [
-        {"label": "Catmull-Rom 超分", "value": "sharp"},
-        {"label": "Nearest", "value": "nearest"},
+        {"label": "Smooth", "value": "smooth"},
         {"label": "Linear", "value": "linear"},
+        {"label": "Nearest", "value": "nearest"},
     ]
     var selected_index := 0
     for i in range(options.size()):
@@ -855,6 +952,44 @@ func _upscale_select() -> OptionButton:
     select.select(selected_index)
     select.item_selected.connect(func(index: int):
         _select_upscale_algorithm(String(select.get_item_metadata(index)))
+    )
+    return select
+
+func _surface_mode_select() -> OptionButton:
+    var select := OptionButton.new()
+    select.custom_minimum_size = Vector2(360, 58)
+    var options := [
+        {"label": "Game Native", "value": RENDER_SURFACE_MODE_GAME},
+        {"label": "Display Fit", "value": RENDER_SURFACE_MODE_DISPLAY},
+    ]
+    var selected_index := 0
+    for i in range(options.size()):
+        select.add_item(String(options[i]["label"]))
+        select.set_item_metadata(i, String(options[i]["value"]))
+        if String(options[i]["value"]) == render_surface_mode:
+            selected_index = i
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_surface_mode(String(select.get_item_metadata(index)))
+    )
+    return select
+
+func _plugin_load_mode_select() -> OptionButton:
+    var select := OptionButton.new()
+    select.custom_minimum_size = Vector2(360, 58)
+    var options := [
+        {"label": "krkrsdl3", "value": "krkrsdl3"},
+        {"label": "aether_all", "value": "aether_all"},
+    ]
+    var selected_index := 0
+    for i in range(options.size()):
+        select.add_item(String(options[i]["label"]))
+        select.set_item_metadata(i, String(options[i]["value"]))
+        if String(options[i]["value"]) == plugin_load_mode:
+            selected_index = i
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_plugin_load_mode(String(select.get_item_metadata(index)))
     )
     return select
 
@@ -937,11 +1072,35 @@ func _select_backend(value: String) -> void:
     call_deferred("_rebuild_settings_view")
 
 func _select_upscale_algorithm(value: String) -> void:
-    if not value in ["sharp", "nearest", "linear"]:
+    if not value in ["smooth", "nearest", "linear"]:
         return
     upscale_algorithm = value
     _apply_upscale_algorithm()
     _mark_settings_dirty()
+
+func _default_render_surface_mode() -> String:
+    return RENDER_SURFACE_MODE_GAME if _is_touch_platform() else RENDER_SURFACE_MODE_DISPLAY
+
+func _select_config_surface_mode(value: String) -> void:
+    if value in [RENDER_SURFACE_MODE_GAME, RENDER_SURFACE_MODE_DISPLAY]:
+        render_surface_mode = value
+    else:
+        render_surface_mode = _default_render_surface_mode()
+
+func _select_surface_mode(value: String) -> void:
+    if not value in [RENDER_SURFACE_MODE_GAME, RENDER_SURFACE_MODE_DISPLAY]:
+        return
+    render_surface_mode = value
+    _mark_settings_dirty()
+    if game_running:
+        _sync_player_surface_size(true)
+
+func _select_plugin_load_mode(value: String) -> void:
+    if not value in ["krkrsdl3", "aether_all"]:
+        return
+    plugin_load_mode = value
+    _mark_settings_dirty()
+    _apply_engine_options()
 
 func _empty_help_text() -> String:
     if OS.get_name() == "iOS":
@@ -1483,7 +1642,6 @@ func _save_game_dictionary_silent(game: Dictionary) -> bool:
         next.append(game)
     _save_game_list(_dedupe_games(next))
     ProjectSettings.set_setting(GAME_PATH_KEY, path)
-    ProjectSettings.save()
     game_path.text = path
     return true
 
@@ -1655,7 +1813,7 @@ func _refresh_games() -> void:
 func _load_game_list() -> Array[Dictionary]:
     var file := FileAccess.open(GAME_LIST_FILE, FileAccess.READ)
     if file == null:
-        var fallback: String = String(ProjectSettings.get_setting(GAME_PATH_KEY, ""))
+        var fallback: String = _resolve_game_path(String(ProjectSettings.get_setting(GAME_PATH_KEY, "")))
         var initial_games: Array[Dictionary] = []
         if not fallback.is_empty() and _path_exists(fallback):
             initial_games.append(_game_info_from_path(fallback))
@@ -1665,8 +1823,12 @@ func _load_game_list() -> Array[Dictionary]:
         return []
     var games: Array[Dictionary] = []
     for item in parsed:
-        if item is Dictionary and item.has("path") and _path_exists(String(item.get("path", ""))) and _web_game_entry_available(item):
-            games.append(item)
+        if item is Dictionary and item.has("path"):
+            var resolved_path := _resolve_game_path(String(item.get("path", "")))
+            if not resolved_path.is_empty() and _path_exists(resolved_path) and _web_game_entry_available(item):
+                var game: Dictionary = item.duplicate(true)
+                game["path"] = resolved_path
+                games.append(game)
     return games
 
 func _save_game_list(games: Array[Dictionary]) -> void:
@@ -1700,10 +1862,11 @@ func _scan_ios_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
     return _dedupe_games(next)
 
 func _add_game_path(path: String) -> bool:
-    if not _path_exists(path):
+    var resolved_path := _resolve_game_path(path)
+    if not _path_exists(resolved_path):
         _show_message("游戏路径不存在")
         return false
-    return _add_game_dictionary(_game_info_from_path(path))
+    return _add_game_dictionary(_game_info_from_path(resolved_path))
 
 func _add_game_dictionary(game: Dictionary) -> bool:
     var path := String(game.get("path", ""))
@@ -1728,7 +1891,6 @@ func _add_game_dictionary(game: Dictionary) -> bool:
         next.append(final_game)
     _save_game_list(_dedupe_games(next))
     ProjectSettings.set_setting(GAME_PATH_KEY, path)
-    ProjectSettings.save()
     game_path.text = path
     _refresh_games()
     if not replaced:
@@ -1771,6 +1933,25 @@ func _path_exists(path: String) -> bool:
     if OS.get_name() == "Web" and path.begins_with("/webgames/"):
         return true
     return DirAccess.dir_exists_absolute(path) or FileAccess.file_exists(path)
+
+func _resolve_game_path(path: String) -> String:
+    var normalized := path.strip_edges()
+    if normalized.is_empty() or _path_exists(normalized) or OS.get_name() != "iOS":
+        return normalized
+
+    var current_root := ProjectSettings.globalize_path("user://Games")
+    var marker := "/Documents/Games/"
+    var marker_index := normalized.find(marker)
+    if marker_index >= 0:
+        var relative_path := normalized.substr(marker_index + marker.length())
+        var current_path := current_root.path_join(relative_path)
+        if _path_exists(current_path):
+            return current_path
+
+    var named_path := current_root.path_join(normalized.get_file())
+    if _path_exists(named_path):
+        return named_path
+    return normalized
 
 func _web_game_entry_available(game: Dictionary) -> bool:
     if OS.get_name() != "Web":
@@ -2025,26 +2206,56 @@ func _finalize_active_game_session() -> void:
     active_game_started_msec = 0
 
 func _ready() -> void:
+    cli_probe_script = _detect_cli_probe_script()
     _apply_ui_font()
     DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_TRANSPARENT, false)
     _apply_initial_window_size()
     _apply_global_dpi_scale()
     get_viewport().transparent_bg = false
     RenderingServer.set_default_clear_color(COLOR_BG)
+    var ios_diagnostics_enabled := OS.get_name() == "iOS" and _runtime_flag("AETHERKIRI_IOS_DIAGNOSTICS")
     var perf_interval_env := OS.get_environment("AETHERKIRI_PERF_LOG_INTERVAL")
     if not perf_interval_env.is_empty():
         perf_log_interval = maxf(0.05, perf_interval_env.to_float())
-    frame_spike_ms = maxf(0.0, OS.get_environment("AETHERKIRI_FRAME_SPIKE_MS").to_float())
+    elif ios_diagnostics_enabled:
+        perf_log_interval = 0.5
+    var frame_spike_env := OS.get_environment("AETHERKIRI_FRAME_SPIKE_MS")
+    if not frame_spike_env.is_empty():
+        frame_spike_ms = maxf(0.0, frame_spike_env.to_float())
+    elif ios_diagnostics_enabled:
+        frame_spike_ms = 20.0
     verbose_render_log = OS.get_environment("AETHERKIRI_VERBOSE_RENDER_LOG") == "1"
+    device_probe_enabled = _runtime_flag("AETHERKIRI_DEVICE_PROBE")
+    render_surface_mode = _default_render_surface_mode()
+    render_surface_base_size = _env_vector2i("AETHERKIRI_GAME_SURFACE_SIZE", RENDER_SURFACE_SIZE)
     render_surface_max_size = _env_vector2i("AETHERKIRI_SURFACE_MAX_SIZE", RENDER_SURFACE_MAX_SIZE)
+    follow_texture_surface_size = _runtime_flag("AETHERKIRI_FOLLOW_TEXTURE_SURFACE")
     frame_probe_enabled = _runtime_flag("AETHERKIRI_FRAME_PROBE")
     frame_probe_interval = maxf(0.05, _runtime_float("AETHERKIRI_FRAME_PROBE_INTERVAL", 1.0))
+    black_frame_guard_enabled = _runtime_flag("AETHERKIRI_BLACK_FRAME_GUARD")
+    input_trace_enabled = _runtime_flag("AETHERKIRI_INPUT_TRACE") or ios_diagnostics_enabled
+    device_probe_enabled = device_probe_enabled or frame_probe_enabled
+    device_probe_enabled = device_probe_enabled or input_trace_enabled
+    device_probe_enabled = device_probe_enabled or _runtime_flag("AETHERKIRI_AUTO_OPEN")
+    device_probe_enabled = device_probe_enabled or _runtime_flag("AETHERKIRI_AUTO_START_GAME")
+    startup_click_stream_enabled = _runtime_flag("AETHERKIRI_STARTUP_CLICK_STREAM")
+    device_probe_enabled = device_probe_enabled or startup_click_stream_enabled
+    device_probe_enabled = device_probe_enabled or not OS.get_environment("AETHERKIRI_CAPTURE_UI").is_empty()
+    device_probe_enabled = device_probe_enabled or not _runtime_string("AETHERKIRI_CAPTURE_AFTER_OPEN").is_empty()
+    device_probe_enabled = device_probe_enabled or not _runtime_string("AETHERKIRI_AUTO_PROBE_CLICKS").is_empty()
+    device_probe_enabled = device_probe_enabled or not cli_probe_script.is_empty()
 
     var live_fps_log_path := OS.get_environment("AETHERKIRI_LIVE_FPS_LOG")
+    if live_fps_log_path.is_empty() and ios_diagnostics_enabled:
+        live_fps_log_path = "user://aetherkiri-ios-live.log"
     if not live_fps_log_path.is_empty():
         perf_log_file = FileAccess.open(live_fps_log_path, FileAccess.WRITE)
         if perf_log_file != null:
-            perf_log_file.store_line("live fps log started")
+            perf_log_file.store_line("live fps log started path=%s input_trace=%s frame_spike_ms=%.2f" % [
+                live_fps_log_path,
+                str(input_trace_enabled),
+                frame_spike_ms,
+            ])
             perf_log_file.flush()
 
     selected_backend = _runtime_string(
@@ -2056,6 +2267,7 @@ func _ready() -> void:
         selected_backend = "Godot Native"
 
     _build_ui()
+    _stage_runtime_fonts()
 
     if not _create_runtime_player():
         return
@@ -2069,13 +2281,16 @@ func _ready() -> void:
     var configured_game_path := OS.get_environment("AETHERKIRI_GAME_PATH")
     if configured_game_path.is_empty():
         configured_game_path = ProjectSettings.get_setting(GAME_PATH_KEY, "")
+    configured_game_path = _resolve_game_path(configured_game_path)
+    if not configured_game_path.is_empty():
+        ProjectSettings.set_setting(GAME_PATH_KEY, configured_game_path)
     game_path.text = configured_game_path
 
     backend.item_selected.connect(_on_backend_selected)
     viewport.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
     viewport.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-    viewport.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-    get_viewport().canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_NEAREST
+    viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+    get_viewport().canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_LINEAR
     _apply_upscale_algorithm()
 
     _append_log("AetherKiri shell ready. Initializing engine...")
@@ -2105,6 +2320,7 @@ func _finish_ready_after_first_frame() -> void:
     var user_dir := OS.get_user_data_dir()
     var cache_dir := user_dir.path_join("cache")
     DirAccess.make_dir_recursive_absolute(cache_dir)
+    var engine_initialized := false
     if not player.initialize_engine(user_dir, cache_dir):
         render_errors += 1
         var init_error_message := "Engine init failed: %s %s" % [
@@ -2113,11 +2329,20 @@ func _finish_ready_after_first_frame() -> void:
         ]
         _append_log(init_error_message)
     else:
+        engine_initialized = true
         _append_log("AetherKiri engine initialized.")
 
     _apply_backend(false)
     _apply_engine_options()
     _apply_shell_runtime_settings()
+    if not cli_probe_script.is_empty():
+        if not engine_initialized:
+            printerr("initialize_engine failed: %s" % player.get_last_error())
+            get_tree().quit(1)
+            return
+        call_deferred("_run_cli_script_probe")
+        return
+
     _append_log("Debug CPU is a fallback backend and is not part of performance acceptance.")
     _write_probe_marker("ready")
     _refresh_games()
@@ -2130,10 +2355,33 @@ func _finish_ready_after_first_frame() -> void:
         _runtime_float("AETHERKIRI_CAPTURE_DELAY_SEC", 0.0)
     )
     auto_probe_clicks = _parse_click_points(_runtime_string("AETHERKIRI_AUTO_PROBE_CLICKS"))
-    if _runtime_flag("AETHERKIRI_AUTO_OPEN"):
+    if _runtime_flag("AETHERKIRI_AUTO_START_GAME"):
+        call_deferred("_auto_start_configured_game")
+    elif _runtime_flag("AETHERKIRI_AUTO_OPEN"):
         call_deferred("_on_open_game")
     if not OS.get_environment("AETHERKIRI_CAPTURE_UI").is_empty():
         call_deferred("_capture_ui_after_ready")
+
+func _auto_start_configured_game() -> void:
+    var path := _resolve_game_path(game_path.text.strip_edges())
+    var game := _find_known_game_by_path(path)
+    if game.is_empty() and not path.is_empty() and _path_exists(path):
+        game = _game_info_from_path(path)
+    if game.is_empty() and not known_games.is_empty():
+        game = known_games[0]
+    if game.is_empty():
+        printerr("auto start failed: no game path")
+        return
+    selected_game = game
+    _start_selected_game()
+
+func _find_known_game_by_path(path: String) -> Dictionary:
+    if path.is_empty():
+        return {}
+    for game in known_games:
+        if String(game.get("path", "")) == path:
+            return game
+    return {}
 
 func _refresh_games_after_web_local_restore() -> void:
     if OS.get_name() != "Web":
@@ -2169,6 +2417,567 @@ func _capture_ui_after_ready() -> void:
     print("ui_capture output=%s stats=%s" % [path, JSON.stringify(_image_stats(image))])
     if OS.get_environment("AETHERKIRI_QUIT_AFTER_CAPTURE") == "1":
         get_tree().quit(0)
+
+func _run_cli_script_probe() -> void:
+    var config := ProbeConfig.load()
+    var target_game_path: String = ProbeConfig.require_game_path(config)
+    if target_game_path.is_empty():
+        printerr("AETHERKIRI_SMOKE_GAME is not set")
+        await _probe_cleanup_and_quit(2)
+        return
+
+    _prepare_cli_probe_view(config)
+    if cli_probe_script == "res://scripts/smoke_test.gd":
+        await _run_cli_smoke_probe(config, target_game_path)
+    elif cli_probe_script == "res://scripts/step_render_probe.gd":
+        await _run_cli_step_probe(config, target_game_path)
+    elif cli_probe_script == "res://scripts/gui_render_probe.gd":
+        await _run_cli_gui_probe(config, target_game_path)
+    elif cli_probe_script == "res://scripts/perf_input_probe.gd":
+        await _run_cli_perf_input_probe(config, target_game_path)
+    else:
+        printerr("unsupported probe script: %s" % cli_probe_script)
+        await _probe_cleanup_and_quit(2)
+
+func _prepare_cli_probe_view(config: Dictionary) -> void:
+    var window_size := ProbeConfig.window_size(config, Vector2i(1280, 720))
+    if window_size.x > 0 and window_size.y > 0:
+        DisplayServer.window_set_size(window_size)
+        size = Vector2(window_size)
+    shell_root.visible = false
+    home_view.visible = false
+    settings_view.visible = false
+    detail_view.visible = false
+    detail_scroll.visible = false
+    modal_layer.visible = false
+    bg_rect.color = COLOR_GAME_BG
+    viewport.visible = true
+    game_view.visible = true
+    loading_panel.visible = false
+    perf.visible = false
+    restart_notice.visible = false
+    viewport.texture = null
+    last_texture_size = Vector2i.ZERO
+    game_running = false
+    _fit_full_rects()
+
+func _probe_open_game(config: Dictionary, target_game_path: String, backend_env: String) -> bool:
+    selected_backend = ProbeConfig.backend(config, backend_env)
+    if not selected_backend in BACKENDS:
+        selected_backend = "Godot Native"
+    _apply_backend(false)
+    var fps_limit := ProbeConfig.int_value(config, "fps_limit", _runtime_int("AETHERKIRI_PROBE_FPS_LIMIT", 0))
+    player.set_engine_option("fps_limit", str(maxi(0, fps_limit)))
+    var surface_size := ProbeConfig.surface_size(config)
+    var surface_result: int = int(player.set_surface_size(surface_size.x, surface_size.y))
+    if surface_result != ENGINE_RESULT_OK:
+        printerr("set_surface_size failed: %s" % player.get_last_error())
+        return false
+    current_surface_size = surface_size
+    game_path.text = target_game_path
+    var result: int = int(player.open_game(target_game_path, true))
+    if result != ENGINE_RESULT_OK:
+        printerr("open_game failed: %s" % player.get_last_error())
+        return false
+    return true
+
+func _probe_wait_startup(config: Dictionary, fallback_frames: int = 900) -> bool:
+    for i in range(ProbeConfig.int_value(config, "startup_timeout_frames", fallback_frames)):
+        var state: int = int(player.get_startup_state())
+        if state == STARTUP_SUCCEEDED:
+            return true
+        if state == STARTUP_FAILED:
+            printerr("startup failed: %s" % player.get_last_error())
+            return false
+        await get_tree().process_frame
+    printerr("startup timed out")
+    return false
+
+func _probe_tick_and_update() -> bool:
+    var result: int = int(player.tick(1.0 / 60.0))
+    if result != ENGINE_RESULT_OK:
+        printerr("tick failed: %s" % player.get_last_error())
+        return false
+    var texture: Texture2D = player.update_frame_texture()
+    if texture != null:
+        viewport.texture = texture
+        viewport.queue_redraw()
+        last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+        _layout_game_viewport(get_viewport_rect().size)
+    return true
+
+func _probe_advance(frames: int) -> bool:
+    for i in range(max(0, frames)):
+        if not _probe_tick_and_update():
+            return false
+        await get_tree().process_frame
+    return true
+
+func _run_cli_smoke_probe(config: Dictionary, target_game_path: String) -> void:
+    var backend_name: String = ProbeConfig.backend(config)
+    if not _probe_open_game(config, target_game_path, "AETHERKIRI_RENDER_BACKEND"):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_wait_startup(config, 600):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_advance(ProbeConfig.int_value(config, "smoke_tick_frames", 5)):
+        await _probe_cleanup_and_quit(1)
+        return
+
+    var frame: Dictionary = player.read_frame_rgba()
+    var bytes: int = frame.get("rgba", PackedByteArray()).size()
+    var width: int = int(frame.get("width", 0))
+    var height: int = int(frame.get("height", 0))
+    if width <= 0 or height <= 0 or bytes <= 0:
+        printerr("empty frame backend=%s frame=%dx%d bytes=%d renderer=%s" % [
+            backend_name,
+            width,
+            height,
+            bytes,
+            player.get_renderer_info(),
+        ])
+        await _probe_cleanup_and_quit(1)
+        return
+
+    var texture: Texture2D = player.update_frame_texture()
+    if texture == null or texture.get_width() != width or texture.get_height() != height:
+        printerr("texture update failed backend=%s frame=%dx%d renderer=%s" % [
+            backend_name,
+            width,
+            height,
+            player.get_renderer_info(),
+        ])
+        await _probe_cleanup_and_quit(1)
+        return
+
+    print("smoke ok backend=%s renderer=\"%s\" texture_backend=%s frame=%dx%d texture=%dx%d serial=%d bytes=%d" % [
+        backend_name,
+        player.get_renderer_info(),
+        player.get_frame_texture_backend(),
+        width,
+        height,
+        texture.get_width(),
+        texture.get_height(),
+        int(frame.get("frame_serial", 0)),
+        bytes,
+    ])
+    await _probe_cleanup_and_quit(0)
+
+func _run_cli_step_probe(config: Dictionary, target_game_path: String) -> void:
+    if not _probe_open_game(config, target_game_path, "AETHERKIRI_PROBE_BACKEND"):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_wait_startup(config, 900):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_advance(ProbeConfig.int_value(config, "warmup_frames", _runtime_int("AETHERKIRI_PROBE_WARMUP_FRAMES", 180))):
+        await _probe_cleanup_and_quit(1)
+        return
+    await _probe_save_step(0, "startup")
+
+    var step := 1
+    if config.has("actions") and config["actions"] is Array:
+        step = await _probe_run_actions(config, step)
+    else:
+        step = await _probe_run_legacy_steps(config, step)
+    if step < 0:
+        await _probe_cleanup_and_quit(1)
+        return
+
+    var measured_frames: int = ProbeConfig.int_value(config, "measure_frames", _runtime_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 120))
+    var start_ticks: int = Time.get_ticks_usec()
+    if not await _probe_advance(measured_frames):
+        await _probe_cleanup_and_quit(1)
+        return
+    var fps: float = float(measured_frames) / max(0.0001, float(Time.get_ticks_usec() - start_ticks) / 1000000.0)
+    print("step probe fps=%.2f texture_backend=%s renderer=\"%s\" steps=%d output=/tmp/aetherkiri-step-*.png" % [
+        fps,
+        player.get_frame_texture_backend(),
+        player.get_renderer_info(),
+        step,
+    ])
+    await _probe_cleanup_and_quit(0)
+
+func _probe_run_legacy_steps(config: Dictionary, step: int) -> int:
+    for click in ProbeConfig.clicks(config):
+        var click_dict: Dictionary = click
+        var pos := ProbeConfig.click_position(click_dict)
+        _probe_send_mapped_click(pos, config)
+        var after_frames := int(click_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        if not await _probe_advance(after_frames):
+            return -1
+        await _probe_save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+
+    for key_event in config.get("keys", []):
+        if not key_event is Dictionary:
+            continue
+        var key_dict: Dictionary = key_event
+        var key_code := int(key_dict.get("key_code", 13))
+        player.send_key_event(true, key_code, int(key_dict.get("modifiers", 0)), int(key_dict.get("unicode", 0)))
+        player.tick(1.0 / 60.0)
+        player.send_key_event(false, key_code, int(key_dict.get("modifiers", 0)), 0)
+        var key_after_frames := int(key_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        if not await _probe_advance(key_after_frames):
+            return -1
+        await _probe_save_step(step, "key_%d" % key_code)
+        step += 1
+
+    for click in config.get("clicks_after_keys", []):
+        if not click is Dictionary:
+            continue
+        var click_dict: Dictionary = click
+        var pos := ProbeConfig.click_position(click_dict)
+        _probe_send_mapped_click(pos, config)
+        var after_frames := int(click_dict.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        if not await _probe_advance(after_frames):
+            return -1
+        await _probe_save_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+    return step
+
+func _probe_run_actions(config: Dictionary, step: int) -> int:
+    for raw_action in config["actions"]:
+        if not raw_action is Dictionary:
+            continue
+        var action: Dictionary = raw_action
+        var kind := String(action.get("type", "click"))
+        var label := String(action.get("label", kind))
+        if kind == "click":
+            var pos := ProbeConfig.click_position(action)
+            _probe_send_mapped_click(pos, config)
+            if label.is_empty() or label == "click":
+                label = "click_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "move":
+            var pos := ProbeConfig.click_position(action)
+            _probe_send_mapped_move(pos, config)
+            if label.is_empty() or label == "move":
+                label = "move_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "key":
+            var key_code := int(action.get("key_code", 13))
+            player.send_key_event(true, key_code, int(action.get("modifiers", 0)), int(action.get("unicode", 0)))
+            player.tick(1.0 / 60.0)
+            player.send_key_event(false, key_code, int(action.get("modifiers", 0)), 0)
+            if label.is_empty() or label == "key":
+                label = "key_%d" % key_code
+        elif kind == "click_stream":
+            step = await _probe_run_click_stream(config, step, label, action)
+            continue
+        elif kind == "wait" or kind == "capture":
+            pass
+        else:
+            print("skip unknown action: %s" % kind)
+            continue
+
+        var after_frames := int(action.get("after_frames", ProbeConfig.int_value(config, "after_click_frames", _runtime_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180))))
+        if not await _probe_advance(after_frames):
+            return -1
+        if bool(action.get("capture", true)):
+            await _probe_save_step(step, label)
+            step += 1
+    return step
+
+func _probe_run_click_stream(config: Dictionary, step: int, label: String, action: Dictionary) -> int:
+    var pos := ProbeConfig.click_position(action)
+    var mapped := _probe_map_window_point(pos, config)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip click_stream outside texture window=%s mapped=%s" % [pos, mapped])
+        return step
+
+    var frames: int = max(1, int(action.get("frames", 180)))
+    var clicks_per_frame: int = max(0, int(action.get("clicks_per_frame", 1)))
+    var capture_every: int = max(0, int(action.get("capture_every", 0)))
+    var spike_ms: float = max(0.0, float(action.get("spike_ms", 20.0)))
+    var pointer_id: int = int(action.get("pointer_id", TOUCH_POINTER_ID_OFFSET))
+    var input_total := 0.0
+    var tick_total := 0.0
+    var update_total := 0.0
+    var frame_total := 0.0
+    var input_max := 0.0
+    var tick_max := 0.0
+    var update_max := 0.0
+    var frame_max := 0.0
+    var spikes := 0
+    var input_events := 0
+    var measured_frames := 0
+
+    if label.is_empty() or label == "click_stream":
+        label = "click_stream_%d_%d_%d" % [frames, int(pos.x), int(pos.y)]
+
+    player.send_pointer_event(POINTER_MOVE, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+    input_events += 1
+    for frame_index in range(frames):
+        var frame_start := Time.get_ticks_usec()
+        var input_start := frame_start
+        for i in range(clicks_per_frame):
+            player.send_pointer_event(POINTER_DOWN, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+            player.send_pointer_event(POINTER_UP, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
+            input_events += 2
+
+        var after_input := Time.get_ticks_usec()
+        var tick_start := after_input
+        var tick_result: int = int(player.tick(1.0 / 60.0))
+        var after_tick := Time.get_ticks_usec()
+        if tick_result != ENGINE_RESULT_OK:
+            printerr("click_stream tick failed: %s" % player.get_last_error())
+            return -1
+        var texture: Texture2D = player.update_frame_texture()
+        if texture != null:
+            viewport.texture = texture
+            last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+            _layout_game_viewport(viewport.size)
+            viewport.queue_redraw()
+        var frame_end := Time.get_ticks_usec()
+
+        var input_ms := float(after_input - input_start) / 1000.0
+        var tick_ms := float(after_tick - tick_start) / 1000.0
+        var update_ms := float(frame_end - after_tick) / 1000.0
+        var frame_ms := float(frame_end - frame_start) / 1000.0
+        input_total += input_ms
+        tick_total += tick_ms
+        update_total += update_ms
+        frame_total += frame_ms
+        measured_frames += 1
+        input_max = maxf(input_max, input_ms)
+        tick_max = maxf(tick_max, tick_ms)
+        update_max = maxf(update_max, update_ms)
+        frame_max = maxf(frame_max, frame_ms)
+        if spike_ms > 0.0 and frame_ms >= spike_ms:
+            spikes += 1
+
+        if capture_every > 0 and (frame_index % capture_every) == 0:
+            await _probe_save_step(step, "%s_f%03d" % [label, frame_index])
+            step += 1
+        await get_tree().process_frame
+
+    var divisor := float(max(1, measured_frames))
+    print("click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d input_events=%d avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+        label,
+        frames,
+        measured_frames,
+        clicks_per_frame,
+        input_events,
+        input_total / divisor,
+        input_max,
+        tick_total / divisor,
+        tick_max,
+        update_total / divisor,
+        update_max,
+        frame_total / divisor,
+        frame_max,
+        spikes,
+        spike_ms,
+        player.get_frame_texture_backend(),
+        player.get_renderer_info(),
+    ])
+
+    if bool(action.get("capture_final", true)):
+        await _probe_save_step(step, "%s_final" % label)
+        step += 1
+    return step
+
+func _probe_save_step(index: int, label: String) -> void:
+    await get_tree().process_frame
+    await get_tree().process_frame
+    var image := _probe_capture_image()
+    var path := "/tmp/aetherkiri-step-%02d-%s.png" % [index, label]
+    image.save_png(path)
+    print("step %02d label=%s texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
+        index,
+        label,
+        player.get_frame_texture_backend(),
+        player.get_renderer_info(),
+        path,
+        JSON.stringify(_image_stats(image)),
+    ])
+
+func _probe_send_mapped_click(window_pos: Vector2, config: Dictionary) -> void:
+    var mapped := _probe_map_window_point(window_pos, config)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip click outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    _hold_next_present_after_input()
+
+func _probe_send_mapped_move(window_pos: Vector2, config: Dictionary) -> void:
+    var mapped := _probe_map_window_point(window_pos, config)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip move outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+
+func _probe_map_window_point(pos: Vector2, config: Dictionary) -> Vector2:
+    var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
+    var coord := ProbeConfig.coord_size(config, Vector2i(
+        _runtime_int("AETHERKIRI_PROBE_COORD_W", 1600),
+        _runtime_int("AETHERKIRI_PROBE_COORD_H", 900)
+    ))
+    var panel_size := Vector2(coord)
+    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
+    if scale <= 0.0:
+        return Vector2(-1.0, -1.0)
+    var drawn_size := tex_size * scale
+    var offset := (panel_size - drawn_size) * 0.5
+    var inside := pos - offset
+    if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
+        return Vector2(-1.0, -1.0)
+    return inside / scale
+
+func _run_cli_gui_probe(config: Dictionary, target_game_path: String) -> void:
+    if not _probe_open_game(config, target_game_path, "AETHERKIRI_RENDER_BACKEND"):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_wait_startup(config, 600):
+        await _probe_cleanup_and_quit(1)
+        return
+
+    var min_frames := ProbeConfig.int_value(config, "min_visible_frames", 0)
+    var max_frames := ProbeConfig.int_value(config, "gui_probe_frames", 180)
+    var frame := {}
+    for i in range(max_frames):
+        if not _probe_tick_and_update():
+            await _probe_cleanup_and_quit(1)
+            return
+        frame = player.read_frame_rgba()
+        if i >= min_frames and int(_frame_stats(frame).get("visible", 0)) > 0:
+            break
+        await get_tree().process_frame
+
+    await get_tree().process_frame
+    await get_tree().process_frame
+    var stats := _frame_stats(frame)
+    var screenshot := _probe_capture_image()
+    var screenshot_stats := _image_stats(screenshot)
+    var output_path := OS.get_user_data_dir().path_join("gui_render_probe.png")
+    screenshot.save_png(output_path)
+    print("gui probe renderer=\"%s\" texture_backend=%s frame=%dx%d serial=%d stats=%s screenshot=%s screenshot_stats=%s" % [
+        player.get_renderer_info(),
+        player.get_frame_texture_backend(),
+        int(frame.get("width", 0)),
+        int(frame.get("height", 0)),
+        int(frame.get("frame_serial", 0)),
+        JSON.stringify(stats),
+        output_path,
+        JSON.stringify(screenshot_stats),
+    ])
+    await _probe_cleanup_and_quit(0 if int(screenshot_stats.get("visible", 0)) > 0 else 2)
+
+func _run_cli_perf_input_probe(config: Dictionary, target_game_path: String) -> void:
+    if not _probe_open_game(config, target_game_path, "AETHERKIRI_PROBE_BACKEND"):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_wait_startup(config, 900):
+        await _probe_cleanup_and_quit(1)
+        return
+    if not await _probe_advance(ProbeConfig.int_value(config, "warmup_frames", 180)):
+        await _probe_cleanup_and_quit(1)
+        return
+
+    var before := _probe_capture_image()
+    before.save_png("/tmp/aetherkiri-before-click.png")
+
+    var measured_frames: int = ProbeConfig.int_value(config, "measure_frames", _runtime_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 180))
+    var start_ticks: int = Time.get_ticks_usec()
+    if not await _probe_advance(measured_frames):
+        await _probe_cleanup_and_quit(1)
+        return
+    var fps: float = float(measured_frames) / max(0.0001, float(Time.get_ticks_usec() - start_ticks) / 1000000.0)
+
+    var clicks := ProbeConfig.clicks(config)
+    var click_pos: Vector2 = ProbeConfig.click_position(clicks[0]) if not clicks.is_empty() else ProbeConfig.perf_click(config, "click", Vector2(
+        _runtime_float("AETHERKIRI_PROBE_CLICK_X", 450.0),
+        _runtime_float("AETHERKIRI_PROBE_CLICK_Y", 880.0)
+    ))
+    _probe_send_direct_click(click_pos)
+    var post_click_frames: int = int(clicks[0].get("after_frames", 180)) if not clicks.is_empty() else ProbeConfig.nested_int(config, "perf_input", "post_click_frames", _runtime_int("AETHERKIRI_PROBE_POST_CLICK_FRAMES", 180))
+    if not await _probe_advance(post_click_frames):
+        await _probe_cleanup_and_quit(1)
+        return
+
+    var has_second_click := clicks.size() > 1 or OS.get_environment("AETHERKIRI_PROBE_SECOND_CLICK") == "1"
+    if has_second_click:
+        var second_click_pos := ProbeConfig.click_position(clicks[1]) if clicks.size() > 1 else ProbeConfig.perf_click(config, "second_click", Vector2(
+            _runtime_float("AETHERKIRI_PROBE_SECOND_CLICK_X", 1350.0),
+            _runtime_float("AETHERKIRI_PROBE_SECOND_CLICK_Y", 240.0)
+        ))
+        _probe_send_direct_click(second_click_pos)
+        var second_post_click_frames: int = int(clicks[1].get("after_frames", 600)) if clicks.size() > 1 else ProbeConfig.nested_int(config, "perf_input", "second_post_click_frames", _runtime_int("AETHERKIRI_PROBE_SECOND_POST_CLICK_FRAMES", 600))
+        if not await _probe_advance(second_post_click_frames):
+            await _probe_cleanup_and_quit(1)
+            return
+
+    var after := _probe_capture_image()
+    after.save_png("/tmp/aetherkiri-after-click.png")
+    var diff: float = _probe_image_diff_score(before, after)
+    print("perf_input probe fps=%.2f texture_backend=%s renderer=\"%s\" click_diff=%.5f before=/tmp/aetherkiri-before-click.png after=/tmp/aetherkiri-after-click.png" % [
+        fps,
+        player.get_frame_texture_backend(),
+        player.get_renderer_info(),
+        diff,
+    ])
+    await _probe_cleanup_and_quit(0 if diff > 0.01 else 2)
+
+func _probe_send_direct_click(pos: Vector2) -> void:
+    player.send_pointer_event(POINTER_MOVE, 0, pos.x, pos.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_DOWN, 0, pos.x, pos.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_UP, 0, pos.x, pos.y, 0.0, 0.0, 0)
+
+func _probe_capture_image() -> Image:
+    var frame: Dictionary = player.read_frame_rgba()
+    var data: PackedByteArray = frame.get("rgba", PackedByteArray())
+    var width := int(frame.get("width", 0))
+    var height := int(frame.get("height", 0))
+    if width > 0 and height > 0 and data.size() >= width * height * 4:
+        var frame_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
+        if int(_image_stats(frame_image).get("visible", 0)) > 0:
+            return frame_image
+
+    if viewport.texture != null:
+        var viewport_image := viewport.texture.get_image()
+        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
+            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
+                return viewport_image
+
+    var texture := get_viewport().get_texture()
+    if texture != null:
+        var viewport_image := texture.get_image()
+        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
+            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
+                return viewport_image
+    return Image.create(1, 1, false, Image.FORMAT_RGBA8)
+
+func _probe_image_diff_score(a: Image, b: Image) -> float:
+    var width: int = min(a.get_width(), b.get_width())
+    var height: int = min(a.get_height(), b.get_height())
+    if width <= 0 or height <= 0:
+        return 0.0
+    var step_x: int = max(1, width / 160)
+    var step_y: int = max(1, height / 90)
+    var total := 0.0
+    var samples := 0
+    for y in range(0, height, step_y):
+        for x in range(0, width, step_x):
+            var ca := a.get_pixel(x, y)
+            var cb := b.get_pixel(x, y)
+            total += absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b) + absf(ca.a - cb.a)
+            samples += 1
+    return total / max(1.0, float(samples))
+
+func _probe_cleanup_and_quit(code: int) -> void:
+    if player != null:
+        viewport.texture = null
+        await get_tree().process_frame
+        player.release_frame_texture()
+        player.destroy_engine()
+    get_tree().quit(code)
 
 func _apply_initial_window_size() -> void:
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
@@ -2212,6 +3021,9 @@ func _process(delta: float) -> void:
             log_drain_accum = 0.0
             _drain_logs()
 
+        if app_lifecycle_paused:
+            return
+
         startup_poll_accum += delta
         if cached_startup_state == STARTUP_SUCCEEDED or startup_poll_accum >= STARTUP_POLL_INTERVAL:
             startup_poll_accum = 0.0
@@ -2220,9 +3032,20 @@ func _process(delta: float) -> void:
         if startup_state == STARTUP_SUCCEEDED:
             restart_notice.text = ""
             loading_panel.visible = false
+            tick_trace_serial += 1
+            tick_trace_active_serial = tick_trace_serial
+            if _should_log_tick_trace():
+                _log_tick_trace("tick_begin serial=%d delta_ms=%.2f pending_touch=%d suppressed=%d busy_left_ms=%d" % [
+                    tick_trace_serial,
+                    delta * 1000.0,
+                    active_touch_points.size(),
+                    suppressed_touch_points.size(),
+                    maxi(0, touch_input_busy_until_msec - Time.get_ticks_msec()),
+                ])
             var tick_start := Time.get_ticks_usec()
             var tick_result: int = int(player.tick(delta))
             var tick_ms := float(Time.get_ticks_usec() - tick_start) / 1000.0
+            tick_trace_active_serial = 0
             if tick_result != ENGINE_RESULT_OK:
                 render_errors += 1
                 var tick_error_line := "Tick failed: %s %s" % [
@@ -2235,13 +3058,22 @@ func _process(delta: float) -> void:
                     perf_log_file.store_line(tick_error_line)
                     perf_log_file.flush()
                 game_running = false
+                app_lifecycle_paused = false
             else:
+                if tick_ms >= frame_spike_ms and frame_spike_ms > 0.0:
+                    _log_tick_trace("tick_end serial=%d tick_ms=%.2f renderer=\"%s\"" % [
+                        tick_trace_serial,
+                        tick_ms,
+                        player.get_renderer_info(),
+                    ])
                 var update_start := Time.get_ticks_usec()
                 _update_frame()
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
+                _update_touch_busy_gate(maxf(delta * 1000.0, tick_ms + update_ms))
                 _log_live_perf(delta, tick_ms, update_ms)
                 _log_frame_spike(delta, tick_ms, update_ms)
                 _log_frame_probe(delta)
+                _log_input_trace(delta, tick_ms, update_ms)
         elif startup_state == STARTUP_FAILED:
             restart_notice.text = "Game startup failed."
             loading_panel.visible = false
@@ -2250,6 +3082,7 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            app_lifecycle_paused = false
             render_errors += 1
             var startup_error := "Startup failed: %s" % player.get_last_error()
             _append_log(startup_error)
@@ -2258,15 +3091,19 @@ func _process(delta: float) -> void:
     state_log_accum += delta
     if game_running and state_log_accum >= 1.0:
         state_log_accum = 0.0
-        var state_line := "main_state startup=%d last_result=%s last_error=\"%s\" texture=%s size=%dx%d" % [
+        var state_line := "main_state startup=%d last_result=%s last_error=\"%s\" texture=%s texture_size=%dx%d surface_mode=%s surface=%dx%d" % [
             startup_state,
             player.get_last_result(),
             player.get_last_error(),
             player.get_frame_texture_backend(),
             last_texture_size.x,
             last_texture_size.y,
+            render_surface_mode,
+            current_surface_size.x,
+            current_surface_size.y,
         ]
         print(state_line)
+        _write_probe_marker(state_line)
         if perf_log_file != null:
             perf_log_file.store_line(state_line)
             perf_log_file.flush()
@@ -2282,13 +3119,16 @@ func _process(delta: float) -> void:
             _append_log("Renderer info: %s" % renderer)
         var fallback := _renderer_fallback(renderer)
         var texture_backend: String = String(player.get_frame_texture_backend()) if game_running else "none"
-        perf.text = "Backend: %s | FPS: %d | Frame: %.2f ms | Texture: %s | Size: %dx%d | Fallback: %s | Errors: %d" % [
+        perf.text = "Backend: %s | FPS: %d | Frame: %.2f ms | Texture: %s | Size: %dx%d | Surface: %s %dx%d | Fallback: %s | Errors: %d" % [
             renderer_summary,
             Engine.get_frames_per_second(),
             frame_ms,
             texture_backend,
             last_texture_size.x,
             last_texture_size.y,
+            render_surface_mode,
+            current_surface_size.x,
+            current_surface_size.y,
             fallback,
             render_errors,
         ]
@@ -2336,6 +3176,21 @@ func _log_frame_spike(delta: float, tick_ms: float, update_ms: float) -> void:
         perf_log_file.store_line(line)
         perf_log_file.flush()
 
+func _should_log_tick_trace() -> bool:
+    return input_trace_enabled and Time.get_ticks_msec() < tick_trace_until_msec
+
+func _arm_tick_trace() -> void:
+    if input_trace_enabled:
+        tick_trace_until_msec = maxi(tick_trace_until_msec, Time.get_ticks_msec() + 1200)
+
+func _log_tick_trace(line: String) -> void:
+    if not input_trace_enabled:
+        return
+    print(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+
 func _log_frame_probe(delta: float) -> void:
     if not frame_probe_enabled:
         return
@@ -2358,22 +3213,117 @@ func _log_frame_probe(delta: float) -> void:
         perf_log_file.store_line(line)
         perf_log_file.flush()
 
+func _log_input_trace(delta: float, tick_ms: float, update_ms: float) -> void:
+    if not input_trace_enabled:
+        return
+    input_trace_accum += delta
+    if input_trace_accum < 0.5:
+        return
+    if input_trace_received == 0 and input_trace_blocked == 0 and input_trace_throttled == 0 and input_trace_busy == 0 and input_trace_present_holds == 0 and input_trace_move_suppressed == 0:
+        input_trace_accum = 0.0
+        return
+    var line := "input_probe fps=%d frame_ms=%.2f tick_ms=%.2f update_ms=%.2f recv=%d fwd=%d blocked=%d throttled=%d busy=%d move_suppressed=%d outside=%d send_failed=%d active_touch=%d suppressed=%d present_holds=%d texture=%s renderer=\"%s\"" % [
+        Engine.get_frames_per_second(),
+        delta * 1000.0,
+        tick_ms,
+        update_ms,
+        input_trace_received,
+        input_trace_forwarded,
+        input_trace_blocked,
+        input_trace_throttled,
+        input_trace_busy,
+        input_trace_move_suppressed,
+        input_trace_outside,
+        input_trace_send_failed,
+        active_touch_points.size(),
+        suppressed_touch_points.size(),
+        input_trace_present_holds,
+        player.get_frame_texture_backend(),
+        player.get_renderer_info(),
+    ]
+    print(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+    input_trace_accum = 0.0
+    input_trace_received = 0
+    input_trace_forwarded = 0
+    input_trace_blocked = 0
+    input_trace_throttled = 0
+    input_trace_busy = 0
+    input_trace_move_suppressed = 0
+    input_trace_outside = 0
+    input_trace_send_failed = 0
+    input_trace_present_holds = 0
+
 func _notification(what: int) -> void:
     if what == NOTIFICATION_RESIZED:
         _fit_full_rects()
         return
     if player == null:
         return
+    if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+        _pause_game_for_lifecycle("notification_%d" % what)
+        return
+    if what == NOTIFICATION_APPLICATION_RESUMED or what == NOTIFICATION_APPLICATION_FOCUS_IN:
+        _resume_game_for_lifecycle("notification_%d" % what)
+        return
     if what == NOTIFICATION_WM_CLOSE_REQUEST:
+        if app_lifecycle_paused:
+            player.resume()
+            app_lifecycle_paused = false
+        _clear_game_input_capture()
         _finalize_active_game_session()
         viewport.texture = null
         player.release_frame_texture()
         player.destroy_engine()
 
+func _pause_game_for_lifecycle(reason: String) -> void:
+    if not _is_touch_platform():
+        return
+    if app_lifecycle_paused or not game_running or cached_startup_state != STARTUP_SUCCEEDED:
+        return
+    _clear_game_input_capture()
+    var result: int = int(player.pause())
+    if result != ENGINE_RESULT_OK:
+        render_errors += 1
+        _log_lifecycle_line("app_pause_failed reason=%s result=%s error=\"%s\"" % [
+            reason,
+            player.get_last_result(),
+            player.get_last_error(),
+        ])
+        return
+    app_lifecycle_paused = true
+    _log_lifecycle_line("app_paused reason=%s" % reason)
+
+func _resume_game_for_lifecycle(reason: String) -> void:
+    if not _is_touch_platform():
+        return
+    if not app_lifecycle_paused:
+        return
+    var result: int = int(player.resume())
+    if result != ENGINE_RESULT_OK:
+        render_errors += 1
+        _log_lifecycle_line("app_resume_failed reason=%s result=%s error=\"%s\"" % [
+            reason,
+            player.get_last_result(),
+            player.get_last_error(),
+        ])
+        return
+    app_lifecycle_paused = false
+    _clear_game_input_capture()
+    _log_lifecycle_line("app_resumed reason=%s" % reason)
+
+func _log_lifecycle_line(line: String) -> void:
+    print(line)
+    _write_probe_marker(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+
 func _on_backend_selected(index: int) -> void:
     selected_backend = BACKENDS[index]
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
-    ProjectSettings.save()
     if game_running:
         restart_notice.text = "Restart current game session to apply renderer."
         _append_log("Renderer change queued: %s" % selected_backend)
@@ -2424,7 +3374,12 @@ func _renderer_summary(renderer: String) -> String:
 
 
 func _on_open_game() -> void:
-    var path := game_path.text.strip_edges()
+    var requested_path := game_path.text.strip_edges()
+    var path := _resolve_game_path(requested_path)
+    if path != requested_path:
+        _write_probe_marker("open_game remapped_path=%s requested=%s" % [path, requested_path])
+        _append_log("Remapped iOS game path: %s" % path)
+        game_path.text = path
     _write_probe_marker("open_game path=%s" % path)
     if path.is_empty():
         render_errors += 1
@@ -2432,7 +3387,6 @@ func _on_open_game() -> void:
         return
 
     ProjectSettings.set_setting(GAME_PATH_KEY, path)
-    ProjectSettings.save()
     _apply_backend(false)
     _sync_player_surface_size(true)
     cached_startup_state = STARTUP_RUNNING
@@ -2455,45 +3409,69 @@ func _on_open_game() -> void:
         return
 
     game_running = true
+    app_lifecycle_paused = false
     log_lines.clear()
+    _clear_game_input_capture()
     if log_view != null:
         log_view.text = ""
         log_view.scroll_vertical = 0
     last_texture_size = Vector2i.ZERO
+    present_hold_frames = 0
     capture_after_open_done = false
     capture_after_open_ready_usec = 0
     auto_probe_running = false
     auto_probe_done = false
+    startup_click_stream_running = false
+    startup_click_stream_done = false
     last_renderer_info_logged = ""
     restart_notice.text = "Starting..."
     _append_log("Game launch requested with backend: %s" % selected_backend)
+    _append_log("Surface mode: %s target=%dx%d texture=%dx%d" % [
+        render_surface_mode,
+        current_surface_size.x,
+        current_surface_size.y,
+        last_texture_size.x,
+        last_texture_size.y,
+    ])
     _append_log("Path: %s" % path)
+    if startup_click_stream_enabled and not startup_click_stream_running and not startup_click_stream_done:
+        startup_click_stream_running = true
+        call_deferred("_run_startup_click_stream_probe")
 
 func _desired_render_surface_size() -> Vector2i:
+    var base_size := _base_render_surface_size()
+    if render_surface_mode == RENDER_SURFACE_MODE_GAME:
+        return base_size
     var window_size := DisplayServer.window_get_size()
     if window_size.x < 1 or window_size.y < 1:
-        return RENDER_SURFACE_SIZE
+        return base_size
     var pixel_scale := _surface_pixel_scale()
     var target_pixel_size := Vector2(
         float(window_size.x) * pixel_scale,
         float(window_size.y) * pixel_scale
     )
     var scale := minf(
-        target_pixel_size.x / float(RENDER_SURFACE_SIZE.x),
-        target_pixel_size.y / float(RENDER_SURFACE_SIZE.y)
+        target_pixel_size.x / float(base_size.x),
+        target_pixel_size.y / float(base_size.y)
     )
     if scale <= 0.0:
-        return RENDER_SURFACE_SIZE
+        return base_size
     scale = minf(
         scale,
         minf(
-            float(render_surface_max_size.x) / float(RENDER_SURFACE_SIZE.x),
-            float(render_surface_max_size.y) / float(RENDER_SURFACE_SIZE.y)
+            float(render_surface_max_size.x) / float(base_size.x),
+            float(render_surface_max_size.y) / float(base_size.y)
         )
     )
     return Vector2i(
-        maxi(1, int(round(float(RENDER_SURFACE_SIZE.x) * scale))),
-        maxi(1, int(round(float(RENDER_SURFACE_SIZE.y) * scale)))
+        maxi(1, int(round(float(base_size.x) * scale))),
+        maxi(1, int(round(float(base_size.y) * scale)))
+    )
+
+func _base_render_surface_size() -> Vector2i:
+    return Vector2i(
+        clampi(render_surface_base_size.x, 1, render_surface_max_size.x),
+        clampi(render_surface_base_size.y, 1, render_surface_max_size.y)
     )
 
 func _surface_pixel_scale() -> float:
@@ -2538,20 +3516,62 @@ func _sync_player_surface_size(force: bool) -> void:
         last_texture_size = Vector2i.ZERO
         var window_size := DisplayServer.window_get_size()
         var screen := DisplayServer.window_get_current_screen()
-        var line := "surface_resize window=%dx%d screen_scale=%.2f target=%dx%d max=%dx%d" % [
+        var base_size := _base_render_surface_size()
+        var line := "surface_resize mode=%s window=%dx%d screen_scale=%.2f base=%dx%d target=%dx%d max=%dx%d" % [
+            render_surface_mode,
             window_size.x,
             window_size.y,
             DisplayServer.screen_get_scale(screen),
+            base_size.x,
+            base_size.y,
             target_size.x,
             target_size.y,
             render_surface_max_size.x,
             render_surface_max_size.y,
         ]
         print(line)
+        _write_probe_marker(line)
         if perf_log_file != null:
             perf_log_file.store_line(line)
             perf_log_file.flush()
     current_surface_size = target_size
+
+func _sync_game_surface_to_texture(texture_size: Vector2i) -> void:
+    if render_surface_mode != RENDER_SURFACE_MODE_GAME:
+        return
+    if not follow_texture_surface_size:
+        return
+    if player == null or texture_size.x <= 0 or texture_size.y <= 0:
+        return
+    var target_size := Vector2i(
+        clampi(texture_size.x, 1, render_surface_max_size.x),
+        clampi(texture_size.y, 1, render_surface_max_size.y)
+    )
+    if target_size == current_surface_size:
+        return
+    render_surface_base_size = target_size
+    var result: int = int(player.set_surface_size(target_size.x, target_size.y))
+    if result != ENGINE_RESULT_OK:
+        render_errors += 1
+        _append_log("Surface follow frame failed: %s %s" % [
+            player.get_last_result(),
+            player.get_last_error(),
+        ])
+        return
+    current_surface_size = target_size
+    var line := "surface_follow_frame texture=%dx%d target=%dx%d max=%dx%d" % [
+        texture_size.x,
+        texture_size.y,
+        target_size.x,
+        target_size.y,
+        render_surface_max_size.x,
+        render_surface_max_size.y,
+    ]
+    print(line)
+    _write_probe_marker(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
 
 func _drain_logs() -> void:
     var logs: String = String(player.drain_startup_logs())
@@ -2561,11 +3581,17 @@ func _drain_logs() -> void:
         _append_log(line)
 
 func _update_frame() -> void:
+    if present_hold_frames > 0:
+        present_hold_frames -= 1
+        return
     var texture: Texture2D = player.update_frame_texture()
     if texture != null:
+        if _should_hold_suspect_black_frame():
+            return
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+        _sync_game_surface_to_texture(last_texture_size)
         _layout_game_viewport(get_viewport_rect().size)
         if not auto_probe_clicks.is_empty() and not auto_probe_running and not auto_probe_done:
             auto_probe_running = true
@@ -2609,6 +3635,35 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
         var visible := int(screenshot_stats.get("visible", 0))
         get_tree().quit(0 if visible > 0 else 2)
 
+func _clear_game_input_capture() -> void:
+    active_touch_points.clear()
+    active_mouse_buttons.clear()
+    suppressed_touch_points.clear()
+    touch_down_points.clear()
+    last_forwarded_touch_move_msec_by_id.clear()
+    last_forwarded_touch_down_msec = 0
+    last_forwarded_touch_up_msec = 0
+    suppress_mouse_until_msec = 0
+    present_hold_frames = 0
+    last_present_hold_msec = 0
+    tick_trace_until_msec = 0
+    tick_trace_active_serial = 0
+    input_trace_accum = 0.0
+    input_trace_received = 0
+    input_trace_forwarded = 0
+    input_trace_blocked = 0
+    input_trace_throttled = 0
+    input_trace_busy = 0
+    input_trace_move_suppressed = 0
+    input_trace_outside = 0
+    input_trace_send_failed = 0
+    input_trace_present_holds = 0
+    touch_input_busy_until_msec = 0
+    black_frame_guard_until_msec = 0
+    black_frame_next_sample_msec = 0
+    black_frame_consecutive = 0
+    black_frame_last_log_msec = 0
+
 func _run_auto_probe() -> void:
     await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_WARMUP_FRAMES", 180))
     await _save_auto_probe_step(0, "startup")
@@ -2626,6 +3681,100 @@ func _run_auto_probe() -> void:
     ])
     if _runtime_flag("AETHERKIRI_QUIT_AFTER_AUTO_PROBE"):
         get_tree().quit(0)
+
+func _run_startup_click_stream_probe() -> void:
+    var frames: int = max(1, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_FRAMES", 240))
+    var clicks_per_frame: int = max(1, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_CLICKS_PER_FRAME", 1))
+    var capture_every: int = max(0, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_CAPTURE_EVERY", 60))
+    var click_pos: Vector2 = Vector2(
+        _runtime_float("AETHERKIRI_STARTUP_CLICK_STREAM_X", float(INITIAL_WINDOW_SIZE.x) * 0.5),
+        _runtime_float("AETHERKIRI_STARTUP_CLICK_STREAM_Y", float(INITIAL_WINDOW_SIZE.y) * 0.5)
+    )
+    var attempted: int = 0
+    var forwarded: int = 0
+    var blocked: int = 0
+    var busy: int = 0
+    var start_usec: int = Time.get_ticks_usec()
+    for frame_index in range(frames):
+        for i in range(clicks_per_frame):
+            attempted += 1
+            if _can_forward_game_input():
+                if _send_startup_probe_mouse_click(click_pos):
+                    forwarded += 1
+                else:
+                    blocked += 1
+            else:
+                if _is_game_input_busy():
+                    _trace_input_busy()
+                    busy += 1
+                else:
+                    _trace_input_blocked()
+                    blocked += 1
+        if capture_every > 0 and (frame_index % capture_every) == 0:
+            _save_startup_click_stream_capture(frame_index)
+        await get_tree().process_frame
+    var elapsed_sec := float(Time.get_ticks_usec() - start_usec) / 1000000.0
+    var line := "startup_click_stream frames=%d clicks_per_frame=%d attempted=%d forwarded=%d blocked=%d busy=%d elapsed_sec=%.3f fps=%.2f renderer=\"%s\" texture=%s size=%dx%d" % [
+        frames,
+        clicks_per_frame,
+        attempted,
+        forwarded,
+        blocked,
+        busy,
+        elapsed_sec,
+        float(frames) / maxf(0.0001, elapsed_sec),
+        player.get_renderer_info(),
+        player.get_frame_texture_backend(),
+        last_texture_size.x,
+        last_texture_size.y,
+    ]
+    print(line)
+    _write_probe_marker(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+    _save_startup_click_stream_capture(frames)
+    startup_click_stream_done = true
+    startup_click_stream_running = false
+    if _runtime_flag("AETHERKIRI_QUIT_AFTER_STARTUP_CLICK_STREAM"):
+        get_tree().quit(0)
+
+func _send_startup_probe_mouse_click(pos: Vector2) -> bool:
+    var down := InputEventMouseButton.new()
+    down.button_index = MOUSE_BUTTON_LEFT
+    down.pressed = true
+    down.position = pos
+    down.global_position = pos
+    _handle_game_pointer_event(down)
+    var down_captured := active_mouse_buttons.has(down.button_index)
+
+    var up := InputEventMouseButton.new()
+    up.button_index = MOUSE_BUTTON_LEFT
+    up.pressed = false
+    up.position = pos
+    up.global_position = pos
+    _handle_game_pointer_event(up)
+    return down_captured
+
+func _save_startup_click_stream_capture(frame_index: int) -> void:
+    var texture := get_viewport().get_texture()
+    if texture == null:
+        return
+    var image := texture.get_image()
+    if image == null:
+        return
+    var prefix := _runtime_string("AETHERKIRI_STARTUP_CLICK_STREAM_PREFIX", "/tmp/aetherkiri-startup-click-stream")
+    var path := "%s-%03d.png" % [prefix, frame_index]
+    image.save_png(path)
+    var line := "startup_click_stream_capture frame=%d output=%s stats=%s" % [
+        frame_index,
+        path,
+        JSON.stringify(_image_stats(image)),
+    ]
+    print(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
 
 func _auto_probe_wait_frames(frames: int) -> void:
     for i in range(max(1, frames)):
@@ -2668,6 +3817,7 @@ func _send_probe_click(window_pos: Vector2) -> void:
     player.send_pointer_event(POINTER_DOWN, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    _hold_next_present_after_input()
     _write_probe_marker("auto_click window=%s mapped=%s" % [window_pos, mapped])
 
 func _map_probe_window_point(pos: Vector2) -> Vector2:
@@ -2720,6 +3870,65 @@ func _image_stats(image: Image) -> Dictionary:
         "sampled": sampled,
         "visible": visible,
     }
+
+func _arm_black_frame_guard() -> void:
+    if not _is_touch_platform() or not black_frame_guard_enabled:
+        return
+    var now := Time.get_ticks_msec()
+    black_frame_guard_until_msec = maxi(black_frame_guard_until_msec, now + BLACK_FRAME_GUARD_MS)
+    black_frame_next_sample_msec = 0
+
+func _should_hold_suspect_black_frame() -> bool:
+    if not _is_touch_platform() or player == null:
+        return false
+    if not black_frame_guard_enabled and not frame_probe_enabled:
+        black_frame_consecutive = 0
+        return false
+    var now := Time.get_ticks_msec()
+    var guard_active := now < black_frame_guard_until_msec
+    if not guard_active and not frame_probe_enabled:
+        black_frame_consecutive = 0
+        return false
+    if black_frame_next_sample_msec > 0 and now < black_frame_next_sample_msec:
+        return false
+
+    black_frame_next_sample_msec = now + BLACK_FRAME_SAMPLE_INTERVAL_MS
+    var frame: Dictionary = player.read_frame_rgba()
+    var stats := _frame_stats(frame)
+    var visible := int(stats.get("visible", 0))
+    var sampled := int(stats.get("sampled", 0))
+    var is_black := sampled > 0 and visible < BLACK_FRAME_VISIBLE_MIN
+    if is_black:
+        black_frame_consecutive += 1
+    else:
+        black_frame_consecutive = 0
+
+    if guard_active or is_black or frame_probe_enabled:
+        _log_frame_guard_sample(stats, is_black, guard_active)
+
+    if guard_active and is_black and viewport != null and viewport.texture != null:
+        return true
+    return false
+
+func _log_frame_guard_sample(stats: Dictionary, is_black: bool, guard_active: bool) -> void:
+    if not input_trace_enabled and not frame_probe_enabled:
+        return
+    var now := Time.get_ticks_msec()
+    if not is_black and black_frame_last_log_msec > 0 and now - black_frame_last_log_msec < 500:
+        return
+    black_frame_last_log_msec = now
+    var line := "frame_guard black=%d guard=%d consecutive=%d texture=%s stats=%s renderer=\"%s\"" % [
+        1 if is_black else 0,
+        1 if guard_active else 0,
+        black_frame_consecutive,
+        player.get_frame_texture_backend(),
+        JSON.stringify(stats),
+        player.get_renderer_info(),
+    ]
+    print(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
 
 func _default_game_path() -> String:
     if OS.get_name() == "iOS":
@@ -2774,7 +3983,7 @@ func _runtime_int(name: String, fallback: int) -> int:
     return int(value)
 
 func _write_probe_marker(line: String) -> void:
-    if OS.get_name() != "iOS":
+    if OS.get_name() != "iOS" or not device_probe_enabled:
         return
     var marker := FileAccess.open(_default_output_path("aetherkiri-device-probe.log"), FileAccess.READ_WRITE)
     if marker == null:
@@ -2787,7 +3996,15 @@ func _write_probe_marker(line: String) -> void:
 
 func _input(event: InputEvent) -> void:
     if game_running and viewport.visible:
-        if _handle_game_pointer_event(event):
+        if not _can_forward_game_input():
+            if _is_game_pointer_event(event):
+                if _is_game_input_busy():
+                    _trace_input_busy()
+                else:
+                    _trace_input_blocked()
+                get_viewport().set_input_as_handled()
+                return
+        elif _handle_game_pointer_event(event):
             get_viewport().set_input_as_handled()
             return
 
@@ -2835,32 +4052,51 @@ func _scroll_detail_by(delta: float) -> void:
     detail_scroll.scroll_vertical = int(next)
 
 func _on_viewport_input(event: InputEvent) -> void:
-    _handle_game_pointer_event(event)
+    if not _can_forward_game_input():
+        if _is_game_pointer_event(event):
+            if _is_game_input_busy():
+                _trace_input_busy()
+            else:
+                _trace_input_blocked()
+            get_viewport().set_input_as_handled()
+        return
+    if _handle_game_pointer_event(event):
+        get_viewport().set_input_as_handled()
+
+func _can_forward_game_input() -> bool:
+    return game_running and viewport.visible and cached_startup_state == STARTUP_SUCCEEDED and (
+        loading_panel == null or not loading_panel.visible
+    )
+
+func _is_game_pointer_event(event: InputEvent) -> bool:
+    return event is InputEventMouseButton or event is InputEventMouseMotion or event is InputEventScreenTouch or event is InputEventScreenDrag or event is InputEventPanGesture
 
 func _handle_game_pointer_event(event: InputEvent) -> bool:
+    # Input callbacks only enqueue events; _process owns engine ticking and frame updates.
+    _trace_input_received()
     if event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
         if _is_touch_platform() and mouse_button.button_index != MOUSE_BUTTON_WHEEL_UP and mouse_button.button_index != MOUSE_BUTTON_WHEEL_DOWN:
-            return Time.get_ticks_msec() < suppress_mouse_until_msec
-        var mapped := _map_viewport_point(mouse_button.position)
+            _trace_input_throttled()
+            return true
+        var is_scroll := mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP or mouse_button.button_index == MOUSE_BUTTON_WHEEL_DOWN
+        var captured := active_mouse_buttons.has(mouse_button.button_index)
+        var mapped := _map_viewport_point(mouse_button.position, captured and not is_scroll)
         if mapped.x < 0.0 or mapped.y < 0.0:
+            _trace_input_outside()
             return false
         var event_type := POINTER_DOWN if mouse_button.pressed else POINTER_UP
-        if mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP or mouse_button.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+        if is_scroll:
             event_type = POINTER_SCROLL
+        elif mouse_button.pressed:
+            active_mouse_buttons[mouse_button.button_index] = mapped
+        else:
+            if not captured:
+                _trace_input_throttled()
+                return true
+            active_mouse_buttons.erase(mouse_button.button_index)
         var button := _map_mouse_button(mouse_button.button_index)
-        if event_type == POINTER_DOWN:
-            player.send_pointer_event(
-                POINTER_MOVE,
-                0,
-                mapped.x,
-                mapped.y,
-                0.0,
-                0.0,
-                button
-            )
-            _pump_pointer_event_tick(1.0 / 60.0)
-        player.send_pointer_event(
+        _send_game_pointer_event(
             event_type,
             0,
             mapped.x,
@@ -2869,54 +4105,222 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             -1.0 if mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0,
             button
         )
-        if event_type != POINTER_SCROLL:
-            _pump_pointer_event_tick(1.0 / 60.0)
+        if event_type == POINTER_UP:
+            _hold_next_present_after_input()
         return true
     elif event is InputEventMouseMotion:
         if _is_touch_platform():
-            return Time.get_ticks_msec() < suppress_mouse_until_msec
+            return true
         var motion := event as InputEventMouseMotion
         var mapped := _map_viewport_point(motion.position)
         if mapped.x < 0.0 or mapped.y < 0.0:
+            _trace_input_outside()
             return false
         var rel := _map_viewport_delta(motion.relative)
-        player.send_pointer_event(
+        _send_game_pointer_event(
             POINTER_MOVE,
             0,
             mapped.x,
             mapped.y,
             rel.x,
             rel.y,
-            0
+            0,
+            POINTER_MOD_LEFT if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) else 0
         )
         return true
     elif event is InputEventScreenTouch:
         var touch := event as InputEventScreenTouch
         suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
-        var mapped := _map_viewport_point(touch.position)
+        var pointer_id := touch.index
+        if touch.pressed:
+            if _is_touch_input_busy():
+                suppressed_touch_points[pointer_id] = true
+                active_touch_points.erase(pointer_id)
+                touch_down_points.erase(pointer_id)
+                _trace_input_busy()
+                return true
+            if not active_touch_points.is_empty():
+                suppressed_touch_points[pointer_id] = true
+                _trace_input_throttled()
+                return true
+            if _should_suppress_touch_press():
+                suppressed_touch_points[pointer_id] = true
+                active_touch_points.erase(pointer_id)
+                touch_down_points.erase(pointer_id)
+                _trace_input_throttled()
+                return true
+            suppressed_touch_points.erase(pointer_id)
+            var mapped := _map_viewport_point(touch.position)
+            if mapped.x < 0.0 or mapped.y < 0.0:
+                _trace_input_outside()
+                return false
+            active_touch_points[pointer_id] = mapped
+            touch_down_points[pointer_id] = mapped
+            last_forwarded_touch_down_msec = Time.get_ticks_msec()
+            _send_game_pointer_event(
+                POINTER_DOWN,
+                _touch_engine_pointer_id(pointer_id),
+                mapped.x,
+                mapped.y,
+                0.0,
+                0.0,
+                0
+            )
+            _arm_tick_trace()
+            _arm_black_frame_guard()
+            return true
+        if suppressed_touch_points.has(pointer_id):
+            suppressed_touch_points.erase(pointer_id)
+            active_touch_points.erase(pointer_id)
+            touch_down_points.erase(pointer_id)
+            _trace_input_throttled()
+            return true
+        var captured := active_touch_points.has(pointer_id)
+        if not captured:
+            _trace_input_throttled()
+            return true
+        var mapped := _map_viewport_point(touch.position, true)
         if mapped.x < 0.0 or mapped.y < 0.0:
-            return false
-        var event_type := POINTER_DOWN if touch.pressed else POINTER_UP
-        if event_type == POINTER_DOWN:
-            player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
-        player.send_pointer_event(event_type, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+            mapped = active_touch_points.get(pointer_id, Vector2.ZERO)
+        var down_mapped: Vector2 = touch_down_points.get(pointer_id, mapped)
+        active_touch_points.erase(pointer_id)
+        touch_down_points.erase(pointer_id)
+        last_forwarded_touch_move_msec_by_id.erase(pointer_id)
+        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
+        last_forwarded_touch_up_msec = Time.get_ticks_msec()
+        _apply_touch_action_cooldown()
+        _arm_black_frame_guard()
+        _hold_next_present_after_input()
         return true
     elif event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
         suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
-        var mapped := _map_viewport_point(drag.position)
+        var pointer_id := drag.index
+        if suppressed_touch_points.has(pointer_id):
+            _trace_input_throttled()
+            return true
+        var captured := active_touch_points.has(pointer_id)
+        var mapped := _map_viewport_point(drag.position, captured)
         if mapped.x < 0.0 or mapped.y < 0.0:
-            return false
-        var rel := _map_viewport_delta(drag.relative)
-        player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, rel.x, rel.y, 0)
+            if not captured:
+                _trace_input_outside()
+                return false
+            mapped = active_touch_points.get(pointer_id, Vector2.ZERO)
+        if captured:
+            active_touch_points[pointer_id] = mapped
+            var rel := _map_viewport_delta(drag.relative)
+            _send_game_pointer_event(
+                POINTER_MOVE,
+                _touch_engine_pointer_id(pointer_id),
+                mapped.x,
+                mapped.y,
+                rel.x,
+                rel.y,
+                0,
+                POINTER_MOD_LEFT
+            )
+        else:
+            _trace_input_throttled()
         return true
     return false
+
+func _touch_engine_pointer_id(pointer_id: int) -> int:
+    return TOUCH_POINTER_ID_OFFSET + pointer_id
+
+func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: float, delta_x: float, delta_y: float, button: int, modifiers: int = 0) -> void:
+    var result := int(player.send_pointer_event(event_type, pointer_id, x, y, delta_x, delta_y, button, modifiers))
+    if not input_trace_enabled:
+        return
+    input_trace_forwarded += 1
+    if result != ENGINE_RESULT_OK:
+        input_trace_send_failed += 1
+
+func _trace_input_received() -> void:
+    if input_trace_enabled:
+        input_trace_received += 1
+
+func _trace_input_blocked() -> void:
+    if input_trace_enabled:
+        input_trace_blocked += 1
+
+func _trace_input_throttled() -> void:
+    if input_trace_enabled:
+        input_trace_throttled += 1
+
+func _trace_input_busy() -> void:
+    if input_trace_enabled:
+        input_trace_busy += 1
+
+func _trace_input_move_suppressed() -> void:
+    if input_trace_enabled:
+        input_trace_move_suppressed += 1
+
+func _trace_input_outside() -> void:
+    if input_trace_enabled:
+        input_trace_outside += 1
+
+func _apply_touch_action_cooldown() -> void:
+    if not _is_touch_platform() or TOUCH_ACTION_COOLDOWN_MS <= 0:
+        return
+    touch_input_busy_until_msec = maxi(
+        touch_input_busy_until_msec,
+        Time.get_ticks_msec() + TOUCH_ACTION_COOLDOWN_MS
+    )
+
+func _update_touch_busy_gate(tick_ms: float) -> void:
+    if not _is_touch_platform() or TOUCH_BUSY_SUPPRESS_MS <= 0:
+        return
+    if tick_ms < TOUCH_BUSY_TICK_MS:
+        return
+    touch_input_busy_until_msec = maxi(
+        touch_input_busy_until_msec,
+        Time.get_ticks_msec() + TOUCH_BUSY_SUPPRESS_MS
+    )
+
+func _is_game_input_busy() -> bool:
+    return _is_touch_input_busy()
+
+func _is_touch_input_busy() -> bool:
+    return _is_touch_platform() and TOUCH_BUSY_SUPPRESS_MS > 0 and Time.get_ticks_msec() < touch_input_busy_until_msec
+
+func _should_suppress_touch_press() -> bool:
+    if not _is_touch_platform() or TOUCH_TAP_MIN_INTERVAL_MS <= 0:
+        return false
+    var now := Time.get_ticks_msec()
+    if last_forwarded_touch_down_msec > 0 and now - last_forwarded_touch_down_msec < TOUCH_TAP_MIN_INTERVAL_MS:
+        return true
+    if last_forwarded_touch_up_msec > 0 and now - last_forwarded_touch_up_msec < TOUCH_TAP_MIN_INTERVAL_MS:
+        return true
+    return false
+
+func _should_suppress_touch_drag(pointer_id: int) -> bool:
+    if not _is_touch_platform():
+        return false
+    var now := Time.get_ticks_msec()
+    var last_move := int(last_forwarded_touch_move_msec_by_id.get(pointer_id, 0))
+    if last_move > 0 and now - last_move < TOUCH_DRAG_MIN_INTERVAL_MS:
+        return true
+    last_forwarded_touch_move_msec_by_id[pointer_id] = now
+    return false
+
+func _hold_next_present_after_input() -> void:
+    if POST_INPUT_PRESENT_HOLD_FRAMES <= 0:
+        return
+    var now := Time.get_ticks_msec()
+    if present_hold_frames > 0:
+        return
+    if last_present_hold_msec > 0 and now - last_present_hold_msec < POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS:
+        return
+    present_hold_frames = POST_INPUT_PRESENT_HOLD_FRAMES
+    last_present_hold_msec = now
+    if input_trace_enabled:
+        input_trace_present_holds += 1
 
 func _is_touch_platform() -> bool:
     var platform := OS.get_name()
     return platform == "iOS" or platform == "Android"
 
-func _map_viewport_point(pos: Vector2) -> Vector2:
+func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2:
     if viewport.texture == null:
         return pos
     var local_pos := pos - viewport.get_global_rect().position
@@ -2932,21 +4336,13 @@ func _map_viewport_point(pos: Vector2) -> Vector2:
     var offset: Vector2 = (panel_size - drawn_size) * 0.5
     var inside: Vector2 = local_pos - offset
     if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
-        return Vector2(-1.0, -1.0)
+        if not clamp_to_bounds:
+            return Vector2(-1.0, -1.0)
+        inside = Vector2(
+            clampf(inside.x, 0.0, drawn_size.x),
+            clampf(inside.y, 0.0, drawn_size.y)
+        )
     return inside / scale
-
-func _pump_pointer_event_tick(delta: float) -> void:
-    if not game_running:
-        return
-    if player.get_startup_state() != STARTUP_SUCCEEDED:
-        return
-    var result: int = int(player.tick(delta))
-    if result != ENGINE_RESULT_OK:
-        render_errors += 1
-        print("Pointer event pump failed: %s %s" % [
-            player.get_last_result(),
-            player.get_last_error(),
-        ])
 
 func _map_viewport_delta(delta: Vector2) -> Vector2:
     if viewport.texture == null:

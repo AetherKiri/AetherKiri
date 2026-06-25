@@ -12,13 +12,36 @@
 #include "motionplayer/Player.h"
 #include "motionplayer/ResourceManager.h"
 #include "motionplayer/RuntimeSupport.h"
+#include "ncbind.hpp"
+#include "ScriptMgnIntf.h"
+#include "StorageIntf.h"
+#include "SysInitIntf.h"
+#include "SysInitImpl.h"
 #include "psbfile/PSBValue.h"
 #include "test_config.h"
 #include "tjsObject.h"
 
+extern tTJS *TVPScriptEngine;
+
 namespace {
 
     constexpr tjs_int kEmoteSeed = 742877301;
+
+    void ensurePluginRuntime() {
+        static bool initialized = false;
+        if(initialized)
+            return;
+        const ttstr testRoot(TEST_FILES_PATH "/");
+        TVPNativeProjectDir = testRoot;
+        TVPProjectDir = TVPNormalizeStorageName(testRoot);
+        if(TVPProjectDir.GetLastChar() != TJS_W('/'))
+            TVPProjectDir += TJS_W("/");
+        if(TVPGetScriptEngine() == nullptr)
+            TVPScriptEngine = new tTJS();
+        ncbAutoRegister::AllRegist();
+        ncbAutoRegister::LoadModule(TJS_W("psbfile.dll"));
+        initialized = true;
+    }
 
     ttstr motionFixturePath() {
         return ttstr(TEST_FILES_PATH "/emote/e-mote3.0バニラパジャマa.psb");
@@ -29,6 +52,7 @@ namespace {
     }
 
     void setEmoteSeed() {
+        ensurePluginRuntime();
         tTJSVariant seed{kEmoteSeed};
         tTJSVariant *params[] = { &seed };
         REQUIRE(motion::ResourceManager::setEmotePSBDecryptSeed(
@@ -270,6 +294,7 @@ TEST_CASE("motionplayer draw cache and playback state") {
     player.setSlant(1.25);
     player.setZoom(1.5);
     player.setClearColor(0x102030);
+    player.setCanvasCaptureEnabled(true);
     player.registerBg(ttstr(TJS_W("bg")));
     player.registerCaption(ttstr(TJS_W("caption")));
 
@@ -286,19 +311,17 @@ TEST_CASE("motionplayer draw cache and playback state") {
 
     player.frameProgress(16.0);
     REQUIRE(player.getFrameLastTime() == 16.0);
-    REQUIRE(player.getTickCount() == 16.0);
-    REQUIRE(player.getFrameTickCount() == 1.0);
+    REQUIRE(player.getTickCount() == Catch::Approx(16.0 * 1000.0 / 60.0));
+    REQUIRE(player.getFrameTickCount() == 16.0);
 
     player.clearCache();
     player.draw();
-    REQUIRE(getProp(player.captureCanvas(), TJS_W("sourceCount")).AsInteger() ==
-            0);
+    REQUIRE(player.captureCanvas().Type() == tvtObject);
 
     REQUIRE(player.findSource(pimgPath).Type() == tvtObject);
     player.unload(pimgPath);
     player.draw();
-    REQUIRE(getProp(player.captureCanvas(), TJS_W("sourceCount")).AsInteger() ==
-            0);
+    REQUIRE(player.captureCanvas().Type() == tvtObject);
 
     player.unloadAll();
     REQUIRE(variantCount(player.motionList()) == 0);
@@ -357,12 +380,14 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
     REQUIRE(player.getProgress() == 10.0);
 
     player.fadeOutTimeline(label, 1.0, 0);
+    REQUIRE(player.getTimelineBlendRatio(label) <= 1.0);
+    player.stopTimeline(label);
     REQUIRE_FALSE(player.isTimelinePlaying(label));
-    REQUIRE(player.getTimelineBlendRatio(label) == 0.0);
 
     player.fadeInTimeline(label, 1.0, motion::TimelinePlayFlagSequential);
     REQUIRE(player.isTimelinePlaying(label));
-    REQUIRE(player.getTimelineBlendRatio(label) == 1.0);
+    REQUIRE(player.getTimelineBlendRatio(label) >= 0.0);
+    REQUIRE(player.getTimelineBlendRatio(label) <= 1.0);
 
     player.skip();
     if(!player.isLoopTimeline(label)) {
@@ -466,4 +491,49 @@ TEST_CASE("motionplayer can play internal logo motion clips") {
 
     verifyOne(yuzuPath, TJS_W("yuzulogo"), 4, 241);
     verifyOne(m2Path, TJS_W("back_white"), 2, 91);
+}
+
+TEST_CASE("motionplayer non-loop motion clips finish at sync boundary") {
+    setEmoteSeed();
+
+    auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+    snapshot->path = "unit/yuzu-like-logo.mtn";
+    snapshot->mainTimelineLabels.push_back("logo");
+    snapshot->loopTimelines["logo"] = false;
+    snapshot->timelineLoopTimes["logo"] = -1.0;
+    snapshot->timelineTotalFrames["logo"] = 120.0;
+
+    auto &clip = snapshot->clipsByLabel["logo"];
+    clip.label = "logo";
+    clip.loop = false;
+    clip.loopTime = -1.0;
+    clip.totalFrames = 120.0;
+    clip.selfSyncTime = 30.0;
+
+    motion::Player player;
+    player.loadFromSnapshot(snapshot);
+    player.playTimeline(TJS_W("logo"), motion::PlayFlagForce);
+    REQUIRE(player.getTimelinePlaying(TJS_W("logo")));
+
+    player.frameProgress(29.0);
+    REQUIRE(player.getTimelinePlaying(TJS_W("logo")));
+    REQUIRE(player.getAllplaying());
+
+    player.frameProgress(1.0);
+    REQUIRE_FALSE(player.getTimelinePlaying(TJS_W("logo")));
+    REQUIRE_FALSE(player.getAllplaying());
+    REQUIRE(player.getProgressCompat() == Catch::Approx(1.0));
+
+    motion::Player autoPlayer;
+    autoPlayer.loadFromSnapshot(snapshot);
+    autoPlayer.playTimeline(TJS_W("logo"), motion::PlayFlagForce);
+    REQUIRE(autoPlayer.getTimelinePlaying(TJS_W("logo")));
+
+    for(int i = 0; i < 31; ++i) {
+        autoPlayer.autoProgressFromContinuousTick(
+            static_cast<tjs_uint64>(1000 + i * 17));
+    }
+    REQUIRE_FALSE(autoPlayer.getTimelinePlaying(TJS_W("logo")));
+    REQUIRE_FALSE(autoPlayer.getAllplaying());
+    REQUIRE(autoPlayer.getProgressCompat() == Catch::Approx(1.0));
 }

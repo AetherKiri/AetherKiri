@@ -11,6 +11,9 @@
 #pragma once
 
 namespace TJS {
+    extern void TJSRememberSaveLoadFileStoreObject(iTJSDispatch2 *object);
+
+    extern tjs_error TJSInvokeRememberedSaveLoadFileStoreItem(tjs_int item_index);
 
     extern void TJSVariantArrayStackCompact();
 

@@ -83,6 +83,9 @@ namespace motion {
         void setMetadata(tTJSVariant v) { _metadata = v; }
         tTJSVariant getMetadata() const { return _metadata; }
 
+        void setResolution(double v) { _resolution = v; }
+        double getResolution() const { return _resolution; }
+
         void setChara(ttstr v) { _chara = v; }
         ttstr getChara() const { return _chara; }
 
@@ -127,7 +130,7 @@ namespace motion {
         void setVariableKeys(tTJSVariant v) { _variableKeys = v; }
         tTJSVariant getVariableKeys();
 
-        void setAllplaying(bool v) { _allplaying = v; }
+        void setAllplaying(bool v);
         bool getAllplaying() const { return _allplaying; }
 
         void setSyncWaiting(bool v) { _syncWaiting = v; }
@@ -312,6 +315,10 @@ namespace motion {
         void adjustGamma(tTJSVariant args);
         void draw();
         void frameProgress(double dt);
+        void autoProgressFromContinuousTick(tjs_uint64 tick);
+        iTJSDispatch2 *getAutoProgressDispatchForCompat() const {
+            return _autoProgressDispatch;
+        }
 
         // Viewport/display
         void setFlip(bool v);
@@ -427,6 +434,7 @@ namespace motion {
         double getTop() const { return getY(); }
         void setLeft(double v) { setX(v); }
         void setTop(double v) { setY(v); }
+        void presentationHoldFromContinuousTick(tjs_uint64 tick);
 
     private:
         bool ensureMotionLoaded();
@@ -504,9 +512,16 @@ namespace motion {
         void applyPreparedRenderItemTranslateOffsets();
         bool buildRenderCommands(tjs_int canvasWidth, tjs_int canvasHeight);
         bool executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
-                                        bool skipUpdate);
+                                         bool skipUpdate);
         bool updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject);
         bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
+        void enableAutoProgress(iTJSDispatch2 *objthis);
+        void disableAutoProgress();
+        void enablePresentationHold(iTJSDispatch2 *targetLayerObject,
+                                    tjs_uint64 durationMs);
+        void disablePresentationHold();
+        void noteManualProgress();
+        void dispatchPendingEvents(iTJSDispatch2 *objthis);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);
@@ -525,6 +540,7 @@ namespace motion {
         ResourceManager _resourceManagerNative;
         int _completionType = 0;
         tTJSVariant _metadata;
+        double _resolution = 0.0;
         ttstr _chara;
         ttstr _motionKey;
         ttstr _outline;  // Aligned to libkrkr2.so +1032: ttstr
@@ -573,6 +589,16 @@ namespace motion {
         inline static bool _useD3D;
         ttstr _meshline;  // Aligned to libkrkr2.so +1052: ttstr
         bool _busy = false;
+        iTJSDispatch2 *_autoProgressDispatch = nullptr;
+        tjs_uint64 _autoProgressLastTick = 0;
+        tjs_uint64 _manualProgressLastTick = 0;
+        bool _autoProgressHasLastTick = false;
+        bool _autoProgressRegistered = false;
+        tTJSVariant _presentationHoldLayer;
+        tjs_uint64 _presentationHoldUntilTick = 0;
+        tjs_uint64 _presentationHoldLastTick = 0;
+        bool _presentationHoldRegistered = false;
+        bool _presentationHoldRendering = false;
 
         // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
         // Camera velocity at player+784/792/800, damping at player+600
@@ -725,5 +751,7 @@ namespace motion {
         // Propagated to child particle players (sub_6BF0DC at 0x6BF9C0).
         tTJSVariant _emoteEditVariant;    // player+1012
     };
+
+    std::vector<tTJSVariant> SnapshotAutoProgressPlayerDispatchesForCompat();
 
 } // namespace motion

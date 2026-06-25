@@ -16,17 +16,21 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
-#include <cmath>
+#include <string>
+#include <vector>
 #include <spdlog/spdlog.h>
 
 #include "tjsArray.h"
+#include "tjsError.h"
 #include "LayerIntf.h"
 #include "MsgIntf.h"
 #include "LayerBitmapIntf.h"
 #include "LayerTreeOwner.h"
 #include "GraphicsLoaderIntf.h"
 #include "StorageIntf.h"
+#include "ScriptMgnIntf.h"
 #include "tvpgl.h"
 #include "EventIntf.h"
 #include "SysInitIntf.h"
@@ -44,7 +48,6 @@
 #include "ConfigManager/IndividualConfigManager.h"
 #include "vkdefine.h"
 #include "RenderManager.h"
-#include <cstdlib>
 #include "FontImpl.h"
 
 extern void TVPSetFontRasterizer(tjs_int index);
@@ -76,6 +79,1296 @@ tjs_uint64 TVPGetLayerTotalBitmapBytes() {
 static int64_t TVPCalcMainImageBytes(tTVPBaseTexture *img) {
     if(!img) return 0;
     return static_cast<int64_t>(img->GetWidth()) * img->GetHeight() * (img->GetBPP() / 8);
+}
+
+static bool TVPLayerDebugEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_LAYER_DEBUG");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+static bool TVPLayerDebugTake() {
+    if(!TVPLayerDebugEnabled()) {
+        return false;
+    }
+    static std::atomic<int> count{0};
+    return count.fetch_add(1, std::memory_order_relaxed) < 50000;
+}
+
+static bool TVPLayerInputTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_INPUT_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+static void TVPTraceLayerInputEvent(const char *event,
+                                    tTJSNI_BaseLayer *layer,
+                                    const tTJSVariantClosure &action_owner) {
+    if(!TVPLayerInputTraceEnabled() || !layer)
+        return;
+    spdlog::info("LayerIntf {} layer={} action={}", event,
+                 layer->GetName().AsStdString(),
+                 action_owner.Object ? "yes" : "no");
+}
+
+static std::string TVPVariantDebugString(const tTJSVariant &value) {
+    ttstr text(value);
+    return text.AsStdString();
+}
+
+static void TVPTraceObjectProperty(const char *label,
+                                   const tTJSVariantClosure &object,
+                                   const tjs_char *property) {
+    if(!TVPLayerInputTraceEnabled() || !object.Object)
+        return;
+    tTJSVariant value;
+    ttstr prop_name(property);
+    const tjs_error hr =
+        object.PropGet(0, prop_name.c_str(), prop_name.GetHint(), &value,
+                       nullptr);
+    if(TJS_FAILED(hr) || value.Type() == tvtVoid) {
+        spdlog::info("LayerIntf trace {}.{}=<missing> hr={}", label,
+                     prop_name.AsStdString(), hr);
+        return;
+    }
+    spdlog::info("LayerIntf trace {}.{}={}", label, prop_name.AsStdString(),
+                 TVPVariantDebugString(value));
+}
+
+static void TVPTraceObjectForButtonClick(const char *label,
+                                         const tTJSVariantClosure &object) {
+    if(!TVPLayerInputTraceEnabled() || !object.Object)
+        return;
+    TVPTraceObjectProperty(label, object, TJS_W("name"));
+    TVPTraceObjectProperty(label, object, TJS_W("linkNum"));
+    TVPTraceObjectProperty(label, object, TJS_W("controlOwner"));
+    TVPTraceObjectProperty(label, object, TJS_W("owner"));
+    TVPTraceObjectProperty(label, object, TJS_W("parent"));
+    TVPTraceObjectProperty(label, object, TJS_W("target"));
+    TVPTraceObjectProperty(label, object, TJS_W("eventTarget"));
+    TVPTraceObjectProperty(label, object, TJS_W("onclick"));
+    TVPTraceObjectProperty(label, object, TJS_W("onenter"));
+    TVPTraceObjectProperty(label, object, TJS_W("onleave"));
+    TVPTraceObjectProperty(label, object, TJS_W("stor"));
+    TVPTraceObjectProperty(label, object, TJS_W("_stor"));
+    TVPTraceObjectProperty(label, object, TJS_W("store"));
+    TVPTraceObjectProperty(label, object, TJS_W("_store"));
+    TVPTraceObjectProperty(label, object, TJS_W("saveA"));
+    TVPTraceObjectProperty(label, object, TJS_W("gameSaveM"));
+    TVPTraceObjectProperty(label, object, TJS_W("current"));
+    TVPTraceObjectProperty(label, object, TJS_W("Current"));
+    TVPTraceObjectProperty(label, object, TJS_W("_current"));
+    TVPTraceObjectProperty(label, object, TJS_W("onClick"));
+    TVPTraceObjectProperty(label, object, TJS_W("onExecute"));
+    TVPTraceObjectProperty(label, object, TJS_W("onButton"));
+    TVPTraceObjectProperty(label, object, TJS_W("onButtonClick"));
+    TVPTraceObjectProperty(label, object, TJS_W("click"));
+    TVPTraceObjectProperty(label, object, TJS_W("execute"));
+    TVPTraceObjectProperty(label, object, TJS_W("exp"));
+    TVPTraceObjectProperty(label, object, TJS_W("expression"));
+    TVPTraceObjectProperty(label, object, TJS_W("cmd"));
+    TVPTraceObjectProperty(label, object, TJS_W("command"));
+    TVPTraceObjectProperty(label, object, TJS_W("func"));
+    TVPTraceObjectProperty(label, object, TJS_W("sename"));
+    TVPTraceObjectProperty(label, object, TJS_W("names"));
+    TVPTraceObjectProperty(label, object, TJS_W("call"));
+    TVPTraceObjectProperty(label, object, TJS_W("global"));
+    TVPTraceObjectProperty(label, object, TJS_W("_up"));
+    TVPTraceObjectProperty(label, object, TJS_W("_down"));
+    TVPTraceObjectProperty(label, object, TJS_W("_click"));
+    TVPTraceObjectProperty(label, object, TJS_W("params"));
+}
+
+static thread_local tTJSNI_BaseLayer *TVPLayerEventSource = nullptr;
+static thread_local tTJSNI_BaseLayer *TVPLayerRecentEventSource = nullptr;
+static thread_local bool TVPCafeStellaSyntheticClickActive = false;
+
+struct tTVPLayerMouseUpContext {
+    bool Active = false;
+    tTJSNI_BaseLayer *Layer = nullptr;
+    tjs_int X = 0;
+    tjs_int Y = 0;
+    tjs_int Button = 0;
+    tjs_int64 Shift = 0;
+};
+
+static thread_local tTVPLayerMouseUpContext TVPLayerCurrentMouseUp;
+
+class TVPLayerEventSourceScope {
+public:
+    explicit TVPLayerEventSourceScope(tTJSNI_BaseLayer *layer)
+        : Previous(TVPLayerEventSource) {
+        TVPLayerEventSource = layer;
+    }
+
+    ~TVPLayerEventSourceScope() { TVPLayerEventSource = Previous; }
+
+private:
+    tTJSNI_BaseLayer *Previous;
+};
+
+class TVPLayerMouseUpContextScope {
+public:
+    TVPLayerMouseUpContextScope(tTJSNI_BaseLayer *layer, tjs_int numparams,
+                                tTJSVariant **param)
+        : Previous(TVPLayerCurrentMouseUp) {
+        TVPLayerCurrentMouseUp = {};
+        if(layer && numparams >= 4) {
+            TVPLayerCurrentMouseUp.Active = true;
+            TVPLayerCurrentMouseUp.Layer = layer;
+            TVPLayerCurrentMouseUp.X = (tjs_int)*param[0];
+            TVPLayerCurrentMouseUp.Y = (tjs_int)*param[1];
+            TVPLayerCurrentMouseUp.Button = (tjs_int)*param[2];
+            TVPLayerCurrentMouseUp.Shift = (tjs_int64)*param[3];
+        }
+    }
+
+    ~TVPLayerMouseUpContextScope() { TVPLayerCurrentMouseUp = Previous; }
+
+private:
+    tTVPLayerMouseUpContext Previous;
+};
+
+static bool TVPLayerNameEquals(tTJSNI_BaseLayer *layer, const char *name) {
+    return layer && layer->GetName().AsStdString() == name;
+}
+
+static bool TVPLayerNameLooksNumberedItem(const ttstr &name) {
+    const std::string text = name.AsStdString();
+    if(text.size() <= 4 || text.compare(0, 4, "item") != 0)
+        return false;
+    for(size_t i = 4; i < text.size(); ++i) {
+        if(text[i] < '0' || text[i] > '9')
+            return false;
+    }
+    return true;
+}
+
+static bool TVPLayerNameLooksNumberedPrefix(const ttstr &name,
+                                            const char *prefix) {
+    const std::string text = name.AsStdString();
+    const size_t prefix_len = std::strlen(prefix);
+    if(text.size() <= prefix_len || text.compare(0, prefix_len, prefix) != 0)
+        return false;
+    for(size_t i = prefix_len; i < text.size(); ++i) {
+        if(text[i] < '0' || text[i] > '9')
+            return false;
+    }
+    return true;
+}
+
+static bool TVPGetNumberedPrefixIndex(const ttstr &name, const char *prefix,
+                                      tjs_int &index) {
+    const std::string text = name.AsStdString();
+    const size_t prefix_len = std::strlen(prefix);
+    if(text.size() <= prefix_len || text.compare(0, prefix_len, prefix) != 0)
+        return false;
+    tjs_int value = 0;
+    for(size_t i = prefix_len; i < text.size(); ++i) {
+        if(text[i] < '0' || text[i] > '9')
+            return false;
+        value = value * 10 + (text[i] - '0');
+    }
+    index = value;
+    return true;
+}
+
+static bool TVPLayerNameLooksCafeStellaIndexedButton(const ttstr &name) {
+    return TVPLayerNameLooksNumberedPrefix(name, "item") ||
+        TVPLayerNameLooksNumberedPrefix(name, "mitem");
+}
+
+static bool TVPGetNumberedItemIndex(tTJSNI_BaseLayer *layer, tjs_int &index) {
+    if(!layer)
+        return false;
+    return TVPGetNumberedPrefixIndex(layer->GetName(), "item", index);
+}
+
+static bool TVPLayerLooksCafeStellaSaveLoadGridItem(tTJSNI_BaseLayer *layer) {
+    if(!layer || !TVPLayerNameLooksNumberedItem(layer->GetName()))
+        return false;
+    if(!TVPLayerNameEquals(layer->GetParent(), "ParentHackLayer"))
+        return false;
+
+    const tjs_uint width = layer->GetWidth();
+    const tjs_uint height = layer->GetHeight();
+    return width >= 220 && width <= 320 && height >= 180 && height <= 320;
+}
+
+static bool TVPGetCafeStellaSaveLoadGridItemIndex(tTJSNI_BaseLayer *layer,
+                                                  tjs_int &item_index) {
+    if(!TVPLayerNameEquals(layer, "ParentHackLayer") ||
+       !TVPLayerLooksCafeStellaSaveLoadGridItem(TVPLayerEventSource)) {
+        return false;
+    }
+    return TVPGetNumberedItemIndex(TVPLayerEventSource, item_index);
+}
+
+static tTJSNI_BaseLayer *TVPGetButtonClickSourceLayer() {
+    if(TVPLayerEventSource)
+        return TVPLayerEventSource;
+    if(TVPLayerCurrentMouseUp.Active && TVPLayerCurrentMouseUp.Layer)
+        return TVPLayerCurrentMouseUp.Layer;
+    return TVPLayerRecentEventSource;
+}
+
+static bool TVPLayerLooksCafeStellaParentHackSource(
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer) {
+    return TVPLayerNameEquals(parent_layer, "ParentHackLayer") &&
+        source_layer && source_layer != parent_layer &&
+        TVPLayerNameLooksCafeStellaIndexedButton(source_layer->GetName());
+}
+
+static iTJSDispatch2 *TVPGetButtonClickEventTarget(tTJSNI_BaseLayer *layer,
+                                                   iTJSDispatch2 *fallback) {
+    tjs_int item_index = 0;
+    if(TVPGetCafeStellaSaveLoadGridItemIndex(layer, item_index)) {
+        if(iTJSDispatch2 *source_owner =
+               TVPLayerEventSource->GetOwnerNoAddRef()) {
+            if(TVPLayerInputTraceEnabled()) {
+                spdlog::info("LayerIntf onButtonClick remap target parent={} source={} index={}",
+                             layer->GetName().AsStdString(),
+                             TVPLayerEventSource->GetName().AsStdString(),
+                             item_index);
+            }
+            return source_owner;
+        }
+    }
+    tTJSNI_BaseLayer *source_layer = TVPGetButtonClickSourceLayer();
+    if(TVPLayerLooksCafeStellaParentHackSource(layer, source_layer)) {
+        if(iTJSDispatch2 *source_owner =
+               source_layer->GetOwnerNoAddRef()) {
+            if(TVPLayerInputTraceEnabled()) {
+                spdlog::info("LayerIntf onButtonClick remap target parent={} source={}",
+                             layer->GetName().AsStdString(),
+                             source_layer->GetName().AsStdString());
+            }
+            return source_owner;
+        }
+    }
+    return fallback;
+}
+
+static tTJSVariantClosure
+TVPGetButtonClickActionOwner(tTJSNI_BaseLayer *layer,
+                             const tTJSVariantClosure &fallback) {
+    tjs_int item_index = 0;
+    if(TVPGetCafeStellaSaveLoadGridItemIndex(layer, item_index) &&
+       TVPLayerEventSource) {
+        tTJSVariantClosure source_action =
+            TVPLayerEventSource->GetActionOwnerNoAddRef();
+        if(source_action.Object) {
+            if(TVPLayerInputTraceEnabled()) {
+                spdlog::info("LayerIntf onButtonClick remap action parent={} source={} index={} same={}",
+                             layer->GetName().AsStdString(),
+                             TVPLayerEventSource->GetName().AsStdString(),
+                             item_index,
+                             source_action.Object == fallback.Object &&
+                                     source_action.ObjThis == fallback.ObjThis
+                                 ? "yes"
+                                 : "no");
+            }
+            return source_action;
+        }
+    }
+    tTJSNI_BaseLayer *source_layer = TVPGetButtonClickSourceLayer();
+    if(TVPLayerLooksCafeStellaParentHackSource(layer, source_layer)) {
+        tTJSVariantClosure source_action =
+            source_layer->GetActionOwnerNoAddRef();
+        if(source_action.Object) {
+            if(TVPLayerInputTraceEnabled()) {
+                spdlog::info("LayerIntf onButtonClick remap action parent={} source={} same={}",
+                             layer->GetName().AsStdString(),
+                             source_layer->GetName().AsStdString(),
+                             source_action.Object == fallback.Object &&
+                                     source_action.ObjThis == fallback.ObjThis
+                                 ? "yes"
+                                 : "no");
+            }
+            return source_action;
+        }
+    }
+    return fallback;
+}
+
+static tjs_error TVPCallCafeStellaGridItemMethod(
+    const char *label, const tTJSVariantClosure &target,
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index, const tjs_char *method, tTJSVariant *result,
+    tjs_int numparams, tTJSVariant **param) {
+    if(!target.Object)
+        return TJS_E_INVALIDOBJECT;
+
+    ttstr method_name(method);
+    const tjs_error hr = target.FuncCall(
+        0, method_name.c_str(), method_name.GetHint(), result, numparams,
+        param, nullptr);
+    if(TVPLayerInputTraceEnabled()) {
+        spdlog::info("LayerIntf onButtonClick item direct label={} parent={} source={} index={} method={} argc={} target={} this={} hr={}",
+                     label ? label : "",
+                     parent_layer ? parent_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     item_index, method_name.AsStdString(), numparams,
+                     static_cast<const void *>(target.Object),
+                     static_cast<const void *>(target.ObjThis), hr);
+    }
+    return hr;
+}
+
+static bool TVPInvokeCafeStellaGridItemDefault(
+    const char *label, const tTJSVariantClosure &target,
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index, tTJSVariant *result) {
+    tTJSVariant item_arg(item_index);
+    tTJSVariant *item_args[1] = { &item_arg };
+
+    const tjs_error set_item_hr = TVPCallCafeStellaGridItemMethod(
+        label, target, parent_layer, source_layer, item_index,
+        TJS_W("setItem"), nullptr, 1, item_args);
+    if(TJS_FAILED(set_item_hr))
+        return false;
+
+    if(TVPLayerInputTraceEnabled()) {
+        tTJSVariant current;
+        TVPCallCafeStellaGridItemMethod(label, target, parent_layer,
+                                        source_layer, item_index,
+                                        TJS_W("getCurrent"), &current, 0,
+                                        nullptr);
+        spdlog::info("LayerIntf onButtonClick item direct label={} current={}",
+                     label ? label : "", TVPVariantDebugString(current));
+    }
+
+    tjs_error default_hr = TVPCallCafeStellaGridItemMethod(
+        label, target, parent_layer, source_layer, item_index,
+        TJS_W("onDefault"), result, 0, nullptr);
+    if(TJS_SUCCEEDED(default_hr))
+        return true;
+
+    default_hr = TVPCallCafeStellaGridItemMethod(
+        label, target, parent_layer, source_layer, item_index,
+        TJS_W("onDefault"), result, 1, item_args);
+    return TJS_SUCCEEDED(default_hr);
+}
+
+static bool TVPInvokeCafeStellaGridItemCandidate(
+    const char *label, const tTJSVariantClosure &target,
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index, tTJSVariant *result) {
+    if(!target.Object)
+        return false;
+
+    if(TVPInvokeCafeStellaGridItemDefault(label, target, parent_layer,
+                                          source_layer, item_index, result))
+        return true;
+
+    tTJSVariant item_arg(item_index);
+    tTJSVariant *item_args[1] = { &item_arg };
+    static const tjs_char *candidate_methods[] = {
+        TJS_W("onItem"),
+        TJS_W("select"),
+        TJS_W("selec"),
+        TJS_W("dsa"),
+        TJS_W("_dsa"),
+        TJS_W("onExecute"),
+    };
+    for(const tjs_char *candidate_method : candidate_methods) {
+        const tjs_error hr = TVPCallCafeStellaGridItemMethod(
+            label, target, parent_layer, source_layer, item_index,
+            candidate_method, result, 1, item_args);
+        if(TJS_SUCCEEDED(hr))
+            return true;
+    }
+    return false;
+}
+
+static bool TVPInvokeCafeStellaGridItemCallbackOwner(
+    const char *property_label, const tTJSVariantClosure &source_object,
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index, tTJSVariant *result) {
+    if(!source_object.Object)
+        return false;
+
+    ttstr property_name(property_label);
+    tTJSVariant callback_value;
+    const tjs_error hr = source_object.PropGet(
+        0, property_name.c_str(), property_name.GetHint(), &callback_value,
+        nullptr);
+    if(TJS_FAILED(hr) || callback_value.Type() != tvtObject) {
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item direct callback property={} parent={} source={} index={} hr={} type={}",
+                         property_label ? property_label : "",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index, hr, static_cast<int>(callback_value.Type()));
+        }
+        return false;
+    }
+
+    tTJSVariantClosure callback =
+        callback_value.AsObjectClosureNoAddRef();
+    if(TVPLayerInputTraceEnabled()) {
+        spdlog::info("LayerIntf onButtonClick item direct callback property={} object={} this={}",
+                     property_label ? property_label : "",
+                     static_cast<const void *>(callback.Object),
+                     static_cast<const void *>(callback.ObjThis));
+    }
+    if(!callback.ObjThis)
+        return false;
+
+    tTJSVariantClosure callback_owner(callback.ObjThis, callback.ObjThis);
+    return TVPInvokeCafeStellaGridItemCandidate(
+        property_label, callback_owner, parent_layer, source_layer, item_index,
+        result);
+}
+
+static bool TVPExecuteCafeStellaCurrentCommand(
+    const ttstr &command, tTJSNI_BaseLayer *parent_layer,
+    tTJSNI_BaseLayer *source_layer, tjs_int item_index, tTJSVariant *result) {
+    iTJSDispatch2 *source_owner =
+        source_layer ? source_layer->GetOwnerNoAddRef() : nullptr;
+    if(!source_owner)
+        return false;
+
+    const ttstr expression =
+        ttstr(TJS_W("Current.cmd(\"")) + command + TJS_W("\")");
+    auto trace_exception = [&](const char *kind, const ttstr &message,
+                               const tjs_char *block, tjs_int line,
+                               const ttstr &trace) {
+        if(!TVPLayerInputTraceEnabled())
+            return;
+        spdlog::info("LayerIntf onButtonClick item direct command parent={} source={} index={} expr={} threw kind={} message={} block={} line={} trace={}",
+                     parent_layer ? parent_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     item_index, expression.AsStdString(), kind ? kind : "",
+                     message.AsStdString(),
+                     block ? ttstr(block).AsStdString() : "", line,
+                     trace.AsStdString());
+    };
+
+    try {
+        TVPExecuteExpression(expression, source_owner, result);
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item direct command parent={} source={} index={} expr={} result={} hr=0",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index, expression.AsStdString(),
+                         result ? TVPVariantDebugString(*result) : "");
+        }
+        return true;
+    } catch(eTJSScriptError &e) {
+        trace_exception("script", e.GetMessage(), e.GetBlockName(),
+                        e.GetSourceLine(), e.GetTrace());
+        return false;
+    } catch(eTJS &e) {
+        trace_exception("tjs", e.GetMessage(), TJS_W(""), -1, ttstr());
+        return false;
+    } catch(...) {
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item direct command parent={} source={} index={} expr={} threw",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index, expression.AsStdString());
+        }
+        return false;
+    }
+}
+
+static bool TVPExecuteCafeStellaCurrentExpression(
+    const ttstr &expression, tTJSNI_BaseLayer *parent_layer,
+    tTJSNI_BaseLayer *source_layer, tjs_int item_index, tTJSVariant *result) {
+    iTJSDispatch2 *source_owner =
+        source_layer ? source_layer->GetOwnerNoAddRef() : nullptr;
+    if(!source_owner)
+        return false;
+
+    auto trace_exception = [&](const char *kind, const ttstr &message,
+                               const tjs_char *block, tjs_int line,
+                               const ttstr &trace) {
+        if(!TVPLayerInputTraceEnabled())
+            return;
+        spdlog::info("LayerIntf onButtonClick item direct expression parent={} source={} index={} expr={} threw kind={} message={} block={} line={} trace={}",
+                     parent_layer ? parent_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     item_index, expression.AsStdString(), kind ? kind : "",
+                     message.AsStdString(),
+                     block ? ttstr(block).AsStdString() : "", line,
+                     trace.AsStdString());
+    };
+
+    try {
+        TVPExecuteExpression(expression, source_owner, result);
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item direct expression parent={} source={} index={} expr={} result={} hr=0",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index, expression.AsStdString(),
+                         result ? TVPVariantDebugString(*result) : "");
+        }
+        return true;
+    } catch(eTJSScriptError &e) {
+        trace_exception("script", e.GetMessage(), e.GetBlockName(),
+                        e.GetSourceLine(), e.GetTrace());
+        return false;
+    } catch(eTJS &e) {
+        trace_exception("tjs", e.GetMessage(), TJS_W(""), -1, ttstr());
+        return false;
+    } catch(...) {
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item direct expression parent={} source={} index={} expr={} threw",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index, expression.AsStdString());
+        }
+        return false;
+    }
+}
+
+static bool TVPGetCafeStellaCurrentMode(tTJSNI_BaseLayer *parent_layer,
+                                        tTJSNI_BaseLayer *source_layer,
+                                        tjs_int item_index,
+                                        std::string &mode_text) {
+    tTJSVariant mode;
+    if(!TVPExecuteCafeStellaCurrentCommand(
+           TJS_W("getCurrentMode"), parent_layer, source_layer, item_index,
+           &mode)) {
+        return false;
+    }
+    mode_text = TVPVariantDebugString(mode);
+    return true;
+}
+
+static bool TVPInvokeCafeStellaClosureMethod(
+    const char *label, const tTJSVariantClosure &target,
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index, const tjs_char *method, tTJSVariant *result) {
+    if(!target.Object)
+        return false;
+
+    ttstr method_name(method);
+    tTJSVariant item_arg(item_index);
+    tTJSVariant *item_args[1] = { &item_arg };
+    tjs_error hr = TJS_E_FAIL;
+    try {
+        hr = target.FuncCall(0, method_name.c_str(), method_name.GetHint(),
+                             result, 1, item_args, nullptr);
+    } catch(eTJSScriptError &e) {
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item numeric method label={} parent={} source={} index={} method={} threw kind=script message={} block={} line={} trace={}",
+                         label ? label : "",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index, method_name.AsStdString(),
+                         e.GetMessage().AsStdString(),
+                         e.GetBlockName()
+                             ? ttstr(e.GetBlockName()).AsStdString()
+                             : "",
+                         e.GetSourceLine(), e.GetTrace().AsStdString());
+        }
+        return false;
+    } catch(eTJS &e) {
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item numeric method label={} parent={} source={} index={} method={} threw kind=tjs message={}",
+                         label ? label : "",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index, method_name.AsStdString(),
+                         e.GetMessage().AsStdString());
+        }
+        return false;
+    } catch(...) {
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item numeric method label={} parent={} source={} index={} method={} threw",
+                         label ? label : "",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index, method_name.AsStdString());
+        }
+        return false;
+    }
+
+    if(TVPLayerInputTraceEnabled()) {
+        spdlog::info("LayerIntf onButtonClick item numeric method label={} parent={} source={} index={} method={} target={} this={} result={} hr={}",
+                     label ? label : "",
+                     parent_layer ? parent_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     item_index, method_name.AsStdString(),
+                     static_cast<const void *>(target.Object),
+                     static_cast<const void *>(target.ObjThis),
+                     result ? TVPVariantDebugString(*result) : "", hr);
+    }
+    return TJS_SUCCEEDED(hr);
+}
+
+static bool TVPGetCafeStellaCurrentClosure(tTJSNI_BaseLayer *source_layer,
+                                           tTJSVariant &current_value) {
+    iTJSDispatch2 *source_owner =
+        source_layer ? source_layer->GetOwnerNoAddRef() : nullptr;
+    if(!source_owner)
+        return false;
+    try {
+        TVPExecuteExpression(TJS_W("Current"), source_owner, &current_value);
+    } catch(...) {
+        return false;
+    }
+    return current_value.Type() == tvtObject;
+}
+
+static bool TVPInvokeCafeStellaCurrentMethod(
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index, const tjs_char *method, tTJSVariant *result) {
+    tTJSVariant current_value;
+    if(!TVPGetCafeStellaCurrentClosure(source_layer, current_value))
+        return false;
+    tTJSVariantClosure current =
+        current_value.AsObjectClosureNoAddRef();
+    return TVPInvokeCafeStellaClosureMethod(
+        "Current", current, parent_layer, source_layer, item_index, method,
+        result);
+}
+
+static bool TVPInvokeCafeStellaCurrentCommandFunction(
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index, const tjs_char *command, tTJSVariant *result) {
+    tTJSVariant current_value;
+    if(!TVPGetCafeStellaCurrentClosure(source_layer, current_value))
+        return false;
+    tTJSVariantClosure current =
+        current_value.AsObjectClosureNoAddRef();
+    if(!current.Object)
+        return false;
+
+    ttstr command_name(command);
+    static ttstr cmd_func_name(TJS_W("cmd_func"));
+    tTJSVariant command_arg(command_name);
+    tTJSVariant item_arg(item_index);
+    tTJSVariant *args[2] = { &command_arg, &item_arg };
+    tjs_error hr = TJS_E_FAIL;
+    try {
+        hr = current.FuncCall(0, cmd_func_name.c_str(),
+                              cmd_func_name.GetHint(), result, 2, args,
+                              nullptr);
+    } catch(eTJSScriptError &e) {
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item numeric command-func parent={} source={} index={} command={} threw kind=script message={} block={} line={} trace={}",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index, command_name.AsStdString(),
+                         e.GetMessage().AsStdString(),
+                         e.GetBlockName()
+                             ? ttstr(e.GetBlockName()).AsStdString()
+                             : "",
+                         e.GetSourceLine(), e.GetTrace().AsStdString());
+        }
+        return false;
+    } catch(eTJS &e) {
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item numeric command-func parent={} source={} index={} command={} threw kind=tjs message={}",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index, command_name.AsStdString(),
+                         e.GetMessage().AsStdString());
+        }
+        return false;
+    } catch(...) {
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item numeric command-func parent={} source={} index={} command={} threw",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index, command_name.AsStdString());
+        }
+        return false;
+    }
+
+    if(TVPLayerInputTraceEnabled()) {
+        spdlog::info("LayerIntf onButtonClick item numeric command-func parent={} source={} index={} command={} result={} hr={}",
+                     parent_layer ? parent_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     item_index, command_name.AsStdString(),
+                     result ? TVPVariantDebugString(*result) : "", hr);
+    }
+    return TJS_SUCCEEDED(hr);
+}
+
+static bool TVPInvokeCafeStellaObjectPropertyMethod(
+    const char *label, const tTJSVariantClosure &owner,
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index, const tjs_char *property, const tjs_char *method,
+    tTJSVariant *result) {
+    if(!owner.Object)
+        return false;
+
+    ttstr property_name(property);
+    tTJSVariant property_value;
+    tjs_error hr = owner.PropGet(0, property_name.c_str(),
+                                 property_name.GetHint(), &property_value,
+                                 nullptr);
+    if(TVPLayerInputTraceEnabled()) {
+        spdlog::info("LayerIntf onButtonClick item numeric property label={} parent={} source={} index={} property={} value={} hr={}",
+                     label ? label : "",
+                     parent_layer ? parent_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     item_index, property_name.AsStdString(),
+                     TJS_SUCCEEDED(hr) ? TVPVariantDebugString(property_value)
+                                       : "<failed>",
+                     hr);
+    }
+    if(TJS_FAILED(hr) || property_value.Type() != tvtObject)
+        return false;
+
+    tTJSVariantClosure property_object =
+        property_value.AsObjectClosureNoAddRef();
+    return TVPInvokeCafeStellaClosureMethod(
+        label, property_object, parent_layer, source_layer, item_index, method,
+        result);
+}
+
+static bool TVPInvokeCafeStellaCurrentPropertyMethod(
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index, const tjs_char *property, const tjs_char *method,
+    tTJSVariant *result) {
+    tTJSVariant current_value;
+    if(!TVPGetCafeStellaCurrentClosure(source_layer, current_value))
+        return false;
+    tTJSVariantClosure current =
+        current_value.AsObjectClosureNoAddRef();
+    return TVPInvokeCafeStellaObjectPropertyMethod(
+        "Current.property", current, parent_layer, source_layer, item_index,
+        property, method, result);
+}
+
+static bool TVPInvokeCafeStellaLayerPropertyMethod(
+    tTJSNI_BaseLayer *owner_layer, tTJSNI_BaseLayer *parent_layer,
+    tTJSNI_BaseLayer *source_layer, tjs_int item_index,
+    const tjs_char *property, const tjs_char *method, tTJSVariant *result) {
+    iTJSDispatch2 *owner_dispatch =
+        owner_layer ? owner_layer->GetOwnerNoAddRef() : nullptr;
+    if(!owner_dispatch)
+        return false;
+
+    tTJSVariantClosure owner(owner_dispatch, owner_dispatch);
+    return TVPInvokeCafeStellaObjectPropertyMethod(
+        "layer.property", owner, parent_layer, source_layer, item_index,
+        property, method, result);
+}
+
+static bool TVPInvokeCafeStellaSaveLoadCurrentCommand(
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index, const std::string &mode_text, tTJSVariant *result) {
+    tTJSVariant ignored;
+    auto exec_numeric = [&](const tjs_char *command,
+                            tTJSVariant *command_result) {
+        ttstr command_name(command);
+        ttstr index_text(item_index);
+        if(TVPInvokeCafeStellaCurrentMethod(
+               parent_layer, source_layer, item_index, command,
+               command_result)) {
+            return true;
+        }
+        if(TVPInvokeCafeStellaCurrentPropertyMethod(
+               parent_layer, source_layer, item_index, TJS_W("_obj"),
+               command, command_result)) {
+            return true;
+        }
+        if(TVPExecuteCafeStellaCurrentExpression(
+               ttstr(TJS_W("Current.func(\"")) + command_name +
+                   TJS_W("\")(") + index_text + TJS_W(")"),
+               parent_layer, source_layer, item_index, command_result)) {
+            return true;
+        }
+        return TVPInvokeCafeStellaCurrentCommandFunction(
+            parent_layer, source_layer, item_index, command, command_result);
+    };
+
+    exec_numeric(TJS_W("onItemEnter"), &ignored);
+    exec_numeric(TJS_W("setIt"), &ignored);
+
+    const tjs_char *candidate_commands[] = {
+        TJS_W("onSelect"),
+        TJS_W("onSel"),
+        TJS_W("invoke"),
+        mode_text == "save" ? TJS_W("onSave") : TJS_W("onLoad"),
+        TJS_W("onDefaul"),
+        TJS_W("onDefaultSe"),
+        TJS_W("internalDef"),
+    };
+    for(const tjs_char *candidate_command : candidate_commands) {
+        if(exec_numeric(candidate_command, result))
+            return true;
+    }
+    return false;
+}
+
+static bool TVPInvokeCafeStellaCurrentDefault(
+    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer,
+    tjs_int item_index, tTJSVariant *result) {
+    const ttstr index_text(item_index);
+    tTJSVariant ignored;
+    std::string mode_text;
+    if(TVPGetCafeStellaCurrentMode(parent_layer, source_layer, item_index,
+                                   mode_text)) {
+        if(mode_text == "save" || mode_text == "load") {
+            if(TVPLayerInputTraceEnabled()) {
+                spdlog::info("LayerIntf onButtonClick item direct current-default state parent={} source={} index={} mode={}",
+                             parent_layer ? parent_layer->GetName().AsStdString() : "",
+                             source_layer ? source_layer->GetName().AsStdString() : "",
+                             item_index, mode_text);
+            }
+            if(TVPInvokeCafeStellaSaveLoadCurrentCommand(
+                   parent_layer, source_layer, item_index, mode_text,
+                   result)) {
+                return true;
+            }
+            return false;
+        }
+    }
+
+    if(TVPExecuteCafeStellaCurrentCommand(
+           ttstr(TJS_W("setItem/")) + index_text, parent_layer, source_layer,
+           item_index, &ignored) &&
+       TVPExecuteCafeStellaCurrentCommand(
+           ttstr(TJS_W("onDefault/")) + index_text, parent_layer,
+           source_layer, item_index, result)) {
+        return true;
+    }
+
+    if(TVPExecuteCafeStellaCurrentCommand(
+           ttstr(TJS_W("onItem/")) + index_text, parent_layer, source_layer,
+           item_index, &ignored) &&
+       TVPExecuteCafeStellaCurrentCommand(
+           ttstr(TJS_W("onDefault/")) + index_text, parent_layer,
+           source_layer, item_index, result)) {
+        return true;
+    }
+
+    return TVPExecuteCafeStellaCurrentCommand(
+        ttstr(TJS_W("onDefault/")) + index_text, parent_layer, source_layer,
+        item_index, result);
+}
+
+static bool TVPInvokeCafeStellaSourceButtonClick(
+    const tTJSVariantClosure &source_object, tTJSNI_BaseLayer *parent_layer,
+    tTJSNI_BaseLayer *source_layer, tjs_int item_index, tTJSVariant *result) {
+    if(!source_object.Object || !source_layer ||
+       TVPCafeStellaSyntheticClickActive)
+        return false;
+
+    tTJSVariantClosure source_action =
+        source_layer->GetActionOwnerNoAddRef();
+    if(!source_action.Object)
+        return false;
+
+    const ttstr index_text(item_index);
+    const ttstr onclick_expression =
+        ttstr(TJS_W("(Current.cmd(\"setItem/")) + index_text +
+        TJS_W("\")),(Current.cmd(\"onDefault/") + index_text + TJS_W("\"))");
+    static ttstr onclick_name(TJS_W("onclick"));
+    tTJSVariant previous_onclick;
+    const tjs_error get_hr =
+        source_object.PropGet(0, onclick_name.c_str(), onclick_name.GetHint(),
+                              &previous_onclick, nullptr);
+    tTJSVariant onclick_value(onclick_expression);
+    tjs_error hr = source_object.PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                         onclick_name.c_str(),
+                                         onclick_name.GetHint(),
+                                         &onclick_value, nullptr);
+    if(TVPLayerInputTraceEnabled()) {
+        spdlog::info("LayerIntf onButtonClick item direct inject onclick parent={} source={} index={} get_hr={} set_hr={} expr={}",
+                     parent_layer ? parent_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     item_index, get_hr, hr, onclick_expression.AsStdString());
+    }
+    if(TJS_FAILED(hr))
+        return false;
+
+    auto restore_onclick = [&]() {
+        if(TJS_SUCCEEDED(get_hr)) {
+            source_object.PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                                  onclick_name.c_str(),
+                                  onclick_name.GetHint(), &previous_onclick,
+                                  nullptr);
+        }
+    };
+
+    auto trace_exception = [&](const char *kind, const ttstr &message,
+                               const tjs_char *block, tjs_int line,
+                               const ttstr &trace) {
+        if(!TVPLayerInputTraceEnabled())
+            return;
+        spdlog::info("LayerIntf onButtonClick item direct inject call parent={} source={} index={} threw kind={} message={} block={} line={} trace={}",
+                     parent_layer ? parent_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     item_index, kind ? kind : "", message.AsStdString(),
+                     block ? ttstr(block).AsStdString() : "", line,
+                     trace.AsStdString());
+    };
+
+    tjs_int x = source_layer->GetWidth() > 0
+                    ? static_cast<tjs_int>(source_layer->GetWidth() / 2)
+                    : 0;
+    tjs_int y = source_layer->GetHeight() > 0
+                    ? static_cast<tjs_int>(source_layer->GetHeight() / 2)
+                    : 0;
+    tjs_int button = 0;
+    tjs_int64 shift = 0;
+    if(TVPLayerCurrentMouseUp.Active &&
+       TVPLayerCurrentMouseUp.Layer == source_layer) {
+        x = TVPLayerCurrentMouseUp.X;
+        y = TVPLayerCurrentMouseUp.Y;
+        button = TVPLayerCurrentMouseUp.Button;
+        shift = TVPLayerCurrentMouseUp.Shift;
+    }
+
+    try {
+        iTJSDispatch2 *source_dispatch = source_layer->GetOwnerNoAddRef();
+        iTJSDispatch2 *evobj =
+            TVPCreateEventObject(TJS_W("onMouseUp"), source_dispatch,
+                                 source_dispatch);
+        tTJSVariant evval(evobj, evobj);
+        evobj->Release();
+
+        auto set_event_member = [&](const tjs_char *name,
+                                    tTJSVariant &value) {
+            ttstr member_name(name);
+            evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                           member_name.c_str(), member_name.GetHint(), &value,
+                           evobj);
+        };
+        tTJSVariant x_arg(x);
+        tTJSVariant y_arg(y);
+        tTJSVariant button_arg(button);
+        tTJSVariant shift_arg(shift);
+        set_event_member(TJS_W("x"), x_arg);
+        set_event_member(TJS_W("y"), y_arg);
+        set_event_member(TJS_W("button"), button_arg);
+        set_event_member(TJS_W("shift"), shift_arg);
+
+        tTJSVariant *event_arg = &evval;
+        TVPCafeStellaSyntheticClickActive = true;
+        hr = source_action.FuncCall(0, TVPActionName.c_str(),
+                                    TVPActionName.GetHint(), result, 1,
+                                    &event_arg, nullptr);
+        TVPCafeStellaSyntheticClickActive = false;
+        restore_onclick();
+    } catch(eTJSScriptError &e) {
+        TVPCafeStellaSyntheticClickActive = false;
+        restore_onclick();
+        trace_exception("script", e.GetMessage(), e.GetBlockName(),
+                        e.GetSourceLine(), e.GetTrace());
+        return false;
+    } catch(eTJS &e) {
+        TVPCafeStellaSyntheticClickActive = false;
+        restore_onclick();
+        trace_exception("tjs", e.GetMessage(), TJS_W(""), -1, ttstr());
+        return false;
+    } catch(...) {
+        TVPCafeStellaSyntheticClickActive = false;
+        restore_onclick();
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item direct inject call parent={} source={} index={} threw",
+                         parent_layer ? parent_layer->GetName().AsStdString() : "",
+                         source_layer ? source_layer->GetName().AsStdString() : "",
+                         item_index);
+        }
+        return false;
+    }
+
+    if(TVPLayerInputTraceEnabled()) {
+        spdlog::info("LayerIntf onButtonClick item direct inject call parent={} source={} index={} x={} y={} button={} shift={} hr={}",
+                     parent_layer ? parent_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     item_index, x, y, button, shift, hr);
+    }
+    return TJS_SUCCEEDED(hr);
+}
+
+static bool TVPInvokeParentHackMessageLayerButtonClick(
+    tTJSNI_BaseLayer *parent_hack_layer, tjs_int numparams,
+    tTJSVariant **param, tTJSVariant *result) {
+    if(numparams < 1)
+        return false;
+
+    tTJSNI_BaseLayer *source_layer = TVPLayerEventSource;
+    if(!source_layer && TVPLayerCurrentMouseUp.Active)
+        source_layer = TVPLayerCurrentMouseUp.Layer;
+    if(!TVPLayerLooksCafeStellaParentHackSource(parent_hack_layer,
+                                                source_layer))
+        return false;
+
+    tTJSNI_BaseLayer *message_layer = parent_hack_layer->GetParent();
+    iTJSDispatch2 *message_owner =
+        message_layer ? message_layer->GetOwnerNoAddRef() : nullptr;
+    if(!message_owner)
+        return false;
+
+    static ttstr on_button_click(TJS_W("onButtonClick"));
+    tTJSVariantClosure message_object(message_owner, message_owner);
+    tTJSVariant *args[1] = { param[0] };
+    const tjs_error hr =
+        message_object.FuncCall(0, on_button_click.c_str(),
+                                on_button_click.GetHint(), result, 1, args,
+                                nullptr);
+    if(TVPLayerInputTraceEnabled()) {
+        spdlog::info("LayerIntf onButtonClick parent-hack forward parent={} source={} message={} link={} hr={}",
+                     parent_hack_layer ? parent_hack_layer->GetName().AsStdString() : "",
+                     source_layer ? source_layer->GetName().AsStdString() : "",
+                     message_layer ? message_layer->GetName().AsStdString() : "",
+                     ttstr(*param[0]).AsStdString(), hr);
+    }
+    return TJS_SUCCEEDED(hr);
+}
+
+static bool TVPInvokeCafeStellaSaveLoadGridItem(tTJSNI_BaseLayer *layer,
+                                                tTJSVariant *result) {
+    tjs_int item_index = 0;
+    if(!TVPGetCafeStellaSaveLoadGridItemIndex(layer, item_index) ||
+       !TVPLayerEventSource) {
+        return false;
+    }
+
+    iTJSDispatch2 *source_owner = TVPLayerEventSource->GetOwnerNoAddRef();
+    if(!source_owner)
+        return false;
+
+    tTJSVariantClosure source_object(source_owner, source_owner);
+    std::string mode_text;
+    const bool save_load_mode =
+        TVPGetCafeStellaCurrentMode(layer, TVPLayerEventSource, item_index,
+                                    mode_text) &&
+        (mode_text == "save" || mode_text == "load");
+    if(TVPInvokeCafeStellaCurrentDefault(layer, TVPLayerEventSource,
+                                         item_index, result))
+        return true;
+    if(!save_load_mode && TVPInvokeCafeStellaSourceButtonClick(
+           source_object, layer, TVPLayerEventSource, item_index, result))
+        return true;
+
+    if(TVPInvokeCafeStellaGridItemCallbackOwner(
+           "onenter", source_object, layer, TVPLayerEventSource, item_index,
+           result))
+        return true;
+    if(TVPInvokeCafeStellaGridItemCallbackOwner(
+           "onleave", source_object, layer, TVPLayerEventSource, item_index,
+           result))
+        return true;
+    if(TVPInvokeCafeStellaGridItemCallbackOwner(
+           "onclick", source_object, layer, TVPLayerEventSource, item_index,
+           result))
+        return true;
+
+    static ttstr control_owner_name(TJS_W("controlOwner"));
+    tTJSVariant control_owner_value;
+    tjs_error hr =
+        source_object.PropGet(0, control_owner_name.c_str(),
+                              control_owner_name.GetHint(),
+                              &control_owner_value, nullptr);
+    if(TJS_FAILED(hr) || control_owner_value.Type() != tvtObject) {
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item direct controlOwner missing parent={} source={} index={} hr={}",
+                         layer->GetName().AsStdString(),
+                         TVPLayerEventSource->GetName().AsStdString(),
+                         item_index, hr);
+        }
+        return false;
+    }
+
+    tTJSVariantClosure control_owner =
+        control_owner_value.AsObjectClosureNoAddRef();
+    if(!control_owner.Object)
+        return false;
+
+    return TVPInvokeCafeStellaGridItemCandidate(
+        "controlOwner", control_owner, layer, TVPLayerEventSource, item_index,
+        result);
+}
+
+static int TVPAbsInt(int value) { return value < 0 ? -value : value; }
+
+static constexpr tjs_uint TVPCafeStellaSaveThumbnailWidth = 408;
+static constexpr tjs_uint TVPCafeStellaSaveThumbnailHeight = 230;
+
+static std::string TVPLayerAsciiLower(std::string text) {
+    for(char &ch : text) {
+        if(ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    return text;
+}
+
+static bool TVPLayerStorageNameLooksExtraThumbnail(const ttstr &name) {
+    const std::string text = TVPLayerAsciiLower(name.AsStdString());
+    return text.find("thum_") != std::string::npos;
+}
+
+static bool TVPLayerStorageNameLooksCafeStellaSaveThumbnail(const ttstr &name) {
+    const std::string text = TVPLayerAsciiLower(name.AsStdString());
+    return text.find("savedata") != std::string::npos &&
+           text.find("data_continue") != std::string::npos;
+}
+
+static bool TVPLayerStorageNameLooksThumbnail(const ttstr &name) {
+    return TVPLayerStorageNameLooksExtraThumbnail(name) ||
+           TVPLayerStorageNameLooksCafeStellaSaveThumbnail(name);
+}
+
+static bool TVPLayerTargetSizeLooksExtraThumbnail(tjs_uint width,
+                                                  tjs_uint height) {
+    return width >= 120 && width <= 512 && height >= 70 && height <= 320;
+}
+
+static bool TVPLayerSourceSizeLooksDownscaleThumbnail(tjs_uint source_width,
+                                                      tjs_uint source_height,
+                                                      tjs_uint target_width,
+                                                      tjs_uint target_height) {
+    if(!source_width || !source_height || !target_width || !target_height) {
+        return false;
+    }
+    if(source_width <= target_width || source_height <= target_height) {
+        return false;
+    }
+    const double source_aspect =
+        static_cast<double>(source_width) / source_height;
+    const double target_aspect =
+        static_cast<double>(target_width) / target_height;
+    return std::fabs(source_aspect - target_aspect) <= 0.05;
+}
+
+static bool TVPCafeStellaSourceSizeLooksSaveThumbnail(tjs_uint width,
+                                                      tjs_uint height) {
+    if(width < 480 || height < 260) {
+        return false;
+    }
+    const double aspect = static_cast<double>(width) / height;
+    return aspect >= 1.65 && aspect <= 1.9;
+}
+
+static bool TVPLayerThumbnailFitEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_THUMBNAIL_FIT");
+        return !value || !*value || *value != '0';
+    }();
+    return enabled;
+}
+
+static bool TVPLayerLoadThumbnailFitted(tTVPBaseTexture *dest,
+                                        const ttstr &name,
+                                        tjs_uint32 colorkey,
+                                        ttstr *provincename,
+                                        iTJSDispatch2 **metainfo) {
+    const bool extra_thumbnail = TVPLayerStorageNameLooksExtraThumbnail(name);
+    const bool cafe_stella_save_thumbnail =
+        TVPLayerStorageNameLooksCafeStellaSaveThumbnail(name);
+    if(!TVPLayerThumbnailFitEnabled() || !dest ||
+       (!extra_thumbnail && !cafe_stella_save_thumbnail)) {
+        return false;
+    }
+    tjs_uint target_width = dest->GetWidth();
+    tjs_uint target_height = dest->GetHeight();
+    if(extra_thumbnail &&
+       !TVPLayerTargetSizeLooksExtraThumbnail(target_width, target_height)) {
+        return false;
+    }
+
+    tTVPBaseTexture source(1, 1);
+    ttstr source_provincename;
+    iTJSDispatch2 *source_metainfo = nullptr;
+    TVPLoadGraphic(&source, name, colorkey, 0, 0, glmNormal,
+                   &source_provincename, &source_metainfo);
+    if(source_metainfo) {
+        source_metainfo->Release();
+    }
+
+    if(cafe_stella_save_thumbnail) {
+        if(!TVPCafeStellaSourceSizeLooksSaveThumbnail(source.GetWidth(),
+                                                     source.GetHeight())) {
+            return false;
+        }
+        // CafeStella's continue hover copies this cached image through a
+        // 408x230 source rect into a 204x115 UI slot. Pre-fitting the cached
+        // bitmap keeps the engine's later source rect from cutting diagonally
+        // through the original 587x330 save screenshot.
+        target_width = TVPCafeStellaSaveThumbnailWidth;
+        target_height = TVPCafeStellaSaveThumbnailHeight;
+    } else if(extra_thumbnail) {
+        if(!TVPLayerSourceSizeLooksDownscaleThumbnail(
+               source.GetWidth(), source.GetHeight(), target_width,
+               target_height)) {
+            return false;
+        }
+        // Gallery scripts commonly load a full-size thumbnail into an already
+        // sized thumbnail layer, then copy that layer's target rect. Keep the
+        // script's rect behavior while avoiding a top-left crop of larger
+        // same-aspect source images.
+    }
+
+    if(TVPLayerDebugEnabled() && TVPLayerDebugTake()) {
+        spdlog::info(
+            "Layer.loadImages thumbnail-fit name={} source={}x{} target={}x{}",
+            name.AsStdString(), static_cast<int>(source.GetWidth()),
+            static_cast<int>(source.GetHeight()), static_cast<int>(target_width),
+            static_cast<int>(target_height));
+    }
+
+    dest->SetSizeWithFill(target_width, target_height, 0);
+    dest->StretchBlt(tTVPRect(0, 0, target_width, target_height),
+                     tTVPRect(0, 0, target_width, target_height), &source,
+                     tTVPRect(0, 0, source.GetWidth(), source.GetHeight()),
+                     bmCopy, 255, false, stFastLinear, 0.0);
+    return true;
+}
+
+static bool TVPLayerDebugNameLooksThumbnail(const ttstr &name) {
+    return TVPLayerDebugEnabled() && TVPLayerStorageNameLooksThumbnail(name);
+}
+
+static bool TVPLayerDebugRectLooksThumbnail(int width, int height) {
+    width = TVPAbsInt(width);
+    height = TVPAbsInt(height);
+    return (width >= 560 && width <= 610 && height >= 300 && height <= 350) ||
+        (width >= 300 && width <= 350 && height >= 560 && height <= 610);
+}
+
+static bool TVPLayerDebugBitmapLooksThumbnail(const iTVPBaseBitmap *src,
+                                              const tTVPRect &srcrect) {
+    if(!src) {
+        return false;
+    }
+    return TVPLayerDebugRectLooksThumbnail(static_cast<int>(src->GetWidth()),
+                                           static_cast<int>(src->GetHeight())) ||
+        TVPLayerDebugRectLooksThumbnail(srcrect.get_width(),
+                                        srcrect.get_height());
+}
+
+static bool TVPLayerDebugShouldLogBitmap(const iTVPBaseBitmap *src,
+                                         const tTVPRect &srcrect) {
+    if(!TVPLayerDebugEnabled()) {
+        return false;
+    }
+    return TVPLayerDebugTake() ||
+        TVPLayerDebugBitmapLooksThumbnail(src, srcrect);
+}
+
+static const char *TVPLayerDebugDrawFaceName(tTVPDrawFace face) {
+    switch(face) {
+        case dfAlpha:
+            return "alpha";
+        case dfAddAlpha:
+            return "addAlpha";
+        case dfOpaque:
+            return "opaque";
+        case dfMask:
+            return "mask";
+        case dfProvince:
+            return "province";
+        case dfAuto:
+            return "auto";
+        default:
+            return "unknown";
+    }
 }
 //---------------------------------------------------------------------------
 
@@ -2364,8 +3657,17 @@ void tTJSNI_BaseLayer::EnsureBitmap() {
     if(!_bitmapEvicted) return;
     AllocateImage();
     if(!_evictedImageName.IsEmpty() && MainImage) {
-        TVPLoadGraphic(MainImage, _evictedImageName, _evictedColorKey,
-                       0, 0, glmNormal, nullptr, nullptr);
+        ttstr provincename;
+        iTJSDispatch2 *metainfo = nullptr;
+        if(!TVPLayerLoadThumbnailFitted(MainImage, _evictedImageName,
+                                        _evictedColorKey, &provincename,
+                                        &metainfo)) {
+            TVPLoadGraphic(MainImage, _evictedImageName, _evictedColorKey,
+                           0, 0, glmNormal, nullptr, nullptr);
+        }
+        if(metainfo) {
+            metainfo->Release();
+        }
     }
     _bitmapEvicted = false;
 }
@@ -2905,9 +4207,16 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
         }
     }
 
+    auto load_graphic = [&](const ttstr &storage_name) {
+        if(!TVPLayerLoadThumbnailFitted(MainImage, storage_name, colorkey,
+                                        &provincename, &metainfo)) {
+            TVPLoadGraphic(MainImage, storage_name, colorkey, 0, 0, glmNormal,
+                           &provincename, &metainfo);
+        }
+    };
+
     try {
-        TVPLoadGraphic(MainImage, load_name, colorkey, 0, 0, glmNormal,
-                       &provincename, &metainfo);
+        load_graphic(load_name);
     } catch(...) {
         ttstr ext = TVPExtractStorageExt(name);
         ext.ToLowerCase();
@@ -2925,8 +4234,8 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
                          name.AsStdString(), fallback.AsStdString());
         }
         try {
-            TVPLoadGraphic(MainImage, fallback, colorkey, 0, 0, glmNormal,
-                           &provincename, &metainfo);
+            load_name = fallback;
+            load_graphic(fallback);
         } catch(...) {
             spdlog::warn("Layer.loadImages placeholder for unreadable image: {}",
                          fallback.AsStdString());
@@ -2942,6 +4251,15 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
     try {
 
         InternalSetImageSize(MainImage->GetWidth(), MainImage->GetHeight());
+        if(TVPLayerDebugTake() || TVPLayerDebugNameLooksThumbnail(name) ||
+           TVPLayerDebugNameLooksThumbnail(load_name)) {
+            spdlog::info(
+                "Layer.loadImages name={} loaded={} size={}x{} colorkey=0x{:08x}",
+                name.AsStdString(), load_name.AsStdString(),
+                static_cast<int>(MainImage->GetWidth()),
+                static_cast<int>(MainImage->GetHeight()),
+                static_cast<unsigned int>(colorkey));
+        }
 
         if(!provincename.IsEmpty()) {
             // province image exists
@@ -3481,6 +4799,7 @@ tTJSNI_BaseLayer *tTJSNI_BaseLayer::GetMostFrontChildAt(tjs_int x, tjs_int y,
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::FireClick(tjs_int x, tjs_int y) {
     if(Owner && !Shutdown) {
+        TVPLayerRecentEventSource = this;
         tTJSVariant param[2];
         param[0] = x;
         param[1] = y;
@@ -3518,6 +4837,8 @@ void tTJSNI_BaseLayer::FireMouseDown(tjs_int x, tjs_int y, tTVPMouseButton mb,
 void tTJSNI_BaseLayer::FireMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
                                    tjs_uint32 flags) {
     if(Owner && !Shutdown) {
+        TVPLayerRecentEventSource = this;
+        TVPLayerEventSourceScope event_source_scope(this);
         tTJSVariant param[4];
         param[0] = x;
         param[1] = y;
@@ -4719,6 +6040,14 @@ void tTJSNI_BaseLayer::CopyRect(tjs_int dx, tjs_int dy, iTVPBaseBitmap *src,
     tTVPRect rect;
     if(!ClipDestPointAndSrcRect(dx, dy, rect, srcrect))
         return; // out of the clipping rect
+    if(TVPLayerDebugShouldLogBitmap(src, rect)) {
+        spdlog::info(
+            "Layer.copyRect face={} dest=({},{} {}x{}) srcSize={}x{} srcRect=({},{} {}x{})",
+            TVPLayerDebugDrawFaceName(DrawFace), dx, dy, rect.get_width(),
+            rect.get_height(), src ? static_cast<int>(src->GetWidth()) : -1,
+            src ? static_cast<int>(src->GetHeight()) : -1, rect.left,
+            rect.top, rect.get_width(), rect.get_height());
+    }
 
     switch(DrawFace) {
         case dfAlpha:
@@ -4810,6 +6139,17 @@ void tTJSNI_BaseLayer::StretchCopy(const tTVPRect &destrect,
                                    iTVPBaseBitmap *src, const tTVPRect &srcrect,
                                    tTVPBBStretchType type, tjs_real typeopt) {
     // stretching copy
+    if(TVPLayerDebugShouldLogBitmap(src, srcrect)) {
+        spdlog::info(
+            "Layer.stretchCopy face={} dest=({},{} {}x{}) srcSize={}x{} srcRect=({},{} {}x{}) type={} opt={}",
+            TVPLayerDebugDrawFaceName(DrawFace), destrect.left, destrect.top,
+            destrect.get_width(),
+            destrect.get_height(), src ? static_cast<int>(src->GetWidth()) : -1,
+            src ? static_cast<int>(src->GetHeight()) : -1, srcrect.left,
+            srcrect.top, srcrect.get_width(), srcrect.get_height(),
+            static_cast<int>(type), typeopt);
+    }
+
     tTVPRect ur = destrect;
     if(ur.right < ur.left)
         std::swap(ur.right, ur.left);
@@ -4860,6 +6200,17 @@ void tTJSNI_BaseLayer::AffineCopy(const t2DAffineMatrix &matrix,
                                   iTVPBaseBitmap *src, const tTVPRect &srcrect,
                                   tTVPBBStretchType type, bool clear) {
     // affine copy
+    if(TVPLayerDebugShouldLogBitmap(src, srcrect)) {
+        spdlog::info(
+            "Layer.affineCopy.matrix face={} srcSize={}x{} srcRect=({},{} {}x{}) mat=[{},{},{},{},{},{}] type={} clear={}",
+            TVPLayerDebugDrawFaceName(DrawFace),
+            src ? static_cast<int>(src->GetWidth()) : -1,
+            src ? static_cast<int>(src->GetHeight()) : -1, srcrect.left,
+            srcrect.top, srcrect.get_width(), srcrect.get_height(), matrix.a,
+            matrix.b, matrix.c, matrix.d, matrix.tx, matrix.ty,
+            static_cast<int>(type), clear ? 1 : 0);
+    }
+
     tTVPRect updaterect;
     bool updated;
 
@@ -4905,6 +6256,19 @@ void tTJSNI_BaseLayer::AffineCopy(const tTVPPointD *points, iTVPBaseBitmap *src,
                                   const tTVPRect &srcrect,
                                   tTVPBBStretchType type, bool clear) {
     // affine copy
+    if(TVPLayerDebugShouldLogBitmap(src, srcrect)) {
+        spdlog::info(
+            "Layer.affineCopy.points face={} srcSize={}x{} srcRect=({},{} {}x{}) p0=({},{}) p1=({},{}) p2=({},{}) type={} clear={}",
+            TVPLayerDebugDrawFaceName(DrawFace),
+            src ? static_cast<int>(src->GetWidth()) : -1,
+            src ? static_cast<int>(src->GetHeight()) : -1, srcrect.left,
+            srcrect.top, srcrect.get_width(), srcrect.get_height(),
+            points ? points[0].x : 0.0, points ? points[0].y : 0.0,
+            points ? points[1].x : 0.0, points ? points[1].y : 0.0,
+            points ? points[2].x : 0.0, points ? points[2].y : 0.0,
+            static_cast<int>(type), clear ? 1 : 0);
+    }
+
     tTVPRect updaterect;
     bool updated;
 
@@ -5222,6 +6586,15 @@ void tTJSNI_BaseLayer::OperateRect(tjs_int dx, tjs_int dy, iTVPBaseBitmap *src,
         TVPThrowExceptionMessage(TVPNotDrawableLayerType);
     if(!src)
         TVPThrowExceptionMessage(TVPSourceLayerHasNoImage);
+    if(TVPLayerDebugShouldLogBitmap(src, rect)) {
+        spdlog::info(
+            "Layer.operateRect face={} dest=({},{} {}x{}) srcSize={}x{} srcRect=({},{} {}x{}) mode={} opacity={}",
+            TVPLayerDebugDrawFaceName(DrawFace), dx, dy, rect.get_width(),
+            rect.get_height(), src ? static_cast<int>(src->GetWidth()) : -1,
+            src ? static_cast<int>(src->GetHeight()) : -1, rect.left,
+            rect.top, rect.get_width(), rect.get_height(),
+            static_cast<int>(mode), opacity);
+    }
 
     ImageModified =
         MainImage->Blt(dx, dy, src, rect, met, opacity, HoldAlpha) ||
@@ -5363,6 +6736,17 @@ void tTJSNI_BaseLayer::OperateStretch(const tTVPRect &destrect,
         std::swap(ur.bottom, ur.top);
     if(!TVPIntersectRect(&ur, ur, ClipRect))
         return; // out of the clipping rectangle
+    if(TVPLayerDebugShouldLogBitmap(src, srcrect)) {
+        spdlog::info(
+            "Layer.operateStretch face={} dest=({},{} {}x{}) clipped=({},{} {}x{}) srcSize={}x{} srcRect=({},{} {}x{}) mode={} opacity={} type={} opt={}",
+            TVPLayerDebugDrawFaceName(DrawFace), destrect.left, destrect.top,
+            destrect.get_width(), destrect.get_height(), ur.left, ur.top,
+            ur.get_width(), ur.get_height(),
+            src ? static_cast<int>(src->GetWidth()) : -1,
+            src ? static_cast<int>(src->GetHeight()) : -1, srcrect.left,
+            srcrect.top, srcrect.get_width(), srcrect.get_height(),
+            static_cast<int>(mode), opacity, static_cast<int>(type), typeopt);
+    }
 
     // It does not throw an exception in this case perhaps
     if(mode == omAuto)
@@ -8735,11 +10119,90 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
                                 /*var. type*/ tTJSNI_Layer);
 
-        tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
+        const tTJSVariantClosure fallback_obj =
+            _this->GetActionOwnerNoAddRef();
+        tTJSVariantClosure obj =
+            TVPGetButtonClickActionOwner(_this, fallback_obj);
+        TVPTraceLayerInputEvent("onButtonClick", _this, obj);
+        if(TVPLayerInputTraceEnabled() && numparams >= 1) {
+            spdlog::info("LayerIntf onButtonClick args layer={} count={} first={}",
+                         _this->GetName().AsStdString(), numparams,
+                         ttstr(*param[0]).AsStdString());
+            tTJSNI_BaseLayer *source_layer = TVPGetButtonClickSourceLayer();
+            auto layer_name = [](tTJSNI_BaseLayer *layer) {
+                return layer ? layer->GetName().AsStdString()
+                             : std::string("<null>");
+            };
+            spdlog::info("LayerIntf onButtonClick source layer={} event={} mouseup={} recent={}",
+                         layer_name(source_layer),
+                         layer_name(TVPLayerEventSource),
+                         TVPLayerCurrentMouseUp.Active
+                             ? layer_name(TVPLayerCurrentMouseUp.Layer)
+                             : std::string("<inactive>"),
+                         layer_name(TVPLayerRecentEventSource));
+            if(source_layer) {
+                tTJSVariantClosure source_action =
+                    source_layer->GetActionOwnerNoAddRef();
+                spdlog::info("LayerIntf onButtonClick source details layer={} size={}x{} owner={} action={}",
+                             source_layer->GetName().AsStdString(),
+                             source_layer->GetWidth(), source_layer->GetHeight(),
+                             source_layer->GetOwnerNoAddRef() ? "yes" : "no",
+                             source_action.Object ? "yes" : "no");
+                if(iTJSDispatch2 *source_owner =
+                       source_layer->GetOwnerNoAddRef()) {
+                    tTJSVariantClosure source_object(source_owner,
+                                                     source_owner);
+                    TVPTraceObjectForButtonClick("button.source",
+                                                 source_object);
+                }
+                TVPTraceObjectForButtonClick("button.sourceActionOwner",
+                                             source_action);
+            }
+            tTJSVariantClosure this_object(objthis, objthis);
+            TVPTraceObjectForButtonClick("button.this", this_object);
+            TVPTraceObjectForButtonClick("button.parentActionOwner",
+                                         fallback_obj);
+            TVPTraceObjectForButtonClick("button.actionOwner", obj);
+        }
+        if(TVPInvokeCafeStellaSaveLoadGridItem(_this, result))
+            return TJS_S_OK;
+        if(TVPInvokeParentHackMessageLayerButtonClick(_this, numparams, param,
+                                                      result))
+            return TJS_S_OK;
         if(obj.Object) {
-            TVP_ACTION_INVOKE_BEGIN(1, "onButtonClick", objthis);
-            TVP_ACTION_INVOKE_MEMBER("linkNum");
-            TVP_ACTION_INVOKE_END(obj);
+            if(numparams < 1)
+                return TJS_E_BADPARAMCOUNT;
+            tjs_int arg_count = 0;
+            iTJSDispatch2 *event_target =
+                TVPGetButtonClickEventTarget(_this, objthis);
+            iTJSDispatch2 *evobj =
+                TVPCreateEventObject(TJS_W("onButtonClick"), event_target,
+                                     event_target);
+            tTJSVariant evval(evobj, evobj);
+            evobj->Release();
+            {
+                static ttstr member_name(TJS_W("linkNum"));
+                const tTJSVariant link_num = *param[arg_count++];
+                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                               member_name.c_str(), member_name.GetHint(),
+                               &link_num, evobj);
+            }
+            if(TVPLayerInputTraceEnabled()) {
+                tTJSVariantClosure event_target_object(event_target, event_target);
+                TVPTraceObjectForButtonClick("button.eventTarget",
+                                             event_target_object);
+                tTJSVariantClosure event_object(evobj, evobj);
+                TVPTraceObjectForButtonClick("button.event", event_object);
+            }
+            tTJSVariant *pevval = &evval;
+            tjs_error hr =
+                obj.FuncCall(0, TVPActionName.c_str(),
+                             TVPActionName.GetHint(), result, 1, &pevval,
+                             nullptr);
+            if(TVPLayerInputTraceEnabled()) {
+                spdlog::info("LayerIntf onButtonClick action returned layer={} hr={}",
+                             _this->GetName().AsStdString(), hr);
+            }
         }
 
         return TJS_S_OK;
@@ -10129,6 +11592,7 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                                 /*var. type*/ tTJSNI_Layer);
 
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
+        TVPTraceLayerInputEvent("onClick", _this, obj);
         if(obj.Object) {
             TVP_ACTION_INVOKE_BEGIN(2, "onClick", objthis);
             TVP_ACTION_INVOKE_MEMBER("x");
@@ -10145,6 +11609,7 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                                 /*var. type*/ tTJSNI_Layer);
 
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
+        TVPTraceLayerInputEvent("onDoubleClick", _this, obj);
         if(obj.Object) {
             TVP_ACTION_INVOKE_BEGIN(2, "onDoubleClick", objthis);
             TVP_ACTION_INVOKE_MEMBER("x");
@@ -10161,6 +11626,7 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                                 /*var. type*/ tTJSNI_Layer);
 
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
+        TVPTraceLayerInputEvent("onMouseDown", _this, obj);
         if(obj.Object) {
             TVP_ACTION_INVOKE_BEGIN(4, "onMouseDown", objthis);
             TVP_ACTION_INVOKE_MEMBER("x");
@@ -10178,7 +11644,10 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
                                 /*var. type*/ tTJSNI_Layer);
 
+        TVPLayerEventSourceScope event_source(_this);
+        TVPLayerMouseUpContextScope mouse_up_context(_this, numparams, param);
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
+        TVPTraceLayerInputEvent("onMouseUp", _this, obj);
         if(obj.Object) {
             TVP_ACTION_INVOKE_BEGIN(4, "onMouseUp", objthis);
             TVP_ACTION_INVOKE_MEMBER("x");

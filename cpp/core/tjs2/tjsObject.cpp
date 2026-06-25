@@ -280,6 +280,43 @@ namespace TJS {
             global->PropGet(0, globalName, nullptr, result, global));
     }
 
+    static bool TJSCompatIsTextRenderObject(iTJSDispatch2 *target,
+                                            iTJSDispatch2 *objthis) {
+        iTJSDispatch2 *dispatch = objthis ? objthis : target;
+        return dispatch &&
+               dispatch->IsInstanceOf(0, nullptr, nullptr,
+                                      TJS_W("TextRender"), dispatch) ==
+                   TJS_S_TRUE;
+    }
+
+    static bool TJSCompatResolveTextRenderRenderCount(
+        const tjs_char *membername, tTJSVariant *result, iTJSDispatch2 *target,
+        iTJSDispatch2 *objthis) {
+        if(!membername || TJS_strcmp(membername, TJS_W("renderCount")) ||
+           !TJSCompatIsTextRenderObject(target, objthis))
+            return false;
+
+        if(!result)
+            return true;
+
+        iTJSDispatch2 *dispatch = objthis ? objthis : target;
+        if(dispatch) {
+            tTJSVariant elapsed(static_cast<tjs_int>(0x3fffffff));
+            tTJSVariant *args[1] = {&elapsed};
+            tTJSVariant count;
+            if(TJS_SUCCEEDED(dispatch->FuncCall(0, TJS_W("calcShowCount"),
+                                                nullptr, &count, 1, args,
+                                                dispatch)) &&
+               count.Type() != tvtVoid) {
+                *result = count;
+                return true;
+            }
+        }
+
+        *result = static_cast<tjs_int>(0);
+        return true;
+    }
+
     static bool TJSIsStartupCompatWritableName(const tjs_char *membername) {
         return membername &&
                (!TJS_strcmp(membername, TJS_W("debugWindowEnabled")) ||
@@ -1604,6 +1641,10 @@ namespace TJS {
             if(TJSCompatResolveGlobalFallback(membername, result)) {
                 return TJS_S_OK;
             }
+            if(TJSCompatResolveTextRenderRenderCount(membername, result, this,
+                                                     objthis)) {
+                return TJS_S_OK;
+            }
         }
 
         if(!data && flag & TJS_MEMBERENSURE) {
@@ -1691,6 +1732,11 @@ namespace TJS {
             if(TJSIsStartupCompatWritableName(membername)) {
                 data = Add(membername, hint);
             }
+        }
+
+        if(!data && membername && !TJS_strcmp(membername, TJS_W("renderCount")) &&
+           TJSCompatIsTextRenderObject(this, objthis)) {
+            data = Add(membername, hint);
         }
 
         if(!data) {

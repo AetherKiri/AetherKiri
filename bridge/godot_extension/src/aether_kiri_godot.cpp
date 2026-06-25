@@ -30,12 +30,16 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <array>
+#include <chrono>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <deque>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -93,6 +97,16 @@ struct GodotGpuOp {
 std::mutex g_gpu_op_queue_mutex;
 std::deque<std::shared_ptr<GodotGpuOp>> g_gpu_op_queue;
 bool g_gpu_op_drain_scheduled = false;
+std::atomic<uint64_t> g_gpu_op_submitted{0};
+std::atomic<uint64_t> g_gpu_op_completed{0};
+std::atomic<uint64_t> g_gpu_op_failed{0};
+std::atomic<uint64_t> g_gpu_blend_op_submitted{0};
+std::atomic<uint64_t> g_gpu_queue_peak{0};
+std::atomic<uint64_t> g_gpu_barriers{0};
+std::atomic<uint64_t> g_gpu_alias_sources{0};
+std::atomic<uint64_t> g_gpu_sync_timeouts{0};
+
+constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
 
 struct GodotGpuPipelineState {
     RID blend_shader;
@@ -138,6 +152,8 @@ struct GodotGpuUniformSetKeyHash {
 
 std::unordered_map<GodotGpuUniformSetKey, RID, GodotGpuUniformSetKeyHash>
     g_gpu_uniform_set_cache;
+
+Ref<RDTextureFormat> MakeRgbaTextureFormat(uint32_t width, uint32_t height);
 
 const char *NormalizeBackend(const String &backend) {
     const String lower = backend.to_lower();
@@ -211,6 +227,61 @@ bool SupportsGodotRenderingDeviceGpu() {
            method.find("gl_compatibility") == std::string::npos &&
            driver.find("opengl") == std::string::npos &&
            driver.find("OpenGL") == std::string::npos;
+}
+
+void UpdateGpuQueuePeak(size_t value) {
+    uint64_t current = g_gpu_queue_peak.load(std::memory_order_relaxed);
+    while (value > current &&
+           !g_gpu_queue_peak.compare_exchange_weak(
+               current, static_cast<uint64_t>(value), std::memory_order_relaxed)) {
+    }
+}
+
+void CountGpuOpResult(bool result) {
+    g_gpu_op_completed.fetch_add(1, std::memory_order_relaxed);
+    if (!result) {
+        g_gpu_op_failed.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+String GetGodotGpuBridgeDebugInfo() {
+    size_t queue_size = 0;
+    bool scheduled = false;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
+        queue_size = g_gpu_op_queue.size();
+        scheduled = g_gpu_op_drain_scheduled;
+    }
+
+    std::ostringstream out;
+    out << " bridge_queue=" << queue_size
+        << " bridge_scheduled=" << (scheduled ? 1 : 0)
+        << " bridge_peak=" << g_gpu_queue_peak.load(std::memory_order_relaxed)
+        << " bridge_ops=" << g_gpu_op_submitted.load(std::memory_order_relaxed)
+        << " bridge_done=" << g_gpu_op_completed.load(std::memory_order_relaxed)
+        << " bridge_failed=" << g_gpu_op_failed.load(std::memory_order_relaxed)
+        << " bridge_blends=" << g_gpu_blend_op_submitted.load(std::memory_order_relaxed)
+        << " bridge_barriers=" << g_gpu_barriers.load(std::memory_order_relaxed)
+        << " bridge_alias_sources=" << g_gpu_alias_sources.load(std::memory_order_relaxed)
+        << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed);
+    return String::utf8(out.str().c_str());
+}
+
+void ApplyGodotGpuBarrier(RenderingDevice *rd) {
+    if (rd == nullptr) return;
+    rd->full_barrier();
+    g_gpu_barriers.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool IsBatchableBlendOp(const std::shared_ptr<GodotGpuOp> &op) {
+    if (op == nullptr) return false;
+    if (op->type == GodotGpuOp::Type::Blend) {
+        return op->src != op->dst;
+    }
+    if (op->type == GodotGpuOp::Type::Blend2) {
+        return op->src != op->dst && op->src2 != op->dst;
+    }
+    return false;
 }
 
 PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
@@ -358,6 +429,21 @@ uint const_alpha_blend_d(uint d, uint s, uint opa) {
     return (out_alpha << 24) | r | (g << 8) | (b << 16);
 }
 
+uint ps_screen_blend(uint d, uint s, uint opa) {
+    uint src_alpha = (s >> 24) & 0xffu;
+    uint a = opa == 255u ? src_alpha : ((src_alpha * opa) >> 8);
+    uint dr = d & 0xffu;
+    uint dg = (d >> 8) & 0xffu;
+    uint db = (d >> 16) & 0xffu;
+    uint sr = s & 0xffu;
+    uint sg = (s >> 8) & 0xffu;
+    uint sb = (s >> 16) & 0xffu;
+    uint r = min(dr + (((sr - ((sr * dr) >> 8)) * a) >> 8), 255u);
+    uint g = min(dg + (((sg - ((sg * dg) >> 8)) * a) >> 8), 255u);
+    uint b = min(db + (((sb - ((sb * db) >> 8)) * a) >> 8), 255u);
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint remove_const_opacity(uint d, uint strength) {
     uint inv_strength = 255u - clamp(strength, 0u, 255u);
     uint a = (((d >> 24) & 0xffu) * inv_strength) >> 8;
@@ -372,29 +458,35 @@ void main() {
 
     ivec2 dst_pos = pc.rect0.xy + local;
     ivec2 src_pos = pc.rect0.zw + local;
-    uint d = pack_u8(vec4_to_u8(imageLoad(dst_img, dst_pos)));
     uint opa = uint(clamp(pc.rect1.w, 0, 255));
-    uint out_color = d;
+    uint out_color = 0u;
 
-    if (pc.rect1.z == 1) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
-        out_color = alpha_blend_hda_o(d, s, opa);
-    } else if (pc.rect1.z == 2) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
-        out_color = alpha_blend_d(d, s, opa);
-    } else if (pc.rect1.z == 3) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
-        out_color = (d & 0xff000000u) + (s & 0x00ffffffu);
-    } else if (pc.rect1.z == 10) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
-        out_color = const_alpha_blend_d(d, s, opa);
-    } else if (pc.rect1.z == 5) {
+    if (pc.rect1.z == 5) {
         out_color = (uint(pc.color0.x) & 0xffu) |
                     ((uint(pc.color0.y) & 0xffu) << 8) |
                     ((uint(pc.color0.z) & 0xffu) << 16) |
                     ((uint(pc.color0.w) & 0xffu) << 24);
-    } else if (pc.rect1.z == 8) {
+    } else {
+        uint d = pack_u8(vec4_to_u8(imageLoad(dst_img, dst_pos)));
+        out_color = d;
+        if (pc.rect1.z == 1) {
+        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
+        out_color = alpha_blend_hda_o(d, s, opa);
+        } else if (pc.rect1.z == 2) {
+        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
+        out_color = alpha_blend_d(d, s, opa);
+        } else if (pc.rect1.z == 3) {
+        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
+        out_color = (d & 0xff000000u) + (s & 0x00ffffffu);
+        } else if (pc.rect1.z == 10) {
+        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
+        out_color = const_alpha_blend_d(d, s, opa);
+        } else if (pc.rect1.z == 11) {
+        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
+        out_color = ps_screen_blend(d, s, opa);
+        } else if (pc.rect1.z == 8) {
         out_color = remove_const_opacity(d, opa);
+        }
     }
 
     imageStore(dst_img, dst_pos, unpack_u8(out_color));
@@ -672,6 +764,28 @@ float edge(vec2 a, vec2 b, vec2 p) {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
+vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
+    vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
+    ivec2 p0 = ivec2(floor(center_coord));
+    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
+    vec2 f = clamp(fract(center_coord), vec2(0.0), vec2(1.0));
+    vec4 c00 = imageLoad(src_img, p0);
+    vec4 c10 = imageLoad(src_img, ivec2(p1.x, p0.y));
+    vec4 c01 = imageLoad(src_img, ivec2(p0.x, p1.y));
+    vec4 c11 = imageLoad(src_img, p1);
+    c00.rgb *= c00.a;
+    c10.rgb *= c10.a;
+    c01.rgb *= c01.a;
+    c11.rgb *= c11.a;
+    vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    if (premul.a > 0.00001) {
+        premul.rgb /= premul.a;
+    } else {
+        premul.rgb = vec3(0.0);
+    }
+    return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
 void main() {
     ivec2 local = ivec2(gl_GlobalInvocationID.xy);
     if (local.x >= pc.rect1.x || local.y >= pc.rect1.y) {
@@ -699,8 +813,7 @@ void main() {
         float w2 = edge(d0, d1, p) / area;
         if (w0 >= -0.0001 && w1 >= -0.0001 && w2 >= -0.0001) {
             vec2 src_pos_f = v0.zw * w0 + v1.zw * w1 + v2.zw * w2;
-            ivec2 src_pos = clamp(ivec2(floor(src_pos_f)), ivec2(0), src_limit);
-            imageStore(dst_img, dst_pos, imageLoad(src_img, src_pos));
+            imageStore(dst_img, dst_pos, load_bilinear(src_limit, src_pos_f));
             return;
         }
     }
@@ -863,10 +976,23 @@ bool DispatchGodotGpuBlend2(RenderingDevice *rd,
 
 bool ExecuteGodotGpuBlend(RenderingDevice *rd,
                           const std::shared_ptr<GodotGpuOp> &op) {
+    if (rd == nullptr || op == nullptr) return false;
+    if (op->src == op->dst &&
+        op->mode != TVP_GODOT_GPU_BLEND_FILL_ARGB) {
+        g_gpu_alias_sources.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
     std::vector<RID> uniform_sets;
     int64_t compute_list = rd->compute_list_begin();
     const bool ok = DispatchGodotGpuBlend(rd, op, compute_list, uniform_sets);
+    if (ok) {
+        rd->compute_list_add_barrier(compute_list);
+    }
     rd->compute_list_end();
+    if (ok) {
+        ApplyGodotGpuBarrier(rd);
+    }
     for (const RID &uniform_set : uniform_sets) {
         rd->free_rid(uniform_set);
     }
@@ -875,17 +1001,27 @@ bool ExecuteGodotGpuBlend(RenderingDevice *rd,
 
 bool ExecuteGodotGpuBlend2(RenderingDevice *rd,
                            const std::shared_ptr<GodotGpuOp> &op) {
+    if (rd == nullptr || op == nullptr) return false;
+    if (op->src == op->dst || op->src2 == op->dst) {
+        g_gpu_alias_sources.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
     std::vector<RID> uniform_sets;
     int64_t compute_list = rd->compute_list_begin();
     const bool ok = DispatchGodotGpuBlend2(rd, op, compute_list, uniform_sets);
+    if (ok) {
+        rd->compute_list_add_barrier(compute_list);
+    }
     rd->compute_list_end();
+    if (ok) {
+        ApplyGodotGpuBarrier(rd);
+    }
     for (const RID &uniform_set : uniform_sets) {
         rd->free_rid(uniform_set);
     }
     return ok;
 }
-
-Ref<RDTextureFormat> MakeRgbaTextureFormat(uint32_t width, uint32_t height);
 
 bool ExecuteGodotGpuCopyTriangles(RenderingDevice *rd,
                                   const std::shared_ptr<GodotGpuOp> &op) {
@@ -923,6 +1059,7 @@ bool ExecuteGodotGpuCopyTriangles(RenderingDevice *rd,
             rd->free_rid(vertex_buffer);
             return false;
         }
+        ApplyGodotGpuBarrier(rd);
         sample_src = temp_src;
     }
 
@@ -966,7 +1103,9 @@ bool ExecuteGodotGpuCopyTriangles(RenderingDevice *rd,
                               static_cast<uint32_t>((op->size.x + 7) / 8),
                               static_cast<uint32_t>((op->size.y + 7) / 8),
                               1);
+    rd->compute_list_add_barrier(compute_list);
     rd->compute_list_end();
+    ApplyGodotGpuBarrier(rd);
     rd->free_rid(uniform_set);
     if (temp_src.is_valid()) rd->free_rid(temp_src);
     rd->free_rid(vertex_buffer);
@@ -975,14 +1114,22 @@ bool ExecuteGodotGpuCopyTriangles(RenderingDevice *rd,
 
 bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &op) {
     if (rd == nullptr || op == nullptr) return false;
+    bool result = false;
+    bool wrote_texture = false;
     switch (op->type) {
         case GodotGpuOp::Type::Update:
-            return rd->texture_update(op->dst, 0, op->data) == OK;
+            result = rd->texture_update(op->dst, 0, op->data) == OK;
+            wrote_texture = true;
+            break;
         case GodotGpuOp::Type::Clear:
-            return rd->texture_clear(op->dst, op->clear_color, 0, 1, 0, 1) == OK;
+            result = rd->texture_clear(op->dst, op->clear_color, 0, 1, 0, 1) == OK;
+            wrote_texture = true;
+            break;
         case GodotGpuOp::Type::Copy:
-            return rd->texture_copy(op->src, op->dst, op->src_pos, op->dst_pos,
-                                    op->size, 0, 0, 0, 0) == OK;
+            result = rd->texture_copy(op->src, op->dst, op->src_pos, op->dst_pos,
+                                      op->size, 0, 0, 0, 0) == OK;
+            wrote_texture = true;
+            break;
         case GodotGpuOp::Type::CopySelf: {
             Ref<RDTextureView> view;
             view.instantiate();
@@ -995,13 +1142,22 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             const Error copy_to_temp =
                 rd->texture_copy(op->src, temp, op->src_pos, Vector3(), op->size,
                                  0, 0, 0, 0);
+            if (copy_to_temp == OK) {
+                ApplyGodotGpuBarrier(rd);
+            }
             const Error copy_to_dst =
                 copy_to_temp == OK
                     ? rd->texture_copy(temp, op->dst, Vector3(), op->dst_pos,
                                        op->size, 0, 0, 0, 0)
                     : FAILED;
+            result = copy_to_temp == OK && copy_to_dst == OK;
+            wrote_texture = true;
+            if (result) {
+                ApplyGodotGpuBarrier(rd);
+            }
             rd->free_rid(temp);
-            return copy_to_temp == OK && copy_to_dst == OK;
+            wrote_texture = false;
+            break;
         }
         case GodotGpuOp::Type::CopyTriangles:
             return ExecuteGodotGpuCopyTriangles(rd, op);
@@ -1017,12 +1173,17 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             rd->free_rid(op->dst);
             return true;
         case GodotGpuOp::Type::Flush:
+            ApplyGodotGpuBarrier(rd);
             return true;
     }
-    return false;
+    if (result && wrote_texture) {
+        ApplyGodotGpuBarrier(rd);
+    }
+    return result;
 }
 
 void FinishGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool result) {
+    CountGpuOpResult(result);
     {
         std::lock_guard<std::mutex> done_lock(op->done_mutex);
         op->result = result;
@@ -1043,13 +1204,25 @@ void ExecuteGodotGpuBlendBatch(
     }
 
     std::vector<RID> uniform_sets;
-    uniform_sets.reserve(ops.size());
     std::vector<bool> results(ops.size(), false);
+    bool any_dispatched = false;
     int64_t compute_list = rd->compute_list_begin();
     for (size_t i = 0; i < ops.size(); ++i) {
-        results[i] = DispatchGodotGpuBlend(rd, ops[i], compute_list, uniform_sets);
+        const auto &op = ops[i];
+        if (op->type == GodotGpuOp::Type::Blend) {
+            results[i] = DispatchGodotGpuBlend(rd, op, compute_list, uniform_sets);
+        } else if (op->type == GodotGpuOp::Type::Blend2) {
+            results[i] = DispatchGodotGpuBlend2(rd, op, compute_list, uniform_sets);
+        }
+        if (results[i]) {
+            any_dispatched = true;
+            rd->compute_list_add_barrier(compute_list);
+        }
     }
     rd->compute_list_end();
+    if (any_dispatched) {
+        ApplyGodotGpuBarrier(rd);
+    }
     for (const RID &uniform_set : uniform_sets) {
         rd->free_rid(uniform_set);
     }
@@ -1073,13 +1246,16 @@ void DrainGodotGpuOpsOnRenderThread() {
             g_gpu_op_queue.pop_front();
         }
 
-        if (op->type == GodotGpuOp::Type::Blend) {
+        if (IsBatchableBlendOp(op)) {
             blend_batch.push_back(op);
             continue;
         }
 
         ExecuteGodotGpuBlendBatch(rd, blend_batch);
         blend_batch.clear();
+
+        // Alias blends are executed separately because sampling and writing the
+        // same storage image in one dispatch is undefined on Metal/Vulkan.
         FinishGodotGpuOp(op, ExecuteGodotGpuOp(rd, op));
     }
     ExecuteGodotGpuBlendBatch(rd, blend_batch);
@@ -1088,15 +1264,27 @@ void DrainGodotGpuOpsOnRenderThread() {
 bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
     RenderingServer *server = RenderingServer::get_singleton();
     RenderingDevice *rd = MainRenderingDevice();
-    if (server == nullptr || rd == nullptr || op == nullptr) return false;
+    if (op == nullptr) return false;
+    g_gpu_op_submitted.fetch_add(1, std::memory_order_relaxed);
+    if (op->type == GodotGpuOp::Type::Blend ||
+        op->type == GodotGpuOp::Type::Blend2) {
+        g_gpu_blend_op_submitted.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (server == nullptr || rd == nullptr) {
+        CountGpuOpResult(false);
+        return false;
+    }
     if (server->is_on_render_thread()) {
-        return ExecuteGodotGpuOp(rd, op);
+        const bool result = ExecuteGodotGpuOp(rd, op);
+        CountGpuOpResult(result);
+        return result;
     }
 
     bool should_schedule = false;
     {
         std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
         g_gpu_op_queue.push_back(op);
+        UpdateGpuQueuePeak(g_gpu_op_queue.size());
         if (!g_gpu_op_drain_scheduled) {
             g_gpu_op_drain_scheduled = true;
             should_schedule = true;
@@ -1111,7 +1299,11 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
         return true;
     }
     std::unique_lock<std::mutex> done_lock(op->done_mutex);
-    op->done_cv.wait(done_lock, [&]() { return op->done; });
+    if (!op->done_cv.wait_for(done_lock, kGodotGpuSyncWaitTimeout,
+                              [&]() { return op->done; })) {
+        g_gpu_sync_timeouts.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
     return op->result;
 }
 
@@ -1642,6 +1834,25 @@ uint32_t CpuConstAlphaBlendSDD(uint32_t s1, uint32_t s2, int opacity) {
     return s1_rb | ((s1_g + ((s2_g - s1_g) * alpha >> 8)) & 0xff00u);
 }
 
+uint32_t CpuPsScreenBlend(uint32_t d, uint32_t s, int opacity) {
+    const uint32_t src_alpha = (s >> 24) & 0xffu;
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    const uint32_t a = opa == 255u ? src_alpha : ((src_alpha * opa) >> 8);
+    const uint32_t dr = d & 0xffu;
+    const uint32_t dg = (d >> 8) & 0xffu;
+    const uint32_t db = (d >> 16) & 0xffu;
+    const uint32_t sr = s & 0xffu;
+    const uint32_t sg = (s >> 8) & 0xffu;
+    const uint32_t sb = (s >> 16) & 0xffu;
+    const uint32_t r =
+        std::min(dr + (((sr - ((sr * dr) >> 8)) * a) >> 8), 255u);
+    const uint32_t g =
+        std::min(dg + (((sg - ((sg * dg) >> 8)) * a) >> 8), 255u);
+    const uint32_t b =
+        std::min(db + (((sb - ((sb * db) >> 8)) * a) >> 8), 255u);
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
                            int opacity, uint32_t color) {
     switch (mode) {
@@ -1659,6 +1870,8 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
             return CpuAlphaBlendA(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_CONST_ALPHA_D:
             return CpuConstAlphaBlendD(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_PS_SCREEN:
+            return CpuPsScreenBlend(d, s, opacity);
         default:
             return s;
     }
@@ -1704,6 +1917,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     }
     if (lower == "constalphablend_sd_d" || lower == "const_alpha_blend_sd_d") {
         return TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D;
+    }
+    if (lower == "psscreenblend" || lower == "ps_screen_blend") {
+        return TVP_GODOT_GPU_BLEND_PS_SCREEN;
     }
     return 0;
 }
@@ -1823,6 +2039,7 @@ public:
 
     void release_frame_texture() {
         release_rd_texture(true);
+        release_presentation_textures(true);
         frame_texture_.unref();
         frame_texture_backend_ = "none";
     }
@@ -1929,7 +2146,8 @@ public:
     }
 
     int send_pointer_event(int type, int pointer_id, double x, double y,
-                           double delta_x, double delta_y, int button) {
+                           double delta_x, double delta_y, int button,
+                           int modifiers = 0) {
         if (handle_ == nullptr) {
             return ENGINE_RESULT_INVALID_STATE;
         }
@@ -1942,6 +2160,7 @@ public:
         event.delta_y = delta_y;
         event.pointer_id = pointer_id;
         event.button = button;
+        event.modifiers = modifiers;
         const engine_result_t result = engine_send_input(handle_, &event);
         update_last_error(result);
         return result;
@@ -1998,7 +2217,10 @@ public:
         const engine_result_t result =
             engine_get_renderer_info(handle_, buffer, sizeof(buffer));
         update_last_error(result);
-        return result == ENGINE_RESULT_OK ? String::utf8(buffer) : String();
+        if (result != ENGINE_RESULT_OK) {
+            return String();
+        }
+        return String::utf8(buffer) + GetGodotGpuBridgeDebugInfo();
     }
 
     String get_frame_texture_backend() const { return frame_texture_backend_; }
@@ -2052,6 +2274,15 @@ public:
                 handle_, &texture_id, &width, &height, &serial);
             if (gpu_result == ENGINE_RESULT_OK && texture_id != 0) {
                 if (normalized_backend == ENGINE_RENDERER_GPU_BRIDGE) {
+                    Ref<Texture2D> presented_texture =
+                        update_presented_bridge_texture(
+                            texture_id, width, height, serial,
+                            "godot_external_presented");
+                    if (presented_texture.is_valid()) {
+                        frame_texture_.unref();
+                        release_imported_texture();
+                        return presented_texture;
+                    }
                     Ref<Texture2D> imported_texture =
                         update_imported_gpu_bridge_texture(texture_id, width,
                                                            height);
@@ -2069,6 +2300,15 @@ public:
                         return bridge_texture;
                     }
                 } else {
+                    Ref<Texture2D> presented_texture =
+                        update_presented_bridge_texture(
+                            texture_id, width, height, serial,
+                            "godot_native_gpu_presented");
+                    if (presented_texture.is_valid()) {
+                        frame_texture_.unref();
+                        release_imported_texture();
+                        return presented_texture;
+                    }
                     Ref<Texture2D> native_texture = ResolveBridgeTexture(texture_id);
                     if (native_texture.is_valid()) {
                         release_imported_texture();
@@ -2345,8 +2585,10 @@ protected:
         ClassDB::bind_method(D_METHOD("pause"), &AetherKiriPlayer::pause);
         ClassDB::bind_method(D_METHOD("resume"), &AetherKiriPlayer::resume);
         ClassDB::bind_method(D_METHOD("send_pointer_event", "type", "pointer_id",
-                                      "x", "y", "delta_x", "delta_y", "button"),
-                             &AetherKiriPlayer::send_pointer_event);
+                                      "x", "y", "delta_x", "delta_y", "button",
+                                      "modifiers"),
+                             &AetherKiriPlayer::send_pointer_event,
+                             DEFVAL(0));
         ClassDB::bind_method(D_METHOD("send_key_event", "pressed", "key_code",
                                       "modifiers", "unicode_codepoint"),
                              &AetherKiriPlayer::send_key_event);
@@ -2415,6 +2657,29 @@ private:
         }
     }
 
+    void release_presentation_textures(bool free_rids) {
+        for (size_t i = 0; i < frame_present_textures_.size(); ++i) {
+            frame_present_textures_[i].unref();
+            if (frame_present_rids_[i].is_valid()) {
+                if (free_rids) {
+                    auto op = std::make_shared<GodotGpuOp>();
+                    op->type = GodotGpuOp::Type::Release;
+                    op->dst = frame_present_rids_[i];
+                    RunGodotGpuOpSync(op);
+                }
+                frame_present_rids_[i] = RID();
+            }
+        }
+        frame_present_width_ = 0;
+        frame_present_height_ = 0;
+        frame_present_current_slot_ = 0;
+        frame_present_serial_ = UINT64_MAX;
+        if (frame_texture_backend_ == "godot_native_gpu_presented" ||
+            frame_texture_backend_ == "godot_external_presented") {
+            frame_texture_backend_ = "none";
+        }
+    }
+
     Ref<Texture2D> update_rd_texture(const engine_frame_desc_t &desc,
                                      const PackedByteArray &data) {
         RenderingDevice *rd = main_rendering_device();
@@ -2468,6 +2733,96 @@ private:
         }
 
         return frame_rd_texture_;
+    }
+
+    bool ensure_presentation_textures(uint32_t width, uint32_t height) {
+        RenderingDevice *rd = main_rendering_device();
+        if (rd == nullptr || !SupportsGodotRenderingDeviceGpu() ||
+            width == 0 || height == 0) {
+            return false;
+        }
+
+        const bool reusable =
+            frame_present_width_ == width &&
+            frame_present_height_ == height &&
+            frame_present_rids_[0].is_valid() &&
+            frame_present_rids_[1].is_valid() &&
+            frame_present_textures_[0].is_valid() &&
+            frame_present_textures_[1].is_valid();
+        if (reusable) {
+            return true;
+        }
+
+        release_presentation_textures(true);
+        Ref<RDTextureFormat> format = MakeRgbaTextureFormat(width, height);
+        Ref<RDTextureView> view;
+        view.instantiate();
+        TypedArray<PackedByteArray> initial_data;
+
+        for (size_t i = 0; i < frame_present_rids_.size(); ++i) {
+            frame_present_rids_[i] = rd->texture_create(format, view, initial_data);
+            if (!frame_present_rids_[i].is_valid()) {
+                release_presentation_textures(true);
+                return false;
+            }
+            frame_present_textures_[i].instantiate();
+            frame_present_textures_[i]->set_texture_rd_rid(frame_present_rids_[i]);
+        }
+
+        frame_present_width_ = width;
+        frame_present_height_ = height;
+        frame_present_current_slot_ = 0;
+        frame_present_serial_ = UINT64_MAX;
+        return true;
+    }
+
+    Ref<Texture2D> update_presented_bridge_texture(uint64_t texture_id,
+                                                   uint32_t width,
+                                                   uint32_t height,
+                                                   uint64_t serial,
+                                                   const char *backend_name) {
+        if (texture_id == 0 || width == 0 || height == 0) {
+            return Ref<Texture2D>();
+        }
+        if (frame_present_serial_ == serial &&
+            frame_present_width_ == width &&
+            frame_present_height_ == height &&
+            frame_present_textures_[frame_present_current_slot_].is_valid()) {
+            frame_texture_serial_ = serial;
+            frame_texture_backend_ = backend_name;
+            return frame_present_textures_[frame_present_current_slot_];
+        }
+
+        GodotGpuTextureRecord source;
+        if (!ResolveBridgeTextureRecord(texture_id, source) ||
+            !source.rid.is_valid()) {
+            return Ref<Texture2D>();
+        }
+        if (!ensure_presentation_textures(width, height)) {
+            return Ref<Texture2D>();
+        }
+
+        const size_t next_slot = 1u - frame_present_current_slot_;
+        auto op = std::make_shared<GodotGpuOp>();
+        op->type = GodotGpuOp::Type::Copy;
+        op->src = source.rid;
+        op->dst = frame_present_rids_[next_slot];
+        op->src_pos = Vector3();
+        op->dst_pos = Vector3();
+        op->size = Vector3(width, height, 1);
+        if (!RunGodotGpuOpSync(op)) {
+            frame_texture_backend_ = "godot_native_gpu_present_timeout";
+            if (frame_present_textures_[frame_present_current_slot_].is_valid()) {
+                return frame_present_textures_[frame_present_current_slot_];
+            }
+            return Ref<Texture2D>();
+        }
+
+        frame_present_current_slot_ = next_slot;
+        frame_present_serial_ = serial;
+        frame_texture_serial_ = serial;
+        frame_texture_backend_ = backend_name;
+        return frame_present_textures_[frame_present_current_slot_];
     }
 
     Ref<Texture2D> update_imported_gpu_bridge_texture(uint64_t texture_id,
@@ -2543,6 +2898,12 @@ private:
     uint64_t frame_imported_source_id_ = 0;
     uint32_t frame_imported_width_ = 0;
     uint32_t frame_imported_height_ = 0;
+    std::array<Ref<Texture2DRD>, 2> frame_present_textures_;
+    std::array<RID, 2> frame_present_rids_;
+    uint32_t frame_present_width_ = 0;
+    uint32_t frame_present_height_ = 0;
+    size_t frame_present_current_slot_ = 0;
+    uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
 };
 

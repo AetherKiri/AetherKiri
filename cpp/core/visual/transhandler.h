@@ -84,7 +84,6 @@ public:
     // return image width
     virtual tjs_error GetHeight(/*out*/ tjs_int *height) = 0;
     // return image height
-#if 0
 	virtual tjs_error GetPixelFormat(/*out*/tjs_int *bpp) = 0;
 		// return image bit depth
 	virtual tjs_error GetPitchBytes(/*out*/tjs_int *pitch) = 0;
@@ -95,7 +94,6 @@ public:
 	virtual tjs_error GetScanLineForWrite(/*in*/tjs_int line,
 			/*out*/void ** scanline) = 0;
 		// return image pixel scan line pointer for writing
-#endif
     virtual iTVPTexture2D *GetTexture() = 0;
     virtual iTVPTexture2D *GetTextureForRender() = 0;
 };

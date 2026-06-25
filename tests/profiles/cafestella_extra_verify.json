@@ -1,0 +1,50 @@
+{
+  "name": "cafestella_extra_verify",
+  "game_path": "",
+  "backend": "Godot Native",
+  "surface_size": [1280, 720],
+  "window_size": [1600, 900],
+  "coord_size": [1600, 900],
+  "startup_timeout_frames": 2400,
+  "warmup_frames": 180,
+  "after_click_frames": 120,
+  "measure_frames": 60,
+  "actions": [
+    {
+      "type": "click",
+      "label": "skip_warning",
+      "x": 450,
+      "y": 880,
+      "after_frames": 1
+    },
+    {
+      "type": "wait",
+      "label": "yuzu_logo_030",
+      "after_frames": 30
+    },
+    {
+      "type": "wait",
+      "label": "yuzu_logo_090",
+      "after_frames": 60
+    },
+    {
+      "type": "wait",
+      "label": "yuzu_logo_150",
+      "after_frames": 60
+    },
+    {
+      "type": "click",
+      "label": "title",
+      "x": 1350,
+      "y": 240,
+      "after_frames": 600
+    },
+    {
+      "type": "click",
+      "label": "extra",
+      "x": 330,
+      "y": 600,
+      "after_frames": 240
+    }
+  ]
+}

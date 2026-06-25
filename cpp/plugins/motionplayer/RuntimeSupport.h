@@ -106,6 +106,8 @@ namespace motion::detail {
         bool loop = false;
         double loopTime = -1.0;   // from PSB; >=0 means loop restart point
         double totalFrames = 0.0;
+        double selfSyncTime = 0.0;
+        double syncTime = 0.0;
         std::vector<std::string> layerNames;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>>
             layersByName;
@@ -187,6 +189,9 @@ namespace motion::detail {
         // Aligned to libkrkr2.so player+696: internal render layer consumed by
         // sub_6CE7D8 / sub_6CE938 style post-draw update.
         tTJSVariant internalRenderLayer;
+        // Visible presentation surface used by Yuzu/KAG no-separate title
+        // motions when the scripted target has full-screen transition children.
+        tTJSVariant presentationRenderLayer;
         // Reusable work layer for sub_6C4E28-style per-item local clipping.
         tTJSVariant scratchWorkLayer;
         std::array<double, 6> drawAffineMatrix{ 1.0, 0.0, 0.0,
@@ -206,12 +211,14 @@ namespace motion::detail {
         // Persistent node tree for updateLayers pipeline
         std::vector<MotionNode> nodes;
         bool nodesBuilt = false;
+        bool yuzuTitleFinalFrameRendered = false;
         // Node label → index map. Aligned to binary's std::map<ttstr,int> at player+24.
         // Populated after buildNodeTree, queried by sub_6F2228 equivalent.
         std::map<std::string, int> nodeLabelMap;
 
         struct PreparedRenderItem {
             int nodeIndex = 0;
+            std::string nodeLabel;
             tTJSVariant srcRef;
             std::string sourceKey;
             bool hasOwnSource = false;
@@ -240,6 +247,7 @@ namespace motion::detail {
         };
         struct RenderCommand {
             int nodeIndex = 0;
+            std::string nodeLabel;
             tTJSVariant srcRef;
             std::string sourceKey;
             bool hasOwnSource = false;

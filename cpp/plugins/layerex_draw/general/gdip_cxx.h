@@ -8,11 +8,8 @@
 #include "gdip_dt.h"
 #include <win32_dt.h>
 
-#if TARGET_OS_MAC || TARGET_OS_IPHONE
-using BOOL = bool;
-#else
-using BOOL = int;
-#endif
+// libgdiplus defines BOOL as gboolean. Keep that exact type because several
+// GDI+ APIs write through BOOL* out-parameters.
 
 #ifndef FALSE
 #define FALSE 0
@@ -168,6 +165,20 @@ namespace libgdiplus {
 
         MatrixClass() { this->_gpStatus = GdipCreateMatrix(&_gpMatrix); }
 
+        MatrixClass(const MatrixClass &other) {
+            if(other._gpMatrix) {
+                this->_gpStatus =
+                    GdipCloneMatrix(other._gpMatrix, &this->_gpMatrix);
+            } else {
+                this->_gpStatus = InvalidParameter;
+            }
+        }
+
+        MatrixClass(MatrixClass &&other) noexcept :
+            _gpMatrix(other._gpMatrix), _gpStatus(other._gpStatus) {
+            other._gpMatrix = nullptr;
+        }
+
         MatrixClass(const GpRectF &rect, const GpPointF &point) {
             this->_gpStatus = GdipCreateMatrix3(&rect, &point, &_gpMatrix);
         }
@@ -286,6 +297,35 @@ namespace libgdiplus {
             return this->_gpMatrix;
         }
 
+        MatrixClass &operator=(const MatrixClass &other) {
+            if(this == &other) {
+                return *this;
+            }
+
+            GpMatrix *cloned = nullptr;
+            GpStatus status = InvalidParameter;
+            if(other._gpMatrix) {
+                status = GdipCloneMatrix(other._gpMatrix, &cloned);
+            }
+            if(status == Ok || cloned) {
+                GdipDeleteMatrix(_gpMatrix);
+                _gpMatrix = cloned;
+            }
+            _gpStatus = status;
+            return *this;
+        }
+
+        MatrixClass &operator=(MatrixClass &&other) noexcept {
+            if(this == &other) {
+                return *this;
+            }
+            GdipDeleteMatrix(_gpMatrix);
+            _gpMatrix = other._gpMatrix;
+            _gpStatus = other._gpStatus;
+            other._gpMatrix = nullptr;
+            return *this;
+        }
+
         ~MatrixClass() { GdipDeleteMatrix(_gpMatrix); }
 
     private:
@@ -295,7 +335,10 @@ namespace libgdiplus {
 
     class ImageClass {
     public:
-        ImageClass(GpImage *gpImage) { this->_gpImage = gpImage; }
+        ImageClass(GpImage *gpImage, float boundsOffsetX = 0.0f,
+                   float boundsOffsetY = 0.0f) :
+            _gpImage(gpImage), _boundsOffsetX(boundsOffsetX),
+            _boundsOffsetY(boundsOffsetY) {}
 
         static ImageClass *FromFile(const WCHAR *filename,
                                     bool useEmbeddedColorManagement) {
@@ -317,6 +360,10 @@ namespace libgdiplus {
         GpStatus GetBounds(RectFClass *srcRect, Unit *srcUnit) const {
             this->_gpStatus =
                 GdipGetImageBounds(this->_gpImage, srcRect, srcUnit);
+            if(this->_gpStatus == Ok) {
+                srcRect->X += _boundsOffsetX;
+                srcRect->Y += _boundsOffsetY;
+            }
             return this->_gpStatus;
         }
 
@@ -367,7 +414,7 @@ namespace libgdiplus {
         [[nodiscard]] ImageClass *Clone() const {
             GpImage *image{ nullptr };
             this->_gpStatus = GdipCloneImage(this->_gpImage, &image);
-            return new ImageClass{ image };
+            return new ImageClass{ image, _boundsOffsetX, _boundsOffsetY };
         }
 
         [[nodiscard]] explicit operator GpImage *() const {
@@ -384,6 +431,8 @@ namespace libgdiplus {
 
     private:
         GpImage *_gpImage{ nullptr };
+        float _boundsOffsetX{ 0.0f };
+        float _boundsOffsetY{ 0.0f };
         mutable GpStatus _gpStatus;
     };
 

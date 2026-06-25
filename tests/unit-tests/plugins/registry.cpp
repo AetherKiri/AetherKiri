@@ -1,11 +1,74 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "PluginImpl.h"
+#include "ScriptMgnIntf.h"
+#include "TransIntf.h"
 #include "ncbind.hpp"
+#include "tjsDictionary.h"
+
+#include <cstring>
+
+extern tTJS *TVPScriptEngine;
+
+namespace {
+
+void ensurePluginRegistryRuntime() {
+    if(TVPGetScriptEngine() == nullptr)
+        TVPScriptEngine = new tTJS();
+    ncbAutoRegister::AllRegist();
+}
+
+tTJSVariant getGlobalProp(const tjs_char *name) {
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+
+    tTJSVariant value;
+    REQUIRE(TJS_SUCCEEDED(global->PropGet(0, name, nullptr, &value, global)));
+    global->Release();
+    return value;
+}
+
+tTJSVariant getProp(const tTJSVariant &object, const tjs_char *name) {
+    REQUIRE(object.Type() == tvtObject);
+    iTJSDispatch2 *dispatch = object.AsObjectNoAddRef();
+    REQUIRE(dispatch != nullptr);
+
+    tTJSVariant value;
+    REQUIRE(
+        TJS_SUCCEEDED(dispatch->PropGet(0, name, nullptr, &value, dispatch)));
+    return value;
+}
+
+void setProp(iTJSDispatch2 *dispatch, const tjs_char *name,
+             const tTJSVariant &value) {
+    REQUIRE(dispatch != nullptr);
+    REQUIRE(TJS_SUCCEEDED(
+        dispatch->PropSet(TJS_MEMBERENSURE, name, nullptr, &value, dispatch)));
+}
+
+} // namespace
 
 TEST_CASE("first-pass compatibility stubs are registered") {
+    ensurePluginRegistryRuntime();
+
     const tjs_char *modules[] = {
+        TJS_W("KAGParserEx.dll"),
+        TJS_W("ExtKAGParser.dll"),
+        TJS_W("extrans.dll"),
+        TJS_W("k2compat.dll"),
+        TJS_W("kagexopt.dll"),
+        TJS_W("krmovie.dll"),
+        TJS_W("kztouch.dll"),
+        TJS_W("lzfs.dll"),
+        TJS_W("dmmcloud.dll"),
+        TJS_W("libegl.dll"),
+        TJS_W("libglesv2.dll"),
+        TJS_W("m2vdec.dll"),
+        TJS_W("version.dll"),
         TJS_W("flashPlayer.dll"),
         TJS_W("layerExSubImage.dll"),
+        TJS_W("layerExColor.dll"),
+        TJS_W("layerExMosaic.dll"),
         TJS_W("layerExSave.dll"),
         TJS_W("gfxEffect.dll"),
         TJS_W("clipboardEx.dll"),
@@ -42,6 +105,8 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("wmrdump.dll"),
         TJS_W("wsh.dll"),
         TJS_W("wumsadp.dll"),
+        TJS_W("wuflac.dll"),
+        TJS_W("wuopus.dll"),
         TJS_W("layerExAgg.dll"),
         TJS_W("layerExCairo.dll"),
         TJS_W("layerExGdiPlus.dll"),
@@ -62,8 +127,135 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("minizip.dll"),
         TJS_W("qrcode.dll"),
         TJS_W("sqlite3.dll"),
+        TJS_W("kirikiroid2.dll"),
+        TJS_W("sqlite3_xp3_vfs.dll"),
     };
 
-    for(const auto *module : modules)
+    for(const auto *module : modules) {
+        INFO(ttstr(module).AsStdString());
         CHECK(ncbAutoRegister::HasModule(module));
+    }
+}
+
+TEST_CASE("legacy compatibility plugins expose observable behavior") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("zlib.dll")));
+    tTJSVariant version;
+    REQUIRE_NOTHROW(TVPExecuteExpression(TJS_W("zlibVersion()"), &version));
+    CHECK(ttstr(version).GetLen() > 0);
+
+    tTJSVariant compressFn = getGlobalProp(TJS_W("zlibCompress"));
+    tTJSVariant uncompressFn = getGlobalProp(TJS_W("zlibUncompress"));
+
+    tTJSVariant input(TJS_W("AetherKiri"));
+    tTJSVariant *compressArgs[] = { &input };
+    tTJSVariant compressed;
+    REQUIRE(TJS_SUCCEEDED(compressFn.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &compressed, 1, compressArgs, nullptr)));
+    REQUIRE(compressed.Type() == tvtOctet);
+
+    tTJSVariant expectedSize(static_cast<tTVInteger>(64));
+    tTJSVariant *uncompressArgs[] = { &compressed, &expectedSize };
+    tTJSVariant roundTrip;
+    REQUIRE(TJS_SUCCEEDED(uncompressFn.AsObjectClosureNoAddRef().FuncCall(
+        0, nullptr, nullptr, &roundTrip, 2, uncompressArgs, nullptr)));
+    REQUIRE(roundTrip.Type() == tvtOctet);
+
+    tTJSVariantOctet *octet = roundTrip.AsOctetNoAddRef();
+    REQUIRE(octet->GetLength() == 10);
+    CHECK(std::memcmp(octet->GetData(), "AetherKiri", 10) == 0);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("version.dll")));
+    tTJSVariant versionClass = getGlobalProp(TJS_W("Version"));
+    CHECK(versionClass.Type() == tvtObject);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("kztouch.dll")));
+    tTJSVariant touchClass = getGlobalProp(TJS_W("KZTouch"));
+    CHECK(touchClass.Type() == tvtObject);
+}
+
+TEST_CASE("plugin load mode defaults to krkrsdl3 and can select all modules") {
+    TVPSetPluginLoadMode(TJS_W("invalid"));
+    CHECK(TVPIsKrkrsdl3PluginLoadMode());
+    CHECK_FALSE(TVPIsAetherAllPluginLoadMode());
+
+    TVPSetPluginLoadMode(TJS_W("aether_all"));
+    CHECK(TVPIsAetherAllPluginLoadMode());
+    CHECK_FALSE(TVPIsKrkrsdl3PluginLoadMode());
+
+    TVPSetPluginLoadMode(TJS_W("krkrsdl3"));
+    CHECK(TVPGetPluginLoadMode() == TJS_W("krkrsdl3"));
+}
+
+TEST_CASE("KAGParserEx preserves existing script KAGParser class") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll"));
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+
+    iTJSDispatch2 *original = TJSCreateDictionaryObject();
+    REQUIRE(original != nullptr);
+    const tTJSVariant originalValue(original, original);
+    setProp(global, TJS_W("KAGParser"), originalValue);
+    original->Release();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("KAGParserEx.dll")));
+
+    const tTJSVariant preserved = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(preserved.Type() == tvtObject);
+    CHECK(preserved.AsObjectNoAddRef() == original);
+
+    const tTJSVariant marker = getGlobalProp(TJS_W("AetherKiriKAGParserEx"));
+    CHECK(static_cast<bool>(getProp(marker, TJS_W("loaded"))));
+    CHECK(ttstr(getProp(marker, TJS_W("mode"))) == TJS_W("precise"));
+
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll")));
+
+    const tTJSVariant restored = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(restored.Type() == tvtObject);
+    CHECK(restored.AsObjectNoAddRef() == original);
+
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+    global->DeleteMember(0, TJS_W("AetherKiriKAGParserEx"), nullptr, global);
+    global->Release();
+}
+
+TEST_CASE("extrans registers precise wave transition provider") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("extrans.dll"));
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("extrans.dll")));
+
+    iTVPTransHandlerProvider *provider =
+        TVPFindTransHandlerProvider(TJS_W("wave"));
+    REQUIRE(provider != nullptr);
+
+    const tjs_char *providerName = nullptr;
+    REQUIRE(TJS_SUCCEEDED(provider->GetName(&providerName)));
+    CHECK(ttstr(providerName) == TJS_W("wave"));
+
+    iTJSDispatch2 *optionsObject = TJSCreateDictionaryObject();
+    REQUIRE(optionsObject != nullptr);
+    const tTJSVariant timeValue(static_cast<tTVInteger>(100));
+    setProp(optionsObject, TJS_W("time"), timeValue);
+
+    tTVPSimpleOptionProvider options(
+        tTJSVariantClosure(optionsObject, optionsObject));
+    optionsObject->Release();
+
+    tTVPTransType type = ttSimple;
+    tTVPTransUpdateType updateType = tutDivisibleFade;
+    iTVPBaseTransHandler *handler = nullptr;
+    REQUIRE(provider->StartTransition(&options, &TVPSimpleImageProvider,
+                                      ltOpaque, 16, 16, 16, 16, &type,
+                                      &updateType, &handler) == TJS_S_OK);
+    REQUIRE(handler != nullptr);
+    CHECK(type == ttExchange);
+    CHECK(updateType == tutDivisible);
+
+    handler->Release();
+    provider->Release();
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("extrans.dll")));
 }

@@ -130,6 +130,7 @@ NCB_REGISTER_CLASS(Player) {
 
     NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
     NCB_PROPERTY(metadata, getMetadata, setMetadata);
+    NCB_PROPERTY(resolution, getResolution, setResolution);
     NCB_PROPERTY(chara, getChara, setChara);
     // Aligned to libkrkr2.so 0x681CAC: raw callback to access objthis
     // for onFindMotion TJS callback during motion loading
@@ -225,6 +226,9 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(copyRect);
     NCB_METHOD(adjustGamma);
     NCB_METHOD_RAW_CALLBACK(draw, &Player::drawCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(drawLayer, &Player::drawCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(drawNitro2D, &Player::drawCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(drawToIrrlicht, &Player::drawCompat, 0);
     NCB_METHOD(frameProgress);
 
     // Viewport/display
@@ -452,6 +456,11 @@ NCB_REGISTER_CLASS(Motion) {
 // ============================================================
 
 static void PostRegistCallback() {
+    try {
+        ncbAutoRegister::LoadModule(TJS_W("krkrgles.dll"));
+    } catch(...) {
+    }
+
     iTJSDispatch2 *global = TVPGetScriptDispatch();
     if (!global) return;
 

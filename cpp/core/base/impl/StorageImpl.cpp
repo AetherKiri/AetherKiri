@@ -101,6 +101,9 @@ public:
 static void _tjs_normalize_nfc(ttstr &name) {
     if(name.IsEmpty())
         return;
+    static constexpr tjs_int MAX_NFC_STORAGE_NAME_LENGTH = 1 << 20;
+    if(name.GetLen() > MAX_NFC_STORAGE_NAME_LENGTH)
+        return;
     CFMutableStringRef str = CFStringCreateMutable(kCFAllocatorDefault, 0);
     if(!str)
         return;
@@ -108,6 +111,10 @@ static void _tjs_normalize_nfc(ttstr &name) {
                              static_cast<CFIndex>(name.GetLen()));
     CFStringNormalize(str, kCFStringNormalizationFormC);
     const CFIndex len = CFStringGetLength(str);
+    if(len > MAX_NFC_STORAGE_NAME_LENGTH) {
+        CFRelease(str);
+        return;
+    }
     std::vector<UniChar> buf(static_cast<size_t>(len));
     if(len > 0) {
         CFStringGetCharacters(str, CFRangeMake(0, len), buf.data());

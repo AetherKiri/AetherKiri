@@ -7,6 +7,18 @@
 #include "TVPColor.h"
 #include "LayerIntf.h"
 #include "Application.h"
+#include <cstdlib>
+#include <spdlog/spdlog.h>
+
+namespace {
+bool TVPSaveTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_SAVE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+} // namespace
 
 tTJSNI_Bitmap::tTJSNI_Bitmap() :
     Owner(nullptr), Bitmap(nullptr), Loading(false) {
@@ -120,6 +132,10 @@ void tTJSNI_Bitmap::Save(const ttstr &name, const ttstr &type,
     if(!Bitmap)
         TVPThrowExceptionMessage(TVPNotDrawableLayerType);
 
+    if(TVPSaveTraceEnabled()) {
+        spdlog::info("SaveTrace Bitmap.save file={} type={}",
+                     name.AsStdString(), type.AsStdString());
+    }
     TVPSaveImage(name, type, Bitmap, meta);
 }
 //----------------------------------------------------------------------

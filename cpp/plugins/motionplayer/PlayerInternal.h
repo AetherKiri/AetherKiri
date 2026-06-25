@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cmath>
+#include <cstdlib>
 #include "WindowIntf.h"
 #include <cstring>
 #include <optional>
@@ -71,6 +72,10 @@ namespace internal {
         inline bool shouldDebugPsbSource(
             const detail::MotionSnapshot &snapshot,
             const std::string &source) {
+            const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
+            if(debugAll && *debugAll && std::strcmp(debugAll, "0") != 0) {
+                return true;
+            }
             const auto path = psbDebugLowercase(snapshot.path);
             const auto src = psbDebugLowercase(source);
             return path.find("title.pimg") != std::string::npos ||
@@ -463,22 +468,36 @@ namespace internal {
                 return false;
             }
 
-            iTJSDispatch2 *obj = value.AsObjectNoAddRef();
-            if(TJS_SUCCEEDED(obj->NativeInstanceSupport(
-                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                   reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
-               layer != nullptr) {
-                return true;
-            }
-
-            // Fallback: try via closure's Object member (may differ from
-            // AsObjectNoAddRef for certain TJS value representations)
-            const auto closure = value.AsObjectClosureNoAddRef();
-            if(closure.Object && closure.Object != obj) {
-                return TJS_SUCCEEDED(closure.Object->NativeInstanceSupport(
+            auto tryDispatch = [&](iTJSDispatch2 *obj) {
+                if(!obj) {
+                    return false;
+                }
+                layer = nullptr;
+                return TJS_SUCCEEDED(obj->NativeInstanceSupport(
                            TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
                            reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
                     layer != nullptr;
+            };
+
+            iTJSDispatch2 *obj = value.AsObjectNoAddRef();
+            if(tryDispatch(obj)) {
+                return true;
+            }
+
+            // Fallback: try both closure sides. Some TJS calls pass a closure
+            // whose Object is a method/class dispatch while ObjThis is the
+            // actual Layer instance.
+            const auto closure = value.AsObjectClosureNoAddRef();
+            if(closure.Object && closure.Object != obj) {
+                if(tryDispatch(closure.Object)) {
+                    return true;
+                }
+            }
+            if(closure.ObjThis && closure.ObjThis != obj &&
+               closure.ObjThis != closure.Object) {
+                if(tryDispatch(closure.ObjThis)) {
+                    return true;
+                }
             }
 
             return false;
@@ -492,46 +511,70 @@ namespace internal {
             }
 
             iTJSDispatch2 *obj = value.AsObjectNoAddRef();
+            const auto closure = value.AsObjectClosureNoAddRef();
+            iTJSDispatch2 *candidates[] = {
+                obj,
+                closure.ObjThis,
+                closure.Object,
+                nullptr,
+            };
 
             // Direct Layer check
-            {
+            for(auto *candidate : candidates) {
+                if(!candidate) {
+                    continue;
+                }
                 tTJSNI_BaseLayer *layer = nullptr;
-                if(TJS_SUCCEEDED(obj->NativeInstanceSupport(
+                if(TJS_SUCCEEDED(candidate->NativeInstanceSupport(
                        TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
                        reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
                    layer) {
-                    return obj;
+                    return candidate;
                 }
             }
 
             // ncb SeparateLayerAdaptor → owner
-            if(auto *adaptor =
-                   ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
-                       obj, false)) {
-                auto *ownerObj = adaptor->getOwner();
-                if(ownerObj) {
-                    auto ownerResolved = tryResolveLayerDispatch(
-                        tTJSVariant(ownerObj, ownerObj));
-                    if(ownerResolved) return ownerResolved;
+            for(auto *candidate : candidates) {
+                if(!candidate) {
+                    continue;
+                }
+                if(auto *adaptor =
+                       ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
+                           candidate, false)) {
+                    auto *ownerObj = adaptor->getOwner();
+                    if(ownerObj) {
+                        auto ownerResolved = tryResolveLayerDispatch(
+                            tTJSVariant(ownerObj, ownerObj));
+                        if(ownerResolved) return ownerResolved;
+                    }
                 }
             }
 
-            // TJS property chain: owner, _owner, targetLayer
-            static const tjs_char *propNames[] = {
-                TJS_W("owner"), TJS_W("_owner"), TJS_W("targetLayer"),
+            static const tjs_char *explicitLayerProps[] = {
+                TJS_W("targetLayer"), TJS_W("_targetLayer"),
+                TJS_W("renderTarget"), TJS_W("_renderTarget"),
                 TJS_W("layer"), TJS_W("_layer"), TJS_W("baseLayer"),
-                TJS_W("_base"), TJS_W("parent"), nullptr };
+                TJS_W("_base"), TJS_W("base"), TJS_W("fore"),
+                TJS_W("back"), TJS_W("primaryLayer"), nullptr };
+            static const tjs_char *ownerLayerProps[] = {
+                TJS_W("owner"), TJS_W("_owner"), TJS_W("parent"), nullptr };
 
-            for(int i = 0; propNames[i]; ++i) {
-                tTJSVariant propVal;
-                if(getObjectProperty(value, propNames[i], propVal) &&
-                   propVal.Type() == tvtObject &&
-                   propVal.AsObjectNoAddRef() != nullptr &&
-                   propVal.AsObjectNoAddRef() != obj) {
-                    auto *resolved = tryResolveLayerDispatch(propVal);
-                    if(resolved) return resolved;
+            auto tryProps = [&](const tjs_char *const *propNames) -> iTJSDispatch2 * {
+                for(int i = 0; propNames[i]; ++i) {
+                    tTJSVariant propVal;
+                    if(getObjectProperty(value, propNames[i], propVal) &&
+                       propVal.Type() == tvtObject &&
+                       propVal.AsObjectNoAddRef() != nullptr &&
+                       propVal.AsObjectNoAddRef() != obj) {
+                        auto *resolved = tryResolveLayerDispatch(propVal);
+                        if(resolved) return resolved;
+                    }
                 }
-            }
+                return nullptr;
+            };
+
+            if(auto *resolved = tryProps(explicitLayerProps)) return resolved;
+            if(auto *resolved = tryProps(ownerLayerProps)) return resolved;
 
             return nullptr;
         }
@@ -944,6 +987,20 @@ namespace internal {
                 }
             }
             return 0.0;
+        }
+
+        inline double motionClipEndTimeLikeKrkrsdl3(
+            const detail::MotionClip *clip) {
+            if(!clip) {
+                return 0.0;
+            }
+            if(clip->syncTime > 0.0) {
+                return clip->syncTime;
+            }
+            if(clip->selfSyncTime > 0.0) {
+                return clip->selfSyncTime;
+            }
+            return clip->totalFrames;
         }
 
         inline void mergeFrameContent(const std::shared_ptr<PSB::PSBDictionary> &content,

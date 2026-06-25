@@ -170,7 +170,9 @@
       "binaryDir": "${sourceDir}/out/ios/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "VCPKG_BUILD_TYPE": "debug"
+        "VCPKG_BUILD_TYPE": "debug",
+        "CMAKE_C_FLAGS_DEBUG": "-Og -g",
+        "CMAKE_CXX_FLAGS_DEBUG": "-Og -g"
       }
     },
     {

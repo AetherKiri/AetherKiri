@@ -21,6 +21,7 @@
 #include "EventIntf.h"
 #include "SysInitIntf.h"
 #include "TickCount.h"
+#include "ScriptMgnIntf.h"
 #include "DebugIntf.h"
 #include "LayerTreeOwner.h"
 #include "WindowIntf.h"
@@ -31,8 +32,102 @@
 
 namespace {
 bool TVPInputTraceEnabled() {
-    static const bool enabled = std::getenv("AETHERKIRI_INPUT_TRACE") != nullptr;
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_INPUT_TRACE");
+        return value && *value && *value != '0';
+    }();
     return enabled;
+}
+
+void TVPTraceExpressionValue(const char *name, const tjs_char *expression) {
+    try {
+        tTJSVariant value;
+        TVPExecuteExpression(ttstr(expression), &value);
+        spdlog::info("LayerManager title diag {}={}", name,
+                     ttstr(value).AsStdString());
+    } catch(const eTJS &e) {
+        spdlog::info("LayerManager title diag {} failed: {}", name,
+                     ttstr(e.GetMessage()).AsStdString());
+    } catch(...) {
+        spdlog::info("LayerManager title diag {} failed", name);
+    }
+}
+
+void TVPTraceTitleStateDiagnostics() {
+    if(!TVPInputTraceEnabled())
+        return;
+
+    static int logged_count = 0;
+    if(logged_count >= 8)
+        return;
+    logged_count++;
+
+    TVPTraceExpressionValue("typeof_kag", TJS_W("typeof kag"));
+    TVPTraceExpressionValue("typeof_global_kag", TJS_W("typeof global.kag"));
+    TVPTraceExpressionValue("typeof_inTitleMenu", TJS_W("typeof inTitleMenu"));
+    TVPTraceExpressionValue(
+        "currentStorage",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.currentStorage : \"\""));
+    TVPTraceExpressionValue(
+        "currentLabel",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.currentLabel : \"\""));
+    TVPTraceExpressionValue(
+        "currentScenario",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.currentScenario : \"\""));
+    TVPTraceExpressionValue(
+        "currentConductor",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.conductor : \"\""));
+    TVPTraceExpressionValue("typeof_SystemActionBase",
+                            TJS_W("typeof SystemActionBase"));
+}
+
+bool TVPScriptReportsTitleMenu() {
+    constexpr tjs_uint32 kCacheMs = 50;
+    static tjs_uint32 cached_tick = 0;
+    static bool cached_value = false;
+    static bool cached_once = false;
+    static bool logged_failure = false;
+
+    const tjs_uint32 now = TVPGetRoughTickCount32();
+    if(cached_once && static_cast<tjs_uint32>(now - cached_tick) < kCacheMs)
+        return cached_value;
+
+    cached_once = true;
+    cached_tick = now;
+    cached_value = false;
+
+    try {
+        TVPTraceTitleStateDiagnostics();
+        tTJSVariant result;
+        TVPExecuteExpression(
+            TJS_W("typeof inTitleMenu == \"Object\" && "
+                  "typeof kag == \"Object\" && inTitleMenu(kag)"),
+            &result);
+        cached_value = result.operator bool();
+        if(TVPInputTraceEnabled()) {
+            spdlog::info("LayerManager title state query result={}",
+                         cached_value ? "true" : "false");
+        }
+    } catch(const eTJS &e) {
+        if(TVPInputTraceEnabled() && !logged_failure) {
+            spdlog::info("LayerManager title state query failed: {}",
+                         ttstr(e.GetMessage()).AsStdString());
+        }
+        logged_failure = true;
+    } catch(...) {
+        if(TVPInputTraceEnabled() && !logged_failure)
+            spdlog::info("LayerManager title state query failed");
+        logged_failure = true;
+    }
+
+    return cached_value;
+}
+
+bool TVPIsTitleMenuBackgroundLayer(tTJSNI_BaseLayer *layer) {
+    if(!layer)
+        return false;
+    const std::string name = layer->GetName().AsStdString();
+    return name == "SysCoverLayer" || name == "title_bg";
 }
 
 void TVPTraceLayerHit(const char *event, tjs_int x, tjs_int y,
@@ -50,19 +145,83 @@ void TVPTraceLayerHit(const char *event, tjs_int x, tjs_int y,
     }
 }
 
+void TVPTraceLayersAt(tTVPLayerManager *manager, const char *reason,
+                      tjs_int x, tjs_int y) {
+    if(!TVPInputTraceEnabled() || !manager)
+        return;
+    spdlog::info("LayerManager layer dump reason={} primary=({}, {})", reason,
+                 x, y);
+    auto &nodes = manager->GetAllNodes();
+    for(auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
+        tTJSNI_BaseLayer *candidate = *it;
+        if(!candidate)
+            continue;
+        tjs_int local_x = x;
+        tjs_int local_y = y;
+        candidate->FromPrimaryCoordinates(local_x, local_y);
+        const bool rect_hit =
+            local_x >= 0 && local_y >= 0 &&
+            local_x < static_cast<tjs_int>(candidate->GetWidth()) &&
+            local_y < static_cast<tjs_int>(candidate->GetHeight());
+        if(!rect_hit)
+            continue;
+        const auto action_owner = candidate->GetActionOwnerNoAddRef();
+        const bool pixel_hit =
+            candidate->HitTestNoVisibleCheck(local_x, local_y);
+        spdlog::info("  layer={} local=({}, {}) size={}x{} pos=({}, {}) visible={} enabled={} opacity={} pixel={} action={}",
+                     candidate->GetName().AsStdString(), local_x, local_y,
+                     candidate->GetWidth(), candidate->GetHeight(),
+                     candidate->GetLeft(), candidate->GetTop(),
+                     candidate->GetNodeVisible() ? "yes" : "no",
+                     candidate->GetNodeEnabled() ? "yes" : "no",
+                     candidate->GetOpacity(), pixel_hit ? "yes" : "no",
+                     action_owner.Object ? "yes" : "no");
+    }
+}
+
 bool TVPIsSaveLoadButtonLayer(tTJSNI_BaseLayer *layer) {
     if(!layer) return false;
     const std::string name = layer->GetName().AsStdString();
     return name == "save" || name == "load" || name == "qload" ||
            name == "back" || name == "return" || name == "yes" ||
-           name == "no";
+           name == "no" || name == "to_save" || name == "to_load" ||
+           name == "to_qsave" || name == "to_qload" ||
+           name == "to_back" || name == "to_return";
+}
+
+bool TVPIsSaveLoadOverlayCommandLayer(tTJSNI_BaseLayer *layer) {
+    if(!layer)
+        return false;
+    const std::string name = layer->GetName().AsStdString();
+    return name == "to_save" || name == "to_load" ||
+           name == "to_qsave" || name == "to_qload" ||
+           name == "to_back" || name == "to_return";
+}
+
+bool TVPLayerRectContainsPrimaryPoint(tTJSNI_BaseLayer *layer, tjs_int x,
+                                      tjs_int y, tjs_int &local_x,
+                                      tjs_int &local_y) {
+    if(!layer)
+        return false;
+    local_x = x;
+    local_y = y;
+    layer->FromPrimaryCoordinates(local_x, local_y);
+    return local_x >= 0 && local_y >= 0 &&
+           local_x < static_cast<tjs_int>(layer->GetWidth()) &&
+           local_y < static_cast<tjs_int>(layer->GetHeight());
 }
 
 bool TVPIsSaveLoadItemLayer(tTJSNI_BaseLayer *layer) {
     if(!layer) return false;
     const std::string name = layer->GetName().AsStdString();
-    return name.rfind("item", 0) == 0 && layer->GetWidth() >= 300 &&
-           layer->GetHeight() >= 80;
+    if(name.rfind("item", 0) != 0)
+        return false;
+    const tjs_int width = layer->GetWidth();
+    const tjs_int height = layer->GetHeight();
+    if(width >= 300 && height >= 80)
+        return true;
+    // CafeStella's save slots are compact cards such as item00 at 259x250.
+    return width >= 220 && width <= 300 && height >= 180 && height <= 300;
 }
 
 bool TVPIsGalleryItemLayer(tTJSNI_BaseLayer *layer) {
@@ -424,12 +583,17 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetMostFrontChildAt(
 //---------------------------------------------------------------------------
 tTJSNI_BaseLayer *tTVPLayerManager::GetClickableLayerAt(tjs_int x, tjs_int y) {
     tTJSNI_BaseLayer *layer = GetMostFrontChildAt(x, y);
+    if(TVPIsSaveLoadItemLayer(layer))
+        TVPTraceLayersAt(this, "save-load-item", x, y);
     if(!layer || !TVPIsMessageLayer(layer) || !Primary)
         return layer;
 
     const tjs_int lower_control_band = (tjs_int)(Primary->GetHeight() * 3 / 4);
     if(y < lower_control_band)
         return layer;
+    const bool message_command_band = IsSaveLoadMessageCommandBand(layer, x, y);
+    if(message_command_band)
+        TVPTraceLayersAt(this, "message-command-band", x, y);
 
     tTJSNI_BaseLayer *under = GetMostFrontChildAt(x, y, layer);
     if(TVPInputTraceEnabled() && under) {
@@ -441,6 +605,36 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetClickableLayerAt(tjs_int x, tjs_int y) {
         return under;
 
     auto &nodes = GetAllNodes();
+    if(message_command_band) {
+        for(auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
+            tTJSNI_BaseLayer *candidate = *it;
+            if(!TVPIsSaveLoadOverlayCommandLayer(candidate) ||
+               !candidate->GetNodeVisible()) {
+                continue;
+            }
+            tjs_int local_x = 0;
+            tjs_int local_y = 0;
+            if(!TVPLayerRectContainsPrimaryPoint(candidate, x, y, local_x,
+                                                 local_y)) {
+                continue;
+            }
+            const bool pixel_hit =
+                candidate->HitTestNoVisibleCheck(local_x, local_y);
+            if(TVPInputTraceEnabled()) {
+                spdlog::info(
+                    "LayerManager save/load overlay command through message={} enabled={} pixel={}",
+                    candidate->GetName().AsStdString(),
+                    candidate->GetNodeEnabled() ? "yes" : "no",
+                    pixel_hit ? "yes" : "no");
+            }
+            const auto action_owner = candidate->GetActionOwnerNoAddRef();
+            if(!candidate->GetNodeEnabled() && !pixel_hit &&
+               !action_owner.Object)
+                continue;
+            return candidate;
+        }
+    }
+
     for(auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
         tTJSNI_BaseLayer *candidate = *it;
         if(!TVPIsSaveLoadButtonLayer(candidate) || !candidate->GetNodeVisible() ||
@@ -462,14 +656,20 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetClickableLayerAt(tjs_int x, tjs_int y) {
 }
 
 bool tTVPLayerManager::IsPendingConfirmStillOnSameSelection() {
+    return GetPendingConfirmSelectionLayer() != nullptr;
+}
+
+tTJSNI_BaseLayer *tTVPLayerManager::GetPendingConfirmSelectionLayer() {
     if(!Primary || PendingConfirmLayerName.empty())
-        return false;
+        return nullptr;
 
     tTJSNI_BaseLayer *layer =
         GetConfirmableSelectionLayerAt(PendingConfirmX, PendingConfirmY);
     if(!TVPIsConfirmableSelectionLayer(layer))
-        return false;
-    return layer->GetName().AsStdString() == PendingConfirmLayerName;
+        return nullptr;
+    if(layer->GetName().AsStdString() != PendingConfirmLayerName)
+        return nullptr;
+    return layer;
 }
 
 tTJSNI_BaseLayer *tTVPLayerManager::GetConfirmableSelectionLayerAt(
@@ -541,25 +741,71 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetConfirmableSelectionLayerAt(
 
 bool tTVPLayerManager::ShouldSynthesizeEnterForSaveLoadButton(
     tTJSNI_BaseLayer *layer, tjs_int x, tjs_int y) {
-    if(!Primary || !TVPIsMessageLayer(layer))
+    if(!IsSaveLoadMessageCommandBand(layer, x, y))
         return false;
 
+    const tjs_int w = (tjs_int)Primary->GetWidth();
+    // Some KAG save/load screens draw bottom command buttons into the message
+    // layer instead of separate button layers. These commands are also
+    // bound to Enter; use that path when the pointer lands in their band.
+    return x >= w * 35 / 100 && x <= w * 70 / 100;
+}
+
+bool tTVPLayerManager::IsSaveLoadMessageCommandBand(tTJSNI_BaseLayer *layer,
+                                                    tjs_int x, tjs_int y) {
+    if(!Primary || !TVPIsMessageLayer(layer))
+        return false;
     const tjs_int w = (tjs_int)Primary->GetWidth();
     const tjs_int h = (tjs_int)Primary->GetHeight();
     if(w <= 0 || h <= 0)
         return false;
 
-    // Some KAG save/load screens draw bottom command buttons into the message
-    // layer instead of separate button layers. The Load command is also bound
-    // to Enter; use that path when the pointer lands in the bottom Load button
-    // band so mouse input matches keyboard behavior.
-    return x >= w * 52 / 100 && x <= w * 70 / 100 &&
-           y >= h * 90 / 100;
+    if(y < h * 90 / 100)
+        return false;
+
+    // CafeStella's bottom Save/Load commands are drawn in the message layer;
+    // keep those clicks out of the save-slot grid behind them.
+    const bool save_command = x >= w * 35 / 100 && x <= w * 49 / 100;
+    const bool load_command = x >= w * 52 / 100 && x <= w * 70 / 100;
+    return save_command || load_command;
 }
-//---------------------------------------------------------------------------
+
+bool tTVPLayerManager::IsTitleMenuInputState(tTJSNI_BaseLayer *layer) {
+    (void)layer;
+    return TVPScriptReportsTitleMenu();
+}
+
+bool tTVPLayerManager::IsTitleMenuControlPoint(tjs_int x, tjs_int y) {
+    if(!Primary)
+        return true;
+
+    const tjs_int w = (tjs_int)Primary->GetWidth();
+    const tjs_int h = (tjs_int)Primary->GetHeight();
+    if(w <= 0 || h <= 0)
+        return true;
+
+    // CafeStella draws title menu controls into the full-screen title layer and
+    // dispatches by coordinate. Keep the right-side menu/switcher interactive,
+    // but keep background/title-art taps from re-entering title scripts.
+    const bool right_title_controls =
+        x >= w * 56 / 100 && y >= h * 25 / 100 && y <= h * 94 / 100;
+    const bool far_right_switcher = x >= w * 92 / 100 && y >= h * 45 / 100;
+    return right_title_controls || far_right_switcher;
+}
+
 void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
+    if(SuppressCurrentTitleMenuPointerGesture) {
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager suppress title repeat click primary=({}, {})", x,
+                y);
+        }
+        SuppressCurrentTitleMenuPointerGesture = false;
+        return;
+    }
     tTJSNI_BaseLayer *l = GetClickableLayerAt(x, y);
     TVPTraceLayerHit("click", x, y, l);
+    TVPTraceLayersAt(this, "click-stack", x, y);
     if(l /*&& CaptureOwner == l*/) {
         if(ShouldSynthesizeEnterForSaveLoadButton(l, x, y) && TVPMainWindow) {
             if(TVPInputTraceEnabled()) {
@@ -571,29 +817,16 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
             PendingSaveLoadEnterTick = TVPGetRoughTickCount32() + 100;
             return;
         }
-        bool selection_passthrough = false;
-        if(!TVPIsConfirmableSelectionLayer(l) && !TVPIsSaveLoadButtonLayer(l)) {
-            if(tTJSNI_BaseLayer *selection = GetConfirmableSelectionLayerAt(x, y)) {
-                if(TVPInputTraceEnabled()) {
-                    spdlog::info("LayerManager selection passthrough top={} selection={}",
-                                 l->GetName().AsStdString(),
-                                 selection->GetName().AsStdString());
-                }
-                l = selection;
-                selection_passthrough = true;
-            }
-        }
-        const bool should_confirm_selection = TVPIsConfirmableSelectionLayer(l);
+        const bool message_command_band =
+            IsSaveLoadMessageCommandBand(l, x, y);
+        const bool should_confirm_selection =
+            TVPIsConfirmableSelectionLayer(l) && !TVPIsSaveLoadItemLayer(l);
         const std::string selection_layer_name =
             should_confirm_selection ? l->GetName().AsStdString() : std::string();
         const tjs_int selection_x = x;
         const tjs_int selection_y = y;
         l->FromPrimaryCoordinates(x, y);
-        if(selection_passthrough)
-            l->FireMouseDown(x, y, mbLeft, 0);
         l->FireClick(x, y);
-        if(selection_passthrough)
-            l->FireMouseUp(x, y, mbLeft, 0);
         if(should_confirm_selection && TVPMainWindow) {
             if(TVPInputTraceEnabled()) {
                 spdlog::info("LayerManager selectable item click -> pending confirm fallback");
@@ -609,6 +842,7 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
 //---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryDoubleClick(tjs_int x, tjs_int y) {
     tTJSNI_BaseLayer *l = GetClickableLayerAt(x, y);
+    TVPTraceLayersAt(this, "double-click-stack", x, y);
     if(l /*&& CaptureOwner == l*/) {
         l->FromPrimaryCoordinates(x, y);
         l->FireDoubleClick(x, y);
@@ -617,10 +851,26 @@ void tTVPLayerManager::PrimaryDoubleClick(tjs_int x, tjs_int y) {
 //---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryMouseDown(tjs_int x, tjs_int y,
                                         tTVPMouseButton mb, tjs_uint32 flags) {
+    if(mb == mbLeft && !IsTitleMenuControlPoint(x, y)) {
+        tTJSNI_BaseLayer *title_hit = GetClickableLayerAt(x, y);
+        if(IsTitleMenuInputState(title_hit) &&
+           TVPIsTitleMenuBackgroundLayer(title_hit)) {
+            if(TVPInputTraceEnabled()) {
+                spdlog::info(
+                    "LayerManager suppress title background pointer primary=({}, {})",
+                    x, y);
+            }
+            SuppressCurrentTitleMenuPointerGesture = true;
+            return;
+        }
+    }
+
     PrimaryMouseMove(x, y, flags);
     tTJSNI_BaseLayer *l =
         CaptureOwner ? CaptureOwner : GetClickableLayerAt(x, y);
     TVPTraceLayerHit("down", x, y, l);
+    TVPTraceLayersAt(this, "down-stack", x, y);
+    SuppressCurrentTitleMenuPointerGesture = false;
     if(l) {
         l->FromPrimaryCoordinates(x, y);
         ReleaseCaptureCalled = false;
@@ -645,13 +895,22 @@ void tTVPLayerManager::PrimaryMouseDown(tjs_int x, tjs_int y,
 //---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
                                       tjs_uint32 flags) {
+    if(mb == mbLeft && SuppressCurrentTitleMenuPointerGesture) {
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager suppress title repeat mouseup primary=({}, {})",
+                x, y);
+        }
+        return;
+    }
     tTJSNI_BaseLayer *l;
 
     if(CaptureOwner)
         l = CaptureOwner;
     else
-        l = GetMostFrontChildAt(x, y);
+        l = GetClickableLayerAt(x, y);
     TVPTraceLayerHit("up", x, y, l);
+    TVPTraceLayersAt(this, "up-stack", x, y);
 
     if(l) {
         int orig_x = x, orig_y = y;
@@ -678,7 +937,7 @@ void tTVPLayerManager::PrimaryMouseMove(tjs_int x, tjs_int y,
     if(CaptureOwner)
         l = CaptureOwner;
     else
-        l = GetMostFrontChildAt(x, y);
+        l = GetClickableLayerAt(x, y);
 
     // enter/leave event
     if(LastMouseMoveSent != l) {
@@ -690,7 +949,7 @@ void tTVPLayerManager::PrimaryMouseMove(tjs_int x, tjs_int y,
         if(CaptureOwner)
             l = CaptureOwner;
         else
-            l = GetMostFrontChildAt(x, y);
+            l = GetClickableLayerAt(x, y);
 
         if(l) {
             InNotifyingHintOrCursorChange = true;
@@ -704,7 +963,7 @@ void tTVPLayerManager::PrimaryMouseMove(tjs_int x, tjs_int y,
                 if(CaptureOwner)
                     ll = CaptureOwner;
                 else
-                    ll = GetMostFrontChildAt(x, y);
+                    ll = GetClickableLayerAt(x, y);
 
                 if(l != ll) {
                     l->FireMouseLeave();
@@ -1313,18 +1572,29 @@ void tTVPLayerManager::UpdateToDrawDevice() {
             PendingConfirmRequiresSameSelection = false;
             PendingConfirmLayerName.clear();
         } else {
+            tTJSNI_BaseLayer *confirm_layer =
+                PendingConfirmRequiresSameSelection
+                    ? GetPendingConfirmSelectionLayer()
+                    : nullptr;
             PendingConfirmRequiresSameSelection = false;
             PendingConfirmLayerName.clear();
             if(TVPInputTraceEnabled())
                 spdlog::info("LayerManager selectable item confirm fallback dispatch Enter");
-            EngineInputEvent event;
-            event.type = kEngineInputKeyDown;
-            event.key_code = 13;
-            if(auto *loop = EngineLoop::GetInstance()) {
-                loop->HandleInputEvent(event);
-                PendingSaveLoadEnterReleaseTick = TVPGetRoughTickCount32() + 100;
+            if(confirm_layer) {
+                confirm_layer->FireKeyDown(13, 0);
+                confirm_layer->FireKeyUp(13, 0);
             } else {
-                TVPPostInputEvent(new tTVPOnKeyDownInputEvent(TVPMainWindow, 13, 0));
+                EngineInputEvent event;
+                event.type = kEngineInputKeyDown;
+                event.key_code = 13;
+                if(auto *loop = EngineLoop::GetInstance()) {
+                    loop->HandleInputEvent(event);
+                    PendingSaveLoadEnterReleaseTick =
+                        TVPGetRoughTickCount32() + 100;
+                } else {
+                    TVPPostInputEvent(
+                        new tTVPOnKeyDownInputEvent(TVPMainWindow, 13, 0));
+                }
             }
         }
     }

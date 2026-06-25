@@ -63,6 +63,9 @@
  *  When enabled, disassembles bytecode and exports scripts during game load. */
 #define ENGINE_OPTION_EXPORT_SCRIPTS "export_scripts"
 
+/** Internal plugin startup policy ("krkrsdl3" / "aether_all"). */
+#define ENGINE_OPTION_PLUGIN_LOAD_MODE "plugin_load_mode"
+
 /** Enable/disable appending recent engine logs to fatal error dialogs
  *  ("0"/"1", default "0"). */
 #define ENGINE_OPTION_ERROR_DIALOG_LOGS "error_dialog_logs"
@@ -80,5 +83,8 @@
 
 #define ENGINE_MEMORY_PROFILE_BALANCED    "balanced"
 #define ENGINE_MEMORY_PROFILE_AGGRESSIVE  "aggressive"
+
+#define ENGINE_PLUGIN_LOAD_MODE_KRKRSDL3  "krkrsdl3"
+#define ENGINE_PLUGIN_LOAD_MODE_AETHER_ALL "aether_all"
 
 #endif  /* KRKR2_ENGINE_OPTIONS_H_ */

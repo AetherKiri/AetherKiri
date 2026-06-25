@@ -2,7 +2,7 @@
 
 [English](verified_games.md)
 
-最后更新：2026-06-07
+最后更新：2026-06-18
 
 本文档记录已经用 AetherKiri 手动 smoke test 或 flow test 过的游戏。它是兼容性记录，
 不代表每条路线、每个视频、每个插件路径或每个存档状态都已经完整验证。
@@ -22,6 +22,8 @@
 | もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | Web release，Chrome，Vite 本地服务器 | 浏览器本地目录导入 | 启动、脚本/插件加载、标题/菜单渲染、基础输入、继续/存读档路径冒烟、CJK/符号字体渲染，以及 IndexedDB `/userfs` 持久化行为 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。Web 部署仍需要 COOP/COEP 头。需要 Live2D 的游戏仍需单独提供 Web 版 Live2D Cubism Core 专有运行时。 |
 | もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | macOS release app | App UI 本地目录导入 | 启动、标题/菜单渲染、基础输入、存读档冒烟，以及 CJK/符号字体渲染 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | iOS/iPadOS app build | 文件 App 导入 | 启动、标题/菜单渲染、触摸输入、存读档冒烟，以及 CJK/符号字体渲染 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 喫茶ステラと死神の蝶 | macOS release app | App UI 本地目录导入 | 启动、标题/菜单渲染、标题背景快速切换/输入压力、继续游戏流程、场景/文字渲染，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 喫茶ステラと死神の蝶 | iOS/iPadOS iPad release app build | 文件 App 导入 | 启动、标题/菜单渲染、触摸输入、标题背景快速切换/输入压力、继续游戏流程、场景/文字渲染，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 
 ## 如何新增游戏
 

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <optional>
@@ -102,6 +103,17 @@ namespace motion::detail {
         bool isTargetLogoMotionPath(const std::string &motionPath) {
             const auto lowered = lowercase(motionPath);
             return lowered.find("yuzulogo.mtn") != std::string::npos ||
+                lowered.find("m2logo.mtn") != std::string::npos;
+        }
+
+        bool shouldLogMotionSnapshotPath(const std::string &motionPath) {
+            const char *enabled = std::getenv("AETHERKIRI_MOTION_DEBUG");
+            if(!enabled || !*enabled || std::strcmp(enabled, "0") == 0) {
+                return false;
+            }
+            const auto lowered = lowercase(motionPath);
+            return lowered.find("title") != std::string::npos ||
+                lowered.find("yuzulogo.mtn") != std::string::npos ||
                 lowered.find("m2logo.mtn") != std::string::npos;
         }
 
@@ -911,6 +923,42 @@ namespace motion::detail {
         void collectValueSources(const std::shared_ptr<PSB::IPSBValue> &value,
                                  std::vector<std::string> &sources);
 
+        double collectSelfSyncTimeFromLayer(
+            const std::shared_ptr<const PSB::PSBDictionary> &layer) {
+            if(!layer) {
+                return 0.0;
+            }
+
+            double result = 0.0;
+            if(const auto frameList = dictionaryList(layer, { "frameList" })) {
+                for(const auto &frameValue : *frameList) {
+                    const auto frame =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                            frameValue);
+                    if(!frame) {
+                        continue;
+                    }
+                    if(static_cast<bool>((*frame)["content"])) {
+                        result = std::max(
+                            result,
+                            dictionaryNumber(frame, { "time" }).value_or(0.0));
+                    }
+                }
+            }
+
+            if(const auto children = dictionaryList(layer, { "children" })) {
+                for(const auto &childValue : *children) {
+                    const auto child =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                            childValue);
+                    result = std::max(result,
+                                      collectSelfSyncTimeFromLayer(child));
+                }
+            }
+
+            return result;
+        }
+
         void collectDictionarySources(
             const std::shared_ptr<PSB::PSBDictionary> &dic,
             std::vector<std::string> &sources) {
@@ -970,6 +1018,12 @@ namespace motion::detail {
                                         "totalFrameCount", "total_frame_count",
                                         "frames", "length", "end" })
                     .value_or(0.0);
+            clip.syncTime =
+                dictionaryNumber(dic, { "syncTime", "sync_time" })
+                    .value_or(0.0);
+            clip.selfSyncTime =
+                dictionaryNumber(dic, { "selfSyncTime", "self_sync_time" })
+                    .value_or(0.0);
             if(const auto loopTime = dictionaryNumber(dic, { "loopTime" })) {
                 clip.loopTime = *loopTime;
                 clip.loop = *loopTime >= 0.0;
@@ -997,6 +1051,9 @@ namespace motion::detail {
                         clip.layersByName[*layerLabel] = layer;
                         clip.layerNames.push_back(*layerLabel);
                     }
+                    clip.selfSyncTime = std::max(
+                        clip.selfSyncTime,
+                        collectSelfSyncTimeFromLayer(layer));
                     collectValueSources(layer, clip.sourceCandidates);
                 }
             }
@@ -1261,6 +1318,15 @@ namespace motion::detail {
                   *snapshot);
         collectControlMetadata(*snapshot);
         collectRootResources(root, *snapshot);
+        if(LOGGER && shouldLogMotionSnapshotPath(snapshot->path)) {
+            LOGGER->info(
+                "motion snapshot parsed: path={} clips={} mainLabels={} diffLabels={} rootLayers={} sources={}",
+                snapshot->path, snapshot->clipsByLabel.size(),
+                joinStrings(snapshot->mainTimelineLabels),
+                joinStrings(snapshot->diffTimelineLabels),
+                joinStrings(snapshot->layerNames),
+                snapshot->sourceCandidates.size());
+        }
         if(logoChainTraceEnabled(snapshot)) {
             logoChainTraceLogf(
                 snapshot->path, "snapshot.parsed", "PSB parse", -1.0,

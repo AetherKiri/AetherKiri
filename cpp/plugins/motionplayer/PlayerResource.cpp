@@ -21,6 +21,8 @@ namespace motion {
                     _runtime->activeMotion.reset();
                     _runtime->timelines.clear();
                     _runtime->playingTimelineLabels.clear();
+                    _allplaying = false;
+                    disableAutoProgress();
                 }
                 it = _runtime->motionsByKey.erase(it);
             } else {
@@ -49,6 +51,8 @@ namespace motion {
         _runtime->lastCanvas.Clear();
         _runtime->lastViewParam.Clear();
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        _allplaying = false;
+        disableAutoProgress();
         _variableKeys.Clear();
         _variableValues.clear();
         _variableAnimators.clear();
@@ -62,8 +66,12 @@ namespace motion {
     }
 
     bool Player::isExistMotion(ttstr name) {
-        return static_cast<bool>(
-            resolveMotion(*_runtime, name, &_resourceManagerNative));
+        try {
+            return static_cast<bool>(
+                resolveMotion(*_runtime, name, &_resourceManagerNative));
+        } catch(...) {
+            return false;
+        }
     }
 
     tTJSVariant Player::findMotion(ttstr name) {

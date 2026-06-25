@@ -27,6 +27,7 @@
 #include <csignal>
 #include <set>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 #include <thread>
@@ -36,6 +37,144 @@ namespace TJS {
     //---------------------------------------------------------------------------
     // utility functions
     //---------------------------------------------------------------------------
+    static bool TJSSaveTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_TJS_SAVE_TRACE");
+            return value && *value && *value != '0';
+        }();
+        return enabled;
+    }
+
+    static bool TJSSaveTraceMatches(const std::string &text) {
+        return text.find("Save") != std::string::npos ||
+               text.find("save") != std::string::npos ||
+               text.find("FileStore") != std::string::npos ||
+               text.find("DirectSave") != std::string::npos ||
+               text.find("CustomSav") != std::string::npos ||
+               text.find("select") != std::string::npos ||
+               text.find("selec") != std::string::npos ||
+               text.find("onButton") != std::string::npos ||
+               text.find("onExecute") != std::string::npos ||
+               text.find("onItem") != std::string::npos ||
+               text.find("onSysButton") != std::string::npos ||
+               text.find("onSel") != std::string::npos ||
+               text.find("setItem") != std::string::npos ||
+               text.find("getItem") != std::string::npos ||
+               text.find("gameSave") != std::string::npos;
+    }
+
+    static bool TJSSaveTraceMemberMatches(const std::string &text) {
+        return text == "onButtonClick" || text == "onExecute" ||
+               text == "onItem" || text == "onSysButton" ||
+               text == "onSel" || text == "onSave" || text == "onLoadF" ||
+               text == "sav" || text == "loa" || text == "getCurrent" ||
+               text == "isExis" || text == "isEna" || text == "_ask" ||
+               text == "setItem" || text == "getItem" ||
+               text == "getItemB" || text == "getEditBu" ||
+               text == "setupUi" || text == "updateItem" ||
+               text == "invoke" || text == "call" ||
+               text == "linkNum" || text == "num" || text == "page";
+    }
+
+    static std::string TJSSaveTraceVariantString(const tTJSVariant &value) {
+        try {
+            return ttstr(value).AsStdString();
+        } catch(...) {
+            return "<unprintable>";
+        }
+    }
+
+    static void TJSTraceSaveFunctionEnter(const tTJSInterCodeContext *ctx,
+                                          iTJSDispatch2 *objthis,
+                                          tTJSVariant **args,
+                                          tjs_int numargs) {
+        if(!TJSSaveTraceEnabled() || !ctx)
+            return;
+        const std::string desc =
+            ctx->GetShortDescriptionWithClassName().AsStdString();
+        if(!TJSSaveTraceMatches(desc))
+            return;
+        static int logged = 0;
+        if(logged >= 8000)
+            return;
+        ++logged;
+        std::string arg_text;
+        const tjs_int trace_arg_count = std::min<tjs_int>(numargs, 4);
+        for(tjs_int i = 0; i < trace_arg_count; ++i) {
+            if(!arg_text.empty())
+                arg_text += ", ";
+            arg_text += fmt::format("a{}={}", i,
+                                    args && args[i]
+                                        ? TJSSaveTraceVariantString(*args[i])
+                                        : std::string("<null>"));
+        }
+        spdlog::info("TJSSaveTrace enter desc=\"{}\" args={} [{}] this={}",
+                     desc, numargs, arg_text,
+                     static_cast<const void *>(objthis));
+    }
+
+    static bool TJSSaveTracePropertyContext(const tTJSInterCodeContext *ctx) {
+        if(!TJSSaveTraceEnabled() || !ctx)
+            return false;
+        const std::string desc =
+            ctx->GetShortDescriptionWithClassName().AsStdString();
+        return TJSSaveTraceMatches(desc);
+    }
+
+    static void TJSTraceSavePropertyGet(const tTJSInterCodeContext *ctx,
+                                        const char *kind,
+                                        const ttstr &name,
+                                        const tTJSVariant &value,
+                                        tjs_error hr) {
+        if(!TJSSaveTraceEnabled() || !ctx)
+            return;
+        const std::string member = name.AsStdString();
+        if(!TJSSaveTracePropertyContext(ctx) &&
+           !TJSSaveTraceMemberMatches(member)) {
+            return;
+        }
+        static int logged = 0;
+        if(logged >= 12000)
+            return;
+        ++logged;
+        spdlog::info("TJSSaveTrace prop {} desc=\"{}\" name={} hr={} value={}",
+                     kind, ctx->GetShortDescriptionWithClassName().AsStdString(),
+                     member, hr, TJS_SUCCEEDED(hr)
+                                     ? TJSSaveTraceVariantString(value)
+                                     : std::string("<failed>"));
+    }
+
+    static void TJSTraceSaveMemberCall(const tTJSInterCodeContext *ctx,
+                                       const char *kind,
+                                       const ttstr &name,
+                                       tTJSVariant **args,
+                                       tjs_int numargs,
+                                       tjs_error hr) {
+        if(!TJSSaveTraceEnabled() || !ctx)
+            return;
+        const std::string desc =
+            ctx->GetShortDescriptionWithClassName().AsStdString();
+        const std::string member = name.AsStdString();
+        if(!TJSSaveTraceMatches(desc) && !TJSSaveTraceMemberMatches(member))
+            return;
+        static int logged = 0;
+        if(logged >= 16000)
+            return;
+        ++logged;
+        std::string arg_text;
+        const tjs_int trace_arg_count = std::min<tjs_int>(numargs, 4);
+        for(tjs_int i = 0; i < trace_arg_count; ++i) {
+            if(!arg_text.empty())
+                arg_text += ", ";
+            arg_text += fmt::format("a{}={}", i,
+                                    args && args[i]
+                                        ? TJSSaveTraceVariantString(*args[i])
+                                        : std::string("<null>"));
+        }
+        spdlog::info("TJSSaveTrace call {} desc=\"{}\" member={} args={} [{}] hr={}",
+                     kind, desc, member, numargs, arg_text, hr);
+    }
+
     static void ThrowFrom_tjs_error_num(tjs_error hr, tjs_int num) {
         tjs_char buf[34];
         TJS_int_to_str(num, buf);
@@ -648,6 +787,7 @@ namespace TJS {
                                                  tjs_int numargs,
                                                  tTJSVariant *result,
                                                  tjs_int start_ip) {
+        TJSTraceSaveFunctionEnter(this, objthis, args, numargs);
         tjs_int num_alloc =
             MaxVariableCount + VariableReserveCount + 1 + MaxFrameCount;
         TJSVariantArrayStackAddRef();
@@ -1453,10 +1593,13 @@ namespace TJS {
 
         tTJSVariantClosure clo = ra_code2->AsObjectClosureNoAddRef();
         tTJSVariant *name = TJS_GET_VM_REG_ADDR(DataArea, code[3]);
+        tTJSVariant *dest = TJS_GET_VM_REG_ADDR(ra, code[1]);
         tjs_error hr =
             clo.PropGet(flags, name->GetString(), name->GetHint(),
-                        TJS_GET_VM_REG_ADDR(ra, code[1]),
+                        dest,
                         clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+        TJSTraceSavePropertyGet(this, "direct", name->AsStringNoAddRef(), *dest,
+                                hr);
         if(TJS_FAILED(hr))
             TJSThrowFrom_tjs_error(
                 hr, TJS_GET_VM_REG(DataArea, code[3]).GetString());
@@ -1557,8 +1700,9 @@ namespace TJS {
 
             try {
                 // TODO: verify here needs hint holding
+                tTJSVariant *dest = TJS_GET_VM_REG_ADDR(ra, code[1]);
                 hr = clo.PropGet(
-                    flags, *str, nullptr, TJS_GET_VM_REG_ADDR(ra, code[1]),
+                    flags, *str, nullptr, dest,
                     clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
                 if(TJS_FAILED(hr))
                     TJSThrowFrom_tjs_error(hr, *str);
@@ -2231,6 +2375,8 @@ namespace TJS {
             }
             clo.Release();
         }
+        TJSTraceSaveMemberCall(this, "direct", name->AsStringNoAddRef(),
+                               pass_args, pass_args_count, hr);
 
         TJS_END_FUNC_CALL_ARGS
 
@@ -2280,6 +2426,8 @@ namespace TJS {
             }
             clo.Release();
         }
+        TJSTraceSaveMemberCall(this, "indirect", name, pass_args,
+                               pass_args_count, hr);
 
         TJS_END_FUNC_CALL_ARGS
 

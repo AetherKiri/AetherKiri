@@ -213,10 +213,16 @@ void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
 }
 //---------------------------------------------------------------------------
 static bool isUnicodeSpace(char16_t ch);
+static bool isDefaultIgnorableUnicode(char16_t ch);
 void FreeTypeFontRasterizer::GetTextExtent(tjs_char ch, tjs_int &w,
                                            tjs_int &h) {
     if(!Face)
         return;
+    if(isDefaultIgnorableUnicode(ch)) {
+        w = 0;
+        h = 0;
+        return;
+    }
 
     GlyphExtentCacheKey key{CurrentExtentCacheFontKey, ch};
     {
@@ -276,12 +282,26 @@ static bool isUnicodeSpace(char16_t ch) {
         ch == 0x2028 || ch == 0x2029 || ch == 0x202F || ch == 0x205F ||
         ch == 0x3000;
 }
+
+static bool isDefaultIgnorableUnicode(char16_t ch) {
+    return ch == 0x00AD || (ch >= 0x200B && ch <= 0x200F) ||
+        ch == 0x2060 || (ch >= 0xFE00 && ch <= 0xFE0F) || ch == 0xFEFF;
+}
 //---------------------------------------------------------------------------
 tTVPCharacterData *
 FreeTypeFontRasterizer::GetBitmap(const tTVPFontAndCharacterData &font,
                                   tjs_int aofsx, tjs_int aofsy) {
     if(!Face)
         return nullptr;
+    if(isDefaultIgnorableUnicode(font.Character)) {
+        auto *data = new tTVPCharacterData();
+        data->Antialiased = font.Antialiased;
+        data->FullColored = false;
+        data->Blured = font.Blured;
+        data->BlurWidth = font.BlurWidth;
+        data->BlurLevel = font.BlurLevel;
+        return data;
+    }
     if(font.Antialiased) {
         Face->ClearOption(TVP_FACE_OPTIONS_NO_ANTIALIASING);
     } else {
@@ -356,6 +376,8 @@ void FreeTypeFontRasterizer::GetGlyphDrawRect(const ttstr &text,
     tjs_uint len = text.length();
     for(tjs_uint i = 0; i < len; i++) {
         tjs_char ch = text[i];
+        if(isDefaultIgnorableUnicode(ch))
+            continue;
         tjs_int ax, ay;
         tTVPRect rt(0, 0, 0, 0);
         bool result = Face->GetGlyphRectFromCharcode(rt, ch, ax, ay);

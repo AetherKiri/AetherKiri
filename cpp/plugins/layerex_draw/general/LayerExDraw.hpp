@@ -303,6 +303,13 @@ namespace layerex {
         /// 描画内容記録用メタファイル
         GpMetafile *metafile;
         //    GpGraphics *metaGraphics;
+        GpBitmap *recordBitmap;
+        GpGraphics *recordGraphics;
+        GeometryT recordWidth;
+        GeometryT recordHeight;
+        REAL recordOriginX;
+        REAL recordOriginY;
+        bool recordEnabled;
 
         bool updateWhenDraw;
 
@@ -417,6 +424,13 @@ namespace layerex {
          * @return 更新領域情報
          */
         RectFClass _drawPath(const Appearance *app, GpPath *path);
+
+        RectFClass _drawRectangles(const Appearance *app, const RectFClass *rects,
+                                   int count);
+
+        bool ensureRecordBounds(REAL left, REAL top, REAL right, REAL bottom);
+        bool ensureRecordSurface(GeometryT minWidth, GeometryT minHeight);
+        void setRecordGraphicsTransform(GpGraphics *target);
 
         /**
          * グリフアウトラインの取得
@@ -778,7 +792,7 @@ namespace layerex {
         /**
          * @return record 描画内容を記録するかどうか
          */
-        bool getRecord() { return metafile != nullptr; }
+        bool getRecord() { return recordEnabled; }
 
         /**
          * 記録内容を ImageClass として取得

@@ -1,7 +1,19 @@
 #include "ncbind.hpp"
 #include "PluginIntf.h"
+#include <cstdlib>
+#include <spdlog/spdlog.h>
 
 #define NCB_MODULE_NAME TJS_W("saveStruct.dll")
+
+namespace {
+bool TVPSaveTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_SAVE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+} // namespace
 
 class tTVPStringStream {
     tTJSBinaryStream *stream;
@@ -229,6 +241,11 @@ public:
                            tTJSVariant **param, iTJSDispatch2 *objthis) {
         if(numparams < 1)
             return TJS_E_BADPARAMCOUNT;
+        if(TVPSaveTraceEnabled()) {
+            ttstr filename(*param[0]);
+            spdlog::info("SaveTrace Array.save2 file={}",
+                         filename.AsStdString());
+        }
         tTJSBinaryStream *stream =
             TVPCreateStream(param[0]->AsString(), TJS_BS_WRITE);
         try {
@@ -269,6 +286,11 @@ public:
                                  tTJSVariant **param, iTJSDispatch2 *objthis) {
         if(numparams < 1)
             return TJS_E_BADPARAMCOUNT;
+        if(TVPSaveTraceEnabled()) {
+            ttstr filename(*param[0]);
+            spdlog::info("SaveTrace Array.saveStruct2 file={}",
+                         filename.AsStdString());
+        }
         tTJSBinaryStream *stream =
             TVPCreateStream(param[0]->AsString(), TJS_BS_WRITE);
         try {
@@ -326,6 +348,11 @@ public:
                                  tTJSVariant **param, iTJSDispatch2 *objthis) {
         if(numparams < 1)
             return TJS_E_BADPARAMCOUNT;
+        if(TVPSaveTraceEnabled()) {
+            ttstr filename(*param[0]);
+            spdlog::info("SaveTrace Dictionary.saveStruct2 file={}",
+                         filename.AsStdString());
+        }
         tTJSBinaryStream *stream =
             TVPCreateStream(param[0]->AsString(), TJS_BS_WRITE);
         try {

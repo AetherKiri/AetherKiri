@@ -1,0 +1,60 @@
+{
+  "name": "cafestella_save_enter_probe",
+  "game_path": "",
+  "backend": "Godot Native",
+  "surface_size": [1280, 720],
+  "window_size": [1600, 900],
+  "coord_size": [1600, 900],
+  "startup_timeout_frames": 2400,
+  "warmup_frames": 180,
+  "after_click_frames": 120,
+  "measure_frames": 60,
+  "actions": [
+    {
+      "type": "click",
+      "label": "skip_warning",
+      "x": 450,
+      "y": 880,
+      "after_frames": 1
+    },
+    {
+      "type": "wait",
+      "label": "yuzu_logo_150",
+      "after_frames": 150
+    },
+    {
+      "type": "click",
+      "label": "title_menu",
+      "x": 1350,
+      "y": 240,
+      "after_frames": 600
+    },
+    {
+      "type": "click",
+      "label": "continue_game",
+      "x": 330,
+      "y": 510,
+      "after_frames": 900
+    },
+    {
+      "type": "click",
+      "label": "open_save",
+      "x": 570,
+      "y": 880,
+      "after_frames": 300
+    },
+    {
+      "type": "click",
+      "label": "slot_001_01",
+      "x": 750,
+      "y": 260,
+      "after_frames": 240
+    },
+    {
+      "type": "key",
+      "label": "enter_save",
+      "key_code": 13,
+      "after_frames": 420
+    }
+  ]
+}

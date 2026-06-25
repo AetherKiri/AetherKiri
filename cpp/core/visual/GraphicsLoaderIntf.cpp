@@ -32,6 +32,7 @@
 #include <mutex>
 #include <thread>
 #include <condition_variable>
+#include <cstdlib>
 #include "Application.h"
 #include "BitmapIntf.h"
 #include "GraphicsLoadThread.h"
@@ -40,6 +41,16 @@
 #include <spdlog/spdlog.h>
 
 #include "TVPDecodeArena.h"
+
+namespace {
+bool TVPSaveTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_SAVE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+} // namespace
 
 void TVPLoadPVRv3(void *formatdata, void *callbackdata,
                   tTVPGraphicSizeCallback sizecallback,
@@ -370,6 +381,13 @@ void TVPSaveImage(const ttstr &storagename, const ttstr &mode,
                   const iTVPBaseBitmap *image, iTJSDispatch2 *meta) {
     if(!image->Is32BPP())
         TVPThrowInternalError;
+
+    if(TVPSaveTraceEnabled()) {
+        spdlog::info("SaveTrace TVPSaveImage file={} mode={} size={}x{}",
+                     storagename.AsStdString(), mode.AsStdString(),
+                     static_cast<int>(image->GetWidth()),
+                     static_cast<int>(image->GetHeight()));
+    }
 
     tTVPGraphicHandlerType *handler;
     tTJSHashTable<ttstr, tTVPGraphicHandlerType>::tIterator i;

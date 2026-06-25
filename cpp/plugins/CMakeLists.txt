@@ -17,6 +17,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     qrcode.cpp
     qrcode/QR_Encode.cpp
     sqlitePlugin.cpp
+    sqliteXp3Vfs.cpp
     sqlite/sqlite3.c
     win32dialog.cpp
     dirlist.cpp
@@ -30,12 +31,21 @@ target_sources(${PROJECT_NAME} PRIVATE
     windowEx.cpp
     menuExt.cpp
     getSample.cpp
+    kirikiroid2.cpp
     layerExPerspective.cpp
     fftgraph.cpp
     LayerExBase.cpp
     layerExSaveCompat.cpp
     xp3filter.cpp
+    shrinkCopy.cpp
     extrans.cpp
+    extrans_precise/mosaic.cpp
+    extrans_precise/ripple.cpp
+    extrans_precise/rotatebase.cpp
+    extrans_precise/rotatetrans.cpp
+    extrans_precise/turn.cpp
+    extrans_precise/turntrans_table.cpp
+    extrans_precise/wave.cpp
     extNagano.cpp
     multiimage.cpp
     textrender.cpp
@@ -50,7 +60,11 @@ target_sources(${PROJECT_NAME} PRIVATE
     wfTypicalDSPCompat.cpp
     packinone.cpp
     clipboardEx.cpp
+    compatLegacyPlugins.cpp
+    compatMediaLayerPlugins.cpp
+    compatSystemPlugins.cpp
     dummy_plugin_stubs.cpp
+    pluginAnchors.cpp
     fstat/main.cpp
 )
 

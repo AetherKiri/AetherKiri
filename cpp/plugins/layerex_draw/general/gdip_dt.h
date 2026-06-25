@@ -3,16 +3,6 @@
 //
 #pragma once
 
-// because on MacOS the BOOL redefined in objc.h
-// libgdiplus has BOOL too!
-
-#if TARGET_OS_MAC || TARGET_OS_IPHONE
-#define _WAPI_UGLIFY_H_
-#define HANDLE void *
-#define BOOL bool
-#define CONST const
-#define VOID void
-#endif
 extern "C" {
 #include <libgdiplus/gdiplus-private.h>
 #include <libgdiplus/gdipenums.h>
@@ -38,7 +28,3 @@ extern "C" {
 #include <libgdiplus/pathgradientbrush-private.h>
 #include <libgdiplus/lineargradientbrush-private.h>
 }
-#undef HANDLE
-#undef BOOL
-#undef CONST
-#undef VOID

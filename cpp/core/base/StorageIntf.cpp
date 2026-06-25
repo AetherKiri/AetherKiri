@@ -11,6 +11,7 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 #include <memory>
 #include "StorageIntf.h"
@@ -24,12 +25,15 @@
 #include "TickCount.h"
 #include "ncbind.hpp"
 #include "UtilStreams.h"
+#include "spdlog/spdlog.h"
 
 #define TVP_DEFAULT_ARCHIVE_CACHE_NUM 128
 #define TVP_DEFAULT_AUTOPATH_CACHE_NUM 256
+static constexpr tjs_int TVP_MAX_STORAGE_NAME_LENGTH = 1 << 20;
 static const tjs_char *TVP_AUTOPATH_CACHE_MISS_MARKER = TJS_W("\x01");
 static const char TVP_GFX_EFFECT_COMPAT_SCRIPT[] =
-    "// AetherKiri gfxEffect.dll compatibility placeholder.\n";
+    "// AetherKiri gfxEffect.dll compatibility placeholder.\n"
+    "try { Plugins.link(\"gfxEffect.dll\"); } catch(e) { }\n";
 static const char TVP_GPU_COMPAT_SCRIPT[] =
     "// AetherKiri GPULayer/D3D compatibility placeholder.\n"
     "try { Plugins.link(\"krkrgles.dll\"); } catch(e) { }\n"
@@ -48,8 +52,19 @@ static const char TVP_GPU_COMPAT_SCRIPT[] =
     "    return null;\n"
     "}\n"
     "try { KAGWindow.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
+    "try { KAGWindow.prototype.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
     "try { KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n";
 static tTJSVariant TVPStoragesArchiveUniqueKeyCompat;
+
+namespace {
+bool TVPSaveTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_SAVE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+} // namespace
 
 //---------------------------------------------------------------------------
 // global variables
@@ -74,7 +89,9 @@ static bool TVPIsGfxEffectCompanionScript(const ttstr &name) {
            (TVPRegisteredPlugins.find(TJS_W("gfxeffect.dll")) !=
                 TVPRegisteredPlugins.end() ||
             TVPRegisteredPlugins.find(TJS_W("gfxfire.dll")) !=
-            TVPRegisteredPlugins.end());
+                TVPRegisteredPlugins.end() ||
+            ncbAutoRegister::HasModule(TJS_W("gfxeffect.dll")) ||
+            ncbAutoRegister::HasModule(TJS_W("gfxfire.dll")));
 }
 
 static bool TVPIsGpuCompanionScript(const ttstr &name) {
@@ -319,6 +336,9 @@ ttstr tTVPStorageMediaManager::NormalizeStorageName(const ttstr &name,
     // empty check
     if(name.IsEmpty())
         return name; // empty name is empty name
+    if(name.GetLen() > TVP_MAX_STORAGE_NAME_LENGTH)
+        TVPThrowExceptionMessage(TVPInvalidPathName,
+                                 TJS_W("<storage path too long>"));
 
     // pre-normalize
     const tjs_char *pca; //, *pcb, *pcc;
@@ -1312,10 +1332,16 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
     ttstr name;
 
     tjs_uint32 access = flags & TJS_BS_ACCESS_MASK;
-    if(access == TJS_BS_WRITE)
+    if(access == TJS_BS_WRITE || access == TJS_BS_APPEND ||
+       access == TJS_BS_UPDATE)
         name = TVPNormalizeStorageName(_name);
     else
         name = TVPGetPlacedPath(_name); // file must exist
+
+    if(TVPSaveTraceEnabled() && access != TJS_BS_READ) {
+        spdlog::info("SaveTrace TVPCreateStream request={} normalized={} flags={} access={}",
+                     _name.AsStdString(), name.AsStdString(), flags, access);
+    }
 
     if(name.IsEmpty()) {
         if(access >= 1)

@@ -222,6 +222,10 @@ bool EngineLoop::HandleInputEvent(const EngineInputEvent& event) {
     }
 }
 
+bool EngineLoop::IsTouchPointerEvent(const EngineInputEvent& event) {
+    return event.pointer_id >= 100000;
+}
+
 void EngineLoop::HandlePointerDown(const EngineInputEvent& event) {
     auto* win = TVPMainWindow;
     if (!win) return;
@@ -269,7 +273,7 @@ void EngineLoop::HandlePointerDown(const EngineInputEvent& event) {
 
     // Windows sends WM_LBUTTONDBLCLK before the second WM_LBUTTONDOWN, and the
     // following WM_LBUTTONUP suppresses the normal click event.
-    if (mb == mbLeft) {
+    if (mb == mbLeft && !IsTouchPointerEvent(event)) {
         const int64_t now = NowMs();
         const int32_t dx = x - last_click_x_;
         const int32_t dy = y - last_click_y_;
@@ -324,7 +328,7 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
     else if (event.button == 2)
         mb = mbMiddle;
 
-    // Defer scancode release until the next Tick has delivered queued click/up
+    // Defer scancode release until the next Tick has delivered queued up/click
     // events. Some KAG widgets query the async mouse state in click handlers.
     uint16_t vk = 0;
     switch (mb) {
@@ -334,9 +338,13 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
         default: break;
     }
 
-    // Match the original Windows event order: WM_LBUTTONUP calls click-like
-    // handlers before OnMouseUp. Some KAG UI widgets use the click event while
-    // the button state is still considered pressed.
+    TVPPostInputEvent(
+        new tTVPOnMouseUpInputEvent(win, x, y, mb, shift));
+
+    // Match the original Kirikiri/Windows path: mouse-up handlers run before
+    // click handlers. Several in-game dialogs are opened from onClick; opening
+    // them while the source button is still captured leaves a one-frame pressed
+    // redraw that looks like a flicker on touch devices.
     if (mb == mbLeft) {
         if (suppress_next_left_click_) {
             suppress_next_left_click_ = false;
@@ -353,9 +361,6 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
             last_click_y_ = y;
         }
     }
-
-    TVPPostInputEvent(
-        new tTVPOnMouseUpInputEvent(win, x, y, mb, shift));
 
     pending_mouse_release_vk_ = vk;
 }

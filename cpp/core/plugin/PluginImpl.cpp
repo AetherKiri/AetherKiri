@@ -49,6 +49,28 @@ bool TVPRegisterGlobalObject(const tjs_char *name, iTJSDispatch2 *dsp);
 
 static iTJSDispatch2 *s_ProxyStorageMap = nullptr;
 static iTVPStorageMedia *s_ProxyStorageMedia = nullptr;
+static ttstr TVPPluginLoadMode(TJS_W("krkrsdl3"));
+
+static ttstr TVPNormalizePluginLoadMode(const ttstr &mode) {
+    ttstr normalized = mode.AsLowerCase();
+    if(normalized == TJS_W("aether_all"))
+        return TJS_W("aether_all");
+    return TJS_W("krkrsdl3");
+}
+
+void TVPSetPluginLoadMode(const ttstr &mode) {
+    TVPPluginLoadMode = TVPNormalizePluginLoadMode(mode);
+}
+
+const ttstr &TVPGetPluginLoadMode() { return TVPPluginLoadMode; }
+
+bool TVPIsKrkrsdl3PluginLoadMode() {
+    return TVPPluginLoadMode == TJS_W("krkrsdl3");
+}
+
+bool TVPIsAetherAllPluginLoadMode() {
+    return TVPPluginLoadMode == TJS_W("aether_all");
+}
 
 class tTJSNC_BootstrapLinkZResult : public tTJSDispatch {
     tjs_uint RefCount = 1;
@@ -565,8 +587,7 @@ bool TVPUnloadPlugin(const ttstr &name) {
         return true;
     }
 
-    // unload plugin
-    return true;
+    return ncbAutoRegister::UnloadModule(normalizedShortName);
 }
 //---------------------------------------------------------------------------
 
@@ -583,12 +604,13 @@ struct tTVPFoundPlugin {
 static tjs_int TVPAutoLoadPluginCount = 0;
 
 static void TVPSearchPluginsAt(std::vector<tTVPFoundPlugin> &list,
-                               std::string folder) {
+                               std::string folder, bool includeDll) {
     TVPListDir(folder, [&](const std::string &filename, int mask) {
         if(mask & S_IFREG) {
             if(filename.length() >= 4) {
                 const char *ext = filename.c_str() + filename.length() - 4;
-                if(!strcasecmp(ext, ".tpm") || !strcasecmp(ext, ".dll")) {
+                if(!strcasecmp(ext, ".tpm") ||
+                   (includeDll && !strcasecmp(ext, ".dll"))) {
                     tTVPFoundPlugin fp;
                     fp.Path = folder;
                     fp.Name = filename;
@@ -601,8 +623,20 @@ static void TVPSearchPluginsAt(std::vector<tTVPFoundPlugin> &list,
 
 void TVPLoadInternalPlugins() {
     PluginCallTracer::Instance().LogRegistrationStart();
+    tTJSVariant mode;
+    if(TVPGetCommandLine(TJS_W("plugin_load_mode"), &mode))
+        TVPSetPluginLoadMode(mode.AsStringNoAddRef());
+
+    spdlog::info("TVPLoadInternalPlugins: plugin_load_mode={}",
+                 TVPPluginLoadMode.AsStdString());
     ncbAutoRegister::AllRegist();
-    ncbAutoRegister::LoadAllModules();
+    if(TVPIsAetherAllPluginLoadMode()) {
+        ncbAutoRegister::LoadAllModules();
+    } else {
+        TVPLoadPlugin(TJS_W("xp3filter.dll"));
+        TVPLoadPlugin(TJS_W("varfile.dll"));
+        TVPLoadPlugin(TJS_W("shrinkCopy.dll"));
+    }
     PluginCallTracer::Instance().LogRegistrationEnd();
 }
 
@@ -674,9 +708,10 @@ void tvpLoadPlugins() {
 
     std::string exepath = ExtractFileDir(TVPNativeProjectDir.AsStdString());
 
-    TVPSearchPluginsAt(list, exepath);
-    TVPSearchPluginsAt(list, exepath + "/system");
-    TVPSearchPluginsAt(list, exepath + "/plugin");
+    const bool includeDll = TVPIsAetherAllPluginLoadMode();
+    TVPSearchPluginsAt(list, exepath, includeDll);
+    TVPSearchPluginsAt(list, exepath + "/system", includeDll);
+    TVPSearchPluginsAt(list, exepath + "/plugin", includeDll);
 
     // sort by filename
     std::sort(list.begin(), list.end());

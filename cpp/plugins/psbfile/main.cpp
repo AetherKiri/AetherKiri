@@ -320,20 +320,9 @@ static void registerPsbResources(PSBFile *self, ttstr path) {
     if(!psbMedia)
         return;
     psbMedia->NormalizeDomainName(path);
-    auto objs = self->getObjects();
-    if(!objs)
-        return;
     // Replace stale entries from previous loads of the same PSB source.
     psbMedia->removeByPrefix((path + TJS_W("/")).AsStdString());
-
-    for(const auto &[k, v] : *objs) {
-        const auto &res = std::dynamic_pointer_cast<PSBResource>(v);
-        if(res == nullptr)
-            continue;
-        ttstr pathN{ k };
-        psbMedia->NormalizePathName(pathN);
-        psbMedia->add((path + TJS_W("/") + pathN).AsStdString(), res);
-    }
+    registerRootResources(path, *self);
 }
 
 static tjs_error load(tTJSVariant *r, tjs_int count, tTJSVariant **p,
