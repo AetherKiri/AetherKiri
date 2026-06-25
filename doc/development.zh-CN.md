@@ -124,10 +124,15 @@ Web 还需要：
 | `AETHERKIRI_TEST_CONFIG` | JSON probe profile 路径。 |
 | `AETHERKIRI_SMOKE_GAME` | 本地游戏路径。不要写入提交的 profile。 |
 | `AETHERKIRI_RENDER_BACKEND` | probe 渲染后端覆盖。 |
+| `AETHERKIRI_DIAGNOSTICS` | 在 release 构建中开启运行期诊断，但不显示桌面 UI 日志框。 |
+| `AETHERKIRI_UI_LOG` | 开启桌面端 loading/runtime UI 日志框。面向用户的 release 构建默认保持关闭。 |
 | `AETHERKIRI_INPUT_TRACE` | 开启 engine/layer 输入 trace。 |
 | `AETHERKIRI_PERF_LOG_INTERVAL` | 性能日志输出间隔，单位秒。 |
 | `AETHERKIRI_FRAME_SPIKE_MS` | 超过该阈值的慢帧会被记录。 |
 | `AETHERKIRI_VERBOSE_RENDER_LOG` | 开启 Godot shell 侧 verbose render log。 |
+| `AETHERKIRI_LIVE_FPS_LOG` | 将运行期 FPS/性能诊断写入指定文件路径。 |
+| `AETHERKIRI_IOS_DIAGNOSTICS` | iOS 真机诊断便利开关，通常配合 `devicectl --console` 使用。 |
+| `AETHERKIRI_IOS_FILE_LOG` | 配合 `AETHERKIRI_IOS_DIAGNOSTICS` 使用；未设置 `AETHERKIRI_LIVE_FPS_LOG` 时写入 `user://aetherkiri-ios-live.log`。 |
 
 ## 构建命令
 
@@ -398,12 +403,25 @@ build/validate_gpu_bridge.sh
 
 ## 调试说明
 
-常用 trace：
+release 构建默认不会持续 drain runtime log，也不会刷新 UI 日志框，避免普通用户版本
+承担每帧日志和 UI 更新开销。需要定位问题时，只打开所需诊断项：
 
 ```bash
+AETHERKIRI_DIAGNOSTICS=1 ...
+AETHERKIRI_UI_LOG=1 ...
 AETHERKIRI_INPUT_TRACE=1 ...
 AETHERKIRI_FRAME_SPIKE_MS=20 ...
 AETHERKIRI_VERBOSE_RENDER_LOG=1 ...
+AETHERKIRI_LIVE_FPS_LOG=/tmp/aetherkiri-live.log ...
+```
+
+macOS release 收集日志时直接运行 app 内的二进制，这样可以继承 shell 环境变量：
+
+```bash
+AETHERKIRI_DIAGNOSTICS=1 \
+AETHERKIRI_UI_LOG=1 \
+AETHERKIRI_FRAME_SPIKE_MS=20 \
+out/godot/macos/release/AetherKiri.app/Contents/MacOS/AetherKiri
 ```
 
 iOS 真机：
@@ -413,11 +431,13 @@ xcrun devicectl device process launch \
   --device <device-identifier> \
   --terminate-existing \
   --console \
-  --environment-variables '{"AETHERKIRI_INPUT_TRACE":"1"}' \
+  --environment-variables '{"AETHERKIRI_IOS_DIAGNOSTICS":"1","AETHERKIRI_INPUT_TRACE":"1","AETHERKIRI_FRAME_SPIKE_MS":"20"}' \
   com.liuyu.aetherkiri.kr37s
 ```
 
-`--console` 会等待进程运行结束，只在需要收集日志时使用，避免长时间占用终端。
+移动端不会显示桌面 UI 日志框。iOS release 诊断请通过 `--console`、设备 syslog
+或 crash log 收集。`--console` 会等待进程运行结束，只在需要收集日志时使用，
+避免长时间占用终端。
 
 ## 代码修改原则
 
