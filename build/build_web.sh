@@ -14,7 +14,7 @@ if [[ "$BUILD_TYPE_LOWER" != "debug" && "$BUILD_TYPE_LOWER" != "release" ]]; the
 fi
 
 GODOT_BIN="${GODOT_BIN:-/Applications/Godot.app/Contents/MacOS/Godot}"
-GODOT_TEMPLATE_DIR="${GODOT_TEMPLATE_DIR:-$HOME/Library/Application Support/Godot/export_templates/4.6.3.stable}"
+GODOT_TEMPLATE_DIR="${GODOT_TEMPLATE_DIR:-$HOME/Library/Application Support/Godot/export_templates/4.7.stable}"
 GODOT_APP_DIR="$PROJECT_ROOT/apps/godot_app"
 CMAKE_CONFIG_PRESET="Web ${BUILD_TYPE_CAP} Config"
 CMAKE_BUILD_PRESET="Web ${BUILD_TYPE_CAP} Build"

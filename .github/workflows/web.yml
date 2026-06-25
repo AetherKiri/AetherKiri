@@ -19,8 +19,8 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       EMSDK_VERSION: 4.0.15
-      GODOT_RELEASE: 4.6.3-stable
-      GODOT_TEMPLATE_VERSION: 4.6.3.stable
+      GODOT_RELEASE: 4.7-stable
+      GODOT_TEMPLATE_VERSION: 4.7.stable
       VCPKG_BUNDLE_TAG: web-vcpkg-bundle
       VCPKG_BUNDLE_ASSET: web-vcpkg-bundle.tar.zst
 
