@@ -145,6 +145,7 @@ public:
 
 private:
     tTVPWaveDecoder *Decoder;
+    ttstr TraceStorageName;
     tTVPWaveSoundBufferDecodeThread *Thread;
     bool EnsureDecodeThread();
     bool IsDecodeThreadRunning() const;

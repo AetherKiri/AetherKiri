@@ -76,8 +76,10 @@ namespace TJS {
         static const bool enabled = [] {
             const char *save = std::getenv("AETHERKIRI_TJS_SAVE_TRACE");
             const char *scene = std::getenv("AETHERKIRI_TJS_SCENE_TRACE");
+            const char *audio = std::getenv("AETHERKIRI_TJS_AUDIO_TRACE");
             return (save && *save && *save != '0') ||
-                   (scene && *scene && *scene != '0');
+                   (scene && *scene && *scene != '0') ||
+                   (audio && *audio && *audio != '0');
         }();
         return enabled;
     }
@@ -85,6 +87,14 @@ namespace TJS {
     static bool TJSSceneTraceEnabled() {
         static const bool enabled = [] {
             const char *value = std::getenv("AETHERKIRI_TJS_SCENE_TRACE");
+            return value && *value && *value != '0';
+        }();
+        return enabled;
+    }
+
+    static bool TJSAudioTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_TJS_AUDIO_TRACE");
             return value && *value && *value != '0';
         }();
         return enabled;
@@ -124,6 +134,23 @@ namespace TJS {
         return false;
     }
 
+    static bool TJSAudioTraceMatches(const std::string &text) {
+        if(!TJSAudioTraceEnabled())
+            return false;
+        static const char *patterns[] = {
+            "playRandomSE", "getRandomSE", "playSE",    "playse",
+            "Sound",        "sound",       "Voice",     "voice",
+            "Wave",         "wave",        "sebuf",     "SEBuf",
+            "ona",          "Ona",         "profile",   "Profile",
+            "patting",      "dokofera",    "storage",   "Storages",
+        };
+        for(const char *pattern : patterns) {
+            if(text.find(pattern) != std::string::npos)
+                return true;
+        }
+        return false;
+    }
+
     static bool TJSSaveTraceMatches(const std::string &text) {
         return text.find("Save") != std::string::npos ||
                text.find("save") != std::string::npos ||
@@ -140,6 +167,7 @@ namespace TJS {
                text.find("setItem") != std::string::npos ||
                text.find("getItem") != std::string::npos ||
                text.find("gameSave") != std::string::npos ||
+               TJSAudioTraceMatches(text) ||
                TJSSceneTraceMatches(text);
     }
 
@@ -154,6 +182,11 @@ namespace TJS {
                text == "setupUi" || text == "updateItem" ||
                text == "invoke" || text == "call" ||
                text == "linkNum" || text == "num" || text == "page" ||
+               text == "action" || text == "onClick" ||
+               text == "play" || text == "open" || text == "stop" ||
+               text == "voice" || text == "storage" || text == "buf" ||
+               text == "array" || text == "profile" || text == "dress" ||
+               text == "chara" || text == "scene" ||
                TJSSceneTraceMatches(text);
     }
 
@@ -406,7 +439,8 @@ namespace TJS {
         const std::string targetText = TJSSaveTraceVariantString(target);
         const bool failed = TJS_FAILED(hr);
         const bool targetMatch = targetText.find("PSBFile") != std::string::npos ||
-                                 targetText.find(".pbd") != std::string::npos;
+                                 targetText.find(".pbd") != std::string::npos ||
+                                 TJSAudioTraceMatches(targetText);
         const bool contextMatch = TJSSaveTraceMatches(desc) || targetMatch;
         const bool interestingFailure =
             failed && TJSSceneTraceEnabled() && contextMatch;

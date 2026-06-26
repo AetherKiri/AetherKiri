@@ -255,10 +255,14 @@ void TVPTraceLayerHit(const char *event, tjs_int x, tjs_int y,
     if(!TVPInputTraceEnabled()) return;
     if(layer) {
         const auto action_owner = layer->GetActionOwnerNoAddRef();
-        spdlog::info("LayerManager {} hit primary=({}, {}) layer={} rect={}x{}+{}+{} action={}",
+        spdlog::info("LayerManager {} hit primary=({}, {}) layer={} overall={} rect={}x{}+{}+{} self_visible={} visible={} enabled={} action={}",
                      event, x, y, layer->GetName().AsStdString(),
+                     layer->GetOverallOrderIndex(),
                      layer->GetWidth(), layer->GetHeight(), layer->GetLeft(),
-                     layer->GetTop(), action_owner.Object ? "yes" : "no");
+                     layer->GetTop(), layer->GetVisible() ? "yes" : "no",
+                     layer->GetNodeVisible() ? "yes" : "no",
+                     layer->GetNodeEnabled() ? "yes" : "no",
+                     action_owner.Object ? "yes" : "no");
     } else {
         spdlog::info("LayerManager {} hit primary=({}, {}) layer=<none>",
                      event, x, y);

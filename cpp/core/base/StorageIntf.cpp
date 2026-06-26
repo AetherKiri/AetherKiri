@@ -178,6 +178,30 @@ bool TVPStorageTraceName(const ttstr &name) {
                    [](unsigned char ch) {
                        return static_cast<char>(std::tolower(ch));
                    });
+    if(const char *match = std::getenv("AETHERKIRI_STORAGE_TRACE_MATCH")) {
+        std::string filters(match);
+        std::transform(filters.begin(), filters.end(), filters.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        size_t pos = 0;
+        while(pos <= filters.size()) {
+            size_t comma = filters.find(',', pos);
+            std::string token = filters.substr(
+                pos, comma == std::string::npos ? std::string::npos : comma - pos);
+            token.erase(0, token.find_first_not_of(" \t\r\n"));
+            size_t end = token.find_last_not_of(" \t\r\n");
+            if(end != std::string::npos)
+                token.erase(end + 1);
+            else
+                token.clear();
+            if(!token.empty() && text.find(token) != std::string::npos)
+                return true;
+            if(comma == std::string::npos)
+                break;
+            pos = comma + 1;
+        }
+    }
     return text.find(".pbd") != std::string::npos ||
         text.find("patch2.xp3") != std::string::npos ||
         text.find("aaemo") != std::string::npos ||

@@ -10,15 +10,37 @@
 //---------------------------------------------------------------------------
 #include "tjsCommHead.h"
 #include <algorithm>
+#include <cstdlib>
 #include "WaveIntf.h"
 #include "EventIntf.h"
 #include "StorageIntf.h"
 #include "MsgIntf.h"
+#include "DebugIntf.h"
 #include "UtilStreams.h"
 #include "WaveLoopManager.h"
 #include "tjsDictionary.h"
 #include "VorbisWaveDecoder.h"
 #include "FFWaveDecoder.h"
+
+static bool TVPWaveIntfAudioTraceEnabled() {
+    static int enabled = []() {
+        const char *value = std::getenv("AETHERKIRI_AUDIO_TRACE");
+        if(!value || !*value)
+            return 0;
+        if((value[0] == '0' || value[0] == 'n' || value[0] == 'N' ||
+            value[0] == 'f' || value[0] == 'F') &&
+           value[1] == '\0')
+            return 0;
+        return 1;
+    }();
+    return enabled != 0;
+}
+
+static void TVPWaveIntfAudioTrace(const ttstr &message) {
+    if(!TVPWaveIntfAudioTraceEnabled())
+        return;
+    TVPAddLog(ttstr(TJS_W("AudioTrace ")) + message);
+}
 
 //---------------------------------------------------------------------------
 // PCM related constants / definitions
@@ -1114,6 +1136,7 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ open) {
 
     if(numparams < 1)
         return TJS_E_BADPARAMCOUNT;
+    TVPWaveIntfAudioTrace(ttstr(TJS_W("tjs open storage=")) + ttstr(*param[0]));
     _this->Open(*param[0]);
 
     return TJS_S_OK;
@@ -1124,6 +1147,7 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ play) {
     TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
                             /*var. type*/ tTJSNI_WaveSoundBuffer);
 
+    TVPWaveIntfAudioTrace(TJS_W("tjs play"));
     _this->Play();
 
     return TJS_S_OK;
@@ -1134,6 +1158,7 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ stop) {
     TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
                             /*var. type*/ tTJSNI_WaveSoundBuffer);
 
+    TVPWaveIntfAudioTrace(TJS_W("tjs stop"));
     _this->Stop();
 
     return TJS_S_OK;

@@ -95,6 +95,7 @@ var perf_log_accum := 0.0
 var state_log_accum := 0.0
 var startup_poll_accum := 0.0
 var cached_startup_state := STARTUP_IDLE
+var runtime_exit_cleanup_pending := false
 var perf_log_interval := PERF_LOG_INTERVAL
 var frame_spike_ms := 0.0
 var frame_probe_enabled := false
@@ -408,6 +409,8 @@ func _mark_settings_dirty() -> void:
 
 func _apply_engine_options() -> void:
     if player == null:
+        return
+    if not player.is_initialized():
         return
     var effective_plugin_load_mode := _runtime_string("AETHERKIRI_PLUGIN_LOAD_MODE", plugin_load_mode)
     if not effective_plugin_load_mode in ["krkrsdl3", "aether_all"]:
@@ -2253,10 +2256,34 @@ func _is_runtime_exit_error(message: String) -> bool:
     return lower.contains("runtime requested termination") or lower.contains("runtime has been terminated")
 
 func _quit_after_runtime_exit() -> void:
+    if runtime_exit_cleanup_pending:
+        return
+    runtime_exit_cleanup_pending = true
     _clear_game_input_capture()
     _finalize_active_game_session()
     game_running = false
     app_lifecycle_paused = false
+    cached_startup_state = STARTUP_IDLE
+    startup_poll_accum = 0.0
+    tick_trace_active_serial = 0
+    if loading_panel != null:
+        loading_panel.visible = false
+    if restart_notice != null:
+        restart_notice.text = ""
+        restart_notice.visible = false
+    if perf != null:
+        perf.visible = false
+    if viewport != null:
+        viewport.texture = null
+        viewport.visible = false
+    if game_view != null:
+        game_view.visible = false
+    if player != null:
+        player.release_frame_texture()
+        player.destroy_engine()
+    if _is_touch_platform():
+        OS.kill(OS.get_process_id())
+        return
     get_tree().quit(0)
 
 func _ready() -> void:
@@ -2372,13 +2399,15 @@ func _create_runtime_player() -> bool:
     add_child(instance as Node)
     return true
 
-func _finish_ready_after_first_frame() -> void:
-    await get_tree().process_frame
+func _ensure_player_initialized() -> bool:
+    if player == null:
+        return false
+    if player.is_initialized():
+        return true
 
     var user_dir := OS.get_user_data_dir()
     var cache_dir := user_dir.path_join("cache")
     DirAccess.make_dir_recursive_absolute(cache_dir)
-    var engine_initialized := false
     if not player.initialize_engine(user_dir, cache_dir):
         render_errors += 1
         var init_error_message := "Engine init failed: %s %s" % [
@@ -2386,12 +2415,19 @@ func _finish_ready_after_first_frame() -> void:
             player.get_last_error(),
         ]
         _append_log(init_error_message)
-    else:
-        engine_initialized = true
-        _append_log("AetherKiri engine initialized.")
+        return false
 
-    _apply_backend(false)
-    _apply_engine_options()
+    _append_log("AetherKiri engine initialized.")
+    return true
+
+func _finish_ready_after_first_frame() -> void:
+    await get_tree().process_frame
+
+    var engine_initialized := _ensure_player_initialized()
+
+    if engine_initialized:
+        _apply_backend(false)
+        _apply_engine_options()
     _apply_shell_runtime_settings()
     if not cli_probe_script.is_empty():
         if not engine_initialized:
@@ -3562,8 +3598,12 @@ func _on_open_game() -> void:
         _append_log("Game path is empty.")
         return
 
+    if not _ensure_player_initialized():
+        return
+
     ProjectSettings.set_setting(GAME_PATH_KEY, path)
     _apply_backend(false)
+    _apply_engine_options()
     _sync_player_surface_size(true)
     cached_startup_state = STARTUP_RUNNING
     startup_poll_accum = STARTUP_POLL_INTERVAL

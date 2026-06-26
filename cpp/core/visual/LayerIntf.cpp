@@ -261,6 +261,51 @@ static std::string TVPVariantDebugString(const tTJSVariant &value) {
     return text.AsStdString();
 }
 
+class TVPTraceObjectEnumCaller : public tTJSDispatch {
+public:
+    TVPTraceObjectEnumCaller(std::string label, int limit)
+        : Label(std::move(label)), Limit(limit) {}
+
+    tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                       tTJSVariant *result, tjs_int numparams,
+                       tTJSVariant **param, iTJSDispatch2 *) override {
+        if(Count >= Limit) {
+            if(result) *result = false;
+            return TJS_S_OK;
+        }
+        if(numparams >= 2) {
+            const tTVInteger member_flags = param[1]->AsInteger();
+            if(!(member_flags & TJS_HIDDENMEMBER)) {
+                const std::string name = TVPVariantDebugString(*param[0]);
+                const std::string value =
+                    numparams >= 3 ? TVPVariantDebugString(*param[2])
+                                   : std::string("<no-value>");
+                spdlog::info("LayerIntf trace {}.{}={}", Label, name, value);
+                Count++;
+            }
+        }
+        if(result) *result = true;
+        return TJS_S_OK;
+    }
+
+private:
+    std::string Label;
+    int Limit;
+    int Count = 0;
+};
+
+static void TVPTraceObjectMembers(const char *label,
+                                  const tTJSVariantClosure &object,
+                                  int limit) {
+    if(!TVPLayerInputTraceEnabled() || !object.Object)
+        return;
+    TVPTraceObjectEnumCaller *caller =
+        new TVPTraceObjectEnumCaller(label, limit);
+    tTJSVariantClosure closure(caller);
+    object.EnumMembers(TJS_IGNOREPROP, &closure, nullptr);
+    caller->Release();
+}
+
 static void TVPTraceObjectProperty(const char *label,
                                    const tTJSVariantClosure &object,
                                    const tjs_char *property) {
@@ -278,12 +323,22 @@ static void TVPTraceObjectProperty(const char *label,
     }
     spdlog::info("LayerIntf trace {}.{}={}", label, prop_name.AsStdString(),
                  TVPVariantDebugString(value));
+    if(value.Type() == tvtObject &&
+       (prop_name == TJS_W("action") || prop_name == TJS_W("onClick"))) {
+        tTJSVariantClosure nested = value.AsObjectClosureNoAddRef();
+        if(nested.Object) {
+            const std::string nested_label =
+                std::string(label) + "." + prop_name.AsStdString();
+            TVPTraceObjectMembers(nested_label.c_str(), nested, 80);
+        }
+    }
 }
 
 static void TVPTraceObjectForButtonClick(const char *label,
                                          const tTJSVariantClosure &object) {
     if(!TVPLayerInputTraceEnabled() || !object.Object)
         return;
+    TVPTraceObjectProperty(label, object, TJS_W("action"));
     TVPTraceObjectProperty(label, object, TJS_W("name"));
     TVPTraceObjectProperty(label, object, TJS_W("linkNum"));
     TVPTraceObjectProperty(label, object, TJS_W("controlOwner"));
@@ -316,6 +371,14 @@ static void TVPTraceObjectForButtonClick(const char *label,
     TVPTraceObjectProperty(label, object, TJS_W("func"));
     TVPTraceObjectProperty(label, object, TJS_W("sename"));
     TVPTraceObjectProperty(label, object, TJS_W("names"));
+    TVPTraceObjectProperty(label, object, TJS_W("array"));
+    TVPTraceObjectProperty(label, object, TJS_W("buf"));
+    TVPTraceObjectProperty(label, object, TJS_W("storage"));
+    TVPTraceObjectProperty(label, object, TJS_W("voice"));
+    TVPTraceObjectProperty(label, object, TJS_W("profile"));
+    TVPTraceObjectProperty(label, object, TJS_W("dress"));
+    TVPTraceObjectProperty(label, object, TJS_W("chara"));
+    TVPTraceObjectProperty(label, object, TJS_W("scene"));
     TVPTraceObjectProperty(label, object, TJS_W("call"));
     TVPTraceObjectProperty(label, object, TJS_W("global"));
     TVPTraceObjectProperty(label, object, TJS_W("_up"));
@@ -329,6 +392,27 @@ static void TVPTraceObjectForButtonClick(const char *label,
     TVPTraceObjectProperty(label, object, TJS_W("_loadNumber"));
     TVPTraceObjectProperty(label, object, TJS_W("_sysbtnTags"));
     TVPTraceObjectProperty(label, object, TJS_W("_sysbtnInfo"));
+}
+
+static void TVPTraceLayerActionOwner(const char *event,
+                                     tTJSNI_BaseLayer *layer,
+                                     const tTJSVariantClosure &object) {
+    if(!TVPLayerInputTraceEnabled() || !layer || !object.Object)
+        return;
+    std::string label = std::string("layer.") + event + ".actionOwner";
+    TVPTraceObjectForButtonClick(label.c_str(), object);
+}
+
+static void TVPTraceLayerActionResult(const char *event,
+                                      tTJSNI_BaseLayer *layer, tjs_error hr,
+                                      tTJSVariant *result) {
+    if(!TVPLayerInputTraceEnabled() || !layer)
+        return;
+    std::string result_text =
+        TJS_SUCCEEDED(hr) && result ? TVPVariantDebugString(*result)
+                                    : std::string("<failed>");
+    spdlog::info("LayerIntf {} action returned layer={} hr={} result={}",
+                 event, layer->GetName().AsStdString(), hr, result_text);
 }
 
 static thread_local tTJSNI_BaseLayer *TVPLayerEventSource = nullptr;
@@ -1450,10 +1534,21 @@ static bool TVPInvokeCafeStellaSaveLoadGridItem(tTJSNI_BaseLayer *layer,
 
     tTJSVariantClosure source_object(source_owner, source_owner);
     std::string mode_text;
-    const bool save_load_mode =
+    const bool has_cafestella_mode =
         TVPGetCafeStellaCurrentMode(layer, TVPLayerEventSource, item_index,
-                                    mode_text) &&
-        (mode_text == "save" || mode_text == "load");
+                                    mode_text);
+    if(!has_cafestella_mode) {
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf onButtonClick item direct skip CafeStella fallback parent={} source={} index={} reason=no-current-mode",
+                         layer->GetName().AsStdString(),
+                         TVPLayerEventSource->GetName().AsStdString(),
+                         item_index);
+        }
+        return false;
+    }
+
+    const bool save_load_mode =
+        mode_text == "save" || mode_text == "load";
     if(TVPInvokeCafeStellaCurrentDefault(layer, TVPLayerEventSource,
                                          item_index, result))
         return true;
@@ -12198,10 +12293,32 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
         TVPTraceLayerInputEvent("onClick", _this, obj);
         if(obj.Object) {
-            TVP_ACTION_INVOKE_BEGIN(2, "onClick", objthis);
-            TVP_ACTION_INVOKE_MEMBER("x");
-            TVP_ACTION_INVOKE_MEMBER("y");
-            TVP_ACTION_INVOKE_END(obj);
+            TVPTraceLayerActionOwner("onClick", _this, obj);
+            if(numparams < 2)
+                return TJS_E_BADPARAMCOUNT;
+            tjs_int arg_count = 0;
+            iTJSDispatch2 *evobj =
+                TVPCreateEventObject(TJS_W("onClick"), objthis, objthis);
+            tTJSVariant evval(evobj, evobj);
+            evobj->Release();
+            {
+                static ttstr member_name(TJS_W("x"));
+                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                               member_name.c_str(), member_name.GetHint(),
+                               param[arg_count++], evobj);
+            }
+            {
+                static ttstr member_name(TJS_W("y"));
+                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                               member_name.c_str(), member_name.GetHint(),
+                               param[arg_count++], evobj);
+            }
+            tTJSVariant *pevval = &evval;
+            const tjs_error hr =
+                obj.FuncCall(0, TVPActionName.c_str(),
+                             TVPActionName.GetHint(), result, 1, &pevval,
+                             nullptr);
+            TVPTraceLayerActionResult("onClick", _this, hr, result);
         }
 
         return TJS_S_OK;
@@ -12232,12 +12349,44 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
         TVPTraceLayerInputEvent("onMouseDown", _this, obj);
         if(obj.Object) {
-            TVP_ACTION_INVOKE_BEGIN(4, "onMouseDown", objthis);
-            TVP_ACTION_INVOKE_MEMBER("x");
-            TVP_ACTION_INVOKE_MEMBER("y");
-            TVP_ACTION_INVOKE_MEMBER("button");
-            TVP_ACTION_INVOKE_MEMBER("shift");
-            TVP_ACTION_INVOKE_END(obj);
+            TVPTraceLayerActionOwner("onMouseDown", _this, obj);
+            if(numparams < 4)
+                return TJS_E_BADPARAMCOUNT;
+            tjs_int arg_count = 0;
+            iTJSDispatch2 *evobj =
+                TVPCreateEventObject(TJS_W("onMouseDown"), objthis, objthis);
+            tTJSVariant evval(evobj, evobj);
+            evobj->Release();
+            {
+                static ttstr member_name(TJS_W("x"));
+                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                               member_name.c_str(), member_name.GetHint(),
+                               param[arg_count++], evobj);
+            }
+            {
+                static ttstr member_name(TJS_W("y"));
+                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                               member_name.c_str(), member_name.GetHint(),
+                               param[arg_count++], evobj);
+            }
+            {
+                static ttstr member_name(TJS_W("button"));
+                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                               member_name.c_str(), member_name.GetHint(),
+                               param[arg_count++], evobj);
+            }
+            {
+                static ttstr member_name(TJS_W("shift"));
+                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                               member_name.c_str(), member_name.GetHint(),
+                               param[arg_count++], evobj);
+            }
+            tTJSVariant *pevval = &evval;
+            const tjs_error hr =
+                obj.FuncCall(0, TVPActionName.c_str(),
+                             TVPActionName.GetHint(), result, 1, &pevval,
+                             nullptr);
+            TVPTraceLayerActionResult("onMouseDown", _this, hr, result);
         }
 
         return TJS_S_OK;
@@ -12253,12 +12402,44 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
         TVPTraceLayerInputEvent("onMouseUp", _this, obj);
         if(obj.Object) {
-            TVP_ACTION_INVOKE_BEGIN(4, "onMouseUp", objthis);
-            TVP_ACTION_INVOKE_MEMBER("x");
-            TVP_ACTION_INVOKE_MEMBER("y");
-            TVP_ACTION_INVOKE_MEMBER("button");
-            TVP_ACTION_INVOKE_MEMBER("shift");
-            TVP_ACTION_INVOKE_END(obj);
+            TVPTraceLayerActionOwner("onMouseUp", _this, obj);
+            if(numparams < 4)
+                return TJS_E_BADPARAMCOUNT;
+            tjs_int arg_count = 0;
+            iTJSDispatch2 *evobj =
+                TVPCreateEventObject(TJS_W("onMouseUp"), objthis, objthis);
+            tTJSVariant evval(evobj, evobj);
+            evobj->Release();
+            {
+                static ttstr member_name(TJS_W("x"));
+                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                               member_name.c_str(), member_name.GetHint(),
+                               param[arg_count++], evobj);
+            }
+            {
+                static ttstr member_name(TJS_W("y"));
+                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                               member_name.c_str(), member_name.GetHint(),
+                               param[arg_count++], evobj);
+            }
+            {
+                static ttstr member_name(TJS_W("button"));
+                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                               member_name.c_str(), member_name.GetHint(),
+                               param[arg_count++], evobj);
+            }
+            {
+                static ttstr member_name(TJS_W("shift"));
+                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                               member_name.c_str(), member_name.GetHint(),
+                               param[arg_count++], evobj);
+            }
+            tTJSVariant *pevval = &evval;
+            const tjs_error hr =
+                obj.FuncCall(0, TVPActionName.c_str(),
+                             TVPActionName.GetHint(), result, 1, &pevval,
+                             nullptr);
+            TVPTraceLayerActionResult("onMouseUp", _this, hr, result);
         }
 
         return TJS_S_OK;
