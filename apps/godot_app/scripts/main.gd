@@ -2248,6 +2248,17 @@ func _finalize_active_game_session() -> void:
     active_game_path = ""
     active_game_started_msec = 0
 
+func _is_runtime_exit_error(message: String) -> bool:
+    var lower := message.to_lower()
+    return lower.contains("runtime requested termination") or lower.contains("runtime has been terminated")
+
+func _quit_after_runtime_exit() -> void:
+    _clear_game_input_capture()
+    _finalize_active_game_session()
+    game_running = false
+    app_lifecycle_paused = false
+    get_tree().quit(0)
+
 func _ready() -> void:
     cli_probe_script = _detect_cli_probe_script()
     _apply_ui_font()
@@ -3191,10 +3202,24 @@ func _process(delta: float) -> void:
             var tick_ms := float(Time.get_ticks_usec() - tick_start) / 1000.0
             tick_trace_active_serial = 0
             if tick_result != ENGINE_RESULT_OK:
+                var tick_result_name := str(player.get_last_result())
+                var tick_error_message := str(player.get_last_error())
+                if _is_runtime_exit_error(tick_error_message):
+                    var runtime_exit_line := "Game exited: %s %s" % [
+                        tick_result_name,
+                        tick_error_message,
+                    ]
+                    _append_log(runtime_exit_line)
+                    print(runtime_exit_line)
+                    if perf_log_file != null:
+                        perf_log_file.store_line(runtime_exit_line)
+                        perf_log_file.flush()
+                    _quit_after_runtime_exit()
+                    return
                 render_errors += 1
                 var tick_error_line := "Tick failed: %s %s" % [
-                    player.get_last_result(),
-                    player.get_last_error(),
+                    tick_result_name,
+                    tick_error_message,
                 ]
                 _append_log(tick_error_line)
                 print(tick_error_line)

@@ -1,0 +1,1322 @@
+// 機能判定
+try {
+	Motion.enableD3D = typeof &Motion.Player.useD3D == "Object";
+} catch (e) {
+	Motion.enableD3D = false;
+}
+
+class EmoteVariable {
+
+	function EmoteVariable() {
+	}
+
+	var moveTarget = %[];
+
+	// emote 変数の初期化
+	function resetEmoteVariables(time, easing, all=false) {
+		//dm(@"${this}:resetEmote:${time}:${easing}:${Scripts.getTraceString()}");
+		moveVariable("move_UD", 0, time, easing);
+		moveVariable("move_LR", 0, time, easing);
+		moveVariable("head_UD", 0, time, easing);
+		moveVariable("head_LR", 0, time, easing);
+		moveVariable("head_slant", 0, time, easing);
+		moveVariable("body_UD", 0, time, easing);
+		moveVariable("body_LR", 0, time, easing);
+		moveVariable("body_slant", 0, time, easing);
+		if (all) {
+			moveVariable("face_talk", 0, 0, 0); // これだけ一瞬で戻す
+			moveVariable("face_eye_UD", 0, time, easing);
+			moveVariable("face_eye_LR", 0, time, easing);
+			moveVariable("face_eye_open", 0, time, easing);
+			moveVariable("face_eyebrow", 0, time, easing);
+			moveVariable("face_mouth", 0, time, easing);
+			moveVariable("face_tears", 0, time, easing);
+			moveVariable("face_cheek", 0, time, easing);
+		}
+		moveVariable("act_sp", 0, time, easing);
+	}
+	
+	// 変数設定
+	function setVariable(name, value, time=0, accel=0) {
+		if (_player !== void) {
+			//if (time > 0) {
+			//	dm(@"移動 モーション変数移動処理:${name}:${value}:${time}:${accel}");
+			//}
+			switch (name) {
+			case "reset":
+				resetEmoteVariables(time, accel);
+				break;
+			case "resetall":
+				resetEmoteVariables(time, accel, true);
+				break;
+			case "meshdivisionratio":
+			case "bustscale":
+			case "hairscale":
+			case "partsscale":
+				this["_" + name] = value;
+			default:
+				moveVariable(name, value, time, accel);
+			}
+			return true;
+		}
+	}
+
+	// 変数取得
+	function getVariable(name) {
+		if (_player !== void) {
+			switch (name) {
+			case "meshdivisionratio":
+			case "bustscale":
+			case "hairscale":
+			case "partsscale":
+				return this["_" + name];
+			default:
+				return _player.getVariable(name);
+			}
+		}
+	}
+
+	function canMove(propName) {
+		// 変数は専用移動をサポート
+		switch (propName) {
+		case "$meshdivisionratio":
+		case "$bustscale":
+		case "$hairscale":
+		case "$partsscale":
+			return false;
+		default:
+			return propName.charAt(0) == '$';
+		}
+	}
+
+	// E-mote 変数の移動開始
+	function moveVariable(name, value, time=0, accel=0) {
+		if (time == 0) {
+			// 瞬間移動
+			_player.setVariable(name, value, 0, 0);
+			if (moveTarget[name] !== void) {
+				delete moveTarget[name];
+			}
+		} else {
+			// 時間つき移動
+			if (accel == "acdec" || accel == "accos") {
+				var half = time / 2.0; // 時間分割
+				var easing = 1; // 加速
+				var start = _player.getVariable(name);
+
+//				var midvalue = (start + value)/2; // 中間値
+//				_player.setVariable(name, midvalue, half*60.0/1000, easing); // 加速
+
+				var sqrtime = (time * Math.sqrt(0.5)); // [MEMO] √2 *time で time/2 の時にちょうど中間地点（easing=1の場合）
+				_player.setVariable(name, value, sqrtime*60.0/1000, easing); // 加速
+
+				//dm(@"${name}:変数設定:${start}->${value}(${time}):${midvalue}:${sqrtime}:${easing}");
+				moveTarget[name] = %[time:half, next:half, value:value, easing:-1]; // 終わったら減速実行
+			} else {
+				if (typeof accel == "String") {
+					switch (accel.toLowerCase()) {
+					case "accel": accel = 1;
+					case "decel": accel = -1;
+					case "const": accel = 0;
+					}
+				}
+				accel = +accel;
+				_player.setVariable(name, value, time*60.0/1000, accel);
+				moveTarget[name] = %[time:time];
+			}
+		}
+	}
+
+	function moveClear() {
+		(Dictionary.clear incontextof moveTarget)();
+	}
+	
+	function moveProgress(time) {
+		if (time > 0) {
+			var names = Scripts.getObjectKeys(moveTarget);
+			for (var i=0;i<names.count;i++) {
+				var name = names[i];
+				var info = moveTarget[name];
+				if (info !== void) {
+					info.time -= time;
+					if (info.time < 0) {
+						if (info.next !== void) {
+							// 二段目の再生処理
+							var now = _player.getVariable(name);
+							//dm(@"${name}:変数設定2:${now}->${info.value}:${info.next}:${info.easing}");
+							_player.setVariable(name, info.value, info.next*60.0/1000, info.easing);
+							info.time = info.next;
+							info.next = void;
+						} else {
+							// 終了
+							delete moveTarget[name];
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 変数動作中かどうかの確認
+	function checkMove(propName, stop) {
+		if (propName.charAt(0) == '$') {
+			var name = propName.substr(1);
+			if (stop) {
+				delete moveTarget[name];
+				return false;
+			}
+			return moveTarget[name] !== void;
+		}
+		return false;
+	}
+	
+	
+	
+}
+
+
+/**
+ * アフィン変形表示用のレイヤ
+ * モーション用
+ * 1. モーションデータを画像として指定して読み込み
+ * 2. オプションとして以下を指定
+ * chara, motion, tickcount, speed
+ */
+class AffineSourceMotion extends AffineSource, EmoteVariable {
+
+	var _images; // 再描画画像保存用
+
+	var _motion_manager;
+	var _player;   // モーションプレイヤー
+	var _separate; // セパレートタイプ
+	var _useD3D;
+
+	var _storage;       // 読み込んでることになってる画像
+	var _innerStorage;  // 実際に読み込んでる画像
+	var _storageType;   // 今読み込んでる種別
+	var _metadata;
+
+	var _lastTick; // 前回の更新時刻
+	var _interval; // 経過時間
+
+	var _lastPlaying; // 前回の再生状態(motion) or アニメ状態(emote)
+	var _playing = false; // 再生状態
+	var _actionCount = 0;
+
+	// emote 情報
+	var _allTimeline = [];
+	var emoteMainTimeline = %[];
+	var emoteDiffTimeline = %[];
+
+	// emote パラメータ
+	var _color;
+	var _meshdivisionratio;
+	var _hairscale;
+	var _bustscale;
+	var _partsscale;
+
+	// emote レベルでの素材スケール補正
+	var _emotescale = 1.0;
+	
+	// 最後に指定した否ループタイムライン
+	var _lastTimeline; 
+
+	var _outline;  // アウトライン
+	property outline {
+		getter() {
+			if (_outline === void) {
+				// アウトラインappの作成
+				_outline = new GdiPlus.Appearance();
+				_outline.addPen(0xFFFF0000, 1, 0, 0);
+			}
+			return _outline;
+		}
+	}
+
+	property dynamicsource { // 動的なソースかどうか
+		getter() { return _player !== void; }
+	}
+
+	var SUPER = global.AffineSource;
+	var EBASE = global.EmoteVariable;
+	
+	/**
+	 * コンストラクタ
+	 */
+	function AffineSourceMotion(window, options, resource) {
+		SUPER.AffineSource(window);
+		EBASE.EmoteVariable();
+		_useD3D = Motion.enableD3D && typeof window.d3dMotion != "undefined" && window.d3dMotion;
+		_separate = !_useD3D && (options === void || +options.noseparate == 0);
+		if (resource !== void) {
+			_motion_manager = resource.addRef();
+		}
+	}
+
+	function createPlayer(src) {
+		//dm(@"プレイヤー生成:${_player}:${_innerStorage}");
+		if (_player === void && _innerStorage != "") {
+			if (_storageType == "emote") {
+				_player = new Motion.EmotePlayer(_motion_manager.resourceManager);
+				_player.maskMode = Motion.MaskModeAlpha;
+				if (_metadata !== void) {
+					_player.chara = _metadata.base.chara;
+					_player.play(_metadata.base.motion, Motion.PlayFlagForce);
+					_player.initPhysics(_metadata);
+				}
+				if (src !== void) {
+					_player.unserialize(src._player.serialize());
+					_color = src._color;
+					if (_color !== void) {
+						_player.setColor(0xFF000000|_color);
+					} else {
+						_player.setColor(0xFF808080);
+					}
+					_meshdivisionratio = src._meshdivisionratio;
+					_hairscale = src._hairscale;
+					_bustscale = src._bustscale;
+					_partsscale = src._partsscale;
+				} else {
+					_color = void;
+					_meshdivisionratio = 1;
+					_hairscale = 1;
+					_bustscale = 1;
+					_partsscale = 1;
+				}
+				Scripts.foreach(_player.getMainTimelineLabelList(), function(i,name) { emoteMainTimeline[name] = true; _allTimeline.add(name); });
+				Scripts.foreach(_player.getDiffTimelineLabelList(), function(i,name) { emoteDiffTimeline[name] = true; _allTimeline.add(name); });
+			} else {
+				_player = new Motion.Player(_motion_manager.resourceManager);
+				_player.onAction = this.onAction;
+				if (src !== void) {
+					var ret = %[];
+					src._getOptions(ret);
+					_setOptions(ret);
+					_lastPlaying = true;
+                }
+			}
+			_lastTick = void;
+		}
+	}
+
+	function removePlayer() {
+		if (_player !== void) {
+			if (_storageType == "emote") {
+				_player.skip();
+				onAnimationStop();
+				(Dictionary.clear incontextof emoteMainTimeline)();
+				(Dictionary.clear incontextof emoteDiffTimeline)();
+				_allTimeline.clear();
+				moveClear();
+			} else {
+				_player.stop();
+				onMotionStop();
+			}
+			invalidate _player;
+			_player = void;
+			_lastTimeline = void;
+			revmtx = void;
+		}
+	}
+
+	/**
+	 * ファイナライザ
+	 */
+	function finalize() {
+		removePlayer();
+		if (_innerStorage !== void) {
+			_metadata = void;
+			var remove = _innerStorage != "" ? splitStorage(_innerStorage) : void;
+			unloadResource(remove);
+		}
+		if (_motion_manager !== void) {
+			_motion_manager.release();
+		}
+	}
+
+	function unloadResource(remove) {
+		if (_motion_manager !== void && remove !== void && remove.count>0) {
+			for (var i=0;i<remove.count;i++) {
+				var s = "dx_" + remove[i];
+				if (s != "") {
+					_motion_manager.unload(s);
+				}
+			}
+		}
+	}
+
+	function loadResource(create, isEmote) {
+		// データ読み込み
+		for (var i=0;i<create.count;i++) {
+			var s = "dx_" + create[i];
+			if (s != "") {
+				if (!Storages.isExistentStorage(s)) {
+					error(@"警告:モーション用画像が見つからない:${s}");
+				} else {
+					try {
+						var obj = _motion_manager.load(s);
+						if (isEmote && obj.metadata !== void) {
+							_metadata = obj.metadata;
+						}
+					} catch (e) {
+						// XXX エラーメッセージが不適切
+						throw new Exception(@"モーションファイルの読み込みに失敗しました:${s}:${e.message}");
+					}
+				}
+			}
+		}
+	}
+
+	function entryOwner(owner) {
+		SUPER.entryOwner(owner);
+		if (_separate && owner instanceof "AffineLayer") {
+			if (typeof owner._motionSeparateAdaptor == "undefined") {
+				//dm(@"${this}:オーナーにセパレータを登録:${owner}:${Scripts.getTraceString()}");
+				owner._motionSeparateAdaptor = new Motion.SeparateLayerAdaptor(owner incontextof global.Layer);
+				owner._motionSeparateAdaptorCount = 1;
+				owner.type = ltBinder if owner.type == ltAlpha;
+			} else {
+				owner._motionSeparateAdaptorCount++;
+			}
+		}
+	}
+
+	function leaveOwner(owner) {
+		if (_owners.find(owner) >= 0) {
+			if (_separate && owner instanceof "AffineLayer") {
+				if (typeof owner._motionSeparateAdaptor != "undefined" && --owner._motionSeparateAdaptorCount == 0) {
+					//dm(@"${this}:オーナーからセパレータを排除:${owner}:${Scripts.getTraceString()}");
+					invalidate owner._motionSeparateAdaptor;
+					delete owner._motionSeparateAdaptor;
+					delete owner._motionSeparateAdaptorCount;
+					owner.type = ltAlpha if owner.type == ltBinder;
+				}
+			}
+		}
+		SUPER.leaveOwner(owner);
+	}
+	
+	/**
+	 * 複製を返す
+	 */
+	function clone(newwindow, instance) {
+		if (newwindow === void) {
+			newwindow = _window;
+		}
+		if (instance === void) {
+			instance = new global.AffineSourceMotion(newwindow, void, newwindow === _window ? _motion_manager : void);
+		}
+		instance._useD3D = _useD3D;
+		instance._separate = _separate;
+		instance._emotescale = _emotescale;
+		SUPER.clone(newwindow, instance);
+		if (_innerStorage !== void) {
+			instance._loadImages(_innerStorage);
+			instance.createPlayer(this);
+		}
+		instance._images = Scripts.clone(_images);
+		return instance;
+	}
+
+	// 強制更新が必要かどうかの判定
+	function isFlip() {
+		return _player !== void && (_storageType == "emote" || (_player.allplaying || _lastPlaying));
+	}
+
+	// 更新処理
+	function updateFlip(tick) {
+		if (_lastTick === void) {
+			_lastTick = tick;
+		} else {
+			if (tick <= _lastTick) {
+				return;
+			}
+		}
+		_interval = tick - _lastTick;
+		if (_storageType == "emote") {
+			if (!_player.animating && _lastPlaying) {
+				onAnimationStop();
+				onSync();
+			}
+			_lastPlaying = _player.animating;
+		} else {
+			if (!_player.playing && _lastPlaying) {
+				onMotionStop();
+			}
+			_lastPlaying = _player.playing;
+		}
+		_lastTick = tick;
+	}
+
+	function onMotionStart() {
+		if (!_playing) {
+			_playing = true;
+			_lastPlaying = true;
+			//notifyOwner("onMotionStart");
+		}
+		// タグ設定
+		if (typeof _player.tags == "Object") {
+			var tags = _player.tags;
+			var n = 1;
+			for (var i=0;i<tags.count;i++) {
+				var content = tags[i].content;
+				if (content !== void && typeof content == "Object") {
+					var action = content.action;
+					if (action !== void && typeof action == "String") {
+						_window.entryDelay(action);
+						_window.entryDelay("ml" + n);
+						n++;
+					}
+				}
+			}
+		}
+		_actionCount = 0;
+	}
+
+	function onMotionStop() {
+		if (_playing) {
+			_playing = false;
+			notifyOwner("onMotionStop");
+			onMovieStop();
+		}
+	}
+
+	function onAnimationStop() {
+		//notifyOwner("onAnimationStop");
+		onMovieStop();
+	}
+	
+	function onAction(layer, action) {
+		//dm("motion onAction:" + action);
+		_actionCount++;
+		_window.extractDelay(action);
+		_window.extractDelay("ml" + _actionCount);
+		notifyOwner("onMotionAction", layer, action);
+	}
+
+	// ----------------------------------------------------------------------
+
+	function canWaitMovie() {
+		if (_player !== void && _storageType != "emote") {
+			return _playing;
+		}
+		return false;
+	}
+
+	function stopMovie() {
+		if (_player !== void && _storageType != "emote") {
+			_player.skipToSync();
+			_player.progress(1);
+			_player.stop();
+		}
+	}
+
+	// @return 同期待ちできるかどうか
+	function canSync() {
+		if (_player !== void) {
+			if (_storageType == "emote") {
+				return _player.animating;
+			} else {
+				return _player.loopTime < 0 && _player.playing;
+			}
+		} else {
+			return false;
+		}
+	}
+	
+	// 行末用状態同期
+	function sync(force=false) {
+		if (_player !== void && _player.motion != "") {
+			if (_storageType == "emote") {
+				if (_player.animating||force) {
+					if (force) {
+						_player.skip();
+					} else {
+						_player.pass();
+					}
+					_player.progress(1);
+					moveClear();
+				}
+			} else {
+				if (_player.playing) {
+					_player.skipToSync();
+					_player.progress(1);
+				}
+			}
+		}
+	}
+
+	// 風の状態変更への追従
+	function updateEnvironment(elm) {
+		if (elm.wind !== void) with (elm.wind) {
+			if (_player !== void && _storageType == "emote") {
+				_player.startWind(.start, .goal, .speed, .min, .max);
+			}
+		}
+	}
+	
+	// ----------------------------------------------------------------------
+
+	function splitStorage(storage) {
+		var origext = Storages.extractStorageExt(storage);
+		var storages;
+		if (storage.indexOf(":") >= 0) {
+			storages = storage.split(":");
+		} else {
+			storages = [storage];
+		}
+		for (var i=0;i<storages.count;i++) {
+			var ext = Storages.extractStorageExt(storages[i]);
+			if (ext == "") {
+				storages[i] += origext;
+			}
+		}
+		return storages;
+	}
+	
+	/**
+	 * 画像のロード
+	 */
+	function _loadImages(storage) {
+		//dm(@"モーション画像ロード:${storage}:${_innerStorage}");
+		if (_innerStorage != storage) {
+			_metadata = void;
+			var ext = Storages.extractStorageExt(storage).toUpperCase();
+			var isEmote = ext == ".PSB";
+			removePlayer();
+			var remove = _innerStorage != "" ? splitStorage(_innerStorage) : void;
+			var create = splitStorage(storage);
+			_innerStorage = void;
+			if (_motion_manager !== void && _motion_manager.refCount == 1) {
+				loadResource(create, isEmote);
+				unloadResource(remove);
+			} else {
+				if (_motion_manager !== void) {
+					unloadResource(remove);
+					_motion_manager.release();
+				}
+				_motion_manager = new global.MotionResourceManager(_window);
+				loadResource(create, isEmote);
+			}
+			_innerStorage = storage;
+			_storageType = isEmote ? "emote" :  "motion";
+		}
+		_initType    = _separate ? ltBinder : ltAlpha;
+		_initOpacity = 255;
+		setSizeToImageSize();
+	}
+
+	function loadImages(storage,colorKey=clNone,options=void) {
+		if (storage != _storage) {
+			_storage = storage;
+			
+			_images = void;
+			_loadImages(storage);
+			createPlayer();
+
+			if (_storageType == "emote") {
+				_emotescale = 1.0;
+				var list = getMultiResolutionInformation(_window).getInfo(storage);
+				if (list !== void) {
+					_images = [];
+					_images.add(%[file:storage, scale:1.0]);
+					for (var i=0;i<list.count;i++) {
+						_images.add(list[i]);
+					}
+					_images.sort(function(a,b) { return a.scale > b.scale; });
+				}
+			}
+			calcUpdate();
+		}
+	}
+
+	function checkMultiOption(name) {
+		if (_storageType == "emote") {
+			if (name == "timeline" || name == "stoptimeline") {
+				return true;
+			}
+		}
+	}
+	
+	function checkOption(name) {
+		if (_storageType == "emote") {
+			//dm(@"checkOption:${name}");
+			switch (name) {
+			case "timeline":
+				return [name, "ratio", "time", "easing"];
+			case "stoptimeline":
+			case "color":
+				return [name, "time", "easing"];
+			case "timelines":
+			case "variables":
+				return name;
+			case "easing":
+			case "ratio":
+				return "ignore";
+			}
+			if (emoteMainTimeline[name] ||
+				emoteDiffTimeline[name]) {
+				return ["timeline", "ratio", "time", "easing"];
+			}
+		} else {
+			switch (name) {
+			case "motion":
+				return [name, "flags"];
+			case "chara":
+			case "tickcount":
+			case "speed":
+			case "outline":
+			case "variables":
+            case "color":
+				return name;
+			case "flags":
+				return "ignore";
+			}
+		}
+		return SUPER.checkOption(name);
+	}
+
+	function checkReplaceOption(name) {
+		// _metadata が無い状態(タイムラインのロードに失敗してる状態)
+		// では変数情報がとれないため期待通り置換できないので素通しさせる
+		if (_storageType == "emote" && _metadata !== void) {
+			switch (name) {
+			case "timeline":
+			case "timelines":
+			case "stoptimeline":
+				return ["timelines", "variables"];
+			}
+		}
+	}
+	
+	function setOptions(elm) {
+		var ret = SUPER.setOptions(elm);
+		var r = _setOptions(elm);
+		if (r !== void) {
+			return r;
+		}
+		if (ret !== void) calcUpdate();
+		return ret;
+	}
+
+	function _playTimeline(name, ratio=1.0, time=0, easing=0) {
+		//dm(@"playTimeline:${name}:${ratio}:${time}:${easing}");
+		if (!_player.getLoopTimeline(name)) {
+			_lastTimeline = name;
+		}
+		if (_player.getTimelinePlaying(name)) {
+			if (emoteDiffTimeline[name]) {
+				_player.setTimelineBlendRatio(name, ratio, time * 60 / 1000, easing);
+			}
+		} else if (!_player.getTimelinePlaying(name)) {
+			if (emoteMainTimeline[name]) {
+				_player.playTimeline(name, 1); // 常にパラレル
+			} else if (emoteDiffTimeline[name]) {
+				_player.playTimeline(name, 3); // パラレルかつ差分指定
+				_player.setTimelineBlendRatio(name, 0, 0, 0);
+				_player.setTimelineBlendRatio(name, ratio, time * 60 / 1000, easing);
+			}
+		}
+	}
+	
+	function _stopTimeline(name, time=0, easing=0) {
+		//dm(@"call _stopTimeline:${name}:${time}");
+		if (_lastTimeline == name) {
+			_lastTimeline = void;
+		}
+		if (_player.getTimelinePlaying(name)) {
+			if (emoteMainTimeline[name]) {
+				_player.stopTimeline(name);
+			} else if (emoteDiffTimeline[name]) {
+				_player.fadeOutTimeline(name, time * 60 / 1000, easing);
+			}
+		}
+	}
+
+	// 画像付加情報設定
+	function _setOptions(elm) {
+		var ret;
+		if (_player !== void) {
+			if (_storageType == "emote") {
+				// 変数反映
+				if (elm.variables !== void) {
+					var vars = typeof elm.variables == "String" ? Scripts.eval(elm.variables) : elm.variables;
+					if (vars instanceof "Dictionary") {
+						Scripts.foreach(vars, function(name,value){moveVariable(name,value);});
+					}
+				}
+				// タイムライン反映
+				var time = +elm.time;
+				var easing = +elm.easing;
+				var ratio = elm.ratio !== void ? +elm.ratio : 1.0;
+				if (elm.timelines !== void) {
+					// 復元処理
+					if (typeof elm.timelines == "String") {
+						// 文字列指定の場合
+						var stoptls = _player.getPlayingTimelineInfoList();
+						var tls = elm.timelines.split(":");
+						var e = %[];
+						Scripts.foreach(tls, function(i,tl,e){e[tl]=true;},e);
+						for (var i=0;i<stoptls.count;i++) {
+							var tl = stoptls[i];
+							if (e[tl.label] === void) {
+								_stopTimeline(tl.label);
+							}
+						}
+						for (var i=0;i<tls.count;i++) {
+							var tl = tls[i];
+							_playTimeline(tl);
+						}
+					} else {
+						var stoptls = _player.getPlayingTimelineInfoList();
+						var tls = elm.timelines;
+						var e = %[];
+						Scripts.foreach(tls, function(i,tl,e){e[tl.label]=true;},e);
+						for (var i=0;i<stoptls.count;i++) {
+							var tl = stoptls[i];
+							if (e[tl.label] === void) {
+								_stopTimeline(tl.label);
+							}
+						}
+						for (var i=0;i<tls.count;i++) {
+							var tl = tls[i];
+							_playTimeline(tl.label, tl.blendRatio);
+						}
+					}
+					ret = true;
+				}
+				if (elm.stoptimeline !== void) {
+					var timeline = elm.stoptimeline;
+					if (timeline instanceof "Dictionary") {
+						// 辞書の場合
+						_setOptions(timeline);
+					} else if (timeline instanceof "Array") {
+						// 配列の場合
+						for (var i=0;i<timeline.count;i++) {
+							_setOptions(timeline[i]);
+						}
+					} else {
+						switch (timeline) {
+						case true:
+						case "true":
+						case "":
+							// 全タイムライン停止
+							{
+								var tls = _player.getPlayingTimelineInfoList();
+								for (var i=0;i<tls.count;i++) {
+									_stopTimeline(tls[i].label, time, easing);
+								}
+							}
+							break;
+						case "main":
+							// メインタイムライン停止
+							{
+								var tls = _player.getPlayingTimelineInfoList();
+								for (var i=0;i<tls.count;i++) {
+									var name = tls[i].label;
+									if (emoteMainTimeline[name]) {
+										_stopTimeline(name, time, easing);
+									}
+								}
+							}
+							break;
+						case "diff":
+							// 差分タイムラインのみ停止
+							{
+								var tls = _player.getPlayingTimelineInfoList();
+								for (var i=0;i<tls.count;i++) {
+									var name = tls[i].label;
+									if (emoteDiffTimeline[name]) {
+										_stopTimeline(name, time, easing);
+									}
+								}
+							}
+							break;
+						default:
+							// 個別停止
+							{
+								var tls = timeline.split(":");
+								for (var i=0;i<tls.count;i++) {
+									_stopTimeline(tls[i], time, easing);
+								}
+							}
+							break;
+						}
+					}
+					ret = true;
+				}
+				if (elm.timeline !== void) {
+					var timeline = elm.timeline;
+					if (timeline instanceof "Dictionary") {
+						// 辞書の場合
+						_setOptions(timeline);
+					} else if (timeline instanceof "Array") {
+						// 配列の場合
+						for (var i=0;i<timeline.count;i++) {
+							_setOptions(timeline[i]);
+						}
+					} else if (timeline == true || timeline == "") {
+						var tls = _player.getPlayingTimelineInfoList();
+						for (var i=0;i<tls.count;i++) {
+							_stopTimeline(tls[i].label, time, easing);
+						}
+					} else {
+						var tls = timeline.split(":");
+						for (var i=0;i<tls.count;i++) {
+							_playTimeline(tls[i], ratio, time, easing);
+						}
+					}
+					ret = true;
+				}
+				if (elm.color !== void) {
+					if (elm.color == "") {
+						if (_color !== void) {
+							_color = void;
+							_player.setColor(0xFF808080, time, easing);
+							ret = "color";
+						} else {
+							ret = true;
+						}
+					} else {
+						if (_color != +elm.color) {
+							_color = +elm.color;
+							_player.setColor(0xFF000000|_color, time, easing);
+							ret = "color";
+						} else {
+							ret = true;
+						}
+					}
+				}
+				
+			} else {
+				var start = false;
+				if (elm.chara !== void) {
+					_player.chara = elm.chara;
+					ret = "char";
+				}
+				if (elm.motion !== void) {
+					var flags = elm.flags !== void ? +elm.flags : Motion.PlayFlagForce;
+					//dm(@"motion:${elm.motion} flags:${flags}");
+					_player.play(elm.motion, flags);
+					start = true;
+					ret = "motion" if ret === void;
+				}
+				if (elm.tickcount !== void) {
+					_player.tickCount = +elm.tickcount;
+					ret = true if ret === void;
+				}
+				if (elm.speed !== void) {
+					_player.speed = +elm.speed;
+					ret = true if ret === void;
+				}
+				if (elm.outline !== void) {
+					_player.outline = +elm.outline ? outline : void;
+					ret = true if ret === void;
+				}
+				if (elm.color !== void) {
+					if (elm.color == "") {
+						if (_color !== void) {
+							_color = void;
+							_player.colorWeight = 0xFF808080;
+							ret = "color" if ret === void;
+						} else {
+                          ret = true if ret === void;
+						}
+					} else {
+						if (_color != +elm.color) {
+							_color = +elm.color;
+							_player.colorWeight = (0xFF000000|_color);
+							ret = "color" if ret === void;
+						} else {
+							ret = true if ret === void;
+						}
+					}
+				}
+				
+
+				// 変数反映
+				if (elm.variables !== void) {
+					var vars = typeof elm.variables == "String" ? Scripts.eval(elm.variables) : elm.variables;
+					if (vars instanceof "Dictionary") {
+						Scripts.foreach(vars, function(name,value){_player.setVariable(name,value);});
+					}
+				}
+				if (start && _player.playing) {
+					onMotionStart();
+				}
+			}
+		}
+		return ret;
+	}
+
+	// 変数設定
+	function setVariable(name, value, time=0, accel=0) {
+		if (_player !== void) {
+			if (_storageType == "emote") {
+				EBASE.setVariable(name, value, time, accel);
+			} else {
+				_player.setVariable(name, value);
+			}
+			notifyOwner("entryFlip");
+			calcUpdate();
+		}
+	}
+
+	// 変数取得
+	function getVariable(name) {
+		if (_player !== void) {
+			if (_storageType == "emote") {
+				return EBASE.getVariable(name);
+			} else {
+				return _player.getVariable(name);
+			}
+		}
+	}
+
+	function _getOptions(ret) {
+		if (_player !== void && _player.motion != "") {
+			_player.progress(0);
+			var keys;
+			if (_storageType == "emote") {
+				var currentTimeline = _player.getPlayingTimelineInfoList();
+				if (currentTimeline.count > 0) {
+					ret.timelines = currentTimeline;
+				}
+				if (_color !== void) {
+					ret.color = _color;
+				}
+				keys = _player.variableKeys;
+			} else {
+				ret.chara = _player.chara;
+				ret.motion = _player.motion;
+				ret.tickcount = _player.tickCount;
+				ret.speed     = _player.speed;
+				if (_player.outline !== void) {
+					ret.outline = true;
+				}
+				if (_color !== void) {
+					ret.color = _color;
+				}
+				keys = _player.variableKeys;
+			}
+			var variables = %[];
+			for (var i=0;i<keys.count;i++) {
+				var name = keys[i];
+				var value = _player.getVariable(name);
+				variables[name] = value;
+			}
+			ret.variables = variables;
+		}
+	}
+	
+	// 画像付加情報取得
+	function getOptions() {
+		var ret = %[];
+		_getOptions(ret);
+		var r = SUPER.getOptions();
+		if (r !== void) {
+			(Dictionary.assign incontextof ret)(r,false);
+		}
+		return ret;
+	}
+
+	// パラメータ変換用
+	function convPropValue(name, value) {
+		if (_player !== void && _storageType == "emote" && _metadata !== void) {
+			if (name.charAt(0) == '$') {
+				var vname = name.substr(1);
+				var list = _player.getVariableFrameList(vname);
+				if (list !== void && list.count > 0) {
+					for (var i=0;i<list.count;i++) {
+						var info = list[i];
+						if (info.label == value) {
+							//dm(@"発見:${info.frame}");
+							return info.frame;
+						}
+					}
+				}
+			}
+		}
+		//dm(@"見つからない:${name}:${value}");
+	}
+	
+	// ---------------------------------------------------------------
+
+	// 顔象度のスケーリングのみ・他のものはプレイヤー側で処理する
+	function calcImageMatrix(mtx, src) {
+		if (_storageType == "emote") {
+			// emote の場合は無視
+		} else {
+			// 全体をアフィン側で処理
+			SUPER.calcImageMatrix(mtx, src);
+		}
+
+		// e-mote だけ対応
+		if (_images !== void && _storageType == "emote" && _player !== void) {
+			// 解像度選択
+			var zoom = mtx.calcZoom();
+			var num = _images.count-1;
+			for (var i=0;i<=num;i++) {
+              // 強制で画像を組み直す
+              if (i == num || zoom > _images[i+1].scale) {
+                var storage = _images[i].file;
+                var scale   = _images[i].scale !== void ? _images[i].scale : 1.0;
+                if (storage != _innerStorage) {
+                  //dm(@"読み直し zoom:${zoom} index:${i} storage:${storage} scale:${scale}");
+                  var data = _player !== void ? _player.serialize() : void;
+                  var color = _color;
+                  try {
+                    _loadImages(storage);
+                    createPlayer();
+                  } catch (e) {
+                    error(@"${storage}:${e.message}");
+                  }
+                  if (_player !== void) {
+                    if (data !== void) {
+                      _player.unserialize(data);
+                    }
+                    if (color !== void) {
+                      _player.setColor(0xFF000000|color);
+                    }
+                  }
+                }
+                _emotescale = 1.0 / scale;
+                break;
+              }
+			}
+        }
+    }
+
+	// 物理演算パラメータ計算
+	function calcParam(name) {
+		if (typeof _window.sflags == "Object") {
+			var s = _window.sflags["emote" + name];
+			if (s !== void) {
+				return this[name] * +s;
+			}
+		}
+		return this[name];
+	}
+
+	var revmtx;
+
+	function _drawAffine(target, mtx, src) {
+		if (_player !== void && _player.motion != "") {
+			if (_storageType == "emote") with (src) {
+				// emoteの場合は画像の変形処理はプレイヤー側に処理させる
+				_player.setCoord(+._imagex, +._imagey);
+				_player.setRotate(- +src._imagerotate * Math.PI * 2 / 360) if ._imagerotate !== void;
+				var s = _emotescale * (._imagezoom !== void ? ._imagezoom : 1.0) * (100/resolutionx);
+				_player.setScale(s);
+				_player.meshDivisionRatio = calcParam("_meshdivisionratio");
+				_player.bustScale         = calcParam("_bustscale");
+				_player.hairScale         = calcParam("_hairscale");
+				_player.partsScale        = calcParam("_partsscale");
+				moveProgress(_interval);
+			}
+			if (_interval > 0) {
+				_player.progress(_interval);
+				_interval = 0;
+			} else {
+				_player.progress(0);
+			}
+			if (false) {
+				// 3x3行列指定だとZが適切に配慮させられない
+				_player.setDrawAffineTranslateMatrix(mtx.m11, mtx.m21, mtx.m12, mtx.m22, mtx.m14, mtx.m24);
+			}  else {
+				// 一度頂点化して逆算するようにする
+				var x = mtx.transformAreaX(1, 1);
+				var y = mtx.transformAreaY(1, 1);
+				var tx = x[0];
+				var ty = y[0];
+				var a = x[1]-tx;
+				var b = x[2]-tx;
+				var c = y[1]-ty;
+				var d = y[2]-ty;
+				_player.setDrawAffineTranslateMatrix(a, c, b, d, tx, ty);
+
+				// 逆変換用の式を作っておく
+				var det = a*d-c*b;
+				revmtx = %[];
+				revmtx.a = d/det;
+				revmtx.b = -b/det;
+				revmtx.c = -c/det;
+				revmtx.d = a/det;
+				revmtx.tx = (b*ty-tx*d)/det;
+				revmtx.ty = (tx*c-a*ty)/det;
+			}
+			_player.completionType = src._completionType;
+			// 描画時に Pixelate 機能を使っていると、ltBinder だとよみこめなくてエラーになってしまうので一時変更
+			_player.draw(target);
+		}
+	}
+
+	property workLayer {
+		getter() {
+			if (typeof _window._motionWorkLayer == "undefined") {
+				_window._motionWorkLayer = new global.Layer(_window, _pool);
+				_window._motionWorkLayer.setSize(_window.scWidth, _window.scHeight);
+			}
+			return _window._motionWorkLayer;
+		}
+	}
+	
+	// 画面描画
+	function drawAffine(target, mtx, src) {
+		if (_player !== void && _player.motion != "") {
+			var name = target.name;
+			var neutralColor = target.neutralColor;
+			var targetLayer = target;
+			var targetType = target.type;
+			if (_useD3D) {
+				target = _window.motionD3DAdaptor;
+				target.clearEnabled = true;
+			} else if (target == src && typeof src._motionSeparateAdaptor != "undefined" && _redrawList.count == 0) {
+				target = src._motionSeparateAdaptor;
+			} else if (_redrawList.count > 0) {
+				target = motionWorkLayer;
+			}
+			targetLayer.type = ltAlpha;
+
+			if (typeof _player.clear != "undefined") {
+				_player.clear(target, neutralColor);
+			}
+			
+			// 描画実行
+			if (target instanceof "D3DAdaptor") {
+				// エラー時も一度はリトライする
+				var retry = true;
+				while (retry) {
+					try {
+						_drawAffine(target, mtx, src);
+						break;
+					} catch (e) {
+						if (retry) {
+							dm("retry drawAffine!");
+							target.removeAllTextures();
+							retry = false;
+						}
+						throw e;
+					}
+				}
+				target.clearEnabled = false;
+			} else {
+				_drawAffine(target, mtx, src);
+			}
+
+			// 強制追加描画処理
+			var list = src.getSubImageLayers();
+			if (list !== void) {
+				for (var i=0;i<list.count;i++) {
+					var obj = list[i];
+					var _image = obj._image;
+					if (_image instanceof "AffineSourceMotion") {
+						var mtx = new AffineMatrix();
+						_image.calcMatrix(mtx, obj);
+						_image.updateImage();
+						_image._drawAffine(target, mtx, obj);
+					}
+				}
+			}
+
+			// 書き戻し
+			if (target instanceof "D3DAdaptor") {
+				var work = workLayer;
+				target.captureCanvas(work);
+				target.unloadUnusedTextures();
+				_redrawImage(work);
+				(Layer.assignImages incontextof targetLayer)(work);
+			} else if (target instanceof "Layer") {
+				_redrawImage(target);
+				(Layer.assignImages incontextof targetLayer)(target);
+			}
+			targetLayer.type = targetType;
+		}
+	}
+
+	/*
+	 * タッチ検知
+	 * @param x
+	 * @param y
+	 * @return タッチ位置の名称
+	 */
+	function checkTouch(x, y, src) {
+		if (_player !== void && _storageType == "emote" && revmtx !== void) {
+			x += src._xbase;
+			y += src._ybase;
+			var x2;
+			var y2;
+			with (revmtx) {
+				x2 = .a*x + .c*y + .tx;
+				y2 = .b*x + .d*y + .ty;
+			}
+			var names = ["bust", "head","body"];
+			for (var i=0;i<names.count;i++) {
+				var name = names[i];
+				if (_player.contains("hit_" + name, x2, y2)) {
+					return name;
+				}
+			}
+		}
+	}
+	
+	// -----------------------------------------------------------------
+	// 立ち絵情報参照用
+	// -----------------------------------------------------------------
+
+	property timeline {
+		getter() {
+			if (_player !== void && _storageType == "emote") with (_player) {
+				var tl = [];
+				if (_lastTimeline !== void) {
+					tl.add(_lastTimeline);
+				}
+				var list = .getPlayingTimelineInfoList();
+				for (var i=0;i<list.count;i++) {
+					var info = list[i];
+					if (.getLoopTimeline(info.label)) {
+						tl.add(info.label);
+					}
+				}
+				return tl.join(":");
+			}
+		}
+	}
+	
+	function getStandMenuInfo(limit, limitFace, forSave = false) {
+		var ret = [];
+		if (_player !== void && _storageType == "emote") with (_player) {
+			var tl = timeline;
+			var list;
+			if (forSave) {
+				list = [];
+				Scripts.foreach(_player.getMainTimelineLabelList(), function(i,name,list) {
+					//dm(@"${_innerStorage}:checkLimit:${name}:${_player.getLoopTimeline(name)}");
+					if (!_player.getLoopTimeline(name)) {
+						list.add(name);
+					}
+				}, list);
+			} else {
+				list = _allTimeline;
+			}
+			ret.add(%[name:"timeline", caption:"タイムライン追加", id:"tlad", list:list, current:tl, flag:"face"]);
+			ret.add(%[name:"stoptimeline", caption:"タイムライン削除", id:"tldl", list:list, param:"stoptimeline"]);
+		}
+		return ret;
+	}
+	
+	/**
+	 * 現在の立ち絵用のタグを生成する
+	 * @param tmp タグ格納先
+	 * @param dress 服装情報を含むかどうか
+	 */
+	function storeStandTag(tmp, dress=false) {
+		if (_player !== void && _storageType == "emote") {
+			tmp.push(timeline*);
+		}
+	}
+
+};
+
+extSourceMap[".PSB"] = AffineSourceMotion;
+extSourceMap[".MTN"] = AffineSourceMotion;

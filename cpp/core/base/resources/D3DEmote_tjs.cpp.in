@@ -1,0 +1,8 @@
+#include <cstddef>
+
+extern const unsigned char kAetherKiriD3DEmoteTjs[] = {
+@BASE_D3DEMOTE_BYTES@
+};
+
+extern const std::size_t kAetherKiriD3DEmoteTjsSize =
+    sizeof(kAetherKiriD3DEmoteTjs);

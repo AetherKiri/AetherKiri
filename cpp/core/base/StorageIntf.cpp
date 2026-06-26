@@ -11,6 +11,7 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdlib>
 #include <stdexcept>
 #include <memory>
@@ -55,6 +56,103 @@ static const char TVP_GPU_COMPAT_SCRIPT[] =
     "try { KAGWindow.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
     "try { KAGWindow.prototype.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
     "try { KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n";
+static const char TVP_D3DEMOTE_COMPAT_PREFIX[] =
+    "// AetherKiri D3DEmote/motion.tjs compatibility bridge.\n"
+    "try { Plugins.link(\"emoteplayer.dll\"); } catch(e) { }\n";
+static const char TVP_LOGWINDOW_COMPAT_SCRIPT[] = R"TJS(
+// AetherKiri KAGEX LogWindow.tjs compatibility bridge.
+class LogWindowPad extends Pad {
+    function LogWindowPad(owner, action, maxline = 300, caption = "KAGEX log") {
+        super.Pad();
+
+        this.owner = owner;
+        this.action = action;
+        this.maxline = maxline;
+
+        borderStyle = bsSizeToolWin;
+        color = 0;
+        fontColor = 0xFFFFFF;
+        fontFace = "monospace";
+        readOnly = false;
+        wordWrap = true;
+        showScrollBars = ssVertical;
+        height = 10;
+        title = caption;
+        clear();
+
+        trigger = new AsyncTrigger(updateText, '');
+        with (trigger) .mode = atmAtIdle, .cached = true;
+    }
+
+    function finalize() {
+        if (!isvalid this) return;
+        invalidate trigger if (trigger);
+        trigger = void;
+        super.finalize(...);
+    }
+
+    function clear() {
+        lines.clear();
+        text = "";
+        clearNext = false;
+        statusText = "latest log first";
+    }
+
+    function setPos(x, y, w, h) {
+        left = x if (x !== void);
+        top = y if (y !== void);
+        setSize(w, h);
+    }
+
+    function setSize(w, h) {
+        width = w if (w !== void);
+        height = h if (h !== void);
+    }
+
+    var owner, action;
+    var trigger;
+    var maxline, lines = [], clearNext;
+
+    function onClose() {
+        if (!isvalid this) return;
+        invokeOwnerAction("closed");
+    }
+
+    function invokeOwnerAction(message, *) {
+        if (!isvalid owner) return;
+        if (typeof owner[action] == "Object") {
+            return owner[action](message, *);
+        }
+    }
+
+    function showResults(blocks*) {
+        var all = [];
+        for (var i = 0; i < blocks.count; i++) {
+            all.add(blocks[i].join("\n")) if (blocks[i] !== void);
+        }
+        text = all.join("\n\n");
+        statusText = "output";
+        clearNext = true;
+    }
+
+    function print(shortmsg, fullmsg = void, tag = void) {
+        clear() if (clearNext);
+        lines.unshift(shortmsg);
+        while (lines.count > maxline) lines.pop();
+        if (trigger) trigger.trigger();
+        else updateText();
+    }
+
+    function updateText() {
+        if (!isvalid this) return;
+        text = lines.join("\n");
+    }
+}
+
+&global.LogWindow = LogWindowPad;
+)TJS";
+extern const unsigned char kAetherKiriD3DEmoteTjs[];
+extern const std::size_t kAetherKiriD3DEmoteTjsSize;
 static tTJSVariant TVPStoragesArchiveUniqueKeyCompat;
 
 namespace {
@@ -82,7 +180,10 @@ bool TVPStorageTraceName(const ttstr &name) {
                    });
     return text.find(".pbd") != std::string::npos ||
         text.find("patch2.xp3") != std::string::npos ||
-        text.find("aaemo") != std::string::npos;
+        text.find("aaemo") != std::string::npos ||
+        text.find("motion.tjs") != std::string::npos ||
+        text.find("d3demote.tjs") != std::string::npos ||
+        text.find("logwindow.tjs") != std::string::npos;
 }
 
 bool TVPIsSplitEmoteVirtualStorage(const ttstr &name) {
@@ -163,6 +264,17 @@ static bool TVPIsGpuCompanionScript(const ttstr &name) {
            storage == TJS_W("live2d.tjs");
 }
 
+static bool TVPIsD3DEmoteCompanionScript(const ttstr &name) {
+    ttstr storage = TVPExtractStorageName(name).AsLowerCase();
+    return storage == TJS_W("motion.tjs") ||
+           storage == TJS_W("d3demote.tjs");
+}
+
+static bool TVPIsLogWindowCompanionScript(const ttstr &name) {
+    ttstr storage = TVPExtractStorageName(name).AsLowerCase();
+    return storage == TJS_W("logwindow.tjs");
+}
+
 static tTJSBinaryStream *TVPOpenGfxEffectCompanionScript() {
     return new tTVPMemoryStream(
         TVP_GFX_EFFECT_COMPAT_SCRIPT,
@@ -173,6 +285,28 @@ static tTJSBinaryStream *TVPOpenGpuCompanionScript() {
     return new tTVPMemoryStream(
         TVP_GPU_COMPAT_SCRIPT,
         static_cast<tjs_uint>(sizeof(TVP_GPU_COMPAT_SCRIPT) - 1));
+}
+
+static tTJSBinaryStream *TVPOpenLogWindowCompanionScript() {
+    return new tTVPMemoryStream(
+        TVP_LOGWINDOW_COMPAT_SCRIPT,
+        static_cast<tjs_uint>(sizeof(TVP_LOGWINDOW_COMPAT_SCRIPT) - 1));
+}
+
+static tTJSBinaryStream *TVPOpenD3DEmoteCompanionScript() {
+    auto *stream = new tTVPMemoryStream();
+    try {
+        stream->Write(TVP_D3DEMOTE_COMPAT_PREFIX,
+                      static_cast<tjs_uint>(
+                          sizeof(TVP_D3DEMOTE_COMPAT_PREFIX) - 1));
+        stream->Write(kAetherKiriD3DEmoteTjs,
+                      static_cast<tjs_uint>(kAetherKiriD3DEmoteTjsSize));
+        stream->Seek(0, TJS_BS_SEEK_SET);
+        return stream;
+    } catch(...) {
+        delete stream;
+        throw;
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -1353,7 +1487,9 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         return found;
     }
 
-    if(TVPIsGfxEffectCompanionScript(name) || TVPIsGpuCompanionScript(name))
+    if(TVPIsD3DEmoteCompanionScript(name) ||
+       TVPIsLogWindowCompanionScript(name) ||
+       TVPIsGfxEffectCompanionScript(name) || TVPIsGpuCompanionScript(name))
         return normalized;
 
     // not found
@@ -1453,6 +1589,12 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
     if(access == TJS_BS_READ && TVPIsGfxEffectCompanionScript(name) &&
        !TVPIsRealStorageNoSearchNoNormalize(name))
         return TVPOpenGfxEffectCompanionScript();
+    if(access == TJS_BS_READ && TVPIsD3DEmoteCompanionScript(name) &&
+       !TVPIsRealStorageNoSearchNoNormalize(name))
+        return TVPOpenD3DEmoteCompanionScript();
+    if(access == TJS_BS_READ && TVPIsLogWindowCompanionScript(name) &&
+       !TVPIsRealStorageNoSearchNoNormalize(name))
+        return TVPOpenLogWindowCompanionScript();
     if(access == TJS_BS_READ && TVPIsGpuCompanionScript(name) &&
        !TVPIsRealStorageNoSearchNoNormalize(name))
         return TVPOpenGpuCompanionScript();

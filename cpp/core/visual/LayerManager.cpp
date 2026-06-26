@@ -966,6 +966,15 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
     TVPTraceLayerHit("click", x, y, l);
     TVPTraceLayersAt(this, "click-stack", x, y);
     if(l /*&& CaptureOwner == l*/) {
+        if(TVPIsSaveLoadOverlayCommandLayer(l)) {
+            if(TVPInputTraceEnabled()) {
+                spdlog::info(
+                    "LayerManager save/load overlay command click -> onButtonClick layer={} primary=({}, {})",
+                    l->GetName().AsStdString(), x, y);
+            }
+            l->FireButtonClick();
+            return;
+        }
         if(ShouldSynthesizeEnterForSaveLoadButton(l, x, y) && TVPMainWindow) {
             if(TVPInputTraceEnabled()) {
                 spdlog::info("LayerManager save/load command click -> Enter primary=({}, {})",
