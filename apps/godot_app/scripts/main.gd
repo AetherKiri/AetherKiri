@@ -2687,9 +2687,16 @@ func _show_system_alert_once(key: String, message: String, title: String = "Aeth
     _show_system_alert(message, title)
 
 func _maybe_show_log_alert(line: String) -> void:
+    var message := line.strip_edges()
+    if message.begins_with("[ALERT_DIALOG] "):
+        var parts := message.trim_prefix("[ALERT_DIALOG] ").split(" | ", true, 1)
+        var alert_title := parts[0] if parts.size() > 0 else "AetherKiri"
+        var alert_message := parts[1] if parts.size() > 1 else ""
+        _show_system_alert(alert_message, alert_title)
+        return
+
     if not log_alerts:
         return
-    var message := line.strip_edges()
     if message.is_empty():
         return
     var lower := message.to_lower()

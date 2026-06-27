@@ -942,7 +942,11 @@ int TVPShowSimpleMessageBox(const char *pszText, const char *pszTitle,
     if(ShowGodotMessageBox(pszText, pszTitle, nButton, btnText)) {
         return WaitForMessageBoxResult();
     }
-    return -1;
+    
+    // Fallback: emit a special log so Godot's main.gd can intercept it and show an OS.alert
+    ttstr logMsg = ttstr("[ALERT_DIALOG] ") + (pszTitle ? pszTitle : "AetherKiri") + ttstr(" | ") + (pszText ? pszText : "");
+    TVPAddLog(logMsg);
+    return 0;
 }
 
 #ifdef __ANDROID__
