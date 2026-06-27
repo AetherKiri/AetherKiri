@@ -698,6 +698,36 @@ public:
         return true;
     }
 
+    size_t GetMotionGroupCount() const { return motionGroupNames_.size(); }
+
+    std::string GetMotionGroupName(int index) const {
+        if (index < 0 || index >= static_cast<int>(motionGroupNames_.size())) {
+            return std::string();
+        }
+        return motionGroupNames_[static_cast<size_t>(index)];
+    }
+
+    int GetMotionCount(const std::string &group) const {
+        const auto *motions = FindMotionNamesForGroup(group);
+        return motions ? static_cast<int>(motions->size()) : 0;
+    }
+
+    std::string GetMotionName(const std::string &group, int index) const {
+        const auto *motions = FindMotionNamesForGroup(group);
+        if (!motions || index < 0 || index >= static_cast<int>(motions->size())) {
+            return std::string();
+        }
+        return (*motions)[static_cast<size_t>(index)];
+    }
+
+    void StopMotions() {
+        if (_motionManager) _motionManager->StopAllMotions();
+    }
+
+    bool MotionsFinished() {
+        return !_motionManager || _motionManager->IsFinished();
+    }
+
     bool StartMotionByName(const std::string &motionName) {
         if (!_motionManager || motionName.empty()) return false;
         ACubismMotion *selected = nullptr;
@@ -723,17 +753,19 @@ public:
                 motionName, keyName, motionNames_.size());
             return false;
         }
+        _motionManager->StopAllMotions();
+        selected->SetLoop(true);
         _motionManager->StartMotionPriority(selected, false, 2);
         spdlog::info("krkrlive2d_godot: started motion '{}' key='{}'",
                      motionName, keyName);
         return true;
     }
 
-    void StartMotion(const std::string &group, const std::string &motion) {
-        if (!_motionManager) return;
+    bool StartMotion(const std::string &group, const std::string &motion) {
+        if (!_motionManager) return false;
         ACubismMotion *selected = nullptr;
         if (!motion.empty()) {
-            if (StartMotionByName(motion)) return;
+            if (StartMotionByName(motion)) return true;
             auto named = motionNames_.find(group + "/" + motion);
             if (named != motionNames_.end()) selected = named->second;
             if (!selected) {
@@ -746,27 +778,38 @@ public:
                 }
             }
         }
-        if (!selected) {
+        if (!selected && motion.empty()) {
             auto it = firstMotionByGroup_.find(group);
             if (it != firstMotionByGroup_.end()) selected = it->second;
         }
-        if (!selected && !motions_.empty()) selected = motions_.begin()->second;
+        if (!selected && motion.empty() && !motions_.empty()) {
+            selected = motions_.begin()->second;
+        }
         if (selected) {
+            _motionManager->StopAllMotions();
+            selected->SetLoop(true);
             _motionManager->StartMotionPriority(selected, false, 2);
             spdlog::info("krkrlive2d_godot: started motion group='{}' motion='{}'",
                          group, motion);
+            return true;
         }
+        spdlog::warn("krkrlive2d_godot: motion start failed group='{}' motion='{}'",
+                     group, motion);
+        return false;
     }
 
-    void StartMotionByIndex(const std::string &group, int index) {
+    bool StartMotionByIndex(const std::string &group, int index) {
         const std::string key = group + "_" + std::to_string(index);
         auto it = motions_.find(key);
         if (it != motions_.end() && _motionManager) {
+            _motionManager->StopAllMotions();
+            it->second->SetLoop(true);
             _motionManager->StartMotionPriority(it->second, false, 2);
             spdlog::info("krkrlive2d_godot: started motion group='{}' index={}",
                          group, index);
+            return true;
         } else {
-            StartMotion(group, std::string());
+            return StartMotion(group, std::string());
         }
     }
 
@@ -988,6 +1031,8 @@ private:
             const char *groupName = setting_->GetMotionGroupName(g);
             if (!groupName) continue;
             const std::string group(groupName);
+            motionGroupNames_.push_back(group);
+            auto &groupMotions = motionNamesByGroup_[group];
             const csmInt32 motionCount = setting_->GetMotionCount(groupName);
             for (csmInt32 m = 0; m < motionCount; ++m) {
                 const char *motionFile = setting_->GetMotionFileName(groupName, m);
@@ -1011,19 +1056,19 @@ private:
                 motions_[key] = motion;
                 firstMotionByGroup_.try_emplace(group, motion);
                 const std::string stem = Stem(motionPath);
+                groupMotions.push_back(stem);
                 const std::string lookupKey = MotionLookupKey(motionPath);
                 motionNames_[MotionLookupKey(group + "/" + stem)] = motion;
+                motionNames_[MotionLookupKey(stem)] = motion;
                 motionNames_[lookupKey] = motion;
                 spdlog::debug(
                     "krkrlive2d_godot: registered motion group='{}' file='{}' key='{}'",
                     group, motionPath, lookupKey);
             }
         }
-
-        if (_motionManager && !motions_.empty()) {
-            _motionManager->StartMotionPriority(motions_.begin()->second,
-                                                false, 1);
-        }
+        spdlog::info(
+            "krkrlive2d_godot: registered {} motion groups and {} motions; waiting for script startMotion",
+            motionGroupNames_.size(), motions_.size());
     }
 
     void CaptureDefaultState() {
@@ -1505,10 +1550,6 @@ private:
         lastUpdateTime_ = now;
 
         GetModel()->LoadParameters();
-        if (_motionManager && _motionManager->IsFinished() && !motions_.empty()) {
-            _motionManager->StartMotionPriority(motions_.begin()->second,
-                                                false, 1);
-        }
         if (_motionManager) _motionManager->UpdateMotion(GetModel(), dt);
         GetModel()->SaveParameters();
         if (_eyeBlink) _eyeBlink->UpdateParameters(GetModel(), dt);
@@ -1954,6 +1995,17 @@ private:
         return drewAny;
     }
 
+    const std::vector<std::string> *FindMotionNamesForGroup(
+        const std::string &group) const {
+        auto it = motionNamesByGroup_.find(group);
+        if (it != motionNamesByGroup_.end()) return &it->second;
+        if (group == "main") {
+            it = motionNamesByGroup_.find(std::string());
+            if (it != motionNamesByGroup_.end()) return &it->second;
+        }
+        return nullptr;
+    }
+
     bool loaded_ = false;
     bool visible_ = true;
     std::string baseName_;
@@ -1964,6 +2016,8 @@ private:
     std::vector<int> drawableMaskContext_;
     std::unordered_map<std::string, ACubismMotion *> motions_;
     std::unordered_map<std::string, ACubismMotion *> motionNames_;
+    std::vector<std::string> motionGroupNames_;
+    std::unordered_map<std::string, std::vector<std::string>> motionNamesByGroup_;
     std::unordered_map<std::string, ACubismMotion *> firstMotionByGroup_;
     std::vector<csmFloat32> defaultPartOpacities_;
     csmVector<CubismIdHandle> _eyeBlinkIds;
@@ -2076,7 +2130,12 @@ public:
 
     static tjs_error renderCb(tTJSVariant *result, tjs_int, tTJSVariant **,
                               Live2DModel *self) {
-        if (self && self->model_) self->model_->Progress();
+        if (self && self->model_) {
+            self->model_->Progress();
+            if (self->playing_ && self->model_->MotionsFinished()) {
+                self->playing_ = false;
+            }
+        }
         SetIntResult(result, 1);
         return TJS_S_OK;
     }
@@ -2097,30 +2156,89 @@ public:
 
     static tjs_error progressCb(tTJSVariant *result, tjs_int,
                                 tTJSVariant **, Live2DModel *self) {
-        if (self && self->model_) self->model_->Progress();
+        if (self && self->model_) {
+            self->model_->Progress();
+            if (self->playing_ && self->model_->MotionsFinished()) {
+                self->playing_ = false;
+            }
+        }
         SetIntResult(result, 1);
+        return TJS_S_OK;
+    }
+
+    static tjs_error getMotionGroupCountCb(tTJSVariant *result, tjs_int,
+                                           tTJSVariant **, Live2DModel *self) {
+        SetIntResult(result, self && self->model_
+                                 ? static_cast<tjs_int>(
+                                       self->model_->GetMotionGroupCount())
+                                 : 0);
+        return TJS_S_OK;
+    }
+
+    static tjs_error getMotionGroupNameCb(tTJSVariant *result, tjs_int numparams,
+                                          tTJSVariant **param,
+                                          Live2DModel *self) {
+        if (!result || !self || !self->model_) return TJS_S_OK;
+        const tjs_int index =
+            (numparams > 0 && param && param[0]) ? ToInt(*param[0], 0) : 0;
+        const std::string name =
+            self->model_->GetMotionGroupName(static_cast<int>(index));
+        *result = ttstr(name.c_str());
+        return TJS_S_OK;
+    }
+
+    static tjs_error getMotionCountCb(tTJSVariant *result, tjs_int numparams,
+                                      tTJSVariant **param, Live2DModel *self) {
+        if (!result || !self || !self->model_) return TJS_S_OK;
+        const std::string group =
+            (numparams > 0 && param && param[0])
+                ? ToTTStr(*param[0]).AsStdString()
+                : std::string("main");
+        SetIntResult(result, self->model_->GetMotionCount(group));
+        return TJS_S_OK;
+    }
+
+    static tjs_error getMotionNameCb(tTJSVariant *result, tjs_int numparams,
+                                     tTJSVariant **param, Live2DModel *self) {
+        if (!result || !self || !self->model_) return TJS_S_OK;
+        const std::string group =
+            (numparams > 0 && param && param[0])
+                ? ToTTStr(*param[0]).AsStdString()
+                : std::string("main");
+        const tjs_int index =
+            (numparams > 1 && param && param[1]) ? ToInt(*param[1], 0) : 0;
+        const std::string name =
+            self->model_->GetMotionName(group, static_cast<int>(index));
+        *result = ttstr(name.c_str());
         return TJS_S_OK;
     }
 
     static tjs_error startMotionCb(tTJSVariant *result, tjs_int numparams,
                                    tTJSVariant **param, Live2DModel *self) {
         if (self && self->model_) {
-            self->playing_ = true;
+            bool started = false;
             self->currentMotions_.clear();
+            spdlog::info("krkrlive2d_godot: startMotion called params={}",
+                         numparams);
             if (numparams == 1 && param && param[0]) {
                 const ttstr motion = ToTTStr(*param[0]);
-                self->currentMotions_.push_back(motion);
                 const std::string motionName = motion.AsStdString();
                 if (!self->model_->StartMotionByName(motionName)) {
-                    self->model_->StartMotion(std::string(), motionName);
+                    started = self->model_->StartMotion(std::string(), motionName);
+                } else {
+                    started = true;
                 }
+                if (started) self->currentMotions_.push_back(motion);
             } else if (numparams > 1 && param && param[1] &&
                        param[1]->Type() == tvtInteger) {
                 const std::string group = param[0]
                                               ? ToTTStr(*param[0]).AsStdString()
                                               : std::string();
-                if (param[0]) self->currentMotions_.push_back(ToTTStr(*param[0]));
-                self->model_->StartMotionByIndex(group, ToInt(*param[1], 0));
+                started =
+                    self->model_->StartMotionByIndex(group, ToInt(*param[1], 0));
+                if (started && param[0]) {
+                    self->currentMotions_.push_back(ToTTStr(*param[0]));
+                }
             } else {
                 const std::string group =
                     (numparams > 0 && param && param[0])
@@ -2130,9 +2248,12 @@ public:
                     (numparams > 1 && param && param[1])
                         ? ToTTStr(*param[1]).AsStdString()
                         : std::string();
-                if (!motion.empty()) self->currentMotions_.push_back(ToTTStr(*param[1]));
-                self->model_->StartMotion(group, motion);
+                started = self->model_->StartMotion(group, motion);
+                if (started && !motion.empty()) {
+                    self->currentMotions_.push_back(ToTTStr(*param[1]));
+                }
             }
+            self->playing_ = started;
         }
         SetIntResult(result, 1);
         return TJS_S_OK;
@@ -2169,6 +2290,7 @@ public:
         if (self) {
             self->playing_ = false;
             self->currentMotions_.clear();
+            if (self->model_) self->model_->StopMotions();
         }
         SetBoolResult(result, true);
         return TJS_S_OK;
@@ -2514,10 +2636,12 @@ NCB_REGISTER_CLASS(Live2DModel) {
     NCB_METHOD_RAW_CALLBACK(setExpression, &Live2DModel::okCb, 0);
     NCB_METHOD_RAW_CALLBACK(getExpression, &Live2DModel::emptyStringCb, 0);
     NCB_METHOD_RAW_CALLBACK(fixExpression, &Live2DModel::okCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getMotionGroupCount, &Live2DModel::zeroCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getMotionGroupName, &Live2DModel::emptyStringCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getMotionCount, &Live2DModel::zeroCb, 0);
-    NCB_METHOD_RAW_CALLBACK(getMotionName, &Live2DModel::emptyStringCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getMotionGroupCount,
+                            &Live2DModel::getMotionGroupCountCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getMotionGroupName,
+                            &Live2DModel::getMotionGroupNameCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getMotionCount, &Live2DModel::getMotionCountCb, 0);
+    NCB_METHOD_RAW_CALLBACK(getMotionName, &Live2DModel::getMotionNameCb, 0);
     NCB_METHOD_RAW_CALLBACK(startMotion, &Live2DModel::startMotionCb, 0);
     NCB_METHOD_RAW_CALLBACK(stopMotion, &Live2DModel::stopMotionCb, 0);
     NCB_METHOD_RAW_CALLBACK(getCurrentMotions,
