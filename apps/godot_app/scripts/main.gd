@@ -2704,7 +2704,7 @@ func _create_file_dialog(title: String, file_mode: int, filters: PackedStringArr
     var dialog := FileDialog.new()
     dialog.file_mode = file_mode
     dialog.access = FileDialog.ACCESS_FILESYSTEM
-    dialog.use_native_dialog = OS.get_name() != "Android"
+    dialog.use_native_dialog = true
     dialog.title = title
     for filter in filters:
         dialog.add_filter(filter)
@@ -3333,6 +3333,25 @@ func _path_exists(path: String) -> bool:
 
 func _resolve_game_path(path: String) -> String:
     var normalized := path.strip_edges()
+    
+    if OS.get_name() == "Android" and normalized.begins_with("content://com.android.externalstorage.documents/"):
+        var path_part := ""
+        if "/tree/" in normalized:
+            path_part = normalized.split("/tree/")[1]
+        elif "/document/" in normalized:
+            path_part = normalized.split("/document/")[1]
+            
+        if not path_part.is_empty():
+            path_part = path_part.replace("%3A", ":")
+            var parts = path_part.split(":", true, 1)
+            if parts.size() >= 2:
+                var volume = parts[0]
+                var doc_path = parts[1].uri_decode()
+                if volume == "primary":
+                    normalized = "/storage/emulated/0/".path_join(doc_path)
+                else:
+                    normalized = ("/storage/" + volume).path_join(doc_path)
+
     if normalized.is_empty() or _path_exists(normalized) or OS.get_name() != "iOS":
         return normalized
 
