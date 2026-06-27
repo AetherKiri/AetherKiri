@@ -155,8 +155,19 @@ jobs:
           [[ -n "${ANDROID_RELEASE_KEYSTORE_ALIAS}" ]] && release_secret_count=$((release_secret_count + 1))
           [[ -n "${ANDROID_RELEASE_KEYSTORE_PASSWORD}" ]] && release_secret_count=$((release_secret_count + 1))
 
+          if [[ "$release_secret_count" -eq 0 ]]; then
+            echo "Android release signing secrets are not configured; building unsigned release APK."
+            echo "ANDROID_RELEASE_SIGNED=0" >> "$GITHUB_ENV"
+            {
+              echo "### Android signing"
+              echo ""
+              echo "Release signing secrets were not available, so CI built an unsigned release APK."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           if [[ "$release_secret_count" -ne 3 ]]; then
-            echo "Android release signing secrets are incomplete. Configure ANDROID_RELEASE_KEYSTORE_BASE64, ANDROID_RELEASE_KEYSTORE_ALIAS, and ANDROID_RELEASE_KEYSTORE_PASSWORD." >&2
+            echo "Android release signing secrets are incomplete. Configure all or none of ANDROID_RELEASE_KEYSTORE_BASE64, ANDROID_RELEASE_KEYSTORE_ALIAS, and ANDROID_RELEASE_KEYSTORE_PASSWORD." >&2
             exit 1
           fi
 
@@ -175,6 +186,7 @@ jobs:
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$release_keystore"
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$ANDROID_RELEASE_KEYSTORE_ALIAS"
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+            echo "ANDROID_RELEASE_SIGNED=1"
           } >> "$GITHUB_ENV"
           perl -0pi -e 's/(name="Android Release".*?package\/signed=)false/${1}true/s' apps/godot_app/export_presets.cfg
 
