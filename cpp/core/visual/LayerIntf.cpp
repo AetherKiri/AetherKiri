@@ -1616,8 +1616,16 @@ static bool TVPLayerStorageNameLooksExtraThumbnail(const ttstr &name) {
 
 static bool TVPLayerStorageNameLooksCafeStellaSaveThumbnail(const ttstr &name) {
     const std::string text = TVPLayerAsciiLower(name.AsStdString());
-    return text.find("savedata") != std::string::npos &&
-           text.find("data_continue") != std::string::npos;
+    if(text.find("savedata") == std::string::npos) {
+        return false;
+    }
+
+    const size_t slash = text.find_last_of("/\\");
+    const std::string file =
+        slash == std::string::npos ? text : text.substr(slash + 1);
+
+    return file.rfind("data_continue", 0) == 0 ||
+           file.rfind("data_quick_", 0) == 0;
 }
 
 static bool TVPLayerStorageNameLooksThumbnail(const ttstr &name) {
@@ -1697,10 +1705,10 @@ static bool TVPLayerLoadThumbnailFitted(tTVPBaseTexture *dest,
                                                      source.GetHeight())) {
             return false;
         }
-        // CafeStella's continue hover copies this cached image through a
-        // 408x230 source rect into a 204x115 UI slot. Pre-fitting the cached
-        // bitmap keeps the engine's later source rect from cutting diagonally
-        // through the original 587x330 save screenshot.
+        // CafeStella's continue/quick-save hover copies cached save images
+        // through a 408x230 source rect into a 204x115 UI slot. Pre-fitting
+        // the cached bitmap keeps the engine's later source rect from cutting
+        // diagonally through the original 587x330 save screenshot.
         target_width = TVPCafeStellaSaveThumbnailWidth;
         target_height = TVPCafeStellaSaveThumbnailHeight;
     } else if(extra_thumbnail) {
