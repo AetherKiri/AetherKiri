@@ -156,27 +156,27 @@ jobs:
           [[ -n "${ANDROID_RELEASE_KEYSTORE_PASSWORD}" ]] && release_secret_count=$((release_secret_count + 1))
 
           if [[ "$release_secret_count" -ne 3 ]]; then
-            echo "Android release signing secrets are incomplete. Configure ANDROID_RELEASE_KEYSTORE_BASE64, ANDROID_RELEASE_KEYSTORE_ALIAS, and ANDROID_RELEASE_KEYSTORE_PASSWORD." >&2
-            exit 1
+            echo "::warning title=Incomplete Signing Secrets::Android release signing secrets are incomplete. Building unsigned release APK."
+            echo "::warning::Configure ANDROID_RELEASE_KEYSTORE_BASE64, ANDROID_RELEASE_KEYSTORE_ALIAS, and ANDROID_RELEASE_KEYSTORE_PASSWORD to enable release signing."
+          else
+            release_keystore="${signing_dir}/release.keystore"
+            printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 -d > "$release_keystore"
+            chmod 600 "$release_keystore"
+            keytool -list \
+              -keystore "$release_keystore" \
+              -storepass "$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+              -alias "$ANDROID_RELEASE_KEYSTORE_ALIAS" >/dev/null
+              
+            {
+              echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$release_keystore"
+              echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=$ANDROID_RELEASE_KEYSTORE_ALIAS"
+              echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+              echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$release_keystore"
+              echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$ANDROID_RELEASE_KEYSTORE_ALIAS"
+              echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+            } >> "$GITHUB_ENV"
+            perl -0pi -e 's/(name="Android Release".*?package\/signed=)false/${1}true/s' apps/godot_app/export_presets.cfg
           fi
-
-          release_keystore="${signing_dir}/release.keystore"
-          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 -d > "$release_keystore"
-          chmod 600 "$release_keystore"
-          keytool -list \
-            -keystore "$release_keystore" \
-            -storepass "$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
-            -alias "$ANDROID_RELEASE_KEYSTORE_ALIAS" >/dev/null
-            
-          {
-            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$release_keystore"
-            echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=$ANDROID_RELEASE_KEYSTORE_ALIAS"
-            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=$ANDROID_RELEASE_KEYSTORE_PASSWORD"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$release_keystore"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$ANDROID_RELEASE_KEYSTORE_ALIAS"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$ANDROID_RELEASE_KEYSTORE_PASSWORD"
-          } >> "$GITHUB_ENV"
-          perl -0pi -e 's/(name="Android Release".*?package\/signed=)false/${1}true/s' apps/godot_app/export_presets.cfg
 
       - name: Build Android Release
         run: |
