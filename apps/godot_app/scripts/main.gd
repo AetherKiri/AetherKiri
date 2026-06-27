@@ -3734,6 +3734,8 @@ func _quit_after_runtime_exit() -> void:
     get_tree().quit(0)
 
 func _ready() -> void:
+    if OS.get_name() == "Android":
+        OS.request_permissions()
     cli_probe_script = _detect_cli_probe_script()
     _apply_ui_font()
     DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_TRANSPARENT, false)
