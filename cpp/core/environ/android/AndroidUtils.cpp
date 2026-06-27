@@ -921,7 +921,7 @@ int TVPShowSimpleMessageBox(const char *pszText, const char *pszTitle,
     // In Godot 4, we route all simple message boxes through the logging system
     // so that main.gd can intercept them and display a Godot-native dialog queue.
     ttstr logMsg = ttstr("[ALERT_DIALOG] ") + (pszTitle ? pszTitle : "AetherKiri") + ttstr(" | ") + (pszText ? pszText : "");
-    TVPAddLog(logMsg);
+    TVPAddImportantLog(logMsg);
     return 0;
 }
 

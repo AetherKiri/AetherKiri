@@ -736,9 +736,6 @@ var black_frame_next_sample_msec := 0
 var black_frame_consecutive := 0
 var black_frame_last_log_msec := 0
 var black_frame_guard_enabled := false
-var _alert_queue: Array[Dictionary] = []
-var _active_alert: AcceptDialog = null
-var _alert_paused_game: bool = false
 var cli_probe_script := ""
 var verbose_render_log := false
 var diagnostics_enabled := false
@@ -2681,43 +2678,7 @@ func _show_message(message: String) -> void:
 func _show_system_alert(message: String, title: String = "AetherKiri") -> void:
     if message.strip_edges().is_empty():
         return
-    var os_name := OS.get_name()
-    if os_name == "Android" or os_name == "iOS":
-        _alert_queue.append({"message": message, "title": title})
-        _process_alert_queue()
-    else:
-        OS.alert(message, title)
-
-func _process_alert_queue() -> void:
-    if _active_alert != null:
-        return
-    if _alert_queue.is_empty():
-        if _alert_paused_game:
-            _alert_paused_game = false
-            if game_running:
-                player.resume()
-        return
-
-    var alert := _alert_queue.pop_front() as Dictionary
-    _active_alert = AcceptDialog.new()
-    _active_alert.title = alert.title
-    _active_alert.dialog_text = alert.message
-    add_child(_active_alert)
-    
-    _active_alert.confirmed.connect(_on_alert_closed)
-    _active_alert.canceled.connect(_on_alert_closed)
-    
-    if game_running and not _alert_paused_game:
-        _alert_paused_game = true
-        player.pause()
-        
-    _active_alert.popup_centered()
-
-func _on_alert_closed() -> void:
-    if _active_alert != null:
-        _active_alert.queue_free()
-        _active_alert = null
-    _process_alert_queue()
+    OS.alert(message, title)
 
 func _show_system_alert_once(key: String, message: String, title: String = "AetherKiri") -> void:
     if shown_system_alerts.has(key):
