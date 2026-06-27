@@ -621,6 +621,15 @@ public:
         checkerr("alSourceQueueBuffers");
         //_tags[_bufferIdx] = tag;
         _bufferSize[_bufferIdx] = len;
+        if(_playing) {
+            ALenum state;
+            alGetSourcei(_alSource, AL_SOURCE_STATE, &state);
+            checkerr("AppendBuffer state");
+            if(state != AL_PLAYING) {
+                alSourcePlay(_alSource);
+                checkerr("AppendBuffer play");
+            }
+        }
     }
 
     void Reset() override {
@@ -634,7 +643,10 @@ public:
             alSourceStop(_alSource);
             UnqueueAllBuffersLocked();
             alSourcei(_alSource, AL_BUFFER, 0);
+            alSourceRewind(_alSource);
+            checkerr("Reset rewind");
         }
+        _playing = false;
         _bufferIdx = -1;
         std::fill(_bufferSize, _bufferSize + _bufferCount, 0);
     }

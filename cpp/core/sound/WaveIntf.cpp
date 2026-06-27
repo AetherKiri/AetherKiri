@@ -11,6 +11,7 @@
 #include "tjsCommHead.h"
 #include <algorithm>
 #include <cstdlib>
+#include <spdlog/spdlog.h>
 #include "WaveIntf.h"
 #include "EventIntf.h"
 #include "StorageIntf.h"
@@ -40,6 +41,7 @@ static void TVPWaveIntfAudioTrace(const ttstr &message) {
     if(!TVPWaveIntfAudioTraceEnabled())
         return;
     TVPAddLog(ttstr(TJS_W("AudioTrace ")) + message);
+    spdlog::info("AudioTrace {}", message.AsStdString());
 }
 
 //---------------------------------------------------------------------------

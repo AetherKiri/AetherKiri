@@ -18,6 +18,7 @@
 #include <math.h>
 #include <algorithm>
 #include <cstdlib>
+#include <spdlog/spdlog.h>
 #include "SystemControl.h"
 #include "DebugIntf.h"
 #include "MsgIntf.h"
@@ -95,6 +96,7 @@ static void TVPAudioTrace(const ttstr &message) {
     if(!TVPAudioTraceEnabled())
         return;
     TVPAddLog(ttstr(TJS_W("AudioTrace ")) + message);
+    spdlog::info("AudioTrace {}", message.AsStdString());
 }
 
 //---------------------------------------------------------------------------
@@ -2659,7 +2661,7 @@ bool tTJSNI_WaveSoundBuffer::FillBuffer(bool firstwrite, bool allowpause) {
         return true;
     if(!BufferPlaying)
         return true;
-    if(!TVPPrimarySoundBufferPlaying)
+    if(!TVPPrimarySoundBufferPlaying && allowpause)
         return true;
 
     // check paused state
