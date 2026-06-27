@@ -12,7 +12,10 @@
 #include <string>
 #include <vector>
 
-#if defined(__GNUC__)
+#if defined(__APPLE__)
+extern "C" bool TVPGodotLive2DRenderToLayer(iTJSDispatch2 *layerDispatch)
+    __attribute__((weak_import));
+#elif defined(__GNUC__)
 extern "C" bool TVPGodotLive2DRenderToLayer(iTJSDispatch2 *layerDispatch)
     __attribute__((weak));
 #endif
