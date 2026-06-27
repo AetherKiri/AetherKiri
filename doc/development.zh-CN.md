@@ -119,6 +119,7 @@ Web 还需要：
 | `EMSDK` / `EMSCRIPTEN_ROOT` | Web 构建使用的 Emscripten SDK/toolchain 位置。 |
 | `AETHERKIRI_GAME_ROOT` / `AETHERKIRI_GAME_ROOTS` | 仅 Vite 本地 Web 调试使用，只读 RangeFS 游戏根目录。 |
 | `AETHERKIRI_WEB_AUTO_START` | 仅 Vite 本地 Web 调试使用，启动后自动挂载并进入配置的游戏。 |
+| `AETHERKIRI_ENABLE_AUTO_START` | 原生桌面自动化启动开关；未设置时，即使环境中残留 `AETHERKIRI_AUTO_START_GAME` 或 `AETHERKIRI_AUTO_OPEN`，普通 debug/release app 也不会自动进入游戏。 |
 | `JOBS` | native 并行构建任务数。 |
 | `IOS_SIMULATOR_ARCH` | iOS 模拟器架构，`arm64` 或 `x86_64`。 |
 | `AETHERKIRI_TEST_CONFIG` | JSON probe profile 路径。 |
@@ -413,6 +414,17 @@ AETHERKIRI_INPUT_TRACE=1 ...
 AETHERKIRI_FRAME_SPIKE_MS=20 ...
 AETHERKIRI_VERBOSE_RENDER_LOG=1 ...
 AETHERKIRI_LIVE_FPS_LOG=/tmp/aetherkiri-live.log ...
+```
+
+原生桌面构建会有意忽略 `AETHERKIRI_AUTO_START_GAME` 和
+`AETHERKIRI_AUTO_OPEN`，除非显式开启自动化模式。这样从 Finder 启动普通
+debug/release app 时，就不会继承旧的全局 `launchctl` 调试变量并直接跳进上次
+的游戏。原生自动化运行时需要显式开启：
+
+```bash
+AETHERKIRI_ENABLE_AUTO_START=1 \
+AETHERKIRI_AUTO_START_GAME=/path/to/game \
+out/godot/macos/debug/AetherKiri.app/Contents/MacOS/AetherKiri
 ```
 
 macOS release 收集日志时直接运行 app 内的二进制，这样可以继承 shell 环境变量：

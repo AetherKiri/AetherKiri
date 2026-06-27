@@ -2317,8 +2317,13 @@ func _ready() -> void:
     input_trace_enabled = _runtime_flag("AETHERKIRI_INPUT_TRACE") or ios_diagnostics_enabled
     device_probe_enabled = device_probe_enabled or frame_probe_enabled
     device_probe_enabled = device_probe_enabled or input_trace_enabled
-    device_probe_enabled = device_probe_enabled or _runtime_flag("AETHERKIRI_AUTO_OPEN")
-    device_probe_enabled = device_probe_enabled or not _runtime_string("AETHERKIRI_AUTO_START_GAME").is_empty()
+    var native_auto_start_enabled := _native_auto_start_enabled()
+    device_probe_enabled = device_probe_enabled or (
+        native_auto_start_enabled and _runtime_flag("AETHERKIRI_AUTO_OPEN")
+    )
+    device_probe_enabled = device_probe_enabled or (
+        native_auto_start_enabled and not _runtime_string("AETHERKIRI_AUTO_START_GAME").is_empty()
+    )
     startup_click_stream_enabled = _runtime_flag("AETHERKIRI_STARTUP_CLICK_STREAM")
     device_probe_enabled = device_probe_enabled or startup_click_stream_enabled
     device_probe_enabled = device_probe_enabled or not OS.get_environment("AETHERKIRI_CAPTURE_UI").is_empty()
@@ -2450,10 +2455,14 @@ func _finish_ready_after_first_frame() -> void:
     )
     auto_probe_clicks = _parse_click_points(_runtime_string("AETHERKIRI_AUTO_PROBE_CLICKS"))
     var auto_start_game_spec := _runtime_string("AETHERKIRI_AUTO_START_GAME")
-    if not auto_start_game_spec.is_empty():
-        call_deferred("_auto_start_configured_game", auto_start_game_spec)
-    elif _runtime_flag("AETHERKIRI_AUTO_OPEN"):
-        call_deferred("_on_open_game")
+    var auto_open_requested := _runtime_flag("AETHERKIRI_AUTO_OPEN")
+    if _native_auto_start_enabled():
+        if not auto_start_game_spec.is_empty():
+            call_deferred("_auto_start_configured_game", auto_start_game_spec)
+        elif auto_open_requested:
+            call_deferred("_on_open_game")
+    elif not auto_start_game_spec.is_empty() or auto_open_requested:
+        _append_log("Native auto-start ignored. Set AETHERKIRI_ENABLE_AUTO_START=1 for automation runs.")
     if not OS.get_environment("AETHERKIRI_CAPTURE_UI").is_empty():
         call_deferred("_capture_ui_after_ready")
 
@@ -4230,6 +4239,9 @@ func _runtime_flag(name: String, fallback: bool = false) -> bool:
         return fallback
     value = value.strip_edges().to_lower()
     return value == "1" or value == "true" or value == "yes" or value == "on"
+
+func _native_auto_start_enabled() -> bool:
+    return _runtime_flag("AETHERKIRI_ENABLE_AUTO_START") or _runtime_flag("AETHERKIRI_AUTOMATION")
 
 func _runtime_float(name: String, fallback: float) -> float:
     var value := _runtime_string(name)
