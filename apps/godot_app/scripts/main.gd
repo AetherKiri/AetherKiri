@@ -2704,7 +2704,7 @@ func _create_file_dialog(title: String, file_mode: int, filters: PackedStringArr
     var dialog := FileDialog.new()
     dialog.file_mode = file_mode
     dialog.access = FileDialog.ACCESS_FILESYSTEM
-    dialog.use_native_dialog = true
+    dialog.use_native_dialog = OS.get_name() != "Android"
     dialog.title = title
     for filter in filters:
         dialog.add_filter(filter)
