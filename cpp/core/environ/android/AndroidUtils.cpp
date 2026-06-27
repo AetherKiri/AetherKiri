@@ -869,6 +869,13 @@ bool ShowGodotMessageBox(const char *pszText, const char *pszTitle,
         "[Ljava/lang/String;)V");
     if(showDialog == nullptr) {
         ClearJniException(env);
+        showDialog = env->GetMethodID(
+            companionClass, "showDialog$lib_templateRelease",
+            "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;"
+            "[Ljava/lang/String;)V");
+    }
+    if(showDialog == nullptr) {
+        ClearJniException(env);
         env->DeleteLocalRef(companionClass);
         env->DeleteLocalRef(companion);
         env->DeleteLocalRef(dialogUtilsClass);
