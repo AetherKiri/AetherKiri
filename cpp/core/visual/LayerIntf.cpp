@@ -544,7 +544,8 @@ static bool TVPGetNumberedPrefixIndex(const ttstr &name, const char *prefix,
 
 static bool TVPLayerNameLooksCafeStellaIndexedButton(const ttstr &name) {
     return TVPLayerNameLooksNumberedPrefix(name, "item") ||
-        TVPLayerNameLooksNumberedPrefix(name, "mitem");
+        TVPLayerNameLooksNumberedPrefix(name, "mitem") ||
+        TVPLayerNameLooksNumberedPrefix(name, "sitem");
 }
 
 static bool TVPGetNumberedItemIndex(tTJSNI_BaseLayer *layer, tjs_int &index) {
