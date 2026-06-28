@@ -391,4 +391,4 @@ Godot Native 或 GPU Bridge 达到性能目标。Debug CPU 只作为诊断 fallb
 
 ## 许可证
 
-AetherKiri 以 GPL-3.0-or-later 分发。完整许可证文本见 `LICENSE`。
+AetherKiri 以 GPL-3.0-or-later 分发。完整许可证文本见 `LICENSE`，第三方授权声明保留在 `THIRD_PARTY_LICENSES.md`。

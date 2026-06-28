@@ -406,4 +406,4 @@ CPU is only a diagnostic fallback.
 ## License
 
 AetherKiri is distributed under GPL-3.0-or-later. See `LICENSE` for the full
-license text.
+license text. Third-party notices are preserved in `THIRD_PARTY_LICENSES.md`.
