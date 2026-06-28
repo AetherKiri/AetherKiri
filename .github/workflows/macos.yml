@@ -136,7 +136,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: AetherKiri-macOS
-          path: out/godot/macos/release/AetherKiri.app
+          path: out/godot/macos/release/
           retention-days: 7
 
       - name: Upload Debug App
@@ -144,7 +144,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: AetherKiri-macOS-Debug
-          path: out/godot/macos/debug/AetherKiri.app
+          path: out/godot/macos/debug/
           retention-days: 7
 
       - name: Save vcpkg cache
