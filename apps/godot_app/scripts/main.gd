@@ -1528,6 +1528,11 @@ func _load_ui_icon(icon_path: String):
     if icon_path.is_empty():
         return null
     if not ui_icon_cache.has(icon_path):
+        var imported := ResourceLoader.load(icon_path, "Texture2D")
+        if imported is Texture2D:
+            ui_icon_cache[icon_path] = imported
+            return imported
+
         var file := FileAccess.open(icon_path, FileAccess.READ)
         if file == null:
             push_warning("UI icon missing: %s" % icon_path)
