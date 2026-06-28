@@ -3295,6 +3295,13 @@ const char* engine_get_last_error(engine_handle_t handle) {
   return impl->last_error.c_str();
 }
 
+ENGINE_API_EXPORT engine_result_t engine_set_java_vm(void* vm) {
+#ifdef __ANDROID__
+  krkr::JniHelper::setJavaVM((JavaVM*)vm);
+#endif
+  return ENGINE_RESULT_OK;
+}
+
 }  // extern "C"
 
 #else
@@ -4022,9 +4029,6 @@ const char* engine_get_last_error(engine_handle_t handle) {
 }
 
 ENGINE_API_EXPORT engine_result_t engine_set_java_vm(void* vm) {
-#ifdef __ANDROID__
-  krkr::JniHelper::setJavaVM((JavaVM*)vm);
-#endif
   return ENGINE_RESULT_OK;
 }
 
