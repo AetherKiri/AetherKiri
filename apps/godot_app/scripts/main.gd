@@ -13,6 +13,560 @@ const RUNTIME_FONT_DIR := "user://runtime_fonts"
 const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
+const UI_ICON_DIR := "res://assets/ui/icons/"
+const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
+const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
+const ICON_REFRESH := UI_ICON_DIR + "arrows-counter-clockwise-fill.svg"
+const ICON_ADD := UI_ICON_DIR + "plus-circle.svg"
+const ICON_HELP := UI_ICON_DIR + "help.svg"
+const ICON_LIBRARY := UI_ICON_DIR + "library.svg"
+const ICON_GAMEPAD := UI_ICON_DIR + "gamepad-bold.svg"
+const ICON_PLAY := UI_ICON_DIR + "game-controller.svg"
+const ICON_PERFORMANCE := UI_ICON_DIR + "performance-fill.svg"
+const ICON_HOME := UI_ICON_DIR + "round-home.svg"
+const ICON_DELETE := UI_ICON_DIR + "round-delete-forever.svg"
+const ICON_PAGE := UI_ICON_DIR + "page-template.svg"
+const ICON_RENAME := UI_ICON_DIR + "tab-new-24-filled.svg"
+const ICON_PLUGIN := UI_ICON_DIR + "plugin-solid.svg"
+const LANG_SYSTEM := "system"
+const LANG_ZH_HANS := "zh_hans"
+const LANG_ZH_HANT := "zh_hant"
+const LANG_EN := "en"
+const LANG_JA := "ja"
+const LANG_KO := "ko"
+const LANGUAGE_MODES := [LANG_SYSTEM, LANG_ZH_HANS, LANG_ZH_HANT, LANG_EN, LANG_JA, LANG_KO]
+const UI_TEXT := {
+    LANG_ZH_HANS: {
+        "home.subtitle": "KiriKiri2 运行时外壳",
+        "home.status": "Godot Native  /  游戏库",
+        "home.empty_title": "尚未添加任何游戏",
+        "home.refresh": "刷新",
+        "home.import": "导入",
+        "home.import_guide": "导入指南",
+        "home.empty_help_ios": "使用「文件」App 将游戏文件夹复制到：\n我的 iPhone / iPad > AetherKiri > Games\n然后点击「刷新」",
+        "home.empty_help_web": "点击「导入」选择本地游戏目录或 XP3 文件",
+        "home.empty_help_desktop": "点击「导入」选择游戏目录或 XP3 文件",
+        "settings.title": "设置",
+        "settings.save": "保存",
+        "settings.section.interface": "界面",
+        "settings.section.render": "渲染",
+        "settings.section.developer": "开发者",
+        "settings.section.about": "关于",
+        "settings.language": "语言",
+        "settings.language_desc": "默认跟随系统；也可以固定为简体中文、繁体中文、英语、日语或韩语",
+        "language.system": "跟随系统",
+        "language.system_with_value": "跟随系统（%s）",
+        "language.zh_hans": "简体中文",
+        "language.zh_hant": "繁體中文",
+        "language.en": "English",
+        "language.ja": "日本語",
+        "language.ko": "한국어",
+        "settings.render_backend": "渲染管线",
+        "settings.render_backend_desc": "未运行游戏时立即生效；运行中切换需重启当前游戏",
+        "settings.surface_mode": "画布尺寸",
+        "settings.surface_mode_desc": "Game Native 按游戏基准画布运行；Display Fit 按设备显示尺寸运行",
+        "settings.upscale": "缩放算法",
+        "settings.upscale_desc": "外层拉伸画面时使用；Smooth/Linear 会做平滑采样",
+        "settings.perf": "性能监控",
+        "settings.perf_desc": "显示帧率和图形 API 信息",
+        "settings.fps_limit": "帧率限制",
+        "settings.fps_limit_desc": "开启后使用下方目标帧率；关闭时交给显示刷新率",
+        "settings.landscape": "锁定横屏",
+        "settings.landscape_desc": "游戏运行时强制横屏显示（手机推荐开启）",
+        "settings.target_fps": "目标帧率",
+        "settings.target_fps_desc": "限制 C++ 引擎 tick/render 频率；最低 80 FPS",
+        "settings.plugin_load_mode": "插件加载模式",
+        "settings.plugin_load_mode_desc": "krkrsdl3 只预加载核心兼容插件；aether_all 保留旧全量注册",
+        "settings.plugin_trace": "插件调用追踪",
+        "settings.plugin_trace_desc": "将所有插件原生调用记录到 plugin_trace.log 用于调试",
+        "settings.mock": "Mock 绕过",
+        "settings.mock_desc": "为缺失插件返回 mock 对象以抑制错误。关闭可暴露真实错误用于调试。",
+        "settings.console_log": "控制台日志文件",
+        "settings.console_log_desc": "将引擎控制台日志写入 krkr.console.log 文件",
+        "settings.trace_log": "追踪日志",
+        "settings.trace_log_desc": "启用 spdlog trace 级别详细日志，输出最大调试信息",
+        "settings.export_tjs": "导出 TJS 脚本",
+        "settings.export_tjs_desc": "游戏加载时自动从 XP3 中导出反汇编的 TJS 字节码脚本",
+        "settings.log_alerts": "日志级别弹窗",
+        "settings.log_alerts_desc": "将 warning/error/fatal 等日志行额外显示为系统提示；默认关闭",
+        "settings.error_dialog_logs": "错误弹窗附带日志",
+        "settings.error_dialog_logs_desc": "真正异常弹窗中追加最近 20 行引擎日志；默认关闭",
+        "settings.version": "版本",
+        "settings.author": "作者",
+        "settings.email": "邮箱",
+        "detail.eyebrow": "游戏详情",
+        "detail.runtime_profile": "运行配置 / %s",
+        "detail.last_played": "上次游玩：%s",
+        "detail.played": "已玩 %s",
+        "detail.launch": "启动游戏",
+        "detail.set_cover": "设置封面",
+        "detail.rename": "重命名",
+        "detail.remove": "移除游戏",
+        "game.today": "今天",
+        "game.days_ago": "%d 天前",
+        "game.played_duration": "已玩 %s",
+        "game.never_played": "尚未游玩",
+        "game.local": "本地游戏",
+        "game.type_directory": "目录",
+        "game.type_archive": "归档",
+        "dialog.import_title": "导入游戏",
+        "dialog.import_guide_body": "请使用「文件」App 将游戏文件夹复制到本应用的目录：\n\n1. 打开 iPhone / iPad 上的「文件」App\n2. 前往：我的 iPhone / iPad > AetherKiri > Games\n3. 将游戏文件夹复制到 Games 目录\n4. 返回本应用，点击「刷新」检测新游戏\n\n游戏目录：Games/",
+        "dialog.ok": "知道了",
+        "dialog.scrape_title": "刮削元数据",
+        "dialog.scrape_body": "已添加「%s」。是否现在进入详情页设置封面、名称和元数据？",
+        "dialog.later": "稍后",
+        "dialog.open_detail": "打开详情",
+        "dialog.choose_cover": "选择封面图片",
+        "dialog.rename": "重命名",
+        "dialog.remove_body": "从列表移除「%s」？不会删除磁盘上的游戏文件。",
+        "dialog.remove": "移除",
+        "dialog.select_game_dir": "选择游戏目录",
+        "dialog.select_local_game_dir": "选择本地游戏目录",
+        "dialog.select_xp3": "选择 XP3 文件",
+        "dialog.cancel": "取消",
+        "dialog.dev_mount": "开发挂载  %s",
+        "message.web_manifest_failed": "无法读取 Web 游戏挂载清单",
+        "message.web_mount_failed": "Web 本地挂载失败：%s",
+        "message.unknown_error": "未知错误",
+        "message.browser_picker_unsupported": "当前浏览器不支持本地文件选择",
+        "message.browser_no_ticket": "浏览器没有返回导入任务",
+        "message.web_import_failed": "本地游戏导入失败：%s",
+        "message.web_game_invalid": "浏览器返回的游戏信息无效",
+        "message.web_import_timeout": "本地游戏导入超时",
+        "message.web_picker_unsupported_long": "当前浏览器不支持直接选择本地游戏文件。请使用支持 File System Access 或目录上传的浏览器。",
+        "message.path_missing": "游戏路径不存在",
+        "message.game_exists": "游戏已存在：%s",
+        "alert.error_title": "AetherKiri 错误",
+        "alert.warning_title": "AetherKiri 警告",
+        "alert.runtime_class_missing": "运行时扩展加载失败：AetherKiriPlayer 不可用",
+        "alert.runtime_create_failed": "运行时扩展加载失败：无法创建 AetherKiriPlayer",
+        "loading.title": "正在启动游戏..."
+    },
+    LANG_ZH_HANT: {
+        "home.subtitle": "KiriKiri2 執行時外殼",
+        "home.status": "Godot Native  /  遊戲庫",
+        "home.empty_title": "尚未加入任何遊戲",
+        "home.refresh": "重新整理",
+        "home.import": "匯入",
+        "home.import_guide": "匯入指南",
+        "home.empty_help_ios": "使用「檔案」App 將遊戲資料夾複製到：\n我的 iPhone / iPad > AetherKiri > Games\n然後點選「重新整理」",
+        "home.empty_help_web": "點選「匯入」選擇本機遊戲目錄或 XP3 檔案",
+        "home.empty_help_desktop": "點選「匯入」選擇遊戲目錄或 XP3 檔案",
+        "settings.title": "設定",
+        "settings.save": "儲存",
+        "settings.section.interface": "介面",
+        "settings.section.render": "渲染",
+        "settings.section.developer": "開發者",
+        "settings.section.about": "關於",
+        "settings.language": "語言",
+        "settings.language_desc": "預設跟隨系統；也可以固定為簡體中文、繁體中文、英語、日語或韓語",
+        "language.system": "跟隨系統",
+        "language.system_with_value": "跟隨系統（%s）",
+        "language.zh_hans": "简体中文",
+        "language.zh_hant": "繁體中文",
+        "language.en": "English",
+        "language.ja": "日本語",
+        "language.ko": "한국어",
+        "settings.render_backend": "渲染管線",
+        "settings.render_backend_desc": "未執行遊戲時立即生效；執行中切換需重新啟動目前遊戲",
+        "settings.surface_mode": "畫布尺寸",
+        "settings.surface_mode_desc": "Game Native 依遊戲基準畫布執行；Display Fit 依裝置顯示尺寸執行",
+        "settings.upscale": "縮放演算法",
+        "settings.upscale_desc": "外層拉伸畫面時使用；Smooth/Linear 會進行平滑取樣",
+        "settings.perf": "效能監控",
+        "settings.perf_desc": "顯示幀率和圖形 API 資訊",
+        "settings.fps_limit": "幀率限制",
+        "settings.fps_limit_desc": "開啟後使用下方目標幀率；關閉時交給顯示刷新率",
+        "settings.landscape": "鎖定橫向",
+        "settings.landscape_desc": "遊戲執行時強制橫向顯示（手機建議開啟）",
+        "settings.target_fps": "目標幀率",
+        "settings.target_fps_desc": "限制 C++ 引擎 tick/render 頻率；最低 80 FPS",
+        "settings.plugin_load_mode": "外掛載入模式",
+        "settings.plugin_load_mode_desc": "krkrsdl3 只預載核心相容外掛；aether_all 保留舊版全量註冊",
+        "settings.plugin_trace": "外掛呼叫追蹤",
+        "settings.plugin_trace_desc": "將所有外掛原生呼叫記錄到 plugin_trace.log 以便除錯",
+        "settings.mock": "Mock 繞過",
+        "settings.mock_desc": "為缺失外掛返回 mock 物件以抑制錯誤。關閉可暴露真實錯誤用於除錯。",
+        "settings.console_log": "主控台日誌檔",
+        "settings.console_log_desc": "將引擎主控台日誌寫入 krkr.console.log 檔案",
+        "settings.trace_log": "追蹤日誌",
+        "settings.trace_log_desc": "啟用 spdlog trace 級別詳細日誌，輸出最大除錯資訊",
+        "settings.export_tjs": "匯出 TJS 腳本",
+        "settings.export_tjs_desc": "遊戲載入時自動從 XP3 中匯出反組譯的 TJS 位元組碼腳本",
+        "settings.log_alerts": "日誌級別彈窗",
+        "settings.log_alerts_desc": "將 warning/error/fatal 等日誌行額外顯示為系統提示；預設關閉",
+        "settings.error_dialog_logs": "錯誤彈窗附帶日誌",
+        "settings.error_dialog_logs_desc": "真正異常彈窗中追加最近 20 行引擎日誌；預設關閉",
+        "settings.version": "版本",
+        "settings.author": "作者",
+        "settings.email": "信箱",
+        "detail.eyebrow": "遊戲詳情",
+        "detail.runtime_profile": "執行設定 / %s",
+        "detail.last_played": "上次遊玩：%s",
+        "detail.played": "已玩 %s",
+        "detail.launch": "啟動遊戲",
+        "detail.set_cover": "設定封面",
+        "detail.rename": "重新命名",
+        "detail.remove": "移除遊戲",
+        "game.today": "今天",
+        "game.days_ago": "%d 天前",
+        "game.played_duration": "已玩 %s",
+        "game.never_played": "尚未遊玩",
+        "game.local": "本機遊戲",
+        "game.type_directory": "目錄",
+        "game.type_archive": "封存",
+        "dialog.import_title": "匯入遊戲",
+        "dialog.import_guide_body": "請使用「檔案」App 將遊戲資料夾複製到本 App 的目錄：\n\n1. 開啟 iPhone / iPad 上的「檔案」App\n2. 前往：我的 iPhone / iPad > AetherKiri > Games\n3. 將遊戲資料夾複製到 Games 目錄\n4. 返回本 App，點選「重新整理」偵測新遊戲\n\n遊戲目錄：Games/",
+        "dialog.ok": "知道了",
+        "dialog.scrape_title": "擷取元資料",
+        "dialog.scrape_body": "已加入「%s」。是否現在進入詳情頁設定封面、名稱和元資料？",
+        "dialog.later": "稍後",
+        "dialog.open_detail": "開啟詳情",
+        "dialog.choose_cover": "選擇封面圖片",
+        "dialog.rename": "重新命名",
+        "dialog.remove_body": "要從列表移除「%s」嗎？不會刪除磁碟上的遊戲檔案。",
+        "dialog.remove": "移除",
+        "dialog.select_game_dir": "選擇遊戲目錄",
+        "dialog.select_local_game_dir": "選擇本機遊戲目錄",
+        "dialog.select_xp3": "選擇 XP3 檔案",
+        "dialog.cancel": "取消",
+        "dialog.dev_mount": "開發掛載  %s",
+        "message.web_manifest_failed": "無法讀取 Web 遊戲掛載清單",
+        "message.web_mount_failed": "Web 本機掛載失敗：%s",
+        "message.unknown_error": "未知錯誤",
+        "message.browser_picker_unsupported": "目前瀏覽器不支援本機檔案選擇",
+        "message.browser_no_ticket": "瀏覽器沒有返回匯入任務",
+        "message.web_import_failed": "本機遊戲匯入失敗：%s",
+        "message.web_game_invalid": "瀏覽器返回的遊戲資訊無效",
+        "message.web_import_timeout": "本機遊戲匯入逾時",
+        "message.web_picker_unsupported_long": "目前瀏覽器不支援直接選擇本機遊戲檔案。請使用支援 File System Access 或目錄上傳的瀏覽器。",
+        "message.path_missing": "遊戲路徑不存在",
+        "message.game_exists": "遊戲已存在：%s",
+        "alert.error_title": "AetherKiri 錯誤",
+        "alert.warning_title": "AetherKiri 警告",
+        "alert.runtime_class_missing": "執行時擴充載入失敗：AetherKiriPlayer 不可用",
+        "alert.runtime_create_failed": "執行時擴充載入失敗：無法建立 AetherKiriPlayer",
+        "loading.title": "正在啟動遊戲..."
+    },
+    LANG_EN: {
+        "home.subtitle": "KiriKiri2 runtime shell",
+        "home.status": "Godot Native  /  Library",
+        "home.empty_title": "No games added yet",
+        "home.refresh": "Refresh",
+        "home.import": "Import",
+        "home.import_guide": "Import Guide",
+        "home.empty_help_ios": "Use the Files app to copy your game folder to:\nOn My iPhone / iPad > AetherKiri > Games\nThen tap Refresh",
+        "home.empty_help_web": "Tap Import to choose a local game folder or XP3 file",
+        "home.empty_help_desktop": "Tap Import to choose a game folder or XP3 file",
+        "settings.title": "Settings",
+        "settings.save": "Save",
+        "settings.section.interface": "Interface",
+        "settings.section.render": "Rendering",
+        "settings.section.developer": "Developer",
+        "settings.section.about": "About",
+        "settings.language": "Language",
+        "settings.language_desc": "Defaults to the system language; you can pin Simplified Chinese, Traditional Chinese, English, Japanese, or Korean",
+        "language.system": "Follow System",
+        "language.system_with_value": "Follow System (%s)",
+        "language.zh_hans": "简体中文",
+        "language.zh_hant": "繁體中文",
+        "language.en": "English",
+        "language.ja": "日本語",
+        "language.ko": "한국어",
+        "settings.render_backend": "Render Pipeline",
+        "settings.render_backend_desc": "Applies immediately while no game is running; switching during play requires restarting the current game",
+        "settings.surface_mode": "Canvas Size",
+        "settings.surface_mode_desc": "Game Native uses the game's base canvas; Display Fit uses the device display size",
+        "settings.upscale": "Scaling",
+        "settings.upscale_desc": "Used when stretching the outer frame; Smooth/Linear apply filtered sampling",
+        "settings.perf": "Performance Monitor",
+        "settings.perf_desc": "Show FPS and graphics API information",
+        "settings.fps_limit": "FPS Limit",
+        "settings.fps_limit_desc": "When enabled, use the target FPS below; otherwise follow the display refresh rate",
+        "settings.landscape": "Lock Landscape",
+        "settings.landscape_desc": "Force landscape while a game is running (recommended on phones)",
+        "settings.target_fps": "Target FPS",
+        "settings.target_fps_desc": "Limit the C++ engine tick/render rate; minimum 80 FPS",
+        "settings.plugin_load_mode": "Plugin Load Mode",
+        "settings.plugin_load_mode_desc": "krkrsdl3 only preloads core compatibility plugins; aether_all keeps the legacy full registration path",
+        "settings.plugin_trace": "Plugin Call Trace",
+        "settings.plugin_trace_desc": "Write all native plugin calls to plugin_trace.log for debugging",
+        "settings.mock": "Mock Bypass",
+        "settings.mock_desc": "Return mock objects for missing plugins to suppress errors. Disable to expose real errors for debugging.",
+        "settings.console_log": "Console Log File",
+        "settings.console_log_desc": "Write engine console output to krkr.console.log",
+        "settings.trace_log": "Trace Log",
+        "settings.trace_log_desc": "Enable spdlog trace-level logs for maximum diagnostic output",
+        "settings.export_tjs": "Export TJS Scripts",
+        "settings.export_tjs_desc": "Automatically export disassembled TJS bytecode scripts from XP3 files while loading games",
+        "settings.log_alerts": "Log Alerts",
+        "settings.log_alerts_desc": "Show warning/error/fatal log lines as system alerts; disabled by default",
+        "settings.error_dialog_logs": "Attach Logs to Errors",
+        "settings.error_dialog_logs_desc": "Append the latest 20 engine log lines to real error dialogs; disabled by default",
+        "settings.version": "Version",
+        "settings.author": "Author",
+        "settings.email": "Email",
+        "detail.eyebrow": "Library Detail",
+        "detail.runtime_profile": "Runtime profile / %s",
+        "detail.last_played": "Last played: %s",
+        "detail.played": "Played %s",
+        "detail.launch": "Launch Game",
+        "detail.set_cover": "Set Cover",
+        "detail.rename": "Rename",
+        "detail.remove": "Remove Game",
+        "game.today": "Today",
+        "game.days_ago": "%d days ago",
+        "game.played_duration": "Played %s",
+        "game.never_played": "Not played yet",
+        "game.local": "Local Game",
+        "game.type_directory": "Directory",
+        "game.type_archive": "Archive",
+        "dialog.import_title": "Import Game",
+        "dialog.import_guide_body": "Use the Files app to copy your game folder into this app's directory:\n\n1. Open the Files app on your iPhone / iPad\n2. Go to: On My iPhone / iPad > AetherKiri > Games\n3. Copy the game folder into Games\n4. Return to this app and tap Refresh to detect new games\n\nGame directory: Games/",
+        "dialog.ok": "Got it",
+        "dialog.scrape_title": "Scrape Metadata",
+        "dialog.scrape_body": "Added \"%s\". Open the detail page now to set cover art, name, and metadata?",
+        "dialog.later": "Later",
+        "dialog.open_detail": "Open Detail",
+        "dialog.choose_cover": "Choose Cover Image",
+        "dialog.rename": "Rename",
+        "dialog.remove_body": "Remove \"%s\" from the list? This will not delete game files from disk.",
+        "dialog.remove": "Remove",
+        "dialog.select_game_dir": "Choose Game Folder",
+        "dialog.select_local_game_dir": "Choose Local Game Folder",
+        "dialog.select_xp3": "Choose XP3 File",
+        "dialog.cancel": "Cancel",
+        "dialog.dev_mount": "Dev Mount  %s",
+        "message.web_manifest_failed": "Could not read the Web game mount manifest",
+        "message.web_mount_failed": "Web local mount failed: %s",
+        "message.unknown_error": "Unknown error",
+        "message.browser_picker_unsupported": "This browser does not support local file picking",
+        "message.browser_no_ticket": "The browser did not return an import task",
+        "message.web_import_failed": "Local game import failed: %s",
+        "message.web_game_invalid": "The browser returned invalid game information",
+        "message.web_import_timeout": "Local game import timed out",
+        "message.web_picker_unsupported_long": "This browser cannot directly choose local game files. Use a browser that supports File System Access or directory upload.",
+        "message.path_missing": "Game path does not exist",
+        "message.game_exists": "Game already exists: %s",
+        "alert.error_title": "AetherKiri Error",
+        "alert.warning_title": "AetherKiri Warning",
+        "alert.runtime_class_missing": "Runtime extension failed to load: AetherKiriPlayer is unavailable",
+        "alert.runtime_create_failed": "Runtime extension failed to load: could not create AetherKiriPlayer",
+        "loading.title": "Launching game..."
+    },
+    LANG_JA: {
+        "home.subtitle": "KiriKiri2 ランタイムシェル",
+        "home.status": "Godot Native  /  ライブラリ",
+        "home.empty_title": "ゲームはまだ追加されていません",
+        "home.refresh": "更新",
+        "home.import": "インポート",
+        "home.import_guide": "インポートガイド",
+        "home.empty_help_ios": "「ファイル」App でゲームフォルダーをコピーしてください：\nこの iPhone / iPad 内 > AetherKiri > Games\nその後「更新」をタップします",
+        "home.empty_help_web": "「インポート」をタップしてローカルゲームフォルダーまたは XP3 ファイルを選択",
+        "home.empty_help_desktop": "「インポート」をタップしてゲームフォルダーまたは XP3 ファイルを選択",
+        "settings.title": "設定",
+        "settings.save": "保存",
+        "settings.section.interface": "インターフェイス",
+        "settings.section.render": "レンダリング",
+        "settings.section.developer": "開発者",
+        "settings.section.about": "情報",
+        "settings.language": "言語",
+        "settings.language_desc": "既定ではシステムに従います。簡体字中国語、繁体字中国語、英語、日本語、韓国語に固定できます",
+        "language.system": "システムに従う",
+        "language.system_with_value": "システムに従う（%s）",
+        "language.zh_hans": "简体中文",
+        "language.zh_hant": "繁體中文",
+        "language.en": "English",
+        "language.ja": "日本語",
+        "language.ko": "한국어",
+        "settings.render_backend": "レンダリングパイプライン",
+        "settings.render_backend_desc": "ゲーム未実行時は即時反映。実行中の切り替えは現在のゲームの再起動が必要です",
+        "settings.surface_mode": "キャンバスサイズ",
+        "settings.surface_mode_desc": "Game Native はゲーム基準のキャンバス、Display Fit はデバイス表示サイズで実行します",
+        "settings.upscale": "スケーリング",
+        "settings.upscale_desc": "外側の画面を引き伸ばすときに使用します。Smooth/Linear は平滑化サンプリングを行います",
+        "settings.perf": "パフォーマンス監視",
+        "settings.perf_desc": "FPS とグラフィックス API 情報を表示します",
+        "settings.fps_limit": "FPS 制限",
+        "settings.fps_limit_desc": "有効時は下の目標 FPS を使用します。無効時はディスプレイのリフレッシュレートに従います",
+        "settings.landscape": "横向き固定",
+        "settings.landscape_desc": "ゲーム実行中に横向き表示を強制します（スマートフォン推奨）",
+        "settings.target_fps": "目標 FPS",
+        "settings.target_fps_desc": "C++ エンジンの tick/render 頻度を制限します。最低 80 FPS",
+        "settings.plugin_load_mode": "プラグイン読み込みモード",
+        "settings.plugin_load_mode_desc": "krkrsdl3 は互換性用コアプラグインのみプリロードします。aether_all は従来の全登録を維持します",
+        "settings.plugin_trace": "プラグイン呼び出し追跡",
+        "settings.plugin_trace_desc": "すべてのネイティブプラグイン呼び出しを plugin_trace.log に記録します",
+        "settings.mock": "Mock バイパス",
+        "settings.mock_desc": "不足プラグインに mock オブジェクトを返してエラーを抑制します。無効にすると実エラーを確認できます。",
+        "settings.console_log": "コンソールログファイル",
+        "settings.console_log_desc": "エンジンのコンソールログを krkr.console.log に書き込みます",
+        "settings.trace_log": "トレースログ",
+        "settings.trace_log_desc": "spdlog の trace レベル詳細ログを有効にします",
+        "settings.export_tjs": "TJS スクリプトを書き出す",
+        "settings.export_tjs_desc": "ゲーム読み込み時に XP3 から逆アセンブル済み TJS バイトコードを自動で書き出します",
+        "settings.log_alerts": "ログアラート",
+        "settings.log_alerts_desc": "warning/error/fatal などのログ行をシステム通知として表示します。既定はオフ",
+        "settings.error_dialog_logs": "エラーにログを添付",
+        "settings.error_dialog_logs_desc": "実エラーダイアログに直近 20 行のエンジンログを追加します。既定はオフ",
+        "settings.version": "バージョン",
+        "settings.author": "作者",
+        "settings.email": "メール",
+        "detail.eyebrow": "ゲーム詳細",
+        "detail.runtime_profile": "ランタイムプロファイル / %s",
+        "detail.last_played": "前回プレイ：%s",
+        "detail.played": "プレイ時間 %s",
+        "detail.launch": "ゲームを起動",
+        "detail.set_cover": "カバーを設定",
+        "detail.rename": "名前を変更",
+        "detail.remove": "ゲームを削除",
+        "game.today": "今日",
+        "game.days_ago": "%d 日前",
+        "game.played_duration": "プレイ時間 %s",
+        "game.never_played": "未プレイ",
+        "game.local": "ローカルゲーム",
+        "game.type_directory": "フォルダー",
+        "game.type_archive": "アーカイブ",
+        "dialog.import_title": "ゲームをインポート",
+        "dialog.import_guide_body": "「ファイル」App でゲームフォルダーをこのアプリのディレクトリにコピーしてください：\n\n1. iPhone / iPad で「ファイル」App を開く\n2. 移動先：この iPhone / iPad 内 > AetherKiri > Games\n3. ゲームフォルダーを Games にコピー\n4. アプリに戻り、「更新」をタップして新しいゲームを検出\n\nゲームディレクトリ：Games/",
+        "dialog.ok": "了解",
+        "dialog.scrape_title": "メタデータ取得",
+        "dialog.scrape_body": "「%s」を追加しました。詳細ページでカバー、名前、メタデータを設定しますか？",
+        "dialog.later": "あとで",
+        "dialog.open_detail": "詳細を開く",
+        "dialog.choose_cover": "カバー画像を選択",
+        "dialog.rename": "名前を変更",
+        "dialog.remove_body": "「%s」をリストから削除しますか？ディスク上のゲームファイルは削除されません。",
+        "dialog.remove": "削除",
+        "dialog.select_game_dir": "ゲームフォルダーを選択",
+        "dialog.select_local_game_dir": "ローカルゲームフォルダーを選択",
+        "dialog.select_xp3": "XP3 ファイルを選択",
+        "dialog.cancel": "キャンセル",
+        "dialog.dev_mount": "開発マウント  %s",
+        "message.web_manifest_failed": "Web ゲームのマウントマニフェストを読み取れません",
+        "message.web_mount_failed": "Web ローカルマウントに失敗しました：%s",
+        "message.unknown_error": "不明なエラー",
+        "message.browser_picker_unsupported": "このブラウザーはローカルファイル選択をサポートしていません",
+        "message.browser_no_ticket": "ブラウザーからインポートタスクが返されませんでした",
+        "message.web_import_failed": "ローカルゲームのインポートに失敗しました：%s",
+        "message.web_game_invalid": "ブラウザーから無効なゲーム情報が返されました",
+        "message.web_import_timeout": "ローカルゲームのインポートがタイムアウトしました",
+        "message.web_picker_unsupported_long": "このブラウザーはローカルゲームファイルの直接選択に対応していません。File System Access またはディレクトリアップロード対応ブラウザーを使用してください。",
+        "message.path_missing": "ゲームパスが存在しません",
+        "message.game_exists": "ゲームは既に存在します：%s",
+        "alert.error_title": "AetherKiri エラー",
+        "alert.warning_title": "AetherKiri 警告",
+        "alert.runtime_class_missing": "ランタイム拡張の読み込みに失敗しました：AetherKiriPlayer は利用できません",
+        "alert.runtime_create_failed": "ランタイム拡張の読み込みに失敗しました：AetherKiriPlayer を作成できません",
+        "loading.title": "ゲームを起動中..."
+    },
+    LANG_KO: {
+        "home.subtitle": "KiriKiri2 런타임 셸",
+        "home.status": "Godot Native  /  라이브러리",
+        "home.empty_title": "아직 추가된 게임이 없습니다",
+        "home.refresh": "새로고침",
+        "home.import": "가져오기",
+        "home.import_guide": "가져오기 가이드",
+        "home.empty_help_ios": "파일 앱으로 게임 폴더를 다음 위치에 복사하세요:\n나의 iPhone / iPad > AetherKiri > Games\n그런 다음 새로고침을 누르세요",
+        "home.empty_help_web": "가져오기를 눌러 로컬 게임 폴더 또는 XP3 파일을 선택하세요",
+        "home.empty_help_desktop": "가져오기를 눌러 게임 폴더 또는 XP3 파일을 선택하세요",
+        "settings.title": "설정",
+        "settings.save": "저장",
+        "settings.section.interface": "인터페이스",
+        "settings.section.render": "렌더링",
+        "settings.section.developer": "개발자",
+        "settings.section.about": "정보",
+        "settings.language": "언어",
+        "settings.language_desc": "기본값은 시스템 언어입니다. 중국어 간체, 중국어 번체, 영어, 일본어, 한국어로 고정할 수 있습니다",
+        "language.system": "시스템 따르기",
+        "language.system_with_value": "시스템 따르기(%s)",
+        "language.zh_hans": "简体中文",
+        "language.zh_hant": "繁體中文",
+        "language.en": "English",
+        "language.ja": "日本語",
+        "language.ko": "한국어",
+        "settings.render_backend": "렌더링 파이프라인",
+        "settings.render_backend_desc": "게임이 실행 중이 아닐 때 즉시 적용됩니다. 실행 중 변경하려면 현재 게임을 다시 시작해야 합니다",
+        "settings.surface_mode": "캔버스 크기",
+        "settings.surface_mode_desc": "Game Native는 게임 기준 캔버스를 사용하고 Display Fit은 장치 표시 크기를 사용합니다",
+        "settings.upscale": "스케일링",
+        "settings.upscale_desc": "외부 화면을 늘릴 때 사용합니다. Smooth/Linear는 부드러운 샘플링을 적용합니다",
+        "settings.perf": "성능 모니터",
+        "settings.perf_desc": "FPS와 그래픽 API 정보를 표시합니다",
+        "settings.fps_limit": "FPS 제한",
+        "settings.fps_limit_desc": "켜면 아래 목표 FPS를 사용하고, 끄면 디스플레이 주사율을 따릅니다",
+        "settings.landscape": "가로 방향 고정",
+        "settings.landscape_desc": "게임 실행 중 가로 표시를 강제합니다(휴대폰 권장)",
+        "settings.target_fps": "목표 FPS",
+        "settings.target_fps_desc": "C++ 엔진 tick/render 빈도를 제한합니다. 최소 80 FPS",
+        "settings.plugin_load_mode": "플러그인 로드 모드",
+        "settings.plugin_load_mode_desc": "krkrsdl3는 핵심 호환 플러그인만 미리 로드합니다. aether_all은 기존 전체 등록 방식을 유지합니다",
+        "settings.plugin_trace": "플러그인 호출 추적",
+        "settings.plugin_trace_desc": "모든 네이티브 플러그인 호출을 plugin_trace.log에 기록합니다",
+        "settings.mock": "Mock 우회",
+        "settings.mock_desc": "누락된 플러그인에 mock 객체를 반환해 오류를 억제합니다. 끄면 실제 오류를 확인할 수 있습니다.",
+        "settings.console_log": "콘솔 로그 파일",
+        "settings.console_log_desc": "엔진 콘솔 로그를 krkr.console.log 파일에 씁니다",
+        "settings.trace_log": "추적 로그",
+        "settings.trace_log_desc": "spdlog trace 레벨 상세 로그를 켜서 최대 디버그 정보를 출력합니다",
+        "settings.export_tjs": "TJS 스크립트 내보내기",
+        "settings.export_tjs_desc": "게임 로드 시 XP3에서 디스어셈블된 TJS 바이트코드 스크립트를 자동으로 내보냅니다",
+        "settings.log_alerts": "로그 알림",
+        "settings.log_alerts_desc": "warning/error/fatal 로그 줄을 시스템 알림으로 표시합니다. 기본값은 꺼짐입니다",
+        "settings.error_dialog_logs": "오류에 로그 첨부",
+        "settings.error_dialog_logs_desc": "실제 오류 대화상자에 최근 엔진 로그 20줄을 추가합니다. 기본값은 꺼짐입니다",
+        "settings.version": "버전",
+        "settings.author": "작성자",
+        "settings.email": "이메일",
+        "detail.eyebrow": "게임 상세",
+        "detail.runtime_profile": "런타임 프로필 / %s",
+        "detail.last_played": "마지막 플레이: %s",
+        "detail.played": "플레이 %s",
+        "detail.launch": "게임 실행",
+        "detail.set_cover": "표지 설정",
+        "detail.rename": "이름 변경",
+        "detail.remove": "게임 제거",
+        "game.today": "오늘",
+        "game.days_ago": "%d일 전",
+        "game.played_duration": "플레이 %s",
+        "game.never_played": "아직 플레이하지 않음",
+        "game.local": "로컬 게임",
+        "game.type_directory": "폴더",
+        "game.type_archive": "아카이브",
+        "dialog.import_title": "게임 가져오기",
+        "dialog.import_guide_body": "파일 앱으로 게임 폴더를 이 앱의 디렉터리에 복사하세요:\n\n1. iPhone / iPad에서 파일 앱을 엽니다\n2. 이동: 나의 iPhone / iPad > AetherKiri > Games\n3. 게임 폴더를 Games에 복사합니다\n4. 앱으로 돌아와 새로고침을 눌러 새 게임을 감지합니다\n\n게임 디렉터리: Games/",
+        "dialog.ok": "확인",
+        "dialog.scrape_title": "메타데이터 가져오기",
+        "dialog.scrape_body": "\"%s\"을(를) 추가했습니다. 지금 상세 페이지에서 표지, 이름, 메타데이터를 설정할까요?",
+        "dialog.later": "나중에",
+        "dialog.open_detail": "상세 열기",
+        "dialog.choose_cover": "표지 이미지 선택",
+        "dialog.rename": "이름 변경",
+        "dialog.remove_body": "\"%s\"을(를) 목록에서 제거할까요? 디스크의 게임 파일은 삭제되지 않습니다.",
+        "dialog.remove": "제거",
+        "dialog.select_game_dir": "게임 폴더 선택",
+        "dialog.select_local_game_dir": "로컬 게임 폴더 선택",
+        "dialog.select_xp3": "XP3 파일 선택",
+        "dialog.cancel": "취소",
+        "dialog.dev_mount": "개발 마운트  %s",
+        "message.web_manifest_failed": "Web 게임 마운트 매니페스트를 읽을 수 없습니다",
+        "message.web_mount_failed": "Web 로컬 마운트 실패: %s",
+        "message.unknown_error": "알 수 없는 오류",
+        "message.browser_picker_unsupported": "이 브라우저는 로컬 파일 선택을 지원하지 않습니다",
+        "message.browser_no_ticket": "브라우저가 가져오기 작업을 반환하지 않았습니다",
+        "message.web_import_failed": "로컬 게임 가져오기 실패: %s",
+        "message.web_game_invalid": "브라우저가 잘못된 게임 정보를 반환했습니다",
+        "message.web_import_timeout": "로컬 게임 가져오기 시간 초과",
+        "message.web_picker_unsupported_long": "이 브라우저는 로컬 게임 파일을 직접 선택할 수 없습니다. File System Access 또는 디렉터리 업로드를 지원하는 브라우저를 사용하세요.",
+        "message.path_missing": "게임 경로가 존재하지 않습니다",
+        "message.game_exists": "게임이 이미 있습니다: %s",
+        "alert.error_title": "AetherKiri 오류",
+        "alert.warning_title": "AetherKiri 경고",
+        "alert.runtime_class_missing": "런타임 확장 로드 실패: AetherKiriPlayer를 사용할 수 없습니다",
+        "alert.runtime_create_failed": "런타임 확장 로드 실패: AetherKiriPlayer를 만들 수 없습니다",
+        "loading.title": "게임 실행 중..."
+    }
+}
 
 const ENGINE_RESULT_OK := 0
 const STARTUP_IDLE := 0
@@ -46,6 +600,13 @@ var home_actions: HBoxContainer
 var empty_state: Control
 var save_button: Button
 var bg_rect: ColorRect
+var home_subtitle_label: Label
+var home_status_label: Label
+var empty_title_label: Label
+var empty_help_label: Label
+var home_primary_button: Button
+var home_guide_button: Button
+var loading_title_label: Label
 var selected_game := {}
 var known_games: Array[Dictionary] = []
 var show_perf_monitor := true
@@ -60,6 +621,8 @@ var trace_log := false
 var export_scripts := false
 var log_alerts := false
 var error_dialog_logs := false
+var language_mode := LANG_SYSTEM
+var active_language := LANG_ZH_HANS
 var dirty_settings := false
 var active_game_path := ""
 var active_game_started_msec := 0
@@ -67,6 +630,8 @@ var detail_touch_scroll_active := false
 var rounded_card_shader: Shader
 var opaque_frame_shader: Shader
 var shown_system_alerts := {}
+var ui_icon_cache := {}
+var cover_texture_cache := {}
 
 var player = null
 var runtime_default_font_path := ""
@@ -177,15 +742,69 @@ const BLACK_FRAME_VISIBLE_MIN := 8
 const INITIAL_WINDOW_SIZE := Vector2i(2240, 1260)
 const DEFAULT_UI_DPI_SCALE := 1.35
 const TOUCH_MOUSE_SUPPRESS_MS := 700
-const COLOR_BG := Color(0.944, 0.932, 0.895, 1.0)
+const COLOR_BG := Color(0.095, 0.102, 0.135, 1.0)
 const COLOR_GAME_BG := Color(0, 0, 0, 1)
-const COLOR_CARD := Color(0.985, 0.98, 0.955, 1.0)
-const COLOR_TEXT := Color(0.12, 0.11, 0.10, 1.0)
-const COLOR_MUTED := Color(0.46, 0.45, 0.42, 1.0)
-const COLOR_ACCENT := Color(0.78, 0.35, 0.22, 1.0)
-const COLOR_ACCENT_SOFT := Color(0.90, 0.72, 0.64, 1.0)
-const COLOR_LINE := Color(0.84, 0.82, 0.76, 1.0)
-const HOME_CARD_SIZE := Vector2(260, 350)
+const COLOR_CARD := Color(0.133, 0.139, 0.184, 1.0)
+const COLOR_CARD_ALT := Color(0.176, 0.184, 0.239, 1.0)
+const COLOR_CARD_HOVER := Color(0.214, 0.224, 0.290, 1.0)
+const COLOR_TEXT := Color(0.972, 0.972, 0.949, 1.0)
+const COLOR_MUTED := Color(0.620, 0.650, 0.780, 1.0)
+const COLOR_ACCENT := Color(0.741, 0.576, 0.976, 1.0)
+const COLOR_ACCENT_SOFT := Color(0.545, 0.914, 0.992, 1.0)
+const COLOR_ACCENT_DIM := Color(0.280, 0.235, 0.410, 1.0)
+const COLOR_WARN := Color(1.000, 0.722, 0.424, 1.0)
+const COLOR_DANGER := Color(1.000, 0.333, 0.333, 1.0)
+const COLOR_LINE := Color(1, 1, 1, 0.105)
+const TOP_ICON_BUTTON_SIZE := Vector2(60, 60)
+const TOP_ACTION_BUTTON_SIZE := Vector2(138, 60)
+const HOME_CARD_SIZE := Vector2(272, 368)
+
+func _normalize_language_mode(value: String) -> String:
+    return value if value in LANGUAGE_MODES else LANG_SYSTEM
+
+func _system_language_code() -> String:
+    var locale := OS.get_locale().to_lower().replace("-", "_")
+    if locale.begins_with("zh_tw") or locale.begins_with("zh_hk") or locale.begins_with("zh_mo") or locale.contains("hant"):
+        return LANG_ZH_HANT
+    if locale.begins_with("zh"):
+        return LANG_ZH_HANS
+    if locale.begins_with("ja"):
+        return LANG_JA
+    if locale.begins_with("ko"):
+        return LANG_KO
+    if locale.begins_with("en"):
+        return LANG_EN
+    return LANG_EN
+
+func _effective_language_code() -> String:
+    var mode := _normalize_language_mode(language_mode)
+    return _system_language_code() if mode == LANG_SYSTEM else mode
+
+func _language_native_name(code: String) -> String:
+    if code == LANG_ZH_HANS:
+        return "简体中文"
+    if code == LANG_ZH_HANT:
+        return "繁體中文"
+    if code == LANG_JA:
+        return "日本語"
+    if code == LANG_KO:
+        return "한국어"
+    return "English"
+
+func _t(key: String, args: Array = []) -> String:
+    var lang := active_language if UI_TEXT.has(active_language) else LANG_EN
+    var table: Dictionary = UI_TEXT.get(lang, {})
+    var value := String(table.get(key, UI_TEXT[LANG_ZH_HANS].get(key, key)))
+    return value % args if not args.is_empty() else value
+
+func _language_option_label(mode: String) -> String:
+    if mode == LANG_SYSTEM:
+        return _t("language.system_with_value", [_language_native_name(_system_language_code())])
+    return _language_native_name(mode)
+
+func _apply_language_mode() -> void:
+    language_mode = _normalize_language_mode(language_mode)
+    active_language = _effective_language_code()
 
 func _detect_cli_probe_script() -> String:
     var env_script := _normalize_cli_probe_script(OS.get_environment("AETHERKIRI_CLI_PROBE_SCRIPT"))
@@ -225,6 +844,22 @@ func _apply_ui_font() -> void:
     UI_FONT.set_fallbacks(fallbacks)
     var ui_theme := Theme.new()
     ui_theme.set_default_font(UI_FONT)
+    ui_theme.set_color("font_color", "Label", COLOR_TEXT)
+    ui_theme.set_color("font_color", "Button", COLOR_TEXT)
+    ui_theme.set_color("font_color", "OptionButton", COLOR_TEXT)
+    ui_theme.set_color("font_hover_color", "OptionButton", COLOR_TEXT)
+    ui_theme.set_color("font_pressed_color", "OptionButton", COLOR_TEXT)
+    ui_theme.set_color("font_color", "LineEdit", COLOR_TEXT)
+    ui_theme.set_color("font_color", "TextEdit", COLOR_TEXT)
+    ui_theme.set_color("font_placeholder_color", "LineEdit", COLOR_MUTED)
+    ui_theme.set_stylebox("normal", "OptionButton", _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1))
+    ui_theme.set_stylebox("hover", "OptionButton", _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 1))
+    ui_theme.set_stylebox("pressed", "OptionButton", _panel_style(8, COLOR_ACCENT_DIM, COLOR_ACCENT, 1))
+    ui_theme.set_stylebox("focus", "OptionButton", _focus_outline(8))
+    ui_theme.set_stylebox("normal", "LineEdit", _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1))
+    ui_theme.set_stylebox("focus", "LineEdit", _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 2))
+    ui_theme.set_stylebox("normal", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.18), COLOR_LINE, 1))
+    ui_theme.set_stylebox("focus", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.24), COLOR_ACCENT, 1))
     theme = ui_theme
 
 func _copy_runtime_font(source_path: String, target_path: String) -> bool:
@@ -331,7 +966,10 @@ func _load_shell_settings() -> void:
         var env_surface_mode := _runtime_string("AETHERKIRI_SURFACE_MODE", "")
         if not env_surface_mode.is_empty():
             _select_config_surface_mode(env_surface_mode)
+        _apply_language_mode()
         return
+    language_mode = _normalize_language_mode(String(cfg.get_value("interface", "language", language_mode)))
+    _apply_language_mode()
     selected_backend = _normalize_backend_name(String(cfg.get_value("rendering", "backend", selected_backend)))
     upscale_algorithm = String(cfg.get_value("rendering", "upscale_algorithm", upscale_algorithm))
     if upscale_algorithm == "sharp" or upscale_algorithm == "nearest":
@@ -379,6 +1017,7 @@ func _normalize_backend_name(value: String) -> String:
 
 func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
+    cfg.set_value("interface", "language", language_mode)
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
     cfg.set_value("rendering", "surface_mode", render_surface_mode)
@@ -533,9 +1172,9 @@ func _set_game_background(active: bool) -> void:
 func _layout_home_view(window_size: Vector2) -> void:
     if game_scroll == null or game_list == null:
         return
-    var margin := 32.0
-    var list_top := 164.0
-    var bottom_reserved := 132.0
+    var margin := 40.0
+    var list_top := 188.0
+    var bottom_reserved := 118.0
     var list_width := maxf(260.0, window_size.x - margin * 2.0)
     var list_height := maxf(160.0, window_size.y - list_top - bottom_reserved)
     game_scroll.position = Vector2(margin, list_top)
@@ -552,10 +1191,10 @@ func _layout_home_view(window_size: Vector2) -> void:
         home_actions.anchor_top = 1.0
         home_actions.anchor_right = 1.0
         home_actions.anchor_bottom = 1.0
-        home_actions.offset_left = -390.0
-        home_actions.offset_top = -108.0
-        home_actions.offset_right = -32.0
-        home_actions.offset_bottom = -44.0
+        home_actions.offset_left = -430.0
+        home_actions.offset_top = -96.0
+        home_actions.offset_right = -40.0
+        home_actions.offset_bottom = -36.0
         home_actions.move_to_front()
 
 func _build_home_view() -> void:
@@ -565,15 +1204,34 @@ func _build_home_view() -> void:
 
     var title := Label.new()
     title.text = "AetherKiri"
-    title.position = Vector2(38, 96)
-    title.add_theme_font_size_override("font_size", 28)
+    title.position = Vector2(42, 38)
+    title.add_theme_font_size_override("font_size", 36)
     title.add_theme_color_override("font_color", COLOR_TEXT)
     home_view.add_child(title)
 
-    var settings_button := _icon_button("☰")
+    home_subtitle_label = Label.new()
+    home_subtitle_label.text = _t("home.subtitle")
+    home_subtitle_label.position = Vector2(44, 84)
+    home_subtitle_label.add_theme_font_size_override("font_size", 17)
+    home_subtitle_label.add_theme_color_override("font_color", COLOR_MUTED)
+    home_view.add_child(home_subtitle_label)
+
+    var status_pill := PanelContainer.new()
+    status_pill.position = Vector2(42, 122)
+    status_pill.size = Vector2(284, 42)
+    status_pill.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1))
+    home_view.add_child(status_pill)
+    home_status_label = Label.new()
+    home_status_label.text = _t("home.status")
+    home_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    home_status_label.add_theme_font_size_override("font_size", 15)
+    home_status_label.add_theme_color_override("font_color", COLOR_ACCENT_SOFT)
+    status_pill.add_child(home_status_label)
+
+    var settings_button := _icon_button(ICON_SETTINGS)
     settings_button.anchor_left = 1.0
     settings_button.anchor_right = 1.0
-    settings_button.position = Vector2(-86, 92)
+    settings_button.position = Vector2(-100, 42)
     settings_button.pressed.connect(_show_settings)
     home_view.add_child(settings_button)
 
@@ -601,46 +1259,43 @@ func _build_home_view() -> void:
     empty_state.add_theme_constant_override("separation", 18)
     home_view.add_child(empty_state)
 
-    var empty_icon := Label.new()
-    empty_icon.text = "▧"
-    empty_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    empty_icon.add_theme_font_size_override("font_size", 64)
-    empty_icon.add_theme_color_override("font_color", COLOR_ACCENT_SOFT)
+    var empty_icon := _centered_icon(ICON_LIBRARY, Vector2(64, 64), COLOR_ACCENT)
+    empty_icon.custom_minimum_size = Vector2(0, 72)
     empty_state.add_child(empty_icon)
 
-    var empty_title := Label.new()
-    empty_title.text = "尚未添加任何游戏"
-    empty_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    empty_title.add_theme_font_size_override("font_size", 30)
-    empty_title.add_theme_color_override("font_color", COLOR_TEXT)
-    empty_state.add_child(empty_title)
+    empty_title_label = Label.new()
+    empty_title_label.text = _t("home.empty_title")
+    empty_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    empty_title_label.add_theme_font_size_override("font_size", 28)
+    empty_title_label.add_theme_color_override("font_color", COLOR_TEXT)
+    empty_state.add_child(empty_title_label)
 
-    var empty_help := Label.new()
-    empty_help.text = _empty_help_text()
-    empty_help.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    empty_help.add_theme_font_size_override("font_size", 22)
-    empty_help.add_theme_color_override("font_color", COLOR_MUTED)
-    empty_state.add_child(empty_help)
+    empty_help_label = Label.new()
+    empty_help_label.text = _empty_help_text()
+    empty_help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    empty_help_label.add_theme_font_size_override("font_size", 18)
+    empty_help_label.add_theme_color_override("font_color", COLOR_MUTED)
+    empty_state.add_child(empty_help_label)
 
     home_actions = HBoxContainer.new()
     home_actions.anchor_left = 1.0
     home_actions.anchor_top = 1.0
     home_actions.anchor_right = 1.0
     home_actions.anchor_bottom = 1.0
-    home_actions.position = Vector2(-390, -108)
-    home_actions.size = Vector2(358, 64)
-    home_actions.add_theme_constant_override("separation", 18)
+    home_actions.position = Vector2(-430, -96)
+    home_actions.size = Vector2(390, 60)
+    home_actions.add_theme_constant_override("separation", 12)
     home_view.add_child(home_actions)
 
-    var primary := _pill_button("⟳  刷新" if OS.get_name() == "iOS" else "＋  导入")
-    primary.custom_minimum_size = Vector2(154, 58)
-    primary.pressed.connect(_on_refresh_or_import)
-    home_actions.add_child(primary)
+    home_primary_button = _pill_button(_t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"), ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD)
+    home_primary_button.custom_minimum_size = Vector2(154, 56)
+    home_primary_button.pressed.connect(_on_refresh_or_import)
+    home_actions.add_child(home_primary_button)
 
-    var guide := _pill_button("?  导入指南")
-    guide.custom_minimum_size = Vector2(186, 58)
-    guide.pressed.connect(_show_import_guide)
-    home_actions.add_child(guide)
+    home_guide_button = _pill_button(_t("home.import_guide"), ICON_HELP)
+    home_guide_button.custom_minimum_size = Vector2(198, 56)
+    home_guide_button.pressed.connect(_show_import_guide)
+    home_actions.add_child(home_guide_button)
 
 func _build_settings_view() -> void:
     settings_view = ScrollContainer.new()
@@ -657,9 +1312,9 @@ func _rebuild_settings_view() -> void:
 
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 32)
+    margin.add_theme_constant_override("margin_left", 40)
     margin.add_theme_constant_override("margin_top", 24)
-    margin.add_theme_constant_override("margin_right", 32)
+    margin.add_theme_constant_override("margin_right", 40)
     margin.add_theme_constant_override("margin_bottom", 40)
     settings_view.add_child(margin)
 
@@ -669,62 +1324,65 @@ func _rebuild_settings_view() -> void:
     margin.add_child(page)
 
     var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 120)
+    top.custom_minimum_size = Vector2(0, 96)
+    top.add_theme_constant_override("separation", 18)
     page.add_child(top)
 
-    var back := _icon_button("‹")
-    back.custom_minimum_size = Vector2(78, 78)
+    var back := _icon_button(ICON_HOME)
+    back.custom_minimum_size = TOP_ICON_BUTTON_SIZE
     back.pressed.connect(_show_home)
     top.add_child(back)
 
     var title := Label.new()
-    title.text = "设置"
-    title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    title.text = _t("settings.title")
+    title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
     title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    title.add_theme_font_size_override("font_size", 26)
+    title.add_theme_font_size_override("font_size", 30)
     title.add_theme_color_override("font_color", COLOR_TEXT)
     top.add_child(title)
 
-    save_button = _pill_button("▣  保存")
+    save_button = _pill_button(_t("settings.save"), ICON_SAVE)
     save_button.disabled = not dirty_settings
-    save_button.custom_minimum_size = Vector2(150, 72)
+    save_button.custom_minimum_size = TOP_ACTION_BUTTON_SIZE
+    save_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     save_button.pressed.connect(_save_shell_settings)
     top.add_child(save_button)
 
-    page.add_child(_section_title("▰  渲染"))
+    page.add_child(_section_title(_t("settings.section.interface"), ICON_SETTINGS))
+    var interface_card := _settings_card()
+    page.add_child(interface_card)
+    interface_card.add_child(_settings_block(_t("settings.language"), _t("settings.language_desc"), _language_select()))
+
+    page.add_child(_section_title(_t("settings.section.render"), ICON_PERFORMANCE))
     var render_card := _settings_card()
     page.add_child(render_card)
-    render_card.add_child(_settings_block("渲染管线", "未运行游戏时立即生效；运行中切换需重启当前游戏", _backend_segment()))
-    render_card.add_child(_settings_block("画布尺寸", "Game Native 按游戏基准画布运行；Display Fit 按设备显示尺寸运行", _surface_mode_select()))
-    render_card.add_child(_settings_block("缩放算法", "外层拉伸画面时使用；Smooth/Linear 会做平滑采样", _upscale_select()))
-    render_card.add_child(_settings_toggle_row("性能监控", "显示帧率和图形 API 信息", show_perf_monitor, "perf"))
-    render_card.add_child(_settings_toggle_row("帧率限制", "开启后使用下方目标帧率；关闭时交给显示刷新率", frame_limit_enabled, "fps_limit"))
+    render_card.add_child(_settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment()))
+    render_card.add_child(_settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select()))
+    render_card.add_child(_settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select()))
+    render_card.add_child(_settings_toggle_row(_t("settings.perf"), _t("settings.perf_desc"), show_perf_monitor, "perf"))
+    render_card.add_child(_settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), frame_limit_enabled, "fps_limit"))
     if frame_limit_enabled:
         render_card.add_child(_settings_fps_row())
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        render_card.add_child(_settings_toggle_row("锁定横屏", "游戏运行时强制横屏显示（手机推荐开启）", lock_landscape, "landscape"))
+        render_card.add_child(_settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), lock_landscape, "landscape"))
 
-    page.add_child(_section_title("▱  开发者"))
+    page.add_child(_section_title(_t("settings.section.developer"), ICON_PLUGIN))
     var dev_card := _settings_card()
     page.add_child(dev_card)
-    dev_card.add_child(_settings_block("插件加载模式", "krkrsdl3 只预加载核心兼容插件；aether_all 保留旧全量注册", _plugin_load_mode_select()))
-    dev_card.add_child(_settings_toggle_row("插件调用追踪", "将所有插件原生调用记录到 plugin_trace.log 用于调试", plugin_trace, "plugin_trace"))
-    dev_card.add_child(_settings_toggle_row("Mock 绕过", "为缺失插件返回 mock 对象以抑制错误。关闭可暴露真实错误用于调试。", mock_enabled, "mock"))
-    dev_card.add_child(_settings_toggle_row("控制台日志文件", "将引擎控制台日志写入 krkr.console.log 文件", console_log_file, "console_log"))
-    dev_card.add_child(_settings_toggle_row("追踪日志", "启用 spdlog trace 级别详细日志，输出最大调试信息", trace_log, "trace_log"))
-    dev_card.add_child(_settings_toggle_row("导出 TJS 脚本", "游戏加载时自动从 XP3 中导出反汇编的 TJS 字节码脚本", export_scripts, "export_tjs"))
-    dev_card.add_child(_settings_toggle_row("日志级别弹窗", "将 warning/error/fatal 等日志行额外显示为系统提示；默认关闭", log_alerts, "log_alerts"))
-    dev_card.add_child(_settings_toggle_row("错误弹窗附带日志", "真正异常弹窗中追加最近 20 行引擎日志；默认关闭", error_dialog_logs, "error_dialog_logs"))
+    dev_card.add_child(_settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select()))
+    dev_card.add_child(_settings_toggle_row(_t("settings.plugin_trace"), _t("settings.plugin_trace_desc"), plugin_trace, "plugin_trace"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), mock_enabled, "mock"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), console_log_file, "console_log"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), trace_log, "trace_log"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), export_scripts, "export_tjs"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.log_alerts"), _t("settings.log_alerts_desc"), log_alerts, "log_alerts"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), error_dialog_logs, "error_dialog_logs"))
 
-    page.add_child(_section_title("ⓘ  关于"))
+    page.add_child(_section_title(_t("settings.section.about"), ICON_HELP))
     var about_card := _settings_card()
     page.add_child(about_card)
-    about_card.add_child(_settings_value_row("版本", "0.2.0-beta.1"))
-    about_card.add_child(_settings_value_row("作者", "reAAAq（由 KYoRi 适配）"))
-    about_card.add_child(_settings_value_row("邮箱", "wangguanzhiabcd@126.com"))
-    about_card.add_child(_settings_value_row("GitHub (Original)", "github.com/reAAAq/KrKr2-Next"))
-    about_card.add_child(_settings_value_row("AetherKiri（当前分支项目）", "github.com/KYoiRyi/AetherKiri"))
+    about_card.add_child(_settings_value_row(_t("settings.version"), "0.2.0-beta.1"))
 
 func _build_detail_view() -> void:
     detail_view = Control.new()
@@ -749,7 +1407,7 @@ func _build_loading_panel() -> void:
     loading_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
     loading_panel.mouse_filter = Control.MOUSE_FILTER_STOP
     loading_panel.visible = false
-    loading_panel.add_theme_stylebox_override("panel", _panel_style(0, Color(0.08, 0.075, 0.065, 0.96), Color(0, 0, 0, 0), 0))
+    loading_panel.add_theme_stylebox_override("panel", _panel_style(0, Color(0.060, 0.064, 0.086, 0.97), Color(0, 0, 0, 0), 0))
     add_child(loading_panel)
 
     var margin := MarginContainer.new()
@@ -765,11 +1423,11 @@ func _build_loading_panel() -> void:
     box.add_theme_constant_override("separation", 16)
     margin.add_child(box)
 
-    var title := Label.new()
-    title.text = "正在启动游戏..."
-    title.add_theme_font_size_override("font_size", 28)
-    title.add_theme_color_override("font_color", Color(0.95, 0.93, 0.86, 1))
-    box.add_child(title)
+    loading_title_label = Label.new()
+    loading_title_label.text = _t("loading.title")
+    loading_title_label.add_theme_font_size_override("font_size", 28)
+    loading_title_label.add_theme_color_override("font_color", COLOR_TEXT)
+    box.add_child(loading_title_label)
 
     if ui_log_enabled and not _mobile_runtime():
         log_view = TextEdit.new()
@@ -780,7 +1438,7 @@ func _build_loading_panel() -> void:
         log_view.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
         log_view.scroll_fit_content_height = false
         log_view.add_theme_font_size_override("font_size", 18)
-        log_view.add_theme_color_override("font_color", Color(0.90, 0.90, 0.82, 1))
+        log_view.add_theme_color_override("font_color", Color(0.90, 0.92, 0.98, 1))
         log_view.add_theme_color_override("background_color", Color(0, 0, 0, 0))
         box.add_child(log_view)
 
@@ -796,26 +1454,44 @@ func _panel_style(radius: int, fill: Color, border: Color, border_width: int = 1
     style.corner_radius_top_right = radius
     style.corner_radius_bottom_left = radius
     style.corner_radius_bottom_right = radius
-    style.content_margin_left = 24
-    style.content_margin_top = 22
-    style.content_margin_right = 24
-    style.content_margin_bottom = 22
+    style.content_margin_left = 18
+    style.content_margin_top = 16
+    style.content_margin_right = 18
+    style.content_margin_bottom = 16
     return style
 
 func _empty_style() -> StyleBoxEmpty:
     return StyleBoxEmpty.new()
 
-func _rounded_card_material() -> ShaderMaterial:
+func _focus_outline(radius: int = 8) -> StyleBoxFlat:
+    var style := StyleBoxFlat.new()
+    style.bg_color = Color(0, 0, 0, 0)
+    style.border_color = COLOR_ACCENT
+    style.border_width_left = 3
+    style.border_width_top = 3
+    style.border_width_right = 3
+    style.border_width_bottom = 3
+    style.corner_radius_top_left = radius
+    style.corner_radius_top_right = radius
+    style.corner_radius_bottom_left = radius
+    style.corner_radius_bottom_right = radius
+    style.expand_margin_left = 3
+    style.expand_margin_top = 3
+    style.expand_margin_right = 3
+    style.expand_margin_bottom = 3
+    return style
+
+func _rounded_card_material(rect_size: Vector2 = HOME_CARD_SIZE, radius: float = 8.0) -> ShaderMaterial:
     if rounded_card_shader == null:
         rounded_card_shader = Shader.new()
         rounded_card_shader.code = """
 shader_type canvas_item;
-uniform float radius = 18.0;
+uniform float radius = 8.0;
+uniform vec2 rect_size = vec2(272.0, 368.0);
 void fragment() {
     vec4 color = texture(TEXTURE, UV);
-    vec2 size = 1.0 / TEXTURE_PIXEL_SIZE;
-    vec2 p = UV * size;
-    vec2 half_size = size * 0.5;
+    vec2 p = UV * rect_size;
+    vec2 half_size = rect_size * 0.5;
     vec2 q = abs(p - half_size) - (half_size - vec2(radius));
     float d = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
     color.a *= 1.0 - smoothstep(0.0, 1.5, d);
@@ -824,14 +1500,82 @@ void fragment() {
 """
     var material := ShaderMaterial.new()
     material.shader = rounded_card_shader
-    material.set_shader_parameter("radius", 18.0)
+    material.set_shader_parameter("radius", radius)
+    material.set_shader_parameter("rect_size", rect_size)
     return material
+
+func _game_card_border_style(active: bool) -> StyleBoxFlat:
+    var style := StyleBoxFlat.new()
+    style.bg_color = Color(0, 0, 0, 0)
+    style.draw_center = false
+    style.border_color = COLOR_ACCENT if active else COLOR_LINE
+    var width := 3 if active else 1
+    style.border_width_left = width
+    style.border_width_top = width
+    style.border_width_right = width
+    style.border_width_bottom = width
+    style.corner_radius_top_left = 8
+    style.corner_radius_top_right = 8
+    style.corner_radius_bottom_left = 8
+    style.corner_radius_bottom_right = 8
+    return style
+
+func _set_game_card_border(button: Button, border: PanelContainer, active: bool) -> void:
+    border.add_theme_stylebox_override("panel", _game_card_border_style(active))
+    button.set_meta("card_border_active", active)
+
+func _load_ui_icon(icon_path: String):
+    if icon_path.is_empty():
+        return null
+    if not ui_icon_cache.has(icon_path):
+        var file := FileAccess.open(icon_path, FileAccess.READ)
+        if file == null:
+            push_warning("UI icon missing: %s" % icon_path)
+            ui_icon_cache[icon_path] = null
+            return null
+        var svg := file.get_as_text()
+        var image := Image.new()
+        var err := image.load_svg_from_string(svg, _svg_icon_scale(svg))
+        if err != OK:
+            push_warning("UI icon failed to load: %s" % icon_path)
+            ui_icon_cache[icon_path] = null
+            return null
+        ui_icon_cache[icon_path] = ImageTexture.create_from_image(image)
+    return ui_icon_cache.get(icon_path)
+
+func _svg_icon_scale(svg: String) -> float:
+    if svg.find('width="1em"') >= 0:
+        return 64.0
+    var regex := RegEx.new()
+    if regex.compile('width="([0-9]+(?:\\.[0-9]+)?)"') != OK:
+        return 1.0
+    var match := regex.search(svg)
+    if match == null:
+        return 1.0
+    var width := maxf(1.0, float(match.get_string(1)))
+    return maxf(1.0, 64.0 / width)
+
+func _icon_rect(icon_path: String, size: Vector2, tint: Color = COLOR_TEXT) -> TextureRect:
+    var icon := TextureRect.new()
+    icon.texture = _load_ui_icon(icon_path)
+    icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    icon.custom_minimum_size = size
+    icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+    icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+    icon.modulate = tint
+    return icon
+
+func _centered_icon(icon_path: String, size: Vector2, tint: Color = COLOR_TEXT) -> CenterContainer:
+    var holder := CenterContainer.new()
+    holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    holder.add_child(_icon_rect(icon_path, size, tint))
+    return holder
 
 func _apply_button_style(button: Button, normal: StyleBox, hover: StyleBox, pressed: StyleBox, disabled: StyleBox = null) -> void:
     button.add_theme_stylebox_override("normal", normal)
     button.add_theme_stylebox_override("hover", hover)
     button.add_theme_stylebox_override("pressed", pressed)
-    button.add_theme_stylebox_override("focus", _empty_style())
+    button.add_theme_stylebox_override("focus", _focus_outline(8))
     if disabled != null:
         button.add_theme_stylebox_override("disabled", disabled)
     button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
@@ -839,132 +1583,175 @@ func _apply_button_style(button: Button, normal: StyleBox, hover: StyleBox, pres
     button.add_theme_color_override("font_focus_color", button.get_theme_color("font_color"))
     button.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.72))
 
-func _pill_button(text: String) -> Button:
+func _pill_button(text: String, icon_path: String = "") -> Button:
     var button := Button.new()
     button.text = text
     button.alignment = HORIZONTAL_ALIGNMENT_CENTER
     button.clip_text = true
-    button.add_theme_font_size_override("font_size", 22)
+    button.focus_mode = Control.FOCUS_ALL
+    button.add_theme_font_size_override("font_size", 20)
     button.add_theme_color_override("font_color", Color.WHITE)
+    if not icon_path.is_empty():
+        button.icon = _load_ui_icon(icon_path)
+        button.expand_icon = true
+        button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+        button.add_theme_constant_override("icon_max_width", 24)
+        button.add_theme_constant_override("h_separation", 10)
     _apply_button_style(
         button,
-        _panel_style(18, COLOR_ACCENT, COLOR_ACCENT, 0),
-        _panel_style(18, COLOR_ACCENT.lightened(0.05), COLOR_ACCENT, 0),
-        _panel_style(18, COLOR_ACCENT.darkened(0.08), COLOR_ACCENT, 0),
-        _panel_style(18, Color(0.78, 0.76, 0.70, 1), Color(0.78, 0.76, 0.70, 1), 0)
+        _panel_style(10, COLOR_ACCENT, COLOR_ACCENT, 0),
+        _panel_style(10, COLOR_ACCENT.lightened(0.06), COLOR_ACCENT.lightened(0.08), 0),
+        _panel_style(10, COLOR_ACCENT.darkened(0.10), COLOR_ACCENT.darkened(0.10), 0),
+        _panel_style(10, Color(0.28, 0.30, 0.38, 1), Color(0.28, 0.30, 0.38, 1), 0)
     )
     return button
 
-func _icon_button(text: String) -> Button:
+func _icon_button(icon_path: String) -> Button:
     var button := Button.new()
-    button.text = text
+    button.text = ""
+    button.icon = _load_ui_icon(icon_path)
     button.alignment = HORIZONTAL_ALIGNMENT_CENTER
-    button.custom_minimum_size = Vector2(64, 64)
-    button.add_theme_font_size_override("font_size", 38)
+    button.expand_icon = true
+    button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    button.focus_mode = Control.FOCUS_ALL
+    button.custom_minimum_size = TOP_ICON_BUTTON_SIZE
+    button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    button.add_theme_constant_override("icon_max_width", 28)
     button.add_theme_color_override("font_color", COLOR_TEXT)
     button.add_theme_color_override("font_hover_color", COLOR_TEXT)
     button.add_theme_color_override("font_pressed_color", COLOR_TEXT)
     button.add_theme_color_override("font_focus_color", COLOR_TEXT)
     _apply_button_style(
         button,
-        _panel_style(32, Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0),
-        _panel_style(32, Color(0.86, 0.84, 0.78, 0.42), Color(0, 0, 0, 0), 0),
-        _panel_style(32, Color(0.80, 0.78, 0.72, 0.55), Color(0, 0, 0, 0), 0)
+        _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1),
+        _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 1),
+        _panel_style(8, COLOR_ACCENT_DIM, COLOR_ACCENT, 1)
     )
     return button
 
-func _section_title(text: String) -> Label:
+func _section_title(text: String, icon_path: String) -> HBoxContainer:
+    var row := HBoxContainer.new()
+    row.custom_minimum_size = Vector2(0, 34)
+    row.add_theme_constant_override("separation", 10)
+    row.add_child(_icon_rect(icon_path, Vector2(22, 22), COLOR_ACCENT_SOFT))
     var label := Label.new()
     label.text = text
-    label.custom_minimum_size = Vector2(0, 34)
-    label.add_theme_font_size_override("font_size", 22)
-    label.add_theme_color_override("font_color", COLOR_ACCENT)
-    return label
+    label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    label.add_theme_font_size_override("font_size", 19)
+    label.add_theme_color_override("font_color", COLOR_ACCENT_SOFT)
+    row.add_child(label)
+    return row
 
 func _settings_card() -> VBoxContainer:
     var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 0)
+    box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    box.add_theme_constant_override("separation", 12)
     return box
 
-func _settings_block(title: String, subtitle: String, control: Control) -> VBoxContainer:
+func _settings_block(title: String, subtitle: String, control: Control) -> Control:
+    var panel := PanelContainer.new()
+    panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    panel.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
     var box := VBoxContainer.new()
-    box.custom_minimum_size = Vector2(0, 126)
+    box.custom_minimum_size = Vector2(0, 116)
     box.add_theme_constant_override("separation", 8)
+    panel.add_child(box)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 22)
+    title_label.add_theme_font_size_override("font_size", 20)
     title_label.add_theme_color_override("font_color", COLOR_TEXT)
     box.add_child(title_label)
     if not subtitle.is_empty():
         var sub := Label.new()
         sub.text = subtitle
-        sub.add_theme_font_size_override("font_size", 18)
+        sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+        sub.add_theme_font_size_override("font_size", 16)
         sub.add_theme_color_override("font_color", COLOR_MUTED)
         box.add_child(sub)
     box.add_child(control)
-    return box
+    return panel
 
-func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: String) -> HBoxContainer:
+func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: String) -> Control:
+    var panel := PanelContainer.new()
+    panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    panel.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
     var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 112)
+    row.custom_minimum_size = Vector2(0, 92)
+    row.add_theme_constant_override("separation", 18)
+    panel.add_child(row)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    labels.add_theme_constant_override("separation", 6)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 24)
+    title_label.add_theme_font_size_override("font_size", 20)
     title_label.add_theme_color_override("font_color", COLOR_TEXT)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = subtitle
-    sub.add_theme_font_size_override("font_size", 20)
+    sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    sub.add_theme_font_size_override("font_size", 16)
     sub.add_theme_color_override("font_color", COLOR_MUTED)
     labels.add_child(sub)
     row.add_child(labels)
 
     var toggle := CheckButton.new()
     toggle.button_pressed = initial
-    toggle.custom_minimum_size = Vector2(92, 60)
+    toggle.focus_mode = Control.FOCUS_ALL
+    toggle.custom_minimum_size = Vector2(92, 54)
     toggle.toggled.connect(func(value: bool): _on_setting_toggle(key, value))
     row.add_child(toggle)
-    return row
+    return panel
 
-func _settings_value_row(title: String, value: String) -> HBoxContainer:
+func _settings_value_row(title: String, value: String) -> Control:
+    var panel := PanelContainer.new()
+    panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    panel.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
     var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 90)
+    row.custom_minimum_size = Vector2(0, 64)
+    row.add_theme_constant_override("separation", 18)
+    panel.add_child(row)
     var label := Label.new()
     label.text = title
     label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    label.add_theme_font_size_override("font_size", 24)
+    label.add_theme_font_size_override("font_size", 19)
     label.add_theme_color_override("font_color", COLOR_TEXT)
     row.add_child(label)
     var value_label := Label.new()
     value_label.text = value
     value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    value_label.add_theme_font_size_override("font_size", 20)
+    value_label.add_theme_font_size_override("font_size", 17)
     value_label.add_theme_color_override("font_color", COLOR_ACCENT)
     row.add_child(value_label)
-    return row
+    return panel
 
-func _settings_fps_row() -> HBoxContainer:
+func _settings_fps_row() -> Control:
+    var panel := PanelContainer.new()
+    panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    panel.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
     var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 90)
+    row.custom_minimum_size = Vector2(0, 86)
+    row.add_theme_constant_override("separation", 18)
+    panel.add_child(row)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    labels.add_theme_constant_override("separation", 6)
     var title_label := Label.new()
-    title_label.text = "目标帧率"
-    title_label.add_theme_font_size_override("font_size", 24)
+    title_label.text = _t("settings.target_fps")
+    title_label.add_theme_font_size_override("font_size", 20)
     title_label.add_theme_color_override("font_color", COLOR_TEXT)
     labels.add_child(title_label)
     var sub := Label.new()
-    sub.text = "限制 C++ 引擎 tick/render 频率；最低 80 FPS"
-    sub.add_theme_font_size_override("font_size", 20)
+    sub.text = _t("settings.target_fps_desc")
+    sub.add_theme_font_size_override("font_size", 16)
     sub.add_theme_color_override("font_color", COLOR_MUTED)
     labels.add_child(sub)
     row.add_child(labels)
 
     var fps_select := OptionButton.new()
-    fps_select.custom_minimum_size = Vector2(170, 58)
+    fps_select.custom_minimum_size = Vector2(170, 54)
     var options := [80, 90, 120, 144]
     var selected_index := 0
     for i in range(options.size()):
@@ -979,7 +1766,23 @@ func _settings_fps_row() -> HBoxContainer:
         _apply_engine_options()
     )
     row.add_child(fps_select)
-    return row
+    return panel
+
+func _language_select() -> OptionButton:
+    var select := OptionButton.new()
+    select.custom_minimum_size = Vector2(360, 58)
+    var selected_index := 0
+    for i in range(LANGUAGE_MODES.size()):
+        var mode := String(LANGUAGE_MODES[i])
+        select.add_item(_language_option_label(mode))
+        select.set_item_metadata(i, mode)
+        if mode == language_mode:
+            selected_index = i
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_language_mode(String(select.get_item_metadata(index)))
+    )
+    return select
 
 func _upscale_select() -> OptionButton:
     var select := OptionButton.new()
@@ -1046,13 +1849,14 @@ func _segment_button(text: String, selected: bool) -> Button:
     button.clip_text = true
     button.toggle_mode = true
     button.button_pressed = selected
-    button.custom_minimum_size = Vector2(240, 58)
-    button.add_theme_font_size_override("font_size", 20)
+    button.focus_mode = Control.FOCUS_ALL
+    button.custom_minimum_size = Vector2(230, 56)
+    button.add_theme_font_size_override("font_size", 18)
     button.add_theme_color_override("font_color", COLOR_TEXT)
-    var selected_style := _panel_style(28, COLOR_ACCENT_SOFT, COLOR_ACCENT_SOFT, 0)
-    var selected_hover_style := _panel_style(28, COLOR_ACCENT_SOFT.lightened(0.04), COLOR_ACCENT_SOFT, 0)
-    var normal_style := _panel_style(28, Color(0.86, 0.84, 0.78, 1), Color(0.86, 0.84, 0.78, 1), 0)
-    var normal_hover_style := _panel_style(28, Color(0.89, 0.87, 0.81, 1), Color(0.89, 0.87, 0.81, 1), 0)
+    var selected_style := _panel_style(8, COLOR_ACCENT_DIM, COLOR_ACCENT, 1)
+    var selected_hover_style := _panel_style(8, COLOR_ACCENT_DIM.lightened(0.06), COLOR_ACCENT_SOFT, 1)
+    var normal_style := _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1)
+    var normal_hover_style := _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 1)
     _apply_button_style(
         button,
         selected_style if selected else normal_style,
@@ -1075,9 +1879,9 @@ func _backend_segment() -> HBoxContainer:
 func _theme_segment() -> HBoxContainer:
     var row := HBoxContainer.new()
     row.add_theme_constant_override("separation", 8)
-    row.add_child(_segment_button("✦  跟随系统", true))
-    row.add_child(_segment_button("◐  深色", false))
-    row.add_child(_segment_button("☀  浅色", false))
+    row.add_child(_segment_button(_t("language.system"), true))
+    row.add_child(_segment_button("Dark", false))
+    row.add_child(_segment_button("Light", false))
     return row
 
 func _on_setting_toggle(key: String, value: bool) -> void:
@@ -1148,12 +1952,42 @@ func _select_plugin_load_mode(value: String) -> void:
     _mark_settings_dirty()
     _apply_engine_options()
 
+func _select_language_mode(value: String) -> void:
+    var next_language := _normalize_language_mode(value)
+    if next_language == language_mode:
+        return
+    language_mode = next_language
+    _apply_language_mode()
+    _mark_settings_dirty()
+    _refresh_language_texts()
+    if settings_view != null and settings_view.visible:
+        call_deferred("_rebuild_settings_view")
+    if detail_view != null and detail_view.visible and not selected_game.is_empty():
+        call_deferred("_show_detail", selected_game)
+    _refresh_games()
+
+func _refresh_language_texts() -> void:
+    if is_instance_valid(home_subtitle_label):
+        home_subtitle_label.text = _t("home.subtitle")
+    if is_instance_valid(home_status_label):
+        home_status_label.text = _t("home.status")
+    if is_instance_valid(empty_title_label):
+        empty_title_label.text = _t("home.empty_title")
+    if is_instance_valid(empty_help_label):
+        empty_help_label.text = _empty_help_text()
+    if is_instance_valid(home_primary_button):
+        home_primary_button.text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
+    if is_instance_valid(home_guide_button):
+        home_guide_button.text = _t("home.import_guide")
+    if is_instance_valid(loading_title_label):
+        loading_title_label.text = _t("loading.title")
+
 func _empty_help_text() -> String:
     if OS.get_name() == "iOS":
-        return "使用「文件」App 将游戏文件夹复制到：\n我的 iPhone / iPad > AetherKiri > Games\n然后点击「刷新」"
+        return _t("home.empty_help_ios")
     if OS.get_name() == "Web":
-        return "点击「导入」选择本地游戏目录或 XP3 文件"
-    return "点击「导入」选择游戏目录或 XP3 文件"
+        return _t("home.empty_help_web")
+    return _t("home.empty_help_desktop")
 
 func _show_home() -> void:
     if dirty_settings:
@@ -1183,20 +2017,29 @@ func _show_detail(game: Dictionary) -> void:
     for child in detail_scroll.get_children():
         child.queue_free()
 
+    var window_size := get_viewport_rect().size
     var content := Control.new()
-    content.custom_minimum_size = Vector2(1280, 920)
+    content.custom_minimum_size = Vector2(maxf(1280.0, window_size.x), maxf(840.0, window_size.y))
     content.mouse_filter = Control.MOUSE_FILTER_PASS
     detail_scroll.add_child(content)
 
-    var back := _icon_button("‹")
-    back.position = Vector2(30, 42)
+    var back := _icon_button(ICON_HOME)
+    back.position = Vector2(36, 34)
     back.pressed.connect(_show_home)
     content.add_child(back)
 
+    var eyebrow := Label.new()
+    eyebrow.text = _t("detail.eyebrow")
+    eyebrow.position = Vector2(116, 44)
+    eyebrow.size = Vector2(360, 30)
+    eyebrow.add_theme_font_size_override("font_size", 17)
+    eyebrow.add_theme_color_override("font_color", COLOR_ACCENT_SOFT)
+    content.add_child(eyebrow)
+
     var cover := PanelContainer.new()
-    cover.position = Vector2(510, 100)
-    cover.size = Vector2(260, 190)
-    cover.add_theme_stylebox_override("panel", _panel_style(18, Color(0.90, 0.89, 0.84, 1), Color(0, 0, 0, 0.04), 1))
+    cover.position = Vector2(62, 126)
+    cover.size = Vector2(340, 476)
+    cover.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1))
     content.add_child(cover)
     var cover_texture := _load_cover_texture(game)
     if cover_texture != null:
@@ -1206,78 +2049,87 @@ func _show_detail(game: Dictionary) -> void:
         image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
         cover.add_child(image)
     else:
-        var icon := Label.new()
-        icon.text = "▣"
-        icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-        icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-        icon.add_theme_font_size_override("font_size", 44)
-        icon.add_theme_color_override("font_color", COLOR_ACCENT_SOFT)
+        var icon := _centered_icon(ICON_GAMEPAD, Vector2(70, 70), COLOR_ACCENT)
         cover.add_child(icon)
 
     var title := Label.new()
     title.text = _game_display_title(game)
-    title.position = Vector2(320, 310)
-    title.size = Vector2(640, 54)
-    title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    title.add_theme_font_size_override("font_size", 34)
+    title.position = Vector2(440, 124)
+    title.size = Vector2(760, 72)
+    title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+    title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    title.add_theme_font_size_override("font_size", 36)
     title.add_theme_color_override("font_color", COLOR_TEXT)
     content.add_child(title)
 
-    var info := VBoxContainer.new()
-    info.position = Vector2(38, 370)
-    info.size = Vector2(max(600, int(size.x) - 76), 170)
-    info.add_theme_constant_override("separation", 12)
-    content.add_child(info)
-    info.add_child(_detail_line("□", String(game.get("path", ""))))
-    info.add_child(_detail_line("◷", "上次游玩：%s" % (_game_subtitle(game).split(" · ")[0])))
-    info.add_child(_detail_line("◴", "已玩 %s" % _format_play_duration(int(game.get("playDurationSeconds", 0)))))
-    info.add_child(_detail_line("▤", String(game.get("type", "Directory"))))
+    var subtitle := Label.new()
+    subtitle.text = _t("detail.runtime_profile", [_game_type_label(String(game.get("type", "Directory")))])
+    subtitle.position = Vector2(444, 194)
+    subtitle.size = Vector2(760, 28)
+    subtitle.add_theme_font_size_override("font_size", 17)
+    subtitle.add_theme_color_override("font_color", COLOR_MUTED)
+    content.add_child(subtitle)
 
-    var start := _pill_button("▶  启动游戏")
-    start.position = Vector2(38, 500)
-    start.size = Vector2(1204, 72)
+    var info_panel := PanelContainer.new()
+    info_panel.position = Vector2(440, 246)
+    info_panel.size = Vector2(760, 206)
+    info_panel.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
+    content.add_child(info_panel)
+    var info := VBoxContainer.new()
+    info.add_theme_constant_override("separation", 12)
+    info_panel.add_child(info)
+    info.add_child(_detail_line(ICON_PAGE, String(game.get("path", ""))))
+    info.add_child(_detail_line(ICON_REFRESH, _t("detail.last_played", [_last_played_label(game)])))
+    info.add_child(_detail_line(ICON_PERFORMANCE, _t("detail.played", [_format_play_duration(int(game.get("playDurationSeconds", 0)))])))
+    info.add_child(_detail_line(ICON_LIBRARY, _game_type_label(String(game.get("type", "Directory")))))
+
+    var start := _pill_button(_t("detail.launch"), ICON_PLAY)
+    start.position = Vector2(440, 480)
+    start.size = Vector2(760, 70)
     start.pressed.connect(_start_selected_game)
     content.add_child(start)
 
     var tools := VBoxContainer.new()
-    tools.position = Vector2(32, 600)
-    tools.size = Vector2(1216, 260)
-    tools.add_theme_constant_override("separation", 1)
+    tools.position = Vector2(440, 582)
+    tools.size = Vector2(760, 250)
+    tools.add_theme_constant_override("separation", 10)
     content.add_child(tools)
-    tools.add_child(_detail_action("▧", "设置封面", func(): _set_cover_for_selected()))
-    tools.add_child(_detail_action("✎", "重命名", func(): _rename_selected_game()))
-    tools.add_child(_detail_action("⌫", "移除游戏", func(): _confirm_remove_selected()))
+    tools.add_child(_detail_action(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected()))
+    tools.add_child(_detail_action(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game()))
+    tools.add_child(_detail_action(ICON_DELETE, _t("detail.remove"), func(): _confirm_remove_selected()))
 
-func _detail_line(icon: String, text: String) -> HBoxContainer:
+func _detail_line(icon_path: String, text: String) -> HBoxContainer:
     var row := HBoxContainer.new()
     row.add_theme_constant_override("separation", 16)
-    var i := Label.new()
-    i.text = icon
-    i.add_theme_font_size_override("font_size", 22)
-    i.add_theme_color_override("font_color", COLOR_MUTED)
-    row.add_child(i)
+    row.add_child(_icon_rect(icon_path, Vector2(24, 24), COLOR_ACCENT_SOFT))
     var label := Label.new()
     label.text = text
     label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    label.add_theme_font_size_override("font_size", 21)
+    label.add_theme_font_size_override("font_size", 17)
     label.add_theme_color_override("font_color", COLOR_MUTED)
     row.add_child(label)
     return row
 
-func _detail_action(icon: String, text: String, callback: Callable = Callable()) -> Button:
+func _detail_action(icon_path: String, text: String, callback: Callable = Callable()) -> Button:
     var button := Button.new()
-    button.text = "%s   %s    ›" % [icon, text]
+    button.text = text
+    button.icon = _load_ui_icon(icon_path)
+    button.expand_icon = true
+    button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
     button.alignment = HORIZONTAL_ALIGNMENT_LEFT
     button.clip_text = true
-    button.custom_minimum_size = Vector2(0, 76)
-    button.add_theme_font_size_override("font_size", 24)
+    button.focus_mode = Control.FOCUS_ALL
+    button.custom_minimum_size = Vector2(0, 68)
+    button.add_theme_constant_override("icon_max_width", 26)
+    button.add_theme_constant_override("h_separation", 14)
+    button.add_theme_font_size_override("font_size", 20)
     button.add_theme_color_override("font_color", COLOR_TEXT)
     _apply_button_style(
         button,
-        _panel_style(14, COLOR_CARD, Color(0, 0, 0, 0.06), 1),
-        _panel_style(14, Color(1.0, 0.995, 0.975, 1), Color(0, 0, 0, 0.08), 1),
-        _panel_style(14, Color(0.95, 0.94, 0.90, 1), Color(0, 0, 0, 0.08), 1)
+        _panel_style(8, COLOR_CARD, COLOR_LINE, 1),
+        _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 1),
+        _panel_style(8, COLOR_ACCENT_DIM, COLOR_ACCENT, 1)
     )
     if callback.is_valid():
         button.pressed.connect(callback)
@@ -1306,17 +2158,17 @@ func _show_import_guide() -> void:
     box.add_theme_constant_override("separation", 22)
     dialog.add_child(box)
     var title := Label.new()
-    title.text = "导入游戏"
+    title.text = _t("dialog.import_title")
     title.add_theme_font_size_override("font_size", 30)
     title.add_theme_color_override("font_color", COLOR_TEXT)
     box.add_child(title)
     var body := Label.new()
-    body.text = "请使用「文件」App 将游戏文件夹复制到本应用的目录：\n\n1. 打开 iPhone / iPad 上的「文件」App\n2. 前往：我的 iPhone / iPad > AetherKiri > Games\n3. 将游戏文件夹复制到 Games 目录\n4. 返回本应用，点击「刷新」检测新游戏\n\n游戏目录：Games/"
+    body.text = _t("dialog.import_guide_body")
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     body.add_theme_font_size_override("font_size", 22)
     body.add_theme_color_override("font_color", COLOR_TEXT)
     box.add_child(body)
-    var ok := _pill_button("知道了")
+    var ok := _pill_button(_t("dialog.ok"))
     ok.custom_minimum_size = Vector2(140, 62)
     ok.pressed.connect(func(): modal_layer.visible = false)
     box.add_child(ok)
@@ -1346,7 +2198,7 @@ func _maybe_show_log_alert(line: String) -> void:
     var is_error := lower.contains("error") or lower.contains("exception") or lower.contains("fatal") or lower.contains("failed") or lower.contains("错误") or lower.contains("失败")
     if not is_warning and not is_error:
         return
-    var title := "AetherKiri 错误" if is_error else "AetherKiri 警告"
+    var title := _t("alert.error_title") if is_error else _t("alert.warning_title")
     _show_system_alert_once("log:%s" % message, message, title)
 
 func _create_file_dialog(title: String, file_mode: int, filters: PackedStringArray = PackedStringArray()) -> FileDialog:
@@ -1380,12 +2232,12 @@ func _offer_scrape_after_add(game: Dictionary) -> void:
     box.add_theme_constant_override("separation", 18)
     dialog.add_child(box)
     var title := Label.new()
-    title.text = "刮削元数据"
+    title.text = _t("dialog.scrape_title")
     title.add_theme_font_size_override("font_size", 28)
     title.add_theme_color_override("font_color", COLOR_TEXT)
     box.add_child(title)
     var body := Label.new()
-    body.text = "已添加「%s」。是否现在进入详情页设置封面、名称和元数据？" % _game_display_title(game)
+    body.text = _t("dialog.scrape_body", [_game_display_title(game)])
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     body.add_theme_font_size_override("font_size", 21)
     body.add_theme_color_override("font_color", COLOR_TEXT)
@@ -1394,11 +2246,11 @@ func _offer_scrape_after_add(game: Dictionary) -> void:
     buttons.add_theme_constant_override("separation", 12)
     box.add_child(buttons)
     var no := Button.new()
-    no.text = "稍后"
+    no.text = _t("dialog.later")
     no.flat = true
     no.pressed.connect(func(): modal_layer.visible = false)
     buttons.add_child(no)
-    var yes := _pill_button("打开详情")
+    var yes := _pill_button(_t("dialog.open_detail"))
     yes.pressed.connect(func():
         modal_layer.visible = false
         _show_detail(game)
@@ -1410,7 +2262,7 @@ func _set_cover_for_selected() -> void:
     if path.is_empty():
         return
     var dialog := _create_file_dialog(
-        "选择封面图片",
+        _t("dialog.choose_cover"),
         FileDialog.FILE_MODE_OPEN_FILE,
         PackedStringArray(["*.png,*.jpg,*.jpeg,*.webp;Image;image/png,image/jpeg,image/webp"])
     )
@@ -1445,7 +2297,7 @@ func _rename_selected_game() -> void:
     box.add_theme_constant_override("separation", 18)
     dialog.add_child(box)
     var title := Label.new()
-    title.text = "重命名"
+    title.text = _t("dialog.rename")
     title.add_theme_font_size_override("font_size", 28)
     title.add_theme_color_override("font_color", COLOR_TEXT)
     box.add_child(title)
@@ -1453,7 +2305,7 @@ func _rename_selected_game() -> void:
     input.text = _game_display_title(selected_game)
     input.custom_minimum_size = Vector2(460, 52)
     box.add_child(input)
-    var save := _pill_button("保存")
+    var save := _pill_button(_t("settings.save"))
     save.pressed.connect(func():
         var new_title := input.text.strip_edges()
         if not new_title.is_empty():
@@ -1487,12 +2339,12 @@ func _confirm_remove_selected() -> void:
     box.add_theme_constant_override("separation", 18)
     dialog.add_child(box)
     var label := Label.new()
-    label.text = "从列表移除「%s」？不会删除磁盘上的游戏文件。" % _game_display_title(selected_game)
+    label.text = _t("dialog.remove_body", [_game_display_title(selected_game)])
     label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     label.add_theme_font_size_override("font_size", 22)
     label.add_theme_color_override("font_color", COLOR_TEXT)
     box.add_child(label)
-    var remove := _pill_button("移除")
+    var remove := _pill_button(_t("dialog.remove"))
     remove.pressed.connect(func():
         modal_layer.visible = false
         _remove_game(path)
@@ -1529,24 +2381,24 @@ func _show_import_picker() -> void:
     box.add_theme_constant_override("separation", 14)
     dialog.add_child(box)
     var title := Label.new()
-    title.text = "导入游戏"
+    title.text = _t("dialog.import_title")
     title.add_theme_font_size_override("font_size", 28)
     title.add_theme_color_override("font_color", COLOR_TEXT)
     box.add_child(title)
-    var dir_button := _pill_button("选择游戏目录")
+    var dir_button := _pill_button(_t("dialog.select_game_dir"))
     dir_button.pressed.connect(func():
         modal_layer.visible = false
         _open_import_dialog(false)
     )
     box.add_child(dir_button)
-    var xp3_button := _pill_button("选择 XP3 文件")
+    var xp3_button := _pill_button(_t("dialog.select_xp3"))
     xp3_button.pressed.connect(func():
         modal_layer.visible = false
         _open_import_dialog(true)
     )
     box.add_child(xp3_button)
     var cancel := Button.new()
-    cancel.text = "取消"
+    cancel.text = _t("dialog.cancel")
     cancel.flat = true
     cancel.pressed.connect(func(): modal_layer.visible = false)
     box.add_child(cancel)
@@ -1568,7 +2420,7 @@ func _web_sync_get_json(path: String):
 
 func _web_game_from_mount_info(info: Dictionary) -> Dictionary:
     return {
-        "name": String(info.get("name", "本地游戏")),
+        "name": String(info.get("name", _t("game.local"))),
         "path": String(info.get("gamePath", info.get("path", ""))),
         "type": String(info.get("type", "Directory")),
         "lastPlayed": 0,
@@ -1603,7 +2455,7 @@ func _mount_web_game(game: Dictionary) -> bool:
     else:
         var manifest = _web_sync_get_json(base_url + "/manifest")
         if not manifest is Dictionary or not manifest.has("files"):
-            _show_message("无法读取 Web 游戏挂载清单")
+            _show_message(_t("message.web_manifest_failed"))
             return false
         var manifest_text := JSON.stringify(manifest)
         mount_source = "(function(){if(typeof AetherKiriMountHttpGame!=='function')return JSON.stringify({ok:false,error:'Web mount API is not ready'});return AetherKiriMountHttpGame(%s,%s,%s);})()" % [
@@ -1615,10 +2467,10 @@ func _mount_web_game(game: Dictionary) -> bool:
     var result = JSON.parse_string(result_text)
     if result is Dictionary and bool(result.get("ok", false)):
         return true
-    var error := "未知错误"
+    var error := _t("message.unknown_error")
     if result is Dictionary:
         error = String(result.get("error", error))
-    _show_message("Web 本地挂载失败：%s" % error)
+    _show_message(_t("message.web_mount_failed", [error]))
     return false
 
 func _web_local_picker_support() -> Dictionary:
@@ -1722,7 +2574,7 @@ func _pick_web_local_game(kind: String) -> void:
     var start_source := "(function(){if(typeof AetherKiriPickLocalGame!=='function')return JSON.stringify({ok:false,error:'Browser local picker is not ready'});return AetherKiriPickLocalGame(%s);})()" % JSON.stringify(kind)
     var start_result = JSON.parse_string(_web_eval_string(start_source))
     if not start_result is Dictionary or not bool(start_result.get("ok", false)):
-        var start_error := "当前浏览器不支持本地文件选择"
+        var start_error := _t("message.browser_picker_unsupported")
         if start_result is Dictionary:
             start_error = String(start_result.get("error", start_error))
         _show_message(start_error)
@@ -1730,7 +2582,7 @@ func _pick_web_local_game(kind: String) -> void:
 
     var ticket := String(start_result.get("ticket", ""))
     if ticket.is_empty():
-        _show_message("浏览器没有返回导入任务")
+        _show_message(_t("message.browser_no_ticket"))
         return
 
     var deadline_msec := Time.get_ticks_msec() + 5 * 60 * 1000
@@ -1746,25 +2598,25 @@ func _pick_web_local_game(kind: String) -> void:
         if status == "cancelled":
             return
         if status == "error" or status == "missing":
-            _show_message("本地游戏导入失败：%s" % String(poll_result.get("error", "未知错误")))
+            _show_message(_t("message.web_import_failed", [String(poll_result.get("error", _t("message.unknown_error")))]))
             return
         if status == "ok":
             var game_data = poll_result.get("game", {})
             if not game_data is Dictionary:
-                _show_message("浏览器返回的游戏信息无效")
+                _show_message(_t("message.web_game_invalid"))
                 return
             var game := _web_game_from_mount_info(game_data)
             if not _mount_web_game(game):
                 return
             _add_game_dictionary(game)
             return
-    _show_message("本地游戏导入超时")
+    _show_message(_t("message.web_import_timeout"))
 
 func _show_web_import_picker() -> void:
     var support := _web_local_picker_support()
     var dev_games := _web_dev_mounts()
     if not bool(support.get("directory", false)) and not bool(support.get("archive", false)) and dev_games.is_empty():
-        _show_message("当前浏览器不支持直接选择本地游戏文件。请使用支持 File System Access 或目录上传的浏览器。")
+        _show_message(_t("message.web_picker_unsupported_long"))
         return
 
     modal_layer.visible = true
@@ -1787,13 +2639,13 @@ func _show_web_import_picker() -> void:
     box.add_theme_constant_override("separation", 14)
     dialog.add_child(box)
     var title := Label.new()
-    title.text = "导入游戏"
+    title.text = _t("dialog.import_title")
     title.add_theme_font_size_override("font_size", 28)
     title.add_theme_color_override("font_color", COLOR_TEXT)
     box.add_child(title)
 
     if bool(support.get("directory", false)):
-        var dir_button := _pill_button("选择本地游戏目录")
+        var dir_button := _pill_button(_t("dialog.select_local_game_dir"))
         dir_button.pressed.connect(func():
             modal_layer.visible = false
             _pick_web_local_game("directory")
@@ -1801,7 +2653,7 @@ func _show_web_import_picker() -> void:
         box.add_child(dir_button)
 
     if bool(support.get("archive", false)):
-        var archive_button := _pill_button("选择 XP3 文件")
+        var archive_button := _pill_button(_t("dialog.select_xp3"))
         archive_button.pressed.connect(func():
             modal_layer.visible = false
             _pick_web_local_game("archive")
@@ -1813,7 +2665,7 @@ func _show_web_import_picker() -> void:
             continue
         var game := _web_game_from_mount_info(item)
         var captured_game := game.duplicate(true)
-        var button := _pill_button("开发挂载  %s" % String(game.get("name", "")))
+        var button := _pill_button(_t("dialog.dev_mount", [String(game.get("name", ""))]))
         button.pressed.connect(func():
             modal_layer.visible = false
             if not _mount_web_game(captured_game):
@@ -1822,7 +2674,7 @@ func _show_web_import_picker() -> void:
         )
         box.add_child(button)
     var cancel := Button.new()
-    cancel.text = "取消"
+    cancel.text = _t("dialog.cancel")
     cancel.flat = true
     cancel.pressed.connect(func(): modal_layer.visible = false)
     box.add_child(cancel)
@@ -1830,7 +2682,7 @@ func _show_web_import_picker() -> void:
 func _open_import_dialog(xp3: bool) -> void:
     var filters := PackedStringArray(["*.xp3,*.XP3;KiriKiri XP3 archive"]) if xp3 else PackedStringArray()
     var dialog := _create_file_dialog(
-        "选择 XP3 文件" if xp3 else "选择游戏目录",
+        _t("dialog.select_xp3") if xp3 else _t("dialog.select_game_dir"),
         FileDialog.FILE_MODE_OPEN_FILE if xp3 else FileDialog.FILE_MODE_OPEN_DIR,
         filters
     )
@@ -1910,14 +2762,14 @@ func _scan_ios_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
 func _add_game_path(path: String) -> bool:
     var resolved_path := _resolve_game_path(path)
     if not _path_exists(resolved_path):
-        _show_message("游戏路径不存在")
+        _show_message(_t("message.path_missing"))
         return false
     return _add_game_dictionary(_game_info_from_path(resolved_path))
 
 func _add_game_dictionary(game: Dictionary) -> bool:
     var path := String(game.get("path", ""))
     if not _path_exists(path):
-        _show_message("游戏路径不存在")
+        _show_message(_t("message.path_missing"))
         return false
     var games := _load_game_list()
     var next: Array[Dictionary] = []
@@ -1926,7 +2778,7 @@ func _add_game_dictionary(game: Dictionary) -> bool:
     for existing in games:
         if String(existing.get("path", "")) == path:
             if OS.get_name() != "Web":
-                _show_message("游戏已存在：%s" % _game_display_title(existing))
+                _show_message(_t("message.game_exists", [_game_display_title(existing)]))
                 return false
             final_game = _merge_game_dictionary(existing, game)
             next.append(final_game)
@@ -2047,6 +2899,14 @@ func _game_display_title(game: Dictionary) -> String:
         return title
     return String(game.get("name", String(game.get("path", "")).get_file()))
 
+func _game_type_label(value: String) -> String:
+    var lower := value.to_lower()
+    if lower == "archive":
+        return _t("game.type_archive")
+    if lower == "directory":
+        return _t("game.type_directory")
+    return value
+
 func _format_play_duration(seconds: int) -> String:
     if seconds < 60:
         return "0m"
@@ -2059,19 +2919,23 @@ func _format_play_duration(seconds: int) -> String:
         return "%dh" % hours
     return "%dh %dm" % [hours, mins]
 
+func _last_played_label(game: Dictionary) -> String:
+    var last_played := int(game.get("lastPlayed", 0))
+    if last_played <= 0:
+        return _t("game.never_played")
+    var elapsed: int = max(0, int(Time.get_unix_time_from_system()) - last_played)
+    if elapsed < 86400:
+        return _t("game.today")
+    return _t("game.days_ago", [max(1, elapsed / 86400)])
+
 func _game_subtitle(game: Dictionary) -> String:
     var parts: PackedStringArray = []
-    var last_played := int(game.get("lastPlayed", 0))
-    if last_played > 0:
-        var elapsed: int = max(0, int(Time.get_unix_time_from_system()) - last_played)
-        if elapsed < 86400:
-            parts.append("今天")
-        else:
-            parts.append("%d 天前" % max(1, elapsed / 86400))
+    if int(game.get("lastPlayed", 0)) > 0:
+        parts.append(_last_played_label(game))
     var duration := int(game.get("playDurationSeconds", 0))
     if duration >= 60:
-        parts.append("已玩 %s" % _format_play_duration(duration))
-    return " · ".join(parts) if not parts.is_empty() else "尚未游玩"
+        parts.append(_t("game.played_duration", [_format_play_duration(duration)]))
+    return " · ".join(parts) if not parts.is_empty() else _t("game.never_played")
 
 func _mark_game_played(path: String) -> Dictionary:
     var games := _load_game_list()
@@ -2120,11 +2984,12 @@ func _game_card(game: Dictionary) -> Button:
     button.custom_minimum_size = HOME_CARD_SIZE
     button.clip_text = true
     button.clip_contents = true
+    button.focus_mode = Control.FOCUS_ALL
     button.text = ""
-    button.add_theme_stylebox_override("normal", _panel_style(18, Color(0.88, 0.87, 0.82, 1), Color(0, 0, 0, 0.10), 1))
-    button.add_theme_stylebox_override("hover", _panel_style(18, Color(0.91, 0.90, 0.85, 1), Color(0, 0, 0, 0.14), 1))
-    button.add_theme_stylebox_override("pressed", _panel_style(18, Color(0.82, 0.81, 0.76, 1), Color(0, 0, 0, 0.16), 1))
-    button.add_theme_stylebox_override("focus", _empty_style())
+    button.add_theme_stylebox_override("normal", _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1))
+    button.add_theme_stylebox_override("hover", _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 1))
+    button.add_theme_stylebox_override("pressed", _panel_style(8, COLOR_ACCENT_DIM, COLOR_ACCENT, 1))
+    button.add_theme_stylebox_override("focus", _focus_outline(8))
     button.pressed.connect(func(): _show_detail(game))
 
     var frame := Control.new()
@@ -2133,31 +2998,24 @@ func _game_card(game: Dictionary) -> Button:
     frame.set_anchors_preset(Control.PRESET_FULL_RECT)
     button.add_child(frame)
 
-    var cover_texture := _load_cover_texture(game)
+    var cover_texture := _load_cover_texture(game, Vector2i(int(HOME_CARD_SIZE.x), int(HOME_CARD_SIZE.y)), 8)
     if cover_texture != null:
         var cover := TextureRect.new()
         cover.texture = cover_texture
         cover.mouse_filter = Control.MOUSE_FILTER_IGNORE
         cover.set_anchors_preset(Control.PRESET_FULL_RECT)
         cover.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-        cover.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-        cover.material = _rounded_card_material()
+        cover.stretch_mode = TextureRect.STRETCH_SCALE
         frame.add_child(cover)
     else:
         var placeholder := PanelContainer.new()
         placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
         placeholder.set_anchors_preset(Control.PRESET_FULL_RECT)
-        placeholder.add_theme_stylebox_override("panel", _panel_style(18, Color(0.91, 0.90, 0.85, 1), Color(0, 0, 0, 0.02), 1))
+        placeholder.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
         frame.add_child(placeholder)
 
-        var icon := Label.new()
-        icon.text = "▣"
-        icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        var icon := _centered_icon(ICON_GAMEPAD, Vector2(58, 58), COLOR_ACCENT)
         icon.set_anchors_preset(Control.PRESET_FULL_RECT)
-        icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-        icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-        icon.add_theme_font_size_override("font_size", 38)
-        icon.add_theme_color_override("font_color", COLOR_ACCENT_SOFT)
         frame.add_child(icon)
 
     var shade := PanelContainer.new()
@@ -2167,10 +3025,10 @@ func _game_card(game: Dictionary) -> Button:
     shade.anchor_right = 1.0
     shade.anchor_bottom = 1.0
     shade.offset_left = 0.0
-    shade.offset_top = -104.0
+    shade.offset_top = -118.0
     shade.offset_right = 0.0
     shade.offset_bottom = 0.0
-    shade.add_theme_stylebox_override("panel", _panel_style(18, Color(0.0, 0.0, 0.0, 0.38), Color(0, 0, 0, 0), 0))
+    shade.add_theme_stylebox_override("panel", _panel_style(8, Color(0.0, 0.0, 0.0, 0.62), Color(0, 0, 0, 0), 0))
     frame.add_child(shade)
 
     var text_margin := MarginContainer.new()
@@ -2180,12 +3038,12 @@ func _game_card(game: Dictionary) -> Button:
     text_margin.anchor_right = 1.0
     text_margin.anchor_bottom = 1.0
     text_margin.offset_left = 0.0
-    text_margin.offset_top = -104.0
+    text_margin.offset_top = -118.0
     text_margin.offset_right = 0.0
     text_margin.offset_bottom = 0.0
-    text_margin.add_theme_constant_override("margin_left", 18)
+    text_margin.add_theme_constant_override("margin_left", 16)
     text_margin.add_theme_constant_override("margin_top", 18)
-    text_margin.add_theme_constant_override("margin_right", 18)
+    text_margin.add_theme_constant_override("margin_right", 16)
     text_margin.add_theme_constant_override("margin_bottom", 16)
     frame.add_child(text_margin)
 
@@ -2198,7 +3056,7 @@ func _game_card(game: Dictionary) -> Button:
     title.text = _game_display_title(game)
     title.mouse_filter = Control.MOUSE_FILTER_IGNORE
     title.clip_text = true
-    title.add_theme_font_size_override("font_size", 22)
+    title.add_theme_font_size_override("font_size", 21)
     title.add_theme_color_override("font_color", Color.WHITE)
     labels.add_child(title)
 
@@ -2206,19 +3064,109 @@ func _game_card(game: Dictionary) -> Button:
     sub.text = _game_subtitle(game)
     sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
     sub.clip_text = true
-    sub.add_theme_font_size_override("font_size", 17)
-    sub.add_theme_color_override("font_color", Color(1, 1, 1, 0.76))
+    sub.add_theme_font_size_override("font_size", 15)
+    sub.add_theme_color_override("font_color", Color(1, 1, 1, 0.72))
     labels.add_child(sub)
+
+    var border := PanelContainer.new()
+    border.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    border.set_anchors_preset(Control.PRESET_FULL_RECT)
+    _set_game_card_border(button, border, false)
+    frame.add_child(border)
+    button.add_to_group("game_card_buttons")
+    button.set_meta("card_border_path", button.get_path_to(border))
+    button.mouse_entered.connect(func(): _set_game_card_border(button, border, true))
+    button.mouse_exited.connect(func():
+        _set_game_card_border(button, border, button.has_focus())
+    )
+    button.focus_entered.connect(func(): _set_game_card_border(button, border, true))
+    button.focus_exited.connect(func():
+        var still_hovered := button.get_global_rect().has_point(button.get_global_mouse_position())
+        _set_game_card_border(button, border, still_hovered)
+    )
     return button
 
-func _load_cover_texture(game: Dictionary) -> Texture2D:
+func _load_cover_texture(game: Dictionary, target_size: Vector2i = Vector2i.ZERO, radius: int = 0) -> Texture2D:
     var cover_path := String(game.get("coverPath", ""))
     if cover_path.is_empty() or not FileAccess.file_exists(cover_path):
         return null
+    var modified := FileAccess.get_modified_time(cover_path)
+    var cache_key := "%s|%d|%dx%d|%d" % [
+        cover_path,
+        modified,
+        target_size.x,
+        target_size.y,
+        radius,
+    ]
+    if cover_texture_cache.has(cache_key):
+        return cover_texture_cache.get(cache_key)
     var image := Image.new()
     if image.load(cover_path) != OK:
         return null
-    return ImageTexture.create_from_image(image)
+    if target_size.x > 0 and target_size.y > 0:
+        image = _cover_image_for_card(image, target_size, radius)
+    else:
+        image.convert(Image.FORMAT_RGBA8)
+    var texture := ImageTexture.create_from_image(image)
+    cover_texture_cache[cache_key] = texture
+    return texture
+
+func _cover_image_for_card(image: Image, target_size: Vector2i, radius: int) -> Image:
+    image.convert(Image.FORMAT_RGBA8)
+    var source_size := Vector2(float(image.get_width()), float(image.get_height()))
+    var target := Vector2(float(target_size.x), float(target_size.y))
+    var scale := maxf(target.x / source_size.x, target.y / source_size.y)
+    var scaled_size := Vector2i(
+        maxi(target_size.x, int(ceil(source_size.x * scale))),
+        maxi(target_size.y, int(ceil(source_size.y * scale)))
+    )
+    image.resize(scaled_size.x, scaled_size.y, Image.INTERPOLATE_LANCZOS)
+    var crop_x := maxi(0, int((scaled_size.x - target_size.x) / 2))
+    var crop_y := maxi(0, int((scaled_size.y - target_size.y) / 2))
+    var cropped := image.get_region(Rect2i(crop_x, crop_y, target_size.x, target_size.y))
+    cropped.convert(Image.FORMAT_RGBA8)
+    _apply_rounded_image_corners(cropped, radius)
+    return cropped
+
+func _apply_rounded_image_corners(image: Image, radius: int) -> void:
+    var w := image.get_width()
+    var h := image.get_height()
+    var r := mini(radius, mini(w, h) / 2)
+    if r <= 0:
+        return
+    var rf := float(r)
+    for y in range(r):
+        for x in range(r):
+            _mask_corner_pixel(image, x, y, Vector2(rf, rf), rf)
+            _mask_corner_pixel(image, w - 1 - x, y, Vector2(float(w) - rf, rf), rf)
+            _mask_corner_pixel(image, x, h - 1 - y, Vector2(rf, float(h) - rf), rf)
+            _mask_corner_pixel(image, w - 1 - x, h - 1 - y, Vector2(float(w) - rf, float(h) - rf), rf)
+
+func _mask_corner_pixel(image: Image, x: int, y: int, center: Vector2, radius: float) -> void:
+    var coverage := clampf(radius + 0.5 - Vector2(float(x) + 0.5, float(y) + 0.5).distance_to(center), 0.0, 1.0)
+    if coverage >= 1.0:
+        return
+    var color := image.get_pixel(x, y)
+    color.a *= coverage
+    image.set_pixel(x, y, color)
+
+func _sync_game_card_hover_states() -> void:
+    if home_view == null or not home_view.visible:
+        return
+    var mouse_pos := get_global_mouse_position()
+    for node in get_tree().get_nodes_in_group("game_card_buttons"):
+        if not is_instance_valid(node) or not (node is Button):
+            continue
+        var button := node as Button
+        if not button.is_visible_in_tree():
+            continue
+        var border_path = button.get_meta("card_border_path", NodePath(""))
+        var border := button.get_node_or_null(border_path) as PanelContainer
+        if border == null:
+            continue
+        var active := button.has_focus() or button.get_global_rect().has_point(mouse_pos)
+        if bool(button.get_meta("card_border_active", false)) != active:
+            _set_game_card_border(button, border, active)
 
 func _start_selected_game() -> void:
     var path := String(selected_game.get("path", ""))
@@ -2391,14 +3339,14 @@ func _create_runtime_player() -> bool:
         var message := "AetherKiri runtime extension class is unavailable."
         push_error(message)
         _append_log(message)
-        _show_system_alert("运行时扩展加载失败：AetherKiriPlayer 不可用", "AetherKiri 错误")
+        _show_system_alert(_t("alert.runtime_class_missing"), _t("alert.error_title"))
         return false
     var instance: Object = ClassDB.instantiate("AetherKiriPlayer")
     if instance == null or not (instance is Node):
         var create_message := "AetherKiri runtime extension could not create AetherKiriPlayer."
         push_error(create_message)
         _append_log(create_message)
-        _show_system_alert("运行时扩展加载失败：无法创建 AetherKiriPlayer", "AetherKiri 错误")
+        _show_system_alert(_t("alert.runtime_create_failed"), _t("alert.error_title"))
         return false
     player = instance
     add_child(instance as Node)
@@ -3210,6 +4158,7 @@ func _apply_global_dpi_scale() -> void:
 
 func _process(delta: float) -> void:
     _fit_full_rects()
+    _sync_game_card_hover_states()
     _flush_log_view_if_needed(delta)
     var startup_state := cached_startup_state
     if game_running:
