@@ -35,6 +35,9 @@ const LANG_EN := "en"
 const LANG_JA := "ja"
 const LANG_KO := "ko"
 const LANGUAGE_MODES := [LANG_SYSTEM, LANG_ZH_HANS, LANG_ZH_HANT, LANG_EN, LANG_JA, LANG_KO]
+const STYLE_DARK := "dark"
+const STYLE_CLASSIC := "classic"
+const STYLE_MODES := [STYLE_DARK, STYLE_CLASSIC]
 const UI_TEXT := {
     LANG_ZH_HANS: {
         "home.subtitle": "KiriKiri2 运行时外壳",
@@ -54,6 +57,10 @@ const UI_TEXT := {
         "settings.section.about": "关于",
         "settings.language": "语言",
         "settings.language_desc": "默认跟随系统；也可以固定为简体中文、繁体中文、英语、日语或韩语",
+        "settings.style": "风格",
+        "settings.style_desc": "可在当前深色风格和旧版原始浅色风格之间切换",
+        "style.dark": "深色",
+        "style.classic": "原始浅色",
         "language.system": "跟随系统",
         "language.system_with_value": "跟随系统（%s）",
         "language.zh_hans": "简体中文",
@@ -160,6 +167,10 @@ const UI_TEXT := {
         "settings.section.about": "關於",
         "settings.language": "語言",
         "settings.language_desc": "預設跟隨系統；也可以固定為簡體中文、繁體中文、英語、日語或韓語",
+        "settings.style": "風格",
+        "settings.style_desc": "可在目前深色風格和舊版原始淺色風格之間切換",
+        "style.dark": "深色",
+        "style.classic": "原始淺色",
         "language.system": "跟隨系統",
         "language.system_with_value": "跟隨系統（%s）",
         "language.zh_hans": "简体中文",
@@ -266,6 +277,10 @@ const UI_TEXT := {
         "settings.section.about": "About",
         "settings.language": "Language",
         "settings.language_desc": "Defaults to the system language; you can pin Simplified Chinese, Traditional Chinese, English, Japanese, or Korean",
+        "settings.style": "Style",
+        "settings.style_desc": "Switch between the current dark style and the original classic light style",
+        "style.dark": "Dark",
+        "style.classic": "Classic Light",
         "language.system": "Follow System",
         "language.system_with_value": "Follow System (%s)",
         "language.zh_hans": "简体中文",
@@ -372,6 +387,10 @@ const UI_TEXT := {
         "settings.section.about": "情報",
         "settings.language": "言語",
         "settings.language_desc": "既定ではシステムに従います。簡体字中国語、繁体字中国語、英語、日本語、韓国語に固定できます",
+        "settings.style": "スタイル",
+        "settings.style_desc": "現在のダークスタイルと旧来のクラシックライトスタイルを切り替えます",
+        "style.dark": "ダーク",
+        "style.classic": "クラシックライト",
         "language.system": "システムに従う",
         "language.system_with_value": "システムに従う（%s）",
         "language.zh_hans": "简体中文",
@@ -478,6 +497,10 @@ const UI_TEXT := {
         "settings.section.about": "정보",
         "settings.language": "언어",
         "settings.language_desc": "기본값은 시스템 언어입니다. 중국어 간체, 중국어 번체, 영어, 일본어, 한국어로 고정할 수 있습니다",
+        "settings.style": "스타일",
+        "settings.style_desc": "현재 다크 스타일과 기존 클래식 라이트 스타일을 전환합니다",
+        "style.dark": "다크",
+        "style.classic": "클래식 라이트",
         "language.system": "시스템 따르기",
         "language.system_with_value": "시스템 따르기(%s)",
         "language.zh_hans": "简体中文",
@@ -623,6 +646,7 @@ var log_alerts := false
 var error_dialog_logs := false
 var language_mode := LANG_SYSTEM
 var active_language := LANG_ZH_HANS
+var style_mode := STYLE_DARK
 var dirty_settings := false
 var active_game_path := ""
 var active_game_started_msec := 0
@@ -742,24 +766,66 @@ const BLACK_FRAME_VISIBLE_MIN := 8
 const INITIAL_WINDOW_SIZE := Vector2i(2240, 1260)
 const DEFAULT_UI_DPI_SCALE := 1.35
 const TOUCH_MOUSE_SUPPRESS_MS := 700
-const COLOR_BG := Color(0.095, 0.102, 0.135, 1.0)
-const COLOR_GAME_BG := Color(0, 0, 0, 1)
-const COLOR_CARD := Color(0.133, 0.139, 0.184, 1.0)
-const COLOR_CARD_ALT := Color(0.176, 0.184, 0.239, 1.0)
-const COLOR_CARD_HOVER := Color(0.214, 0.224, 0.290, 1.0)
-const COLOR_TEXT := Color(0.972, 0.972, 0.949, 1.0)
-const COLOR_MUTED := Color(0.620, 0.650, 0.780, 1.0)
-const COLOR_ACCENT := Color(0.741, 0.576, 0.976, 1.0)
-const COLOR_ACCENT_SOFT := Color(0.545, 0.914, 0.992, 1.0)
-const COLOR_ACCENT_DIM := Color(0.280, 0.235, 0.410, 1.0)
-const COLOR_WARN := Color(1.000, 0.722, 0.424, 1.0)
-const COLOR_DANGER := Color(1.000, 0.333, 0.333, 1.0)
-const COLOR_LINE := Color(1, 1, 1, 0.105)
 const TOP_ICON_BUTTON_SIZE := Vector2(60, 60)
 const TOP_ACTION_BUTTON_SIZE := Vector2(138, 60)
 const PILL_ICON_SIZE := Vector2(24, 24)
 const PILL_ICON_VISUAL_OFFSET_Y := 2.0
 const HOME_CARD_SIZE := Vector2(272, 368)
+
+var color_bg := Color(0.095, 0.102, 0.135, 1.0)
+var color_game_bg := Color(0, 0, 0, 1)
+var color_card := Color(0.133, 0.139, 0.184, 1.0)
+var color_card_alt := Color(0.176, 0.184, 0.239, 1.0)
+var color_card_hover := Color(0.214, 0.224, 0.290, 1.0)
+var color_text := Color(0.972, 0.972, 0.949, 1.0)
+var color_muted := Color(0.620, 0.650, 0.780, 1.0)
+var color_accent := Color(0.741, 0.576, 0.976, 1.0)
+var color_accent_soft := Color(0.545, 0.914, 0.992, 1.0)
+var color_accent_dim := Color(0.280, 0.235, 0.410, 1.0)
+var color_warn := Color(1.000, 0.722, 0.424, 1.0)
+var color_danger := Color(1.000, 0.333, 0.333, 1.0)
+var color_line := Color(1, 1, 1, 0.105)
+
+func _normalize_style_mode(value: String) -> String:
+    return value if value in STYLE_MODES else STYLE_DARK
+
+func _apply_style_mode(update_theme: bool = true) -> void:
+    style_mode = _normalize_style_mode(style_mode)
+    if style_mode == STYLE_CLASSIC:
+        color_bg = Color(0.944, 0.932, 0.895, 1.0)
+        color_game_bg = Color(0, 0, 0, 1)
+        color_card = Color(0.985, 0.980, 0.955, 1.0)
+        color_card_alt = Color(0.900, 0.890, 0.840, 1.0)
+        color_card_hover = Color(1.000, 0.995, 0.975, 1.0)
+        color_text = Color(0.120, 0.110, 0.100, 1.0)
+        color_muted = Color(0.460, 0.450, 0.420, 1.0)
+        color_accent = Color(0.780, 0.350, 0.220, 1.0)
+        color_accent_soft = Color(0.900, 0.720, 0.640, 1.0)
+        color_accent_dim = Color(0.900, 0.720, 0.640, 1.0)
+        color_warn = Color(1.000, 0.722, 0.424, 1.0)
+        color_danger = Color(1.000, 0.333, 0.333, 1.0)
+        color_line = Color(0.840, 0.820, 0.760, 1.0)
+    else:
+        color_bg = Color(0.095, 0.102, 0.135, 1.0)
+        color_game_bg = Color(0, 0, 0, 1)
+        color_card = Color(0.133, 0.139, 0.184, 1.0)
+        color_card_alt = Color(0.176, 0.184, 0.239, 1.0)
+        color_card_hover = Color(0.214, 0.224, 0.290, 1.0)
+        color_text = Color(0.972, 0.972, 0.949, 1.0)
+        color_muted = Color(0.620, 0.650, 0.780, 1.0)
+        color_accent = Color(0.741, 0.576, 0.976, 1.0)
+        color_accent_soft = Color(0.545, 0.914, 0.992, 1.0)
+        color_accent_dim = Color(0.280, 0.235, 0.410, 1.0)
+        color_warn = Color(1.000, 0.722, 0.424, 1.0)
+        color_danger = Color(1.000, 0.333, 0.333, 1.0)
+        color_line = Color(1, 1, 1, 0.105)
+
+    if update_theme:
+        _apply_ui_font()
+    if bg_rect != null:
+        _set_game_background(game_running)
+    else:
+        RenderingServer.set_default_clear_color(color_game_bg if game_running else color_bg)
 
 func _normalize_language_mode(value: String) -> String:
     return value if value in LANGUAGE_MODES else LANG_SYSTEM
@@ -804,6 +870,11 @@ func _language_option_label(mode: String) -> String:
         return _t("language.system_with_value", [_language_native_name(_system_language_code())])
     return _language_native_name(mode)
 
+func _style_option_label(mode: String) -> String:
+    if mode == STYLE_CLASSIC:
+        return _t("style.classic")
+    return _t("style.dark")
+
 func _apply_language_mode() -> void:
     language_mode = _normalize_language_mode(language_mode)
     active_language = _effective_language_code()
@@ -846,22 +917,22 @@ func _apply_ui_font() -> void:
     UI_FONT.set_fallbacks(fallbacks)
     var ui_theme := Theme.new()
     ui_theme.set_default_font(UI_FONT)
-    ui_theme.set_color("font_color", "Label", COLOR_TEXT)
-    ui_theme.set_color("font_color", "Button", COLOR_TEXT)
-    ui_theme.set_color("font_color", "OptionButton", COLOR_TEXT)
-    ui_theme.set_color("font_hover_color", "OptionButton", COLOR_TEXT)
-    ui_theme.set_color("font_pressed_color", "OptionButton", COLOR_TEXT)
-    ui_theme.set_color("font_color", "LineEdit", COLOR_TEXT)
-    ui_theme.set_color("font_color", "TextEdit", COLOR_TEXT)
-    ui_theme.set_color("font_placeholder_color", "LineEdit", COLOR_MUTED)
-    ui_theme.set_stylebox("normal", "OptionButton", _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1))
-    ui_theme.set_stylebox("hover", "OptionButton", _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 1))
-    ui_theme.set_stylebox("pressed", "OptionButton", _panel_style(8, COLOR_ACCENT_DIM, COLOR_ACCENT, 1))
+    ui_theme.set_color("font_color", "Label", color_text)
+    ui_theme.set_color("font_color", "Button", color_text)
+    ui_theme.set_color("font_color", "OptionButton", color_text)
+    ui_theme.set_color("font_hover_color", "OptionButton", color_text)
+    ui_theme.set_color("font_pressed_color", "OptionButton", color_text)
+    ui_theme.set_color("font_color", "LineEdit", color_text)
+    ui_theme.set_color("font_color", "TextEdit", color_text)
+    ui_theme.set_color("font_placeholder_color", "LineEdit", color_muted)
+    ui_theme.set_stylebox("normal", "OptionButton", _panel_style(8, color_card_alt, color_line, 1))
+    ui_theme.set_stylebox("hover", "OptionButton", _panel_style(8, color_card_hover, color_accent, 1))
+    ui_theme.set_stylebox("pressed", "OptionButton", _panel_style(8, color_accent_dim, color_accent, 1))
     ui_theme.set_stylebox("focus", "OptionButton", _focus_outline(8))
-    ui_theme.set_stylebox("normal", "LineEdit", _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1))
-    ui_theme.set_stylebox("focus", "LineEdit", _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 2))
-    ui_theme.set_stylebox("normal", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.18), COLOR_LINE, 1))
-    ui_theme.set_stylebox("focus", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.24), COLOR_ACCENT, 1))
+    ui_theme.set_stylebox("normal", "LineEdit", _panel_style(8, color_card_alt, color_line, 1))
+    ui_theme.set_stylebox("focus", "LineEdit", _panel_style(8, color_card_hover, color_accent, 2))
+    ui_theme.set_stylebox("normal", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.18), color_line, 1))
+    ui_theme.set_stylebox("focus", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.24), color_accent, 1))
     theme = ui_theme
 
 func _copy_runtime_font(source_path: String, target_path: String) -> bool:
@@ -907,7 +978,7 @@ func _stage_runtime_fonts() -> void:
 
 func _build_ui() -> void:
     bg_rect = ColorRect.new()
-    bg_rect.color = COLOR_BG
+    bg_rect.color = color_bg
     bg_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
     add_child(bg_rect)
 
@@ -964,14 +1035,22 @@ func _build_ui() -> void:
 
 func _load_shell_settings() -> void:
     var cfg := ConfigFile.new()
+    var env_style := _runtime_string("AETHERKIRI_STYLE_MODE", "")
     if cfg.load(SETTINGS_FILE) != OK:
         var env_surface_mode := _runtime_string("AETHERKIRI_SURFACE_MODE", "")
         if not env_surface_mode.is_empty():
             _select_config_surface_mode(env_surface_mode)
         _apply_language_mode()
+        if not env_style.is_empty():
+            style_mode = _normalize_style_mode(env_style)
+        _apply_style_mode()
         return
     language_mode = _normalize_language_mode(String(cfg.get_value("interface", "language", language_mode)))
     _apply_language_mode()
+    style_mode = _normalize_style_mode(String(cfg.get_value("interface", "style", style_mode)))
+    if not env_style.is_empty():
+        style_mode = _normalize_style_mode(env_style)
+    _apply_style_mode()
     selected_backend = _normalize_backend_name(String(cfg.get_value("rendering", "backend", selected_backend)))
     upscale_algorithm = String(cfg.get_value("rendering", "upscale_algorithm", upscale_algorithm))
     if upscale_algorithm == "sharp" or upscale_algorithm == "nearest":
@@ -1020,6 +1099,7 @@ func _normalize_backend_name(value: String) -> String:
 func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
     cfg.set_value("interface", "language", language_mode)
+    cfg.set_value("interface", "style", style_mode)
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
     cfg.set_value("rendering", "surface_mode", render_surface_mode)
@@ -1168,7 +1248,7 @@ func _apply_upscale_algorithm() -> void:
             viewport.material = _opaque_frame_material()
 
 func _set_game_background(active: bool) -> void:
-    var color := COLOR_GAME_BG if active else COLOR_BG
+    var color := color_game_bg if active else color_bg
     if bg_rect != null:
         bg_rect.color = color
     RenderingServer.set_default_clear_color(color)
@@ -1210,26 +1290,26 @@ func _build_home_view() -> void:
     title.text = "AetherKiri"
     title.position = Vector2(42, 38)
     title.add_theme_font_size_override("font_size", 36)
-    title.add_theme_color_override("font_color", COLOR_TEXT)
+    title.add_theme_color_override("font_color", color_text)
     home_view.add_child(title)
 
     home_subtitle_label = Label.new()
     home_subtitle_label.text = _t("home.subtitle")
     home_subtitle_label.position = Vector2(44, 84)
     home_subtitle_label.add_theme_font_size_override("font_size", 17)
-    home_subtitle_label.add_theme_color_override("font_color", COLOR_MUTED)
+    home_subtitle_label.add_theme_color_override("font_color", color_muted)
     home_view.add_child(home_subtitle_label)
 
     var status_pill := PanelContainer.new()
     status_pill.position = Vector2(42, 122)
     status_pill.size = Vector2(284, 42)
-    status_pill.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1))
+    status_pill.add_theme_stylebox_override("panel", _panel_style(8, color_card_alt, color_line, 1))
     home_view.add_child(status_pill)
     home_status_label = Label.new()
     home_status_label.text = _t("home.status")
     home_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     home_status_label.add_theme_font_size_override("font_size", 15)
-    home_status_label.add_theme_color_override("font_color", COLOR_ACCENT_SOFT)
+    home_status_label.add_theme_color_override("font_color", color_accent_soft)
     status_pill.add_child(home_status_label)
 
     var settings_button := _icon_button(ICON_SETTINGS)
@@ -1263,7 +1343,7 @@ func _build_home_view() -> void:
     empty_state.add_theme_constant_override("separation", 18)
     home_view.add_child(empty_state)
 
-    var empty_icon := _centered_icon(ICON_LIBRARY, Vector2(64, 64), COLOR_ACCENT)
+    var empty_icon := _centered_icon(ICON_LIBRARY, Vector2(64, 64), color_accent)
     empty_icon.custom_minimum_size = Vector2(0, 72)
     empty_state.add_child(empty_icon)
 
@@ -1271,14 +1351,14 @@ func _build_home_view() -> void:
     empty_title_label.text = _t("home.empty_title")
     empty_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     empty_title_label.add_theme_font_size_override("font_size", 28)
-    empty_title_label.add_theme_color_override("font_color", COLOR_TEXT)
+    empty_title_label.add_theme_color_override("font_color", color_text)
     empty_state.add_child(empty_title_label)
 
     empty_help_label = Label.new()
     empty_help_label.text = _empty_help_text()
     empty_help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     empty_help_label.add_theme_font_size_override("font_size", 18)
-    empty_help_label.add_theme_color_override("font_color", COLOR_MUTED)
+    empty_help_label.add_theme_color_override("font_color", color_muted)
     empty_state.add_child(empty_help_label)
 
     home_actions = HBoxContainer.new()
@@ -1343,7 +1423,7 @@ func _rebuild_settings_view() -> void:
     title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     title.add_theme_font_size_override("font_size", 30)
-    title.add_theme_color_override("font_color", COLOR_TEXT)
+    title.add_theme_color_override("font_color", color_text)
     top.add_child(title)
 
     save_button = _pill_button(_t("settings.save"), ICON_SAVE)
@@ -1358,6 +1438,7 @@ func _rebuild_settings_view() -> void:
     var interface_card := _settings_card()
     page.add_child(interface_card)
     interface_card.add_child(_settings_block(_t("settings.language"), _t("settings.language_desc"), _language_select()))
+    interface_card.add_child(_settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select()))
 
     page.add_child(_section_title(_t("settings.section.render"), ICON_PERFORMANCE))
     var render_card := _settings_card()
@@ -1431,7 +1512,7 @@ func _build_loading_panel() -> void:
     loading_title_label = Label.new()
     loading_title_label.text = _t("loading.title")
     loading_title_label.add_theme_font_size_override("font_size", 28)
-    loading_title_label.add_theme_color_override("font_color", COLOR_TEXT)
+    loading_title_label.add_theme_color_override("font_color", color_text)
     box.add_child(loading_title_label)
 
     if ui_log_enabled and not _mobile_runtime():
@@ -1471,7 +1552,7 @@ func _empty_style() -> StyleBoxEmpty:
 func _focus_outline(radius: int = 8) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
     style.bg_color = Color(0, 0, 0, 0)
-    style.border_color = COLOR_ACCENT
+    style.border_color = color_accent
     style.border_width_left = 3
     style.border_width_top = 3
     style.border_width_right = 3
@@ -1513,7 +1594,7 @@ func _game_card_border_style(active: bool) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
     style.bg_color = Color(0, 0, 0, 0)
     style.draw_center = false
-    style.border_color = COLOR_ACCENT if active else COLOR_LINE
+    style.border_color = color_accent if active else color_line
     var width := 3 if active else 1
     style.border_width_left = width
     style.border_width_top = width
@@ -1565,17 +1646,17 @@ func _svg_icon_scale(svg: String) -> float:
     var width := maxf(1.0, float(match.get_string(1)))
     return maxf(1.0, 64.0 / width)
 
-func _icon_rect(icon_path: String, size: Vector2, tint: Color = COLOR_TEXT) -> TextureRect:
+func _icon_rect(icon_path: String, size: Vector2, tint: Color = Color(-1, -1, -1, -1)) -> TextureRect:
     var icon := TextureRect.new()
     icon.texture = _load_ui_icon(icon_path)
     icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
     icon.custom_minimum_size = size
     icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
     icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-    icon.modulate = tint
+    icon.modulate = color_text if tint.a < 0.0 else tint
     return icon
 
-func _centered_icon(icon_path: String, size: Vector2, tint: Color = COLOR_TEXT) -> CenterContainer:
+func _centered_icon(icon_path: String, size: Vector2, tint: Color = Color(-1, -1, -1, -1)) -> CenterContainer:
     var holder := CenterContainer.new()
     holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
     holder.add_child(_icon_rect(icon_path, size, tint))
@@ -1591,7 +1672,15 @@ func _apply_button_style(button: Button, normal: StyleBox, hover: StyleBox, pres
     button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
     button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
     button.add_theme_color_override("font_focus_color", button.get_theme_color("font_color"))
-    button.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.72))
+    button.add_theme_color_override("font_disabled_color", _disabled_text_color())
+
+func _disabled_text_color() -> Color:
+    return Color(1, 1, 1, 0.72) if style_mode == STYLE_DARK else Color(color_text.r, color_text.g, color_text.b, 0.56)
+
+func _pill_disabled_style(radius: int) -> StyleBoxFlat:
+    if style_mode == STYLE_DARK:
+        return _panel_style(radius, Color(0.28, 0.30, 0.38, 1), Color(0.28, 0.30, 0.38, 1), 0)
+    return _panel_style(radius, Color(0.78, 0.76, 0.70, 1), Color(0.78, 0.76, 0.70, 1), 0)
 
 func _pill_button(text: String, icon_path: String = "") -> Button:
     var button := Button.new()
@@ -1606,10 +1695,10 @@ func _pill_button(text: String, icon_path: String = "") -> Button:
         _attach_pill_button_content(button, text, icon_path)
     _apply_button_style(
         button,
-        _panel_style(10, COLOR_ACCENT, COLOR_ACCENT, 0),
-        _panel_style(10, COLOR_ACCENT.lightened(0.06), COLOR_ACCENT.lightened(0.08), 0),
-        _panel_style(10, COLOR_ACCENT.darkened(0.10), COLOR_ACCENT.darkened(0.10), 0),
-        _panel_style(10, Color(0.28, 0.30, 0.38, 1), Color(0.28, 0.30, 0.38, 1), 0)
+        _panel_style(10, color_accent, color_accent, 0),
+        _panel_style(10, color_accent.lightened(0.06), color_accent.lightened(0.08), 0),
+        _panel_style(10, color_accent.darkened(0.10), color_accent.darkened(0.10), 0),
+        _pill_disabled_style(10)
     )
     return button
 
@@ -1656,7 +1745,7 @@ func _set_pill_button_text(button: Button, text: String) -> void:
     button.text = text
 
 func _sync_pill_button_content_state(button: Button) -> void:
-    var tint := Color(1, 1, 1, 0.72) if button.disabled else Color.WHITE
+    var tint := _disabled_text_color() if button.disabled else Color.WHITE
     var label_path = button.get_meta("pill_label_path", NodePath(""))
     var label := button.get_node_or_null(label_path) as Label
     if label != null:
@@ -1669,37 +1758,40 @@ func _sync_pill_button_content_state(button: Button) -> void:
 func _icon_button(icon_path: String) -> Button:
     var button := Button.new()
     button.text = ""
-    button.icon = _load_ui_icon(icon_path)
     button.alignment = HORIZONTAL_ALIGNMENT_CENTER
-    button.expand_icon = true
-    button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    button.clip_contents = true
     button.focus_mode = Control.FOCUS_ALL
     button.custom_minimum_size = TOP_ICON_BUTTON_SIZE
     button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
     button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    button.add_theme_constant_override("icon_max_width", 28)
-    button.add_theme_color_override("font_color", COLOR_TEXT)
-    button.add_theme_color_override("font_hover_color", COLOR_TEXT)
-    button.add_theme_color_override("font_pressed_color", COLOR_TEXT)
-    button.add_theme_color_override("font_focus_color", COLOR_TEXT)
+    button.add_theme_color_override("font_color", color_text)
+    button.add_theme_color_override("font_hover_color", color_text)
+    button.add_theme_color_override("font_pressed_color", color_text)
+    button.add_theme_color_override("font_focus_color", color_text)
     _apply_button_style(
         button,
-        _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1),
-        _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 1),
-        _panel_style(8, COLOR_ACCENT_DIM, COLOR_ACCENT, 1)
+        _panel_style(8, color_card_alt, color_line, 1),
+        _panel_style(8, color_card_hover, color_accent, 1),
+        _panel_style(8, color_accent_dim, color_accent, 1)
     )
+
+    var center := CenterContainer.new()
+    center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    center.set_anchors_preset(Control.PRESET_FULL_RECT)
+    button.add_child(center)
+    center.add_child(_icon_rect(icon_path, Vector2(28, 28), color_text))
     return button
 
 func _section_title(text: String, icon_path: String) -> HBoxContainer:
     var row := HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 34)
     row.add_theme_constant_override("separation", 10)
-    row.add_child(_icon_rect(icon_path, Vector2(22, 22), COLOR_ACCENT_SOFT))
+    row.add_child(_icon_rect(icon_path, Vector2(22, 22), color_accent_soft))
     var label := Label.new()
     label.text = text
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     label.add_theme_font_size_override("font_size", 19)
-    label.add_theme_color_override("font_color", COLOR_ACCENT_SOFT)
+    label.add_theme_color_override("font_color", color_accent_soft)
     row.add_child(label)
     return row
 
@@ -1712,7 +1804,7 @@ func _settings_card() -> VBoxContainer:
 func _settings_block(title: String, subtitle: String, control: Control) -> Control:
     var panel := PanelContainer.new()
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
+    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     var box := VBoxContainer.new()
     box.custom_minimum_size = Vector2(0, 116)
     box.add_theme_constant_override("separation", 8)
@@ -1720,14 +1812,14 @@ func _settings_block(title: String, subtitle: String, control: Control) -> Contr
     var title_label := Label.new()
     title_label.text = title
     title_label.add_theme_font_size_override("font_size", 20)
-    title_label.add_theme_color_override("font_color", COLOR_TEXT)
+    title_label.add_theme_color_override("font_color", color_text)
     box.add_child(title_label)
     if not subtitle.is_empty():
         var sub := Label.new()
         sub.text = subtitle
         sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
         sub.add_theme_font_size_override("font_size", 16)
-        sub.add_theme_color_override("font_color", COLOR_MUTED)
+        sub.add_theme_color_override("font_color", color_muted)
         box.add_child(sub)
     box.add_child(control)
     return panel
@@ -1735,7 +1827,7 @@ func _settings_block(title: String, subtitle: String, control: Control) -> Contr
 func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: String) -> Control:
     var panel := PanelContainer.new()
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
+    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     var row := HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 92)
     row.add_theme_constant_override("separation", 18)
@@ -1746,13 +1838,13 @@ func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: S
     var title_label := Label.new()
     title_label.text = title
     title_label.add_theme_font_size_override("font_size", 20)
-    title_label.add_theme_color_override("font_color", COLOR_TEXT)
+    title_label.add_theme_color_override("font_color", color_text)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = subtitle
     sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     sub.add_theme_font_size_override("font_size", 16)
-    sub.add_theme_color_override("font_color", COLOR_MUTED)
+    sub.add_theme_color_override("font_color", color_muted)
     labels.add_child(sub)
     row.add_child(labels)
 
@@ -1767,7 +1859,7 @@ func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: S
 func _settings_value_row(title: String, value: String) -> Control:
     var panel := PanelContainer.new()
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
+    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     var row := HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 64)
     row.add_theme_constant_override("separation", 18)
@@ -1777,20 +1869,20 @@ func _settings_value_row(title: String, value: String) -> Control:
     label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     label.add_theme_font_size_override("font_size", 19)
-    label.add_theme_color_override("font_color", COLOR_TEXT)
+    label.add_theme_color_override("font_color", color_text)
     row.add_child(label)
     var value_label := Label.new()
     value_label.text = value
     value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     value_label.add_theme_font_size_override("font_size", 17)
-    value_label.add_theme_color_override("font_color", COLOR_ACCENT)
+    value_label.add_theme_color_override("font_color", color_accent)
     row.add_child(value_label)
     return panel
 
 func _settings_fps_row() -> Control:
     var panel := PanelContainer.new()
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
+    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     var row := HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 86)
     row.add_theme_constant_override("separation", 18)
@@ -1801,12 +1893,12 @@ func _settings_fps_row() -> Control:
     var title_label := Label.new()
     title_label.text = _t("settings.target_fps")
     title_label.add_theme_font_size_override("font_size", 20)
-    title_label.add_theme_color_override("font_color", COLOR_TEXT)
+    title_label.add_theme_color_override("font_color", color_text)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = _t("settings.target_fps_desc")
     sub.add_theme_font_size_override("font_size", 16)
-    sub.add_theme_color_override("font_color", COLOR_MUTED)
+    sub.add_theme_color_override("font_color", color_muted)
     labels.add_child(sub)
     row.add_child(labels)
 
@@ -1841,6 +1933,22 @@ func _language_select() -> OptionButton:
     select.select(selected_index)
     select.item_selected.connect(func(index: int):
         _select_language_mode(String(select.get_item_metadata(index)))
+    )
+    return select
+
+func _style_select() -> OptionButton:
+    var select := OptionButton.new()
+    select.custom_minimum_size = Vector2(360, 58)
+    var selected_index := 0
+    for i in range(STYLE_MODES.size()):
+        var mode := String(STYLE_MODES[i])
+        select.add_item(_style_option_label(mode))
+        select.set_item_metadata(i, mode)
+        if mode == style_mode:
+            selected_index = i
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_style_mode(String(select.get_item_metadata(index)))
     )
     return select
 
@@ -1912,11 +2020,11 @@ func _segment_button(text: String, selected: bool) -> Button:
     button.focus_mode = Control.FOCUS_ALL
     button.custom_minimum_size = Vector2(230, 56)
     button.add_theme_font_size_override("font_size", 18)
-    button.add_theme_color_override("font_color", COLOR_TEXT)
-    var selected_style := _panel_style(8, COLOR_ACCENT_DIM, COLOR_ACCENT, 1)
-    var selected_hover_style := _panel_style(8, COLOR_ACCENT_DIM.lightened(0.06), COLOR_ACCENT_SOFT, 1)
-    var normal_style := _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1)
-    var normal_hover_style := _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 1)
+    button.add_theme_color_override("font_color", color_text)
+    var selected_style := _panel_style(8, color_accent_dim, color_accent, 1)
+    var selected_hover_style := _panel_style(8, color_accent_dim.lightened(0.06), color_accent_soft, 1)
+    var normal_style := _panel_style(8, color_card_alt, color_line, 1)
+    var normal_hover_style := _panel_style(8, color_card_hover, color_accent, 1)
     _apply_button_style(
         button,
         selected_style if selected else normal_style,
@@ -2026,6 +2134,52 @@ func _select_language_mode(value: String) -> void:
         call_deferred("_show_detail", selected_game)
     _refresh_games()
 
+func _select_style_mode(value: String) -> void:
+    var next_style := _normalize_style_mode(value)
+    if next_style == style_mode:
+        return
+    style_mode = next_style
+    _apply_style_mode()
+    _mark_settings_dirty()
+    call_deferred("_rebuild_shell_views_after_style_change")
+
+func _rebuild_shell_views_after_style_change() -> void:
+    if shell_root == null:
+        return
+    var was_home := is_instance_valid(home_view) and home_view.visible
+    var was_settings := is_instance_valid(settings_view) and settings_view.visible
+    var was_detail := is_instance_valid(detail_view) and detail_view.visible
+
+    _remove_shell_view(home_view)
+    _remove_shell_view(settings_view)
+    _remove_shell_view(detail_view)
+
+    _build_home_view()
+    _build_settings_view()
+    _build_detail_view()
+    _fit_full_rects()
+
+    if was_settings:
+        home_view.visible = false
+        detail_view.visible = false
+        settings_view.visible = true
+        _rebuild_settings_view()
+    elif was_detail and not selected_game.is_empty():
+        _show_detail(selected_game)
+    else:
+        home_view.visible = was_home or not was_detail
+        settings_view.visible = false
+        detail_view.visible = false
+        _refresh_games()
+
+func _remove_shell_view(view: Control) -> void:
+    if view == null or not is_instance_valid(view):
+        return
+    var parent := view.get_parent()
+    if parent != null:
+        parent.remove_child(view)
+    view.queue_free()
+
 func _refresh_language_texts() -> void:
     if is_instance_valid(home_subtitle_label):
         home_subtitle_label.text = _t("home.subtitle")
@@ -2093,13 +2247,13 @@ func _show_detail(game: Dictionary) -> void:
     eyebrow.position = Vector2(116, 44)
     eyebrow.size = Vector2(360, 30)
     eyebrow.add_theme_font_size_override("font_size", 17)
-    eyebrow.add_theme_color_override("font_color", COLOR_ACCENT_SOFT)
+    eyebrow.add_theme_color_override("font_color", color_accent_soft)
     content.add_child(eyebrow)
 
     var cover := PanelContainer.new()
     cover.position = Vector2(62, 126)
     cover.size = Vector2(340, 476)
-    cover.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1))
+    cover.add_theme_stylebox_override("panel", _panel_style(8, color_card_alt, color_line, 1))
     content.add_child(cover)
     var cover_texture := _load_cover_texture(game)
     if cover_texture != null:
@@ -2109,7 +2263,7 @@ func _show_detail(game: Dictionary) -> void:
         image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
         cover.add_child(image)
     else:
-        var icon := _centered_icon(ICON_GAMEPAD, Vector2(70, 70), COLOR_ACCENT)
+        var icon := _centered_icon(ICON_GAMEPAD, Vector2(70, 70), color_accent)
         cover.add_child(icon)
 
     var title := Label.new()
@@ -2119,7 +2273,7 @@ func _show_detail(game: Dictionary) -> void:
     title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
     title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.add_theme_font_size_override("font_size", 36)
-    title.add_theme_color_override("font_color", COLOR_TEXT)
+    title.add_theme_color_override("font_color", color_text)
     content.add_child(title)
 
     var subtitle := Label.new()
@@ -2127,13 +2281,13 @@ func _show_detail(game: Dictionary) -> void:
     subtitle.position = Vector2(444, 194)
     subtitle.size = Vector2(760, 28)
     subtitle.add_theme_font_size_override("font_size", 17)
-    subtitle.add_theme_color_override("font_color", COLOR_MUTED)
+    subtitle.add_theme_color_override("font_color", color_muted)
     content.add_child(subtitle)
 
     var info_panel := PanelContainer.new()
     info_panel.position = Vector2(440, 246)
     info_panel.size = Vector2(760, 206)
-    info_panel.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
+    info_panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     content.add_child(info_panel)
     var info := VBoxContainer.new()
     info.add_theme_constant_override("separation", 12)
@@ -2161,13 +2315,13 @@ func _show_detail(game: Dictionary) -> void:
 func _detail_line(icon_path: String, text: String) -> HBoxContainer:
     var row := HBoxContainer.new()
     row.add_theme_constant_override("separation", 16)
-    row.add_child(_icon_rect(icon_path, Vector2(24, 24), COLOR_ACCENT_SOFT))
+    row.add_child(_icon_rect(icon_path, Vector2(24, 24), color_accent_soft))
     var label := Label.new()
     label.text = text
     label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     label.add_theme_font_size_override("font_size", 17)
-    label.add_theme_color_override("font_color", COLOR_MUTED)
+    label.add_theme_color_override("font_color", color_muted)
     row.add_child(label)
     return row
 
@@ -2184,12 +2338,12 @@ func _detail_action(icon_path: String, text: String, callback: Callable = Callab
     button.add_theme_constant_override("icon_max_width", 26)
     button.add_theme_constant_override("h_separation", 14)
     button.add_theme_font_size_override("font_size", 20)
-    button.add_theme_color_override("font_color", COLOR_TEXT)
+    button.add_theme_color_override("font_color", color_text)
     _apply_button_style(
         button,
-        _panel_style(8, COLOR_CARD, COLOR_LINE, 1),
-        _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 1),
-        _panel_style(8, COLOR_ACCENT_DIM, COLOR_ACCENT, 1)
+        _panel_style(8, color_card, color_line, 1),
+        _panel_style(8, color_card_hover, color_accent, 1),
+        _panel_style(8, color_accent_dim, color_accent, 1)
     )
     if callback.is_valid():
         button.pressed.connect(callback)
@@ -2211,7 +2365,7 @@ func _show_import_guide() -> void:
     dialog.anchor_bottom = 0.5
     dialog.position = Vector2(-320, -250)
     dialog.size = Vector2(640, 500)
-    dialog.add_theme_stylebox_override("panel", _panel_style(22, COLOR_CARD, Color(0, 0, 0, 0.04), 1))
+    dialog.add_theme_stylebox_override("panel", _panel_style(22, color_card, Color(0, 0, 0, 0.04), 1))
     modal_layer.add_child(dialog)
 
     var box := VBoxContainer.new()
@@ -2220,13 +2374,13 @@ func _show_import_guide() -> void:
     var title := Label.new()
     title.text = _t("dialog.import_title")
     title.add_theme_font_size_override("font_size", 30)
-    title.add_theme_color_override("font_color", COLOR_TEXT)
+    title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var body := Label.new()
     body.text = _t("dialog.import_guide_body")
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     body.add_theme_font_size_override("font_size", 22)
-    body.add_theme_color_override("font_color", COLOR_TEXT)
+    body.add_theme_color_override("font_color", color_text)
     box.add_child(body)
     var ok := _pill_button(_t("dialog.ok"))
     ok.custom_minimum_size = Vector2(140, 62)
@@ -2286,7 +2440,7 @@ func _offer_scrape_after_add(game: Dictionary) -> void:
     dialog.anchor_bottom = 0.5
     dialog.position = Vector2(-280, -150)
     dialog.size = Vector2(560, 300)
-    dialog.add_theme_stylebox_override("panel", _panel_style(20, COLOR_CARD, Color(0, 0, 0, 0.06), 1))
+    dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
     modal_layer.add_child(dialog)
     var box := VBoxContainer.new()
     box.add_theme_constant_override("separation", 18)
@@ -2294,13 +2448,13 @@ func _offer_scrape_after_add(game: Dictionary) -> void:
     var title := Label.new()
     title.text = _t("dialog.scrape_title")
     title.add_theme_font_size_override("font_size", 28)
-    title.add_theme_color_override("font_color", COLOR_TEXT)
+    title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var body := Label.new()
     body.text = _t("dialog.scrape_body", [_game_display_title(game)])
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     body.add_theme_font_size_override("font_size", 21)
-    body.add_theme_color_override("font_color", COLOR_TEXT)
+    body.add_theme_color_override("font_color", color_text)
     box.add_child(body)
     var buttons := HBoxContainer.new()
     buttons.add_theme_constant_override("separation", 12)
@@ -2351,7 +2505,7 @@ func _rename_selected_game() -> void:
     dialog.anchor_bottom = 0.5
     dialog.position = Vector2(-280, -150)
     dialog.size = Vector2(560, 300)
-    dialog.add_theme_stylebox_override("panel", _panel_style(20, COLOR_CARD, Color(0, 0, 0, 0.06), 1))
+    dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
     modal_layer.add_child(dialog)
     var box := VBoxContainer.new()
     box.add_theme_constant_override("separation", 18)
@@ -2359,7 +2513,7 @@ func _rename_selected_game() -> void:
     var title := Label.new()
     title.text = _t("dialog.rename")
     title.add_theme_font_size_override("font_size", 28)
-    title.add_theme_color_override("font_color", COLOR_TEXT)
+    title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var input := LineEdit.new()
     input.text = _game_display_title(selected_game)
@@ -2393,7 +2547,7 @@ func _confirm_remove_selected() -> void:
     dialog.anchor_bottom = 0.5
     dialog.position = Vector2(-280, -140)
     dialog.size = Vector2(560, 280)
-    dialog.add_theme_stylebox_override("panel", _panel_style(20, COLOR_CARD, Color(0, 0, 0, 0.06), 1))
+    dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
     modal_layer.add_child(dialog)
     var box := VBoxContainer.new()
     box.add_theme_constant_override("separation", 18)
@@ -2402,7 +2556,7 @@ func _confirm_remove_selected() -> void:
     label.text = _t("dialog.remove_body", [_game_display_title(selected_game)])
     label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     label.add_theme_font_size_override("font_size", 22)
-    label.add_theme_color_override("font_color", COLOR_TEXT)
+    label.add_theme_color_override("font_color", color_text)
     box.add_child(label)
     var remove := _pill_button(_t("dialog.remove"))
     remove.pressed.connect(func():
@@ -2435,7 +2589,7 @@ func _show_import_picker() -> void:
     dialog.anchor_bottom = 0.5
     dialog.position = Vector2(-260, -160)
     dialog.size = Vector2(520, 320)
-    dialog.add_theme_stylebox_override("panel", _panel_style(20, COLOR_CARD, Color(0, 0, 0, 0.06), 1))
+    dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
     modal_layer.add_child(dialog)
     var box := VBoxContainer.new()
     box.add_theme_constant_override("separation", 14)
@@ -2443,7 +2597,7 @@ func _show_import_picker() -> void:
     var title := Label.new()
     title.text = _t("dialog.import_title")
     title.add_theme_font_size_override("font_size", 28)
-    title.add_theme_color_override("font_color", COLOR_TEXT)
+    title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var dir_button := _pill_button(_t("dialog.select_game_dir"))
     dir_button.pressed.connect(func():
@@ -2693,7 +2847,7 @@ func _show_web_import_picker() -> void:
     dialog.anchor_bottom = 0.5
     dialog.position = Vector2(-340, -220)
     dialog.size = Vector2(680, 440)
-    dialog.add_theme_stylebox_override("panel", _panel_style(20, COLOR_CARD, Color(0, 0, 0, 0.06), 1))
+    dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
     modal_layer.add_child(dialog)
     var box := VBoxContainer.new()
     box.add_theme_constant_override("separation", 14)
@@ -2701,7 +2855,7 @@ func _show_web_import_picker() -> void:
     var title := Label.new()
     title.text = _t("dialog.import_title")
     title.add_theme_font_size_override("font_size", 28)
-    title.add_theme_color_override("font_color", COLOR_TEXT)
+    title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
 
     if bool(support.get("directory", false)):
@@ -3046,9 +3200,9 @@ func _game_card(game: Dictionary) -> Button:
     button.clip_contents = true
     button.focus_mode = Control.FOCUS_ALL
     button.text = ""
-    button.add_theme_stylebox_override("normal", _panel_style(8, COLOR_CARD_ALT, COLOR_LINE, 1))
-    button.add_theme_stylebox_override("hover", _panel_style(8, COLOR_CARD_HOVER, COLOR_ACCENT, 1))
-    button.add_theme_stylebox_override("pressed", _panel_style(8, COLOR_ACCENT_DIM, COLOR_ACCENT, 1))
+    button.add_theme_stylebox_override("normal", _panel_style(8, color_card_alt, color_line, 1))
+    button.add_theme_stylebox_override("hover", _panel_style(8, color_card_hover, color_accent, 1))
+    button.add_theme_stylebox_override("pressed", _panel_style(8, color_accent_dim, color_accent, 1))
     button.add_theme_stylebox_override("focus", _focus_outline(8))
     button.pressed.connect(func(): _show_detail(game))
 
@@ -3071,10 +3225,10 @@ func _game_card(game: Dictionary) -> Button:
         var placeholder := PanelContainer.new()
         placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
         placeholder.set_anchors_preset(Control.PRESET_FULL_RECT)
-        placeholder.add_theme_stylebox_override("panel", _panel_style(8, COLOR_CARD, COLOR_LINE, 1))
+        placeholder.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
         frame.add_child(placeholder)
 
-        var icon := _centered_icon(ICON_GAMEPAD, Vector2(58, 58), COLOR_ACCENT)
+        var icon := _centered_icon(ICON_GAMEPAD, Vector2(58, 58), color_accent)
         icon.set_anchors_preset(Control.PRESET_FULL_RECT)
         frame.add_child(icon)
 
@@ -3301,7 +3455,7 @@ func _ready() -> void:
     _apply_initial_window_size()
     _apply_global_dpi_scale()
     get_viewport().transparent_bg = false
-    RenderingServer.set_default_clear_color(COLOR_BG)
+    RenderingServer.set_default_clear_color(color_bg)
     var ios_diagnostics_enabled := OS.get_name() == "iOS" and _runtime_flag("AETHERKIRI_IOS_DIAGNOSTICS")
     var perf_interval_env := OS.get_environment("AETHERKIRI_PERF_LOG_INTERVAL")
     if not perf_interval_env.is_empty():
@@ -3625,7 +3779,7 @@ func _prepare_cli_probe_view(config: Dictionary) -> void:
     detail_view.visible = false
     detail_scroll.visible = false
     modal_layer.visible = false
-    bg_rect.color = COLOR_GAME_BG
+    bg_rect.color = color_game_bg
     viewport.visible = true
     game_view.visible = true
     loading_panel.visible = false
