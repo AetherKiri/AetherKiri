@@ -4083,6 +4083,13 @@ void DeinitializeAetherKiri(ModuleInitializationLevel level) {
     ReleaseRemainingGodotGpuTextures();
     ReleaseGodotGpuPipeline();
     TVPGodotGpuBridgeRegister(nullptr);
+
+#if defined(__ANDROID__)
+    // Forcefully exit the process on Android when the Godot engine terminates.
+    // Kirikiri relies on many global states that fail to re-initialize correctly 
+    // if the OS keeps the process alive but destroys and recreates the Godot Activity.
+    std::exit(0);
+#endif
 }
 
 } // namespace godot
