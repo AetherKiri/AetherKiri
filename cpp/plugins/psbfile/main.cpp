@@ -8,9 +8,12 @@
 #include <cassert>
 #include <cstdlib>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "tjs.h"
 #include "ncbind.hpp"
+#include "KAGParser.h"
 #include "PSBFile.h"
 #include "PSBHeader.h"
 #include "PSBMediaRegistry.h"
@@ -74,6 +77,124 @@ static bool psbCacheInfoCallback(size_t &usedBytes, size_t &limitBytes) {
     return true;
 }
 
+namespace {
+using ScenarioLabelSet = std::unordered_set<std::string>;
+
+std::string StripLeadingStar(std::string value) {
+    if(!value.empty() && value.front() == '*')
+        value.erase(value.begin());
+    return value;
+}
+
+void AddScenarioLabel(ScenarioLabelSet &labels, std::string value) {
+    value = StripLeadingStar(std::move(value));
+    if(!value.empty())
+        labels.insert(std::move(value));
+}
+
+std::shared_ptr<PSB::PSBDictionary>
+AsDictionary(const std::shared_ptr<PSB::IPSBValue> &value) {
+    return std::dynamic_pointer_cast<PSB::PSBDictionary>(value);
+}
+
+std::shared_ptr<PSB::PSBList>
+AsList(const std::shared_ptr<PSB::IPSBValue> &value) {
+    return std::dynamic_pointer_cast<PSB::PSBList>(value);
+}
+
+std::shared_ptr<PSB::PSBString>
+AsString(const std::shared_ptr<PSB::IPSBValue> &value) {
+    return std::dynamic_pointer_cast<PSB::PSBString>(value);
+}
+
+void CollectJumpLabels(ScenarioLabelSet &labels,
+                       const std::shared_ptr<PSB::IPSBValue> &value) {
+    if(auto dict = AsDictionary(value)) {
+        for(const auto &[key, child] : *dict) {
+            AddScenarioLabel(labels, key);
+            if(auto text = AsString(child))
+                AddScenarioLabel(labels, text->value);
+        }
+        return;
+    }
+
+    if(auto list = AsList(value)) {
+        for(const auto &child : *list) {
+            if(auto text = AsString(child))
+                AddScenarioLabel(labels, text->value);
+        }
+    }
+}
+
+ScenarioLabelSet CollectScenarioLabels(const std::shared_ptr<const PSB::PSBDictionary> &root) {
+    ScenarioLabelSet labels;
+    if(!root)
+        return labels;
+
+    auto scenes = std::dynamic_pointer_cast<PSB::PSBList>((*root)["scenes"]);
+    if(!scenes)
+        return labels;
+
+    for(const auto &sceneValue : *scenes) {
+        auto scene = AsDictionary(sceneValue);
+        if(!scene)
+            continue;
+
+        if(auto label = AsString((*scene)["label"]))
+            AddScenarioLabel(labels, label->value);
+        CollectJumpLabels(labels, (*scene)["jumplabels"]);
+    }
+
+    return labels;
+}
+
+const ScenarioLabelSet *GetCachedScenarioLabels(const ttstr &storage) {
+    static std::unordered_map<std::string, ScenarioLabelSet> cache;
+
+    ttstr path = storage;
+    if(path.IsEmpty())
+        return nullptr;
+    if(TVPExtractStorageExt(path).AsLowerCase() != TJS_W(".scn"))
+        path += TJS_W(".scn");
+
+    const std::string key = path.AsStdString();
+    auto found = cache.find(key);
+    if(found != cache.end())
+        return &found->second;
+
+    PSB::PSBFile psb;
+    psb.setSeed(motion::ResourceManager::getDecryptSeed());
+    if(!psb.loadPSBFile(path)) {
+        if(psbDebugEnabled()) {
+            LOGGER->info("PSB scenario label load failed: {}",
+                         path.AsStdString());
+        }
+        return nullptr;
+    }
+
+    auto inserted = cache.emplace(key, CollectScenarioLabels(psb.getObjects()));
+    if(psbDebugEnabled()) {
+        LOGGER->info("PSB scenario labels: path={} count={}", key,
+                     inserted.first->second.size());
+    }
+    return &inserted.first->second;
+}
+
+bool HasCompiledScenarioLabel(const ttstr &storage, const ttstr &label) {
+    const auto *labels = GetCachedScenarioLabels(storage);
+    if(!labels)
+        return false;
+
+    std::string wanted = StripLeadingStar(label.AsStdString());
+    const bool found = labels->find(wanted) != labels->end();
+    if(psbDebugEnabled()) {
+        LOGGER->info("PSB scenario label query: storage={} label={} found={}",
+                     storage.AsStdString(), wanted, found);
+    }
+    return found;
+}
+} // namespace
+
 namespace PSB {
 void initPSBMedia() {
     if(psbMedia != nullptr)
@@ -96,9 +217,15 @@ void deInitPSBMedia() {
 }
 } // namespace PSB
 
-void initPsbFile() { initPSBMedia(); }
+void initPsbFile() {
+    initPSBMedia();
+    TVPRegisterCompiledScenarioLabelResolver(HasCompiledScenarioLabel);
+}
 
-void deInitPsbFile() { deInitPSBMedia(); }
+void deInitPsbFile() {
+    TVPRegisterCompiledScenarioLabelResolver(nullptr);
+    deInitPSBMedia();
+}
 
 // ---------------------------------------------------------------------------
 // PSB Lazy Proxy: converts PSB tree nodes to TJS on demand, avoiding the

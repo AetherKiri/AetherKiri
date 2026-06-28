@@ -26,6 +26,12 @@
 #include <vector>
 
 using namespace TJS;
+
+typedef bool (*tTVPCompiledScenarioLabelResolver)(const ttstr &storage,
+                                                  const ttstr &label);
+
+TJS_EXP_FUNC_DEF(void, TVPRegisterCompiledScenarioLabelResolver,
+                 (tTVPCompiledScenarioLabelResolver resolver));
 /*[*/
 //---------------------------------------------------------------------------
 // KAG Parser debug level

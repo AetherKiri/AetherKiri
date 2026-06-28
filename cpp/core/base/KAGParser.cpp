@@ -15,6 +15,8 @@
 #include "tjsDictionary.h"
 #include "DebugIntf.h"
 #include "TextStream.h"
+#include "StorageIntf.h"
+#include "ncbind.hpp"
 #include <atomic>
 #include <cstdlib>
 #include <spdlog/spdlog.h>
@@ -136,6 +138,46 @@ const tjs_char *TVPUnknownMacroName = TJS_W("Unknown macro \"%1\"");
 #define TJS_NATIVE_SET_ClassID ClassID_KAGParser = TJS_NCM_CLASSID;
 static tjs_int32 ClassID_KAGParser = -1;
 
+static tTVPCompiledScenarioLabelResolver
+    TVPCompiledScenarioLabelResolver = nullptr;
+
+void TVPRegisterCompiledScenarioLabelResolver(
+    tTVPCompiledScenarioLabelResolver resolver) {
+    TVPCompiledScenarioLabelResolver = resolver;
+}
+
+static ttstr TVPGetCompiledScenarioStorageName(const ttstr &name) {
+    if(name.IsEmpty())
+        return ttstr();
+
+    ttstr path = name;
+    if(TVPExtractStorageExt(path).AsLowerCase() != TJS_W(".scn"))
+        path += TJS_W(".scn");
+    return path;
+}
+
+static bool TVPHasCompiledScenarioStorage(const ttstr &name) {
+    ttstr path = TVPGetCompiledScenarioStorageName(name);
+    return !path.IsEmpty() && TVPIsExistentStorage(path);
+}
+
+static bool TVPCompiledScenarioHasLabel(const ttstr &storage,
+                                        const ttstr &label) {
+    if(storage.IsEmpty() || label.IsEmpty())
+        return false;
+
+    if(!TVPCompiledScenarioLabelResolver)
+        ncbAutoRegister::LoadModule(TJS_W("psbfile.dll"));
+    if(!TVPCompiledScenarioLabelResolver)
+        return false;
+
+    try {
+        return TVPCompiledScenarioLabelResolver(storage, label);
+    } catch(...) {
+        return false;
+    }
+}
+
 //---------------------------------------------------------------------------
 // tTVPScenarioCacheItem : Scenario Cache Item
 //---------------------------------------------------------------------------
@@ -189,7 +231,11 @@ void tTVPScenarioCacheItem::LoadScenario(const ttstr &name, bool isstring) {
         } catch(...) {
             if(stream)
                 stream->Destruct();
-            throw;
+            if(TVPHasCompiledScenarioStorage(name)) {
+                Buffer = TJS_W("*\n");
+            } else {
+                throw;
+            }
         }
         if(stream)
             stream->Destruct();
@@ -1152,6 +1198,12 @@ void tTJSNI_KAGParser::GoToLabel(const ttstr &name) {
         else
             CurPage.Clear();
         CurLine = newline->Line;
+        CurPos = 0;
+        LineBufferUsing = false;
+    } else if(TVPCompiledScenarioHasLabel(StorageName, name)) {
+        CurLabel = name;
+        CurPage.Clear();
+        CurLine = 0;
         CurPos = 0;
         LineBufferUsing = false;
     } else {
