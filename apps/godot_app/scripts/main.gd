@@ -757,6 +757,8 @@ const COLOR_DANGER := Color(1.000, 0.333, 0.333, 1.0)
 const COLOR_LINE := Color(1, 1, 1, 0.105)
 const TOP_ICON_BUTTON_SIZE := Vector2(60, 60)
 const TOP_ACTION_BUTTON_SIZE := Vector2(138, 60)
+const PILL_ICON_SIZE := Vector2(24, 24)
+const PILL_ICON_VISUAL_OFFSET_Y := 2.0
 const HOME_CARD_SIZE := Vector2(272, 368)
 
 func _normalize_language_mode(value: String) -> String:
@@ -1040,11 +1042,13 @@ func _save_shell_settings() -> void:
     dirty_settings = false
     if save_button != null:
         save_button.disabled = true
+        _sync_pill_button_content_state(save_button)
 
 func _mark_settings_dirty() -> void:
     dirty_settings = true
     if save_button != null:
         save_button.disabled = false
+        _sync_pill_button_content_state(save_button)
 
 func _apply_engine_options() -> void:
     if player == null:
@@ -1344,6 +1348,7 @@ func _rebuild_settings_view() -> void:
 
     save_button = _pill_button(_t("settings.save"), ICON_SAVE)
     save_button.disabled = not dirty_settings
+    _sync_pill_button_content_state(save_button)
     save_button.custom_minimum_size = TOP_ACTION_BUTTON_SIZE
     save_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     save_button.pressed.connect(_save_shell_settings)
@@ -1590,18 +1595,15 @@ func _apply_button_style(button: Button, normal: StyleBox, hover: StyleBox, pres
 
 func _pill_button(text: String, icon_path: String = "") -> Button:
     var button := Button.new()
-    button.text = text
+    button.text = text if icon_path.is_empty() else ""
     button.alignment = HORIZONTAL_ALIGNMENT_CENTER
     button.clip_text = true
+    button.clip_contents = true
     button.focus_mode = Control.FOCUS_ALL
     button.add_theme_font_size_override("font_size", 20)
     button.add_theme_color_override("font_color", Color.WHITE)
     if not icon_path.is_empty():
-        button.icon = _load_ui_icon(icon_path)
-        button.expand_icon = true
-        button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
-        button.add_theme_constant_override("icon_max_width", 24)
-        button.add_theme_constant_override("h_separation", 10)
+        _attach_pill_button_content(button, text, icon_path)
     _apply_button_style(
         button,
         _panel_style(10, COLOR_ACCENT, COLOR_ACCENT, 0),
@@ -1610,6 +1612,59 @@ func _pill_button(text: String, icon_path: String = "") -> Button:
         _panel_style(10, Color(0.28, 0.30, 0.38, 1), Color(0.28, 0.30, 0.38, 1), 0)
     )
     return button
+
+func _attach_pill_button_content(button: Button, text: String, icon_path: String) -> void:
+    var center := CenterContainer.new()
+    center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    center.set_anchors_preset(Control.PRESET_FULL_RECT)
+    button.add_child(center)
+
+    var row := HBoxContainer.new()
+    row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    row.add_theme_constant_override("separation", 10)
+    center.add_child(row)
+
+    var icon_holder := Control.new()
+    icon_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    icon_holder.custom_minimum_size = PILL_ICON_SIZE
+    icon_holder.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    row.add_child(icon_holder)
+
+    var icon := _icon_rect(icon_path, PILL_ICON_SIZE, Color.WHITE)
+    icon.position = Vector2(0, PILL_ICON_VISUAL_OFFSET_Y)
+    icon.size = PILL_ICON_SIZE
+    icon_holder.add_child(icon)
+
+    var label := Label.new()
+    label.text = text
+    label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    label.add_theme_font_size_override("font_size", 20)
+    label.add_theme_color_override("font_color", Color.WHITE)
+    row.add_child(label)
+
+    button.set_meta("pill_icon_path", button.get_path_to(icon))
+    button.set_meta("pill_label_path", button.get_path_to(label))
+
+func _set_pill_button_text(button: Button, text: String) -> void:
+    var label_path = button.get_meta("pill_label_path", NodePath(""))
+    var label := button.get_node_or_null(label_path) as Label
+    if label != null:
+        label.text = text
+        return
+    button.text = text
+
+func _sync_pill_button_content_state(button: Button) -> void:
+    var tint := Color(1, 1, 1, 0.72) if button.disabled else Color.WHITE
+    var label_path = button.get_meta("pill_label_path", NodePath(""))
+    var label := button.get_node_or_null(label_path) as Label
+    if label != null:
+        label.add_theme_color_override("font_color", tint)
+    var icon_path = button.get_meta("pill_icon_path", NodePath(""))
+    var icon := button.get_node_or_null(icon_path) as TextureRect
+    if icon != null:
+        icon.modulate = tint
 
 func _icon_button(icon_path: String) -> Button:
     var button := Button.new()
@@ -1981,9 +2036,9 @@ func _refresh_language_texts() -> void:
     if is_instance_valid(empty_help_label):
         empty_help_label.text = _empty_help_text()
     if is_instance_valid(home_primary_button):
-        home_primary_button.text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
+        _set_pill_button_text(home_primary_button, _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"))
     if is_instance_valid(home_guide_button):
-        home_guide_button.text = _t("home.import_guide")
+        _set_pill_button_text(home_guide_button, _t("home.import_guide"))
     if is_instance_valid(loading_title_label):
         loading_title_label.text = _t("loading.title")
 
