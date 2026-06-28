@@ -69,7 +69,7 @@ const UI_TEXT := {
         "language.ja": "日本語",
         "language.ko": "한국어",
         "settings.render_backend": "渲染管线",
-        "settings.render_backend_desc": "未运行游戏时立即生效；运行中切换需重启当前游戏",
+        "settings.render_backend_desc": "保存后生效；运行中切换需重启当前游戏",
         "settings.surface_mode": "画布尺寸",
         "settings.surface_mode_desc": "Game Native 按游戏基准画布运行；Display Fit 按设备显示尺寸运行",
         "settings.upscale": "缩放算法",
@@ -179,7 +179,7 @@ const UI_TEXT := {
         "language.ja": "日本語",
         "language.ko": "한국어",
         "settings.render_backend": "渲染管線",
-        "settings.render_backend_desc": "未執行遊戲時立即生效；執行中切換需重新啟動目前遊戲",
+        "settings.render_backend_desc": "儲存後生效；執行中切換需重新啟動目前遊戲",
         "settings.surface_mode": "畫布尺寸",
         "settings.surface_mode_desc": "Game Native 依遊戲基準畫布執行；Display Fit 依裝置顯示尺寸執行",
         "settings.upscale": "縮放演算法",
@@ -289,7 +289,7 @@ const UI_TEXT := {
         "language.ja": "日本語",
         "language.ko": "한국어",
         "settings.render_backend": "Render Pipeline",
-        "settings.render_backend_desc": "Applies immediately while no game is running; switching during play requires restarting the current game",
+        "settings.render_backend_desc": "Applies after saving; switching during play requires restarting the current game",
         "settings.surface_mode": "Canvas Size",
         "settings.surface_mode_desc": "Game Native uses the game's base canvas; Display Fit uses the device display size",
         "settings.upscale": "Scaling",
@@ -399,7 +399,7 @@ const UI_TEXT := {
         "language.ja": "日本語",
         "language.ko": "한국어",
         "settings.render_backend": "レンダリングパイプライン",
-        "settings.render_backend_desc": "ゲーム未実行時は即時反映。実行中の切り替えは現在のゲームの再起動が必要です",
+        "settings.render_backend_desc": "保存後に反映されます。実行中の切り替えは現在のゲームの再起動が必要です",
         "settings.surface_mode": "キャンバスサイズ",
         "settings.surface_mode_desc": "Game Native はゲーム基準のキャンバス、Display Fit はデバイス表示サイズで実行します",
         "settings.upscale": "スケーリング",
@@ -509,7 +509,7 @@ const UI_TEXT := {
         "language.ja": "日本語",
         "language.ko": "한국어",
         "settings.render_backend": "렌더링 파이프라인",
-        "settings.render_backend_desc": "게임이 실행 중이 아닐 때 즉시 적용됩니다. 실행 중 변경하려면 현재 게임을 다시 시작해야 합니다",
+        "settings.render_backend_desc": "저장 후 적용됩니다. 실행 중 변경하려면 현재 게임을 다시 시작해야 합니다",
         "settings.surface_mode": "캔버스 크기",
         "settings.surface_mode_desc": "Game Native는 게임 기준 캔버스를 사용하고 Display Fit은 장치 표시 크기를 사용합니다",
         "settings.upscale": "스케일링",
@@ -602,10 +602,31 @@ const POINTER_MOVE := 2
 const POINTER_UP := 3
 const POINTER_SCROLL := 4
 const POINTER_MOD_LEFT := 0x08
-const SHELL_SCROLL_DRAG_THRESHOLD := 10.0
-const SHELL_SCROLL_PAN_SPEED := 2.6
+const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
+const SHELL_SCROLL_DRAG_SPEED := 4.0
+const SHELL_SCROLL_TOUCHPAD_SPEED := 12.0
+const SHELL_SCROLL_WHEEL_SPEED := 4.0
 const SHELL_SCROLL_WHEEL_STEP := 320.0
 const SHELL_SCROLL_MOUSE_KEY := -1
+const SETTINGS_DRAFT_KEYS := [
+    "language",
+    "style",
+    "backend",
+    "upscale_algorithm",
+    "surface_mode",
+    "perf_overlay",
+    "fps_limit_enabled",
+    "target_fps",
+    "force_landscape",
+    "plugin_trace",
+    "plugin_load_mode",
+    "mock_enabled",
+    "console_log_file",
+    "trace_log",
+    "export_scripts",
+    "log_alerts",
+    "error_dialog_logs",
+]
 
 var backend: OptionButton
 var game_path: LineEdit
@@ -652,9 +673,11 @@ var language_mode := LANG_SYSTEM
 var active_language := LANG_ZH_HANS
 var style_mode := STYLE_DARK
 var dirty_settings := false
+var settings_draft := {}
 var active_game_path := ""
 var active_game_started_msec := 0
 var shell_scroll_drag_states := {}
+var shell_scroll_remainders := {}
 var rounded_card_shader: Shader
 var opaque_frame_shader: Shader
 var shown_system_alerts := {}
@@ -1128,11 +1151,147 @@ func _save_shell_settings() -> void:
         save_button.disabled = true
         _sync_pill_button_content_state(save_button)
 
-func _mark_settings_dirty() -> void:
-    dirty_settings = true
-    if save_button != null:
-        save_button.disabled = false
+func _current_settings_snapshot() -> Dictionary:
+    return {
+        "language": language_mode,
+        "style": style_mode,
+        "backend": selected_backend,
+        "upscale_algorithm": upscale_algorithm,
+        "surface_mode": render_surface_mode,
+        "perf_overlay": show_perf_monitor,
+        "fps_limit_enabled": frame_limit_enabled,
+        "target_fps": target_fps,
+        "force_landscape": lock_landscape,
+        "plugin_trace": plugin_trace,
+        "plugin_load_mode": plugin_load_mode,
+        "mock_enabled": mock_enabled,
+        "console_log_file": console_log_file,
+        "trace_log": trace_log,
+        "export_scripts": export_scripts,
+        "log_alerts": log_alerts,
+        "error_dialog_logs": error_dialog_logs,
+    }
+
+func _settings_snapshots_equal(left: Dictionary, right: Dictionary) -> bool:
+    for key in SETTINGS_DRAFT_KEYS:
+        if left.get(key) != right.get(key):
+            return false
+    return true
+
+func _begin_settings_edit() -> void:
+    settings_draft = _current_settings_snapshot()
+    dirty_settings = false
+    _sync_save_button_enabled()
+
+func _discard_settings_draft() -> void:
+    settings_draft.clear()
+    dirty_settings = false
+    _sync_save_button_enabled()
+
+func _sync_save_button_enabled() -> void:
+    if save_button != null and is_instance_valid(save_button):
+        save_button.disabled = not dirty_settings
         _sync_pill_button_content_state(save_button)
+
+func _refresh_settings_dirty() -> void:
+    if settings_draft.is_empty():
+        dirty_settings = false
+    else:
+        dirty_settings = not _settings_snapshots_equal(settings_draft, _current_settings_snapshot())
+    _sync_save_button_enabled()
+
+func _set_settings_draft_value(key: String, value) -> void:
+    if settings_draft.is_empty():
+        settings_draft = _current_settings_snapshot()
+    settings_draft[key] = value
+    _refresh_settings_dirty()
+
+func _settings_draft_string(key: String, fallback: String) -> String:
+    return String(settings_draft.get(key, fallback))
+
+func _settings_draft_bool(key: String, fallback: bool) -> bool:
+    return bool(settings_draft.get(key, fallback))
+
+func _settings_draft_int(key: String, fallback: int) -> int:
+    return int(settings_draft.get(key, fallback))
+
+func _apply_settings_snapshot(snapshot: Dictionary) -> void:
+    language_mode = _normalize_language_mode(String(snapshot.get("language", language_mode)))
+    _apply_language_mode()
+    style_mode = _normalize_style_mode(String(snapshot.get("style", style_mode)))
+    _apply_style_mode()
+
+    selected_backend = _normalize_backend_name(String(snapshot.get("backend", selected_backend)))
+    if not selected_backend in BACKENDS:
+        selected_backend = "Godot Native"
+
+    upscale_algorithm = String(snapshot.get("upscale_algorithm", upscale_algorithm))
+    if not upscale_algorithm in ["smooth", "nearest", "linear"]:
+        upscale_algorithm = "smooth"
+    _apply_upscale_algorithm()
+
+    var next_surface_mode := String(snapshot.get("surface_mode", render_surface_mode))
+    render_surface_mode = next_surface_mode if next_surface_mode in [RENDER_SURFACE_MODE_GAME, RENDER_SURFACE_MODE_DISPLAY] else _default_render_surface_mode()
+    show_perf_monitor = bool(snapshot.get("perf_overlay", show_perf_monitor))
+    if perf != null:
+        perf.visible = game_running and show_perf_monitor
+    frame_limit_enabled = bool(snapshot.get("fps_limit_enabled", frame_limit_enabled))
+    target_fps = int(snapshot.get("target_fps", target_fps))
+    lock_landscape = bool(snapshot.get("force_landscape", lock_landscape))
+    plugin_trace = bool(snapshot.get("plugin_trace", plugin_trace))
+    plugin_load_mode = String(snapshot.get("plugin_load_mode", plugin_load_mode))
+    if not plugin_load_mode in ["krkrsdl3", "aether_all"]:
+        plugin_load_mode = "krkrsdl3"
+    mock_enabled = bool(snapshot.get("mock_enabled", mock_enabled))
+    console_log_file = bool(snapshot.get("console_log_file", console_log_file))
+    trace_log = bool(snapshot.get("trace_log", trace_log))
+    export_scripts = bool(snapshot.get("export_scripts", export_scripts))
+    log_alerts = bool(snapshot.get("log_alerts", log_alerts))
+    error_dialog_logs = bool(snapshot.get("error_dialog_logs", error_dialog_logs))
+
+func _save_settings_draft() -> void:
+    if settings_draft.is_empty() or not dirty_settings:
+        return
+
+    var previous_language := language_mode
+    var previous_active_language := active_language
+    var previous_style := style_mode
+    var previous_backend := selected_backend
+    var previous_surface_mode := render_surface_mode
+    var snapshot := settings_draft.duplicate()
+
+    _apply_settings_snapshot(snapshot)
+    _save_shell_settings()
+    settings_draft.clear()
+
+    if previous_backend != selected_backend:
+        var backend_index := BACKENDS.find(selected_backend)
+        if backend_index >= 0 and backend != null and is_instance_valid(backend):
+            backend.select(backend_index)
+        if player != null and player.is_initialized():
+            if game_running:
+                restart_notice.text = "Restart current game session to apply renderer."
+                _append_log("Renderer change queued: %s" % selected_backend)
+            else:
+                _apply_backend(true)
+
+    if previous_surface_mode != render_surface_mode and game_running:
+        _sync_player_surface_size(true)
+
+    var language_changed := previous_language != language_mode or previous_active_language != active_language
+    var style_changed := previous_style != style_mode
+    if style_changed:
+        call_deferred("_rebuild_shell_views_after_style_change")
+    elif language_changed:
+        _refresh_language_texts()
+        if settings_view != null and settings_view.visible:
+            call_deferred("_rebuild_settings_view")
+        if detail_view != null and detail_view.visible and not selected_game.is_empty():
+            call_deferred("_show_detail", selected_game)
+        _refresh_games()
+
+func _mark_settings_dirty() -> void:
+    _refresh_settings_dirty()
 
 func _apply_engine_options() -> void:
     if player == null:
@@ -1326,8 +1485,7 @@ func _build_home_view() -> void:
     game_scroll = ScrollContainer.new()
     game_scroll.position = Vector2(32, 164)
     game_scroll.size = Vector2(390, 500)
-    game_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-    game_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+    _configure_shell_scroll(game_scroll)
     home_view.add_child(game_scroll)
 
     game_list = GridContainer.new()
@@ -1388,8 +1546,7 @@ func _build_home_view() -> void:
 func _build_settings_view() -> void:
     settings_view = ScrollContainer.new()
     settings_view.set_anchors_preset(Control.PRESET_FULL_RECT)
-    settings_view.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-    settings_view.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+    _configure_shell_scroll(settings_view)
     settings_view.visible = false
     shell_root.add_child(settings_view)
 
@@ -1435,7 +1592,7 @@ func _rebuild_settings_view() -> void:
     _sync_pill_button_content_state(save_button)
     save_button.custom_minimum_size = TOP_ACTION_BUTTON_SIZE
     save_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    save_button.pressed.connect(_save_shell_settings)
+    save_button.pressed.connect(_save_settings_draft)
     top.add_child(save_button)
 
     page.add_child(_section_title(_t("settings.section.interface"), ICON_SETTINGS))
@@ -1450,24 +1607,24 @@ func _rebuild_settings_view() -> void:
     render_card.add_child(_settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment()))
     render_card.add_child(_settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select()))
     render_card.add_child(_settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select()))
-    render_card.add_child(_settings_toggle_row(_t("settings.perf"), _t("settings.perf_desc"), show_perf_monitor, "perf"))
-    render_card.add_child(_settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), frame_limit_enabled, "fps_limit"))
-    if frame_limit_enabled:
+    render_card.add_child(_settings_toggle_row(_t("settings.perf"), _t("settings.perf_desc"), _settings_draft_bool("perf_overlay", show_perf_monitor), "perf"))
+    render_card.add_child(_settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
+    if _settings_draft_bool("fps_limit_enabled", frame_limit_enabled):
         render_card.add_child(_settings_fps_row())
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        render_card.add_child(_settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), lock_landscape, "landscape"))
+        render_card.add_child(_settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
 
     page.add_child(_section_title(_t("settings.section.developer"), ICON_PLUGIN))
     var dev_card := _settings_card()
     page.add_child(dev_card)
     dev_card.add_child(_settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select()))
-    dev_card.add_child(_settings_toggle_row(_t("settings.plugin_trace"), _t("settings.plugin_trace_desc"), plugin_trace, "plugin_trace"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), mock_enabled, "mock"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), console_log_file, "console_log"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), trace_log, "trace_log"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), export_scripts, "export_tjs"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.log_alerts"), _t("settings.log_alerts_desc"), log_alerts, "log_alerts"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), error_dialog_logs, "error_dialog_logs"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.plugin_trace"), _t("settings.plugin_trace_desc"), _settings_draft_bool("plugin_trace", plugin_trace), "plugin_trace"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), _settings_draft_bool("console_log_file", console_log_file), "console_log"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), _settings_draft_bool("trace_log", trace_log), "trace_log"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), _settings_draft_bool("export_scripts", export_scripts), "export_tjs"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.log_alerts"), _t("settings.log_alerts_desc"), _settings_draft_bool("log_alerts", log_alerts), "log_alerts"))
+    dev_card.add_child(_settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
 
     page.add_child(_section_title(_t("settings.section.about"), ICON_HELP))
     var about_card := _settings_card()
@@ -1482,8 +1639,7 @@ func _build_detail_view() -> void:
 
     detail_scroll = ScrollContainer.new()
     detail_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
-    detail_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-    detail_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+    _configure_shell_scroll(detail_scroll)
     detail_view.add_child(detail_scroll)
 
 func _build_modal_layer() -> void:
@@ -1703,6 +1859,11 @@ func _deep_control_at_position(node: Node, position: Vector2) -> Control:
         return nested if nested != null else child_control
     return null
 
+func _configure_shell_scroll(scroll: ScrollContainer) -> void:
+    scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+    scroll.scroll_deadzone = 0
+
 func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
     var scroll := _find_shell_scroll_at_position(position)
     if scroll == null:
@@ -1713,6 +1874,7 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         "control": _control_at_pointer(position),
         "last": position,
         "distance": 0.0,
+        "pending_y": 0.0,
         "dragging": false,
     }
 
@@ -1733,13 +1895,17 @@ func _update_shell_scroll_drag(key: int, position: Vector2, relative: Vector2) -
         delta = relative
     state["last"] = position
     var distance := float(state.get("distance", 0.0)) + absf(delta.y)
-    var dragging := bool(state.get("dragging", false)) or distance >= SHELL_SCROLL_DRAG_THRESHOLD
+    var pending_y := float(state.get("pending_y", 0.0)) + delta.y
+    var was_dragging := bool(state.get("dragging", false))
+    var dragging := was_dragging or distance >= SHELL_SCROLL_DRAG_THRESHOLD
     state["distance"] = distance
     state["dragging"] = dragging
+    state["pending_y"] = 0.0 if dragging else pending_y
     shell_scroll_drag_states[key] = state
     if not dragging:
         return false
-    _scroll_container_by(scroll, -delta.y)
+    var drag_delta := delta.y if was_dragging else pending_y
+    _scroll_container_by(scroll, -drag_delta * SHELL_SCROLL_DRAG_SPEED)
     _cancel_shell_scroll_press(state)
     _sync_game_card_hover_states(false)
     return true
@@ -1784,8 +1950,18 @@ func _scroll_container_by(scroll: ScrollContainer, delta: float) -> void:
     var bar := scroll.get_v_scroll_bar()
     if bar == null:
         return
-    var next := clampf(float(scroll.scroll_vertical) + delta, bar.min_value, bar.max_value)
-    scroll.scroll_vertical = int(next)
+    var scroll_key := scroll.get_instance_id()
+    var remainder := float(shell_scroll_remainders.get(scroll_key, 0.0))
+    var next := clampf(float(scroll.scroll_vertical) + remainder + delta, bar.min_value, bar.max_value)
+    var snapped := int(roundf(next))
+    snapped = int(clampf(float(snapped), bar.min_value, bar.max_value))
+    scroll.scroll_vertical = snapped
+    var clamped_to_min := is_equal_approx(next, bar.min_value) and delta < 0.0
+    var clamped_to_max := is_equal_approx(next, bar.max_value) and delta > 0.0
+    if clamped_to_min or clamped_to_max:
+        shell_scroll_remainders.erase(scroll_key)
+    else:
+        shell_scroll_remainders[scroll_key] = next - float(snapped)
 
 func _apply_button_style(button: Button, normal: StyleBox, hover: StyleBox, pressed: StyleBox, disabled: StyleBox = null) -> void:
     button.add_theme_stylebox_override("normal", normal)
@@ -2031,16 +2207,15 @@ func _settings_fps_row() -> Control:
     fps_select.custom_minimum_size = Vector2(170, 54)
     var options := [80, 90, 120, 144]
     var selected_index := 0
+    var draft_target_fps := _settings_draft_int("target_fps", target_fps)
     for i in range(options.size()):
         fps_select.add_item("%d FPS" % options[i])
         fps_select.set_item_metadata(i, options[i])
-        if options[i] == target_fps:
+        if options[i] == draft_target_fps:
             selected_index = i
     fps_select.select(selected_index)
     fps_select.item_selected.connect(func(index: int):
-        target_fps = int(fps_select.get_item_metadata(index))
-        _mark_settings_dirty()
-        _apply_engine_options()
+        _set_settings_draft_value("target_fps", int(fps_select.get_item_metadata(index)))
     )
     row.add_child(fps_select)
     return panel
@@ -2049,11 +2224,12 @@ func _language_select() -> OptionButton:
     var select := OptionButton.new()
     select.custom_minimum_size = Vector2(360, 58)
     var selected_index := 0
+    var draft_language := _normalize_language_mode(_settings_draft_string("language", language_mode))
     for i in range(LANGUAGE_MODES.size()):
         var mode := String(LANGUAGE_MODES[i])
         select.add_item(_language_option_label(mode))
         select.set_item_metadata(i, mode)
-        if mode == language_mode:
+        if mode == draft_language:
             selected_index = i
     select.select(selected_index)
     select.item_selected.connect(func(index: int):
@@ -2065,11 +2241,12 @@ func _style_select() -> OptionButton:
     var select := OptionButton.new()
     select.custom_minimum_size = Vector2(360, 58)
     var selected_index := 0
+    var draft_style := _normalize_style_mode(_settings_draft_string("style", style_mode))
     for i in range(STYLE_MODES.size()):
         var mode := String(STYLE_MODES[i])
         select.add_item(_style_option_label(mode))
         select.set_item_metadata(i, mode)
-        if mode == style_mode:
+        if mode == draft_style:
             selected_index = i
     select.select(selected_index)
     select.item_selected.connect(func(index: int):
@@ -2086,10 +2263,11 @@ func _upscale_select() -> OptionButton:
         {"label": "Nearest", "value": "nearest"},
     ]
     var selected_index := 0
+    var draft_upscale := _settings_draft_string("upscale_algorithm", upscale_algorithm)
     for i in range(options.size()):
         select.add_item(String(options[i]["label"]))
         select.set_item_metadata(i, String(options[i]["value"]))
-        if String(options[i]["value"]) == upscale_algorithm:
+        if String(options[i]["value"]) == draft_upscale:
             selected_index = i
     select.select(selected_index)
     select.item_selected.connect(func(index: int):
@@ -2105,10 +2283,11 @@ func _surface_mode_select() -> OptionButton:
         {"label": "Display Fit", "value": RENDER_SURFACE_MODE_DISPLAY},
     ]
     var selected_index := 0
+    var draft_surface_mode := _settings_draft_string("surface_mode", render_surface_mode)
     for i in range(options.size()):
         select.add_item(String(options[i]["label"]))
         select.set_item_metadata(i, String(options[i]["value"]))
-        if String(options[i]["value"]) == render_surface_mode:
+        if String(options[i]["value"]) == draft_surface_mode:
             selected_index = i
     select.select(selected_index)
     select.item_selected.connect(func(index: int):
@@ -2124,10 +2303,11 @@ func _plugin_load_mode_select() -> OptionButton:
         {"label": "aether_all", "value": "aether_all"},
     ]
     var selected_index := 0
+    var draft_plugin_load_mode := _settings_draft_string("plugin_load_mode", plugin_load_mode)
     for i in range(options.size()):
         select.add_item(String(options[i]["label"]))
         select.set_item_metadata(i, String(options[i]["value"]))
-        if String(options[i]["value"]) == plugin_load_mode:
+        if String(options[i]["value"]) == draft_plugin_load_mode:
             selected_index = i
     select.select(selected_index)
     select.item_selected.connect(func(index: int):
@@ -2161,10 +2341,11 @@ func _segment_button(text: String, selected: bool) -> Button:
 func _backend_segment() -> HBoxContainer:
     var row := HBoxContainer.new()
     row.add_theme_constant_override("separation", 8)
-    var native := _segment_button("Godot Native", selected_backend != "Debug CPU")
+    var draft_backend := _normalize_backend_name(_settings_draft_string("backend", selected_backend))
+    var native := _segment_button("Godot Native", draft_backend != "Debug CPU")
     native.pressed.connect(func(): _select_backend("Godot Native"))
     row.add_child(native)
-    var cpu := _segment_button("Debug CPU", selected_backend == "Debug CPU")
+    var cpu := _segment_button("Debug CPU", draft_backend == "Debug CPU")
     cpu.pressed.connect(func(): _select_backend("Debug CPU"))
     row.add_child(cpu)
     return row
@@ -2179,29 +2360,25 @@ func _theme_segment() -> HBoxContainer:
 
 func _on_setting_toggle(key: String, value: bool) -> void:
     if key == "perf":
-        show_perf_monitor = value
-        perf.visible = game_running and show_perf_monitor
+        _set_settings_draft_value("perf_overlay", value)
     elif key == "fps_limit":
-        frame_limit_enabled = value
+        _set_settings_draft_value("fps_limit_enabled", value)
     elif key == "landscape":
-        lock_landscape = value
+        _set_settings_draft_value("force_landscape", value)
     elif key == "plugin_trace":
-        plugin_trace = value
+        _set_settings_draft_value("plugin_trace", value)
     elif key == "mock":
-        mock_enabled = value
+        _set_settings_draft_value("mock_enabled", value)
     elif key == "console_log":
-        console_log_file = value
+        _set_settings_draft_value("console_log_file", value)
     elif key == "trace_log":
-        trace_log = value
+        _set_settings_draft_value("trace_log", value)
     elif key == "export_tjs":
-        export_scripts = value
+        _set_settings_draft_value("export_scripts", value)
     elif key == "log_alerts":
-        log_alerts = value
+        _set_settings_draft_value("log_alerts", value)
     elif key == "error_dialog_logs":
-        error_dialog_logs = value
-    _mark_settings_dirty()
-    _apply_engine_options()
-    _apply_shell_runtime_settings()
+        _set_settings_draft_value("error_dialog_logs", value)
     if key == "fps_limit":
         call_deferred("_rebuild_settings_view")
 
@@ -2209,17 +2386,13 @@ func _select_backend(value: String) -> void:
     var index := BACKENDS.find(value)
     if index < 0:
         return
-    backend.select(index)
-    _on_backend_selected(index)
-    _mark_settings_dirty()
+    _set_settings_draft_value("backend", BACKENDS[index])
     call_deferred("_rebuild_settings_view")
 
 func _select_upscale_algorithm(value: String) -> void:
     if not value in ["smooth", "nearest", "linear"]:
         return
-    upscale_algorithm = value
-    _apply_upscale_algorithm()
-    _mark_settings_dirty()
+    _set_settings_draft_value("upscale_algorithm", value)
 
 func _default_render_surface_mode() -> String:
     return RENDER_SURFACE_MODE_GAME
@@ -2233,40 +2406,24 @@ func _select_config_surface_mode(value: String) -> void:
 func _select_surface_mode(value: String) -> void:
     if not value in [RENDER_SURFACE_MODE_GAME, RENDER_SURFACE_MODE_DISPLAY]:
         return
-    render_surface_mode = value
-    _mark_settings_dirty()
-    if game_running:
-        _sync_player_surface_size(true)
+    _set_settings_draft_value("surface_mode", value)
 
 func _select_plugin_load_mode(value: String) -> void:
     if not value in ["krkrsdl3", "aether_all"]:
         return
-    plugin_load_mode = value
-    _mark_settings_dirty()
-    _apply_engine_options()
+    _set_settings_draft_value("plugin_load_mode", value)
 
 func _select_language_mode(value: String) -> void:
     var next_language := _normalize_language_mode(value)
-    if next_language == language_mode:
+    if next_language == _normalize_language_mode(_settings_draft_string("language", language_mode)):
         return
-    language_mode = next_language
-    _apply_language_mode()
-    _mark_settings_dirty()
-    _refresh_language_texts()
-    if settings_view != null and settings_view.visible:
-        call_deferred("_rebuild_settings_view")
-    if detail_view != null and detail_view.visible and not selected_game.is_empty():
-        call_deferred("_show_detail", selected_game)
-    _refresh_games()
+    _set_settings_draft_value("language", next_language)
 
 func _select_style_mode(value: String) -> void:
     var next_style := _normalize_style_mode(value)
-    if next_style == style_mode:
+    if next_style == _normalize_style_mode(_settings_draft_string("style", style_mode)):
         return
-    style_mode = next_style
-    _apply_style_mode()
-    _mark_settings_dirty()
-    call_deferred("_rebuild_shell_views_after_style_change")
+    _set_settings_draft_value("style", next_style)
 
 func _rebuild_shell_views_after_style_change() -> void:
     if shell_root == null:
@@ -2330,8 +2487,7 @@ func _empty_help_text() -> String:
 
 func _show_home() -> void:
     _reset_shell_scroll_drag()
-    if dirty_settings:
-        _save_shell_settings()
+    _discard_settings_draft()
     _set_game_background(false)
     home_view.visible = true
     settings_view.visible = false
@@ -2341,6 +2497,7 @@ func _show_home() -> void:
 
 func _show_settings() -> void:
     _reset_shell_scroll_drag()
+    _begin_settings_edit()
     _set_game_background(false)
     _rebuild_settings_view()
     home_view.visible = false
@@ -5614,7 +5771,7 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
         var pan_scroll := _find_shell_scroll_at_position(pan.position)
         if pan_scroll == null:
             return false
-        _scroll_container_by(pan_scroll, pan.delta.y * SHELL_SCROLL_PAN_SPEED)
+        _scroll_container_by(pan_scroll, pan.delta.y * SHELL_SCROLL_TOUCHPAD_SPEED)
         _sync_game_card_hover_states(false)
         return true
 
@@ -5629,7 +5786,7 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
             var wheel_factor := absf(mouse_button.factor)
             if wheel_factor < 1.0:
                 wheel_factor = 1.0
-            _scroll_container_by(wheel_scroll, wheel_direction * SHELL_SCROLL_WHEEL_STEP * wheel_factor)
+            _scroll_container_by(wheel_scroll, wheel_direction * SHELL_SCROLL_WHEEL_STEP * SHELL_SCROLL_WHEEL_SPEED * wheel_factor)
             return true
         if mouse_button.button_index != MOUSE_BUTTON_LEFT:
             return false
