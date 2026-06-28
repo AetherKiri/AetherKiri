@@ -602,6 +602,10 @@ const POINTER_MOVE := 2
 const POINTER_UP := 3
 const POINTER_SCROLL := 4
 const POINTER_MOD_LEFT := 0x08
+const SHELL_SCROLL_DRAG_THRESHOLD := 10.0
+const SHELL_SCROLL_PAN_SPEED := 2.6
+const SHELL_SCROLL_WHEEL_STEP := 320.0
+const SHELL_SCROLL_MOUSE_KEY := -1
 
 var backend: OptionButton
 var game_path: LineEdit
@@ -650,7 +654,7 @@ var style_mode := STYLE_DARK
 var dirty_settings := false
 var active_game_path := ""
 var active_game_started_msec := 0
-var detail_touch_scroll_active := false
+var shell_scroll_drag_states := {}
 var rounded_card_shader: Shader
 var opaque_frame_shader: Shader
 var shown_system_alerts := {}
@@ -1662,6 +1666,127 @@ func _centered_icon(icon_path: String, size: Vector2, tint: Color = Color(-1, -1
     holder.add_child(_icon_rect(icon_path, size, tint))
     return holder
 
+func _nearest_scroll_container(control: Control) -> ScrollContainer:
+    var current := control.get_parent()
+    while current != null:
+        if current is ScrollContainer:
+            return current as ScrollContainer
+        current = current.get_parent()
+    return null
+
+func _find_shell_scroll_at_position(position: Vector2) -> ScrollContainer:
+    var scrolls: Array[ScrollContainer] = [settings_view, detail_scroll, game_scroll]
+    for scroll in scrolls:
+        if scroll != null and scroll.is_visible_in_tree() and scroll.get_global_rect().has_point(position):
+            return scroll
+    return null
+
+func _control_at_pointer(position: Vector2) -> Control:
+    var hovered := get_viewport().gui_get_hovered_control()
+    if hovered is Control:
+        var control := hovered as Control
+        if control.is_visible_in_tree() and control.get_global_rect().has_point(position):
+            return control
+    if shell_root != null and shell_root.is_visible_in_tree():
+        return _deep_control_at_position(shell_root, position)
+    return null
+
+func _deep_control_at_position(node: Node, position: Vector2) -> Control:
+    for i in range(node.get_child_count() - 1, -1, -1):
+        var child := node.get_child(i)
+        if not child is Control:
+            continue
+        var child_control := child as Control
+        if not child_control.is_visible_in_tree() or not child_control.get_global_rect().has_point(position):
+            continue
+        var nested := _deep_control_at_position(child_control, position)
+        return nested if nested != null else child_control
+    return null
+
+func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
+    var scroll := _find_shell_scroll_at_position(position)
+    if scroll == null:
+        shell_scroll_drag_states.erase(key)
+        return
+    shell_scroll_drag_states[key] = {
+        "scroll": scroll,
+        "control": _control_at_pointer(position),
+        "last": position,
+        "distance": 0.0,
+        "dragging": false,
+    }
+
+func _update_shell_scroll_drag(key: int, position: Vector2, relative: Vector2) -> bool:
+    var state: Dictionary = shell_scroll_drag_states.get(key, {})
+    if state.is_empty():
+        _start_shell_scroll_drag(key, position)
+        state = shell_scroll_drag_states.get(key, {})
+        if state.is_empty():
+            return false
+    var scroll := state.get("scroll") as ScrollContainer
+    if scroll == null or not is_instance_valid(scroll) or not scroll.is_visible_in_tree():
+        shell_scroll_drag_states.erase(key)
+        return false
+    var last_position := state.get("last", position) as Vector2
+    var delta := position - last_position
+    if delta.is_zero_approx():
+        delta = relative
+    state["last"] = position
+    var distance := float(state.get("distance", 0.0)) + absf(delta.y)
+    var dragging := bool(state.get("dragging", false)) or distance >= SHELL_SCROLL_DRAG_THRESHOLD
+    state["distance"] = distance
+    state["dragging"] = dragging
+    shell_scroll_drag_states[key] = state
+    if not dragging:
+        return false
+    _scroll_container_by(scroll, -delta.y)
+    _cancel_shell_scroll_press(state)
+    _sync_game_card_hover_states(false)
+    return true
+
+func _finish_shell_scroll_drag(key: int) -> bool:
+    var state: Dictionary = shell_scroll_drag_states.get(key, {})
+    var dragging := bool(state.get("dragging", false))
+    if dragging:
+        _cancel_shell_scroll_press(state)
+        _sync_game_card_hover_states(false)
+    shell_scroll_drag_states.erase(key)
+    return dragging
+
+func _reset_shell_scroll_drag() -> void:
+    for key in shell_scroll_drag_states.keys():
+        var state: Dictionary = shell_scroll_drag_states.get(key, {})
+        _cancel_shell_scroll_press(state)
+    shell_scroll_drag_states.clear()
+    _sync_game_card_hover_states(false)
+
+func _cancel_shell_scroll_press(state: Dictionary) -> void:
+    get_viewport().gui_release_focus()
+    var control := state.get("control") as Control
+    if control == null or not is_instance_valid(control):
+        return
+    control.release_focus()
+    var button := _nearest_base_button(control)
+    if button != null:
+        button.release_focus()
+        if not button.toggle_mode:
+            button.set_pressed_no_signal(false)
+
+func _nearest_base_button(control: Control) -> BaseButton:
+    var current: Node = control
+    while current != null:
+        if current is BaseButton:
+            return current as BaseButton
+        current = current.get_parent()
+    return null
+
+func _scroll_container_by(scroll: ScrollContainer, delta: float) -> void:
+    var bar := scroll.get_v_scroll_bar()
+    if bar == null:
+        return
+    var next := clampf(float(scroll.scroll_vertical) + delta, bar.min_value, bar.max_value)
+    scroll.scroll_vertical = int(next)
+
 func _apply_button_style(button: Button, normal: StyleBox, hover: StyleBox, pressed: StyleBox, disabled: StyleBox = null) -> void:
     button.add_theme_stylebox_override("normal", normal)
     button.add_theme_stylebox_override("hover", hover)
@@ -2204,6 +2329,7 @@ func _empty_help_text() -> String:
     return _t("home.empty_help_desktop")
 
 func _show_home() -> void:
+    _reset_shell_scroll_drag()
     if dirty_settings:
         _save_shell_settings()
     _set_game_background(false)
@@ -2214,6 +2340,7 @@ func _show_home() -> void:
     _refresh_games()
 
 func _show_settings() -> void:
+    _reset_shell_scroll_drag()
     _set_game_background(false)
     _rebuild_settings_view()
     home_view.visible = false
@@ -2222,6 +2349,7 @@ func _show_settings() -> void:
     modal_layer.visible = false
 
 func _show_detail(game: Dictionary) -> void:
+    _reset_shell_scroll_drag()
     _set_game_background(false)
     selected_game = game
     home_view.visible = false
@@ -3364,7 +3492,7 @@ func _mask_corner_pixel(image: Image, x: int, y: int, center: Vector2, radius: f
     color.a *= coverage
     image.set_pixel(x, y, color)
 
-func _sync_game_card_hover_states() -> void:
+func _sync_game_card_hover_states(allow_hover: bool = true) -> void:
     if home_view == null or not home_view.visible:
         return
     var mouse_pos := get_global_mouse_position()
@@ -3378,7 +3506,7 @@ func _sync_game_card_hover_states() -> void:
         var border := button.get_node_or_null(border_path) as PanelContainer
         if border == null:
             continue
-        var active := button.has_focus() or button.get_global_rect().has_point(mouse_pos)
+        var active := allow_hover and (button.has_focus() or button.get_global_rect().has_point(mouse_pos))
         if bool(button.get_meta("card_border_active", false)) != active:
             _set_game_card_border(button, border, active)
 
@@ -5444,24 +5572,11 @@ func _input(event: InputEvent) -> void:
             get_viewport().set_input_as_handled()
             return
 
+    if _handle_shell_scroll_input(event):
+        get_viewport().set_input_as_handled()
+        return
+
     if detail_view == null or detail_scroll == null or not detail_view.visible:
-        return
-
-    if event is InputEventScreenTouch:
-        var touch := event as InputEventScreenTouch
-        detail_touch_scroll_active = touch.pressed
-        return
-
-    if event is InputEventScreenDrag:
-        var drag := event as InputEventScreenDrag
-        _scroll_detail_by(-drag.relative.y)
-        get_viewport().set_input_as_handled()
-        return
-
-    if event is InputEventPanGesture:
-        var pan := event as InputEventPanGesture
-        _scroll_detail_by(pan.delta.y)
-        get_viewport().set_input_as_handled()
         return
 
     if event is InputEventMouseButton:
@@ -5474,18 +5589,60 @@ func _input(event: InputEvent) -> void:
             get_viewport().set_input_as_handled()
         return
 
+func _scroll_detail_by(delta: float) -> void:
+    _scroll_container_by(detail_scroll, delta)
+
+func _handle_shell_scroll_input(event: InputEvent) -> bool:
+    if shell_root == null or not shell_root.visible:
+        return false
+    if modal_layer != null and modal_layer.visible:
+        return false
+
+    if event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        if touch.pressed:
+            _start_shell_scroll_drag(touch.index, touch.position)
+            return false
+        return _finish_shell_scroll_drag(touch.index)
+
+    if event is InputEventScreenDrag:
+        var drag := event as InputEventScreenDrag
+        return _update_shell_scroll_drag(drag.index, drag.position, drag.relative)
+
+    if event is InputEventPanGesture:
+        var pan := event as InputEventPanGesture
+        var pan_scroll := _find_shell_scroll_at_position(pan.position)
+        if pan_scroll == null:
+            return false
+        _scroll_container_by(pan_scroll, pan.delta.y * SHELL_SCROLL_PAN_SPEED)
+        _sync_game_card_hover_states(false)
+        return true
+
+    if event is InputEventMouseButton:
+        var mouse_button := event as InputEventMouseButton
+        var is_wheel := mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP or mouse_button.button_index == MOUSE_BUTTON_WHEEL_DOWN
+        if mouse_button.pressed and is_wheel:
+            var wheel_scroll := _find_shell_scroll_at_position(mouse_button.position)
+            if wheel_scroll == null:
+                return false
+            var wheel_direction := -1.0 if mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0
+            var wheel_factor := absf(mouse_button.factor)
+            if wheel_factor < 1.0:
+                wheel_factor = 1.0
+            _scroll_container_by(wheel_scroll, wheel_direction * SHELL_SCROLL_WHEEL_STEP * wheel_factor)
+            return true
+        if mouse_button.button_index != MOUSE_BUTTON_LEFT:
+            return false
+        if mouse_button.pressed:
+            _start_shell_scroll_drag(SHELL_SCROLL_MOUSE_KEY, mouse_button.position)
+            return false
+        return _finish_shell_scroll_drag(SHELL_SCROLL_MOUSE_KEY)
+
     if event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
         var motion := event as InputEventMouseMotion
-        if absf(motion.relative.y) > 1.0:
-            _scroll_detail_by(-motion.relative.y)
-            get_viewport().set_input_as_handled()
+        return _update_shell_scroll_drag(SHELL_SCROLL_MOUSE_KEY, motion.position, motion.relative)
 
-func _scroll_detail_by(delta: float) -> void:
-    var bar := detail_scroll.get_v_scroll_bar()
-    if bar == null:
-        return
-    var next := clampf(float(detail_scroll.scroll_vertical) + delta, bar.min_value, bar.max_value)
-    detail_scroll.scroll_vertical = int(next)
+    return false
 
 func _on_viewport_input(event: InputEvent) -> void:
     if not _can_forward_game_input():
