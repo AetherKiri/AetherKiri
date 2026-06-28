@@ -362,6 +362,12 @@ ENGINE_API_EXPORT engine_result_t engine_get_memory_stats(
  */
 ENGINE_API_EXPORT const char* engine_get_last_error(engine_handle_t handle);
 
+/*
+ * Sets the JavaVM for Android environments.
+ * vm: Pointer to JavaVM.
+ */
+ENGINE_API_EXPORT engine_result_t engine_set_java_vm(void* vm);
+
 #if defined(__cplusplus)
 }  /* extern "C" */
 #endif

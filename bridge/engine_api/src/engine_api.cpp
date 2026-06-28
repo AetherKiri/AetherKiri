@@ -27,6 +27,8 @@
 #if defined(__ANDROID__)
 #include <android/log.h>
 #include <android/native_window.h>
+#include <jni.h>
+#include "environ/android/KrkrJniHelper.h"
 // Defined in android_jni_bridge.cpp (C++ linkage)
 ANativeWindow* krkr_GetNativeWindow();
 void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
@@ -4017,6 +4019,13 @@ const char* engine_get_last_error(engine_handle_t handle) {
   auto* impl = reinterpret_cast<engine_handle_s*>(handle);
   std::lock_guard<std::recursive_mutex> guard(impl->mutex);
   return impl->last_error.c_str();
+}
+
+ENGINE_API_EXPORT engine_result_t engine_set_java_vm(void* vm) {
+#ifdef __ANDROID__
+  krkr::JniHelper::setJavaVM((JavaVM*)vm);
+#endif
+  return ENGINE_RESULT_OK;
 }
 
 }  // extern "C"

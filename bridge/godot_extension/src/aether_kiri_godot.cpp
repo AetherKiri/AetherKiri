@@ -4068,10 +4068,32 @@ private:
     uint64_t frame_texture_serial_ = UINT64_MAX;
 };
 
+#ifdef __ANDROID__
+#include <dlfcn.h>
+#include <jni.h>
+typedef jint (*JNI_GetCreatedJavaVMs_t)(void**, jsize, jsize*);
+#endif
+
 void InitializeAetherKiri(ModuleInitializationLevel level) {
     if (level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
+#ifdef __ANDROID__
+    void* handle = dlopen("libart.so", RTLD_LAZY);
+    if (!handle) handle = dlopen("libdvm.so", RTLD_LAZY);
+    if (handle) {
+        JNI_GetCreatedJavaVMs_t JNI_GetCreatedJavaVMs_func = 
+            (JNI_GetCreatedJavaVMs_t)dlsym(handle, "JNI_GetCreatedJavaVMs");
+        if (JNI_GetCreatedJavaVMs_func) {
+            void* vm = nullptr;
+            jsize num_vms = 0;
+            JNI_GetCreatedJavaVMs_func(&vm, 1, &num_vms);
+            if (vm) {
+                engine_set_java_vm(vm);
+            }
+        }
+    }
+#endif
     ClassDB::register_class<AetherKiriPlayer>();
 }
 
