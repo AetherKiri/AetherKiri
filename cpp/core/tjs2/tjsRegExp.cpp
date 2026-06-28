@@ -16,8 +16,17 @@
 #include "tjsArray.h"
 
 #include <functional>
+#include <cstdlib>
+#include <spdlog/spdlog.h>
 
 namespace TJS {
+    static bool TJSRegExpTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_REGEXP_TRACE");
+            return value && *value && *value != '0';
+        }();
+        return enabled;
+    }
 
     //---------------------------------------------------------------------------
     // Flags
@@ -113,9 +122,24 @@ namespace TJS {
                         tTJSNC_RegExp::GetResultArray(true, s, _this, region);
                     tTJSVariant arrayval(array, array);
                     tTJSVariant *param = &arrayval;
+                    if(TJSRegExpTraceEnabled()) {
+                        spdlog::info(
+                            "RegExpTrace callback before regex={} func={} funcThis={} "
+                            "objthis={} array={} matchPos={} matchEnd={} groups={}",
+                            static_cast<void *>(_this),
+                            static_cast<void *>(funcval.Object),
+                            static_cast<void *>(funcval.ObjThis),
+                            static_cast<void *>(objthis), static_cast<void *>(array),
+                            pos, end, region->num_regs);
+                    }
                     array->Release();
                     hr = funcval.FuncCall(0, nullptr, nullptr, &result, 1,
                                           &param, nullptr);
+                    if(TJSRegExpTraceEnabled()) {
+                        spdlog::info("RegExpTrace callback after func={} hr={} resultType={}",
+                                     static_cast<void *>(funcval.Object), hr,
+                                     static_cast<int>(result.Type()));
+                    }
                     if(TJS_FAILED(hr)) {
                         onig_region_free(region, 1);
                         return;

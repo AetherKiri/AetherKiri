@@ -11,9 +11,11 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdlib>
 #include <stdexcept>
 #include <memory>
+#include <string>
 #include "StorageIntf.h"
 #include "tjsUtils.h"
 #include "MsgIntf.h"
@@ -54,6 +56,103 @@ static const char TVP_GPU_COMPAT_SCRIPT[] =
     "try { KAGWindow.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
     "try { KAGWindow.prototype.KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n"
     "try { KAGWindow_createDrawDevice = KAGWindow_createDrawDevice; } catch(e) { }\n";
+static const char TVP_D3DEMOTE_COMPAT_PREFIX[] =
+    "// AetherKiri D3DEmote/motion.tjs compatibility bridge.\n"
+    "try { Plugins.link(\"emoteplayer.dll\"); } catch(e) { }\n";
+static const char TVP_LOGWINDOW_COMPAT_SCRIPT[] = R"TJS(
+// AetherKiri KAGEX LogWindow.tjs compatibility bridge.
+class LogWindowPad extends Pad {
+    function LogWindowPad(owner, action, maxline = 300, caption = "KAGEX log") {
+        super.Pad();
+
+        this.owner = owner;
+        this.action = action;
+        this.maxline = maxline;
+
+        borderStyle = bsSizeToolWin;
+        color = 0;
+        fontColor = 0xFFFFFF;
+        fontFace = "monospace";
+        readOnly = false;
+        wordWrap = true;
+        showScrollBars = ssVertical;
+        height = 10;
+        title = caption;
+        clear();
+
+        trigger = new AsyncTrigger(updateText, '');
+        with (trigger) .mode = atmAtIdle, .cached = true;
+    }
+
+    function finalize() {
+        if (!isvalid this) return;
+        invalidate trigger if (trigger);
+        trigger = void;
+        super.finalize(...);
+    }
+
+    function clear() {
+        lines.clear();
+        text = "";
+        clearNext = false;
+        statusText = "latest log first";
+    }
+
+    function setPos(x, y, w, h) {
+        left = x if (x !== void);
+        top = y if (y !== void);
+        setSize(w, h);
+    }
+
+    function setSize(w, h) {
+        width = w if (w !== void);
+        height = h if (h !== void);
+    }
+
+    var owner, action;
+    var trigger;
+    var maxline, lines = [], clearNext;
+
+    function onClose() {
+        if (!isvalid this) return;
+        invokeOwnerAction("closed");
+    }
+
+    function invokeOwnerAction(message, *) {
+        if (!isvalid owner) return;
+        if (typeof owner[action] == "Object") {
+            return owner[action](message, *);
+        }
+    }
+
+    function showResults(blocks*) {
+        var all = [];
+        for (var i = 0; i < blocks.count; i++) {
+            all.add(blocks[i].join("\n")) if (blocks[i] !== void);
+        }
+        text = all.join("\n\n");
+        statusText = "output";
+        clearNext = true;
+    }
+
+    function print(shortmsg, fullmsg = void, tag = void) {
+        clear() if (clearNext);
+        lines.unshift(shortmsg);
+        while (lines.count > maxline) lines.pop();
+        if (trigger) trigger.trigger();
+        else updateText();
+    }
+
+    function updateText() {
+        if (!isvalid this) return;
+        text = lines.join("\n");
+    }
+}
+
+&global.LogWindow = LogWindowPad;
+)TJS";
+extern const unsigned char kAetherKiriD3DEmoteTjs[];
+extern const std::size_t kAetherKiriD3DEmoteTjsSize;
 static tTJSVariant TVPStoragesArchiveUniqueKeyCompat;
 
 namespace {
@@ -63,6 +162,86 @@ bool TVPSaveTraceEnabled() {
         return value && *value && *value != '0';
     }();
     return enabled;
+}
+
+bool TVPStorageTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_STORAGE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+bool TVPStorageTraceName(const ttstr &name) {
+    std::string text = name.AsStdString();
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    if(const char *match = std::getenv("AETHERKIRI_STORAGE_TRACE_MATCH")) {
+        std::string filters(match);
+        std::transform(filters.begin(), filters.end(), filters.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        size_t pos = 0;
+        while(pos <= filters.size()) {
+            size_t comma = filters.find(',', pos);
+            std::string token = filters.substr(
+                pos, comma == std::string::npos ? std::string::npos : comma - pos);
+            token.erase(0, token.find_first_not_of(" \t\r\n"));
+            size_t end = token.find_last_not_of(" \t\r\n");
+            if(end != std::string::npos)
+                token.erase(end + 1);
+            else
+                token.clear();
+            if(!token.empty() && text.find(token) != std::string::npos)
+                return true;
+            if(comma == std::string::npos)
+                break;
+            pos = comma + 1;
+        }
+    }
+    return text.find(".pbd") != std::string::npos ||
+        text.find("patch2.xp3") != std::string::npos ||
+        text.find("aaemo") != std::string::npos ||
+        text.find("motion.tjs") != std::string::npos ||
+        text.find("d3demote.tjs") != std::string::npos ||
+        text.find("logwindow.tjs") != std::string::npos;
+}
+
+bool TVPIsSplitEmoteVirtualStorage(const ttstr &name) {
+    std::string storage = TVPExtractStorageName(name).AsStdString();
+    if(storage.empty()) {
+        storage = name.AsStdString();
+        const auto slash = storage.find_last_of("/\\");
+        if(slash != std::string::npos) {
+            storage = storage.substr(slash + 1);
+        }
+    }
+    std::transform(storage.begin(), storage.end(), storage.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    if(storage.rfind("dx_", 0) == 0) {
+        storage = storage.substr(3);
+    }
+
+    const auto stripSuffix = [](std::string &value,
+                                const std::string &suffix) {
+        if(value.size() < suffix.size() ||
+           value.compare(value.size() - suffix.size(), suffix.size(), suffix) !=
+               0) {
+            return false;
+        }
+        value.resize(value.size() - suffix.size());
+        return true;
+    };
+    if(!stripSuffix(storage, ".mtn") && !stripSuffix(storage, ".psb")) {
+        stripSuffix(storage, ".mt");
+    }
+    return storage.size() > 3 &&
+        storage.compare(storage.size() - 3, 3, "emo") == 0;
 }
 } // namespace
 
@@ -109,6 +288,17 @@ static bool TVPIsGpuCompanionScript(const ttstr &name) {
            storage == TJS_W("live2d.tjs");
 }
 
+static bool TVPIsD3DEmoteCompanionScript(const ttstr &name) {
+    ttstr storage = TVPExtractStorageName(name).AsLowerCase();
+    return storage == TJS_W("motion.tjs") ||
+           storage == TJS_W("d3demote.tjs");
+}
+
+static bool TVPIsLogWindowCompanionScript(const ttstr &name) {
+    ttstr storage = TVPExtractStorageName(name).AsLowerCase();
+    return storage == TJS_W("logwindow.tjs");
+}
+
 static tTJSBinaryStream *TVPOpenGfxEffectCompanionScript() {
     return new tTVPMemoryStream(
         TVP_GFX_EFFECT_COMPAT_SCRIPT,
@@ -119,6 +309,28 @@ static tTJSBinaryStream *TVPOpenGpuCompanionScript() {
     return new tTVPMemoryStream(
         TVP_GPU_COMPAT_SCRIPT,
         static_cast<tjs_uint>(sizeof(TVP_GPU_COMPAT_SCRIPT) - 1));
+}
+
+static tTJSBinaryStream *TVPOpenLogWindowCompanionScript() {
+    return new tTVPMemoryStream(
+        TVP_LOGWINDOW_COMPAT_SCRIPT,
+        static_cast<tjs_uint>(sizeof(TVP_LOGWINDOW_COMPAT_SCRIPT) - 1));
+}
+
+static tTJSBinaryStream *TVPOpenD3DEmoteCompanionScript() {
+    auto *stream = new tTVPMemoryStream();
+    try {
+        stream->Write(TVP_D3DEMOTE_COMPAT_PREFIX,
+                      static_cast<tjs_uint>(
+                          sizeof(TVP_D3DEMOTE_COMPAT_PREFIX) - 1));
+        stream->Write(kAetherKiriD3DEmoteTjs,
+                      static_cast<tjs_uint>(kAetherKiriD3DEmoteTjsSize));
+        stream->Seek(0, TJS_BS_SEEK_SET);
+        return stream;
+    } catch(...) {
+        delete stream;
+        throw;
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -1075,8 +1287,16 @@ void TVPAddAutoPath(const ttstr &name) {
 
     auto i =
         std::find(TVPAutoPathList.begin(), TVPAutoPathList.end(), normalized);
-    if(i == TVPAutoPathList.end())
-        TVPAutoPathList.push_back(normalized);
+    const bool moved = i != TVPAutoPathList.end();
+    if(moved)
+        TVPAutoPathList.erase(i);
+    TVPAutoPathList.push_back(normalized);
+
+    if(TVPStorageTraceEnabled() && TVPStorageTraceName(normalized)) {
+        spdlog::info("StorageTrace addAutoPath request={} normalized={} moved={} count={}",
+                     name.AsStdString(), normalized.AsStdString(), moved,
+                     TVPAutoPathList.size());
+    }
 
     TVPClearAutoPathCache();
 }
@@ -1149,6 +1369,13 @@ static tjs_uint TVPRebuildAutoPathTable() {
                                            TJS_W('/'))) {
                                 ttstr sname = TVPExtractStorageName(name);
                                 TVPAutoPathTable.Add(sname, path);
+                                if(TVPStorageTraceEnabled() &&
+                                   TVPStorageTraceName(sname)) {
+                                    spdlog::info(
+                                        "StorageTrace table archive short={} path={} full={}",
+                                        sname.AsStdString(), path.AsStdString(),
+                                        name.AsStdString());
+                                }
                                 count++;
                             }
                         } else {
@@ -1173,6 +1400,10 @@ static tjs_uint TVPRebuildAutoPathTable() {
             TVPStorageMediaManager.GetListAt(path, &lister);
             for(auto &i : lister.list) {
                 TVPAutoPathTable.Add(i, path);
+                if(TVPStorageTraceEnabled() && TVPStorageTraceName(i)) {
+                    spdlog::info("StorageTrace table folder short={} path={}",
+                                 i.AsStdString(), path.AsStdString());
+                }
                 count++;
             }
         }
@@ -1226,8 +1457,22 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         }
     }
 
+    ttstr normalized(TVPNormalizeStorageName(name));
+
+    if(TVPIsSplitEmoteVirtualStorage(name)) {
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info("StorageTrace virtual split-emote request={} normalized={}",
+                         name.AsStdString(), normalized.AsStdString());
+        }
+        return normalized;
+    }
+
     ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
     if(incache) {
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info("StorageTrace cache request={} result={}",
+                         name.AsStdString(), incache->AsStdString());
+        }
         if(*incache == TVP_AUTOPATH_CACHE_MISS_MARKER)
             return {};
         return *incache; // found in cache
@@ -1235,12 +1480,14 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
 
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
 
-    ttstr normalized(TVPNormalizeStorageName(name));
-
     bool found = TVPIsRealStorageNoSearchNoNormalize(normalized);
     if(found) {
         // found in current folder
         TVPAutoPathCache.Add(name, normalized);
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info("StorageTrace direct request={} normalized={}",
+                         name.AsStdString(), normalized.AsStdString());
+        }
         return normalized;
     }
 
@@ -1255,14 +1502,26 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         // found in table
         ttstr found = *result + storagename;
         TVPAutoPathCache.Add(name, found);
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info(
+                "StorageTrace table-hit request={} short={} base={} found={}",
+                name.AsStdString(), storagename.AsStdString(),
+                result->AsStdString(), found.AsStdString());
+        }
         return found;
     }
 
-    if(TVPIsGfxEffectCompanionScript(name) || TVPIsGpuCompanionScript(name))
+    if(TVPIsD3DEmoteCompanionScript(name) ||
+       TVPIsLogWindowCompanionScript(name) ||
+       TVPIsGfxEffectCompanionScript(name) || TVPIsGpuCompanionScript(name))
         return normalized;
 
     // not found
     TVPAutoPathCache.Add(name, TVP_AUTOPATH_CACHE_MISS_MARKER);
+    if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+        spdlog::info("StorageTrace miss request={} short={}",
+                     name.AsStdString(), storagename.AsStdString());
+    }
     return {};
 }
 //---------------------------------------------------------------------------
@@ -1283,6 +1542,8 @@ ttstr TVPSearchPlacedPath(const ttstr &name) {
 //---------------------------------------------------------------------------
 bool TVPIsExistentStorage(const ttstr &name) {
     if(!TVPGetPlacedPath(name).IsEmpty())
+        return true;
+    if(TVPIsSplitEmoteVirtualStorage(name))
         return true;
     ttstr pure = TVPExtractStorageName(name);
     if(pure.GetLen() > 4) {
@@ -1352,9 +1613,23 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
     if(access == TJS_BS_READ && TVPIsGfxEffectCompanionScript(name) &&
        !TVPIsRealStorageNoSearchNoNormalize(name))
         return TVPOpenGfxEffectCompanionScript();
+    if(access == TJS_BS_READ && TVPIsD3DEmoteCompanionScript(name) &&
+       !TVPIsRealStorageNoSearchNoNormalize(name))
+        return TVPOpenD3DEmoteCompanionScript();
+    if(access == TJS_BS_READ && TVPIsLogWindowCompanionScript(name) &&
+       !TVPIsRealStorageNoSearchNoNormalize(name))
+        return TVPOpenLogWindowCompanionScript();
     if(access == TJS_BS_READ && TVPIsGpuCompanionScript(name) &&
        !TVPIsRealStorageNoSearchNoNormalize(name))
         return TVPOpenGpuCompanionScript();
+    if(access == TJS_BS_READ && TVPIsSplitEmoteVirtualStorage(name) &&
+       !TVPIsRealStorageNoSearchNoNormalize(name)) {
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info("StorageTrace open virtual split-emote: {}",
+                         name.AsStdString());
+        }
+        return new tTVPMemoryStream();
+    }
 
     // does name contain > ?
     const tjs_char *sharp_pos = TJS_strchr(name.c_str(), TVPArchiveDelimiter);

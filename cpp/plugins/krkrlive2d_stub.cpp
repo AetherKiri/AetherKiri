@@ -18,6 +18,10 @@ struct Live2DRenderTarget {
 
 Live2DRenderTarget g_live2dRenderTarget = {0, 0, 0};
 
+extern "C" bool TVPGodotLive2DRenderToLayer(iTJSDispatch2 *) {
+    return false;
+}
+
 #define NCB_MODULE_NAME TJS_W("krkrlive2d.dll")
 
 namespace {

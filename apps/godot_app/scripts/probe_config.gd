@@ -1,6 +1,14 @@
 extends RefCounted
 
 static func load() -> Dictionary:
+    var inline := OS.get_environment("AETHERKIRI_TEST_CONFIG_JSON")
+    if not inline.is_empty():
+        var inline_parsed = JSON.parse_string(inline)
+        if inline_parsed is Dictionary:
+            return inline_parsed
+        printerr("AETHERKIRI_TEST_CONFIG_JSON is not a JSON object")
+        return {}
+
     var path := OS.get_environment("AETHERKIRI_TEST_CONFIG")
     if path.is_empty():
         path = OS.get_environment("AETHERKIRI_PROBE_CONFIG")

@@ -21,15 +21,16 @@
 #include <algorithm>
 #include <cctype>
 #include <dirent.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include "StorageImpl.h"
 #include "BinaryStream.h"
 #include <spdlog/spdlog.h>
 #ifdef __APPLE__
 #include <TargetConditionals.h>
+#include <CoreFoundation/CoreFoundation.h>
 #if TARGET_OS_IOS
 #include <CoreText/CoreText.h>
-#include <CoreFoundation/CoreFoundation.h>
 #endif
 #endif
 
@@ -239,6 +240,57 @@ void TVPInitFontNames() {
         return tryLoadFontDirect(nativePath, nativePath);
     };
 
+    auto joinNativePath = [](std::string folder,
+                             const std::string &leaf) -> std::string {
+        if(folder.empty())
+            return leaf;
+        if(folder.back() != '/' && folder.back() != '\\')
+            folder.push_back('/');
+        folder += leaf;
+        return folder;
+    };
+
+    auto tryLoadDefaultFontFromNativeDir =
+        [&tryLoadFontDirect, &joinNativePath](const std::string &folder) -> bool {
+            if(folder.empty())
+                return false;
+            static const char *kDefaultFontNames[] = {
+                "default.ttf", "default.ttc", "default.otf", "default.otc",
+                nullptr
+            };
+            for(const char **name = kDefaultFontNames; *name; ++name) {
+                const std::string path = joinNativePath(folder, *name);
+                if(tryLoadFontDirect(path, path))
+                    return true;
+            }
+            return false;
+        };
+
+#ifdef __APPLE__
+    auto appleBundleResourceDirs = []() -> std::vector<std::string> {
+        std::vector<std::string> dirs;
+        CFBundleRef bundle = CFBundleGetMainBundle();
+        if(!bundle)
+            return dirs;
+        CFURLRef resourceURL = CFBundleCopyResourcesDirectoryURL(bundle);
+        if(!resourceURL)
+            return dirs;
+        char path[PATH_MAX] = {};
+        if(CFURLGetFileSystemRepresentation(resourceURL, true,
+                                            reinterpret_cast<UInt8 *>(path),
+                                            sizeof(path))) {
+            dirs.emplace_back(path);
+            std::string fontDir(path);
+            if(!fontDir.empty() && fontDir.back() != '/')
+                fontDir.push_back('/');
+            fontDir += "fonts";
+            dirs.emplace_back(std::move(fontDir));
+        }
+        CFRelease(resourceURL);
+        return dirs;
+    };
+#endif
+
     auto isFontFilePath = [](std::string path) -> bool {
         auto slash = path.find_last_of("/\\");
         if(slash != std::string::npos)
@@ -312,6 +364,15 @@ void TVPInitFontNames() {
                 "default_font", "");
         if(!userFont.IsEmpty() && tryLoadFontStorageOrDirect(userFont))
             break;
+
+#ifdef __APPLE__
+        for(const auto &folder : appleBundleResourceDirs()) {
+            if(tryLoadDefaultFontFromNativeDir(folder))
+                break;
+        }
+        if(TVPFontNames.GetCount() > 0)
+            break;
+#endif
 
         if(tryLoadFontStorageOrDirect(TVPGetAppPath() + "default.ttf"))
             break;

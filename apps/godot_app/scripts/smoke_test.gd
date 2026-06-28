@@ -53,6 +53,15 @@ func _initialize() -> void:
         quit(1)
         return
 
+    if ProbeConfig.bool_value(config, "smoke_startup_only", false):
+        print("smoke ok startup_only backend=%s renderer=\"%s\"" % [
+            backend,
+            player.get_renderer_info(),
+        ])
+        player.destroy_engine()
+        quit(0)
+        return
+
     for i in range(ProbeConfig.int_value(config, "smoke_tick_frames", 5)):
         result = player.tick(1.0 / 60.0)
         if result != 0:

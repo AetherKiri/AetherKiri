@@ -783,7 +783,11 @@ public:
      * @return 実際に移動できたら true
      */
     static bool copyFile(const tjs_char *from, const tjs_char *to) {
-        ttstr fromFile(TVPGetLocallyAccessibleName(TVPGetPlacedPath(from)));
+        ttstr fromPlaced = TVPGetPlacedPath(from);
+        if(fromPlaced.IsEmpty())
+            return false;
+
+        ttstr fromFile(TVPGetLocallyAccessibleName(fromPlaced));
         ttstr toFile(TVPGetLocallyAccessibleName(TVPNormalizeStorageName(to)));
         return _copyFile(fromFile, toFile);
     }
@@ -810,7 +814,11 @@ public:
      */
     static bool copyFileNoNormalize(const tjs_char *from, const tjs_char *to,
                                     bool failIfExist) {
-        ttstr fromFile(TVPGetLocallyAccessibleName(TVPGetPlacedPath(from)));
+        ttstr fromPlaced = TVPGetPlacedPath(from);
+        if(fromPlaced.IsEmpty())
+            return false;
+
+        ttstr fromFile(TVPGetLocallyAccessibleName(fromPlaced));
         ttstr toFile(to);
         if(toFile.length()) {
             // ※指定次第で例外を発生させるためTVPGetLocallyAccessibleNameは使わない

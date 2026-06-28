@@ -5,6 +5,7 @@
 #include "ConfigManager/IndividualConfigManager.h"
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
@@ -15,6 +16,172 @@ namespace {
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
     std::string sampleBitmapStats(const iTVPBaseBitmap *bitmap);
+
+    bool motionRenderProfileEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+            return value && *value && std::strcmp(value, "0") != 0;
+        }();
+        return enabled;
+    }
+
+    std::uint64_t motionRenderProfileNowUs() {
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
+    void renderReuseHashCombine(std::size_t &seed, std::size_t value) {
+        seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+    }
+
+    std::size_t renderReuseHashFloat(float value) {
+        return std::hash<int>{}(
+            static_cast<int>(std::lround(static_cast<double>(value) * 1024.0)));
+    }
+
+    std::size_t renderCommandReuseSignature(
+        const std::vector<motion::detail::PlayerRuntime::RenderCommand> &commands) {
+        std::size_t seed = commands.size();
+        for(const auto &command : commands) {
+            renderReuseHashCombine(seed, std::hash<int>{}(command.nodeIndex));
+            renderReuseHashCombine(seed, std::hash<std::string>{}(command.sourceKey));
+            renderReuseHashCombine(seed, std::hash<int>{}(command.blendMode));
+            renderReuseHashCombine(seed, std::hash<int>{}(command.opacity));
+            renderReuseHashCombine(seed, std::hash<int>{}(command.itemFlags));
+            renderReuseHashCombine(seed, std::hash<int>{}(command.parentNodeIndex));
+            renderReuseHashCombine(seed, std::hash<int>{}(command.visibleAncestorIndex));
+            renderReuseHashCombine(seed, std::hash<int>{}(command.meshDivX));
+            renderReuseHashCombine(seed, std::hash<int>{}(command.meshDivY));
+            renderReuseHashCombine(seed, std::hash<int>{}(command.meshType));
+            renderReuseHashCombine(seed, std::hash<bool>{}(command.groupOnly));
+            renderReuseHashCombine(seed, std::hash<bool>{}(command.clearEnabled));
+            for(const auto value : command.packedColors) {
+                renderReuseHashCombine(seed, std::hash<std::uint32_t>{}(value));
+            }
+            for(const auto value : command.clipRect) {
+                renderReuseHashCombine(seed, std::hash<int>{}(value));
+            }
+            for(const auto value : command.dirtyRect) {
+                renderReuseHashCombine(seed, std::hash<int>{}(value));
+            }
+            for(const auto value : command.worldCorners) {
+                renderReuseHashCombine(seed, renderReuseHashFloat(value));
+            }
+            for(const auto value : command.localCorners) {
+                renderReuseHashCombine(seed, renderReuseHashFloat(value));
+            }
+            for(const auto value : command.worldMeshPoints) {
+                renderReuseHashCombine(seed, renderReuseHashFloat(value));
+            }
+            for(const auto value : command.localMeshPoints) {
+                renderReuseHashCombine(seed, renderReuseHashFloat(value));
+            }
+        }
+        return seed;
+    }
+
+    using PresentationRenderCacheEntry =
+        motion::detail::PlayerRuntime::PresentationRenderCacheEntry;
+
+    struct GlobalPresentationRenderCacheEntry : PresentationRenderCacheEntry {
+        tTJSVariant sourceLayer;
+        std::uint64_t storedUs = 0;
+    };
+
+    using GlobalPresentationRenderCache =
+        std::unordered_map<iTJSDispatch2 *, GlobalPresentationRenderCacheEntry>;
+
+    GlobalPresentationRenderCache &globalPresentationRenderCache() {
+        static GlobalPresentationRenderCache cache;
+        return cache;
+    }
+
+    GlobalPresentationRenderCacheEntry makeGlobalPresentationRenderCacheEntry(
+        iTJSDispatch2 *sourceLayerObject,
+        const std::string &motionPath,
+        double frame,
+        tjs_int canvasWidth,
+        tjs_int canvasHeight,
+        std::size_t commandSignature,
+        std::uint64_t storedUs) {
+        GlobalPresentationRenderCacheEntry entry;
+        entry.motion = motionPath;
+        entry.frame = frame;
+        entry.canvasWidth = canvasWidth;
+        entry.canvasHeight = canvasHeight;
+        entry.commandSignature = commandSignature;
+        if(sourceLayerObject) {
+            entry.sourceLayer =
+                tTJSVariant(sourceLayerObject, sourceLayerObject);
+        }
+        entry.storedUs = storedUs;
+        return entry;
+    }
+
+    void invalidateGlobalPresentationRenderTarget(iTJSDispatch2 *target) {
+        auto &cache = globalPresentationRenderCache();
+        if(target) {
+            cache.erase(target);
+        } else {
+            cache.clear();
+        }
+    }
+
+    bool presentationRenderEntryMatches(
+        const PresentationRenderCacheEntry &entry,
+        const std::string &motionPath,
+        double frame,
+        tjs_int canvasWidth,
+        tjs_int canvasHeight,
+        std::size_t commandSignature) {
+        return entry.motion == motionPath &&
+            entry.canvasWidth == canvasWidth &&
+            entry.canvasHeight == canvasHeight &&
+            std::fabs(entry.frame - frame) < 0.0001 &&
+            entry.commandSignature == commandSignature;
+    }
+
+    constexpr std::uint64_t kGlobalPresentationReuseTtlUs = 100000;
+    constexpr std::uint64_t kGlobalPresentationCopyReuseTtlUs = 100000;
+
+    iTJSDispatch2 *globalPresentationSourceLayerObject(
+        GlobalPresentationRenderCacheEntry &entry) {
+        if(entry.sourceLayer.Type() != tvtObject) {
+            return nullptr;
+        }
+        return entry.sourceLayer.AsObjectNoAddRef();
+    }
+
+    GlobalPresentationRenderCache::iterator findGlobalPresentationRenderSource(
+        GlobalPresentationRenderCache &cache,
+        iTJSDispatch2 *targetLayerObject,
+        const std::string &motionPath,
+        double frame,
+        tjs_int canvasWidth,
+        tjs_int canvasHeight,
+        std::size_t commandSignature,
+        std::uint64_t nowUs) {
+        auto it = cache.begin();
+        while(it != cache.end()) {
+            auto &entry = it->second;
+            const bool expired =
+                nowUs < entry.storedUs ||
+                nowUs - entry.storedUs > kGlobalPresentationCopyReuseTtlUs;
+            if(expired || !globalPresentationSourceLayerObject(entry)) {
+                it = cache.erase(it);
+                continue;
+            }
+            if(it->first != targetLayerObject &&
+               presentationRenderEntryMatches(entry, motionPath, frame,
+                                               canvasWidth, canvasHeight,
+                                               commandSignature)) {
+                return it;
+            }
+            ++it;
+        }
+        return cache.end();
+    }
 
     bool packedColorsAreDefault(std::uint32_t c0, std::uint32_t c1,
                                 std::uint32_t c2, std::uint32_t c3) {
@@ -289,6 +456,20 @@ namespace {
         return source.find("yuzu_logo") != std::string::npos;
     }
 
+    bool isYuzuStartupLogoWhiteWashLayer(const std::string &motionPath,
+                                         const std::string &nodeLabel,
+                                         const std::string &sourceKey) {
+        if(!isYuzuStartupLogoMotion(motionPath)) {
+            return false;
+        }
+        const auto source = renderDebugLowercase(sourceKey);
+        if(source.find("moji_white") != std::string::npos) {
+            return true;
+        }
+        const auto label = renderDebugLowercase(nodeLabel);
+        return label == "white" && source.find("/yuzu/") != std::string::npos;
+    }
+
     bool motionSourcePixelsAreBGRA(const std::string &motionPath,
                                    bool decodedPixelsAreBgra) {
         if(decodedPixelsAreBgra) {
@@ -353,11 +534,21 @@ namespace {
             source.find("/title/bg") != std::string::npos;
     }
 
+    bool isYuzuTitleLogoLayer(const std::string &nodeLabel,
+                              const std::string &sourceKey) {
+        const auto source = renderDebugLowercase(sourceKey);
+        if(source.find("src/title/logo") != std::string::npos ||
+           source.find("/title/logo") != std::string::npos) {
+            return true;
+        }
+        const auto label = renderDebugLowercase(nodeLabel);
+        return label == "logo" || label == "logoover";
+    }
+
     bool isYuzuTitleCharacterOrLogoLayer(const std::string &nodeLabel,
                                          const std::string &sourceKey) {
         const auto source = renderDebugLowercase(sourceKey);
-        if(source.find("src/title/logo") != std::string::npos ||
-           source.find("/title/logo") != std::string::npos ||
+        if(isYuzuTitleLogoLayer(nodeLabel, sourceKey) ||
            source.find("src/title/ch") != std::string::npos ||
            source.find("/title/ch") != std::string::npos ||
            source.find("title2_ch") != std::string::npos ||
@@ -409,7 +600,7 @@ namespace {
                                                 entry.sourceKey);
     }
 
-    int yuzuTitlePresentationDrawRank(
+    int yuzuTitleIntroDrawPriority(
         const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
         if(isYuzuTitleBackgroundLayer(entry.nodeLabel, entry.sourceKey)) {
             return 0;
@@ -417,7 +608,14 @@ namespace {
         if(isYuzuTitlePositionLayer(entry.nodeLabel, entry.sourceKey)) {
             return 1;
         }
-        return 2;
+        if(isYuzuTitleStandaloneCharacterLayer(entry.nodeLabel,
+                                               entry.sourceKey)) {
+            return 2;
+        }
+        if(isYuzuTitleLogoLayer(entry.nodeLabel, entry.sourceKey)) {
+            return 3;
+        }
+        return 1;
     }
 
     bool isYuzuTitleRenderablePresentationLayer(
@@ -786,19 +984,6 @@ namespace {
         const bool isLogoMotion = isYuzuLogoPresentationMotion(motionPath);
 
         if(isTitleMotion) {
-            std::stable_sort(runtime.preparedRenderItems.begin(),
-                             runtime.preparedRenderItems.end(),
-                             [](const auto &lhs, const auto &rhs) {
-                                 return yuzuTitlePresentationDrawRank(lhs) <
-                                     yuzuTitlePresentationDrawRank(rhs);
-                             });
-            if(LOGGER && shouldDebugTitleRender(motionPath) &&
-               markRenderDebugLogged("yuzu-title-draw-rank:" + motionPath)) {
-                LOGGER->info(
-                    "motion title presentation draw order normalized: motion={}",
-                    motionPath);
-            }
-
             const bool hasSyntheticIntroLayer = std::any_of(
                 runtime.preparedRenderItems.begin(),
                 runtime.preparedRenderItems.end(),
@@ -807,14 +992,57 @@ namespace {
                         !entry.skipFlag1 && entry.opacity > 0 &&
                         isYuzuTitleSyntheticIntroLayer(entry);
                 });
+            const bool hasLayerNeedingStableOrdering = std::any_of(
+                runtime.preparedRenderItems.begin(),
+                runtime.preparedRenderItems.end(),
+                [](const auto &entry) {
+                    if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+                       entry.opacity <= 0) {
+                        return false;
+                    }
+                    return isYuzuTitlePositionLayer(entry.nodeLabel,
+                                                    entry.sourceKey) ||
+                        isYuzuTitleStandaloneCharacterLayer(entry.nodeLabel,
+                                                            entry.sourceKey) ||
+                        isYuzuTitleLogoLayer(entry.nodeLabel, entry.sourceKey);
+                });
+            if(hasLayerNeedingStableOrdering) {
+                std::stable_sort(
+                    runtime.preparedRenderItems.begin(),
+                    runtime.preparedRenderItems.end(),
+                    [](const auto &lhs, const auto &rhs) {
+                        return yuzuTitleIntroDrawPriority(lhs) <
+                            yuzuTitleIntroDrawPriority(rhs);
+                    });
+            }
             if(hasSyntheticIntroLayer) {
+                std::vector<std::string> syntheticIntroSources;
+                syntheticIntroSources.reserve(runtime.preparedRenderItems.size());
+                for(const auto &entry : runtime.preparedRenderItems) {
+                    if(entry.drawFlag && !entry.skipFlag0 && !entry.skipFlag1 &&
+                       entry.opacity > 0 && isYuzuTitleSyntheticIntroLayer(entry)) {
+                        syntheticIntroSources.push_back(
+                            renderDebugLowercase(entry.sourceKey));
+                    }
+                }
                 int suppressedClipCharacters = 0;
+                int suppressedCompositeLayers = 0;
                 for(auto &entry : runtime.preparedRenderItems) {
                     if(entry.drawFlag && !entry.skipFlag0 && !entry.skipFlag1 &&
                        entry.opacity > 0 &&
-                       isYuzuTitleClipAnimatedCharacterLayer(entry)) {
+                       isYuzuTitleClipAnimatedCharacterLayer(entry) &&
+                       std::find(syntheticIntroSources.begin(),
+                                 syntheticIntroSources.end(),
+                                 renderDebugLowercase(entry.sourceKey)) !=
+                           syntheticIntroSources.end()) {
                         entry.skipFlag0 = true;
                         ++suppressedClipCharacters;
+                    } else if(entry.drawFlag && !entry.skipFlag0 &&
+                              !entry.skipFlag1 && entry.opacity > 0 &&
+                              isYuzuTitlePositionLayer(entry.nodeLabel,
+                                                       entry.sourceKey)) {
+                        entry.skipFlag0 = true;
+                        ++suppressedCompositeLayers;
                     }
                 }
                 if(suppressedClipCharacters > 0 && LOGGER &&
@@ -825,6 +1053,15 @@ namespace {
                     LOGGER->info(
                         "motion title clip character layer suppressed: motion={} suppressedClipCharacters={}",
                         motionPath, suppressedClipCharacters);
+                }
+                if(suppressedCompositeLayers > 0 && LOGGER &&
+                   shouldDebugTitleRender(motionPath) &&
+                   markRenderDebugLogged(fmt::format(
+                       "yuzu-title-composite-delayed:{}:{}",
+                       motionPath, suppressedCompositeLayers))) {
+                    LOGGER->info(
+                        "motion title composite layer delayed until intro completes: motion={} suppressedCompositeLayers={}",
+                        motionPath, suppressedCompositeLayers);
                 }
             }
 
@@ -860,17 +1097,37 @@ namespace {
             }
         }
 
-        bool usesCenteredPresentationOrigin = isLogoMotion;
+        bool usesCenteredPresentationOrigin = isLogoMotion || isTitleMotion;
+        float centeredPresentationTranslateX =
+            static_cast<float>(canvasWidth) * 0.5f;
+        float centeredPresentationTranslateY =
+            static_cast<float>(canvasHeight) * 0.5f;
+        bool centeredOriginFromReference = false;
+        if(isTitleMotion &&
+           runtime.yuzuPresentationCenteredOriginConfirmed) {
+            usesCenteredPresentationOrigin = true;
+            centeredOriginFromReference = true;
+            centeredPresentationTranslateX =
+                runtime.yuzuPresentationTranslateX;
+            centeredPresentationTranslateY =
+                runtime.yuzuPresentationTranslateY;
+        }
         auto considerCenteredOrigin =
             [&](const motion::detail::PlayerRuntime::PreparedRenderItem &entry,
                 int referenceKind) {
-                if(usesCenteredPresentationOrigin || !entry.drawFlag ||
-                   entry.opacity <= 0 ||
+                if(!entry.drawFlag || entry.opacity <= 0 ||
                    isYuzuTitleWhiteUtilityLayer(motionPath, entry.nodeLabel,
                                                 entry.sourceKey)) {
                     return;
                 }
                 const auto source = renderDebugLowercase(entry.sourceKey);
+                const bool isTitlePositionReference =
+                    isTitleMotion &&
+                    isYuzuTitlePositionLayer(entry.nodeLabel, entry.sourceKey);
+                if(usesCenteredPresentationOrigin &&
+                   (!isTitlePositionReference || centeredOriginFromReference)) {
+                    return;
+                }
                 const bool isLogoBackdrop =
                     isLogoMotion &&
                     (source == "src/logo/icon50" ||
@@ -878,6 +1135,7 @@ namespace {
                 switch(referenceKind) {
                     case 0:
                         if(isTitleMotion &&
+                           !isTitlePositionReference &&
                            (!isYuzuTitleBackgroundLayer(entry.nodeLabel,
                                                         entry.sourceKey) ||
                             source.find("_bottom") != std::string::npos ||
@@ -886,7 +1144,9 @@ namespace {
                         }
                         break;
                     case 1:
-                        if(!isTitleMotion || source != "src/title/pos2") {
+                        if(!isTitleMotion ||
+                           (!isTitlePositionReference &&
+                            source != "src/title/pos2")) {
                             return;
                         }
                         break;
@@ -919,6 +1179,23 @@ namespace {
                     usesCenteredPresentationOrigin = true;
                     return;
                 }
+                if(isTitlePositionReference && crossesOrigin &&
+                   widthRatio >= 0.75f &&
+                   heightRatio >= 0.55f &&
+                   widthRatio <= maxCenteredWidthRatio &&
+                   heightRatio <= maxCenteredHeightRatio &&
+                   std::fabs(centerX) <=
+                       static_cast<float>(canvasWidth) * 0.1f &&
+                   std::fabs(centerY) <=
+                       static_cast<float>(canvasHeight) * 0.1f) {
+                    usesCenteredPresentationOrigin = true;
+                    centeredOriginFromReference = true;
+                    centeredPresentationTranslateX =
+                        std::round(-referenceBox[0]);
+                    centeredPresentationTranslateY =
+                        std::round(-referenceBox[1]);
+                    return;
+                }
                 usesCenteredPresentationOrigin =
                     crossesOrigin &&
                     referenceBox[2] > 0.0f && referenceBox[3] > 0.0f &&
@@ -940,17 +1217,22 @@ namespace {
             }
         }
         if(usesCenteredPresentationOrigin) {
-            const float translateX = static_cast<float>(canvasWidth) * 0.5f;
-            const float translateY = static_cast<float>(canvasHeight) * 0.5f;
+            const float translateX = centeredPresentationTranslateX;
+            const float translateY = centeredPresentationTranslateY;
+            if(isTitleMotion && centeredOriginFromReference) {
+                runtime.yuzuPresentationCenteredOriginConfirmed = true;
+                runtime.yuzuPresentationTranslateX = translateX;
+                runtime.yuzuPresentationTranslateY = translateY;
+            }
             for(auto &entry : runtime.preparedRenderItems) {
                 translatePreparedRenderItem(entry, translateX, translateY);
             }
             if(LOGGER && shouldDebugTitleRender(motionPath) &&
                markRenderDebugLogged("yuzu-presentation-origin:" + motionPath)) {
                 LOGGER->info(
-                    "motion presentation origin: motion={} centered=1 translate={:.1f},{:.1f} canvas={}x{}",
+                    "motion presentation origin: motion={} centered=1 translate={:.1f},{:.1f} canvas={}x{} reference={}",
                     motionPath, translateX, translateY, canvasWidth,
-                    canvasHeight);
+                    canvasHeight, centeredOriginFromReference ? 1 : 0);
             }
         }
 
@@ -1728,6 +2010,38 @@ namespace {
             layer->GetParentVisible() && layer->GetOpacity() > 0;
     }
 
+    bool motionLayerIsDrawableCgViewSurface(tTJSNI_BaseLayer *layer) {
+        return layer && layer->GetOwnerNoAddRef() && layer->GetVisible() &&
+            layer->GetOpacity() > 0;
+    }
+
+    bool layerNameContains(tTJSNI_BaseLayer *layer, const std::string &needle) {
+        if(!layer) {
+            return false;
+        }
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        return name.find(needle) != std::string::npos;
+    }
+
+    bool layerIsCgViewContainer(tTJSNI_BaseLayer *layer) {
+        return layerNameContains(layer, "cg view layer");
+    }
+
+    bool layerIsSpecificCgViewContainer(tTJSNI_BaseLayer *layer) {
+        return layerNameContains(layer, "cg view layer :");
+    }
+
+    bool layerIsCgViewAffineSurface(tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return false;
+        }
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        return name.find("affinelayer") != std::string::npos &&
+            layerIsCgViewContainer(layer);
+    }
+
     int scoreMotionPresentationChild(tTJSNI_BaseLayer *parent,
                                      tTJSNI_BaseLayer *child,
                                      int canvasWidth,
@@ -1775,14 +2089,30 @@ namespace {
             name.find("grad") != std::string::npos ||
             name.find("eff") != std::string::npos ||
             name.find("mask") != std::string::npos ||
+            name.find("fade") != std::string::npos ||
+            name.find("fader") != std::string::npos ||
+            name.find("load trigger") != std::string::npos ||
+            name.find("trigger") != std::string::npos ||
+            name.find("systembaselayer") != std::string::npos ||
+            name.find("system base") != std::string::npos ||
+            name.find("system") != std::string::npos ||
             name.find("sq_") != std::string::npos ||
             name.find("square") != std::string::npos ||
             name.find("logo") != std::string::npos ||
             name.find("date") != std::string::npos ||
             name.find("passive") != std::string::npos ||
             name.find("message") != std::string::npos ||
+            name.find("title") != std::string::npos ||
             name.find("text") != std::string::npos ||
             name.find("trans") != std::string::npos ||
+            name == "face" ||
+            name == "msgwin" ||
+            name == "character" ||
+            name == "character2" ||
+            name == "chara" ||
+            name.find("msgwin") != std::string::npos ||
+            name.find("character") != std::string::npos ||
+            name.find("portrait") != std::string::npos ||
             name.find("クリック") != std::string::npos ||
             name.find("待ち") != std::string::npos ||
             name.find("メッセージ") != std::string::npos ||
@@ -1790,11 +2120,63 @@ namespace {
             name.find("名前") != std::string::npos;
     }
 
+    bool genericMotionLayerNameLooksLikeEventSurface(const std::string &name) {
+        return name == "ev" ||
+            name == "event" ||
+            name == "cg" ||
+            name.find("event") != std::string::npos ||
+            name.find("cg") != std::string::npos;
+    }
+
     int scoreGenericMotionPresentationChild(tTJSNI_BaseLayer *parent,
                                             tTJSNI_BaseLayer *child,
                                             int canvasWidth,
                                             int canvasHeight,
                                             int depth) {
+        if(!parent || !child || child == parent || !child->GetOwnerNoAddRef()) {
+            return -1;
+        }
+        if(!motionLayerIsVisiblePresentationSurface(child) ||
+           !child->GetHasImage() ||
+           !motionLayerCoversCanvas(child, canvasWidth, canvasHeight)) {
+            return -1;
+        }
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(child->GetName()));
+        if(genericMotionLayerNameLooksLikeUiChrome(name)) {
+            return -1;
+        }
+        if(child->GetCount() > 0 &&
+           !genericMotionLayerNameLooksLikeEventSurface(name)) {
+            return -1;
+        }
+        if(name == "stage" || name.find("stage") != std::string::npos) {
+            return -1;
+        }
+
+        int score = 100;
+        if(name == "ev") {
+            score += 700;
+        } else if(name.find("ev") != std::string::npos ||
+                  name.find("event") != std::string::npos ||
+                  name.find("cg") != std::string::npos) {
+            score += 500;
+        } else if(name.find("背景") != std::string::npos ||
+                  name.find("background") != std::string::npos ||
+                  name.find("bg") != std::string::npos) {
+            score += 80;
+        }
+        score += static_cast<int>(child->GetOverallOrderIndex());
+        score += static_cast<int>(child->GetOrderIndex()) * 2;
+        score -= depth * 4;
+        return score;
+    }
+
+    int scoreStartupLogoPresentationChild(tTJSNI_BaseLayer *parent,
+                                          tTJSNI_BaseLayer *child,
+                                          int canvasWidth,
+                                          int canvasHeight,
+                                          int depth) {
         if(!parent || !child || child == parent || !child->GetOwnerNoAddRef()) {
             return -1;
         }
@@ -1815,13 +2197,13 @@ namespace {
 
         int score = 100;
         if(name == "ev") {
-            score += 700;
+            score += 900;
         } else if(name.find("ev") != std::string::npos ||
                   name.find("event") != std::string::npos ||
                   name.find("cg") != std::string::npos) {
-            score += 500;
+            score += 700;
         } else if(name == "stage" || name.find("stage") != std::string::npos) {
-            score += 350;
+            score += 600;
         } else if(name.find("背景") != std::string::npos ||
                   name.find("background") != std::string::npos ||
                   name.find("bg") != std::string::npos) {
@@ -1831,6 +2213,41 @@ namespace {
         score += static_cast<int>(child->GetOrderIndex()) * 2;
         score -= depth * 4;
         return score;
+    }
+
+    tTJSNI_BaseLayer *findStartupLogoPresentationLayer(
+        tTJSNI_BaseLayer *parent,
+        int canvasWidth,
+        int canvasHeight) {
+        if(!parent || parent->GetCount() <= 0) {
+            return nullptr;
+        }
+
+        struct Candidate {
+            tTJSNI_BaseLayer *layer = nullptr;
+            int score = -1;
+        };
+        Candidate best;
+        auto visit = [&](auto &&self,
+                         tTJSNI_BaseLayer *current,
+                         int depth) -> void {
+            if(!current || current->GetCount() <= 0) {
+                return;
+            }
+            const auto childCount = current->GetCount();
+            for(tjs_uint i = 0; i < childCount; ++i) {
+                auto *child = current->GetChildren(static_cast<tjs_int>(i));
+                const int score = scoreStartupLogoPresentationChild(
+                    current, child, canvasWidth, canvasHeight, depth);
+                if(score > best.score) {
+                    best.layer = child;
+                    best.score = score;
+                }
+                self(self, child, depth + 1);
+            }
+        };
+        visit(visit, parent, 0);
+        return best.layer;
     }
 
     bool yuzuTitleLayerNameMatches(tTJSNI_BaseLayer *layer) {
@@ -1961,6 +2378,134 @@ namespace {
         return best.layer;
     }
 
+    tTJSNI_BaseLayer *findCgViewMotionPresentationChild(
+        tTJSNI_BaseLayer *parent,
+        int canvasWidth,
+        int canvasHeight) {
+        if(!parent || parent->GetCount() <= 0) {
+            return nullptr;
+        }
+
+        struct Candidate {
+            tTJSNI_BaseLayer *layer = nullptr;
+            int score = -1;
+        };
+        Candidate best;
+        auto visit = [&](auto &&self,
+                         tTJSNI_BaseLayer *current,
+                         int depth) -> void {
+            if(!current || current->GetCount() <= 0) {
+                return;
+            }
+            const auto childCount = current->GetCount();
+            for(tjs_uint i = 0; i < childCount; ++i) {
+                auto *child = current->GetChildren(static_cast<tjs_int>(i));
+                if(child && layerIsCgViewAffineSurface(child) &&
+                   layerIsCgViewContainer(current) &&
+                   motionLayerIsDrawableCgViewSurface(child) &&
+                   child->GetHasImage() &&
+                   motionLayerCoversCanvas(child, canvasWidth, canvasHeight)) {
+                    int score = 1000;
+                    if(layerIsSpecificCgViewContainer(current)) {
+                        score += 500;
+                    }
+                    if(current->GetVisible() && current->GetOpacity() > 0) {
+                        score += 100;
+                    }
+                    if(current->GetParentVisible()) {
+                        score += 50;
+                    }
+                    score += static_cast<int>(current->GetOverallOrderIndex());
+                    score += static_cast<int>(child->GetOrderIndex()) * 2;
+                    score -= depth * 4;
+                    if(score > best.score) {
+                        best.layer = child;
+                        best.score = score;
+                    }
+                }
+                self(self, child, depth + 1);
+            }
+        };
+        visit(visit, parent, 0);
+        return best.layer;
+    }
+
+    bool motionPresentationLayerHasVisibleSamples(tTJSNI_BaseLayer *layer) {
+        if(!layer || !layer->GetHasImage()) {
+            return false;
+        }
+        auto *image = layer->GetMainImage();
+        if(!image || image->GetWidth() <= 0 || image->GetHeight() <= 0) {
+            return false;
+        }
+
+        const tjs_int width = static_cast<tjs_int>(image->GetWidth());
+        const tjs_int height = static_cast<tjs_int>(image->GetHeight());
+        for(tjs_int yStep = 0; yStep < 8; ++yStep) {
+            const tjs_int y = std::min<tjs_int>(
+                height - 1, std::max<tjs_int>(0, yStep * height / 7));
+            for(tjs_int xStep = 0; xStep < 8; ++xStep) {
+                const tjs_int x = std::min<tjs_int>(
+                    width - 1, std::max<tjs_int>(0, xStep * width / 7));
+                if((image->GetPoint(x, y) & 0xff000000u) != 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    bool shouldPreservePreviousGenericPresentationFrame(
+        const motion::detail::PlayerRuntime &runtime,
+        tTJSNI_BaseLayer *targetLayer,
+        int canvasWidth,
+        int canvasHeight) {
+        if(canvasWidth <= 0 || canvasHeight <= 0 ||
+           runtime.renderCommands.empty() ||
+           !motionPresentationLayerHasVisibleSamples(targetLayer)) {
+            return false;
+        }
+
+        int maxRight = 0;
+        int maxBottom = 0;
+        bool hasOffscreenSource = false;
+        for(const auto &command : runtime.renderCommands) {
+            if(command.clipRect[0] != 0 || command.clipRect[1] != 0) {
+                return false;
+            }
+            maxRight = std::max(maxRight, command.clipRect[2]);
+            maxBottom = std::max(maxBottom, command.clipRect[3]);
+            for(size_t i = 0; i + 1 < command.worldCorners.size(); i += 2) {
+                if(command.worldCorners[i] < -1.0f ||
+                   command.worldCorners[i + 1] < -1.0f) {
+                    hasOffscreenSource = true;
+                    break;
+                }
+            }
+        }
+
+        if(!hasOffscreenSource) {
+            return false;
+        }
+
+        return maxRight > 0 && maxBottom > 0 &&
+            maxRight <= std::max(1, canvasWidth * 2 / 5) &&
+            maxBottom <= std::max(1, canvasHeight * 2 / 5);
+    }
+
+    void clearMotionPresentationLayer(tTJSNI_BaseLayer *layer,
+                                      int canvasWidth,
+                                      int canvasHeight) {
+        if(!layer || canvasWidth <= 0 || canvasHeight <= 0) {
+            return;
+        }
+        const tTVPRect clearRect(
+            0, 0,
+            std::max<tjs_int>(canvasWidth, layer->GetImageWidth()),
+            std::max<tjs_int>(canvasHeight, layer->GetImageHeight()));
+        layer->FillRect(clearRect, 0x00000000);
+    }
+
     bool prepareMotionPresentationLayerForRender(tTJSNI_BaseLayer *layer,
                                                  int canvasWidth,
                                                  int canvasHeight) {
@@ -2014,8 +2559,11 @@ namespace {
         }
         layer->SetName(TJS_W("AetherKiriYuzuTitlePresentation"));
         layer->SetHitThreshold(256);
+        // title_bg is a background/event surface. A fallback presentation layer
+        // must stay behind title UI and character layers instead of becoming a
+        // full-screen foreground overlay.
         try {
-            layer->BringToFront();
+            layer->BringToBack();
         } catch(...) {
         }
         return layerObject;
@@ -2038,6 +2586,66 @@ namespace {
         layer->SetClip(0, 0, width, height);
         tTVPRect rect(0, 0, width, height);
         layer->FillRect(rect, clearColor);
+        return true;
+    }
+
+    bool prepareLayerForPresentationCopy(iTJSDispatch2 *layerObject,
+                                         bool usingPresentationTarget,
+                                         int width,
+                                         int height) {
+        auto *layer = resolveNativeLayer(layerObject);
+        if(!layer || width <= 0 || height <= 0) {
+            return false;
+        }
+        if(usingPresentationTarget) {
+            return prepareMotionPresentationLayerForRender(layer, width, height);
+        }
+        if(!layer->GetHasImage()) {
+            layer->SetHasImage(true);
+        }
+        if(layer->GetImageWidth() < width || layer->GetImageHeight() < height) {
+            layer->SetImageSize(static_cast<tjs_uint>(width),
+                                static_cast<tjs_uint>(height));
+        }
+        if(layer->GetWidth() != width || layer->GetHeight() != height) {
+            layer->SetSize(width, height);
+        }
+        layer->SetClip(0, 0, width, height);
+        layer->SetVisible(true);
+        return true;
+    }
+
+    bool copyGlobalPresentationRender(
+        iTJSDispatch2 *targetLayerObject,
+        bool usingPresentationTarget,
+        int canvasWidth,
+        int canvasHeight,
+        GlobalPresentationRenderCacheEntry &entry) {
+        auto *sourceLayerObject = globalPresentationSourceLayerObject(entry);
+        if(!sourceLayerObject || sourceLayerObject == targetLayerObject) {
+            return false;
+        }
+        auto *sourceLayer = resolveNativeLayer(sourceLayerObject);
+        auto *targetLayer = resolveNativeLayer(targetLayerObject);
+        if(!sourceLayer || !targetLayer || !sourceLayer->GetMainImage()) {
+            return false;
+        }
+        if(sourceLayer->GetImageWidth() < canvasWidth ||
+           sourceLayer->GetImageHeight() < canvasHeight) {
+            return false;
+        }
+        if(!prepareLayerForPresentationCopy(targetLayerObject,
+                                            usingPresentationTarget,
+                                            canvasWidth, canvasHeight)) {
+            return false;
+        }
+        try {
+            const tTVPRect sourceRect(0, 0, canvasWidth, canvasHeight);
+            targetLayer->CopyRect(0, 0, sourceLayer->GetMainImage(), nullptr,
+                                  sourceRect);
+        } catch(...) {
+            return false;
+        }
         return true;
     }
 
@@ -2434,7 +3042,10 @@ namespace motion {
 
     void Player::setResizable(bool v) { _runtime->resizable = v; }
 
-    void Player::removeAllTextures() { _runtime->sourcesByKey.clear(); }
+    void Player::removeAllTextures() {
+        _runtime->sourcesByKey.clear();
+        _runtime->clearMotionBitmapCaches();
+    }
 
     void Player::removeAllBg() { _runtime->backgrounds.clear(); }
 
@@ -2648,6 +3259,19 @@ namespace motion {
                        entry.nodeLabel + ":" + entry.sourceKey)) {
                     LOGGER->info(
                         "motion skip title white utility layer: motion={} node={} label={} source={}",
+                        motionPath, entry.nodeIndex, entry.nodeLabel,
+                        entry.sourceKey);
+                }
+                continue;
+            }
+            if(isYuzuStartupLogoWhiteWashLayer(motionPath, entry.nodeLabel,
+                                               entry.sourceKey)) {
+                if(LOGGER && shouldDebugTitleRender(motionPath, entry.sourceKey) &&
+                   markRenderDebugLogged(
+                       "yuzu-logo-white-wash:" + motionPath + ":" +
+                       entry.nodeLabel + ":" + entry.sourceKey)) {
+                    LOGGER->info(
+                        "motion skip yuzu logo white wash layer: motion={} node={} label={} source={}",
                         motionPath, entry.nodeIndex, entry.nodeLabel,
                         entry.sourceKey);
                 }
@@ -2911,10 +3535,24 @@ namespace motion {
             return false;
         }
 
-        std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
-            baseSourceCache;
-        std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
-            preparedSourceCache;
+        struct RenderProfileStats {
+            int baseHits = 0;
+            int baseMisses = 0;
+            int preparedHits = 0;
+            int preparedMisses = 0;
+            int storageLoads = 0;
+            int psbLoads = 0;
+            int tintBuilds = 0;
+            std::uint64_t baseResolveUs = 0;
+            std::uint64_t preparedResolveUs = 0;
+            std::uint64_t tintBuildUs = 0;
+        };
+        RenderProfileStats profileStats;
+        const bool profileEnabled = motionRenderProfileEnabled();
+        const auto profileStartUs =
+            profileEnabled ? motionRenderProfileNowUs() : 0;
+        auto &baseSourceCache = _runtime->motionSourceBitmapCache;
+        auto &preparedSourceCache = _runtime->motionPreparedBitmapCache;
         auto resolveBaseSourceBitmap =
             [&](const detail::PlayerRuntime::RenderCommand &command)
                 -> std::shared_ptr<tTVPBaseBitmap> {
@@ -2923,8 +3561,16 @@ namespace motion {
             }
             if(auto it = baseSourceCache.find(command.sourceKey);
                it != baseSourceCache.end()) {
+                if(profileEnabled) {
+                    ++profileStats.baseHits;
+                }
                 return it->second;
             }
+            if(profileEnabled) {
+                ++profileStats.baseMisses;
+            }
+            const auto resolveStartUs =
+                profileEnabled ? motionRenderProfileNowUs() : 0;
 
             std::shared_ptr<tTVPBaseBitmap> srcBmp;
             std::string sourceOrigin("unresolved");
@@ -2944,6 +3590,9 @@ namespace motion {
                     if(bmp->GetWidth() > 0 && bmp->GetHeight() > 0) {
                         srcBmp = bmp;
                         sourceOrigin = detail::narrow(loadPath);
+                        if(profileEnabled) {
+                            ++profileStats.storageLoads;
+                        }
                         if(LOGGER &&
                            shouldDebugTitleRender(motionPath, command.sourceKey,
                                                   sourceOrigin) &&
@@ -3005,6 +3654,9 @@ namespace motion {
                         }
                     }
                     srcBmp = bmp;
+                    if(profileEnabled) {
+                        ++profileStats.psbLoads;
+                    }
                     sourceOrigin = fmt::format(
                         "psb:{}:{}x{}:origin=({:.3f},{:.3f}):bgra={}",
                         command.sourceKey, width, height, originX, originY,
@@ -3033,6 +3685,10 @@ namespace motion {
                 srcBmp ? srcBmp->GetHeight() : 0);
 
             baseSourceCache.emplace(command.sourceKey, srcBmp);
+            if(profileEnabled) {
+                profileStats.baseResolveUs +=
+                    motionRenderProfileNowUs() - resolveStartUs;
+            }
             return srcBmp;
         };
         auto resolveSourceBitmap =
@@ -3051,12 +3707,24 @@ namespace motion {
                 command.packedColors[3], useHalfAlphaTint ? 1 : 0);
             if(auto it = preparedSourceCache.find(tintKey);
                it != preparedSourceCache.end()) {
+                if(profileEnabled) {
+                    ++profileStats.preparedHits;
+                }
                 return it->second;
             }
+            if(profileEnabled) {
+                ++profileStats.preparedMisses;
+            }
+            const auto preparedStartUs =
+                profileEnabled ? motionRenderProfileNowUs() : 0;
 
             auto srcBmp = resolveBaseSourceBitmap(command);
             if(!srcBmp) {
                 preparedSourceCache.emplace(tintKey, nullptr);
+                if(profileEnabled) {
+                    profileStats.preparedResolveUs +=
+                        motionRenderProfileNowUs() - preparedStartUs;
+                }
                 return nullptr;
             }
 
@@ -3091,10 +3759,19 @@ namespace motion {
             const bool needsTint = tintDefaultNeutralMask || colorsCarryTint;
             if(!needsTint && !yuzuLogoCompositeSource) {
                 preparedSourceCache.emplace(tintKey, srcBmp);
+                if(profileEnabled) {
+                    profileStats.preparedResolveUs +=
+                        motionRenderProfileNowUs() - preparedStartUs;
+                }
                 return srcBmp;
             }
 
+            const auto tintStartUs =
+                profileEnabled ? motionRenderProfileNowUs() : 0;
             auto tinted = cloneBitmap32(*srcBmp);
+            if(profileEnabled) {
+                ++profileStats.tintBuilds;
+            }
             if(needsTint) {
                 applyPackedCornerTintLike_0x6A7518(
                     *tinted, command.packedColors, useHalfAlphaTint,
@@ -3104,6 +3781,10 @@ namespace motion {
             if(yuzuLogoCompositeSource) {
                 recolorYuzuCompositeLogoText(
                     *tinted, yuzuStartupLogoDisplayTextTint(motionPath));
+            }
+            if(profileEnabled) {
+                profileStats.tintBuildUs +=
+                    motionRenderProfileNowUs() - tintStartUs;
             }
             if(LOGGER &&
                shouldDebugTitleRender(motionPath, command.sourceKey) &&
@@ -3125,6 +3806,10 @@ namespace motion {
                 command.packedColors[2], command.packedColors[3],
                 tinted->GetWidth(), tinted->GetHeight());
             preparedSourceCache.emplace(tintKey, tinted);
+            if(profileEnabled) {
+                profileStats.preparedResolveUs +=
+                    motionRenderProfileNowUs() - preparedStartUs;
+            }
             return tinted;
         };
 
@@ -3433,6 +4118,16 @@ namespace motion {
             if(opa <= 0) {
                 continue;
             }
+            if(command.hasRenderParent) {
+                detail::logoChainTraceLogf(
+                    motionPath, "execute.skipChild", "0x6C7440",
+                    _clampedEvalTime,
+                    "nodeIndex={} parentNodeIndex={} clipRect=[{},{},{},{}]",
+                    command.nodeIndex, command.parentNodeIndex,
+                    command.clipRect[0], command.clipRect[1],
+                    command.clipRect[2], command.clipRect[3]);
+                continue;
+            }
 
             if(!buildCommandOutput(buildCommandOutput, i)) {
                 continue;
@@ -3647,6 +4342,21 @@ namespace motion {
                 motionPath, "execute.update", "0x6C7440", _clampedEvalTime,
                 "renderLayer.Update(false) size={}x{}",
                 renderLayer->GetWidth(), renderLayer->GetHeight());
+        }
+        if(profileEnabled && LOGGER) {
+            LOGGER->info(
+                "motion render profile: motion={} frame={:.2f} target={} native={} commands={} cache=base:{}/{} prepared:{}/{} loads=storage:{} psb:{} tintBuilds={} us=total:{} base:{} prepared:{} tint:{}",
+                motionPath, _clampedEvalTime,
+                static_cast<const void *>(renderLayerObject),
+                static_cast<const void *>(renderLayer),
+                _runtime->renderCommands.size(),
+                profileStats.baseHits, profileStats.baseMisses,
+                profileStats.preparedHits, profileStats.preparedMisses,
+                profileStats.storageLoads, profileStats.psbLoads,
+                profileStats.tintBuilds,
+                motionRenderProfileNowUs() - profileStartUs,
+                profileStats.baseResolveUs, profileStats.preparedResolveUs,
+                profileStats.tintBuildUs);
         }
         return true;
     }
@@ -3867,12 +4577,20 @@ namespace motion {
                     finalNativeLayer, canvasWidth, canvasHeight);
             }
         } else if(yuzuLogoPresentation) {
-            presentationChild = findMotionPresentationChild(
-                finalNativeLayer, canvasWidth, canvasHeight,
-                allowTransientPresentationLayer);
-        } else {
-            presentationChild = findGenericMotionPresentationChild(
+            presentationChild = findStartupLogoPresentationLayer(
                 finalNativeLayer, canvasWidth, canvasHeight);
+            if(!presentationChild) {
+                presentationChild = findMotionPresentationChild(
+                    finalNativeLayer, canvasWidth, canvasHeight,
+                    allowTransientPresentationLayer);
+            }
+        } else {
+            presentationChild = findCgViewMotionPresentationChild(
+                finalNativeLayer, canvasWidth, canvasHeight);
+            if(!presentationChild) {
+                presentationChild = findGenericMotionPresentationChild(
+                    finalNativeLayer, canvasWidth, canvasHeight);
+            }
         }
         if(presentationChild) {
             if(auto *presentationObject = presentationChild->GetOwnerNoAddRef()) {
@@ -3920,6 +4638,8 @@ namespace motion {
                     "motion presentation skip empty title frame: motion={} target=[{}]",
                     motionPath, describeLayerForDebug(finalNativeLayer));
             }
+            _runtime->clearPresentationRenderReuse();
+            invalidateGlobalPresentationRenderTarget(finalLayerObject);
             _runtime->lastCanvas =
                 tTJSVariant(resolvedLayerObject, resolvedLayerObject);
             return true;
@@ -3933,6 +4653,8 @@ namespace motion {
                     "motion presentation skip title tail frame: motion={} target=[{}]",
                     motionPath, describeLayerForDebug(finalNativeLayer));
             }
+            _runtime->clearPresentationRenderReuse();
+            invalidateGlobalPresentationRenderTarget(finalLayerObject);
             _runtime->lastCanvas =
                 tTJSVariant(resolvedLayerObject, resolvedLayerObject);
             return true;
@@ -3964,16 +4686,149 @@ namespace motion {
                 "motion presentation direct target: motion={} target=[{}]",
                 motionPath, describeLayerForDebug(finalNativeLayer));
         }
+
+        buildRenderCommands(canvasWidth, canvasHeight);
+        const bool clearGenericPresentationLayer =
+            usingPresentationTarget && renderLayerObject == finalLayerObject &&
+            !yuzuTitlePresentation && !yuzuLogoPresentation;
+        if(clearGenericPresentationLayer && _runtime->renderCommands.empty()) {
+            if(LOGGER && shouldDebugTitleRender(motionPath) &&
+               markRenderDebugLogged("presentation-skip-empty-generic:" +
+                                     motionPath)) {
+                LOGGER->info(
+                    "motion presentation skip empty generic frame: motion={} target=[{}]",
+                    motionPath, describeLayerForDebug(finalNativeLayer));
+            }
+            _runtime->lastCanvas =
+                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+            return true;
+        }
+        if(clearGenericPresentationLayer &&
+           shouldPreservePreviousGenericPresentationFrame(
+               *_runtime, finalNativeLayer, canvasWidth, canvasHeight)) {
+            _runtime->lastCanvas =
+                tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+            return true;
+        }
+        const auto presentationCommandSignature =
+            renderCommandReuseSignature(_runtime->renderCommands);
+        const bool canReuseYuzuPresentation =
+            (yuzuTitlePresentation || yuzuLogoPresentation);
+        const bool canReusePresentationRender =
+            canReuseYuzuPresentation &&
+            renderLayerObject == finalLayerObject && renderLayerObject != nullptr &&
+            !_runtime->renderCommands.empty();
+        const auto presentationReuseNowUs =
+            canReusePresentationRender ? motionRenderProfileNowUs() : 0;
+        if(canReusePresentationRender) {
+            auto cacheIt =
+                _runtime->presentationRenderCache.find(renderLayerObject);
+            if(cacheIt != _runtime->presentationRenderCache.end()) {
+                const auto &entry = cacheIt->second;
+                if(presentationRenderEntryMatches(
+                       entry, motionPath, _clampedEvalTime, canvasWidth,
+                       canvasHeight, presentationCommandSignature)) {
+                    ++_runtime->presentationRenderReuseSkips;
+                    if(motionRenderProfileEnabled() && LOGGER) {
+                        LOGGER->info(
+                            "motion render reuse: motion={} frame={:.2f} target={} canvas={}x{} commands={} skips={} scope=runtime",
+                            motionPath, _clampedEvalTime,
+                            static_cast<const void *>(renderLayerObject),
+                            canvasWidth, canvasHeight,
+                            _runtime->renderCommands.size(),
+                            _runtime->presentationRenderReuseSkips);
+                    }
+                    _runtime->lastCanvas =
+                        tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                    return true;
+                }
+            }
+            auto &globalCache = globalPresentationRenderCache();
+            auto globalIt = globalCache.find(renderLayerObject);
+	            if(globalIt != globalCache.end() &&
+	               presentationReuseNowUs >= globalIt->second.storedUs &&
+	               presentationReuseNowUs - globalIt->second.storedUs <=
+	                   kGlobalPresentationReuseTtlUs &&
+	               presentationRenderEntryMatches(
+	                   globalIt->second, motionPath, _clampedEvalTime, canvasWidth,
+	                   canvasHeight, presentationCommandSignature)) {
+                ++_runtime->presentationRenderReuseSkips;
+                _runtime->presentationRenderCache[renderLayerObject] = {
+                    motionPath,
+                    _clampedEvalTime,
+                    canvasWidth,
+                    canvasHeight,
+                    presentationCommandSignature,
+                };
+                if(motionRenderProfileEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "motion render reuse: motion={} frame={:.2f} target={} canvas={}x{} commands={} skips={} scope=global age_us={}",
+                        motionPath, _clampedEvalTime,
+                        static_cast<const void *>(renderLayerObject), canvasWidth,
+                        canvasHeight, _runtime->renderCommands.size(),
+                        _runtime->presentationRenderReuseSkips,
+                        presentationReuseNowUs - globalIt->second.storedUs);
+                }
+	                _runtime->lastCanvas =
+	                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+	                return true;
+	            }
+	            auto sourceIt = findGlobalPresentationRenderSource(
+	                globalCache, renderLayerObject, motionPath, _clampedEvalTime,
+	                canvasWidth, canvasHeight, presentationCommandSignature,
+	                presentationReuseNowUs);
+	            if(sourceIt != globalCache.end() &&
+	               copyGlobalPresentationRender(
+	                   renderLayerObject, usingPresentationTarget, canvasWidth,
+	                   canvasHeight, sourceIt->second)) {
+	                ++_runtime->presentationRenderReuseSkips;
+	                _runtime->presentationRenderCache[renderLayerObject] = {
+	                    motionPath,
+	                    _clampedEvalTime,
+	                    canvasWidth,
+	                    canvasHeight,
+	                    presentationCommandSignature,
+	                };
+	                globalCache[renderLayerObject] =
+	                    makeGlobalPresentationRenderCacheEntry(
+	                        renderLayerObject, motionPath, _clampedEvalTime,
+	                        canvasWidth, canvasHeight,
+	                        presentationCommandSignature, presentationReuseNowUs);
+	                if(motionRenderProfileEnabled() && LOGGER) {
+	                    LOGGER->info(
+	                        "motion render reuse: motion={} frame={:.2f} target={} source={} canvas={}x{} commands={} skips={} scope=global-copy age_us={}",
+	                        motionPath, _clampedEvalTime,
+	                        static_cast<const void *>(renderLayerObject),
+	                        static_cast<const void *>(sourceIt->first),
+	                        canvasWidth, canvasHeight,
+	                        _runtime->renderCommands.size(),
+	                        _runtime->presentationRenderReuseSkips,
+	                        presentationReuseNowUs - sourceIt->second.storedUs);
+	                }
+	                _runtime->lastCanvas =
+	                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+	                return true;
+	            }
+	        }
+
         if(renderLayerObject != finalLayerObject) {
             if(!prepareLayerForRender(renderLayerObject, canvasWidth, canvasHeight,
                                       0x00000000)) {
+                _runtime->invalidatePresentationRenderTarget(renderLayerObject);
+                invalidateGlobalPresentationRenderTarget(renderLayerObject);
                 return false;
             }
         } else if(auto *targetLayer = resolveNativeLayer(finalLayerObject)) {
             if(usingPresentationTarget) {
-                if(!prepareMotionPresentationLayerForRender(targetLayer, canvasWidth,
-                                                            canvasHeight)) {
+                if(!prepareMotionPresentationLayerForRender(
+                       targetLayer, canvasWidth, canvasHeight)) {
+                    _runtime->invalidatePresentationRenderTarget(renderLayerObject);
+                    invalidateGlobalPresentationRenderTarget(renderLayerObject);
                     return false;
+                }
+                if(clearGenericPresentationLayer) {
+                    clearMotionPresentationLayer(targetLayer, canvasWidth,
+                                                 canvasHeight);
                 }
             } else {
                 if(targetLayer->GetWidth() != canvasWidth ||
@@ -3982,12 +4837,33 @@ namespace motion {
                 }
             }
         } else {
+            _runtime->invalidatePresentationRenderTarget(renderLayerObject);
+            invalidateGlobalPresentationRenderTarget(renderLayerObject);
             return false;
         }
 
-        buildRenderCommands(canvasWidth, canvasHeight);
         if(!executeLayerRenderCommands(renderLayerObject, true)) {
+            _runtime->invalidatePresentationRenderTarget(renderLayerObject);
+            invalidateGlobalPresentationRenderTarget(renderLayerObject);
             return false;
+        }
+        if(canReusePresentationRender) {
+            _runtime->presentationRenderCache[renderLayerObject] = {
+                motionPath,
+                _clampedEvalTime,
+                canvasWidth,
+                canvasHeight,
+                presentationCommandSignature,
+            };
+	            globalPresentationRenderCache()[renderLayerObject] =
+	                makeGlobalPresentationRenderCacheEntry(
+	                    renderLayerObject, motionPath, _clampedEvalTime,
+	                    canvasWidth, canvasHeight, presentationCommandSignature,
+	                    presentationReuseNowUs ? presentationReuseNowUs
+	                                           : motionRenderProfileNowUs());
+	        } else {
+            _runtime->invalidatePresentationRenderTarget(renderLayerObject);
+            invalidateGlobalPresentationRenderTarget(renderLayerObject);
         }
         auto *renderLayer = resolveNativeLayer(renderLayerObject);
         if(LOGGER && shouldDebugTitleRender(motionPath) &&
@@ -4043,7 +4919,9 @@ namespace motion {
 
         if(yuzuTitlePresentation && !_presentationHoldRendering &&
            finalLayerObject) {
-            enablePresentationHold(finalLayerObject, 3000);
+            // Keep a short tail for the last animation frame; a multi-second
+            // hold can leave title_bg above later scene layers during startup.
+            enablePresentationHold(finalLayerObject, 250);
         }
 
         _runtime->lastCanvas =
@@ -4273,6 +5151,7 @@ namespace motion {
 
     void Player::clearCache() {
         _runtime->sourcesByKey.clear();
+        _runtime->clearMotionBitmapCaches();
         _runtime->lastCanvas.Clear();
     }
 

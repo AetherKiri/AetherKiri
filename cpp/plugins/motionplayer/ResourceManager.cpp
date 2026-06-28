@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include <spdlog/spdlog.h>
 
@@ -78,6 +79,127 @@ namespace {
 
             default:
                 return false;
+        }
+    }
+
+    bool motionResourceDebugEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_MOTION_DEBUG");
+            return value && *value && std::strcmp(value, "0") != 0;
+        }();
+        return enabled;
+    }
+
+    bool stripSuffixInPlace(std::string &value, const std::string &suffix) {
+        if(value.size() < suffix.size()) {
+            return false;
+        }
+        if(value.compare(value.size() - suffix.size(), suffix.size(), suffix) !=
+           0) {
+            return false;
+        }
+        value.resize(value.size() - suffix.size());
+        return true;
+    }
+
+    bool splitEmoteRequestLabels(const ttstr &path,
+                                 std::vector<std::string> &labels) {
+        std::string storage =
+            motion::detail::narrow(TVPExtractStorageName(path));
+        if(storage.empty()) {
+            storage = motion::detail::narrow(path);
+            const auto slash = storage.find_last_of("/\\");
+            if(slash != std::string::npos) {
+                storage = storage.substr(slash + 1);
+            }
+        }
+
+        storage = lowercase(storage);
+        if(storage.rfind("dx_", 0) == 0) {
+            storage = storage.substr(3);
+        }
+        if(!stripSuffixInPlace(storage, ".mtn") &&
+           !stripSuffixInPlace(storage, ".psb")) {
+            stripSuffixInPlace(storage, ".mt");
+        }
+        if(storage.size() <= 3 ||
+           storage.compare(storage.size() - 3, 3, "emo") != 0) {
+            return false;
+        }
+
+        labels.push_back(storage);
+        const auto base = storage.substr(0, storage.size() - 3);
+        if(!base.empty()) {
+            labels.push_back(base);
+        }
+        return true;
+    }
+
+    bool labelMatchesSplitEmote(const std::string &label,
+                                const std::vector<std::string> &candidates) {
+        const auto lowered = lowercase(label);
+        for(const auto &candidate : candidates) {
+            if(candidate.empty()) {
+                continue;
+            }
+            if(lowered == candidate ||
+               (lowered.size() > candidate.size() &&
+                lowered.compare(lowered.size() - candidate.size(),
+                                candidate.size(), candidate) == 0)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool snapshotHasSplitEmoteLabel(
+        const motion::detail::MotionSnapshot &snapshot,
+        const std::vector<std::string> &labels) {
+        const auto matches = [&labels](const std::string &label) {
+            return labelMatchesSplitEmote(label, labels);
+        };
+        if(std::any_of(snapshot.mainTimelineLabels.begin(),
+                       snapshot.mainTimelineLabels.end(), matches) ||
+           std::any_of(snapshot.diffTimelineLabels.begin(),
+                       snapshot.diffTimelineLabels.end(), matches)) {
+            return true;
+        }
+        for(const auto &[label, clip] : snapshot.clipsByLabel) {
+            (void)clip;
+            if(matches(label)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    tTJSVariant fallbackSplitEmoteModule(const tTJSVariant &lastLoaded,
+                                         const ttstr &path) {
+        std::vector<std::string> labels;
+        if(!splitEmoteRequestLabels(path, labels)) {
+            return {};
+        }
+        const auto snapshot = motion::detail::lookupModuleSnapshot(lastLoaded);
+        if(!snapshot || !snapshotHasSplitEmoteLabel(*snapshot, labels)) {
+            return {};
+        }
+        if(motionResourceDebugEnabled()) {
+            LOGGER->info(
+                "ResourceManager::load split emote alias: request={} source={}",
+                path.AsStdString(), snapshot->path);
+        }
+        return lastLoaded;
+    }
+
+    tTJSVariant &recentMotionModule() {
+        static tTJSVariant module;
+        return module;
+    }
+
+    void rememberRecentMotionModule(const tTJSVariant &loaded) {
+        if(loaded.Type() == tvtObject &&
+           motion::detail::lookupModuleSnapshot(loaded)) {
+            recentMotionModule() = loaded;
         }
     }
 }
@@ -163,25 +285,69 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *r,
 tTJSVariant motion::ResourceManager::load(ttstr path) const {
     const auto rawPath = path.AsStdString();
     const auto loweredPath = lowercase(rawPath);
-    if(loweredPath.find(".mtn") != std::string::npos) {
-        LOGGER->warn("Motion resource manager load: {}", rawPath);
+    if((loweredPath.find(".mtn") != std::string::npos ||
+        loweredPath.find(".mt") != std::string::npos) &&
+       motionResourceDebugEnabled()) {
+        LOGGER->info("Motion resource manager load: {}", rawPath);
     }
+
+    const auto alias = _state ? fallbackSplitEmoteModule(_state->lastLoadedModule,
+                                                         path)
+                              : tTJSVariant{};
+    if(alias.Type() != tvtVoid) {
+        rememberLoadedModule(path, alias);
+        return alias;
+    }
+
+    const auto recentAlias = fallbackSplitEmoteModule(recentMotionModule(), path);
+    if(recentAlias.Type() != tvtVoid) {
+        rememberLoadedModule(path, recentAlias);
+        return recentAlias;
+    }
+
     const auto loaded = detail::loadPSBVariant(path, _decryptSeed);
     if(loaded.Type() != tvtVoid && _state) {
-        const auto key = rawPath;
-        _state->loadedModules[key] = loaded;
-        ttstr trimmed = path;
-        if(path.StartsWith(TJS_W("lzfs://./"))) {
-            trimmed = path.SubString(9, path.GetLen() - 9);
-        }
-        const ttstr placed = TVPGetPlacedPath(trimmed);
-        if(!placed.IsEmpty()) {
-            _state->loadedModules[placed.AsStdString()] = loaded;
-        }
-        _state->lastLoadedPath = key;
-        _state->lastLoadedModule = loaded;
+        rememberLoadedModule(path, loaded);
     }
     return loaded;
+}
+
+void motion::ResourceManager::rememberLoadedModule(
+    ttstr path, const tTJSVariant &loaded) const {
+    if(loaded.Type() == tvtVoid || !_state) {
+        return;
+    }
+
+    const auto key = path.AsStdString();
+    if(!key.empty()) {
+        _state->loadedModules[key] = loaded;
+        _state->lastLoadedPath = key;
+    }
+
+    ttstr trimmed = path;
+    if(path.StartsWith(TJS_W("lzfs://./"))) {
+        trimmed = path.SubString(9, path.GetLen() - 9);
+        const auto trimmedKey = trimmed.AsStdString();
+        if(!trimmedKey.empty()) {
+            _state->loadedModules[trimmedKey] = loaded;
+        }
+    }
+
+    const ttstr storage = TVPExtractStorageName(trimmed);
+    if(!storage.IsEmpty()) {
+        const auto storageKey = storage.AsStdString();
+        _state->loadedModules[storageKey] = loaded;
+        if(storageKey.rfind("dx_", 0) == 0 && storageKey.size() > 3) {
+            _state->loadedModules[storageKey.substr(3)] = loaded;
+        }
+    }
+
+    const ttstr placed = TVPGetPlacedPath(trimmed);
+    if(!placed.IsEmpty()) {
+        _state->loadedModules[placed.AsStdString()] = loaded;
+    }
+    _state->lastLoadedModule = loaded;
+    rememberRecentMotionModule(loaded);
 }
 
 void motion::ResourceManager::unload(ttstr path) const {
@@ -267,8 +433,10 @@ tTJSVariant motion::ResourceManager::findLoadedModule(ttstr path) const {
         }
     }
 
-    LOGGER->warn("ResourceManager::findLoadedModule({}): cache miss",
-                 path.AsStdString());
+    if(motionResourceDebugEnabled()) {
+        LOGGER->info("ResourceManager::findLoadedModule({}): cache miss",
+                     path.AsStdString());
+    }
     return {};
 }
 

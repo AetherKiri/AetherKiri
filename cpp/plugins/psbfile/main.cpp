@@ -6,6 +6,8 @@
 //
 #include <spdlog/spdlog.h>
 #include <cassert>
+#include <cstdlib>
+#include <string>
 
 #include "tjs.h"
 #include "ncbind.hpp"
@@ -15,6 +17,7 @@
 #include "PSBMedia.h"
 #include "PSBValue.h"
 #include "SystemControl.h"
+#include "../motionplayer/ResourceManager.h"
 
 #define NCB_MODULE_NAME TJS_W("psbfile.dll")
 
@@ -22,6 +25,26 @@
 
 using namespace PSB;
 static PSBMedia *psbMedia = nullptr;
+
+static bool psbDebugEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_PSB_DEBUG");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+static std::string describeVariant(const tTJSVariant *value) {
+    if(!value)
+        return "<null>";
+    std::string text = "type=" + std::to_string(static_cast<int>(value->Type()));
+    try {
+        text += " value=" + ttstr(*value).AsStdString();
+    } catch(...) {
+        text += " value=<unprintable>";
+    }
+    return text;
+}
 
 namespace PSB {
 bool GetPSBMediaCacheStats(PSBMediaCacheStats &outStats) {
@@ -329,13 +352,18 @@ static tjs_error load(tTJSVariant *r, tjs_int count, tTJSVariant **p,
                       iTJSDispatch2 *obj) {
     bool loadSuccess = true;
     auto *self = ncbInstanceAdaptor<PSB::PSBFile>::GetNativeInstance(obj);
-    if(count != 1) {
+    if(psbDebugEnabled()) {
+        LOGGER->info("PSBFile.load enter count={} first={}", count,
+                     count > 0 ? describeVariant(p[0]) : std::string("<none>"));
+    }
+    if(count < 1) {
         return TJS_E_BADPARAMCOUNT;
     }
 
-    if((*p)->Type() == tvtString) {
-        ttstr path{ **p };
+    if(p[0]->Type() == tvtString) {
+        ttstr path{ *p[0] };
         try {
+            self->setSeed(motion::ResourceManager::getDecryptSeed());
             if(!self->loadPSBFile(path)) {
                 LOGGER->info("cannot load psb file : {}", path.AsStdString());
                 loadSuccess = false;
@@ -349,10 +377,12 @@ static tjs_error load(tTJSVariant *r, tjs_int count, tTJSVariant **p,
             LOGGER->warn("PSBFile load unknown error: {}", path.AsStdString());
             loadSuccess = false;
         }
-    } else if((*p)->Type() == tvtOctet) {
+    } else if(p[0]->Type() == tvtOctet) {
         LOGGER->critical("PSBFile::load stream no implement!");
         loadSuccess = false;
     } else {
+        LOGGER->warn("PSBFile.load invalid first argument type={} count={}",
+                     static_cast<int>(p[0]->Type()), count);
         return TJS_E_INVALIDPARAM;
     }
 
@@ -401,12 +431,18 @@ NCB_SET_CONVERTOR(const PSBFile *, PSBFileConvertor<const PSBFile>);
 static tjs_error PSBFileFactory(PSBFile **result, tjs_int count,
                                 tTJSVariant **params, iTJSDispatch2 *_) {
     PSBFile *psbFile = nullptr;
+    if(psbDebugEnabled()) {
+        LOGGER->info("PSBFile factory enter count={} first={}", count,
+                     count > 0 ? describeVariant(params[0])
+                               : std::string("<none>"));
+    }
     if(count == 0) {
         psbFile = new PSBFile();
-    } else if(count == 1 && (*params)->Type() == tvtString) {
+    } else if(count >= 1 && params[0]->Type() == tvtString) {
         ttstr path{ *params[0] };
         psbFile = new PSBFile();
         try {
+            psbFile->setSeed(motion::ResourceManager::getDecryptSeed());
             if(psbFile->loadPSBFile(path)) {
                 registerPsbResources(psbFile, path);
             } else {
@@ -418,6 +454,10 @@ static tjs_error PSBFileFactory(PSBFile **result, tjs_int count,
             LOGGER->warn("PSBFile load unknown error: {}", path.AsStdString());
         }
     } else {
+        if(count > 0) {
+            LOGGER->warn("PSBFile factory invalid first argument type={} count={}",
+                         static_cast<int>(params[0]->Type()), count);
+        }
         return TJS_E_INVALIDPARAM;
     }
     *result = psbFile;

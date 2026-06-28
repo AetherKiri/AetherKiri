@@ -11,6 +11,8 @@
 
 #include "tjsCommHead.h"
 
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 
 #include "tjsArray.h"
@@ -29,6 +31,7 @@
 #include "spdlog/spdlog.h"
 
 #include <cctype>
+#include <string>
 
 namespace {
 bool TVPInputTraceEnabled() {
@@ -50,6 +53,20 @@ void TVPTraceExpressionValue(const char *name, const tjs_char *expression) {
                      ttstr(e.GetMessage()).AsStdString());
     } catch(...) {
         spdlog::info("LayerManager title diag {} failed", name);
+    }
+}
+
+bool TVPScriptIsCgModeViewTrans() {
+    try {
+        tTJSVariant result;
+        TVPExecuteExpression(
+            TJS_W("typeof kag == \"Object\" && kag && "
+                  "kag.currentStorage == \"cgmode.ks\" && "
+                  "kag.currentLabel == \"*viewtrans\""),
+            &result);
+        return result.operator bool();
+    } catch(...) {
+        return false;
     }
 }
 
@@ -130,15 +147,122 @@ bool TVPIsTitleMenuBackgroundLayer(tTJSNI_BaseLayer *layer) {
     return name == "SysCoverLayer" || name == "title_bg";
 }
 
+std::string TVPTraceLayerImageSampleInfo(tTJSNI_BaseLayer *layer,
+                                         bool force = false) {
+    if(!TVPInputTraceEnabled() || !layer)
+        return "-";
+
+    const std::string name = layer->GetName().AsStdString();
+    if(!force && name.find("CG View Layer") == std::string::npos &&
+       name.find("表メッセージレイヤ2") == std::string::npos)
+        return "-";
+
+    tTVPBaseTexture *image = nullptr;
+    try {
+        image = layer->GetMainImage();
+    } catch(...) {
+        return "get-image-failed";
+    }
+    if(!image)
+        return "none";
+
+    const int iw = static_cast<int>(image->GetWidth());
+    const int ih = static_cast<int>(image->GetHeight());
+    if(iw <= 0 || ih <= 0)
+        return "empty";
+
+    auto sample = [&](int x, int y) -> tjs_uint32 {
+        x = std::clamp(x, 0, iw - 1);
+        y = std::clamp(y, 0, ih - 1);
+        try {
+            return image->GetPoint(x, y);
+        } catch(...) {
+            return 0;
+        }
+    };
+
+    int nonzero_alpha = 0;
+    int total = 0;
+    for(int gy = 0; gy < 8; ++gy) {
+        for(int gx = 0; gx < 8; ++gx) {
+            const int x = iw == 1 ? 0 : (gx * (iw - 1)) / 7;
+            const int y = ih == 1 ? 0 : (gy * (ih - 1)) / 7;
+            if((sample(x, y) & 0xff000000u) != 0)
+                nonzero_alpha++;
+            total++;
+        }
+    }
+
+    const tjs_uint32 p00 = sample(0, 0);
+    const tjs_uint32 center = sample(iw / 2, ih / 2);
+    const tjs_uint32 pbr = sample(iw - 1, ih - 1);
+    char buf[192];
+    std::snprintf(buf, sizeof(buf),
+                  "img=%dx%d ofs=%d,%d alpha=%d/%d p00=%08x center=%08x pbr=%08x",
+                  iw, ih, layer->GetImageLeft(), layer->GetImageTop(),
+                  nonzero_alpha, total, p00, center, pbr);
+    return buf;
+}
+
+std::string TVPTraceLayerChildrenInfo(tTJSNI_BaseLayer *layer) {
+    if(!TVPInputTraceEnabled() || !layer)
+        return "-";
+
+    const std::string name = layer->GetName().AsStdString();
+    if(name.find("CG View Layer") == std::string::npos)
+        return "-";
+
+    std::string result;
+    const tjs_uint count = layer->GetCount();
+    for(tjs_uint i = 0; i < count; ++i) {
+        tTJSNI_BaseLayer *child = layer->GetChildren(static_cast<tjs_int>(i));
+        if(!child)
+            continue;
+        if(!result.empty())
+            result += " | ";
+        result += "#";
+        result += std::to_string(i);
+        result += " ";
+        result += child->GetName().AsStdString();
+        result += " order=";
+        result += std::to_string(child->GetOrderIndex());
+        result += " pos=";
+        result += std::to_string(child->GetLeft());
+        result += ",";
+        result += std::to_string(child->GetTop());
+        result += " size=";
+        result += std::to_string(child->GetWidth());
+        result += "x";
+        result += std::to_string(child->GetHeight());
+        result += " vis=";
+        result += child->GetVisible() ? "1" : "0";
+        result += "/";
+        result += child->GetNodeVisible() ? "1" : "0";
+        result += " en=";
+        result += child->GetNodeEnabled() ? "1" : "0";
+        result += " opa=";
+        result += std::to_string(child->GetOpacity());
+        result += " has=";
+        result += child->GetHasImage() ? "1" : "0";
+        result += " ";
+        result += TVPTraceLayerImageSampleInfo(child, true);
+    }
+    return result.empty() ? "none" : result;
+}
+
 void TVPTraceLayerHit(const char *event, tjs_int x, tjs_int y,
                       tTJSNI_BaseLayer *layer) {
     if(!TVPInputTraceEnabled()) return;
     if(layer) {
         const auto action_owner = layer->GetActionOwnerNoAddRef();
-        spdlog::info("LayerManager {} hit primary=({}, {}) layer={} rect={}x{}+{}+{} action={}",
+        spdlog::info("LayerManager {} hit primary=({}, {}) layer={} overall={} rect={}x{}+{}+{} self_visible={} visible={} enabled={} action={}",
                      event, x, y, layer->GetName().AsStdString(),
+                     layer->GetOverallOrderIndex(),
                      layer->GetWidth(), layer->GetHeight(), layer->GetLeft(),
-                     layer->GetTop(), action_owner.Object ? "yes" : "no");
+                     layer->GetTop(), layer->GetVisible() ? "yes" : "no",
+                     layer->GetNodeVisible() ? "yes" : "no",
+                     layer->GetNodeEnabled() ? "yes" : "no",
+                     action_owner.Object ? "yes" : "no");
     } else {
         spdlog::info("LayerManager {} hit primary=({}, {}) layer=<none>",
                      event, x, y);
@@ -168,15 +292,54 @@ void TVPTraceLayersAt(tTVPLayerManager *manager, const char *reason,
         const auto action_owner = candidate->GetActionOwnerNoAddRef();
         const bool pixel_hit =
             candidate->HitTestNoVisibleCheck(local_x, local_y);
-        spdlog::info("  layer={} local=({}, {}) size={}x{} pos=({}, {}) visible={} enabled={} opacity={} pixel={} action={}",
-                     candidate->GetName().AsStdString(), local_x, local_y,
+        tTJSNI_BaseLayer *parent = candidate->GetParent();
+        const std::string parent_name =
+            parent ? parent->GetName().AsStdString() : std::string("<none>");
+        const std::string image_samples =
+            TVPTraceLayerImageSampleInfo(candidate);
+        const std::string child_samples =
+            TVPTraceLayerChildrenInfo(candidate);
+        spdlog::info("  layer={} parent={} order={} overall={} local=({}, {}) size={}x{} pos=({}, {}) type={} display_type={} has_image={} image_samples={} child_samples={} children={} visible_children={} in_transition={} trans_children={} self_visible={} visible={} enabled={} opacity={} pixel={} action={}",
+                     candidate->GetName().AsStdString(), parent_name,
+                     candidate->GetOrderIndex(),
+                     candidate->GetOverallOrderIndex(), local_x, local_y,
                      candidate->GetWidth(), candidate->GetHeight(),
                      candidate->GetLeft(), candidate->GetTop(),
+                     ttstr(candidate->GetTypeNameString()).AsStdString(),
+                     static_cast<int>(candidate->DebugGetDisplayType()),
+                     candidate->GetHasImage() ? "yes" : "no",
+                     image_samples,
+                     child_samples,
+                     candidate->GetCount(),
+                     candidate->DebugGetVisibleChildrenCount(),
+                     candidate->DebugIsInTransition() ? "yes" : "no",
+                     candidate->DebugIsTransWithChildren() ? "yes" : "no",
+                     candidate->GetVisible() ? "yes" : "no",
                      candidate->GetNodeVisible() ? "yes" : "no",
                      candidate->GetNodeEnabled() ? "yes" : "no",
                      candidate->GetOpacity(), pixel_hit ? "yes" : "no",
                      action_owner.Object ? "yes" : "no");
     }
+}
+
+void TVPTraceCgModeViewTransIdle(tTVPLayerManager *manager, tjs_int x,
+                                 tjs_int y) {
+    if(!TVPInputTraceEnabled() || !manager)
+        return;
+    if(!TVPScriptIsCgModeViewTrans())
+        return;
+
+    static int logged_count = 0;
+    static tjs_uint32 last_tick = 0;
+    const tjs_uint32 now = TVPGetRoughTickCount32();
+    if(logged_count >= 16)
+        return;
+    if(logged_count > 0 && static_cast<tjs_uint32>(now - last_tick) < 250)
+        return;
+
+    logged_count++;
+    last_tick = now;
+    TVPTraceLayersAt(manager, "cgmode-viewtrans-idle", x, y);
 }
 
 bool TVPIsSaveLoadButtonLayer(tTJSNI_BaseLayer *layer) {
@@ -807,6 +970,15 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
     TVPTraceLayerHit("click", x, y, l);
     TVPTraceLayersAt(this, "click-stack", x, y);
     if(l /*&& CaptureOwner == l*/) {
+        if(TVPIsSaveLoadOverlayCommandLayer(l)) {
+            if(TVPInputTraceEnabled()) {
+                spdlog::info(
+                    "LayerManager save/load overlay command click -> onButtonClick layer={} primary=({}, {})",
+                    l->GetName().AsStdString(), x, y);
+            }
+            l->FireButtonClick();
+            return;
+        }
         if(ShouldSynthesizeEnterForSaveLoadButton(l, x, y) && TVPMainWindow) {
             if(TVPInputTraceEnabled()) {
                 spdlog::info("LayerManager save/load command click -> Enter primary=({}, {})",
@@ -819,24 +991,8 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
         }
         const bool message_command_band =
             IsSaveLoadMessageCommandBand(l, x, y);
-        const bool should_confirm_selection =
-            TVPIsConfirmableSelectionLayer(l) && !TVPIsSaveLoadItemLayer(l);
-        const std::string selection_layer_name =
-            should_confirm_selection ? l->GetName().AsStdString() : std::string();
-        const tjs_int selection_x = x;
-        const tjs_int selection_y = y;
         l->FromPrimaryCoordinates(x, y);
         l->FireClick(x, y);
-        if(should_confirm_selection && TVPMainWindow) {
-            if(TVPInputTraceEnabled()) {
-                spdlog::info("LayerManager selectable item click -> pending confirm fallback");
-            }
-            PendingConfirmX = selection_x;
-            PendingConfirmY = selection_y;
-            PendingConfirmRequiresSameSelection = true;
-            PendingConfirmLayerName = selection_layer_name;
-            PendingSaveLoadEnterTick = TVPGetRoughTickCount32() + 100;
-        }
     }
 }
 //---------------------------------------------------------------------------
@@ -1562,8 +1718,13 @@ void tTVPLayerManager::UpdateToDrawDevice() {
     // drawdevice -> layer
     if(!Primary)
         return;
-    if(PendingSaveLoadEnterTick > 0 &&
-       TVPGetRoughTickCount32() >= PendingSaveLoadEnterTick && TVPMainWindow) {
+    auto process_pending_enter = [&](bool selection_confirm) {
+        if(PendingSaveLoadEnterTick <= 0 || !TVPMainWindow)
+            return;
+        if(PendingConfirmRequiresSameSelection != selection_confirm)
+            return;
+        if(TVPGetRoughTickCount32() < PendingSaveLoadEnterTick)
+            return;
         PendingSaveLoadEnterTick = 0;
         if(PendingConfirmRequiresSameSelection &&
            !IsPendingConfirmStillOnSameSelection()) {
@@ -1597,7 +1758,8 @@ void tTVPLayerManager::UpdateToDrawDevice() {
                 }
             }
         }
-    }
+    };
+    process_pending_enter(false);
     if(PendingSaveLoadEnterReleaseTick > 0 &&
        TVPGetRoughTickCount32() >= PendingSaveLoadEnterReleaseTick) {
         PendingSaveLoadEnterReleaseTick = 0;
@@ -1608,6 +1770,9 @@ void tTVPLayerManager::UpdateToDrawDevice() {
             loop->HandleInputEvent(event);
     }
     Primary->CompleteForWindow(this);
+    process_pending_enter(true);
+    TVPTraceCgModeViewTransIdle(this, (tjs_int)Primary->GetWidth() / 2,
+                                (tjs_int)Primary->GetHeight() / 2);
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::NotifyUpdateRegionFixed() {

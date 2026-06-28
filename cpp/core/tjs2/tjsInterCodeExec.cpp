@@ -25,6 +25,8 @@
 #include "tjsGlobalStringMap.h"
 #include <chrono>
 #include <csignal>
+#include <atomic>
+#include <cstdio>
 #include <set>
 #include <mutex>
 #include <string>
@@ -37,12 +39,116 @@ namespace TJS {
     //---------------------------------------------------------------------------
     // utility functions
     //---------------------------------------------------------------------------
+    static constexpr size_t TJS_EXEC_ARG_TRACE_RING_SIZE = 160;
+    static constexpr size_t TJS_EXEC_ARG_TRACE_LINE_SIZE = 1024;
+    static char TJSExecArgTraceRing[TJS_EXEC_ARG_TRACE_RING_SIZE]
+                                  [TJS_EXEC_ARG_TRACE_LINE_SIZE] = {};
+    static std::atomic<uint64_t> TJSExecArgTraceIndex{0};
+
+    static void TJSStoreExecArgTrace(std::string line) {
+        const uint64_t index =
+            TJSExecArgTraceIndex.fetch_add(1, std::memory_order_relaxed);
+        std::snprintf(TJSExecArgTraceRing[index % TJS_EXEC_ARG_TRACE_RING_SIZE],
+                      TJS_EXEC_ARG_TRACE_LINE_SIZE, "%s", line.c_str());
+    }
+
+    extern "C" const char *TJSGetRecentExecArgTrace() {
+        static std::string dump;
+        dump.clear();
+
+        const uint64_t end =
+            TJSExecArgTraceIndex.load(std::memory_order_relaxed);
+        const uint64_t start = end > TJS_EXEC_ARG_TRACE_RING_SIZE
+                                   ? end - TJS_EXEC_ARG_TRACE_RING_SIZE
+                                   : 0;
+        for(uint64_t i = start; i < end; ++i) {
+            const char *line =
+                TJSExecArgTraceRing[i % TJS_EXEC_ARG_TRACE_RING_SIZE];
+            if(!line || !*line)
+                continue;
+            dump += line;
+            dump += '\n';
+        }
+        return dump.c_str();
+    }
+
     static bool TJSSaveTraceEnabled() {
         static const bool enabled = [] {
-            const char *value = std::getenv("AETHERKIRI_TJS_SAVE_TRACE");
+            const char *save = std::getenv("AETHERKIRI_TJS_SAVE_TRACE");
+            const char *scene = std::getenv("AETHERKIRI_TJS_SCENE_TRACE");
+            const char *audio = std::getenv("AETHERKIRI_TJS_AUDIO_TRACE");
+            return (save && *save && *save != '0') ||
+                   (scene && *scene && *scene != '0') ||
+                   (audio && *audio && *audio != '0');
+        }();
+        return enabled;
+    }
+
+    static bool TJSSceneTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_TJS_SCENE_TRACE");
             return value && *value && *value != '0';
         }();
         return enabled;
+    }
+
+    static bool TJSAudioTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_TJS_AUDIO_TRACE");
+            return value && *value && *value != '0';
+        }();
+        return enabled;
+    }
+
+    static bool TJSCrashTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_TJS_VM_TRACE");
+            return value && *value && *value != '0';
+        }();
+        return enabled;
+    }
+
+    static bool TJSExecArgTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_EXEC_ARG_TRACE");
+            return value && *value && *value != '0';
+        }();
+        return enabled;
+    }
+
+    static bool TJSSceneTraceMatches(const std::string &text) {
+        if(!TJSSceneTraceEnabled())
+            return false;
+        static const char *patterns[] = {
+            "stand",           "Stand",       "StandLayer",
+            "StandPSD",        "StandImage",  "StandInformation",
+            "KAGEnvImageMapperStand",         "AffineSourceStand",
+            "PSDInfo",         "PSBFile",     ".pbd",
+            "getStandM",       "getStandF",   "setFaceVis",
+            "setCondVis",      "checkVis"
+        };
+        for(const char *pattern : patterns) {
+            if(text.find(pattern) != std::string::npos)
+                return true;
+        }
+        return false;
+    }
+
+    static bool TJSAudioTraceMatches(const std::string &text) {
+        if(!TJSAudioTraceEnabled())
+            return false;
+        static const char *patterns[] = {
+            "playRandomSE", "getRandomSE", "playSE",    "playse",
+            "Sound",        "sound",       "Voice",     "voice",
+            "Wave",         "wave",        "sebuf",     "SEBuf",
+            "ona",          "Ona",         "profile",   "Profile",
+            "patting",      "dokofera",    "storage",   "Storages",
+        };
+        for(const char *pattern : patterns) {
+            if(text.find(pattern) != std::string::npos)
+                return true;
+        }
+        return false;
     }
 
     static bool TJSSaveTraceMatches(const std::string &text) {
@@ -60,7 +166,9 @@ namespace TJS {
                text.find("onSel") != std::string::npos ||
                text.find("setItem") != std::string::npos ||
                text.find("getItem") != std::string::npos ||
-               text.find("gameSave") != std::string::npos;
+               text.find("gameSave") != std::string::npos ||
+               TJSAudioTraceMatches(text) ||
+               TJSSceneTraceMatches(text);
     }
 
     static bool TJSSaveTraceMemberMatches(const std::string &text) {
@@ -73,7 +181,13 @@ namespace TJS {
                text == "getItemB" || text == "getEditBu" ||
                text == "setupUi" || text == "updateItem" ||
                text == "invoke" || text == "call" ||
-               text == "linkNum" || text == "num" || text == "page";
+               text == "linkNum" || text == "num" || text == "page" ||
+               text == "action" || text == "onClick" ||
+               text == "play" || text == "open" || text == "stop" ||
+               text == "voice" || text == "storage" || text == "buf" ||
+               text == "array" || text == "profile" || text == "dress" ||
+               text == "chara" || text == "scene" ||
+               TJSSceneTraceMatches(text);
     }
 
     static std::string TJSSaveTraceVariantString(const tTJSVariant &value) {
@@ -129,15 +243,148 @@ namespace TJS {
         if(!TJSSaveTraceEnabled() || !ctx)
             return;
         const std::string member = name.AsStdString();
+        const bool failed = TJS_FAILED(hr);
+        const bool interestingFailure =
+            failed && TJSSceneTraceEnabled() && TJSSaveTracePropertyContext(ctx);
         if(!TJSSaveTracePropertyContext(ctx) &&
-           !TJSSaveTraceMemberMatches(member)) {
+           !TJSSaveTraceMemberMatches(member) && !interestingFailure) {
             return;
         }
         static int logged = 0;
-        if(logged >= 12000)
+        if(!interestingFailure && logged >= 12000)
             return;
         ++logged;
         spdlog::info("TJSSaveTrace prop {} desc=\"{}\" name={} hr={} value={}",
+                     kind, ctx->GetShortDescriptionWithClassName().AsStdString(),
+                     member, hr, TJS_SUCCEEDED(hr)
+                                     ? TJSSaveTraceVariantString(value)
+                                     : std::string("<failed>"));
+    }
+
+    static void TJSTracePropertyDirectBefore(const tTJSInterCodeContext *ctx,
+                                             const ttstr &name,
+                                             const tTJSVariant *target,
+                                             const tTJSVariantClosure &closure) {
+        if(!TJSCrashTraceEnabled() || !ctx)
+            return;
+        static int logged = 0;
+        if(logged >= 20000)
+            return;
+        ++logged;
+        const std::string value = target ? TJSSaveTraceVariantString(*target)
+                                         : std::string("<null>");
+        spdlog::info(
+            "TJSCrashTrace get-direct-before desc=\"{}\" name={} target={} "
+            "object={} objthis={}",
+            ctx->GetShortDescriptionWithClassName().AsStdString(),
+            name.AsStdString(), value, static_cast<const void *>(closure.Object),
+            static_cast<const void *>(closure.ObjThis));
+    }
+
+    static std::string TJSCrashTraceVariantBrief(const tTJSVariant &value) {
+        std::string text = fmt::format("type={}", static_cast<int>(value.Type()));
+        if(value.Type() == tvtObject) {
+            try {
+                const tTJSVariantClosure closure = value.AsObjectClosureNoAddRef();
+                text += fmt::format(" object={} objthis={}",
+                                    static_cast<const void *>(closure.Object),
+                                    static_cast<const void *>(closure.ObjThis));
+                if(TJSObjectHashMapEnabled()) {
+                    text += fmt::format(" objectFlags=0x{:x} objthisFlags=0x{:x}",
+                                        TJSGetObjectHashCheckFlag(closure.Object),
+                                        TJSGetObjectHashCheckFlag(closure.ObjThis));
+                }
+            } catch(...) {
+                text += " object=<unavailable>";
+            }
+        }
+        return text;
+    }
+
+    static std::string TJSTraceDispatchBrief(iTJSDispatch2 *object) {
+        if(!object)
+            return "null";
+        std::string text = fmt::format("{}", static_cast<void *>(object));
+        if(TJSObjectHashMapEnabled()) {
+            text += fmt::format(" flags=0x{:x}",
+                                TJSGetObjectHashCheckFlag(object));
+            ttstr type = TJSGetObjectTypeInfo(object);
+            if(!type.IsEmpty())
+                text += fmt::format(" type=\"{}\"", type.AsStdString());
+        }
+        return text;
+    }
+
+    static void TJSTraceExecArgs(const tTJSInterCodeContext *ctx,
+                                 iTJSDispatch2 *objthis,
+                                 tTJSVariant **args,
+                                 tjs_int numargs,
+                                 tjs_int declArgCount,
+                                 tjs_int collapseBase) {
+        if(!TJSExecArgTraceEnabled() || !ctx)
+            return;
+
+        std::string arg_text;
+        const tjs_int trace_arg_count = std::min<tjs_int>(numargs, 6);
+        for(tjs_int i = 0; i < trace_arg_count; ++i) {
+            if(!arg_text.empty())
+                arg_text += ", ";
+            arg_text += fmt::format("a{}={}", i,
+                                    args && args[i]
+                                        ? TJSCrashTraceVariantBrief(*args[i])
+                                        : std::string("<null>"));
+        }
+
+        TJSStoreExecArgTrace(fmt::format(
+            "TJSExecArgTrace enter this={} desc=\"{}\" objthis={} numargs={} "
+            "decl={} collapse={} args=[{}]",
+            static_cast<const void *>(ctx),
+            ctx->GetShortDescriptionWithClassName().AsStdString(),
+            TJSTraceDispatchBrief(objthis), numargs, declArgCount, collapseBase,
+            arg_text));
+    }
+
+    static void TJSTraceVMCopy(const tTJSInterCodeContext *ctx,
+                               const tjs_int32 *code_base,
+                               const tjs_int32 *code,
+                               tTJSVariant *ra) {
+        if(!TJSCrashTraceEnabled() || !ctx)
+            return;
+        static int logged = 0;
+        if(logged >= 4000)
+            return;
+        ++logged;
+        const tjs_int dst = TJS_FROM_VM_REG_ADDR(code[1]);
+        const tjs_int src = TJS_FROM_VM_REG_ADDR(code[2]);
+        const tTJSVariant &dst_value = TJS_GET_VM_REG(ra, code[1]);
+        const tTJSVariant &src_value = TJS_GET_VM_REG(ra, code[2]);
+        spdlog::info("TJSCrashTrace vm_cp desc=\"{}\" ip={} dst=%{} [{}] src=%{} [{}]",
+                     ctx->GetShortDescriptionWithClassName().AsStdString(),
+                     static_cast<long long>(code - code_base), dst,
+                     TJSCrashTraceVariantBrief(dst_value), src,
+                     TJSCrashTraceVariantBrief(src_value));
+    }
+
+    static void TJSTraceSavePropertySet(const tTJSInterCodeContext *ctx,
+                                        const char *kind,
+                                        const ttstr &name,
+                                        const tTJSVariant &value,
+                                        tjs_error hr) {
+        if(!TJSSaveTraceEnabled() || !ctx)
+            return;
+        const std::string member = name.AsStdString();
+        const bool failed = TJS_FAILED(hr);
+        const bool interestingFailure =
+            failed && TJSSceneTraceEnabled() && TJSSaveTracePropertyContext(ctx);
+        if(!TJSSaveTracePropertyContext(ctx) &&
+           !TJSSaveTraceMemberMatches(member) && !interestingFailure) {
+            return;
+        }
+        static int logged = 0;
+        if(!interestingFailure && logged >= 12000)
+            return;
+        ++logged;
+        spdlog::info("TJSSaveTrace set {} desc=\"{}\" name={} hr={} value={}",
                      kind, ctx->GetShortDescriptionWithClassName().AsStdString(),
                      member, hr, TJS_SUCCEEDED(hr)
                                      ? TJSSaveTraceVariantString(value)
@@ -155,10 +402,14 @@ namespace TJS {
         const std::string desc =
             ctx->GetShortDescriptionWithClassName().AsStdString();
         const std::string member = name.AsStdString();
-        if(!TJSSaveTraceMatches(desc) && !TJSSaveTraceMemberMatches(member))
+        const bool failed = TJS_FAILED(hr);
+        const bool interestingFailure =
+            failed && TJSSceneTraceEnabled() && TJSSaveTraceMatches(desc);
+        if(!TJSSaveTraceMatches(desc) && !TJSSaveTraceMemberMatches(member) &&
+           !interestingFailure)
             return;
         static int logged = 0;
-        if(logged >= 16000)
+        if(!interestingFailure && logged >= 16000)
             return;
         ++logged;
         std::string arg_text;
@@ -173,6 +424,44 @@ namespace TJS {
         }
         spdlog::info("TJSSaveTrace call {} desc=\"{}\" member={} args={} [{}] hr={}",
                      kind, desc, member, numargs, arg_text, hr);
+    }
+
+    static void TJSTraceSaveCallOp(const tTJSInterCodeContext *ctx,
+                                   const char *op,
+                                   const tTJSVariant &target,
+                                   tTJSVariant **args,
+                                   tjs_int numargs,
+                                   tjs_error hr) {
+        if(!TJSSaveTraceEnabled() || !ctx)
+            return;
+        const std::string desc =
+            ctx->GetShortDescriptionWithClassName().AsStdString();
+        const std::string targetText = TJSSaveTraceVariantString(target);
+        const bool failed = TJS_FAILED(hr);
+        const bool targetMatch = targetText.find("PSBFile") != std::string::npos ||
+                                 targetText.find(".pbd") != std::string::npos ||
+                                 TJSAudioTraceMatches(targetText);
+        const bool contextMatch = TJSSaveTraceMatches(desc) || targetMatch;
+        const bool interestingFailure =
+            failed && TJSSceneTraceEnabled() && contextMatch;
+        if(!targetMatch && !interestingFailure)
+            return;
+        static int logged = 0;
+        if(!interestingFailure && logged >= 8000)
+            return;
+        ++logged;
+        std::string arg_text;
+        const tjs_int trace_arg_count = std::min<tjs_int>(numargs, 4);
+        for(tjs_int i = 0; i < trace_arg_count; ++i) {
+            if(!arg_text.empty())
+                arg_text += ", ";
+            arg_text += fmt::format("a{}={}", i,
+                                    args && args[i]
+                                        ? TJSSaveTraceVariantString(*args[i])
+                                        : std::string("<null>"));
+        }
+        spdlog::info("TJSSaveTrace op {} desc=\"{}\" target={} args={} [{}] hr={}",
+                     op, desc, targetText, numargs, arg_text, hr);
     }
 
     static void ThrowFrom_tjs_error_num(tjs_error hr, tjs_int num) {
@@ -787,12 +1076,31 @@ namespace TJS {
                                                  tjs_int numargs,
                                                  tTJSVariant *result,
                                                  tjs_int start_ip) {
+        struct tExecutingContextRefGuard {
+            tTJSInterCodeContext *Self;
+            iTJSDispatch2 *ObjThis;
+
+            tExecutingContextRefGuard(tTJSInterCodeContext *self,
+                                      iTJSDispatch2 *objthis)
+                : Self(self), ObjThis(objthis) {
+                Self->AddRef();
+                Self->EnterExecution();
+                if(ObjThis)
+                    ObjThis->AddRef();
+            }
+
+            ~tExecutingContextRefGuard() {
+                Self->LeaveExecution();
+                if(ObjThis)
+                    ObjThis->Release();
+                Self->Release();
+            }
+        } executing_context_ref(this, objthis);
+
         TJSTraceSaveFunctionEnter(this, objthis, args, numargs);
         tjs_int num_alloc =
             MaxVariableCount + VariableReserveCount + 1 + MaxFrameCount;
         TJSVariantArrayStackAddRef();
-        //	AddRef();
-        //	if(objthis) objthis->AddRef();
         try {
             tTJSVariant *regs = TJSVariantArrayStack->Allocate(num_alloc);
             tTJSVariant *ra =
@@ -848,6 +1156,8 @@ namespace TJS {
             tTJSVariant *oldra = nullptr;
 #endif // _DEBUG
             try {
+                TJSTraceExecArgs(this, objthis, args, numargs, FuncDeclArgCount,
+                                 FuncDeclCollapseBase);
                 ra[-1].SetObject(objthis, objthis);
                 ra[0].Clear();
 
@@ -917,13 +1227,9 @@ namespace TJS {
             if(TJSStackTracerEnabled())
                 TJSStackTracerPop();
         } catch(...) {
-            //		if(objthis) objthis->Release();
-            //		Release();
             TJSVariantArrayStackRelease();
             throw;
         }
-        //	if(objthis) objthis->Release();
-        //	Release();
         TJSVariantArrayStackRelease();
     }
 
@@ -962,6 +1268,15 @@ namespace TJS {
         tjs->OutputToConsole(info.c_str());
         tjs->OutputToConsole(TJS_W("-- Disassembled VM code --"));
         DisassembleSrcLine(codepos);
+        if(TJSSceneTraceEnabled()) {
+            tjs_int start = FindSrcLineStartCodePos(codepos);
+            Disassemble(
+                [](const tjs_char *msg, void *) {
+                    spdlog::info("TJSSaveTrace disasm {}",
+                                 ttstr(msg).AsStdString());
+                },
+                nullptr, start, codepos + 1);
+        }
 
         tjs->OutputToConsole(TJS_W("-- Register dump --"));
 
@@ -1052,6 +1367,7 @@ namespace TJS {
                         break;
 
                     case VM_CP:
+                        TJSTraceVMCopy(this, CodeArea, code, ra);
                         TJS_GET_VM_REG(ra, code[1])
                             .CopyRef(TJS_GET_VM_REG(ra, code[2]));
                         code += 3;
@@ -1476,10 +1792,29 @@ namespace TJS {
         } catch(eTJSSilent &) {
             throw;
         } catch(eTJSScriptError &e) {
+            if(tryCatch && TJSSceneTraceEnabled()) {
+                const std::string desc =
+                    GetShortDescriptionWithClassName().AsStdString();
+                if(TJSSceneTraceMatches(desc)) {
+                    spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} trace={} ip={}",
+                                 desc, e.GetMessage().AsStdString(),
+                                 e.GetTrace().AsStdString(),
+                                 codesave - CodeArea);
+                    DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
+                }
+            }
             e.AddTrace(this, codesave - CodeArea);
             throw;
         } catch(eTJS &e) {
             if(tryCatch) {
+                const std::string desc =
+                    GetShortDescriptionWithClassName().AsStdString();
+                if(TJSSceneTraceEnabled() && TJSSceneTraceMatches(desc)) {
+                    spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
+                                 desc, e.GetMessage().AsStdString(),
+                                 codesave - CodeArea);
+                    DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
+                }
                 spdlog::get("tjs2")->debug(e.GetMessage().AsStdString());
             } else {
                 DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
@@ -1487,6 +1822,13 @@ namespace TJS {
             TJS_eTJSScriptError(e.GetMessage(), this, codesave - CodeArea);
         } catch(exception &e) {
             if(tryCatch) {
+                const std::string desc =
+                    GetShortDescriptionWithClassName().AsStdString();
+                if(TJSSceneTraceEnabled() && TJSSceneTraceMatches(desc)) {
+                    spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
+                                 desc, e.what(), codesave - CodeArea);
+                    DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
+                }
                 spdlog::get("tjs2")->debug(e.what());
             } else {
                 DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
@@ -1494,6 +1836,13 @@ namespace TJS {
             TJS_eTJSScriptError(e.what(), this, codesave - CodeArea);
         } catch(const char *text) {
             if(tryCatch) {
+                const std::string desc =
+                    GetShortDescriptionWithClassName().AsStdString();
+                if(TJSSceneTraceEnabled() && TJSSceneTraceMatches(desc)) {
+                    spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
+                                 desc, text, codesave - CodeArea);
+                    DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
+                }
                 spdlog::get("tjs2")->debug(text);
             } else {
                 DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
@@ -1594,6 +1943,8 @@ namespace TJS {
         tTJSVariantClosure clo = ra_code2->AsObjectClosureNoAddRef();
         tTJSVariant *name = TJS_GET_VM_REG_ADDR(DataArea, code[3]);
         tTJSVariant *dest = TJS_GET_VM_REG_ADDR(ra, code[1]);
+        TJSTracePropertyDirectBefore(this, name->AsStringNoAddRef(), ra_code2,
+                                     clo);
         tjs_error hr =
             clo.PropGet(flags, name->GetString(), name->GetHint(),
                         dest,
@@ -1634,6 +1985,8 @@ namespace TJS {
                              TJS_GET_VM_REG_ADDR(ra, code[3]),
                              clo.ObjThis ? clo.ObjThis
                                          : ra[-1].AsObjectNoAddRef());
+        TJSTraceSavePropertySet(this, "direct", name->AsStringNoAddRef(),
+                                *TJS_GET_VM_REG_ADDR(ra, code[3]), hr);
         if(TJS_FAILED(hr))
             TJSThrowFrom_tjs_error(
                 hr, TJS_GET_VM_REG(DataArea, code[2]).GetString());
@@ -2321,6 +2674,9 @@ namespace TJS {
         }
         clo.Release();
         // TODO: nullptr Check
+        TJSTraceSaveCallOp(this, code[0] == VM_CALL ? "call" : "new",
+                           TJS_GET_VM_REG(ra, code[2]), pass_args,
+                           pass_args_count, hr);
 
         TJS_END_FUNC_CALL_ARGS
 

@@ -602,7 +602,10 @@ namespace TJS {
             Stack.push_back(tTJSStackRecord(context, in_try));
         }
 
-        void Pop() { Stack.pop_back(); }
+        void Pop() {
+            if(!Stack.empty())
+                Stack.pop_back();
+        }
 
         void SetCodePointer(const tjs_int32 *codebase,
                             tjs_int32 *const *codeptr) {

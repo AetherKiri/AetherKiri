@@ -22,6 +22,7 @@
 #include <cstdlib>
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
+#include <sys/ucontext.h>
 #endif
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -66,6 +67,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "visual/godot/GodotRenderManager.h"
 #include "psbfile/PSBMedia.h"
 #include "sound/win32/WaveImpl.h"
+#include "tjsDebug.h"
 #include "engine_options.h"
 #include "PluginCallTracer.hpp"
 #include "PluginImpl.h"
@@ -86,6 +88,8 @@ extern "C" void TVPRegisterPSDPluginAnchor();
 extern "C" void TVPRegisterMotionPlayerPluginAnchor();
 extern "C" void TVPRegisterLayerExDrawPluginAnchor();
 extern "C" void TVPRegisterKAGParserExPluginAnchor();
+
+extern "C" const char* TJSGetRecentExecArgTrace();
 extern "C" void TVPRegisterScriptsExPluginAnchor();
 extern "C" void TVPRegisterCSVParserPluginAnchor();
 extern "C" void TVPRegisterFstatPluginAnchor();
@@ -266,8 +270,49 @@ std::shared_ptr<spdlog::logger> EnsureNamedLogger(const char* name) {
   return spdlog::stdout_color_mt(name);
 }
 
-void CrashSignalHandler(int sig) {
-  spdlog::critical("FATAL SIGNAL {} received!", sig);
+void CrashSignalHandler(int sig, siginfo_t* info, void* context) {
+  spdlog::critical("FATAL SIGNAL {} received! fault={}", sig,
+                   info ? info->si_addr : nullptr);
+#if defined(__APPLE__) && defined(__aarch64__)
+  if (auto* uctx = static_cast<ucontext_t*>(context);
+      uctx && uctx->uc_mcontext) {
+    const auto& ss = uctx->uc_mcontext->__ss;
+    spdlog::critical(
+        "registers pc={} lr={} sp={} fp={} x0={} x1={} x2={} x3={} x8={} "
+        "x19={} x20={} x21={} x22={} x23={} x24={} x25={} x26={} x27={} "
+        "x28={}",
+        reinterpret_cast<void*>(ss.__pc), reinterpret_cast<void*>(ss.__lr),
+        reinterpret_cast<void*>(ss.__sp), reinterpret_cast<void*>(ss.__fp),
+        reinterpret_cast<void*>(ss.__x[0]), reinterpret_cast<void*>(ss.__x[1]),
+        reinterpret_cast<void*>(ss.__x[2]), reinterpret_cast<void*>(ss.__x[3]),
+        reinterpret_cast<void*>(ss.__x[8]), reinterpret_cast<void*>(ss.__x[19]),
+        reinterpret_cast<void*>(ss.__x[20]), reinterpret_cast<void*>(ss.__x[21]),
+        reinterpret_cast<void*>(ss.__x[22]), reinterpret_cast<void*>(ss.__x[23]),
+        reinterpret_cast<void*>(ss.__x[24]), reinterpret_cast<void*>(ss.__x[25]),
+        reinterpret_cast<void*>(ss.__x[26]), reinterpret_cast<void*>(ss.__x[27]),
+        reinterpret_cast<void*>(ss.__x[28]));
+  }
+#else
+  (void)context;
+#endif
+  if (const char* trace = std::getenv("AETHERKIRI_TJS_CRASH_TRACE");
+      trace && *trace && *trace != '0') {
+    try {
+      const auto tjs_trace = TJS::TJSGetStackTraceString(32, TJS_W("\n  <-- "));
+      if (!tjs_trace.IsEmpty()) {
+        spdlog::critical("TJS stack:\n  {}", tjs_trace.AsStdString());
+      }
+    } catch (...) {
+      spdlog::critical("TJS stack: <unavailable>");
+    }
+  }
+  if (const char* trace = std::getenv("AETHERKIRI_EXEC_ARG_TRACE");
+      trace && *trace && *trace != '0') {
+    if (const char* recent = TJSGetRecentExecArgTrace();
+        recent && *recent) {
+      spdlog::critical("Recent TJS argument trace:\n{}", recent);
+    }
+  }
 
   // Print a mini backtrace where libc provides execinfo.
 #if defined(ENGINE_API_HAS_EXECINFO)
@@ -323,10 +368,14 @@ void CrashTerminateHandler() {
 
 void InstallCrashSignalHandlers() {
   std::set_terminate(CrashTerminateHandler);
-  signal(SIGSEGV, CrashSignalHandler);
-  signal(SIGABRT, CrashSignalHandler);
-  signal(SIGBUS,  CrashSignalHandler);
-  signal(SIGFPE,  CrashSignalHandler);
+  struct sigaction action {};
+  action.sa_sigaction = CrashSignalHandler;
+  sigemptyset(&action.sa_mask);
+  action.sa_flags = SA_SIGINFO;
+  sigaction(SIGSEGV, &action, nullptr);
+  sigaction(SIGABRT, &action, nullptr);
+  sigaction(SIGBUS, &action, nullptr);
+  sigaction(SIGFPE, &action, nullptr);
 }
 
 void EnsureInternalPluginAnchorsLinked() {

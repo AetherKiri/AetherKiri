@@ -12,6 +12,7 @@
 
 // must before with Platform.h because marco will replece `st_atime` symbol!
 #include <fcntl.h>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <algorithm>
@@ -1510,6 +1511,42 @@ bool TVPSaveStreamToFile(tTJSBinaryStream *st, tjs_uint64 offset,
 //---------------------------------------------------------------------------
 static std::vector<ttstr> TVPAutoMountedPaths;
 
+static std::string TVPLowerASCII(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    return text;
+}
+
+static bool TVPIsPatchArchiveName(const std::string &name,
+                                  int *sequence = nullptr) {
+    std::string lower = TVPLowerASCII(name);
+    if(lower.size() > 4 && lower.substr(lower.size() - 4) == ".xp3")
+        lower.resize(lower.size() - 4);
+
+    if(lower == "patch") {
+        if(sequence) *sequence = 0;
+        return true;
+    }
+
+    constexpr const char *prefix = "patch";
+    constexpr size_t prefixLen = 5;
+    if(lower.rfind(prefix, 0) != 0 || lower.size() == prefixLen)
+        return false;
+
+    int value = 0;
+    for(size_t i = prefixLen; i < lower.size(); i++) {
+        unsigned char ch = static_cast<unsigned char>(lower[i]);
+        if(!std::isdigit(ch))
+            return false;
+        value = std::min(value * 10 + (lower[i] - '0'), 1000000);
+    }
+
+    if(sequence) *sequence = value;
+    return true;
+}
+
 void TVPAutoMountSiblingXP3Archives() {
     if(TVPProjectDir.GetLastChar() != TJS_W('/'))
         return;
@@ -1567,7 +1604,20 @@ void TVPAutoMountSiblingXP3Archives() {
     }
     closedir(dirp);
 
-    std::sort(xp3Names.begin(), xp3Names.end());
+    std::sort(xp3Names.begin(), xp3Names.end(),
+              [](const std::string &a, const std::string &b) {
+                  int aSequence = 0;
+                  int bSequence = 0;
+                  const bool aPatch =
+                      TVPIsPatchArchiveName(a, &aSequence);
+                  const bool bPatch =
+                      TVPIsPatchArchiveName(b, &bSequence);
+                  if(aPatch != bPatch)
+                      return !aPatch;
+                  if(aPatch && aSequence != bSequence)
+                      return aSequence < bSequence;
+                  return TVPLowerASCII(a) < TVPLowerASCII(b);
+              });
 
     if(xp3Names.empty()) {
         TVPAddImportantLog(TJS_W("(info) No sibling XP3 archives found"));
@@ -1575,6 +1625,7 @@ void TVPAutoMountSiblingXP3Archives() {
     }
 
     for(const auto &xp3Name : xp3Names) {
+        const bool priorityArchive = TVPIsPatchArchiveName(xp3Name);
         ttstr archivePath = parentStoragePath + ttstr(xp3Name.c_str());
         archivePath = TVPNormalizeStorageName(archivePath);
 
@@ -1618,7 +1669,9 @@ void TVPAutoMountSiblingXP3Archives() {
             ttstr autoPath = archiveBase + dirStr;
             try {
                 TVPAddAutoPath(autoPath);
-                TVPAutoMountedPaths.push_back(TVPNormalizeStorageName(autoPath));
+                if(priorityArchive)
+                    TVPAutoMountedPaths.push_back(
+                        TVPNormalizeStorageName(autoPath));
             } catch(...) {}
         }
 
@@ -1633,18 +1686,13 @@ void TVPAutoMountSiblingXP3Archives() {
 void TVPBoostAutoMountPaths() {
     if(TVPAutoMountedPaths.empty()) return;
 
-    extern std::vector<ttstr> TVPAutoPathList;
-    extern bool AutoPathTableInit;
-
+    size_t moved = 0;
     for(const auto &p : TVPAutoMountedPaths) {
-        auto it = std::find(TVPAutoPathList.begin(), TVPAutoPathList.end(), p);
-        if(it != TVPAutoPathList.end())
-            TVPAutoPathList.erase(it);
-        TVPAutoPathList.push_back(p);
+        TVPAddAutoPath(p);
+        moved++;
     }
     TVPAutoMountedPaths.clear();
 
-    AutoPathTableInit = false;
-    spdlog::info("TVPBoostAutoMountPaths: re-ordered {} patch paths to end of auto path list",
-                 TVPAutoPathList.size());
+    spdlog::info("TVPBoostAutoMountPaths: re-ordered {} priority archive paths to end of auto path list",
+                 moved);
 }

@@ -70,6 +70,7 @@ FORCE_LOAD_PLUGIN_SOURCES=(
     "cpp/plugins/psdfile/libpsdfile.a"
     "cpp/plugins/psdfile/psdparse/libpsdparse.a"
 )
+IOS_SDK_COMPAT_ARCHIVE="libios_sdk_compat_symbols.a"
 
 ensure_vcpkg() {
     if [[ -f "$PROJECT_ROOT/.devtools/vcpkg/.vcpkg-root" ]]; then
@@ -142,18 +143,98 @@ if [[ "$SIMULATOR" == true ]]; then
     preflight_simulator_template_arch "$SIMULATOR_ARCH" "$GODOT_EXPORT_TEMPLATE"
 fi
 
+resolve_ios_godot_cpp_lib() {
+    local triplet_root="$1"
+    local arch="$2"
+    local build_type="$3"
+    local config_name="release"
+    local config_upper="RELEASE"
+    if [[ "$build_type" == "debug" ]]; then
+        config_name="debug"
+        config_upper="DEBUG"
+    fi
+
+    local config_file="$triplet_root/share/unofficial-godot-cpp/unofficial-godot-cpp-config-$config_name.cmake"
+    local location=""
+    if [[ -f "$config_file" ]]; then
+        location="$(sed -n "s|.*IMPORTED_LOCATION_${config_upper} \"\\(.*\\)\".*|\\1|p" "$config_file" | head -n 1)"
+        location="${location//\$\{_IMPORT_PREFIX\}/$triplet_root}"
+        if [[ -n "$location" && -f "$location" ]]; then
+            printf '%s\n' "$location"
+            return 0
+        fi
+    fi
+
+    local search_dirs=()
+    if [[ "$build_type" == "debug" ]]; then
+        search_dirs+=("$triplet_root/debug/lib" "$triplet_root/lib")
+    else
+        search_dirs+=("$triplet_root/lib" "$triplet_root/debug/lib")
+    fi
+
+    local dir
+    local found
+    for dir in "${search_dirs[@]}"; do
+        [[ -d "$dir" ]] || continue
+        found="$(find "$dir" -maxdepth 1 -name "libgodot-cpp.ios.*.$arch.a" -print -quit 2>/dev/null || true)"
+        if [[ -n "$found" ]]; then
+            printf '%s\n' "$found"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+build_ios_sdk_compat_archive() {
+    local output="$1"
+    local triplet="$2"
+    local arch="arm64"
+    local sdk="iphoneos"
+    local min_flag="-mios-version-min=${IOS_MIN_VERSION:-14.0}"
+    local work_dir="$CMAKE_BUILD_DIR/ios_sdk_compat"
+    local source="$work_dir/ios_sdk_compat_symbols.mm"
+    local object="$work_dir/ios_sdk_compat_symbols.o"
+
+    if [[ "$triplet" == "x64-ios-simulator" ]]; then
+        arch="x86_64"
+        sdk="iphonesimulator"
+        min_flag="-mios-simulator-version-min=${IOS_MIN_VERSION:-14.0}"
+    elif [[ "$triplet" == "arm64-ios-simulator" ]]; then
+        sdk="iphonesimulator"
+        min_flag="-mios-simulator-version-min=${IOS_MIN_VERSION:-14.0}"
+    fi
+
+    mkdir -p "$work_dir"
+    cat > "$source" <<'EOF'
+#import <Foundation/Foundation.h>
+
+extern "C" {
+extern "C" __attribute__((weak, visibility("default"))) NSString * const CADynamicRangeAutomatic = @"CADynamicRangeAutomatic";
+extern "C" __attribute__((weak, visibility("default"))) NSString * const CADynamicRangeConstrainedHigh = @"CADynamicRangeConstrainedHigh";
+extern "C" __attribute__((weak, visibility("default"))) NSString * const CADynamicRangeHigh = @"CADynamicRangeHigh";
+extern "C" __attribute__((weak, visibility("default"))) NSString * const CADynamicRangeStandard = @"CADynamicRangeStandard";
+extern "C" __attribute__((weak, visibility("default"))) NSString * const MTLLogStateErrorDomain = @"MTLLogStateErrorDomain";
+extern "C" __attribute__((weak, visibility("default"))) NSString * const MTLTensorDomain = @"MTLTensorDomain";
+extern "C" __attribute__((weak, visibility("default"))) NSString * const NSDeviceCertificationiPhonePerformanceGaming = @"NSDeviceCertificationiPhonePerformanceGaming";
+extern "C" __attribute__((weak, visibility("default"))) NSString * const NSProcessInfoPerformanceProfileDidChangeNotification = @"NSProcessInfoPerformanceProfileDidChangeNotification";
+extern "C" __attribute__((weak, visibility("default"))) NSString * const NSProcessPerformanceProfileDefault = @"NSProcessPerformanceProfileDefault";
+extern "C" __attribute__((weak, visibility("default"))) NSString * const NSProcessPerformanceProfileSustained = @"NSProcessPerformanceProfileSustained";
+}
+EOF
+
+    xcrun --sdk "$sdk" clang++ -arch "$arch" "$min_flag" -fobjc-arc -c "$source" -o "$object"
+    libtool -static -o "$output" "$object"
+}
+
 combine_ios_static_extension() {
     local output="$1"
     local triplet="$2"
     local vcpkg_triplet_root="$CMAKE_BUILD_DIR/vcpkg_installed/$triplet"
     local vcpkg_lib_dir="$vcpkg_triplet_root/lib"
-    local godot_cpp_config="template_release"
-    local godot_cpp_lib_dir="$vcpkg_lib_dir"
-    if [[ "$BUILD_TYPE_LOWER" == "debug" ]]; then
-        godot_cpp_config="template_debug"
-        godot_cpp_lib_dir="$vcpkg_triplet_root/debug/lib"
-    fi
-    local godot_cpp_lib="$godot_cpp_lib_dir/libgodot-cpp.ios.$godot_cpp_config.arm64.a"
+    local cubism_core_lib="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphoneos/libLive2DCubismCore.a"
+    local godot_cpp_arch="arm64"
+    local godot_cpp_lib=""
     local libs=(
         "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a"
         "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a"
@@ -179,13 +260,19 @@ combine_ios_static_extension() {
     )
 
     if [[ "$triplet" == "x64-ios-simulator" ]]; then
-        godot_cpp_lib="$godot_cpp_lib_dir/libgodot-cpp.ios.$godot_cpp_config.x86_64.a"
+        godot_cpp_arch="x86_64"
+        cubism_core_lib="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphonesimulator-x86_64/libLive2DCubismCore.a"
+    elif [[ "$triplet" == "arm64-ios-simulator" ]]; then
+        cubism_core_lib="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphonesimulator-arm64/libLive2DCubismCore.a"
     fi
+    godot_cpp_lib="$(resolve_ios_godot_cpp_lib "$vcpkg_triplet_root" "$godot_cpp_arch" "$BUILD_TYPE_LOWER" || true)"
     if [[ ! -f "$godot_cpp_lib" ]]; then
-        echo "Error: missing Godot C++ iOS archive for $BUILD_TYPE_LOWER build: $godot_cpp_lib" >&2
+        echo "Error: missing Godot C++ iOS archive for $BUILD_TYPE_LOWER build ($godot_cpp_arch)." >&2
+        echo "       Expected an archive matching: $vcpkg_triplet_root/{lib,debug/lib}/libgodot-cpp.ios.*.$godot_cpp_arch.a" >&2
         exit 1
     fi
     libs=("$godot_cpp_lib" "${libs[@]}")
+    libs+=("$cubism_core_lib")
 
     while IFS= read -r lib; do
         libs+=("$lib")
@@ -283,6 +370,7 @@ patch_ios_export_project() {
     local export_build_type="$3"
     local flags
     flags='$(LD_CLASSIC_$(XCODE_VERSION_ACTUAL)) -Wl,-U,_aether_kiri_library_init'
+    flags+=" -Wl,-force_load,AetherKiri/bin/ios/$export_build_type/$IOS_SDK_COMPAT_ARCHIVE"
     local archive
     for archive in "${FORCE_LOAD_PLUGIN_ARCHIVES[@]}"; do
         flags+=" -Wl,-force_load,AetherKiri/bin/ios/$export_build_type/$archive"
@@ -363,6 +451,7 @@ cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 mkdir -p "$GODOT_BIN_DIR"
 cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a" "$GODOT_BIN_DIR/" 2>/dev/null || true
 cp -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a" "$GODOT_BIN_DIR/" 2>/dev/null || true
+build_ios_sdk_compat_archive "$GODOT_BIN_DIR/$IOS_SDK_COMPAT_ARCHIVE" "$VCPKG_TRIPLET_DIR"
 stage_force_load_plugin_archives "$GODOT_BIN_DIR"
 if [[ -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a" ]]; then
     combine_ios_static_extension "$GODOT_BIN_DIR/libaether_kiri_godot.a" "$VCPKG_TRIPLET_DIR"
@@ -372,6 +461,7 @@ if [[ "$SIMULATOR" == true ]]; then
     mkdir -p "$GODOT_EXPORT_BIN_DIR"
     cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a" "$GODOT_EXPORT_BIN_DIR/" 2>/dev/null || true
     cp -f "$GODOT_BIN_DIR/libaether_kiri_godot.a" "$GODOT_EXPORT_BIN_DIR/" 2>/dev/null || true
+    cp -f "$GODOT_BIN_DIR/$IOS_SDK_COMPAT_ARCHIVE" "$GODOT_EXPORT_BIN_DIR/" 2>/dev/null || true
     stage_force_load_plugin_archives "$GODOT_EXPORT_BIN_DIR"
 fi
 
@@ -393,6 +483,7 @@ else
         verify_exported_simulator_template_arch "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER" "$SIMULATOR_ARCH"
     fi
     stage_force_load_plugin_archives "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri/bin/ios/$BUILD_TYPE_LOWER"
+    cp -f "$GODOT_BIN_DIR/$IOS_SDK_COMPAT_ARCHIVE" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri/bin/ios/$BUILD_TYPE_LOWER/" 2>/dev/null || true
     PATCH_ARCH="arm64"
     if [[ "$SIMULATOR" == true ]]; then
         PATCH_ARCH="$SIMULATOR_ARCH"

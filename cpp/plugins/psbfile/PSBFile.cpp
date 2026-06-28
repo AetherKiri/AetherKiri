@@ -1,5 +1,7 @@
 #include "PSBFile.h"
 
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <zlib.h>
@@ -15,6 +17,29 @@ static constexpr size_t kPSBMmapThreshold = 256 * 1024;
 #define LOGGER spdlog::get("plugin")
 
 namespace PSB {
+    namespace {
+        bool IsPSBLoadDebugEnabled() {
+            static const bool enabled = [] {
+                const char *value = std::getenv("AETHERKIRI_PSB_DEBUG");
+                return value && *value && std::strcmp(value, "0") != 0;
+            }();
+            return enabled;
+        }
+
+        std::uint32_t ReadU32LE(const std::uint8_t *data) {
+            return static_cast<std::uint32_t>(data[0]) |
+                (static_cast<std::uint32_t>(data[1]) << 8) |
+                (static_cast<std::uint32_t>(data[2]) << 16) |
+                (static_cast<std::uint32_t>(data[3]) << 24);
+        }
+
+        void LogPSBStage(const ttstr &filePath, const char *stage) {
+            if(IsPSBLoadDebugEnabled()) {
+                LOGGER->info("PSBFile stage: {} ({})", stage,
+                             filePath.AsStdString());
+            }
+        }
+    } // namespace
 
     void PSBFile::resetState() {
         charset = PSBArray();
@@ -350,13 +375,26 @@ namespace PSB {
 
     bool PSBFile::loadPSBFile(const ttstr &filePath) {
         LOGGER->debug("load psb file: {}", filePath.AsStdString());
+        const bool traceLoad = IsPSBLoadDebugEnabled();
+        if(traceLoad) {
+            LOGGER->info("PSBFile load begin: path={} seed={}",
+                         filePath.AsStdString(), _seed);
+        }
         resetState();
         auto *s = TVPCreateStream(filePath);
-        if(!s)
+        if(!s) {
+            if(traceLoad) {
+                LOGGER->warn("PSBFile open failed: {}", filePath.AsStdString());
+            }
             return false;
+        }
 
         const size_t readSize = s->GetSize();
         if(readSize < 9) {
+            if(traceLoad) {
+                LOGGER->warn("PSBFile too small: path={} size={}",
+                             filePath.AsStdString(), readSize);
+            }
             delete s;
             return false;
         }
@@ -373,6 +411,12 @@ namespace PSB {
             fileData = new uint8_t[readSize];
         s->Read(fileData, readSize);
         delete s;
+
+        if(traceLoad) {
+            LOGGER->info("PSBFile raw: path={} size={} first4=0x{:08x}",
+                         filePath.AsStdString(), readSize,
+                         ReadU32LE(fileData));
+        }
 
         auto freeFileData = [&]() {
             if(fileDataMmap) {
@@ -432,7 +476,24 @@ namespace PSB {
         }
 
         stream.SetPosition(0);
+        LogPSBStage(filePath, "parse header");
         _header = PSB::parsePSBHeader(&stream);
+        if(traceLoad) {
+            LOGGER->info(
+                "PSBFile header: path={} size={} psbSize={} seed={} version={} "
+                "encrypt={} encrypted={} headerLen={} offsets encrypt={} names={} "
+                "strings={} stringsData={} chunkOffsets={} chunkLengths={} "
+                "chunkData={} entries={} extraOffsets={} extraLengths={} "
+                "extraData={}",
+                filePath.AsStdString(), readSize, psbSize, _seed,
+                _header.version, _header.encrypt, _header.isEncrypted(),
+                _header.GetHeaderLength(), _header.offsetEncrypt,
+                _header.offsetNames, _header.offsetStrings,
+                _header.offsetStringsData, _header.offsetChunkOffsets,
+                _header.offsetChunkLengths, _header.offsetChunkData,
+                _header.offsetEntries, _header.offsetExtraChunkOffsets,
+                _header.offsetExtraChunkLengths, _header.offsetExtraChunkData);
+        }
 
         if(_seed > 0) {
             // decrypt
@@ -530,13 +591,19 @@ namespace PSB {
         }
 
         // Pre Load Strings
+        LogPSBStage(filePath, "load string offsets");
         stream.SetPosition(_header.offsetStrings);
         stringOffsets = PSB::PSBArray(
             stream.ReadI8LE() -
                 static_cast<std::uint8_t>(PSB::PSBObjType::ArrayN1) + 1,
             &stream);
+        if(traceLoad) {
+            LOGGER->info("PSBFile strings: path={} offsets={}",
+                         filePath.AsStdString(), stringOffsets.value.size());
+        }
 
         // Load Names
+        LogPSBStage(filePath, "load names");
         if(_header.version == 1) {
             // don't believe HeaderLength
             if(_header.offsetEncrypt >= stream.GetSize()) {
@@ -564,8 +631,17 @@ namespace PSB {
                 &stream);
             loadNames();
         }
+        if(traceLoad) {
+            LOGGER->info(
+                "PSBFile names: path={} charset={} namesData={} indexes={} "
+                "names={}",
+                filePath.AsStdString(), charset.value.size(),
+                namesData.value.size(), nameIndexes.value.size(),
+                names.size());
+        }
 
         // Pre Load Resources (Chunks)
+        LogPSBStage(filePath, "load chunk offsets");
         stream.SetPosition(_header.offsetChunkOffsets);
         chunkOffsets = PSB::PSBArray(
             stream.ReadI8LE() -
@@ -576,11 +652,17 @@ namespace PSB {
             stream.ReadI8LE() -
                 static_cast<std::uint8_t>(PSB::PSBObjType::ArrayN1) + 1,
             &stream);
+        if(traceLoad) {
+            LOGGER->info("PSBFile chunks: path={} offsets={} lengths={}",
+                         filePath.AsStdString(), chunkOffsets.value.size(),
+                         chunkLengths.value.size());
+        }
 
         resources.reserve(chunkLengths.value.size());
 
         if(_header.version >= 4) {
             // Pre Load Extra Resources (Chunks)
+            LogPSBStage(filePath, "load extra chunk offsets");
             stream.SetPosition(_header.offsetExtraChunkOffsets);
             extraChunkOffsets = PSB::PSBArray(
                 stream.ReadI8LE() -
@@ -594,6 +676,7 @@ namespace PSB {
             extraResources.reserve(extraChunkLengths.value.size());
         }
         // Load Entries
+        LogPSBStage(filePath, "load root entries");
         stream.SetPosition(_header.offsetEntries);
         auto obj = unpack(&stream);
         if(!obj) {
@@ -602,17 +685,26 @@ namespace PSB {
 
         _root = std::move(obj);
         // Load Resource
+        LogPSBStage(filePath, "load resources");
         for(auto &res : resources) {
             loadResource(*res, &stream);
         }
 
         if(_header.version >= 4) {
+            LogPSBStage(filePath, "load extra resources");
             for(auto &res : extraResources) {
                 loadExtraResource(*res, &stream);
             }
         }
 
         afterLoad();
+        if(traceLoad) {
+            LOGGER->info(
+                "PSBFile load ok: path={} type={} strings={} resources={} "
+                "extraResources={}",
+                filePath.AsStdString(), static_cast<int>(_type),
+                strings.size(), resources.size(), extraResources.size());
+        }
         return true;
     }
 

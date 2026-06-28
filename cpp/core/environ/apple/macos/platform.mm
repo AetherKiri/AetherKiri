@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <vector>
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach-o/dyld.h>
 #include <mach/task.h>
@@ -361,6 +363,19 @@ tjs_int TVPGetSystemFreeMemory() {
 
 int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
                             const std::vector<ttstr> &vecButtons) {
+    std::string utf8Text = text.AsStdString();
+    std::string utf8Caption = caption.AsStdString();
+    spdlog::error("TVPShowSimpleMessageBox: {} - {}", utf8Caption, utf8Text);
+
+    const char *suppressAlerts = std::getenv("AETHERKIRI_SUPPRESS_NATIVE_ALERTS");
+    if(suppressAlerts != nullptr && suppressAlerts[0] != '\0' &&
+       std::strcmp(suppressAlerts, "0") != 0 &&
+       std::strcmp(suppressAlerts, "false") != 0 &&
+       std::strcmp(suppressAlerts, "off") != 0 &&
+       std::strcmp(suppressAlerts, "no") != 0) {
+        return 0;
+    }
+
     // 确保在主线程执行UI操作
     if (![NSThread isMainThread]) {
         __block int result = -1;
@@ -370,9 +385,6 @@ int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
         return result;
     }
 
-    // 转换文本
-    std::string utf8Text = text.AsStdString();
-    std::string utf8Caption = caption.AsStdString();
     NSString *nsText = [NSString stringWithUTF8String:utf8Text.c_str()];
     NSString *nsCaption = [NSString stringWithUTF8String:utf8Caption.c_str()];
 

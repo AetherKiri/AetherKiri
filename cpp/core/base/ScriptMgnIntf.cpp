@@ -970,6 +970,32 @@ static void TVPInstallIOSPatchWindowPrerequisites() {
 #endif
 
 static void TVPLogStartupScriptError(const char *stage,
+                                     const TJS::eTJSScriptError &e);
+
+static void TVPInstallKagRuntimeDefaults() {
+    try {
+        TVPExecuteScript(TJS_W(
+            "if(typeof kag != \"undefined\") {\n"
+            "  if(typeof kag.autoMode == \"undefined\") kag.autoMode = false;\n"
+            "  if(typeof kag.skipMode == \"undefined\") kag.skipMode = 0;\n"
+            "  if(typeof kag.autoModePageWait == \"undefined\") kag.autoModePageWait = 0;\n"
+            "  if(typeof kag.autoModeLineWait == \"undefined\") kag.autoModeLineWait = 0;\n"
+            "  if(typeof kag.userChSpeed == \"undefined\") kag.userChSpeed = 0;\n"
+            "  if(typeof kag.autoModeWaitVoice == \"undefined\") kag.autoModeWaitVoice = 0;\n"
+            "}\n"),
+            TJS_W("kag_runtime_defaults.tjs"), 0,
+            static_cast<tTJSVariant *>(nullptr));
+    } catch(const TJS::eTJSScriptError &e) {
+        TVPLogStartupScriptError("KAG runtime defaults patch error", e);
+    } catch(const TJS::eTJS &e) {
+        spdlog::warn("KAG runtime defaults patch TJS error: {}",
+                     e.GetMessage().AsStdString());
+    } catch(...) {
+        spdlog::warn("KAG runtime defaults patch failed");
+    }
+}
+
+static void TVPLogStartupScriptError(const char *stage,
                                      const TJS::eTJSScriptError &e) {
     ttstr msg;
     msg += e.GetMessage();
@@ -1108,6 +1134,7 @@ void TVPExecuteStartupScript() {
             TVPStartupSuccess = true;
         }
         spdlog::info("Startup script ended.");
+        TVPInstallKagRuntimeDefaults();
 #if defined(__ANDROID__)
         __android_log_print(ANDROID_LOG_INFO, "krkr2",
                             "Startup script ended successfully");
@@ -1124,8 +1151,10 @@ void TVPExecuteStartupScript() {
 #endif
         try {
             ttstr patch = TVPGetAppPath() + "AfterStartup.tjs";
-            if(TVPIsExistentStorageNoSearch(patch))
+            if(TVPIsExistentStorageNoSearch(patch)) {
                 TVPExecuteStorage(patch);
+                TVPInstallKagRuntimeDefaults();
+            }
         } catch(...) {
         }
     }

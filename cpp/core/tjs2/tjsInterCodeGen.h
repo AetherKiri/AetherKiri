@@ -452,6 +452,8 @@ namespace TJS {
         tTJSInterCodeContext *PropSetter;
         tTJSInterCodeContext *PropGetter;
         tTJSInterCodeContext *SuperClassGetter;
+        tjs_int ExecutingCount;
+        bool DeferredFinalize;
 
 #ifdef _DEBUG
         ScopeKey DebuggerScopeKey; //!< for exec
@@ -470,6 +472,9 @@ namespace TJS {
         tTJSScriptBlock *GetBlock() const { return Block; }
         tTJS *GetTJS() const { return CachedTJSEngine; }
         void ClearBlockPointer();
+
+        void EnterExecution();
+        void LeaveExecution();
 
 #ifdef _DEBUG
         ttstr GetClassName() const;

@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <string>
@@ -73,11 +74,75 @@ static bool ustring_contains(const tjs_ustring &s, tjs_char ch) {
   return s.find(ch) != tjs_ustring::npos;
 }
 
+static bool textRenderVariantIsString(const tTJSVariant &value) {
+  return value.Type() == tvtString || value.Type() == tvtOctet;
+}
+
+static bool textRenderVariantIsNumeric(const tTJSVariant &value) {
+  const tTJSVariantType type = value.Type();
+  return type != tvtVoid && type != tvtString && type != tvtObject;
+}
+
+static bool textRenderReadObjectProp(iTJSDispatch2 *object,
+                                     const tjs_char *name,
+                                     tTJSVariant &value) {
+  return object &&
+         TJS_SUCCEEDED(object->PropGet(0, name, nullptr, &value, object)) &&
+         value.Type() != tvtVoid;
+}
+
+static bool textRenderReadIntPropAliases(
+    iTJSDispatch2 *object, std::initializer_list<const tjs_char *> names,
+    int &value) {
+  for (const auto *name : names) {
+    tTJSVariant prop;
+    if (!textRenderReadObjectProp(object, name, prop) ||
+        !textRenderVariantIsNumeric(prop)) {
+      continue;
+    }
+    value = static_cast<int>((tjs_int)prop);
+    return true;
+  }
+  return false;
+}
+
+static bool textRenderReadRealPropAliases(
+    iTJSDispatch2 *object, std::initializer_list<const tjs_char *> names,
+    double &value) {
+  for (const auto *name : names) {
+    tTJSVariant prop;
+    if (!textRenderReadObjectProp(object, name, prop) ||
+        !textRenderVariantIsNumeric(prop)) {
+      continue;
+    }
+    value = prop.AsReal();
+    return true;
+  }
+  return false;
+}
+
+static bool textRenderReadStringPropAliases(
+    iTJSDispatch2 *object, std::initializer_list<const tjs_char *> names,
+    tjs_ustring &value) {
+  for (const auto *name : names) {
+    tTJSVariant prop;
+    if (!textRenderReadObjectProp(object, name, prop) ||
+        !textRenderVariantIsString(prop)) {
+      continue;
+    }
+    const tjs_char *s = prop.GetString();
+    value = s ? tjs_ustring(s) : tjs_ustring();
+    return true;
+  }
+  return false;
+}
+
 struct TextRenderState {
   bool bold = false;
   bool italic = false;
   tjs_ustring face{TJS_W("user")};
   int fontSize = 24;
+  double fontScale = 1.0;
   RgbColor chColor = 0xffffff;
   int rubySize = 10;
   int rubyOffset = -2;
@@ -90,12 +155,15 @@ struct TextRenderState {
   int lineSpacing = 6;
   int pitch = 0;
   int lineSize = 0;
+  int align = -1;
+  int valign = -1;
 
   tTJSVariant serialize() const {
     auto dict = TJSCreateDictionaryObject();
     setprop(dict, bold);
     setprop(dict, italic);
     setprop(dict, fontSize);
+    setprop(dict, fontScale);
     { tTJSVariant v(ttstr(face.c_str())); dict->PropSet(TJS_MEMBERENSURE, TJS_W("face"), nullptr, &v, dict); }
     setprop_t(dict, chColor, static_cast<tjs_int>);
     setprop(dict, rubySize);
@@ -109,6 +177,8 @@ struct TextRenderState {
     setprop(dict, lineSpacing);
     setprop(dict, pitch);
     setprop(dict, lineSize);
+    setprop(dict, align);
+    setprop(dict, valign);
     auto res = tTJSVariant(dict, dict);
     dict->Release();
     return res;
@@ -120,13 +190,26 @@ struct TextRenderState {
     getprop(dict, bold);
     getprop(dict, italic);
     getprop(dict, fontSize);
-    { tTJSVariant v;
-      if (TJS_SUCCEEDED(dict->PropGet(0, TJS_W("face"), nullptr, &v, dict)) && v.Type() != tvtVoid) {
-        const tjs_char *s = v.GetString();
-        if (s) face = s;
+    textRenderReadIntPropAliases(dict,
+                                 {TJS_W("fontSize"), TJS_W("fontsize"),
+                                  TJS_W("fontheight"), TJS_W("fontHeight")},
+                                 fontSize);
+    textRenderReadRealPropAliases(dict,
+                                  {TJS_W("fontScale"), TJS_W("fontscale")},
+                                  fontScale);
+    textRenderReadStringPropAliases(dict,
+                                    {TJS_W("face"), TJS_W("fontface"),
+                                     TJS_W("fontFace")},
+                                    face);
+    getprop_t(dict, chColor, static_cast<RgbColor>);
+    {
+      int color = static_cast<int>(chColor);
+      if (textRenderReadIntPropAliases(dict,
+                                       {TJS_W("chColor"), TJS_W("color")},
+                                       color)) {
+        chColor = static_cast<RgbColor>(color);
       }
     }
-    getprop_t(dict, chColor, static_cast<RgbColor>);
     getprop(dict, rubySize);
     getprop(dict, rubyOffset);
     getprop(dict, shadow);
@@ -136,8 +219,18 @@ struct TextRenderState {
     getprop(dict, edgeExtent);
     getprop(dict, edgeEmphasis);
     getprop(dict, lineSpacing);
+    textRenderReadIntPropAliases(dict,
+                                 {TJS_W("lineSpacing"), TJS_W("linespacing")},
+                                 lineSpacing);
     getprop(dict, pitch);
     getprop(dict, lineSize);
+    textRenderReadIntPropAliases(dict,
+                                 {TJS_W("lineSize"), TJS_W("linesize"),
+                                  TJS_W("linestep"), TJS_W("lineStep")},
+                                 lineSize);
+    textRenderReadIntPropAliases(dict, {TJS_W("align"), TJS_W("halign")},
+                                 align);
+    textRenderReadIntPropAliases(dict, {TJS_W("valign")}, valign);
   }
 };
 
@@ -231,15 +324,6 @@ struct CharacterInfo {
   }
 
 #define property_delegate(name) NCB_PROPERTY(name, get_##name, set_##name);
-
-static bool textRenderVariantIsString(const tTJSVariant &value) {
-  return value.Type() == tvtString || value.Type() == tvtOctet;
-}
-
-static bool textRenderVariantIsNumeric(const tTJSVariant &value) {
-  const tTJSVariantType type = value.Type();
-  return type != tvtVoid && type != tvtString && type != tvtObject;
-}
 
 static TextColor textRenderColorRaw(const tTJSVariant &value,
                                     TextColor fallback) {
@@ -556,6 +640,12 @@ public:
   property_accessor(italic, bool, m_state.italic);
   property_accessor_string(face, m_state.face);
   property_accessor(fontSize, int, m_state.fontSize);
+  double get_fontScale() const { return m_state.fontScale; }
+  void set_fontScale(double v) {
+    m_state.fontScale = v;
+    m_fontDirty = true;
+    m_layoutDirty = true;
+  }
   property_accessor_cast(chColor, RgbColor, tjs_int, m_state.chColor);
   property_accessor(rubySize, int, m_state.rubySize);
   property_accessor(rubyOffset, int, m_state.rubyOffset);
@@ -568,11 +658,14 @@ public:
   property_accessor(lineSpacing, int, m_state.lineSpacing);
   property_accessor(pitch, int, m_state.pitch);
   property_accessor(lineSize, int, m_state.lineSize);
+  property_accessor(align, int, m_state.align);
+  property_accessor(valign, int, m_state.valign);
 
   property_accessor(defaultBold, bool, m_default.bold);
   property_accessor(defaultItalic, bool, m_default.italic);
   property_accessor_string(defaultFace, m_default.face);
   property_accessor(defaultFontSize, int, m_default.fontSize);
+  property_accessor(defaultFontScale, double, m_default.fontScale);
   property_accessor_cast(defaultChColor, RgbColor, tjs_int, m_default.chColor);
   property_accessor(defaultRubySize, int, m_default.rubySize);
   property_accessor(defaultRubyOffset, int, m_default.rubyOffset);
@@ -585,21 +678,21 @@ public:
   property_accessor(defaultLineSpacing, int, m_default.lineSpacing);
   property_accessor(defaultPitch, int, m_default.pitch);
   property_accessor(defaultLineSize, int, m_default.lineSize);
+  property_accessor(defaultAlign, int, m_default.align);
+  property_accessor(defaultValign, int, m_default.valign);
 
-  double get_fontScale() const { return m_fontScale; }
-  void set_fontScale(double v) { m_fontScale = v; }
-  int get_renderLeft() const { return getRenderedBounds().left; }
-  int get_renderTop() const { return getRenderedBounds().top; }
-  int get_renderWidth() const {
+  int get_renderLeft() { return getRenderedBounds().left; }
+  int get_renderTop() { return getRenderedBounds().top; }
+  int get_renderWidth() {
     const auto bounds = getRenderedBounds();
     return bounds.right - bounds.left;
   }
-  int get_renderHeight() const {
+  int get_renderHeight() {
     const auto bounds = getRenderedBounds();
     return bounds.bottom - bounds.top;
   }
-  int get_renderRight() const { return getRenderedBounds().right; }
-  int get_renderBottom() const { return getRenderedBounds().bottom; }
+  int get_renderRight() { return getRenderedBounds().right; }
+  int get_renderBottom() { return getRenderedBounds().bottom; }
 
 private:
   struct RenderBounds {
@@ -612,6 +705,7 @@ private:
   FontRasterizer *m_rasterizer;
   int m_cachedAscentHeight = 0;
   bool m_fontDirty = true;
+  bool m_layoutDirty = false;
 
   int m_boxWidth = 0;
   int m_boxHeight = 0;
@@ -623,7 +717,6 @@ private:
   bool m_overflow = false;
   bool m_isBeginningOfLine = true;
   bool m_vertical = false;
-  double m_fontScale = 1.0;
 
   TextRenderOptions m_options{};
   TextRenderState m_default{};
@@ -638,11 +731,13 @@ private:
   void performLinebreak();
   void flush(bool force = false);
   void applyFont();
+  void applyAlignment();
   double getRequestedFontScale() const;
   double getEffectiveFontScale() const;
   int getEffectiveLineSpacing() const;
+  int getEffectiveFontHeight() const;
   int getAscentHeight();
-  RenderBounds getRenderedBounds() const;
+  RenderBounds getRenderedBounds();
 };
 
 enum TextRenderMode {
@@ -677,8 +772,7 @@ void TextRenderBase::applyFont() {
   m_fontDirty = false;
 
   tTVPFont font;
-  font.Height = static_cast<tjs_int>(
-      std::lround(m_state.fontSize * getEffectiveFontScale()));
+  font.Height = static_cast<tjs_int>(getEffectiveFontHeight());
   font.Flags = static_cast<tjs_uint32>(
       (m_state.bold ? TVP_TF_BOLD : 0) | (m_state.italic ? TVP_TF_ITALIC : 0));
   font.Angle = 0;
@@ -728,13 +822,14 @@ double TextRenderBase::getEffectiveFontScale() const {
 }
 
 double TextRenderBase::getRequestedFontScale() const {
-  if (m_fontScale >= 1.0) return m_fontScale;
+  const double scale = std::max(m_state.fontScale, 0.001);
+  if (scale >= 1.0) return scale;
 
   const bool looksLikeMainMessageBox =
       m_boxWidth >= 900 && m_boxHeight >= 120 && m_state.fontSize >= 20;
   if (looksLikeMainMessageBox) return 1.0;
 
-  return m_fontScale;
+  return scale;
 }
 
 int TextRenderBase::getEffectiveLineSpacing() const {
@@ -743,6 +838,11 @@ int TextRenderBase::getEffectiveLineSpacing() const {
       std::max(getEffectiveFontScale() /
                    std::max(getRequestedFontScale(), 0.001),
                1.0)));
+}
+
+int TextRenderBase::getEffectiveFontHeight() const {
+  return std::max(1, static_cast<int>(
+                         std::lround(m_state.fontSize * getEffectiveFontScale())));
 }
 
 int TextRenderBase::getAscentHeight() {
@@ -924,7 +1024,7 @@ void TextRenderBase::pushCharacter(tjs_char ch) {
   info.x = 0;
   info.y = 0;
   info.cw = advance_width;
-  info.size = m_cachedAscentHeight;
+  info.size = getEffectiveFontHeight();
   info.color = m_state.chColor;
   info.edge = m_state.edge ? std::make_optional(m_state.edgeColor) : std::nullopt;
   info.edgeExtent = m_state.edge ? m_state.edgeExtent : 0;
@@ -979,6 +1079,90 @@ void TextRenderBase::flush(bool force) {
   m_x = x;
   m_characters.insert(m_characters.end(), m_buffer.begin(), m_buffer.end());
   m_buffer.clear();
+  m_layoutDirty = true;
+}
+
+void TextRenderBase::applyAlignment() {
+  if (!m_layoutDirty || m_characters.empty()) return;
+  m_layoutDirty = false;
+
+  struct LineBounds {
+    size_t first = 0;
+    size_t last = 0;
+    int y = 0;
+    int left = 0;
+    int right = 0;
+    int top = 0;
+    int bottom = 0;
+  };
+
+  std::vector<LineBounds> lines;
+  lines.reserve(4);
+  for (size_t i = 0; i < m_characters.size(); ++i) {
+    const auto &ch = m_characters[i];
+    const int left = ch.x;
+    const int right = ch.x + std::max(ch.cw, 0);
+    const int top = ch.y;
+    const int bottom = ch.y + std::max(ch.size, getAscentHeight());
+    if (lines.empty() || lines.back().y != ch.y) {
+      lines.push_back({i, i, ch.y, left, right, top, bottom});
+      continue;
+    }
+    auto &line = lines.back();
+    line.last = i;
+    line.left = std::min(line.left, left);
+    line.right = std::max(line.right, right);
+    line.top = std::min(line.top, top);
+    line.bottom = std::max(line.bottom, bottom);
+  }
+
+  int blockTop = std::numeric_limits<int>::max();
+  int blockBottom = std::numeric_limits<int>::min();
+  for (auto &line : lines) {
+    if (m_boxWidth > 0) {
+      const int lineWidth = line.right - line.left;
+      int offsetX = 0;
+      if (m_state.align == 0) {
+        offsetX = (m_boxWidth - lineWidth) / 2 - line.left;
+      } else if (m_state.align > 0) {
+        offsetX = (m_boxWidth - lineWidth) - line.left;
+      }
+      if (offsetX != 0) {
+        for (size_t i = line.first; i <= line.last; ++i) {
+          m_characters[i].x += offsetX;
+        }
+        line.left += offsetX;
+        line.right += offsetX;
+      }
+    }
+    blockTop = std::min(blockTop, line.top);
+    blockBottom = std::max(blockBottom, line.bottom);
+  }
+
+  if (m_boxHeight > 0 && blockTop <= blockBottom) {
+    const int blockHeight = blockBottom - blockTop;
+    int offsetY = 0;
+    if (m_state.valign == 0) {
+      offsetY = (m_boxHeight - blockHeight) / 2 - blockTop;
+    } else if (m_state.valign > 0) {
+      offsetY = (m_boxHeight - blockHeight) - blockTop;
+    }
+    if (offsetY != 0) {
+      for (auto &ch : m_characters) ch.y += offsetY;
+    }
+  }
+
+  if (std::getenv("AETHERKIRI_TEXT_TRACE") != nullptr) {
+    static int logged = 0;
+    if (logged < 40) {
+      ++logged;
+      spdlog::info(
+          "textrender layout #{} chars={} box={}x{} fontSize={} fontScale={} "
+          "align={} valign={}",
+          logged, m_characters.size(), m_boxWidth, m_boxHeight,
+          m_state.fontSize, m_state.fontScale, m_state.align, m_state.valign);
+    }
+  }
 }
 
 void TextRenderBase::setRenderSize(int width, int height) {
@@ -996,6 +1180,7 @@ void TextRenderBase::setOption(tTJSVariant options) {
 }
 
 tTJSVariant TextRenderBase::getCharacters(int start, int end) {
+  applyAlignment();
   auto array = TJSCreateArrayObject();
 
   if ((end < start) || (start == 0 && end == 0)) {
@@ -1012,6 +1197,7 @@ tTJSVariant TextRenderBase::getCharacters(int start, int end) {
 
 void TextRenderBase::clear() {
   m_characters.clear();
+  m_buffer.clear();
   m_state = m_default;
   m_overflow = false;
   m_x = 0;
@@ -1019,10 +1205,13 @@ void TextRenderBase::clear() {
   m_indent = 0;
   m_isBeginningOfLine = true;
   m_fontDirty = true;
+  m_layoutDirty = false;
+  m_mode = kTextRenderModeLeading;
 }
 
 void TextRenderBase::done() {
   flush();
+  applyAlignment();
 }
 
 void TextRenderBase::newline() {
@@ -1034,6 +1223,7 @@ void TextRenderBase::newline() {
 void TextRenderBase::resetStyle() {
   m_state = m_default;
   m_fontDirty = true;
+  m_layoutDirty = true;
 }
 
 void TextRenderBase::resetFont() {
@@ -1041,7 +1231,9 @@ void TextRenderBase::resetFont() {
   m_state.italic = m_default.italic;
   m_state.face = m_default.face;
   m_state.fontSize = m_default.fontSize;
+  m_state.fontScale = m_default.fontScale;
   m_fontDirty = true;
+  m_layoutDirty = true;
 }
 
 tTJSVariant TextRenderBase::getKeyWait() {
@@ -1083,7 +1275,8 @@ tTJSVariant TextRenderBase::renderText(tTJSString text) {
   return getCharacters(0, 0);
 }
 
-TextRenderBase::RenderBounds TextRenderBase::getRenderedBounds() const {
+TextRenderBase::RenderBounds TextRenderBase::getRenderedBounds() {
+  applyAlignment();
   RenderBounds bounds{0, 0, 0, 0};
   bool hasCharacter = false;
 
@@ -1163,11 +1356,14 @@ NCB_REGISTER_CLASS(TextRenderBase) {
   property_delegate(lineSpacing);
   property_delegate(pitch);
   property_delegate(lineSize);
+  property_delegate(align);
+  property_delegate(valign);
 
   property_delegate(defaultBold);
   property_delegate(defaultItalic);
   property_delegate(defaultFace);
   property_delegate(defaultFontSize);
+  property_delegate(defaultFontScale);
   property_delegate(defaultChColor);
   property_delegate(defaultRubySize);
   property_delegate(defaultRubyOffset);
@@ -1180,6 +1376,8 @@ NCB_REGISTER_CLASS(TextRenderBase) {
   property_delegate(defaultLineSpacing);
   property_delegate(defaultPitch);
   property_delegate(defaultLineSize);
+  property_delegate(defaultAlign);
+  property_delegate(defaultValign);
 
   NCB_PROPERTY(fontScale, get_fontScale, set_fontScale);
   NCB_PROPERTY(renderCount, get_renderCount, set_renderCount);

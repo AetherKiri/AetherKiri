@@ -15,6 +15,7 @@ extern "C" {
 #include "LayerIntf.h"
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <spdlog/spdlog.h>
 
@@ -110,13 +111,17 @@ TVPMoviePlayer::TVPMoviePlayer() {
 }
 
 TVPMoviePlayer::~TVPMoviePlayer() {
+    ShutdownPlayer();
+    if(img_convert_ctx)
+        sws_freeContext(img_convert_ctx), img_convert_ctx = nullptr;
+}
+
+void TVPMoviePlayer::ShutdownPlayer() {
     if(m_pPlayer) {
         m_pPlayer->SetCallback({});
         delete m_pPlayer;
         m_pPlayer = nullptr;
     }
-    if(img_convert_ctx)
-        sws_freeContext(img_convert_ctx), img_convert_ctx = nullptr;
 }
 
 void TVPMoviePlayer::Release() {
@@ -317,17 +322,25 @@ int TVPMoviePlayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
     int srcHeight = pic.iHeight;
     int width = pic.iDisplayWidth > 0 ? pic.iDisplayWidth : pic.iWidth;
     int height = pic.iDisplayHeight > 0 ? pic.iDisplayHeight : pic.iHeight;
+    if(srcWidth <= 0 || srcHeight <= 0 || width <= 0 || height <= 0 ||
+       !pic.data[0] || !pic.data[1] || !pic.data[2])
+        return -1;
     uint8_t *data = (uint8_t *)TJSAlignedAlloc(width * height * 4, 4);
+    if(!data)
+        return -1;
     uint8_t *dstData[4] = {data, nullptr, nullptr, nullptr};
     int dstLineSize[4] = {width * 4, 0, 0, 0};
 
     img_convert_ctx = sws_getCachedContext(
         img_convert_ctx, srcWidth, srcHeight, AV_PIX_FMT_YUV420P, width, height,
         AV_PIX_FMT_RGBA, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-    assert(img_convert_ctx);
-    int processed = sws_scale(img_convert_ctx, pic.data, pic.iLineSize, 0,
+    int processed = 0;
+    if(img_convert_ctx) {
+        processed = sws_scale(img_convert_ctx, pic.data, pic.iLineSize, 0,
                               srcHeight, dstData, dstLineSize);
+    }
     if(processed <= 0) {
+        std::memset(data, 0, static_cast<size_t>(width) * height * 4);
         ConvertYuv420ToRgba(pic, data, width, height, dstLineSize[0]);
     }
 

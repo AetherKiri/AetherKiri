@@ -90,6 +90,14 @@ bool TraceGpuFallback() {
     return enabled;
 }
 
+bool DeferredGodotGpuDrainEnabled() {
+    static const bool enabled = []() {
+        const char *value = std::getenv("AETHERKIRI_GODOT_DEFER_GPU_DRAIN");
+        return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
 bool IsGpuRectFastPathEnabled(const char *name) {
     if (!g_gpu_fastpath_enabled.load(std::memory_order_relaxed)) {
         return false;
@@ -130,7 +138,7 @@ bool IsGpuRectFastPathEnabled(const char *name) {
 }
 
 int GpuRectMinArea() {
-    constexpr int kDefaultGpuRectMinArea = 2048;
+    constexpr int kDefaultGpuRectMinArea = 32768;
     static const int min_area = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_RECT_MIN_AREA");
         if (value == nullptr || value[0] == '\0') return kDefaultGpuRectMinArea;
@@ -147,7 +155,7 @@ int GpuRectMinAreaForMethod(const char *name) {
         (std::strcmp(name, "AlphaBlend") == 0 ||
          std::strcmp(name, "AlphaBlend_a") == 0 ||
          std::strcmp(name, "AlphaBlend_d") == 0)) {
-        constexpr int kDefaultAlphaRectMinArea = 2048;
+        constexpr int kDefaultAlphaRectMinArea = 32768;
         static const int min_area = []() {
             const char *value =
                 std::getenv("AETHERKIRI_GODOT_GPU_ALPHA_RECT_MIN_AREA");
@@ -645,9 +653,9 @@ bool GodotTexture2D::BlendGpuFrom2(GodotTexture2D *src1, GodotTexture2D *src2,
     return true;
 }
 
-bool GodotTexture2D::UploadCpuToGpu() {
+bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
     if (!cpu_dirty_) {
-        if (gpu_dirty_) {
+        if (gpu_dirty_ && flush_pending_gpu_writes) {
             const auto *bridge = TVPGodotGpuBridgeGet();
             if (bridge != nullptr && bridge->flush != nullptr) {
                 return bridge->flush();
@@ -802,7 +810,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         IsGpuRectFastPathEnabled("Copy") &&
         ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
-        src->UploadCpuToGpu()) {
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled())) {
         const tTVPRect &src_rc = textures[0].second;
         if (!RectBoundsInsideTexture(src_rc, src)) {
             CountCopyFallbackReason("copy_src_out_of_bounds");
@@ -889,7 +897,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         RectAbsSizeMatches(rctar, textures[0].second) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
-        src->UploadCpuToGpu() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
         dst->BlendGpuFrom(src, rctar, textures[0].second,
                           TVP_GODOT_GPU_BLEND_COPY_COLOR, 255, 0)) {
         CountGpuFastPath(method_name);
@@ -902,7 +910,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         RectAbsSizeMatches(rctar, textures[0].second) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
-        src->UploadCpuToGpu() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
         dst->BlendGpuFrom(src, rctar, textures[0].second,
                           TVP_GODOT_GPU_BLEND_ALPHA,
                           godot_method != nullptr ? godot_method->Opacity() : 255,
@@ -917,7 +925,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         RectAbsSizeMatches(rctar, textures[0].second) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
-        src->UploadCpuToGpu() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
         dst->BlendGpuFrom(src, rctar, textures[0].second,
                           TVP_GODOT_GPU_BLEND_ALPHA_D,
                           godot_method != nullptr ? godot_method->Opacity() : 255,
@@ -932,7 +940,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         RectAbsSizeMatches(rctar, textures[0].second) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
-        src->UploadCpuToGpu() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
         dst->BlendGpuFrom(src, rctar, textures[0].second,
                           TVP_GODOT_GPU_BLEND_CONST_ALPHA_D,
                           godot_method != nullptr ? godot_method->Opacity() : 255,
@@ -947,7 +955,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         RectAbsSizeMatches(rctar, textures[0].second) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
-        src->UploadCpuToGpu() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
         dst->BlendGpuFrom(src, rctar, textures[0].second,
                           TVP_GODOT_GPU_BLEND_PS_SCREEN,
                           godot_method != nullptr ? godot_method->Opacity() : 255,
@@ -962,7 +970,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         IsGpuRectFastPathEnabled("AlphaBlend_a") &&
         ShouldUseGpuRectFastPath(rctar, "AlphaBlend_a", dst, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
-        src->UploadCpuToGpu()) {
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled())) {
         const tTVPRect &src_rc = textures[0].second;
         const int opacity = godot_method != nullptr ? godot_method->Opacity() : 255;
         if (!RectBoundsInsideTexture(src_rc, src)) {
@@ -1059,7 +1067,8 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         RectBoundsInsideTexture(textures[1].second, src2) &&
         dst->EnsureGpuHandle() && src1->EnsureGpuHandle() &&
         src2->EnsureGpuHandle() &&
-        src1->UploadCpuToGpu() && src2->UploadCpuToGpu() &&
+        src1->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        src2->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
         dst->BlendGpuFrom2(
             src1, src2, rctar, textures[0].second, textures[1].second,
             method_name == "ConstAlphaBlend_SD_d"
@@ -1144,7 +1153,7 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
             !TrianglesNeedAlphaAreaDownsample(static_cast<uint32_t>(nTriangles),
                                               pttar, textures[0].second, src) &&
             dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
-            src->UploadCpuToGpu() &&
+            src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
             dst->CopyTrianglesGpuFrom(src, static_cast<uint32_t>(nTriangles),
                                       rcclip, pttar, textures[0].second)) {
             CountGpuFastPath(method_name);

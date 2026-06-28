@@ -290,6 +290,10 @@ public:
     void SetParent(tTJSNI_BaseLayer *parent) { Join(parent); }
 
     tjs_uint GetCount() { return Children.GetActualCount(); }
+    tjs_int DebugGetVisibleChildrenCount() { return GetVisibleChildrenCount(); }
+    bool DebugIsInTransition() const { return InTransition; }
+    bool DebugIsTransWithChildren() const { return TransWithChildren; }
+    tTVPLayerType DebugGetDisplayType() const { return DisplayType; }
 
     tTJSNI_BaseLayer *GetChildren(tjs_int idx) {
         Children.Compact();
@@ -617,6 +621,7 @@ public:
 
 private:
     void FireClick(tjs_int x, tjs_int y);
+    void FireButtonClick();
     void FireDoubleClick(tjs_int x, tjs_int y);
     void FireMouseDown(tjs_int x, tjs_int y, tTVPMouseButton mb,
                        tjs_uint32 flags);

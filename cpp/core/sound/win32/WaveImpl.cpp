@@ -17,6 +17,8 @@
 
 #include <math.h>
 #include <algorithm>
+#include <cstdlib>
+#include <spdlog/spdlog.h>
 #include "SystemControl.h"
 #include "DebugIntf.h"
 #include "MsgIntf.h"
@@ -75,6 +77,27 @@ static tjs_int TVPL2BufferLength = 1000; // in ms
 static bool TVPDirectSoundUse3D = false;
 static tjs_int TVPVolumeLogFactor = 3322;
 static bool TVPPrimarySoundBufferPlaying = false;
+
+static bool TVPAudioTraceEnabled() {
+    static int enabled = []() {
+        const char *value = std::getenv("AETHERKIRI_AUDIO_TRACE");
+        if(!value || !*value)
+            return 0;
+        if((value[0] == '0' || value[0] == 'n' || value[0] == 'N' ||
+            value[0] == 'f' || value[0] == 'F') &&
+           value[1] == '\0')
+            return 0;
+        return 1;
+    }();
+    return enabled != 0;
+}
+
+static void TVPAudioTrace(const ttstr &message) {
+    if(!TVPAudioTraceEnabled())
+        return;
+    TVPAddLog(ttstr(TJS_W("AudioTrace ")) + message);
+    spdlog::info("AudioTrace {}", message.AsStdString());
+}
 
 //---------------------------------------------------------------------------
 static void TVPInitSoundOptions() {
@@ -2406,6 +2429,7 @@ void tTJSNI_WaveSoundBuffer::ResetSamplePositions() {
 void tTJSNI_WaveSoundBuffer::Clear() {
     // clear all status and unload current decoder
     Stop();
+    TraceStorageName.Clear();
     ThreadCallbackEnabled = false;
     TVPCheckSoundBufferAllSleep();
     if(Thread)
@@ -2637,7 +2661,7 @@ bool tTJSNI_WaveSoundBuffer::FillBuffer(bool firstwrite, bool allowpause) {
         return true;
     if(!BufferPlaying)
         return true;
-    if(!TVPPrimarySoundBufferPlaying)
+    if(!TVPPrimarySoundBufferPlaying && allowpause)
         return true;
 
     // check paused state
@@ -2940,8 +2964,20 @@ void tTJSNI_WaveSoundBuffer::FlushAllLabelEvents() {
 
 //---------------------------------------------------------------------------
 void tTJSNI_WaveSoundBuffer::StartPlay() {
-    if(!Decoder)
+    if(!Decoder) {
+        TVPAudioTrace(ttstr(TJS_W("start skipped no_decoder storage=")) +
+                      TraceStorageName + TJS_W(" status=") +
+                      GetStatusString());
         return;
+    }
+
+    TVPAudioTrace(ttstr(TJS_W("start begin storage=")) + TraceStorageName +
+                  TJS_W(" status=") + GetStatusString() +
+                  TJS_W(" paused=") + ttstr((tjs_int)(Paused ? 1 : 0)) +
+                  TJS_W(" buffer_playing=") +
+                  ttstr((tjs_int)(BufferPlaying ? 1 : 0)) +
+                  TJS_W(" ds_playing=") +
+                  ttstr((tjs_int)(DSBufferPlaying ? 1 : 0)));
 
     // let primary buffer to start running
     TVPEnsurePrimaryBufferPlay();
@@ -2977,6 +3013,14 @@ void tTJSNI_WaveSoundBuffer::StartPlay() {
             DSBufferPlaying = true;
         }
 
+        TVPAudioTrace(ttstr(TJS_W("start primed storage=")) +
+                      TraceStorageName + TJS_W(" paused=") +
+                      ttstr((tjs_int)(Paused ? 1 : 0)) +
+                      TJS_W(" buffer_playing=") +
+                      ttstr((tjs_int)(BufferPlaying ? 1 : 0)) +
+                      TJS_W(" ds_playing=") +
+                      ttstr((tjs_int)(DSBufferPlaying ? 1 : 0)));
+
         // re-schedule label events
         ResetLastCheckedDecodePos();
         TVPReschedulePendingLabelEvent(GetNearestEventStep());
@@ -2997,6 +3041,13 @@ void tTJSNI_WaveSoundBuffer::StopPlay() {
     if(!SoundBuffer)
         return;
 
+    TVPAudioTrace(ttstr(TJS_W("stop_play storage=")) + TraceStorageName +
+                  TJS_W(" status=") + GetStatusString() +
+                  TJS_W(" buffer_playing=") +
+                  ttstr((tjs_int)(BufferPlaying ? 1 : 0)) +
+                  TJS_W(" ds_playing=") +
+                  ttstr((tjs_int)(DSBufferPlaying ? 1 : 0)));
+
     if(IsDecodeThreadRunning()) {
         Thread->SetPriority(TVPDecodeThreadHighPriority);
     }
@@ -3011,10 +3062,23 @@ void tTJSNI_WaveSoundBuffer::StopPlay() {
 //---------------------------------------------------------------------------
 void tTJSNI_WaveSoundBuffer::Play() {
     // play from first or current position
-    if(!Decoder)
+    if(!Decoder) {
+        TVPAudioTrace(ttstr(TJS_W("play skipped no_decoder storage=")) +
+                      TraceStorageName + TJS_W(" status=") +
+                      GetStatusString());
         return;
-    if(BufferPlaying)
+    }
+    if(BufferPlaying) {
+        TVPAudioTrace(ttstr(TJS_W("play skipped already_playing storage=")) +
+                      TraceStorageName + TJS_W(" status=") +
+                      GetStatusString());
         return;
+    }
+
+    TVPAudioTrace(ttstr(TJS_W("play request storage=")) + TraceStorageName +
+                  TJS_W(" status=") + GetStatusString() +
+                  TJS_W(" paused=") + ttstr((tjs_int)(Paused ? 1 : 0)) +
+                  TJS_W(" looping=") + ttstr((tjs_int)(Looping ? 1 : 0)));
 
     StopPlay();
 
@@ -3029,6 +3093,8 @@ void tTJSNI_WaveSoundBuffer::Play() {
 
     StartPlay();
     SetStatus(ssPlay);
+    TVPAudioTrace(ttstr(TJS_W("play status_set storage=")) +
+                  TraceStorageName + TJS_W(" status=") + GetStatusString());
 }
 
 //---------------------------------------------------------------------------
@@ -3096,9 +3162,21 @@ void tTJSNI_WaveSoundBuffer::Open(const ttstr &storagename) {
     TVPEnsurePrimaryBufferPlay(); // let primary buffer to start
                                   // running
 
-    Clear();
+    TVPAudioTrace(ttstr(TJS_W("open request storage=")) + storagename);
 
-    Decoder = TVPCreateWaveDecoder(storagename);
+    Clear();
+    TraceStorageName = storagename;
+
+    try {
+        Decoder = TVPCreateWaveDecoder(storagename);
+        TVPAudioTrace(ttstr(TJS_W("open decoder_ready storage=")) +
+                      TraceStorageName);
+    } catch(...) {
+        TVPAudioTrace(ttstr(TJS_W("open decoder_exception storage=")) +
+                      TraceStorageName);
+        TraceStorageName.Clear();
+        throw;
+    }
 
     try {
         // make manager
@@ -3112,6 +3190,17 @@ void tTJSNI_WaveSoundBuffer::Open(const ttstr &storagename) {
         // retrieve format
         InputFormat = FilterOutput->GetFormat();
         Frequency = InputFormat.SamplesPerSec;
+        TVPAudioTrace(ttstr(TJS_W("open ready storage=")) + TraceStorageName +
+                      TJS_W(" freq=") +
+                      ttstr((tjs_int)InputFormat.SamplesPerSec) +
+                      TJS_W(" channels=") +
+                      ttstr((tjs_int)InputFormat.Channels) +
+                      TJS_W(" bits=") +
+                      ttstr((tjs_int)InputFormat.BitsPerSample) +
+                      TJS_W(" total_ms=") +
+                      ttstr((tjs_int)InputFormat.TotalTime) +
+                      TJS_W(" seekable=") +
+                      ttstr((tjs_int)(InputFormat.Seekable ? 1 : 0)));
     } catch(...) {
         Clear();
         throw;

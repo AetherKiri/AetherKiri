@@ -119,15 +119,21 @@ Web 还需要：
 | `EMSDK` / `EMSCRIPTEN_ROOT` | Web 构建使用的 Emscripten SDK/toolchain 位置。 |
 | `AETHERKIRI_GAME_ROOT` / `AETHERKIRI_GAME_ROOTS` | 仅 Vite 本地 Web 调试使用，只读 RangeFS 游戏根目录。 |
 | `AETHERKIRI_WEB_AUTO_START` | 仅 Vite 本地 Web 调试使用，启动后自动挂载并进入配置的游戏。 |
+| `AETHERKIRI_ENABLE_AUTO_START` | 原生桌面自动化启动开关；未设置时，即使环境中残留 `AETHERKIRI_AUTO_START_GAME` 或 `AETHERKIRI_AUTO_OPEN`，普通 debug/release app 也不会自动进入游戏。 |
 | `JOBS` | native 并行构建任务数。 |
 | `IOS_SIMULATOR_ARCH` | iOS 模拟器架构，`arm64` 或 `x86_64`。 |
 | `AETHERKIRI_TEST_CONFIG` | JSON probe profile 路径。 |
 | `AETHERKIRI_SMOKE_GAME` | 本地游戏路径。不要写入提交的 profile。 |
 | `AETHERKIRI_RENDER_BACKEND` | probe 渲染后端覆盖。 |
+| `AETHERKIRI_DIAGNOSTICS` | 在 release 构建中开启运行期诊断，但不显示桌面 UI 日志框。 |
+| `AETHERKIRI_UI_LOG` | 开启桌面端 loading/runtime UI 日志框。面向用户的 release 构建默认保持关闭。 |
 | `AETHERKIRI_INPUT_TRACE` | 开启 engine/layer 输入 trace。 |
 | `AETHERKIRI_PERF_LOG_INTERVAL` | 性能日志输出间隔，单位秒。 |
 | `AETHERKIRI_FRAME_SPIKE_MS` | 超过该阈值的慢帧会被记录。 |
 | `AETHERKIRI_VERBOSE_RENDER_LOG` | 开启 Godot shell 侧 verbose render log。 |
+| `AETHERKIRI_LIVE_FPS_LOG` | 将运行期 FPS/性能诊断写入指定文件路径。 |
+| `AETHERKIRI_IOS_DIAGNOSTICS` | iOS 真机诊断便利开关，通常配合 `devicectl --console` 使用。 |
+| `AETHERKIRI_IOS_FILE_LOG` | 配合 `AETHERKIRI_IOS_DIAGNOSTICS` 使用；未设置 `AETHERKIRI_LIVE_FPS_LOG` 时写入 `user://aetherkiri-ios-live.log`。 |
 
 ## 构建命令
 
@@ -398,12 +404,36 @@ build/validate_gpu_bridge.sh
 
 ## 调试说明
 
-常用 trace：
+release 构建默认不会持续 drain runtime log，也不会刷新 UI 日志框，避免普通用户版本
+承担每帧日志和 UI 更新开销。需要定位问题时，只打开所需诊断项：
 
 ```bash
+AETHERKIRI_DIAGNOSTICS=1 ...
+AETHERKIRI_UI_LOG=1 ...
 AETHERKIRI_INPUT_TRACE=1 ...
 AETHERKIRI_FRAME_SPIKE_MS=20 ...
 AETHERKIRI_VERBOSE_RENDER_LOG=1 ...
+AETHERKIRI_LIVE_FPS_LOG=/tmp/aetherkiri-live.log ...
+```
+
+原生桌面构建会有意忽略 `AETHERKIRI_AUTO_START_GAME` 和
+`AETHERKIRI_AUTO_OPEN`，除非显式开启自动化模式。这样从 Finder 启动普通
+debug/release app 时，就不会继承旧的全局 `launchctl` 调试变量并直接跳进上次
+的游戏。原生自动化运行时需要显式开启：
+
+```bash
+AETHERKIRI_ENABLE_AUTO_START=1 \
+AETHERKIRI_AUTO_START_GAME=/path/to/game \
+out/godot/macos/debug/AetherKiri.app/Contents/MacOS/AetherKiri
+```
+
+macOS release 收集日志时直接运行 app 内的二进制，这样可以继承 shell 环境变量：
+
+```bash
+AETHERKIRI_DIAGNOSTICS=1 \
+AETHERKIRI_UI_LOG=1 \
+AETHERKIRI_FRAME_SPIKE_MS=20 \
+out/godot/macos/release/AetherKiri.app/Contents/MacOS/AetherKiri
 ```
 
 iOS 真机：
@@ -413,11 +443,13 @@ xcrun devicectl device process launch \
   --device <device-identifier> \
   --terminate-existing \
   --console \
-  --environment-variables '{"AETHERKIRI_INPUT_TRACE":"1"}' \
+  --environment-variables '{"AETHERKIRI_IOS_DIAGNOSTICS":"1","AETHERKIRI_INPUT_TRACE":"1","AETHERKIRI_FRAME_SPIKE_MS":"20"}' \
   com.liuyu.aetherkiri.kr37s
 ```
 
-`--console` 会等待进程运行结束，只在需要收集日志时使用，避免长时间占用终端。
+移动端不会显示桌面 UI 日志框。iOS release 诊断请通过 `--console`、设备 syslog
+或 crash log 收集。`--console` 会等待进程运行结束，只在需要收集日志时使用，
+避免长时间占用终端。
 
 ## 代码修改原则
 

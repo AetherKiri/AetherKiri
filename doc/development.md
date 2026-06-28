@@ -124,15 +124,21 @@ Useful environment variables:
 | `EMSDK` / `EMSCRIPTEN_ROOT` | Emscripten SDK/toolchain location for Web builds. |
 | `AETHERKIRI_GAME_ROOT` / `AETHERKIRI_GAME_ROOTS` | Vite-only local Web game roots for read-only RangeFS testing. |
 | `AETHERKIRI_WEB_AUTO_START` | Vite-only local Web switch to mount and start the configured game automatically. |
+| `AETHERKIRI_ENABLE_AUTO_START` | Native desktop automation opt-in. Without it, stale `AETHERKIRI_AUTO_START_GAME` or `AETHERKIRI_AUTO_OPEN` values are ignored by normal debug/release apps. |
 | `JOBS` | Parallel native build jobs. |
 | `IOS_SIMULATOR_ARCH` | `arm64` or `x86_64` simulator build selection. |
 | `AETHERKIRI_TEST_CONFIG` | JSON probe profile path. |
 | `AETHERKIRI_SMOKE_GAME` | Local game path for probes; do not commit this into profiles. |
 | `AETHERKIRI_RENDER_BACKEND` | Probe backend override. |
+| `AETHERKIRI_DIAGNOSTICS` | Enables runtime diagnostics in release builds without showing the desktop UI log panel. |
+| `AETHERKIRI_UI_LOG` | Enables the desktop loading/runtime UI log panel. Keep it off in user-facing release builds unless diagnosing a problem. |
 | `AETHERKIRI_INPUT_TRACE` | Enables engine/layer input traces. |
 | `AETHERKIRI_PERF_LOG_INTERVAL` | Performance log interval in seconds. |
 | `AETHERKIRI_FRAME_SPIKE_MS` | Logs frames slower than this threshold. |
 | `AETHERKIRI_VERBOSE_RENDER_LOG` | Enables verbose render logging in the Godot shell. |
+| `AETHERKIRI_LIVE_FPS_LOG` | Writes runtime FPS/performance diagnostics to the given file path. |
+| `AETHERKIRI_IOS_DIAGNOSTICS` | iOS convenience switch for device diagnostics; use it with `devicectl --console`. |
+| `AETHERKIRI_IOS_FILE_LOG` | With `AETHERKIRI_IOS_DIAGNOSTICS`, writes `user://aetherkiri-ios-live.log` when no explicit `AETHERKIRI_LIVE_FPS_LOG` is set. |
 
 ## Build Commands
 
@@ -423,12 +429,39 @@ notes.
 
 ## Debugging Notes
 
-Useful traces:
+Release builds do not continuously drain runtime logs or update the UI log panel
+by default. This keeps normal user builds from paying the per-frame logging/UI
+cost. Enable only the diagnostics you need:
 
 ```bash
+AETHERKIRI_DIAGNOSTICS=1 ...
+AETHERKIRI_UI_LOG=1 ...
 AETHERKIRI_INPUT_TRACE=1 ...
 AETHERKIRI_FRAME_SPIKE_MS=20 ...
 AETHERKIRI_VERBOSE_RENDER_LOG=1 ...
+AETHERKIRI_LIVE_FPS_LOG=/tmp/aetherkiri-live.log ...
+```
+
+Native desktop builds intentionally ignore `AETHERKIRI_AUTO_START_GAME` and
+`AETHERKIRI_AUTO_OPEN` unless automation is explicitly enabled. This prevents a
+normal debug/release app launched from Finder from inheriting stale global
+`launchctl` debug variables and jumping straight into the previous game. For
+native automation runs, opt in explicitly:
+
+```bash
+AETHERKIRI_ENABLE_AUTO_START=1 \
+AETHERKIRI_AUTO_START_GAME=/path/to/game \
+out/godot/macos/debug/AetherKiri.app/Contents/MacOS/AetherKiri
+```
+
+For macOS release logging, run the app binary directly so it inherits the shell
+environment:
+
+```bash
+AETHERKIRI_DIAGNOSTICS=1 \
+AETHERKIRI_UI_LOG=1 \
+AETHERKIRI_FRAME_SPIKE_MS=20 \
+out/godot/macos/release/AetherKiri.app/Contents/MacOS/AetherKiri
 ```
 
 On iOS device:
@@ -438,12 +471,14 @@ xcrun devicectl device process launch \
   --device <device-identifier> \
   --terminate-existing \
   --console \
-  --environment-variables '{"AETHERKIRI_INPUT_TRACE":"1"}' \
+  --environment-variables '{"AETHERKIRI_IOS_DIAGNOSTICS":"1","AETHERKIRI_INPUT_TRACE":"1","AETHERKIRI_FRAME_SPIKE_MS":"20"}' \
   com.liuyu.aetherkiri.kr37s
 ```
 
-Use `--console` only when actively collecting logs, because it waits for the
-process and can keep a terminal session occupied.
+The desktop UI log panel is not shown on mobile. Use `--console` or device
+syslog/crash logs for iOS release diagnostics. Use `--console` only when
+actively collecting logs, because it waits for the process and can keep a
+terminal session occupied.
 
 ## Code Change Guidelines
 
