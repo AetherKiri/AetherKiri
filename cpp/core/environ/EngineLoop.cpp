@@ -12,6 +12,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <spdlog/spdlog.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 #include "Application.h"
 #include "ConfigManager/IndividualConfigManager.h"
@@ -50,13 +53,24 @@ int64_t NowMs() {
 }
 
 bool InputTraceEnabled() {
-    static const bool enabled = [] {
-        const char* value = std::getenv("AETHERKIRI_INPUT_TRACE");
-        return value && value[0] && value[0] != '0';
-    }();
-    return enabled;
+    const char* value = std::getenv("AETHERKIRI_INPUT_TRACE");
+    return value && value[0] && value[0] != '0';
 }
 } // namespace
+
+#ifdef __ANDROID__
+#define AETHER_INPUT_TRACE_LOG(...)                                             \
+    do {                                                                        \
+        if (InputTraceEnabled()) {                                              \
+            __android_log_print(ANDROID_LOG_INFO, "aether-input", __VA_ARGS__); \
+        }                                                                       \
+    } while (0)
+#else
+#define AETHER_INPUT_TRACE_LOG(...)                                             \
+    do {                                                                        \
+    } while (0)
+#endif
+
 void TVPSetPostUpdateEvent(void (*f)()) { s_postUpdate = f; }
 
 // Async key/mouse state table — indexed by Windows VK code
@@ -270,6 +284,8 @@ void EngineLoop::HandlePointerDown(const EngineInputEvent& event) {
 
     last_mouse_down_x_ = x;
     last_mouse_down_y_ = y;
+    AETHER_INPUT_TRACE_LOG("EngineLoop down id=%d x=%d y=%d button=%u flags=%u",
+                           event.pointer_id, x, y, event.button, flags);
 
     // Windows sends WM_LBUTTONDBLCLK before the second WM_LBUTTONDOWN, and the
     // following WM_LBUTTONUP suppresses the normal click event.
@@ -305,6 +321,9 @@ void EngineLoop::HandlePointerMove(const EngineInputEvent& event) {
     // Update cached cursor position for Layer.cursorX/cursorY queries
     if (win->GetForm())
         win->GetForm()->UpdateCursorPos(x, y);
+
+    AETHER_INPUT_TRACE_LOG("EngineLoop move id=%d x=%d y=%d shift=%u",
+                           event.pointer_id, x, y, shift);
 
     TVPPostInputEvent(
         new tTVPOnMouseMoveInputEvent(win, x, y, shift));
@@ -353,11 +372,17 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
             TVPPostInputEvent(
                 new tTVPOnClickInputEvent(win, last_mouse_down_x_,
                                           last_mouse_down_y_));
+            AETHER_INPUT_TRACE_LOG(
+                "EngineLoop click id=%d x=%d y=%d up=(%d,%d)",
+                event.pointer_id, last_mouse_down_x_, last_mouse_down_y_, x, y);
             last_click_time_ms_ = NowMs();
             last_click_x_ = x;
             last_click_y_ = y;
         }
     }
+
+    AETHER_INPUT_TRACE_LOG("EngineLoop up id=%d x=%d y=%d button=%u shift=%u",
+                           event.pointer_id, x, y, event.button, shift);
 
     TVPPostInputEvent(
         new tTVPOnMouseUpInputEvent(win, x, y, mb, shift));

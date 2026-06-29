@@ -41,6 +41,9 @@
 #define uint32_t unsigned int
 
 #include <thread>
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 
 #undef uint32_t
 
@@ -400,6 +403,10 @@ bool TVPHostSuppressProcessExit = false;
 
 //---------------------------------------------------------------------------
 void TVPTerminateAsync(int code) {
+#if defined(__ANDROID__)
+    __android_log_print(ANDROID_LOG_INFO, "krkr2",
+                        "TVPTerminateAsync called code=%d", code);
+#endif
     // do "A"synchronous temination of application
     TVPTerminated = true;
     TVPTerminateCode = code;
@@ -417,6 +424,11 @@ void TVPTerminateAsync(int code) {
 
 //---------------------------------------------------------------------------
 void TVPTerminateSync(int code) {
+#if defined(__ANDROID__)
+    __android_log_print(ANDROID_LOG_INFO, "krkr2",
+                        "TVPTerminateSync called code=%d suppress=%d",
+                        code, TVPHostSuppressProcessExit ? 1 : 0);
+#endif
     // do synchronous temination of application (never return)
     if(TVPHostSuppressProcessExit) {
         // In embedded host mode (Application host), calling TVPSystemUninit() here

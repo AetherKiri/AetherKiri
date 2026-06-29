@@ -2351,6 +2351,21 @@ engine_result_t engine_set_option(engine_handle_t handle,
     return ENGINE_RESULT_OK;
   }
 
+  if (key == "input_trace") {
+    const std::string v(option->value_utf8);
+    const bool enabled = (v == "1" || v == "true");
+    if (enabled) {
+      setenv("AETHERKIRI_INPUT_TRACE", "1", 1);
+    } else {
+      unsetenv("AETHERKIRI_INPUT_TRACE");
+    }
+    spdlog::info("engine_set_option: input_trace={}", enabled);
+    TVPSetCommandLine(ttstr(option->key_utf8).c_str(), ttstr(option->value_utf8));
+    ClearHandleErrorLocked(impl);
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+
   // Handle export_scripts option: enable/disable TJS script export
   if (key == ENGINE_OPTION_EXPORT_SCRIPTS) {
     const std::string v(option->value_utf8);
