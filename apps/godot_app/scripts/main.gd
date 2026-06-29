@@ -3756,11 +3756,17 @@ func _quit_after_runtime_exit() -> void:
     if player != null:
         player.release_frame_texture()
         player.destroy_engine()
+    var exit_func = func():
+        if OS.get_name() == "iOS":
+            OS.kill(OS.get_process_id())
+        else:
+            get_tree().quit(0)
+
     var dialog := AcceptDialog.new()
     dialog.title = "AetherKiri"
     dialog.dialog_text = "游戏已退出\nGame Exited"
-    dialog.confirmed.connect(func(): get_tree().quit(0))
-    dialog.canceled.connect(func(): get_tree().quit(0))
+    dialog.confirmed.connect(exit_func)
+    dialog.canceled.connect(exit_func)
     add_child(dialog)
     dialog.popup_centered()
 
