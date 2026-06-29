@@ -21,6 +21,9 @@
 #include <string>
 #include <vector>
 #include <spdlog/spdlog.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 #include "tjsArray.h"
 #include "tjsError.h"
@@ -106,12 +109,22 @@ static bool TVPLayerDebugTake() {
 }
 
 static bool TVPLayerInputTraceEnabled() {
-    static const bool enabled = [] {
-        const char *value = std::getenv("AETHERKIRI_INPUT_TRACE");
-        return value && *value && *value != '0';
-    }();
-    return enabled;
+    const char *value = std::getenv("AETHERKIRI_INPUT_TRACE");
+    return value && *value && *value != '0';
 }
+
+#ifdef __ANDROID__
+#define AETHER_LAYER_INPUT_TRACE_LOG(...)                                       \
+    do {                                                                       \
+        if(TVPLayerInputTraceEnabled()) {                                       \
+            __android_log_print(ANDROID_LOG_INFO, "aether-input", __VA_ARGS__); \
+        }                                                                      \
+    } while(0)
+#else
+#define AETHER_LAYER_INPUT_TRACE_LOG(...)                                       \
+    do {                                                                       \
+    } while(0)
+#endif
 
 static bool TVPLayerDrawTraceEnabled() {
     static const bool enabled = [] {
@@ -251,6 +264,9 @@ static void TVPTraceLayerInputEvent(const char *event,
                                     const tTJSVariantClosure &action_owner) {
     if(!TVPLayerInputTraceEnabled() || !layer)
         return;
+    AETHER_LAYER_INPUT_TRACE_LOG("LayerIntf %s layer=%s action=%d", event,
+                                 layer->GetName().AsStdString().c_str(),
+                                 action_owner.Object ? 1 : 0);
     spdlog::info("LayerIntf {} layer={} action={}", event,
                  layer->GetName().AsStdString(),
                  action_owner.Object ? "yes" : "no");
@@ -2148,6 +2164,11 @@ tjs_error tTJSNI_BaseLayer::Construct(tjs_int numparams, tTJSVariant **param,
         return TJS_E_BADPARAMCOUNT;
 
     Owner = tjs_obj; // no addref
+#if defined(__ANDROID__)
+    spdlog::info("Layer construct begin native={} owner={} argc={}",
+                 static_cast<void *>(this), static_cast<void *>(Owner),
+                 static_cast<int>(numparams));
+#endif
 
     // get the window native instance
     tTJSVariantClosure clo = param[0]->AsObjectClosureNoAddRef();
@@ -2160,9 +2181,16 @@ tjs_error tTJSNI_BaseLayer::Construct(tjs_int numparams, tTJSVariant **param,
     class iTVPLayerTreeOwner *lto = nullptr;
     tTJSVariant iface_v;
     if(TJS_FAILED(clo.PropGet(0, TJS_W("layerTreeOwnerInterface"), nullptr,
-                              &iface_v, nullptr)))
+                              &iface_v, nullptr))) {
+#if defined(__ANDROID__)
+        spdlog::warn("Layer construct failed: no layerTreeOwnerInterface native={} owner={} windowObj={} windowThis={}",
+                     static_cast<void *>(this), static_cast<void *>(Owner),
+                     static_cast<void *>(clo.Object),
+                     static_cast<void *>(clo.ObjThis));
+#endif
         TVPThrowExceptionMessage(
             TJS_W("Cannot Retrive Layer Tree Owner Interface."));
+    }
     lto = reinterpret_cast<iTVPLayerTreeOwner *>(
         (tjs_intptr_t)(tjs_int64)iface_v);
 
@@ -2170,10 +2198,18 @@ tjs_error tTJSNI_BaseLayer::Construct(tjs_int numparams, tTJSVariant **param,
     clo = param[1]->AsObjectClosureNoAddRef();
     tTJSNI_Layer *lay = nullptr;
     if(clo.Object) {
-        if(TJS_FAILED(clo.Object->NativeInstanceSupport(
-               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-               (iTJSNativeInstance **)&lay)))
+        tjs_error lay_hr = clo.Object->NativeInstanceSupport(
+            TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+            (iTJSNativeInstance **)&lay);
+        if(TJS_FAILED(lay_hr)) {
+#if defined(__ANDROID__)
+            spdlog::warn("Layer construct failed: invalid parent native={} owner={} parentObj={} parentThis={} hr={}",
+                         static_cast<void *>(this), static_cast<void *>(Owner),
+                         static_cast<void *>(clo.Object),
+                         static_cast<void *>(clo.ObjThis), lay_hr);
+#endif
             TVPThrowExceptionMessage(TVPSpecifyLayer);
+        }
     }
 
     // retrieve manager
@@ -2203,12 +2239,26 @@ tjs_error tTJSNI_BaseLayer::Construct(tjs_int numparams, tTJSVariant **param,
     //	IncCacheEnabledCount(); ///// -------------------- test
 
     ActionOwner = param[0]->AsObjectClosure();
+#if defined(__ANDROID__)
+    spdlog::info("Layer construct end native={} owner={} parent={} manager={} primary={} actionObj={} actionThis={}",
+                 static_cast<void *>(this), static_cast<void *>(Owner),
+                 static_cast<void *>(Parent), static_cast<void *>(Manager),
+                 IsPrimary() ? "yes" : "no",
+                 static_cast<void *>(ActionOwner.Object),
+                 static_cast<void *>(ActionOwner.ObjThis));
+#endif
 
     return TJS_S_OK;
 }
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::Invalidate() {
+#if defined(__ANDROID__)
+    spdlog::info("Layer invalidate native={} owner={} name='{}' parent={} manager={} primary={}",
+                 static_cast<void *>(this), static_cast<void *>(Owner),
+                 Name.AsStdString(), static_cast<void *>(Parent),
+                 static_cast<void *>(Manager), IsPrimary() ? "yes" : "no");
+#endif
     Shutdown = true;
 
     // stop transition

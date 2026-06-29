@@ -1,6 +1,7 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <assert.h>
@@ -31,6 +32,9 @@
 #include "Platform.h"
 #include "EventIntf.h"
 #include <thread>
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 #include "ConfigManager/LocaleConfigManager.h"
 #include "StorageIntf.h"
 extern "C" {
@@ -60,6 +64,25 @@ static void _no_memory_cb() {
 
 static std::string _title, _msg, _retry, _cancel;
 static tTJSCriticalSection _cs;
+#if defined(__ANDROID__)
+static bool TVPAndroidAppTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_APP_TRACE");
+        return value && value[0] && value[0] != '0';
+    }();
+    return enabled;
+}
+
+static void TVPAndroidAppLog(const char *message) {
+    if(!TVPAndroidAppTraceEnabled()) return;
+    __android_log_print(ANDROID_LOG_INFO, "krkr2", "%s", message);
+}
+
+static void TVPAndroidAppLogf(const char *fmt, size_t value) {
+    if(!TVPAndroidAppTraceEnabled()) return;
+    __android_log_print(ANDROID_LOG_INFO, "krkr2", fmt, value);
+}
+#endif
 typedef void *F_alloc_t(void *, size_t);
 static void *__do_alloc_func(F_alloc_t *f, void *p, size_t c) {
     void *ptr = f(p, c);
@@ -579,14 +602,34 @@ void tTVPApplication::ShowException(const ttstr &e) {
 }
 void tTVPApplication::Run() {
     try {
+#if defined(__ANDROID__)
+        TVPAndroidAppLog("Application::Run begin");
+#endif
         if(TVPTerminated) {
+#if defined(__ANDROID__)
+            TVPAndroidAppLog("Application::Run terminated branch");
+#endif
             TVPSystemUninit();
             TVPExitApplication(TVPTerminateCode);
         }
         //	TVPBreathe();
+#if defined(__ANDROID__)
+        TVPAndroidAppLog("Application::Run before ProcessMessages");
+#endif
         ProcessMessages();
+#if defined(__ANDROID__)
+        TVPAndroidAppLog("Application::Run after ProcessMessages");
+#endif
         if(TVPSystemControl)
+#if defined(__ANDROID__)
+        {
+            TVPAndroidAppLog("Application::Run before SystemWatchTimerTimer");
+#endif
             TVPSystemControl->SystemWatchTimerTimer();
+#if defined(__ANDROID__)
+            TVPAndroidAppLog("Application::Run after SystemWatchTimerTimer");
+        }
+#endif
         //		TVPDeliverWindowUpdateEvents(); // from
         // SystemWatchTimerTimer
     } catch(const EAbort &) {
@@ -639,19 +682,49 @@ void tTVPApplication::ProcessMessages() {
         std::lock_guard<std::mutex> cs(m_msgQueueLock);
         remaining = m_lstUserMsg.size();
     }
+#if defined(__ANDROID__)
+    TVPAndroidAppLogf("Application::ProcessMessages begin queued=%zu", remaining);
+#endif
+    size_t processed = 0;
     while(remaining-- > 0) {
         tMsg msg;
+        int msg_id = 0;
+        void *msg_host = nullptr;
         {
             std::lock_guard<std::mutex> cs(m_msgQueueLock);
             if(m_lstUserMsg.empty())
                 break;
+            msg_host = std::get<0>(m_lstUserMsg.front());
+            msg_id = std::get<1>(m_lstUserMsg.front());
             msg = std::move(std::get<2>(m_lstUserMsg.front()));
             m_lstUserMsg.erase(m_lstUserMsg.begin());
         }
-        if(msg)
+        if(msg) {
+#if defined(__ANDROID__)
+            if(TVPAndroidAppTraceEnabled()) {
+                __android_log_print(ANDROID_LOG_INFO, "krkr2",
+                                    "Application::ProcessMessages before user msg index=%zu id=%d host=%p",
+                                    processed, msg_id, msg_host);
+            }
+#endif
             msg();
+#if defined(__ANDROID__)
+            if(TVPAndroidAppTraceEnabled()) {
+                __android_log_print(ANDROID_LOG_INFO, "krkr2",
+                                    "Application::ProcessMessages after user msg index=%zu id=%d",
+                                    processed, msg_id);
+            }
+#endif
+        }
+        processed += 1;
     }
+#if defined(__ANDROID__)
+    TVPAndroidAppLog("Application::ProcessMessages before ProgressAllTimer");
+#endif
     TVPTimer::ProgressAllTimer();
+#if defined(__ANDROID__)
+    TVPAndroidAppLog("Application::ProcessMessages after ProgressAllTimer");
+#endif
 }
 
 #if 0
@@ -708,6 +781,9 @@ void tTVPApplication::SetTitle(const ttstr &caption) {
 
 void tTVPApplication::Terminate() {
     //::PostQuitMessage(0);
+#if defined(__ANDROID__)
+    TVPAndroidAppLog("Application::Terminate called");
+#endif
     tarminate_ = true;
     TVPTerminated = true;
 }

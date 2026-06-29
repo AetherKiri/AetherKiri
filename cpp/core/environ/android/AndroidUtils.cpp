@@ -36,6 +36,23 @@ using JniMethodInfo = krkr::JniHelper::MethodInfo;
 #define KR2ActJavaPath "org/tvp/kirikiri2/KR2Activity"
 // #define KR2EntryJavaPath "org/tvp/kirikiri2/Kirikiroid2"
 
+namespace {
+
+constexpr const char *kFallbackPackageName = "org.github.krkr2.aetherkiri";
+
+std::string FallbackInternalStoragePath() {
+    return std::string("/storage/emulated/0/Android/data/") +
+           kFallbackPackageName + "/files";
+}
+
+void DeleteLocalRefIf(JNIEnv *env, jobject ref) {
+    if(env != nullptr && ref != nullptr) {
+        env->DeleteLocalRef(ref);
+    }
+}
+
+} // namespace
+
 // Declared in android_jni_bridge.cpp; provides the host Application Context
 // as a fallback when KR2Activity is not available.
 extern jobject krkr_GetApplicationContext();
@@ -228,10 +245,13 @@ static jobject GetKR2ActInstance() {
 static std::string GetApkStoragePath() {
     JniMethodInfo methodInfo;
     jobject sInstance = GetKR2ActInstance();
+    if(sInstance == nullptr) {
+        return "";
+    }
     if(!JniHelper::getMethodInfo(methodInfo, "android/content/Context",
                                  "getApplicationInfo",
                                  "()Landroid/content/pm/ApplicationInfo;")) {
-        methodInfo.env->DeleteLocalRef(sInstance);
+        DeleteLocalRefIf(methodInfo.env, sInstance);
         return "";
     }
     jobject ApplicationInfo =
@@ -241,20 +261,31 @@ static std::string GetApkStoragePath() {
     jfieldID id_sourceDir = methodInfo.env->GetFieldID(
         clsApplicationInfo, "sourceDir", "Ljava/lang/String;");
     methodInfo.env->DeleteLocalRef(sInstance);
-    return JniHelper::jstring2string(
-        (jstring)methodInfo.env->GetObjectField(ApplicationInfo, id_sourceDir));
+    std::string result;
+    if(ApplicationInfo != nullptr && id_sourceDir != nullptr) {
+        result = JniHelper::jstring2string(
+            (jstring)methodInfo.env->GetObjectField(ApplicationInfo, id_sourceDir));
+    }
+    DeleteLocalRefIf(methodInfo.env, clsApplicationInfo);
+    DeleteLocalRefIf(methodInfo.env, ApplicationInfo);
+    return result;
 }
 
 static std::string GetPackageName() {
     JniMethodInfo methodInfo;
     jobject sInstance = GetKR2ActInstance();
+    if(sInstance == nullptr) {
+        return kFallbackPackageName;
+    }
     if(!JniHelper::getMethodInfo(methodInfo, "android/content/ContextWrapper",
                                  "getPackageName", "()Ljava/lang/String;")) {
-        methodInfo.env->DeleteLocalRef(sInstance);
-        return "";
+        DeleteLocalRefIf(methodInfo.env, sInstance);
+        return kFallbackPackageName;
     }
-    return JniHelper::jstring2string((jstring)methodInfo.env->CallObjectMethod(
-        sInstance, methodInfo.methodID));
+    std::string result = JniHelper::jstring2string(
+        (jstring)methodInfo.env->CallObjectMethod(sInstance, methodInfo.methodID));
+    methodInfo.env->DeleteLocalRef(sInstance);
+    return result.empty() ? kFallbackPackageName : result;
 }
 
 // from unzip.cpp
@@ -383,14 +414,21 @@ static std::string File_getAbsolutePath(jobject FileObj) {
 
 static std::string GetInternalStoragePath() {
     jobject sInstance = GetKR2ActInstance();
+    if(sInstance == nullptr) {
+        return FallbackInternalStoragePath();
+    }
     JniMethodInfo methodInfo;
     if(!JniHelper::getMethodInfo(methodInfo, "android/content/ContextWrapper",
                                  "getFilesDir", "()Ljava/io/File;")) {
-        return "";
+        DeleteLocalRefIf(methodInfo.env, sInstance);
+        return FallbackInternalStoragePath();
     }
     jobject FileObj =
         methodInfo.env->CallObjectMethod(sInstance, methodInfo.methodID);
-    return File_getAbsolutePath(FileObj);
+    std::string result = File_getAbsolutePath(FileObj);
+    DeleteLocalRefIf(methodInfo.env, FileObj);
+    methodInfo.env->DeleteLocalRef(sInstance);
+    return result.empty() ? FallbackInternalStoragePath() : result;
 }
 
 std::string Android_GetDumpStoragePath() {
@@ -413,6 +451,11 @@ static int GetExternalStoragePath(std::vector<std::string> &ret) {
     int count = 0;
     JniMethodInfo methodInfo;
     jobject sInstance = GetKR2ActInstance();
+    if(sInstance == nullptr) {
+        ret.emplace_back(FallbackInternalStoragePath());
+        ret.emplace_back("/storage/emulated/0");
+        return 2;
+    }
     // 	if (JniHelper::getMethodInfo(methodInfo,
     // "android/content/Context", "getExternalMediaDirs",
     // "()[Ljava/io/File;")) { 		jobjectArray FileObjs =
@@ -437,12 +480,16 @@ static int GetExternalStoragePath(std::vector<std::string> &ret) {
             ++count;
         }
     }
+    DeleteLocalRefIf(methodInfo.env, sInstance);
     return count;
 }
 
 std::vector<std::string> TVPGetAppStoragePath() {
     std::vector<std::string> ret;
-    ret.emplace_back(GetInternalStoragePath());
+    std::string internal = GetInternalStoragePath();
+    if(!internal.empty()) {
+        ret.emplace_back(internal);
+    }
     GetExternalStoragePath(ret);
     return ret;
 }
@@ -451,7 +498,8 @@ std::vector<std::string> TVPGetDriverPath() {
     std::vector<std::string> ret;
     jobject sInstance = GetKR2ActInstance();
     JniMethodInfo methodInfo;
-    if(JniHelper::getMethodInfo(methodInfo, KR2ActJavaPath, "getStoragePath",
+    if(sInstance != nullptr &&
+       JniHelper::getMethodInfo(methodInfo, KR2ActJavaPath, "getStoragePath",
                                 "()[Ljava/lang/String;")) {
         jobjectArray PathObjs = (jobjectArray)methodInfo.env->CallObjectMethod(
             sInstance, methodInfo.methodID);
@@ -465,6 +513,7 @@ std::vector<std::string> TVPGetDriverPath() {
             }
         }
     }
+    DeleteLocalRefIf(methodInfo.env, sInstance);
 
     if(!ret.empty())
         return ret;
@@ -1142,9 +1191,17 @@ void TVPControlAdDialog(int adType, int arg1, int arg2) {
 
 static int _GetAndroidSDKVersion() {
     JNIEnv *pEnv = JniHelper::getEnv();
+    if(pEnv == nullptr) return 0;
     jclass classID = pEnv->FindClass("android/os/Build$VERSION");
+    if(classID == nullptr) return 0;
     jfieldID idSDK_INT = pEnv->GetStaticFieldID(classID, "SDK_INT", "I");
-    return pEnv->GetStaticIntField(classID, idSDK_INT);
+    if(idSDK_INT == nullptr) {
+        pEnv->DeleteLocalRef(classID);
+        return 0;
+    }
+    int result = pEnv->GetStaticIntField(classID, idSDK_INT);
+    pEnv->DeleteLocalRef(classID);
+    return result;
 }
 static int GetAndroidSDKVersion() {
     static int result = _GetAndroidSDKVersion();
@@ -1163,6 +1220,15 @@ bool TVPCheckStartupPath(const std::string &path) {
     if(pos == std::string::npos)
         return false;
     std::string parent = path.substr(0, pos);
+    if(JniHelper::getEnv() == nullptr) {
+        std::string savePath = parent + "/savedata";
+        if(!TVPCheckExistentLocalFolder(savePath)) {
+            TVPCreateFolders(savePath);
+        }
+        return access(parent.c_str(), W_OK) == 0 ||
+               TVPCheckExistentLocalFolder(savePath);
+    }
+
     JniMethodInfo methodInfo;
     bool success = false;
     if(JniHelper::getStaticMethodInfo(

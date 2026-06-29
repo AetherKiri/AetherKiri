@@ -14,6 +14,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 #include "tjsArray.h"
 #include "LayerManager.h"
@@ -35,12 +38,22 @@
 
 namespace {
 bool TVPInputTraceEnabled() {
-    static const bool enabled = [] {
-        const char *value = std::getenv("AETHERKIRI_INPUT_TRACE");
-        return value && *value && *value != '0';
-    }();
-    return enabled;
+    const char *value = std::getenv("AETHERKIRI_INPUT_TRACE");
+    return value && *value && *value != '0';
 }
+
+#ifdef __ANDROID__
+#define AETHER_INPUT_TRACE_LOG(...)                                             \
+    do {                                                                        \
+        if(TVPInputTraceEnabled()) {                                            \
+            __android_log_print(ANDROID_LOG_INFO, "aether-input", __VA_ARGS__); \
+        }                                                                       \
+    } while(0)
+#else
+#define AETHER_INPUT_TRACE_LOG(...)                                             \
+    do {                                                                        \
+    } while(0)
+#endif
 
 void TVPTraceExpressionValue(const char *name, const tjs_char *expression) {
     try {
@@ -255,6 +268,13 @@ void TVPTraceLayerHit(const char *event, tjs_int x, tjs_int y,
     if(!TVPInputTraceEnabled()) return;
     if(layer) {
         const auto action_owner = layer->GetActionOwnerNoAddRef();
+        AETHER_INPUT_TRACE_LOG(
+            "LayerManager %s hit primary=(%d,%d) layer=%s overall=%d rect=%dx%d+%d+%d visible=%d/%d enabled=%d action=%d",
+            event, x, y, layer->GetName().AsStdString().c_str(),
+            layer->GetOverallOrderIndex(), layer->GetWidth(),
+            layer->GetHeight(), layer->GetLeft(), layer->GetTop(),
+            layer->GetVisible() ? 1 : 0, layer->GetNodeVisible() ? 1 : 0,
+            layer->GetNodeEnabled() ? 1 : 0, action_owner.Object ? 1 : 0);
         spdlog::info("LayerManager {} hit primary=({}, {}) layer={} overall={} rect={}x{}+{}+{} self_visible={} visible={} enabled={} action={}",
                      event, x, y, layer->GetName().AsStdString(),
                      layer->GetOverallOrderIndex(),
@@ -264,6 +284,8 @@ void TVPTraceLayerHit(const char *event, tjs_int x, tjs_int y,
                      layer->GetNodeEnabled() ? "yes" : "no",
                      action_owner.Object ? "yes" : "no");
     } else {
+        AETHER_INPUT_TRACE_LOG("LayerManager %s hit primary=(%d,%d) layer=<none>",
+                               event, x, y);
         spdlog::info("LayerManager {} hit primary=({}, {}) layer=<none>",
                      event, x, y);
     }
@@ -299,6 +321,17 @@ void TVPTraceLayersAt(tTVPLayerManager *manager, const char *reason,
             TVPTraceLayerImageSampleInfo(candidate);
         const std::string child_samples =
             TVPTraceLayerChildrenInfo(candidate);
+        AETHER_INPUT_TRACE_LOG(
+            "LayerManager stack %s layer=%s parent=%s order=%d/%d local=(%d,%d) size=%dx%d pos=(%d,%d) vis=%d/%d en=%d opacity=%d pixel=%d action=%d",
+            reason, candidate->GetName().AsStdString().c_str(),
+            parent_name.c_str(), candidate->GetOrderIndex(),
+            candidate->GetOverallOrderIndex(), local_x, local_y,
+            candidate->GetWidth(), candidate->GetHeight(),
+            candidate->GetLeft(), candidate->GetTop(),
+            candidate->GetVisible() ? 1 : 0,
+            candidate->GetNodeVisible() ? 1 : 0,
+            candidate->GetNodeEnabled() ? 1 : 0, candidate->GetOpacity(),
+            pixel_hit ? 1 : 0, action_owner.Object ? 1 : 0);
         spdlog::info("  layer={} parent={} order={} overall={} local=({}, {}) size={}x{} pos=({}, {}) type={} display_type={} has_image={} image_samples={} child_samples={} children={} visible_children={} in_transition={} trans_children={} self_visible={} visible={} enabled={} opacity={} pixel={} action={}",
                      candidate->GetName().AsStdString(), parent_name,
                      candidate->GetOrderIndex(),
