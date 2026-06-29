@@ -3757,7 +3757,7 @@ func _quit_after_runtime_exit() -> void:
         player.release_frame_texture()
         player.destroy_engine()
     var exit_func = func():
-        if OS.get_name() == "iOS":
+        if OS.get_name() == "iOS" or OS.get_name() == "Android":
             OS.kill(OS.get_process_id())
         else:
             get_tree().quit(0)
