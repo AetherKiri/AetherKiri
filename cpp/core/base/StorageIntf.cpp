@@ -793,6 +793,8 @@ ttstr tTVPStorageMediaManager::ExtractMediaName(const ttstr &name) {
 bool tTVPStorageMediaManager::CheckExistentStorage(const ttstr &name) {
     // gateway for CheckExistentStorage
     // name must not be an in-archive storage name
+    if(name.IsEmpty())
+        return false;
     tMediaRecord *rec = GetMediaRecord(name);
     return rec->MediaIntf.GetObjectNoAddRef()->CheckExistentStorage(
         rec->GetDomainAndPath(name));

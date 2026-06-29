@@ -1442,7 +1442,16 @@ tTJSNativeClass *TVPCreateNativeClass_Storages() {
             return TJS_E_BADPARAMCOUNT;
 
         if(result) {
-            ttstr str(TVPNormalizeStorageName(*param[0]));
+            ttstr str(*param[0]);
+            if(str.IsEmpty()) {
+                *result = TJS_W("");
+                return TJS_S_OK;
+            }
+            str = TVPNormalizeStorageName(str);
+            if(str.IsEmpty()) {
+                *result = TJS_W("");
+                return TJS_S_OK;
+            }
             TVPGetLocalName(str);
             *result = str;
         }

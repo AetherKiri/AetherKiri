@@ -22,6 +22,7 @@ vcpkg_installed/
 *.md
 !README.md
 !README.zh-CN.md
+!THIRD_PARTY_LICENSES.md
 !doc/verified_games.md
 !doc/verified_games.zh-CN.md
 *.lock
