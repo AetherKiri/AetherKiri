@@ -62,6 +62,11 @@ AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
     tjs_int y,
     tjs_int width,
     tjs_int height);
+extern "C" bool AetherKiriMotionShowCenteredPresentationHoldOverlay(
+    tTJSNI_BaseLayer *layer);
+extern "C" void AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(
+    tTJSNI_BaseLayer *layer);
+extern "C" void AetherKiriMotionTickCenteredPresentationHoldOverlays();
 
 extern void TVPSetFontRasterizer(tjs_int index);
 
@@ -2947,6 +2952,8 @@ void tTJSNI_BaseLayer::SetVisible(bool st) {
         if(st && _bitmapEvicted)
             EnsureBitmap();
         if(!st)
+            AetherKiriMotionShowCenteredPresentationHoldOverlay(this);
+        if(!st)
             Update();
         Visible = st;
         if(st)
@@ -2970,6 +2977,8 @@ void tTJSNI_BaseLayer::SetOpacity(tjs_int opa) {
             TVPThrowExceptionMessage(TVPCannotSetPrimaryInvisible);
         if(opa != 0 && Visible && _bitmapEvicted)
             EnsureBitmap();
+        if(opa == 0)
+            AetherKiriMotionShowCenteredPresentationHoldOverlay(this);
         Opacity = opa;
         if(Parent)
             Parent->NotifyChildrenVisualStateChanged();
@@ -9953,6 +9962,7 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
 
     InCompletion = false;
     AfterCompletion();
+    AetherKiriMotionTickCenteredPresentationHoldOverlays();
 }
 
 //---------------------------------------------------------------------------
@@ -12274,6 +12284,7 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             TVPThrowExceptionMessage(TVPSpecifyLayer);
 
         _this->AssignImages(src);
+        AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(_this);
         AetherKiriMotionRestoreCenteredPresentationLayer(_this);
 
         return TJS_S_OK;
