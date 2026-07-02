@@ -53,6 +53,16 @@
 #include "RenderManager.h"
 #include "FontImpl.h"
 
+extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
+    tTJSNI_BaseLayer *layer);
+extern "C" bool
+AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
+    tTJSNI_BaseLayer *layer,
+    tjs_int x,
+    tjs_int y,
+    tjs_int width,
+    tjs_int height);
+
 extern void TVPSetFontRasterizer(tjs_int index);
 
 extern tjs_int TVPGetFontRasterizer();
@@ -11040,9 +11050,19 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             return TJS_E_BADPARAMCOUNT;
         tjs_int x = *param[0];
         tjs_int y = *param[1];
+        const auto fillColor = static_cast<tjs_uint32>(
+            static_cast<tjs_int64>(*param[4]));
+        const bool transparentFill = (fillColor & 0xff000000u) == 0;
+        if(transparentFill) {
+            AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
+                _this, x, y, (tjs_int)*param[2], (tjs_int)*param[3]);
+        }
         _this->FillRect(
             tTVPRect(x, y, x + (tjs_int)*param[2], y + (tjs_int)*param[3]),
-            static_cast<tjs_uint32>(static_cast<tjs_int64>(*param[4])));
+            fillColor);
+        if(transparentFill) {
+            AetherKiriMotionRestoreCenteredPresentationLayer(_this);
+        }
         return TJS_S_OK;
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ fillRect)
@@ -12254,6 +12274,7 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             TVPThrowExceptionMessage(TVPSpecifyLayer);
 
         _this->AssignImages(src);
+        AetherKiriMotionRestoreCenteredPresentationLayer(_this);
 
         return TJS_S_OK;
     }

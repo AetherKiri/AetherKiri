@@ -3,6 +3,7 @@
 //
 #include "PlayerInternal.h"
 #include "ConfigManager/IndividualConfigManager.h"
+#include "TickCount.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -2536,6 +2537,249 @@ namespace {
         return true;
     }
 
+    bool centeredGameMotionPresentationLayerShouldPassHit(
+        tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return false;
+        }
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        return name == "ev" || name == "trans_ev" ||
+            name == "sd" || name == "trans_sd";
+    }
+
+    void configureCenteredGameMotionPresentationHitPassthrough(
+        tTJSNI_BaseLayer *layer) {
+        if(!centeredGameMotionPresentationLayerShouldPassHit(layer)) {
+            return;
+        }
+        layer->SetHitType(htMask);
+        layer->SetHitThreshold(256);
+    }
+
+    bool centeredGameMotionStablePresentationLayer(tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return false;
+        }
+        const auto name =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        return name == "ev" || name == "sd";
+    }
+
+    struct CenteredPresentationHoldEntry {
+        tTJSVariant layer;
+        std::shared_ptr<tTVPBaseBitmap> bitmap;
+        std::string motion;
+        std::string layerName;
+        tjs_int width = 0;
+        tjs_int height = 0;
+        tjs_uint64 holdUntilTick = 0;
+    };
+
+    constexpr tjs_uint64 kCenteredPresentationHoldDurationMs = 450;
+
+    using CenteredPresentationHoldCache =
+        std::unordered_map<tTJSNI_BaseLayer *, CenteredPresentationHoldEntry>;
+
+    CenteredPresentationHoldCache &centeredPresentationHoldCache() {
+        static CenteredPresentationHoldCache cache;
+        return cache;
+    }
+
+    CenteredPresentationHoldEntry *findCenteredPresentationHoldEntry(
+        tTJSNI_BaseLayer *layer,
+        const std::string &motionPath) {
+        if(!layer) {
+            return nullptr;
+        }
+
+        auto &cache = centeredPresentationHoldCache();
+        if(auto exact = cache.find(layer);
+           exact != cache.end() && exact->second.motion == motionPath &&
+           exact->second.bitmap) {
+            return &exact->second;
+        }
+
+        const auto layerName =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        for(auto &entry : cache) {
+            if(entry.second.motion == motionPath &&
+               entry.second.layerName == layerName &&
+               entry.second.bitmap) {
+                return &entry.second;
+            }
+        }
+        return nullptr;
+    }
+
+    CenteredPresentationHoldEntry *findLiveCenteredPresentationHoldEntry(
+        tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return nullptr;
+        }
+
+        const auto now = TVPGetTickCount();
+        auto usable = [now](const CenteredPresentationHoldEntry &entry) {
+            return entry.bitmap && entry.width > 0 && entry.height > 0 &&
+                entry.holdUntilTick >= now;
+        };
+
+        auto &cache = centeredPresentationHoldCache();
+        if(auto exact = cache.find(layer);
+           exact != cache.end() && usable(exact->second)) {
+            return &exact->second;
+        }
+
+        const auto layerName =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        for(auto &entry : cache) {
+            if(entry.second.layerName == layerName && usable(entry.second)) {
+                return &entry.second;
+            }
+        }
+        return nullptr;
+    }
+
+    bool hasCenteredPresentationHoldHistoryForLayer(
+        tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return false;
+        }
+
+        auto &cache = centeredPresentationHoldCache();
+        if(auto exact = cache.find(layer);
+           exact != cache.end() && exact->second.bitmap) {
+            return true;
+        }
+
+        const auto layerName =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        for(const auto &entry : cache) {
+            if(entry.second.layerName == layerName && entry.second.bitmap) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    CenteredPresentationHoldEntry *
+    captureCenteredPresentationHoldLayerSamples(
+        tTJSNI_BaseLayer *layer,
+        const std::string &motionPath) {
+        if(!centeredGameMotionStablePresentationLayer(layer) ||
+           !motionPresentationLayerHasVisibleSamples(layer)) {
+            return nullptr;
+        }
+        auto *image = layer->GetMainImage();
+        if(!image || image->GetWidth() <= 0 || image->GetHeight() <= 0) {
+            return nullptr;
+        }
+
+        const tjs_int width = static_cast<tjs_int>(image->GetWidth());
+        const tjs_int height = static_cast<tjs_int>(image->GetHeight());
+        auto &cache = centeredPresentationHoldCache();
+        auto &entry = cache[layer];
+        if(!entry.bitmap || entry.width != width || entry.height != height) {
+            entry.bitmap = std::make_shared<tTVPBaseBitmap>(
+                static_cast<tjs_uint>(width),
+                static_cast<tjs_uint>(height), 32);
+            entry.width = width;
+            entry.height = height;
+        }
+
+        entry.layerName =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        if(!motionPath.empty()) {
+            entry.motion = motionPath;
+        } else if(entry.motion.empty()) {
+            for(const auto &cached : cache) {
+                if(cached.second.layerName == entry.layerName &&
+                   !cached.second.motion.empty()) {
+                    entry.motion = cached.second.motion;
+                    break;
+                }
+            }
+        }
+        entry.holdUntilTick = std::max(
+            entry.holdUntilTick,
+            TVPGetTickCount() + kCenteredPresentationHoldDurationMs);
+        entry.bitmap->Fill(tTVPRect(0, 0, width, height), 0x00000000);
+        entry.bitmap->CopyRect(0, 0, image, tTVPRect(0, 0, width, height));
+        return &entry;
+    }
+
+    bool copyCenteredPresentationHoldEntryToLayer(
+        tTJSNI_BaseLayer *layer,
+        CenteredPresentationHoldEntry &entry,
+        int canvasWidth,
+        int canvasHeight) {
+        if(!layer || !entry.bitmap || entry.width <= 0 || entry.height <= 0) {
+            return false;
+        }
+
+        const int restoreWidth =
+            std::max<int>(canvasWidth, static_cast<int>(entry.width));
+        const int restoreHeight =
+            std::max<int>(canvasHeight, static_cast<int>(entry.height));
+        if(!prepareMotionPresentationLayerForRender(layer, restoreWidth,
+                                                    restoreHeight)) {
+            return false;
+        }
+
+        try {
+            const tTVPRect sourceRect(0, 0, entry.width, entry.height);
+            layer->CopyRect(0, 0, entry.bitmap.get(), nullptr, sourceRect);
+            configureCenteredGameMotionPresentationHitPassthrough(layer);
+            entry.holdUntilTick = std::max(
+                entry.holdUntilTick,
+                TVPGetTickCount() + kCenteredPresentationHoldDurationMs);
+            layer->Update(false);
+        } catch(...) {
+            return false;
+        }
+        return true;
+    }
+
+    void captureCenteredPresentationHoldFrame(
+        iTJSDispatch2 *layerObject,
+        tTJSNI_BaseLayer *layer,
+        const std::string &motionPath) {
+        if(!layerObject) {
+            return;
+        }
+        if(!isCenteredGameMotion(motionPath)) {
+            return;
+        }
+        auto *entry = captureCenteredPresentationHoldLayerSamples(
+            layer, motionPath);
+        if(!entry) {
+            return;
+        }
+
+        entry->layer =
+            tTJSVariant(layerObject, layerObject);
+    }
+
+    bool restoreCenteredPresentationHoldFrame(
+        tTJSNI_BaseLayer *layer,
+        const std::string &motionPath,
+        int canvasWidth,
+        int canvasHeight) {
+        if(!centeredGameMotionStablePresentationLayer(layer) ||
+           !isCenteredGameMotion(motionPath) || !layer->GetParentVisible()) {
+            return false;
+        }
+
+        auto *entry = findCenteredPresentationHoldEntry(layer, motionPath);
+        if(!entry || !entry->bitmap || entry->motion != motionPath ||
+           entry->width <= 0 || entry->height <= 0) {
+            return false;
+        }
+
+        return copyCenteredPresentationHoldEntryToLayer(
+            layer, *entry, canvasWidth, canvasHeight);
+    }
+
     iTJSDispatch2 *ensureYuzuTitlePresentationRenderLayer(
         motion::detail::PlayerRuntime &runtime,
         iTJSDispatch2 *layerTreeOwnerObject,
@@ -3034,6 +3278,90 @@ namespace {
     }
 
 } // namespace
+
+extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
+    tTJSNI_BaseLayer *layer) {
+    const bool trace = std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG") != nullptr;
+    auto logReturn = [&](const char *reason, bool result) {
+        if(trace && LOGGER && centeredGameMotionPresentationLayerShouldPassHit(layer)) {
+            LOGGER->info(
+                "motion centered restore hook layer=[{}] reason={} result={}",
+                describeLayerForDebug(layer), reason ? reason : "<null>",
+                result ? 1 : 0);
+        }
+        return result;
+    };
+    if(!centeredGameMotionStablePresentationLayer(layer)) {
+        return logReturn("not-centered-stable", false);
+    }
+    if(layer->GetParentVisible()) {
+        return logReturn("parent-visible", false);
+    }
+    if(motionPresentationLayerHasVisibleSamples(layer)) {
+        return logReturn("already-visible", false);
+    }
+
+    auto *entry = findLiveCenteredPresentationHoldEntry(layer);
+    if(!entry) {
+        return logReturn("no-live-entry", false);
+    }
+
+    const int canvasWidth = std::max<tjs_int>(
+        std::max<tjs_int>(layer->GetImageWidth(), layer->GetWidth()),
+        entry->width);
+    const int canvasHeight = std::max<tjs_int>(
+        std::max<tjs_int>(layer->GetImageHeight(), layer->GetHeight()),
+        entry->height);
+    const bool restored = copyCenteredPresentationHoldEntryToLayer(
+        layer, *entry, canvasWidth, canvasHeight);
+    return logReturn(restored ? "restored" : "copy-failed", restored);
+}
+
+extern "C" bool
+AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
+    tTJSNI_BaseLayer *layer,
+    tjs_int x,
+    tjs_int y,
+    tjs_int width,
+    tjs_int height) {
+    const bool trace = std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG") != nullptr;
+    auto logReturn = [&](const char *reason, bool result) {
+        if(trace && LOGGER &&
+           centeredGameMotionPresentationLayerShouldPassHit(layer)) {
+            LOGGER->info(
+                "motion centered preserve hook layer=[{}] reason={} result={}",
+                describeLayerForDebug(layer), reason ? reason : "<null>",
+                result ? 1 : 0);
+        }
+        return result;
+    };
+    if(!centeredGameMotionStablePresentationLayer(layer)) {
+        return logReturn("not-centered-stable", false);
+    }
+    if(layer->GetParentVisible()) {
+        return logReturn("parent-visible", false);
+    }
+    if(!hasCenteredPresentationHoldHistoryForLayer(layer)) {
+        return logReturn("no-history", false);
+    }
+    if(width <= 0 || height <= 0 || x > 0 || y > 0) {
+        return logReturn("partial-clear", false);
+    }
+
+    const tjs_int coveredWidth = x + width;
+    const tjs_int coveredHeight = y + height;
+    const tjs_int requiredWidth = std::max<tjs_int>(
+        layer->GetImageWidth(), layer->GetWidth());
+    const tjs_int requiredHeight = std::max<tjs_int>(
+        layer->GetImageHeight(), layer->GetHeight());
+    if(coveredWidth < requiredWidth || coveredHeight < requiredHeight) {
+        return logReturn("partial-clear", false);
+    }
+
+    auto *entry = captureCenteredPresentationHoldLayerSamples(layer, "");
+    return logReturn(entry ? "preserved" : "no-visible-samples",
+                     entry != nullptr);
+}
 
 namespace motion {
 
@@ -4560,6 +4888,9 @@ namespace motion {
             isYuzuTitlePresentationMotion(motionPath);
         const bool yuzuLogoPresentation =
             isYuzuLogoPresentationMotion(motionPath);
+        const bool centeredGamePresentation =
+            !yuzuTitlePresentation && !yuzuLogoPresentation &&
+            isCenteredGameMotion(motionPath);
         if(yuzuTitlePresentation && _runtime->activeMotion &&
            _runtime->activeMotion->width > 0 &&
            _runtime->activeMotion->height > 0) {
@@ -4613,6 +4944,15 @@ namespace motion {
                         describeLayerForDebug(finalNativeLayer),
                         allowTransientPresentationLayer ? 1 : 0);
                 }
+            }
+        }
+        if(centeredGamePresentation) {
+            configureCenteredGameMotionPresentationHitPassthrough(
+                finalNativeLayer);
+            if(finalLayerObject && finalNativeLayer &&
+               !motionPresentationLayerHasVisibleSamples(finalNativeLayer)) {
+                restoreCenteredPresentationHoldFrame(
+                    finalNativeLayer, motionPath, canvasWidth, canvasHeight);
             }
         }
         ensureNodeTreeBuilt();
@@ -4692,6 +5032,13 @@ namespace motion {
             usingPresentationTarget && renderLayerObject == finalLayerObject &&
             !yuzuTitlePresentation && !yuzuLogoPresentation;
         if(clearGenericPresentationLayer && _runtime->renderCommands.empty()) {
+            if(centeredGamePresentation &&
+               restoreCenteredPresentationHoldFrame(
+                   finalNativeLayer, motionPath, canvasWidth, canvasHeight)) {
+                _runtime->lastCanvas =
+                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                return true;
+            }
             if(LOGGER && shouldDebugTitleRender(motionPath) &&
                markRenderDebugLogged("presentation-skip-empty-generic:" +
                                      motionPath)) {
@@ -4843,6 +5190,13 @@ namespace motion {
         }
 
         if(!executeLayerRenderCommands(renderLayerObject, true)) {
+            if(centeredGamePresentation &&
+               restoreCenteredPresentationHoldFrame(
+                   finalNativeLayer, motionPath, canvasWidth, canvasHeight)) {
+                _runtime->lastCanvas =
+                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                return true;
+            }
             _runtime->invalidatePresentationRenderTarget(renderLayerObject);
             invalidateGlobalPresentationRenderTarget(renderLayerObject);
             return false;
@@ -4908,6 +5262,23 @@ namespace motion {
 	                    motionPath, "post.layer", "0x6CE7D8", _clampedEvalTime,
 	                    "targetLayer.Update(false) size={}x{}",
                     layer->GetWidth(), layer->GetHeight());
+            }
+            if(centeredGamePresentation) {
+                finalNativeLayer = resolveNativeLayer(finalLayerObject);
+                configureCenteredGameMotionPresentationHitPassthrough(
+                    finalNativeLayer);
+                bool centeredPresentationVisible = false;
+                if(motionPresentationLayerHasVisibleSamples(finalNativeLayer)) {
+                    captureCenteredPresentationHoldFrame(
+                        finalLayerObject, finalNativeLayer, motionPath);
+                    centeredPresentationVisible = true;
+                } else {
+                    centeredPresentationVisible =
+                        restoreCenteredPresentationHoldFrame(
+                            finalNativeLayer, motionPath, canvasWidth,
+                            canvasHeight);
+                }
+                (void)centeredPresentationVisible;
             }
         }
         if(bypassInternalAssignForYuzuTitle) {
