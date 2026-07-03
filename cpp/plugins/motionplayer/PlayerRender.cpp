@@ -895,19 +895,6 @@ namespace {
         const float height = bounds[3] - bounds[1];
         const float canvasW = static_cast<float>(canvasWidth);
         const float canvasH = static_cast<float>(canvasHeight);
-        if(LOGGER && shouldDebugTitleRender(motionPath) &&
-           markRenderDebugLogged("centered-game-motion-candidate:" + motionPath)) {
-            LOGGER->info(
-                "motion centered game presentation candidate: motion={} bounds=[{:.1f},{:.1f},{:.1f},{:.1f}] size={:.1f}x{:.1f} canvas={}x{} preparedItems={}",
-                motionPath, bounds[0], bounds[1], bounds[2], bounds[3],
-                width, height, canvasWidth, canvasHeight,
-                runtime.preparedRenderItems.size());
-        }
-        if(width < canvasW * 0.08f || height < canvasH * 0.08f ||
-           width > canvasW * 0.90f || height > canvasH * 0.90f) {
-            return;
-        }
-
         const float currentCenterX = (bounds[0] + bounds[2]) * 0.5f;
         const float currentCenterY = (bounds[1] + bounds[3]) * 0.5f;
         const float originToleranceX = std::max(16.0f, canvasW * 0.02f);
@@ -920,6 +907,54 @@ namespace {
             bounds[2] > 0.0f && bounds[3] > 0.0f &&
             std::fabs(currentCenterX) <= originToleranceX &&
             std::fabs(currentCenterY) <= originToleranceY;
+        float stageWidth = width;
+        float stageHeight = height;
+        if(runtime.activeMotion) {
+            if(std::isfinite(runtime.activeMotion->width) &&
+               runtime.activeMotion->width > 0.0) {
+                stageWidth = static_cast<float>(runtime.activeMotion->width);
+            }
+            if(std::isfinite(runtime.activeMotion->height) &&
+               runtime.activeMotion->height > 0.0) {
+                stageHeight = static_cast<float>(runtime.activeMotion->height);
+            }
+        }
+        if(LOGGER && shouldDebugTitleRender(motionPath) &&
+           markRenderDebugLogged("centered-game-motion-candidate:" + motionPath)) {
+            LOGGER->info(
+                "motion centered game presentation candidate: motion={} bounds=[{:.1f},{:.1f},{:.1f},{:.1f}] size={:.1f}x{:.1f} canvas={}x{} stage={:.1f}x{:.1f} topLeft={} centered={} preparedItems={}",
+                motionPath, bounds[0], bounds[1], bounds[2], bounds[3],
+                width, height, canvasWidth, canvasHeight,
+                stageWidth, stageHeight,
+                topLeftOrigin ? 1 : 0, centeredOrigin ? 1 : 0,
+                runtime.preparedRenderItems.size());
+        }
+        const bool plausibleTopLeftStage =
+            topLeftOrigin &&
+            std::isfinite(stageWidth) && std::isfinite(stageHeight) &&
+            stageWidth > 0.0f && stageHeight > 0.0f &&
+            width <= stageWidth * 1.05f && height <= stageHeight * 1.05f;
+        const bool plausibleCenteredStage =
+            centeredOrigin &&
+            std::isfinite(stageWidth) && std::isfinite(stageHeight) &&
+            stageWidth > 0.0f && stageHeight > 0.0f &&
+            width <= stageWidth * 1.20f && height <= stageHeight * 1.20f;
+        if(width < canvasW * 0.08f || height < canvasH * 0.08f ||
+           ((!plausibleTopLeftStage && !plausibleCenteredStage) &&
+            (width > canvasW * 0.90f || height > canvasH * 0.90f))) {
+            if(LOGGER && shouldDebugTitleRender(motionPath) &&
+               std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG")) {
+                LOGGER->info(
+                    "motion centered game presentation skipped: motion={} reason=size bounds=[{:.1f},{:.1f},{:.1f},{:.1f}] size={:.1f}x{:.1f} canvas={}x{} stage={:.1f}x{:.1f} topLeft={} centered={} preparedItems={}",
+                    motionPath, bounds[0], bounds[1], bounds[2], bounds[3],
+                    width, height, canvasWidth, canvasHeight,
+                    stageWidth, stageHeight,
+                    topLeftOrigin ? 1 : 0, centeredOrigin ? 1 : 0,
+                    runtime.preparedRenderItems.size());
+            }
+            return;
+        }
+
         if(!topLeftOrigin && !centeredOrigin) {
             return;
         }
@@ -928,31 +963,32 @@ namespace {
             (std::isfinite(configuredResolution) && configuredResolution > 0.0)
                 ? static_cast<float>(100.0 / configuredResolution)
                 : 1.0f;
-        float scaledCenterX = currentCenterX;
-        float scaledCenterY = currentCenterY;
+        const float stageCenterX = topLeftOrigin ? stageWidth * 0.5f : 0.0f;
+        const float stageCenterY = topLeftOrigin ? stageHeight * 0.5f : 0.0f;
+        if(!std::isfinite(stageCenterX) || !std::isfinite(stageCenterY)) {
+            return;
+        }
         std::array<float, 4> scaledBounds = bounds;
         if(std::isfinite(motionScale) && motionScale > 0.0f &&
            std::fabs(motionScale - 1.0f) >= 0.0001f) {
             for(auto &entry : runtime.preparedRenderItems) {
-                scalePreparedRenderItem(entry, currentCenterX, currentCenterY,
+                scalePreparedRenderItem(entry, stageCenterX, stageCenterY,
                                         motionScale);
             }
-            scaledBounds[0] = currentCenterX +
-                (bounds[0] - currentCenterX) * motionScale;
-            scaledBounds[1] = currentCenterY +
-                (bounds[1] - currentCenterY) * motionScale;
-            scaledBounds[2] = currentCenterX +
-                (bounds[2] - currentCenterX) * motionScale;
-            scaledBounds[3] = currentCenterY +
-                (bounds[3] - currentCenterY) * motionScale;
-            scaledCenterX = (scaledBounds[0] + scaledBounds[2]) * 0.5f;
-            scaledCenterY = (scaledBounds[1] + scaledBounds[3]) * 0.5f;
+            scaledBounds[0] = stageCenterX +
+                (bounds[0] - stageCenterX) * motionScale;
+            scaledBounds[1] = stageCenterY +
+                (bounds[1] - stageCenterY) * motionScale;
+            scaledBounds[2] = stageCenterX +
+                (bounds[2] - stageCenterX) * motionScale;
+            scaledBounds[3] = stageCenterY +
+                (bounds[3] - stageCenterY) * motionScale;
         }
 
         const float targetCenterX = canvasW * 0.5f;
         const float targetCenterY = canvasH * 0.5f;
-        const float translateX = std::round(targetCenterX - scaledCenterX);
-        const float translateY = std::round(targetCenterY - scaledCenterY);
+        const float translateX = std::round(targetCenterX - stageCenterX);
+        const float translateY = std::round(targetCenterY - stageCenterY);
         if(std::fabs(translateX) < 0.5f && std::fabs(translateY) < 0.5f) {
             return;
         }
@@ -2583,6 +2619,7 @@ namespace {
     struct CenteredPresentationHoldEntry {
         tTJSVariant layer;
         tTJSVariant parentLayer;
+        tTJSVariant overlayParentLayer;
         tTJSVariant overlayLayer;
         std::shared_ptr<tTVPBaseBitmap> bitmap;
         std::string motion;
@@ -2604,11 +2641,17 @@ namespace {
         tjs_int opacity = 255;
         tjs_int orderIndex = 0;
         tjs_int absoluteOrderIndex = 0;
+        tjs_int overlayLeft = 0;
+        tjs_int overlayTop = 0;
+        tjs_int overlayOrderIndex = 0;
+        tjs_int overlayAbsoluteOrderIndex = 0;
         tjs_int primaryOrderIndex = 0;
         tjs_int primaryAbsoluteOrderIndex = 0;
         bool parentAbsoluteOrderMode = false;
+        bool overlayParentAbsoluteOrderMode = false;
         bool primaryAbsoluteOrderMode = false;
         bool hasGeometry = false;
+        bool hasOverlayGeometry = false;
         bool hasPrimaryGeometry = false;
         int overlayFramesRemaining = 0;
         tjs_uint64 capturedTick = 0;
@@ -2713,6 +2756,19 @@ namespace {
         return false;
     }
 
+    tTJSNI_BaseLayer *findCenteredPresentationOverlayAnchor(
+        tTJSNI_BaseLayer *layer) {
+        auto *anchor = layer;
+        while(anchor && anchor->GetParent()) {
+            auto *parent = anchor->GetParent();
+            if(parent->GetVisible() && parent->GetParentVisible()) {
+                return anchor;
+            }
+            anchor = parent;
+        }
+        return layer;
+    }
+
     CenteredPresentationHoldEntry *
     captureCenteredPresentationHoldLayerSamples(
         tTJSNI_BaseLayer *layer,
@@ -2763,6 +2819,33 @@ namespace {
                     tTJSVariant(parentObject, parentObject);
             }
         }
+        entry.overlayParentLayer.Clear();
+        entry.overlayLeft = entry.left;
+        entry.overlayTop = entry.top;
+        entry.overlayOrderIndex = entry.orderIndex;
+        entry.overlayAbsoluteOrderIndex = entry.absoluteOrderIndex;
+        entry.overlayParentAbsoluteOrderMode = entry.parentAbsoluteOrderMode;
+        entry.hasOverlayGeometry = false;
+        if(auto *anchor = findCenteredPresentationOverlayAnchor(layer)) {
+            if(auto *overlayParent = anchor->GetParent()) {
+                if(auto *overlayParentObject = overlayParent->GetOwnerNoAddRef()) {
+                    entry.overlayParentLayer =
+                        tTJSVariant(overlayParentObject, overlayParentObject);
+                    tjs_int parentPrimaryLeft = 0;
+                    tjs_int parentPrimaryTop = 0;
+                    overlayParent->ToPrimaryCoordinates(parentPrimaryLeft,
+                                                        parentPrimaryTop);
+                    entry.overlayLeft = entry.primaryLeft - parentPrimaryLeft;
+                    entry.overlayTop = entry.primaryTop - parentPrimaryTop;
+                    entry.overlayOrderIndex = anchor->GetOrderIndex();
+                    entry.overlayAbsoluteOrderIndex =
+                        anchor->GetAbsoluteOrderIndex();
+                    entry.overlayParentAbsoluteOrderMode =
+                        overlayParent->GetAbsoluteOrderMode();
+                    entry.hasOverlayGeometry = true;
+                }
+            }
+        }
         entry.hasGeometry = entry.layerWidth > 0 && entry.layerHeight > 0;
         entry.hasPrimaryGeometry = entry.hasGeometry;
         if(auto *primaryChild = layer) {
@@ -2810,13 +2893,14 @@ namespace {
         CenteredPresentationHoldEntry &entry,
         int canvasWidth,
         int canvasHeight,
-        bool usePrimaryPlacement = false) {
+        bool usePrimaryPlacement = false,
+        bool useOverlayPlacement = false) {
         const bool trace =
             std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG") != nullptr;
         auto fail = [&](const char *reason) {
             if(trace && LOGGER) {
                 LOGGER->info(
-                    "motion centered copy hold layer failed layer=[{}] reason={} entry={}x{} layerRect=[{},{} {}x{}] imagePos=[{},{}] clip=[{},{},{}x{}] usePrimary={}",
+                    "motion centered copy hold layer failed layer=[{}] reason={} entry={}x{} layerRect=[{},{} {}x{}] overlayRect=[{},{}] imagePos=[{},{}] clip=[{},{},{}x{}] usePrimary={} useOverlay={}",
                     describeLayerForDebug(layer),
                     reason ? reason : "<null>",
                     entry.width,
@@ -2825,13 +2909,16 @@ namespace {
                     entry.top,
                     entry.layerWidth,
                     entry.layerHeight,
+                    entry.overlayLeft,
+                    entry.overlayTop,
                     entry.imageLeft,
                     entry.imageTop,
                     entry.clipLeft,
                     entry.clipTop,
                     entry.clipWidth,
                     entry.clipHeight,
-                    usePrimaryPlacement ? 1 : 0);
+                    usePrimaryPlacement ? 1 : 0,
+                    useOverlayPlacement ? 1 : 0);
             }
             return false;
         };
@@ -2852,12 +2939,16 @@ namespace {
                 return fail("prepare-failed");
             }
 
-            const bool hasPlacement =
-                usePrimaryPlacement ? entry.hasPrimaryGeometry : entry.hasGeometry;
-            const tjs_int targetLeft =
-                usePrimaryPlacement ? entry.primaryLeft : entry.left;
-            const tjs_int targetTop =
-                usePrimaryPlacement ? entry.primaryTop : entry.top;
+            const bool hasPlacement = useOverlayPlacement
+                ? entry.hasOverlayGeometry
+                : (usePrimaryPlacement ? entry.hasPrimaryGeometry
+                                       : entry.hasGeometry);
+            const tjs_int targetLeft = useOverlayPlacement
+                ? entry.overlayLeft
+                : (usePrimaryPlacement ? entry.primaryLeft : entry.left);
+            const tjs_int targetTop = useOverlayPlacement
+                ? entry.overlayTop
+                : (usePrimaryPlacement ? entry.primaryTop : entry.top);
             if(hasPlacement) {
                 if(layer->GetLeft() != targetLeft ||
                    layer->GetTop() != targetTop) {
@@ -2939,13 +3030,18 @@ namespace {
         auto fail = [&](const char *reason) {
             if(trace && LOGGER) {
                 LOGGER->info(
-                    "motion centered copy hold overlay failed reason={} ref=[{}] refAncestry={} entryLayer={} entry={}x{} primary=[{},{} order={} absOrder={} absMode={}]",
+                    "motion centered copy hold overlay failed reason={} ref=[{}] refAncestry={} entryLayer={} entry={}x{} overlay=[{},{} order={} absOrder={} absMode={}] primary=[{},{} order={} absOrder={} absMode={}]",
                     reason ? reason : "<null>",
                     describeLayerForDebug(referenceLayer),
                     describeLayerAncestryForDebug(referenceLayer),
                     entry.layerName,
                     entry.width,
                     entry.height,
+                    entry.overlayLeft,
+                    entry.overlayTop,
+                    entry.overlayOrderIndex,
+                    entry.overlayAbsoluteOrderIndex,
+                    entry.overlayParentAbsoluteOrderMode ? 1 : 0,
                     entry.primaryLeft,
                     entry.primaryTop,
                     entry.primaryOrderIndex,
@@ -2956,12 +3052,14 @@ namespace {
         };
         try {
             if(!entry.bitmap || entry.width <= 0 || entry.height <= 0 ||
-               entry.parentLayer.Type() != tvtObject) {
+               (entry.overlayParentLayer.Type() != tvtObject &&
+                entry.parentLayer.Type() != tvtObject)) {
                 return fail("missing-entry");
             }
 
-            auto *parentObject =
-                resolvePrimaryAncestorLayerObject(referenceLayer);
+            auto *parentObject = entry.overlayParentLayer.Type() == tvtObject
+                ? entry.overlayParentLayer.AsObjectNoAddRef()
+                : nullptr;
             auto *owner = resolveMainWindowOwnerObject();
             if(!parentObject) {
                 auto *sourceParentObject = entry.parentLayer.AsObjectNoAddRef();
@@ -2976,14 +3074,17 @@ namespace {
                 if(!owner) {
                     return fail("no-owner");
                 }
-                parentObject = resolvePrimaryLayerObject(owner);
+                parentObject = resolvePrimaryAncestorLayerObject(referenceLayer);
+                if(!parentObject) {
+                    parentObject = resolvePrimaryLayerObject(owner);
+                }
             } else if(!owner) {
                 return fail("no-owner");
             }
             auto *parentLayer = resolveNativeLayer(parentObject);
             if(!parentObject || !parentLayer || !parentLayer->GetVisible() ||
                !parentLayer->GetParentVisible()) {
-                return fail("no-visible-primary");
+                return fail("no-visible-overlay-parent");
             }
 
             auto *overlayObject = ensureReusableLayerObject(
@@ -2992,7 +3093,9 @@ namespace {
                 parentObject,
                 static_cast<tTVPLayerType>(ltAlpha),
                 true,
-                entry.primaryAbsoluteOrderMode);
+                entry.overlayParentLayer.Type() == tvtObject
+                    ? entry.overlayParentAbsoluteOrderMode
+                    : entry.primaryAbsoluteOrderMode);
             auto *overlayLayer = resolveNativeLayer(overlayObject);
             if(!overlayObject || !overlayLayer) {
                 return fail("ensure-overlay-failed");
@@ -3001,18 +3104,28 @@ namespace {
             overlayLayer->SetName(TJS_W("AetherKiriCenteredPresentationHold"));
             overlayLayer->SetHitType(htMask);
             overlayLayer->SetHitThreshold(256);
-            if(entry.primaryAbsoluteOrderMode) {
+            if(entry.overlayParentLayer.Type() == tvtObject &&
+               entry.overlayParentAbsoluteOrderMode) {
+                overlayLayer->SetAbsoluteOrderIndex(
+                    entry.overlayAbsoluteOrderIndex + 1);
+            } else if(entry.overlayParentLayer.Type() != tvtObject &&
+                      entry.primaryAbsoluteOrderMode) {
                 overlayLayer->SetAbsoluteOrderIndex(
                     entry.primaryAbsoluteOrderIndex + 1);
             } else {
                 const auto maxIndex =
                     std::max<tjs_int>(0, parentLayer->GetCount() - 1);
+                const auto targetOrder = entry.overlayParentLayer.Type() == tvtObject
+                    ? entry.overlayOrderIndex + 1
+                    : entry.primaryOrderIndex + 1;
                 overlayLayer->SetOrderIndex(
-                    std::min<tjs_int>(entry.primaryOrderIndex + 1, maxIndex));
+                    std::min<tjs_int>(targetOrder, maxIndex));
             }
 
             if(!copyCenteredPresentationHoldEntryToLayer(
-                   overlayLayer, entry, entry.width, entry.height, true)) {
+                   overlayLayer, entry, entry.width, entry.height,
+                   entry.overlayParentLayer.Type() != tvtObject,
+                   entry.overlayParentLayer.Type() == tvtObject)) {
                 return fail("copy-to-overlay-layer-failed");
             }
             entry.overlayFramesRemaining =
