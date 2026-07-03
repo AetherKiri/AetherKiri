@@ -2062,27 +2062,40 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
         "runtime requested termination");
   }
 
-  // Mark that a frame was rendered this tick (for IOSurface mode notification)
-  impl->frame.rendered_this_tick = true;
+  impl->frame.rendered_this_tick = false;
 
   // In IOSurface mode, the engine renders directly to the shared IOSurface
   // via the FBO — no need for glReadPixels. Skip the expensive readback.
   if (impl->render.native_window_attached) {
     // Android WindowSurface mode — TVPForceSwapBuffer() (called by
-    // TVPDrawSceneOnce above) already performed eglSwapBuffers to deliver
-    // the frame to the host external texture. Just update frame tracking.
+    // TVPDrawSceneOnce above) only swaps when UpdateDrawBuffer produced new
+    // content, so follow the presented serial instead of advancing per tick.
+#if defined(__ANDROID__) && defined(KRKR_ENABLE_GPU_BRIDGE)
+    const uint64_t presented_serial =
+        krkr::GetEngineEGLContext().GetPresentedFrameSerial();
+    if (presented_serial != impl->frame.serial) {
+      impl->frame.serial = presented_serial;
+      impl->frame.rendered_this_tick = true;
+    }
+    impl->frame.ready = impl->frame.serial != 0;
+#else
     impl->frame.serial += 1;
     impl->frame.ready = true;
+    impl->frame.rendered_this_tick = true;
+#endif
   } else if (!impl->render.iosurface_attached) {
     // GodotNative/DebugCpu host path: BasicDrawDevice handed the final
     // composited texture to HostWindowLayer::UpdateDrawBuffer().
+    const uint64_t previous_serial = impl->frame.serial;
     if (CaptureGodotNativeGpuFrameLocked(impl)) {
+      impl->frame.rendered_this_tick = impl->frame.serial != previous_serial;
       log_tick_spike("godot_native_gpu");
       ClearHandleErrorLocked(impl);
       SetThreadError(nullptr);
       return ENGINE_RESULT_OK;
     }
     if (CopyHostFrameLocked(impl)) {
+      impl->frame.rendered_this_tick = impl->frame.serial != previous_serial;
       log_tick_spike("host_copy");
       ClearHandleErrorLocked(impl);
       SetThreadError(nullptr);
@@ -2105,6 +2118,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
       impl->frame.stride_bytes = layout.stride_bytes;
       impl->frame.ready = true;
       impl->frame.serial += 1;
+      impl->frame.rendered_this_tick = true;
     } else if (!impl->frame.ready && required_size > 0) {
       std::fill(impl->frame.rgba.begin(), impl->frame.rgba.end(), 0);
       impl->frame.width = layout.width;
@@ -2112,6 +2126,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
       impl->frame.stride_bytes = layout.stride_bytes;
       impl->frame.ready = true;
       impl->frame.serial += 1;
+      impl->frame.rendered_this_tick = true;
     }
   } else {
     // IOSurface mode — just increment frame serial, no readback needed.
@@ -2121,6 +2136,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
 #endif
     impl->frame.serial += 1;
     impl->frame.ready = true;
+    impl->frame.rendered_this_tick = true;
   }
 
   ClearHandleErrorLocked(impl);

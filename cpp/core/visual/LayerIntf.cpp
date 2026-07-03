@@ -9947,7 +9947,18 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
         Manager->GetLayerTreeOwner()->StartBitmapCompletion(Manager);
     try {
         if(IsGPU()) {
-            InternalComplete2_GPU(Rect, drawable);
+            if(Manager) {
+                tTVPComplexRect &updateRegion =
+                    Manager->GetUpdateRegionForCompletion();
+                if(updateRegion.GetCount() > 0) {
+                    // The Godot final drawable presents a complete frame. Using
+                    // a dirty rect here leaves old pixels around moved layers.
+                    InternalComplete2_GPU(Rect, drawable);
+                    updateRegion.Clear();
+                }
+            } else {
+                InternalComplete2_GPU(Rect, drawable);
+            }
         } else {
             InternalComplete2(Manager->GetUpdateRegionForCompletion(),
                               drawable);

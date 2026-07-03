@@ -128,6 +128,8 @@ void TVPForceSwapBuffer() {
             __android_log_print(ANDROID_LOG_WARN, "krkr2",
                                 "TVPForceSwapBuffer: eglSwapBuffers failed err=0x%x",
                                 eglGetError());
+        } else {
+            egl.MarkFramePresented();
         }
     }
     // In Pbuffer mode, swap is a no-op — engine_tick handles readback.
