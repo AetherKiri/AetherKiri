@@ -5530,6 +5530,24 @@ namespace motion {
         }
         ensureNodeTreeBuilt();
         prepareRenderItems();
+        if(!skipUpdate && _runtime->preparedRenderItems.empty()) {
+            const bool hasMotionChildNode = std::any_of(
+                _runtime->nodes.begin(), _runtime->nodes.end(),
+                [](const motion::detail::MotionNode &node) {
+                    return node.nodeType == 3;
+                });
+            if(hasMotionChildNode) {
+                updateLayers();
+                prepareRenderItems();
+                if(LOGGER && shouldDebugTitleRender(motionPath) &&
+                   markRenderDebugLogged("presentation-prerender-update:" +
+                                         motionPath)) {
+                    LOGGER->info(
+                        "motion presentation prerender update: motion={} preparedItems={}",
+                        motionPath, _runtime->preparedRenderItems.size());
+                }
+            }
+        }
         applyPreparedRenderItemTranslateOffsets();
         adjustPreparedRenderItemsForYuzuPresentation(
             *_runtime, motionPath, canvasWidth, canvasHeight);

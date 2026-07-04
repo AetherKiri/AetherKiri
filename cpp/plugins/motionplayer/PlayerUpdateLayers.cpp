@@ -3724,7 +3724,14 @@ namespace motion {
         const auto motionPath =
             _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
 
-        auto prependChildEntries = [&](Player *child) {
+        struct PendingChildRenderItems {
+            int parentNodeIndex = -1;
+            std::string childMotionPath;
+            std::vector<detail::PlayerRuntime::PreparedRenderItem> entries;
+        };
+        std::vector<PendingChildRenderItems> pendingChildItems;
+
+        auto collectChildEntries = [&](int parentNodeIndex, Player *child) {
             if(!child || !child->_runtime) {
                 return;
             }
@@ -3735,21 +3742,22 @@ namespace motion {
             if(childEntries.empty()) {
                 return;
             }
-            // Aligned to sub_6F363C call sites (0x6BE2C0 / 0x6C1A00):
-            // child render items are inserted at BEGIN before the parent items.
-            _runtime->preparedRenderItems.insert(
-                _runtime->preparedRenderItems.begin(),
+            PendingChildRenderItems pending;
+            pending.parentNodeIndex = parentNodeIndex;
+            pending.childMotionPath = child->_runtime->activeMotion
+                ? child->_runtime->activeMotion->path
+                : std::string("<none>");
+            pending.entries.insert(
+                pending.entries.end(),
                 std::make_move_iterator(childEntries.begin()),
                 std::make_move_iterator(childEntries.end()));
             detail::logoChainTraceLogf(
-                motionPath, "prepare.childMerge", "0x6F363C",
+                motionPath, "prepare.childCollect", "0x6F363C",
                 _clampedEvalTime,
-                "childMotionPath={} insertedAtBegin={} parentTotalAfterInsert={}",
-                child->_runtime->activeMotion
-                    ? child->_runtime->activeMotion->path
-                    : std::string("<none>"),
-                childEntries.size(), _runtime->preparedRenderItems.size());
+                "parentNodeIndex={} childMotionPath={} collected={}",
+                parentNodeIndex, pending.childMotionPath, pending.entries.size());
             childEntries.clear();
+            pendingChildItems.push_back(std::move(pending));
         };
 
         // Aligned to sub_6C2334: nodeType 3/4 child-player recursion is gated
@@ -3759,17 +3767,43 @@ namespace motion {
             for(size_t ni = 1; ni < _runtime->nodes.size(); ++ni) {
                 auto &node = _runtime->nodes[ni];
                 if(node.nodeType == 3) {
-                    prependChildEntries(node.getChildPlayer());
+                    collectChildEntries(static_cast<int>(ni),
+                                        node.getChildPlayer());
                 } else if(node.nodeType == 4) {
                     const int particleCount = node.getParticleCount();
                     for(int pi = 0; pi < particleCount; ++pi) {
-                        prependChildEntries(node.getParticleChild(pi));
+                        collectChildEntries(static_cast<int>(ni),
+                                            node.getParticleChild(pi));
                     }
                 }
             }
         }
 
         appendPreparedRenderItems();
+        for(auto &pending : pendingChildItems) {
+            if(pending.entries.empty()) {
+                continue;
+            }
+            auto insertPos = _runtime->preparedRenderItems.end();
+            for(auto it = _runtime->preparedRenderItems.begin();
+                it != _runtime->preparedRenderItems.end(); ++it) {
+                if(it->nodeIndex > pending.parentNodeIndex) {
+                    insertPos = it;
+                    break;
+                }
+            }
+            const auto insertedCount = pending.entries.size();
+            _runtime->preparedRenderItems.insert(
+                insertPos,
+                std::make_move_iterator(pending.entries.begin()),
+                std::make_move_iterator(pending.entries.end()));
+            detail::logoChainTraceLogf(
+                motionPath, "prepare.childMerge", "0x6F363C",
+                _clampedEvalTime,
+                "parentNodeIndex={} childMotionPath={} inserted={} parentTotalAfterInsert={}",
+                pending.parentNodeIndex, pending.childMotionPath, insertedCount,
+                _runtime->preparedRenderItems.size());
+        }
         std::vector<double> beforeSortKeys;
         beforeSortKeys.reserve(_runtime->preparedRenderItems.size());
         for(const auto &item : _runtime->preparedRenderItems) {

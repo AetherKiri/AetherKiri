@@ -10615,37 +10615,57 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
              transsource && transsource->GetName() == TJS_W("表-背景"));
         if(withchildren && kag_background_pair && MainImage &&
            transsource && transsource->MainImage &&
-           destImageWidth == srcImageWidth &&
-           destImageHeight == srcImageHeight &&
-           destImageWidth > 0 && destImageHeight > 0 &&
+           destLayerWidth > 0 && destLayerHeight > 0 &&
+           srcLayerWidth > 0 && srcLayerHeight > 0 &&
            (destLayerWidth != srcLayerWidth ||
-            destLayerHeight != srcLayerHeight) &&
-           destLayerWidth <= destImageWidth &&
-           srcLayerWidth <= srcImageWidth &&
-           destLayerHeight <= destImageHeight &&
-           srcLayerHeight <= srcImageHeight) {
-            if(TVPLayerTransitionTraceEnabled()) {
-                spdlog::info(
-                    "LayerTrans align-kag-background layer={} {}x{} src={} "
-                    "{}x{} image={}x{}",
+            destLayerHeight != srcLayerHeight)) {
+            const tjs_int commonWidth = std::max(destLayerWidth, srcLayerWidth);
+            const tjs_int commonHeight =
+                std::max(destLayerHeight, srcLayerHeight);
+            const tjs_int maxImageWidth =
+                std::max(destImageWidth, srcImageWidth);
+            const tjs_int maxImageHeight =
+                std::max(destImageHeight, srcImageHeight);
+            const bool dimensionsPlausible =
+                maxImageWidth > 0 && maxImageHeight > 0 &&
+                commonWidth <= maxImageWidth &&
+                commonHeight <= maxImageHeight;
+
+            if(dimensionsPlausible) {
+                if(TVPLayerTransitionTraceEnabled()) {
+                    spdlog::info(
+                        "LayerTrans align-kag-background layer={} {}x{} "
+                        "src={} {}x{} destImage={}x{} srcImage={}x{} "
+                        "common={}x{}",
+                        GetName().AsStdString(), destLayerWidth,
+                        destLayerHeight, transsource->GetName().AsStdString(),
+                        srcLayerWidth, srcLayerHeight, destImageWidth,
+                        destImageHeight, srcImageWidth, srcImageHeight,
+                        commonWidth, commonHeight);
+                }
+                if(destLayerWidth != commonWidth ||
+                   destLayerHeight != commonHeight) {
+                    InternalSetSize(static_cast<tjs_uint>(commonWidth),
+                                    static_cast<tjs_uint>(commonHeight));
+                    destLayerWidth = GetWidth();
+                    destLayerHeight = GetHeight();
+                }
+                if(srcLayerWidth != commonWidth ||
+                   srcLayerHeight != commonHeight) {
+                    transsource->InternalSetSize(
+                        static_cast<tjs_uint>(commonWidth),
+                        static_cast<tjs_uint>(commonHeight));
+                    srcLayerWidth = transsource->GetWidth();
+                    srcLayerHeight = transsource->GetHeight();
+                }
+            } else if(TVPLayerTransitionTraceEnabled()) {
+                spdlog::warn(
+                    "LayerTrans skip-kag-background-align layer={} {}x{} "
+                    "src={} {}x{} destImage={}x{} srcImage={}x{}",
                     GetName().AsStdString(), destLayerWidth, destLayerHeight,
                     transsource->GetName().AsStdString(), srcLayerWidth,
-                    srcLayerHeight, destImageWidth, destImageHeight);
-            }
-            if(destLayerWidth != destImageWidth ||
-               destLayerHeight != destImageHeight) {
-                InternalSetSize(static_cast<tjs_uint>(destImageWidth),
-                                static_cast<tjs_uint>(destImageHeight));
-                destLayerWidth = GetWidth();
-                destLayerHeight = GetHeight();
-            }
-            if(srcLayerWidth != srcImageWidth ||
-               srcLayerHeight != srcImageHeight) {
-                transsource->InternalSetSize(
-                    static_cast<tjs_uint>(srcImageWidth),
-                    static_cast<tjs_uint>(srcImageHeight));
-                srcLayerWidth = transsource->GetWidth();
-                srcLayerHeight = transsource->GetHeight();
+                    srcLayerHeight, destImageWidth, destImageHeight,
+                    srcImageWidth, srcImageHeight);
             }
         }
 
