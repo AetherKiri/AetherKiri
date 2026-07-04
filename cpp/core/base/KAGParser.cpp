@@ -17,6 +17,7 @@
 #include "TextStream.h"
 #include "StorageIntf.h"
 #include "ncbind.hpp"
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <spdlog/spdlog.h>
@@ -63,6 +64,142 @@ bool TVPKagTagTraceValuesEnabled() {
         return value && *value && *value != '0';
     }();
     return enabled;
+}
+
+bool TVPKagQueueTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_KAG_QUEUE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+const char *TVPKagVariantTypeName(tTJSVariantType type) {
+    switch(type) {
+    case tvtVoid: return "void";
+    case tvtObject: return "object";
+    case tvtString: return "string";
+    case tvtOctet: return "octet";
+    case tvtInteger: return "integer";
+    case tvtReal: return "real";
+    default: return "unknown";
+    }
+}
+
+std::string TVPKagTraceVariantValue(const tTJSVariant &value) {
+    if(value.Type() == tvtVoid)
+        return "<void>";
+    if(value.Type() == tvtObject)
+        return "<object>";
+    try {
+        return ttstr(value).AsStdString();
+    } catch(...) {
+        return "<unprintable>";
+    }
+}
+
+std::string TVPKagTraceDispatchProperty(iTJSDispatch2 *object,
+                                        const tjs_char *name) {
+    if(!object)
+        return "<null>";
+    tTJSVariant value;
+    const tjs_error hr = object->PropGet(0, name, nullptr, &value, object);
+    if(TJS_FAILED(hr) || value.Type() == tvtVoid)
+        return "<missing>";
+    return TVPKagTraceVariantValue(value);
+}
+
+void TVPSetKagTagList(iTJSDispatch2 *tag,
+                      const std::vector<ttstr> &attribute_names) {
+    if(!tag)
+        return;
+
+    static ttstr __taglist_name(TJS_W("taglist"));
+    static ttstr __tag_name(TJS_W("tagname"));
+
+    iTJSDispatch2 *array = TJSCreateArrayObject();
+    if(!array)
+        return;
+
+    try {
+        tjs_int index = 0;
+        tTJSVariant tag_name(__tag_name);
+        array->PropSetByNum(TJS_MEMBERENSURE, index++, &tag_name, array);
+
+        for(const auto &name : attribute_names) {
+            tTJSVariant value(name);
+            array->PropSetByNum(TJS_MEMBERENSURE, index++, &value, array);
+        }
+
+        tTJSVariant taglist(array, array);
+        tag->PropSetByVS(TJS_MEMBERENSURE,
+                         __taglist_name.AsVariantStringNoAddRef(), &taglist,
+                         tag);
+    } catch(...) {
+        array->Release();
+        throw;
+    }
+
+    array->Release();
+}
+
+bool TVPHasKagTagList(iTJSDispatch2 *tag) {
+    if(!tag)
+        return false;
+
+    tTJSVariant value;
+    if(TJS_FAILED(tag->PropGet(0, TJS_W("taglist"), nullptr, &value, tag)))
+        return false;
+    return value.Type() != tvtVoid;
+}
+
+bool TVPIsKagRuntimeTagMember(const ttstr &name) {
+    return name == TJS_W("tagname") || name == TJS_W("taglist") ||
+           name == TJS_W("runLine") || name == TJS_W("runLineStr") ||
+           name == TJS_W("runCount");
+}
+
+class TVPKagTagListEnumCaller : public tTJSDispatch {
+public:
+    explicit TVPKagTagListEnumCaller(std::vector<ttstr> &names)
+        : Names(names) {}
+
+    tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                       tTJSVariant *result, tjs_int numparams,
+                       tTJSVariant **param, iTJSDispatch2 *) override {
+        if(numparams > 1) {
+            const tTVInteger memberflag = param[1]->AsInteger();
+            if(!(memberflag & TJS_HIDDENMEMBER)) {
+                ttstr name(*param[0]);
+                if(!TVPIsKagRuntimeTagMember(name))
+                    Names.push_back(name);
+            }
+        }
+        if(result)
+            *result = true;
+        return TJS_S_OK;
+    }
+
+private:
+    std::vector<ttstr> &Names;
+};
+
+std::vector<ttstr> TVPCollectKagTagMemberNames(iTJSDispatch2 *tag) {
+    std::vector<ttstr> names;
+    if(!tag)
+        return names;
+
+    TVPKagTagListEnumCaller *caller = new TVPKagTagListEnumCaller(names);
+    tTJSVariantClosure closure(caller);
+    tag->EnumMembers(TJS_IGNOREPROP | TJS_ENUM_NO_VALUE, &closure, nullptr);
+    caller->Release();
+
+    std::sort(names.begin(), names.end(),
+              [](const ttstr &lhs, const ttstr &rhs) {
+                  return lhs.AsStdString() < rhs.AsStdString();
+              });
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    return names;
 }
 
 bool TVPKagTagTraceNameAllowed(const std::string &name) {
@@ -1654,6 +1791,7 @@ parse_start:
             DicObj->PropSetByVS(TJS_MEMBERENSURE,
                                 __tag_name.AsVariantStringNoAddRef(), &r_val,
                                 DicObj);
+            TVPSetKagTagList(DicObj, {});
             Interrupted = false;
             DicObj->AddRef();
             return DicObj;
@@ -1694,6 +1832,7 @@ parse_start:
                 DicObj->PropSetByVS(TJS_MEMBERENSURE,
                                     __eol_name.AsVariantStringNoAddRef(),
                                     &true_val, DicObj);
+                TVPSetKagTagList(DicObj, { __eol_name });
                 if(RecordingMacro)
                     RecordingMacroStr += TJS_W("[r eol=true]");
                 CurLine++;
@@ -1750,6 +1889,7 @@ parse_start:
                     DicObj->PropSetByVS(TJS_MEMBERENSURE,
                                         text_name.AsVariantStringNoAddRef(),
                                         pCachedVal, DicObj);
+                    TVPSetKagTagList(DicObj, { text_name });
 
                     if(RecordingMacro) {
                         if(ch == TJS_W('['))
@@ -1763,6 +1903,7 @@ parse_start:
                     DicObj->PropSetByVS(TJS_MEMBERENSURE,
                                         __tag_name.AsVariantStringNoAddRef(),
                                         &r_val, DicObj);
+                    TVPSetKagTagList(DicObj, {});
                     if(RecordingMacro)
                         RecordingMacroStr += TJS_W("[r]");
                 }
@@ -1884,6 +2025,13 @@ parse_start:
             tTJSVariant Value;
         };
         std::vector<tAttrEntry> parsed_attributes;
+        auto set_taglist_from_parsed_attributes = [&]() {
+            std::vector<ttstr> names;
+            names.reserve(parsed_attributes.size());
+            for(const auto &entry : parsed_attributes)
+                names.push_back(entry.Name);
+            TVPSetKagTagList(DicObj, names);
+        };
         auto trace_returned_tag = [&]() {
             if(!TVPKagTagTraceEnabled())
                 return;
@@ -2025,6 +2173,9 @@ parse_start:
                     TVP_KAG_STEP_NEXT;
 
                     if(condition && ExcludeLevel == -1) {
+                        set_taglist_from_parsed_attributes();
+                        if(tagname == TJS_W("endtrans"))
+                            TVPArmKagNoTransWaitRepair();
                         trace_returned_tag();
                         DicObj->AddRef();
                         return DicObj;
@@ -2678,6 +2829,91 @@ parse_start:
 iTJSDispatch2 *tTJSNI_KAGParser::GetNextTag() { return _GetNextTag(); }
 
 //---------------------------------------------------------------------------
+iTJSDispatch2 *tTJSNI_KAGParser::CopyTag(tjs_int numparams,
+                                         tTJSVariant **param) {
+    iTJSDispatch2 *dest = TJSCreateDictionaryObject();
+    if(!dest)
+        return nullptr;
+
+    try {
+        tjs_int source_index = -1;
+        bool has_explicit_tag_name = false;
+        const bool trace = TVPKagQueueTraceEnabled();
+
+        if(numparams >= 2) {
+            has_explicit_tag_name = param[0] && param[0]->Type() != tvtVoid;
+            if(param[1] && param[1]->Type() == tvtObject)
+                source_index = 1;
+        } else if(numparams >= 1 && param[0]) {
+            if(param[0]->Type() == tvtObject)
+                source_index = 0;
+            else if(param[0]->Type() != tvtVoid)
+                has_explicit_tag_name = true;
+        }
+
+        if(trace) {
+            std::string p0 = "<none>";
+            std::string p1 = "<none>";
+            const char *p0_type = "none";
+            const char *p1_type = "none";
+            if(numparams >= 1 && param[0]) {
+                p0_type = TVPKagVariantTypeName(param[0]->Type());
+                p0 = TVPKagTraceVariantValue(*param[0]);
+            }
+            if(numparams >= 2 && param[1]) {
+                p1_type = TVPKagVariantTypeName(param[1]->Type());
+                p1 = TVPKagTraceVariantValue(*param[1]);
+            }
+            spdlog::info("KAGQueue copyTag enter numparams={} source={} "
+                         "explicitName={} p0Type={} p0={} p1Type={} p1={}",
+                         numparams, source_index, has_explicit_tag_name,
+                         p0_type, p0, p1_type, p1);
+        }
+
+        if(source_index >= 0) {
+            tTJSVariant *assign_args[1] = { param[source_index] };
+            tjs_error hr = DicAssign->FuncCall(0, nullptr, nullptr, nullptr, 1,
+                                               assign_args, dest);
+            if(TJS_FAILED(hr))
+                TJSThrowFrom_tjs_error(hr);
+        }
+
+        if(has_explicit_tag_name) {
+            static ttstr __tag_name(TJSMapGlobalStringMap(TJS_W("tagname")));
+            dest->PropSetByVS(TJS_MEMBERENSURE,
+                              __tag_name.AsVariantStringNoAddRef(), param[0],
+                              dest);
+        }
+
+        if(!TVPHasKagTagList(dest)) {
+            const std::vector<ttstr> names = TVPCollectKagTagMemberNames(dest);
+            TVPSetKagTagList(dest, names);
+        }
+
+        if(trace) {
+            spdlog::info("KAGQueue copyTag result tagname={} name={} method={} "
+                         "sync={} fade={} time={} env={} storage={} target={} "
+                         "taglist={}",
+                         TVPKagTraceDispatchProperty(dest, TJS_W("tagname")),
+                         TVPKagTraceDispatchProperty(dest, TJS_W("name")),
+                         TVPKagTraceDispatchProperty(dest, TJS_W("method")),
+                         TVPKagTraceDispatchProperty(dest, TJS_W("sync")),
+                         TVPKagTraceDispatchProperty(dest, TJS_W("fade")),
+                         TVPKagTraceDispatchProperty(dest, TJS_W("time")),
+                         TVPKagTraceDispatchProperty(dest, TJS_W("env")),
+                         TVPKagTraceDispatchProperty(dest, TJS_W("storage")),
+                         TVPKagTraceDispatchProperty(dest, TJS_W("target")),
+                         TVPKagTraceDispatchProperty(dest, TJS_W("taglist")));
+        }
+    } catch(...) {
+        dest->Release();
+        throw;
+    }
+
+    return dest;
+}
+
+//---------------------------------------------------------------------------
 iTJSDispatch2 *tTJSNI_KAGParser::GetMacroTopNoAddRef() const {
     if(MacroArgStackDepth == 0)
         return nullptr;
@@ -2759,6 +2995,24 @@ iTJSDispatch2 *TVPCreateNativeClass_KAGParser() {
         return TJS_S_OK;
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ getNextTag)
+    //----------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ copyTag) {
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_KAGParser);
+
+        iTJSDispatch2 *dsp = _this->CopyTag(numparams, param);
+        if(result) {
+            if(dsp)
+                *result = tTJSVariant(dsp, dsp);
+            else
+                result->Clear();
+        }
+        if(dsp)
+            dsp->Release();
+
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_METHOD_DECL(/*func. name*/ copyTag)
     //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ assign) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,

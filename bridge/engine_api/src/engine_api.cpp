@@ -54,6 +54,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "environ/EngineLoop.h"
 #include "environ/MainScene.h"
 #include "base/StorageIntf.h"
+#include "base/ScriptMgnIntf.h"
 #include "base/SysInitIntf.h"
 #include "base/impl/SysInitImpl.h"
 #include "visual/GraphicsLoaderIntf.h"
@@ -2018,6 +2019,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   // which is insufficient.
   if (::Application) {
     ::Application->Run();
+    TVPRepairKagNoTransWait();
   }
   const auto after_application_run = std::chrono::steady_clock::now();
   ::TVPDrawSceneOnce(0);

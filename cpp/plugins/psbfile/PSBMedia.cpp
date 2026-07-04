@@ -292,7 +292,14 @@ namespace PSB {
                     break;
                 }
                 if(src == &rawSrc) {
-                    return nullptr;
+                    const size_t directAlign = inferAlign();
+                    if(directAlign != 0 &&
+                       rawSrc.size() >= pixelCount * directAlign) {
+                        src = &rawSrc;
+                        decodedAlign = directAlign;
+                    } else {
+                        return nullptr;
+                    }
                 }
             }
 

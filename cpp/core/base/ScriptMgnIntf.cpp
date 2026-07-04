@@ -63,6 +63,9 @@
 #include <android/log.h>
 #endif
 
+#include <atomic>
+#include <cstdlib>
+
 //---------------------------------------------------------------------------
 // Script system initialization script
 //---------------------------------------------------------------------------
@@ -998,6 +1001,128 @@ static void TVPInstallKagRuntimeDefaults() {
     }
 }
 
+static std::atomic<int> TVPKagNoTransWaitRepairFrames{0};
+
+static bool TVPKagNoTransWaitRepairTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_KAG_WAIT_REPAIR_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+static void TVPInstallKagNoTransWaitRepairHelper() {
+    try {
+        TVPExecuteScript(TJS_W(
+            "if(typeof global.AetherKiriRepairNoTransWait == \"undefined\") {\n"
+            "  global.AetherKiriLastNoTransWaitRepairInfo = \"\";\n"
+            "  global.AetherKiriRepairNoTransWait = function() {\n"
+            "    try {\n"
+            "      global.AetherKiriLastNoTransWaitRepairInfo = \"\";\n"
+            "      if(typeof kag != \"Object\" || !kag || kag.conductor === void) return false;\n"
+            "      var c = kag.conductor;\n"
+            "      if(c.status != c.mWait || c.waitAll === void ||\n"
+            "         c.waitAll.trans === void || c.pendings === void ||\n"
+            "         c.pendings.count <= 0) return false;\n"
+            "      var first = c.pendings[0];\n"
+            "      if(first === void || first.tagname != \"envupdate\" ||\n"
+            "         first.trans !== void) return false;\n"
+            "      for(var i = 0; i < c.pendings.count; i++) {\n"
+            "        var pending = c.pendings[i];\n"
+            "        if(pending !== void && pending.tagname == \"envupdate\" &&\n"
+            "           pending.trans !== void) return false;\n"
+            "      }\n"
+            "      var hasUpdate = first.pretrans !== void || first.update !== void ||\n"
+            "         first.revpretrans !== void || first.revupdate !== void ||\n"
+            "         first.stop !== void || first.wait !== void ||\n"
+            "         first.msgchange !== void || first.msgoff !== void;\n"
+            "      if(!hasUpdate) return false;\n"
+            "      var keys = \"\";\n"
+            "      if(typeof Scripts == \"Object\") keys = Scripts.getObjectKeys(first).join(\",\");\n"
+            "      var updates = (first.update !== void && first.update.count !== void) ? first.update.count : \"\";\n"
+            "      global.AetherKiriLastNoTransWaitRepairInfo = \"trigger pending=\" + c.pendings.count + \" update=\" + updates + \" keys=\" + keys;\n"
+            "      c.trigger(\"trans\");\n"
+            "      return true;\n"
+            "    } catch(e) {\n"
+            "      global.AetherKiriLastNoTransWaitRepairInfo = \"error=\" + e;\n"
+            "      return false;\n"
+            "    }\n"
+            "  } incontextof global;\n"
+            "}\n"),
+            TJS_W("kag_notrans_wait_repair.tjs"), 0,
+            static_cast<tTJSVariant *>(nullptr));
+    } catch(const TJS::eTJSScriptError &e) {
+        TVPLogStartupScriptError("KAG no-trans wait repair patch error", e);
+    } catch(const TJS::eTJS &e) {
+        spdlog::warn("KAG no-trans wait repair patch TJS error: {}",
+                     e.GetMessage().AsStdString());
+    } catch(...) {
+        spdlog::warn("KAG no-trans wait repair patch failed");
+    }
+}
+
+void TVPArmKagNoTransWaitRepair() {
+    TVPKagNoTransWaitRepairFrames.store(120, std::memory_order_relaxed);
+    if(TVPKagNoTransWaitRepairTraceEnabled())
+        spdlog::info("KAG no-trans wait repair armed");
+}
+
+void TVPRepairKagNoTransWait() {
+    const int remaining =
+        TVPKagNoTransWaitRepairFrames.fetch_sub(1, std::memory_order_relaxed);
+    if(remaining <= 0) {
+        if(remaining < 0)
+            TVPKagNoTransWaitRepairFrames.store(0, std::memory_order_relaxed);
+        return;
+    }
+
+    try {
+        tTJSVariant repaired(false);
+        TVPExecuteExpression(
+            TJS_W("(typeof global.AetherKiriRepairNoTransWait != \"undefined\") ? "
+                  "global.AetherKiriRepairNoTransWait() : false"),
+            &repaired);
+        const bool did_repair = repaired.operator bool();
+        if(TVPKagNoTransWaitRepairTraceEnabled()) {
+            tTJSVariant info;
+            try {
+                TVPExecuteExpression(
+                    TJS_W("(typeof global.AetherKiriLastNoTransWaitRepairInfo "
+                          "!= \"undefined\") ? "
+                          "global.AetherKiriLastNoTransWaitRepairInfo : \"\""),
+                    &info);
+            } catch(...) {
+                info = TJS_W("");
+            }
+            spdlog::info("KAG no-trans wait repair tick remaining={} result={} "
+                         "info={}",
+                         remaining, did_repair ? "true" : "false",
+                         ttstr(info).AsStdString());
+        }
+        if(did_repair)
+            TVPKagNoTransWaitRepairFrames.store(0,
+                                                std::memory_order_relaxed);
+    } catch(const TJS::eTJSScriptError &e) {
+        if(TVPKagNoTransWaitRepairTraceEnabled())
+            spdlog::info("KAG no-trans wait repair script-error message={} "
+                         "block={} line={}",
+                         e.GetMessage().AsStdString(),
+                         e.GetBlockName() ? ttstr(e.GetBlockName()).AsStdString()
+                                          : "",
+                         e.GetSourceLine());
+        TVPKagNoTransWaitRepairFrames.store(0, std::memory_order_relaxed);
+    } catch(const TJS::eTJS &e) {
+        if(TVPKagNoTransWaitRepairTraceEnabled())
+            spdlog::info("KAG no-trans wait repair tjs-error message={}",
+                         e.GetMessage().AsStdString());
+        TVPKagNoTransWaitRepairFrames.store(0, std::memory_order_relaxed);
+    } catch(...) {
+        if(TVPKagNoTransWaitRepairTraceEnabled())
+            spdlog::info("KAG no-trans wait repair failed");
+        TVPKagNoTransWaitRepairFrames.store(0, std::memory_order_relaxed);
+    }
+}
+
 static void TVPLogStartupScriptError(const char *stage,
                                      const TJS::eTJSScriptError &e) {
     ttstr msg;
@@ -1138,6 +1263,7 @@ void TVPExecuteStartupScript() {
         }
         spdlog::info("Startup script ended.");
         TVPInstallKagRuntimeDefaults();
+        TVPInstallKagNoTransWaitRepairHelper();
 #if defined(__ANDROID__)
         __android_log_print(ANDROID_LOG_INFO, "krkr2",
                             "Startup script ended successfully");
@@ -1157,6 +1283,7 @@ void TVPExecuteStartupScript() {
             if(TVPIsExistentStorageNoSearch(patch)) {
                 TVPExecuteStorage(patch);
                 TVPInstallKagRuntimeDefaults();
+                TVPInstallKagNoTransWaitRepairHelper();
             }
         } catch(...) {
         }

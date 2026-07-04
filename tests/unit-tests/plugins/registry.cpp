@@ -7,6 +7,7 @@
 #include "tjsDictionary.h"
 
 #include <cstring>
+#include <utility>
 
 extern tTJS *TVPScriptEngine;
 
@@ -44,6 +45,32 @@ void setProp(iTJSDispatch2 *dispatch, const tjs_char *name,
     REQUIRE(dispatch != nullptr);
     REQUIRE(TJS_SUCCEEDED(
         dispatch->PropSet(TJS_MEMBERENSURE, name, nullptr, &value, dispatch)));
+}
+
+class ScenarioLoadCallback : public tTJSDispatch {
+public:
+    explicit ScenarioLoadCallback(ttstr scenario) : Scenario(std::move(scenario)) {}
+
+    tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                       tTJSVariant *result, tjs_int, tTJSVariant **,
+                       iTJSDispatch2 *) override {
+        if(result)
+            *result = Scenario;
+        return TJS_S_OK;
+    }
+
+private:
+    ttstr Scenario;
+};
+
+tTJSVariant getIndex(const tTJSVariant &object, tjs_int index) {
+    REQUIRE(object.Type() == tvtObject);
+    iTJSDispatch2 *dispatch = object.AsObjectNoAddRef();
+    REQUIRE(dispatch != nullptr);
+
+    tTJSVariant value;
+    REQUIRE(TJS_SUCCEEDED(dispatch->PropGetByNum(0, index, &value, dispatch)));
+    return value;
 }
 
 } // namespace
@@ -186,6 +213,106 @@ TEST_CASE("plugin load mode defaults to krkrsdl3 and can select all modules") {
 
     TVPSetPluginLoadMode(TJS_W("krkrsdl3"));
     CHECK(TVPGetPluginLoadMode() == TJS_W("krkrsdl3"));
+}
+
+TEST_CASE("KAGParserEx getNextTag returns ordered taglist") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll"));
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("KAGParserEx.dll")));
+    tTJSVariant parserClass = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(parserClass.Type() == tvtObject);
+
+    iTJSDispatch2 *parser = nullptr;
+    tTJSVariantClosure parserClosure = parserClass.AsObjectClosureNoAddRef();
+    REQUIRE(TJS_SUCCEEDED(parserClosure.CreateNew(0, nullptr, nullptr, &parser,
+                                                  0, nullptr, nullptr)));
+    REQUIRE(parser != nullptr);
+
+    ScenarioLoadCallback *callback =
+        new ScenarioLoadCallback(TJS_W("[endtrans fade=1000 sync]\n"));
+    tTJSVariant callbackValue(callback, callback);
+    setProp(parser, TJS_W("onScenarioLoad"), callbackValue);
+    callback->Release();
+
+    tTJSVariant storage(TJS_W("memory.ks"));
+    tTJSVariant *loadArgs[] = { &storage };
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(0, TJS_W("loadScenario"), nullptr,
+                                           nullptr, 1, loadArgs, parser)));
+
+    tTJSVariant tag;
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(0, TJS_W("getNextTag"), nullptr,
+                                           &tag, 0, nullptr, parser)));
+    REQUIRE(tag.Type() == tvtObject);
+    CHECK(ttstr(getProp(tag, TJS_W("tagname"))) == TJS_W("endtrans"));
+    CHECK((tjs_int)getProp(tag, TJS_W("fade")) == 1000);
+    CHECK(ttstr(getProp(tag, TJS_W("sync"))) == TJS_W("true"));
+
+    const tTJSVariant taglist = getProp(tag, TJS_W("taglist"));
+    REQUIRE(taglist.Type() == tvtObject);
+    CHECK(ttstr(getIndex(taglist, 0)) == TJS_W("tagname"));
+    CHECK(ttstr(getIndex(taglist, 1)) == TJS_W("fade"));
+    CHECK(ttstr(getIndex(taglist, 2)) == TJS_W("sync"));
+
+    parser->Release();
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll")));
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+    global->DeleteMember(0, TJS_W("AetherKiriKAGParserEx"), nullptr, global);
+    global->Release();
+}
+
+TEST_CASE("KAGParserEx copyTag clones tags for conductor queues") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll"));
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("KAGParserEx.dll")));
+    tTJSVariant parserClass = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(parserClass.Type() == tvtObject);
+
+    iTJSDispatch2 *parser = nullptr;
+    tTJSVariantClosure parserClosure = parserClass.AsObjectClosureNoAddRef();
+    REQUIRE(TJS_SUCCEEDED(parserClosure.CreateNew(0, nullptr, nullptr, &parser,
+                                                  0, nullptr, nullptr)));
+    REQUIRE(parser != nullptr);
+
+    iTJSDispatch2 *source = TJSCreateDictionaryObject();
+    REQUIRE(source != nullptr);
+    setProp(source, TJS_W("fade"), tTJSVariant(static_cast<tTVInteger>(1000)));
+    setProp(source, TJS_W("sync"), tTJSVariant(static_cast<tTVInteger>(1)));
+
+    tTJSVariant tagName(TJS_W("endtrans"));
+    tTJSVariant sourceValue(source, source);
+    tTJSVariant *copyArgs[] = { &tagName, &sourceValue };
+    tTJSVariant copied;
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(0, TJS_W("copyTag"), nullptr,
+                                           &copied, 2, copyArgs, parser)));
+
+    REQUIRE(copied.Type() == tvtObject);
+    CHECK(ttstr(getProp(copied, TJS_W("tagname"))) == TJS_W("endtrans"));
+    CHECK((tjs_int)getProp(copied, TJS_W("fade")) == 1000);
+    CHECK((tjs_int)getProp(copied, TJS_W("sync")) == 1);
+    CHECK(copied.AsObjectNoAddRef() != source);
+
+    const tTJSVariant taglist = getProp(copied, TJS_W("taglist"));
+    REQUIRE(taglist.Type() == tvtObject);
+    CHECK(ttstr(getIndex(taglist, 0)) == TJS_W("tagname"));
+    CHECK(ttstr(getIndex(taglist, 1)) == TJS_W("fade"));
+    CHECK(ttstr(getIndex(taglist, 2)) == TJS_W("sync"));
+
+    parser->Release();
+    source->Release();
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll")));
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+    global->DeleteMember(0, TJS_W("AetherKiriKAGParserEx"), nullptr, global);
+    global->Release();
 }
 
 TEST_CASE("KAGParserEx preserves existing script KAGParser class") {

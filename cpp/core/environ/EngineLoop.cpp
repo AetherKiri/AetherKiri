@@ -22,6 +22,7 @@
 #include "Platform.h"
 #include "SysInitIntf.h"
 #include "RenderManager.h"
+#include "ScriptMgnIntf.h"
 #include "TickCount.h"
 #ifdef __APPLE__
 #include <malloc/malloc.h>
@@ -143,6 +144,7 @@ void EngineLoop::Tick(float delta) {
     if (!started_)
         return;
     ::Application->Run();
+    TVPRepairKagNoTransWait();
     if (pending_mouse_release_vk_ != 0 &&
         pending_mouse_release_vk_ < sizeof(s_scancode) / sizeof(s_scancode[0])) {
         s_scancode[pending_mouse_release_vk_] &= ~1;
@@ -357,10 +359,8 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
         default: break;
     }
 
-    // Match the original Kirikiri/Windows path: WM_LBUTTONUP posts the click
-    // at the mouse-down coordinates before mouse-up releases capture. Some
-    // Yuzu gallery/page buttons use the captured button state to distinguish
-    // selection from confirmation.
+    // Match the existing AetherKiri path: click uses the mouse-down
+    // coordinates before mouse-up releases transient button layers.
     if (mb == mbLeft) {
         if (suppress_next_left_click_) {
             suppress_next_left_click_ = false;

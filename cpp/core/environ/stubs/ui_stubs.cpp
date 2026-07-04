@@ -618,23 +618,14 @@ public:
     // -- Pure virtual implementations --
 
     void SetPaintBoxSize(tjs_int w, tjs_int h) override {
-        // Only set WindowSize here — DestRect is exclusively managed by
-        // UpdateDrawBuffer() which knows the correct letterbox viewport.
-        // Setting DestRect here would overwrite the viewport offset and
-        // cause mouse Y-axis misalignment.
-        if (!owner_) return;
-        auto* dd = owner_->GetDrawDevice();
-        if (!dd) return;
-
-        tjs_int surf_w = 0;
-        tjs_int surf_h = 0;
-        GetHostSurfaceSize(w, h, surf_w, surf_h);
-        width_ = surf_w;
-        height_ = surf_h;
-
-        dd->SetWindowSize(surf_w, surf_h);
-        spdlog::debug("HostWindowLayer::SetPaintBoxSize: layer={}x{}, surface={}x{}",
-                      w, h, surf_w, surf_h);
+        // Mirrors the Win32 form's paint-box state: this is the source layer
+        // size, not the script-visible client/window size.
+        paint_width_ = w;
+        paint_height_ = h;
+        SyncDrawDeviceWindowSize(w, h);
+        spdlog::debug(
+            "HostWindowLayer::SetPaintBoxSize: layer={}x{}, logical={}x{}",
+            w, h, width_, height_);
     }
 
     bool GetFormEnabled() override { return !closing_; }
@@ -680,17 +671,20 @@ public:
 
     void SetCaption(const std::string &cap) override { caption_ = cap; }
 
-    void SetWidth(tjs_int) override {
-        width_ = static_cast<tjs_int>(g_host_surface_width);
+    void SetWidth(tjs_int w) override {
+        if (w > 0) width_ = w;
+        SyncDrawDeviceWindowSize(width_, height_);
     }
 
-    void SetHeight(tjs_int) override {
-        height_ = static_cast<tjs_int>(g_host_surface_height);
+    void SetHeight(tjs_int h) override {
+        if (h > 0) height_ = h;
+        SyncDrawDeviceWindowSize(width_, height_);
     }
 
-    void SetSize(tjs_int, tjs_int) override {
-        width_ = static_cast<tjs_int>(g_host_surface_width);
-        height_ = static_cast<tjs_int>(g_host_surface_height);
+    void SetSize(tjs_int w, tjs_int h) override {
+        if (w > 0) width_ = w;
+        if (h > 0) height_ = h;
+        SyncDrawDeviceWindowSize(width_, height_);
     }
 
     void GetSize(tjs_int &w, tjs_int &h) override {
@@ -1092,6 +1086,17 @@ public:
     TVPOverlayNode *GetPrimaryArea() override { return nullptr; }
 
 private:
+    void SyncDrawDeviceWindowSize(tjs_int fallback_w, tjs_int fallback_h) {
+        if (!owner_) return;
+        auto* dd = owner_->GetDrawDevice();
+        if (!dd) return;
+
+        tjs_int surf_w = 0;
+        tjs_int surf_h = 0;
+        GetHostSurfaceSize(fallback_w, fallback_h, surf_w, surf_h);
+        dd->SetWindowSize(surf_w, surf_h);
+    }
+
     GodotTexture2D *PrepareGodotSurfaceTexture(GodotTexture2D *source,
                                                tjs_uint source_w,
                                                tjs_uint source_h,
@@ -1243,6 +1248,8 @@ private:
     std::string caption_;
     tjs_int width_;
     tjs_int height_;
+    tjs_int paint_width_ = 0;
+    tjs_int paint_height_ = 0;
     bool active_;
     bool closing_;
 

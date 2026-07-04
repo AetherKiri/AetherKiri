@@ -128,6 +128,35 @@ static bool TVPLayerInputTraceEnabled() {
     return value && *value && *value != '0';
 }
 
+static bool TVPLayerTransitionTraceEnabled() {
+    const char *value = std::getenv("AETHERKIRI_TRANS_TRACE");
+    return value && *value && *value != '0';
+}
+
+static void TVPTraceLayerTransition(const char *event,
+                                    const tTJSNI_BaseLayer *layer,
+                                    const tTJSNI_BaseLayer *src = nullptr,
+                                    tjs_error status = TJS_S_OK) {
+    if(!TVPLayerTransitionTraceEnabled())
+        return;
+    spdlog::info(
+        "LayerTrans {} layer={} native={} owner={} shutdown={} visible={} "
+        "transition={} src={} srcNative={} srcOwner={} srcShutdown={} "
+        "eventDisabled={} systemEventDisabled={} status={}",
+        event ? event : "", layer ? layer->GetName().AsStdString() : "<null>",
+        static_cast<const void *>(layer),
+        layer ? static_cast<const void *>(layer->GetOwnerNoAddRef()) : nullptr,
+        "<private>",
+        layer && layer->GetVisible() ? "yes" : "no",
+        layer && layer->DebugIsInTransition() ? "yes" : "no",
+        src ? src->GetName().AsStdString() : "<null>",
+        static_cast<const void *>(src),
+        src ? static_cast<const void *>(src->GetOwnerNoAddRef()) : nullptr,
+        "<private>",
+        TVPEventDisabled ? "yes" : "no",
+        TVPGetSystemEventDisabledState() ? "yes" : "no", status);
+}
+
 #ifdef __ANDROID__
 #define AETHER_LAYER_INPUT_TRACE_LOG(...)                                       \
     do {                                                                       \
@@ -292,6 +321,235 @@ static std::string TVPVariantDebugString(const tTJSVariant &value) {
     return text.AsStdString();
 }
 
+static void TVPTraceKagExpressionValue(const char *label,
+                                       const tjs_char *expression) {
+    if(!TVPLayerInputTraceEnabled())
+        return;
+    try {
+        tTJSVariant value;
+        TVPExecuteExpression(ttstr(expression), &value);
+        spdlog::info("LayerIntf kag {}={}", label,
+                     TVPVariantDebugString(value));
+    } catch(const eTJSScriptError &e) {
+        spdlog::info("LayerIntf kag {} script-error message={} block={} line={}",
+                     label, e.GetMessage().AsStdString(),
+                     e.GetBlockName() ? ttstr(e.GetBlockName()).AsStdString()
+                                      : "",
+                     e.GetSourceLine());
+    } catch(const eTJS &e) {
+        spdlog::info("LayerIntf kag {} tjs-error message={}", label,
+                     e.GetMessage().AsStdString());
+    } catch(...) {
+        spdlog::info("LayerIntf kag {} failed", label);
+    }
+}
+
+static void TVPTraceKagState(const char *prefix) {
+    if(!TVPLayerInputTraceEnabled())
+        return;
+    spdlog::info("LayerIntf kag-state {}", prefix ? prefix : "");
+    TVPTraceKagExpressionValue(
+        "typeof_kag", TJS_W("typeof kag"));
+    TVPTraceKagExpressionValue(
+        "currentStorage",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.currentStorage : \"\""));
+    TVPTraceKagExpressionValue(
+        "currentLabel",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.currentLabel : \"\""));
+    TVPTraceKagExpressionValue(
+        "inStable",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.inStable : \"\""));
+    TVPTraceKagExpressionValue(
+        "enabled",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.enabled : \"\""));
+    TVPTraceKagExpressionValue(
+        "currentState",
+        TJS_W("(typeof SystemHook == \"Object\" && SystemHook) ? "
+              "SystemHook.currentState : \"\""));
+    TVPTraceKagExpressionValue(
+        "playerWorking",
+        TJS_W("(typeof SystemAction == \"Object\" && SystemAction) ? "
+              "SystemAction.playerWorking : \"\""));
+    TVPTraceKagExpressionValue(
+        "current",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.current : \"\""));
+    TVPTraceKagExpressionValue(
+        "usingExtraConductor",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.usingExtraConductor : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.conductor : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.status",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.status : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.mRun",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.mRun : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.mWait",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.mWait : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.mStop",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.mStop : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.lastTagName",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.lastTagName : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.curStorage",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.curStorage : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.curLabel",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.curLabel : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.runLabel",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.runLabel : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.waitUntil",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.waitUntil : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.waitKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\") ? "
+              "Scripts.getObjectKeys(kag.conductor.waitUntil).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.waitAllKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\") ? "
+              "Scripts.getObjectKeys(kag.conductor.waitAll).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pendingCount",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.pendings.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 0) ? "
+              "(kag.conductor.pendings[0].tagname + \":\" + "
+              "((void !== kag.conductor.pendings[0].name) ? "
+              "kag.conductor.pendings[0].name : \"\")) : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.taglist",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 0 && "
+              "void !== kag.conductor.pendings[0].taglist) ? "
+              "kag.conductor.pendings[0].taglist.join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.keys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\" && "
+              "kag.conductor.pendings.count > 0) ? "
+              "Scripts.getObjectKeys(kag.conductor.pendings[0]).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.hasTrans",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 0) ? "
+              "(void !== kag.conductor.pendings[0].trans) : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.transKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\" && "
+              "kag.conductor.pendings.count > 0 && "
+              "void !== kag.conductor.pendings[0].trans) ? "
+              "Scripts.getObjectKeys(kag.conductor.pendings[0].trans).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.hasUpdate",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 0) ? "
+              "(void !== kag.conductor.pendings[0].update) : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.updateKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\" && "
+              "kag.conductor.pendings.count > 0 && "
+              "void !== kag.conductor.pendings[0].update) ? "
+              "Scripts.getObjectKeys(kag.conductor.pendings[0].update).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.updateCount",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 0 && "
+              "void !== kag.conductor.pendings[0].update && "
+              "void !== kag.conductor.pendings[0].update.count) ? "
+              "kag.conductor.pendings[0].update.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending1",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 1) ? "
+              "(kag.conductor.pendings[1].tagname + \":\" + "
+              "((void !== kag.conductor.pendings[1].name) ? "
+              "kag.conductor.pendings[1].name : \"\")) : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending1.taglist",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 1 && "
+              "void !== kag.conductor.pendings[1].taglist) ? "
+              "kag.conductor.pendings[1].taglist.join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.fastCount",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.fasttags.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.nextCount",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.nexttags.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.next0",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.nexttags.count > 0) ? "
+              "kag.conductor.nexttags[0].tagname : \"\""));
+    TVPTraceKagExpressionValue(
+        "main.status",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.mainConductor.status : \"\""));
+    TVPTraceKagExpressionValue(
+        "main.nextCount",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.mainConductor.nexttags.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "main.waitKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\") ? "
+              "Scripts.getObjectKeys(kag.mainConductor.waitUntil).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "extra.status",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.extraConductor.status : \"\""));
+    TVPTraceKagExpressionValue(
+        "extra.nextCount",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.extraConductor.nexttags.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "extra.waitKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\") ? "
+              "Scripts.getObjectKeys(kag.extraConductor.waitUntil).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "entryTags.count",
+        TJS_W("(typeof kag == \"Object\" && kag && void !== kag.entryTags) ? "
+              "kag.entryTags.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "transMode",
+        TJS_W("(typeof kag == \"Object\" && kag && void !== kag.transMode) ? "
+              "kag.transMode : \"\""));
+    TVPTraceKagExpressionValue(
+        "transTarget",
+        TJS_W("(typeof kag == \"Object\" && kag && void !== kag.transTarget) ? "
+              "kag.transTarget : \"\""));
+    TVPTraceKagExpressionValue(
+        "waitInfo",
+        TJS_W("(typeof kag == \"Object\" && kag && void !== kag.waitInfo) ? "
+              "kag.waitInfo : \"\""));
+}
+
 class TVPTraceObjectEnumCaller : public tTJSDispatch {
 public:
     TVPTraceObjectEnumCaller(std::string label, int limit)
@@ -355,7 +613,9 @@ static void TVPTraceObjectProperty(const char *label,
     spdlog::info("LayerIntf trace {}.{}={}", label, prop_name.AsStdString(),
                  TVPVariantDebugString(value));
     if(value.Type() == tvtObject &&
-       (prop_name == TJS_W("action") || prop_name == TJS_W("onClick"))) {
+       (prop_name == TJS_W("action") || prop_name == TJS_W("onClick") ||
+        prop_name == TJS_W("current") ||
+        prop_name == TJS_W("controlOwner"))) {
         tTJSVariantClosure nested = value.AsObjectClosureNoAddRef();
         if(nested.Object) {
             const std::string nested_label =
@@ -8698,8 +8958,11 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
                 TransTick = GetTransTick();
             }
             er = DivisibleTransHandler->StartProcess(TransTick);
-            if(er != TJS_S_TRUE)
+            if(er != TJS_S_TRUE) {
+                TVPTraceLayerTransition("before-completion-start-finished",
+                                        this, TransSrc, er);
                 StopTransitionByHandler();
+            }
         } else if(GiveUpdateTransHandler) {
             // not yet implemented
         }
@@ -8735,8 +8998,11 @@ void tTJSNI_BaseLayer::AfterCompletion() {
             // notify start of processing unit
             tjs_error er;
             er = DivisibleTransHandler->EndProcess();
-            if(er != TJS_S_TRUE)
+            if(er != TJS_S_TRUE) {
+                TVPTraceLayerTransition("after-completion-end-finished",
+                                        this, TransSrc, er);
                 StopTransitionByHandler();
+            }
         } else if(GiveUpdateTransHandler) {
             // not yet implemented
         }
@@ -10131,17 +10397,93 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
         // create option provider
         sop = new tTVPSimpleOptionProvider(options);
 
+        tjs_int destLayerWidth = GetWidth();
+        tjs_int destLayerHeight = GetHeight();
+        const tjs_int destImageWidth = MainImage ? MainImage->GetWidth() : -1;
+        const tjs_int destImageHeight = MainImage ? MainImage->GetHeight() : -1;
+        tjs_int srcLayerWidth = transsource ? transsource->GetWidth() : 0;
+        tjs_int srcLayerHeight = transsource ? transsource->GetHeight() : 0;
+        const tjs_int srcImageWidth =
+            (transsource && transsource->MainImage)
+                ? transsource->MainImage->GetWidth()
+                : -1;
+        const tjs_int srcImageHeight =
+            (transsource && transsource->MainImage)
+                ? transsource->MainImage->GetHeight()
+                : -1;
+
+        const bool kag_background_pair =
+            (GetName() == TJS_W("表-背景") &&
+             transsource && transsource->GetName() == TJS_W("裏-背景")) ||
+            (GetName() == TJS_W("裏-背景") &&
+             transsource && transsource->GetName() == TJS_W("表-背景"));
+        if(withchildren && kag_background_pair && MainImage &&
+           transsource && transsource->MainImage &&
+           destImageWidth == srcImageWidth &&
+           destImageHeight == srcImageHeight &&
+           destImageWidth > 0 && destImageHeight > 0 &&
+           (destLayerWidth != srcLayerWidth ||
+            destLayerHeight != srcLayerHeight) &&
+           destLayerWidth <= destImageWidth &&
+           srcLayerWidth <= srcImageWidth &&
+           destLayerHeight <= destImageHeight &&
+           srcLayerHeight <= srcImageHeight) {
+            if(TVPLayerTransitionTraceEnabled()) {
+                spdlog::info(
+                    "LayerTrans align-kag-background layer={} {}x{} src={} "
+                    "{}x{} image={}x{}",
+                    GetName().AsStdString(), destLayerWidth, destLayerHeight,
+                    transsource->GetName().AsStdString(), srcLayerWidth,
+                    srcLayerHeight, destImageWidth, destImageHeight);
+            }
+            if(destLayerWidth != destImageWidth ||
+               destLayerHeight != destImageHeight) {
+                InternalSetSize(static_cast<tjs_uint>(destImageWidth),
+                                static_cast<tjs_uint>(destImageHeight));
+                destLayerWidth = GetWidth();
+                destLayerHeight = GetHeight();
+            }
+            if(srcLayerWidth != srcImageWidth ||
+               srcLayerHeight != srcImageHeight) {
+                transsource->InternalSetSize(
+                    static_cast<tjs_uint>(srcImageWidth),
+                    static_cast<tjs_uint>(srcImageHeight));
+                srcLayerWidth = transsource->GetWidth();
+                srcLayerHeight = transsource->GetHeight();
+            }
+        }
+
+        const tjs_int providerDestWidth =
+            withchildren ? destLayerWidth : destImageWidth;
+        const tjs_int providerDestHeight =
+            withchildren ? destLayerHeight : destImageHeight;
+        const tjs_int providerSrcWidth =
+            transsource ? (withchildren ? srcLayerWidth : srcImageWidth) : 0;
+        const tjs_int providerSrcHeight =
+            transsource ? (withchildren ? srcLayerHeight : srcImageHeight) : 0;
+
+        if(TVPLayerTransitionTraceEnabled()) {
+            spdlog::info(
+                "LayerTrans request name={} withChildren={} layer={} native={} "
+                "layerSize={}x{} imageSize={}x{} src={} srcNative={} "
+                "srcLayerSize={}x{} srcImageSize={}x{} providerDest={}x{} "
+                "providerSrc={}x{}",
+                name.AsStdString(), withchildren ? "yes" : "no",
+                GetName().AsStdString(), static_cast<void *>(this),
+                destLayerWidth, destLayerHeight, destImageWidth,
+                destImageHeight,
+                transsource ? transsource->GetName().AsStdString() : "<null>",
+                static_cast<void *>(transsource), srcLayerWidth,
+                srcLayerHeight, srcImageWidth, srcImageHeight,
+                providerDestWidth, providerDestHeight, providerSrcWidth,
+                providerSrcHeight);
+        }
+
         // notify starting of the transition to the provider
         tjs_error er = pro->StartTransition(
             sop, &TVPSimpleImageProvider, DisplayType,
-            withchildren ? GetWidth() : MainImage->GetWidth(),
-            withchildren ? GetHeight() : MainImage->GetHeight(),
-            transsource ? (withchildren ? transsource->GetWidth()
-                                        : transsource->MainImage->GetWidth())
-                        : 0,
-            transsource ? (withchildren ? transsource->GetHeight()
-                                        : transsource->MainImage->GetHeight())
-                        : 0,
+            providerDestWidth, providerDestHeight, providerSrcWidth,
+            providerSrcHeight,
             &TransType, &TransUpdateType, &handler);
 
         if(TJS_FAILED(er))
@@ -10239,6 +10581,7 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
         InTransition = true;
         TransCompEventPrevented = false;
 
+        TVPTraceLayerTransition("start", this, TransSrc);
         spdlog::trace("[TransTrace] StartTransition name={} type={} updateType={} withChildren={} hasSrc={}",
             name.AsNarrowStdString(), (int)TransType, (int)TransUpdateType,
             withchildren, transsource != nullptr);
@@ -10264,6 +10607,7 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
 void tTJSNI_BaseLayer::InternalStopTransition() {
     // stop transition
     if(InTransition) {
+        TVPTraceLayerTransition("internal-stop-enter", this, TransSrc);
         spdlog::trace("[TransTrace] StopTransition type={}", (int)TransType);
         InTransition = false;
         TransCompEventPrevented = false;
@@ -10304,6 +10648,19 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
         bool transsrcalive = false;
         if(TransSrc && !TransSrc->Shutdown)
             transsrcalive = true;
+        if(TVPLayerTransitionTraceEnabled()) {
+            spdlog::info(
+                "LayerTrans internal-stop-alive layer={} src={} srcNative={} "
+                "srcShutdown={} srcAlive={} owner={} transDestObj={} transSrcObj={}",
+                GetName().AsStdString(),
+                TransSrc ? TransSrc->GetName().AsStdString() : "<null>",
+                static_cast<void *>(TransSrc),
+                TransSrc && TransSrc->Shutdown ? "yes" : "no",
+                transsrcalive ? "yes" : "no",
+                static_cast<void *>(Owner),
+                static_cast<void *>(TransDestObj),
+                static_cast<void *>(TransSrcObj));
+        }
 
         if(TransSrc)
             TransSrc->TransDest = nullptr;
@@ -10317,6 +10674,7 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
 
         // fire event
         if(Owner && !Shutdown && transsrcalive) {
+            TVPTraceLayerTransition("post-transition-completed", this, nullptr);
             static ttstr eventname(TJS_W("onTransitionCompleted"));
 
             // fire SYNCHRONOUS event of "onTransitionCompleted"
@@ -10353,6 +10711,7 @@ void tTJSNI_BaseLayer::StopTransition() {
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::StopTransitionByHandler() {
     // stopping of the transition caused by the handler
+    TVPTraceLayerTransition("stop-by-handler", this, TransSrc);
     if(!TVPEventDisabled) {
         // event dispatching is enabled
         InternalStopTransition();
@@ -12416,11 +12775,13 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                                param[arg_count++], evobj);
             }
             tTJSVariant *pevval = &evval;
+            TVPTraceKagState("before onClick action");
             const tjs_error hr =
                 obj.FuncCall(0, TVPActionName.c_str(),
                              TVPActionName.GetHint(), result, 1, &pevval,
                              nullptr);
             TVPTraceLayerActionResult("onClick", _this, hr, result);
+            TVPTraceKagState("after onClick action");
         }
 
         return TJS_S_OK;
@@ -12484,11 +12845,13 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                                param[arg_count++], evobj);
             }
             tTJSVariant *pevval = &evval;
+            TVPTraceKagState("before onMouseDown action");
             const tjs_error hr =
                 obj.FuncCall(0, TVPActionName.c_str(),
                              TVPActionName.GetHint(), result, 1, &pevval,
                              nullptr);
             TVPTraceLayerActionResult("onMouseDown", _this, hr, result);
+            TVPTraceKagState("after onMouseDown action");
         }
 
         return TJS_S_OK;
@@ -12537,11 +12900,13 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                                param[arg_count++], evobj);
             }
             tTJSVariant *pevval = &evval;
+            TVPTraceKagState("before onMouseUp action");
             const tjs_error hr =
                 obj.FuncCall(0, TVPActionName.c_str(),
                              TVPActionName.GetHint(), result, 1, &pevval,
                              nullptr);
             TVPTraceLayerActionResult("onMouseUp", _this, hr, result);
+            TVPTraceKagState("after onMouseUp action");
         }
 
         return TJS_S_OK;
