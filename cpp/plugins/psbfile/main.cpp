@@ -459,7 +459,14 @@ static tjs_error getRoot(tTJSVariant *r, tjs_int n, tTJSVariant **p,
     auto *self = ncbInstanceAdaptor<PSB::PSBFile>::GetNativeInstance(obj);
     const auto &root = self->getRootValue();
     if(root) {
-        *r = convertPSBLazy(root);
+        // Gallery scripts inspect and copy small PIMG roots as real
+        // Array/Dictionary objects. The lazy proxy is kept for large scenario
+        // PSBs where eager conversion is expensive.
+        if(self->getType() == PSB::PSBType::Pimg) {
+            *r = root->toTJSVal();
+        } else {
+            *r = convertPSBLazy(root);
+        }
     } else {
         r->Clear();
     }

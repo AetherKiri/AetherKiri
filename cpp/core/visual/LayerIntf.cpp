@@ -15,10 +15,14 @@
 #include "tjsCommHead.h"
 
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <cctype>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <spdlog/spdlog.h>
 #ifdef __ANDROID__
@@ -52,6 +56,7 @@
 #include "vkdefine.h"
 #include "RenderManager.h"
 #include "FontImpl.h"
+#include "../../plugins/psbfile/PSBMedia.h"
 
 extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
     tTJSNI_BaseLayer *layer);
@@ -2028,6 +2033,197 @@ static bool TVPLayerLoadThumbnailFitted(tTVPBaseTexture *dest,
                      tTVPRect(0, 0, target_width, target_height), &source,
                      tTVPRect(0, 0, source.GetWidth(), source.GetHeight()),
                      bmCopy, 255, false, stFastLinear, 0.0);
+    return true;
+}
+
+static bool TVPLayerGetObjectString(tTJSVariantClosure object,
+                                    const tjs_char *name,
+                                    ttstr &out) {
+    tTJSVariant value;
+    if(TJS_FAILED(object.PropGet(TJS_IGNOREPROP, name, nullptr, &value, nullptr)) ||
+       value.Type() == tvtVoid) {
+        return false;
+    }
+    out = ttstr(value);
+    return !out.IsEmpty();
+}
+
+static std::vector<std::string> TVPLayerSplitPimgSeton(const std::string &seton) {
+    std::vector<std::string> result;
+    size_t start = 0;
+    while(start <= seton.size()) {
+        const size_t sep = seton.find(':', start);
+        std::string part =
+            sep == std::string::npos ? seton.substr(start)
+                                      : seton.substr(start, sep - start);
+        if(!part.empty()) {
+            result.push_back(std::move(part));
+        }
+        if(sep == std::string::npos) {
+            break;
+        }
+        start = sep + 1;
+    }
+    return result;
+}
+
+static std::string TVPLayerPimgArchiveFromStorage(std::string storage) {
+    constexpr const char *scheme = "psb://";
+    if(storage.rfind(scheme, 0) == 0) {
+        storage.erase(0, std::strlen(scheme));
+    }
+    const size_t query = storage.find_first_of("?#");
+    if(query != std::string::npos) {
+        storage.erase(query);
+    }
+    const std::string lower = TVPLayerAsciiLower(storage);
+    if(lower.size() < 5 || lower.substr(lower.size() - 5) != ".pimg") {
+        storage += ".pimg";
+    }
+    return storage;
+}
+
+static bool TVPLayerLoadPimgComposite(tTJSNI_BaseLayer *layer,
+                                      const ttstr &storage,
+                                      const ttstr &seton,
+                                      tjs_uint32 colorkey,
+                                      iTJSDispatch2 **metainfo) {
+    if(!layer) {
+        return false;
+    }
+
+    PSB::PSBMedia *media = PSB::GetGlobalPSBMedia();
+    if(!media) {
+        return false;
+    }
+
+    const std::string archive =
+        TVPLayerPimgArchiveFromStorage(storage.AsStdString());
+    const std::string setonText = seton.AsStdString();
+    const std::vector<std::string> requestedLayers =
+        TVPLayerSplitPimgSeton(setonText);
+    if(archive.empty() || requestedLayers.empty()) {
+        return false;
+    }
+
+    media->ensureArchiveLoaded(archive, false);
+    std::vector<PSB::PSBMedia::ImageInfoEntry> entries =
+        media->getImagesByPrefix(archive);
+    if(entries.empty() && media->ensureArchiveLoaded(archive, true)) {
+        entries = media->getImagesByPrefix(archive);
+    }
+    if(entries.empty()) {
+        return false;
+    }
+
+    std::unordered_map<std::string, const PSB::PSBMedia::ImageInfoEntry *>
+        entriesByLabel;
+    for(const auto &entry : entries) {
+        if(entry.info.label.empty()) {
+            continue;
+        }
+        entriesByLabel.emplace(TVPLayerAsciiLower(entry.info.label), &entry);
+    }
+
+    std::vector<const PSB::PSBMedia::ImageInfoEntry *> selected;
+    selected.reserve(requestedLayers.size());
+    for(auto it = requestedLayers.rbegin(); it != requestedLayers.rend(); ++it) {
+        const auto found = entriesByLabel.find(TVPLayerAsciiLower(*it));
+        if(found == entriesByLabel.end()) {
+            spdlog::warn(
+                "Layer.loadImages PIMG composite missing layer: archive={} seton={} layer={}",
+                archive, setonText, *it);
+            return false;
+        }
+        selected.push_back(found->second);
+    }
+
+    int canvasWidth = 0;
+    int canvasHeight = 0;
+    for(const auto *entry : selected) {
+        canvasWidth =
+            std::max(canvasWidth, entry->info.left + entry->info.width);
+        canvasHeight =
+            std::max(canvasHeight, entry->info.top + entry->info.height);
+    }
+    if(canvasWidth <= 0 || canvasHeight <= 0) {
+        for(const auto &entry : entries) {
+            canvasWidth =
+                std::max(canvasWidth, entry.info.left + entry.info.width);
+            canvasHeight =
+                std::max(canvasHeight, entry.info.top + entry.info.height);
+        }
+    }
+    if(canvasWidth <= 0 || canvasHeight <= 0) {
+        return false;
+    }
+
+    tTVPBaseBitmap canvas(static_cast<tjs_uint>(canvasWidth),
+                          static_cast<tjs_uint>(canvasHeight), 32);
+    canvas.Fill(tTVPRect(0, 0, canvasWidth, canvasHeight), 0);
+
+    bool wroteAnyLayer = false;
+    iTJSDispatch2 *compositeMeta = nullptr;
+    try {
+        for(const auto *entry : selected) {
+            const auto &info = entry->info;
+            if(!info.visible || info.opacity <= 0) {
+                continue;
+            }
+
+            tTVPBaseTexture source(1, 1);
+            iTJSDispatch2 *layerMeta = nullptr;
+            const ttstr layerStorage =
+                ttstr(TJS_W("psb://")) + ttstr(entry->key.c_str());
+            TVPLoadGraphic(&source, layerStorage, colorkey, 0, 0, glmNormal,
+                           nullptr, compositeMeta ? nullptr : &layerMeta);
+            if(layerMeta) {
+                if(!compositeMeta) {
+                    compositeMeta = layerMeta;
+                } else {
+                    layerMeta->Release();
+                }
+            }
+
+            const tTVPRect sourceRect(
+                0, 0, static_cast<tjs_int>(source.GetWidth()),
+                static_cast<tjs_int>(source.GetHeight()));
+            const tjs_int opacity =
+                std::max(0, std::min(255, info.opacity));
+            const tTVPBBBltMethod method =
+                !wroteAnyLayer && opacity == 255 ? bmCopy : bmAlphaOnAlpha;
+            canvas.Blt(info.left, info.top, &source, sourceRect, method, opacity,
+                       false);
+            wroteAnyLayer = true;
+        }
+
+        if(!wroteAnyLayer) {
+            if(compositeMeta) {
+                compositeMeta->Release();
+            }
+            return false;
+        }
+
+        layer->AssignMainImageWithUpdate(&canvas);
+        spdlog::debug(
+            "Layer.loadImages PIMG composite storage={} archive={} seton={} size={}x{} layers={}",
+            storage.AsStdString(), archive, setonText, canvasWidth, canvasHeight,
+            selected.size());
+    } catch(...) {
+        if(compositeMeta) {
+            compositeMeta->Release();
+        }
+        spdlog::warn(
+            "Layer.loadImages PIMG composite failed: storage={} archive={} seton={}",
+            storage.AsStdString(), archive, setonText);
+        return false;
+    }
+
+    if(metainfo) {
+        *metainfo = compositeMeta;
+    } else if(compositeMeta) {
+        compositeMeta->Release();
+    }
     return true;
 }
 
@@ -11102,7 +11298,37 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         tjs_uint32 key = clNone; // TODO Intfなのに固有値が
         if(numparams >= 2 && param[1]->Type() != tvtVoid)
             key = (tjs_uint32)param[1]->AsInteger();
-        iTJSDispatch2 *metainfo = _this->LoadImages(name, key);
+        if(TVPLayerInputTraceEnabled() && numparams >= 3 &&
+           param[2]->Type() == tvtObject) {
+            spdlog::info("Layer.loadImages options name={} layer={}",
+                         name.AsStdString(), _this->GetName().AsStdString());
+            TVPTraceObjectMembers(
+                "loadImages.options",
+                param[2]->AsObjectClosureNoAddRef(), 120);
+        }
+        iTJSDispatch2 *metainfo = nullptr;
+        if(numparams >= 3 && param[2]->Type() == tvtObject) {
+            tTJSVariantClosure options = param[2]->AsObjectClosureNoAddRef();
+            ttstr pimgStorage;
+            ttstr pimgSeton;
+            if(TVPLayerGetObjectString(options, TJS_W("storage"), pimgStorage) &&
+               TVPLayerGetObjectString(options, TJS_W("seton"), pimgSeton) &&
+               TVPLayerLoadPimgComposite(_this, pimgStorage, pimgSeton, key,
+                                         &metainfo)) {
+                try {
+                    if(result)
+                        *result = metainfo;
+                } catch(...) {
+                    if(metainfo)
+                        metainfo->Release();
+                    throw;
+                }
+                if(metainfo)
+                    metainfo->Release();
+                return TJS_S_OK;
+            }
+        }
+        metainfo = _this->LoadImages(name, key);
         try {
             if(result)
                 *result = metainfo;
