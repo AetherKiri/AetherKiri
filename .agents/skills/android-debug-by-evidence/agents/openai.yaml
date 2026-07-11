@@ -1,0 +1,4 @@
+interface:
+  display_name: "Android Evidence Debugging"
+  short_description: "Reproduce Android bugs with precise warning and error logs"
+  default_prompt: "Use $android-debug-by-evidence to diagnose this Android-only performance or rendering bug through a user-operated reproduction."
