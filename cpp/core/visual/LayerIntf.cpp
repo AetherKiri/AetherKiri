@@ -15,7 +15,6 @@
 #include "tjsCommHead.h"
 
 #include <atomic>
-#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -73,33 +72,6 @@ bool TVPFreeUnusedLayerCache = false;
 
 static std::atomic<tjs_int> TVPLayerInstanceCount{0};
 static std::atomic<int64_t> TVPLayerBitmapTotalBytes{0};
-
-namespace {
-struct tTVPLayerGpuPerfContext {
-    uint64_t Sequence = 0;
-    uint64_t DrawCalls = 0;
-    uint64_t SlowSubtrees = 0;
-    int Depth = 0;
-};
-
-static std::atomic<uint64_t> TVPLayerGpuPerfSequence{0};
-static thread_local tTVPLayerGpuPerfContext *TVPCurrentLayerGpuPerf = nullptr;
-
-static int64_t TVPLayerPerfElapsedUs(
-    const std::chrono::steady_clock::time_point &start) {
-    return std::chrono::duration_cast<std::chrono::microseconds>(
-               std::chrono::steady_clock::now() - start)
-        .count();
-}
-
-static void TVPLogLayerGpuPerfWarning(const std::string &message) {
-    spdlog::warn("[PERF] {}", message);
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_WARN, "AetherKiriPerf", "%s",
-                        message.c_str());
-#endif
-}
-} // namespace
 
 tjs_int TVPGetLayerCount() { return TVPLayerInstanceCount.load(std::memory_order_relaxed); }
 tjs_uint64 TVPGetLayerTotalBitmapBytes() {
@@ -9159,12 +9131,6 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
     ParentRectToChildRect(rect); // to this layer based axis
     TVPTraceLayerDrawGpu("begin", this, rctar, rect, target);
 
-    const auto perf_start = std::chrono::steady_clock::now();
-    tTVPLayerGpuPerfContext *perf = TVPCurrentLayerGpuPerf;
-    const int perf_depth = perf ? perf->Depth++ : 0;
-    if(perf)
-        perf->DrawCalls++;
-
     // process drawing
     DirectTransferToParent = false;
 
@@ -9273,29 +9239,6 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
     }
 
     CurrentDrawTarget = nullptr;
-
-    if(perf) {
-        perf->Depth--;
-        const int64_t elapsed_us = TVPLayerPerfElapsedUs(perf_start);
-        if(elapsed_us >= 50000) {
-            perf->SlowSubtrees++;
-            const std::string name = GetName().AsStdString();
-            TVPLogLayerGpuPerfWarning(
-                "krkr_layer_draw_spike render=" +
-                std::to_string(perf->Sequence) + " depth=" +
-                std::to_string(perf_depth) + " total_us=" +
-                std::to_string(elapsed_us) + " name=\"" + name +
-                "\" rect=" + std::to_string(rect.left) + "," +
-                std::to_string(rect.top) + "," +
-                std::to_string(rect.right) + "," +
-                std::to_string(rect.bottom) + " size=" +
-                std::to_string(Rect.get_width()) + "x" +
-                std::to_string(Rect.get_height()) + " children=" +
-                std::to_string(GetVisibleChildrenCount()) + " opacity=" +
-                std::to_string(Opacity) + " transition=" +
-                std::to_string(InTransition ? 1 : 0));
-        }
-    }
 }
 
 //---------------------------------------------------------------------------
@@ -9974,15 +9917,6 @@ void tTJSNI_BaseLayer::InternalComplete(tTVPComplexRect &updateregion,
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
-    const auto complete_start = std::chrono::steady_clock::now();
-    tTVPLayerGpuPerfContext perf;
-    tTVPLayerGpuPerfContext *previous_perf = TVPCurrentLayerGpuPerf;
-    const bool trace_gpu = IsGPU() && previous_perf == nullptr;
-    if(trace_gpu) {
-        perf.Sequence = TVPLayerGpuPerfSequence.fetch_add(
-                            1, std::memory_order_relaxed) + 1;
-        TVPCurrentLayerGpuPerf = &perf;
-    }
     BeforeCompletion();
 
     if(Manager)
@@ -10002,8 +9936,6 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
     } catch(...) {
         if(Manager)
             Manager->GetLayerTreeOwner()->EndBitmapCompletion(Manager);
-        if(trace_gpu)
-            TVPCurrentLayerGpuPerf = previous_perf;
         throw;
     }
     if(Manager)
@@ -10011,22 +9943,6 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
 
     InCompletion = false;
     AfterCompletion();
-
-    if(trace_gpu) {
-        TVPCurrentLayerGpuPerf = previous_perf;
-        const int64_t elapsed_us = TVPLayerPerfElapsedUs(complete_start);
-        if(elapsed_us >= 50000) {
-            TVPLogLayerGpuPerfWarning(
-                "krkr_layer_complete_spike render=" +
-                std::to_string(perf.Sequence) + " total_us=" +
-                std::to_string(elapsed_us) + " draw_calls=" +
-                std::to_string(perf.DrawCalls) + " slow_subtrees=" +
-                std::to_string(perf.SlowSubtrees) + " root=\"" +
-                GetName().AsStdString() + "\" size=" +
-                std::to_string(Rect.get_width()) + "x" +
-                std::to_string(Rect.get_height()));
-        }
-    }
 }
 
 //---------------------------------------------------------------------------

@@ -67,9 +67,6 @@ endif()
 target_link_libraries(aether_kiri_godot PRIVATE
     "$<LINK_LIBRARY:WHOLE_ARCHIVE,unofficial::godot::cpp>"
 )
-if(ANDROID)
-    target_link_libraries(aether_kiri_godot PRIVATE log)
-endif()
 
 set_target_properties(aether_kiri_godot PROPERTIES
     OUTPUT_NAME "aether_kiri_godot"

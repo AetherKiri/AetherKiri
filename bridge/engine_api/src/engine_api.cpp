@@ -118,7 +118,6 @@ struct engine_handle_s {
   std::thread::id owner_thread;
   bool runtime_owner = false;
   uint64_t tick_count = 0;
-  std::chrono::steady_clock::time_point last_tick_end{};
 
   // Frame state — readback buffer and tracking
   struct FrameState {
@@ -179,13 +178,6 @@ void AndroidInfoLog(const char* fmt, ...) {
   __android_log_vprint(ANDROID_LOG_INFO, "krkr2", fmt, args);
   va_end(args);
 }
-
-void AndroidPerfWarning(const char* fmt, ...) {
-  va_list args;
-  va_start(args, fmt);
-  __android_log_vprint(ANDROID_LOG_WARN, "AetherKiriPerf", fmt, args);
-  va_end(args);
-}
 #endif
 
 enum class EngineState {
@@ -228,11 +220,7 @@ uint64_t EngineTickSpikeThresholdUs() {
   static const uint64_t threshold = []() -> uint64_t {
     const char* value = std::getenv("AETHERKIRI_ENGINE_TICK_SPIKE_MS");
     if (value == nullptr || *value == '\0') {
-#if defined(__ANDROID__)
-      return 50000;
-#else
       return 0;
-#endif
     }
     const double ms = std::atof(value);
     if (ms <= 0.0) {
@@ -1868,23 +1856,6 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   impl->tick_count += 1;
 
   const auto tick_start = std::chrono::steady_clock::now();
-#if defined(__ANDROID__)
-  if (impl->last_tick_end.time_since_epoch().count() != 0) {
-    const uint64_t gap_us = DurationUs(impl->last_tick_end, tick_start);
-    const uint64_t threshold_us = EngineTickSpikeThresholdUs();
-    if (threshold_us > 0 && gap_us >= threshold_us) {
-      spdlog::warn(
-          "[PERF] krkr_tick_gap tick={} gap_us={} pending_inputs={} renderer={}",
-          static_cast<unsigned long long>(impl->tick_count), gap_us,
-          impl->input.pending_events.size(), impl->render.renderer);
-      AndroidPerfWarning(
-          "krkr_tick_gap tick=%llu gap_us=%llu pending_inputs=%zu renderer=%s",
-          static_cast<unsigned long long>(impl->tick_count),
-          static_cast<unsigned long long>(gap_us),
-          impl->input.pending_events.size(), impl->render.renderer.c_str());
-    }
-  }
-#endif
   size_t dispatched_inputs = 0;
   while (!impl->input.pending_events.empty()) {
     const engine_input_event_t queued_event = impl->input.pending_events.front();
@@ -2073,7 +2044,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
       return;
     }
     spdlog::warn(
-        "[PERF] krkr_tick_spike tick={} total_us={} input_us={} app_us={} "
+        "engine_tick_spike tick={} total_us={} input_us={} app_us={} "
         "draw_us={} recycle_us={} capture_us={} inputs={} renderer={} "
         "frame_backend={}",
         static_cast<unsigned long long>(impl->tick_count), total_us,
@@ -2083,20 +2054,6 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
         DurationUs(after_draw_scene, after_recycle),
         DurationUs(after_recycle, tick_end), dispatched_inputs,
         impl->render.renderer, frame_backend);
-#if defined(__ANDROID__)
-    AndroidPerfWarning(
-        "krkr_tick_spike tick=%llu total_us=%llu input_us=%llu app_us=%llu "
-        "draw_us=%llu recycle_us=%llu capture_us=%llu inputs=%zu renderer=%s "
-        "frame_backend=%s",
-        static_cast<unsigned long long>(impl->tick_count),
-        static_cast<unsigned long long>(total_us),
-        static_cast<unsigned long long>(DurationUs(tick_start, after_input)),
-        static_cast<unsigned long long>(DurationUs(after_input, after_application_run)),
-        static_cast<unsigned long long>(DurationUs(after_application_run, after_draw_scene)),
-        static_cast<unsigned long long>(DurationUs(after_draw_scene, after_recycle)),
-        static_cast<unsigned long long>(DurationUs(after_recycle, tick_end)),
-        dispatched_inputs, impl->render.renderer.c_str(), frame_backend);
-#endif
   };
 
   if (TVPTerminated) {
@@ -2122,14 +2079,12 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
     // composited texture to HostWindowLayer::UpdateDrawBuffer().
     if (CaptureGodotNativeGpuFrameLocked(impl)) {
       log_tick_spike("godot_native_gpu");
-      impl->last_tick_end = std::chrono::steady_clock::now();
       ClearHandleErrorLocked(impl);
       SetThreadError(nullptr);
       return ENGINE_RESULT_OK;
     }
     if (CopyHostFrameLocked(impl)) {
       log_tick_spike("host_copy");
-      impl->last_tick_end = std::chrono::steady_clock::now();
       ClearHandleErrorLocked(impl);
       SetThreadError(nullptr);
       return ENGINE_RESULT_OK;
@@ -2175,7 +2130,6 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
                      ? "native_window"
                      : (impl->render.iosurface_attached ? "iosurface"
                                                         : "readback"));
-  impl->last_tick_end = std::chrono::steady_clock::now();
 #if defined(__ANDROID__)
   if (impl->tick_count % 120 == 0) {
     AndroidInfoLog("engine_tick: tick=%llu rendered=%d serial=%llu native_window=%d iosurface=%d frame_ready=%d",

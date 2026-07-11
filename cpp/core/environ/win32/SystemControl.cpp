@@ -3,11 +3,6 @@
 
 //---------------------------------------------------------------------------
 #include <algorithm>
-#include <chrono>
-#if defined(__ANDROID__)
-#include <android/log.h>
-#endif
-#include <spdlog/spdlog.h>
 #include "SystemControl.h"
 #include "EventIntf.h"
 #include "MsgIntf.h"
@@ -180,10 +175,9 @@ void tTVPSystemControl::RunMemoryGovernor(uint32_t tick) {
 
     const tjs_int base_graphic_limit_mb =
 #ifdef __ANDROID__
-        // Android games commonly assemble UI screens from dozens of decoded
-        // RGBA assets. On devices with a healthy memory budget, retain the
-        // game's normal 256 MB cache ceiling; pressure levels below still
-        // shrink it aggressively.
+        // Android UI screens commonly reuse dozens of decoded RGBA assets.
+        // Keep the normal cache ceiling when memory is healthy; pressure
+        // levels below still shrink it aggressively.
         TVPClampInt(budget_mb / (MemoryProfile ? 10 : 12), 32,
                     MemoryProfile ? 96 : 256);
 #else
@@ -515,9 +509,6 @@ void tTVPSystemControl::DeliverEvents() {
 }
 
 void tTVPSystemControl::SystemWatchTimerTimer() {
-#if defined(__ANDROID__)
-    const auto perf_begin = std::chrono::steady_clock::now();
-#endif
     if(TVPTerminated) {
         // this will ensure terminating the application.
         // the WM_QUIT message disappears in some unknown
@@ -562,9 +553,6 @@ void tTVPSystemControl::SystemWatchTimerTimer() {
 #endif
     // check status and deliver events
     DeliverEvents();
-#if defined(__ANDROID__)
-    const auto perf_after_events = std::chrono::steady_clock::now();
-#endif
 
     // call TickBeat
     tjs_int count = TVPGetWindowCount();
@@ -572,9 +560,6 @@ void tTVPSystemControl::SystemWatchTimerTimer() {
         tTJSNI_Window *win = TVPGetWindowListAt(i);
         win->TickBeat();
     }
-#if defined(__ANDROID__)
-    const auto perf_after_tickbeat = std::chrono::steady_clock::now();
-#endif
 
     if(!ContinuousEventCalling && tick - LastCompactedTick > 4000) {
         // idle state over 4 sec.
@@ -586,14 +571,8 @@ void tTVPSystemControl::SystemWatchTimerTimer() {
         LastCompactedTick = tick;
         TVPDeliverCompactEvent(TVP_COMPACT_LEVEL_IDLE);
     }
-#if defined(__ANDROID__)
-    const auto perf_after_compact = std::chrono::steady_clock::now();
-#endif
 
     RunMemoryGovernor(tick);
-#if defined(__ANDROID__)
-    const auto perf_after_governor = std::chrono::steady_clock::now();
-#endif
 
     if(!ContinuousEventCalling && tick > LastRehashedTick + 1500) {
         // TJS2 object rehash
@@ -605,27 +584,6 @@ void tTVPSystemControl::SystemWatchTimerTimer() {
         LastRehashedTick = tick;
         TJSDoRehash();
     }
-#if defined(__ANDROID__)
-    const auto perf_end = std::chrono::steady_clock::now();
-    auto duration_us = [](auto begin, auto end) -> long long {
-        return std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
-    };
-    const long long total_us = duration_us(perf_begin, perf_end);
-    if(total_us >= 50000) {
-        const long long events_us = duration_us(perf_begin, perf_after_events);
-        const long long tickbeat_us = duration_us(perf_after_events, perf_after_tickbeat);
-        const long long compact_us = duration_us(perf_after_tickbeat, perf_after_compact);
-        const long long governor_us = duration_us(perf_after_compact, perf_after_governor);
-        const long long rehash_us = duration_us(perf_after_governor, perf_end);
-        spdlog::warn(
-            "[PERF] krkr_system_watch_spike total_us={} events_us={} tickbeat_us={} compact_us={} governor_us={} rehash_us={}",
-            total_us, events_us, tickbeat_us, compact_us, governor_us, rehash_us);
-        __android_log_print(
-            ANDROID_LOG_WARN, "AetherKiriPerf",
-            "krkr_system_watch_spike total_us=%lld events_us=%lld tickbeat_us=%lld compact_us=%lld governor_us=%lld rehash_us=%lld",
-            total_us, events_us, tickbeat_us, compact_us, governor_us, rehash_us);
-    }
-#endif
     // ensure modal window visible
     if(tick > LastShowModalWindowSentTick + 4100) {
         //	::PostMessage(Handle, WM_USER+0x32, 0, 0);

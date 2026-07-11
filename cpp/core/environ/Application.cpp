@@ -1,12 +1,10 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 #include <string>
 #include <vector>
 #include <assert.h>
-#include <spdlog/spdlog.h>
 
 #include "tjsError.h"
 #include "tjsDebug.h"
@@ -83,25 +81,6 @@ static void TVPAndroidAppLog(const char *message) {
 static void TVPAndroidAppLogf(const char *fmt, size_t value) {
     if(!TVPAndroidAppTraceEnabled()) return;
     __android_log_print(ANDROID_LOG_INFO, "krkr2", fmt, value);
-}
-
-static uint64_t TVPAndroidPerfThresholdUs() {
-    static const uint64_t threshold = [] {
-        const char *value = std::getenv("AETHERKIRI_ENGINE_TICK_SPIKE_MS");
-        if(value && value[0]) {
-            const double ms = std::atof(value);
-            return ms > 0.0 ? static_cast<uint64_t>(ms * 1000.0) : uint64_t{0};
-        }
-        return uint64_t{50000};
-    }();
-    return threshold;
-}
-
-static uint64_t TVPAndroidDurationUs(
-    std::chrono::steady_clock::time_point begin,
-    std::chrono::steady_clock::time_point end) {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count());
 }
 #endif
 typedef void *F_alloc_t(void *, size_t);
@@ -624,7 +603,6 @@ void tTVPApplication::ShowException(const ttstr &e) {
 void tTVPApplication::Run() {
     try {
 #if defined(__ANDROID__)
-        const auto perf_begin = std::chrono::steady_clock::now();
         TVPAndroidAppLog("Application::Run begin");
 #endif
         if(TVPTerminated) {
@@ -640,7 +618,6 @@ void tTVPApplication::Run() {
 #endif
         ProcessMessages();
 #if defined(__ANDROID__)
-        const auto perf_after_messages = std::chrono::steady_clock::now();
         TVPAndroidAppLog("Application::Run after ProcessMessages");
 #endif
         if(TVPSystemControl)
@@ -651,24 +628,6 @@ void tTVPApplication::Run() {
             TVPSystemControl->SystemWatchTimerTimer();
 #if defined(__ANDROID__)
             TVPAndroidAppLog("Application::Run after SystemWatchTimerTimer");
-        }
-#endif
-#if defined(__ANDROID__)
-        const auto perf_end = std::chrono::steady_clock::now();
-        const uint64_t total_us = TVPAndroidDurationUs(perf_begin, perf_end);
-        if(total_us >= TVPAndroidPerfThresholdUs()) {
-            spdlog::warn(
-                "[PERF] krkr_app_spike total_us={} messages_us={} system_watch_us={}",
-                total_us, TVPAndroidDurationUs(perf_begin, perf_after_messages),
-                TVPAndroidDurationUs(perf_after_messages, perf_end));
-            __android_log_print(
-                ANDROID_LOG_WARN, "AetherKiriPerf",
-                "krkr_app_spike total_us=%llu messages_us=%llu system_watch_us=%llu",
-                static_cast<unsigned long long>(total_us),
-                static_cast<unsigned long long>(
-                    TVPAndroidDurationUs(perf_begin, perf_after_messages)),
-                static_cast<unsigned long long>(
-                    TVPAndroidDurationUs(perf_after_messages, perf_end)));
         }
 #endif
         //		TVPDeliverWindowUpdateEvents(); // from

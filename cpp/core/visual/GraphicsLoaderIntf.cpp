@@ -29,7 +29,6 @@
 #include "ScriptMgnIntf.h"
 #include "RenderManager.h"
 #include "ConfigManager/LocaleConfigManager.h"
-#include <chrono>
 #include <mutex>
 #include <thread>
 #include <condition_variable>
@@ -40,28 +39,10 @@
 #include <complex>
 #include <list>
 #include <spdlog/spdlog.h>
-#ifdef __ANDROID__
-#include <android/log.h>
-#endif
 
 #include "TVPDecodeArena.h"
 
 namespace {
-int64_t TVPGraphicPerfElapsedUs(
-    const std::chrono::steady_clock::time_point &start) {
-    return std::chrono::duration_cast<std::chrono::microseconds>(
-               std::chrono::steady_clock::now() - start)
-        .count();
-}
-
-void TVPLogGraphicPerfWarning(const std::string &message) {
-    spdlog::warn("[PERF] {}", message);
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_WARN, "AetherKiriPerf", "%s",
-                        message.c_str());
-#endif
-}
-
 bool TVPSaveTraceEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_SAVE_TRACE");
@@ -1936,7 +1917,6 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
                    tjs_uint desw, tjs_uint desh, tTVPGraphicLoadMode mode,
                    ttstr *provincename, iTJSDispatch2 **metainfo) {
     // loading with cache management
-    const auto perf_start = std::chrono::steady_clock::now();
     ttstr nname = TVPNormalizeStorageName(name);
     tjs_uint32 hash;
     tTVPGraphicsSearchData searchdata;
@@ -1954,7 +1934,6 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
             TVPGraphicCache.FindAndTouchWithHash(searchdata, hash);
         if(ptr) {
             // found in cache
-            const auto assign_start = std::chrono::steady_clock::now();
             if(dest)
                 ptr->GetObjectNoAddRef()->AssignToTexture(dest);
             if(provincename)
@@ -1962,22 +1941,7 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
             if(metainfo)
                 *metainfo = TVPMetaInfoPairsToDictionary(
                     ptr->GetObjectNoAddRef()->MetaInfo);
-            const int result_size = ptr->GetObjectNoAddRef()->GetSize();
-            const int64_t total_us = TVPGraphicPerfElapsedUs(perf_start);
-            if(total_us >= 50000) {
-                TVPLogGraphicPerfWarning(
-                    "krkr_graphic_load_spike total_us=" +
-                    std::to_string(total_us) + " cache=hit lookup_us=" +
-                    std::to_string(std::chrono::duration_cast<
-                                       std::chrono::microseconds>(
-                                       assign_start - perf_start)
-                                       .count()) +
-                    " assign_us=" +
-                    std::to_string(TVPGraphicPerfElapsedUs(assign_start)) +
-                    " bytes=" + std::to_string(result_size) + " name=\"" +
-                    nname.AsStdString() + "\"");
-            }
-            return result_size;
+            return ptr->GetObjectNoAddRef()->GetSize();
         }
     }
 
@@ -1992,7 +1956,6 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
     try {
         tTVPBitmap *bmp = nullptr;
         iTVPTexture2D *texture = nullptr;
-        const auto decode_start = std::chrono::steady_clock::now();
 
         // Skip XP3 decompression for known unsupported video formats
         // (but NOT .amv which is now handled by the AMV decoder).
@@ -2024,7 +1987,6 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
             TVPDecodeArena::Instance().End();
 #endif
         }
-        const auto decode_end = std::chrono::steady_clock::now();
 
         if(provincename)
             *provincename = pn;
@@ -2072,23 +2034,6 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
         } else {
             ret = bmp->GetWidth() * bmp->GetHeight() * bmp->GetBPP() / 8;
             bmp->Release();
-        }
-        const int64_t total_us = TVPGraphicPerfElapsedUs(perf_start);
-        if(total_us >= 50000) {
-            const int64_t decode_us =
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    decode_end - decode_start)
-                    .count();
-            const int64_t post_us = TVPGraphicPerfElapsedUs(decode_end);
-            TVPLogGraphicPerfWarning(
-                "krkr_graphic_load_spike total_us=" +
-                std::to_string(total_us) + " cache=miss decode_us=" +
-                std::to_string(decode_us) + " post_us=" +
-                std::to_string(post_us) + " bytes=" + std::to_string(ret) +
-                " cache_used=" +
-                std::to_string(TVPGraphicCacheTotalBytes) + " cache_limit=" +
-                std::to_string(TVPGraphicCacheLimit) + " name=\"" +
-                nname.AsStdString() + "\"");
         }
     } catch(...) {
         if(mi)

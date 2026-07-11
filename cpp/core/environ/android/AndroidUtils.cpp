@@ -1,5 +1,4 @@
 #include "AndroidUtils.h"
-#include <atomic>
 #include <unzip.h>
 #include "zlib.h"
 #include <map>
@@ -282,11 +281,6 @@ static jobject GetKR2ActInstance() {
         if (env) {
             return env->NewLocalRef(ctx);
         }
-    }
-    static std::atomic<bool> missing_context_reported{false};
-    if(!missing_context_reported.exchange(true, std::memory_order_relaxed)) {
-        __android_log_print(ANDROID_LOG_ERROR, "krkr2",
-            "GetKR2ActInstance: no KR2Activity and no Application Context available; further reports suppressed");
     }
     return 0;
 }

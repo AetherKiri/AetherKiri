@@ -10,11 +10,7 @@
 //---------------------------------------------------------------------------
 
 #include "tjsCommHead.h"
-#include <algorithm>
 #include <spdlog/spdlog.h>
-#ifdef __ANDROID__
-#include <android/log.h>
-#endif
 
 #include "tjsInterCodeExec.h"
 #include "tjsInterCodeGen.h"
@@ -35,7 +31,6 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 #include <thread>
 #include <fmt/format.h>
@@ -49,98 +44,6 @@ namespace TJS {
     static char TJSExecArgTraceRing[TJS_EXEC_ARG_TRACE_RING_SIZE]
                                   [TJS_EXEC_ARG_TRACE_LINE_SIZE] = {};
     static std::atomic<uint64_t> TJSExecArgTraceIndex{0};
-
-    static void TJSLogFunctionPerfWarning(const std::string &message) {
-        spdlog::warn("[PERF] {}", message);
-#ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_WARN, "AetherKiriPerf", "%s",
-                            message.c_str());
-#endif
-    }
-
-    struct TJSFunctionPerfStat {
-        uint64_t Calls = 0;
-        int64_t SelfUs = 0;
-        int64_t MaxSelfUs = 0;
-    };
-
-    struct TJSFunctionPerfFrame {
-        std::string Description;
-        std::chrono::steady_clock::time_point Start;
-        int64_t ChildUs = 0;
-        tjs_int NumArgs = 0;
-        tjs_int StartIp = 0;
-    };
-
-    static thread_local std::vector<TJSFunctionPerfFrame>
-        TJSFunctionPerfFrames;
-    static thread_local std::unordered_map<std::string, TJSFunctionPerfStat>
-        TJSFunctionPerfStats;
-
-    class TJSFunctionPerfScope {
-    public:
-        TJSFunctionPerfScope(const tTJSInterCodeContext *context,
-                             tjs_int num_args, tjs_int start_ip) {
-            if(TJSFunctionPerfFrames.empty())
-                TJSFunctionPerfStats.clear();
-            TJSFunctionPerfFrame frame;
-            frame.Description =
-                context->GetShortDescriptionWithClassName().AsStdString();
-            frame.Start = std::chrono::steady_clock::now();
-            frame.NumArgs = num_args;
-            frame.StartIp = start_ip;
-            TJSFunctionPerfFrames.emplace_back(std::move(frame));
-        }
-
-        ~TJSFunctionPerfScope() {
-            if(TJSFunctionPerfFrames.empty())
-                return;
-            TJSFunctionPerfFrame frame =
-                std::move(TJSFunctionPerfFrames.back());
-            TJSFunctionPerfFrames.pop_back();
-            const int64_t total_us =
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - frame.Start)
-                    .count();
-            const int64_t self_us = std::max<int64_t>(0, total_us - frame.ChildUs);
-            TJSFunctionPerfStat &stat = TJSFunctionPerfStats[frame.Description];
-            stat.Calls++;
-            stat.SelfUs += self_us;
-            stat.MaxSelfUs = std::max(stat.MaxSelfUs, self_us);
-            if(!TJSFunctionPerfFrames.empty())
-                TJSFunctionPerfFrames.back().ChildUs += total_us;
-
-            if(total_us >= 50000) {
-                TJSLogFunctionPerfWarning(fmt::format(
-                    "krkr_tjs_function_spike total_us={} self_us={} function=\"{}\" args={} start_ip={}",
-                    total_us, self_us, frame.Description, frame.NumArgs,
-                    frame.StartIp));
-            }
-
-            if(TJSFunctionPerfFrames.empty() && total_us >= 500000) {
-                std::vector<std::pair<std::string, TJSFunctionPerfStat>> ranked(
-                    TJSFunctionPerfStats.begin(), TJSFunctionPerfStats.end());
-                std::sort(ranked.begin(), ranked.end(),
-                          [](const auto &left, const auto &right) {
-                              return left.second.SelfUs > right.second.SelfUs;
-                          });
-                std::string top;
-                const size_t count = std::min<size_t>(ranked.size(), 12);
-                for(size_t i = 0; i < count; ++i) {
-                    if(!top.empty())
-                        top += "; ";
-                    top += fmt::format("{} self_us={} calls={} max_us={}",
-                                       ranked[i].first,
-                                       ranked[i].second.SelfUs,
-                                       ranked[i].second.Calls,
-                                       ranked[i].second.MaxSelfUs);
-                }
-                TJSLogFunctionPerfWarning(fmt::format(
-                    "krkr_tjs_profile total_us={} root=\"{}\" top=[{}]",
-                    total_us, frame.Description, top));
-            }
-        }
-    };
 
     static void TJSStoreExecArgTrace(std::string line) {
         const uint64_t index =
@@ -1176,7 +1079,6 @@ namespace TJS {
         if(!GetValidity() || !CodeArea) {
             TJSThrowFrom_tjs_error(TJS_E_INVALIDOBJECT);
         }
-        TJSFunctionPerfScope function_perf_scope(this, numargs, start_ip);
 
         struct tExecutingContextRefGuard {
             tTJSInterCodeContext *Self;
@@ -1333,7 +1235,6 @@ namespace TJS {
             throw;
         }
         TJSVariantArrayStackRelease();
-
     }
 
     //---------------------------------------------------------------------------

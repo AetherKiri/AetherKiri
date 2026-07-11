@@ -53,7 +53,6 @@
 #include <mutex>
 
 #if defined(__ANDROID__)
-#include <android/log.h>
 #include <jni.h>
 
 extern JNIEnv* krkr_GetJNIEnv();
@@ -110,7 +109,6 @@ struct GodotGpuOp {
     uint32_t color = 0xffffffffu;
     bool result = false;
     bool done = false;
-    std::chrono::steady_clock::time_point queued_at{};
     std::mutex done_mutex;
     std::condition_variable done_cv;
 };
@@ -126,121 +124,8 @@ std::atomic<uint64_t> g_gpu_queue_peak{0};
 std::atomic<uint64_t> g_gpu_barriers{0};
 std::atomic<uint64_t> g_gpu_alias_sources{0};
 std::atomic<uint64_t> g_gpu_sync_timeouts{0};
-std::atomic<uint64_t> g_gpu_drain_count{0};
-std::atomic<uint64_t> g_gpu_drain_max_us{0};
-std::atomic<uint64_t> g_gpu_queue_wait_max_us{0};
-std::atomic<uint64_t> g_gpu_present_max_us{0};
-std::atomic<uint64_t> g_gpu_present_dropped{0};
-std::atomic<uint64_t> g_gpu_texture_create_count{0};
-std::atomic<uint64_t> g_gpu_texture_create_max_us{0};
-std::atomic<uint64_t> g_gpu_texture_release_max_us{0};
-std::mutex g_gpu_perf_log_mutex;
-std::deque<std::string> g_gpu_perf_log;
-constexpr size_t kGpuPerfLogMaxLines = 100;
 
 constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
-
-uint64_t SteadyDurationUs(std::chrono::steady_clock::time_point begin,
-                          std::chrono::steady_clock::time_point end) {
-    if (begin.time_since_epoch().count() == 0 || end <= begin) return 0;
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count());
-}
-
-void UpdateAtomicMax(std::atomic<uint64_t> &target, uint64_t value) {
-    uint64_t current = target.load(std::memory_order_relaxed);
-    while (value > current &&
-           !target.compare_exchange_weak(current, value,
-                                         std::memory_order_relaxed)) {
-    }
-}
-
-const char *GodotGpuOpTypeName(GodotGpuOp::Type type) {
-    switch (type) {
-        case GodotGpuOp::Type::Update: return "update";
-        case GodotGpuOp::Type::Clear: return "clear";
-        case GodotGpuOp::Type::Copy: return "copy";
-        case GodotGpuOp::Type::PresentCopy: return "present";
-        case GodotGpuOp::Type::CopySelf: return "copy_self";
-        case GodotGpuOp::Type::CopyTriangles: return "copy_tri";
-        case GodotGpuOp::Type::DrawTriangles: return "draw_tri";
-        case GodotGpuOp::Type::DrawMaskedTriangles: return "draw_masked";
-        case GodotGpuOp::Type::Mosaic: return "mosaic";
-        case GodotGpuOp::Type::Read: return "read";
-        case GodotGpuOp::Type::Blend: return "blend";
-        case GodotGpuOp::Type::Blend2: return "blend2";
-        case GodotGpuOp::Type::Release: return "release";
-        case GodotGpuOp::Type::Warmup: return "warmup";
-        case GodotGpuOp::Type::Flush: return "flush";
-    }
-    return "unknown";
-}
-
-uint64_t GodotGpuBridgeSpikeThresholdUs() {
-    static const uint64_t threshold = [] {
-        const char *value = std::getenv("AETHERKIRI_GPU_BRIDGE_SPIKE_MS");
-        if (value != nullptr && value[0] != '\0') {
-            const double ms = std::atof(value);
-            return ms > 0.0 ? static_cast<uint64_t>(ms * 1000.0) : uint64_t{0};
-        }
-#if defined(__ANDROID__)
-        return uint64_t{16000};
-#else
-        return uint64_t{0};
-#endif
-    }();
-    return threshold;
-}
-
-uint64_t GodotGpuPresentSpikeThresholdUs() {
-    static const uint64_t threshold = [] {
-        const char *value = std::getenv("AETHERKIRI_GPU_PRESENT_SPIKE_MS");
-        if (value != nullptr && value[0] != '\0') {
-            const double ms = std::atof(value);
-            return ms > 0.0 ? static_cast<uint64_t>(ms * 1000.0) : uint64_t{0};
-        }
-#if defined(__ANDROID__)
-        // A normal 60 Hz presentation completes in roughly 16.7 ms. Only
-        // report latency that spans at least three display intervals.
-        return uint64_t{50000};
-#else
-        return uint64_t{0};
-#endif
-    }();
-    return threshold;
-}
-
-void GodotGpuPerfWarning(const std::string &message) {
-    {
-        std::lock_guard<std::mutex> lock(g_gpu_perf_log_mutex);
-        g_gpu_perf_log.push_back(message);
-        while (g_gpu_perf_log.size() > kGpuPerfLogMaxLines) {
-            g_gpu_perf_log.pop_front();
-        }
-    }
-#if defined(__ANDROID__)
-    __android_log_print(ANDROID_LOG_WARN, "AetherKiriPerf", "%s", message.c_str());
-#else
-    UtilityFunctions::print(String::utf8(message.c_str()));
-#endif
-}
-
-String GetGodotGpuPerformanceDiagnostics() {
-    std::lock_guard<std::mutex> lock(g_gpu_perf_log_mutex);
-    std::ostringstream out;
-    bool first = true;
-    for (const std::string &line : g_gpu_perf_log) {
-        if (!first) out << '\n';
-        first = false;
-        out << line;
-    }
-    return String::utf8(out.str().c_str());
-}
-
-void ClearGodotGpuPerformanceDiagnostics() {
-    std::lock_guard<std::mutex> lock(g_gpu_perf_log_mutex);
-    g_gpu_perf_log.clear();
-}
 
 #if defined(__ANDROID__)
 constexpr int kAndroidFlagActivityNewTask = 0x10000000;
@@ -1074,12 +959,7 @@ String GetGodotGpuBridgeDebugInfo() {
         << " bridge_blends=" << g_gpu_blend_op_submitted.load(std::memory_order_relaxed)
         << " bridge_barriers=" << g_gpu_barriers.load(std::memory_order_relaxed)
         << " bridge_alias_sources=" << g_gpu_alias_sources.load(std::memory_order_relaxed)
-        << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed)
-        << " bridge_drains=" << g_gpu_drain_count.load(std::memory_order_relaxed)
-        << " bridge_drain_max_us=" << g_gpu_drain_max_us.load(std::memory_order_relaxed)
-        << " bridge_wait_max_us=" << g_gpu_queue_wait_max_us.load(std::memory_order_relaxed)
-        << " present_max_us=" << g_gpu_present_max_us.load(std::memory_order_relaxed)
-        << " present_dropped=" << g_gpu_present_dropped.load(std::memory_order_relaxed);
+        << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed);
     return String::utf8(out.str().c_str());
 }
 
@@ -2942,19 +2822,6 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
 
 void FinishGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool result) {
     CountGpuOpResult(result);
-    if (!result && op != nullptr) {
-        std::ostringstream message;
-        message << "gpu_op_failed type=" << GodotGpuOpTypeName(op->type)
-                << " size=" << static_cast<int32_t>(op->size.x) << 'x'
-                << static_cast<int32_t>(op->size.y)
-                << " src_pos=" << static_cast<int32_t>(op->src_pos.x) << ','
-                << static_cast<int32_t>(op->src_pos.y)
-                << " dst_pos=" << static_cast<int32_t>(op->dst_pos.x) << ','
-                << static_cast<int32_t>(op->dst_pos.y)
-                << " opacity=" << op->opacity
-                << " mode=" << op->mode;
-        GodotGpuPerfWarning(message.str());
-    }
     {
         std::lock_guard<std::mutex> done_lock(op->done_mutex);
         op->result = result;
@@ -3018,13 +2885,8 @@ void ExecuteGodotGpuBlendBatch(
 }
 
 void DrainGodotGpuOpsOnRenderThread() {
-    const auto drain_start = std::chrono::steady_clock::now();
     RenderingDevice *rd = MainRenderingDevice();
     std::vector<std::shared_ptr<GodotGpuOp>> blend_batch;
-    std::array<uint64_t, 15> type_counts{};
-    uint64_t drained_ops = 0;
-    uint64_t failed_before = g_gpu_op_failed.load(std::memory_order_relaxed);
-    uint64_t max_queue_wait_us = 0;
     for (;;) {
         std::shared_ptr<GodotGpuOp> op;
         {
@@ -3036,13 +2898,6 @@ void DrainGodotGpuOpsOnRenderThread() {
             op = g_gpu_op_queue.front();
             g_gpu_op_queue.pop_front();
         }
-
-        drained_ops += 1;
-        const size_t type_index = static_cast<size_t>(op->type);
-        if (type_index < type_counts.size()) type_counts[type_index] += 1;
-        max_queue_wait_us = std::max(
-            max_queue_wait_us,
-            SteadyDurationUs(op->queued_at, std::chrono::steady_clock::now()));
 
         if (IsBatchableBlendOp(op)) {
             blend_batch.push_back(op);
@@ -3057,41 +2912,12 @@ void DrainGodotGpuOpsOnRenderThread() {
         FinishGodotGpuOp(op, ExecuteGodotGpuOp(rd, op));
     }
     ExecuteGodotGpuBlendBatch(rd, blend_batch);
-
-    const uint64_t drain_us = SteadyDurationUs(
-        drain_start, std::chrono::steady_clock::now());
-    g_gpu_drain_count.fetch_add(1, std::memory_order_relaxed);
-    UpdateAtomicMax(g_gpu_drain_max_us, drain_us);
-    UpdateAtomicMax(g_gpu_queue_wait_max_us, max_queue_wait_us);
-    const uint64_t threshold_us = GodotGpuBridgeSpikeThresholdUs();
-    if (threshold_us > 0 &&
-        (drain_us >= threshold_us || max_queue_wait_us >= threshold_us)) {
-        std::ostringstream counts;
-        bool first = true;
-        for (size_t i = 0; i < type_counts.size(); ++i) {
-            if (type_counts[i] == 0) continue;
-            if (!first) counts << ',';
-            first = false;
-            counts << GodotGpuOpTypeName(static_cast<GodotGpuOp::Type>(i))
-                   << ':' << type_counts[i];
-        }
-        const uint64_t failed_after =
-            g_gpu_op_failed.load(std::memory_order_relaxed);
-        std::ostringstream message;
-        message << "gpu_bridge_spike drain_us=" << drain_us
-                << " queue_wait_us=" << max_queue_wait_us
-                << " ops=" << drained_ops
-                << " failed=" << (failed_after - failed_before)
-                << " types=" << counts.str();
-        GodotGpuPerfWarning(message.str());
-    }
 }
 
 bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
     RenderingServer *server = RenderingServer::get_singleton();
     RenderingDevice *rd = MainRenderingDevice();
     if (op == nullptr) return false;
-    op->queued_at = std::chrono::steady_clock::now();
     g_gpu_op_submitted.fetch_add(1, std::memory_order_relaxed);
     if (op->type == GodotGpuOp::Type::Blend ||
         op->type == GodotGpuOp::Type::Blend2) {
@@ -3143,20 +2969,6 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
     if (!op->done_cv.wait_for(done_lock, kGodotGpuSyncWaitTimeout,
                               [&]() { return op->done; })) {
         g_gpu_sync_timeouts.fetch_add(1, std::memory_order_relaxed);
-        size_t queue_size = 0;
-        bool scheduled = false;
-        {
-            std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
-            queue_size = g_gpu_op_queue.size();
-            scheduled = g_gpu_op_drain_scheduled;
-        }
-        std::ostringstream message;
-        message << "gpu_bridge_timeout type=" << GodotGpuOpTypeName(op->type)
-                << " waited_us=" << SteadyDurationUs(
-                       op->queued_at, std::chrono::steady_clock::now())
-                << " queue=" << queue_size
-                << " scheduled=" << (scheduled ? 1 : 0);
-        GodotGpuPerfWarning(message.str());
         return false;
     }
     return op->result;
@@ -3214,7 +3026,6 @@ Ref<RDTextureFormat> MakeRgbaTextureFormat(uint32_t width, uint32_t height) {
 
 uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
                           uint32_t stride_bytes) {
-    const auto create_begin = std::chrono::steady_clock::now();
     RenderingDevice *rd = MainRenderingDevice();
     if (rd == nullptr || !SupportsGodotRenderingDeviceGpu() ||
         width == 0 || height == 0) {
@@ -3225,10 +3036,8 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
     view.instantiate();
     TypedArray<PackedByteArray> initial_data;
     initial_data.push_back(PackRgbaBytes(pixels, width, height, stride_bytes));
-    const auto after_pack = std::chrono::steady_clock::now();
     RID rid = rd->texture_create(MakeRgbaTextureFormat(width, height), view,
                                  initial_data);
-    const auto after_create = std::chrono::steady_clock::now();
     if (!rid.is_valid()) return 0;
 
     GodotGpuTextureRecord record;
@@ -3241,23 +3050,10 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
     std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
     const uint64_t id = g_next_gpu_texture_id++;
     g_gpu_textures[id] = record;
-    const uint64_t total_us = SteadyDurationUs(create_begin, after_create);
-    g_gpu_texture_create_count.fetch_add(1, std::memory_order_relaxed);
-    UpdateAtomicMax(g_gpu_texture_create_max_us, total_us);
-    if (total_us >= GodotGpuBridgeSpikeThresholdUs()) {
-        std::ostringstream message;
-        message << "gpu_texture_create_spike id=" << id
-                << " size=" << width << 'x' << height
-                << " total_us=" << total_us
-                << " pack_us=" << SteadyDurationUs(create_begin, after_pack)
-                << " rd_create_us=" << SteadyDurationUs(after_pack, after_create);
-        GodotGpuPerfWarning(message.str());
-    }
     return id;
 }
 
 void BridgeReleaseTexture(uint64_t texture) {
-    const auto release_begin = std::chrono::steady_clock::now();
     GodotGpuTextureRecord record;
     {
         std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
@@ -3272,15 +3068,6 @@ void BridgeReleaseTexture(uint64_t texture) {
         op->type = GodotGpuOp::Type::Release;
         op->dst = record.rid;
         RunGodotGpuOpSync(op);
-    }
-    const uint64_t release_us = SteadyDurationUs(
-        release_begin, std::chrono::steady_clock::now());
-    UpdateAtomicMax(g_gpu_texture_release_max_us, release_us);
-    if (release_us >= GodotGpuBridgeSpikeThresholdUs()) {
-        std::ostringstream message;
-        message << "gpu_texture_release_spike id=" << texture
-                << " total_us=" << release_us;
-        GodotGpuPerfWarning(message.str());
     }
 }
 
@@ -4278,18 +4065,6 @@ public:
         return String::utf8(buffer.data(), bytes_written);
     }
 
-    String get_performance_diagnostics() const {
-        return GetGodotGpuPerformanceDiagnostics();
-    }
-
-    void clear_performance_diagnostics() {
-        ClearGodotGpuPerformanceDiagnostics();
-    }
-
-    void record_performance_marker(const String &marker) {
-        GodotGpuPerfWarning(marker.utf8().get_data());
-    }
-
     String get_renderer_info() {
         if (handle_ == nullptr) {
             return String();
@@ -4714,12 +4489,6 @@ protected:
                              &AetherKiriPlayer::get_startup_state);
         ClassDB::bind_method(D_METHOD("drain_startup_logs"),
                              &AetherKiriPlayer::drain_startup_logs);
-        ClassDB::bind_method(D_METHOD("get_performance_diagnostics"),
-                             &AetherKiriPlayer::get_performance_diagnostics);
-        ClassDB::bind_method(D_METHOD("clear_performance_diagnostics"),
-                             &AetherKiriPlayer::clear_performance_diagnostics);
-        ClassDB::bind_method(D_METHOD("record_performance_marker", "marker"),
-                             &AetherKiriPlayer::record_performance_marker);
         ClassDB::bind_method(D_METHOD("get_renderer_info"),
                              &AetherKiriPlayer::get_renderer_info);
         ClassDB::bind_method(D_METHOD("get_frame_texture_backend"),
@@ -4829,18 +4598,6 @@ private:
         if (!done) {
             return false;
         }
-        const uint64_t present_us = SteadyDurationUs(
-            frame_present_pending_op_->queued_at,
-            std::chrono::steady_clock::now());
-        UpdateAtomicMax(g_gpu_present_max_us, present_us);
-        const uint64_t threshold_us = GodotGpuPresentSpikeThresholdUs();
-        if (threshold_us > 0 && present_us >= threshold_us) {
-            std::ostringstream message;
-            message << "gpu_present_spike serial=" << frame_present_pending_serial_
-                    << " latency_us=" << present_us
-                    << " dropped_since_submit=" << frame_present_pending_dropped_;
-            GodotGpuPerfWarning(message.str());
-        }
         if (result) {
             frame_present_current_slot_ = frame_present_pending_slot_;
             frame_present_serial_ = frame_present_pending_serial_;
@@ -4852,7 +4609,6 @@ private:
         frame_present_pending_op_.reset();
         frame_present_pending_serial_ = UINT64_MAX;
         frame_present_pending_backend_ = String();
-        frame_present_pending_dropped_ = 0;
         return result;
     }
 
@@ -4983,8 +4739,6 @@ private:
         // faster than Godot's render thread, drop intermediate copies and keep
         // displaying the last completed texture instead of blocking the tick.
         if (frame_present_pending_op_ != nullptr) {
-            frame_present_pending_dropped_ += 1;
-            g_gpu_present_dropped.fetch_add(1, std::memory_order_relaxed);
             if (frame_present_serial_ != UINT64_MAX &&
                 frame_present_textures_[frame_present_current_slot_].is_valid()) {
                 return frame_present_textures_[frame_present_current_slot_];
@@ -5027,7 +4781,6 @@ private:
         frame_present_pending_slot_ = next_slot;
         frame_present_pending_serial_ = serial;
         frame_present_pending_backend_ = backend_name;
-        frame_present_pending_dropped_ = 0;
         return frame_present_textures_[frame_present_current_slot_];
     }
 
@@ -5114,7 +4867,6 @@ private:
     size_t frame_present_pending_slot_ = 0;
     uint64_t frame_present_pending_serial_ = UINT64_MAX;
     String frame_present_pending_backend_;
-    uint64_t frame_present_pending_dropped_ = 0;
     bool gpu_pipelines_prewarmed_ = false;
     uint64_t frame_texture_serial_ = UINT64_MAX;
 };

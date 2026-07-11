@@ -12,9 +12,6 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
-#include <chrono>
-#include <string>
-#include <typeinfo>
 #include "SysInitIntf.h"
 #include "EventIntf.h"
 #include "WindowIntf.h"
@@ -24,26 +21,6 @@
 #include "TickCount.h"
 #include "SystemImpl.h"
 #include <spdlog/spdlog.h>
-#ifdef __ANDROID__
-#include <android/log.h>
-#endif
-
-namespace {
-static int64_t TVPEventPerfElapsedUs(
-    const std::chrono::steady_clock::time_point &start) {
-    return std::chrono::duration_cast<std::chrono::microseconds>(
-               std::chrono::steady_clock::now() - start)
-        .count();
-}
-
-static void TVPLogEventPerfWarning(const std::string &message) {
-    spdlog::warn("[PERF] {}", message);
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_WARN, "AetherKiriPerf", "%s",
-                        message.c_str());
-#endif
-}
-} // namespace
 
 //---------------------------------------------------------------------------
 // tTVPEvent  : script event class
@@ -121,7 +98,6 @@ public:
     void Deliver() {
         if(!TJSIsObjectValid(Target->IsValid(0, nullptr, nullptr, Target)))
             return; // The target had been invalidated
-        const auto perf_start = std::chrono::steady_clock::now();
         tTJSVariant **ArgsPtr = new tTJSVariant *[NumArgs];
         for(tjs_uint i = 0; i < NumArgs; i++)
             ArgsPtr[i] = Args + i;
@@ -133,16 +109,6 @@ public:
             throw;
         }
         delete[] ArgsPtr;
-        const int64_t elapsed_us = TVPEventPerfElapsedUs(perf_start);
-        if(elapsed_us >= 50000) {
-            TVPLogEventPerfWarning(
-                "krkr_script_event_spike total_us=" +
-                std::to_string(elapsed_us) + " event=\"" +
-                EventName.AsStdString() + "\" tag=" + std::to_string(Tag) +
-                " flags=" + std::to_string(Flags) + " args=" +
-                std::to_string(NumArgs) + " sequence=" +
-                std::to_string(Sequence));
-        }
     }
 
     iTJSDispatch2 *GetTargetNoAddRef() const { return Target; }
@@ -479,9 +445,6 @@ static bool _TVPDeliverAllEvents2() {
             TVPInputEventQueue.begin();
         e = *i;
         TVPInputEventQueue.erase(i);
-        const auto perf_start = std::chrono::steady_clock::now();
-        const int perf_tag = e->GetTag();
-        const std::string perf_type = typeid(*e).name();
 
         // event delivering
         try {
@@ -490,14 +453,7 @@ static bool _TVPDeliverAllEvents2() {
             delete e;
             throw;
         }
-        const int64_t elapsed_us = TVPEventPerfElapsedUs(perf_start);
         delete e;
-        if(elapsed_us >= 50000) {
-            TVPLogEventPerfWarning(
-                "krkr_input_event_spike total_us=" +
-                std::to_string(elapsed_us) + " type=\"" + perf_type +
-                "\" tag=" + std::to_string(perf_tag));
-        }
 
         // check exclusive events
         if(TVPExclusiveEventPosted)
@@ -521,40 +477,13 @@ static bool _TVPDeliverAllEvents() {
         return true;
 
     // event invokation was received...
-    const auto perf_start = std::chrono::steady_clock::now();
-    const size_t script_queue_before = TVPEventQueue.size();
-    const size_t input_queue_before = TVPInputEventQueue.size();
     TVPEventReceived();
-    const auto deliver_start = std::chrono::steady_clock::now();
 
     // for script event objects
 
     bool ret_value;
 
     ret_value = _TVPDeliverAllEvents2();
-
-    const auto finish = std::chrono::steady_clock::now();
-    const int64_t total_us =
-        std::chrono::duration_cast<std::chrono::microseconds>(finish - perf_start)
-            .count();
-    if(total_us >= 50000) {
-        const int64_t received_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(deliver_start -
-                                                                  perf_start)
-                .count();
-        const int64_t deliver_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(finish -
-                                                                  deliver_start)
-                .count();
-        TVPLogEventPerfWarning(
-            "krkr_event_dispatch_spike total_us=" + std::to_string(total_us) +
-            " received_us=" + std::to_string(received_us) +
-            " deliver_us=" + std::to_string(deliver_us) +
-            " script_before=" + std::to_string(script_queue_before) +
-            " input_before=" + std::to_string(input_queue_before) +
-            " script_after=" + std::to_string(TVPEventQueue.size()) +
-            " input_after=" + std::to_string(TVPInputEventQueue.size()));
-    }
 
     return ret_value;
 }
@@ -860,18 +789,10 @@ static void _TVPDeliverContinuousEvent() // internal
         bool emptyflag = false;
         for(tjs_uint32 i = 0; i < TVPContinuousEventVector.size(); i++) {
             // note that the handler can remove itself while the event
-            const auto callback_start = std::chrono::steady_clock::now();
             if(TVPContinuousEventVector[i])
                 TVPContinuousEventVector[i]->OnContinuousCallback(tick);
             else
                 emptyflag = true;
-            const int64_t callback_us = TVPEventPerfElapsedUs(callback_start);
-            if(callback_us >= 50000) {
-                TVPLogEventPerfWarning(
-                    "krkr_continuous_callback_spike total_us=" +
-                    std::to_string(callback_us) + " index=" +
-                    std::to_string(i));
-            }
 
             if(TVPExclusiveEventPosted)
                 return; // check exclusive events
@@ -899,7 +820,6 @@ static void _TVPDeliverContinuousEvent() // internal
         for(tjs_uint i = 0; i < TVPContinuousHandlerVector.size(); i++) {
             if(TVPContinuousHandlerVector[i].Object) {
                 tjs_error er;
-                const auto handler_start = std::chrono::steady_clock::now();
                 try {
                     er = TVPContinuousHandlerVector[i].FuncCall(
                         0, nullptr, nullptr, nullptr, 1, &pvtick, nullptr);
@@ -909,13 +829,6 @@ static void _TVPDeliverContinuousEvent() // internal
                     TVPContinuousHandlerVector[i].Object =
                         TVPContinuousHandlerVector[i].ObjThis = nullptr;
                     throw;
-                }
-                const int64_t handler_us = TVPEventPerfElapsedUs(handler_start);
-                if(handler_us >= 50000) {
-                    TVPLogEventPerfWarning(
-                        "krkr_continuous_handler_spike total_us=" +
-                        std::to_string(handler_us) + " index=" +
-                        std::to_string(i));
                 }
                 if(TJS_FAILED(er)) {
                     // failed
