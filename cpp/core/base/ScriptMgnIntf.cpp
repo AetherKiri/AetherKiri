@@ -38,6 +38,9 @@
 #include "SysInitIntf.h"
 #include "PhaseVocoderFilter.h"
 #include "BasicDrawDevice.h"
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 #include "BinaryStream.h"
 #include "SysInitImpl.h"
 #include "Application.h"
@@ -1363,6 +1366,14 @@ void TVPBeforeProcessUnhandledException() { TVPDumpHWException(); }
 extern ttstr TVPGetErrorDialogTitle();
 
 static void TVPTerminateAfterScriptException(const ttstr &reason) {
+    const std::string reason_utf8 = reason.AsStdString();
+    spdlog::error("TVPTerminateAfterScriptException:\n{}", reason_utf8);
+    spdlog::default_logger()->flush();
+#if defined(__ANDROID__)
+    __android_log_print(ANDROID_LOG_ERROR, "krkr2",
+                        "TVPTerminateAfterScriptException: %s",
+                        reason_utf8.c_str());
+#endif
     if(TVPHostSuppressProcessExit) {
         // Embedded host mode: avoid full synchronous teardown from inside
         // script exception handling. Mark runtime terminated and unwind.
@@ -1382,6 +1393,8 @@ void TVPShowScriptException(eTJS &e) {
             (ttstr(TVPScriptExceptionRaised) + TJS_W("\n") + e.GetMessage());
         TVPAddLog(ttstr(TVPScriptExceptionRaised) + TJS_W("\n") +
                   e.GetMessage());
+        spdlog::error("TVPShowScriptException:\n{}", errstr.AsStdString());
+        spdlog::default_logger()->flush();
         TVPShowSimpleMessageBox(errstr, TVPGetErrorDialogTitle());
         // Application->MessageDlg( errstr.AsStdString(),
         // std::wstring(), mtError, mbOK );
@@ -1401,6 +1414,16 @@ void TVPShowScriptException(eTJSScriptError &e) {
                   e.GetMessage());
         if(e.GetTrace().GetLen() != 0)
             TVPAddLog(ttstr(TJS_W("trace : ")) + e.GetTrace());
+        spdlog::error("TVPShowScriptException:\n{}", errstr.AsStdString());
+        if(e.GetTrace().GetLen() != 0)
+            spdlog::error("TVPShowScriptException trace:\n{}",
+                          e.GetTrace().AsStdString());
+        const tjs_char *scriptName = e.GetBlockName();
+        spdlog::error("TVPShowScriptException source: block='{}' line={} pos={}",
+                      scriptName != nullptr ? ttstr(scriptName).AsStdString()
+                                            : std::string(),
+                      e.GetSourceLine(), e.GetPosition());
+        spdlog::default_logger()->flush();
         TVPShowSimpleMessageBox(errstr, TVPGetErrorDialogTitle());
         //	Application->MessageDlg( errstr.AsStdString(),
         // Application->GetTitle(), mtStop, mbOK );
@@ -1480,6 +1503,10 @@ void TVPInitializeStartupScript() {
 
     TVPExecuteStartupScript();
     if(TVPTerminateOnNoWindowStartup && TVPGetWindowCount() == 0) {
+#if defined(__ANDROID__)
+        __android_log_print(ANDROID_LOG_INFO, "krkr2",
+                            "TVPInitializeStartupScript: no window at startup; terminating");
+#endif
         // no window is created and main window is invisible
         Application->Terminate();
     }

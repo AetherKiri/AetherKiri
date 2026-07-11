@@ -363,6 +363,8 @@ namespace TJS // following is in the namespace
         inherited::CallFinalize = false;
         Parent = nullptr;
         PropGetter = PropSetter = SuperClassGetter = nullptr;
+        ExecutingCount = 0;
+        DeferredFinalize = false;
 
         CodeArea = code;
         CodeAreaCapa = codeSize;

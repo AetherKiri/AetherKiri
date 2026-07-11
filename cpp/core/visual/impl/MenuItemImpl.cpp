@@ -23,8 +23,12 @@
 
 static std::map<tTVInteger, iTJSDispatch2 *> MENU_LIST;
 static void AddMenuDispatch(tTVInteger hWnd, iTJSDispatch2 *menu) {
-    MENU_LIST.insert(
+    if(menu == nullptr)
+        return;
+    auto inserted = MENU_LIST.insert(
         std::map<tTVInteger, iTJSDispatch2 *>::value_type(hWnd, menu));
+    if(inserted.second)
+        menu->AddRef();
 }
 iTJSDispatch2 *TVPGetMenuDispatch(tTVInteger hWnd) {
     auto i = MENU_LIST.find(hWnd);
@@ -33,7 +37,14 @@ iTJSDispatch2 *TVPGetMenuDispatch(tTVInteger hWnd) {
     }
     return nullptr;
 }
-static void DelMenuDispatch(tTVInteger hWnd) { MENU_LIST.erase(hWnd); }
+static void DelMenuDispatch(tTVInteger hWnd) {
+    auto i = MENU_LIST.find(hWnd);
+    if(i == MENU_LIST.end())
+        return;
+    if(i->second)
+        i->second->Release();
+    MENU_LIST.erase(i);
+}
 static bool _IsWindow(tTVInteger hWnd) {
     tjs_int count = TVPGetWindowCount();
     for(tjs_int i = 0; i < count; ++i) {
@@ -52,9 +63,7 @@ static void UpdateMenuList() {
             // �Ȥˤʤ��ʤä�Window
             auto target = i;
             i++;
-            iTJSDispatch2 *menu = target->second;
-            MENU_LIST.erase(target);
-            menu->Release();
+            DelMenuDispatch(target->first);
             // TVPDeleteAcceleratorKeyTable(hWnd);
         } else {
             i++;
@@ -73,9 +82,16 @@ tjs_error WindowMenuProperty::PropGet(tjs_uint32 flag,
     tTVInteger hWnd = var.AsInteger();
     iTJSDispatch2 *menu = TVPGetMenuDispatch(hWnd);
     if(menu == nullptr) {
-        UpdateMenuList();
-        menu = TVPCreateMenuItemObject(objthis);
-        AddMenuDispatch(hWnd, menu);
+        // Embedded frontends do not expose a native menu bar. Keep the script
+        // menu object alive for the window lifetime and avoid opportunistic
+        // cleanup here, because some startup scripts build nested menu trees
+        // while repeatedly reading Window.menu.
+        iTJSDispatch2 *created = TVPCreateMenuItemObject(objthis);
+        AddMenuDispatch(hWnd, created);
+        created->Release();
+        menu = TVPGetMenuDispatch(hWnd);
+        if(menu == nullptr)
+            return TJS_E_INVALIDOBJECT;
     }
     *result = tTJSVariant(menu, menu);
     return TJS_S_OK;

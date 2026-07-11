@@ -1076,6 +1076,10 @@ namespace TJS {
                                                  tjs_int numargs,
                                                  tTJSVariant *result,
                                                  tjs_int start_ip) {
+        if(!GetValidity() || !CodeArea) {
+            TJSThrowFrom_tjs_error(TJS_E_INVALIDOBJECT);
+        }
+
         struct tExecutingContextRefGuard {
             tTJSInterCodeContext *Self;
             iTJSDispatch2 *ObjThis;
@@ -1343,6 +1347,9 @@ namespace TJS {
         // execute VM codes
         tjs_int32 *codesave;
         try {
+            if(!CodeArea) {
+                TJSThrowFrom_tjs_error(TJS_E_INVALIDOBJECT);
+            }
             tjs_int32 *code = codesave = CodeArea + startip;
 
             if(TJSStackTracerEnabled())

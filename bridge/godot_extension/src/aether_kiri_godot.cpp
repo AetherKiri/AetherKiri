@@ -6,6 +6,9 @@
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/image_texture.hpp>
+#include <godot_cpp/classes/java_class.hpp>
+#include <godot_cpp/classes/java_class_wrapper.hpp>
+#include <godot_cpp/classes/java_object.hpp>
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
@@ -28,6 +31,7 @@
 #include <godot_cpp/variant/typed_array.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <godot_cpp/variant/variant.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -35,6 +39,8 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
@@ -45,6 +51,13 @@
 #include <vector>
 #include <unordered_map>
 #include <mutex>
+
+#if defined(__ANDROID__)
+#include <jni.h>
+
+extern JNIEnv* krkr_GetJNIEnv();
+extern jobject krkr_GetApplicationContext();
+#endif
 
 namespace godot {
 namespace {
@@ -111,6 +124,669 @@ std::atomic<uint64_t> g_gpu_alias_sources{0};
 std::atomic<uint64_t> g_gpu_sync_timeouts{0};
 
 constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
+
+#if defined(__ANDROID__)
+constexpr int kAndroidFlagActivityNewTask = 0x10000000;
+constexpr int kAndroidPermissionGranted = 0;
+
+void AndroidLogPrintf(const char *level, const char *format, ...) {
+#if !defined(NDEBUG)
+    char buffer[1024];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    UtilityFunctions::print(String("[AetherKiri/android/") +
+                            String(level != nullptr ? level : "info") +
+                            String("] ") + String(buffer));
+#else
+    (void)level;
+    (void)format;
+#endif
+}
+
+#define AK_ANDROID_LOGI(...) AndroidLogPrintf("info", __VA_ARGS__)
+#define AK_ANDROID_LOGW(...) AndroidLogPrintf("warn", __VA_ARGS__)
+
+JavaClassWrapper *AndroidJavaWrapper() {
+    JavaClassWrapper *wrapper = JavaClassWrapper::get_singleton();
+    if (wrapper == nullptr) {
+        AK_ANDROID_LOGW("storage permission Java bridge unavailable: no JavaClassWrapper");
+    }
+    return wrapper;
+}
+
+bool AndroidJavaHasException(JavaClassWrapper *wrapper, const char *stage) {
+    if (wrapper == nullptr) {
+        return false;
+    }
+    Ref<JavaObject> exception = wrapper->get_exception();
+    if (exception.is_valid()) {
+        AK_ANDROID_LOGW("storage permission Java bridge exception at %s",
+                        stage != nullptr ? stage : "unknown");
+        return true;
+    }
+    return false;
+}
+
+Object *AndroidVariantObject(const Variant &value) {
+    if (value.get_type() != Variant::OBJECT) {
+        return nullptr;
+    }
+    return static_cast<Object *>(value);
+}
+
+int AndroidHasExternalStoragePermissionViaGodotJava() {
+    JavaClassWrapper *wrapper = AndroidJavaWrapper();
+    if (wrapper == nullptr) {
+        return -1;
+    }
+
+    Ref<JavaClass> environment = wrapper->wrap("android.os.Environment");
+    if (environment.is_null() || AndroidJavaHasException(wrapper, "wrap Environment")) {
+        AK_ANDROID_LOGW("storage permission Java bridge failed: Environment unavailable");
+        return -1;
+    }
+
+    Variant result = environment->call("isExternalStorageManager");
+    if (AndroidJavaHasException(wrapper, "Environment.isExternalStorageManager")) {
+        return -1;
+    }
+    if (result.get_type() != Variant::BOOL &&
+        result.get_type() != Variant::INT) {
+        AK_ANDROID_LOGW("storage permission Java bridge failed: unexpected permission result type=%d",
+                        static_cast<int>(result.get_type()));
+        return -1;
+    }
+
+    const bool granted = result.get_type() == Variant::BOOL
+        ? static_cast<bool>(result)
+        : static_cast<int64_t>(result) != 0;
+    AK_ANDROID_LOGI("storage permission Java bridge granted=%d", granted ? 1 : 0);
+    return granted ? 1 : 0;
+}
+
+Object *AndroidGetApplicationContextViaGodotJava(JavaClassWrapper *wrapper,
+                                                Variant &app_context_owner) {
+    if (wrapper == nullptr) {
+        return nullptr;
+    }
+
+    Ref<JavaClass> activity_thread = wrapper->wrap("android.app.ActivityThread");
+    if (activity_thread.is_null() ||
+        AndroidJavaHasException(wrapper, "wrap ActivityThread")) {
+        AK_ANDROID_LOGW("storage permission Java bridge failed: ActivityThread unavailable");
+        return nullptr;
+    }
+
+    app_context_owner = activity_thread->call("currentApplication");
+    if (AndroidJavaHasException(wrapper, "ActivityThread.currentApplication")) {
+        return nullptr;
+    }
+    Object *context = AndroidVariantObject(app_context_owner);
+    if (context == nullptr) {
+        AK_ANDROID_LOGW("storage permission Java bridge failed: currentApplication returned no object");
+    }
+    return context;
+}
+
+bool AndroidStartSettingsIntentViaGodotJava(JavaClassWrapper *wrapper,
+                                           const char *action,
+                                           bool include_package_uri) {
+    if (wrapper == nullptr || action == nullptr) {
+        return false;
+    }
+
+    Variant context_owner;
+    Object *context = AndroidGetApplicationContextViaGodotJava(
+        wrapper, context_owner);
+    if (context == nullptr) {
+        return false;
+    }
+
+    Variant package_name = context->call("getPackageName");
+    if (AndroidJavaHasException(wrapper, "Context.getPackageName") ||
+        package_name.get_type() != Variant::STRING) {
+        AK_ANDROID_LOGW("storage permission Java bridge failed: package name unavailable");
+        return false;
+    }
+
+    Ref<JavaClass> intent_class = wrapper->wrap("android.content.Intent");
+    if (intent_class.is_null() || AndroidJavaHasException(wrapper, "wrap Intent")) {
+        AK_ANDROID_LOGW("storage permission Java bridge failed: Intent unavailable");
+        return false;
+    }
+
+    Variant intent_owner = intent_class->call("new");
+    if (AndroidJavaHasException(wrapper, "Intent.new()") ||
+        intent_owner.get_type() != Variant::OBJECT ||
+        AndroidVariantObject(intent_owner) == nullptr) {
+        AK_ANDROID_LOGW("storage permission Java bridge failed: empty intent create failed action=%s",
+                        action);
+        return false;
+    }
+
+    Object *intent = AndroidVariantObject(intent_owner);
+    intent->call("setAction", String(action));
+    if (AndroidJavaHasException(wrapper, "Intent.setAction")) {
+        AK_ANDROID_LOGW("storage permission Java bridge failed: setAction failed action=%s",
+                        action);
+        return false;
+    }
+
+    if (include_package_uri) {
+        Ref<JavaClass> uri_class = wrapper->wrap("android.net.Uri");
+        if (uri_class.is_valid() &&
+            !AndroidJavaHasException(wrapper, "wrap Uri")) {
+            const String uri_text = String("package:") + String(package_name);
+            Variant uri = uri_class->call("parse", uri_text);
+            if (!AndroidJavaHasException(wrapper, "Uri.parse") &&
+                AndroidVariantObject(uri) != nullptr) {
+                intent->call("setData", uri);
+                AndroidJavaHasException(wrapper, "Intent.setData");
+            }
+        }
+    }
+
+    intent->call("addFlags", kAndroidFlagActivityNewTask);
+    AndroidJavaHasException(wrapper, "Intent.addFlags");
+
+    context->call("startActivity", intent_owner);
+    if (AndroidJavaHasException(wrapper, "Context.startActivity")) {
+        AK_ANDROID_LOGW("storage permission Java bridge failed: startActivity failed action=%s",
+                        action);
+        return false;
+    }
+
+    AK_ANDROID_LOGI("storage permission Java bridge started settings action=%s include_package_uri=%d",
+                    action, include_package_uri ? 1 : 0);
+    return true;
+}
+
+bool AndroidRequestExternalStoragePermissionViaGodotJava() {
+    JavaClassWrapper *wrapper = AndroidJavaWrapper();
+    if (wrapper == nullptr) {
+        return false;
+    }
+
+    bool ok = AndroidStartSettingsIntentViaGodotJava(
+        wrapper, "android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION",
+        true);
+    if (!ok) {
+        ok = AndroidStartSettingsIntentViaGodotJava(
+            wrapper, "android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION",
+            false);
+    }
+    AK_ANDROID_LOGI("storage permission Java bridge request result=%d", ok ? 1 : 0);
+    return ok;
+}
+
+void AndroidClearJniException(JNIEnv *env) {
+    if (env != nullptr && env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
+}
+
+void AndroidDeleteLocalRef(JNIEnv *env, jobject ref) {
+    if (env != nullptr && ref != nullptr) {
+        env->DeleteLocalRef(ref);
+    }
+}
+
+jobject AndroidGetApplicationContextLocal(JNIEnv *env) {
+    if (env == nullptr) {
+        return nullptr;
+    }
+
+    jobject context = krkr_GetApplicationContext();
+    if (context != nullptr) {
+        return env->NewLocalRef(context);
+    }
+
+    jclass activity_thread_class = env->FindClass("android/app/ActivityThread");
+    if (activity_thread_class == nullptr) {
+        AndroidClearJniException(env);
+        return nullptr;
+    }
+
+    jmethodID current_application = env->GetStaticMethodID(
+        activity_thread_class, "currentApplication",
+        "()Landroid/app/Application;");
+    if (current_application == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(activity_thread_class);
+        return nullptr;
+    }
+
+    jobject app = env->CallStaticObjectMethod(activity_thread_class,
+                                             current_application);
+    env->DeleteLocalRef(activity_thread_class);
+    if (env->ExceptionCheck() || app == nullptr) {
+        AndroidClearJniException(env);
+        return nullptr;
+    }
+    return app;
+}
+
+jclass AndroidFindClassWithAppClassLoader(JNIEnv *env, const char *class_name) {
+    if (env == nullptr || class_name == nullptr) {
+        return nullptr;
+    }
+
+    jclass cls = env->FindClass(class_name);
+    if (cls != nullptr && !env->ExceptionCheck()) {
+        return cls;
+    }
+    AndroidClearJniException(env);
+
+    jobject app_context = AndroidGetApplicationContextLocal(env);
+    if (app_context == nullptr) {
+        return nullptr;
+    }
+
+    jclass context_class = env->FindClass("android/content/Context");
+    if (context_class == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(app_context);
+        return nullptr;
+    }
+
+    jmethodID get_class_loader = env->GetMethodID(
+        context_class, "getClassLoader", "()Ljava/lang/ClassLoader;");
+    if (get_class_loader == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(context_class);
+        env->DeleteLocalRef(app_context);
+        return nullptr;
+    }
+
+    jobject class_loader = env->CallObjectMethod(app_context, get_class_loader);
+    env->DeleteLocalRef(context_class);
+    env->DeleteLocalRef(app_context);
+    if (env->ExceptionCheck() || class_loader == nullptr) {
+        AndroidClearJniException(env);
+        return nullptr;
+    }
+
+    jclass class_loader_class = env->FindClass("java/lang/ClassLoader");
+    if (class_loader_class == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(class_loader);
+        return nullptr;
+    }
+
+    jmethodID load_class = env->GetMethodID(
+        class_loader_class, "loadClass",
+        "(Ljava/lang/String;)Ljava/lang/Class;");
+    if (load_class == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(class_loader_class);
+        env->DeleteLocalRef(class_loader);
+        return nullptr;
+    }
+
+    std::string dotted_name(class_name);
+    for (char &ch : dotted_name) {
+        if (ch == '/') {
+            ch = '.';
+        }
+    }
+    jstring java_class_name = env->NewStringUTF(dotted_name.c_str());
+    jobject class_object = env->CallObjectMethod(class_loader, load_class,
+                                                java_class_name);
+    AndroidDeleteLocalRef(env, java_class_name);
+    env->DeleteLocalRef(class_loader_class);
+    env->DeleteLocalRef(class_loader);
+    if (env->ExceptionCheck() || class_object == nullptr) {
+        AndroidClearJniException(env);
+        return nullptr;
+    }
+    return static_cast<jclass>(class_object);
+}
+
+jobject AndroidGetGodotActivityLocal(JNIEnv *env) {
+    if (env == nullptr) {
+        return nullptr;
+    }
+
+    jobject app_context = AndroidGetApplicationContextLocal(env);
+    if (app_context == nullptr) {
+        return nullptr;
+    }
+
+    jclass godot_class = AndroidFindClassWithAppClassLoader(
+        env, "org/godotengine/godot/Godot");
+    if (godot_class == nullptr) {
+        env->DeleteLocalRef(app_context);
+        return nullptr;
+    }
+
+    jmethodID get_instance = env->GetStaticMethodID(
+        godot_class, "getInstance",
+        "(Landroid/content/Context;)Lorg/godotengine/godot/Godot;");
+    if (get_instance == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(godot_class);
+        env->DeleteLocalRef(app_context);
+        return nullptr;
+    }
+
+    jobject godot = env->CallStaticObjectMethod(godot_class, get_instance,
+                                                app_context);
+    env->DeleteLocalRef(app_context);
+    if (env->ExceptionCheck() || godot == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(godot_class);
+        return nullptr;
+    }
+
+    jmethodID get_activity = env->GetMethodID(
+        godot_class, "getActivity", "()Landroid/app/Activity;");
+    if (get_activity == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(godot);
+        env->DeleteLocalRef(godot_class);
+        return nullptr;
+    }
+
+    jobject activity = env->CallObjectMethod(godot, get_activity);
+    env->DeleteLocalRef(godot);
+    env->DeleteLocalRef(godot_class);
+    if (env->ExceptionCheck() || activity == nullptr) {
+        AndroidClearJniException(env);
+        return nullptr;
+    }
+    return activity;
+}
+
+int AndroidGetSdkInt() {
+    JNIEnv *env = krkr_GetJNIEnv();
+    if (env == nullptr) {
+        return 0;
+    }
+
+    jclass version_class = env->FindClass("android/os/Build$VERSION");
+    if (version_class == nullptr) {
+        AndroidClearJniException(env);
+        return 0;
+    }
+
+    jfieldID sdk_int = env->GetStaticFieldID(version_class, "SDK_INT", "I");
+    if (sdk_int == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(version_class);
+        return 0;
+    }
+
+    const int result = env->GetStaticIntField(version_class, sdk_int);
+    AndroidClearJniException(env);
+    env->DeleteLocalRef(version_class);
+    return result;
+}
+
+bool AndroidHasRuntimePermission(const char *permission) {
+    JNIEnv *env = krkr_GetJNIEnv();
+    if (env == nullptr || permission == nullptr) {
+        return false;
+    }
+
+    jobject context = AndroidGetGodotActivityLocal(env);
+    if (context == nullptr) {
+        context = AndroidGetApplicationContextLocal(env);
+    }
+    if (context == nullptr) {
+        return false;
+    }
+
+    jclass context_class = env->FindClass("android/content/Context");
+    if (context_class == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(context);
+        return false;
+    }
+
+    jmethodID check_self_permission = env->GetMethodID(
+        context_class, "checkSelfPermission", "(Ljava/lang/String;)I");
+    if (check_self_permission == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(context_class);
+        env->DeleteLocalRef(context);
+        return false;
+    }
+
+    jstring permission_string = env->NewStringUTF(permission);
+    if (permission_string == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(context_class);
+        env->DeleteLocalRef(context);
+        return false;
+    }
+
+    const jint result = env->CallIntMethod(context, check_self_permission,
+                                          permission_string);
+    const bool ok =
+        !env->ExceptionCheck() && result == kAndroidPermissionGranted;
+    AndroidClearJniException(env);
+    env->DeleteLocalRef(permission_string);
+    env->DeleteLocalRef(context_class);
+    env->DeleteLocalRef(context);
+    return ok;
+}
+
+bool AndroidHasExternalStoragePermission() {
+    const int sdk = AndroidGetSdkInt();
+    if (sdk > 0 && sdk < 23) {
+        return true;
+    }
+    if (sdk > 0 && sdk < 30) {
+        return AndroidHasRuntimePermission(
+            "android.permission.READ_EXTERNAL_STORAGE");
+    }
+
+    const int java_result = AndroidHasExternalStoragePermissionViaGodotJava();
+    if (java_result >= 0) {
+        return java_result != 0;
+    }
+
+    JNIEnv *env = krkr_GetJNIEnv();
+    if (env == nullptr) {
+        return false;
+    }
+
+    jclass environment_class = env->FindClass("android/os/Environment");
+    if (environment_class == nullptr) {
+        AndroidClearJniException(env);
+        return false;
+    }
+
+    jmethodID is_external_storage_manager = env->GetStaticMethodID(
+        environment_class, "isExternalStorageManager", "()Z");
+    if (is_external_storage_manager == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(environment_class);
+        return false;
+    }
+
+    const jboolean result = env->CallStaticBooleanMethod(
+        environment_class, is_external_storage_manager);
+    const bool ok = !env->ExceptionCheck() && result == JNI_TRUE;
+    AndroidClearJniException(env);
+    env->DeleteLocalRef(environment_class);
+    return ok;
+}
+
+bool AndroidStartSettingsIntent(JNIEnv *env, jobject context, const char *action,
+                                bool include_package_uri) {
+    if (env == nullptr || context == nullptr || action == nullptr) {
+        AK_ANDROID_LOGW("storage permission settings intent skipped: invalid args");
+        return false;
+    }
+
+    jclass intent_class = env->FindClass("android/content/Intent");
+    jclass context_class = env->FindClass("android/content/Context");
+    if (intent_class == nullptr || context_class == nullptr) {
+        AK_ANDROID_LOGW("storage permission settings intent skipped: missing classes");
+        AndroidClearJniException(env);
+        AndroidDeleteLocalRef(env, intent_class);
+        AndroidDeleteLocalRef(env, context_class);
+        return false;
+    }
+
+    jstring action_string = env->NewStringUTF(action);
+    if (action_string == nullptr) {
+        AK_ANDROID_LOGW("storage permission settings intent skipped: action string failed");
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(intent_class);
+        env->DeleteLocalRef(context_class);
+        return false;
+    }
+
+    jobject uri = nullptr;
+    if (include_package_uri) {
+        jmethodID get_package_name = env->GetMethodID(
+            context_class, "getPackageName", "()Ljava/lang/String;");
+        jclass uri_class = env->FindClass("android/net/Uri");
+        jmethodID parse_uri = uri_class != nullptr
+            ? env->GetStaticMethodID(uri_class, "parse",
+                                     "(Ljava/lang/String;)Landroid/net/Uri;")
+            : nullptr;
+        if (get_package_name != nullptr && uri_class != nullptr &&
+            parse_uri != nullptr) {
+            auto package_name = static_cast<jstring>(
+                env->CallObjectMethod(context, get_package_name));
+            if (!env->ExceptionCheck() && package_name != nullptr) {
+                const char *package_chars =
+                    env->GetStringUTFChars(package_name, nullptr);
+                if (package_chars != nullptr) {
+                    std::string uri_text = "package:";
+                    uri_text += package_chars;
+                    env->ReleaseStringUTFChars(package_name, package_chars);
+                    jstring uri_string = env->NewStringUTF(uri_text.c_str());
+                    if (uri_string != nullptr) {
+                        uri = env->CallStaticObjectMethod(uri_class, parse_uri,
+                                                         uri_string);
+                        env->DeleteLocalRef(uri_string);
+                    }
+                }
+                env->DeleteLocalRef(package_name);
+            }
+        }
+        AndroidClearJniException(env);
+        AndroidDeleteLocalRef(env, uri_class);
+    }
+
+    jobject intent = nullptr;
+    if (include_package_uri && uri != nullptr) {
+        jmethodID constructor = env->GetMethodID(
+            intent_class, "<init>",
+            "(Ljava/lang/String;Landroid/net/Uri;)V");
+        if (constructor != nullptr) {
+            intent = env->NewObject(intent_class, constructor, action_string,
+                                    uri);
+        }
+    }
+    if (intent == nullptr) {
+        AndroidClearJniException(env);
+        jmethodID constructor = env->GetMethodID(
+            intent_class, "<init>", "(Ljava/lang/String;)V");
+        if (constructor != nullptr) {
+            intent = env->NewObject(intent_class, constructor, action_string);
+        }
+    }
+
+    if (intent == nullptr || env->ExceptionCheck()) {
+        AK_ANDROID_LOGW("storage permission settings intent skipped: intent create failed action=%s", action);
+        AndroidClearJniException(env);
+        AndroidDeleteLocalRef(env, uri);
+        env->DeleteLocalRef(action_string);
+        env->DeleteLocalRef(intent_class);
+        env->DeleteLocalRef(context_class);
+        return false;
+    }
+
+    jmethodID add_flags = env->GetMethodID(
+        intent_class, "addFlags", "(I)Landroid/content/Intent;");
+    if (add_flags != nullptr) {
+        jobject flagged = env->CallObjectMethod(
+            intent, add_flags, kAndroidFlagActivityNewTask);
+        AndroidClearJniException(env);
+        AndroidDeleteLocalRef(env, flagged);
+    } else {
+        AndroidClearJniException(env);
+    }
+
+    jmethodID start_activity = env->GetMethodID(
+        context_class, "startActivity", "(Landroid/content/Intent;)V");
+    if (start_activity == nullptr) {
+        AK_ANDROID_LOGW("storage permission settings intent skipped: startActivity not found action=%s", action);
+        AndroidClearJniException(env);
+        AndroidDeleteLocalRef(env, intent);
+        AndroidDeleteLocalRef(env, uri);
+        env->DeleteLocalRef(action_string);
+        env->DeleteLocalRef(intent_class);
+        env->DeleteLocalRef(context_class);
+        return false;
+    }
+
+    env->CallVoidMethod(context, start_activity, intent);
+    const bool ok = !env->ExceptionCheck();
+    AK_ANDROID_LOGI("storage permission settings intent action=%s include_package_uri=%d ok=%d",
+                    action, include_package_uri ? 1 : 0, ok ? 1 : 0);
+    AndroidClearJniException(env);
+    AndroidDeleteLocalRef(env, intent);
+    AndroidDeleteLocalRef(env, uri);
+    env->DeleteLocalRef(action_string);
+    env->DeleteLocalRef(intent_class);
+    env->DeleteLocalRef(context_class);
+    return ok;
+}
+
+bool AndroidRequestExternalStoragePermission() {
+    const int sdk = AndroidGetSdkInt();
+    AK_ANDROID_LOGI("storage permission request sdk=%d", sdk);
+    if (sdk > 0 && sdk < 30) {
+        AK_ANDROID_LOGI("storage permission request falling back to runtime permissions");
+        return false;
+    }
+    if (AndroidHasExternalStoragePermission()) {
+        AK_ANDROID_LOGI("storage permission already granted");
+        return true;
+    }
+
+    if (AndroidRequestExternalStoragePermissionViaGodotJava()) {
+        return true;
+    }
+
+    JNIEnv *env = krkr_GetJNIEnv();
+    if (env == nullptr) {
+        AK_ANDROID_LOGW("storage permission request failed: no JNI env");
+        return false;
+    }
+
+    jobject context = AndroidGetGodotActivityLocal(env);
+    AK_ANDROID_LOGI("storage permission request activity_context=%d", context != nullptr ? 1 : 0);
+    if (context == nullptr) {
+        context = AndroidGetApplicationContextLocal(env);
+        AK_ANDROID_LOGI("storage permission request app_context=%d", context != nullptr ? 1 : 0);
+    }
+    if (context == nullptr) {
+        AK_ANDROID_LOGW("storage permission request failed: no context");
+        return false;
+    }
+
+    bool ok = AndroidStartSettingsIntent(
+        env, context,
+        "android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION", true);
+    if (!ok) {
+        ok = AndroidStartSettingsIntent(
+            env, context,
+            "android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION", false);
+    }
+    AK_ANDROID_LOGI("storage permission request result=%d", ok ? 1 : 0);
+    env->DeleteLocalRef(context);
+    return ok;
+}
+#endif
 
 struct GodotGpuPipelineState {
     RID blend_shader;
@@ -3717,6 +4393,22 @@ public:
         return result;
     }
 
+    bool android_has_external_storage_permission() const {
+#if defined(__ANDROID__)
+        return AndroidHasExternalStoragePermission();
+#else
+        return true;
+#endif
+    }
+
+    bool android_request_external_storage_permission() const {
+#if defined(__ANDROID__)
+        return AndroidRequestExternalStoragePermission();
+#else
+        return true;
+#endif
+    }
+
 protected:
     static void _bind_methods() {
         ClassDB::bind_method(D_METHOD("initialize_engine", "writable_path", "cache_path"),
@@ -3773,6 +4465,10 @@ protected:
         ClassDB::bind_method(D_METHOD("debug_gpu_blend2_self_test", "mode", "opacity"),
                              &AetherKiriPlayer::debug_gpu_blend2_self_test,
                              DEFVAL(255));
+        ClassDB::bind_method(D_METHOD("android_has_external_storage_permission"),
+                             &AetherKiriPlayer::android_has_external_storage_permission);
+        ClassDB::bind_method(D_METHOD("android_request_external_storage_permission"),
+                             &AetherKiriPlayer::android_request_external_storage_permission);
     }
 
 private:

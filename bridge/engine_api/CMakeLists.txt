@@ -60,5 +60,5 @@ set_target_properties(engine_api PROPERTIES
 
 # On Android, link system platform libs.
 if(ANDROID)
-    target_link_libraries(engine_api PRIVATE log android)
+    target_link_libraries(engine_api PRIVATE log android dl)
 endif()

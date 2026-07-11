@@ -7,10 +7,12 @@
 
 #include "KrkrJniHelper.h"
 #include <android/log.h>
+#include <dlfcn.h>
 #include <mutex>
 #include <string>
 
 #define LOG_TAG "krkr2"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 // Declared in bridge/engine_api/src/android_jni_bridge.cpp
@@ -22,6 +24,37 @@ static JavaVM* g_javaVM = nullptr;
 static std::mutex g_jvm_mutex;
 
 namespace {
+
+using GetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
+
+JavaVM* RecoverJavaVMFromRuntime() {
+    auto fn = reinterpret_cast<GetCreatedJavaVMsFn>(
+        dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
+    void* artHandle = nullptr;
+    if (!fn) {
+        artHandle = dlopen("libart.so", RTLD_NOW | RTLD_LOCAL);
+        if (artHandle) {
+            fn = reinterpret_cast<GetCreatedJavaVMsFn>(
+                dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
+        }
+    }
+    if (!fn) {
+        LOGE("JniHelper: JNI_GetCreatedJavaVMs is unavailable");
+        return nullptr;
+    }
+
+    JavaVM* vm = nullptr;
+    jsize vmCount = 0;
+    const jint result = fn(&vm, 1, &vmCount);
+    if (result == JNI_OK && vmCount > 0 && vm) {
+        LOGI("JniHelper: recovered JavaVM from Android runtime");
+        return vm;
+    }
+
+    LOGE("JniHelper: JNI_GetCreatedJavaVMs failed result=%d count=%d",
+         result, static_cast<int>(vmCount));
+    return nullptr;
+}
 
 // Try to get an application context even before host plugin JNI has run.
 jobject ResolveApplicationContext(JNIEnv* env) {
@@ -146,8 +179,16 @@ void JniHelper::setJavaVM(JavaVM* vm) {
 }
 
 JavaVM* JniHelper::getJavaVM() {
-    std::lock_guard<std::mutex> lock(g_jvm_mutex);
-    return g_javaVM;
+    {
+        std::lock_guard<std::mutex> lock(g_jvm_mutex);
+        if (g_javaVM) return g_javaVM;
+    }
+
+    JavaVM* vm = RecoverJavaVMFromRuntime();
+    if (!vm) return nullptr;
+
+    setJavaVM(vm);
+    return vm;
 }
 
 JNIEnv* JniHelper::getEnv() {

@@ -16,6 +16,7 @@
 #include <cstring>
 #include <memory>
 #include <math.h>
+#include <mutex>
 
 #include "LayerBitmapIntf.h"
 #include "LayerBitmapImpl.h"
@@ -66,19 +67,23 @@ enum {
 static FontRasterizer *TVPFontRasterizers[FONT_RASTER_EOT];
 static bool TVPFontRasterizersInit = false;
 static tjs_int TVPCurrentFontRasterizers = FONT_RASTER_FREE_TYPE;
+static std::mutex TVPFontRasterizersMutex;
 // static tjs_int TVPCurrentFontRasterizers = FONT_RASTER_GDI;
 void TVPInializeFontRasterizers() {
-    if(TVPFontRasterizersInit == false) {
+    std::lock_guard<std::mutex> lock(TVPFontRasterizersMutex);
+    if(TVPFontRasterizers[FONT_RASTER_FREE_TYPE] == nullptr) {
         TVPFontRasterizers[FONT_RASTER_FREE_TYPE] =
             new FreeTypeFontRasterizer();
         //		TVPFontRasterizers[FONT_RASTER_GDI] = new
         // GDIFontRasterizer();
-
-        TVPFontSystem = new FontSystem();
-        TVPFontRasterizersInit = true;
     }
+    if(TVPFontSystem == nullptr) {
+        TVPFontSystem = new FontSystem();
+    }
+    TVPFontRasterizersInit = true;
 }
 void TVPUninitializeFontRasterizers() {
+    std::lock_guard<std::mutex> lock(TVPFontRasterizersMutex);
     for(tjs_int i = 0; i < FONT_RASTER_EOT; i++) {
         if(TVPFontRasterizers[i]) {
             TVPFontRasterizers[i]->Release();
@@ -89,6 +94,7 @@ void TVPUninitializeFontRasterizers() {
         delete TVPFontSystem;
         TVPFontSystem = nullptr;
     }
+    TVPFontRasterizersInit = false;
 }
 static tTVPAtExit TVPUninitializeFontRaster(TVP_ATEXIT_PRI_RELEASE,
                                             TVPUninitializeFontRasterizers);

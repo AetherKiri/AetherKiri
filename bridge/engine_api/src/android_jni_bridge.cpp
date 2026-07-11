@@ -12,6 +12,7 @@
 #include <android/log.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
+#include <dlfcn.h>
 #include <mutex>
 #include "environ/android/KrkrJniHelper.h"
 
@@ -27,9 +28,56 @@
 static JavaVM* g_javaVM = nullptr;
 static std::mutex g_jvm_mutex;
 
+namespace {
+
+using GetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
+
+JavaVM* RecoverJavaVMFromRuntime() {
+    auto fn = reinterpret_cast<GetCreatedJavaVMsFn>(
+        dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
+    void* artHandle = nullptr;
+    if (!fn) {
+        artHandle = dlopen("libart.so", RTLD_NOW | RTLD_LOCAL);
+        if (artHandle) {
+            fn = reinterpret_cast<GetCreatedJavaVMsFn>(
+                dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
+        }
+    }
+    if (!fn) {
+        LOGE("krkr_GetJavaVM: JNI_GetCreatedJavaVMs is unavailable");
+        return nullptr;
+    }
+
+    JavaVM* vm = nullptr;
+    jsize vmCount = 0;
+    const jint result = fn(&vm, 1, &vmCount);
+    if (result == JNI_OK && vmCount > 0 && vm) {
+        LOGI("krkr_GetJavaVM: recovered JavaVM from Android runtime");
+        return vm;
+    }
+
+    LOGE("krkr_GetJavaVM: JNI_GetCreatedJavaVMs failed result=%d count=%d",
+         result, static_cast<int>(vmCount));
+    return nullptr;
+}
+
+} // namespace
+
 JavaVM* krkr_GetJavaVM() {
-    std::lock_guard<std::mutex> lock(g_jvm_mutex);
-    return g_javaVM;
+    {
+        std::lock_guard<std::mutex> lock(g_jvm_mutex);
+        if (g_javaVM) return g_javaVM;
+    }
+
+    JavaVM* vm = RecoverJavaVMFromRuntime();
+    if (!vm) return nullptr;
+
+    {
+        std::lock_guard<std::mutex> lock(g_jvm_mutex);
+        g_javaVM = vm;
+    }
+    krkr::JniHelper::setJavaVM(vm);
+    return vm;
 }
 
 JNIEnv* krkr_GetJNIEnv() {

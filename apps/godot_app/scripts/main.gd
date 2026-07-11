@@ -141,6 +141,7 @@ const UI_TEXT := {
         "message.web_game_invalid": "浏览器返回的游戏信息无效",
         "message.web_import_timeout": "本地游戏导入超时",
         "message.web_picker_unsupported_long": "当前浏览器不支持直接选择本地游戏文件。请使用支持 File System Access 或目录上传的浏览器。",
+        "message.android_storage_permission_required": "需要允许 AetherKiri 访问文件系统后才能导入或启动外部游戏。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.path_missing": "游戏路径不存在",
         "message.game_exists": "游戏已存在：%s",
         "alert.error_title": "AetherKiri 错误",
@@ -251,6 +252,7 @@ const UI_TEXT := {
         "message.web_game_invalid": "瀏覽器返回的遊戲資訊無效",
         "message.web_import_timeout": "本機遊戲匯入逾時",
         "message.web_picker_unsupported_long": "目前瀏覽器不支援直接選擇本機遊戲檔案。請使用支援 File System Access 或目錄上傳的瀏覽器。",
+        "message.android_storage_permission_required": "需要允許 AetherKiri 存取檔案系統後才能匯入或啟動外部遊戲。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.path_missing": "遊戲路徑不存在",
         "message.game_exists": "遊戲已存在：%s",
         "alert.error_title": "AetherKiri 錯誤",
@@ -361,6 +363,7 @@ const UI_TEXT := {
         "message.web_game_invalid": "The browser returned invalid game information",
         "message.web_import_timeout": "Local game import timed out",
         "message.web_picker_unsupported_long": "This browser cannot directly choose local game files. Use a browser that supports File System Access or directory upload.",
+        "message.android_storage_permission_required": "Allow AetherKiri to access the file system before importing or launching external games. Grant file access in the system prompt or permission settings, then try again.",
         "message.path_missing": "Game path does not exist",
         "message.game_exists": "Game already exists: %s",
         "alert.error_title": "AetherKiri Error",
@@ -471,6 +474,7 @@ const UI_TEXT := {
         "message.web_game_invalid": "ブラウザーから無効なゲーム情報が返されました",
         "message.web_import_timeout": "ローカルゲームのインポートがタイムアウトしました",
         "message.web_picker_unsupported_long": "このブラウザーはローカルゲームファイルの直接選択に対応していません。File System Access またはディレクトリアップロード対応ブラウザーを使用してください。",
+        "message.android_storage_permission_required": "外部ゲームのインポートまたは起動には、AetherKiri にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.path_missing": "ゲームパスが存在しません",
         "message.game_exists": "ゲームは既に存在します：%s",
         "alert.error_title": "AetherKiri エラー",
@@ -581,6 +585,7 @@ const UI_TEXT := {
         "message.web_game_invalid": "브라우저가 잘못된 게임 정보를 반환했습니다",
         "message.web_import_timeout": "로컬 게임 가져오기 시간 초과",
         "message.web_picker_unsupported_long": "이 브라우저는 로컬 게임 파일을 직접 선택할 수 없습니다. File System Access 또는 디렉터리 업로드를 지원하는 브라우저를 사용하세요.",
+        "message.android_storage_permission_required": "외부 게임을 가져오거나 실행하려면 AetherKiri의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.path_missing": "게임 경로가 존재하지 않습니다",
         "message.game_exists": "게임이 이미 있습니다: %s",
         "alert.error_title": "AetherKiri 오류",
@@ -603,7 +608,8 @@ const POINTER_UP := 3
 const POINTER_SCROLL := 4
 const POINTER_MOD_LEFT := 0x08
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
-const SHELL_SCROLL_DRAG_SPEED := 4.0
+const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
+const SHELL_SCROLL_DRAG_SPEED := 1.0
 const SHELL_SCROLL_TOUCHPAD_SPEED := 12.0
 const SHELL_SCROLL_WHEEL_SPEED := 4.0
 const SHELL_SCROLL_WHEEL_STEP := 320.0
@@ -1026,6 +1032,7 @@ func _build_ui() -> void:
     viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
     viewport.visible = false
     add_child(viewport)
+    viewport.gui_input.connect(_on_viewport_input)
     _apply_upscale_algorithm()
 
     game_view = Control.new()
@@ -1308,6 +1315,7 @@ func _apply_engine_options() -> void:
     player.set_engine_option("mock_enabled", "1" if mock_enabled else "0")
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if trace_log else "0")
+    player.set_engine_option("input_trace", "1" if input_trace_enabled else "0")
     player.set_engine_option("export_scripts", "1" if export_scripts else "0")
     player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
     if not runtime_default_font_path.is_empty():
@@ -1869,13 +1877,16 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
     if scroll == null:
         shell_scroll_drag_states.erase(key)
         return
+    var control := _control_at_pointer(position)
+    var button := _nearest_base_button(control) if control != null else null
     shell_scroll_drag_states[key] = {
         "scroll": scroll,
-        "control": _control_at_pointer(position),
+        "control": control,
         "last": position,
         "distance": 0.0,
         "pending_y": 0.0,
         "dragging": false,
+        "threshold": SHELL_SCROLL_BUTTON_DRAG_THRESHOLD if button != null else SHELL_SCROLL_DRAG_THRESHOLD,
     }
 
 func _update_shell_scroll_drag(key: int, position: Vector2, relative: Vector2) -> bool:
@@ -1897,7 +1908,8 @@ func _update_shell_scroll_drag(key: int, position: Vector2, relative: Vector2) -
     var distance := float(state.get("distance", 0.0)) + absf(delta.y)
     var pending_y := float(state.get("pending_y", 0.0)) + delta.y
     var was_dragging := bool(state.get("dragging", false))
-    var dragging := was_dragging or distance >= SHELL_SCROLL_DRAG_THRESHOLD
+    var threshold := float(state.get("threshold", SHELL_SCROLL_DRAG_THRESHOLD))
+    var dragging := was_dragging or distance >= threshold
     state["distance"] = distance
     state["dragging"] = dragging
     state["pending_y"] = 0.0 if dragging else pending_y
@@ -2585,6 +2597,9 @@ func _show_detail(game: Dictionary) -> void:
     var start := _pill_button(_t("detail.launch"), ICON_PLAY)
     start.position = Vector2(440, 480)
     start.size = Vector2(760, 70)
+    start.button_down.connect(func(): _android_input_debug_log("detail launch button_down"))
+    start.button_up.connect(func(): _android_input_debug_log("detail launch button_up"))
+    start.pressed.connect(func(): _android_input_debug_log("detail launch pressed"))
     start.pressed.connect(_start_selected_game)
     content.add_child(start)
 
@@ -2687,9 +2702,18 @@ func _show_system_alert_once(key: String, message: String, title: String = "Aeth
     _show_system_alert(message, title)
 
 func _maybe_show_log_alert(line: String) -> void:
+    var message := line.strip_edges()
+    var alert_parts := message.split("[ALERT_DIALOG]", true, 1)
+    if alert_parts.size() > 1:
+        var content := alert_parts[1].strip_edges()
+        var parts := content.split(" | ", true, 1)
+        var alert_title := parts[0].strip_edges() if parts.size() > 0 else "AetherKiri"
+        var alert_message := parts[1].strip_edges() if parts.size() > 1 else ""
+        _show_system_alert(alert_message, alert_title)
+        return
+
     if not log_alerts:
         return
-    var message := line.strip_edges()
     if message.is_empty():
         return
     var lower := message.to_lower()
@@ -2856,6 +2880,8 @@ func _on_refresh_or_import() -> void:
         return
     if OS.get_name() == "Web":
         _show_web_import_picker()
+        return
+    if not _ensure_android_storage_permission_for_import():
         return
     _show_import_picker()
 
@@ -3179,6 +3205,8 @@ func _show_web_import_picker() -> void:
     box.add_child(cancel)
 
 func _open_import_dialog(xp3: bool) -> void:
+    if not _ensure_android_storage_permission_for_import():
+        return
     var filters := PackedStringArray(["*.xp3,*.XP3;KiriKiri XP3 archive"]) if xp3 else PackedStringArray()
     var dialog := _create_file_dialog(
         _t("dialog.select_xp3") if xp3 else _t("dialog.select_game_dir"),
@@ -3329,11 +3357,18 @@ func _sorted_games(games: Array[Dictionary]) -> Array[Dictionary]:
 func _path_exists(path: String) -> bool:
     if OS.get_name() == "Web" and path.begins_with("/webgames/"):
         return true
-    return DirAccess.dir_exists_absolute(path) or FileAccess.file_exists(path)
+    var candidate := _android_external_storage_path_from_tree_uri(path) if OS.get_name() == "Android" else path
+    if candidate.begins_with("content://"):
+        return false
+    return DirAccess.dir_exists_absolute(candidate) or FileAccess.file_exists(candidate)
 
 func _resolve_game_path(path: String) -> String:
     var normalized := path.strip_edges()
-    if normalized.is_empty() or _path_exists(normalized) or OS.get_name() != "iOS":
+    if normalized.is_empty():
+        return normalized
+    if OS.get_name() == "Android":
+        normalized = _android_external_storage_path_from_tree_uri(normalized)
+    if _path_exists(normalized) or OS.get_name() != "iOS":
         return normalized
 
     var current_root := ProjectSettings.globalize_path("user://Games")
@@ -3349,6 +3384,23 @@ func _resolve_game_path(path: String) -> String:
     if _path_exists(named_path):
         return named_path
     return normalized
+
+func _android_external_storage_path_from_tree_uri(path: String) -> String:
+    var prefix := "content://com.android.externalstorage.documents/tree/"
+    if not path.begins_with(prefix):
+        return path
+    var document_id := path.substr(prefix.length()).uri_decode()
+    if document_id.begins_with("primary:"):
+        var relative_path := document_id.substr("primary:".length()).strip_edges()
+        if relative_path.is_empty():
+            return "/storage/emulated/0"
+        return "/storage/emulated/0".path_join(relative_path)
+    if document_id.begins_with("home:"):
+        var home_relative_path := document_id.substr("home:".length()).strip_edges()
+        if home_relative_path.is_empty():
+            return "/storage/emulated/0/Documents"
+        return "/storage/emulated/0/Documents".path_join(home_relative_path)
+    return path
 
 func _web_game_entry_available(game: Dictionary) -> bool:
     if OS.get_name() != "Web":
@@ -3668,8 +3720,11 @@ func _sync_game_card_hover_states(allow_hover: bool = true) -> void:
             _set_game_card_border(button, border, active)
 
 func _start_selected_game() -> void:
+    _android_input_debug_log("_start_selected_game selected=%s" % str(selected_game))
     var path := String(selected_game.get("path", ""))
     if path.is_empty():
+        return
+    if not _ensure_android_storage_permission_for_path(path):
         return
     if not _mount_web_game(selected_game):
         return
@@ -3912,6 +3967,91 @@ func _finish_ready_after_first_frame() -> void:
         _append_log("Native auto-start ignored. Set AETHERKIRI_ENABLE_AUTO_START=1 for automation runs.")
     if not OS.get_environment("AETHERKIRI_CAPTURE_UI").is_empty():
         call_deferred("_capture_ui_after_ready")
+
+func _request_android_storage_permissions() -> void:
+    if OS.get_name() != "Android":
+        return
+    if player != null and player.has_method("android_request_external_storage_permission"):
+        if bool(player.android_request_external_storage_permission()):
+            return
+    OS.request_permissions()
+
+func _ensure_android_storage_permission_for_import() -> bool:
+    return _ensure_android_storage_permission_for_path("/storage/emulated/0")
+
+func _ensure_android_storage_permission_for_path(path: String) -> bool:
+    if not _android_path_needs_storage_permission(path):
+        return true
+    if _android_has_external_storage_permission():
+        return true
+    _show_android_storage_permission_prompt()
+    return false
+
+func _show_android_storage_permission_prompt() -> void:
+    modal_layer.visible = true
+    modal_layer.move_to_front()
+    for child in modal_layer.get_children():
+        child.queue_free()
+    var dim := ColorRect.new()
+    dim.color = Color(0, 0, 0, 0.52)
+    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+    modal_layer.add_child(dim)
+    var dialog := PanelContainer.new()
+    dialog.anchor_left = 0.5
+    dialog.anchor_top = 0.5
+    dialog.anchor_right = 0.5
+    dialog.anchor_bottom = 0.5
+    dialog.position = Vector2(-420, -180)
+    dialog.size = Vector2(840, 360)
+    dialog.add_theme_stylebox_override("panel", _panel_style(22, color_card, Color(0, 0, 0, 0.06), 1))
+    modal_layer.add_child(dialog)
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 24)
+    dialog.add_child(box)
+    var title := Label.new()
+    title.text = "AetherKiri"
+    title.add_theme_font_size_override("font_size", 32)
+    title.add_theme_color_override("font_color", color_text)
+    box.add_child(title)
+    var body := Label.new()
+    body.text = _t("message.android_storage_permission_required")
+    body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    body.add_theme_font_size_override("font_size", 24)
+    body.add_theme_color_override("font_color", color_text)
+    box.add_child(body)
+    var ok := _pill_button(_t("dialog.ok"))
+    ok.custom_minimum_size = Vector2(160, 64)
+    ok.pressed.connect(func():
+        modal_layer.visible = false
+        call_deferred("_request_android_storage_permissions")
+    )
+    box.add_child(ok)
+
+func _android_path_needs_storage_permission(path: String) -> bool:
+    if OS.get_name() != "Android":
+        return false
+    var normalized := _android_external_storage_path_from_tree_uri(path).strip_edges()
+    if normalized.is_empty():
+        return false
+    if normalized.begins_with("content://"):
+        return true
+    if normalized.begins_with("/sdcard"):
+        return true
+    if not normalized.begins_with("/storage/emulated/"):
+        return false
+    var package_path := "/storage/emulated/0/Android/data/org.github.krkr2.aetherkiri/"
+    return not normalized.begins_with(package_path)
+
+func _android_has_external_storage_permission() -> bool:
+    if OS.get_name() != "Android":
+        return true
+    if player != null and player.has_method("android_has_external_storage_permission"):
+        return bool(player.android_has_external_storage_permission())
+    for root in ["/storage/emulated/0", "/sdcard"]:
+        var dir := DirAccess.open(root)
+        if dir != null:
+            return true
+    return false
 
 func _auto_start_configured_game(spec: String = "") -> void:
     _refresh_known_games_for_auto_start()
@@ -4662,11 +4802,13 @@ func _process(delta: float) -> void:
     var startup_state := cached_startup_state
     if game_running:
         _sync_player_surface_size(false)
-        if _should_process_runtime_logs():
-            log_drain_accum += delta
-            if log_drain_accum >= LOG_DRAIN_INTERVAL:
-                log_drain_accum = 0.0
-                _drain_logs()
+        # Runtime logs also carry control messages such as [ALERT_DIALOG].
+        # Drain them even when developer logging is disabled so those messages
+        # cannot remain hidden in the native queue.
+        log_drain_accum += delta
+        if log_drain_accum >= LOG_DRAIN_INTERVAL:
+            log_drain_accum = 0.0
+            _drain_logs()
 
         if app_lifecycle_paused:
             return
@@ -5252,10 +5394,12 @@ func _drain_logs() -> void:
     var logs: String = String(player.drain_startup_logs())
     if logs.is_empty():
         return
-    if not _should_process_runtime_logs():
-        return
+    var process_runtime_logs := _should_process_runtime_logs()
     for line in logs.split("\n", false):
-        _append_log(line)
+        # Always process native control messages. Ordinary engine logs remain
+        # gated by the diagnostics/UI settings to avoid unnecessary UI work.
+        if process_runtime_logs or line.contains("[ALERT_DIALOG]"):
+            _append_log(line)
 
 func _should_process_runtime_logs() -> bool:
     return diagnostics_enabled or ui_log_enabled or log_alerts or error_dialog_logs
@@ -5716,6 +5860,30 @@ func _write_probe_marker(line: String) -> void:
     marker.flush()
 
 func _input(event: InputEvent) -> void:
+    if _is_game_pointer_event(event):
+        var debug_pos := Vector2.ZERO
+        if event is InputEventMouseButton:
+            debug_pos = (event as InputEventMouseButton).position
+        elif event is InputEventMouseMotion:
+            debug_pos = (event as InputEventMouseMotion).position
+        elif event is InputEventScreenTouch:
+            debug_pos = (event as InputEventScreenTouch).position
+        elif event is InputEventScreenDrag:
+            debug_pos = (event as InputEventScreenDrag).position
+        elif event is InputEventPanGesture:
+            debug_pos = (event as InputEventPanGesture).position
+        var debug_control := _control_at_pointer(debug_pos) if shell_root != null and shell_root.visible else null
+        var debug_button := _nearest_base_button(debug_control) if debug_control != null else null
+        _android_input_debug_log("input event=%s game_running=%s can_forward=%s viewport_visible=%s startup=%d pos=%s control=%s button=%s" % [
+            event.get_class(),
+            str(game_running),
+            str(_can_forward_game_input()),
+            str(viewport != null and viewport.visible),
+            cached_startup_state,
+            str(debug_pos),
+            _control_debug_label(debug_control),
+            _control_debug_label(debug_button),
+        ])
     if game_running and viewport.visible:
         if not _can_forward_game_input():
             if _is_game_pointer_event(event):
@@ -6104,11 +6272,65 @@ func _touch_engine_pointer_id(pointer_id: int) -> int:
 
 func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: float, delta_x: float, delta_y: float, button: int, modifiers: int = 0) -> void:
     var result := int(player.send_pointer_event(event_type, pointer_id, x, y, delta_x, delta_y, button, modifiers))
+    if _android_input_debug_enabled():
+        print("android_input fwd type=%d pid=%d x=%.1f y=%.1f dx=%.1f dy=%.1f button=%d mods=%d result=%d" % [
+            event_type,
+            pointer_id,
+            x,
+            y,
+            delta_x,
+            delta_y,
+            button,
+            modifiers,
+            result,
+        ])
+        _android_input_debug_log("fwd type=%d pid=%d x=%.1f y=%.1f dx=%.1f dy=%.1f button=%d mods=%d result=%d" % [
+            event_type,
+            pointer_id,
+            x,
+            y,
+            delta_x,
+            delta_y,
+            button,
+            modifiers,
+            result,
+        ])
     if not input_trace_enabled:
         return
     input_trace_forwarded += 1
     if result != ENGINE_RESULT_OK:
         input_trace_send_failed += 1
+
+func _android_input_debug_enabled() -> bool:
+    return OS.get_name() == "Android" and input_trace_enabled
+
+func _android_input_debug_log(line: String) -> void:
+    if not _android_input_debug_enabled():
+        return
+    var file := FileAccess.open("user://android-input.log", FileAccess.READ_WRITE)
+    if file == null:
+        file = FileAccess.open("user://android-input.log", FileAccess.WRITE)
+    if file == null:
+        return
+    file.seek_end()
+    file.store_line("%d %s" % [Time.get_ticks_msec(), line])
+    file.flush()
+
+func _control_debug_label(control: Control) -> String:
+    if control == null:
+        return "<null>"
+    var rect := control.get_global_rect()
+    return "%s name=%s path=%s rect=(%.1f,%.1f %.1fx%.1f) visible=%s filter=%d" % [
+        control.get_class(),
+        control.name,
+        control.get_path(),
+        rect.position.x,
+        rect.position.y,
+        rect.size.x,
+        rect.size.y,
+        str(control.is_visible_in_tree()),
+        int(control.mouse_filter),
+    ]
 
 func _trace_input_received() -> void:
     if input_trace_enabled:
@@ -6217,7 +6439,8 @@ func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2
             clampf(inside.x, 0.0, drawn_size.x),
             clampf(inside.y, 0.0, drawn_size.y)
         )
-    return inside / scale
+    var texture_point: Vector2 = inside / scale
+    return _map_texture_input_to_surface(texture_point, tex_size)
 
 func _map_viewport_delta(delta: Vector2) -> Vector2:
     if viewport.texture == null:
@@ -6228,7 +6451,21 @@ func _map_viewport_delta(delta: Vector2) -> Vector2:
     )
     var panel_size: Vector2 = viewport.size
     var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
-    return delta / max(0.0001, scale)
+    var texture_delta: Vector2 = delta / max(0.0001, scale)
+    return _map_texture_input_to_surface(texture_delta, tex_size)
+
+func _map_texture_input_to_surface(point: Vector2, texture_size: Vector2) -> Vector2:
+    if current_surface_size.x <= 0 or current_surface_size.y <= 0:
+        return point
+    var surface_size := Vector2(float(current_surface_size.x), float(current_surface_size.y))
+    if texture_size.x <= 0.0 or texture_size.y <= 0.0:
+        return point
+    if absf(surface_size.x - texture_size.x) <= 0.5 and absf(surface_size.y - texture_size.y) <= 0.5:
+        return point
+    return Vector2(
+        point.x * surface_size.x / texture_size.x,
+        point.y * surface_size.y / texture_size.y
+    )
 
 func _map_mouse_button(button_index: MouseButton) -> int:
     if button_index == MOUSE_BUTTON_RIGHT:
