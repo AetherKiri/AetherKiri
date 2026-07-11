@@ -12,7 +12,11 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <chrono>
 #include <spdlog/spdlog.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 #include "MsgIntf.h"
 #include "WindowIntf.h"
 #include "LayerIntf.h"
@@ -649,12 +653,46 @@ void tTJSNI_BaseWindow::NotifyUpdateRegionFixed(
 void tTJSNI_BaseWindow::UpdateContent() {
     if(DrawDevice) {
         // is called from event dispatcher
+        const auto update_start = std::chrono::steady_clock::now();
         DrawDevice->Update();
+        const auto show_start = std::chrono::steady_clock::now();
 
         if(!WaitVSync)
             DrawDevice->Show();
 
+        const auto end_start = std::chrono::steady_clock::now();
+
         EndUpdate();
+        const auto finish = std::chrono::steady_clock::now();
+        const auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                  finish - update_start)
+                                  .count();
+        if(total_us >= 50000) {
+            const auto update_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    show_start - update_start)
+                    .count();
+            const auto show_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    end_start - show_start)
+                    .count();
+            const auto end_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    finish - end_start)
+                    .count();
+            spdlog::warn(
+                "[PERF] krkr_window_update_spike total_us={} update_us={} show_us={} end_us={} wait_vsync={}",
+                total_us, update_us, show_us, end_us, WaitVSync ? 1 : 0);
+#ifdef __ANDROID__
+            __android_log_print(
+                ANDROID_LOG_WARN, "AetherKiriPerf",
+                "krkr_window_update_spike total_us=%lld update_us=%lld show_us=%lld end_us=%lld wait_vsync=%d",
+                static_cast<long long>(total_us),
+                static_cast<long long>(update_us),
+                static_cast<long long>(show_us),
+                static_cast<long long>(end_us), WaitVSync ? 1 : 0);
+#endif
+        }
     }
 }
 //---------------------------------------------------------------------------

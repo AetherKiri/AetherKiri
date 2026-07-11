@@ -1,4 +1,5 @@
 #include "AndroidUtils.h"
+#include <atomic>
 #include <unzip.h>
 #include "zlib.h"
 #include <map>
@@ -29,6 +30,7 @@
 #include "RenderManager.h"
 #include <sys/stat.h>
 #include <cerrno>
+#include <cstdio>
 
 using JniHelper = krkr::JniHelper;
 using JniMethodInfo = krkr::JniHelper::MethodInfo;
@@ -49,6 +51,46 @@ void DeleteLocalRefIf(JNIEnv *env, jobject ref) {
     if(env != nullptr && ref != nullptr) {
         env->DeleteLocalRef(ref);
     }
+}
+
+tjs_int ReadProcMemAvailableMB() {
+    FILE *file = std::fopen("/proc/meminfo", "r");
+    if(!file)
+        return -1;
+    char line[256];
+    long mem_available_kb = -1;
+    long mem_free_kb = -1;
+    while(std::fgets(line, sizeof(line), file)) {
+        long value = 0;
+        if(std::sscanf(line, "MemAvailable: %ld kB", &value) == 1) {
+            mem_available_kb = value;
+            break;
+        }
+        if(std::sscanf(line, "MemFree: %ld kB", &value) == 1)
+            mem_free_kb = value;
+    }
+    std::fclose(file);
+    const long available_kb =
+        mem_available_kb >= 0 ? mem_available_kb : mem_free_kb;
+    return available_kb >= 0
+               ? static_cast<tjs_int>(available_kb / 1024)
+               : -1;
+}
+
+tjs_int ReadProcSelfRssMB() {
+    FILE *file = std::fopen("/proc/self/statm", "r");
+    if(!file)
+        return -1;
+    unsigned long total_pages = 0;
+    unsigned long resident_pages = 0;
+    const int read = std::fscanf(file, "%lu %lu", &total_pages,
+                                 &resident_pages);
+    std::fclose(file);
+    if(read != 2)
+        return -1;
+    return static_cast<tjs_int>(
+        resident_pages * static_cast<unsigned long>(getpagesize()) /
+        (1024UL * 1024UL));
 }
 
 } // namespace
@@ -99,12 +141,16 @@ static void updateMemoryInfo() {
 
 tjs_int TVPGetSystemFreeMemory() {
     updateMemoryInfo();
-    return _availMemory;
+    if(_availMemory > 0)
+        return _availMemory;
+    return ReadProcMemAvailableMB();
 }
 
 tjs_int TVPGetSelfUsedMemory() {
     updateMemoryInfo();
-    return usedMemory;
+    if(usedMemory > 0)
+        return usedMemory;
+    return ReadProcSelfRssMB();
 }
 
 void TVPForceSwapBuffer() {
@@ -237,8 +283,11 @@ static jobject GetKR2ActInstance() {
             return env->NewLocalRef(ctx);
         }
     }
-    __android_log_print(ANDROID_LOG_ERROR, "krkr2",
-        "GetKR2ActInstance: no KR2Activity and no Application Context available");
+    static std::atomic<bool> missing_context_reported{false};
+    if(!missing_context_reported.exchange(true, std::memory_order_relaxed)) {
+        __android_log_print(ANDROID_LOG_ERROR, "krkr2",
+            "GetKR2ActInstance: no KR2Activity and no Application Context available; further reports suppressed");
+    }
     return 0;
 }
 

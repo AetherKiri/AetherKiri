@@ -98,10 +98,45 @@ int TVPDrawSceneOnce(int interval) {
     tjs_uint64 curTick = TVPGetRoughTickCount32();
     int remain = interval - static_cast<int>(curTick - lastTick);
     if (remain <= 0) {
+#ifdef __ANDROID__
+        const auto perf_begin = std::chrono::steady_clock::now();
+#endif
         if (s_postUpdate)
             s_postUpdate();
+#ifdef __ANDROID__
+        const auto perf_after_post = std::chrono::steady_clock::now();
+#endif
         TVPHostForceDrawDeviceShow();
+#ifdef __ANDROID__
+        const auto perf_after_show = std::chrono::steady_clock::now();
+#endif
         TVPForceSwapBuffer();
+#ifdef __ANDROID__
+        const auto perf_end = std::chrono::steady_clock::now();
+        const auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            perf_end - perf_begin).count();
+        if(total_us >= 50000) {
+            spdlog::warn(
+                "[PERF] krkr_draw_spike total_us={} post_update_us={} show_us={} swap_us={}",
+                total_us,
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    perf_after_post - perf_begin).count(),
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    perf_after_show - perf_after_post).count(),
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    perf_end - perf_after_show).count());
+            __android_log_print(
+                ANDROID_LOG_WARN, "AetherKiriPerf",
+                "krkr_draw_spike total_us=%lld post_update_us=%lld show_us=%lld swap_us=%lld",
+                static_cast<long long>(total_us),
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(
+                    perf_after_post - perf_begin).count()),
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(
+                    perf_after_show - perf_after_post).count()),
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(
+                    perf_end - perf_after_show).count()));
+        }
+#endif
         lastTick = curTick;
         return 0;
     } else {

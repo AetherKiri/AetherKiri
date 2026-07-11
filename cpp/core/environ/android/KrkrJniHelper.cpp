@@ -7,6 +7,7 @@
 
 #include "KrkrJniHelper.h"
 #include <android/log.h>
+#include <atomic>
 #include <dlfcn.h>
 #include <mutex>
 #include <string>
@@ -22,6 +23,8 @@ namespace krkr {
 
 static JavaVM* g_javaVM = nullptr;
 static std::mutex g_jvm_mutex;
+static bool g_jvm_recovery_attempted = false;
+static std::atomic<bool> g_null_vm_reported{false};
 
 namespace {
 
@@ -176,12 +179,18 @@ jclass FindClass(JNIEnv* env, const char* className) {
 void JniHelper::setJavaVM(JavaVM* vm) {
     std::lock_guard<std::mutex> lock(g_jvm_mutex);
     g_javaVM = vm;
+    if(vm) {
+        g_jvm_recovery_attempted = true;
+        g_null_vm_reported.store(false, std::memory_order_relaxed);
+    }
 }
 
 JavaVM* JniHelper::getJavaVM() {
     {
         std::lock_guard<std::mutex> lock(g_jvm_mutex);
         if (g_javaVM) return g_javaVM;
+        if (g_jvm_recovery_attempted) return nullptr;
+        g_jvm_recovery_attempted = true;
     }
 
     JavaVM* vm = RecoverJavaVMFromRuntime();
@@ -194,7 +203,9 @@ JavaVM* JniHelper::getJavaVM() {
 JNIEnv* JniHelper::getEnv() {
     JavaVM* vm = getJavaVM();
     if (!vm) {
-        LOGE("JniHelper::getEnv: JavaVM is null");
+        if(!g_null_vm_reported.exchange(true, std::memory_order_relaxed)) {
+            LOGE("JniHelper::getEnv: JavaVM is null; further retries suppressed");
+        }
         return nullptr;
     }
 

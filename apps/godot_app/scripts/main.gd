@@ -98,6 +98,11 @@ const UI_TEXT := {
         "settings.log_alerts_desc": "将 warning/error/fatal 等日志行额外显示为系统提示；默认关闭",
         "settings.error_dialog_logs": "错误弹窗附带日志",
         "settings.error_dialog_logs_desc": "真正异常弹窗中追加最近 20 行引擎日志；默认关闭",
+        "settings.perf_diagnostics": "性能诊断日志",
+        "settings.perf_diagnostics_desc": "仅保留超过阈值的 KRKR 与 GPU 桥接异常，便于复现后复制",
+        "settings.copy_diagnostics": "复制日志",
+        "settings.clear_diagnostics": "清空",
+        "game.menu.logs": "日志",
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "邮箱",
@@ -209,6 +214,11 @@ const UI_TEXT := {
         "settings.log_alerts_desc": "將 warning/error/fatal 等日誌行額外顯示為系統提示；預設關閉",
         "settings.error_dialog_logs": "錯誤彈窗附帶日誌",
         "settings.error_dialog_logs_desc": "真正異常彈窗中追加最近 20 行引擎日誌；預設關閉",
+        "settings.perf_diagnostics": "效能診斷日誌",
+        "settings.perf_diagnostics_desc": "僅保留超過門檻的 KRKR 與 GPU 橋接異常，方便重現後複製",
+        "settings.copy_diagnostics": "複製日誌",
+        "settings.clear_diagnostics": "清除",
+        "game.menu.logs": "日誌",
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "信箱",
@@ -320,6 +330,11 @@ const UI_TEXT := {
         "settings.log_alerts_desc": "Show warning/error/fatal log lines as system alerts; disabled by default",
         "settings.error_dialog_logs": "Attach Logs to Errors",
         "settings.error_dialog_logs_desc": "Append the latest 20 engine log lines to real error dialogs; disabled by default",
+        "settings.perf_diagnostics": "Performance Diagnostics",
+        "settings.perf_diagnostics_desc": "Only threshold-exceeding KRKR and GPU bridge anomalies are retained for copying",
+        "settings.copy_diagnostics": "Copy Logs",
+        "settings.clear_diagnostics": "Clear",
+        "game.menu.logs": "Logs",
         "settings.version": "Version",
         "settings.author": "Author",
         "settings.email": "Email",
@@ -431,6 +446,11 @@ const UI_TEXT := {
         "settings.log_alerts_desc": "warning/error/fatal などのログ行をシステム通知として表示します。既定はオフ",
         "settings.error_dialog_logs": "エラーにログを添付",
         "settings.error_dialog_logs_desc": "実エラーダイアログに直近 20 行のエンジンログを追加します。既定はオフ",
+        "settings.perf_diagnostics": "パフォーマンス診断ログ",
+        "settings.perf_diagnostics_desc": "しきい値を超えた KRKR・GPU ブリッジ異常のみを保持します",
+        "settings.copy_diagnostics": "ログをコピー",
+        "settings.clear_diagnostics": "クリア",
+        "game.menu.logs": "ログ",
         "settings.version": "バージョン",
         "settings.author": "作者",
         "settings.email": "メール",
@@ -542,6 +562,11 @@ const UI_TEXT := {
         "settings.log_alerts_desc": "warning/error/fatal 로그 줄을 시스템 알림으로 표시합니다. 기본값은 꺼짐입니다",
         "settings.error_dialog_logs": "오류에 로그 첨부",
         "settings.error_dialog_logs_desc": "실제 오류 대화상자에 최근 엔진 로그 20줄을 추가합니다. 기본값은 꺼짐입니다",
+        "settings.perf_diagnostics": "성능 진단 로그",
+        "settings.perf_diagnostics_desc": "임계값을 초과한 KRKR 및 GPU 브리지 이상만 보관합니다",
+        "settings.copy_diagnostics": "로그 복사",
+        "settings.clear_diagnostics": "지우기",
+        "game.menu.logs": "로그",
         "settings.version": "버전",
         "settings.author": "작성자",
         "settings.email": "이메일",
@@ -642,6 +667,11 @@ var perf: Label
 var perf_layer: CanvasLayer
 var perf_panel: PanelContainer
 var log_view = null
+var game_tools_layer: CanvasLayer
+var game_menu_button: Button
+var game_menu_popup: PanelContainer
+var game_log_overlay: ColorRect
+var game_perf_diagnostics_view: TextEdit
 var shell_root: Control
 var home_view: Control
 var settings_view: ScrollContainer
@@ -751,6 +781,9 @@ var ui_log_enabled := false
 var web_auto_start_attempted := false
 var perf_log_file: FileAccess
 var log_lines: PackedStringArray = []
+var perf_diagnostic_lines: PackedStringArray = []
+var last_process_start_usec := 0
+var performance_input_sequence := 0
 var log_view_dirty := false
 var log_view_flush_accum := 0.0
 var suppress_mouse_until_msec := 0
@@ -1077,6 +1110,8 @@ func _build_ui() -> void:
     perf.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     perf_panel.add_child(perf)
 
+    _build_game_tools_overlay()
+
     restart_notice = Label.new()
     restart_notice.position = Vector2(24, 44)
     restart_notice.add_theme_font_size_override("font_size", 14)
@@ -1086,6 +1121,126 @@ func _build_ui() -> void:
 
     _build_loading_panel()
     _fit_full_rects()
+
+func _build_game_tools_overlay() -> void:
+    game_tools_layer = CanvasLayer.new()
+    game_tools_layer.name = "GameToolsOverlay"
+    game_tools_layer.layer = 120
+    add_child(game_tools_layer)
+
+    game_menu_button = Button.new()
+    game_menu_button.text = "⋮"
+    game_menu_button.anchor_left = 1.0
+    game_menu_button.anchor_right = 1.0
+    game_menu_button.offset_left = -76.0
+    game_menu_button.offset_top = 18.0
+    game_menu_button.offset_right = -18.0
+    game_menu_button.offset_bottom = 76.0
+    game_menu_button.add_theme_font_size_override("font_size", 30)
+    game_menu_button.visible = false
+    game_menu_button.pressed.connect(_toggle_game_menu)
+    game_tools_layer.add_child(game_menu_button)
+
+    game_menu_popup = PanelContainer.new()
+    game_menu_popup.anchor_left = 1.0
+    game_menu_popup.anchor_right = 1.0
+    game_menu_popup.offset_left = -218.0
+    game_menu_popup.offset_top = 82.0
+    game_menu_popup.offset_right = -18.0
+    game_menu_popup.offset_bottom = 148.0
+    game_menu_popup.add_theme_stylebox_override(
+        "panel", _panel_style(8, Color(0.025, 0.030, 0.050, 0.96), Color(0.72, 0.82, 1.0, 0.72), 1)
+    )
+    game_menu_popup.visible = false
+    game_tools_layer.add_child(game_menu_popup)
+
+    var logs_button := Button.new()
+    logs_button.text = _t("game.menu.logs")
+    logs_button.add_theme_font_size_override("font_size", 18)
+    logs_button.pressed.connect(_open_game_performance_logs)
+    game_menu_popup.add_child(logs_button)
+
+    game_log_overlay = ColorRect.new()
+    game_log_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+    game_log_overlay.color = Color(0.0, 0.0, 0.0, 0.72)
+    game_log_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+    game_log_overlay.visible = false
+    game_tools_layer.add_child(game_log_overlay)
+
+    var panel := PanelContainer.new()
+    panel.anchor_left = 0.08
+    panel.anchor_top = 0.08
+    panel.anchor_right = 0.92
+    panel.anchor_bottom = 0.92
+    panel.add_theme_stylebox_override(
+        "panel", _panel_style(10, Color(0.025, 0.030, 0.050, 0.98), Color(0.72, 0.82, 1.0, 0.72), 1)
+    )
+    game_log_overlay.add_child(panel)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 20)
+    margin.add_theme_constant_override("margin_top", 18)
+    margin.add_theme_constant_override("margin_right", 20)
+    margin.add_theme_constant_override("margin_bottom", 18)
+    panel.add_child(margin)
+
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 12)
+    margin.add_child(box)
+
+    var header := HBoxContainer.new()
+    box.add_child(header)
+    var title := Label.new()
+    title.text = _t("settings.perf_diagnostics")
+    title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    title.add_theme_font_size_override("font_size", 24)
+    header.add_child(title)
+    var close := Button.new()
+    close.text = "×"
+    close.custom_minimum_size = Vector2(58, 48)
+    close.add_theme_font_size_override("font_size", 26)
+    close.pressed.connect(_close_game_performance_logs)
+    header.add_child(close)
+
+    game_perf_diagnostics_view = TextEdit.new()
+    game_perf_diagnostics_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    game_perf_diagnostics_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    game_perf_diagnostics_view.editable = false
+    game_perf_diagnostics_view.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+    game_perf_diagnostics_view.add_theme_font_size_override("font_size", 16)
+    box.add_child(game_perf_diagnostics_view)
+
+    var actions := HBoxContainer.new()
+    actions.add_theme_constant_override("separation", 10)
+    box.add_child(actions)
+    var copy := Button.new()
+    copy.text = _t("settings.copy_diagnostics")
+    copy.pressed.connect(_copy_performance_diagnostics)
+    actions.add_child(copy)
+    var clear := Button.new()
+    clear.text = _t("settings.clear_diagnostics")
+    clear.pressed.connect(_clear_performance_diagnostics)
+    actions.add_child(clear)
+
+func _toggle_game_menu() -> void:
+    game_menu_popup.visible = not game_menu_popup.visible
+
+func _open_game_performance_logs() -> void:
+    game_menu_popup.visible = false
+    game_perf_diagnostics_view.text = _performance_diagnostics_text()
+    game_log_overlay.visible = true
+
+func _close_game_performance_logs() -> void:
+    game_log_overlay.visible = false
+
+func _set_game_tools_visible(visible: bool) -> void:
+    if game_menu_button != null:
+        game_menu_button.visible = visible
+    if not visible:
+        if game_menu_popup != null:
+            game_menu_popup.visible = false
+        if game_log_overlay != null:
+            game_log_overlay.visible = false
 
 func _load_shell_settings() -> void:
     var cfg := ConfigFile.new()
@@ -3809,6 +3964,7 @@ func _quit_after_runtime_exit() -> void:
         restart_notice.text = ""
         restart_notice.visible = false
     _set_perf_visible(false)
+    _set_game_tools_visible(false)
     if viewport != null:
         viewport.texture = null
         viewport.visible = false
@@ -4835,6 +4991,17 @@ func _apply_global_dpi_scale() -> void:
     window.content_scale_factor = scale
 
 func _process(delta: float) -> void:
+    var process_start_usec := Time.get_ticks_usec()
+    if game_running and last_process_start_usec > 0:
+        var process_interval_us := process_start_usec - last_process_start_usec
+        if process_interval_us >= 100000:
+            _record_performance_marker(
+                "godot_frame_gap interval_us=%d delta_us=%d" % [
+                    process_interval_us,
+                    int(delta * 1000000.0),
+                ]
+            )
+    last_process_start_usec = process_start_usec
     _fit_full_rects()
     _sync_game_card_hover_states()
     _flush_log_view_if_needed(delta)
@@ -4912,6 +5079,14 @@ func _process(delta: float) -> void:
                 var update_start := Time.get_ticks_usec()
                 _update_frame()
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
+                if tick_ms >= 100.0 or update_ms >= 100.0:
+                    _record_performance_marker(
+                        "godot_host_spike input_seq=%d tick_us=%d update_us=%d" % [
+                            performance_input_sequence,
+                            int(tick_ms * 1000.0),
+                            int(update_ms * 1000.0),
+                        ]
+                    )
                 _update_touch_busy_gate(maxf(delta * 1000.0, tick_ms + update_ms))
                 _log_live_perf(delta, tick_ms, update_ms)
                 _log_frame_spike(delta, tick_ms, update_ms)
@@ -4925,6 +5100,7 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            _set_game_tools_visible(false)
             app_lifecycle_paused = false
             render_errors += 1
             var startup_error := "Startup failed: %s" % player.get_last_error()
@@ -5290,6 +5466,7 @@ func _on_open_game() -> void:
         return
 
     game_running = true
+    _set_game_tools_visible(true)
     app_lifecycle_paused = false
     log_lines.clear()
     log_view_dirty = false
@@ -5462,10 +5639,52 @@ func _drain_logs() -> void:
         return
     var process_runtime_logs := _should_process_runtime_logs()
     for line in logs.split("\n", false):
+        if line.contains("[PERF]"):
+            _append_performance_diagnostic(line)
         # Always process native control messages. Ordinary engine logs remain
         # gated by the diagnostics/UI settings to avoid unnecessary UI work.
         if process_runtime_logs or line.contains("[ALERT_DIALOG]"):
             _append_log(line)
+
+func _append_performance_diagnostic(line: String) -> void:
+    perf_diagnostic_lines.append(line)
+    while perf_diagnostic_lines.size() > 100:
+        perf_diagnostic_lines.remove_at(0)
+    if game_perf_diagnostics_view != null and game_log_overlay != null and game_log_overlay.visible:
+        game_perf_diagnostics_view.text = _performance_diagnostics_text()
+        game_perf_diagnostics_view.scroll_vertical = max(0, game_perf_diagnostics_view.get_line_count())
+
+func _performance_diagnostics_text() -> String:
+    var lines: PackedStringArray = []
+    lines.append("platform=%s version=0.2.0-beta.1" % OS.get_name())
+    if player != null and player.has_method("get_renderer_info"):
+        lines.append("renderer=%s" % String(player.get_renderer_info()))
+    lines.append_array(perf_diagnostic_lines)
+    if player != null and player.has_method("get_performance_diagnostics"):
+        var bridge_logs := String(player.get_performance_diagnostics())
+        for line in bridge_logs.split("\n", false):
+            lines.append("[GPU] %s" % line)
+    if lines.size() <= 2:
+        lines.append("No performance anomalies recorded.")
+    return "\n".join(lines)
+
+func _copy_performance_diagnostics() -> void:
+    DisplayServer.clipboard_set(_performance_diagnostics_text())
+
+func _clear_performance_diagnostics() -> void:
+    perf_diagnostic_lines.clear()
+    if player != null and player.has_method("clear_performance_diagnostics"):
+        player.clear_performance_diagnostics()
+    if game_perf_diagnostics_view != null:
+        game_perf_diagnostics_view.text = _performance_diagnostics_text()
+
+func _record_performance_marker(marker: String) -> void:
+    if player != null and player.has_method("record_performance_marker"):
+        player.record_performance_marker(marker)
+        if game_perf_diagnostics_view != null and game_log_overlay != null and game_log_overlay.visible:
+            game_perf_diagnostics_view.text = _performance_diagnostics_text()
+        return
+    _append_performance_diagnostic("[PERF] %s" % marker)
 
 func _should_process_runtime_logs() -> bool:
     return diagnostics_enabled or ui_log_enabled or log_alerts or error_dialog_logs
@@ -5926,6 +6145,8 @@ func _write_probe_marker(line: String) -> void:
     marker.flush()
 
 func _input(event: InputEvent) -> void:
+    if game_running and _game_tools_should_receive_event(event):
+        return
     if _is_game_pointer_event(event):
         var debug_pos := Vector2.ZERO
         if event is InputEventMouseButton:
@@ -6054,6 +6275,28 @@ func _can_forward_game_input() -> bool:
 
 func _is_game_pointer_event(event: InputEvent) -> bool:
     return event is InputEventMouseButton or event is InputEventMouseMotion or event is InputEventScreenTouch or event is InputEventScreenDrag or event is InputEventPanGesture
+
+func _game_tools_should_receive_event(event: InputEvent) -> bool:
+    if not _is_game_pointer_event(event):
+        return false
+    if game_log_overlay != null and game_log_overlay.visible:
+        return true
+    var point := Vector2(-1, -1)
+    if event is InputEventMouseButton:
+        point = (event as InputEventMouseButton).position
+    elif event is InputEventMouseMotion:
+        point = (event as InputEventMouseMotion).position
+    elif event is InputEventScreenTouch:
+        point = (event as InputEventScreenTouch).position
+    elif event is InputEventScreenDrag:
+        point = (event as InputEventScreenDrag).position
+    elif event is InputEventPanGesture:
+        point = (event as InputEventPanGesture).position
+    if point.x < 0.0:
+        return false
+    if game_menu_button != null and game_menu_button.visible and game_menu_button.get_global_rect().has_point(point):
+        return true
+    return game_menu_popup != null and game_menu_popup.visible and game_menu_popup.get_global_rect().has_point(point)
 
 func _handle_game_pointer_event(event: InputEvent) -> bool:
     # Input callbacks only enqueue events; _process owns engine ticking and frame updates.
@@ -6337,6 +6580,17 @@ func _touch_engine_pointer_id(pointer_id: int) -> int:
     return TOUCH_POINTER_ID_OFFSET + pointer_id
 
 func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: float, delta_x: float, delta_y: float, button: int, modifiers: int = 0) -> void:
+    if event_type == POINTER_UP:
+        performance_input_sequence += 1
+        _record_performance_marker(
+            "game_input seq=%d type=up pointer=%d x=%.1f y=%.1f button=%d" % [
+                performance_input_sequence,
+                pointer_id,
+                x,
+                y,
+                button,
+            ]
+        )
     var result := int(player.send_pointer_event(event_type, pointer_id, x, y, delta_x, delta_y, button, modifiers))
     if _android_input_debug_enabled():
         print("android_input fwd type=%d pid=%d x=%.1f y=%.1f dx=%.1f dy=%.1f button=%d mods=%d result=%d" % [
