@@ -13,6 +13,9 @@
 /** Frame rate limit (0 = unlimited / follow vsync). */
 #define ENGINE_OPTION_FPS_LIMIT           "fps_limit"
 
+/** Final surface policy ("game" keeps native texture size, "display" scales). */
+#define ENGINE_OPTION_SURFACE_MODE        "surface_mode"
+
 /** Render pipeline selection. */
 #define ENGINE_OPTION_RENDERER            "renderer"
 
