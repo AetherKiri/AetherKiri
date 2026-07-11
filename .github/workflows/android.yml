@@ -23,6 +23,8 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       GODOT_RELEASE: 4.7-stable
       GODOT_TEMPLATE_VERSION: 4.7.stable
+      # Keep native extensions on the libc++ ABI used by Godot 4.7 templates.
+      ANDROID_NDK_VERSION: 28.1.13356709
       VCPKG_BUNDLE_TAG: android-vcpkg-bundle
       VCPKG_BUNDLE_ASSET: android-vcpkg-bundle.tar.zst
 
@@ -90,7 +92,7 @@ jobs:
           echo "GODOT_BIN=${GITHUB_WORKSPACE}/${godot_bin}" >> "$GITHUB_ENV"
           echo "GODOT_TEMPLATE_DIR=${template_dir}" >> "$GITHUB_ENV"
 
-      - name: Detect Android SDK and NDK
+      - name: Set up Android SDK and pinned NDK
         run: |
           set -euo pipefail
           if [[ -z "${ANDROID_HOME:-}" ]]; then
@@ -104,15 +106,26 @@ jobs:
           fi
 
           sdk_root="${ANDROID_HOME:-${HOME}/Android/Sdk}"
-          if [[ -d "${sdk_root}/ndk" ]]; then
-            latest_ndk="$(find "${sdk_root}/ndk" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)"
-            latest_ndk_version="$(basename "${latest_ndk}")"
-            echo "ANDROID_NDK_HOME=${latest_ndk}" >> "$GITHUB_ENV"
-            echo "ANDROID_NDK_VERSION=${latest_ndk_version}" >> "$GITHUB_ENV"
-          else
-            echo "Android NDK directory not found under ${sdk_root}/ndk" >&2
+          ndk_root="${sdk_root}/ndk/${ANDROID_NDK_VERSION}"
+          if [[ ! -f "${ndk_root}/build/cmake/android.toolchain.cmake" ]]; then
+            sdkmanager_bin="$(find "${sdk_root}/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort | tail -1)"
+            if [[ -z "${sdkmanager_bin}" ]]; then
+              echo "Android sdkmanager not found under ${sdk_root}" >&2
+              exit 1
+            fi
+            set +o pipefail
+            yes | "${sdkmanager_bin}" "ndk;${ANDROID_NDK_VERSION}"
+            sdkmanager_status=${PIPESTATUS[1]}
+            set -o pipefail
+            if [[ "${sdkmanager_status}" -ne 0 ]]; then
+              exit "${sdkmanager_status}"
+            fi
+          fi
+          if [[ ! -f "${ndk_root}/build/cmake/android.toolchain.cmake" ]]; then
+            echo "Pinned Android NDK ${ANDROID_NDK_VERSION} was not installed" >&2
             exit 1
           fi
+          echo "ANDROID_NDK_HOME=${ndk_root}" >> "$GITHUB_ENV"
 
       - name: Restore vcpkg cache
         if: steps.restore-vcpkg-bundle.outputs.restored != '1'

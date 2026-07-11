@@ -109,7 +109,9 @@ iOS and Android export presets reference the generated PNG sizes under
 - Xcode for macOS/iOS exports
 - Android SDK/NDK for Android exports. The script uses
   `ANDROID_HOME`/`ANDROID_SDK_ROOT` when set, otherwise
-  `$HOME/Library/Android/sdk`, and picks the newest installed NDK.
+  `$HOME/Library/Android/sdk`, and prefers an installed NDK 28.x release.
+  Set `ANDROID_NDK_HOME` (or `ANDROID_NDK_VERSION`) to select a specific NDK;
+  Android builds for the Godot 4.7 export template should use NDK 28.1.13356709.
 - Emscripten/emsdk for Web exports, with `emcc`, `em++`, and `emar` on `PATH`.
 - Godot Web GDExtension/dlink export templates installed as
   `web_dlink_debug.zip` and `web_dlink_release.zip`.

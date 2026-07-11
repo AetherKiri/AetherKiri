@@ -33,7 +33,9 @@ enabled=PackedStringArray()
 
 [rendering]
 
-rendering_device/driver.android="opengl3"
+rendering_device/driver.android="vulkan"
+rendering_device/fallback_to_opengl3=true
+rendering/gl_compatibility/driver.android="opengl3"
 renderer/rendering_method="mobile"
 textures/vram_compression/import_etc2_astc=true
-renderer/rendering_method.android="gl_compatibility"
+renderer/rendering_method.android="mobile"

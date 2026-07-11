@@ -104,7 +104,9 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 - macOS/iOS 导出需要 Xcode
 - Android 导出需要 Android SDK/NDK。脚本会优先使用
   `ANDROID_HOME`/`ANDROID_SDK_ROOT`，否则使用 `$HOME/Library/Android/sdk`，
-  并自动选择已安装的最新 NDK。
+  并优先选择已安装的 NDK 28.x。可通过 `ANDROID_NDK_HOME`（或
+  `ANDROID_NDK_VERSION`）指定 NDK；与 Godot 4.7 导出模板配套的 Android
+  构建应使用 NDK 28.1.13356709。
 - Web 导出需要 Emscripten/emsdk，并确保 `emcc`、`em++`、`emar` 在 `PATH` 中。
 - Web 的 GDExtension 导出需要 Godot dlink 模板，文件名为
   `web_dlink_debug.zip` 和 `web_dlink_release.zip`。
