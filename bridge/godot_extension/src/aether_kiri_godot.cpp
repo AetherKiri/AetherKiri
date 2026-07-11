@@ -2942,6 +2942,19 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
 
 void FinishGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool result) {
     CountGpuOpResult(result);
+    if (!result && op != nullptr) {
+        std::ostringstream message;
+        message << "gpu_op_failed type=" << GodotGpuOpTypeName(op->type)
+                << " size=" << static_cast<int32_t>(op->size.x) << 'x'
+                << static_cast<int32_t>(op->size.y)
+                << " src_pos=" << static_cast<int32_t>(op->src_pos.x) << ','
+                << static_cast<int32_t>(op->src_pos.y)
+                << " dst_pos=" << static_cast<int32_t>(op->dst_pos.x) << ','
+                << static_cast<int32_t>(op->dst_pos.y)
+                << " opacity=" << op->opacity
+                << " mode=" << op->mode;
+        GodotGpuPerfWarning(message.str());
+    }
     {
         std::lock_guard<std::mutex> done_lock(op->done_mutex);
         op->result = result;

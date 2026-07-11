@@ -500,6 +500,13 @@ tTVPNativeBaseBitmap::tTVPNativeBaseBitmap(const tTVPNativeBaseBitmap &r) {
 }
 //---------------------------------------------------------------------------
 tTVPNativeBaseBitmap::~tTVPNativeBaseBitmap() {
+    if(!PendingTextDraws.empty()) {
+        TVPAddImportantLog(
+            ttstr(TJS_W("Warning: text_batch_drop reason=bitmap_destroy pending=")) +
+            ttstr(static_cast<tjs_int64>(PendingTextDraws.size())) +
+            TJS_W(" size=") + ttstr(static_cast<tjs_int>(GetWidth())) +
+            TJS_W("x") + ttstr(static_cast<tjs_int>(GetHeight())));
+    }
     ClearPendingTextDraws();
     if(Bitmap)
         Bitmap->Release();
@@ -566,6 +573,13 @@ void tTVPNativeBaseBitmap::SetSize(tjs_uint w, tjs_uint h, bool keepimage) {
 }
 //---------------------------------------------------------------------------
 void tTVPNativeBaseBitmap::SetSizeAndImageBuffer(tTVPBitmap *bmp) {
+    if(!PendingTextDraws.empty()) {
+        TVPAddImportantLog(
+            ttstr(TJS_W("Warning: text_batch_drop reason=replace_image pending=")) +
+            ttstr(static_cast<tjs_int64>(PendingTextDraws.size())) +
+            TJS_W(" size=") + ttstr(static_cast<tjs_int>(GetWidth())) +
+            TJS_W("x") + ttstr(static_cast<tjs_int>(GetHeight())));
+    }
     ClearPendingTextDraws();
     // create a new bitmap and copy existing bitmap
     iTVPTexture2D *newbitmap = GetRenderManager()->CreateTexture2D(bmp);
@@ -1915,7 +1929,17 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
                 }
                 tmp->Release();
                 if(!_CharacterTextureRGBA)
+                {
+                    TVPAddImportantLog(
+                        ttstr(TJS_W("Error: text_batch_draw_failed reason=scratch_texture "
+                                    "glyphs=")) +
+                        ttstr(static_cast<tjs_int64>(glyphs.size())) +
+                        TJS_W(" rect=") + ttstr(batch_rect.left) + TJS_W(",") +
+                        ttstr(batch_rect.top) + TJS_W(",") +
+                        ttstr(batch_rect.right) + TJS_W(",") +
+                        ttstr(batch_rect.bottom));
                     return false;
+                }
 
                 static iTVPRenderMethod *method =
                     TVPGetRenderManager()->GetRenderMethod("AlphaBlend_d");
@@ -1948,6 +1972,11 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
         ClearPendingTextDraws();
         FlushingPendingTextDraws = false;
     } catch(...) {
+        TVPAddImportantLog(
+            ttstr(TJS_W("Error: text_batch_flush_exception pending=")) +
+            ttstr(static_cast<tjs_int64>(PendingTextDraws.size())) +
+            TJS_W(" size=") + ttstr(static_cast<tjs_int>(GetWidth())) +
+            TJS_W("x") + ttstr(static_cast<tjs_int>(GetHeight())));
         ClearPendingTextDraws();
         FlushingPendingTextDraws = false;
         throw;
