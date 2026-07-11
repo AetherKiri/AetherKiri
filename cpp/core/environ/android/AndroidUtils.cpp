@@ -960,31 +960,10 @@ bool ShowGodotMessageBox(const char *pszText, const char *pszTitle,
 
 int TVPShowSimpleMessageBox(const char *pszText, const char *pszTitle,
                             unsigned int nButton, const char **btnText) {
-    JniMethodInfo methodInfo;
-    if(JniHelper::getStaticMethodInfo(
-           methodInfo, "org/tvp/kirikiri2/KR2Activity", "ShowMessageBox",
-           "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/"
-           "String;)V")) {
-        MsgBoxRet = -2;
-        jstring jstrTitle = methodInfo.env->NewStringUTF(pszTitle);
-        jstring jstrText = methodInfo.env->NewStringUTF(pszText);
-        jobjectArray btns = NewJavaButtonArray(methodInfo.env, nButton, btnText);
-
-        methodInfo.env->CallStaticVoidMethod(
-            methodInfo.classID, methodInfo.methodID, jstrTitle, jstrText, btns);
-
-        methodInfo.env->DeleteLocalRef(jstrTitle);
-        methodInfo.env->DeleteLocalRef(jstrText);
-        if(btns != nullptr) methodInfo.env->DeleteLocalRef(btns);
-        methodInfo.env->DeleteLocalRef(methodInfo.classID);
-
-        return WaitForMessageBoxResult();
-    }
-
-    if(ShowGodotMessageBox(pszText, pszTitle, nButton, btnText)) {
-        return WaitForMessageBoxResult();
-    }
-    return -1;
+    // main.gd intercepts this control log and displays it through OS.alert().
+    ttstr logMsg = ttstr("[ALERT_DIALOG] ") + (pszTitle ? pszTitle : "AetherKiri") + ttstr(" | ") + (pszText ? pszText : "");
+    TVPAddImportantLog(logMsg);
+    return 0;
 }
 
 #ifdef __ANDROID__
