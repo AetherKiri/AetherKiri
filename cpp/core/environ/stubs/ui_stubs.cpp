@@ -67,7 +67,6 @@ uint64_t g_host_gpu_serial = 0;
 uint32_t g_host_surface_width = 1920;
 uint32_t g_host_surface_height = 1080;
 bool g_host_prefer_gpu_frame = true;
-bool g_host_scale_to_surface = false;
 tTJSNI_Window *g_host_window_owner = nullptr;
 
 std::mutex g_host_video_overlay_mutex;
@@ -471,10 +470,6 @@ extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height) {
     if(width == 0 || height == 0) return;
     g_host_surface_width = width;
     g_host_surface_height = height;
-}
-
-extern "C" void TVPHostSetScaleToSurface(bool scale_to_surface) {
-    g_host_scale_to_surface = scale_to_surface;
 }
 
 extern "C" bool TVPHostSubmitVideoOverlayFrame(const void *rgba,
@@ -1104,11 +1099,6 @@ private:
                                                tjs_int surface_h) {
         if (source == nullptr || surface_w <= 0 || surface_h <= 0) {
             return nullptr;
-        }
-        // Game Native presents the engine's real output texture and lets
-        // Godot scale it once. Display Fit keeps the explicit surface blit.
-        if (!g_host_scale_to_surface) {
-            return source;
         }
         if (static_cast<tjs_uint>(surface_w) == source_w &&
             static_cast<tjs_uint>(surface_h) == source_h) {

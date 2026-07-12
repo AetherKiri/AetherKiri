@@ -639,8 +639,6 @@ var game_path: LineEdit
 var restart_notice: Label
 var viewport: TextureRect
 var perf: Label
-var perf_layer: CanvasLayer
-var perf_panel: PanelContainer
 var log_view = null
 var shell_root: Control
 var home_view: Control
@@ -668,7 +666,7 @@ var known_games: Array[Dictionary] = []
 var show_perf_monitor := true
 var lock_landscape := true
 var frame_limit_enabled := false
-var target_fps := 60
+var target_fps := 80
 var plugin_trace := false
 var plugin_load_mode := "krkrsdl3"
 var mock_enabled := true
@@ -766,7 +764,7 @@ var last_forwarded_touch_up_msec := 0
 var last_forwarded_touch_move_msec_by_id := {}
 var touch_input_busy_until_msec := 0
 var device_probe_enabled := false
-var follow_texture_surface_size := true
+var follow_texture_surface_size := false
 var present_hold_frames := 0
 var last_present_hold_msec := 0
 var current_surface_size := Vector2i.ZERO
@@ -1052,30 +1050,12 @@ func _build_ui() -> void:
     _build_detail_view()
     _build_modal_layer()
 
-    # Keep diagnostics outside the game CanvasItem stack. GameViewport is moved
-    # to the front while playing, so a sibling Control can otherwise be hidden.
-    perf_layer = CanvasLayer.new()
-    perf_layer.name = "PerformanceOverlay"
-    perf_layer.layer = 100
-    add_child(perf_layer)
-
-    perf_panel = PanelContainer.new()
-    perf_panel.name = "PerformancePanel"
-    perf_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    perf_panel.add_theme_stylebox_override(
-        "panel",
-        _panel_style(8, Color(0.025, 0.030, 0.050, 0.78),
-            Color(0.72, 0.82, 1.0, 0.58), 1)
-    )
-    perf_panel.visible = false
-    perf_layer.add_child(perf_panel)
-
     perf = Label.new()
-    perf.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    perf.position = Vector2(24, 18)
     perf.add_theme_font_size_override("font_size", 13)
     perf.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
-    perf.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    perf_panel.add_child(perf)
+    perf.visible = false
+    game_view.add_child(perf)
 
     restart_notice = Label.new()
     restart_notice.position = Vector2(24, 44)
@@ -1260,7 +1240,8 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
     var next_surface_mode := String(snapshot.get("surface_mode", render_surface_mode))
     render_surface_mode = next_surface_mode if next_surface_mode in [RENDER_SURFACE_MODE_GAME, RENDER_SURFACE_MODE_DISPLAY] else _default_render_surface_mode()
     show_perf_monitor = bool(snapshot.get("perf_overlay", show_perf_monitor))
-    _set_perf_visible(game_running and show_perf_monitor)
+    if perf != null:
+        perf.visible = game_running and show_perf_monitor
     frame_limit_enabled = bool(snapshot.get("fps_limit_enabled", frame_limit_enabled))
     target_fps = int(snapshot.get("target_fps", target_fps))
     lock_landscape = bool(snapshot.get("force_landscape", lock_landscape))
@@ -1329,7 +1310,6 @@ func _apply_engine_options() -> void:
         effective_plugin_load_mode = "krkrsdl3"
     var effective_plugin_trace := plugin_trace or _runtime_flag("AETHERKIRI_PLUGIN_TRACE", false)
     player.set_engine_option("fps_limit", str(target_fps) if frame_limit_enabled else "0")
-    player.set_engine_option("surface_mode", render_surface_mode)
     player.set_engine_option("plugin_load_mode", effective_plugin_load_mode)
     player.set_engine_option("plugin_trace", "1" if effective_plugin_trace else "0")
     player.set_engine_option("mock_enabled", "1" if mock_enabled else "0")
@@ -1368,21 +1348,6 @@ func _fit_full_rects() -> void:
         control.offset_bottom = 0.0
     _layout_game_viewport(window_size)
     _layout_home_view(window_size)
-    _layout_perf_overlay(window_size)
-
-func _layout_perf_overlay(window_size: Vector2) -> void:
-    if perf_panel == null:
-        return
-    var horizontal_margin := 16.0
-    perf_panel.position = Vector2(horizontal_margin, 12.0)
-    perf_panel.size = Vector2(
-        maxf(240.0, window_size.x - horizontal_margin * 2.0),
-        84.0
-    )
-
-func _set_perf_visible(visible: bool) -> void:
-    if perf_panel != null:
-        perf_panel.visible = visible
 
 func _layout_game_viewport(window_size: Vector2) -> void:
     if viewport == null:
@@ -3776,7 +3741,7 @@ func _start_selected_game() -> void:
     game_view.visible = true
     loading_panel.visible = true
     loading_panel.move_to_front()
-    _set_perf_visible(show_perf_monitor)
+    perf.visible = show_perf_monitor
     restart_notice.visible = true
     _on_open_game()
 
@@ -3808,7 +3773,8 @@ func _quit_after_runtime_exit() -> void:
     if restart_notice != null:
         restart_notice.text = ""
         restart_notice.visible = false
-    _set_perf_visible(false)
+    if perf != null:
+        perf.visible = false
     if viewport != null:
         viewport.texture = null
         viewport.visible = false
@@ -3846,7 +3812,7 @@ func _ready() -> void:
     render_surface_mode = _default_render_surface_mode()
     render_surface_base_size = _env_vector2i("AETHERKIRI_GAME_SURFACE_SIZE", RENDER_SURFACE_SIZE)
     render_surface_max_size = _env_vector2i("AETHERKIRI_SURFACE_MAX_SIZE", RENDER_SURFACE_MAX_SIZE)
-    follow_texture_surface_size = _runtime_flag("AETHERKIRI_FOLLOW_TEXTURE_SURFACE", true)
+    follow_texture_surface_size = _runtime_flag("AETHERKIRI_FOLLOW_TEXTURE_SURFACE")
     frame_probe_enabled = _runtime_flag("AETHERKIRI_FRAME_PROBE")
     frame_probe_interval = maxf(0.05, _runtime_float("AETHERKIRI_FRAME_PROBE_INTERVAL", 1.0))
     black_frame_guard_enabled = _runtime_flag("AETHERKIRI_BLACK_FRAME_GUARD")
@@ -3959,11 +3925,6 @@ func _ensure_player_initialized() -> bool:
         return false
 
     _append_log("AetherKiri engine initialized.")
-    var pipelines_prewarmed := bool(player.prewarm_gpu_pipelines())
-    if pipelines_prewarmed:
-        _append_log("Godot GPU pipelines prewarmed.")
-    else:
-        _append_log("GPU pipeline prewarm skipped (RenderingDevice unavailable or compatibility fallback active).")
     return true
 
 func _finish_ready_after_first_frame() -> void:
@@ -4247,7 +4208,7 @@ func _prepare_cli_probe_view(config: Dictionary) -> void:
     viewport.visible = true
     game_view.visible = true
     loading_panel.visible = false
-    _set_perf_visible(false)
+    perf.visible = false
     restart_notice.visible = false
     viewport.texture = null
     last_texture_size = Vector2i.ZERO
@@ -4953,7 +4914,7 @@ func _process(delta: float) -> void:
                 perf_log_file.flush()
     if perf_accum >= PERF_UPDATE_INTERVAL:
         perf_accum = 0.0
-        if (perf_panel == null or not perf_panel.visible) and not verbose_render_log:
+        if not perf.visible and not verbose_render_log:
             return
         var frame_ms := delta * 1000.0
         var renderer: String = selected_backend
@@ -4963,7 +4924,7 @@ func _process(delta: float) -> void:
         if verbose_render_log and game_running and not renderer.is_empty() and renderer_summary != last_renderer_info_logged:
             last_renderer_info_logged = renderer_summary
             _append_log("Renderer info: %s" % renderer)
-        if perf_panel == null or not perf_panel.visible:
+        if not perf.visible:
             return
         var fallback := _renderer_fallback(renderer)
         var texture_backend: String = String(player.get_frame_texture_backend()) if game_running else "none"
@@ -5209,45 +5170,18 @@ func _renderer_fallback(renderer: String) -> String:
     var end := renderer.find(" ", start)
     if end < 0:
         end = renderer.length()
-    var summary := renderer.substr(start, end - start)
-    var fallback_ops := _renderer_value(renderer, "fallback_ops")
-    var gpu_ops := _renderer_value(renderer, "gpu_ops")
-    if not fallback_ops.is_empty() or not gpu_ops.is_empty():
-        summary += " (CPU:%s GPU:%s)" % [
-            fallback_ops if not fallback_ops.is_empty() else "?",
-            gpu_ops if not gpu_ops.is_empty() else "?",
-        ]
-    return summary
-
-func _renderer_value(renderer: String, key: String) -> String:
-    var marker := key + "="
-    var start := renderer.find(marker)
-    if start < 0:
-        return ""
-    start += marker.length()
-    var end := renderer.find(" ", start)
-    if end < 0:
-        end = renderer.length()
     return renderer.substr(start, end - start)
 
 func _renderer_summary(renderer: String) -> String:
     if renderer.is_empty():
         return selected_backend
-    var summary := selected_backend
     if renderer.contains("backend=godot_native"):
-        summary = "Godot Native GPU"
-    elif renderer.contains("backend=gpu_bridge"):
-        summary = "GPU Bridge"
-    elif renderer.contains("backend=debug_cpu"):
-        summary = "Debug CPU"
-    var driver := _renderer_value(renderer, "godot_driver")
-    var method := _renderer_value(renderer, "godot_method")
-    if not driver.is_empty() or not method.is_empty():
-        summary += " (%s/%s)" % [
-            driver if not driver.is_empty() else "unknown",
-            method if not method.is_empty() else "unknown",
-        ]
-    return summary
+        return "Godot Native GPU"
+    if renderer.contains("backend=gpu_bridge"):
+        return "GPU Bridge"
+    if renderer.contains("backend=debug_cpu"):
+        return "Debug CPU"
+    return selected_backend
 
 
 func _on_open_game() -> void:
@@ -5427,8 +5361,8 @@ func _sync_game_surface_to_texture(texture_size: Vector2i) -> void:
     if player == null or texture_size.x <= 0 or texture_size.y <= 0:
         return
     var target_size := Vector2i(
-        maxi(1, texture_size.x),
-        maxi(1, texture_size.y)
+        clampi(texture_size.x, 1, render_surface_max_size.x),
+        clampi(texture_size.y, 1, render_surface_max_size.y)
     )
     if target_size == current_surface_size:
         return

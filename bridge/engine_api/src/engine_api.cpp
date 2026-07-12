@@ -109,7 +109,6 @@ extern "C" bool TVPHostGetLatestGodotGpuFrame(uint64_t* texture,
 extern "C" void TVPHostActivateMainWindow();
 extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height);
 extern "C" void TVPHostSetPreferGpuFrame(bool prefer_gpu_frame);
-extern "C" void TVPHostSetScaleToSurface(bool scale_to_surface);
 
 struct engine_handle_s {
   std::recursive_mutex mutex;
@@ -2258,17 +2257,6 @@ engine_result_t engine_set_option(engine_handle_t handle,
     impl->fps.initialized = false;
     spdlog::info("engine_set_option: fps_limit={} (interval={}us)",
                  impl->fps.limit, impl->fps.interval_us);
-    ClearHandleErrorLocked(impl);
-    SetThreadError(nullptr);
-    return ENGINE_RESULT_OK;
-  }
-
-  if (key == ENGINE_OPTION_SURFACE_MODE) {
-    const std::string value(option->value_utf8);
-    const bool scale_to_surface = value == "display" || value == "display_fit";
-    TVPHostSetScaleToSurface(scale_to_surface);
-    spdlog::info("engine_set_option: surface_mode={} scale_to_surface={}",
-                 value, scale_to_surface);
     ClearHandleErrorLocked(impl);
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;

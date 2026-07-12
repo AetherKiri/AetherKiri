@@ -78,7 +78,6 @@ struct GodotGpuOp {
         Update,
         Clear,
         Copy,
-        PresentCopy,
         CopySelf,
         CopyTriangles,
         DrawTriangles,
@@ -88,7 +87,6 @@ struct GodotGpuOp {
         Blend,
         Blend2,
         Release,
-        Warmup,
         Flush,
     };
 
@@ -1001,8 +999,7 @@ bool DeferredGodotGpuDrainEnabled() {
 bool ShouldScheduleGodotGpuDrainNow(const std::shared_ptr<GodotGpuOp> &op,
                                     bool wait) {
     if (wait || !DeferredGodotGpuDrainEnabled()) return true;
-    return op != nullptr && (op->type == GodotGpuOp::Type::Flush ||
-                             op->type == GodotGpuOp::Type::PresentCopy);
+    return op != nullptr && op->type == GodotGpuOp::Type::Flush;
 }
 
 struct GodotGpuPendingWrite {
@@ -2744,7 +2741,6 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             wrote_texture = true;
             break;
         case GodotGpuOp::Type::Copy:
-        case GodotGpuOp::Type::PresentCopy:
             result = rd->texture_copy(op->src, op->dst, op->src_pos, op->dst_pos,
                                       op->size, 0, 0, 0, 0) == OK;
             wrote_texture = true;
@@ -2797,19 +2793,6 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             ClearGodotGpuUniformSetCache(rd);
             rd->free_rid(op->dst);
             return true;
-        case GodotGpuOp::Type::Warmup: {
-            // Compile every bridge compute pipeline before the first game
-            // frame so lazy shader creation cannot appear as gameplay hitching.
-            bool warmed = true;
-            warmed = EnsureBlendPipeline(rd) && warmed;
-            warmed = EnsureAlphaBlendAPipeline(rd) && warmed;
-            warmed = EnsureBlend2Pipeline(rd) && warmed;
-            warmed = EnsureCopyTrianglesPipeline(rd) && warmed;
-            warmed = EnsureDrawTrianglesPipeline(rd) && warmed;
-            warmed = EnsureDrawMaskedTrianglesPipeline(rd) && warmed;
-            warmed = EnsureMosaicPipeline(rd) && warmed;
-            return warmed;
-        }
         case GodotGpuOp::Type::Flush:
             ApplyGodotGpuBarrier(rd);
             return true;
@@ -2934,8 +2917,7 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
                 g_gpu_op_queue.push_back(op);
                 UpdateGpuQueuePeak(g_gpu_op_queue.size());
             }
-            if (!wait && op->type != GodotGpuOp::Type::Flush &&
-                op->type != GodotGpuOp::Type::PresentCopy) {
+            if (!wait && op->type != GodotGpuOp::Type::Flush) {
                 return true;
             }
             DrainGodotGpuOpsOnRenderThread();
@@ -3943,19 +3925,6 @@ public:
         return result;
     }
 
-    bool prewarm_gpu_pipelines() {
-        if (gpu_pipelines_prewarmed_) {
-            return true;
-        }
-        if (!SupportsGodotRenderingDeviceGpu()) {
-            return false;
-        }
-        auto op = std::make_shared<GodotGpuOp>();
-        op->type = GodotGpuOp::Type::Warmup;
-        gpu_pipelines_prewarmed_ = RunGodotGpuOpSync(op);
-        return gpu_pipelines_prewarmed_;
-    }
-
     int open_game(const String &game_root_path, bool async) {
         if (handle_ == nullptr) {
             last_result_ = "INVALID_STATE";
@@ -4076,14 +4045,7 @@ public:
         if (result != ENGINE_RESULT_OK) {
             return String();
         }
-        RenderingServer *server = RenderingServer::get_singleton();
-        String godot_info;
-        if (server != nullptr) {
-            godot_info = " godot_method=" + server->get_current_rendering_method() +
-                         " godot_driver=" + server->get_current_rendering_driver_name() +
-                         " rd_gpu=" + String(SupportsGodotRenderingDeviceGpu() ? "1" : "0");
-        }
-        return String::utf8(buffer) + godot_info + GetGodotGpuBridgeDebugInfo();
+        return String::utf8(buffer) + GetGodotGpuBridgeDebugInfo();
     }
 
     String get_frame_texture_backend() const { return frame_texture_backend_; }
@@ -4469,8 +4431,6 @@ protected:
                              &AetherKiriPlayer::set_engine_option);
         ClassDB::bind_method(D_METHOD("set_surface_size", "width", "height"),
                              &AetherKiriPlayer::set_surface_size);
-        ClassDB::bind_method(D_METHOD("prewarm_gpu_pipelines"),
-                             &AetherKiriPlayer::prewarm_gpu_pipelines);
         ClassDB::bind_method(D_METHOD("open_game", "game_root_path", "async"),
                              &AetherKiriPlayer::open_game, DEFVAL(true));
         ClassDB::bind_method(D_METHOD("tick", "delta_seconds"),
@@ -4555,7 +4515,6 @@ private:
     }
 
     void release_presentation_textures(bool free_rids) {
-        complete_pending_presentation_copy(true);
         for (size_t i = 0; i < frame_present_textures_.size(); ++i) {
             frame_present_textures_[i].unref();
             if (frame_present_rids_[i].is_valid()) {
@@ -4576,40 +4535,6 @@ private:
             frame_texture_backend_ == "godot_external_presented") {
             frame_texture_backend_ = "none";
         }
-    }
-
-    bool complete_pending_presentation_copy(bool wait) {
-        if (frame_present_pending_op_ == nullptr) {
-            return true;
-        }
-        if (wait) {
-            auto flush = std::make_shared<GodotGpuOp>();
-            flush->type = GodotGpuOp::Type::Flush;
-            RunGodotGpuOpSync(flush);
-        }
-
-        bool done = false;
-        bool result = false;
-        {
-            std::lock_guard<std::mutex> lock(frame_present_pending_op_->done_mutex);
-            done = frame_present_pending_op_->done;
-            result = frame_present_pending_op_->result;
-        }
-        if (!done) {
-            return false;
-        }
-        if (result) {
-            frame_present_current_slot_ = frame_present_pending_slot_;
-            frame_present_serial_ = frame_present_pending_serial_;
-            frame_texture_serial_ = frame_present_pending_serial_;
-            frame_texture_backend_ = frame_present_pending_backend_;
-        } else {
-            frame_texture_backend_ = "godot_native_gpu_present_failed";
-        }
-        frame_present_pending_op_.reset();
-        frame_present_pending_serial_ = UINT64_MAX;
-        frame_present_pending_backend_ = String();
-        return result;
     }
 
     Ref<Texture2D> update_rd_texture(const engine_frame_desc_t &desc,
@@ -4677,10 +4602,10 @@ private:
         const bool reusable =
             frame_present_width_ == width &&
             frame_present_height_ == height &&
-            std::all_of(frame_present_rids_.begin(), frame_present_rids_.end(),
-                        [](const RID &rid) { return rid.is_valid(); }) &&
-            std::all_of(frame_present_textures_.begin(), frame_present_textures_.end(),
-                        [](const Ref<Texture2DRD> &texture) { return texture.is_valid(); });
+            frame_present_rids_[0].is_valid() &&
+            frame_present_rids_[1].is_valid() &&
+            frame_present_textures_[0].is_valid() &&
+            frame_present_textures_[1].is_valid();
         if (reusable) {
             return true;
         }
@@ -4716,7 +4641,6 @@ private:
         if (texture_id == 0 || width == 0 || height == 0) {
             return Ref<Texture2D>();
         }
-        complete_pending_presentation_copy(false);
         if (frame_present_serial_ == serial &&
             frame_present_width_ == width &&
             frame_present_height_ == height &&
@@ -4735,41 +4659,15 @@ private:
             return Ref<Texture2D>();
         }
 
-        // Keep at most one presentation copy in flight. If the producer is
-        // faster than Godot's render thread, drop intermediate copies and keep
-        // displaying the last completed texture instead of blocking the tick.
-        if (frame_present_pending_op_ != nullptr) {
-            if (frame_present_serial_ != UINT64_MAX &&
-                frame_present_textures_[frame_present_current_slot_].is_valid()) {
-                return frame_present_textures_[frame_present_current_slot_];
-            }
-            return Ref<Texture2D>();
-        }
-
-        const size_t next_slot =
-            (frame_present_current_slot_ + 1u) % frame_present_rids_.size();
+        const size_t next_slot = 1u - frame_present_current_slot_;
         auto op = std::make_shared<GodotGpuOp>();
-        op->type = GodotGpuOp::Type::PresentCopy;
+        op->type = GodotGpuOp::Type::Copy;
         op->src = source.rid;
         op->dst = frame_present_rids_[next_slot];
         op->src_pos = Vector3();
         op->dst_pos = Vector3();
         op->size = Vector3(width, height, 1);
-        // Establish the first visible frame synchronously. Every later frame
-        // uses scheduled asynchronous triple-buffer rotation.
-        if (frame_present_serial_ == UINT64_MAX) {
-            if (!RunGodotGpuOpSync(op)) {
-                frame_texture_backend_ = "godot_native_gpu_present_timeout";
-                return Ref<Texture2D>();
-            }
-            frame_present_current_slot_ = next_slot;
-            frame_present_serial_ = serial;
-            frame_texture_serial_ = serial;
-            frame_texture_backend_ = backend_name;
-            return frame_present_textures_[frame_present_current_slot_];
-        }
-
-        if (!RunGodotGpuOpAsync(op)) {
+        if (!RunGodotGpuOpSync(op)) {
             frame_texture_backend_ = "godot_native_gpu_present_timeout";
             if (frame_present_textures_[frame_present_current_slot_].is_valid()) {
                 return frame_present_textures_[frame_present_current_slot_];
@@ -4777,10 +4675,10 @@ private:
             return Ref<Texture2D>();
         }
 
-        frame_present_pending_op_ = op;
-        frame_present_pending_slot_ = next_slot;
-        frame_present_pending_serial_ = serial;
-        frame_present_pending_backend_ = backend_name;
+        frame_present_current_slot_ = next_slot;
+        frame_present_serial_ = serial;
+        frame_texture_serial_ = serial;
+        frame_texture_backend_ = backend_name;
         return frame_present_textures_[frame_present_current_slot_];
     }
 
@@ -4857,17 +4755,12 @@ private:
     uint64_t frame_imported_source_id_ = 0;
     uint32_t frame_imported_width_ = 0;
     uint32_t frame_imported_height_ = 0;
-    std::array<Ref<Texture2DRD>, 3> frame_present_textures_;
-    std::array<RID, 3> frame_present_rids_;
+    std::array<Ref<Texture2DRD>, 2> frame_present_textures_;
+    std::array<RID, 2> frame_present_rids_;
     uint32_t frame_present_width_ = 0;
     uint32_t frame_present_height_ = 0;
     size_t frame_present_current_slot_ = 0;
     uint64_t frame_present_serial_ = UINT64_MAX;
-    std::shared_ptr<GodotGpuOp> frame_present_pending_op_;
-    size_t frame_present_pending_slot_ = 0;
-    uint64_t frame_present_pending_serial_ = UINT64_MAX;
-    String frame_present_pending_backend_;
-    bool gpu_pipelines_prewarmed_ = false;
     uint64_t frame_texture_serial_ = UINT64_MAX;
 };
 
