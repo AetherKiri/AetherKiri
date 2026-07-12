@@ -250,9 +250,11 @@ void tTVPSystemControl::RunMemoryGovernor(uint32_t tick) {
         static_cast<uint32_t>(MemoryProfile ? 20000 : 40000);
     if(pressure == 0 && tick - LastIdleCompactTick >= idle_compact_interval) {
         LastIdleCompactTick = tick;
+#ifndef __ANDROID__
         TVPDeliverCompactEvent(TVP_COMPACT_LEVEL_DEACTIVATE);
 #ifdef __APPLE__
         malloc_zone_pressure_relief(nullptr, 0);
+#endif
 #endif
     }
 
@@ -561,6 +563,7 @@ void tTVPSystemControl::SystemWatchTimerTimer() {
         win->TickBeat();
     }
 
+#ifndef __ANDROID__
     if(!ContinuousEventCalling && tick - LastCompactedTick > 4000) {
         // idle state over 4 sec.
         LastCompactedTick = tick;
@@ -571,6 +574,7 @@ void tTVPSystemControl::SystemWatchTimerTimer() {
         LastCompactedTick = tick;
         TVPDeliverCompactEvent(TVP_COMPACT_LEVEL_IDLE);
     }
+#endif
 
     RunMemoryGovernor(tick);
 

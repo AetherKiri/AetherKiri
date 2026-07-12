@@ -1979,7 +1979,15 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
     if(opa == 0)
         return; // nothing to do
 
+#ifdef __ANDROID__
+    // Keep consecutive text calls pending while this bitmap is already safe to
+    // render into.  Independ() flushes the pending queue even when no copy is
+    // needed, which turns settings-page construction into many tiny uploads.
+    if(!IsIndependent())
+        Independ();
+#else
     Independ();
+#endif
 
     ApplyFont();
 
@@ -2069,6 +2077,77 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
         !IndividualConfigManager::GetInstance()->GetValue<bool>(
             "ogl_accurate_render", false) &&
         bltmode == bmAlphaOnAlpha && opa > 0 && !drawdata.empty();
+
+#ifdef __ANDROID__
+    if(batchGPURoute) {
+        auto clipped_rect = [&](tTVPCharacterData *data, tjs_int dx,
+                                tjs_int dy, tTVPRect &out) -> bool {
+            out.left = dx + data->OriginX;
+            out.top = dy + data->OriginY;
+            out.right = out.left + data->BlackBoxX;
+            out.bottom = out.top + data->BlackBoxY;
+
+            if(out.left < destrect.left)
+                out.left = destrect.left;
+            if(out.right > destrect.right)
+                out.right = destrect.right;
+            if(out.top < destrect.top)
+                out.top = destrect.top;
+            if(out.bottom > destrect.bottom)
+                out.bottom = destrect.bottom;
+            return !out.is_empty();
+        };
+
+        for(const auto &draw : drawdata) {
+            tTVPRect main_rect;
+            tTVPRect shadow_rect;
+            const bool shadow_drawn = shlevel != 0 && draw.Shadow &&
+                clipped_rect(draw.Shadow, draw.X + shofsx,
+                             draw.Y + shofsy, shadow_rect);
+            const bool main_drawn = draw.Data &&
+                clipped_rect(draw.Data, draw.X, draw.Y, main_rect);
+            if(!main_drawn && !shadow_drawn)
+                continue;
+
+            tTVPPendingTextDraw pending;
+            pending.DestRect = destrect;
+            pending.X = draw.X;
+            pending.Y = draw.Y;
+            pending.Color = color;
+            pending.BltMode = bltmode;
+            pending.Opa = opa;
+            pending.HoldAlpha = holdalpha;
+            pending.ShadowColor = shadowcolor;
+            pending.ShLevel = shlevel;
+            pending.ShWidth = shwidth;
+            pending.ShOfsX = shofsx;
+            pending.ShOfsY = shofsy;
+            pending.Data = draw.Data;
+            pending.Shadow = draw.Shadow;
+            if(pending.Data)
+                pending.Data->AddRef();
+            if(pending.Shadow)
+                pending.Shadow->AddRef();
+            PendingTextDraws.push_back(pending);
+
+            if(updaterects) {
+                if(main_drawn && shadow_drawn) {
+                    tTVPRect combined;
+                    TVPUnionRect(&combined, main_rect, shadow_rect);
+                    updaterects->Or(combined);
+                } else {
+                    updaterects->Or(main_drawn ? main_rect : shadow_rect);
+                }
+            }
+        }
+
+        // Bound retained glyph memory for unusually large script-generated
+        // pages while preserving cross-call batching for normal UI screens.
+        if(PendingTextDraws.size() >= 8192)
+            FlushPendingTextDraws();
+        return;
+    }
+#endif
 
     if(batchGPURoute) {
         struct tTVPTextBatchGlyph {

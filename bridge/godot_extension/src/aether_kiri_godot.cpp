@@ -1553,6 +1553,20 @@ layout(push_constant, std430) uniform Params {
     ivec4 source_rects;
 } pc;
 
+vec4 blend_straight_alpha(vec4 s1, vec4 s2, float source_opacity) {
+    // Match RenderManager_ogl's UnivTransBlend_d exactly.  This is not the
+    // usual straight-alpha interpolation: the result is subsequently drawn
+    // as an alpha layer, so the source contribution compensates for that
+    // second composition step.
+    float target_opacity = 1.0 - source_opacity;
+    float numerator = s2.a * source_opacity;
+    float denominator = numerator * (1.0 - s1.a * target_opacity) +
+                        s1.a * target_opacity + 0.0001;
+    float source_weight = numerator / denominator;
+    return vec4(mix(s1.rgb, s2.rgb, clamp(source_weight, 0.0, 1.0)),
+                mix(s2.a, s1.a, target_opacity));
+}
+
 void main() {
     ivec2 local = ivec2(gl_GlobalInvocationID.xy);
     if(local.x >= pc.rect1.x || local.y >= pc.rect1.y) return;
@@ -1566,6 +1580,7 @@ void main() {
     int rule_value = int(round(clamp(imageLoad(rule_img, rule_pos).r,
                                      0.0, 1.0) * 255.0));
     int packed_mode = pc.rect1.z;
+    int mode = packed_mode & 0xffff;
     int vague = max((packed_mode >> 16) & 0xffff, 1);
     int phase = pc.rect1.w;
 
@@ -1577,7 +1592,18 @@ void main() {
     } else {
         int opacity = clamp(255 - ((rule_value - (phase - vague)) * 255 /
                                    vague), 0, 255);
-        result = mix(s1, s2, float(opacity) / 256.0);
+        float blend_opacity = float(opacity) / 256.0;
+        if(mode == 13) {
+            result = blend_straight_alpha(s1, s2, blend_opacity);
+        } else if(mode == 12) {
+            // UnivTransBlend deliberately preserves s1's alpha.  Mixing the
+            // alpha here makes a fully composited page translucent while the
+            // rule edge crosses it, which appears as a whole-screen dark
+            // flash over the previously presented frame.
+            result = vec4(mix(s1.rgb, s2.rgb, blend_opacity), s1.a);
+        } else {
+            result = mix(s1, s2, blend_opacity);
+        }
     }
     imageStore(dst_img, dst_pos, result);
 }
@@ -3648,6 +3674,17 @@ bool BridgeBlendRect3(
     op->mode = mode;
     op->opacity = opacity;
     op->color = color;
+#if defined(__ANDROID__)
+    static std::atomic<int> blend3_trace_count{0};
+    if(blend3_trace_count.fetch_add(1, std::memory_order_relaxed) < 96) {
+        AndroidLogPrintf(
+            "warn",
+            "blend3 mode=%u phase=%d size=%dx%d src1=%ux%u src2=%ux%u rule=%ux%u",
+            mode, opacity, width, height, src1_record.width,
+            src1_record.height, src2_record.width, src2_record.height,
+            src3_record.width, src3_record.height);
+    }
+#endif
     return RunGodotGpuOpAsync(op);
 }
 

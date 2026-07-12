@@ -104,51 +104,16 @@ void TVPPrintLog(const char *str) {
     __android_log_print(ANDROID_LOG_INFO, "kr2 debug info", "%s", str);
 }
 
-static tjs_uint32 _lastMemoryInfoQuery = 0;
-static tjs_int _availMemory, usedMemory;
-static void updateMemoryInfo() {
-    if(TVPGetRoughTickCount32() - _lastMemoryInfoQuery > 3000) { // freq in 3s
-
-        JniMethodInfo methodInfo;
-        if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath,
-                                          "updateMemoryInfo", "()V")) {
-            methodInfo.env->CallStaticVoidMethod(methodInfo.classID,
-                                                 methodInfo.methodID);
-            methodInfo.env->DeleteLocalRef(methodInfo.classID);
-        }
-
-        if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath,
-                                          "getAvailMemory", "()J")) {
-            _availMemory = methodInfo.env->CallStaticLongMethod(
-                               methodInfo.classID, methodInfo.methodID) /
-                (1024 * 1024);
-            methodInfo.env->DeleteLocalRef(methodInfo.classID);
-        }
-
-        if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath,
-                                          "getUsedMemory", "()J")) {
-            // in kB
-            usedMemory = methodInfo.env->CallStaticLongMethod(
-                             methodInfo.classID, methodInfo.methodID) /
-                1024;
-            methodInfo.env->DeleteLocalRef(methodInfo.classID);
-        }
-
-        _lastMemoryInfoQuery = TVPGetRoughTickCount32();
-    }
-}
-
 tjs_int TVPGetSystemFreeMemory() {
-    updateMemoryInfo();
-    if(_availMemory > 0)
-        return _availMemory;
+    // The embedded Godot host does not use KR2Activity. Looking up its static
+    // memory helpers from the render thread periodically crosses JNI (and may
+    // repeatedly miss the class), producing visible frame stalls. /proc is
+    // available to the app process and gives the values needed by the memory
+    // governor without touching Java.
     return ReadProcMemAvailableMB();
 }
 
 tjs_int TVPGetSelfUsedMemory() {
-    updateMemoryInfo();
-    if(usedMemory > 0)
-        return usedMemory;
     return ReadProcSelfRssMB();
 }
 
