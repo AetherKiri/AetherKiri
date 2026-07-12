@@ -12,11 +12,16 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <math.h>
 #include <mutex>
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 #include "LayerBitmapIntf.h"
 #include "LayerBitmapImpl.h"
@@ -155,6 +160,13 @@ void TVPMapPrerenderedFont(const tTVPFont &font, const ttstr &storage) {
         i != TVPPrerenderedFontMapVector.end(); i++) {
         if(i->Font == font) {
             // found font
+            // Font hooks commonly map the same face/storage before measuring
+            // each UI group.  Repeating an identical mapping used to clear
+            // the entire glyph cache and invalidate every bitmap font state.
+            if(i->Object == object) {
+                object->Release();
+                return;
+            }
             // replace existing
             i->Object->Release();
             i->Object = object;
@@ -1744,15 +1756,18 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
     if(FlushingPendingTextDraws || PendingTextDraws.empty())
         return;
 
+#ifdef __ANDROID__
+    const auto flush_start = std::chrono::steady_clock::now();
+    const size_t pending_count = PendingTextDraws.size();
+    size_t style_group_count = 0;
+    size_t gpu_batch_count = 0;
+    size_t max_batch_pixels = 0;
+#endif
     FlushingPendingTextDraws = true;
     try {
         auto keys_equal = [](const tTVPPendingTextDraw &a,
                              const tTVPPendingTextDraw &b) -> bool {
-            return a.DestRect.left == b.DestRect.left &&
-                a.DestRect.top == b.DestRect.top &&
-                a.DestRect.right == b.DestRect.right &&
-                a.DestRect.bottom == b.DestRect.bottom &&
-                a.Color == b.Color && a.BltMode == b.BltMode &&
+            return a.Color == b.Color && a.BltMode == b.BltMode &&
                 a.Opa == b.Opa && a.HoldAlpha == b.HoldAlpha &&
                 a.ShadowColor == b.ShadowColor && a.ShLevel == b.ShLevel &&
                 a.ShWidth == b.ShWidth && a.ShOfsX == b.ShOfsX &&
@@ -1761,6 +1776,9 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
 
         size_t begin = 0;
         while(begin < PendingTextDraws.size()) {
+#ifdef __ANDROID__
+            ++style_group_count;
+#endif
             size_t end = begin + 1;
             while(end < PendingTextDraws.size() &&
                   keys_equal(PendingTextDraws[begin], PendingTextDraws[end])) {
@@ -1776,11 +1794,14 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
             dtdata.holdalpha = key.HoldAlpha;
 
             std::vector<tTVPCharacterDrawData> drawdata;
+            std::vector<tTVPRect> drawrects;
             drawdata.reserve(end - begin);
+            drawrects.reserve(end - begin);
             for(size_t i = begin; i < end; ++i) {
                 const auto &pending = PendingTextDraws[i];
                 drawdata.push_back(tTVPCharacterDrawData(
                     pending.Data, pending.Shadow, pending.X, pending.Y));
+                drawrects.push_back(pending.DestRect);
             }
 
             struct tTVPTextBatchGlyph {
@@ -1813,23 +1834,24 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
                     srect.right = data->BlackBoxX;
                     srect.bottom = data->BlackBoxY;
 
-                    if(drect.left < dtdata.rect.left) {
-                        srect.left += (dtdata.rect.left - drect.left);
-                        drect.left = dtdata.rect.left;
+                    const tTVPRect &cliprect = drawrects[idx];
+                    if(drect.left < cliprect.left) {
+                        srect.left += (cliprect.left - drect.left);
+                        drect.left = cliprect.left;
                     }
-                    if(drect.right > dtdata.rect.right) {
-                        srect.right -= (drect.right - dtdata.rect.right);
-                        drect.right = dtdata.rect.right;
+                    if(drect.right > cliprect.right) {
+                        srect.right -= (drect.right - cliprect.right);
+                        drect.right = cliprect.right;
                     }
                     if(srect.left >= srect.right)
                         continue;
-                    if(drect.top < dtdata.rect.top) {
-                        srect.top += (dtdata.rect.top - drect.top);
-                        drect.top = dtdata.rect.top;
+                    if(drect.top < cliprect.top) {
+                        srect.top += (cliprect.top - drect.top);
+                        drect.top = cliprect.top;
                     }
-                    if(drect.bottom > dtdata.rect.bottom) {
-                        srect.bottom -= (drect.bottom - dtdata.rect.bottom);
-                        drect.bottom = dtdata.rect.bottom;
+                    if(drect.bottom > cliprect.bottom) {
+                        srect.bottom -= (drect.bottom - cliprect.bottom);
+                        drect.bottom = cliprect.bottom;
                     }
                     if(srect.top >= srect.bottom)
                         continue;
@@ -1854,6 +1876,12 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
 
                 const tjs_int batch_w = batch_rect.get_width();
                 const tjs_int batch_h = batch_rect.get_height();
+#ifdef __ANDROID__
+                ++gpu_batch_count;
+                max_batch_pixels = std::max(
+                    max_batch_pixels,
+                    static_cast<size_t>(batch_w) * static_cast<size_t>(batch_h));
+#endif
                 tTVPBitmap *tmp = new tTVPBitmap(batch_w, batch_h, 32);
                 tjs_int dpitch = tmp->GetPitch();
                 tjs_uint8 *bits =
@@ -1947,6 +1975,23 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
         }
         ClearPendingTextDraws();
         FlushingPendingTextDraws = false;
+#ifdef __ANDROID__
+        const auto flush_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                  std::chrono::steady_clock::now() - flush_start)
+                                  .count();
+        if(flush_us >= 20000) {
+            static std::atomic<int> slow_flush_logs{0};
+            if(slow_flush_logs.fetch_add(1, std::memory_order_relaxed) < 96) {
+                __android_log_print(
+                    ANDROID_LOG_WARN, "AetherKiriPageSwitch",
+                    "page_switch_text_flush duration_us=%lld glyphs=%zu style_groups=%zu gpu_batches=%zu max_batch_pixels=%zu bitmap=%dx%d",
+                    static_cast<long long>(flush_us), pending_count,
+                    style_group_count, gpu_batch_count, max_batch_pixels,
+                    Bitmap ? Bitmap->GetWidth() : 0,
+                    Bitmap ? Bitmap->GetHeight() : 0);
+            }
+        }
+#endif
     } catch(...) {
         ClearPendingTextDraws();
         FlushingPendingTextDraws = false;
@@ -2417,6 +2462,12 @@ void tTVPNativeBaseBitmap::GetTextSize(const ttstr &text) {
             TextHeight = std::abs(Font.Height);
         }
 
+#ifndef __ANDROID__
+        // Desktop historically warms the glyph bitmap cache while measuring.
+        // On Android, UI parsers call getTextWidth hundreds of times while
+        // constructing a page; eager rasterization turns a metrics query into
+        // a main-thread rendering workload. DrawText will populate the same
+        // cache on demand for glyphs that are actually displayed.
         tTVPFontAndCharacterData font;
         font.Font = Font;
         font.Antialiased = true;
@@ -2433,6 +2484,7 @@ void tTVPNativeBaseBitmap::GetTextSize(const ttstr &text) {
                 data->Release();
             buf++;
         }
+#endif
     }
 }
 //---------------------------------------------------------------------------

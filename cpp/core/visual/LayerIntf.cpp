@@ -4187,29 +4187,40 @@ void tTJSNI_BaseLayer::AllocateDefaultImage() {
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
     // assign images
-    bool main_changed = true;
+    bool main_changed = false;
+    bool province_changed = false;
 
     if(src->MainImage) {
         int64_t oldBytes = TVPCalcMainImageBytes(MainImage);
         if(MainImage)
             main_changed = MainImage->Assign(*src->MainImage);
-        else
+        else {
             MainImage = new tTVPBaseTexture(*src->MainImage);
+            main_changed = true;
+        }
         TVPLayerBitmapTotalBytes.fetch_add(TVPCalcMainImageBytes(MainImage) - oldBytes,
                                            std::memory_order_relaxed);
-        FontChanged = true; // invalidate font assignment cache
-    } else {
+        if(main_changed)
+            FontChanged = true; // invalidate font assignment cache
+    } else if(MainImage) {
         DeallocateImage();
+        main_changed = true;
     }
 
     if(src->ProvinceImage) {
         if(ProvinceImage)
-            ProvinceImage->Assign(*src->ProvinceImage);
-        else
+            province_changed = ProvinceImage->Assign(*src->ProvinceImage);
+        else {
             ProvinceImage = new tTVPBaseBitmap(*src->ProvinceImage);
-    } else {
+            province_changed = true;
+        }
+    } else if(ProvinceImage) {
         DeallocateProvinceImage();
+        province_changed = true;
     }
+
+    if(!main_changed && !province_changed)
+        return;
 
     if(main_changed && MainImage) {
         InternalSetImageSize(MainImage->GetWidth(), MainImage->GetHeight());
@@ -4218,7 +4229,7 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
 
     ImageModified = true;
 
-    if(MainImage)
+    if(main_changed && MainImage)
         ResetClip(); // cliprect is reset
 
     if(main_changed)

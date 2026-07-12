@@ -3003,9 +3003,11 @@ void tTJSNI_WaveSoundBuffer::StartPlay() {
         BufferPlaying = true;
         FillL2Buffer(true, false);
         FillBuffer(true, false);
+#ifndef __ANDROID__
         FillBuffer(false, false);
         FillBuffer(false, false);
         FillBuffer(false, false);
+#endif
 
         // start playing
         if(!Paused) {
