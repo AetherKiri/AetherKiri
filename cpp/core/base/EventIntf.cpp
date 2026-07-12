@@ -12,6 +12,10 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <string>
+#include <typeinfo>
 #include "SysInitIntf.h"
 #include "EventIntf.h"
 #include "WindowIntf.h"
@@ -21,6 +25,34 @@
 #include "TickCount.h"
 #include "SystemImpl.h"
 #include <spdlog/spdlog.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
+
+namespace {
+#ifdef __ANDROID__
+constexpr int64_t kAndroidPageSwitchSpikeUs = 20000;
+constexpr int kAndroidPageSwitchProbeLimit = 64;
+std::atomic<int> g_android_page_switch_probe_count{0};
+
+int64_t TVPPageSwitchElapsedUs(
+    const std::chrono::steady_clock::time_point &start) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now() - start)
+        .count();
+}
+
+void TVPLogPageSwitchProbe(const std::string &message) {
+    if(g_android_page_switch_probe_count.fetch_add(1,
+                                                   std::memory_order_relaxed) >=
+       kAndroidPageSwitchProbeLimit)
+        return;
+    spdlog::warn("[PAGE_SWITCH_PERF] {}", message);
+    __android_log_print(ANDROID_LOG_WARN, "AetherKiriPageSwitch", "%s",
+                        message.c_str());
+}
+#endif
+} // namespace
 
 //---------------------------------------------------------------------------
 // tTVPEvent  : script event class
@@ -98,6 +130,9 @@ public:
     void Deliver() {
         if(!TJSIsObjectValid(Target->IsValid(0, nullptr, nullptr, Target)))
             return; // The target had been invalidated
+#ifdef __ANDROID__
+        const auto script_event_start = std::chrono::steady_clock::now();
+#endif
         tTJSVariant **ArgsPtr = new tTJSVariant *[NumArgs];
         for(tjs_uint i = 0; i < NumArgs; i++)
             ArgsPtr[i] = Args + i;
@@ -109,6 +144,19 @@ public:
             throw;
         }
         delete[] ArgsPtr;
+#ifdef __ANDROID__
+        const int64_t script_event_us =
+            TVPPageSwitchElapsedUs(script_event_start);
+        if(script_event_us >= kAndroidPageSwitchSpikeUs) {
+            TVPLogPageSwitchProbe(
+                "page_switch_script_event_spike phase=script_event duration_us=" +
+                std::to_string(script_event_us) + " event=\"" +
+                EventName.AsStdString() + "\" args=" +
+                std::to_string(NumArgs) + " tag=" + std::to_string(Tag) +
+                " flags=" + std::to_string(Flags) + " sequence=" +
+                std::to_string(Sequence));
+        }
+#endif
     }
 
     iTJSDispatch2 *GetTargetNoAddRef() const { return Target; }
@@ -445,6 +493,11 @@ static bool _TVPDeliverAllEvents2() {
             TVPInputEventQueue.begin();
         e = *i;
         TVPInputEventQueue.erase(i);
+#ifdef __ANDROID__
+        const auto input_start = std::chrono::steady_clock::now();
+        const int input_tag = e->GetTag();
+        const std::string input_type = typeid(*e).name();
+#endif
 
         // event delivering
         try {
@@ -453,7 +506,18 @@ static bool _TVPDeliverAllEvents2() {
             delete e;
             throw;
         }
+#ifdef __ANDROID__
+        const int64_t input_us = TVPPageSwitchElapsedUs(input_start);
+#endif
         delete e;
+#ifdef __ANDROID__
+        if(input_us >= kAndroidPageSwitchSpikeUs) {
+            TVPLogPageSwitchProbe(
+                "page_switch_input_spike phase=deliver duration_us=" +
+                std::to_string(input_us) + " type=\"" + input_type +
+                "\" tag=" + std::to_string(input_tag));
+        }
+#endif
 
         // check exclusive events
         if(TVPExclusiveEventPosted)
@@ -477,13 +541,40 @@ static bool _TVPDeliverAllEvents() {
         return true;
 
     // event invokation was received...
+#ifdef __ANDROID__
+    const auto dispatch_start = std::chrono::steady_clock::now();
+    const size_t script_before = TVPEventQueue.size();
+    const size_t input_before = TVPInputEventQueue.size();
+#endif
     TVPEventReceived();
+#ifdef __ANDROID__
+    const auto deliver_start = std::chrono::steady_clock::now();
+#endif
 
     // for script event objects
 
     bool ret_value;
 
     ret_value = _TVPDeliverAllEvents2();
+
+#ifdef __ANDROID__
+    const int64_t dispatch_us = TVPPageSwitchElapsedUs(dispatch_start);
+    if(dispatch_us >= kAndroidPageSwitchSpikeUs) {
+        const int64_t receive_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                deliver_start - dispatch_start)
+                .count();
+        TVPLogPageSwitchProbe(
+            "page_switch_dispatch_spike phase=event_dispatch duration_us=" +
+            std::to_string(dispatch_us) +
+            " receive_us=" + std::to_string(receive_us) +
+            " deliver_us=" + std::to_string(dispatch_us - receive_us) +
+            " script_before=" + std::to_string(script_before) +
+            " input_before=" + std::to_string(input_before) +
+            " script_after=" + std::to_string(TVPEventQueue.size()) +
+            " input_after=" + std::to_string(TVPInputEventQueue.size()));
+    }
+#endif
 
     return ret_value;
 }

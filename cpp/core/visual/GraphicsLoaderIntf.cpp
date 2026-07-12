@@ -29,6 +29,8 @@
 #include "ScriptMgnIntf.h"
 #include "RenderManager.h"
 #include "ConfigManager/LocaleConfigManager.h"
+#include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 #include <condition_variable>
@@ -39,10 +41,33 @@
 #include <complex>
 #include <list>
 #include <spdlog/spdlog.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 #include "TVPDecodeArena.h"
 
 namespace {
+#ifdef __ANDROID__
+std::atomic<int> TVPPageSwitchGraphicWarnings{0};
+
+int64_t TVPPageSwitchGraphicElapsedUs(
+    const std::chrono::steady_clock::time_point &start) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now() - start)
+        .count();
+}
+
+void TVPLogPageSwitchGraphicWarning(const std::string &message) {
+    if(TVPPageSwitchGraphicWarnings.fetch_add(1, std::memory_order_relaxed) >=
+       64)
+        return;
+    spdlog::warn("[PAGE_SWITCH_PERF] {}", message);
+    __android_log_print(ANDROID_LOG_WARN, "AetherKiriPageSwitch", "%s",
+                        message.c_str());
+}
+#endif
+
 bool TVPSaveTraceEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_SAVE_TRACE");
@@ -1493,6 +1518,13 @@ static void TVPCheckGraphicCacheLimit() {
 }
 //---------------------------------------------------------------------------
 void TVPClearGraphicCache() {
+#ifdef __ANDROID__
+    if(TVPGraphicCacheTotalBytes > 0) {
+        TVPLogPageSwitchGraphicWarning(
+            "page_switch_graphic_cache_clear phase=cache_clear bytes_before=" +
+            std::to_string(TVPGraphicCacheTotalBytes));
+    }
+#endif
     TVPGraphicCache.Clear();
     TVPGraphicCacheTotalBytes = 0;
 }
@@ -1917,6 +1949,9 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
                    tjs_uint desw, tjs_uint desh, tTVPGraphicLoadMode mode,
                    ttstr *provincename, iTJSDispatch2 **metainfo) {
     // loading with cache management
+#ifdef __ANDROID__
+    const auto graphic_start = std::chrono::steady_clock::now();
+#endif
     ttstr nname = TVPNormalizeStorageName(name);
     tjs_uint32 hash;
     tTVPGraphicsSearchData searchdata;
@@ -1934,6 +1969,9 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
             TVPGraphicCache.FindAndTouchWithHash(searchdata, hash);
         if(ptr) {
             // found in cache
+#ifdef __ANDROID__
+            const auto assign_start = std::chrono::steady_clock::now();
+#endif
             if(dest)
                 ptr->GetObjectNoAddRef()->AssignToTexture(dest);
             if(provincename)
@@ -1941,7 +1979,29 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
             if(metainfo)
                 *metainfo = TVPMetaInfoPairsToDictionary(
                     ptr->GetObjectNoAddRef()->MetaInfo);
-            return ptr->GetObjectNoAddRef()->GetSize();
+            const int result_size = ptr->GetObjectNoAddRef()->GetSize();
+#ifdef __ANDROID__
+            const int64_t total_us =
+                TVPPageSwitchGraphicElapsedUs(graphic_start);
+            if(total_us >= 15000) {
+                const int64_t lookup_us =
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        assign_start - graphic_start)
+                        .count();
+                TVPLogPageSwitchGraphicWarning(
+                    "page_switch_graphic_spike phase=graphic_load duration_us=" +
+                    std::to_string(total_us) + " cache=hit lookup_us=" +
+                    std::to_string(lookup_us) + " assign_us=" +
+                    std::to_string(total_us - lookup_us) + " bytes=" +
+                    std::to_string(result_size) + " keyidx=" +
+                    std::to_string(keyidx) + " mode=" +
+                    std::to_string(static_cast<int>(mode)) + " desw=" +
+                    std::to_string(desw) + " desh=" + std::to_string(desh) +
+                    " name=\"" +
+                    nname.AsStdString() + "\"");
+            }
+#endif
+            return result_size;
         }
     }
 
@@ -1956,6 +2016,9 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
     try {
         tTVPBitmap *bmp = nullptr;
         iTVPTexture2D *texture = nullptr;
+#ifdef __ANDROID__
+        const auto decode_start = std::chrono::steady_clock::now();
+#endif
 
         // Skip XP3 decompression for known unsupported video formats
         // (but NOT .amv which is now handled by the AMV decoder).
@@ -1987,6 +2050,9 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
             TVPDecodeArena::Instance().End();
 #endif
         }
+#ifdef __ANDROID__
+        const auto decode_end = std::chrono::steady_clock::now();
+#endif
 
         if(provincename)
             *provincename = pn;
@@ -2035,6 +2101,29 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
             ret = bmp->GetWidth() * bmp->GetHeight() * bmp->GetBPP() / 8;
             bmp->Release();
         }
+#ifdef __ANDROID__
+        const int64_t total_us =
+            TVPPageSwitchGraphicElapsedUs(graphic_start);
+        if(total_us >= 15000) {
+            const int64_t decode_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    decode_end - decode_start)
+                    .count();
+            TVPLogPageSwitchGraphicWarning(
+                "page_switch_graphic_spike phase=graphic_load duration_us=" +
+                std::to_string(total_us) + " cache=miss decode_us=" +
+                std::to_string(decode_us) + " post_us=" +
+                std::to_string(total_us - decode_us) + " bytes=" +
+                std::to_string(ret) + " cache_used=" +
+                std::to_string(TVPGraphicCacheTotalBytes) + " cache_limit=" +
+                std::to_string(TVPGraphicCacheLimit) + " keyidx=" +
+                std::to_string(keyidx) + " mode=" +
+                std::to_string(static_cast<int>(mode)) + " desw=" +
+                std::to_string(desw) + " desh=" + std::to_string(desh) +
+                " name=\"" +
+                nname.AsStdString() + "\"");
+        }
+#endif
     } catch(...) {
         if(mi)
             delete mi;

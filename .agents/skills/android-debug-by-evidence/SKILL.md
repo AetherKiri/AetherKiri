@@ -116,6 +116,10 @@ If a diagnostic build appears fixed, report it as “not reproduced in this run.
 
 Once the user confirms the defect is gone across repeated runs:
 
+Do not remove temporary probes or diagnostic tooling merely because a build
+improves the symptom. Keep them until the user explicitly confirms the issue
+is completely fixed; only then begin diagnostic cleanup.
+
 1. Remove temporary probes, diagnostic overlays, environment switches, and failed experimental changes.
 2. Keep durable failure logs only when they are low-volume and operationally useful.
 3. Rebuild Android and run the focused verification again.
