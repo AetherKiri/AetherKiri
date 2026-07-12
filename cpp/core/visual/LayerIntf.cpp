@@ -2135,7 +2135,6 @@ tTJSNI_BaseLayer::tTJSNI_BaseLayer() {
     TransWithChildren = false;
     TransDrawable.Src1Bmp = nullptr;
     TransDrawable.Src2Bmp = nullptr;
-    TransDrawable.BackdropBmp = nullptr;
     TransDrawable.SnapshotWarmupFrames = 0;
     TransDrawable.SkipSnapshotFrame = false;
     DestSLP = nullptr;
@@ -2159,11 +2158,6 @@ tTJSNI_BaseLayer::tTJSNI_BaseLayer() {
 
 //---------------------------------------------------------------------------
 tTJSNI_BaseLayer::~tTJSNI_BaseLayer() {
-#ifdef __ANDROID__
-    delete TransDrawable.Src1Bmp;
-    delete TransDrawable.Src2Bmp;
-    delete TransDrawable.BackdropBmp;
-#endif
     TVPLayerInstanceCount.fetch_sub(1, std::memory_order_relaxed);
     tTVPTempBitmapHolder::Release();
 }
@@ -9245,41 +9239,6 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
             if(TransUpdateType == tutDivisibleFade &&
                TransDrawable.Src1Bmp &&
                (!TransSrc || TransDrawable.Src2Bmp)) {
-#ifdef __ANDROID__
-                if(TVPIsTypeUsingAlpha(DisplayType)) {
-                    tTVPRect backdrop_clip;
-                    tTVPBaseTexture *backdrop_target =
-                        target->GetDrawTargetBitmap(rctar, backdrop_clip);
-                    if(backdrop_target) {
-                        if(!TransDrawable.BackdropBmp) {
-                            auto *backdrop =
-                                new tTVPBaseTexture(*backdrop_target);
-                            backdrop->Independ();
-                            TransDrawable.BackdropBmp = backdrop;
-                            static std::atomic<int> backdrop_logs{0};
-                            if(backdrop_logs.fetch_add(
-                                   1, std::memory_order_relaxed) < 16) {
-                                __android_log_print(
-                                    ANDROID_LOG_WARN,
-                                    "AetherKiriPageSwitch",
-                                    "page_switch_backdrop capture size=%ux%u clip=%d,%d,%d,%d",
-                                    backdrop->GetWidth(),
-                                    backdrop->GetHeight(), backdrop_clip.left,
-                                    backdrop_clip.top, backdrop_clip.right,
-                                    backdrop_clip.bottom);
-                            }
-                        } else {
-                            // The draw buffer persists between frames. Restore
-                            // the parent content before applying this frame's
-                            // alpha transition so the effect does not compound
-                            // over its own previous output.
-                            backdrop_target->CopyRect(
-                                backdrop_clip.left, backdrop_clip.top,
-                                TransDrawable.BackdropBmp, backdrop_clip);
-                        }
-                    }
-                }
-#endif
                 TransDrawable.DrawCompleted(
                     rctar, TransDrawable.Src1Bmp, rect, DisplayType, Opacity);
                 CurrentDrawTarget = nullptr;
@@ -10299,11 +10258,9 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
 #ifdef __ANDROID__
         delete TransDrawable.Src1Bmp;
         delete TransDrawable.Src2Bmp;
-        delete TransDrawable.BackdropBmp;
 #endif
         TransDrawable.Src1Bmp = nullptr;
         TransDrawable.Src2Bmp = nullptr;
-        TransDrawable.BackdropBmp = nullptr;
 #ifdef __ANDROID__
         // The page scripts have already assembled both transition trees before
         // StartTransition. Waiting one more event tick can catch their own
@@ -10418,11 +10375,9 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
 #ifdef __ANDROID__
         delete TransDrawable.Src1Bmp;
         delete TransDrawable.Src2Bmp;
-        delete TransDrawable.BackdropBmp;
 #endif
         TransDrawable.Src1Bmp = nullptr;
         TransDrawable.Src2Bmp = nullptr;
-        TransDrawable.BackdropBmp = nullptr;
         TransDrawable.SnapshotWarmupFrames = 0;
         TransDrawable.SkipSnapshotFrame = false;
 
