@@ -470,8 +470,9 @@ static void registerPsbResources(PSBFile *self, ttstr path) {
     if(!psbMedia)
         return;
     psbMedia->NormalizeDomainName(path);
-    // Replace stale entries from previous loads of the same PSB source.
-    psbMedia->removeByPrefix((path + TJS_W("/")).AsStdString());
+    // PSB archives are immutable for the lifetime of an engine session.
+    // Re-register in place so PSBMedia::add can retain converted subimages
+    // when scripts repeatedly construct/load the same archive.
     registerRootResources(path, *self);
 }
 

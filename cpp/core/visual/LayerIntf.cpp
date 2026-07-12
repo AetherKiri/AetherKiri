@@ -10275,10 +10275,15 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
         {
             static std::atomic<int> transition_start_logs{0};
             if(transition_start_logs.fetch_add(1, std::memory_order_relaxed) <
-               32) {
+               128) {
                 __android_log_print(
                     ANDROID_LOG_WARN, "AetherKiriPageSwitch",
-                    "page_switch_transition_start name=\"%s\" type=%d update_type=%d with_children=%d size=%dx%d",
+                    "page_switch_transition_start layer=%p layer_name=\"%s\" parent=%p source=%p source_name=\"%s\" name=\"%s\" type=%d update_type=%d with_children=%d size=%dx%d",
+                    static_cast<void *>(this), GetName().AsStdString().c_str(),
+                    static_cast<void *>(Parent),
+                    static_cast<void *>(transsource),
+                    transsource ? transsource->GetName().AsStdString().c_str()
+                                : "",
                     name.AsStdString().c_str(), static_cast<int>(TransType),
                     static_cast<int>(TransUpdateType), withchildren ? 1 : 0,
                     withchildren ? GetWidth() : MainImage->GetWidth(),
@@ -10369,6 +10374,23 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
 void tTJSNI_BaseLayer::InternalStopTransition() {
     // stop transition
     if(InTransition) {
+#ifdef __ANDROID__
+        {
+            static std::atomic<int> transition_stop_logs{0};
+            if(transition_stop_logs.fetch_add(1, std::memory_order_relaxed) <
+               128) {
+                __android_log_print(
+                    ANDROID_LOG_WARN, "AetherKiriPageSwitch",
+                    "page_switch_transition_stop layer=%p layer_name=\"%s\" parent=%p source=%p source_name=\"%s\" shutdown=%d source_alive=%d tick=%llu",
+                    static_cast<void *>(this), GetName().AsStdString().c_str(),
+                    static_cast<void *>(Parent), static_cast<void *>(TransSrc),
+                    TransSrc ? TransSrc->GetName().AsStdString().c_str() : "",
+                    Shutdown ? 1 : 0,
+                    (TransSrc && !TransSrc->Shutdown) ? 1 : 0,
+                    static_cast<unsigned long long>(TransTick));
+            }
+        }
+#endif
         spdlog::trace("[TransTrace] StopTransition type={}", (int)TransType);
         InTransition = false;
         TransCompEventPrevented = false;
