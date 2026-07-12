@@ -4045,7 +4045,14 @@ public:
         if (result != ENGINE_RESULT_OK) {
             return String();
         }
-        return String::utf8(buffer) + GetGodotGpuBridgeDebugInfo();
+        RenderingServer *server = RenderingServer::get_singleton();
+        String godot_info;
+        if (server != nullptr) {
+            godot_info = " godot_method=" + server->get_current_rendering_method() +
+                         " godot_driver=" + server->get_current_rendering_driver_name() +
+                         " rd_gpu=" + String(SupportsGodotRenderingDeviceGpu() ? "1" : "0");
+        }
+        return String::utf8(buffer) + godot_info + GetGodotGpuBridgeDebugInfo();
     }
 
     String get_frame_texture_backend() const { return frame_texture_backend_; }

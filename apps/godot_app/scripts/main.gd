@@ -639,6 +639,8 @@ var game_path: LineEdit
 var restart_notice: Label
 var viewport: TextureRect
 var perf: Label
+var perf_layer: CanvasLayer
+var perf_panel: PanelContainer
 var log_view = null
 var shell_root: Control
 var home_view: Control
@@ -1050,12 +1052,30 @@ func _build_ui() -> void:
     _build_detail_view()
     _build_modal_layer()
 
+    # Keep diagnostics above the game CanvasItem stack. GameViewport moves to
+    # the front while playing, which can otherwise hide a sibling Control.
+    perf_layer = CanvasLayer.new()
+    perf_layer.name = "PerformanceOverlay"
+    perf_layer.layer = 100
+    add_child(perf_layer)
+
+    perf_panel = PanelContainer.new()
+    perf_panel.name = "PerformancePanel"
+    perf_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    perf_panel.add_theme_stylebox_override(
+        "panel",
+        _panel_style(8, Color(0.025, 0.030, 0.050, 0.78),
+            Color(0.72, 0.82, 1.0, 0.58), 1)
+    )
+    perf_panel.visible = false
+    perf_layer.add_child(perf_panel)
+
     perf = Label.new()
-    perf.position = Vector2(24, 18)
+    perf.mouse_filter = Control.MOUSE_FILTER_IGNORE
     perf.add_theme_font_size_override("font_size", 13)
     perf.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
-    perf.visible = false
-    game_view.add_child(perf)
+    perf.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    perf_panel.add_child(perf)
 
     restart_notice = Label.new()
     restart_notice.position = Vector2(24, 44)
@@ -1240,8 +1260,7 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
     var next_surface_mode := String(snapshot.get("surface_mode", render_surface_mode))
     render_surface_mode = next_surface_mode if next_surface_mode in [RENDER_SURFACE_MODE_GAME, RENDER_SURFACE_MODE_DISPLAY] else _default_render_surface_mode()
     show_perf_monitor = bool(snapshot.get("perf_overlay", show_perf_monitor))
-    if perf != null:
-        perf.visible = game_running and show_perf_monitor
+    _set_perf_visible(game_running and show_perf_monitor)
     frame_limit_enabled = bool(snapshot.get("fps_limit_enabled", frame_limit_enabled))
     target_fps = int(snapshot.get("target_fps", target_fps))
     lock_landscape = bool(snapshot.get("force_landscape", lock_landscape))
@@ -1348,6 +1367,21 @@ func _fit_full_rects() -> void:
         control.offset_bottom = 0.0
     _layout_game_viewport(window_size)
     _layout_home_view(window_size)
+    _layout_perf_overlay(window_size)
+
+func _layout_perf_overlay(window_size: Vector2) -> void:
+    if perf_panel == null:
+        return
+    var horizontal_margin := 16.0
+    perf_panel.position = Vector2(horizontal_margin, 12.0)
+    perf_panel.size = Vector2(
+        maxf(240.0, window_size.x - horizontal_margin * 2.0),
+        84.0
+    )
+
+func _set_perf_visible(visible: bool) -> void:
+    if perf_panel != null:
+        perf_panel.visible = visible
 
 func _layout_game_viewport(window_size: Vector2) -> void:
     if viewport == null:
@@ -3741,7 +3775,7 @@ func _start_selected_game() -> void:
     game_view.visible = true
     loading_panel.visible = true
     loading_panel.move_to_front()
-    perf.visible = show_perf_monitor
+    _set_perf_visible(show_perf_monitor)
     restart_notice.visible = true
     _on_open_game()
 
@@ -3773,8 +3807,7 @@ func _quit_after_runtime_exit() -> void:
     if restart_notice != null:
         restart_notice.text = ""
         restart_notice.visible = false
-    if perf != null:
-        perf.visible = false
+    _set_perf_visible(false)
     if viewport != null:
         viewport.texture = null
         viewport.visible = false
@@ -4208,7 +4241,7 @@ func _prepare_cli_probe_view(config: Dictionary) -> void:
     viewport.visible = true
     game_view.visible = true
     loading_panel.visible = false
-    perf.visible = false
+    _set_perf_visible(false)
     restart_notice.visible = false
     viewport.texture = null
     last_texture_size = Vector2i.ZERO
@@ -4914,7 +4947,7 @@ func _process(delta: float) -> void:
                 perf_log_file.flush()
     if perf_accum >= PERF_UPDATE_INTERVAL:
         perf_accum = 0.0
-        if not perf.visible and not verbose_render_log:
+        if (perf_panel == null or not perf_panel.visible) and not verbose_render_log:
             return
         var frame_ms := delta * 1000.0
         var renderer: String = selected_backend
@@ -4924,7 +4957,7 @@ func _process(delta: float) -> void:
         if verbose_render_log and game_running and not renderer.is_empty() and renderer_summary != last_renderer_info_logged:
             last_renderer_info_logged = renderer_summary
             _append_log("Renderer info: %s" % renderer)
-        if not perf.visible:
+        if perf_panel == null or not perf_panel.visible:
             return
         var fallback := _renderer_fallback(renderer)
         var texture_backend: String = String(player.get_frame_texture_backend()) if game_running else "none"
@@ -5170,18 +5203,45 @@ func _renderer_fallback(renderer: String) -> String:
     var end := renderer.find(" ", start)
     if end < 0:
         end = renderer.length()
+    var summary := renderer.substr(start, end - start)
+    var fallback_ops := _renderer_value(renderer, "fallback_ops")
+    var gpu_ops := _renderer_value(renderer, "gpu_ops")
+    if not fallback_ops.is_empty() or not gpu_ops.is_empty():
+        summary += " (CPU:%s GPU:%s)" % [
+            fallback_ops if not fallback_ops.is_empty() else "?",
+            gpu_ops if not gpu_ops.is_empty() else "?",
+        ]
+    return summary
+
+func _renderer_value(renderer: String, key: String) -> String:
+    var marker := key + "="
+    var start := renderer.find(marker)
+    if start < 0:
+        return ""
+    start += marker.length()
+    var end := renderer.find(" ", start)
+    if end < 0:
+        end = renderer.length()
     return renderer.substr(start, end - start)
 
 func _renderer_summary(renderer: String) -> String:
     if renderer.is_empty():
         return selected_backend
+    var summary := selected_backend
     if renderer.contains("backend=godot_native"):
-        return "Godot Native GPU"
-    if renderer.contains("backend=gpu_bridge"):
-        return "GPU Bridge"
-    if renderer.contains("backend=debug_cpu"):
-        return "Debug CPU"
-    return selected_backend
+        summary = "Godot Native GPU"
+    elif renderer.contains("backend=gpu_bridge"):
+        summary = "GPU Bridge"
+    elif renderer.contains("backend=debug_cpu"):
+        summary = "Debug CPU"
+    var driver := _renderer_value(renderer, "godot_driver")
+    var method := _renderer_value(renderer, "godot_method")
+    if not driver.is_empty() or not method.is_empty():
+        summary += " (%s/%s)" % [
+            driver if not driver.is_empty() else "unknown",
+            method if not method.is_empty() else "unknown",
+        ]
+    return summary
 
 
 func _on_open_game() -> void:
