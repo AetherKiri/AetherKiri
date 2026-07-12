@@ -12,16 +12,11 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <math.h>
 #include <mutex>
-
-#ifdef __ANDROID__
-#include <android/log.h>
-#endif
 
 #include "LayerBitmapIntf.h"
 #include "LayerBitmapImpl.h"
@@ -1756,13 +1751,6 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
     if(FlushingPendingTextDraws || PendingTextDraws.empty())
         return;
 
-#ifdef __ANDROID__
-    const auto flush_start = std::chrono::steady_clock::now();
-    const size_t pending_count = PendingTextDraws.size();
-    size_t style_group_count = 0;
-    size_t gpu_batch_count = 0;
-    size_t max_batch_pixels = 0;
-#endif
     FlushingPendingTextDraws = true;
     try {
         auto keys_equal = [](const tTVPPendingTextDraw &a,
@@ -1776,9 +1764,6 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
 
         size_t begin = 0;
         while(begin < PendingTextDraws.size()) {
-#ifdef __ANDROID__
-            ++style_group_count;
-#endif
             size_t end = begin + 1;
             while(end < PendingTextDraws.size() &&
                   keys_equal(PendingTextDraws[begin], PendingTextDraws[end])) {
@@ -1876,12 +1861,6 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
 
                 const tjs_int batch_w = batch_rect.get_width();
                 const tjs_int batch_h = batch_rect.get_height();
-#ifdef __ANDROID__
-                ++gpu_batch_count;
-                max_batch_pixels = std::max(
-                    max_batch_pixels,
-                    static_cast<size_t>(batch_w) * static_cast<size_t>(batch_h));
-#endif
                 tTVPBitmap *tmp = new tTVPBitmap(batch_w, batch_h, 32);
                 tjs_int dpitch = tmp->GetPitch();
                 tjs_uint8 *bits =
@@ -1975,23 +1954,6 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
         }
         ClearPendingTextDraws();
         FlushingPendingTextDraws = false;
-#ifdef __ANDROID__
-        const auto flush_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                                  std::chrono::steady_clock::now() - flush_start)
-                                  .count();
-        if(flush_us >= 20000) {
-            static std::atomic<int> slow_flush_logs{0};
-            if(slow_flush_logs.fetch_add(1, std::memory_order_relaxed) < 96) {
-                __android_log_print(
-                    ANDROID_LOG_WARN, "AetherKiriPageSwitch",
-                    "page_switch_text_flush duration_us=%lld glyphs=%zu style_groups=%zu gpu_batches=%zu max_batch_pixels=%zu bitmap=%dx%d",
-                    static_cast<long long>(flush_us), pending_count,
-                    style_group_count, gpu_batch_count, max_batch_pixels,
-                    Bitmap ? Bitmap->GetWidth() : 0,
-                    Bitmap ? Bitmap->GetHeight() : 0);
-            }
-        }
-#endif
     } catch(...) {
         ClearPendingTextDraws();
         FlushingPendingTextDraws = false;

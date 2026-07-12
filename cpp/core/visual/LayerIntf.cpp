@@ -15,7 +15,6 @@
 #include "tjsCommHead.h"
 
 #include <atomic>
-#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -8734,23 +8733,6 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
                 auto *snapshot = new tTVPBaseTexture(*completed);
                 snapshot->Independ();
                 TransDrawable.Src1Bmp = snapshot;
-                if(snapshot->GetWidth() == 1920 &&
-                   snapshot->GetHeight() == 1080) {
-                    static std::atomic<int> src1_sample_logs{0};
-                    if(src1_sample_logs.fetch_add(
-                           1, std::memory_order_relaxed) == 0) {
-                        const int y = snapshot->GetHeight() / 2;
-                        __android_log_print(
-                            ANDROID_LOG_WARN, "AetherKiriPageSwitch",
-                            "page_switch_snapshot role=src1 size=%ux%u samples=%08x,%08x,%08x,%08x,%08x",
-                            snapshot->GetWidth(), snapshot->GetHeight(),
-                            snapshot->GetPoint(0, y),
-                            snapshot->GetPoint(snapshot->GetWidth() / 4, y),
-                            snapshot->GetPoint(snapshot->GetWidth() / 2, y),
-                            snapshot->GetPoint(snapshot->GetWidth() * 3 / 4, y),
-                            snapshot->GetPoint(snapshot->GetWidth() - 1, y));
-                    }
-                }
             }
 #else
             TransDrawable.Src1Bmp = completed;
@@ -8764,23 +8746,6 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
                 auto *snapshot = new tTVPBaseTexture(*completed);
                 snapshot->Independ();
                 TransDrawable.Src2Bmp = snapshot;
-                if(snapshot->GetWidth() == 1920 &&
-                   snapshot->GetHeight() == 1080) {
-                    static std::atomic<int> src2_sample_logs{0};
-                    if(src2_sample_logs.fetch_add(
-                           1, std::memory_order_relaxed) == 0) {
-                        const int y = snapshot->GetHeight() / 2;
-                        __android_log_print(
-                            ANDROID_LOG_WARN, "AetherKiriPageSwitch",
-                            "page_switch_snapshot role=src2 size=%ux%u samples=%08x,%08x,%08x,%08x,%08x",
-                            snapshot->GetWidth(), snapshot->GetHeight(),
-                            snapshot->GetPoint(0, y),
-                            snapshot->GetPoint(snapshot->GetWidth() / 4, y),
-                            snapshot->GetPoint(snapshot->GetWidth() / 2, y),
-                            snapshot->GetPoint(snapshot->GetWidth() * 3 / 4, y),
-                            snapshot->GetPoint(snapshot->GetWidth() - 1, y));
-                    }
-                }
             }
 #else
             TransDrawable.Src2Bmp = completed;
@@ -10282,26 +10247,6 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
         TransDrawable.SnapshotWarmupFrames = 0;
 #endif
         TransDrawable.SkipSnapshotFrame = false;
-#ifdef __ANDROID__
-        {
-            static std::atomic<int> transition_start_logs{0};
-            if(transition_start_logs.fetch_add(1, std::memory_order_relaxed) <
-               128) {
-                __android_log_print(
-                    ANDROID_LOG_WARN, "AetherKiriPageSwitch",
-                    "page_switch_transition_start layer=%p layer_name=\"%s\" parent=%p source=%p source_name=\"%s\" name=\"%s\" type=%d update_type=%d with_children=%d size=%dx%d",
-                    static_cast<void *>(this), GetName().AsStdString().c_str(),
-                    static_cast<void *>(Parent),
-                    static_cast<void *>(transsource),
-                    transsource ? transsource->GetName().AsStdString().c_str()
-                                : "",
-                    name.AsStdString().c_str(), static_cast<int>(TransType),
-                    static_cast<int>(TransUpdateType), withchildren ? 1 : 0,
-                    withchildren ? GetWidth() : MainImage->GetWidth(),
-                    withchildren ? GetHeight() : MainImage->GetHeight());
-            }
-        }
-#endif
         if(TransWithChildren) {
             IncCacheEnabledCount();
             if(transsource)
@@ -10385,23 +10330,6 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
 void tTJSNI_BaseLayer::InternalStopTransition() {
     // stop transition
     if(InTransition) {
-#ifdef __ANDROID__
-        {
-            static std::atomic<int> transition_stop_logs{0};
-            if(transition_stop_logs.fetch_add(1, std::memory_order_relaxed) <
-               128) {
-                __android_log_print(
-                    ANDROID_LOG_WARN, "AetherKiriPageSwitch",
-                    "page_switch_transition_stop layer=%p layer_name=\"%s\" parent=%p source=%p source_name=\"%s\" shutdown=%d source_alive=%d tick=%llu",
-                    static_cast<void *>(this), GetName().AsStdString().c_str(),
-                    static_cast<void *>(Parent), static_cast<void *>(TransSrc),
-                    TransSrc ? TransSrc->GetName().AsStdString().c_str() : "",
-                    Shutdown ? 1 : 0,
-                    (TransSrc && !TransSrc->Shutdown) ? 1 : 0,
-                    static_cast<unsigned long long>(TransTick));
-            }
-        }
-#endif
         spdlog::trace("[TransTrace] StopTransition type={}", (int)TransType);
         InTransition = false;
         TransCompEventPrevented = false;
@@ -10583,28 +10511,7 @@ void tTJSNI_BaseLayer::DoDivisibleTransition(iTVPBaseBitmap *dest, tjs_int dx,
     data.DestTop = dy;
 
     // process
-#ifdef __ANDROID__
-    const auto process_start = std::chrono::steady_clock::now();
-#endif
     DivisibleTransHandler->Process(&data);
-#ifdef __ANDROID__
-    const auto process_finish = std::chrono::steady_clock::now();
-    const int64_t process_us =
-        std::chrono::duration_cast<std::chrono::microseconds>(process_finish -
-                                                              process_start)
-            .count();
-    if(process_us >= 2000) {
-        static std::atomic<int> transition_process_logs{0};
-        if(transition_process_logs.fetch_add(1, std::memory_order_relaxed) <
-           96) {
-            __android_log_print(
-                ANDROID_LOG_WARN, "AetherKiriPageSwitch",
-                "page_switch_transition_process path=self duration_us=%lld update_type=%d size=%dx%d",
-                static_cast<long long>(process_us),
-                static_cast<int>(TransUpdateType), data.Width, data.Height);
-        }
-    }
-#endif
 
     if(data.Dest == data.Src1) {
         // returned destination differs from given destination
@@ -10641,10 +10548,6 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
     // do divisible transition
     if(!Owner->InTransition || !Owner->DivisibleTransHandler)
         return;
-#ifdef __ANDROID__
-    const auto transition_start = std::chrono::steady_clock::now();
-#endif
-
     tTVPDivisibleData data;
     data.Left = destrect.left - Owner->Rect.left;
     data.Top = destrect.top - Owner->Rect.top;
@@ -10693,10 +10596,6 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
     } else {
         data.Src2 = nullptr;
     }
-#ifdef __ANDROID__
-    const auto source_ready = std::chrono::steady_clock::now();
-#endif
-
     tTVPBaseTexture *dest;
     bool tempalloc = false;
     if(bmp == Target || Target == nullptr) {
@@ -10728,13 +10627,7 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
     }
 
     try {
-#ifdef __ANDROID__
-        const auto process_start = std::chrono::steady_clock::now();
-#endif
         Owner->DivisibleTransHandler->Process(&data);
-#ifdef __ANDROID__
-        const auto process_finish = std::chrono::steady_clock::now();
-#endif
         tTVPRect cr = cliprect;
 
         if(data.Dest == Owner->DestSLP) {
@@ -10747,40 +10640,6 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
             cr.set_offsets(data.DestLeft, data.DestTop);
             OrgDrawable->DrawCompleted(destrect, src, cr, type, opacity);
         }
-#ifdef __ANDROID__
-        const auto transition_finish = std::chrono::steady_clock::now();
-        const int64_t total_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                transition_finish - transition_start)
-                .count();
-        if(total_us >= 5000) {
-            static std::atomic<int> transition_draw_logs{0};
-            if(transition_draw_logs.fetch_add(1, std::memory_order_relaxed) <
-               96) {
-                const int64_t source_us =
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        source_ready - transition_start)
-                        .count();
-                const int64_t process_us =
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        process_finish - process_start)
-                        .count();
-                const int64_t submit_us =
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        transition_finish - process_finish)
-                        .count();
-                __android_log_print(
-                    ANDROID_LOG_WARN, "AetherKiriPageSwitch",
-                    "page_switch_transition_process path=children total_us=%lld source_us=%lld process_us=%lld submit_us=%lld update_type=%d size=%dx%d temp=%d",
-                    static_cast<long long>(total_us),
-                    static_cast<long long>(source_us),
-                    static_cast<long long>(process_us),
-                    static_cast<long long>(submit_us),
-                    static_cast<int>(Owner->TransUpdateType), data.Width,
-                    data.Height, tempalloc ? 1 : 0);
-            }
-        }
-#endif
     } catch(...) {
         if(tempalloc)
             tTVPTempBitmapHolder::FreeTemp();

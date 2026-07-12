@@ -12,9 +12,6 @@
 #include "tjsCommHead.h"
 #include <algorithm>
 #include <spdlog/spdlog.h>
-#ifdef __ANDROID__
-#include <android/log.h>
-#endif
 
 #include "tjsInterCodeExec.h"
 #include "tjsInterCodeGen.h"
@@ -49,90 +46,6 @@ namespace TJS {
     static char TJSExecArgTraceRing[TJS_EXEC_ARG_TRACE_RING_SIZE]
                                   [TJS_EXEC_ARG_TRACE_LINE_SIZE] = {};
     static std::atomic<uint64_t> TJSExecArgTraceIndex{0};
-
-#ifdef __ANDROID__
-    struct TJSPageSwitchFunctionStat {
-        uint64_t Calls = 0;
-        int64_t SelfUs = 0;
-        int64_t MaxSelfUs = 0;
-    };
-
-    struct TJSPageSwitchFunctionFrame {
-        std::string Description;
-        std::chrono::steady_clock::time_point Start;
-        int64_t ChildUs = 0;
-    };
-
-    static thread_local std::vector<TJSPageSwitchFunctionFrame>
-        TJSPageSwitchFunctionFrames;
-    static thread_local std::unordered_map<std::string,
-                                           TJSPageSwitchFunctionStat>
-        TJSPageSwitchFunctionStats;
-    static std::atomic<int> TJSPageSwitchProfileWarnings{0};
-
-    class TJSPageSwitchFunctionScope {
-    public:
-        explicit TJSPageSwitchFunctionScope(
-            const tTJSInterCodeContext *context) {
-            if(TJSPageSwitchFunctionFrames.empty())
-                TJSPageSwitchFunctionStats.clear();
-            TJSPageSwitchFunctionFrames.push_back({
-                context->GetShortDescriptionWithClassName().AsStdString(),
-                std::chrono::steady_clock::now(), 0});
-        }
-
-        ~TJSPageSwitchFunctionScope() {
-            if(TJSPageSwitchFunctionFrames.empty())
-                return;
-            TJSPageSwitchFunctionFrame frame =
-                std::move(TJSPageSwitchFunctionFrames.back());
-            TJSPageSwitchFunctionFrames.pop_back();
-            const int64_t total_us =
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - frame.Start)
-                    .count();
-            const int64_t self_us =
-                std::max<int64_t>(0, total_us - frame.ChildUs);
-            auto &stat = TJSPageSwitchFunctionStats[frame.Description];
-            stat.Calls++;
-            stat.SelfUs += self_us;
-            stat.MaxSelfUs = std::max(stat.MaxSelfUs, self_us);
-            if(!TJSPageSwitchFunctionFrames.empty()) {
-                TJSPageSwitchFunctionFrames.back().ChildUs += total_us;
-                return;
-            }
-            if(total_us < 50000 ||
-               TJSPageSwitchProfileWarnings.fetch_add(
-                   1, std::memory_order_relaxed) >= 32)
-                return;
-
-            std::vector<std::pair<std::string, TJSPageSwitchFunctionStat>>
-                ranked(TJSPageSwitchFunctionStats.begin(),
-                       TJSPageSwitchFunctionStats.end());
-            std::sort(ranked.begin(), ranked.end(),
-                      [](const auto &left, const auto &right) {
-                          return left.second.SelfUs > right.second.SelfUs;
-                      });
-            std::string top;
-            const size_t count = std::min<size_t>(ranked.size(), 10);
-            for(size_t i = 0; i < count; ++i) {
-                if(!top.empty())
-                    top += "; ";
-                top += fmt::format("{} self_us={} calls={} max_self_us={}",
-                                   ranked[i].first,
-                                   ranked[i].second.SelfUs,
-                                   ranked[i].second.Calls,
-                                   ranked[i].second.MaxSelfUs);
-            }
-            const std::string message = fmt::format(
-                "page_switch_tjs_profile phase=tjs_function duration_us={} root=\"{}\" top=[{}]",
-                total_us, frame.Description, top);
-            spdlog::warn("[PAGE_SWITCH_PERF] {}", message);
-            __android_log_print(ANDROID_LOG_WARN, "AetherKiriPageSwitch", "%s",
-                                message.c_str());
-        }
-    };
-#endif
 
     static void TJSStoreExecArgTrace(std::string line) {
         const uint64_t index =
@@ -1168,10 +1081,6 @@ namespace TJS {
         if(!GetValidity() || !CodeArea) {
             TJSThrowFrom_tjs_error(TJS_E_INVALIDOBJECT);
         }
-#ifdef __ANDROID__
-        TJSPageSwitchFunctionScope page_switch_function_scope(this);
-#endif
-
         struct tExecutingContextRefGuard {
             tTJSInterCodeContext *Self;
             iTJSDispatch2 *ObjThis;

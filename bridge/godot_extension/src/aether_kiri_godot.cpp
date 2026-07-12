@@ -3674,17 +3674,6 @@ bool BridgeBlendRect3(
     op->mode = mode;
     op->opacity = opacity;
     op->color = color;
-#if defined(__ANDROID__)
-    static std::atomic<int> blend3_trace_count{0};
-    if(blend3_trace_count.fetch_add(1, std::memory_order_relaxed) < 96) {
-        AndroidLogPrintf(
-            "warn",
-            "blend3 mode=%u phase=%d size=%dx%d src1=%ux%u src2=%ux%u rule=%ux%u",
-            mode, opacity, width, height, src1_record.width,
-            src1_record.height, src2_record.width, src2_record.height,
-            src3_record.width, src3_record.height);
-    }
-#endif
     return RunGodotGpuOpAsync(op);
 }
 

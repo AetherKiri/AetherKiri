@@ -3,7 +3,6 @@
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
 
 #include <algorithm>
-#include <atomic>
 #include <cstdarg>
 #include <chrono>
 #include <cmath>
@@ -118,8 +117,6 @@ struct engine_handle_s {
   std::thread::id owner_thread;
   bool runtime_owner = false;
   uint64_t tick_count = 0;
-  std::chrono::steady_clock::time_point last_tick_start{};
-  bool tick_timing_initialized = false;
 
   // Frame state — readback buffer and tracking
   struct FrameState {
@@ -222,14 +219,7 @@ uint64_t EngineTickSpikeThresholdUs() {
   static const uint64_t threshold = []() -> uint64_t {
     const char* value = std::getenv("AETHERKIRI_ENGINE_TICK_SPIKE_MS");
     if (value == nullptr || *value == '\0') {
-#if defined(__ANDROID__)
-      // Keep a narrow always-on probe while the Android page-switch issue is
-      // under investigation.  This covers work outside Window::UpdateContent,
-      // including the final draw/swap where SurfaceFlinger gaps can originate.
-      return 12000;
-#else
       return 0;
-#endif
     }
     const double ms = std::atof(value);
     if (ms <= 0.0) {
@@ -1865,12 +1855,6 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   impl->tick_count += 1;
 
   const auto tick_start = std::chrono::steady_clock::now();
-  uint64_t tick_interval_us = 0;
-  if (impl->tick_timing_initialized) {
-    tick_interval_us = DurationUs(impl->last_tick_start, tick_start);
-  }
-  impl->last_tick_start = tick_start;
-  impl->tick_timing_initialized = true;
   size_t dispatched_inputs = 0;
   while (!impl->input.pending_events.empty()) {
     const engine_input_event_t queued_event = impl->input.pending_events.front();
@@ -2059,37 +2043,16 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
       return;
     }
     spdlog::warn(
-        "engine_tick_spike tick={} interval_us={} total_us={} input_us={} app_us={} "
+        "engine_tick_spike tick={} total_us={} input_us={} app_us={} "
         "draw_us={} recycle_us={} capture_us={} inputs={} renderer={} "
         "frame_backend={}",
-        static_cast<unsigned long long>(impl->tick_count), tick_interval_us,
-        total_us,
+        static_cast<unsigned long long>(impl->tick_count), total_us,
         DurationUs(tick_start, after_input),
         DurationUs(after_input, after_application_run),
         DurationUs(after_application_run, after_draw_scene),
         DurationUs(after_draw_scene, after_recycle),
         DurationUs(after_recycle, tick_end), dispatched_inputs,
         impl->render.renderer, frame_backend);
-#if defined(__ANDROID__)
-    static std::atomic<int> android_tick_spike_logs{0};
-    if (android_tick_spike_logs.fetch_add(1, std::memory_order_relaxed) < 160) {
-      __android_log_print(
-          ANDROID_LOG_WARN, "AetherKiriPageSwitch",
-          "engine_tick_spike tick=%llu interval_us=%llu total_us=%llu input_us=%llu app_us=%llu draw_us=%llu recycle_us=%llu capture_us=%llu inputs=%zu renderer=%s frame_backend=%s",
-          static_cast<unsigned long long>(impl->tick_count),
-          static_cast<unsigned long long>(tick_interval_us),
-          static_cast<unsigned long long>(total_us),
-          static_cast<unsigned long long>(DurationUs(tick_start, after_input)),
-          static_cast<unsigned long long>(
-              DurationUs(after_input, after_application_run)),
-          static_cast<unsigned long long>(
-              DurationUs(after_application_run, after_draw_scene)),
-          static_cast<unsigned long long>(
-              DurationUs(after_draw_scene, after_recycle)),
-          static_cast<unsigned long long>(DurationUs(after_recycle, tick_end)),
-          dispatched_inputs, impl->render.renderer.c_str(), frame_backend);
-    }
-#endif
   };
 
   if (TVPTerminated) {

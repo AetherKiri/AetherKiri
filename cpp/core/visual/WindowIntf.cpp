@@ -12,12 +12,6 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <spdlog/spdlog.h>
-#ifdef __ANDROID__
-#include <android/log.h>
-#endif
 #include "MsgIntf.h"
 #include "WindowIntf.h"
 #include "LayerIntf.h"
@@ -654,55 +648,12 @@ void tTJSNI_BaseWindow::NotifyUpdateRegionFixed(
 void tTJSNI_BaseWindow::UpdateContent() {
     if(DrawDevice) {
         // is called from event dispatcher
-#ifdef __ANDROID__
-        const auto update_start = std::chrono::steady_clock::now();
-#endif
         DrawDevice->Update();
-#ifdef __ANDROID__
-        const auto show_start = std::chrono::steady_clock::now();
-#endif
 
         if(!WaitVSync)
             DrawDevice->Show();
 
-#ifdef __ANDROID__
-        const auto end_start = std::chrono::steady_clock::now();
-#endif
         EndUpdate();
-#ifdef __ANDROID__
-        const auto finish = std::chrono::steady_clock::now();
-        const int64_t total_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                finish - update_start)
-                .count();
-        if(total_us >= 20000) {
-            static std::atomic<int> warning_count{0};
-            if(warning_count.fetch_add(1, std::memory_order_relaxed) < 64) {
-                const int64_t draw_us =
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        show_start - update_start)
-                        .count();
-                const int64_t show_us =
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        end_start - show_start)
-                        .count();
-                const int64_t end_us =
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        finish - end_start)
-                        .count();
-                spdlog::warn(
-                    "[PAGE_SWITCH_PERF] page_switch_window_spike phase=window_update duration_us={} draw_us={} show_us={} end_us={} wait_vsync={}",
-                    total_us, draw_us, show_us, end_us, WaitVSync ? 1 : 0);
-                __android_log_print(
-                    ANDROID_LOG_WARN, "AetherKiriPageSwitch",
-                    "page_switch_window_spike phase=window_update duration_us=%lld draw_us=%lld show_us=%lld end_us=%lld wait_vsync=%d",
-                    static_cast<long long>(total_us),
-                    static_cast<long long>(draw_us),
-                    static_cast<long long>(show_us),
-                    static_cast<long long>(end_us), WaitVSync ? 1 : 0);
-            }
-        }
-#endif
     }
 }
 //---------------------------------------------------------------------------

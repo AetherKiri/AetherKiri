@@ -3,7 +3,6 @@
 //
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <spdlog/spdlog.h>
@@ -1438,14 +1437,6 @@ namespace PSB {
             it->second.sizeBytes = CalcEntryFootprint(it->second);
             _bytesInUse += it->second.sizeBytes;
             touchLocked(it->second);
-            if(preserveConverted) {
-                static std::atomic<int> preservedLogs{0};
-                if(preservedLogs.fetch_add(1, std::memory_order_relaxed) < 64) {
-                    LOGGER->info(
-                        "PSB media cache preserved converted image: key={} bytes={}",
-                        key, it->second.convertedImage->size());
-                }
-            }
         } else {
             _lru.push_front(key);
             CacheEntry entry{};
