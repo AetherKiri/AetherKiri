@@ -16,6 +16,20 @@ class FakePlayer extends Node:
         if not enabled:
             return -1
         native_sequence += 1
+        native_batches.append(JSON.stringify({
+            "schema": 1,
+            "session": "fake-native",
+            "sequence": native_sequence,
+            "monotonic_us": Time.get_ticks_usec(),
+            "platform": "stub",
+            "layer": "engine",
+            "subsystem": "lifecycle",
+            "level": "info",
+            "event": "issue_marker",
+            "duration_us": 0,
+            "queue_dropped": 0,
+            "fields": {"label": label},
+        }) + "\n")
         return native_sequence if not label.is_empty() else -1
 
     func drain_diagnostic_events() -> String:
@@ -68,6 +82,14 @@ func _run() -> void:
         _fail("normal ring-window expiry was counted as a queue drop")
         return
     diagnostics.mark_issue("test_issue")
+    if diagnostics._marker_button.text != "已标记 #1" or not diagnostics._marker_button.disabled:
+        _fail("accepted marker did not provide visible device feedback")
+        return
+    diagnostics._status_until_msec = 0
+    diagnostics._process(0.0)
+    if diagnostics._marker_button.text != diagnostics.MARKER_BUTTON_TEXT or diagnostics._marker_button.disabled:
+        _fail("marker feedback did not restore the action button")
+        return
     diagnostics._pending_incidents[0]["until_us"] = 0
     diagnostics._finish_elapsed_incidents()
     if not diagnostics._pending_incidents.is_empty():
@@ -92,7 +114,8 @@ func _run() -> void:
     var contents := file.get_as_text() if file != null else ""
     if (not contents.contains("test_issue") or
             not contents.contains("host_frame_spike") or
-            not contents.contains("native_backlog_2")):
+            not contents.contains("native_backlog_2") or
+            not contents.contains("fake-native")):
         _fail("expected structured events are missing")
         return
     print("diagnostic_session_test: PASS output=%s" % ProjectSettings.globalize_path(base))

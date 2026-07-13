@@ -11,6 +11,8 @@ const MAX_FILE_BYTES := 4 * 1024 * 1024
 const FLUSH_INTERVAL := 1.0
 const NATIVE_DRAIN_INTERVAL := 0.5
 const REQUEST_FILE := "user://diagnostic-request.json"
+const MARKER_BUTTON_TEXT := "标记问题"
+const MARKER_FEEDBACK_MSEC := 1800
 
 const CATEGORY := {
     "lifecycle": 1 << 0,
@@ -132,7 +134,7 @@ func build_overlay(parent: Node) -> void:
     _overlay.add_child(box)
 
     _marker_button = Button.new()
-    _marker_button.text = "标记问题"
+    _marker_button.text = MARKER_BUTTON_TEXT
     _marker_button.custom_minimum_size = Vector2(172, 48)
     _marker_button.pressed.connect(mark_issue.bind("user_issue"))
     _marker_button.visible = false
@@ -178,6 +180,8 @@ func start(runtime_player, renderer: String) -> bool:
 func set_game_active(value: bool) -> void:
     if _marker_button != null:
         _marker_button.visible = active and value
+        if not value:
+            _reset_marker_feedback()
     if not value and _status_label != null:
         _status_label.visible = false
 
@@ -222,12 +226,24 @@ func sample_frame(delta: float, tick_ms: float, update_ms: float,
         _record_frame_summary(renderer, texture_backend)
 
 func mark_issue(label: String = "user_issue") -> void:
-    if not active or marker_count >= MAX_MARKERS:
+    if not active:
+        return
+    if marker_count >= MAX_MARKERS:
+        _show_marker_feedback("已达标记上限 (%d)" % MAX_MARKERS, false)
+        if _marker_button != null:
+            _marker_button.disabled = true
+        print("[diagnostics] marker_rejected session=%s reason=max_markers count=%d" % [
+            session_id, marker_count,
+        ])
         return
     marker_count += 1
     var native_sequence := -1
     if player != null and player.has_method("mark_diagnostic_event"):
         native_sequence = int(player.mark_diagnostic_event(label))
+        if native_sequence >= 0:
+            # Persist the native marker in the same synchronous flush as the
+            # Godot marker instead of leaving it queued for the next timer tick.
+            _drain_native()
     record("godot", "lifecycle", "info", "issue_marker", 0, {
         "label": label,
         "marker_index": marker_count,
@@ -245,11 +261,38 @@ func mark_issue(label: String = "user_issue") -> void:
         "lines": PackedStringArray(),
     })
     flush()
-    if _status_label != null:
-        _status_label.text = "已标记 #%d" % marker_count
-        _status_label.visible = true
-        _status_until_msec = Time.get_ticks_msec() + 1600
+    var feedback := "已标记 #%d" % marker_count
+    _show_marker_feedback(feedback, true)
+    if OS.get_name() in ["Android", "iOS"]:
+        Input.vibrate_handheld(80, 0.45)
+    print("[diagnostics] issue_marker session=%s marker=%d label=%s native_sequence=%d output=%s" % [
+        session_id,
+        marker_count,
+        label,
+        native_sequence,
+        ProjectSettings.globalize_path(session_dir),
+    ])
     marker_created.emit(marker_count, label)
+
+func _show_marker_feedback(message: String, accepted: bool) -> void:
+    if _marker_button != null:
+        _marker_button.text = message
+        _marker_button.disabled = accepted
+    if _status_label != null:
+        _status_label.text = "诊断日志已保存" if accepted else "请结束本次诊断会话"
+        _status_label.visible = true
+    _status_until_msec = Time.get_ticks_msec() + MARKER_FEEDBACK_MSEC
+
+func _reset_marker_feedback() -> void:
+    if _marker_button != null:
+        if active and marker_count >= MAX_MARKERS:
+            _marker_button.text = "标记已满 (%d)" % MAX_MARKERS
+            _marker_button.disabled = true
+        else:
+            _marker_button.text = MARKER_BUTTON_TEXT
+            _marker_button.disabled = false
+    if _status_label != null:
+        _status_label.visible = false
 
 func finish() -> void:
     if not active:
@@ -295,7 +338,7 @@ func _process(delta: float) -> void:
         _flush_accum = 0.0
         flush()
     if _status_label != null and _status_label.visible and Time.get_ticks_msec() >= _status_until_msec:
-        _status_label.visible = false
+        _reset_marker_feedback()
 
 func _notification(what: int) -> void:
     if what in [NOTIFICATION_APPLICATION_PAUSED, NOTIFICATION_APPLICATION_FOCUS_OUT,
