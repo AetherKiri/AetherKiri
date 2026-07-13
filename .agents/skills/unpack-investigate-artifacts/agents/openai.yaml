@@ -1,0 +1,4 @@
+interface:
+  display_name: "Investigate Diagnostic Artifacts"
+  short_description: "Unpack diagnostic ZIPs and trace evidence boundaries"
+  default_prompt: "Use $unpack-investigate-artifacts to safely unpack this existing diagnostic package and report evidence-backed findings without running collection."
