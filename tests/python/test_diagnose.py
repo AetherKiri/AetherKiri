@@ -84,6 +84,32 @@ class DiagnoseTests(unittest.TestCase):
             ["adb", "-s", "ABC123"],
         )
 
+    def test_android_preflight_accepts_wireless_device_with_mdns_descriptor(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["adb"], 0,
+            stdout=(
+                b"List of devices attached\n"
+                b"adb-c693383b-1quekS (2)._adb-tls-connect._tcp device "
+                b"product:fixture model:fixture transport_id:3\n"
+            ),
+        )
+        args = self.android_args()
+        with mock.patch.object(diagnose, "run", return_value=completed):
+            diagnose.android_preflight(args)
+        self.assertEqual(args.device, "adb-c693383b-1quekS")
+
+    def test_android_preflight_reports_wireless_device_real_state(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["adb"], 0,
+            stdout=(
+                b"List of devices attached\n"
+                b"adb-c693383b-1quekS (2)._adb-tls-connect._tcp offline\n"
+            ),
+        )
+        with mock.patch.object(diagnose, "run", return_value=completed):
+            with self.assertRaisesRegex(diagnose.DiagnoseError, "offline"):
+                diagnose.android_preflight(self.android_args())
+
     def test_host_marker_is_added_when_ui_marker_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             bundle = Path(temp)

@@ -31,6 +31,9 @@ PROFILES = (
     "plugin", "system", "full",
 )
 POST_MARKER_GRACE_SECONDS = 5.25
+ADB_DEVICE_STATES = frozenset({
+    "device", "offline", "unauthorized", "bootloader", "recovery", "sideload",
+})
 
 PROFILE_ENV: dict[str, dict[str, str]] = {
     "baseline": {
@@ -146,9 +149,8 @@ def adb_command(args: argparse.Namespace, *parts: str) -> list[str]:
     return command + list(parts)
 
 
-def android_preflight(args: argparse.Namespace) -> None:
-    run(["adb", "start-server"], check=False)
-    listing = output(["adb", "devices"], check=False)
+def parse_adb_devices(listing: str) -> dict[str, str]:
+    """Return serial -> transport state, tolerating mDNS descriptor columns."""
     devices: dict[str, str] = {}
     saw_header = False
     for line in listing.splitlines():
@@ -158,8 +160,20 @@ def android_preflight(args: argparse.Namespace) -> None:
         if not saw_header:
             continue
         columns = line.strip().split()
-        if len(columns) >= 2:
-            devices[columns[0]] = columns[1]
+        if len(columns) < 2:
+            continue
+        state = next(
+            (column for column in columns[1:] if column in ADB_DEVICE_STATES),
+            columns[1],
+        )
+        devices[columns[0]] = state
+    return devices
+
+
+def android_preflight(args: argparse.Namespace) -> None:
+    run(["adb", "start-server"], check=False)
+    listing = output(["adb", "devices"], check=False)
+    devices = parse_adb_devices(listing)
     if args.device:
         state = devices.get(args.device)
         if state is None:
