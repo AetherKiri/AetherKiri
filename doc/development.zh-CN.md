@@ -404,6 +404,14 @@ build/validate_gpu_bridge.sh
 
 ## 调试说明
 
+需要复现难以描述的性能、输入、渲染或原生问题时，优先使用[统一诊断会话](diagnostics.zh-CN.md)：
+
+```bash
+python3 tools/diagnose.py run android
+```
+
+复现后在应用内点击“标记问题”，回到终端按 Enter；工具会生成包含结构化事件、平台日志和证据摘要的 ZIP。下面的环境变量仍可用于单项临时排查，但日常流程不再要求人工组合它们。
+
 release 构建默认不会持续 drain runtime log，也不会刷新 UI 日志框，避免普通用户版本
 承担每帧日志和 UI 更新开销。需要定位问题时，只打开所需诊断项：
 

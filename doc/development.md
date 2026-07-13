@@ -429,6 +429,14 @@ notes.
 
 ## Debugging Notes
 
+For hard-to-describe performance, input, rendering, or native failures, start with a [unified diagnostic session](diagnostics.md):
+
+```bash
+python3 tools/diagnose.py run android
+```
+
+Reproduce the symptom, tap **标记问题** in the app, and press Enter in the terminal. The tool creates a ZIP containing structured events, platform evidence, and a bounded summary. The individual environment variables below remain available for narrow experiments, but no longer need to be assembled manually for routine captures.
+
 Release builds do not continuously drain runtime logs or update the UI log panel
 by default. This keeps normal user builds from paying the per-frame logging/UI
 cost. Enable only the diagnostics you need:

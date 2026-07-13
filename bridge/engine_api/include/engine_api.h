@@ -26,7 +26,7 @@ extern "C" {
 #endif
 
 /* ABI version: major(8bit), minor(8bit), patch(16bit). */
-#define ENGINE_API_VERSION 0x01000000u
+#define ENGINE_API_VERSION 0x01010000u
 #define ENGINE_API_MAKE_VERSION(major, minor, patch) \
   ((((uint32_t)(major)&0xFFu) << 24u) | (((uint32_t)(minor)&0xFFu) << 16u) | \
    ((uint32_t)(patch)&0xFFFFu))
@@ -101,6 +101,35 @@ typedef struct engine_memory_stats_t {
   uint64_t reserved_u64[4];
   void* reserved_ptr[4];
 } engine_memory_stats_t;
+
+/* Structured diagnostic categories. Values are a stable ABI bit mask. */
+typedef enum engine_diagnostic_category_t {
+  ENGINE_DIAGNOSTIC_CATEGORY_LIFECYCLE = 1u << 0u,
+  ENGINE_DIAGNOSTIC_CATEGORY_INPUT = 1u << 1u,
+  ENGINE_DIAGNOSTIC_CATEGORY_RENDER = 1u << 2u,
+  ENGINE_DIAGNOSTIC_CATEGORY_STORAGE = 1u << 3u,
+  ENGINE_DIAGNOSTIC_CATEGORY_SCRIPT = 1u << 4u,
+  ENGINE_DIAGNOSTIC_CATEGORY_AUDIO = 1u << 5u,
+  ENGINE_DIAGNOSTIC_CATEGORY_VIDEO = 1u << 6u,
+  ENGINE_DIAGNOSTIC_CATEGORY_PLUGIN = 1u << 7u,
+  ENGINE_DIAGNOSTIC_CATEGORY_MEMORY = 1u << 8u,
+  ENGINE_DIAGNOSTIC_CATEGORY_SYSTEM = 1u << 9u,
+  ENGINE_DIAGNOSTIC_CATEGORY_ALL = 0x3ffu
+} engine_diagnostic_category_t;
+
+typedef struct engine_diagnostic_config_t {
+  uint32_t struct_size;
+  uint32_t enabled;
+  uint64_t category_mask;
+  uint32_t slow_frame_threshold_us;
+  uint32_t max_events;
+  /* Caller clock sampled immediately before applying this config. When set,
+   * native event timestamps are translated into the caller's monotonic domain. */
+  uint64_t host_monotonic_origin_us;
+  const char* session_id_utf8;
+  uint64_t reserved_u64[4];
+  void* reserved_ptr[4];
+} engine_diagnostic_config_t;
 
 typedef enum engine_input_event_type_t {
   ENGINE_INPUT_EVENT_POINTER_DOWN = 1,
@@ -354,6 +383,19 @@ ENGINE_API_EXPORT engine_result_t engine_get_renderer_info(
  */
 ENGINE_API_EXPORT engine_result_t engine_get_memory_stats(
     engine_handle_t handle, engine_memory_stats_t* out_stats);
+
+/* Configures the bounded structured diagnostic queue for this handle. */
+ENGINE_API_EXPORT engine_result_t engine_set_diagnostic_config(
+    engine_handle_t handle, const engine_diagnostic_config_t* config);
+
+/* Inserts a cross-layer marker and returns its event sequence. */
+ENGINE_API_EXPORT engine_result_t engine_mark_diagnostic_event(
+    engine_handle_t handle, const char* label_utf8, uint64_t* out_sequence);
+
+/* Drains newline-delimited JSON diagnostic events into caller storage. */
+ENGINE_API_EXPORT engine_result_t engine_drain_diagnostic_events(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written);
 
 /*
  * Returns last error message as UTF-8 null-terminated string.

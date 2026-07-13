@@ -7,12 +7,11 @@ const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const UI_FONT := preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
 const UI_SYMBOL_FONT := preload("res://assets/fonts/aetherkiri-runtime-symbols.ttf")
-const RUNTIME_CJK_FONT_SOURCE := "res://assets/fonts/aetherkiri-runtime-cjk.otf"
-const RUNTIME_SYMBOL_FONT_SOURCE := "res://assets/fonts/aetherkiri-runtime-symbols.ttf"
 const RUNTIME_FONT_DIR := "user://runtime_fonts"
 const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
+const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -642,6 +641,7 @@ var perf: Label
 var perf_layer: CanvasLayer
 var perf_panel: PanelContainer
 var log_view = null
+var diagnostic_session = null
 var shell_root: Control
 var home_view: Control
 var settings_view: ScrollContainer
@@ -970,11 +970,11 @@ func _apply_ui_font() -> void:
     ui_theme.set_stylebox("focus", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.24), color_accent, 1))
     theme = ui_theme
 
-func _copy_runtime_font(source_path: String, target_path: String) -> bool:
-    var input := FileAccess.open(source_path, FileAccess.READ)
-    if input == null:
-        return false
-    var data := input.get_buffer(input.get_length())
+func _write_runtime_font(font: FontFile, target_path: String) -> bool:
+    # Exported projects remap source font paths to Godot resources, so opening
+    # the original .otf/.ttf path as a raw file is not portable. FontFile keeps
+    # the original bytes and works identically in editor and exported builds.
+    var data := font.get_data()
     if data.is_empty():
         return false
     var output := FileAccess.open(target_path, FileAccess.WRITE)
@@ -997,13 +997,13 @@ func _stage_runtime_fonts() -> void:
     var symbols_target := RUNTIME_FONT_DIR.path_join(RUNTIME_SYMBOL_FONT_FILE)
     var copied_any := false
 
-    if _copy_runtime_font(RUNTIME_CJK_FONT_SOURCE, default_target):
+    if _write_runtime_font(UI_FONT, default_target):
         runtime_default_font_path = ProjectSettings.globalize_path(default_target)
         copied_any = true
     else:
         _append_log("Runtime CJK font staging failed.")
 
-    if _copy_runtime_font(RUNTIME_SYMBOL_FONT_SOURCE, symbols_target):
+    if _write_runtime_font(UI_SYMBOL_FONT, symbols_target):
         copied_any = true
     else:
         _append_log("Runtime symbol font staging failed.")
@@ -3808,6 +3808,9 @@ func _quit_after_runtime_exit() -> void:
         restart_notice.text = ""
         restart_notice.visible = false
     _set_perf_visible(false)
+    if diagnostic_session != null:
+        diagnostic_session.set_game_active(false)
+        diagnostic_session.finish()
     if viewport != null:
         viewport.texture = null
         viewport.visible = false
@@ -3897,6 +3900,10 @@ func _ready() -> void:
     if not _create_runtime_player():
         return
 
+    diagnostic_session = DiagnosticSession.new()
+    add_child(diagnostic_session)
+    diagnostic_session.build_overlay(self)
+
     for item in BACKENDS:
         backend.add_item(item)
 
@@ -3968,6 +3975,7 @@ func _finish_ready_after_first_frame() -> void:
     if engine_initialized:
         _apply_backend(false)
         _apply_engine_options()
+        diagnostic_session.start(player, selected_backend)
     _apply_shell_runtime_settings()
     if not cli_probe_script.is_empty():
         if not engine_initialized:
@@ -4895,6 +4903,12 @@ func _process(delta: float) -> void:
                     perf_log_file.store_line(tick_error_line)
                     perf_log_file.flush()
                 game_running = false
+                if diagnostic_session != null:
+                    diagnostic_session.set_game_active(false)
+                    diagnostic_session.record("godot", "lifecycle", "error", "game_tick_failed", 0, {
+                        "result": tick_result_name,
+                        "error": tick_error_message,
+                    })
                 app_lifecycle_paused = false
             else:
                 if tick_ms >= frame_spike_ms and frame_spike_ms > 0.0:
@@ -4907,6 +4921,14 @@ func _process(delta: float) -> void:
                 _update_frame()
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
                 _update_touch_busy_gate(maxf(delta * 1000.0, tick_ms + update_ms))
+                if diagnostic_session != null:
+                    diagnostic_session.sample_frame(
+                        delta,
+                        tick_ms,
+                        update_ms,
+                        player.get_renderer_info(),
+                        player.get_frame_texture_backend()
+                    )
                 _log_live_perf(delta, tick_ms, update_ms)
                 _log_frame_spike(delta, tick_ms, update_ms)
                 _log_frame_probe(delta)
@@ -4919,6 +4941,11 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            if diagnostic_session != null:
+                diagnostic_session.set_game_active(false)
+                diagnostic_session.record("godot", "lifecycle", "error", "game_startup_failed", 0, {
+                    "error": player.get_last_error(),
+                })
             app_lifecycle_paused = false
             render_errors += 1
             var startup_error := "Startup failed: %s" % player.get_last_error()
@@ -5107,9 +5134,13 @@ func _notification(what: int) -> void:
     if player == null:
         return
     if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+        if diagnostic_session != null:
+            diagnostic_session.record("godot", "lifecycle", "info", "application_paused", 0, {"notification": what})
         _pause_game_for_lifecycle("notification_%d" % what)
         return
     if what == NOTIFICATION_APPLICATION_RESUMED or what == NOTIFICATION_APPLICATION_FOCUS_IN:
+        if diagnostic_session != null:
+            diagnostic_session.record("godot", "lifecycle", "info", "application_resumed", 0, {"notification": what})
         _resume_game_for_lifecycle("notification_%d" % what)
         return
     if what == NOTIFICATION_WM_CLOSE_REQUEST:
@@ -5118,6 +5149,8 @@ func _notification(what: int) -> void:
             app_lifecycle_paused = false
         _clear_game_input_capture()
         _finalize_active_game_session()
+        if diagnostic_session != null:
+            diagnostic_session.finish()
         viewport.texture = null
         player.release_frame_texture()
         player.destroy_engine()
@@ -5284,6 +5317,13 @@ func _on_open_game() -> void:
         return
 
     game_running = true
+    if diagnostic_session != null:
+        diagnostic_session.set_game_active(true)
+        diagnostic_session.record("godot", "lifecycle", "info", "game_open_requested", 0, {
+            "path": path,
+            "backend": selected_backend,
+            "async": async_open,
+        })
     app_lifecycle_paused = false
     log_lines.clear()
     log_view_dirty = false

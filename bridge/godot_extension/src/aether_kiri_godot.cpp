@@ -21,6 +21,7 @@
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/texture2d.hpp>
 #include <godot_cpp/classes/texture2drd.hpp>
+#include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
@@ -4280,6 +4281,60 @@ public:
         return String::utf8(buffer.data(), bytes_written);
     }
 
+    int set_diagnostic_config(bool enabled, const String &session_id,
+                              int64_t category_mask,
+                              int slow_frame_threshold_ms = 20,
+                              int max_events = 2000) {
+        if (handle_ == nullptr) {
+            return ENGINE_RESULT_INVALID_STATE;
+        }
+        const CharString session_utf8 = session_id.utf8();
+        engine_diagnostic_config_t config{};
+        config.struct_size = sizeof(config);
+        config.enabled = enabled ? 1u : 0u;
+        config.category_mask = static_cast<uint64_t>(
+            std::max<int64_t>(0, category_mask));
+        config.slow_frame_threshold_us = static_cast<uint32_t>(
+            std::max(0, slow_frame_threshold_ms) * 1000);
+        config.max_events = static_cast<uint32_t>(
+            std::clamp(max_events, 64, 10000));
+        config.host_monotonic_origin_us =
+            Time::get_singleton()->get_ticks_usec();
+        config.session_id_utf8 = session_utf8.get_data();
+        const engine_result_t result =
+            engine_set_diagnostic_config(handle_, &config);
+        update_last_error(result);
+        return result;
+    }
+
+    int64_t mark_diagnostic_event(const String &label) {
+        if (handle_ == nullptr) {
+            return -1;
+        }
+        const CharString label_utf8 = label.utf8();
+        uint64_t sequence = 0;
+        const engine_result_t result = engine_mark_diagnostic_event(
+            handle_, label_utf8.get_data(), &sequence);
+        update_last_error(result);
+        return result == ENGINE_RESULT_OK ? static_cast<int64_t>(sequence) : -1;
+    }
+
+    String drain_diagnostic_events() {
+        if (handle_ == nullptr) {
+            return String();
+        }
+        std::vector<char> buffer(256 * 1024);
+        uint32_t bytes_written = 0;
+        const engine_result_t result = engine_drain_diagnostic_events(
+            handle_, buffer.data(), static_cast<uint32_t>(buffer.size()),
+            &bytes_written);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK || bytes_written == 0) {
+            return String();
+        }
+        return String::utf8(buffer.data(), bytes_written);
+    }
+
     String get_renderer_info() {
         if (handle_ == nullptr) {
             return String();
@@ -4702,6 +4757,15 @@ protected:
                              &AetherKiriPlayer::get_startup_state);
         ClassDB::bind_method(D_METHOD("drain_startup_logs"),
                              &AetherKiriPlayer::drain_startup_logs);
+        ClassDB::bind_method(D_METHOD("set_diagnostic_config", "enabled",
+                                      "session_id", "category_mask",
+                                      "slow_frame_threshold_ms", "max_events"),
+                             &AetherKiriPlayer::set_diagnostic_config,
+                             DEFVAL(20), DEFVAL(2000));
+        ClassDB::bind_method(D_METHOD("mark_diagnostic_event", "label"),
+                             &AetherKiriPlayer::mark_diagnostic_event);
+        ClassDB::bind_method(D_METHOD("drain_diagnostic_events"),
+                             &AetherKiriPlayer::drain_diagnostic_events);
         ClassDB::bind_method(D_METHOD("get_renderer_info"),
                              &AetherKiriPlayer::get_renderer_info);
         ClassDB::bind_method(D_METHOD("get_frame_texture_backend"),
