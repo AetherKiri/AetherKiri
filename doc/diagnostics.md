@@ -16,6 +16,8 @@ python3 tools/diagnose.py run web
 
 The command builds Debug by default, launches the app, and waits. Reproduce the symptom, tap **标记问题** in the game overlay, then press Enter in the terminal. Use `--duration 30` without an interactive terminal.
 
+Android validates `adb devices` before starting a build. A missing, unauthorized, or offline device fails immediately; use `--device SERIAL` when more than one ready device is connected.
+
 Results are written to `out/diagnostics/<timestamp>-<platform>-<session>/` and a matching ZIP. A bundle contains build metadata, unified JSONL events, the 10 seconds before and 5 seconds after each marker, platform evidence, and a summary that does not claim causation from timing alone. If the UI is blocked, collection adds a host marker with `ui_marker_missing=true`.
 
 ## Profiles

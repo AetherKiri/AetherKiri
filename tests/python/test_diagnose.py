@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 from pathlib import Path
@@ -17,6 +18,10 @@ SPEC.loader.exec_module(diagnose)
 
 
 class DiagnoseTests(unittest.TestCase):
+    @staticmethod
+    def android_args(device: str | None = None) -> argparse.Namespace:
+        return argparse.Namespace(device=device)
+
     def test_platform_adapter_matrix_is_complete(self) -> None:
         expected = {"android", "ios", "ios-simulator", "macos", "web"}
         self.assertEqual(set(diagnose.PREPARE), expected)
@@ -29,6 +34,55 @@ class DiagnoseTests(unittest.TestCase):
         self.assertNotIn("AETHERKIRI_INPUT_TRACE", baseline)
         self.assertEqual(full["AETHERKIRI_INPUT_TRACE"], "1")
         self.assertEqual(full["AETHERKIRI_DIAGNOSTIC_SESSION"], "session")
+
+    def test_android_preflight_rejects_missing_device_before_build(self) -> None:
+        completed = subprocess.CompletedProcess(["adb"], 0, stdout=b"List of devices attached\n\n")
+        with mock.patch.object(diagnose, "run", return_value=completed):
+            with self.assertRaisesRegex(diagnose.DiagnoseError, "No Android device detected"):
+                diagnose.android_preflight(self.android_args())
+
+    def test_android_execute_stops_before_build_without_device(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            args = argparse.Namespace(
+                platform="android", profile="baseline", reuse_build=False,
+                device=None, duration=0.0, session="missing-device",
+                output=str(Path(temp) / "bundle"), include_screenshot=False,
+            )
+            completed = subprocess.CompletedProcess(
+                ["adb"], 0, stdout=b"List of devices attached\n\n")
+            with mock.patch.object(diagnose, "run", return_value=completed), \
+                    mock.patch.object(diagnose, "build") as build_mock:
+                with self.assertRaisesRegex(diagnose.DiagnoseError, "No Android device detected"):
+                    diagnose.execute(args)
+            build_mock.assert_not_called()
+            self.assertFalse(Path(args.output).exists())
+
+    def test_android_preflight_explains_unauthorized_device(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["adb"], 0, stdout=b"List of devices attached\nABC123\tunauthorized\n")
+        with mock.patch.object(diagnose, "run", return_value=completed):
+            with self.assertRaisesRegex(diagnose.DiagnoseError, "unauthorized"):
+                diagnose.android_preflight(self.android_args())
+
+    def test_android_preflight_requires_serial_for_multiple_devices(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["adb"], 0,
+            stdout=b"List of devices attached\nABC123\tdevice\nEMULATOR\tdevice\n")
+        with mock.patch.object(diagnose, "run", return_value=completed):
+            with self.assertRaisesRegex(diagnose.DiagnoseError, "Multiple Android devices"):
+                diagnose.android_preflight(self.android_args())
+
+    def test_android_preflight_selects_only_ready_device(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["adb"], 0, stdout=b"List of devices attached\nABC123\tdevice\n")
+        args = self.android_args()
+        with mock.patch.object(diagnose, "run", return_value=completed):
+            diagnose.android_preflight(args)
+        self.assertEqual(args.device, "ABC123")
+        self.assertEqual(
+            diagnose.adb_command(args, "shell", "pidof", diagnose.ANDROID_PACKAGE)[:3],
+            ["adb", "-s", "ABC123"],
+        )
 
     def test_host_marker_is_added_when_ui_marker_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

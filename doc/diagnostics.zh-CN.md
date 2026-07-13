@@ -16,6 +16,8 @@ python3 tools/diagnose.py run web
 
 命令默认构建 Debug、安装或启动应用并等待复现。问题出现后点击游戏右上角的“标记问题”，再回到终端按 Enter。非交互环境使用 `--duration 30`。
 
+Android 会在构建前运行设备预检。请先用 `adb devices` 确认设备状态为 `device`；多设备连接时通过 `--device SERIAL` 指定目标。未连接、未授权或离线时会立即停止，不再生成误导性的空诊断包。
+
 结果写入 `out/diagnostics/<时间>-<平台>-<session>/` 和同名 ZIP。诊断包包含构建元数据、统一 `events.jsonl`、标记前 10 秒与后 5 秒窗口、平台日志和只陈述证据的 `summary.md`。如果 UI 卡死无法点击，工具会写入带 `ui_marker_missing=true` 的 host marker，仍然保留平台证据。
 
 ## 诊断等级

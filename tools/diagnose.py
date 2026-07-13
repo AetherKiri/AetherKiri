@@ -139,21 +139,72 @@ def build(platform: str) -> None:
         run(["./build.sh", platform, "debug"])
 
 
-def wait_for_pid(package: str, timeout: float = 20.0) -> str:
+def adb_command(args: argparse.Namespace, *parts: str) -> list[str]:
+    command = ["adb"]
+    if args.device:
+        command += ["-s", args.device]
+    return command + list(parts)
+
+
+def android_preflight(args: argparse.Namespace) -> None:
+    run(["adb", "start-server"], check=False)
+    listing = output(["adb", "devices"], check=False)
+    devices: dict[str, str] = {}
+    saw_header = False
+    for line in listing.splitlines():
+        if line.strip().startswith("List of devices attached"):
+            saw_header = True
+            continue
+        if not saw_header:
+            continue
+        columns = line.strip().split()
+        if len(columns) >= 2:
+            devices[columns[0]] = columns[1]
+    if args.device:
+        state = devices.get(args.device)
+        if state is None:
+            raise DiagnoseError(
+                f"Android device {args.device!r} was not found. Check `adb devices` or omit --device."
+            )
+        if state != "device":
+            raise DiagnoseError(
+                f"Android device {args.device!r} is {state}. Unlock it and accept the USB debugging prompt."
+            )
+        return
+    ready = [serial for serial, state in devices.items() if state == "device"]
+    if len(ready) == 1:
+        args.device = ready[0]
+        return
+    if len(ready) > 1:
+        raise DiagnoseError(
+            "Multiple Android devices are connected. Pass --device SERIAL from `adb devices`."
+        )
+    if devices:
+        states = ", ".join(f"{serial} ({state})" for serial, state in devices.items())
+        raise DiagnoseError(
+            f"No ready Android device: {states}. Unlock the device and accept USB debugging."
+        )
+    raise DiagnoseError(
+        "No Android device detected. Connect a device or start an emulator, enable USB debugging, "
+        "then verify it appears in `adb devices`."
+    )
+
+
+def wait_for_pid(args: argparse.Namespace, package: str, timeout: float = 20.0) -> str:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        pid = output(["adb", "shell", "pidof", package], check=False).split()
+        pid = output(adb_command(args, "shell", "pidof", package), check=False).split()
         if pid:
             return pid[0]
         time.sleep(0.5)
     raise DiagnoseError(f"Timed out waiting for Android process {package}")
 
 
-def wait_android_session(session: str, timeout: float = 45.0) -> None:
+def wait_android_session(args: argparse.Namespace, session: str, timeout: float = 45.0) -> None:
     deadline = time.monotonic() + timeout
     path = f"files/diagnostics/{session}/metadata.json"
     while time.monotonic() < deadline:
-        result = run(["adb", "shell", "run-as", ANDROID_PACKAGE, "test", "-f", path],
+        result = run(adb_command(args, "shell", "run-as", ANDROID_PACKAGE, "test", "-f", path),
                      check=False)
         if result.returncode == 0:
             return
@@ -166,33 +217,33 @@ def android_prepare(args: argparse.Namespace, bundle: Path, env: dict[str, str])
     apk = ROOT / "out/godot/android/debug/AetherKiri-debug.apk"
     if not apk.exists():
         raise DiagnoseError(f"Android APK not found: {apk}")
-    run(["adb", "install", "-r", str(apk)])
+    run(adb_command(args, "install", "-r", str(apk)))
     request = json.dumps({"session": args.session, "profile": args.profile}).encode()
-    run(["adb", "shell", "run-as", ANDROID_PACKAGE, "mkdir", "-p", "files"], check=False)
+    run(adb_command(args, "shell", "run-as", ANDROID_PACKAGE, "mkdir", "-p", "files"), check=False)
     pushed = run(
-        ["adb", "exec-out", "run-as", ANDROID_PACKAGE, "sh", "-c",
-         "cat > files/diagnostic-request.json"],
+        adb_command(args, "exec-out", "run-as", ANDROID_PACKAGE, "sh", "-c",
+                    "cat > files/diagnostic-request.json"),
         input_bytes=request, check=False,
     )
     if pushed.returncode != 0 and args.profile != "baseline":
         raise DiagnoseError("Unable to write Android diagnostic profile with run-as; use a debuggable APK")
-    run(["adb", "shell", "am", "force-stop", ANDROID_PACKAGE], check=False)
-    run(["adb", "logcat", "-c"], check=False)
-    run(["adb", "shell", "monkey", "-p", ANDROID_PACKAGE,
-         "-c", "android.intent.category.LAUNCHER", "1"])
-    pid = wait_for_pid(ANDROID_PACKAGE)
-    wait_android_session(args.session)
+    run(adb_command(args, "shell", "am", "force-stop", ANDROID_PACKAGE), check=False)
+    run(adb_command(args, "logcat", "-c"), check=False)
+    run(adb_command(args, "shell", "monkey", "-p", ANDROID_PACKAGE,
+                    "-c", "android.intent.category.LAUNCHER", "1"))
+    pid = wait_for_pid(args, ANDROID_PACKAGE)
+    wait_android_session(args, args.session)
     console_file = (bundle / "platform/logcat-live.txt").open("wb")
     console = subprocess.Popen(
-        ["adb", "logcat", "--pid", pid, "-v", "threadtime"],
+        adb_command(args, "logcat", "--pid", pid, "-v", "threadtime"),
         cwd=ROOT, stdout=console_file, stderr=subprocess.STDOUT,
     )
     trace = None
     if args.profile in {"system", "full"}:
         trace = subprocess.Popen(
-            ["adb", "shell", "perfetto", "-o",
-             "/data/misc/perfetto-traces/aetherkiri-diagnostic.pftrace",
-             "-t", "30s", "sched", "freq", "idle", "am", "wm", "gfx", "view"],
+            adb_command(args, "shell", "perfetto", "-o",
+                        "/data/misc/perfetto-traces/aetherkiri-diagnostic.pftrace",
+                        "-t", "30s", "sched", "freq", "idle", "am", "wm", "gfx", "view"),
             cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     return {"pid": pid, "console": console, "console_file": console_file, "trace": trace}
@@ -209,34 +260,40 @@ def safe_extract_tar(data: bytes, destination: Path) -> None:
 
 
 def android_collect(args: argparse.Namespace, bundle: Path, state: dict[str, Any]) -> None:
+    if not state.get("pid"):
+        (bundle / "platform/collection-skipped.txt").write_text(
+            "Android application did not start; device evidence collection was skipped.\n",
+            encoding="utf-8",
+        )
+        return
     terminate(state.get("trace"), 2)
     terminate(state.get("console"), 2)
     if state.get("console_file") is not None:
         state["console_file"].close()
     platform = bundle / "platform"
     pid = str(state.get("pid", ""))
-    run(["adb", "logcat", "-d", "--pid", pid, "*:W"],
+    run(adb_command(args, "logcat", "-d", "--pid", pid, "*:W"),
         check=False, output_path=platform / "logcat-warning-error.txt")
-    run(["adb", "logcat", "-b", "crash", "-d"],
+    run(adb_command(args, "logcat", "-b", "crash", "-d"),
         check=False, output_path=platform / "logcat-crash.txt")
-    run(["adb", "shell", "dumpsys", "meminfo", ANDROID_PACKAGE],
+    run(adb_command(args, "shell", "dumpsys", "meminfo", ANDROID_PACKAGE),
         check=False, output_path=platform / "meminfo.txt")
-    run(["adb", "shell", "dumpsys", "gfxinfo", ANDROID_PACKAGE, "framestats"],
+    run(adb_command(args, "shell", "dumpsys", "gfxinfo", ANDROID_PACKAGE, "framestats"),
         check=False, output_path=platform / "gfxinfo-framestats.txt")
     if args.include_screenshot:
-        run(["adb", "exec-out", "screencap", "-p"], check=False,
+        run(adb_command(args, "exec-out", "screencap", "-p"), check=False,
             output_path=platform / "screenshot.png")
     tar_result = run(
-        ["adb", "exec-out", "run-as", ANDROID_PACKAGE, "tar", "-cf", "-",
-         f"files/diagnostics/{args.session}"], check=False,
+        adb_command(args, "exec-out", "run-as", ANDROID_PACKAGE, "tar", "-cf", "-",
+                    f"files/diagnostics/{args.session}"), check=False,
     )
     if tar_result.returncode == 0 and tar_result.stdout:
         safe_extract_tar(tar_result.stdout, bundle)
     else:
         (platform / "app-data-error.txt").write_bytes(tar_result.stdout)
     if args.profile in {"system", "full"}:
-        run(["adb", "pull", "/data/misc/perfetto-traces/aetherkiri-diagnostic.pftrace",
-             str(platform / "aetherkiri-diagnostic.pftrace")], check=False)
+        run(adb_command(args, "pull", "/data/misc/perfetto-traces/aetherkiri-diagnostic.pftrace",
+                        str(platform / "aetherkiri-diagnostic.pftrace")), check=False)
 
 
 def find_ios_project() -> Path:
@@ -475,6 +532,7 @@ COLLECT = {
     "macos": macos_collect,
     "web": web_collect,
 }
+PREFLIGHT = {"android": android_preflight}
 
 
 def find_session_directory(bundle: Path, session: str) -> Path | None:
@@ -691,6 +749,8 @@ def execute(args: argparse.Namespace) -> Path:
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     args.session = args.session or f"{timestamp}-{args.platform}-{uuid.uuid4().hex[:8]}"
     args.bundle = Path(args.output).resolve() if args.output else OUT_ROOT / args.session
+    if args.platform in PREFLIGHT:
+        PREFLIGHT[args.platform](args)
     bundle: Path = args.bundle
     (bundle / "platform").mkdir(parents=True, exist_ok=False)
     write_tool_metadata(args, bundle)
@@ -734,7 +794,7 @@ def parser() -> argparse.ArgumentParser:
     run_parser.add_argument("platform", choices=tuple(PREPARE))
     run_parser.add_argument("--profile", choices=PROFILES, default="baseline")
     run_parser.add_argument("--reuse-build", action="store_true", help="reuse the current debug artifact")
-    run_parser.add_argument("--device", help="iOS device identifier or name")
+    run_parser.add_argument("--device", help="Android serial or iOS device identifier/name")
     run_parser.add_argument("--duration", type=float, help="non-interactive capture duration in seconds")
     run_parser.add_argument("--session", help="explicit diagnostic session id")
     run_parser.add_argument("--output", help="explicit uncompressed bundle directory")
