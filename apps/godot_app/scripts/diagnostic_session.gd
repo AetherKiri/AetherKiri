@@ -10,7 +10,9 @@ const MAX_MARKERS := 8
 const MAX_FILE_BYTES := 4 * 1024 * 1024
 const FLUSH_INTERVAL := 1.0
 const NATIVE_DRAIN_INTERVAL := 0.5
-const REQUEST_FILE := "user://diagnostic-request.json"
+const LEGACY_REQUEST_FILE := "user://diagnostic-request.json"
+const MOBILE_DIAGNOSTIC_SUBDIR := "AetherKiri/Diagnostics"
+const ANDROID_DOCUMENTS_DIR := "/storage/emulated/0/Documents"
 const MARKER_BUTTON_TEXT := "标记问题"
 const MARKER_FEEDBACK_MSEC := 1800
 
@@ -65,14 +67,50 @@ var _status_until_msec := 0
 var _marker_touch_captures: Dictionary = {}
 var _marker_mouse_captured := false
 
+static func diagnostic_root_for_platform(platform: String, documents_dir: String) -> String:
+    if platform == "Android":
+        return ANDROID_DOCUMENTS_DIR.path_join(MOBILE_DIAGNOSTIC_SUBDIR)
+    if platform == "iOS":
+        if documents_dir.is_empty():
+            return ""
+        return documents_dir.path_join(MOBILE_DIAGNOSTIC_SUBDIR)
+    return "user://diagnostics"
+
+static func diagnostic_root_dir() -> String:
+    var documents_dir := ""
+    if OS.get_name() == "iOS":
+        documents_dir = OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
+    return diagnostic_root_for_platform(OS.get_name(), documents_dir)
+
+static func _request_paths() -> PackedStringArray:
+    var paths := PackedStringArray()
+    var root := diagnostic_root_dir()
+    if not root.is_empty() and OS.get_name() in ["Android", "iOS"]:
+        paths.append(root.path_join("diagnostic-request.json"))
+    paths.append(LEGACY_REQUEST_FILE)
+    return paths
+
+static func _request_data() -> Dictionary:
+    for path in _request_paths():
+        if not FileAccess.file_exists(path):
+            continue
+        var file := FileAccess.open(path, FileAccess.READ)
+        if file == null:
+            continue
+        var parsed = JSON.parse_string(file.get_as_text())
+        if parsed is Dictionary:
+            return parsed
+    return {}
+
+static func _clear_request_files() -> void:
+    for path in _request_paths():
+        if FileAccess.file_exists(path):
+            DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
 static func requested_profile() -> String:
     var requested := OS.get_environment("AETHERKIRI_DIAGNOSTIC_PROFILE").strip_edges().to_lower()
-    if requested.is_empty() and FileAccess.file_exists(REQUEST_FILE):
-        var file := FileAccess.open(REQUEST_FILE, FileAccess.READ)
-        if file != null:
-            var parsed = JSON.parse_string(file.get_as_text())
-            if parsed is Dictionary:
-                requested = String(parsed.get("profile", "")).strip_edges().to_lower()
+    if requested.is_empty():
+        requested = String(_request_data().get("profile", "")).strip_edges().to_lower()
     if requested.is_empty() and OS.get_name() == "Web":
         var value = JavaScriptBridge.eval(
             "new URLSearchParams(globalThis.location.search).get('diagnostic_profile') || ''",
@@ -83,12 +121,8 @@ static func requested_profile() -> String:
 
 static func requested_session_id() -> String:
     var requested := OS.get_environment("AETHERKIRI_DIAGNOSTIC_SESSION").strip_edges()
-    if requested.is_empty() and FileAccess.file_exists(REQUEST_FILE):
-        var file := FileAccess.open(REQUEST_FILE, FileAccess.READ)
-        if file != null:
-            var parsed = JSON.parse_string(file.get_as_text())
-            if parsed is Dictionary:
-                requested = String(parsed.get("session", "")).strip_edges()
+    if requested.is_empty():
+        requested = String(_request_data().get("session", "")).strip_edges()
     if requested.is_empty() and OS.get_name() == "Web":
         var value = JavaScriptBridge.eval(
             "new URLSearchParams(globalThis.location.search).get('diagnostic_session') || ''",
@@ -105,8 +139,9 @@ static func requested_enabled() -> bool:
     var value := OS.get_environment("AETHERKIRI_DIAGNOSTICS").strip_edges().to_lower()
     if value in ["1", "true", "on", "yes"]:
         return true
-    if FileAccess.file_exists(REQUEST_FILE):
-        return true
+    for path in _request_paths():
+        if FileAccess.file_exists(path):
+            return true
     if OS.get_name() == "Web":
         return bool(JavaScriptBridge.eval(
             "new URLSearchParams(globalThis.location.search).has('diagnostic_session')",
@@ -153,12 +188,24 @@ func start(runtime_player, renderer: String) -> bool:
     player = runtime_player
     profile = requested_profile()
     session_id = requested_session_id()
-    session_dir = "user://diagnostics".path_join(session_id)
-    DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(session_dir.path_join("incidents")))
+    var diagnostic_root := diagnostic_root_dir()
+    if diagnostic_root.is_empty():
+        push_error("Platform Documents directory is unavailable for diagnostics")
+        return false
+    session_dir = diagnostic_root.path_join(session_id)
+    var mkdir_result := DirAccess.make_dir_recursive_absolute(
+        ProjectSettings.globalize_path(session_dir.path_join("incidents"))
+    )
+    if mkdir_result != OK:
+        push_error("Unable to create public diagnostic directory: %s (%d)" % [
+            session_dir, mkdir_result,
+        ])
+        return false
     _event_file = FileAccess.open(session_dir.path_join("events.jsonl"), FileAccess.WRITE)
     if _event_file == null:
         push_error("Unable to open diagnostic event file: %s" % session_dir)
         return false
+    _clear_request_files()
     active = true
     var mask := int(PROFILE_MASK.get(profile, PROFILE_MASK["baseline"]))
     if player.has_method("set_diagnostic_config"):

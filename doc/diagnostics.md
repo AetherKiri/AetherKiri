@@ -8,17 +8,22 @@ Diagnostic sessions replace manual correlation of Godot output, native logs, pla
 
 ```bash
 python3 tools/diagnose.py run android
-python3 tools/diagnose.py run macos --reuse-build
+python3 tools/diagnose.py run macos
 python3 tools/diagnose.py run ios --device "device name or UDID"
 python3 tools/diagnose.py run ios-simulator
 python3 tools/diagnose.py run web
 ```
 
-The command builds Debug by default, launches the app, and waits. Reproduce the symptom, tap **标记问题** in the game overlay, then press Enter in the terminal. Use `--duration 30` without an interactive terminal.
+The command uses the already installed or exported app by default, restarts it, and begins capture without building or installing. Use `--build-install` only when the app must be updated; combine it with `--reuse-build` to install an existing artifact without rebuilding. Reproduce the symptom, tap **标记问题** in the game overlay, then press Enter in the terminal. Use `--duration 30` without an interactive terminal.
 
 An accepted marker changes the button to **已标记 #N**, shows a saved confirmation, vibrates briefly on mobile, and emits a `[diagnostics] issue_marker` console/logcat line. The event stream and matching pre/post incident files are flushed immediately. The button explicitly reports when the eight-marker session limit is reached.
 
-Android validates `adb devices` before starting a build and preserves complete wireless mDNS serials even when Bonjour adds a suffix containing spaces. It prefers the ADB under `ANDROID_SDK_ROOT`/`ANDROID_HOME` so the build and capture do not restart each other's daemon, waits for wireless rediscovery after the build, and retries installation once only for a transport drop. A missing, unauthorized, or offline device fails immediately; use `--device SERIAL` when more than one ready device is connected.
+Android validates `adb devices` before capture and preserves complete wireless mDNS serials even when Bonjour adds a suffix containing spaces. It prefers the ADB under `ANDROID_SDK_ROOT`/`ANDROID_HOME`. Installation only occurs in `--build-install` mode and retries once only for a transport drop. A missing, unauthorized, or offline device fails immediately; use `--device SERIAL` when more than one ready device is connected.
+
+Raw mobile diagnostic files are accessible without root:
+
+- Android: `/storage/emulated/0/Documents/AetherKiri/Diagnostics/<session>/`
+- iOS/iPadOS: Files → On My iPhone/iPad → AetherKiri → `AetherKiri/Diagnostics/<session>/`; Finder/iTunes file sharing is also enabled.
 
 Results are written to `out/diagnostics/<timestamp>-<platform>-<session>/` and a matching ZIP. A bundle contains build metadata, unified JSONL events, the 10 seconds before and 5 seconds after each marker, platform evidence, and a summary that does not claim causation from timing alone. If the UI is blocked, collection adds a host marker with `ui_marker_missing=true`.
 
@@ -26,7 +31,7 @@ Results are written to `out/diagnostics/<timestamp>-<platform>-<session>/` and a
 
 `--profile` accepts `baseline`, `input`, `render`, `storage`, `script`, `audio`, `video`, `plugin`, `system`, and `full`. Baseline records lifecycle events, warnings/errors, one-second frame aggregates, and phase breakdowns above 20 ms. `system` enables bounded platform tracing where available. `full` is deliberately high-overhead and should only be used for short captures.
 
-Use `--reuse-build` for repeated captures. Baseline never flushes per frame: it flushes once per second, on marker, on backgrounding, and on shutdown. The in-memory ring is capped at 2,000 events, event files rotate at 4 MiB, and one session accepts at most eight incident markers.
+Repeat the capture command directly for consecutive reproductions. Baseline never flushes per frame: it flushes once per second, on marker, on backgrounding, and on shutdown. The in-memory ring is capped at 2,000 events, event files rotate at 4 MiB, and one session accepts at most eight incident markers.
 
 ## Platform evidence
 

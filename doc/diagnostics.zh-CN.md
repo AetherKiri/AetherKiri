@@ -8,17 +8,22 @@
 
 ```bash
 python3 tools/diagnose.py run android
-python3 tools/diagnose.py run macos --reuse-build
+python3 tools/diagnose.py run macos
 python3 tools/diagnose.py run ios --device "设备名称或 UDID"
 python3 tools/diagnose.py run ios-simulator
 python3 tools/diagnose.py run web
 ```
 
-命令默认构建 Debug、安装或启动应用并等待复现。问题出现后点击游戏右上角的“标记问题”，再回到终端按 Enter。非交互环境使用 `--duration 30`。
+命令默认直接使用已经安装或已导出的应用，快速重启并进入日志采集，不执行构建或安装。只有需要更新应用时才显式使用 `--build-install`；已有构建产物可配合 `--build-install --reuse-build` 只安装不重编。问题出现后点击游戏右上角的“标记问题”，再回到终端按 Enter。非交互环境使用 `--duration 30`。
 
-标记成功后按钮会显示“已标记 #N / 诊断日志已保存”，移动端短震动，并向 logcat/控制台输出 `[diagnostics] issue_marker`。事件会立即 flush 到应用内部的 `diagnostics/<session>/events.jsonl`，同时封存对应的 `incidents/marker-NN-pre/post.jsonl`；单次会话达到 8 个标记后按钮会明确显示已满。
+标记成功后按钮会显示“已标记 #N / 诊断日志已保存”，移动端短震动，并向 logcat/控制台输出 `[diagnostics] issue_marker`。事件会立即 flush 到 `Diagnostics/<session>/events.jsonl`，同时封存对应的 `incidents/marker-NN-pre/post.jsonl`；单次会话达到 8 个标记后按钮会明确显示已满。
 
-Android 会在构建前运行设备预检。请先用 `adb devices` 确认设备状态为 `device`；多设备连接时通过 `--device SERIAL` 指定目标，无线 mDNS 序列号即使包含 Bonjour 生成的空格后缀也会完整保留。工具优先使用 `ANDROID_SDK_ROOT`/`ANDROID_HOME` 下与构建链一致的 ADB，避免另一份 PATH ADB 重启 daemon；构建完成后会等待无线设备重新发现，安装时若仅发生传输掉线会重连并重试一次。未连接、未授权或离线时会立即停止，不再生成误导性的空诊断包。
+Android 会在采集前运行设备预检。请先用 `adb devices` 确认设备状态为 `device`；多设备连接时通过 `--device SERIAL` 指定目标，无线 mDNS 序列号即使包含 Bonjour 生成的空格后缀也会完整保留。工具优先使用 `ANDROID_SDK_ROOT`/`ANDROID_HOME` 下与构建链一致的 ADB。只有 `--build-install` 模式涉及安装，并仅在传输掉线时重连重试一次。
+
+移动端原始诊断文件无需 root 即可访问：
+
+- Android：`/storage/emulated/0/Documents/AetherKiri/Diagnostics/<session>/`
+- iOS/iPadOS：“文件”App → “我的 iPhone/iPad” → AetherKiri → `AetherKiri/Diagnostics/<session>/`；也支持 Finder/iTunes 文件共享。
 
 结果写入 `out/diagnostics/<时间>-<平台>-<session>/` 和同名 ZIP。诊断包包含构建元数据、统一 `events.jsonl`、标记前 10 秒与后 5 秒窗口、平台日志和只陈述证据的 `summary.md`。如果 UI 卡死无法点击，工具会写入带 `ui_marker_missing=true` 的 host marker，仍然保留平台证据。
 
@@ -35,7 +40,7 @@ Android 会在构建前运行设备预检。请先用 `adb devices` 确认设备
 | `system` | Android Perfetto 或平台系统证据 | 中到高 |
 | `full` | 所有详细探针 | 高，仅短时间使用 |
 
-连续复现时使用 `--reuse-build`。`baseline` 不逐帧刷盘；事件每秒、标记问题、进入后台和退出时批量刷新。事件文件按 4 MiB 轮转两份，内存环最多 2000 条，单次会话最多 8 个标记。
+连续复现直接重复运行命令即可。`baseline` 不逐帧刷盘；事件每秒、标记问题、进入后台和退出时批量刷新。事件文件按 4 MiB 轮转两份，内存环最多 2000 条，单次会话最多 8 个标记。
 
 ## 平台采集内容
 

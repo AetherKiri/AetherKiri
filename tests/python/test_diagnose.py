@@ -44,7 +44,7 @@ class DiagnoseTests(unittest.TestCase):
     def test_android_execute_stops_before_build_without_device(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             args = argparse.Namespace(
-                platform="android", profile="baseline", reuse_build=False,
+                platform="android", profile="baseline", build_install=False, reuse_build=False,
                 device=None, duration=0.0, session="missing-device",
                 output=str(Path(temp) / "bundle"), include_screenshot=False,
             )
@@ -175,10 +175,41 @@ class DiagnoseTests(unittest.TestCase):
             (bundle / "platform").mkdir()
             diagnose.write_android_diagnostic_request(args, bundle)
             commands = [call.args[0] for call in run_mock.call_args_list]
-            self.assertEqual(commands[0][3], "push")
-            self.assertIn("cp", commands[1])
+            self.assertIn("mkdir", commands[0])
+            self.assertEqual(commands[1][3], "push")
+            self.assertEqual(
+                commands[1][-1],
+                diagnose.ANDROID_DIAGNOSTIC_ROOT + "/diagnostic-request.json",
+            )
             self.assertNotIn("exec-out", [part for command in commands for part in command])
+            self.assertNotIn("run-as", [part for command in commands for part in command])
             self.assertFalse((bundle / "platform/diagnostic-request.json").exists())
+
+    def test_capture_existing_install_is_the_default(self) -> None:
+        parsed = diagnose.parser().parse_args(["run", "android", "--duration", "0"])
+        self.assertFalse(parsed.build_install)
+        self.assertFalse(parsed.reuse_build)
+
+    def test_execute_only_builds_when_explicitly_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            def make_args(name: str, build_install: bool) -> argparse.Namespace:
+                return argparse.Namespace(
+                    platform="android", profile="baseline", build_install=build_install,
+                    reuse_build=False, device="fixture", duration=0.0,
+                    session=name, output=str(Path(temp) / name), include_screenshot=False,
+                )
+
+            completed = subprocess.CompletedProcess(["fixture"], 0, stdout=b"")
+            with mock.patch.dict(diagnose.PREFLIGHT, {"android": lambda _args: None}), \
+                    mock.patch.dict(diagnose.PREPARE, {"android": lambda _args, _bundle, _env: {}}), \
+                    mock.patch.dict(diagnose.COLLECT, {"android": lambda _args, _bundle, _state: None}), \
+                    mock.patch.object(diagnose, "run", return_value=completed), \
+                    mock.patch.object(diagnose, "build") as build_mock, \
+                    mock.patch.object(diagnose.time, "sleep"):
+                diagnose.execute(make_args("attach", False))
+                build_mock.assert_not_called()
+                diagnose.execute(make_args("fresh", True))
+                build_mock.assert_called_once_with("android")
 
     def test_host_marker_is_added_when_ui_marker_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -24,6 +24,7 @@ import webbrowser
 ROOT = Path(__file__).resolve().parents[1]
 OUT_ROOT = ROOT / "out" / "diagnostics"
 ANDROID_PACKAGE = "org.github.krkr2.aetherkiri"
+ANDROID_DIAGNOSTIC_ROOT = "/storage/emulated/0/Documents/AetherKiri/Diagnostics"
 IOS_BUNDLE = "com.liuyu.aetherkiri.kr37s"
 MAC_APP_NAME = "AetherKiri"
 PROFILES = (
@@ -241,7 +242,7 @@ def wait_for_android_transport(args: argparse.Namespace,
     deadline = time.monotonic() + timeout
     last_state = "not found"
     print(
-        f"[diagnose] Waiting for Android device {args.device} after build…",
+        f"[diagnose] Waiting for Android device {args.device}…",
         flush=True,
     )
     run([args.adb, "start-server"], check=False)
@@ -252,7 +253,7 @@ def wait_for_android_transport(args: argparse.Namespace,
             return
         time.sleep(0.5)
     raise DiagnoseError(
-        f"Android device {args.device!r} did not reconnect after the build "
+        f"Android device {args.device!r} did not reconnect "
         f"(last state: {last_state}). Keep Wireless debugging enabled, or reconnect it with adb."
     )
 
@@ -275,16 +276,12 @@ def android_install(args: argparse.Namespace, apk: Path) -> None:
 def write_android_diagnostic_request(args: argparse.Namespace, bundle: Path) -> None:
     request = json.dumps({"session": args.session, "profile": args.profile}).encode()
     local_path = bundle / "platform/diagnostic-request.json"
-    remote_path = f"/data/local/tmp/aetherkiri-diagnostic-{uuid.uuid4().hex}.json"
+    remote_path = f"{ANDROID_DIAGNOSTIC_ROOT}/diagnostic-request.json"
     local_path.write_bytes(request)
     try:
+        run(adb_command(args, "shell", "mkdir", "-p", ANDROID_DIAGNOSTIC_ROOT))
         run(adb_command(args, "push", str(local_path), remote_path))
-        run(adb_command(
-            args, "shell", "run-as", ANDROID_PACKAGE,
-            "cp", remote_path, "files/diagnostic-request.json",
-        ))
     finally:
-        run(adb_command(args, "shell", "rm", "-f", remote_path), check=False)
         local_path.unlink(missing_ok=True)
 
 
@@ -300,24 +297,26 @@ def wait_for_pid(args: argparse.Namespace, package: str, timeout: float = 20.0) 
 
 def wait_android_session(args: argparse.Namespace, session: str, timeout: float = 45.0) -> None:
     deadline = time.monotonic() + timeout
-    path = f"files/diagnostics/{session}/metadata.json"
+    path = f"{ANDROID_DIAGNOSTIC_ROOT}/{session}/metadata.json"
     while time.monotonic() < deadline:
-        result = run(adb_command(args, "shell", "run-as", ANDROID_PACKAGE, "test", "-f", path),
-                     check=False)
+        result = run(adb_command(args, "shell", "test", "-f", path), check=False)
         if result.returncode == 0:
             return
         time.sleep(0.5)
-    raise DiagnoseError("Android app launched but the diagnostic session did not become ready")
+    raise DiagnoseError(
+        "Android app launched but its public Documents diagnostic session did not become ready. "
+        "If the installed app predates public diagnostics, run once with --build-install."
+    )
 
 
 def android_prepare(args: argparse.Namespace, bundle: Path, env: dict[str, str]) -> dict[str, Any]:
     del env
-    apk = ROOT / "out/godot/android/debug/AetherKiri-debug.apk"
-    if not apk.exists():
-        raise DiagnoseError(f"Android APK not found: {apk}")
     wait_for_android_transport(args)
-    android_install(args, apk)
-    run(adb_command(args, "shell", "run-as", ANDROID_PACKAGE, "mkdir", "-p", "files"), check=False)
+    if getattr(args, "build_install", False):
+        apk = ROOT / "out/godot/android/debug/AetherKiri-debug.apk"
+        if not apk.exists():
+            raise DiagnoseError(f"Android APK not found: {apk}")
+        android_install(args, apk)
     write_android_diagnostic_request(args, bundle)
     run(adb_command(args, "shell", "am", "force-stop", ANDROID_PACKAGE), check=False)
     run(adb_command(args, "logcat", "-c"), check=False)
@@ -376,8 +375,8 @@ def android_collect(args: argparse.Namespace, bundle: Path, state: dict[str, Any
         run(adb_command(args, "exec-out", "screencap", "-p"), check=False,
             output_path=platform / "screenshot.png")
     tar_result = run(
-        adb_command(args, "exec-out", "run-as", ANDROID_PACKAGE, "tar", "-cf", "-",
-                    f"files/diagnostics/{args.session}"), check=False,
+        adb_command(args, "exec-out", "tar", "-C", ANDROID_DIAGNOSTIC_ROOT,
+                    "-cf", "-", args.session), check=False,
     )
     if tar_result.returncode == 0 and tar_result.stdout:
         safe_extract_tar(tar_result.stdout, bundle)
@@ -417,8 +416,9 @@ def build_ios_app(device: str, simulator: bool) -> Path:
 def ios_prepare(args: argparse.Namespace, bundle: Path, env: dict[str, str]) -> dict[str, Any]:
     if not args.device:
         raise DiagnoseError("iOS device collection requires --device <UDID-or-name>")
-    app = build_ios_app(args.device, simulator=False)
-    run(["xcrun", "devicectl", "device", "install", "app", "--device", args.device, str(app)])
+    if getattr(args, "build_install", False):
+        app = build_ios_app(args.device, simulator=False)
+        run(["xcrun", "devicectl", "device", "install", "app", "--device", args.device, str(app)])
     console_file = (bundle / "platform/devicectl-console.txt").open("wb")
     launch_env = {key: value for key, value in env.items() if key.startswith("AETHERKIRI_")}
     console = subprocess.Popen(
@@ -452,9 +452,10 @@ def ios_collect(args: argparse.Namespace, bundle: Path, state: dict[str, Any]) -
 
 def ios_simulator_prepare(args: argparse.Namespace, bundle: Path,
                           env: dict[str, str]) -> dict[str, Any]:
-    app = build_ios_app("booted", simulator=True)
     run(["xcrun", "simctl", "terminate", "booted", IOS_BUNDLE], check=False)
-    run(["xcrun", "simctl", "install", "booted", str(app)])
+    if getattr(args, "build_install", False):
+        app = build_ios_app("booted", simulator=True)
+        run(["xcrun", "simctl", "install", "booted", str(app)])
     console_file = (bundle / "platform/simctl-console.txt").open("wb")
     sim_env = dict(env)
     for key, value in list(env.items()):
@@ -828,7 +829,8 @@ def write_tool_metadata(args: argparse.Namespace, bundle: Path) -> None:
         "platform": args.platform,
         "profile": args.profile,
         "git_revision": git_revision(),
-        "build_type": "debug",
+        "build_type": "debug" if getattr(args, "build_install", False) else "installed",
+        "capture_mode": "build-install" if getattr(args, "build_install", False) else "existing-install",
         "raw_logs": True,
         "screenshots_requested": bool(args.include_screenshot),
         "tool": "tools/diagnose.py",
@@ -850,7 +852,7 @@ def execute(args: argparse.Namespace) -> Path:
     state: dict[str, Any] = {}
     error: Exception | None = None
     try:
-        if not args.reuse_build:
+        if getattr(args, "build_install", False) and not args.reuse_build:
             build("ios" if args.platform == "ios" else args.platform)
         state = PREPARE[args.platform](args, bundle, env)
         wait_for_reproduction(args.duration)
@@ -882,10 +884,18 @@ def execute(args: argparse.Namespace) -> Path:
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
     subcommands = root.add_subparsers(dest="command", required=True)
-    run_parser = subcommands.add_parser("run", help="build, launch, capture, and package one reproduction")
+    run_parser = subcommands.add_parser(
+        "run", help="capture an existing installation and package one reproduction")
     run_parser.add_argument("platform", choices=tuple(PREPARE))
     run_parser.add_argument("--profile", choices=PROFILES, default="baseline")
-    run_parser.add_argument("--reuse-build", action="store_true", help="reuse the current debug artifact")
+    run_parser.add_argument(
+        "--build-install", action="store_true",
+        help="explicitly build and install before capture (off by default)",
+    )
+    run_parser.add_argument(
+        "--reuse-build", action="store_true",
+        help="with --build-install, install the existing artifact without rebuilding",
+    )
     run_parser.add_argument("--device", help="Android serial or iOS device identifier/name")
     run_parser.add_argument("--duration", type=float, help="non-interactive capture duration in seconds")
     run_parser.add_argument("--session", help="explicit diagnostic session id")

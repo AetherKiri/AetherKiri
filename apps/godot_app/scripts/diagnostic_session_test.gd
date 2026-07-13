@@ -60,6 +60,14 @@ func _run() -> void:
     if not diagnostics.start(fake, "test-renderer"):
         _fail("session did not start")
         return
+    if DiagnosticSession.diagnostic_root_for_platform("Android", "/ignored") != \
+            "/storage/emulated/0/Documents/AetherKiri/Diagnostics":
+        _fail("Android diagnostics are not rooted in public Documents")
+        return
+    if DiagnosticSession.diagnostic_root_for_platform("iOS", "/App/Documents") != \
+            "/App/Documents/AetherKiri/Diagnostics":
+        _fail("iOS diagnostics are not rooted in app Documents")
+        return
 
     diagnostics.set_game_active(true)
     await process_frame
@@ -131,7 +139,7 @@ func _run() -> void:
         return
     diagnostics.finish()
 
-    var base := "user://diagnostics".path_join(session_id)
+    var base: String = diagnostics.session_dir
     if not FileAccess.file_exists(base.path_join("metadata.json")):
         _fail("metadata was not written")
         return
