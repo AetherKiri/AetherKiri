@@ -61,6 +61,40 @@ func _run() -> void:
         _fail("session did not start")
         return
 
+    diagnostics.set_game_active(true)
+    await process_frame
+    var marker_center: Vector2 = diagnostics._marker_button.get_global_rect().get_center()
+    var marker_press := InputEventScreenTouch.new()
+    marker_press.index = 7
+    marker_press.position = marker_center
+    marker_press.pressed = true
+    if not diagnostics.routes_pointer_to_marker(marker_press):
+        _fail("marker touch press was not reserved for GUI dispatch")
+        return
+    var marker_drag := InputEventScreenDrag.new()
+    marker_drag.index = 7
+    marker_drag.position = Vector2.ZERO
+    if not diagnostics.routes_pointer_to_marker(marker_drag):
+        _fail("captured marker touch drag leaked into game input")
+        return
+    var marker_release := InputEventScreenTouch.new()
+    marker_release.index = 7
+    marker_release.position = Vector2.ZERO
+    marker_release.pressed = false
+    if not diagnostics.routes_pointer_to_marker(marker_release):
+        _fail("captured marker touch release leaked into game input")
+        return
+    if diagnostics.routes_pointer_to_marker(marker_release):
+        _fail("released marker touch remained captured")
+        return
+    var game_press := InputEventScreenTouch.new()
+    game_press.index = 8
+    game_press.position = Vector2.ZERO
+    game_press.pressed = true
+    if diagnostics.routes_pointer_to_marker(game_press):
+        _fail("unrelated game touch was captured by marker overlay")
+        return
+
     diagnostics.record("test", "lifecycle", "warning", "test_warning", 123, {"raw": "/private/game"})
     diagnostics.sample_frame(0.025, 21.0, 2.0, "test-renderer", "test-texture")
     var native_time := Time.get_ticks_usec()

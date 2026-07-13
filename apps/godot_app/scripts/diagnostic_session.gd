@@ -62,6 +62,8 @@ var _overlay: CanvasLayer
 var _marker_button: Button
 var _status_label: Label
 var _status_until_msec := 0
+var _marker_touch_captures: Dictionary = {}
+var _marker_mouse_captured := false
 
 static func requested_profile() -> String:
     var requested := OS.get_environment("AETHERKIRI_DIAGNOSTIC_PROFILE").strip_edges().to_lower()
@@ -184,6 +186,44 @@ func set_game_active(value: bool) -> void:
             _reset_marker_feedback()
     if not value and _status_label != null:
         _status_label.visible = false
+    if not value:
+        _marker_touch_captures.clear()
+        _marker_mouse_captured = false
+
+func routes_pointer_to_marker(event: InputEvent) -> bool:
+    if _marker_button == null or not active or not _marker_button.visible:
+        return false
+    if event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        if touch.pressed and _marker_button.get_global_rect().has_point(touch.position):
+            _marker_touch_captures[touch.index] = true
+            print("[diagnostics] marker_input phase=press type=touch pointer=%d pos=%s" % [
+                touch.index, str(touch.position),
+            ])
+            return true
+        if _marker_touch_captures.has(touch.index):
+            if not touch.pressed:
+                _marker_touch_captures.erase(touch.index)
+            return true
+        return false
+    if event is InputEventScreenDrag:
+        return _marker_touch_captures.has((event as InputEventScreenDrag).index)
+    if event is InputEventMouseButton:
+        var button := event as InputEventMouseButton
+        if button.button_index != MOUSE_BUTTON_LEFT:
+            return false
+        if button.pressed and _marker_button.get_global_rect().has_point(button.position):
+            _marker_mouse_captured = true
+            print("[diagnostics] marker_input phase=press type=mouse pos=%s" % str(button.position))
+            return true
+        if _marker_mouse_captured:
+            if not button.pressed:
+                _marker_mouse_captured = false
+            return true
+        return false
+    if event is InputEventMouseMotion:
+        return _marker_mouse_captured
+    return false
 
 func record(layer: String, subsystem: String, level: String, event: String,
             duration_us: int = 0, fields: Dictionary = {}) -> void:

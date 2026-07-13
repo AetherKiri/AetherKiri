@@ -5960,6 +5960,10 @@ func _write_probe_marker(line: String) -> void:
     marker.flush()
 
 func _input(event: InputEvent) -> void:
+    # _input runs before Control GUI dispatch. Keep pointers that begin on the
+    # diagnostic action out of the game bridge so Button can receive them.
+    if diagnostic_session != null and diagnostic_session.routes_pointer_to_marker(event):
+        return
     if _is_game_pointer_event(event):
         var debug_pos := Vector2.ZERO
         if event is InputEventMouseButton:
