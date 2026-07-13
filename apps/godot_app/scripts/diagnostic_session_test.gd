@@ -37,6 +37,12 @@ func _run() -> void:
     var diagnostics = DiagnosticSession.new()
     root.add_child(diagnostics)
     diagnostics.build_overlay(root)
+    if diagnostics._marker_button.get_parent().mouse_filter != Control.MOUSE_FILTER_IGNORE:
+        _fail("hidden diagnostic overlay blocks shell input")
+        return
+    if diagnostics._marker_button.mouse_filter != Control.MOUSE_FILTER_STOP:
+        _fail("visible diagnostic marker button does not receive input")
+        return
     if not diagnostics.start(fake, "test-renderer"):
         _fail("session did not start")
         return

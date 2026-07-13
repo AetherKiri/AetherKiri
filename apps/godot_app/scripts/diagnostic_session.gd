@@ -126,7 +126,9 @@ func build_overlay(parent: Node) -> void:
     box.set_anchors_preset(Control.PRESET_TOP_RIGHT)
     box.position = Vector2(-190, 18)
     box.size = Vector2(172, 88)
-    box.mouse_filter = Control.MOUSE_FILTER_PASS
+    # The overlay exists on the home screen too, even while the marker button
+    # is hidden. Let empty overlay space pass through to top-right shell actions.
+    box.mouse_filter = Control.MOUSE_FILTER_IGNORE
     _overlay.add_child(box)
 
     _marker_button = Button.new()
