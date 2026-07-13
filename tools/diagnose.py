@@ -31,9 +31,14 @@ PROFILES = (
     "plugin", "system", "full",
 )
 POST_MARKER_GRACE_SECONDS = 5.25
+ANDROID_RECONNECT_TIMEOUT_SECONDS = 30.0
 ADB_DEVICE_STATES = frozenset({
     "device", "offline", "unauthorized", "bootloader", "recovery", "sideload",
 })
+ADB_TRANSPORT_FAILURES = (
+    "no devices/emulators found", "device offline",
+    "transport error", "connection reset", "connection closed",
+)
 
 PROFILE_ENV: dict[str, dict[str, str]] = {
     "baseline": {
@@ -142,15 +147,36 @@ def build(platform: str) -> None:
         run(["./build.sh", platform, "debug"])
 
 
+def resolve_adb_executable() -> str:
+    executable = "adb.exe" if os.name == "nt" else "adb"
+    sdk_roots = [os.environ.get("ANDROID_SDK_ROOT"), os.environ.get("ANDROID_HOME")]
+    if sys.platform == "darwin":
+        sdk_roots.append(str(Path.home() / "Library/Android/sdk"))
+    else:
+        sdk_roots.append(str(Path.home() / "Android/Sdk"))
+    for root in sdk_roots:
+        if not root:
+            continue
+        candidate = Path(root).expanduser() / "platform-tools" / executable
+        if candidate.is_file():
+            return str(candidate)
+    discovered = shutil.which(executable)
+    if discovered:
+        return discovered
+    raise DiagnoseError(
+        "ADB was not found. Set ANDROID_SDK_ROOT/ANDROID_HOME or add platform-tools to PATH."
+    )
+
+
 def adb_command(args: argparse.Namespace, *parts: str) -> list[str]:
-    command = ["adb"]
+    command = [getattr(args, "adb", None) or resolve_adb_executable()]
     if args.device:
         command += ["-s", args.device]
     return command + list(parts)
 
 
 def parse_adb_devices(listing: str) -> dict[str, str]:
-    """Return serial -> transport state, tolerating mDNS descriptor columns."""
+    """Return serial -> state, preserving spaces in Bonjour-renamed mDNS serials."""
     devices: dict[str, str] = {}
     saw_header = False
     for line in listing.splitlines():
@@ -162,17 +188,23 @@ def parse_adb_devices(listing: str) -> dict[str, str]:
         columns = line.strip().split()
         if len(columns) < 2:
             continue
-        state = next(
-            (column for column in columns[1:] if column in ADB_DEVICE_STATES),
-            columns[1],
+        state_index = next(
+            (index for index, column in enumerate(columns[1:], 1)
+             if column in ADB_DEVICE_STATES),
+            None,
         )
-        devices[columns[0]] = state
+        if state_index is None:
+            devices[columns[0]] = columns[1]
+            continue
+        serial = " ".join(columns[:state_index])
+        devices[serial] = columns[state_index]
     return devices
 
 
 def android_preflight(args: argparse.Namespace) -> None:
-    run(["adb", "start-server"], check=False)
-    listing = output(["adb", "devices"], check=False)
+    args.adb = resolve_adb_executable()
+    run([args.adb, "start-server"], check=False)
+    listing = output([args.adb, "devices"], check=False)
     devices = parse_adb_devices(listing)
     if args.device:
         state = devices.get(args.device)
@@ -204,6 +236,58 @@ def android_preflight(args: argparse.Namespace) -> None:
     )
 
 
+def wait_for_android_transport(args: argparse.Namespace,
+                               timeout: float = ANDROID_RECONNECT_TIMEOUT_SECONDS) -> None:
+    deadline = time.monotonic() + timeout
+    last_state = "not found"
+    print(
+        f"[diagnose] Waiting for Android device {args.device} after build…",
+        flush=True,
+    )
+    run([args.adb, "start-server"], check=False)
+    while time.monotonic() < deadline:
+        devices = parse_adb_devices(output([args.adb, "devices"], check=False))
+        last_state = devices.get(args.device, "not found")
+        if last_state == "device":
+            return
+        time.sleep(0.5)
+    raise DiagnoseError(
+        f"Android device {args.device!r} did not reconnect after the build "
+        f"(last state: {last_state}). Keep Wireless debugging enabled, or reconnect it with adb."
+    )
+
+
+def android_install(args: argparse.Namespace, apk: Path) -> None:
+    command = adb_command(args, "install", "-r", str(apk))
+    result = run(command, check=False)
+    if result.returncode == 0:
+        return
+    detail = result.stdout.decode("utf-8", errors="replace")
+    lowered = detail.lower()
+    missing_transport = "adb: device '" in lowered and "' not found" in lowered
+    if not missing_transport and not any(fragment in lowered for fragment in ADB_TRANSPORT_FAILURES):
+        raise DiagnoseError(f"Command failed ({result.returncode}): {command_text(command)}\n{detail[-4000:]}")
+    print("[diagnose] Android transport dropped during install; reconnecting once…", flush=True)
+    wait_for_android_transport(args)
+    run(command)
+
+
+def write_android_diagnostic_request(args: argparse.Namespace, bundle: Path) -> None:
+    request = json.dumps({"session": args.session, "profile": args.profile}).encode()
+    local_path = bundle / "platform/diagnostic-request.json"
+    remote_path = f"/data/local/tmp/aetherkiri-diagnostic-{uuid.uuid4().hex}.json"
+    local_path.write_bytes(request)
+    try:
+        run(adb_command(args, "push", str(local_path), remote_path))
+        run(adb_command(
+            args, "shell", "run-as", ANDROID_PACKAGE,
+            "cp", remote_path, "files/diagnostic-request.json",
+        ))
+    finally:
+        run(adb_command(args, "shell", "rm", "-f", remote_path), check=False)
+        local_path.unlink(missing_ok=True)
+
+
 def wait_for_pid(args: argparse.Namespace, package: str, timeout: float = 20.0) -> str:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -231,16 +315,10 @@ def android_prepare(args: argparse.Namespace, bundle: Path, env: dict[str, str])
     apk = ROOT / "out/godot/android/debug/AetherKiri-debug.apk"
     if not apk.exists():
         raise DiagnoseError(f"Android APK not found: {apk}")
-    run(adb_command(args, "install", "-r", str(apk)))
-    request = json.dumps({"session": args.session, "profile": args.profile}).encode()
+    wait_for_android_transport(args)
+    android_install(args, apk)
     run(adb_command(args, "shell", "run-as", ANDROID_PACKAGE, "mkdir", "-p", "files"), check=False)
-    pushed = run(
-        adb_command(args, "exec-out", "run-as", ANDROID_PACKAGE, "sh", "-c",
-                    "cat > files/diagnostic-request.json"),
-        input_bytes=request, check=False,
-    )
-    if pushed.returncode != 0 and args.profile != "baseline":
-        raise DiagnoseError("Unable to write Android diagnostic profile with run-as; use a debuggable APK")
+    write_android_diagnostic_request(args, bundle)
     run(adb_command(args, "shell", "am", "force-stop", ANDROID_PACKAGE), check=False)
     run(adb_command(args, "logcat", "-c"), check=False)
     run(adb_command(args, "shell", "monkey", "-p", ANDROID_PACKAGE,

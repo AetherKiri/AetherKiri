@@ -20,7 +20,7 @@ SPEC.loader.exec_module(diagnose)
 class DiagnoseTests(unittest.TestCase):
     @staticmethod
     def android_args(device: str | None = None) -> argparse.Namespace:
-        return argparse.Namespace(device=device)
+        return argparse.Namespace(device=device, adb="adb")
 
     def test_platform_adapter_matrix_is_complete(self) -> None:
         expected = {"android", "ios", "ios-simulator", "macos", "web"}
@@ -81,7 +81,7 @@ class DiagnoseTests(unittest.TestCase):
         self.assertEqual(args.device, "ABC123")
         self.assertEqual(
             diagnose.adb_command(args, "shell", "pidof", diagnose.ANDROID_PACKAGE)[:3],
-            ["adb", "-s", "ABC123"],
+            [args.adb, "-s", "ABC123"],
         )
 
     def test_android_preflight_accepts_wireless_device_with_mdns_descriptor(self) -> None:
@@ -96,7 +96,10 @@ class DiagnoseTests(unittest.TestCase):
         args = self.android_args()
         with mock.patch.object(diagnose, "run", return_value=completed):
             diagnose.android_preflight(args)
-        self.assertEqual(args.device, "adb-c693383b-1quekS")
+        self.assertEqual(
+            args.device,
+            "adb-c693383b-1quekS (2)._adb-tls-connect._tcp",
+        )
 
     def test_android_preflight_reports_wireless_device_real_state(self) -> None:
         completed = subprocess.CompletedProcess(
@@ -109,6 +112,73 @@ class DiagnoseTests(unittest.TestCase):
         with mock.patch.object(diagnose, "run", return_value=completed):
             with self.assertRaisesRegex(diagnose.DiagnoseError, "offline"):
                 diagnose.android_preflight(self.android_args())
+
+    def test_adb_resolution_prefers_android_sdk_over_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            sdk = Path(temp)
+            adb = sdk / "platform-tools/adb"
+            adb.parent.mkdir()
+            adb.touch()
+            with mock.patch.dict(
+                diagnose.os.environ,
+                {"ANDROID_SDK_ROOT": str(sdk), "ANDROID_HOME": ""},
+                clear=False,
+            ), mock.patch.object(diagnose.shutil, "which", return_value="/path/adb"):
+                self.assertEqual(diagnose.resolve_adb_executable(), str(adb))
+
+    def test_android_transport_waits_for_wireless_rediscovery(self) -> None:
+        missing = subprocess.CompletedProcess(
+            ["adb"], 0, stdout=b"List of devices attached\n\n")
+        ready = subprocess.CompletedProcess(
+            ["adb"], 0,
+            stdout=(
+                b"List of devices attached\n"
+                b"WIRELESS (2)._adb-tls-connect._tcp device\n"
+            ),
+        )
+        wireless_serial = "WIRELESS (2)._adb-tls-connect._tcp"
+        args = self.android_args(wireless_serial)
+        with mock.patch.object(diagnose, "run", side_effect=[missing, missing, ready]), \
+                mock.patch.object(diagnose.time, "sleep"):
+            diagnose.wait_for_android_transport(args, timeout=1.0)
+
+    def test_android_install_retries_only_after_transport_failure(self) -> None:
+        disconnected = subprocess.CompletedProcess(
+            ["adb"], 1, stdout=b"adb: device 'WIRELESS' not found\n")
+        installed = subprocess.CompletedProcess(["adb"], 0, stdout=b"Success\n")
+        args = self.android_args("WIRELESS")
+        with mock.patch.object(diagnose, "run", side_effect=[disconnected, installed]) as run_mock, \
+                mock.patch.object(diagnose, "wait_for_android_transport") as wait_mock:
+            diagnose.android_install(args, Path("app.apk"))
+        wait_mock.assert_called_once_with(args)
+        self.assertEqual(run_mock.call_count, 2)
+
+    def test_android_install_does_not_retry_apk_failure(self) -> None:
+        rejected = subprocess.CompletedProcess(
+            ["adb"], 1, stdout=b"Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]\n")
+        args = self.android_args("WIRELESS")
+        with mock.patch.object(diagnose, "run", return_value=rejected), \
+                mock.patch.object(diagnose, "wait_for_android_transport") as wait_mock:
+            with self.assertRaisesRegex(diagnose.DiagnoseError, "INSTALL_FAILED"):
+                diagnose.android_install(args, Path("app.apk"))
+        wait_mock.assert_not_called()
+
+    def test_android_request_uses_push_instead_of_wireless_stdin(self) -> None:
+        args = argparse.Namespace(
+            device="WIRELESS (2)._adb-tls-connect._tcp", adb="adb",
+            session="fixture-session", profile="baseline",
+        )
+        completed = subprocess.CompletedProcess(["adb"], 0, stdout=b"")
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(diagnose, "run", return_value=completed) as run_mock:
+            bundle = Path(temp)
+            (bundle / "platform").mkdir()
+            diagnose.write_android_diagnostic_request(args, bundle)
+            commands = [call.args[0] for call in run_mock.call_args_list]
+            self.assertEqual(commands[0][3], "push")
+            self.assertIn("cp", commands[1])
+            self.assertNotIn("exec-out", [part for command in commands for part in command])
+            self.assertFalse((bundle / "platform/diagnostic-request.json").exists())
 
     def test_host_marker_is_added_when_ui_marker_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
