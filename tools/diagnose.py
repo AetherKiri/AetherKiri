@@ -27,10 +27,9 @@ ANDROID_PACKAGE = "org.github.krkr2.aetherkiri"
 ANDROID_DIAGNOSTIC_ROOT = "/storage/emulated/0/Documents/AetherKiri/Diagnostics"
 IOS_BUNDLE = "com.liuyu.aetherkiri.kr37s"
 MAC_APP_NAME = "AetherKiri"
-PROFILES = (
-    "baseline", "input", "render", "storage", "script", "audio", "video",
-    "plugin", "system", "full",
-)
+PROFILE_CATALOG_PATH = ROOT / "apps/godot_app/config/diagnostic_profiles.json"
+PROFILE_CATALOG = json.loads(PROFILE_CATALOG_PATH.read_text(encoding="utf-8"))
+PROFILES = tuple(item["name"] for item in PROFILE_CATALOG["profiles"])
 POST_MARKER_GRACE_SECONDS = 5.25
 ANDROID_RECONNECT_TIMEOUT_SECONDS = 30.0
 ADB_DEVICE_STATES = frozenset({
@@ -42,38 +41,7 @@ ADB_TRANSPORT_FAILURES = (
 )
 
 PROFILE_ENV: dict[str, dict[str, str]] = {
-    "baseline": {
-        "AETHERKIRI_DIAGNOSTICS": "1",
-        "AETHERKIRI_FRAME_SPIKE_MS": "20",
-        "AETHERKIRI_ENGINE_TICK_SPIKE_MS": "20",
-    },
-    "input": {"AETHERKIRI_INPUT_TRACE": "1"},
-    "render": {
-        "AETHERKIRI_VERBOSE_RENDER_LOG": "1",
-        "AETHERKIRI_GODOT_RENDER_STATS": "1",
-        "AETHERKIRI_GODOT_GPU_TRACE_FALLBACK": "1",
-    },
-    "storage": {"AETHERKIRI_STORAGE_TRACE": "1", "AETHERKIRI_IMAGE_LOAD_TRACE": "1"},
-    "script": {"AETHERKIRI_APP_TRACE": "1", "AETHERKIRI_TJS_VM_TRACE": "1"},
-    "audio": {"AETHERKIRI_AUDIO_TRACE": "1", "AETHERKIRI_TJS_AUDIO_TRACE": "1"},
-    "video": {"AETHERKIRI_VIDEO_TRACE": "1"},
-    "plugin": {"AETHERKIRI_PLUGIN_TRACE": "1", "AETHERKIRI_TRACE_MISSING_MEMBERS": "1"},
-    "system": {},
-    "full": {
-        "AETHERKIRI_INPUT_TRACE": "1",
-        "AETHERKIRI_VERBOSE_RENDER_LOG": "1",
-        "AETHERKIRI_GODOT_RENDER_STATS": "1",
-        "AETHERKIRI_GODOT_GPU_TRACE_FALLBACK": "1",
-        "AETHERKIRI_STORAGE_TRACE": "1",
-        "AETHERKIRI_IMAGE_LOAD_TRACE": "1",
-        "AETHERKIRI_APP_TRACE": "1",
-        "AETHERKIRI_TJS_VM_TRACE": "1",
-        "AETHERKIRI_AUDIO_TRACE": "1",
-        "AETHERKIRI_VIDEO_TRACE": "1",
-        "AETHERKIRI_PLUGIN_TRACE": "1",
-        "AETHERKIRI_TRACE_MISSING_MEMBERS": "1",
-        "AETHERKIRI_TRACE_LOG": "1",
-    },
+    item["name"]: dict(item.get("env", {})) for item in PROFILE_CATALOG["profiles"]
 }
 
 
@@ -649,6 +617,11 @@ def consolidate_app_files(bundle: Path, session: str) -> None:
     incidents = source / "incidents"
     if incidents.exists():
         shutil.copytree(incidents, bundle / "incidents", dirs_exist_ok=True)
+    attachments = bundle / "attachments"
+    for pattern in ("state-snapshot-*.json", "screenshot-*.png"):
+        for path in source.glob(pattern):
+            attachments.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, attachments / path.name)
 
 
 def merge_app_metadata(bundle: Path) -> None:
@@ -756,12 +729,17 @@ def write_summary(bundle: Path, session: str, platform: str, profile: str) -> No
     dropped = max((int(event.get("queue_dropped", 0)) for event in events), default=0)
     p95_values = [float(event.get("fields", {}).get("p95_ms", 0)) for event in summaries]
     max_values = [float(event.get("fields", {}).get("max_ms", 0)) for event in summaries]
+    snapshots = sorted((bundle / "attachments").glob("state-snapshot-*.json")) if (bundle / "attachments").exists() else []
+    screenshots = sorted((bundle / "attachments").glob("screenshot-*.png")) if (bundle / "attachments").exists() else []
+    self_checks = [event for event in events if event.get("event") == "diagnostic_self_check"]
     lines = [
         "# AetherKiri Diagnostic Summary", "",
         f"- Session: `{session}`", f"- Platform: `{platform}`", f"- Profile: `{profile}`",
         f"- Structured events: {len(events)}", f"- Issue markers: {len(markers)}",
         f"- Warning/error events: {len(warnings)}", f"- Slow events: {len(spikes)}",
         f"- Queue drops reported: {dropped}",
+        f"- State snapshots: {len(snapshots)}", f"- Explicit screenshots: {len(screenshots)}",
+        f"- In-app self-checks: {len(self_checks)}",
     ]
     if summaries:
         lines += [
@@ -834,6 +812,7 @@ def write_tool_metadata(args: argparse.Namespace, bundle: Path) -> None:
         "raw_logs": True,
         "screenshots_requested": bool(args.include_screenshot),
         "tool": "tools/diagnose.py",
+        "profile_catalog_schema": PROFILE_CATALOG.get("schema", 1),
     }
     (bundle / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")

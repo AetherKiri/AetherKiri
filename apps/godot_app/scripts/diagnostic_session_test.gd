@@ -42,6 +42,14 @@ func _init() -> void:
     call_deferred("_run")
 
 func _run() -> void:
+    var catalog := DiagnosticSession.profile_catalog()
+    if catalog.keys().size() != DiagnosticSession.PROFILE_NAMES.size():
+        _fail("shared diagnostic profile catalog is incomplete")
+        return
+    for profile_name in DiagnosticSession.PROFILE_NAMES:
+        if not catalog.has(profile_name) or int(catalog[profile_name].get("category_mask", -1)) != int(DiagnosticSession.PROFILE_MASK[profile_name]):
+            _fail("shared diagnostic profile mask drifted: %s" % profile_name)
+            return
     var session_id := "godot-test-%d" % Time.get_ticks_usec()
     OS.set_environment("AETHERKIRI_DIAGNOSTIC_SESSION", session_id)
     OS.set_environment("AETHERKIRI_DIAGNOSTIC_PROFILE", "baseline")
@@ -50,6 +58,10 @@ func _run() -> void:
     root.add_child(fake)
     var diagnostics = DiagnosticSession.new()
     root.add_child(diagnostics)
+    diagnostics.set_translator(func(key: String):
+        return {"debug.action.mark": "Mark issue", "debug.result.marked": "Marked %s", "debug.result.marker_limit": "Marker limit %s", "debug.result.unavailable": "Unavailable"}.get(key, key)
+    )
+    diagnostics.set_marker_context_provider(func(): return {"fps": 60, "input": {"forwarded": 3}})
     diagnostics.build_overlay(root)
     if diagnostics._marker_button.get_parent().mouse_filter != Control.MOUSE_FILTER_IGNORE:
         _fail("hidden diagnostic overlay blocks shell input")
@@ -123,16 +135,44 @@ func _run() -> void:
     if diagnostics.dropped_events != drops_before_expiry:
         _fail("normal ring-window expiry was counted as a queue drop")
         return
-    diagnostics.mark_issue("test_issue")
-    if diagnostics._marker_button.text != "已标记 #1" or not diagnostics._marker_button.disabled:
+    if not diagnostics.mark_issue("test_issue"):
+        _fail("valid issue marker was rejected")
+        return
+    if diagnostics._marker_button.text != "✓ #1" or not diagnostics._marker_button.disabled:
         _fail("accepted marker did not provide visible device feedback")
         return
     diagnostics._status_until_msec = 0
     diagnostics._process(0.0)
-    if diagnostics._marker_button.text != diagnostics.MARKER_BUTTON_TEXT or diagnostics._marker_button.disabled:
+    if diagnostics._marker_button.text != "Mark issue" or diagnostics._marker_button.disabled:
         _fail("marker feedback did not restore the action button")
         return
-    diagnostics._pending_incidents[0]["until_us"] = 0
+    var snapshot_path: String = diagnostics.write_state_snapshot({"fixture": true})
+    if snapshot_path.is_empty() or not FileAccess.file_exists(snapshot_path):
+        _fail("state snapshot was not exported")
+        return
+    if not diagnostics.arm_next_slow_frame("slow_fixture"):
+        _fail("slow-frame capture could not be armed")
+        return
+    diagnostics.sample_frame(0.030, 24.0, 3.0, "test-renderer", "test-texture")
+    if diagnostics.marker_count != 2 or diagnostics.status_snapshot().get("slow_frame_armed", true):
+        _fail("next slow frame was not captured and disarmed")
+        return
+    while diagnostics.marker_count < diagnostics.MAX_MARKERS:
+        if not diagnostics.mark_issue("limit_fixture_%d" % diagnostics.marker_count):
+            _fail("marker was rejected before the bounded session limit")
+            return
+    if diagnostics.mark_issue("over_limit"):
+        _fail("marker beyond the bounded session limit was accepted")
+        return
+    if diagnostics._marker_button.text != "Marker limit 8" or not diagnostics._marker_button.disabled:
+        _fail("marker limit did not provide localized visible feedback")
+        return
+    var zip_path: String = diagnostics.export_zip()
+    if zip_path.is_empty() or not FileAccess.file_exists(zip_path):
+        _fail("session ZIP was not exported")
+        return
+    for incident in diagnostics._pending_incidents:
+        incident["until_us"] = 0
     diagnostics._finish_elapsed_incidents()
     if not diagnostics._pending_incidents.is_empty():
         _fail("elapsed marker incident was not finalized")
@@ -151,6 +191,9 @@ func _run() -> void:
         return
     if not FileAccess.file_exists(base.path_join("incidents/marker-01-post.jsonl")):
         _fail("marker post-window was not sealed")
+        return
+    if not FileAccess.file_exists(base.path_join("incidents/marker-01-state.json")):
+        _fail("marker context snapshot was not sealed")
         return
     var file := FileAccess.open(base.path_join("events.jsonl"), FileAccess.READ)
     var contents := file.get_as_text() if file != null else ""

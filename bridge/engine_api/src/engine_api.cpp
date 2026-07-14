@@ -1374,9 +1374,9 @@ engine_result_t OpenGameCore(engine_handle_t handle,
   }
   spdlog::default_logger()->flush();
 
-  // Only initialize plugin trace logger when tracing is enabled.
-  // The toggle is set via engine_set_option before engine_open_game.
-  if (PluginCallTracer::Instance().IsEnabled()) {
+  // Remember the path even while tracing is disabled so the in-app debug
+  // console can enable a bounded trace after the game has already started.
+  {
 #if defined(__EMSCRIPTEN__)
     std::string trace_path = TVPGetDefaultFileDir();
 #else
@@ -1384,7 +1384,8 @@ engine_result_t OpenGameCore(engine_handle_t handle,
 #endif
     if (!trace_path.empty() && trace_path.back() != '/') trace_path += "/";
     trace_path += "plugin_trace.log";
-    PluginCallTracer::Instance().InitLogger(trace_path);
+    PluginCallTracer::Instance().SetLogFilePath(trace_path);
+    PluginCallTracer::Instance().ResetDebugStats();
   }
 
   const bool prefer_gpu_after_startup =
@@ -3404,6 +3405,64 @@ engine_result_t engine_get_memory_stats(engine_handle_t handle,
   return ENGINE_RESULT_OK;
 }
 
+engine_result_t engine_get_plugin_debug_info(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written) {
+  if (out_buffer == nullptr || buffer_size == 0 || out_bytes_written == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "plugin debug output buffer is invalid");
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+
+  const auto snapshot = PluginCallTracer::Instance().GetDebugSnapshot();
+  auto append_array = [](std::ostringstream& stream,
+                         const std::vector<std::string>& items) {
+    stream << '[';
+    for (size_t index = 0; index < items.size(); ++index) {
+      if (index != 0) stream << ',';
+      stream << '"' << JsonEscape(items[index]) << '"';
+    }
+    stream << ']';
+  };
+  std::ostringstream json;
+  json << "{\"tracing_enabled\":" << (snapshot.tracingEnabled ? "true" : "false")
+       << ",\"method_calls\":" << snapshot.methodCalls
+       << ",\"property_gets\":" << snapshot.propertyGets
+       << ",\"property_sets\":" << snapshot.propertySets
+       << ",\"load_succeeded\":" << snapshot.loadSucceeded
+       << ",\"load_failed\":" << snapshot.loadFailed
+       << ",\"load_fallback\":" << snapshot.loadFallback
+       << ",\"missing_members\":" << snapshot.missingMembers
+       << ",\"loaded_plugins\":";
+  append_array(json, snapshot.loadedPlugins);
+  json << ",\"failed_plugins\":";
+  append_array(json, snapshot.failedPlugins);
+  json << ",\"fallback_plugins\":";
+  append_array(json, snapshot.fallbackPlugins);
+  json << ",\"recent_missing_members\":";
+  append_array(json, snapshot.recentMissingMembers);
+  json << '}';
+
+  const std::string payload = json.str();
+  if (payload.size() + 1u > buffer_size) {
+    *out_bytes_written = 0;
+    out_buffer[0] = '\0';
+    return SetHandleErrorAndReturnLocked(
+        impl, ENGINE_RESULT_INVALID_ARGUMENT,
+        "plugin debug output buffer is too small");
+  }
+  std::memcpy(out_buffer, payload.data(), payload.size());
+  out_buffer[payload.size()] = '\0';
+  *out_bytes_written = static_cast<uint32_t>(payload.size());
+  ClearHandleErrorLocked(impl);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
 engine_result_t engine_set_diagnostic_config(
     engine_handle_t handle, const engine_diagnostic_config_t* config) {
   if (config == nullptr || config->struct_size < sizeof(*config)) {
@@ -4285,6 +4344,37 @@ engine_result_t engine_get_memory_stats(engine_handle_t handle,
 
   std::memset(out_stats, 0, sizeof(*out_stats));
   out_stats->struct_size = sizeof(engine_memory_stats_t);
+  impl->last_error.clear();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_get_plugin_debug_info(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written) {
+  if (out_buffer == nullptr || buffer_size == 0 || out_bytes_written == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "plugin debug output buffer is invalid");
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) return result;
+  static constexpr const char* payload =
+      "{\"tracing_enabled\":false,\"method_calls\":0,\"property_gets\":0,"
+      "\"property_sets\":0,\"load_succeeded\":0,\"load_failed\":0,"
+      "\"load_fallback\":0,\"missing_members\":0,\"loaded_plugins\":[],"
+      "\"failed_plugins\":[],\"fallback_plugins\":[],"
+      "\"recent_missing_members\":[]}";
+  const size_t length = std::strlen(payload);
+  if (length + 1u > buffer_size) {
+    *out_bytes_written = 0;
+    out_buffer[0] = '\0';
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "plugin debug output buffer is too small");
+  }
+  std::memcpy(out_buffer, payload, length + 1u);
+  *out_bytes_written = static_cast<uint32_t>(length);
   impl->last_error.clear();
   SetThreadError(nullptr);
   return ENGINE_RESULT_OK;

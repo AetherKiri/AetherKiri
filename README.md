@@ -75,6 +75,7 @@ Godot App Shell
 | `tests/profiles/` | Per-game probe profiles. Committed profiles must not contain machine-local game paths. |
 | `tools/` | Developer and compatibility tools built outside iOS/Android targets. |
 | `doc/development.md` | Full developer guide for architecture, file roles, build, testing, probes, and debugging. |
+| `doc/diagnostics.md` | In-app debugger, one-command collection, bundle contract, and evidence-first investigation guide. |
 | `doc/verified_games.md` | Manual list of games that have been smoke-tested with the current runtime. |
 
 ## Render Backends

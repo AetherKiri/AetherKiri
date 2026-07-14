@@ -4356,6 +4356,53 @@ public:
         return String::utf8(buffer) + godot_info + GetGodotGpuBridgeDebugInfo();
     }
 
+    Dictionary get_memory_stats() {
+        Dictionary output;
+        if (handle_ == nullptr) {
+            return output;
+        }
+        engine_memory_stats_t stats{};
+        stats.struct_size = sizeof(stats);
+        const engine_result_t result = engine_get_memory_stats(handle_, &stats);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK) {
+            return output;
+        }
+        output["self_used_mb"] = static_cast<int64_t>(stats.self_used_mb);
+        output["system_free_mb"] = static_cast<int64_t>(stats.system_free_mb);
+        output["system_total_mb"] = static_cast<int64_t>(stats.system_total_mb);
+        output["graphic_cache_bytes"] = static_cast<int64_t>(stats.graphic_cache_bytes);
+        output["graphic_cache_limit_bytes"] = static_cast<int64_t>(stats.graphic_cache_limit_bytes);
+        output["xp3_segment_cache_bytes"] = static_cast<int64_t>(stats.xp3_segment_cache_bytes);
+        output["psb_cache_bytes"] = static_cast<int64_t>(stats.psb_cache_bytes);
+        output["psb_cache_entries"] = static_cast<int64_t>(stats.psb_cache_entries);
+        output["psb_cache_entry_limit"] = static_cast<int64_t>(stats.psb_cache_entry_limit);
+        output["psb_cache_hits"] = static_cast<int64_t>(stats.psb_cache_hits);
+        output["psb_cache_misses"] = static_cast<int64_t>(stats.psb_cache_misses);
+        output["archive_cache_entries"] = static_cast<int64_t>(stats.archive_cache_entries);
+        output["archive_cache_limit"] = static_cast<int64_t>(stats.archive_cache_limit);
+        output["autopath_cache_entries"] = static_cast<int64_t>(stats.autopath_cache_entries);
+        output["autopath_cache_limit"] = static_cast<int64_t>(stats.autopath_cache_limit);
+        output["autopath_table_entries"] = static_cast<int64_t>(stats.autopath_table_entries);
+        return output;
+    }
+
+    String get_plugin_debug_info() {
+        if (handle_ == nullptr) {
+            return String();
+        }
+        std::vector<char> buffer(64 * 1024);
+        uint32_t bytes_written = 0;
+        const engine_result_t result = engine_get_plugin_debug_info(
+            handle_, buffer.data(), static_cast<uint32_t>(buffer.size()),
+            &bytes_written);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK || bytes_written == 0) {
+            return String();
+        }
+        return String::utf8(buffer.data(), bytes_written);
+    }
+
     String get_frame_texture_backend() const { return frame_texture_backend_; }
 
     Dictionary read_frame_rgba() {
@@ -4768,6 +4815,10 @@ protected:
                              &AetherKiriPlayer::drain_diagnostic_events);
         ClassDB::bind_method(D_METHOD("get_renderer_info"),
                              &AetherKiriPlayer::get_renderer_info);
+        ClassDB::bind_method(D_METHOD("get_memory_stats"),
+                             &AetherKiriPlayer::get_memory_stats);
+        ClassDB::bind_method(D_METHOD("get_plugin_debug_info"),
+                             &AetherKiriPlayer::get_plugin_debug_info);
         ClassDB::bind_method(D_METHOD("get_frame_texture_backend"),
                              &AetherKiriPlayer::get_frame_texture_backend);
         ClassDB::bind_method(D_METHOD("read_frame_rgba"),

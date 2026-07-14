@@ -12,6 +12,8 @@ const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
+const DiagnosticLocalization = preload("res://scripts/diagnostic_localization.gd")
+const DebugConsole = preload("res://scripts/debug_console.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -93,8 +95,6 @@ const UI_TEXT := {
         "settings.trace_log_desc": "启用 spdlog trace 级别详细日志，输出最大调试信息",
         "settings.export_tjs": "导出 TJS 脚本",
         "settings.export_tjs_desc": "游戏加载时自动从 XP3 中导出反汇编的 TJS 字节码脚本",
-        "settings.log_alerts": "日志级别弹窗",
-        "settings.log_alerts_desc": "将 warning/error/fatal 等日志行额外显示为系统提示；默认关闭",
         "settings.error_dialog_logs": "错误弹窗附带日志",
         "settings.error_dialog_logs_desc": "真正异常弹窗中追加最近 20 行引擎日志；默认关闭",
         "settings.version": "版本",
@@ -204,8 +204,6 @@ const UI_TEXT := {
         "settings.trace_log_desc": "啟用 spdlog trace 級別詳細日誌，輸出最大除錯資訊",
         "settings.export_tjs": "匯出 TJS 腳本",
         "settings.export_tjs_desc": "遊戲載入時自動從 XP3 中匯出反組譯的 TJS 位元組碼腳本",
-        "settings.log_alerts": "日誌級別彈窗",
-        "settings.log_alerts_desc": "將 warning/error/fatal 等日誌行額外顯示為系統提示；預設關閉",
         "settings.error_dialog_logs": "錯誤彈窗附帶日誌",
         "settings.error_dialog_logs_desc": "真正異常彈窗中追加最近 20 行引擎日誌；預設關閉",
         "settings.version": "版本",
@@ -315,8 +313,6 @@ const UI_TEXT := {
         "settings.trace_log_desc": "Enable spdlog trace-level logs for maximum diagnostic output",
         "settings.export_tjs": "Export TJS Scripts",
         "settings.export_tjs_desc": "Automatically export disassembled TJS bytecode scripts from XP3 files while loading games",
-        "settings.log_alerts": "Log Alerts",
-        "settings.log_alerts_desc": "Show warning/error/fatal log lines as system alerts; disabled by default",
         "settings.error_dialog_logs": "Attach Logs to Errors",
         "settings.error_dialog_logs_desc": "Append the latest 20 engine log lines to real error dialogs; disabled by default",
         "settings.version": "Version",
@@ -426,8 +422,6 @@ const UI_TEXT := {
         "settings.trace_log_desc": "spdlog の trace レベル詳細ログを有効にします",
         "settings.export_tjs": "TJS スクリプトを書き出す",
         "settings.export_tjs_desc": "ゲーム読み込み時に XP3 から逆アセンブル済み TJS バイトコードを自動で書き出します",
-        "settings.log_alerts": "ログアラート",
-        "settings.log_alerts_desc": "warning/error/fatal などのログ行をシステム通知として表示します。既定はオフ",
         "settings.error_dialog_logs": "エラーにログを添付",
         "settings.error_dialog_logs_desc": "実エラーダイアログに直近 20 行のエンジンログを追加します。既定はオフ",
         "settings.version": "バージョン",
@@ -537,8 +531,6 @@ const UI_TEXT := {
         "settings.trace_log_desc": "spdlog trace 레벨 상세 로그를 켜서 최대 디버그 정보를 출력합니다",
         "settings.export_tjs": "TJS 스크립트 내보내기",
         "settings.export_tjs_desc": "게임 로드 시 XP3에서 디스어셈블된 TJS 바이트코드 스크립트를 자동으로 내보냅니다",
-        "settings.log_alerts": "로그 알림",
-        "settings.log_alerts_desc": "warning/error/fatal 로그 줄을 시스템 알림으로 표시합니다. 기본값은 꺼짐입니다",
         "settings.error_dialog_logs": "오류에 로그 첨부",
         "settings.error_dialog_logs_desc": "실제 오류 대화상자에 최근 엔진 로그 20줄을 추가합니다. 기본값은 꺼짐입니다",
         "settings.version": "버전",
@@ -619,19 +611,18 @@ const SETTINGS_DRAFT_KEYS := [
     "backend",
     "upscale_algorithm",
     "surface_mode",
-    "perf_overlay",
+    "diagnostic_profile",
+    "debug_overlay_mode",
     "fps_limit_enabled",
     "target_fps",
     "force_landscape",
-    "plugin_trace",
     "plugin_load_mode",
     "mock_enabled",
-    "console_log_file",
-    "trace_log",
-    "export_scripts",
-    "log_alerts",
     "error_dialog_logs",
 ]
+const DIAGNOSTIC_PROFILES := ["off", "baseline", "input", "render", "storage", "script", "audio", "video", "plugin", "system", "full"]
+const DEBUG_OVERLAY_MODES := ["off", "summary", "detail"]
+const ADVANCED_TRACE_TIMEOUT_MS := 30000
 
 var backend: OptionButton
 var game_path: LineEdit
@@ -642,6 +633,7 @@ var perf_layer: CanvasLayer
 var perf_panel: PanelContainer
 var log_view = null
 var diagnostic_session = null
+var debug_console = null
 var shell_root: Control
 var home_view: Control
 var settings_view: ScrollContainer
@@ -666,17 +658,21 @@ var loading_title_label: Label
 var selected_game := {}
 var known_games: Array[Dictionary] = []
 var show_perf_monitor := true
+var diagnostic_profile := "baseline" if OS.is_debug_build() else "off"
+var debug_overlay_mode := "summary" if OS.is_debug_build() else "off"
 var lock_landscape := true
 var frame_limit_enabled := false
 var target_fps := 80
 var plugin_trace := false
 var plugin_load_mode := "krkrsdl3"
 var mock_enabled := true
-var console_log_file := true
+var console_log_file := false
 var trace_log := false
 var export_scripts := false
-var log_alerts := false
-var error_dialog_logs := false
+var error_dialog_logs := OS.is_debug_build()
+var advanced_tool_expanded := false
+var advanced_expiry_msec := {}
+var diagnostic_env_originals := {}
 var language_mode := LANG_SYSTEM
 var active_language := LANG_ZH_HANS
 var style_mode := STYLE_DARK
@@ -751,6 +747,12 @@ var ui_log_enabled := false
 var web_auto_start_attempted := false
 var perf_log_file: FileAccess
 var log_lines: PackedStringArray = []
+var last_tick_ms := 0.0
+var last_update_ms := 0.0
+var last_frame_ms := 0.0
+var debug_last_input_event := ""
+var debug_last_input_target := ""
+var debug_last_input_position := Vector2.ZERO
 var log_view_dirty := false
 var log_view_flush_accum := 0.0
 var suppress_mouse_until_msec := 0
@@ -897,7 +899,13 @@ func _language_native_name(code: String) -> String:
 func _t(key: String, args: Array = []) -> String:
     var lang := active_language if UI_TEXT.has(active_language) else LANG_EN
     var table: Dictionary = UI_TEXT.get(lang, {})
-    var value := String(table.get(key, UI_TEXT[LANG_ZH_HANS].get(key, key)))
+    var value := ""
+    if DiagnosticLocalization.has_key(key):
+        value = DiagnosticLocalization.get_text(lang, key)
+    elif table.has(key):
+        value = String(table[key])
+    else:
+        value = String(UI_TEXT[LANG_ZH_HANS].get(key, key))
     return value % args if not args.is_empty() else value
 
 func _language_option_label(mode: String) -> String:
@@ -1113,23 +1121,27 @@ func _load_shell_settings() -> void:
         upscale_algorithm = "smooth"
     render_surface_mode = String(cfg.get_value("rendering", "surface_mode", render_surface_mode))
     _select_config_surface_mode(_runtime_string("AETHERKIRI_SURFACE_MODE", render_surface_mode))
-    show_perf_monitor = bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
+    var legacy_perf_overlay := bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
+    debug_overlay_mode = String(cfg.get_value("diagnostics", "overlay_mode", "summary" if legacy_perf_overlay else "off"))
+    if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
+        debug_overlay_mode = "summary" if OS.is_debug_build() else "off"
+    show_perf_monitor = debug_overlay_mode != "off"
+    diagnostic_profile = String(cfg.get_value("diagnostics", "profile", diagnostic_profile))
+    if not diagnostic_profile in DIAGNOSTIC_PROFILES:
+        diagnostic_profile = "baseline" if OS.is_debug_build() else "off"
     frame_limit_enabled = bool(cfg.get_value("rendering", "fps_limit_enabled", frame_limit_enabled))
     target_fps = int(cfg.get_value("rendering", "target_fps", target_fps))
     lock_landscape = bool(cfg.get_value("rendering", "force_landscape", lock_landscape))
-    plugin_trace = bool(cfg.get_value("developer", "plugin_trace", plugin_trace))
     plugin_load_mode = String(cfg.get_value("developer", "plugin_load_mode", plugin_load_mode))
     if not plugin_load_mode in ["krkrsdl3", "aether_all"]:
         plugin_load_mode = "krkrsdl3"
     mock_enabled = bool(cfg.get_value("developer", "mock_enabled", mock_enabled))
-    console_log_file = bool(cfg.get_value("developer", "console_log_file", console_log_file))
-    trace_log = bool(cfg.get_value("developer", "trace_log", trace_log))
-    export_scripts = bool(cfg.get_value("developer", "export_scripts", export_scripts))
-    log_alerts = bool(cfg.get_value("developer", "log_alerts", log_alerts))
     error_dialog_logs = bool(cfg.get_value("developer", "error_dialog_logs", error_dialog_logs))
 
 func _configure_runtime_diagnostics() -> void:
     diagnostics_enabled = _runtime_flag("AETHERKIRI_DIAGNOSTICS")
+    diagnostics_enabled = diagnostics_enabled or diagnostic_profile != "off"
+    diagnostics_enabled = diagnostics_enabled or DiagnosticSession.external_request_present()
     diagnostics_enabled = diagnostics_enabled or device_probe_enabled
     diagnostics_enabled = diagnostics_enabled or verbose_render_log
     diagnostics_enabled = diagnostics_enabled or trace_log
@@ -1157,22 +1169,22 @@ func _save_shell_settings() -> void:
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
     cfg.set_value("rendering", "surface_mode", render_surface_mode)
-    cfg.set_value("rendering", "perf_overlay", show_perf_monitor)
+    cfg.set_value("diagnostics", "profile", diagnostic_profile)
+    cfg.set_value("diagnostics", "overlay_mode", debug_overlay_mode)
     cfg.set_value("rendering", "fps_limit_enabled", frame_limit_enabled)
     cfg.set_value("rendering", "target_fps", target_fps)
     cfg.set_value("rendering", "force_landscape", lock_landscape)
-    cfg.set_value("developer", "plugin_trace", plugin_trace)
     cfg.set_value("developer", "plugin_load_mode", plugin_load_mode)
     cfg.set_value("developer", "mock_enabled", mock_enabled)
-    cfg.set_value("developer", "console_log_file", console_log_file)
-    cfg.set_value("developer", "trace_log", trace_log)
-    cfg.set_value("developer", "export_scripts", export_scripts)
-    cfg.set_value("developer", "log_alerts", log_alerts)
     cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
     cfg.save(SETTINGS_FILE)
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
     _apply_engine_options()
     _apply_shell_runtime_settings()
+    if diagnostic_session != null:
+        diagnostic_session.apply_preference(diagnostic_profile, player, selected_backend)
+        diagnostic_session.set_game_active(game_running)
+    _sync_debug_console_state()
     dirty_settings = false
     if save_button != null:
         save_button.disabled = true
@@ -1185,17 +1197,13 @@ func _current_settings_snapshot() -> Dictionary:
         "backend": selected_backend,
         "upscale_algorithm": upscale_algorithm,
         "surface_mode": render_surface_mode,
-        "perf_overlay": show_perf_monitor,
+        "diagnostic_profile": diagnostic_profile,
+        "debug_overlay_mode": debug_overlay_mode,
         "fps_limit_enabled": frame_limit_enabled,
         "target_fps": target_fps,
         "force_landscape": lock_landscape,
-        "plugin_trace": plugin_trace,
         "plugin_load_mode": plugin_load_mode,
         "mock_enabled": mock_enabled,
-        "console_log_file": console_log_file,
-        "trace_log": trace_log,
-        "export_scripts": export_scripts,
-        "log_alerts": log_alerts,
         "error_dialog_logs": error_dialog_logs,
     }
 
@@ -1259,20 +1267,21 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
 
     var next_surface_mode := String(snapshot.get("surface_mode", render_surface_mode))
     render_surface_mode = next_surface_mode if next_surface_mode in [RENDER_SURFACE_MODE_GAME, RENDER_SURFACE_MODE_DISPLAY] else _default_render_surface_mode()
-    show_perf_monitor = bool(snapshot.get("perf_overlay", show_perf_monitor))
+    diagnostic_profile = String(snapshot.get("diagnostic_profile", diagnostic_profile))
+    if not diagnostic_profile in DIAGNOSTIC_PROFILES:
+        diagnostic_profile = "baseline" if OS.is_debug_build() else "off"
+    debug_overlay_mode = String(snapshot.get("debug_overlay_mode", debug_overlay_mode))
+    if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
+        debug_overlay_mode = "summary" if OS.is_debug_build() else "off"
+    show_perf_monitor = debug_overlay_mode != "off"
     _set_perf_visible(game_running and show_perf_monitor)
     frame_limit_enabled = bool(snapshot.get("fps_limit_enabled", frame_limit_enabled))
     target_fps = int(snapshot.get("target_fps", target_fps))
     lock_landscape = bool(snapshot.get("force_landscape", lock_landscape))
-    plugin_trace = bool(snapshot.get("plugin_trace", plugin_trace))
     plugin_load_mode = String(snapshot.get("plugin_load_mode", plugin_load_mode))
     if not plugin_load_mode in ["krkrsdl3", "aether_all"]:
         plugin_load_mode = "krkrsdl3"
     mock_enabled = bool(snapshot.get("mock_enabled", mock_enabled))
-    console_log_file = bool(snapshot.get("console_log_file", console_log_file))
-    trace_log = bool(snapshot.get("trace_log", trace_log))
-    export_scripts = bool(snapshot.get("export_scripts", export_scripts))
-    log_alerts = bool(snapshot.get("log_alerts", log_alerts))
     error_dialog_logs = bool(snapshot.get("error_dialog_logs", error_dialog_logs))
 
 func _save_settings_draft() -> void:
@@ -1327,21 +1336,95 @@ func _apply_engine_options() -> void:
     var effective_plugin_load_mode := _runtime_string("AETHERKIRI_PLUGIN_LOAD_MODE", plugin_load_mode)
     if not effective_plugin_load_mode in ["krkrsdl3", "aether_all"]:
         effective_plugin_load_mode = "krkrsdl3"
-    var effective_plugin_trace := plugin_trace or _runtime_flag("AETHERKIRI_PLUGIN_TRACE", false)
+    var effective_diagnostic_profile := DiagnosticSession.requested_profile() if DiagnosticSession.external_request_present() else diagnostic_profile
+    _apply_diagnostic_profile_environment(effective_diagnostic_profile)
+    var effective_plugin_trace := plugin_trace or effective_diagnostic_profile in ["plugin", "full"] or _runtime_flag("AETHERKIRI_PLUGIN_TRACE", false)
+    var effective_trace_log := trace_log or effective_diagnostic_profile == "full" or _runtime_flag("AETHERKIRI_TRACE_LOG", false)
+    var effective_input_trace := input_trace_enabled or effective_diagnostic_profile in ["input", "full"]
     player.set_engine_option("fps_limit", str(target_fps) if frame_limit_enabled else "0")
     player.set_engine_option("plugin_load_mode", effective_plugin_load_mode)
     player.set_engine_option("plugin_trace", "1" if effective_plugin_trace else "0")
     player.set_engine_option("mock_enabled", "1" if mock_enabled else "0")
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
-    player.set_engine_option("trace_log", "1" if trace_log else "0")
-    player.set_engine_option("input_trace", "1" if input_trace_enabled else "0")
+    player.set_engine_option("trace_log", "1" if effective_trace_log else "0")
+    player.set_engine_option("input_trace", "1" if effective_input_trace else "0")
     player.set_engine_option("export_scripts", "1" if export_scripts else "0")
-    player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
     if not runtime_default_font_path.is_empty():
         player.set_engine_option("default_font", runtime_default_font_path)
     if not runtime_font_dir_path.is_empty():
         player.set_engine_option("font_dir", runtime_font_dir_path)
     player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
+
+func _apply_diagnostic_profile_environment(profile_name: String) -> void:
+    var catalog := DiagnosticSession.profile_catalog()
+    var profile_flags := {}
+    var protected_names := ["AETHERKIRI_DIAGNOSTICS", "AETHERKIRI_FRAME_SPIKE_MS", "AETHERKIRI_ENGINE_TICK_SPIKE_MS"]
+    for catalog_name in catalog:
+        var definition: Dictionary = catalog[catalog_name]
+        var names := PackedStringArray()
+        for name in (definition.get("env", {}) as Dictionary).keys():
+            if not String(name) in protected_names:
+                names.append(String(name))
+        profile_flags[catalog_name] = names
+    var managed := PackedStringArray()
+    for values in profile_flags.values():
+        for value in values:
+            if not managed.has(String(value)):
+                managed.append(String(value))
+    if diagnostic_env_originals.is_empty():
+        for name in managed:
+            diagnostic_env_originals[name] = OS.get_environment(name)
+    for name in managed:
+        var original := String(diagnostic_env_originals.get(name, ""))
+        if original.is_empty():
+            OS.unset_environment(name)
+        else:
+            OS.set_environment(name, original)
+    for name in profile_flags.get(profile_name, []):
+        OS.set_environment(String(name), "1")
+
+func _set_advanced_tool(option: String, enabled: bool) -> void:
+    if option == "plugin_trace":
+        plugin_trace = enabled
+    elif option == "trace_log":
+        trace_log = enabled
+    elif option == "console_log_file":
+        console_log_file = enabled
+    elif option == "export_scripts":
+        export_scripts = enabled
+    else:
+        return
+    if enabled and option in ["plugin_trace", "trace_log"]:
+        advanced_expiry_msec[option] = Time.get_ticks_msec() + ADVANCED_TRACE_TIMEOUT_MS
+    else:
+        advanced_expiry_msec.erase(option)
+    _apply_engine_options()
+    if diagnostic_session != null and diagnostic_session.active:
+        diagnostic_session.record("godot", "diagnostics", "warning" if enabled else "info", "advanced_tool_changed", 0, {
+            "option": option,
+            "enabled": enabled,
+            "temporary": true,
+        })
+
+func _update_advanced_tool_timeouts() -> void:
+    if advanced_expiry_msec.is_empty():
+        return
+    var now := Time.get_ticks_msec()
+    for option in advanced_expiry_msec.keys().duplicate():
+        if now >= int(advanced_expiry_msec[option]):
+            _set_advanced_tool(String(option), false)
+
+func _advanced_snapshot() -> Dictionary:
+    var now := Time.get_ticks_msec()
+    var result := {
+        "plugin_trace": plugin_trace,
+        "trace_log": trace_log,
+        "console_log_file": console_log_file,
+        "export_scripts": export_scripts,
+    }
+    for option in advanced_expiry_msec:
+        result["%s_remaining_sec" % option] = maxi(0, int(ceil(float(int(advanced_expiry_msec[option]) - now) / 1000.0)))
+    return result
 
 func _apply_shell_runtime_settings() -> void:
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
@@ -1376,7 +1459,7 @@ func _layout_perf_overlay(window_size: Vector2) -> void:
     perf_panel.position = Vector2(horizontal_margin, 12.0)
     perf_panel.size = Vector2(
         maxf(240.0, window_size.x - horizontal_margin * 2.0),
-        84.0
+        112.0 if debug_overlay_mode == "detail" else 84.0
     )
 
 func _set_perf_visible(visible: bool) -> void:
@@ -1518,6 +1601,7 @@ func _build_home_view() -> void:
     status_pill.add_child(home_status_label)
 
     var settings_button := _icon_button(ICON_SETTINGS)
+    settings_button.name = "SettingsButton"
     settings_button.anchor_left = 1.0
     settings_button.anchor_right = 1.0
     settings_button.position = Vector2(-100, 42)
@@ -1649,24 +1733,43 @@ func _rebuild_settings_view() -> void:
     render_card.add_child(_settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment()))
     render_card.add_child(_settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select()))
     render_card.add_child(_settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select()))
-    render_card.add_child(_settings_toggle_row(_t("settings.perf"), _t("settings.perf_desc"), _settings_draft_bool("perf_overlay", show_perf_monitor), "perf"))
     render_card.add_child(_settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
     if _settings_draft_bool("fps_limit_enabled", frame_limit_enabled):
         render_card.add_child(_settings_fps_row())
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
         render_card.add_child(_settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
 
-    page.add_child(_section_title(_t("settings.section.developer"), ICON_PLUGIN))
-    var dev_card := _settings_card()
-    page.add_child(dev_card)
-    dev_card.add_child(_settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select()))
-    dev_card.add_child(_settings_toggle_row(_t("settings.plugin_trace"), _t("settings.plugin_trace_desc"), _settings_draft_bool("plugin_trace", plugin_trace), "plugin_trace"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), _settings_draft_bool("console_log_file", console_log_file), "console_log"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), _settings_draft_bool("trace_log", trace_log), "trace_log"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), _settings_draft_bool("export_scripts", export_scripts), "export_tjs"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.log_alerts"), _t("settings.log_alerts_desc"), _settings_draft_bool("log_alerts", log_alerts), "log_alerts"))
-    dev_card.add_child(_settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
+    page.add_child(_section_title(_t("settings.section.diagnostics"), ICON_PERFORMANCE))
+    var diagnostic_card := _settings_card()
+    page.add_child(diagnostic_card)
+    diagnostic_card.add_child(_settings_block(_t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select()))
+    diagnostic_card.add_child(_settings_block(_t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select()))
+    diagnostic_card.add_child(_settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
+
+    page.add_child(_section_title(_t("settings.section.compatibility"), ICON_PLUGIN))
+    var compatibility_card := _settings_card()
+    page.add_child(compatibility_card)
+    compatibility_card.add_child(_settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select()))
+    compatibility_card.add_child(_settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
+
+    page.add_child(_section_title(_t("settings.section.advanced"), ICON_PLUGIN))
+    var advanced_card := _settings_card()
+    page.add_child(advanced_card)
+    var advanced_disclosure := Button.new()
+    advanced_disclosure.text = ("▼ " if advanced_tool_expanded else "▶ ") + _t("settings.advanced_desc")
+    advanced_disclosure.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    advanced_disclosure.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    advanced_disclosure.custom_minimum_size = Vector2(0, 64)
+    advanced_disclosure.pressed.connect(func():
+        advanced_tool_expanded = not advanced_tool_expanded
+        call_deferred("_rebuild_settings_view")
+    )
+    advanced_card.add_child(advanced_disclosure)
+    if advanced_tool_expanded:
+        advanced_card.add_child(_settings_toggle_row(_t("settings.plugin_trace"), _t("settings.plugin_trace_desc"), plugin_trace, "advanced_plugin_trace"))
+        advanced_card.add_child(_settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), trace_log, "advanced_trace_log"))
+        advanced_card.add_child(_settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), console_log_file, "advanced_console_log"))
+        advanced_card.add_child(_settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), export_scripts, "advanced_export_tjs"))
 
     page.add_child(_section_title(_t("settings.section.about"), ICON_HELP))
     var about_card := _settings_card()
@@ -2345,8 +2448,8 @@ func _plugin_load_mode_select() -> OptionButton:
     var select := OptionButton.new()
     select.custom_minimum_size = Vector2(360, 58)
     var options := [
-        {"label": "krkrsdl3", "value": "krkrsdl3"},
-        {"label": "aether_all", "value": "aether_all"},
+        {"label": _t("settings.plugin_load.core"), "value": "krkrsdl3"},
+        {"label": _t("settings.plugin_load.all"), "value": "aether_all"},
     ]
     var selected_index := 0
     var draft_plugin_load_mode := _settings_draft_string("plugin_load_mode", plugin_load_mode)
@@ -2358,6 +2461,38 @@ func _plugin_load_mode_select() -> OptionButton:
     select.select(selected_index)
     select.item_selected.connect(func(index: int):
         _select_plugin_load_mode(String(select.get_item_metadata(index)))
+    )
+    return select
+
+func _diagnostic_profile_select() -> OptionButton:
+    var select := OptionButton.new()
+    select.custom_minimum_size = Vector2(360, 58)
+    var selected_index := 0
+    var draft_value := _settings_draft_string("diagnostic_profile", diagnostic_profile)
+    for value in DIAGNOSTIC_PROFILES:
+        select.add_item(_t("profile.%s" % value))
+        select.set_item_metadata(select.item_count - 1, value)
+        if value == draft_value:
+            selected_index = select.item_count - 1
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _set_settings_draft_value("diagnostic_profile", String(select.get_item_metadata(index)))
+    )
+    return select
+
+func _debug_overlay_select() -> OptionButton:
+    var select := OptionButton.new()
+    select.custom_minimum_size = Vector2(360, 58)
+    var selected_index := 0
+    var draft_value := _settings_draft_string("debug_overlay_mode", debug_overlay_mode)
+    for value in DEBUG_OVERLAY_MODES:
+        select.add_item(_t("overlay.%s" % value))
+        select.set_item_metadata(select.item_count - 1, value)
+        if value == draft_value:
+            selected_index = select.item_count - 1
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _set_settings_draft_value("debug_overlay_mode", String(select.get_item_metadata(index)))
     )
     return select
 
@@ -2405,26 +2540,23 @@ func _theme_segment() -> HBoxContainer:
     return row
 
 func _on_setting_toggle(key: String, value: bool) -> void:
-    if key == "perf":
-        _set_settings_draft_value("perf_overlay", value)
-    elif key == "fps_limit":
+    if key == "fps_limit":
         _set_settings_draft_value("fps_limit_enabled", value)
     elif key == "landscape":
         _set_settings_draft_value("force_landscape", value)
-    elif key == "plugin_trace":
-        _set_settings_draft_value("plugin_trace", value)
     elif key == "mock":
         _set_settings_draft_value("mock_enabled", value)
-    elif key == "console_log":
-        _set_settings_draft_value("console_log_file", value)
-    elif key == "trace_log":
-        _set_settings_draft_value("trace_log", value)
-    elif key == "export_tjs":
-        _set_settings_draft_value("export_scripts", value)
-    elif key == "log_alerts":
-        _set_settings_draft_value("log_alerts", value)
     elif key == "error_dialog_logs":
         _set_settings_draft_value("error_dialog_logs", value)
+    elif key.begins_with("advanced_"):
+        var option: String = String({
+            "advanced_plugin_trace": "plugin_trace",
+            "advanced_trace_log": "trace_log",
+            "advanced_console_log": "console_log_file",
+            "advanced_export_tjs": "export_scripts",
+        }.get(key, ""))
+        if not option.is_empty():
+            _set_advanced_tool(option, value)
     if key == "fps_limit":
         call_deferred("_rebuild_settings_view")
 
@@ -2509,6 +2641,10 @@ func _remove_shell_view(view: Control) -> void:
     view.queue_free()
 
 func _refresh_language_texts() -> void:
+    if diagnostic_session != null:
+        diagnostic_session.refresh_language()
+    if debug_console != null:
+        debug_console.refresh_language()
     if is_instance_valid(home_subtitle_label):
         home_subtitle_label.text = _t("home.subtitle")
     if is_instance_valid(home_status_label):
@@ -2744,19 +2880,6 @@ func _maybe_show_log_alert(line: String) -> void:
         var alert_title := parts[0].strip_edges() if parts.size() > 0 else "AetherKiri"
         var alert_message := parts[1].strip_edges() if parts.size() > 1 else ""
         _show_system_alert(alert_message, alert_title)
-        return
-
-    if not log_alerts:
-        return
-    if message.is_empty():
-        return
-    var lower := message.to_lower()
-    var is_warning := lower.contains("warning") or lower.contains("(warning)") or lower.contains("警告")
-    var is_error := lower.contains("error") or lower.contains("exception") or lower.contains("fatal") or lower.contains("failed") or lower.contains("错误") or lower.contains("失败")
-    if not is_warning and not is_error:
-        return
-    var title := _t("alert.error_title") if is_error else _t("alert.warning_title")
-    _show_system_alert_once("log:%s" % message, message, title)
 
 func _create_file_dialog(title: String, file_mode: int, filters: PackedStringArray = PackedStringArray()) -> FileDialog:
     var dialog := FileDialog.new()
@@ -3798,6 +3921,7 @@ func _quit_after_runtime_exit() -> void:
     _clear_game_input_capture()
     _finalize_active_game_session()
     game_running = false
+    _sync_debug_console_state()
     app_lifecycle_paused = false
     cached_startup_state = STARTUP_IDLE
     startup_poll_accum = 0.0
@@ -3902,7 +4026,11 @@ func _ready() -> void:
 
     diagnostic_session = DiagnosticSession.new()
     add_child(diagnostic_session)
+    diagnostic_session.configure_preference(diagnostic_profile)
+    diagnostic_session.set_translator(func(key: String): return _t(key))
+    diagnostic_session.set_marker_context_provider(func(): return _diagnostic_marker_context())
     diagnostic_session.build_overlay(self)
+    _setup_debug_console()
 
     for item in BACKENDS:
         backend.add_item(item)
@@ -3927,6 +4055,217 @@ func _ready() -> void:
 
     _append_log("AetherKiri shell ready. Initializing engine...")
     call_deferred("_finish_ready_after_first_frame")
+
+func _setup_debug_console() -> void:
+    debug_console = DebugConsole.new()
+    debug_console.setup(self, func(key: String): return _t(key), func(): return _debug_console_snapshot())
+    debug_console.marker_requested.connect(_on_debug_marker_requested)
+    debug_console.snapshot_requested.connect(_on_debug_snapshot_requested)
+    debug_console.screenshot_requested.connect(_on_debug_screenshot_requested)
+    debug_console.export_requested.connect(_on_debug_export_requested)
+    debug_console.copy_summary_requested.connect(_on_debug_copy_summary_requested)
+    debug_console.self_check_requested.connect(_on_debug_self_check_requested)
+    debug_console.capture_slow_frame_requested.connect(_on_debug_slow_frame_requested)
+    debug_console.advanced_toggle_requested.connect(_set_advanced_tool)
+    debug_console.logs_clear_requested.connect(func():
+        log_lines.clear()
+        log_view_dirty = true
+    )
+    debug_console.drawer_visibility_changed.connect(func(open: bool):
+        if diagnostic_session != null:
+            diagnostic_session.set_game_active(game_running and not open)
+    )
+    _sync_debug_console_state()
+
+func _sync_debug_console_state() -> void:
+    if debug_console == null:
+        return
+    var available: bool = diagnostic_session != null and bool(diagnostic_session.active)
+    debug_console.set_available(available)
+    debug_console.set_game_active(game_running and available)
+    if diagnostic_session != null:
+        diagnostic_session.set_game_active(game_running and available and not debug_console.is_open())
+
+func _diagnostic_marker_context() -> Dictionary:
+    var memory := {}
+    var plugins := {}
+    var renderer := selected_backend
+    if player != null and player.is_initialized():
+        var renderer_info := String(player.get_renderer_info())
+        if not renderer_info.is_empty():
+            renderer = renderer_info
+        if player.has_method("get_memory_stats"):
+            memory = player.get_memory_stats()
+        if player.has_method("get_plugin_debug_info"):
+            var parsed = JSON.parse_string(String(player.get_plugin_debug_info()))
+            if parsed is Dictionary:
+                plugins = parsed
+    return {
+        "fps": Engine.get_frames_per_second(),
+        "frame_ms": last_frame_ms,
+        "tick_ms": last_tick_ms,
+        "godot_update_ms": last_update_ms,
+        "frame_summary": diagnostic_session.latest_frame_summary.duplicate(true) if diagnostic_session != null else {},
+        "renderer": renderer,
+        "texture_size": [last_texture_size.x, last_texture_size.y],
+        "surface_size": [current_surface_size.x, current_surface_size.y],
+        "render_errors": render_errors,
+        "input": {
+            "last_event": debug_last_input_event,
+            "last_target": debug_last_input_target,
+            "last_position": [debug_last_input_position.x, debug_last_input_position.y],
+            "received": input_trace_received,
+            "forwarded": input_trace_forwarded,
+            "blocked": input_trace_blocked,
+            "throttled": input_trace_throttled,
+            "busy": input_trace_busy,
+            "outside": input_trace_outside,
+            "suppressed": input_trace_move_suppressed,
+            "active_pointers": active_touch_points.size(),
+        },
+        "memory": memory,
+        "plugins": plugins,
+    }
+
+func _debug_console_snapshot() -> Dictionary:
+    var session: Dictionary = diagnostic_session.status_snapshot() if diagnostic_session != null else {}
+    var memory: Dictionary = {}
+    var plugins: Dictionary = {}
+    var renderer: String = selected_backend
+    var texture_backend: String = "-"
+    if player != null and player.is_initialized():
+        var renderer_info := String(player.get_renderer_info())
+        if not renderer_info.is_empty():
+            renderer = renderer_info
+        texture_backend = String(player.get_frame_texture_backend())
+        if player.has_method("get_memory_stats"):
+            var raw_memory: Dictionary = player.get_memory_stats()
+            memory = raw_memory.duplicate(true)
+            memory["current_bytes"] = int(raw_memory.get("self_used_mb", 0)) * 1024 * 1024
+            memory["system_free_bytes"] = int(raw_memory.get("system_free_mb", 0)) * 1024 * 1024
+            memory["system_total_bytes"] = int(raw_memory.get("system_total_mb", 0)) * 1024 * 1024
+            memory["cache_bytes"] = int(raw_memory.get("graphic_cache_bytes", 0)) + int(raw_memory.get("xp3_segment_cache_bytes", 0)) + int(raw_memory.get("psb_cache_bytes", 0))
+        if player.has_method("get_plugin_debug_info"):
+            var parsed = JSON.parse_string(String(player.get_plugin_debug_info()))
+            if parsed is Dictionary:
+                plugins = (parsed as Dictionary).duplicate(true)
+                plugins["method_call_count"] = int(plugins.get("method_calls", 0))
+                plugins["property_call_count"] = int(plugins.get("property_gets", 0)) + int(plugins.get("property_sets", 0))
+                plugins["plugin_load_success_count"] = int(plugins.get("load_succeeded", 0))
+                plugins["plugin_load_failure_count"] = int(plugins.get("load_failed", 0))
+                plugins["plugin_load_fallback_count"] = int(plugins.get("load_fallback", 0))
+                plugins["missing_member_count"] = int(plugins.get("missing_members", 0))
+    var points: Dictionary = active_touch_points.duplicate()
+    if pending_touch_index >= 0:
+        points[pending_touch_index] = pending_touch_mapped
+    var frame_summary: Dictionary = session.get("frame_summary", {})
+    var surface_text: String = "%dx%d" % [current_surface_size.x, current_surface_size.y]
+    var texture_text: String = "%dx%d %s" % [last_texture_size.x, last_texture_size.y, texture_backend]
+    return {
+        "session": session,
+        "performance": {
+            "fps": Engine.get_frames_per_second(),
+            "frame_summary": frame_summary,
+            "tick_ms": last_tick_ms,
+            "update_ms": last_update_ms,
+            "frame_ms": last_frame_ms,
+            "renderer": renderer,
+            "texture": texture_text,
+            "surface": surface_text,
+            "fallback": selected_backend == "Debug CPU",
+            "errors": render_errors,
+        },
+        "memory": memory,
+        "plugins": plugins,
+        "events": diagnostic_session.recent_events(100) if diagnostic_session != null else [],
+        "logs": Array(log_lines),
+        "input": {
+            "last_event": debug_last_input_event,
+            "last_target": debug_last_input_target,
+            "last_position": debug_last_input_position,
+            "received": input_trace_received,
+            "forwarded": input_trace_forwarded,
+            "blocked": input_trace_blocked,
+            "throttled": input_trace_throttled,
+            "busy": input_trace_busy,
+            "outside": input_trace_outside,
+            "suppressed": input_trace_move_suppressed,
+            "active_count": points.size(),
+            "points": points,
+        },
+        "advanced": _advanced_snapshot(),
+        "overhead": "high" if plugin_trace or trace_log or diagnostic_profile == "full" else ("medium" if console_log_file or export_scripts or diagnostic_profile not in ["off", "baseline"] else "low"),
+    }
+
+func _on_debug_marker_requested(label: String) -> void:
+    if diagnostic_session == null or not diagnostic_session.active:
+        debug_console.show_result(_t("debug.result.unavailable"), true)
+        return
+    if diagnostic_session.mark_issue(label):
+        debug_console.show_result(_t("debug.result.marked", [label]))
+    else:
+        debug_console.show_result(_t("debug.result.marker_limit", [DiagnosticSession.MAX_MARKERS]), true)
+
+func _on_debug_snapshot_requested() -> void:
+    if diagnostic_session == null or not diagnostic_session.active:
+        debug_console.show_result(_t("debug.result.unavailable"), true)
+        return
+    var snapshot := _debug_console_snapshot()
+    snapshot.erase("events")
+    snapshot.erase("logs")
+    var path: String = diagnostic_session.write_state_snapshot(snapshot)
+    debug_console.show_result(_t("debug.result.snapshot", [path]), path.is_empty())
+
+func _on_debug_screenshot_requested() -> void:
+    if diagnostic_session == null or not diagnostic_session.active:
+        debug_console.show_result(_t("debug.result.unavailable"), true)
+        return
+    var path: String = String(diagnostic_session.session_dir).path_join("screenshot-%d.png" % Time.get_ticks_msec())
+    var result: Error = get_viewport().get_texture().get_image().save_png(path)
+    if result == OK:
+        diagnostic_session.record("godot", "render", "info", "screenshot_saved", 0, {"path": path.get_file()})
+        diagnostic_session.flush()
+    var global_path: String = ProjectSettings.globalize_path(path) if result == OK else ""
+    debug_console.show_result(_t("debug.result.screenshot", [global_path]), result != OK)
+
+func _on_debug_export_requested() -> void:
+    if diagnostic_session == null or not diagnostic_session.active:
+        debug_console.show_result(_t("debug.result.unavailable"), true)
+        return
+    var path: String = diagnostic_session.export_zip()
+    debug_console.show_result(_t("debug.result.exported", [path]), path.is_empty())
+
+func _on_debug_copy_summary_requested() -> void:
+    if diagnostic_session == null or not diagnostic_session.active:
+        debug_console.show_result(_t("debug.result.unavailable"), true)
+        return
+    DisplayServer.clipboard_set(diagnostic_session.summary_text({"renderer": selected_backend, "errors": render_errors}))
+    debug_console.show_result(_t("debug.result.copied"))
+
+func _on_debug_slow_frame_requested() -> void:
+    if diagnostic_session != null and diagnostic_session.arm_next_slow_frame():
+        debug_console.show_result(_t("debug.result.slow_armed"))
+    else:
+        debug_console.show_result(_t("debug.result.unavailable"), true)
+
+func _on_debug_self_check_requested() -> void:
+    var checks := PackedStringArray()
+    checks.append("session=ok" if diagnostic_session != null and diagnostic_session.active else "session=failed")
+    checks.append("engine=ok" if player != null and player.is_initialized() else "engine=failed")
+    checks.append("renderer=ok" if not selected_backend.is_empty() else "renderer=failed")
+    var writable := false
+    if diagnostic_session != null and diagnostic_session.active:
+        var probe_path: String = String(diagnostic_session.session_dir).path_join(".self-check")
+        var probe: FileAccess = FileAccess.open(probe_path, FileAccess.WRITE)
+        writable = probe != null
+        if probe != null:
+            probe.store_string("ok")
+            probe = null
+            DirAccess.remove_absolute(ProjectSettings.globalize_path(probe_path))
+        diagnostic_session.record("godot", "system", "info" if writable else "error", "diagnostic_self_check", 0, {"checks": Array(checks), "storage_writable": writable})
+        diagnostic_session.flush()
+    checks.append("storage=ok" if writable else "storage=failed")
+    debug_console.show_result(_t("debug.result.self_check", [", ".join(checks)]), not writable)
 
 func _create_runtime_player() -> bool:
     if not ClassDB.class_exists("AetherKiriPlayer"):
@@ -3976,6 +4315,7 @@ func _finish_ready_after_first_frame() -> void:
         _apply_backend(false)
         _apply_engine_options()
         diagnostic_session.start(player, selected_backend)
+        _sync_debug_console_state()
     _apply_shell_runtime_settings()
     if not cli_probe_script.is_empty():
         if not engine_initialized:
@@ -4180,12 +4520,22 @@ func _refresh_games_after_web_local_restore() -> void:
 
 func _capture_ui_after_ready() -> void:
     var action := OS.get_environment("AETHERKIRI_CAPTURE_UI_ACTION")
-    if action == "settings":
+    if action in ["settings", "settings_diagnostics", "settings_advanced"]:
+        if action == "settings_advanced":
+            advanced_tool_expanded = true
         _show_settings()
     elif action == "guide":
         _show_import_guide()
     elif action == "detail" and not known_games.is_empty():
         _show_detail(known_games[0])
+    elif action == "debug_console" and diagnostic_session != null and diagnostic_session.active:
+        shell_root.visible = false
+        game_view.visible = true
+        viewport.visible = true
+        game_running = true
+        diagnostic_session.set_game_active(true)
+        _sync_debug_console_state()
+        debug_console.open_drawer()
     var mouse := OS.get_environment("AETHERKIRI_CAPTURE_UI_MOUSE")
     if not mouse.is_empty():
         var parts := mouse.split(",", false)
@@ -4193,6 +4543,10 @@ func _capture_ui_after_ready() -> void:
             Input.warp_mouse(Vector2(parts[0].to_float(), parts[1].to_float()))
     await get_tree().process_frame
     await get_tree().process_frame
+    if action == "settings_diagnostics" and settings_view != null:
+        settings_view.scroll_vertical = 1200
+    elif action == "settings_advanced" and settings_view != null:
+        settings_view.scroll_vertical = int(settings_view.get_v_scroll_bar().max_value)
     await get_tree().process_frame
     var path := OS.get_environment("AETHERKIRI_CAPTURE_UI")
     var image := get_viewport().get_texture().get_image()
@@ -4254,6 +4608,7 @@ func _prepare_cli_probe_view(config: Dictionary) -> void:
     viewport.texture = null
     last_texture_size = Vector2i.ZERO
     game_running = false
+    _sync_debug_console_state()
     _fit_full_rects()
 
 func _probe_open_game(config: Dictionary, target_game_path: String, backend_env: String) -> bool:
@@ -4838,6 +5193,7 @@ func _apply_global_dpi_scale() -> void:
 
 func _process(delta: float) -> void:
     _fit_full_rects()
+    _update_advanced_tool_timeouts()
     _sync_game_card_hover_states()
     _flush_log_view_if_needed(delta)
     var startup_state := cached_startup_state
@@ -4876,6 +5232,8 @@ func _process(delta: float) -> void:
             var tick_start := Time.get_ticks_usec()
             var tick_result: int = int(player.tick(delta))
             var tick_ms := float(Time.get_ticks_usec() - tick_start) / 1000.0
+            last_tick_ms = tick_ms
+            last_frame_ms = delta * 1000.0
             tick_trace_active_serial = 0
             if tick_result != ENGINE_RESULT_OK:
                 var tick_result_name := str(player.get_last_result())
@@ -4903,6 +5261,7 @@ func _process(delta: float) -> void:
                     perf_log_file.store_line(tick_error_line)
                     perf_log_file.flush()
                 game_running = false
+                _sync_debug_console_state()
                 if diagnostic_session != null:
                     diagnostic_session.set_game_active(false)
                     diagnostic_session.record("godot", "lifecycle", "error", "game_tick_failed", 0, {
@@ -4920,6 +5279,7 @@ func _process(delta: float) -> void:
                 var update_start := Time.get_ticks_usec()
                 _update_frame()
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
+                last_update_ms = update_ms
                 _update_touch_busy_gate(maxf(delta * 1000.0, tick_ms + update_ms))
                 if diagnostic_session != null:
                     diagnostic_session.sample_frame(
@@ -4941,6 +5301,7 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            _sync_debug_console_state()
             if diagnostic_session != null:
                 diagnostic_session.set_game_active(false)
                 diagnostic_session.record("godot", "lifecycle", "error", "game_startup_failed", 0, {
@@ -4988,7 +5349,7 @@ func _process(delta: float) -> void:
             return
         var fallback := _renderer_fallback(renderer)
         var texture_backend: String = String(player.get_frame_texture_backend()) if game_running else "none"
-        perf.text = "Backend: %s | FPS: %d | Frame: %.2f ms | Texture: %s | Size: %dx%d | Surface: %s %dx%d | Fallback: %s | Errors: %d" % [
+        var summary_text := "Backend: %s | FPS: %d | Frame: %.2f ms | Texture: %s | Size: %dx%d | Surface: %s %dx%d | Fallback: %s | Errors: %d" % [
             renderer_summary,
             Engine.get_frames_per_second(),
             frame_ms,
@@ -5001,6 +5362,18 @@ func _process(delta: float) -> void:
             fallback,
             render_errors,
         ]
+        if debug_overlay_mode == "detail" and diagnostic_session != null:
+            var frame_summary: Dictionary = diagnostic_session.latest_frame_summary
+            summary_text += "\nTick: %.2f ms | Update: %.2f ms | P50/P95/P99/Max: %.2f / %.2f / %.2f / %.2f ms | Dropped: %d" % [
+                last_tick_ms,
+                last_update_ms,
+                float(frame_summary.get("p50_ms", 0.0)),
+                float(frame_summary.get("p95_ms", 0.0)),
+                float(frame_summary.get("p99_ms", 0.0)),
+                float(frame_summary.get("max_ms", 0.0)),
+                diagnostic_session.dropped_events,
+            ]
+        perf.text = summary_text
 func _log_live_perf(delta: float, tick_ms: float, update_ms: float) -> void:
     if not _should_emit_runtime_perf_logs():
         return
@@ -5324,6 +5697,7 @@ func _on_open_game() -> void:
             "backend": selected_backend,
             "async": async_open,
         })
+    _sync_debug_console_state()
     app_lifecycle_paused = false
     log_lines.clear()
     log_view_dirty = false
@@ -5502,10 +5876,10 @@ func _drain_logs() -> void:
             _append_log(line)
 
 func _should_process_runtime_logs() -> bool:
-    return diagnostics_enabled or ui_log_enabled or log_alerts or error_dialog_logs
+    return diagnostics_enabled or ui_log_enabled or error_dialog_logs
 
 func _should_collect_log_lines() -> bool:
-    return ui_log_enabled or error_dialog_logs
+    return true
 
 func _should_emit_runtime_perf_logs() -> bool:
     return diagnostics_enabled or perf_log_file != null
@@ -5962,6 +6336,8 @@ func _write_probe_marker(line: String) -> void:
 func _input(event: InputEvent) -> void:
     # _input runs before Control GUI dispatch. Keep pointers that begin on the
     # diagnostic action out of the game bridge so Button can receive them.
+    if debug_console != null and debug_console.routes_pointer(event):
+        return
     if diagnostic_session != null and diagnostic_session.routes_pointer_to_marker(event):
         return
     if _is_game_pointer_event(event):
@@ -5978,6 +6354,9 @@ func _input(event: InputEvent) -> void:
             debug_pos = (event as InputEventPanGesture).position
         var debug_control := _control_at_pointer(debug_pos) if shell_root != null and shell_root.visible else null
         var debug_button := _nearest_base_button(debug_control) if debug_control != null else null
+        debug_last_input_event = event.get_class()
+        debug_last_input_position = debug_pos
+        debug_last_input_target = _control_debug_label(debug_button if debug_button != null else debug_control)
         _android_input_debug_log("input event=%s game_running=%s can_forward=%s viewport_visible=%s startup=%d pos=%s control=%s button=%s" % [
             event.get_class(),
             str(game_running),
@@ -6399,8 +6778,6 @@ func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: flo
             modifiers,
             result,
         ])
-    if not input_trace_enabled:
-        return
     input_trace_forwarded += 1
     if result != ENGINE_RESULT_OK:
         input_trace_send_failed += 1
@@ -6437,28 +6814,22 @@ func _control_debug_label(control: Control) -> String:
     ]
 
 func _trace_input_received() -> void:
-    if input_trace_enabled:
-        input_trace_received += 1
+    input_trace_received += 1
 
 func _trace_input_blocked() -> void:
-    if input_trace_enabled:
-        input_trace_blocked += 1
+    input_trace_blocked += 1
 
 func _trace_input_throttled() -> void:
-    if input_trace_enabled:
-        input_trace_throttled += 1
+    input_trace_throttled += 1
 
 func _trace_input_busy() -> void:
-    if input_trace_enabled:
-        input_trace_busy += 1
+    input_trace_busy += 1
 
 func _trace_input_move_suppressed() -> void:
-    if input_trace_enabled:
-        input_trace_move_suppressed += 1
+    input_trace_move_suppressed += 1
 
 func _trace_input_outside() -> void:
-    if input_trace_enabled:
-        input_trace_outside += 1
+    input_trace_outside += 1
 
 func _apply_touch_action_cooldown() -> void:
     if not _is_touch_platform() or TOUCH_ACTION_COOLDOWN_MS <= 0:
@@ -6589,8 +6960,6 @@ func _append_log(line: String) -> void:
     if device_probe_enabled:
         _write_probe_marker("log %s" % line)
     _maybe_show_log_alert(line)
-    if not _should_collect_log_lines():
-        return
     log_lines.append(line)
     while log_lines.size() > MAX_LOG_LINES:
         log_lines.remove_at(0)

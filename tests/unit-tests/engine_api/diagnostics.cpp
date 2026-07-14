@@ -121,3 +121,29 @@ TEST_CASE("legacy startup drain remains independent") {
           ENGINE_RESULT_OK);
   REQUIRE(DrainDiagnostics(handle).find("after-open") != std::string::npos);
 }
+
+TEST_CASE("plugin debug snapshot is bounded JSON and validates buffers") {
+  Handle handle;
+  engine_option_t trace_option{};
+  trace_option.key_utf8 = "plugin_trace";
+  trace_option.value_utf8 = "1";
+  REQUIRE(engine_set_option(handle.value, &trace_option) == ENGINE_RESULT_OK);
+  std::vector<char> buffer(64 * 1024);
+  uint32_t written = 0;
+  REQUIRE(engine_get_plugin_debug_info(
+              handle.value, buffer.data(), static_cast<uint32_t>(buffer.size()),
+              &written) == ENGINE_RESULT_OK);
+  const std::string output(buffer.data(), written);
+  REQUIRE_FALSE(output.empty());
+  REQUIRE(output.front() == '{');
+  REQUIRE(output.back() == '}');
+  REQUIRE(output.find("\"method_calls\":") != std::string::npos);
+  REQUIRE(output.find("\"loaded_plugins\":[") != std::string::npos);
+  REQUIRE(output.find("\"tracing_enabled\":true") != std::string::npos);
+
+  char too_small[2] = {};
+  written = 99;
+  REQUIRE(engine_get_plugin_debug_info(handle.value, too_small, sizeof(too_small),
+                                       &written) == ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(written == 0);
+}

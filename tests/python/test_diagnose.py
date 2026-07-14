@@ -285,6 +285,20 @@ class DiagnoseTests(unittest.TestCase):
             diagnose.consolidate_app_files(bundle, "missing")
             self.assertFalse((bundle / "events.jsonl").exists())
 
+    def test_app_snapshots_and_explicit_screenshots_become_attachments(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp)
+            session = bundle / "app-data/diagnostics/fixture"
+            (session / "incidents").mkdir(parents=True)
+            (session / "events.jsonl").write_text("", encoding="utf-8")
+            (session / "state-snapshot-01.json").write_text("{}", encoding="utf-8")
+            (session / "screenshot-10.png").write_bytes(b"png")
+            (session / "incidents/marker-01-state.json").write_text("{}", encoding="utf-8")
+            diagnose.consolidate_app_files(bundle, "fixture")
+            self.assertTrue((bundle / "attachments/state-snapshot-01.json").exists())
+            self.assertTrue((bundle / "attachments/screenshot-10.png").exists())
+            self.assertTrue((bundle / "incidents/marker-01-state.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

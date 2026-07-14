@@ -26,7 +26,7 @@ extern "C" {
 #endif
 
 /* ABI version: major(8bit), minor(8bit), patch(16bit). */
-#define ENGINE_API_VERSION 0x01010000u
+#define ENGINE_API_VERSION 0x01020000u
 #define ENGINE_API_MAKE_VERSION(major, minor, patch) \
   ((((uint32_t)(major)&0xFFu) << 24u) | (((uint32_t)(minor)&0xFFu) << 16u) | \
    ((uint32_t)(patch)&0xFFFFu))
@@ -383,6 +383,11 @@ ENGINE_API_EXPORT engine_result_t engine_get_renderer_info(
  */
 ENGINE_API_EXPORT engine_result_t engine_get_memory_stats(
     engine_handle_t handle, engine_memory_stats_t* out_stats);
+
+/* Gets a bounded JSON object with plugin load, fallback, call, and missing-member stats. */
+ENGINE_API_EXPORT engine_result_t engine_get_plugin_debug_info(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written);
 
 /* Configures the bounded structured diagnostic queue for this handle. */
 ENGINE_API_EXPORT engine_result_t engine_set_diagnostic_config(

@@ -8,7 +8,22 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <sys/stat.h>
+
+namespace {
+constexpr size_t kMaxDebugListEntries = 64;
+
+void AppendBoundedUnique(std::vector<std::string> &items,
+                         const std::string &value) {
+    if(value.empty()) return;
+    const auto existing = std::find(items.begin(), items.end(), value);
+    if(existing != items.end()) items.erase(existing);
+    items.push_back(value);
+    if(items.size() > kMaxDebugListEntries)
+        items.erase(items.begin(), items.begin() + (items.size() - kMaxDebugListEntries));
+}
+}
 
 // ===========================================================================
 // PluginCallTracer singleton
@@ -43,15 +58,41 @@ void PluginCallTracer::InitLogger(const std::string &logFilePath) {
     }
 }
 
+void PluginCallTracer::SetLogFilePath(const std::string &logFilePath) {
+    std::shared_ptr<spdlog::logger> previous;
+    bool reopen = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if(m_shuttingDown || m_logFilePath == logFilePath) return;
+        previous = m_logger;
+        m_logger.reset();
+        m_loggerInitialized = false;
+        m_logFilePath = logFilePath;
+        reopen = m_enabled;
+    }
+    if(previous) {
+        try {
+            previous->flush();
+            spdlog::drop("plugin_trace");
+        } catch(...) {
+        }
+    }
+    if(reopen) InitLogger(logFilePath);
+}
+
 void PluginCallTracer::SetEnabled(bool enabled) {
     std::shared_ptr<spdlog::logger> logger;
+    std::string path;
+    bool initialize = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_shuttingDown) return;
+        m_enabled = enabled;
+        initialize = enabled && !m_loggerInitialized && !m_logFilePath.empty();
+        path = m_logFilePath;
     }
-    m_enabled = enabled;
-    if (enabled && !m_loggerInitialized && !m_logFilePath.empty()) {
-        InitLogger(m_logFilePath);
+    if (initialize) {
+        InitLogger(path);
     }
     logger = GetActiveLogger();
     if (logger) {
@@ -65,9 +106,13 @@ void PluginCallTracer::SetEnabled(bool enabled) {
 }
 
 void PluginCallTracer::EnsureLogger() {
-    if (!m_shuttingDown && !m_loggerInitialized && !m_logFilePath.empty()) {
-        InitLogger(m_logFilePath);
+    std::string path;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_shuttingDown || m_loggerInitialized || m_logFilePath.empty()) return;
+        path = m_logFilePath;
     }
+    InitLogger(path);
 }
 
 void PluginCallTracer::Shutdown() {
@@ -126,6 +171,10 @@ void PluginCallTracer::LogMethodCall(const std::string &className,
                                      const std::string &memberName,
                                      tjs_int numparams,
                                      tTJSVariant **param) {
+    if(IsEnabled()) {
+        std::lock_guard<std::mutex> lock(m_statsMutex);
+        ++m_stats.methodCalls;
+    }
     auto logger = GetActiveLogger();
     if (!logger) return;
     std::string msg = className + "." + memberName + "(argc=" +
@@ -158,6 +207,10 @@ void PluginCallTracer::LogMethodCall(const std::string &className,
 
 void PluginCallTracer::LogPropGet(const std::string &className,
                                   const std::string &memberName) {
+    if(IsEnabled()) {
+        std::lock_guard<std::mutex> lock(m_statsMutex);
+        ++m_stats.propertyGets;
+    }
     auto logger = GetActiveLogger();
     if (!logger) return;
     try {
@@ -169,6 +222,10 @@ void PluginCallTracer::LogPropGet(const std::string &className,
 void PluginCallTracer::LogPropSet(const std::string &className,
                                   const std::string &memberName,
                                   const tTJSVariant *value) {
+    if(IsEnabled()) {
+        std::lock_guard<std::mutex> lock(m_statsMutex);
+        ++m_stats.propertySets;
+    }
     auto logger = GetActiveLogger();
     if (!logger) return;
     std::string valStr;
@@ -642,6 +699,21 @@ void PluginCallTracer::LogRegistrationEnd() {
 
 void PluginCallTracer::LogPluginLoad(const std::string &name, bool success,
                                      const char *stub) {
+    {
+        std::lock_guard<std::mutex> lock(m_statsMutex);
+        if(success) {
+            ++m_stats.loadSucceeded;
+            AppendBoundedUnique(m_stats.loadedPlugins, name);
+        } else {
+            ++m_stats.loadFailed;
+            AppendBoundedUnique(m_stats.failedPlugins, name);
+            if(stub) {
+                ++m_stats.loadFallback;
+                AppendBoundedUnique(m_stats.fallbackPlugins,
+                                    name + " -> " + stub);
+            }
+        }
+    }
     auto logger = GetActiveLogger();
     if (!logger) return;
     try {
@@ -672,6 +744,17 @@ void PluginCallTracer::LogMissingMember(const tjs_char *membername,
         }
     }
 
+    {
+        std::lock_guard<std::mutex> lock(m_statsMutex);
+        ++m_stats.missingMembers;
+        std::string item = className.empty() ? std::string{} : className + ".";
+        item += ns.operator const char *();
+        item += " [";
+        item += operation ? operation : "unknown";
+        item += "]";
+        AppendBoundedUnique(m_stats.recentMissingMembers, item);
+    }
+
     if (auto logger = GetActiveLogger()) {
         try {
             if (className.empty()) {
@@ -693,4 +776,17 @@ void PluginCallTracer::LogMissingMember(const tjs_char *membername,
             spdlog::debug("TJS missing member {}.{} at {}", className, ns.operator const char *(), operation);
         }
     }
+}
+
+PluginDebugSnapshot PluginCallTracer::GetDebugSnapshot() const {
+    std::lock_guard<std::mutex> lock(m_statsMutex);
+    auto snapshot = m_stats;
+    snapshot.tracingEnabled = IsEnabled();
+    return snapshot;
+}
+
+void PluginCallTracer::ResetDebugStats() {
+    std::lock_guard<std::mutex> lock(m_statsMutex);
+    m_stats = PluginDebugSnapshot{};
+    m_stats.tracingEnabled = IsEnabled();
 }

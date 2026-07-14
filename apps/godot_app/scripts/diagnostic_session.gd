@@ -13,8 +13,12 @@ const NATIVE_DRAIN_INTERVAL := 0.5
 const LEGACY_REQUEST_FILE := "user://diagnostic-request.json"
 const MOBILE_DIAGNOSTIC_SUBDIR := "AetherKiri/Diagnostics"
 const ANDROID_DOCUMENTS_DIR := "/storage/emulated/0/Documents"
-const MARKER_BUTTON_TEXT := "标记问题"
+const PROFILE_CATALOG_FILE := "res://config/diagnostic_profiles.json"
 const MARKER_FEEDBACK_MSEC := 1800
+const PROFILE_NAMES := [
+    "baseline", "input", "render", "storage", "script", "audio",
+    "video", "plugin", "system", "full",
+]
 
 const CATEGORY := {
     "lifecycle": 1 << 0,
@@ -42,6 +46,21 @@ const PROFILE_MASK := {
     "full": (1 << 10) - 1,
 }
 
+static func profile_catalog() -> Dictionary:
+    var file := FileAccess.open(PROFILE_CATALOG_FILE, FileAccess.READ)
+    if file == null:
+        return {}
+    var parsed = JSON.parse_string(file.get_as_text())
+    if not parsed is Dictionary:
+        return {}
+    var result := {}
+    for value in (parsed as Dictionary).get("profiles", []):
+        if value is Dictionary:
+            var name := String((value as Dictionary).get("name", ""))
+            if not name.is_empty():
+                result[name] = (value as Dictionary).duplicate(true)
+    return result
+
 var active := false
 var profile := "baseline"
 var session_id := ""
@@ -51,6 +70,12 @@ var sequence := 0
 var dropped_events := 0
 var marker_count := 0
 var slow_frame_threshold_ms := 20.0
+var preferred_profile := "baseline" if OS.is_debug_build() else "off"
+var external_request := false
+var started_at_usec := 0
+var total_event_count := 0
+var latest_frame_summary: Dictionary = {}
+var last_action_error := ""
 
 var _ring: Array[Dictionary] = []
 var _pending_lines: PackedStringArray = []
@@ -66,6 +91,25 @@ var _status_label: Label
 var _status_until_msec := 0
 var _marker_touch_captures: Dictionary = {}
 var _marker_mouse_captured := false
+var _next_slow_frame_label := ""
+var _snapshot_count := 0
+var _translate: Callable
+var _marker_context_provider: Callable
+
+func set_translator(translator: Callable) -> void:
+    _translate = translator
+
+func set_marker_context_provider(provider: Callable) -> void:
+    _marker_context_provider = provider
+
+func refresh_language() -> void:
+    _reset_marker_feedback()
+
+func _tr(key: String, args: Array = []) -> String:
+    if not _translate.is_valid():
+        return key
+    var value := String(_translate.call(key))
+    return value % args if not args.is_empty() else value
 
 static func diagnostic_root_for_platform(platform: String, documents_dir: String) -> String:
     if platform == "Android":
@@ -119,6 +163,24 @@ static func requested_profile() -> String:
         requested = String(value).strip_edges().to_lower()
     return requested if PROFILE_MASK.has(requested) else "baseline"
 
+static func external_request_present() -> bool:
+    for name in [
+        "AETHERKIRI_DIAGNOSTICS",
+        "AETHERKIRI_DIAGNOSTIC_PROFILE",
+        "AETHERKIRI_DIAGNOSTIC_SESSION",
+    ]:
+        if not OS.get_environment(name).strip_edges().is_empty():
+            return true
+    for path in _request_paths():
+        if FileAccess.file_exists(path):
+            return true
+    if OS.get_name() == "Web":
+        return bool(JavaScriptBridge.eval(
+            "new URLSearchParams(globalThis.location.search).has('diagnostic_session')",
+            true
+        ))
+    return false
+
 static func requested_session_id() -> String:
     var requested := OS.get_environment("AETHERKIRI_DIAGNOSTIC_SESSION").strip_edges()
     if requested.is_empty():
@@ -130,24 +192,25 @@ static func requested_session_id() -> String:
         )
         requested = String(value).strip_edges()
     if requested.is_empty():
-        requested = "%s-%d" % [Time.get_datetime_string_from_system(false, true), OS.get_process_id()]
+        requested = "%s-%d-%d" % [Time.get_datetime_string_from_system(false, true), OS.get_process_id(), Time.get_ticks_msec()]
     return _safe_name(requested)
 
 static func requested_enabled() -> bool:
-    if OS.is_debug_build():
-        return true
-    var value := OS.get_environment("AETHERKIRI_DIAGNOSTICS").strip_edges().to_lower()
-    if value in ["1", "true", "on", "yes"]:
-        return true
-    for path in _request_paths():
-        if FileAccess.file_exists(path):
-            return true
-    if OS.get_name() == "Web":
-        return bool(JavaScriptBridge.eval(
-            "new URLSearchParams(globalThis.location.search).has('diagnostic_session')",
-            true
-        ))
-    return false
+    return external_request_present()
+
+func configure_preference(value: String) -> void:
+    var normalized := value.strip_edges().to_lower()
+    preferred_profile = normalized if normalized in PROFILE_NAMES else "off"
+
+func apply_preference(value: String, runtime_player, renderer: String) -> bool:
+    configure_preference(value)
+    if external_request:
+        return active
+    if active:
+        finish()
+    if preferred_profile == "off":
+        return false
+    return start(runtime_player, renderer)
 
 static func _safe_name(value: String) -> String:
     var result := value
@@ -171,7 +234,7 @@ func build_overlay(parent: Node) -> void:
     _overlay.add_child(box)
 
     _marker_button = Button.new()
-    _marker_button.text = MARKER_BUTTON_TEXT
+    _marker_button.text = _tr("debug.action.mark")
     _marker_button.custom_minimum_size = Vector2(172, 48)
     _marker_button.pressed.connect(mark_issue.bind("user_issue"))
     _marker_button.visible = false
@@ -183,10 +246,13 @@ func build_overlay(parent: Node) -> void:
     box.add_child(_status_label)
 
 func start(runtime_player, renderer: String) -> bool:
-    if active or not requested_enabled() or runtime_player == null:
+    if active or runtime_player == null:
         return active
+    external_request = external_request_present()
+    if not external_request and preferred_profile == "off":
+        return false
     player = runtime_player
-    profile = requested_profile()
+    profile = requested_profile() if external_request else preferred_profile
     session_id = requested_session_id()
     var diagnostic_root := diagnostic_root_dir()
     if diagnostic_root.is_empty():
@@ -207,7 +273,20 @@ func start(runtime_player, renderer: String) -> bool:
         return false
     _clear_request_files()
     active = true
-    var mask := int(PROFILE_MASK.get(profile, PROFILE_MASK["baseline"]))
+    started_at_usec = Time.get_ticks_usec()
+    sequence = 0
+    dropped_events = 0
+    marker_count = 0
+    total_event_count = 0
+    _ring.clear()
+    _pending_lines.clear()
+    _pending_incidents.clear()
+    latest_frame_summary.clear()
+    _next_slow_frame_label = ""
+    _snapshot_count = 0
+    var catalog := profile_catalog()
+    var profile_definition: Dictionary = catalog.get(profile, {})
+    var mask := int(profile_definition.get("category_mask", PROFILE_MASK.get(profile, PROFILE_MASK["baseline"])))
     if player.has_method("set_diagnostic_config"):
         var result := int(player.set_diagnostic_config(
             true, session_id, mask, int(slow_frame_threshold_ms), MAX_RING_EVENTS
@@ -309,21 +388,36 @@ func sample_frame(delta: float, tick_ms: float, update_ms: float,
             "renderer": renderer,
             "texture_backend": texture_backend,
         })
+        if not _next_slow_frame_label.is_empty():
+            var label := _next_slow_frame_label
+            _next_slow_frame_label = ""
+            record("godot", "render", "info", "armed_slow_frame_captured", int(maxf(frame_ms, work_ms) * 1000.0), {
+                "label": label,
+                "frame_ms": frame_ms,
+                "tick_ms": tick_ms,
+                "update_ms": update_ms,
+            })
+            mark_issue(label)
     if _frame_accum >= 1.0:
         _record_frame_summary(renderer, texture_backend)
 
-func mark_issue(label: String = "user_issue") -> void:
+func mark_issue(label: String = "user_issue") -> bool:
     if not active:
-        return
+        return false
     if marker_count >= MAX_MARKERS:
-        _show_marker_feedback("已达标记上限 (%d)" % MAX_MARKERS, false)
+        _show_marker_feedback(_tr("debug.result.marker_limit", [MAX_MARKERS]), false)
         if _marker_button != null:
             _marker_button.disabled = true
         print("[diagnostics] marker_rejected session=%s reason=max_markers count=%d" % [
             session_id, marker_count,
         ])
-        return
+        return false
     marker_count += 1
+    var marker_context: Dictionary = {}
+    if _marker_context_provider.is_valid():
+        var provided = _marker_context_provider.call()
+        if provided is Dictionary:
+            marker_context = (provided as Dictionary).duplicate(true)
     var native_sequence := -1
     if player != null and player.has_method("mark_diagnostic_event"):
         native_sequence = int(player.mark_diagnostic_event(label))
@@ -335,12 +429,24 @@ func mark_issue(label: String = "user_issue") -> void:
         "label": label,
         "marker_index": marker_count,
         "native_sequence": native_sequence,
+        "context": marker_context,
     })
     var prefix := "marker-%02d" % marker_count
     var pre_lines := PackedStringArray()
     for item in _ring:
         pre_lines.append(String(item.get("line", "")))
     _write_lines(session_dir.path_join("incidents").path_join(prefix + "-pre.jsonl"), pre_lines)
+    var state_file := FileAccess.open(session_dir.path_join("incidents").path_join(prefix + "-state.json"), FileAccess.WRITE)
+    if state_file != null:
+        state_file.store_string(JSON.stringify({
+            "schema": SCHEMA_VERSION,
+            "session": session_id,
+            "marker_index": marker_count,
+            "label": label,
+            "monotonic_us": Time.get_ticks_usec(),
+            "context": marker_context,
+        }, "  ") + "\n")
+        state_file.flush()
     _pending_incidents.append({
         "index": marker_count,
         "label": label,
@@ -348,7 +454,7 @@ func mark_issue(label: String = "user_issue") -> void:
         "lines": PackedStringArray(),
     })
     flush()
-    var feedback := "已标记 #%d" % marker_count
+    var feedback := "✓ #%d" % marker_count
     _show_marker_feedback(feedback, true)
     if OS.get_name() in ["Android", "iOS"]:
         Input.vibrate_handheld(80, 0.45)
@@ -360,23 +466,157 @@ func mark_issue(label: String = "user_issue") -> void:
         ProjectSettings.globalize_path(session_dir),
     ])
     marker_created.emit(marker_count, label)
+    return true
+
+func arm_next_slow_frame(label: String = "slow_frame") -> bool:
+    if not active:
+        last_action_error = "diagnostic session is not active"
+        return false
+    _next_slow_frame_label = label
+    record("godot", "render", "info", "slow_frame_capture_armed", 0, {
+        "label": label,
+        "threshold_ms": slow_frame_threshold_ms,
+    })
+    flush()
+    last_action_error = ""
+    return true
+
+func write_state_snapshot(fields: Dictionary) -> String:
+    if not active:
+        last_action_error = "diagnostic session is not active"
+        return ""
+    _snapshot_count += 1
+    var item := {
+        "schema": SCHEMA_VERSION,
+        "session": session_id,
+        "sequence": _snapshot_count,
+        "monotonic_us": Time.get_ticks_usec(),
+        "fields": fields,
+    }
+    var path := session_dir.path_join("state-snapshot-%02d.json" % _snapshot_count)
+    var file := FileAccess.open(path, FileAccess.WRITE)
+    if file == null:
+        last_action_error = "unable to write state snapshot"
+        return ""
+    file.store_string(JSON.stringify(item, "  ") + "\n")
+    file.flush()
+    record("godot", "system", "info", "state_snapshot", 0, {
+        "index": _snapshot_count,
+        "path": path.get_file(),
+    })
+    flush()
+    last_action_error = ""
+    return ProjectSettings.globalize_path(path)
+
+func status_snapshot() -> Dictionary:
+    return {
+        "active": active,
+        "profile": profile if active else preferred_profile,
+        "external_request": external_request,
+        "session": session_id,
+        "session_dir": ProjectSettings.globalize_path(session_dir) if not session_dir.is_empty() else "",
+        "elapsed_seconds": maxf(0.0, float(Time.get_ticks_usec() - started_at_usec) / 1_000_000.0) if active else 0.0,
+        "events": total_event_count,
+        "dropped": dropped_events,
+        "dropped_events": dropped_events,
+        "markers": marker_count,
+        "max_markers": MAX_MARKERS,
+        "slow_frame_armed": not _next_slow_frame_label.is_empty(),
+        "frame_summary": latest_frame_summary.duplicate(true),
+    }
+
+func recent_events(limit: int = 50) -> Array[Dictionary]:
+    var output: Array[Dictionary] = []
+    var first := maxi(0, _ring.size() - maxi(0, limit))
+    for index in range(first, _ring.size()):
+        var event = _ring[index].get("event", {})
+        if event is Dictionary:
+            output.append((event as Dictionary).duplicate(true))
+    return output
+
+func summary_text(extra: Dictionary = {}) -> String:
+    var status := status_snapshot()
+    var frame: Dictionary = status.get("frame_summary", {})
+    var lines := PackedStringArray([
+        "AetherKiri diagnostic summary",
+        "session: %s" % String(status.get("session", "")),
+        "platform: %s" % OS.get_name(),
+        "profile: %s" % String(status.get("profile", "off")),
+        "elapsed: %.1fs" % float(status.get("elapsed_seconds", 0.0)),
+        "events: %d (dropped: %d)" % [int(status.get("events", 0)), int(status.get("dropped", 0))],
+        "markers: %d" % int(status.get("markers", 0)),
+        "frame p95/max: %.2f / %.2f ms" % [
+            float(frame.get("p95_ms", 0.0)),
+            float(frame.get("max_ms", 0.0)),
+        ],
+    ])
+    for key in extra.keys():
+        lines.append("%s: %s" % [String(key), String(extra[key])])
+    lines.append("output: %s" % String(status.get("session_dir", "")))
+    return "\n".join(lines)
+
+func export_zip() -> String:
+    if not active or session_dir.is_empty():
+        last_action_error = "diagnostic session is not active"
+        return ""
+    _drain_native()
+    flush()
+    var zip_path := diagnostic_root_dir().path_join(session_id + ".zip")
+    var packer := ZIPPacker.new()
+    var open_result := packer.open(zip_path)
+    if open_result != OK:
+        last_action_error = "unable to create ZIP (%d)" % open_result
+        return ""
+    var files := PackedStringArray()
+    _collect_files_recursive(session_dir, "", files)
+    for relative in files:
+        var source := FileAccess.open(session_dir.path_join(relative), FileAccess.READ)
+        if source == null:
+            continue
+        var start_result := packer.start_file(relative)
+        if start_result != OK:
+            packer.close()
+            last_action_error = "unable to add %s to ZIP (%d)" % [relative, start_result]
+            return ""
+        packer.write_file(source.get_buffer(source.get_length()))
+        packer.close_file()
+    packer.close()
+    last_action_error = ""
+    return ProjectSettings.globalize_path(zip_path)
+
+func _collect_files_recursive(root: String, relative: String, output: PackedStringArray) -> void:
+    var path := root if relative.is_empty() else root.path_join(relative)
+    var directory := DirAccess.open(path)
+    if directory == null:
+        return
+    directory.list_dir_begin()
+    var name := directory.get_next()
+    while not name.is_empty():
+        if name != "." and name != "..":
+            var child := name if relative.is_empty() else relative.path_join(name)
+            if directory.current_is_dir():
+                _collect_files_recursive(root, child, output)
+            else:
+                output.append(child)
+        name = directory.get_next()
+    directory.list_dir_end()
 
 func _show_marker_feedback(message: String, accepted: bool) -> void:
     if _marker_button != null:
         _marker_button.text = message
         _marker_button.disabled = accepted
     if _status_label != null:
-        _status_label.text = "诊断日志已保存" if accepted else "请结束本次诊断会话"
+        _status_label.text = _tr("debug.result.marked", ["#%d" % marker_count]) if accepted else message
         _status_label.visible = true
     _status_until_msec = Time.get_ticks_msec() + MARKER_FEEDBACK_MSEC
 
 func _reset_marker_feedback() -> void:
     if _marker_button != null:
         if active and marker_count >= MAX_MARKERS:
-            _marker_button.text = "标记已满 (%d)" % MAX_MARKERS
+            _marker_button.text = "%s (%d/%d)" % [_tr("debug.action.mark"), marker_count, MAX_MARKERS]
             _marker_button.disabled = true
         else:
-            _marker_button.text = MARKER_BUTTON_TEXT
+            _marker_button.text = _tr("debug.action.mark")
             _marker_button.disabled = false
     if _status_label != null:
         _status_label.visible = false
@@ -436,7 +676,8 @@ func _notification(what: int) -> void:
 
 func _accept_event(item: Dictionary, line: String) -> void:
     var now := int(item.get("monotonic_us", Time.get_ticks_usec()))
-    _ring.append({"monotonic_us": now, "line": line})
+    total_event_count += 1
+    _ring.append({"monotonic_us": now, "line": line, "event": item.duplicate(true)})
     while _ring.size() > MAX_RING_EVENTS:
         _ring.pop_front()
         dropped_events += 1
@@ -476,7 +717,7 @@ func _record_frame_summary(renderer: String, texture_backend: String) -> void:
     for value in samples:
         total += float(value)
     var count := samples.size()
-    record("godot", "render", "info", "frame_summary", 0, {
+    latest_frame_summary = {
         "count": count,
         "average_ms": total / float(count),
         "p50_ms": float(samples[clampi(int(floor((count - 1) * 0.50)), 0, count - 1)]),
@@ -485,7 +726,8 @@ func _record_frame_summary(renderer: String, texture_backend: String) -> void:
         "max_ms": float(samples[count - 1]),
         "renderer": renderer,
         "texture_backend": texture_backend,
-    })
+    }
+    record("godot", "render", "info", "frame_summary", 0, latest_frame_summary)
     _frame_samples.clear()
 
 func _finish_elapsed_incidents() -> void:
