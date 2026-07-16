@@ -723,6 +723,1050 @@ void TVPExecuteStorage(const ttstr &name, tTJSVariant *result,
 #include <fstream>
 #include <filesystem>
 #include <tjsByteCodeLoader.h>
+
+static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
+                                               ttstr &buffer) {
+    const ttstr lower = shortname.AsLowerCase();
+    const bool standDebug = [] {
+        const char *value = std::getenv("AETHERKIRI_STAND_DEBUG");
+        return value && *value && *value != '0';
+    }();
+    const bool sceneDebug = [] {
+        const char *value = std::getenv("AETHERKIRI_SCENE_DEBUG");
+        return value && *value && *value != '0';
+    }();
+
+    if(lower == TJS_W("standaffinesourcelayer.tjs")) {
+        const ttstr from(TJS_W(
+            "property _width {\r\n"
+            "\t\tgetter() {\r\n"
+            "\t\t\tif (_standImage !== void) {\r\n"
+            "\t\t\t\t_standImage.width;\r\n"
+            "\t\t\t}\r\n"
+            "\t\t}\r\n"
+            "    }"));
+        const ttstr to(TJS_W(
+            "property _width {\r\n"
+            "\t\tgetter() {\r\n"
+            "\t\t\tif (_standImage !== void) {\r\n"
+            "\t\t\t\treturn _standImage.width;\r\n"
+            "\t\t\t}\r\n"
+            "\t\t}\r\n"
+            "    }"));
+        ttstr patched(buffer);
+        patched.Replace(from, to, false);
+        patched.Replace(TJS_W("\t\t\t\t_standImage.width;\r\n"),
+                        TJS_W("\t\t\t\treturn _standImage.width;\r\n"),
+                        false);
+        patched.Replace(TJS_W("\t\t\t\t_standImage.width;\n"),
+                        TJS_W("\t\t\t\treturn _standImage.width;\n"),
+                        false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info(
+                "Applied compatibility patch for StandAffineSourceLayer._width");
+        }
+
+    }
+
+    if(lower == TJS_W("d3d.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("} else if ((sourceClass !== void && typeof sourceClass[\"BMPBaseAffineSourceLayer\"] != \"undefined\") || (sourceClass === void && redraw)) {\r\n"),
+            TJS_W("} else if ((sourceClass !== void && (ext == \".STAND\" || ext == \".EVENT\" || typeof sourceClass[\"BMPBaseAffineSourceLayer\"] != \"undefined\")) || (sourceClass === void && redraw)) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\t\t\tisEmote = obj.root.metadata !== void && obj.root.metadata.format == \"emote\";\r\n"),
+            TJS_W("\t\t\t\t\t\tisEmote = obj.root.metadata !== void && obj.root.metadata.format == \"emote\" && (options === void || (options.chara === void && options.motion === void));\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied compatibility patch for D3D source routing and PSB motion classification");
+        }
+    }
+
+    if(lower == TJS_W("motionaffinesourcelayer.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\tfunction _loadImages(storage) {\r\n"),
+            TJS_W("\tfunction _loadImages(storage, options=void) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t_storageType = (_metadata !== void && _metadata.format == \"emote\") ? \"emote\" : \"motion\";\r\n"),
+            TJS_W("\t\t\t_storageType = (_metadata !== void && _metadata.format == \"emote\" && (options === void || (options.chara === void && options.motion === void))) ? \"emote\" : \"motion\";\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t_loadImages(storage);\r\n"
+                  "\t\t\tcreatePlayer();\r\n"),
+            TJS_W("\t\t\t_loadImages(storage, options);\r\n"
+                  "\t\t\tif (_metadata !== void && _metadata.format == \"emote\" && options !== void && (options.chara !== void || options.motion !== void)) _storageType = \"motion\";\r\n"
+                  "\t\t\tcreatePlayer();\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t_loadImages(storage, options);\r\n"
+                  "\t\t\tcreatePlayer();\r\n"),
+            TJS_W("\t\t\t_loadImages(storage, options);\r\n"
+                  "\t\t\tif (_metadata !== void && _metadata.format == \"emote\" && options !== void && (options.chara !== void || options.motion !== void)) _storageType = \"motion\";\r\n"
+                  "\t\t\tcreatePlayer();\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\tinstance._loadImages(_innerStorage);\r\n"
+                  "\t\t\tinstance.createPlayer(this);\r\n"),
+            TJS_W("\t\t\tinstance._loadImages(_innerStorage, _storageType == \"motion\" ? %[motion:true] : void);\r\n"
+                  "\t\t\tinstance._storageType = _storageType;\r\n"
+                  "\t\t\tinstance._aetherKiriHasMotion = _aetherKiriHasMotion;\r\n"
+                  "\t\t\tinstance._aetherKiriLastMotion = _aetherKiriLastMotion;\r\n"
+                  "\t\t\tinstance._aetherKiriImmediateMotionOwner = void;\r\n"
+                  "\t\t\tinstance.createPlayer(this);\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tret.motion = _player.motion;\r\n"),
+            TJS_W("\t\t\t\tret.motion = _aetherKiriHasMotion ? _aetherKiriLastMotion : _player.motion;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("ret.motion = _player.motion;"),
+            TJS_W("ret.motion = _aetherKiriHasMotion ? _aetherKiriLastMotion : _player.motion;"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction _getOptions(ret) {\r\n"
+                  "\t\tif (_player !== void && _player.motion != \"\") {\r\n"),
+            TJS_W("\tfunction _getOptions(ret) {\r\n"
+                  "\t\tif (_player !== void && (_player.motion != \"\" || _aetherKiriHasMotion)) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("keys = _player.varibleKeys;"),
+            TJS_W("keys = _player.variableKeys;"),
+            false);
+        patched.Replace(
+            TJS_W("\t// 最後に指定した否ループタイムライン\r\n"
+                  "\tvar _lastTimeline; \r\n"),
+            TJS_W("\t// 最後に指定した否ループタイムライン\r\n"
+                  "\tvar _lastTimeline; \r\n"
+                  "\tvar _aetherKiriHasMotion = false;\r\n"
+                  "\tvar _aetherKiriLastMotion;\r\n"
+                  "\tvar _aetherKiriImmediateMotionOwner;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction checkOption(name) {\r\n"
+                  "\t\tif (_storageType == \"emote\") {\r\n"
+                  "\t\t\t//dm(@\"checkOption:${name}\");\r\n"),
+            TJS_W("\tfunction checkOption(name) {\r\n"
+                  "\t\tif (_storageType == \"emote\") {\r\n"
+                  "\t\t\tif (name == \"motion\") return [name, \"flags\"];\r\n"
+                  "\t\t\tif (name == \"chara\" || name == \"tickcount\" || name == \"speed\" || name == \"outline\") return name;\r\n"
+                  "\t\t\t//dm(@\"checkOption:${name}\");\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction removePlayer() {\r\n"),
+            TJS_W("\tfunction _aetherKiriBindMotionTarget(owner=void) {\r\n"
+                  "\t\ttry {\r\n"
+                  "\t\t\tif (_player === void) return;\r\n"
+                  "\t\t\tif (owner === void && _owners !== void && _owners.count > 0) owner = _owners[_owners.count - 1];\r\n"
+                  "\t\t\tif (owner === void) return;\r\n"
+                  "\t\t\tvar layerOwner = owner incontextof global.Layer;\r\n"
+                  "\t\t\tif (_separate && typeof owner._motionSeparateAdaptor != \"undefined\") {\r\n"
+                  "\t\t\t\ttry { owner._motionSeparateAdaptor.targetLayer = layerOwner; } catch(e) {}\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t\t_player.targetLayer = layerOwner;\r\n"
+                  "\t\t} catch(e) {}\r\n"
+                  "\t}\r\n"
+                  "\r\n"
+                  "\tfunction _aetherKiriTouchMotionOwner(owner=void) {\r\n"
+                  "\t\ttry {\r\n"
+                  "\t\t\tif (owner === void && _owners !== void && _owners.count > 0) owner = _owners[_owners.count - 1];\r\n"
+                  "\t\t\tif (owner !== void && owner instanceof \"AffineLayer\") {\r\n"
+                  "\t\t\t\tif (_separate && typeof owner._motionSeparateAdaptor != \"undefined\") return;\r\n"
+                  "\t\t\t\towner.calcUpdate();\r\n"
+                  "\t\t\t\towner.entryFlip();\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t} catch(e) {}\r\n"
+                  "\t}\r\n"
+                  "\r\n"
+                  "\tfunction _aetherKiriDrawMotionOwnerNow(owner) {\r\n"
+                  "\t\ttry {\r\n"
+                  "\t\t\tif (owner === void || _player === void || !_aetherKiriHasMotion || _aetherKiriImmediateMotionOwner === owner) return false;\r\n"
+                  "\t\t\tvar motion = ((string)_aetherKiriLastMotion).toLowerCase();\r\n"
+                  "\t\t\tif (motion.substr(0, 2) != \"sd\" || !(owner instanceof \"AffineLayer\")) return false;\r\n"
+                  "\t\t\tif (_separate && typeof owner._motionSeparateAdaptor == \"undefined\") {\r\n"
+                  "\t\t\t\towner._motionSeparateAdaptor = new Motion.SeparateLayerAdaptor(owner incontextof global.Layer);\r\n"
+                  "\t\t\t\towner._motionSeparateAdaptorCount = 0;\r\n"
+                  "\t\t\t\towner.type = ltBinder if owner.type == ltAlpha;\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t\t_aetherKiriBindMotionTarget(owner);\r\n"
+                  "\t\t\tdrawAffine(owner, owner);\r\n"
+                  "\t\t\t_aetherKiriImmediateMotionOwner = owner;\r\n"
+                  "\t\t\tif (typeof owner.entryFlip != \"undefined\") owner.entryFlip();\r\n"
+                  "\t\t\treturn true;\r\n"
+                  "\t\t} catch(e) {\r\n"
+                  "\t\t\t_aetherKiriImmediateMotionOwner = void if _aetherKiriImmediateMotionOwner === owner;\r\n"
+                  "\t\t\treturn false;\r\n"
+                  "\t\t}\r\n"
+                  "\t}\r\n"
+                  "\r\n"
+                  "\tfunction removePlayer() {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t_player = void;\r\n"
+                  "\t\t\t_lastTimeline = void;\r\n"),
+            TJS_W("\t\t\t_player = void;\r\n"
+                  "\t\t\t_lastTimeline = void;\r\n"
+                  "\t\t\t_aetherKiriHasMotion = false;\r\n"
+                  "\t\t\t_aetherKiriLastMotion = void;\r\n"
+                  "\t\t\t_aetherKiriImmediateMotionOwner = void;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t}\r\n"
+                  "\t\t}\r\n"
+                  "\t}\r\n"
+                  "\r\n"
+                  "\tfunction leaveOwner(owner) {\r\n"),
+            TJS_W("\t\t\t}\r\n"
+                  "\t\t}\r\n"
+                  "\t\t_aetherKiriBindMotionTarget(owner);\r\n"
+                  "\t\tif (_aetherKiriHasMotion) {\r\n"
+                  "\t\t\t_aetherKiriTouchMotionOwner(owner);\r\n"
+                  "\t\t\ttry {\r\n"
+                  "\t\t\t\tvar __akMotion = ((string)_aetherKiriLastMotion).toLowerCase();\r\n"
+                  "\t\t\t\tif (__akMotion.substr(0, 2) == \"sd\" && owner instanceof \"AffineLayer\" && _aetherKiriImmediateMotionOwner !== owner) {\r\n"
+                  "\t\t\t\t\ttry { drawAffine(owner, owner); _aetherKiriImmediateMotionOwner = owner; } catch(__akImmediateDrawE) { throw __akImmediateDrawE; }\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t} catch(__akDrawE) {}\r\n"
+                  "\t\t}\r\n"
+                  "\t}\r\n"
+                  "\r\n"
+                  "\tfunction leaveOwner(owner) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction setOptions(elm) {\r\n"
+                  "\t\tvar ret = super.setOptions(elm);\r\n"),
+            TJS_W("\tfunction setOptions(elm) {\r\n"
+                  "\t\tif (_storageType == \"emote\" && elm !== void && (elm.chara !== void || elm.motion !== void)) {\r\n"
+                  "\t\t\tremovePlayer();\r\n"
+                  "\t\t\t_storageType = \"motion\";\r\n"
+                  "\t\t\tcreatePlayer();\r\n"
+                  "\t\t}\r\n"
+                  "\t\tvar ret = super.setOptions(elm);\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\tif (_storageType == \"emote\") {\r\n"),
+            TJS_W("\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\t_aetherKiriBindMotionTarget();\r\n"
+                  "\t\t\t\tif (_storageType == \"emote\") {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tif (elm.motion !== void) {\r\n"
+                  "\t\t\t\t\tvar flags = elm.flags !== void ? +elm.flags : Motion.PlayFlagForce;\r\n"
+                  "\t\t\t\t\t//dm(@\"motion:${elm.motion} flags:${flags}\");\r\n"
+                  "\t\t\t\t\t_player.play(elm.motion, flags);\r\n"
+                  "\t\t\t\t\tstart = true;\r\n"
+                  "\t\t\t\t\tret = \"motion\" if ret === void;\r\n"
+                  "\t\t\t\t}\r\n"),
+            TJS_W("\t\t\t\tif (elm.motion !== void) {\r\n"
+                  "\t\t\t\t\tvar flags = elm.flags !== void ? +elm.flags : Motion.PlayFlagForce;\r\n"
+                  "\t\t\t\t\t//dm(@\"motion:${elm.motion} flags:${flags}\");\r\n"
+                  "\t\t\t\t\t_player.play(elm.motion, flags);\r\n"
+                  "\t\t\t\t\t_aetherKiriHasMotion = true;\r\n"
+                  "\t\t\t\t\t_aetherKiriLastMotion = elm.motion;\r\n"
+                  "\t\t\t\t\t_aetherKiriImmediateMotionOwner = void;\r\n"
+                  "\t\t\t\t\tstart = true;\r\n"
+                  "\t\t\t\t\tret = \"motion\" if ret === void;\r\n"
+                  "\t\t\t\t}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tif (start && _player.playing) {\r\n"
+                  "\t\t\t\t\tonMotionStart();\r\n"
+                  "\t\t\t\t}\r\n"),
+            TJS_W("\t\t\t\tif (start && _player.playing) {\r\n"
+                  "\t\t\t\t\tonMotionStart();\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t\tif (start) {\r\n"
+                  "\t\t\t\t\t_aetherKiriBindMotionTarget();\r\n"
+                  "\t\t\t\t\t_aetherKiriTouchMotionOwner();\r\n"
+                  "\t\t\t\t}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction drawAffine(target, src) {\r\n"
+                  "\t\tif (_player !== void && _player.motion != \"\") {\r\n"),
+            TJS_W("\tfunction drawAffine(target, src) {\r\n"
+                  "\t\tif (_player !== void && (_player.motion != \"\" || _aetherKiriHasMotion)) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\t\tvar name = target.name;\r\n"
+                  "\t\t\t\t\tvar neutralColor = target.neutralColor;\r\n"),
+            TJS_W("\t\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\t\tvar name = target.name;\r\n"
+                  "\t\t\t\t\tvar neutralColor = target.neutralColor;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\t\tif (target == src && typeof src._motionSeparateAdaptor != \"undefined\") {\r\n"
+                  "\t\t\t\t\t\ttarget = src._motionSeparateAdaptor;\r\n"
+                  "\t\t\t\t\t}\r\n"),
+            TJS_W("\t\t\t\t\tif (target == src && typeof src._motionSeparateAdaptor != \"undefined\") {\r\n"
+                  "\t\t\t\t\t\ttarget = src._motionSeparateAdaptor;\r\n"
+                  "\t\t\t\t\t\ttry { target.targetLayer = src incontextof global.Layer; } catch(e) {}\r\n"
+                  "\t\t\t\t\t}\r\n"
+            ),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tif (target == src && typeof src._motionSeparateAdaptor != \"undefined\") {\r\n"
+                  "\t\t\t\t\ttarget = src._motionSeparateAdaptor;\r\n"
+                  "\t\t\t\t}\r\n"),
+            TJS_W("\t\t\t\tif (target == src && typeof src._motionSeparateAdaptor != \"undefined\") {\r\n"
+                  "\t\t\t\t\ttarget = src._motionSeparateAdaptor;\r\n"
+                  "\t\t\t\t\ttry { target.targetLayer = src incontextof global.Layer; } catch(e) {}\r\n"
+                  "\t\t\t\t}\r\n"
+            ),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\t\tif (typeof _player.clear != \"undefined\") {\r\n"
+                  "\t\t\t\t\t\t_player.clear(target, neutralColor);\r\n"
+                  "\t\t\t\t\t}\r\n"),
+            TJS_W("\t\t\t\t\t// AetherKiri: renderToLayer clears the target; native clear rejects some TJS layer wrappers.\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tif (typeof _player.clear != \"undefined\") {\r\n"
+                  "\t\t\t\t\t_player.clear(target, neutralColor);\r\n"
+                  "\t\t\t\t}\r\n"),
+            TJS_W("\t\t\t\t// AetherKiri: renderToLayer clears the target; native clear rejects some TJS layer wrappers.\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info(
+                "Applied compatibility patch for MotionAffineSourceLayer PSB motion classification");
+        }
+    }
+
+    if(lower == TJS_W("world.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\t\towner[name] = imageSource;\r\n"
+                  "\t\towner.calcUpdate();\r\n"),
+            TJS_W("\t\towner[name] = imageSource;\r\n"
+                  "\t\ttry {\r\n"
+                  "\t\t\tif (imageSource !== void && imageSource instanceof \"MotionAffineSourceLayer\" && typeof imageSource._aetherKiriDrawMotionOwnerNow != \"undefined\") {\r\n"
+                  "\t\t\t\timageSource._aetherKiriDrawMotionOwnerNow(owner);\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t} catch(__akMotionDrawE) {}\r\n"
+                  "\t\towner.calcUpdate();\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied compatibility patch for immediate SD motion presentation");
+        }
+    }
+
+    if(sceneDebug && lower == TJS_W("motionaffinesourcelayer.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\tfunction entryOwner(owner) {\r\n"
+                  "\t\tsuper.entryOwner(owner);\r\n"),
+            TJS_W("\tfunction entryOwner(owner) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] MotionAffine entryOwner image:${filename} owner:${owner !== void ? owner.name : void} owners:${_owners !== void ? _owners.count : -1} player:${_player !== void} motion:${_player !== void ? _player.motion : void}\"); } catch(e) {}\r\n"
+                  "\t\tsuper.entryOwner(owner);\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\t_aetherKiriBindMotionTarget();\r\n"
+                  "\t\t\t\tif (_storageType == \"emote\") {\r\n"),
+            TJS_W("\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\t_aetherKiriBindMotionTarget();\r\n"
+                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] MotionAffine setOptions image:${filename} storageType:${_storageType} ownerCount:${_owners !== void ? _owners.count : -1} chara:${elm.chara} motion:${elm.motion} playerMotion:${_player.motion}\"); } catch(e) {}\r\n"
+                  "\t\t\t\tif (_storageType == \"emote\") {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\tif (_storageType == \"emote\") {\r\n"),
+            TJS_W("\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] MotionAffine setOptions image:${filename} storageType:${_storageType} ownerCount:${_owners !== void ? _owners.count : -1} chara:${elm.chara} motion:${elm.motion} playerMotion:${_player.motion}\"); } catch(e) {}\r\n"
+                  "\t\t\t\tif (_storageType == \"emote\") {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\t\t_aetherKiriBindMotionTarget(src);\r\n"
+                  "\t\t\t\t\tvar name = target.name;\r\n"),
+            TJS_W("\t\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\t\t_aetherKiriBindMotionTarget(src);\r\n"
+                  "\t\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] MotionAffine drawAffine begin image:${filename} target:${target !== void ? target.name : void} src:${src !== void ? src.name : void} type:${src !== void ? src.type : void} motion:${_player.motion} playing:${_player.playing}\"); } catch(e) {}\r\n"
+                  "\t\t\t\t\tvar name = target.name;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\t\tvar name = target.name;\r\n"),
+            TJS_W("\t\t\t\tif (_player !== void) {\r\n"
+                  "\t\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] MotionAffine drawAffine begin image:${filename} target:${target !== void ? target.name : void} src:${src !== void ? src.name : void} type:${src !== void ? src.type : void} motion:${_player.motion} playing:${_player.playing}\"); } catch(e) {}\r\n"
+                  "\t\t\t\t\tvar name = target.name;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\t\t_player.draw(target);\r\n"),
+            TJS_W("\t\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] MotionAffine drawAffine call image:${filename} target:${target !== void ? target : void} targetName:${target !== void ? target.name : void}\"); } catch(e) {}\r\n"
+                  "\t\t\t\t\tif (target instanceof \"SeparateLayerAdaptor\" || target instanceof \"D3DAdaptor\") {\r\n"
+                  "\t\t\t\t\t\t_player.draw(target);\r\n"
+                  "\t\t\t\t\t} else {\r\n"
+                  "\t\t\t\t\t\ttry { _player.targetLayer = target; } catch(e) {}\r\n"
+                  "\t\t\t\t\t\t_player.draw();\r\n"
+                  "\t\t\t\t\t}\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied scene debug patch for MotionAffineSourceLayer");
+        }
+    }
+
+    if(lower == TJS_W("d3daffinesourcemotion.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\t\t\t\t_player = new D3DMotionPlayer(_d3dlayer);\r\n"),
+            TJS_W("\t\t\t\t_player = new D3DMotionPlayer(_d3dlayer);\r\n"
+                  "\t\t\t\ttry { _player.targetLayer = _d3dlayer; } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\t\t_player.play(elm.motion, elm.flags !== void ? +elm.flags : Motion.PlayFlagForce);\r\n"),
+            TJS_W("\t\t\t\t\t_player.play(elm.motion, elm.flags !== void ? +elm.flags : Motion.PlayFlagForce);\r\n"
+                  "\t\t\t\t\ttry { _player.targetLayer = _d3dlayer; _player.draw(_d3dlayer); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t_player.progress(diff * 60.0 / 1000);\r\n"),
+            TJS_W("\t\t\t_player.progress(diff * 60.0 / 1000);\r\n"
+                  "\t\t\ttry { _player.targetLayer = _d3dlayer; _player.draw(_d3dlayer); } catch(e) {}\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info(
+                "Applied compatibility patch for D3DAffineSourceMotion target redraw");
+        }
+    }
+
+    if(lower == TJS_W("world.tjs")) {
+        ttstr patched(buffer);
+        const bool hasPerLayerMessageVisibility =
+            buffer.IndexOf(TJS_W("property msgvisible")) >= 0 &&
+            buffer.IndexOf(TJS_W("var _msgvisible")) >= 0;
+        if(hasPerLayerMessageVisibility) {
+            patched.Replace(
+                TJS_W("\t\tif (src !== void) {\r\n"
+                      "\t\t\tlayer.assign(src);\r\n"
+                      "\t\t}\r\n"),
+                TJS_W("\t\tif (src !== void) {\r\n"
+                      "\t\t\tlayer.assign(src);\r\n"
+                      "\t\t\tlayer.msgvisible = msgvisible;\r\n"
+                      "\t\t\tlayer.ignore = ignore;\r\n"
+                      "\t\t}\r\n"),
+                false);
+        } else {
+            patched.Replace(
+                TJS_W("\t\tif (src !== void) {\r\n"
+                      "\t\t\tlayer.assign(src);\r\n"
+                      "\t\t}\r\n"),
+                TJS_W("\t\tif (src !== void) {\r\n"
+                      "\t\t\tlayer.assign(src);\r\n"
+                      "\t\t\tlayer.ignore = ignore;\r\n"
+                      "\t\t}\r\n"),
+                false);
+        }
+        patched.Replace(
+            TJS_W("\t\t\t\t\tobj = new EnvLayerObject(this, camera, name, className, classInfo.type == \"dlayer\");\r\n"
+                  "\t\t\t\t\tobj.setMessageVisible(msgVisible && !msgHidden);\r\n"),
+            TJS_W("\t\t\t\t\tobj = new EnvLayerObject(this, camera, name, className, classInfo.type == \"dlayer\");\r\n"
+                  "\t\t\t\t\tif (classInfo.msgwinMode) syncMsgVisibleFromKag();\r\n"
+                  "\t\t\t\t\tobj.setMessageVisible(msgVisible && !msgHidden);\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction setMsgwinLayerVisible() {\r\n"
+                  "\t\tScripts.foreach(envlayerList, function(id,obj) {\r\n"),
+            TJS_W("\tfunction syncMsgVisibleFromKag() {\r\n"
+                  "\t\ttry {\r\n"
+                  "\t\t\tvar __akMsgVisible = msgVisible;\r\n"
+                  "\t\t\tvar __akMsg = (kag.fore !== void && kag.fore.messages !== void) ? kag.fore.messages[kag.currentNum] : void;\r\n"
+                  "\t\t\tif (kag.current !== void) __akMsgVisible = __akMsgVisible || kag.current.visible;\r\n"
+                  "\t\t\tif (__akMsg !== void) {\r\n"
+                  "\t\t\t\t__akMsgVisible = __akMsgVisible || __akMsg.visible;\r\n"
+                  "\t\t\t\ttry { if (__akMsg.comp !== void) __akMsgVisible = __akMsgVisible || __akMsg.comp.visible; } catch(__akMsgCompE) {}\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t\tmsgVisible = __akMsgVisible;\r\n"
+                  "\t\t\ttry { msgHidden = kag.messageLayerHiding; } catch(__akMsgHiddenE) {}\r\n"
+                  "\t\t} catch(__akMsgE) {}\r\n"
+                  "\t}\r\n"
+                  "\r\n"
+                  "\tfunction setMsgwinLayerVisible() {\r\n"
+                  "\t\tsyncMsgVisibleFromKag();\r\n"
+                  "\t\tScripts.foreach(envlayerList, function(id,obj) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction _updateAll(allData, snap=false, restore=true) {\r\n"
+                  "\t\tif (allData !== void) {\r\n"
+                  "\t\t\tvar data = allData.data;\r\n"
+                  "\t\t\tvar leave = %[];\r\n"
+                  "\t\t\tvar create = [];\r\n"),
+            TJS_W("\tfunction _updateAll(allData, snap=false, restore=true) {\r\n"
+                  "\t\tif (allData !== void) {\r\n"
+                  "\t\t\tvar data = allData.data;\r\n"
+                  "\t\t\tvar __akRestoreFaceVisible = false;\r\n"
+                  "\t\t\tvar leave = %[];\r\n"
+                  "\t\t\tvar create = [];\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\t\t\tcreate.add(info);\r\n"
+                  "\t\t\t\t\t\tvar name = info[0];\r\n"),
+            TJS_W("\t\t\t\t\t\tcreate.add(info);\r\n"
+                  "\t\t\t\t\t\ttry { if (info[0] == \"face\" && info[2] !== void && (info[2].showmode & 1)) __akRestoreFaceVisible = true; } catch(__akFaceRestoreE) {}\r\n"
+                  "\t\t\t\t\t\tvar name = info[0];\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t// 生成するものと同種のもの以外は破棄\r\n"
+                  "\t\t\tenvClear(leave);\r\n"
+                  "\t\t\t// オブジェクト生成\r\n"),
+            TJS_W("\t\t\t// 生成するものと同種のもの以外は破棄\r\n"
+                  "\t\t\tenvClear(leave);\r\n"
+                  "\t\t\tif (__akRestoreFaceVisible && typeof this.removeIgnore != \"undefined\") { try { this.removeIgnore(\"face\"); } catch(__akFaceIgnoreE) {} }\r\n"
+                  "\t\t\t// オブジェクト生成\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied compatibility patch for world msgwin visibility restore");
+        }
+    }
+
+    if(sceneDebug && lower == TJS_W("kagenvplayer.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\tfunction onRestore(f) {\r\n"
+                  "\t\tif (f.scenePlayer !== void) {\r\n"),
+            TJS_W("\tfunction onRestore(f) {\r\n"
+                  "\t\tif (f.scenePlayer !== void) {\r\n"
+                  "\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] player.onRestore scene:${f.scenePlayer.scene} point:${f.scenePlayer.point}\"); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\tif (typeof point == \"Integer\") {\r\n"
+                  "\t\t\t// 数値指定ポイント\r\n"
+                  "\t\t\twhile ((obj = getLine(newcur)) !== void) {\r\n"),
+            TJS_W("\t\tif (typeof point == \"Integer\") {\r\n"
+                  "\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] goToPoint request:${point}\"); } catch(e) {}\r\n"
+                  "\t\t\t// 数値指定ポイント\r\n"
+                  "\t\t\twhile ((obj = getLine(newcur)) !== void) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tif (typeof obj == \"Object\" && typeof obj[SAVE_POINT] == \"Integer\" && obj[SAVE_POINT] >= point) {\r\n"
+                  "\t\t\t\t\trestore(obj[SAVE_STATE]);\r\n"),
+            TJS_W("\t\t\t\tif (typeof obj == \"Object\" && typeof obj[SAVE_POINT] == \"Integer\" && obj[SAVE_POINT] >= point) {\r\n"
+                  "\t\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] goToPoint match cur:${newcur} savePoint:${obj[SAVE_POINT]} saveText:${obj[SAVE_TEXT]} saveStateType:${typeof obj[SAVE_STATE]}\"); } catch(e) {}\r\n"
+                  "\t\t\t\t\trestore(obj[SAVE_STATE]);\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\tcase \"Object\":\r\n"
+                  "\t\t\tkag.stopAllVoice(0, true);\r\n"
+                  "\t\t\tworld._updateAll(obj);\r\n"),
+            TJS_W("\t\tcase \"Object\":\r\n"
+                  "\t\t\ttry {\r\n"
+                  "\t\t\t\tvar __akKeys = Scripts.getObjectKeys(obj).join(\",\");\r\n"
+                  "\t\t\t\tvar __akData = obj.data;\r\n"
+                  "\t\t\t\tDebug.notice(@\"[AETHERKIRI_SCENE] restore Object keys:${__akKeys} dataCount:${__akData !== void ? __akData.count : -1}\");\r\n"
+                  "\t\t\t\tif (__akData !== void) {\r\n"
+                  "\t\t\t\t\tfor (var __akI=0; __akI<__akData.count; __akI++) {\r\n"
+                  "\t\t\t\t\t\tvar __akInfo = __akData[__akI];\r\n"
+                  "\t\t\t\t\t\tvar __akElm = __akInfo[2];\r\n"
+                  "\t\t\t\t\t\tvar __akImg = \"\";\r\n"
+                  "\t\t\t\t\t\tif (__akElm !== void && __akElm.redraw !== void && __akElm.redraw.imageFile !== void) __akImg = __akElm.redraw.imageFile;\r\n"
+                  "\t\t\t\t\t\tDebug.notice(@\"[AETHERKIRI_SCENE] restore data[${__akI}] name:${__akInfo[0]} class:${__akInfo[1]} show:${__akElm !== void ? __akElm.showmode : void} image:${__akImg}\");\r\n"
+                  "\t\t\t\t\t}\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t} catch(e) { Debug.notice(@\"[AETHERKIRI_SCENE] restore log failed:${e.message}\"); }\r\n"
+                  "\t\t\tkag.stopAllVoice(0, true);\r\n"
+                  "\t\t\tworld._updateAll(obj);\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied scene debug patch for KAGEnvPlayer");
+        }
+    } else if(sceneDebug && lower == TJS_W("world.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\tfunction _updateAll(allData, snap=false, restore=true) {\r\n"
+                  "\t\tif (allData !== void) {\r\n"),
+            TJS_W("\tfunction _updateAll(allData, snap=false, restore=true) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] world._updateAll all:${allData !== void} data:${allData !== void && allData.data !== void ? allData.data.count : -1} snap:${snap} restore:${restore}\"); } catch(e) {}\r\n"
+                  "\t\tif (allData !== void) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction _setOpacity() {\r\n"
+                  "\t\tvar o = _opacity * _visvalue / 100;\r\n"
+                  "\t\tSUPER.opacity = o;\r\n"),
+            TJS_W("\tfunction _setOpacity() {\r\n"
+                  "\t\tvar o = _opacity * _visvalue / 100;\r\n"
+                  "\t\tSUPER.opacity = o;\r\n"
+                  "\t\ttry { if (name == \"face\" || name == \"hide_face\" || name == \"trans_face\") Debug.notice(@\"[AETHERKIRI_SCENE] setOpacity name:${name} o:${o} visvalue:${_visvalue} msgvisible:${_msgvisible} ignore:${_ignore} camera:${_cameraMode}\"); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tvar msgvisible = true;\r\n"
+                  "\tfunction setMessageVisible(visible) {\r\n"
+                  "\t\tmsgvisible = visible;\r\n"),
+            TJS_W("\tvar msgvisible = true;\r\n"
+                  "\tfunction setMessageVisible(visible) {\r\n"
+                  "\t\ttry { if (name == \"face\") Debug.notice(@\"[AETHERKIRI_SCENE] object.setMessageVisible name:${name} value:${visible}\"); } catch(e) {}\r\n"
+                  "\t\tmsgvisible = visible;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\tmsgVisible = __akMsgVisible;\r\n"
+                  "\t\t\ttry { msgHidden = kag.messageLayerHiding; } catch(__akMsgHiddenE) {}\r\n"),
+            TJS_W("\t\t\tmsgVisible = __akMsgVisible;\r\n"
+                  "\t\t\ttry { msgHidden = kag.messageLayerHiding; } catch(__akMsgHiddenE) {}\r\n"
+                  "\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] syncMsgVisible msgVisible:${msgVisible} msgHidden:${msgHidden} current:${kag.current !== void ? kag.current.visible : void} fore:${__akMsg !== void ? __akMsg.visible : void} comp:${(__akMsg !== void && __akMsg.comp !== void) ? __akMsg.comp.visible : void} hiding:${kag.messageLayerHiding}\"); } catch(__akMsgLogE) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction createObject(name, className) {\r\n"
+                  "\t\tvar obj = envobjects[name];\r\n"),
+            TJS_W("\tfunction createObject(name, className) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] createObject name:${name} class:${className}\"); } catch(e) {}\r\n"
+                  "\t\tvar obj = envobjects[name];\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction onCurrentMessageVisibleChanged(hidden, page, time) {\r\n"
+                  "\t\tmsgVisible = !hidden;\r\n"),
+            TJS_W("\tfunction onCurrentMessageVisibleChanged(hidden, page, time) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] onCurrentMessageVisibleChanged hidden:${hidden} page:${page} time:${time}\"); } catch(e) {}\r\n"
+                  "\t\tmsgVisible = !hidden;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction onMessageHiddenStateChanged(hidden, page) {\r\n"
+                  "\t\tmsgHidden = hidden;\r\n"),
+            TJS_W("\tfunction onMessageHiddenStateChanged(hidden, page) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] onMessageHiddenStateChanged hidden:${hidden} page:${page}\"); } catch(e) {}\r\n"
+                  "\t\tmsgHidden = hidden;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction updateImage(elm) {\r\n"
+                  "\t\tif (targetLayer !== void) {\r\n"),
+            TJS_W("\tfunction updateImage(elm) {\r\n"
+                  "\t\ttry { var __akImg = (elm !== void && elm.redraw !== void && elm.redraw.imageFile !== void) ? elm.redraw.imageFile : \"\"; if (__akImg != \"\") Debug.notice(@\"[AETHERKIRI_SCENE] updateImage obj:${name} class:${className} image:${__akImg}\"); } catch(e) {}\r\n"
+                  "\t\tif (targetLayer !== void) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction updateImageSource(owner, file,  name=\"_image\") {\r\n"
+                  "\t\tvar imageSource = owner[name];\r\n"
+                  "\t\tvar imageData = getImageData(file);\r\n"),
+            TJS_W("\tfunction updateImageSource(owner, file,  name=\"_image\") {\r\n"
+                  "\t\tvar imageSource = owner[name];\r\n"
+                  "\t\tvar imageData = getImageData(file);\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] updateImageSource owner:${owner !== void ? owner.name : void} slot:${name} file:${file} storage:${imageData !== void ? imageData.storage : void} current:${imageSource !== void ? imageSource.filename : void}\"); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\towner[name] = imageSource;\r\n"
+                  "\t\ttry {\r\n"
+                  "\t\t\tif (imageSource !== void && imageSource instanceof \"MotionAffineSourceLayer\" && typeof imageSource._aetherKiriDrawMotionOwnerNow != \"undefined\") {\r\n"
+                  "\t\t\t\timageSource._aetherKiriDrawMotionOwnerNow(owner);\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t} catch(__akMotionDrawE) {}\r\n"
+                  "\t\towner.calcUpdate();\r\n"),
+            TJS_W("\t\towner[name] = imageSource;\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] updateImageSource result owner:${owner !== void ? owner.name : void} slot:${name} source:${imageSource} filename:${imageSource !== void ? imageSource.filename : void}\"); } catch(e) {}\r\n"
+                  "\t\ttry {\r\n"
+                  "\t\t\tif (imageSource !== void && imageSource instanceof \"MotionAffineSourceLayer\" && typeof imageSource._aetherKiriDrawMotionOwnerNow != \"undefined\") {\r\n"
+                  "\t\t\t\tvar __akImmediateDraw = imageSource._aetherKiriDrawMotionOwnerNow(owner);\r\n"
+                  "\t\t\t\tDebug.notice(@\"[AETHERKIRI_SCENE] updateImageSource immediate motion draw owner:${owner !== void ? owner.name : void} file:${file} drawn:${__akImmediateDraw}\");\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t} catch(__akMotionDrawE) { Debug.notice(@\"[AETHERKIRI_SCENE] updateImageSource immediate motion draw failed:${__akMotionDrawE.message}\"); }\r\n"
+                  "\t\towner.calcUpdate();\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction getImageSource(imageData, owner) {\r\n"
+                  "\t\tif (imageData !== void) {\r\n"),
+            TJS_W("\tfunction getImageSource(imageData, owner) {\r\n"
+                  "\t\ttry { if (imageData !== void && imageData.storage != \"\") Debug.notice(@\"[AETHERKIRI_SCENE] getImageSource owner:${owner !== void ? owner.name : void} storage:${imageData.storage}\"); } catch(e) {}\r\n"
+                  "\t\tif (imageData !== void) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\tScripts.foreach(absLayers, function(i,v,count) {\r\n"
+                  "\t\t\t\tvar abs =  v.absoluteBase + i;\r\n"
+                  "\t\t\t\tif (v.absolute != abs) {\r\n"
+                  "\t\t\t\t\tv.absolute = abs;\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t\t//dm(@\"${v.name}:absolute:${v.absolute}\");\r\n"
+                  "\t\t\t}, absLayers.count);\r\n"),
+            TJS_W("\t\t\tScripts.foreach(absLayers, function(i,v,count) {\r\n"
+                  "\t\t\t\tvar abs =  v.absoluteBase + i;\r\n"
+                  "\t\t\t\tif (v.absolute != abs) {\r\n"
+                  "\t\t\t\t\tv.absolute = abs;\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t\ttry {\r\n"
+                  "\t\t\t\t\tvar __akName = \"\";\r\n"
+                  "\t\t\t\t\ttry { __akName = v.name; } catch(__akNameE) {}\r\n"
+                  "\t\t\t\t\tif (__akName == \"\") try { __akName = v.target.name; } catch(__akTargetNameE) {}\r\n"
+                  "\t\t\t\t\tif (__akName == \"face\" || __akName == \"秀明\" || __akName == \"和奏\" || v.absoluteBase >= 1000000) {\r\n"
+                  "\t\t\t\t\t\tDebug.notice(@\"[AETHERKIRI_SCENE] absolute i:${i}/${count} name:${__akName} base:${v.absoluteBase} calc:${abs} actual:${v.absolute} z:${v.orderzpos} order:${v.order !== void ? v.order : void} vis:${v.visible !== void ? v.visible : void} opa:${v.opacity !== void ? v.opacity : void} width:${v.width !== void ? v.width : void} height:${v.height !== void ? v.height : void}\");\r\n"
+                  "\t\t\t\t\t}\r\n"
+                  "\t\t\t\t} catch(e) { Debug.notice(@\"[AETHERKIRI_SCENE] absolute log failed:${e.message}\"); }\r\n"
+                  "\t\t\t\t//dm(@\"${v.name}:absolute:${v.absolute}\");\r\n"
+                  "\t\t\t}, absLayers.count);\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied scene debug patch for world");
+        }
+    } else if(sceneDebug && lower == TJS_W("affinesourcelayer.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\t//dm(@\"createAffineSource:${filename}:${storage}\");\r\n"
+                  "\tvar sourceInfo = findAffineSource(filename, options);\r\n"
+                  "\tvar sourceClass = sourceInfo.sourceClass;\r\n"
+                  "\tvar storage = sourceInfo.storage;\r\n"
+                  "\tvar image = (sourceClass !== void) ? new sourceClass(window, options) : new global.ImageAffineSourceLayer(window);\r\n"),
+            TJS_W("\t//dm(@\"createAffineSource:${filename}:${storage}\");\r\n"
+                  "\tvar sourceInfo = findAffineSource(filename, options);\r\n"
+                  "\tvar sourceClass = sourceInfo.sourceClass;\r\n"
+                  "\tvar storage = sourceInfo.storage;\r\n"
+                  "\tvar image = (sourceClass !== void) ? new sourceClass(window, options) : new global.ImageAffineSourceLayer(window);\r\n"
+                  "\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] createAffineSource filename:${filename} storage:${storage} ext:${sourceInfo.ext} sourceClass:${sourceClass} image:${image} optStorage:${options !== void ? options.storage : void} optChara:${options !== void ? options.chara : void} optMotion:${options !== void ? options.motion : void}\"); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tvar ret = image.loadImages(storage, colorKey, options);\r\n"
+                  "\tvar optlist;\r\n"),
+            TJS_W("\tvar ret = image.loadImages(storage, colorKey, options);\r\n"
+                  "\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] createAffineSource loadImages filename:${filename} image:${image} ret:${ret} imageStorageType:${image._storageType !== void ? image._storageType : void} optChara:${options !== void ? options.chara : void} optMotion:${options !== void ? options.motion : void}\"); } catch(e) {}\r\n"
+                  "\tvar optlist;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tif (options !== void) {\r\n"
+                  "\t\toptlist = image.setOptions(options);\r\n"
+                  "\t}\r\n"),
+            TJS_W("\tif (options !== void) {\r\n"
+                  "\t\toptlist = image.setOptions(options);\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] createAffineSource setOptions filename:${filename} image:${image} optlist:${optlist} imageStorageType:${image._storageType !== void ? image._storageType : void} optChara:${options.chara} optMotion:${options.motion}\"); } catch(e) {}\r\n"
+                  "\t}\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied scene debug patch for AffineSourceLayer");
+        }
+    } else if(sceneDebug && lower == TJS_W("kagenvimage.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\t\t\t\tret.imageFile = env.getImageFileDataConv(imageSourceFile, imageSource, options, imageRedraw, zresolution, extend, packopt);\r\n"),
+            TJS_W("\t\t\t\tret.imageFile = env.getImageFileDataConv(imageSourceFile, imageSource, options, imageRedraw, zresolution, extend, packopt);\r\n"
+                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] getUpdateData obj:${name} sourceFile:${imageSourceFile} source:${imageSource} options:${options} imageFile:${ret.imageFile}\"); } catch(e) {}\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied scene debug patch for KAGEnvImage");
+        }
+    } else if(sceneDebug && lower == TJS_W("affinelayer.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\tfunction calcUpdate(l,t,w,h) {\r\n"
+                  "\t\tif (_doAffine < 2) {\r\n"),
+            TJS_W("\tfunction calcUpdate(l,t,w,h) {\r\n"
+                  "\t\ttry { if (_image !== void && (_image instanceof \"StandAffineSourceLayer\" || _image instanceof \"MotionAffineSourceLayer\")) Debug.notice(@\"[AETHERKIRI_SCENE] AffineLayer calcUpdate name:${name} image:${_image.filename} class:${typeof _image} region:${l},${t},${w},${h} affine:${_doAffine} call:${callOnPaint} geom:${left},${top},${width}x${height} visible:${visible} opacity:${opacity}\"); } catch(e) {}\r\n"
+                  "\t\tif (_doAffine < 2) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\tif (_image !== void) {\r\n"
+                  "\t\t\tif (_updateFlag) {\r\n"
+                  "\t\t\t\t_image.updateImage(this);\r\n"),
+            TJS_W("\t\tif (_image !== void) {\r\n"
+                  "\t\t\ttry { if (_image instanceof \"StandAffineSourceLayer\" || _image instanceof \"MotionAffineSourceLayer\") Debug.notice(@\"[AETHERKIRI_SCENE] AffineLayer onPaint name:${name} image:${_image.filename} class:${typeof _image} update:${_updateFlag} affine:${_doAffine} call:${callOnPaint} type:${type} geom:${left},${top},${width}x${height} visible:${visible} opacity:${opacity}\"); } catch(e) {}\r\n"
+                  "\t\t\tif (_updateFlag) {\r\n"
+                  "\t\t\t\t_image.updateImage(this);\r\n"
+                  "\t\t\t\ttry { if (_image instanceof \"StandAffineSourceLayer\" || _image instanceof \"MotionAffineSourceLayer\") Debug.notice(@\"[AETHERKIRI_SCENE] AffineLayer afterUpdate name:${name} image:${_image.filename} geom:${left},${top},${width}x${height} image:${imageWidth}x${imageHeight} af:${_image._afx},${_image._afy} src:${_image.width}x${_image.height}\"); } catch(e) {}\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied scene debug patch for AffineLayer");
+        }
+    } else if(sceneDebug && lower == TJS_W("autoface.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\tfunction onEnvParseStartLine(pcd, cd, elm, env) {\r\n"
+                  "\t\tif (!autoShow || elm.notext) return;\r\n"
+                  "\t\tvar obj;\r\n"
+                  "\t\tvar face = env.objects[facename];\r\n"
+                  "\t\tif (elm === void || elm.name == \"\" || (obj = findStand(env, elm.name)) === void) {\r\n"),
+            TJS_W("\tfunction onEnvParseStartLine(pcd, cd, elm, env) {\r\n"
+                  "\t\tif (!autoShow || elm.notext) return;\r\n"
+                  "\t\tvar obj;\r\n"
+                  "\t\tvar face = env.objects[facename];\r\n"
+                  "\t\tif (elm !== void && elm.name != \"\") obj = findStand(env, elm.name);\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_FACE] startLine elm:${elm !== void ? elm.name : void} obj:${obj !== void ? obj.name : void} objClass:${obj !== void ? obj.classInfo.name : void} objDisp:${obj !== void ? obj.disp : void} objShow:${obj !== void ? obj.isShow() : void} faceShow:${face !== void ? face.isShow() : void} faceFollow:${face !== void ? face.followSource : void}\"); } catch(e) { Debug.notice(@\"[AETHERKIRI_FACE] startLine log failed:${e.message}\"); }\r\n"
+                  "\t\tif (elm === void || elm.name == \"\" || obj === void) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\tif (obj.disp >= KAGEnvImage.INVISIBLE || obj.classInfo.name == \"bu\") {\r\n"
+                  "\t\t\t\t// 話者が非表示指定なので全部消しておく\r\n"
+                  "\t\t\t\thideFace(pcd, env);\r\n"
+                  "\t\t\t\te.disp = 3;\r\n"
+                  "\t\t\t} else if (obj.classInfo.name == msgwin) {\r\n"
+                  "\t\t\t\t// 話者が顔位置にいるので他のオブジェクトは消しておく\r\n"
+                  "\t\t\t\thideFace(pcd, env, obj.name);\r\n"
+                  "\t\t\t\te.disp = 3;\r\n"
+                  "\t\t\t} else {\r\n"),
+            TJS_W("\t\t\tif (obj.disp >= KAGEnvImage.INVISIBLE || obj.classInfo.name == \"bu\") {\r\n"
+                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_FACE] startLine branch hide name:${name} disp:${obj.disp} class:${obj.classInfo.name}\"); } catch(e) {}\r\n"
+                  "\t\t\t\t// 話者が非表示指定なので全部消しておく\r\n"
+                  "\t\t\t\thideFace(pcd, env);\r\n"
+                  "\t\t\t\te.disp = 3;\r\n"
+                  "\t\t\t} else if (obj.classInfo.name == msgwin) {\r\n"
+                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_FACE] startLine branch msgwin name:${name} disp:${obj.disp}\"); } catch(e) {}\r\n"
+                  "\t\t\t\t// 話者が顔位置にいるので他のオブジェクトは消しておく\r\n"
+                  "\t\t\t\thideFace(pcd, env, obj.name);\r\n"
+                  "\t\t\t\te.disp = 3;\r\n"
+                  "\t\t\t} else {\r\n"
+                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_FACE] startLine branch copy name:${name} disp:${obj.disp} show:${obj.isShow()}\"); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction onEnvParseStartText(pcd, cd, elm, env) {\r\n"
+                  "\t\tif (!autoShow || elm.notext) return;\r\n"
+                  "\t\tvar obj;\r\n"
+                  "\t\tif (elm !== void && elm.name != \"\" && (obj = findStand(env, elm.name)) !== void) {\r\n"),
+            TJS_W("\tfunction onEnvParseStartText(pcd, cd, elm, env) {\r\n"
+                  "\t\tif (!autoShow || elm.notext) return;\r\n"
+                  "\t\tvar obj;\r\n"
+                  "\t\tif (elm !== void && elm.name != \"\") obj = findStand(env, elm.name);\r\n"
+                  "\t\ttry { var __akFace = env.objects[facename]; Debug.notice(@\"[AETHERKIRI_FACE] startText elm:${elm !== void ? elm.name : void} obj:${obj !== void ? obj.name : void} objClass:${obj !== void ? obj.classInfo.name : void} objDisp:${obj !== void ? obj.disp : void} objShow:${obj !== void ? obj.isShow() : void} faceShow:${__akFace !== void ? __akFace.isShow() : void} faceFollow:${__akFace !== void ? __akFace.followSource : void} event:${env.isEventShow()} force:${forceShow}\"); } catch(e) { Debug.notice(@\"[AETHERKIRI_FACE] startText log failed:${e.message}\"); }\r\n"
+                  "\t\tif (elm !== void && elm.name != \"\" && obj !== void) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tif (eventShow || !env.isEventShow()) {\r\n"
+                  "\t\t\t\t\tvar show = forceShow ? true : obj.isShow();\r\n"
+                  "\t\t\t\t\tvar face = env.objects[facename];\r\n"
+                  "\t\t\t\t\tif (show && (face === void || !face.isShow())) {\r\n"
+                  "\t\t\t\t\t\tpcd.addNextTag(facename, %[\"copyfollow\", name, \"disp\", true, \"$eye\", name, \"$lip\", name, \"nosync\", true]);\r\n"
+                  "\t\t\t\t\t}\r\n"
+                  "\t\t\t\t}\r\n"),
+            TJS_W("\t\t\t\tif (eventShow || !env.isEventShow()) {\r\n"
+                  "\t\t\t\t\tvar show = forceShow ? true : obj.isShow();\r\n"
+                  "\t\t\t\t\tvar face = env.objects[facename];\r\n"
+                  "\t\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_FACE] startText copy name:${name} show:${show} objShow:${obj.isShow()} faceShow:${face !== void ? face.isShow() : void}\"); } catch(e) {}\r\n"
+                  "\t\t\t\t\tif (show && (face === void || !face.isShow())) {\r\n"
+                  "\t\t\t\t\t\tDebug.notice(@\"[AETHERKIRI_FACE] startText enqueue face disp:${name}\");\r\n"
+                  "\t\t\t\t\t\tpcd.addNextTag(facename, %[\"copyfollow\", name, \"disp\", true, \"$eye\", name, \"$lip\", name, \"nosync\", true]);\r\n"
+                  "\t\t\t\t\t}\r\n"
+                  "\t\t\t\t}\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied scene debug patch for AutoFace");
+        }
+    }
+
+    if(!standDebug)
+        return;
+
+    if(lower == TJS_W("standaffinesourcelayer.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\tfunction loadImages(storage,colorKey=clNone,options=void) {\r\n"
+                  "\t\t_standImage = new StandImage(_window, storage);\r\n"),
+            TJS_W("\tfunction loadImages(storage,colorKey=clNone,options=void) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] StandAffine loadImages storage:${storage} options:${options}\"); } catch(e) {}\r\n"
+                  "\t\t_standImage = new StandImage(_window, storage);\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction updateImage(src, clean=false) {\r\n"
+                  "\t\tif (_standImage !== void) {\r\n"),
+            TJS_W("\tfunction updateImage(src, clean=false) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] StandAffine updateImage src:${src} clean:${clean} stand:${_standImage !== void}\"); } catch(e) {}\r\n"
+                  "\t\tif (_standImage !== void) {\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied stand debug patch for StandAffineSourceLayer");
+        }
+    } else if(lower == TJS_W("standinformation.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\t\t\t\t\tvar infofile = .filename + \"_info.txt\";\r\n"),
+            TJS_W("\t\t\t\t\tvar infofile = .filename + \"_info.txt\";\r\n"
+                  "\t\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] getChStandInfo storage:${storage} base:${baseName} filename:${.filename} infofile:${infofile}\"); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tfile.load(infofile);\r\n"),
+            TJS_W("\t\t\t\tfile.load(infofile);\r\n"
+                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] loadStandInfo infofile:${infofile} lines:${file.count}\"); } catch(e) {}\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied stand debug patch for StandInformation");
+        }
+    } else if(lower == TJS_W("standimage.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\tfunction updateImage(src) {\r\n\r\n"
+                  "\t\tzresolution = typeof src.zresolution != \"undefined\" ? src.zresolution : 100;\r\n"),
+            TJS_W("\tfunction updateImage(src) {\r\n\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] updateImage enter storage:${storage} base:${base} dress:${dress} pose:${pose} face:${face} update:${updateFlag} standInfo:${standInfo !== void}\"); } catch(e) {}\r\n"
+                  "\t\tzresolution = typeof src.zresolution != \"undefined\" ? src.zresolution : 100;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\tif (!updateFlag || base === void || dress === void || pose === void || face === void || standInfo === void) {\r\n"
+                  "\t\t\treturn;\r\n"
+                  "\t\t}\r\n"),
+            TJS_W("\t\tif (!updateFlag || base === void || dress === void || pose === void || face === void || standInfo === void) {\r\n"
+                  "\t\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] updateImage skip storage:${storage} update:${updateFlag} baseVoid:${base === void} dressVoid:${dress === void} poseVoid:${pose === void} faceVoid:${face === void} standInfoVoid:${standInfo === void}\"); } catch(e) {}\r\n"
+                  "\t\t\treturn;\r\n"
+                  "\t\t}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t//dm(@\"${storage}:立ち絵レベル level:${level} imageLevel:${imageLevel}\");\r\n"
+                  "\t\t\t\r\n"
+                  "\t\t\tstandlayer = infoBase.getStandPSDLayer(standInfo, file, this);\r\n"),
+            TJS_W("\t\t\t//dm(@\"${storage}:立ち絵レベル level:${level} imageLevel:${imageLevel}\");\r\n"
+                  "\t\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] select file storage:${storage} base:${base} level:${level} imageLevel:${imageLevel} file:${file}\"); } catch(e) {}\r\n"
+                  "\t\t\t\r\n"
+                  "\t\t\tstandlayer = infoBase.getStandPSDLayer(standInfo, file, this);\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\tstandlayer.resetSize();\r\n"
+                  "\t\t\tstandLevel = level;\r\n"),
+            TJS_W("\t\t\tstandlayer.resetSize();\r\n"
+                  "\t\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] resetSize storage:${storage} layer:${standlayer.name} size:${standlayer.width}x${standlayer.height} page:${standlayer.pageWidth}x${standlayer.pageHeight} offset:${standlayer.offsetX},${standlayer.offsetY}\"); } catch(e) {}\r\n"
+                  "\t\t\tstandLevel = level;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\tstandlayer.setFace(face, variables);\r\n\r\n"
+                  "\t\tupdateFlag = false;\r\n"),
+            TJS_W("\t\tstandlayer.setFace(face, variables);\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] updateImage done storage:${storage} base:${base} dress:${dress} pose:${pose} face:${face} ret:${ret}\"); } catch(e) {}\r\n\r\n"
+                  "\t\tupdateFlag = false;\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied stand debug patch for StandImage");
+        }
+    } else if(lower == TJS_W("psdlayer.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\t\tinitLayers(width, height);\r\n"),
+            TJS_W("\t\tinitLayers(width, height);\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] PSD loadDATA basename:${basename} size:${width}x${height} layers:${layers.count} groups:${groups.count}\"); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\tdata.load(storage);\r\n"
+                  "\t\tvar count = data.count;\r\n"),
+            TJS_W("\t\tdata.load(storage);\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] PSD loadTXT storage:${storage} rawLines:${data.count}\"); } catch(e) {}\r\n"
+                  "\t\tvar count = data.count;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction resetSize() {\r\n"
+                  "\t\tif (psdinfo.width > 0 && psdinfo.height > 0) {\r\n"),
+            TJS_W("\tfunction resetSize() {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] PSD resetSize psd:${psdinfo !== void} psdsize:${psdinfo !== void ? psdinfo.width : void}x${psdinfo !== void ? psdinfo.height : void}\"); } catch(e) {}\r\n"
+                  "\t\tif (psdinfo.width > 0 && psdinfo.height > 0) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction updateDisp(dispRect=null) {\r\n"
+                  "\t\t\r\n"
+                  "\t\tif (psdinfo === void) {\r\n"),
+            TJS_W("\tfunction updateDisp(dispRect=null) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] PSD updateDisp enter width:${width} height:${height} dispRect:${dispRect}\"); } catch(e) {}\r\n"
+                  "\t\t\r\n"
+                  "\t\tif (psdinfo === void) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\treturn [l,t,w,h];\r\n"),
+            TJS_W("\t\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] PSD updateDisp region:${l},${t},${w},${h}\"); } catch(e) {}\r\n"
+                  "\t\t\treturn [l,t,w,h];\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied stand debug patch for psdlayer");
+        }
+    } else if(lower == TJS_W("standlayer.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\t\t\tloadImages(storage);\r\n"),
+            TJS_W("\t\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] StandPSDInfo loadImages storage:${storage}\"); } catch(e) {}\r\n"
+                  "\t\t\tloadImages(storage);\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\tsetVisible(name, true);\r\n"),
+            TJS_W("\t\t\tsetVisible(name, true);\r\n"
+                  "\t\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] visible layer:${name}\"); } catch(e) {}\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied stand debug patch for StandLayer");
+        }
+    }
+}
+
+static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
+    const ttstr lower = shortname.AsLowerCase();
+    const bool patchD3DLayer = lower == TJS_W("d3d.tjs");
+    const bool patchD3DMotion =
+        patchD3DLayer || lower == TJS_W("d3daffinesourcemotion.tjs");
+    if(!patchD3DLayer && !patchD3DMotion)
+        return;
+
+    if(patchD3DLayer) try {
+        TVPExecuteScript(
+            TJS_W(
+                "(function() {\r\n"
+                "\tif (typeof global.D3DAffineLayer == \"undefined\") return;\r\n"
+                "\tif (typeof global.__aetherKiriD3DStandOrigLoadImages != \"undefined\") return;\r\n"
+                "\tglobal.__aetherKiriD3DStandOrigLoadImages = &global.D3DAffineLayer.loadImages;\r\n"
+                "\tglobal.D3DAffineLayer.loadImages = function(filename, colorKey=clNone, options=void, redraw=false) {\r\n"
+                "\t\tvar sourceInfo = findAffineSource(filename, options);\r\n"
+                "\t\tvar sourceClass = sourceInfo.sourceClass;\r\n"
+                "\t\tvar storage = sourceInfo.storage;\r\n"
+                "\t\tvar ext = sourceInfo.ext;\r\n"
+                "\t\tif (ext != \".STAND\" && ext != \".EVENT\") return (global.__aetherKiriD3DStandOrigLoadImages incontextof this)(filename, colorKey, options, redraw);\r\n"
+                "\t\tif (sourceClass === void) return (global.__aetherKiriD3DStandOrigLoadImages incontextof this)(filename, colorKey, options, redraw);\r\n"
+                "\t\tif (this._image.filename != filename ||\r\n"
+                "\t\t\t(this._image instanceof \"D3DAffineSourcePicture\" && redraw) ||\r\n"
+                "\t\t\t(this._image instanceof \"D3DAffineSourceImage\" && ((sourceClass === void && !redraw) || this._image._sourceClass !== sourceClass))\r\n"
+                "\t\t\t) {\r\n"
+                "\t\t\tinvalidate this._image;\r\n"
+                "\t\t\tthis._image = new D3DAffineSourceImage(this, sourceClass);\r\n"
+                "\t\t\tthis._image.filename = filename;\r\n"
+                "\t\t\tthis._image.loadImages(storage, colorKey, options);\r\n"
+                "\t\t\tif (options !== void) this._image.setOptions(options);\r\n"
+                "\t\t\tthis.calcUpdate();\r\n"
+                "\t\t}\r\n"
+                "\t};\r\n"
+                "})();\r\n"),
+            TJS_W("AetherKiriD3DStandSourcePatch"), 0, (tTJSVariant *)nullptr);
+        spdlog::info(
+            "Applied compatibility hook for D3DAffineLayer stand source routing");
+    } catch(...) {
+        spdlog::warn(
+            "Failed to apply compatibility hook for D3DAffineLayer stand source routing");
+    }
+
+    if(patchD3DMotion) try {
+        TVPExecuteScript(
+            TJS_W(
+                "(function() {\r\n"
+                "\tif (typeof global.D3DAffineSourceMotion == \"undefined\") return;\r\n"
+                "\tif (typeof global.__aetherKiriD3DMotionOrigLoadImages != \"undefined\") return;\r\n"
+                "\tglobal.__aetherKiriD3DMotionOrigLoadImages = &global.D3DAffineSourceMotion.loadImages;\r\n"
+                "\tglobal.__aetherKiriD3DMotionOrigOnUpdate = &global.D3DAffineSourceMotion.onUpdate;\r\n"
+                "\tglobal.__aetherKiriD3DMotionBindTarget = function(source) {\r\n"
+                "\t\ttry {\r\n"
+                "\t\t\tif (source !== void && source._player !== void && source._d3dlayer !== void) {\r\n"
+                "\t\t\t\tsource._player.targetLayer = source._d3dlayer;\r\n"
+                "\t\t\t}\r\n"
+                "\t\t} catch(e) {}\r\n"
+                "\t};\r\n"
+                "\tglobal.D3DAffineSourceMotion.loadImages = function(storage, colorKey=clNone, options=void) {\r\n"
+                "\t\tvar ret = (global.__aetherKiriD3DMotionOrigLoadImages incontextof this)(storage, colorKey, options);\r\n"
+                "\t\tglobal.__aetherKiriD3DMotionBindTarget(this);\r\n"
+                "\t\treturn ret;\r\n"
+                "\t};\r\n"
+                "\tglobal.D3DAffineSourceMotion.onUpdate = function(diff) {\r\n"
+                "\t\tvar ret = (global.__aetherKiriD3DMotionOrigOnUpdate incontextof this)(diff);\r\n"
+                "\t\tglobal.__aetherKiriD3DMotionBindTarget(this);\r\n"
+                "\t\treturn ret;\r\n"
+                "\t};\r\n"
+                "})();\r\n"),
+            TJS_W("AetherKiriD3DMotionTargetPatch"), 0,
+            (tTJSVariant *)nullptr);
+        spdlog::info(
+            "Applied compatibility hook for D3DAffineSourceMotion target routing");
+    } catch(...) {
+        spdlog::warn(
+            "Failed to apply compatibility hook for D3DAffineSourceMotion target routing");
+    }
+}
 //---------------------------------------------------------------------------
 void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
                        tTJSVariant *result, bool isexpression,
@@ -812,8 +1856,10 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
                     stream.get(), result, context, shortname.c_str());
             }
 
-            if(isbytecode)
+            if(isbytecode) {
+                TVPApplyPostScriptCompatibilityPatches(shortname);
                 return;
+            }
         }
     }
 
@@ -823,6 +1869,7 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
         place, modestr) };
     ttstr buffer;
     stream->Read(buffer, 0);
+    TVPApplyScriptCompatibilityPatches(shortname, buffer);
 
     // Export plain-text script when export_scripts is enabled
     if(doExport) {
@@ -852,6 +1899,7 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
         else
             TVPScriptEngine->EvalExpression(buffer, result, context,
                                             &shortname);
+        TVPApplyPostScriptCompatibilityPatches(shortname);
     }
 }
 

@@ -169,6 +169,8 @@ namespace motion::detail {
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>> layersByName;
         std::vector<std::string> sourceCandidates;
         std::unordered_map<std::string, MotionClip> clipsByLabel;
+        std::unordered_map<std::string,
+            std::unordered_map<std::string, MotionClip>> clipsByOwnerAndLabel;
         std::unordered_map<std::string, TimelineControlBinding>
             timelineControlByLabel;
         std::vector<std::string> resourceAliases;
@@ -182,6 +184,7 @@ namespace motion::detail {
         std::shared_ptr<MotionSnapshot> activeMotion;
         std::unordered_map<std::string, TimelineState> timelines;
         std::vector<std::string> playingTimelineLabels;
+        std::string lastExplicitTimelineLabel;
         std::unordered_map<std::string, tjs_int> layerIdsByName;
         std::unordered_map<tjs_int, std::string> layerNamesById;
         std::vector<tTJSVariant> backgrounds;
@@ -231,6 +234,7 @@ namespace motion::detail {
         std::vector<MotionNode> nodes;
         bool nodesBuilt = false;
         bool yuzuTitleFinalFrameRendered = false;
+        bool yuzuSdPresentationRetired = false;
         bool yuzuPresentationCenteredOriginConfirmed = false;
         float yuzuPresentationTranslateX = 0.0f;
         float yuzuPresentationTranslateY = 0.0f;
@@ -341,6 +345,10 @@ namespace motion::detail {
     };
 
     std::shared_ptr<PlayerRuntime> makePlayerRuntime();
+    const MotionClip *findMotionClip(const MotionSnapshot &snapshot,
+                                     const std::string &owner,
+                                     const std::string &label,
+                                     bool allowLabelFallback = true);
 
     std::string narrow(const ttstr &value);
     ttstr widen(const std::string &value);

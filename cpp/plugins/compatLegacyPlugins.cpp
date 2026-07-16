@@ -517,3 +517,54 @@ static void libglesv2Init() {
             TJS_W("GLES entry points are owned by the current renderer"));
 }
 NCB_PRE_REGIST_CALLBACK(libglesv2Init);
+
+// -------------------------------------------------------------------------
+// layeredwindow.dll
+// The original Win32 plug-in submits an already composed BGRA buffer through
+// UpdateLayeredWindow. AetherKiri's host renders the dialog Window's Layer
+// tree directly, so the pixel submission itself is intentionally a no-op.
+// Games still require the global entry point while constructing custom modal
+// dialogs, however; leaving it undefined aborts before Window.showModal().
+// -------------------------------------------------------------------------
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("layeredwindow.dll")
+
+namespace {
+
+tjs_error TJS_INTF_METHOD layeredWindowCompatCb(
+    tTJSVariant *result, tjs_int, tTJSVariant **, iTJSDispatch2 *) {
+    setBoolResult(result, true);
+    return TJS_S_OK;
+}
+
+void registerLayeredWindowCompat() {
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if(!global)
+        return;
+
+    iTJSDispatch2 *method =
+        TJSCreateNativeClassMethod(layeredWindowCompatCb);
+    if(method) {
+        tTJSVariant value(method, method);
+        global->PropSet(TJS_MEMBERENSURE, TJS_W("layeredwindow"), nullptr,
+                        &value, global);
+        method->Release();
+    }
+    global->Release();
+    TVPAddLog(TJS_W(
+        "AetherKiri compat plugin layeredwindow.dll: host Layer tree owns dialog composition"));
+}
+
+void unregisterLayeredWindowCompat() {
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if(!global)
+        return;
+    global->DeleteMember(0, TJS_W("layeredwindow"), nullptr, global);
+    global->Release();
+}
+
+} // namespace
+
+NCB_PRE_REGIST_CALLBACK(registerLayeredWindowCompat);
+NCB_POST_UNREGIST_CALLBACK(unregisterLayeredWindowCompat);

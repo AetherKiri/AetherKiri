@@ -1132,16 +1132,86 @@ static iTJSDispatch2 *g_registeredLayer = nullptr;
 // Find the first Layer object among the callback parameters.
 // The game may pass (intFlag, layer, ...) instead of (layer).
 // ---------------------------------------------------------------------------
+static bool IsLayerDispatch(iTJSDispatch2 *obj) {
+    if(!obj) return false;
+    tTJSNI_BaseLayer *layer = nullptr;
+    return TJS_SUCCEEDED(obj->NativeInstanceSupport(
+               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+               reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
+        layer != nullptr;
+}
+
+static bool GetDispatchProperty(iTJSDispatch2 *obj, const tjs_char *name,
+                                tTJSVariant &result) {
+    result.Clear();
+    if(!obj) return false;
+    return TJS_SUCCEEDED(obj->PropGet(
+        TJS_IGNOREPROP, name, nullptr, &result, obj));
+}
+
+static iTJSDispatch2 *ResolveLayerDispatchFromVariant(const tTJSVariant &value,
+                                                      int depth = 0) {
+    if(depth > 4 || value.Type() != tvtObject || !value.AsObjectNoAddRef())
+        return nullptr;
+
+    iTJSDispatch2 *base = value.AsObjectNoAddRef();
+    const auto closure = value.AsObjectClosureNoAddRef();
+    iTJSDispatch2 *candidates[] = {
+        base,
+        closure.ObjThis,
+        closure.Object,
+        nullptr,
+    };
+
+    for(auto *candidate : candidates) {
+        if(IsLayerDispatch(candidate))
+            return candidate;
+    }
+
+    static const tjs_char *kExplicitLayerProps[] = {
+        TJS_W("targetLayer"), TJS_W("_targetLayer"),
+        TJS_W("renderTarget"), TJS_W("_renderTarget"),
+        TJS_W("layer"), TJS_W("_layer"), TJS_W("baseLayer"),
+        TJS_W("_base"), TJS_W("base"), TJS_W("fore"),
+        TJS_W("back"), TJS_W("primaryLayer"), nullptr,
+    };
+    static const tjs_char *kOwnerLayerProps[] = {
+        TJS_W("owner"), TJS_W("_owner"), TJS_W("parent"), nullptr,
+    };
+
+    auto tryProps = [&](const tjs_char *const *props) -> iTJSDispatch2 * {
+        for(auto *candidate : candidates) {
+            if(!candidate) continue;
+            for(int i = 0; props[i]; ++i) {
+                tTJSVariant prop;
+                if(!GetDispatchProperty(candidate, props[i], prop) ||
+                   prop.Type() != tvtObject || !prop.AsObjectNoAddRef() ||
+                   prop.AsObjectNoAddRef() == candidate ||
+                   prop.AsObjectNoAddRef() == base) {
+                    continue;
+                }
+                if(auto *resolved =
+                       ResolveLayerDispatchFromVariant(prop, depth + 1)) {
+                    return resolved;
+                }
+            }
+        }
+        return nullptr;
+    };
+
+    if(auto *resolved = tryProps(kExplicitLayerProps))
+        return resolved;
+    if(auto *resolved = tryProps(kOwnerLayerProps))
+        return resolved;
+    return nullptr;
+}
+
 static iTJSDispatch2 *FindLayerInParams(tjs_int n, tTJSVariant **p) {
     if (!p) return nullptr;
     for (tjs_int i = 0; i < n; ++i) {
-        if (p[i] && p[i]->Type() == tvtObject) {
-            iTJSDispatch2 *obj = p[i]->AsObjectNoAddRef();
-            if (!obj) continue;
-            tTJSVariant test;
-            if (TJS_SUCCEEDED(obj->PropGet(0, TJS_W("imageWidth"), nullptr, &test, obj)))
-                return obj;
-        }
+        if (!p[i]) continue;
+        if(auto *layer = ResolveLayerDispatchFromVariant(*p[i]))
+            return layer;
     }
     return nullptr;
 }
@@ -1227,6 +1297,16 @@ static void RegisterYuzuMotionRenderable(tjs_int n, tTJSVariant **p,
     iTJSDispatch2 *layer = FindLayerInParams(n, p);
     if(layer) g_registeredLayer = layer;
     if(!player) return;
+    if(!layer) {
+        tTJSVariant playerVar(player, player);
+        layer = ResolveLayerDispatchFromVariant(playerVar);
+    }
+    if(!layer) {
+        spdlog::debug(
+            "krkrgles: skipped Motion.Player auto-render via {} without layer",
+            tag ? tag : "entry");
+        return;
+    }
 
     std::lock_guard<std::mutex> lock(YuzuMotionRenderMutex());
     auto &items = YuzuMotionRenderables();
@@ -1281,7 +1361,11 @@ static tjs_int RenderYuzuMotionRenderables(const char *tag) {
             : nullptr;
         iTJSDispatch2 *layer = item.layer.Type() == tvtObject
             ? item.layer.AsObjectNoAddRef()
-            : g_registeredLayer;
+            : nullptr;
+        if(!layer && item.player.Type() == tvtObject) {
+            layer = ResolveLayerDispatchFromVariant(item.player);
+        }
+        if(!layer) continue;
         if(InvokeMotionPlayerDraw(player, layer, tag)) ++rendered;
     }
     return rendered;

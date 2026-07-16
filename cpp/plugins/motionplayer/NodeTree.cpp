@@ -719,7 +719,7 @@ namespace motion::detail {
 
     std::vector<MotionNode> buildNodeTree(
         const MotionSnapshot &snapshot,
-        const std::string &clipLabel) {
+        const MotionClip *clip) {
 
         std::vector<MotionNode> nodes;
         // Aligned to Player_buildNodeTree (0x6B51F0): root index 0 is a
@@ -737,12 +737,9 @@ namespace motion::detail {
             std::shared_ptr<const PSB::PSBDictionary>> *layersByName = nullptr;
         const std::vector<std::string> *layerNames = nullptr;
 
-        if (!clipLabel.empty()) {
-            auto clipIt = snapshot.clipsByLabel.find(clipLabel);
-            if (clipIt != snapshot.clipsByLabel.end()) {
-                layersByName = &clipIt->second.layersByName;
-                layerNames = &clipIt->second.layerNames;
-            }
+        if (clip) {
+            layersByName = &clip->layersByName;
+            layerNames = &clip->layerNames;
         }
 
         if (!layersByName) {
@@ -868,7 +865,8 @@ namespace motion::detail {
 
         if (auto logger = spdlog::get("plugin")) {
             logger->debug("buildNodeTree: clipLabel='{}', rootLayers={}, {} nodes built",
-                          clipLabel, layerNames->size(), nodes.size());
+                          clip ? clip->label : std::string{},
+                          layerNames->size(), nodes.size());
         }
 
         return nodes;

@@ -79,14 +79,16 @@ struct PointFConvertor {
     template <typename ANYT>
     void operator()(ANYT &adst, const tTJSVariant &src) {
         if(src.Type() == tvtObject) {
-            T *obj = AdaptorT::GetNativeInstance(src.AsObjectNoAddRef());
-            if(obj) {
-                dst = *obj;
+            ncbPropAccessor info(src);
+            // The compatibility adaptor can box script arrays as an empty
+            // native point, so preserve the documented array overload first.
+            if(IsArray(src)) {
+                dst = PointF{ (REAL)info.getRealValue(0),
+                              (REAL)info.getRealValue(1) };
             } else {
-                ncbPropAccessor info(src);
-                if(IsArray(src)) {
-                    dst = PointF{ (REAL)info.getRealValue(0),
-                                  (REAL)info.getRealValue(1) };
+                T *obj = AdaptorT::GetNativeInstance(src.AsObjectNoAddRef());
+                if(obj) {
+                    dst = *obj;
                 } else {
                     dst = PointF{ (REAL)info.getRealValue(TJS_W("x")),
                                   (REAL)info.getRealValue(TJS_W("y")) };

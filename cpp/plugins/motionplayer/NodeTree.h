@@ -11,6 +11,7 @@
 namespace motion::detail {
 
     struct MotionSnapshot;
+    struct MotionClip;
     struct MotionNode;
 
     // Walk the PSB layer tree for the given clip (or root layers if clipLabel
@@ -19,6 +20,6 @@ namespace motion::detail {
     // parent node index, with top-level layers using parentIndex=0.
     std::vector<MotionNode> buildNodeTree(
         const MotionSnapshot &snapshot,
-        const std::string &clipLabel);
+        const MotionClip *clip);
 
 } // namespace motion::detail

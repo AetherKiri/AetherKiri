@@ -1347,6 +1347,11 @@ namespace PSB {
         if(!shouldAttemptLoad)
             return false;
 
+        if(IsVerbosePSBDebugEnabled()) {
+            LOGGER->info("PSB lazy-load request: key={} archive={}", key,
+                         archiveKey);
+        }
+
         try {
             ttstr archivePath(archiveKey.c_str());
             PSBFile psb;

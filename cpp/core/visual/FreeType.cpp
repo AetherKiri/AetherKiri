@@ -265,10 +265,13 @@ tFreeTypeFace::tFreeTypeFace(const ttstr &fontname, tjs_uint32 options) :
 
     // フォントを開く
     // if(options & TVP_FACE_OPTIONS_FILE)
-    {
+    try {
         // ファイルを開く
         Face = new tGenericFreeTypeFace(fontname, options);
         // 例外がここで発生する可能性があるので注意
+    } catch(...) {
+        TVPUninitializeFreeFont();
+        throw;
     }
     // else
     {
@@ -324,6 +327,7 @@ tFreeTypeFace::~tFreeTypeFace() {
         delete GlyphIndexToCharcodeVector;
     if(Face)
         delete Face;
+    TVPUninitializeFreeFont();
 }
 //---------------------------------------------------------------------------
 

@@ -186,10 +186,59 @@ namespace motion::detail {
             if(!enabled || !*enabled || std::strcmp(enabled, "0") == 0) {
                 return false;
             }
+            const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
+            if(debugAll && *debugAll && std::strcmp(debugAll, "0") != 0) {
+                return true;
+            }
             const auto lowered = lowercase(motionPath);
             return lowered.find("title") != std::string::npos ||
                 lowered.find("yuzulogo.mtn") != std::string::npos ||
                 lowered.find("m2logo.mtn") != std::string::npos;
+        }
+
+        std::string describePsbTreeForMotionDebug(
+            const std::shared_ptr<PSB::IPSBValue> &value,
+            const int depth = 0) {
+            if(!value) {
+                return "null";
+            }
+            if(const auto text =
+                   std::dynamic_pointer_cast<PSB::PSBString>(value)) {
+                return '"' + text->value + '"';
+            }
+            if(depth >= 8) {
+                return value->toString();
+            }
+            if(const auto dictionary =
+                   std::dynamic_pointer_cast<PSB::PSBDictionary>(value)) {
+                std::string out = "{";
+                bool first = true;
+                for(const auto &[key, child] : *dictionary) {
+                    if(!first) {
+                        out += ",";
+                    }
+                    out += key;
+                    out += ":";
+                    out += describePsbTreeForMotionDebug(child, depth + 1);
+                    first = false;
+                }
+                out += "}";
+                return out;
+            }
+            if(const auto list =
+                   std::dynamic_pointer_cast<PSB::PSBList>(value)) {
+                std::string out = "[";
+                for(size_t index = 0; index < list->size(); ++index) {
+                    if(index != 0) {
+                        out += ",";
+                    }
+                    out += describePsbTreeForMotionDebug(
+                        (*list)[static_cast<int>(index)], depth + 1);
+                }
+                out += "]";
+                return out;
+            }
+            return value->toString();
         }
 
         bool logoTraceQueryEnabled() {
@@ -1074,40 +1123,60 @@ namespace motion::detail {
         void maybeRecordMotionClip(const std::vector<std::string> &path,
                                    const std::shared_ptr<PSB::PSBDictionary> &dic,
                                    MotionSnapshot &snapshot) {
-            if(path.size() < 4 ||
-               lowercase(path[path.size() - 2]) != "motion" ||
-               lowercase(path[path.size() - 4]) != "object") {
+            if(path.size() < 3) {
                 return;
             }
 
-            const auto label = path.back();
+            std::string label;
+            std::string owner;
+            if(path.size() >= 4 &&
+               lowercase(path[path.size() - 2]) == "motion" &&
+               lowercase(path[path.size() - 4]) == "object") {
+                label = path.back();
+                owner = path[path.size() - 3];
+            } else if(lowercase(path[path.size() - 3]) == "motion") {
+                // Some Yuzu PSBs store SD clips as motion/<chara>/<label>
+                // rather than object/<chara>/motion/<label>.
+                label = path.back();
+                owner = path[path.size() - 2];
+            } else {
+                return;
+            }
+
             if(label.empty()) {
                 return;
             }
 
-            auto &clip = snapshot.clipsByLabel[label];
-            clip.label = label;
-            clip.owner = path[path.size() - 3];
-            clip.totalFrames =
-                dictionaryNumber(dic, { "lastTime", "frameCount", "frame_count",
-                                        "totalFrameCount", "total_frame_count",
-                                        "frames", "length", "end" })
-                    .value_or(0.0);
-            clip.syncTime =
-                dictionaryNumber(dic, { "syncTime", "sync_time" })
-                    .value_or(0.0);
-            clip.selfSyncTime =
-                dictionaryNumber(dic, { "selfSyncTime", "self_sync_time" })
-                    .value_or(0.0);
-            if(const auto loopTime = dictionaryNumber(dic, { "loopTime" })) {
-                clip.loopTime = *loopTime;
-                clip.loop = *loopTime >= 0.0;
-            } else if(const auto loop = dictionaryBool(dic, { "loop", "repeat", "is_loop" })) {
-                clip.loop = *loop;
-                clip.loopTime = *loop ? 0.0 : -1.0;
+            const auto layers = dictionaryList(dic, { "layer" });
+            if(!layers) {
+                return;
             }
 
-            if(const auto layers = dictionaryList(dic, { "layer" })) {
+            const auto populateClip = [&](MotionClip &clip) {
+                clip.label = label;
+                clip.owner = owner;
+                clip.totalFrames =
+                    dictionaryNumber(
+                        dic, { "lastTime", "frameCount", "frame_count",
+                               "totalFrameCount", "total_frame_count", "frames",
+                               "length", "end" })
+                        .value_or(0.0);
+                clip.syncTime =
+                    dictionaryNumber(dic, { "syncTime", "sync_time" })
+                        .value_or(0.0);
+                clip.selfSyncTime =
+                    dictionaryNumber(dic, { "selfSyncTime", "self_sync_time" })
+                        .value_or(0.0);
+                if(const auto loopTime =
+                       dictionaryNumber(dic, { "loopTime" })) {
+                    clip.loopTime = *loopTime;
+                    clip.loop = *loopTime >= 0.0;
+                } else if(const auto loop = dictionaryBool(
+                              dic, { "loop", "repeat", "is_loop" })) {
+                    clip.loop = *loop;
+                    clip.loopTime = *loop ? 0.0 : -1.0;
+                }
+
                 for(const auto &item : *layers) {
                     const auto layer =
                         std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
@@ -1131,9 +1200,13 @@ namespace motion::detail {
                         collectSelfSyncTimeFromLayer(layer));
                     collectValueSources(layer, clip.sourceCandidates);
                 }
-            }
 
-            collectValueSources(dic, clip.sourceCandidates);
+                collectValueSources(dic, clip.sourceCandidates);
+            };
+
+            populateClip(snapshot.clipsByOwnerAndLabel[owner][label]);
+            auto &clip = snapshot.clipsByLabel[label];
+            populateClip(clip);
 
             appendUnique(snapshot.mainTimelineLabels, clip.label);
             snapshot.loopTimelines[clip.label] = clip.loop;
@@ -1281,6 +1354,49 @@ namespace motion::detail {
             }
         }
 
+        std::string describeObjectMotionKeys(
+            const std::shared_ptr<const PSB::PSBDictionary> &root) {
+            if(!root) {
+                return {};
+            }
+            const auto objectTree =
+                std::dynamic_pointer_cast<PSB::PSBDictionary>((*root)["object"]);
+            if(!objectTree) {
+                return {};
+            }
+
+            std::string out;
+            for(const auto &[objectName, objectValue] : *objectTree) {
+                const auto objectDict =
+                    std::dynamic_pointer_cast<PSB::PSBDictionary>(objectValue);
+                if(!objectDict) {
+                    continue;
+                }
+                const auto motionDict =
+                    std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                        (*objectDict)["motion"]);
+                if(!motionDict) {
+                    continue;
+                }
+
+                if(!out.empty()) {
+                    out += "; ";
+                }
+                out += objectName;
+                out += "[";
+                bool first = true;
+                for(const auto &[motionName, _] : *motionDict) {
+                    if(!first) {
+                        out += ",";
+                    }
+                    out += motionName;
+                    first = false;
+                }
+                out += "]";
+            }
+            return out;
+        }
+
         void appendResourceAlias(MotionSnapshot &snapshot, const ttstr &alias) {
             const auto raw = narrow(alias);
             if(raw.empty()) {
@@ -1304,6 +1420,29 @@ namespace motion::detail {
 
     std::shared_ptr<PlayerRuntime> makePlayerRuntime() {
         return std::make_shared<PlayerRuntime>();
+    }
+
+    const MotionClip *findMotionClip(const MotionSnapshot &snapshot,
+                                     const std::string &owner,
+                                     const std::string &label,
+                                     const bool allowLabelFallback) {
+        if(!owner.empty()) {
+            if(const auto ownerIt = snapshot.clipsByOwnerAndLabel.find(owner);
+               ownerIt != snapshot.clipsByOwnerAndLabel.end()) {
+                if(const auto clipIt = ownerIt->second.find(label);
+                   clipIt != ownerIt->second.end()) {
+                    return &clipIt->second;
+                }
+            }
+        }
+        if(!allowLabelFallback) {
+            return nullptr;
+        }
+        if(const auto it = snapshot.clipsByLabel.find(label);
+           it != snapshot.clipsByLabel.end()) {
+            return &it->second;
+        }
+        return nullptr;
     }
 
     std::string narrow(const ttstr &value) { return value.AsStdString(); }
@@ -1402,6 +1541,45 @@ namespace motion::detail {
                 joinStrings(snapshot->diffTimelineLabels),
                 joinStrings(snapshot->layerNames),
                 snapshot->sourceCandidates.size());
+            const auto objectMotionKeys = describeObjectMotionKeys(root);
+            if(!objectMotionKeys.empty()) {
+                LOGGER->info("motion snapshot object motions: path={} {}",
+                             snapshot->path, objectMotionKeys);
+            }
+            const char *debugAll =
+                std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
+            if(debugAll && *debugAll && std::strcmp(debugAll, "0") != 0) {
+                for(const auto &[owner, clips] :
+                    snapshot->clipsByOwnerAndLabel) {
+                    for(const auto &[label, clip] : clips) {
+                        LOGGER->info(
+                            "motion snapshot clip: path={} owner={} label={} frames={} loop={} layers=[{}] sources=[{}]",
+                            snapshot->path, owner, label, clip.totalFrames,
+                            clip.loop ? 1 : 0, joinStrings(clip.layerNames),
+                            joinStrings(clip.sourceCandidates));
+                        const auto debugPath = lowercase(snapshot->path);
+                        if(debugPath.find("title.psb") != std::string::npos &&
+                           ((owner == "char" &&
+                             (label == "show" || label == "normal")) ||
+                            (owner == "TITLE2" && label == "normal"))) {
+                            for(const auto &layerName : clip.layerNames) {
+                                const auto layerIt =
+                                    clip.layersByName.find(layerName);
+                                if(layerIt == clip.layersByName.end()) {
+                                    continue;
+                                }
+                                LOGGER->info(
+                                    "motion snapshot layer tree: path={} owner={} label={} layer={} tree={}",
+                                    snapshot->path, owner, label, layerName,
+                                    describePsbTreeForMotionDebug(
+                                        std::const_pointer_cast<
+                                            PSB::PSBDictionary>(
+                                            layerIt->second)));
+                            }
+                        }
+                    }
+                }
+            }
         }
         if(logoChainTraceEnabled(snapshot)) {
             logoChainTraceLogf(

@@ -100,6 +100,22 @@ static bool isValidUTF8(const unsigned char *raw, size_t size) {
     return true;
 }
 
+static bool shouldPreferCP932ForStandMetadata(const ttstr &name) {
+    ttstr shortName = TVPExtractStorageName(name).AsLowerCase();
+    if(TVPExtractStorageExt(shortName) == TJS_W(".stand"))
+        return true;
+    if(shortName == TJS_W("facezoom.csv"))
+        return true;
+
+    constexpr tjs_int InfoSuffixLen = 9; // "_info.txt"
+    if(shortName.GetLen() < InfoSuffixLen)
+        return false;
+
+    ttstr suffix(shortName.c_str() + shortName.GetLen() - InfoSuffixLen,
+                 InfoSuffixLen);
+    return suffix == TJS_W("_info.txt");
+}
+
 std::string checkTextEncoding(const void *buf, size_t size,
                               std::uint8_t &bomSize) {
     auto raw = static_cast<const unsigned char *>(buf);
@@ -233,6 +249,17 @@ public:
         std::uint8_t bomSize = 0;
         std::string encoding = checkTextEncoding(raw.data(), size, bomSize);
         raw.erase(raw.begin(), raw.begin() + bomSize);
+        size = raw.size();
+
+        if(bomSize == 0 && shouldPreferCP932ForStandMetadata(name) &&
+           hasNonAsciiBytes(raw.data(), size) && !isValidUTF8(raw.data(), size)) {
+            encoding = "cp932";
+        }
+
+        if(encoding.empty() && G_DefaultReadEncoding == "UTF-8" &&
+           hasNonAsciiBytes(raw.data(), size) && !isValidUTF8(raw.data(), size)) {
+            encoding = "cp932";
+        }
 
         if(encoding.empty())
             encoding = G_DefaultReadEncoding; // 默认回退

@@ -3,6 +3,7 @@
 // source code url: https://github.com/wamsoft/windowEx/blob
 //
 #include <cstdint>
+#include <unordered_map>
 
 typedef unsigned long DWORD;
 
@@ -651,6 +652,33 @@ struct WindowEx {
         return TJS_S_OK;
     }
 
+    static tjs_error registerHotKey(tTJSVariant *result, tjs_int numparams,
+                                    tTJSVariant **params,
+                                    iTJSDispatch2 *obj) {
+        if(numparams < 1)
+            return TJS_E_BADPARAMCOUNT;
+
+        WindowEx *self = GetInstance(obj);
+        if(!self)
+            return TJS_E_ACCESSDENYED;
+
+        const tjs_int id = params[0]->AsInteger();
+        if(numparams == 1) {
+            self->hotKeys.erase(id);
+        } else {
+            if(numparams < 3)
+                return TJS_E_BADPARAMCOUNT;
+            self->hotKeys[id] = {
+                static_cast<tjs_int>(params[1]->AsInteger()),
+                static_cast<tjs_int>(params[2]->AsInteger()),
+            };
+        }
+
+        if(result)
+            *result = true;
+        return TJS_S_OK;
+    }
+
     void checkUpdateMenuItem(HMENU menu, int pos, UINT id);
 
     //--------------------------------------------------------------
@@ -882,6 +910,11 @@ protected:
     }
 
 private:
+    struct HotKeyRegistration {
+        tjs_int key;
+        tjs_int modifiers;
+    };
+
     iTJSDispatch2 *self, *menuex;
     iTJSDispatch2 *sysMenuModified,
         *sysMenuModMap; //< システムメニュー改変用
@@ -895,6 +928,7 @@ private:
     bool enableNCMEvent; //< WM_SETCURSORコールバック
     bool enableWinMsgHook; //< メッセージフック有効
     DWORD bitHooks[0x0400 / 32];
+    std::unordered_map<tjs_int, HotKeyRegistration> hotKeys;
 
 public:
     //----------------------------------------------------------
@@ -992,6 +1026,7 @@ NCB_ATTACH_CLASS_WITH_HOOK(WindowEx, Window) {
     RawCallback(TJS_W("setMessageHook"), &Class::setMessageHook, 0);
     RawCallback(TJS_W("bringTo"), &Class::bringTo, 0);
     RawCallback(TJS_W("sendToBack"), &Class::sendToBack, 0);
+    RawCallback(TJS_W("registerHotKey"), &Class::registerHotKey, 0);
 
     Method(TJS_W("registerExEvent"), &Class::checkExEvents);
     Method(TJS_W("getNotificationNum"), &Class::getWindowNotificationNum);

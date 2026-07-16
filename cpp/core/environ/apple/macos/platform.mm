@@ -376,6 +376,20 @@ int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
         return 0;
     }
 
+    const char *forceAlerts = std::getenv("AETHERKIRI_FORCE_NATIVE_ALERTS");
+    const bool forceNativeAlert =
+        forceAlerts != nullptr && forceAlerts[0] != '\0' &&
+        std::strcmp(forceAlerts, "0") != 0 &&
+        std::strcmp(forceAlerts, "false") != 0 &&
+        std::strcmp(forceAlerts, "off") != 0 &&
+        std::strcmp(forceAlerts, "no") != 0;
+    if(!forceNativeAlert && vecButtons.size() <= 1 &&
+       (utf8Caption == "Information" ||
+        utf8Caption.rfind("Warning", 0) == 0)) {
+        spdlog::warn("TVPShowSimpleMessageBox: auto-acknowledged non-fatal startup dialog");
+        return 0;
+    }
+
     // 确保在主线程执行UI操作
     if (![NSThread isMainThread]) {
         __block int result = -1;

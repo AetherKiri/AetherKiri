@@ -540,6 +540,17 @@ static void TVPRegisterGfxFireStub() {
     spdlog::info("Registered gfxFire stub for missing gfxEffect.dll");
 }
 
+static void TVPRegisterFontInfoStub() {
+    try {
+        TVPExecuteScript(TJS_W(
+            "System._fontInfoMap = %[];\n"
+            "System.getFontInfoMap = function() { return System._fontInfoMap; };\n"));
+        spdlog::info("Registered System.getFontInfoMap stub for missing fontInfo.dll");
+    } catch(...) {
+        spdlog::warn("Failed to register fontInfo.dll compatibility stub");
+    }
+}
+
 void TVPLoadPlugin(const ttstr &name) {
     ttstr normalizedShortName = TVPGetNormalizedPluginName(name);
     ttstr resolvedName = name;
@@ -553,6 +564,21 @@ void TVPLoadPlugin(const ttstr &name) {
         if(loaded) {
             TVPRegisteredPlugins.insert(normalizedShortName);
             stub = "ProxyStorageMap compatibility layer";
+        }
+    }
+
+    if(!loaded && TJS::TVPIsMockEnabled()) {
+        if(normalizedShortName == TJS_W("fontinfo.dll")) {
+            TVPRegisterFontInfoStub();
+            TVPRegisteredPlugins.insert(normalizedShortName);
+            loaded = true;
+            stub = "FontInfoStub";
+        } else if(normalizedShortName == TJS_W("tenshin.tpm") ||
+                  normalizedShortName == TJS_W("tenshin.dll")) {
+            TVPRegisteredPlugins.insert(normalizedShortName);
+            loaded = true;
+            stub = "TenshinNoopStub";
+            spdlog::info("Registered no-op compatibility stub for {}", name.AsStdString());
         }
     }
 

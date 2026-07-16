@@ -4221,6 +4221,10 @@ func _probe_open_game(config: Dictionary, target_game_path: String, backend_env:
     _apply_backend(false)
     var fps_limit := ProbeConfig.int_value(config, "fps_limit", _runtime_int("AETHERKIRI_PROBE_FPS_LIMIT", 0))
     player.set_engine_option("fps_limit", str(maxi(0, fps_limit)))
+    if config.has("engine_options") and config["engine_options"] is Dictionary:
+        var engine_options: Dictionary = config["engine_options"]
+        for key in engine_options.keys():
+            player.set_engine_option(String(key), String(engine_options[key]))
     var surface_size := ProbeConfig.surface_size(config)
     _write_probe_marker("probe_open_game surface=%dx%d fps_limit=%d" % [surface_size.x, surface_size.y, fps_limit])
     var surface_result: int = int(player.set_surface_size(surface_size.x, surface_size.y))
@@ -4435,6 +4439,17 @@ func _probe_run_actions(config: Dictionary, step: int) -> int:
             player.send_key_event(false, key_code, int(action.get("modifiers", 0)), 0)
             if label.is_empty() or label == "key":
                 label = "key_%d" % key_code
+        elif kind == "scroll" or kind == "repeat_scroll":
+            var pos := ProbeConfig.click_position(action)
+            var count: int = max(1, int(action.get("count", 1)))
+            var delta_y := float(action.get("delta_y", -1.0))
+            var per_scroll_frames: int = max(0, int(action.get("per_scroll_frames", 1)))
+            for i in range(count):
+                _probe_send_mapped_scroll(pos, config, delta_y)
+                if per_scroll_frames > 0 and not await _probe_advance(per_scroll_frames):
+                    return -1
+            if label.is_empty() or label == "scroll" or label == "repeat_scroll":
+                label = "scroll_%d_%d_%d" % [count, int(pos.x), int(pos.y)]
         elif kind == "click_stream":
             step = await _probe_run_click_stream(config, step, label, action)
             continue
@@ -4588,6 +4603,15 @@ func _probe_send_mapped_move(window_pos: Vector2, config: Dictionary) -> void:
         return
     player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
+
+func _probe_send_mapped_scroll(window_pos: Vector2, config: Dictionary, delta_y: float) -> void:
+    var mapped := _probe_map_window_point(window_pos, config)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip scroll outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_SCROLL, 0, mapped.x, mapped.y, 0.0, delta_y, 0)
 
 func _probe_map_window_point(pos: Vector2, config: Dictionary) -> Vector2:
     var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))

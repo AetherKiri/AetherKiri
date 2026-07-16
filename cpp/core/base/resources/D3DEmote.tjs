@@ -577,12 +577,16 @@ class AffineSourceMotion extends AffineSource, EmoteVariable {
 	/**
 	 * 画像のロード
 	 */
-	function _loadImages(storage) {
+	function _isMotionPsbOptions(options) {
+		return options !== void && (options.motion !== void || options.chara !== void);
+	}
+
+	function _loadImages(storage, options=void) {
 		//dm(@"モーション画像ロード:${storage}:${_innerStorage}");
 		if (_innerStorage != storage) {
 			_metadata = void;
 			var ext = Storages.extractStorageExt(storage).toUpperCase();
-			var isEmote = ext == ".PSB";
+			var isEmote = ext == ".PSB" && !_isMotionPsbOptions(options);
 			removePlayer();
 			var remove = _innerStorage != "" ? splitStorage(_innerStorage) : void;
 			var create = splitStorage(storage);
@@ -611,7 +615,7 @@ class AffineSourceMotion extends AffineSource, EmoteVariable {
 			_storage = storage;
 			
 			_images = void;
-			_loadImages(storage);
+			_loadImages(storage, options);
 			createPlayer();
 
 			if (_storageType == "emote") {

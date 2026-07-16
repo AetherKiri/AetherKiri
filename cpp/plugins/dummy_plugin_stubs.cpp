@@ -733,6 +733,16 @@ static void GlesCompatRegisterRenderable(tjs_int numparams,
         GlesCompatFindMotionPlayerInParams(numparams, param);
     if(!player)
         return;
+    if(!layer) {
+        tTJSVariant playerVar(player, player);
+        layer = GlesCompatResolveLayerDispatch(playerVar);
+    }
+    if(!layer) {
+        TVPAddLog(ttstr(TJS_W("GLESCompat.")) +
+                  (tag ? tag : TJS_W("entry")) +
+                  TJS_W(": skipped Motion.Player render target without layer"));
+        return;
+    }
 
     std::lock_guard<std::mutex> lock(GlesCompatRenderMutex());
     auto &items = GlesCompatRenderables();
@@ -785,25 +795,31 @@ static tjs_int GlesCompatRenderMotionPlayers(const tjs_char *tag) {
     }
 
     tjs_int rendered = 0;
-    iTJSDispatch2 *defaultLayer = GlesCompatDefaultLayer();
     for(const auto &item : snapshot) {
         iTJSDispatch2 *player = item.player.Type() == tvtObject
             ? item.player.AsObjectNoAddRef()
             : nullptr;
         iTJSDispatch2 *layer = item.layer.Type() == tvtObject
             ? item.layer.AsObjectNoAddRef()
-            : defaultLayer;
+            : nullptr;
+        if(!layer && item.player.Type() == tvtObject)
+            layer = GlesCompatResolveLayerDispatch(item.player);
+        if(!layer)
+            continue;
         if(GlesCompatInvokeMotionDraw(player, layer, tag))
             ++rendered;
     }
 
-    if(snapshot.empty() && defaultLayer) {
+    if(snapshot.empty()) {
         for(const auto &playerVar :
             motion::SnapshotAutoProgressPlayerDispatchesForCompat()) {
             iTJSDispatch2 *player = playerVar.Type() == tvtObject
                 ? playerVar.AsObjectNoAddRef()
                 : nullptr;
-            if(GlesCompatInvokeMotionDraw(player, defaultLayer, tag))
+            iTJSDispatch2 *layer = GlesCompatResolveLayerDispatch(playerVar);
+            if(!layer)
+                continue;
+            if(GlesCompatInvokeMotionDraw(player, layer, tag))
                 ++rendered;
         }
     }

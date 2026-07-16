@@ -164,6 +164,25 @@ TEST_CASE("first-pass compatibility stubs are registered") {
     }
 }
 
+TEST_CASE("void member access stays safe for transient script layers") {
+    ensurePluginRegistryRuntime();
+
+    tTJSVariant result;
+    REQUIRE_NOTHROW(
+        TVPExecuteExpression(TJS_W("([])[void]"), &result));
+    REQUIRE(result.Type() == tvtVoid);
+
+    REQUIRE_NOTHROW(TVPExecuteExpression(
+        TJS_W("typeof (([])[void]).offset"), &result));
+    REQUIRE(result.Type() == tvtString);
+    REQUIRE(ttstr(result) == TJS_W("undefined"));
+
+    REQUIRE_NOTHROW(TVPExecuteExpression(
+        TJS_W("typeof (([])[void])[\"offset\"]"), &result));
+    REQUIRE(result.Type() == tvtString);
+    REQUIRE(ttstr(result) == TJS_W("undefined"));
+}
+
 TEST_CASE("legacy compatibility plugins expose observable behavior") {
     ensurePluginRegistryRuntime();
 

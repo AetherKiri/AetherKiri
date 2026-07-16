@@ -18,7 +18,6 @@
 #include <string>
 #include <unordered_map>
 
-extern void TVPUninitializeFreeFont();
 extern FontSystem *TVPFontSystem;
 
 namespace {
@@ -123,11 +122,11 @@ FreeTypeFontRasterizer::FreeTypeFontRasterizer() :
     AddRef();
 }
 FreeTypeFontRasterizer::~FreeTypeFontRasterizer() {
+    std::lock_guard<std::recursive_mutex> stateLock(Mutex);
 
     delete Face;
     Face = nullptr;
     ClearFallbackFaces();
-    TVPUninitializeFreeFont();
 }
 void FreeTypeFontRasterizer::AddRef() { RefCount++; }
 //---------------------------------------------------------------------------
@@ -145,6 +144,7 @@ void FreeTypeFontRasterizer::Release() {
 //---------------------------------------------------------------------------
 void FreeTypeFontRasterizer::ApplyFont(class tTVPNativeBaseBitmap *bmp,
                                        bool force) {
+    std::lock_guard<std::recursive_mutex> stateLock(Mutex);
     if(bmp != LastBitmap || force) {
         ApplyFont(bmp->GetFont());
         LastBitmap = bmp;
@@ -152,6 +152,7 @@ void FreeTypeFontRasterizer::ApplyFont(class tTVPNativeBaseBitmap *bmp,
 }
 //---------------------------------------------------------------------------
 void FreeTypeFontRasterizer::ApplyFont(const tTVPFont &font) {
+    std::lock_guard<std::recursive_mutex> stateLock(Mutex);
     CurrentFont = font;
     ttstr stdname = TVPFontSystem->GetBeingFont(font.Face);
     // TVP_FACE_OPTIONS_NO_ANTIALIASING
@@ -216,6 +217,7 @@ static bool isUnicodeSpace(char16_t ch);
 static bool isDefaultIgnorableUnicode(char16_t ch);
 void FreeTypeFontRasterizer::GetTextExtent(tjs_char ch, tjs_int &w,
                                            tjs_int &h) {
+    std::lock_guard<std::recursive_mutex> stateLock(Mutex);
     if(!Face)
         return;
     if(isDefaultIgnorableUnicode(ch)) {
@@ -272,6 +274,7 @@ void FreeTypeFontRasterizer::GetTextExtent(tjs_char ch, tjs_int &w,
 }
 //---------------------------------------------------------------------------
 tjs_int FreeTypeFontRasterizer::GetAscentHeight() {
+    std::lock_guard<std::recursive_mutex> stateLock(Mutex);
     if(Face)
         return Face->GetAscent();
     return 0;
@@ -291,6 +294,7 @@ static bool isDefaultIgnorableUnicode(char16_t ch) {
 tTVPCharacterData *
 FreeTypeFontRasterizer::GetBitmap(const tTVPFontAndCharacterData &font,
                                   tjs_int aofsx, tjs_int aofsy) {
+    std::lock_guard<std::recursive_mutex> stateLock(Mutex);
     if(!Face)
         return nullptr;
     if(isDefaultIgnorableUnicode(font.Character)) {
@@ -363,6 +367,7 @@ FreeTypeFontRasterizer::GetBitmap(const tTVPFontAndCharacterData &font,
 //---------------------------------------------------------------------------
 void FreeTypeFontRasterizer::GetGlyphDrawRect(const ttstr &text,
                                               tTVPRect &area) {
+    std::lock_guard<std::recursive_mutex> stateLock(Mutex);
     if(!Face) {
         area.left = area.top = area.right = area.bottom = 0;
         return;

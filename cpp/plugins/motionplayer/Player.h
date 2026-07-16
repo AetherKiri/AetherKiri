@@ -15,6 +15,8 @@
 #include "tjs.h"
 #include "ResourceManager.h"
 
+class tTVPBaseBitmap;
+
 namespace PSB {
     class PSBDictionary;
 }
@@ -219,6 +221,9 @@ namespace motion {
         void setProject(tTJSVariant v) { _project = v; }
         tTJSVariant getProject() const { return _project; }
 
+        void setTargetLayer(tTJSVariant v) { _targetLayer = v; }
+        tTJSVariant getTargetLayer() const { return _targetLayer; }
+
         void setUseD3D(bool v) { _useD3D = v; }
         bool getUseD3D() const { return _useD3D; }
 
@@ -389,6 +394,10 @@ namespace motion {
                                              tjs_int numparams,
                                              tTJSVariant **param,
                                              Player *nativeInstance);
+        static tjs_error clearCompatMethod(tTJSVariant *result,
+                                           tjs_int numparams,
+                                           tTJSVariant **param,
+                                           iTJSDispatch2 *objthis);
         static tjs_error drawCompat(tTJSVariant *result, tjs_int numparams,
                                     tTJSVariant **param,
                                     iTJSDispatch2 *objthis);
@@ -402,6 +411,14 @@ namespace motion {
                                                  tjs_int numparams,
                                                  tTJSVariant **param,
                                                  iTJSDispatch2 *objthis);
+        static tjs_error setCoordCompatMethod(tTJSVariant *result,
+                                              tjs_int numparams,
+                                              tTJSVariant **param,
+                                              iTJSDispatch2 *objthis);
+        static tjs_error containsCompatMethod(tTJSVariant *result,
+                                              tjs_int numparams,
+                                              tTJSVariant **param,
+                                              iTJSDispatch2 *objthis);
         static tjs_error isPlayingCompat(tTJSVariant *result, tjs_int numparams,
                                          tTJSVariant **param,
                                          iTJSDispatch2 *objthis);
@@ -420,6 +437,7 @@ namespace motion {
         // Public accessor for EmotePlayer delegation
         double getActiveMotionWidth() const;
         double getActiveMotionHeight() const;
+        bool contains(double x, double y);
         bool hitTestLayer(ttstr name, double x, double y);
 
         // Root node position (x/y/left/top)
@@ -507,6 +525,7 @@ namespace motion {
         const std::vector<std::string> &activeSourceCandidates() const;
         void calcBounds();
         void updateLayers();
+        bool applyMotionParentRootStateForRender();
         bool prepareRenderItems();
         void appendPreparedRenderItems();
         void applyPreparedRenderItemTranslateOffsets();
@@ -515,12 +534,25 @@ namespace motion {
                                          bool skipUpdate);
         bool updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject);
         bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
+        void claimYuzuSdAutoProgress();
+        void releaseYuzuSdAutoProgressClaim();
+        void retireYuzuSdAutoProgress();
         void enableAutoProgress(iTJSDispatch2 *objthis);
         void disableAutoProgress();
         void enablePresentationHold(iTJSDispatch2 *targetLayerObject,
                                     tjs_uint64 durationMs);
         void disablePresentationHold();
         void noteManualProgress();
+        std::string beginEndedTimelineRenderHold();
+        void endEndedTimelineRenderHold(const std::string &label);
+        bool deferEndedTimelineRenderHoldUntilDraw(const std::string &label);
+        void releaseDeferredEndedTimelineRenderHoldAfterDraw(bool force = false);
+        bool hasPlayingChildPlayers() const;
+        bool shouldReportPlayingChildPlayers() const;
+        bool isYuzuSdPreviewAnimationFrozen() const;
+        void captureYuzuSdPreviewFrame(iTJSDispatch2 *renderTargetObject,
+                                       const std::string &motionPath);
+        bool restoreFrozenYuzuSdPreviewFrame(iTJSDispatch2 *targetObject);
         void dispatchPendingEvents(iTJSDispatch2 *objthis);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
@@ -586,6 +618,7 @@ namespace motion {
         ttstr _stealthMotion;
         tTJSVariant _tags;
         tTJSVariant _project;
+        tTJSVariant _targetLayer;
         inline static bool _useD3D;
         ttstr _meshline;  // Aligned to libkrkr2.so +1052: ttstr
         bool _busy = false;
@@ -594,11 +627,24 @@ namespace motion {
         tjs_uint64 _manualProgressLastTick = 0;
         bool _autoProgressHasLastTick = false;
         bool _autoProgressRegistered = false;
+        bool _autoProgressRendering = false;
         tTJSVariant _presentationHoldLayer;
         tjs_uint64 _presentationHoldUntilTick = 0;
         tjs_uint64 _presentationHoldLastTick = 0;
         bool _presentationHoldRegistered = false;
         bool _presentationHoldRendering = false;
+        std::string _deferredEndedTimelineRenderHoldLabel;
+        std::string _completedEndedTimelineRenderHoldLabel;
+        double _yuzuSdChildContinuationFrames = 0.0;
+        std::shared_ptr<tTVPBaseBitmap> _yuzuSdPreviewFrame;
+        std::string _yuzuSdPreviewFrameMotion;
+        std::string _yuzuSdPreviewFrameLabel;
+        std::string _endedTimelineRenderHoldRestoreLabel;
+        double _endedTimelineRenderHoldRestoreTime = 0.0;
+        double _endedTimelineRenderHoldRestoreEvalTime = 0.0;
+        bool _endedTimelineRenderHoldHasRestore = false;
+        Player *_motionParentPlayer = nullptr;
+        int _motionParentNodeIndex = -1;
 
         // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
         // Camera velocity at player+784/792/800, damping at player+600
@@ -613,6 +659,7 @@ namespace motion {
         // setter may be called before node tree exists).
         double _pendingRootX = 0.0;
         double _pendingRootY = 0.0;
+        double _pendingRootZ = 0.0;
         bool _hasPendingRootPos = false;
         double _rootOffsetZ = 0.0;
         float _cameraOffsetX = 0.0f;    // player+144, set by setCameraOffset (0x6D9A38)
@@ -674,11 +721,6 @@ namespace motion {
         bool _mirrorEvalEnabled = false;
         std::unordered_set<std::string> _mirrorPositiveCache;
         std::unordered_set<std::string> _mirrorNegativeCache;
-
-        // Parent color propagated from parent motion node (sub_6BE0C0 at 0x6BEB7C).
-        // Binary: *(_DWORD *)(childPlayer + 1156) = *(_DWORD *)(node + 100)
-        // Stores colorBytes[0..3] packed as RGBA uint32 (default 0xFF808080).
-        uint32_t _parentColorPacked = 0xFF808080u;  // player+1156
 
         // Per-frame flag cleared at end of updateLayers (player+608, 0x6BBDF8).
         // Set to true in constructor; checked by sub_6BE0C0 case 2 (0x6BE664)

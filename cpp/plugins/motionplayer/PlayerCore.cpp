@@ -4,8 +4,11 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 #include "PlayerInternal.h"
@@ -30,6 +33,9 @@ namespace {
     std::vector<motion::Player *> g_autoProgressPlayers;
     MotionPlayerAutoProgressHook g_autoProgressHook;
     bool g_autoProgressHookRegistered = false;
+
+    std::mutex g_yuzuSdAutoProgressMutex;
+    motion::Player *g_yuzuSdAutoProgressPlayer = nullptr;
 
     std::mutex g_presentationHoldMutex;
     std::vector<motion::Player *> g_presentationHoldPlayers;
@@ -94,6 +100,74 @@ namespace {
         }
     }
 
+    bool isYuzuSdPreviewMotion(const motion::detail::PlayerRuntime &runtime,
+                               const std::string &label) {
+        if(!runtime.activeMotion || label.size() < 2) {
+            return false;
+        }
+
+        auto lower = [](std::string value) {
+            std::transform(value.begin(), value.end(), value.begin(),
+                           [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            return value;
+        };
+
+        std::string path = lower(runtime.activeMotion->path);
+        const size_t slash = path.find_last_of("/\\");
+        if(slash != std::string::npos) {
+            path.erase(0, slash + 1);
+        }
+        const std::string loweredLabel = lower(label);
+        const bool supportedMotionStorage =
+            path.find(".psb") != std::string::npos ||
+            path.find(".mtn") != std::string::npos;
+        return path.rfind("sd", 0) == 0 &&
+            loweredLabel.rfind("sd", 0) == 0 && supportedMotionStorage;
+    }
+
+    void suppressYuzuSdPreviewSyncEvents(
+        motion::detail::PlayerRuntime &runtime,
+        const std::string &label,
+        const char *reason) {
+        if(!isYuzuSdPreviewMotion(runtime, label)) {
+            return;
+        }
+
+        auto motionPath = runtime.activeMotion
+            ? runtime.activeMotion->path
+            : std::string{};
+        std::transform(motionPath.begin(), motionPath.end(), motionPath.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        if(motionPath.find(".psb") == std::string::npos) {
+            return;
+        }
+
+        const auto oldSize = runtime.pendingEvents.size();
+        runtime.pendingEvents.erase(
+            std::remove_if(runtime.pendingEvents.begin(),
+                           runtime.pendingEvents.end(),
+                           [&label](const motion::detail::MotionEvent &event) {
+                               return event.type == 1 &&
+                                   event.param1 == label;
+                           }),
+            runtime.pendingEvents.end());
+        if(LOGGER && oldSize != runtime.pendingEvents.size()) {
+            const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
+            if(debug && *debug && std::strcmp(debug, "0") != 0) {
+                LOGGER->info(
+                    "motion suppress sd preview sync: reason={} motion={} label={} removed={}",
+                    reason ? reason : "<null>",
+                    runtime.activeMotion ? runtime.activeMotion->path
+                                         : std::string{},
+                    label, oldSize - runtime.pendingEvents.size());
+            }
+        }
+    }
+
     void MotionPlayerAutoProgressHook::OnContinuousCallback(tjs_uint64 tick) {
         std::vector<motion::Player *> players;
         {
@@ -134,6 +208,20 @@ namespace {
             return nullptr;
         }
         return layer;
+    }
+
+    bool layerBelongsToCgViewPresentation(tTJSNI_BaseLayer *layer) {
+        for(auto *current = layer; current; current = current->GetParent()) {
+            auto name = motion::detail::narrow(current->GetName());
+            for(char &ch : name) {
+                ch = static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(ch)));
+            }
+            if(name.find("cg view layer") != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
     }
 
     std::string lowerAscii(std::string value) {
@@ -333,6 +421,96 @@ namespace motion {
     Player::~Player() {
         disableAutoProgress();
         disablePresentationHold();
+        releaseYuzuSdAutoProgressClaim();
+    }
+
+    void Player::claimYuzuSdAutoProgress() {
+        if(_motionParentPlayer || !_runtime || !_runtime->activeMotion ||
+           !isYuzuSdPresentationMotionPath(_runtime->activeMotion->path)) {
+            return;
+        }
+
+        const auto label =
+            psbDebugLowercase(_runtime->lastExplicitTimelineLabel);
+        if(label.rfind("sd", 0) != 0) {
+            return;
+        }
+
+        Player *previous = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_yuzuSdAutoProgressMutex);
+            if(g_yuzuSdAutoProgressPlayer != this) {
+                previous = g_yuzuSdAutoProgressPlayer;
+                g_yuzuSdAutoProgressPlayer = this;
+            }
+        }
+
+        _runtime->yuzuSdPresentationRetired = false;
+        if(previous && previous != this) {
+            if(LOGGER) {
+                const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
+                if(debug && *debug && std::strcmp(debug, "0") != 0) {
+                    LOGGER->info(
+                        "motion yuzu sd presentation replaced: incoming={} outgoing={}",
+                        _runtime->activeMotion->path,
+                        previous->_runtime && previous->_runtime->activeMotion
+                            ? previous->_runtime->activeMotion->path
+                            : std::string{});
+                }
+            }
+            previous->retireYuzuSdAutoProgress();
+        }
+    }
+
+    void Player::releaseYuzuSdAutoProgressClaim() {
+        bool releasedActivePresentation = false;
+        {
+            std::lock_guard<std::mutex> lock(g_yuzuSdAutoProgressMutex);
+            if(g_yuzuSdAutoProgressPlayer == this) {
+                g_yuzuSdAutoProgressPlayer = nullptr;
+                releasedActivePresentation = true;
+            }
+        }
+        if(releasedActivePresentation) {
+            retireYuzuSdAutoProgress();
+        }
+    }
+
+    void Player::retireYuzuSdAutoProgress() {
+        if(!_runtime) {
+            disableAutoProgress();
+            disablePresentationHold();
+            return;
+        }
+
+        _runtime->yuzuSdPresentationRetired = true;
+        if(_runtime->activeMotion) {
+            forgetYuzuSdPresentationTargets(_runtime->activeMotion->path);
+        }
+        if(_runtime->internalRenderLayer.Type() == tvtObject) {
+            auto *renderObject =
+                _runtime->internalRenderLayer.AsObjectNoAddRef();
+            if(auto *renderLayer = resolvePresentationHoldLayer(renderObject)) {
+                renderLayer->SetVisible(false);
+                if(auto *image = renderLayer->GetMainImage()) {
+                    const tTVPRect clearRect(
+                        0, 0, std::max<tjs_int>(renderLayer->GetImageWidth(), 0),
+                        std::max<tjs_int>(renderLayer->GetImageHeight(), 0));
+                    image->Fill(clearRect, 0x00000000);
+                }
+                renderLayer->Update(false);
+            }
+        }
+        for(auto &item : _runtime->timelines) {
+            item.second.playing = false;
+        }
+        _runtime->playingTimelineLabels.clear();
+        _runtime->pendingEvents.clear();
+        _allplaying = false;
+        disableAutoProgress();
+        disablePresentationHold();
+        _targetLayer.Clear();
+        _runtime->lastCanvas.Clear();
     }
 
     void Player::setAllplaying(bool v) {
@@ -465,6 +643,204 @@ namespace motion {
         _autoProgressHasLastTick = true;
     }
 
+    std::string Player::beginEndedTimelineRenderHold() {
+        if(!_runtime || !_runtime->activeMotion) {
+            return {};
+        }
+
+        const std::string &label = _runtime->lastExplicitTimelineLabel;
+        if(label.empty()) {
+            return {};
+        }
+
+        if(std::find(_runtime->playingTimelineLabels.begin(),
+                     _runtime->playingTimelineLabels.end(),
+                     label) != _runtime->playingTimelineLabels.end()) {
+            return {};
+        }
+
+        if(_runtime->activeMotion->clipsByLabel.find(label) ==
+           _runtime->activeMotion->clipsByLabel.end()) {
+            return {};
+        }
+
+        const auto stateIt = _runtime->timelines.find(label);
+        if(stateIt == _runtime->timelines.end()) {
+            return {};
+        }
+
+        auto &state = stateIt->second;
+        const bool completedYuzuSdPreview =
+            isYuzuSdPreviewMotion(*_runtime, label) &&
+            _completedEndedTimelineRenderHoldLabel == label;
+        const bool deferredYuzuSdPreview =
+            isYuzuSdPreviewMotion(*_runtime, label) &&
+            _deferredEndedTimelineRenderHoldLabel == label;
+        const bool continuingYuzuSdPreview =
+            completedYuzuSdPreview || deferredYuzuSdPreview;
+        if(completedYuzuSdPreview &&
+           _yuzuSdChildContinuationFrames <= 0.0 &&
+           !hasPlayingChildPlayers()) {
+            return {};
+        }
+        if(state.playing || state.totalFrames <= 0.0 ||
+           state.currentTime + 0.0001 < state.totalFrames) {
+            return {};
+        }
+
+        if(isYuzuSdPreviewMotion(*_runtime, label)) {
+            const double renderTime =
+                std::max(0.0, std::nextafter(state.totalFrames, 0.0));
+            const bool firstHeldFrame = !_endedTimelineRenderHoldHasRestore;
+            if(firstHeldFrame) {
+                _endedTimelineRenderHoldRestoreLabel = label;
+                _endedTimelineRenderHoldRestoreTime = state.currentTime;
+                _endedTimelineRenderHoldRestoreEvalTime = _clampedEvalTime;
+                _endedTimelineRenderHoldHasRestore = true;
+            }
+            state.currentTime = renderTime;
+            _clampedEvalTime = renderTime;
+            if(firstHeldFrame && LOGGER) {
+                const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
+                if(debug && *debug && std::strcmp(debug, "0") != 0) {
+                    LOGGER->info(
+                        "motion hold ended sd timeline at last visible frame: motion={} label={} renderTime={:.6f} restoreTime={:.6f}",
+                        _runtime->activeMotion->path, label, renderTime,
+                        _endedTimelineRenderHoldRestoreTime);
+                }
+            }
+        }
+
+        state.playing = true;
+        _runtime->playingTimelineLabels.push_back(label);
+        _allplaying = true;
+        _syncActive = _syncWaiting;
+        // A one-frame SD selector is the static base for its animated child
+        // motions. Re-evaluate that final root frame while the children run,
+        // but keep the already-built tree on subsequent draws.
+        if(!continuingYuzuSdPreview) {
+            _runtime->nodesBuilt = false;
+        }
+        _emoteDirty = true;
+        if(LOGGER) {
+            const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
+            if(debug && *debug && std::strcmp(debug, "0") != 0) {
+                LOGGER->info(
+                    "motion hold ended timeline for render: motion={} label={} time={:.3f}/{:.3f}",
+                    _runtime->activeMotion->path, label, state.currentTime,
+                    state.totalFrames);
+            }
+        }
+        return label;
+    }
+
+    void Player::endEndedTimelineRenderHold(const std::string &label) {
+        if(label.empty() || !_runtime) {
+            return;
+        }
+
+        suppressYuzuSdPreviewSyncEvents(*_runtime, label, "end-hold");
+
+        _runtime->playingTimelineLabels.erase(
+            std::remove(_runtime->playingTimelineLabels.begin(),
+                        _runtime->playingTimelineLabels.end(), label),
+            _runtime->playingTimelineLabels.end());
+        if(const auto stateIt = _runtime->timelines.find(label);
+           stateIt != _runtime->timelines.end() &&
+           stateIt->second.totalFrames > 0.0 &&
+           stateIt->second.currentTime + 0.0001 >=
+               stateIt->second.totalFrames) {
+            stateIt->second.playing = false;
+            stateIt->second.wasPlaying = false;
+        }
+        if(_endedTimelineRenderHoldHasRestore &&
+           _endedTimelineRenderHoldRestoreLabel == label) {
+            if(auto stateIt = _runtime->timelines.find(label);
+               stateIt != _runtime->timelines.end()) {
+                stateIt->second.currentTime =
+                    _endedTimelineRenderHoldRestoreTime;
+                stateIt->second.playing = false;
+                stateIt->second.wasPlaying = false;
+            }
+            _clampedEvalTime = _endedTimelineRenderHoldRestoreEvalTime;
+            _endedTimelineRenderHoldRestoreLabel.clear();
+            _endedTimelineRenderHoldRestoreTime = 0.0;
+            _endedTimelineRenderHoldRestoreEvalTime = 0.0;
+            _endedTimelineRenderHoldHasRestore = false;
+        }
+        _allplaying = !_runtime->playingTimelineLabels.empty() ||
+            shouldReportPlayingChildPlayers();
+        _syncActive = _syncWaiting && _allplaying;
+    }
+
+    bool Player::deferEndedTimelineRenderHoldUntilDraw(
+        const std::string &label) {
+        if(label.empty() || !_runtime ||
+           !isYuzuSdPreviewMotion(*_runtime, label)) {
+            return false;
+        }
+
+        if(!_deferredEndedTimelineRenderHoldLabel.empty() &&
+           _deferredEndedTimelineRenderHoldLabel != label) {
+            const auto previous = _deferredEndedTimelineRenderHoldLabel;
+            _deferredEndedTimelineRenderHoldLabel.clear();
+            endEndedTimelineRenderHold(previous);
+        }
+
+        suppressYuzuSdPreviewSyncEvents(*_runtime, label, "defer-draw");
+        _deferredEndedTimelineRenderHoldLabel = label;
+        if(LOGGER) {
+            const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
+            if(debug && *debug && std::strcmp(debug, "0") != 0) {
+                LOGGER->info(
+                    "motion defer ended timeline release until draw: motion={} label={}",
+                    _runtime->activeMotion ? _runtime->activeMotion->path
+                                           : std::string{},
+                    label);
+            }
+        }
+        return true;
+    }
+
+    void Player::releaseDeferredEndedTimelineRenderHoldAfterDraw(bool force) {
+        (void)force;
+        if(_deferredEndedTimelineRenderHoldLabel.empty()) {
+            return;
+        }
+
+        const auto label = _deferredEndedTimelineRenderHoldLabel;
+        _deferredEndedTimelineRenderHoldLabel.clear();
+        const bool firstCompletedDraw =
+            _completedEndedTimelineRenderHoldLabel != label;
+        _completedEndedTimelineRenderHoldLabel = label;
+        // SD selectors are one-frame roots with animated child motions. Keep
+        // a short grace period for children that start on the following tick;
+        // live child timelines continue to drive rendering after it expires.
+        if(firstCompletedDraw) {
+            _yuzuSdChildContinuationFrames = 180.0;
+        }
+        endEndedTimelineRenderHold(label);
+    }
+
+    bool Player::isYuzuSdPreviewAnimationFrozen() const {
+        if(_motionParentPlayer || !_runtime || !_runtime->activeMotion ||
+           _completedEndedTimelineRenderHoldLabel.empty() ||
+           _completedEndedTimelineRenderHoldLabel !=
+               _runtime->lastExplicitTimelineLabel ||
+           _yuzuSdChildContinuationFrames > 0.0 ||
+           hasPlayingChildPlayers() ||
+           !isYuzuSdPreviewMotion(
+               *_runtime, _completedEndedTimelineRenderHoldLabel)) {
+            return false;
+        }
+        const auto stateIt = _runtime->timelines.find(
+            _completedEndedTimelineRenderHoldLabel);
+        return stateIt == _runtime->timelines.end() ||
+            !stateIt->second.playing || stateIt->second.totalFrames <= 0.0 ||
+            stateIt->second.currentTime + 0.0001 >=
+                stateIt->second.totalFrames;
+    }
+
     void Player::dispatchPendingEvents(iTJSDispatch2 *objthis) {
         if(!_runtime || _runtime->pendingEvents.empty()) {
             return;
@@ -494,7 +870,7 @@ namespace motion {
     }
 
     void Player::autoProgressFromContinuousTick(tjs_uint64 tick) {
-        if(!_runtime) {
+        if(!_runtime || _runtime->yuzuSdPresentationRetired) {
             disableAutoProgress();
             return;
         }
@@ -548,11 +924,137 @@ namespace motion {
 
         _runtime->pendingEvents.clear();
         frameProgress(deltaMs * kMotionFramesPerMillisecond);
+        const std::string renderHoldLabel = beginEndedTimelineRenderHold();
         ensureNodeTreeBuilt();
         if(!_runtime->nodes.empty()) {
             updateLayers();
         }
         calcBounds();
+        bool renderedEndedTimelineFrame = false;
+        if(!_autoProgressRendering && !_presentationHoldRendering) {
+            iTJSDispatch2 *target = nullptr;
+            std::string staleSdTargetName;
+            if(_targetLayer.Type() == tvtObject) {
+                tTJSVariant targetValue = _targetLayer;
+                target = tryResolveLayerDispatch(targetValue);
+            }
+            if(!target && dispatch) {
+                tTJSVariant dispatchValue(dispatch, dispatch);
+                target = tryResolveLayerDispatch(dispatchValue);
+            }
+            if(!target && _runtime->lastCanvas.Type() == tvtObject) {
+                target = tryResolveLayerDispatch(_runtime->lastCanvas);
+            }
+            if(target && _runtime->activeMotion &&
+               isYuzuSdPresentationMotionPath(
+                   _runtime->activeMotion->path) &&
+               !yuzuSdPresentationTargetIsUsable(target)) {
+                staleSdTargetName =
+                    yuzuSdPresentationTargetLayerName(target);
+                const char *debug =
+                    std::getenv("AETHERKIRI_MOTION_DEBUG");
+                if(debug && *debug && std::strcmp(debug, "0") != 0 &&
+                   LOGGER) {
+                    LOGGER->info(
+                        "motion auto-progress discarded stale sd presentation target: motion={} target={} layer={}",
+                        _runtime->activeMotion->path,
+                        static_cast<const void *>(target),
+                        staleSdTargetName.empty() ? std::string("<unnamed>")
+                                                  : staleSdTargetName);
+                }
+                target = nullptr;
+                _targetLayer.Clear();
+            }
+            if(!target && _runtime->activeMotion) {
+                target = resolveYuzuTitlePresentationTargetFromLayerTree(
+                    _runtime->activeMotion->path);
+                if(target) {
+                    _targetLayer = tTJSVariant(target, target);
+                }
+            }
+            if(!target && _runtime->activeMotion) {
+                target = resolveRememberedYuzuSdPresentationTarget(
+                    _runtime->activeMotion->path);
+                if(target) {
+                    _targetLayer = tTJSVariant(target, target);
+                    const char *debug =
+                        std::getenv("AETHERKIRI_MOTION_DEBUG");
+                    if(debug && *debug && std::strcmp(debug, "0") != 0 &&
+                       LOGGER) {
+                        LOGGER->info(
+                            "motion auto-progress reused sd presentation target: motion={} target={}",
+                            _runtime->activeMotion->path,
+                            static_cast<const void *>(target));
+                    }
+                }
+            }
+            if(!target && _runtime->activeMotion) {
+                target = resolveYuzuSdPresentationTargetFromLayerTree(
+                    _runtime->activeMotion->path,
+                    _runtime->lastExplicitTimelineLabel,
+                    staleSdTargetName);
+                if(target) {
+                    _targetLayer = tTJSVariant(target, target);
+                }
+            }
+            if(target) {
+                const auto logicalSdTargetName =
+                    yuzuSdPresentationTargetLayerName(target);
+                const bool allowHiddenStableSdTarget =
+                    _runtime->activeMotion &&
+                    isYuzuSdPresentationMotionPath(
+                        _runtime->activeMotion->path) &&
+                    (logicalSdTargetName == "ev" ||
+                     logicalSdTargetName == "sd") &&
+                    yuzuSdPresentationTargetIsUsable(target);
+                if(auto *layer = resolvePresentationHoldLayer(target);
+                   layer && layer->GetOpacity() > 0 &&
+                   ((layer->GetVisible() && layer->GetParentVisible()) ||
+                    allowHiddenStableSdTarget)) {
+                    rememberYuzuSdPresentationTarget(
+                        _runtime->activeMotion->path, target);
+                    _autoProgressRendering = true;
+                    try {
+                        const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
+                        if(debug && *debug && std::strcmp(debug, "0") != 0 &&
+                           LOGGER && _runtime->activeMotion) {
+                            LOGGER->info(
+                                "motion auto-progress render target: motion={} target={}",
+                                _runtime->activeMotion->path,
+                                static_cast<const void *>(target));
+                        }
+                        renderedEndedTimelineFrame = _d3dDrawMode
+                            ? renderViaSharedD3DAdaptor(target)
+                            : renderToLayer(target);
+                    } catch(const std::exception &e) {
+                        if(LOGGER) {
+                            LOGGER->warn(
+                                "motion auto-progress render failed: error={}",
+                                e.what());
+                        }
+                    } catch(...) {
+                        if(LOGGER) {
+                            LOGGER->warn(
+                                "motion auto-progress render failed: error=<unknown>");
+                        }
+                    }
+                    _autoProgressRendering = false;
+                }
+            }
+        }
+        if(renderedEndedTimelineFrame) {
+            // This path already performed the draw that drawCompat normally
+            // completes. Commit the held SD frame now so the next continuous
+            // tick reuses its child-player tree instead of rebuilding every
+            // looping motion from frame zero.
+            if(deferEndedTimelineRenderHoldUntilDraw(renderHoldLabel)) {
+                releaseDeferredEndedTimelineRenderHoldAfterDraw();
+            } else {
+                endEndedTimelineRenderHold(renderHoldLabel);
+            }
+        } else if(!deferEndedTimelineRenderHoldUntilDraw(renderHoldLabel)) {
+            endEndedTimelineRenderHold(renderHoldLabel);
+        }
         dispatchPendingEvents(dispatch);
 
         if(!_allplaying && _runtime->playingTimelineLabels.empty()) {
@@ -607,6 +1109,7 @@ namespace motion {
         _runtime->clearMotionBitmapCaches();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
+        _runtime->lastExplicitTimelineLabel.clear();
         _runtime->yuzuPresentationCenteredOriginConfirmed = false;
         _runtime->yuzuPresentationTranslateX = 0.0f;
         _runtime->yuzuPresentationTranslateY = 0.0f;
@@ -690,6 +1193,7 @@ namespace motion {
         _runtime->clearMotionBitmapCaches();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
+        _runtime->lastExplicitTimelineLabel.clear();
         _runtime->yuzuPresentationCenteredOriginConfirmed = false;
         _runtime->yuzuPresentationTranslateX = 0.0f;
         _runtime->yuzuPresentationTranslateY = 0.0f;
@@ -759,6 +1263,7 @@ namespace motion {
         self->_runtime->clearMotionBitmapCaches();
         self->_runtime->timelines.clear();
         self->_runtime->playingTimelineLabels.clear();
+        self->_runtime->lastExplicitTimelineLabel.clear();
         self->_runtime->yuzuPresentationCenteredOriginConfirmed = false;
         self->_runtime->yuzuPresentationTranslateX = 0.0f;
         self->_runtime->yuzuPresentationTranslateY = 0.0f;
@@ -942,16 +1447,18 @@ namespace motion {
                 if(label.empty()) {
                     return nullptr;
                 }
-                const auto it = _runtime->activeMotion->clipsByLabel.find(label);
-                return it != _runtime->activeMotion->clipsByLabel.end()
-                    ? &it->second
-                    : nullptr;
+                return detail::findMotionClip(
+                    *_runtime->activeMotion, detail::narrow(_chara), label);
             };
 
         for(const auto &label : _runtime->playingTimelineLabels) {
             if(const auto *clip = selectByLabel(label)) {
                 return clip;
             }
+        }
+
+        if(const auto *clip = selectByLabel(_runtime->lastExplicitTimelineLabel)) {
+            return clip;
         }
 
         const auto &primaryLabels =

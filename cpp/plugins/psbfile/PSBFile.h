@@ -40,6 +40,8 @@ namespace PSB {
          * @param filePath
          */
         bool loadPSBFile(const ttstr &filePath);
+        bool loadPSBData(const void *data, size_t size,
+                         const ttstr &sourceName);
         /**
          * Load a string based on index, lift stream Position
          */

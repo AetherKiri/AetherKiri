@@ -308,6 +308,9 @@ class tTVPLayerManager : public iTVPLayerManager, public tTVPDrawable {
 
     bool InNotifyingHintOrCursorChange;
     bool HoldAlpha = true;
+    tTVPBaseTexture *EnsureDrawBufferSize(tjs_int w, tjs_int h,
+                                          bool clear_on_resize);
+    tTVPBaseTexture *EnsureDrawBufferMatchesPrimary(bool clear_on_resize);
 
 public:
     tTVPLayerManager(class iTVPLayerTreeOwner *owner);
@@ -341,7 +344,9 @@ public: // methods from tTVPDrawable
     void DrawCompleted(const tTVPRect &destrect, tTVPBaseTexture *bmp,
                        const tTVPRect &cliprect, tTVPLayerType type,
                        tjs_int opacity) override;
-    tTVPBaseTexture *GetDrawBuffer() override { return DrawBuffer; }
+    tTVPBaseTexture *GetDrawBuffer() override {
+        return EnsureDrawBufferMatchesPrimary(false);
+    }
     tTVPBaseTexture *GetOrCreateDrawBuffer();
 
 public:
@@ -485,7 +490,8 @@ public:
     void PrimaryMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
                         tjs_uint32 flags);
 
-    void PrimaryMouseMove(tjs_int x, tjs_int y, tjs_uint32 flags);
+    void PrimaryMouseMove(tjs_int x, tjs_int y, tjs_uint32 flags,
+                          bool force = false);
     void ForceMouseLeave();
     void ForceMouseRecheck();
     void MouseOutOfWindow();

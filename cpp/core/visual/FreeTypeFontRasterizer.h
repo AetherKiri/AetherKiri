@@ -5,6 +5,7 @@
 #include "tjsCommHead.h"
 #include "CharacterData.h"
 #include "FontRasterizer.h"
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,7 @@ class FreeTypeFontRasterizer : public FontRasterizer {
     class tTVPNativeBaseBitmap *LastBitmap;
     tTVPFont CurrentFont;
     std::string CurrentExtentCacheFontKey;
+    std::recursive_mutex Mutex;
     void ApplyFallbackFaces();
     void ClearFallbackFaces();
     void ApplyFaceOptions(class tFreeTypeFace *face);

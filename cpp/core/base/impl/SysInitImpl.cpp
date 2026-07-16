@@ -564,6 +564,8 @@ static void TVPInitProgramArgumentsAndDataPath(bool stop_after_datapath_got) {
             // ((ttstr)val).AsStdString();
             TVPNativeDataPath = ApplicationSpecialPath::GetDataPathDirectory(
                 config_datapath, ExePath());
+            TVPDataPathDirectoryEnsured = false;
+            TVPEnsureDataPathDirectory();
 
             if(stop_after_datapath_got)
                 return;

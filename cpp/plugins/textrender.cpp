@@ -976,6 +976,17 @@ bool TextRenderBase::render(tTJSString text, int autoIndent, int diff, int all, 
       }
       break;
     }
+    case '\r':
+      // Treat CRLF as one logical line break while still supporting files
+      // that contain old-style CR-only line endings.
+      if (i + 1 < len && text[i + 1] == '\n') ++i;
+      flush();
+      performLinebreak();
+      break;
+    case '\n':
+      flush();
+      performLinebreak();
+      break;
     default:
       pushCharacter(ch);
       break;
@@ -1215,9 +1226,8 @@ void TextRenderBase::done() {
 }
 
 void TextRenderBase::newline() {
-  if (auto logger = spdlog::get("plugin")) {
-    logger->warn("TextRenderBase::newline() is not supported");
-  }
+  flush();
+  performLinebreak();
 }
 
 void TextRenderBase::resetStyle() {

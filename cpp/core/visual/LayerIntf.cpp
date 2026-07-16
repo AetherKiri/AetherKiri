@@ -198,6 +198,8 @@ static bool TVPLayerDrawTraceName(const ttstr &name) {
            s.find("表メッセージレイヤ1") != std::string::npos ||
            s.find("表メッセージレイヤ2") != std::string::npos ||
            s.find("CG View Layer") != std::string::npos ||
+           s == "face" || s == "trans_face" || s == "hide_face" ||
+           s == "秀明" || s == "和奏" ||
            s == "item3" || s == "item6";
 }
 
@@ -243,6 +245,12 @@ static bool TVPLayerDrawTraceArmed() {
 static bool TVPLayerDrawTraceArmIfNeeded(tTJSNI_BaseLayer *layer) {
     if(TVPLayerDrawTraceArmed())
         return true;
+    if(layer && TVPLayerDrawTraceName(layer->GetName())) {
+        TVPLayerDrawTraceArmedFlag.store(true, std::memory_order_relaxed);
+        spdlog::info("LayerDrawGPU trace armed by focus layer={}",
+                     layer->GetName().AsStdString());
+        return true;
+    }
     if(TVPLayerDrawTraceIsPreviewLayer(layer)) {
         TVPLayerDrawTraceArmedFlag.store(true, std::memory_order_relaxed);
         spdlog::info("LayerDrawGPU trace armed by layer={}",
@@ -688,6 +696,7 @@ static void TVPTraceObjectForButtonClick(const char *label,
     TVPTraceObjectProperty(label, object, TJS_W("_loadNumber"));
     TVPTraceObjectProperty(label, object, TJS_W("_sysbtnTags"));
     TVPTraceObjectProperty(label, object, TJS_W("_sysbtnInfo"));
+
 }
 
 static void TVPTraceLayerActionOwner(const char *event,
@@ -697,6 +706,7 @@ static void TVPTraceLayerActionOwner(const char *event,
         return;
     std::string label = std::string("layer.") + event + ".actionOwner";
     TVPTraceObjectForButtonClick(label.c_str(), object);
+
 }
 
 static void TVPTraceLayerActionResult(const char *event,
@@ -774,6 +784,11 @@ static bool TVPParseCafeStellaItemName(const ttstr &name, tjs_int &column,
 
     tjs_int first = 0;
     size_t i = 4;
+    // Some KAG UI builders use item_${x}_${y}, while older layouts use
+    // item${x}_${y}.  Treat the separator after "item" as optional so both
+    // forms participate in ParentHackLayer event forwarding.
+    if(i < text.size() && text[i] == '_')
+        ++i;
     if(i >= text.size() || text[i] < '0' || text[i] > '9')
         return false;
     for(; i < text.size() && text[i] >= '0' && text[i] <= '9'; ++i)
@@ -839,7 +854,7 @@ static bool TVPGetNumberedPrefixIndex(const ttstr &name, const char *prefix,
 }
 
 static bool TVPLayerNameLooksCafeStellaIndexedButton(const ttstr &name) {
-    return TVPLayerNameLooksNumberedPrefix(name, "item") ||
+    return TVPLayerNameLooksNumberedItem(name) ||
         TVPLayerNameLooksNumberedPrefix(name, "mitem") ||
         TVPLayerNameLooksNumberedPrefix(name, "sitem");
 }
@@ -7463,6 +7478,16 @@ void tTJSNI_BaseLayer::AffineCopy(const t2DAffineMatrix &matrix,
 
     ImageModified = updated || ImageModified;
 
+    if(TVPLayerDebugShouldLogBitmap(src, srcrect)) {
+        spdlog::info(
+            "Layer.affineCopy.matrix result updated={} updateRect=({},{} {}x{}) imageOfs=({}, {}) clip=({},{} {}x{}) layer={} pos=({}, {}) size={}x{}",
+            updated ? 1 : 0, updaterect.left, updaterect.top,
+            updaterect.get_width(), updaterect.get_height(), ImageLeft,
+            ImageTop, ClipRect.left, ClipRect.top, ClipRect.get_width(),
+            ClipRect.get_height(), GetName().AsStdString(), GetLeft(),
+            GetTop(), GetWidth(), GetHeight());
+    }
+
     if(updated) {
         updaterect.add_offsets(ImageLeft, ImageTop);
         Update(updaterect);
@@ -7520,6 +7545,16 @@ void tTJSNI_BaseLayer::AffineCopy(const tTVPPointD *points, iTVPBaseBitmap *src,
     }
 
     ImageModified = updated || ImageModified;
+
+    if(TVPLayerDebugShouldLogBitmap(src, srcrect)) {
+        spdlog::info(
+            "Layer.affineCopy.points result updated={} updateRect=({},{} {}x{}) imageOfs=({}, {}) clip=({},{} {}x{}) layer={} pos=({}, {}) size={}x{}",
+            updated ? 1 : 0, updaterect.left, updaterect.top,
+            updaterect.get_width(), updaterect.get_height(), ImageLeft,
+            ImageTop, ClipRect.left, ClipRect.top, ClipRect.get_width(),
+            ClipRect.get_height(), GetName().AsStdString(), GetLeft(),
+            GetTop(), GetWidth(), GetHeight());
+    }
 
     if(updated) {
         updaterect.add_offsets(ImageLeft, ImageTop);
@@ -9648,8 +9683,11 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
                 // for each child...
 
                 // visible check
-                if(!child->Visible)
+                if(!child->Visible) {
+                    tTVPRect empty;
+                    TVPTraceLayerDrawGpuChild(this, child, empty, false);
                     continue;
+                }
 
                 // intersection check
                 if(!TVPIntersectRect(&UpdateRectForChild, rectForChild,
@@ -9700,8 +9738,11 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
                 // for each child...
 
                 // visible check
-                if(!child->Visible)
+                if(!child->Visible) {
+                    tTVPRect empty;
+                    TVPTraceLayerDrawGpuChild(this, child, empty, false);
                     continue;
+                }
 
                 // intersection check
                 tTVPRect chrect;
@@ -10619,9 +10660,21 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
            srcLayerWidth > 0 && srcLayerHeight > 0 &&
            (destLayerWidth != srcLayerWidth ||
             destLayerHeight != srcLayerHeight)) {
-            const tjs_int commonWidth = std::max(destLayerWidth, srcLayerWidth);
-            const tjs_int commonHeight =
-                std::max(destLayerHeight, srcLayerHeight);
+            tjs_int commonWidth = std::max(destLayerWidth, srcLayerWidth);
+            tjs_int commonHeight = std::max(destLayerHeight, srcLayerHeight);
+            const tTJSNI_BaseLayer *destParent = Parent;
+            const tTJSNI_BaseLayer *srcParent = transsource->Parent;
+            const bool sameSizedParents =
+                destParent && srcParent && destParent->GetWidth() > 0 &&
+                destParent->GetHeight() > 0 &&
+                destParent->GetWidth() == srcParent->GetWidth() &&
+                destParent->GetHeight() == srcParent->GetHeight();
+            if(sameSizedParents) {
+                commonWidth = std::min<tjs_int>(
+                    commonWidth, static_cast<tjs_int>(destParent->GetWidth()));
+                commonHeight = std::min<tjs_int>(
+                    commonHeight, static_cast<tjs_int>(destParent->GetHeight()));
+            }
             const tjs_int maxImageWidth =
                 std::max(destImageWidth, srcImageWidth);
             const tjs_int maxImageHeight =
@@ -10636,11 +10689,13 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
                     spdlog::info(
                         "LayerTrans align-kag-background layer={} {}x{} "
                         "src={} {}x{} destImage={}x{} srcImage={}x{} "
-                        "common={}x{}",
+                        "parent={}x{} common={}x{}",
                         GetName().AsStdString(), destLayerWidth,
                         destLayerHeight, transsource->GetName().AsStdString(),
                         srcLayerWidth, srcLayerHeight, destImageWidth,
                         destImageHeight, srcImageWidth, srcImageHeight,
+                        sameSizedParents ? destParent->GetWidth() : 0,
+                        sameSizedParents ? destParent->GetHeight() : 0,
                         commonWidth, commonHeight);
                 }
                 if(destLayerWidth != commonWidth ||
@@ -11362,6 +11417,96 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         return TJS_S_OK;
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ loadImages)
+    //----------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ loadSubImage) {
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_Layer);
+        if(numparams < 3)
+            return TJS_E_BADPARAMCOUNT;
+
+        ttstr name(*param[0]);
+        tjs_int dx = (tjs_int)*param[1];
+        tjs_int dy = (tjs_int)*param[2];
+        tjs_uint32 key = clNone;
+        if(numparams >= 4 && param[3]->Type() != tvtVoid)
+            key = (tjs_uint32)param[3]->AsInteger();
+
+        tTVPBaseTexture source(1, 1);
+        ttstr provincename;
+        iTJSDispatch2 *metainfo = nullptr;
+        TVPLoadGraphic(&source, name, key, 0, 0, glmNormal, &provincename,
+                       &metainfo);
+
+        std::unique_ptr<tTVPBaseBitmap> province;
+        if(!provincename.IsEmpty()) {
+            province = std::make_unique<tTVPBaseBitmap>(source.GetWidth(),
+                                                        source.GetHeight(), 8);
+            TVPLoadGraphicProvince(province.get(), provincename, 0,
+                                   source.GetWidth(), source.GetHeight());
+        }
+
+        const tjs_int needed_right = dx + static_cast<tjs_int>(source.GetWidth());
+        const tjs_int needed_bottom = dy + static_cast<tjs_int>(source.GetHeight());
+
+        bool allocated_target = false;
+        if(!_this->GetMainImage()) {
+            if(_this->GetWidth() == 0 || _this->GetHeight() == 0) {
+                const tjs_uint target_width = static_cast<tjs_uint>(
+                    std::max<tjs_int>(1, needed_right));
+                const tjs_uint target_height = static_cast<tjs_uint>(
+                    std::max<tjs_int>(1, needed_bottom));
+                _this->SetSize(target_width, target_height);
+            }
+            _this->SetHasImage(true);
+            allocated_target = true;
+        }
+
+        if(needed_right > static_cast<tjs_int>(_this->GetImageWidth()) ||
+           needed_bottom > static_cast<tjs_int>(_this->GetImageHeight())) {
+            const tjs_uint target_width = static_cast<tjs_uint>(
+                std::max<tjs_int>(needed_right,
+                                  static_cast<tjs_int>(_this->GetImageWidth())));
+            const tjs_uint target_height = static_cast<tjs_uint>(
+                std::max<tjs_int>(needed_bottom,
+                                  static_cast<tjs_int>(_this->GetImageHeight())));
+            if(target_width == 0 || target_height == 0)
+                TVPThrowExceptionMessage(TVPInvalidParam);
+            _this->SetImageSize(target_width, target_height);
+        }
+
+        if(allocated_target) {
+            _this->FillRect(tTVPRect(0, 0, _this->GetImageWidth(),
+                                     _this->GetImageHeight()),
+                            _this->GetNeutralColor());
+        }
+
+        tTVPRect source_rect(0, 0, source.GetWidth(), source.GetHeight());
+        _this->CopyRect(dx, dy, &source, province.get(), source_rect);
+
+        if(TVPLayerLoadTraceEnabled() || TVPLayerDebugTake()) {
+            spdlog::info(
+                "Layer.loadSubImage name={} dest=({}, {}) size={}x{} target={}x{} colorkey=0x{:08x}",
+                name.AsStdString(), dx, dy, static_cast<int>(source.GetWidth()),
+                static_cast<int>(source.GetHeight()),
+                static_cast<int>(_this->GetWidth()),
+                static_cast<int>(_this->GetHeight()),
+                static_cast<unsigned int>(key));
+        }
+
+        try {
+            if(result)
+                *result = metainfo;
+        } catch(...) {
+            if(metainfo)
+                metainfo->Release();
+            throw;
+        }
+        if(metainfo)
+            metainfo->Release();
+
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_METHOD_DECL(/*func. name*/ loadSubImage)
     //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ loadProvinceImage) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
@@ -12888,7 +13033,10 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         if(numparams < 1)
             return TJS_E_BADPARAMCOUNT;
 
-        tTJSNI_BaseLayer *src;
+        tTJSNI_BaseLayer *src = nullptr;
+        if(param[0]->Type() != tvtObject)
+            TVPThrowExceptionMessage(TVPSpecifyLayer);
+
         tTJSVariantClosure clo = param[0]->AsObjectClosureNoAddRef();
         if(clo.Object) {
             if(TJS_FAILED(clo.Object->NativeInstanceSupport(
@@ -13374,8 +13522,15 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ onNodeDisabled)
     //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ onKeyDown) {
-        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
-                                /*var. type*/ tTJSNI_Layer);
+        if(!objthis)
+            return TJS_E_NATIVECLASSCRASH;
+
+        tTJSNI_Layer *_this = nullptr;
+        tjs_error native_hr = objthis->NativeInstanceSupport(
+            TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+            (iTJSNativeInstance **)&_this);
+        if(TJS_FAILED(native_hr) || !_this)
+            return TJS_S_OK;
 
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
         if(obj.Object) {
@@ -13535,8 +13690,15 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ onSearchNextFocusable)
     //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ onBeforeFocus) {
-        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
-                                /*var. type*/ tTJSNI_Layer);
+        if(!objthis)
+            return TJS_E_NATIVECLASSCRASH;
+
+        tTJSNI_Layer *_this = nullptr;
+        tjs_error native_hr = objthis->NativeInstanceSupport(
+            TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+            (iTJSNativeInstance **)&_this);
+        if(TJS_FAILED(native_hr) || !_this)
+            return TJS_S_OK;
 
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
         if(obj.Object) {

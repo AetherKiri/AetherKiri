@@ -611,8 +611,7 @@ bool TVPRemoveFolder(const ttstr &name) {
 // TVPGetAppPath
 //---------------------------------------------------------------------------
 ttstr TVPGetAppPath() {
-    static ttstr apppath(TVPExtractStoragePath(TVPProjectDir));
-    return apppath;
+    return TVPExtractStoragePath(TVPProjectDir);
 }
 //---------------------------------------------------------------------------
 
@@ -1541,14 +1540,28 @@ static bool TVPIsPatchArchiveName(const std::string &name,
 
     constexpr const char *prefix = "patch";
     constexpr size_t prefixLen = 5;
-    if(lower.rfind(prefix, 0) != 0 || lower.size() == prefixLen)
+    const bool startsWithPatch = lower.rfind(prefix, 0) == 0;
+    const bool endsWithPatch = lower.size() > prefixLen &&
+        lower.compare(lower.size() - prefixLen, prefixLen, prefix) == 0;
+    if(!startsWithPatch) {
+        if(!endsWithPatch)
+            return false;
+        if(sequence) *sequence = 1000001;
+        return true;
+    }
+
+    if(lower.size() == prefixLen)
         return false;
 
     int value = 0;
     for(size_t i = prefixLen; i < lower.size(); i++) {
         unsigned char ch = static_cast<unsigned char>(lower[i]);
-        if(!std::isdigit(ch))
-            return false;
+        if(!std::isdigit(ch)) {
+            // Named patches (patchAI, patch_data1080, etc.) are overlays on
+            // the game's regular patch/patchN archives.
+            if(sequence) *sequence = 1000001;
+            return true;
+        }
         value = std::min(value * 10 + (lower[i] - '0'), 1000000);
     }
 

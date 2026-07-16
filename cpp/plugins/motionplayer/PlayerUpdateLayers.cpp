@@ -4,6 +4,8 @@
 #include "PlayerInternal.h"
 #include "ncbind.hpp"    // ncbInstanceAdaptor<Player>::CreateAdaptor for TJS bridge
 #include "tjsArray.h"    // TJSCreateArrayObject, TJSGetArrayElementCount
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #ifdef __EMSCRIPTEN__
 #include <wasm_simd128.h>
@@ -12,6 +14,23 @@
 using namespace motion::internal;
 
 namespace {
+    inline bool motionUpdateDebugEnabled() {
+        const char *enabled = std::getenv("AETHERKIRI_MOTION_DEBUG");
+        const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
+        return (enabled && *enabled && std::strcmp(enabled, "0") != 0) ||
+            (debugAll && *debugAll && std::strcmp(debugAll, "0") != 0);
+    }
+
+    inline bool motionUpdateDebugAllEnabled() {
+        const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
+        return debugAll && *debugAll && std::strcmp(debugAll, "0") != 0;
+    }
+
+    inline bool markMotionUpdateDebugLogged(const std::string &key) {
+        static std::unordered_set<std::string> loggedKeys;
+        return loggedKeys.insert(key).second;
+    }
+
     inline void copyPackedColorsToBytes(
         uint8_t (&colorBytes)[16],
         const std::array<std::uint32_t, 4> &packedColors) {
@@ -299,13 +318,39 @@ namespace motion {
                 // Default: use first frame value
                 _variableValues[label] = frames.front().value;
             }
-            // Bind variable values to child Players (sub_6C4668 equivalent)
-            // For nodeType=3/4 nodes with child Players, propagate variable values
+            // Bind path-qualified variables to child Players (sub_6C4668
+            // equivalent).  Yuzu addresses nested selectors with labels such
+            // as `bt_start/select` and `slot01/base/disable`.  Each path
+            // segment names a motion node; only the remaining suffix belongs
+            // to that child Player.  Broadcasting the untrimmed label made the
+            // child miss its selector entirely.
             for (auto &vn : nodes) {
                 if (vn.nodeType == 3) {
                     if (auto *cp = vn.getChildPlayer()) {
-                        for (const auto &[label, value] : _variableValues)
-                            cp->setVariable(detail::widen(label), value);
+                        const std::string prefix = vn.layerName + "/";
+                        for (const auto &[label, value] : _variableValues) {
+                            if(!vn.layerName.empty() &&
+                               label.rfind(prefix, 0) == 0 &&
+                               label.size() > prefix.size()) {
+                                cp->setVariable(
+                                    detail::widen(label.substr(prefix.size())),
+                                    value);
+                                continue;
+                            }
+
+                            // Controller-backed global parameters are shared
+                            // by parent and child models.  Keep that behavior
+                            // without leaking unrelated path labels into every
+                            // nested selector.
+                            if(label.find('/') == std::string::npos &&
+                               cp->_runtime && cp->_runtime->activeMotion &&
+                               cp->_runtime->activeMotion
+                                   ->controllerBindings.find(label) !=
+                                   cp->_runtime->activeMotion
+                                       ->controllerBindings.end()) {
+                                cp->setVariable(detail::widen(label), value);
+                            }
+                        }
                     }
                 } else if (vn.nodeType == 4) {
                     for (int pi2 = 0; pi2 < vn.getParticleCount(); ++pi2) {
@@ -467,7 +512,15 @@ namespace motion {
             populateTransformStateFromFrameState(node.accumulated, state);
             node.accumulated.dirty = true;
 
-            if (!state.visible) {
+            // Type 2 is a structural transform group. Several classic KAG
+            // motions deliberately give the group itself only type=0 frames
+            // while animating its children (for example Extra/CG's content
+            // grid). The native player still carries the parent transform
+            // through that group; skipping here leaves every child in the
+            // motion's local coordinate space.
+            const bool structuralTransformGroup =
+                !state.visible && node.nodeType == 2;
+            if (!state.visible && !structuralTransformGroup) {
                 node.accumulated.visible = false;
                 node.accumulated.active = false;
                 node.accumulated.opacity = 0;
@@ -949,7 +1002,10 @@ namespace motion {
                 double py = vn.accumulated.posY;
                 // Walk parent clip chain, evaluate through each mesh (0x6BC838..0x6BC8B0)
                 int clipWalk = vn.parentClipIndex;
-                while (clipWalk >= 0 && clipWalk < static_cast<int>(nodes.size())) {
+                size_t clipDepth = 0;
+                while (clipWalk >= 0 &&
+                       clipWalk < static_cast<int>(nodes.size()) &&
+                       clipDepth++ < nodes.size()) {
                     auto &cn = nodes[clipWalk];
                     if (cn.meshControlPointsPrev.size() >= 32) {
                         // Apply inverse matrix to get normalized coords (0x6BC858..0x6BC87C)
@@ -1150,8 +1206,11 @@ namespace motion {
                             }
                         };
                         int clipWalk = vn.parentClipIndex;
+                        size_t clipDepth = 0;
                         double cascadeOrgX = orgX, cascadeOrgY = orgY;
-                        while (clipWalk >= 0 && clipWalk < static_cast<int>(nodes.size())) {
+                        while (clipWalk >= 0 &&
+                               clipWalk < static_cast<int>(nodes.size()) &&
+                               clipDepth++ < nodes.size()) {
                             auto &cn = nodes[clipWalk];
                             if (cn.meshControlPoints.size() >= 32) {
                                 const float *cmesh = cn.meshControlPoints.data();
@@ -1359,6 +1418,7 @@ namespace motion {
         // Visibility flags — aligned to sub_6BD8DC at 0x6BD8DC.
         // Root node (index 0) is always visible.
         if (!nodes.empty()) {
+            nodes[0].visibleAncestorIndex = -1;
             nodes[0].drawFlag = nodes[0].accumulated.visible && nodes[0].hasSource;
         }
         // Visibility bitmask: which nodeTypes can render
@@ -1368,6 +1428,7 @@ namespace motion {
         const int visBitmask = _runtime->isEmoteMode ? 6153 : 6145;
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
+            node.visibleAncestorIndex = -1;
 
             // Find visible ancestor (walk parent chain, 0x6BD9D8)
             int pIdx = node.parentIndex;
@@ -1575,6 +1636,218 @@ namespace motion {
         // Only runs when !isEmoteMode (0x6BE104).
         if (_runtime->isEmoteMode) return;
 
+        struct MotionSubNodeRootState {
+            double posX = 0.0;
+            double posY = 0.0;
+            double posZ = 0.0;
+        };
+
+        auto computeMotionSubNodeRootState =
+            [](const detail::MotionNode &parentNode) {
+                MotionSubNodeRootState state;
+                state.posX = parentNode.accumulated.posX;
+                state.posY = parentNode.accumulated.posY;
+                state.posZ = parentNode.accumulated.posZ;
+
+                const double originX = parentNode.activeSlot().ox;
+                const double originY = parentNode.activeSlot().oy;
+                if (originX != 0.0 || originY != 0.0) {
+                    const double negOY = -originY;
+                    const double vx =
+                        parentNode.accumulated.m12 * negOY -
+                        originX * parentNode.accumulated.m11;
+                    const double vy =
+                        parentNode.accumulated.m22 * negOY -
+                        originX * parentNode.accumulated.m21;
+                    if (parentNode.coordinateMode == 1) {
+                        state.posX += vx;
+                        state.posZ += vy;
+                    } else {
+                        state.posX += vx;
+                        state.posY += vy;
+                    }
+                }
+
+                return state;
+            };
+
+        auto applyMotionSubNodeRootState =
+            [&](Player &child,
+                const detail::MotionNode &parentNode,
+                const MotionSubNodeRootState &rootState,
+                bool hasAngle,
+                double computedAngle) {
+                if (!child._runtime) {
+                    return;
+                }
+
+                child._pendingRootX = rootState.posX;
+                child._pendingRootY = rootState.posY;
+                child._pendingRootZ = rootState.posZ;
+                child._hasPendingRootPos = true;
+                child._zFactor = _zFactor;
+                child._runtime->drawAffineMatrix = _runtime->drawAffineMatrix;
+                {
+                    uint32_t packed;
+                    std::memcpy(&packed, &parentNode.colorBytes[0],
+                                sizeof(uint32_t));
+                    child._colorWeightPacked = packed;
+                }
+
+                if (child._runtime->nodes.empty()) {
+                    if (LOGGER && motionUpdateDebugAllEnabled() &&
+                        _runtime && _runtime->activeMotion &&
+                        (_runtime->activeMotion->path.find("SD") != std::string::npos ||
+                         _runtime->activeMotion->path.find("sd") != std::string::npos)) {
+                        LOGGER->info(
+                            "motion subnode root pending: motion={} parentLabel={} parentIndex={} childMotion={} childLabel={} root=({:.1f},{:.1f},{:.1f}) parentAccum=({:.1f},{:.1f},{:.1f})",
+                            _runtime->activeMotion->path,
+                            parentNode.layerName.empty()
+                                ? std::string("<root>")
+                                : parentNode.layerName,
+                            parentNode.parentIndex,
+                            child._runtime->activeMotion
+                                ? child._runtime->activeMotion->path
+                                : std::string("<none>"),
+                            detail::narrow(child._motionKey),
+                        rootState.posX, rootState.posY, rootState.posZ,
+                        parentNode.accumulated.posX,
+                        parentNode.accumulated.posY,
+                        parentNode.accumulated.posZ);
+                    }
+                    return;
+                }
+
+                auto &cr = child._runtime->nodes[0];
+                if (LOGGER && motionUpdateDebugAllEnabled() &&
+                    _runtime && _runtime->activeMotion &&
+                    (_runtime->activeMotion->path.find("SD") != std::string::npos ||
+                     _runtime->activeMotion->path.find("sd") != std::string::npos ||
+                     isYuzuTitlePresentationMotionPath(
+                         _runtime->activeMotion->path))) {
+                    LOGGER->info(
+                        "motion subnode root apply: motion={} parentLabel={} parentIndex={} childMotion={} childLabel={} childNodes={} root=({:.3f},{:.3f},{:.3f}) parentAccum=({:.3f},{:.3f},{:.3f}) parentScale=({:.6f},{:.6f}) parentMatrix=[{:.6f},{:.6f},{:.6f},{:.6f}] rootBefore=({:.3f},{:.3f},{:.3f}) rootScaleBefore=({:.6f},{:.6f}) rootMatrixBefore=[{:.6f},{:.6f},{:.6f},{:.6f}]",
+                        _runtime->activeMotion->path,
+                        parentNode.layerName.empty()
+                            ? std::string("<root>")
+                            : parentNode.layerName,
+                        parentNode.parentIndex,
+                        child._runtime->activeMotion
+                            ? child._runtime->activeMotion->path
+                            : std::string("<none>"),
+                        detail::narrow(child._motionKey),
+                        child._runtime->nodes.size(),
+                        rootState.posX, rootState.posY, rootState.posZ,
+                        parentNode.accumulated.posX,
+                        parentNode.accumulated.posY,
+                        parentNode.accumulated.posZ,
+                        parentNode.accumulated.scaleX,
+                        parentNode.accumulated.scaleY,
+                        parentNode.accumulated.m11,
+                        parentNode.accumulated.m12,
+                        parentNode.accumulated.m21,
+                        parentNode.accumulated.m22,
+                        cr.localState.posX, cr.localState.posY,
+                        cr.localState.posZ,
+                        cr.localState.scaleX, cr.localState.scaleY,
+                        cr.accumulated.m11, cr.accumulated.m12,
+                        cr.accumulated.m21, cr.accumulated.m22);
+                }
+                cr.accumulated.posX = rootState.posX;
+                cr.accumulated.posY = rootState.posY;
+                cr.accumulated.posZ = rootState.posZ;
+                cr.localState.posX = rootState.posX;
+                cr.localState.posY = rootState.posY;
+                cr.localState.posZ = rootState.posZ;
+                cr.localState.flipX = parentNode.accumulated.flipX;
+                cr.localState.flipY = parentNode.accumulated.flipY;
+                cr.localState.scaleX = parentNode.accumulated.scaleX;
+                cr.localState.scaleY = parentNode.accumulated.scaleY;
+                cr.localState.slantX = parentNode.accumulated.slantX;
+                cr.localState.slantY = parentNode.accumulated.slantY;
+                cr.localState.opacity = parentNode.accumulated.opacity;
+                cr.localState.active = parentNode.accumulated.active;
+                cr.localState.visible = parentNode.accumulated.visible;
+                cr.localState.dirty = true;
+
+                // Flip — only write if changed, set dirty (0x6BEA28..0x6BEA54)
+                if (cr.accumulated.flipX != parentNode.accumulated.flipX ||
+                    cr.accumulated.flipY != parentNode.accumulated.flipY) {
+                    cr.accumulated.flipX = parentNode.accumulated.flipX;
+                    cr.accumulated.flipY = parentNode.accumulated.flipY;
+                    cr.accumulated.dirty = true;
+                }
+                // Scale — only write if changed, set dirty (0x6BEA5C..0x6BEA88)
+                if (cr.accumulated.scaleX != parentNode.accumulated.scaleX ||
+                    cr.accumulated.scaleY != parentNode.accumulated.scaleY) {
+                    cr.accumulated.scaleX = parentNode.accumulated.scaleX;
+                    cr.accumulated.scaleY = parentNode.accumulated.scaleY;
+                    cr.accumulated.dirty = true;
+                }
+                // Slant — set dirty if changed (0x6BEB10..0x6BEB3C)
+                if (cr.accumulated.slantX != parentNode.accumulated.slantX ||
+                    cr.accumulated.slantY != parentNode.accumulated.slantY) {
+                    cr.accumulated.slantX = parentNode.accumulated.slantX;
+                    cr.accumulated.slantY = parentNode.accumulated.slantY;
+                    cr.accumulated.dirty = true;
+                }
+                // Opacity — set dirty if changed (0x6BEB40..0x6BEB58)
+                if (cr.accumulated.opacity != parentNode.accumulated.opacity) {
+                    cr.accumulated.opacity = parentNode.accumulated.opacity;
+                    cr.accumulated.dirty = true;
+                }
+                // Active — set dirty if changed (0x6BEB5C..0x6BEB74)
+                if (cr.accumulated.active != parentNode.accumulated.active) {
+                    cr.accumulated.active = parentNode.accumulated.active;
+                    cr.accumulated.dirty = true;
+                }
+
+                // === Angle -> child (0x6BEAA8..0x6BEB08) ===
+                if (hasAngle) {
+                    if (child._runtime->isEmoteMode) {
+                        double k = computedAngle;
+                        while (k < 0.0) k += 360.0;
+                        while (k >= 360.0) k -= 360.0;
+                    } else if (cr.accumulated.angle != computedAngle) {
+                        cr.accumulated.angle = computedAngle;
+                        cr.accumulated.dirty = true;
+                    }
+                }
+
+                // === Matrix propagation (0x6BEB9C..0x6BEC4C) ===
+                if (hasAngle ||
+                    computedAngle == parentNode.accumulated.angle ||
+                    child._directEdit) {
+                    cr.accumulated.m11 = parentNode.accumulated.m11;
+                    cr.accumulated.m12 = parentNode.accumulated.m12;
+                    cr.accumulated.m21 = parentNode.accumulated.m21;
+                    cr.accumulated.m22 = parentNode.accumulated.m22;
+                } else {
+                    double delta =
+                        (computedAngle - parentNode.accumulated.angle) *
+                        3.14159265 * 2.0 / 360.0;
+                    if (parentNode.accumulated.flipX !=
+                        parentNode.accumulated.flipY) {
+                        delta = -delta;
+                    }
+                    const double c = std::cos(delta);
+                    const double s = std::sin(delta);
+                    cr.accumulated.m11 =
+                        c * parentNode.accumulated.m11 +
+                        s * parentNode.accumulated.m12;
+                    cr.accumulated.m12 =
+                        c * parentNode.accumulated.m12 -
+                        parentNode.accumulated.m11 * s;
+                    cr.accumulated.m21 =
+                        c * parentNode.accumulated.m21 +
+                        s * parentNode.accumulated.m22;
+                    cr.accumulated.m22 =
+                        c * parentNode.accumulated.m22 -
+                        parentNode.accumulated.m21 * s;
+                }
+                cr.accumulated.dirty = true;
+            };
+
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &mn = nodes[i];
             if (mn.nodeType != 3) continue;
@@ -1587,6 +1860,10 @@ namespace motion {
             } else {
                 v12 = _priorDraw;    // keep raw int value
             }
+            bool childRootStateValid = false;
+            MotionSubNodeRootState childRootState;
+            bool childRootHasAngle = false;
+            double childRootComputedAngle = 0.0;
 
             // Get child Player via TJS dispatch (0x6BE220..0x6BE260)
             // Aligned to binary: node+1912 → NativeInstanceSupport → native Player*
@@ -1607,8 +1884,19 @@ namespace motion {
             // Binary: calls cleanup (sub_6C0DE8, sub_6B56F8), releases TJS variants,
             // then goes to LABEL_3 (next loop iteration), SKIPPING frameProgress/updateLayers.
             if (mn.activeSlot().done) {
+                const bool retainYuzuSdPreviewChild =
+                    isYuzuSdPresentationMotionPath(motionPath) &&
+                    ((!_completedEndedTimelineRenderHoldLabel.empty() &&
+                      _completedEndedTimelineRenderHoldLabel ==
+                          _runtime->lastExplicitTimelineLabel) ||
+                     (!_deferredEndedTimelineRenderHoldLabel.empty() &&
+                      _deferredEndedTimelineRenderHoldLabel ==
+                          _runtime->lastExplicitTimelineLabel)) &&
+                    child._runtime && child._runtime->activeMotion &&
+                    child._runtime->nodesBuilt &&
+                    child._runtime->nodes.size() > 1;
                 const bool retainTitlePresentationChild =
-                    motionPath.find("title_bg") != std::string::npos &&
+                    isYuzuTitlePresentationMotionPath(motionPath) &&
                     child._runtime &&
                     child._runtime->activeMotion &&
                     child._runtime->nodesBuilt &&
@@ -1627,27 +1915,32 @@ namespace motion {
                     }
                     continue;
                 }
-                // Binary cleanup at 0x6BE328..0x6BE354:
-                // 1. child._allplaying = false (player+1099)
-                // 2. sub_6C0DE8(child+1296) — resets timeline keyframe cache
-                // 3. sub_6B56F8(child) — releases layer IDs for all non-root nodes,
-                //    clears nodes (except root), resets label map
-                // 4. Release TJS variants at child+984 and child+976
-                child._allplaying = false;
-                if (child._runtime) {
-                    // sub_6C0DE8: reset timeline keyframe cache
-                    child._runtime->timelines.clear();
-                    // sub_6B56F8: release layer IDs for non-root nodes, then clear
-                    child._runtime->layerIdsByName.clear();
-                    child._runtime->layerNamesById.clear();
-                    child._runtime->nodeLabelMap.clear();
-                    // Keep root node but clear the rest (sub_6B56F8 at 0x6B59E0)
-                    if (child._runtime->nodes.size() > 1) {
-                        child._runtime->nodes.resize(1);
+                if(!retainYuzuSdPreviewChild) {
+                    // Binary cleanup at 0x6BE328..0x6BE354:
+                    // 1. child._allplaying = false (player+1099)
+                    // 2. sub_6C0DE8(child+1296) — resets timeline keyframe cache
+                    // 3. sub_6B56F8(child) — releases layer IDs for all non-root nodes,
+                    //    clears nodes (except root), resets label map
+                    // 4. Release TJS variants at child+984 and child+976
+                    child._allplaying = false;
+                    if (child._runtime) {
+                        // sub_6C0DE8: reset timeline keyframe cache
+                        child._runtime->timelines.clear();
+                        // sub_6B56F8: release layer IDs for non-root nodes, then clear
+                        child._runtime->layerIdsByName.clear();
+                        child._runtime->layerNamesById.clear();
+                        child._runtime->nodeLabelMap.clear();
+                        // Keep root node but clear the rest (sub_6B56F8 at 0x6B59E0)
+                        if (child._runtime->nodes.size() > 1) {
+                            child._runtime->nodes.resize(1);
+                        }
+                        child._runtime->nodesBuilt = false;
                     }
-                    child._runtime->nodesBuilt = false;
+                    continue;  // skip to next iteration — binary goes to LABEL_3, not LABEL_18
                 }
-                continue;  // skip to next iteration — binary goes to LABEL_3, not LABEL_18
+                // A one-frame SD selector owns looping child motions. Its clip
+                // slot finishes immediately, but its children keep advancing
+                // until the user selects the next SD state.
             }
 
             {
@@ -1687,20 +1980,23 @@ namespace motion {
                                 mn.activeSlot().motionFlags | v12;
                             const bool canReuseCurrentSnapshot =
                                 _runtime && _runtime->activeMotion &&
-                                _runtime->activeMotion->clipsByLabel.find(
-                                    motionPart) !=
-                                    _runtime->activeMotion->clipsByLabel.end();
+                                detail::findMotionClip(
+                                    *_runtime->activeMotion, charaPart,
+                                    motionPart, false) != nullptr;
                             if(LOGGER &&
                                std::getenv("AETHERKIRI_MOTION_DEBUG") &&
                                motionPath.find("title") != std::string::npos) {
                                 LOGGER->info(
                                     "motion child resolve: parent={} node={} src={} chara={} motion={} reuseSnapshot={} flags={}",
                                     motionPath, mn.layerName, src, charaPart,
-                                    motionPart, canReuseCurrentSnapshot ? 1 : 0,
+                                    motionPart,
+                                    canReuseCurrentSnapshot ? 1 : 0,
                                     playFlags);
                             }
 
                             if(canReuseCurrentSnapshot) {
+                                const bool sameChara =
+                                    detail::narrow(child._chara) == charaPart;
                                 child.setChara(detail::widen(charaPart));
                                 const auto motionKey = detail::widen(motionPart);
                                 const bool sameSnapshot =
@@ -1718,7 +2014,7 @@ namespace motion {
                                     child._runtime &&
                                     child._runtime->nodesBuilt &&
                                     child._runtime->nodes.size() > 1;
-                                if(!sameSnapshot || !sameMotion ||
+                                if(!sameSnapshot || !sameChara || !sameMotion ||
                                    !hasTimeline || !hasBuiltNodes) {
                                     child._motionKey = motionKey;
                                     child.loadFromSnapshot(_runtime->activeMotion);
@@ -1955,125 +2251,16 @@ namespace motion {
                     }
                 }
 
-                // === Origin offset (0x6BE994..0x6BE9F4) ===
-                double posX = mn.accumulated.posX;
-                double posY = mn.accumulated.posY;
-                double posZ = mn.accumulated.posZ;
-
-                const double originX = mn.activeSlot().ox;
-                const double originY = mn.activeSlot().oy;
-                if (originX != 0.0 || originY != 0.0) {
-                    const double negOY = -originY;
-                    // v79 = m12*negOY - originX*m11 (0x6BE9E0)
-                    const double vx = mn.accumulated.m12 * negOY - originX * mn.accumulated.m11;
-                    // v80 = m22*negOY - originX*m21 (0x6BE9E4)
-                    const double vy = mn.accumulated.m22 * negOY - originX * mn.accumulated.m21;
-                    if (mn.coordinateMode == 1) {
-                        posX += vx;
-                        posZ += vy;
-                    } else {
-                        posX += vx;
-                        posY += vy;
-                    }
-                }
-
                 // === State propagation to child root node (0x6BEA18..0x6BEB74) ===
-                if (child._runtime && !child._runtime->nodes.empty()) {
-                    auto &cr = child._runtime->nodes[0];
-                    cr.accumulated.posX = posX;
-                    cr.accumulated.posY = posY;
-                    cr.accumulated.posZ = posZ;
-                    // Flip — only write if changed, set dirty (0x6BEA28..0x6BEA54)
-                    if (cr.accumulated.flipX != mn.accumulated.flipX ||
-                        cr.accumulated.flipY != mn.accumulated.flipY) {
-                        cr.accumulated.flipX = mn.accumulated.flipX;
-                        cr.accumulated.flipY = mn.accumulated.flipY;
-                        cr.accumulated.dirty = true;
-                    }
-                    // Scale — only write if changed, set dirty (0x6BEA5C..0x6BEA88)
-                    if (cr.accumulated.scaleX != mn.accumulated.scaleX ||
-                        cr.accumulated.scaleY != mn.accumulated.scaleY) {
-                        cr.accumulated.scaleX = mn.accumulated.scaleX;
-                        cr.accumulated.scaleY = mn.accumulated.scaleY;
-                        cr.accumulated.dirty = true;
-                    }
-                    // Slant — set dirty if changed (0x6BEB10..0x6BEB3C)
-                    if (cr.accumulated.slantX != mn.accumulated.slantX ||
-                        cr.accumulated.slantY != mn.accumulated.slantY) {
-                        cr.accumulated.slantX = mn.accumulated.slantX;
-                        cr.accumulated.slantY = mn.accumulated.slantY;
-                        cr.accumulated.dirty = true;
-                    }
-                    // Opacity — set dirty if changed (0x6BEB40..0x6BEB58)
-                    if (cr.accumulated.opacity != mn.accumulated.opacity) {
-                        cr.accumulated.opacity = mn.accumulated.opacity;
-                        cr.accumulated.dirty = true;
-                    }
-                    // Active — set dirty if changed (0x6BEB5C..0x6BEB74)
-                    if (cr.accumulated.active != mn.accumulated.active) {
-                        cr.accumulated.active = mn.accumulated.active;
-                        cr.accumulated.dirty = true;
-                    }
-                    // Parent color propagation (0x6BEB7C)
-                    // Binary: *(_DWORD *)(v16 + 1156) = *(_DWORD *)(v10 + 100)
-                    // Reads node+100 (colorBytes[0..3] packed as uint32 RGBA), writes to
-                    // child player+1156 (_parentColorPacked). NOT a blend mode field.
-                    {
-                        uint32_t packed;
-                        std::memcpy(&packed, &mn.colorBytes[0], sizeof(uint32_t));
-                        child._parentColorPacked = packed;
-                    }
-
-                    // isEmoteMode check + zFactor (0x6BEA90..0x6BEA94)
-                    child._zFactor = _zFactor;
-                    // Binary at 0x6BEA98: if isEmoteMode, call Player_initEmoteMotion(child, 2)
-                    // This syncs emote bone state. Emote mode is not used in web port.
-
-                    // === Angle → child (0x6BEAA8..0x6BEB08) ===
-                    if (hasAngle) {
-                        if (child._runtime->isEmoteMode) {
-                            // Emote mode: normalize angle [0,360), set player+464, reinit
-                            double k = computedAngle;
-                            while (k < 0.0) k += 360.0;
-                            while (k >= 360.0) k -= 360.0;
-                            // player+464 = emote angle (not mapped in web port)
-                            // Player_initEmoteMotion(child, 2) — N/A for web
-                        } else {
-                            if (cr.accumulated.angle != computedAngle) {
-                                cr.accumulated.angle = computedAngle;
-                                cr.accumulated.dirty = true;
-                            }
-                        }
-                    }
-
-                    // === Matrix propagation (0x6BEB9C..0x6BEC4C) ===
-                    // Binary at 0x6BEB90: condition is hasAngle || angle==accAngle || child._directEdit
-                    // (player+482). When _directEdit is true, direct-copy path is taken.
-                    if (hasAngle || computedAngle == mn.accumulated.angle ||
-                        child._directEdit) {
-                        // Direct copy (0x6BEB9C)
-                        cr.accumulated.m11 = mn.accumulated.m11;
-                        cr.accumulated.m12 = mn.accumulated.m12;
-                        cr.accumulated.m21 = mn.accumulated.m21;
-                        cr.accumulated.m22 = mn.accumulated.m22;
-                    } else {
-                        // Rotate by (computedAngle - accumulated.angle) (0x6BEBC8..0x6BEC4C)
-                        double delta = (computedAngle - mn.accumulated.angle)
-                                       * 3.14159265 * 2.0 / 360.0;
-                        if (mn.accumulated.flipX != mn.accumulated.flipY)
-                            delta = -delta;
-                        const double c = std::cos(delta);
-                        const double s = std::sin(delta);
-                        cr.accumulated.m11 = c * mn.accumulated.m11 + s * mn.accumulated.m12;
-                        cr.accumulated.m12 = c * mn.accumulated.m12 - mn.accumulated.m11 * s;
-                        cr.accumulated.m21 = c * mn.accumulated.m21 + s * mn.accumulated.m22;
-                        cr.accumulated.m22 = c * mn.accumulated.m22 - mn.accumulated.m21 * s;
-                    }
-                    // Unconditional dirty after matrix propagation (0x6BEBAC)
-                    cr.accumulated.dirty = true;
-                    // Note: clip chain propagation is done in label_18 below,
-                    // which ALL paths (active + inactive) fall through to.
-                }
+                childRootState = computeMotionSubNodeRootState(mn);
+                childRootHasAngle = hasAngle;
+                childRootComputedAngle = computedAngle;
+                childRootStateValid = true;
+                applyMotionSubNodeRootState(
+                    child, mn, childRootState, childRootHasAngle,
+                    childRootComputedAngle);
+                // Note: clip chain propagation is done in label_18 below,
+                // which ALL paths (active + inactive) fall through to.
 
             }
             } // end childPtr scope — goto label_18 can jump here
@@ -2085,6 +2272,168 @@ namespace motion {
             // even for inactive/non-visible nodes.
             if (auto *childP = mn.getChildPlayer()) {
                 auto &child = *childP;
+                if (!childRootStateValid && child._runtime) {
+                    childRootState = computeMotionSubNodeRootState(mn);
+                    childRootHasAngle = false;
+                    childRootComputedAngle = mn.accumulated.angle;
+                    childRootStateValid = true;
+                }
+                if (childRootStateValid) {
+                    applyMotionSubNodeRootState(
+                        child, mn, childRootState, childRootHasAngle,
+                        childRootComputedAngle);
+                }
+                // A non-looping motion referenced by a motion node is sampled
+                // from its parent's local time.  It is not an independent
+                // clock: the slot's start/offset preserves staggered entrance
+                // timing, while path variables select exact states such as
+                // `select=2` or `page=1`.  Advancing these children on their
+                // own made button states cycle, page numbers count forever,
+                // and one-frame save cards disappear at their empty end time.
+                const auto &motionSource = mn.activeSlot().src;
+                const auto *childClip = child.selectActiveClip();
+                const bool isTitleCastEntrance =
+                    motionSource == "motion/char/show" &&
+                    motionPath.find("title.psb") != std::string::npos;
+                const bool parentDrivenChild =
+                    !motionSource.empty() && childClip && !childClip->loop &&
+                    !isTitleCastEntrance;
+                if(parentDrivenChild) {
+                    auto sourceLeaf = motionSource;
+                    if(const auto slash = sourceLeaf.find_last_of("/\\");
+                       slash != std::string::npos) {
+                        sourceLeaf = sourceLeaf.substr(slash + 1);
+                    }
+
+                    std::optional<double> selectedTime;
+                    if(!mn.layerName.empty()) {
+                        if(const auto it = _variableValues.find(mn.layerName);
+                           it != _variableValues.end()) {
+                            selectedTime = it->second;
+                        }
+                    }
+                    if(!selectedTime && !sourceLeaf.empty()) {
+                        if(const auto it = _variableValues.find(sourceLeaf);
+                           it != _variableValues.end()) {
+                            selectedTime = it->second;
+                        }
+                    }
+
+                    double childTime = selectedTime.value_or(
+                        currentTime - mn.activeSlot().clipStartTime +
+                        mn.activeSlot().motionTimeOffset);
+                    childTime = std::max(0.0, childTime);
+                    const double totalFrames = childClip->totalFrames > 0.0
+                        ? childClip->totalFrames
+                        : child._cachedTotalFrames;
+                    child._frameLoopTime = childTime;
+                    child._loopTime = childTime;
+
+                    double renderTime = childTime;
+                    if(totalFrames > 0.0 && renderTime >= totalFrames) {
+                        renderTime = std::max(
+                            0.0, std::nextafter(totalFrames, 0.0));
+                    }
+
+                    // The numbered title character clips contain an authored
+                    // transition-out tail after frame 70.  The title's parent
+                    // keeps those cards on screen, so retain the fully visible
+                    // pose while still honoring each card's staggered start.
+                    if(childClip->label == "charmove" &&
+                       child._motionParentPlayer &&
+                       detail::narrow(child._motionParentPlayer->_chara)
+                               .rfind("title_bg", 0) == 0) {
+                        renderTime = std::min(renderTime, 70.0);
+                    }
+
+                    child._clampedEvalTime = renderTime;
+                    if(child._runtime) {
+                        if(auto stateIt = child._runtime->timelines.find(
+                               childClip->label);
+                           stateIt != child._runtime->timelines.end()) {
+                            stateIt->second.currentTime = renderTime;
+                            stateIt->second.playing = false;
+                            stateIt->second.wasPlaying = false;
+                        }
+                        const auto playingIt = std::remove(
+                            child._runtime->playingTimelineLabels.begin(),
+                            child._runtime->playingTimelineLabels.end(),
+                            childClip->label);
+                        child._runtime->playingTimelineLabels.erase(
+                            playingIt,
+                            child._runtime->playingTimelineLabels.end());
+                    }
+                    child._queuing = true;
+                    child._allplaying = child.hasPlayingChildPlayers();
+                    child._emoteDirty = true;
+                } else {
+                    // Looping/standalone children keep their own clock.
+                    child.frameProgress(_frameLastTime);
+                }
+                if(isYuzuSdPresentationMotionPath(motionPath) &&
+                   child._runtime) {
+                    const std::string childLabel =
+                        detail::narrow(child._motionKey);
+                    const bool parentHoldsSdFrame =
+                        (!_deferredEndedTimelineRenderHoldLabel.empty() &&
+                         _deferredEndedTimelineRenderHoldLabel ==
+                             _runtime->lastExplicitTimelineLabel) ||
+                        (!_completedEndedTimelineRenderHoldLabel.empty() &&
+                         _completedEndedTimelineRenderHoldLabel ==
+                             _runtime->lastExplicitTimelineLabel);
+                    constexpr const char *bodySetSuffix = "_body_set";
+                    const bool isBodySet =
+                        childLabel.size() >= std::strlen(bodySetSuffix) &&
+                        childLabel.compare(
+                            childLabel.size() - std::strlen(bodySetSuffix),
+                            std::strlen(bodySetSuffix), bodySetSuffix) == 0;
+                    const auto stateIt =
+                        child._runtime->timelines.find(childLabel);
+                    if(isBodySet &&
+                       stateIt != child._runtime->timelines.end()) {
+                        auto &state = stateIt->second;
+                        if(!state.playing && state.totalFrames > 0.0 &&
+                           state.currentTime + 0.0001 >= state.totalFrames) {
+                            state.currentTime = 0.0;
+                            child._clampedEvalTime = state.currentTime;
+                            child._runtime->nodesBuilt = false;
+                            child._emoteDirty = true;
+                            if(LOGGER && motionUpdateDebugEnabled()) {
+                                LOGGER->info(
+                                    "motion hold yuzu sd body setup: motion={} label={} time={:.6f}/{:.6f}",
+                                    motionPath, childLabel,
+                                    state.currentTime, state.totalFrames);
+                            }
+                        }
+                    }
+                    if(parentHoldsSdFrame && !isBodySet &&
+                       stateIt != child._runtime->timelines.end()) {
+                        auto &state = stateIt->second;
+                        if(!state.playing && state.totalFrames > 0.0 &&
+                           state.currentTime >= state.totalFrames) {
+                            const double renderTime = std::max(
+                                0.0,
+                                std::nextafter(state.totalFrames, 0.0));
+                            state.currentTime = renderTime;
+                            state.playing = false;
+                            state.wasPlaying = false;
+                            child._clampedEvalTime = renderTime;
+                            child._emoteDirty = true;
+                            if(LOGGER && motionUpdateDebugEnabled()) {
+                                LOGGER->info(
+                                    "motion hold yuzu sd child final frame: motion={} label={} time={:.6f}/{:.6f}",
+                                    motionPath, childLabel, state.currentTime,
+                                    state.totalFrames);
+                            }
+                        }
+                    }
+                }
+                child.ensureNodeTreeBuilt();
+                if (childRootStateValid) {
+                    applyMotionSubNodeRootState(
+                        child, mn, childRootState, childRootHasAngle,
+                        childRootComputedAngle);
+                }
                 if (child._runtime && !child._runtime->nodes.empty()) {
                     auto &cr = child._runtime->nodes[0];
                     // Clip chain propagation (0x6BE278..0x6BE29C)
@@ -2092,25 +2441,132 @@ namespace motion {
                     //         v18 = v10; if (!node+1963) v18 = *(v10+1968)
                     //         v17+1968 = v18 (visibleAncestor with conditional)
                     //         v17+1952 = v10+1952 (third field — not mapped in our arch)
-                    cr.parentClipIndex = mn.parentClipIndex;
-                    // Binary 0x6BE280: if meshCombineEnabled, current node is ancestor;
-                    // otherwise, propagate stored ancestor.
-                    if (mn.meshCombineEnabled) {
-                        cr.visibleAncestorIndex = static_cast<int>(i);
-                    } else {
-                        cr.visibleAncestorIndex = mn.visibleAncestorIndex;
-                    }
+                    // parentClipIndex is local to a Player node array. The
+                    // binary stores a node pointer here, but copying our
+                    // integer into a child array can alias an unrelated child
+                    // node and create a cycle. Parent transforms are already
+                    // propagated through the child root state above.
+                    cr.parentClipIndex = -1;
+                    // Native stores an ancestor pointer. Our integer indices are
+                    // local to each Player, so parent-runtime indices must not be
+                    // copied into the child node array. The external ancestor is
+                    // attached when child render items are flattened below.
+                    cr.visibleAncestorIndex = -1;
                     // Binary 0x6BE29C: propagates node+1952 (forceVisible) to child root
                     cr.forceVisible = mn.forceVisible;
                 }
-                // Step child: frameProgress + updateLayers (0x6BE2A4..0x6BE2AC)
-                // Binary calls both unconditionally (no guard).
-                child.frameProgress(_frameLastTime);
-                child.ensureNodeTreeBuilt();
                 child.updateLayers();
             }
         }
 
+    }
+
+    bool Player::applyMotionParentRootStateForRender() {
+        if(!_runtime || !_motionParentPlayer ||
+           !_motionParentPlayer->_runtime ||
+           _motionParentNodeIndex < 0 ||
+           _motionParentNodeIndex >=
+               static_cast<int>(_motionParentPlayer->_runtime->nodes.size())) {
+            return false;
+        }
+
+        const auto &parentNode =
+            _motionParentPlayer->_runtime->nodes[_motionParentNodeIndex];
+
+        double posX = parentNode.accumulated.posX;
+        double posY = parentNode.accumulated.posY;
+        double posZ = parentNode.accumulated.posZ;
+
+        const double originX = parentNode.activeSlot().ox;
+        const double originY = parentNode.activeSlot().oy;
+        if(originX != 0.0 || originY != 0.0) {
+            const double negOY = -originY;
+            const double vx =
+                parentNode.accumulated.m12 * negOY -
+                originX * parentNode.accumulated.m11;
+            const double vy =
+                parentNode.accumulated.m22 * negOY -
+                originX * parentNode.accumulated.m21;
+            if(parentNode.coordinateMode == 1) {
+                posX += vx;
+                posZ += vy;
+            } else {
+                posX += vx;
+                posY += vy;
+            }
+        }
+
+        _pendingRootX = posX;
+        _pendingRootY = posY;
+        _pendingRootZ = posZ;
+        _hasPendingRootPos = true;
+        _zFactor = _motionParentPlayer->_zFactor;
+        _runtime->drawAffineMatrix =
+            _motionParentPlayer->_runtime->drawAffineMatrix;
+        {
+            uint32_t packed;
+            std::memcpy(&packed, &parentNode.colorBytes[0],
+                        sizeof(uint32_t));
+            _colorWeightPacked = packed;
+        }
+
+        if(_runtime->nodes.empty()) {
+            return true;
+        }
+
+        auto &root = _runtime->nodes[0];
+        root.localState.posX = posX;
+        root.localState.posY = posY;
+        root.localState.posZ = posZ;
+        root.localState.flipX = parentNode.accumulated.flipX;
+        root.localState.flipY = parentNode.accumulated.flipY;
+        root.localState.scaleX = parentNode.accumulated.scaleX;
+        root.localState.scaleY = parentNode.accumulated.scaleY;
+        root.localState.slantX = parentNode.accumulated.slantX;
+        root.localState.slantY = parentNode.accumulated.slantY;
+        root.localState.opacity = parentNode.accumulated.opacity;
+        root.localState.active = parentNode.accumulated.active;
+        root.localState.visible = parentNode.accumulated.visible;
+        root.localState.dirty = true;
+
+        root.accumulated.posX = posX;
+        root.accumulated.posY = posY;
+        root.accumulated.posZ = posZ;
+        root.accumulated.flipX = parentNode.accumulated.flipX;
+        root.accumulated.flipY = parentNode.accumulated.flipY;
+        root.accumulated.scaleX = parentNode.accumulated.scaleX;
+        root.accumulated.scaleY = parentNode.accumulated.scaleY;
+        root.accumulated.slantX = parentNode.accumulated.slantX;
+        root.accumulated.slantY = parentNode.accumulated.slantY;
+        root.accumulated.opacity = parentNode.accumulated.opacity;
+        root.accumulated.active = parentNode.accumulated.active;
+        root.accumulated.visible = parentNode.accumulated.visible;
+        root.accumulated.m11 = parentNode.accumulated.m11;
+        root.accumulated.m12 = parentNode.accumulated.m12;
+        root.accumulated.m21 = parentNode.accumulated.m21;
+        root.accumulated.m22 = parentNode.accumulated.m22;
+        root.accumulated.dirty = true;
+
+        if(LOGGER && motionUpdateDebugAllEnabled() &&
+           _runtime->activeMotion &&
+           (_runtime->activeMotion->path.find("SD") != std::string::npos ||
+            _runtime->activeMotion->path.find("sd") != std::string::npos)) {
+            LOGGER->info(
+                "motion parent root render apply: childMotion={} childLabel={} parentMotion={} parentLabel={} parentIndex={} root=({:.1f},{:.1f},{:.1f}) parentAccum=({:.1f},{:.1f},{:.1f})",
+                _runtime->activeMotion->path, detail::narrow(_motionKey),
+                _motionParentPlayer->_runtime->activeMotion
+                    ? _motionParentPlayer->_runtime->activeMotion->path
+                    : std::string("<none>"),
+                parentNode.layerName.empty()
+                    ? std::string("<root>")
+                    : parentNode.layerName,
+                _motionParentNodeIndex, posX, posY, posZ,
+                parentNode.accumulated.posX,
+                parentNode.accumulated.posY,
+                parentNode.accumulated.posZ);
+        }
+
+        return true;
     }
 
     void Player::updateLayersPhase3_ParticleEmitter() {
@@ -2570,11 +3026,11 @@ namespace motion {
                 if (!_stealthMotion.IsEmpty()) {
                     child->onFindMotion(_stealthMotion, PlayFlagStealth);
                 }
-                // _parentColorPacked propagation (0x6BF9B4)
+                // colorWeight propagation (player+1156, 0x6BF9B4)
                 {
                     uint32_t packed;
                     std::memcpy(&packed, &pn.colorBytes[0], sizeof(uint32_t));
-                    child->_parentColorPacked = packed;
+                    child->_colorWeightPacked = packed;
                 }
                 // emoteEdit propagation (0x6BF9C0..0x6BF9D4)
                 child->_emoteEditVariant = _emoteEditVariant;
@@ -2879,8 +3335,6 @@ namespace motion {
             // Pass 2: Step each remaining child (0x6C1984..0x6C1A3C)
             // Binary at 0x6C1960: mesh combine parent propagation.
             {
-                const int meshParentIdx = pn.meshCombineEnabled
-                    ? static_cast<int>(pi) : pn.visibleAncestorIndex;
                 const int pCount2 = pn.getParticleCount();
                 for (int ci = 0; ci < pCount2; ++ci) {
                     auto *child = pn.getParticleChild(ci);
@@ -2888,8 +3342,10 @@ namespace motion {
                     child->_zFactor = _zFactor;
                     if (!child->_runtime->nodes.empty()) {
                         auto &cr = child->_runtime->nodes[0];
-                        cr.parentClipIndex = pn.parentClipIndex;
-                        cr.visibleAncestorIndex = meshParentIdx;
+                        cr.parentClipIndex = -1;
+                        // Parent and child node indices are separate namespaces.
+                        // Attach the external ancestor during render-item merge.
+                        cr.visibleAncestorIndex = -1;
                         cr.forceVisible = pn.forceVisible;
                     }
                     child->frameProgress(_frameLastTime);
@@ -3064,6 +3520,12 @@ namespace motion {
         }
 
         updateLayersPhase1_PreLoop(currentTime);
+        // Phase 1 evaluates the child motion's local root and therefore resets
+        // it to the PSB-local origin.  Restore the containing motion node before
+        // phase 2 accumulates descendants and phase 3 computes their vertices.
+        if(_motionParentPlayer) {
+            applyMotionParentRootStateForRender();
+        }
         updateLayersPhase2_MainLoop(currentTime);
         if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {
             const auto &root = nodes[0];
@@ -3151,6 +3613,64 @@ namespace motion {
             evalData.dirtyFlag = 0;
         }
 
+        // A motion child evaluates its own root at local (0, 0).  The parent
+        // transform is applied before the child update above, so phase 1 can
+        // overwrite it while rebuilding the child's accumulated state.  Keep
+        // the inherited root as the final state consumed by recursive render
+        // collection and hit testing.  Without this, nested button/slot clips
+        // leak into the top-left corner and every save card is rendered at the
+        // origin instead of at its parent slot position.
+        if(_motionParentPlayer) {
+            applyMotionParentRootStateForRender();
+        }
+
+        _allplaying = !_runtime->playingTimelineLabels.empty() ||
+            shouldReportPlayingChildPlayers();
+
+    }
+
+    bool Player::hasPlayingChildPlayers() const {
+        if(!_runtime) {
+            return false;
+        }
+
+        const auto isPlaying = [](const Player *child) {
+            return child &&
+                (child->_allplaying ||
+                 (child->_runtime &&
+                  !child->_runtime->playingTimelineLabels.empty()) ||
+                 child->hasPlayingChildPlayers());
+        };
+
+        for(const auto &node : _runtime->nodes) {
+            if(node.nodeType == 3) {
+                if(isPlaying(node.getChildPlayer())) {
+                    return true;
+                }
+                continue;
+            }
+            if(node.nodeType != 4) {
+                continue;
+            }
+            const int childCount = node.getParticleCount();
+            for(int index = 0; index < childCount; ++index) {
+                if(isPlaying(node.getParticleChild(index))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    bool Player::shouldReportPlayingChildPlayers() const {
+        // `allplaying` is the aggregate state used by AnimKAGLayer to keep
+        // calling progress() after the selected/root timeline has stopped.
+        // Nested motion clips are not limited to SD presentations: classic
+        // title and Extra PSBs also use short outer clips that launch longer
+        // child animations.  Restricting this state to SD presentations
+        // freezes those children at the outer clip's final frame.
+        return !_motionParentPlayer && _runtime && _runtime->activeMotion &&
+            hasPlayingChildPlayers();
     }
 
     void Player::calcBounds() {
@@ -3315,6 +3835,9 @@ namespace motion {
         const int bitmask = _runtime->isEmoteMode ? 5193 : 5185;
         const auto &dam = _runtime->drawAffineMatrix;
         std::unordered_set<int> requiredGroupNodeIndices;
+        int skipInactive = 0;
+        int skipType = 0;
+        int skipNoRenderableSource = 0;
 
         auto transformPoint = [&](float x, float y) -> tTVPPointD {
             return {
@@ -3366,7 +3889,9 @@ namespace motion {
                 }
                 const auto &ancestor = nodes[ancestorIndex];
                 const bool isSpecialCompositeParent =
-                    ancestor.nodeType == 12 && (ancestor.stencilType & 4) != 0;
+                    (ancestor.nodeType == 12 &&
+                     (ancestor.stencilType & 4) != 0) ||
+                    ancestor.nodeType == 7;
                 const auto inserted = isSpecialCompositeParent
                     ? requiredGroupNodeIndices.insert(ancestorIndex)
                     : std::pair<std::unordered_set<int>::iterator, bool>{
@@ -3386,7 +3911,10 @@ namespace motion {
 
         for(size_t i = 0; i < nodes.size(); ++i) {
             const auto &node = nodes[i];
-            if(!node.accumulated.active) continue;
+            if(!node.accumulated.active) {
+                ++skipInactive;
+                continue;
+            }
             const bool hasOwnSource =
                 node.hasSource && !node.interpolatedCache.src.empty();
             const bool needsGroupEntry =
@@ -3395,9 +3923,13 @@ namespace motion {
             if(!needsGroupEntry &&
                !node.forceVisible &&
                (((1 << node.nodeType) & bitmask) == 0)) {
+                ++skipType;
                 continue;
             }
-            if(!hasOwnSource && !needsGroupEntry) continue;
+            if(!hasOwnSource && !needsGroupEntry) {
+                ++skipNoRenderableSource;
+                continue;
+            }
 
             detail::PlayerRuntime::PreparedRenderItem entry;
             entry.nodeIndex = static_cast<int>(i);
@@ -3622,6 +4154,71 @@ namespace motion {
             entries.push_back(std::move(entry));
         }
 
+        if(LOGGER && motionUpdateDebugEnabled() &&
+           (_runtime->activeMotion && motionUpdateDebugAllEnabled())) {
+            const auto &motionPath = _runtime->activeMotion->path;
+            const int frameBucket =
+                static_cast<int>(std::floor(_frameTickCount / 10.0));
+            if(markMotionUpdateDebugLogged(fmt::format(
+                   "prepare-append|{}|{}|{}|{}", motionPath,
+                   static_cast<const void *>(this),
+                   detail::narrow(_motionKey), frameBucket))) {
+                std::ostringstream nodeSummary;
+                const size_t nodeLimit = std::min<size_t>(nodes.size(), 24);
+                for(size_t ni = 0; ni < nodeLimit; ++ni) {
+                    const auto &node = nodes[ni];
+                    if(ni) nodeSummary << ";";
+                    nodeSummary << ni << ":"
+                                << (node.layerName.empty()
+                                        ? std::string("<root>")
+                                        : node.layerName)
+                                << ":t" << node.nodeType
+                                << ":parent=" << node.parentIndex
+                                << ":inherit=0x" << std::hex
+                                << node.inheritFlags << std::dec
+                                << ":act" << (node.accumulated.active ? 1 : 0)
+                                << ":vis" << (node.accumulated.visible ? 1 : 0)
+                                << ":hasSrc" << (node.hasSource ? 1 : 0)
+                                << ":src=" << (node.interpolatedCache.src.empty()
+                                                  ? std::string("<none>")
+                                                  : node.interpolatedCache.src)
+                                << ":draw" << (node.drawFlag ? 1 : 0)
+                                << ":force" << node.forceVisible
+                                << ":opa" << node.accumulated.opacity
+                                << ":localPos=(" << node.localState.posX << ","
+                                << node.localState.posY << ","
+                                << node.localState.posZ << ")"
+                                << ":localScale=(" << node.localState.scaleX
+                                << "," << node.localState.scaleY << ")"
+                                << ":frameScale=("
+                                << node.interpolatedCache.scaleX << ","
+                                << node.interpolatedCache.scaleY << ")"
+                                << ":accPos=(" << node.accumulated.posX << ","
+                                << node.accumulated.posY << ","
+                                << node.accumulated.posZ << ")"
+                                << ":accScale=(" << node.accumulated.scaleX
+                                << "," << node.accumulated.scaleY << ")"
+                                << ":matrix=[" << node.accumulated.m11 << ","
+                                << node.accumulated.m12 << ","
+                                << node.accumulated.m21 << ","
+                                << node.accumulated.m22 << "]"
+                                << ":clip=" << node.clipW << "x" << node.clipH
+                                << ":origin=(" << node.originX << ","
+                                << node.originY << ")"
+                                << ":bounds=[" << node.bounds[0] << ","
+                                << node.bounds[1] << "," << node.bounds[2]
+                                << "," << node.bounds[3] << "]";
+                }
+                LOGGER->info(
+                    "motion prepare append summary: motion={} player={} motionKey={} frameTick={:.2f} nodes={} entries={} requiredGroups={} skipInactive={} skipType={} skipNoRenderable={} nodes=[{}]",
+                    motionPath, static_cast<const void *>(this),
+                    detail::narrow(_motionKey), _frameTickCount,
+                    nodes.size(), entries.size(),
+                    requiredGroupNodeIndices.size(), skipInactive, skipType,
+                    skipNoRenderableSource, nodeSummary.str());
+            }
+        }
+
         if(entries.empty()) {
             return;
         }
@@ -3726,6 +4323,7 @@ namespace motion {
 
         struct PendingChildRenderItems {
             int parentNodeIndex = -1;
+            int externalAncestorNodeIndex = -1;
             std::string childMotionPath;
             std::vector<detail::PlayerRuntime::PreparedRenderItem> entries;
         };
@@ -3744,6 +4342,14 @@ namespace motion {
             }
             PendingChildRenderItems pending;
             pending.parentNodeIndex = parentNodeIndex;
+            if(parentNodeIndex >= 0 &&
+               parentNodeIndex < static_cast<int>(_runtime->nodes.size())) {
+                const auto &parentNode = _runtime->nodes[parentNodeIndex];
+                pending.externalAncestorNodeIndex =
+                    parentNode.meshCombineEnabled
+                        ? parentNodeIndex
+                        : parentNode.visibleAncestorIndex;
+            }
             pending.childMotionPath = child->_runtime->activeMotion
                 ? child->_runtime->activeMotion->path
                 : std::string("<none>");
@@ -3761,9 +4367,12 @@ namespace motion {
         };
 
         // Aligned to sub_6C2334: nodeType 3/4 child-player recursion is gated
-        // by player+1092 (preview). The native code only expands these child
-        // render lists when preview == 0.
-        if(!_preview) {
+        // by player+1092 (preview). Yuzu's SD presentation motions are an
+        // exception in practice: their visible image lives in a nested child
+        // motion even when the CG viewer marks the parent as a preview.
+        const bool expandChildRenderItems =
+            !_preview || isYuzuSdPresentationMotionPath(motionPath);
+        if(expandChildRenderItems) {
             for(size_t ni = 1; ni < _runtime->nodes.size(); ++ni) {
                 auto &node = _runtime->nodes[ni];
                 if(node.nodeType == 3) {
@@ -3780,9 +4389,300 @@ namespace motion {
         }
 
         appendPreparedRenderItems();
+
+        auto isValidPreparedPaintBox =
+            [](const std::array<float, 4> &box) {
+                return std::isfinite(box[0]) && std::isfinite(box[1]) &&
+                    std::isfinite(box[2]) && std::isfinite(box[3]) &&
+                    box[2] >= box[0] && box[3] >= box[1];
+            };
+
+        auto unionPreparedPaintBox =
+            [&](std::array<float, 4> &bounds,
+                const std::array<float, 4> &box,
+                bool &haveBounds) {
+                if(!isValidPreparedPaintBox(box)) {
+                    return;
+                }
+                if(!haveBounds) {
+                    bounds = box;
+                    haveBounds = true;
+                    return;
+                }
+                bounds[0] = std::min(bounds[0], box[0]);
+                bounds[1] = std::min(bounds[1], box[1]);
+                bounds[2] = std::max(bounds[2], box[2]);
+                bounds[3] = std::max(bounds[3], box[3]);
+            };
+
+        auto isLikelySdMotion = [](const std::string &path) {
+            std::string lowered = path;
+            std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                           [](unsigned char c) {
+                               return static_cast<char>(std::tolower(c));
+                           });
+            const auto slash = lowered.find_last_of("/\\");
+            const std::string base =
+                slash == std::string::npos ? lowered : lowered.substr(slash + 1);
+            return base.rfind("sd", 0) == 0 ||
+                lowered.find("/sd/") != std::string::npos ||
+                lowered.find("\\sd\\") != std::string::npos ||
+                lowered.find("/sd") != std::string::npos ||
+                lowered.find("\\sd") != std::string::npos;
+        };
+
+        auto translatePreparedEntry =
+            [](detail::PlayerRuntime::PreparedRenderItem &entry,
+               float dx, float dy,
+               const std::array<float, 4> *replacementViewport) {
+                for(size_t i = 0; i + 1 < entry.corners.size(); i += 2) {
+                    entry.corners[i] += dx;
+                    entry.corners[i + 1] += dy;
+                }
+                if(entry.paintBox[2] >= entry.paintBox[0] &&
+                   entry.paintBox[3] >= entry.paintBox[1]) {
+                    entry.paintBox[0] += dx;
+                    entry.paintBox[1] += dy;
+                    entry.paintBox[2] += dx;
+                    entry.paintBox[3] += dy;
+                }
+                if(entry.hasViewport &&
+                   entry.viewport[2] >= entry.viewport[0] &&
+                   entry.viewport[3] >= entry.viewport[1]) {
+                    entry.viewport[0] += dx;
+                    entry.viewport[1] += dy;
+                    entry.viewport[2] += dx;
+                    entry.viewport[3] += dy;
+                }
+                if(replacementViewport &&
+                   (!entry.hasViewport ||
+                    entry.viewport[2] <= entry.viewport[0] ||
+                    entry.viewport[3] <= entry.viewport[1])) {
+                    entry.viewport = *replacementViewport;
+                    entry.hasViewport = true;
+                }
+                for(size_t i = 0; i + 1 < entry.meshPoints.size(); i += 2) {
+                    entry.meshPoints[i] += dx;
+                    entry.meshPoints[i + 1] += dy;
+                }
+            };
+
+        auto maybeTranslateCenteredChildEntries =
+            [&](PendingChildRenderItems &pending) {
+                if(pending.entries.empty() || !isLikelySdMotion(motionPath)) {
+                    return;
+                }
+
+                std::array<float, 4> parentBounds{0.0f, 0.0f, 0.0f, 0.0f};
+                std::array<float, 4> parentViewport{0.0f, 0.0f, 0.0f, 0.0f};
+                bool haveParentBounds = false;
+                bool haveParentViewport = false;
+                for(const auto &entry : _runtime->preparedRenderItems) {
+                    if(!entry.drawFlag || entry.opacity <= 0) {
+                        continue;
+                    }
+                    unionPreparedPaintBox(parentBounds, entry.paintBox,
+                                          haveParentBounds);
+                    if(entry.hasViewport) {
+                        unionPreparedPaintBox(parentViewport, entry.viewport,
+                                              haveParentViewport);
+                    }
+                }
+                if(!haveParentBounds) {
+                    return;
+                }
+                if(!haveParentViewport) {
+                    parentViewport = parentBounds;
+                    haveParentViewport = true;
+                }
+
+                std::array<float, 4> childBounds{0.0f, 0.0f, 0.0f, 0.0f};
+                bool haveChildBounds = false;
+                for(const auto &entry : pending.entries) {
+                    if(!entry.drawFlag || entry.opacity <= 0) {
+                        continue;
+                    }
+                    unionPreparedPaintBox(childBounds, entry.paintBox,
+                                          haveChildBounds);
+                }
+                if(!haveChildBounds) {
+                    return;
+                }
+
+                const float parentWidth = parentBounds[2] - parentBounds[0];
+                const float parentHeight = parentBounds[3] - parentBounds[1];
+                if(parentWidth <= 0.0f || parentHeight <= 0.0f) {
+                    return;
+                }
+
+                const float parentCenterX =
+                    (parentBounds[0] + parentBounds[2]) * 0.5f;
+                const float parentCenterY =
+                    (parentBounds[1] + parentBounds[3]) * 0.5f;
+                if(!std::isfinite(parentCenterX) ||
+                   !std::isfinite(parentCenterY) ||
+                   (std::fabs(parentCenterX) < 128.0f &&
+                    std::fabs(parentCenterY) < 128.0f)) {
+                    return;
+                }
+
+                const float childCenterX =
+                    (childBounds[0] + childBounds[2]) * 0.5f;
+                const float childCenterY =
+                    (childBounds[1] + childBounds[3]) * 0.5f;
+                const bool childLooksCenterOrigin =
+                    std::fabs(childCenterX) <= parentWidth * 0.75f &&
+                    std::fabs(childCenterY) <= parentHeight * 0.75f;
+                if(!childLooksCenterOrigin) {
+                    return;
+                }
+
+                const std::array<float, 4> translatedChildBounds{
+                    childBounds[0] + parentCenterX,
+                    childBounds[1] + parentCenterY,
+                    childBounds[2] + parentCenterX,
+                    childBounds[3] + parentCenterY
+                };
+                const float margin =
+                    std::max(8.0f, std::min(parentWidth, parentHeight) * 0.12f);
+                const std::array<float, 4> expandedParentBounds{
+                    parentBounds[0] - margin,
+                    parentBounds[1] - margin,
+                    parentBounds[2] + margin,
+                    parentBounds[3] + margin
+                };
+                const bool translatedIntersectsParent =
+                    translatedChildBounds[0] <= expandedParentBounds[2] &&
+                    translatedChildBounds[2] >= expandedParentBounds[0] &&
+                    translatedChildBounds[1] <= expandedParentBounds[3] &&
+                    translatedChildBounds[3] >= expandedParentBounds[1];
+                if(!translatedIntersectsParent) {
+                    return;
+                }
+
+                for(auto &entry : pending.entries) {
+                    translatePreparedEntry(
+                        entry, parentCenterX, parentCenterY,
+                        haveParentViewport ? &parentViewport : nullptr);
+                }
+                if(LOGGER && motionUpdateDebugAllEnabled()) {
+                    LOGGER->info(
+                        "motion child center-origin translate: motion={} parentNode={} childMotion={} parentBounds=[{:.1f},{:.1f},{:.1f},{:.1f}] childBounds=[{:.1f},{:.1f},{:.1f},{:.1f}] offset=({:.1f},{:.1f}) entries={}",
+                        motionPath, pending.parentNodeIndex,
+                        pending.childMotionPath, parentBounds[0],
+                        parentBounds[1], parentBounds[2], parentBounds[3],
+                        childBounds[0], childBounds[1], childBounds[2],
+                        childBounds[3], parentCenterX, parentCenterY,
+                        pending.entries.size());
+                }
+            };
+
+        auto inheritParentClipViewport =
+            [&](PendingChildRenderItems &pending) {
+                if(pending.parentNodeIndex < 0 ||
+                   pending.parentNodeIndex >=
+                       static_cast<int>(_runtime->nodes.size())) {
+                    return;
+                }
+                const auto &parentNode =
+                    _runtime->nodes[pending.parentNodeIndex];
+                const int clipIndex = parentNode.parentClipIndex;
+                if(clipIndex < 0 ||
+                   clipIndex >= static_cast<int>(_runtime->nodes.size())) {
+                    return;
+                }
+                const auto &clipNode = _runtime->nodes[clipIndex];
+                if(clipNode.shapeAABB[2] < clipNode.shapeAABB[0] ||
+                   clipNode.shapeAABB[3] < clipNode.shapeAABB[1]) {
+                    return;
+                }
+
+                const auto &dam = _runtime->drawAffineMatrix;
+                auto transformClipPoint = [&](float x, float y) {
+                    return std::array<float, 2>{
+                        static_cast<float>(dam[0] * x + dam[2] * y + dam[4]),
+                        static_cast<float>(dam[1] * x + dam[3] * y + dam[5])
+                    };
+                };
+                const auto p0 = transformClipPoint(
+                    clipNode.shapeAABB[0], clipNode.shapeAABB[1]);
+                const auto p1 = transformClipPoint(
+                    clipNode.shapeAABB[2], clipNode.shapeAABB[1]);
+                const auto p2 = transformClipPoint(
+                    clipNode.shapeAABB[2], clipNode.shapeAABB[3]);
+                const auto p3 = transformClipPoint(
+                    clipNode.shapeAABB[0], clipNode.shapeAABB[3]);
+                const std::array<float, 4> inheritedViewport{
+                    std::min(std::min(p0[0], p1[0]), std::min(p2[0], p3[0])),
+                    std::min(std::min(p0[1], p1[1]), std::min(p2[1], p3[1])),
+                    std::max(std::max(p0[0], p1[0]), std::max(p2[0], p3[0])),
+                    std::max(std::max(p0[1], p1[1]), std::max(p2[1], p3[1]))
+                };
+                for(auto &entry : pending.entries) {
+                    if(entry.hasViewport &&
+                       entry.viewport[2] >= entry.viewport[0] &&
+                       entry.viewport[3] >= entry.viewport[1]) {
+                        entry.viewport[0] = std::max(
+                            entry.viewport[0], inheritedViewport[0]);
+                        entry.viewport[1] = std::max(
+                            entry.viewport[1], inheritedViewport[1]);
+                        entry.viewport[2] = std::min(
+                            entry.viewport[2], inheritedViewport[2]);
+                        entry.viewport[3] = std::min(
+                            entry.viewport[3], inheritedViewport[3]);
+                    } else {
+                        entry.viewport = inheritedViewport;
+                        entry.hasViewport = true;
+                    }
+                }
+            };
+
+        // Merge later siblings first. Child entries receive remapped indices;
+        // if an earlier sibling is merged first, those large child-local
+        // indices can be mistaken for parent indices by the next insertion and
+        // place later children behind a full-screen earlier child.
+        std::stable_sort(
+            pendingChildItems.begin(), pendingChildItems.end(),
+            [](const PendingChildRenderItems &lhs,
+               const PendingChildRenderItems &rhs) {
+                return lhs.parentNodeIndex > rhs.parentNodeIndex;
+            });
+
+        int nextMergedNodeIndex = static_cast<int>(_runtime->nodes.size());
         for(auto &pending : pendingChildItems) {
             if(pending.entries.empty()) {
                 continue;
+            }
+            maybeTranslateCenteredChildEntries(pending);
+            // A child Player owns a separate node array, so its local
+            // parentClipIndex cannot point back into the containing motion.
+            // Carry the nearest type-7 clip into the flattened child items.
+            inheritParentClipViewport(pending);
+
+            // Child players use node indices local to their own runtime. Once
+            // flattened, isolate those namespaces so render-parent lookup
+            // cannot bind to an unrelated command with the same local index.
+            int maxChildNodeIndex = -1;
+            for(const auto &entry : pending.entries) {
+                maxChildNodeIndex = std::max(maxChildNodeIndex,
+                                             entry.nodeIndex);
+                maxChildNodeIndex = std::max(maxChildNodeIndex,
+                                             entry.visibleAncestorIndex);
+            }
+            if(maxChildNodeIndex >= 0) {
+                const int nodeIndexOffset = nextMergedNodeIndex;
+                for(auto &entry : pending.entries) {
+                    if(entry.nodeIndex >= 0) {
+                        entry.nodeIndex += nodeIndexOffset;
+                    }
+                    if(entry.visibleAncestorIndex >= 0) {
+                        entry.visibleAncestorIndex += nodeIndexOffset;
+                    } else if(pending.externalAncestorNodeIndex >= 0) {
+                        entry.visibleAncestorIndex =
+                            pending.externalAncestorNodeIndex;
+                    }
+                }
+                nextMergedNodeIndex += maxChildNodeIndex + 1;
             }
             auto insertPos = _runtime->preparedRenderItems.end();
             for(auto it = _runtime->preparedRenderItems.begin();

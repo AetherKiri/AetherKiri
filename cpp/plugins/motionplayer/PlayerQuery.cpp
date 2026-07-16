@@ -3,6 +3,7 @@
 //
 #include "PlayerInternal.h"
 #include "HitTestInternal.h"
+#include "SourceCache.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -10,14 +11,46 @@
 using namespace motion::internal;
 
 namespace {
+    template<typename Shape>
+    tTJSVariant makeNativeShapeVariant(Shape *native) {
+        if(auto *dispatch = ncbInstanceAdaptor<Shape>::CreateAdaptor(native)) {
+            tTJSVariant result(dispatch, dispatch);
+            dispatch->Release();
+            return result;
+        }
+        delete native;
+        return {};
+    }
+
     bool motionDebugEnabled() {
         const char *enabled = std::getenv("AETHERKIRI_MOTION_DEBUG");
+        return enabled && *enabled && std::strcmp(enabled, "0") != 0;
+    }
+
+    bool motionHitDebugEnabled() {
+        const char *enabled = std::getenv("AETHERKIRI_MOTION_HIT_DEBUG");
         return enabled && *enabled && std::strcmp(enabled, "0") != 0;
     }
 
     std::string describeLayerForQueryDebug(tTJSNI_BaseLayer *layer) {
         if(!layer) {
             return "<null>";
+        }
+        const auto type = layer->GetType();
+        const bool drawableType = type != ltBinder;
+        tjs_int imageWidth = -1;
+        tjs_int imageHeight = -1;
+        bool hasImage = false;
+        if(drawableType) {
+            try {
+                imageWidth = layer->GetImageWidth();
+                imageHeight = layer->GetImageHeight();
+                hasImage = layer->GetHasImage();
+            } catch(...) {
+                imageWidth = -1;
+                imageHeight = -1;
+                hasImage = false;
+            }
         }
         std::ostringstream out;
         out << "ptr=" << static_cast<const void *>(layer)
@@ -30,10 +63,14 @@ namespace {
             << ",overall=" << layer->GetOverallOrderIndex()
             << ",rect=[" << layer->GetLeft() << "," << layer->GetTop()
             << "," << layer->GetWidth() << "x" << layer->GetHeight() << "]"
-            << ",image=" << layer->GetImageWidth() << "x"
-            << layer->GetImageHeight()
-            << ",hasImage=" << (layer->GetHasImage() ? 1 : 0)
-            << ",type=" << static_cast<int>(layer->GetType())
+            << ",image=";
+        if(drawableType && imageWidth >= 0 && imageHeight >= 0) {
+            out << imageWidth << "x" << imageHeight;
+        } else {
+            out << "?x?";
+        }
+        out << ",hasImage=" << (hasImage ? 1 : 0)
+            << ",type=" << static_cast<int>(type)
             << ",children=" << layer->GetCount();
         return out.str();
     }
@@ -54,6 +91,17 @@ namespace {
             out << " <- ...";
         }
         return out.str();
+    }
+
+    bool layerBelongsToCgViewForQuery(tTJSNI_BaseLayer *layer) {
+        for(auto *current = layer; current; current = current->GetParent()) {
+            const auto name = motion::internal::psbDebugLowercase(
+                motion::detail::narrow(current->GetName()));
+            if(name.find("cg view layer") != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
     }
 
     iTJSDispatch2 *selectVariantDispatchTarget(tTJSVariant *value) {
@@ -83,6 +131,103 @@ namespace {
             << ",nis=" << er
             << ",layer=[" << describeLayerForQueryDebug(layer) << "]";
         return out.str();
+    }
+
+    bool startsWith(const std::string &value, const std::string &prefix) {
+        return value.size() >= prefix.size() &&
+            value.compare(0, prefix.size(), prefix) == 0;
+    }
+
+    bool containsString(const std::vector<std::string> &values,
+                        const std::string &needle) {
+        return std::find(values.begin(), values.end(), needle) != values.end();
+    }
+
+    std::string joinStrings(const std::vector<std::string> &values,
+                            const char *separator = ",") {
+        std::ostringstream out;
+        for(size_t index = 0; index < values.size(); ++index) {
+            if(index != 0) {
+                out << separator;
+            }
+            out << values[index];
+        }
+        return out.str();
+    }
+
+    std::string labelTail(std::string value) {
+        const auto slash = value.find_last_of("/\\");
+        if(slash != std::string::npos) {
+            value = value.substr(slash + 1);
+        }
+        return value;
+    }
+
+    void appendYuzuShortMotionMatches(
+        std::vector<std::string> &matches,
+        const std::vector<std::string> &labels,
+        const std::string &base,
+        const std::string &suffix) {
+        if(base.empty() || suffix.empty()) {
+            return;
+        }
+        const auto motionPrefix = std::string("motion/") + base + "/" + suffix;
+        for(const auto &label : labels) {
+            const auto lowered = motion::internal::psbDebugLowercase(label);
+            const auto tail = labelTail(lowered);
+            if(startsWith(lowered, motionPrefix) || startsWith(tail, suffix)) {
+                if(!containsString(matches, label)) {
+                    matches.push_back(label);
+                }
+            }
+        }
+    }
+
+    std::vector<std::string> resolveYuzuShortMotionLabels(
+        const motion::detail::MotionSnapshot &snapshot,
+        const std::string &requestKey,
+        const std::string &charaKey) {
+        std::vector<std::string> labels;
+        const auto request = motion::internal::psbDebugLowercase(requestKey);
+        if(request.empty()) {
+            return labels;
+        }
+
+        std::vector<std::string> bases;
+        const auto pathBase = motion::internal::psbDebugLowercase(
+            motion::internal::basenameWithoutExtension(snapshot.path));
+        if(!pathBase.empty()) {
+            bases.push_back(pathBase);
+        }
+        const auto charaBase = motion::internal::psbDebugLowercase(
+            motion::internal::basenameWithoutExtension(charaKey));
+        if(!charaBase.empty() && !containsString(bases, charaBase)) {
+            bases.push_back(charaBase);
+        }
+
+        std::vector<std::string> allLabels = snapshot.mainTimelineLabels;
+        for(const auto &label : snapshot.diffTimelineLabels) {
+            if(!containsString(allLabels, label)) {
+                allLabels.push_back(label);
+            }
+        }
+        for(const auto &[label, _] : snapshot.clipsByLabel) {
+            if(!containsString(allLabels, label)) {
+                allLabels.push_back(label);
+            }
+        }
+
+        for(const auto &base : bases) {
+            if(!startsWith(request, base) || request.size() <= base.size()) {
+                continue;
+            }
+            const auto suffix = request.substr(base.size());
+            appendYuzuShortMotionMatches(labels, allLabels, base, suffix);
+            if(!labels.empty()) {
+                break;
+            }
+        }
+        return labels;
     }
 
     float variableEaseWeightLike_0x671228(double ease) {
@@ -201,30 +346,148 @@ namespace motion {
     }
 
     tTJSVariant Player::getLayerMotion(ttstr name) {
-        const auto *layers = activeLayersByName();
-        if(!layers) {
+        ensureMotionLoaded();
+        ensureNodeTreeBuilt();
+        if(!_runtime) {
             return {};
         }
 
+        // Motion buttons are queried between draws. Keep their child players
+        // synchronized with the parent node before returning the object used
+        // by script-side contains(x, y).
+        if(!_runtime->nodes.empty()) {
+            updateLayers();
+        }
+
         const auto key = detail::narrow(name);
-        if(const auto it = layers->find(key); it != layers->end()) {
-            return it->second->toTJSVal();
+        const auto it = _runtime->nodeLabelMap.find(key);
+        if(it == _runtime->nodeLabelMap.end() || it->second < 0 ||
+           it->second >= static_cast<int>(_runtime->nodes.size())) {
+            return {};
+        }
+
+        const auto &node = _runtime->nodes[static_cast<size_t>(it->second)];
+        if(node.nodeType == 3 && node.childPlayerVar.Type() == tvtObject) {
+            if(auto *child = node.getChildPlayer()) {
+                child->applyMotionParentRootStateForRender();
+                child->ensureNodeTreeBuilt();
+                child->updateLayers();
+                if(LOGGER && motionHitDebugEnabled()) {
+                    LOGGER->info(
+                        "motion hit child query: parentMotion={} label={} parentPos=({:.2f},{:.2f}) childMotion={} childLabel={}",
+                        _runtime->activeMotion
+                            ? _runtime->activeMotion->path
+                            : std::string("<none>"),
+                        key, node.accumulated.posX, node.accumulated.posY,
+                        child->_runtime && child->_runtime->activeMotion
+                            ? child->_runtime->activeMotion->path
+                            : std::string("<none>"),
+                        detail::narrow(child->_motionKey));
+                }
+            }
+            return node.childPlayerVar;
         }
 
         return {};
     }
 
     tTJSVariant Player::getLayerGetter(ttstr name) {
-        const auto layer = getLayerMotion(name);
-        if(layer.Type() == tvtVoid) {
+        ensureMotionLoaded();
+        ensureNodeTreeBuilt();
+        if(!_runtime) {
             return {};
+        }
+
+        if(!_runtime->nodes.empty()) {
+            updateLayers();
+        }
+
+        const auto key = detail::narrow(name);
+        const auto it = _runtime->nodeLabelMap.find(key);
+        if(it == _runtime->nodeLabelMap.end() || it->second < 0 ||
+           it->second >= static_cast<int>(_runtime->nodes.size())) {
+            return {};
+        }
+
+        const auto &node = _runtime->nodes[static_cast<size_t>(it->second)];
+        tTJSVariant motion;
+        if(node.nodeType == 3 && node.childPlayerVar.Type() == tvtObject) {
+            motion = node.childPlayerVar;
+        }
+
+        tTJSVariant shape;
+        switch(node.shapeGeomType) {
+            case ShapeTypeCircle: {
+                auto *circle = new Circle();
+                circle->x = node.shapeVertices[0];
+                circle->y = node.shapeVertices[1];
+                circle->r = node.shapeVertices[2];
+                shape = makeNativeShapeVariant(circle);
+                break;
+            }
+            case ShapeTypeRect: {
+                auto *rect = new Rect();
+                rect->l = node.shapeVertices[3];
+                rect->t = node.shapeVertices[4];
+                rect->w = node.shapeVertices[5] - node.shapeVertices[3];
+                rect->h = node.shapeVertices[6] - node.shapeVertices[4];
+                shape = makeNativeShapeVariant(rect);
+                break;
+            }
+            case ShapeTypeQuad: {
+                auto *quad = new Quad();
+                for(size_t index = 0; index < 8; ++index) {
+                    quad->verts[index] = node.shapeVertices[index + 7];
+                }
+                shape = makeNativeShapeVariant(quad);
+                break;
+            }
+            default:
+                break;
+        }
+
+        if(LOGGER && motionHitDebugEnabled()) {
+            const auto &root = _runtime->nodes.front();
+            LOGGER->info(
+                "motion layer getter: motion={} chara={} motionKey={} layer={} type={} geom={} rootPos=({:.2f},{:.2f}) nodePos=({:.2f},{:.2f}) nodeScale=({:.4f},{:.4f}) rect=({:.2f},{:.2f},{:.2f},{:.2f})",
+                _runtime->activeMotion
+                    ? _runtime->activeMotion->path
+                    : std::string("<none>"),
+                detail::narrow(_chara), detail::narrow(_motionKey), key,
+                node.nodeType, node.shapeGeomType,
+                root.accumulated.posX, root.accumulated.posY,
+                node.accumulated.posX, node.accumulated.posY,
+                node.accumulated.scaleX, node.accumulated.scaleY,
+                node.shapeVertices[3], node.shapeVertices[4],
+                node.shapeVertices[5] - node.shapeVertices[3],
+                node.shapeVertices[6] - node.shapeVertices[4]);
         }
 
         const auto layerId = requireLayerId(name);
         return detail::makeDictionary({
             { "name", name },
+            { "label", name },
             { "id", layerId },
-            { "motion", layer },
+            { "type", node.nodeType },
+            { "visible", node.accumulated.visible },
+            { "branchVisible", node.accumulated.active },
+            { "layerVisible", node.drawFlag },
+            { "x", node.accumulated.posX },
+            { "y", node.accumulated.posY },
+            { "left", node.accumulated.posX },
+            { "top", node.accumulated.posY },
+            { "flipX", node.accumulated.flipX },
+            { "flipY", node.accumulated.flipY },
+            { "zoomX", node.accumulated.scaleX },
+            { "zoomY", node.accumulated.scaleY },
+            { "angleDeg", node.accumulated.angle },
+            { "angleRad", node.accumulated.angle * 3.14159265358979323846 /
+                              180.0 },
+            { "slantX", node.accumulated.slantX },
+            { "slantY", node.accumulated.slantY },
+            { "opacity", node.accumulated.opacity },
+            { "shape", shape },
+            { "motion", motion },
         });
     }
 
@@ -690,6 +953,82 @@ namespace motion {
         return false;
     }
 
+    bool Player::contains(double x, double y) {
+        ensureMotionLoaded();
+        ensureNodeTreeBuilt();
+        if(!_runtime || !_runtime->activeMotion) {
+            return false;
+        }
+
+        if(_motionParentPlayer && _motionParentPlayer->_runtime) {
+            _motionParentPlayer->ensureNodeTreeBuilt();
+            if(!_motionParentPlayer->_runtime->nodes.empty()) {
+                _motionParentPlayer->updateLayers();
+            }
+            applyMotionParentRootStateForRender();
+        }
+
+        if(!_runtime->nodes.empty()) {
+            updateLayers();
+            calcBounds();
+        }
+
+        bool hasExplicitShape = false;
+        bool shapeHit = false;
+        for(const auto &node : _runtime->nodes) {
+            if(node.nodeType != 1 || !node.accumulated.active ||
+               node.activeSlot().done || node.shapeGeomType == ShapeTypePoint) {
+                continue;
+            }
+            hasExplicitShape = true;
+            if(hitTestMotionNodeShape(node, x, y)) {
+                shapeHit = true;
+                break;
+            }
+        }
+
+        const bool boundsHit =
+            _boundsMinX <= x && x < _boundsMaxX &&
+            _boundsMinY <= y && y < _boundsMaxY;
+        const bool hit = hasExplicitShape ? shapeHit : boundsHit;
+        if(LOGGER && motionHitDebugEnabled()) {
+            LOGGER->info(
+                "motion contains: motion={} label={} point=({:.2f},{:.2f}) shapes={} shapeHit={} bounds=({:.2f},{:.2f},{:.2f},{:.2f}) boundsHit={} result={}",
+                _runtime->activeMotion->path, detail::narrow(_motionKey), x, y,
+                hasExplicitShape ? 1 : 0, shapeHit ? 1 : 0,
+                _boundsMinX, _boundsMinY, _boundsMaxX, _boundsMaxY,
+                boundsHit ? 1 : 0, hit ? 1 : 0);
+        }
+        return hit;
+    }
+
+    tjs_error Player::containsCompatMethod(tTJSVariant *result,
+                                           tjs_int numparams,
+                                           tTJSVariant **param,
+                                           iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(!result) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        if(numparams >= 3 && param[0] && param[1] && param[2]) {
+            *result = tTJSVariant(
+                self->hitTestLayer(ttstr(*param[0]), param[1]->AsReal(),
+                                   param[2]->AsReal()));
+            return TJS_S_OK;
+        }
+        if(numparams >= 2 && param[0] && param[1]) {
+            *result = tTJSVariant(
+                self->contains(param[0]->AsReal(), param[1]->AsReal()));
+            return TJS_S_OK;
+        }
+        return TJS_E_INVALIDPARAM;
+    }
+
     tjs_int Player::countMainTimelines() {
         ensureMotionLoaded();
         return _runtime->activeMotion
@@ -825,8 +1164,16 @@ namespace motion {
                          key) == _runtime->playingTimelineLabels.end()) {
                 _runtime->playingTimelineLabels.push_back(key);
             }
+            _runtime->lastExplicitTimelineLabel = key;
         }
 
+        if(const auto *clip = detail::findMotionClip(
+               *_runtime->activeMotion, detail::narrow(_chara), key,
+               false)) {
+            it->second.totalFrames = clip->totalFrames;
+            it->second.loop = clip->loop;
+            it->second.loopTime = clip->loopTime;
+        }
         it->second.flags = flags;
         it->second.playing = true;
         it->second.currentTime = 0.0;
@@ -969,9 +1316,17 @@ namespace motion {
         }
 
         const bool chainMode = (flags & PlayFlagChain) != 0;
-        const auto playOne = [&](const std::string &timelineLabel) {
+        const auto playOne = [&](const std::string &timelineLabel,
+                                 const bool rememberExplicit) {
             auto &state = _runtime->timelines[timelineLabel];
             state.label = timelineLabel;
+            if(const auto *clip = detail::findMotionClip(
+                   *_runtime->activeMotion, detail::narrow(_chara),
+                   timelineLabel, false)) {
+                state.totalFrames = clip->totalFrames;
+                state.loop = clip->loop;
+                state.loopTime = clip->loopTime;
+            }
             state.flags = flags;
             state.blendRatio = 1.0;
             state.playing = true;
@@ -988,6 +1343,9 @@ namespace motion {
                          timelineLabel) == _runtime->playingTimelineLabels.end()) {
                 _runtime->playingTimelineLabels.push_back(timelineLabel);
             }
+            if(rememberExplicit) {
+                _runtime->lastExplicitTimelineLabel = timelineLabel;
+            }
             if(state.totalFrames <= 0.0 && _runtime->activeMotion) {
                 const auto it =
                     _runtime->activeMotion->timelineTotalFrames.find(timelineLabel);
@@ -1001,7 +1359,7 @@ namespace motion {
         if(!label.IsEmpty()) {
             const auto key = detail::narrow(label);
             if(_runtime->timelines.find(key) != _runtime->timelines.end()) {
-                playOne(key);
+                playOne(key, true);
                 started = true;
             }
         }
@@ -1012,12 +1370,15 @@ namespace motion {
                 ? _runtime->activeMotion->mainTimelineLabels
                 : _runtime->activeMotion->diffTimelineLabels;
             for(const auto &timelineLabel : primary) {
-                playOne(timelineLabel);
+                playOne(timelineLabel, false);
                 started = true;
             }
         }
 
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        if(_allplaying) {
+            claimYuzuSdAutoProgress();
+        }
         return started;
     }
 
@@ -1205,6 +1566,58 @@ namespace motion {
         return TJS_S_OK;
     }
 
+    tjs_error Player::clearCompatMethod(tTJSVariant *result, tjs_int numparams,
+                                        tTJSVariant **param,
+                                        iTJSDispatch2 *objthis) {
+        if(result) {
+            result->Clear();
+        }
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 1 || !param || !param[0] ||
+           param[0]->Type() != tvtObject) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        iTJSDispatch2 *target = selectVariantDispatchTarget(param[0]);
+        if(auto *adaptor =
+               ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
+                   target, false)) {
+            target = adaptor->getPrivateRenderTargetObject();
+            if(!target) {
+                return TJS_S_OK;
+            }
+        } else if(auto *resolved = tryResolveLayerDispatch(*param[0])) {
+            target = resolved;
+        }
+
+        tTJSNI_BaseLayer *layer = nullptr;
+        if(!target || TJS_FAILED(target->NativeInstanceSupport(
+                          TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                          reinterpret_cast<iTJSNativeInstance **>(&layer))) ||
+           !layer) {
+            return TJS_S_OK;
+        }
+
+        auto *bitmap = layer->GetMainImage();
+        if(!bitmap || bitmap->GetWidth() <= 0 || bitmap->GetHeight() <= 0) {
+            return TJS_S_OK;
+        }
+        const tjs_uint32 color =
+            numparams >= 2 && param[1]
+                ? static_cast<tjs_uint32>(param[1]->AsInteger())
+                : 0;
+        bitmap->Fill(
+            tTVPRect(0, 0, static_cast<tjs_int>(bitmap->GetWidth()),
+                     static_cast<tjs_int>(bitmap->GetHeight())),
+            color);
+        layer->Update(false);
+        self->_runtime->clearPresentationRenderReuse();
+        return TJS_S_OK;
+    }
+
     // drawCompat — aligned to libkrkr2.so sub_6D5FB8 / Player_drawD3D (0x6D5B90).
     // Logic:
     //   1. param is D3DAdaptor → set _d3dDrawMode and render via D3D path immediately
@@ -1229,6 +1642,9 @@ namespace motion {
         if(!nativeInstance) {
             return TJS_E_INVALIDOBJECT;
         }
+        auto releaseDeferredEndedTimelineHold = [&]() {
+            nativeInstance->releaseDeferredEndedTimelineRenderHoldAfterDraw();
+        };
 
         const auto motionPath =
             nativeInstance->_runtime && nativeInstance->_runtime->activeMotion
@@ -1236,6 +1652,18 @@ namespace motion {
                 : std::string{};
         tTJSVariant *arg = (numparams > 0 && param) ? param[0] : nullptr;
         iTJSDispatch2 *paramObj = selectVariantDispatchTarget(arg);
+        if(nativeInstance->isYuzuSdPreviewAnimationFrozen() &&
+           nativeInstance->restoreFrozenYuzuSdPreviewFrame(paramObj)) {
+            if(result) {
+                if(arg) {
+                    *result = *arg;
+                } else {
+                    *result = nativeInstance->_runtime->lastCanvas;
+                }
+            }
+            releaseDeferredEndedTimelineHold();
+            return TJS_S_OK;
+        }
         tTJSNI_BaseLayer *argLayer = nullptr;
         const bool argIsLayer = arg && tryGetLayerObject(*arg, argLayer);
         iTJSDispatch2 *resolvedLayerObject =
@@ -1265,6 +1693,26 @@ namespace motion {
         }
 
         if(!paramObj) {
+            iTJSDispatch2 *targetLayerObject =
+                tryResolveLayerDispatch(nativeInstance->_targetLayer);
+            if(targetLayerObject) {
+                if(LOGGER && motionDebugEnabled()) {
+                    LOGGER->info(
+                        "motion drawCompat route: motion={} route=stored-target target={}",
+                        motionPath,
+                        static_cast<const void *>(targetLayerObject));
+                }
+                if(nativeInstance->_d3dDrawMode) {
+                    nativeInstance->renderViaSharedD3DAdaptor(targetLayerObject);
+                } else {
+                    nativeInstance->renderToLayer(targetLayerObject);
+                }
+                if(result) {
+                    *result = tTJSVariant(targetLayerObject, targetLayerObject);
+                }
+                releaseDeferredEndedTimelineHold();
+                return TJS_S_OK;
+            }
             detail::logoChainTraceLogf(
                 motionPath, "drawCompat.dispatch", "0x6D5FB8",
                 nativeInstance->_clampedEvalTime,
@@ -1279,6 +1727,7 @@ namespace motion {
             if(result) {
                 *result = nativeInstance->_runtime->lastCanvas;
             }
+            releaseDeferredEndedTimelineHold();
             return TJS_S_OK;
         }
 
@@ -1333,6 +1782,7 @@ namespace motion {
                 nativeInstance->renderToLayer(drawTargetObject);
             }
             if(result) *result = *arg;
+            releaseDeferredEndedTimelineHold();
             return TJS_S_OK;
         }
 
@@ -1368,6 +1818,7 @@ namespace motion {
                 nativeInstance->_d3dDrawMode = true;
                 nativeInstance->renderToD3DAdaptor(d3dAdaptor);
                 if(result && arg) *result = *arg;
+                releaseDeferredEndedTimelineHold();
                 return TJS_S_OK;
             }
         }
@@ -1415,6 +1866,7 @@ namespace motion {
                 if(result && arg) {
                     *result = *arg;
                 }
+                releaseDeferredEndedTimelineHold();
                 return TJS_S_OK;
             }
         }
@@ -1452,6 +1904,7 @@ namespace motion {
                     nativeInstance->renderToLayer(resolved);
                 }
                 if(result) *result = tTJSVariant(resolved, resolved);
+                releaseDeferredEndedTimelineHold();
                 return TJS_S_OK;
             }
         }
@@ -1471,6 +1924,7 @@ namespace motion {
         if(result) {
             *result = nativeInstance->_runtime->lastCanvas;
         }
+        releaseDeferredEndedTimelineHold();
         return TJS_S_OK;
     }
 
@@ -1484,6 +1938,7 @@ namespace motion {
         if(!self) {
             return TJS_E_INVALIDOBJECT;
         }
+        self->releaseDeferredEndedTimelineRenderHoldAfterDraw(true);
 
         ttstr label;
         tjs_int flags = 0;
@@ -1527,13 +1982,32 @@ namespace motion {
             return TJS_S_OK;
         }
 
+        if(motionDebugEnabled() && LOGGER) {
+            LOGGER->info(
+                "motion play request: motion={} label={} flags={} chara={} timelines={} activeLabels=[{}]",
+                self->_runtime->activeMotion->path, detail::narrow(label), flags,
+                detail::narrow(self->_chara), self->_runtime->timelines.size(),
+                joinStrings(self->_runtime->activeMotion->mainTimelineLabels));
+        }
+
         if((flags & PlayFlagForce) != 0) {
             self->stopTimeline(TJS_W(""));
         }
 
-        const auto playOne = [&](const std::string &timelineLabel) {
+        const auto playOne = [&](const std::string &timelineLabel,
+                                 const bool rememberExplicit) {
             auto &state = self->_runtime->timelines[timelineLabel];
             state.label = timelineLabel;
+            if(const auto *clip = detail::findMotionClip(
+                   *self->_runtime->activeMotion,
+                   detail::narrow(self->_chara), timelineLabel, false)) {
+                // Motion labels are reused by many objects in one PSB. Use
+                // the selected object's timing instead of the flattened
+                // label table, whose last writer may be a different object.
+                state.totalFrames = clip->totalFrames;
+                state.loop = clip->loop;
+                state.loopTime = clip->loopTime;
+            }
             state.flags = flags;
             state.blendRatio = 1.0;
             state.playing = true;
@@ -1549,6 +2023,9 @@ namespace motion {
                self->_runtime->playingTimelineLabels.end()) {
                 self->_runtime->playingTimelineLabels.push_back(timelineLabel);
             }
+            if(rememberExplicit) {
+                self->_runtime->lastExplicitTimelineLabel = timelineLabel;
+            }
             // Ensure totalFrames is set (may be 0 if timeline wasn't primed)
             if(state.totalFrames <= 0.0 && self->_runtime->activeMotion) {
                 auto it = self->_runtime->activeMotion->timelineTotalFrames.find(timelineLabel);
@@ -1562,8 +2039,31 @@ namespace motion {
         if(!label.IsEmpty()) {
             const auto key = detail::narrow(label);
             if(self->_runtime->timelines.find(key) != self->_runtime->timelines.end()) {
-                playOne(key);
+                playOne(key, true);
                 started = true;
+                if(motionDebugEnabled() && LOGGER) {
+                    LOGGER->info("motion play exact match: request={} source={}",
+                                 key, self->_runtime->activeMotion->path);
+                }
+            } else if(self->_runtime->activeMotion) {
+                const auto aliases = resolveYuzuShortMotionLabels(
+                    *self->_runtime->activeMotion, key,
+                    detail::narrow(self->_chara));
+                for(const auto &alias : aliases) {
+                    if(self->_runtime->timelines.find(alias) ==
+                       self->_runtime->timelines.end()) {
+                        continue;
+                    }
+                    playOne(alias, true);
+                    started = true;
+                }
+                if(started && motionDebugEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "motion play yuzu short alias: request={} chara={} source={} resolved=[{}]",
+                        key, detail::narrow(self->_chara),
+                        self->_runtime->activeMotion->path,
+                        joinStrings(aliases));
+                }
             }
         }
 
@@ -1572,12 +2072,25 @@ namespace motion {
                 ? self->_runtime->activeMotion->mainTimelineLabels
                 : self->_runtime->activeMotion->diffTimelineLabels;
             for(const auto &timelineLabel : primary) {
-                playOne(timelineLabel);
+                playOne(timelineLabel, false);
                 started = true;
             }
         }
 
         self->_allplaying = !self->_runtime->playingTimelineLabels.empty();
+        if(started) {
+            self->_runtime->nodes.clear();
+            self->_runtime->nodesBuilt = false;
+            self->_runtime->nodeLabelMap.clear();
+            self->claimYuzuSdAutoProgress();
+        }
+        if(motionDebugEnabled() && LOGGER) {
+            LOGGER->info(
+                "motion play result: motion={} label={} started={} playing=[{}]",
+                self->_runtime->activeMotion->path, detail::narrow(label),
+                started ? 1 : 0,
+                joinStrings(self->_runtime->playingTimelineLabels));
+        }
         if(self->_allplaying) {
             self->enableAutoProgress(objthis);
         } else {
@@ -1610,6 +2123,12 @@ namespace motion {
         if(delta < 0 || delta > 60000) {
             delta = 0;
         }
+        if(self->isYuzuSdPreviewAnimationFrozen()) {
+            if(result) {
+                *result = tTJSVariant(self->getProgressCompat());
+            }
+            return TJS_S_OK;
+        }
 
         self->_runtime->pendingEvents.clear();
         self->frameProgress(delta * kMotionFramesPerMillisecond);
@@ -1625,6 +2144,8 @@ namespace motion {
             std::fabs(self->_frameLastTime - delta * kMotionFramesPerMillisecond) <
                 0.000001,
             "progressCompat dt(ms)->frame conversion diverged from 0x6D2A98");
+        const std::string renderHoldLabel =
+            self->beginEndedTimelineRenderHold();
 
         // Aligned to libkrkr2.so Player_progressCompat (0x6D2A98):
         // progress_inner -> updateLayers -> calcBounds -> dispatchEvents.
@@ -1640,6 +2161,127 @@ namespace motion {
         }
         self->calcBounds();
 
+        // MotionAffineSourceLayer calls progress() immediately before draw().
+        // Rendering an SD here as well races KAG's back/front-page clone and
+        // lets the outgoing page overwrite the new composite surface.
+        const bool scriptOwnedYuzuSdDraw =
+            isYuzuSdPresentationMotionPath(motionPath) &&
+            self->_targetLayer.Type() == tvtObject;
+        if(!scriptOwnedYuzuSdDraw && !self->_autoProgressRendering &&
+           !self->_presentationHoldRendering) {
+            iTJSDispatch2 *target = nullptr;
+            std::string staleSdTargetName;
+            if(self->_targetLayer.Type() == tvtObject) {
+                tTJSVariant targetValue = self->_targetLayer;
+                target = tryResolveLayerDispatch(targetValue);
+            }
+            if(!target && objthis) {
+                tTJSVariant dispatchValue(objthis, objthis);
+                target = tryResolveLayerDispatch(dispatchValue);
+            }
+            if(!target && self->_runtime->lastCanvas.Type() == tvtObject) {
+                target = tryResolveLayerDispatch(self->_runtime->lastCanvas);
+            }
+            if(target && isYuzuSdPresentationMotionPath(motionPath) &&
+               !yuzuSdPresentationTargetIsUsable(target)) {
+                staleSdTargetName =
+                    yuzuSdPresentationTargetLayerName(target);
+                if(LOGGER && motionDebugEnabled()) {
+                    LOGGER->info(
+                        "motion progress discarded stale sd presentation target: motion={} target={}",
+                        motionPath, static_cast<const void *>(target));
+                }
+                target = nullptr;
+                self->_targetLayer.Clear();
+            }
+            if(!target) {
+                target = resolveYuzuTitlePresentationTargetFromLayerTree(
+                    motionPath);
+                if(target) {
+                    self->_targetLayer = tTJSVariant(target, target);
+                }
+            }
+            if(!target) {
+                target = resolveRememberedYuzuSdPresentationTarget(
+                    motionPath);
+                if(target) {
+                    self->_targetLayer = tTJSVariant(target, target);
+                    if(LOGGER && motionDebugEnabled()) {
+                        LOGGER->info(
+                            "motion progress reused sd presentation target: motion={} target={}",
+                            motionPath, static_cast<const void *>(target));
+                    }
+                }
+            }
+            if(!target) {
+                target = resolveYuzuSdPresentationTargetFromLayerTree(
+                    motionPath,
+                    self->_runtime->lastExplicitTimelineLabel,
+                    staleSdTargetName);
+                if(target) {
+                    self->_targetLayer = tTJSVariant(target, target);
+                }
+            }
+            if(target) {
+                tTJSVariant targetValue(target, target);
+                tTJSNI_BaseLayer *targetLayer = nullptr;
+                tryGetLayerObject(targetValue, targetLayer);
+                if(layerBelongsToCgViewForQuery(targetLayer)) {
+                    if(LOGGER && motionDebugEnabled()) {
+                        LOGGER->info(
+                            "motion progress render skipped for CG View scripted layer: motion={} target=[{}]",
+                            motionPath,
+                            describeLayerForQueryDebug(targetLayer));
+                    }
+                    // CustomCgViewLayer drives its AffineLayer through the SLA
+                    // draw that immediately follows progress(). A second direct
+                    // render here bypasses the script-owned zoom and produces a
+                    // differently sized duplicate frame.
+                    target = nullptr;
+                }
+            }
+            if(target) {
+                rememberYuzuSdPresentationTarget(motionPath, target);
+                self->_autoProgressRendering = true;
+                try {
+                    if(LOGGER && motionDebugEnabled()) {
+                        LOGGER->info(
+                            "motion progress render target: motion={} target={}",
+                            motionPath, static_cast<const void *>(target));
+                    }
+                    if(self->_d3dDrawMode) {
+                        self->renderViaSharedD3DAdaptor(target);
+                    } else {
+                        self->renderToLayer(target);
+                    }
+                } catch(const std::exception &e) {
+                    if(LOGGER) {
+                        LOGGER->warn(
+                            "motion progress render failed: motion={} error={}",
+                            motionPath, e.what());
+                    }
+                } catch(...) {
+                    if(LOGGER) {
+                        LOGGER->warn(
+                            "motion progress render failed: motion={} error=<unknown>",
+                            motionPath);
+                    }
+                }
+                self->_autoProgressRendering = false;
+            } else if(LOGGER && motionDebugEnabled() &&
+                      motionPath.find("title") != std::string::npos) {
+                static int missingProgressTargetLogs = 0;
+                if(missingProgressTargetLogs < 12) {
+                    ++missingProgressTargetLogs;
+                    LOGGER->info(
+                        "motion progress render target missing: motion={} objthis={} targetLayerType={} lastCanvasType={}",
+                        motionPath, static_cast<const void *>(objthis),
+                        static_cast<int>(self->_targetLayer.Type()),
+                        static_cast<int>(self->_runtime->lastCanvas.Type()));
+                }
+            }
+        }
+
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&
            self->_clampedEvalTime >= 30.0 && self->_clampedEvalTime <= 40.0) {
@@ -1647,6 +2289,9 @@ namespace motion {
                          motionPath.c_str(), self->_clampedEvalTime);
         }
 
+        if(!self->deferEndedTimelineRenderHoldUntilDraw(renderHoldLabel)) {
+            self->endEndedTimelineRenderHold(renderHoldLabel);
+        }
         self->dispatchPendingEvents(objthis);
         if(!self->_allplaying && self->_runtime->playingTimelineLabels.empty()) {
             self->disableAutoProgress();
@@ -1675,6 +2320,39 @@ namespace motion {
             (numparams >= 4 && param[3]) ? param[3]->AsReal() : 0.0;
         self->setVariable(ttstr(*param[0]), param[1]->AsReal(), transition,
                           ease);
+        // Motion buttons update selector variables from mouse callbacks even
+        // after the presentation timeline has stopped.  There may be no next
+        // workMotion tick to consume the new value, so evaluate the zero-time
+        // state now.  This also makes the first hover event visible instead of
+        // lagging one mouse move behind.
+        if(transition <= 0.0 && self->_runtime &&
+           self->_runtime->activeMotion) {
+            self->ensureNodeTreeBuilt();
+            if(!self->_runtime->nodes.empty()) {
+                self->updateLayers();
+                self->calcBounds();
+            }
+        }
+        return TJS_S_OK;
+    }
+
+    tjs_error Player::setCoordCompatMethod(tTJSVariant *, tjs_int numparams,
+                                           tTJSVariant **param,
+                                           iTJSDispatch2 *objthis) {
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 2 || !param[0] || !param[1]) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        const double transition =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 4 && param[3]) ? param[3]->AsReal() : 0.0;
+        self->setEmoteCoord(param[0]->AsReal(), param[1]->AsReal(), transition,
+                            ease);
         return TJS_S_OK;
     }
 
@@ -1685,8 +2363,12 @@ namespace motion {
             return TJS_E_INVALIDOBJECT;
         }
 
+        // `playing` describes the selected/root timeline only. `allplaying`
+        // is maintained separately by updateLayers and also includes nested
+        // child players. Querying one property must not clear the other: the
+        // KAG continuous handler reads `playing` after progress(), then relies
+        // on `allplaying` on the next tick to finish longer child motions.
         const bool playing = !self->_runtime->playingTimelineLabels.empty();
-        self->setAllplaying(playing);
         if(result) {
             *result = tTJSVariant(playing);
         }
