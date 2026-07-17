@@ -336,7 +336,7 @@ jobs:
           chmod +x ./build.sh
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          ./build.sh ios release --jobs=4 2>&1 | tee "${RUNNER_TEMP}/ios-release-build.log"
+          ./build.sh ios release --jobs=4 --package-ipa 2>&1 | tee "${RUNNER_TEMP}/ios-release-build.log"
           if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/ios-release-build.log"; then
             echo "Godot iOS release export logged script or GDExtension load errors." >&2
             exit 1
@@ -348,13 +348,13 @@ jobs:
           chmod +x ./build.sh
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          ./build.sh ios debug --jobs=4 2>&1 | tee "${RUNNER_TEMP}/ios-debug-build.log"
+          ./build.sh ios debug --jobs=4 --package-ipa 2>&1 | tee "${RUNNER_TEMP}/ios-debug-build.log"
           if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/ios-debug-build.log"; then
             echo "Godot iOS debug export logged script or GDExtension load errors." >&2
             exit 1
           fi
 
-      - name: Verify exported Xcode project
+      - name: Verify exported Xcode project and IPA
         run: |
           set -euo pipefail
           for build_type in release debug; do
@@ -364,6 +364,11 @@ jobs:
             fi
             if [[ ! -d "out/godot/ios/${build_type}/AetherKiri" ]]; then
               echo "Godot iOS ${build_type} project sources not found" >&2
+              exit 1
+            fi
+            build_type_cap="$(echo "${build_type:0:1}" | tr '[:lower:]' '[:upper:]')${build_type:1}"
+            if [[ ! -f "out/godot/ios/${build_type}/AetherKiri-${build_type_cap}-Unsigned.ipa" ]]; then
+              echo "Godot iOS ${build_type} unsigned IPA not found" >&2
               exit 1
             fi
           done
@@ -386,6 +391,22 @@ jobs:
           path: |
             out/godot/ios/debug/AetherKiri.xcodeproj
             out/godot/ios/debug/AetherKiri
+          retention-days: 7
+
+      - name: Upload Release Unsigned IPA
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-iOS-Unsigned-IPA
+          path: out/godot/ios/release/AetherKiri-Release-Unsigned.ipa
+          retention-days: 7
+
+      - name: Upload Debug Unsigned IPA
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-iOS-Debug-Unsigned-IPA
+          path: out/godot/ios/debug/AetherKiri-Debug-Unsigned.ipa
           retention-days: 7
 
       - name: Save vcpkg cache
