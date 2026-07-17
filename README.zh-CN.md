@@ -111,6 +111,17 @@ Godot 设置页会持久化所选后端。游戏运行中切换后端时会提�
 iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生成 PNG
 尺寸，包括 App Store 图标和启动器图标。
 
+## 运行平台要求
+
+| 平台 | 最低版本 | 说明 |
+| --- | --- | --- |
+| macOS | macOS 11.0（Big Sur） | Universal App，同时包含 `arm64` 和 `x86_64`。 |
+| iOS / iPadOS | iOS / iPadOS 14.0 | 真机为 `arm64`；开发环境可构建 `arm64` 和 `x86_64` 模拟器版本。 |
+| Android | Android 7.0（API 24） | 当前产品导出只打包 `arm64-v8a`。 |
+| Web | 不限定操作系统版本 | 浏览器必须支持 WebAssembly SIMD、WebAssembly threads 和 `SharedArrayBuffer`，并通过配置了跨源隔离（COOP/COEP）的 HTTP 服务访问。 |
+
+Windows 和 Linux 的原生产品导出链路尚未接入，因此目前没有受支持的最低运行版本。
+
 ## 环境要求
 
 - CMake 3.28+

@@ -120,6 +120,18 @@ The app icon shown above is the same icon configured by the Godot project:
 iOS and Android export presets reference the generated PNG sizes under
 `apps/godot_app/assets/icons/`, including App Store and launcher sizes.
 
+## Runtime Platform Requirements
+
+| Platform | Minimum version | Notes |
+| --- | --- | --- |
+| macOS | macOS 11.0 (Big Sur) | Universal app (`arm64` and `x86_64`). |
+| iOS / iPadOS | iOS / iPadOS 14.0 | `arm64` devices; `arm64` and `x86_64` simulator builds are available for development. |
+| Android | Android 7.0 (API 24) | The product export currently packages `arm64-v8a` only. |
+| Web | No OS version floor | Requires a browser with WebAssembly SIMD, WebAssembly threads, and `SharedArrayBuffer`, served with cross-origin isolation (COOP/COEP). |
+
+Windows and Linux native product exports are not wired yet, so they do not
+currently have supported minimum runtime versions.
+
 ## Requirements
 
 - CMake 3.28+
