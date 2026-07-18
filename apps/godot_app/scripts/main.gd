@@ -2704,9 +2704,18 @@ func _show_system_alert_once(key: String, message: String, title: String = "Aeth
     _show_system_alert(message, title)
 
 func _maybe_show_log_alert(line: String) -> void:
+    var message := line.strip_edges()
+    var alert_parts := message.split("[ALERT_DIALOG]", true, 1)
+    if alert_parts.size() > 1:
+        var content := alert_parts[1].strip_edges()
+        var parts := content.split(" | ", true, 1)
+        var alert_title := parts[0].strip_edges() if parts.size() > 0 else "AetherKiri"
+        var alert_message := parts[1].strip_edges() if parts.size() > 1 else ""
+        _show_system_alert(alert_message, alert_title)
+        return
+
     if not log_alerts:
         return
-    var message := line.strip_edges()
     if message.is_empty():
         return
     var lower := message.to_lower()
@@ -4899,11 +4908,13 @@ func _process(delta: float) -> void:
     var startup_state := cached_startup_state
     if game_running:
         _sync_player_surface_size(false)
-        if _should_process_runtime_logs():
-            log_drain_accum += delta
-            if log_drain_accum >= LOG_DRAIN_INTERVAL:
-                log_drain_accum = 0.0
-                _drain_logs()
+        # Runtime logs also carry control messages such as [ALERT_DIALOG].
+        # Drain them even when developer logging is disabled so those messages
+        # cannot remain hidden in the native queue.
+        log_drain_accum += delta
+        if log_drain_accum >= LOG_DRAIN_INTERVAL:
+            log_drain_accum = 0.0
+            _drain_logs()
 
         if app_lifecycle_paused:
             return
@@ -5489,10 +5500,12 @@ func _drain_logs() -> void:
     var logs: String = String(player.drain_startup_logs())
     if logs.is_empty():
         return
-    if not _should_process_runtime_logs():
-        return
+    var process_runtime_logs := _should_process_runtime_logs()
     for line in logs.split("\n", false):
-        _append_log(line)
+        # Always process native control messages. Ordinary engine logs remain
+        # gated by the diagnostics/UI settings to avoid unnecessary UI work.
+        if process_runtime_logs or line.contains("[ALERT_DIALOG]"):
+            _append_log(line)
 
 func _should_process_runtime_logs() -> bool:
     return diagnostics_enabled or ui_log_enabled or log_alerts or error_dialog_logs
