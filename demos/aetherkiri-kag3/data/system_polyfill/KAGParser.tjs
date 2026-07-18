@@ -1,0 +1,2589 @@
+﻿
+//---------------------------------------------------------------------------
+// KAG Parser Utility Class
+//---------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------
+/*
+  KAG System (Kirikiri Adventure Game System) is an application script for
+  TVP(Kirikiri), providing core system for Adventure Game/Visual Novel.
+  KAG has a simple tag-based mark-up language ("scenario file").
+  Version under 2.x of KAG is slow since the parser is written in TJS1.
+  KAG 3.x uses TVP's internal KAG parser written in C++ in this unit, will
+  acquire speed in compensation for ability of customizing.
+*/
+//---------------------------------------------------------------------------
+
+@if(0)
+global.TVPKAGNoLine = "Attempt to load scenario file %1 is empty";
+global.TVPKAGCannotOmmitFirstLabelName = "The first label name of the scenario file cannot be omitted";
+global.TVPInternalError = "Internal Error: at %1 line %2";
+global.TVPKAGMalformedSaveData = "Bookmark data is abnormal. Data may be corrupted";
+global.TVPKAGLabelNotFound = "Label %s not found in scenario file %s";
+global.TVPLabelOrScriptInMacro = "Labels and iscript cannot be written in macros";
+global.TVPKAGInlineScriptNotEnd = "[endscript] or @endscript not found";
+global.TVPKAGSyntaxError = "Tag syntax error. Check for \'[\' and \']\' balance, \" and \" balance, missing spaces, extra line breaks, macro-endmacro balance, missing required attributes, etc.";
+global.TVPKAGCallStackUnderflow = "The return tag does not correspond to the call tag (many return tags)";
+global.TVPKAGReturnLostSync = "The return location of return cannot be specified because the scenario file has changed";
+global.TVPKAGSpecifyKAGParser = "Please specify an object of KAGParser class";
+global.TVPUnknownMacroName = "Macro \"%s\" is not registered";
+@endif
+@if(1)
+global.TVPKAGNoLine = "読み込もうとしたシナリオファイル %1 は空です";
+global.TVPKAGCannotOmmitFirstLabelName = "シナリオファイルの最初のラベル名は省略できません";
+global.TVPInternalError = "内部エラーが発生しました: at %1 line %2";
+global.TVPKAGMalformedSaveData = "栞データが異常です。データが破損している可能性があります";
+global.TVPKAGLabelNotFound = "シナリオファイル %1 内にラベル %2 が見つかりません";
+global.TVPLabelOrScriptInMacro = "ラベルや iscript はマクロ中に記述できません";
+global.TVPKAGInlineScriptNotEnd = "[endscript] または @endscript が見つかりません";
+global.TVPKAGSyntaxError = "タグの文法エラーです。'[' や ']' の対応、\" と \" の対応、スペースの入れ忘れ、余分な改行、macro 〜 endmacro の対応、必要な属性の不足などを確認してください";
+global.TVPKAGCallStackUnderflow = "return タグが call タグと対応していません ( return タグが多い )";
+global.TVPKAGReturnLostSync = "シナリオファイルに変更があったため return の戻り先位置を特定できません";
+global.TVPKAGSpecifyKAGParser = "KAGParser クラスのオブジェクトを指定してください";
+global.TVPUnknownMacroName = "マクロ \"%1\" は登録されていません";
+@endif
+
+global.special_kag_tags = [
+	"if",
+	"ignore",
+	"endif",
+	"endignore",
+	"else",
+	"elsif",
+	"emb",
+	"macro",
+	"endmacro",
+	"macropop",
+	"erasemacro",
+	"jump",
+	"call",
+	"return"
+];
+
+//---------------------------------------------------------------------------
+// tTVPScenarioCacheItem : Scenario Cache Item
+//---------------------------------------------------------------------------
+class __internal_KAGParser_ScenarioCacheItem
+{
+	function __internal_KAGParser_ScenarioCacheItem(name, isstring)
+	{
+		this.lines = null;
+		this.lineCount = 0;
+		this.labelCache = %[]; // Label cache
+		this.labelAliases = %[];
+		this.labelCached = false; // whether the label is cached
+		this.loadScenario(name, isstring);
+	}
+
+	// load file or string to buffer
+	function loadScenario(name, isstring)
+	{
+		// load scenario from file or string to buffer
+		if ((typeof(name) === "Object") && (name instanceof "Array"))
+		{
+			this.lines = name;
+		}
+		else if ((typeof(name) === "String") && isstring)
+		{
+			// when onScenarioLoad returns string;
+			// assumes the string is scenario
+			this.lines = name.split("\n");
+		}
+		else if (typeof(name) === "String")
+		{
+			// else load from file
+			this.lines = [];
+			this.lines.load(name);
+		}
+		else
+		{
+			throw new global.Exception("Name not Array or String!");
+		}
+		// pass1: count lines
+		// pass2: split lines
+		var leading_tabs_regexp = /^\t+/g;
+		for (var i = 0; i < this.lines.count; i += 1)
+		{
+			this.lines[i] = this.lines[i].replace(leading_tabs_regexp, "");  // skip leading tabs
+		}
+
+		// tab-only last line will not be counted in pass2, thus makes
+		// pass2 counted lines are lesser than pass1 lines.
+
+		this.ensureLabelCache();
+	}
+
+	function ensureLabelCache()
+	{
+		// construct label cache
+		if (!this.labelCached)
+		{
+			// make label cache
+			var page_name_regexp = /\|.*$/g;
+			var prevlabel = "";
+			for (var i = 0; i < this.lines.count; i += 1)
+			{
+				var line = this.lines[i];
+				if (line.length >= 2 && line[0] === "*")
+				{
+					// page name found
+					var label = line.replace(page_name_regexp, "");
+					if (label.length === 1)
+					{
+						if (prevlabel.length === 0)
+						{
+							throw new global.Exception(this.TVPKAGCannotOmmitFirstLabelName);
+						}
+						label = prevlabel;
+					}
+
+					prevlabel = label;
+
+					if (this.labelCache[label] !== void)
+					{
+						// previous label name found (duplicated label)
+						this.labelCache[label][1] += 1;
+						label = ("%s:%s").sprintf(label, i);
+					}
+
+					this.labelCache[label] = [i, 1];
+					this.labelAliases[i] = label;
+				}
+			}
+			this.labelCached = true;
+		}
+	}
+
+	function getLabelAliasFromLine(line)
+	{
+		return this.labelAliases[line];
+	}
+
+	function getLines()
+	{
+		return this.lines;
+	}
+
+	function getLineCount()
+	{
+		return this.lines.count;
+	}
+
+	function getLabelCache()
+	{
+		return this.labelCache;
+	}
+
+}
+
+//---------------------------------------------------------------------------
+// tTVPScenarioCache
+//---------------------------------------------------------------------------
+global.__internal_KAGParser_scenarios = %[];
+
+global.__internal_KAGParser_getScenario = function(storagename, isstring)
+{
+	// compact interface initialization
+	if (isstring)
+	{
+		// we do not cache when the string is passed as a scenario
+		return new global.__internal_KAGParser_ScenarioCacheItem(storagename, isstring);
+	}
+
+	if (global.__internal_KAGParser_scenarios[storagename] === void)
+	{
+		global.__internal_KAGParser_scenarios[storagename] = new global.__internal_KAGParser_ScenarioCacheItem(storagename, isstring);
+	}
+	return global.__internal_KAGParser_scenarios[storagename];
+};
+
+//---------------------------------------------------------------------------
+// KAG Parser debug level
+//---------------------------------------------------------------------------
+global.tkdlNone = 0; // none is reported
+global.tkdlSimple = 1; // simple report
+global.tkdlVerbose = 2; // complete report ( verbose )
+
+//---------------------------------------------------------------------------
+// tTJSNI_KAGParser : KAGParser TJS native instance
+//---------------------------------------------------------------------------
+// KAGParser is implemented as a TJS native class/object
+class __internal_KAGParser
+{
+	function __internal_KAGParser()
+	{
+		this.owner = null; // owner object
+		this.scenario = null; // this is scenario object
+		this.lines = null; // is copied from Scenario
+		this.lineCount = 0; // is copied from Scenario
+		this.macros = %[]; // Macro Dictionary Object
+		this.macroArgs = []; // Macro arguments
+		this.callStack = [];
+		this.storageName = "";
+		this.storageShortName = "";
+		this.buffer = ""; // not stored
+		this.curLine = 0; // current processing line
+		this.curPos = 0; // current processing position ( column )
+		this.curLineStr = null; // current line string; not stored
+		this.processSpecialTags = true; // whether to process special tags
+		this.lineBuffer = ""; // line buffer ( if any macro/emb was expanded )
+		this.lineBufferUsing = "";
+		this.curLabel = ""; // Current Label
+		this.curPage = ""; // Current Page Name; not stored
+		this.tagLine = 0; // line number of previous tag; not stored
+		this.debugLevel = global.tkdlSimple; // debugging log level; not stored
+		this.interrupted = false;
+		this.ignoreCR = false; // CR is not interpreted as [r] tag when this is true; not stored
+		this.recordingMacro = false; // recording a macro
+		this.recordingMacroStr = ""; // recording macro content; not stored
+		this.recordingMacroName = ""; // recording macro's name; not stored
+		this.excludeLevel = 0;
+		this.ifLevel = 0;
+		this.excludeLevelStack = []; // stored as string
+		this.ifLevelExecutedStack = []; // stored as string
+		this.macroArgStackBase = 0;
+		this.macroArgStackDepth = 0;
+
+		// retrieve DictClear method and DictObj object
+		// retrieve clear method from dictclass
+		this.dicClear = global.Dictionary.clear; // Dictionary.Clear method pointer
+		this.dicAssign = global.Dictionary.assign; // Dictionary
+		this.dicObj = %[]; // DictionaryObject
+	}
+
+	function construct(tjs_obj)
+	{
+		this.owner = tjs_obj;
+	}
+
+	function finalize()
+	{
+		// invalidate this object
+
+		// release objects
+		this.dicClear = void;
+		this.dicAssign = void;
+		this.dicObj = void;
+		this.macros = void;
+
+		this.clearMacroArgs();
+		this.clearBuffer();
+
+		this.owner = null;
+	}
+
+	function store()
+	{
+		// store current status into newly created dictionary object
+		// and return the dictionary object.
+		var dic = %[];
+		{
+			// create and assign macro dictionary
+			{
+				var dsp = %[];
+				dic.macros = dsp;
+
+				(this.dicAssign incontextof dsp)(this.macros);
+			}
+
+			// create and assign macro arguments
+			{
+				var dsp = [];
+				dic.macroArgs = dsp;
+
+				for (var i = 0; i < this.macroArgStackDepth; i += 1)
+				{
+					var dic = %[];
+					dsp[i] = dic;
+
+					(this.dicAssign incontextof dic)(this.macroArgs[i]);
+				}
+			}
+
+
+			// create call stack array and copy call stack status
+			{
+				var dsp = [];
+				dic.callStack = dsp;
+
+				for (var i = 0; i < this.callStack.count; i += 1)
+				{
+					var dic = %[];
+					dsp[i] = dic;
+
+					var item = this.callStack[i];
+
+					dic.storage = item.storage + "";
+					dic.label = item.label + "";
+					dic.offset = item.offset | 0;
+					dic.orgLineStr = item.orgLineStr + "";
+					dic.lineBuffer = item.lineBuffer + "";
+					dic.pos = item.pos | 0;
+					dic.lineBufferUsing = item.lineBufferUsing | 0;
+					dic.macroArgStackBase = item.macroArgStackBase | 0;
+					dic.macroArgStackDepth = item.macroArgStackDepth | 0;
+					dic.ExcludeLevel = item.excludeLevel | 0;
+					dic.IfLevel = item.ifLevel | 0;
+
+					this.storeIntStackToDic(dic, item.excludeLevelStack, "ExcludeLevelStack");
+					this.storeBoolStackToDic(dic, item.ifLevelExecutedStack, "IfLevelExecutedStack");
+				}
+			}
+
+			// store StorageName, StorageShortName ( Buffer is not stored )
+			dic.storageName = this.storageName + "";
+			dic.storageShortName = this.storageShortName + "";
+
+			// ( Lines and LineCount are not stored )
+
+			// store CurStorage, CurLine, CurPos
+			dic.curLine = this.curLine | 0;
+			dic.curPos = this.curPos | 0;
+
+			// ( CurLineStr is not stored )
+
+			// LineBuffer, LineBufferUsing
+			dic.lineBuffer = this.lineBuffer + "";
+			dic.lineBufferUsing = this.lineBufferUsing | 0;
+
+			// store CurLabel ( CurPage TagLine is not stored )
+			dic.curLabel = this.curLabel + "";
+
+			// ( DebugLebel and IgnoreCR are not stored )
+
+			// ( RecordingMacro, RecordingMacroStr, RecordingMacroName are not stored)
+
+
+			// ExcludeLevel, IfLevel, ExcludeLevelStack, IfLevelExecutedStack
+			dic.ExcludeLevel = this.excludeLevel | 0;
+			dic.IfLevel = this.ifLevel | 0;
+			this.storeIntStackToDic(dic, this.excludeLevelStack, "ExcludeLevelStack");
+			this.storeBoolStackToDic(dic, this.ifLevelExecutedStack, "IfLevelExecutedStack");
+
+			// store MacroArgStackBase, MacroArgStackDepth
+			dic.macroArgStackBase = this.macroArgStackBase | 0;
+			dic.macroArgStackDepth = this.macroArgStackDepth | 0;
+		}
+		return dic;
+	}
+
+	function storeIntStackToDic(dic, stack, membername)
+	{
+		var stack_str = [];
+		var hex = "0123456789abcdef";
+		for (var i = 0; i < stack.count; i += 1)
+		{
+			var v = stack[i];
+			stack_str.add(hex[(v >> 28) & 0x000f]);
+			stack_str.add(hex[(v >> 24) & 0x000f]);
+			stack_str.add(hex[(v >> 20) & 0x000f]);
+			stack_str.add(hex[(v >> 16) & 0x000f]);
+			stack_str.add(hex[(v >> 12) & 0x000f]);
+			stack_str.add(hex[(v >>  8) & 0x000f]);
+			stack_str.add(hex[(v >>  4) & 0x000f]);
+			stack_str.add(hex[(v >>  0) & 0x000f]);
+		}
+		dic[membername] = stack_str.join("");
+	}
+
+	function restoreIntStackFromStr(stack, str)
+	{
+		stack.clear();
+		var len = str.length \ 8;
+		for (var i = 0; i < len; i += 1)
+		{
+			stack.add(
+				(((#str[i+0] <= #'9') ? (#str[i+0] - #'0') : (#str[i+0] - #'a' + 10)) << 28) |
+				(((#str[i+1] <= #'9') ? (#str[i+1] - #'0') : (#str[i+1] - #'a' + 10)) << 24) |
+				(((#str[i+2] <= #'9') ? (#str[i+2] - #'0') : (#str[i+2] - #'a' + 10)) << 20) |
+				(((#str[i+3] <= #'9') ? (#str[i+3] - #'0') : (#str[i+3] - #'a' + 10)) << 16) |
+				(((#str[i+4] <= #'9') ? (#str[i+4] - #'0') : (#str[i+4] - #'a' + 10)) << 12) |
+				(((#str[i+5] <= #'9') ? (#str[i+5] - #'0') : (#str[i+5] - #'a' + 10)) <<  8) |
+				(((#str[i+6] <= #'9') ? (#str[i+6] - #'0') : (#str[i+6] - #'a' + 10)) <<  4) |
+				(((#str[i+7] <= #'9') ? (#str[i+7] - #'0') : (#str[i+7] - #'a' + 10)) <<  0)
+			);
+		}
+	}
+
+	function restoreBoolStackFromStr(stack, str)
+	{
+		stack.clear();
+		var len = str.length;
+		for (var i = 0; i < len; i += 1)
+		{
+			stack.add(str[i] === "1");
+		}
+	}
+
+	function storeBoolStackToDic(dic, stack, membername)
+	{
+		var stack_str = [];
+		var bit = "01";
+		for (var i = 0; i < stack.count; i += 1)
+		{
+			stack_str.add(bit[stack[i]]);
+		}
+		dic[membername] = stack_str.join("");
+	}
+
+	function restore(dic)
+	{
+		// restore status from "dic"
+
+		// restore macros
+		{
+			var val = dic.macros;
+			if (val !== void)
+			{
+				(this.dicAssign incontextof this.macros)(val);
+			}
+		}
+
+		{
+			this.macroArgStackDepth = 0;
+
+			var val = dic.macroArgs;
+			if (val !== void)
+			{
+				var clo = val;
+				var count = clo.count;
+
+				this.clearMacroArgs();
+
+				var val = dic.macroArgStackDepth;
+				if (val !== void)
+				{
+					this.macroArgStackDepth = val | 0;
+				}
+
+				for (var i = 0; i < count; i += 1)
+				{
+					var dsp = %[];
+
+					(this.dicAssign incontextof dsp)(clo[i]);
+
+					this.macroArgs.add(dsp);
+				}
+			}
+
+			if (this.macroArgStackDepth !== this.macroArgs.count)
+			{
+				throw new global.Exception(global.TVPKAGMalformedSaveData);
+			}
+
+			this.macroArgStackBase = this.macroArgs.count; // later reset to MacroArgStackBase
+
+			// restore call stack
+			var val = dic.callStack;
+			if (val !== void)
+			{
+				var clo = val;
+				var count = clo.count;
+
+				this.callStack.clear();
+
+				for (var i = 0; i < count; i += 1)
+				{
+					var item = clo[i];
+					var call_frame = %[];
+					call_frame.storage = item.storage;
+					call_frame.label = item.label;
+					call_frame.offset = item.offset;
+					call_frame.orgLineStr = item.orgLineStr;
+					call_frame.lineBuffer = item.lineBuffer;
+					call_frame.pos = item.pos;
+					call_frame.lineBufferUsing = (item.lineBufferUsing | 0) !== 0;
+					call_frame.macroArgStackBase = item.macroArgStackBase | 0;
+					call_frame.macroArgStackDepth = item.macroArgStackDepth | 0;
+					call_frame.excludeLevel = item.ExcludeLevel;
+					call_frame.ifLevel = item.IfLevel;
+					var new_excludeLevelStack = [];
+					this.restoreIntStackFromStr(new_excludeLevelStack, item.ExcludeLevelStack);
+					call_frame.excludeLevelStack = new_excludeLevelStack;
+					
+					var new_ifLevelExecutedStack = [];
+					this.restoreBoolStackFromStr(new_ifLevelExecutedStack, item.IfLevelExecutedStack);
+					call_frame.ifLevelExecutedStack = new_ifLevelExecutedStack;
+					
+					this.callStack.add(call_frame);
+				}
+			}
+
+			// restore StorageName, StorageShortName, CurStorage, CurLabel
+			var val = dic.storageName;
+			if (val !== void)
+			{
+				this.storageName = val;
+			}
+			var val = dic.storageShortName;
+			if (val !== void)
+			{
+				this.storageShortName = val;
+			}
+			var val = dic.curLabel;
+			if (val !== void)
+			{
+				this.curLabel = val;
+			}
+
+			// load scenario
+			var storage = this.storageName;
+			var label = this.curLabel;
+			this.clearBuffer(); // ensure re-loading the scenario
+			this.loadScenario(storage);
+			this.goToLabel(label);
+
+			// ExcludeLevel, IfLevel
+			var val = dic.ExcludeLevel;
+			if (val !== void)
+			{
+				this.excludeLevel = val | 0;
+			}
+			var val = dic.IfLevel;
+			if (val !== void)
+			{
+				this.ifLevel = val | 0;
+			}
+
+			var val = dic.ExcludeLevelStack;
+			if (val !== void)
+			{
+				var stack_str = val;
+				this.restoreIntStackFromStr(this.excludeLevelStack, stack_str);
+			}
+
+			var val = dic.IfLevelExecutedStack;
+			if (val !== void)
+			{
+				var stack_str = val;
+				this.restoreBoolStackFromStr(this.ifLevelExecutedStack, stack_str);
+			}
+
+
+			// restore MacroArgStackBase
+			var val = dic.macroArgStackBase;
+			if (val !== void)
+			{
+				this.macroArgStackBase = val | 0;
+			}
+		}
+	}
+
+	function assign(ref)
+	{
+		// copy Macros
+		{
+			(this.dicAssign incontextof this.macros)(ref.macros);
+		}
+		
+		// copy MacroArgs
+		{
+			this.clearMacroArgs();
+			for (var i = 0; i < ref.macroArgStackDepth; i += 1)
+			{
+				var dic = %[];
+				var src = ref.macroArgs[i];
+				(this.dicAssign incontextof dic)(src);
+				this.macroArgs.add(dic);
+			}
+			this.macroArgStackDepth = ref.macroArgStackDepth;
+		}
+		this.macroArgStackBase = ref.macroArgStackBase;
+
+		// copy CallStack
+		this.callStack.assignStruct(ref.callStack);
+
+		// copy StorageName, StorageShortName
+		this.storageName = ref.storageName;
+		this.storageShortName = ref.storageShortName;
+		
+
+		// copy Scenario
+		if (this.scenario !== ref.scenario)
+		{
+			this.scenario = ref.scenario;
+			this.lines = ref.lines;
+			this.lineCount = ref.lineCount;
+		}
+
+		// copy CurStorage, CurLine, CurPos
+		this.curLine = ref.curLine;
+		this.curPos = ref.curPos;
+
+		// copy CurLineStr, LineBuffer, LineBufferUsing
+		this.curLineStr = ref.curLineStr;
+		this.lineBuffer = ref.lineBuffer;
+		this.lineBufferUsing = ref.lineBufferUsing;
+
+		// copy CurLabel, CurPage, TagLine
+		this.curLabel = ref.curLabel;
+		this.curPage = ref.curPage;
+		this.tagLine = ref.tagLine;
+
+		// copy DebugLebel, IgnoreCR
+		this.debugLevel = ref.debugLevel;
+		this.ignoreCR = ref.ignoreCR;
+
+		// copy RecordingMacro, RecordingMacroStr, RecordingMacroName
+		this.recordingMacro = ref.recordingMacro;
+		this.recordingMacroStr = ref.recordingMacroStr;
+		this.recordingMacroName = ref.recordingMacroName;
+
+		// copy ExcludeLevel, IfLevel
+		this.excludeLevel = ref.excludeLevel;
+		this.ifLevel = ref.ifLevel;
+		this.excludeLevelStack.assign(ref.excludeLevelStack);
+		this.ifLevelExecutedStack.assign(ref.ifLevelExecutedStack);
+	}
+
+	function loadScenario(name)
+	{
+		// load scenario to buffer
+		if (name === this.storageName)
+		{
+			// avoid re-loading
+			this.rewind();
+		}
+		else
+		{
+			this.clearBuffer();
+
+			// fire onScenarioLoad
+			var ret = null;
+			if (typeof(this.owner) === "Object" && typeof(this.owner.onScenarioLoad) === "Object")
+			{
+				ret = this.owner.onScenarioLoad(name);
+			}
+			if (typeof(ret) === "String")
+			{
+				this.scenario = global.__internal_KAGParser_getScenario(ret, true);
+			}
+			else
+			{
+				this.scenario = global.__internal_KAGParser_getScenario(name, false);
+			}
+			this.lines = this.scenario.getLines();
+			this.lineCount = this.scenario.getLineCount();
+			
+			this.rewind();
+
+			this.storageName = name;
+			this.storageShortName = global.Storages.extractStorageName(name);
+
+			if (this.debugLevel >= global.tkdlSimple)
+			{
+				global.Debug.message("================================================================================");
+				global.Debug.message("Scenario loaded : " + name);
+			}
+		}
+
+		if (typeof(this.owner) === "Object" && typeof(this.owner.onScenarioLoaded) === "Object")
+		{
+			this.owner.onScenarioLoaded(this.storageName);
+		}
+	}
+
+	function getStorageName()
+	{
+		return this.storageName;
+	}
+
+	// clear all states
+	function clear()
+	{
+		// clear all states
+		// TVPClearScnearioCache(); // also invalidates the scenario cache
+		this.clearBuffer();
+		this.clearMacroArgs();
+		this.clearCallStack();
+	}
+
+	// clear internal buffer
+	function clearBuffer()
+	{
+		// clear internal buffer
+		if (typeof(this.scenario) === "Object")
+		{
+			this.scenario = null;
+			this.lines = null;
+			this.curLineStr = null;
+		}
+		this.storageName = "";
+		this.storageShortName = "";
+		this.breakConditionAndMacro();
+	}
+
+	// set current position to first
+	function rewind()
+	{
+		// set current position to first
+		this.curLine = 0;
+		this.curPos = 0;
+		this.curLineStr = this.lines[0];
+		this.lineBufferUsing = false;
+		this.breakConditionAndMacro();
+	}
+
+	// break condition state and macro expansion
+	function breakConditionAndMacro()
+	{
+		// break condition state and macro recording
+		this.recordingMacro = false;
+		this.excludeLevel = -1;
+		this.excludeLevelStack.clear();
+		this.ifLevelExecutedStack.clear();
+		this.ifLevel = 0;
+		this.popMacroArgsTo(this.macroArgStackBase); // clear macro argument down to current base stack position
+	}
+
+	function TVPIsWS(ch)
+	{
+		// is white space ?
+		return (ch === " " || ch === "\t");
+	}
+
+	// search label and set current position
+	function goToLabel(name)
+	{
+		// search label and set current position
+		// parameter "name" must start with '*'
+		if (name.length === 0)
+		{
+			return;
+		}
+		this.scenario.ensureLabelCache();
+		var newline = this.scenario.getLabelCache()[name];
+		if (typeof(newline) === "Object")
+		{
+			// found the label in cache
+			this.curLabel = this.scenario.getLabelAliasFromLine(newline[0]);
+			var vl = this.lines[newline[0]].indexOf("|");
+			if (vl === -1)
+			{
+				this.curPage = "";
+			}
+			else
+			{
+				this.curPage = this.lines[newline[0]].substr(vl + 1);
+			}
+			this.curLine = newline[0];
+			this.curPos = 0;
+			this.lineBufferUsing = false;
+		}
+		else
+		{
+			// not found
+			throw new global.Exception(global.TVPKAGLabelNotFound.sprintf(name, this.storageName));
+		}
+
+		if (this.debugLevel >= global.tkdlSimple)
+		{
+			global.Debug.message("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ");
+			global.Debug.message(this.storageShortName + " : jumped to : " + name);
+		}
+		this.breakConditionAndMacro();
+	}
+
+	function goToStorageAndLabel(storage, label)
+	{
+		if (typeof(storage) === "String" && storage.length > 0)
+		{
+			this.loadScenario(storage);
+		}
+		if (typeof(label) === "String" && label.length > 0)
+		{
+			this.goToLabel(label);
+		}
+	}
+
+	function callLabel(name)
+	{
+		this.pushCallStack();
+		this.goToLabel(name);
+	}
+
+	// skip comment or label and go to next line
+	function skipCommentOrLabel()
+	{
+		// skip comment or label, and go to next line.
+		// fire OnScript event if [script] thru [endscript] ( or @script thru
+		// @endscript ) is found.
+		this.scenario.ensureLabelCache();
+		this.curPos = 0;
+		if (this.curLine >= this.lineCount)
+		{
+			return false;
+		}
+
+		for (; this.curLine < this.lineCount; this.curLine += 1)
+		{
+			if (this.lines === null)
+			{
+				return false; // in this loop, Lines can be NULL when onScript does so.
+			}
+
+			var p = this.lines[this.curLine];
+			if (p[0] === ";")
+			{
+				continue; // comment
+			}
+
+			if (p[0] === "*")
+			{
+				// label
+				if (this.recordingMacro)
+				{
+					throw new global.Exception(global.TVPLabelOrScriptInMacro);
+				}
+				var vl = p.indexOf("|");
+				var pagename;
+				if (vl === -1)
+				{
+					this.curLabel = this.scenario.getLabelAliasFromLine(this.curLine);
+					this.curPage = "";
+					pagename = false;
+				}
+				else
+				{
+					this.curLabel = this.scenario.getLabelAliasFromLine(this.curLine);
+					this.curPage = p.substr(vl + 1);
+					pagename = true;
+				}
+				// fire onLabel callback event
+				if (typeof(this.owner) === "Object" && typeof(this.owner.onLabel) === "Object")
+				{
+					this.owner.onLabel(this.curLabel, pagename ? this.curPage : void);
+				}
+				continue;
+			}
+
+			if ((p === "[iscript]" || p === "[iscript]\\") || (p === "@iscript"))
+			{
+				// inline TJS script
+				if (this.recordingMacro)
+				{
+					throw new global.Exception(global.TVPLabelOrScriptInMacro);
+				}
+
+				var script = "";
+				this.curLine += 1;
+				var script_start = this.curLine;
+
+				for (; this.curLine < this.lineCount; this.curLine += 1)
+				{
+					var p = this.lines[this.curLine];
+					if (((p === "[endscript]" || p === "[endscript]\\")) || (p === "@endscript"))
+					{
+						break;
+					}
+					if (this.excludeLevel === -1)
+					{
+						script += p;
+						script += "\r\n";
+					}
+				}
+
+				if (this.curLine === this.lineCount)
+				{
+					throw new global.Exception(global.TVPKAGInlineScriptNotEnd);
+				}
+
+				// fire onScript callback event
+				if (this.excludeLevel === -1)
+				{
+					if (typeof(this.owner) === "Object" && typeof(this.owner.onScript) === "Object")
+					{
+						this.owner.onScript(script, this.storageShortName, script_start);
+					}
+				}
+				continue;
+			}
+
+			break;
+		}
+
+		if (this.curLine >= this.lineCount)
+		{
+			return false;
+		}
+
+		this.curLineStr = this.lines[this.curLine];
+		this.lineBufferUsing = false;
+
+		if (this.debugLevel >= global.tkdlVerbose)
+		{
+			global.Debug.message(this.storageShortName + " : " + this.curLineStr);
+		}
+
+		return true;
+	}
+
+	function pushMacroArgs(args)
+	{
+		var dsp;
+		if (this.macroArgs.count > this.macroArgStackDepth)
+		{
+			dsp = this.macroArgs[this.macroArgStackDepth];
+		}
+		else
+		{
+			if (this.macroArgStackDepth > this.macroArgs.count)
+			{
+				throw new global.Exception("internal error");
+			}
+			dsp = %[];
+			this.macroArgs.add(dsp);
+		}
+		this.macroArgStackDepth += 1;
+
+		// copy arguments from args to dsp
+		(this.dicAssign incontextof dsp)(args);
+	}
+
+	function popMacroArgs()
+	{
+		if (this.macroArgStackDepth === 0)
+		{
+			throw new global.Exception(global.TVPKAGSyntaxError);
+		}
+		this.macroArgStackDepth -= 1;
+	}
+
+	function clearMacroArgs()
+	{
+		for (var i = 0; i < this.macroArgs.count; i += 1)
+		{
+			invalidate this.macroArgs[i];
+		}
+		this.macroArgs.clear();
+		this.macroArgStackDepth = 0;
+	}
+
+	function popMacroArgsTo(base)
+	{
+		this.macroArgStackDepth = base;
+	}
+
+	function findNearestLabel(in_start)
+	{
+		// find nearest label which be pleced before "start".
+		// "labelline" is to be the label's line number (0-based), and
+		// "labelname" is to be its label name.
+		// "labelline" will be -1 and "labelname" be empty if the label is not found.
+		var labelline = -1;
+		var labelname = "";
+		this.scenario.ensureLabelCache();
+
+		var start = in_start;
+		start -= 1;
+		while (start >= 0)
+		{
+			if (this.lines[start][0] === "*")
+			{
+				// label found
+				labelname = this.scenario.getLabelAliasFromLine(start);
+				break;
+			}
+			start -= 1;
+		}
+		labelline = start;
+		if (labelline === -1)
+		{
+			labelname = "";
+		}
+		return [labelline, labelname];
+	}
+
+	function pushCallStack()
+	{
+		// push current position information
+		if (this.debugLevel >= global.tkdlVerbose)
+		{
+			global.Debug.message(this.storageShortName + " : call stack depth before calling : " + this.callStack.count);
+		}
+
+		var labelinfo = this.findNearestLabel(this.curLine);
+		var labelline = labelinfo[0];
+		var labelname = labelinfo[1];
+		if (labelline < 0)
+		{
+			labelline = 0;
+		}
+		var curline_content = "";
+		if (typeof(this.lines) === "Object" && this.curLine < this.lineCount)
+		{
+			curline_content = this.lines[this.curLine];
+		}
+
+		var call_frame = %[];
+		call_frame.storage = this.storageName; // caller storage
+		call_frame.label = labelname; // caller nearest label
+		call_frame.offset = this.curLine - labelline; // line offset from the label
+		call_frame.orgLineStr = curline_content; // original line string
+		call_frame.lineBuffer = this.lineBuffer; // line string (if alive)
+		call_frame.pos = this.curPos;
+		call_frame.lineBufferUsing = this.lineBufferUsing; // whether LineBuffer is used or not
+		call_frame.macroArgStackBase = this.macroArgStackBase;
+		call_frame.macroArgStackDepth = this.macroArgStackDepth;
+		var new_excludeLevelStack = [];
+		new_excludeLevelStack.assign(this.excludeLevelStack);
+		call_frame.excludeLevelStack = new_excludeLevelStack;
+		call_frame.excludeLevel = this.excludeLevel;
+		var new_ifLevelExecutedStack = [];
+		new_ifLevelExecutedStack.assign(this.ifLevelExecutedStack);
+		call_frame.ifLevelExecutedStack = new_ifLevelExecutedStack;
+		call_frame.ifLevel = this.ifLevel;
+
+		this.callStack.add(call_frame);
+		this.macroArgStackBase = this.macroArgStackDepth;
+	}
+
+	function popCallStack(storage, label)
+	{
+		storage += "";
+		label += "";
+		// pop call stack information
+		if (this.callStack.count === 0)
+		{
+			throw new global.Exception(global.TVPKAGCallStackUnderflow);
+		}
+
+		// pop macro argument information
+		var data = this.callStack[this.callStack.count - 1];
+		this.macroArgStackBase = data.macroArgStackDepth; // later reset to MacroArgStackBase
+		this.popMacroArgsTo(data.macroArgStackDepth);
+
+		// goto label or previous position
+		if ((storage.length !== 0) || (label.length !== 0))
+		{
+			// return to specified position
+			this.goToStorageAndLabel(storage, label);
+		}
+		else
+		{
+			// return to previous calling position
+			this.loadScenario(data.storage);
+			if (data.label.length !== 0)
+			{
+				this.goToLabel(data.label);
+			}
+			this.curLine += data.offset;
+			if (this.curLine > this.lineCount)
+			{
+				throw new global.Exception(global.TVPKAGReturnLostSync);
+			}
+			/* CurLine == LineCount is OK (at end of file) */
+			if (this.curLine < this.lineCount)
+			{
+				if (data.orgLineStr !== this.lines[this.curLine]) // check original line information
+				{
+					throw new global.Exception(global.TVPKAGReturnLostSync);
+				}
+			}
+			if (data.lineBufferUsing)
+			{
+				this.lineBuffer = data.lineBuffer;
+				this.curLineStr = data.lineBuffer;
+				this.lineBufferUsing = true;
+			}
+			else
+			{
+				if (this.curLine < this.lineCount)
+				{
+					this.curLineStr = this.lines[this.curLine];
+					this.lineBufferUsing = false;
+				}
+			}
+			this.curPos = data.pos;
+
+			this.excludeLevelStack = data.excludeLevelStack;
+			this.excludeLevel = data.excludeLevel;
+			this.ifLevelExecutedStack = data.ifLevelExecutedStack;
+			this.ifLevel = data.ifLevel;
+
+			if (this.debugLevel >= global.tkdlSimple)
+			{
+				var label = "";
+				if (data.label.length === 0)
+				{
+					label = "(start)";
+				}
+				else
+				{
+					label = data.label;
+				}
+				global.Debug.message(this.storageShortName + " : returned to : " + label + " line offset " + data.offset);
+			}
+		}
+
+		// reset MacroArgStackBase
+		this.macroArgStackBase = data.macroArgStackBase;
+
+		// pop casll stack
+		this.callStack.erase(this.callStack.count - 1);
+
+
+		// call function back
+		if (typeof(this.owner) === "Object" && typeof(this.owner.onAfterReturn) === "Object")
+		{
+			this.owner.onAfterReturn();
+		}
+
+
+		if (this.debugLevel >= global.tkdlVerbose)
+		{
+			global.Debug.message(this.storageShortName + " : call stack depth after returning : " + this.callStack.count);
+		}
+	}
+
+	function clearCallStack()
+	{
+		this.callStack.clear();
+		this.macroArgStackBase = 0;
+		this.popMacroArgsTo(this.macroArgStackBase); // macro arguments are also cleared
+	}
+
+	function interrupt()
+	{
+		this.interrupted = true;
+	}
+
+	function resetInterrupt()
+	{
+		this.interrupted = false;
+	}
+
+	function kagStepNext(ldelim)
+	{
+		if (ldelim === "")
+		{
+			this.curLine += 1;
+			this.curPos = 0;
+			this.lineBufferUsing = false;
+		}
+		else
+		{
+			this.curPos += 1;
+		}
+	}
+
+	function _getNextTag()
+	{
+		// get next tag and return information dictionary object.
+		// return NULL if the tag not found.
+		// normal characters are interpreted as a "ch" tag.
+		// CR code is interpreted as a "r" tag.
+		// returned tag's line number is stored to TagLine.
+		// tag paremeters are stored into return value.
+		// tag name is also stored into return value, naemd "__tag".
+
+		// pretty a nasty code.
+
+		if (this.curLine >= this.lineCount)
+		{
+			return null;
+		}
+		if (this.lines === null)
+		{
+			return null;
+		}
+
+		var __tag_name = "tagname";
+		var __eol_name = "eol";
+		var __storage_name = "storage";
+		var __target_name = "target";
+		var __exp_name = "exp";
+
+		while (true)
+		{
+			(this.dicClear incontextof this.dicObj)(); // clear dictionary object
+
+			if (this.interrupted)
+			{
+				// interrupt current parsing
+				// return as "interrupted" tag
+				this.dicObj[__tag_name] = "interrupt";
+				this.interrupted = false;
+				return this.dicObj;
+			}
+
+			if (this.curLine >= this.lineCount)
+			{
+				break; // all of scenario was decoded 
+			}
+
+			var tagstartpos = this.curPos;
+
+			if (!this.lineBufferUsing && this.curPos === 0)
+			{
+				if (!this.skipCommentOrLabel())
+				{
+					return null;
+				}
+			}
+
+			if (!this.ignoreCR)
+			{
+				if (
+					(
+						this.curLineStr[this.curPos] === "\\" &&
+						this.curLineStr.length === this.curPos
+					) ||
+					(
+						this.curLineStr.length === this.curPos &&
+						this.curPos >= 3 &&
+						this.curLineStr[this.curPos - 3] === "[" &&
+						this.curLineStr[this.curPos - 2] === "p" && // for line ending with [p]
+						this.curLineStr[this.curPos - 2] === "]" 
+					)
+				)
+				{
+					// line ended with '\\'
+					this.curLine += 1;
+					this.curPos = 0;
+					this.lineBufferUsing = false;
+					continue;
+				}
+
+				if (this.curLineStr.length === this.curPos)
+				{
+					// line ended ...
+					this.tagLine = this.curLine;
+					this.dicObj[__tag_name] = "r";
+					this.dicObj[__eol_name] = "true";
+					if (this.recordingMacro)
+					{
+						this.recordingMacroStr += "[r eol=true]";
+					}
+					this.curLine += 1;
+					this.curPos = 0;
+					this.lineBufferUsing = false;
+					if (!this.recordingMacro && this.excludeLevel === -1)
+					{
+						return this.dicObj;
+					}
+					continue;
+				}
+			}
+
+			var ldelim; // last delimiter
+
+			if (!this.lineBufferUsing && this.curPos === 0 && this.curLineStr[0] === "@")
+			{
+				// line command mode
+				ldelim = ""; // tag last delimiter is a null terminater
+			}
+			else
+			{
+				if (
+					(this.curLineStr.length === this.curPos) ||
+					(this.curLineStr[this.curPos] !== "[") ||
+					(
+						this.curLineStr.length !== this.curPos &&
+						this.curLineStr.length !== this.curPos + 1 &&
+						this.curLineStr[this.curPos] === "[" &&
+						this.curLineStr[this.curPos + 1] === "["
+					)
+				)
+				{
+					// normal character
+					if (this.curLineStr.length === this.curPos)
+					{
+						// line ended
+						this.curLine += 1;
+						this.curPos = 0;
+						this.lineBufferUsing = false;
+						continue;
+					}
+					this.tagLine = this.curLine;
+					var ch = this.curLineStr[this.curPos];
+
+					if (ch === "\t")
+					{
+						this.curPos += 1;
+						continue;
+					}
+					else if (ch !== "\n")
+					{
+						this.dicObj[__tag_name] = "ch";
+						this.dicObj["text"] = ch;
+						if (this.recordingMacro)
+						{
+							if (ch === "[")
+							{
+								this.recordingMacroStr += "[[";
+							}
+							else
+							{
+								this.recordingMacroStr += ch;
+							}
+						}
+					}
+					else
+					{
+						// \n  ( reline )
+						this.dicObj[__tag_name] = "r";
+						if (this.recordingMacro)
+						{
+							this.recordingMacroStr += "[r]";
+						}
+					}
+
+					if (this.curLineStr[this.curPos] === "[")
+					{
+						this.curPos += 1;
+					}
+					this.curPos += 1;
+
+					if (!this.recordingMacro && this.excludeLevel === -1)
+					{
+						return this.dicObj;
+					}
+					continue;
+				}
+
+				ldelim = "]";
+			}
+
+			// a tag
+			var condition = true;
+			this.tagLine = this.curLine;
+			var tagstart = this.curPos;
+			this.curPos += 1;
+
+			if (this.curLineStr.length === this.curPos)
+			{
+				throw new global.Exception(global.TVPKAGSyntaxError);
+			}
+
+			// tag name
+			while (this.curLineStr.length !== this.curPos && this.TVPIsWS(this.curLineStr[this.curPos]))
+			{
+				this.curPos += 1;
+			}
+			if (this.curLineStr.length === this.curPos)
+			{
+				throw new global.Exception(global.TVPKAGSyntaxError);
+			}
+			// XXX: verify offset
+			var tagnamestart = this.curPos;
+			while (this.curLineStr.length !== this.curPos && !this.TVPIsWS(this.curLineStr[this.curPos]) && this.curLineStr[this.curPos] !== ldelim)
+			{
+				this.curPos += 1;
+			}
+
+			if (tagnamestart === this.curPos)
+			{
+				throw new global.Exception(global.TVPKAGSyntaxError);
+			}
+
+			var tagname = this.curLineStr.substring(tagnamestart, this.curPos - tagnamestart);
+			tagname = tagname.toLowerCase();
+			{
+				this.dicObj[__tag_name] = tagname;
+			}
+
+			var tagkind = "";
+
+			// check special control tags
+			if (this.processSpecialTags)
+			{
+				tagkind = global.special_kag_tags.find(tagname) !== -1 ? tagname : "";
+			}
+			else
+			{
+				tagkind = "";
+			}
+
+			if (tagkind === "macro")
+			{
+				this.recordingMacroName = "";
+			}
+
+			// tag attributes
+			while (true)
+			{
+				while (this.curLineStr.length !== this.curPos && this.TVPIsWS(this.curLineStr[this.curPos]))
+				{
+					this.curPos += 1;
+				}
+				if ((ldelim === "" && this.curLineStr.length === this.curPos) || this.curLineStr[this.curPos] === ldelim)
+				{
+					// tag ended
+					var ismacro = false;
+					var macrocontent = "";
+
+					if (condition && this.excludeLevel === -1)
+					{
+						if (tagkind === "endmacro")
+						{
+							// macro recording ended
+							// endmacro
+							if (!this.recordingMacro)
+							{
+								throw new global.Exception(global.TVPKAGSyntaxError);
+							}
+							this.recordingMacro = false;
+							if (this.debugLevel >= global.tkdlVerbose)
+							{
+								global.Debug.message("macro: " + this.recordingMacroName + " : " + this.recordingMacroStr);
+							}
+
+							this.recordingMacroStr += "[macropop]"; // ensure macro arguments are to be popped
+
+							// register macro
+							this.macros[this.recordingMacroName] = this.recordingMacroStr;
+						}
+
+						// record macro
+						if (this.recordingMacro)
+						{
+							if (ldelim !== "")
+							{
+								// normal tag
+								// XXX: verify offets
+								this.recordingMacroStr += this.curLineStr.substring(tagstart, this.curPos - tagstart + 1);
+							}
+							else
+							{
+								// line command
+								if (this.curPos - tagstart >= 1)
+								{
+									this.recordingMacroStr += "[" + this.curLineStr.substring(tagstart + 1, this.curPos - tagstart - 1) + "]";
+								}
+							}
+
+							this.kagStepNext(ldelim);
+
+							break; // break
+						}
+
+						// is macro ?
+						ismacro = typeof(this.macros[tagname]) === "String";
+						if (ismacro)
+						{
+							macrocontent = this.macros[tagname];
+						}
+					}
+
+					// tag-specific processing
+					if (tagkind === "" && !ismacro)
+					{
+						// not a control tag
+
+						this.kagStepNext(ldelim);
+
+						if (condition && this.excludeLevel === -1)
+						{
+							return this.dicObj;
+						}
+
+						break;
+					}
+
+					// if/ignore
+					if (tagkind === "if" || tagkind === "ignore")
+					{
+						this.ifLevel += 1;
+						this.ifLevelExecutedStack.add(false);
+						this.excludeLevelStack.add(this.excludeLevel);
+
+						if (this.excludeLevel === -1)
+						{
+							if (typeof(this.dicObj[__exp_name]) !== "String" || this.dicObj[__exp_name] === "")
+							{
+								throw new global.Exception(global.TVPKAGSyntaxError);
+							}
+
+							var val = global.Scripts.eval(this.dicObj[__exp_name] ,,, this.owner);
+
+							var cond = !!val;
+							if (tagkind === "ignore")
+							{
+								cond = !cond;
+							}
+
+							this.ifLevelExecutedStack[this.ifLevelExecutedStack.count - 1] = cond;
+							if (!cond)
+							{
+								this.excludeLevel = this.ifLevel;
+							}
+
+						}
+					}
+
+					// elsif
+					if (tagkind === "elsif")
+					{
+						if (this.ifLevelExecutedStack.count === 0)
+						{
+							// no preceded if/ignore tag.
+							// should throw an exception?
+						}
+						else if (this.ifLevelExecutedStack[this.ifLevelExecutedStack.count - 1])
+						{
+							this.excludeLevel = this.ifLevel;
+						}
+						else if (this.ifLevel === this.excludeLevel)
+						{
+							if (typeof(this.dicObj[__exp_name]) !== "String" || this.dicObj[__exp_name] === "")
+							{
+								throw new global.Exception(global.TVPKAGSyntaxError);
+							}
+
+							var val = global.Scripts.eval(this.dicObj[__exp_name] ,,, this.owner);
+
+							var cond = !!val;
+							if (cond)
+							{
+								this.ifLevelExecutedStack[this.ifLevelExecutedStack.count - 1] = true;
+								this.excludeLevel = -1;
+							}
+						}
+					}
+
+					// else
+					if (tagkind === "else")
+					{
+						if (this.ifLevelExecutedStack.count === 0)
+						{
+							// no preceded if/ignore tag.
+							// should throw an exception?
+						}
+						else if (this.ifLevelExecutedStack[this.ifLevelExecutedStack.count - 1])
+						{
+							this.excludeLevel = this.ifLevel;
+						}
+						else if (this.ifLevel === this.excludeLevel)
+						{
+							this.ifLevelExecutedStack[this.ifLevelExecutedStack.count - 1] = true;
+							this.excludeLevel = -1;
+						}
+					}
+
+					// endif/endignore
+					if (tagkind === "endif" || tagkind === "endignore")
+					{
+						// endif
+						if (this.excludeLevelStack.count !== 0)
+						{
+							this.excludeLevel = this.excludeLevelStack[this.excludeLevelStack.count - 1];
+							this.excludeLevelStack.erase(this.excludeLevelStack.count - 1);
+						}
+						if (this.ifLevelExecutedStack.count !== 0)
+						{
+							this.ifLevelExecutedStack.erase(this.ifLevelExecutedStack.count - 1);
+						}
+
+						this.ifLevel -= 1;
+						if (this.ifLevel < 0)
+						{
+							this.ifLevel = 0;
+						}
+
+						this.kagStepNext(ldelim);
+
+						break; // break
+					}
+
+					if (condition && this.excludeLevel === -1)
+					{
+						if (tagkind === "emb" || (ismacro && tagkind === ""))
+						{
+							// embed string
+							// insert string to current position
+							if (ldelim !== "")
+							{
+								this.curPos += 1;
+							}
+
+							if (!ismacro)
+							{
+								// execute expression
+								if (typeof(this.dicObj[__exp_name]) !== "String" || this.dicObj[__exp_name] === "")
+								{
+									throw new global.Exception(global.TVPKAGSyntaxError);
+								}
+
+
+								var val = global.Scripts.eval(this.dicObj[__exp_name] ,,, this.owner);
+
+								var exp = val + "";
+
+								var newbuf = this.curLineStr.substring(0, tagstartpos);
+
+								// count '['
+								// escape '['
+								var exp_pos = 0;
+								while (exp.length !== exp_pos)
+								{
+									if (exp[exp_pos] === "[")
+									{
+										newbuf += "[[";
+									}
+									else
+									{
+										newbuf += exp[exp_pos];
+									}
+									exp_pos += 1;
+								}
+
+								newbuf += this.curLineStr.substring(this.curPos);
+
+								if (ldelim === "" && !this.ignoreCR)
+								{
+									newbuf += "\\";
+								}
+
+								this.lineBuffer = newbuf;
+							}
+							else
+							{
+								var newbuf = this.curLineStr.substring(0, tagstartpos);
+								newbuf += macrocontent;
+								newbuf += this.curLineStr.substring(this.curPos);
+
+								if (ldelim === "" && !this.ignoreCR)
+								{
+									newbuf += "\\";
+								}
+
+								this.lineBuffer = newbuf;
+							}
+
+							this.curLineStr = this.lineBuffer;
+							this.curPos = tagstartpos;
+
+							this.lineBufferUsing = true;
+
+							// push macro arguments
+							if (ismacro)
+							{
+								this.pushMacroArgs(this.dicObj);
+							}
+
+							break;
+
+						}
+						else if (tagkind === "jump")
+						{
+							// jump tag
+							var attrib_storage = this.dicObj[__storage_name];
+							var attrib_target = this.dicObj[__target_name];
+
+							// fire onJump event
+							var process = true;
+							if (typeof(this.owner) === "Object" && typeof(this.owner.onJump) === "Object")
+							{
+								process = this.owner.onJump(this.dicObj);
+							}
+
+							if (process)
+							{
+								this.goToStorageAndLabel(attrib_storage, attrib_target);
+								return true; // re-start parsing
+							}
+						}
+						else if (tagkind === "call")
+						{
+							// call tag
+							var attrib_storage = this.dicObj[__storage_name];
+							var attrib_target = this.dicObj[__target_name];
+
+							// fire onCall event
+							var process = true;
+							if (typeof(this.owner) === "Object" && typeof(this.owner.onCall) === "Object")
+							{
+								process = this.owner.onCall(this.dicObj);
+							}
+
+							if (process)
+							{
+								this.kagStepNext(ldelim);
+
+								this.pushCallStack();
+								this.goToStorageAndLabel(attrib_storage, attrib_target);
+								return true;
+							}
+						}
+						else if (tagkind === "return")
+						{
+							// return tag
+							var attrib_storage = this.dicObj[__storage_name];
+							var attrib_target = this.dicObj[__target_name];
+
+							// fire onReturn event
+							var process = true;
+							if (typeof(this.owner) === "Object" && typeof(this.owner.onReturn) === "Object")
+							{
+								process = this.owner.onReturn(this.dicObj);
+							}
+
+							if (process)
+							{
+								this.popCallStack(attrib_storage, attrib_target);
+								return true;
+							}
+						}
+						else
+						{
+							if (tagkind === "macro")
+							{
+								if (typeof(this.dicObj["name"]) !== "String" || this.dicObj["name"] === "")
+								{
+									throw new global.Exception(global.TVPKAGSyntaxError); // missing macro name
+								}
+								this.recordingMacroName = this.dicObj["name"].toLowerCase();
+								this.recordingMacro = true; // start recording macro
+								this.recordingMacroStr = "";
+							}
+							else if (tagkind === "macropop")
+							{
+								// pop macro arguments
+								this.popMacroArgs();
+							}
+							else if (tagkind === "erasemacro")
+							{
+								if (typeof(this.dicObj["name"]) !== "String" || this.dicObj["name"] === "")
+								{
+									throw new global.Exception(global.TVPUnknownMacroName);
+								}
+								if (typeof(this.macros[this.dicObj["name"]]) !== "String")
+								{
+									throw new global.Exception(global.TVPUnknownMacroName + this.dicObj["name"]);
+								}
+								delete this.macros[this.dicObj["name"]];
+							}
+						}
+					}
+
+					this.kagStepNext(ldelim);
+					break;
+				}
+
+				if (this.curLineStr.length === this.curPos)
+				{
+					throw new global.Exception(global.TVPKAGSyntaxError);
+				}
+
+				// attrib name
+				if (this.curLineStr[this.curPos] === "*")
+				{
+					// macro entity all
+					if (!this.recordingMacro)
+					{
+						var dsp = this.getMacroTopNoAddRef();
+						if (dsp !== null)
+						{
+							// assign macro arguments to current arguments
+							(this.dicAssign incontextof this.dicObj)(dsp);
+						}
+						this.dicObj[__tag_name] = tagname; // reset tag_name
+					}
+
+					this.curPos += 1;
+					while (this.curLineStr.length !== this.curPos && this.TVPIsWS(this.curLineStr[this.curPos]))
+					{
+						this.curPos += 1;
+					}
+					continue;
+				}
+
+				var attribnamestart = this.curPos;
+				while (this.curLineStr.length !== this.curPos && !this.TVPIsWS(this.curLineStr[this.curPos]) && this.curLineStr[this.curPos] !== "=" && (ldelim !== "" ? this.curLineStr[this.curPos] !== ldelim : true))
+				{
+					this.curPos += 1;
+				}
+
+				var attribnameend = this.curPos;
+
+				var attribname = this.curLineStr.substring(attribnamestart, attribnameend - attribnamestart);
+
+				// =
+				while (this.curLineStr.length !== this.curPos && this.TVPIsWS(this.curLineStr[this.curPos]))
+				{
+					this.curPos += 1;
+				}
+
+				var entity = false;
+				var macroarg = false;
+				var value = "";
+
+				if (this.curLineStr.length === this.curPos || this.curLineStr[this.curPos] !== "=")
+				{
+					// arrtibute value omitted
+					value = "true"; // always true
+				}
+				else
+				{
+					if (this.curLineStr.length === this.curPos)
+					{
+						throw new global.Exception(global.TVPKAGSyntaxError);
+					}
+					this.curPos += 1;
+					if (this.curLineStr.length === this.curPos)
+					{
+						throw new global.Exception(global.TVPKAGSyntaxError);
+					}
+					while (this.curLineStr.length !== this.curPos && this.TVPIsWS(this.curLineStr[this.curPos]))
+					{
+						this.curPos += 1;
+					}
+					if (this.curLineStr.length === this.curPos)
+					{
+						throw new global.Exception(global.TVPKAGSyntaxError);
+					}
+
+					// attrib value
+					var vdelim = 0; // value delimiter
+
+					if (this.curLineStr[this.curPos] === "&")
+					{
+						entity = true;
+						this.curPos += 1;
+					}
+					else if (this.curLineStr[this.curPos] === "%")
+					{
+						macroarg = true;
+						this.curPos += 1;
+					}
+
+					if (this.curLineStr[this.curPos] === "\"" || this.curLineStr[this.curPos] === "'")
+					{
+						vdelim = this.curLineStr[this.curPos];
+						this.curPos += 1;
+					}
+
+					var valuestart = this.curPos;
+
+					while (this.curLineStr.length !== this.curPos && (vdelim !== 0 ? (this.curLineStr[this.curPos] !== vdelim) : (this.curLineStr[this.curPos] !== ldelim && !this.TVPIsWS(this.curLineStr[this.curPos]))))
+					{
+						if (this.curLineStr[this.curPos] === "`")
+						{
+							// escaped with '`'
+							this.curPos += 1;
+							if (this.curLineStr.length === this.curPos)
+							{
+								throw new global.Exception(global.TVPKAGSyntaxError);
+							}
+						}
+						this.curPos += 1;
+					}
+
+					if (ldelim !== "" && this.curLineStr.length === this.curPos)
+					{
+						throw new global.Exception(global.TVPKAGSyntaxError);
+					}
+
+					var valueend = this.curPos;
+
+					if (vdelim !== 0)
+					{
+						// XXX: implement buffer overflow emulation on unbalanced quotes
+						if (this.curLineStr.length !== this.curPos)
+						{
+							this.curPos += 1;
+						}
+					}
+
+					// unescape ` character of value
+					value = this.curLineStr.substring(valuestart, valueend - valuestart);
+
+					if (valuestart !== valueend)
+					{
+						// value has at least one character
+						var value_pos = 0;
+						if (value[value_pos] === "&")
+						{
+							entity = true;
+							value_pos += 1;
+						}
+						if (value[value_pos] === "%")
+						{
+							macroarg = true;
+							value_pos += 1;
+						}
+						var newvalue = "";
+						while (value.length !== value_pos)
+						{
+							if (value[value_pos] === "`")
+							{
+								value_pos += 1;
+								if (value.length === value_pos)
+								{
+									break;
+								}
+							}
+							newvalue += value[value_pos];
+							value_pos += 1;
+						}
+
+						value = newvalue;
+					}
+				}
+
+				// special attibute processing
+				var valueVariant;
+				var store = true;
+				if ((!this.recordingMacro && this.excludeLevel === -1) || tagkind === "elsif")
+				{
+					// process expression entity or macro argument
+					if (entity)
+					{
+						valueVariant = global.Scripts.eval(value ,,, this.owner);
+						if (valueVariant !== void)
+						{
+							valueVariant += "";
+						}
+					}
+					else if (macroarg)
+					{
+						var args = this.getMacroTopNoAddRef();
+						if (args)
+						{
+							var pipe_char_index = value.indexOf("|");
+							if (pipe_char_index !== -1)
+							{
+								var name = value.substring(0, pipe_char_index);
+								valueVariant = args[name];
+								if (valueVariant === void)
+								{
+									valueVariant = value.substring(pipe_char_index + 1);
+								}
+							}
+							else
+							{
+								valueVariant = args[value];
+							}
+						}
+						else
+						{
+							valueVariant = value;
+						}
+					}
+					else
+					{
+						valueVariant = value;
+					}
+
+					if (attribname === "cond")
+					{
+						// condition
+						var val = global.Scripts.eval(valueVariant + "" ,,, this.owner);
+						condition = !!val;
+						store = false;
+					}
+				}
+
+				// store value into the dictionary object
+				if (store)
+				{
+					this.dicObj[attribname] = valueVariant;
+				}
+			}
+		}
+
+		return null;
+	}
+
+	function getNextTag()
+	{
+		var res = true;
+		while (res === true)
+		{
+			res = this._getNextTag();
+		}
+		return res;
+	}
+
+	function getCurLabel()
+	{
+		return this.curLabel;
+	}
+
+	function getCurLine()
+	{
+		return this.curLine;
+	}
+
+	function getCurPos()
+	{
+		return this.curPos;
+	}
+
+	function getCurLineStr()
+	{
+		return this.curLineStr;
+	}
+
+	function setProcessSpecialTags(b)
+	{
+		this.processSpecialTags = b;
+	}
+
+	function getProcessSpecialTags()
+	{
+		return this.processSpecialTags;
+	}
+
+	function setIgnoreCR(b)
+	{
+		this.ignoreCR = b;
+	}
+
+	function getIgnoreCR()
+	{
+		return this.ignoreCR();
+	}
+
+	function setDebugLevel(level)
+	{
+		this.debugLevel = level;
+	}
+
+	function getDebugLevel()
+	{
+		return this.debugLevel;
+	}
+
+	function getMacrosNoAddRef()
+	{
+		return this.macros;
+	}
+
+	// get current macro argument (parameters)
+	function getMacroTopNoAddRef()
+	{
+		if (this.macroArgStackDepth === 0)
+		{
+			return null;
+		}
+		return this.macroArgs[this.macroArgStackDepth - 1];
+	}
+
+	function getCallStackDepth()
+	{
+		return this.callStack.count;
+	}
+}
+
+class KAGParser
+{
+	var __internal_KAGParser_instance;
+	/**
+	 * @summary Building a KAGParser object
+	 *
+	 * Build an object of class KAGParser.
+	 * @constructor
+	 */
+	/**
+	 * @summary KAGParser オブジェクトの構築
+	 *
+	 * KAGParser クラスのオブジェクトを構築します。
+	 * @constructor
+	 */
+	function KAGParser()
+	{
+		this.__internal_KAGParser_instance = new global.__internal_KAGParser();
+		this.__internal_KAGParser_instance.construct(this);
+	}
+
+	function finalize()
+	{
+	}
+
+	/**
+	 * @summary Loading a scenario
+	 *
+	 * Loads the specified scenario storage and sets the scenario loading position to the beginning of the storage.
+	 * @param {String} name - Specifies the scenario storage to load.
+	 */
+	/**
+	 * @summary シナリオの読み込み<
+	 *
+	 * 指定されたシナリオストレージを読み込み、シナリオ読み込み位置をストレージの先頭に設定します。
+	 * @param {String} name - 読み込むシナリオストレージを指定します。
+	 */
+	function loadScenario(name)
+	{
+		return this.__internal_KAGParser_instance.loadScenario(name);
+	}
+
+	/**
+	 * @summary Move to specified label
+	 *
+	 * Moves to the specified label in the loaded scenario storage.
+	 * @param {String} label - Specify the label name of the move destination.
+	 */
+	/**
+	 * @summary 指定ラベルへの移動
+	 *
+	 * 読み込まれているシナリオストレージの中で、指定されたラベルへ移動します。
+	 * @param {String} label - 移動先のラベル名を指定します。
+	 */
+	function goToLabel(label)
+	{
+		return this.__internal_KAGParser_instance.goToLabel(label);
+	}
+
+	/**
+	 * @summary Move the current position to the specified label by stacking it
+	 *
+	 * Moves to the specified label.
+	 * At that time, the current scenario storage read position is pushed onto the stack.
+	 * @param {String} label - Specify the label name of the move destination.
+	 */
+	/**
+	 * @summary 現在位置をスタックに積んでの、指定ラベルへの移動
+	 *
+	 * 指定されたラベルへ移動します。
+	 * その際、現在のシナリオストレージ読み込み位置をスタックに積みます。
+	 * @param {String} label - 移動先のラベル名を指定します。
+	 */
+	function callLabel(label)
+	{
+		return this.__internal_KAGParser_instance.callLabel(label);
+	}
+
+	/**
+	 * @summary Get the following tags
+	 *
+	 * 	Returns the following tags in a dictionary array. Normal characters (not inside the tag) are interpreted as ch tags.
+	 * 	In the interrupted state, it returns the interrupt tag and releases the interrupted state.
+	 * 	Returns void at the end of storage.
+	 * 	The name of the tag is stored in the tagname element of the return dictionary array.
+	 * 	The if, ignore, endif, endignore, emb, macro, endmacro, erasemacro, jump, call, return, iscript, and endscript tags are built-in tags.
+	 * The processing for these tags is done automatically inside this met
+	 * Therefore, this method does not return any information about these tags.
+	 * @return {Dictionary} Tag information.
+	 * @see KAGParser.interrupt
+	 * @see KAGParser.resetInterrupt
+	 */
+	/**
+	 * @summary 次のタグを得る
+	 *
+	 * 次のタグを辞書配列で返します。(タグ内部にない)通常の文字は、ch タグと解釈されます。<r/>
+	 * interrupted 状態では、interrupt タグを返し、interrupted 状態を解除します。<r/>
+	 * ストレージの末尾では、void を返します。<r/>
+	 * タグの名前は、戻り値の辞書配列の tagname 要素に格納されています。<r/>
+	 * if, ignore, endif, endignore, emb, macro, endmacro, erasemacro, jump, call, return, iscript, endscript の各タグは組み込みタグです。
+	 * これらのタグに関する処理は、このメソッドの内部で自動的に行なわれます。
+	 * したがって、このメソッドはこれらのタグに関する情報を返しません。
+	 * @return {Dictionary} タグ情報の辞書配列
+	 * @see KAGParser.interrupt
+	 * @see KAGParser.resetInterrupt
+	 */
+	function getNextTag()
+	{
+		var res = this.__internal_KAGParser_instance.getNextTag();
+		if (res === null)
+		{
+			return void;
+		}
+		return res;
+	}
+
+	/**
+	 * @summary Copy of KAGParser object
+	 *
+	 * Copies the contents of the KAGParser object specified in src.
+	 * @param {KAGParser} src - Specifies the KAGParser object to copy from.
+	 */
+	/**
+	 * @summary KAGParser オブジェクトのコピー
+	 *
+	 * コピー元の KAGParser オブジェクトを指定します。
+	 * @param {KAGParser} src - src で指定した KAGParser オブジェクトの内容をコピーします。
+	 */
+	function assign(src)
+	{
+		if (typeof(src) !== "Object" || (typeof(src) === "Object" && !(src instanceof "KAGParser")))
+		{
+			throw new global.Exception(global.TVPKAGSpecifyKAGParser);
+		}
+		this.__internal_KAGParser_instance.assign(src.__internal_KAGParser_instance);
+	}
+
+	/**
+	 * @summary Clear object
+	 *
+	 * Clears the state of the object.
+	 */
+	/**
+	 * @summary オブジェクトのクリア
+	 *
+	 * オブジェクトの状態をクリアします。
+	 */
+	function clear()
+	{
+		return this.__internal_KAGParser_instance.clear();
+	}
+
+	/**
+	 * @summary Write the state of an object to a dictionary array
+	 *
+	 * Writes the state of the object to a dictionary array.
+	 * @return {Dictionary} the state of an object
+	 * @see KAGParser.restore
+	 */
+	/**
+	 * @summary オブジェクトの状態を辞書配列に書き出す
+	 *
+	 * オブジェクトの状態を辞書配列に書き出します。
+	 * @return {Dictionary} オブジェクトの状態を表わす辞書配列
+	 * @see KAGParser.restore
+	 */
+	function store()
+	{
+		return this.__internal_KAGParser_instance.store();
+	}
+
+	/**
+	 * @summary Restore the state of an object from a dictionary array
+	 *
+	 * Restores the state of the KAGParser object based on the dictionary array specified by dic.
+	 * @param {Dictionary} dic - the state of the object to be restored
+	 * @see KAGParser.store
+	 */
+	/**
+	 * @summary 辞書配列からオブジェクトの状態を復元する
+	 *
+	 * dic で指定した辞書配列を元にして、KAGParser オブジェクトの状態を復元します。
+	 * @param {Dictionary} dic - 復元するオブジェクトの状態を表わす辞書配列
+	 * @see KAGParser.store
+	 */
+	function restore(dic)
+	{
+		return this.__internal_KAGParser_instance.restore(dic);
+	}
+
+	/**
+	 * @summary call tag clear the call stack
+	 *
+	 * call tag Clears the stack of call calls. Macro arguments are also cleared.
+	 */
+	/**
+	 * @summary call タグ呼び出しスタックのクリア
+	 *
+	 * call タグ呼び出しのスタックをクリアします。マクロ引数もクリアされます。
+	 */
+	function clearCallStack()
+	{
+		return this.__internal_KAGParser_instance.clearCallStack();
+	}
+
+	/**
+	 * @summary Put in interrupted state
+	 *
+	 * It will be in the interrupted state. In this state, the next {@link KAGParser.getNextTag} method call returns an interrupt tag.
+	 * @see KAGParser.resetInterrupt
+	 * @see KAGParser.getNextTag
+	 */
+	/**
+	 * @summary interrupted 状態にする
+	 *
+	 * interrupted 状態になります。この状態のときは、次の {@link KAGParser.getNextTag} メソッドの呼び出しでは interrupt タグが返されます。
+	 * @see KAGParser.resetInterrupt
+	 * @see KAGParser.getNextTag
+	 */
+	function interrupt()
+	{
+		return this.__internal_KAGParser_instance.interrupt();
+	}
+
+	/**
+	 * @summary Canceling the interrupted state
+	 *
+	 * Releases the interrupted state.
+	 * @see KAGParser.interrupt
+	 * @see KAGParser.getNextTag
+	 */
+	/**
+	 * @summary interrupted 状態の解除
+	 *
+	 * interrupted 状態を解除します。
+	 * @see KAGParser.interrupt
+	 * @see KAGParser.getNextTag
+	 */
+	function resetInterrupt()
+	{
+		return this.__internal_KAGParser_instance.resetInterrupt();
+	}
+
+	function popMacroArgs()
+	{
+		return this.__internal_KAGParser_instance.popMacroArgs();
+	}
+
+	/**
+	 * @summary Number of lines in the current line
+	 *
+	 * Indicates what line the current line is in storage.
+	 * @access r
+	 */
+	/**
+	 * @summary 現在行の行数
+	 *
+	 * 現在行がストレージ中で何行目かを表わします。
+	 * @access r
+	 */
+	property curLine
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.curLine;
+		}
+	}
+
+	/**
+	 * @summary The position of the character on the current line
+	 *
+	 * Indicates the current character number in the current line.
+	 * @access r
+	 */
+	/**
+	 * @summary 現在行における文字の位置
+	 *
+	 * 現在行の中で、今何文字目にあるかを表わします。
+	 * @access r
+	 */
+	property curPos
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.curPos;
+		}
+	}
+
+	/**
+	 * @summary Current line string
+	 *
+	 * Represents the string on the current line.
+	 * @access r
+	 */
+	/**
+	 * @summary 現在行の文字列
+	 *
+	 * 現在行の文字列を表わします。
+	 * @access r
+	 */
+	property curLineStr
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.curLineStr;
+		}
+	}
+
+	/**
+	 * @summary Whether to ignore line breaks
+	 *
+	 * Indicates whether to ignore line breaks.
+	 * If true, ignore line breaks.
+	 * If false, a line break will occur on the display at the position of the line break in the scenario. (KAG2 compatibility mode)
+	 * @access r/w
+	 */
+	/**
+	 * @summary 改行を無視するかどうか
+	 *
+	 * 改行を無視するかどうかを表わします。
+	 * 真ならば改行を無視します。
+	 * 偽ならば、シナリオ中の改行の位置で、表示上も改行します。(KAG2 互換モード)
+	 * @access r/w
+	 */
+	property ignoreCR
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.ignoreCR;
+		}
+		setter(v)
+		{
+			this.__internal_KAGParser_instance.ignoreCR = v;
+		}
+	}
+
+	/**
+	 * @summary Whether to handle special tags
+	 *
+	 * Indicates whether to process special tags.
+	 * If true, process newlines and special tags. The default is true.
+	 * What are special tags? If ignore endif endignore else elsif emb macro endmacro macropop erasemacro jump call return tags. If this property is false, you can get these tags as-is with getNextTag.
+	 * However, iscript~endscript is always processed.
+	 * @access r/w
+	 */
+	/**
+	 * @summary 特殊タグを処理するかどうか
+	 *
+	 * 特殊タグを処理するかどうかを表わします。
+	 * 真ならば改行を特殊タグを処理します。デフォルトは真です。
+	 * 特殊タグとは  if ignore endif endignore else elsif emb macro endmacro macropop erasemacro jump call return の各タグです。このプロパティが偽の場合、これらのタグはそのまま getNextTag で取得することができます。
+	 * ただし、iscript 〜 endscript は常に処理されます。
+	 * @access r/w
+	 */
+	property processSpecialTags
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.processSpecialTags;
+		}
+		setter (v)
+		{
+			this.__internal_KAGParser_instance.processSpecialTags = v;
+		}
+	}
+
+	/**
+	 * @summary Debug level
+	 *
+	 * Indicates the debug level.
+	 * The values ​​that can be set are as follows.
+	 *
+	 * tkdlNone
+	 * tkdlSimple
+	 * tkdlVerbose
+	 *
+	 * The amount of debug messages displayed increases in the order of tkdlNone < tkdlSimple < tkdlVerbose.
+	 * @access r/w
+	 */
+	/**
+	 * @summary デバッグレベル
+	 *
+	 * デバッグレベルを表わします。
+	 * 設定可能な値は以下の通りです。
+	 *
+	 * tkdlNone
+	 * tkdlSimple
+	 * tkdlVerbose
+	 *
+	 * tkdlNone < tkdlSimple < tkdlVerbose の順に、表示されるデバッグメッセージの量が多くなります。
+	 * @access r/w
+	 */
+	property debugLevel
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.debugLevel;
+		}
+		setter(v)
+		{
+			this.__internal_KAGParser_instance.debugLevel = v;
+		}
+	}
+
+	/**
+	 * @summary Dictionary array with macros
+	 *
+	 * Represents a dictionary array containing macros.
+	 * For example, hoge macros can be accessed with macros['hoge'].
+	 * @access r
+	 */
+	/**
+	 * @summary マクロの入った辞書配列
+	 *
+	 * マクロの入った辞書配列を表わします。
+	 * 例えば、hoge マクロには macros['hoge'] でアクセスできます。
+	 * @access r
+	 */
+	property macros
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.macros;
+		}
+	}
+
+	/**
+	 * @summary Arguments of the currently running macro
+	 *
+	 * The argument of the currently executed macro is represented by a dictionary array.
+	 * @access r
+	 */
+	/**
+	 * @summary 現在実行されているマクロの引数
+	 *
+	 * 現在実行されているマクロの引数を、辞書配列で表わします。
+	 * @access r
+	 */
+	property macroParams
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.getMacroTopNoAddRef();
+		}
+	}
+
+	property mp
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.getMacroTopNoAddRef();
+		}
+	}
+
+	/**
+	 * @summary call tag Call stack depth
+	 *
+	 * call tag Represents the depth of the call stack.
+	 * @access r
+	 */
+	/**
+	 * @summary call タグ呼び出しスタックの深さ
+	 *
+	 * call タグ呼び出しスタックの深さを表わします。
+	 * @access r
+	 */
+	property callStackDepth
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.getCallStackDepth();
+		}
+	}
+
+	/**
+	 * @summary Current storage
+	 *
+	 * Represents the current storage.
+	 * You can also set the value. In that case, the specified storage is read.
+	 * @access r/w
+	 */
+	/**
+	 * @summary 現在のストレージ
+	 *
+	 * 現在のストレージを表わします。
+	 * 値を設定することもできます。その場合は、指定されたストレージを読み込みます。
+	 * @access r/w
+	 */
+	property curStorage
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.storageName + "";
+		}
+		setter(v)
+		{
+			this.__internal_KAGParser_instance.loadScenario(v);
+		}
+	}
+
+	/**
+	 * @summary Current label
+	 *
+	 * Represents the current label.
+	 * @access r
+	 */
+	/**
+	 * @summary 現在のラベル
+	 *
+	 * 現在のラベルを表わします。
+	 * @access r
+	 */
+	property curLabel
+	{
+		getter
+		{
+			return this.__internal_KAGParser_instance.curLabel + "";
+		}
+	}
+}

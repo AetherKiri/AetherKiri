@@ -14,6 +14,7 @@ const ProbeConfig = preload("res://scripts/probe_config.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
 const DiagnosticLocalization = preload("res://scripts/diagnostic_localization.gd")
 const DebugConsole = preload("res://scripts/debug_console.gd")
+const BuiltinDemo = preload("res://scripts/builtin_demo.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -108,10 +109,12 @@ const UI_TEXT := {
         "detail.set_cover": "设置封面",
         "detail.rename": "重命名",
         "detail.remove": "移除游戏",
+        "detail.delete_builtin": "删除内置 Demo",
         "game.today": "今天",
         "game.days_ago": "%d 天前",
         "game.played_duration": "已玩 %s",
         "game.never_played": "尚未游玩",
+        "game.builtin_demo": "内置 Demo",
         "game.local": "本地游戏",
         "game.type_directory": "目录",
         "game.type_archive": "归档",
@@ -125,7 +128,9 @@ const UI_TEXT := {
         "dialog.choose_cover": "选择封面图片",
         "dialog.rename": "重命名",
         "dialog.remove_body": "从列表移除「%s」？不会删除磁盘上的游戏文件。",
+        "dialog.delete_builtin_body": "删除内置示例「%s」及其本地存档？删除后不会自动恢复。",
         "dialog.remove": "移除",
+        "dialog.delete": "删除",
         "dialog.select_game_dir": "选择游戏目录",
         "dialog.select_local_game_dir": "选择本地游戏目录",
         "dialog.select_xp3": "选择 XP3 文件",
@@ -143,6 +148,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "需要允许 AetherKiri 访问文件系统后才能导入或启动外部游戏。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.path_missing": "游戏路径不存在",
         "message.game_exists": "游戏已存在：%s",
+        "message.builtin_delete_failed": "删除内置 Demo 时发生错误：%s",
         "alert.error_title": "AetherKiri 错误",
         "alert.warning_title": "AetherKiri 警告",
         "alert.runtime_class_missing": "运行时扩展加载失败：AetherKiriPlayer 不可用",
@@ -217,10 +223,12 @@ const UI_TEXT := {
         "detail.set_cover": "設定封面",
         "detail.rename": "重新命名",
         "detail.remove": "移除遊戲",
+        "detail.delete_builtin": "刪除內建 Demo",
         "game.today": "今天",
         "game.days_ago": "%d 天前",
         "game.played_duration": "已玩 %s",
         "game.never_played": "尚未遊玩",
+        "game.builtin_demo": "內建 Demo",
         "game.local": "本機遊戲",
         "game.type_directory": "目錄",
         "game.type_archive": "封存",
@@ -234,7 +242,9 @@ const UI_TEXT := {
         "dialog.choose_cover": "選擇封面圖片",
         "dialog.rename": "重新命名",
         "dialog.remove_body": "要從列表移除「%s」嗎？不會刪除磁碟上的遊戲檔案。",
+        "dialog.delete_builtin_body": "要刪除內建示例「%s」及其本機存檔嗎？刪除後不會自動還原。",
         "dialog.remove": "移除",
+        "dialog.delete": "刪除",
         "dialog.select_game_dir": "選擇遊戲目錄",
         "dialog.select_local_game_dir": "選擇本機遊戲目錄",
         "dialog.select_xp3": "選擇 XP3 檔案",
@@ -252,6 +262,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "需要允許 AetherKiri 存取檔案系統後才能匯入或啟動外部遊戲。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.path_missing": "遊戲路徑不存在",
         "message.game_exists": "遊戲已存在：%s",
+        "message.builtin_delete_failed": "刪除內建 Demo 時發生錯誤：%s",
         "alert.error_title": "AetherKiri 錯誤",
         "alert.warning_title": "AetherKiri 警告",
         "alert.runtime_class_missing": "執行時擴充載入失敗：AetherKiriPlayer 不可用",
@@ -326,10 +337,12 @@ const UI_TEXT := {
         "detail.set_cover": "Set Cover",
         "detail.rename": "Rename",
         "detail.remove": "Remove Game",
+        "detail.delete_builtin": "Delete Built-in Demo",
         "game.today": "Today",
         "game.days_ago": "%d days ago",
         "game.played_duration": "Played %s",
         "game.never_played": "Not played yet",
+        "game.builtin_demo": "Built-in Demo",
         "game.local": "Local Game",
         "game.type_directory": "Directory",
         "game.type_archive": "Archive",
@@ -343,7 +356,9 @@ const UI_TEXT := {
         "dialog.choose_cover": "Choose Cover Image",
         "dialog.rename": "Rename",
         "dialog.remove_body": "Remove \"%s\" from the list? This will not delete game files from disk.",
+        "dialog.delete_builtin_body": "Delete the built-in demo \"%s\" and its local saves? It will not be restored automatically.",
         "dialog.remove": "Remove",
+        "dialog.delete": "Delete",
         "dialog.select_game_dir": "Choose Game Folder",
         "dialog.select_local_game_dir": "Choose Local Game Folder",
         "dialog.select_xp3": "Choose XP3 File",
@@ -361,6 +376,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "Allow AetherKiri to access the file system before importing or launching external games. Grant file access in the system prompt or permission settings, then try again.",
         "message.path_missing": "Game path does not exist",
         "message.game_exists": "Game already exists: %s",
+        "message.builtin_delete_failed": "Could not completely delete the built-in demo: %s",
         "alert.error_title": "AetherKiri Error",
         "alert.warning_title": "AetherKiri Warning",
         "alert.runtime_class_missing": "Runtime extension failed to load: AetherKiriPlayer is unavailable",
@@ -435,10 +451,12 @@ const UI_TEXT := {
         "detail.set_cover": "カバーを設定",
         "detail.rename": "名前を変更",
         "detail.remove": "ゲームを削除",
+        "detail.delete_builtin": "内蔵デモを削除",
         "game.today": "今日",
         "game.days_ago": "%d 日前",
         "game.played_duration": "プレイ時間 %s",
         "game.never_played": "未プレイ",
+        "game.builtin_demo": "内蔵デモ",
         "game.local": "ローカルゲーム",
         "game.type_directory": "フォルダー",
         "game.type_archive": "アーカイブ",
@@ -452,7 +470,9 @@ const UI_TEXT := {
         "dialog.choose_cover": "カバー画像を選択",
         "dialog.rename": "名前を変更",
         "dialog.remove_body": "「%s」をリストから削除しますか？ディスク上のゲームファイルは削除されません。",
+        "dialog.delete_builtin_body": "内蔵デモ「%s」とローカルセーブデータを削除しますか？削除後は自動的に復元されません。",
         "dialog.remove": "削除",
+        "dialog.delete": "削除",
         "dialog.select_game_dir": "ゲームフォルダーを選択",
         "dialog.select_local_game_dir": "ローカルゲームフォルダーを選択",
         "dialog.select_xp3": "XP3 ファイルを選択",
@@ -470,6 +490,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "外部ゲームのインポートまたは起動には、AetherKiri にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.path_missing": "ゲームパスが存在しません",
         "message.game_exists": "ゲームは既に存在します：%s",
+        "message.builtin_delete_failed": "内蔵デモを完全に削除できませんでした：%s",
         "alert.error_title": "AetherKiri エラー",
         "alert.warning_title": "AetherKiri 警告",
         "alert.runtime_class_missing": "ランタイム拡張の読み込みに失敗しました：AetherKiriPlayer は利用できません",
@@ -544,10 +565,12 @@ const UI_TEXT := {
         "detail.set_cover": "표지 설정",
         "detail.rename": "이름 변경",
         "detail.remove": "게임 제거",
+        "detail.delete_builtin": "내장 데모 삭제",
         "game.today": "오늘",
         "game.days_ago": "%d일 전",
         "game.played_duration": "플레이 %s",
         "game.never_played": "아직 플레이하지 않음",
+        "game.builtin_demo": "내장 데모",
         "game.local": "로컬 게임",
         "game.type_directory": "폴더",
         "game.type_archive": "아카이브",
@@ -561,7 +584,9 @@ const UI_TEXT := {
         "dialog.choose_cover": "표지 이미지 선택",
         "dialog.rename": "이름 변경",
         "dialog.remove_body": "\"%s\"을(를) 목록에서 제거할까요? 디스크의 게임 파일은 삭제되지 않습니다.",
+        "dialog.delete_builtin_body": "내장 데모 \"%s\"와 로컬 저장 데이터를 삭제할까요? 삭제 후에는 자동으로 복원되지 않습니다.",
         "dialog.remove": "제거",
+        "dialog.delete": "삭제",
         "dialog.select_game_dir": "게임 폴더 선택",
         "dialog.select_local_game_dir": "로컬 게임 폴더 선택",
         "dialog.select_xp3": "XP3 파일 선택",
@@ -579,6 +604,7 @@ const UI_TEXT := {
         "message.android_storage_permission_required": "외부 게임을 가져오거나 실행하려면 AetherKiri의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.path_missing": "게임 경로가 존재하지 않습니다",
         "message.game_exists": "게임이 이미 있습니다: %s",
+        "message.builtin_delete_failed": "내장 데모를 완전히 삭제하지 못했습니다: %s",
         "alert.error_title": "AetherKiri 오류",
         "alert.warning_title": "AetherKiri 경고",
         "alert.runtime_class_missing": "런타임 확장 로드 실패: AetherKiriPlayer를 사용할 수 없습니다",
@@ -689,6 +715,7 @@ var ui_icon_cache := {}
 var cover_texture_cache := {}
 
 var player = null
+var builtin_demo = BuiltinDemo.new()
 var runtime_default_font_path := ""
 var runtime_font_dir_path := ""
 var selected_backend := "Godot Native"
@@ -2780,7 +2807,8 @@ func _show_detail(game: Dictionary) -> void:
     content.add_child(tools)
     tools.add_child(_detail_action(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected()))
     tools.add_child(_detail_action(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game()))
-    tools.add_child(_detail_action(ICON_DELETE, _t("detail.remove"), func(): _confirm_remove_selected()))
+    var remove_label := "detail.delete_builtin" if builtin_demo.is_game(game) else "detail.remove"
+    tools.add_child(_detail_action(ICON_DELETE, _t(remove_label), func(): _confirm_remove_selected()))
 
 func _detail_line(icon_path: String, text: String) -> HBoxContainer:
     var row := HBoxContainer.new()
@@ -2999,6 +3027,7 @@ func _confirm_remove_selected() -> void:
     var path := String(selected_game.get("path", ""))
     if path.is_empty():
         return
+    var deleting_builtin := builtin_demo.is_game(selected_game)
     modal_layer.visible = true
     for child in modal_layer.get_children():
         child.queue_free()
@@ -3019,12 +3048,13 @@ func _confirm_remove_selected() -> void:
     box.add_theme_constant_override("separation", 18)
     dialog.add_child(box)
     var label := Label.new()
-    label.text = _t("dialog.remove_body", [_game_display_title(selected_game)])
+    var body_key := "dialog.delete_builtin_body" if deleting_builtin else "dialog.remove_body"
+    label.text = _t(body_key, [_game_display_title(selected_game)])
     label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     label.add_theme_font_size_override("font_size", 22)
     label.add_theme_color_override("font_color", color_text)
     box.add_child(label)
-    var remove := _pill_button(_t("dialog.remove"))
+    var remove := _pill_button(_t("dialog.delete" if deleting_builtin else "dialog.remove"))
     remove.pressed.connect(func():
         modal_layer.visible = false
         _remove_game(path)
@@ -3092,6 +3122,11 @@ func _web_eval_string(source: String) -> String:
     if value == null:
         return ""
     return String(value)
+
+func _sync_web_user_fs(reason: String) -> void:
+    if OS.get_name() != "Web":
+        return
+    _web_eval_string("(function(){if(typeof AetherKiriSyncUserFs==='function'){AetherKiriSyncUserFs(%s);return '1';}return '0';})()" % JSON.stringify(reason))
 
 func _web_sync_get_json(path: String):
     var source := "(function(){var xhr=new XMLHttpRequest();xhr.open('GET',%s,false);xhr.send(null);if(xhr.status>=200&&xhr.status<300)return xhr.responseText;return JSON.stringify({error:'HTTP '+xhr.status});})()" % JSON.stringify(path)
@@ -3380,10 +3415,16 @@ func _open_import_dialog(xp3: bool) -> void:
     dialog.popup_centered(Vector2i(900, 640))
 
 func _refresh_games() -> void:
-    known_games = _load_game_list()
+    var loaded_games := _load_game_list()
+    known_games = builtin_demo.reconcile_games(loaded_games)
+    var library_changed := JSON.stringify(known_games) != JSON.stringify(loaded_games)
     if OS.get_name() == "iOS":
         known_games = _scan_ios_games_dir(known_games)
         _save_game_list(known_games)
+    elif library_changed:
+        _save_game_list(known_games)
+    if library_changed:
+        _sync_web_user_fs("builtin_demo_reconciled")
     known_games = _sorted_games(known_games)
     for child in game_list.get_children():
         child.queue_free()
@@ -3638,6 +3679,8 @@ func _last_played_label(game: Dictionary) -> String:
 
 func _game_subtitle(game: Dictionary) -> String:
     var parts: PackedStringArray = []
+    if builtin_demo.is_game(game):
+        parts.append(_t("game.builtin_demo"))
     if int(game.get("lastPlayed", 0)) > 0:
         parts.append(_last_played_label(game))
     var duration := int(game.get("playDurationSeconds", 0))
@@ -3678,14 +3721,25 @@ func _update_game(path: String, values: Dictionary) -> void:
     _refresh_games()
 
 func _remove_game(path: String) -> void:
+    var deleting_builtin := builtin_demo.is_path(path)
+    var builtin_delete_result: Error = OK
+    if deleting_builtin:
+        builtin_delete_result = builtin_demo.remove_install()
+        if not builtin_demo.is_removed():
+            _show_message(_t("message.builtin_delete_failed", [error_string(builtin_delete_result)]))
+            return
     var games := _load_game_list()
     var next: Array[Dictionary] = []
     for game in games:
         if String(game.get("path", "")) != path:
             next.append(game)
     _save_game_list(next)
+    if deleting_builtin:
+        _sync_web_user_fs("builtin_demo_deleted")
     selected_game = {}
     _show_home()
+    if deleting_builtin and builtin_delete_result != OK:
+        _show_message(_t("message.builtin_delete_failed", [error_string(builtin_delete_result)]))
 
 func _game_card(game: Dictionary) -> Button:
     var button := Button.new()

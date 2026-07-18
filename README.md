@@ -57,6 +57,8 @@ Godot App Shell
   support.
 - Export paths for macOS, iOS/iPadOS, Android, and Web.
 - Runtime-selectable render backend with persisted settings.
+- Bundled multilingual KAG3 demo that can be played from the library and
+  deleted by the player.
 - Probe scripts for smoke, render, interaction, performance, and manual repro
   sessions.
 - Manual compatibility notes for tested titles in
@@ -72,11 +74,29 @@ Godot App Shell
 | `bridge/engine_api/` | C ABI used by the host layer to drive the C++ engine. |
 | `cpp/core/` | KiriKiri2 runtime, visual system, audio, storage, VM, and plugin support. |
 | `cpp/plugins/` | Bundled native plugin implementations and compatibility stubs. |
+| `demos/aetherkiri-kag3/` | Source tree for the built-in AetherKiri KAG3 demo. |
 | `tests/profiles/` | Per-game probe profiles. Committed profiles must not contain machine-local game paths. |
 | `tools/` | Developer and compatibility tools built outside iOS/Android targets. |
 | `doc/development.md` | Full developer guide for architecture, file roles, build, testing, probes, and debugging. |
 | `doc/diagnostics.md` | In-app debugger, one-command collection, bundle contract, and evidence-first investigation guide. |
 | `doc/verified_games.md` | Manual list of games that have been smoke-tested with the current runtime. |
+
+## Built-in Demo
+
+The product package includes the multilingual AetherKiri KAG3 demo at
+`apps/godot_app/builtin_demos/aetherkiri-kag3/data.xp3`. On first launch the
+app atomically stages a writable copy under `user://builtin_games/` and adds it
+to the normal game library, so it uses the same launch and play-time flow as an
+imported game.
+
+Deleting this library entry removes the staged archive and its local saves,
+including the browser's separate persistent save directory, and records the
+player's choice. Refreshing or upgrading the app does not restore the demo;
+instead, it retries any unfinished cleanup. The signed seed remains part of
+the application package, so deleting the writable copy cannot shrink the
+installed app bundle.
+The editable source and rebuild instructions are in
+[`demos/aetherkiri-kag3/`](demos/aetherkiri-kag3/).
 
 ## Render Backends
 
