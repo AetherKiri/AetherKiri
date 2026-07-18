@@ -19,12 +19,6 @@ vcpkg_installed/
 .gradle/
 .act/
 .devtools
-*.md
-!README.md
-!README.zh-CN.md
-!THIRD_PARTY_LICENSES.md
-!doc/verified_games.md
-!doc/verified_games.zh-CN.md
 *.lock
 !package-lock.json
 node_modules/
@@ -36,11 +30,6 @@ local.properties
 third_party/live2d/Core/live2dcubismcore*.js
 third_party/live2d/Core/live2dcubismcore*.wasm
 third_party/live2d/Core/*.map
-!third_party/live2d/Core/README.md
-!third_party/live2d/CubismWebFramework/LICENSE.md
-!third_party/live2d/CubismWebFramework/README.md
-!third_party/live2d/CubismWebFramework/README.ja.md
-!third_party/live2d/CubismWebFramework/CHANGELOG.md
 
 # Android signing secrets
 *.keystore
@@ -64,3 +53,5 @@ bridge/flutter_engine_bridge/ios/Libs/*/*.a
 apps/flutter_app/devtools_options.yaml
 apps/godot_app/.godot/
 plugin_trace.log
+__pycache__/
+*.pyc

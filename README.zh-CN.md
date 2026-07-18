@@ -70,6 +70,7 @@ Godot App Shell
 | `tests/profiles/` | 单游戏 probe profile。提交到仓库的 profile 不能包含机器本地路径。 |
 | `tools/` | 不参与 iOS/Android 目标构建的开发和兼容工具。 |
 | `doc/development.zh-CN.md` | 完整开发文档，覆盖架构、文件作用、构建、测试、probe 和调试。 |
+| `doc/diagnostics.zh-CN.md` | 应用内调试、一条命令采集、诊断包结构与证据优先调查指南。 |
 | `doc/verified_games.zh-CN.md` | 当前运行时已手动 smoke test 的游戏清单。 |
 
 ## 渲染后端
@@ -104,7 +105,9 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 - macOS/iOS 导出需要 Xcode
 - Android 导出需要 Android SDK/NDK。脚本会优先使用
   `ANDROID_HOME`/`ANDROID_SDK_ROOT`，否则使用 `$HOME/Library/Android/sdk`，
-  并自动选择已安装的最新 NDK。
+  并优先选择已安装的 NDK 28.x。可通过 `ANDROID_NDK_HOME`（或
+  `ANDROID_NDK_VERSION`）指定 NDK；与 Godot 4.7 导出模板配套的 Android
+  构建应使用 NDK 28.1.13356709。
 - Web 导出需要 Emscripten/emsdk，并确保 `emcc`、`em++`、`emar` 在 `PATH` 中。
 - Web 的 GDExtension 导出需要 Godot dlink 模板，文件名为
   `web_dlink_debug.zip` 和 `web_dlink_release.zip`。

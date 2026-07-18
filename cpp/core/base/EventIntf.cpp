@@ -445,7 +445,6 @@ static bool _TVPDeliverAllEvents2() {
             TVPInputEventQueue.begin();
         e = *i;
         TVPInputEventQueue.erase(i);
-
         // event delivering
         try {
             e->Deliver();

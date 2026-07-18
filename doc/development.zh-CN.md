@@ -63,7 +63,10 @@ CPU 上传只能作为 debug fallback。性能优化应优先落到 Godot Native
 | `apps/godot_app/export_presets.cfg` | Godot 导出 preset。签名相关配置可能需要本地覆盖。 |
 | `apps/godot_app/aether_kiri.gdextension` | GDExtension 在各平台 debug/release 的 native library 映射。 |
 | `apps/godot_app/scenes/main.tscn` | 主场景。当前大部分 UI 由脚本动态构建。 |
-| `apps/godot_app/scripts/main.gd` | App shell 主逻辑：主页、设置、游戏详情、加载控制台、渲染后端选择、输入转发、性能面板。 |
+| `apps/godot_app/scripts/main.gd` | App shell 与集成点：主页/设置/游戏 UI、渲染选择、输入转发和诊断快照提供。 |
+| `apps/godot_app/scripts/diagnostic_session.gd` | 有界结构化事件、标记窗口、公共 Documents 存储、快照与 ZIP 导出。 |
+| `apps/godot_app/scripts/debug_console.gd` | 仅会话有效的应用内概览/事件/日志/输入/插件调试抽屉与诊断操作。 |
+| `doc/diagnostics.zh-CN.md` | 面向维护者的应用内查看、主机采集、诊断包结构与调查工作流。 |
 | `apps/godot_app/scripts/probe_config.gd` | probe/test 配置加载器，读取 `AETHERKIRI_TEST_CONFIG` 和环境变量覆盖。 |
 | `apps/godot_app/scripts/smoke_test.gd` | 基础引擎启动冒烟 probe。 |
 | `apps/godot_app/scripts/step_render_probe.gd` | 按步骤点击并截图的渲染 probe。 |
@@ -403,6 +406,14 @@ build/validate_gpu_bridge.sh
 已验证游戏清单里不要记录本机游戏路径。
 
 ## 调试说明
+
+需要复现难以描述的性能、输入、渲染或原生问题时，优先使用[统一诊断会话](diagnostics.zh-CN.md)：
+
+```bash
+python3 tools/diagnose.py run android
+```
+
+复现后在应用内点击“标记问题”，回到终端按 Enter；工具会生成包含结构化事件、平台日志和证据摘要的 ZIP。下面的环境变量仍可用于单项临时排查，但日常流程不再要求人工组合它们。
 
 release 构建默认不会持续 drain runtime log，也不会刷新 UI 日志框，避免普通用户版本
 承担每帧日志和 UI 更新开销。需要定位问题时，只打开所需诊断项：

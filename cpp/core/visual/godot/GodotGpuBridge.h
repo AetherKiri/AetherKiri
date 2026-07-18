@@ -40,6 +40,11 @@ struct TVPGodotGpuBridgeCallbacks {
                         const tTVPRect *dst_rect, const tTVPRect *src1_rect,
                         const tTVPRect *src2_rect, uint32_t mode,
                         int opacity, uint32_t color);
+    bool (*blend_rect3)(uint64_t dst, uint64_t src1, uint64_t src2,
+                        uint64_t src3, const tTVPRect *dst_rect,
+                        const tTVPRect *src1_rect, const tTVPRect *src2_rect,
+                        const tTVPRect *src3_rect, uint32_t mode,
+                        int opacity, uint32_t color);
     bool (*read_rgba)(uint64_t texture, void *out_pixels,
                       size_t out_pixels_size, uint32_t stride_bytes);
     bool (*flush)();
@@ -57,6 +62,9 @@ enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D = 9,
     TVP_GODOT_GPU_BLEND_CONST_ALPHA_D = 10,
     TVP_GODOT_GPU_BLEND_PS_SCREEN = 11,
+    TVP_GODOT_GPU_BLEND_UNIVERSAL = 12,
+    TVP_GODOT_GPU_BLEND_UNIVERSAL_D = 13,
+    TVP_GODOT_GPU_BLEND_UNIVERSAL_A = 14,
 };
 
 extern "C" void TVPGodotGpuBridgeRegister(

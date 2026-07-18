@@ -12,7 +12,6 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
-#include <spdlog/spdlog.h>
 #include "MsgIntf.h"
 #include "WindowIntf.h"
 #include "LayerIntf.h"

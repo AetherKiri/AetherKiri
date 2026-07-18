@@ -67,7 +67,10 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | `apps/godot_app/export_presets.cfg` | Godot export presets for macOS, iOS, Android, and Web. Signing-sensitive values may need local overrides. |
 | `apps/godot_app/aether_kiri.gdextension` | GDExtension library map for debug/release and target platforms. |
 | `apps/godot_app/scenes/main.tscn` | Main scene. Most UI is currently built by script. |
-| `apps/godot_app/scripts/main.gd` | Main app shell: home UI, settings, game detail page, loading console, renderer selection, input forwarding, performance overlay. |
+| `apps/godot_app/scripts/main.gd` | Main app shell and integration point: home/settings/game UI, renderer selection, input forwarding, and diagnostic snapshot providers. |
+| `apps/godot_app/scripts/diagnostic_session.gd` | Bounded structured events, marker windows, public Documents storage, snapshots, and ZIP export. |
+| `apps/godot_app/scripts/debug_console.gd` | Session-only in-app Overview/Events/Logs/Input/Plugins drawer and diagnostic actions. |
+| `doc/diagnostics.md` | Maintainer workflow for in-app inspection, host collection, bundle layout, and artifact investigation. |
 | `apps/godot_app/scripts/probe_config.gd` | Shared probe/test config loader. Reads `AETHERKIRI_TEST_CONFIG` and environment overrides. |
 | `apps/godot_app/scripts/smoke_test.gd` | Basic engine startup smoke probe. |
 | `apps/godot_app/scripts/step_render_probe.gd` | Click/step render probe that saves screenshots after configured actions. |
@@ -428,6 +431,14 @@ paths in the verified-games list. Keep the localized
 notes.
 
 ## Debugging Notes
+
+For hard-to-describe performance, input, rendering, or native failures, start with a [unified diagnostic session](diagnostics.md):
+
+```bash
+python3 tools/diagnose.py run android
+```
+
+Reproduce the symptom, tap **标记问题** in the app, and press Enter in the terminal. The tool creates a ZIP containing structured events, platform evidence, and a bounded summary. The individual environment variables below remain available for narrow experiments, but no longer need to be assembled manually for routine captures.
 
 Release builds do not continuously drain runtime logs or update the UI log panel
 by default. This keeps normal user builds from paying the per-frame logging/UI

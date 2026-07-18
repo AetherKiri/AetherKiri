@@ -15,6 +15,7 @@
 #include <mutex>
 #include <thread>
 #include <memory>
+#include <sstream>
 #include <vector>
 
 #include <csignal>
@@ -168,6 +169,20 @@ struct engine_handle_s {
     int psb_cache_mb = 0;
     int psb_cache_entries = 0;
   } memory_options;
+
+  struct DiagnosticState {
+    std::mutex mutex;
+    bool enabled = false;
+    uint64_t category_mask = ENGINE_DIAGNOSTIC_CATEGORY_LIFECYCLE |
+                             ENGINE_DIAGNOSTIC_CATEGORY_RENDER;
+    uint32_t slow_frame_threshold_us = 20000;
+    size_t max_events = 2000;
+    uint64_t sequence = 0;
+    uint64_t dropped = 0;
+    int64_t monotonic_offset_us = 0;
+    std::string session_id;
+    std::deque<std::string> events;
+  } diagnostics;
 };
 
 namespace {
@@ -215,6 +230,70 @@ uint64_t DurationUs(std::chrono::steady_clock::time_point begin,
   return static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::microseconds>(end - begin)
           .count());
+}
+
+uint64_t SteadyMonotonicUs() {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+uint64_t AlignedMonotonicUs(int64_t offset_us) {
+  const int64_t aligned = static_cast<int64_t>(SteadyMonotonicUs()) + offset_us;
+  return aligned > 0 ? static_cast<uint64_t>(aligned) : 0;
+}
+
+std::string JsonEscape(const std::string& value) {
+  std::string escaped;
+  escaped.reserve(value.size() + 16);
+  for (const unsigned char c : value) {
+    switch (c) {
+      case '\"': escaped += "\\\""; break;
+      case '\\': escaped += "\\\\"; break;
+      case '\b': escaped += "\\b"; break;
+      case '\f': escaped += "\\f"; break;
+      case '\n': escaped += "\\n"; break;
+      case '\r': escaped += "\\r"; break;
+      case '\t': escaped += "\\t"; break;
+      default:
+        if (c < 0x20u) {
+          char buffer[7] = {};
+          std::snprintf(buffer, sizeof(buffer), "\\u%04x", c);
+          escaped += buffer;
+        } else {
+          escaped.push_back(static_cast<char>(c));
+        }
+    }
+  }
+  return escaped;
+}
+
+uint64_t PushDiagnosticEvent(engine_handle_s* impl, const char* layer,
+                             const char* subsystem, const char* level,
+                             const char* event, uint64_t duration_us,
+                             const std::string& fields_json = "{}") {
+  if (impl == nullptr) return 0;
+  std::lock_guard<std::mutex> guard(impl->diagnostics.mutex);
+  auto& state = impl->diagnostics;
+  if (!state.enabled) return 0;
+  const uint64_t sequence = ++state.sequence;
+  while (state.events.size() >= state.max_events) {
+    state.events.pop_front();
+    ++state.dropped;
+  }
+  std::ostringstream line;
+  line << "{\"schema\":1,\"session\":\"" << JsonEscape(state.session_id)
+       << "\",\"sequence\":" << sequence
+       << ",\"monotonic_us\":" << AlignedMonotonicUs(state.monotonic_offset_us)
+       << ",\"platform\":\"native\",\"layer\":\"" << JsonEscape(layer)
+       << "\",\"subsystem\":\"" << JsonEscape(subsystem)
+       << "\",\"level\":\"" << JsonEscape(level)
+       << "\",\"event\":\"" << JsonEscape(event)
+       << "\",\"duration_us\":" << duration_us
+       << ",\"queue_dropped\":" << state.dropped
+       << ",\"fields\":" << (fields_json.empty() ? "{}" : fields_json) << "}";
+  state.events.push_back(line.str());
+  return sequence;
 }
 
 uint64_t EngineTickSpikeThresholdUs() {
@@ -565,6 +644,20 @@ void PushRuntimeSpdlogToStartupQueue(const spdlog::details::log_msg& msg) {
   line.append("] ");
   line.append(payload);
   PushStartupLog(target, line);
+  const char* diagnostic_level =
+      msg.level >= spdlog::level::err ? "error" :
+      (msg.level >= spdlog::level::warn ? "warning" : "info");
+  bool include_log = msg.level >= spdlog::level::warn;
+  {
+    std::lock_guard<std::mutex> diagnostic_guard(target->diagnostics.mutex);
+    include_log = include_log ||
+        target->diagnostics.category_mask == ENGINE_DIAGNOSTIC_CATEGORY_ALL;
+  }
+  if (include_log) {
+    PushDiagnosticEvent(target, "engine", logger.c_str(), diagnostic_level,
+                        "log", 0,
+                        "{\"message\":\"" + JsonEscape(payload) + "\"}");
+  }
 }
 
 void SetStartupState(engine_handle_s* impl, uint32_t state) {
@@ -1284,9 +1377,9 @@ engine_result_t OpenGameCore(engine_handle_t handle,
   }
   spdlog::default_logger()->flush();
 
-  // Only initialize plugin trace logger when tracing is enabled.
-  // The toggle is set via engine_set_option before engine_open_game.
-  if (PluginCallTracer::Instance().IsEnabled()) {
+  // Remember the path even while tracing is disabled so the in-app debug
+  // console can enable a bounded trace after the game has already started.
+  {
 #if defined(__EMSCRIPTEN__)
     std::string trace_path = TVPGetDefaultFileDir();
 #else
@@ -1294,7 +1387,8 @@ engine_result_t OpenGameCore(engine_handle_t handle,
 #endif
     if (!trace_path.empty() && trace_path.back() != '/') trace_path += "/";
     trace_path += "plugin_trace.log";
-    PluginCallTracer::Instance().InitLogger(trace_path);
+    PluginCallTracer::Instance().SetLogFilePath(trace_path);
+    PluginCallTracer::Instance().ResetDebugStats();
   }
 
   const bool prefer_gpu_after_startup =
@@ -2051,7 +2145,13 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   const auto after_recycle = std::chrono::steady_clock::now();
 
   auto log_tick_spike = [&](const char* frame_backend) {
-    const uint64_t threshold_us = EngineTickSpikeThresholdUs();
+    uint64_t threshold_us = EngineTickSpikeThresholdUs();
+    {
+      std::lock_guard<std::mutex> diagnostic_guard(impl->diagnostics.mutex);
+      if (impl->diagnostics.enabled && impl->diagnostics.slow_frame_threshold_us > 0) {
+        threshold_us = impl->diagnostics.slow_frame_threshold_us;
+      }
+    }
     if (threshold_us == 0) {
       return;
     }
@@ -2071,6 +2171,18 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
         DurationUs(after_draw_scene, after_recycle),
         DurationUs(after_recycle, tick_end), dispatched_inputs,
         impl->render.renderer, frame_backend);
+    std::ostringstream fields;
+    fields << "{\"tick\":" << impl->tick_count
+           << ",\"input_us\":" << DurationUs(tick_start, after_input)
+           << ",\"app_us\":" << DurationUs(after_input, after_application_run)
+           << ",\"draw_us\":" << DurationUs(after_application_run, after_draw_scene)
+           << ",\"recycle_us\":" << DurationUs(after_draw_scene, after_recycle)
+           << ",\"capture_us\":" << DurationUs(after_recycle, tick_end)
+           << ",\"inputs\":" << dispatched_inputs
+           << ",\"renderer\":\"" << JsonEscape(impl->render.renderer)
+           << "\",\"frame_backend\":\"" << JsonEscape(frame_backend) << "\"}";
+    PushDiagnosticEvent(impl, "engine", "render", "warning",
+                        "engine_tick_spike", total_us, fields.str());
   };
 
   if (TVPTerminated) {
@@ -3330,6 +3442,168 @@ engine_result_t engine_get_memory_stats(engine_handle_t handle,
   return ENGINE_RESULT_OK;
 }
 
+engine_result_t engine_get_plugin_debug_info(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written) {
+  if (out_buffer == nullptr || buffer_size == 0 || out_bytes_written == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "plugin debug output buffer is invalid");
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+
+  const auto snapshot = PluginCallTracer::Instance().GetDebugSnapshot();
+  auto append_array = [](std::ostringstream& stream,
+                         const std::vector<std::string>& items) {
+    stream << '[';
+    for (size_t index = 0; index < items.size(); ++index) {
+      if (index != 0) stream << ',';
+      stream << '"' << JsonEscape(items[index]) << '"';
+    }
+    stream << ']';
+  };
+  std::ostringstream json;
+  json << "{\"tracing_enabled\":" << (snapshot.tracingEnabled ? "true" : "false")
+       << ",\"method_calls\":" << snapshot.methodCalls
+       << ",\"property_gets\":" << snapshot.propertyGets
+       << ",\"property_sets\":" << snapshot.propertySets
+       << ",\"load_succeeded\":" << snapshot.loadSucceeded
+       << ",\"load_failed\":" << snapshot.loadFailed
+       << ",\"load_fallback\":" << snapshot.loadFallback
+       << ",\"missing_members\":" << snapshot.missingMembers
+       << ",\"loaded_plugins\":";
+  append_array(json, snapshot.loadedPlugins);
+  json << ",\"failed_plugins\":";
+  append_array(json, snapshot.failedPlugins);
+  json << ",\"fallback_plugins\":";
+  append_array(json, snapshot.fallbackPlugins);
+  json << ",\"recent_missing_members\":";
+  append_array(json, snapshot.recentMissingMembers);
+  json << '}';
+
+  const std::string payload = json.str();
+  if (payload.size() + 1u > buffer_size) {
+    *out_bytes_written = 0;
+    out_buffer[0] = '\0';
+    return SetHandleErrorAndReturnLocked(
+        impl, ENGINE_RESULT_INVALID_ARGUMENT,
+        "plugin debug output buffer is too small");
+  }
+  std::memcpy(out_buffer, payload.data(), payload.size());
+  out_buffer[payload.size()] = '\0';
+  *out_bytes_written = static_cast<uint32_t>(payload.size());
+  ClearHandleErrorLocked(impl);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_set_diagnostic_config(
+    engine_handle_t handle, const engine_diagnostic_config_t* config) {
+  if (config == nullptr || config->struct_size < sizeof(*config)) {
+    return SetThreadErrorAndReturn(
+        ENGINE_RESULT_INVALID_ARGUMENT,
+        "engine_diagnostic_config_t is null or too small");
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  {
+    std::lock_guard<std::mutex> diagnostic_guard(impl->diagnostics.mutex);
+    auto& state = impl->diagnostics;
+    state.enabled = config->enabled != 0;
+    state.category_mask = config->category_mask & ENGINE_DIAGNOSTIC_CATEGORY_ALL;
+    state.slow_frame_threshold_us = config->slow_frame_threshold_us;
+    state.max_events = std::clamp<size_t>(config->max_events, 64u, 10000u);
+    state.monotonic_offset_us = config->host_monotonic_origin_us > 0
+        ? static_cast<int64_t>(config->host_monotonic_origin_us) -
+              static_cast<int64_t>(SteadyMonotonicUs())
+        : 0;
+    state.session_id = config->session_id_utf8 != nullptr
+        ? config->session_id_utf8 : "";
+    state.sequence = 0;
+    state.dropped = 0;
+    state.events.clear();
+  }
+  if (config->enabled != 0) {
+    PushDiagnosticEvent(impl, "engine", "lifecycle", "info",
+                        "diagnostic_session_started", 0,
+                        "{\"category_mask\":" +
+                            std::to_string(config->category_mask) +
+                            ",\"slow_frame_threshold_us\":" +
+                            std::to_string(config->slow_frame_threshold_us) + "}");
+  }
+  ClearHandleErrorLocked(impl);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_mark_diagnostic_event(engine_handle_t handle,
+                                             const char* label_utf8,
+                                             uint64_t* out_sequence) {
+  if (label_utf8 == nullptr || out_sequence == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "label_utf8 and out_sequence are required");
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  bool enabled = false;
+  {
+    std::lock_guard<std::mutex> diagnostic_guard(impl->diagnostics.mutex);
+    enabled = impl->diagnostics.enabled;
+  }
+  if (!enabled) {
+    return SetHandleErrorAndReturnLocked(
+        impl, ENGINE_RESULT_INVALID_STATE, "diagnostic session is not enabled");
+  }
+  *out_sequence = PushDiagnosticEvent(
+      impl, "engine", "lifecycle", "info", "issue_marker", 0,
+      "{\"label\":\"" + JsonEscape(label_utf8) + "\"}");
+  ClearHandleErrorLocked(impl);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_drain_diagnostic_events(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written) {
+  if (out_bytes_written == nullptr || out_buffer == nullptr || buffer_size == 0) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "diagnostic output buffer is invalid");
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  uint32_t written = 0;
+  {
+    std::lock_guard<std::mutex> diagnostic_guard(impl->diagnostics.mutex);
+    auto& events = impl->diagnostics.events;
+    while (!events.empty()) {
+      const std::string& line = events.front();
+      const uint32_t needed = static_cast<uint32_t>(line.size() + 1u);
+      if (written + needed >= buffer_size) break;
+      std::memcpy(out_buffer + written, line.data(), line.size());
+      written += static_cast<uint32_t>(line.size());
+      out_buffer[written++] = '\n';
+      events.pop_front();
+    }
+  }
+  out_buffer[std::min<uint32_t>(written, buffer_size - 1u)] = '\0';
+  *out_bytes_written = written;
+  ClearHandleErrorLocked(impl);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
 const char* engine_get_last_error(engine_handle_t handle) {
   if (handle == nullptr) {
     return g_thread_error.c_str();
@@ -3349,9 +3623,13 @@ const char* engine_get_last_error(engine_handle_t handle) {
 
 #else
 
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <chrono>
 #include <deque>
 #include <new>
+#include <sstream>
 #include <string>
 #include <unordered_set>
 #include <mutex>
@@ -3365,6 +3643,13 @@ struct engine_handle_s {
   uint64_t frame_serial = 0;
   uint32_t startup_state = ENGINE_STARTUP_STATE_IDLE;
   std::deque<std::string> startup_logs;
+  bool diagnostics_enabled = false;
+  uint64_t diagnostic_sequence = 0;
+  uint64_t diagnostic_dropped = 0;
+  size_t diagnostic_max_events = 2000;
+  int64_t diagnostic_monotonic_offset_us = 0;
+  std::string diagnostic_session;
+  std::deque<std::string> diagnostic_events;
 };
 
 namespace {
@@ -3414,6 +3699,51 @@ engine_result_t ValidateHandleLocked(engine_handle_t handle,
 
 void SetHandleErrorLocked(engine_handle_s* impl, const char* message) {
   impl->last_error = (message != nullptr) ? message : "";
+}
+
+std::string StubJsonEscape(const std::string& value) {
+  std::string result;
+  for (const unsigned char c : value) {
+    if (c == '\"') result += "\\\"";
+    else if (c == '\\') result += "\\\\";
+    else if (c == '\b') result += "\\b";
+    else if (c == '\f') result += "\\f";
+    else if (c == '\n') result += "\\n";
+    else if (c == '\r') result += "\\r";
+    else if (c == '\t') result += "\\t";
+    else if (c < 0x20u) {
+      char buffer[7] = {};
+      std::snprintf(buffer, sizeof(buffer), "\\u%04x", c);
+      result += buffer;
+    } else result.push_back(static_cast<char>(c));
+  }
+  return result;
+}
+
+uint64_t StubPushDiagnostic(engine_handle_s* impl, const char* event,
+                            const std::string& fields) {
+  if (!impl->diagnostics_enabled) return 0;
+  const uint64_t sequence = ++impl->diagnostic_sequence;
+  while (impl->diagnostic_events.size() >= impl->diagnostic_max_events) {
+    impl->diagnostic_events.pop_front();
+    ++impl->diagnostic_dropped;
+  }
+  const auto raw_now = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  const auto now = std::max<int64_t>(
+      0, raw_now + impl->diagnostic_monotonic_offset_us);
+  std::ostringstream line;
+  line << "{\"schema\":1,\"session\":\""
+       << StubJsonEscape(impl->diagnostic_session)
+       << "\",\"sequence\":" << sequence
+       << ",\"monotonic_us\":" << now
+       << ",\"platform\":\"stub\",\"layer\":\"engine\""
+       << ",\"subsystem\":\"lifecycle\",\"level\":\"info\""
+       << ",\"event\":\"" << event << "\",\"duration_us\":0"
+       << ",\"queue_dropped\":" << impl->diagnostic_dropped
+       << ",\"fields\":" << fields << "}";
+  impl->diagnostic_events.push_back(line.str());
+  return sequence;
 }
 
 }  // namespace
@@ -4051,6 +4381,121 @@ engine_result_t engine_get_memory_stats(engine_handle_t handle,
 
   std::memset(out_stats, 0, sizeof(*out_stats));
   out_stats->struct_size = sizeof(engine_memory_stats_t);
+  impl->last_error.clear();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_get_plugin_debug_info(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written) {
+  if (out_buffer == nullptr || buffer_size == 0 || out_bytes_written == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "plugin debug output buffer is invalid");
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) return result;
+  static constexpr const char* payload =
+      "{\"tracing_enabled\":false,\"method_calls\":0,\"property_gets\":0,"
+      "\"property_sets\":0,\"load_succeeded\":0,\"load_failed\":0,"
+      "\"load_fallback\":0,\"missing_members\":0,\"loaded_plugins\":[],"
+      "\"failed_plugins\":[],\"fallback_plugins\":[],"
+      "\"recent_missing_members\":[]}";
+  const size_t length = std::strlen(payload);
+  if (length + 1u > buffer_size) {
+    *out_bytes_written = 0;
+    out_buffer[0] = '\0';
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "plugin debug output buffer is too small");
+  }
+  std::memcpy(out_buffer, payload, length + 1u);
+  *out_bytes_written = static_cast<uint32_t>(length);
+  impl->last_error.clear();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_set_diagnostic_config(
+    engine_handle_t handle, const engine_diagnostic_config_t* config) {
+  if (config == nullptr || config->struct_size < sizeof(*config)) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "engine_diagnostic_config_t is invalid");
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  impl->diagnostics_enabled = config->enabled != 0;
+  impl->diagnostic_sequence = 0;
+  impl->diagnostic_dropped = 0;
+  impl->diagnostic_max_events = std::clamp<size_t>(config->max_events, 64u, 10000u);
+  const auto raw_now = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  impl->diagnostic_monotonic_offset_us = config->host_monotonic_origin_us > 0
+      ? static_cast<int64_t>(config->host_monotonic_origin_us) - raw_now
+      : 0;
+  impl->diagnostic_session = config->session_id_utf8 != nullptr
+      ? config->session_id_utf8 : "";
+  impl->diagnostic_events.clear();
+  if (impl->diagnostics_enabled) {
+    StubPushDiagnostic(impl, "diagnostic_session_started", "{}");
+  }
+  impl->last_error.clear();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_mark_diagnostic_event(engine_handle_t handle,
+                                             const char* label_utf8,
+                                             uint64_t* out_sequence) {
+  if (label_utf8 == nullptr || out_sequence == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "label_utf8 and out_sequence are required");
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (!impl->diagnostics_enabled) {
+    SetHandleErrorLocked(impl, "diagnostic session is not enabled");
+    return ENGINE_RESULT_INVALID_STATE;
+  }
+  *out_sequence = StubPushDiagnostic(
+      impl, "issue_marker",
+      "{\"label\":\"" + StubJsonEscape(label_utf8) + "\"}");
+  impl->last_error.clear();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_drain_diagnostic_events(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written) {
+  if (out_bytes_written == nullptr || out_buffer == nullptr || buffer_size == 0) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "diagnostic output buffer is invalid");
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  uint32_t written = 0;
+  while (!impl->diagnostic_events.empty()) {
+    const std::string& line = impl->diagnostic_events.front();
+    const uint32_t needed = static_cast<uint32_t>(line.size() + 1u);
+    if (written + needed >= buffer_size) break;
+    std::memcpy(out_buffer + written, line.data(), line.size());
+    written += static_cast<uint32_t>(line.size());
+    out_buffer[written++] = '\n';
+    impl->diagnostic_events.pop_front();
+  }
+  out_buffer[std::min<uint32_t>(written, buffer_size - 1u)] = '\0';
+  *out_bytes_written = written;
   impl->last_error.clear();
   SetThreadError(nullptr);
   return ENGINE_RESULT_OK;

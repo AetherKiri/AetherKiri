@@ -1,0 +1,747 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Build Android App
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      GODOT_RELEASE: 4.7-stable
+      GODOT_TEMPLATE_VERSION: 4.7.stable
+      ANDROID_NDK_VERSION: 28.1.13356709
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Install Build Systems
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd ccache jq
+
+      - name: Restore ccache
+        id: restore-ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-android-ccache
+
+      - name: Setup ccache config
+        run: |
+          ccache --max-size=1000M
+          ccache -z
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Godot export tools
+        run: |
+          set -euo pipefail
+          mkdir -p .godot "${RUNNER_TEMP}/godot-templates"
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "${RUNNER_TEMP}/godot-linux.zip" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          unzip -tq "${RUNNER_TEMP}/godot-linux.zip"
+          unzip -q "${RUNNER_TEMP}/godot-linux.zip" -d .godot
+          godot_bin="$(find .godot -maxdepth 1 -type f -name 'Godot*_linux.x86_64' | head -1)"
+          if [[ -z "$godot_bin" ]]; then
+            echo "Godot Linux binary not found after unzip" >&2
+            exit 1
+          fi
+          chmod +x "$godot_bin"
+
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "${RUNNER_TEMP}/godot-export-templates.tpz" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          unzip -tq "${RUNNER_TEMP}/godot-export-templates.tpz"
+          unzip -q "${RUNNER_TEMP}/godot-export-templates.tpz" -d "${RUNNER_TEMP}/godot-templates"
+          template_dir="${HOME}/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+          mkdir -p "${template_dir}"
+          cp -a "${RUNNER_TEMP}/godot-templates/templates/." "${template_dir}/"
+
+          echo "GODOT_BIN=${GITHUB_WORKSPACE}/${godot_bin}" >> "$GITHUB_ENV"
+          echo "GODOT_TEMPLATE_DIR=${template_dir}" >> "$GITHUB_ENV"
+
+      - name: Set up Android SDK and pinned NDK
+        run: |
+          set -euo pipefail
+          if [[ -z "${ANDROID_HOME:-}" ]]; then
+            if [[ -d "$HOME/Android/Sdk" ]]; then
+              echo "ANDROID_HOME=$HOME/Android/Sdk" >> "$GITHUB_ENV"
+            elif [[ -d "/usr/local/lib/android/sdk" ]]; then
+              echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+            fi
+          else
+            echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          fi
+
+          sdk_root="${ANDROID_HOME:-${HOME}/Android/Sdk}"
+          ndk_root="${sdk_root}/ndk/${ANDROID_NDK_VERSION}"
+          if [[ ! -f "${ndk_root}/build/cmake/android.toolchain.cmake" ]]; then
+            sdkmanager_bin="$(find "${sdk_root}/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort | tail -1)"
+            if [[ -z "${sdkmanager_bin}" ]]; then
+              echo "Android sdkmanager not found under ${sdk_root}" >&2
+              exit 1
+            fi
+            set +o pipefail
+            yes | "${sdkmanager_bin}" "ndk;${ANDROID_NDK_VERSION}"
+            sdkmanager_status=${PIPESTATUS[1]}
+            set -o pipefail
+            if [[ "${sdkmanager_status}" -ne 0 ]]; then
+              exit "${sdkmanager_status}"
+            fi
+          fi
+          if [[ ! -f "${ndk_root}/build/cmake/android.toolchain.cmake" ]]; then
+            echo "Pinned Android NDK ${ANDROID_NDK_VERSION} was not installed" >&2
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=${ndk_root}" >> "$GITHUB_ENV"
+
+      - name: Restore vcpkg cache
+        id: restore-vcpkg
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .devtools/vcpkg
+            ~/.cache/vcpkg/archives
+          key: ${{ runner.os }}-android-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          restore-keys: |
+            ${{ runner.os }}-android-vcpkg-
+
+      - name: Bootstrap vcpkg
+        run: |
+          set -euo pipefail
+          if [[ -d ".devtools/vcpkg" && ! -d ".devtools/vcpkg/.git" ]]; then
+            rm -rf .devtools/vcpkg
+          fi
+          if [[ ! -d ".devtools/vcpkg/.git" ]]; then
+            mkdir -p .devtools
+            git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
+          fi
+          if [[ ! -x ".devtools/vcpkg/vcpkg" ]]; then
+            (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
+          fi
+          echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure Android signing
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_KEYSTORE_ALIAS: ${{ secrets.ANDROID_RELEASE_KEYSTORE_ALIAS }}
+          ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          signing_dir="${RUNNER_TEMP}/android-signing"
+          mkdir -p "$signing_dir"
+
+          release_secret_count=0
+          [[ -n "${ANDROID_RELEASE_KEYSTORE_BASE64}" ]] && release_secret_count=$((release_secret_count + 1))
+          [[ -n "${ANDROID_RELEASE_KEYSTORE_ALIAS}" ]] && release_secret_count=$((release_secret_count + 1))
+          [[ -n "${ANDROID_RELEASE_KEYSTORE_PASSWORD}" ]] && release_secret_count=$((release_secret_count + 1))
+
+          if [[ "$release_secret_count" -eq 0 ]]; then
+            echo "Android release signing secrets are not configured; building unsigned release APK."
+            echo "ANDROID_RELEASE_SIGNED=0" >> "$GITHUB_ENV"
+            {
+              echo "### Android signing"
+              echo ""
+              echo "Release signing secrets were not available, so CI built an unsigned release APK."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [[ "$release_secret_count" -ne 3 ]]; then
+            echo "Android release signing secrets are incomplete. Configure all or none of ANDROID_RELEASE_KEYSTORE_BASE64, ANDROID_RELEASE_KEYSTORE_ALIAS, and ANDROID_RELEASE_KEYSTORE_PASSWORD." >&2
+            exit 1
+          fi
+
+          release_keystore="${signing_dir}/release.keystore"
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 -d > "$release_keystore"
+          chmod 600 "$release_keystore"
+          keytool -list \
+            -keystore "$release_keystore" \
+            -storepass "$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
+            -alias "$ANDROID_RELEASE_KEYSTORE_ALIAS" >/dev/null
+
+          {
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$release_keystore"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=$ANDROID_RELEASE_KEYSTORE_ALIAS"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$release_keystore"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$ANDROID_RELEASE_KEYSTORE_ALIAS"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+            echo "ANDROID_RELEASE_SIGNED=1"
+          } >> "$GITHUB_ENV"
+          perl -0pi -e 's/(name="Android Release".*?package\/signed=)false/${1}true/s' apps/godot_app/export_presets.cfg
+
+      - name: Build Android Release
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          export NDK_CCACHE=ccache
+          ./build.sh android release --jobs=4
+
+      - name: Build Android Debug
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          export NDK_CCACHE=ccache
+          ./build.sh android debug --jobs=4
+
+      - name: Verify exported APKs
+        run: |
+          set -euo pipefail
+          test -f out/godot/android/release/AetherKiri-release.apk
+          test -f out/godot/android/debug/AetherKiri-debug.apk
+
+      - name: Upload Release APK
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-Android-APK
+          path: out/godot/android/release/AetherKiri-release.apk
+          retention-days: 7
+
+      - name: Upload Debug APK
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-Android-Debug-APK
+          path: out/godot/android/debug/AetherKiri-debug.apk
+          retention-days: 7
+
+      - name: Save vcpkg cache
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .devtools/vcpkg
+            ~/.cache/vcpkg/archives
+          key: ${{ runner.os }}-android-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+
+      - name: Save ccache
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-android-ccache
+
+  ios:
+    name: Build iOS App
+    runs-on: macos-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      GODOT_RELEASE: 4.7-stable
+      GODOT_TEMPLATE_VERSION: 4.7.stable
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Install Build Systems
+        run: |
+          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache
+          echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+
+      - name: Install Godot export tools
+        run: |
+          set -euo pipefail
+          mkdir -p .godot "${RUNNER_TEMP}/godot-templates"
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "${RUNNER_TEMP}/godot-macos.zip" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_macos.universal.zip"
+          unzip -tq "${RUNNER_TEMP}/godot-macos.zip"
+          unzip -q "${RUNNER_TEMP}/godot-macos.zip" -d .godot
+          chmod +x ".godot/Godot.app/Contents/MacOS/Godot"
+
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "${RUNNER_TEMP}/godot-export-templates.tpz" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          unzip -tq "${RUNNER_TEMP}/godot-export-templates.tpz"
+          unzip -q "${RUNNER_TEMP}/godot-export-templates.tpz" -d "${RUNNER_TEMP}/godot-templates"
+          template_dir="${HOME}/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+          mkdir -p "${template_dir}"
+          cp -a "${RUNNER_TEMP}/godot-templates/templates/." "${template_dir}/"
+
+          echo "GODOT_BIN=${GITHUB_WORKSPACE}/.godot/Godot.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
+          echo "GODOT_EXPORT_TEMPLATE=${template_dir}/ios.zip" >> "$GITHUB_ENV"
+
+      - name: Restore ccache
+        id: restore-ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ios-ccache
+
+      - name: Setup ccache config
+        run: |
+          ccache --max-size=1000M
+          ccache -z
+
+      - name: Restore vcpkg cache
+        id: restore-vcpkg
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .devtools/vcpkg
+            ~/.cache/vcpkg/archives
+          key: ${{ runner.os }}-ios-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          restore-keys: |
+            ${{ runner.os }}-ios-vcpkg-
+
+      - name: Bootstrap vcpkg
+        run: |
+          set -euo pipefail
+          if [[ -d ".devtools/vcpkg" && ! -f ".devtools/vcpkg/.vcpkg-root" ]]; then
+            rm -rf .devtools/vcpkg
+          fi
+          if [[ ! -d ".devtools/vcpkg/.git" ]]; then
+            mkdir -p .devtools
+            git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
+          fi
+          if [[ ! -x ".devtools/vcpkg/vcpkg" ]]; then
+            (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
+          fi
+          echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Build iOS Release
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ./build.sh ios release --jobs=4 --package-ipa 2>&1 | tee "${RUNNER_TEMP}/ios-release-build.log"
+          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/ios-release-build.log"; then
+            echo "Godot iOS release export logged script or GDExtension load errors." >&2
+            exit 1
+          fi
+
+      - name: Build iOS Debug
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ./build.sh ios debug --jobs=4 --package-ipa 2>&1 | tee "${RUNNER_TEMP}/ios-debug-build.log"
+          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/ios-debug-build.log"; then
+            echo "Godot iOS debug export logged script or GDExtension load errors." >&2
+            exit 1
+          fi
+
+      - name: Verify exported Xcode project and IPA
+        run: |
+          set -euo pipefail
+          for build_type in release debug; do
+            if [[ ! -d "out/godot/ios/${build_type}/AetherKiri.xcodeproj" ]]; then
+              echo "Godot iOS ${build_type} Xcode project not found" >&2
+              exit 1
+            fi
+            if [[ ! -d "out/godot/ios/${build_type}/AetherKiri" ]]; then
+              echo "Godot iOS ${build_type} project sources not found" >&2
+              exit 1
+            fi
+            build_type_cap="$(echo "${build_type:0:1}" | tr '[:lower:]' '[:upper:]')${build_type:1}"
+            if [[ ! -f "out/godot/ios/${build_type}/AetherKiri-${build_type_cap}-Unsigned.ipa" ]]; then
+              echo "Godot iOS ${build_type} unsigned IPA not found" >&2
+              exit 1
+            fi
+          done
+
+      - name: Upload Release Xcode Project
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-iOS-XcodeProject
+          path: |
+            out/godot/ios/release/AetherKiri.xcodeproj
+            out/godot/ios/release/AetherKiri
+          retention-days: 7
+
+      - name: Upload Debug Xcode Project
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-iOS-Debug-XcodeProject
+          path: |
+            out/godot/ios/debug/AetherKiri.xcodeproj
+            out/godot/ios/debug/AetherKiri
+          retention-days: 7
+
+      - name: Upload Release Unsigned IPA
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-iOS-Unsigned-IPA
+          path: out/godot/ios/release/AetherKiri-Release-Unsigned.ipa
+          retention-days: 7
+
+      - name: Upload Debug Unsigned IPA
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-iOS-Debug-Unsigned-IPA
+          path: out/godot/ios/debug/AetherKiri-Debug-Unsigned.ipa
+          retention-days: 7
+
+      - name: Save vcpkg cache
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .devtools/vcpkg
+            ~/.cache/vcpkg/archives
+          key: ${{ runner.os }}-ios-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+
+      - name: Save ccache
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ios-ccache
+
+  macos:
+    name: Build macOS App
+    runs-on: macos-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      GODOT_RELEASE: 4.7-stable
+      GODOT_TEMPLATE_VERSION: 4.7.stable
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Install Build Systems
+        run: |
+          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache
+          echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+
+      - name: Install Godot export tools
+        run: |
+          set -euo pipefail
+          mkdir -p .godot "${RUNNER_TEMP}/godot-templates"
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "${RUNNER_TEMP}/godot-macos.zip" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_macos.universal.zip"
+          unzip -tq "${RUNNER_TEMP}/godot-macos.zip"
+          unzip -q "${RUNNER_TEMP}/godot-macos.zip" -d .godot
+          chmod +x ".godot/Godot.app/Contents/MacOS/Godot"
+
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "${RUNNER_TEMP}/godot-export-templates.tpz" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          unzip -tq "${RUNNER_TEMP}/godot-export-templates.tpz"
+          unzip -q "${RUNNER_TEMP}/godot-export-templates.tpz" -d "${RUNNER_TEMP}/godot-templates"
+          template_dir="${HOME}/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+          mkdir -p "${template_dir}"
+          cp -a "${RUNNER_TEMP}/godot-templates/templates/." "${template_dir}/"
+
+          echo "GODOT_BIN=${GITHUB_WORKSPACE}/.godot/Godot.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
+          echo "GODOT_EXPORT_TEMPLATE=${template_dir}/macos.zip" >> "$GITHUB_ENV"
+
+      - name: Restore ccache
+        id: restore-ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-macos-ccache
+
+      - name: Setup ccache config
+        run: |
+          ccache --max-size=1000M
+          ccache -z
+
+      - name: Restore vcpkg cache
+        id: restore-vcpkg
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .devtools/vcpkg
+            ~/.cache/vcpkg/archives
+          key: ${{ runner.os }}-macos-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          restore-keys: |
+            ${{ runner.os }}-macos-vcpkg-
+
+      - name: Bootstrap vcpkg
+        run: |
+          set -euo pipefail
+          if [[ -d ".devtools/vcpkg" && ! -f ".devtools/vcpkg/.vcpkg-root" ]]; then
+            rm -rf .devtools/vcpkg
+          fi
+          if [[ ! -d ".devtools/vcpkg/.git" ]]; then
+            mkdir -p .devtools
+            git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
+          fi
+          if [[ ! -x ".devtools/vcpkg/vcpkg" ]]; then
+            (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
+          fi
+          echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Build macOS Release
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ./build.sh macos release --jobs=4
+
+      - name: Build macOS Debug
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ./build.sh macos debug --jobs=4
+
+      - name: Verify built .app
+        run: |
+          set -euo pipefail
+          for build_type in release debug; do
+            APP_PATH="out/godot/macos/${build_type}/AetherKiri.app"
+            if [[ ! -d "$APP_PATH" ]]; then
+              echo "Built Godot ${build_type} .app bundle not found: $APP_PATH" >&2
+              exit 1
+            fi
+            codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          done
+
+      - name: Upload Release App
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-macOS
+          path: out/godot/macos/release/
+          retention-days: 7
+
+      - name: Upload Debug App
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-macOS-Debug
+          path: out/godot/macos/debug/
+          retention-days: 7
+
+      - name: Save vcpkg cache
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .devtools/vcpkg
+            ~/.cache/vcpkg/archives
+          key: ${{ runner.os }}-macos-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+
+      - name: Save ccache
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-macos-ccache
+
+  web:
+    name: Build Web App
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      EMSDK_VERSION: 4.0.15
+      GODOT_RELEASE: 4.7-stable
+      GODOT_TEMPLATE_VERSION: 4.7.stable
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Install Build Systems
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd ccache jq python3
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Restore Emscripten cache
+        id: restore-emsdk
+        uses: actions/cache/restore@v5
+        with:
+          path: .devtools/emsdk
+          key: ${{ runner.os }}-emsdk-${{ env.EMSDK_VERSION }}
+
+      - name: Install Emscripten
+        run: |
+          set -euo pipefail
+          mkdir -p .devtools
+          if [[ ! -d ".devtools/emsdk/.git" ]]; then
+            rm -rf .devtools/emsdk
+            git clone https://github.com/emscripten-core/emsdk.git .devtools/emsdk
+          fi
+          .devtools/emsdk/emsdk install "$EMSDK_VERSION"
+          .devtools/emsdk/emsdk activate "$EMSDK_VERSION"
+          {
+            echo "EMSDK=${GITHUB_WORKSPACE}/.devtools/emsdk"
+            echo "EMSCRIPTEN_ROOT=${GITHUB_WORKSPACE}/.devtools/emsdk/upstream/emscripten"
+            echo "EMSDK_PYTHON=$(command -v python3)"
+          } >> "$GITHUB_ENV"
+          {
+            echo "${GITHUB_WORKSPACE}/.devtools/emsdk"
+            echo "${GITHUB_WORKSPACE}/.devtools/emsdk/upstream/emscripten"
+          } >> "$GITHUB_PATH"
+
+      - name: Install Godot export tools
+        run: |
+          set -euo pipefail
+          mkdir -p .godot "${RUNNER_TEMP}/godot-templates"
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "${RUNNER_TEMP}/godot-linux.zip" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          unzip -tq "${RUNNER_TEMP}/godot-linux.zip"
+          unzip -q "${RUNNER_TEMP}/godot-linux.zip" -d .godot
+          godot_bin="$(find .godot -maxdepth 1 -type f -name 'Godot*_linux.x86_64' | head -1)"
+          if [[ -z "$godot_bin" ]]; then
+            echo "Godot Linux binary not found after unzip" >&2
+            exit 1
+          fi
+          chmod +x "$godot_bin"
+
+          curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "${RUNNER_TEMP}/godot-export-templates.tpz" \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          unzip -tq "${RUNNER_TEMP}/godot-export-templates.tpz"
+          unzip -q "${RUNNER_TEMP}/godot-export-templates.tpz" -d "${RUNNER_TEMP}/godot-templates"
+          template_dir="${HOME}/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+          mkdir -p "$template_dir"
+          cp -a "${RUNNER_TEMP}/godot-templates/templates/." "$template_dir/"
+
+          {
+            echo "GODOT_BIN=${GITHUB_WORKSPACE}/${godot_bin}"
+            echo "GODOT_TEMPLATE_DIR=${template_dir}"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore ccache
+        id: restore-ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-web-ccache
+
+      - name: Setup ccache config
+        run: |
+          ccache --max-size=1000M
+          ccache -z
+
+      - name: Restore vcpkg cache
+        id: restore-vcpkg
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .devtools/vcpkg
+            ~/.cache/vcpkg/archives
+          key: ${{ runner.os }}-web-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          restore-keys: |
+            ${{ runner.os }}-web-vcpkg-
+
+      - name: Bootstrap vcpkg
+        run: |
+          set -euo pipefail
+          if [[ -d ".devtools/vcpkg" && ! -f ".devtools/vcpkg/.vcpkg-root" ]]; then
+            rm -rf .devtools/vcpkg
+          fi
+          if [[ ! -d ".devtools/vcpkg/.git" ]]; then
+            mkdir -p .devtools
+            git clone https://github.com/microsoft/vcpkg.git .devtools/vcpkg
+          fi
+          if [[ ! -x ".devtools/vcpkg/vcpkg" ]]; then
+            (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
+          fi
+          echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Typecheck Web scripts
+        run: npm run typecheck
+
+      - name: Build Web Release
+        run: |
+          set -euo pipefail
+          source .devtools/emsdk/emsdk_env.sh
+          chmod +x ./build.sh
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          ./build.sh web release --jobs=4 2>&1 | tee "${RUNNER_TEMP}/web-build.log"
+          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/web-build.log"; then
+            echo "Godot Web export logged script or GDExtension load errors." >&2
+            exit 1
+          fi
+
+      - name: Verify Web export
+        run: |
+          set -euo pipefail
+          test -f out/godot/web/release/index.html
+          test -f out/godot/web/release/index.wasm
+          test -f out/godot/web/release/index.pck
+          test -f out/godot/web/release/live2d/aetherkiri-live2d-bridge.js
+          node --check build/web_export_local_picker.js
+          node --check build/web_export_range_fs.js
+          node --check build/patch_web_export.mjs
+
+      - name: Upload Artifact
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: AetherKiri-Web
+          path: out/godot/web/release
+          retention-days: 7
+
+      - name: Save vcpkg cache
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .devtools/vcpkg
+            ~/.cache/vcpkg/archives
+          key: ${{ runner.os }}-web-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+
+      - name: Save Emscripten cache
+        if: success() && github.event_name != 'pull_request' && steps.restore-emsdk.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v5
+        with:
+          path: .devtools/emsdk
+          key: ${{ runner.os }}-emsdk-${{ env.EMSDK_VERSION }}
+
+      - name: Save ccache
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-web-ccache

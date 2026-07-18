@@ -27,6 +27,7 @@
 
 static JavaVM* g_javaVM = nullptr;
 static std::mutex g_jvm_mutex;
+static bool g_jvm_recovery_attempted = false;
 
 namespace {
 
@@ -67,6 +68,8 @@ JavaVM* krkr_GetJavaVM() {
     {
         std::lock_guard<std::mutex> lock(g_jvm_mutex);
         if (g_javaVM) return g_javaVM;
+        if (g_jvm_recovery_attempted) return nullptr;
+        g_jvm_recovery_attempted = true;
     }
 
     JavaVM* vm = RecoverJavaVMFromRuntime();
@@ -75,6 +78,7 @@ JavaVM* krkr_GetJavaVM() {
     {
         std::lock_guard<std::mutex> lock(g_jvm_mutex);
         g_javaVM = vm;
+        g_jvm_recovery_attempted = true;
     }
     krkr::JniHelper::setJavaVM(vm);
     return vm;
@@ -143,6 +147,7 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
     {
         std::lock_guard<std::mutex> lock(g_jvm_mutex);
         g_javaVM = vm;
+        g_jvm_recovery_attempted = true;
     }
 
     // Also set JavaVM for the KrkrJniHelper (used by AndroidUtils.cpp)

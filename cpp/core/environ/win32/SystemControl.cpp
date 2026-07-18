@@ -174,13 +174,33 @@ void tTVPSystemControl::RunMemoryGovernor(uint32_t tick) {
 #endif
 
     const tjs_int base_graphic_limit_mb =
+#ifdef __ANDROID__
+        // Android UI screens commonly reuse dozens of decoded RGBA assets.
+        // Keep the normal cache ceiling when memory is healthy; pressure
+        // levels below still shrink it aggressively.
+        TVPClampInt(budget_mb / (MemoryProfile ? 10 : 12), 32,
+                    MemoryProfile ? 96 : 256);
+#else
         TVPClampInt(budget_mb / (MemoryProfile ? 10 : 12), 16,
                     MemoryProfile ? 64 : 96);
+#endif
     tjs_int target_graphic_limit_mb = base_graphic_limit_mb;
     if(pressure == 1)
-        target_graphic_limit_mb = TVPClampInt(base_graphic_limit_mb * 2 / 3, 24, 64);
+#ifdef __ANDROID__
+        target_graphic_limit_mb =
+            TVPClampInt(base_graphic_limit_mb * 2 / 3, 48, 160);
+#else
+        target_graphic_limit_mb =
+            TVPClampInt(base_graphic_limit_mb * 2 / 3, 24, 64);
+#endif
     else if(pressure >= 2)
-        target_graphic_limit_mb = TVPClampInt(base_graphic_limit_mb / 3, 24, 48);
+#ifdef __ANDROID__
+        target_graphic_limit_mb =
+            TVPClampInt(base_graphic_limit_mb / 3, 32, 96);
+#else
+        target_graphic_limit_mb =
+            TVPClampInt(base_graphic_limit_mb / 3, 24, 48);
+#endif
 
     const tjs_uint64 target_graphic_bytes =
         static_cast<tjs_uint64>(target_graphic_limit_mb) * 1024ULL * 1024ULL;
@@ -230,9 +250,11 @@ void tTVPSystemControl::RunMemoryGovernor(uint32_t tick) {
         static_cast<uint32_t>(MemoryProfile ? 20000 : 40000);
     if(pressure == 0 && tick - LastIdleCompactTick >= idle_compact_interval) {
         LastIdleCompactTick = tick;
+#ifndef __ANDROID__
         TVPDeliverCompactEvent(TVP_COMPACT_LEVEL_DEACTIVATE);
 #ifdef __APPLE__
         malloc_zone_pressure_relief(nullptr, 0);
+#endif
 #endif
     }
 
@@ -541,6 +563,7 @@ void tTVPSystemControl::SystemWatchTimerTimer() {
         win->TickBeat();
     }
 
+#ifndef __ANDROID__
     if(!ContinuousEventCalling && tick - LastCompactedTick > 4000) {
         // idle state over 4 sec.
         LastCompactedTick = tick;
@@ -551,6 +574,7 @@ void tTVPSystemControl::SystemWatchTimerTimer() {
         LastCompactedTick = tick;
         TVPDeliverCompactEvent(TVP_COMPACT_LEVEL_IDLE);
     }
+#endif
 
     RunMemoryGovernor(tick);
 

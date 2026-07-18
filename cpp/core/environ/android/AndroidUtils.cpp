@@ -29,6 +29,7 @@
 #include "RenderManager.h"
 #include <sys/stat.h>
 #include <cerrno>
+#include <cstdio>
 
 using JniHelper = krkr::JniHelper;
 using JniMethodInfo = krkr::JniHelper::MethodInfo;
@@ -51,6 +52,46 @@ void DeleteLocalRefIf(JNIEnv *env, jobject ref) {
     }
 }
 
+tjs_int ReadProcMemAvailableMB() {
+    FILE *file = std::fopen("/proc/meminfo", "r");
+    if(!file)
+        return -1;
+    char line[256];
+    long mem_available_kb = -1;
+    long mem_free_kb = -1;
+    while(std::fgets(line, sizeof(line), file)) {
+        long value = 0;
+        if(std::sscanf(line, "MemAvailable: %ld kB", &value) == 1) {
+            mem_available_kb = value;
+            break;
+        }
+        if(std::sscanf(line, "MemFree: %ld kB", &value) == 1)
+            mem_free_kb = value;
+    }
+    std::fclose(file);
+    const long available_kb =
+        mem_available_kb >= 0 ? mem_available_kb : mem_free_kb;
+    return available_kb >= 0
+               ? static_cast<tjs_int>(available_kb / 1024)
+               : -1;
+}
+
+tjs_int ReadProcSelfRssMB() {
+    FILE *file = std::fopen("/proc/self/statm", "r");
+    if(!file)
+        return -1;
+    unsigned long total_pages = 0;
+    unsigned long resident_pages = 0;
+    const int read = std::fscanf(file, "%lu %lu", &total_pages,
+                                 &resident_pages);
+    std::fclose(file);
+    if(read != 2)
+        return -1;
+    return static_cast<tjs_int>(
+        resident_pages * static_cast<unsigned long>(getpagesize()) /
+        (1024UL * 1024UL));
+}
+
 } // namespace
 
 // Declared in android_jni_bridge.cpp; provides the host Application Context
@@ -63,48 +104,17 @@ void TVPPrintLog(const char *str) {
     __android_log_print(ANDROID_LOG_INFO, "kr2 debug info", "%s", str);
 }
 
-static tjs_uint32 _lastMemoryInfoQuery = 0;
-static tjs_int _availMemory, usedMemory;
-static void updateMemoryInfo() {
-    if(TVPGetRoughTickCount32() - _lastMemoryInfoQuery > 3000) { // freq in 3s
-
-        JniMethodInfo methodInfo;
-        if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath,
-                                          "updateMemoryInfo", "()V")) {
-            methodInfo.env->CallStaticVoidMethod(methodInfo.classID,
-                                                 methodInfo.methodID);
-            methodInfo.env->DeleteLocalRef(methodInfo.classID);
-        }
-
-        if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath,
-                                          "getAvailMemory", "()J")) {
-            _availMemory = methodInfo.env->CallStaticLongMethod(
-                               methodInfo.classID, methodInfo.methodID) /
-                (1024 * 1024);
-            methodInfo.env->DeleteLocalRef(methodInfo.classID);
-        }
-
-        if(JniHelper::getStaticMethodInfo(methodInfo, KR2ActJavaPath,
-                                          "getUsedMemory", "()J")) {
-            // in kB
-            usedMemory = methodInfo.env->CallStaticLongMethod(
-                             methodInfo.classID, methodInfo.methodID) /
-                1024;
-            methodInfo.env->DeleteLocalRef(methodInfo.classID);
-        }
-
-        _lastMemoryInfoQuery = TVPGetRoughTickCount32();
-    }
-}
-
 tjs_int TVPGetSystemFreeMemory() {
-    updateMemoryInfo();
-    return _availMemory;
+    // The embedded Godot host does not use KR2Activity. Looking up its static
+    // memory helpers from the render thread periodically crosses JNI (and may
+    // repeatedly miss the class), producing visible frame stalls. /proc is
+    // available to the app process and gives the values needed by the memory
+    // governor without touching Java.
+    return ReadProcMemAvailableMB();
 }
 
 tjs_int TVPGetSelfUsedMemory() {
-    updateMemoryInfo();
-    return usedMemory;
+    return ReadProcSelfRssMB();
 }
 
 void TVPForceSwapBuffer() {
@@ -239,8 +249,6 @@ static jobject GetKR2ActInstance() {
             return env->NewLocalRef(ctx);
         }
     }
-    __android_log_print(ANDROID_LOG_ERROR, "krkr2",
-        "GetKR2ActInstance: no KR2Activity and no Application Context available");
     return 0;
 }
 

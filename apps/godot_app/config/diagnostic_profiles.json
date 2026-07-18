@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "profiles": [
+    {
+      "name": "baseline",
+      "category_mask": 5,
+      "overhead": "low",
+      "env": {
+        "AETHERKIRI_DIAGNOSTICS": "1",
+        "AETHERKIRI_FRAME_SPIKE_MS": "20",
+        "AETHERKIRI_ENGINE_TICK_SPIKE_MS": "20"
+      }
+    },
+    {"name": "input", "category_mask": 7, "overhead": "medium", "env": {"AETHERKIRI_INPUT_TRACE": "1"}},
+    {
+      "name": "render",
+      "category_mask": 261,
+      "overhead": "medium",
+      "env": {
+        "AETHERKIRI_VERBOSE_RENDER_LOG": "1",
+        "AETHERKIRI_GODOT_RENDER_STATS": "1",
+        "AETHERKIRI_GODOT_GPU_TRACE_FALLBACK": "1"
+      }
+    },
+    {"name": "storage", "category_mask": 269, "overhead": "medium", "env": {"AETHERKIRI_STORAGE_TRACE": "1", "AETHERKIRI_IMAGE_LOAD_TRACE": "1"}},
+    {"name": "script", "category_mask": 21, "overhead": "medium", "env": {"AETHERKIRI_APP_TRACE": "1", "AETHERKIRI_TJS_VM_TRACE": "1"}},
+    {"name": "audio", "category_mask": 37, "overhead": "medium", "env": {"AETHERKIRI_AUDIO_TRACE": "1", "AETHERKIRI_TJS_AUDIO_TRACE": "1"}},
+    {"name": "video", "category_mask": 69, "overhead": "medium", "env": {"AETHERKIRI_VIDEO_TRACE": "1"}},
+    {"name": "plugin", "category_mask": 133, "overhead": "medium", "env": {"AETHERKIRI_PLUGIN_TRACE": "1", "AETHERKIRI_TRACE_MISSING_MEMBERS": "1"}},
+    {"name": "system", "category_mask": 517, "overhead": "medium", "env": {}},
+    {
+      "name": "full",
+      "category_mask": 1023,
+      "overhead": "high",
+      "env": {
+        "AETHERKIRI_INPUT_TRACE": "1",
+        "AETHERKIRI_VERBOSE_RENDER_LOG": "1",
+        "AETHERKIRI_GODOT_RENDER_STATS": "1",
+        "AETHERKIRI_GODOT_GPU_TRACE_FALLBACK": "1",
+        "AETHERKIRI_STORAGE_TRACE": "1",
+        "AETHERKIRI_IMAGE_LOAD_TRACE": "1",
+        "AETHERKIRI_APP_TRACE": "1",
+        "AETHERKIRI_TJS_VM_TRACE": "1",
+        "AETHERKIRI_AUDIO_TRACE": "1",
+        "AETHERKIRI_TJS_AUDIO_TRACE": "1",
+        "AETHERKIRI_VIDEO_TRACE": "1",
+        "AETHERKIRI_PLUGIN_TRACE": "1",
+        "AETHERKIRI_TRACE_MISSING_MEMBERS": "1",
+        "AETHERKIRI_TRACE_LOG": "1"
+      }
+    }
+  ]
+}

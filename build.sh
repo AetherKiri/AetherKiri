@@ -13,6 +13,7 @@
 #   debug|release       Build type (default: debug)
 #   --abi=<abis>        Android only: target ABIs (default: arm64-v8a)
 #   --simulator         iOS only: build for iOS Simulator
+#   --package-ipa       iOS only: build unsigned .ipa package for sideloading
 #   --jobs=<N>          Parallel build jobs (default: 8)
 #   --clean             Clean build artifacts before building
 #   --help, -h          Show this help message
@@ -56,13 +57,14 @@ show_help() {
     echo "  web        Build Godot Web export with GDExtension side module"
     echo ""
     echo "Options:"
-    echo "  debug|release       Build type (default: debug)"
-    echo "  --abi=<abis>        Android only: comma-separated ABIs"
-    echo "                      (arm64-v8a, armeabi-v7a, x86_64, x86)"
-    echo "  --simulator         iOS only: build for iOS Simulator"
-    echo "  --jobs=<N>          Parallel build jobs (default: 8)"
-    echo "  --clean             Clean build artifacts before building"
-    echo "  --help, -h          Show this help message"
+    echo "  debug|release       Build type (default: debug)
+  --abi=<abis>        Android only: comma-separated ABIs
+                      (arm64-v8a, armeabi-v7a, x86_64, x86)
+  --simulator         iOS only: build for iOS Simulator
+  --package-ipa       iOS only: build unsigned .ipa package for sideloading
+  --jobs=<N>          Parallel build jobs (default: 8)
+  --clean             Clean build artifacts before building
+  --help, -h          Show this help message"
     echo ""
     echo "Examples:"
     echo "  ./build.sh android debug --abi=arm64-v8a"
@@ -108,6 +110,9 @@ for arg in "$@"; do
         --simulator-arch=*)
             EXTRA_ARGS+=("$arg")
             ;;
+        --package-ipa|--unsigned-ipa|--ipa)
+            EXTRA_ARGS+=("$arg")
+            ;;
         *)
             echo -e "${YELLOW}[WARN]${NC} Unknown argument: $arg (passing through)"
             EXTRA_ARGS+=("$arg")
@@ -145,6 +150,25 @@ if [[ -z "$PLATFORM" ]]; then
             ;;
     esac
     echo ""
+
+    # Interactive build type selection after choosing platform
+    if [[ -z "$BUILD_TYPE" ]]; then
+        echo "Select build type:"
+        echo ""
+        echo "  1) debug (default)"
+        echo "  2) release"
+        echo ""
+        read -rp "Enter choice [1-2] (default: 1): " bt_choice
+        case "$bt_choice" in
+            ""|1|debug|Debug)   BUILD_TYPE="debug" ;;
+            2|release|Release)  BUILD_TYPE="release" ;;
+            *)
+                echo -e "${RED}[ERROR]${NC} Invalid choice: $bt_choice"
+                exit 1
+                ;;
+        esac
+        echo ""
+    fi
 fi
 
 # Default build type

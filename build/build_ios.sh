@@ -7,11 +7,13 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_TYPE="debug"
 SIMULATOR=false
 SIMULATOR_ARCH="${IOS_SIMULATOR_ARCH:-x86_64}"
+PACKAGE_IPA=false
 for arg in "$@"; do
     case "$arg" in
         debug|release|Debug|Release) BUILD_TYPE="$arg" ;;
         --simulator) SIMULATOR=true ;;
         --simulator-arch=*) SIMULATOR_ARCH="${arg#*=}" ;;
+        --package-ipa|--unsigned-ipa|--ipa) PACKAGE_IPA=true ;;
         *) echo "[WARN] Unknown iOS build argument ignored: $arg" ;;
     esac
 done
@@ -404,6 +406,43 @@ EOF
     fi
 }
 
+package_ios_unsigned_ipa() {
+    local export_dir="$1"
+    local build_type_lower="$2"
+    local config_cap="Release"
+    if [[ "$build_type_lower" == "debug" ]]; then
+        config_cap="Debug"
+    fi
+    local xcodeproj="$export_dir/AetherKiri.xcodeproj"
+    if [[ ! -d "$xcodeproj" ]]; then
+        echo "Error: Xcode project not found at $xcodeproj" >&2
+        return 1
+    fi
+    if ! command -v xcodebuild >/dev/null 2>&1; then
+        echo "Error: xcodebuild not found. Cannot package unsigned .ipa." >&2
+        return 1
+    fi
+    echo "==> Building unsigned iOS App ($config_cap) for Sideloading..."
+    mkdir -p "$export_dir/build"
+    xcodebuild build \
+        -project "$xcodeproj" \
+        -scheme AetherKiri \
+        -configuration "$config_cap" \
+        -sdk iphoneos \
+        CODE_SIGN_IDENTITY="" \
+        CODE_SIGNING_REQUIRED=NO \
+        CODE_SIGNING_ALLOWED=NO \
+        CONFIGURATION_BUILD_DIR="$export_dir/build"
+
+    echo "==> Packaging into unsigned .ipa..."
+    mkdir -p "$export_dir/Payload"
+    rm -rf "$export_dir/Payload/AetherKiri.app" "$export_dir/AetherKiri-${config_cap}-Unsigned.ipa"
+    cp -R "$export_dir/build/AetherKiri.app" "$export_dir/Payload/"
+    (cd "$export_dir" && zip -qry "AetherKiri-${config_cap}-Unsigned.ipa" Payload)
+    rm -rf "$export_dir/Payload" "$export_dir/build"
+    echo "Unsigned IPA created: $export_dir/AetherKiri-${config_cap}-Unsigned.ipa"
+}
+
 with_ios_only_gdextension() {
     local gdextension_file="$GODOT_APP_DIR/aether_kiri.gdextension"
     local backup_file
@@ -489,6 +528,11 @@ else
         PATCH_ARCH="$SIMULATOR_ARCH"
     fi
     patch_ios_export_project "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj" "$PATCH_ARCH" "$BUILD_TYPE_LOWER"
+    if [[ "$PACKAGE_IPA" == true && "$SIMULATOR" == false ]]; then
+        package_ios_unsigned_ipa "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER" "$BUILD_TYPE_LOWER"
+    elif [[ "$PACKAGE_IPA" == true && "$SIMULATOR" == true ]]; then
+        echo "[WARN] --package-ipa is ignored when building for simulator."
+    fi
 fi
 
 echo "iOS build output: $PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER"

@@ -23,11 +23,17 @@ public:
     iTVPRenderMethod *Delegate() const { return delegate_; }
     uint32_t Color() const { return color_; }
     int Opacity() const { return opacity_; }
+    int Phase() const { return phase_; }
+    int Vague() const { return vague_; }
 
 private:
     iTVPRenderMethod *delegate_ = nullptr;
     uint32_t color_ = 0;
     int opacity_ = 255;
+    int phase_id_ = -1;
+    int vague_id_ = -1;
+    int phase_ = 0;
+    int vague_ = 0;
 };
 
 class GodotTexture2D final : public iTVPTexture2D {
@@ -68,6 +74,11 @@ public:
     bool BlendGpuFrom2(GodotTexture2D *src1, GodotTexture2D *src2,
                        const tTVPRect &dst_rc, const tTVPRect &src1_rc,
                        const tTVPRect &src2_rc, uint32_t mode, int opacity,
+                       uint32_t color);
+    bool BlendGpuFrom3(GodotTexture2D *src1, GodotTexture2D *src2,
+                       GodotTexture2D *src3, const tTVPRect &dst_rc,
+                       const tTVPRect &src1_rc, const tTVPRect &src2_rc,
+                       const tTVPRect &src3_rc, uint32_t mode, int opacity,
                        uint32_t color);
     bool UploadCpuToGpu(bool flush_pending_gpu_writes = true);
     void MarkGpuDirty() { gpu_dirty_ = true; }
