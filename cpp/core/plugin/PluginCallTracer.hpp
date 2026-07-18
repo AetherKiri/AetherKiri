@@ -17,13 +17,31 @@
 #include "tjsCommHead.h"
 #include "tjsNative.h"
 #include <spdlog/logger.h>
+#include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <string>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // Forward declarations
 // ---------------------------------------------------------------------------
 class PluginCallTracer;
+
+struct PluginDebugSnapshot {
+    bool tracingEnabled = false;
+    uint64_t methodCalls = 0;
+    uint64_t propertyGets = 0;
+    uint64_t propertySets = 0;
+    uint64_t loadSucceeded = 0;
+    uint64_t loadFailed = 0;
+    uint64_t loadFallback = 0;
+    uint64_t missingMembers = 0;
+    std::vector<std::string> loadedPlugins;
+    std::vector<std::string> failedPlugins;
+    std::vector<std::string> fallbackPlugins;
+    std::vector<std::string> recentMissingMembers;
+};
 
 // ---------------------------------------------------------------------------
 // PluginMethodProxy — wraps a method dispatch, logs FuncCall then delegates
@@ -259,6 +277,9 @@ public:
     /// Create the file logger at the given path (call once at startup).
     void InitLogger(const std::string &logFilePath);
 
+    /// Remember the current game trace path without creating the file.
+    void SetLogFilePath(const std::string &logFilePath);
+
     /// Enable/disable tracing at runtime.
     void SetEnabled(bool enabled);
 
@@ -302,6 +323,9 @@ public:
     void LogMissingMember(const tjs_char *membername, const char *operation,
                           iTJSDispatch2 *obj);
 
+    PluginDebugSnapshot GetDebugSnapshot() const;
+    void ResetDebugStats();
+
 private:
     PluginCallTracer() = default;
     ~PluginCallTracer() = default;
@@ -313,9 +337,11 @@ private:
     std::shared_ptr<spdlog::logger> m_logger;
     std::string m_logFilePath;
     std::mutex m_mutex;
-    bool m_enabled = false;
+    mutable std::mutex m_statsMutex;
+    std::atomic<bool> m_enabled{false};
     bool m_loggerInitialized = false;
-    bool m_shuttingDown = false;
+    std::atomic<bool> m_shuttingDown{false};
+    PluginDebugSnapshot m_stats;
 };
 
 #endif // AETHERKiri_PLUGIN_CALL_TRACER_HPP

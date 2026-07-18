@@ -1123,6 +1123,8 @@ private:
 
         tTVPBaseTexture *Src1Bmp; // tutDivisible
         tTVPBaseTexture *Src2Bmp; // tutDivisible
+        int SnapshotWarmupFrames;
+        bool SkipSnapshotFrame;
 
         void Init(tTJSNI_BaseLayer *owner, tTVPDrawable *org) {
             Owner = owner;

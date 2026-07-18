@@ -21,6 +21,7 @@
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/texture2d.hpp>
 #include <godot_cpp/classes/texture2drd.hpp>
+#include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
@@ -86,6 +87,7 @@ struct GodotGpuOp {
         Read,
         Blend,
         Blend2,
+        Blend3,
         Release,
         Flush,
     };
@@ -93,12 +95,14 @@ struct GodotGpuOp {
     Type type = Type::Update;
     RID src;
     RID src2;
+    RID src3;
     RID dst;
     PackedByteArray data;
     std::vector<float> vertices;
     Color clear_color;
     Vector3 src_pos;
     Vector3 src2_pos;
+    Vector3 src3_pos;
     Vector3 dst_pos;
     Vector3 size;
     Vector3 src_size;
@@ -795,6 +799,8 @@ struct GodotGpuPipelineState {
     RID alpha_blend_a_pipeline;
     RID blend2_shader;
     RID blend2_pipeline;
+    RID blend3_shader;
+    RID blend3_pipeline;
     RID copy_triangles_shader;
     RID copy_triangles_pipeline;
     RID draw_triangles_shader;
@@ -813,11 +819,12 @@ struct GodotGpuUniformSetKey {
     int64_t rid1 = 0;
     int64_t rid2 = 0;
     uint8_t count = 0;
+    int64_t rid3 = 0;
 
     bool operator==(const GodotGpuUniformSetKey &other) const {
         return shader == other.shader && rid0 == other.rid0 &&
                rid1 == other.rid1 && rid2 == other.rid2 &&
-               count == other.count;
+               count == other.count && rid3 == other.rid3;
     }
 };
 
@@ -831,6 +838,7 @@ struct GodotGpuUniformSetKeyHash {
         combine(key.rid0);
         combine(key.rid1);
         combine(key.rid2);
+        combine(key.rid3);
         h ^= std::hash<int>{}(key.count);
         return h;
     }
@@ -977,6 +985,10 @@ bool IsBatchableBlendOp(const std::shared_ptr<GodotGpuOp> &op) {
     if (op->type == GodotGpuOp::Type::Blend2) {
         return op->src != op->dst && op->src2 != op->dst;
     }
+    if(op->type == GodotGpuOp::Type::Blend3) {
+        return op->src != op->dst && op->src2 != op->dst &&
+            op->src3 != op->dst;
+    }
     return false;
 }
 
@@ -1034,14 +1046,20 @@ bool BlendOpNeedsBarrierBeforeDispatch(
         PendingWriteForRect(op.dst, op.dst_pos, op.size);
     const GodotGpuPendingWrite src_rect =
         PendingWriteForRect(op.src, op.src_pos, op.size);
-    const bool dual_source = op.type == GodotGpuOp::Type::Blend2;
+    const bool dual_source = op.type == GodotGpuOp::Type::Blend2 ||
+        op.type == GodotGpuOp::Type::Blend3;
+    const bool triple_source = op.type == GodotGpuOp::Type::Blend3;
     const GodotGpuPendingWrite src2_rect =
         dual_source ? PendingWriteForRect(op.src2, op.src2_pos, op.size)
                     : GodotGpuPendingWrite{};
+    const GodotGpuPendingWrite src3_rect =
+        triple_source ? PendingWriteForRect(op.src3, op.src3_pos, op.size)
+                      : GodotGpuPendingWrite{};
     for (const auto &write : writes) {
         if (PendingWritesOverlap(write, dst_rect) ||
             PendingWritesOverlap(write, src_rect) ||
-            (dual_source && PendingWritesOverlap(write, src2_rect))) {
+            (dual_source && PendingWritesOverlap(write, src2_rect)) ||
+            (triple_source && PendingWritesOverlap(write, src3_rect))) {
             return true;
         }
     }
@@ -1053,7 +1071,9 @@ PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
     data.resize(48);
     uint8_t *bytes = data.ptrw();
     if (bytes == nullptr) return data;
-    const bool dual_source = op.type == GodotGpuOp::Type::Blend2;
+    const bool dual_source = op.type == GodotGpuOp::Type::Blend2 ||
+        op.type == GodotGpuOp::Type::Blend3;
+    const bool triple_source = op.type == GodotGpuOp::Type::Blend3;
     const bool triangles = op.type == GodotGpuOp::Type::CopyTriangles ||
                            op.type == GodotGpuOp::Type::DrawTriangles ||
                            op.type == GodotGpuOp::Type::DrawMaskedTriangles;
@@ -1066,7 +1086,9 @@ PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
         static_cast<int32_t>(op.src_pos.y),
         static_cast<int32_t>(op.size.x),
         static_cast<int32_t>(op.size.y),
-        static_cast<int32_t>(op.mode),
+        static_cast<int32_t>(triple_source
+                                 ? (op.mode | ((op.color & 0xffffu) << 16))
+                                 : op.mode),
         static_cast<int32_t>(std::clamp(op.opacity, 0, 255)),
         dimensioned ? static_cast<int32_t>(op.src_size.x) :
         dual_source ? static_cast<int32_t>(op.src2_pos.x)
@@ -1074,9 +1096,11 @@ PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
         dimensioned ? static_cast<int32_t>(op.src_size.y) :
         dual_source ? static_cast<int32_t>(op.src2_pos.y)
                     : static_cast<int32_t>((op.color >> 8) & 0xffu),
+        triple_source ? static_cast<int32_t>(op.src3_pos.x) :
         triangles ? static_cast<int32_t>(op.color) :
         mosaic ? 0 :
         dual_source ? 0 : static_cast<int32_t>((op.color >> 16) & 0xffu),
+        triple_source ? static_cast<int32_t>(op.src3_pos.y) :
         (dual_source || triangles || mosaic) ? 0
                                              : static_cast<int32_t>((op.color >> 24) & 0xffu),
     };
@@ -1504,6 +1528,103 @@ void main() {
     g_gpu_pipeline_state->blend2_pipeline =
         rd->compute_pipeline_create(g_gpu_pipeline_state->blend2_shader);
     return g_gpu_pipeline_state->blend2_pipeline.is_valid();
+}
+
+bool EnsureBlend3Pipeline(RenderingDevice *rd) {
+    if(rd == nullptr) return false;
+    if(g_gpu_pipeline_state == nullptr) {
+        g_gpu_pipeline_state = new GodotGpuPipelineState();
+    }
+    if(g_gpu_pipeline_state->blend3_pipeline.is_valid()) return true;
+
+    Ref<RDShaderSource> source;
+    source.instantiate();
+    source->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
+    source->set_stage_source(
+        RenderingDevice::SHADER_STAGE_COMPUTE,
+        R"GLSL(#version 450
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(rgba8, set = 0, binding = 0) uniform readonly image2D src1_img;
+layout(rgba8, set = 0, binding = 1) uniform readonly image2D src2_img;
+layout(rgba8, set = 0, binding = 2) uniform readonly image2D rule_img;
+layout(rgba8, set = 0, binding = 3) uniform image2D dst_img;
+layout(push_constant, std430) uniform Params {
+    ivec4 rect0;
+    ivec4 rect1;
+    ivec4 source_rects;
+} pc;
+
+vec4 blend_straight_alpha(vec4 s1, vec4 s2, float source_opacity) {
+    // Match RenderManager_ogl's UnivTransBlend_d exactly.  This is not the
+    // usual straight-alpha interpolation: the result is subsequently drawn
+    // as an alpha layer, so the source contribution compensates for that
+    // second composition step.
+    float target_opacity = 1.0 - source_opacity;
+    float numerator = s2.a * source_opacity;
+    float denominator = numerator * (1.0 - s1.a * target_opacity) +
+                        s1.a * target_opacity + 0.0001;
+    float source_weight = numerator / denominator;
+    return vec4(mix(s1.rgb, s2.rgb, clamp(source_weight, 0.0, 1.0)),
+                mix(s2.a, s1.a, target_opacity));
+}
+
+void main() {
+    ivec2 local = ivec2(gl_GlobalInvocationID.xy);
+    if(local.x >= pc.rect1.x || local.y >= pc.rect1.y) return;
+
+    ivec2 dst_pos = pc.rect0.xy + local;
+    ivec2 src1_pos = pc.rect0.zw + local;
+    ivec2 src2_pos = pc.source_rects.xy + local;
+    ivec2 rule_pos = pc.source_rects.zw + local;
+    vec4 s1 = imageLoad(src1_img, src1_pos);
+    vec4 s2 = imageLoad(src2_img, src2_pos);
+    int rule_value = int(round(clamp(imageLoad(rule_img, rule_pos).r,
+                                     0.0, 1.0) * 255.0));
+    int packed_mode = pc.rect1.z;
+    int mode = packed_mode & 0xffff;
+    int vague = max((packed_mode >> 16) & 0xffff, 1);
+    int phase = pc.rect1.w;
+
+    vec4 result;
+    if(rule_value >= phase) {
+        result = s1;
+    } else if(rule_value < phase - vague) {
+        result = s2;
+    } else {
+        int opacity = clamp(255 - ((rule_value - (phase - vague)) * 255 /
+                                   vague), 0, 255);
+        float blend_opacity = float(opacity) / 256.0;
+        if(mode == 13) {
+            result = blend_straight_alpha(s1, s2, blend_opacity);
+        } else if(mode == 12) {
+            // UnivTransBlend deliberately preserves s1's alpha.  Mixing the
+            // alpha here makes a fully composited page translucent while the
+            // rule edge crosses it, which appears as a whole-screen dark
+            // flash over the previously presented frame.
+            result = vec4(mix(s1.rgb, s2.rgb, blend_opacity), s1.a);
+        } else {
+            result = mix(s1, s2, blend_opacity);
+        }
+    }
+    imageStore(dst_img, dst_pos, result);
+}
+)GLSL");
+
+    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
+    if(spirv.is_null()) return false;
+    const String compile_error =
+        spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE);
+    if(!compile_error.is_empty()) {
+        UtilityFunctions::printerr("Godot GPU blend3 shader compile error: ",
+                                   compile_error);
+        return false;
+    }
+    g_gpu_pipeline_state->blend3_shader =
+        rd->shader_create_from_spirv(spirv, "AetherKiriBlend3");
+    if(!g_gpu_pipeline_state->blend3_shader.is_valid()) return false;
+    g_gpu_pipeline_state->blend3_pipeline =
+        rd->compute_pipeline_create(g_gpu_pipeline_state->blend3_shader);
+    return g_gpu_pipeline_state->blend3_pipeline.is_valid();
 }
 
 bool EnsureCopyTrianglesPipeline(RenderingDevice *rd) {
@@ -2374,6 +2495,32 @@ RID GetCachedBlend2UniformSet(RenderingDevice *rd, const RID &shader,
     return uniform_set;
 }
 
+RID GetCachedBlend3UniformSet(RenderingDevice *rd, const RID &shader,
+                              const RID &src1, const RID &src2,
+                              const RID &src3, const RID &dst) {
+    const GodotGpuUniformSetKey key{shader.get_id(), src1.get_id(),
+                                    src2.get_id(), src3.get_id(), 4,
+                                    dst.get_id()};
+    auto it = g_gpu_uniform_set_cache.find(key);
+    if(it != g_gpu_uniform_set_cache.end() && it->second.is_valid()) {
+        return it->second;
+    }
+
+    TypedArray<RDUniform> uniforms;
+    const RID resources[] = {src1, src2, src3, dst};
+    for(int binding = 0; binding < 4; ++binding) {
+        Ref<RDUniform> uniform;
+        uniform.instantiate();
+        uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
+        uniform->set_binding(binding);
+        uniform->add_id(resources[binding]);
+        uniforms.push_back(uniform);
+    }
+    RID uniform_set = rd->uniform_set_create(uniforms, shader, 0);
+    if(uniform_set.is_valid()) g_gpu_uniform_set_cache[key] = uniform_set;
+    return uniform_set;
+}
+
 bool DispatchGodotGpuBlend(RenderingDevice *rd,
                            const std::shared_ptr<GodotGpuOp> &op,
                            int64_t compute_list,
@@ -2427,6 +2574,27 @@ bool DispatchGodotGpuBlend2(RenderingDevice *rd,
                               static_cast<uint32_t>((op->size.x + 7) / 8),
                               static_cast<uint32_t>((op->size.y + 7) / 8),
                               1);
+    return true;
+}
+
+bool DispatchGodotGpuBlend3(RenderingDevice *rd,
+                            const std::shared_ptr<GodotGpuOp> &op,
+                            int64_t compute_list,
+                            std::vector<RID> &uniform_sets) {
+    if(!EnsureBlend3Pipeline(rd)) return false;
+    RID uniform_set = GetCachedBlend3UniformSet(
+        rd, g_gpu_pipeline_state->blend3_shader, op->src, op->src2,
+        op->src3, op->dst);
+    if(!uniform_set.is_valid()) return false;
+    (void)uniform_sets;
+    const PackedByteArray push_constants = PackGpuPushConstants(*op);
+    rd->compute_list_bind_compute_pipeline(
+        compute_list, g_gpu_pipeline_state->blend3_pipeline);
+    rd->compute_list_bind_uniform_set(compute_list, uniform_set, 0);
+    rd->compute_list_set_push_constant(compute_list, push_constants, 48);
+    rd->compute_list_dispatch(compute_list,
+                              static_cast<uint32_t>((op->size.x + 7) / 8),
+                              static_cast<uint32_t>((op->size.y + 7) / 8), 1);
     return true;
 }
 
@@ -2789,6 +2957,16 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             return ExecuteGodotGpuBlend(rd, op);
         case GodotGpuOp::Type::Blend2:
             return ExecuteGodotGpuBlend2(rd, op);
+        case GodotGpuOp::Type::Blend3: {
+            std::vector<RID> uniform_sets;
+            int64_t compute_list = rd->compute_list_begin();
+            const bool ok =
+                DispatchGodotGpuBlend3(rd, op, compute_list, uniform_sets);
+            if(ok) rd->compute_list_add_barrier(compute_list);
+            rd->compute_list_end();
+            if(ok) ApplyGodotGpuBarrier(rd);
+            return ok;
+        }
         case GodotGpuOp::Type::Release:
             ClearGodotGpuUniformSetCache(rd);
             rd->free_rid(op->dst);
@@ -2841,6 +3019,9 @@ void ExecuteGodotGpuBlendBatch(
             results[i] = DispatchGodotGpuBlend(rd, op, compute_list, uniform_sets);
         } else if (op->type == GodotGpuOp::Type::Blend2) {
             results[i] = DispatchGodotGpuBlend2(rd, op, compute_list, uniform_sets);
+        } else if(op->type == GodotGpuOp::Type::Blend3) {
+            results[i] = DispatchGodotGpuBlend3(rd, op, compute_list,
+                                                uniform_sets);
         }
         if (results[i]) {
             any_dispatched = true;
@@ -2903,7 +3084,8 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
     if (op == nullptr) return false;
     g_gpu_op_submitted.fetch_add(1, std::memory_order_relaxed);
     if (op->type == GodotGpuOp::Type::Blend ||
-        op->type == GodotGpuOp::Type::Blend2) {
+        op->type == GodotGpuOp::Type::Blend2 ||
+        op->type == GodotGpuOp::Type::Blend3) {
         g_gpu_blend_op_submitted.fetch_add(1, std::memory_order_relaxed);
     }
     if (server == nullptr || rd == nullptr) {
@@ -3438,6 +3620,64 @@ bool BridgeBlendRect2(uint64_t dst, uint64_t src1, uint64_t src2,
     return RunGodotGpuOpAsync(op);
 }
 
+bool BridgeBlendRect3(
+    uint64_t dst, uint64_t src1, uint64_t src2, uint64_t src3,
+    const tTVPRect *dst_rect, const tTVPRect *src1_rect,
+    const tTVPRect *src2_rect, const tTVPRect *src3_rect, uint32_t mode,
+    int opacity, uint32_t color) {
+    if(dst_rect == nullptr || src1_rect == nullptr || src2_rect == nullptr ||
+       src3_rect == nullptr) {
+        return false;
+    }
+    GodotGpuTextureRecord dst_record;
+    GodotGpuTextureRecord src1_record;
+    GodotGpuTextureRecord src2_record;
+    GodotGpuTextureRecord src3_record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        auto dst_it = g_gpu_textures.find(dst);
+        auto src1_it = g_gpu_textures.find(src1);
+        auto src2_it = g_gpu_textures.find(src2);
+        auto src3_it = g_gpu_textures.find(src3);
+        if(dst_it == g_gpu_textures.end() ||
+           src1_it == g_gpu_textures.end() ||
+           src2_it == g_gpu_textures.end() ||
+           src3_it == g_gpu_textures.end()) {
+            return false;
+        }
+        dst_record = dst_it->second;
+        src1_record = src1_it->second;
+        src2_record = src2_it->second;
+        src3_record = src3_it->second;
+    }
+    const int width = dst_rect->right - dst_rect->left;
+    const int height = dst_rect->bottom - dst_rect->top;
+    const auto same_size = [&](const tTVPRect *rect) {
+        return width == rect->right - rect->left &&
+            height == rect->bottom - rect->top;
+    };
+    if(width <= 0 || height <= 0 || !same_size(src1_rect) ||
+       !same_size(src2_rect) || !same_size(src3_rect)) {
+        return false;
+    }
+
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::Blend3;
+    op->src = src1_record.rid;
+    op->src2 = src2_record.rid;
+    op->src3 = src3_record.rid;
+    op->dst = dst_record.rid;
+    op->src_pos = Vector3(src1_rect->left, src1_rect->top, 0);
+    op->src2_pos = Vector3(src2_rect->left, src2_rect->top, 0);
+    op->src3_pos = Vector3(src3_rect->left, src3_rect->top, 0);
+    op->dst_pos = Vector3(dst_rect->left, dst_rect->top, 0);
+    op->size = Vector3(width, height, 1);
+    op->mode = mode;
+    op->opacity = opacity;
+    op->color = color;
+    return RunGodotGpuOpAsync(op);
+}
+
 bool BridgeReadRgba(uint64_t texture, void *out_pixels, size_t out_pixels_size,
                     uint32_t stride_bytes) {
     if (out_pixels == nullptr) return false;
@@ -3751,6 +3991,12 @@ void ReleaseGodotGpuPipeline() {
         if (g_gpu_pipeline_state->blend2_shader.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->blend2_shader);
         }
+        if(g_gpu_pipeline_state->blend3_pipeline.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->blend3_pipeline);
+        }
+        if(g_gpu_pipeline_state->blend3_shader.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->blend3_shader);
+        }
         if (g_gpu_pipeline_state->copy_triangles_pipeline.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->copy_triangles_pipeline);
         }
@@ -3828,6 +4074,7 @@ public:
         callbacks.mosaic_rects = BridgeMosaicRects;
         callbacks.blend_rect = BridgeBlendRect;
         callbacks.blend_rect2 = BridgeBlendRect2;
+        callbacks.blend_rect3 = BridgeBlendRect3;
         callbacks.read_rgba = BridgeReadRgba;
         callbacks.flush = BridgeFlush;
         TVPGodotGpuBridgeRegister(&callbacks);
@@ -4034,6 +4281,60 @@ public:
         return String::utf8(buffer.data(), bytes_written);
     }
 
+    int set_diagnostic_config(bool enabled, const String &session_id,
+                              int64_t category_mask,
+                              int slow_frame_threshold_ms = 20,
+                              int max_events = 2000) {
+        if (handle_ == nullptr) {
+            return ENGINE_RESULT_INVALID_STATE;
+        }
+        const CharString session_utf8 = session_id.utf8();
+        engine_diagnostic_config_t config{};
+        config.struct_size = sizeof(config);
+        config.enabled = enabled ? 1u : 0u;
+        config.category_mask = static_cast<uint64_t>(
+            std::max<int64_t>(0, category_mask));
+        config.slow_frame_threshold_us = static_cast<uint32_t>(
+            std::max(0, slow_frame_threshold_ms) * 1000);
+        config.max_events = static_cast<uint32_t>(
+            std::clamp(max_events, 64, 10000));
+        config.host_monotonic_origin_us =
+            Time::get_singleton()->get_ticks_usec();
+        config.session_id_utf8 = session_utf8.get_data();
+        const engine_result_t result =
+            engine_set_diagnostic_config(handle_, &config);
+        update_last_error(result);
+        return result;
+    }
+
+    int64_t mark_diagnostic_event(const String &label) {
+        if (handle_ == nullptr) {
+            return -1;
+        }
+        const CharString label_utf8 = label.utf8();
+        uint64_t sequence = 0;
+        const engine_result_t result = engine_mark_diagnostic_event(
+            handle_, label_utf8.get_data(), &sequence);
+        update_last_error(result);
+        return result == ENGINE_RESULT_OK ? static_cast<int64_t>(sequence) : -1;
+    }
+
+    String drain_diagnostic_events() {
+        if (handle_ == nullptr) {
+            return String();
+        }
+        std::vector<char> buffer(256 * 1024);
+        uint32_t bytes_written = 0;
+        const engine_result_t result = engine_drain_diagnostic_events(
+            handle_, buffer.data(), static_cast<uint32_t>(buffer.size()),
+            &bytes_written);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK || bytes_written == 0) {
+            return String();
+        }
+        return String::utf8(buffer.data(), bytes_written);
+    }
+
     String get_renderer_info() {
         if (handle_ == nullptr) {
             return String();
@@ -4045,7 +4346,61 @@ public:
         if (result != ENGINE_RESULT_OK) {
             return String();
         }
-        return String::utf8(buffer) + GetGodotGpuBridgeDebugInfo();
+        RenderingServer *server = RenderingServer::get_singleton();
+        String godot_info;
+        if (server != nullptr) {
+            godot_info = " godot_method=" + server->get_current_rendering_method() +
+                         " godot_driver=" + server->get_current_rendering_driver_name() +
+                         " rd_gpu=" + String(SupportsGodotRenderingDeviceGpu() ? "1" : "0");
+        }
+        return String::utf8(buffer) + godot_info + GetGodotGpuBridgeDebugInfo();
+    }
+
+    Dictionary get_memory_stats() {
+        Dictionary output;
+        if (handle_ == nullptr) {
+            return output;
+        }
+        engine_memory_stats_t stats{};
+        stats.struct_size = sizeof(stats);
+        const engine_result_t result = engine_get_memory_stats(handle_, &stats);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK) {
+            return output;
+        }
+        output["self_used_mb"] = static_cast<int64_t>(stats.self_used_mb);
+        output["system_free_mb"] = static_cast<int64_t>(stats.system_free_mb);
+        output["system_total_mb"] = static_cast<int64_t>(stats.system_total_mb);
+        output["graphic_cache_bytes"] = static_cast<int64_t>(stats.graphic_cache_bytes);
+        output["graphic_cache_limit_bytes"] = static_cast<int64_t>(stats.graphic_cache_limit_bytes);
+        output["xp3_segment_cache_bytes"] = static_cast<int64_t>(stats.xp3_segment_cache_bytes);
+        output["psb_cache_bytes"] = static_cast<int64_t>(stats.psb_cache_bytes);
+        output["psb_cache_entries"] = static_cast<int64_t>(stats.psb_cache_entries);
+        output["psb_cache_entry_limit"] = static_cast<int64_t>(stats.psb_cache_entry_limit);
+        output["psb_cache_hits"] = static_cast<int64_t>(stats.psb_cache_hits);
+        output["psb_cache_misses"] = static_cast<int64_t>(stats.psb_cache_misses);
+        output["archive_cache_entries"] = static_cast<int64_t>(stats.archive_cache_entries);
+        output["archive_cache_limit"] = static_cast<int64_t>(stats.archive_cache_limit);
+        output["autopath_cache_entries"] = static_cast<int64_t>(stats.autopath_cache_entries);
+        output["autopath_cache_limit"] = static_cast<int64_t>(stats.autopath_cache_limit);
+        output["autopath_table_entries"] = static_cast<int64_t>(stats.autopath_table_entries);
+        return output;
+    }
+
+    String get_plugin_debug_info() {
+        if (handle_ == nullptr) {
+            return String();
+        }
+        std::vector<char> buffer(64 * 1024);
+        uint32_t bytes_written = 0;
+        const engine_result_t result = engine_get_plugin_debug_info(
+            handle_, buffer.data(), static_cast<uint32_t>(buffer.size()),
+            &bytes_written);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK || bytes_written == 0) {
+            return String();
+        }
+        return String::utf8(buffer.data(), bytes_written);
     }
 
     String get_frame_texture_backend() const { return frame_texture_backend_; }
@@ -4449,8 +4804,21 @@ protected:
                              &AetherKiriPlayer::get_startup_state);
         ClassDB::bind_method(D_METHOD("drain_startup_logs"),
                              &AetherKiriPlayer::drain_startup_logs);
+        ClassDB::bind_method(D_METHOD("set_diagnostic_config", "enabled",
+                                      "session_id", "category_mask",
+                                      "slow_frame_threshold_ms", "max_events"),
+                             &AetherKiriPlayer::set_diagnostic_config,
+                             DEFVAL(20), DEFVAL(2000));
+        ClassDB::bind_method(D_METHOD("mark_diagnostic_event", "label"),
+                             &AetherKiriPlayer::mark_diagnostic_event);
+        ClassDB::bind_method(D_METHOD("drain_diagnostic_events"),
+                             &AetherKiriPlayer::drain_diagnostic_events);
         ClassDB::bind_method(D_METHOD("get_renderer_info"),
                              &AetherKiriPlayer::get_renderer_info);
+        ClassDB::bind_method(D_METHOD("get_memory_stats"),
+                             &AetherKiriPlayer::get_memory_stats);
+        ClassDB::bind_method(D_METHOD("get_plugin_debug_info"),
+                             &AetherKiriPlayer::get_plugin_debug_info);
         ClassDB::bind_method(D_METHOD("get_frame_texture_backend"),
                              &AetherKiriPlayer::get_frame_texture_backend);
         ClassDB::bind_method(D_METHOD("read_frame_rgba"),

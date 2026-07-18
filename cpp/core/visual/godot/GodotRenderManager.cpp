@@ -112,6 +112,9 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "ConstAlphaBlend_d") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD_d") == 0 ||
+               std::strcmp(name, "UnivTransBlend") == 0 ||
+               std::strcmp(name, "UnivTransBlend_d") == 0 ||
+               std::strcmp(name, "UnivTransBlend_a") == 0 ||
                std::strcmp(name, "CopyColor") == 0 ||
                std::strcmp(name, "PsScreenBlend") == 0;
     };
@@ -299,12 +302,17 @@ GodotRenderMethod::GodotRenderMethod(iTVPRenderMethod *delegate)
     : delegate_(delegate) {}
 
 int GodotRenderMethod::EnumParameterID(const char *name) {
-    return delegate_ != nullptr ? delegate_->EnumParameterID(name) : -1;
+    const int id = delegate_ != nullptr ? delegate_->EnumParameterID(name) : -1;
+    if(name != nullptr && std::strcmp(name, "phase") == 0) phase_id_ = id;
+    if(name != nullptr && std::strcmp(name, "vague") == 0) vague_id_ = id;
+    return id;
 }
 void GodotRenderMethod::SetParameterUInt(int id, unsigned int Value) {
     if (delegate_) delegate_->SetParameterUInt(id, Value);
 }
 void GodotRenderMethod::SetParameterInt(int id, int Value) {
+    if(id == phase_id_) phase_ = Value;
+    if(id == vague_id_) vague_ = Value;
     if (delegate_) delegate_->SetParameterInt(id, Value);
 }
 void GodotRenderMethod::SetParameterPtr(int id, const void *Value) {
@@ -416,13 +424,29 @@ void GodotTexture2D::MarkOpaqueKnown() {
 }
 
 void GodotTexture2D::CreateGpuHandle(const void *pixel, int pitch) {
-    if (format_ != TVPTextureFormat::RGBA) return;
     const auto *bridge = TVPGodotGpuBridgeGet();
     if (bridge == nullptr || bridge->create_rgba == nullptr) return;
     const void *src = pixel != nullptr ? pixel :
         (pixels_.empty() ? nullptr : pixels_.data());
-    const uint32_t stride = static_cast<uint32_t>(
+    uint32_t stride = static_cast<uint32_t>(
         pixel != nullptr && pitch > 0 ? pitch : pitch_);
+    std::vector<uint32_t> expanded_gray;
+    if(format_ == TVPTextureFormat::Gray) {
+        if(src == nullptr) return;
+        expanded_gray.resize(static_cast<size_t>(Width) * Height);
+        const auto *gray = static_cast<const uint8_t *>(src);
+        for(int y = 0; y < Height; ++y) {
+            for(int x = 0; x < Width; ++x) {
+                const uint32_t value = gray[static_cast<size_t>(y) * stride + x];
+                expanded_gray[static_cast<size_t>(y) * Width + x] =
+                    value | (value << 8) | (value << 16) | 0xff000000u;
+            }
+        }
+        src = expanded_gray.data();
+        stride = static_cast<uint32_t>(Width) * 4u;
+    } else if(format_ != TVPTextureFormat::RGBA) {
+        return;
+    }
     gpu_handle_ = bridge->create_rgba(static_cast<uint32_t>(Width),
                                       static_cast<uint32_t>(Height),
                                       src, stride);
@@ -431,7 +455,7 @@ void GodotTexture2D::CreateGpuHandle(const void *pixel, int pitch) {
     }
     gpu_dirty_ = false;
     cpu_dirty_ = false;
-    DiscardCpuStorage();
+    if(format_ == TVPTextureFormat::RGBA) DiscardCpuStorage();
 }
 
 bool GodotTexture2D::EnsureGpuHandle() {
@@ -653,6 +677,30 @@ bool GodotTexture2D::BlendGpuFrom2(GodotTexture2D *src1, GodotTexture2D *src2,
     return true;
 }
 
+bool GodotTexture2D::BlendGpuFrom3(
+    GodotTexture2D *src1, GodotTexture2D *src2, GodotTexture2D *src3,
+    const tTVPRect &dst_rc, const tTVPRect &src1_rc,
+    const tTVPRect &src2_rc, const tTVPRect &src3_rc, uint32_t mode,
+    int opacity, uint32_t color) {
+    if(src1 == nullptr || src2 == nullptr || src3 == nullptr ||
+       gpu_handle_ == 0 || src1->gpu_handle_ == 0 ||
+       src2->gpu_handle_ == 0 || src3->gpu_handle_ == 0) {
+        return false;
+    }
+    const auto *bridge = TVPGodotGpuBridgeGet();
+    if(bridge == nullptr || bridge->blend_rect3 == nullptr) return false;
+    if(!bridge->blend_rect3(
+           gpu_handle_, src1->gpu_handle_, src2->gpu_handle_,
+           src3->gpu_handle_, &dst_rc, &src1_rc, &src2_rc, &src3_rc, mode,
+           opacity, color)) {
+        return false;
+    }
+    gpu_dirty_ = true;
+    cpu_dirty_ = false;
+    MarkOpacityUnknown();
+    return true;
+}
+
 bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
     if (!cpu_dirty_) {
         if (gpu_dirty_ && flush_pending_gpu_writes) {
@@ -804,6 +852,15 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         : nullptr;
     auto *src2 = textures.size() == 2
         ? dynamic_cast<GodotTexture2D *>(textures[1].first)
+        : nullptr;
+    auto *src3_1 = textures.size() == 3
+        ? dynamic_cast<GodotTexture2D *>(textures[0].first)
+        : nullptr;
+    auto *src3_2 = textures.size() == 3
+        ? dynamic_cast<GodotTexture2D *>(textures[1].first)
+        : nullptr;
+    auto *src3_3 = textures.size() == 3
+        ? dynamic_cast<GodotTexture2D *>(textures[2].first)
         : nullptr;
 
     if (method_name == "Copy" && dst != nullptr && src != nullptr &&
@@ -1075,6 +1132,38 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
                 ? TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D
                 : TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD,
             godot_method != nullptr ? godot_method->Opacity() : 255, 0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
+    if((method_name == "UnivTransBlend" ||
+        method_name == "UnivTransBlend_d" ||
+        method_name == "UnivTransBlend_a") &&
+       dst != nullptr && src3_1 != nullptr && src3_2 != nullptr &&
+       src3_3 != nullptr &&
+       IsGpuRectFastPathEnabled(method_name.c_str()) &&
+       ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src3_1,
+                                src3_2) &&
+       RectBoundsInsideTexture(textures[0].second, src3_1) &&
+       RectBoundsInsideTexture(textures[1].second, src3_2) &&
+       RectBoundsInsideTexture(textures[2].second, src3_3) &&
+       dst->EnsureGpuHandle() && src3_1->EnsureGpuHandle() &&
+       src3_2->EnsureGpuHandle() && src3_3->EnsureGpuHandle() &&
+       src3_1->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+       src3_2->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+       src3_3->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+       dst->BlendGpuFrom3(
+           src3_1, src3_2, src3_3, rctar, textures[0].second,
+           textures[1].second, textures[2].second,
+           method_name == "UnivTransBlend_d"
+               ? TVP_GODOT_GPU_BLEND_UNIVERSAL_D
+               : method_name == "UnivTransBlend_a"
+                     ? TVP_GODOT_GPU_BLEND_UNIVERSAL_A
+                     : TVP_GODOT_GPU_BLEND_UNIVERSAL,
+           godot_method != nullptr ? godot_method->Phase() : 0,
+           static_cast<uint32_t>(godot_method != nullptr
+                                     ? godot_method->Vague()
+                                     : 0))) {
         CountGpuFastPath(method_name);
         return;
     }

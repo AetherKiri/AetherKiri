@@ -155,6 +155,13 @@ void TVPMapPrerenderedFont(const tTVPFont &font, const ttstr &storage) {
         i != TVPPrerenderedFontMapVector.end(); i++) {
         if(i->Font == font) {
             // found font
+            // Font hooks commonly map the same face/storage before measuring
+            // each UI group.  Repeating an identical mapping used to clear
+            // the entire glyph cache and invalidate every bitmap font state.
+            if(i->Object == object) {
+                object->Release();
+                return;
+            }
             // replace existing
             i->Object->Release();
             i->Object = object;
@@ -1748,11 +1755,7 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
     try {
         auto keys_equal = [](const tTVPPendingTextDraw &a,
                              const tTVPPendingTextDraw &b) -> bool {
-            return a.DestRect.left == b.DestRect.left &&
-                a.DestRect.top == b.DestRect.top &&
-                a.DestRect.right == b.DestRect.right &&
-                a.DestRect.bottom == b.DestRect.bottom &&
-                a.Color == b.Color && a.BltMode == b.BltMode &&
+            return a.Color == b.Color && a.BltMode == b.BltMode &&
                 a.Opa == b.Opa && a.HoldAlpha == b.HoldAlpha &&
                 a.ShadowColor == b.ShadowColor && a.ShLevel == b.ShLevel &&
                 a.ShWidth == b.ShWidth && a.ShOfsX == b.ShOfsX &&
@@ -1776,11 +1779,14 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
             dtdata.holdalpha = key.HoldAlpha;
 
             std::vector<tTVPCharacterDrawData> drawdata;
+            std::vector<tTVPRect> drawrects;
             drawdata.reserve(end - begin);
+            drawrects.reserve(end - begin);
             for(size_t i = begin; i < end; ++i) {
                 const auto &pending = PendingTextDraws[i];
                 drawdata.push_back(tTVPCharacterDrawData(
                     pending.Data, pending.Shadow, pending.X, pending.Y));
+                drawrects.push_back(pending.DestRect);
             }
 
             struct tTVPTextBatchGlyph {
@@ -1813,23 +1819,24 @@ void tTVPNativeBaseBitmap::FlushPendingTextDraws() {
                     srect.right = data->BlackBoxX;
                     srect.bottom = data->BlackBoxY;
 
-                    if(drect.left < dtdata.rect.left) {
-                        srect.left += (dtdata.rect.left - drect.left);
-                        drect.left = dtdata.rect.left;
+                    const tTVPRect &cliprect = drawrects[idx];
+                    if(drect.left < cliprect.left) {
+                        srect.left += (cliprect.left - drect.left);
+                        drect.left = cliprect.left;
                     }
-                    if(drect.right > dtdata.rect.right) {
-                        srect.right -= (drect.right - dtdata.rect.right);
-                        drect.right = dtdata.rect.right;
+                    if(drect.right > cliprect.right) {
+                        srect.right -= (drect.right - cliprect.right);
+                        drect.right = cliprect.right;
                     }
                     if(srect.left >= srect.right)
                         continue;
-                    if(drect.top < dtdata.rect.top) {
-                        srect.top += (dtdata.rect.top - drect.top);
-                        drect.top = dtdata.rect.top;
+                    if(drect.top < cliprect.top) {
+                        srect.top += (cliprect.top - drect.top);
+                        drect.top = cliprect.top;
                     }
-                    if(drect.bottom > dtdata.rect.bottom) {
-                        srect.bottom -= (drect.bottom - dtdata.rect.bottom);
-                        drect.bottom = dtdata.rect.bottom;
+                    if(drect.bottom > cliprect.bottom) {
+                        srect.bottom -= (drect.bottom - cliprect.bottom);
+                        drect.bottom = cliprect.bottom;
                     }
                     if(srect.top >= srect.bottom)
                         continue;
@@ -1979,7 +1986,15 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
     if(opa == 0)
         return; // nothing to do
 
+#ifdef __ANDROID__
+    // Keep consecutive text calls pending while this bitmap is already safe to
+    // render into.  Independ() flushes the pending queue even when no copy is
+    // needed, which turns settings-page construction into many tiny uploads.
+    if(!IsIndependent())
+        Independ();
+#else
     Independ();
+#endif
 
     ApplyFont();
 
@@ -2069,6 +2084,77 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(
         !IndividualConfigManager::GetInstance()->GetValue<bool>(
             "ogl_accurate_render", false) &&
         bltmode == bmAlphaOnAlpha && opa > 0 && !drawdata.empty();
+
+#ifdef __ANDROID__
+    if(batchGPURoute) {
+        auto clipped_rect = [&](tTVPCharacterData *data, tjs_int dx,
+                                tjs_int dy, tTVPRect &out) -> bool {
+            out.left = dx + data->OriginX;
+            out.top = dy + data->OriginY;
+            out.right = out.left + data->BlackBoxX;
+            out.bottom = out.top + data->BlackBoxY;
+
+            if(out.left < destrect.left)
+                out.left = destrect.left;
+            if(out.right > destrect.right)
+                out.right = destrect.right;
+            if(out.top < destrect.top)
+                out.top = destrect.top;
+            if(out.bottom > destrect.bottom)
+                out.bottom = destrect.bottom;
+            return !out.is_empty();
+        };
+
+        for(const auto &draw : drawdata) {
+            tTVPRect main_rect;
+            tTVPRect shadow_rect;
+            const bool shadow_drawn = shlevel != 0 && draw.Shadow &&
+                clipped_rect(draw.Shadow, draw.X + shofsx,
+                             draw.Y + shofsy, shadow_rect);
+            const bool main_drawn = draw.Data &&
+                clipped_rect(draw.Data, draw.X, draw.Y, main_rect);
+            if(!main_drawn && !shadow_drawn)
+                continue;
+
+            tTVPPendingTextDraw pending;
+            pending.DestRect = destrect;
+            pending.X = draw.X;
+            pending.Y = draw.Y;
+            pending.Color = color;
+            pending.BltMode = bltmode;
+            pending.Opa = opa;
+            pending.HoldAlpha = holdalpha;
+            pending.ShadowColor = shadowcolor;
+            pending.ShLevel = shlevel;
+            pending.ShWidth = shwidth;
+            pending.ShOfsX = shofsx;
+            pending.ShOfsY = shofsy;
+            pending.Data = draw.Data;
+            pending.Shadow = draw.Shadow;
+            if(pending.Data)
+                pending.Data->AddRef();
+            if(pending.Shadow)
+                pending.Shadow->AddRef();
+            PendingTextDraws.push_back(pending);
+
+            if(updaterects) {
+                if(main_drawn && shadow_drawn) {
+                    tTVPRect combined;
+                    TVPUnionRect(&combined, main_rect, shadow_rect);
+                    updaterects->Or(combined);
+                } else {
+                    updaterects->Or(main_drawn ? main_rect : shadow_rect);
+                }
+            }
+        }
+
+        // Bound retained glyph memory for unusually large script-generated
+        // pages while preserving cross-call batching for normal UI screens.
+        if(PendingTextDraws.size() >= 8192)
+            FlushPendingTextDraws();
+        return;
+    }
+#endif
 
     if(batchGPURoute) {
         struct tTVPTextBatchGlyph {
@@ -2338,6 +2424,12 @@ void tTVPNativeBaseBitmap::GetTextSize(const ttstr &text) {
             TextHeight = std::abs(Font.Height);
         }
 
+#ifndef __ANDROID__
+        // Desktop historically warms the glyph bitmap cache while measuring.
+        // On Android, UI parsers call getTextWidth hundreds of times while
+        // constructing a page; eager rasterization turns a metrics query into
+        // a main-thread rendering workload. DrawText will populate the same
+        // cache on demand for glyphs that are actually displayed.
         tTVPFontAndCharacterData font;
         font.Font = Font;
         font.Antialiased = true;
@@ -2354,6 +2446,7 @@ void tTVPNativeBaseBitmap::GetTextSize(const ttstr &text) {
                 data->Release();
             buf++;
         }
+#endif
     }
 }
 //---------------------------------------------------------------------------

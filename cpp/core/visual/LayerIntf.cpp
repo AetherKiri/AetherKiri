@@ -2132,6 +2132,10 @@ tTJSNI_BaseLayer::tTJSNI_BaseLayer() {
     TransSrcObj = nullptr;
     InTransition = false;
     TransWithChildren = false;
+    TransDrawable.Src1Bmp = nullptr;
+    TransDrawable.Src2Bmp = nullptr;
+    TransDrawable.SnapshotWarmupFrames = 0;
+    TransDrawable.SkipSnapshotFrame = false;
     DestSLP = nullptr;
     SrcSLP = nullptr;
     TransCompEventPrevented = false;
@@ -4182,29 +4186,40 @@ void tTJSNI_BaseLayer::AllocateDefaultImage() {
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
     // assign images
-    bool main_changed = true;
+    bool main_changed = false;
+    bool province_changed = false;
 
     if(src->MainImage) {
         int64_t oldBytes = TVPCalcMainImageBytes(MainImage);
         if(MainImage)
             main_changed = MainImage->Assign(*src->MainImage);
-        else
+        else {
             MainImage = new tTVPBaseTexture(*src->MainImage);
+            main_changed = true;
+        }
         TVPLayerBitmapTotalBytes.fetch_add(TVPCalcMainImageBytes(MainImage) - oldBytes,
                                            std::memory_order_relaxed);
-        FontChanged = true; // invalidate font assignment cache
-    } else {
+        if(main_changed)
+            FontChanged = true; // invalidate font assignment cache
+    } else if(MainImage) {
         DeallocateImage();
+        main_changed = true;
     }
 
     if(src->ProvinceImage) {
         if(ProvinceImage)
-            ProvinceImage->Assign(*src->ProvinceImage);
-        else
+            province_changed = ProvinceImage->Assign(*src->ProvinceImage);
+        else {
             ProvinceImage = new tTVPBaseBitmap(*src->ProvinceImage);
-    } else {
+            province_changed = true;
+        }
+    } else if(ProvinceImage) {
         DeallocateProvinceImage();
+        province_changed = true;
     }
+
+    if(!main_changed && !province_changed)
+        return;
 
     if(main_changed && MainImage) {
         InternalSetImageSize(MainImage->GetWidth(), MainImage->GetHeight());
@@ -4213,7 +4228,7 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
 
     ImageModified = true;
 
-    if(MainImage)
+    if(main_changed && MainImage)
         ResetClip(); // cliprect is reset
 
     if(main_changed)
@@ -8686,14 +8701,56 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
         }
     }
 
-    if(InTransition && TransWithChildren && TransUpdateType == tutDivisible) {
-        // complete all area of the layer
-        InTransition = false; // cheat!!!
-        TransDrawable.Src1Bmp = Complete();
-        InTransition = true;
+    bool use_cached_transition_frames = TransUpdateType == tutDivisible;
+#ifdef __ANDROID__
+    use_cached_transition_frames = use_cached_transition_frames ||
+        TransUpdateType == tutDivisibleFade;
+    TransDrawable.SkipSnapshotFrame = false;
+    if(InTransition && TransWithChildren && use_cached_transition_frames &&
+       TransDrawable.SnapshotWarmupFrames > 0) {
+        --TransDrawable.SnapshotWarmupFrames;
+        TransDrawable.SkipSnapshotFrame = true;
+    }
+#endif
+    if(InTransition && TransWithChildren && use_cached_transition_frames &&
+       !TransDrawable.SkipSnapshotFrame) {
+        // Complete each stable page once. Transition Update() invalidates the
+        // destination every frame, so rebuilding these snapshots on every
+        // BeforeCompletion defeats the cache and repeats the entire child-tree
+        // composition during the animation.
+        if(!TransDrawable.Src1Bmp) {
+            InTransition = false; // cheat!!!
+            tTVPBaseTexture *completed = nullptr;
+            try {
+                completed = Complete();
+                InTransition = true;
+            } catch(...) {
+                InTransition = true;
+                throw;
+            }
+#ifdef __ANDROID__
+            if(completed) {
+                auto *snapshot = new tTVPBaseTexture(*completed);
+                snapshot->Independ();
+                TransDrawable.Src1Bmp = snapshot;
+            }
+#else
+            TransDrawable.Src1Bmp = completed;
+#endif
+        }
 
-        if(TransSrc)
-            TransDrawable.Src2Bmp = TransSrc->Complete();
+        if(TransSrc && !TransDrawable.Src2Bmp) {
+            tTVPBaseTexture *completed = TransSrc->Complete();
+#ifdef __ANDROID__
+            if(completed) {
+                auto *snapshot = new tTVPBaseTexture(*completed);
+                snapshot->Independ();
+                TransDrawable.Src2Bmp = snapshot;
+            }
+#else
+            TransDrawable.Src2Bmp = completed;
+#endif
+        }
     }
 
     TVP_LAYER_FOR_EACH_CHILD_BEGIN(child)
@@ -9140,6 +9197,30 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
         // rearrange pipe line for transition
         if(InTransition && TransWithChildren) {
             TransDrawable.Init(this, target);
+#ifdef __ANDROID__
+            // UI scripts can finish hiding/reparenting outgoing controls one
+            // event tick after StartTransition. Keep the last presented frame
+            // during that tick instead of exposing and freezing the transient
+            // half-torn-down layer tree.
+            if(TransDrawable.SkipSnapshotFrame) {
+                CurrentDrawTarget = nullptr;
+                return;
+            }
+            // BeforeCompletion has already produced stable, fully-composited
+            // source pages for divisible-fade transitions. Rewalking and
+            // recompositing the complete child tree here is redundant: the
+            // transition handler below reads Src1Bmp/Src2Bmp, not that freshly
+            // composed intermediate. Complex UI screens can otherwise spend
+            // 50-126 ms per frame doing work whose result is discarded.
+            if(TransUpdateType == tutDivisibleFade &&
+               TransDrawable.Src1Bmp &&
+               (!TransSrc || TransDrawable.Src2Bmp)) {
+                TransDrawable.DrawCompleted(
+                    rctar, TransDrawable.Src1Bmp, rect, DisplayType, Opacity);
+                CurrentDrawTarget = nullptr;
+                return;
+            }
+#endif
             target = &TransDrawable;
         }
         if(GetVisibleChildrenCount() == 0) {
@@ -10150,6 +10231,22 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
 
         // set to cache
         TransWithChildren = withchildren;
+#ifdef __ANDROID__
+        delete TransDrawable.Src1Bmp;
+        delete TransDrawable.Src2Bmp;
+#endif
+        TransDrawable.Src1Bmp = nullptr;
+        TransDrawable.Src2Bmp = nullptr;
+#ifdef __ANDROID__
+        // The page scripts have already assembled both transition trees before
+        // StartTransition. Waiting one more event tick can catch their own
+        // temporary full-screen dimmer at peak opacity and then freeze it into
+        // the cached frame for the entire transition.
+        TransDrawable.SnapshotWarmupFrames = 0;
+#else
+        TransDrawable.SnapshotWarmupFrames = 0;
+#endif
+        TransDrawable.SkipSnapshotFrame = false;
         if(TransWithChildren) {
             IncCacheEnabledCount();
             if(transsource)
@@ -10236,6 +10333,14 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
         spdlog::trace("[TransTrace] StopTransition type={}", (int)TransType);
         InTransition = false;
         TransCompEventPrevented = false;
+#ifdef __ANDROID__
+        delete TransDrawable.Src1Bmp;
+        delete TransDrawable.Src2Bmp;
+#endif
+        TransDrawable.Src1Bmp = nullptr;
+        TransDrawable.Src2Bmp = nullptr;
+        TransDrawable.SnapshotWarmupFrames = 0;
+        TransDrawable.SkipSnapshotFrame = false;
 
         // unregister idle event handler
         if(!TransSelfUpdate)
@@ -10443,7 +10548,6 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
     // do divisible transition
     if(!Owner->InTransition || !Owner->DivisibleTransHandler)
         return;
-
     tTVPDivisibleData data;
     data.Left = destrect.left - Owner->Rect.left;
     data.Top = destrect.top - Owner->Rect.top;
@@ -10451,7 +10555,13 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
     data.Height = cliprect.get_height();
 
     iTVPBaseBitmap *src1bmp;
-    if(Owner->TransUpdateType == tutDivisible)
+    bool use_cached_transition_frames =
+        Owner->TransUpdateType == tutDivisible;
+#ifdef __ANDROID__
+    use_cached_transition_frames = use_cached_transition_frames ||
+        Owner->TransUpdateType == tutDivisibleFade;
+#endif
+    if(use_cached_transition_frames)
         src1bmp = Src1Bmp;
     else
         src1bmp = bmp;
@@ -10470,7 +10580,7 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
     if(Owner->TransSrc) {
         // source available
         // prepare source 2 from CacheBitmap
-        if(Owner->TransUpdateType == tutDivisible)
+        if(use_cached_transition_frames)
             src = Src2Bmp;
         else
             src = Owner->TransSrc->Complete(destrect);
@@ -10486,7 +10596,6 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
     } else {
         data.Src2 = nullptr;
     }
-
     tTVPBaseTexture *dest;
     bool tempalloc = false;
     if(bmp == Target || Target == nullptr) {

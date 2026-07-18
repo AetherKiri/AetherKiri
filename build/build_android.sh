@@ -61,13 +61,8 @@ ensure_vcpkg
 
 find_android_ndk() {
     local candidate
-    if [[ -d "$ANDROID_HOME/ndk" ]]; then
-        find "$ANDROID_HOME/ndk" -maxdepth 1 -mindepth 1 -type d \
-            -exec test -f '{}/build/cmake/android.toolchain.cmake' ';' -print \
-            | sort -V | tail -1
-        return 0
-    fi
-
+    # A caller-selected NDK must win over SDK auto-discovery. This lets the
+    # native extension use the same libc++ ABI as Godot's export template.
     for candidate in "${ANDROID_NDK_HOME:-}" "${ANDROID_NDK:-}" "${NDK_HOME:-}"; do
         [[ -z "$candidate" ]] && continue
         candidate="${candidate%.}"
@@ -76,6 +71,31 @@ find_android_ndk() {
             return 0
         fi
     done
+
+    if [[ -n "${ANDROID_NDK_VERSION:-}" ]]; then
+        candidate="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+        if [[ -f "$candidate/build/cmake/android.toolchain.cmake" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    fi
+
+    if [[ -d "$ANDROID_HOME/ndk" ]]; then
+        # Godot 4.7 Android export templates are built with NDK r28. Prefer
+        # an installed r28 release so the bundled libc++_shared.so matches
+        # native extension ABI expectations.
+        candidate="$(find "$ANDROID_HOME/ndk" -maxdepth 1 -mindepth 1 -type d -name '28.*' \
+            -exec test -f '{}/build/cmake/android.toolchain.cmake' ';' -print \
+            | sort -V | tail -1)"
+        if [[ -n "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+        find "$ANDROID_HOME/ndk" -maxdepth 1 -mindepth 1 -type d \
+            -exec test -f '{}/build/cmake/android.toolchain.cmake' ';' -print \
+            | sort -V | tail -1
+        return 0
+    fi
 
     return 1
 }

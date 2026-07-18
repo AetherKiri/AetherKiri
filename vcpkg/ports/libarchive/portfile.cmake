@@ -1,5 +1,7 @@
 vcpkg_download_distfile(ARCHIVE
-    URLS "https://libarchive.org/downloads/libarchive-${VERSION}.tar.xz"
+    URLS
+        "https://github.com/libarchive/libarchive/releases/download/v${VERSION}/libarchive-${VERSION}.tar.xz"
+        "https://libarchive.org/downloads/libarchive-${VERSION}.tar.xz"
     FILENAME "libarchive-${VERSION}.tar.xz"
     SHA512 2524f71f4c2ebc254a1927279be3394e820d0a0c6dec7ef835a862aa08c35756edaa4208bcdc710dd092872b59c200b555b78670372e2830822e278ff1ec4e4a
 )

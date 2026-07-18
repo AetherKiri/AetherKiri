@@ -10,6 +10,7 @@
 //---------------------------------------------------------------------------
 
 #include "tjsCommHead.h"
+#include <algorithm>
 #include <spdlog/spdlog.h>
 
 #include "tjsInterCodeExec.h"
@@ -31,6 +32,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <thread>
 #include <fmt/format.h>
@@ -1079,7 +1081,6 @@ namespace TJS {
         if(!GetValidity() || !CodeArea) {
             TJSThrowFrom_tjs_error(TJS_E_INVALIDOBJECT);
         }
-
         struct tExecutingContextRefGuard {
             tTJSInterCodeContext *Self;
             iTJSDispatch2 *ObjThis;

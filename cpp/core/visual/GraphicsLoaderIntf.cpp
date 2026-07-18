@@ -1956,7 +1956,6 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
     try {
         tTVPBitmap *bmp = nullptr;
         iTVPTexture2D *texture = nullptr;
-
         // Skip XP3 decompression for known unsupported video formats
         // (but NOT .amv which is now handled by the AMV decoder).
         ttstr ext = TVPExtractStorageExt(nname);
@@ -1987,7 +1986,6 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
             TVPDecodeArena::Instance().End();
 #endif
         }
-
         if(provincename)
             *provincename = pn;
         if(metainfo)

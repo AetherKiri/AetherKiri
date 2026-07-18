@@ -326,7 +326,8 @@ void EngineLoop::HandlePointerMove(const EngineInputEvent& event) {
                            event.pointer_id, x, y, shift);
 
     TVPPostInputEvent(
-        new tTVPOnMouseMoveInputEvent(win, x, y, shift));
+        new tTVPOnMouseMoveInputEvent(win, x, y, shift),
+        TVP_EPT_REMOVE_POST);
 }
 
 void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {

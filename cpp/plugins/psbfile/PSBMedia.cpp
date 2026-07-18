@@ -1384,10 +1384,41 @@ namespace PSB {
         _missingResourceKeys.erase(key);
         auto it = _resources.find(key);
         if(it != _resources.end()) {
+            const bool sameResource =
+                it->second.resource == resource ||
+                (it->second.resource != nullptr &&
+                 it->second.resource->data == resource->data);
+            bool sameImageInfo = imageMeta == nullptr;
+            if(imageMeta != nullptr && it->second.hasImageInfo) {
+                const auto &old = it->second.imageInfo;
+                sameImageInfo = old.width == imageMeta->getWidth() &&
+                    old.height == imageMeta->getHeight() &&
+                    old.left == imageMeta->getLeft() &&
+                    old.top == imageMeta->getTop() &&
+                    old.opacity == imageMeta->getOpacity() &&
+                    old.visible == imageMeta->getVisible() &&
+                    old.layerType == imageMeta->getLayerType() &&
+                    old.type == imageMeta->getType() &&
+                    old.paletteType == imageMeta->getPalType() &&
+                    old.spec == imageMeta->getSpec() &&
+                    old.compress == imageMeta->getCompress() &&
+                    old.palette == imageMeta->getPalette().data;
+            }
+            const bool preserveConverted =
+                sameResource && sameImageInfo &&
+                it->second.convertedImage != nullptr;
+            auto convertedImage = preserveConverted
+                ? it->second.convertedImage
+                : std::shared_ptr<std::vector<uint8_t>>{};
+
             _bytesInUse -= it->second.sizeBytes;
             it->second.resource = resource;
-            it->second.convertedImage.reset();
-            it->second.hasImageInfo = imageMeta != nullptr;
+            it->second.convertedImage = std::move(convertedImage);
+            // The object-tree registration pass has no ImageMetadata.  Do not
+            // erase metadata learned by an earlier handler pass for the same
+            // resource, or its cached raw-to-BMP conversion becomes unusable.
+            if(imageMeta != nullptr)
+                it->second.hasImageInfo = true;
             if(imageMeta) {
                 it->second.imageInfo.debugKey = key;
                 it->second.imageInfo.width = imageMeta->getWidth();
