@@ -2,7 +2,8 @@
 
 #include <cstdlib>
 #include <cstring>
-#if defined(__APPLE__) || defined(__linux__)
+#if defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
+#define AETHERKIRI_HAS_EXECINFO 1
 #include <execinfo.h>
 #endif
 #include <iostream>
@@ -679,7 +680,7 @@ namespace PSB {
     bool PSBFile::loadPSBFile(const ttstr &filePath) {
         LOGGER->debug("load psb file: {}", filePath.AsStdString());
         const bool traceLoad = IsPSBLoadDebugEnabled();
-#if defined(__APPLE__) || defined(__linux__)
+#if defined(AETHERKIRI_HAS_EXECINFO)
         const std::string tracePath = filePath.AsStdString();
         if(traceLoad && tracePath.size() >= 4 &&
            tracePath.compare(tracePath.size() - 4, 4, ".pbd") == 0) {
