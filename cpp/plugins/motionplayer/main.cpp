@@ -144,7 +144,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(loopTime, getLoopTime, setLoopTime);
     NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
                  setProcessedMeshVerticesNum);
-    NCB_PROPERTY(playing, getAllplaying, setAllplaying);
+    NCB_PROPERTY(playing, getPlaying, setAllplaying);
     NCB_PROPERTY(queuing, getQueuing, setQueuing);
     NCB_PROPERTY(directEdit, getDirectEdit, setDirectEdit);
     NCB_PROPERTY(selectorEnabled, getSelectorEnabled, setSelectorEnabled);

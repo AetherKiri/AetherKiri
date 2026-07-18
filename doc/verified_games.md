@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-06-30
+Last updated: 2026-07-18
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -28,6 +28,15 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | オトメ*ドメイン | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, gallery scene replay flow, compiled PSB scenario label lookup, scene/text rendering, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | もっと！孕ませ！炎のおっぱい異世界おっぱいメイド学園！ | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, continue/load flow, scene/text rendering, voice playback smoke, save/load smoke, exit behavior, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | もっと！孕ませ！炎のおっぱい異世界超エロサキュバス学園！ | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, continue/load flow, scene/text rendering, Live2D rendering smoke, voice playback smoke, save/load smoke, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 天神乱漫 -LUCKY or UNLUCKY!?- | macOS release app; iOS/iPadOS release app build on iPad | Startup, opening movie transition, title/menu rendering, continue flow, scene/text rendering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| のーぶる☆わーくす | macOS release app; iOS/iPadOS release app build on iPad | Startup, opening movie transition, title/menu rendering, continue flow, scene/text rendering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| サノバウィッチ | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 千恋＊万花 | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 天使☆騒々 RE-BOOT! | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue flow, scene/text rendering, gallery rendering and animation smoke, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| ライムライト・レモネードジャム | macOS release app; iOS/iPadOS release app build on iPad | Startup, title animation and menu rendering, continue/load flow, scene/text rendering, gallery navigation/compositing, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| ワガママハイスペック | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, music selection/playback, lock-screen audio recovery, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| ワガママハイスペック OC | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, music playback, lock-screen audio recovery, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 淫母マンション～ママは、性処理肉便器～ | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, scene/text rendering, audio playback, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 
 ## How To Add A Game
 

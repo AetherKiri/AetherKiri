@@ -1868,13 +1868,16 @@ namespace TJS {
             throw;
         } catch(eTJS &e) {
             if(tryCatch) {
-                const std::string desc =
-                    GetShortDescriptionWithClassName().AsStdString();
-                if(TJSSceneTraceEnabled() && TJSSceneTraceMatches(desc)) {
-                    spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
-                                 desc, e.GetMessage().AsStdString(),
-                                 codesave - CodeArea);
-                    DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
+                if(TJSSceneTraceEnabled()) {
+                    const std::string desc =
+                        GetShortDescriptionWithClassName().AsStdString();
+                    if(TJSSceneTraceMatches(desc)) {
+                        spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
+                                     desc, e.GetMessage().AsStdString(),
+                                     codesave - CodeArea);
+                        DisplayExceptionGeneratedCode(codesave - CodeArea,
+                                                      ra_org);
+                    }
                 }
                 spdlog::get("tjs2")->debug(e.GetMessage().AsStdString());
             } else {
@@ -1883,12 +1886,15 @@ namespace TJS {
             TJS_eTJSScriptError(e.GetMessage(), this, codesave - CodeArea);
         } catch(exception &e) {
             if(tryCatch) {
-                const std::string desc =
-                    GetShortDescriptionWithClassName().AsStdString();
-                if(TJSSceneTraceEnabled() && TJSSceneTraceMatches(desc)) {
-                    spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
-                                 desc, e.what(), codesave - CodeArea);
-                    DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
+                if(TJSSceneTraceEnabled()) {
+                    const std::string desc =
+                        GetShortDescriptionWithClassName().AsStdString();
+                    if(TJSSceneTraceMatches(desc)) {
+                        spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
+                                     desc, e.what(), codesave - CodeArea);
+                        DisplayExceptionGeneratedCode(codesave - CodeArea,
+                                                      ra_org);
+                    }
                 }
                 spdlog::get("tjs2")->debug(e.what());
             } else {
@@ -1897,12 +1903,15 @@ namespace TJS {
             TJS_eTJSScriptError(e.what(), this, codesave - CodeArea);
         } catch(const char *text) {
             if(tryCatch) {
-                const std::string desc =
-                    GetShortDescriptionWithClassName().AsStdString();
-                if(TJSSceneTraceEnabled() && TJSSceneTraceMatches(desc)) {
-                    spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
-                                 desc, text, codesave - CodeArea);
-                    DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
+                if(TJSSceneTraceEnabled()) {
+                    const std::string desc =
+                        GetShortDescriptionWithClassName().AsStdString();
+                    if(TJSSceneTraceMatches(desc)) {
+                        spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
+                                     desc, text, codesave - CodeArea);
+                        DisplayExceptionGeneratedCode(codesave - CodeArea,
+                                                      ra_org);
+                    }
                 }
                 spdlog::get("tjs2")->debug(text);
             } else {

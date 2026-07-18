@@ -3,7 +3,9 @@
 //
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -103,6 +105,17 @@ namespace motion::detail {
         float weight = 1.0f;
     };
 
+    // Motion-local variables drive the frame clock of layers marked with a
+    // matching `parameterize` index. UI motions use these for states such as
+    // select, disable, invisible, empty and notopen.
+    struct MotionParameterInfo {
+        std::string id;
+        bool discretization = false;
+        double rangeBegin = 0.0;
+        double rangeEnd = 0.0;
+        double division = 0.0;
+    };
+
     struct MotionClip {
         std::string label;
         std::string owner;
@@ -112,10 +125,62 @@ namespace motion::detail {
         double selfSyncTime = 0.0;
         double syncTime = 0.0;
         std::vector<std::string> layerNames;
+        // PSB motion clips may contain several top-level layers with the same
+        // label (for example one `alpha` group per title character). Keep the
+        // authored list as the rendering source of truth; layersByName remains
+        // the name-based lookup surface for script/query compatibility.
+        std::vector<std::shared_ptr<const PSB::PSBDictionary>> orderedLayers;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>>
             layersByName;
+        std::vector<MotionParameterInfo> parameters;
+        int defaultParameterIndex = -1;
         std::vector<std::string> sourceCandidates;
     };
+
+    inline double parameterizedClipTime(const MotionClip &clip,
+                                        const MotionParameterInfo &parameter,
+                                        double value) {
+        const double range = parameter.rangeEnd - parameter.rangeBegin;
+        if(std::abs(range) <= 0.0000001) {
+            return 0.0;
+        }
+
+        const double minimum =
+            std::min(parameter.rangeBegin, parameter.rangeEnd);
+        const double maximum =
+            std::max(parameter.rangeBegin, parameter.rangeEnd);
+        double normalized =
+            (std::clamp(value, minimum, maximum) - parameter.rangeBegin) /
+            range;
+
+        // Discrete parameters select authored input values, while `division`
+        // describes the motion timeline's subdivisions.  Those counts can be
+        // different: eyechatch's `graffiti` selector has values 0..4 over a
+        // 49-division timeline. Quantizing the input to 1/49 shifted values 1,
+        // 3, and 4 off their exact selector frames and left every associated
+        // child motion inactive. Integer selector ranges therefore quantize
+        // by their own value count. Retain division as a fallback for the
+        // uncommon case of a non-integral authored range.
+        if(parameter.discretization) {
+            const double rangeMagnitude = std::abs(range);
+            const double integerSteps = std::round(rangeMagnitude);
+            const double selectorSteps =
+                integerSteps >= 1.0 &&
+                        std::abs(rangeMagnitude - integerSteps) <= 0.0000001
+                    ? integerSteps
+                    : parameter.division;
+            if(selectorSteps > 0.0) {
+                normalized = std::round(normalized * selectorSteps) /
+                             selectorSteps;
+            }
+        }
+        normalized = std::clamp(normalized, 0.0, 1.0);
+
+        const double timelineEnd = clip.selfSyncTime > 0.0
+            ? clip.selfSyncTime
+            : std::max(0.0, clip.totalFrames - 1.0);
+        return normalized * timelineEnd;
+    }
 
     struct TimelineState {
         std::string label;
@@ -206,6 +271,13 @@ namespace motion::detail {
             motionSourceBitmapCache;
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
             motionPreparedBitmapCache;
+        // Only materialized (copied/tinted) prepared bitmaps are tracked here.
+        // A motion can animate packed corner colors every frame, producing a
+        // distinct cache key and a full-size bitmap for each value. Keep those
+        // variants bounded per source while leaving cheap aliases to the base
+        // source cache untouched.
+        std::unordered_map<std::string, std::deque<std::string>>
+            motionPreparedMaterializedKeysBySource;
         struct PresentationRenderCacheEntry {
             std::string motion;
             double frame = 0.0;
@@ -283,6 +355,10 @@ namespace motion::detail {
             int itemFlags = 0;
             int parentNodeIndex = -1;
             bool hasRenderParent = false;
+            // A parent viewport can crop a drawable inside the final canvas.
+            // Such items need the clip-sized scratch layer; the final target
+            // only provides canvas-edge clipping.
+            bool requiresLocalClip = false;
             std::array<std::uint32_t, 4> packedColors{
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
             };
@@ -340,6 +416,7 @@ namespace motion::detail {
         void clearMotionBitmapCaches() {
             motionSourceBitmapCache.clear();
             motionPreparedBitmapCache.clear();
+            motionPreparedMaterializedKeysBySource.clear();
             clearPresentationRenderReuse();
         }
     };

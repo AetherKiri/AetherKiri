@@ -178,6 +178,7 @@ public:
 #endif
     void OnActivate();
     void OnDeactivate();
+    bool RetryAudioRendererForHost();
     void OnExit();
     void OnLowMemory();
 

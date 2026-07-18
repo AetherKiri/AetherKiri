@@ -27,6 +27,7 @@
 #include "DebugIntf.h"
 #include "Random.h"
 #include "XP3Archive.h"
+#include "XP3ArchiveCxDecoder.h"
 #include "FileSelector.h"
 
 #include "Application.h"
@@ -1570,6 +1571,10 @@ static bool TVPIsPatchArchiveName(const std::string &name,
 }
 
 void TVPAutoMountSiblingXP3Archives() {
+    // A process may launch more than one title over its lifetime. Never let a
+    // package-selected decoder leak into the next project.
+    TVPResetBuiltinXP3CxDecoder();
+
     if(TVPProjectDir.GetLastChar() != TJS_W('/'))
         return;
 

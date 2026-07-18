@@ -8,6 +8,7 @@
 #include <deque>
 #include <list>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -133,6 +134,7 @@ namespace motion {
         tTJSVariant getVariableKeys();
 
         void setAllplaying(bool v);
+        bool getPlaying() const;
         bool getAllplaying() const { return _allplaying; }
 
         void setSyncWaiting(bool v) { _syncWaiting = v; }
@@ -457,6 +459,8 @@ namespace motion {
     private:
         bool ensureMotionLoaded();
         void ensureNodeTreeBuilt();
+        Player *findLayerNodeForQuery(const std::string &key,
+                                      int &nodeIndex);
         void syncVariableKeysFromActiveMotion();
         void syncSelectorControlsLike_0x670D1C();
         const detail::TimelineState *primaryTimelineStateLike_0x66F80C() const;
@@ -741,6 +745,11 @@ namespace motion {
         bool _physicsDisabled = false;   // player+1159
         bool _emoteAnimatorFlag = false; // player+1161
         bool _emoteDirty = false;        // player+1162
+        // Script-side setters can update many selector variables before the
+        // next draw/query (a gallery page updates every slot this way).  Keep
+        // node evaluation deferred and coalesced instead of rebuilding the
+        // complete composed motion tree for each individual setter.
+        bool _layersDirty = true;
         struct EmoteCoordState {
             double x = 0.0;
             double y = 0.0;

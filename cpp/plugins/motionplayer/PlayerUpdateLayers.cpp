@@ -321,9 +321,28 @@ namespace motion {
             // Bind path-qualified variables to child Players (sub_6C4668
             // equivalent).  Yuzu addresses nested selectors with labels such
             // as `bt_start/select` and `slot01/base/disable`.  Each path
-            // segment names a motion node; only the remaining suffix belongs
-            // to that child Player.  Broadcasting the untrimmed label made the
-            // child miss its selector entirely.
+            // segment names a motion node; transparent wrapper motions keep
+            // the full path until the player containing that segment is
+            // reached, then only the remaining suffix belongs to the selected
+            // child. This mirrors the native recursive parameter binder while
+            // preserving path scope between sibling controls.
+            std::unordered_map<std::string, bool> hasRoutingNode;
+            for(const auto &[label, value] : _variableValues) {
+                const auto slash = label.find('/');
+                if(slash == std::string::npos) {
+                    continue;
+                }
+                const auto segment = label.substr(0, slash);
+                bool found = false;
+                for(const auto &candidate : nodes) {
+                    if(candidate.nodeType == 3 &&
+                       candidate.layerName == segment) {
+                        found = true;
+                        break;
+                    }
+                }
+                hasRoutingNode.emplace(label, found);
+            }
             for (auto &vn : nodes) {
                 if (vn.nodeType == 3) {
                     if (auto *cp = vn.getChildPlayer()) {
@@ -338,16 +357,9 @@ namespace motion {
                                 continue;
                             }
 
-                            // Controller-backed global parameters are shared
-                            // by parent and child models.  Keep that behavior
-                            // without leaking unrelated path labels into every
-                            // nested selector.
-                            if(label.find('/') == std::string::npos &&
-                               cp->_runtime && cp->_runtime->activeMotion &&
-                               cp->_runtime->activeMotion
-                                   ->controllerBindings.find(label) !=
-                                   cp->_runtime->activeMotion
-                                       ->controllerBindings.end()) {
+                            if(label.find('/') == std::string::npos) {
+                                cp->setVariable(detail::widen(label), value);
+                            } else if(!hasRoutingNode[label]) {
                                 cp->setVariable(detail::widen(label), value);
                             }
                         }
@@ -387,14 +399,59 @@ namespace motion {
                 parentIdx = 0;
             const auto &parent = nodes[parentIdx];
 
-            // Evaluate this node's interpolated state
-            auto state = evaluateLayerContent(node.psbNode, currentTime,
+            double nodeTime = currentTime;
+            const auto *clip = selectActiveClip();
+            int parameterIndex = node.parameterizeIndex;
+            if(parameterIndex < 0 && clip) {
+                parameterIndex = clip->defaultParameterIndex;
+            }
+            if(parameterIndex >= 0) {
+                if(clip && static_cast<size_t>(parameterIndex) <
+                               clip->parameters.size()) {
+                    const auto &parameter =
+                        clip->parameters[static_cast<size_t>(parameterIndex)];
+                    double rawValue = parameter.rangeBegin;
+                    // Motion nodes form nested Players, while scripts set
+                    // variables on the owning root Player. The native binder
+                    // resolves an unqualified parameter through that owner
+                    // chain. Child Players can be instantiated after the
+                    // parent's variable propagation pass, so relying only on
+                    // a copied child map leaves their parameter at rangeBegin
+                    // (for example `chapter=45` rendered as 0-0). Resolve the
+                    // nearest authored value directly through the ancestry as
+                    // well; path-qualified sibling selectors remain isolated
+                    // because their leaf parameter name does not match at the
+                    // root.
+                    std::unordered_set<const Player *> variableOwners;
+                    for(const Player *owner = this;
+                        owner && variableOwners.insert(owner).second;
+                        owner = owner->_motionParentPlayer) {
+                        if(const auto it =
+                               owner->_variableValues.find(parameter.id);
+                           it != owner->_variableValues.end()) {
+                            rawValue = it->second;
+                            break;
+                        }
+                        if(const auto it =
+                               owner->_evalResultValues.find(parameter.id);
+                           it != owner->_evalResultValues.end()) {
+                            rawValue = it->second;
+                            break;
+                        }
+                    }
+                    nodeTime = detail::parameterizedClipTime(
+                        *clip, parameter, rawValue);
+                }
+            }
+
+            // Evaluate this node's interpolated state.
+            auto state = evaluateLayerContent(node.psbNode, nodeTime,
                                               node.nodeType);
             if(detail::logoChainTraceEnabled(_runtime->activeMotion)
                && state.debugEvaluated) {
                 detail::logoChainTraceLogf(
                     motionPath, "updateLayers.phase2.framesel", "0x6926B4/0x699AE4",
-                    currentTime,
+                    nodeTime,
                     "nodeIndex={} label={} type={} activeIndex={} nextIndex={} frameA[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] frameB[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] t={:.6f} interpolated={} final[src={},opacity={:.6f},scale=({:.6f},{:.6f})]",
                     node.index,
                     node.layerName.empty() ? std::string("<root>")
@@ -2295,9 +2352,25 @@ namespace motion {
                 const bool isTitleCastEntrance =
                     motionSource == "motion/char/show" &&
                     motionPath.find("title.psb") != std::string::npos;
+                // A parameterized clip is a selector timeline: its parameter
+                // chooses which nested motion is active, but it does not scrub
+                // the selected motion at that selector value. Once selected,
+                // the child must advance on its own clock until its one-shot
+                // animation completes. This applies to ordinary UI `select`
+                // clips as well as authored selectors such as `ch`, `page`,
+                // and `state`.
+                const auto *parentClip = selectActiveClip();
+                int motionParameterIndex = mn.parameterizeIndex;
+                if(motionParameterIndex < 0 && parentClip) {
+                    motionParameterIndex = parentClip->defaultParameterIndex;
+                }
+                const bool parameterizedSelectorChild =
+                    parentClip && motionParameterIndex >= 0 &&
+                    static_cast<size_t>(motionParameterIndex) <
+                        parentClip->parameters.size();
                 const bool parentDrivenChild =
                     !motionSource.empty() && childClip && !childClip->loop &&
-                    !isTitleCastEntrance;
+                    !isTitleCastEntrance && !parameterizedSelectorChild;
                 if(parentDrivenChild) {
                     auto sourceLeaf = motionSource;
                     if(const auto slash = sourceLeaf.find_last_of("/\\");
@@ -2306,10 +2379,49 @@ namespace motion {
                     }
 
                     std::optional<double> selectedTime;
+                    // A child clip can itself be a parameterized selector.
+                    // Resolve its authored parameter before falling back to
+                    // the parent animation clock. The value may already have
+                    // been copied into the child by phase 1, or still live on
+                    // an ancestor when the child was just instantiated.
+                    if(childClip->defaultParameterIndex >= 0 &&
+                       static_cast<size_t>(childClip->defaultParameterIndex) <
+                           childClip->parameters.size()) {
+                        const auto &parameter = childClip->parameters[
+                            static_cast<size_t>(
+                                childClip->defaultParameterIndex)];
+                        double rawValue = parameter.rangeBegin;
+                        std::unordered_set<const Player *> variableOwners;
+                        for(const Player *owner = &child;
+                            owner && variableOwners.insert(owner).second;
+                            owner = owner->_motionParentPlayer) {
+                            if(const auto it =
+                                   owner->_variableValues.find(parameter.id);
+                               it != owner->_variableValues.end()) {
+                                rawValue = it->second;
+                                break;
+                            }
+                            if(const auto it =
+                                   owner->_evalResultValues.find(parameter.id);
+                               it != owner->_evalResultValues.end()) {
+                                rawValue = it->second;
+                                break;
+                            }
+                        }
+                        // The native selector defaults to its range beginning
+                        // even before a script explicitly binds the variable.
+                        // Keeping that default prevents selector clips from
+                        // accidentally advancing as ordinary animations.
+                        selectedTime = detail::parameterizedClipTime(
+                            *childClip, parameter, rawValue);
+                    }
                     if(!mn.layerName.empty()) {
-                        if(const auto it = _variableValues.find(mn.layerName);
+                        if(!selectedTime) {
+                            if(const auto it =
+                                   _variableValues.find(mn.layerName);
                            it != _variableValues.end()) {
-                            selectedTime = it->second;
+                                selectedTime = it->second;
+                            }
                         }
                     }
                     if(!selectedTime && !sourceLeaf.empty()) {
@@ -2365,6 +2477,10 @@ namespace motion {
                     }
                     child._queuing = true;
                     child._allplaying = child.hasPlayingChildPlayers();
+                    // The sampled child itself remains pinned to the parent,
+                    // but independently playing descendants still need the
+                    // root tick's delta (button -> selected over/out motion).
+                    child._frameLastTime = _frameLastTime;
                     child._emoteDirty = true;
                 } else {
                     // Looping/standalone children keep their own clock.
@@ -3626,6 +3742,8 @@ namespace motion {
 
         _allplaying = !_runtime->playingTimelineLabels.empty() ||
             shouldReportPlayingChildPlayers();
+        _emoteDirty = false;
+        _layersDirty = false;
 
     }
 
@@ -3888,10 +4006,14 @@ namespace motion {
                     break;
                 }
                 const auto &ancestor = nodes[ancestorIndex];
+                // Type 12 is an off-screen/composite container even when its
+                // own stencil mode is 1 rather than 4.  Its source is the
+                // group's base image, not an independent full-screen sibling.
+                // Keeping only mode-4 containers here flattened mode-1 child
+                // motions directly into the target and let their base images
+                // overwrite previously rendered nested artwork.
                 const bool isSpecialCompositeParent =
-                    (ancestor.nodeType == 12 &&
-                     (ancestor.stencilType & 4) != 0) ||
-                    ancestor.nodeType == 7;
+                    ancestor.nodeType == 12 || ancestor.nodeType == 7;
                 const auto inserted = isSpecialCompositeParent
                     ? requiredGroupNodeIndices.insert(ancestorIndex)
                     : std::pair<std::unordered_set<int>::iterator, bool>{
@@ -3935,7 +4057,7 @@ namespace motion {
             entry.nodeIndex = static_cast<int>(i);
             entry.nodeLabel = node.layerName;
             entry.hasOwnSource = hasOwnSource;
-            entry.groupOnly = !hasOwnSource && needsGroupEntry;
+            entry.groupOnly = needsGroupEntry;
             if(hasOwnSource) {
                 entry.sourceKey = node.interpolatedCache.src;
                 entry.srcRef = findSource(detail::widen(entry.sourceKey));
@@ -4324,6 +4446,7 @@ namespace motion {
         struct PendingChildRenderItems {
             int parentNodeIndex = -1;
             int externalAncestorNodeIndex = -1;
+            bool forceExternalAncestorForRoot = false;
             std::string childMotionPath;
             std::vector<detail::PlayerRuntime::PreparedRenderItem> entries;
         };
@@ -4345,6 +4468,8 @@ namespace motion {
             if(parentNodeIndex >= 0 &&
                parentNodeIndex < static_cast<int>(_runtime->nodes.size())) {
                 const auto &parentNode = _runtime->nodes[parentNodeIndex];
+                pending.forceExternalAncestorForRoot =
+                    parentNode.meshCombineEnabled;
                 pending.externalAncestorNodeIndex =
                     parentNode.meshCombineEnabled
                         ? parentNodeIndex
@@ -4366,12 +4491,14 @@ namespace motion {
             pendingChildItems.push_back(std::move(pending));
         };
 
-        // Aligned to sub_6C2334: nodeType 3/4 child-player recursion is gated
-        // by player+1092 (preview). Yuzu's SD presentation motions are an
-        // exception in practice: their visible image lives in a nested child
-        // motion even when the CG viewer marks the parent as a preview.
-        const bool expandChildRenderItems =
-            !_preview || isYuzuSdPresentationMotionPath(motionPath);
+        // The native player can keep preview child players on separate output
+        // surfaces. AetherKiri flattens a motion into one KiriKiri layer, so an
+        // active nested motion must be collected here as well. Otherwise a CG
+        // viewer preview silently drops any artwork authored in nodeType 3/4
+        // children (for example the centre of eyechatch.mtn). Do not infer this
+        // from the motion filename: ordinary gallery composites use the same
+        // nesting as the previously handled sd* presentations.
+        const bool expandChildRenderItems = true;
         if(expandChildRenderItems) {
             for(size_t ni = 1; ni < _runtime->nodes.size(); ++ni) {
                 auto &node = _runtime->nodes[ni];
@@ -4677,7 +4804,17 @@ namespace motion {
                     }
                     if(entry.visibleAncestorIndex >= 0) {
                         entry.visibleAncestorIndex += nodeIndexOffset;
-                    } else if(pending.externalAncestorNodeIndex >= 0) {
+                    } else if(pending.externalAncestorNodeIndex >= 0 &&
+                              (entry.groupOnly ||
+                               pending.forceExternalAncestorForRoot)) {
+                        // Composite roots remain inside their containing
+                        // group. A plain bitmap root is already a complete
+                        // colour draw, though: attaching it to the nearest
+                        // type-12 ancestor makes later nested groups cover it
+                        // (gallery sticker/icon variants), whereas multi-layer
+                        // variants stay independent through their local parent
+                        // indices. Mesh-combined roots are the explicit
+                        // exception and must retain the external parent.
                         entry.visibleAncestorIndex =
                             pending.externalAncestorNodeIndex;
                     }

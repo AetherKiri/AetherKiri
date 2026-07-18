@@ -11,3 +11,4 @@ set(TEST_FILES_PATH ${CMAKE_CURRENT_SOURCE_DIR}/test_files)
 configure_file(test_config.h.in test_config.h)
 
 add_subdirectory(unit-tests/plugins)
+add_subdirectory(unit-tests/tjs2)

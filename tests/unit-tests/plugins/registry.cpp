@@ -108,6 +108,8 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("htmlhelp.dll"),
         TJS_W("httprequest.dll"),
         TJS_W("drawdevice.dll"),
+        TJS_W("DrawDeviceD2D.dll"),
+        TJS_W("DrawDeviceD2Dm.dll"),
         TJS_W("drawdeviceD3D.dll"),
         TJS_W("drawdeviceIrrlicht.dll"),
         TJS_W("drawdeviceOgre.dll"),
@@ -276,6 +278,21 @@ TEST_CASE("KAGParserEx getNextTag returns ordered taglist") {
     CHECK(ttstr(getIndex(taglist, 0)) == TJS_W("tagname"));
     CHECK(ttstr(getIndex(taglist, 1)) == TJS_W("fade"));
     CHECK(ttstr(getIndex(taglist, 2)) == TJS_W("sync"));
+
+    // taglist is native parser metadata: it must remain directly accessible
+    // without leaking into the dictionary enumeration used by KAG scripts.
+    iTJSDispatch2 *enumerated = TJSCreateArrayObject();
+    REQUIRE(enumerated != nullptr);
+    tTJSVariant *assignArgs[] = { &tag };
+    REQUIRE(TJS_SUCCEEDED(enumerated->FuncCall(
+        0, TJS_W("assign"), nullptr, nullptr, 1, assignArgs, enumerated)));
+    tTJSVariant enumeratedValue(enumerated, enumerated);
+    const tjs_int enumeratedCount =
+        static_cast<tjs_int>(getProp(enumeratedValue, TJS_W("count")));
+    CHECK(enumeratedCount == 6);
+    for(tjs_int i = 0; i < enumeratedCount; i += 2)
+        CHECK(ttstr(getIndex(enumeratedValue, i)) != TJS_W("taglist"));
+    enumerated->Release();
 
     parser->Release();
     REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll")));

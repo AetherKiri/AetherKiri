@@ -520,6 +520,16 @@ namespace motion {
         }
     }
 
+    bool Player::getPlaying() const {
+        // `playing` is the state of this Player's selected/root timeline.
+        // `allplaying` additionally keeps independently timed descendants
+        // advancing. AnimKAGLayer deliberately uses the former to unlock UI
+        // input once the owning transition ends, while continuing to tick the
+        // latter for nested effects. Returning the aggregate state here makes
+        // a looping child permanently lock every motion-backed button.
+        return _runtime && !_runtime->playingTimelineLabels.empty();
+    }
+
     void Player::enableAutoProgress(iTJSDispatch2 *objthis) {
         if(!objthis) {
             return;
@@ -673,6 +683,16 @@ namespace motion {
         const bool completedYuzuSdPreview =
             isYuzuSdPreviewMotion(*_runtime, label) &&
             _completedEndedTimelineRenderHoldLabel == label;
+        // A completed ordinary one-shot has already committed its final
+        // frame. Re-entering the hold while an unrelated descendant keeps
+        // the owner ticking rebuilds the whole retained UI every frame and
+        // wipes interactive child state (hovered buttons immediately return
+        // to their default clip). Yuzu SD previews deliberately keep using
+        // the hold while their animated descendants continue.
+        if(_completedEndedTimelineRenderHoldLabel == label &&
+           !isYuzuSdPreviewMotion(*_runtime, label)) {
+            return {};
+        }
         const bool deferredYuzuSdPreview =
             isYuzuSdPreviewMotion(*_runtime, label) &&
             _deferredEndedTimelineRenderHoldLabel == label;
@@ -752,6 +772,10 @@ namespace motion {
                stateIt->second.totalFrames) {
             stateIt->second.playing = false;
             stateIt->second.wasPlaying = false;
+            if(_runtime->activeMotion &&
+               !isYuzuSdPreviewMotion(*_runtime, label)) {
+                _completedEndedTimelineRenderHoldLabel = label;
+            }
         }
         if(_endedTimelineRenderHoldHasRestore &&
            _endedTimelineRenderHoldRestoreLabel == label) {
@@ -1072,6 +1096,7 @@ namespace motion {
     void Player::setX(double v) {
         _pendingRootX = v;
         _hasPendingRootPos = true;
+        _layersDirty = true;
         if (_runtime && !_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
             if (root.localState.posX != v) {
@@ -1090,6 +1115,7 @@ namespace motion {
     void Player::setY(double v) {
         _pendingRootY = v;
         _hasPendingRootPos = true;
+        _layersDirty = true;
         if (_runtime && !_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
             if (root.localState.posY != v) {
@@ -1105,6 +1131,16 @@ namespace motion {
     // Used by EmotePlayer.setModule() to bridge loaded PSB data into the Player pipeline.
     void Player::loadFromSnapshot(
         std::shared_ptr<detail::MotionSnapshot> snapshot) {
+        // A newly bound motion starts on its own local timeline.  Motion
+        // sub-nodes reuse Player instances while switching between clips
+        // such as `select`, `over`, and `out`; carrying the previous clip's
+        // accumulated time makes the replacement one-shot end on its first
+        // zero-delta evaluation.
+        _frameLastTime = 0.0;
+        _frameLoopTime = 0.0;
+        _loopTime = 0.0;
+        _clampedEvalTime = 0.0;
+        _frameTickCount = 0.0;
         _runtime->activeMotion.reset();
         _runtime->clearMotionBitmapCaches();
         _runtime->timelines.clear();
@@ -1189,6 +1225,7 @@ namespace motion {
             return;
         }
         _motionKey = v;
+        _layersDirty = true;
         _runtime->activeMotion.reset();
         _runtime->clearMotionBitmapCaches();
         _runtime->timelines.clear();
@@ -1531,6 +1568,7 @@ namespace motion {
 
     void Player::setProgressCompat(double v) {
         ensureMotionLoaded();
+        _layersDirty = true;
         const auto progress = std::clamp(v, 0.0, 1.0);
         _runtime->playingTimelineLabels.clear();
         for(auto &[_, state] : _runtime->timelines) {

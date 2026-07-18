@@ -969,15 +969,11 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetMostFrontChildAt(
 //---------------------------------------------------------------------------
 tTJSNI_BaseLayer *tTVPLayerManager::GetClickableLayerAt(tjs_int x, tjs_int y) {
     tTJSNI_BaseLayer *layer = GetMostFrontChildAt(x, y);
-    if(tTJSNI_BaseLayer *preview = TVPFindCgPreviewLayerAt(this, x, y)) {
-        if(TVPInputTraceEnabled() && layer != preview) {
-            spdlog::info("LayerManager route click from {} to cg preview {}",
-                         layer ? layer->GetName().AsStdString()
-                               : std::string("<none>"),
-                         preview->GetName().AsStdString());
-        }
-        return preview;
-    }
+    // Do not globally prioritize a full-size CG presentation layer here.
+    // Gallery controls can be composited over that layer and must retain the
+    // normal front-to-back hit result for press, hover, click, and drag.  The
+    // preview fallback is intentionally applied only to right-click release
+    // in PrimaryMouseUp, where it is needed to close a full-screen preview.
     layer = TVPFindMotionButtonOwnerForDisplayProxy(layer, x, y);
     if(TVPIsSaveLoadItemLayer(layer))
         TVPTraceLayersAt(this, "save-load-item", x, y);
@@ -1313,29 +1309,30 @@ void tTVPLayerManager::PrimaryMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
     TVPTraceLayerHit("up", x, y, l);
     TVPTraceLayersAt(this, "up-stack", x, y);
 
-    if(l) {
-        int orig_x = x, orig_y = y;
-        tTJSNI_BaseLayer *right_click_preview =
-            mb == mbRight ? TVPFindCgPreviewLayerAt(this, orig_x, orig_y)
-                          : nullptr;
-        if(right_click_preview) {
-            const std::string preview_name =
-                right_click_preview->GetName().AsStdString();
-            right_click_preview->FromPrimaryCoordinates(x, y);
-            right_click_preview->FireMouseUp(x, y, mb, flags);
-            TVPRouteCgModePreviewRightClick();
-            if(TVPInputTraceEnabled()) {
-                spdlog::info(
-                    "LayerManager route right click to cg preview mouseup {}",
-                    preview_name);
-            }
-            if(!TVPIsAnyMouseButtonPressedInShiftStateFlags(flags)) {
-                ReleaseCapture();
-                PrimaryMouseMove(orig_x, orig_y, flags);
-            }
-            return;
+    const int orig_x = x;
+    const int orig_y = y;
+    tTJSNI_BaseLayer *right_click_preview =
+        mb == mbRight ? TVPFindCgPreviewLayerAt(this, orig_x, orig_y)
+                      : nullptr;
+    if(right_click_preview) {
+        const std::string preview_name =
+            right_click_preview->GetName().AsStdString();
+        right_click_preview->FromPrimaryCoordinates(x, y);
+        right_click_preview->FireMouseUp(x, y, mb, flags);
+        TVPRouteCgModePreviewRightClick();
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager route right click to cg preview mouseup {}",
+                preview_name);
         }
+        if(!TVPIsAnyMouseButtonPressedInShiftStateFlags(flags)) {
+            ReleaseCapture();
+            PrimaryMouseMove(orig_x, orig_y, flags);
+        }
+        return;
+    }
 
+    if(l) {
         l->FromPrimaryCoordinates(x, y);
         l->FireMouseUp(x, y, mb, flags);
 

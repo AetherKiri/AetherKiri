@@ -13,6 +13,7 @@
 #include "motionplayer/ResourceManager.h"
 #include "psbfile/PSBFile.h"
 #include "psbfile/PSBMediaRegistry.h"
+#include "kbadDataPack.h"
 #include "tjsNs0DataPack.h"
 #include <array>
 #include <iomanip>
@@ -1043,6 +1044,14 @@ static tjs_error loadDataPack(tTJSVariant *result,
                          path.AsStdString());
             TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack TJS/ns0 ok: ")) +
                       path);
+            return TJS_S_OK;
+        }
+        stream->Seek(0, TJS_BS_SEEK_SET);
+        if(TVPLoadKbadDataPack(stream.get(),
+                              result ? result : &binaryResult)) {
+            spdlog::info("Scripts.loadDataPack KBAD ok: {}",
+                         path.AsStdString());
+            TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack KBAD ok: ")) + path);
             return TJS_S_OK;
         }
         stream->Seek(0, TJS_BS_SEEK_SET);

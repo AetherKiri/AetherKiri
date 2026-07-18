@@ -143,3 +143,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE ZLIB::ZLIB)
 # Highway SIMD optimization module
 add_subdirectory(simd)
 target_link_libraries(${PROJECT_NAME} PRIVATE tvpgl_simd)
+
+# The animation compositor spends most of its frame time in the templated
+# stretch/affine raster loops in this module. Keep assertions and debug symbols,
+# but allow those hot loops to inline and vectorize in Debug builds as well;
+# -Og makes layered 1080p SD motions too slow to coexist with typewriter text.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE -O2 -g)
+endif()

@@ -168,6 +168,7 @@ namespace TJS {
 
     // Global mock fallback declarations
     extern bool TVPIsMockEnabled();
+    extern void TVPSetMockEnabled(bool enabled);
     extern tTJSVariantClosure_S& TVPGetGlobalMockClosure_S();
 
 /*[*/

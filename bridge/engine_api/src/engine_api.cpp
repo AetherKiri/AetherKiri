@@ -68,6 +68,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "visual/godot/GodotRenderManager.h"
 #include "psbfile/PSBMedia.h"
 #include "sound/win32/WaveImpl.h"
+#include "sound/win32/WaveMixer.h"
 #include "tjsDebug.h"
 #include "engine_options.h"
 #include "PluginCallTracer.hpp"
@@ -610,6 +611,7 @@ bool EnsureEngineRuntimeInitialized(uint32_t width, uint32_t height,
 void StartHostEngineLoop(engine_handle_s* impl) {
   EngineLoop::CreateInstance();
   if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
+    loop->ResetPointerState();
     loop->Start();
   }
   if (auto* scene = TVPMainScene::GetInstance(); scene != nullptr) {
@@ -1519,6 +1521,9 @@ engine_result_t engine_destroy(engine_handle_t handle) {
   }
 
   if (owned_runtime) {
+    if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
+      loop->ResetPointerState();
+    }
     try {
       Application->OnDeactivate();
     } catch (...) {
@@ -1855,6 +1860,14 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   }
   impl->tick_count += 1;
 
+  // iOS may deliver the first foreground callback before the shared
+  // AVAudioSession is ready. The renderer keeps its logical streams locked
+  // and retries device activation with a short internal backoff.
+  if (::Application && TVPIsAudioRendererSuspendedForHost()) {
+    ::Application->RetryAudioRendererForHost();
+  }
+  TVPPollAudioRendererForHost();
+
   const auto tick_start = std::chrono::steady_clock::now();
   size_t dispatched_inputs = 0;
   while (!impl->input.pending_events.empty()) {
@@ -2019,6 +2032,9 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
   // which is insufficient.
   if (::Application) {
     ::Application->Run();
+    if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
+      loop->CompleteInputFrame();
+    }
     TVPRepairKagNoTransWait();
   }
   const auto after_application_run = std::chrono::steady_clock::now();
@@ -2196,6 +2212,9 @@ engine_result_t engine_pause(engine_handle_t handle) {
   Application->OnDeactivate();
   impl->input.active_pointer_ids.clear();
   impl->input.pending_events.clear();
+  if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
+    loop->ResetPointerState();
+  }
   impl->state = ToStateValue(EngineState::kPaused);
   ClearHandleErrorLocked(impl);
   SetThreadError(nullptr);

@@ -600,6 +600,10 @@ namespace motion::detail {
             if (auto v = nodeTreePsbNumber(psbNode, "coordinate"))
                 node.coordinateMode = static_cast<int>(*v);
 
+            // "parameterize" → motion-local parameter table index.
+            if (auto v = nodeTreePsbNumber(psbNode, "parameterize"))
+                node.parameterizeIndex = static_cast<int>(*v);
+
             // "inheritMask" → inheritFlags (node+40, default 0x1FC)
             if (auto v = nodeTreePsbNumber(psbNode, "inheritMask"))
                 node.inheritFlags = static_cast<int>(*v);
@@ -736,10 +740,13 @@ namespace motion::detail {
         const std::unordered_map<std::string,
             std::shared_ptr<const PSB::PSBDictionary>> *layersByName = nullptr;
         const std::vector<std::string> *layerNames = nullptr;
+        const std::vector<std::shared_ptr<const PSB::PSBDictionary>>
+            *orderedLayers = nullptr;
 
         if (clip) {
             layersByName = &clip->layersByName;
             layerNames = &clip->layerNames;
+            orderedLayers = &clip->orderedLayers;
         }
 
         if (!layersByName) {
@@ -747,16 +754,23 @@ namespace motion::detail {
             layerNames = &snapshot.layerNames;
         }
 
-        if (!layerNames || layerNames->empty()) {
+        if ((!orderedLayers || orderedLayers->empty()) &&
+            (!layerNames || layerNames->empty())) {
             return nodes;
         }
 
         // Aligned to Player_buildNodeTree_recursive(player, 0, layerArray):
         // every top-level PSB layer uses the synthetic root (index 0) as parent.
-        for (const auto &name : *layerNames) {
-            auto it = layersByName->find(name);
-            if (it == layersByName->end()) continue;
-            walkTree(it->second, 0, nodes);
+        if (orderedLayers && !orderedLayers->empty()) {
+            for (const auto &layer : *orderedLayers) {
+                walkTree(layer, 0, nodes);
+            }
+        } else {
+            for (const auto &name : *layerNames) {
+                auto it = layersByName->find(name);
+                if (it == layersByName->end()) continue;
+                walkTree(it->second, 0, nodes);
+            }
         }
 
         if (layersByName != &snapshot.layersByName &&

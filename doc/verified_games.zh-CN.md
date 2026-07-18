@@ -2,7 +2,7 @@
 
 [English](verified_games.md)
 
-最后更新：2026-06-30
+最后更新：2026-07-18
 
 本文档记录已经用 AetherKiri 手动 smoke test 或 flow test 过的游戏。它是兼容性记录，
 不代表每条路线、每个视频、每个插件路径或每个存档状态都已经完整验证。
@@ -27,6 +27,15 @@
 | オトメ*ドメイン | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、画廊场景回放流程、编译版 PSB 场景标签解析、场景/文字渲染，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | もっと！孕ませ！炎のおっぱい異世界おっぱいメイド学園！ | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、语音播放冒烟、存读档冒烟、退出行为，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | もっと！孕ませ！炎のおっぱい異世界超エロサキュバス学園！ | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、Live2D 渲染冒烟、语音播放冒烟、存读档冒烟，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 天神乱漫 -LUCKY or UNLUCKY!?- | macOS release app；iOS/iPadOS iPad release app build | 启动、开场影片切换、标题/菜单渲染、继续游戏流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| のーぶる☆わーくす | macOS release app；iOS/iPadOS iPad release app build | 启动、开场影片切换、标题/菜单渲染、继续游戏流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| サノバウィッチ | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 千恋＊万花 | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 天使☆騒々 RE-BOOT! | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续游戏流程、场景/文字渲染、画廊渲染与动画冒烟、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| ライムライト・レモネードジャム | macOS release app；iOS/iPadOS iPad release app build | 启动、标题动画与菜单渲染、继续/读档流程、场景/文字渲染、画廊导航与图像合成、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| ワガママハイスペック | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、音乐选择与播放、锁屏恢复音频和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| ワガママハイスペック OC | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、音乐播放、锁屏恢复音频和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 淫母マンション～ママは、性処理肉便器～ | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、场景/文字渲染、音频播放和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 
 ## 如何新增游戏
 

@@ -607,6 +607,8 @@ const POINTER_MOVE := 2
 const POINTER_UP := 3
 const POINTER_SCROLL := 4
 const POINTER_MOD_LEFT := 0x08
+const POINTER_MOD_RIGHT := 0x10
+const POINTER_MOD_MIDDLE := 0x20
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
 const SHELL_SCROLL_DRAG_SPEED := 1.0
@@ -4432,6 +4434,19 @@ func _probe_run_actions(config: Dictionary, step: int) -> int:
             _probe_send_mapped_move(pos, config)
             if label.is_empty() or label == "move":
                 label = "move_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "drag":
+            var from := _probe_action_point(action, "from", ProbeConfig.click_position(action))
+            var to := _probe_action_point(action, "to", from)
+            if not await _probe_send_mapped_drag(
+                from,
+                to,
+                config,
+                max(1, int(action.get("steps", 12))),
+                max(0, int(action.get("per_step_frames", 1)))
+            ):
+                continue
+            if label.is_empty() or label == "drag":
+                label = "drag_%d_%d_to_%d_%d" % [int(from.x), int(from.y), int(to.x), int(to.y)]
         elif kind == "key":
             var key_code := int(action.get("key_code", 13))
             player.send_key_event(true, key_code, int(action.get("modifiers", 0)), int(action.get("unicode", 0)))
@@ -4604,6 +4619,62 @@ func _probe_send_mapped_move(window_pos: Vector2, config: Dictionary) -> void:
     player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
 
+func _probe_action_point(action: Dictionary, key: String, fallback: Vector2) -> Vector2:
+    var value: Variant = action.get(key, null)
+    if value is Array and value.size() >= 2:
+        return Vector2(float(value[0]), float(value[1]))
+    if value is Dictionary:
+        return Vector2(float(value.get("x", fallback.x)), float(value.get("y", fallback.y)))
+    return fallback
+
+func _probe_send_mapped_drag(
+    from: Vector2,
+    to: Vector2,
+    config: Dictionary,
+    steps: int,
+    per_step_frames: int
+) -> bool:
+    var mapped_from := _probe_map_window_point(from, config)
+    var mapped_to := _probe_map_window_point(to, config)
+    if mapped_from.x < 0.0 or mapped_from.y < 0.0 or mapped_to.x < 0.0 or mapped_to.y < 0.0:
+        print("skip drag outside texture window from=%s to=%s mapped_from=%s mapped_to=%s" % [
+            from,
+            to,
+            mapped_from,
+            mapped_to,
+        ])
+        return false
+
+    player.send_pointer_event(POINTER_MOVE, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_DOWN, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    _hold_next_present_after_input()
+    player.tick(1.0 / 60.0)
+
+    var previous := mapped_from
+    for index in range(1, steps + 1):
+        var current := mapped_from.lerp(mapped_to, float(index) / float(steps))
+        var delta := current - previous
+        player.send_pointer_event(
+            POINTER_MOVE,
+            0,
+            current.x,
+            current.y,
+            delta.x,
+            delta.y,
+            0,
+            0
+        )
+        player.tick(1.0 / 60.0)
+        previous = current
+        if per_step_frames > 0 and not await _probe_advance(per_step_frames):
+            return false
+
+    player.send_pointer_event(POINTER_UP, 0, mapped_to.x, mapped_to.y, 0.0, 0.0, 0)
+    _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
+    player.tick(1.0 / 60.0)
+    return true
+
 func _probe_send_mapped_scroll(window_pos: Vector2, config: Dictionary, delta_y: float) -> void:
     var mapped := _probe_map_window_point(window_pos, config)
     if mapped.x < 0.0 or mapped.y < 0.0:
@@ -4736,6 +4807,18 @@ func _probe_send_direct_click(pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, pos.x, pos.y, 0.0, 0.0, 0)
 
 func _probe_capture_image() -> Image:
+    # A headless Godot viewport can be an opaque white dummy target. Prefer
+    # the engine's composed RGBA frame so CLI regression captures inspect the
+    # game output instead of accepting that dummy as a valid screenshot.
+    var frame: Dictionary = player.read_frame_rgba()
+    var data: PackedByteArray = frame.get("rgba", PackedByteArray())
+    var width := int(frame.get("width", 0))
+    var height := int(frame.get("height", 0))
+    if width > 0 and height > 0 and data.size() >= width * height * 4:
+        var frame_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
+        if int(_image_stats(frame_image).get("visible", 0)) > 0:
+            return frame_image
+
     var texture := get_viewport().get_texture()
     if texture != null:
         var viewport_image := texture.get_image()
@@ -4749,14 +4832,6 @@ func _probe_capture_image() -> Image:
             if int(_image_stats(viewport_image).get("visible", 0)) > 0:
                 return viewport_image
 
-    var frame: Dictionary = player.read_frame_rgba()
-    var data: PackedByteArray = frame.get("rgba", PackedByteArray())
-    var width := int(frame.get("width", 0))
-    var height := int(frame.get("height", 0))
-    if width > 0 and height > 0 and data.size() >= width * height * 4:
-        var frame_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
-        if int(_image_stats(frame_image).get("visible", 0)) > 0:
-            return frame_image
     return Image.create(1, 1, false, Image.FORMAT_RGBA8)
 
 func _probe_image_diff_score(a: Image, b: Image) -> float:
@@ -6050,11 +6125,19 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         if _is_touch_platform():
             return true
         var motion := event as InputEventMouseMotion
-        var mapped := _map_viewport_point(motion.position)
+        var captured := not active_mouse_buttons.is_empty()
+        var mapped := _map_viewport_point(motion.position, captured)
         if mapped.x < 0.0 or mapped.y < 0.0:
             _trace_input_outside()
             return false
         var rel := _map_viewport_delta(motion.relative)
+        var modifiers := 0
+        if active_mouse_buttons.has(MOUSE_BUTTON_LEFT) or (motion.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+            modifiers |= POINTER_MOD_LEFT
+        if active_mouse_buttons.has(MOUSE_BUTTON_RIGHT) or (motion.button_mask & MOUSE_BUTTON_MASK_RIGHT) != 0:
+            modifiers |= POINTER_MOD_RIGHT
+        if active_mouse_buttons.has(MOUSE_BUTTON_MIDDLE) or (motion.button_mask & MOUSE_BUTTON_MASK_MIDDLE) != 0:
+            modifiers |= POINTER_MOD_MIDDLE
         _send_game_pointer_event(
             POINTER_MOVE,
             0,
@@ -6063,7 +6146,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             rel.x,
             rel.y,
             0,
-            POINTER_MOD_LEFT if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) else 0
+            modifiers
         )
         return true
     elif event is InputEventScreenTouch:

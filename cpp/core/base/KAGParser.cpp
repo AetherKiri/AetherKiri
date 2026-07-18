@@ -132,7 +132,10 @@ void TVPSetKagTagList(iTJSDispatch2 *tag,
         }
 
         tTJSVariant taglist(array, array);
-        tag->PropSetByVS(TJS_MEMBERENSURE,
+        // taglist is parser metadata. Native queue/copy code still needs to
+        // address it directly, but game-side dictionary enumeration must not
+        // mistake it for a tag parameter.
+        tag->PropSetByVS(TJS_MEMBERENSURE | TJS_HIDDENMEMBER,
                          __taglist_name.AsVariantStringNoAddRef(), &taglist,
                          tag);
     } catch(...) {

@@ -518,7 +518,20 @@ void TVPEnsureDataPathDirectory() {
 }
 
 //---------------------------------------------------------------------------
-static void PushAllCommandlineArguments() {}
+static void PushAllCommandlineArguments() {
+    // A normal Kirikiri release executable carries player defaults in its
+    // embedded option resource.  AetherKiri hosts external game directories,
+    // so there is no per-title executable resource to supply the usual
+    // "-debugwin=no" value.  Leaving the option absent is observably different
+    // from "no": startup scripts commonly use
+    // `System.getArgument("-debugwin") != "no"` and will otherwise enter their
+    // developer-only stand-view/debug path before the KAG object exists.
+    //
+    // Seed the packaged-player default here.  Explicit engine options are
+    // inserted ahead of this entry below, and TVPSetCommandLine can replace it,
+    // so callers can still opt in deliberately.
+    TVPProgramArguments.push_back(TJS_W("-debugwin=no"));
+}
 
 //---------------------------------------------------------------------------
 static void PushConfigFileOptions(const std::vector<std::string> *options) {

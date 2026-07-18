@@ -226,6 +226,82 @@ namespace {
 
 } // namespace
 
+TEST_CASE("motionplayer maps parameter values across the authored clip span") {
+    motion::detail::MotionClip clip;
+    clip.totalFrames = 29.0;
+    clip.selfSyncTime = 28.0;
+
+    motion::detail::MotionParameterInfo parameter;
+    parameter.id = "charview";
+    parameter.discretization = true;
+    parameter.rangeBegin = 0.0;
+    parameter.rangeEnd = 14.0;
+    parameter.division = 14.0;
+
+    REQUIRE(motion::detail::parameterizedClipTime(clip, parameter, 1.0) ==
+            Catch::Approx(2.0));
+    REQUIRE(motion::detail::parameterizedClipTime(clip, parameter, 2.0) ==
+            Catch::Approx(4.0));
+    REQUIRE(motion::detail::parameterizedClipTime(clip, parameter, 3.0) ==
+            Catch::Approx(6.0));
+    REQUIRE(motion::detail::parameterizedClipTime(clip, parameter, 14.0) ==
+            Catch::Approx(28.0));
+
+    // `division` is also the quantization step count when discretization is
+    // enabled, including non-integer parameter ranges.
+    parameter.rangeBegin = -1.0;
+    parameter.rangeEnd = 1.1;
+    parameter.division = 4.0;
+    REQUIRE(motion::detail::parameterizedClipTime(clip, parameter, 0.31) ==
+            Catch::Approx(14.0));
+    REQUIRE(motion::detail::parameterizedClipTime(clip, parameter, 0.32) ==
+            Catch::Approx(21.0));
+
+    SECTION("selector values are clamped at both authored endpoints") {
+        parameter.rangeBegin = 0.0;
+        parameter.rangeEnd = 14.0;
+        parameter.division = 14.0;
+        REQUIRE(motion::detail::parameterizedClipTime(
+                    clip, parameter, -100.0) == Catch::Approx(0.0));
+        REQUIRE(motion::detail::parameterizedClipTime(
+                    clip, parameter, 100.0) == Catch::Approx(28.0));
+    }
+
+    SECTION("descending parameter ranges retain their authored direction") {
+        parameter.rangeBegin = 14.0;
+        parameter.rangeEnd = 0.0;
+        parameter.division = 14.0;
+        REQUIRE(motion::detail::parameterizedClipTime(
+                    clip, parameter, 14.0) == Catch::Approx(0.0));
+        REQUIRE(motion::detail::parameterizedClipTime(
+                    clip, parameter, 7.0) == Catch::Approx(14.0));
+        REQUIRE(motion::detail::parameterizedClipTime(
+                    clip, parameter, 0.0) == Catch::Approx(28.0));
+    }
+
+    SECTION("non-discrete parameters interpolate continuously") {
+        parameter.discretization = false;
+        parameter.rangeBegin = 0.0;
+        parameter.rangeEnd = 10.0;
+        REQUIRE(motion::detail::parameterizedClipTime(
+                    clip, parameter, 2.5) == Catch::Approx(7.0));
+    }
+
+    SECTION("timeline and degenerate-range fallbacks are bounded") {
+        clip.selfSyncTime = 0.0;
+        clip.totalFrames = 7.0;
+        parameter.discretization = false;
+        parameter.rangeBegin = 0.0;
+        parameter.rangeEnd = 6.0;
+        REQUIRE(motion::detail::parameterizedClipTime(
+                    clip, parameter, 3.0) == Catch::Approx(3.0));
+
+        parameter.rangeEnd = parameter.rangeBegin;
+        REQUIRE(motion::detail::parameterizedClipTime(
+                    clip, parameter, 3.0) == Catch::Approx(0.0));
+    }
+}
+
 TEST_CASE("motionplayer resource chain and query surface") {
     setEmoteSeed();
 
@@ -249,7 +325,10 @@ TEST_CASE("motionplayer resource chain and query surface") {
 
     const auto firstLayer = ttstr(getIndex(layerNames, 0));
     REQUIRE_FALSE(firstLayer.IsEmpty());
-    REQUIRE(player.getLayerMotion(firstLayer).Type() == tvtObject);
+    // The fixture's top-level entries are ordinary grouping layers, not child
+    // motion nodes. getLayerMotion therefore reports void while the generic
+    // layer getter remains available for hit testing and metadata queries.
+    REQUIRE(player.getLayerMotion(firstLayer).Type() == tvtVoid);
     REQUIRE(player.getLayerGetter(firstLayer).Type() == tvtObject);
     REQUIRE(variantCount(player.getLayerGetterList()) == variantCount(layerNames));
 
@@ -512,7 +591,9 @@ TEST_CASE("motionplayer non-loop motion clips finish at sync boundary") {
 
     motion::Player player;
     player.loadFromSnapshot(snapshot);
-    player.playTimeline(TJS_W("logo"), motion::PlayFlagForce);
+    REQUIRE(player.playMotionLike_0x6B2284(TJS_W("logo"),
+                                           motion::PlayFlagForce));
+    REQUIRE(player.getMotion() == TJS_W("logo"));
     REQUIRE(player.getTimelinePlaying(TJS_W("logo")));
 
     player.frameProgress(29.0);

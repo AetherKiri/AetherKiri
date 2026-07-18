@@ -1,6 +1,7 @@
 #include "ncbind.hpp"
 #include "StorageIntf.h"
 #include "TextStream.h"
+#include "kbadDataPack.h"
 #include "tp_stub.h"
 
 #include <cstdlib>
@@ -72,14 +73,6 @@ void setDictionaryValue(iTJSDispatch2 *dict, const TomlString &key,
     dict->PropSet(TJS_MEMBERENSURE, key.c_str(), nullptr, &value, dict);
 }
 
-bool isKbadTomlBytes(const std::vector<std::uint8_t> &bytes) {
-    static constexpr char Signature[] = "KBAD100";
-    return bytes.size() >= 8 &&
-           std::equal(std::begin(Signature), std::end(Signature) - 1,
-                      bytes.begin()) &&
-           bytes[7] == 0;
-}
-
 std::vector<std::uint8_t> readStorageBytes(const ttstr &placed) {
     std::unique_ptr<tTJSBinaryStream> stream(TVPCreateStream(placed, TJS_BS_READ));
     if(!stream)
@@ -97,203 +90,6 @@ std::vector<std::uint8_t> readStorageBytes(const ttstr &placed) {
     return bytes;
 }
 
-TomlString decodeUtf16LeBytes(const std::uint8_t *data, size_t size) {
-    if(size >= 2 && data[0] == 0xff && data[1] == 0xfe) {
-        data += 2;
-        size -= 2;
-    }
-    if(size & 1)
-        --size;
-
-    TomlString out;
-    out.reserve(size / 2);
-    for(size_t i = 0; i + 1 < size; i += 2) {
-        const tjs_char ch =
-            static_cast<tjs_char>(data[i] |
-                                  (static_cast<std::uint16_t>(data[i + 1]) << 8));
-        if(ch != 0)
-            out.push_back(ch);
-    }
-    return out;
-}
-
-class KbadDecoder {
-public:
-    explicit KbadDecoder(const std::vector<std::uint8_t> &bytes) :
-        bytes(bytes), pos(8) {}
-
-    tTJSVariant decode() {
-        tTJSVariant value = decodeValue();
-        if(pos != bytes.size())
-            throw std::runtime_error("trailing KBAD data");
-        return value;
-    }
-
-private:
-    std::uint8_t readU8() {
-        require(1);
-        return bytes[pos++];
-    }
-
-    std::uint16_t readU16() {
-        require(2);
-        std::uint16_t value = bytes[pos] |
-            (static_cast<std::uint16_t>(bytes[pos + 1]) << 8);
-        pos += 2;
-        return value;
-    }
-
-    std::uint32_t readU32() {
-        require(4);
-        std::uint32_t value = bytes[pos] |
-            (static_cast<std::uint32_t>(bytes[pos + 1]) << 8) |
-            (static_cast<std::uint32_t>(bytes[pos + 2]) << 16) |
-            (static_cast<std::uint32_t>(bytes[pos + 3]) << 24);
-        pos += 4;
-        return value;
-    }
-
-    std::uint64_t readU64() {
-        require(8);
-        std::uint64_t value = 0;
-        for(int shift = 0; shift < 64; shift += 8)
-            value |= static_cast<std::uint64_t>(bytes[pos++]) << shift;
-        return value;
-    }
-
-    float readFloat32() {
-        const std::uint32_t bits = readU32();
-        float value = 0.0f;
-        std::memcpy(&value, &bits, sizeof(value));
-        return value;
-    }
-
-    double readFloat64() {
-        const std::uint64_t bits = readU64();
-        double value = 0.0;
-        std::memcpy(&value, &bits, sizeof(value));
-        return value;
-    }
-
-    TomlString readString(size_t charCount) {
-        if(charCount > (bytes.size() - pos) / 2)
-            throw std::runtime_error("truncated KBAD string");
-        TomlString value =
-            decodeUtf16LeBytes(bytes.data() + pos, charCount * 2);
-        pos += charCount * 2;
-        return value;
-    }
-
-    tTJSVariant decodeValue() {
-        const std::uint8_t type = readU8();
-        if(type <= 0x7f)
-            return tTJSVariant(static_cast<tTVInteger>(type));
-        if(type >= 0xe0)
-            return tTJSVariant(static_cast<tTVInteger>(
-                static_cast<std::int8_t>(type)));
-
-        if(type >= 0x80 && type <= 0x8f)
-            return decodeMap(type & 0x0f);
-        if(type >= 0x90 && type <= 0x9f)
-            return decodeArray(type & 0x0f);
-        if(type >= 0xa0 && type <= 0xbf)
-            return tTJSVariant(ttstr(readString(type & 0x1f)));
-
-        switch(type) {
-        case 0xc0:
-        case 0xc1:
-            return tTJSVariant();
-        case 0xc2:
-            return tTJSVariant(false);
-        case 0xc3:
-            return tTJSVariant(true);
-        case 0xc4:
-            return tTJSVariant(ttstr(readString(readU8())));
-        case 0xc5:
-            return tTJSVariant(ttstr(readString(readU16())));
-        case 0xc6:
-            return tTJSVariant(ttstr(readString(readU32())));
-        case 0xca:
-            return tTJSVariant(static_cast<tTVReal>(readFloat32()));
-        case 0xcb:
-            return tTJSVariant(static_cast<tTVReal>(readFloat64()));
-        case 0xcc:
-            return tTJSVariant(static_cast<tTVInteger>(readU8()));
-        case 0xcd:
-            return tTJSVariant(static_cast<tTVInteger>(readU16()));
-        case 0xce:
-            return tTJSVariant(static_cast<tTVInteger>(readU32()));
-        case 0xcf:
-            return tTJSVariant(static_cast<tTVInteger>(readU64()));
-        case 0xd0:
-            return tTJSVariant(static_cast<tTVInteger>(
-                static_cast<std::int8_t>(readU8())));
-        case 0xd1:
-            return tTJSVariant(static_cast<tTVInteger>(
-                static_cast<std::int16_t>(readU16())));
-        case 0xd2:
-            return tTJSVariant(static_cast<tTVInteger>(
-                static_cast<std::int32_t>(readU32())));
-        case 0xd3:
-            return tTJSVariant(static_cast<tTVInteger>(
-                static_cast<std::int64_t>(readU64())));
-        case 0xd9:
-            return tTJSVariant(ttstr(readString(readU8())));
-        case 0xda:
-            return tTJSVariant(ttstr(readString(readU16())));
-        case 0xdb:
-            return tTJSVariant(ttstr(readString(readU32())));
-        case 0xdc:
-            return decodeArray(readU16());
-        case 0xdd:
-            return decodeArray(readU32());
-        case 0xde:
-            return decodeMap(readU16());
-        case 0xdf:
-            return decodeMap(readU32());
-        default:
-            throw std::runtime_error("unsupported KBAD type");
-        }
-    }
-
-    tTJSVariant decodeArray(size_t count) {
-        tTJSVariant result = makeArray();
-        iTJSDispatch2 *array = result.AsObjectNoAddRef();
-        for(size_t i = 0; i < count; ++i) {
-            tTJSVariant value = decodeValue();
-            array->PropSetByNum(TJS_MEMBERENSURE, static_cast<tjs_int>(i),
-                                &value, array);
-        }
-        return result;
-    }
-
-    tTJSVariant decodeMap(size_t count) {
-        tTJSVariant result = makeDictionary();
-        iTJSDispatch2 *dict = result.AsObjectNoAddRef();
-        for(size_t i = 0; i < count; ++i) {
-            tTJSVariant keyValue = decodeValue();
-            tTJSVariant value = decodeValue();
-            const tjs_char *keyChars = keyValue.GetString();
-            if(keyChars)
-                setDictionaryValue(dict, TomlString(keyChars), value);
-        }
-        return result;
-    }
-
-    void require(size_t count) const {
-        if(count > bytes.size() - pos)
-            throw std::runtime_error("truncated KBAD data");
-    }
-
-    const std::vector<std::uint8_t> &bytes;
-    size_t pos = 0;
-};
-
-tTJSVariant decodeKbadObject(const std::vector<std::uint8_t> &bytes) {
-    KbadDecoder decoder(bytes);
-    return decoder.decode();
-}
-
 struct LoadedTomlText {
     TomlString text;
     ttstr placed;
@@ -305,9 +101,9 @@ LoadedTomlText loadTomlText(const ttstr &filename) {
     LoadedTomlText loaded;
     loaded.placed = TVPGetPlacedPath(filename);
     std::vector<std::uint8_t> bytes = readStorageBytes(loaded.placed);
-    if(isKbadTomlBytes(bytes)) {
+    if(TVPDecodeKbadDataPack(bytes.data(), bytes.size(),
+                             &loaded.kbadValue)) {
         loaded.kbad = true;
-        loaded.kbadValue = decodeKbadObject(bytes);
         return loaded;
     }
 

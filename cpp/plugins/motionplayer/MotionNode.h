@@ -59,6 +59,8 @@ namespace motion::detail {
         int meshDivision = 0;         // "meshDivision" from PSB (node+2008)
         int meshDivX = 0;             // node+2012: computed grid width
         int meshDivY = 0;             // node+2016: computed grid height
+        // Index into the active clip's motion-local parameter table.
+        int parameterizeIndex = -1;
         // Mesh inverse matrix for sub_69AE74 child deformation (node+2096..2132)
         double meshInvM11 = 0, meshInvM12 = 0;  // node+2096, node+2104
         double meshInvM21 = 0, meshInvM22 = 0;  // node+2112, node+2120

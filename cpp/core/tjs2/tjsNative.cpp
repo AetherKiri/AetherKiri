@@ -421,7 +421,7 @@ namespace TJS {
             if(TJS_FAILED(hr))
                 return hr;
 
-            if(this->CallMissing && TJS::TVPIsMockEnabled()) {
+            if(this->CallMissing) {
                 tTJSVariant missingVar(this->missing_name);
                 dsp->ClassInstanceInfo(TJS_CII_SET_MISSING, 0, &missingVar);
             }

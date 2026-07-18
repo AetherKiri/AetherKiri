@@ -1177,6 +1177,58 @@ namespace motion::detail {
                     clip.loopTime = *loop ? 0.0 : -1.0;
                 }
 
+                const auto appendParameter = [&](
+                    const std::shared_ptr<PSB::PSBDictionary> &parameter) {
+                    if(!parameter) {
+                        return;
+                    }
+                    MotionParameterInfo info;
+                    info.id = dictionaryString(
+                                  parameter, { "id", "label", "name" })
+                                  .value_or(std::string{});
+                    info.discretization =
+                        dictionaryBool(parameter, { "discretization" })
+                            .value_or(false);
+                    info.rangeBegin =
+                        dictionaryNumber(parameter, { "rangeBegin" })
+                            .value_or(0.0);
+                    info.rangeEnd =
+                        dictionaryNumber(parameter, { "rangeEnd" })
+                            .value_or(0.0);
+                    const double range = info.rangeEnd - info.rangeBegin;
+                    info.division =
+                        dictionaryNumber(parameter, { "division" })
+                            .value_or(range > 0.0 ? range : 1.0);
+                    clip.parameters.push_back(std::move(info));
+                };
+
+                if(clip.parameters.empty()) {
+                    if(const auto parameterList =
+                           dictionaryList(dic, { "parameter" })) {
+                        for(const auto &parameterItem : *parameterList) {
+                            appendParameter(
+                                std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                                    parameterItem));
+                        }
+                    }
+
+                    const auto parameterizeValue = (*dic)["parameterize"];
+                    if(const auto parameterize =
+                           std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                               parameterizeValue)) {
+                        if(clip.parameters.empty()) {
+                            appendParameter(parameterize);
+                        }
+                        if(!clip.parameters.empty()) {
+                            clip.defaultParameterIndex = 0;
+                        }
+                    } else if(const auto defaultIndex =
+                                  psbNumber(parameterizeValue)) {
+                        clip.defaultParameterIndex =
+                            static_cast<int>(*defaultIndex);
+                    }
+                }
+
                 for(const auto &item : *layers) {
                     const auto layer =
                         std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
@@ -1190,6 +1242,7 @@ namespace motion::detail {
                         continue;
                     }
 
+                    clip.orderedLayers.push_back(layer);
                     if(clip.layersByName.find(*layerLabel) ==
                        clip.layersByName.end()) {
                         clip.layersByName[*layerLabel] = layer;
@@ -1552,10 +1605,26 @@ namespace motion::detail {
                 for(const auto &[owner, clips] :
                     snapshot->clipsByOwnerAndLabel) {
                     for(const auto &[label, clip] : clips) {
+                        std::vector<std::string> parameterDescriptions;
+                        parameterDescriptions.reserve(clip.parameters.size());
+                        for(size_t parameterIndex = 0;
+                            parameterIndex < clip.parameters.size();
+                            ++parameterIndex) {
+                            const auto &parameter =
+                                clip.parameters[parameterIndex];
+                            parameterDescriptions.push_back(fmt::format(
+                                "{}:{}[{:.3f},{:.3f}] div={:.3f} discrete={}",
+                                parameterIndex, parameter.id,
+                                parameter.rangeBegin, parameter.rangeEnd,
+                                parameter.division,
+                                parameter.discretization ? 1 : 0));
+                        }
                         LOGGER->info(
-                            "motion snapshot clip: path={} owner={} label={} frames={} loop={} layers=[{}] sources=[{}]",
+                            "motion snapshot clip: path={} owner={} label={} frames={} loop={} defaultParameter={} parameters=[{}] layers=[{}] sources=[{}]",
                             snapshot->path, owner, label, clip.totalFrames,
-                            clip.loop ? 1 : 0, joinStrings(clip.layerNames),
+                            clip.loop ? 1 : 0, clip.defaultParameterIndex,
+                            joinStrings(parameterDescriptions),
+                            joinStrings(clip.layerNames),
                             joinStrings(clip.sourceCandidates));
                         const auto debugPath = lowercase(snapshot->path);
                         if(debugPath.find("title.psb") != std::string::npos &&
@@ -1977,8 +2046,11 @@ namespace motion::detail {
 
         // Also scan clips' layers
         for(const auto &[clipLabel, clip] : snapshot.clipsByLabel) {
-            for(const auto &[layerName, layerDict] : clip.layersByName) {
+            for(const auto &layerDict : clip.orderedLayers) {
                 if(!layerDict) continue;
+                const auto layerName =
+                    dictionaryString(layerDict, { "label", "name", "id" })
+                        .value_or(std::string{});
                 auto frameList = std::dynamic_pointer_cast<PSB::PSBList>(
                     (*layerDict)["frameList"]);
                 if(!frameList) continue;

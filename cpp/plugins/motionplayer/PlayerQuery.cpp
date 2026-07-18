@@ -118,6 +118,19 @@ namespace {
         return value->AsObjectNoAddRef();
     }
 
+    tTJSNI_BaseLayer *nativeLayerFromDispatch(iTJSDispatch2 *dispatch) {
+        if(!dispatch) {
+            return nullptr;
+        }
+        tTJSNI_BaseLayer *layer = nullptr;
+        if(TJS_FAILED(dispatch->NativeInstanceSupport(
+               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+               reinterpret_cast<iTJSNativeInstance **>(&layer)))) {
+            return nullptr;
+        }
+        return layer;
+    }
+
     std::string describeDispatchLayerProbe(iTJSDispatch2 *dispatch) {
         if(!dispatch) {
             return "<null>";
@@ -345,6 +358,70 @@ namespace motion {
         });
     }
 
+    Player *Player::findLayerNodeForQuery(const std::string &key,
+                                          int &nodeIndex) {
+        nodeIndex = -1;
+        if(key.empty()) {
+            return nullptr;
+        }
+
+        // A composed motion is normally a tree, but malformed assets or a
+        // reused child object must not turn a layer query into unbounded C++
+        // recursion.  Iterative DFS also preserves the native first-match
+        // behavior without consuming the call stack on deeply nested UIs.
+        std::vector<Player *> pending{this};
+        std::unordered_set<Player *> visited;
+        while(!pending.empty()) {
+            Player *current = pending.back();
+            pending.pop_back();
+            if(!current || !visited.insert(current).second) {
+                continue;
+            }
+
+            current->ensureMotionLoaded();
+            current->ensureNodeTreeBuilt();
+            if(!current->_runtime) {
+                continue;
+            }
+            if((current->_layersDirty || current->_emoteDirty) &&
+               !current->_runtime->nodes.empty()) {
+                current->updateLayers();
+            }
+
+            if(const auto found = current->_runtime->nodeLabelMap.find(key);
+               found != current->_runtime->nodeLabelMap.end() &&
+               found->second >= 0 &&
+               found->second <
+                   static_cast<int>(current->_runtime->nodes.size())) {
+                nodeIndex = found->second;
+                return current;
+            }
+
+            // Push in reverse so the traversal order matches the previous
+            // recursive, node-order DFS implementation.
+            for(auto it = current->_runtime->nodes.rbegin();
+                it != current->_runtime->nodes.rend(); ++it) {
+                if(it->nodeType == 3) {
+                    if(auto *child = it->getChildPlayer()) {
+                        if(visited.find(child) == visited.end()) {
+                            pending.push_back(child);
+                        }
+                    }
+                } else if(it->nodeType == 4) {
+                    for(int index = it->getParticleCount() - 1;
+                        index >= 0; --index) {
+                        if(auto *child = it->getParticleChild(index)) {
+                            if(visited.find(child) == visited.end()) {
+                                pending.push_back(child);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return nullptr;
+    }
+
     tTJSVariant Player::getLayerMotion(ttstr name) {
         ensureMotionLoaded();
         ensureNodeTreeBuilt();
@@ -355,28 +432,26 @@ namespace motion {
         // Motion buttons are queried between draws. Keep their child players
         // synchronized with the parent node before returning the object used
         // by script-side contains(x, y).
-        if(!_runtime->nodes.empty()) {
+        if((_layersDirty || _emoteDirty) && !_runtime->nodes.empty()) {
             updateLayers();
         }
 
         const auto key = detail::narrow(name);
-        const auto it = _runtime->nodeLabelMap.find(key);
-        if(it == _runtime->nodeLabelMap.end() || it->second < 0 ||
-           it->second >= static_cast<int>(_runtime->nodes.size())) {
+        int nodeIndex = -1;
+        auto *owner = findLayerNodeForQuery(key, nodeIndex);
+        if(!owner || !owner->_runtime) {
             return {};
         }
 
-        const auto &node = _runtime->nodes[static_cast<size_t>(it->second)];
+        const auto &node =
+            owner->_runtime->nodes[static_cast<size_t>(nodeIndex)];
         if(node.nodeType == 3 && node.childPlayerVar.Type() == tvtObject) {
             if(auto *child = node.getChildPlayer()) {
-                child->applyMotionParentRootStateForRender();
-                child->ensureNodeTreeBuilt();
-                child->updateLayers();
                 if(LOGGER && motionHitDebugEnabled()) {
                     LOGGER->info(
                         "motion hit child query: parentMotion={} label={} parentPos=({:.2f},{:.2f}) childMotion={} childLabel={}",
-                        _runtime->activeMotion
-                            ? _runtime->activeMotion->path
+                        owner->_runtime->activeMotion
+                            ? owner->_runtime->activeMotion->path
                             : std::string("<none>"),
                         key, node.accumulated.posX, node.accumulated.posY,
                         child->_runtime && child->_runtime->activeMotion
@@ -398,18 +473,19 @@ namespace motion {
             return {};
         }
 
-        if(!_runtime->nodes.empty()) {
+        if((_layersDirty || _emoteDirty) && !_runtime->nodes.empty()) {
             updateLayers();
         }
 
         const auto key = detail::narrow(name);
-        const auto it = _runtime->nodeLabelMap.find(key);
-        if(it == _runtime->nodeLabelMap.end() || it->second < 0 ||
-           it->second >= static_cast<int>(_runtime->nodes.size())) {
+        int nodeIndex = -1;
+        auto *owner = findLayerNodeForQuery(key, nodeIndex);
+        if(!owner || !owner->_runtime) {
             return {};
         }
 
-        const auto &node = _runtime->nodes[static_cast<size_t>(it->second)];
+        const auto &node =
+            owner->_runtime->nodes[static_cast<size_t>(nodeIndex)];
         tTJSVariant motion;
         if(node.nodeType == 3 && node.childPlayerVar.Type() == tvtObject) {
             motion = node.childPlayerVar;
@@ -447,13 +523,14 @@ namespace motion {
         }
 
         if(LOGGER && motionHitDebugEnabled()) {
-            const auto &root = _runtime->nodes.front();
+            const auto &root = owner->_runtime->nodes.front();
             LOGGER->info(
                 "motion layer getter: motion={} chara={} motionKey={} layer={} type={} geom={} rootPos=({:.2f},{:.2f}) nodePos=({:.2f},{:.2f}) nodeScale=({:.4f},{:.4f}) rect=({:.2f},{:.2f},{:.2f},{:.2f})",
-                _runtime->activeMotion
-                    ? _runtime->activeMotion->path
+                owner->_runtime->activeMotion
+                    ? owner->_runtime->activeMotion->path
                     : std::string("<none>"),
-                detail::narrow(_chara), detail::narrow(_motionKey), key,
+                detail::narrow(owner->_chara),
+                detail::narrow(owner->_motionKey), key,
                 node.nodeType, node.shapeGeomType,
                 root.accumulated.posX, root.accumulated.posY,
                 node.accumulated.posX, node.accumulated.posY,
@@ -463,7 +540,7 @@ namespace motion {
                 node.shapeVertices[6] - node.shapeVertices[4]);
         }
 
-        const auto layerId = requireLayerId(name);
+        const auto layerId = owner->requireLayerId(name);
         return detail::makeDictionary({
             { "name", name },
             { "label", name },
@@ -507,6 +584,7 @@ namespace motion {
     }
 
     void Player::skipToSync() {
+        _layersDirty = true;
         for(auto &[_, state] : _runtime->timelines) {
             if(state.totalFrames > 0.0) {
                 state.currentTime = state.totalFrames;
@@ -556,6 +634,7 @@ namespace motion {
     void Player::setVariableResolvedWeightLike_0x671228(
         const std::string &key, double value, double transition,
         double easeWeight) {
+        _layersDirty = true;
         const auto *activeMotion = _runtime->activeMotion.get();
         const auto bindingIt = activeMotion
             ? activeMotion->controllerBindings.find(key)
@@ -900,7 +979,7 @@ namespace motion {
             return false;
         }
 
-        if(!_runtime->nodes.empty()) {
+        if((_layersDirty || _emoteDirty) && !_runtime->nodes.empty()) {
             updateLayers();
             calcBounds();
         }
@@ -910,44 +989,11 @@ namespace motion {
             return false;
         }
 
-        auto findNodeRecursive =
-            [&](auto &&self, Player *player) -> const detail::MotionNode * {
-            if(!player || !player->_runtime) {
-                return nullptr;
-            }
-
-            if(const auto it = player->_runtime->nodeLabelMap.find(key);
-               it != player->_runtime->nodeLabelMap.end()) {
-                const auto index = it->second;
-                if(index >= 0 &&
-                   index < static_cast<int>(player->_runtime->nodes.size())) {
-                    return &player->_runtime->nodes[static_cast<size_t>(index)];
-                }
-            }
-
-            for(auto &node : player->_runtime->nodes) {
-                if(node.nodeType == 3) {
-                    if(auto *child = node.getChildPlayer()) {
-                        if(const auto *found = self(self, child)) {
-                            return found;
-                        }
-                    }
-                } else if(node.nodeType == 4) {
-                    const int particleCount = node.getParticleCount();
-                    for(int i = 0; i < particleCount; ++i) {
-                        if(auto *child = node.getParticleChild(i)) {
-                            if(const auto *found = self(self, child)) {
-                                return found;
-                            }
-                        }
-                    }
-                }
-            }
-
-            return nullptr;
-        };
-
-        if(const auto *node = findNodeRecursive(findNodeRecursive, this)) {
+        int nodeIndex = -1;
+        if(auto *owner = findLayerNodeForQuery(key, nodeIndex);
+           owner && owner->_runtime) {
+            const auto *node = &owner->_runtime->nodes[
+                static_cast<size_t>(nodeIndex)];
             return hitTestMotionNodeShape(*node, x, y);
         }
         return false;
@@ -962,13 +1008,14 @@ namespace motion {
 
         if(_motionParentPlayer && _motionParentPlayer->_runtime) {
             _motionParentPlayer->ensureNodeTreeBuilt();
-            if(!_motionParentPlayer->_runtime->nodes.empty()) {
+            if((_motionParentPlayer->_layersDirty ||
+                _motionParentPlayer->_emoteDirty) &&
+               !_motionParentPlayer->_runtime->nodes.empty()) {
                 _motionParentPlayer->updateLayers();
             }
-            applyMotionParentRootStateForRender();
         }
 
-        if(!_runtime->nodes.empty()) {
+        if((_layersDirty || _emoteDirty) && !_runtime->nodes.empty()) {
             updateLayers();
             calcBounds();
         }
@@ -1145,6 +1192,7 @@ namespace motion {
         if(_runtime->timelines.empty()) {
             detail::primeTimelineStates(_runtime->timelines, *_runtime->activeMotion);
         }
+        _layersDirty = true;
 
         const auto key = detail::narrow(label);
         auto it = _runtime->timelines.find(key);
@@ -1198,6 +1246,7 @@ namespace motion {
     }
 
     void Player::stopTimeline(ttstr label) {
+        _layersDirty = true;
         const auto key = detail::narrow(label);
         if(label.IsEmpty()) {
             for(auto &[_, state] : _runtime->timelines) {
@@ -1240,6 +1289,7 @@ namespace motion {
 
     void Player::setTimelineBlendRatio(ttstr label, double ratio) {
         ensureMotionLoaded();
+        _layersDirty = true;
         if(_runtime->timelines.empty() && _runtime->activeMotion) {
             detail::primeTimelineStates(_runtime->timelines, *_runtime->activeMotion);
         }
@@ -1376,6 +1426,9 @@ namespace motion {
         }
 
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        if(started && !label.IsEmpty()) {
+            _motionKey = label;
+        }
         if(_allplaying) {
             claimYuzuSdAutoProgress();
         }
@@ -2079,16 +2132,51 @@ namespace motion {
 
         self->_allplaying = !self->_runtime->playingTimelineLabels.empty();
         if(started) {
+            // Motion.Player.motion is the currently selected timeline label,
+            // not the PSB storage name.  AnimKAGLayer reads it when the
+            // timeline starts and stops (for example to distinguish `show`
+            // from `hide`).  Keeping the old/empty value lets the visual
+            // transition finish while silently skipping the script-side
+            // completion action that rebuilds a page or closes a dialog.
+            if(!label.IsEmpty()) {
+                self->_motionKey = label;
+            }
+            // A newly selected clip starts with its own playback clock.  The
+            // accumulated player clock may still point at the end of the
+            // previously selected clip; retaining it makes the first
+            // zero-delta refresh immediately finish a shorter replacement
+            // clip before it can render or advance.
+            self->_frameLastTime = 0.0;
+            self->_frameLoopTime = 0.0;
+            self->_loopTime = 0.0;
+            self->_clampedEvalTime = 0.0;
+            self->_frameTickCount = 0.0;
             self->_runtime->nodes.clear();
             self->_runtime->nodesBuilt = false;
             self->_runtime->nodeLabelMap.clear();
             self->claimYuzuSdAutoProgress();
         }
         if(motionDebugEnabled() && LOGGER) {
+            std::string controlSummary = "<none>";
+            if(!label.IsEmpty()) {
+                const auto controlIt =
+                    self->_runtime->activeMotion->timelineControlByLabel.find(
+                        detail::narrow(label));
+                if(controlIt != self->_runtime->activeMotion
+                                    ->timelineControlByLabel.end()) {
+                    controlSummary = fmt::format(
+                        "last={:.3f},loop=[{:.3f},{:.3f}],tracks={}",
+                        controlIt->second.lastTime,
+                        controlIt->second.loopBegin,
+                        controlIt->second.loopEnd,
+                        controlIt->second.tracks.size());
+                }
+            }
             LOGGER->info(
-                "motion play result: motion={} label={} started={} playing=[{}]",
+                "motion play result: player={} motion={} label={} started={} speed={} control={} playing=[{}]",
+                static_cast<const void *>(self),
                 self->_runtime->activeMotion->path, detail::narrow(label),
-                started ? 1 : 0,
+                started ? 1 : 0, self->_speed ? 1 : 0, controlSummary,
                 joinStrings(self->_runtime->playingTimelineLabels));
         }
         if(self->_allplaying) {
@@ -2320,17 +2408,117 @@ namespace motion {
             (numparams >= 4 && param[3]) ? param[3]->AsReal() : 0.0;
         self->setVariable(ttstr(*param[0]), param[1]->AsReal(), transition,
                           ease);
-        // Motion buttons update selector variables from mouse callbacks even
-        // after the presentation timeline has stopped.  There may be no next
-        // workMotion tick to consume the new value, so evaluate the zero-time
-        // state now.  This also makes the first hover event visible instead of
-        // lagging one mouse move behind.
-        if(transition <= 0.0 && self->_runtime &&
+        // Gallery/layout variables are intentionally coalesced until the next
+        // draw or layer query: a page initializes dozens of them in one TJS
+        // callback. Interactive `select` controllers are different. KAG does
+        // not call progress(0) after the pointer leaves every button, so their
+        // leave state must be committed here or the last hover frame remains
+        // cached indefinitely.
+        const auto variableKey = detail::narrow(ttstr(*param[0]));
+        const double selectorValue = param[1]->AsReal();
+        const bool interactiveSelectKey =
+            variableKey == "select" ||
+            (variableKey.size() > 7 &&
+             variableKey.compare(variableKey.size() - 7, 7, "/select") == 0);
+        // `select=0` is the bulk initialization/default state and is normally
+        // followed by one layout draw.  Repainting the whole retained canvas
+        // for every such assignment interrupts menu construction.  Non-zero
+        // values are the actual pointer/key transitions that need an
+        // immediate commit.
+        const bool interactiveSelect =
+            interactiveSelectKey && std::abs(selectorValue) > 0.0000001;
+        if(interactiveSelect && transition <= 0.0 && self->_runtime &&
            self->_runtime->activeMotion) {
             self->ensureNodeTreeBuilt();
             if(!self->_runtime->nodes.empty()) {
                 self->updateLayers();
                 self->calcBounds();
+            }
+
+            // Updating the selector tree only changes the native node cache.
+            // Classic KAG menu scripts do not consistently issue progress(0)
+            // after onLeave, so commit the new selector frame during this
+            // input event. Render the owning root UI, not the isolated button:
+            // selector sprites are alpha-composited, and drawing only the
+            // child leaves the previous hover pixels underneath it.
+            Player *renderOwner = self;
+            std::unordered_set<Player *> ancestry;
+            while(renderOwner->_motionParentPlayer &&
+                  ancestry.insert(renderOwner).second) {
+                renderOwner = renderOwner->_motionParentPlayer;
+            }
+            if(!renderOwner->_autoProgressRendering &&
+               !renderOwner->_presentationHoldRendering) {
+                iTJSDispatch2 *target = nullptr;
+                if(renderOwner->_targetLayer.Type() == tvtObject) {
+                    tTJSVariant targetValue = renderOwner->_targetLayer;
+                    target = tryResolveLayerDispatch(targetValue);
+                }
+                if(!target && renderOwner->_runtime &&
+                   renderOwner->_runtime->lastCanvas.Type() == tvtObject) {
+                    target = tryResolveLayerDispatch(
+                        renderOwner->_runtime->lastCanvas);
+                }
+                if(!target && self != renderOwner &&
+                   self->_targetLayer.Type() == tvtObject) {
+                    tTJSVariant targetValue = self->_targetLayer;
+                    target = tryResolveLayerDispatch(targetValue);
+                }
+                if(target) {
+                    renderOwner->_autoProgressRendering = true;
+                    try {
+                        // The normal selector frame may be translucent. Clear
+                        // the retained root canvas before drawing the complete
+                        // UI, otherwise each visited hover remains blended
+                        // beneath subsequent frames.
+                        if(auto *targetLayer = nativeLayerFromDispatch(target)) {
+                            if(auto *image = targetLayer->GetMainImage()) {
+                                const tTVPRect clearRect(
+                                    0, 0,
+                                    std::max<tjs_int>(
+                                        targetLayer->GetImageWidth(), 0),
+                                    std::max<tjs_int>(
+                                        targetLayer->GetImageHeight(), 0));
+                                image->Fill(clearRect, 0x00000000);
+                            }
+                        }
+                        if(renderOwner->_d3dDrawMode) {
+                            renderOwner->renderViaSharedD3DAdaptor(target);
+                        } else {
+                            renderOwner->renderToLayer(target);
+                        }
+                    } catch(const std::exception &e) {
+                        if(LOGGER && motionDebugEnabled()) {
+                            LOGGER->warn(
+                                "motion selector render failed: motion={} variable={} error={}",
+                                renderOwner->_runtime &&
+                                        renderOwner->_runtime->activeMotion
+                                    ? renderOwner->_runtime->activeMotion->path
+                                    : std::string("<none>"),
+                                variableKey, e.what());
+                        }
+                    } catch(...) {
+                        if(LOGGER && motionDebugEnabled()) {
+                            LOGGER->warn(
+                                "motion selector render failed: motion={} variable={} error=<unknown>",
+                                renderOwner->_runtime &&
+                                        renderOwner->_runtime->activeMotion
+                                    ? renderOwner->_runtime->activeMotion->path
+                                    : std::string("<none>"),
+                                variableKey);
+                        }
+                    }
+                    renderOwner->_autoProgressRendering = false;
+                }
+            }
+            // Parameter-selected one-shot children (notably button `out`
+            // transitions) can outlive the already-finished root timeline.
+            // Keep driving the owning UI until those child timelines finish.
+            if(renderOwner == self &&
+               (renderOwner->_allplaying ||
+                renderOwner->hasPlayingChildPlayers())) {
+                renderOwner->_allplaying = true;
+                renderOwner->enableAutoProgress(objthis);
             }
         }
         return TJS_S_OK;
@@ -2368,7 +2556,7 @@ namespace motion {
         // child players. Querying one property must not clear the other: the
         // KAG continuous handler reads `playing` after progress(), then relies
         // on `allplaying` on the next tick to finish longer child motions.
-        const bool playing = !self->_runtime->playingTimelineLabels.empty();
+        const bool playing = self->getPlaying();
         if(result) {
             *result = tTJSVariant(playing);
         }

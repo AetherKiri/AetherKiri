@@ -4,6 +4,7 @@
 #include "PlayerInternal.h"
 #include "ConfigManager/IndividualConfigManager.h"
 #include "TickCount.h"
+#include "ThreadIntf.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -66,6 +67,7 @@ namespace {
             renderReuseHashCombine(seed, std::hash<int>{}(command.itemFlags));
             renderReuseHashCombine(seed, std::hash<int>{}(command.parentNodeIndex));
             renderReuseHashCombine(seed, std::hash<int>{}(command.visibleAncestorIndex));
+            renderReuseHashCombine(seed, std::hash<bool>{}(command.requiresLocalClip));
             renderReuseHashCombine(seed, std::hash<int>{}(command.meshDivX));
             renderReuseHashCombine(seed, std::hash<int>{}(command.meshDivY));
             renderReuseHashCombine(seed, std::hash<int>{}(command.meshType));
@@ -288,29 +290,6 @@ namespace {
             spread <= 80;
     }
 
-    bool bitmapHasTransparentPixels(const tTVPBaseBitmap &bitmap) {
-        const int width = static_cast<int>(bitmap.GetWidth());
-        const int height = static_cast<int>(bitmap.GetHeight());
-        if(width <= 0 || height <= 0) {
-            return false;
-        }
-
-        const size_t total =
-            static_cast<size_t>(width) * static_cast<size_t>(height);
-        const size_t step = std::max<size_t>(1, total / 4096u);
-        for(size_t i = 0; i < total; i += step) {
-            const int y = static_cast<int>(i / static_cast<size_t>(width));
-            const int x = static_cast<int>(i % static_cast<size_t>(width));
-            const auto *row = static_cast<const std::uint8_t *>(
-                bitmap.GetScanLine(static_cast<tjs_uint>(y)));
-            const auto *pixel = row + static_cast<size_t>(x) * 4u;
-            if(pixel[3] < 250) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     bool bitmapLooksWhiteMask(const tTVPBaseBitmap &bitmap) {
         const int width = static_cast<int>(bitmap.GetWidth());
         const int height = static_cast<int>(bitmap.GetHeight());
@@ -438,7 +417,7 @@ namespace {
         const auto titlePos = motion.find("title_bg");
         if(titlePos == std::string::npos ||
            titlePos + 8 >= motion.size() ||
-           motion[titlePos + 8] < '3' || motion[titlePos + 8] > '6') {
+           motion[titlePos + 8] < '0' || motion[titlePos + 8] > '9') {
             return false;
         }
         if(sourceKey.empty()) {
@@ -514,18 +493,12 @@ namespace {
         return label == "white" && source.find("/yuzu/") != std::string::npos;
     }
 
-    bool motionSourcePixelsAreBGRA(const std::string &motionPath,
-                                   bool decodedPixelsAreBgra) {
-        if(decodedPixelsAreBgra) {
-            return true;
-        }
-
-        const auto motion = renderDebugLowercase(motionPath);
-        if(loweredPathContainsStartupLogo(motion)) {
-            return false;
-        }
-
-        return true;
+    bool motionSourcePixelsAreBGRA(bool decodedPixelsAreBgra) {
+        // The decoder explicitly marks palettized resources after expanding
+        // their palette into TVP's BGRA layout. Unpalettized raw/RL motion
+        // resources remain in authored RGBA order regardless of the PSB
+        // container version and still need the R/B conversion below.
+        return decodedPixelsAreBgra;
     }
 
     bool isYuzuPresentationMotion(const std::string &motionPath) {
@@ -636,15 +609,14 @@ namespace {
     bool isYuzuTitleLogoLayer(const std::string &nodeLabel,
                               const std::string &sourceKey) {
         const auto source = renderDebugLowercase(sourceKey);
-        if(source.find("src/title/logo") != std::string::npos ||
-           source.find("/title/logo") != std::string::npos ||
-           source.find("src/common/title_logo") != std::string::npos ||
-           source.find("/common/title_logo") != std::string::npos) {
+        if(source.find("logo") != std::string::npos ||
+           sourceKey.find("ロゴ") != std::string::npos) {
             return true;
         }
         const auto label = renderDebugLowercase(nodeLabel);
         return label == "logo" || label == "logoover" ||
-            label == "title_logo";
+            label == "title_logo" || label.find("logo") != std::string::npos ||
+            nodeLabel.find("ロゴ") != std::string::npos;
     }
 
     bool isYuzuTitleNonCharacterLayer(const std::string &nodeLabel,
@@ -853,17 +825,33 @@ namespace {
 
     bool hasYuzuTitleOpaqueFinalOverlayFrame(
         const motion::detail::PlayerRuntime &runtime) {
-        return std::any_of(
-            runtime.preparedRenderItems.begin(),
-            runtime.preparedRenderItems.end(),
-            [](const auto &entry) {
-                return entry.drawFlag && !entry.skipFlag0 &&
-                    !entry.skipFlag1 && entry.opacity >= 240 &&
-                    (isYuzuTitleLogoLayer(entry.nodeLabel,
-                                          entry.sourceKey) ||
-                     isYuzuTitleMainLayer(entry.nodeLabel,
-                                          entry.sourceKey));
-            });
+        bool hasOpaqueFinalOverlay = false;
+        bool hasActiveTransientLogo = false;
+        for(const auto &entry : runtime.preparedRenderItems) {
+            if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1) {
+                continue;
+            }
+            const bool isLogo = isYuzuTitleLogoLayer(entry.nodeLabel,
+                                                     entry.sourceKey);
+            const bool isMain = isYuzuTitleMainLayer(entry.nodeLabel,
+                                                     entry.sourceKey);
+            if(!isLogo && !isMain) {
+                continue;
+            }
+            if(entry.opacity >= 240) {
+                hasOpaqueFinalOverlay = true;
+            }
+            // Numbered title cards draw a normal opaque logo plus a second
+            // additive copy for the bounce/flash. The normal copy alone is
+            // not proof that the animation has settled: retaining while the
+            // additive copy is visible freezes an oversized white logo over
+            // the completed card.
+            if(isLogo && entry.opacity > 0 &&
+               (entry.blendMode & 0x0f) != 0) {
+                hasActiveTransientLogo = true;
+            }
+        }
+        return hasOpaqueFinalOverlay && !hasActiveTransientLogo;
     }
 
     bool hasYuzuTitleStablePresentationFrame(
@@ -901,7 +889,12 @@ namespace {
         }
         return (hasOpaqueBackground && opaqueTitleCharacters >= 3 &&
                 hasOpaqueMainOrLogo) ||
-            opaqueNormalPresentationItems >= 2 ||
+            // A normal title card commonly starts with its opaque background
+            // and character while a white transition is still fading out.
+            // That is a useful delta-composition base, but not the terminal
+            // presentation frame.  The title/main overlay is the lifecycle
+            // signal that the card is ready to retain after the motion ends.
+            (opaqueNormalPresentationItems >= 2 && hasOpaqueMainOrLogo) ||
             (hasOpaqueNumberedComposite && hasOpaqueMainOrLogo);
     }
 
@@ -978,6 +971,84 @@ namespace {
             bounds[3] = std::max(bounds[3], corners[i + 1]);
         }
         return bounds;
+    }
+
+    bool resolvePsbSourceDimensions(
+        const motion::detail::MotionSnapshot &snapshot,
+        const std::string &sourceKey,
+        float &width,
+        float &height) {
+        width = 0.0f;
+        height = 0.0f;
+        if(sourceKey.rfind("src/", 0) != 0 || !snapshot.root) {
+            return false;
+        }
+
+        const auto sourcePath = sourceKey.substr(4);
+        const auto slash = sourcePath.find('/');
+        if(slash == std::string::npos || slash == 0 ||
+           slash + 1 >= sourcePath.size()) {
+            return false;
+        }
+
+        const auto iconNode = navigatePSBPath(
+            snapshot.root,
+            "source/" + sourcePath.substr(0, slash) + "/icon/" +
+                sourcePath.substr(slash + 1));
+        if(!iconNode) {
+            return false;
+        }
+
+        auto sourceWidth =
+            psbDictionaryNumber(iconNode, "width").value_or(0.0);
+        auto sourceHeight =
+            psbDictionaryNumber(iconNode, "height").value_or(0.0);
+        if(sourceWidth <= 0.0) {
+            sourceWidth = psbDictionaryNumber(iconNode, "truncated_width")
+                              .value_or(0.0);
+        }
+        if(sourceHeight <= 0.0) {
+            sourceHeight = psbDictionaryNumber(iconNode, "truncated_height")
+                               .value_or(0.0);
+        }
+        if(!std::isfinite(sourceWidth) || !std::isfinite(sourceHeight) ||
+           sourceWidth <= 0.0 || sourceHeight <= 0.0) {
+            return false;
+        }
+
+        width = static_cast<float>(sourceWidth);
+        height = static_cast<float>(sourceHeight);
+        return true;
+    }
+
+    bool hasDuplicatedNumberedTitleScale(
+        const motion::detail::MotionSnapshot &snapshot,
+        const motion::detail::PlayerRuntime::PreparedRenderItem &entry) {
+        float sourceWidth = 0.0f;
+        float sourceHeight = 0.0f;
+        if(!resolvePsbSourceDimensions(snapshot, entry.sourceKey,
+                                       sourceWidth, sourceHeight)) {
+            return false;
+        }
+
+        // The PSB quad is ordered top-left, top-right, bottom-right,
+        // bottom-left. Measure its two transformed edge lengths instead of
+        // its AABB so rotation does not look like an extra scale.
+        const float renderedWidth = std::hypot(
+            entry.corners[2] - entry.corners[0],
+            entry.corners[3] - entry.corners[1]);
+        const float renderedHeight = std::hypot(
+            entry.corners[6] - entry.corners[0],
+            entry.corners[7] - entry.corners[1]);
+        const float scaleX = renderedWidth / sourceWidth;
+        const float scaleY = renderedHeight / sourceHeight;
+        constexpr float kNestedScaleMin = 2.15f;
+        constexpr float kNestedScaleMax = 2.35f;
+        constexpr float kMaxAnisotropy = 0.12f;
+        return std::isfinite(scaleX) && std::isfinite(scaleY) &&
+            scaleX >= kNestedScaleMin && scaleX <= kNestedScaleMax &&
+            scaleY >= kNestedScaleMin && scaleY <= kNestedScaleMax &&
+            std::fabs(scaleX - scaleY) <= kMaxAnisotropy;
     }
 
     bool isCenteredGameMotion(const std::string &motionPath) {
@@ -1700,11 +1771,13 @@ namespace {
             }
         }
 
-        // title_bg3..6 currently accumulate the 150% group scale twice, which
-        // produces a 225% character transform. These title-card bitmaps are
-        // authored for a 1:1 final presentation, so compensate by 4/9 while
-        // retaining the group's animated centre and translation.
-        if(isYuzuNumberedTitleCharacterMotion(motionPath)) {
+        // Some numbered Yuzu title cards author their character under two
+        // nested 150% groups. Collapse that duplicated 225% transform only
+        // when the prepared quad is actually 2.25x its PSB source. Matching
+        // by title filename alone also catches 1:1 cards and shrinks them to
+        // 4/9 of their intended size.
+        if(runtime.activeMotion &&
+           isYuzuNumberedTitleCharacterMotion(motionPath)) {
             const float canvasCenterX =
                 static_cast<float>(canvasWidth) * 0.5f;
             const float canvasCenterY =
@@ -1712,8 +1785,8 @@ namespace {
             for(auto &entry : runtime.preparedRenderItems) {
                 if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
                    entry.opacity <= 0 ||
-                   !isYuzuNumberedTitleCharacterMotion(
-                       motionPath, entry.sourceKey)) {
+                   !hasDuplicatedNumberedTitleScale(
+                       *runtime.activeMotion, entry)) {
                     continue;
                 }
                 auto bounds = boundsFromRenderCorners(entry.corners);
@@ -2199,7 +2272,8 @@ namespace {
     }
 
     void applyPackedCornerTintLike_0x6A7518(
-        tTVPBaseBitmap &bitmap,
+        const tTVPBaseBitmap &source,
+        tTVPBaseBitmap &destination,
         const std::array<std::uint32_t, 4> &packedColors,
         bool halfAlphaBlend,
         bool tintDefaultNeutralMask,
@@ -2209,7 +2283,7 @@ namespace {
         const auto c1 = packedColors[1];
         const auto c2 = packedColors[2];
         const auto c3 = packedColors[3];
-        const bool alphaOnlyMask = bitmapLooksAlphaOnlyMask(bitmap);
+        const bool alphaOnlyMask = bitmapLooksAlphaOnlyMask(source);
         const bool colorsAreNeutral = packedColorsAreDefault(c0, c1, c2, c3) ||
             packedColorsAreOpaqueWhite(c0, c1, c2, c3);
         if(colorsAreNeutral && !tintDefaultNeutralMask) {
@@ -2224,9 +2298,13 @@ namespace {
             colorsAreNeutral ? neutralTint : unpackPackedRgba(c2);
         const auto bottomLeft =
             colorsAreNeutral ? neutralTint : unpackPackedRgba(c3);
-        const int width = static_cast<int>(bitmap.GetWidth());
-        const int height = static_cast<int>(bitmap.GetHeight());
+        const int width = static_cast<int>(source.GetWidth());
+        const int height = static_cast<int>(source.GetHeight());
         if(width <= 0 || height <= 0) {
+            return;
+        }
+        if(destination.GetWidth() != source.GetWidth() ||
+           destination.GetHeight() != source.GetHeight()) {
             return;
         }
 
@@ -2241,61 +2319,160 @@ namespace {
             return a + (pos * (b - a)) / span;
         };
 
-        for(int y = 0; y < height; ++y) {
-            auto *row = static_cast<std::uint8_t *>(
-                bitmap.GetScanLineForWrite(static_cast<tjs_uint>(y)));
-            const int rowLeftR =
-                lerpChannel(topLeft[0], bottomLeft[0], y, spanY);
-            const int rowLeftG =
-                lerpChannel(topLeft[1], bottomLeft[1], y, spanY);
-            const int rowLeftB =
-                lerpChannel(topLeft[2], bottomLeft[2], y, spanY);
-            const int rowLeftA =
-                lerpChannel(topLeft[3], bottomLeft[3], y, spanY);
-            const int rowRightR =
-                lerpChannel(topRight[0], bottomRight[0], y, spanY);
-            const int rowRightG =
-                lerpChannel(topRight[1], bottomRight[1], y, spanY);
-            const int rowRightB =
-                lerpChannel(topRight[2], bottomRight[2], y, spanY);
-            const int rowRightA =
-                lerpChannel(topRight[3], bottomRight[3], y, spanY);
+        // Corner colors are commonly animated as one uniform value. In that
+        // case the general bilinear loop needlessly evaluates four lerps for
+        // every pixel (several million pixels for a title-card source).
+        // Keeping this as a separate branch is bit-for-bit equivalent because
+        // lerp(a, a, ...) is exactly a for every coordinate.
+        const bool hasUniformTint =
+            topLeft == topRight && topLeft == bottomRight &&
+            topLeft == bottomLeft;
 
-            for(int x = 0; x < width; ++x) {
-                auto *dst = row + static_cast<size_t>(x) * 4u;
-                const bool whiteMaskPixel = pixelLooksWhiteMask(dst);
-                if(tintOnlyWhitePixels && !whiteMaskPixel) {
+        // Resolve the writable storage once before dispatching row workers.
+        // GetScanLineForWrite() may perform copy-on-write and update texture
+        // state, so it must not be called concurrently from worker threads.
+        const auto *sourcePixels = static_cast<const std::uint8_t *>(
+            source.GetScanLine(0));
+        auto *destinationPixels = static_cast<std::uint8_t *>(
+            destination.GetScanLineForWrite(0));
+        const auto sourcePitch =
+            static_cast<std::ptrdiff_t>(source.GetPitchBytes());
+        const auto destinationPitch =
+            static_cast<std::ptrdiff_t>(destination.GetPitchBytes());
+        if(!sourcePixels || !destinationPixels || sourcePitch == 0 ||
+           destinationPitch == 0) {
+            return;
+        }
+
+        const size_t pixelCount =
+            static_cast<size_t>(width) * static_cast<size_t>(height);
+        constexpr size_t kParallelTintThreshold = 512u * 512u;
+        const int workerCount = pixelCount >= kParallelTintThreshold
+            ? std::max(1, std::min<int>(TVPGetThreadNum(), height))
+            : 1;
+
+        const auto tintRows = [&](int workerIndex) {
+            const int yBegin = height * workerIndex / workerCount;
+            const int yEnd = height * (workerIndex + 1) / workerCount;
+            for(int y = yBegin; y < yEnd; ++y) {
+                const auto *sourceRow = sourcePixels +
+                    static_cast<std::ptrdiff_t>(y) * sourcePitch;
+                auto *destinationRow = destinationPixels +
+                    static_cast<std::ptrdiff_t>(y) * destinationPitch;
+                const int rowLeftR = hasUniformTint
+                    ? topLeft[0]
+                    : lerpChannel(topLeft[0], bottomLeft[0], y, spanY);
+                const int rowLeftG = hasUniformTint
+                    ? topLeft[1]
+                    : lerpChannel(topLeft[1], bottomLeft[1], y, spanY);
+                const int rowLeftB = hasUniformTint
+                    ? topLeft[2]
+                    : lerpChannel(topLeft[2], bottomLeft[2], y, spanY);
+                const int rowLeftA = hasUniformTint
+                    ? topLeft[3]
+                    : lerpChannel(topLeft[3], bottomLeft[3], y, spanY);
+                const int rowRightR = hasUniformTint
+                    ? topLeft[0]
+                    : lerpChannel(topRight[0], bottomRight[0], y, spanY);
+                const int rowRightG = hasUniformTint
+                    ? topLeft[1]
+                    : lerpChannel(topRight[1], bottomRight[1], y, spanY);
+                const int rowRightB = hasUniformTint
+                    ? topLeft[2]
+                    : lerpChannel(topRight[2], bottomRight[2], y, spanY);
+                const int rowRightA = hasUniformTint
+                    ? topLeft[3]
+                    : lerpChannel(topRight[3], bottomRight[3], y, spanY);
+
+                // This is the dominant animation case: one uniform packed
+                // color applied to an ordinary RGBA image. Keep it outside
+                // the general per-pixel mask/gradient branches. Blend mode
+                // 0x10 uses divisor 128, so a right shift is exactly the same
+                // integer operation for these non-negative channel values.
+                if(hasUniformTint && !tintOnlyWhitePixels &&
+                   !alphaOnlyMask && colorDivisor == 128 &&
+                   rowLeftA == 255) {
+                    for(int x = 0; x < width; ++x) {
+                        const auto *src =
+                            sourceRow + static_cast<size_t>(x) * 4u;
+                        auto *dst =
+                            destinationRow + static_cast<size_t>(x) * 4u;
+                        const int red = rowLeftR * static_cast<int>(src[2]);
+                        const int green = rowLeftG * static_cast<int>(src[1]);
+                        const int blue = rowLeftB * static_cast<int>(src[0]);
+                        const int tintedRed = red >> 7;
+                        const int tintedGreen = green >> 7;
+                        const int tintedBlue = blue >> 7;
+                        dst[2] = static_cast<std::uint8_t>(
+                            tintedRed > 255 ? 255 : tintedRed);
+                        dst[1] = static_cast<std::uint8_t>(
+                            tintedGreen > 255 ? 255 : tintedGreen);
+                        dst[0] = static_cast<std::uint8_t>(
+                            tintedBlue > 255 ? 255 : tintedBlue);
+                        dst[3] = src[3];
+                    }
                     continue;
                 }
-                const int tintR =
-                    lerpChannel(rowLeftR, rowRightR, x, spanX);
-                const int tintG =
-                    lerpChannel(rowLeftG, rowRightG, x, spanX);
-                const int tintB =
-                    lerpChannel(rowLeftB, rowRightB, x, spanX);
-                const int tintA =
-                    lerpChannel(rowLeftA, rowRightA, x, spanX);
-                if(colorsAreNeutral && tintOnlyWhitePixels && whiteMaskPixel) {
-                    const int srcA = static_cast<int>(dst[3]);
-                    dst[2] = static_cast<std::uint8_t>(tintR);
-                    dst[1] = static_cast<std::uint8_t>(tintG);
-                    dst[0] = static_cast<std::uint8_t>(tintB);
-                    dst[3] = static_cast<std::uint8_t>(
-                        std::min(255, tintA * srcA / 255));
-                    continue;
+
+                for(int x = 0; x < width; ++x) {
+                    const auto *src =
+                        sourceRow + static_cast<size_t>(x) * 4u;
+                    auto *dst =
+                        destinationRow + static_cast<size_t>(x) * 4u;
+                    // White-mask classification is relatively expensive and
+                    // is irrelevant for ordinary color tinting. Short-circuit
+                    // it here instead of scanning RGB thresholds for every
+                    // pixel of multi-megapixel title-card sources.
+                    const bool whiteMaskPixel =
+                        tintOnlyWhitePixels && pixelLooksWhiteMask(src);
+                    if(tintOnlyWhitePixels && !whiteMaskPixel) {
+                        std::memcpy(dst, src, 4u);
+                        continue;
+                    }
+                    const int tintR = hasUniformTint
+                        ? rowLeftR
+                        : lerpChannel(rowLeftR, rowRightR, x, spanX);
+                    const int tintG = hasUniformTint
+                        ? rowLeftG
+                        : lerpChannel(rowLeftG, rowRightG, x, spanX);
+                    const int tintB = hasUniformTint
+                        ? rowLeftB
+                        : lerpChannel(rowLeftB, rowRightB, x, spanX);
+                    const int tintA = hasUniformTint
+                        ? rowLeftA
+                        : lerpChannel(rowLeftA, rowRightA, x, spanX);
+                    if(colorsAreNeutral && tintOnlyWhitePixels &&
+                       whiteMaskPixel) {
+                        const int srcA = static_cast<int>(src[3]);
+                        dst[2] = static_cast<std::uint8_t>(tintR);
+                        dst[1] = static_cast<std::uint8_t>(tintG);
+                        dst[0] = static_cast<std::uint8_t>(tintB);
+                        dst[3] = static_cast<std::uint8_t>(
+                            std::min(255, tintA * srcA / 255));
+                        continue;
+                    }
+                    const int srcR =
+                        alphaOnlyMask ? 255 : static_cast<int>(src[2]);
+                    const int srcG =
+                        alphaOnlyMask ? 255 : static_cast<int>(src[1]);
+                    const int srcB =
+                        alphaOnlyMask ? 255 : static_cast<int>(src[0]);
+                    dst[2] = static_cast<std::uint8_t>(std::min(
+                        255, tintR * srcR / colorDivisor));
+                    dst[1] = static_cast<std::uint8_t>(std::min(
+                        255, tintG * srcG / colorDivisor));
+                    dst[0] = static_cast<std::uint8_t>(std::min(
+                        255, tintB * srcB / colorDivisor));
+                    dst[3] = static_cast<std::uint8_t>(std::min(
+                        255, tintA * static_cast<int>(src[3]) / 255));
                 }
-                const int srcR = alphaOnlyMask ? 255 : static_cast<int>(dst[2]);
-                const int srcG = alphaOnlyMask ? 255 : static_cast<int>(dst[1]);
-                const int srcB = alphaOnlyMask ? 255 : static_cast<int>(dst[0]);
-                dst[2] = static_cast<std::uint8_t>(std::min(
-                    255, tintR * srcR / colorDivisor));
-                dst[1] = static_cast<std::uint8_t>(std::min(
-                    255, tintG * srcG / colorDivisor));
-                dst[0] = static_cast<std::uint8_t>(std::min(
-                    255, tintB * srcB / colorDivisor));
-                dst[3] = static_cast<std::uint8_t>(std::min(
-                    255, tintA * static_cast<int>(dst[3]) / 255));
             }
+        };
+
+        if(workerCount > 1) {
+            TVPExecThreadTask(workerCount, tintRows);
+        } else {
+            tintRows(0);
         }
     }
 
@@ -2370,8 +2547,16 @@ namespace {
         }
 
         tTJSVariant ownerVar(layerTreeOwnerObject, layerTreeOwnerObject);
+        const auto ownerClosure = ownerVar.AsObjectClosureNoAddRef();
         tTJSVariant primaryVar;
-        if(!getObjectProperty(ownerVar, TJS_W("primaryLayer"), primaryVar) ||
+        // primaryLayer is a native TJS property.  getObjectProperty() uses
+        // TJS_IGNOREPROP intentionally for metadata lookup, which returns the
+        // property dispatch itself instead of invoking its getter.  Passing
+        // that dispatch as Layer(parent) makes the constructor reject it with
+        // "Specify Layer class object" on the first D3D affine frame.
+        if(!ownerClosure.Object ||
+           TJS_FAILED(ownerClosure.PropGet(0, TJS_W("primaryLayer"), nullptr,
+                                           &primaryVar, nullptr)) ||
            primaryVar.Type() != tvtObject || !primaryVar.AsObjectNoAddRef()) {
             return nullptr;
         }
@@ -2379,7 +2564,9 @@ namespace {
         if(auto *resolved = tryResolveLayerDispatch(primaryVar)) {
             return resolved;
         }
-        return primaryVar.AsObjectNoAddRef();
+        // A parent passed to Layer's constructor must be a verified native
+        // Layer.  Never fall back to an arbitrary script/property object.
+        return nullptr;
     }
 
     tTJSNI_BaseLayer *resolvePrimaryAncestorLayer(
@@ -3055,6 +3242,7 @@ namespace {
         if(!layer) {
             return false;
         }
+
         const auto name =
             renderDebugLowercase(motion::detail::narrow(layer->GetName()));
         return name == "title_bg" ||
@@ -4120,11 +4308,17 @@ namespace {
                std::abs(candidateHeight - sceneHeight) > heightTolerance) {
                 continue;
             }
-            if(!centeredPresentationLayerSubtreeLooksLikeMessageUi(candidate)) {
-                continue;
-            }
-
-            int score = 100 - std::min<int>(
+            // Front/back scene pages are structural peers.  Custom Yuzu
+            // message skins do not necessarily put "message" or
+            // "メッセージ" in their layer names, so requiring a name match
+            // here makes a hidden back page fall through to the top layer.
+            // A full-screen hold parented there can then cover the real
+            // message window whenever the pages exchange.  Type, geometry,
+            // visibility, and the shared parent already identify the peer;
+            // retain the message-name heuristic only as a preference.
+            const bool hasMessageUi =
+                centeredPresentationLayerSubtreeLooksLikeMessageUi(candidate);
+            int score = (hasMessageUi ? 200 : 100) - std::min<int>(
                 50, static_cast<int>(std::llabs(
                         static_cast<long long>(candidate->GetOrderIndex()) -
                         static_cast<long long>(hiddenOrder))));
@@ -4187,50 +4381,29 @@ namespace {
             return;
         }
 
+        const tjs_int currentOrder = absoluteOrderMode
+            ? orderLayer->GetAbsoluteOrderIndex()
+            : orderLayer->GetOrderIndex();
+        if(currentOrder < messageOrder) {
+            return;
+        }
+
         const tjs_int targetOrder = std::max<tjs_int>(0, messageOrder - 1);
-        std::vector<tTJSNI_BaseLayer *> presentationSiblings;
-        presentationSiblings.reserve(parent->GetCount());
-        for(tjs_uint i = 0; i < childCount; ++i) {
-            auto *child = parent->GetChildren(static_cast<tjs_int>(i));
-            if(!child || !child->GetOwnerNoAddRef() ||
-               !centeredPresentationLayerShouldStayBelowMessageUi(child)) {
-                continue;
-            }
-            presentationSiblings.push_back(child);
-        }
-        if(std::find(presentationSiblings.begin(),
-                     presentationSiblings.end(),
-                     orderLayer) == presentationSiblings.end()) {
-            presentationSiblings.push_back(orderLayer);
+        if(absoluteOrderMode) {
+            orderLayer->SetAbsoluteOrderIndex(targetOrder);
+        } else {
+            orderLayer->SetOrderIndex(targetOrder);
         }
 
-        for(auto *candidate : presentationSiblings) {
-            if(!candidate || candidate->GetParent() != parent) {
-                continue;
-            }
-            const tjs_int currentOrder = absoluteOrderMode
-                ? candidate->GetAbsoluteOrderIndex()
-                : candidate->GetOrderIndex();
-            if(currentOrder < messageOrder) {
-                continue;
-            }
-
-            if(absoluteOrderMode) {
-                candidate->SetAbsoluteOrderIndex(targetOrder);
-            } else {
-                candidate->SetOrderIndex(targetOrder);
-            }
-
-            if(LOGGER && std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG")) {
-                LOGGER->info(
-                    "motion centered order guard: reason={} layer=[{}] orderLayer=[{}] message=[{}] orderMode={} from={} to={}",
-                    reason ? reason : "<null>",
-                    describeLayerForDebug(layer),
-                    describeLayerForDebug(candidate),
-                    describeLayerForDebug(messageLayer),
-                    absoluteOrderMode ? "absolute" : "relative",
-                    currentOrder, targetOrder);
-            }
+        if(LOGGER && std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG")) {
+            LOGGER->info(
+                "motion centered order guard: reason={} layer=[{}] orderLayer=[{}] message=[{}] orderMode={} from={} to={}",
+                reason ? reason : "<null>",
+                describeLayerForDebug(layer),
+                describeLayerForDebug(orderLayer),
+                describeLayerForDebug(messageLayer),
+                absoluteOrderMode ? "absolute" : "relative",
+                currentOrder, targetOrder);
         }
     }
 
@@ -4549,6 +4722,39 @@ namespace {
                 if(savedParentLayer && savedParentLayer->GetVisible() &&
                    savedParentLayer->GetParentVisible()) {
                     useSavedOverlayParent = true;
+
+                    // Capturing an event CG while its front/back scene page is
+                    // hidden records the still-visible top layer as the overlay
+                    // parent.  Merely checking that saved parent for visibility
+                    // is insufficient: restoring the opaque hold there places it
+                    // above the visible page and its message window.  Refine that
+                    // cached top-level parent to the currently visible structural
+                    // peer before reusing it.
+                    auto *hiddenSceneAnchor =
+                        findCenteredPresentationOverlayAnchor(referenceLayer);
+                    auto *visibleSceneSibling =
+                        findVisibleCenteredPresentationSceneSibling(
+                            hiddenSceneAnchor);
+                    if(hiddenSceneAnchor && visibleSceneSibling &&
+                       hiddenSceneAnchor->GetParent() == savedParentLayer &&
+                       visibleSceneSibling->GetOwnerNoAddRef()) {
+                        parentObject =
+                            visibleSceneSibling->GetOwnerNoAddRef();
+                        savedParentLayer = visibleSceneSibling;
+                        entry.overlayParentLayer =
+                            tTJSVariant(parentObject, parentObject);
+                        tjs_int parentPrimaryLeft = 0;
+                        tjs_int parentPrimaryTop = 0;
+                        savedParentLayer->ToPrimaryCoordinates(
+                            parentPrimaryLeft, parentPrimaryTop);
+                        entry.overlayLeft =
+                            entry.primaryLeft - parentPrimaryLeft;
+                        entry.overlayTop =
+                            entry.primaryTop - parentPrimaryTop;
+                        entry.overlayParentAbsoluteOrderMode =
+                            savedParentLayer->GetAbsoluteOrderMode();
+                        entry.hasOverlayGeometry = true;
+                    }
                 } else {
                     parentObject = nullptr;
                 }
@@ -6262,10 +6468,19 @@ namespace {
 
     bool shouldUseDirectRenderPathLike_0x6C7440(
         const motion::detail::PlayerRuntime::RenderCommand &command) {
+        // World corners already include the complete ancestor transform, so a
+        // nested leaf that does not belong to a render group can be drawn
+        // straight into the presentation target.  Routing those leaves through
+        // local scratch layers doubles the pixel work (source -> scratch ->
+        // target); large looping SD motions then monopolize the script tick and
+        // make typewriter text visibly stutter.  Synthetic/stencil groups,
+        // local viewport clips and authored Photoshop blend modes still use
+        // buffered composition to preserve their ordering and mask semantics.
         const unsigned lowNibble =
             static_cast<unsigned>(command.blendMode) & 0x0Fu;
         return !command.clearEnabled &&
-            command.visibleAncestorIndex < 0 &&
+            !command.hasRenderParent &&
+            !command.requiresLocalClip &&
             (lowNibble == 0u || lowNibble > 5u);
     }
 
@@ -6283,7 +6498,7 @@ namespace {
         }};
     }
 
-    bool axisAlignedIntegerRectFromCorners(
+    bool axisAlignedRectBoundsFromCorners(
         const std::array<float, 8> &corners,
         float xOffset,
         float yOffset,
@@ -6309,22 +6524,17 @@ namespace {
             return false;
         }
 
-        auto roundToInt = [&](float value, int &out) {
-            const float rounded = std::round(value);
-            if(std::fabs(value - rounded) > kEpsilon) {
-                return false;
-            }
-            out = static_cast<int>(rounded);
-            return true;
-        };
-
-        int il = 0;
-        int it = 0;
-        int ir = 0;
-        int ib = 0;
-        if(!roundToInt(left, il) || !roundToInt(top, it) ||
-           !roundToInt(right, ir) || !roundToInt(bottom, ib) ||
-           ir <= il || ib <= it) {
+        // Stretch/OperateStretch take integer rectangles, but a PSB motion can
+        // place a perfectly axis-aligned quad on a fractional pixel (the SD
+        // assets in LimeLight are commonly scaled by 0.75). Requiring integer
+        // authored corners sends those quads through OperateTriangles, whose
+        // compatibility implementation is a synchronous software rasterizer.
+        // Snap only the bounds; rotated/skewed quads still use the affine path.
+        const int il = static_cast<int>(std::lround(left));
+        const int it = static_cast<int>(std::lround(top));
+        const int ir = static_cast<int>(std::lround(right));
+        const int ib = static_cast<int>(std::lround(bottom));
+        if(ir <= il || ib <= it) {
             return false;
         }
         outRect = tTVPRect(il, it, ir, ib);
@@ -6943,6 +7153,7 @@ namespace motion {
         _runtime->nodes =
             detail::buildNodeTree(*_runtime->activeMotion, selectedClip);
         _runtime->nodesBuilt = true;
+        _layersDirty = true;
 
         if(!_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
@@ -6992,6 +7203,7 @@ namespace motion {
                             << ":st" << node.stencilType
                             << ":b" << node.accumulated.blendMode
                             << ":pd" << node.priorDraw
+                            << ":pz" << node.parameterizeIndex
                             << ":p" << node.parentIndex;
             }
             LOGGER->info("motion build nodes: motion={} count={} nodes=[{}]",
@@ -7178,6 +7390,11 @@ namespace motion {
                 };
             }
             command.visibleAncestorIndex = entry.visibleAncestorIndex;
+            command.requiresLocalClip = entry.hasViewport &&
+                (entry.viewport[0] > entry.paintBox[0] + 0.01f ||
+                 entry.viewport[1] > entry.paintBox[1] + 0.01f ||
+                 entry.viewport[2] < entry.paintBox[2] - 0.01f ||
+                 entry.viewport[3] < entry.paintBox[3] - 0.01f);
             command.clearEnabled = _clearEnabled;
             command.meshType = entry.meshType;
             command.meshDivX = entry.meshDivX;
@@ -7406,9 +7623,14 @@ namespace motion {
             int storageLoads = 0;
             int psbLoads = 0;
             int tintBuilds = 0;
+            int tintEvictions = 0;
+            int directOutputs = 0;
+            int bufferedOutputs = 0;
             std::uint64_t baseResolveUs = 0;
             std::uint64_t preparedResolveUs = 0;
             std::uint64_t tintBuildUs = 0;
+            std::uint64_t tintAllocateUs = 0;
+            std::uint64_t tintApplyUs = 0;
         };
         RenderProfileStats profileStats;
         const bool profileEnabled = motionRenderProfileEnabled();
@@ -7416,6 +7638,79 @@ namespace motion {
             profileEnabled ? motionRenderProfileNowUs() : 0;
         auto &baseSourceCache = _runtime->motionSourceBitmapCache;
         auto &preparedSourceCache = _runtime->motionPreparedBitmapCache;
+        auto &materializedKeysBySource =
+            _runtime->motionPreparedMaterializedKeysBySource;
+        // A source can occur more than once in one command list, and direct
+        // commands resolve it once while building and again while copying.
+        // Never evict a variant already touched by this execution.
+        std::unordered_set<std::string> preparedKeysTouchedThisExecution;
+        const auto preparedVariantCapacity =
+            [](const std::shared_ptr<tTVPBaseBitmap> &bitmap) -> size_t {
+                const size_t pixelCount = bitmap
+                    ? static_cast<size_t>(bitmap->GetWidth()) *
+                          static_cast<size_t>(bitmap->GetHeight())
+                    : 0u;
+                constexpr size_t kLargePreparedBitmapPixels = 512u * 512u;
+                return pixelCount >= kLargePreparedBitmapPixels ? 4u : 16u;
+            };
+        const auto trimMaterializedPreparedKeys =
+            [&](std::deque<std::string> &keys, size_t capacity) {
+                while(keys.size() > capacity) {
+                    const auto evictIt = std::find_if(
+                        keys.begin(), keys.end(), [&](const std::string &key) {
+                            return preparedKeysTouchedThisExecution.find(key) ==
+                                preparedKeysTouchedThisExecution.end();
+                        });
+                    if(evictIt == keys.end()) {
+                        // More live variants than the normal capacity are
+                        // valid in one frame. The next cache hit or insertion
+                        // trims them after that frame's touch set expires.
+                        break;
+                    }
+                    preparedSourceCache.erase(*evictIt);
+                    keys.erase(evictIt);
+                    if(profileEnabled) {
+                        ++profileStats.tintEvictions;
+                    }
+                }
+            };
+        const auto touchMaterializedPreparedKey =
+            [&](const std::string &sourceKey, const std::string &preparedKey) {
+                preparedKeysTouchedThisExecution.insert(preparedKey);
+                auto sourceIt = materializedKeysBySource.find(sourceKey);
+                if(sourceIt == materializedKeysBySource.end()) {
+                    return;
+                }
+                auto &keys = sourceIt->second;
+                const auto keyIt =
+                    std::find(keys.begin(), keys.end(), preparedKey);
+                if(keyIt == keys.end()) {
+                    return;
+                }
+                keys.erase(keyIt);
+                keys.push_back(preparedKey);
+                const auto bitmapIt = preparedSourceCache.find(preparedKey);
+                trimMaterializedPreparedKeys(
+                    keys, preparedVariantCapacity(
+                              bitmapIt != preparedSourceCache.end()
+                                  ? bitmapIt->second
+                                  : nullptr));
+            };
+        const auto cacheMaterializedPreparedBitmap =
+            [&](const std::string &sourceKey, const std::string &preparedKey,
+                const std::shared_ptr<tTVPBaseBitmap> &bitmap) {
+                preparedSourceCache.emplace(preparedKey, bitmap);
+                auto &keys = materializedKeysBySource[sourceKey];
+                const auto existing =
+                    std::find(keys.begin(), keys.end(), preparedKey);
+                if(existing != keys.end()) {
+                    keys.erase(existing);
+                }
+                keys.push_back(preparedKey);
+                preparedKeysTouchedThisExecution.insert(preparedKey);
+                trimMaterializedPreparedKeys(
+                    keys, preparedVariantCapacity(bitmap));
+            };
         auto resolveBaseSourceBitmap =
             [&](const detail::PlayerRuntime::RenderCommand &command)
                 -> std::shared_ptr<tTVPBaseBitmap> {
@@ -7439,9 +7734,18 @@ namespace motion {
             std::string sourceOrigin("unresolved");
             const auto resolvedPath = resolveMotionSourcePath(
                 *_runtime->activeMotion, command.sourceKey);
-            if(!resolvedPath.IsEmpty()) {
+            const auto resolvedPathString = detail::narrow(resolvedPath);
+            const bool resolvedPathIsEmbeddedPsb =
+                resolvedPathString.rfind("psb://", 0) == 0;
+            // A PSB icon's `pixel` resource contains raw/RL/palettized pixels,
+            // even though the compatibility storage path is exposed with a
+            // synthetic `.png` suffix. Sending those bytes through the normal
+            // image loader produces a 1x1 transparent fallback and prevents
+            // the PSB-aware decoder below from ever running (for example the
+            // animated dressing-room curtains in eyecatch3.mtn).
+            if(!resolvedPath.IsEmpty() && !resolvedPathIsEmbeddedPsb) {
                 ttstr loadPath = resolvedPath;
-                const auto pathString = detail::narrow(resolvedPath);
+                const auto &pathString = resolvedPathString;
                 if(pathString.rfind('.') == std::string::npos ||
                    pathString.rfind('.') < pathString.rfind('/')) {
                     loadPath = resolvedPath + TJS_W(".png");
@@ -7513,8 +7817,7 @@ namespace motion {
                     decodedPixels, originX, originY, &decodedPixelsAreBgra);
                 if(resource && width > 0 && height > 0 && !resource->data.empty()) {
                     const bool sourcePixelsAreBgra =
-                        motionSourcePixelsAreBGRA(motionPath,
-                                                  decodedPixelsAreBgra);
+                        motionSourcePixelsAreBGRA(decodedPixelsAreBgra);
                     const auto &pixelData =
                         decodedPixels.empty() ? resource->data : decodedPixels;
                     auto bmp = std::make_shared<tTVPBaseBitmap>(
@@ -7602,6 +7905,7 @@ namespace motion {
                 if(profileEnabled) {
                     ++profileStats.preparedHits;
                 }
+                touchMaterializedPreparedKey(command.sourceKey, tintKey);
                 return it->second;
             }
             if(profileEnabled) {
@@ -7660,15 +7964,32 @@ namespace motion {
 
             const auto tintStartUs =
                 profileEnabled ? motionRenderProfileNowUs() : 0;
-            auto tinted = cloneBitmap32(*srcBmp);
+            // Tinting writes every destination pixel, so construct the result
+            // directly from the immutable source instead of cloning the whole
+            // bitmap and immediately walking it again. Besides avoiding one
+            // full-size copy, this prevents per-scanline copy-on-write checks
+            // from dominating large animated title-card sources.
+            auto tinted = needsTint
+                ? std::make_shared<tTVPBaseBitmap>(
+                      static_cast<tjs_uint>(srcBmp->GetWidth()),
+                      static_cast<tjs_uint>(srcBmp->GetHeight()), 32)
+                : cloneBitmap32(*srcBmp);
             if(profileEnabled) {
                 ++profileStats.tintBuilds;
+                profileStats.tintAllocateUs +=
+                    motionRenderProfileNowUs() - tintStartUs;
             }
             if(needsTint) {
+                const auto tintApplyStartUs =
+                    profileEnabled ? motionRenderProfileNowUs() : 0;
                 applyPackedCornerTintLike_0x6A7518(
-                    *tinted, command.packedColors, useHalfAlphaTint,
+                    *srcBmp, *tinted, command.packedColors, useHalfAlphaTint,
                     tintDefaultNeutralMask, tintOnlyWhitePixels,
                     neutralStartupLogoTint(motionPath));
+                if(profileEnabled) {
+                    profileStats.tintApplyUs +=
+                        motionRenderProfileNowUs() - tintApplyStartUs;
+                }
             }
             if(yuzuLogoCompositeSource) {
                 recolorYuzuCompositeLogoText(
@@ -7697,7 +8018,8 @@ namespace motion {
                 command.packedColors[0], command.packedColors[1],
                 command.packedColors[2], command.packedColors[3],
                 tinted->GetWidth(), tinted->GetHeight());
-            preparedSourceCache.emplace(tintKey, tinted);
+            cacheMaterializedPreparedBitmap(command.sourceKey, tintKey,
+                                             tinted);
             if(profileEnabled) {
                 profileStats.preparedResolveUs +=
                     motionRenderProfileNowUs() - preparedStartUs;
@@ -7739,15 +8061,19 @@ namespace motion {
             }
             if(command.meshType == 0) {
                 tTVPRect localRect;
-                const bool canUseRectCopy =
-                    axisAlignedIntegerRectFromCorners(command.localCorners,
-                                                      0.5f, 0.5f,
-                                                      localRect) &&
-                    localRect.get_width() == sourceRect.get_width() &&
-                    localRect.get_height() == sourceRect.get_height();
-                if(canUseRectCopy) {
-                    targetLayer->CopyRect(localRect.left, localRect.top,
-                                          srcBmp.get(), nullptr, sourceRect);
+                const bool canUseAxisAlignedStretch =
+                    axisAlignedRectBoundsFromCorners(command.localCorners,
+                                                     0.5f, 0.5f,
+                                                     localRect);
+                if(canUseAxisAlignedStretch) {
+                    if(localRect.get_width() == sourceRect.get_width() &&
+                       localRect.get_height() == sourceRect.get_height()) {
+                        targetLayer->CopyRect(localRect.left, localRect.top,
+                                              srcBmp.get(), nullptr, sourceRect);
+                    } else {
+                        targetLayer->StretchCopy(localRect, srcBmp.get(),
+                                                 sourceRect, stLinear, 0.0);
+                    }
                 } else {
                     const auto localPts =
                         buildAffineTrianglePoints(command.localCorners, 0.0f,
@@ -7848,11 +8174,18 @@ namespace motion {
             const bool hasChildren = !command.childCommandIndices.empty();
             const bool useDirectRenderPath =
                 shouldUseDirectRenderPathLike_0x6C7440(command) &&
-                !hasChildren && command.parentNodeIndex < 0;
+                !hasChildren;
             if(useDirectRenderPath) {
                 command.executedDirect = true;
                 command.builtRect = command.clipRect;
+                if(profileEnabled) {
+                    ++profileStats.directOutputs;
+                }
                 return true;
+            }
+
+            if(profileEnabled) {
+                ++profileStats.bufferedOutputs;
             }
 
             iTJSDispatch2 *leafLayerObject = ensureCommandLayer(command.leafLayer);
@@ -8038,27 +8371,45 @@ namespace motion {
                 std::string branch("direct.operateAffine");
                 const bool directCopyWithoutOpacity =
                     ((command.blendMode & 0x0F) == 0) && opa >= 255 &&
-                    !bitmapHasTransparentPixels(*srcBmp);
+                    // IsOpaque is maintained exactly by the texture backend.
+                    // A sampled alpha scan can miss sparse transparency and
+                    // would let CopyRect erase layers already drawn below it.
+                    srcBmp->IsOpaque();
                 if(command.meshType == 0) {
                     tTVPRect destinationRect;
-                    const bool canUseRectCopy =
-                        axisAlignedIntegerRectFromCorners(command.worldCorners,
-                                                          0.0f, 0.0f,
-                                                          destinationRect) &&
-                        destinationRect.get_width() == sourceRect.get_width() &&
-                        destinationRect.get_height() == sourceRect.get_height();
-                    if(canUseRectCopy && directCopyWithoutOpacity) {
-                        branch = "direct.copyRect";
-                        renderLayer->CopyRect(destinationRect.left,
-                                              destinationRect.top,
-                                              srcBmp.get(), nullptr,
-                                              sourceRect);
-                    } else if(canUseRectCopy) {
-                        branch = "direct.operateRect";
-                        renderLayer->OperateRect(destinationRect.left,
-                                                 destinationRect.top,
-                                                 srcBmp.get(), sourceRect,
-                                                 blendMode, opa);
+                    const bool canUseAxisAlignedStretch =
+                        axisAlignedRectBoundsFromCorners(command.worldCorners,
+                                                         0.0f, 0.0f,
+                                                         destinationRect);
+                    if(canUseAxisAlignedStretch) {
+                        const bool sameSize =
+                            destinationRect.get_width() ==
+                                sourceRect.get_width() &&
+                            destinationRect.get_height() ==
+                                sourceRect.get_height();
+                        if(sameSize && directCopyWithoutOpacity) {
+                            branch = "direct.copyRect";
+                            renderLayer->CopyRect(destinationRect.left,
+                                                  destinationRect.top,
+                                                  srcBmp.get(), nullptr,
+                                                  sourceRect);
+                        } else if(sameSize) {
+                            branch = "direct.operateRect";
+                            renderLayer->OperateRect(destinationRect.left,
+                                                     destinationRect.top,
+                                                     srcBmp.get(), sourceRect,
+                                                     blendMode, opa);
+                        } else if(directCopyWithoutOpacity) {
+                            branch = "direct.stretchCopy";
+                            renderLayer->StretchCopy(destinationRect,
+                                                     srcBmp.get(), sourceRect,
+                                                     stLinear, 0.0);
+                        } else {
+                            branch = "direct.operateStretch";
+                            renderLayer->OperateStretch(
+                                destinationRect, srcBmp.get(), sourceRect,
+                                blendMode, opa, stLinear, 0.0);
+                        }
                     } else {
                         const auto worldPts =
                             buildAffineTrianglePoints(command.worldCorners,
@@ -8236,19 +8587,27 @@ namespace motion {
                 renderLayer->GetWidth(), renderLayer->GetHeight());
         }
         if(profileEnabled && LOGGER) {
+            size_t materializedPreparedEntries = 0;
+            for(const auto &entry : materializedKeysBySource) {
+                materializedPreparedEntries += entry.second.size();
+            }
             LOGGER->info(
-                "motion render profile: motion={} frame={:.2f} target={} native={} commands={} cache=base:{}/{} prepared:{}/{} loads=storage:{} psb:{} tintBuilds={} us=total:{} base:{} prepared:{} tint:{}",
+                "motion render profile: motion={} frame={:.2f} target={} native={} commands={} outputs=direct:{} buffered:{} cache=base:{}/{} prepared:{}/{} entries=prepared:{} materialized:{} evictions:{} loads=storage:{} psb:{} tintBuilds={} us=total:{} base:{} prepared:{} tint:{} alloc:{} apply:{}",
                 motionPath, _clampedEvalTime,
                 static_cast<const void *>(renderLayerObject),
                 static_cast<const void *>(renderLayer),
                 _runtime->renderCommands.size(),
+                profileStats.directOutputs, profileStats.bufferedOutputs,
                 profileStats.baseHits, profileStats.baseMisses,
                 profileStats.preparedHits, profileStats.preparedMisses,
+                preparedSourceCache.size(), materializedPreparedEntries,
+                profileStats.tintEvictions,
                 profileStats.storageLoads, profileStats.psbLoads,
                 profileStats.tintBuilds,
                 motionRenderProfileNowUs() - profileStartUs,
                 profileStats.baseResolveUs, profileStats.preparedResolveUs,
-                profileStats.tintBuildUs);
+                profileStats.tintBuildUs, profileStats.tintAllocateUs,
+                profileStats.tintApplyUs);
         }
         return true;
     }
@@ -8364,6 +8723,9 @@ namespace motion {
             adaptor->getWidth(), adaptor->getHeight());
 
         ensureNodeTreeBuilt();
+        // progress()/setVariable() already evaluate root D3D motions before
+        // draw.  Only a composed child whose inherited parent transform
+        // changed needs a second evaluation at this point.
         if(applyMotionParentRootStateForRender() && !_runtime->nodes.empty()) {
             updateLayers();
         }
@@ -8376,10 +8738,17 @@ namespace motion {
             resolveCenteredGameMotionResolution(_resolution, _tags, _metadata,
                                                 motionPath));
 
+        iTJSDispatch2 *windowObject = adaptor->getWindowObject();
+        iTJSDispatch2 *primaryLayerObject =
+            resolvePrimaryLayerObject(windowObject);
+        if(!primaryLayerObject) {
+            return false;
+        }
+
         iTJSDispatch2 *renderLayerObject =
             ensureReusableLayerObject(_runtime->internalRenderLayer,
-                                      adaptor->getWindowObject(),
-                                      nullptr,
+                                      windowObject,
+                                      primaryLayerObject,
                                       static_cast<tTVPLayerType>(ltAlpha),
                                       false);
         if(!renderLayerObject) {
@@ -8585,7 +8954,9 @@ namespace motion {
                 finalNativeLayer, "target-select");
         }
         ensureNodeTreeBuilt();
-        if(applyMotionParentRootStateForRender() && !_runtime->nodes.empty()) {
+        const bool parentStateChanged = applyMotionParentRootStateForRender();
+        if((parentStateChanged || _layersDirty || _emoteDirty) &&
+           !_runtime->nodes.empty()) {
             updateLayers();
         }
         prepareRenderItems();
@@ -9043,12 +9414,24 @@ namespace motion {
                    targetLayer->GetHeight() != canvasHeight) {
                     targetLayer->SetSize(canvasWidth, canvasHeight);
                 }
-                // Auto-progress retains the dedicated CG child as its next
-                // target. On that direct route it bypasses the generic
-                // presentation clear above, so moving SD layers otherwise
-                // accumulate every previous position as ghost images.
+                // Auto-progress can retain either the dedicated CG child or
+                // KAG's ev/sd transition surface as its next target. Both
+                // direct routes bypass the generic presentation clear above,
+                // so moving SD layers otherwise accumulate every previous
+                // position as ghost images.
+                const auto directYuzuSdLayerName =
+                    isYuzuSdPresentationMotionPath(motionPath)
+                        ? yuzuSdPresentationTargetLayerName(finalLayerObject)
+                        : std::string{};
+                const bool directYuzuSdTransitionTarget =
+                    _autoProgressRendering &&
+                    (directYuzuSdLayerName == "ev" ||
+                     directYuzuSdLayerName == "trans_ev" ||
+                     directYuzuSdLayerName == "sd" ||
+                     directYuzuSdLayerName == "trans_sd");
                 if(targetLayer->GetName().AsStdString() ==
-                   "AetherKiriCgViewMotionSurface") {
+                       "AetherKiriCgViewMotionSurface" ||
+                   directYuzuSdTransitionTarget) {
                     clearMotionPresentationLayer(targetLayer, canvasWidth,
                                                  canvasHeight);
                 }
@@ -9311,7 +9694,9 @@ namespace motion {
             canvasWidth, canvasHeight);
 
         ensureNodeTreeBuilt();
-        if(applyMotionParentRootStateForRender() && !_runtime->nodes.empty()) {
+        const bool parentStateChanged = applyMotionParentRootStateForRender();
+        if((parentStateChanged || _layersDirty || _emoteDirty) &&
+           !_runtime->nodes.empty()) {
             updateLayers();
         }
         prepareRenderItems();
@@ -9625,7 +10010,9 @@ namespace motion {
 
         ensureMotionLoaded();
         ensureNodeTreeBuilt();
-        if(applyMotionParentRootStateForRender() && !_runtime->nodes.empty()) {
+        const bool parentStateChanged = applyMotionParentRootStateForRender();
+        if((parentStateChanged || _layersDirty || _emoteDirty) &&
+           !_runtime->nodes.empty()) {
             updateLayers();
         }
         calcViewParam();
@@ -9679,6 +10066,7 @@ namespace motion {
         if(!_runtime || label.empty()) {
             return;
         }
+        _layersDirty = true;
 
         auto timelineIt = _runtime->timelines.find(label);
         if(timelineIt == _runtime->timelines.end()) {
@@ -10323,6 +10711,7 @@ namespace motion {
         if(!_speed) {
             return;
         }
+        _layersDirty = true;
         if(!_completedEndedTimelineRenderHoldLabel.empty()) {
             const auto stateIt = _runtime->timelines.find(
                 _completedEndedTimelineRenderHoldLabel);
@@ -10418,12 +10807,22 @@ namespace motion {
             if(endTime > 0.0 && clipTime >= endTime) {
                 const bool wasPlaying =
                     _allplaying || !_runtime->playingTimelineLabels.empty();
-                for(auto &[_, state] : _runtime->timelines) {
-                    state.currentTime = std::min(state.currentTime, endTime);
+                const double completedRenderTime = std::max(
+                    0.0, std::nextafter(endTime, 0.0));
+                for(auto &[label, state] : _runtime->timelines) {
+                    state.currentTime =
+                        label == activeClipBeforeProgress->label
+                            ? completedRenderTime
+                            : std::min(state.currentTime, endTime);
                     state.playing = false;
                     state.wasPlaying = false;
                 }
                 _runtime->playingTimelineLabels.clear();
+                // The sync boundary itself is already outside the authored
+                // one-shot slot.  Keep rendering its last visible sample
+                // while reporting playback as complete; otherwise short UI
+                // transitions (`over`/`out`) disappear as soon as they end.
+                _clampedEvalTime = completedRenderTime;
                 if(wasPlaying) {
                     _runtime->pendingEvents.push_back(
                         {1, activeClipBeforeProgress->label, {}});

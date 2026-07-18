@@ -2823,11 +2823,6 @@ static void TVPResizeRgbaForLayerSampling(const cv::Mat &src_img,
     }
 }
 
-static double tTVPPointD_distQ(const tTVPPointD &p0, const tTVPPointD &p1) {
-    double dx = p0.x - p1.x, dy = p0.y - p1.y;
-    return dx * dx + dy * dy;
-}
-
 static bool isDoubleEqual(double a, double b) {
     a -= b;
     if(a < 0)
@@ -2836,11 +2831,14 @@ static bool isDoubleEqual(double a, double b) {
 }
 
 static bool checkQuadSquared(const tTVPPointD *p) {
-    double d01 = tTVPPointD_distQ(p[0], p[1]);
-    double d23 = tTVPPointD_distQ(p[2], p[3]);
-    double d12 = tTVPPointD_distQ(p[1], p[2]);
-    double d03 = tTVPPointD_distQ(p[0], p[3]);
-    return isDoubleEqual(d01, d23) && isDoubleEqual(d12, d03);
+    // OperateTriangles receives two triangles laid out as
+    //   LT, RT, LB, RT, LB, RB.
+    // p[3] is therefore a duplicate of p[1], not the fourth corner.  The old
+    // distance test used p[3] and misclassified ordinary affine copies as
+    // perspective quads.  Test the actual RB point and the parallelogram
+    // relation directly so affineCopy can use warpAffine.
+    return isDoubleEqual(p[5].x, p[1].x - p[0].x + p[2].x) &&
+        isDoubleEqual(p[5].y, p[1].y - p[0].y + p[2].y);
 }
 
 static iTVPTexture2D *(*_createStaticTexture2D)(tTVPBitmap *bmp,
@@ -3822,39 +3820,16 @@ public:
                 cv::Point2f(dstpt[2].x - rcclip.left, dstpt[2].y - rcclip.top),
             };
 
-            cv::Mat src_img;
-            if(isSrcRect) {
-                tTVPRect rcsrc(0x7FFFFFFF, 0x7FFFFFFF, -1, -1);
-                for(int i = 0; i < 4; ++i) {
-                    const cv::Point2f &pt = pts_src[i];
-                    tjs_int x = pt.x;
-                    if(x < rcsrc.left)
-                        rcsrc.left = x;
-                    if(++x > rcsrc.right)
-                        rcsrc.right = x;
-                    tjs_int y = pt.y;
-                    if(y < rcsrc.top)
-                        rcsrc.top = y;
-                    if(++y > rcsrc.bottom)
-                        rcsrc.bottom = y;
-                }
-                sdata += rcsrc.top * spitch + rcsrc.left * 4;
-                for(int i = 0; i < 4; ++i) {
-                    cv::Point2f &pt = pts_src[i];
-                    pt.x -= rcsrc.left;
-                    pt.y -= rcsrc.top;
-                }
-                tjs_int sw = src->GetWidth(), sh = src->GetHeight();
-                if(rcsrc.get_width() > sw)
-                    rcsrc.set_width(sw);
-                if(rcsrc.get_height() > sh)
-                    rcsrc.set_height(sh);
-                src_img = cv::Mat(rcsrc.get_height(), rcsrc.get_width(),
-                                  CV_8UC4, (void *)sdata, spitch);
-            } else {
-                src_img = cv::Mat(src->GetHeight(), src->GetWidth(), CV_8UC4,
-                                  (void *)sdata, spitch);
-            }
+            // Keep the Mat backed by the complete texture.  The previous ROI
+            // optimization enlarged right/bottom by two pixels but clamped
+            // only its width/height, without accounting for a non-zero
+            // left/top.  A cropped source touching the texture edge could
+            // consequently expose rows past the allocation to OpenCV's NEON
+            // remap kernel and crash during an interrupted title animation.
+            // A full-image Mat is only a header here; it does not copy pixels
+            // or make warpAffine/warpPerspective process additional output.
+            cv::Mat src_img(src->GetHeight(), src->GetWidth(), CV_8UC4,
+                            (void *)sdata, spitch);
 
             cv::Mat dst_img;
             cv::Size dst_size(rcclip.get_width(), rcclip.get_height());

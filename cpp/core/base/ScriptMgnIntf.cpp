@@ -1691,11 +1691,35 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
 
 static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
     const ttstr lower = shortname.AsLowerCase();
+    const bool patchWorld = lower == TJS_W("world.tjs");
     const bool patchD3DLayer = lower == TJS_W("d3d.tjs");
     const bool patchD3DMotion =
         patchD3DLayer || lower == TJS_W("d3daffinesourcemotion.tjs");
-    if(!patchD3DLayer && !patchD3DMotion)
+    if(!patchWorld && !patchD3DLayer && !patchD3DMotion)
         return;
+
+    if(patchWorld) try {
+        TVPExecuteScript(
+            TJS_W(
+                "(function() {\r\n"
+                "\tif (typeof global.EnvLayerObject == \"undefined\") return;\r\n"
+                "\tif (typeof global.EnvLayerObject.__aetherKiriOrigCreateLayer != \"undefined\") return;\r\n"
+                "\tglobal.EnvLayerObject.__aetherKiriOrigCreateLayer = &global.EnvLayerObject.createLayer;\r\n"
+                "\tglobal.EnvLayerObject.createLayer = function(src=void) {\r\n"
+                "\t\tvar layer = (global.EnvLayerObject.__aetherKiriOrigCreateLayer incontextof this)(src);\r\n"
+                "\t\tif (layer !== void) {\r\n"
+                "\t\t\ttry { layer.msgvisible = this.msgvisible; } catch(e) {}\r\n"
+                "\t\t\ttry { layer.ignore = this.ignore; } catch(e) {}\r\n"
+                "\t\t}\r\n"
+                "\t\treturn layer;\r\n"
+                "\t};\r\n"
+                "})();\r\n"),
+            TJS_W("AetherKiriWorldLayerClonePatch"), 0,
+            (tTJSVariant *)nullptr);
+        spdlog::info("Applied compatibility hook for world layer clone state");
+    } catch(...) {
+        spdlog::warn("Failed to apply compatibility hook for world layer clone state");
+    }
 
     if(patchD3DLayer) try {
         TVPExecuteScript(

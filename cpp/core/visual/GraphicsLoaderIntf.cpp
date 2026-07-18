@@ -386,15 +386,44 @@ void TVPLoadImageHeader(const ttstr &storagename, iTJSDispatch2 **dic) {
     if(dic == nullptr)
         return;
 
-    ttstr ext = TVPExtractStorageExt(storagename);
-    if(ext == TJS_W(""))
-        TVPThrowExceptionMessage(TVPUnknownGraphicFormat, storagename);
-    tTVPGraphicHandlerType *handler = TVPGraphicType.Hash.Find(ext);
+    ttstr name = TVPNormalizeStorageName(storagename);
+    ttstr ext = TVPExtractStorageExt(name);
+    tTVPGraphicHandlerType *handler = nullptr;
+    if(ext.IsEmpty())
+        handler = TVPGuessGraphicLoadHandler(name);
+    else
+        handler = TVPGraphicType.Hash.Find(ext);
     if(!handler)
         TVPThrowExceptionMessage(TVPUnknownGraphicFormat, storagename);
 
-    tTVPStreamHolder holder(storagename); // open a storage named "storagename"
+    tTVPStreamHolder holder(name); // open a storage named "storagename"
     handler->Header(holder.Get(), dic);
+}
+//---------------------------------------------------------------------------
+void TVPGetImageSize(const ttstr &storagename, tjs_int &width,
+                     tjs_int &height) {
+    iTJSDispatch2 *dic = nullptr;
+    try {
+        TVPLoadImageHeader(storagename, &dic);
+        if(!dic)
+            TVPThrowExceptionMessage(TVPUnknownGraphicFormat, storagename);
+
+        tTJSVariant value;
+        if(TJS_FAILED(dic->PropGet(TJS_MEMBERMUSTEXIST, TJS_W("width"),
+                                   nullptr, &value, dic)))
+            TVPThrowExceptionMessage(TVPUnknownGraphicFormat, storagename);
+        width = static_cast<tjs_int>(value.AsInteger());
+
+        if(TJS_FAILED(dic->PropGet(TJS_MEMBERMUSTEXIST, TJS_W("height"),
+                                   nullptr, &value, dic)))
+            TVPThrowExceptionMessage(TVPUnknownGraphicFormat, storagename);
+        height = static_cast<tjs_int>(value.AsInteger());
+    } catch(...) {
+        if(dic)
+            dic->Release();
+        throw;
+    }
+    dic->Release();
 }
 //---------------------------------------------------------------------------
 void TVPSaveImage(const ttstr &storagename, const ttstr &mode,

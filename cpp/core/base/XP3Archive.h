@@ -98,6 +98,7 @@ public:
     struct tArchiveItem {
         ttstr Name;
         tjs_uint32 FileHash{};
+        tjs_uint32 Flags{};
         tjs_uint64 OrgSize{}; // original ( uncompressed ) size
         tjs_uint64 ArcSize{}; // in-archive size
         std::vector<tTVPXP3ArchiveSegment> Segments;
@@ -134,6 +135,10 @@ public:
 
     [[nodiscard]] tjs_uint32 GetFileHash(tjs_uint idx) const {
         return ItemVector[idx].FileHash;
+    }
+
+    [[nodiscard]] bool IsFileProtected(tjs_uint idx) const {
+        return (ItemVector[idx].Flags & TVP_XP3_FILE_PROTECTED) != 0;
     }
 
     ttstr GetName(tjs_uint idx) override { return ItemVector[idx].Name; }
