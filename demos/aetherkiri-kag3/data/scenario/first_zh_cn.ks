@@ -18,7 +18,7 @@
 [r]
 [link target="*about_aetherkiri_zh_cn"]什么是 AetherKiri？[endlink][r]
 [r]
-[link storage="first.ks" target="*syokai_start"]返回语言选择[endlink][r]
+[font size=18][link storage="first.ks" target="*syokai_start"]日本語[endlink] / [link storage="first.ks" target="*syokai_start_en"]English[endlink] / [link storage="first_zh_tw.ks" target="*syokai_start_zh_tw"]繁體中文[endlink] / [link storage="first_ko.ks" target="*syokai_start_ko"]한국어[endlink][resetfont][r]
 @endnowait
 @history output=true
 @current page=fore

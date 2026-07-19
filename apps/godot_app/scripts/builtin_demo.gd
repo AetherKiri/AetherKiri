@@ -1,7 +1,7 @@
 extends RefCounted
 
 const DEMO_ID := "aetherkiri-kag3-demo"
-const DEMO_VERSION := 1
+const DEMO_VERSION := 4
 const DEFAULT_SOURCE_PATH := "res://builtin_demos/aetherkiri-kag3/data.xp3"
 const DEFAULT_INSTALL_DIR := "user://builtin_games/aetherkiri-demo"
 const DEFAULT_INSTALL_PATH := DEFAULT_INSTALL_DIR + "/data.xp3"

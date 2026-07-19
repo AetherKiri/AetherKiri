@@ -1033,7 +1033,10 @@ class MessageLayer extends KAGLayer
 			newlinelayersize += rubySize+rubyOffset - lineSpacing;
 		}
 
-		newlinelayersize += 8; // 袋文字・影描画用の余裕
+		// Keep a little extra descent room for CJK faces.  The logical font
+		// size is also used for link hit regions, so clipping the temporary
+		// line bitmap would make its visible text and its hover region disagree.
+		newlinelayersize += 16; // 袋文字・影描画とCJKの下降部用の余裕
 		if(!vertical)
 		{
 			// 横書きの場合

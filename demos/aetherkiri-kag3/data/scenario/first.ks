@@ -59,7 +59,7 @@
 
 
 
-*syokai_start|Introduction to Kirikiri and KAG - Menu
+*syokai_start|AetherKiri と KAG の紹介 - メニュー
 @startanchor
 
 ; Load the background image, draw the menu on the message layer
@@ -72,16 +72,14 @@
 @history output=false
 @style align=center
 [font size=40 color=0x00ffff]吉里吉里とKAGの紹介[resetfont][r]
-[font size=20 color=0x00ffff]Introduction to Kirikiri and KAG[resetfont][r]
 [r]
 [link target="*about_kirikiri"]吉里吉里とは[endlink][r]
-[link target="*about_kirikiri_en"]What is Kirikiri?[endlink][r]
 [r]
 [link target="*about_kag"]KAGとは[endlink][r]
-[link target="*about_kag_en"]What is KAG?[endlink][r]
+[r]
 [link target="*about_kirikirisdl2"]AetherKiriとは？[endlink][r]
-[link target="*about_kirikirisdl2_en"]What is AetherKiri?[endlink][r]
-[font size=18][link storage="first_zh_cn.ks" target="*syokai_start_zh_cn"]简体中文[endlink] / [link storage="first_zh_tw.ks" target="*syokai_start_zh_tw"]繁體中文[endlink] / [link storage="first_ko.ks" target="*syokai_start_ko"]한국어[endlink][resetfont][r]
+[r]
+[font size=18][link target="*syokai_start_en"]English[endlink] / [link storage="first_zh_cn.ks" target="*syokai_start_zh_cn"]简体中文[endlink] / [link storage="first_zh_tw.ks" target="*syokai_start_zh_tw"]繁體中文[endlink] / [link storage="first_ko.ks" target="*syokai_start_ko"]한국어[endlink][resetfont][r]
 [r]
 ;[link exp="kag.shutdown()" color=0xff0000 hint="吉里吉里/KAGの紹介を終了します / Exit the Introduction to Kirikiri/KAG"]終了 / Exit[endlink]
 @endnowait
@@ -105,6 +103,40 @@
 @trans method=crossfade time=300
 @wt
 @jump target=*syokai_start
+
+*syokai_start_en|AetherKiri and KAG Introduction - Menu
+@backlay
+@loadbg storage="_24_5" page=back
+@current page=back
+@cm
+@layopt layer=message0 page=back visible=true
+@nowait
+@history output=false
+@style align=center
+[font size=40 color=0x00ffff]AetherKiri and KAG Introduction[resetfont][r]
+[r]
+[link target="*about_kirikiri_en"]What is Kirikiri?[endlink][r]
+[r]
+[link target="*about_kag_en"]What is KAG?[endlink][r]
+[r]
+[link target="*about_kirikirisdl2_en"]What is AetherKiri?[endlink][r]
+[r]
+[font size=18][link target="*syokai_start"]日本語[endlink] / [link storage="first_zh_cn.ks" target="*syokai_start_zh_cn"]简体中文[endlink] / [link storage="first_zh_tw.ks" target="*syokai_start_zh_tw"]繁體中文[endlink] / [link storage="first_ko.ks" target="*syokai_start_ko"]한국어[endlink][resetfont][r]
+[r]
+@endnowait
+@history output=true
+@current page=fore
+@trans method=crossfade time=800
+@wt
+@record
+@s
+
+*to_syokai_start_en
+@backlay
+@layopt layer=message0 page=back visible=false
+@trans method=crossfade time=300
+@wt
+@jump target=*syokai_start_en
 
 *about_kirikiri|吉里吉里とは
 @changebg_and_clear storage="_24_4"
@@ -385,7 +417,7 @@ and the [font color=0xffff00]Transparent Image Format Converter[resetfont] can b
 [r]
 [r]
 @start_select
-[link target=*to_syokai_start]Return to the menu[endlink]
+[link target=*to_syokai_start_en]Return to the menu[endlink]
 @end_select
 [s]
 
@@ -580,7 +612,7 @@ This concludes the introduction to KAG.[l][r]
 By all means, everybody please use Kirikiri/KAG to make more wonderful games.[l][r]
 [r]
 @start_select
-[link target=*to_syokai_start]Return to the menu[endlink]
+[link target=*to_syokai_start_en]Return to the menu[endlink]
 @end_select
 [s]
 
@@ -608,6 +640,6 @@ Its GitHub repository contains current compatibility information, build instruct
 @start_select
 [link exp="System.shellExecute('https://github.com/AetherKiri/AetherKiri')" hint="Open AetherKiri on GitHub"]AetherKiri on GitHub[endlink][r]
 [r]
-[link target=*to_syokai_start]Return to the menu[endlink]
+[link target=*to_syokai_start_en]Return to the menu[endlink]
 @end_select
 [s]

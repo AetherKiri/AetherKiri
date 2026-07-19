@@ -18,7 +18,7 @@
 [r]
 [link target="*about_aetherkiri_ko"]AetherKiri란?[endlink][r]
 [r]
-[link storage="first.ks" target="*syokai_start"]언어 선택으로 돌아가기[endlink][r]
+[font size=18][link storage="first.ks" target="*syokai_start"]日本語[endlink] / [link storage="first.ks" target="*syokai_start_en"]English[endlink] / [link storage="first_zh_cn.ks" target="*syokai_start_zh_cn"]简体中文[endlink] / [link storage="first_zh_tw.ks" target="*syokai_start_zh_tw"]繁體中文[endlink][resetfont][r]
 @endnowait
 @history output=true
 @current page=fore

@@ -6394,6 +6394,14 @@ func _input(event: InputEvent) -> void:
         return
     if diagnostic_session != null and diagnostic_session.routes_pointer_to_marker(event):
         return
+    # KAG [edit] controls own their focus inside the rendered game; Godot does
+    # not mirror that focus onto the TextureRect. Forward keyboard input here,
+    # before shell Controls can consume it.
+    if event is InputEventKey and _can_forward_game_input():
+        var key := event as InputEventKey
+        player.send_key_event(key.pressed, key.keycode, key.get_modifiers_mask(), key.unicode)
+        get_viewport().set_input_as_handled()
+        return
     if _is_game_pointer_event(event):
         var debug_pos := Vector2.ZERO
         if event is InputEventMouseButton:
@@ -7002,13 +7010,6 @@ func _map_mouse_button(button_index: MouseButton) -> int:
     if button_index == MOUSE_BUTTON_MIDDLE:
         return 2
     return 0
-
-func _unhandled_input(event: InputEvent) -> void:
-    if not game_running:
-        return
-    if event is InputEventKey:
-        var key := event as InputEventKey
-        player.send_key_event(key.pressed, key.keycode, key.get_modifiers_mask(), key.unicode)
 
 func _append_log(line: String) -> void:
     if device_probe_enabled:

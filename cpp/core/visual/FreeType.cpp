@@ -488,8 +488,17 @@ tTVPCharacterData *tFreeTypeFace::GetGlyphFromCharcode(tjs_char code) {
         // tGlyphBitmap を作成して返す
         // int baseline = (int)(FTFace->height + FTFace->descender) *
         // FTFace->size->metrics.y_ppem / FTFace->units_per_EM;
+        // FT_Set_Pixel_Sizes sets the em square, while KAG's font height is
+        // the logical line-box height.  CJK faces commonly have an ascender
+        // larger than their em square; using it unchanged pushes glyphs below
+        // the KAG line box and separates the visible text from link hit areas.
         int baseline = (int)(FTFace->ascender) * FTFace->size->metrics.y_ppem /
             FTFace->units_per_EM;
+        const int glyph_descent = std::max(
+            0, FT_PosToInt(FTFace->glyph->metrics.height -
+                            FTFace->glyph->metrics.horiBearingY));
+        baseline = std::clamp(baseline, 0,
+                              std::max(0, Height - glyph_descent));
 
         glyph_bmp = new tTVPCharacterData(ft_bmp->buffer, ft_bmp->pitch,
                                           FTFace->glyph->bitmap_left,
@@ -539,6 +548,10 @@ bool tFreeTypeFace::GetGlyphRectFromCharcode(tTVPRect &rt, tjs_char code,
 
     int baseline = (int)(FTFace->ascender) * FTFace->size->metrics.y_ppem /
         FTFace->units_per_EM;
+    const int glyph_descent = std::max(
+        0, FT_PosToInt(FTFace->glyph->metrics.height -
+                        FTFace->glyph->metrics.horiBearingY));
+    baseline = std::clamp(baseline, 0, std::max(0, Height - glyph_descent));
     /*
     FT_Render_Glyph でレンダリングしないと以下の各値は取得できない
     tjs_int t = baseline - FTFace->glyph->bitmap_top;
