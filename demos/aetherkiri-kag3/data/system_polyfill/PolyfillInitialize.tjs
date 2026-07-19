@@ -1,0 +1,78 @@
+﻿
+@if (kirikiriz)
+property _dummyProp { getter {} setter (v) {} }
+with(global.Window)
+{
+	&.innerSunken    = &_dummyProp;
+	&.showScrollBars = &_dummyProp;
+}
+@endif
+
+{
+	if (typeof(global.KirikiriPolyfillRoot) !== "String")
+	{
+		global.KirikiriPolyfillRoot = "system_polyfill/";
+	}
+
+	// Try loading menu.dll plugin
+	if (typeof(global.MenuItem) !== "Object")
+	{
+		try
+		{
+			global.Plugins.link("menu.dll");
+		}
+		catch (e)
+		{
+			// pass
+		}
+	}
+	// Load MenuItem stub if MenuItem object is not set
+	if (typeof(global.MenuItem) !== "Object")
+	{
+		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "MenuItem_stub.tjs");
+	}
+
+	// Try loading KAGParser.dll plugin
+	if (typeof(global.KAGParser) !== "Object")
+	{
+		try
+		{
+			global.Plugins.link("KAGParser.dll");
+		}
+		catch (e)
+		{
+			// pass
+		}
+	}
+	// Load KAGParser implementation if KAGParser object is not set
+	if (typeof(global.KAGParser) !== "Object")
+	{
+		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "KAGParser.tjs");
+	}
+
+	// Load font and set it as default
+	if (typeof(global.Font) === "Object" && typeof(global.Font.addFont) === "Object")
+	{
+		var font_to_add = "";
+		var paths_to_check = [
+			global.KirikiriPolyfillRoot + "font.ttf",
+			global.KirikiriPolyfillRoot + "font.otf",
+		];
+		for (var i = 0; i < paths_to_check.count; i += 1)
+		{
+			var font_to_check = paths_to_check[i];
+			if (font_to_check !== void)
+			{
+				if (global.Storages.isExistentStorage(font_to_check))
+				{
+					font_to_add = font_to_check;
+					break;
+				}
+			}
+		}
+		if (font_to_add !== "")
+		{
+			global.System.setArgument("-deffont", global.Font.addFont(font_to_add)[0]);
+		}
+	}
+}

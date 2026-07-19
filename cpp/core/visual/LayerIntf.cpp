@@ -14479,6 +14479,31 @@ const tTVPFont &tTJSNI_Font::GetFont() const {
 //---------------------------------------------------------------------------
 tjs_uint32 tTJSNC_Font::ClassID = -1;
 
+static tjs_error TVPAddFontForScript(tTJSVariant *result, tjs_int numparams,
+                                     tTJSVariant **param) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+
+    std::vector<ttstr> fontNames;
+    const ttstr filename = TVPGetPlacedPath(*param[0]);
+    if(filename.length())
+        TVPEnumFontsProc(filename, &fontNames);
+
+    if(result) {
+        iTJSDispatch2 *array = TJSCreateArrayObject();
+        tTJSVariant arrayValue(array, array);
+        *result = arrayValue;
+        array->Release();
+
+        for(tjs_uint i = 0; i < fontNames.size(); ++i) {
+            tTJSVariant name(fontNames[i]);
+            array->PropSetByNum(TJS_MEMBERENSURE, i, &name, array);
+        }
+    }
+
+    return TJS_S_OK;
+}
+
 tTJSNC_Font::tTJSNC_Font() : tTJSNativeClass(TJS_W("Font")) {
     TJS_BEGIN_NATIVE_MEMBERS(Font) // constructor
     TJS_DECL_EMPTY_FINALIZE_METHOD
@@ -14492,6 +14517,23 @@ tTJSNC_Font::tTJSNC_Font() : tTJSNativeClass(TJS_W("Font")) {
     //----------------------------------------------------------------------
 
     //-- methods
+
+    // KAG3's original PolyfillInitialize.tjs loads its bundled font through
+    // Font.addFont() and uses the first returned family name as -deffont.
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ addFont) {
+        return TVPAddFontForScript(result, numparams, param);
+    }
+    TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ addFont)
+    //----------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ AddFont) {
+        return TVPAddFontForScript(result, numparams, param);
+    }
+    TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ AddFont)
+    //----------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ AddTrueTypeFont) {
+        return TVPAddFontForScript(result, numparams, param);
+    }
+    TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ AddTrueTypeFont)
 
     //---------------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ getTextWidth) {
@@ -14845,8 +14887,7 @@ TJS_END_NATIVE_PROP_GETTER
 
 TJS_BEGIN_NATIVE_PROP_SETTER {
     ttstr name(*param);
-    // don't override, specified by preference
-    // TVPFontSystem->SetDefaultFontName( name.c_str() );
+    TVPSetDefaultFontName(name);
     return TJS_S_OK;
 }
 TJS_END_NATIVE_PROP_SETTER

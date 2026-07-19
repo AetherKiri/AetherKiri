@@ -1231,6 +1231,8 @@ tTJSNativeClass *TVPCreateNativeClass_System() {
         ttstr value = *param[1];
 
         TVPSetCommandLine(name.c_str(), value);
+        if(name == TJS_W("-deffont"))
+            TVPSetDefaultFontName(value);
 
         return TJS_S_OK;
     }
