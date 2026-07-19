@@ -2,6 +2,19 @@
 
 The following notices were previously included in the root LICENSE file and are preserved here.
 
+-------------------------------------------------------------------------------
+Bundled AetherKiri KAG3 demo
+-------------------------------------------------------------------------------
+The product includes the AetherKiri KAG3 demo under `demos/aetherkiri-kag3/`
+and as a built-in XP3 archive. The demo is derived from KAG3:
+
+Copyright (C) 2001-2009, W.Dee and contributors.
+Modification and redistribution are permitted.
+
+The demo includes Noto Sans CJK JP. Its SIL Open Font License notice is stored
+at `demos/aetherkiri-kag3/data/system_polyfill/NotoSansCJK-LICENSE.txt` and
+alongside the bundled product archive.
+
 ===============================================================================
 THIRD-PARTY AND UPSTREAM COMPONENTS
 ===============================================================================

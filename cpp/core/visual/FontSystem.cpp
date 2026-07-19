@@ -50,6 +50,11 @@ void FontSystem::ConstructDefaultFont() {
     }
 }
 
+void FontSystem::SetDefaultFontName(const ttstr &name) {
+    AddFont(name);
+    DefaultFont.Face = name;
+}
+
 ttstr FontSystem::GetBeingFont(ttstr fonts) {
     // retrieve being font in the system.
     // font candidates are given by "fonts", separated by comma.

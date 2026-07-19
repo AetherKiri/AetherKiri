@@ -3,3 +3,9 @@
 
 # Enforce LF for vcpkg patch files, as patch.exe on Windows fails with CRLF line endings
 *.patch text eol=lf
+
+# Product game archives are binary assets.
+*.xp3 -text
+
+# Preserve the upstream KAG3 demo scripts byte-for-byte, including legacy whitespace.
+demos/aetherkiri-kag3/data/** whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

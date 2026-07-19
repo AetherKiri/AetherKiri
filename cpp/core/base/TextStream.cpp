@@ -121,7 +121,17 @@ std::string checkTextEncoding(const void *buf, size_t size,
     auto raw = static_cast<const unsigned char *>(buf);
     std::string encoding;
     // --- 检查 BOM ---
-    if(size >= 2 && raw[0] == 0xFF && raw[1] == 0xFE) {
+    if(size >= 4 && raw[0] == 0xFF && raw[1] == 0xFE && raw[2] == 0x00 &&
+       raw[3] == 0x00) {
+        // UTF-32LE BOM (must be checked before its UTF-16LE prefix)
+        bomSize = 4;
+        encoding = "UTF-32LE";
+    } else if(size >= 4 && raw[0] == 0x00 && raw[1] == 0x00 &&
+              raw[2] == 0xFE && raw[3] == 0xFF) {
+        // UTF-32BE BOM
+        bomSize = 4;
+        encoding = "UTF-32BE";
+    } else if(size >= 2 && raw[0] == 0xFF && raw[1] == 0xFE) {
         // UTF-16LE BOM
         bomSize = 2;
         encoding = "UTF-16LE";
@@ -133,16 +143,6 @@ std::string checkTextEncoding(const void *buf, size_t size,
         // UTF-8 BOM
         bomSize = 3;
         encoding = "UTF-8";
-    } else if(size >= 4 && raw[0] == 0xFF && raw[1] == 0xFE && raw[2] == 0x00 &&
-              raw[3] == 0x00) {
-        // UTF-32LE BOM
-        bomSize = 4;
-        encoding = "UTF-32LE";
-    } else if(size >= 4 && raw[0] == 0x00 && raw[1] == 0x00 && raw[2] == 0xFE &&
-              raw[3] == 0xFF) {
-        // UTF-32BE BOM
-        bomSize = 4;
-        encoding = "UTF-32BE";
     } else {
         // ---------- 普通文本：用 uchardet 检测编码 ----------
         uchardet_t ud = uchardet_new();
@@ -265,14 +265,14 @@ public:
             encoding = G_DefaultReadEncoding; // 默认回退
 
         if(encoding == "ASCII") {
-            _buffer.assign(raw.data(), raw.data() + size);
+            _buffer.assign(raw.data(), raw.data() + raw.size());
             return;
         }
 
         if(encoding == "UTF-8") {
             _buffer = boost::locale::conv::utf_to_utf<char16_t>(
                 reinterpret_cast<const char *>(raw.data()),
-                reinterpret_cast<const char *>(raw.data() + size));
+                reinterpret_cast<const char *>(raw.data() + raw.size()));
             return;
         }
 
@@ -299,7 +299,7 @@ public:
            encoding == "UTF-32BE") {
             _buffer = boost::locale::conv::utf_to_utf<char16_t>(
                 reinterpret_cast<const char32_t *>(raw.data()),
-                reinterpret_cast<const char32_t *>(raw.data() + size));
+                reinterpret_cast<const char32_t *>(raw.data() + raw.size()));
             return;
         }
 

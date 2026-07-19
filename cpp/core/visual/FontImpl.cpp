@@ -10,6 +10,7 @@
 #include <map>
 #include <cmath>
 #include "Application.h"
+#include "FontSystem.h"
 #include "Platform.h"
 #include "ConfigManager/IndividualConfigManager.h"
 #ifndef M_PI
@@ -37,9 +38,21 @@
 tTJSHashTable<ttstr, TVPFontNamePathInfo, tTVPttstrHash> TVPFontNames;
 static ttstr TVPDefaultFontName;
 const ttstr &TVPGetDefaultFontName() { return TVPDefaultFontName; }
+extern FontSystem *TVPFontSystem;
+
+bool TVPSetDefaultFontName(const ttstr &fontName) {
+    if(fontName.IsEmpty() || !TVPFindFont(fontName))
+        return false;
+
+    TVPDefaultFontName = fontName;
+    if(TVPFontSystem)
+        TVPFontSystem->SetDefaultFontName(fontName);
+    spdlog::info("default font face set: {}", fontName.AsStdString());
+    return true;
+}
+
 void TVPGetAllFontList(std::vector<ttstr> &list) {
-    auto itend = TVPFontNames.GetLast();
-    for(auto it = TVPFontNames.GetFirst(); it != itend; ++it) {
+    for(auto it = TVPFontNames.GetFirst(); !it.IsNull(); ++it) {
         list.push_back(it.GetKey());
     }
 }
@@ -68,7 +81,8 @@ void TVPReleaseFontLibrary() {
 //---------------------------------------------------------------------------
 static int TVPInternalEnumFonts(
     FT_Byte *pBuf, int buflen, const ttstr &FontPath,
-    const std::function<tTJSBinaryStream *(TVPFontNamePathInfo *)> &getter) {
+    const std::function<tTJSBinaryStream *(TVPFontNamePathInfo *)> &getter,
+    std::vector<ttstr> *fontNames = nullptr) {
     unsigned int faceCount = 0;
     FT_Face fontface;
     FT_Error error =
@@ -131,6 +145,11 @@ static int TVPInternalEnumFonts(
                 info.Index = i;
                 info.Getter = getter;
                 TVPFontNames.Add(fontname, info);
+                if(fontNames &&
+                   std::find(fontNames->begin(), fontNames->end(), fontname) ==
+                       fontNames->end()) {
+                    fontNames->emplace_back(fontname);
+                }
                 addCount = 1;
             }
             /*if (!addCount)*/ {
@@ -140,6 +159,11 @@ static int TVPInternalEnumFonts(
                 info.Index = i;
                 info.Getter = getter;
                 TVPFontNames.Add(fontname, info);
+                if(fontNames &&
+                   std::find(fontNames->begin(), fontNames->end(), fontname) ==
+                       fontNames->end()) {
+                    fontNames->emplace_back(fontname);
+                }
             }
             ++faceCount;
         }
@@ -154,7 +178,8 @@ static int TVPInternalEnumFonts(
  * @param FontPath font path str
  * @return load failed return 0, otherwise > 0
  */
-int TVPEnumFontsProc(const ttstr &FontPath) {
+int TVPEnumFontsProc(const ttstr &FontPath,
+                     std::vector<ttstr> *fontNames) {
     if(!TVPIsExistentStorageNoSearch(FontPath)) {
         return 0;
     }
@@ -168,7 +193,8 @@ int TVPEnumFontsProc(const ttstr &FontPath) {
     buf.resize(bufflen);
     Stream->ReadBuffer(&buf.front(), bufflen);
     delete Stream;
-    return TVPInternalEnumFonts(&buf.front(), bufflen, FontPath, nullptr);
+    return TVPInternalEnumFonts(&buf.front(), bufflen, FontPath, nullptr,
+                                fontNames);
 }
 
 tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname) {

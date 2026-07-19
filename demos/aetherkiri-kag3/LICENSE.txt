@@ -1,0 +1,8 @@
+KAG3 License
+
+Copyright (C) 2001-2009, W.Dee and contributors.
+Modification and redistribution are permitted.
+
+The AetherKiri-specific demo changes are distributed under the same terms.
+The bundled Noto Sans CJK font is licensed separately; see
+data/system_polyfill/NotoSansCJK-LICENSE.txt.

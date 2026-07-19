@@ -4315,7 +4315,15 @@ public:
         event.modifiers = modifiers;
         event.unicode_codepoint = static_cast<uint32_t>(
             std::max(0, unicode_codepoint));
-        const engine_result_t result = engine_send_input(handle_, &event);
+        engine_result_t result = engine_send_input(handle_, &event);
+        // KAG edit controls receive printable characters through a distinct
+        // text-input event; a key-down alone only handles navigation and
+        // editing commands such as Backspace.
+        if (result == ENGINE_RESULT_OK && pressed &&
+            unicode_codepoint > 0) {
+            event.type = ENGINE_INPUT_EVENT_TEXT_INPUT;
+            result = engine_send_input(handle_, &event);
+        }
         update_last_error(result);
         return result;
     }

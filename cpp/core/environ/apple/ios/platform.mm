@@ -112,7 +112,10 @@ static bool _TVPCreateFolders(const ttstr &folder) {
     if(!TVPCreateFolders(parent))
         return false;
 
-    return !std::filesystem::create_directory(folder.AsStdString().c_str());
+    std::error_code error;
+    if(std::filesystem::create_directory(folder.AsStdString(), error))
+        return true;
+    return !error && TVPCheckExistentLocalFolder(folder);
 }
 
 bool TVPCreateFolders(const ttstr &folder) {

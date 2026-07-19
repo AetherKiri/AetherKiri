@@ -1352,6 +1352,14 @@ engine_result_t OpenGameCore(engine_handle_t handle,
     normalized_game_root_path.push_back('/');
   }
 
+  std::string sidecar_root_path = normalized_game_root_path;
+  if (looks_like_archive) {
+    const auto separator = sidecar_root_path.find_last_of("/\\");
+    sidecar_root_path = separator == std::string::npos
+        ? "."
+        : sidecar_root_path.substr(0, separator);
+  }
+
   spdlog::info(
       "engine_open_game: runtime initialized, starting application with path: {} (normalized: {})",
       game_root_path_utf8, normalized_game_root_path);
@@ -1364,7 +1372,7 @@ engine_result_t OpenGameCore(engine_handle_t handle,
 #if defined(__EMSCRIPTEN__)
     std::string log_file_path = TVPGetDefaultFileDir();
 #else
-    std::string log_file_path = normalized_game_root_path;
+    std::string log_file_path = sidecar_root_path;
 #endif
     if (!log_file_path.empty() && log_file_path.back() != '/') {
       log_file_path += "/";
@@ -1383,7 +1391,7 @@ engine_result_t OpenGameCore(engine_handle_t handle,
 #if defined(__EMSCRIPTEN__)
     std::string trace_path = TVPGetDefaultFileDir();
 #else
-    std::string trace_path = normalized_game_root_path;
+    std::string trace_path = sidecar_root_path;
 #endif
     if (!trace_path.empty() && trace_path.back() != '/') trace_path += "/";
     trace_path += "plugin_trace.log";
@@ -3643,6 +3651,7 @@ struct engine_handle_s {
   uint64_t frame_serial = 0;
   uint32_t startup_state = ENGINE_STARTUP_STATE_IDLE;
   std::deque<std::string> startup_logs;
+  bool plugin_tracing_enabled = false;
   bool diagnostics_enabled = false;
   uint64_t diagnostic_sequence = 0;
   uint64_t diagnostic_dropped = 0;
@@ -4028,6 +4037,11 @@ engine_result_t engine_set_option(engine_handle_t handle,
     return ENGINE_RESULT_INVALID_STATE;
   }
 
+  if (std::strcmp(option->key_utf8, "plugin_trace") == 0) {
+    const std::string value(option->value_utf8);
+    impl->plugin_tracing_enabled = value == "1" || value == "true";
+  }
+
   impl->last_error.clear();
   SetThreadError(nullptr);
   return ENGINE_RESULT_OK;
@@ -4397,20 +4411,22 @@ engine_result_t engine_get_plugin_debug_info(
   engine_handle_s* impl = nullptr;
   auto result = ValidateHandleLocked(handle, &impl);
   if (result != ENGINE_RESULT_OK) return result;
-  static constexpr const char* payload =
-      "{\"tracing_enabled\":false,\"method_calls\":0,\"property_gets\":0,"
+  std::string payload = "{\"tracing_enabled\":";
+  payload += impl->plugin_tracing_enabled ? "true" : "false";
+  payload +=
+      ",\"method_calls\":0,\"property_gets\":0,"
       "\"property_sets\":0,\"load_succeeded\":0,\"load_failed\":0,"
       "\"load_fallback\":0,\"missing_members\":0,\"loaded_plugins\":[],"
       "\"failed_plugins\":[],\"fallback_plugins\":[],"
       "\"recent_missing_members\":[]}";
-  const size_t length = std::strlen(payload);
+  const size_t length = payload.size();
   if (length + 1u > buffer_size) {
     *out_bytes_written = 0;
     out_buffer[0] = '\0';
     return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
                                    "plugin debug output buffer is too small");
   }
-  std::memcpy(out_buffer, payload, length + 1u);
+  std::memcpy(out_buffer, payload.c_str(), length + 1u);
   *out_bytes_written = static_cast<uint32_t>(length);
   impl->last_error.clear();
   SetThreadError(nullptr);

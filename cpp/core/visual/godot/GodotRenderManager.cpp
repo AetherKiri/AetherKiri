@@ -502,6 +502,25 @@ void GodotTexture2D::EnsureCpuReadable() {
     if (!gpu_dirty_ && !pixels_.empty()) return;
     EnsureCpuStorage();
     const auto *bridge = TVPGodotGpuBridgeGet();
+    if (format_ == TVPTextureFormat::Gray && bridge != nullptr &&
+        bridge->read_rgba != nullptr) {
+        const uint32_t rgba_pitch = static_cast<uint32_t>(Width) * 4u;
+        std::vector<uint8_t> rgba(static_cast<size_t>(rgba_pitch) * Height);
+        if (bridge->read_rgba(gpu_handle_, rgba.data(), rgba.size(),
+                              rgba_pitch)) {
+            for (int y = 0; y < Height; ++y) {
+                const auto *source =
+                    rgba.data() + static_cast<size_t>(y) * rgba_pitch;
+                auto *destination =
+                    pixels_.data() + static_cast<size_t>(y) * pitch_;
+                for (int x = 0; x < Width; ++x) {
+                    destination[x] = source[static_cast<size_t>(x) * 4];
+                }
+            }
+            gpu_dirty_ = false;
+        }
+        return;
+    }
     if (bridge != nullptr && bridge->read_rgba != nullptr &&
         bridge->read_rgba(gpu_handle_, pixels_.data(), pixels_.size(),
                           static_cast<uint32_t>(pitch_))) {
@@ -546,35 +565,39 @@ void GodotTexture2D::Update(const void *pixel, TVPTextureFormat::e format,
 }
 
 uint32_t GodotTexture2D::GetPoint(int x, int y) {
-    if (x < 0 || y < 0 || x >= Width || y >= Height) {
+    if (x < 0 || y < 0 || x >= Width || y >= Height ||
+        (format_ != TVPTextureFormat::Gray &&
+         format_ != TVPTextureFormat::RGBA)) {
         return 0;
     }
     EnsureCpuReadable();
     if (pixels_.empty()) return 0;
+    const size_t offset = static_cast<size_t>(y) * pitch_;
     if (format_ == TVPTextureFormat::Gray) {
-        return pixels_[static_cast<size_t>(y) * pitch_ + x];
+        return pixels_[offset + static_cast<size_t>(x)];
     }
-    if (format_ != TVPTextureFormat::RGBA) return 0;
     uint32_t value = 0;
-    std::memcpy(&value, pixels_.data() + static_cast<size_t>(y) * pitch_ + x * 4, 4);
+    std::memcpy(&value, pixels_.data() + offset + static_cast<size_t>(x) * 4,
+                4);
     return value;
 }
 
 void GodotTexture2D::SetPoint(int x, int y, uint32_t clr) {
-    if (x < 0 || y < 0 || x >= Width || y >= Height) {
+    if (x < 0 || y < 0 || x >= Width || y >= Height ||
+        (format_ != TVPTextureFormat::Gray &&
+         format_ != TVPTextureFormat::RGBA)) {
         return;
     }
     EnsureCpuReadable();
     if (pixels_.empty()) return;
+    const size_t offset = static_cast<size_t>(y) * pitch_;
     if (format_ == TVPTextureFormat::Gray) {
-        pixels_[static_cast<size_t>(y) * pitch_ + x] =
-            static_cast<uint8_t>(clr & 0xffu);
-        MarkCpuDirty();
-        return;
+        pixels_[offset + static_cast<size_t>(x)] = static_cast<uint8_t>(clr);
+    } else {
+        std::memcpy(pixels_.data() + offset + static_cast<size_t>(x) * 4,
+                    &clr, 4);
+        MarkOpacityUnknown();
     }
-    if (format_ != TVPTextureFormat::RGBA) return;
-    std::memcpy(pixels_.data() + static_cast<size_t>(y) * pitch_ + x * 4, &clr, 4);
-    MarkOpacityUnknown();
     MarkCpuDirty();
 }
 

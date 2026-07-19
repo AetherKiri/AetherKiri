@@ -1,8 +1,16 @@
 cmake_minimum_required(VERSION 3.16)
 project(TestPlugins LANGUAGES CXX)
 
-add_executable(motionplayer-dll motionplayer-dll.cpp registry.cpp
-    kbad-data-pack.cpp textrender-timing.cpp main.cpp)
+add_executable(motionplayer-dll
+    main.cpp
+    motionplayer-dll.cpp
+    registry.cpp
+    kbad-data-pack.cpp
+    textrender-timing.cpp
+    text-stream.cpp
+    font-compat.cpp
+    godot-texture.cpp
+)
 
 set(_KRKR2PLUGIN_LINK_ITEM "$<LINK_LIBRARY:WHOLE_ARCHIVE,krkr2plugin>")
 

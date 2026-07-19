@@ -54,6 +54,7 @@ Godot App Shell
 - C++17 KiriKiri2 运行时核心，覆盖视觉、音频、存储、VM 和插件支持。
 - 已接入 macOS、iOS/iPadOS、Android 和 Web 导出链路。
 - 可在运行时选择渲染后端，并持久化设置。
+- 随产品内置多语言 KAG3 Demo，可从游戏库直接体验，也可由玩家删除。
 - 提供 smoke、渲染、交互、性能和手动复现 probe 脚本。
 - 已手动验证过的游戏记录在 [`doc/verified_games.zh-CN.md`](doc/verified_games.zh-CN.md)。
 - 以 GPL-3.0-or-later 分发源码。
@@ -67,11 +68,26 @@ Godot App Shell
 | `bridge/engine_api/` | 宿主层驱动 C++ 引擎的 C ABI。 |
 | `cpp/core/` | KiriKiri2 运行时、视觉系统、音频、存储、VM 和插件支持。 |
 | `cpp/plugins/` | 内置 native 插件实现和兼容 stub。 |
+| `demos/aetherkiri-kag3/` | AetherKiri 内置 KAG3 Demo 的完整源码。 |
 | `tests/profiles/` | 单游戏 probe profile。提交到仓库的 profile 不能包含机器本地路径。 |
 | `tools/` | 不参与 iOS/Android 目标构建的开发和兼容工具。 |
 | `doc/development.zh-CN.md` | 完整开发文档，覆盖架构、文件作用、构建、测试、probe 和调试。 |
 | `doc/diagnostics.zh-CN.md` | 应用内调试、一条命令采集、诊断包结构与证据优先调查指南。 |
 | `doc/verified_games.zh-CN.md` | 当前运行时已手动 smoke test 的游戏清单。 |
+
+## 内置 Demo
+
+产品包内包含多语言 AetherKiri KAG3 Demo：
+`apps/godot_app/builtin_demos/aetherkiri-kag3/data.xp3`。应用首次启动时会
+将它原子复制到 `user://builtin_games/` 的可写目录，再作为普通游戏加入
+游戏库，因此启动和游玩时长统计与玩家导入的游戏一致。
+
+玩家在详情页删除该条目时，会同时删除可运行副本及其本地存档（包括 Web
+版独立的持久化存档目录），并记录“已删除”状态；刷新游戏库或升级应用都
+不会自动恢复，只会重试未完成的清理。签名应用包中的种子资源仍属于产品
+本体，删除可写副本不会缩小已安装的 App/APK/PCK。
+可编辑源码和重新构建说明位于
+[`demos/aetherkiri-kag3/`](demos/aetherkiri-kag3/)。
 
 ## 渲染后端
 
