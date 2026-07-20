@@ -49,6 +49,7 @@
 #include "ImageFunction.h"
 #include "BitmapIntf.h"
 #include "tjsScriptBlock.h"
+#include "tjsScriptRecovery.h"
 #include "ApplicationSpecialPath.h"
 #include "SystemImpl.h"
 #include "BitmapLayerTreeOwner.h"
@@ -1780,6 +1781,45 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
     }
 }
 
+static void TVPExecuteTextScriptWithRecovery(const ttstr &script,
+                                             tTJSVariant *result,
+                                             iTJSDispatch2 *context,
+                                             const ttstr &shortname) {
+    try {
+        TVPScriptEngine->ExecScript(script, result, context, &shortname);
+        return;
+    } catch(const eTJSCompileError &error) {
+        ttstr recovered = script;
+        if(!TJSExperimentalRecoverTrailingToken(TVPScriptEngine, script,
+                                                 error.GetPosition(),
+                                                 recovered))
+            throw;
+
+        spdlog::warn("Recovered trailing script token in '{}' ({} -> {} chars)",
+                     shortname.AsStdString(), script.GetLen(),
+                     recovered.GetLen());
+        TVPScriptEngine->ExecScript(recovered, result, context, &shortname);
+    } catch(const eTJSScriptError &error) {
+        // Syntax errors accumulated by the lexer are reported as a script
+        // error after parsing. Runtime script errors have no compile errors
+        // on their block and must propagate unchanged.
+        auto *block = error.GetBlockNoAddRef();
+        if(!block || block->CompileErrorCount == 0)
+            throw;
+
+        ttstr recovered = script;
+        if(!TJSExperimentalRecoverTrailingToken(TVPScriptEngine, script,
+                                                 error.GetPosition(),
+                                                 recovered))
+            throw;
+
+        spdlog::warn("Recovered trailing script token in '{}' ({} -> {} chars)",
+                     shortname.AsStdString(), script.GetLen(),
+                     recovered.GetLen());
+        TVPScriptEngine->ExecScript(recovered, result, context, &shortname);
+    }
+}
+
 static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
     const ttstr lower = shortname.AsLowerCase();
     const bool patchWorld = lower == TJS_W("world.tjs");
@@ -2074,7 +2114,7 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
     if(TVPScriptEngine) {
 
         if(!isexpression)
-            TVPScriptEngine->ExecScript(buffer, result, context, &shortname);
+            TVPExecuteTextScriptWithRecovery(buffer, result, context, shortname);
         else
             TVPScriptEngine->EvalExpression(buffer, result, context,
                                             &shortname);
