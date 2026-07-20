@@ -1377,7 +1377,8 @@ func _apply_engine_options() -> void:
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if effective_trace_log else "0")
     player.set_engine_option("input_trace", "1" if effective_input_trace else "0")
-    player.set_engine_option("export_scripts", "1" if export_scripts else "0")
+    var effective_export_scripts := export_scripts or _runtime_flag("AETHERKIRI_EXPORT_SCRIPTS", false)
+    player.set_engine_option("export_scripts", "1" if effective_export_scripts else "0")
     if not runtime_default_font_path.is_empty():
         player.set_engine_option("default_font", runtime_default_font_path)
     if not runtime_font_dir_path.is_empty():
