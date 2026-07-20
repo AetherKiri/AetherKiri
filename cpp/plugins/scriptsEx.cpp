@@ -6,7 +6,20 @@
 #include <vector>
 #include <algorithm>
 #include "PluginImpl.h"
+#include "ScriptMgnIntf.h"
+#include "StorageIntf.h"
 #include "TextStream.h"
+#include "tjs.h"
+#include "motionplayer/ResourceManager.h"
+#include "psbfile/PSBFile.h"
+#include "psbfile/PSBMediaRegistry.h"
+#include "kbadDataPack.h"
+#include "tjsNs0DataPack.h"
+#include <array>
+#include <iomanip>
+#include <memory>
+#include <sstream>
+#include <spdlog/spdlog.h>
 
 #define NCB_MODULE_NAME TJS_W("ScriptsEx.dll")
 
@@ -971,10 +984,128 @@ static tjs_error loadDataPack(tTJSVariant *result,
                               iTJSDispatch2 *objthis) {
     if(numparams < 1)
         return TJS_E_BADPARAMCOUNT;
+    if(result)
+        result->Clear();
+
+    if(param[0]->Type() != tvtString)
+        return TJS_E_INVALIDPARAM;
+
+    ttstr path = *param[0];
+    if(path.IsEmpty())
+        return TJS_S_OK;
+    spdlog::info("Scripts.loadDataPack enter: {}", path.AsStdString());
+    TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack enter: ")) + path);
+
+    if(!TVPIsExistentStorage(path) && TVPExtractStorageExt(path).IsEmpty()) {
+        ttstr pbd = path + TJS_W(".pbd");
+        if(TVPIsExistentStorage(pbd))
+            path = pbd;
+    }
+
+    ttstr outerIv;
+    if(numparams >= 2 && param[1]->Type() == tvtObject) {
+        tTJSVariant value;
+        tTJSVariantClosure closure = param[1]->AsObjectClosureNoAddRef();
+        if(closure.Object &&
+           TJS_SUCCEEDED(closure.PropGet(TJS_IGNOREPROP, TJS_W("outeriv"),
+                                         nullptr, &value, nullptr)) &&
+           value.Type() == tvtString) {
+            outerIv = value;
+        }
+    }
+
+    std::unique_ptr<tTJSBinaryStream> stream;
+    try {
+        stream.reset(TVPCreateStream(path, TJS_BS_READ));
+    } catch(...) {
+        return TJS_S_OK;
+    }
+
+    tTJSVariant binaryResult;
+    try {
+        tTJS *engine = TVPGetScriptEngine();
+        if(engine && engine->LoadByteCode(
+                         stream.get(), result ? result : &binaryResult,
+                         nullptr, TVPExtractStorageName(path).c_str())) {
+            return TJS_S_OK;
+        }
+    } catch(...) {
+        // A data pack is not TJS bytecode. Some TJS2 builds throw while
+        // probing it, so always continue with the binary pack decoders.
+        if(result)
+            result->Clear();
+    }
+
+    try {
+        stream->Seek(0, TJS_BS_SEEK_SET);
+        if(TVPLoadTjsNs0DataPack(
+               stream.get(), result ? result : &binaryResult, outerIv)) {
+            spdlog::info("Scripts.loadDataPack TJS/ns0 ok: {}",
+                         path.AsStdString());
+            TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack TJS/ns0 ok: ")) +
+                      path);
+            return TJS_S_OK;
+        }
+        stream->Seek(0, TJS_BS_SEEK_SET);
+        if(TVPLoadKbadDataPack(stream.get(),
+                              result ? result : &binaryResult)) {
+            spdlog::info("Scripts.loadDataPack KBAD ok: {}",
+                         path.AsStdString());
+            TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack KBAD ok: ")) + path);
+            return TJS_S_OK;
+        }
+        stream->Seek(0, TJS_BS_SEEK_SET);
+        std::array<unsigned char, 8> signature{};
+        const tjs_uint signatureSize = static_cast<tjs_uint>(
+            std::min<tjs_uint64>(signature.size(), stream->GetSize()));
+        if(signatureSize > 0)
+            stream->ReadBuffer(signature.data(), signatureSize);
+        std::ostringstream signatureText;
+        signatureText << std::hex << std::setfill('0');
+        for(tjs_uint i = 0; i < signatureSize; ++i)
+            signatureText << std::setw(2)
+                          << static_cast<unsigned>(signature[i]);
+        TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack unrecognized binary: ")) +
+                  path + TJS_W(" header=") +
+                  ttstr(signatureText.str().c_str()));
+    } catch(const eTJS &e) {
+        spdlog::warn("Scripts.loadDataPack TJS decode failed: {} ({})",
+                     e.GetMessage().AsStdString(), path.AsStdString());
+        TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack TJS decode failed: ")) +
+                  e.GetMessage());
+        if(result)
+            result->Clear();
+    } catch(const std::exception &e) {
+        spdlog::warn("Scripts.loadDataPack binary decode failed: {} ({})",
+                     e.what(), path.AsStdString());
+        TVPAddLog(ttstr(TJS_W("Scripts.loadDataPack binary decode failed: ")) +
+                  ttstr(e.what()));
+        if(result)
+            result->Clear();
+    } catch(...) {
+        spdlog::warn("Scripts.loadDataPack binary decode failed: unknown ({})",
+                     path.AsStdString());
+        TVPAddLog(TJS_W("Scripts.loadDataPack binary decode failed: unknown exception"));
+        if(result)
+            result->Clear();
+    }
+
+    PSB::PSBFile psb;
+    psb.setSeed(motion::ResourceManager::getDecryptSeed());
+    try {
+        if(!psb.loadPSBFile(path))
+            return TJS_S_OK;
+    } catch(...) {
+        return TJS_S_OK;
+    }
+
+    const auto &root = psb.getRootValue();
+    if(!root)
+        return TJS_S_OK;
+
+    PSB::registerRootResources(path, psb);
     if(result) {
-        iTJSDispatch2 *dict = TJSCreateDictionaryObject();
-        *result = tTJSVariant(dict, dict);
-        dict->Release();
+        *result = root->toTJSVal();
     }
     return TJS_S_OK;
 }

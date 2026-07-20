@@ -24,6 +24,52 @@ std::string toUtf8(const tjs_char *text) {
     return out;
 }
 
+std::basic_string<tjs_char> normalizeSearchText(const void *text, int bytes) {
+    std::basic_string<tjs_char> normalized;
+    if(!text || bytes <= 0)
+        return normalized;
+
+    const auto *chars = static_cast<const tjs_char *>(text);
+    const size_t length = static_cast<size_t>(bytes) / sizeof(tjs_char);
+    normalized.reserve(length);
+    for(size_t i = 0; i < length; ++i) {
+        tjs_char ch = chars[i];
+        if(ch >= 0xff01 && ch <= 0xff5e)
+            ch = static_cast<tjs_char>(ch - 0xfee0);
+        if(ch >= TJS_W('A') && ch <= TJS_W('Z'))
+            ch = static_cast<tjs_char>(ch + (TJS_W('a') - TJS_W('A')));
+        if(ch >= 0x30a1 && ch <= 0x30f6)
+            ch = static_cast<tjs_char>(ch - 0x60);
+        if(ch <= 0x20 || ch == 0x3000)
+            continue;
+        normalized.push_back(ch);
+    }
+    return normalized;
+}
+
+void sqliteNormalizedContains(sqlite3_context *context, int argc,
+                              sqlite3_value **argv) {
+    if(argc < 2 || sqlite3_value_type(argv[0]) == SQLITE_NULL ||
+       sqlite3_value_type(argv[1]) == SQLITE_NULL) {
+        sqlite3_result_int(context, 0);
+        return;
+    }
+
+    const auto haystack = normalizeSearchText(sqlite3_value_text16(argv[0]),
+                                              sqlite3_value_bytes16(argv[0]));
+    const auto needle = normalizeSearchText(sqlite3_value_text16(argv[1]),
+                                            sqlite3_value_bytes16(argv[1]));
+    sqlite3_result_int(context,
+                       needle.empty() || haystack.find(needle) !=
+                                             std::basic_string<tjs_char>::npos);
+}
+
+int registerCompatibilityFunctions(sqlite3 *db) {
+    return sqlite3_create_function16(db, TJS_W("ncnt"), 2, SQLITE_UTF16,
+                                     nullptr, &sqliteNormalizedContains,
+                                     nullptr, nullptr);
+}
+
 int bindParam(sqlite3_stmt *stmt, const tTJSVariant &param, int pos) {
     switch(param.Type()) {
         case tvtInteger:
@@ -176,6 +222,8 @@ public:
                                    : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
         int ret = sqlite3_open_v2(toUtf8(name.c_str()).c_str(), &db_, flags,
                                   useXp3 ? "xp3" : nullptr);
+        if(ret == SQLITE_OK)
+            ret = registerCompatibilityFunctions(db_);
         if(ret != SQLITE_OK && db_) {
             errorCode_ = ret;
             errorMessage_ =

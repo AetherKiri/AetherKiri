@@ -11,9 +11,53 @@ ncbAutoRegister::_top[ncbAutoRegister::LINE_COUNT] = NCB_INNER_AUTOREGISTER_LINE
 
 std::map<ttstr, ncbAutoRegister::INTERNAL_PLUGIN_LISTS > ncbAutoRegister::_internal_plugins;
 
-bool ncbAutoRegister::LoadModule(const ttstr &_name)
+namespace {
+
+std::map<ttstr, ttstr> &ModuleAliases()
+{
+	// Function-local storage makes alias registration safe across translation
+	// units during static initialization.
+	static std::map<ttstr, ttstr> aliases;
+	return aliases;
+}
+
+ttstr ResolveModuleAlias(const ttstr &_name)
 {
 	ttstr name = _name.AsLowerCase();
+	std::set<ttstr> visited;
+	while (visited.insert(name).second) {
+		auto it = ModuleAliases().find(name);
+		if (it == ModuleAliases().end())
+			return name;
+		name = it->second;
+	}
+	spdlog::error("ncbAutoRegister: cyclic module alias involving '{}'",
+	              name.AsStdString());
+	return _name.AsLowerCase();
+}
+
+} // namespace
+
+void ncbAutoRegister::RegisterModuleAlias(NameT alias, NameT canonical)
+{
+	if (!alias || !canonical)
+		return;
+	ttstr lower_alias = ttstr(alias).AsLowerCase();
+	ttstr lower_canonical = ttstr(canonical).AsLowerCase();
+	if (lower_alias.length() == 0 || lower_canonical.length() == 0 ||
+	    lower_alias == lower_canonical)
+		return;
+	ModuleAliases()[lower_alias] = lower_canonical;
+}
+
+bool ncbAutoRegister::LoadModule(const ttstr &_name)
+{
+	const ttstr requested_name = _name.AsLowerCase();
+	const ttstr name = ResolveModuleAlias(requested_name);
+	if (name != requested_name) {
+		spdlog::trace("ncbAutoRegister::LoadModule('{}'): alias of '{}'",
+		              requested_name.AsStdString(), name.AsStdString());
+	}
 	if (TVPRegisteredPlugins.find(name) != TVPRegisteredPlugins.end()) {
         spdlog::trace("ncbAutoRegister::LoadModule('{}'): already registered",
                       name.AsStdString());
@@ -56,7 +100,7 @@ bool ncbAutoRegister::LoadModule(const ttstr &_name)
 
 bool ncbAutoRegister::UnloadModule(const ttstr &_name)
 {
-	ttstr name = _name.AsLowerCase();
+	const ttstr name = ResolveModuleAlias(_name);
 	auto it = _internal_plugins.find(name);
 	if (it == _internal_plugins.end()) {
         spdlog::warn("ncbAutoRegister::UnloadModule('{}'): module not found in internal plugin map",
@@ -94,7 +138,7 @@ bool ncbAutoRegister::UnloadModule(const ttstr &_name)
 
 bool ncbAutoRegister::HasModule(const ttstr &_name)
 {
-	ttstr name = _name.AsLowerCase();
+	const ttstr name = ResolveModuleAlias(_name);
 	return _internal_plugins.find(name) != _internal_plugins.end();
 }
 

@@ -15,10 +15,14 @@
 #include "tjsCommHead.h"
 
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <cctype>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <spdlog/spdlog.h>
 #ifdef __ANDROID__
@@ -52,6 +56,22 @@
 #include "vkdefine.h"
 #include "RenderManager.h"
 #include "FontImpl.h"
+#include "../../plugins/psbfile/PSBMedia.h"
+
+extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
+    tTJSNI_BaseLayer *layer);
+extern "C" bool
+AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
+    tTJSNI_BaseLayer *layer,
+    tjs_int x,
+    tjs_int y,
+    tjs_int width,
+    tjs_int height);
+extern "C" bool AetherKiriMotionShowCenteredPresentationHoldOverlay(
+    tTJSNI_BaseLayer *layer);
+extern "C" void AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(
+    tTJSNI_BaseLayer *layer);
+extern "C" void AetherKiriMotionTickCenteredPresentationHoldOverlays();
 
 extern void TVPSetFontRasterizer(tjs_int index);
 
@@ -113,6 +133,35 @@ static bool TVPLayerInputTraceEnabled() {
     return value && *value && *value != '0';
 }
 
+static bool TVPLayerTransitionTraceEnabled() {
+    const char *value = std::getenv("AETHERKIRI_TRANS_TRACE");
+    return value && *value && *value != '0';
+}
+
+static void TVPTraceLayerTransition(const char *event,
+                                    const tTJSNI_BaseLayer *layer,
+                                    const tTJSNI_BaseLayer *src = nullptr,
+                                    tjs_error status = TJS_S_OK) {
+    if(!TVPLayerTransitionTraceEnabled())
+        return;
+    spdlog::info(
+        "LayerTrans {} layer={} native={} owner={} shutdown={} visible={} "
+        "transition={} src={} srcNative={} srcOwner={} srcShutdown={} "
+        "eventDisabled={} systemEventDisabled={} status={}",
+        event ? event : "", layer ? layer->GetName().AsStdString() : "<null>",
+        static_cast<const void *>(layer),
+        layer ? static_cast<const void *>(layer->GetOwnerNoAddRef()) : nullptr,
+        "<private>",
+        layer && layer->GetVisible() ? "yes" : "no",
+        layer && layer->DebugIsInTransition() ? "yes" : "no",
+        src ? src->GetName().AsStdString() : "<null>",
+        static_cast<const void *>(src),
+        src ? static_cast<const void *>(src->GetOwnerNoAddRef()) : nullptr,
+        "<private>",
+        TVPEventDisabled ? "yes" : "no",
+        TVPGetSystemEventDisabledState() ? "yes" : "no", status);
+}
+
 #ifdef __ANDROID__
 #define AETHER_LAYER_INPUT_TRACE_LOG(...)                                       \
     do {                                                                       \
@@ -149,6 +198,8 @@ static bool TVPLayerDrawTraceName(const ttstr &name) {
            s.find("表メッセージレイヤ1") != std::string::npos ||
            s.find("表メッセージレイヤ2") != std::string::npos ||
            s.find("CG View Layer") != std::string::npos ||
+           s == "face" || s == "trans_face" || s == "hide_face" ||
+           s == "秀明" || s == "和奏" ||
            s == "item3" || s == "item6";
 }
 
@@ -194,6 +245,12 @@ static bool TVPLayerDrawTraceArmed() {
 static bool TVPLayerDrawTraceArmIfNeeded(tTJSNI_BaseLayer *layer) {
     if(TVPLayerDrawTraceArmed())
         return true;
+    if(layer && TVPLayerDrawTraceName(layer->GetName())) {
+        TVPLayerDrawTraceArmedFlag.store(true, std::memory_order_relaxed);
+        spdlog::info("LayerDrawGPU trace armed by focus layer={}",
+                     layer->GetName().AsStdString());
+        return true;
+    }
     if(TVPLayerDrawTraceIsPreviewLayer(layer)) {
         TVPLayerDrawTraceArmedFlag.store(true, std::memory_order_relaxed);
         spdlog::info("LayerDrawGPU trace armed by layer={}",
@@ -277,6 +334,235 @@ static std::string TVPVariantDebugString(const tTJSVariant &value) {
     return text.AsStdString();
 }
 
+static void TVPTraceKagExpressionValue(const char *label,
+                                       const tjs_char *expression) {
+    if(!TVPLayerInputTraceEnabled())
+        return;
+    try {
+        tTJSVariant value;
+        TVPExecuteExpression(ttstr(expression), &value);
+        spdlog::info("LayerIntf kag {}={}", label,
+                     TVPVariantDebugString(value));
+    } catch(const eTJSScriptError &e) {
+        spdlog::info("LayerIntf kag {} script-error message={} block={} line={}",
+                     label, e.GetMessage().AsStdString(),
+                     e.GetBlockName() ? ttstr(e.GetBlockName()).AsStdString()
+                                      : "",
+                     e.GetSourceLine());
+    } catch(const eTJS &e) {
+        spdlog::info("LayerIntf kag {} tjs-error message={}", label,
+                     e.GetMessage().AsStdString());
+    } catch(...) {
+        spdlog::info("LayerIntf kag {} failed", label);
+    }
+}
+
+static void TVPTraceKagState(const char *prefix) {
+    if(!TVPLayerInputTraceEnabled())
+        return;
+    spdlog::info("LayerIntf kag-state {}", prefix ? prefix : "");
+    TVPTraceKagExpressionValue(
+        "typeof_kag", TJS_W("typeof kag"));
+    TVPTraceKagExpressionValue(
+        "currentStorage",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.currentStorage : \"\""));
+    TVPTraceKagExpressionValue(
+        "currentLabel",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.currentLabel : \"\""));
+    TVPTraceKagExpressionValue(
+        "inStable",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.inStable : \"\""));
+    TVPTraceKagExpressionValue(
+        "enabled",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.enabled : \"\""));
+    TVPTraceKagExpressionValue(
+        "currentState",
+        TJS_W("(typeof SystemHook == \"Object\" && SystemHook) ? "
+              "SystemHook.currentState : \"\""));
+    TVPTraceKagExpressionValue(
+        "playerWorking",
+        TJS_W("(typeof SystemAction == \"Object\" && SystemAction) ? "
+              "SystemAction.playerWorking : \"\""));
+    TVPTraceKagExpressionValue(
+        "current",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.current : \"\""));
+    TVPTraceKagExpressionValue(
+        "usingExtraConductor",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.usingExtraConductor : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor",
+        TJS_W("(typeof kag == \"Object\" && kag) ? kag.conductor : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.status",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.status : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.mRun",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.mRun : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.mWait",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.mWait : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.mStop",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.mStop : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.lastTagName",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.lastTagName : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.curStorage",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.curStorage : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.curLabel",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.curLabel : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.runLabel",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.runLabel : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.waitUntil",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.waitUntil : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.waitKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\") ? "
+              "Scripts.getObjectKeys(kag.conductor.waitUntil).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.waitAllKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\") ? "
+              "Scripts.getObjectKeys(kag.conductor.waitAll).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pendingCount",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.pendings.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 0) ? "
+              "(kag.conductor.pendings[0].tagname + \":\" + "
+              "((void !== kag.conductor.pendings[0].name) ? "
+              "kag.conductor.pendings[0].name : \"\")) : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.taglist",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 0 && "
+              "void !== kag.conductor.pendings[0].taglist) ? "
+              "kag.conductor.pendings[0].taglist.join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.keys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\" && "
+              "kag.conductor.pendings.count > 0) ? "
+              "Scripts.getObjectKeys(kag.conductor.pendings[0]).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.hasTrans",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 0) ? "
+              "(void !== kag.conductor.pendings[0].trans) : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.transKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\" && "
+              "kag.conductor.pendings.count > 0 && "
+              "void !== kag.conductor.pendings[0].trans) ? "
+              "Scripts.getObjectKeys(kag.conductor.pendings[0].trans).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.hasUpdate",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 0) ? "
+              "(void !== kag.conductor.pendings[0].update) : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.updateKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\" && "
+              "kag.conductor.pendings.count > 0 && "
+              "void !== kag.conductor.pendings[0].update) ? "
+              "Scripts.getObjectKeys(kag.conductor.pendings[0].update).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending0.updateCount",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 0 && "
+              "void !== kag.conductor.pendings[0].update && "
+              "void !== kag.conductor.pendings[0].update.count) ? "
+              "kag.conductor.pendings[0].update.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending1",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 1) ? "
+              "(kag.conductor.pendings[1].tagname + \":\" + "
+              "((void !== kag.conductor.pendings[1].name) ? "
+              "kag.conductor.pendings[1].name : \"\")) : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.pending1.taglist",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.pendings.count > 1 && "
+              "void !== kag.conductor.pendings[1].taglist) ? "
+              "kag.conductor.pendings[1].taglist.join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.fastCount",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.fasttags.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.nextCount",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.conductor.nexttags.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "conductor.next0",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "kag.conductor.nexttags.count > 0) ? "
+              "kag.conductor.nexttags[0].tagname : \"\""));
+    TVPTraceKagExpressionValue(
+        "main.status",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.mainConductor.status : \"\""));
+    TVPTraceKagExpressionValue(
+        "main.nextCount",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.mainConductor.nexttags.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "main.waitKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\") ? "
+              "Scripts.getObjectKeys(kag.mainConductor.waitUntil).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "extra.status",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.extraConductor.status : \"\""));
+    TVPTraceKagExpressionValue(
+        "extra.nextCount",
+        TJS_W("(typeof kag == \"Object\" && kag) ? "
+              "kag.extraConductor.nexttags.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "extra.waitKeys",
+        TJS_W("(typeof kag == \"Object\" && kag && "
+              "typeof Scripts == \"Object\") ? "
+              "Scripts.getObjectKeys(kag.extraConductor.waitUntil).join(\",\") : \"\""));
+    TVPTraceKagExpressionValue(
+        "entryTags.count",
+        TJS_W("(typeof kag == \"Object\" && kag && void !== kag.entryTags) ? "
+              "kag.entryTags.count : \"\""));
+    TVPTraceKagExpressionValue(
+        "transMode",
+        TJS_W("(typeof kag == \"Object\" && kag && void !== kag.transMode) ? "
+              "kag.transMode : \"\""));
+    TVPTraceKagExpressionValue(
+        "transTarget",
+        TJS_W("(typeof kag == \"Object\" && kag && void !== kag.transTarget) ? "
+              "kag.transTarget : \"\""));
+    TVPTraceKagExpressionValue(
+        "waitInfo",
+        TJS_W("(typeof kag == \"Object\" && kag && void !== kag.waitInfo) ? "
+              "kag.waitInfo : \"\""));
+}
+
 class TVPTraceObjectEnumCaller : public tTJSDispatch {
 public:
     TVPTraceObjectEnumCaller(std::string label, int limit)
@@ -340,7 +626,9 @@ static void TVPTraceObjectProperty(const char *label,
     spdlog::info("LayerIntf trace {}.{}={}", label, prop_name.AsStdString(),
                  TVPVariantDebugString(value));
     if(value.Type() == tvtObject &&
-       (prop_name == TJS_W("action") || prop_name == TJS_W("onClick"))) {
+       (prop_name == TJS_W("action") || prop_name == TJS_W("onClick") ||
+        prop_name == TJS_W("current") ||
+        prop_name == TJS_W("controlOwner"))) {
         tTJSVariantClosure nested = value.AsObjectClosureNoAddRef();
         if(nested.Object) {
             const std::string nested_label =
@@ -408,6 +696,7 @@ static void TVPTraceObjectForButtonClick(const char *label,
     TVPTraceObjectProperty(label, object, TJS_W("_loadNumber"));
     TVPTraceObjectProperty(label, object, TJS_W("_sysbtnTags"));
     TVPTraceObjectProperty(label, object, TJS_W("_sysbtnInfo"));
+
 }
 
 static void TVPTraceLayerActionOwner(const char *event,
@@ -417,6 +706,7 @@ static void TVPTraceLayerActionOwner(const char *event,
         return;
     std::string label = std::string("layer.") + event + ".actionOwner";
     TVPTraceObjectForButtonClick(label.c_str(), object);
+
 }
 
 static void TVPTraceLayerActionResult(const char *event,
@@ -494,6 +784,11 @@ static bool TVPParseCafeStellaItemName(const ttstr &name, tjs_int &column,
 
     tjs_int first = 0;
     size_t i = 4;
+    // Save/load grid builders use both item_${x}_${y} and item${x}_${y}.
+    // This parser is limited to the separate save/load compatibility path;
+    // normal button dispatch must use the callback data bound by the script.
+    if(i < text.size() && text[i] == '_')
+        ++i;
     if(i >= text.size() || text[i] < '0' || text[i] > '9')
         return false;
     for(; i < text.size() && text[i] >= '0' && text[i] <= '9'; ++i)
@@ -527,41 +822,6 @@ static bool TVPLayerNameLooksNumberedItem(const ttstr &name) {
     tjs_int row = 0;
     bool has_row = false;
     return TVPParseCafeStellaItemName(name, column, row, has_row);
-}
-
-static bool TVPLayerNameLooksNumberedPrefix(const ttstr &name,
-                                            const char *prefix) {
-    const std::string text = name.AsStdString();
-    const size_t prefix_len = std::strlen(prefix);
-    if(text.size() <= prefix_len || text.compare(0, prefix_len, prefix) != 0)
-        return false;
-    for(size_t i = prefix_len; i < text.size(); ++i) {
-        if(text[i] < '0' || text[i] > '9')
-            return false;
-    }
-    return true;
-}
-
-static bool TVPGetNumberedPrefixIndex(const ttstr &name, const char *prefix,
-                                      tjs_int &index) {
-    const std::string text = name.AsStdString();
-    const size_t prefix_len = std::strlen(prefix);
-    if(text.size() <= prefix_len || text.compare(0, prefix_len, prefix) != 0)
-        return false;
-    tjs_int value = 0;
-    for(size_t i = prefix_len; i < text.size(); ++i) {
-        if(text[i] < '0' || text[i] > '9')
-            return false;
-        value = value * 10 + (text[i] - '0');
-    }
-    index = value;
-    return true;
-}
-
-static bool TVPLayerNameLooksCafeStellaIndexedButton(const ttstr &name) {
-    return TVPLayerNameLooksNumberedPrefix(name, "item") ||
-        TVPLayerNameLooksNumberedPrefix(name, "mitem") ||
-        TVPLayerNameLooksNumberedPrefix(name, "sitem");
 }
 
 static bool TVPGetNumberedItemIndex(tTJSNI_BaseLayer *layer, tjs_int &index) {
@@ -609,93 +869,6 @@ static bool TVPGetCafeStellaSaveLoadGridItemIndex(tTJSNI_BaseLayer *layer,
         return false;
     }
     return TVPGetNumberedItemIndex(TVPLayerEventSource, item_index);
-}
-
-static tTJSNI_BaseLayer *TVPGetButtonClickSourceLayer() {
-    if(TVPLayerEventSource)
-        return TVPLayerEventSource;
-    if(TVPLayerCurrentMouseUp.Active && TVPLayerCurrentMouseUp.Layer)
-        return TVPLayerCurrentMouseUp.Layer;
-    return TVPLayerRecentEventSource;
-}
-
-static bool TVPLayerLooksCafeStellaParentHackSource(
-    tTJSNI_BaseLayer *parent_layer, tTJSNI_BaseLayer *source_layer) {
-    return TVPLayerNameEquals(parent_layer, "ParentHackLayer") &&
-        source_layer && source_layer != parent_layer &&
-        TVPLayerNameLooksCafeStellaIndexedButton(source_layer->GetName());
-}
-
-static iTJSDispatch2 *TVPGetButtonClickEventTarget(tTJSNI_BaseLayer *layer,
-                                                   iTJSDispatch2 *fallback) {
-    tjs_int item_index = 0;
-    if(TVPGetCafeStellaSaveLoadGridItemIndex(layer, item_index)) {
-        if(iTJSDispatch2 *source_owner =
-               TVPLayerEventSource->GetOwnerNoAddRef()) {
-            if(TVPLayerInputTraceEnabled()) {
-                spdlog::info("LayerIntf onButtonClick remap target parent={} source={} index={}",
-                             layer->GetName().AsStdString(),
-                             TVPLayerEventSource->GetName().AsStdString(),
-                             item_index);
-            }
-            return source_owner;
-        }
-    }
-    tTJSNI_BaseLayer *source_layer = TVPGetButtonClickSourceLayer();
-    if(TVPLayerLooksCafeStellaParentHackSource(layer, source_layer)) {
-        if(iTJSDispatch2 *source_owner =
-               source_layer->GetOwnerNoAddRef()) {
-            if(TVPLayerInputTraceEnabled()) {
-                spdlog::info("LayerIntf onButtonClick remap target parent={} source={}",
-                             layer->GetName().AsStdString(),
-                             source_layer->GetName().AsStdString());
-            }
-            return source_owner;
-        }
-    }
-    return fallback;
-}
-
-static tTJSVariantClosure
-TVPGetButtonClickActionOwner(tTJSNI_BaseLayer *layer,
-                             const tTJSVariantClosure &fallback) {
-    tjs_int item_index = 0;
-    if(TVPGetCafeStellaSaveLoadGridItemIndex(layer, item_index) &&
-       TVPLayerEventSource) {
-        tTJSVariantClosure source_action =
-            TVPLayerEventSource->GetActionOwnerNoAddRef();
-        if(source_action.Object) {
-            if(TVPLayerInputTraceEnabled()) {
-                spdlog::info("LayerIntf onButtonClick remap action parent={} source={} index={} same={}",
-                             layer->GetName().AsStdString(),
-                             TVPLayerEventSource->GetName().AsStdString(),
-                             item_index,
-                             source_action.Object == fallback.Object &&
-                                     source_action.ObjThis == fallback.ObjThis
-                                 ? "yes"
-                                 : "no");
-            }
-            return source_action;
-        }
-    }
-    tTJSNI_BaseLayer *source_layer = TVPGetButtonClickSourceLayer();
-    if(TVPLayerLooksCafeStellaParentHackSource(layer, source_layer)) {
-        tTJSVariantClosure source_action =
-            source_layer->GetActionOwnerNoAddRef();
-        if(source_action.Object) {
-            if(TVPLayerInputTraceEnabled()) {
-                spdlog::info("LayerIntf onButtonClick remap action parent={} source={} same={}",
-                             layer->GetName().AsStdString(),
-                             source_layer->GetName().AsStdString(),
-                             source_action.Object == fallback.Object &&
-                                     source_action.ObjThis == fallback.ObjThis
-                                 ? "yes"
-                                 : "no");
-            }
-            return source_action;
-        }
-    }
-    return fallback;
 }
 
 static tjs_error TVPCallCafeStellaGridItemMethod(
@@ -1500,42 +1673,6 @@ static bool TVPInvokeCafeStellaSourceButtonClick(
     return TJS_SUCCEEDED(hr);
 }
 
-static bool TVPInvokeParentHackMessageLayerButtonClick(
-    tTJSNI_BaseLayer *parent_hack_layer, tjs_int numparams,
-    tTJSVariant **param, tTJSVariant *result) {
-    if(numparams < 1)
-        return false;
-
-    tTJSNI_BaseLayer *source_layer = TVPLayerEventSource;
-    if(!source_layer && TVPLayerCurrentMouseUp.Active)
-        source_layer = TVPLayerCurrentMouseUp.Layer;
-    if(!TVPLayerLooksCafeStellaParentHackSource(parent_hack_layer,
-                                                source_layer))
-        return false;
-
-    tTJSNI_BaseLayer *message_layer = parent_hack_layer->GetParent();
-    iTJSDispatch2 *message_owner =
-        message_layer ? message_layer->GetOwnerNoAddRef() : nullptr;
-    if(!message_owner)
-        return false;
-
-    static ttstr on_button_click(TJS_W("onButtonClick"));
-    tTJSVariantClosure message_object(message_owner, message_owner);
-    tTJSVariant *args[1] = { param[0] };
-    const tjs_error hr =
-        message_object.FuncCall(0, on_button_click.c_str(),
-                                on_button_click.GetHint(), result, 1, args,
-                                nullptr);
-    if(TVPLayerInputTraceEnabled()) {
-        spdlog::info("LayerIntf onButtonClick parent-hack forward parent={} source={} message={} link={} hr={}",
-                     parent_hack_layer ? parent_hack_layer->GetName().AsStdString() : "",
-                     source_layer ? source_layer->GetName().AsStdString() : "",
-                     message_layer ? message_layer->GetName().AsStdString() : "",
-                     ttstr(*param[0]).AsStdString(), hr);
-    }
-    return TJS_SUCCEEDED(hr);
-}
-
 static bool TVPInvokeCafeStellaSaveLoadGridItem(tTJSNI_BaseLayer *layer,
                                                 tTJSVariant *result) {
     tjs_int item_index = 0;
@@ -1753,6 +1890,197 @@ static bool TVPLayerLoadThumbnailFitted(tTVPBaseTexture *dest,
                      tTVPRect(0, 0, target_width, target_height), &source,
                      tTVPRect(0, 0, source.GetWidth(), source.GetHeight()),
                      bmCopy, 255, false, stFastLinear, 0.0);
+    return true;
+}
+
+static bool TVPLayerGetObjectString(tTJSVariantClosure object,
+                                    const tjs_char *name,
+                                    ttstr &out) {
+    tTJSVariant value;
+    if(TJS_FAILED(object.PropGet(TJS_IGNOREPROP, name, nullptr, &value, nullptr)) ||
+       value.Type() == tvtVoid) {
+        return false;
+    }
+    out = ttstr(value);
+    return !out.IsEmpty();
+}
+
+static std::vector<std::string> TVPLayerSplitPimgSeton(const std::string &seton) {
+    std::vector<std::string> result;
+    size_t start = 0;
+    while(start <= seton.size()) {
+        const size_t sep = seton.find(':', start);
+        std::string part =
+            sep == std::string::npos ? seton.substr(start)
+                                      : seton.substr(start, sep - start);
+        if(!part.empty()) {
+            result.push_back(std::move(part));
+        }
+        if(sep == std::string::npos) {
+            break;
+        }
+        start = sep + 1;
+    }
+    return result;
+}
+
+static std::string TVPLayerPimgArchiveFromStorage(std::string storage) {
+    constexpr const char *scheme = "psb://";
+    if(storage.rfind(scheme, 0) == 0) {
+        storage.erase(0, std::strlen(scheme));
+    }
+    const size_t query = storage.find_first_of("?#");
+    if(query != std::string::npos) {
+        storage.erase(query);
+    }
+    const std::string lower = TVPLayerAsciiLower(storage);
+    if(lower.size() < 5 || lower.substr(lower.size() - 5) != ".pimg") {
+        storage += ".pimg";
+    }
+    return storage;
+}
+
+static bool TVPLayerLoadPimgComposite(tTJSNI_BaseLayer *layer,
+                                      const ttstr &storage,
+                                      const ttstr &seton,
+                                      tjs_uint32 colorkey,
+                                      iTJSDispatch2 **metainfo) {
+    if(!layer) {
+        return false;
+    }
+
+    PSB::PSBMedia *media = PSB::GetGlobalPSBMedia();
+    if(!media) {
+        return false;
+    }
+
+    const std::string archive =
+        TVPLayerPimgArchiveFromStorage(storage.AsStdString());
+    const std::string setonText = seton.AsStdString();
+    const std::vector<std::string> requestedLayers =
+        TVPLayerSplitPimgSeton(setonText);
+    if(archive.empty() || requestedLayers.empty()) {
+        return false;
+    }
+
+    media->ensureArchiveLoaded(archive, false);
+    std::vector<PSB::PSBMedia::ImageInfoEntry> entries =
+        media->getImagesByPrefix(archive);
+    if(entries.empty() && media->ensureArchiveLoaded(archive, true)) {
+        entries = media->getImagesByPrefix(archive);
+    }
+    if(entries.empty()) {
+        return false;
+    }
+
+    std::unordered_map<std::string, const PSB::PSBMedia::ImageInfoEntry *>
+        entriesByLabel;
+    for(const auto &entry : entries) {
+        if(entry.info.label.empty()) {
+            continue;
+        }
+        entriesByLabel.emplace(TVPLayerAsciiLower(entry.info.label), &entry);
+    }
+
+    std::vector<const PSB::PSBMedia::ImageInfoEntry *> selected;
+    selected.reserve(requestedLayers.size());
+    for(auto it = requestedLayers.rbegin(); it != requestedLayers.rend(); ++it) {
+        const auto found = entriesByLabel.find(TVPLayerAsciiLower(*it));
+        if(found == entriesByLabel.end()) {
+            spdlog::warn(
+                "Layer.loadImages PIMG composite missing layer: archive={} seton={} layer={}",
+                archive, setonText, *it);
+            return false;
+        }
+        selected.push_back(found->second);
+    }
+
+    int canvasWidth = 0;
+    int canvasHeight = 0;
+    for(const auto *entry : selected) {
+        canvasWidth =
+            std::max(canvasWidth, entry->info.left + entry->info.width);
+        canvasHeight =
+            std::max(canvasHeight, entry->info.top + entry->info.height);
+    }
+    if(canvasWidth <= 0 || canvasHeight <= 0) {
+        for(const auto &entry : entries) {
+            canvasWidth =
+                std::max(canvasWidth, entry.info.left + entry.info.width);
+            canvasHeight =
+                std::max(canvasHeight, entry.info.top + entry.info.height);
+        }
+    }
+    if(canvasWidth <= 0 || canvasHeight <= 0) {
+        return false;
+    }
+
+    tTVPBaseBitmap canvas(static_cast<tjs_uint>(canvasWidth),
+                          static_cast<tjs_uint>(canvasHeight), 32);
+    canvas.Fill(tTVPRect(0, 0, canvasWidth, canvasHeight), 0);
+
+    bool wroteAnyLayer = false;
+    iTJSDispatch2 *compositeMeta = nullptr;
+    try {
+        for(const auto *entry : selected) {
+            const auto &info = entry->info;
+            if(!info.visible || info.opacity <= 0) {
+                continue;
+            }
+
+            tTVPBaseTexture source(1, 1);
+            iTJSDispatch2 *layerMeta = nullptr;
+            const ttstr layerStorage =
+                ttstr(TJS_W("psb://")) + ttstr(entry->key.c_str());
+            TVPLoadGraphic(&source, layerStorage, colorkey, 0, 0, glmNormal,
+                           nullptr, compositeMeta ? nullptr : &layerMeta);
+            if(layerMeta) {
+                if(!compositeMeta) {
+                    compositeMeta = layerMeta;
+                } else {
+                    layerMeta->Release();
+                }
+            }
+
+            const tTVPRect sourceRect(
+                0, 0, static_cast<tjs_int>(source.GetWidth()),
+                static_cast<tjs_int>(source.GetHeight()));
+            const tjs_int opacity =
+                std::max(0, std::min(255, info.opacity));
+            const tTVPBBBltMethod method =
+                !wroteAnyLayer && opacity == 255 ? bmCopy : bmAlphaOnAlpha;
+            canvas.Blt(info.left, info.top, &source, sourceRect, method, opacity,
+                       false);
+            wroteAnyLayer = true;
+        }
+
+        if(!wroteAnyLayer) {
+            if(compositeMeta) {
+                compositeMeta->Release();
+            }
+            return false;
+        }
+
+        layer->AssignMainImageWithUpdate(&canvas);
+        spdlog::debug(
+            "Layer.loadImages PIMG composite storage={} archive={} seton={} size={}x{} layers={}",
+            storage.AsStdString(), archive, setonText, canvasWidth, canvasHeight,
+            selected.size());
+    } catch(...) {
+        if(compositeMeta) {
+            compositeMeta->Release();
+        }
+        spdlog::warn(
+            "Layer.loadImages PIMG composite failed: storage={} archive={} seton={}",
+            storage.AsStdString(), archive, setonText);
+        return false;
+    }
+
+    if(metainfo) {
+        *metainfo = compositeMeta;
+    } else if(compositeMeta) {
+        compositeMeta->Release();
+    }
     return true;
 }
 
@@ -2093,7 +2421,6 @@ tTJSNI_BaseLayer::tTJSNI_BaseLayer() {
     AttentionLeft = AttentionTop = 0;
 
     Enabled = true;
-    SelProcessLock = false;
     Focusable = false;
     JoinFocusChain = true;
 
@@ -2941,6 +3268,8 @@ void tTJSNI_BaseLayer::SetVisible(bool st) {
         if(st && _bitmapEvicted)
             EnsureBitmap();
         if(!st)
+            AetherKiriMotionShowCenteredPresentationHoldOverlay(this);
+        if(!st)
             Update();
         Visible = st;
         if(st)
@@ -2964,6 +3293,8 @@ void tTJSNI_BaseLayer::SetOpacity(tjs_int opa) {
             TVPThrowExceptionMessage(TVPCannotSetPrimaryInvisible);
         if(opa != 0 && Visible && _bitmapEvicted)
             EnsureBitmap();
+        if(opa == 0)
+            AetherKiriMotionShowCenteredPresentationHoldOverlay(this);
         Opacity = opa;
         if(Parent)
             Parent->NotifyChildrenVisualStateChanged();
@@ -7003,6 +7334,16 @@ void tTJSNI_BaseLayer::AffineCopy(const t2DAffineMatrix &matrix,
 
     ImageModified = updated || ImageModified;
 
+    if(TVPLayerDebugShouldLogBitmap(src, srcrect)) {
+        spdlog::info(
+            "Layer.affineCopy.matrix result updated={} updateRect=({},{} {}x{}) imageOfs=({}, {}) clip=({},{} {}x{}) layer={} pos=({}, {}) size={}x{}",
+            updated ? 1 : 0, updaterect.left, updaterect.top,
+            updaterect.get_width(), updaterect.get_height(), ImageLeft,
+            ImageTop, ClipRect.left, ClipRect.top, ClipRect.get_width(),
+            ClipRect.get_height(), GetName().AsStdString(), GetLeft(),
+            GetTop(), GetWidth(), GetHeight());
+    }
+
     if(updated) {
         updaterect.add_offsets(ImageLeft, ImageTop);
         Update(updaterect);
@@ -7060,6 +7401,16 @@ void tTJSNI_BaseLayer::AffineCopy(const tTVPPointD *points, iTVPBaseBitmap *src,
     }
 
     ImageModified = updated || ImageModified;
+
+    if(TVPLayerDebugShouldLogBitmap(src, srcrect)) {
+        spdlog::info(
+            "Layer.affineCopy.points result updated={} updateRect=({},{} {}x{}) imageOfs=({}, {}) clip=({},{} {}x{}) layer={} pos=({}, {}) size={}x{}",
+            updated ? 1 : 0, updaterect.left, updaterect.top,
+            updaterect.get_width(), updaterect.get_height(), ImageLeft,
+            ImageTop, ClipRect.left, ClipRect.top, ClipRect.get_width(),
+            ClipRect.get_height(), GetName().AsStdString(), GetLeft(),
+            GetTop(), GetWidth(), GetHeight());
+    }
 
     if(updated) {
         updaterect.add_offsets(ImageLeft, ImageTop);
@@ -8694,8 +9045,11 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
                 TransTick = GetTransTick();
             }
             er = DivisibleTransHandler->StartProcess(TransTick);
-            if(er != TJS_S_TRUE)
+            if(er != TJS_S_TRUE) {
+                TVPTraceLayerTransition("before-completion-start-finished",
+                                        this, TransSrc, er);
                 StopTransitionByHandler();
+            }
         } else if(GiveUpdateTransHandler) {
             // not yet implemented
         }
@@ -8773,8 +9127,11 @@ void tTJSNI_BaseLayer::AfterCompletion() {
             // notify start of processing unit
             tjs_error er;
             er = DivisibleTransHandler->EndProcess();
-            if(er != TJS_S_TRUE)
+            if(er != TJS_S_TRUE) {
+                TVPTraceLayerTransition("after-completion-end-finished",
+                                        this, TransSrc, er);
                 StopTransitionByHandler();
+            }
         } else if(GiveUpdateTransHandler) {
             // not yet implemented
         }
@@ -9248,8 +9605,11 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
                 // for each child...
 
                 // visible check
-                if(!child->Visible)
+                if(!child->Visible) {
+                    tTVPRect empty;
+                    TVPTraceLayerDrawGpuChild(this, child, empty, false);
                     continue;
+                }
 
                 // intersection check
                 if(!TVPIntersectRect(&UpdateRectForChild, rectForChild,
@@ -9300,8 +9660,11 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
                 // for each child...
 
                 // visible check
-                if(!child->Visible)
+                if(!child->Visible) {
+                    tTVPRect empty;
+                    TVPTraceLayerDrawGpuChild(this, child, empty, false);
                     continue;
+                }
 
                 // intersection check
                 tTVPRect chrect;
@@ -10009,7 +10372,18 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
         Manager->GetLayerTreeOwner()->StartBitmapCompletion(Manager);
     try {
         if(IsGPU()) {
-            InternalComplete2_GPU(Rect, drawable);
+            if(Manager) {
+                tTVPComplexRect &updateRegion =
+                    Manager->GetUpdateRegionForCompletion();
+                if(updateRegion.GetCount() > 0) {
+                    // The Godot final drawable presents a complete frame. Using
+                    // a dirty rect here leaves old pixels around moved layers.
+                    InternalComplete2_GPU(Rect, drawable);
+                    updateRegion.Clear();
+                }
+            } else {
+                InternalComplete2_GPU(Rect, drawable);
+            }
         } else {
             InternalComplete2(Manager->GetUpdateRegionForCompletion(),
                               drawable);
@@ -10024,6 +10398,7 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
 
     InCompletion = false;
     AfterCompletion();
+    AetherKiriMotionTickCenteredPresentationHoldOverlays();
 }
 
 //---------------------------------------------------------------------------
@@ -10181,17 +10556,127 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
         // create option provider
         sop = new tTVPSimpleOptionProvider(options);
 
+        tjs_int destLayerWidth = GetWidth();
+        tjs_int destLayerHeight = GetHeight();
+        const tjs_int destImageWidth = MainImage ? MainImage->GetWidth() : -1;
+        const tjs_int destImageHeight = MainImage ? MainImage->GetHeight() : -1;
+        tjs_int srcLayerWidth = transsource ? transsource->GetWidth() : 0;
+        tjs_int srcLayerHeight = transsource ? transsource->GetHeight() : 0;
+        const tjs_int srcImageWidth =
+            (transsource && transsource->MainImage)
+                ? transsource->MainImage->GetWidth()
+                : -1;
+        const tjs_int srcImageHeight =
+            (transsource && transsource->MainImage)
+                ? transsource->MainImage->GetHeight()
+                : -1;
+
+        const bool kag_background_pair =
+            (GetName() == TJS_W("表-背景") &&
+             transsource && transsource->GetName() == TJS_W("裏-背景")) ||
+            (GetName() == TJS_W("裏-背景") &&
+             transsource && transsource->GetName() == TJS_W("表-背景"));
+        if(withchildren && kag_background_pair && MainImage &&
+           transsource && transsource->MainImage &&
+           destLayerWidth > 0 && destLayerHeight > 0 &&
+           srcLayerWidth > 0 && srcLayerHeight > 0 &&
+           (destLayerWidth != srcLayerWidth ||
+            destLayerHeight != srcLayerHeight)) {
+            tjs_int commonWidth = std::max(destLayerWidth, srcLayerWidth);
+            tjs_int commonHeight = std::max(destLayerHeight, srcLayerHeight);
+            const tTJSNI_BaseLayer *destParent = Parent;
+            const tTJSNI_BaseLayer *srcParent = transsource->Parent;
+            const bool sameSizedParents =
+                destParent && srcParent && destParent->GetWidth() > 0 &&
+                destParent->GetHeight() > 0 &&
+                destParent->GetWidth() == srcParent->GetWidth() &&
+                destParent->GetHeight() == srcParent->GetHeight();
+            if(sameSizedParents) {
+                commonWidth = std::min<tjs_int>(
+                    commonWidth, static_cast<tjs_int>(destParent->GetWidth()));
+                commonHeight = std::min<tjs_int>(
+                    commonHeight, static_cast<tjs_int>(destParent->GetHeight()));
+            }
+            const tjs_int maxImageWidth =
+                std::max(destImageWidth, srcImageWidth);
+            const tjs_int maxImageHeight =
+                std::max(destImageHeight, srcImageHeight);
+            const bool dimensionsPlausible =
+                maxImageWidth > 0 && maxImageHeight > 0 &&
+                commonWidth <= maxImageWidth &&
+                commonHeight <= maxImageHeight;
+
+            if(dimensionsPlausible) {
+                if(TVPLayerTransitionTraceEnabled()) {
+                    spdlog::info(
+                        "LayerTrans align-kag-background layer={} {}x{} "
+                        "src={} {}x{} destImage={}x{} srcImage={}x{} "
+                        "parent={}x{} common={}x{}",
+                        GetName().AsStdString(), destLayerWidth,
+                        destLayerHeight, transsource->GetName().AsStdString(),
+                        srcLayerWidth, srcLayerHeight, destImageWidth,
+                        destImageHeight, srcImageWidth, srcImageHeight,
+                        sameSizedParents ? destParent->GetWidth() : 0,
+                        sameSizedParents ? destParent->GetHeight() : 0,
+                        commonWidth, commonHeight);
+                }
+                if(destLayerWidth != commonWidth ||
+                   destLayerHeight != commonHeight) {
+                    InternalSetSize(static_cast<tjs_uint>(commonWidth),
+                                    static_cast<tjs_uint>(commonHeight));
+                    destLayerWidth = GetWidth();
+                    destLayerHeight = GetHeight();
+                }
+                if(srcLayerWidth != commonWidth ||
+                   srcLayerHeight != commonHeight) {
+                    transsource->InternalSetSize(
+                        static_cast<tjs_uint>(commonWidth),
+                        static_cast<tjs_uint>(commonHeight));
+                    srcLayerWidth = transsource->GetWidth();
+                    srcLayerHeight = transsource->GetHeight();
+                }
+            } else if(TVPLayerTransitionTraceEnabled()) {
+                spdlog::warn(
+                    "LayerTrans skip-kag-background-align layer={} {}x{} "
+                    "src={} {}x{} destImage={}x{} srcImage={}x{}",
+                    GetName().AsStdString(), destLayerWidth, destLayerHeight,
+                    transsource->GetName().AsStdString(), srcLayerWidth,
+                    srcLayerHeight, destImageWidth, destImageHeight,
+                    srcImageWidth, srcImageHeight);
+            }
+        }
+
+        const tjs_int providerDestWidth =
+            withchildren ? destLayerWidth : destImageWidth;
+        const tjs_int providerDestHeight =
+            withchildren ? destLayerHeight : destImageHeight;
+        const tjs_int providerSrcWidth =
+            transsource ? (withchildren ? srcLayerWidth : srcImageWidth) : 0;
+        const tjs_int providerSrcHeight =
+            transsource ? (withchildren ? srcLayerHeight : srcImageHeight) : 0;
+
+        if(TVPLayerTransitionTraceEnabled()) {
+            spdlog::info(
+                "LayerTrans request name={} withChildren={} layer={} native={} "
+                "layerSize={}x{} imageSize={}x{} src={} srcNative={} "
+                "srcLayerSize={}x{} srcImageSize={}x{} providerDest={}x{} "
+                "providerSrc={}x{}",
+                name.AsStdString(), withchildren ? "yes" : "no",
+                GetName().AsStdString(), static_cast<void *>(this),
+                destLayerWidth, destLayerHeight, destImageWidth,
+                destImageHeight,
+                transsource ? transsource->GetName().AsStdString() : "<null>",
+                static_cast<void *>(transsource), srcLayerWidth,
+                srcLayerHeight, srcImageWidth, srcImageHeight,
+                providerDestWidth, providerDestHeight, providerSrcWidth,
+                providerSrcHeight);
+        }
+
         // notify starting of the transition to the provider
         tjs_error er = pro->StartTransition(
             sop, &TVPSimpleImageProvider, DisplayType,
-            withchildren ? GetWidth() : MainImage->GetWidth(),
-            withchildren ? GetHeight() : MainImage->GetHeight(),
-            transsource ? (withchildren ? transsource->GetWidth()
-                                        : transsource->MainImage->GetWidth())
-                        : 0,
-            transsource ? (withchildren ? transsource->GetHeight()
-                                        : transsource->MainImage->GetHeight())
-                        : 0,
+            providerDestWidth, providerDestHeight, providerSrcWidth,
+            providerSrcHeight,
             &TransType, &TransUpdateType, &handler);
 
         if(TJS_FAILED(er))
@@ -10305,6 +10790,7 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
         InTransition = true;
         TransCompEventPrevented = false;
 
+        TVPTraceLayerTransition("start", this, TransSrc);
         spdlog::trace("[TransTrace] StartTransition name={} type={} updateType={} withChildren={} hasSrc={}",
             name.AsNarrowStdString(), (int)TransType, (int)TransUpdateType,
             withchildren, transsource != nullptr);
@@ -10330,6 +10816,7 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
 void tTJSNI_BaseLayer::InternalStopTransition() {
     // stop transition
     if(InTransition) {
+        TVPTraceLayerTransition("internal-stop-enter", this, TransSrc);
         spdlog::trace("[TransTrace] StopTransition type={}", (int)TransType);
         InTransition = false;
         TransCompEventPrevented = false;
@@ -10378,6 +10865,19 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
         bool transsrcalive = false;
         if(TransSrc && !TransSrc->Shutdown)
             transsrcalive = true;
+        if(TVPLayerTransitionTraceEnabled()) {
+            spdlog::info(
+                "LayerTrans internal-stop-alive layer={} src={} srcNative={} "
+                "srcShutdown={} srcAlive={} owner={} transDestObj={} transSrcObj={}",
+                GetName().AsStdString(),
+                TransSrc ? TransSrc->GetName().AsStdString() : "<null>",
+                static_cast<void *>(TransSrc),
+                TransSrc && TransSrc->Shutdown ? "yes" : "no",
+                transsrcalive ? "yes" : "no",
+                static_cast<void *>(Owner),
+                static_cast<void *>(TransDestObj),
+                static_cast<void *>(TransSrcObj));
+        }
 
         if(TransSrc)
             TransSrc->TransDest = nullptr;
@@ -10391,6 +10891,7 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
 
         // fire event
         if(Owner && !Shutdown && transsrcalive) {
+            TVPTraceLayerTransition("post-transition-completed", this, nullptr);
             static ttstr eventname(TJS_W("onTransitionCompleted"));
 
             // fire SYNCHRONOUS event of "onTransitionCompleted"
@@ -10427,6 +10928,7 @@ void tTJSNI_BaseLayer::StopTransition() {
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::StopTransitionByHandler() {
     // stopping of the transition caused by the handler
+    TVPTraceLayerTransition("stop-by-handler", this, TransSrc);
     if(!TVPEventDisabled) {
         // event dispatching is enabled
         InternalStopTransition();
@@ -10687,6 +11189,34 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
     //-- methods
 
     //----------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ fetchImageSize) {
+        if(numparams < 1)
+            return TJS_E_BADPARAMCOUNT;
+
+        tjs_int width = 0;
+        tjs_int height = 0;
+        TVPGetImageSize(ttstr(*param[0]), width, height);
+
+        if(result) {
+            iTJSDispatch2 *array = TJSCreateArrayObject();
+            if(!array)
+                return TJS_E_FAIL;
+            try {
+                tTJSVariant value(width);
+                array->PropSetByNum(TJS_MEMBERENSURE, 0, &value, array);
+                value = height;
+                array->PropSetByNum(TJS_MEMBERENSURE, 1, &value, array);
+                *result = tTJSVariant(array, array);
+            } catch(...) {
+                array->Release();
+                throw;
+            }
+            array->Release();
+        }
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ fetchImageSize)
+    //----------------------------------------------------------------------
 
     //----------------------------------------------------------------------
     // 在合适的位置，例如其他 Layer 方法绑定之后
@@ -10821,7 +11351,37 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         tjs_uint32 key = clNone; // TODO Intfなのに固有値が
         if(numparams >= 2 && param[1]->Type() != tvtVoid)
             key = (tjs_uint32)param[1]->AsInteger();
-        iTJSDispatch2 *metainfo = _this->LoadImages(name, key);
+        if(TVPLayerInputTraceEnabled() && numparams >= 3 &&
+           param[2]->Type() == tvtObject) {
+            spdlog::info("Layer.loadImages options name={} layer={}",
+                         name.AsStdString(), _this->GetName().AsStdString());
+            TVPTraceObjectMembers(
+                "loadImages.options",
+                param[2]->AsObjectClosureNoAddRef(), 120);
+        }
+        iTJSDispatch2 *metainfo = nullptr;
+        if(numparams >= 3 && param[2]->Type() == tvtObject) {
+            tTJSVariantClosure options = param[2]->AsObjectClosureNoAddRef();
+            ttstr pimgStorage;
+            ttstr pimgSeton;
+            if(TVPLayerGetObjectString(options, TJS_W("storage"), pimgStorage) &&
+               TVPLayerGetObjectString(options, TJS_W("seton"), pimgSeton) &&
+               TVPLayerLoadPimgComposite(_this, pimgStorage, pimgSeton, key,
+                                         &metainfo)) {
+                try {
+                    if(result)
+                        *result = metainfo;
+                } catch(...) {
+                    if(metainfo)
+                        metainfo->Release();
+                    throw;
+                }
+                if(metainfo)
+                    metainfo->Release();
+                return TJS_S_OK;
+            }
+        }
+        metainfo = _this->LoadImages(name, key);
         try {
             if(result)
                 *result = metainfo;
@@ -10835,6 +11395,96 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         return TJS_S_OK;
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ loadImages)
+    //----------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ loadSubImage) {
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_Layer);
+        if(numparams < 3)
+            return TJS_E_BADPARAMCOUNT;
+
+        ttstr name(*param[0]);
+        tjs_int dx = (tjs_int)*param[1];
+        tjs_int dy = (tjs_int)*param[2];
+        tjs_uint32 key = clNone;
+        if(numparams >= 4 && param[3]->Type() != tvtVoid)
+            key = (tjs_uint32)param[3]->AsInteger();
+
+        tTVPBaseTexture source(1, 1);
+        ttstr provincename;
+        iTJSDispatch2 *metainfo = nullptr;
+        TVPLoadGraphic(&source, name, key, 0, 0, glmNormal, &provincename,
+                       &metainfo);
+
+        std::unique_ptr<tTVPBaseBitmap> province;
+        if(!provincename.IsEmpty()) {
+            province = std::make_unique<tTVPBaseBitmap>(source.GetWidth(),
+                                                        source.GetHeight(), 8);
+            TVPLoadGraphicProvince(province.get(), provincename, 0,
+                                   source.GetWidth(), source.GetHeight());
+        }
+
+        const tjs_int needed_right = dx + static_cast<tjs_int>(source.GetWidth());
+        const tjs_int needed_bottom = dy + static_cast<tjs_int>(source.GetHeight());
+
+        bool allocated_target = false;
+        if(!_this->GetMainImage()) {
+            if(_this->GetWidth() == 0 || _this->GetHeight() == 0) {
+                const tjs_uint target_width = static_cast<tjs_uint>(
+                    std::max<tjs_int>(1, needed_right));
+                const tjs_uint target_height = static_cast<tjs_uint>(
+                    std::max<tjs_int>(1, needed_bottom));
+                _this->SetSize(target_width, target_height);
+            }
+            _this->SetHasImage(true);
+            allocated_target = true;
+        }
+
+        if(needed_right > static_cast<tjs_int>(_this->GetImageWidth()) ||
+           needed_bottom > static_cast<tjs_int>(_this->GetImageHeight())) {
+            const tjs_uint target_width = static_cast<tjs_uint>(
+                std::max<tjs_int>(needed_right,
+                                  static_cast<tjs_int>(_this->GetImageWidth())));
+            const tjs_uint target_height = static_cast<tjs_uint>(
+                std::max<tjs_int>(needed_bottom,
+                                  static_cast<tjs_int>(_this->GetImageHeight())));
+            if(target_width == 0 || target_height == 0)
+                TVPThrowExceptionMessage(TVPInvalidParam);
+            _this->SetImageSize(target_width, target_height);
+        }
+
+        if(allocated_target) {
+            _this->FillRect(tTVPRect(0, 0, _this->GetImageWidth(),
+                                     _this->GetImageHeight()),
+                            _this->GetNeutralColor());
+        }
+
+        tTVPRect source_rect(0, 0, source.GetWidth(), source.GetHeight());
+        _this->CopyRect(dx, dy, &source, province.get(), source_rect);
+
+        if(TVPLayerLoadTraceEnabled() || TVPLayerDebugTake()) {
+            spdlog::info(
+                "Layer.loadSubImage name={} dest=({}, {}) size={}x{} target={}x{} colorkey=0x{:08x}",
+                name.AsStdString(), dx, dy, static_cast<int>(source.GetWidth()),
+                static_cast<int>(source.GetHeight()),
+                static_cast<int>(_this->GetWidth()),
+                static_cast<int>(_this->GetHeight()),
+                static_cast<unsigned int>(key));
+        }
+
+        try {
+            if(result)
+                *result = metainfo;
+        } catch(...) {
+            if(metainfo)
+                metainfo->Release();
+            throw;
+        }
+        if(metainfo)
+            metainfo->Release();
+
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_METHOD_DECL(/*func. name*/ loadSubImage)
     //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ loadProvinceImage) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
@@ -10982,100 +11632,6 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ setSizeToImageSize)
     //----------------------------------------------------------------------
-    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ onButtonClick) {
-        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
-                                /*var. type*/ tTJSNI_Layer);
-
-        const tTJSVariantClosure fallback_obj =
-            _this->GetActionOwnerNoAddRef();
-        tTJSVariantClosure obj =
-            TVPGetButtonClickActionOwner(_this, fallback_obj);
-        TVPTraceLayerInputEvent("onButtonClick", _this, obj);
-        if(TVPLayerInputTraceEnabled() && numparams >= 1) {
-            spdlog::info("LayerIntf onButtonClick args layer={} count={} first={}",
-                         _this->GetName().AsStdString(), numparams,
-                         ttstr(*param[0]).AsStdString());
-            tTJSNI_BaseLayer *source_layer = TVPGetButtonClickSourceLayer();
-            auto layer_name = [](tTJSNI_BaseLayer *layer) {
-                return layer ? layer->GetName().AsStdString()
-                             : std::string("<null>");
-            };
-            spdlog::info("LayerIntf onButtonClick source layer={} event={} mouseup={} recent={}",
-                         layer_name(source_layer),
-                         layer_name(TVPLayerEventSource),
-                         TVPLayerCurrentMouseUp.Active
-                             ? layer_name(TVPLayerCurrentMouseUp.Layer)
-                             : std::string("<inactive>"),
-                         layer_name(TVPLayerRecentEventSource));
-            if(source_layer) {
-                tTJSVariantClosure source_action =
-                    source_layer->GetActionOwnerNoAddRef();
-                spdlog::info("LayerIntf onButtonClick source details layer={} size={}x{} owner={} action={}",
-                             source_layer->GetName().AsStdString(),
-                             source_layer->GetWidth(), source_layer->GetHeight(),
-                             source_layer->GetOwnerNoAddRef() ? "yes" : "no",
-                             source_action.Object ? "yes" : "no");
-                if(iTJSDispatch2 *source_owner =
-                       source_layer->GetOwnerNoAddRef()) {
-                    tTJSVariantClosure source_object(source_owner,
-                                                     source_owner);
-                    TVPTraceObjectForButtonClick("button.source",
-                                                 source_object);
-                }
-                TVPTraceObjectForButtonClick("button.sourceActionOwner",
-                                             source_action);
-            }
-            tTJSVariantClosure this_object(objthis, objthis);
-            TVPTraceObjectForButtonClick("button.this", this_object);
-            TVPTraceObjectForButtonClick("button.parentActionOwner",
-                                         fallback_obj);
-            TVPTraceObjectForButtonClick("button.actionOwner", obj);
-        }
-        if(TVPInvokeCafeStellaSaveLoadGridItem(_this, result))
-            return TJS_S_OK;
-        if(TVPInvokeParentHackMessageLayerButtonClick(_this, numparams, param,
-                                                      result))
-            return TJS_S_OK;
-        if(obj.Object) {
-            if(numparams < 1)
-                return TJS_E_BADPARAMCOUNT;
-            tjs_int arg_count = 0;
-            iTJSDispatch2 *event_target =
-                TVPGetButtonClickEventTarget(_this, objthis);
-            iTJSDispatch2 *evobj =
-                TVPCreateEventObject(TJS_W("onButtonClick"), event_target,
-                                     event_target);
-            tTJSVariant evval(evobj, evobj);
-            evobj->Release();
-            {
-                static ttstr member_name(TJS_W("linkNum"));
-                const tTJSVariant link_num = *param[arg_count++];
-                evobj->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP,
-                               member_name.c_str(), member_name.GetHint(),
-                               &link_num, evobj);
-            }
-            if(TVPLayerInputTraceEnabled()) {
-                tTJSVariantClosure event_target_object(event_target, event_target);
-                TVPTraceObjectForButtonClick("button.eventTarget",
-                                             event_target_object);
-                tTJSVariantClosure event_object(evobj, evobj);
-                TVPTraceObjectForButtonClick("button.event", event_object);
-            }
-            tTJSVariant *pevval = &evval;
-            tjs_error hr =
-                obj.FuncCall(0, TVPActionName.c_str(),
-                             TVPActionName.GetHint(), result, 1, &pevval,
-                             nullptr);
-            if(TVPLayerInputTraceEnabled()) {
-                spdlog::info("LayerIntf onButtonClick action returned layer={} hr={}",
-                             _this->GetName().AsStdString(), hr);
-            }
-        }
-
-        return TJS_S_OK;
-    }
-    TJS_END_NATIVE_METHOD_DECL(/*func. name*/ onButtonClick)
-    //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ setImagePos) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
                                 /*var. type*/ tTJSNI_Layer);
@@ -11149,9 +11705,19 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             return TJS_E_BADPARAMCOUNT;
         tjs_int x = *param[0];
         tjs_int y = *param[1];
+        const auto fillColor = static_cast<tjs_uint32>(
+            static_cast<tjs_int64>(*param[4]));
+        const bool transparentFill = (fillColor & 0xff000000u) == 0;
+        if(transparentFill) {
+            AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
+                _this, x, y, (tjs_int)*param[2], (tjs_int)*param[3]);
+        }
         _this->FillRect(
             tTVPRect(x, y, x + (tjs_int)*param[2], y + (tjs_int)*param[3]),
-            static_cast<tjs_uint32>(static_cast<tjs_int64>(*param[4])));
+            fillColor);
+        if(transparentFill) {
+            AetherKiriMotionRestoreCenteredPresentationLayer(_this);
+        }
         return TJS_S_OK;
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ fillRect)
@@ -12351,7 +12917,10 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         if(numparams < 1)
             return TJS_E_BADPARAMCOUNT;
 
-        tTJSNI_BaseLayer *src;
+        tTJSNI_BaseLayer *src = nullptr;
+        if(param[0]->Type() != tvtObject)
+            TVPThrowExceptionMessage(TVPSpecifyLayer);
+
         tTJSVariantClosure clo = param[0]->AsObjectClosureNoAddRef();
         if(clo.Object) {
             if(TJS_FAILED(clo.Object->NativeInstanceSupport(
@@ -12363,6 +12932,8 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             TVPThrowExceptionMessage(TVPSpecifyLayer);
 
         _this->AssignImages(src);
+        AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(_this);
+        AetherKiriMotionRestoreCenteredPresentationLayer(_this);
 
         return TJS_S_OK;
     }
@@ -12482,11 +13053,13 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                                param[arg_count++], evobj);
             }
             tTJSVariant *pevval = &evval;
+            TVPTraceKagState("before onClick action");
             const tjs_error hr =
                 obj.FuncCall(0, TVPActionName.c_str(),
                              TVPActionName.GetHint(), result, 1, &pevval,
                              nullptr);
             TVPTraceLayerActionResult("onClick", _this, hr, result);
+            TVPTraceKagState("after onClick action");
         }
 
         return TJS_S_OK;
@@ -12550,11 +13123,13 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                                param[arg_count++], evobj);
             }
             tTJSVariant *pevval = &evval;
+            TVPTraceKagState("before onMouseDown action");
             const tjs_error hr =
                 obj.FuncCall(0, TVPActionName.c_str(),
                              TVPActionName.GetHint(), result, 1, &pevval,
                              nullptr);
             TVPTraceLayerActionResult("onMouseDown", _this, hr, result);
+            TVPTraceKagState("after onMouseDown action");
         }
 
         return TJS_S_OK;
@@ -12603,11 +13178,13 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                                param[arg_count++], evobj);
             }
             tTJSVariant *pevval = &evval;
+            TVPTraceKagState("before onMouseUp action");
             const tjs_error hr =
                 obj.FuncCall(0, TVPActionName.c_str(),
                              TVPActionName.GetHint(), result, 1, &pevval,
                              nullptr);
             TVPTraceLayerActionResult("onMouseUp", _this, hr, result);
+            TVPTraceKagState("after onMouseUp action");
         }
 
         return TJS_S_OK;
@@ -12829,8 +13406,15 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ onNodeDisabled)
     //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ onKeyDown) {
-        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
-                                /*var. type*/ tTJSNI_Layer);
+        if(!objthis)
+            return TJS_E_NATIVECLASSCRASH;
+
+        tTJSNI_Layer *_this = nullptr;
+        tjs_error native_hr = objthis->NativeInstanceSupport(
+            TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+            (iTJSNativeInstance **)&_this);
+        if(TJS_FAILED(native_hr) || !_this)
+            return TJS_S_OK;
 
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
         if(obj.Object) {
@@ -12990,8 +13574,15 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ onSearchNextFocusable)
     //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ onBeforeFocus) {
-        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
-                                /*var. type*/ tTJSNI_Layer);
+        if(!objthis)
+            return TJS_E_NATIVECLASSCRASH;
+
+        tTJSNI_Layer *_this = nullptr;
+        tjs_error native_hr = objthis->NativeInstanceSupport(
+            TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+            (iTJSNativeInstance **)&_this);
+        if(TJS_FAILED(native_hr) || !_this)
+            return TJS_S_OK;
 
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
         if(obj.Object) {
@@ -13812,24 +14403,6 @@ TJS_BEGIN_NATIVE_PROP_SETTER {
 TJS_END_NATIVE_PROP_SETTER
 }
 TJS_END_NATIVE_PROP_DECL(enabled)
-//----------------------------------------------------------------------
-TJS_BEGIN_NATIVE_PROP_DECL(selProcessLock){ TJS_BEGIN_NATIVE_PROP_GETTER{
-    TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
-                            /*var. type*/ tTJSNI_Layer);
-*result = _this->GetSelProcessLock();
-return TJS_S_OK;
-}
-TJS_END_NATIVE_PROP_GETTER
-
-TJS_BEGIN_NATIVE_PROP_SETTER {
-    TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
-                            /*var. type*/ tTJSNI_Layer);
-    _this->SetSelProcessLock(param->operator bool());
-    return TJS_S_OK;
-}
-TJS_END_NATIVE_PROP_SETTER
-}
-TJS_END_NATIVE_PROP_DECL(selProcessLock)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_PROP_DECL(nodeEnabled){ TJS_BEGIN_NATIVE_PROP_GETTER{
     TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,

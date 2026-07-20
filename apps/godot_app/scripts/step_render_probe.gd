@@ -6,6 +6,7 @@ const STARTUP_FAILED := 3
 const POINTER_DOWN := 1
 const POINTER_MOVE := 2
 const POINTER_UP := 3
+const POINTER_SCROLL := 4
 
 var player
 var rect: TextureRect
@@ -47,6 +48,10 @@ func _initialize() -> void:
     var plugin_load_mode := ProbeConfig.string_value(test_config, "plugin_load_mode", "")
     if plugin_load_mode in ["krkrsdl3", "aether_all"]:
         player.set_engine_option("plugin_load_mode", plugin_load_mode)
+    if test_config.has("engine_options") and test_config["engine_options"] is Dictionary:
+        var engine_options: Dictionary = test_config["engine_options"]
+        for key in engine_options.keys():
+            player.set_engine_option(String(key), String(engine_options[key]))
     var surface_size: Vector2i = ProbeConfig.surface_size(test_config)
     player.set_surface_size(surface_size.x, surface_size.y)
 
@@ -131,19 +136,9 @@ func _save_step(index: int, label: String) -> void:
     ])
 
 func _capture_frame_image() -> Image:
-    var texture := root.get_viewport().get_texture()
-    if texture != null:
-        var viewport_image := texture.get_image()
-        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
-            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
-                return viewport_image
-
-    if rect.texture != null:
-        var rect_image := rect.texture.get_image()
-        if rect_image != null and rect_image.get_width() > 0 and rect_image.get_height() > 0:
-            if int(_image_stats(rect_image).get("visible", 0)) > 0:
-                return rect_image
-
+    # In headless mode the root viewport can be an opaque white dummy target.
+    # Read the engine's final RGBA frame first so visual probes inspect the
+    # actual KiriKiri composition rather than that dummy viewport.
     var frame: Dictionary = player.read_frame_rgba()
     var data: PackedByteArray = frame.get("rgba", PackedByteArray())
     var width := int(frame.get("width", 0))
@@ -152,6 +147,19 @@ func _capture_frame_image() -> Image:
         var frame_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
         if int(_image_stats(frame_image).get("visible", 0)) > 0:
             return frame_image
+
+    if rect.texture != null:
+        var rect_image := rect.texture.get_image()
+        if rect_image != null and rect_image.get_width() > 0 and rect_image.get_height() > 0:
+            if int(_image_stats(rect_image).get("visible", 0)) > 0:
+                return rect_image
+
+    var texture := root.get_viewport().get_texture()
+    if texture != null:
+        var viewport_image := texture.get_image()
+        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
+            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
+                return viewport_image
 
     return Image.create(1, 1, false, Image.FORMAT_RGBA8)
 
@@ -202,6 +210,18 @@ func _run_actions(step: int) -> int:
             _send_window_move(pos)
             if label.is_empty() or label == "move":
                 label = "move_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "drag":
+            var from := _action_point(action, "from", ProbeConfig.click_position(action))
+            var to := _action_point(action, "to", from)
+            if not await _send_window_drag(
+                from,
+                to,
+                max(1, int(action.get("steps", 12))),
+                max(0, int(action.get("per_step_frames", 1)))
+            ):
+                continue
+            if label.is_empty() or label == "drag":
+                label = "drag_%d_%d_to_%d_%d" % [int(from.x), int(from.y), int(to.x), int(to.y)]
         elif kind == "key":
             var key_code := int(action.get("key_code", 13))
             player.send_key_event(true, key_code, int(action.get("modifiers", 0)), int(action.get("unicode", 0)))
@@ -219,16 +239,37 @@ func _run_actions(step: int) -> int:
                     await _advance(per_click_frames)
             if label.is_empty() or label == "repeat_click":
                 label = "repeat_click_%d_%d_%d" % [count, int(pos.x), int(pos.y)]
+        elif kind == "scroll" or kind == "repeat_scroll":
+            var pos := ProbeConfig.click_position(action)
+            var count: int = max(1, int(action.get("count", 1)))
+            var delta_y := float(action.get("delta_y", -1.0))
+            var per_scroll_frames: int = max(0, int(action.get("per_scroll_frames", 1)))
+            for i in range(count):
+                _send_window_scroll(pos, delta_y)
+                if per_scroll_frames > 0:
+                    await _advance(per_scroll_frames)
+            if label.is_empty() or label == "scroll" or label == "repeat_scroll":
+                label = "scroll_%d_%d_%d" % [count, int(pos.x), int(pos.y)]
         elif kind == "click_stream":
             step = await _run_click_stream(step, label, action)
             continue
+        elif kind == "wait_ms":
+            var duration_ms: int = max(0, int(action.get("duration_ms", action.get("milliseconds", 0))))
+            await _advance_for_ms(duration_ms)
+            if label.is_empty() or label == "wait_ms":
+                label = "wait_%dms" % duration_ms
         elif kind == "wait" or kind == "capture":
             pass
         else:
             print("skip unknown action: %s" % kind)
             continue
 
-        await _advance(int(action.get("after_frames", ProbeConfig.int_value(test_config, "after_click_frames", _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)))))
+        var default_after_frames := 0 if kind == "wait_ms" else ProbeConfig.int_value(
+            test_config,
+            "after_click_frames",
+            _env_int("AETHERKIRI_PROBE_AFTER_CLICK_FRAMES", 180)
+        )
+        await _advance(int(action.get("after_frames", default_after_frames)))
         if bool(action.get("capture", true)):
             await _save_step(step, label)
             step += 1
@@ -367,6 +408,29 @@ func _send_window_click(window_pos: Vector2, button: int = 0) -> void:
     player.tick(1.0 / 60.0)
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, button)
 
+func _advance_for_ms(duration_ms: int) -> void:
+    if duration_ms <= 0:
+        return
+
+    # Some games schedule title/audio state from the wall clock rather than
+    # accumulated tick deltas. Keep pumping at roughly 60 Hz without allowing
+    # a fast headless process to simulate thousands of frames during the wait.
+    var deadline_usec := Time.get_ticks_usec() + duration_ms * 1000
+    var previous_tick_usec := Time.get_ticks_usec()
+    var next_tick_usec := previous_tick_usec
+    while Time.get_ticks_usec() < deadline_usec:
+        var now_usec := Time.get_ticks_usec()
+        if now_usec >= next_tick_usec:
+            var delta := clampf(float(now_usec - previous_tick_usec) / 1000000.0, 1.0 / 240.0, 1.0 / 15.0)
+            if player.tick(delta) == 0:
+                var texture: Texture2D = player.update_frame_texture()
+                if texture != null:
+                    rect.texture = texture
+                    rect.queue_redraw()
+            previous_tick_usec = now_usec
+            next_tick_usec = now_usec + 16667
+        await process_frame
+
 func _send_window_move(window_pos: Vector2) -> void:
     var mapped := _map_window_point(window_pos)
     if mapped.x < 0.0 or mapped.y < 0.0:
@@ -374,6 +438,63 @@ func _send_window_move(window_pos: Vector2) -> void:
         return
     player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
+
+func _action_point(action: Dictionary, key: String, fallback: Vector2) -> Vector2:
+    var value: Variant = action.get(key, null)
+    if value is Array and value.size() >= 2:
+        return Vector2(float(value[0]), float(value[1]))
+    if value is Dictionary:
+        return Vector2(float(value.get("x", fallback.x)), float(value.get("y", fallback.y)))
+    return fallback
+
+func _send_window_drag(from: Vector2, to: Vector2, steps: int, per_step_frames: int) -> bool:
+    var mapped_from := _map_window_point(from)
+    var mapped_to := _map_window_point(to)
+    if mapped_from.x < 0.0 or mapped_from.y < 0.0 or mapped_to.x < 0.0 or mapped_to.y < 0.0:
+        print("skip drag outside texture window from=%s to=%s mapped_from=%s mapped_to=%s" % [
+            from,
+            to,
+            mapped_from,
+            mapped_to,
+        ])
+        return false
+
+    player.send_pointer_event(POINTER_MOVE, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_DOWN, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+
+    var previous := mapped_from
+    for index in range(1, steps + 1):
+        var current := mapped_from.lerp(mapped_to, float(index) / float(steps))
+        var delta := current - previous
+        player.send_pointer_event(
+            POINTER_MOVE,
+            0,
+            current.x,
+            current.y,
+            delta.x,
+            delta.y,
+            0,
+            0
+        )
+        player.tick(1.0 / 60.0)
+        previous = current
+        if per_step_frames > 0:
+            await _advance(per_step_frames)
+
+    player.send_pointer_event(POINTER_UP, 0, mapped_to.x, mapped_to.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    return true
+
+func _send_window_scroll(window_pos: Vector2, delta_y: float) -> void:
+    var mapped := _map_window_point(window_pos)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip scroll outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_SCROLL, 0, mapped.x, mapped.y, 0.0, delta_y, 0)
 
 func _map_window_point(pos: Vector2) -> Vector2:
     if rect.texture == null:

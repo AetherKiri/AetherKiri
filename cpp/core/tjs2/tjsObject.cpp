@@ -1699,7 +1699,7 @@ namespace TJS {
                 return TJSCompatStartupNoOpFunction(result, numparams, param,
                                                    objthis);
             }
-            if(CallMissing && TJS::TVPIsMockEnabled()) {
+            if(CallMissing) {
                 // call 'missing' method
                 tTJSVariant value_func;
                 if(CallGetMissing(membername, value_func))
@@ -1779,7 +1779,7 @@ namespace TJS {
 
         tTJSSymbolData *data = Find(membername, hint);
         if(!data) {
-            if(CallMissing && TJS::TVPIsMockEnabled()) {
+            if(CallMissing) {
                 // call 'missing' method
                 tTJSVariant value;
                 if(CallGetMissing(membername, value))
@@ -1872,7 +1872,7 @@ namespace TJS {
         }
 
         tTJSSymbolData *data;
-        if(CallMissing && TJS::TVPIsMockEnabled()) {
+        if(CallMissing) {
             data = Find(membername, hint);
             if(!data) {
                 // call 'missing' method
@@ -1981,7 +1981,7 @@ namespace TJS {
         }
 
         tTJSSymbolData *data;
-        if(CallMissing && TJS::TVPIsMockEnabled()) {
+        if(CallMissing) {
             data = Find((const tjs_char *)(*membername), membername->GetHint());
             if(!data) {
                 // call 'missing' method
@@ -2110,7 +2110,7 @@ namespace TJS {
         tTJSSymbolData *data = Find(membername, hint);
 
         if(!data) {
-            if(CallMissing && TJS::TVPIsMockEnabled()) {
+            if(CallMissing) {
                 // call 'missing' method
                 tTJSVariant value;
                 if(CallGetMissing(membername, value))
@@ -2155,7 +2155,7 @@ namespace TJS {
         tTJSSymbolData *data = Find(membername, hint);
 
         if(!data) {
-            if(CallMissing && TJS::TVPIsMockEnabled()) {
+            if(CallMissing) {
                 // call 'missing' method
                 tTJSVariant value;
                 if(CallGetMissing(membername, value))
@@ -2216,7 +2216,7 @@ namespace TJS {
                     object->Release();
                 return TJS_S_OK;
             }
-            if(CallMissing && TJS::TVPIsMockEnabled()) {
+            if(CallMissing) {
                 // call 'missing' method
                 tTJSVariant value;
                 if(CallGetMissing(membername, value))
@@ -2319,7 +2319,7 @@ namespace TJS {
         tTJSSymbolData *data = Find(membername, hint);
 
         if(!data) {
-            if(CallMissing && TJS::TVPIsMockEnabled()) {
+            if(CallMissing) {
                 // call 'missing' method
                 tTJSVariant value;
                 if(CallGetMissing(membername, value))
@@ -2415,7 +2415,7 @@ namespace TJS {
         tTJSSymbolData *data = Find(membername, hint);
 
         if(!data) {
-            if(CallMissing && TJS::TVPIsMockEnabled()) {
+            if(CallMissing) {
                 // call default operation
                 return inherited::Operation(flag, membername, hint, result,
                                             param, objthis);

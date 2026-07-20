@@ -144,7 +144,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(loopTime, getLoopTime, setLoopTime);
     NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
                  setProcessedMeshVerticesNum);
-    NCB_PROPERTY(playing, getAllplaying, setAllplaying);
+    NCB_PROPERTY(playing, getPlaying, setAllplaying);
     NCB_PROPERTY(queuing, getQueuing, setQueuing);
     NCB_PROPERTY(directEdit, getDirectEdit, setDirectEdit);
     NCB_PROPERTY(selectorEnabled, getSelectorEnabled, setSelectorEnabled);
@@ -179,6 +179,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(stealthMotion, getStealthMotion, setStealthMotion);
     NCB_PROPERTY(tags, getTags, setTags);
     NCB_PROPERTY(project, getProject, setProject);
+    NCB_PROPERTY(targetLayer, getTargetLayer, setTargetLayer);
     NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
     NCB_PROPERTY(meshline, getMeshline, setMeshline);
     NCB_PROPERTY_RO(busy, getBusy);
@@ -188,6 +189,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(initPhysics);
     NCB_METHOD(serialize);
     NCB_METHOD(unserialize);
+    NCB_METHOD_RAW_CALLBACK(setCoord, &Player::setCoordCompatMethod, 0);
     NCB_METHOD(setRotate);
     NCB_METHOD(setMirror);
     NCB_METHOD(setHairScale);
@@ -217,6 +219,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(registerBg);
     NCB_METHOD(registerCaption);
     NCB_METHOD(unloadUnusedTextures);
+    NCB_METHOD_RAW_CALLBACK(clear, &Player::clearCompatMethod, 0);
     NCB_METHOD(alphaOpAdd);
     NCB_METHOD_RAW_CALLBACK(captureCanvas, &Player::captureCanvasCompat, 0);
     NCB_METHOD(findSource);
@@ -289,6 +292,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD_RAW_CALLBACK(progress, &Player::progressCompatMethod, 0);
     NCB_METHOD_RAW_CALLBACK(isPlaying, &Player::isPlayingCompat, 0);
     NCB_METHOD_RAW_CALLBACK(stop, &Player::stopCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(contains, &Player::containsCompatMethod, 0);
     NCB_METHOD(motionList);
     NCB_METHOD(emoteEdit);
 }

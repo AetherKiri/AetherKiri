@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <cctype>
+
 #include "../PSBFile.h"
 #include "PimgType.h"
 
@@ -28,17 +31,39 @@ namespace PSB {
     }
 
 
-    // 忽略大小写的字符串比较辅助函数
-    static bool startsWithIgnoreCase(const std::string &str,
-                                     const std::string &prefix) {
-        if(prefix.size() > str.size())
+    static bool equalsIgnoreCase(const std::string &left,
+                                 const std::string &right) {
+        if(left.size() != right.size()) {
             return false;
+        }
+        return std::equal(left.begin(), left.end(), right.begin(),
+                          [](char a, char b) {
+                              return std::tolower(
+                                         static_cast<unsigned char>(a)) ==
+                                  std::tolower(static_cast<unsigned char>(b));
+                          });
+    }
 
-        return std::equal(
-            prefix.begin(), prefix.end(), str.begin(), [](char a, char b) {
-                return std::tolower(static_cast<unsigned char>(a)) ==
-                    std::tolower(static_cast<unsigned char>(b));
-            });
+    static std::string basenameOfResourceName(const std::string &name) {
+        const size_t slash = name.find_last_of("/\\");
+        return slash == std::string::npos ? name : name.substr(slash + 1);
+    }
+
+    static bool resourceNameMatchesLayerId(const std::string &name,
+                                           int layerId) {
+        const std::string base = basenameOfResourceName(name);
+        const std::string id = fmt::format("{}", layerId);
+        if(equalsIgnoreCase(base, id)) {
+            return true;
+        }
+        if(base.size() <= id.size() ||
+           !equalsIgnoreCase(base.substr(0, id.size()), id)) {
+            return false;
+        }
+
+        // PIMG source entries use numeric layer ids. Match resource keys like
+        // "2245.tlg" for layer 2245, but never let layer 22 match "2245.tlg".
+        return base[id.size()] == '.';
     }
 
     static void findPimgResources(
@@ -62,33 +87,18 @@ namespace PSB {
                         continue;
                     }
 
-                    // 1. 优先查找带点前缀的项
-                    auto findWithDot =
+                    auto findLayerResource =
                         [&](const std::unique_ptr<IResourceMetadata> &item) {
-                            return startsWithIgnoreCase(
-                                item->getName(), fmt::format("{}.", layerId));
+                            return resourceNameMatchesLayerId(
+                                item->getName(), layerId);
                         };
 
-                    // 2. 其次查找无点前缀的项
-                    auto findWithoutDot =
-                        [&](const std::unique_ptr<IResourceMetadata> &item) {
-                            return startsWithIgnoreCase(
-                                item->getName(), fmt::format("{}", layerId));
-                        };
-
-                    // 查找逻辑：优先带点前缀，若无则找无点前缀
                     IResourceMetadata *foundItem = nullptr;
 
-                    auto it =
-                        std::find_if(list.begin(), list.end(), findWithDot);
+                    auto it = std::find_if(list.begin(), list.end(),
+                                           findLayerResource);
                     if(it != list.end()) {
                         foundItem = it->get();
-                    } else {
-                        it = std::find_if(list.begin(), list.end(),
-                                          findWithoutDot);
-                        if(it != list.end()) {
-                            foundItem = it->get();
-                        }
                     }
 
                     // 安全类型转换

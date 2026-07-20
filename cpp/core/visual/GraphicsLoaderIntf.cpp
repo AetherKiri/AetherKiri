@@ -43,6 +43,25 @@
 #include "TVPDecodeArena.h"
 
 namespace {
+thread_local ttstr TVPCurrentGraphicLoadName;
+
+class TVPScopedGraphicLoadName {
+public:
+    explicit TVPScopedGraphicLoadName(const ttstr &name) {
+        Previous = TVPCurrentGraphicLoadName;
+        TVPCurrentGraphicLoadName = name;
+    }
+
+    ~TVPScopedGraphicLoadName() { TVPCurrentGraphicLoadName = Previous; }
+
+    TVPScopedGraphicLoadName(const TVPScopedGraphicLoadName &) = delete;
+    TVPScopedGraphicLoadName &
+    operator=(const TVPScopedGraphicLoadName &) = delete;
+
+private:
+    ttstr Previous;
+};
+
 bool TVPSaveTraceEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_SAVE_TRACE");
@@ -106,9 +125,10 @@ static void TVPLoadGraphicRouter(void *formatdata, void *callbackdata,
         }
 #undef CALL_LOAD_FUNC
     }
-    spdlog::warn("Unsupported image format (header {:02x}{:02x}{:02x}{:02x}), "
+    spdlog::warn("Unsupported image format for '{}' (header {:02x}{:02x}{:02x}{:02x}), "
                  "generating 1x1 transparent fallback",
-                 header[0], header[1], header[2], header[3]);
+                 TVPCurrentGraphicLoadName.AsStdString(), header[0], header[1],
+                 header[2], header[3]);
     sizecallback(callbackdata, 1, 1, gpfRGBA);
     void *buf = scanlinecallback(callbackdata, 0);
     if(buf) memset(buf, 0, 4);
@@ -366,15 +386,44 @@ void TVPLoadImageHeader(const ttstr &storagename, iTJSDispatch2 **dic) {
     if(dic == nullptr)
         return;
 
-    ttstr ext = TVPExtractStorageExt(storagename);
-    if(ext == TJS_W(""))
-        TVPThrowExceptionMessage(TVPUnknownGraphicFormat, storagename);
-    tTVPGraphicHandlerType *handler = TVPGraphicType.Hash.Find(ext);
+    ttstr name = TVPNormalizeStorageName(storagename);
+    ttstr ext = TVPExtractStorageExt(name);
+    tTVPGraphicHandlerType *handler = nullptr;
+    if(ext.IsEmpty())
+        handler = TVPGuessGraphicLoadHandler(name);
+    else
+        handler = TVPGraphicType.Hash.Find(ext);
     if(!handler)
         TVPThrowExceptionMessage(TVPUnknownGraphicFormat, storagename);
 
-    tTVPStreamHolder holder(storagename); // open a storage named "storagename"
+    tTVPStreamHolder holder(name); // open a storage named "storagename"
     handler->Header(holder.Get(), dic);
+}
+//---------------------------------------------------------------------------
+void TVPGetImageSize(const ttstr &storagename, tjs_int &width,
+                     tjs_int &height) {
+    iTJSDispatch2 *dic = nullptr;
+    try {
+        TVPLoadImageHeader(storagename, &dic);
+        if(!dic)
+            TVPThrowExceptionMessage(TVPUnknownGraphicFormat, storagename);
+
+        tTJSVariant value;
+        if(TJS_FAILED(dic->PropGet(TJS_MEMBERMUSTEXIST, TJS_W("width"),
+                                   nullptr, &value, dic)))
+            TVPThrowExceptionMessage(TVPUnknownGraphicFormat, storagename);
+        width = static_cast<tjs_int>(value.AsInteger());
+
+        if(TJS_FAILED(dic->PropGet(TJS_MEMBERMUSTEXIST, TJS_W("height"),
+                                   nullptr, &value, dic)))
+            TVPThrowExceptionMessage(TVPUnknownGraphicFormat, storagename);
+        height = static_cast<tjs_int>(value.AsInteger());
+    } catch(...) {
+        if(dic)
+            dic->Release();
+        throw;
+    }
+    dic->Release();
 }
 //---------------------------------------------------------------------------
 void TVPSaveImage(const ttstr &storagename, const ttstr &mode,
@@ -1765,6 +1814,7 @@ TVPInternalLoadBitmap(const ttstr &_name, tjs_uint32 keyidx, tjs_uint desw,
         keyidx = -1;
     }
 
+    TVPScopedGraphicLoadName scopedLoadName(name);
     handler->Load(handler->FormatData, (void *)&data,
                   TVPLoadGraphic_SizeCallback, TVPLoadGraphic_ScanLineCallback,
                   TVPLoadGraphic_MetaInfoPushCallback, holder.Get(), keyidx,
@@ -1795,6 +1845,7 @@ TVPInternalLoadBitmap(const ttstr &_name, tjs_uint32 keyidx, tjs_uint desw,
 
         try {
             // load image via handler
+            TVPScopedGraphicLoadName scopedMaskLoadName(maskname);
             handler->Load(handler->FormatData, (void *)&data,
                           TVPLoadGraphic_SizeCallback,
                           TVPLoadGraphic_ScanLineCallback, nullptr,
@@ -2179,6 +2230,7 @@ private:
                 data.NeedMetaInfo = true;
                 data.MetaInfo = nullptr;
 
+                TVPScopedGraphicLoadName scopedLoadName(item.main.filename);
                 (item.main.handler->Load)(
                     item.main.handler->FormatData, (void *)&data,
                     TVPLoadGraphic_SizeCallback,
@@ -2200,6 +2252,7 @@ private:
                     data.DesH = 0;
                     data.NeedMetaInfo = false;
 
+                    TVPScopedGraphicLoadName scopedMaskLoadName(item.mask.filename);
                     (item.mask.handler->Load)(
                         item.mask.handler->FormatData, (void *)&data,
                         TVPLoadGraphic_SizeCallback,

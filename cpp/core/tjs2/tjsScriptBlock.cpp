@@ -500,7 +500,11 @@ namespace TJS {
             void ExceptionPrint(const tjs_char *msg) override { Print(msg); }
 
             void Print(const tjs_char *msg) override {
-                _stream->Write(msg, TJS_strlen(msg));
+                // tTJSBinaryStream::Write takes a byte count.  Passing the
+                // number of UTF-16 code units truncated every disassembly
+                // fragment halfway and made exported bytecode scripts
+                // unreadable on platforms where tjs_char is two bytes.
+                _stream->Write(msg, TJS_strlen(msg) * sizeof(tjs_char));
             }
         } output{ stream };
         auto i = InterCodeContextList.begin();

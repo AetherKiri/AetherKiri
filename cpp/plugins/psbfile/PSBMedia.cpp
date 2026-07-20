@@ -292,7 +292,14 @@ namespace PSB {
                     break;
                 }
                 if(src == &rawSrc) {
-                    return nullptr;
+                    const size_t directAlign = inferAlign();
+                    if(directAlign != 0 &&
+                       rawSrc.size() >= pixelCount * directAlign) {
+                        src = &rawSrc;
+                        decodedAlign = directAlign;
+                    } else {
+                        return nullptr;
+                    }
                 }
             }
 
@@ -1082,6 +1089,11 @@ namespace PSB {
 
     PSBMedia::ResourceMap::iterator
     PSBMedia::findBySuffixLocked(const std::string &key) {
+        auto matched = _resources.end();
+        size_t matchCount = 0;
+        std::string firstMatch;
+        std::string secondMatch;
+
         for(auto it = _resources.begin(); it != _resources.end(); ++it) {
             const auto &stored = it->first;
             if(stored.size() < key.size()) {
@@ -1096,8 +1108,23 @@ namespace PSB {
 
             const char boundary = stored[stored.size() - key.size() - 1];
             if(boundary == '/' || boundary == '>') {
-                return it;
+                if(matchCount == 0) {
+                    matched = it;
+                    firstMatch = stored;
+                } else if(matchCount == 1) {
+                    secondMatch = stored;
+                }
+                ++matchCount;
             }
+        }
+
+        if(matchCount == 1) {
+            return matched;
+        }
+        if(matchCount > 1) {
+            LOGGER->debug(
+                "PSB media cache ambiguous suffix-hit rejected: {} -> {}, {}{}",
+                key, firstMatch, secondMatch, matchCount > 2 ? ", ..." : "");
         }
         return _resources.end();
     }
@@ -1320,6 +1347,11 @@ namespace PSB {
         if(!shouldAttemptLoad)
             return false;
 
+        if(IsVerbosePSBDebugEnabled()) {
+            LOGGER->info("PSB lazy-load request: key={} archive={}", key,
+                         archiveKey);
+        }
+
         try {
             ttstr archivePath(archiveKey.c_str());
             PSBFile psb;
@@ -1421,6 +1453,7 @@ namespace PSB {
                 it->second.hasImageInfo = true;
             if(imageMeta) {
                 it->second.imageInfo.debugKey = key;
+                it->second.imageInfo.label = imageMeta->getLabel();
                 it->second.imageInfo.width = imageMeta->getWidth();
                 it->second.imageInfo.height = imageMeta->getHeight();
                 it->second.imageInfo.left = imageMeta->getLeft();
@@ -1444,6 +1477,7 @@ namespace PSB {
             entry.hasImageInfo = imageMeta != nullptr;
             if(imageMeta) {
                 entry.imageInfo.debugKey = key;
+                entry.imageInfo.label = imageMeta->getLabel();
                 entry.imageInfo.width = imageMeta->getWidth();
                 entry.imageInfo.height = imageMeta->getHeight();
                 entry.imageInfo.left = imageMeta->getLeft();
@@ -1524,6 +1558,33 @@ namespace PSB {
         _loadedArchives.clear();
         _knownResourceKeys.clear();
         _missingResourceKeys.clear();
+    }
+
+    bool PSBMedia::ensureArchiveLoaded(const std::string &archiveKey,
+                                        bool reloadIfLoaded) {
+        std::string archive = canonicalizeKey(archiveKey);
+        while(!archive.empty() && archive.back() == '/') {
+            archive.pop_back();
+        }
+        if(archive.empty()) {
+            return false;
+        }
+
+        const std::string archivePrefix = archive + "/";
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            if(!reloadIfLoaded) {
+                for(const auto &[key, entry] : _resources) {
+                    (void)entry;
+                    if(key.rfind(archivePrefix, 0) == 0) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return tryLazyLoadArchive(archivePrefix + "__aetherkiri_probe__",
+                                  reloadIfLoaded);
     }
 
     std::vector<PSBMedia::ImageInfoEntry> PSBMedia::getImagesByPrefix(

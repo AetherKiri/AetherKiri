@@ -5,6 +5,8 @@ add_executable(motionplayer-dll
     main.cpp
     motionplayer-dll.cpp
     registry.cpp
+    kbad-data-pack.cpp
+    textrender-timing.cpp
     text-stream.cpp
     font-compat.cpp
     godot-texture.cpp
@@ -20,6 +22,9 @@ target_link_libraries(motionplayer-dll
         ${_KRKR2PLUGIN_LINK_ITEM}
 )
 
-target_include_directories(motionplayer-dll PRIVATE "${TEST_CONFIG_DIR}")
+target_include_directories(motionplayer-dll PRIVATE
+    "${TEST_CONFIG_DIR}"
+    "${CMAKE_SOURCE_DIR}/cpp/plugins"
+)
 
 catch_discover_tests(motionplayer-dll)

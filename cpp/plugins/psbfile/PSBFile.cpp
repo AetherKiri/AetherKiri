@@ -2,6 +2,10 @@
 
 #include <cstdlib>
 #include <cstring>
+#if defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
+#define AETHERKIRI_HAS_EXECINFO 1
+#include <execinfo.h>
+#endif
 #include <iostream>
 #include <memory>
 #include <zlib.h>
@@ -373,61 +377,28 @@ namespace PSB {
         }
     }
 
-    bool PSBFile::loadPSBFile(const ttstr &filePath) {
-        LOGGER->debug("load psb file: {}", filePath.AsStdString());
+    bool PSBFile::loadPSBData(const void *data, size_t readSize,
+                              const ttstr &sourceName) {
         const bool traceLoad = IsPSBLoadDebugEnabled();
         if(traceLoad) {
             LOGGER->info("PSBFile load begin: path={} seed={}",
-                         filePath.AsStdString(), _seed);
+                         sourceName.AsStdString(), _seed);
         }
         resetState();
-        auto *s = TVPCreateStream(filePath);
-        if(!s) {
-            if(traceLoad) {
-                LOGGER->warn("PSBFile open failed: {}", filePath.AsStdString());
-            }
-            return false;
-        }
-
-        const size_t readSize = s->GetSize();
-        if(readSize < 9) {
+        if(!data || readSize < 9) {
             if(traceLoad) {
                 LOGGER->warn("PSBFile too small: path={} size={}",
-                             filePath.AsStdString(), readSize);
+                             sourceName.AsStdString(), readSize);
             }
-            delete s;
             return false;
         }
 
-        bool fileDataMmap = false;
-        uint8_t *fileData = nullptr;
-#if defined(__APPLE__) || defined(__linux__) || defined(__ANDROID__)
-        if(readSize >= kPSBMmapThreshold) {
-            fileData = (uint8_t *)TVPMmapAlloc(readSize);
-            fileDataMmap = true;
-        }
-#endif
-        if(!fileData)
-            fileData = new uint8_t[readSize];
-        s->Read(fileData, readSize);
-        delete s;
-
+        const auto *fileData = static_cast<const std::uint8_t *>(data);
         if(traceLoad) {
             LOGGER->info("PSBFile raw: path={} size={} first4=0x{:08x}",
-                         filePath.AsStdString(), readSize,
+                         sourceName.AsStdString(), readSize,
                          ReadU32LE(fileData));
         }
-
-        auto freeFileData = [&]() {
-            if(fileDataMmap) {
-#if defined(__APPLE__) || defined(__linux__) || defined(__ANDROID__)
-                TVPMmapFree(fileData);
-#endif
-            } else {
-                delete[] fileData;
-            }
-            fileData = nullptr;
-        };
 
         char sign[4];
         memcpy(sign, fileData, 4);
@@ -440,8 +411,8 @@ namespace PSB {
         if(!isMdf &&
            std::strcmp(sign, PsbSignature) != 0 &&
            std::strcmp(sign, MflSignature) != 0) {
-            LOGGER->warn("Not a PSB/MDF/MFL file: {}", filePath.AsStdString());
-            freeFileData();
+            LOGGER->warn("Not a PSB/MDF/MFL file: {}",
+                         sourceName.AsStdString());
             return false;
         }
 
@@ -461,22 +432,20 @@ namespace PSB {
             int zResult = uncompress(
                 static_cast<Bytef *>(stream.GetInternalBuffer()), &destLen,
                 fileData + 8, static_cast<uLong>(readSize - 8));
-            freeFileData();
 
             if(zResult != Z_OK) {
                 LOGGER->warn("MDF decompression failed: zlib error {} ({})",
-                             zResult, filePath.AsStdString());
+                             zResult, sourceName.AsStdString());
                 return false;
             }
             LOGGER->debug("MDF decompressed: {} -> {} bytes ({})",
-                          readSize, destLen, filePath.AsStdString());
+                          readSize, destLen, sourceName.AsStdString());
         } else {
             memcpy(stream.GetInternalBuffer(), fileData, readSize);
-            freeFileData();
         }
 
         stream.SetPosition(0);
-        LogPSBStage(filePath, "parse header");
+        LogPSBStage(sourceName, "parse header");
         _header = PSB::parsePSBHeader(&stream);
         if(traceLoad) {
             LOGGER->info(
@@ -485,7 +454,7 @@ namespace PSB {
                 "strings={} stringsData={} chunkOffsets={} chunkLengths={} "
                 "chunkData={} entries={} extraOffsets={} extraLengths={} "
                 "extraData={}",
-                filePath.AsStdString(), readSize, psbSize, _seed,
+                sourceName.AsStdString(), readSize, psbSize, _seed,
                 _header.version, _header.encrypt, _header.isEncrypted(),
                 _header.GetHeaderLength(), _header.offsetEncrypt,
                 _header.offsetNames, _header.offsetStrings,
@@ -575,7 +544,7 @@ namespace PSB {
 
         if(std::strcmp(_header.signature, PSB::PsbSignature) != 0) {
             LOGGER->warn("Not a valid PSB file ({}): signature='{}'",
-                filePath.AsStdString(), _header.signature);
+                         sourceName.AsStdString(), _header.signature);
             return false;
         }
 
@@ -591,7 +560,7 @@ namespace PSB {
         }
 
         // Pre Load Strings
-        LogPSBStage(filePath, "load string offsets");
+        LogPSBStage(sourceName, "load string offsets");
         stream.SetPosition(_header.offsetStrings);
         stringOffsets = PSB::PSBArray(
             stream.ReadI8LE() -
@@ -599,11 +568,11 @@ namespace PSB {
             &stream);
         if(traceLoad) {
             LOGGER->info("PSBFile strings: path={} offsets={}",
-                         filePath.AsStdString(), stringOffsets.value.size());
+                         sourceName.AsStdString(), stringOffsets.value.size());
         }
 
         // Load Names
-        LogPSBStage(filePath, "load names");
+        LogPSBStage(sourceName, "load names");
         if(_header.version == 1) {
             // don't believe HeaderLength
             if(_header.offsetEncrypt >= stream.GetSize()) {
@@ -635,13 +604,13 @@ namespace PSB {
             LOGGER->info(
                 "PSBFile names: path={} charset={} namesData={} indexes={} "
                 "names={}",
-                filePath.AsStdString(), charset.value.size(),
+                sourceName.AsStdString(), charset.value.size(),
                 namesData.value.size(), nameIndexes.value.size(),
                 names.size());
         }
 
         // Pre Load Resources (Chunks)
-        LogPSBStage(filePath, "load chunk offsets");
+        LogPSBStage(sourceName, "load chunk offsets");
         stream.SetPosition(_header.offsetChunkOffsets);
         chunkOffsets = PSB::PSBArray(
             stream.ReadI8LE() -
@@ -654,7 +623,7 @@ namespace PSB {
             &stream);
         if(traceLoad) {
             LOGGER->info("PSBFile chunks: path={} offsets={} lengths={}",
-                         filePath.AsStdString(), chunkOffsets.value.size(),
+                         sourceName.AsStdString(), chunkOffsets.value.size(),
                          chunkLengths.value.size());
         }
 
@@ -662,7 +631,7 @@ namespace PSB {
 
         if(_header.version >= 4) {
             // Pre Load Extra Resources (Chunks)
-            LogPSBStage(filePath, "load extra chunk offsets");
+            LogPSBStage(sourceName, "load extra chunk offsets");
             stream.SetPosition(_header.offsetExtraChunkOffsets);
             extraChunkOffsets = PSB::PSBArray(
                 stream.ReadI8LE() -
@@ -676,7 +645,7 @@ namespace PSB {
             extraResources.reserve(extraChunkLengths.value.size());
         }
         // Load Entries
-        LogPSBStage(filePath, "load root entries");
+        LogPSBStage(sourceName, "load root entries");
         stream.SetPosition(_header.offsetEntries);
         auto obj = unpack(&stream);
         if(!obj) {
@@ -685,13 +654,13 @@ namespace PSB {
 
         _root = std::move(obj);
         // Load Resource
-        LogPSBStage(filePath, "load resources");
+        LogPSBStage(sourceName, "load resources");
         for(auto &res : resources) {
             loadResource(*res, &stream);
         }
 
         if(_header.version >= 4) {
-            LogPSBStage(filePath, "load extra resources");
+            LogPSBStage(sourceName, "load extra resources");
             for(auto &res : extraResources) {
                 loadExtraResource(*res, &stream);
             }
@@ -702,10 +671,74 @@ namespace PSB {
             LOGGER->info(
                 "PSBFile load ok: path={} type={} strings={} resources={} "
                 "extraResources={}",
-                filePath.AsStdString(), static_cast<int>(_type),
+                sourceName.AsStdString(), static_cast<int>(_type),
                 strings.size(), resources.size(), extraResources.size());
         }
         return true;
+    }
+
+    bool PSBFile::loadPSBFile(const ttstr &filePath) {
+        LOGGER->debug("load psb file: {}", filePath.AsStdString());
+        const bool traceLoad = IsPSBLoadDebugEnabled();
+#if defined(AETHERKIRI_HAS_EXECINFO)
+        const std::string tracePath = filePath.AsStdString();
+        if(traceLoad && tracePath.size() >= 4 &&
+           tracePath.compare(tracePath.size() - 4, 4, ".pbd") == 0) {
+            void *frames[20]{};
+            const int frameCount = backtrace(frames, 20);
+            char **symbols = backtrace_symbols(frames, frameCount);
+            for(int index = 0; symbols && index < frameCount; ++index)
+                LOGGER->info("PSBFile pbd caller[{}]: {}", index,
+                             symbols[index]);
+            std::free(symbols);
+        }
+#endif
+        resetState();
+        auto *s = TVPCreateStream(filePath);
+        if(!s) {
+            if(traceLoad) {
+                LOGGER->warn("PSBFile open failed: {}", filePath.AsStdString());
+            }
+            return false;
+        }
+
+        const size_t readSize = s->GetSize();
+        if(readSize < 9) {
+            if(traceLoad) {
+                LOGGER->warn("PSBFile too small: path={} size={}",
+                             filePath.AsStdString(), readSize);
+            }
+            delete s;
+            return false;
+        }
+
+        bool fileDataMmap = false;
+        uint8_t *fileData = nullptr;
+#if defined(__APPLE__) || defined(__linux__) || defined(__ANDROID__)
+        if(readSize >= kPSBMmapThreshold) {
+            fileData = (uint8_t *)TVPMmapAlloc(readSize);
+            fileDataMmap = true;
+        }
+#endif
+        if(!fileData)
+            fileData = new uint8_t[readSize];
+        s->Read(fileData, readSize);
+        delete s;
+
+        auto freeFileData = [&]() {
+            if(fileDataMmap) {
+#if defined(__APPLE__) || defined(__linux__) || defined(__ANDROID__)
+                TVPMmapFree(fileData);
+#endif
+            } else {
+                delete[] fileData;
+            }
+            fileData = nullptr;
+        };
+
+        bool result = loadPSBData(fileData, readSize, filePath);
+        freeFileData();
+        return result;
     }
 
     void PSBFile::loadResource(PSBResource &res,

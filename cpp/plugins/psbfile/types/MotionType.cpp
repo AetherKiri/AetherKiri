@@ -457,14 +457,16 @@ namespace PSB {
 
     bool MotionType::isThisType(const PSBFile &psb) {
         const auto objects = psb.getObjects();
-        if(psb.getObjects() == nullptr) {
+        if(objects == nullptr) {
             return false;
         }
 
-        auto fdId = objects->find("id");
-        return fdId != objects->end() &&
-            std::dynamic_pointer_cast<PSBString>(fdId->second)->value ==
-            "motion";
+        const auto fdId = objects->find("id");
+        if(fdId == objects->end()) {
+            return false;
+        }
+        const auto idValue = std::dynamic_pointer_cast<PSBString>(fdId->second);
+        return idValue != nullptr && idValue->value == "motion";
     }
 
     std::vector<std::unique_ptr<IResourceMetadata>>

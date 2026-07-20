@@ -94,6 +94,22 @@ public:
      */
     void Tick(float delta);
 
+    /**
+     * Finish input state that must remain visible while Application::Run()
+     * delivers the current frame's queued events.
+     *
+     * Host integrations that drive Application::Run() themselves (such as
+     * engine_api) must call this immediately afterwards.
+     */
+    void CompleteInputFrame();
+
+    /**
+     * Cancel host pointer capture state without posting synthetic input.
+     * Call this when a game session is opened/destroyed or the host loses
+     * focus, so a button held across that boundary cannot poison later moves.
+     */
+    void ResetPointerState();
+
     /** Whether the loop has been started. */
     bool IsStarted() const { return started_; }
 
@@ -142,5 +158,10 @@ private:
     int32_t last_click_x_ = 0;
     int32_t last_click_y_ = 0;
     bool suppress_next_left_click_ = false;
-    uint16_t pending_mouse_release_vk_ = 0;
+    // Bit positions are the mouse VK values (1=left, 2=right, 4=middle).
+    // A mask preserves simultaneous releases until their queued handlers run.
+    uint8_t pending_mouse_release_mask_ = 0;
+    // Mirrors Win32's GetMouseButtonState(): move/wheel events must retain
+    // the pressed-button flags even when a host omits them from its event.
+    uint32_t active_mouse_shift_flags_ = 0;
 };

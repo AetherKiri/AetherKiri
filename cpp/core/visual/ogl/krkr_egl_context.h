@@ -176,6 +176,10 @@ public:
      */
     void MarkFrameDirty() { frame_dirty_ = true; }
 
+    void MarkFramePresented() { presented_frame_serial_ += 1; }
+
+    uint64_t GetPresentedFrameSerial() const { return presented_frame_serial_; }
+
     /**
      * Check and consume the dirty flag.
      * @return true if the frame was dirty (and flag is now cleared).
@@ -244,6 +248,7 @@ private:
     // UpdateDrawBuffer() was not called, avoiding double-buffer
     // flicker (alternating between current and stale back-buffer).
     bool       frame_dirty_         = false;
+    uint64_t   presented_frame_serial_ = 0;
 };
 
 /**

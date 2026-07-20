@@ -12,6 +12,7 @@
 #include "tjsCommHead.h"
 
 #include "XP3Archive.h"
+#include "XP3ArchiveCxDecoder.h"
 #include "MsgIntf.h"
 #include "DebugIntf.h"
 #include "EventIntf.h"
@@ -20,6 +21,8 @@
 
 #include <zlib.h>
 #include <algorithm>
+#include <map>
+#include <vector>
 
 #include "TVPMmapAlloc.h"
 
@@ -342,11 +345,22 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
                                          0x67 /*'g'*/, 0x6d /*'m'*/ };
     static const tjs_uint8 cn_adlr[] = { 0x61 /*'a'*/, 0x64 /*'d'*/,
                                          0x6c /*'l'*/, 0x72 /*'r'*/ };
+    static const tjs_uint8 cn_hnfn[] = { 0x68 /*'h'*/, 0x6e /*'n'*/,
+                                         0x66 /*'f'*/, 0x6e /*'n'*/ };
 
     TVPAddLog(TVPFormatMessage(
         TVPInfoTryingToReadXp3VirtualFileSystemInformationFrom, ArchiveName));
 
     int segmentcount = 0;
+    // XP3 v3 stores real names in top-level hnfn chunks while File.info
+    // contains an opaque name. Different files can share the same content
+    // hash, and the mappings can span continued index blocks, so retain every
+    // name in archive order instead of overwriting it by hash.
+    struct tXP3FilenameMappings {
+        std::vector<ttstr> Names;
+        size_t Next = 0;
+    };
+    std::map<tjs_uint32, tXP3FilenameMappings> filenameMap;
     try {
         // retrieve archive offset
         if(off < 0)
@@ -414,6 +428,34 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
                 TVPThrowExceptionMessage(TVPReadError);
             }
 
+            // Collect the v3 hash-to-filenames mapping before parsing File
+            // chunks. hnfn chunks are not guaranteed to precede their File
+            // chunks within an index block.
+            tjs_uint ch_hnfn_start = 0;
+            tjs_uint ch_hnfn_size = index_size;
+            for(;;) {
+                if(!FindChunk(indexdata, cn_hnfn, ch_hnfn_start,
+                              ch_hnfn_size))
+                    break;
+                if(ch_hnfn_size >= 6) {
+                    const tjs_uint32 hash =
+                        ReadI32FromMem(indexdata + ch_hnfn_start);
+                    const tjs_int nameLength =
+                        ReadI16FromMem(indexdata + ch_hnfn_start + 4);
+                    const tjs_uint64 requiredSize =
+                        6u + static_cast<tjs_uint64>(nameLength) * 2u;
+                    if(nameLength >= 0 && requiredSize <= ch_hnfn_size) {
+                        filenameMap[hash].Names.push_back(
+                            TVPStringFromBMPUnicode(
+                                reinterpret_cast<const tjs_uint16 *>(
+                                    indexdata + ch_hnfn_start + 6),
+                                nameLength));
+                    }
+                }
+                ch_hnfn_start += ch_hnfn_size;
+                ch_hnfn_size = index_size - ch_hnfn_start;
+            }
+
             // read index information from memory
             tjs_uint ch_file_start = 0;
             tjs_uint ch_file_size = index_size;
@@ -433,6 +475,7 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
                 tArchiveItem item;
                 tjs_uint32 flags =
                     ReadI32FromMem(indexdata + ch_info_start + 0);
+                item.Flags = flags;
                 if(!TVPAllowExtractProtectedStorage &&
                    (flags & TVP_XP3_FILE_PROTECTED))
                     TVPThrowExceptionMessage(
@@ -444,8 +487,6 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
                 ttstr name = TVPStringFromBMPUnicode(
                     (const tjs_uint16 *)(indexdata + ch_info_start + 22), len);
                 item.Name = name;
-                if(normalizeName)
-                    NormalizeInArchiveStorageName(item.Name);
 
                 // find 'segm' sub-chunk
                 // Each of in-archive storages can be splitted into
@@ -498,6 +539,19 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
 
                 // read 'aldr' sub-chunk
                 item.FileHash = ReadI32FromMem(indexdata + ch_adlr_start);
+
+                const auto mappedName = filenameMap.find(item.FileHash);
+                if(mappedName != filenameMap.end() &&
+                   mappedName->second.Next < mappedName->second.Names.size()) {
+                    item.Name =
+                        mappedName->second.Names[mappedName->second.Next++];
+                    // Profiles are selected by the real startup entry's
+                    // content fingerprint, never by a game path or title.
+                    if(item.Name == TJS_W("startup.tjs"))
+                        TVPActivateBuiltinXP3CxDecoder(item.FileHash);
+                }
+                if(normalizeName)
+                    NormalizeInArchiveStorageName(item.Name);
 
                 // push information
                 ItemVector.push_back(item);
@@ -1045,6 +1099,10 @@ tjs_uint tTVPXP3ArchiveStream::Read(void *buffer, tjs_uint read_size) {
                 Owner->GetFileHash(StorageIndex), Owner->GetName(StorageIndex));
             TVPXP3ArchiveExtractionFilter((tTVPXP3ExtractionFilterInfo *)&info,
                                           &FilterContext);
+        } else if(Owner->IsFileProtected(StorageIndex)) {
+            TVPDecodeBuiltinXP3Cx(
+                Owner->GetFileHash(StorageIndex), CurPos,
+                static_cast<tjs_uint8 *>(buffer) + write_size, one_size);
         }
 
         // adjust members

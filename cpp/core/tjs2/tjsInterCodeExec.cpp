@@ -118,6 +118,59 @@ namespace TJS {
         return enabled;
     }
 
+    static char TJSCompatAsciiLower(char ch) {
+        return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch - 'A' + 'a') : ch;
+    }
+
+    static bool TJSCompatContainsAsciiNoCase(const std::string &text,
+                                             const char *pattern) {
+        if(!pattern || !*pattern)
+            return true;
+        const size_t patternLength = std::char_traits<char>::length(pattern);
+        if(patternLength > text.size())
+            return false;
+        for(size_t start = 0; start <= text.size() - patternLength; ++start) {
+            bool matches = true;
+            for(size_t index = 0; index < patternLength; ++index) {
+                if(TJSCompatAsciiLower(text[start + index]) !=
+                   TJSCompatAsciiLower(pattern[index])) {
+                    matches = false;
+                    break;
+                }
+            }
+            if(matches)
+                return true;
+        }
+        return false;
+    }
+
+    static bool TJSCompatKAGEnvLayerTypeIntegerProperty(
+        const tTJSInterCodeContext *ctx, const tTJSVariant &target,
+        const tjs_char *membername, tTJSVariant *result) {
+        if(!ctx || !result || !membername || target.Type() != tvtInteger ||
+           TJS_strcmp(membername, TJS_W("type")))
+            return false;
+
+        const tTVInteger layerType = target.AsInteger();
+        if(layerType < 0 || layerType > 28)
+            return false;
+
+        if(!TJSCompatContainsAsciiNoCase(
+               ctx->GetShortDescriptionWithClassName().AsStdString(),
+               "convLayerType"))
+            return false;
+
+        tTJSScriptBlock *block = ctx->GetBlock();
+        if(!block || !block->GetName())
+            return false;
+        const std::string blockName = ttstr(block->GetName()).AsStdString();
+        if(!TJSCompatContainsAsciiNoCase(blockName, "kagenvimage.tjs"))
+            return false;
+
+        *result = layerType;
+        return true;
+    }
+
     static bool TJSSceneTraceMatches(const std::string &text) {
         if(!TJSSceneTraceEnabled())
             return false;
@@ -125,6 +178,7 @@ namespace TJS {
             "stand",           "Stand",       "StandLayer",
             "StandPSD",        "StandImage",  "StandInformation",
             "KAGEnvImageMapperStand",         "AffineSourceStand",
+            "AffineSource",    "AffineMatrix", "AffineLayer",
             "PSDInfo",         "PSBFile",     ".pbd",
             "getStandM",       "getStandF",   "setFaceVis",
             "setCondVis",      "checkVis"
@@ -1815,13 +1869,16 @@ namespace TJS {
             throw;
         } catch(eTJS &e) {
             if(tryCatch) {
-                const std::string desc =
-                    GetShortDescriptionWithClassName().AsStdString();
-                if(TJSSceneTraceEnabled() && TJSSceneTraceMatches(desc)) {
-                    spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
-                                 desc, e.GetMessage().AsStdString(),
-                                 codesave - CodeArea);
-                    DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
+                if(TJSSceneTraceEnabled()) {
+                    const std::string desc =
+                        GetShortDescriptionWithClassName().AsStdString();
+                    if(TJSSceneTraceMatches(desc)) {
+                        spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
+                                     desc, e.GetMessage().AsStdString(),
+                                     codesave - CodeArea);
+                        DisplayExceptionGeneratedCode(codesave - CodeArea,
+                                                      ra_org);
+                    }
                 }
                 spdlog::get("tjs2")->debug(e.GetMessage().AsStdString());
             } else {
@@ -1830,12 +1887,15 @@ namespace TJS {
             TJS_eTJSScriptError(e.GetMessage(), this, codesave - CodeArea);
         } catch(exception &e) {
             if(tryCatch) {
-                const std::string desc =
-                    GetShortDescriptionWithClassName().AsStdString();
-                if(TJSSceneTraceEnabled() && TJSSceneTraceMatches(desc)) {
-                    spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
-                                 desc, e.what(), codesave - CodeArea);
-                    DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
+                if(TJSSceneTraceEnabled()) {
+                    const std::string desc =
+                        GetShortDescriptionWithClassName().AsStdString();
+                    if(TJSSceneTraceMatches(desc)) {
+                        spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
+                                     desc, e.what(), codesave - CodeArea);
+                        DisplayExceptionGeneratedCode(codesave - CodeArea,
+                                                      ra_org);
+                    }
                 }
                 spdlog::get("tjs2")->debug(e.what());
             } else {
@@ -1844,12 +1904,15 @@ namespace TJS {
             TJS_eTJSScriptError(e.what(), this, codesave - CodeArea);
         } catch(const char *text) {
             if(tryCatch) {
-                const std::string desc =
-                    GetShortDescriptionWithClassName().AsStdString();
-                if(TJSSceneTraceEnabled() && TJSSceneTraceMatches(desc)) {
-                    spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
-                                 desc, text, codesave - CodeArea);
-                    DisplayExceptionGeneratedCode(codesave - CodeArea, ra_org);
+                if(TJSSceneTraceEnabled()) {
+                    const std::string desc =
+                        GetShortDescriptionWithClassName().AsStdString();
+                    if(TJSSceneTraceMatches(desc)) {
+                        spdlog::info("TJSSaveTrace exception desc=\"{}\" msg={} ip={}",
+                                     desc, text, codesave - CodeArea);
+                        DisplayExceptionGeneratedCode(codesave - CodeArea,
+                                                      ra_org);
+                    }
                 }
                 spdlog::get("tjs2")->debug(text);
             } else {
@@ -1948,9 +2011,13 @@ namespace TJS {
             return;
         }
 
-        tTJSVariantClosure clo = ra_code2->AsObjectClosureNoAddRef();
         tTJSVariant *name = TJS_GET_VM_REG_ADDR(DataArea, code[3]);
         tTJSVariant *dest = TJS_GET_VM_REG_ADDR(ra, code[1]);
+        if(TJSCompatKAGEnvLayerTypeIntegerProperty(this, *ra_code2,
+                                                   name->GetString(), dest))
+            return;
+
+        tTJSVariantClosure clo = ra_code2->AsObjectClosureNoAddRef();
         TJSTracePropertyDirectBefore(this, name->AsStringNoAddRef(), ra_code2,
                                      clo);
         tjs_error hr =
@@ -2053,9 +2120,14 @@ namespace TJS {
             return;
         }
 
+        tTJSVariant *ra_code3 = TJS_GET_VM_REG_ADDR(ra, code[3]);
+        if(ra_code3->Type() == tvtVoid) {
+            TJS_GET_VM_REG_ADDR(ra, code[1])->Clear();
+            return;
+        }
+
         tjs_error hr;
         tTJSVariantClosure clo = ra_code2->AsObjectClosureNoAddRef();
-        tTJSVariant *ra_code3 = TJS_GET_VM_REG_ADDR(ra, code[3]);
         if(ra_code3->Type() != tvtInteger) {
             tTJSVariantString *str = ra_code3->AsString();
 
@@ -2416,6 +2488,10 @@ namespace TJS {
                                                   tjs_uint32 flags) const {
         // ra[code[1]] = typeof ra[code[2]][DataArea[ra[code[3]]]];
         tTJSVariantType type = TJS_GET_VM_REG(ra, code[2]).Type();
+        if(type == tvtVoid) {
+            TJS_GET_VM_REG(ra, code[1]) = TJS_W("undefined");
+            return;
+        }
         if(type == tvtString) {
             GetStringProperty(TJS_GET_VM_REG_ADDR(ra, code[1]),
                               TJS_GET_VM_REG_ADDR(ra, code[2]),
@@ -2462,6 +2538,11 @@ namespace TJS {
         // ra[code[1]] = typeof ra[code[2]][ra[code[3]]];
 
         tTJSVariantType type = TJS_GET_VM_REG(ra, code[2]).Type();
+        if(type == tvtVoid ||
+           TJS_GET_VM_REG(ra, code[3]).Type() == tvtVoid) {
+            TJS_GET_VM_REG(ra, code[1]) = TJS_W("undefined");
+            return;
+        }
         if(type == tvtString) {
             GetStringProperty(TJS_GET_VM_REG_ADDR(ra, code[1]),
                               TJS_GET_VM_REG_ADDR(ra, code[2]),

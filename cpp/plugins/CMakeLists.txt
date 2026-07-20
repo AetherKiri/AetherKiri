@@ -5,6 +5,8 @@ add_library(${PROJECT_NAME} STATIC)
 
 target_sources(${PROJECT_NAME} PRIVATE
     scriptsEx.cpp
+    tjsNs0DataPack.cpp
+    kbadDataPack.cpp
     binaryStream.cpp
     base64.cpp
     encode.cpp
@@ -13,6 +15,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     lineParser.cpp
     memfile.cpp
     json/jsonPlugin.cpp
+    tomlPlugin.cpp
     minizip.cpp
     qrcode.cpp
     qrcode/QR_Encode.cpp

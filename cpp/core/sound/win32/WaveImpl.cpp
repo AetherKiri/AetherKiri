@@ -2999,17 +2999,32 @@ void tTJSNI_WaveSoundBuffer::StartPlay() {
         // reset filter chain
         ResetFilterChain();
 
-        // fill sound buffer with some first samples
+        // Reset the level-2 ring without decoding on the caller (TJS) thread.
+        // Even one access unit is normally about 125 ms, which is enough to
+        // make a menu click feel as though navigation is waiting for audio.
+        // The decode thread and the wave-buffer worker will produce and queue
+        // the first unit asynchronously after play() returns.
+        L2BufferReadPos = 0;
+        L2BufferWritePos = 0;
+        {
+            tTJSCriticalSectionHolder remainHolder(L2BufferRemainCS);
+            L2BufferRemain = 0;
+        }
+        L2BufferEnded = false;
+        for(tjs_int i = 0; i < L2BufferUnits; ++i) {
+            L2BufferDecodedSamplesInUnit[i] = 0;
+            L2BufferSegmentQueues[i].Clear();
+        }
+        PlayStopPos = -1;
+        SoundBufferWritePos = 0;
+        SoundBufferPrevReadPos = 0;
+        LastCheckedDecodePos = -1;
+        LastCheckedTick = TVPGetTickCount();
         BufferPlaying = true;
-        FillL2Buffer(true, false);
-        FillBuffer(true, false);
-#ifndef __ANDROID__
-        FillBuffer(false, false);
-        FillBuffer(false, false);
-        FillBuffer(false, false);
-#endif
 
-        // start playing
+        // Mark the host buffer as playing now. SDL emits silence until the
+        // first queued unit arrives; OpenAL restarts the source from
+        // AppendBuffer(), so neither backend needs a synchronous primer.
         if(!Paused) {
             SoundBuffer->Play(/*0, 0, DSBPLAY_LOOPING*/);
             DSBufferPlaying = true;

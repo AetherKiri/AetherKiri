@@ -80,6 +80,10 @@ TJS_EXP_FUNC_DEF(void, TVPExecuteBytecode,
 
 extern void TVPExecuteStartupScript();
 
+extern void TVPArmKagNoTransWaitRepair();
+
+extern void TVPRepairKagNoTransWait();
+
 TJS_EXP_FUNC_DEF(void, TVPCreateMessageMapFile, (const ttstr &filename));
 
 //---------------------------------------------------------------------------

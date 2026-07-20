@@ -9,15 +9,17 @@ namespace PSB {
 
     bool ArchiveType::isThisType(const PSBFile &psb) {
         const auto objects = psb.getObjects();
-        if(psb.getObjects() == nullptr) {
+        if(objects == nullptr) {
             return false;
         }
 
-        auto fdId = objects->find("id");
+        const auto fdId = objects->find("id");
         if(fdId == objects->end())
             return false;
-        std::string id =
-            std::dynamic_pointer_cast<PSBString>(fdId->second)->value;
+        const auto idValue = std::dynamic_pointer_cast<PSBString>(fdId->second);
+        if(!idValue)
+            return false;
+        const std::string &id = idValue->value;
 
         return id == "archive" ||
             (id == "scenario" && objects->find("file_info") != objects->end());

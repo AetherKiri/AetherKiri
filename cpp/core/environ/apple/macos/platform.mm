@@ -5,8 +5,6 @@
 #include <filesystem>
 #include <vector>
 #include <algorithm>
-#include <cstdlib>
-#include <cstring>
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach-o/dyld.h>
 #include <mach/task.h>
@@ -370,12 +368,8 @@ int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
     std::string utf8Caption = caption.AsStdString();
     spdlog::error("TVPShowSimpleMessageBox: {} - {}", utf8Caption, utf8Text);
 
-    const char *suppressAlerts = std::getenv("AETHERKIRI_SUPPRESS_NATIVE_ALERTS");
-    if(suppressAlerts != nullptr && suppressAlerts[0] != '\0' &&
-       std::strcmp(suppressAlerts, "0") != 0 &&
-       std::strcmp(suppressAlerts, "false") != 0 &&
-       std::strcmp(suppressAlerts, "off") != 0 &&
-       std::strcmp(suppressAlerts, "no") != 0) {
+    if(TVPShouldAutoAcknowledgeMessageBox(caption, vecButtons.size())) {
+        spdlog::warn("TVPShowSimpleMessageBox: auto-acknowledged native dialog");
         return 0;
     }
 

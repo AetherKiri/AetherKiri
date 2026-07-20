@@ -121,10 +121,10 @@ const UI_TEXT := {
         "dialog.import_title": "导入游戏",
         "dialog.import_guide_body": "请使用「文件」App 将游戏文件夹复制到本应用的目录：\n\n1. 打开 iPhone / iPad 上的「文件」App\n2. 前往：我的 iPhone / iPad > AetherKiri > Games\n3. 将游戏文件夹复制到 Games 目录\n4. 返回本应用，点击「刷新」检测新游戏\n\n游戏目录：Games/",
         "dialog.ok": "知道了",
-        "dialog.scrape_title": "刮削元数据",
-        "dialog.scrape_body": "已添加「%s」。是否现在进入详情页设置封面、名称和元数据？",
+        "dialog.scrape_title": "完善游戏信息",
+        "dialog.scrape_body": "已添加「%s」。要现在设置封面和显示名称吗？",
         "dialog.later": "稍后",
-        "dialog.open_detail": "打开详情",
+        "dialog.open_detail": "现在设置",
         "dialog.choose_cover": "选择封面图片",
         "dialog.rename": "重命名",
         "dialog.remove_body": "从列表移除「%s」？不会删除磁盘上的游戏文件。",
@@ -235,10 +235,10 @@ const UI_TEXT := {
         "dialog.import_title": "匯入遊戲",
         "dialog.import_guide_body": "請使用「檔案」App 將遊戲資料夾複製到本 App 的目錄：\n\n1. 開啟 iPhone / iPad 上的「檔案」App\n2. 前往：我的 iPhone / iPad > AetherKiri > Games\n3. 將遊戲資料夾複製到 Games 目錄\n4. 返回本 App，點選「重新整理」偵測新遊戲\n\n遊戲目錄：Games/",
         "dialog.ok": "知道了",
-        "dialog.scrape_title": "擷取元資料",
-        "dialog.scrape_body": "已加入「%s」。是否現在進入詳情頁設定封面、名稱和元資料？",
+        "dialog.scrape_title": "完善遊戲資訊",
+        "dialog.scrape_body": "已加入「%s」。要現在設定封面和顯示名稱嗎？",
         "dialog.later": "稍後",
-        "dialog.open_detail": "開啟詳情",
+        "dialog.open_detail": "現在設定",
         "dialog.choose_cover": "選擇封面圖片",
         "dialog.rename": "重新命名",
         "dialog.remove_body": "要從列表移除「%s」嗎？不會刪除磁碟上的遊戲檔案。",
@@ -349,10 +349,10 @@ const UI_TEXT := {
         "dialog.import_title": "Import Game",
         "dialog.import_guide_body": "Use the Files app to copy your game folder into this app's directory:\n\n1. Open the Files app on your iPhone / iPad\n2. Go to: On My iPhone / iPad > AetherKiri > Games\n3. Copy the game folder into Games\n4. Return to this app and tap Refresh to detect new games\n\nGame directory: Games/",
         "dialog.ok": "Got it",
-        "dialog.scrape_title": "Scrape Metadata",
-        "dialog.scrape_body": "Added \"%s\". Open the detail page now to set cover art, name, and metadata?",
+        "dialog.scrape_title": "Finish Game Info",
+        "dialog.scrape_body": "Added \"%s\". Set the cover art and display name now?",
         "dialog.later": "Later",
-        "dialog.open_detail": "Open Detail",
+        "dialog.open_detail": "Set Up Now",
         "dialog.choose_cover": "Choose Cover Image",
         "dialog.rename": "Rename",
         "dialog.remove_body": "Remove \"%s\" from the list? This will not delete game files from disk.",
@@ -463,10 +463,10 @@ const UI_TEXT := {
         "dialog.import_title": "ゲームをインポート",
         "dialog.import_guide_body": "「ファイル」App でゲームフォルダーをこのアプリのディレクトリにコピーしてください：\n\n1. iPhone / iPad で「ファイル」App を開く\n2. 移動先：この iPhone / iPad 内 > AetherKiri > Games\n3. ゲームフォルダーを Games にコピー\n4. アプリに戻り、「更新」をタップして新しいゲームを検出\n\nゲームディレクトリ：Games/",
         "dialog.ok": "了解",
-        "dialog.scrape_title": "メタデータ取得",
-        "dialog.scrape_body": "「%s」を追加しました。詳細ページでカバー、名前、メタデータを設定しますか？",
+        "dialog.scrape_title": "ゲーム情報を設定",
+        "dialog.scrape_body": "「%s」を追加しました。今すぐカバーと表示名を設定しますか？",
         "dialog.later": "あとで",
-        "dialog.open_detail": "詳細を開く",
+        "dialog.open_detail": "今すぐ設定",
         "dialog.choose_cover": "カバー画像を選択",
         "dialog.rename": "名前を変更",
         "dialog.remove_body": "「%s」をリストから削除しますか？ディスク上のゲームファイルは削除されません。",
@@ -577,10 +577,10 @@ const UI_TEXT := {
         "dialog.import_title": "게임 가져오기",
         "dialog.import_guide_body": "파일 앱으로 게임 폴더를 이 앱의 디렉터리에 복사하세요:\n\n1. iPhone / iPad에서 파일 앱을 엽니다\n2. 이동: 나의 iPhone / iPad > AetherKiri > Games\n3. 게임 폴더를 Games에 복사합니다\n4. 앱으로 돌아와 새로고침을 눌러 새 게임을 감지합니다\n\n게임 디렉터리: Games/",
         "dialog.ok": "확인",
-        "dialog.scrape_title": "메타데이터 가져오기",
-        "dialog.scrape_body": "\"%s\"을(를) 추가했습니다. 지금 상세 페이지에서 표지, 이름, 메타데이터를 설정할까요?",
+        "dialog.scrape_title": "게임 정보 설정",
+        "dialog.scrape_body": "\"%s\"을(를) 추가했습니다. 지금 표지와 표시 이름을 설정할까요?",
         "dialog.later": "나중에",
-        "dialog.open_detail": "상세 열기",
+        "dialog.open_detail": "지금 설정",
         "dialog.choose_cover": "표지 이미지 선택",
         "dialog.rename": "이름 변경",
         "dialog.remove_body": "\"%s\"을(를) 목록에서 제거할까요? 디스크의 게임 파일은 삭제되지 않습니다.",
@@ -624,6 +624,8 @@ const POINTER_MOVE := 2
 const POINTER_UP := 3
 const POINTER_SCROLL := 4
 const POINTER_MOD_LEFT := 0x08
+const POINTER_MOD_RIGHT := 0x10
+const POINTER_MOD_MIDDLE := 0x20
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
 const SHELL_SCROLL_DRAG_SPEED := 1.0
@@ -2952,13 +2954,20 @@ func _offer_scrape_after_add(game: Dictionary) -> void:
     box.add_child(body)
     var buttons := HBoxContainer.new()
     buttons.add_theme_constant_override("separation", 12)
+    buttons.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    buttons.alignment = BoxContainer.ALIGNMENT_END
+    buttons.custom_minimum_size = Vector2(0, 62)
     box.add_child(buttons)
     var no := Button.new()
     no.text = _t("dialog.later")
     no.flat = true
+    no.custom_minimum_size = Vector2(112, 62)
+    no.add_theme_font_size_override("font_size", 20)
+    no.add_theme_color_override("font_color", color_text)
     no.pressed.connect(func(): modal_layer.visible = false)
     buttons.add_child(no)
     var yes := _pill_button(_t("dialog.open_detail"))
+    yes.custom_minimum_size = Vector2(148, 62)
     yes.pressed.connect(func():
         modal_layer.visible = false
         _show_detail(game)
@@ -4673,6 +4682,10 @@ func _probe_open_game(config: Dictionary, target_game_path: String, backend_env:
     _apply_backend(false)
     var fps_limit := ProbeConfig.int_value(config, "fps_limit", _runtime_int("AETHERKIRI_PROBE_FPS_LIMIT", 0))
     player.set_engine_option("fps_limit", str(maxi(0, fps_limit)))
+    if config.has("engine_options") and config["engine_options"] is Dictionary:
+        var engine_options: Dictionary = config["engine_options"]
+        for key in engine_options.keys():
+            player.set_engine_option(String(key), String(engine_options[key]))
     var surface_size := ProbeConfig.surface_size(config)
     _write_probe_marker("probe_open_game surface=%dx%d fps_limit=%d" % [surface_size.x, surface_size.y, fps_limit])
     var surface_result: int = int(player.set_surface_size(surface_size.x, surface_size.y))
@@ -4880,6 +4893,19 @@ func _probe_run_actions(config: Dictionary, step: int) -> int:
             _probe_send_mapped_move(pos, config)
             if label.is_empty() or label == "move":
                 label = "move_%d_%d" % [int(pos.x), int(pos.y)]
+        elif kind == "drag":
+            var from := _probe_action_point(action, "from", ProbeConfig.click_position(action))
+            var to := _probe_action_point(action, "to", from)
+            if not await _probe_send_mapped_drag(
+                from,
+                to,
+                config,
+                max(1, int(action.get("steps", 12))),
+                max(0, int(action.get("per_step_frames", 1)))
+            ):
+                continue
+            if label.is_empty() or label == "drag":
+                label = "drag_%d_%d_to_%d_%d" % [int(from.x), int(from.y), int(to.x), int(to.y)]
         elif kind == "key":
             var key_code := int(action.get("key_code", 13))
             player.send_key_event(true, key_code, int(action.get("modifiers", 0)), int(action.get("unicode", 0)))
@@ -4887,6 +4913,17 @@ func _probe_run_actions(config: Dictionary, step: int) -> int:
             player.send_key_event(false, key_code, int(action.get("modifiers", 0)), 0)
             if label.is_empty() or label == "key":
                 label = "key_%d" % key_code
+        elif kind == "scroll" or kind == "repeat_scroll":
+            var pos := ProbeConfig.click_position(action)
+            var count: int = max(1, int(action.get("count", 1)))
+            var delta_y := float(action.get("delta_y", -1.0))
+            var per_scroll_frames: int = max(0, int(action.get("per_scroll_frames", 1)))
+            for i in range(count):
+                _probe_send_mapped_scroll(pos, config, delta_y)
+                if per_scroll_frames > 0 and not await _probe_advance(per_scroll_frames):
+                    return -1
+            if label.is_empty() or label == "scroll" or label == "repeat_scroll":
+                label = "scroll_%d_%d_%d" % [count, int(pos.x), int(pos.y)]
         elif kind == "click_stream":
             step = await _probe_run_click_stream(config, step, label, action)
             continue
@@ -5041,6 +5078,71 @@ func _probe_send_mapped_move(window_pos: Vector2, config: Dictionary) -> void:
     player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
 
+func _probe_action_point(action: Dictionary, key: String, fallback: Vector2) -> Vector2:
+    var value: Variant = action.get(key, null)
+    if value is Array and value.size() >= 2:
+        return Vector2(float(value[0]), float(value[1]))
+    if value is Dictionary:
+        return Vector2(float(value.get("x", fallback.x)), float(value.get("y", fallback.y)))
+    return fallback
+
+func _probe_send_mapped_drag(
+    from: Vector2,
+    to: Vector2,
+    config: Dictionary,
+    steps: int,
+    per_step_frames: int
+) -> bool:
+    var mapped_from := _probe_map_window_point(from, config)
+    var mapped_to := _probe_map_window_point(to, config)
+    if mapped_from.x < 0.0 or mapped_from.y < 0.0 or mapped_to.x < 0.0 or mapped_to.y < 0.0:
+        print("skip drag outside texture window from=%s to=%s mapped_from=%s mapped_to=%s" % [
+            from,
+            to,
+            mapped_from,
+            mapped_to,
+        ])
+        return false
+
+    player.send_pointer_event(POINTER_MOVE, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_DOWN, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    _hold_next_present_after_input()
+    player.tick(1.0 / 60.0)
+
+    var previous := mapped_from
+    for index in range(1, steps + 1):
+        var current := mapped_from.lerp(mapped_to, float(index) / float(steps))
+        var delta := current - previous
+        player.send_pointer_event(
+            POINTER_MOVE,
+            0,
+            current.x,
+            current.y,
+            delta.x,
+            delta.y,
+            0,
+            0
+        )
+        player.tick(1.0 / 60.0)
+        previous = current
+        if per_step_frames > 0 and not await _probe_advance(per_step_frames):
+            return false
+
+    player.send_pointer_event(POINTER_UP, 0, mapped_to.x, mapped_to.y, 0.0, 0.0, 0)
+    _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
+    player.tick(1.0 / 60.0)
+    return true
+
+func _probe_send_mapped_scroll(window_pos: Vector2, config: Dictionary, delta_y: float) -> void:
+    var mapped := _probe_map_window_point(window_pos, config)
+    if mapped.x < 0.0 or mapped.y < 0.0:
+        print("skip scroll outside texture window=%s mapped=%s" % [window_pos, mapped])
+        return
+    player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
+    player.tick(1.0 / 60.0)
+    player.send_pointer_event(POINTER_SCROLL, 0, mapped.x, mapped.y, 0.0, delta_y, 0)
+
 func _probe_map_window_point(pos: Vector2, config: Dictionary) -> Vector2:
     var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
     var coord := ProbeConfig.coord_size(config, Vector2i(
@@ -5164,6 +5266,18 @@ func _probe_send_direct_click(pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, pos.x, pos.y, 0.0, 0.0, 0)
 
 func _probe_capture_image() -> Image:
+    # A headless Godot viewport can be an opaque white dummy target. Prefer
+    # the engine's composed RGBA frame so CLI regression captures inspect the
+    # game output instead of accepting that dummy as a valid screenshot.
+    var frame: Dictionary = player.read_frame_rgba()
+    var data: PackedByteArray = frame.get("rgba", PackedByteArray())
+    var width := int(frame.get("width", 0))
+    var height := int(frame.get("height", 0))
+    if width > 0 and height > 0 and data.size() >= width * height * 4:
+        var frame_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
+        if int(_image_stats(frame_image).get("visible", 0)) > 0:
+            return frame_image
+
     var texture := get_viewport().get_texture()
     if texture != null:
         var viewport_image := texture.get_image()
@@ -5177,14 +5291,6 @@ func _probe_capture_image() -> Image:
             if int(_image_stats(viewport_image).get("visible", 0)) > 0:
                 return viewport_image
 
-    var frame: Dictionary = player.read_frame_rgba()
-    var data: PackedByteArray = frame.get("rgba", PackedByteArray())
-    var width := int(frame.get("width", 0))
-    var height := int(frame.get("height", 0))
-    if width > 0 and height > 0 and data.size() >= width * height * 4:
-        var frame_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
-        if int(_image_stats(frame_image).get("visible", 0)) > 0:
-            return frame_image
     return Image.create(1, 1, false, Image.FORMAT_RGBA8)
 
 func _probe_image_diff_score(a: Image, b: Image) -> float:
@@ -6577,11 +6683,19 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         if _is_touch_platform():
             return true
         var motion := event as InputEventMouseMotion
-        var mapped := _map_viewport_point(motion.position)
+        var captured := not active_mouse_buttons.is_empty()
+        var mapped := _map_viewport_point(motion.position, captured)
         if mapped.x < 0.0 or mapped.y < 0.0:
             _trace_input_outside()
             return false
         var rel := _map_viewport_delta(motion.relative)
+        var modifiers := 0
+        if active_mouse_buttons.has(MOUSE_BUTTON_LEFT) or (motion.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+            modifiers |= POINTER_MOD_LEFT
+        if active_mouse_buttons.has(MOUSE_BUTTON_RIGHT) or (motion.button_mask & MOUSE_BUTTON_MASK_RIGHT) != 0:
+            modifiers |= POINTER_MOD_RIGHT
+        if active_mouse_buttons.has(MOUSE_BUTTON_MIDDLE) or (motion.button_mask & MOUSE_BUTTON_MASK_MIDDLE) != 0:
+            modifiers |= POINTER_MOD_MIDDLE
         _send_game_pointer_event(
             POINTER_MOVE,
             0,
@@ -6590,7 +6704,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             rel.x,
             rel.y,
             0,
-            POINTER_MOD_LEFT if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) else 0
+            modifiers
         )
         return true
     elif event is InputEventScreenTouch:

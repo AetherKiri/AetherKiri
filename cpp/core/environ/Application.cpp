@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <assert.h>
@@ -28,6 +29,7 @@
 // #include "MouseCursor.h"
 #include "SystemImpl.h"
 #include "WaveImpl.h"
+#include "WaveMixer.h"
 #include "GraphicsLoadThread.h"
 #include "Platform.h"
 #include "EventIntf.h"
@@ -139,6 +141,24 @@ void TVPCheckMemory() {
         }
     }
 #endif
+}
+
+static bool TVPEnvironmentFlagEnabled(const char *name) {
+    const char *value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' &&
+           std::strcmp(value, "0") != 0 &&
+           std::strcmp(value, "false") != 0 &&
+           std::strcmp(value, "off") != 0 &&
+           std::strcmp(value, "no") != 0;
+}
+
+bool TVPShouldAutoAcknowledgeMessageBox(const ttstr &caption,
+                                        std::size_t buttonCount) {
+    (void)caption;
+    (void)buttonCount;
+    if(TVPEnvironmentFlagEnabled("AETHERKIRI_SUPPRESS_NATIVE_ALERTS"))
+        return true;
+    return false;
 }
 
 int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption) {
@@ -915,20 +935,51 @@ void tTVPApplication::OnActivate() {
     if(!_project_startup)
         return;
 
+    spdlog::info("Host lifecycle activate begin audio_suspended={}",
+                 TVPIsAudioRendererSuspendedForHost() ? 1 : 0);
+
+    if(!TVPResumeAudioRendererForHost()) {
+        TVPAddImportantLog(
+            TJS_W("(warning) Failed to resume the host audio renderer"));
+    } else {
+        // Restore logical streams only after the platform device is ready.
+        // If the first iOS activation races UIApplication/AVAudioSession,
+        // RetryAudioRendererForHost() will finish this on a later frame.
+        TVPResetVolumeToAllSoundBuffer();
+        TVPUnlockSoundMixer();
+    }
+
     //	TVPRestoreFullScreenWindowAtActivation();
-    TVPResetVolumeToAllSoundBuffer();
-    TVPUnlockSoundMixer();
 
     // trigger System.onActivate event
     TVPPostApplicationActivateEvent();
     for(auto &it : m_activeEvents) {
         it.second(it.first, eTVPActiveEvent::onActive);
     }
+    spdlog::info("Host lifecycle activate complete audio_suspended={}",
+                 TVPIsAudioRendererSuspendedForHost() ? 1 : 0);
 }
+
+bool tTVPApplication::RetryAudioRendererForHost() {
+    if(!TVPIsAudioRendererSuspendedForHost())
+        return true;
+    if(!TVPResumeAudioRendererForHost())
+        return false;
+
+    TVPResetVolumeToAllSoundBuffer();
+    TVPUnlockSoundMixer();
+    TVPAddImportantLog(TJS_W("(info) Host audio renderer resumed"));
+    spdlog::info("Host lifecycle audio retry completed");
+    return true;
+}
+
 void tTVPApplication::OnDeactivate() {
     application_activating_ = false;
     if(!_project_startup)
         return;
+
+    spdlog::info("Host lifecycle deactivate begin audio_suspended={}",
+                 TVPIsAudioRendererSuspendedForHost() ? 1 : 0);
 
     //	TVPMinimizeFullScreenWindowAtInactivation();
 
@@ -937,6 +988,11 @@ void tTVPApplication::OnDeactivate() {
 
     // set sound volume
     TVPResetVolumeToAllSoundBuffer();
+    // Stop the platform output device before the wave worker converts its
+    // currently playing streams into the engine's temporary host-pause state.
+    // This gives OpenAL Soft a clean chance to stop RemoteIO before iOS tears
+    // down the shared AVAudioSession.
+    TVPSuspendAudioRendererForHost();
     TVPLockSoundMixer();
 
     // trigger System.onDeactivate event
@@ -944,6 +1000,8 @@ void tTVPApplication::OnDeactivate() {
     for(auto &it : m_activeEvents) {
         it.second(it.first, eTVPActiveEvent::onDeactive);
     }
+    spdlog::info("Host lifecycle deactivate complete audio_suspended={}",
+                 TVPIsAudioRendererSuspendedForHost() ? 1 : 0);
 }
 
 void tTVPApplication::OnExit() {

@@ -374,6 +374,8 @@ public:
 
     void SetMultiLineTagEnabled(bool b) { MultiLineTagEnabled = b; }
     bool GetMultiLineTagEnabled() const { return MultiLineTagEnabled; }
+
+    iTJSDispatch2 *CopyTag(tjs_int numparams, tTJSVariant **param);
 };
 
 extern iTJSDispatch2 *TVPCreateNativeClass_KAGParser();

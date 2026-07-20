@@ -68,6 +68,26 @@ uint32_t g_host_surface_width = 1920;
 uint32_t g_host_surface_height = 1080;
 bool g_host_prefer_gpu_frame = true;
 tTJSNI_Window *g_host_window_owner = nullptr;
+std::vector<tTJSNI_Window *> g_host_window_owners;
+
+void RegisterHostWindow(tTJSNI_Window *owner) {
+    if(owner == nullptr)
+        return;
+    g_host_window_owners.push_back(owner);
+    g_host_window_owner = owner;
+}
+
+void UnregisterHostWindow(tTJSNI_Window *owner) {
+    if(owner == nullptr)
+        return;
+    g_host_window_owners.erase(
+        std::remove(g_host_window_owners.begin(), g_host_window_owners.end(),
+                    owner),
+        g_host_window_owners.end());
+    g_host_window_owner = g_host_window_owners.empty()
+                              ? nullptr
+                              : g_host_window_owners.back();
+}
 
 std::mutex g_host_video_overlay_mutex;
 std::vector<uint8_t> g_host_video_overlay_rgba;
@@ -94,6 +114,7 @@ void ApplyHostTextureFilter(GLenum target) {
     glTexParameteri(target, GL_TEXTURE_MIN_FILTER, filter);
     glTexParameteri(target, GL_TEXTURE_MAG_FILTER, filter);
 }
+#endif
 
 bool HostRenderTraceEnabled() {
     return std::getenv("AETHERKIRI_RENDER_TRACE") != nullptr;
@@ -109,7 +130,6 @@ bool ShouldLogHostRenderTrace() {
     last_log = now;
     return true;
 }
-#endif
 
 struct HostFrameStats {
     size_t sampled = 0;
@@ -596,6 +616,7 @@ public:
     }
 
     ~HostWindowLayer() {
+        DetachOwner();
         delete surface_texture_;
         surface_texture_ = nullptr;
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
@@ -618,23 +639,14 @@ public:
     // -- Pure virtual implementations --
 
     void SetPaintBoxSize(tjs_int w, tjs_int h) override {
-        // Only set WindowSize here — DestRect is exclusively managed by
-        // UpdateDrawBuffer() which knows the correct letterbox viewport.
-        // Setting DestRect here would overwrite the viewport offset and
-        // cause mouse Y-axis misalignment.
-        if (!owner_) return;
-        auto* dd = owner_->GetDrawDevice();
-        if (!dd) return;
-
-        tjs_int surf_w = 0;
-        tjs_int surf_h = 0;
-        GetHostSurfaceSize(w, h, surf_w, surf_h);
-        width_ = surf_w;
-        height_ = surf_h;
-
-        dd->SetWindowSize(surf_w, surf_h);
-        spdlog::debug("HostWindowLayer::SetPaintBoxSize: layer={}x{}, surface={}x{}",
-                      w, h, surf_w, surf_h);
+        // Mirrors the Win32 form's paint-box state: this is the source layer
+        // size, not the script-visible client/window size.
+        paint_width_ = w;
+        paint_height_ = h;
+        SyncDrawDeviceWindowSize(w, h);
+        spdlog::debug(
+            "HostWindowLayer::SetPaintBoxSize: layer={}x{}, logical={}x{}",
+            w, h, width_, height_);
     }
 
     bool GetFormEnabled() override { return !closing_; }
@@ -669,7 +681,25 @@ public:
     void BringToFront() override {}
 
     void ShowWindowAsModal() override {
-        spdlog::warn("HostWindowLayer::ShowWindowAsModal: stub");
+        // The engine runs on the host UI thread, so returning immediately
+        // would make Window.showModal() read its default result and destroy
+        // the dialog. Use the platform's nested modal loop instead. This is
+        // also usable on mobile, where the platform implementation keeps its
+        // native run loop alive while waiting for the selected button.
+        const ttstr prompt = TJS_W("Continue with this operation?");
+        const ttstr caption = caption_.empty()
+                                  ? ttstr(TJS_W("Confirmation"))
+                                  : ttstr(caption_.c_str());
+        const bool accepted =
+            TVPShowSimpleMessageBoxYesNo(prompt, caption) == 0;
+
+        if(owner_ != nullptr) {
+            if(iTJSDispatch2 *script_owner = owner_->GetOwnerNoAddRef()) {
+                tTJSVariant value(accepted ? 1 : 0);
+                script_owner->PropSet(TJS_MEMBERENSURE, TJS_W("result"),
+                                      nullptr, &value, script_owner);
+            }
+        }
     }
 
     bool GetVisible() override { return visible_; }
@@ -680,17 +710,20 @@ public:
 
     void SetCaption(const std::string &cap) override { caption_ = cap; }
 
-    void SetWidth(tjs_int) override {
-        width_ = static_cast<tjs_int>(g_host_surface_width);
+    void SetWidth(tjs_int w) override {
+        if (w > 0) width_ = w;
+        SyncDrawDeviceWindowSize(width_, height_);
     }
 
-    void SetHeight(tjs_int) override {
-        height_ = static_cast<tjs_int>(g_host_surface_height);
+    void SetHeight(tjs_int h) override {
+        if (h > 0) height_ = h;
+        SyncDrawDeviceWindowSize(width_, height_);
     }
 
-    void SetSize(tjs_int, tjs_int) override {
-        width_ = static_cast<tjs_int>(g_host_surface_width);
-        height_ = static_cast<tjs_int>(g_host_surface_height);
+    void SetSize(tjs_int w, tjs_int h) override {
+        if (w > 0) width_ = w;
+        if (h > 0) height_ = h;
+        SyncDrawDeviceWindowSize(width_, height_);
     }
 
     void GetSize(tjs_int &w, tjs_int &h) override {
@@ -733,6 +766,12 @@ public:
                 PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
                                            surface_h);
             if (output_tex == nullptr) output_tex = godot_tex;
+            if (HostRenderTraceEnabled() && ShouldLogHostRenderTrace()) {
+                spdlog::info(
+                    "host_render_trace path=godot_gpu_prefer tex={}x{} surface={}x{} output={}x{}",
+                    tw, th, surface_w, surface_h, output_tex->GetWidth(),
+                    output_tex->GetHeight());
+            }
             PublishHostGpuFrame(output_tex->GetGodotGpuHandle(),
                                 static_cast<uint32_t>(output_tex->GetWidth()),
                                 static_cast<uint32_t>(output_tex->GetHeight()));
@@ -798,6 +837,12 @@ public:
                     PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
                                                surface_h);
                 if (output_tex == nullptr) output_tex = godot_tex;
+                if (HostRenderTraceEnabled() && ShouldLogHostRenderTrace()) {
+                    spdlog::info(
+                        "host_render_trace path=godot_gpu tex={}x{} surface={}x{} output={}x{}",
+                        tw, th, surface_w, surface_h, output_tex->GetWidth(),
+                        output_tex->GetHeight());
+                }
                 PublishHostGpuFrame(
                     output_tex->GetGodotGpuHandle(),
                     static_cast<uint32_t>(output_tex->GetWidth()),
@@ -1035,6 +1080,7 @@ public:
 
     void InvalidateClose() override {
         closing_ = true;
+        DetachOwner();
     }
 
     bool GetWindowActive() override { return active_; }
@@ -1042,7 +1088,12 @@ public:
     void Close() override {
         closing_ = true;
         spdlog::debug("HostWindowLayer::Close called");
-        TVPTerminateAsync(0);
+        if(owner_ == TVPMainWindow) {
+            TVPTerminateAsync(0);
+        } else {
+            visible_ = false;
+            DetachOwner();
+        }
     }
 
     void OnCloseQueryCalled(bool b) override {
@@ -1092,6 +1143,24 @@ public:
     TVPOverlayNode *GetPrimaryArea() override { return nullptr; }
 
 private:
+    void DetachOwner() {
+        if(owner_ == nullptr)
+            return;
+        UnregisterHostWindow(owner_);
+        owner_ = nullptr;
+    }
+
+    void SyncDrawDeviceWindowSize(tjs_int fallback_w, tjs_int fallback_h) {
+        if (!owner_) return;
+        auto* dd = owner_->GetDrawDevice();
+        if (!dd) return;
+
+        tjs_int surf_w = 0;
+        tjs_int surf_h = 0;
+        GetHostSurfaceSize(fallback_w, fallback_h, surf_w, surf_h);
+        dd->SetWindowSize(surf_w, surf_h);
+    }
+
     GodotTexture2D *PrepareGodotSurfaceTexture(GodotTexture2D *source,
                                                tjs_uint source_w,
                                                tjs_uint source_h,
@@ -1243,6 +1312,8 @@ private:
     std::string caption_;
     tjs_int width_;
     tjs_int height_;
+    tjs_int paint_width_ = 0;
+    tjs_int paint_height_ = 0;
     bool active_;
     bool closing_;
 
@@ -1279,7 +1350,7 @@ void TVPInitUIExtension() {
 // Creates a HostWindowLayer and registers it with the application.
 // ---------------------------------------------------------------------------
 iWindowLayer *TVPCreateAndAddWindow(tTJSNI_Window *w) {
-    g_host_window_owner = w;
+    RegisterHostWindow(w);
     auto *layer = new HostWindowLayer(w);
     spdlog::info("TVPCreateAndAddWindow: created HostWindowLayer ({}x{})",
                  layer->GetWidth(), layer->GetHeight());

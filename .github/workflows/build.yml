@@ -182,7 +182,7 @@ jobs:
             -keystore "$release_keystore" \
             -storepass "$ANDROID_RELEASE_KEYSTORE_PASSWORD" \
             -alias "$ANDROID_RELEASE_KEYSTORE_ALIAS" >/dev/null
-            
+
           {
             echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$release_keystore"
             echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=$ANDROID_RELEASE_KEYSTORE_ALIAS"

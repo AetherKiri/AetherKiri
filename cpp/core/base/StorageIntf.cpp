@@ -333,6 +333,49 @@ static tTJSBinaryStream *TVPOpenD3DEmoteCompanionScript() {
     }
 }
 
+static bool TVPIsRealStorageNoSearchNoNormalize(const ttstr &name);
+
+static bool TVPGetMotionParameterCompanionInfo(const ttstr &name,
+                                               ttstr *sourceName) {
+    std::string storage = TVPExtractStorageName(name).AsStdString();
+    if(storage.empty()) {
+        storage = name.AsStdString();
+        const auto slash = storage.find_last_of("/\\");
+        if(slash != std::string::npos)
+            storage = storage.substr(slash + 1);
+    }
+
+    std::string lower = storage;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    if(lower.size() <= 11 || lower.rfind("motion_", 0) != 0 ||
+       lower.compare(lower.size() - 4, 4, ".tjs") != 0) {
+        return false;
+    }
+
+    std::string inner = storage.substr(7, storage.size() - 11);
+    std::string innerLower = lower.substr(7, lower.size() - 11);
+    const auto dot = innerLower.rfind('.');
+    if(dot == std::string::npos)
+        return false;
+    const std::string ext = innerLower.substr(dot);
+    if(ext != ".mtn" && ext != ".psb")
+        return false;
+
+    if(sourceName)
+        *sourceName = ttstr(inner.c_str());
+    return true;
+}
+
+static tTJSBinaryStream *TVPOpenMotionParameterCompanionScript() {
+    static const char TVP_EMPTY_MOTION_PARAMETER_SCRIPT[] = "%[]";
+    return new tTVPMemoryStream(
+        TVP_EMPTY_MOTION_PARAMETER_SCRIPT,
+        static_cast<tjs_uint>(sizeof(TVP_EMPTY_MOTION_PARAMETER_SCRIPT) - 1));
+}
+
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
@@ -1280,6 +1323,40 @@ struct tTVPClearAutoPathCacheCallback : public tTVPCompactEventCallbackIntf {
 
 static bool TVPClearAutoPathCacheCallbackInit = false;
 
+static bool TVPGetProjectRelativeAutoPath(const ttstr &path,
+                                          ttstr &relative) {
+    if(TVPProjectDir.IsEmpty() ||
+       TJS_strchr(path.c_str(), TVPArchiveDelimiter))
+        return false;
+
+    ttstr projectRoot = TVPNormalizeStorageName(
+        FixMissingPathDelimiter(TVPProjectDir));
+    if(path.GetLen() <= projectRoot.GetLen() ||
+       !path.StartsWith(projectRoot))
+        return false;
+
+    relative = path.SubString(projectRoot.GetLen(),
+                              path.GetLen() - projectRoot.GetLen());
+    if(relative.IsEmpty() ||
+       TJS_strchr(relative.c_str(), TVPArchiveDelimiter))
+        return false;
+
+    tTVPArchive::NormalizeInArchiveStorageName(relative);
+    return !relative.IsEmpty();
+}
+
+static bool TVPArchiveAutoPathMatches(const ttstr &path,
+                                      const ttstr &relative) {
+    const tjs_char *delimiter =
+        TJS_strchr(path.c_str(), TVPArchiveDelimiter);
+    if(!delimiter)
+        return false;
+
+    ttstr inArchive(delimiter + 1);
+    tTVPArchive::NormalizeInArchiveStorageName(inArchive);
+    return inArchive == relative;
+}
+
 //---------------------------------------------------------------------------
 void TVPAddAutoPath(const ttstr &name) {
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
@@ -1287,17 +1364,38 @@ void TVPAddAutoPath(const ttstr &name) {
     ttstr fixedName = FixMissingPathDelimiter(name);
     ttstr normalized = TVPNormalizeStorageName(fixedName);
 
+    // Sibling XP3 archives are mounted before startup.tjs runs. When a game
+    // later adds a project-relative search path such as system/ or main/,
+    // mirror that ordering onto matching directories inside those archives.
+    // This preserves Kirikiri's last-added-path-wins behavior while keeping
+    // loose project files above their archived counterparts.
+    std::vector<ttstr> archivedPeers;
+    ttstr relative;
+    if(TVPGetProjectRelativeAutoPath(normalized, relative)) {
+        for(auto it = TVPAutoPathList.begin(); it != TVPAutoPathList.end();) {
+            if(TVPArchiveAutoPathMatches(*it, relative)) {
+                archivedPeers.push_back(*it);
+                it = TVPAutoPathList.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     auto i =
         std::find(TVPAutoPathList.begin(), TVPAutoPathList.end(), normalized);
     const bool moved = i != TVPAutoPathList.end();
     if(moved)
         TVPAutoPathList.erase(i);
+    TVPAutoPathList.insert(TVPAutoPathList.end(), archivedPeers.begin(),
+                           archivedPeers.end());
     TVPAutoPathList.push_back(normalized);
 
     if(TVPStorageTraceEnabled() && TVPStorageTraceName(normalized)) {
-        spdlog::info("StorageTrace addAutoPath request={} normalized={} moved={} count={}",
-                     name.AsStdString(), normalized.AsStdString(), moved,
-                     TVPAutoPathList.size());
+        spdlog::info(
+            "StorageTrace addAutoPath request={} normalized={} moved={} archive_peers={} count={}",
+            name.AsStdString(), normalized.AsStdString(), moved,
+            archivedPeers.size(), TVPAutoPathList.size());
     }
 
     TVPClearAutoPathCache();
@@ -1469,6 +1567,35 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         return normalized;
     }
 
+    // Some Yuzusoft scripts probe motion_<asset>.psb.tjs via
+    // Storages.isExistentStorage() before Scripts.evalStorage(). Handle the
+    // virtual companion before consulting the auto path cache, otherwise the
+    // first failed physical lookup can poison the cache with a miss.
+    ttstr motionSourceName;
+    if(TVPGetMotionParameterCompanionInfo(name, &motionSourceName)) {
+        bool motionSourceExists = false;
+        ttstr sourceInSamePath = TVPExtractStoragePath(normalized) +
+            motionSourceName;
+        if(!sourceInSamePath.IsEmpty() &&
+           TVPIsRealStorageNoSearchNoNormalize(sourceInSamePath)) {
+            motionSourceExists = true;
+        } else {
+            TVPRebuildAutoPathTable();
+            motionSourceExists = TVPAutoPathTable.Find(motionSourceName) !=
+                nullptr;
+        }
+        if(motionSourceExists) {
+            TVPAutoPathCache.Add(name, normalized);
+            if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+                spdlog::info(
+                    "StorageTrace virtual motion-parameter request={} source={} normalized={}",
+                    name.AsStdString(), motionSourceName.AsStdString(),
+                    normalized.AsStdString());
+            }
+            return normalized;
+        }
+    }
+
     ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
     if(incache) {
         if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
@@ -1517,6 +1644,30 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
        TVPIsLogWindowCompanionScript(name) ||
        TVPIsGfxEffectCompanionScript(name) || TVPIsGpuCompanionScript(name))
         return normalized;
+
+    motionSourceName.Clear();
+    if(TVPGetMotionParameterCompanionInfo(name, &motionSourceName)) {
+        bool motionSourceExists = false;
+        ttstr sourceInSamePath = TVPExtractStoragePath(normalized) +
+            motionSourceName;
+        if(!sourceInSamePath.IsEmpty() &&
+           TVPIsRealStorageNoSearchNoNormalize(sourceInSamePath)) {
+            motionSourceExists = true;
+        } else {
+            motionSourceExists = TVPAutoPathTable.Find(motionSourceName) !=
+                nullptr;
+        }
+        if(motionSourceExists) {
+            TVPAutoPathCache.Add(name, normalized);
+            if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+                spdlog::info(
+                    "StorageTrace virtual motion-parameter request={} source={} normalized={}",
+                    name.AsStdString(), motionSourceName.AsStdString(),
+                    normalized.AsStdString());
+            }
+            return normalized;
+        }
+    }
 
     // not found
     TVPAutoPathCache.Add(name, TVP_AUTOPATH_CACHE_MISS_MARKER);
@@ -1631,6 +1782,15 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
                          name.AsStdString());
         }
         return new tTVPMemoryStream();
+    }
+    if(access == TJS_BS_READ &&
+       TVPGetMotionParameterCompanionInfo(name, nullptr) &&
+       !TVPIsRealStorageNoSearchNoNormalize(name)) {
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info("StorageTrace open virtual motion-parameter: {}",
+                         name.AsStdString());
+        }
+        return TVPOpenMotionParameterCompanionScript();
     }
 
     // does name contain > ?

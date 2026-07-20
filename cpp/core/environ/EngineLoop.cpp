@@ -22,6 +22,7 @@
 #include "Platform.h"
 #include "SysInitIntf.h"
 #include "RenderManager.h"
+#include "ScriptMgnIntf.h"
 #include "TickCount.h"
 #ifdef __APPLE__
 #include <malloc/malloc.h>
@@ -143,15 +144,39 @@ void EngineLoop::Tick(float delta) {
     if (!started_)
         return;
     ::Application->Run();
-    if (pending_mouse_release_vk_ != 0 &&
-        pending_mouse_release_vk_ < sizeof(s_scancode) / sizeof(s_scancode[0])) {
-        s_scancode[pending_mouse_release_vk_] &= ~1;
-        pending_mouse_release_vk_ = 0;
-    }
+    CompleteInputFrame();
+    TVPRepairKagNoTransWait();
     TVPDeliverContinuousEvent();
     iTVPTexture2D::RecycleProcess();
     if (s_postUpdate)
         s_postUpdate();
+}
+
+void EngineLoop::CompleteInputFrame() {
+    // Mouse-up and click are queued together.  Keep System.getKeyState(...,
+    // true) pressed while Application::Run() invokes those handlers, then
+    // release it before the next host input frame.  engine_api drives
+    // Application::Run() directly, so this cannot live only in Tick().
+    constexpr uint16_t mouse_vks[] = {0x01, 0x02, 0x04};
+    for (const uint16_t vk : mouse_vks) {
+        if ((pending_mouse_release_mask_ & (1u << vk)) != 0)
+            s_scancode[vk] &= ~1;
+    }
+    pending_mouse_release_mask_ = 0;
+}
+
+void EngineLoop::ResetPointerState() {
+    active_mouse_shift_flags_ = 0;
+    pending_mouse_release_mask_ = 0;
+    suppress_next_left_click_ = false;
+    last_mouse_down_x_ = 0;
+    last_mouse_down_y_ = 0;
+    last_click_time_ms_ = 0;
+    last_click_x_ = 0;
+    last_click_y_ = 0;
+    constexpr uint16_t mouse_vks[] = {0x01, 0x02, 0x04};
+    for (const uint16_t vk : mouse_vks)
+        s_scancode[vk] = 0;
 }
 
 bool EngineLoop::StartupFrom(const std::string& path) {
@@ -269,18 +294,19 @@ void EngineLoop::HandlePointerDown(const EngineInputEvent& event) {
     }
     if (vk < sizeof(s_scancode) / sizeof(s_scancode[0])) {
         s_scancode[vk] = 0x11; // pressed + was-pressed
-        if (pending_mouse_release_vk_ == vk)
-            pending_mouse_release_vk_ = 0;
+        pending_mouse_release_mask_ &= ~(1u << vk);
     }
 
     // Combine mouse button state into shift flags
-    uint32_t flags = shift;
+    uint32_t button_flag = 0;
     switch (mb) {
-        case mbLeft:   flags |= TVP_SS_LEFT;   break;
-        case mbRight:  flags |= TVP_SS_RIGHT;  break;
-        case mbMiddle: flags |= TVP_SS_MIDDLE; break;
+        case mbLeft:   button_flag = TVP_SS_LEFT;   break;
+        case mbRight:  button_flag = TVP_SS_RIGHT;  break;
+        case mbMiddle: button_flag = TVP_SS_MIDDLE; break;
         default: break;
     }
+    active_mouse_shift_flags_ |= button_flag;
+    const uint32_t flags = shift | active_mouse_shift_flags_;
 
     last_mouse_down_x_ = x;
     last_mouse_down_y_ = y;
@@ -316,7 +342,8 @@ void EngineLoop::HandlePointerMove(const EngineInputEvent& event) {
 
     const tjs_int x = static_cast<tjs_int>(event.x);
     const tjs_int y = static_cast<tjs_int>(event.y);
-    const uint32_t shift = ConvertModifiers(event.modifiers);
+    const uint32_t shift =
+        ConvertModifiers(event.modifiers) | active_mouse_shift_flags_;
 
     // Update cached cursor position for Layer.cursorX/cursorY queries
     if (win->GetForm())
@@ -336,7 +363,7 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
 
     const tjs_int x = static_cast<tjs_int>(event.x);
     const tjs_int y = static_cast<tjs_int>(event.y);
-    const uint32_t shift = ConvertModifiers(event.modifiers);
+    uint32_t button_flag = 0;
 
     // Update cached cursor position for Layer.cursorX/cursorY queries
     if (win->GetForm())
@@ -348,8 +375,19 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
     else if (event.button == 2)
         mb = mbMiddle;
 
-    // Defer scancode release until the next Tick has delivered queued up/click
-    // events. Some KAG widgets query the async mouse state in click handlers.
+    switch (mb) {
+        case mbLeft:   button_flag = TVP_SS_LEFT;   break;
+        case mbRight:  button_flag = TVP_SS_RIGHT;  break;
+        case mbMiddle: button_flag = TVP_SS_MIDDLE; break;
+        default: break;
+    }
+    active_mouse_shift_flags_ &= ~button_flag;
+    const uint32_t shift =
+        (ConvertModifiers(event.modifiers) & ~button_flag) |
+        active_mouse_shift_flags_;
+
+    // Defer scancode release until Application::Run has delivered the queued
+    // up/click events. Some KAG widgets query async mouse state in handlers.
     uint16_t vk = 0;
     switch (mb) {
         case mbLeft:   vk = 0x01; break;
@@ -358,10 +396,8 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
         default: break;
     }
 
-    // Match the original Kirikiri/Windows path: WM_LBUTTONUP posts the click
-    // at the mouse-down coordinates before mouse-up releases capture. Some
-    // Yuzu gallery/page buttons use the captured button state to distinguish
-    // selection from confirmation.
+    // Match the existing AetherKiri path: click uses the mouse-down
+    // coordinates before mouse-up releases transient button layers.
     if (mb == mbLeft) {
         if (suppress_next_left_click_) {
             suppress_next_left_click_ = false;
@@ -388,7 +424,8 @@ void EngineLoop::HandlePointerUp(const EngineInputEvent& event) {
     TVPPostInputEvent(
         new tTVPOnMouseUpInputEvent(win, x, y, mb, shift));
 
-    pending_mouse_release_vk_ = vk;
+    if (vk != 0)
+        pending_mouse_release_mask_ |= (1u << vk);
 }
 
 void EngineLoop::HandlePointerScroll(const EngineInputEvent& event) {
@@ -397,7 +434,8 @@ void EngineLoop::HandlePointerScroll(const EngineInputEvent& event) {
 
     const tjs_int x = static_cast<tjs_int>(event.x);
     const tjs_int y = static_cast<tjs_int>(event.y);
-    const uint32_t shift = ConvertModifiers(event.modifiers);
+    const uint32_t shift =
+        ConvertModifiers(event.modifiers) | active_mouse_shift_flags_;
 
     // delta_y > 0 = scroll up, delta_y < 0 = scroll down
     // TVP expects wheel delta in units (positive = up)

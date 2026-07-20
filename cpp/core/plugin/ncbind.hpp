@@ -1893,7 +1893,7 @@ struct ncbRegistNativeClass : public ncbRegistNativeClassBase {
 			// Wrapping is now done in tTJSNativeClass::RegisterNCM so that
 			// ALL registrations (including external plugins) are intercepted.
 			TJSNativeClassRegisterNCM(_classobj, name, dsp, _className, item->GetType(), item->GetFlags());
-			if (!TJS_strcmp(name, TJS_W("missing")) && TJS::TVPIsMockEnabled()) {
+			if (!TJS_strcmp(name, TJS_W("missing"))) {
 				tTJSVariant missingVar(TJS_W("missing"));
 				_classobj->ClassInstanceInfo(TJS_CII_SET_MISSING, 0, &missingVar);
 			}
@@ -2159,6 +2159,9 @@ struct ncbAutoRegister {
 	static bool LoadModule(const ttstr &_name);
 	static bool UnloadModule(const ttstr &_name);
 	static bool HasModule(const ttstr &_name);
+	// Register an alternate filename for one canonical in-process module.
+	// Aliases share registration state, avoiding duplicate class registration.
+	static void RegisterModuleAlias(NameT alias, NameT canonical);
 	static void LoadAllModules();
 protected:
 	virtual void Regist()   const = 0;
@@ -2173,6 +2176,17 @@ private:
 
 	static std::map<ttstr, INTERNAL_PLUGIN_LISTS > _internal_plugins;
 };
+
+struct ncbModuleAliasAutoRegister {
+	ncbModuleAliasAutoRegister(ncbAutoRegister::NameT alias,
+	                           ncbAutoRegister::NameT canonical) {
+		ncbAutoRegister::RegisterModuleAlias(alias, canonical);
+	}
+};
+
+#define NCB_REGISTER_MODULE_ALIAS(alias, canonical, tag)                       \
+	static ncbModuleAliasAutoRegister ncbModuleAliasAutoRegister_ ## tag(       \
+		alias, canonical)
 
 ////////////////////////////////////////
 template <class T>

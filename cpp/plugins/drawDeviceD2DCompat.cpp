@@ -1,4 +1,4 @@
-#define NCB_MODULE_NAME TJS_W("DrawDeviceD2Dm.dll")
+#define NCB_MODULE_NAME TJS_W("DrawDeviceD2D.dll")
 
 #include "ncbind.hpp"
 #include "tjs.h"
@@ -6,6 +6,12 @@
 #include "visual/WindowIntf.h"
 #include <algorithm>
 #include <vector>
+
+// Some titles ship the original DrawDeviceD2D.dll while others request the
+// extended DrawDeviceD2Dm.dll name.  They are one compatibility implementation
+// here, so both filenames must resolve to the same registrar/state.
+NCB_REGISTER_MODULE_ALIAS(TJS_W("DrawDeviceD2Dm.dll"), NCB_MODULE_NAME,
+                          DrawDeviceD2DMCompat);
 
 namespace {
 
@@ -368,6 +374,12 @@ public:
         SyncViewStateRect();
         ApplyViewport();
         RequestFullInvalidation();
+    }
+
+    void present() {
+        blanked_ = false;
+        if(real_)
+            real_->Show();
     }
 
     tjs_int captureBaseDrawDevice(const tTJSVariant &value) {
@@ -951,5 +963,6 @@ NCB_REGISTER_CLASS(DrawDeviceD2D) {
     Method(TJS_W("recreate"), &Class::recreate);
     Method(TJS_W("blank"), &Class::blank);
     Method(TJS_W("relocate"), &Class::relocate);
+    Method(TJS_W("present"), &Class::present);
     NCB_SUBCLASS(ViewState, D2DView);
 }

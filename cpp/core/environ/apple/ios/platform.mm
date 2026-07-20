@@ -20,6 +20,7 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <AVFAudio/AVFAudio.h>
 
 #include <spdlog/spdlog.h>
 
@@ -28,6 +29,47 @@
 #include "Platform.h"
 #include "SysInitImpl.h"
 #include "tjsString.h"
+
+bool TVPActivateAudioSessionForHost() {
+    @autoreleasepool {
+        // Godot can report APPLICATION_RESUMED while UIKit is still moving the
+        // scene through foreground-inactive. Activating AVAudioSession at that
+        // point may return success but leave the AudioQueue silent, so keep the
+        // renderer suspended until the application is fully active.
+        UIApplicationState state = UIApplication.sharedApplication.applicationState;
+        if(state != UIApplicationStateActive) {
+            spdlog::debug(
+                "Deferring host audio activation while UIApplication state is {}",
+                static_cast<long>(state));
+            return false;
+        }
+
+        AVAudioSession *session = AVAudioSession.sharedInstance;
+        NSString *category = session.category ?: @"";
+        NSString *mode = session.mode ?: @"";
+        AVAudioSessionRouteDescription *route = session.currentRoute;
+        NSMutableArray<NSString *> *outputs = [NSMutableArray array];
+        for(AVAudioSessionPortDescription *port in route.outputs) {
+            [outputs addObject:port.portType ?: @""];
+        }
+        spdlog::info(
+            "iOS audio session activate begin app_state={} category={} mode={} "
+            "sample_rate={} output_volume={} outputs={}",
+            static_cast<long>(state), category.UTF8String ?: "",
+            mode.UTF8String ?: "", session.sampleRate, session.outputVolume,
+            [outputs componentsJoinedByString:@","].UTF8String ?: "");
+        NSError *error = nil;
+        if(![session setActive:YES error:&error]) {
+            const char *description = error.localizedDescription.UTF8String;
+            spdlog::warn("Failed to activate iOS audio session: {}",
+                         description ? description : "unknown error");
+            return false;
+        }
+
+        spdlog::info("iOS audio session activated after host resume");
+        return true;
+    }
+}
 
 // ---- File operations (POSIX compatible, reused from macOS) ----
 
@@ -205,114 +247,137 @@ tjs_int TVPGetSystemFreeMemory() {
 
 // ---- UI dialogs (UIKit) ----
 
-// Helper: find the topmost view controller for presenting alerts.
+static UIWindowScene *TVPFindForegroundWindowScene() {
+    UIWindowScene *inactiveScene = nil;
+    for(UIScene *candidate in UIApplication.sharedApplication.connectedScenes) {
+        if(![candidate isKindOfClass:UIWindowScene.class])
+            continue;
+        UIWindowScene *scene = (UIWindowScene *)candidate;
+        if(scene.activationState == UISceneActivationStateForegroundActive)
+            return scene;
+        if(!inactiveScene &&
+           scene.activationState == UISceneActivationStateForegroundInactive)
+            inactiveScene = scene;
+    }
+    return inactiveScene;
+}
+
+static UIWindow *TVPFindKeyWindow(UIWindowScene *scene) {
+    if(!scene)
+        return nil;
+    UIWindow *fallback = nil;
+    for(UIWindow *window in scene.windows) {
+        if(window.isKeyWindow)
+            return window;
+        if(!fallback && !window.hidden && window.alpha > 0.0)
+            fallback = window;
+    }
+    return fallback;
+}
+
+// Helper: find the topmost view controller for presenting input dialogs.
 static UIViewController *TVPFindTopViewController() {
-    UIWindow *window = nil;
-    for (UIWindowScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if (scene.activationState == UISceneActivationStateForegroundActive) {
-            for (UIWindow *w in scene.windows) {
-                if (w.isKeyWindow) {
-                    window = w;
-                    break;
-                }
-            }
+    UIViewController *controller =
+        TVPFindKeyWindow(TVPFindForegroundWindowScene()).rootViewController;
+    while(controller) {
+        if(controller.presentedViewController) {
+            controller = controller.presentedViewController;
+        } else if([controller isKindOfClass:UINavigationController.class]) {
+            controller =
+                ((UINavigationController *)controller).visibleViewController;
+        } else if([controller isKindOfClass:UITabBarController.class]) {
+            controller =
+                ((UITabBarController *)controller).selectedViewController;
+        } else {
+            break;
         }
-        if (window) break;
     }
-    UIViewController *rootVC = window.rootViewController;
-    while (rootVC.presentedViewController) {
-        rootVC = rootVC.presentedViewController;
-    }
-    return rootVC;
+    return controller;
 }
 
 int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
                             const std::vector<ttstr> &vecButtons) {
-    __block int selectedIndex = -1;
-
     std::string utf8Text = text.AsStdString();
     std::string utf8Caption = caption.AsStdString();
-    // Copy button labels for use in the block
-    std::vector<std::string> utf8Buttons;
-    utf8Buttons.reserve(vecButtons.size());
-    for (const auto &btn : vecButtons) {
-        utf8Buttons.emplace_back(btn.AsStdString());
+    spdlog::error("TVPShowSimpleMessageBox: {} - {}", utf8Caption, utf8Text);
+
+    if(TVPShouldAutoAcknowledgeMessageBox(caption, vecButtons.size())) {
+        spdlog::warn("TVPShowSimpleMessageBox: auto-acknowledged native dialog");
+        return 0;
     }
 
-    // Block that creates and presents the alert.
-    auto showAlert = ^{
-        UIAlertController *alert = [UIAlertController
-            alertControllerWithTitle:[NSString stringWithUTF8String:utf8Caption.c_str()]
-            message:[NSString stringWithUTF8String:utf8Text.c_str()]
-            preferredStyle:UIAlertControllerStyleAlert];
+    std::vector<std::string> utf8Buttons;
+    utf8Buttons.reserve(vecButtons.size());
+    for(const auto &btn : vecButtons)
+        utf8Buttons.emplace_back(btn.AsStdString());
+    if(utf8Buttons.empty())
+        utf8Buttons.emplace_back("OK");
 
-        // When called on the main thread we use a run-loop based wait
-        // instead of a semaphore to avoid deadlocking.
-        __block BOOL dismissed = NO;
+    spdlog::info("TVPShowSimpleMessageBox: presenting {} action(s) on {} thread",
+                 utf8Buttons.size(),
+                 [NSThread isMainThread] ? "main" : "worker");
 
-        for (int i = 0; i < (int)utf8Buttons.size(); i++) {
-            const std::string &label = utf8Buttons[i];
-            [alert addAction:[UIAlertAction
-                actionWithTitle:[NSString stringWithUTF8String:label.c_str()]
-                style:UIAlertActionStyleDefault
-                handler:^(UIAlertAction *action) {
-                    selectedIndex = i;
-                    dismissed = YES;
-                }]];
-        }
+    const int pendingIndex = static_cast<int>(utf8Buttons.size());
+    const int fallbackIndex = pendingIndex > 1 ? pendingIndex - 1 : 0;
+    __block int selectedIndex = pendingIndex;
+    __block bool presentationFailed = false;
+    dispatch_semaphore_t selectionSemaphore = dispatch_semaphore_create(0);
 
-        UIViewController *rootVC = TVPFindTopViewController();
-        if (rootVC) {
-            [rootVC presentViewController:alert animated:YES completion:nil];
-            // Spin the run loop until the user dismisses the alert.
-            // This keeps the UI responsive and avoids the semaphore deadlock.
-            while (!dismissed) {
-                [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                                         beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    void (^showDialog)(void) = ^{
+        @autoreleasepool {
+            UIViewController *presenter = TVPFindTopViewController();
+            if(!presenter) {
+                spdlog::error(
+                    "TVPShowSimpleMessageBox: no active UIKit presenter");
+                presentationFailed = true;
+                dispatch_semaphore_signal(selectionSemaphore);
+                return;
             }
-        } else {
-            // No VC available — just log and return immediately
-            spdlog::warn("TVPShowSimpleMessageBox: no root view controller available, cannot present alert");
-            selectedIndex = 0;
+
+            UIAlertController *alert = [UIAlertController
+                alertControllerWithTitle:
+                    [NSString stringWithUTF8String:utf8Caption.c_str()]
+                message:[NSString stringWithUTF8String:utf8Text.c_str()]
+                preferredStyle:UIAlertControllerStyleAlert];
+            for(int i = 0; i < pendingIndex; ++i) {
+                const auto label = utf8Buttons[static_cast<std::size_t>(i)];
+                [alert addAction:[UIAlertAction
+                    actionWithTitle:
+                        [NSString stringWithUTF8String:label.c_str()]
+                    style:UIAlertActionStyleDefault
+                    handler:^(UIAlertAction *) {
+                        selectedIndex = i;
+                        dispatch_semaphore_signal(selectionSemaphore);
+                    }]];
+            }
+            [presenter presentViewController:alert animated:YES completion:nil];
         }
     };
 
-    if ([NSThread isMainThread]) {
-        // Already on the main thread — present directly to avoid deadlock.
-        showAlert();
+    if([NSThread isMainThread]) {
+        showDialog();
+        // UIKit has no synchronous modal API. Blocking or pumping a nested
+        // run loop here prevents Godot's render callback from returning, so
+        // the alert presentation itself cannot be committed and the game is
+        // left on its white transition frame. Present the native alert, then
+        // use the non-destructive fallback result while UIKit handles the
+        // user's eventual tap asynchronously.
+        spdlog::info(
+            "TVPShowSimpleMessageBox: main-thread dialog is asynchronous; "
+            "returning fallback action {}", fallbackIndex);
+        return fallbackIndex;
     } else {
-        // Off the main thread — dispatch and wait via semaphore.
-        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            // Wrap the alert so the semaphore is signalled after dismissal.
-            __block BOOL dismissed = NO;
-
-            UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:[NSString stringWithUTF8String:utf8Caption.c_str()]
-                message:[NSString stringWithUTF8String:utf8Text.c_str()]
-                preferredStyle:UIAlertControllerStyleAlert];
-
-            for (int i = 0; i < (int)utf8Buttons.size(); i++) {
-                const std::string &label = utf8Buttons[i];
-                [alert addAction:[UIAlertAction
-                    actionWithTitle:[NSString stringWithUTF8String:label.c_str()]
-                    style:UIAlertActionStyleDefault
-                    handler:^(UIAlertAction *action) {
-                        selectedIndex = i;
-                        dispatch_semaphore_signal(sem);
-                    }]];
-            }
-
-            UIViewController *rootVC = TVPFindTopViewController();
-            if (rootVC) {
-                [rootVC presentViewController:alert animated:YES completion:nil];
-            } else {
-                dispatch_semaphore_signal(sem);
-            }
-        });
-        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+        // Startup runs on the engine worker. Present asynchronously on UIKit's
+        // main queue and block only that worker until the native action fires.
+        dispatch_async(dispatch_get_main_queue(), showDialog);
+        dispatch_semaphore_wait(selectionSemaphore, DISPATCH_TIME_FOREVER);
     }
 
+    if(presentationFailed || selectedIndex == pendingIndex)
+        return fallbackIndex;
+
+    spdlog::info(
+        "TVPShowSimpleMessageBox: selected native action {}", selectedIndex);
     return selectedIndex;
 }
 
@@ -328,15 +393,18 @@ extern "C" int TVPShowSimpleMessageBox(const char *pszText, const char *pszTitle
 int TVPShowSimpleInputBox(ttstr &text, const ttstr &caption,
                           const ttstr &prompt,
                           const std::vector<ttstr> &vecButtons) {
-    __block int selectedIndex = -1;
+    const int pendingIndex = static_cast<int>(vecButtons.size());
+    const int fallbackIndex = pendingIndex > 1 ? pendingIndex - 1 : 0;
+    __block int selectedIndex = pendingIndex;
     __block NSString *inputText = nil;
+    __block bool presentationFailed = false;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 
     std::string utf8Caption = caption.AsStdString();
     std::string utf8Prompt = prompt.AsStdString();
     std::string utf8Default = text.AsStdString();
 
-    dispatch_async(dispatch_get_main_queue(), ^{
+    void (^showDialog)(void) = ^{
         UIAlertController *alert = [UIAlertController
             alertControllerWithTitle:[NSString stringWithUTF8String:utf8Caption.c_str()]
             message:[NSString stringWithUTF8String:utf8Prompt.c_str()]
@@ -353,41 +421,36 @@ int TVPShowSimpleInputBox(ttstr &text, const ttstr &caption,
                 style:UIAlertActionStyleDefault
                 handler:^(UIAlertAction *action) {
                     selectedIndex = i;
-                    inputText = alert.textFields.firstObject.text;
+                    inputText = [alert.textFields.firstObject.text copy];
                     dispatch_semaphore_signal(sem);
                 }]];
         }
 
-        UIWindow *window = nil;
-        for (UIWindowScene *scene in UIApplication.sharedApplication.connectedScenes) {
-            if (scene.activationState == UISceneActivationStateForegroundActive) {
-                for (UIWindow *w in scene.windows) {
-                    if (w.isKeyWindow) {
-                        window = w;
-                        break;
-                    }
-                }
-            }
-            if (window) break;
-        }
-
-        UIViewController *rootVC = window.rootViewController;
-        while (rootVC.presentedViewController) {
-            rootVC = rootVC.presentedViewController;
-        }
-
-        if (rootVC) {
-            [rootVC presentViewController:alert animated:YES completion:nil];
+        UIViewController *presenter = TVPFindTopViewController();
+        if (presenter) {
+            [presenter presentViewController:alert animated:YES completion:nil];
         } else {
+            presentationFailed = true;
             dispatch_semaphore_signal(sem);
         }
-    });
+    };
 
-    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    if([NSThread isMainThread]) {
+        showDialog();
+        spdlog::info(
+            "TVPShowSimpleInputBox: main-thread dialog is asynchronous; "
+            "returning fallback action {}", fallbackIndex);
+        return fallbackIndex;
+    } else {
+        dispatch_async(dispatch_get_main_queue(), showDialog);
+        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    }
 
     if (inputText) {
         text = ttstr([inputText UTF8String]);
     }
+    if(presentationFailed || selectedIndex == pendingIndex)
+        return fallbackIndex;
     return selectedIndex;
 }
 

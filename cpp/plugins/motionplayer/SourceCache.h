@@ -70,7 +70,25 @@ namespace motion {
 
         int getType() const { return type; }
         tTJSVariant getP() const { return tTJSVariant(); } // stub
-        bool contains(double, double) { return false; } // stub
+        bool contains(double px, double py) {
+            bool positive = false;
+            bool negative = false;
+            for(int index = 0; index < 4; ++index) {
+                const int next = (index + 1) % 4;
+                const double ax = verts[index * 2];
+                const double ay = verts[index * 2 + 1];
+                const double bx = verts[next * 2];
+                const double by = verts[next * 2 + 1];
+                const double cross =
+                    (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+                positive = positive || cross > 0.0;
+                negative = negative || cross < 0.0;
+                if(positive && negative) {
+                    return false;
+                }
+            }
+            return true;
+        }
     };
 
     // Aligned to libkrkr2.so Motion.LayerGetter (0x69B350)

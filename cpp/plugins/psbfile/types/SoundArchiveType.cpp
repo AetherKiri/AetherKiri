@@ -11,14 +11,16 @@ namespace PSB {
 
     bool SoundArchiveType::isThisType(const PSBFile &psb) {
         const auto objects = psb.getObjects();
-        if(psb.getObjects() == nullptr) {
+        if(objects == nullptr) {
             return false;
         }
 
-        auto fdId = objects->find("id");
-        auto str = std::dynamic_pointer_cast<PSBString>(fdId->second);
-        return fdId != objects->end() && str != nullptr &&
-            str->value == "sound_archive";
+        const auto fdId = objects->find("id");
+        if(fdId == objects->end()) {
+            return false;
+        }
+        const auto str = std::dynamic_pointer_cast<PSBString>(fdId->second);
+        return str != nullptr && str->value == "sound_archive";
     }
 
     std::vector<std::unique_ptr<IResourceMetadata>>

@@ -1000,7 +1000,6 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     if (method_name == "AlphaBlend" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("AlphaBlend") &&
         ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
-        RectAbsSizeMatches(rctar, textures[0].second) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
         src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
@@ -1015,7 +1014,6 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     if (method_name == "AlphaBlend_d" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("AlphaBlend_d") &&
         ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
-        RectAbsSizeMatches(rctar, textures[0].second) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
         src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
@@ -1108,19 +1106,10 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
                 }
             }
         }
-        if (!RectAbsSizeMatches(rctar, src_rc)) {
-            CountCopyFallbackReason(RectNeedsAlphaAreaDownsample(rctar, src_rc, src)
-                                        ? "alpha_blend_a_area_downsample"
-                                        : IsGpuCopyTrianglesEnabled()
-                                              ? "alpha_blend_a_scaled"
-                                              : "alpha_blend_a_scaled_cpu");
-            CountMethodFallback(method);
-            SoftwareDelegate()->OperateRect(delegate_method, tar, reftar, rctar, textures);
-            if (dst != nullptr) {
-                dst->MarkCpuDirty();
-            }
-            return;
-        }
+        // The Godot bridge performs scaled AlphaBlend_a with premultiplied
+        // bilinear sampling. Keeping area downscales on the CPU forces a full
+        // GPU readback/upload between every transparent motion layer, which is
+        // especially expensive for the 0.75x SD animations used by Yuzu games.
         if (dst->BlendGpuFrom(src, rctar, src_rc,
                           TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A,
                           opacity, 0)) {

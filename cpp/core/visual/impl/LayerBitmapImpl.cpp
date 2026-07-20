@@ -610,13 +610,24 @@ bool tTVPNativeBaseBitmap::IsOpaque() const { return Bitmap->IsOpaque(); }
 
 //---------------------------------------------------------------------------
 bool tTVPNativeBaseBitmap::Assign(const tTVPNativeBaseBitmap &rhs) {
-    FlushPendingTextDraws();
-    if(this == &rhs || Bitmap == rhs.Bitmap)
+    if(this == &rhs)
         return false;
 
-    Bitmap->Release();
+    // Assign shares the source texture. Materialize deferred glyph draws first
+    // so a temporary text work bitmap cannot hand out its pre-draw texture.
+    const_cast<tTVPNativeBaseBitmap &>(rhs).FlushPendingTextDraws();
+    FlushPendingTextDraws();
+    if(Bitmap == rhs.Bitmap)
+        return false;
+
+    if(Bitmap)
+        Bitmap->Release();
     Bitmap = rhs.Bitmap;
-    Bitmap->AddRef();
+    if(Bitmap)
+        Bitmap->AddRef();
+    else
+        Bitmap = GetRenderManager()->CreateTexture2D(
+            nullptr, 0, 1, 1, TVPTextureFormat::RGBA);
 
     Font = rhs.Font;
     FontChanged = true; // informs internal font information is invalidated
@@ -625,14 +636,23 @@ bool tTVPNativeBaseBitmap::Assign(const tTVPNativeBaseBitmap &rhs) {
 }
 //---------------------------------------------------------------------------
 bool tTVPNativeBaseBitmap::AssignBitmap(const tTVPNativeBaseBitmap &rhs) {
-    FlushPendingTextDraws();
     // assign only bitmap
-    if(this == &rhs || Bitmap == rhs.Bitmap)
+    if(this == &rhs)
         return false;
 
-    Bitmap->Release();
+    const_cast<tTVPNativeBaseBitmap &>(rhs).FlushPendingTextDraws();
+    FlushPendingTextDraws();
+    if(Bitmap == rhs.Bitmap)
+        return false;
+
+    if(Bitmap)
+        Bitmap->Release();
     Bitmap = rhs.Bitmap;
-    Bitmap->AddRef();
+    if(Bitmap)
+        Bitmap->AddRef();
+    else
+        Bitmap = GetRenderManager()->CreateTexture2D(
+            nullptr, 0, 1, 1, TVPTextureFormat::RGBA);
 
     // font information are not copyed
     FontChanged = true; // informs internal font information is invalidated
@@ -644,9 +664,14 @@ bool tTVPNativeBaseBitmap::AssignTexture(iTVPTexture2D *tex) {
     if(Bitmap == tex)
         return false;
 
-    Bitmap->Release();
+    if(Bitmap)
+        Bitmap->Release();
     Bitmap = tex; // CreateTexture2D(bmp);
-    Bitmap->AddRef();
+    if(Bitmap)
+        Bitmap->AddRef();
+    else
+        Bitmap = GetRenderManager()->CreateTexture2D(
+            nullptr, 0, 1, 1, TVPTextureFormat::RGBA);
 
     // font information are not copyed
     FontChanged = true; // informs internal font information is invalidated

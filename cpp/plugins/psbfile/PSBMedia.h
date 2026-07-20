@@ -67,6 +67,7 @@ namespace PSB {
     public:
         struct CachedImageInfo {
             std::string debugKey;
+            std::string label;
             int width = 0;
             int height = 0;
             int left = 0;
@@ -93,6 +94,8 @@ namespace PSB {
             std::string key;
             CachedImageInfo info;
         };
+        bool ensureArchiveLoaded(const std::string &archiveKey,
+                                 bool reloadIfLoaded = false);
         std::vector<ImageInfoEntry> getImagesByPrefix(const std::string &prefix) const;
         bool getImageInfo(const std::string &key, CachedImageInfo &outInfo) const;
 

@@ -1,7 +1,11 @@
 #include "DebugIntf.h"
+#include "LayerBitmapIntf.h"
+#include "LayerIntf.h"
 #include "ncbind.hpp"
 
+#include <algorithm>
 #include <map>
+#include <vector>
 
 #ifndef TJS_INTF_METHOD
 #define TJS_INTF_METHOD
@@ -53,6 +57,248 @@ void loadLayerExMovie() {
 
 void codecHandledByCore(const tjs_char *module) {
     logCompatOnce(module, TJS_W("audio decoding is handled by the host sound core"));
+}
+
+tjs_int compatVariantInt(tTJSVariant **param, tjs_int numparams,
+                         tjs_int index, tjs_int fallback) {
+    if(index >= numparams || !param || !param[index] ||
+       param[index]->Type() == tvtVoid)
+        return fallback;
+    return static_cast<tjs_int>(*param[index]);
+}
+
+tTJSNI_BaseLayer *compatLayerFromThis(iTJSDispatch2 *objthis) {
+    if(!objthis)
+        return nullptr;
+    tTJSNI_BaseLayer *layer = nullptr;
+    if(TJS_FAILED(objthis->NativeInstanceSupport(
+           TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+           reinterpret_cast<iTJSNativeInstance **>(&layer)))) {
+        return nullptr;
+    }
+    return layer;
+}
+
+tjs_error setGlyphOctetResult(tTJSVariant *result, tjs_int width,
+                              tjs_int height,
+                              const std::vector<tjs_uint8> &glyph) {
+    if(!result)
+        return TJS_S_OK;
+
+    tTJSVariantOctet *octet = TJSAllocVariantOctet(
+        glyph.empty() ? nullptr : glyph.data(),
+        static_cast<tjs_uint>(glyph.size()));
+    if(!octet)
+        return TJS_S_OK;
+
+    iTJSDispatch2 *array = TJSCreateArrayObject();
+    if(!array) {
+        octet->Release();
+        return TJS_E_FAIL;
+    }
+
+    tTJSVariant value;
+    value = width;
+    array->PropSetByNum(TJS_MEMBERENSURE, 0, &value, array);
+    value = height;
+    array->PropSetByNum(TJS_MEMBERENSURE, 1, &value, array);
+    value = octet;
+    array->PropSetByNum(TJS_MEMBERENSURE, 2, &value, array);
+    octet->Release();
+
+    *result = tTJSVariant(array, array);
+    array->Release();
+    return TJS_S_OK;
+}
+
+tjs_error TJS_INTF_METHOD makeGlyphBitmapCompat(tTJSVariant *result,
+                                                tjs_int numparams,
+                                                tTJSVariant **param,
+                                                iTJSDispatch2 *objthis) {
+    if(result)
+        result->Clear();
+
+    tTJSNI_BaseLayer *layer = compatLayerFromThis(objthis);
+    if(!layer)
+        return TJS_E_NATIVECLASSCRASH;
+
+    tTVPBaseTexture *image = layer->GetMainImage();
+    if(!image)
+        return TJS_S_OK;
+
+    const tjs_int image_width = static_cast<tjs_int>(image->GetWidth());
+    const tjs_int image_height = static_cast<tjs_int>(image->GetHeight());
+    if(image_width <= 0 || image_height <= 0)
+        return TJS_S_OK;
+
+    tjs_int left = compatVariantInt(param, numparams, 1, 0);
+    tjs_int top = compatVariantInt(param, numparams, 2, 0);
+    tjs_int width = compatVariantInt(param, numparams, 3, image_width - left);
+    tjs_int height = compatVariantInt(param, numparams, 4, image_height - top);
+
+    left = std::clamp(left, 0, image_width);
+    top = std::clamp(top, 0, image_height);
+    width = std::clamp(width, 0, image_width - left);
+    height = std::clamp(height, 0, image_height - top);
+    if(width <= 0 || height <= 0)
+        return TJS_S_OK;
+
+    const tjs_int pitch = image->GetPitchBytes();
+    if(pitch <= 0)
+        return TJS_S_OK;
+
+    std::vector<tjs_uint8> glyph(static_cast<size_t>(width) *
+                                 static_cast<size_t>(height));
+    for(tjs_int y = 0; y < height; ++y) {
+        const auto *row = static_cast<const tjs_uint32 *>(
+            image->GetScanLine(static_cast<tjs_uint>(top + y)));
+        if(!row)
+            continue;
+        row += left;
+        for(tjs_int x = 0; x < width; ++x) {
+            tjs_uint8 alpha =
+                static_cast<tjs_uint8>((row[x] >> 24) & 0xff);
+            if(alpha == 0) {
+                const tjs_uint32 pixel = row[x];
+                alpha = static_cast<tjs_uint8>(
+                    std::max({pixel & 0xff, (pixel >> 8) & 0xff,
+                              (pixel >> 16) & 0xff}));
+            }
+            glyph[static_cast<size_t>(y) * static_cast<size_t>(width) +
+                  static_cast<size_t>(x)] = alpha;
+        }
+    }
+
+    return setGlyphOctetResult(result, width, height, glyph);
+}
+
+tjs_error TJS_INTF_METHOD operateGlyphToProvinceCompat(
+    tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
+    iTJSDispatch2 *objthis) {
+    if(result)
+        result->Clear();
+    if(numparams < 5 || !param || !param[4] ||
+       param[4]->Type() != tvtOctet)
+        return TJS_E_BADPARAMCOUNT;
+
+    tTJSNI_BaseLayer *layer = compatLayerFromThis(objthis);
+    if(!layer)
+        return TJS_E_NATIVECLASSCRASH;
+
+    tTVPBaseTexture *image = layer->GetMainImage();
+    if(!image)
+        return TJS_S_OK;
+
+    tjs_int dst_x = compatVariantInt(param, numparams, 0, 0);
+    tjs_int dst_y = compatVariantInt(param, numparams, 1, 0);
+    tjs_int width = compatVariantInt(param, numparams, 2, 0);
+    tjs_int height = compatVariantInt(param, numparams, 3, 0);
+    if(width <= 0 || height <= 0)
+        return TJS_S_OK;
+
+    auto *octet = param[4]->AsOctetNoAddRef();
+    if(!octet || !octet->GetData())
+        return TJS_S_OK;
+    const tjs_uint8 *src = octet->GetData();
+    const size_t src_len = octet->GetLength();
+
+    const tjs_int image_width = static_cast<tjs_int>(image->GetWidth());
+    const tjs_int image_height = static_cast<tjs_int>(image->GetHeight());
+    tjs_int src_x = 0;
+    tjs_int src_y = 0;
+    tjs_int copy_w = width;
+    tjs_int copy_h = height;
+    if(dst_x < 0) {
+        src_x = -dst_x;
+        copy_w -= src_x;
+        dst_x = 0;
+    }
+    if(dst_y < 0) {
+        src_y = -dst_y;
+        copy_h -= src_y;
+        dst_y = 0;
+    }
+    copy_w = std::min(copy_w, image_width - dst_x);
+    copy_h = std::min(copy_h, image_height - dst_y);
+    if(copy_w <= 0 || copy_h <= 0)
+        return TJS_S_OK;
+
+    auto *dst = static_cast<tjs_uint8 *>(
+        layer->GetProvinceImagePixelBufferForWrite());
+    const tjs_int pitch = layer->GetProvinceImagePixelBufferPitch();
+    if(!dst || pitch <= 0)
+        return TJS_S_OK;
+
+    for(tjs_int y = 0; y < copy_h; ++y) {
+        const size_t src_row =
+            static_cast<size_t>(src_y + y) * static_cast<size_t>(width) +
+            static_cast<size_t>(src_x);
+        if(src_row >= src_len)
+            break;
+        const size_t row_available = src_len - src_row;
+        const tjs_int row_w =
+            static_cast<tjs_int>(std::min<size_t>(copy_w, row_available));
+        tjs_uint8 *dst_row = dst + static_cast<size_t>(dst_y + y) *
+                                       static_cast<size_t>(pitch) +
+                             static_cast<size_t>(dst_x);
+        const tjs_uint8 *src_row_ptr = src + src_row;
+        for(tjs_int x = 0; x < row_w; ++x)
+            dst_row[x] = std::max(dst_row[x], src_row_ptr[x]);
+    }
+
+    tTVPRect rect;
+    rect.left = dst_x;
+    rect.top = dst_y;
+    rect.right = dst_x + copy_w;
+    rect.bottom = dst_y + copy_h;
+    layer->Update(rect);
+    return TJS_S_OK;
+}
+
+tjs_error TJS_INTF_METHOD makeBitmapFromProvinceCompat(
+    tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
+    iTJSDispatch2 *objthis) {
+    if(result)
+        result->Clear();
+
+    tTJSNI_BaseLayer *layer = compatLayerFromThis(objthis);
+    if(!layer)
+        return TJS_E_NATIVECLASSCRASH;
+
+    tjs_int left = compatVariantInt(param, numparams, 0, 0);
+    tjs_int top = compatVariantInt(param, numparams, 1, 0);
+    tjs_int width = compatVariantInt(param, numparams, 2, 0);
+    tjs_int height = compatVariantInt(param, numparams, 3, 0);
+    if(width <= 0 || height <= 0)
+        return TJS_S_OK;
+
+    auto *province = static_cast<const tjs_uint8 *>(
+        layer->GetProvinceImagePixelBuffer());
+    const tjs_int pitch = layer->GetProvinceImagePixelBufferPitch();
+    tTVPBaseBitmap *province_image = layer->GetProvinceImage();
+    const tjs_int province_width =
+        province_image ? static_cast<tjs_int>(province_image->GetWidth()) : 0;
+    const tjs_int province_height =
+        province_image ? static_cast<tjs_int>(province_image->GetHeight()) : 0;
+    std::vector<tjs_uint8> glyph(static_cast<size_t>(width) *
+                                 static_cast<size_t>(height));
+    if(province && pitch > 0 && province_width > 0 && province_height > 0) {
+        for(tjs_int y = 0; y < height; ++y) {
+            if(top + y < 0 || top + y >= province_height)
+                continue;
+            const tjs_uint8 *src_row =
+                province + static_cast<size_t>(top + y) *
+                               static_cast<size_t>(pitch);
+            for(tjs_int x = 0; x < width; ++x) {
+                if(left + x < 0 || left + x >= province_width)
+                    continue;
+                glyph[static_cast<size_t>(y) * static_cast<size_t>(width) +
+                      static_cast<size_t>(x)] = src_row[left + x];
+            }
+        }
+    }
+
+    return setGlyphOctetResult(result, width, height, glyph);
 }
 
 } // namespace
@@ -495,6 +741,26 @@ NCB_ATTACH_CLASS(LayerGlyphEx, Layer) {
     NCB_PROPERTY(inc_x, getIncX, setIncX);
     NCB_PROPERTY(inc_y, getIncY, setIncY);
     NCB_PROPERTY(inc, getInc, setInc);
+}
+
+// -------------------------------------------------------------------------
+// msdfrender.dll
+// AETHERKIRI_COMPAT_STUB: enough glyph extraction for games that use
+// PreRenderFontEx/MSDF atlases while final blending stays in Layer.drawGlyph.
+// -------------------------------------------------------------------------
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("msdfrender.dll")
+
+class MsdfrenderLayerCompat {};
+
+NCB_ATTACH_CLASS(MsdfrenderLayerCompat, Layer) {
+    RawCallback(TJS_W("makeGlyphSDF"), makeGlyphBitmapCompat, 0);
+    RawCallback(TJS_W("makeGlyphMSDF"), makeGlyphBitmapCompat, 0);
+    RawCallback(TJS_W("operateGlyphToProvince"),
+                operateGlyphToProvinceCompat, 0);
+    RawCallback(TJS_W("makeBitmapFromProvince"),
+                makeBitmapFromProvinceCompat, 0);
 }
 
 // -------------------------------------------------------------------------

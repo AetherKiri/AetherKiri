@@ -995,7 +995,16 @@ bool IsBatchableBlendOp(const std::shared_ptr<GodotGpuOp> &op) {
 bool HazardTrackedBlendBarriersEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_GODOT_HAZARD_BARRIERS");
-        return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
+        // Keep every queued blend strictly ordered by default.  Tracking only
+        // the visible RID rectangles is not sufficient on Metal: Godot may
+        // expose different RIDs backed by aliased texture storage, so an
+        // apparently independent dispatch can still have a write-after-read
+        // dependency.  Missing that dependency progressively over-blends
+        // translucent full-screen layers (for example the white title fade).
+        // The rectangle-based optimization remains available for profiling,
+        // but must be explicitly enabled.
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }
@@ -1044,8 +1053,10 @@ bool BlendOpNeedsBarrierBeforeDispatch(
     if (writes.empty()) return false;
     const GodotGpuPendingWrite dst_rect =
         PendingWriteForRect(op.dst, op.dst_pos, op.size);
+    const Vector3 src_extent =
+        op.src_size.x > 0.0 && op.src_size.y > 0.0 ? op.src_size : op.size;
     const GodotGpuPendingWrite src_rect =
-        PendingWriteForRect(op.src, op.src_pos, op.size);
+        PendingWriteForRect(op.src, op.src_pos, src_extent);
     const bool dual_source = op.type == GodotGpuOp::Type::Blend2 ||
         op.type == GodotGpuOp::Type::Blend3;
     const bool triple_source = op.type == GodotGpuOp::Type::Blend3;
@@ -1079,6 +1090,10 @@ PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
                            op.type == GodotGpuOp::Type::DrawMaskedTriangles;
     const bool mosaic = op.type == GodotGpuOp::Type::Mosaic;
     const bool dimensioned = triangles || mosaic;
+    const bool scaled_blend = op.type == GodotGpuOp::Type::Blend &&
+        op.mode != TVP_GODOT_GPU_BLEND_FILL_ARGB &&
+        op.src_size.x > 0.0 && op.src_size.y > 0.0 &&
+        (op.src_size.x != op.size.x || op.src_size.y != op.size.y);
     int32_t values[12] = {
         static_cast<int32_t>(op.dst_pos.x),
         static_cast<int32_t>(op.dst_pos.y),
@@ -1090,13 +1105,14 @@ PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
                                  ? (op.mode | ((op.color & 0xffffu) << 16))
                                  : op.mode),
         static_cast<int32_t>(std::clamp(op.opacity, 0, 255)),
-        dimensioned ? static_cast<int32_t>(op.src_size.x) :
+        (dimensioned || scaled_blend) ? static_cast<int32_t>(op.src_size.x) :
         dual_source ? static_cast<int32_t>(op.src2_pos.x)
                     : static_cast<int32_t>(op.color & 0xffu),
-        dimensioned ? static_cast<int32_t>(op.src_size.y) :
+        (dimensioned || scaled_blend) ? static_cast<int32_t>(op.src_size.y) :
         dual_source ? static_cast<int32_t>(op.src2_pos.y)
                     : static_cast<int32_t>((op.color >> 8) & 0xffu),
         triple_source ? static_cast<int32_t>(op.src3_pos.x) :
+        scaled_blend ? 1 :
         triangles ? static_cast<int32_t>(op.color) :
         mosaic ? 0 :
         dual_source ? 0 : static_cast<int32_t>((op.color >> 16) & 0xffu),
@@ -1146,6 +1162,33 @@ vec4 unpack_u8(uint c) {
                 float((c >> 8) & 0xffu),
                 float((c >> 16) & 0xffu),
                 float((c >> 24) & 0xffu)) / 255.0;
+}
+
+vec4 load_src(ivec2 local) {
+    if (pc.color0.z != 1) {
+        return imageLoad(src_img, pc.rect0.zw + local);
+    }
+    ivec2 src_extent = max(pc.color0.xy, ivec2(1));
+    vec2 src_coord = vec2(pc.rect0.zw) +
+        (vec2(local) + vec2(0.5)) * vec2(src_extent) /
+            vec2(max(pc.rect1.xy, ivec2(1))) -
+        vec2(0.5);
+    ivec2 src_min = pc.rect0.zw;
+    ivec2 src_max = src_min + src_extent - ivec2(1);
+    ivec2 p0 = clamp(ivec2(floor(src_coord)), src_min, src_max);
+    ivec2 p1 = clamp(p0 + ivec2(1), src_min, src_max);
+    vec2 f = clamp(fract(src_coord), vec2(0.0), vec2(1.0));
+    vec4 c00 = imageLoad(src_img, p0);
+    vec4 c10 = imageLoad(src_img, ivec2(p1.x, p0.y));
+    vec4 c01 = imageLoad(src_img, ivec2(p0.x, p1.y));
+    vec4 c11 = imageLoad(src_img, p1);
+    c00.rgb *= c00.a;
+    c10.rgb *= c10.a;
+    c01.rgb *= c01.a;
+    c11.rgb *= c11.a;
+    vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    premul.rgb = premul.a > 0.00001 ? premul.rgb / premul.a : vec3(0.0);
+    return clamp(premul, vec4(0.0), vec4(1.0));
 }
 
 uint alpha_blend_hda_o(uint d, uint s, uint opa) {
@@ -1252,7 +1295,6 @@ void main() {
     }
 
     ivec2 dst_pos = pc.rect0.xy + local;
-    ivec2 src_pos = pc.rect0.zw + local;
     uint opa = uint(clamp(pc.rect1.w, 0, 255));
     uint out_color = 0u;
 
@@ -1263,21 +1305,17 @@ void main() {
                     ((uint(pc.color0.w) & 0xffu) << 24);
     } else {
         uint d = pack_u8(vec4_to_u8(imageLoad(dst_img, dst_pos)));
+        uint s = pack_u8(vec4_to_u8(load_src(local)));
         out_color = d;
         if (pc.rect1.z == 1) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
         out_color = alpha_blend_hda_o(d, s, opa);
         } else if (pc.rect1.z == 2) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
         out_color = alpha_blend_d(d, s, opa);
         } else if (pc.rect1.z == 3) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
         out_color = (d & 0xff000000u) + (s & 0x00ffffffu);
         } else if (pc.rect1.z == 10) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
         out_color = const_alpha_blend_d(d, s, opa);
         } else if (pc.rect1.z == 11) {
-        uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
         out_color = ps_screen_blend(d, s, opa);
         } else if (pc.rect1.z == 8) {
         out_color = remove_const_opacity(d, opa);
@@ -1345,6 +1383,33 @@ vec4 unpack_u8(uint c) {
                 float((c >> 24) & 0xffu)) / 255.0;
 }
 
+vec4 load_src(ivec2 local) {
+    if (pc.color0.z != 1) {
+        return imageLoad(src_img, pc.rect0.zw + local);
+    }
+    ivec2 src_extent = max(pc.color0.xy, ivec2(1));
+    vec2 src_coord = vec2(pc.rect0.zw) +
+        (vec2(local) + vec2(0.5)) * vec2(src_extent) /
+            vec2(max(pc.rect1.xy, ivec2(1))) -
+        vec2(0.5);
+    ivec2 src_min = pc.rect0.zw;
+    ivec2 src_max = src_min + src_extent - ivec2(1);
+    ivec2 p0 = clamp(ivec2(floor(src_coord)), src_min, src_max);
+    ivec2 p1 = clamp(p0 + ivec2(1), src_min, src_max);
+    vec2 f = clamp(fract(src_coord), vec2(0.0), vec2(1.0));
+    vec4 c00 = imageLoad(src_img, p0);
+    vec4 c10 = imageLoad(src_img, ivec2(p1.x, p0.y));
+    vec4 c01 = imageLoad(src_img, ivec2(p0.x, p1.y));
+    vec4 c11 = imageLoad(src_img, p1);
+    c00.rgb *= c00.a;
+    c10.rgb *= c10.a;
+    c01.rgb *= c01.a;
+    c11.rgb *= c11.a;
+    vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    premul.rgb = premul.a > 0.00001 ? premul.rgb / premul.a : vec3(0.0);
+    return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
 uint saturated_add(uint a, uint b) {
     uint tmp = ((a & b) + (((a ^ b) >> 1) & 0x7f7f7f7fu)) & 0x80808080u;
     tmp = (tmp << 1) - (tmp >> 7);
@@ -1387,8 +1452,7 @@ void main() {
     }
 
     ivec2 dst_pos = pc.rect0.xy + local;
-    ivec2 src_pos = pc.rect0.zw + local;
-    uint s = pack_u8(vec4_to_u8(imageLoad(src_img, src_pos)));
+    uint s = pack_u8(vec4_to_u8(load_src(local)));
     uint d = pack_u8(vec4_to_u8(imageLoad(dst_img, dst_pos)));
     uint opa = uint(clamp(pc.rect1.w, 0, 255));
     imageStore(dst_img, dst_pos, unpack_u8(alpha_blend_a_d_o(d, s, opa)));
@@ -3553,9 +3617,9 @@ bool BridgeBlendRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
     }
     const int width = dst_rect->right - dst_rect->left;
     const int height = dst_rect->bottom - dst_rect->top;
-    if (width <= 0 || height <= 0 ||
-        width != src_rect->right - src_rect->left ||
-        height != src_rect->bottom - src_rect->top) {
+    const int src_width = src_rect->right - src_rect->left;
+    const int src_height = src_rect->bottom - src_rect->top;
+    if (width <= 0 || height <= 0 || src_width <= 0 || src_height <= 0) {
         return false;
     }
 
@@ -3566,6 +3630,7 @@ bool BridgeBlendRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
     op->src_pos = Vector3(src_rect->left, src_rect->top, 0);
     op->dst_pos = Vector3(dst_rect->left, dst_rect->top, 0);
     op->size = Vector3(width, height, 1);
+    op->src_size = Vector3(src_width, src_height, 1);
     op->mode = mode;
     op->opacity = opacity;
     op->color = color;

@@ -19,6 +19,7 @@
 #include "EventIntf.h"
 #include "LayerIntf.h"
 #include "LayerBitmapIntf.h"
+#include "tjsArray.h"
 #include "Random.h"
 #include "ScriptMgnIntf.h"
 #include "DebugIntf.h"
@@ -220,6 +221,34 @@ tTJSNC_System::tTJSNC_System() : inherited(TJS_W("System")) {
     }
     TJS_END_NATIVE_STATIC_METHOD_DECL(
         /*func. name*/ clearGraphicCache)
+    //---------------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ fetchImageSize) {
+        if(numparams < 1)
+            return TJS_E_BADPARAMCOUNT;
+
+        tjs_int width = 0;
+        tjs_int height = 0;
+        TVPGetImageSize(ttstr(*param[0]), width, height);
+
+        if(result) {
+            iTJSDispatch2 *array = TJSCreateArrayObject();
+            if(!array)
+                return TJS_E_FAIL;
+            try {
+                tTJSVariant value(width);
+                array->PropSetByNum(TJS_MEMBERENSURE, 0, &value, array);
+                value = height;
+                array->PropSetByNum(TJS_MEMBERENSURE, 1, &value, array);
+                *result = tTJSVariant(array, array);
+            } catch(...) {
+                array->Release();
+                throw;
+            }
+            array->Release();
+        }
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ fetchImageSize)
     //---------------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ touchImages) {
         // try to cache graphics

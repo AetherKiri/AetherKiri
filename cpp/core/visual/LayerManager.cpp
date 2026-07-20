@@ -83,6 +83,51 @@ bool TVPScriptIsCgModeViewTrans() {
     }
 }
 
+bool TVPRouteCgModePreviewRightClick() {
+    if(!TVPScriptIsCgModeViewTrans())
+        return false;
+
+    try {
+        tTJSVariant result;
+        TVPExecuteExpression(
+            TJS_W("kag.process(\"\", \"*view_rclick\")"), &result);
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager routed cgmode preview right click to *view_rclick");
+        }
+        return true;
+    } catch(const eTJS &e) {
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager cgmode preview right click route failed: {}",
+                ttstr(e.GetMessage()).AsStdString());
+        }
+    } catch(...) {
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager cgmode preview right click route failed");
+        }
+    }
+    return false;
+}
+
+bool TVPScriptIsCgPreviewLoop() {
+    try {
+        tTJSVariant result;
+        TVPExecuteExpression(
+            TJS_W("typeof kag == \"Object\" && kag && "
+                  "((kag.currentStorage == \"extra.ks\" && "
+                  "  kag.currentLabel == \"*viewloop\") || "
+                  " (kag.currentStorage == \"cgmode.ks\" && "
+                  "  (kag.currentLabel == \"*viewtrans\" || "
+                  "   kag.currentLabel == \"*view_rclick\")))"),
+            &result);
+        return result.operator bool();
+    } catch(...) {
+        return false;
+    }
+}
+
 void TVPTraceTitleStateDiagnostics() {
     if(!TVPInputTraceEnabled())
         return;
@@ -407,6 +452,149 @@ bool TVPLayerRectContainsPrimaryPoint(tTJSNI_BaseLayer *layer, tjs_int x,
            local_y < static_cast<tjs_int>(layer->GetHeight());
 }
 
+bool TVPIsActiveMotionButtonLayer(tTJSNI_BaseLayer *layer) {
+    if(!layer || !layer->GetNodeVisible() || !layer->GetNodeEnabled())
+        return false;
+
+    iTJSDispatch2 *owner = layer->GetOwnerNoAddRef();
+    if(!owner)
+        return false;
+
+    static ttstr motion_working_name(TJS_W("motionWorking"));
+    tTJSVariant motion_working;
+    if(TJS_FAILED(owner->PropGet(0, motion_working_name.c_str(),
+                                 motion_working_name.GetHint(),
+                                 &motion_working, owner)) ||
+       !motion_working.operator bool()) {
+        return false;
+    }
+
+    static ttstr motion_buttons_name(TJS_W("_motionButtons"));
+    tTJSVariant motion_buttons_value;
+    if(TJS_FAILED(owner->PropGet(0, motion_buttons_name.c_str(),
+                                 motion_buttons_name.GetHint(),
+                                 &motion_buttons_value, owner)) ||
+       motion_buttons_value.Type() != tvtObject) {
+        return false;
+    }
+
+    const tTJSVariantClosure motion_buttons =
+        motion_buttons_value.AsObjectClosureNoAddRef();
+    if(!motion_buttons.Object)
+        return false;
+
+    static ttstr count_name(TJS_W("count"));
+    tTJSVariant count;
+    return TJS_SUCCEEDED(motion_buttons.PropGet(
+               0, count_name.c_str(), count_name.GetHint(), &count,
+               nullptr)) &&
+           count.AsInteger() > 0;
+}
+
+tTJSNI_BaseLayer *TVPFindMotionButtonOwnerForDisplayProxy(
+    tTJSNI_BaseLayer *layer, tjs_int x, tjs_int y) {
+    tTJSNI_BaseLayer *proxy = layer;
+    while(proxy && proxy->GetName().IsEmpty()) {
+        tTJSNI_BaseLayer *parent = proxy->GetParent();
+        if(!parent || proxy->GetLeft() != 0 || proxy->GetTop() != 0 ||
+           proxy->GetWidth() != parent->GetWidth() ||
+           proxy->GetHeight() != parent->GetHeight()) {
+            break;
+        }
+
+        if(TVPIsActiveMotionButtonLayer(parent)) {
+            tjs_int local_x = 0;
+            tjs_int local_y = 0;
+            if(TVPLayerRectContainsPrimaryPoint(parent, x, y, local_x,
+                                                 local_y) &&
+               parent->HitTestNoVisibleCheck(local_x, local_y)) {
+                if(TVPInputTraceEnabled()) {
+                    spdlog::info(
+                        "LayerManager route display proxy to motion owner primary=({}, {}) proxy={} owner={}",
+                        x, y, proxy->GetName().AsStdString(),
+                        parent->GetName().AsStdString());
+                }
+                return parent;
+            }
+        }
+        proxy = parent;
+    }
+    return layer;
+}
+
+bool TVPIsCgPreviewPresentationLayer(tTJSNI_BaseLayer *layer) {
+    if(!layer)
+        return false;
+    const std::string name = layer->GetName().AsStdString();
+    return name.find("CG View Layer :") != std::string::npos;
+}
+
+bool TVPLayerImageAlphaHit(tTJSNI_BaseLayer *layer, tjs_int local_x,
+                           tjs_int local_y) {
+    if(!layer || !layer->GetHasImage())
+        return false;
+    tTVPBaseTexture *image = nullptr;
+    try {
+        image = layer->GetMainImage();
+    } catch(...) {
+        return false;
+    }
+    if(!image)
+        return false;
+
+    const tjs_int px = local_x - layer->GetImageLeft();
+    const tjs_int py = local_y - layer->GetImageTop();
+    if(px < 0 || py < 0 || px >= static_cast<tjs_int>(image->GetWidth()) ||
+       py >= static_cast<tjs_int>(image->GetHeight())) {
+        return false;
+    }
+
+    try {
+        return (image->GetPoint(px, py) & 0xff000000u) != 0;
+    } catch(...) {
+        return false;
+    }
+}
+
+tTJSNI_BaseLayer *TVPFindCgPreviewLayerAt(tTVPLayerManager *manager, tjs_int x,
+                                          tjs_int y) {
+    if(!manager || !TVPScriptIsCgPreviewLoop())
+        return nullptr;
+
+    auto &nodes = manager->GetAllNodes();
+    for(auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
+        tTJSNI_BaseLayer *candidate = *it;
+        if(!TVPIsCgPreviewPresentationLayer(candidate) ||
+           !candidate->GetVisible() || !candidate->GetNodeVisible() ||
+           !candidate->GetNodeEnabled()) {
+            continue;
+        }
+
+        tjs_int local_x = 0;
+        tjs_int local_y = 0;
+        if(!TVPLayerRectContainsPrimaryPoint(candidate, x, y, local_x,
+                                             local_y)) {
+            continue;
+        }
+        if(!TVPLayerImageAlphaHit(candidate, local_x, local_y)) {
+            continue;
+        }
+
+        if(TVPInputTraceEnabled()) {
+            const auto action_owner = candidate->GetActionOwnerNoAddRef();
+            spdlog::info(
+                "LayerManager cg preview presentation hit primary=({}, {}) layer={} local=({}, {}) visible={} parentVisible={} enabled={} action={}",
+                x, y, candidate->GetName().AsStdString(), local_x, local_y,
+                candidate->GetVisible() ? "yes" : "no",
+                candidate->GetNodeVisible() ? "yes" : "no",
+                candidate->GetNodeEnabled() ? "yes" : "no",
+                action_owner.Object ? "yes" : "no");
+        }
+        return candidate;
+    }
+    return nullptr;
+}
+
 bool TVPIsSaveLoadItemLayer(tTJSNI_BaseLayer *layer) {
     if(!layer) return false;
     const std::string name = layer->GetName().AsStdString();
@@ -496,6 +684,38 @@ void tTVPLayerManager::SetHoldAlpha(bool b) {
     static_cast<tTVPDestTexture *>(DrawBuffer)->SetHoldAlpha(b);
 }
 
+tTVPBaseTexture *tTVPLayerManager::EnsureDrawBufferSize(
+    tjs_int w, tjs_int h, bool clear_on_resize) {
+    if(w <= 0 || h <= 0)
+        return DrawBuffer;
+
+    const tjs_uint target_w = static_cast<tjs_uint>(w);
+    const tjs_uint target_h = static_cast<tjs_uint>(h);
+    if(!DrawBuffer) {
+        DrawBuffer = new tTVPDestTexture(target_w, target_h);
+        DrawBuffer->Fill(tTVPRect(0, 0, w, h), 0xFF000000);
+        static_cast<tTVPDestTexture *>(DrawBuffer)->SetHoldAlpha(HoldAlpha);
+        return DrawBuffer;
+    }
+
+    if(DrawBuffer->GetWidth() != target_w ||
+       DrawBuffer->GetHeight() != target_h) {
+        DrawBuffer->SetSize(target_w, target_h, !clear_on_resize);
+        if(clear_on_resize)
+            DrawBuffer->Fill(tTVPRect(0, 0, w, h), 0xFF000000);
+        static_cast<tTVPDestTexture *>(DrawBuffer)->SetHoldAlpha(HoldAlpha);
+    }
+    return DrawBuffer;
+}
+
+tTVPBaseTexture *tTVPLayerManager::EnsureDrawBufferMatchesPrimary(
+    bool clear_on_resize) {
+    tjs_int w = 0, h = 0;
+    if(!GetPrimaryLayerSize(w, h))
+        return DrawBuffer;
+    return EnsureDrawBufferSize(w, h, clear_on_resize);
+}
+
 //---------------------------------------------------------------------------
 tTVPBaseTexture *tTVPLayerManager::GetDrawTargetBitmap(const tTVPRect &rect,
                                                        tTVPRect &cliprect) {
@@ -503,27 +723,12 @@ tTVPBaseTexture *tTVPLayerManager::GetDrawTargetBitmap(const tTVPRect &rect,
     tjs_int w = rect.get_width();
     tjs_int h = rect.get_height();
 
-    if(!DrawBuffer) {
-        // create draw buffer
-        if(Primary) {
-            const tTVPRect &rc = Primary->GetRect();
-            w = rc.get_width();
-            h = rc.get_height();
-        }
-        DrawBuffer = new tTVPDestTexture(w, h);
-        DrawBuffer->Fill(tTVPRect(0, 0, w, h), 0xFF000000);
-        static_cast<tTVPDestTexture *>(DrawBuffer)->SetHoldAlpha(HoldAlpha);
-    } else {
-        tjs_int bw = DrawBuffer->GetWidth();
-        tjs_int bh = DrawBuffer->GetHeight();
-        if(bw < w || bh < h) {
-            // insufficient size; resize the draw buffer
-            tjs_uint neww = bw > w ? bw : w, newh = bh > h ? bh : h;
-            neww += (neww & 1); // align to even
-            DrawBuffer->SetSize(neww, newh, false);
-            DrawBuffer->Fill(tTVPRect(0, 0, neww, newh), 0xFF000000);
-        }
+    if(Primary) {
+        const tTVPRect &rc = Primary->GetRect();
+        w = rc.get_width();
+        h = rc.get_height();
     }
+    EnsureDrawBufferSize(w, h, false);
 
     cliprect = rect;
     return DrawBuffer;
@@ -545,22 +750,7 @@ void tTVPLayerManager::DrawCompleted(const tTVPRect &destrect,
     if(!/*LayerTreeOwner->*/ GetPrimaryLayerSize(w, h))
         return;
     // Window->GetDrawDevice()->GetSrcSize(w, h);
-    if(!DrawBuffer) {
-        // create draw buffer
-        DrawBuffer = new tTVPDestTexture(w, h);
-        DrawBuffer->Fill(tTVPRect(0, 0, w, h), 0xFF000000);
-        static_cast<tTVPDestTexture *>(DrawBuffer)->SetHoldAlpha(HoldAlpha);
-    } else {
-        tjs_int bw = DrawBuffer->GetWidth();
-        tjs_int bh = DrawBuffer->GetHeight();
-        if(bw < w || bh < h) {
-            // insufficient size; resize the draw buffer
-            tjs_uint neww = bw > w ? bw : w, newh = bh > h ? bh : h;
-            neww += (neww & 1); // align to even
-            DrawBuffer->SetSize(neww, newh, false);
-            DrawBuffer->Fill(tTVPRect(0, 0, neww, newh), 0xFF000000);
-        }
-    }
+    EnsureDrawBufferSize(w, h, false);
 
     DrawBuffer->Blt(destrect.left, destrect.top, bmp, cliprect, type, opacity,
                     HoldAlpha);
@@ -568,15 +758,7 @@ void tTVPLayerManager::DrawCompleted(const tTVPRect &destrect,
 }
 
 tTVPBaseTexture *tTVPLayerManager::GetOrCreateDrawBuffer() {
-    if(!DrawBuffer) {
-        tjs_int w, h;
-        if(!GetPrimaryLayerSize(w, h))
-            return nullptr;
-        DrawBuffer = new tTVPDestTexture(w, h);
-        DrawBuffer->Fill(tTVPRect(0, 0, w, h), 0xFF000000);
-        static_cast<tTVPDestTexture *>(DrawBuffer)->SetHoldAlpha(HoldAlpha);
-    }
-    return DrawBuffer;
+    return EnsureDrawBufferMatchesPrimary(false);
 }
 
 //---------------------------------------------------------------------------
@@ -735,7 +917,15 @@ void tTVPLayerManager::NotifyLayerResize() {
     if(!LayerTreeOwner)
         return;
 
+    tjs_int w = 0, h = 0;
+    if(GetPrimaryLayerSize(w, h) && w > 0 && h > 0) {
+        EnsureDrawBufferSize(w, h, true);
+        UpdateRegion.Clear();
+        UpdateRegion.Or(tTVPRect(0, 0, w, h));
+    }
+
     LayerTreeOwner->NotifyLayerResize(this);
+    NotifyWindowInvalidation();
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::NotifyWindowInvalidation() {
@@ -779,6 +969,12 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetMostFrontChildAt(
 //---------------------------------------------------------------------------
 tTJSNI_BaseLayer *tTVPLayerManager::GetClickableLayerAt(tjs_int x, tjs_int y) {
     tTJSNI_BaseLayer *layer = GetMostFrontChildAt(x, y);
+    // Do not globally prioritize a full-size CG presentation layer here.
+    // Gallery controls can be composited over that layer and must retain the
+    // normal front-to-back hit result for press, hover, click, and drag.  The
+    // preview fallback is intentionally applied only to right-click release
+    // in PrimaryMouseUp, where it is needed to close a full-screen preview.
+    layer = TVPFindMotionButtonOwnerForDisplayProxy(layer, x, y);
     if(TVPIsSaveLoadItemLayer(layer))
         TVPTraceLayersAt(this, "save-load-item", x, y);
     if(!layer || !TVPIsMessageLayer(layer) || !Primary)
@@ -1003,6 +1199,14 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
     TVPTraceLayerHit("click", x, y, l);
     TVPTraceLayersAt(this, "click-stack", x, y);
     if(l /*&& CaptureOwner == l*/) {
+        if(TVPIsCgPreviewPresentationLayer(l)) {
+            if(TVPInputTraceEnabled()) {
+                spdlog::info(
+                    "LayerManager cg preview suppress synthetic click layer={} primary=({}, {})",
+                    l->GetName().AsStdString(), x, y);
+            }
+            return;
+        }
         if(TVPIsSaveLoadOverlayCommandLayer(l)) {
             if(TVPInputTraceEnabled()) {
                 spdlog::info(
@@ -1054,7 +1258,11 @@ void tTVPLayerManager::PrimaryMouseDown(tjs_int x, tjs_int y,
         }
     }
 
-    PrimaryMouseMove(x, y, flags);
+    // Refresh script-side hover state before the press. Motion-backed buttons
+    // can become interactive while the cursor is stationary (for example
+    // after a title animation unlocks), so coordinate changes alone are not
+    // sufficient to establish their focus.
+    PrimaryMouseMove(x, y, flags, true);
     tTJSNI_BaseLayer *l =
         CaptureOwner ? CaptureOwner : GetClickableLayerAt(x, y);
     TVPTraceLayerHit("down", x, y, l);
@@ -1101,9 +1309,30 @@ void tTVPLayerManager::PrimaryMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
     TVPTraceLayerHit("up", x, y, l);
     TVPTraceLayersAt(this, "up-stack", x, y);
 
-    if(l) {
-        int orig_x = x, orig_y = y;
+    const int orig_x = x;
+    const int orig_y = y;
+    tTJSNI_BaseLayer *right_click_preview =
+        mb == mbRight ? TVPFindCgPreviewLayerAt(this, orig_x, orig_y)
+                      : nullptr;
+    if(right_click_preview) {
+        const std::string preview_name =
+            right_click_preview->GetName().AsStdString();
+        right_click_preview->FromPrimaryCoordinates(x, y);
+        right_click_preview->FireMouseUp(x, y, mb, flags);
+        TVPRouteCgModePreviewRightClick();
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager route right click to cg preview mouseup {}",
+                preview_name);
+        }
+        if(!TVPIsAnyMouseButtonPressedInShiftStateFlags(flags)) {
+            ReleaseCapture();
+            PrimaryMouseMove(orig_x, orig_y, flags);
+        }
+        return;
+    }
 
+    if(l) {
         l->FromPrimaryCoordinates(x, y);
         l->FireMouseUp(x, y, mb, flags);
 
@@ -1116,8 +1345,8 @@ void tTVPLayerManager::PrimaryMouseUp(tjs_int x, tjs_int y, tTVPMouseButton mb,
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::PrimaryMouseMove(tjs_int x, tjs_int y,
-                                        tjs_uint32 flags) {
-    bool poschanged = (LastMouseMoveX != x || LastMouseMoveY != y);
+                                        tjs_uint32 flags, bool force) {
+    bool poschanged = force || LastMouseMoveX != x || LastMouseMoveY != y;
     LastMouseMoveX = x;
     LastMouseMoveY = y;
 
@@ -1276,7 +1505,7 @@ void tTVPLayerManager::ForceMouseLeave() {
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::ForceMouseRecheck() {
-    PrimaryMouseMove(LastMouseMoveX, LastMouseMoveY, 0);
+    PrimaryMouseMove(LastMouseMoveX, LastMouseMoveY, 0, true);
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::MouseOutOfWindow() {

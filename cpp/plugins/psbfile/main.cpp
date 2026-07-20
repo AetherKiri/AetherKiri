@@ -459,7 +459,14 @@ static tjs_error getRoot(tTJSVariant *r, tjs_int n, tTJSVariant **p,
     auto *self = ncbInstanceAdaptor<PSB::PSBFile>::GetNativeInstance(obj);
     const auto &root = self->getRootValue();
     if(root) {
-        *r = convertPSBLazy(root);
+        // Gallery scripts inspect and copy small PIMG roots as real
+        // Array/Dictionary objects. The lazy proxy is kept for large scenario
+        // PSBs where eager conversion is expensive.
+        if(self->getType() == PSB::PSBType::Pimg) {
+            *r = root->toTJSVal();
+        } else {
+            *r = convertPSBLazy(root);
+        }
     } else {
         r->Clear();
     }
@@ -506,8 +513,22 @@ static tjs_error load(tTJSVariant *r, tjs_int count, tTJSVariant **p,
             loadSuccess = false;
         }
     } else if(p[0]->Type() == tvtOctet) {
-        LOGGER->critical("PSBFile::load stream no implement!");
-        loadSuccess = false;
+        auto *octet = p[0]->AsOctetNoAddRef();
+        try {
+            self->setSeed(motion::ResourceManager::getDecryptSeed());
+            if(!octet || !self->loadPSBData(
+                              octet->GetData(), octet->GetLength(),
+                              ttstr(TJS_W("<octet>")))) {
+                LOGGER->info("cannot load psb data from octet");
+                loadSuccess = false;
+            }
+        } catch(const std::exception &e) {
+            LOGGER->warn("PSBFile load octet error: {}", e.what());
+            loadSuccess = false;
+        } catch(...) {
+            LOGGER->warn("PSBFile load octet unknown error");
+            loadSuccess = false;
+        }
     } else {
         LOGGER->warn("PSBFile.load invalid first argument type={} count={}",
                      static_cast<int>(p[0]->Type()), count);
@@ -580,6 +601,21 @@ static tjs_error PSBFileFactory(PSBFile **result, tjs_int count,
             LOGGER->warn("PSBFile load error: {} ({})", e.what(), path.AsStdString());
         } catch(...) {
             LOGGER->warn("PSBFile load unknown error: {}", path.AsStdString());
+        }
+    } else if(count >= 1 && params[0]->Type() == tvtOctet) {
+        auto *octet = params[0]->AsOctetNoAddRef();
+        psbFile = new PSBFile();
+        try {
+            psbFile->setSeed(motion::ResourceManager::getDecryptSeed());
+            if(!octet || !psbFile->loadPSBData(
+                              octet->GetData(), octet->GetLength(),
+                              ttstr(TJS_W("<octet>")))) {
+                LOGGER->warn("Failed to load PSB data from octet");
+            }
+        } catch(const std::exception &e) {
+            LOGGER->warn("PSBFile load octet error: {}", e.what());
+        } catch(...) {
+            LOGGER->warn("PSBFile load octet unknown error");
         }
     } else {
         if(count > 0) {

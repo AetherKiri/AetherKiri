@@ -11,6 +11,7 @@
 #include "FreeTypeFontRasterizer.h"
 #include "LayerIntf.h"
 #include "RectItf.h"
+#include "textrender_timing.h"
 #include "tvpfontstruc.h"
 #include "WindowIntf.h"
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
@@ -241,6 +242,8 @@ struct TextRenderOptions {
   tjs_ustring leading{u"\\$([{\uff62\u2018\u201c\uff08\u3014\uff3b\uff5b\u3008\u300a\u300c\u300e\u3010\uffe5\uff04\uffe1"};
   tjs_ustring begin{u"\u300c\u300e\uff08\u2018\u201c\u3014\uff3b\uff5b\u3008\u300a"};
   tjs_ustring end{u"\u300d\u300f\uff09\u2019\u201d\u3015\uff3d\uff5d\u3009\u300b"};
+  bool ignoreDelay = false;
+  bool widthTimeScale = false;
 
   void deserialize(tTJSVariant t) {
     auto dict = t.AsObjectNoAddRef();
@@ -265,6 +268,22 @@ struct TextRenderOptions {
         const tjs_char *s = v.GetString(); if (s) end = s;
       }
     }
+    {
+      int value = ignoreDelay ? 1 : 0;
+      if (textRenderReadIntPropAliases(
+              dict, {TJS_W("ignore_delay"), TJS_W("ignoreDelay")}, value)) {
+        ignoreDelay = value != 0;
+      }
+    }
+    {
+      int value = widthTimeScale ? 1 : 0;
+      if (textRenderReadIntPropAliases(
+              dict,
+              {TJS_W("width_time_scale"), TJS_W("widthTimeScale")},
+              value)) {
+        widthTimeScale = value != 0;
+      }
+    }
   }
 };
 
@@ -284,6 +303,7 @@ struct CharacterInfo {
   int edgeEmphasis = 0;
   std::optional<RgbColor> shadow = std::nullopt;
   tjs_ustring text;
+  double delay = 0.0;
 
   tTJSVariant serialize() const {
     auto dict = TJSCreateDictionaryObject();
@@ -302,10 +322,19 @@ struct CharacterInfo {
     setprop(dict, edgeEmphasis);
     setprop_opt_t(dict, shadow, static_cast<tjs_int>);
     { tTJSVariant v(ttstr(text.c_str())); dict->PropSet(TJS_MEMBERENSURE, TJS_W("text"), nullptr, &v, dict); }
+    {
+      tTJSVariant v(krkr::textrender::CharacterDelayForScript(delay));
+      dict->PropSet(TJS_MEMBERENSURE, TJS_W("delay"), nullptr, &v, dict);
+    }
     auto res = tTJSVariant(dict, dict);
     dict->Release();
     return res;
   }
+};
+
+struct TextRenderKeyWait {
+  int pos = 0;
+  double time = 0.0;
 };
 
 #define property_accessor(name, type, storage) \
@@ -613,7 +642,11 @@ public:
     }
   }
 
-  bool render(tTJSString text, int autoIndent, int diff, int all, bool same);
+  bool render(tTJSString text, int autoIndent, int diff, int all, bool same,
+              bool plain = false, iTJSDispatch2 *callbackThis = nullptr);
+  static tjs_error TJS_INTF_METHOD renderCallback(
+      tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
+      iTJSDispatch2 *objthis);
   void setRenderSize(int width, int height);
   void setDefault(tTJSVariant defaultSettings);
   void setOption(tTJSVariant options);
@@ -623,7 +656,7 @@ public:
   void newline();
 
   tTJSVariant getKeyWait();
-  tTJSVariant renderDelay();
+  double get_renderDelay() const;
   int calcShowCount(int elapsed);
   int get_renderCount() const;
   void set_renderCount(int value);
@@ -660,6 +693,7 @@ public:
   property_accessor(lineSize, int, m_state.lineSize);
   property_accessor(align, int, m_state.align);
   property_accessor(valign, int, m_state.valign);
+  property_accessor(timeScale, double, m_timeScale);
 
   property_accessor(defaultBold, bool, m_default.bold);
   property_accessor(defaultItalic, bool, m_default.italic);
@@ -717,6 +751,15 @@ private:
   bool m_overflow = false;
   bool m_isBeginningOfLine = true;
   bool m_vertical = false;
+  double m_timeScale = 1.0;
+  double m_baseCharacterDelay = 0.0;
+  double m_characterDelay = 0.0;
+  double m_currentDelay = 0.0;
+  double m_renderDelay = 0.0;
+  size_t m_timingSegmentStart = 0;
+  double m_timingSegmentStartDelay = 0.0;
+  size_t m_sameKeyWaitIndex = 0;
+  bool m_sameTiming = false;
 
   TextRenderOptions m_options{};
   TextRenderState m_default{};
@@ -724,6 +767,7 @@ private:
 
   std::vector<CharacterInfo> m_characters{};
   std::vector<CharacterInfo> m_buffer{};
+  std::vector<TextRenderKeyWait> m_keyWaits{};
   uint32_t m_mode = 0;
 
   void pushCharacter(tjs_char ch);
@@ -738,6 +782,11 @@ private:
   int getEffectiveFontHeight() const;
   int getAscentHeight();
   RenderBounds getRenderedBounds();
+  size_t getCharacterCount() const;
+  void addDelay(double delay);
+  void synchronizeTiming(double targetTime);
+  std::optional<double> resolveDelayLabel(
+      iTJSDispatch2 *callbackThis, const tjs_ustring &label) const;
 };
 
 enum TextRenderMode {
@@ -765,6 +814,90 @@ static void read_integer(tTJSString const &str, size_t &i, int &value) {
     if (ch == ';') { if (is_negative) value = -value; return; }
     TVPThrowExceptionMessage(TJS_W("TextRenderBase::render() parse error: unexpected char"));
   }
+}
+
+static int read_optional_integer(tTJSString const &str, size_t &i,
+                                 int fallback) {
+  tjs_ustring token;
+  tjs_char ch;
+  while (true) {
+    if (!readchar(str, i, ch)) {
+      TVPThrowExceptionMessage(
+          TJS_W("TextRenderBase::render() parse error: expected integer or ';', found EOF"));
+    }
+    if (ch == ';') break;
+    token += ch;
+  }
+
+  const auto parsed = krkr::textrender::ParseOptionalIntegerToken(
+      std::basic_string_view<tjs_char>(token));
+  if (!parsed.valid) {
+    TVPThrowExceptionMessage(
+        TJS_W("TextRenderBase::render() parse error: unexpected char"));
+  }
+  return parsed.hasValue ? parsed.value : fallback;
+}
+
+static tjs_ustring read_delay_label(tTJSString const &str, size_t &i,
+                                    const tjs_char *command) {
+  tjs_char ch;
+  if (!readchar(str, i, ch) || ch != '$') {
+    TVPThrowExceptionMessage(
+        TJS_W("TextRenderBase::render() parse error: expected '$' after %1"),
+        command);
+  }
+
+  tjs_ustring label;
+  while (true) {
+    if (!readchar(str, i, ch)) {
+      TVPThrowExceptionMessage(
+          TJS_W("TextRenderBase::render() parse error: unterminated label after %1"),
+          command);
+    }
+    if (ch == ';') return label;
+    label += ch;
+  }
+}
+
+static bool read_flag(tTJSString const &str, size_t &i, bool default_value,
+                      const tjs_char *command) {
+  tjs_char ch;
+  if (!readchar(str, i, ch)) {
+    TVPThrowExceptionMessage(
+        TJS_W("TextRenderBase::render() parse error: expected flag after %1"),
+        command);
+  }
+  if (ch == '0') return false;
+  if (ch == '1') return true;
+  return default_value;
+}
+
+tjs_error TJS_INTF_METHOD TextRenderBase::renderCallback(
+    tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
+    iTJSDispatch2 *objthis) {
+  if (!objthis) return TJS_E_NATIVECLASSCRASH;
+  if (numparams < 1 || !param || !param[0]) return TJS_E_BADPARAMCOUNT;
+
+  auto *self = ncbInstanceAdaptor<TextRenderBase>::GetNativeInstance(objthis);
+  if (!self) return TJS_E_NATIVECLASSCRASH;
+
+  const auto intParam = [&](tjs_int index, int fallback) {
+    return index < numparams && param[index] &&
+                   param[index]->Type() != tvtVoid
+               ? static_cast<int>(static_cast<tjs_int>(*param[index]))
+               : fallback;
+  };
+  const int autoIndent = intParam(1, 0);
+  const int diff = intParam(2, 0);
+  const int all = intParam(3, 0);
+  const bool same = intParam(4, 0) != 0;
+  const bool plain = intParam(5, 0) != 0;
+
+  const bool rendered =
+      self->render(ttstr(*param[0]), autoIndent, diff, all, same, plain,
+                   objthis);
+  if (result) *result = rendered;
+  return TJS_S_OK;
 }
 
 void TextRenderBase::applyFont() {
@@ -850,9 +983,115 @@ int TextRenderBase::getAscentHeight() {
   return m_cachedAscentHeight;
 }
 
-bool TextRenderBase::render(tTJSString text, int autoIndent, int diff, int all, bool same) {
+size_t TextRenderBase::getCharacterCount() const {
+  return m_characters.size() + m_buffer.size();
+}
+
+void TextRenderBase::addDelay(double delay) {
+  if (m_options.ignoreDelay) return;
+  m_currentDelay += std::max(delay, 0.0);
+}
+
+void TextRenderBase::synchronizeTiming(double targetTime) {
+  targetTime = std::max(targetTime, m_timingSegmentStartDelay);
+  const double sourceDuration =
+      std::max(m_currentDelay - m_timingSegmentStartDelay, 0.0);
+  const double targetDuration = targetTime - m_timingSegmentStartDelay;
+  const double scale = sourceDuration > 0.0
+                           ? targetDuration / sourceDuration
+                           : 1.0;
+
+  size_t index = 0;
+  const auto scaleCharacter = [&](CharacterInfo &character) {
+    if (index++ < m_timingSegmentStart) return;
+    character.delay =
+        m_timingSegmentStartDelay +
+        (character.delay - m_timingSegmentStartDelay) * scale;
+  };
+  for (auto &character : m_characters) scaleCharacter(character);
+  for (auto &character : m_buffer) scaleCharacter(character);
+  for (auto &wait : m_keyWaits) {
+    if (wait.pos < static_cast<int>(m_timingSegmentStart)) continue;
+    wait.time = m_timingSegmentStartDelay +
+                (wait.time - m_timingSegmentStartDelay) * scale;
+  }
+
+  m_currentDelay = targetTime;
+  m_renderDelay = std::max(m_renderDelay, targetTime);
+  m_timingSegmentStart = getCharacterCount();
+  m_timingSegmentStartDelay = targetTime;
+}
+
+std::optional<double> TextRenderBase::resolveDelayLabel(
+    iTJSDispatch2 *callbackThis, const tjs_ustring &label) const {
+  if (!callbackThis) return std::nullopt;
+
+  tTJSVariant labelValue(ttstr(label.c_str()));
+  tTJSVariant *params[] = {&labelValue};
+  tTJSVariant resolved;
+  const tjs_error status = callbackThis->FuncCall(
+      0, TJS_W("onLabel"), nullptr, &resolved, 1, params, callbackThis);
+  if (TJS_FAILED(status) ||
+      (resolved.Type() != tvtInteger && resolved.Type() != tvtReal)) {
+    return std::nullopt;
+  }
+  return static_cast<double>(resolved.AsReal());
+}
+
+bool TextRenderBase::render(tTJSString text, int autoIndent, int diff, int all,
+                            bool same, bool plain,
+                            iTJSDispatch2 *callbackThis) {
+  // A new message keeps the already laid-out glyphs, but their reveal time is
+  // reset to zero.  This is how MsgwinRender appends a new line while only
+  // animating the newly supplied text.  `same` is used by synchronized
+  // secondary-language rendering and therefore keeps the existing timeline.
+  flush();
+  if (!same) {
+    for (auto &character : m_characters) character.delay = 0.0;
+    m_keyWaits.clear();
+    m_renderDelay = 0.0;
+    m_currentDelay = 0.0;
+  } else {
+    // `same` is used for concurrently rendered language tracks.  They share
+    // the first track's key-wait anchors but each track starts at time zero;
+    // renderDelay remains the maximum duration of all tracks.
+    m_currentDelay = 0.0;
+  }
+
   m_autoIndent = autoIndent;
+  m_sameTiming = same;
+  m_sameKeyWaitIndex = 0;
+  m_baseCharacterDelay =
+      m_options.ignoreDelay ? 0.0 : std::max(static_cast<double>(diff), 0.0);
+  if (all > 0 && m_baseCharacterDelay == 0.0 && !m_options.ignoreDelay) {
+    // Keep distinct timestamps so the requested total time can be
+    // distributed even when the caller did not provide a character speed.
+    m_baseCharacterDelay = 0.001;
+  }
+  m_characterDelay = m_baseCharacterDelay;
+  m_timingSegmentStart = getCharacterCount();
+  m_timingSegmentStartDelay = m_currentDelay;
+
   size_t len = (size_t)text.GetLen();
+  const auto finishTiming = [&]() {
+    if (all > 0 && !m_options.ignoreDelay) {
+      synchronizeTiming(static_cast<double>(all));
+    } else {
+      m_renderDelay = std::max(m_renderDelay, m_currentDelay);
+    }
+  };
+
+  if (plain) {
+    krkr::textrender::ParsePlainText<tjs_char>(
+        std::basic_string_view<tjs_char>(text.c_str(), len),
+        [this](tjs_char ch) { pushCharacter(ch); }, [this]() {
+          flush();
+          performLinebreak();
+        });
+    finishTiming();
+    return !m_overflow;
+  }
+
   for (size_t i = 0; i < len; ++i) {
     tjs_char ch = text[i];
     switch (ch) {
@@ -874,35 +1113,80 @@ bool TextRenderBase::render(tTJSString text, int autoIndent, int diff, int all, 
         break;
       }
       case 'b': {
-        int value = 0;
-        read_integer(text, i, value);
-        m_state.bold = (value != 0);
+        m_state.bold = read_flag(text, i, m_default.bold, TJS_W("%b"));
         m_fontDirty = true;
         break;
       }
       case 'i': {
-        int value = 0;
-        read_integer(text, i, value);
-        m_state.italic = (value != 0);
+        m_state.italic = read_flag(text, i, m_default.italic, TJS_W("%i"));
         m_fontDirty = true;
         break;
       }
       case 's': {
-        int value = 0;
-        read_integer(text, i, value);
-        m_state.fontSize = value;
-        m_fontDirty = true;
+        m_state.shadow = read_flag(text, i, m_default.shadow, TJS_W("%s"));
         break;
       }
       case 'e': {
-        int value = 0;
-        read_integer(text, i, value);
-        m_state.edge = (value != 0);
+        m_state.edge = read_flag(text, i, m_default.edge, TJS_W("%e"));
         break;
       }
       case 'd': {
+        // An empty %d; resets the speed to the caller supplied base delay.
+        // It is distinct from %d0;, which intentionally disables delay.
+        const int value = read_optional_integer(text, i, 100);
+        if (!m_options.ignoreDelay) {
+          m_characterDelay =
+              m_baseCharacterDelay * static_cast<double>(value) / 100.0;
+        }
+        break;
+      }
+      case 'a': {
+        const int value = read_optional_integer(
+            text, i, static_cast<int>(m_baseCharacterDelay));
+        if (!m_options.ignoreDelay) {
+          m_characterDelay = std::max(static_cast<double>(value), 0.0);
+        }
+        break;
+      }
+      case 'w': {
+        if (i + 1 < len && text[i + 1] == '$') {
+          const auto label = read_delay_label(text, i, TJS_W("%w"));
+          if (const auto value = resolveDelayLabel(callbackThis, label)) {
+            addDelay(*value);
+          }
+        } else {
+          int value = 0;
+          read_integer(text, i, value);
+          addDelay(m_baseCharacterDelay * static_cast<double>(value) / 100.0);
+        }
+        break;
+      }
+      case 't': {
+        if (i + 1 < len && text[i + 1] == '$') {
+          const auto label = read_delay_label(text, i, TJS_W("%t"));
+          if (const auto value = resolveDelayLabel(callbackThis, label)) {
+            addDelay(*value);
+          }
+        } else {
+          int value = 0;
+          read_integer(text, i, value);
+          addDelay(static_cast<double>(value));
+        }
+        break;
+      }
+      case 'D': {
+        if (i + 1 < len && text[i + 1] == '$') {
+          const auto label = read_delay_label(text, i, TJS_W("%D"));
+          if (!m_options.ignoreDelay) {
+            if (const auto value = resolveDelayLabel(callbackThis, label)) {
+              synchronizeTiming(*value);
+            }
+          }
+          break;
+        }
         int value = 0;
         read_integer(text, i, value);
+        if (!m_options.ignoreDelay) synchronizeTiming(value);
         break;
       }
       case 'r': m_state = m_default; m_fontDirty = true; break;
@@ -928,7 +1212,15 @@ bool TextRenderBase::render(tTJSString text, int autoIndent, int diff, int all, 
       case 'i': m_indent = m_x; break;
       case 'r': m_indent = 0; break;
       case 'w': pushCharacter(' '); break;
-      case 'k': break;
+      case 'k': {
+        const int position = static_cast<int>(getCharacterCount());
+        if (m_sameTiming && m_sameKeyWaitIndex < m_keyWaits.size()) {
+          synchronizeTiming(m_keyWaits[m_sameKeyWaitIndex++].time);
+        } else if (!m_sameTiming) {
+          m_keyWaits.push_back({position, m_currentDelay});
+        }
+        break;
+      }
       case 'x': break;
       default: pushCharacter(ch); break;
       }
@@ -976,11 +1268,24 @@ bool TextRenderBase::render(tTJSString text, int autoIndent, int diff, int all, 
       }
       break;
     }
+    case '\r':
+      // Treat CRLF as one logical line break while still supporting files
+      // that contain old-style CR-only line endings.
+      if (i + 1 < len && text[i + 1] == '\n') ++i;
+      flush();
+      performLinebreak();
+      break;
+    case '\n':
+      flush();
+      performLinebreak();
+      break;
     default:
       pushCharacter(ch);
       break;
     }
   }
+
+  finishTiming();
 
   return !m_overflow;
 }
@@ -1032,8 +1337,17 @@ void TextRenderBase::pushCharacter(tjs_char ch) {
   info.shadow = m_state.shadow ? std::make_optional(m_state.shadowColor) : std::nullopt;
   tjs_char tmp[] = { ch, 0 };
   info.text = tmp;
+  info.delay = m_currentDelay;
 
   m_buffer.push_back(std::move(info));
+
+  double characterDelay = m_characterDelay;
+  if (m_options.widthTimeScale) {
+    characterDelay *=
+        static_cast<double>(std::max(advance_width, 0)) /
+        static_cast<double>(std::max(getEffectiveFontHeight(), 1));
+  }
+  addDelay(characterDelay);
 
   if (m_autoIndent) {
     if (m_isBeginningOfLine && m_autoIndent < 0) {
@@ -1207,6 +1521,15 @@ void TextRenderBase::clear() {
   m_fontDirty = true;
   m_layoutDirty = false;
   m_mode = kTextRenderModeLeading;
+  m_keyWaits.clear();
+  m_baseCharacterDelay = 0.0;
+  m_characterDelay = 0.0;
+  m_currentDelay = 0.0;
+  m_renderDelay = 0.0;
+  m_timingSegmentStart = 0;
+  m_timingSegmentStartDelay = 0.0;
+  m_sameKeyWaitIndex = 0;
+  m_sameTiming = false;
 }
 
 void TextRenderBase::done() {
@@ -1215,9 +1538,8 @@ void TextRenderBase::done() {
 }
 
 void TextRenderBase::newline() {
-  if (auto logger = spdlog::get("plugin")) {
-    logger->warn("TextRenderBase::newline() is not supported");
-  }
+  flush();
+  performLinebreak();
 }
 
 void TextRenderBase::resetStyle() {
@@ -1238,20 +1560,36 @@ void TextRenderBase::resetFont() {
 
 tTJSVariant TextRenderBase::getKeyWait() {
   auto array = TJSCreateArrayObject();
+  for (size_t i = 0; i < m_keyWaits.size(); ++i) {
+    auto dict = TJSCreateDictionaryObject();
+    {
+      tTJSVariant value(m_keyWaits[i].pos);
+      dict->PropSet(TJS_MEMBERENSURE, TJS_W("pos"), nullptr, &value, dict);
+    }
+    {
+      tTJSVariant value(
+          krkr::textrender::ScaleDelay(m_keyWaits[i].time, m_timeScale));
+      dict->PropSet(TJS_MEMBERENSURE, TJS_W("time"), nullptr, &value, dict);
+    }
+    tTJSVariant value(dict, dict);
+    dict->Release();
+    array->PropSetByNum(TJS_MEMBERENSURE, static_cast<tjs_int>(i), &value,
+                        array);
+  }
   auto res = tTJSVariant(array, array);
   array->Release();
   return res;
 }
 
-tTJSVariant TextRenderBase::renderDelay() {
-  auto array = TJSCreateArrayObject();
-  auto res = tTJSVariant(array, array);
-  array->Release();
-  return res;
+double TextRenderBase::get_renderDelay() const {
+  return krkr::textrender::ScaleDelay(m_renderDelay, m_timeScale);
 }
 
 int TextRenderBase::calcShowCount(int elapsed) {
-  return static_cast<int>(m_characters.size());
+  return krkr::textrender::CalcShowCount(
+      m_characters.begin(), m_characters.end(),
+      static_cast<double>(elapsed), m_timeScale,
+      [](const CharacterInfo &character) { return character.delay; });
 }
 
 int TextRenderBase::get_renderCount() const {
@@ -1270,7 +1608,7 @@ void TextRenderBase::redraw() {
 
 tTJSVariant TextRenderBase::renderText(tTJSString text) {
   clear();
-  render(text, 0, 0, 1, false);
+  render(text, 0, 0, 0, false);
   done();
   return getCharacters(0, 0);
 }
@@ -1319,7 +1657,7 @@ tTJSVariant TextRenderBase::getRect() {
 NCB_REGISTER_CLASS(TextRenderBase) {
   Constructor();
 
-  NCB_METHOD(render);
+  NCB_METHOD_RAW_CALLBACK(render, &TextRenderBase::renderCallback, 0);
   NCB_METHOD(setRenderSize);
   NCB_METHOD(setDefault);
   NCB_METHOD(setOption);
@@ -1329,7 +1667,6 @@ NCB_REGISTER_CLASS(TextRenderBase) {
   NCB_METHOD(newline);
 
   NCB_METHOD(getKeyWait);
-  NCB_METHOD(renderDelay);
   NCB_METHOD(calcShowCount);
   NCB_METHOD(redraw);
   NCB_METHOD(renderText);
@@ -1358,6 +1695,7 @@ NCB_REGISTER_CLASS(TextRenderBase) {
   property_delegate(lineSize);
   property_delegate(align);
   property_delegate(valign);
+  property_delegate(timeScale);
 
   property_delegate(defaultBold);
   property_delegate(defaultItalic);
@@ -1381,6 +1719,7 @@ NCB_REGISTER_CLASS(TextRenderBase) {
 
   NCB_PROPERTY(fontScale, get_fontScale, set_fontScale);
   NCB_PROPERTY(renderCount, get_renderCount, set_renderCount);
+  NCB_PROPERTY_RO(renderDelay, get_renderDelay);
   NCB_PROPERTY_RO(renderLeft, get_renderLeft);
   NCB_PROPERTY_RO(renderTop, get_renderTop);
   NCB_PROPERTY_RO(renderWidth, get_renderWidth);
