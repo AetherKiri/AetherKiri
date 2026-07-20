@@ -239,7 +239,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: AetherKiri-Android-APK
+          name: android-release-apk
           path: out/godot/android/release/AetherKiri-release.apk
           retention-days: 7
 
@@ -247,7 +247,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: AetherKiri-Android-Debug-APK
+          name: android-debug-apk
           path: out/godot/android/debug/AetherKiri-debug.apk
           retention-days: 7
 
@@ -405,7 +405,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: AetherKiri-iOS-XcodeProject
+          name: ios-release-xcode-project
           path: |
             out/godot/ios/release/AetherKiri.xcodeproj
             out/godot/ios/release/AetherKiri
@@ -415,7 +415,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: AetherKiri-iOS-Debug-XcodeProject
+          name: ios-debug-xcode-project
           path: |
             out/godot/ios/debug/AetherKiri.xcodeproj
             out/godot/ios/debug/AetherKiri
@@ -425,7 +425,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: AetherKiri-iOS-Unsigned-IPA
+          name: ios-release-unsigned-ipa
           path: out/godot/ios/release/AetherKiri-Release-Unsigned.ipa
           retention-days: 7
 
@@ -433,7 +433,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: AetherKiri-iOS-Debug-Unsigned-IPA
+          name: ios-debug-unsigned-ipa
           path: out/godot/ios/debug/AetherKiri-Debug-Unsigned.ipa
           retention-days: 7
 
@@ -603,7 +603,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: AetherKiri-macOS
+          name: macos-release-app
           path: out/godot/macos/release/
           retention-days: 7
 
@@ -611,7 +611,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: AetherKiri-macOS-Debug
+          name: macos-debug-app
           path: out/godot/macos/debug/
           retention-days: 7
 
@@ -796,7 +796,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: AetherKiri-Web
+          name: web-release-export
           path: out/godot/web/release
           retention-days: 7
 
