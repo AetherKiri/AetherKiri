@@ -1782,6 +1782,7 @@ parse_start:
     static ttstr __exp_name(TJSMapGlobalStringMap(TJS_W("exp")));
     static ttstr __escape_name(TJSMapGlobalStringMap(TJS_W("escape")));
     static ttstr __name_name(TJSMapGlobalStringMap(TJS_W("name")));
+    static ttstr __taglist_name(TJSMapGlobalStringMap(TJS_W("taglist")));
 
     while(true) {
         DicClear->FuncCall(0, nullptr, nullptr, nullptr, 0, nullptr, DicObj);
