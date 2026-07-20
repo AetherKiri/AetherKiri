@@ -1,4 +1,5 @@
 #include "GlobalConfigManager.h"
+#include <cstdarg>
 #include <tinyxml2.h>
 #include "Platform.h"
 #include "UtilStreams.h"

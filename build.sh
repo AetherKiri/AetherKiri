@@ -53,7 +53,7 @@ show_help() {
     echo "  android    Build Android Godot APK"
     echo "  ios        Build iOS Godot app/export project"
     echo "  macos      Build macOS Godot app"
-    echo "  linux      Not wired yet; placeholder target"
+    echo "  linux      Build Linux Godot app"
     echo "  web        Build Godot Web export with GDExtension side module"
     echo ""
     echo "Options:"
@@ -206,6 +206,11 @@ if [[ "$CLEAN" == true ]]; then
             rm -rf "$SCRIPT_DIR/out/macos/$BUILD_TYPE"
             rm -rf "$SCRIPT_DIR/out/godot/macos/$BUILD_TYPE"
             echo -e "${GREEN}[INFO]${NC} macOS build artifacts cleaned."
+            ;;
+        linux)
+            rm -rf "$SCRIPT_DIR/out/linux/$BUILD_TYPE"
+            rm -rf "$SCRIPT_DIR/out/godot/linux/$BUILD_TYPE"
+            echo -e "${GREEN}[INFO]${NC} Linux build artifacts cleaned."
             ;;
         web)
             rm -rf "$SCRIPT_DIR/out/web/$BUILD_TYPE"

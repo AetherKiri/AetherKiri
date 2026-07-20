@@ -46,6 +46,15 @@ if(TARGET krkr2core AND TARGET krkr2plugin)
         # final native engine_api link as well.
         set(_KRKR2PLUGIN_LINK_ITEM "$<LINK_LIBRARY:WHOLE_ARCHIVE,krkr2plugin>")
         target_link_libraries(engine_api PRIVATE krkr2core ${_KRKR2PLUGIN_LINK_ITEM})
+
+        if(LINUX)
+            # The runtime modules have circular static-library dependencies.
+            # Re-scan them after all consumers have been seen so platform
+            # implementations from core_environ_module are retained.
+            target_link_libraries(engine_api PRIVATE
+                "$<LINK_GROUP:RESCAN,core_base_module,core_environ_module,core_extension_module,core_plugin_module,core_movie_module,core_sound_module,core_visual_module,core_utils_module,tvpgl_simd,tjs2>"
+            )
+        endif()
         set_property(TARGET engine_api PROPERTY LINK_LIBRARY_OVERRIDE_krkr2plugin WHOLE_ARCHIVE)
     endif()
 endif()
@@ -57,6 +66,15 @@ endif()
 set_target_properties(engine_api PROPERTIES
     OUTPUT_NAME "engine_api"
 )
+
+if(LINUX)
+    # Linux exports bundle the engine and its vcpkg runtime libraries beside
+    # the GDExtension. Keep the loader path relative to that bundle.
+    set_target_properties(engine_api PROPERTIES
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "$ORIGIN"
+    )
+endif()
 
 # On Android, link system platform libs.
 if(ANDROID)

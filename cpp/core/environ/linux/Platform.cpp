@@ -66,7 +66,6 @@ bool TVP_utime(const char *name, time_t modtime) {
 
 #ifdef LINUX
 #include <filesystem>
-#include <gtk/gtk.h>
 #include <fstream>
 #include <Defer.h>
 #include <sys/stat.h>
@@ -139,47 +138,9 @@ std::string TVPGetCurrentLanguage() {
 
 int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
                             const std::vector<ttstr> &vecButtons) {
-    GtkWidget *dialog = nullptr;
-    DEFER({
-        if(dialog) {
-            gtk_widget_destroy(dialog);
-        }
-    });
-
-    switch(vecButtons.size()) {
-        case 1:
-            dialog = gtk_message_dialog_new(
-                NULL, // 父窗口
-                GTK_DIALOG_MODAL, // 模态对话框
-                GTK_MESSAGE_INFO, // 消息类型（信息）
-                GTK_BUTTONS_OK, // 按钮类型
-                "%s", text.AsStdString().c_str() // 消息内容
-            );
-            gtk_window_set_title(GTK_WINDOW(dialog),
-                                 caption.AsStdString().c_str());
-            gtk_dialog_run(GTK_DIALOG(dialog));
-            return 0;
-            break;
-        case 2:
-            dialog = gtk_message_dialog_new(
-                NULL, // 父窗口
-                GTK_DIALOG_MODAL, // 模态对话框
-                GTK_MESSAGE_INFO, // 消息类型（信息）
-                GTK_BUTTONS_YES_NO, // 按钮类型
-                "%s", text.AsStdString().c_str() // 消息内容
-            );
-            gtk_window_set_title(GTK_WINDOW(dialog),
-                                 caption.AsStdString().c_str());
-            int result = gtk_dialog_run(GTK_DIALOG(dialog));
-            switch(result) {
-                case GTK_RESPONSE_YES:
-                    return 0; // YES 0
-                default:
-                    return 1; // NO 1
-            }
-            break;
-    }
-    return -1;
+    fprintf(stderr, "%s: %s\n", caption.AsStdString().c_str(),
+            text.AsStdString().c_str());
+    return vecButtons.size() == 2 ? 1 : 0;
 }
 
 extern "C" int TVPShowSimpleMessageBox(const char *pszText,

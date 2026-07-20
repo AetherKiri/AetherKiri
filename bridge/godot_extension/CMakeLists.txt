@@ -68,10 +68,16 @@ target_link_libraries(aether_kiri_godot PRIVATE
     "$<LINK_LIBRARY:WHOLE_ARCHIVE,unofficial::godot::cpp>"
 )
 
+set(AETHERKIRI_EXTENSION_RPATH "@loader_path")
+if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
+    # The staged Linux extension and engine API live next to each other.
+    set(AETHERKIRI_EXTENSION_RPATH "$ORIGIN")
+endif()
+
 set_target_properties(aether_kiri_godot PROPERTIES
     OUTPUT_NAME "aether_kiri_godot"
     BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "@loader_path"
+    INSTALL_RPATH "${AETHERKIRI_EXTENSION_RPATH}"
 )
 
 if(WEB OR EMSCRIPTEN)
