@@ -1778,18 +1778,18 @@ void main() {
     bool covered = false;
 
     for (int tri = 0; tri < tri_count; ++tri) {
-        int vertex_base = pc.color0.w + tri * 3;
+        int vertex_base = pc.color0.w + tri * 4;
+        vec4 tri_bounds = vertices.vertex[vertex_base + 3];
+        if (any(lessThan(p, tri_bounds.xy)) ||
+            any(greaterThan(p, tri_bounds.zw))) {
+            continue;
+        }
         vec4 v0 = vertices.vertex[vertex_base + 0];
         vec4 v1 = vertices.vertex[vertex_base + 1];
         vec4 v2 = vertices.vertex[vertex_base + 2];
         vec2 d0 = v0.xy;
         vec2 d1 = v1.xy;
         vec2 d2 = v2.xy;
-        vec2 tri_min = min(d0, min(d1, d2)) - vec2(0.25);
-        vec2 tri_max = max(d0, max(d1, d2)) + vec2(0.25);
-        if (any(lessThan(p, tri_min)) || any(greaterThan(p, tri_max))) {
-            continue;
-        }
         float area = edge(d0, d1, d2);
         if (abs(area) < 0.00001) {
             continue;
@@ -1801,6 +1801,10 @@ void main() {
             vec2 src_pos_f = v0.zw * w0 + v1.zw * w1 + v2.zw * w2;
             out_color = load_bilinear(src_limit, src_pos_f);
             covered = true;
+            // A tessellated surface has a single source sample at a pixel.
+            // Stop after the first covering triangle instead of scanning the
+            // rest of the mesh (and avoid sampling a shared edge twice).
+            break;
         }
     }
     if (covered) {
@@ -2236,24 +2240,25 @@ void main() {
     ivec2 src_limit = max(pc.color0.xy - ivec2(1), ivec2(0));
     float opacity = clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
     int blend_flags = pc.color0.z;
-    bool tvp_blend = (blend_flags & 65536) != 0;
+    bool mask_write = (blend_flags & 131072) != 0;
+    bool tvp_blend = !mask_write && (blend_flags & 65536) != 0;
     int tvp_blend_mode = blend_flags & 65535;
     vec4 dst = imageLoad(dst_img, dst_pos);
     bool covered = false;
 
     for (int tri = 0; tri < tri_count; ++tri) {
-        int vertex_base = pc.color0.w + tri * 3;
+        int vertex_base = pc.color0.w + tri * 4;
+        vec4 tri_bounds = vertices.vertex[vertex_base + 3];
+        if (any(lessThan(p, tri_bounds.xy)) ||
+            any(greaterThan(p, tri_bounds.zw))) {
+            continue;
+        }
         vec4 v0 = vertices.vertex[vertex_base + 0];
         vec4 v1 = vertices.vertex[vertex_base + 1];
         vec4 v2 = vertices.vertex[vertex_base + 2];
         vec2 d0 = v0.xy;
         vec2 d1 = v1.xy;
         vec2 d2 = v2.xy;
-        vec2 tri_min = min(d0, min(d1, d2)) - vec2(0.25);
-        vec2 tri_max = max(d0, max(d1, d2)) + vec2(0.25);
-        if (any(lessThan(p, tri_min)) || any(greaterThan(p, tri_max))) {
-            continue;
-        }
         float area = edge(d0, d1, d2);
         if (abs(area) < 0.00001) {
             continue;
@@ -2284,9 +2289,21 @@ void main() {
                 if (src.a <= 0.00001) {
                     continue;
                 }
-                dst = blend_cubism(dst, src, blend_flags);
+                if (mask_write) {
+                    // Cubism mask textures start white and accumulate inverse
+                    // source alpha.  Keep RGB white because the masked draw
+                    // samples only alpha, matching the former CPU rasterizer.
+                    dst = vec4(1.0, 1.0, 1.0,
+                               dst.a * (1.0 - src.a));
+                } else {
+                    dst = blend_cubism(dst, src, blend_flags);
+                }
             }
             covered = true;
+            // Cubism ArtMeshes are tessellations, not independently stacked
+            // triangles.  Once this pixel is covered, later triangles in the
+            // same mesh cannot contribute another layer.
+            break;
         }
     }
     if (covered) {
@@ -2574,15 +2591,18 @@ void main() {
     bool covered = false;
 
     for (int tri = 0; tri < tri_count; ++tri) {
-        int base = pc.color0.w + tri * 18;
+        int base = pc.color0.w + tri * 22;
+        vec4 tri_bounds = vec4(vertices.value[base + 18],
+                               vertices.value[base + 19],
+                               vertices.value[base + 20],
+                               vertices.value[base + 21]);
+        if (any(lessThan(p, tri_bounds.xy)) ||
+            any(greaterThan(p, tri_bounds.zw))) {
+            continue;
+        }
         vec2 d0 = vertex_dst(base, 0);
         vec2 d1 = vertex_dst(base, 1);
         vec2 d2 = vertex_dst(base, 2);
-        vec2 tri_min = min(d0, min(d1, d2)) - vec2(0.25);
-        vec2 tri_max = max(d0, max(d1, d2)) + vec2(0.25);
-        if (any(lessThan(p, tri_min)) || any(greaterThan(p, tri_max))) {
-            continue;
-        }
         float area = edge(d0, d1, d2);
         if (abs(area) < 0.00001) {
             continue;
@@ -2614,6 +2634,10 @@ void main() {
             }
             dst = blend_cubism(dst, src, blend_flags);
             covered = true;
+            // As above, a pixel belongs to one triangle of an ArtMesh.  This
+            // turns the common case from a full 64-triangle scan into an
+            // early-out while keeping drawable-to-drawable ordering intact.
+            break;
         }
     }
     if (covered) {
@@ -3383,6 +3407,25 @@ bool IsBatchableTriangleOp(const std::shared_ptr<GodotGpuOp> &op) {
     }
 }
 
+bool IsLive2DTriangleOp(const std::shared_ptr<GodotGpuOp> &op) {
+    if (!IsBatchableTriangleOp(op)) return false;
+    if (op->type == GodotGpuOp::Type::DrawMaskedTriangles) return true;
+    return op->type == GodotGpuOp::Type::DrawTriangles &&
+           (op->color & TVP_GODOT_GPU_BLEND_TVP_OPERATION) == 0;
+}
+
+bool TriangleOpNeedsBarrierBeforeDispatch(
+    const GodotGpuOp &op,
+    const std::vector<GodotGpuPendingWrite> &writes) {
+    if (writes.empty()) return false;
+    const GodotGpuPendingWrite dst_rect =
+        PendingWriteForRect(op.dst, op.dst_pos, op.size);
+    for (const auto &write : writes) {
+        if (PendingWritesOverlap(write, dst_rect)) return true;
+    }
+    return false;
+}
+
 void ExecuteGodotGpuTriangleBatch(
     RenderingDevice *rd,
     const std::vector<std::shared_ptr<GodotGpuOp>> &ops) {
@@ -3566,8 +3609,18 @@ void ExecuteGodotGpuComputeBatch(
 
     std::vector<RID> unused_uniform_sets;
     bool any_dispatched = false;
+    std::vector<GodotGpuPendingWrite> live2d_pending_writes;
     const int64_t compute_list = rd->compute_list_begin();
     for (size_t i = 0; i < ops.size(); ++i) {
+        const bool live2d_triangle = IsLive2DTriangleOp(ops[i]);
+        if (live2d_triangle && TriangleOpNeedsBarrierBeforeDispatch(
+                                   *ops[i], live2d_pending_writes)) {
+            rd->compute_list_add_barrier(compute_list);
+            live2d_pending_writes.clear();
+        } else if (!live2d_triangle && !live2d_pending_writes.empty()) {
+            rd->compute_list_add_barrier(compute_list);
+            live2d_pending_writes.clear();
+        }
         if (IsBatchableTriangleOp(ops[i])) {
             if (results[i]) {
                 DispatchGodotGpuPreparedTriangles(rd, compute_list,
@@ -3585,10 +3638,24 @@ void ExecuteGodotGpuComputeBatch(
         }
         if (results[i]) {
             any_dispatched = true;
-            // Preserve native E-mote layer order while sharing the expensive
-            // Metal command-list submission across blend and triangle ops.
-            rd->compute_list_add_barrier(compute_list);
+            if (live2d_triangle) {
+                // Cubism drawables use explicit, non-aliased textures.  Only
+                // overlapping destination rectangles need read-after-write
+                // ordering because the shader samples the existing target.
+                // This removes hundreds of redundant Metal barriers for
+                // disjoint ArtMeshes while preserving drawable order where
+                // pixels can actually overlap.
+                live2d_pending_writes.push_back(PendingWriteForRect(
+                    ops[i]->dst, ops[i]->dst_pos, ops[i]->size));
+            } else {
+                // Keep the more conservative E-mote/TVP behavior: those paths
+                // can expose different RIDs backed by aliased storage.
+                rd->compute_list_add_barrier(compute_list);
+            }
         }
+    }
+    if (!live2d_pending_writes.empty()) {
+        rd->compute_list_add_barrier(compute_list);
     }
     rd->compute_list_end();
     if (any_dispatched) ApplyGodotGpuBarrier(rd);
@@ -3896,6 +3963,22 @@ bool BridgeCopyRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
     return RunGodotGpuOpAsync(op);
 }
 
+void AppendGodotGpuTriangleBounds(std::vector<float> &vertices,
+                                  const tTVPPointD *points) {
+    const float min_x = static_cast<float>(
+        std::min({points[0].x, points[1].x, points[2].x}) - 0.25);
+    const float min_y = static_cast<float>(
+        std::min({points[0].y, points[1].y, points[2].y}) - 0.25);
+    const float max_x = static_cast<float>(
+        std::max({points[0].x, points[1].x, points[2].x}) + 0.25);
+    const float max_y = static_cast<float>(
+        std::max({points[0].y, points[1].y, points[2].y}) + 0.25);
+    vertices.push_back(min_x);
+    vertices.push_back(min_y);
+    vertices.push_back(max_x);
+    vertices.push_back(max_y);
+}
+
 bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
                          const tTVPRect *clip_rect,
                          const tTVPPointD *dst_points,
@@ -3931,12 +4014,17 @@ bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     op->size = Vector3(width, height, 1);
     op->src_size = Vector3(src_record.width, src_record.height, 1);
     op->mode = triangle_count;
-    op->vertices.reserve(static_cast<size_t>(triangle_count) * 12u);
-    for (uint32_t i = 0; i < triangle_count * 3u; ++i) {
-        op->vertices.push_back(static_cast<float>(dst_points[i].x));
-        op->vertices.push_back(static_cast<float>(dst_points[i].y));
-        op->vertices.push_back(static_cast<float>(src_points[i].x));
-        op->vertices.push_back(static_cast<float>(src_points[i].y));
+    op->vertices.reserve(static_cast<size_t>(triangle_count) * 16u);
+    for (uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
+        const uint32_t vertex_base = triangle * 3u;
+        for (uint32_t vertex = 0; vertex < 3u; ++vertex) {
+            const uint32_t i = vertex_base + vertex;
+            op->vertices.push_back(static_cast<float>(dst_points[i].x));
+            op->vertices.push_back(static_cast<float>(dst_points[i].y));
+            op->vertices.push_back(static_cast<float>(src_points[i].x));
+            op->vertices.push_back(static_cast<float>(src_points[i].y));
+        }
+        AppendGodotGpuTriangleBounds(op->vertices, dst_points + vertex_base);
     }
     return RunGodotGpuOpAsync(op);
 }
@@ -3979,12 +4067,17 @@ bool BridgeDrawTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     op->mode = triangle_count;
     op->opacity = static_cast<int>(std::round(std::clamp(opacity, 0.0f, 1.0f) * 255.0f));
     op->color = blend_mode;
-    op->vertices.reserve(static_cast<size_t>(triangle_count) * 12u);
-    for (uint32_t i = 0; i < triangle_count * 3u; ++i) {
-        op->vertices.push_back(static_cast<float>(dst_points[i].x));
-        op->vertices.push_back(static_cast<float>(dst_points[i].y));
-        op->vertices.push_back(static_cast<float>(src_points[i].x));
-        op->vertices.push_back(static_cast<float>(src_points[i].y));
+    op->vertices.reserve(static_cast<size_t>(triangle_count) * 16u);
+    for (uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
+        const uint32_t vertex_base = triangle * 3u;
+        for (uint32_t vertex = 0; vertex < 3u; ++vertex) {
+            const uint32_t i = vertex_base + vertex;
+            op->vertices.push_back(static_cast<float>(dst_points[i].x));
+            op->vertices.push_back(static_cast<float>(dst_points[i].y));
+            op->vertices.push_back(static_cast<float>(src_points[i].x));
+            op->vertices.push_back(static_cast<float>(src_points[i].y));
+        }
+        AppendGodotGpuTriangleBounds(op->vertices, dst_points + vertex_base);
     }
     return RunGodotGpuOpAsync(op);
 }
@@ -4036,14 +4129,19 @@ bool BridgeDrawMaskedTriangles(uint64_t dst, uint64_t src, uint64_t mask,
     op->opacity = static_cast<int>(
         std::round(std::clamp(opacity, 0.0f, 1.0f) * 255.0f));
     op->color = (blend_mode & 0xffffu) | (inverted_mask ? 0x10000u : 0u);
-    op->vertices.reserve(static_cast<size_t>(triangle_count) * 18u);
-    for (uint32_t i = 0; i < triangle_count * 3u; ++i) {
-        op->vertices.push_back(static_cast<float>(dst_points[i].x));
-        op->vertices.push_back(static_cast<float>(dst_points[i].y));
-        op->vertices.push_back(static_cast<float>(src_points[i].x));
-        op->vertices.push_back(static_cast<float>(src_points[i].y));
-        op->vertices.push_back(static_cast<float>(mask_points[i].x));
-        op->vertices.push_back(static_cast<float>(mask_points[i].y));
+    op->vertices.reserve(static_cast<size_t>(triangle_count) * 22u);
+    for (uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
+        const uint32_t vertex_base = triangle * 3u;
+        for (uint32_t vertex = 0; vertex < 3u; ++vertex) {
+            const uint32_t i = vertex_base + vertex;
+            op->vertices.push_back(static_cast<float>(dst_points[i].x));
+            op->vertices.push_back(static_cast<float>(dst_points[i].y));
+            op->vertices.push_back(static_cast<float>(src_points[i].x));
+            op->vertices.push_back(static_cast<float>(src_points[i].y));
+            op->vertices.push_back(static_cast<float>(mask_points[i].x));
+            op->vertices.push_back(static_cast<float>(mask_points[i].y));
+        }
+        AppendGodotGpuTriangleBounds(op->vertices, dst_points + vertex_base);
     }
     return RunGodotGpuOpAsync(op);
 }

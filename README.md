@@ -142,8 +142,8 @@ iOS and Android export presets reference the generated PNG sizes under
 ## Build
 
 The public repository builds and runs CI without access to private packages.
-Maintainers with access to the complete E-mote implementation can initialize
-the optional package before building:
+Maintainers with access to the complete E-mote and native Live2D
+implementations can initialize the optional package before building:
 
 ```bash
 git submodule update --init packages/AetherInternal
@@ -157,15 +157,14 @@ checkout. Trusted runs of the `Build` GitHub Actions workflow use the
 private submodule recursively. Fork and Dependabot pull requests cannot access
 repository secrets, so those untrusted runs use the public fallback.
 
-The internal package extends `motionplayer`; it does not replace the public
-target or copy its source tree. The public backend remains the single
-script-facing implementation. When available, the private package registers a
-small versioned extension that supplies only the newly added E-mote module
-recognition, authored blink/physics metadata, automatic blinking,
-bust/hair/tail physics, precise repeated-label stencil policy, and private
-state persistence. Both configurations run the same public motionplayer
-tests. A package/API mismatch stops configuration instead of silently
-building an incompatible combination.
+The internal package extends the existing public `motionplayer` and
+`krkr2plugin` targets; it does not replace either target or copy their public
+source trees. For E-mote, it registers a small versioned controller extension.
+For native Live2D, it contributes the Cubism SDK, `.l2d` loader, motion player,
+and renderer while the public repository keeps the script-compatible fallback
+and generic GPU bridge. Both configurations run the same public tests. A
+package/API mismatch stops configuration instead of silently building an
+incompatible combination.
 
 Common builds:
 

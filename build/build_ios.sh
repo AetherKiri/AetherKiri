@@ -234,7 +234,8 @@ combine_ios_static_extension() {
     local triplet="$2"
     local vcpkg_triplet_root="$CMAKE_BUILD_DIR/vcpkg_installed/$triplet"
     local vcpkg_lib_dir="$vcpkg_triplet_root/lib"
-    local cubism_core_lib="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphoneos/libLive2DCubismCore.a"
+    local cubism_package_root="${AETHERKIRI_INTERNAL_DIR:-$PROJECT_ROOT/packages/AetherInternal}"
+    local cubism_core_lib="$cubism_package_root/third_party/cubism/Core/lib/ios/Release-iphoneos/libLive2DCubismCore.a"
     local godot_cpp_arch="arm64"
     local godot_cpp_lib=""
     local libs=(
@@ -263,9 +264,9 @@ combine_ios_static_extension() {
 
     if [[ "$triplet" == "x64-ios-simulator" ]]; then
         godot_cpp_arch="x86_64"
-        cubism_core_lib="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphonesimulator-x86_64/libLive2DCubismCore.a"
+        cubism_core_lib="$cubism_package_root/third_party/cubism/Core/lib/ios/Release-iphonesimulator-x86_64/libLive2DCubismCore.a"
     elif [[ "$triplet" == "arm64-ios-simulator" ]]; then
-        cubism_core_lib="$PROJECT_ROOT/cpp/plugins/cubism/Core/lib/ios/Release-iphonesimulator-arm64/libLive2DCubismCore.a"
+        cubism_core_lib="$cubism_package_root/third_party/cubism/Core/lib/ios/Release-iphonesimulator-arm64/libLive2DCubismCore.a"
     fi
     godot_cpp_lib="$(resolve_ios_godot_cpp_lib "$vcpkg_triplet_root" "$godot_cpp_arch" "$BUILD_TYPE_LOWER" || true)"
     if [[ ! -f "$godot_cpp_lib" ]]; then

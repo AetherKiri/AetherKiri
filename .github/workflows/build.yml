@@ -579,9 +579,9 @@ jobs:
             2>&1 | tee "$configure_log"
 
           if [[ "$AETHERKIRI_WITH_INTERNAL" == "true" ]]; then
-            grep -F "AetherInternal E-mote package: enabled" "$configure_log"
+            grep -F "AetherInternal E-mote/Live2D package: enabled" "$configure_log"
           else
-            grep -F "AetherInternal E-mote package: unavailable; using public fallback" "$configure_log"
+            grep -F "AetherInternal package: unavailable; using public fallbacks" "$configure_log"
           fi
 
           cmake --build "$test_build_dir" --parallel 4

@@ -71,6 +71,10 @@ enum TVPGodotGpuBlendMode : uint32_t {
     // Tag the latter so AlphaBlend/AlphaBlend_d are not mistaken for Cubism
     // add/multiply flags by the bridge shader.
     TVP_GODOT_GPU_BLEND_TVP_OPERATION = 0x00010000u,
+    // Request destination-alpha mask accumulation for a triangle mesh.  This
+    // is a generic GPU bridge operation; the optional Live2D package uses it
+    // to avoid rebuilding and uploading full mask textures on the CPU.
+    TVP_GODOT_GPU_BLEND_MASK_WRITE = 0x00020000u,
 };
 
 // draw_triangles is also used by the Live2D renderer, whose low 16 bits carry

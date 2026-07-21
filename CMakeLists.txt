@@ -83,6 +83,7 @@ option(BUILD_GPU_BRIDGE "build legacy external GPU bridge renderer" OFF)
 option(AETHERKIRI_ENABLE_INTERNAL
        "enable optional private AetherInternal packages when available" ON)
 set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 2)
+set(AETHERKIRI_LIVE2D_HOST_API_VERSION 1)
 set(AETHERKIRI_INTERNAL_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherInternal"
     CACHE PATH "path to an AetherInternal package checkout")
@@ -96,10 +97,13 @@ if(AETHERKIRI_ENABLE_INTERNAL)
     find_package(AetherInternal CONFIG QUIET
         NO_DEFAULT_PATH)
     if(AetherInternal_FOUND)
-        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 3 OR
+        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 4 OR
            NOT AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL
                AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION OR
-           NOT COMMAND aetherinternal_extend_motionplayer)
+           NOT AETHERINTERNAL_REQUIRED_LIVE2D_HOST_API_VERSION EQUAL
+               AETHERKIRI_LIVE2D_HOST_API_VERSION OR
+           NOT COMMAND aetherinternal_extend_motionplayer OR
+           NOT COMMAND aetherinternal_extend_live2d)
             message(FATAL_ERROR
                 "AetherInternal is present but is incompatible with the "
                 "motionplayer backend contract required by this checkout")
@@ -109,9 +113,9 @@ if(AETHERKIRI_ENABLE_INTERNAL)
 endif()
 
 if(AETHERKIRI_INTERNAL_ENABLED)
-    message(STATUS "AetherInternal E-mote package: enabled")
+    message(STATUS "AetherInternal E-mote/Live2D package: enabled")
 else()
-    message(STATUS "AetherInternal E-mote package: unavailable; using public fallback")
+    message(STATUS "AetherInternal package: unavailable; using public fallbacks")
 endif()
 
 set(CMAKE_C_STANDARD 17)
