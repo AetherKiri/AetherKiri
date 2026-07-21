@@ -44,6 +44,14 @@
 namespace motion {
 namespace internal {
 
+        // Binder layers are structural containers. Kirikiri allows them to
+        // participate in the layer tree, but drawable-only APIs such as
+        // GetImageWidth/SetHasImage must never be used on them.
+        inline bool presentationLayerTypeCanReceivePixels(
+            tTVPLayerType type) {
+            return type != ltBinder;
+        }
+
 
         // Return true if a source path is a motion cross-reference
         // (e.g. "motion/title_bg/char_move"), not an image source.

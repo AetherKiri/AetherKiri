@@ -892,7 +892,9 @@ TJS_END_NATIVE_STATIC_METHOD_DECL_OUTER(
 
         ttstr name = *param[0];
         const ttstr lower_name = name.AsLowerCase();
-        if(lower_name.StartsWith(TJS_W("bres://"))) {
+        const bool is_bres_resource =
+            lower_name.StartsWith(TJS_W("bres://"));
+        if(is_bres_resource) {
             const tjs_char *path = name.c_str() + 7;
             if(path[0] == TJS_W('/')) {
                 while(path[0] == TJS_W('/'))
@@ -917,6 +919,14 @@ TJS_END_NATIVE_STATIC_METHOD_DECL_OUTER(
 
         if(is_plugin) {
             TVPLoadPlugin(name);
+        } else if(is_bres_resource) {
+            // linkZ consumes a binary KiriKiri-Z resource and returns its
+            // exported object. It is not Scripts.execStorage: treating the
+            // module bytes as TJS text fails immediately on the binary
+            // header. The host-side proxy below provides the bootstrap
+            // surface used by PackinOne startup code.
+            PluginCallTracer::Instance().LogPluginLoad(
+                name.AsStdString(), true, "linkZ BRes module bridged");
         } else {
             TVPExecuteStorage(name);
             PluginCallTracer::Instance().LogPluginLoad(

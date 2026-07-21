@@ -2682,9 +2682,20 @@ bool tTJSNI_WaveSoundBuffer::FillBuffer(bool firstwrite, bool allowpause) {
 
     // check decoder thread status
     tjs_int bufferremain;
+    bool decoderended;
+    bool decodedaudiopending;
     {
+        // Take an EOF/pending-data snapshot while the decode thread cannot
+        // advance the L2 ring.  L2BufferRemain can also contain terminal
+        // zero-length units, so it is not by itself an indication that audio
+        // still needs to be queued.
+        tTJSCriticalSectionHolder l2holder(L2BufferCS);
         tTJSCriticalSectionHolder holder(L2BufferRemainCS);
         bufferremain = L2BufferRemain;
+        decoderended = L2BufferEnded;
+        decodedaudiopending =
+            bufferremain > 0 &&
+            L2BufferDecodedSamplesInUnit[L2BufferReadPos] > 0;
     }
 
     if(IsDecodeThreadRunning() && bufferremain < TVP_WSB_ACCESS_FREQ)
@@ -2729,7 +2740,14 @@ bool tTJSNI_WaveSoundBuffer::FillBuffer(bool firstwrite, bool allowpause) {
                     PlayStopPos < (tjs_int)pp)
                 {
 #else
-        if(L2BufferEnded) {
+        // With asynchronous startup the decoder can reach EOF before the
+        // playing thread has transferred its decoded L2 units to the host
+        // buffer.  An empty OpenAL/SDL queue alone therefore does not mean
+        // playback is finished: stopping here drops short UI sound effects
+        // depending on which thread wins the race.  Conversely, the decoder
+        // keeps terminal zero-length L2 units in the ring, so wait only for
+        // actual decoded audio rather than for L2BufferRemain to reach zero.
+        if(decoderended && !decodedaudiopending) {
             if(SoundBuffer->GetRemainBuffers() == 0) {
 #endif
                 FlushAllLabelEvents();

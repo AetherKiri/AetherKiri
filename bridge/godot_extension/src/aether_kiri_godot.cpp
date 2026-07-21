@@ -1282,6 +1282,23 @@ uint ps_screen_blend(uint d, uint s, uint opa) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint ps_mul_blend(uint d, uint s, uint opa) {
+    uint a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int mr = (dr * int(s & 0xffu)) >> 8;
+    int mg = (dg * int((s >> 8) & 0xffu)) >> 8;
+    int mb = (db * int((s >> 16) & 0xffu)) >> 8;
+    uint r = uint(clamp(dr + (((mr - dr) * int(a)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((mg - dg) * int(a)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((mb - db) * int(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint remove_const_opacity(uint d, uint strength) {
     uint inv_strength = 255u - clamp(strength, 0u, 255u);
     uint a = (((d >> 24) & 0xffu) * inv_strength) >> 8;
@@ -1317,6 +1334,8 @@ void main() {
         out_color = const_alpha_blend_d(d, s, opa);
         } else if (pc.rect1.z == 11) {
         out_color = ps_screen_blend(d, s, opa);
+        } else if (pc.rect1.z == 15) {
+        out_color = ps_mul_blend(d, s, opa);
         } else if (pc.rect1.z == 8) {
         out_color = remove_const_opacity(d, opa);
         }
@@ -2010,6 +2029,152 @@ vec4 blend_cubism(vec4 dst, vec4 src, int flags) {
                                 parameter.x + parameter.y + parameter.z);
 }
 
+uvec4 vec4_to_u8(vec4 value) {
+    return uvec4(round(clamp(value, vec4(0.0), vec4(1.0)) * 255.0));
+}
+
+uint pack_u8(uvec4 c) {
+    return (c.r & 0xffu) |
+           ((c.g & 0xffu) << 8) |
+           ((c.b & 0xffu) << 16) |
+           ((c.a & 0xffu) << 24);
+}
+
+vec4 unpack_u8(uint c) {
+    return vec4(float(c & 0xffu),
+                float((c >> 8) & 0xffu),
+                float((c >> 16) & 0xffu),
+                float((c >> 24) & 0xffu)) / 255.0;
+}
+
+uint alpha_blend_hda_o(uint d, uint s, uint opa) {
+    uint sopa = (((s >> 24) & 0xffu) * opa) >> 8;
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int sr = int(s & 0xffu);
+    int sg = int((s >> 8) & 0xffu);
+    int sb = int((s >> 16) & 0xffu);
+    uint r = uint(clamp(dr + (((sr - dr) * int(sopa)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((sg - dg) * int(sopa)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((sb - db) * int(sopa)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint opacity_on_opacity(uint dest_alpha, uint src_alpha) {
+    if (dest_alpha == 0u) {
+        return 255u;
+    }
+    uint denom = dest_alpha * (255u - src_alpha) + 255u * src_alpha;
+    if (denom == 0u) {
+        return 255u;
+    }
+    return min((255u * 255u * src_alpha) / denom, 255u);
+}
+
+uint negative_mul_alpha(uint dest_alpha, uint src_alpha) {
+    return 255u - (((255u - dest_alpha) * (255u - src_alpha)) / 255u);
+}
+
+uint alpha_blend_d(uint d, uint s, uint opa) {
+    uint effective_alpha = (s >> 24) & 0xffu;
+    if (opa == 255u) {
+        if (s <= 0x00ffffffu) {
+            return d;
+        }
+        if (s >= 0xff000000u) {
+            return s;
+        }
+        if (d <= 0x00ffffffu) {
+            return s;
+        }
+    } else {
+        effective_alpha = (effective_alpha * opa) >> 8;
+    }
+
+    uint dest_alpha = (d >> 24) & 0xffu;
+    uint blend_alpha = opacity_on_opacity(dest_alpha, effective_alpha);
+    uint out_alpha = negative_mul_alpha(dest_alpha, effective_alpha);
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int sr = int(s & 0xffu);
+    int sg = int((s >> 8) & 0xffu);
+    int sb = int((s >> 16) & 0xffu);
+    uint r = uint(clamp(dr + (((sr - dr) * int(blend_alpha)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((sg - dg) * int(blend_alpha)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((sb - db) * int(blend_alpha)) >> 8), 0, 255));
+    return (out_alpha << 24) | r | (g << 8) | (b << 16);
+}
+
+uint saturated_add(uint a, uint b) {
+    uint tmp = ((a & b) + (((a ^ b) >> 1) & 0x7f7f7f7fu)) & 0x80808080u;
+    tmp = (tmp << 1) - (tmp >> 7);
+    return (a + b - tmp) | tmp;
+}
+
+uint mul_color(uint color, uint fac) {
+    return (((((color & 0x00ff00u) * fac) & 0x00ff0000u) +
+             (((color & 0xff00ffu) * fac) & 0xff00ff00u)) >> 8);
+}
+
+uint alpha_to_additive_alpha(uint c) {
+    return mul_color(c, c >> 24) + (c & 0xff000000u);
+}
+
+uint add_alpha_blend_a_a(uint d, uint s) {
+    uint dopa = d >> 24;
+    uint sopa = s >> 24;
+    dopa = dopa + sopa - ((dopa * sopa) >> 8);
+    dopa -= dopa >> 8;
+    sopa ^= 0xffu;
+    s &= 0x00ffffffu;
+    return (dopa << 24) +
+           saturated_add((((d & 0xff00ffu) * sopa >> 8) & 0xff00ffu) +
+                         (((d & 0x00ff00u) * sopa >> 8) & 0x00ff00u),
+                         s);
+}
+
+uint alpha_blend_a_d_o(uint d, uint s, uint opa) {
+    if (opa != 255u) {
+        s = (s & 0x00ffffffu) + (((((s >> 24) * opa) >> 8) & 0xffu) << 24);
+    }
+    return add_alpha_blend_a_a(d, alpha_to_additive_alpha(s));
+}
+
+uint ps_mul_blend(uint d, uint s, uint opa) {
+    uint a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int mr = (dr * int(s & 0xffu)) >> 8;
+    int mg = (dg * int((s >> 8) & 0xffu)) >> 8;
+    int mb = (db * int((s >> 16) & 0xffu)) >> 8;
+    uint r = uint(clamp(dr + (((mr - dr) * int(a)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((mg - dg) * int(a)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((mb - db) * int(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint blend_tvp(uint d, uint s, uint opa, int mode) {
+    if (mode == 1) {
+        return alpha_blend_hda_o(d, s, opa);
+    }
+    if (mode == 2) {
+        return alpha_blend_d(d, s, opa);
+    }
+    if (mode == 7) {
+        return alpha_blend_a_d_o(d, s, opa);
+    }
+    if (mode == 15) {
+        return ps_mul_blend(d, s, opa);
+    }
+    return d;
+}
+
 void main() {
     ivec2 local = ivec2(gl_GlobalInvocationID.xy);
     if (local.x >= pc.rect1.x || local.y >= pc.rect1.y) {
@@ -2022,6 +2187,8 @@ void main() {
     ivec2 src_limit = max(pc.color0.xy - ivec2(1), ivec2(0));
     float opacity = clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
     int blend_flags = pc.color0.z;
+    bool tvp_blend = (blend_flags & 65536) != 0;
+    int tvp_blend_mode = blend_flags & 65535;
     vec4 dst = imageLoad(dst_img, dst_pos);
     bool covered = false;
 
@@ -2042,14 +2209,28 @@ void main() {
         if (w0 >= -0.0001 && w1 >= -0.0001 && w2 >= -0.0001) {
             vec2 src_pos_f = v0.zw * w0 + v1.zw * w1 + v2.zw * w2;
             vec4 src = load_bilinear(src_limit, src_pos_f);
-            if (src.g >= 0.70 && src.g > src.r + 0.20 && src.g > src.b + 0.20) {
-                src.a = 0.0;
+            if (tvp_blend) {
+                uint d = pack_u8(vec4_to_u8(dst));
+                uint s = pack_u8(vec4_to_u8(src));
+                dst = unpack_u8(blend_tvp(
+                    d, s, uint(clamp(pc.rect1.w, 0, 255)), tvp_blend_mode));
+                // A single affine surface is tessellated into adjacent
+                // triangles. Pixels on their shared edge must be blended only
+                // once; the Cubism path intentionally keeps its own mesh
+                // accumulation semantics below.
+                covered = true;
+                break;
+            } else {
+                if (src.g >= 0.70 && src.g > src.r + 0.20 &&
+                    src.g > src.b + 0.20) {
+                    src.a = 0.0;
+                }
+                src.a *= opacity;
+                if (src.a <= 0.00001) {
+                    continue;
+                }
+                dst = blend_cubism(dst, src, blend_flags);
             }
-            src.a *= opacity;
-            if (src.a <= 0.00001) {
-                continue;
-            }
-            dst = blend_cubism(dst, src, blend_flags);
             covered = true;
         }
     }
@@ -3962,6 +4143,27 @@ uint32_t CpuPsScreenBlend(uint32_t d, uint32_t s, int opacity) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint32_t CpuPsMulBlend(uint32_t d, uint32_t s, int opacity) {
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    uint32_t a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    const int dr = static_cast<int>(d & 0xffu);
+    const int dg = static_cast<int>((d >> 8) & 0xffu);
+    const int db = static_cast<int>((d >> 16) & 0xffu);
+    const int mr = (dr * static_cast<int>(s & 0xffu)) >> 8;
+    const int mg = (dg * static_cast<int>((s >> 8) & 0xffu)) >> 8;
+    const int mb = (db * static_cast<int>((s >> 16) & 0xffu)) >> 8;
+    const uint32_t r = static_cast<uint32_t>(
+        std::clamp(dr + (((mr - dr) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t g = static_cast<uint32_t>(
+        std::clamp(dg + (((mg - dg) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t b = static_cast<uint32_t>(
+        std::clamp(db + (((mb - db) * static_cast<int>(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
                            int opacity, uint32_t color) {
     switch (mode) {
@@ -3981,6 +4183,8 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
             return CpuConstAlphaBlendD(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_PS_SCREEN:
             return CpuPsScreenBlend(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_PS_MULTIPLY:
+            return CpuPsMulBlend(d, s, opacity);
         default:
             return s;
     }
@@ -4029,6 +4233,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     }
     if (lower == "psscreenblend" || lower == "ps_screen_blend") {
         return TVP_GODOT_GPU_BLEND_PS_SCREEN;
+    }
+    if (lower == "psmulblend" || lower == "ps_mul_blend") {
+        return TVP_GODOT_GPU_BLEND_PS_MULTIPLY;
     }
     return 0;
 }

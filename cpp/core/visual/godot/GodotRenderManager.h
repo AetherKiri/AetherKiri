@@ -68,6 +68,11 @@ public:
                               const tTVPRect &clip_rc,
                               const tTVPPointD *dst_points,
                               const tTVPPointD *src_points);
+    bool BlendTrianglesGpuFrom(GodotTexture2D *src, uint32_t triangle_count,
+                               const tTVPRect &clip_rc,
+                               const tTVPPointD *dst_points,
+                               const tTVPPointD *src_points, uint32_t mode,
+                               int opacity);
     bool BlendGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
                       const tTVPRect &src_rc, uint32_t mode, int opacity,
                       uint32_t color);

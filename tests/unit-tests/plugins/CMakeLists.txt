@@ -8,8 +8,12 @@ add_executable(motionplayer-dll
     kbad-data-pack.cpp
     textrender-timing.cpp
     text-stream.cpp
+    xp3-cx-decoder.cpp
     font-compat.cpp
+    font-baseline.cpp
     godot-texture.cpp
+    krkrgles-aliases.cpp
+    kag-load-contract.cpp
 )
 
 set(_KRKR2PLUGIN_LINK_ITEM "$<LINK_LIBRARY:WHOLE_ARCHIVE,krkr2plugin>")
