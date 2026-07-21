@@ -10,10 +10,18 @@
 //---------------------------------------------------------------------------
 #include "tjsCommHead.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 #include "MsgIntf.h"
 #include "WindowIntf.h"
 #include "VideoOvlIntf.h"
 #include "LayerIntf.h"
+
+static bool VideoStatusTraceEnabled() {
+    const char *value = std::getenv("AETHERKIRI_VIDEO_TRACE");
+    return value != nullptr && value[0] != '\0';
+}
 
 //---------------------------------------------------------------------------
 // tTJSNI_BaseVideoOverlay
@@ -56,6 +64,13 @@ tjs_error tTJSNI_BaseVideoOverlay::Construct(tjs_int numparams,
 }
 //---------------------------------------------------------------------------
 void tTJSNI_BaseVideoOverlay::Invalidate() {
+    if(VideoStatusTraceEnabled()) {
+        std::fprintf(stderr,
+                     "[video-trace] overlay.base.invalidate this=%p owner=%p status=%d can_events=%d\n",
+                     static_cast<void *>(this), static_cast<void *>(Owner),
+                     static_cast<int>(Status), CanDeliverEvents ? 1 : 0);
+        std::fflush(stderr);
+    }
     Owner = nullptr;
     if(Window)
         Window->UnregisterVideoOverlayObject(this);
@@ -92,6 +107,14 @@ void tTJSNI_BaseVideoOverlay::SetStatus(tTVPSoundStatus s) {
     // this function may call the onStatusChanged event immediately
 
     if(Status != s) {
+        if(VideoStatusTraceEnabled()) {
+            std::fprintf(stderr,
+                         "[video-trace] overlay.status.sync this=%p owner=%p old=%d new=%d can_events=%d\n",
+                         static_cast<void *>(this), static_cast<void *>(Owner),
+                         static_cast<int>(Status), static_cast<int>(s),
+                         CanDeliverEvents ? 1 : 0);
+            std::fflush(stderr);
+        }
         Status = s;
 
         if(Owner) {
@@ -114,6 +137,14 @@ void tTJSNI_BaseVideoOverlay::SetStatusAsync(tTVPSoundStatus s) {
     // this function posts the onStatusChanged event
 
     if(Status != s) {
+        if(VideoStatusTraceEnabled()) {
+            std::fprintf(stderr,
+                         "[video-trace] overlay.status.async this=%p owner=%p old=%d new=%d can_events=%d\n",
+                         static_cast<void *>(this), static_cast<void *>(Owner),
+                         static_cast<int>(Status), static_cast<int>(s),
+                         CanDeliverEvents ? 1 : 0);
+            std::fflush(stderr);
+        }
         Status = s;
 
         if(Owner) {
