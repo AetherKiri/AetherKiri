@@ -19,6 +19,10 @@
 
 | 游戏 | 已验证平台/构建 | 验证范围 | 结果 | 验证人 | 备注 |
 | --- | --- | --- | --- | --- | --- |
+| 恋がさくころ桜どき | Linux x64 release app | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
+| ましろ色シンフォニー | Linux x64 release app | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
+| Clover Day's | Linux x64 release app | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
+| 金色ラブリッチェ -Golden Time- | Linux x64 release app | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
 | もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | Web release（Chrome，Vite 本地服务器）；macOS release app；iOS/iPadOS iPad app build；Android release APK | 启动、脚本/插件加载、标题/菜单渲染、基础输入、继续/存读档路径冒烟、CJK/符号字体渲染，以及 Web 端 IndexedDB `/userfs` 持久化行为 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。Web 部署仍需要 COOP/COEP 头。需要 Live2D 的游戏仍需单独提供 Web 版 Live2D Cubism Core 专有运行时。 |
 | 喫茶ステラと死神の蝶 | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、标题背景快速切换/输入压力、继续游戏流程、场景/文字渲染，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | RIDDLE JOKER | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、标题动画/图层、继续游戏流程、场景/文字渲染、对话输入压力、存读档冒烟，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
