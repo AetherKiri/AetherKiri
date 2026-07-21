@@ -28,14 +28,37 @@ int BytesPerPixel(TVPTextureFormat::e format) {
     }
 }
 
-void CopyRect(uint8_t *dst, int dst_pitch, const uint8_t *src, int src_pitch,
-              int bytes_per_pixel, const tTVPRect &rc) {
-    const int width_bytes = std::max(0, rc.get_width()) * bytes_per_pixel;
-    for (int y = rc.top; y < rc.bottom; ++y) {
-        std::memcpy(dst + y * dst_pitch + rc.left * bytes_per_pixel,
-                    src + (y - rc.top) * src_pitch,
-                    static_cast<size_t>(width_bytes));
+bool CopyRect(uint8_t *dst, int dst_pitch, int dst_width, int dst_height,
+              const uint8_t *src, int src_pitch, int bytes_per_pixel,
+              const tTVPRect &rc) {
+    if(dst == nullptr || src == nullptr || dst_pitch <= 0 || src_pitch <= 0 ||
+       dst_width <= 0 || dst_height <= 0 || bytes_per_pixel <= 0 ||
+       rc.right <= rc.left || rc.bottom <= rc.top) {
+        return false;
     }
+
+    const int left = std::max(0, rc.left);
+    const int top = std::max(0, rc.top);
+    const int right = std::min(dst_width, rc.right);
+    const int bottom = std::min(dst_height, rc.bottom);
+    if(left >= right || top >= bottom) {
+        return true;
+    }
+
+    const size_t source_x = static_cast<size_t>(left - rc.left) * bytes_per_pixel;
+    const size_t width_bytes = static_cast<size_t>(right - left) * bytes_per_pixel;
+    if(source_x + width_bytes > static_cast<size_t>(src_pitch) ||
+       static_cast<size_t>(right) * bytes_per_pixel >
+           static_cast<size_t>(dst_pitch)) {
+        return false;
+    }
+    for(int y = top; y < bottom; ++y) {
+        const size_t source_y = static_cast<size_t>(y - rc.top) * src_pitch;
+        const size_t destination_y = static_cast<size_t>(y) * dst_pitch;
+        std::memcpy(dst + destination_y + static_cast<size_t>(left) * bytes_per_pixel,
+                    src + source_y + source_x, width_bytes);
+    }
+    return true;
 }
 
 std::mutex g_method_stats_mutex;
@@ -565,6 +588,13 @@ void *GodotTexture2D::GetScanLineForWrite(tjs_uint l) {
 void GodotTexture2D::Update(const void *pixel, TVPTextureFormat::e format,
                             int pitch, const tTVPRect &rc) {
     if (pixel == nullptr) return;
+    const int new_bpp = BytesPerPixel(format);
+    if(format != format_) {
+        ReleaseGpuHandle();
+        format_ = format;
+        pitch_ = Width * new_bpp;
+        pixels_.assign(static_cast<size_t>(pitch_) * Height, 0);
+    }
     const bool full_rect = IsFullTextureRect(rc, Width, Height);
     const bool replace_transient_scratch =
         !full_rect && discard_unwritten_on_partial_update_ &&
@@ -577,11 +607,11 @@ void GodotTexture2D::Update(const void *pixel, TVPTextureFormat::e format,
         }
         EnsureCpuStorage();
     }
-    format_ = format;
-    const int bpp = BytesPerPixel(format_);
-    const int src_pitch = pitch > 0 ? pitch : rc.get_width() * bpp;
-    CopyRect(pixels_.data(), pitch_, static_cast<const uint8_t *>(pixel),
-             src_pitch, bpp, rc);
+    const int src_pitch = pitch > 0 ? pitch : rc.get_width() * new_bpp;
+    const bool copied = CopyRect(pixels_.data(), pitch_, Width, Height,
+                                 static_cast<const uint8_t *>(pixel), src_pitch,
+                                 new_bpp, rc);
+    if (!copied) return;
     if (full_rect) {
         SetOpacityFromPixels(pixels_.data(), pitch_);
     } else {
