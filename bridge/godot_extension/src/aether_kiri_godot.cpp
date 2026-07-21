@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -809,6 +810,8 @@ struct GodotGpuPipelineState {
     RID draw_masked_triangles_pipeline;
     RID mosaic_shader;
     RID mosaic_pipeline;
+    RID triangle_vertex_buffer;
+    uint32_t triangle_vertex_buffer_capacity = 0;
 };
 
 GodotGpuPipelineState *g_gpu_pipeline_state = nullptr;
@@ -1775,12 +1778,18 @@ void main() {
     bool covered = false;
 
     for (int tri = 0; tri < tri_count; ++tri) {
-        vec4 v0 = vertices.vertex[tri * 3 + 0];
-        vec4 v1 = vertices.vertex[tri * 3 + 1];
-        vec4 v2 = vertices.vertex[tri * 3 + 2];
+        int vertex_base = pc.color0.w + tri * 3;
+        vec4 v0 = vertices.vertex[vertex_base + 0];
+        vec4 v1 = vertices.vertex[vertex_base + 1];
+        vec4 v2 = vertices.vertex[vertex_base + 2];
         vec2 d0 = v0.xy;
         vec2 d1 = v1.xy;
         vec2 d2 = v2.xy;
+        vec2 tri_min = min(d0, min(d1, d2)) - vec2(0.25);
+        vec2 tri_max = max(d0, max(d1, d2)) + vec2(0.25);
+        if (any(lessThan(p, tri_min)) || any(greaterThan(p, tri_max))) {
+            continue;
+        }
         float area = edge(d0, d1, d2);
         if (abs(area) < 0.00001) {
             continue;
@@ -2142,6 +2151,37 @@ uint alpha_blend_a_d_o(uint d, uint s, uint opa) {
     return add_alpha_blend_a_a(d, alpha_to_additive_alpha(s));
 }
 
+uint const_alpha_blend_d(uint d, uint s, uint opa) {
+    uint dest_alpha = (d >> 24) & 0xffu;
+    uint blend_alpha = opacity_on_opacity(dest_alpha, opa);
+    uint out_alpha = negative_mul_alpha(dest_alpha, opa);
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int sr = int(s & 0xffu);
+    int sg = int((s >> 8) & 0xffu);
+    int sb = int((s >> 16) & 0xffu);
+    uint r = uint(clamp(dr + (((sr - dr) * int(blend_alpha)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((sg - dg) * int(blend_alpha)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((sb - db) * int(blend_alpha)) >> 8), 0, 255));
+    return (out_alpha << 24) | r | (g << 8) | (b << 16);
+}
+
+uint ps_screen_blend(uint d, uint s, uint opa) {
+    uint src_alpha = (s >> 24) & 0xffu;
+    uint a = opa == 255u ? src_alpha : ((src_alpha * opa) >> 8);
+    uint dr = d & 0xffu;
+    uint dg = (d >> 8) & 0xffu;
+    uint db = (d >> 16) & 0xffu;
+    uint sr = s & 0xffu;
+    uint sg = (s >> 8) & 0xffu;
+    uint sb = (s >> 16) & 0xffu;
+    uint r = min(dr + (((sr - ((sr * dr) >> 8)) * a) >> 8), 255u);
+    uint g = min(dg + (((sg - ((sg * dg) >> 8)) * a) >> 8), 255u);
+    uint b = min(db + (((sb - ((sb * db) >> 8)) * a) >> 8), 255u);
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint ps_mul_blend(uint d, uint s, uint opa) {
     uint a = (s >> 24) & 0xffu;
     if (opa != 255u) {
@@ -2166,8 +2206,17 @@ uint blend_tvp(uint d, uint s, uint opa, int mode) {
     if (mode == 2) {
         return alpha_blend_d(d, s, opa);
     }
+    if (mode == 3) {
+        return (d & 0xff000000u) | (s & 0x00ffffffu);
+    }
     if (mode == 7) {
         return alpha_blend_a_d_o(d, s, opa);
+    }
+    if (mode == 10) {
+        return const_alpha_blend_d(d, s, opa);
+    }
+    if (mode == 11) {
+        return ps_screen_blend(d, s, opa);
     }
     if (mode == 15) {
         return ps_mul_blend(d, s, opa);
@@ -2193,12 +2242,18 @@ void main() {
     bool covered = false;
 
     for (int tri = 0; tri < tri_count; ++tri) {
-        vec4 v0 = vertices.vertex[tri * 3 + 0];
-        vec4 v1 = vertices.vertex[tri * 3 + 1];
-        vec4 v2 = vertices.vertex[tri * 3 + 2];
+        int vertex_base = pc.color0.w + tri * 3;
+        vec4 v0 = vertices.vertex[vertex_base + 0];
+        vec4 v1 = vertices.vertex[vertex_base + 1];
+        vec4 v2 = vertices.vertex[vertex_base + 2];
         vec2 d0 = v0.xy;
         vec2 d1 = v1.xy;
         vec2 d2 = v2.xy;
+        vec2 tri_min = min(d0, min(d1, d2)) - vec2(0.25);
+        vec2 tri_max = max(d0, max(d1, d2)) + vec2(0.25);
+        if (any(lessThan(p, tri_min)) || any(greaterThan(p, tri_max))) {
+            continue;
+        }
         float area = edge(d0, d1, d2);
         if (abs(area) < 0.00001) {
             continue;
@@ -2519,10 +2574,15 @@ void main() {
     bool covered = false;
 
     for (int tri = 0; tri < tri_count; ++tri) {
-        int base = tri * 18;
+        int base = pc.color0.w + tri * 18;
         vec2 d0 = vertex_dst(base, 0);
         vec2 d1 = vertex_dst(base, 1);
         vec2 d2 = vertex_dst(base, 2);
+        vec2 tri_min = min(d0, min(d1, d2)) - vec2(0.25);
+        vec2 tri_max = max(d0, max(d1, d2)) + vec2(0.25);
+        if (any(lessThan(p, tri_min)) || any(greaterThan(p, tri_max))) {
+            continue;
+        }
         float area = edge(d0, d1, d2);
         if (abs(area) < 0.00001) {
             continue;
@@ -2670,6 +2730,40 @@ void ClearGodotGpuUniformSetCache(RenderingDevice *rd) {
     g_gpu_uniform_set_cache.clear();
 }
 
+bool UpdateGodotGpuTriangleVertexBuffer(RenderingDevice *rd,
+                                        const PackedByteArray &data,
+                                        RID &vertex_buffer) {
+    vertex_buffer = RID();
+    if (rd == nullptr || g_gpu_pipeline_state == nullptr || data.is_empty()) {
+        return false;
+    }
+    const uint64_t required = static_cast<uint64_t>(data.size());
+    if (required > std::numeric_limits<uint32_t>::max()) return false;
+
+    if (!g_gpu_pipeline_state->triangle_vertex_buffer.is_valid() ||
+        g_gpu_pipeline_state->triangle_vertex_buffer_capacity < required) {
+        uint64_t capacity = 64u * 1024u;
+        while (capacity < required) capacity *= 2u;
+        if (capacity > std::numeric_limits<uint32_t>::max()) return false;
+
+        // Uniform sets retain the buffer RID, so discard them before replacing
+        // the shared buffer. Texture-backed sets are lazily rebuilt as needed.
+        ClearGodotGpuUniformSetCache(rd);
+        if (g_gpu_pipeline_state->triangle_vertex_buffer.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->triangle_vertex_buffer);
+        }
+        g_gpu_pipeline_state->triangle_vertex_buffer =
+            rd->storage_buffer_create(static_cast<uint32_t>(capacity));
+        g_gpu_pipeline_state->triangle_vertex_buffer_capacity =
+            g_gpu_pipeline_state->triangle_vertex_buffer.is_valid()
+                ? static_cast<uint32_t>(capacity) : 0;
+    }
+    vertex_buffer = g_gpu_pipeline_state->triangle_vertex_buffer;
+    return vertex_buffer.is_valid() &&
+           rd->buffer_update(vertex_buffer, 0,
+                             static_cast<uint32_t>(required), data) == OK;
+}
+
 RID GetCachedBlendUniformSet(RenderingDevice *rd, const RID &shader,
                              const RID &src, const RID &dst) {
     const GodotGpuUniformSetKey key{
@@ -2763,6 +2857,41 @@ RID GetCachedBlend3UniformSet(RenderingDevice *rd, const RID &shader,
     }
     RID uniform_set = rd->uniform_set_create(uniforms, shader, 0);
     if(uniform_set.is_valid()) g_gpu_uniform_set_cache[key] = uniform_set;
+    return uniform_set;
+}
+
+RID GetCachedTriangleUniformSet(RenderingDevice *rd, const RID &shader,
+                                const RID &vertex_buffer, const RID &src,
+                                const RID &mask, const RID &dst,
+                                bool masked) {
+    const GodotGpuUniformSetKey key{
+        shader.get_id(), vertex_buffer.get_id(), src.get_id(),
+        masked ? mask.get_id() : dst.get_id(),
+        static_cast<uint8_t>(masked ? 4 : 3),
+        masked ? dst.get_id() : 0};
+    auto it = g_gpu_uniform_set_cache.find(key);
+    if (it != g_gpu_uniform_set_cache.end() && it->second.is_valid()) {
+        return it->second;
+    }
+
+    TypedArray<RDUniform> uniforms;
+    const RID resources[] = {vertex_buffer, src, mask, dst};
+    const int resource_count = masked ? 4 : 3;
+    for (int binding = 0; binding < resource_count; ++binding) {
+        Ref<RDUniform> uniform;
+        uniform.instantiate();
+        uniform->set_uniform_type(
+            binding == 0 ? RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER
+                         : RenderingDevice::UNIFORM_TYPE_IMAGE);
+        uniform->set_binding(binding);
+        const RID resource = !masked && binding == 2 ? dst : resources[binding];
+        uniform->add_id(resource);
+        uniforms.push_back(uniform);
+    }
+    RID uniform_set = rd->uniform_set_create(uniforms, shader, 0);
+    if (uniform_set.is_valid()) {
+        g_gpu_uniform_set_cache[key] = uniform_set;
+    }
     return uniform_set;
 }
 
@@ -2892,166 +3021,171 @@ bool ExecuteGodotGpuBlend2(RenderingDevice *rd,
     return ok;
 }
 
-bool ExecuteGodotGpuTriangles(RenderingDevice *rd,
+struct GodotGpuPreparedTriangles {
+    RID pipeline;
+    RID uniform_set;
+    RID vertex_buffer;
+    RID temp_src;
+    PackedByteArray push_constants;
+    uint32_t groups_x = 0;
+    uint32_t groups_y = 0;
+    bool owns_uniform_set = false;
+    bool owns_vertex_buffer = false;
+};
+
+void FreeGodotGpuPreparedTriangles(RenderingDevice *rd,
+                                   GodotGpuPreparedTriangles &prepared) {
+    if (rd == nullptr) return;
+    if (prepared.owns_uniform_set && prepared.uniform_set.is_valid()) {
+        rd->free_rid(prepared.uniform_set);
+    }
+    if (prepared.temp_src.is_valid()) rd->free_rid(prepared.temp_src);
+    if (prepared.owns_vertex_buffer && prepared.vertex_buffer.is_valid()) {
+        rd->free_rid(prepared.vertex_buffer);
+    }
+    prepared = {};
+}
+
+bool PrepareGodotGpuTriangles(RenderingDevice *rd,
                               const std::shared_ptr<GodotGpuOp> &op,
-                              bool draw) {
-    if (rd == nullptr || op == nullptr || op->vertices.empty() ||
-        !(draw ? EnsureDrawTrianglesPipeline(rd)
-               : EnsureCopyTrianglesPipeline(rd))) {
+                              bool draw, bool masked,
+                              GodotGpuPreparedTriangles &prepared,
+                              const RID &shared_vertex_buffer = RID(),
+                              int32_t vertex_offset = 0,
+                              bool cache_uniform_set = false) {
+    prepared = {};
+    if (rd == nullptr || op == nullptr || op->vertices.empty()) return false;
+    if (masked) {
+        if (!EnsureDrawMaskedTrianglesPipeline(rd)) return false;
+    } else if (!(draw ? EnsureDrawTrianglesPipeline(rd)
+                      : EnsureCopyTrianglesPipeline(rd))) {
         return false;
     }
 
-    PackedByteArray vertex_data;
-    vertex_data.resize(static_cast<int64_t>(op->vertices.size() * sizeof(float)));
-    if (uint8_t *bytes = vertex_data.ptrw()) {
-        std::memcpy(bytes, op->vertices.data(), op->vertices.size() * sizeof(float));
+    if (shared_vertex_buffer.is_valid()) {
+        prepared.vertex_buffer = shared_vertex_buffer;
+    } else {
+        PackedByteArray vertex_data;
+        vertex_data.resize(
+            static_cast<int64_t>(op->vertices.size() * sizeof(float)));
+        if (uint8_t *bytes = vertex_data.ptrw()) {
+            std::memcpy(bytes, op->vertices.data(),
+                        op->vertices.size() * sizeof(float));
+        }
+        prepared.vertex_buffer =
+            rd->storage_buffer_create(vertex_data.size(), vertex_data);
+        prepared.owns_vertex_buffer = prepared.vertex_buffer.is_valid();
     }
-    RID vertex_buffer = rd->storage_buffer_create(vertex_data.size(), vertex_data);
-    if (!vertex_buffer.is_valid()) return false;
+    if (!prepared.vertex_buffer.is_valid()) return false;
 
     RID sample_src = op->src;
-    RID temp_src;
-    if (op->src == op->dst) {
+    if (!masked && op->src == op->dst) {
         Ref<RDTextureView> view;
         view.instantiate();
         TypedArray<PackedByteArray> initial_data;
-        temp_src = rd->texture_create(
+        prepared.temp_src = rd->texture_create(
             MakeRgbaTextureFormat(static_cast<uint32_t>(op->src_size.x),
                                   static_cast<uint32_t>(op->src_size.y)),
             view, initial_data);
-        if (!temp_src.is_valid()) {
-            rd->free_rid(vertex_buffer);
+        if (!prepared.temp_src.is_valid()) {
+            FreeGodotGpuPreparedTriangles(rd, prepared);
             return false;
         }
         const Error copied = rd->texture_copy(
-            op->src, temp_src, Vector3(), Vector3(), op->src_size, 0, 0, 0, 0);
+            op->src, prepared.temp_src, Vector3(), Vector3(), op->src_size,
+            0, 0, 0, 0);
         if (copied != OK) {
-            rd->free_rid(temp_src);
-            rd->free_rid(vertex_buffer);
+            FreeGodotGpuPreparedTriangles(rd, prepared);
             return false;
         }
         ApplyGodotGpuBarrier(rd);
-        sample_src = temp_src;
+        sample_src = prepared.temp_src;
     }
 
-    Ref<RDUniform> vertex_uniform;
-    vertex_uniform.instantiate();
-    vertex_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-    vertex_uniform->set_binding(0);
-    vertex_uniform->add_id(vertex_buffer);
-
-    Ref<RDUniform> src_uniform;
-    src_uniform.instantiate();
-    src_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-    src_uniform->set_binding(1);
-    src_uniform->add_id(sample_src);
-
-    Ref<RDUniform> dst_uniform;
-    dst_uniform.instantiate();
-    dst_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-    dst_uniform->set_binding(2);
-    dst_uniform->add_id(op->dst);
-
-    TypedArray<RDUniform> uniforms;
-    uniforms.push_back(vertex_uniform);
-    uniforms.push_back(src_uniform);
-    uniforms.push_back(dst_uniform);
-    const RID shader = draw ? g_gpu_pipeline_state->draw_triangles_shader
-                            : g_gpu_pipeline_state->copy_triangles_shader;
-    const RID pipeline = draw ? g_gpu_pipeline_state->draw_triangles_pipeline
-                              : g_gpu_pipeline_state->copy_triangles_pipeline;
-    RID uniform_set = rd->uniform_set_create(uniforms, shader, 0);
-    if (!uniform_set.is_valid()) {
-        if (temp_src.is_valid()) rd->free_rid(temp_src);
-        rd->free_rid(vertex_buffer);
+    const RID shader = masked
+        ? g_gpu_pipeline_state->draw_masked_triangles_shader
+        : draw ? g_gpu_pipeline_state->draw_triangles_shader
+               : g_gpu_pipeline_state->copy_triangles_shader;
+    prepared.pipeline = masked
+        ? g_gpu_pipeline_state->draw_masked_triangles_pipeline
+        : draw ? g_gpu_pipeline_state->draw_triangles_pipeline
+               : g_gpu_pipeline_state->copy_triangles_pipeline;
+    if (cache_uniform_set) {
+        prepared.uniform_set = GetCachedTriangleUniformSet(
+            rd, shader, prepared.vertex_buffer, sample_src, op->src2,
+            op->dst, masked);
+    } else {
+        TypedArray<RDUniform> uniforms;
+        const RID resources[] = {prepared.vertex_buffer, sample_src,
+                                 op->src2, op->dst};
+        const int resource_count = masked ? 4 : 3;
+        for (int binding = 0; binding < resource_count; ++binding) {
+            Ref<RDUniform> uniform;
+            uniform.instantiate();
+            uniform->set_uniform_type(
+                binding == 0
+                    ? RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER
+                    : RenderingDevice::UNIFORM_TYPE_IMAGE);
+            uniform->set_binding(binding);
+            const RID resource = !masked && binding == 2
+                ? op->dst : resources[binding];
+            uniform->add_id(resource);
+            uniforms.push_back(uniform);
+        }
+        prepared.uniform_set = rd->uniform_set_create(uniforms, shader, 0);
+        prepared.owns_uniform_set = prepared.uniform_set.is_valid();
+    }
+    if (!prepared.uniform_set.is_valid()) {
+        FreeGodotGpuPreparedTriangles(rd, prepared);
         return false;
     }
 
-    const PackedByteArray push_constants = PackGpuPushConstants(*op);
+    prepared.push_constants = PackGpuPushConstants(*op);
+    if (uint8_t *bytes = prepared.push_constants.ptrw()) {
+        std::memcpy(bytes + 11 * sizeof(int32_t), &vertex_offset,
+                    sizeof(vertex_offset));
+    }
+    prepared.groups_x = static_cast<uint32_t>((op->size.x + 7) / 8);
+    prepared.groups_y = static_cast<uint32_t>((op->size.y + 7) / 8);
+    return prepared.groups_x > 0 && prepared.groups_y > 0;
+}
+
+void DispatchGodotGpuPreparedTriangles(
+    RenderingDevice *rd, int64_t compute_list,
+    const GodotGpuPreparedTriangles &prepared) {
+    rd->compute_list_bind_compute_pipeline(compute_list, prepared.pipeline);
+    rd->compute_list_bind_uniform_set(compute_list, prepared.uniform_set, 0);
+    rd->compute_list_set_push_constant(compute_list, prepared.push_constants, 48);
+    rd->compute_list_dispatch(compute_list, prepared.groups_x,
+                              prepared.groups_y, 1);
+}
+
+bool ExecuteGodotGpuTriangles(RenderingDevice *rd,
+                              const std::shared_ptr<GodotGpuOp> &op,
+                              bool draw) {
+    GodotGpuPreparedTriangles prepared;
+    if (!PrepareGodotGpuTriangles(rd, op, draw, false, prepared)) return false;
+
     int64_t compute_list = rd->compute_list_begin();
-    rd->compute_list_bind_compute_pipeline(compute_list, pipeline);
-    rd->compute_list_bind_uniform_set(compute_list, uniform_set, 0);
-    rd->compute_list_set_push_constant(compute_list, push_constants, 48);
-    rd->compute_list_dispatch(compute_list,
-                              static_cast<uint32_t>((op->size.x + 7) / 8),
-                              static_cast<uint32_t>((op->size.y + 7) / 8),
-                              1);
+    DispatchGodotGpuPreparedTriangles(rd, compute_list, prepared);
     rd->compute_list_add_barrier(compute_list);
     rd->compute_list_end();
     ApplyGodotGpuBarrier(rd);
-    rd->free_rid(uniform_set);
-    if (temp_src.is_valid()) rd->free_rid(temp_src);
-    rd->free_rid(vertex_buffer);
+    FreeGodotGpuPreparedTriangles(rd, prepared);
     return true;
 }
 
 bool ExecuteGodotGpuMaskedTriangles(RenderingDevice *rd,
                                     const std::shared_ptr<GodotGpuOp> &op) {
-    if (rd == nullptr || op == nullptr || op->vertices.empty() ||
-        !EnsureDrawMaskedTrianglesPipeline(rd)) {
-        return false;
-    }
+    GodotGpuPreparedTriangles prepared;
+    if (!PrepareGodotGpuTriangles(rd, op, true, true, prepared)) return false;
 
-    PackedByteArray vertex_data;
-    vertex_data.resize(static_cast<int64_t>(op->vertices.size() * sizeof(float)));
-    if (uint8_t *bytes = vertex_data.ptrw()) {
-        std::memcpy(bytes, op->vertices.data(),
-                    op->vertices.size() * sizeof(float));
-    }
-    RID vertex_buffer = rd->storage_buffer_create(vertex_data.size(), vertex_data);
-    if (!vertex_buffer.is_valid()) return false;
-
-    Ref<RDUniform> vertex_uniform;
-    vertex_uniform.instantiate();
-    vertex_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
-    vertex_uniform->set_binding(0);
-    vertex_uniform->add_id(vertex_buffer);
-
-    Ref<RDUniform> src_uniform;
-    src_uniform.instantiate();
-    src_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-    src_uniform->set_binding(1);
-    src_uniform->add_id(op->src);
-
-    Ref<RDUniform> mask_uniform;
-    mask_uniform.instantiate();
-    mask_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-    mask_uniform->set_binding(2);
-    mask_uniform->add_id(op->src2);
-
-    Ref<RDUniform> dst_uniform;
-    dst_uniform.instantiate();
-    dst_uniform->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
-    dst_uniform->set_binding(3);
-    dst_uniform->add_id(op->dst);
-
-    TypedArray<RDUniform> uniforms;
-    uniforms.push_back(vertex_uniform);
-    uniforms.push_back(src_uniform);
-    uniforms.push_back(mask_uniform);
-    uniforms.push_back(dst_uniform);
-    RID uniform_set = rd->uniform_set_create(
-        uniforms, g_gpu_pipeline_state->draw_masked_triangles_shader, 0);
-    if (!uniform_set.is_valid()) {
-        rd->free_rid(vertex_buffer);
-        return false;
-    }
-
-    const PackedByteArray push_constants = PackGpuPushConstants(*op);
     int64_t compute_list = rd->compute_list_begin();
-    rd->compute_list_bind_compute_pipeline(
-        compute_list, g_gpu_pipeline_state->draw_masked_triangles_pipeline);
-    rd->compute_list_bind_uniform_set(compute_list, uniform_set, 0);
-    rd->compute_list_set_push_constant(compute_list, push_constants, 48);
-    rd->compute_list_dispatch(compute_list,
-                              static_cast<uint32_t>((op->size.x + 7) / 8),
-                              static_cast<uint32_t>((op->size.y + 7) / 8),
-                              1);
+    DispatchGodotGpuPreparedTriangles(rd, compute_list, prepared);
     rd->compute_list_add_barrier(compute_list);
     rd->compute_list_end();
     ApplyGodotGpuBarrier(rd);
-    rd->free_rid(uniform_set);
-    rd->free_rid(vertex_buffer);
+    FreeGodotGpuPreparedTriangles(rd, prepared);
     return true;
 }
 
@@ -3236,6 +3370,88 @@ void FinishGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool result) {
     op->done_cv.notify_one();
 }
 
+bool IsBatchableTriangleOp(const std::shared_ptr<GodotGpuOp> &op) {
+    if (op == nullptr || op->src == op->dst) return false;
+    switch (op->type) {
+        case GodotGpuOp::Type::CopyTriangles:
+        case GodotGpuOp::Type::DrawTriangles:
+            return true;
+        case GodotGpuOp::Type::DrawMaskedTriangles:
+            return op->src2 != op->dst;
+        default:
+            return false;
+    }
+}
+
+void ExecuteGodotGpuTriangleBatch(
+    RenderingDevice *rd,
+    const std::vector<std::shared_ptr<GodotGpuOp>> &ops) {
+    if (ops.empty()) return;
+    if (rd == nullptr) {
+        for (const auto &op : ops) FinishGodotGpuOp(op, false);
+        return;
+    }
+
+    std::vector<GodotGpuPreparedTriangles> prepared(ops.size());
+    std::vector<bool> results(ops.size(), false);
+    std::vector<size_t> float_offsets(ops.size(), 0);
+    std::vector<float> combined_vertices;
+    for (size_t i = 0; i < ops.size(); ++i) {
+        while ((combined_vertices.size() & 3u) != 0u) {
+            combined_vertices.push_back(0.0f);
+        }
+        float_offsets[i] = combined_vertices.size();
+        combined_vertices.insert(combined_vertices.end(),
+                                 ops[i]->vertices.begin(),
+                                 ops[i]->vertices.end());
+    }
+    PackedByteArray vertex_data;
+    vertex_data.resize(static_cast<int64_t>(combined_vertices.size() *
+                                            sizeof(float)));
+    if (uint8_t *bytes = vertex_data.ptrw()) {
+        std::memcpy(bytes, combined_vertices.data(),
+                    combined_vertices.size() * sizeof(float));
+    }
+    RID shared_vertex_buffer;
+    if (!UpdateGodotGpuTriangleVertexBuffer(rd, vertex_data,
+                                            shared_vertex_buffer)) {
+        for (const auto &op : ops) FinishGodotGpuOp(op, false);
+        return;
+    }
+
+    bool any_prepared = false;
+    for (size_t i = 0; i < ops.size(); ++i) {
+        const bool draw = ops[i]->type != GodotGpuOp::Type::CopyTriangles;
+        const bool masked =
+            ops[i]->type == GodotGpuOp::Type::DrawMaskedTriangles;
+        const int32_t vertex_offset = static_cast<int32_t>(
+            masked ? float_offsets[i] : float_offsets[i] / 4u);
+        results[i] = PrepareGodotGpuTriangles(
+            rd, ops[i], draw, masked, prepared[i], shared_vertex_buffer,
+            vertex_offset, true);
+        any_prepared = any_prepared || results[i];
+    }
+
+    if (any_prepared) {
+        const int64_t compute_list = rd->compute_list_begin();
+        for (size_t i = 0; i < ops.size(); ++i) {
+            if (!results[i]) continue;
+            DispatchGodotGpuPreparedTriangles(rd, compute_list, prepared[i]);
+            // E-mote layers frequently reuse the preceding destination as a
+            // later source. Keep native draw order while amortizing the much
+            // more expensive compute-list begin/end submission on Metal.
+            rd->compute_list_add_barrier(compute_list);
+        }
+        rd->compute_list_end();
+        ApplyGodotGpuBarrier(rd);
+    }
+
+    for (size_t i = 0; i < ops.size(); ++i) {
+        FreeGodotGpuPreparedTriangles(rd, prepared[i]);
+        FinishGodotGpuOp(ops[i], results[i]);
+    }
+}
+
 void ExecuteGodotGpuBlendBatch(
     RenderingDevice *rd,
     const std::vector<std::shared_ptr<GodotGpuOp>> &ops) {
@@ -3293,9 +3509,103 @@ void ExecuteGodotGpuBlendBatch(
     }
 }
 
+void ExecuteGodotGpuComputeBatch(
+    RenderingDevice *rd,
+    const std::vector<std::shared_ptr<GodotGpuOp>> &ops) {
+    if (ops.empty()) return;
+    if (rd == nullptr) {
+        for (const auto &op : ops) FinishGodotGpuOp(op, false);
+        return;
+    }
+
+    std::vector<GodotGpuPreparedTriangles> prepared(ops.size());
+    std::vector<bool> results(ops.size(), false);
+    std::vector<size_t> float_offsets(ops.size(), 0);
+    std::vector<float> combined_vertices;
+    bool has_triangles = false;
+    for (size_t i = 0; i < ops.size(); ++i) {
+        if (!IsBatchableTriangleOp(ops[i])) continue;
+        has_triangles = true;
+        while ((combined_vertices.size() & 3u) != 0u) {
+            combined_vertices.push_back(0.0f);
+        }
+        float_offsets[i] = combined_vertices.size();
+        combined_vertices.insert(combined_vertices.end(),
+                                 ops[i]->vertices.begin(),
+                                 ops[i]->vertices.end());
+    }
+
+    RID shared_vertex_buffer;
+    bool vertices_ready = !has_triangles;
+    if (has_triangles) {
+        PackedByteArray vertex_data;
+        vertex_data.resize(static_cast<int64_t>(combined_vertices.size() *
+                                                sizeof(float)));
+        if (uint8_t *bytes = vertex_data.ptrw()) {
+            std::memcpy(bytes, combined_vertices.data(),
+                        combined_vertices.size() * sizeof(float));
+        }
+        vertices_ready = UpdateGodotGpuTriangleVertexBuffer(
+            rd, vertex_data, shared_vertex_buffer);
+    }
+
+    if (vertices_ready) {
+        for (size_t i = 0; i < ops.size(); ++i) {
+            if (!IsBatchableTriangleOp(ops[i])) continue;
+            const bool draw =
+                ops[i]->type != GodotGpuOp::Type::CopyTriangles;
+            const bool masked =
+                ops[i]->type == GodotGpuOp::Type::DrawMaskedTriangles;
+            const int32_t vertex_offset = static_cast<int32_t>(
+                masked ? float_offsets[i] : float_offsets[i] / 4u);
+            results[i] = PrepareGodotGpuTriangles(
+                rd, ops[i], draw, masked, prepared[i], shared_vertex_buffer,
+                vertex_offset, true);
+        }
+    }
+
+    std::vector<RID> unused_uniform_sets;
+    bool any_dispatched = false;
+    const int64_t compute_list = rd->compute_list_begin();
+    for (size_t i = 0; i < ops.size(); ++i) {
+        if (IsBatchableTriangleOp(ops[i])) {
+            if (results[i]) {
+                DispatchGodotGpuPreparedTriangles(rd, compute_list,
+                                                  prepared[i]);
+            }
+        } else if (ops[i]->type == GodotGpuOp::Type::Blend) {
+            results[i] = DispatchGodotGpuBlend(
+                rd, ops[i], compute_list, unused_uniform_sets);
+        } else if (ops[i]->type == GodotGpuOp::Type::Blend2) {
+            results[i] = DispatchGodotGpuBlend2(
+                rd, ops[i], compute_list, unused_uniform_sets);
+        } else if (ops[i]->type == GodotGpuOp::Type::Blend3) {
+            results[i] = DispatchGodotGpuBlend3(
+                rd, ops[i], compute_list, unused_uniform_sets);
+        }
+        if (results[i]) {
+            any_dispatched = true;
+            // Preserve native E-mote layer order while sharing the expensive
+            // Metal command-list submission across blend and triangle ops.
+            rd->compute_list_add_barrier(compute_list);
+        }
+    }
+    rd->compute_list_end();
+    if (any_dispatched) ApplyGodotGpuBarrier(rd);
+
+    for (size_t i = 0; i < ops.size(); ++i) {
+        FreeGodotGpuPreparedTriangles(rd, prepared[i]);
+        FinishGodotGpuOp(ops[i], results[i]);
+    }
+}
+
 void DrainGodotGpuOpsOnRenderThread() {
     RenderingDevice *rd = MainRenderingDevice();
-    std::vector<std::shared_ptr<GodotGpuOp>> blend_batch;
+    std::vector<std::shared_ptr<GodotGpuOp>> compute_batch;
+    const auto flush_compute = [&]() {
+        ExecuteGodotGpuComputeBatch(rd, compute_batch);
+        compute_batch.clear();
+    };
     for (;;) {
         std::shared_ptr<GodotGpuOp> op;
         {
@@ -3309,18 +3619,21 @@ void DrainGodotGpuOpsOnRenderThread() {
         }
 
         if (IsBatchableBlendOp(op)) {
-            blend_batch.push_back(op);
+            compute_batch.push_back(op);
+            continue;
+        }
+        if (IsBatchableTriangleOp(op)) {
+            compute_batch.push_back(op);
             continue;
         }
 
-        ExecuteGodotGpuBlendBatch(rd, blend_batch);
-        blend_batch.clear();
+        flush_compute();
 
         // Alias blends are executed separately because sampling and writing the
         // same storage image in one dispatch is undefined on Metal/Vulkan.
         FinishGodotGpuOp(op, ExecuteGodotGpuOp(rd, op));
     }
-    ExecuteGodotGpuBlendBatch(rd, blend_batch);
+    flush_compute();
 }
 
 bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
@@ -3476,7 +3789,10 @@ void BridgeReleaseTexture(uint64_t texture) {
         auto op = std::make_shared<GodotGpuOp>();
         op->type = GodotGpuOp::Type::Release;
         op->dst = record.rid;
-        RunGodotGpuOpSync(op);
+        // Texture operations are consumed in queue order. Waiting here turns
+        // every short-lived E-mote scratch layer into a render-thread round
+        // trip; enqueue the release after its last use instead.
+        RunGodotGpuOpAsync(op);
     }
 }
 
@@ -4292,6 +4608,9 @@ void ReleaseGodotGpuPipeline() {
         }
         if (g_gpu_pipeline_state->mosaic_shader.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->mosaic_shader);
+        }
+        if (g_gpu_pipeline_state->triangle_vertex_buffer.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->triangle_vertex_buffer);
         }
     }
     delete g_gpu_pipeline_state;

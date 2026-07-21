@@ -195,6 +195,8 @@ func _run_actions(step: int) -> int:
         var action: Dictionary = raw_action
         var kind := String(action.get("type", "click"))
         var label := String(action.get("label", kind))
+        if OS.get_environment("AETHERKIRI_PROBE_ACTION_TRACE") != "":
+            print("step_probe_action begin label=%s kind=%s" % [label, kind])
         if kind == "click":
             var pos := ProbeConfig.click_position(action)
             _send_window_click(pos)
@@ -284,20 +286,41 @@ func _run_click_stream(step: int, label: String, action: Dictionary) -> int:
 
     var frames: int = max(1, int(action.get("frames", 180)))
     var clicks_per_frame: int = max(0, int(action.get("clicks_per_frame", 1)))
+    var click_every_frames: int = max(1, int(action.get("click_every_frames", 1)))
+    var max_clicks: int = max(0, int(action.get("max_clicks", 0)))
     var capture_every: int = max(0, int(action.get("capture_every", 0)))
+    # PNG encoding is intentionally deferred when requested. E-mote consumes
+    # wall-clock intervals from TJS, so encoding a 1080p PNG inside the loop
+    # turns the next progress() call into a 30+ frame hitch and can skip an
+    # entire blink or inject an artificial physics impulse.
+    var deferred_capture_every: int = max(0, int(action.get("deferred_capture_every", 0)))
+    var deferred_capture_crop := Rect2i()
+    if action.has("deferred_capture_crop") and action["deferred_capture_crop"] is Array:
+        var crop_values: Array = action["deferred_capture_crop"]
+        if crop_values.size() >= 4:
+            deferred_capture_crop = Rect2i(
+                int(crop_values[0]), int(crop_values[1]),
+                int(crop_values[2]), int(crop_values[3])
+            )
+    var deferred_captures: Array[Dictionary] = []
     var spike_ms: float = max(0.0, float(action.get("spike_ms", 20.0)))
     var pointer_id: int = int(action.get("pointer_id", 100000))
     var tick_total := 0.0
     var update_total := 0.0
     var input_total := 0.0
     var frame_total := 0.0
+    var present_total := 0.0
     var tick_max := 0.0
     var update_max := 0.0
     var input_max := 0.0
     var frame_max := 0.0
+    var present_max := 0.0
     var spikes := 0
+    var present_spikes := 0
     var input_events := 0
+    var clicks_sent := 0
     var measured_frames := 0
+    var stream_start_ticks := Time.get_ticks_usec()
 
     if label.is_empty() or label == "click_stream":
         label = "click_stream_%d_%d_%d" % [frames, int(pos.x), int(pos.y)]
@@ -307,10 +330,16 @@ func _run_click_stream(step: int, label: String, action: Dictionary) -> int:
     for frame_index in range(frames):
         var frame_start := Time.get_ticks_usec()
         var input_start := frame_start
-        for i in range(clicks_per_frame):
+        var click_batch := 0
+        if clicks_per_frame > 0 and (frame_index % click_every_frames) == 0:
+            click_batch = clicks_per_frame
+            if max_clicks > 0:
+                click_batch = mini(click_batch, max_clicks - clicks_sent)
+        for i in range(max(0, click_batch)):
             player.send_pointer_event(POINTER_DOWN, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
             player.send_pointer_event(POINTER_UP, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
             input_events += 2
+            clicks_sent += 1
 
         var after_input := Time.get_ticks_usec()
         var tick_start := after_input
@@ -369,15 +398,58 @@ func _run_click_stream(step: int, label: String, action: Dictionary) -> int:
                 JSON.stringify(_image_stats(image)),
             ])
             step += 1
+        if deferred_capture_every > 0 and (frame_index % deferred_capture_every) == 0:
+            var deferred_image := _capture_frame_image()
+            if deferred_capture_crop.size.x > 0 and deferred_capture_crop.size.y > 0:
+                var bounded_crop := deferred_capture_crop.intersection(
+                    Rect2i(Vector2i.ZERO, deferred_image.get_size())
+                )
+                if bounded_crop.size.x > 0 and bounded_crop.size.y > 0:
+                    deferred_image = deferred_image.get_region(bounded_crop)
+            deferred_captures.append({"frame": frame_index, "image": deferred_image})
         await process_frame
+        var present_ms := float(Time.get_ticks_usec() - frame_start) / 1000.0
+        present_total += present_ms
+        present_max = maxf(present_max, present_ms)
+        if spike_ms > 0.0 and present_ms >= spike_ms:
+            present_spikes += 1
+
+    var stream_end_ticks := Time.get_ticks_usec()
+
+    for deferred_capture in deferred_captures:
+        var deferred_frame := int(deferred_capture["frame"])
+        var deferred_image: Image = deferred_capture["image"]
+        var deferred_path := "/tmp/aetherkiri-step-%02d-%s_deferred_f%03d.png" % [
+            step,
+            label,
+            deferred_frame,
+        ]
+        deferred_image.save_png(deferred_path)
+        print("step %02d label=%s deferred_frame=%d screenshot=%s stats=%s" % [
+            step,
+            label,
+            deferred_frame,
+            deferred_path,
+            JSON.stringify(_image_stats(deferred_image)),
+        ])
+        step += 1
 
     var divisor := float(max(1, measured_frames))
-    print("click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d input_events=%d avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+    var elapsed_sec: float = maxf(0.0001, float(stream_end_ticks - stream_start_ticks) / 1000000.0)
+    var fps: float = float(measured_frames) / elapsed_sec
+    print("click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d click_every_frames=%d max_clicks=%d clicks_sent=%d input_events=%d fps=%.2f avg_present_ms=%.2f max_present_ms=%.2f present_spikes=%d avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
         label,
         frames,
         measured_frames,
         clicks_per_frame,
+        click_every_frames,
+        max_clicks,
+        clicks_sent,
         input_events,
+        fps,
+        present_total / divisor,
+        present_max,
+        present_spikes,
         input_total / divisor,
         input_max,
         tick_total / divisor,

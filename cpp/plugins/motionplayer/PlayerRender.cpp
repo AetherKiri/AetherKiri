@@ -14,6 +14,24 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+extern "C" bool AetherInternalMotionRestoreCenteredPresentationLayer(
+    tTJSNI_BaseLayer *layer);
+extern "C" bool
+AetherInternalMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
+    tTJSNI_BaseLayer *layer,
+    tjs_int x,
+    tjs_int y,
+    tjs_int width,
+    tjs_int height);
+extern "C" bool AetherInternalMotionShowCenteredPresentationHoldOverlay(
+    tTJSNI_BaseLayer *layer);
+extern "C" void AetherInternalMotionTickCenteredPresentationHoldOverlays();
+extern "C" void
+AetherInternalMotionDismissCenteredPresentationHoldOverlaysForLayer(
+    tTJSNI_BaseLayer *layer);
+#endif
+
 using namespace motion::internal;
 
 namespace {
@@ -7004,6 +7022,9 @@ namespace {
 
 extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
     tTJSNI_BaseLayer *layer) {
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+    return AetherInternalMotionRestoreCenteredPresentationLayer(layer);
+#endif
     const bool trace = std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG") != nullptr;
     if(centeredGameMotionPresentationLayerShouldPassHit(layer)) {
         configureCenteredGameMotionPresentationHitPassthrough(layer);
@@ -7060,6 +7081,11 @@ AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
     tjs_int y,
     tjs_int width,
     tjs_int height) {
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+    return
+        AetherInternalMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
+            layer, x, y, width, height);
+#endif
     const bool trace = std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG") != nullptr;
     if(centeredGameMotionPresentationLayerShouldPassHit(layer)) {
         configureCenteredGameMotionPresentationHitPassthrough(layer);
@@ -7115,6 +7141,9 @@ AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
 
 extern "C" bool AetherKiriMotionShowCenteredPresentationHoldOverlay(
     tTJSNI_BaseLayer *layer) {
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+    return AetherInternalMotionShowCenteredPresentationHoldOverlay(layer);
+#endif
     const bool trace = std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG") != nullptr;
     if(centeredGameMotionPresentationLayerShouldPassHit(layer)) {
         configureCenteredGameMotionPresentationHitPassthrough(layer);
@@ -7147,6 +7176,10 @@ extern "C" bool AetherKiriMotionShowCenteredPresentationHoldOverlay(
 }
 
 extern "C" void AetherKiriMotionTickCenteredPresentationHoldOverlays() {
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+    AetherInternalMotionTickCenteredPresentationHoldOverlays();
+    return;
+#endif
     auto &cache = centeredPresentationHoldCache();
     if(cache.empty()) {
         return;
@@ -7212,6 +7245,10 @@ extern "C" void AetherKiriMotionTickCenteredPresentationHoldOverlays() {
 extern "C" void
 AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(
     tTJSNI_BaseLayer *layer) {
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+    AetherInternalMotionDismissCenteredPresentationHoldOverlaysForLayer(layer);
+    return;
+#endif
     hideCenteredPresentationHoldOverlaysForReplacementLayer(layer);
 }
 

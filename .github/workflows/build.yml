@@ -14,6 +14,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  # GitHub does not expose repository secrets to fork or Dependabot pull
+  # requests. Trusted runs build the complete internal product; untrusted
+  # pull requests retain the public fallback without exposing the SSH key.
+  AETHERKIRI_WITH_INTERNAL: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
+
 jobs:
   android:
     name: Build Android App
@@ -28,6 +34,17 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
+        with:
+          submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
+          ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
+          persist-credentials: false
+
+      - name: Verify AetherInternal package
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
+          git submodule status --recursive
 
       - name: Install Build Systems
         run: |
@@ -262,6 +279,17 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
+        with:
+          submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
+          ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
+          persist-credentials: false
+
+      - name: Verify AetherInternal package
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
+          git submodule status --recursive
 
       - name: Install Build Systems
         run: |
@@ -437,6 +465,17 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
+        with:
+          submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
+          ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
+          persist-credentials: false
+
+      - name: Verify AetherInternal package
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
+          git submodule status --recursive
 
       - name: Install Build Systems
         run: |
@@ -521,6 +560,33 @@ jobs:
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh macos debug --jobs=4
 
+      - name: Run native motionplayer contract tests
+        run: |
+          set -euo pipefail
+          test_build_dir="${GITHUB_WORKSPACE}/out/macos/ci-tests"
+          configure_log="${RUNNER_TEMP}/aetherkiri-test-configure.log"
+
+          cmake --preset "MacOS Debug Config" --fresh \
+            -B "$test_build_dir" \
+            -D ENABLE_TESTS=ON \
+            -D BUILD_TOOLS=OFF \
+            -D BUILD_ENGINE_API=OFF \
+            -D BUILD_GODOT_EXTENSION=OFF \
+            -D VCPKG_MANIFEST_INSTALL=OFF \
+            -D VCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/out/macos/debug/vcpkg_installed" \
+            -D CMAKE_C_COMPILER_LAUNCHER=ccache \
+            -D CMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            2>&1 | tee "$configure_log"
+
+          if [[ "$AETHERKIRI_WITH_INTERNAL" == "true" ]]; then
+            grep -F "AetherInternal E-mote package: enabled" "$configure_log"
+          else
+            grep -F "AetherInternal E-mote package: unavailable; using public fallback" "$configure_log"
+          fi
+
+          cmake --build "$test_build_dir" --parallel 4
+          ctest --test-dir "$test_build_dir" --output-on-failure --parallel 4
+
       - name: Verify built .app
         run: |
           set -euo pipefail
@@ -578,6 +644,17 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
+        with:
+          submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
+          ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
+          persist-credentials: false
+
+      - name: Verify AetherInternal package
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
+          git submodule status --recursive
 
       - name: Install Build Systems
         run: |

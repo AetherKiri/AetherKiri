@@ -16,7 +16,7 @@
 #include "SysInitIntf.h"
 #include "UtilStreams.h"
 #include "GraphicsLoaderIntf.h"
-#include "../motionplayer/ResourceManager.h"
+#include "motionplayer/ResourceManager.h"
 
 namespace PSB {
 #define LOGGER spdlog::get("plugin")
@@ -1326,6 +1326,16 @@ namespace PSB {
             if(_missingResourceKeys.find(key) != _missingResourceKeys.end()) {
                 return false;
             }
+            // A parse/decryption failure applies to the complete archive, not
+            // just the requested child resource.  E-mote archives can expose
+            // resources through their dedicated runtime while remaining
+            // unreadable by the generic PSB loader; retrying that same parse
+            // for every missing child caused hundreds of exceptions and
+            // synchronous I/O stalls during dialogue playback.
+            if(_failedArchives.find(archiveKey) != _failedArchives.end()) {
+                _missingResourceKeys.insert(key);
+                return false;
+            }
             const std::string archivePrefix = archiveKey + "/";
             bool archiveHasLiveResources = false;
             for(const auto &entry : _resources) {
@@ -1354,11 +1364,32 @@ namespace PSB {
 
         try {
             ttstr archivePath(archiveKey.c_str());
-            PSBFile psb;
-            psb.setSeed(motion::ResourceManager::getDecryptSeed());
-            if(!psb.loadPSBFile(archivePath)) {
+            const auto loadArchive = [&](const tjs_int seed) {
+                auto candidate = std::make_unique<PSBFile>();
+                candidate->setSeed(seed);
+                return candidate->loadPSBFile(archivePath)
+                    ? std::move(candidate)
+                    : std::unique_ptr<PSBFile>{};
+            };
+
+            std::unique_ptr<PSBFile> psb;
+            try {
+                // Ordinary scenario/image PSBs must remain seedless. Encrypted
+                // E-mote archives use the Motion seed only as a fallback.
+                psb = loadArchive(0);
+            } catch(...) {
+                if(motion::ResourceManager::getEmotePSBDecryptSeed() == 0) {
+                    throw;
+                }
+            }
+            if(!psb && motion::ResourceManager::getEmotePSBDecryptSeed() != 0) {
+                psb = loadArchive(
+                    motion::ResourceManager::getEmotePSBDecryptSeed());
+            }
+            if(!psb) {
                 std::lock_guard<std::mutex> lock(_mutex);
                 _loadedArchives.erase(archiveKey);
+                _failedArchives.insert(archiveKey);
                 LOGGER->debug("PSB lazy-load failed: {}", archiveKey);
                 return false;
             }
@@ -1367,9 +1398,10 @@ namespace PSB {
             } else {
                 LOGGER->debug("PSB lazy-load archive: {}", archiveKey);
             }
-            RegisterPSBResourcesIntoMedia(*this, psb, archiveKey);
+            RegisterPSBResourcesIntoMedia(*this, *psb, archiveKey);
             {
                 std::lock_guard<std::mutex> lock(_mutex);
+                _failedArchives.erase(archiveKey);
                 const bool found = _resources.find(key) != _resources.end() ||
                     findBySuffixLocked(key) != _resources.end();
                 if(found) {
@@ -1382,11 +1414,13 @@ namespace PSB {
         } catch(const std::exception &e) {
             std::lock_guard<std::mutex> lock(_mutex);
             _loadedArchives.erase(archiveKey);
+            _failedArchives.insert(archiveKey);
             LOGGER->warn("PSB lazy-load error: {} ({})", e.what(), archiveKey);
             return false;
         } catch(...) {
             std::lock_guard<std::mutex> lock(_mutex);
             _loadedArchives.erase(archiveKey);
+            _failedArchives.insert(archiveKey);
             LOGGER->warn("PSB lazy-load unknown error: {}", archiveKey);
             return false;
         }
@@ -1545,6 +1579,7 @@ namespace PSB {
             std::string archiveKey = normalizedPrefix;
             archiveKey.pop_back();
             _loadedArchives.erase(archiveKey);
+            _failedArchives.erase(archiveKey);
         }
     }
 
@@ -1556,6 +1591,7 @@ namespace PSB {
         _hitCount = 0;
         _missCount = 0;
         _loadedArchives.clear();
+        _failedArchives.clear();
         _knownResourceKeys.clear();
         _missingResourceKeys.clear();
     }

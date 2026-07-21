@@ -1,0 +1,29 @@
+{
+  "name": "nekopara_vol1_dialogue_30_perf_local",
+  "game_path": "",
+  "backend": "Godot Native",
+  "surface_size": [1920, 1080],
+  "window_size": [1600, 900],
+  "coord_size": [1600, 900],
+  "startup_timeout_frames": 2400,
+  "warmup_frames": 780,
+  "after_click_frames": 120,
+  "measure_frames": 120,
+  "export_scripts": false,
+  "actions": [
+    {"type": "click", "label": "data_load", "pos": [1430, 400], "after_frames": 180, "capture": false},
+    {"type": "click", "label": "first_save", "pos": [545, 282], "after_frames": 360, "capture": false},
+    {
+      "type": "click_stream",
+      "label": "dialogue_clicks_30",
+      "pos": [800, 720],
+      "frames": 420,
+      "clicks_per_frame": 1,
+      "click_every_frames": 12,
+      "max_clicks": 30,
+      "capture_every": 0,
+      "capture_final": true,
+      "spike_ms": 25.0
+    }
+  ]
+}

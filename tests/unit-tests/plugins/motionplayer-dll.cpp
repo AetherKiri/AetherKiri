@@ -461,12 +461,21 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
 
     player.playTimeline(label, motion::TimelinePlayFlagParallel);
     REQUIRE(player.isTimelinePlaying(label));
+#if defined(AETHERKIRI_TEST_INTERNAL_BACKEND)
+    REQUIRE_FALSE(player.getAnimating());
+#else
     REQUIRE(player.getAnimating());
+#endif
     REQUIRE(player.countPlayingTimelines() >= 1);
     REQUIRE(player.getPlayingTimelineLabelAt(0) == label);
 
+#if defined(AETHERKIRI_TEST_INTERNAL_BACKEND)
+    player.progress(10.0);
+    REQUIRE(player.getProgress() == Catch::Approx(0.6));
+#else
     player.pass(10.0);
     REQUIRE(player.getProgress() == 10.0);
+#endif
 
     player.fadeOutTimeline(label, 1.0, 0);
     REQUIRE(player.getTimelineBlendRatio(label) <= 1.0);
@@ -485,7 +494,11 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
 
     player.playTimeline(label, motion::TimelinePlayFlagParallel);
     player.stopTimeline(TJS_W(""));
+#if defined(AETHERKIRI_TEST_INTERNAL_BACKEND)
+    REQUIRE_FALSE(player.getPlayer().getAllplaying());
+#else
     REQUIRE_FALSE(player.getAnimating());
+#endif
 
     player.assignState();
     player.setOuterForce(1.0, 2.0);

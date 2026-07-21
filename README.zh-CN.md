@@ -68,6 +68,7 @@ Godot App Shell
 | `bridge/engine_api/` | 宿主层驱动 C++ 引擎的 C ABI。 |
 | `cpp/core/` | KiriKiri2 运行时、视觉系统、音频、存储、VM 和插件支持。 |
 | `cpp/plugins/` | 内置 native 插件实现和兼容 stub。 |
+| `packages/AetherInternal/` | 可选的私有 E-mote package submodule；公开版本不依赖它也能构建。 |
 | `demos/aetherkiri-kag3/` | AetherKiri 内置 KAG3 Demo 的完整源码。 |
 | `tests/profiles/` | 单游戏 probe profile。提交到仓库的 profile 不能包含机器本地路径。 |
 | `tools/` | 不参与 iOS/Android 目标构建的开发和兼容工具。 |
@@ -130,6 +131,25 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 - 本地 Web dev server 使用 TypeScript/Vite，需要 Node.js 和 npm。
 
 ## 构建
+
+公开仓库在没有私有 package 权限时也可以正常构建并运行 CI。有权限的维护者可在构建前初始化完整 E-mote 实现：
+
+```bash
+git submodule update --init packages/AetherInternal
+```
+
+CMake 检测到 package 后会自动启用。使用
+`-DAETHERKIRI_ENABLE_INTERNAL=OFF` 可强制验证公开 fallback；也可通过
+`-DAETHERKIRI_INTERNAL_DIR=/absolute/path/to/AetherInternal` 指定独立检出目录。
+GitHub Actions 的 `Build` workflow 会在可信运行中使用仓库 Secret
+`AETHERSECRET` 作为只读 SSH 密钥，递归初始化私有 submodule。来自 fork
+或 Dependabot 的 PR 无法访问仓库 Secret，因此这些不可信运行仍使用公开 fallback。
+
+私有 package 只扩展 `motionplayer`，不会替换公开 target 或公开源码列表。
+公开注册层始终是脚本侧的唯一入口；检测到私库时，它会选择处于独立命名空间的
+私有 backend。私库构建会把同一套公开 motionplayer 契约测试分别跑在两个
+backend 上，并额外运行私有 E-mote 测试。package/API 版本不一致时 CMake 会
+直接停止配置，不会静默产出不兼容的组合。
 
 常用构建命令：
 

@@ -1,0 +1,3 @@
+[submodule "packages/AetherInternal"]
+	path = packages/AetherInternal
+	url = git@github.com:AetherKiri/AetherInternal.git

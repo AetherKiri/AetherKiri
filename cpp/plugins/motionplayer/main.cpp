@@ -6,7 +6,14 @@
 #include "tjs.h"
 #include "ncbind.hpp"
 #include "psbfile/PSBFile.h"
+#include "MotionPlayerBackendContract.h"
 
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+#define motion aetherinternal_emote
+#include "AetherInternalMotionPlayerBackend.h"
+#undef motion
+using namespace aetherinternal_emote;
+#else
 #include "ResourceManager.h"
 #include "EmotePlayer.h"
 #include "Player.h"
@@ -16,6 +23,7 @@
 #include "D3DAdaptor.h"
 
 using namespace motion;
+#endif
 
 #define NCB_MODULE_NAME TJS_W("motionplayer.dll")
 #define LOGGER spdlog::get("plugin")
@@ -308,7 +316,11 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(smoothing, getSmoothing, setSmoothing);
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+    NCB_PROPERTY(queuing, getQueuing, setQueuing);
+#else
     NCB_PROPERTY(queing, getQueuing, setQueuing); // original typo preserved
+#endif
     NCB_PROPERTY(hairScale, getHairScale, setHairScale);
     NCB_PROPERTY(partsScale, getPartsScale, setPartsScale);
     NCB_PROPERTY(bustScale, getBustScale, setBustScale);
@@ -319,6 +331,12 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_PROPERTY(drawvisible, getDrawVisible, setDrawVisible);
     NCB_PROPERTY(drawOpacity, getDrawOpacity, setDrawOpacity);
     NCB_PROPERTY(opengl, getOpengl, setOpengl);
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+    NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
+    NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
+    NCB_PROPERTY_RO(variableKeys, getVariableKeys);
+    NCB_PROPERTY_RO(allplaying, getAllplaying);
+#endif
     NCB_PROPERTY_RO(animating, getAnimating);
     NCB_PROPERTY_RO(playCallback, getPlayCallback);
 
@@ -330,7 +348,12 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_METHOD(hide);
     NCB_METHOD(assignState);
     NCB_METHOD(initPhysics);
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+    NCB_METHOD(serialize);
+    NCB_METHOD(unserialize);
+#endif
     NCB_METHOD_RAW_CALLBACK(setRot, &EmotePlayer::setRotCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(setRotate, &EmotePlayer::setRotCompat, 0);
     NCB_METHOD(getRot);
     NCB_METHOD_RAW_CALLBACK(setCoord, &EmotePlayer::setCoordCompat, 0);
     NCB_METHOD_RAW_CALLBACK(setScale, &EmotePlayer::setScaleCompat, 0);
@@ -379,6 +402,13 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_METHOD_RAW_CALLBACK(setOuterForce, &EmotePlayer::setOuterForceCompat, 0);
     NCB_METHOD(getOuterForce);
     NCB_METHOD_RAW_CALLBACK(contains, &EmotePlayer::containsCompat, 0);
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+    NCB_METHOD_RAW_CALLBACK(setDrawAffineTranslateMatrix,
+                            &EmotePlayer::setDrawAffineTranslateMatrixCompat,
+                            0);
+    NCB_METHOD_RAW_CALLBACK(clear, &EmotePlayer::clearCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(draw, &EmotePlayer::drawCompat, 0);
+#endif
 }
 
 // ============================================================
@@ -441,6 +471,15 @@ NCB_REGISTER_CLASS(Motion) {
     Variant(TJS_W("PlayFlagAsCan"), (tjs_int)PlayFlagAsCan);
     Variant(TJS_W("PlayFlagJoin"), (tjs_int)PlayFlagJoin);
     Variant(TJS_W("PlayFlagStealth"), (tjs_int)PlayFlagStealth);
+
+#if defined(AETHERKIRI_INTERNAL_EMOTE)
+    Variant(TJS_W("MaskModeStencil"), (tjs_int)MaskModeStencil);
+    Variant(TJS_W("MaskModeAlpha"), (tjs_int)MaskModeAlpha);
+    Variant(TJS_W("TimelinePlayFlagParallel"),
+            (tjs_int)TimelinePlayFlagParallel);
+    Variant(TJS_W("TimelinePlayFlagSequential"),
+            (tjs_int)TimelinePlayFlagSequential);
+#endif
 
     // Transform orders
     Variant(TJS_W("TransformOrderFlip"), (tjs_int)TransformOrderFlip);
@@ -590,6 +629,7 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(assignState);
     NCB_METHOD(initPhysics);
     NCB_METHOD_RAW_CALLBACK(setRot, &EmotePlayer::setRotCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(setRotate, &EmotePlayer::setRotCompat, 0);
     NCB_METHOD(getRot);
     NCB_METHOD_RAW_CALLBACK(setCoord, &EmotePlayer::setCoordCompat, 0);
     NCB_METHOD_RAW_CALLBACK(setScale, &EmotePlayer::setScaleCompat, 0);

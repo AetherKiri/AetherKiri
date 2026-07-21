@@ -10,7 +10,6 @@
 #include "StorageIntf.h"
 #include "TextStream.h"
 #include "tjs.h"
-#include "motionplayer/ResourceManager.h"
 #include "psbfile/PSBFile.h"
 #include "psbfile/PSBMediaRegistry.h"
 #include "kbadDataPack.h"
@@ -1091,7 +1090,6 @@ static tjs_error loadDataPack(tTJSVariant *result,
     }
 
     PSB::PSBFile psb;
-    psb.setSeed(motion::ResourceManager::getDecryptSeed());
     try {
         if(!psb.loadPSBFile(path))
             return TJS_S_OK;

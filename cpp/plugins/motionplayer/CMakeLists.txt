@@ -18,6 +18,13 @@ target_sources(${PROJECT_NAME} PRIVATE
     SeparateLayerAdaptor.cpp
 )
 
+if(AETHERKIRI_INTERNAL_ENABLED)
+    # The public implementation remains part of every build. The private
+    # package adds a separately-namespaced backend and lets the shared public
+    # registration layer select it; it never replaces this source list.
+    aetherinternal_extend_motionplayer(${PROJECT_NAME})
+endif()
+
 target_link_libraries(${PROJECT_NAME} PRIVATE krkr2plugin)
 
 if(EMSCRIPTEN)

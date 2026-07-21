@@ -369,11 +369,41 @@ static bool TVPGetMotionParameterCompanionInfo(const ttstr &name,
     return true;
 }
 
-static tTJSBinaryStream *TVPOpenMotionParameterCompanionScript() {
-    static const char TVP_EMPTY_MOTION_PARAMETER_SCRIPT[] = "%[]";
-    return new tTVPMemoryStream(
-        TVP_EMPTY_MOTION_PARAMETER_SCRIPT,
-        static_cast<tjs_uint>(sizeof(TVP_EMPTY_MOTION_PARAMETER_SCRIPT) - 1));
+static std::string TVPEscapeTJSStringLiteral(const std::string &value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for(unsigned char ch : value) {
+        switch(ch) {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\r': escaped += "\\r"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\t': escaped += "\\t"; break;
+            default: escaped.push_back(static_cast<char>(ch)); break;
+        }
+    }
+    return escaped;
+}
+
+static tTJSBinaryStream *TVPOpenMotionParameterCompanionScript(
+    const ttstr &sourceName) {
+    // KAG's world.tjs treats motion_<asset>.psb.tjs as an expression whose
+    // result describes the image source. Returning an empty dictionary makes
+    // checkAnimImageData() erase the original filename before it reaches
+    // MotionResourceManager. Preserve that filename so .PSB is routed to
+    // MotionAffineSourceLayer and, in turn, Motion.EmotePlayer.
+    const std::string script =
+        "%[\"storage\" => \"" +
+        TVPEscapeTJSStringLiteral(sourceName.AsStdString()) + "\"]";
+    auto *stream = new tTVPMemoryStream();
+    try {
+        stream->Write(script.data(), static_cast<tjs_uint>(script.size()));
+        stream->Seek(0, TJS_BS_SEEK_SET);
+        return stream;
+    } catch(...) {
+        delete stream;
+        throw;
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -1781,14 +1811,16 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
         }
         return new tTVPMemoryStream();
     }
+    ttstr motionSourceName;
     if(access == TJS_BS_READ &&
-       TVPGetMotionParameterCompanionInfo(name, nullptr) &&
+       TVPGetMotionParameterCompanionInfo(name, &motionSourceName) &&
        !TVPIsRealStorageNoSearchNoNormalize(name)) {
         if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
-            spdlog::info("StorageTrace open virtual motion-parameter: {}",
-                         name.AsStdString());
+            spdlog::info(
+                "StorageTrace open virtual motion-parameter: {} source={}",
+                name.AsStdString(), motionSourceName.AsStdString());
         }
-        return TVPOpenMotionParameterCompanionScript();
+        return TVPOpenMotionParameterCompanionScript(motionSourceName);
     }
 
     // does name contain > ?

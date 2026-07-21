@@ -74,6 +74,7 @@ Godot App Shell
 | `bridge/engine_api/` | C ABI used by the host layer to drive the C++ engine. |
 | `cpp/core/` | KiriKiri2 runtime, visual system, audio, storage, VM, and plugin support. |
 | `cpp/plugins/` | Bundled native plugin implementations and compatibility stubs. |
+| `packages/AetherInternal/` | Optional private E-mote package submodule; public builds work without it. |
 | `demos/aetherkiri-kag3/` | Source tree for the built-in AetherKiri KAG3 demo. |
 | `tests/profiles/` | Per-game probe profiles. Committed profiles must not contain machine-local game paths. |
 | `tools/` | Developer and compatibility tools built outside iOS/Android targets. |
@@ -139,6 +140,29 @@ iOS and Android export presets reference the generated PNG sizes under
 - Node.js and npm for the TypeScript/Vite local Web server.
 
 ## Build
+
+The public repository builds and runs CI without access to private packages.
+Maintainers with access to the complete E-mote implementation can initialize
+the optional package before building:
+
+```bash
+git submodule update --init packages/AetherInternal
+```
+
+CMake enables it automatically when present. Use
+`-DAETHERKIRI_ENABLE_INTERNAL=OFF` to test the public fallback, or
+`-DAETHERKIRI_INTERNAL_DIR=/absolute/path/to/AetherInternal` to use a separate
+checkout. Trusted runs of the `Build` GitHub Actions workflow use the
+`AETHERSECRET` repository secret as a read-only SSH key and initialize the
+private submodule recursively. Fork and Dependabot pull requests cannot access
+repository secrets, so those untrusted runs use the public fallback.
+
+The internal package extends `motionplayer`; it does not replace the public
+target or its source list. The public registration layer remains the single
+script-facing entry point and selects the separately namespaced internal
+backend when available. Internal builds run the public motionplayer contract
+tests against both backends, plus private E-mote tests. A package/API mismatch
+stops configuration instead of silently building an incompatible combination.
 
 Common builds:
 

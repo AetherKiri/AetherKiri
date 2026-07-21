@@ -80,6 +80,41 @@ option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
 option(BUILD_ENGINE_API "build engine_api bridge shared library" ON)
 option(BUILD_GODOT_EXTENSION "build Godot GDExtension host library" ON)
 option(BUILD_GPU_BRIDGE "build legacy external GPU bridge renderer" OFF)
+option(AETHERKIRI_ENABLE_INTERNAL
+       "enable optional private AetherInternal packages when available" ON)
+set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 1)
+set(AETHERKIRI_INTERNAL_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherInternal"
+    CACHE PATH "path to an AetherInternal package checkout")
+
+set(AETHERKIRI_INTERNAL_ENABLED OFF)
+if(AETHERKIRI_ENABLE_INTERNAL)
+    # Use a normal (non-cache) package hint so a previous configured checkout
+    # cannot keep a removed/private submodule enabled through stale cache.
+    set(AetherInternal_DIR "${AETHERKIRI_INTERNAL_DIR}/cmake")
+    unset(AetherInternal_FOUND)
+    find_package(AetherInternal CONFIG QUIET
+        NO_DEFAULT_PATH)
+    if(AetherInternal_FOUND)
+        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 2 OR
+           NOT AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL
+               AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION OR
+           NOT COMMAND aetherinternal_extend_motionplayer OR
+           NOT COMMAND aetherinternal_configure_motionplayer_contract_target OR
+           NOT COMMAND aetherinternal_configure_motionplayer_tests)
+            message(FATAL_ERROR
+                "AetherInternal is present but is incompatible with the "
+                "motionplayer backend contract required by this checkout")
+        endif()
+        set(AETHERKIRI_INTERNAL_ENABLED ON)
+    endif()
+endif()
+
+if(AETHERKIRI_INTERNAL_ENABLED)
+    message(STATUS "AetherInternal E-mote package: enabled")
+else()
+    message(STATUS "AetherInternal E-mote package: unavailable; using public fallback")
+endif()
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)

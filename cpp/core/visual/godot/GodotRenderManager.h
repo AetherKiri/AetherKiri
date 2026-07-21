@@ -39,7 +39,8 @@ private:
 class GodotTexture2D final : public iTVPTexture2D {
 public:
     GodotTexture2D(const void *pixel, int pitch, unsigned int w,
-                   unsigned int h, TVPTextureFormat::e format);
+                   unsigned int h, TVPTextureFormat::e format,
+                   int create_flags = RENDER_CREATE_TEXTURE_FLAG_ANY);
     ~GodotTexture2D() override;
 
     TVPTextureFormat::e GetFormat() const override { return format_; }
@@ -60,6 +61,9 @@ public:
     uint64_t GetGodotGpuHandle() const { return gpu_handle_; }
     bool HasGodotGpuHandle() const { return gpu_handle_ != 0; }
     bool HasPendingGpuWrites() const { return gpu_dirty_ && !cpu_dirty_; }
+    bool RequiresGpuReadback() const {
+        return gpu_handle_ != 0 && !cpu_dirty_ && pixels_.empty();
+    }
     bool EnsureGpuHandle();
     bool ClearGpu(uint32_t rgba, const tTVPRect &rc);
     bool CopyGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
@@ -73,6 +77,17 @@ public:
                                const tTVPPointD *dst_points,
                                const tTVPPointD *src_points, uint32_t mode,
                                int opacity);
+    bool DrawTrianglesGpuFrom(GodotTexture2D *src, uint32_t triangle_count,
+                              const tTVPRect &clip_rc,
+                              const tTVPPointD *dst_points,
+                              const tTVPPointD *src_points, int opacity,
+                              uint32_t blend_mode);
+    bool DrawMaskedTrianglesGpuFrom(
+        GodotTexture2D *src, GodotTexture2D *mask,
+        uint32_t triangle_count, const tTVPRect &clip_rc,
+        const tTVPPointD *dst_points, const tTVPPointD *src_points,
+        const tTVPPointD *mask_points, int opacity, uint32_t blend_mode,
+        bool use_mask_alpha);
     bool BlendGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
                       const tTVPRect &src_rc, uint32_t mode, int opacity,
                       uint32_t color);
@@ -108,6 +123,7 @@ private:
     bool cpu_dirty_ = false;
     bool opacity_known_ = false;
     bool opaque_ = false;
+    bool discard_unwritten_on_partial_update_ = false;
 };
 
 class GodotRenderManager final : public iTVPRenderManager {
@@ -158,3 +174,18 @@ private:
 void TVPForceRegisterGodotRenderManager();
 void TVPSetGodotRenderManagerGpuFastPathEnabled(bool enabled);
 std::string TVPGetGodotRenderManagerFallbackStats();
+
+class iTVPBaseBitmap;
+
+// Compose a source bitmap through the alpha union of one or more mask
+// bitmaps without synchronously reading Metal textures back to the CPU.
+// Destination rectangles are local to mask_scratch/dst; source rectangles
+// are local to the corresponding mask bitmap.
+bool TVPGodotCompositeAlphaUnionMask(
+    iTVPBaseBitmap *dst, iTVPBaseBitmap *src,
+    iTVPBaseBitmap *mask_scratch,
+    iTVPBaseBitmap *const *masks,
+    const tTVPRect *mask_dst_rects,
+    const tTVPRect *mask_src_rects,
+    size_t mask_count,
+    bool use_mask_alpha);
