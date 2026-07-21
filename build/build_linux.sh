@@ -108,6 +108,20 @@ stage_export_runtime_libraries() {
         -exec cp -Lf {} "$GODOT_EXPORT_DIR/" \;
 }
 
+stage_release_extension_for_editor_scan() {
+    if [[ "$BUILD_TYPE_LOWER" != "release" ]]; then
+        return
+    fi
+
+    # Godot opens the host debug GDExtension while importing the project,
+    # including before a release export. Use the ABI-compatible release
+    # runtime for that scan when this job has not built debug yet.
+    local debug_dir="$GODOT_APP_DIR/bin/linux/debug"
+    mkdir -p "$debug_dir"
+    find "$GODOT_BIN_DIR" -maxdepth 1 -type f -name 'lib*.so*' \
+        -exec cp -Lf {} "$debug_dir/" \;
+}
+
 echo "==> Building Linux engine and Godot extension"
 cmake --preset "$CMAKE_CONFIG_PRESET" -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
 cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
@@ -122,6 +136,7 @@ if readelf -d "$GODOT_BIN_DIR/libengine_api.so" | grep -Fq "$CMAKE_BUILD_DIR"; t
     exit 1
 fi
 verify_linux_libraries "$GODOT_BIN_DIR"
+stage_release_extension_for_editor_scan
 
 if [[ ! -x "$GODOT_BIN" ]]; then
     echo "Error: Godot not found at $GODOT_BIN. Run tools/setup_linux.sh first." >&2
