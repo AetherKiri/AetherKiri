@@ -101,6 +101,7 @@ public:
         if(upe == 0) return 0;
         return FTFace->ascender * ppem / upe;
     }
+    [[nodiscard]] tjs_int GetLineBaseline() const;
     void GetUnderline(tjs_int &pos, tjs_int &thickness) const {
         if(!FTFace || !FTFace->size || FTFace->units_per_EM == 0) {
             pos = 0; thickness = 1; return;

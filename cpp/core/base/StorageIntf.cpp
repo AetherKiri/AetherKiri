@@ -1678,8 +1678,6 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
     return {};
 }
 //---------------------------------------------------------------------------
-
-//---------------------------------------------------------------------------
 // TVPSearchPlacedPath
 //---------------------------------------------------------------------------
 ttstr TVPSearchPlacedPath(const ttstr &name) {
@@ -2035,18 +2033,9 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ isExistentStorageNoSearchNoNormalize
 
     ttstr path = *param[0];
 
-    bool exists = TVPIsExistentStorageNoSearchNoNormalize(path);
-    ttstr lower = path.AsLowerCase();
-    if(exists && lower.GetLen() >= 4 &&
-       !TJS_strcmp(lower.c_str() + lower.GetLen() - 4, TJS_W(".xp3"))) {
-        // PackinOne startup scripts use this method to decide whether to parse
-        // a proprietary archive index. Native XP3 auto-mount already populated
-        // the search table, so skip that plugin-only branch.
-        exists = false;
-    }
-
     if(result)
-        *result = (tjs_int)exists;
+        *result =
+            (tjs_int)TVPIsExistentStorageNoSearchNoNormalize(path);
 
     return TJS_S_OK;
 }

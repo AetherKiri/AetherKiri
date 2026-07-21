@@ -65,7 +65,13 @@ enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_UNIVERSAL = 12,
     TVP_GODOT_GPU_BLEND_UNIVERSAL_D = 13,
     TVP_GODOT_GPU_BLEND_UNIVERSAL_A = 14,
+    TVP_GODOT_GPU_BLEND_PS_MULTIPLY = 15,
 };
+
+// draw_triangles is also used by the Live2D renderer, whose low 16 bits carry
+// Cubism blend flags.  Tag Kirikiri render-method modes separately so the
+// bridge shader can preserve both interpretations without an ABI expansion.
+constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_TVP_BLEND = 0x00010000u;
 
 extern "C" void TVPGodotGpuBridgeRegister(
     const TVPGodotGpuBridgeCallbacks *callbacks);

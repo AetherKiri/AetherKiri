@@ -2,6 +2,7 @@
 #include "FreeTypeFontRasterizer.h"
 #include "LayerBitmapIntf.h"
 #include "FreeType.h"
+#include "FontBaseline.h"
 #if _WIN32
 #include <corecrt_math_defines.h>
 #else
@@ -275,8 +276,11 @@ void FreeTypeFontRasterizer::GetTextExtent(tjs_char ch, tjs_int &w,
 //---------------------------------------------------------------------------
 tjs_int FreeTypeFontRasterizer::GetAscentHeight() {
     std::lock_guard<std::recursive_mutex> stateLock(Mutex);
+    // LayerBitmap uses this value as the shared baseline anchor for mapped
+    // TFT glyphs. It must match the baseline used by runtime FreeType glyphs,
+    // otherwise a line mixing the two sources jumps vertically.
     if(Face)
-        return Face->GetAscent();
+        return Face->GetLineBaseline();
     return 0;
 }
 static bool isUnicodeSpace(char16_t ch) {
@@ -323,8 +327,16 @@ FreeTypeFontRasterizer::GetBitmap(const tTVPFontAndCharacterData &font,
         ApplyFallbackFaces();
         for(auto *fallback : FaceFallbacks) {
             data = fallback->GetGlyphFromCharcode(font.Character);
-            if(data)
+            if(data) {
+                // The caller supplies a single y coordinate for the whole
+                // line. Missing CJK glyphs may come from several fallback
+                // faces, whose ascender/descent metrics differ. Keep those
+                // bitmaps on the requested face's baseline instead of
+                // letting adjacent characters jump vertically.
+                data->OriginY += krkr::font::ComputeFallbackBaselineAdjustment(
+                    Face->GetLineBaseline(), fallback->GetLineBaseline());
                 break;
+            }
         }
     }
     if(data == nullptr) {
@@ -390,8 +402,13 @@ void FreeTypeFontRasterizer::GetGlyphDrawRect(const ttstr &text,
             ApplyFallbackFaces();
             for(auto *fallback : FaceFallbacks) {
                 result = fallback->GetGlyphRectFromCharcode(rt, ch, ax, ay);
-                if(result)
+                if(result) {
+                    rt.add_offsets(
+                        0, krkr::font::ComputeFallbackBaselineAdjustment(
+                               Face->GetLineBaseline(),
+                               fallback->GetLineBaseline()));
                     break;
+                }
             }
         }
         if(result == false)

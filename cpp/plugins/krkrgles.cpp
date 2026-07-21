@@ -6,6 +6,7 @@
 #include "RenderManager.h"
 #include "EventIntf.h"
 #include "WindowIntf.h"
+#include "ScriptAliasUtils.h"
 #include "motionplayer/Player.h"
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -94,42 +95,6 @@ inline void SetObjectMethod(iTJSDispatch2 *o, const tjs_char *n,
     m->Release();
 }
 
-static bool ForceSetScriptMember(const tTJSVariant &target,
-                                 const tjs_char *member,
-                                 const tTJSVariant &value) {
-    if (target.Type() != tvtObject || !member) return false;
-    tTJSVariantClosure clo = target.AsObjectClosureNoAddRef();
-    if (!clo.Object) return false;
-    return TJS_SUCCEEDED(clo.Object->PropSet(
-        TJS_MEMBERENSURE | TJS_IGNOREPROP, member, nullptr, &value,
-        clo.ObjThis ? clo.ObjThis : clo.Object));
-}
-
-static bool ForceSetGlobalObjectMember(const tjs_char *globalName,
-                                       const tjs_char *member,
-                                       const tTJSVariant &value) {
-    tTJS *engine = TVPGetScriptEngine();
-    if (!engine || !globalName || !member) return false;
-    iTJSDispatch2 *global = engine->GetGlobalNoAddRef();
-    if (!global) return false;
-
-    tTJSVariant target;
-    if (TJS_FAILED(global->PropGet(0, globalName, nullptr, &target, global)))
-        return false;
-
-    bool installed = ForceSetScriptMember(target, member, value);
-
-    tTJSVariant prototype;
-    tTJSVariantClosure clo = target.AsObjectClosureNoAddRef();
-    if (clo.Object &&
-        TJS_SUCCEEDED(clo.Object->PropGet(0, TJS_W("prototype"), nullptr,
-                                          &prototype, clo.Object))) {
-        installed = ForceSetScriptMember(prototype, member, value) || installed;
-    }
-
-    return installed;
-}
-
 static bool ForceMirrorGlobalToMember(const tjs_char *targetGlobal,
                                       const tjs_char *sourceGlobal) {
     tTJS *engine = TVPGetScriptEngine();
@@ -140,7 +105,8 @@ static bool ForceMirrorGlobalToMember(const tjs_char *targetGlobal,
     tTJSVariant value;
     if (TJS_FAILED(global->PropGet(0, sourceGlobal, nullptr, &value, global)))
         return false;
-    return ForceSetGlobalObjectMember(targetGlobal, sourceGlobal, value);
+    return aetherkiri::plugins::EnsureGlobalObjectMember(
+        targetGlobal, sourceGlobal, value);
 }
 
 static bool CreateScriptObject(const tjs_char *expression, tTJSVariant *result) {
@@ -175,16 +141,16 @@ static bool InstallDrawDeviceScriptAliases() {
         if (CreateScriptObject(TJS_W("new OGLDrawDevice()"), &gpuDevice) ||
             CreateScriptObject(TJS_W("new GLESAdaptor()"), &gpuDevice)) {
             for (const tjs_char *target : kDrawAliasTargets) {
-                installed = ForceSetGlobalObjectMember(
+                installed = aetherkiri::plugins::EnsureGlobalObjectMember(
                                 target, TJS_W("drawDevice"), gpuDevice) ||
                             installed;
-                installed = ForceSetGlobalObjectMember(
+                installed = aetherkiri::plugins::EnsureGlobalObjectMember(
                                 target, TJS_W("gpuDrawDevice"), gpuDevice) ||
                             installed;
-                installed = ForceSetGlobalObjectMember(
+                installed = aetherkiri::plugins::EnsureGlobalObjectMember(
                                 target, TJS_W("OGLDrawDevice"), gpuDevice) ||
                             installed;
-                installed = ForceSetGlobalObjectMember(
+                installed = aetherkiri::plugins::EnsureGlobalObjectMember(
                                 target, TJS_W("GLESAdaptor"), gpuDevice) ||
                             installed;
             }
@@ -195,7 +161,7 @@ static bool InstallDrawDeviceScriptAliases() {
                 TVPMainWindow->GetDrawDeviceObject();
             if (windowDrawDevice.Type() == tvtObject) {
                 for (const tjs_char *target : kDrawAliasTargets) {
-                    installed = ForceSetGlobalObjectMember(
+                    installed = aetherkiri::plugins::EnsureGlobalObjectMember(
                                     target, TJS_W("nativeDrawDevice"),
                                     windowDrawDevice) ||
                                 installed;

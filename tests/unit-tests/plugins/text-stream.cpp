@@ -71,3 +71,48 @@ TEST_CASE("UTF-32 BOMs take precedence over their UTF-16 prefixes") {
           "UTF-32BE");
     CHECK(bom_size == 4);
 }
+
+TEST_CASE("invalid EUC-JP guesses fall back to lossless GBK") {
+    // GBK-encoded Japanese from a translated KAG system script.  Its kana
+    // prefix strongly resembles EUC-JP, but 0x84 0x49 is not valid EUC-JP.
+    const std::array<unsigned char, 44> content = {
+        0xA5, 0xC6, 0xA5, 0xAD, 0xA5, 0xB9, 0xA5, 0xC8, 0xA4, 0xCE, 0xA5,
+        0xEC, 0xA5, 0xF3, 0xA5, 0xC0, 0xA5, 0xEA, 0xA5, 0xF3, 0xA5, 0xB0,
+        0x84, 0x49, 0xC0, 0xED, 0xA4, 0xF2, 0xD0, 0xD0, 0xA4, 0xA6, 0xA4,
+        0xBF, 0xA4, 0xE1, 0xA4, 0xCE, 0xA5, 0xAF, 0xA5, 0xE9, 0xA5, 0xB9,
+    };
+    std::uint8_t bom_size = 0;
+
+    CHECK(checkTextEncoding(content.data(), content.size(), bom_size) ==
+          "GBK");
+    CHECK(bom_size == 0);
+}
+
+TEST_CASE(
+    "explicit legacy text encoding overrides an ambiguous detector guess") {
+    TemporaryFile file("aetherkiri-explicit-gbk.stand");
+    // filename:'愛莉a' encoded as GBK.  The non-ASCII bytes are also a valid
+    // CP932 sequence, so detector-only decoding produces mojibake.
+    const std::array<unsigned char, 16> content = {
+        'f',  'i',  'l',  'e',  'n',  'a',  'm',  'e',
+        ':',  '\'', 0x90, 0xDB, 0xC0, 0xF2, 'a',  '\'',
+    };
+    {
+        std::ofstream output(file.path, std::ios::binary);
+        REQUIRE(output.good());
+        output.write(reinterpret_cast<const char *>(content.data()),
+                     static_cast<std::streamsize>(content.size()));
+        REQUIRE(output.good());
+    }
+
+    struct RestoreDefaultEncoding {
+        ~RestoreDefaultEncoding() { TVPSetDefaultReadEncoding(TJS_W("utf-8")); }
+    } restore;
+    TVPSetDefaultReadEncoding(TJS_W("gbk"));
+
+    std::unique_ptr<iTJSTextReadStream> stream(
+        TVPCreateTextStreamForRead(ttstr(file.path.string()), TJS_W("")));
+    tTJSString decoded;
+    REQUIRE(stream->Read(decoded, 0) == 14);
+    CHECK(ttstr(decoded) == TJS_W("filename:'愛莉a'"));
+}

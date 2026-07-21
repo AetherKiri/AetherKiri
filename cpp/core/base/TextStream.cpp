@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cctype>
 
+#include <boost/locale/encoding.hpp>
+
 #include "TextStream.h"
 
 #include <opencv2/core/hal/interface.h>
@@ -64,6 +66,19 @@ static bool isKnownNonUtf8GameEncoding(const std::string &encoding) {
     return encoding == "cp932" || encoding == "EUC-JP" ||
            encoding == "ISO-2022-JP" || encoding == "GBK" ||
            encoding == "GB18030" || encoding == "Big5";
+}
+
+static bool isStrictlyDecodable(const unsigned char *raw, size_t size,
+                                const std::string &encoding) {
+    try {
+        boost::locale::conv::to_utf<wchar_t>(
+            reinterpret_cast<const char *>(raw),
+            reinterpret_cast<const char *>(raw + size), encoding,
+            boost::locale::conv::stop);
+        return true;
+    } catch(...) {
+        return false;
+    }
 }
 
 static bool hasNonAsciiBytes(const unsigned char *raw, size_t size) {
@@ -158,8 +173,22 @@ std::string checkTextEncoding(const void *buf, size_t size,
             } else if(encoding == "UTF-8") {
                 if(!isValidUTF8(raw, size))
                     encoding.clear();
-            } else if(!encoding.empty() && !isKnownNonUtf8GameEncoding(encoding)) {
+            } else if(!encoding.empty() &&
+                      !isKnownNonUtf8GameEncoding(encoding)) {
                 encoding.clear();
+            } else if(!encoding.empty() &&
+                      !isStrictlyDecodable(raw, size, encoding)) {
+                // Statistical detectors can mistake GBK text containing many
+                // Japanese glyphs for EUC-JP.  Never accept a legacy encoding
+                // that cannot decode the complete byte stream: the default
+                // conversion policy silently drops invalid bytes and can turn
+                // quotes inside scripts into executable punctuation.
+                if((encoding == "EUC-JP" || encoding == "ISO-2022-JP") &&
+                   isStrictlyDecodable(raw, size, "GBK")) {
+                    encoding = "GBK";
+                } else {
+                    encoding.clear();
+                }
             }
         }
     }
@@ -251,8 +280,16 @@ public:
         raw.erase(raw.begin(), raw.begin() + bomSize);
         size = raw.size();
 
-        if(bomSize == 0 && shouldPreferCP932ForStandMetadata(name) &&
-           hasNonAsciiBytes(raw.data(), size) && !isValidUTF8(raw.data(), size)) {
+        // Storages.setTextEncoding()/Scripts.textEncoding is an explicit game
+        // instruction.  Legacy CJK byte streams are often valid in more than
+        // one encoding, so a statistical guess (for example CP932 for GBK
+        // bytes) must not override that instruction.  Keep UTF-8 as the
+        // auto-detecting default for games that do not select an encoding.
+        if(bomSize == 0 && G_DefaultReadEncoding != "UTF-8") {
+            encoding = G_DefaultReadEncoding;
+        } else if(bomSize == 0 && shouldPreferCP932ForStandMetadata(name) &&
+                  hasNonAsciiBytes(raw.data(), size) &&
+                  !isValidUTF8(raw.data(), size)) {
             encoding = "cp932";
         }
 

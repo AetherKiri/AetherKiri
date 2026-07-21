@@ -21,6 +21,8 @@
 
 #include <zlib.h>
 #include <algorithm>
+#include <array>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -331,6 +333,58 @@ bool TVPIsXP3Archive(const ttstr &name) {
 }
 
 //---------------------------------------------------------------------------
+namespace {
+
+bool TVPReadXP3ItemHeader(tTJSBinaryStream *stream,
+                          const tTVPXP3Archive::tArchiveItem &item,
+                          std::array<tjs_uint8, 8> &header) {
+    if(item.Segments.empty())
+        return false;
+
+    const auto &segment = item.Segments.front();
+    if(segment.Offset != 0 || segment.OrgSize < header.size())
+        return false;
+
+    const tjs_uint64 originalPosition = stream->GetPosition();
+    bool succeeded = false;
+    try {
+        stream->SetPosition(segment.Start);
+        if(segment.IsCompressed) {
+            if(segment.ArcSize <= std::numeric_limits<tjs_uint>::max() &&
+               segment.OrgSize <= std::numeric_limits<tjs_uint>::max()) {
+                std::vector<tjs_uint8> archived(
+                    static_cast<std::size_t>(segment.ArcSize));
+                std::vector<tjs_uint8> original(
+                    static_cast<std::size_t>(segment.OrgSize));
+                stream->ReadBuffer(archived.data(),
+                                   static_cast<tjs_uint>(archived.size()));
+                unsigned long originalSize =
+                    static_cast<unsigned long>(original.size());
+                succeeded =
+                    uncompress(original.data(), &originalSize,
+                               archived.data(),
+                               static_cast<unsigned long>(archived.size())) ==
+                        Z_OK &&
+                    originalSize == original.size();
+                if(succeeded)
+                    std::copy_n(original.begin(), header.size(),
+                                header.begin());
+            }
+        } else {
+            stream->ReadBuffer(header.data(),
+                               static_cast<tjs_uint>(header.size()));
+            succeeded = true;
+        }
+    } catch(...) {
+        succeeded = false;
+    }
+    stream->SetPosition(originalPosition);
+    return succeeded;
+}
+
+} // namespace
+
+//---------------------------------------------------------------------------
 void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
                           bool normalizeName) {
     tjs_uint64 offset = off;
@@ -545,10 +599,6 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
                    mappedName->second.Next < mappedName->second.Names.size()) {
                     item.Name =
                         mappedName->second.Names[mappedName->second.Next++];
-                    // Profiles are selected by the real startup entry's
-                    // content fingerprint, never by a game path or title.
-                    if(item.Name == TJS_W("startup.tjs"))
-                        TVPActivateBuiltinXP3CxDecoder(item.FileHash);
                 }
                 if(normalizeName)
                     NormalizeInArchiveStorageName(item.Name);
@@ -564,6 +614,32 @@ void tTVPXP3Archive::Init(tTJSBinaryStream *st, tjs_int64 off,
 
             if(!(index_flag & TVP_XP3_INDEX_CONTINUE))
                 break; // continue reading index when the bit sets
+        }
+
+        // A content hash alone is not enough to select Cx: translated XP3s
+        // can retain protected metadata after their payload is already
+        // decrypted. Probe the root startup payload before enabling the
+        // decoder for this archive.
+        for(const auto &item : ItemVector) {
+            if(item.Name != TJS_W("startup.tjs") ||
+               !TVPIsBuiltinXP3CxScheme(item.FileHash))
+                continue;
+
+            std::array<tjs_uint8, 8> header{};
+            const bool headerRead = TVPReadXP3ItemHeader(st, item, header);
+            if(TVPShouldUseBuiltinXP3CxDecoder(
+                   item.FileHash, headerRead ? header.data() : nullptr,
+                   headerRead ? header.size() : 0)) {
+                UseBuiltinCxDecoder =
+                    TVPActivateBuiltinXP3CxDecoder(item.FileHash);
+                if(UseBuiltinCxDecoder)
+                    TVPAddImportantLog(
+                        TJS_W("(info) Activated built-in XP3 Cx decoder"));
+            } else {
+                TVPAddImportantLog(
+                    TJS_W("(info) Protected XP3 payload is already decoded; skipped built-in Cx decoder"));
+            }
+            break;
         }
 
         // sort item vector by its name (required for tTVPArchive
@@ -1099,7 +1175,8 @@ tjs_uint tTVPXP3ArchiveStream::Read(void *buffer, tjs_uint read_size) {
                 Owner->GetFileHash(StorageIndex), Owner->GetName(StorageIndex));
             TVPXP3ArchiveExtractionFilter((tTVPXP3ExtractionFilterInfo *)&info,
                                           &FilterContext);
-        } else if(Owner->IsFileProtected(StorageIndex)) {
+        } else if(Owner->UsesBuiltinCxDecoder() &&
+                  Owner->IsFileProtected(StorageIndex)) {
             TVPDecodeBuiltinXP3Cx(
                 Owner->GetFileHash(StorageIndex), CurPos,
                 static_cast<tjs_uint8 *>(buffer) + write_size, one_size);

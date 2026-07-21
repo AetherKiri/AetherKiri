@@ -69,6 +69,7 @@ namespace TJS {
                 !TJS_strcmp(membername, TJS_W("loadResolutionInfo")) ||
                 !TJS_strcmp(membername, TJS_W("parseArchiveIndex")) ||
                 !TJS_strcmp(membername, TJS_W("setDefaultDllDirectories")) ||
+                !TJS_strcmp(membername, TJS_W("checkSignature")) ||
                 !TJS_strcmp(membername, TJS_W("pathHash")));
     }
 
@@ -301,77 +302,6 @@ namespace TJS {
         } catch(...) {
             resolving = false;
             throw;
-        }
-    }
-
-    static bool TJSCompatResolveWindowDrawDeviceFallback(
-        const tjs_char *membername, tTJSVariant *result) {
-        if(!result || !membername)
-            return false;
-        if(TJS_strcmp(membername, TJS_W("drawDevice")) &&
-           TJS_strcmp(membername, TJS_W("nativeDrawDevice")))
-            return false;
-
-        static thread_local bool resolving = false;
-        if(resolving)
-            return false;
-
-        resolving = true;
-        try {
-            tTJS *engine = TVPGetScriptEngine();
-            if(!engine) {
-                resolving = false;
-                return false;
-            }
-            iTJSDispatch2 *global = engine->GetGlobalNoAddRef();
-            if(!global) {
-                resolving = false;
-                return false;
-            }
-
-            tTJSVariant windowClass;
-            if(TJS_FAILED(global->PropGet(0, TJS_W("Window"), nullptr,
-                                          &windowClass, global)) ||
-               windowClass.Type() != tvtObject) {
-                resolving = false;
-                return false;
-            }
-
-            tTJSVariantClosure windowClosure =
-                windowClass.AsObjectClosureNoAddRef();
-            if(!windowClosure.Object) {
-                resolving = false;
-                return false;
-            }
-
-            tTJSVariant mainWindow;
-            iTJSDispatch2 *windowObjThis = windowClosure.ObjThis
-                                               ? windowClosure.ObjThis
-                                               : windowClosure.Object;
-            if(TJS_FAILED(windowClosure.Object->PropGet(
-                   0, TJS_W("mainWindow"), nullptr, &mainWindow,
-                   windowObjThis)) ||
-               mainWindow.Type() != tvtObject) {
-                resolving = false;
-                return false;
-            }
-
-            tTJSVariantClosure mainClosure =
-                mainWindow.AsObjectClosureNoAddRef();
-            if(!mainClosure.Object) {
-                resolving = false;
-                return false;
-            }
-
-            iTJSDispatch2 *mainObjThis =
-                mainClosure.ObjThis ? mainClosure.ObjThis : mainClosure.Object;
-            const bool ok = TJS_SUCCEEDED(mainClosure.Object->PropGet(
-                0, TJS_W("drawDevice"), nullptr, result, mainObjThis));
-            resolving = false;
-            return ok;
-        } catch(...) {
-            resolving = false;
-            return false;
         }
     }
 
@@ -1789,9 +1719,6 @@ namespace TJS {
                 return TJS_S_OK;
             }
             if(TJSCompatResolveStartupFallback(membername, result)) {
-                return TJS_S_OK;
-            }
-            if(TJSCompatResolveWindowDrawDeviceFallback(membername, result)) {
                 return TJS_S_OK;
             }
             if(TJSCompatResolveKagRuntimeFallback(membername, result, this,

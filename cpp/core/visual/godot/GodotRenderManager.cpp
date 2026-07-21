@@ -116,7 +116,8 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "UnivTransBlend_d") == 0 ||
                std::strcmp(name, "UnivTransBlend_a") == 0 ||
                std::strcmp(name, "CopyColor") == 0 ||
-               std::strcmp(name, "PsScreenBlend") == 0;
+               std::strcmp(name, "PsScreenBlend") == 0 ||
+               std::strcmp(name, "PsMulBlend") == 0;
     };
     static const std::string setting = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_RECT_FASTPATH");
@@ -202,6 +203,16 @@ bool IsGpuCopyTrianglesEnabled() {
     static const bool enabled = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_COPY_TRIANGLES");
         return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+bool IsGpuBlendTrianglesEnabled() {
+    static const bool enabled = []() {
+        const char *value =
+            std::getenv("AETHERKIRI_GODOT_GPU_BLEND_TRIANGLES");
+        return value == nullptr || value[0] == '\0' ||
+               std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }
@@ -670,6 +681,36 @@ bool GodotTexture2D::CopyTrianglesGpuFrom(GodotTexture2D *src,
     return true;
 }
 
+bool GodotTexture2D::BlendTrianglesGpuFrom(
+    GodotTexture2D *src, uint32_t triangle_count, const tTVPRect &clip_rc,
+    const tTVPPointD *dst_points, const tTVPPointD *src_points, uint32_t mode,
+    int opacity) {
+    if (src == nullptr || triangle_count == 0 || dst_points == nullptr ||
+        src_points == nullptr || gpu_handle_ == 0 || src->gpu_handle_ == 0) {
+        return false;
+    }
+    if (mode != TVP_GODOT_GPU_BLEND_ALPHA &&
+        mode != TVP_GODOT_GPU_BLEND_ALPHA_D &&
+        mode != TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A &&
+        mode != TVP_GODOT_GPU_BLEND_PS_MULTIPLY) {
+        return false;
+    }
+    const auto *bridge = TVPGodotGpuBridgeGet();
+    if (bridge == nullptr || bridge->draw_triangles == nullptr) return false;
+    const float normalized_opacity =
+        static_cast<float>(std::clamp(opacity, 0, 255)) / 255.0f;
+    if (!bridge->draw_triangles(
+            gpu_handle_, src->gpu_handle_, triangle_count, &clip_rc,
+            dst_points, src_points, normalized_opacity,
+            TVP_GODOT_GPU_TRIANGLE_TVP_BLEND | mode)) {
+        return false;
+    }
+    gpu_dirty_ = true;
+    cpu_dirty_ = false;
+    MarkOpacityUnknown();
+    return true;
+}
+
 bool GodotTexture2D::BlendGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
                                   const tTVPRect &src_rc, uint32_t mode,
                                   int opacity, uint32_t color) {
@@ -1055,6 +1096,21 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         return;
     }
 
+    if (method_name == "PsMulBlend" && dst != nullptr && src != nullptr &&
+        IsGpuRectFastPathEnabled("PsMulBlend") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
+        RectAbsSizeMatches(rctar, textures[0].second) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(src, rctar, textures[0].second,
+                          TVP_GODOT_GPU_BLEND_PS_MULTIPLY,
+                          godot_method != nullptr ? godot_method->Opacity() : 255,
+                          0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
     if ((method_name == "AlphaBlend_a" ||
         method_name == "PerspectiveAlphaBlend_a") &&
         dst != nullptr && src != nullptr &&
@@ -1256,11 +1312,12 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
     ++draw_count_;
     const std::string method_name =
         method != nullptr ? method->GetName() : std::string();
+    auto *godot_method = dynamic_cast<GodotRenderMethod *>(method);
+    auto *dst = dynamic_cast<GodotTexture2D *>(target);
+    auto *src = textures.size() == 1
+        ? dynamic_cast<GodotTexture2D *>(textures[0].first)
+        : nullptr;
     if (method_name == "Copy") {
-        auto *dst = dynamic_cast<GodotTexture2D *>(target);
-        auto *src = textures.size() == 1
-            ? dynamic_cast<GodotTexture2D *>(textures[0].first)
-            : nullptr;
         if (dst != nullptr && src != nullptr &&
             IsGpuRectFastPathEnabled("Copy") &&
             IsGpuCopyTrianglesEnabled() &&
@@ -1277,12 +1334,41 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
                                     ? "triangles"
                                     : "triangles_cpu");
     }
+
+    uint32_t blend_mode = 0;
+    const char *fast_path_name = nullptr;
+    if (method_name == "AlphaBlend") {
+        blend_mode = TVP_GODOT_GPU_BLEND_ALPHA;
+        fast_path_name = "AlphaBlend";
+    } else if (method_name == "AlphaBlend_d") {
+        blend_mode = TVP_GODOT_GPU_BLEND_ALPHA_D;
+        fast_path_name = "AlphaBlend_d";
+    } else if (method_name == "AlphaBlend_a" ||
+               method_name == "PerspectiveAlphaBlend_a") {
+        blend_mode = TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A;
+        fast_path_name = "AlphaBlend_a";
+    } else if (method_name == "PsMulBlend") {
+        blend_mode = TVP_GODOT_GPU_BLEND_PS_MULTIPLY;
+        fast_path_name = "PsMulBlend";
+    }
+    if (fast_path_name != nullptr && nTriangles > 0 && dst != nullptr &&
+        src != nullptr && IsGpuRectFastPathEnabled(fast_path_name) &&
+        IsGpuBlendTrianglesEnabled() &&
+        ShouldUseGpuRectFastPath(rcclip, fast_path_name, dst, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendTrianglesGpuFrom(
+            src, static_cast<uint32_t>(nTriangles), rcclip, pttar,
+            textures[0].second, blend_mode,
+            godot_method != nullptr ? godot_method->Opacity() : 255)) {
+        CountGpuFastPath(method_name + ":Triangles");
+        return;
+    }
     CountMethodFallback(method);
-    auto *godot_method = dynamic_cast<GodotRenderMethod *>(method);
     SoftwareDelegate()->OperateTriangles(
         godot_method != nullptr ? godot_method->Delegate() : method,
         nTriangles, target, reftar, rcclip, pttar, textures);
-    if (auto *dst = dynamic_cast<GodotTexture2D *>(target)) {
+    if (dst != nullptr) {
         dst->MarkCpuDirty();
     }
 }

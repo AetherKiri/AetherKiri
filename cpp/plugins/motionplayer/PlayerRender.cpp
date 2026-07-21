@@ -20,6 +20,8 @@ namespace {
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
     std::string sampleBitmapStats(const iTVPBaseBitmap *bitmap);
+    bool bitmapVisibleBounds(const iTVPBaseBitmap *bitmap,
+                             tTVPRect &bounds);
     bool showCenteredPresentationMessageUiOverlay(
         tTJSNI_BaseLayer *presentationLayer,
         int canvasWidth,
@@ -32,6 +34,10 @@ namespace {
         int canvasHeight,
         tjs_int &messageTop);
     bool motionPresentationLayerHasVisibleSamples(tTJSNI_BaseLayer *layer);
+    bool centeredPresentationFrameHasResolvedScale(
+        tTJSNI_BaseLayer *layer,
+        const std::string &motionPath,
+        const char *reason);
 
     bool motionRenderProfileEnabled() {
         static const bool enabled = [] {
@@ -3485,7 +3491,10 @@ namespace {
     }
 
     bool motionPresentationLayerHasVisibleSamples(tTJSNI_BaseLayer *layer) {
-        if(!layer || !layer->GetHasImage()) {
+        if(!layer ||
+           !motion::internal::presentationLayerTypeCanReceivePixels(
+               layer->GetType()) ||
+           !layer->GetHasImage()) {
             return false;
         }
         auto *image = layer->GetMainImage();
@@ -3891,30 +3900,37 @@ namespace {
         int canvasWidth,
         int canvasHeight) {
         if(!sourceLayer || !targetLayer || sourceLayer == targetLayer ||
-           !sourceLayer->GetHasImage()) {
-            return false;
-        }
-        auto *sourceImage = sourceLayer->GetMainImage();
-        if(!sourceImage || sourceImage->GetWidth() <= 0 ||
-           sourceImage->GetHeight() <= 0) {
-            return false;
-        }
-
-        const auto sourceWidth =
-            static_cast<tjs_int>(sourceImage->GetWidth());
-        const auto sourceHeight =
-            static_cast<tjs_int>(sourceImage->GetHeight());
-        const auto targetWidth = std::max<tjs_int>(
-            std::max<tjs_int>(sourceWidth, canvasWidth),
-            std::max<tjs_int>(targetLayer->GetImageWidth(), 0));
-        const auto targetHeight = std::max<tjs_int>(
-            std::max<tjs_int>(sourceHeight, canvasHeight),
-            std::max<tjs_int>(targetLayer->GetImageHeight(), 0));
-        if(targetWidth <= 0 || targetHeight <= 0) {
+           !motion::internal::presentationLayerTypeCanReceivePixels(
+               sourceLayer->GetType()) ||
+           !motion::internal::presentationLayerTypeCanReceivePixels(
+               targetLayer->GetType())) {
             return false;
         }
 
         try {
+            if(!sourceLayer->GetHasImage()) {
+                return false;
+            }
+            auto *sourceImage = sourceLayer->GetMainImage();
+            if(!sourceImage || sourceImage->GetWidth() <= 0 ||
+               sourceImage->GetHeight() <= 0) {
+                return false;
+            }
+
+            const auto sourceWidth =
+                static_cast<tjs_int>(sourceImage->GetWidth());
+            const auto sourceHeight =
+                static_cast<tjs_int>(sourceImage->GetHeight());
+            const auto targetWidth = std::max<tjs_int>(
+                std::max<tjs_int>(sourceWidth, canvasWidth),
+                std::max<tjs_int>(targetLayer->GetImageWidth(), 0));
+            const auto targetHeight = std::max<tjs_int>(
+                std::max<tjs_int>(sourceHeight, canvasHeight),
+                std::max<tjs_int>(targetLayer->GetImageHeight(), 0));
+            if(targetWidth <= 0 || targetHeight <= 0) {
+                return false;
+            }
+
             if(!targetLayer->GetHasImage()) {
                 targetLayer->SetHasImage(true);
             }
@@ -3969,6 +3985,10 @@ namespace {
         if(sourceFamily == YuzuSdPresentationLayerFamily::None) {
             return 0;
         }
+        if(!centeredPresentationFrameHasResolvedScale(
+               sourceLayer, motionPath, reason)) {
+            return 0;
+        }
 
         auto *root = sourceLayer;
         while(root && root->GetParent()) {
@@ -3985,6 +4005,8 @@ namespace {
                 return;
             }
             if(layer != sourceLayer &&
+               motion::internal::presentationLayerTypeCanReceivePixels(
+                   layer->GetType()) &&
                yuzuSdPresentationLayerFamily(layer) == sourceFamily &&
                seen.insert(layer).second) {
                 targets.push_back(layer);
@@ -4055,6 +4077,10 @@ namespace {
         bool hasOverlayGeometry = false;
         bool hasPrimaryGeometry = false;
         bool cgViewPresentation = false;
+        tTVPRect contentBounds;
+        tTVPRect pendingExpandedBounds;
+        bool hasContentBounds = false;
+        int pendingExpandedBoundsFrames = 0;
         int overlayFramesRemaining = 0;
         tjs_uint64 capturedTick = 0;
         tjs_uint64 holdUntilTick = 0;
@@ -4077,6 +4103,76 @@ namespace {
     centeredPresentationMessageUiOverlayCache() {
         static CenteredPresentationMessageUiOverlayCache cache;
         return cache;
+    }
+
+    bool centeredPresentationFrameHasResolvedScale(
+        tTJSNI_BaseLayer *layer,
+        const std::string &motionPath,
+        const char *reason) {
+        if(!layer || motionPath.empty()) {
+            return true;
+        }
+        const auto family = yuzuSdPresentationLayerFamily(layer);
+        if(family == YuzuSdPresentationLayerFamily::None) {
+            return true;
+        }
+        const auto layerName =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        CenteredPresentationHoldEntry *previousStable = nullptr;
+        for(auto &cached : centeredPresentationHoldCache()) {
+            if(cached.first == layer) {
+                continue;
+            }
+            auto &candidate = cached.second;
+            if(candidate.motion != motionPath || !candidate.bitmap ||
+               !candidate.hasContentBounds ||
+               yuzuSdPresentationLayerFamilyName(candidate.layerName) !=
+                   family) {
+                continue;
+            }
+            if(!previousStable ||
+               candidate.capturedTick > previousStable->capturedTick) {
+                previousStable = &candidate;
+            }
+        }
+        if(!previousStable) {
+            return true;
+        }
+
+        // A stable layer is normally the only cached member of its family.
+        // Scan alpha bounds only during a front/back replacement overlap so
+        // looping SD animation frames keep their steady-state render cost.
+        auto *image = layer->GetMainImage();
+        tTVPRect currentBounds;
+        if(!image || !bitmapVisibleBounds(image, currentBounds)) {
+            return true;
+        }
+
+        const auto previousWidth = previousStable->contentBounds.get_width();
+        const auto previousHeight = previousStable->contentBounds.get_height();
+        const auto currentWidth = currentBounds.get_width();
+        const auto currentHeight = currentBounds.get_height();
+        if(previousWidth <= 0 || previousHeight <= 0 ||
+           currentWidth <= previousWidth * 6 / 5 ||
+           currentHeight <= previousHeight * 6 / 5) {
+            return true;
+        }
+
+        previousStable->holdUntilTick = std::max(
+            previousStable->holdUntilTick,
+            TVPGetTickCount() + kCenteredPresentationHoldDurationMs);
+        if(LOGGER && std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG")) {
+            LOGGER->info(
+                "motion centered frame rejected unresolved scale: reason={} motion={} layer={} previous=[{},{},{},{}] current=[{},{},{},{}]",
+                reason ? reason : "<null>", motionPath, layerName,
+                previousStable->contentBounds.left,
+                previousStable->contentBounds.top,
+                previousStable->contentBounds.right,
+                previousStable->contentBounds.bottom,
+                currentBounds.left, currentBounds.top,
+                currentBounds.right, currentBounds.bottom);
+        }
+        return false;
     }
 
     bool refreshCenteredPresentationHoldEntryFromVisibleLayer(
@@ -4105,6 +4201,53 @@ namespace {
             return true;
         }
 
+        tTVPRect currentBounds;
+        const bool hasCurrentBounds =
+            bitmapVisibleBounds(image, currentBounds);
+        if(hasCurrentBounds && entry.hasContentBounds) {
+            const auto oldWidth = entry.contentBounds.get_width();
+            const auto oldHeight = entry.contentBounds.get_height();
+            const auto currentWidth = currentBounds.get_width();
+            const auto currentHeight = currentBounds.get_height();
+            const bool abruptlyExpanded =
+                oldWidth > 0 && oldHeight > 0 &&
+                currentWidth > oldWidth * 6 / 5 &&
+                currentHeight > oldHeight * 6 / 5;
+            if(abruptlyExpanded) {
+                const auto pendingWidth =
+                    entry.pendingExpandedBounds.get_width();
+                const auto pendingHeight =
+                    entry.pendingExpandedBounds.get_height();
+                const bool samePendingExpansion =
+                    entry.pendingExpandedBoundsFrames > 0 &&
+                    std::abs(currentWidth - pendingWidth) <=
+                        std::max<tjs_int>(2, currentWidth / 50) &&
+                    std::abs(currentHeight - pendingHeight) <=
+                        std::max<tjs_int>(2, currentHeight / 50);
+                if(!samePendingExpansion) {
+                    entry.pendingExpandedBounds = currentBounds;
+                    entry.pendingExpandedBoundsFrames = 1;
+                    if(LOGGER &&
+                       std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG")) {
+                        LOGGER->info(
+                            "motion centered hold rejected transient scale jump: motion={} layer={} old=[{},{},{},{}] current=[{},{},{},{}]",
+                            entry.motion, entry.layerName,
+                            entry.contentBounds.left, entry.contentBounds.top,
+                            entry.contentBounds.right,
+                            entry.contentBounds.bottom,
+                            currentBounds.left, currentBounds.top,
+                            currentBounds.right, currentBounds.bottom);
+                    }
+                    return true;
+                }
+                ++entry.pendingExpandedBoundsFrames;
+            } else {
+                entry.pendingExpandedBoundsFrames = 0;
+            }
+        } else {
+            entry.pendingExpandedBoundsFrames = 0;
+        }
+
         const auto width = static_cast<tjs_int>(image->GetWidth());
         const auto height = static_cast<tjs_int>(image->GetHeight());
         if(!entry.bitmap || entry.width != width || entry.height != height) {
@@ -4116,6 +4259,11 @@ namespace {
         }
         entry.bitmap->Fill(tTVPRect(0, 0, width, height), 0x00000000);
         entry.bitmap->CopyRect(0, 0, image, tTVPRect(0, 0, width, height));
+        if(hasCurrentBounds) {
+            entry.contentBounds = currentBounds;
+            entry.hasContentBounds = true;
+        }
+        entry.pendingExpandedBoundsFrames = 0;
         entry.capturedTick = now;
         return true;
     }
@@ -4423,6 +4571,20 @@ namespace {
         const tjs_int width = static_cast<tjs_int>(image->GetWidth());
         const tjs_int height = static_cast<tjs_int>(image->GetHeight());
         auto &cache = centeredPresentationHoldCache();
+        const auto layerName =
+            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        tTVPRect currentBounds;
+        const bool hasCurrentBounds =
+            bitmapVisibleBounds(image, currentBounds);
+        // During a Yuzu front/back page exchange, the replacement `ev` layer
+        // is briefly populated at its native size before MotionPlayer applies
+        // the motion's logical resolution.  Keep the prior stable transition
+        // frame until the replacement has reached its resolved geometry.
+        if(!centeredPresentationFrameHasResolvedScale(
+               layer, motionPath, "capture")) {
+            return nullptr;
+        }
+
         auto &entry = cache[layer];
         if(!entry.bitmap || entry.width != width || entry.height != height) {
             entry.bitmap = std::make_shared<tTVPBaseBitmap>(
@@ -4432,8 +4594,7 @@ namespace {
             entry.height = height;
         }
 
-        entry.layerName =
-            renderDebugLowercase(motion::detail::narrow(layer->GetName()));
+        entry.layerName = layerName;
         entry.cgViewPresentation = layerBelongsToCgViewPresentation(layer);
         entry.left = layer->GetLeft();
         entry.top = layer->GetTop();
@@ -4524,6 +4685,11 @@ namespace {
             now + kCenteredPresentationHoldDurationMs);
         entry.bitmap->Fill(tTVPRect(0, 0, width, height), 0x00000000);
         entry.bitmap->CopyRect(0, 0, image, tTVPRect(0, 0, width, height));
+        entry.hasContentBounds = hasCurrentBounds;
+        if(hasCurrentBounds) {
+            entry.contentBounds = currentBounds;
+        }
+        entry.pendingExpandedBoundsFrames = 0;
         return &entry;
     }
 
@@ -6299,8 +6465,10 @@ namespace {
         const bool presentationIsCgViewAffine =
             layerIsCgViewAffineSurface(presentationLayer);
         const bool presentationCanReceivePixels =
-            presentationLayer->GetType() != ltBinder;
+            motion::internal::presentationLayerTypeCanReceivePixels(
+                presentationLayer->GetType());
         bool presentationVisible =
+            presentationCanReceivePixels &&
             motionPresentationLayerHasVisibleSamples(presentationLayer);
         if(!presentationVisible && renderLayer &&
            motionPresentationLayerHasVisibleSamples(renderLayer) &&

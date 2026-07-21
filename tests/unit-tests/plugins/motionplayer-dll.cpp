@@ -10,6 +10,7 @@
 
 #include "motionplayer/EmotePlayer.h"
 #include "motionplayer/Player.h"
+#include "motionplayer/PlayerInternal.h"
 #include "motionplayer/ResourceManager.h"
 #include "motionplayer/RuntimeSupport.h"
 #include "ncbind.hpp"
@@ -22,6 +23,15 @@
 #include "tjsObject.h"
 
 extern tTJS *TVPScriptEngine;
+
+TEST_CASE("motion presentation excludes structural binder layers") {
+    REQUIRE_FALSE(
+        motion::internal::presentationLayerTypeCanReceivePixels(ltBinder));
+    REQUIRE(
+        motion::internal::presentationLayerTypeCanReceivePixels(ltOpaque));
+    REQUIRE(
+        motion::internal::presentationLayerTypeCanReceivePixels(ltAlpha));
+}
 
 namespace {
 

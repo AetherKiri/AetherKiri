@@ -66,6 +66,19 @@
 #include <atomic>
 #include <cstdlib>
 
+namespace {
+
+// Monotonically records actual entries into the engine's storage executor.
+// Script-side loader wrappers can use this to detect that they returned
+// successfully without delegating to the native loader.
+std::atomic<tjs_uint64> TVPStorageExecutionSerial{0};
+
+tjs_uint64 TVPGetStorageExecutionSerial() {
+    return TVPStorageExecutionSerial.load(std::memory_order_relaxed);
+}
+
+} // namespace
+
 //---------------------------------------------------------------------------
 // Script system initialization script
 //---------------------------------------------------------------------------
@@ -787,6 +800,16 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
 
     if(lower == TJS_W("motionaffinesourcelayer.tjs")) {
         ttstr patched(buffer);
+        // There are two incompatible MotionAffineSourceLayer generations in
+        // the wild.  The newer one owns a polymorphic emote/motion player and
+        // exposes the storage-type lifecycle below; the older one constructs
+        // Motion.Player directly.  Never inject lifecycle references into the
+        // old class: unresolved _storageType/removePlayer/createPlayer names
+        // abort setOptions before chara/motion can reach the native player.
+        const bool hasStorageTypePlayerLifecycle =
+            patched.IndexOf(TJS_W("_storageType")) >= 0 &&
+            patched.IndexOf(TJS_W("function removePlayer")) >= 0 &&
+            patched.IndexOf(TJS_W("function createPlayer")) >= 0;
         patched.Replace(
             TJS_W("\tfunction _loadImages(storage) {\r\n"),
             TJS_W("\tfunction _loadImages(storage, options=void) {\r\n"),
@@ -819,14 +842,16 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\tinstance._aetherKiriImmediateMotionOwner = void;\r\n"
                   "\t\t\tinstance.createPlayer(this);\r\n"),
             false);
-        patched.Replace(
-            TJS_W("\t\t\t\tret.motion = _player.motion;\r\n"),
-            TJS_W("\t\t\t\tret.motion = _aetherKiriHasMotion ? _aetherKiriLastMotion : _player.motion;\r\n"),
-            false);
-        patched.Replace(
-            TJS_W("ret.motion = _player.motion;"),
-            TJS_W("ret.motion = _aetherKiriHasMotion ? _aetherKiriLastMotion : _player.motion;"),
-            false);
+        if(hasStorageTypePlayerLifecycle) {
+            patched.Replace(
+                TJS_W("\t\t\t\tret.motion = _player.motion;\r\n"),
+                TJS_W("\t\t\t\tret.motion = _aetherKiriHasMotion ? _aetherKiriLastMotion : _player.motion;\r\n"),
+                false);
+            patched.Replace(
+                TJS_W("ret.motion = _player.motion;"),
+                TJS_W("ret.motion = _aetherKiriHasMotion ? _aetherKiriLastMotion : _player.motion;"),
+                false);
+        }
         patched.Replace(
             TJS_W("\tfunction _getOptions(ret) {\r\n"
                   "\t\tif (_player !== void && _player.motion != \"\") {\r\n"),
@@ -936,17 +961,19 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\r\n"
                   "\tfunction leaveOwner(owner) {\r\n"),
             false);
-        patched.Replace(
-            TJS_W("\tfunction setOptions(elm) {\r\n"
-                  "\t\tvar ret = super.setOptions(elm);\r\n"),
-            TJS_W("\tfunction setOptions(elm) {\r\n"
-                  "\t\tif (_storageType == \"emote\" && elm !== void && (elm.chara !== void || elm.motion !== void)) {\r\n"
-                  "\t\t\tremovePlayer();\r\n"
-                  "\t\t\t_storageType = \"motion\";\r\n"
-                  "\t\t\tcreatePlayer();\r\n"
-                  "\t\t}\r\n"
-                  "\t\tvar ret = super.setOptions(elm);\r\n"),
-            false);
+        if(hasStorageTypePlayerLifecycle) {
+            patched.Replace(
+                TJS_W("\tfunction setOptions(elm) {\r\n"
+                      "\t\tvar ret = super.setOptions(elm);\r\n"),
+                TJS_W("\tfunction setOptions(elm) {\r\n"
+                      "\t\tif (_storageType == \"emote\" && elm !== void && (elm.chara !== void || elm.motion !== void)) {\r\n"
+                      "\t\t\tremovePlayer();\r\n"
+                      "\t\t\t_storageType = \"motion\";\r\n"
+                      "\t\t\tcreatePlayer();\r\n"
+                      "\t\t}\r\n"
+                      "\t\tvar ret = super.setOptions(elm);\r\n"),
+                false);
+        }
         patched.Replace(
             TJS_W("\t\t\tif (_player !== void) {\r\n"
                   "\t\t\t\tif (_storageType == \"emote\") {\r\n"),
@@ -1275,6 +1302,27 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t\tkag.stopAllVoice(0, true);\r\n"
                   "\t\t\tworld._updateAll(obj);\r\n"),
             false);
+        patched.Replace(
+            TJS_W("\t\tcase \"Object\":\r\n"
+                  "\t\t\tworld._updateAll(obj);\r\n"
+                  "\t\t\tloopVoiceInfo.onRestore(obj);\r\n"),
+            TJS_W("\t\tcase \"Object\":\r\n"
+                  "\t\t\ttry {\r\n"
+                  "\t\t\t\tvar __akData = obj.data;\r\n"
+                  "\t\t\t\tDebug.notice(@\"[AETHERKIRI_SCENE] restore Object dataCount:${__akData !== void ? __akData.count : -1}\");\r\n"
+                  "\t\t\t\tif (__akData !== void) {\r\n"
+                  "\t\t\t\t\tfor (var __akI=0; __akI<__akData.count; __akI++) {\r\n"
+                  "\t\t\t\t\t\tvar __akInfo = __akData[__akI];\r\n"
+                  "\t\t\t\t\t\tvar __akElm = __akInfo[2];\r\n"
+                  "\t\t\t\t\t\tvar __akRedraw = __akElm !== void ? __akElm.redraw : void;\r\n"
+                  "\t\t\t\t\t\tvar __akFile = __akRedraw !== void ? __akRedraw.imageFile : void;\r\n"
+                  "\t\t\t\t\t\tDebug.notice(@\"[AETHERKIRI_SCENE] restore data[${__akI}] name:${__akInfo[0]} class:${__akInfo[1]} show:${__akElm !== void ? __akElm.showmode : void} redraw:${__akRedraw !== void} imageType:${typeof __akFile} file:${__akFile !== void ? __akFile.file : void} options:${__akFile !== void ? __akFile.options : void}\");\r\n"
+                  "\t\t\t\t\t}\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t} catch(e) { Debug.notice(@\"[AETHERKIRI_SCENE] restore log failed:${e.message}\"); }\r\n"
+                  "\t\t\tworld._updateAll(obj);\r\n"
+                  "\t\t\tloopVoiceInfo.onRestore(obj);\r\n"),
+            false);
         if(patched != buffer) {
             buffer = patched;
             spdlog::info("Applied scene debug patch for KAGEnvPlayer");
@@ -1287,6 +1335,34 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             TJS_W("\tfunction _updateAll(allData, snap=false, restore=true) {\r\n"
                   "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] world._updateAll all:${allData !== void} data:${allData !== void && allData.data !== void ? allData.data.count : -1} snap:${snap} restore:${restore}\"); } catch(e) {}\r\n"
                   "\t\tif (allData !== void) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction _updateAll(allData, snap=false) {\r\n"
+                  "\t\tif (allData !== void) {\r\n"),
+            TJS_W("\tfunction _updateAll(allData, snap=false) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] world._updateAll all:${allData !== void} data:${allData !== void && allData.data !== void ? allData.data.count : -1} snap:${snap}\"); } catch(e) {}\r\n"
+                  "\t\tif (allData !== void) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction update(elm) {\r\n"
+                  "\t\tif (targetLayer !== void) {\r\n"
+                  "\t\t\tif (elm.redraw !== void) with (elm.redraw) {\r\n"),
+            TJS_W("\tfunction update(elm) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] layer.update name:${name} target:${targetLayer !== void} redraw:${elm.redraw !== void} update:${elm.update !== void}\"); } catch(e) {}\r\n"
+                  "\t\tif (targetLayer !== void) {\r\n"
+                  "\t\t\tif (elm.redraw !== void) with (elm.redraw) {\r\n"
+                  "\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] layer.redraw name:${name} imageType:${typeof .imageFile} file:${.imageFile !== void ? .imageFile.file : void}\"); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction objUpdate(elm) {\r\n"
+                  "\t\t//dm(@\"${name}:objUpdate:${elm.showmode}:${elm.trans}:${elm.redraw}:${elm.update}:${world.envTransMode}\");\r\n"
+                  "\t\t// 表示状態\r\n"
+                  "\t\tvisible = (elm.showmode & 1);\r\n"),
+            TJS_W("\tfunction objUpdate(elm) {\r\n"
+                  "\t\t//dm(@\"${name}:objUpdate:${elm.showmode}:${elm.trans}:${elm.redraw}:${elm.update}:${world.envTransMode}\");\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] layer.objUpdate name:${name} show:${elm.showmode} trans:${elm.trans !== void} redraw:${elm.redraw !== void} envTrans:${world.envTransMode}\"); } catch(e) {}\r\n"
+                  "\t\t// 表示状態\r\n"
+                  "\t\tvisible = (elm.showmode & 1);\r\n"),
             false);
         patched.Replace(
             TJS_W("\tfunction _setOpacity() {\r\n"
@@ -1560,6 +1636,13 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\t_standImage = new StandImage(_window, storage);\r\n"),
             false);
         patched.Replace(
+            TJS_W("\tfunction loadImages(storage,colorKey=clNone,options=void) {\r\n"
+                  "\t\t_standImage = new StandImage(storage, _window, storage);\r\n"),
+            TJS_W("\tfunction loadImages(storage,colorKey=clNone,options=void) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] StandAffine loadImages storage:${storage} options:${options}\"); } catch(e) {}\r\n"
+                  "\t\t_standImage = new StandImage(storage, _window, storage);\r\n"),
+            false);
+        patched.Replace(
             TJS_W("\tfunction updateImage(src, clean=false) {\r\n"
                   "\t\tif (_standImage !== void) {\r\n"),
             TJS_W("\tfunction updateImage(src, clean=false) {\r\n"
@@ -1570,12 +1653,20 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             buffer = patched;
             spdlog::info("Applied stand debug patch for StandAffineSourceLayer");
         }
-    } else if(lower == TJS_W("standinformation.tjs")) {
+    } else if(lower == TJS_W("standinformation.tjs") ||
+              lower == TJS_W("mainwindow.tjs")) {
         ttstr patched(buffer);
         patched.Replace(
             TJS_W("\t\t\t\t\tvar infofile = .filename + \"_info.txt\";\r\n"),
             TJS_W("\t\t\t\t\tvar infofile = .filename + \"_info.txt\";\r\n"
                   "\t\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] getChStandInfo storage:${storage} base:${baseName} filename:${.filename} infofile:${infofile}\"); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\t\tvar infofile = .filename + \"_info.txt\";\r\n"
+                  "\t\t\t\t\tif (!Storages.isExistentStorage(infofile)) {\r\n"),
+            TJS_W("\t\t\t\t\tvar infofile = .filename + \"_info.txt\";\r\n"
+                  "\t\t\t\t\ttry { Debug.notice(@\"[AETHERKIRI_STAND] getChStandInfo storage:${storage} base:${baseName} filename:${.filename} infofile:${infofile} exists:${Storages.isExistentStorage(infofile)}\"); } catch(e) {}\r\n"
+                  "\t\t\t\t\tif (!Storages.isExistentStorage(infofile)) {\r\n"),
             false);
         patched.Replace(
             TJS_W("\t\t\t\tfile.load(infofile);\r\n"),
@@ -1696,8 +1787,40 @@ static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
     const bool patchD3DMotion =
         patchD3DLayer || lower == TJS_W("d3daffinesourcemotion.tjs");
     const bool patchMessageText = lower == TJS_W("msghack.tjs");
-    if(!patchWorld && !patchD3DLayer && !patchD3DMotion && !patchMessageText)
+    const bool patchQuickMenu = lower == TJS_W("quickmenu.tjs");
+    if(!patchWorld && !patchD3DLayer && !patchD3DMotion &&
+       !patchMessageText && !patchQuickMenu)
         return;
+
+    // YuzuSoft quick menus still use the generic cursor SE when their proxied
+    // window buttons have no per-control onenter script. Keep that fallback on
+    // the quick-menu event so other intentionally silent window buttons stay
+    // silent.
+    if(patchQuickMenu) try {
+        TVPExecuteScript(
+            TJS_W(
+                "(function() {\r\n"
+                "\tif (typeof global.QuickMenuLayerBase == \"undefined\") return;\r\n"
+                "\tif (typeof global.QuickMenuLayerBase.__aetherKiriOrigOnButtonEnter != \"undefined\") return;\r\n"
+                "\tglobal.QuickMenuLayerBase.__aetherKiriOrigOnButtonEnter = &global.QuickMenuLayerBase.onButtonEnter;\r\n"
+                "\tglobal.QuickMenuLayerBase.onButtonEnter = function(name) {\r\n"
+                "\t\ttry {\r\n"
+                "\t\t\tvar button = this.proxy[name].target;\r\n"
+                "\t\t\tif ((button.onenter === void || button.onenter == \"\") && typeof global.playSysSE != \"undefined\") {\r\n"
+                "\t\t\t\tglobal.playSysSE(\"*.enter\");\r\n"
+                "\t\t\t}\r\n"
+                "\t\t} catch(e) {}\r\n"
+                "\t\treturn (global.QuickMenuLayerBase.__aetherKiriOrigOnButtonEnter incontextof this)(name);\r\n"
+                "\t};\r\n"
+                "})();\r\n"),
+            TJS_W("AetherKiriQuickMenuHoverSoundPatch"), 0,
+            (tTJSVariant *)nullptr);
+        spdlog::info(
+            "Applied compatibility hook for quick-menu hover sound fallback");
+    } catch(...) {
+        spdlog::warn(
+            "Failed to apply compatibility hook for quick-menu hover sound fallback");
+    }
 
     if(patchMessageText) try {
         TVPExecuteScript(
@@ -1828,6 +1951,8 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
     // execute storage which contains script
     if(!TVPScriptEngine)
         TVPThrowInternalError;
+
+    TVPStorageExecutionSerial.fetch_add(1, std::memory_order_relaxed);
 
     // Check if export_scripts is enabled (used by both bytecode and text paths)
     tTJSVariant exportOpt;
@@ -2103,6 +2228,117 @@ static void TVPInstallKagRuntimeDefaults() {
     }
 }
 
+const tjs_char *TVPGetKagLoadContractGuardScript() {
+    return TJS_W(
+        "if(typeof global.KAGLoadScript == \"Object\" &&\n"
+        "   typeof Scripts.getStorageExecutionSerial == \"Object\" &&\n"
+        "   typeof Scripts.execStorageNative == \"Object\" &&\n"
+        "   typeof global.__aetherKiriOriginalKAGLoadScript == \"undefined\") {\n"
+        "  global.__aetherKiriOriginalKAGLoadScript = &global.KAGLoadScript;\n"
+        "  global.KAGLoadScript = function(storage) {\n"
+        "    var serial = Scripts.getStorageExecutionSerial();\n"
+        "    var ret = (global.__aetherKiriOriginalKAGLoadScript incontextof this)(...);\n"
+        "    if(storage !== void && storage != \"\" &&\n"
+        "       Scripts.getStorageExecutionSerial() == serial)\n"
+        "      return Scripts.execStorageNative(...);\n"
+        "    return ret;\n"
+        "  } incontextof global;\n"
+        "}\n");
+}
+
+const tjs_char *TVPGetPatchRuntimeRegistryExpression() {
+    return TJS_W(
+        "(typeof global.loadTrigger == \"Object\" && "
+        "typeof global.loadTrigger.instance == \"Object\" && "
+        "typeof global.loadTrigger.instance.loadHooks == \"Object\") ? "
+        "global.loadTrigger.instance.loadHooks : void");
+}
+
+namespace {
+
+class tTVPMergeObjectMembersCallback final : public tTJSDispatch {
+public:
+    explicit tTVPMergeObjectMembersCallback(iTJSDispatch2 *destination) :
+        destination_(destination) {}
+
+    tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                       tTJSVariant *result, tjs_int numparams,
+                       tTJSVariant **param, iTJSDispatch2 *) override {
+        if(numparams < 3)
+            return TJS_E_BADPARAMCOUNT;
+
+        const tjs_uint32 flags =
+            static_cast<tjs_uint32>(param[1]->AsInteger());
+        if(!(flags & TJS_HIDDENMEMBER)) {
+            const tjs_error error = destination_->PropSetByVS(
+                TJS_MEMBERENSURE | TJS_IGNOREPROP | flags,
+                param[0]->AsStringNoAddRef(), param[2], destination_);
+            if(TJS_FAILED(error))
+                return error;
+        }
+        if(result)
+            *result = static_cast<tjs_int>(1);
+        return TJS_S_OK;
+    }
+
+private:
+    iTJSDispatch2 *destination_;
+};
+
+static bool TVPReadPatchRuntimeRegistry(tTJSVariant &registry) {
+    registry.Clear();
+    try {
+        TVPExecuteExpression(TVPGetPatchRuntimeRegistryExpression(),
+                             &registry);
+        return registry.Type() == tvtObject &&
+               registry.AsObjectNoAddRef() != nullptr;
+    } catch(const TJS::eTJSScriptError &e) {
+        TVPLogStartupScriptError("Patch runtime registry read error", e);
+    } catch(const TJS::eTJS &e) {
+        spdlog::warn("Patch runtime registry read TJS error: {}",
+                     e.GetMessage().AsStdString());
+    } catch(...) {
+        spdlog::warn("Patch runtime registry read failed");
+    }
+    registry.Clear();
+    return false;
+}
+
+} // namespace
+
+bool TVPMergeObjectMembers(iTJSDispatch2 *destination,
+                           iTJSDispatch2 *source) {
+    if(!destination || !source)
+        return false;
+
+    auto *callback = new tTVPMergeObjectMembersCallback(destination);
+    tTJSVariantClosure closure(callback);
+    try {
+        const bool merged = TJS_SUCCEEDED(
+            source->EnumMembers(TJS_IGNOREPROP, &closure, source));
+        callback->Release();
+        return merged;
+    } catch(...) {
+        callback->Release();
+        throw;
+    }
+}
+
+static void TVPInstallKagLoadContractGuard() {
+    try {
+        TVPExecuteScript(TVPGetKagLoadContractGuardScript(),
+            TJS_W("kag_load_contract_guard.tjs"), 0,
+            static_cast<tTJSVariant *>(nullptr));
+    } catch(const TJS::eTJSScriptError &e) {
+        TVPLogStartupScriptError("KAG load contract guard error", e);
+    } catch(const TJS::eTJS &e) {
+        spdlog::warn("KAG load contract guard TJS error: {}",
+                     e.GetMessage().AsStdString());
+    } catch(...) {
+        spdlog::warn("KAG load contract guard failed");
+    }
+}
+
 static std::atomic<int> TVPKagNoTransWaitRepairFrames{0};
 
 static bool TVPKagNoTransWaitRepairTraceEnabled() {
@@ -2246,6 +2482,12 @@ static void TVPLogStartupScriptError(const char *stage,
 }
 
 void TVPExecuteStartupScript() {
+    // The engine library can open more than one game in the same host
+    // process.  Do not let a previous game's Storages.setTextEncoding()
+    // setting leak into the next title; its patch.tjs may select a different
+    // legacy encoding again after startup.
+    TVPSetDefaultReadEncoding(TJS_W("utf-8"));
+
     ttstr strPatchError;
     try {
         TVPInstallStartupPatchPrerequisites();
@@ -2370,16 +2612,44 @@ void TVPExecuteStartupScript() {
         __android_log_print(ANDROID_LOG_INFO, "krkr2",
                             "Startup script ended successfully");
 #endif
+        ttstr patch = TVPGetAppPath() + "patch.tjs";
+        if(TVPIsExistentStorageNoSearch(patch)) {
 #if defined(__APPLE__) && TARGET_OS_IPHONE
-        try {
-            ttstr patch = TVPGetAppPath() + "patch.tjs";
-            if(TVPIsExistentStorageNoSearch(patch)) {
-                TVPInstallIOSPatchWindowPrerequisites();
-                TVPExecuteStorage(patch);
-            }
-        } catch(...) {
-        }
+            TVPInstallIOSPatchWindowPrerequisites();
 #endif
+            // A late compatibility patch can replace framework classes and
+            // their singleton instances.  Preserve runtime extension hooks
+            // registered by game scripts, then merge them into the new
+            // instance so class replacement does not silently disable those
+            // extensions.
+            tTJSVariant savedRuntimeRegistry;
+            const bool hasSavedRuntimeRegistry =
+                TVPReadPatchRuntimeRegistry(savedRuntimeRegistry);
+            try {
+                TVPExecuteStorage(patch);
+            } catch(...) {
+            }
+            if(hasSavedRuntimeRegistry) {
+                tTJSVariant replacementRuntimeRegistry;
+                if(TVPReadPatchRuntimeRegistry(replacementRuntimeRegistry)) {
+                    try {
+                        if(!TVPMergeObjectMembers(
+                               replacementRuntimeRegistry.AsObjectNoAddRef(),
+                               savedRuntimeRegistry.AsObjectNoAddRef())) {
+                            spdlog::warn(
+                                "Patch runtime registry merge failed");
+                        }
+                    } catch(const TJS::eTJS &e) {
+                        spdlog::warn(
+                            "Patch runtime registry merge TJS error: {}",
+                            e.GetMessage().AsStdString());
+                    } catch(...) {
+                        spdlog::warn(
+                            "Patch runtime registry merge failed");
+                    }
+                }
+            }
+        }
         try {
             ttstr patch = TVPGetAppPath() + "AfterStartup.tjs";
             if(TVPIsExistentStorageNoSearch(patch)) {
@@ -2389,6 +2659,8 @@ void TVPExecuteStartupScript() {
             }
         } catch(...) {
         }
+        TVPInstallKagLoadContractGuard();
+
     }
     TJS_CONVERT_TO_TJS_EXCEPTION
     //}
@@ -2749,6 +3021,25 @@ tjs_uint32 tTJSNC_Scripts::ClassID = -1;
 
 namespace {
 
+tjs_error TVPExecStorageFromScript(tTJSVariant *result, tjs_int numparams,
+                                   tTJSVariant **param) {
+    if(numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+
+    ttstr name = *param[0];
+
+    ttstr modestr;
+    if(numparams >= 2 && param[1]->Type() != tvtVoid)
+        modestr = *param[1];
+
+    iTJSDispatch2 *context = numparams >= 3 && param[2]->Type() != tvtVoid
+        ? param[2]->AsObjectNoAddRef()
+        : nullptr;
+
+    TVPExecuteStorage(name, context, result, false, modestr.c_str());
+    return TJS_S_OK;
+}
+
 class tTJSObjectKeysEnumCaller : public tTJSDispatch {
 public:
     explicit tTJSObjectKeysEnumCaller(iTJSDispatch2 *array) : array_(array) {}
@@ -2791,25 +3082,21 @@ TJS_END_NATIVE_CONSTRUCTOR_DECL(/*TJS class name*/ Scripts)
 
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ execStorage) {
-    // execute script which stored in storage
-    if(numparams < 1)
-        return TJS_E_BADPARAMCOUNT;
-
-    ttstr name = *param[0];
-
-    ttstr modestr;
-    if(numparams >= 2 && param[1]->Type() != tvtVoid)
-        modestr = *param[1];
-
-    iTJSDispatch2 *context = numparams >= 3 && param[2]->Type() != tvtVoid
-        ? param[2]->AsObjectNoAddRef()
-        : nullptr;
-
-    TVPExecuteStorage(name, context, result, false, modestr.c_str());
-
-    return TJS_S_OK;
+    return TVPExecStorageFromScript(result, numparams, param);
 }
 TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ execStorage)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ execStorageNative) {
+    return TVPExecStorageFromScript(result, numparams, param);
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ execStorageNative)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ getStorageExecutionSerial) {
+    if(result)
+        *result = static_cast<tjs_int64>(TVPGetStorageExecutionSerial());
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ getStorageExecutionSerial)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ evalStorage) {
     // execute expression which stored in storage

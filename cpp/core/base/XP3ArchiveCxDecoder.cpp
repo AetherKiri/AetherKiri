@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -555,8 +556,31 @@ std::atomic<const CxDecoder *> gActiveDecoder{ nullptr };
 
 } // namespace
 
+bool TVPIsBuiltinXP3CxScheme(std::uint32_t fingerprint) {
+    return fingerprint == kWagamamaHighSpecOcScheme.Fingerprint;
+}
+
+bool TVPShouldUseBuiltinXP3CxDecoder(std::uint32_t fingerprint,
+                                    const void *header,
+                                    std::size_t headerSize) {
+    if(!TVPIsBuiltinXP3CxScheme(fingerprint))
+        return false;
+
+    // Some translated/repacked XP3s retain the protected flag and original
+    // hashes after their payload has already been decrypted. The generic
+    // startup bytecode therefore has the same fingerprint as the encrypted
+    // title, but applying Cx a second time corrupts every script. Validate the
+    // stored payload before selecting the scheme.
+    static constexpr std::uint8_t kTjsByteCodeHeader[] = {
+        'T', 'J', 'S', '2', '1', '0', '0', 0,
+    };
+    return header == nullptr || headerSize < sizeof(kTjsByteCodeHeader) ||
+        std::memcmp(header, kTjsByteCodeHeader,
+                    sizeof(kTjsByteCodeHeader)) != 0;
+}
+
 bool TVPActivateBuiltinXP3CxDecoder(std::uint32_t fingerprint) {
-    if(fingerprint != kWagamamaHighSpecOcScheme.Fingerprint)
+    if(!TVPIsBuiltinXP3CxScheme(fingerprint))
         return false;
     const CxDecoder *decoder = &GetWagamamaHighSpecOcDecoder();
     gActiveDecoder.store(decoder, std::memory_order_release);

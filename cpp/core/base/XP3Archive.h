@@ -111,6 +111,7 @@ public:
     tjs_int Count = 0;
 
     std::vector<tArchiveItem> ItemVector;
+    bool UseBuiltinCxDecoder = false;
 
     void Init(tTJSBinaryStream *st, tjs_int64 offset,
               bool normalizeName = true);
@@ -139,6 +140,10 @@ public:
 
     [[nodiscard]] bool IsFileProtected(tjs_uint idx) const {
         return (ItemVector[idx].Flags & TVP_XP3_FILE_PROTECTED) != 0;
+    }
+
+    [[nodiscard]] bool UsesBuiltinCxDecoder() const {
+        return UseBuiltinCxDecoder;
     }
 
     ttstr GetName(tjs_uint idx) override { return ItemVector[idx].Name; }
