@@ -6383,45 +6383,9 @@ namespace {
         }
 
         std::string replacementLayerName;
-        if(centeredGameMotionStablePresentationLayer(layer) &&
-           motionPresentationLayerHasVisibleSamples(layer)) {
-            const auto layerName =
+        if(centeredGameMotionStablePresentationLayer(layer)) {
+            replacementLayerName =
                 renderDebugLowercase(motion::detail::narrow(layer->GetName()));
-            CenteredPresentationHoldEntry *activeOverlayEntry = nullptr;
-            for(auto &item : cache) {
-                auto &candidate = item.second;
-                if(candidate.layerName == layerName &&
-                   centeredPresentationHoldOverlayIsActive(candidate) &&
-                   (!activeOverlayEntry ||
-                    candidate.capturedTick > activeOverlayEntry->capturedTick ||
-                    (candidate.capturedTick ==
-                         activeOverlayEntry->capturedTick &&
-                     candidate.holdUntilTick >
-                         activeOverlayEntry->holdUntilTick))) {
-                    activeOverlayEntry = &candidate;
-                }
-            }
-            if(activeOverlayEntry) {
-                const int canvasWidth = std::max<tjs_int>(
-                    std::max<tjs_int>(layer->GetImageWidth(), layer->GetWidth()),
-                    activeOverlayEntry->width);
-                const int canvasHeight = std::max<tjs_int>(
-                    std::max<tjs_int>(layer->GetImageHeight(), layer->GetHeight()),
-                    activeOverlayEntry->height);
-                if(copyCenteredPresentationHoldEntryToLayer(
-                       layer, *activeOverlayEntry, canvasWidth, canvasHeight,
-                       false, false, true)) {
-                    replacementLayerName = activeOverlayEntry->layerName;
-                }
-            } else {
-                if(auto *layerObject = layer->GetOwnerNoAddRef()) {
-                    if(auto *entry =
-                           captureCenteredPresentationHoldLayerSamples(layer, "")) {
-                        entry->layer = tTJSVariant(layerObject, layerObject);
-                        replacementLayerName = entry->layerName;
-                    }
-                }
-            }
         }
 
         bool anyOverlayVisible = false;
@@ -6441,6 +6405,10 @@ namespace {
                item.second.layerName != replacementLayerName) {
                 continue;
             }
+            // assignImages has already installed the replacement pixels. A
+            // hold surface is only a temporary bridge while no replacement is
+            // available; copying it back here would overwrite a newly loaded
+            // still CG with the preceding animation's final frame.
             hideCenteredPresentationHoldOverlay(item.second);
             if(item.second.layer.Type() == tvtObject) {
                 hideCenteredPresentationMessageUiOverlay(
