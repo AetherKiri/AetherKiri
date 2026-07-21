@@ -47,6 +47,7 @@ namespace motion {
     void Player::unloadAll() {
         _runtime->motionsByKey.clear();
         _runtime->sourcesByKey.clear();
+        _runtime->sourceLookupMisses.clear();
         _runtime->activeMotion.reset();
         _runtime->clearMotionBitmapCaches();
         _runtime->timelines.clear();

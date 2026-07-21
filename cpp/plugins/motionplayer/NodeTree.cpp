@@ -4,6 +4,7 @@
 //
 
 #include "NodeTree.h"
+#include "MotionPlayerExtension.h"
 #include "MotionNode.h"
 #include "RuntimeSupport.h"
 #include "Player.h"
@@ -679,8 +680,12 @@ namespace motion::detail {
             node.hasSource = checkHasSource(psbNode);
 
             // "emoteEdit" → emoteEditDict (node+1980, sub_6B3C78 at 0x6B3D48)
-            if (auto ee = std::dynamic_pointer_cast<PSB::PSBDictionary>((*psbNode)["emoteEdit"]))
+            if (auto ee = std::dynamic_pointer_cast<PSB::PSBDictionary>((*psbNode)["emoteEdit"])) {
                 node.emoteEditDict = ee;
+                if(auto value = nodeTreePsbNumber(ee, "priorDraw")) {
+                    node.authoredPriorDraw = static_cast<int>(*value);
+                }
+            }
 
             // === TJS↔Native bridge: create child objects (sub_6B3C78 case 3/4) ===
             if (node.nodeType == 3) {
@@ -840,6 +845,8 @@ namespace motion::detail {
             }
         }
 
+        // Baseline motionplayer compatibility: resolve the first node for a
+        // stencil label, matching the original public implementation.
         std::unordered_map<std::string, int> nodeIndexByLabel;
         nodeIndexByLabel.reserve(nodes.size());
         for(const auto &node : nodes) {
@@ -847,34 +854,38 @@ namespace motion::detail {
                 nodeIndexByLabel.emplace(node.layerName, node.index);
             }
         }
-
-        // Aligned to Player_buildNodeTree post-pass (0x6B51F0..0x6B55AC):
-        // type==12 nodes with stencilType bit 2 set walk
-        // "stencilCompositeMaskLayerList", resolve label→node, and set node+1961
-        // on the referenced mask layers.
         for(auto &node : nodes) {
-            if(node.nodeType != 12 || (node.stencilType & 4) == 0 || !node.psbNode) {
+            if(node.nodeType != 12 || (node.stencilType & 4) == 0 ||
+               !node.psbNode) {
                 continue;
             }
-            auto maskLayers = nodeTreePsbList(
+            const auto maskLayers = nodeTreePsbList(
                 node.psbNode, "stencilCompositeMaskLayerList");
             if(!maskLayers) {
                 continue;
             }
-            for(int i = 0; i < static_cast<int>(maskLayers->size()); ++i) {
-                auto label = std::dynamic_pointer_cast<PSB::PSBString>((*maskLayers)[i]);
+            for(const auto &item : *maskLayers) {
+                const auto label =
+                    std::dynamic_pointer_cast<PSB::PSBString>(item);
                 if(!label || label->value.empty()) {
                     continue;
                 }
-                auto it = nodeIndexByLabel.find(label->value);
-                if(it == nodeIndexByLabel.end()) {
+                const auto found = nodeIndexByLabel.find(label->value);
+                if(found == nodeIndexByLabel.end()) {
                     continue;
                 }
-                auto &target = nodes[it->second];
+                auto &target = nodes[found->second];
                 if(target.nodeType == 0 || target.nodeType == 3) {
                     target.stencilCompositeMaskReferenced = true;
                 }
             }
+        }
+
+        // Optional packages can refine vendor-specific label scoping without
+        // replacing the public node walker or renderer.
+        if(const auto *extension = motionPlayerExtension();
+           extension && extension->configureNodeTree) {
+            extension->configureNodeTree(nodes);
         }
 
         if (auto logger = spdlog::get("plugin")) {

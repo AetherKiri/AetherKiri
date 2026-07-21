@@ -146,9 +146,10 @@ GitHub Actions 的 `Build` workflow 会在可信运行中使用仓库 Secret
 或 Dependabot 的 PR 无法访问仓库 Secret，因此这些不可信运行仍使用公开 fallback。
 
 私有 package 只扩展 `motionplayer`，不会替换公开 target 或公开源码列表。
-公开注册层始终是脚本侧的唯一入口；检测到私库时，它会选择处于独立命名空间的
-私有 backend。私库构建会把同一套公开 motionplayer 契约测试分别跑在两个
-backend 上，并额外运行私有 E-mote 测试。package/API 版本不一致时 CMake 会
+公开 backend 始终是脚本侧的唯一实现；检测到私库时，仅通过版本化扩展接口加入
+本次新增的 E-mote 模块识别、眨眼/物理元数据、自动眨眼、胸部/头发/尾巴物理、
+重复标签的精确遮罩策略及私有状态存档。私库不复制公开源码，也不使用补丁覆盖。
+两种构建运行同一套公开 motionplayer 测试。package/API 版本不一致时 CMake 会
 直接停止配置，不会静默产出不兼容的组合。
 
 常用构建命令：

@@ -2,35 +2,21 @@
 // Split from Player.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "MotionPlayerExtension.h"
 #include "ConfigManager/IndividualConfigManager.h"
 #include "TickCount.h"
 #include "ThreadIntf.h"
+#include "godot/GodotRenderManager.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
-
-#if defined(AETHERKIRI_INTERNAL_EMOTE)
-extern "C" bool AetherInternalMotionRestoreCenteredPresentationLayer(
-    tTJSNI_BaseLayer *layer);
-extern "C" bool
-AetherInternalMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
-    tTJSNI_BaseLayer *layer,
-    tjs_int x,
-    tjs_int y,
-    tjs_int width,
-    tjs_int height);
-extern "C" bool AetherInternalMotionShowCenteredPresentationHoldOverlay(
-    tTJSNI_BaseLayer *layer);
-extern "C" void AetherInternalMotionTickCenteredPresentationHoldOverlays();
-extern "C" void
-AetherInternalMotionDismissCenteredPresentationHoldOverlaysForLayer(
-    tTJSNI_BaseLayer *layer);
-#endif
 
 using namespace motion::internal;
 
@@ -69,6 +55,116 @@ namespace {
         return static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
+    struct SharedMotionSourceBitmapEntry {
+        std::shared_ptr<tTVPBaseBitmap> bitmap;
+        std::size_t bytes = 0;
+        std::uint64_t lastUse = 0;
+    };
+
+    struct SharedMotionSourceBitmapCache {
+        std::mutex mutex;
+        std::unordered_map<std::string, SharedMotionSourceBitmapEntry> entries;
+        std::size_t bytes = 0;
+        std::uint64_t useCounter = 0;
+    };
+
+    SharedMotionSourceBitmapCache &sharedMotionSourceBitmapCache() {
+        static SharedMotionSourceBitmapCache cache;
+        return cache;
+    }
+
+    void appendMotionSourceFingerprint(
+        std::uint64_t &first,
+        std::uint64_t &second,
+        const std::vector<std::uint8_t> &data) {
+        for(const auto value : data) {
+            first ^= value;
+            first *= 1099511628211ull;
+            second += value + 0x9e3779b97f4a7c15ull + (second << 6) +
+                (second >> 2);
+        }
+    }
+
+    std::string makeSharedMotionSourceBitmapKey(
+        const motion::detail::MotionSnapshot &snapshot,
+        const std::string &resourcePath,
+        const std::string &compressName,
+        int width,
+        int height,
+        const PSB::PSBResource &resource) {
+        std::uint64_t first = 1469598103934665603ull;
+        std::uint64_t second = 0x517cc1b727220a95ull;
+        appendMotionSourceFingerprint(first, second, resource.data);
+
+        std::size_t paletteBytes = 0;
+        if(resourcePath.size() > 6 &&
+           resourcePath.compare(resourcePath.size() - 6, 6, "/pixel") == 0) {
+            const auto palettePath =
+                resourcePath.substr(0, resourcePath.size() - 6) + "/pal";
+            if(const auto paletteIt = snapshot.resourcesByPath.find(palettePath);
+               paletteIt != snapshot.resourcesByPath.end() && paletteIt->second) {
+                paletteBytes = paletteIt->second->data.size();
+                appendMotionSourceFingerprint(
+                    first, second, paletteIt->second->data);
+            }
+        }
+        return fmt::format(
+            "{}x{}|{}|{}:{:016x}:{:016x}|{}",
+            width, height, compressName,
+            resource.data.size(), first, second, paletteBytes);
+    }
+
+    std::shared_ptr<tTVPBaseBitmap> findSharedMotionSourceBitmap(
+        const std::string &key) {
+        auto &cache = sharedMotionSourceBitmapCache();
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        const auto it = cache.entries.find(key);
+        if(it == cache.entries.end()) {
+            return nullptr;
+        }
+        it->second.lastUse = ++cache.useCounter;
+        return it->second.bitmap;
+    }
+
+    void rememberSharedMotionSourceBitmap(
+        const std::string &key,
+        const std::shared_ptr<tTVPBaseBitmap> &bitmap) {
+        if(key.empty() || !bitmap) {
+            return;
+        }
+        auto &cache = sharedMotionSourceBitmapCache();
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        const auto bitmapBytes =
+            static_cast<std::size_t>(bitmap->GetWidth()) *
+            static_cast<std::size_t>(bitmap->GetHeight()) * 4u;
+        if(auto existing = cache.entries.find(key);
+           existing != cache.entries.end()) {
+            cache.bytes -= existing->second.bytes;
+            existing->second = {bitmap, bitmapBytes, ++cache.useCounter};
+            cache.bytes += bitmapBytes;
+        } else {
+            cache.entries.emplace(
+                key,
+                SharedMotionSourceBitmapEntry{
+                    bitmap, bitmapBytes, ++cache.useCounter});
+            cache.bytes += bitmapBytes;
+        }
+
+        constexpr std::size_t kSharedBitmapCacheLimit = 256u * 1024u * 1024u;
+        while(cache.bytes > kSharedBitmapCacheLimit &&
+              cache.entries.size() > 1) {
+            auto oldest = cache.entries.begin();
+            for(auto it = std::next(cache.entries.begin());
+                it != cache.entries.end(); ++it) {
+                if(it->second.lastUse < oldest->second.lastUse) {
+                    oldest = it;
+                }
+            }
+            cache.bytes -= oldest->second.bytes;
+            cache.entries.erase(oldest);
+        }
     }
 
     void renderReuseHashCombine(std::size_t &seed, std::size_t value) {
@@ -6867,7 +6963,7 @@ namespace {
         return true;
     }
 
-    bool applyMotionAlphaMaskLike_0x6AF104(
+    bool applyMotionAlphaMaskLike_0x6AC4E4(
         iTJSDispatch2 *dstLayerObject,
         int dstX,
         int dstY,
@@ -7008,7 +7104,7 @@ namespace {
         }
 
         motion::detail::logoChainTraceLogf(
-            motionPath, "execute.mask", "0x6AF104", frameTime,
+            motionPath, "execute.mask", "0x6AC4E4", frameTime,
             "dstNode={} srcNode={} itemFlags={} playerStencilType={} threshold={} requested=[{},{},{},{}] overlap=[{},{},{},{}]",
             dstNodeIndex, srcNodeIndex, itemFlags, playerStencilType, threshold,
             requestedRect.left, requestedRect.top,
@@ -7022,9 +7118,6 @@ namespace {
 
 extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
     tTJSNI_BaseLayer *layer) {
-#if defined(AETHERKIRI_INTERNAL_EMOTE)
-    return AetherInternalMotionRestoreCenteredPresentationLayer(layer);
-#endif
     const bool trace = std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG") != nullptr;
     if(centeredGameMotionPresentationLayerShouldPassHit(layer)) {
         configureCenteredGameMotionPresentationHitPassthrough(layer);
@@ -7081,11 +7174,6 @@ AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
     tjs_int y,
     tjs_int width,
     tjs_int height) {
-#if defined(AETHERKIRI_INTERNAL_EMOTE)
-    return
-        AetherInternalMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
-            layer, x, y, width, height);
-#endif
     const bool trace = std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG") != nullptr;
     if(centeredGameMotionPresentationLayerShouldPassHit(layer)) {
         configureCenteredGameMotionPresentationHitPassthrough(layer);
@@ -7141,9 +7229,6 @@ AetherKiriMotionPreserveCenteredPresentationLayerBeforeTransparentClear(
 
 extern "C" bool AetherKiriMotionShowCenteredPresentationHoldOverlay(
     tTJSNI_BaseLayer *layer) {
-#if defined(AETHERKIRI_INTERNAL_EMOTE)
-    return AetherInternalMotionShowCenteredPresentationHoldOverlay(layer);
-#endif
     const bool trace = std::getenv("AETHERKIRI_MOTION_LAYER_DEBUG") != nullptr;
     if(centeredGameMotionPresentationLayerShouldPassHit(layer)) {
         configureCenteredGameMotionPresentationHitPassthrough(layer);
@@ -7176,10 +7261,6 @@ extern "C" bool AetherKiriMotionShowCenteredPresentationHoldOverlay(
 }
 
 extern "C" void AetherKiriMotionTickCenteredPresentationHoldOverlays() {
-#if defined(AETHERKIRI_INTERNAL_EMOTE)
-    AetherInternalMotionTickCenteredPresentationHoldOverlays();
-    return;
-#endif
     auto &cache = centeredPresentationHoldCache();
     if(cache.empty()) {
         return;
@@ -7245,10 +7326,6 @@ extern "C" void AetherKiriMotionTickCenteredPresentationHoldOverlays() {
 extern "C" void
 AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(
     tTJSNI_BaseLayer *layer) {
-#if defined(AETHERKIRI_INTERNAL_EMOTE)
-    AetherInternalMotionDismissCenteredPresentationHoldOverlaysForLayer(layer);
-    return;
-#endif
     hideCenteredPresentationHoldOverlaysForReplacementLayer(layer);
 }
 
@@ -7261,6 +7338,7 @@ namespace motion {
 
     void Player::removeAllTextures() {
         _runtime->sourcesByKey.clear();
+        _runtime->sourceLookupMisses.clear();
         _runtime->clearMotionBitmapCaches();
     }
 
@@ -7490,9 +7568,11 @@ namespace motion {
         _runtime->renderCommands.clear();
         const auto motionPath =
             _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
+        const bool logoTraceEnabled =
+            detail::logoChainTraceEnabledForPath(motionPath);
         for(const auto &entry : _runtime->preparedRenderItems) {
             if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
-               entry.opacity <= 0) {
+               (entry.opacity <= 0 && !entry.stencilMaskReferenced)) {
                 continue;
             }
             if(isYuzuTitleWhiteUtilityLayer(motionPath, entry.nodeLabel,
@@ -7545,23 +7625,25 @@ namespace motion {
             std::string clipFailureReason;
             if(!computeRenderClipRect(entry, canvasWidth, canvasHeight, clipRect,
                                       &clipFailureReason)) {
-                detail::logoChainTraceCheck(
-                    motionPath, "renderCommand.clip", "0x6C4E28",
-                    _clampedEvalTime,
-                    fmt::format(
-                        "paintBox∩viewport∩canvas exp paintBox=[{:.3f},{:.3f},{:.3f},{:.3f}] viewport={} canvas=[0,0,{},{}]",
-                        entry.paintBox[0], entry.paintBox[1], entry.paintBox[2],
-                        entry.paintBox[3],
-                        entry.hasViewport
-                            ? fmt::format("[{:.3f},{:.3f},{:.3f},{:.3f}]",
-                                          entry.viewport[0], entry.viewport[1],
-                                          entry.viewport[2], entry.viewport[3])
-                            : std::string("<invalid default>"),
-                        canvasWidth, canvasHeight),
-                    fmt::format("nodeIndex={} act=<invalid:{}>",
-                                entry.nodeIndex, clipFailureReason),
-                    false,
-                    "sub_6C4E28 produced an invalid local clip rect");
+                if(logoTraceEnabled) {
+                    detail::logoChainTraceCheck(
+                        motionPath, "renderCommand.clip", "0x6C4E28",
+                        _clampedEvalTime,
+                        fmt::format(
+                            "paintBox∩viewport∩canvas exp paintBox=[{:.3f},{:.3f},{:.3f},{:.3f}] viewport={} canvas=[0,0,{},{}]",
+                            entry.paintBox[0], entry.paintBox[1], entry.paintBox[2],
+                            entry.paintBox[3],
+                            entry.hasViewport
+                                ? fmt::format("[{:.3f},{:.3f},{:.3f},{:.3f}]",
+                                              entry.viewport[0], entry.viewport[1],
+                                              entry.viewport[2], entry.viewport[3])
+                                : std::string("<invalid default>"),
+                            canvasWidth, canvasHeight),
+                        fmt::format("nodeIndex={} act=<invalid:{}>",
+                                    entry.nodeIndex, clipFailureReason),
+                        false,
+                        "sub_6C4E28 produced an invalid local clip rect");
+                }
                 continue;
             }
 
@@ -7572,10 +7654,12 @@ namespace motion {
             command.sourceKey = entry.sourceKey;
             command.hasOwnSource = entry.hasOwnSource;
             command.groupOnly = entry.groupOnly;
+            command.stencilMaskReferenced = entry.stencilMaskReferenced;
             command.blendMode = entry.blendMode;
             command.opacity = entry.opacity;
             command.itemFlags = entry.updateCount;
             command.parentNodeIndex = entry.visibleAncestorIndex;
+            command.stencilMaskNodeIndices = entry.stencilMaskNodeIndices;
             command.packedColors = entry.packedColors;
 
             // Numbered Yuzu title motions use bm=21 with opaque black as the
@@ -7664,7 +7748,7 @@ namespace motion {
                 }
             }
 
-            {
+            if(logoTraceEnabled) {
                 std::array<float, 8> expectedLocalCorners{};
                 bool cornersOk = true;
                 for(size_t ci = 0; ci < entry.corners.size(); ci += 2) {
@@ -7720,30 +7804,102 @@ namespace motion {
         commandIndexByNode.reserve(_runtime->renderCommands.size());
         for(size_t i = 0; i < _runtime->renderCommands.size(); ++i) {
             _runtime->renderCommands[i].childCommandIndices.clear();
+            _runtime->renderCommands[i].stencilMaskCommandIndices.clear();
             _runtime->renderCommands[i].leafBuilt = false;
             _runtime->renderCommands[i].composedBuilt = false;
             _runtime->renderCommands[i].executedDirect = false;
             _runtime->renderCommands[i].builtRect = {0, 0, 0, 0};
+            // Prepared-item mask membership keeps zero-opacity authored mask
+            // sources alive through command creation.  Only a multi-input
+            // composite needs those sources materialized off-screen; ordinary
+            // one-mask groups keep the direct render path.
+            _runtime->renderCommands[i].stencilMaskReferenced = false;
             commandIndexByNode.emplace(_runtime->renderCommands[i].nodeIndex, i);
         }
         for(size_t i = 0; i < _runtime->renderCommands.size(); ++i) {
-            const int parentNodeIndex = _runtime->renderCommands[i].parentNodeIndex;
-            if(parentNodeIndex < 0) {
-                continue;
-            }
-            if(const auto it = commandIndexByNode.find(parentNodeIndex);
-               it != commandIndexByNode.end()) {
-                auto &parentCommand = _runtime->renderCommands[it->second];
-                // Synthetic/group-only parents keep local child composition.
-                // The special alpha-mask path is selected later from the
-                // parent's stencil flags instead of being inferred from every
-                // visible ancestor relationship here.
-                if(!parentCommand.groupOnly) {
-                    continue;
+            int ancestorNodeIndex =
+                _runtime->renderCommands[i].parentNodeIndex;
+            std::unordered_set<int> visitedAncestorNodes;
+            while(ancestorNodeIndex >= 0 &&
+                  visitedAncestorNodes.insert(ancestorNodeIndex).second) {
+                const auto it = commandIndexByNode.find(ancestorNodeIndex);
+                if(it == commandIndexByNode.end() ||
+                   it->second >= _runtime->renderCommands.size()) {
+                    break;
                 }
-                _runtime->renderCommands[it->second].childCommandIndices.push_back(
-                    static_cast<int>(i));
-                _runtime->renderCommands[i].hasRenderParent = true;
+                auto &ancestorCommand =
+                    _runtime->renderCommands[it->second];
+                if(ancestorCommand.groupOnly) {
+                    // Native type-12 render items own the complete drawable
+                    // descendant subtree, including layers separated from the
+                    // group by ordinary transform/blank nodes. Flatten every
+                    // such drawable into the nearest composite command so an
+                    // iris texture cannot escape to the final target merely
+                    // because its immediate parent is `UD`/`LR`.
+                    // Only a true composite-union mask (two or more authored
+                    // inputs, such as shirome + add_mask) needs its complete
+                    // descendant subtree buffered.  The large one-mask
+                    // body/head containers are already represented by their
+                    // direct colour draws; pulling even their direct children
+                    // through CPU scratch layers cuts animation throughput in
+                    // half without changing the target image.
+                    if(ancestorCommand.stencilMaskNodeIndices.size() > 1) {
+                        ancestorCommand.childCommandIndices.push_back(
+                            static_cast<int>(i));
+                        _runtime->renderCommands[i].hasRenderParent = true;
+                    }
+                    break;
+                }
+                const int nextAncestorNodeIndex =
+                    ancestorCommand.parentNodeIndex;
+                if(nextAncestorNodeIndex == ancestorNodeIndex) {
+                    break;
+                }
+                ancestorNodeIndex = nextAncestorNodeIndex;
+            }
+        }
+        // Native sub_6C7440 walks a dedicated stencil-mask item list after it
+        // has composed the group's ordinary children.  Preserve that
+        // distinction instead of treating every colour child as a mask.
+        for(auto &command : _runtime->renderCommands) {
+            for(const int maskNodeIndex : command.stencilMaskNodeIndices) {
+                if(const auto it = commandIndexByNode.find(maskNodeIndex);
+                   it != commandIndexByNode.end() &&
+                   it->second < _runtime->renderCommands.size() &&
+                   _runtime->renderCommands[it->second].nodeIndex !=
+                       command.nodeIndex) {
+                    command.stencilMaskCommandIndices.push_back(
+                        static_cast<int>(it->second));
+                    if(command.stencilMaskNodeIndices.size() > 1) {
+                        _runtime->renderCommands[it->second]
+                            .stencilMaskReferenced = true;
+                    }
+                    if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG_ALL")) {
+                        const auto &maskCommand =
+                            _runtime->renderCommands[it->second];
+                        LOGGER->info(
+                            "motion stencil mask command: motion={} frameTick={:.2f} group={} groupNode={} groupFlags=0x{:x} mask={} maskNode={} maskFlags=0x{:x} maskOpacity={}",
+                            motionPath, _frameTickCount,
+                            command.nodeLabel, command.nodeIndex,
+                            command.itemFlags, maskCommand.nodeLabel,
+                            maskCommand.nodeIndex, maskCommand.itemFlags,
+                            maskCommand.opacity);
+                    }
+                }
+            }
+            if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG_ALL") &&
+               (!command.stencilMaskCommandIndices.empty() ||
+                command.groupOnly)) {
+                LOGGER->info(
+                    "motion composite command topology: motion={} node={} label={} groupOnly={} parent={} hasParent={} children={} masks={} flags=0x{:x} clip=[{},{},{},{}]",
+                    motionPath, command.nodeIndex, command.nodeLabel,
+                    command.groupOnly ? 1 : 0, command.parentNodeIndex,
+                    command.hasRenderParent ? 1 : 0,
+                    command.childCommandIndices.size(),
+                    command.stencilMaskCommandIndices.size(),
+                    command.itemFlags, command.clipRect[0],
+                    command.clipRect[1], command.clipRect[2],
+                    command.clipRect[3]);
             }
         }
 
@@ -7774,6 +7930,8 @@ namespace motion {
             return false;
         }
         const auto motionPath = _runtime->activeMotion->path;
+        const bool logoTraceEnabled =
+            detail::logoChainTraceEnabledForPath(motionPath);
 
         auto *renderLayer = resolveNativeLayer(renderLayerObject);
         iTJSDispatch2 *scratchOwner = resolveMainWindowOwnerObject();
@@ -7810,19 +7968,23 @@ namespace motion {
             static_cast<const void *>(scratchParent), skipUpdate ? 1 : 0);
         int snapshotCopyOrder = 0;
         if(!renderLayer) {
-            detail::logoChainTraceCheck(
-                motionPath, "execute.setup", "0x6C7440", _clampedEvalTime,
-                "renderLayer should resolve before executeLayerRenderCommands",
-                fmt::format("renderLayer={}",
-                            static_cast<const void *>(renderLayer)),
-                false,
-                "SLA/Layer backend could not resolve native layers before copy");
+            if(logoTraceEnabled) {
+                detail::logoChainTraceCheck(
+                    motionPath, "execute.setup", "0x6C7440", _clampedEvalTime,
+                    "renderLayer should resolve before executeLayerRenderCommands",
+                    fmt::format("renderLayer={}",
+                                static_cast<const void *>(renderLayer)),
+                    false,
+                    "SLA/Layer backend could not resolve native layers before copy");
+            }
             return false;
         }
 
         struct RenderProfileStats {
             int baseHits = 0;
             int baseMisses = 0;
+            int sharedBitmapHits = 0;
+            int sharedBitmapMisses = 0;
             int preparedHits = 0;
             int preparedMisses = 0;
             int storageLoads = 0;
@@ -7836,6 +7998,9 @@ namespace motion {
             std::uint64_t tintBuildUs = 0;
             std::uint64_t tintAllocateUs = 0;
             std::uint64_t tintApplyUs = 0;
+            std::uint64_t psbMetadataUs = 0;
+            std::uint64_t psbDecodeUs = 0;
+            std::uint64_t psbConvertUs = 0;
         };
         RenderProfileStats profileStats;
         const bool profileEnabled = motionRenderProfileEnabled();
@@ -7937,8 +8102,50 @@ namespace motion {
 
             std::shared_ptr<tTVPBaseBitmap> srcBmp;
             std::string sourceOrigin("unresolved");
-            const auto resolvedPath = resolveMotionSourcePath(
-                *_runtime->activeMotion, command.sourceKey);
+            int width = 0;
+            int height = 0;
+            double originX = 0.0;
+            double originY = 0.0;
+            std::string resourcePath;
+            std::string compressName;
+            std::string sharedBitmapKey;
+            std::vector<std::uint8_t> decodedPixels;
+            bool decodedPixelsAreBgra = false;
+            const auto metadataStartUs =
+                profileEnabled ? motionRenderProfileNowUs() : 0;
+            const auto *resourceMetadata = findPSBResourceBySourceName(
+                *_runtime->activeMotion, command.sourceKey, width, height,
+                decodedPixels, originX, originY, nullptr, false,
+                &resourcePath, &compressName);
+            if(resourceMetadata && width > 0 && height > 0 &&
+               !resourceMetadata->data.empty()) {
+                sharedBitmapKey = makeSharedMotionSourceBitmapKey(
+                    *_runtime->activeMotion, resourcePath, compressName,
+                    width, height,
+                    *resourceMetadata);
+                srcBmp = findSharedMotionSourceBitmap(sharedBitmapKey);
+                if(profileEnabled) {
+                    if(srcBmp) {
+                        ++profileStats.sharedBitmapHits;
+                    } else {
+                        ++profileStats.sharedBitmapMisses;
+                    }
+                }
+            }
+            if(profileEnabled) {
+                profileStats.psbMetadataUs +=
+                    motionRenderProfileNowUs() - metadataStartUs;
+            }
+
+            // Embedded E-mote icons are authoritative for their `src/...`
+            // keys. Resolving them through the generic storage layer first
+            // scans every PSB resource and performs several archive lookups
+            // per icon, even though the exact resource was already found.
+            // Keep external lookup only for motions without an embedded icon.
+            const auto resolvedPath = resourceMetadata
+                ? ttstr{}
+                : resolveMotionSourcePath(
+                      *_runtime->activeMotion, command.sourceKey);
             const auto resolvedPathString = detail::narrow(resolvedPath);
             const bool resolvedPathIsEmbeddedPsb =
                 resolvedPathString.rfind("psb://", 0) == 0;
@@ -8011,56 +8218,83 @@ namespace motion {
             }
 
             if(!srcBmp) {
-                int width = 0;
-                int height = 0;
-                double originX = 0.0;
-                double originY = 0.0;
-                std::vector<std::uint8_t> decodedPixels;
-                bool decodedPixelsAreBgra = false;
-                const auto *resource = findPSBResourceBySourceName(
-                    *_runtime->activeMotion, command.sourceKey, width, height,
-                    decodedPixels, originX, originY, &decodedPixelsAreBgra);
+                const auto *resource = resourceMetadata;
+                if(!srcBmp && resourceMetadata) {
+                    const auto decodeStartUs =
+                        profileEnabled ? motionRenderProfileNowUs() : 0;
+                    resource = findPSBResourceBySourceName(
+                        *_runtime->activeMotion, command.sourceKey,
+                        width, height, decodedPixels, originX, originY,
+                        &decodedPixelsAreBgra, true);
+                    if(profileEnabled) {
+                        profileStats.psbDecodeUs +=
+                            motionRenderProfileNowUs() - decodeStartUs;
+                    }
+                }
                 if(resource && width > 0 && height > 0 && !resource->data.empty()) {
-                    const bool sourcePixelsAreBgra =
-                        motionSourcePixelsAreBGRA(decodedPixelsAreBgra);
-                    const auto &pixelData =
-                        decodedPixels.empty() ? resource->data : decodedPixels;
-                    auto bmp = std::make_shared<tTVPBaseBitmap>(
-                        static_cast<tjs_uint>(width),
-                        static_cast<tjs_uint>(height), 32);
-                    tTVPRect fillRect(0, 0, width, height);
-                    bmp->Fill(fillRect, 0x00000000);
-                    const auto *src = pixelData.data();
-                    for(int y = 0; y < height; ++y) {
-                        auto *row = static_cast<std::uint8_t *>(
-                            bmp->GetScanLineForWrite(static_cast<tjs_uint>(y)));
-                        for(int x = 0; x < width; ++x) {
-                            const size_t sourceIndex =
-                                (static_cast<size_t>(y) * width + x) * 4u;
-                            if(sourceIndex + 3 >= pixelData.size()) {
+                    const bool sourcePixelsAreBgra = motionSourcePixelsAreBGRA(
+                        decodedPixelsAreBgra);
+                    if(!srcBmp) {
+                        const auto convertStartUs =
+                            profileEnabled ? motionRenderProfileNowUs() : 0;
+                        const auto &pixelData = decodedPixels.empty()
+                            ? resource->data : decodedPixels;
+                        auto bmp = std::make_shared<tTVPBaseBitmap>(
+                            static_cast<tjs_uint>(width),
+                            static_cast<tjs_uint>(height), 32);
+                        const auto totalPixels =
+                            static_cast<std::size_t>(width) *
+                            static_cast<std::size_t>(height);
+                        const auto validPixels = std::min(
+                            pixelData.size() / 4u, totalPixels);
+                        // A decoded PSB icon normally covers the complete
+                        // bitmap. Do not clear every pixel only to overwrite
+                        // it immediately; retain the clear for truncated
+                        // resources where the untouched tail must be alpha 0.
+                        if(validPixels < totalPixels) {
+                            bmp->Fill(tTVPRect(0, 0, width, height),
+                                      0x00000000);
+                        }
+                        const auto *src = pixelData.data();
+                        for(int y = 0; y < height; ++y) {
+                            const auto rowOffset =
+                                static_cast<std::size_t>(y) *
+                                static_cast<std::size_t>(width);
+                            if(rowOffset >= validPixels) {
                                 break;
                             }
-                            auto *dst = row + x * 4;
+                            const auto rowPixels = std::min(
+                                static_cast<std::size_t>(width),
+                                validPixels - rowOffset);
+                            auto *row = static_cast<std::uint8_t *>(
+                                bmp->GetScanLineForWrite(
+                                    static_cast<tjs_uint>(y)));
+                            const auto *sourceRow =
+                                src + rowOffset * 4u;
                             if(sourcePixelsAreBgra) {
-                                dst[0] = src[sourceIndex + 0];
-                                dst[1] = src[sourceIndex + 1];
-                                dst[2] = src[sourceIndex + 2];
+                                std::memcpy(row, sourceRow, rowPixels * 4u);
                             } else {
-                                dst[0] = src[sourceIndex + 2];
-                                dst[1] = src[sourceIndex + 1];
-                                dst[2] = src[sourceIndex + 0];
+                                TVPReverseRGB(
+                                    reinterpret_cast<tjs_uint32 *>(row),
+                                    reinterpret_cast<const tjs_uint32 *>(
+                                        sourceRow),
+                                    static_cast<tjs_int>(rowPixels));
                             }
-                            dst[3] = src[sourceIndex + 3];
+                        }
+                        srcBmp = bmp;
+                        rememberSharedMotionSourceBitmap(
+                            sharedBitmapKey, srcBmp);
+                        if(profileEnabled) {
+                            ++profileStats.psbLoads;
+                            profileStats.psbConvertUs +=
+                                motionRenderProfileNowUs() - convertStartUs;
                         }
                     }
-                    srcBmp = bmp;
-                    if(profileEnabled) {
-                        ++profileStats.psbLoads;
-                    }
                     sourceOrigin = fmt::format(
-                        "psb:{}:{}x{}:origin=({:.3f},{:.3f}):bgra={}",
+                        "psb:{}:{}x{}:origin=({:.3f},{:.3f}):bgra={}:shared={}",
                         command.sourceKey, width, height, originX, originY,
-                        sourcePixelsAreBgra ? 1 : 0);
+                        sourcePixelsAreBgra ? 1 : 0,
+                        decodedPixels.empty() ? 1 : 0);
                     if(LOGGER &&
                        shouldDebugTitleRender(motionPath, command.sourceKey,
                                               sourceOrigin) &&
@@ -8345,16 +8579,18 @@ namespace motion {
             const bool hasSourceBitmap =
                 srcBmp && srcBmp->GetWidth() > 0 && srcBmp->GetHeight() > 0;
             if(!hasSourceBitmap && command.childCommandIndices.empty()) {
-                detail::logoChainTraceCheck(
-                    motionPath, "execute.source", "0x6C7440",
-                    _clampedEvalTime,
-                    "resolved bitmap should exist with positive size",
-                    fmt::format("nodeIndex={} source={} bitmap={}x{}",
-                                command.nodeIndex, command.sourceKey,
-                                srcBmp ? srcBmp->GetWidth() : 0,
-                                srcBmp ? srcBmp->GetHeight() : 0),
-                    false,
-                    "sub_6C7440 could not resolve a drawable source bitmap");
+                if(logoTraceEnabled) {
+                    detail::logoChainTraceCheck(
+                        motionPath, "execute.source", "0x6C7440",
+                        _clampedEvalTime,
+                        "resolved bitmap should exist with positive size",
+                        fmt::format("nodeIndex={} source={} bitmap={}x{}",
+                                    command.nodeIndex, command.sourceKey,
+                                    srcBmp ? srcBmp->GetWidth() : 0,
+                                    srcBmp ? srcBmp->GetHeight() : 0),
+                        false,
+                        "sub_6C7440 could not resolve a drawable source bitmap");
+                }
                 return false;
             }
 
@@ -8362,7 +8598,7 @@ namespace motion {
                 0, 0,
                 hasSourceBitmap ? static_cast<tjs_int>(srcBmp->GetWidth()) : 0,
                 hasSourceBitmap ? static_cast<tjs_int>(srcBmp->GetHeight()) : 0);
-            if(hasSourceBitmap) {
+            if(hasSourceBitmap && logoTraceEnabled) {
                 detail::logoChainTraceCheck(
                     motionPath, "execute.srcRect", "0x6C7440",
                     _clampedEvalTime,
@@ -8379,7 +8615,8 @@ namespace motion {
             const bool hasChildren = !command.childCommandIndices.empty();
             const bool useDirectRenderPath =
                 shouldUseDirectRenderPathLike_0x6C7440(command) &&
-                !hasChildren;
+                !hasChildren && !command.stencilMaskReferenced &&
+                !command.hasRenderParent;
             if(useDirectRenderPath) {
                 command.executedDirect = true;
                 command.builtRect = command.clipRect;
@@ -8396,15 +8633,17 @@ namespace motion {
             iTJSDispatch2 *leafLayerObject = ensureCommandLayer(command.leafLayer);
             auto *leafLayer = resolveNativeLayer(leafLayerObject);
             if(!leafLayerObject || !leafLayer) {
-                detail::logoChainTraceCheck(
-                    motionPath, "execute.workLayer", "0x6C7440",
-                    _clampedEvalTime,
-                    "leaf layer should resolve for buffered item path",
-                    fmt::format("nodeIndex={} leafLayer={}",
-                                command.nodeIndex,
-                                static_cast<const void *>(leafLayer)),
-                    false,
-                    "sub_6C7440 could not allocate the per-item leaf layer");
+                if(logoTraceEnabled) {
+                    detail::logoChainTraceCheck(
+                        motionPath, "execute.workLayer", "0x6C7440",
+                        _clampedEvalTime,
+                        "leaf layer should resolve for buffered item path",
+                        fmt::format("nodeIndex={} leafLayer={}",
+                                    command.nodeIndex,
+                                    static_cast<const void *>(leafLayer)),
+                        false,
+                        "sub_6C7440 could not allocate the per-item leaf layer");
+                }
                 return false;
             }
 
@@ -8450,15 +8689,17 @@ namespace motion {
                 ensureCommandLayer(command.composedLayer);
             auto *composedLayer = resolveNativeLayer(composedLayerObject);
             if(!composedLayerObject || !composedLayer) {
-                detail::logoChainTraceCheck(
-                    motionPath, "execute.workLayer", "0x6C7440",
-                    _clampedEvalTime,
-                    "composed layer should resolve for parent item path",
-                    fmt::format("nodeIndex={} composedLayer={}",
-                                command.nodeIndex,
-                                static_cast<const void *>(composedLayer)),
-                    false,
-                    "sub_6C7440 could not allocate the composed output layer");
+                if(logoTraceEnabled) {
+                    detail::logoChainTraceCheck(
+                        motionPath, "execute.workLayer", "0x6C7440",
+                        _clampedEvalTime,
+                        "composed layer should resolve for parent item path",
+                        fmt::format("nodeIndex={} composedLayer={}",
+                                    command.nodeIndex,
+                                    static_cast<const void *>(composedLayer)),
+                        false,
+                        "sub_6C7440 could not allocate the composed output layer");
+                }
                 return false;
             }
 
@@ -8479,38 +8720,6 @@ namespace motion {
                     continue;
                 }
                 auto &child = _runtime->renderCommands[childCommandIndex];
-                if((command.itemFlags & 4) != 0) {
-                    auto *childMaskLayerObject =
-                        child.leafLayer.Type() == tvtObject
-                            ? child.leafLayer.AsObjectNoAddRef()
-                            : nullptr;
-                    if(!childMaskLayerObject) {
-                        continue;
-                    }
-                    const int childWidth = child.builtRect[2] - child.builtRect[0];
-                    const int childHeight = child.builtRect[3] - child.builtRect[1];
-                    if(childWidth <= 0 || childHeight <= 0) {
-                        continue;
-                    }
-                    applyMotionAlphaMaskLike_0x6AF104(
-                        composedLayerObject,
-                        child.builtRect[0] - command.clipRect[0],
-                        child.builtRect[1] - command.clipRect[1],
-                        childMaskLayerObject,
-                        0,
-                        0,
-                        childWidth,
-                        childHeight,
-                        64,
-                        playerStencilType,
-                        command.itemFlags,
-                        motionPath,
-                        _clampedEvalTime,
-                        command.nodeIndex,
-                        child.nodeIndex);
-                    continue;
-                }
-
                 auto *childOutputLayerObject = chooseCommandOutputLayerObject(child);
                 auto *childOutputLayer = resolveNativeLayer(childOutputLayerObject);
                 if(!childOutputLayerObject || !childOutputLayer) {
@@ -8531,6 +8740,266 @@ namespace motion {
                     childLocalRect,
                     childBlendMode,
                     childOpacity);
+            }
+
+            struct CompositeMaskSurface {
+                const tTVPBaseTexture *bitmap = nullptr;
+                iTJSDispatch2 *layerObject = nullptr;
+                int worldLeft = 0;
+                int worldTop = 0;
+                int width = 0;
+                int height = 0;
+                int opacity = 255;
+                int itemFlags = 0;
+                int nodeIndex = -1;
+            };
+            std::vector<CompositeMaskSurface> compositeMaskSurfaces;
+            compositeMaskSurfaces.reserve(
+                command.stencilMaskCommandIndices.size());
+
+            for(const int maskCommandIndex :
+                    command.stencilMaskCommandIndices) {
+                if(maskCommandIndex < 0 ||
+                   maskCommandIndex >=
+                       static_cast<int>(_runtime->renderCommands.size())) {
+                    continue;
+                }
+                const bool maskOutputBuilt =
+                    self(self, static_cast<size_t>(maskCommandIndex));
+                if(!maskOutputBuilt) {
+                    continue;
+                }
+                auto &mask = _runtime->renderCommands[maskCommandIndex];
+                iTJSDispatch2 *maskLayerObject = nullptr;
+                // sub_6C7440 selects item+324 for a composed mask (flag 4),
+                // otherwise item+304 for the leaf mask.
+                if((mask.itemFlags & 4) != 0 && mask.composedBuilt &&
+                   mask.composedLayer.Type() == tvtObject) {
+                    maskLayerObject = mask.composedLayer.AsObjectNoAddRef();
+                } else if(mask.leafBuilt &&
+                          mask.leafLayer.Type() == tvtObject) {
+                    maskLayerObject = mask.leafLayer.AsObjectNoAddRef();
+                } else {
+                    maskLayerObject = chooseCommandOutputLayerObject(mask);
+                }
+                if(!maskLayerObject) {
+                    continue;
+                }
+                auto *maskLayer = resolveNativeLayer(maskLayerObject);
+                if(!maskLayer || !maskLayer->GetMainImage()) {
+                    continue;
+                }
+                const int maskWidth =
+                    mask.builtRect[2] - mask.builtRect[0];
+                const int maskHeight =
+                    mask.builtRect[3] - mask.builtRect[1];
+                if(maskWidth <= 0 || maskHeight <= 0) {
+                    continue;
+                }
+                compositeMaskSurfaces.push_back(CompositeMaskSurface{
+                    maskLayer->GetMainImage(),
+                    maskLayerObject,
+                    mask.builtRect[0], mask.builtRect[1],
+                    maskWidth, maskHeight,
+                    std::clamp(mask.opacity, 0, 255),
+                    mask.itemFlags,
+                    mask.nodeIndex});
+            }
+
+            // A type-12 stencilComposite node carries the operation on the
+            // group itself (normally 0x5). Native sub_6C2208 first uses that
+            // full value to add the referenced layer images into an off-screen
+            // alpha mask, then sub_6C7088 applies the resulting group image to
+            // its ordinary children with flags&3 (crop for 0x5).
+            //
+            // Referenced mask items deliberately ignore their display
+            // opacity. `add_mask` is authored with opacity zero so it is not
+            // painted as colour, but its source alpha still participates in
+            // the native mask build. Dropping it leaves the entire circular
+            // iris visible instead of following the moving eyelid aperture.
+            const int compositeMaskOperation = command.itemFlags & 3;
+            if((command.itemFlags & 4) != 0 &&
+               !compositeMaskSurfaces.empty() &&
+               (compositeMaskOperation == 1 ||
+                compositeMaskOperation == 2)) {
+                const int dstWidth = clipWidth;
+                const int dstHeight = clipHeight;
+                const bool thresholdMaskMode = playerStencilType == 0;
+                bool gpuMaskApplied = false;
+                if(!thresholdMaskMode && command.groupOnly &&
+                   compositeMaskSurfaces.size() > 1) {
+                    iTJSDispatch2 *maskScratchLayerObject =
+                        ensureCommandLayer(command.maskLayer);
+                    auto *maskScratchLayer =
+                        resolveNativeLayer(maskScratchLayerObject);
+                    if(maskScratchLayerObject && maskScratchLayer &&
+                       prepareLayerForRender(maskScratchLayerObject,
+                                             dstWidth, dstHeight,
+                                             0x00000000)) {
+                        std::vector<iTVPBaseBitmap *> maskBitmaps;
+                        std::vector<tTVPRect> maskDstRects;
+                        std::vector<tTVPRect> maskSrcRects;
+                        maskBitmaps.reserve(compositeMaskSurfaces.size());
+                        maskDstRects.reserve(compositeMaskSurfaces.size());
+                        maskSrcRects.reserve(compositeMaskSurfaces.size());
+                        for(const auto &surface : compositeMaskSurfaces) {
+                            int dstLeft =
+                                surface.worldLeft - command.clipRect[0];
+                            int dstTop =
+                                surface.worldTop - command.clipRect[1];
+                            int srcLeft = 0;
+                            int srcTop = 0;
+                            int width = surface.width;
+                            int height = surface.height;
+                            if(dstLeft < 0) {
+                                srcLeft -= dstLeft;
+                                width += dstLeft;
+                                dstLeft = 0;
+                            }
+                            if(dstTop < 0) {
+                                srcTop -= dstTop;
+                                height += dstTop;
+                                dstTop = 0;
+                            }
+                            width = std::min(width, dstWidth - dstLeft);
+                            height = std::min(height, dstHeight - dstTop);
+                            width = std::min(width,
+                                             surface.width - srcLeft);
+                            height = std::min(height,
+                                              surface.height - srcTop);
+                            if(width <= 0 || height <= 0) {
+                                continue;
+                            }
+                            maskBitmaps.push_back(
+                                const_cast<iTVPBaseBitmap *>(
+                                    static_cast<const iTVPBaseBitmap *>(
+                                        surface.bitmap)));
+                            maskDstRects.emplace_back(
+                                dstLeft, dstTop,
+                                dstLeft + width, dstTop + height);
+                            maskSrcRects.emplace_back(
+                                srcLeft, srcTop,
+                                srcLeft + width, srcTop + height);
+                        }
+                        if(!maskBitmaps.empty()) {
+                            gpuMaskApplied =
+                                TVPGodotCompositeAlphaUnionMask(
+                                    leafLayer->GetMainImage(),
+                                    composedLayer->GetMainImage(),
+                                    maskScratchLayer->GetMainImage(),
+                                    maskBitmaps.data(), maskDstRects.data(),
+                                    maskSrcRects.data(), maskBitmaps.size(),
+                                    compositeMaskOperation == 1);
+                        }
+                    }
+                    if(gpuMaskApplied) {
+                        // The group leaf is a cleared scratch surface.  It now
+                        // contains the masked composite; swap the reusable
+                        // slots so the ordinary output selector returns it.
+                        std::swap(command.leafLayer,
+                                  command.composedLayer);
+                        composedLayerObject =
+                            command.composedLayer.AsObjectNoAddRef();
+                        composedLayer =
+                            resolveNativeLayer(composedLayerObject);
+                    }
+                }
+
+                auto *dstBitmap = composedLayer->GetMainImage();
+                if(!gpuMaskApplied && compositeMaskSurfaces.size() == 1) {
+                    // With one input, native's op-5 mask build followed by
+                    // op-1/op-2 application is algebraically identical to a
+                    // single crop. Request the whole group rectangle so the
+                    // helper also clears alpha outside the mask's bounds.
+                    const auto &surface = compositeMaskSurfaces.front();
+                    applyMotionAlphaMaskLike_0x6AC4E4(
+                        composedLayerObject, 0, 0, surface.layerObject,
+                        command.clipRect[0] - surface.worldLeft,
+                        command.clipRect[1] - surface.worldTop,
+                        dstWidth, dstHeight, 64, playerStencilType,
+                        compositeMaskOperation, motionPath, _clampedEvalTime,
+                        command.nodeIndex, surface.nodeIndex);
+                } else if(!gpuMaskApplied) {
+                    for(int y = 0; y < dstHeight; ++y) {
+                        auto *dstRow = static_cast<std::uint8_t *>(
+                            dstBitmap->GetScanLineForWrite(y));
+                        const int worldY = command.clipRect[1] + y;
+                        for(int x = 0; x < dstWidth; ++x) {
+                            const int worldX = command.clipRect[0] + x;
+                            int unionAlpha = 0;
+                            for(const auto &surface : compositeMaskSurfaces) {
+                                if(worldX < surface.worldLeft ||
+                                   worldY < surface.worldTop ||
+                                   worldX >= surface.worldLeft + surface.width ||
+                                   worldY >= surface.worldTop + surface.height) {
+                                    continue;
+                                }
+                                const int sourceX = worldX - surface.worldLeft;
+                                const int sourceY = worldY - surface.worldTop;
+                                if(sourceX >= static_cast<int>(surface.bitmap->GetWidth()) ||
+                                   sourceY >= static_cast<int>(surface.bitmap->GetHeight())) {
+                                    continue;
+                                }
+                                const auto *sourceRow =
+                                    static_cast<const std::uint8_t *>(
+                                        surface.bitmap->GetScanLine(sourceY));
+                                const int sourceAlpha = static_cast<int>(
+                                    sourceRow[sourceX * 4 + 3]);
+                                if(thresholdMaskMode) {
+                                    if(sourceAlpha >= 64) {
+                                        unionAlpha = 255;
+                                        break;
+                                    }
+                                } else {
+                                    unionAlpha +=
+                                        ((255 - unionAlpha) * sourceAlpha) / 255;
+                                }
+                            }
+
+                            auto &dstAlpha = dstRow[x * 4 + 3];
+                            if(compositeMaskOperation == 1) {
+                                if(thresholdMaskMode) {
+                                    if(unionAlpha < 64) dstAlpha = 0;
+                                } else {
+                                    dstAlpha = static_cast<std::uint8_t>(
+                                        (static_cast<int>(dstAlpha) * unionAlpha) /
+                                        255);
+                                }
+                            } else if(thresholdMaskMode) {
+                                if(unionAlpha >= 64) dstAlpha = 0;
+                            } else {
+                                dstAlpha = static_cast<std::uint8_t>(
+                                    (static_cast<int>(dstAlpha) *
+                                     (255 - unionAlpha)) / 255);
+                            }
+                        }
+                    }
+                }
+
+                if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG_ALL")) {
+                    LOGGER->info(
+                        "motion composite stencil applied: motion={} group={} groupNode={} operation={} masks={} clip=[{},{},{},{}]",
+                        motionPath, command.nodeLabel, command.nodeIndex,
+                        compositeMaskOperation, compositeMaskSurfaces.size(),
+                        command.clipRect[0], command.clipRect[1],
+                        command.clipRect[2], command.clipRect[3]);
+                }
+            } else {
+                // Retain the native per-item path for non-composite stencil
+                // chains.  These nodes author their own operation codes.
+                for(size_t maskIndex = 0;
+                    maskIndex < compositeMaskSurfaces.size(); ++maskIndex) {
+                    const auto &surface = compositeMaskSurfaces[maskIndex];
+                    applyMotionAlphaMaskLike_0x6AC4E4(
+                        composedLayerObject,
+                        surface.worldLeft - command.clipRect[0],
+                        surface.worldTop - command.clipRect[1],
+                        surface.layerObject, 0, 0,
+                        surface.width, surface.height, 64,
+                        playerStencilType, surface.itemFlags & 3,
+                        motionPath, _clampedEvalTime,
+                        command.nodeIndex, surface.nodeIndex);
+                }
             }
 
             command.composedBuilt = true;
@@ -8558,7 +9027,6 @@ namespace motion {
                     command.clipRect[2], command.clipRect[3]);
                 continue;
             }
-
             if(!buildCommandOutput(buildCommandOutput, i)) {
                 continue;
             }
@@ -8797,13 +9265,15 @@ namespace motion {
                 materializedPreparedEntries += entry.second.size();
             }
             LOGGER->info(
-                "motion render profile: motion={} frame={:.2f} target={} native={} commands={} outputs=direct:{} buffered:{} cache=base:{}/{} prepared:{}/{} entries=prepared:{} materialized:{} evictions:{} loads=storage:{} psb:{} tintBuilds={} us=total:{} base:{} prepared:{} tint:{} alloc:{} apply:{}",
+                "motion render profile: motion={} frame={:.2f} target={} native={} commands={} outputs=direct:{} buffered:{} cache=base:{}/{} shared:{}/{} prepared:{}/{} entries=prepared:{} materialized:{} evictions:{} loads=storage:{} psb:{} tintBuilds={} us=total:{} base:{} prepared:{} tint:{} alloc:{} apply:{} psbMeta:{} psbDecode:{} psbConvert:{}",
                 motionPath, _clampedEvalTime,
                 static_cast<const void *>(renderLayerObject),
                 static_cast<const void *>(renderLayer),
                 _runtime->renderCommands.size(),
                 profileStats.directOutputs, profileStats.bufferedOutputs,
                 profileStats.baseHits, profileStats.baseMisses,
+                profileStats.sharedBitmapHits,
+                profileStats.sharedBitmapMisses,
                 profileStats.preparedHits, profileStats.preparedMisses,
                 preparedSourceCache.size(), materializedPreparedEntries,
                 profileStats.tintEvictions,
@@ -8812,7 +9282,8 @@ namespace motion {
                 motionRenderProfileNowUs() - profileStartUs,
                 profileStats.baseResolveUs, profileStats.preparedResolveUs,
                 profileStats.tintBuildUs, profileStats.tintAllocateUs,
-                profileStats.tintApplyUs);
+                profileStats.tintApplyUs, profileStats.psbMetadataUs,
+                profileStats.psbDecodeUs, profileStats.psbConvertUs);
         }
         return true;
     }
@@ -8928,10 +9399,16 @@ namespace motion {
             adaptor->getWidth(), adaptor->getHeight());
 
         ensureNodeTreeBuilt();
-        // progress()/setVariable() already evaluate root D3D motions before
-        // draw.  Only a composed child whose inherited parent transform
-        // changed needs a second evaluation at this point.
-        if(applyMotionParentRootStateForRender() && !_runtime->nodes.empty()) {
+        // A freshly selected E-mote model is commonly built from draw(), after
+        // the progress callback for that tick has already run.  The tree is
+        // therefore dirty but has never executed the native updateLayers
+        // pipeline that instantiates its nested Motion players.  Honor the
+        // same dirty gates as the ordinary presentation renderer; otherwise
+        // all_parts/全体構造 reaches prepareRenderItems with empty body/head
+        // children and only its transparent layout nodes are submitted.
+        const bool parentStateChanged = applyMotionParentRootStateForRender();
+        if((parentStateChanged || _layersDirty || _emoteDirty) &&
+           !_runtime->nodes.empty()) {
             updateLayers();
         }
         prepareRenderItems();
@@ -10168,9 +10645,19 @@ namespace motion {
             return;
         }
 
+        const std::string lookupKey =
+            (_runtime->activeMotion ? _runtime->activeMotion->path
+                                    : std::string{}) +
+            '\n' + requestKey;
+        if(_runtime->sourceLookupMisses.find(lookupKey) !=
+           _runtime->sourceLookupMisses.end()) {
+            return;
+        }
+
         ttstr resolved;
         if(!detail::resolveExistingPath(buildSourceCandidates(*_runtime, name),
                                         resolved)) {
+            _runtime->sourceLookupMisses.emplace(lookupKey);
             return;
         }
 
@@ -10183,6 +10670,7 @@ namespace motion {
 
         const auto source = _resourceManagerNative.load(resolved);
         if(source.Type() == tvtVoid) {
+            _runtime->sourceLookupMisses.emplace(lookupKey);
             return;
         }
 
@@ -10192,6 +10680,7 @@ namespace motion {
 
     void Player::clearCache() {
         _runtime->sourcesByKey.clear();
+        _runtime->sourceLookupMisses.clear();
         _runtime->clearMotionBitmapCaches();
         _runtime->lastCanvas.Clear();
     }
@@ -10227,7 +10716,7 @@ namespace motion {
         }
     }
 
-    void Player::scheduleTimelineControlAnimatorLike_0x671A50(
+    void Player::scheduleTimelineControlAnimatorLike_0x6646E0(
         detail::TimelineState &state, size_t trackIndex, float value,
         double transition, double easeWeight) {
         if(trackIndex >= state.controlTrackAnimators.size()) {
@@ -10250,6 +10739,21 @@ namespace motion {
             animator.weight = static_cast<float>(easeWeight);
             state.controlTrackValues[trackIndex] = targetValue;
             return;
+        }
+
+        // sub_6646E0 receives Player+1161 as its queuing flag.  When that
+        // byte is clear it discards pending requests before adding the new
+        // one, while preserving the animator's currently evaluated value.
+        // Always appending here lets old loop requests run after the seek and
+        // makes the tail/body alternate between stale poses on consecutive
+        // frames at every loop boundary.
+        if(!_emoteAnimatorFlag) {
+            animator.queue.clear();
+            animator.active = false;
+            animator.startValue = animator.currentValue;
+            animator.targetValue = animator.currentValue;
+            animator.progress = 1.0f;
+            animator.duration = 0.0f;
         }
 
         animator.queue.push_back(detail::TimelineControlKeyframe{
@@ -10523,13 +11027,20 @@ namespace motion {
 
     void Player::applyEvalResultPostProcessLike_0x67CC9C() {
         for(auto &entry : _evalResultList) {
-            accumulateTimelineContributionLike_0x67C560(entry.label, entry.value);
+            // The list stores the persistent controller/base value.  A
+            // timeline is a per-frame additive layer over that value; it must
+            // not be folded back into the persistent slot.  Mutating
+            // entry.value here accumulated every waiting-loop sample across
+            // frames until the parameter hit an extreme.  The visible result
+            // was a fast one-shot sway followed by completely still physics
+            // anchors (and, for slant controls, a permanently tilted model).
             double outputValue = entry.value;
+            accumulateTimelineContributionLike_0x67C560(entry.label,
+                                                          outputValue);
             if(shouldMirrorEvalLabelLike_0x67C6B0(entry.label)) {
                 outputValue = -outputValue;
             }
             _evalResultValues[entry.label] = outputValue;
-            _variableValues[entry.label] = outputValue;
         }
 
         applyClampControlsLike_0x67C8A8();
@@ -10552,6 +11063,7 @@ namespace motion {
             }
 
             auto &state = it->second;
+            const double timelineTimeBeforeAdvance = state.currentTime;
             if(prevTimes != nullptr) {
                 (*prevTimes)[label] = state.currentTime;
             }
@@ -10642,7 +11154,7 @@ namespace motion {
 
                 if(!state.controlInitialized ||
                    state.controlFrameCursor.size() != binding->tracks.size()) {
-                    resetTimelineControlStateLike_0x671A50(
+                    seekTimelineControlStateLike_0x66EE30(
                         state, *binding, std::max(state.currentTime, 0.0));
                 }
 
@@ -10668,7 +11180,7 @@ namespace motion {
                         applyTimelineControlWindowLike_0x669E1C(
                             state, *binding, loopEnd, false);
                         remaining -= std::max(loopEnd - currentTime, 0.0);
-                        resetTimelineControlStateLike_0x671A50(
+                        seekTimelineControlStateLike_0x66EE30(
                             state, *binding, loopBegin);
                     }
                     applyTimelineControlWindowLike_0x669E1C(
@@ -10699,6 +11211,49 @@ namespace motion {
                 }
             }
 
+            if(LOGGER && std::getenv("AETHERKIRI_EMOTE_TIMELINE_TRACE")) {
+                const auto beforeBucket = static_cast<long long>(
+                    std::floor(std::max(timelineTimeBeforeAdvance, 0.0) /
+                               60.0));
+                const auto afterBucket = static_cast<long long>(
+                    std::floor(std::max(state.currentTime, 0.0) / 60.0));
+                const bool rewound =
+                    state.currentTime + 0.0001 < timelineTimeBeforeAdvance;
+                if(rewound || afterBucket != beforeBucket) {
+                    std::ostringstream values;
+                    if(binding) {
+                        for(size_t trackIndex = 0;
+                            trackIndex < binding->tracks.size(); ++trackIndex) {
+                            if(trackIndex != 0) {
+                                values << ';';
+                            }
+                            const auto &track = binding->tracks[trackIndex];
+                            const double trackValue =
+                                trackIndex < state.controlTrackValues.size()
+                                ? state.controlTrackValues[trackIndex]
+                                : 0.0;
+                            const bool active =
+                                trackIndex < state.controlTrackAnimators.size()
+                                ? state.controlTrackAnimators[trackIndex].active
+                                : false;
+                            const size_t queued =
+                                trackIndex < state.controlTrackAnimators.size()
+                                ? state.controlTrackAnimators[trackIndex]
+                                      .queue.size()
+                                : 0;
+                            values << track.label << '=' << trackValue
+                                   << "(active=" << (active ? 1 : 0)
+                                   << ",queue=" << queued << ')';
+                        }
+                    }
+                    LOGGER->info(
+                        "[EMOTE_TIMELINE] step motion={} label={} time={:.3f}->{:.3f} flags={} blend={:.4f} values=[{}]",
+                        activeMotion ? activeMotion->path : std::string{},
+                        label, timelineTimeBeforeAdvance, state.currentTime,
+                        state.flags, state.blendRatio, values.str());
+                }
+            }
+
             if(!keepPlaying && state.wasPlaying) {
                 _runtime->pendingEvents.push_back({1, label, {}});
                 state.wasPlaying = false;
@@ -10711,13 +11266,20 @@ namespace motion {
         _runtime->playingTimelineLabels.resize(writeIndex);
     }
 
-    void Player::resetTimelineControlStateLike_0x671A50(
+    void Player::seekTimelineControlStateLike_0x66EE30(
         detail::TimelineState &state,
         const detail::TimelineControlBinding &binding,
         double time) {
+        // libgame.so sub_66EE30 relocates the timeline cursor and rebuilds
+        // only the per-track frame cursors.  It deliberately keeps the
+        // existing track animator/value alive, then queues the value at the
+        // seek destination from the current pose.  Clearing those objects at
+        // every loop boundary makes the model snap to zero for one frame --
+        // visible as the periodic high-frequency tail/body twitch.
+        state.currentTime = time;
         state.controlFrameCursor.assign(binding.tracks.size(), -1);
-        state.controlTrackValues.assign(binding.tracks.size(), 0.0f);
-        state.controlTrackAnimators.assign(binding.tracks.size(), {});
+        state.controlTrackValues.resize(binding.tracks.size(), 0.0f);
+        state.controlTrackAnimators.resize(binding.tracks.size());
         for(size_t trackIndex = 0; trackIndex < binding.tracks.size();
             ++trackIndex) {
             const auto &track = binding.tracks[trackIndex];
@@ -10726,14 +11288,13 @@ namespace motion {
             for(size_t frameIndex = 0; frameIndex < track.frames.size();
                 ++frameIndex) {
                 const auto &frame = track.frames[frameIndex];
+                if(frame.time > time) {
+                    break;
+                }
+                cursor = static_cast<int>(frameIndex);
                 if(!frame.isTypeZero) {
-                    lastNonTypeZero = static_cast<int>(frameIndex);
+                    lastNonTypeZero = cursor;
                 }
-                if(frame.time <= time) {
-                    cursor = static_cast<int>(frameIndex);
-                    continue;
-                }
-                break;
             }
             state.controlFrameCursor[trackIndex] = cursor;
 
@@ -10749,7 +11310,7 @@ namespace motion {
                 ? std::max(track.frames[nextIndex].time - time - 1.0, 0.0)
                 : 0.0;
             if((state.flags & 2) != 0 && !track.instantVariable) {
-                scheduleTimelineControlAnimatorLike_0x671A50(
+                scheduleTimelineControlAnimatorLike_0x6646E0(
                     state, trackIndex, frame.value, transition,
                     frame.easingWeight);
             } else {
@@ -10812,7 +11373,7 @@ namespace motion {
                     const double transition = std::max(
                         followingFrame.time - targetTime - 1.0, 0.0);
                     if(internalRoute) {
-                        scheduleTimelineControlAnimatorLike_0x671A50(
+                        scheduleTimelineControlAnimatorLike_0x6646E0(
                             state, trackIndex, nextFrame.value, transition,
                             nextFrame.easingWeight);
                     } else {
@@ -10859,7 +11420,7 @@ namespace motion {
             if(rewound) {
                 // Aligned to sub_671A50: re-seek per-track cursors using the
                 // timeline time before the current crossing scan.
-                resetTimelineControlStateLike_0x671A50(
+                seekTimelineControlStateLike_0x66EE30(
                     state, binding, std::max(prevTime, 0.0));
             }
 
@@ -10892,9 +11453,15 @@ namespace motion {
                       track.frames[nextIndex].time <= state.currentTime) {
                     const auto &frame = track.frames[nextIndex];
                     if(!frame.isTypeZero) {
+                        const double transition =
+                            nextIndex + 1 < track.frames.size()
+                            ? std::max(track.frames[nextIndex + 1].time -
+                                           state.currentTime - 1.0,
+                                       0.0)
+                            : 0.0;
                         setVariableResolvedWeightLike_0x671228(
                             track.label, static_cast<double>(frame.value),
-                            frame.time, frame.easingWeight);
+                            transition, frame.easingWeight);
                     }
                     cursor = static_cast<int>(nextIndex);
                     ++nextIndex;
@@ -10907,6 +11474,121 @@ namespace motion {
             }
 
             state.controlLastAppliedTime = state.currentTime;
+        }
+    }
+
+    void Player::passTimelinesLike_0x67A100() {
+        if(!_runtime || !_runtime->activeMotion) {
+            return;
+        }
+
+        _layersDirty = true;
+        size_t writeIndex = 0;
+        for(size_t readIndex = 0;
+            readIndex < _runtime->playingTimelineLabels.size(); ++readIndex) {
+            const std::string label =
+                _runtime->playingTimelineLabels[readIndex];
+            const auto stateIt = _runtime->timelines.find(label);
+            const auto bindingIt =
+                _runtime->activeMotion->timelineControlByLabel.find(label);
+            if(stateIt == _runtime->timelines.end() ||
+               bindingIt ==
+                   _runtime->activeMotion->timelineControlByLabel.end()) {
+                _runtime->playingTimelineLabels[writeIndex++] = label;
+                continue;
+            }
+
+            auto &state = stateIt->second;
+            const auto &binding = bindingIt->second;
+            // Native pass() only consumes one-shot timelines. Looping control
+            // timelines keep running and are left in the active list.
+            if(binding.loopBegin >= 0.0 || !state.playing) {
+                if(state.playing) {
+                    _runtime->playingTimelineLabels[writeIndex++] = label;
+                }
+                continue;
+            }
+
+            if((state.flags & 2) != 0) {
+                if((state.flags & 4) != 0) {
+                    _runtime->playingTimelineLabels[writeIndex++] = label;
+                    continue;
+                }
+                setTimelineBlendLike_0x6735AC(
+                    label, true, 0.0, 20.0, 0.0);
+                state.flags |= 4;
+            }
+
+            if(!state.controlInitialized ||
+               state.controlFrameCursor.size() != binding.tracks.size()) {
+                seekTimelineControlStateLike_0x66EE30(
+                    state, binding, std::max(state.currentTime, 0.0));
+            }
+            if(state.controlTrackAnimators.size() < binding.tracks.size()) {
+                state.controlTrackAnimators.resize(binding.tracks.size());
+            }
+            if(state.controlTrackValues.size() < binding.tracks.size()) {
+                state.controlTrackValues.resize(binding.tracks.size(), 0.0f);
+            }
+
+            for(size_t trackIndex = 0; trackIndex < binding.tracks.size();
+                ++trackIndex) {
+                const auto &track = binding.tracks[trackIndex];
+                int cursor = state.controlFrameCursor[trackIndex];
+                for(size_t frameIndex = static_cast<size_t>(cursor + 1);
+                    frameIndex < track.frames.size(); ++frameIndex) {
+                    const auto &frame = track.frames[frameIndex];
+                    if(!frame.isTypeZero) {
+                        if((state.flags & 2) != 0 &&
+                           !track.instantVariable) {
+                            scheduleTimelineControlAnimatorLike_0x6646E0(
+                                state, trackIndex, frame.value, frame.time,
+                                frame.easingWeight);
+                        } else {
+                            setVariableResolvedWeightLike_0x671228(
+                                track.label, static_cast<double>(frame.value),
+                                frame.time, frame.easingWeight);
+                        }
+                    }
+                    cursor = static_cast<int>(frameIndex);
+                }
+                state.controlFrameCursor[trackIndex] = cursor;
+            }
+
+            state.controlLastAppliedTime = binding.lastTime;
+            if((state.flags & 4) != 0) {
+                _runtime->playingTimelineLabels[writeIndex++] = label;
+            } else {
+                state.playing = false;
+                state.wasPlaying = false;
+            }
+        }
+        _runtime->playingTimelineLabels.resize(writeIndex);
+        _allplaying = !_runtime->playingTimelineLabels.empty();
+        if(!_allplaying) {
+            disableAutoProgress();
+        }
+        _emoteDirty = true;
+    }
+
+    void Player::ensureEmoteControlStateInitialized() {
+        if(const auto *extension = motionPlayerExtension();
+           extension && extension->ensureControlState) {
+            extension->ensureControlState(*this);
+        }
+    }
+
+    void Player::stepAutoBlinkControllersLike_0x660FBC(double dt) {
+        if(const auto *extension = motionPlayerExtension();
+           extension && extension->stepAutoBlink) {
+            extension->stepAutoBlink(*this, dt);
+        }
+    }
+
+    void Player::stepEmotePhysicsLike_0x678B28(double dt) {
+        if(const auto *extension = motionPlayerExtension();
+           extension && extension->stepPhysics) {
+            extension->stepPhysics(*this, dt);
         }
     }
 
@@ -10942,6 +11624,13 @@ namespace motion {
 
         _evalResultValues.clear();
 
+        ensureEmoteControlStateInitialized();
+        const auto *extension = motionPlayerExtension();
+        if(extension && extension->hasActivePhysics &&
+           extension->hasActivePhysics(*this)) {
+            ensureNodeTreeBuilt();
+        }
+
         // Aligned to Player_preProgress (0x671764): timeline advancement
         // happens before controller stepping inside Player_progress.
         std::unordered_map<std::string, double> prevTimes;
@@ -10975,7 +11664,10 @@ namespace motion {
             remainingControllerStep -= controllerDt;
         }
 
+        stepAutoBlinkControllersLike_0x660FBC(actualDelta);
+
         applyEvalResultPostProcessLike_0x67CC9C();
+        stepEmotePhysicsLike_0x678B28(actualDelta);
 
         // Camera velocity/friction moved to updateLayers pre-loop (0x6BB360..0x6BB42C)
 

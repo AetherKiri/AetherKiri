@@ -3,6 +3,7 @@
 //
 #pragma once
 #include <memory>
+#include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -28,6 +29,7 @@ namespace motion {
         struct CachedModuleEntry {
             std::string key;
             tTJSVariant module;
+            std::uint64_t loadGeneration = 0;
         };
         [[nodiscard]] std::vector<CachedModuleEntry> uniqueCachedModules() const;
         [[nodiscard]] static tjs_int getEmotePSBDecryptSeed();
@@ -46,6 +48,9 @@ namespace motion {
     private:
         struct State {
             std::unordered_map<std::string, tTJSVariant> loadedModules;
+            std::unordered_map<iTJSDispatch2 *, std::uint64_t>
+                moduleLoadGenerations;
+            std::uint64_t nextLoadGeneration = 0;
             std::string lastLoadedPath;
             tTJSVariant lastLoadedModule;
         };

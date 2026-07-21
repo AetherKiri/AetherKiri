@@ -158,11 +158,14 @@ private submodule recursively. Fork and Dependabot pull requests cannot access
 repository secrets, so those untrusted runs use the public fallback.
 
 The internal package extends `motionplayer`; it does not replace the public
-target or its source list. The public registration layer remains the single
-script-facing entry point and selects the separately namespaced internal
-backend when available. Internal builds run the public motionplayer contract
-tests against both backends, plus private E-mote tests. A package/API mismatch
-stops configuration instead of silently building an incompatible combination.
+target or copy its source tree. The public backend remains the single
+script-facing implementation. When available, the private package registers a
+small versioned extension that supplies only the newly added E-mote module
+recognition, authored blink/physics metadata, automatic blinking,
+bust/hair/tail physics, precise repeated-label stencil policy, and private
+state persistence. Both configurations run the same public motionplayer
+tests. A package/API mismatch stops configuration instead of silently
+building an incompatible combination.
 
 Common builds:
 

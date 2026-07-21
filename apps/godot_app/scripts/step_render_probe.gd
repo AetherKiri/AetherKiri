@@ -11,6 +11,7 @@ const POINTER_SCROLL := 4
 var player
 var rect: TextureRect
 var test_config := {}
+var current_surface_size := Vector2i.ZERO
 
 func _initialize() -> void:
     test_config = ProbeConfig.load()
@@ -54,6 +55,7 @@ func _initialize() -> void:
             player.set_engine_option(String(key), String(engine_options[key]))
     var surface_size: Vector2i = ProbeConfig.surface_size(test_config)
     player.set_surface_size(surface_size.x, surface_size.y)
+    current_surface_size = surface_size
 
     var game_path: String = ProbeConfig.require_game_path(test_config)
     if game_path.is_empty():
@@ -586,7 +588,15 @@ func _map_window_point(pos: Vector2) -> Vector2:
     var inside := pos - offset
     if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
         return Vector2(-1.0, -1.0)
-    return inside / scale
+    var texture_point := inside / scale
+    if current_surface_size.x <= 0 or current_surface_size.y <= 0:
+        return texture_point
+    if absf(float(current_surface_size.x) - tex_size.x) <= 0.5 and absf(float(current_surface_size.y) - tex_size.y) <= 0.5:
+        return texture_point
+    return Vector2(
+        texture_point.x * float(current_surface_size.x) / tex_size.x,
+        texture_point.y * float(current_surface_size.y) / tex_size.y
+    )
 
 func _parse_clicks(spec: String) -> Array[Vector2]:
     var clicks: Array[Vector2] = []

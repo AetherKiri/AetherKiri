@@ -9,6 +9,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "PlayerInternal.h"
@@ -528,6 +529,60 @@ namespace motion {
         // latter for nested effects. Returning the aggregate state here makes
         // a looping child permanently lock every motion-backed button.
         return _runtime && !_runtime->playingTimelineLabels.empty();
+    }
+
+    bool Player::getEmoteAnimating() const {
+        // libgame.so sub_671378 does not read Player+0x44b (allplaying) and it
+        // does not treat a playing timeline as blocking by itself. It first
+        // collects the controller tracks owned by active timelines, then skips
+        // matching controller animators while testing the five controller
+        // buckets. Those tracks include perpetual blink/breathing/idle motion;
+        // reporting them as `animating` makes MotionAffineSourceLayer wait at
+        // every KAG line end forever.
+        const auto animatorActive = [](const auto &state) {
+            return state.active || !state.queue.empty();
+        };
+
+        std::unordered_set<std::string> timelineControlledLabels;
+        if(_runtime && _runtime->activeMotion) {
+            for(const auto &timelineLabel :
+                _runtime->playingTimelineLabels) {
+                const auto stateIt =
+                    _runtime->timelines.find(timelineLabel);
+                if(stateIt == _runtime->timelines.end() ||
+                   !stateIt->second.playing) {
+                    continue;
+                }
+                const auto controlIt = _runtime->activeMotion
+                    ->timelineControlByLabel.find(timelineLabel);
+                if(controlIt == _runtime->activeMotion
+                                    ->timelineControlByLabel.end()) {
+                    continue;
+                }
+                for(const auto &track : controlIt->second.tracks) {
+                    if(!track.label.empty()) {
+                        timelineControlledLabels.insert(track.label);
+                    }
+                }
+            }
+        }
+
+        const auto bucketBlocks = [&](const auto &bucket) {
+            for(const auto &[label, state] : bucket) {
+                if(animatorActive(state) &&
+                   timelineControlledLabels.find(label) ==
+                       timelineControlledLabels.end()) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        return bucketBlocks(_type4ControllerAnimators) |
+            bucketBlocks(_type5ControllerAnimators) |
+            bucketBlocks(_type6ControllerAnimators) |
+            bucketBlocks(_type7ControllerAnimators) |
+            bucketBlocks(_type8ControllerAnimators);
     }
 
     void Player::enableAutoProgress(iTJSDispatch2 *objthis) {
@@ -1159,6 +1214,7 @@ namespace motion {
         _evalResultListIndex.clear();
         _mirrorPositiveCache.clear();
         _mirrorNegativeCache.clear();
+        _motionExtensionState.reset();
         disableAutoProgress();
 
         if(snapshot) {
@@ -1488,6 +1544,20 @@ namespace motion {
                     *_runtime->activeMotion, detail::narrow(_chara), label);
             };
 
+        // An E-mote module separates the persistent model motion (for
+        // example metadata base.motion = "全体構造") from the independently
+        // playing main/difference timelines ("waiting_loop", expressions,
+        // and so on).  Those controller labels do not select the geometry
+        // object.  The native Emote wrapper keeps the metadata motion bound
+        // while timelines only drive variables.  Falling through to the
+        // playing label here made clip lookup fail and build the snapshot's
+        // union of head/body/face object trees as unrelated root layers.
+        if(_runtime->isEmoteMode && !_motionKey.IsEmpty()) {
+            if(const auto *clip = selectByLabel(detail::narrow(_motionKey))) {
+                return clip;
+            }
+        }
+
         for(const auto &label : _runtime->playingTimelineLabels) {
             if(const auto *clip = selectByLabel(label)) {
                 return clip;
@@ -1644,38 +1714,234 @@ namespace motion {
         return 0.0;
     }
 
-    // Aligned to libkrkr2.so sub_6709AC at 0x6709AC:
-    // initPhysics(min, max, amp, freq1, freq2) creates a Spring physics object
-    // at player+1128 (1564 bytes, sub_670AFC). Stores params at player+1136..1152.
-    // The Spring physics system drives emote hair/bust/parts oscillation.
-    // Full spring simulation not yet implemented for web port — store params only.
+    // E-mote scripts pass the metadata object to initPhysics; the native
+    // Player has already retained the equivalent PSB controller payloads.
+    // Rebuild every state object so loading a save never carries momentum or
+    // a half-finished blink from the previous character module.
     void Player::initPhysics() {
-        // Parameters come from NCB: initPhysics(min, max, amp, freq1, freq2)
-        // In the NCB binding this is a raw callback. The actual parameters
-        // are parsed by the NCB wrapper. Since we store the scale values
-        // (hairScale/partsScale/bustScale) and these physics params would
-        // drive them, we log but accept the call.
-        // player+1128 = physics object (not created)
-        // player+1136..1152 = min, max, amplitude, freq1, freq2
+        ensureMotionLoaded();
+        _motionExtensionState.reset();
+        ensureEmoteControlStateInitialized();
+        _emoteDirty = true;
+        _layersDirty = true;
     }
     tTJSVariant Player::serialize() {
         ensureMotionLoaded();
+        ensureEmoteControlStateInitialized();
+
+        const auto serializeAnimator = [](const auto &state) {
+            std::vector<tTJSVariant> queue;
+            queue.reserve(state.queue.size());
+            for(const auto &keyframe : state.queue) {
+                queue.push_back(detail::makeDictionary({
+                    { "value", static_cast<double>(keyframe.value) },
+                    { "duration", static_cast<double>(keyframe.duration) },
+                    { "weight", static_cast<double>(keyframe.weight) },
+                }));
+            }
+            return detail::makeDictionary({
+                { "value", static_cast<double>(state.currentValue) },
+                { "current", static_cast<double>(state.currentValue) },
+                { "start", static_cast<double>(state.startValue) },
+                { "target", static_cast<double>(state.targetValue) },
+                { "progress", static_cast<double>(state.progress) },
+                { "duration", static_cast<double>(state.duration) },
+                { "weight", static_cast<double>(state.weight) },
+                { "active", state.active },
+                // Native controller serializers call this request queue `rq`.
+                { "rq", detail::makeArray(queue) },
+            });
+        };
+
+        const auto serializeAnimatorBucket =
+            [&serializeAnimator](const auto &bucket) {
+                std::vector<std::string> labels;
+                labels.reserve(bucket.size());
+                for(const auto &[label, state] : bucket) {
+                    labels.push_back(label);
+                }
+                std::sort(labels.begin(), labels.end());
+
+                std::vector<tTJSVariant> result;
+                result.reserve(labels.size());
+                for(const auto &label : labels) {
+                    const auto &state = bucket.at(label);
+                    result.push_back(detail::makeDictionary({
+                        { "label", detail::widen(label) },
+                        { "value", static_cast<double>(state.currentValue) },
+                        { "phase", state.active ? 1 : 0 },
+                        { "speed", static_cast<double>(state.duration) },
+                        { "tick", static_cast<double>(state.progress) },
+                        { "animator", serializeAnimator(state) },
+                    }));
+                }
+                return detail::makeArray(result);
+            };
+
+        const auto serializeOuterForce = [](const OuterForceState &state) {
+            return detail::makeDictionary({
+                { "active", state.active },
+                { "x", state.x },
+                { "y", state.y },
+                { "transition", state.transition },
+                { "ease", state.ease },
+            });
+        };
 
         std::vector<std::pair<std::string, tTJSVariant>> variables;
-        std::unordered_set<std::string> seenVariables;
+        std::unordered_set<std::string> authoredVariables;
         if(_runtime->activeMotion) {
-            for(const auto &label : _runtime->activeMotion->variableLabels) {
-                seenVariables.insert(label);
-                variables.emplace_back(label, getVariable(detail::widen(label)));
+            const auto &motion = *_runtime->activeMotion;
+            const auto remember = [&authoredVariables](const std::string &label) {
+                if(!label.empty()) {
+                    authoredVariables.insert(label);
+                }
+            };
+
+            for(const auto &label : motion.variableLabels) {
+                remember(label);
+            }
+            for(const auto &[label, _] : motion.variableRanges) {
+                remember(label);
+            }
+            for(const auto &[label, _] : motion.variableFrames) {
+                remember(label);
+            }
+            for(const auto &[label, binding] : motion.controllerBindings) {
+                (void)binding;
+                remember(label);
+            }
+            for(const auto &[timelineLabel, binding] :
+                motion.timelineControlByLabel) {
+                (void)timelineLabel;
+                for(const auto &track : binding.tracks) {
+                    remember(track.label);
+                }
+            }
+            const auto rememberClipParameters = [&remember](
+                                                    const detail::MotionClip &clip) {
+                for(const auto &parameter : clip.parameters) {
+                    remember(parameter.id);
+                }
+            };
+            for(const auto &[label, clip] : motion.clipsByLabel) {
+                (void)label;
+                rememberClipParameters(clip);
+            }
+            for(const auto &[owner, clips] : motion.clipsByOwnerAndLabel) {
+                (void)owner;
+                for(const auto &[label, clip] : clips) {
+                    (void)label;
+                    rememberClipParameters(clip);
+                }
             }
         }
         for(const auto &[label, value] : _variableValues) {
-            if(seenVariables.insert(label).second) {
+            // Native Player::serialize (libgame.so sub_673220) retains
+            // authored E-mote controls through its typed controller buckets
+            // and timeline/physics state.  It does not enumerate the PSB's
+            // variable range table.  Doing that here used getVariable's
+            // range fallback and serialized values such as body_slant=-30
+            // even when the current neutral value was zero.  Restoring that
+            // dictionary after a resolution/model switch permanently tilted
+            // the character and displaced the physics anchors.
+            //
+            // Keep the Aether-only dictionary solely for genuinely dynamic
+            // script variables which are not authored by the active motion.
+            if(authoredVariables.find(label) == authoredVariables.end()) {
                 variables.emplace_back(label, value);
             }
         }
 
+        std::vector<tTJSVariant> richTimelines;
+        for(const auto &label : _runtime->playingTimelineLabels) {
+            const auto it = _runtime->timelines.find(label);
+            if(it == _runtime->timelines.end() || !it->second.playing) {
+                continue;
+            }
+            const auto &state = it->second;
+            richTimelines.push_back(detail::makeDictionary({
+                { "label", detail::widen(label) },
+                { "flags", static_cast<tjs_int>(state.flags | 1) },
+                { "curTime", state.currentTime },
+                { "currentTime", state.currentTime },
+                { "blendRatio", state.blendRatio },
+                { "blendRatioCtrl", serializeAnimator(state.blendAnimator) },
+                { "s", state.blendAutoStop },
+            }));
+        }
+
+        const auto base = detail::makeDictionary({
+            { "c", detail::makeDictionary({
+                  { "x", _emoteCoordState.x },
+                  { "y", _emoteCoordState.y },
+                  { "transition", _emoteCoordState.transition },
+                  { "ease", _emoteCoordState.ease },
+              }) },
+            { "scale", detail::makeDictionary({
+                  { "value", _emoteScaleState.value },
+                  { "transition", _emoteScaleState.transition },
+                  { "ease", _emoteScaleState.ease },
+              }) },
+            { "color", detail::makeDictionary({
+                  { "value", static_cast<tjs_int64>(_emoteColorState.packed) },
+                  { "transition", _emoteColorState.transition },
+                  { "ease", _emoteColorState.ease },
+              }) },
+            { "r", detail::makeDictionary({
+                  { "value", _emoteRotState.value },
+                  { "transition", _emoteRotState.transition },
+                  { "ease", _emoteRotState.ease },
+              }) },
+        });
+        const auto outerForces = detail::makeDictionary({
+            { "bust", serializeOuterForce(_bustOuterForce) },
+            { "h", serializeOuterForce(_hairOuterForce) },
+            { "parts", serializeOuterForce(_partsOuterForce) },
+        });
+        tTJSVariant eye = detail::makeArray({});
+        tTJSVariant bust = detail::makeArray({});
+        tTJSVariant hair = detail::makeArray({});
+        tTJSVariant parts = detail::makeArray({});
+        if(const auto *extension = motionPlayerExtension();
+           extension && extension->serializeControlState) {
+            extension->serializeControlState(
+                *this, eye, bust, hair, parts);
+        }
+        const auto physics = detail::makeDictionary({
+            { "bust", bust },
+            { "h", hair },
+            { "parts", parts },
+            { "wind", detail::makeDictionary({
+                  { "active", _windState.active },
+                  { "minAngle", _windState.minAngle },
+                  { "maxAngle", _windState.maxAngle },
+                  { "amplitude", _windState.amplitude },
+                  { "freqX", _windState.freqX },
+                  { "freqY", _windState.freqY },
+                  { "phase", _windState.phase },
+                  { "prevPhase", _windState.prevPhase },
+                  { "scaledAmplitude", _windState.scaledAmplitude },
+                  { "counter", _windState.counter },
+              }) },
+        });
+
+        const auto legacyTimelines = getPlayingTimelineInfoList();
+
         return detail::makeDictionary({
+            // Native libgame.so Player::serialize keys (sub_673220).
+            { "t", detail::makeArray(richTimelines) },
+            { "eye", eye },
+            { "eyebrow", serializeAnimatorBucket(_type5ControllerAnimators) },
+            { "m", serializeAnimatorBucket(_type6ControllerAnimators) },
+            { "transition", serializeAnimatorBucket(_type7ControllerAnimators) },
+            { "s", serializeAnimatorBucket(_type8ControllerAnimators) },
+            { "base", base },
+            { "o", outerForces },
+            // Aether extension: native serialization does not retain every
+            // particle coordinate, but doing so prevents a visible dynamics
+            // pop on save/load.
+            { "physics", physics },
             { "chara", _chara },
             { "motion", _motionKey },
             { "resolution", _resolution },
@@ -1683,7 +1949,7 @@ namespace motion {
             { "speed", _speed },
             { "outline", tTJSVariant(_outline) },
             { "variables", detail::makeDictionary(variables) },
-            { "timelines", getPlayingTimelineInfoList() },
+            { "timelines", legacyTimelines },
         });
     }
 
@@ -1724,6 +1990,120 @@ namespace motion {
             _outline = ttstr(value);
         }
 
+        ensureMotionLoaded();
+        ensureEmoteControlStateInitialized();
+
+        const auto readNumber = [](const tTJSVariant &object,
+                                   const tjs_char *name,
+                                   double &target) {
+            tTJSVariant stored;
+            if(getObjectProperty(object, name, stored) &&
+               stored.Type() != tvtVoid) {
+                target = stored.AsReal();
+                return true;
+            }
+            return false;
+        };
+        const auto readBool = [](const tTJSVariant &object,
+                                 const tjs_char *name,
+                                 bool &target) {
+            tTJSVariant stored;
+            if(getObjectProperty(object, name, stored) &&
+               stored.Type() != tvtVoid) {
+                target = stored.AsInteger() != 0;
+                return true;
+            }
+            return false;
+        };
+
+        const auto restoreVariableAnimator = [&readNumber, &readBool](
+                                                   const tTJSVariant &object,
+                                                   VariableAnimatorState &state) {
+            if(object.Type() != tvtObject ||
+               object.AsObjectNoAddRef() == nullptr) {
+                return;
+            }
+            double number = 0.0;
+            if(readNumber(object, TJS_W("current"), number) ||
+               readNumber(object, TJS_W("value"), number)) {
+                state.currentValue = static_cast<float>(number);
+            }
+            if(readNumber(object, TJS_W("start"), number)) {
+                state.startValue = static_cast<float>(number);
+            }
+            if(readNumber(object, TJS_W("target"), number)) {
+                state.targetValue = static_cast<float>(number);
+            }
+            if(readNumber(object, TJS_W("progress"), number) ||
+               readNumber(object, TJS_W("tick"), number)) {
+                state.progress = static_cast<float>(number);
+            }
+            if(readNumber(object, TJS_W("duration"), number) ||
+               readNumber(object, TJS_W("speed"), number)) {
+                state.duration = static_cast<float>(number);
+            }
+            if(readNumber(object, TJS_W("weight"), number)) {
+                state.weight = static_cast<float>(number);
+            }
+            readBool(object, TJS_W("active"), state.active);
+
+            tTJSVariant queue;
+            if(getObjectProperty(object, TJS_W("rq"), queue) &&
+               queue.Type() == tvtObject &&
+               queue.AsObjectNoAddRef() != nullptr) {
+                state.queue.clear();
+                const auto count = getObjectCount(queue);
+                for(tjs_int index = 0; index < count; ++index) {
+                    tTJSVariant item;
+                    if(!getArrayItem(queue, index, item) ||
+                       item.Type() != tvtObject) {
+                        continue;
+                    }
+                    VariableKeyframe keyframe;
+                    if(readNumber(item, TJS_W("value"), number)) {
+                        keyframe.value = static_cast<float>(number);
+                    }
+                    if(readNumber(item, TJS_W("duration"), number)) {
+                        keyframe.duration = static_cast<float>(number);
+                    }
+                    if(readNumber(item, TJS_W("weight"), number)) {
+                        keyframe.weight = static_cast<float>(number);
+                    }
+                    state.queue.push_back(keyframe);
+                }
+            }
+        };
+
+        const auto restoreAnimatorBucket = [&restoreVariableAnimator](
+                                               const tTJSVariant &array,
+                                               auto &bucket) {
+            if(array.Type() != tvtObject ||
+               array.AsObjectNoAddRef() == nullptr) {
+                return;
+            }
+            bucket.clear();
+            const auto count = getObjectCount(array);
+            for(tjs_int index = 0; index < count; ++index) {
+                tTJSVariant item;
+                if(!getArrayItem(array, index, item) ||
+                   item.Type() != tvtObject) {
+                    continue;
+                }
+                tTJSVariant labelValue;
+                if(!getObjectProperty(item, TJS_W("label"), labelValue) ||
+                   labelValue.Type() == tvtVoid) {
+                    continue;
+                }
+                const auto label = detail::narrow(labelValue);
+                tTJSVariant animator;
+                if(!getObjectProperty(item, TJS_W("animator"), animator) ||
+                   animator.Type() != tvtObject) {
+                    animator = item;
+                }
+                restoreVariableAnimator(animator, bucket[label]);
+            }
+        };
+
         if(getObjectProperty(data, TJS_W("variables"), value) &&
            value.Type() == tvtObject && value.AsObjectNoAddRef() != nullptr) {
             DictionaryEnumerator callback;
@@ -1737,9 +2117,159 @@ namespace motion {
             }
         }
 
+        for(const auto &[name, bucket] : std::initializer_list<
+                std::pair<const tjs_char *,
+                          std::unordered_map<std::string,
+                                             VariableAnimatorState> *>>{
+                { TJS_W("eyebrow"), &_type5ControllerAnimators },
+                { TJS_W("m"), &_type6ControllerAnimators },
+                { TJS_W("transition"), &_type7ControllerAnimators },
+                { TJS_W("s"), &_type8ControllerAnimators },
+            }) {
+            if(getObjectProperty(data, name, value) &&
+               value.Type() == tvtObject) {
+                restoreAnimatorBucket(value, *bucket);
+            }
+        }
+
+        tTJSVariant serializedEye;
+        getObjectProperty(data, TJS_W("eye"), serializedEye);
+
+        if(getObjectProperty(data, TJS_W("base"), value) &&
+           value.Type() == tvtObject) {
+            tTJSVariant component;
+            if(getObjectProperty(value, TJS_W("c"), component) &&
+               component.Type() == tvtObject) {
+                readNumber(component, TJS_W("x"), _emoteCoordState.x);
+                readNumber(component, TJS_W("y"), _emoteCoordState.y);
+                readNumber(component, TJS_W("transition"),
+                           _emoteCoordState.transition);
+                readNumber(component, TJS_W("ease"), _emoteCoordState.ease);
+                setX(_emoteCoordState.x);
+                setY(_emoteCoordState.y);
+            }
+            if(getObjectProperty(value, TJS_W("scale"), component) &&
+               component.Type() == tvtObject) {
+                const double previousScale = _emoteScaleState.value;
+                readNumber(component, TJS_W("value"), _emoteScaleState.value);
+                readNumber(component, TJS_W("transition"),
+                           _emoteScaleState.transition);
+                readNumber(component, TJS_W("ease"), _emoteScaleState.ease);
+                if(LOGGER &&
+                   std::getenv("AETHERKIRI_EMOTE_AFFINE_TRACE") &&
+                   std::fabs(previousScale - _emoteScaleState.value) > 1e-7) {
+                    LOGGER->info(
+                        "[EMOTE_AFFINE] player={} motion={} unserializeScale={:.6f}->{:.6f}",
+                        static_cast<const void *>(this),
+                        _runtime && _runtime->activeMotion
+                            ? _runtime->activeMotion->path
+                            : std::string{},
+                        previousScale, _emoteScaleState.value);
+                }
+            }
+            if(getObjectProperty(value, TJS_W("r"), component) &&
+               component.Type() == tvtObject) {
+                readNumber(component, TJS_W("value"), _emoteRotState.value);
+                readNumber(component, TJS_W("transition"),
+                           _emoteRotState.transition);
+                readNumber(component, TJS_W("ease"), _emoteRotState.ease);
+                _rotateAngle = _emoteRotState.value;
+            }
+            if(getObjectProperty(value, TJS_W("color"), component) &&
+               component.Type() == tvtObject) {
+                double packed = static_cast<double>(_emoteColorState.packed);
+                if(readNumber(component, TJS_W("value"), packed)) {
+                    _emoteColorState.packed = static_cast<tjs_uint32>(packed);
+                    const auto color = _emoteColorState.packed;
+                    _emoteColorState.rgbaBytes[0] = static_cast<float>(
+                        static_cast<std::uint8_t>(color >> 16));
+                    _emoteColorState.rgbaBytes[1] = static_cast<float>(
+                        static_cast<std::uint8_t>(color >> 8));
+                    _emoteColorState.rgbaBytes[2] = static_cast<float>(
+                        static_cast<std::uint8_t>(color));
+                    _emoteColorState.rgbaBytes[3] = static_cast<float>(
+                        static_cast<std::uint8_t>(color >> 24));
+                }
+                readNumber(component, TJS_W("transition"),
+                           _emoteColorState.transition);
+                readNumber(component, TJS_W("ease"), _emoteColorState.ease);
+            }
+        }
+
+        const auto restoreOuterForce = [&readNumber, &readBool](
+                                           const tTJSVariant &object,
+                                           OuterForceState &state) {
+            if(object.Type() != tvtObject) {
+                return;
+            }
+            readBool(object, TJS_W("active"), state.active);
+            readNumber(object, TJS_W("x"), state.x);
+            readNumber(object, TJS_W("y"), state.y);
+            readNumber(object, TJS_W("transition"), state.transition);
+            readNumber(object, TJS_W("ease"), state.ease);
+        };
+        if(getObjectProperty(data, TJS_W("o"), value) &&
+           value.Type() == tvtObject) {
+            tTJSVariant force;
+            if(getObjectProperty(value, TJS_W("bust"), force)) {
+                restoreOuterForce(force, _bustOuterForce);
+            }
+            if(getObjectProperty(value, TJS_W("h"), force)) {
+                restoreOuterForce(force, _hairOuterForce);
+            }
+            if(getObjectProperty(value, TJS_W("parts"), force)) {
+                restoreOuterForce(force, _partsOuterForce);
+            }
+        }
+
+        tTJSVariant serializedBust;
+        tTJSVariant serializedHair;
+        tTJSVariant serializedParts;
+        if(getObjectProperty(data, TJS_W("physics"), value) &&
+           value.Type() == tvtObject) {
+            tTJSVariant component;
+            getObjectProperty(value, TJS_W("bust"), serializedBust);
+            getObjectProperty(value, TJS_W("h"), serializedHair);
+            getObjectProperty(value, TJS_W("parts"), serializedParts);
+            if(getObjectProperty(value, TJS_W("wind"), component) &&
+               component.Type() == tvtObject) {
+                readBool(component, TJS_W("active"), _windState.active);
+                readNumber(component, TJS_W("minAngle"), _windState.minAngle);
+                readNumber(component, TJS_W("maxAngle"), _windState.maxAngle);
+                readNumber(component, TJS_W("amplitude"), _windState.amplitude);
+                readNumber(component, TJS_W("freqX"), _windState.freqX);
+                readNumber(component, TJS_W("freqY"), _windState.freqY);
+                readNumber(component, TJS_W("phase"), _windState.phase);
+                readNumber(component, TJS_W("prevPhase"), _windState.prevPhase);
+                readNumber(component, TJS_W("scaledAmplitude"),
+                           _windState.scaledAmplitude);
+                double counter = _windState.counter;
+                if(readNumber(component, TJS_W("counter"), counter)) {
+                    _windState.counter = static_cast<int>(counter);
+                }
+            }
+        }
+        if(const auto *extension = motionPlayerExtension();
+           extension && extension->unserializeControlState) {
+            extension->unserializeControlState(
+                *this, serializedEye, serializedBust,
+                serializedHair, serializedParts);
+        }
+
         bool restoredTimelines = false;
-        if(getObjectProperty(data, TJS_W("timelines"), value) &&
-           value.Type() == tvtObject && value.AsObjectNoAddRef() != nullptr) {
+        tTJSVariant serializedTimelines;
+        bool hasSerializedTimelines =
+            getObjectProperty(data, TJS_W("t"), serializedTimelines) &&
+            serializedTimelines.Type() == tvtObject &&
+            serializedTimelines.AsObjectNoAddRef() != nullptr;
+        if(!hasSerializedTimelines) {
+            hasSerializedTimelines =
+                getObjectProperty(data, TJS_W("timelines"),
+                                  serializedTimelines) &&
+                serializedTimelines.Type() == tvtObject &&
+                serializedTimelines.AsObjectNoAddRef() != nullptr;
+        }
+        if(hasSerializedTimelines) {
             ensureMotionLoaded();
             if(_runtime->activeMotion && _runtime->timelines.empty()) {
                 detail::primeTimelineStates(_runtime->timelines,
@@ -1747,10 +2277,11 @@ namespace motion {
             }
             _runtime->playingTimelineLabels.clear();
 
-            const auto count = getObjectCount(value);
+            const auto count = getObjectCount(serializedTimelines);
             for(tjs_int index = 0; index < count; ++index) {
                 tTJSVariant item;
-                if(!getArrayItem(value, index, item) || item.Type() != tvtObject ||
+                if(!getArrayItem(serializedTimelines, index, item) ||
+                   item.Type() != tvtObject ||
                    item.AsObjectNoAddRef() == nullptr) {
                     continue;
                 }
@@ -1783,7 +2314,10 @@ namespace motion {
                 }
 
                 tTJSVariant currentTimeValue;
-                if(getObjectProperty(item, TJS_W("currentTime"), currentTimeValue) &&
+                if((getObjectProperty(item, TJS_W("currentTime"),
+                                      currentTimeValue) ||
+                    getObjectProperty(item, TJS_W("curTime"),
+                                      currentTimeValue)) &&
                    currentTimeValue.Type() != tvtVoid) {
                     it->second.currentTime = currentTimeValue.AsReal();
                 }
@@ -1793,6 +2327,62 @@ namespace motion {
                    blendRatioValue.Type() != tvtVoid) {
                     it->second.blendRatio = blendRatioValue.AsReal();
                 }
+
+                tTJSVariant blendAnimatorValue;
+                if(getObjectProperty(item, TJS_W("blendRatioCtrl"),
+                                     blendAnimatorValue) &&
+                   blendAnimatorValue.Type() == tvtObject) {
+                    auto &animator = it->second.blendAnimator;
+                    double number = 0.0;
+                    if(readNumber(blendAnimatorValue, TJS_W("current"),
+                                  number) ||
+                       readNumber(blendAnimatorValue, TJS_W("value"), number)) {
+                        animator.currentValue = static_cast<float>(number);
+                    }
+                    if(readNumber(blendAnimatorValue, TJS_W("start"), number)) {
+                        animator.startValue = static_cast<float>(number);
+                    }
+                    if(readNumber(blendAnimatorValue, TJS_W("target"), number)) {
+                        animator.targetValue = static_cast<float>(number);
+                    }
+                    if(readNumber(blendAnimatorValue, TJS_W("progress"), number)) {
+                        animator.progress = static_cast<float>(number);
+                    }
+                    if(readNumber(blendAnimatorValue, TJS_W("duration"), number)) {
+                        animator.duration = static_cast<float>(number);
+                    }
+                    if(readNumber(blendAnimatorValue, TJS_W("weight"), number)) {
+                        animator.weight = static_cast<float>(number);
+                    }
+                    readBool(blendAnimatorValue, TJS_W("active"),
+                             animator.active);
+                    tTJSVariant queue;
+                    if(getObjectProperty(blendAnimatorValue, TJS_W("rq"), queue) &&
+                       queue.Type() == tvtObject) {
+                        animator.queue.clear();
+                        const auto queueCount = getObjectCount(queue);
+                        for(tjs_int queueIndex = 0; queueIndex < queueCount;
+                            ++queueIndex) {
+                            tTJSVariant queued;
+                            if(!getArrayItem(queue, queueIndex, queued) ||
+                               queued.Type() != tvtObject) {
+                                continue;
+                            }
+                            detail::TimelineControlKeyframe keyframe;
+                            if(readNumber(queued, TJS_W("value"), number)) {
+                                keyframe.value = static_cast<float>(number);
+                            }
+                            if(readNumber(queued, TJS_W("duration"), number)) {
+                                keyframe.duration = static_cast<float>(number);
+                            }
+                            if(readNumber(queued, TJS_W("weight"), number)) {
+                                keyframe.weight = static_cast<float>(number);
+                            }
+                            animator.queue.push_back(keyframe);
+                        }
+                    }
+                }
+                readBool(item, TJS_W("s"), it->second.blendAutoStop);
             }
         }
 
@@ -1810,6 +2400,8 @@ namespace motion {
         }
 
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        _layersDirty = true;
+        _emoteDirty = true;
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer_setCoord (0x5301EC):
@@ -1829,10 +2421,22 @@ namespace motion {
     // the wrapper multiplies baseScale * userScale, then forwards the final
     // scalar plus transition/ease to the inner Player scale animator.
     void Player::setEmoteScale(double scale, double transition, double ease) {
+        const double previousScale = _emoteScaleState.value;
         _emoteScaleState.value = scale;
         _emoteScaleState.transition = transition;
         _emoteScaleState.ease = ease;
         _emoteDirty = true;
+        _layersDirty = true;
+        if(LOGGER && std::getenv("AETHERKIRI_EMOTE_AFFINE_TRACE") &&
+           std::fabs(previousScale - scale) > 1e-7) {
+            LOGGER->info(
+                "[EMOTE_AFFINE] player={} motion={} innerScale={:.6f}->{:.6f}",
+                static_cast<const void *>(this),
+                _runtime && _runtime->activeMotion
+                    ? _runtime->activeMotion->path
+                    : std::string{},
+                previousScale, scale);
+        }
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer_setRot (0x5302E4):
@@ -1844,6 +2448,7 @@ namespace motion {
         _emoteRotState.transition = transition;
         _emoteRotState.ease = ease;
         _emoteDirty = true;
+        _layersDirty = true;
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer_setColor (0x530314):
@@ -1862,7 +2467,9 @@ namespace motion {
             static_cast<float>(static_cast<std::uint8_t>(color >> 24));
         _emoteColorState.transition = transition;
         _emoteColorState.ease = ease;
+        _colorWeightPacked = swapPackedRbLike_0x6CD710(color);
         _emoteDirty = true;
+        _layersDirty = true;
     }
 
     void Player::setMirror(bool mirror) {
@@ -1879,22 +2486,58 @@ namespace motion {
 
     void Player::setEmoteMeshDivisionRatio(double v) {
         _emoteMeshDivisionRatio = v;
-        _emoteMeshDivisionRatioDup = v;
     }
 
     // Aligned to libkrkr2.so:
     // sub_681F20: player+1184 = a2
-    void Player::setHairScale(double s) { _hairScale = s; }
+    void Player::setHairScale(double s) {
+        if(LOGGER && std::getenv("AETHERKIRI_EMOTE_CONTROL_TRACE") &&
+           _hairScale != s) {
+            LOGGER->info("[EMOTE_CONTROL] set hairScale {:.6f} -> {:.6f}",
+                         _hairScale, s);
+        }
+        _hairScale = s;
+    }
     // sub_681F28: player+1192 = a2
-    void Player::setPartsScale(double s) { _partsScale = s; }
+    void Player::setPartsScale(double s) {
+        if(LOGGER && std::getenv("AETHERKIRI_EMOTE_CONTROL_TRACE") &&
+           _partsScale != s) {
+            LOGGER->info("[EMOTE_CONTROL] set partsScale {:.6f} -> {:.6f}",
+                         _partsScale, s);
+        }
+        _partsScale = s;
+    }
     // sub_681F30: player+1200 = a2
-    void Player::setBustScale(double s) { _bustScale = s; }
+    void Player::setBustScale(double s) {
+        if(LOGGER && std::getenv("AETHERKIRI_EMOTE_CONTROL_TRACE") &&
+           _bustScale != s) {
+            LOGGER->info("[EMOTE_CONTROL] set bustScale {:.6f} -> {:.6f}",
+                         _bustScale, s);
+        }
+        _bustScale = s;
+    }
+    // player+1176, consumed by sub_678D50 while interpolating the authored
+    // point-shape anchor against the camera origin.
+    void Player::setBodyScale(double s) {
+        if(LOGGER && std::getenv("AETHERKIRI_EMOTE_CONTROL_TRACE") &&
+           _bodyScale != s) {
+            LOGGER->info("[EMOTE_CONTROL] set bodyScale {:.6f} -> {:.6f}",
+                         _bodyScale, s);
+        }
+        _bodyScale = s;
+    }
 
-    // Aligned to D3DEmotePlayer_startWind (0x530680) -> Player_startWind (0x6709AC):
+    // Aligned to D3DEmotePlayer_startWind (0x530A60) -> sub_66DD8C:
     // normalize amplitude, optionally destroy/rebuild wind simulator state, then
     // store min/max/amplitude/freq and reset the active counter.
     void Player::startWind(double minAngle, double maxAngle, double amplitude,
                            double freqX, double freqY) {
+        if(LOGGER && std::getenv("AETHERKIRI_EMOTE_CONTROL_TRACE")) {
+            LOGGER->info(
+                "[EMOTE_CONTROL] startWind args=[{:.6f},{:.6f},{:.6f},{:.6f},{:.6f}] meshDivision={:.6f}",
+                minAngle, maxAngle, amplitude, freqX, freqY,
+                _emoteMeshDivisionRatio);
+        }
         const double absAmplitude = std::abs(amplitude);
         const double normalizedMin = amplitude >= 0.0 ? minAngle : maxAngle;
         const double normalizedMax = amplitude >= 0.0 ? maxAngle : minAngle;

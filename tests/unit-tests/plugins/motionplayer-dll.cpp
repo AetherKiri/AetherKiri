@@ -9,6 +9,7 @@
 #include <iostream>
 
 #include "motionplayer/EmotePlayer.h"
+#include "motionplayer/MotionPlayerExtension.h"
 #include "motionplayer/Player.h"
 #include "motionplayer/PlayerInternal.h"
 #include "motionplayer/ResourceManager.h"
@@ -23,6 +24,28 @@
 #include "tjsObject.h"
 
 extern tTJS *TVPScriptEngine;
+extern "C" void TVPRegisterMotionPlayerPluginAnchor();
+
+TEST_CASE("motionplayer optional E-mote extension matches build mode") {
+    TVPRegisterMotionPlayerPluginAnchor();
+        const auto *extension = motion::motionPlayerExtension();
+#if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
+    REQUIRE(extension != nullptr);
+    REQUIRE(extension->abiVersion ==
+            motion::kMotionPlayerExtensionAbiVersion);
+    REQUIRE(extension->detectExtendedEmoteMode != nullptr);
+        REQUIRE(extension->collectControlMetadata != nullptr);
+        REQUIRE(extension->configureNodeTree != nullptr);
+        REQUIRE(extension->ensureControlState != nullptr);
+        REQUIRE(extension->hasActivePhysics != nullptr);
+        REQUIRE(extension->serializeControlState != nullptr);
+        REQUIRE(extension->unserializeControlState != nullptr);
+        REQUIRE(extension->stepAutoBlink != nullptr);
+    REQUIRE(extension->stepPhysics != nullptr);
+#else
+    REQUIRE(extension == nullptr);
+#endif
+}
 
 TEST_CASE("motion presentation excludes structural binder layers") {
     REQUIRE_FALSE(
@@ -461,21 +484,12 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
 
     player.playTimeline(label, motion::TimelinePlayFlagParallel);
     REQUIRE(player.isTimelinePlaying(label));
-#if defined(AETHERKIRI_TEST_INTERNAL_BACKEND)
     REQUIRE_FALSE(player.getAnimating());
-#else
-    REQUIRE(player.getAnimating());
-#endif
     REQUIRE(player.countPlayingTimelines() >= 1);
     REQUIRE(player.getPlayingTimelineLabelAt(0) == label);
 
-#if defined(AETHERKIRI_TEST_INTERNAL_BACKEND)
     player.progress(10.0);
     REQUIRE(player.getProgress() == Catch::Approx(0.6));
-#else
-    player.pass(10.0);
-    REQUIRE(player.getProgress() == 10.0);
-#endif
 
     player.fadeOutTimeline(label, 1.0, 0);
     REQUIRE(player.getTimelineBlendRatio(label) <= 1.0);
@@ -494,11 +508,7 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
 
     player.playTimeline(label, motion::TimelinePlayFlagParallel);
     player.stopTimeline(TJS_W(""));
-#if defined(AETHERKIRI_TEST_INTERNAL_BACKEND)
     REQUIRE_FALSE(player.getPlayer().getAllplaying());
-#else
-    REQUIRE_FALSE(player.getAnimating());
-#endif
 
     player.assignState();
     player.setOuterForce(1.0, 2.0);

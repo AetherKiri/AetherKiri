@@ -91,11 +91,9 @@ namespace {
     }
 
     bool stripSuffixInPlace(std::string &value, const std::string &suffix) {
-        if(value.size() < suffix.size()) {
-            return false;
-        }
-        if(value.compare(value.size() - suffix.size(), suffix.size(), suffix) !=
-           0) {
+        if(value.size() < suffix.size() ||
+           value.compare(value.size() - suffix.size(), suffix.size(), suffix) !=
+               0) {
             return false;
         }
         value.resize(value.size() - suffix.size());
@@ -113,7 +111,6 @@ namespace {
                 storage = storage.substr(slash + 1);
             }
         }
-
         storage = lowercase(storage);
         if(storage.rfind("dx_", 0) == 0) {
             storage = storage.substr(3);
@@ -126,7 +123,6 @@ namespace {
            storage.compare(storage.size() - 3, 3, "emo") != 0) {
             return false;
         }
-
         labels.push_back(storage);
         const auto base = storage.substr(0, storage.size() - 3);
         if(!base.empty()) {
@@ -135,17 +131,16 @@ namespace {
         return true;
     }
 
-    bool labelMatchesSplitEmote(const std::string &label,
-                                const std::vector<std::string> &candidates) {
+    bool labelMatchesSplitEmote(
+        const std::string &label,
+        const std::vector<std::string> &candidates) {
         const auto lowered = lowercase(label);
         for(const auto &candidate : candidates) {
-            if(candidate.empty()) {
-                continue;
-            }
-            if(lowered == candidate ||
-               (lowered.size() > candidate.size() &&
-                lowered.compare(lowered.size() - candidate.size(),
-                                candidate.size(), candidate) == 0)) {
+            if(!candidate.empty() &&
+               (lowered == candidate ||
+                (lowered.size() > candidate.size() &&
+                 lowered.compare(lowered.size() - candidate.size(),
+                                 candidate.size(), candidate) == 0))) {
                 return true;
             }
         }
@@ -158,19 +153,15 @@ namespace {
         const auto matches = [&labels](const std::string &label) {
             return labelMatchesSplitEmote(label, labels);
         };
-        if(std::any_of(snapshot.mainTimelineLabels.begin(),
-                       snapshot.mainTimelineLabels.end(), matches) ||
-           std::any_of(snapshot.diffTimelineLabels.begin(),
-                       snapshot.diffTimelineLabels.end(), matches)) {
-            return true;
-        }
-        for(const auto &[label, clip] : snapshot.clipsByLabel) {
-            (void)clip;
-            if(matches(label)) {
-                return true;
-            }
-        }
-        return false;
+        return std::any_of(snapshot.mainTimelineLabels.begin(),
+                           snapshot.mainTimelineLabels.end(), matches) ||
+            std::any_of(snapshot.diffTimelineLabels.begin(),
+                        snapshot.diffTimelineLabels.end(), matches) ||
+            std::any_of(snapshot.clipsByLabel.begin(),
+                        snapshot.clipsByLabel.end(),
+                        [&matches](const auto &entry) {
+                            return matches(entry.first);
+                        });
     }
 
     tTJSVariant fallbackSplitEmoteModule(const tTJSVariant &lastLoaded,
@@ -202,6 +193,7 @@ namespace {
             recentMotionModule() = loaded;
         }
     }
+
 }
 
 motion::ResourceManager::ResourceManager() : _state(std::make_shared<State>()) {}
@@ -291,15 +283,27 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
         LOGGER->info("Motion resource manager load: {}", rawPath);
     }
 
-    const auto alias = _state ? fallbackSplitEmoteModule(_state->lastLoadedModule,
-                                                         path)
-                              : tTJSVariant{};
+    // ResourceManager is shared by the script-facing wrapper and every
+    // EmotePlayer created from it.  A load of an already registered module
+    // must therefore reuse that module instead of parsing and recursively
+    // scanning the complete PSB again on the render thread.
+    if(const auto cached = findLoaded(path); cached.Type() != tvtVoid) {
+        _state->lastLoadedPath = rawPath;
+        _state->lastLoadedModule = cached;
+        rememberRecentMotionModule(cached);
+        return cached;
+    }
+
+    const auto alias = _state
+        ? fallbackSplitEmoteModule(_state->lastLoadedModule, path)
+        : tTJSVariant{};
     if(alias.Type() != tvtVoid) {
         rememberLoadedModule(path, alias);
         return alias;
     }
 
-    const auto recentAlias = fallbackSplitEmoteModule(recentMotionModule(), path);
+    const auto recentAlias = fallbackSplitEmoteModule(
+        recentMotionModule(), path);
     if(recentAlias.Type() != tvtVoid) {
         rememberLoadedModule(path, recentAlias);
         return recentAlias;
@@ -347,6 +351,12 @@ void motion::ResourceManager::rememberLoadedModule(
         _state->loadedModules[placed.AsStdString()] = loaded;
     }
     _state->lastLoadedModule = loaded;
+    if(loaded.Type() == tvtObject) {
+        if(auto *object = loaded.AsObjectNoAddRef()) {
+            _state->moduleLoadGenerations[object] =
+                ++_state->nextLoadGeneration;
+        }
+    }
     rememberRecentMotionModule(loaded);
 }
 
@@ -371,6 +381,8 @@ void motion::ResourceManager::clearCache() const {
     }
 
     _state->loadedModules.clear();
+    _state->moduleLoadGenerations.clear();
+    _state->nextLoadGeneration = 0;
     _state->lastLoadedPath.clear();
     _state->lastLoadedModule.Clear();
 }
@@ -464,7 +476,14 @@ motion::ResourceManager::uniqueCachedModules() const {
         if(!obj || !seen.insert(obj).second) {
             continue;
         }
-        result.push_back({ key, module });
+        const auto generation = _state->moduleLoadGenerations.find(obj);
+        result.push_back({
+            key,
+            module,
+            generation != _state->moduleLoadGenerations.end()
+                ? generation->second
+                : 0,
+        });
     }
     return result;
 }

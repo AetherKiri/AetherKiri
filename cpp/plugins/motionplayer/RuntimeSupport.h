@@ -176,9 +176,17 @@ namespace motion::detail {
         }
         normalized = std::clamp(normalized, 0.0, 1.0);
 
-        const double timelineEnd = clip.selfSyncTime > 0.0
-            ? clip.selfSyncTime
-            : std::max(0.0, clip.totalFrames - 1.0);
+        // Parameterized motion samples span the authored frame axis. A
+        // clip's selfSyncTime is only a playback/synchronization marker and
+        // can be earlier than its last parameter frame. E-mote eye clips are
+        // the concrete counterexample: both eyelid and iris use a 61-frame
+        // [-10, 50] parameter axis, while only the eyelid declares
+        // selfSyncTime=50. Using that marker maps face_eye_open=10 to frame
+        // 16.67 for the lid but frame 20 for the iris, leaving the iris exposed
+        // during a blink. Native parameter evaluation uses the complete axis.
+        const double timelineEnd = clip.totalFrames > 0.0
+            ? std::max(0.0, clip.totalFrames - 1.0)
+            : std::max(0.0, parameter.division);
         return normalized * timelineEnd;
     }
 
@@ -238,6 +246,9 @@ namespace motion::detail {
             std::unordered_map<std::string, MotionClip>> clipsByOwnerAndLabel;
         std::unordered_map<std::string, TimelineControlBinding>
             timelineControlByLabel;
+        // Opaque metadata owned by an optional motionplayer extension. The
+        // public runtime never interprets vendor-specific controller payloads.
+        std::shared_ptr<const void> extensionMetadata;
         std::vector<std::string> resourceAliases;
         double width = 0.0;
         double height = 0.0;
@@ -246,6 +257,12 @@ namespace motion::detail {
     struct PlayerRuntime {
         std::unordered_map<std::string, std::shared_ptr<MotionSnapshot>> motionsByKey;
         std::unordered_map<std::string, tTJSVariant> sourcesByKey;
+        // A PSB-backed E-mote layer first asks the legacy source loader for an
+        // external bitmap, then falls back to the embedded PSB resource.  A
+        // missing external source is a stable result for the lifetime of the
+        // active motion; remember it so every animated layer does not repeat
+        // storage-path resolution and directory scans on every frame.
+        std::unordered_set<std::string> sourceLookupMisses;
         std::shared_ptr<MotionSnapshot> activeMotion;
         std::unordered_map<std::string, TimelineState> timelines;
         std::vector<std::string> playingTimelineLabels;
@@ -269,6 +286,17 @@ namespace motion::detail {
         // resources is expensive enough to be visible during title animations.
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
             motionSourceBitmapCache;
+        struct MotionSourceMetadata {
+            int width = 0;
+            int height = 0;
+            double originX = 0.0;
+            double originY = 0.0;
+        };
+        // Width/height/origin are immutable PSB icon metadata. Layer
+        // evaluation needs them every frame, but must not walk the PSB tree
+        // (or decode the icon pixels) for every animated node every frame.
+        std::unordered_map<std::string, MotionSourceMetadata>
+            motionSourceMetadataCache;
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
             motionPreparedBitmapCache;
         // Only materialized (copied/tinted) prepared bitmaps are tracked here.
@@ -337,6 +365,8 @@ namespace motion::detail {
             int opacity = 255;
             int updateCount = 0;
             int visibleAncestorIndex = -1;
+            bool stencilMaskReferenced = false;
+            std::vector<int> stencilMaskNodeIndices;
             int meshDivX = 0;
             int meshDivY = 0;
             int meshType = 0;
@@ -350,6 +380,11 @@ namespace motion::detail {
             std::string sourceKey;
             bool hasOwnSource = false;
             bool groupOnly = false;
+            // Referenced stencil inputs must be materialized into an
+            // off-screen layer even when they would otherwise qualify for the
+            // direct-to-target fast path.  Composite groups read that layer's
+            // source alpha later in the same render walk.
+            bool stencilMaskReferenced = false;
             int blendMode = 16;
             int opacity = 255;
             int itemFlags = 0;
@@ -375,8 +410,11 @@ namespace motion::detail {
             int meshType = 0;
             int layerId = 0;
             std::vector<int> childCommandIndices;
+            std::vector<int> stencilMaskNodeIndices;
+            std::vector<int> stencilMaskCommandIndices;
             tTJSVariant leafLayer;
             tTJSVariant composedLayer;
+            tTJSVariant maskLayer;
             std::array<int, 4> builtRect{0, 0, 0, 0};
             bool leafBuilt = false;
             bool composedBuilt = false;
@@ -415,6 +453,7 @@ namespace motion::detail {
 
         void clearMotionBitmapCaches() {
             motionSourceBitmapCache.clear();
+            motionSourceMetadataCache.clear();
             motionPreparedBitmapCache.clear();
             motionPreparedMaterializedKeysBySource.clear();
             clearPresentationRenderReuse();
