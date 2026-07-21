@@ -79,6 +79,8 @@ TJS_EXP_FUNC_DEF(void, TVPExecuteBytecode,
                   const tjs_char *name = nullptr));
 
 extern void TVPExecuteStartupScript();
+extern const tjs_char *TVPGetStartupPatchPrerequisitesScript();
+extern const tjs_char *TVPGetPatchWindowPrerequisitesScript();
 extern const tjs_char *TVPGetKagLoadContractGuardScript();
 extern const tjs_char *TVPGetPatchRuntimeRegistryExpression();
 extern bool TVPMergeObjectMembers(iTJSDispatch2 *destination,
