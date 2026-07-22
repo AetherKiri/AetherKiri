@@ -92,7 +92,7 @@ jobs:
 
           release_args=(
             --repo "$GITHUB_REPOSITORY"
-            --title "AetherKiri $tag"
+            --title "$tag"
             --generate-notes
             --verify-tag
           )
