@@ -139,6 +139,31 @@ iOS and Android export presets reference the generated PNG sizes under
   `web_dlink_debug.zip` and `web_dlink_release.zip`.
 - Node.js and npm for the TypeScript/Vite local Web server.
 
+### Linux
+
+The Linux development environment is project-local. It keeps Godot, vcpkg,
+vcpkg downloads/binaries, assembler tools, npm, and Godot XDG data in
+`.aetherkiri-cache/` (override with `AETHERKIRI_CACHE_DIR`). Bootstrap it with:
+
+```bash
+./tools/setup_linux.sh
+```
+
+On Arch Linux, the bootstrap uses the system packages when available and can
+place the tool-only `zip`, `nasm`, and `yasm` packages under the project cache
+when it cannot elevate. Install the broader system prerequisites
+once for the normal host-managed setup:
+
+```bash
+sudo pacman -S --needed base-devel cmake ninja pkgconf git curl unzip ccache nasm yasm
+```
+
+Delete `.aetherkiri-cache/` to reclaim all reusable local build caches and
+tool downloads. The Linux build links `apps/godot_app/.godot` to this cache
+root and recreates its cache target on the next build. Build outputs remain
+under `out/`; remove a Linux configuration with
+`./build.sh --clean linux debug` or `./build.sh --clean linux release`.
+
 ## Build
 
 The public repository builds and runs CI without access to private packages.
@@ -177,11 +202,15 @@ Common builds:
 ./build.sh android release --abi=arm64-v8a
 ./build.sh web debug
 ./build.sh web release
+./build.sh linux debug
+./build.sh linux release
 ```
 
 The scripts build the native engine and Godot host library, stage them under
 `apps/godot_app/bin/`, then run the matching Godot export preset when Godot is
-available. Android is currently wired for `arm64-v8a`.
+available. Linux exports include the required vcpkg shared libraries beside
+the executable, so their engine runtime does not depend on the local build
+tree. Android is currently wired for `arm64-v8a`.
 
 ## Run and Test Artifacts
 

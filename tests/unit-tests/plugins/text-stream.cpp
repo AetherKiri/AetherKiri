@@ -116,3 +116,24 @@ TEST_CASE(
     REQUIRE(stream->Read(decoded, 0) == 14);
     CHECK(ttstr(decoded) == TJS_W("filename:'愛莉a'"));
 }
+
+TEST_CASE("BOM-less CP932 scripts use the legacy KiriKiri fallback") {
+    TemporaryFile file("aetherkiri-cp932.tjs");
+    const std::array<unsigned char, 21> content = {
+        'v',  'a',  'r',  ' ',  'n',  'a',  'm',  'e',  ' ',  '=',  ' ',
+        '"', 0x91, 0xCC, 0x8C, 0xB1, 0x94, 0xC5, '"',  ';',  '\n',
+    };
+    {
+        std::ofstream output(file.path, std::ios::binary);
+        REQUIRE(output.good());
+        output.write(reinterpret_cast<const char *>(content.data()),
+                     static_cast<std::streamsize>(content.size()));
+        REQUIRE(output.good());
+    }
+
+    std::unique_ptr<iTJSTextReadStream> stream(
+        TVPCreateTextStreamForRead(ttstr(file.path.string()), TJS_W("")));
+    tTJSString decoded;
+    REQUIRE(stream->Read(decoded, 0) == 18);
+    CHECK(ttstr(decoded) == TJS_W("var name = \"\u4f53\u9a13\u7248\";\n"));
+}

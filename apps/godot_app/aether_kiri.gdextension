@@ -3,6 +3,9 @@ entry_symbol = "aether_kiri_library_init"
 compatibility_minimum = "4.6"
 
 [libraries]
+; Linux support is retained in the source tree but is currently disabled.
+; linux.debug.x86_64 = "res://bin/linux/debug/libaether_kiri_godot.so"
+; linux.release.x86_64 = "res://bin/linux/release/libaether_kiri_godot.so"
 macos.debug = "res://bin/macos/debug/libaether_kiri_godot.dylib"
 macos.release = "res://bin/macos/release/libaether_kiri_godot.dylib"
 ios.debug = "res://bin/ios/debug/libaether_kiri_godot.a"
@@ -13,6 +16,12 @@ web.debug.wasm32 = "res://bin/web/debug/aether_kiri_godot.wasm"
 web.release.wasm32 = "res://bin/web/release/aether_kiri_godot.wasm"
 
 [dependencies]
+; linux.debug.x86_64 = {
+;   "res://bin/linux/debug/libengine_api.so": ""
+; }
+; linux.release.x86_64 = {
+;   "res://bin/linux/release/libengine_api.so": ""
+; }
 macos.debug = {
   "res://bin/macos/debug/libengine_api.dylib": ""
 }

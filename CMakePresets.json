@@ -75,7 +75,9 @@
         "LINUX": true,
         "VCPKG_TARGET_TRIPLET": "x64-linux",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/vcpkg/triplets",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": true
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "BUILD_TOOLS": false,
+        "ENABLE_TESTS": false
       },
       "condition": {
         "type": "equals",

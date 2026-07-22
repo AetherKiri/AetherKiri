@@ -103,6 +103,10 @@ namespace TJS // following is in the namespace
 
     void parser::error(const std::string &msg) {
         spdlog::get("tjs2")->critical(msg);
+        // Bison may recover from a syntax error and leave a partially built
+        // context. Mark the block as failed so SetText/Parse throws before
+        // that incomplete intermediate code can be executed.
+        _yyerror(TJSSyntaxError, ptr);
     }
 
     //---------------------------------------------------------------------------

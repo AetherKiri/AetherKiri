@@ -1452,6 +1452,18 @@ static tjs_uint TVPRebuildAutoPathTable() {
     if(AutoPathTableInit)
         return 0;
 
+    // Storage probes may be triggered by log callbacks while building this
+    // table. Let the nested lookup use entries collected so far rather than
+    // recursively clearing and rebuilding the same table.
+    static thread_local bool rebuilding = false;
+    if(rebuilding)
+        return 0;
+    rebuilding = true;
+    struct tRebuildGuard {
+        bool &active;
+        ~tRebuildGuard() { active = false; }
+    } guard{ rebuilding };
+
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
 
     TVPAutoPathTable.Clear();

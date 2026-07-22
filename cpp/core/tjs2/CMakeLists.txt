@@ -111,6 +111,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     tjsOctPack.cpp
     tjsNamespace.cpp
     tjsScriptCache.cpp
+    tjsScriptRecovery.cpp
     tjsConfig.cpp
     tjsCompileControl.cpp
     tjsObjectExtendable.cpp

@@ -125,6 +125,35 @@ TEST_CASE("Godot Gray textures extract province pixels after GPU writes") {
     CHECK(row[3] == 0xee);
 }
 
+TEST_CASE("Godot texture updates clip off-texture rectangles") {
+    GodotTexture2D texture(nullptr, 0, 2, 2, TVPTextureFormat::RGBA);
+    const std::array<std::uint8_t, 16> pixels = {
+        1, 0, 0, 255, 2, 0, 0, 255,
+        3, 0, 0, 255, 4, 0, 0, 255,
+    };
+
+    texture.Update(pixels.data(), TVPTextureFormat::RGBA, 8,
+                   tTVPRect(-1, -1, 1, 1));
+
+    CHECK(texture.GetPoint(0, 0) == 0xff000004u);
+    CHECK(texture.GetPoint(1, 0) == 0u);
+    CHECK(texture.GetPoint(0, 1) == 0u);
+}
+
+TEST_CASE("Godot texture updates reallocate when the pixel format changes") {
+    GodotTexture2D texture(nullptr, 0, 2, 1, TVPTextureFormat::Gray);
+    const std::array<std::uint8_t, 8> pixels = {
+        1, 2, 3, 255, 4, 5, 6, 255,
+    };
+
+    texture.Update(pixels.data(), TVPTextureFormat::RGBA, 8,
+                   tTVPRect(0, 0, 2, 1));
+
+    CHECK(texture.GetFormat() == TVPTextureFormat::RGBA);
+    CHECK(texture.GetPitch() == 8);
+    CHECK(texture.GetPoint(1, 0) == 0xff060504u);
+}
+
 TEST_CASE("Godot textures tag Kirikiri triangle blend modes") {
     TestGpuBridge bridge;
     std::array<std::uint8_t, 16> pixels = {

@@ -19,6 +19,7 @@ vcpkg_installed/
 .gradle/
 .act/
 .devtools
+.aetherkiri-cache/
 *.lock
 !package-lock.json
 node_modules/
@@ -52,6 +53,7 @@ bridge/flutter_engine_bridge/ios/Libs/CURRENT_TRIPLET
 bridge/flutter_engine_bridge/ios/Libs/*/*.a
 apps/flutter_app/devtools_options.yaml
 apps/godot_app/.godot/
+apps/godot_app/.godot
 plugin_trace.log
 __pycache__/
 *.pyc
