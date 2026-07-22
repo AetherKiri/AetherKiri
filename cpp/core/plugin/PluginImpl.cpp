@@ -162,6 +162,9 @@ public:
         TJS_BEGIN_NATIVE_METHOD_DECL(refresh) { return TJS_S_OK; }
         TJS_END_NATIVE_METHOD_DECL(refresh)
 
+        TJS_BEGIN_NATIVE_METHOD_DECL(resetKeyPressState) { return TJS_S_OK; }
+        TJS_END_NATIVE_METHOD_DECL(resetKeyPressState)
+
         TJS_BEGIN_NATIVE_METHOD_DECL(remove) { return TJS_S_OK; }
         TJS_END_NATIVE_METHOD_DECL(remove)
 
@@ -205,6 +208,13 @@ public:
             return TJS_S_OK;
         }
         TJS_END_NATIVE_METHOD_DECL(getCount)
+
+        TJS_BEGIN_NATIVE_METHOD_DECL(getController) {
+            if(result)
+                result->Clear();
+            return TJS_S_OK;
+        }
+        TJS_END_NATIVE_METHOD_DECL(getController)
 
         TJS_BEGIN_NATIVE_PROP_DECL(count) {
             TJS_BEGIN_NATIVE_PROP_GETTER {
@@ -499,15 +509,15 @@ static void TVPUnregisterProxyFsStub() {
 }
 
 // gamepad.dll 未实现时注册 stub，避免 exgamepad.tjs 访问 GamepadPort 报错（逆向见：global["GamepadPort"]/["Gamepad"]，脚本用 SystemConfig.GamepadPort）
-static void TVPRegisterGamepadStub() {
+static bool TVPRegisterGamepadStub() {
     iTJSDispatch2 *stub = new tTJSNC_GamepadStub();
     if(!stub)
-        return;
+        return false;
 
     iTJSDispatch2 *global = TVPGetScriptDispatch();
     if(!global) {
         stub->Release();
-        return;
+        return false;
     }
 
     tTJSVariant val(stub);
@@ -524,6 +534,7 @@ static void TVPRegisterGamepadStub() {
     global->Release();
     stub->Release();
     spdlog::info("Registered GamepadPort/Gamepad stub for missing gamepad.dll");
+    return true;
 }
 
 static void TVPRegisterGfxFireStub() {
@@ -573,7 +584,13 @@ void TVPLoadPlugin(const ttstr &name) {
     }
 
     if(!loaded && TJS::TVPIsMockEnabled()) {
-        if(normalizedShortName == TJS_W("fontinfo.dll")) {
+        if(normalizedShortName == TJS_W("gamepad.dll")) {
+            loaded = TVPRegisterGamepadStub();
+            if(loaded) {
+                TVPRegisteredPlugins.insert(normalizedShortName);
+                stub = "GamepadStub";
+            }
+        } else if(normalizedShortName == TJS_W("fontinfo.dll")) {
             TVPRegisterFontInfoStub();
             TVPRegisteredPlugins.insert(normalizedShortName);
             loaded = true;
@@ -595,10 +612,7 @@ void TVPLoadPlugin(const ttstr &name) {
         spdlog::error("Loading Plugin: {} Failed", name.AsStdString());
         const char *stub = nullptr;
         if(TJS::TVPIsMockEnabled()) {
-            if(normalizedShortName == TJS_W("gamepad.dll")) {
-                TVPRegisterGamepadStub();
-                stub = "GamepadStub";
-            } else if(normalizedShortName == TJS_W("gfxeffect.dll") ||
+            if(normalizedShortName == TJS_W("gfxeffect.dll") ||
                       normalizedShortName == TJS_W("gfxfire.dll")) {
                 TVPRegisterGfxFireStub();
                 stub = "gfxFireStub";
