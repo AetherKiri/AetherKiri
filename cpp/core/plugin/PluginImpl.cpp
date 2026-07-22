@@ -39,6 +39,11 @@
 #include "Application.h"
 #include "SysInitImpl.h"
 
+#if defined(_WIN32)
+#undef GetClassName
+#undef GetMessage
+#endif
+
 #ifdef _MSC_VER
 #define strcasecmp _stricmp
 #endif

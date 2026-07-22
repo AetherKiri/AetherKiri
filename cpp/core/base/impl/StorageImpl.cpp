@@ -40,6 +40,13 @@
 
 #include "spdlog/spdlog.h"
 
+#if defined(_WIN32)
+#undef GetClassName
+#undef GetMessage
+#undef max
+#undef min
+#endif
+
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
 #endif
