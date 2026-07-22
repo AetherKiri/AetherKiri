@@ -184,11 +184,17 @@ bool IsGpuRectLargeEnoughForMethod(const tTVPRect &rect, const char *name) {
 bool ShouldUseGpuRectFastPath(const tTVPRect &rect, const char *name,
                               const GodotTexture2D *dst,
                               const GodotTexture2D *src = nullptr,
-                              const GodotTexture2D *src2 = nullptr) {
+                              const GodotTexture2D *src2 = nullptr,
+                              const GodotTexture2D *src3 = nullptr) {
     if (IsGpuRectLargeEnoughForMethod(rect, name)) return true;
     return (dst != nullptr && dst->HasPendingGpuWrites()) ||
            (src != nullptr && src->HasPendingGpuWrites()) ||
-           (src2 != nullptr && src2->HasPendingGpuWrites());
+           (src2 != nullptr && src2->HasPendingGpuWrites()) ||
+           (src3 != nullptr && src3->HasPendingGpuWrites()) ||
+           (dst != nullptr && dst->RequiresGpuReadback()) ||
+           (src != nullptr && src->RequiresGpuReadback()) ||
+           (src2 != nullptr && src2->RequiresGpuReadback()) ||
+           (src3 != nullptr && src3->RequiresGpuReadback());
 }
 
 bool IsOpaqueAlphaBlendCopyEnabled() {
@@ -362,10 +368,13 @@ iTVPRenderManager *GodotRenderManager::SoftwareDelegate() {
 }
 
 GodotTexture2D::GodotTexture2D(const void *pixel, int pitch, unsigned int w,
-                               unsigned int h, TVPTextureFormat::e format)
+                               unsigned int h, TVPTextureFormat::e format,
+                               int create_flags)
     : iTVPTexture2D(static_cast<tjs_int>(w), static_cast<tjs_int>(h)),
       format_(format),
-      pitch_(pitch > 0 ? pitch : static_cast<int>(w) * BytesPerPixel(format)) {
+      pitch_(pitch > 0 ? pitch : static_cast<int>(w) * BytesPerPixel(format)),
+      discard_unwritten_on_partial_update_(
+          (create_flags & RENDER_CREATE_TEXTURE_FLAG_NO_COMPRESS) != 0) {
     pixels_.resize(static_cast<size_t>(pitch_) * h);
     if (pixel != nullptr) {
         const int src_pitch = pitch > 0 ? pitch : pitch_;
@@ -557,9 +566,15 @@ void GodotTexture2D::Update(const void *pixel, TVPTextureFormat::e format,
                             int pitch, const tTVPRect &rc) {
     if (pixel == nullptr) return;
     const bool full_rect = IsFullTextureRect(rc, Width, Height);
-    if (!full_rect) {
+    const bool replace_transient_scratch =
+        !full_rect && discard_unwritten_on_partial_update_ &&
+        rc.left == 0 && rc.top == 0;
+    if (!full_rect && !replace_transient_scratch) {
         EnsureCpuReadable();
     } else {
+        if (replace_transient_scratch) {
+            pixels_.clear();
+        }
         EnsureCpuStorage();
     }
     format_ = format;
@@ -685,24 +700,72 @@ bool GodotTexture2D::BlendTrianglesGpuFrom(
     GodotTexture2D *src, uint32_t triangle_count, const tTVPRect &clip_rc,
     const tTVPPointD *dst_points, const tTVPPointD *src_points, uint32_t mode,
     int opacity) {
-    if (src == nullptr || triangle_count == 0 || dst_points == nullptr ||
-        src_points == nullptr || gpu_handle_ == 0 || src->gpu_handle_ == 0) {
-        return false;
-    }
     if (mode != TVP_GODOT_GPU_BLEND_ALPHA &&
         mode != TVP_GODOT_GPU_BLEND_ALPHA_D &&
+        mode != TVP_GODOT_GPU_BLEND_COPY_COLOR &&
         mode != TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A &&
+        mode != TVP_GODOT_GPU_BLEND_CONST_ALPHA_D &&
+        mode != TVP_GODOT_GPU_BLEND_PS_SCREEN &&
         mode != TVP_GODOT_GPU_BLEND_PS_MULTIPLY) {
         return false;
     }
+    return DrawTrianglesGpuFrom(
+        src, triangle_count, clip_rc, dst_points, src_points, opacity,
+        TVP_GODOT_GPU_TRIANGLE_TVP_BLEND | mode);
+}
+
+bool GodotTexture2D::DrawTrianglesGpuFrom(GodotTexture2D *src,
+                                          uint32_t triangle_count,
+                                          const tTVPRect &clip_rc,
+                                          const tTVPPointD *dst_points,
+                                          const tTVPPointD *src_points,
+                                          int opacity,
+                                          uint32_t blend_mode) {
+    if(src == nullptr || src == this || triangle_count == 0 ||
+       dst_points == nullptr || src_points == nullptr || gpu_handle_ == 0 ||
+       src->gpu_handle_ == 0) {
+        return false;
+    }
     const auto *bridge = TVPGodotGpuBridgeGet();
-    if (bridge == nullptr || bridge->draw_triangles == nullptr) return false;
-    const float normalized_opacity =
+    if(bridge == nullptr || bridge->draw_triangles == nullptr) return false;
+    const float normalizedOpacity =
         static_cast<float>(std::clamp(opacity, 0, 255)) / 255.0f;
-    if (!bridge->draw_triangles(
-            gpu_handle_, src->gpu_handle_, triangle_count, &clip_rc,
-            dst_points, src_points, normalized_opacity,
-            TVP_GODOT_GPU_TRIANGLE_TVP_BLEND | mode)) {
+    if(!bridge->draw_triangles(gpu_handle_, src->gpu_handle_, triangle_count,
+                               &clip_rc, dst_points, src_points,
+                               normalizedOpacity, blend_mode)) {
+        return false;
+    }
+    gpu_dirty_ = true;
+    cpu_dirty_ = false;
+    MarkOpacityUnknown();
+    return true;
+}
+
+bool GodotTexture2D::DrawMaskedTrianglesGpuFrom(
+    GodotTexture2D *src, GodotTexture2D *mask,
+    uint32_t triangle_count, const tTVPRect &clip_rc,
+    const tTVPPointD *dst_points, const tTVPPointD *src_points,
+    const tTVPPointD *mask_points, int opacity, uint32_t blend_mode,
+    bool use_mask_alpha) {
+    if(src == nullptr || mask == nullptr || src == this || mask == this ||
+       triangle_count == 0 || dst_points == nullptr || src_points == nullptr ||
+       mask_points == nullptr || gpu_handle_ == 0 || src->gpu_handle_ == 0 ||
+       mask->gpu_handle_ == 0) {
+        return false;
+    }
+    const auto *bridge = TVPGodotGpuBridgeGet();
+    if(bridge == nullptr || bridge->draw_masked_triangles == nullptr) {
+        return false;
+    }
+    const float normalizedOpacity =
+        static_cast<float>(std::clamp(opacity, 0, 255)) / 255.0f;
+    // The bridge flag is named inverted_mask for its original Cubism caller.
+    // Its shader starts from (1 - mask alpha), so true selects ordinary
+    // alpha-mask semantics and false selects the inverse mask.
+    if(!bridge->draw_masked_triangles(
+           gpu_handle_, src->gpu_handle_, mask->gpu_handle_, triangle_count,
+           &clip_rc, dst_points, src_points, mask_points, normalizedOpacity,
+           blend_mode, use_mask_alpha)) {
         return false;
     }
     gpu_dirty_ = true;
@@ -813,8 +876,8 @@ iTVPTexture2D *GodotRenderManager::CreateTexture2D(const void *pixel, int pitch,
                                                    unsigned int w,
                                                    unsigned int h,
                                                    TVPTextureFormat::e format,
-                                                   int) {
-    auto *texture = new GodotTexture2D(pixel, pitch, w, h, format);
+                                                   int flags) {
+    auto *texture = new GodotTexture2D(pixel, pitch, w, h, format, flags);
     vmem_size_ += static_cast<uint64_t>(texture->GetPitch()) * h;
     g_texture_create_count.fetch_add(1, std::memory_order_relaxed);
     return texture;
@@ -1224,7 +1287,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
        src3_3 != nullptr &&
        IsGpuRectFastPathEnabled(method_name.c_str()) &&
        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src3_1,
-                                src3_2) &&
+                                src3_2, src3_3) &&
        RectBoundsInsideTexture(textures[0].second, src3_1) &&
        RectBoundsInsideTexture(textures[1].second, src3_2) &&
        RectBoundsInsideTexture(textures[2].second, src3_3) &&
@@ -1347,11 +1410,21 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
                method_name == "PerspectiveAlphaBlend_a") {
         blend_mode = TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A;
         fast_path_name = "AlphaBlend_a";
+    } else if (method_name == "CopyColor") {
+        blend_mode = TVP_GODOT_GPU_BLEND_COPY_COLOR;
+        fast_path_name = "CopyColor";
+    } else if (method_name == "ConstAlphaBlend_d") {
+        blend_mode = TVP_GODOT_GPU_BLEND_CONST_ALPHA_D;
+        fast_path_name = "ConstAlphaBlend_d";
+    } else if (method_name == "PsScreenBlend") {
+        blend_mode = TVP_GODOT_GPU_BLEND_PS_SCREEN;
+        fast_path_name = "PsScreenBlend";
     } else if (method_name == "PsMulBlend") {
         blend_mode = TVP_GODOT_GPU_BLEND_PS_MULTIPLY;
         fast_path_name = "PsMulBlend";
     }
-    if (fast_path_name != nullptr && nTriangles > 0 && dst != nullptr &&
+    if (fast_path_name != nullptr && nTriangles > 0 && nTriangles <= 64 &&
+        dst != nullptr &&
         src != nullptr && IsGpuRectFastPathEnabled(fast_path_name) &&
         IsGpuBlendTrianglesEnabled() &&
         ShouldUseGpuRectFastPath(rcclip, fast_path_name, dst, src) &&
@@ -1393,6 +1466,90 @@ void GodotRenderManager::OperatePerspective(iTVPRenderMethod *method, int nQuads
     if (auto *dst = dynamic_cast<GodotTexture2D *>(target)) {
         dst->MarkCpuDirty();
     }
+}
+
+bool TVPGodotCompositeAlphaUnionMask(
+    iTVPBaseBitmap *dst_bitmap, iTVPBaseBitmap *src_bitmap,
+    iTVPBaseBitmap *mask_scratch_bitmap,
+    iTVPBaseBitmap *const *mask_bitmaps,
+    const tTVPRect *mask_dst_rects,
+    const tTVPRect *mask_src_rects,
+    size_t mask_count,
+    bool use_mask_alpha) {
+    if(dst_bitmap == nullptr || src_bitmap == nullptr ||
+       mask_scratch_bitmap == nullptr || mask_bitmaps == nullptr ||
+       mask_dst_rects == nullptr || mask_src_rects == nullptr ||
+       mask_count == 0 || dst_bitmap == src_bitmap ||
+       dst_bitmap == mask_scratch_bitmap ||
+       src_bitmap == mask_scratch_bitmap) {
+        return false;
+    }
+
+    const tTVPRect full_dst(
+        0, 0, static_cast<tjs_int>(dst_bitmap->GetWidth()),
+        static_cast<tjs_int>(dst_bitmap->GetHeight()));
+    const tTVPRect full_src(
+        0, 0, static_cast<tjs_int>(src_bitmap->GetWidth()),
+        static_cast<tjs_int>(src_bitmap->GetHeight()));
+    const tTVPRect full_mask(
+        0, 0, static_cast<tjs_int>(mask_scratch_bitmap->GetWidth()),
+        static_cast<tjs_int>(mask_scratch_bitmap->GetHeight()));
+    if(full_dst.is_empty() || full_src.is_empty() || full_mask.is_empty() ||
+       full_dst.get_width() != full_src.get_width() ||
+       full_dst.get_height() != full_src.get_height() ||
+       full_dst.get_width() != full_mask.get_width() ||
+       full_dst.get_height() != full_mask.get_height()) {
+        return false;
+    }
+
+    auto *dst = dynamic_cast<GodotTexture2D *>(
+        dst_bitmap->GetTextureForRender(true, &full_dst));
+    auto *src = dynamic_cast<GodotTexture2D *>(src_bitmap->GetTexture());
+    auto *mask_scratch = dynamic_cast<GodotTexture2D *>(
+        mask_scratch_bitmap->GetTextureForRender(true, &full_mask));
+    if(dst == nullptr || src == nullptr || mask_scratch == nullptr ||
+       !dst->EnsureGpuHandle() || !src->EnsureGpuHandle() ||
+       !mask_scratch->EnsureGpuHandle() ||
+       !src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+       !dst->ClearGpu(0x00000000u, full_dst) ||
+       !mask_scratch->ClearGpu(0x00000000u, full_mask)) {
+        return false;
+    }
+
+    for(size_t i = 0; i < mask_count; ++i) {
+        if(mask_bitmaps[i] == nullptr || mask_dst_rects[i].is_empty() ||
+           mask_src_rects[i].is_empty() ||
+           mask_dst_rects[i].get_width() != mask_src_rects[i].get_width() ||
+           mask_dst_rects[i].get_height() != mask_src_rects[i].get_height()) {
+            continue;
+        }
+        auto *mask = dynamic_cast<GodotTexture2D *>(
+            mask_bitmaps[i]->GetTexture());
+        if(mask == nullptr || !mask->EnsureGpuHandle() ||
+           !mask->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+           !mask_scratch->BlendGpuFrom(
+               mask, mask_dst_rects[i], mask_src_rects[i],
+               // AlphaBlend holds the destination alpha in KiriKiri.  The
+               // union scratch starts transparent, so use the destination-
+               // alpha variant to accumulate src-over alpha just like the
+               // native op-5 mask builder.
+               TVP_GODOT_GPU_BLEND_ALPHA_D, 255, 0)) {
+            return false;
+        }
+    }
+
+    const tTVPPointD points[6] = {
+        {0.0, 0.0},
+        {static_cast<double>(full_dst.right), 0.0},
+        {0.0, static_cast<double>(full_dst.bottom)},
+        {static_cast<double>(full_dst.right), 0.0},
+        {0.0, static_cast<double>(full_dst.bottom)},
+        {static_cast<double>(full_dst.right),
+         static_cast<double>(full_dst.bottom)},
+    };
+    return dst->DrawMaskedTrianglesGpuFrom(
+        src, mask_scratch, 2, full_dst, points, points, points, 255, 0,
+        use_mask_alpha);
 }
 
 std::string TVPGetGodotRenderManagerFallbackStats() {

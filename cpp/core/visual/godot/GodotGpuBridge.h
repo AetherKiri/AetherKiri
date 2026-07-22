@@ -66,12 +66,22 @@ enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_UNIVERSAL_D = 13,
     TVP_GODOT_GPU_BLEND_UNIVERSAL_A = 14,
     TVP_GODOT_GPU_BLEND_PS_MULTIPLY = 15,
+    // draw_triangles is shared by Cubism (whose low bits describe Cubism
+    // colour/alpha modes) and KiriKiri (whose low bits are the modes above).
+    // Tag the latter so AlphaBlend/AlphaBlend_d are not mistaken for Cubism
+    // add/multiply flags by the bridge shader.
+    TVP_GODOT_GPU_BLEND_TVP_OPERATION = 0x00010000u,
+    // Request destination-alpha mask accumulation for a triangle mesh.  This
+    // is a generic GPU bridge operation; the optional Live2D package uses it
+    // to avoid rebuilding and uploading full mask textures on the CPU.
+    TVP_GODOT_GPU_BLEND_MASK_WRITE = 0x00020000u,
 };
 
 // draw_triangles is also used by the Live2D renderer, whose low 16 bits carry
 // Cubism blend flags.  Tag Kirikiri render-method modes separately so the
 // bridge shader can preserve both interpretations without an ABI expansion.
-constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_TVP_BLEND = 0x00010000u;
+constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_TVP_BLEND =
+    TVP_GODOT_GPU_BLEND_TVP_OPERATION;
 
 extern "C" void TVPGodotGpuBridgeRegister(
     const TVPGodotGpuBridgeCallbacks *callbacks);

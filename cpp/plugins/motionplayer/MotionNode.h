@@ -68,27 +68,40 @@ namespace motion::detail {
         // Computed mesh flags (sub_6BC4F0 at 0x6BC6E4..0x6BC818)
         bool hasMeshData = false;        // node+1962: has active mesh data
         bool stencilCompositeMaskReferenced = false; // node+1961: post-build mask-layer reference
+        // type-12 stencil containers retain the exact nodes named by
+        // stencilCompositeMaskLayerList.  The native renderer keeps this as a
+        // separate mask-item chain; it is not the same thing as the group's
+        // ordinary colour children.
+        std::vector<int> stencilCompositeMaskNodeIndices;
         bool meshCombineEnabled = false; // node+1963: mesh combines with children
-        // libkrkr2.so seeds node+52 from PSB "stencilType" in Player_initNodeFields
-        // (0x6B3C78), but later visibility/render-tree stages consume the same slot as
-        // a per-frame non-zero update mask while still preserving deflector bit 4.
-        // Keep both the raw PSB seed and the runtime-composed value explicitly.
+        // libgame.so sub_6B1058 seeds node+52 from the PSB "stencilType".
+        // Render-item construction at 0x6C09F4 copies that value verbatim to
+        // item+244.  Frame-list type is a separate field and must never be ORed
+        // into this operation code (2 would turn a crop into a reverse crop).
         int stencilTypeBase = 0;      // raw PSB "stencilType"
-        int stencilType = 0;          // runtime node+52-compatible mask
+        int stencilType = 0;          // current native node+52 operation code
         int currentFrameType = 0;     // current frameList type (0/2/3), for trace
 
-        // Mesh control points (node+2024..2032 in libkrkr2.so).
-        // For meshType=1: 16 × 2 floats (Bezier patch 4×4 control grid) = 32 floats.
-        // For meshType=2: (divX+1)*(divY+1)*2 floats (grid mesh).
-        // Built by sub_6BC4F0 vertex computation.
-        std::vector<float> meshControlPoints;      // node+2024
-        std::vector<float> meshControlPointsPrev;  // node+2048 (previous frame)
+        // The native node owns three distinct mesh vectors. Keeping them
+        // separate is essential: +2024 is the authored normalized 4x4 patch,
+        // +2048 is the tessellated render grid, and +2072 is the authored
+        // patch transformed into world coordinates.
+        std::vector<float> meshControlPoints;       // node+2024, 16 normalized XY pairs
+        std::vector<float> meshRenderPoints;        // node+2048, tessellated world XY pairs
+        std::vector<float> meshWorldControlPoints;  // node+2072, 16 world XY pairs
+        // node+1968 is a pointer to the inherited mesh chain in libgame.so.
+        // It is unrelated to the shape/stencil clip parent tracked below.
+        int meshAncestorIndex = -1;
 
         // emoteEdit PSB dict reference (node+1980, sub_6B3C78 at 0x6B3D48)
         std::shared_ptr<const PSB::PSBDictionary> emoteEditDict;
 
         // Prior draw flag (node+48, from PSB emoteEdit "priorDraw")
         // Raw int, not bool — binary checks bit flags (v12 & 5) in sub_6BE0C0.
+        // The PSB dictionary is immutable after the node tree is built, so
+        // cache its authored value instead of doing RTTI dictionary lookups
+        // for every E-mote node on every rendered frame.
+        int authoredPriorDraw = 0;
         int priorDraw = 0;
 
         // ========== Dual Clip Slot Architecture ==========

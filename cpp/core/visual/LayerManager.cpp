@@ -522,6 +522,58 @@ tTJSNI_BaseLayer *TVPFindMotionButtonOwnerForDisplayProxy(
     return layer;
 }
 
+tTJSNI_BaseLayer *TVPRoutePassiveKagPresentationProxyToPage(
+    tTJSNI_BaseLayer *hit, tjs_int x, tjs_int y) {
+    if(!hit || !hit->GetName().IsEmpty())
+        return hit;
+
+    tTJSNI_BaseLayer *presentation = hit->GetParent();
+    if(!presentation || presentation->GetName().IsEmpty() ||
+       presentation->GetCount() != 1 ||
+       TVPIsActiveMotionButtonLayer(presentation) ||
+       hit->GetLeft() != 0 || hit->GetTop() != 0 ||
+       hit->GetWidth() != presentation->GetWidth() ||
+       hit->GetHeight() != presentation->GetHeight()) {
+        return hit;
+    }
+
+    tTJSNI_BaseLayer *page = presentation->GetParent();
+    if(!page || !page->GetNodeVisible() || !page->GetNodeEnabled() ||
+       presentation->GetLeft() != 0 || presentation->GetTop() != 0 ||
+       presentation->GetWidth() != page->GetWidth() ||
+       presentation->GetHeight() != page->GetHeight()) {
+        return hit;
+    }
+
+    // KAG EX mounts stand/E-mote characters as a named layer with one
+    // unnamed, full-page display proxy below the foreground page (for
+    // example `<unnamed> -> ショコラ -> 表-背景`, child to parent).  The
+    // proxy is only a presentation surface; allowing its opaque pixels to own
+    // pointer input prevents the foreground page's click-to-advance handler
+    // from running.
+    // The wrapper normally starts as ltBinder, but affine transitions can
+    // replace it with an ltAlpha presentation layer while retaining the same
+    // passive proxy structure. Restrict the structural fallback to KAG
+    // page-background names so title/gallery controls remain interactive.
+    const std::string page_name = page->GetName().AsStdString();
+    if(page_name.find("背景") == std::string::npos)
+        return hit;
+
+    tjs_int local_x = 0;
+    tjs_int local_y = 0;
+    if(!TVPLayerRectContainsPrimaryPoint(page, x, y, local_x, local_y) ||
+       !page->HitTestNoVisibleCheck(local_x, local_y)) {
+        return hit;
+    }
+
+    if(TVPInputTraceEnabled()) {
+        spdlog::info(
+            "LayerManager pass passive KAG presentation proxy to page primary=({}, {}) presentation={} page={}",
+            x, y, presentation->GetName().AsStdString(), page_name);
+    }
+    return page;
+}
+
 bool TVPIsCgPreviewPresentationLayer(tTJSNI_BaseLayer *layer) {
     if(!layer)
         return false;
@@ -629,6 +681,87 @@ bool TVPIsMessageLayer(tTJSNI_BaseLayer *layer) {
     if(!layer) return false;
     return layer->GetName().AsStdString().find("メッセージ") !=
            std::string::npos;
+}
+
+bool TVPIsScriptInstanceOf(tTJSNI_BaseLayer *layer,
+                           const tjs_char *class_name) {
+    if(!layer || !class_name)
+        return false;
+    iTJSDispatch2 *owner = layer->GetOwnerNoAddRef();
+    return owner &&
+           owner->IsInstanceOf(0, nullptr, nullptr, class_name, owner) ==
+               TJS_S_TRUE;
+}
+
+tTJSNI_BaseLayer *TVPFindAffinePresentationAncestor(
+    tTJSNI_BaseLayer *layer) {
+    // KAG's AffineLayer (and EnvGraphicLayer subclasses) is a presentation
+    // surface.  It deliberately has no pointer handlers of its own, but its
+    // opaque character pixels still win the native Layer hit test.
+    for(tTJSNI_BaseLayer *candidate = layer; candidate;
+        candidate = candidate->GetParent()) {
+        if(TVPIsScriptInstanceOf(candidate, TJS_W("AffineLayer")))
+            return candidate;
+    }
+    return nullptr;
+}
+
+bool TVPIsInLayerSubtree(tTJSNI_BaseLayer *layer,
+                         tTJSNI_BaseLayer *root) {
+    for(tTJSNI_BaseLayer *candidate = layer; candidate;
+        candidate = candidate->GetParent()) {
+        if(candidate == root)
+            return true;
+    }
+    return false;
+}
+
+tTJSNI_BaseLayer *TVPRouteAffinePresentationToMessageLayer(
+    tTVPLayerManager *manager, tTJSNI_BaseLayer *hit, tjs_int x, tjs_int y) {
+    if(!manager || !hit)
+        return hit;
+
+    tTJSNI_BaseLayer *presentation =
+        TVPFindAffinePresentationAncestor(hit);
+    if(!presentation)
+        return hit;
+
+    // Motion-backed GUI layers are real controls.  They are normally routed
+    // before this helper, but keep the guard here for nested display proxies.
+    if(TVPIsActiveMotionButtonLayer(presentation))
+        return hit;
+
+    // Find the front-most live message layer behind the character subtree.
+    // MessageLayer handles click-to-advance in onMouseDown, so routing only
+    // the synthetic onClick event would still leave the game stuck.
+    auto &nodes = manager->GetAllNodes();
+    for(auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
+        tTJSNI_BaseLayer *candidate = *it;
+        if(!candidate || TVPIsInLayerSubtree(candidate, presentation) ||
+           !TVPIsMessageLayer(candidate) || !candidate->GetNodeVisible() ||
+           !candidate->GetNodeEnabled()) {
+            continue;
+        }
+
+        tjs_int local_x = 0;
+        tjs_int local_y = 0;
+        if(!TVPLayerRectContainsPrimaryPoint(candidate, x, y, local_x,
+                                             local_y) ||
+           !candidate->HitTestNoVisibleCheck(local_x, local_y)) {
+            continue;
+        }
+
+        if(TVPInputTraceEnabled()) {
+            spdlog::info(
+                "LayerManager pass affine presentation through to message primary=({}, {}) presentation={} hit={} message={}",
+                x, y, presentation->GetName().AsStdString(),
+                hit->GetName().AsStdString(),
+                candidate->GetName().AsStdString());
+        }
+        return candidate;
+    }
+
+    return hit;
 }
 }
 
@@ -975,6 +1108,8 @@ tTJSNI_BaseLayer *tTVPLayerManager::GetClickableLayerAt(tjs_int x, tjs_int y) {
     // preview fallback is intentionally applied only to right-click release
     // in PrimaryMouseUp, where it is needed to close a full-screen preview.
     layer = TVPFindMotionButtonOwnerForDisplayProxy(layer, x, y);
+    layer = TVPRoutePassiveKagPresentationProxyToPage(layer, x, y);
+    layer = TVPRouteAffinePresentationToMessageLayer(this, layer, x, y);
     if(TVPIsSaveLoadItemLayer(layer))
         TVPTraceLayersAt(this, "save-load-item", x, y);
     if(!layer || !TVPIsMessageLayer(layer) || !Primary)

@@ -69,7 +69,7 @@ public:
         return Get(pMsg, iTimeoutInMilliSeconds, priority);
     }
 
-    int GetDataSize() const { return m_iDataSize; }
+    int GetDataSize() const { return m_iDataSize.load(); }
 
     int GetTimeSize();
 
@@ -105,7 +105,7 @@ private:
     bool m_bInitialized;
     bool m_drain;
 
-    int m_iDataSize;
+    std::atomic<int> m_iDataSize;
     double m_TimeFront;
     double m_TimeBack;
     double m_TimeSize;

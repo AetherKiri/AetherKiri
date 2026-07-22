@@ -20,7 +20,6 @@
 #include "PSBMedia.h"
 #include "PSBValue.h"
 #include "SystemControl.h"
-#include "../motionplayer/ResourceManager.h"
 
 #define NCB_MODULE_NAME TJS_W("psbfile.dll")
 
@@ -163,7 +162,6 @@ const ScenarioLabelSet *GetCachedScenarioLabels(const ttstr &storage) {
         return &found->second;
 
     PSB::PSBFile psb;
-    psb.setSeed(motion::ResourceManager::getDecryptSeed());
     if(!psb.loadPSBFile(path)) {
         if(psbDebugEnabled()) {
             LOGGER->info("PSB scenario label load failed: {}",
@@ -498,7 +496,6 @@ static tjs_error load(tTJSVariant *r, tjs_int count, tTJSVariant **p,
     if(p[0]->Type() == tvtString) {
         ttstr path{ *p[0] };
         try {
-            self->setSeed(motion::ResourceManager::getDecryptSeed());
             if(!self->loadPSBFile(path)) {
                 LOGGER->info("cannot load psb file : {}", path.AsStdString());
                 loadSuccess = false;
@@ -515,7 +512,6 @@ static tjs_error load(tTJSVariant *r, tjs_int count, tTJSVariant **p,
     } else if(p[0]->Type() == tvtOctet) {
         auto *octet = p[0]->AsOctetNoAddRef();
         try {
-            self->setSeed(motion::ResourceManager::getDecryptSeed());
             if(!octet || !self->loadPSBData(
                               octet->GetData(), octet->GetLength(),
                               ttstr(TJS_W("<octet>")))) {
@@ -591,7 +587,6 @@ static tjs_error PSBFileFactory(PSBFile **result, tjs_int count,
         ttstr path{ *params[0] };
         psbFile = new PSBFile();
         try {
-            psbFile->setSeed(motion::ResourceManager::getDecryptSeed());
             if(psbFile->loadPSBFile(path)) {
                 registerPsbResources(psbFile, path);
             } else {
@@ -606,7 +601,6 @@ static tjs_error PSBFileFactory(PSBFile **result, tjs_int count,
         auto *octet = params[0]->AsOctetNoAddRef();
         psbFile = new PSBFile();
         try {
-            psbFile->setSeed(motion::ResourceManager::getDecryptSeed());
             if(!octet || !psbFile->loadPSBData(
                               octet->GetData(), octet->GetLength(),
                               ttstr(TJS_W("<octet>")))) {

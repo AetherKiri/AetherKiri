@@ -120,3 +120,29 @@ TEST_CASE("late patches preserve registered load hooks") {
                          TJS_W("loadTrigger.instance.loadHooks.sharedHook")) ==
           TJS_W("runtime-registration"));
 }
+
+TEST_CASE("patch prerequisites persist globally across script blocks") {
+    ScriptEngineOwner engine;
+
+    engine->ExecScript(TVPGetStartupPatchPrerequisitesScript());
+    CHECK(evaluateString(engine.operator->(),
+                         TJS_W("typeof global.kagHookEntries")) ==
+          TJS_W("Object"));
+    CHECK(evaluateString(engine.operator->(),
+                         TJS_W("typeof global.afterInitCallback")) ==
+          TJS_W("Object"));
+
+    engine->ExecScript(TJS_W(
+        "global.kagHookEntries.add(123);\n"
+        "global.KAGWindow = %[];\n"));
+    engine->ExecScript(TVPGetStartupPatchPrerequisitesScript());
+    engine->ExecScript(TVPGetPatchWindowPrerequisitesScript());
+
+    CHECK(evaluateInteger(engine.operator->(),
+                          TJS_W("global.kagHookEntries.count")) == 1);
+    CHECK(evaluateInteger(engine.operator->(),
+                          TJS_W("global.KAGWindow.kagHookEntries[0]")) ==
+          123);
+    CHECK(evaluateInteger(engine.operator->(),
+                          TJS_W("global.KAGWindow.COMMAND_WAIT")) == 2);
+}

@@ -32,6 +32,12 @@ public:
 
     bool HasData() const override { return m_messageQueue.GetDataSize() > 0; }
 
+    int GetPendingDataSize() const override {
+        return m_messageQueue.GetDataSize();
+    }
+
+    bool IsWorkerRunning() const override { return CThread::IsRunning(); }
+
     int GetLevel() override { return m_messageQueue.GetLevel(); }
 
     bool IsInited() const override { return m_messageQueue.IsInited(); }

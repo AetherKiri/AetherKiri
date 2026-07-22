@@ -37,6 +37,7 @@
 #include "ScriptMgnIntf.h"
 #include "NodeTree.h"
 #include "MotionNode.h"
+#include "MotionPlayerExtension.h"
 
 #define LOGGER spdlog::get("plugin")
 #define STUB_WARN(name) LOGGER->warn("Player::" #name "() stub called")
@@ -325,40 +326,36 @@ namespace internal {
             return snapshot;
         }
 
-        inline bool stripSuffixInPlace(std::string &value,
-                                       const std::string &suffix) {
-            if(value.size() < suffix.size()) {
-                return false;
-            }
-            if(value.compare(value.size() - suffix.size(), suffix.size(),
-                             suffix) != 0) {
-                return false;
-            }
-            value.resize(value.size() - suffix.size());
-            return true;
-        }
-
         inline bool splitEmoteCandidateBase(const ttstr &candidate,
                                             std::string &base) {
-            std::string storage = detail::narrow(TVPExtractStorageName(candidate));
+            std::string storage = detail::narrow(
+                TVPExtractStorageName(candidate));
             if(storage.empty()) {
                 storage = detail::narrow(candidate);
-                const auto slash = storage.find_last_of("/\\");
-                if(slash != std::string::npos) {
+                if(const auto slash = storage.find_last_of("/\\");
+                   slash != std::string::npos) {
                     storage = storage.substr(slash + 1);
                 }
             }
-
-            storage = psbDebugLowercase(storage);
-            if(!stripSuffixInPlace(storage, ".mtn") &&
-               !stripSuffixInPlace(storage, ".psb")) {
-                stripSuffixInPlace(storage, ".mt");
+            storage = psbDebugLowercase(std::move(storage));
+            const auto stripSuffix = [](std::string &value,
+                                        const std::string &suffix) {
+                if(value.size() < suffix.size() ||
+                   value.compare(value.size() - suffix.size(), suffix.size(),
+                                 suffix) != 0) {
+                    return false;
+                }
+                value.resize(value.size() - suffix.size());
+                return true;
+            };
+            if(!stripSuffix(storage, ".mtn") &&
+               !stripSuffix(storage, ".psb")) {
+                stripSuffix(storage, ".mt");
             }
             if(storage.size() <= 3 ||
                storage.compare(storage.size() - 3, 3, "emo") != 0) {
                 return false;
             }
-
             base = storage.substr(0, storage.size() - 3);
             return !base.empty();
         }
@@ -369,8 +366,7 @@ namespace internal {
             const auto matches = [&loweredSuffix](const std::string &label) {
                 const auto lowered = psbDebugLowercase(label);
                 const auto emoteSuffix = loweredSuffix + "emo";
-                return lowered == loweredSuffix ||
-                    lowered == emoteSuffix ||
+                return lowered == loweredSuffix || lowered == emoteSuffix ||
                     (lowered.size() > loweredSuffix.size() &&
                      lowered.compare(lowered.size() - loweredSuffix.size(),
                                      loweredSuffix.size(), loweredSuffix) == 0) ||
@@ -378,7 +374,6 @@ namespace internal {
                      lowered.compare(lowered.size() - emoteSuffix.size(),
                                      emoteSuffix.size(), emoteSuffix) == 0);
             };
-
             return std::any_of(snapshot.mainTimelineLabels.begin(),
                                snapshot.mainTimelineLabels.end(), matches) ||
                 std::any_of(snapshot.diffTimelineLabels.begin(),
@@ -397,16 +392,17 @@ namespace internal {
             if(!splitEmoteCandidateBase(candidate, base)) {
                 return nullptr;
             }
-
-            const auto loaded = resourceManager.getLastLoadedModule();
-            const auto snapshot = detail::lookupModuleSnapshot(loaded);
-            if(!snapshot || !motionSnapshotHasTimelineSuffix(*snapshot, base)) {
+            const auto snapshot = detail::lookupModuleSnapshot(
+                resourceManager.getLastLoadedModule());
+            if(!snapshot ||
+               !motionSnapshotHasTimelineSuffix(*snapshot, base)) {
                 return nullptr;
             }
-
-            LOGGER->info(
-                "motion resolve split emote candidate from cached module: request={} source={}",
-                candidate.AsStdString(), snapshot->path);
+            if(LOGGER) {
+                LOGGER->info(
+                    "motion resolve split emote candidate from cached module: request={} source={}",
+                    candidate.AsStdString(), snapshot->path);
+            }
             return snapshot;
         }
 
@@ -424,14 +420,21 @@ namespace internal {
             runtime.yuzuPresentationCenteredOriginConfirmed = false;
             runtime.yuzuPresentationTranslateX = 0.0f;
             runtime.yuzuPresentationTranslateY = 0.0f;
-            // Detect emote mode from PSB root "type" field.
-            // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
-            //   type=0 → non-emote (motion), type=1 → emote
+            // The public backend supports the numeric module contract it has
+            // always exposed. Optional packages may recognize additional
+            // vendor-specific module layouts through the extension seam.
             runtime.isEmoteMode = false;
             if(snapshot && snapshot->root) {
                 auto typeVal = (*snapshot->root)["type"];
                 if(auto num = std::dynamic_pointer_cast<PSB::PSBNumber>(typeVal)) {
                     runtime.isEmoteMode = (num->getValue<int>() == 1);
+                }
+                if(!runtime.isEmoteMode) {
+                    if(const auto *extension = motionPlayerExtension();
+                       extension && extension->detectExtendedEmoteMode) {
+                        runtime.isEmoteMode =
+                            extension->detectExtendedEmoteMode(*snapshot);
+                    }
                 }
             }
             if(snapshot) {
@@ -463,6 +466,23 @@ namespace internal {
                     return it->second;
                 }
 
+                // KAG commonly preloads a module through ResourceManager and
+                // then asks a newly-created Player to bind the same storage.
+                // Prefer that shared immutable snapshot.  Parsing here first
+                // made rapid dialogue advancement rescan large E-mote PSBs on
+                // the main/render thread even though the module was cached.
+                if(resourceManager != nullptr) {
+                    const auto loaded =
+                        resourceManager->findLoadedModule(resolved);
+                    if(const auto snapshot =
+                           detail::lookupModuleSnapshot(loaded)) {
+                        resourceManager->rememberLoadedModule(
+                            name, snapshot->moduleValue);
+                        return cacheMotion(runtime, requestKey, resolvedKey,
+                                           snapshot);
+                    }
+                }
+
                 const auto snapshot = detail::loadMotionSnapshot(
                     resolved, ResourceManager::getEmotePSBDecryptSeed());
                 if(snapshot) {
@@ -488,13 +508,13 @@ namespace internal {
                                                snapshot);
                         }
                     }
-                    if(const auto snapshot =
-                           fallbackSplitEmoteMotion(*resourceManager,
-                                                    candidate)) {
+                    if(const auto snapshot = fallbackSplitEmoteMotion(
+                           *resourceManager, candidate)) {
                         resourceManager->rememberLoadedModule(
                             candidate, snapshot->moduleValue);
                         return cacheMotion(runtime, requestKey,
-                                           detail::narrow(candidate), snapshot);
+                                           detail::narrow(candidate),
+                                           snapshot);
                     }
                     if(TVPGetPlacedPath(candidate).IsEmpty()) {
                         continue;
@@ -590,9 +610,14 @@ namespace internal {
         }
 
         inline tjs_int getObjectCount(const tTJSVariant &object) {
-            tTJSVariant count;
-            return getObjectProperty(object, TJS_W("count"), count)
-                ? count.AsInteger()
+            if(object.Type() != tvtObject || object.AsObjectNoAddRef() == nullptr) {
+                return 0;
+            }
+
+            tjs_int count = 0;
+            return TJS_SUCCEEDED(object.AsObjectClosureNoAddRef().GetCount(
+                       &count, nullptr, nullptr, nullptr))
+                ? count
                 : 0;
         }
 
@@ -1252,6 +1277,13 @@ namespace internal {
             BezierCurve occ;          // mask 0x8000: opacity curve control
             BezierCurve cc;           // position curve (slot+296, "cc" PSB key)
             ControlPointCurve cp;     // rotation spline (slot+268, "cp" PSB key)
+            // mask 0x02000000: E-mote BezierPatch payload. Native slots keep
+            // the mesh easing curve at +296 and 32 normalized XY floats at
+            // +320. Keep it separate from the legacy top-level cc field so
+            // ordinary motion position easing is unaffected.
+            bool hasMeshPayload = false;
+            BezierCurve meshCc;
+            std::vector<float> meshControlPoints;
             // === Subsystem data (mask 0x80000+) ===
             // mask 0x80000: motion sub-object (sub_692AB0 at 0x6938CC)
             int motionMask = 0;
@@ -1330,6 +1362,21 @@ namespace internal {
                 return boolean->value ? 1.0 : 0.0;
             }
             return std::nullopt;
+        }
+
+        inline const std::array<float, 32> &identityMeshControlPoints() {
+            static const std::array<float, 32> points = [] {
+                std::array<float, 32> value{};
+                for(int y = 0; y < 4; ++y) {
+                    for(int x = 0; x < 4; ++x) {
+                        const int index = (y * 4 + x) * 2;
+                        value[index] = static_cast<float>(x) / 3.0f;
+                        value[index + 1] = static_cast<float>(y) / 3.0f;
+                    }
+                }
+                return value;
+            }();
+            return points;
         }
 
         inline std::optional<double>
@@ -1749,6 +1796,29 @@ namespace internal {
                 }
             }
 
+            // E-mote BezierPatch data. libgame.so sub_68FE90 checks mask
+            // 0x02000000, reads mesh.cc (fallback mesh.m), then requires
+            // mesh.bp (fallback mesh.b) to contain exactly 32 floats.
+            if(mask & 0x02000000) {
+                state.hasMeshPayload = true;
+                if(auto mesh = psbDictionaryValue(content, "mesh")) {
+                    auto curve = psbDictionaryValue(mesh, "cc");
+                    if(!curve) curve = psbDictionaryValue(mesh, "m");
+                    if(curve) state.meshCc = parseBezierCurve(curve);
+
+                    auto points = psbDictionaryList(mesh, "bp");
+                    if(!points) points = psbDictionaryList(mesh, "b");
+                    if(points && points->size() == 32) {
+                        state.meshControlPoints.reserve(32);
+                        for(size_t index = 0; index < 32; ++index) {
+                            state.meshControlPoints.push_back(static_cast<float>(
+                                psbNumberValue((*points)[static_cast<int>(index)])
+                                    .value_or(0.0)));
+                        }
+                    }
+                }
+            }
+
             // mask & 0x200: packed color payload (sub_692AB0 at
             // 0x692F4C..0x693428). Binary stores four packed RGBA DWORDs.
             if(mask & 0x200) {
@@ -2051,6 +2121,28 @@ namespace internal {
             if(state.height != slotB.height)
                 state.height = lerp(state.height, slotB.height, t);
 
+            // E-mote mesh interpolation (libgame.so sub_696EC4 ->
+            // sub_69802C). A missing bp list is the global identity 4x4
+            // patch, not an absent deformation node.
+            if(slotA.hasMeshPayload || slotB.hasMeshPayload ||
+               !slotA.meshControlPoints.empty() ||
+               !slotB.meshControlPoints.empty()) {
+                state.hasMeshPayload = true;
+                const auto &identity = identityMeshControlPoints();
+                const float *pointsA = slotA.meshControlPoints.size() == 32
+                    ? slotA.meshControlPoints.data() : identity.data();
+                const float *pointsB = slotB.meshControlPoints.size() == 32
+                    ? slotB.meshControlPoints.data() : identity.data();
+                const double meshT = !slotA.meshCc.empty()
+                    ? evaluateBezierCurve(slotA.meshCc, t) : t;
+                state.meshControlPoints.resize(32);
+                for(size_t index = 0; index < 32; ++index) {
+                    state.meshControlPoints[index] = static_cast<float>(
+                        lerp(pointsA[index], pointsB[index], meshT));
+                }
+                state.meshCc = slotA.meshCc;
+            }
+
             // FlipX/FlipY: not interpolated, use slot A value
             // (sub_699AE4 copies directly from clip slot, no lerp)
 
@@ -2254,7 +2346,10 @@ namespace internal {
             int &outWidth, int &outHeight,
             std::vector<std::uint8_t> &decompressedOut,
             double &outOriginX, double &outOriginY,
-            bool *outDecodedIsBgra = nullptr) {
+            bool *outDecodedIsBgra = nullptr,
+            bool decodePixelData = true,
+            std::string *outResourcePath = nullptr,
+            std::string *outCompressName = nullptr) {
             outWidth = 0;
             outHeight = 0;
             outOriginX = 0.0;
@@ -2263,7 +2358,53 @@ namespace internal {
             if(outDecodedIsBgra) {
                 *outDecodedIsBgra = false;
             }
+            if(outResourcePath) {
+                outResourcePath->clear();
+            }
+            if(outCompressName) {
+                outCompressName->clear();
+            }
             if(source.empty() || isMotionCrossReference(source)) {
+                return nullptr;
+            }
+
+            // E-mote uses synthetic transparent sources as transform/mesh
+            // containers.  They are encoded directly in the source name as
+            //
+            //     blank/<width>:<height>:<originX>:<originY>
+            //
+            // and therefore have no PSB pixel resource to look up.  Native
+            // libgame still fills the node's clip rectangle and anchor from
+            // these four values; descendants are then evaluated through the
+            // blank node's Bezier patch.  Leaving the dimensions at zero
+            // drops that patch and detaches face/hair/body child layers.
+            if(source.rfind("blank/", 0) == 0) {
+                const char *cursor = source.c_str() + 6;
+                double values[4]{};
+                bool valid = true;
+                for(int i = 0; i < 4; ++i) {
+                    char *end = nullptr;
+                    values[i] = std::strtod(cursor, &end);
+                    if(end == cursor || !std::isfinite(values[i])) {
+                        valid = false;
+                        break;
+                    }
+                    if(i < 3) {
+                        if(*end != ':') {
+                            valid = false;
+                            break;
+                        }
+                        cursor = end + 1;
+                    } else if(*end != '\0') {
+                        valid = false;
+                    }
+                }
+                if(valid && values[0] > 0.0 && values[1] > 0.0) {
+                    outWidth = static_cast<int>(std::lround(values[0]));
+                    outHeight = static_cast<int>(std::lround(values[1]));
+                    outOriginX = values[2];
+                    outOriginY = values[3];
+                }
                 return nullptr;
             }
 
@@ -2312,6 +2453,15 @@ namespace internal {
                            outWidth > 0 && outHeight > 0) {
                             auto compressStr =
                                 psbDictionaryString(iconNode, "compress");
+                            if(outResourcePath) {
+                                *outResourcePath = pixelPath;
+                            }
+                            if(outCompressName) {
+                                *outCompressName = compressStr;
+                            }
+                            if(!decodePixelData) {
+                                return resIt->second.get();
+                            }
                             const bool isRL =
                                 isPsbRLCompressName(compressStr);
                             const bool decoded = decodePsbPixelResource(
@@ -2389,6 +2539,15 @@ namespace internal {
                             auto compressStr =
                                 psbDictionaryString(node, "compress");
                             if(outWidth > 0 && outHeight > 0) {
+                                if(outResourcePath) {
+                                    *outResourcePath = resPath;
+                                }
+                                if(outCompressName) {
+                                    *outCompressName = compressStr;
+                                }
+                                if(!decodePixelData) {
+                                    return resource.get();
+                                }
                                 const bool isRL =
                                     isPsbRLCompressName(compressStr);
                                 const bool decoded = decodePsbPixelResource(

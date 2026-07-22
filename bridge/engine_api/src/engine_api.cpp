@@ -179,6 +179,8 @@ struct engine_handle_s {
     size_t max_events = 2000;
     uint64_t sequence = 0;
     uint64_t dropped = 0;
+    uint64_t suppressed_slow_frames = 0;
+    std::chrono::steady_clock::time_point last_slow_frame_log{};
     int64_t monotonic_offset_us = 0;
     std::string session_id;
     std::deque<std::string> events;
@@ -2168,17 +2170,32 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
     if (total_us < threshold_us) {
       return;
     }
+    uint64_t suppressed_slow_frames = 0;
+    {
+      std::lock_guard<std::mutex> diagnostic_guard(impl->diagnostics.mutex);
+      const auto now = std::chrono::steady_clock::now();
+      if (impl->diagnostics.last_slow_frame_log.time_since_epoch().count() > 0 &&
+          now - impl->diagnostics.last_slow_frame_log <
+              std::chrono::seconds(1)) {
+        ++impl->diagnostics.suppressed_slow_frames;
+        return;
+      }
+      impl->diagnostics.last_slow_frame_log = now;
+      suppressed_slow_frames = impl->diagnostics.suppressed_slow_frames;
+      impl->diagnostics.suppressed_slow_frames = 0;
+    }
     spdlog::warn(
         "engine_tick_spike tick={} total_us={} input_us={} app_us={} "
         "draw_us={} recycle_us={} capture_us={} inputs={} renderer={} "
-        "frame_backend={}",
+        "frame_backend={} suppressed={}",
         static_cast<unsigned long long>(impl->tick_count), total_us,
         DurationUs(tick_start, after_input),
         DurationUs(after_input, after_application_run),
         DurationUs(after_application_run, after_draw_scene),
         DurationUs(after_draw_scene, after_recycle),
         DurationUs(after_recycle, tick_end), dispatched_inputs,
-        impl->render.renderer, frame_backend);
+        impl->render.renderer, frame_backend,
+        static_cast<unsigned long long>(suppressed_slow_frames));
     std::ostringstream fields;
     fields << "{\"tick\":" << impl->tick_count
            << ",\"input_us\":" << DurationUs(tick_start, after_input)
@@ -2187,6 +2204,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
            << ",\"recycle_us\":" << DurationUs(after_draw_scene, after_recycle)
            << ",\"capture_us\":" << DurationUs(after_recycle, tick_end)
            << ",\"inputs\":" << dispatched_inputs
+           << ",\"suppressed\":" << suppressed_slow_frames
            << ",\"renderer\":\"" << JsonEscape(impl->render.renderer)
            << "\",\"frame_backend\":\"" << JsonEscape(frame_backend) << "\"}";
     PushDiagnosticEvent(impl, "engine", "render", "warning",

@@ -36,19 +36,33 @@ namespace motion {
         void setMeshDivisionRatio(double v);
         [[nodiscard]] double getMeshDivisionRatio() const { return _meshDivisionRatio; }
 
-        void setQueuing(bool v) { _queuing = v; }
-        [[nodiscard]] bool getQueuing() const { return _queuing; }
+        void setQueuing(bool v);
+        [[nodiscard]] bool getQueuing() const {
+            return _player.getEmoteAnimatorQueuing();
+        }
 
-        void setHairScale(double v) { _hairScale = v; }
+        void setHairScale(double v) {
+            _hairScale = v;
+            _player.setHairScale(v);
+        }
         [[nodiscard]] double getHairScale() const { return _hairScale; }
 
-        void setPartsScale(double v) { _partsScale = v; }
+        void setPartsScale(double v) {
+            _partsScale = v;
+            _player.setPartsScale(v);
+        }
         [[nodiscard]] double getPartsScale() const { return _partsScale; }
 
-        void setBustScale(double v) { _bustScale = v; }
+        void setBustScale(double v) {
+            _bustScale = v;
+            _player.setBustScale(v);
+        }
         [[nodiscard]] double getBustScale() const { return _bustScale; }
 
-        void setBodyScale(double v) { _bodyScale = v; }
+        void setBodyScale(double v) {
+            _bodyScale = v;
+            _player.setBodyScale(v);
+        }
         [[nodiscard]] double getBodyScale() const { return _bodyScale; }
 
         void setVisible(bool v);
@@ -70,6 +84,21 @@ namespace motion {
 
         void setOpengl(bool v) { _opengl = v; }
         [[nodiscard]] bool getOpengl() const { return _opengl; }
+
+        void setMaskMode(tjs_int v) { _player.setMaskMode(v); }
+        [[nodiscard]] tjs_int getMaskMode() const { return _player.getMaskMode(); }
+
+        void setCompletionType(tjs_int v) { _player.setCompletionType(v); }
+        [[nodiscard]] tjs_int getCompletionType() const {
+            return _player.getCompletionType();
+        }
+
+        [[nodiscard]] tTJSVariant getVariableKeys() {
+            return _player.getVariableKeys();
+        }
+        [[nodiscard]] bool getAllplaying() const {
+            return _player.getAllplaying();
+        }
 
         void setModule(tTJSVariant v);
         [[nodiscard]] tTJSVariant getModule() const;
@@ -93,6 +122,8 @@ namespace motion {
         void hide();
         void assignState();
         void initPhysics();
+        tTJSVariant serialize();
+        void unserialize(tTJSVariant data);
 
         void setRot(double rot, double transition = 0.0,
                     double ease = 0.0);
@@ -175,8 +206,11 @@ namespace motion {
         void skip();
         void skipToSync();
         void addPlayCallback();
-        void pass(double dt);
-        void progress(double dt);
+        void pass();
+        // Motion.EmotePlayer follows libgame sub_67EC94: the public TJS
+        // argument is a TVP millisecond interval and is converted to 60 Hz
+        // frame units before advancing the native player.
+        void progress(double dtMilliseconds);
 
         void setOuterForce(double x, double y);
         void setOuterForce(ttstr label, double x, double y,
@@ -191,10 +225,25 @@ namespace motion {
         static tjs_error containsCompat(tTJSVariant *result, tjs_int numparams,
                                         tTJSVariant **param,
                                         iTJSDispatch2 *objthis);
+        static tjs_error setDrawAffineTranslateMatrixCompat(
+            tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
+            iTJSDispatch2 *objthis);
+        static tjs_error clearCompat(tTJSVariant *result, tjs_int numparams,
+                                     tTJSVariant **param,
+                                     iTJSDispatch2 *objthis);
+        static tjs_error drawCompat(tTJSVariant *result, tjs_int numparams,
+                                    tTJSVariant **param,
+                                    iTJSDispatch2 *objthis);
 
         // Access to internal Player for delegation from NCB methods
         Player &getPlayer() { return _player; }
         const Player &getPlayer() const { return _player; }
+
+    protected:
+        // D3DEmotePlayer's libgame sub_530E3C entry point already receives
+        // frame units. Keep the shared sub-stepped update behind this helper
+        // so the two public APIs retain their distinct native time domains.
+        void progressFrames(double dtFrames);
 
     private:
         // Aligned to libkrkr2.so: EmoteObject(40b) owns ResourceManager + Player(1496b).
@@ -241,6 +290,9 @@ namespace motion {
     class D3DEmotePlayer : public EmotePlayer {
     public:
         explicit D3DEmotePlayer(ResourceManager rm) : EmotePlayer(rm) {}
+
+        // Unlike Motion.EmotePlayer, the D3D-compatible API consumes frames.
+        void progress(double dtFrames);
     };
 
 } // namespace motion

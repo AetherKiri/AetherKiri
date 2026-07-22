@@ -27,6 +27,10 @@ namespace motion {
     class SeparateLayerAdaptor;
 }
 
+namespace aetherinternal {
+    class EmoteRuntimeExtension;
+}
+
 namespace motion {
     namespace detail {
         struct MotionClip;
@@ -75,6 +79,8 @@ namespace motion {
     };
 
     class Player {
+        friend class ::aetherinternal::EmoteRuntimeExtension;
+
     public:
         explicit Player(ResourceManager rm = ResourceManager{});
         ~Player();
@@ -124,6 +130,13 @@ namespace motion {
         void setQueuing(bool v) { _queuing = v; }
         bool getQueuing() const { return _queuing; }
 
+        // Motion.EmotePlayer/D3DEmotePlayer's similarly named property maps
+        // to Player+1161, not to the ordinary Motion.Player queuing byte.
+        // libgame's generated setters only ever enable this mode (the input
+        // value is intentionally ignored).
+        void enableEmoteAnimatorQueuing() { _emoteAnimatorFlag = true; }
+        bool getEmoteAnimatorQueuing() const { return _emoteAnimatorFlag; }
+
         void setDirectEdit(bool v) { _directEdit = v; }
         bool getDirectEdit() const { return _directEdit; }
 
@@ -136,6 +149,12 @@ namespace motion {
         void setAllplaying(bool v);
         bool getPlaying() const;
         bool getAllplaying() const { return _allplaying; }
+        // Motion.EmotePlayer.animating is not Player.allplaying.  The native
+        // getter (libgame.so sub_671378) reports direct controller work that
+        // is not owned by an active timeline. Passive timeline tracks (blink,
+        // breathing and physics) keep allplaying true solely so they continue
+        // to receive progress ticks.
+        bool getEmoteAnimating() const;
 
         void setSyncWaiting(bool v) { _syncWaiting = v; }
         bool getSyncWaiting() const { return _syncWaiting; }
@@ -275,6 +294,7 @@ namespace motion {
         void setHairScale(double s);
         void setPartsScale(double s);
         void setBustScale(double s);
+        void setBodyScale(double s);
         void startWind(double minAngle, double maxAngle, double amplitude,
                        double freqX, double freqY);
         void stopWind();
@@ -322,6 +342,10 @@ namespace motion {
         void adjustGamma(tTJSVariant args);
         void draw();
         void frameProgress(double dt);
+        void frameProgressManually(double dt) {
+            noteManualProgress();
+            frameProgress(dt);
+        }
         void autoProgressFromContinuousTick(tjs_uint64 tick);
         iTJSDispatch2 *getAutoProgressDispatchForCompat() const {
             return _autoProgressDispatch;
@@ -340,6 +364,7 @@ namespace motion {
         tTJSVariant getLayerGetter(ttstr name);
         tTJSVariant getLayerGetterList();
         void skipToSync();
+        void passTimelinesLike_0x67A100();
         void setStereovisionCameraPosition(double x, double y, double z);
 
         // Timeline/variable queries
@@ -400,9 +425,17 @@ namespace motion {
                                            tjs_int numparams,
                                            tTJSVariant **param,
                                            iTJSDispatch2 *objthis);
+        static tjs_error clearCompatForNative(tTJSVariant *result,
+                                              tjs_int numparams,
+                                              tTJSVariant **param,
+                                              Player *nativeInstance);
         static tjs_error drawCompat(tTJSVariant *result, tjs_int numparams,
                                     tTJSVariant **param,
                                     iTJSDispatch2 *objthis);
+        static tjs_error drawCompatForNative(tTJSVariant *result,
+                                             tjs_int numparams,
+                                             tTJSVariant **param,
+                                             Player *nativeInstance);
         static tjs_error playCompat(tTJSVariant *result, tjs_int numparams,
                                     tTJSVariant **param, iTJSDispatch2 *objthis);
         static tjs_error progressCompatMethod(tTJSVariant *result,
@@ -466,11 +499,11 @@ namespace motion {
         const detail::TimelineState *primaryTimelineStateLike_0x66F80C() const;
         void preProgressPlayingTimelinesLike_0x671764(
             double dt, std::unordered_map<std::string, double> *prevTimes);
-        void resetTimelineControlStateLike_0x671A50(
+        void seekTimelineControlStateLike_0x66EE30(
             detail::TimelineState &state,
             const detail::TimelineControlBinding &binding,
             double time);
-        void scheduleTimelineControlAnimatorLike_0x671A50(
+        void scheduleTimelineControlAnimatorLike_0x6646E0(
             detail::TimelineState &state,
             size_t trackIndex,
             float value,
@@ -504,6 +537,9 @@ namespace motion {
         void applyEvalResultPostProcessLike_0x67CC9C();
         void applyClampControlsLike_0x67C8A8();
         bool shouldMirrorEvalLabelLike_0x67C6B0(const std::string &label);
+        void ensureEmoteControlStateInitialized();
+        void stepAutoBlinkControllersLike_0x660FBC(double dt);
+        void stepEmotePhysicsLike_0x678B28(double dt);
         double &ensureEvalResultSlotLike_0x686944(const std::string &label);
         void removeEvalResultSlotLike_Reset(const std::string &label);
         void writeEvalResultValueLike_0x6C4668(const std::string &label,
@@ -732,12 +768,13 @@ namespace motion {
         // to interpolated derivative path instead of using deltaPos.
         bool _noUpdateYet = true;  // player+608
 
-        // Aligned to libkrkr2.so emote scale/rotate fields:
-        // sub_681F20: player+1184, sub_681F28: player+1192, sub_681F30: player+1200
-        // player+1168/+1176 are the duplicated meshDivisionRatio doubles read by
-        // Player_startWind (0x6709AC).
+        // Aligned to libgame.so emote scale/rotate fields:
+        // meshDivisionRatio at player+1168 is read by startWind; bodyScale at
+        // player+1176 is read by sub_678D50 when resolving physics anchors.
+        // sub_681F20: player+1184, sub_681F28: player+1192,
+        // sub_681F30: player+1200.
         double _emoteMeshDivisionRatio = 1.0;
-        double _emoteMeshDivisionRatioDup = 1.0;
+        double _bodyScale = 1.0;
         double _hairScale = 1.0;    // player+1184
         double _partsScale = 1.0;   // player+1192
         double _bustScale = 1.0;    // player+1200
@@ -760,7 +797,8 @@ namespace motion {
             double value = 0.0;
             double transition = 0.0;
             double ease = 0.0;
-        } _emoteScaleState, _emoteRotState;
+        } _emoteRotState;
+        EmoteScalarAnimatorState _emoteScaleState{1.0, 0.0, 0.0};
         struct EmoteColorState {
             tjs_uint32 packed = 0;
             std::array<float, 4> rgbaBytes{0.f, 0.f, 0.f, 0.f};
@@ -792,6 +830,11 @@ namespace motion {
         OuterForceState _bustOuterForce;
         OuterForceState _hairOuterForce;
         OuterForceState _partsOuterForce;
+
+        // Runtime state owned by an optional motionplayer extension. Keeping
+        // this opaque prevents vendor controller layouts from leaking into
+        // the public Player data model.
+        std::shared_ptr<void> _motionExtensionState;
 
         // Aligned to libkrkr2.so player+992: TJS Math.RandomGenerator object.
         // sub_6BA7B8 calls its "random" method to get [0.0, 1.0) doubles.

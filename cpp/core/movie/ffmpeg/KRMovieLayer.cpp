@@ -7,12 +7,18 @@
 #include <chrono>
 #include <cstring>
 #include <cstdlib>
+#include <spdlog/spdlog.h>
 
 extern "C" {
 #include "libswscale/swscale.h"
 }
 
 NS_KRMOVIE_BEGIN
+
+static bool VideoTraceEnabled() {
+    const char *value = std::getenv("AETHERKIRI_VIDEO_TRACE");
+    return value != nullptr && value[0] != '\0';
+}
 
 static inline uint8_t ClampByte(int value) {
     if(value < 0)
@@ -59,6 +65,9 @@ static double VideoSubmitMaxFps() {
 }
 
 VideoPresentLayer::~VideoPresentLayer() {
+    if(VideoTraceEnabled())
+        spdlog::info("MoviePlayerLayer destroying layer={}",
+                     static_cast<const void *>(this));
     ShutdownPlayer();
 }
 
@@ -115,6 +124,10 @@ void VideoPresentLayer::SetVideoBuffer(tTVPBaseTexture *buff1,
 }
 
 void VideoPresentLayer::ClearVideoBuffer() {
+    if(VideoTraceEnabled())
+        spdlog::info("MoviePlayerLayer clear buffer layer={} player={}",
+                     static_cast<const void *>(this),
+                     static_cast<const void *>(m_pPlayer));
     if(m_continuousHookRegistered) {
         TVPRemoveContinuousEventHook(this);
         m_continuousHookRegistered = false;
@@ -133,6 +146,10 @@ void VideoPresentLayer::ClearVideoBuffer() {
 }
 
 void VideoPresentLayer::ShutdownPlayer() {
+    if(VideoTraceEnabled())
+        spdlog::info("MoviePlayerLayer shutdown layer={} player={}",
+                     static_cast<const void *>(this),
+                     static_cast<const void *>(m_pPlayer));
     ClearVideoBuffer();
     TVPMoviePlayer::ShutdownPlayer();
 }
@@ -258,6 +275,14 @@ int VideoPresentLayer::AddVideoPicture(DVDVideoPicture &pic, int index) {
 void MoviePlayerLayer::BuildGraph(tTJSNI_VideoOverlay *callbackwin,
                                   IStream *stream, const tjs_char *streamname,
                                   const tjs_char *type, uint64_t size) {
+    if(VideoTraceEnabled()) {
+        TJS::tTJSNarrowStringHolder holder(streamname);
+        const std::string filename = holder.operator const tjs_nchar *();
+        spdlog::info("MoviePlayerLayer build file={} layer={} callback={}",
+                     filename,
+                     static_cast<const void *>(this),
+                     static_cast<const void *>(callbackwin));
+    }
     m_pCallbackWin = callbackwin;
     m_pPlayer->SetCallback([this](auto &&PH1, auto &&PH2) {
         OnPlayEvent(std::forward<decltype(PH1)>(PH1),
@@ -275,6 +300,9 @@ void MoviePlayerLayer::OnPlayEvent(KRMovieEvent msg, void *p) {
         ev.LParam = frame;
         m_pCallbackWin->PostEvent(ev);
     } else if(msg == KRMovieEvent::Ended) {
+        if(VideoTraceEnabled())
+            spdlog::info("MoviePlayerLayer OnPlayEvent ended callback={}",
+                         static_cast<const void *>(m_pCallbackWin));
         NativeEvent ev(WM_GRAPHNOTIFY);
         ev.WParam = EC_COMPLETE;
         ev.LParam = 0;

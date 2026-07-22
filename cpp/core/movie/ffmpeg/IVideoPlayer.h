@@ -66,6 +66,10 @@ public:
 
     virtual bool HasData() const = 0;
 
+    virtual int GetPendingDataSize() const { return HasData() ? 1 : 0; }
+
+    virtual bool IsWorkerRunning() const { return true; }
+
     virtual int GetLevel() = 0;
 
     bool IsInited() const override = 0;
@@ -124,6 +128,10 @@ public:
     bool AcceptsData() override = 0;
 
     virtual bool HasData() const = 0;
+
+    virtual int GetPendingDataSize() const { return HasData() ? 1 : 0; }
+
+    virtual bool IsWorkerRunning() const { return true; }
 
     virtual int GetLevel() = 0;
 

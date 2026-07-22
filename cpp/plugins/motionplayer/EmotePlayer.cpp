@@ -6,7 +6,10 @@
 //
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
+#include <unordered_map>
 
 #include "EmotePlayer.h"
 #include "RuntimeSupport.h"
@@ -81,6 +84,22 @@ namespace {
         }
         return self.getPlayer().getProject();
     }
+
+    bool emoteTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_EMOTE_TRACE");
+            return value && *value && std::strcmp(value, "0") != 0;
+        }();
+        return enabled;
+    }
+
+    bool emoteAffineTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_EMOTE_AFFINE_TRACE");
+            return value && *value && std::strcmp(value, "0") != 0;
+        }();
+        return enabled;
+    }
 } // namespace
 
 namespace motion {
@@ -102,8 +121,19 @@ namespace motion {
         _player.setEmoteMeshDivisionRatio(v);
     }
 
+    // Motion.EmotePlayer sub_67F34C and D3DEmotePlayer sub_5304BC both
+    // ignore the assigned boolean and set Player+1161 to one. This switches
+    // controller setters from restart semantics to native queued semantics.
+    void EmotePlayer::setQueuing(bool) {
+        _queuing = true;
+        _player.enableEmoteAnimatorQueuing();
+        if(emoteTraceEnabled()) {
+            LOGGER->info("[EMOTE_TRACE] animator queuing enabled");
+        }
+    }
+
     bool EmotePlayer::getAnimating() const {
-        return _player.getAllplaying();
+        return _player.getEmoteAnimating();
     }
 
     void EmotePlayer::setModule(tTJSVariant v) {
@@ -174,10 +204,17 @@ namespace motion {
         copy->_smoothing = _smoothing;
         copy->_meshDivisionRatio = _meshDivisionRatio;
         copy->_queuing = _queuing;
+        if(_queuing) {
+            copy->_player.enableEmoteAnimatorQueuing();
+        }
         copy->_hairScale = _hairScale;
         copy->_partsScale = _partsScale;
         copy->_bustScale = _bustScale;
         copy->_bodyScale = _bodyScale;
+        copy->_player.setHairScale(_hairScale);
+        copy->_player.setPartsScale(_partsScale);
+        copy->_player.setBustScale(_bustScale);
+        copy->_player.setBodyScale(_bodyScale);
         copy->_progress = _progress;
         copy->_modified = _modified;
         copy->_drawVisible = _drawVisible;
@@ -228,10 +265,25 @@ namespace motion {
         _modified = true;
     }
 
+    tTJSVariant EmotePlayer::serialize() { return _player.serialize(); }
+
+    void EmotePlayer::unserialize(tTJSVariant data) {
+        _player.unserialize(data);
+        _modified = true;
+    }
+
     // Aligned to libkrkr2.so sub_5302E4: delegates to Player's rotAnimator
     void EmotePlayer::setRot(double rot, double transition, double ease) {
+        const bool changed = std::fabs(_rot - rot) > 1e-9;
         _rot = rot;
         _player.setRotate(rot, transition, ease);
+        if(changed && emoteAffineTraceEnabled()) {
+            LOGGER->info(
+                "[EMOTE_AFFINE] player={} motion={} rotRadians={:.6f} rotDegrees={:.3f} transition={:.3f} ease={:.3f}",
+                static_cast<const void *>(this),
+                detail::narrow(_player.getMotion()), rot,
+                rot * 57.2957795130823208768, transition, ease);
+        }
         _modified = true;
     }
 
@@ -261,9 +313,17 @@ namespace motion {
     // Aligned to libkrkr2.so sub_5301EC: delegates to Player's coordAnimator
     void EmotePlayer::setCoord(double x, double y, double transition,
                                double ease) {
+        const bool changed = std::fabs(_coordX - x) > 1e-6 ||
+            std::fabs(_coordY - y) > 1e-6;
         _coordX = x;
         _coordY = y;
         _player.setEmoteCoord(x, y, transition, ease);
+        if(changed && emoteAffineTraceEnabled()) {
+            LOGGER->info(
+                "[EMOTE_AFFINE] player={} motion={} coord=({:.3f},{:.3f}) transition={:.3f} ease={:.3f}",
+                static_cast<const void *>(this),
+                detail::narrow(_player.getMotion()), x, y, transition, ease);
+        }
         _modified = true;
     }
 
@@ -290,10 +350,19 @@ namespace motion {
 
     // Aligned to libkrkr2.so sub_530260: finalScale = baseScale * userScale
     void EmotePlayer::setScale(double s, double transition, double ease) {
+        const bool changed = std::fabs(static_cast<double>(_userScale) - s) >
+            1e-7;
         _userScale = static_cast<float>(s);
         const double finalScale =
             static_cast<double>(_baseScale) * static_cast<double>(_userScale);
         _player.setEmoteScale(finalScale, transition, ease);
+        if(changed && emoteAffineTraceEnabled()) {
+            LOGGER->info(
+                "[EMOTE_AFFINE] player={} motion={} userScale={:.6f} baseScale={:.6f} finalScale={:.6f} transition={:.3f} ease={:.3f}",
+                static_cast<const void *>(this),
+                detail::narrow(_player.getMotion()), s,
+                static_cast<double>(_baseScale), finalScale, transition, ease);
+        }
         _modified = true;
     }
 
@@ -586,8 +655,13 @@ namespace motion {
             }
             if(_player.hasActiveMotion()) {
                 mode = Sdl3PlayMode::MotionKey;
+                const ttstr metaChara =
+                    readMetadataBaseField(module, TJS_W("chara"));
                 const ttstr metaMotion =
                     readMetadataBaseField(module, TJS_W("motion"));
+                if(!metaChara.IsEmpty()) {
+                    _player.setChara(metaChara);
+                }
                 clipLookupLabel = !metaMotion.IsEmpty() ? metaMotion : label;
                 LOGGER->debug(
                     "EmotePlayer::play mode=MotionKey storageKey={} clipLookup={} playLabel={}",
@@ -606,7 +680,14 @@ namespace motion {
                     _storageKey = ttstr(entry.key.c_str());
                     _module = entry.module;
                 }
-                clipLookupLabel = label;
+                const ttstr metaChara =
+                    readMetadataBaseField(entry.module, TJS_W("chara"));
+                const ttstr metaMotion =
+                    readMetadataBaseField(entry.module, TJS_W("motion"));
+                if(!metaChara.IsEmpty()) {
+                    _player.setChara(metaChara);
+                }
+                clipLookupLabel = !metaMotion.IsEmpty() ? metaMotion : label;
                 LOGGER->debug(
                     "EmotePlayer::play mode=SingleCache key={} chara={} clipLookup={}",
                     entry.key, _player.getChara().AsStdString(),
@@ -614,6 +695,19 @@ namespace motion {
             } else if(!cached.empty()) {
                 mode = Sdl3PlayMode::MultiCache;
                 selfClear = false;
+                const ttstr requestedChara = _player.getChara();
+                const auto requestedCharaString =
+                    requestedChara.AsStdString();
+                const auto requestedMotionString = label.AsStdString();
+                const tTJSVariant mostRecentlyLoaded =
+                    rm.getLastLoadedModule();
+                iTJSDispatch2 *mostRecentlyLoadedObject =
+                    mostRecentlyLoaded.Type() == tvtObject
+                    ? mostRecentlyLoaded.AsObjectNoAddRef()
+                    : nullptr;
+                const ResourceManager::CachedModuleEntry *bestEntry = nullptr;
+                int bestScore = -1;
+                std::uint64_t bestGeneration = 0;
                 for(const auto &entry : cached) {
                     const ttstr metaChara =
                         readMetadataBaseField(entry.module, TJS_W("chara"));
@@ -622,14 +716,68 @@ namespace motion {
                     if(metaChara.IsEmpty() || metaMotion.IsEmpty()) {
                         continue;
                     }
-                    _player.bindMotionModuleKey(ttstr(entry.key.c_str()));
-                    _storageKey = ttstr(entry.key.c_str());
-                    _module = entry.module;
+
+                    const auto metaCharaString = metaChara.AsStdString();
+                    const auto metaMotionString = metaMotion.AsStdString();
+                    int score = 0;
+                    if(!requestedCharaString.empty()) {
+                        if(metaCharaString != requestedCharaString) {
+                            continue;
+                        }
+                        score += 4;
+                    }
+                    if(!requestedMotionString.empty()) {
+                        if(metaMotionString != requestedMotionString) {
+                            continue;
+                        }
+                        score += 8;
+                    }
+                    if(entry.key.find(metaMotionString) != std::string::npos) {
+                        score += 1;
+                    }
+                    // Several resolution variants intentionally carry the
+                    // same chara/motion metadata. MotionAffineSourceLayer
+                    // loads the variant selected for the current zoom and
+                    // immediately constructs a fresh EmotePlayer from this
+                    // shared ResourceManager. Native binds that just-loaded
+                    // object. Iterating the unordered cache instead could
+                    // bind an older half-resolution PSB while the script
+                    // applies the full-resolution scale, making one actor
+                    // suddenly shrink after an affine/zoom transition.
+                    if(entry.module.AsObjectNoAddRef() ==
+                       mostRecentlyLoadedObject) {
+                        score += 16;
+                    }
+                    // Resolve equal-metadata resolution variants by their
+                    // own load order.  The global last-loaded object can be
+                    // another actor when a scene constructs Chocola and
+                    // Vanilla back-to-back; in that case unordered_map order
+                    // used to select an old half-resolution model and made
+                    // only one actor suddenly shrink.
+                    if(score > bestScore ||
+                       (score == bestScore &&
+                        entry.loadGeneration > bestGeneration)) {
+                        bestScore = score;
+                        bestGeneration = entry.loadGeneration;
+                        bestEntry = &entry;
+                    }
+                }
+
+                if(bestEntry != nullptr) {
+                    const ttstr metaChara = readMetadataBaseField(
+                        bestEntry->module, TJS_W("chara"));
+                    const ttstr metaMotion = readMetadataBaseField(
+                        bestEntry->module, TJS_W("motion"));
+                    _player.bindMotionModuleKey(
+                        ttstr(bestEntry->key.c_str()));
+                    _storageKey = ttstr(bestEntry->key.c_str());
+                    _module = bestEntry->module;
+                    _player.setChara(metaChara);
                     clipLookupLabel = metaMotion;
-                    LOGGER->warn(
-                        "EmotePlayer::play mode=MultiCache key={}: selected first metadata match",
-                        entry.key);
-                    break;
+                    LOGGER->debug(
+                        "EmotePlayer::play mode=MultiCache key={} chara={} clipLookup={}: selected most-recent exact metadata match",
+                        bestEntry->key, metaChara.AsStdString(),
+                        metaMotion.AsStdString());
                 }
             }
         }
@@ -684,21 +832,52 @@ namespace motion {
         _modified = true;
     }
 
-    // Aligned to libkrkr2.so sub_530A5C → sub_67D01C:
-    // Binary progress() delegates to Player's full physics/animation engine.
-    void EmotePlayer::pass(double dt) {
-        _progress += dt;
-        double remaining = dt;
-        while(remaining > 0.0) {
-            const double step = std::min(remaining, 1.1);
-            _player.frameProgress(step);
-            remaining -= step;
+    // Aligned to libgame.so sub_530E30 → sub_67A100. pass() flushes the
+    // remaining control frames of non-looping timelines; it is deliberately
+    // separate from progress(dt).
+    void EmotePlayer::pass() {
+        _player.passTimelinesLike_0x67A100();
+        _modified = true;
+    }
+
+    // Shared full animation advance.  sub_530E3C enters Player_progress once
+    // with the original delta.  Player_progress internally chunks controller
+    // animators to 1.1 frames, but evaluates the physics controllers once with
+    // the unmodified delta after those chunks.
+    void EmotePlayer::progressFrames(double dtFrames) {
+        _progress += dtFrames;
+        // D3DEmotePlayer is advanced explicitly by the game's render tick.
+        // Record that manual advance on the shared Player so its compatibility
+        // continuous callback cannot apply the same wall-clock interval a
+        // second time.
+        const double beforeTick = _player.getFrameTickCount();
+        _player.frameProgressManually(dtFrames);
+        if(emoteTraceEnabled()) {
+            static std::unordered_map<const EmotePlayer *, uint64_t> counts;
+            const uint64_t count = ++counts[this];
+            if(count <= 12 || count % 60 == 0 || dtFrames > 2.0) {
+                LOGGER->info(
+                    "[EMOTE_TRACE] progress player={} call={} dtFrames={:.4f} "
+                    "frameTick={:.4f}->{:.4f} speed={} animating={} allplaying={}",
+                    static_cast<const void *>(this), count, dtFrames,
+                    beforeTick, _player.getFrameTickCount(),
+                    _player.getSpeed() ? 1 : 0,
+                    _player.getEmoteAnimating() ? 1 : 0,
+                    _player.getAllplaying() ? 1 : 0);
+            }
         }
         _modified = true;
     }
 
-    void EmotePlayer::progress(double dt) {
-        pass(dt);
+    // Motion.EmotePlayer: libgame sub_67EC94 converts the TVP millisecond
+    // interval to 60 Hz frame units before entering the common player update.
+    void EmotePlayer::progress(double dtMilliseconds) {
+        progressFrames(dtMilliseconds * 60.0 / 1000.0);
+    }
+
+    // D3DEmotePlayer: libgame sub_530E3C receives frame units directly.
+    void D3DEmotePlayer::progress(double dtFrames) {
+        progressFrames(dtFrames);
     }
 
     // Aligned to libkrkr2.so sub_672D58: routes by label to bust/h/parts
@@ -792,6 +971,38 @@ namespace motion {
             return TJS_S_OK;
         }
         return TJS_E_INVALIDPARAM;
+    }
+
+    tjs_error EmotePlayer::setDrawAffineTranslateMatrixCompat(
+        tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
+        iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        return self ? Player::setDrawAffineTranslateMatrixCompat(
+                          result, numparams, param, &self->_player)
+                    : TJS_E_INVALIDOBJECT;
+    }
+
+    tjs_error EmotePlayer::clearCompat(tTJSVariant *result,
+                                       tjs_int numparams,
+                                       tTJSVariant **param,
+                                       iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        return self ? Player::clearCompatForNative(
+                          result, numparams, param, &self->_player)
+                    : TJS_E_INVALIDOBJECT;
+    }
+
+    tjs_error EmotePlayer::drawCompat(tTJSVariant *result,
+                                      tjs_int numparams,
+                                      tTJSVariant **param,
+                                      iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        return self ? Player::drawCompatForNative(
+                          result, numparams, param, &self->_player)
+                    : TJS_E_INVALIDOBJECT;
     }
 
 } // namespace motion

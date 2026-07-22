@@ -32,6 +32,42 @@ namespace {
         return enabled && *enabled && std::strcmp(enabled, "0") != 0;
     }
 
+    bool emoteTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_EMOTE_TRACE");
+            return value && *value && std::strcmp(value, "0") != 0;
+        }();
+        return enabled;
+    }
+
+    bool emoteAffineTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value = std::getenv("AETHERKIRI_EMOTE_AFFINE_TRACE");
+            return value && *value && std::strcmp(value, "0") != 0;
+        }();
+        return enabled;
+    }
+
+    bool emoteTimelineTraceEnabled() {
+        static const bool enabled = [] {
+            const char *value =
+                std::getenv("AETHERKIRI_EMOTE_TIMELINE_TRACE");
+            return value && *value && std::strcmp(value, "0") != 0;
+        }();
+        return enabled;
+    }
+
+    std::string joinTimelineLabels(const std::vector<std::string> &labels) {
+        std::string result;
+        for(const auto &label : labels) {
+            if(!result.empty()) {
+                result += ',';
+            }
+            result += label;
+        }
+        return result;
+    }
+
     std::string describeLayerForQueryDebug(tTJSNI_BaseLayer *layer) {
         if(!layer) {
             return "<null>";
@@ -322,7 +358,6 @@ namespace motion {
             return;
         }
         ensureEvalResultSlotLike_0x686944(label) = value;
-        _variableValues[label] = value;
         _evalResultValues[label] = value;
     }
 
@@ -493,6 +528,13 @@ namespace motion {
 
         tTJSVariant shape;
         switch(node.shapeGeomType) {
+            case ShapeTypePoint: {
+                auto *point = new Point();
+                point->x = node.shapeVertices[0];
+                point->y = node.shapeVertices[1];
+                shape = makeNativeShapeVariant(point);
+                break;
+            }
             case ShapeTypeCircle: {
                 auto *circle = new Circle();
                 circle->x = node.shapeVertices[0];
@@ -641,6 +683,14 @@ namespace motion {
             : decltype(activeMotion->controllerBindings.find(key)){};
         const bool hasBinding =
             activeMotion && bindingIt != activeMotion->controllerBindings.end();
+
+        if(emoteTraceEnabled() && LOGGER) {
+            LOGGER->info(
+                "[EMOTE_TRACE] setVariable motion={} key={} binding={} value={} transition={} easeWeight={} queuing={}",
+                activeMotion ? activeMotion->path : std::string{}, key,
+                hasBinding ? bindingIt->second.type : -1, value, transition,
+                easeWeight, _emoteAnimatorFlag ? 1 : 0);
+        }
 
         if(hasBinding) {
             const auto queueControllerStateLikeBinary =
@@ -846,6 +896,17 @@ namespace motion {
         }
 
         if(!_runtime->activeMotion) {
+            return 0.0;
+        }
+
+        // E-mote's variableFrames/variableRanges tables describe the authored
+        // deformation domain, not an initial pose.  A fresh controller starts
+        // at the neutral scalar 0.  Returning the first range entry here (for
+        // example body_UD=-30) lets fixed-controller initialization persist an
+        // extreme pose before updateLayers has a chance to seed its neutral
+        // values.  Waiting-loop output is then added to that bad base forever,
+        // which tilts the model and clamps hair/tail anchor motion.
+        if(_runtime->isEmoteMode) {
             return 0.0;
         }
 
@@ -1195,14 +1256,68 @@ namespace motion {
         _layersDirty = true;
 
         const auto key = detail::narrow(label);
+        if(emoteTraceEnabled() && LOGGER) {
+            LOGGER->info(
+                "[EMOTE_TRACE] playTimeline motion={} label={} flags={} queuing={}",
+                _runtime->activeMotion ? _runtime->activeMotion->path
+                                       : std::string{},
+                key, flags, _emoteAnimatorFlag ? 1 : 0);
+        }
         auto it = _runtime->timelines.find(key);
         if(it == _runtime->timelines.end()) {
             return;
         }
 
-        // Aligned to libkrkr2.so Player_playTimeline (0x672F70):
-        // parallel flag first clears the playing-timeline list.
-        if((flags & 1) != 0) {
+        if(emoteTimelineTraceEnabled() && LOGGER) {
+            const auto controlIt =
+                _runtime->activeMotion->timelineControlByLabel.find(key);
+            const auto *control =
+                controlIt != _runtime->activeMotion->timelineControlByLabel.end()
+                ? &controlIt->second
+                : nullptr;
+            std::ostringstream trackDescription;
+            if(control) {
+                for(size_t trackIndex = 0;
+                    trackIndex < control->tracks.size(); ++trackIndex) {
+                    if(trackIndex != 0) {
+                        trackDescription << ';';
+                    }
+                    const auto &track = control->tracks[trackIndex];
+                    trackDescription << track.label << "(instant="
+                                     << (track.instantVariable ? 1 : 0)
+                                     << ",frames=" << track.frames.size();
+                    if(!track.frames.empty()) {
+                        trackDescription << ",first="
+                                         << track.frames.front().time
+                                         << ",last="
+                                         << track.frames.back().time;
+                    }
+                    trackDescription << ')';
+                }
+            }
+            LOGGER->info(
+                "[EMOTE_TIMELINE] play motion={} label={} flags={} "
+                "stateLoop={} loopTime={:.3f} total={:.3f} "
+                "control={} loopBegin={:.3f} loopEnd={:.3f} "
+                "lastTime={:.3f} tracks={} trackDetail=[{}] before=[{}]",
+                _runtime->activeMotion->path, key, flags,
+                it->second.loop ? 1 : 0, it->second.loopTime,
+                it->second.totalFrames, control ? 1 : 0,
+                control ? control->loopBegin : -1.0,
+                control ? control->loopEnd : -1.0,
+                control ? control->lastTime : -1.0,
+                control ? control->tracks.size() : 0,
+                trackDescription.str(),
+                joinTimelineLabels(_runtime->playingTimelineLabels));
+        }
+
+        // TimelinePlayFlagParallel is bit 0. Native E-mote only replaces the
+        // current list when that bit is absent; flag 3 (parallel + diff) must
+        // keep the persistent model timeline and any other parallel controls.
+        // Clearing on a SET bit made Nekopara's waiting_loop replace
+        // `全体構造`, so hair/tail motion ran once against an incomplete base
+        // controller state and then settled permanently.
+        if((flags & 1) == 0) {
             stopTimeline(TJS_W(""));
         }
 
@@ -1227,6 +1342,9 @@ namespace motion {
         it->second.currentTime = 0.0;
         it->second.blendRatio = 1.0;
         it->second.blendAnimator = {};
+        it->second.blendAnimator.currentValue = 1.0f;
+        it->second.blendAnimator.startValue = 1.0f;
+        it->second.blendAnimator.targetValue = 1.0f;
         it->second.blendAutoStop = false;
         it->second.controlInitialized = false;
         it->second.controlLastAppliedTime = 0.0;
@@ -1236,7 +1354,7 @@ namespace motion {
         if(const auto controlIt =
                _runtime->activeMotion->timelineControlByLabel.find(key);
            controlIt != _runtime->activeMotion->timelineControlByLabel.end()) {
-            resetTimelineControlStateLike_0x671A50(
+            seekTimelineControlStateLike_0x66EE30(
                 it->second, controlIt->second, 0.0);
         }
         _allplaying = !_runtime->playingTimelineLabels.empty();
@@ -1297,8 +1415,24 @@ namespace motion {
         const auto key = detail::narrow(label);
         auto &state = _runtime->timelines[key];
         state.label = key;
+        if(LOGGER && std::getenv("AETHERKIRI_EMOTE_TIMELINE_TRACE")) {
+            LOGGER->info(
+                "[EMOTE_TIMELINE] blend motion={} label={} {:.4f}->{:.4f}",
+                _runtime && _runtime->activeMotion
+                    ? _runtime->activeMotion->path
+                    : std::string{},
+                key, state.blendRatio, ratio);
+        }
         state.blendRatio = ratio;
+        // The internal difference-timeline route steps this animator on every
+        // progress call, even when it has no queued transition.  Resetting it
+        // with the zero-valued default object made the next frame overwrite
+        // the just-assigned ratio (normally 1) with 0, permanently muting
+        // waiting_loop while its track clock kept running.
         state.blendAnimator = {};
+        state.blendAnimator.currentValue = static_cast<float>(ratio);
+        state.blendAnimator.startValue = static_cast<float>(ratio);
+        state.blendAnimator.targetValue = static_cast<float>(ratio);
         state.blendAutoStop = false;
     }
 
@@ -1408,7 +1542,20 @@ namespace motion {
         bool started = false;
         if(!label.IsEmpty()) {
             const auto key = detail::narrow(label);
-            if(_runtime->timelines.find(key) != _runtime->timelines.end()) {
+            // E-mote metadata starts the retained model clip (for example
+            // `全体構造`) through Player.play(), even though that clip is not
+            // one of the public main/difference control timelines.  Native
+            // Player creates a playback entry for that exact clip.  Falling
+            // through to the public main-timeline list starts every mutually
+            // exclusive expression/action at once; a later pass() then
+            // flushes all of them into the controller animators together.
+            const bool hasExactTimeline =
+                _runtime->timelines.find(key) != _runtime->timelines.end();
+            const bool hasExactClip = detail::findMotionClip(
+                                          *_runtime->activeMotion,
+                                          detail::narrow(_chara), key, false) !=
+                nullptr;
+            if(hasExactTimeline || hasExactClip) {
                 playOne(key, true);
                 started = true;
             }
@@ -1574,6 +1721,7 @@ namespace motion {
             return TJS_E_BADPARAMCOUNT;
         }
 
+        const auto previousMatrix = nativeInstance->_runtime->drawAffineMatrix;
         nativeInstance->_runtime->drawAffineMatrix = matrix;
         const auto motionPath =
             nativeInstance->_runtime && nativeInstance->_runtime->activeMotion
@@ -1590,6 +1738,20 @@ namespace motion {
             matrix[5], isIdentity ? 0 : 1,
             (numparams >= 6) ? "six-params"
                              : ((numparams == 1) ? "matrix-object" : "invalid"));
+        if(emoteAffineTraceEnabled()) {
+            bool changed = false;
+            for(size_t index = 0; index < matrix.size(); ++index) {
+                changed = changed ||
+                    std::fabs(previousMatrix[index] - matrix[index]) > 1e-7;
+            }
+            if(changed) {
+                LOGGER->info(
+                    "[EMOTE_AFFINE] player={} motion={} drawMatrix=[{:.6f},{:.6f},{:.6f},{:.6f},{:.3f},{:.3f}]",
+                    static_cast<const void *>(nativeInstance), motionPath,
+                    matrix[0], matrix[1], matrix[2], matrix[3], matrix[4],
+                    matrix[5]);
+            }
+        }
         return TJS_S_OK;
     }
 
@@ -1622,10 +1784,17 @@ namespace motion {
     tjs_error Player::clearCompatMethod(tTJSVariant *result, tjs_int numparams,
                                         tTJSVariant **param,
                                         iTJSDispatch2 *objthis) {
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        return clearCompatForNative(result, numparams, param, self);
+    }
+
+    tjs_error Player::clearCompatForNative(tTJSVariant *result,
+                                           tjs_int numparams,
+                                           tTJSVariant **param,
+                                           Player *self) {
         if(result) {
             result->Clear();
         }
-        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
         if(!self) {
             return TJS_E_INVALIDOBJECT;
         }
@@ -1679,14 +1848,20 @@ namespace motion {
     //      else render directly to Layer
     tjs_error Player::drawCompat(tTJSVariant *result, tjs_int numparams,
                                  tTJSVariant **param, iTJSDispatch2 *objthis) {
+        auto *nativeInstance = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        return drawCompatForNative(result, numparams, param, nativeInstance);
+    }
+
+    tjs_error Player::drawCompatForNative(tTJSVariant *result,
+                                          tjs_int numparams,
+                                          tTJSVariant **param,
+                                          Player *nativeInstance) {
         if(result) {
             result->Clear();
         }
-        auto *nativeInstance = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
         if(LOGGER && motionDebugEnabled()) {
             LOGGER->info(
-                "motion drawCompat entered: objthis={} native={} numparams={} firstArgType={}",
-                static_cast<const void *>(objthis),
+                "motion drawCompat entered: native={} numparams={} firstArgType={}",
                 static_cast<const void *>(nativeInstance), numparams,
                 (numparams > 0 && param && param[0])
                     ? static_cast<int>(param[0]->Type())

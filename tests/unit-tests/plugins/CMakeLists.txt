@@ -31,4 +31,9 @@ target_include_directories(motionplayer-dll PRIVATE
     "${CMAKE_SOURCE_DIR}/cpp/plugins"
 )
 
+if(AETHERKIRI_INTERNAL_ENABLED)
+    target_compile_definitions(motionplayer-dll PRIVATE
+        AETHERKIRI_EXPECT_INTERNAL_EMOTE=1)
+endif()
+
 catch_discover_tests(motionplayer-dll)

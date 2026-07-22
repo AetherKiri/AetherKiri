@@ -150,6 +150,7 @@ namespace PSB {
         uint64_t _hitCount = 0;
         uint64_t _missCount = 0;
         std::unordered_set<std::string> _loadedArchives;
+        std::unordered_set<std::string> _failedArchives;
         std::unordered_set<std::string> _knownResourceKeys;
         std::unordered_set<std::string> _missingResourceKeys;
         std::unordered_map<std::string, std::vector<LayerPosition>> _layerPositions;

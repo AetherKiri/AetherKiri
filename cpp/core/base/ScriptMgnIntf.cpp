@@ -2167,43 +2167,66 @@ bool TVPStartupSuccess = false;
 
 void TVPOpenPatchLibUrl();
 
+static void TVPLogStartupScriptError(const char *stage,
+                                     const TJS::eTJSScriptError &e);
+
 //---------------------------------------------------------------------------
 // TVPExecuteStartupScript
 //---------------------------------------------------------------------------
+const tjs_char *TVPGetStartupPatchPrerequisitesScript() {
+    return TJS_W(
+        "if(typeof global.inSystemMenuStorages == \"undefined\") global.inSystemMenuStorages = [];\n"
+        "if(typeof global.kagHookEntries == \"undefined\") global.kagHookEntries = [];\n"
+        "if(typeof global.afterInitCallback == \"undefined\") global.afterInitCallback = [];\n"
+        "if(typeof global.COMMAND_SYNC == \"undefined\") global.COMMAND_SYNC = 0;\n"
+        "if(typeof global.COMMAND_ASYNC == \"undefined\") global.COMMAND_ASYNC = 1;\n"
+        "if(typeof global.COMMAND_WAIT == \"undefined\") global.COMMAND_WAIT = 2;\n"
+        "if(typeof global.kirikiriz == \"undefined\") global.kirikiriz = false;\n"
+        "if(typeof global.kirikiriz_generic == \"undefined\") global.kirikiriz_generic = false;\n");
+}
+
+const tjs_char *TVPGetPatchWindowPrerequisitesScript() {
+    return TJS_W(
+        "if(typeof KAGWindow != \"undefined\") {\n"
+        "  if(typeof KAGWindow.inSystemMenuStorages == \"undefined\") KAGWindow.inSystemMenuStorages = global.inSystemMenuStorages;\n"
+        "  if(typeof KAGWindow.kagHookEntries == \"undefined\") KAGWindow.kagHookEntries = global.kagHookEntries;\n"
+        "  if(typeof KAGWindow.afterInitCallback == \"undefined\") KAGWindow.afterInitCallback = global.afterInitCallback;\n"
+        "  if(typeof KAGWindow.COMMAND_SYNC == \"undefined\") KAGWindow.COMMAND_SYNC = global.COMMAND_SYNC;\n"
+        "  if(typeof KAGWindow.COMMAND_ASYNC == \"undefined\") KAGWindow.COMMAND_ASYNC = global.COMMAND_ASYNC;\n"
+        "  if(typeof KAGWindow.COMMAND_WAIT == \"undefined\") KAGWindow.COMMAND_WAIT = global.COMMAND_WAIT;\n"
+        "  if(typeof KAGWindow.kirikiriz == \"undefined\") KAGWindow.kirikiriz = global.kirikiriz;\n"
+        "  if(typeof KAGWindow.kirikiriz_generic == \"undefined\") KAGWindow.kirikiriz_generic = global.kirikiriz_generic;\n"
+        "}\n");
+}
+
 static void TVPInstallStartupPatchPrerequisites() {
-    TVPExecuteScript(TJS_W(
-        "var inSystemMenuStorages = [];\n"
-        "var kagHookEntries = [];\n"
-        "var afterInitCallback = [];\n"
-        "var COMMAND_SYNC = 0;\n"
-        "var COMMAND_ASYNC = 1;\n"
-        "var COMMAND_WAIT = 2;\n"
-        "var kirikiriz = false;\n"
-        "var kirikiriz_generic = false;\n"),
+    TVPExecuteScript(TVPGetStartupPatchPrerequisitesScript(),
         TJS_W("startup_patch_prereq.tjs"), 0,
         static_cast<tTJSVariant *>(nullptr));
 }
 
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 static void TVPInstallIOSPatchWindowPrerequisites() {
-    TVPExecuteScript(TJS_W(
-        "if(typeof KAGWindow != \"undefined\") {\n"
-        "  if(typeof KAGWindow.inSystemMenuStorages == \"undefined\") KAGWindow.inSystemMenuStorages = inSystemMenuStorages;\n"
-        "  if(typeof KAGWindow.kagHookEntries == \"undefined\") KAGWindow.kagHookEntries = kagHookEntries;\n"
-        "  if(typeof KAGWindow.afterInitCallback == \"undefined\") KAGWindow.afterInitCallback = afterInitCallback;\n"
-        "  if(typeof KAGWindow.COMMAND_SYNC == \"undefined\") KAGWindow.COMMAND_SYNC = COMMAND_SYNC;\n"
-        "  if(typeof KAGWindow.COMMAND_ASYNC == \"undefined\") KAGWindow.COMMAND_ASYNC = COMMAND_ASYNC;\n"
-        "  if(typeof KAGWindow.COMMAND_WAIT == \"undefined\") KAGWindow.COMMAND_WAIT = COMMAND_WAIT;\n"
-        "  if(typeof KAGWindow.kirikiriz == \"undefined\") KAGWindow.kirikiriz = kirikiriz;\n"
-        "  if(typeof KAGWindow.kirikiriz_generic == \"undefined\") KAGWindow.kirikiriz_generic = kirikiriz_generic;\n"
-        "}\n"),
-        TJS_W("ios_patch_window_prereq.tjs"), 0,
-        static_cast<tTJSVariant *>(nullptr));
+    try {
+        // A title's startup script may explicitly clear compatibility
+        // globals. Restore only missing members before wiring them to the
+        // window class used by the late iOS patch.
+        TVPInstallStartupPatchPrerequisites();
+        TVPExecuteScript(TVPGetPatchWindowPrerequisitesScript(),
+            TJS_W("ios_patch_window_prereq.tjs"), 0,
+            static_cast<tTJSVariant *>(nullptr));
+    } catch(const TJS::eTJSScriptError &e) {
+        TVPLogStartupScriptError("iOS patch window prerequisites error", e);
+    } catch(const TJS::eTJS &e) {
+        spdlog::warn("iOS patch window prerequisites TJS error: {}",
+                     e.GetMessage().AsStdString());
+    } catch(...) {
+        // Compatibility setup is optional and must never prevent a title
+        // from reaching its own patch.tjs.
+        spdlog::warn("iOS patch window prerequisites failed");
+    }
 }
 #endif
-
-static void TVPLogStartupScriptError(const char *stage,
-                                     const TJS::eTJSScriptError &e);
 
 static void TVPInstallKagRuntimeDefaults() {
     try {
