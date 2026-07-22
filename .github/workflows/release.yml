@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '[0-9]*'
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build release artifacts
+    uses: ./.github/workflows/build.yml
+    permissions:
+      actions: read
+      contents: read
+    secrets: inherit
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '*-release-*'
+          path: release-assets/downloaded
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          asset_dir="$(pwd)/release-assets"
+          download_dir="$asset_dir/downloaded"
+
+          android_apk="$(find "$download_dir/android-release-apk" -type f -name '*.apk' -print -quit)"
+          ios_ipa="$(find "$download_dir/ios-release-unsigned-ipa" -type f -name '*.ipa' -print -quit)"
+          test -n "$android_apk"
+          test -n "$ios_ipa"
+          test -d "$download_dir/ios-release-xcode-project"
+          test -d "$download_dir/macos-release-app"
+          test -d "$download_dir/web-release-export"
+
+          cp "$android_apk" "$asset_dir/AetherKiri-${tag}-android.apk"
+          cp "$ios_ipa" "$asset_dir/AetherKiri-${tag}-ios-unsigned.ipa"
+
+          (
+            cd "$download_dir/ios-release-xcode-project"
+            zip -qry "$asset_dir/AetherKiri-${tag}-ios-xcode-project.zip" .
+          )
+          (
+            cd "$download_dir/macos-release-app"
+            zip -qry "$asset_dir/AetherKiri-${tag}-macos.zip" .
+          )
+          (
+            cd "$download_dir/web-release-export"
+            zip -qry "$asset_dir/AetherKiri-${tag}-web.zip" .
+          )
+
+          rm -rf "$download_dir"
+
+      - name: Create or update GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          assets=(release-assets/*)
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+            exit 0
+          fi
+
+          release_args=(
+            --repo "$GITHUB_REPOSITORY"
+            --title "$tag"
+            --generate-notes
+            --verify-tag
+          )
+          if [[ "$tag" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
+
+          gh release create "$tag" "${assets[@]}" "${release_args[@]}"
