@@ -164,8 +164,10 @@ bool IsGpuRectFastPathEnabled(const char *name) {
     return false;
 }
 
+constexpr int kDefaultGpuRectMinArea = 32768;
+constexpr int kDefaultAlphaRectMinArea = 32768;
+
 int GpuRectMinArea() {
-    constexpr int kDefaultGpuRectMinArea = 32768;
     static const int min_area = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_RECT_MIN_AREA");
         if (value == nullptr || value[0] == '\0') return kDefaultGpuRectMinArea;
@@ -182,7 +184,6 @@ int GpuRectMinAreaForMethod(const char *name) {
         (std::strcmp(name, "AlphaBlend") == 0 ||
          std::strcmp(name, "AlphaBlend_a") == 0 ||
          std::strcmp(name, "AlphaBlend_d") == 0)) {
-        constexpr int kDefaultAlphaRectMinArea = 32768;
         static const int min_area = []() {
             const char *value =
                 std::getenv("AETHERKIRI_GODOT_GPU_ALPHA_RECT_MIN_AREA");

@@ -35,6 +35,13 @@ else()
 endif()
 
 target_compile_features(aether_kiri_godot PRIVATE cxx_std_17)
+if(MSVC)
+    set_property(TARGET aether_kiri_godot PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        _ITERATOR_DEBUG_LEVEL=0)
+    target_compile_options(aether_kiri_godot PRIVATE /U_DEBUG)
+endif()
 target_compile_definitions(aether_kiri_godot PRIVATE
     $<$<CONFIG:Debug>:DEBUG_ENABLED DEBUG_METHODS_ENABLED HOT_RELOAD_ENABLED>
 )
