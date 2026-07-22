@@ -32,7 +32,8 @@ struct layerExRaster : public layerExBase
 
         if (_width != width || _height != height) return;
 
-        double omega = 2 * M_PI / lines;
+        constexpr double kPi = 3.14159265358979323846;
+        double omega = 2 * kPi / lines;
         tjs_int CurH = (tjs_int)maxh;
         double rad = -omega * time / cycle * (height / 2);
 

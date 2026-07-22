@@ -121,7 +121,11 @@ public:
         zip_fileinfo info{};
         const std::time_t now = std::time(nullptr);
         std::tm localTime{};
+#if defined(_WIN32)
+        localtime_s(&localTime, &now);
+#else
         localtime_r(&now, &localTime);
+#endif
         info.tmz_date.tm_year = localTime.tm_year + 1900;
         info.tmz_date.tm_mon = localTime.tm_mon;
         info.tmz_date.tm_mday = localTime.tm_mday;

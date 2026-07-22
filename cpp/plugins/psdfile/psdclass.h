@@ -5,6 +5,9 @@
 
 // #define LOAD_MEMORY
 #include "typedefine.h"
+#if defined(_WIN32)
+#undef GetMessage
+#endif
 #include "tp_stub.h"
 #include "psdparse/psdfile.h"
 #include "ncbind.hpp"
