@@ -3,6 +3,7 @@
 
 #include "godot/GodotGpuBridge.h"
 #include "godot/GodotRenderManager.h"
+#include "LayerBitmapIntf.h"
 
 #include <array>
 #include <cstdint>

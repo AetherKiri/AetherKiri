@@ -32,6 +32,16 @@
 //---------------------------------------------------------------------------
 tTJSNI_Window *TVPMainWindow = nullptr; // main window
 static std::vector<tTJSNI_Window *> TVPWindowVector;
+static TVPPendingDrawDeviceInstaller g_pending_draw_device_installer = nullptr;
+
+void TVPSetPendingDrawDeviceInstaller(TVPPendingDrawDeviceInstaller installer) {
+    g_pending_draw_device_installer = installer;
+}
+
+bool TVPInstallPendingDrawDevice(tTJSNI_BaseWindow *window) {
+    return g_pending_draw_device_installer != nullptr &&
+           g_pending_draw_device_installer(window);
+}
 //---------------------------------------------------------------------------
 static void TVPRegisterWindowToList(tTJSNI_Window *window) {
     if(TVPMainWindow == nullptr && TVPWindowVector.size() == 0) {
@@ -625,6 +635,7 @@ void tTJSNI_BaseWindow::PostReleaseCaptureEvent() {
 }
 //---------------------------------------------------------------------------
 void tTJSNI_BaseWindow::RegisterLayerManager(iTVPLayerManager *manager) {
+    TVPInstallPendingDrawDevice(this);
     if(DrawDevice)
         DrawDevice->AddLayerManager(manager);
 }

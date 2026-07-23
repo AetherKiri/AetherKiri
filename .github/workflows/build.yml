@@ -20,6 +20,9 @@ env:
   # requests. Trusted runs build the complete internal product; untrusted
   # pull requests retain the public fallback without exposing the SSH key.
   AETHERKIRI_WITH_INTERNAL: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
+  # Forward the checkout decision to build.sh so a stale or partial package
+  # checkout cannot accidentally enable private extensions in public builds.
+  AETHERKIRI_ENABLE_INTERNAL: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
 
 jobs:
   android:

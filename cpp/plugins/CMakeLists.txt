@@ -5,7 +5,6 @@ add_library(${PROJECT_NAME} STATIC)
 
 target_sources(${PROJECT_NAME} PRIVATE
     scriptsEx.cpp
-    tjsNs0DataPack.cpp
     kbadDataPack.cpp
     binaryStream.cpp
     base64.cpp
@@ -51,14 +50,12 @@ target_sources(${PROJECT_NAME} PRIVATE
     extrans_precise/wave.cpp
     extNagano.cpp
     multiimage.cpp
-    textrender.cpp
     alphamovie.cpp
     layerExBTOA.cpp
     layerExImage.cpp
     layerExRaster.cpp
     layerExAreaAverage.cpp
     layerExLongExposure.cpp
-    drawDeviceD2DCompat.cpp
     wfBasicEffectCompat.cpp
     wfTypicalDSPCompat.cpp
     packinone.cpp
@@ -114,6 +111,16 @@ if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_live2d)
     aetherinternal_extend_live2d(${PROJECT_NAME})
 else()
     target_sources(${PROJECT_NAME} PRIVATE krkrlive2d_stub.cpp)
+endif()
+
+if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_krkr2plugin)
+    aetherinternal_extend_krkr2plugin(${PROJECT_NAME})
+else()
+    target_sources(${PROJECT_NAME} PRIVATE
+        tjsNs0DataPack.cpp
+        textrender.cpp
+        drawDeviceD2DCompat.cpp
+    )
 endif()
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${KRKR2PLUGIN_PATH} ${KRKR2PLUGIN_PATH}/simplebinder})

@@ -36,4 +36,8 @@ if(AETHERKIRI_INTERNAL_ENABLED)
         AETHERKIRI_EXPECT_INTERNAL_EMOTE=1)
 endif()
 
+if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_krkr2plugin_tests)
+    aetherinternal_extend_krkr2plugin_tests(motionplayer-dll)
+endif()
+
 catch_discover_tests(motionplayer-dll)

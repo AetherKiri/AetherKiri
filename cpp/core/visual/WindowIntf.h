@@ -300,6 +300,12 @@ public:
     void SetWaitVSync(bool enable);
     [[nodiscard]] bool GetWaitVSync() const;
 };
+
+// Optional installer used by private/additive draw-device implementations.
+// The public build leaves the hook unset and keeps the normal device path.
+using TVPPendingDrawDeviceInstaller = bool (*)(tTJSNI_BaseWindow *window);
+void TVPSetPendingDrawDeviceInstaller(TVPPendingDrawDeviceInstaller installer);
+bool TVPInstallPendingDrawDevice(tTJSNI_BaseWindow *window);
 //---------------------------------------------------------------------------
 
 #include "WindowImpl.h" // must define tTJSNI_Window class
