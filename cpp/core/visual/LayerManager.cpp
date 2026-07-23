@@ -1354,6 +1354,15 @@ void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
             l->FireButtonClick();
             return;
         }
+        if(IsTitleMenuInputState(l) && l->HasButtonClickTarget()) {
+            if(TVPInputTraceEnabled()) {
+                spdlog::info(
+                    "LayerManager title link click -> onButtonClick layer={} primary=({}, {})",
+                    l->GetName().AsStdString(), x, y);
+            }
+            l->FireButtonClick();
+            return;
+        }
         if(ShouldSynthesizeEnterForSaveLoadButton(l, x, y) && TVPMainWindow) {
             if(TVPInputTraceEnabled()) {
                 spdlog::info("LayerManager save/load command click -> Enter primary=({}, {})",
