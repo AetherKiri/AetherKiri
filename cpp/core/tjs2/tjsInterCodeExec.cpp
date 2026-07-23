@@ -1033,9 +1033,9 @@ namespace TJS {
                 Current = nullptr;
             } else {
                 bool availableoffset = false;
-                size_t offset = 0;
+                ptrdiff_t offset = 0;
                 if(Current != nullptr && Arrays != nullptr) {
-                    offset = (size_t)Current - (size_t)Arrays;
+                    offset = Current - Arrays;
                     availableoffset = true;
                 }
 
