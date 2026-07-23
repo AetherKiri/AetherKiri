@@ -1311,13 +1311,16 @@ bool tTVPLayerManager::IsTitleMenuControlPoint(tjs_int x, tjs_int y) {
     if(w <= 0 || h <= 0)
         return true;
 
-    // CafeStella draws title menu controls into the full-screen title layer and
-    // dispatches by coordinate. Keep the right-side menu/switcher interactive,
-    // but keep background/title-art taps from re-entering title scripts.
+    // Some titles draw menu controls into the full-screen title layer and
+    // dispatch them by coordinate. Keep the common left and right menu bands
+    // interactive, but keep background/title-art taps from re-entering title
+    // scripts.
+    const bool left_title_controls =
+        x <= w * 25 / 100 && y >= h * 30 / 100 && y <= h * 94 / 100;
     const bool right_title_controls =
         x >= w * 56 / 100 && y >= h * 25 / 100 && y <= h * 94 / 100;
     const bool far_right_switcher = x >= w * 92 / 100 && y >= h * 45 / 100;
-    return right_title_controls || far_right_switcher;
+    return left_title_controls || right_title_controls || far_right_switcher;
 }
 
 void tTVPLayerManager::PrimaryClick(tjs_int x, tjs_int y) {
