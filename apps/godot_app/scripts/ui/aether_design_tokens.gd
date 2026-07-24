@@ -100,6 +100,22 @@ func material_panel(elevated: bool = false) -> StyleBoxFlat:
         style.shadow_offset = Vector2(0, 8)
     return style
 
+func card_style(hovered: bool = false, pressed: bool = false) -> StyleBoxFlat:
+    var fill := surface_raised if hovered else surface
+    if pressed:
+        fill = Color(
+            surface_raised.r + accent_fill.r * 0.08,
+            surface_raised.g + accent_fill.g * 0.08,
+            surface_raised.b + accent_fill.b * 0.08,
+            1.0
+        )
+    var border := accent if pressed else (highlight if hovered else separator)
+    var style := panel(fill, RADIUS_MEDIUM, border, 1)
+    style.shadow_color = shadow
+    style.shadow_size = 18 if hovered else 10
+    style.shadow_offset = Vector2(0, 8 if hovered else 4)
+    return style
+
 func sidebar_panel() -> StyleBoxFlat:
     var style := panel(sidebar_material, 0, separator, 1)
     style.border_width_left = 0

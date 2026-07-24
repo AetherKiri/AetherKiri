@@ -864,8 +864,8 @@ const TOP_ICON_BUTTON_SIZE := Vector2(60, 60)
 const TOP_ACTION_BUTTON_SIZE := Vector2(138, 60)
 const PILL_ICON_SIZE := Vector2(24, 24)
 const PILL_ICON_VISUAL_OFFSET_Y := 2.0
-const HOME_CARD_SIZE := Vector2(252, 346)
-const HOME_CARD_COVER_HEIGHT := 226.0
+const HOME_CARD_SIZE := Vector2(252, 250)
+const HOME_CARD_COVER_HEIGHT := 142.0
 
 var color_bg := Color(0.055, 0.059, 0.071, 1.0)
 var color_game_bg := Color(0, 0, 0, 1)
@@ -4055,21 +4055,27 @@ func _remove_game(path: String) -> void:
 func _game_card(game: Dictionary) -> Button:
     var button := Button.new()
     button.custom_minimum_size = HOME_CARD_SIZE
-    button.clip_text = true
     button.clip_contents = true
     button.focus_mode = Control.FOCUS_ALL
     button.text = ""
-    button.add_theme_stylebox_override("normal", _panel_style(8, color_card, color_line, 1))
-    button.add_theme_stylebox_override("hover", _panel_style(8, color_card, color_line, 1))
-    button.add_theme_stylebox_override("pressed", _panel_style(8, color_card_alt, color_accent, 1))
-    button.add_theme_stylebox_override("focus", _focus_outline(8))
+    button.add_theme_stylebox_override("normal", ui_tokens.card_style())
+    button.add_theme_stylebox_override("hover", ui_tokens.card_style(true))
+    button.add_theme_stylebox_override("pressed", ui_tokens.card_style(true, true))
+    button.add_theme_stylebox_override("focus", ui_tokens.focus_style())
     button.pressed.connect(func(): _show_detail(game))
 
-    var frame := Control.new()
+    var frame := VBoxContainer.new()
     frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
     frame.clip_contents = true
     frame.set_anchors_preset(Control.PRESET_FULL_RECT)
+    frame.add_theme_constant_override("separation", 0)
     button.add_child(frame)
+
+    var cover_host := Control.new()
+    cover_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    cover_host.custom_minimum_size = Vector2(0, HOME_CARD_COVER_HEIGHT)
+    cover_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    frame.add_child(cover_host)
 
     var cover_texture := _load_cover_texture(
         game,
@@ -4080,47 +4086,66 @@ func _game_card(game: Dictionary) -> Button:
         var cover := TextureRect.new()
         cover.texture = cover_texture
         cover.mouse_filter = Control.MOUSE_FILTER_IGNORE
-        cover.anchor_right = 1.0
-        cover.offset_bottom = HOME_CARD_COVER_HEIGHT
+        cover.set_anchors_preset(Control.PRESET_FULL_RECT)
         cover.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
         cover.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-        frame.add_child(cover)
+        cover_host.add_child(cover)
     else:
         var placeholder := PanelContainer.new()
         placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-        placeholder.anchor_right = 1.0
-        placeholder.offset_bottom = HOME_CARD_COVER_HEIGHT
-        placeholder.add_theme_stylebox_override("panel", _panel_style(0, color_card_alt, color_line, 0))
-        frame.add_child(placeholder)
+        placeholder.set_anchors_preset(Control.PRESET_FULL_RECT)
+        placeholder.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.surface_raised, 0))
+        cover_host.add_child(placeholder)
 
-        var icon := _centered_icon(ICON_GAMEPAD, Vector2(48, 48), color_accent)
+        var icon := _centered_icon(ICON_GAMEPAD, Vector2(40, 40), ui_tokens.accent)
         icon.set_anchors_preset(Control.PRESET_FULL_RECT)
         placeholder.add_child(icon)
 
-    var info_surface := PanelContainer.new()
-    info_surface.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    info_surface.anchor_top = 1.0
-    info_surface.anchor_right = 1.0
-    info_surface.anchor_bottom = 1.0
-    info_surface.offset_top = HOME_CARD_COVER_HEIGHT - HOME_CARD_SIZE.y
-    info_surface.add_theme_stylebox_override("panel", _panel_style(0, color_card, Color(0, 0, 0, 0), 0))
-    frame.add_child(info_surface)
+    var badge := PanelContainer.new()
+    badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    badge.position = Vector2(10, 10)
+    var badge_style := ui_tokens.panel(Color(0.030, 0.032, 0.038, 0.78), 6, Color(1, 1, 1, 0.12), 1)
+    badge_style.content_margin_left = 8
+    badge_style.content_margin_top = 4
+    badge_style.content_margin_right = 8
+    badge_style.content_margin_bottom = 4
+    badge.add_theme_stylebox_override("panel", badge_style)
+    cover_host.add_child(badge)
+    var badge_label := Label.new()
+    badge_label.text = _game_type_label(String(game.get("type", "Directory")))
+    badge_label.add_theme_font_size_override("font_size", 10)
+    badge_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.90))
+    badge.add_child(badge_label)
+
+    var play_chip := PanelContainer.new()
+    play_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    play_chip.anchor_left = 1.0
+    play_chip.anchor_top = 1.0
+    play_chip.anchor_right = 1.0
+    play_chip.anchor_bottom = 1.0
+    play_chip.offset_left = -44.0
+    play_chip.offset_top = -44.0
+    play_chip.offset_right = -10.0
+    play_chip.offset_bottom = -10.0
+    play_chip.modulate.a = 0.72
+    var play_style := ui_tokens.panel(Color(0.030, 0.032, 0.038, 0.82), 8, Color(1, 1, 1, 0.14), 1)
+    play_chip.add_theme_stylebox_override("panel", play_style)
+    play_chip.add_child(_centered_icon(ICON_PLAY, Vector2(17, 17), Color.WHITE))
+    cover_host.add_child(play_chip)
+
+    var metadata := PanelContainer.new()
+    metadata.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    metadata.custom_minimum_size = Vector2(0, HOME_CARD_SIZE.y - HOME_CARD_COVER_HEIGHT)
+    metadata.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.surface, 0))
+    frame.add_child(metadata)
 
     var text_margin := MarginContainer.new()
     text_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    text_margin.anchor_left = 0.0
-    text_margin.anchor_top = 1.0
-    text_margin.anchor_right = 1.0
-    text_margin.anchor_bottom = 1.0
-    text_margin.offset_left = 0.0
-    text_margin.offset_top = HOME_CARD_COVER_HEIGHT - HOME_CARD_SIZE.y
-    text_margin.offset_right = 0.0
-    text_margin.offset_bottom = 0.0
     text_margin.add_theme_constant_override("margin_left", 14)
-    text_margin.add_theme_constant_override("margin_top", 13)
+    text_margin.add_theme_constant_override("margin_top", 12)
     text_margin.add_theme_constant_override("margin_right", 14)
-    text_margin.add_theme_constant_override("margin_bottom", 12)
-    frame.add_child(text_margin)
+    text_margin.add_theme_constant_override("margin_bottom", 10)
+    metadata.add_child(text_margin)
 
     var labels := VBoxContainer.new()
     labels.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -4133,35 +4158,20 @@ func _game_card(game: Dictionary) -> Button:
     title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.max_lines_visible = 2
     title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-    title.add_theme_font_size_override("font_size", 18)
-    title.add_theme_color_override("font_color", color_text)
+    title.custom_minimum_size = Vector2(0, 46)
+    title.add_theme_font_size_override("font_size", 17)
+    title.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title)
 
     var sub := Label.new()
     sub.text = _game_subtitle(game)
     sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
     sub.clip_text = true
-    sub.add_theme_font_size_override("font_size", 13)
-    sub.add_theme_color_override("font_color", color_muted)
+    sub.add_theme_font_size_override("font_size", 12)
+    sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
 
-    var border := PanelContainer.new()
-    border.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    border.set_anchors_preset(Control.PRESET_FULL_RECT)
-    _set_game_card_border(button, border, false)
-    frame.add_child(border)
-    button.add_to_group("game_card_buttons")
-    ui_motion.bind_pressable(button)
-    button.set_meta("card_border_path", button.get_path_to(border))
-    button.mouse_entered.connect(func(): _set_game_card_border(button, border, true))
-    button.mouse_exited.connect(func():
-        _set_game_card_border(button, border, button.has_focus())
-    )
-    button.focus_entered.connect(func(): _set_game_card_border(button, border, true))
-    button.focus_exited.connect(func():
-        var still_hovered := button.get_global_rect().has_point(button.get_global_mouse_position())
-        _set_game_card_border(button, border, still_hovered)
-    )
+    ui_motion.bind_lift(button, play_chip)
     return button
 
 func _load_cover_texture(game: Dictionary, target_size: Vector2i = Vector2i.ZERO, radius: int = 0) -> Texture2D:
