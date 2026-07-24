@@ -1084,6 +1084,7 @@ var empty_title_label: Label
 var empty_help_label: Label
 var video_empty_title_label: Label
 var video_empty_help_label: Label
+var empty_primary_button: Button
 var home_primary_button: Button
 var home_guide_button: Button
 var home_cards_animated_once := false
@@ -2756,6 +2757,15 @@ func _build_home_view() -> void:
     empty_help_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     empty_box.add_child(empty_help_label)
 
+    empty_primary_button = _pill_button(
+        _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"),
+        ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD
+    )
+    empty_primary_button.custom_minimum_size = Vector2(164, 48)
+    empty_primary_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    empty_primary_button.pressed.connect(_on_refresh_or_import)
+    empty_box.add_child(empty_primary_button)
+
     video_empty_state = CenterContainer.new()
     video_empty_state.set_anchors_preset(Control.PRESET_FULL_RECT)
     video_empty_state.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -3327,9 +3337,10 @@ func _build_loading_panel() -> void:
     loading_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
     loading_panel.mouse_filter = Control.MOUSE_FILTER_STOP
     loading_panel.visible = false
+    var scrim_alpha := 0.48 if style_mode == STYLE_DARK else 0.34
     loading_panel.add_theme_stylebox_override(
         "panel",
-        ui_tokens.panel(Color(ui_tokens.background.r, ui_tokens.background.g, ui_tokens.background.b, 0.92), 0)
+        ui_tokens.panel(Color(0, 0, 0, scrim_alpha), 0)
     )
     add_child(loading_panel)
 
@@ -3338,9 +3349,14 @@ func _build_loading_panel() -> void:
 
     loading_card = PanelContainer.new()
     var viewport_width := get_viewport_rect().size.x
-    var preferred_width := 720.0 if ui_log_enabled and not _mobile_runtime() else 460.0
-    loading_card.custom_minimum_size = Vector2(minf(preferred_width, maxf(320.0, viewport_width - 40.0)), 420 if ui_log_enabled and not _mobile_runtime() else 156)
-    loading_card.add_theme_stylebox_override("panel", ui_tokens.material_panel(true))
+    var preferred_width := 720.0 if ui_log_enabled and not _mobile_runtime() else 420.0
+    loading_card.custom_minimum_size = Vector2(minf(preferred_width, maxf(300.0, viewport_width - 40.0)), 420 if ui_log_enabled and not _mobile_runtime() else 136)
+    var loading_style := ui_tokens.material_panel(true)
+    loading_style.content_margin_left = 20
+    loading_style.content_margin_top = 18
+    loading_style.content_margin_right = 20
+    loading_style.content_margin_bottom = 18
+    loading_card.add_theme_stylebox_override("panel", loading_style)
     center.add_child(loading_card)
 
     var box := VBoxContainer.new()
@@ -3352,18 +3368,23 @@ func _build_loading_panel() -> void:
     loading_card.add_child(box)
 
     var status_row := HBoxContainer.new()
-    status_row.custom_minimum_size = Vector2(0, 52)
-    status_row.add_theme_constant_override("separation", 14)
+    status_row.custom_minimum_size = Vector2(0, 60)
+    status_row.add_theme_constant_override("separation", 12)
     box.add_child(status_row)
 
     var spinner_holder := Control.new()
-    spinner_holder.custom_minimum_size = Vector2(32, 32)
+    spinner_holder.custom_minimum_size = Vector2(44, 44)
     spinner_holder.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     status_row.add_child(spinner_holder)
-    loading_spinner = _icon_rect(ICON_REFRESH, Vector2(24, 24), ui_tokens.accent)
-    loading_spinner.position = Vector2(4, 4)
-    loading_spinner.size = Vector2(24, 24)
-    loading_spinner.pivot_offset = Vector2(12, 12)
+    var spinner_plate := PanelContainer.new()
+    spinner_plate.position = Vector2.ZERO
+    spinner_plate.size = Vector2(44, 44)
+    spinner_plate.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent_fill, 8))
+    spinner_holder.add_child(spinner_plate)
+    loading_spinner = _icon_rect(ICON_REFRESH, Vector2(20, 20), ui_tokens.accent)
+    loading_spinner.position = Vector2(12, 12)
+    loading_spinner.size = Vector2(20, 20)
+    loading_spinner.pivot_offset = Vector2(10, 10)
     spinner_holder.add_child(loading_spinner)
 
     var loading_labels := VBoxContainer.new()
@@ -3373,12 +3394,12 @@ func _build_loading_panel() -> void:
 
     loading_title_label = Label.new()
     loading_title_label.text = _t("loading.title")
-    loading_title_label.add_theme_font_size_override("font_size", 20)
+    loading_title_label.add_theme_font_size_override("font_size", 18)
     loading_title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     loading_labels.add_child(loading_title_label)
     var loading_caption := Label.new()
     loading_caption.text = selected_backend
-    loading_caption.add_theme_font_size_override("font_size", 12)
+    loading_caption.add_theme_font_size_override("font_size", 13)
     loading_caption.add_theme_color_override("font_color", ui_tokens.text_secondary)
     loading_labels.add_child(loading_caption)
 
@@ -4335,6 +4356,8 @@ func _refresh_language_texts() -> void:
         video_empty_title_label.text = _t("video.empty_title")
     if is_instance_valid(video_empty_help_label):
         video_empty_help_label.text = _video_empty_help_text()
+    if is_instance_valid(empty_primary_button):
+        _set_pill_button_text(empty_primary_button, _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"))
     if is_instance_valid(home_primary_button):
         var primary_text := _t("video.refresh") if OS.get_name() == "iOS" else _t("video.import")
         if home_library_mode == "game":
