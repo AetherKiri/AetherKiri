@@ -77,13 +77,15 @@ func toolbar_button(button: Button, selected: bool = false) -> Button:
     button.add_theme_color_override("icon_hover_color", tokens.accent if selected else tokens.text_primary)
     button.add_theme_color_override("icon_pressed_color", tokens.accent)
     button.add_theme_color_override("icon_focus_color", foreground)
+    button.add_theme_color_override("icon_disabled_color", tokens.text_tertiary)
+    button.add_theme_color_override("font_disabled_color", tokens.text_tertiary)
     _set_button_boxes(
         button,
         _control_box(tokens.accent_fill if selected else Color.TRANSPARENT, Color.TRANSPARENT, false),
         _control_box(tokens.surface_hover, tokens.highlight, true),
         _control_box(tokens.accent_fill, Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.42), false),
         _focus_box(8),
-        _control_box(Color.TRANSPARENT, Color.TRANSPARENT, false)
+        _control_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.48), tokens.separator, false)
     )
     return button
 
@@ -114,13 +116,20 @@ func disclosure_button(button: Button) -> Button:
     button.add_theme_color_override("font_color", tokens.text_primary)
     button.add_theme_color_override("font_hover_color", tokens.text_primary)
     button.add_theme_color_override("font_pressed_color", tokens.text_primary)
+    var normal := _control_box(Color.TRANSPARENT, Color.TRANSPARENT, false)
+    var hover := _control_box(tokens.surface_hover, Color.TRANSPARENT, false)
+    var pressed := _control_box(tokens.accent_fill, Color.TRANSPARENT, false)
+    var focus := _focus_box(8)
+    var disabled := _control_box(Color.TRANSPARENT, Color.TRANSPARENT, false)
+    for style in [normal, hover, pressed, focus, disabled]:
+        style.content_margin_right = 42
     _set_button_boxes(
         button,
-        _control_box(Color.TRANSPARENT, Color.TRANSPARENT, false),
-        _control_box(tokens.surface_hover, Color.TRANSPARENT, false),
-        _control_box(tokens.accent_fill, Color.TRANSPARENT, false),
-        _focus_box(8),
-        _control_box(Color.TRANSPARENT, Color.TRANSPARENT, false)
+        normal,
+        hover,
+        pressed,
+        focus,
+        disabled
     )
     return button
 

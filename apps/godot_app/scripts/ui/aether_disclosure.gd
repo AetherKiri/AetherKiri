@@ -14,6 +14,7 @@ func setup(design_tokens, motion_system, label: String, chevron_texture: Texture
     text = label
     expanded = initial_value
     alignment = HORIZONTAL_ALIGNMENT_LEFT
+    clip_text = true
     focus_mode = Control.FOCUS_ALL
     mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
     custom_minimum_size.y = 52
