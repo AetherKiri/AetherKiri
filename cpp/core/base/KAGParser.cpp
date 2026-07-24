@@ -2178,6 +2178,7 @@ parse_start:
 
                     if(condition && ExcludeLevel == -1) {
                         set_taglist_from_parsed_attributes();
+                        TVPNotifyKagTagForEnvironmentWorldReset(tagname);
                         if(tagname == TJS_W("endtrans"))
                             TVPArmKagNoTransWaitRepair();
                         trace_returned_tag();

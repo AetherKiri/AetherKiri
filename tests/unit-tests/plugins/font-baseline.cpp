@@ -44,3 +44,10 @@ TEST_CASE("prerendered and runtime glyphs use the same baseline contract") {
     // visible jump between adjacent glyphs.
     CHECK(krkr::font::ComputeGlyphOriginY(30, 22) != runtimeOriginY);
 }
+
+TEST_CASE("top-aligned text keeps negative ink and outlines inside its clip") {
+    CHECK(krkr::font::ClampTextOriginToClipTop(0, -9, 1, 0) == 10);
+    CHECK(krkr::font::ClampTextOriginToClipTop(4, -2, 1, 0) == 4);
+    CHECK(krkr::font::ClampTextOriginToClipTop(0, 0, 1, 0) == 1);
+    CHECK(krkr::font::ClampTextOriginToClipTop(8, -4, 0, 3) == 8);
+}

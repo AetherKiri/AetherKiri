@@ -2245,28 +2245,26 @@ static void TVPInstallStartupPatchPrerequisites() {
         static_cast<tTJSVariant *>(nullptr));
 }
 
-#if defined(__APPLE__) && TARGET_OS_IPHONE
-static void TVPInstallIOSPatchWindowPrerequisites() {
+static void TVPInstallPatchWindowPrerequisites() {
     try {
         // A title's startup script may explicitly clear compatibility
         // globals. Restore only missing members before wiring them to the
-        // window class used by the late iOS patch.
+        // window class used by a late patch.
         TVPInstallStartupPatchPrerequisites();
         TVPExecuteScript(TVPGetPatchWindowPrerequisitesScript(),
-            TJS_W("ios_patch_window_prereq.tjs"), 0,
+            TJS_W("patch_window_prereq.tjs"), 0,
             static_cast<tTJSVariant *>(nullptr));
     } catch(const TJS::eTJSScriptError &e) {
-        TVPLogStartupScriptError("iOS patch window prerequisites error", e);
+        TVPLogStartupScriptError("Patch window prerequisites error", e);
     } catch(const TJS::eTJS &e) {
-        spdlog::warn("iOS patch window prerequisites TJS error: {}",
+        spdlog::warn("Patch window prerequisites TJS error: {}",
                      e.GetMessage().AsStdString());
     } catch(...) {
         // Compatibility setup is optional and must never prevent a title
         // from reaching its own patch.tjs.
-        spdlog::warn("iOS patch window prerequisites failed");
+        spdlog::warn("Patch window prerequisites failed");
     }
 }
-#endif
 
 static void TVPInstallKagRuntimeDefaults() {
     try {
@@ -2317,6 +2315,14 @@ const tjs_char *TVPGetPatchRuntimeRegistryExpression() {
         "global.loadTrigger.instance.loadHooks : void");
 }
 
+const tjs_char *TVPGetPatchRuntimeInstanceRecoveryScript() {
+    return TJS_W(
+        "if(typeof global.loadTrigger == \"Object\" && "
+        "typeof global.loadTrigger.instance != \"Object\") {\n"
+        "  global.loadTrigger.instance = new loadTrigger();\n"
+        "}\n");
+}
+
 namespace {
 
 class tTVPMergeObjectMembersCallback final : public tTJSDispatch {
@@ -2365,6 +2371,21 @@ static bool TVPReadPatchRuntimeRegistry(tTJSVariant &registry) {
     }
     registry.Clear();
     return false;
+}
+
+static void TVPRecoverPatchRuntimeInstance() {
+    try {
+        TVPExecuteScript(TVPGetPatchRuntimeInstanceRecoveryScript(),
+                         TJS_W("patch_runtime_instance_recovery.tjs"), 0,
+                         static_cast<tTJSVariant *>(nullptr));
+    } catch(const TJS::eTJSScriptError &e) {
+        TVPLogStartupScriptError("Patch runtime instance recovery error", e);
+    } catch(const TJS::eTJS &e) {
+        spdlog::warn("Patch runtime instance recovery TJS error: {}",
+                     e.GetMessage().AsStdString());
+    } catch(...) {
+        spdlog::warn("Patch runtime instance recovery failed");
+    }
 }
 
 } // namespace
@@ -2524,6 +2545,178 @@ void TVPRepairKagNoTransWait() {
     }
 }
 
+namespace {
+
+std::atomic<int> TVPKagEnvironmentWorldResetTagBudget{0};
+std::atomic<int> TVPKagEnvironmentWorldResetRepairFrames{0};
+ttstr TVPKagEnvironmentWorldResetObjectName;
+
+bool TVPKagEnvironmentWorldResetTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value =
+            std::getenv("AETHERKIRI_KAG_WORLD_RESET_REPAIR_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+bool TVPGetObjectMember(iTJSDispatch2 *object, iTJSDispatch2 *objthis,
+                        const tjs_char *name, tTJSVariant &value) {
+    value.Clear();
+    return object &&
+           TJS_SUCCEEDED(object->PropGet(0, name, nullptr, &value,
+                                         objthis ? objthis : object));
+}
+
+bool TVPGetObjectMember(const tTJSVariant &source, const tjs_char *name,
+                        tTJSVariant &value) {
+    if(source.Type() != tvtObject)
+        return false;
+    const tTJSVariantClosure closure = source.AsObjectClosureNoAddRef();
+    return TVPGetObjectMember(closure.Object, closure.ObjThis, name, value);
+}
+
+bool TVPVariantHasObject(const tTJSVariant &value) {
+    return value.Type() == tvtObject &&
+           value.AsObjectClosureNoAddRef().Object != nullptr;
+}
+
+bool TVPKagEnvironmentObjectMissingInWorld(const ttstr &name) {
+    tTJS *engine = TVPGetScriptEngine();
+    if(!engine)
+        return false;
+    iTJSDispatch2 *global = engine->GetGlobalNoAddRef();
+    if(!global)
+        return false;
+
+    tTJSVariant world;
+    tTJSVariant environment;
+    tTJSVariant definitions;
+    tTJSVariant definition;
+    tTJSVariant world_objects;
+    tTJSVariant world_object;
+    if(!TVPGetObjectMember(global, global, TJS_W("world_object"), world) ||
+       !TVPVariantHasObject(world) ||
+       !TVPGetObjectMember(world, TJS_W("env"), environment) ||
+       !TVPVariantHasObject(environment) ||
+       !TVPGetObjectMember(environment, TJS_W("objects"), definitions) ||
+       !TVPVariantHasObject(definitions) ||
+       !TVPGetObjectMember(definitions, name.c_str(), definition) ||
+       !TVPVariantHasObject(definition) ||
+       !TVPGetObjectMember(world, TJS_W("envobjects"), world_objects) ||
+       !TVPVariantHasObject(world_objects)) {
+        return false;
+    }
+
+    return !TVPGetObjectMember(world_objects, name.c_str(), world_object) ||
+           !TVPVariantHasObject(world_object);
+}
+
+} // namespace
+
+void TVPNotifyKagTagForEnvironmentWorldReset(const ttstr &tag_name) {
+    if(tag_name == TJS_W("envclear")) {
+        // envclear resets only EnvObjectWorld. Keep a bounded watch window so
+        // a later command that re-addresses a retained KAGEnvironment object
+        // can restore its missing renderer-side peer.
+        TVPKagEnvironmentWorldResetObjectName.Clear();
+        TVPKagEnvironmentWorldResetRepairFrames.store(
+            0, std::memory_order_relaxed);
+        TVPKagEnvironmentWorldResetTagBudget.store(
+            8192, std::memory_order_relaxed);
+        if(TVPKagEnvironmentWorldResetTraceEnabled())
+            spdlog::info("KAG environment world-reset repair armed");
+        return;
+    }
+
+    const int remaining =
+        TVPKagEnvironmentWorldResetTagBudget.fetch_sub(
+            1, std::memory_order_relaxed);
+    if(remaining <= 0) {
+        if(remaining < 0) {
+            TVPKagEnvironmentWorldResetTagBudget.store(
+                0, std::memory_order_relaxed);
+        }
+        return;
+    }
+
+    try {
+        if(!TVPKagEnvironmentObjectMissingInWorld(tag_name))
+            return;
+        TVPKagEnvironmentWorldResetObjectName = tag_name;
+        TVPKagEnvironmentWorldResetTagBudget.store(
+            0, std::memory_order_relaxed);
+        TVPKagEnvironmentWorldResetRepairFrames.store(
+            120, std::memory_order_relaxed);
+        if(TVPKagEnvironmentWorldResetTraceEnabled()) {
+            spdlog::info(
+                "KAG environment world-reset repair candidate object={}",
+                tag_name.AsStdString());
+        }
+    } catch(...) {
+        // A game without this KAG environment model simply keeps running.
+    }
+}
+
+void TVPRepairKagEnvironmentWorldReset() {
+    const int remaining =
+        TVPKagEnvironmentWorldResetRepairFrames.fetch_sub(
+            1, std::memory_order_relaxed);
+    if(remaining <= 0) {
+        if(remaining < 0) {
+            TVPKagEnvironmentWorldResetRepairFrames.store(
+                0, std::memory_order_relaxed);
+        }
+        return;
+    }
+
+    try {
+        const ttstr object_name = TVPKagEnvironmentWorldResetObjectName;
+        if(object_name.IsEmpty() ||
+           !TVPKagEnvironmentObjectMissingInWorld(object_name)) {
+            TVPKagEnvironmentWorldResetRepairFrames.store(
+                0, std::memory_order_relaxed);
+            return;
+        }
+
+        tTJSVariant stable(false);
+        TVPExecuteExpression(
+            TJS_W("typeof kag == \"Object\" && kag && kag.inStable"),
+            &stable);
+        if(!stable.operator bool())
+            return;
+
+        TVPExecuteExpression(TJS_W("world_object.updateAll()"),
+                             static_cast<tTJSVariant *>(nullptr));
+        TVPKagEnvironmentWorldResetRepairFrames.store(
+            0, std::memory_order_relaxed);
+        TVPKagEnvironmentWorldResetObjectName.Clear();
+        if(TVPKagEnvironmentWorldResetTraceEnabled()) {
+            spdlog::info(
+                "KAG environment world-reset repair completed object={}",
+                object_name.AsStdString());
+        }
+    } catch(const TJS::eTJSScriptError &e) {
+        if(TVPKagEnvironmentWorldResetTraceEnabled()) {
+            spdlog::info(
+                "KAG environment world-reset repair script-error message={} "
+                "block={} line={}",
+                e.GetMessage().AsStdString(),
+                e.GetBlockName() ? ttstr(e.GetBlockName()).AsStdString() : "",
+                e.GetSourceLine());
+        }
+    } catch(const TJS::eTJS &e) {
+        if(TVPKagEnvironmentWorldResetTraceEnabled()) {
+            spdlog::info(
+                "KAG environment world-reset repair TJS error message={}",
+                e.GetMessage().AsStdString());
+        }
+    } catch(...) {
+        if(TVPKagEnvironmentWorldResetTraceEnabled())
+            spdlog::info("KAG environment world-reset repair failed");
+    }
+}
+
 static void TVPLogStartupScriptError(const char *stage,
                                      const TJS::eTJSScriptError &e) {
     ttstr msg;
@@ -2677,9 +2870,7 @@ void TVPExecuteStartupScript() {
 #endif
         ttstr patch = TVPGetAppPath() + "patch.tjs";
         if(TVPIsExistentStorageNoSearch(patch)) {
-#if defined(__APPLE__) && TARGET_OS_IPHONE
-            TVPInstallIOSPatchWindowPrerequisites();
-#endif
+            TVPInstallPatchWindowPrerequisites();
             // A late compatibility patch can replace framework classes and
             // their singleton instances.  Preserve runtime extension hooks
             // registered by game scripts, then merge them into the new
@@ -2694,7 +2885,18 @@ void TVPExecuteStartupScript() {
             }
             if(hasSavedRuntimeRegistry) {
                 tTJSVariant replacementRuntimeRegistry;
-                if(TVPReadPatchRuntimeRegistry(replacementRuntimeRegistry)) {
+                bool hasReplacementRuntimeRegistry =
+                    TVPReadPatchRuntimeRegistry(replacementRuntimeRegistry);
+                if(!hasReplacementRuntimeRegistry) {
+                    // Some precompiled late patches register a replacement
+                    // class while conditionally skipping its top-level
+                    // singleton assignment. Recreate the replacement class's
+                    // own instance before restoring runtime hooks.
+                    TVPRecoverPatchRuntimeInstance();
+                    hasReplacementRuntimeRegistry =
+                        TVPReadPatchRuntimeRegistry(replacementRuntimeRegistry);
+                }
+                if(hasReplacementRuntimeRegistry) {
                     try {
                         if(!TVPMergeObjectMembers(
                                replacementRuntimeRegistry.AsObjectNoAddRef(),
