@@ -28,8 +28,8 @@ func setup(design_tokens, motion_system, labels: PackedStringArray, initial_inde
     indicator = PanelContainer.new()
     indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
     var indicator_style: StyleBoxFlat = tokens.panel(tokens.surface_hover, 6, tokens.highlight, 1)
-    indicator_style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.26)
-    indicator_style.shadow_size = 7
+    indicator_style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.26 if tokens.mode == "dark" else 0.12)
+    indicator_style.shadow_size = 7 if tokens.mode == "dark" else 4
     indicator_style.shadow_offset = Vector2(0, 2)
     indicator.add_theme_stylebox_override("panel", indicator_style)
     add_child(indicator)

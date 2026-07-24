@@ -30,8 +30,8 @@ func setup(design_tokens, motion_system, initial_value: bool) -> void:
     var knob_style: StyleBoxFlat = tokens.panel(Color.WHITE, 12)
     knob_style.border_color = Color(1, 1, 1, 0.56)
     knob_style.border_width_top = 1
-    knob_style.shadow_color = Color(0, 0, 0, 0.28)
-    knob_style.shadow_size = 5
+    knob_style.shadow_color = Color(0, 0, 0, 0.28 if tokens.mode == "dark" else 0.16)
+    knob_style.shadow_size = 5 if tokens.mode == "dark" else 3
     knob_style.shadow_offset = Vector2(0, 2)
     knob.add_theme_stylebox_override("panel", knob_style)
     add_child(knob)
@@ -83,7 +83,7 @@ func _animate_knob_scale(target: Vector2, duration: float) -> void:
 func _track_box(fill: Color) -> StyleBoxFlat:
     var border := Color(1, 1, 1, 0.13) if tokens.mode == "dark" else Color(1, 1, 1, 0.48)
     var style: StyleBoxFlat = tokens.panel(fill, 16, border, 1)
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.16)
-    style.shadow_size = 3
+    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.16 if tokens.mode == "dark" else 0.06)
+    style.shadow_size = 3 if tokens.mode == "dark" else 2
     style.shadow_offset = Vector2(0, 1)
     return style

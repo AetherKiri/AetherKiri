@@ -236,8 +236,8 @@ func _field_box(fill: Color, border: Color, border_width: int) -> StyleBoxFlat:
     var style: StyleBoxFlat = tokens.button_style(fill, border, 8)
     style.content_margin_left = 13
     style.content_margin_right = 42
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.16)
-    style.shadow_size = 4
+    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.16 if tokens.mode == "dark" else 0.07)
+    style.shadow_size = 4 if tokens.mode == "dark" else 2
     style.shadow_offset = Vector2(0, 1)
     style.border_width_left = border_width
     style.border_width_top = border_width
@@ -252,7 +252,7 @@ func _popup_box() -> StyleBoxFlat:
     style.content_margin_top = MENU_PADDING
     style.content_margin_right = MENU_PADDING
     style.content_margin_bottom = MENU_PADDING
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.64)
-    style.shadow_size = 24
+    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.64 if tokens.mode == "dark" else 0.22)
+    style.shadow_size = 24 if tokens.mode == "dark" else 14
     style.shadow_offset = Vector2(0, 10)
     return style
