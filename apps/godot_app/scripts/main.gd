@@ -20,6 +20,7 @@ const AetherMotion = preload("res://scripts/ui/aether_motion.gd")
 const AetherWidgets = preload("res://scripts/ui/aether_widgets.gd")
 const AetherSegmentedControl = preload("res://scripts/ui/aether_segmented_control.gd")
 const AetherSwitch = preload("res://scripts/ui/aether_switch.gd")
+const AetherDisclosure = preload("res://scripts/ui/aether_disclosure.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -2016,26 +2017,29 @@ func _rebuild_settings_view() -> void:
     _add_settings_row(compatibility_group, _settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
 
     var advanced_group := _settings_group(page, _t("settings.section.advanced"), ICON_PLUGIN, animate_page, 0.13)
-    var advanced_disclosure := Button.new()
-    advanced_disclosure.text = _t("settings.advanced_desc")
-    advanced_disclosure.icon = _load_ui_icon(ICON_CHEVRON_DOWN if advanced_tool_expanded else ICON_CHEVRON_RIGHT)
-    advanced_disclosure.expand_icon = true
-    advanced_disclosure.icon_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-    advanced_disclosure.alignment = HORIZONTAL_ALIGNMENT_LEFT
-    advanced_disclosure.custom_minimum_size = Vector2(0, 52)
-    advanced_disclosure.add_theme_constant_override("icon_max_width", 18)
-    advanced_disclosure.add_theme_font_size_override("font_size", 15)
-    ui_widgets.disclosure_button(advanced_disclosure)
-    advanced_disclosure.pressed.connect(func():
-        advanced_tool_expanded = not advanced_tool_expanded
-        call_deferred("_rebuild_settings_view")
+    var advanced_disclosure = AetherDisclosure.new()
+    advanced_disclosure.setup(
+        ui_tokens,
+        ui_motion,
+        _t("settings.advanced_desc"),
+        _load_ui_icon(ICON_CHEVRON_RIGHT),
+        advanced_tool_expanded
     )
+    ui_widgets.disclosure_button(advanced_disclosure)
     _add_settings_row(advanced_group, advanced_disclosure)
-    if advanced_tool_expanded:
-        _add_settings_row(advanced_group, _settings_toggle_row(_t("settings.plugin_trace"), _t("settings.plugin_trace_desc"), plugin_trace, "advanced_plugin_trace"))
-        _add_settings_row(advanced_group, _settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), trace_log, "advanced_trace_log"))
-        _add_settings_row(advanced_group, _settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), console_log_file, "advanced_console_log"))
-        _add_settings_row(advanced_group, _settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), export_scripts, "advanced_export_tjs"))
+    var advanced_content := VBoxContainer.new()
+    advanced_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    advanced_content.add_theme_constant_override("separation", 0)
+    advanced_content.visible = advanced_tool_expanded
+    advanced_group.add_child(advanced_content)
+    _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.plugin_trace"), _t("settings.plugin_trace_desc"), plugin_trace, "advanced_plugin_trace"))
+    _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), trace_log, "advanced_trace_log"))
+    _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), console_log_file, "advanced_console_log"))
+    _add_settings_row(advanced_content, _settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), export_scripts, "advanced_export_tjs"))
+    advanced_disclosure.expanded_changed.connect(func(value: bool):
+        advanced_tool_expanded = value
+        ui_motion.set_visible(advanced_content, value)
+    )
 
     var about_group := _settings_group(page, _t("settings.section.about"), ICON_HELP, animate_page, 0.155)
     _add_settings_row(about_group, _settings_value_row(_t("settings.version"), "0.2.0-beta.1"))

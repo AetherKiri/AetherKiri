@@ -121,6 +121,34 @@ func reveal(control: Control, delay: float = 0.0) -> void:
         tween.tween_property(control, "scale", Vector2.ONE, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     tween.chain().tween_callback(func(): _finish(control))
 
+func set_visible(control: Control, show: bool) -> void:
+    if control == null or not is_instance_valid(control):
+        return
+    var key := control.get_instance_id()
+    var was_animating := active_tweens.has(key)
+    _stop(control)
+    _update_pivot(control)
+    if show:
+        control.visible = true
+        if not was_animating and control.modulate.a >= 0.99:
+            control.modulate.a = 0.0
+            control.scale = Vector2.ONE if reduced_motion else Vector2(0.985, 0.985)
+    var target_alpha := 1.0 if show else 0.0
+    var target_scale := Vector2.ONE if show or reduced_motion else Vector2(0.985, 0.985)
+    var tween := control.create_tween().set_parallel(true)
+    active_tweens[key] = tween
+    var duration := 0.12 if reduced_motion else (0.22 if show else 0.16)
+    tween.tween_property(control, "modulate:a", target_alpha, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    if not reduced_motion:
+        tween.tween_property(control, "scale", target_scale, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    tween.chain().tween_callback(func():
+        if not show:
+            control.visible = false
+            control.modulate.a = 1.0
+            control.scale = Vector2.ONE
+        _finish(control)
+    )
+
 func _press_in(control: Control) -> void:
     if reduced_motion:
         return
