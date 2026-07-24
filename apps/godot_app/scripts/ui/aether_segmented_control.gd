@@ -10,7 +10,6 @@ var motion
 var buttons: Array[Button] = []
 var selected_index := 0
 var indicator: PanelContainer
-var indicator_tween: Tween
 
 func setup(design_tokens, motion_system, labels: PackedStringArray, initial_index: int = 0) -> void:
     tokens = design_tokens
@@ -101,12 +100,9 @@ func _layout_indicator(animate: bool = false) -> void:
     var segment_width := available_width / float(buttons.size())
     var target_position := Vector2(TRACK_INSET + segment_width * float(selected_index), TRACK_INSET)
     var target_size := Vector2(segment_width, maxf(0.0, size.y - TRACK_INSET * 2.0))
-    if indicator_tween != null and indicator_tween.is_valid():
-        indicator_tween.kill()
     if not animate or motion.reduced_motion:
         indicator.position = target_position
         indicator.size = target_size
         return
-    indicator_tween = create_tween().set_parallel(true)
-    indicator_tween.tween_property(indicator, "position", target_position, 0.22).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    indicator_tween.tween_property(indicator, "size", target_size, 0.22).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    motion.spring_property(indicator, "position", target_position, 0.32, 1.0)
+    motion.spring_property(indicator, "size", target_size, 0.32, 1.0)

@@ -705,6 +705,7 @@ var active_modal_dialog: Control
 var loading_panel: PanelContainer
 var loading_card: PanelContainer
 var loading_spinner: TextureRect
+var loading_hiding := false
 var game_scroll: ScrollContainer
 var game_list: GridContainer
 var home_actions: HBoxContainer
@@ -2215,10 +2216,16 @@ func _build_loading_panel() -> void:
         box.add_child(log_view)
 
 func _show_loading_overlay() -> void:
-    loading_panel.visible = true
+    loading_hiding = false
     loading_panel.move_to_front()
     if loading_card != null:
-        ui_motion.reveal(loading_card)
+        ui_motion.loading_in(loading_panel, loading_card)
+
+func _hide_loading_overlay() -> void:
+    if loading_panel == null or not loading_panel.visible or loading_hiding:
+        return
+    loading_hiding = true
+    ui_motion.loading_out(loading_panel, loading_card, func(): loading_hiding = false)
 
 func _panel_style(radius: int, fill: Color, border: Color, border_width: int = 1) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
@@ -3002,6 +3009,7 @@ func _empty_help_text() -> String:
     return _t("home.empty_help_desktop")
 
 func _show_home() -> void:
+    var previous_route := shell_route
     _reset_shell_scroll_drag()
     _discard_settings_draft()
     _set_game_background(false)
@@ -3011,8 +3019,11 @@ func _show_home() -> void:
     modal_layer.visible = false
     _sync_shell_route("library")
     _refresh_games()
+    if previous_route != "library":
+        ui_motion.route_in(home_view, -1.0)
 
 func _show_settings() -> void:
+    var previous_route := shell_route
     _reset_shell_scroll_drag()
     settings_animate_next = shell_route != "settings"
     _begin_settings_edit()
@@ -3024,8 +3035,11 @@ func _show_settings() -> void:
     _sync_shell_route("settings")
     _fit_full_rects()
     call_deferred("_rebuild_settings_view")
+    if previous_route != "settings":
+        ui_motion.route_in(settings_view, 1.0)
 
 func _show_detail(game: Dictionary) -> void:
+    var previous_route := shell_route
     _reset_shell_scroll_drag()
     _set_game_background(false)
     selected_game = game
@@ -3034,6 +3048,8 @@ func _show_detail(game: Dictionary) -> void:
     detail_view.visible = true
     modal_layer.visible = false
     _sync_shell_route("detail")
+    if previous_route != "detail":
+        ui_motion.route_in(detail_view, 1.0)
     for child in detail_scroll.get_children():
         child.queue_free()
 
@@ -3318,7 +3334,7 @@ func _modal_dialog(preferred_size: Vector2, dim_alpha: float = 0.44) -> PanelCon
     modal_layer.add_child(dialog)
     active_modal_scrim = dim
     active_modal_dialog = dialog
-    ui_motion.modal_in(dim, dialog)
+    ui_motion.modal_in(dim, dialog, shell_root)
     return dialog
 
 func _modal_stack(dialog: PanelContainer, title_text: String, icon_path: String) -> VBoxContainer:
@@ -3356,7 +3372,7 @@ func _dismiss_modal(after: Callable = Callable()) -> void:
         return
     var scrim := active_modal_scrim
     var dialog := active_modal_dialog
-    ui_motion.modal_out(scrim, dialog, func():
+    ui_motion.modal_out(scrim, dialog, shell_root, func():
         modal_layer.visible = false
         active_modal_scrim = null
         active_modal_dialog = null
@@ -4449,7 +4465,7 @@ func _quit_after_runtime_exit() -> void:
     startup_poll_accum = 0.0
     tick_trace_active_serial = 0
     if loading_panel != null:
-        loading_panel.visible = false
+        _hide_loading_overlay()
     if restart_notice != null:
         restart_notice.text = ""
         restart_notice.visible = false
@@ -4540,6 +4556,8 @@ func _ready() -> void:
     if not selected_backend in BACKENDS:
         selected_backend = "Godot Native"
 
+    if ui_motion.get_parent() == null:
+        add_child(ui_motion)
     _build_ui()
     _stage_runtime_fonts()
 
@@ -5815,7 +5833,7 @@ func _process(delta: float) -> void:
             startup_state = cached_startup_state
         if startup_state == STARTUP_SUCCEEDED:
             restart_notice.text = ""
-            loading_panel.visible = false
+            _hide_loading_overlay()
             _flush_pending_touch_press_if_ready()
             tick_trace_serial += 1
             tick_trace_active_serial = tick_trace_serial
@@ -5893,7 +5911,7 @@ func _process(delta: float) -> void:
                 _log_input_trace(delta, tick_ms, update_ms)
         elif startup_state == STARTUP_FAILED:
             restart_notice.text = "Game startup failed."
-            loading_panel.visible = false
+            _hide_loading_overlay()
             _set_game_background(false)
             shell_root.visible = true
             viewport.visible = false

@@ -1,18 +1,103 @@
-extends RefCounted
+extends Node
 
-const PRESS_SCALE := Vector2(0.975, 0.975)
+const PRESS_SCALE := Vector2(0.972, 0.972)
+const HOVER_SCALE := Vector2(1.010, 1.010)
 const REST_SCALE := Vector2.ONE
 const ENTER_OFFSET := Vector2(0, 10)
 const ENTER_DURATION := 0.22
-const PRESS_IN_DURATION := 0.10
-const PRESS_OUT_DURATION := 0.16
+const PRESS_RESPONSE := 0.16
+const RELEASE_RESPONSE := 0.24
+const HOVER_RESPONSE := 0.26
+const SPRING_STEP := 1.0 / 120.0
 
 var reduced_motion := false
-var active_tweens := {}
+var active_tweens: Dictionary = {}
+var active_springs: Dictionary = {}
 
 func _init() -> void:
     var value := OS.get_environment("AETHERKIRI_REDUCED_MOTION").strip_edges().to_lower()
     reduced_motion = value in ["1", "true", "yes", "on"]
+    set_process(false)
+
+func _process(delta: float) -> void:
+    if active_springs.is_empty():
+        set_process(false)
+        return
+    var clamped_delta := minf(delta, 1.0 / 30.0)
+    var step_count := maxi(1, ceili(clamped_delta / SPRING_STEP))
+    var step_delta := clamped_delta / float(step_count)
+    var completed: Array[String] = []
+    var callbacks: Array[Callable] = []
+    for key_variant in active_springs.keys():
+        var key := String(key_variant)
+        var state: Dictionary = active_springs[key]
+        var owner: Object = state.get("owner")
+        if owner == null or not is_instance_valid(owner):
+            completed.append(key)
+            continue
+        var property: StringName = state.get("property")
+        var current = owner.get(property)
+        var target = state.get("target")
+        var velocity = state.get("velocity")
+        var response: float = state.get("response", 0.32)
+        var damping_ratio: float = state.get("damping", 1.0)
+        var omega := TAU / maxf(0.08, response)
+        var stiffness := omega * omega
+        var damping := 2.0 * damping_ratio * omega
+        for _step in range(step_count):
+            velocity += ((target - current) * stiffness - velocity * damping) * step_delta
+            current += velocity * step_delta
+        owner.set(property, current)
+        state["velocity"] = velocity
+        active_springs[key] = state
+        var epsilon: float = state.get("epsilon", 0.001)
+        if _value_length(target - current) <= epsilon and _value_length(velocity) <= epsilon * 4.0:
+            owner.set(property, target)
+            completed.append(key)
+            var callback: Callable = state.get("finished", Callable())
+            if callback.is_valid():
+                callbacks.append(callback)
+    for key in completed:
+        active_springs.erase(key)
+    for callback in callbacks:
+        callback.call()
+    if active_springs.is_empty():
+        set_process(false)
+
+func spring_property(
+    owner: Object,
+    property: StringName,
+    target,
+    response: float = 0.32,
+    damping: float = 1.0,
+    finished: Callable = Callable()
+) -> void:
+    if owner == null or not is_instance_valid(owner):
+        if finished.is_valid():
+            finished.call()
+        return
+    var key := _motion_key(owner, property)
+    if reduced_motion:
+        active_springs.erase(key)
+        owner.set(property, target)
+        if finished.is_valid():
+            finished.call()
+        return
+    var current = owner.get(property)
+    var velocity = _zero_like(current)
+    if active_springs.has(key):
+        velocity = active_springs[key].get("velocity", velocity)
+    active_springs[key] = {
+        "owner": owner,
+        "property": property,
+        "target": target,
+        "velocity": velocity,
+        "response": response,
+        "damping": damping,
+        "epsilon": 0.0008 if current is float else 0.04,
+        "finished": finished,
+    }
+    set_process(true)
 
 func bind_pressable(control: Control) -> void:
     if control == null or control.has_meta("aether_motion_bound"):
@@ -47,63 +132,93 @@ func bind_lift(control: Control, highlight: CanvasItem = null, rest_alpha: float
     )
     if control is BaseButton:
         var button := control as BaseButton
-        button.button_down.connect(func():
-            if not reduced_motion:
-                _animate_scale(button, PRESS_SCALE, PRESS_IN_DURATION)
-        )
+        button.button_down.connect(func(): _press_in(button))
         button.button_up.connect(func():
             var hovered := bool(button.get_meta("aether_hovered", false))
-            var target := Vector2(1.012, 1.012) if hovered and not reduced_motion else REST_SCALE
-            _animate_scale(button, target, PRESS_OUT_DURATION)
+            _animate_scale(button, HOVER_SCALE if hovered else REST_SCALE, RELEASE_RESPONSE)
         )
 
 func enter(control: Control, offset: Vector2 = ENTER_OFFSET, delay: float = 0.0) -> void:
     if control == null or not is_instance_valid(control):
         return
-    _stop(control)
+    _stop_tweens(control)
     var target_position := control.position
     control.modulate.a = 0.0
     if not reduced_motion:
         control.position = target_position + offset
     var tween := control.create_tween().set_parallel(true)
-    active_tweens[control.get_instance_id()] = tween
+    active_tweens[_tween_key(control, "enter")] = tween
     var duration := 0.12 if reduced_motion else ENTER_DURATION
     tween.tween_property(control, "modulate:a", 1.0, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not reduced_motion:
         tween.tween_property(control, "position", target_position, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    tween.chain().tween_callback(func(): _finish(control))
+    tween.chain().tween_callback(func(): _finish_tween(control, "enter"))
 
-func modal_in(scrim: CanvasItem, dialog: Control) -> void:
+func route_in(control: Control, direction: float = 1.0) -> void:
+    enter(control, Vector2(8.0 * direction, 0.0))
+
+func modal_in(scrim: CanvasItem, dialog: Control, background: Control = null) -> void:
     if scrim == null or dialog == null:
         return
+    _stop_tweens(scrim)
+    _stop_tweens(dialog)
     scrim.modulate.a = 0.0
     dialog.modulate.a = 0.0
     _update_pivot(dialog)
-    dialog.scale = Vector2.ONE if reduced_motion else Vector2(0.985, 0.985)
-    var tween := dialog.create_tween().set_parallel(true)
-    active_tweens[dialog.get_instance_id()] = tween
-    var duration := 0.14 if reduced_motion else 0.22
-    tween.tween_property(scrim, "modulate:a", 1.0, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    tween.tween_property(dialog, "modulate:a", 1.0, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    var rest_position := dialog.position
+    dialog.set_meta("aether_modal_rest_position", rest_position)
     if not reduced_motion:
-        tween.tween_property(dialog, "scale", Vector2.ONE, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    tween.chain().tween_callback(func(): _finish(dialog))
+        dialog.position = rest_position + Vector2(0, 8)
+        dialog.scale = Vector2(0.965, 0.965)
+        spring_property(dialog, "position", rest_position, 0.34, 1.0)
+        spring_property(dialog, "scale", REST_SCALE, 0.32, 1.0)
+    else:
+        dialog.scale = REST_SCALE
+    _fade(scrim, 1.0, 0.18 if not reduced_motion else 0.12, "modal")
+    _fade(dialog, 1.0, 0.20 if not reduced_motion else 0.12, "modal")
+    if background != null and is_instance_valid(background):
+        _update_pivot(background)
+        spring_property(background, "scale", Vector2(0.992, 0.992), 0.38, 1.0)
+        _fade(background, 0.94, 0.20, "modal_background")
 
-func modal_out(scrim: CanvasItem, dialog: Control, finished: Callable = Callable()) -> void:
+func modal_out(scrim: CanvasItem, dialog: Control, background: Control = null, finished: Callable = Callable()) -> void:
     if scrim == null or dialog == null:
         if finished.is_valid():
             finished.call()
         return
-    _stop(dialog)
-    var tween := dialog.create_tween().set_parallel(true)
-    active_tweens[dialog.get_instance_id()] = tween
-    var duration := 0.10 if reduced_motion else 0.16
-    tween.tween_property(scrim, "modulate:a", 0.0, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    tween.tween_property(dialog, "modulate:a", 0.0, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    var rest_position: Vector2 = dialog.get_meta("aether_modal_rest_position", dialog.position)
     if not reduced_motion:
-        tween.tween_property(dialog, "scale", Vector2(0.985, 0.985), duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    tween.chain().tween_callback(func():
-        _finish(dialog)
+        spring_property(dialog, "position", rest_position + Vector2(0, 8), 0.24, 1.0)
+        spring_property(dialog, "scale", Vector2(0.965, 0.965), 0.24, 1.0)
+    _fade(scrim, 0.0, 0.14 if not reduced_motion else 0.10, "modal")
+    _fade(dialog, 0.0, 0.14 if not reduced_motion else 0.10, "modal", finished)
+    if background != null and is_instance_valid(background):
+        spring_property(background, "scale", REST_SCALE, 0.34, 1.0)
+        _fade(background, 1.0, 0.16, "modal_background")
+
+func loading_in(panel: Control, card: Control) -> void:
+    if panel == null or card == null:
+        return
+    panel.visible = true
+    panel.modulate.a = 0.0
+    _update_pivot(card)
+    if not reduced_motion:
+        card.scale = Vector2(0.975, 0.975)
+        spring_property(card, "scale", REST_SCALE, 0.32, 1.0)
+    _fade(panel, 1.0, 0.18 if not reduced_motion else 0.12, "loading")
+
+func loading_out(panel: Control, card: Control, finished: Callable = Callable()) -> void:
+    if panel == null or not is_instance_valid(panel):
+        if finished.is_valid():
+            finished.call()
+        return
+    if card != null and is_instance_valid(card) and not reduced_motion:
+        spring_property(card, "scale", Vector2(0.985, 0.985), 0.22, 1.0)
+    _fade(panel, 0.0, 0.14 if not reduced_motion else 0.10, "loading", func():
+        panel.visible = false
+        panel.modulate.a = 1.0
+        if card != null and is_instance_valid(card):
+            card.scale = REST_SCALE
         if finished.is_valid():
             finished.call()
     )
@@ -111,94 +226,116 @@ func modal_out(scrim: CanvasItem, dialog: Control, finished: Callable = Callable
 func reveal(control: Control, delay: float = 0.0) -> void:
     if control == null or not is_instance_valid(control):
         return
-    _stop(control)
+    _stop_tweens(control)
     _update_pivot(control)
     control.modulate.a = 0.0
-    control.scale = Vector2.ONE if reduced_motion else Vector2(0.985, 0.985)
+    control.scale = REST_SCALE if reduced_motion else Vector2(0.985, 0.985)
     var tween := control.create_tween().set_parallel(true)
-    active_tweens[control.get_instance_id()] = tween
+    active_tweens[_tween_key(control, "reveal")] = tween
     var duration := 0.12 if reduced_motion else 0.22
     tween.tween_property(control, "modulate:a", 1.0, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not reduced_motion:
-        tween.tween_property(control, "scale", Vector2.ONE, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    tween.chain().tween_callback(func(): _finish(control))
+        tween.tween_property(control, "scale", REST_SCALE, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    tween.chain().tween_callback(func(): _finish_tween(control, "reveal"))
 
 func set_visible(control: Control, show: bool) -> void:
     if control == null or not is_instance_valid(control):
         return
-    var key := control.get_instance_id()
-    var was_animating := active_tweens.has(key)
-    _stop(control)
     _update_pivot(control)
     if show:
         control.visible = true
-        if not was_animating and control.modulate.a >= 0.99:
+        if control.modulate.a >= 0.99:
             control.modulate.a = 0.0
-            control.scale = Vector2.ONE if reduced_motion else Vector2(0.985, 0.985)
-    var target_alpha := 1.0 if show else 0.0
-    var target_scale := Vector2.ONE if show or reduced_motion else Vector2(0.985, 0.985)
-    var tween := control.create_tween().set_parallel(true)
-    active_tweens[key] = tween
-    var duration := 0.12 if reduced_motion else (0.22 if show else 0.16)
-    tween.tween_property(control, "modulate:a", target_alpha, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+            control.scale = REST_SCALE if reduced_motion else Vector2(0.985, 0.985)
     if not reduced_motion:
-        tween.tween_property(control, "scale", target_scale, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    tween.chain().tween_callback(func():
+        spring_property(control, "scale", REST_SCALE if show else Vector2(0.985, 0.985), 0.28 if show else 0.22, 1.0)
+    _fade(control, 1.0 if show else 0.0, 0.18 if show else 0.14, "visibility", func():
         if not show:
             control.visible = false
             control.modulate.a = 1.0
-            control.scale = Vector2.ONE
-        _finish(control)
+            control.scale = REST_SCALE
     )
 
 func _press_in(control: Control) -> void:
     if reduced_motion:
         return
-    _animate_scale(control, PRESS_SCALE, PRESS_IN_DURATION)
+    _animate_scale(control, PRESS_SCALE, PRESS_RESPONSE)
 
 func _press_out(control: Control) -> void:
     if reduced_motion:
         control.scale = REST_SCALE
         return
-    _animate_scale(control, REST_SCALE, PRESS_OUT_DURATION)
+    _animate_scale(control, REST_SCALE, RELEASE_RESPONSE)
 
 func _set_lift_hover(control: Control, highlight: CanvasItem, active: bool, rest_alpha: float, hover_alpha: float) -> void:
     if control == null or not is_instance_valid(control):
         return
     control.set_meta("aether_hovered", active)
-    var target := Vector2(1.012, 1.012) if active and not reduced_motion else REST_SCALE
-    _animate_scale(control, target, 0.18 if active else 0.20)
+    _animate_scale(control, HOVER_SCALE if active else REST_SCALE, HOVER_RESPONSE)
     if highlight == null or not is_instance_valid(highlight):
         return
     if reduced_motion:
         highlight.modulate.a = hover_alpha if active else rest_alpha
         return
-    var tween := highlight.create_tween()
-    tween.tween_property(highlight, "modulate:a", hover_alpha if active else rest_alpha, 0.16).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    _fade(highlight, hover_alpha if active else rest_alpha, 0.16, "hover")
 
-func _animate_scale(control: Control, target: Vector2, duration: float) -> void:
+func _animate_scale(control: Control, target: Vector2, response: float) -> void:
     if control == null or not is_instance_valid(control):
         return
-    _stop(control)
     _update_pivot(control)
-    var tween := control.create_tween()
-    active_tweens[control.get_instance_id()] = tween
-    tween.tween_property(control, "scale", target, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    tween.tween_callback(func(): _finish(control))
+    spring_property(control, "scale", target, response, 1.0)
+
+func _fade(item: CanvasItem, target: float, duration: float, channel: String, finished: Callable = Callable()) -> void:
+    if item == null or not is_instance_valid(item):
+        if finished.is_valid():
+            finished.call()
+        return
+    var key := _tween_key(item, channel)
+    _stop_tween_key(key)
+    var tween := item.create_tween()
+    active_tweens[key] = tween
+    tween.tween_property(item, "modulate:a", target, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    tween.tween_callback(func():
+        active_tweens.erase(key)
+        if finished.is_valid():
+            finished.call()
+    )
 
 func _update_pivot(control: Control) -> void:
     if control != null and is_instance_valid(control):
         control.pivot_offset = control.size * 0.5
 
-func _stop(control: Control) -> void:
-    if control == null or not is_instance_valid(control):
+func _stop_tweens(owner: Object) -> void:
+    if owner == null or not is_instance_valid(owner):
         return
-    var key := control.get_instance_id()
+    var prefix := "%d:" % owner.get_instance_id()
+    for key_variant in active_tweens.keys():
+        var key := String(key_variant)
+        if key.begins_with(prefix):
+            _stop_tween_key(key)
+
+func _stop_tween_key(key: String) -> void:
     var tween = active_tweens.get(key)
     if tween is Tween and tween.is_valid():
         tween.kill()
     active_tweens.erase(key)
 
-func _finish(control: Control) -> void:
-    if control != null and is_instance_valid(control):
-        active_tweens.erase(control.get_instance_id())
+func _finish_tween(owner: Object, channel: String) -> void:
+    if owner != null and is_instance_valid(owner):
+        active_tweens.erase(_tween_key(owner, channel))
+
+func _motion_key(owner: Object, property: StringName) -> String:
+    return "%d:%s" % [owner.get_instance_id(), String(property)]
+
+func _tween_key(owner: Object, channel: String) -> String:
+    return "%d:%s" % [owner.get_instance_id(), channel]
+
+func _zero_like(value):
+    if value is Vector2:
+        return Vector2.ZERO
+    return 0.0
+
+func _value_length(value) -> float:
+    if value is Vector2:
+        return value.length()
+    return absf(float(value))

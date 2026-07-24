@@ -17,7 +17,6 @@ var overlay: Control
 var popup_panel: PanelContainer
 var chevron: TextureRect
 var popup_tween: Tween
-var chevron_tween: Tween
 
 var item_count: int:
     get:
@@ -195,19 +194,16 @@ func _animate_popup(show: bool) -> void:
     popup_tween = create_tween().set_parallel(true)
     popup_tween.tween_property(popup_panel, "modulate:a", 1.0 if show else 0.0, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not motion.reduced_motion:
-        popup_tween.tween_property(popup_panel, "scale", Vector2.ONE if show else Vector2(0.97, 0.97), duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+        motion.spring_property(popup_panel, "scale", Vector2.ONE if show else Vector2(0.97, 0.97), 0.28 if show else 0.22, 1.0)
     if not show:
         popup_tween.chain().tween_callback(_free_overlay)
 
 func _animate_chevron(open: bool) -> void:
-    if chevron_tween != null and chevron_tween.is_valid():
-        chevron_tween.kill()
     var target := PI if open else 0.0
     if motion.reduced_motion:
         chevron.rotation = target
         return
-    chevron_tween = create_tween()
-    chevron_tween.tween_property(chevron, "rotation", target, 0.18).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    motion.spring_property(chevron, "rotation", target, 0.28, 1.0)
 
 func _focus_selected_item() -> void:
     if popup_panel == null or not is_instance_valid(popup_panel):

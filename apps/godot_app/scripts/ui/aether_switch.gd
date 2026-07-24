@@ -7,8 +7,6 @@ const TRACK_INSET := 4.0
 var tokens
 var motion
 var knob: PanelContainer
-var movement_tween: Tween
-var press_tween: Tween
 
 func setup(design_tokens, motion_system, initial_value: bool) -> void:
     tokens = design_tokens
@@ -53,18 +51,15 @@ func _sync(enabled: bool, animate: bool) -> void:
     add_theme_stylebox_override("hover_pressed", _track_box(hover_track))
     add_theme_stylebox_override("disabled", _track_box(Color(track.r, track.g, track.b, 0.38)))
     var target := Vector2(TRACK_SIZE.x - TRACK_INSET - KNOB_SIZE.x, TRACK_INSET) if enabled else Vector2(TRACK_INSET, TRACK_INSET)
-    if movement_tween != null and movement_tween.is_valid():
-        movement_tween.kill()
     if not animate or motion.reduced_motion:
         knob.position = target
         return
-    movement_tween = create_tween()
-    movement_tween.tween_property(knob, "position", target, 0.22).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    motion.spring_property(knob, "position", target, 0.30, 1.0)
 
 func _press_in() -> void:
     if motion.reduced_motion:
         return
-    _animate_knob_scale(Vector2(1.11, 0.94), 0.10)
+    _animate_knob_scale(Vector2(1.11, 0.94), 0.16)
 
 func _press_out() -> void:
     if knob == null:
@@ -72,13 +67,10 @@ func _press_out() -> void:
     if motion.reduced_motion:
         knob.scale = Vector2.ONE
         return
-    _animate_knob_scale(Vector2.ONE, 0.16)
+    _animate_knob_scale(Vector2.ONE, 0.24)
 
-func _animate_knob_scale(target: Vector2, duration: float) -> void:
-    if press_tween != null and press_tween.is_valid():
-        press_tween.kill()
-    press_tween = create_tween()
-    press_tween.tween_property(knob, "scale", target, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+func _animate_knob_scale(target: Vector2, response: float) -> void:
+    motion.spring_property(knob, "scale", target, response, 1.0)
 
 func _track_box(fill: Color) -> StyleBoxFlat:
     var border := Color(1, 1, 1, 0.13) if tokens.mode == "dark" else Color(1, 1, 1, 0.48)
