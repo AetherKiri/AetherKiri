@@ -1991,14 +1991,14 @@ func _rebuild_settings_view() -> void:
     margin.add_child(center)
 
     var page := VBoxContainer.new()
-    page.custom_minimum_size = Vector2(minf(980.0, maxf(320.0, available_size.x - float(gutter * 2))), 0)
+    page.custom_minimum_size = Vector2(minf(1120.0, maxf(320.0, available_size.x - float(gutter * 2))), 0)
     page.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
     page.add_theme_constant_override("separation", 24)
     center.add_child(page)
 
-    var top: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 124 if compact else 72)
-    top.add_theme_constant_override("separation", 8 if compact else 14)
+    var top := HBoxContainer.new()
+    top.custom_minimum_size = Vector2(0, 72)
+    top.add_theme_constant_override("separation", 14)
     page.add_child(top)
 
     var title_stack := VBoxContainer.new()
@@ -2029,11 +2029,27 @@ func _rebuild_settings_view() -> void:
     save_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     top.add_child(save_button)
 
-    var interface_group := _settings_group(page, _t("settings.section.interface"), ICON_SETTINGS, animate_page, 0.03)
+    var groups: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
+    groups.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    groups.add_theme_constant_override("separation", 18)
+    page.add_child(groups)
+
+    var primary_column := VBoxContainer.new()
+    primary_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    primary_column.add_theme_constant_override("separation", 20)
+    groups.add_child(primary_column)
+    var secondary_column := primary_column
+    if not compact:
+        secondary_column = VBoxContainer.new()
+        secondary_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        secondary_column.add_theme_constant_override("separation", 20)
+        groups.add_child(secondary_column)
+
+    var interface_group := _settings_group(primary_column, _t("settings.section.interface"), ICON_SETTINGS, animate_page, 0.03)
     _add_settings_row(interface_group, _settings_block(_t("settings.language"), _t("settings.language_desc"), _language_select()))
     _add_settings_row(interface_group, _settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select()))
 
-    var render_group := _settings_group(page, _t("settings.section.render"), ICON_PERFORMANCE, animate_page, 0.055)
+    var render_group := _settings_group(primary_column, _t("settings.section.render"), ICON_PERFORMANCE, animate_page, 0.055)
     _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment()))
     _add_settings_row(render_group, _settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select()))
     _add_settings_row(render_group, _settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select()))
@@ -2043,16 +2059,16 @@ func _rebuild_settings_view() -> void:
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
         _add_settings_row(render_group, _settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
 
-    var diagnostic_group := _settings_group(page, _t("settings.section.diagnostics"), ICON_PERFORMANCE, animate_page, 0.08)
+    var diagnostic_group := _settings_group(secondary_column, _t("settings.section.diagnostics"), ICON_PERFORMANCE, animate_page, 0.08)
     _add_settings_row(diagnostic_group, _settings_block(_t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select()))
     _add_settings_row(diagnostic_group, _settings_block(_t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select()))
     _add_settings_row(diagnostic_group, _settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
 
-    var compatibility_group := _settings_group(page, _t("settings.section.compatibility"), ICON_PLUGIN, animate_page, 0.105)
+    var compatibility_group := _settings_group(secondary_column, _t("settings.section.compatibility"), ICON_PLUGIN, animate_page, 0.105)
     _add_settings_row(compatibility_group, _settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select()))
     _add_settings_row(compatibility_group, _settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
 
-    var advanced_group := _settings_group(page, _t("settings.section.advanced"), ICON_PLUGIN, animate_page, 0.13)
+    var advanced_group := _settings_group(secondary_column, _t("settings.section.advanced"), ICON_PLUGIN, animate_page, 0.13)
     var advanced_disclosure = AetherDisclosure.new()
     advanced_disclosure.setup(
         ui_tokens,
@@ -2077,7 +2093,7 @@ func _rebuild_settings_view() -> void:
         ui_motion.set_visible(advanced_content, value)
     )
 
-    var about_group := _settings_group(page, _t("settings.section.about"), ICON_HELP, animate_page, 0.155)
+    var about_group := _settings_group(secondary_column, _t("settings.section.about"), ICON_HELP, animate_page, 0.155)
     _add_settings_row(about_group, _settings_value_row(_t("settings.version"), "0.2.0-beta.1"))
 
     if animate_page:
@@ -2503,15 +2519,13 @@ func _sync_pill_button_content_state(button: Button) -> void:
     if icon != null:
         icon.modulate = tint
 
-func _section_title(text: String, icon_path: String) -> HBoxContainer:
+func _section_title(text: String, _icon_path: String) -> HBoxContainer:
     var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 28)
-    row.add_theme_constant_override("separation", 8)
-    row.add_child(_icon_rect(icon_path, Vector2(18, 18), ui_tokens.accent))
+    row.custom_minimum_size = Vector2(0, 24)
     var label := Label.new()
     label.text = text
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    label.add_theme_font_size_override("font_size", 17)
+    label.add_theme_font_size_override("font_size", 13)
     label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     row.add_child(label)
     return row
@@ -2519,7 +2533,7 @@ func _section_title(text: String, icon_path: String) -> HBoxContainer:
 func _settings_group(page: VBoxContainer, title: String, icon_path: String, animate: bool, delay: float) -> VBoxContainer:
     var group := VBoxContainer.new()
     group.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    group.add_theme_constant_override("separation", 8)
+    group.add_theme_constant_override("separation", 6)
     page.add_child(group)
     group.add_child(_section_title(title, icon_path))
     var panel := PanelContainer.new()
@@ -2546,10 +2560,9 @@ func _settings_block(title: String, subtitle: String, control: Control) -> Contr
     margin.add_theme_constant_override("margin_top", 10)
     margin.add_theme_constant_override("margin_right", 2)
     margin.add_theme_constant_override("margin_bottom", 10)
-    var compact := shell_content.size.x < 720.0
-    var box: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
-    box.custom_minimum_size = Vector2(0, 104 if compact else 66)
-    box.add_theme_constant_override("separation", 12 if compact else 20)
+    var box := VBoxContainer.new()
+    box.custom_minimum_size = Vector2(0, 104)
+    box.add_theme_constant_override("separation", 12)
     margin.add_child(box)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2567,7 +2580,7 @@ func _settings_block(title: String, subtitle: String, control: Control) -> Contr
         sub.add_theme_font_size_override("font_size", 13)
         sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
         labels.add_child(sub)
-    control.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_SHRINK_END
+    control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     box.add_child(control)
     return margin
