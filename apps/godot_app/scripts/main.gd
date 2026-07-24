@@ -4688,7 +4688,7 @@ func _danger_button(text: String) -> Button:
     ui_widgets.destructive_button(button)
     return button
 
-func _modal_dialog(preferred_size: Vector2, dim_alpha: float = 0.52) -> PanelContainer:
+func _modal_dialog(preferred_size: Vector2, dim_alpha: float = 0.44) -> PanelContainer:
     modal_layer.visible = true
     modal_layer.move_to_front()
     for child in modal_layer.get_children():
@@ -4710,22 +4710,56 @@ func _modal_dialog(preferred_size: Vector2, dim_alpha: float = 0.52) -> PanelCon
 
     var viewport_size := get_viewport_rect().size
     var dialog_size := Vector2(
-        minf(preferred_size.x, maxf(320.0, viewport_size.x - 32.0)),
-        minf(preferred_size.y, maxf(220.0, viewport_size.y - 32.0))
+        minf(preferred_size.x, maxf(280.0, viewport_size.x - 32.0)),
+        minf(preferred_size.y, maxf(180.0, viewport_size.y - 32.0))
     )
     var dialog := PanelContainer.new()
+    dialog.clip_contents = true
     dialog.anchor_left = 0.5
     dialog.anchor_top = 0.5
     dialog.anchor_right = 0.5
     dialog.anchor_bottom = 0.5
     dialog.position = -dialog_size * 0.5
     dialog.size = dialog_size
-    dialog.add_theme_stylebox_override("panel", ui_tokens.material_panel(true))
+    var dialog_style := ui_tokens.material_panel(true)
+    dialog_style.content_margin_left = 20
+    dialog_style.content_margin_top = 18
+    dialog_style.content_margin_right = 20
+    dialog_style.content_margin_bottom = 18
+    dialog.add_theme_stylebox_override("panel", dialog_style)
     modal_layer.add_child(dialog)
     active_modal_scrim = dim
     active_modal_dialog = dialog
     ui_motion.modal_in(dim, dialog)
     return dialog
+
+func _modal_stack(dialog: PanelContainer, title_text: String, icon_path: String) -> VBoxContainer:
+    var box := VBoxContainer.new()
+    box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    box.add_theme_constant_override("separation", 16)
+    dialog.add_child(box)
+
+    var header := HBoxContainer.new()
+    header.custom_minimum_size = Vector2(0, 44)
+    header.add_theme_constant_override("separation", 12)
+    box.add_child(header)
+
+    var icon_plate := PanelContainer.new()
+    icon_plate.custom_minimum_size = Vector2(42, 42)
+    icon_plate.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    icon_plate.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.accent_fill, 8))
+    icon_plate.add_child(_centered_icon(icon_path, Vector2(21, 21), ui_tokens.accent))
+    header.add_child(icon_plate)
+
+    var title := Label.new()
+    title.text = title_text
+    title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    title.add_theme_font_size_override("font_size", 22)
+    title.add_theme_color_override("font_color", ui_tokens.text_primary)
+    header.add_child(title)
+    return box
 
 func _dismiss_modal(after: Callable = Callable()) -> void:
     if modal_layer == null or not modal_layer.visible:
@@ -4748,24 +4782,17 @@ func _show_import_guide() -> void:
     if home_library_mode == "video":
         guide_title = _t("video.guide_title")
         guide_body = _t("video.guide_body_ios") if OS.get_name() == "iOS" else _t("video.guide_body_desktop")
-    var dialog := _modal_dialog(Vector2(640, 440), 0.58)
-
-    var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 18)
-    dialog.add_child(box)
-    var title := Label.new()
-    title.text = guide_title
-    title.add_theme_font_size_override("font_size", 26)
-    title.add_theme_color_override("font_color", color_text)
-    box.add_child(title)
+    var dialog := _modal_dialog(Vector2(560, 400), 0.46)
+    var box := _modal_stack(dialog, guide_title, ICON_LIBRARY)
     var body := Label.new()
     body.text = guide_body
+    body.size_flags_vertical = Control.SIZE_EXPAND_FILL
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    body.add_theme_font_size_override("font_size", 17)
-    body.add_theme_color_override("font_color", color_muted)
+    body.add_theme_font_size_override("font_size", 15)
+    body.add_theme_color_override("font_color", ui_tokens.text_secondary)
     box.add_child(body)
     var ok := _pill_button(_t("dialog.ok"))
-    ok.custom_minimum_size = Vector2(140, 52)
+    ok.custom_minimum_size = Vector2(112, 44)
     ok.size_flags_horizontal = Control.SIZE_SHRINK_END
     ok.pressed.connect(_dismiss_modal)
     box.add_child(ok)
@@ -5130,35 +5157,29 @@ func _create_file_dialog(title: String, file_mode: int, filters: PackedStringArr
     return dialog
 
 func _offer_scrape_after_add(game: Dictionary) -> void:
-    var dialog := _modal_dialog(Vector2(560, 300))
-    var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 18)
-    dialog.add_child(box)
-    var title := Label.new()
-    title.text = _t("dialog.scrape_title")
-    title.add_theme_font_size_override("font_size", 24)
-    title.add_theme_color_override("font_color", color_text)
-    box.add_child(title)
+    var dialog := _modal_dialog(Vector2(520, 280))
+    var box := _modal_stack(dialog, _t("dialog.scrape_title"), ICON_GAMEPAD)
     var body := Label.new()
     body.text = _t("dialog.scrape_body", [_game_display_title(game)])
+    body.size_flags_vertical = Control.SIZE_EXPAND_FILL
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    body.add_theme_font_size_override("font_size", 16)
-    body.add_theme_color_override("font_color", color_muted)
+    body.add_theme_font_size_override("font_size", 15)
+    body.add_theme_color_override("font_color", ui_tokens.text_secondary)
     box.add_child(body)
     var buttons := HBoxContainer.new()
     buttons.add_theme_constant_override("separation", 12)
     buttons.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     buttons.alignment = BoxContainer.ALIGNMENT_END
-    buttons.custom_minimum_size = Vector2(0, 52)
+    buttons.custom_minimum_size = Vector2(0, 44)
     box.add_child(buttons)
     var no := Button.new()
     no.text = _t("dialog.later")
-    no.custom_minimum_size = Vector2(112, 52)
+    no.custom_minimum_size = Vector2(104, 44)
     ui_widgets.secondary_button(no)
     no.pressed.connect(_dismiss_modal)
     buttons.add_child(no)
     var yes := _pill_button(_t("dialog.open_detail"))
-    yes.custom_minimum_size = Vector2(148, 52)
+    yes.custom_minimum_size = Vector2(140, 44)
     yes.pressed.connect(func():
         _dismiss_modal(func(): _show_detail(game))
     )
@@ -5240,21 +5261,16 @@ func _rename_selected_game() -> void:
     var path := String(selected_game.get("path", ""))
     if path.is_empty():
         return
-    var dialog := _modal_dialog(Vector2(560, 300))
-    var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 18)
-    dialog.add_child(box)
-    var title := Label.new()
-    title.text = _t("dialog.rename")
-    title.add_theme_font_size_override("font_size", 24)
-    title.add_theme_color_override("font_color", color_text)
-    box.add_child(title)
+    var dialog := _modal_dialog(Vector2(520, 260))
+    var box := _modal_stack(dialog, _t("dialog.rename"), ICON_RENAME)
     var input := LineEdit.new()
     input.text = _game_display_title(selected_game)
-    input.custom_minimum_size = Vector2(0, 50)
+    input.custom_minimum_size = Vector2(0, 44)
     ui_widgets.line_edit(input)
     box.add_child(input)
     var save := _pill_button(_t("settings.save"))
+    save.custom_minimum_size = Vector2(112, 44)
+    save.size_flags_horizontal = Control.SIZE_SHRINK_END
     save.pressed.connect(func():
         var new_title := input.text.strip_edges()
         if not new_title.is_empty():
@@ -5270,16 +5286,16 @@ func _confirm_remove_selected() -> void:
     if path.is_empty():
         return
     var deleting_builtin := builtin_demo.is_game(selected_game)
-    var dialog := _modal_dialog(Vector2(560, 280))
-    var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 18)
-    dialog.add_child(box)
+    var remove_label := "detail.delete_builtin" if deleting_builtin else "detail.remove"
+    var dialog := _modal_dialog(Vector2(520, 260))
+    var box := _modal_stack(dialog, _t(remove_label), ICON_DELETE)
     var label := Label.new()
     var body_key := "dialog.delete_builtin_body" if deleting_builtin else "dialog.remove_body"
     label.text = _t(body_key, [_game_display_title(selected_game)])
     label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    label.add_theme_font_size_override("font_size", 17)
-    label.add_theme_color_override("font_color", color_muted)
+    label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    label.add_theme_font_size_override("font_size", 15)
+    label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     box.add_child(label)
     var buttons := HBoxContainer.new()
     buttons.add_theme_constant_override("separation", 12)
@@ -5322,15 +5338,8 @@ func _on_refresh_or_import() -> void:
     _show_import_picker()
 
 func _show_import_picker() -> void:
-    var dialog := _modal_dialog(Vector2(520, 320))
-    var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 14)
-    dialog.add_child(box)
-    var title := Label.new()
-    title.text = _t("dialog.import_title")
-    title.add_theme_font_size_override("font_size", 24)
-    title.add_theme_color_override("font_color", color_text)
-    box.add_child(title)
+    var dialog := _modal_dialog(Vector2(480, 300))
+    var box := _modal_stack(dialog, _t("dialog.import_title"), ICON_ADD)
     var dir_button := _detail_action(ICON_LIBRARY, _t("dialog.select_game_dir"))
     dir_button.pressed.connect(func():
         _dismiss_modal(func(): _open_import_dialog())
@@ -5565,15 +5574,8 @@ func _show_web_import_picker() -> void:
         _show_message(_t("message.web_picker_unsupported_long"))
         return
 
-    var dialog := _modal_dialog(Vector2(680, 440))
-    var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 14)
-    dialog.add_child(box)
-    var title := Label.new()
-    title.text = _t("dialog.import_title")
-    title.add_theme_font_size_override("font_size", 24)
-    title.add_theme_color_override("font_color", color_text)
-    box.add_child(title)
+    var dialog := _modal_dialog(Vector2(600, 400))
+    var box := _modal_stack(dialog, _t("dialog.import_title"), ICON_ADD)
 
     if bool(support.get("directory", false)):
         var dir_button := _detail_action(ICON_LIBRARY, _t("dialog.select_local_game_dir"))
@@ -7312,23 +7314,17 @@ func _show_android_storage_permission_prompt(
     after_acknowledged: Callable = Callable(),
     message_key: String = "message.android_storage_permission_required"
 ) -> void:
-    var dialog := _modal_dialog(Vector2(840, 360), 0.58)
-    var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 18)
-    dialog.add_child(box)
-    var title := Label.new()
-    title.text = "Aether"
-    title.add_theme_font_size_override("font_size", 26)
-    title.add_theme_color_override("font_color", color_text)
-    box.add_child(title)
+    var dialog := _modal_dialog(Vector2(640, 320), 0.46)
+    var box := _modal_stack(dialog, "AetherKiri", ICON_LIBRARY)
     var body := Label.new()
     body.text = _t(message_key)
+    body.size_flags_vertical = Control.SIZE_EXPAND_FILL
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    body.add_theme_font_size_override("font_size", 17)
-    body.add_theme_color_override("font_color", color_muted)
+    body.add_theme_font_size_override("font_size", 15)
+    body.add_theme_color_override("font_color", ui_tokens.text_secondary)
     box.add_child(body)
     var ok := _pill_button(_t("dialog.ok"))
-    ok.custom_minimum_size = Vector2(160, 52)
+    ok.custom_minimum_size = Vector2(128, 44)
     ok.size_flags_horizontal = Control.SIZE_SHRINK_END
     ok.pressed.connect(func():
         _dismiss_modal(func():
