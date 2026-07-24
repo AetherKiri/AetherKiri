@@ -1607,7 +1607,7 @@ func _layout_home_view(window_size: Vector2) -> void:
     game_list.custom_minimum_size = Vector2(list_width, 0)
 
     if home_header != null:
-        home_header.size = Vector2(window_size.x, header_height)
+        home_header.offset_bottom = header_height
     if home_brand != null:
         home_brand.position = Vector2(margin, 14.0)
         home_brand.size = Vector2(maxf(220.0, window_size.x - margin * 2.0), 60.0)
