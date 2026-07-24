@@ -16,14 +16,31 @@ func primary_button(button: Button) -> Button:
     button.add_theme_color_override("font_hover_color", Color.WHITE)
     button.add_theme_color_override("font_pressed_color", Color.WHITE)
     button.add_theme_color_override("font_focus_color", Color.WHITE)
-    button.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.48))
+    button.add_theme_color_override("font_disabled_color", tokens.text_tertiary)
     _set_button_boxes(
         button,
         _primary_box(tokens.accent, false),
         _primary_box(tokens.accent.lightened(0.055), true),
         _primary_box(tokens.accent.darkened(0.10), false),
         _focus_box(8),
-        _primary_box(Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.25), false)
+        _control_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.46), tokens.separator, false)
+    )
+    return button
+
+func destructive_button(button: Button) -> Button:
+    _prepare_button(button, 15)
+    button.add_theme_color_override("font_color", Color.WHITE)
+    button.add_theme_color_override("font_hover_color", Color.WHITE)
+    button.add_theme_color_override("font_pressed_color", Color.WHITE)
+    button.add_theme_color_override("font_focus_color", Color.WHITE)
+    button.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.42))
+    _set_button_boxes(
+        button,
+        _primary_box(tokens.danger, false),
+        _primary_box(tokens.danger.lightened(0.055), true),
+        _primary_box(tokens.danger.darkened(0.10), false),
+        _focus_box(8),
+        _control_box(Color(tokens.danger.r, tokens.danger.g, tokens.danger.b, 0.20), tokens.separator, false)
     )
     return button
 
@@ -53,11 +70,11 @@ func toolbar_button(button: Button, selected: bool = false) -> Button:
     button.custom_minimum_size = Vector2(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
     var foreground: Color = tokens.accent if selected else tokens.text_secondary
     button.add_theme_color_override("font_color", foreground)
-    button.add_theme_color_override("font_hover_color", tokens.text_primary)
+    button.add_theme_color_override("font_hover_color", tokens.accent if selected else tokens.text_primary)
     button.add_theme_color_override("font_pressed_color", tokens.accent)
     button.add_theme_color_override("font_focus_color", foreground)
     button.add_theme_color_override("icon_normal_color", foreground)
-    button.add_theme_color_override("icon_hover_color", tokens.text_primary)
+    button.add_theme_color_override("icon_hover_color", tokens.accent if selected else tokens.text_primary)
     button.add_theme_color_override("icon_pressed_color", tokens.accent)
     button.add_theme_color_override("icon_focus_color", foreground)
     _set_button_boxes(
@@ -71,8 +88,25 @@ func toolbar_button(button: Button, selected: bool = false) -> Button:
     return button
 
 func navigation_button(button: Button, selected: bool = false) -> Button:
-    toolbar_button(button, selected)
+    _prepare_button(button, 15)
     button.custom_minimum_size.y = 46.0
+    var foreground: Color = tokens.accent if selected else tokens.text_secondary
+    button.add_theme_color_override("font_color", foreground)
+    button.add_theme_color_override("font_hover_color", tokens.accent if selected else tokens.text_primary)
+    button.add_theme_color_override("font_pressed_color", tokens.accent)
+    button.add_theme_color_override("font_focus_color", foreground)
+    button.add_theme_color_override("icon_normal_color", foreground)
+    button.add_theme_color_override("icon_hover_color", tokens.accent if selected else tokens.text_primary)
+    button.add_theme_color_override("icon_pressed_color", tokens.accent)
+    button.add_theme_color_override("icon_focus_color", foreground)
+    _set_button_boxes(
+        button,
+        tokens.button_style(tokens.accent_fill if selected else Color.TRANSPARENT, Color.TRANSPARENT, 8),
+        tokens.button_style(Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.23) if selected else tokens.surface_raised, Color.TRANSPARENT, 8),
+        tokens.button_style(tokens.accent_fill, Color.TRANSPARENT, 8),
+        _focus_box(8),
+        tokens.button_style(Color.TRANSPARENT, Color.TRANSPARENT, 8)
+    )
     return button
 
 func disclosure_button(button: Button) -> Button:
