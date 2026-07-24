@@ -1263,19 +1263,20 @@ const PILL_ICON_VISUAL_OFFSET_Y := 2.0
 const SETTINGS_ACTION_BUTTON_SIZE := Vector2(150, 54)
 const HOME_CARD_SIZE := Vector2(272, 368)
 
-var color_bg := Color(0.095, 0.102, 0.135, 1.0)
+var color_bg := Color(0.055, 0.059, 0.071, 1.0)
 var color_game_bg := Color(0, 0, 0, 1)
-var color_card := Color(0.133, 0.139, 0.184, 1.0)
-var color_card_alt := Color(0.176, 0.184, 0.239, 1.0)
-var color_card_hover := Color(0.214, 0.224, 0.290, 1.0)
-var color_text := Color(0.972, 0.972, 0.949, 1.0)
-var color_muted := Color(0.620, 0.650, 0.780, 1.0)
-var color_accent := Color(0.741, 0.576, 0.976, 1.0)
-var color_accent_soft := Color(0.545, 0.914, 0.992, 1.0)
-var color_accent_dim := Color(0.280, 0.235, 0.410, 1.0)
-var color_warn := Color(1.000, 0.722, 0.424, 1.0)
-var color_danger := Color(1.000, 0.333, 0.333, 1.0)
-var color_line := Color(1, 1, 1, 0.105)
+var color_card := Color(0.098, 0.102, 0.118, 1.0)
+var color_card_alt := Color(0.132, 0.137, 0.157, 1.0)
+var color_card_hover := Color(0.170, 0.177, 0.202, 1.0)
+var color_text := Color(0.961, 0.961, 0.973, 1.0)
+var color_muted := Color(0.635, 0.643, 0.682, 1.0)
+var color_accent := Color(0.039, 0.518, 1.000, 1.0)
+var color_accent_soft := Color(0.392, 0.824, 1.000, 1.0)
+var color_accent_dim := Color(0.067, 0.218, 0.369, 1.0)
+var color_warn := Color(1.000, 0.624, 0.039, 1.0)
+var color_danger := Color(1.000, 0.271, 0.227, 1.0)
+var color_success := Color(0.188, 0.820, 0.345, 1.0)
+var color_line := Color(1, 1, 1, 0.090)
 
 func _normalize_style_mode(value: String) -> String:
     return value if value in STYLE_MODES else STYLE_DARK
@@ -1283,33 +1284,35 @@ func _normalize_style_mode(value: String) -> String:
 func _apply_style_mode(update_theme: bool = true) -> void:
     style_mode = _normalize_style_mode(style_mode)
     if style_mode == STYLE_CLASSIC:
-        color_bg = Color(0.944, 0.932, 0.895, 1.0)
+        color_bg = Color(0.961, 0.961, 0.973, 1.0)
         color_game_bg = Color(0, 0, 0, 1)
-        color_card = Color(0.985, 0.980, 0.955, 1.0)
-        color_card_alt = Color(0.900, 0.890, 0.840, 1.0)
-        color_card_hover = Color(1.000, 0.995, 0.975, 1.0)
-        color_text = Color(0.120, 0.110, 0.100, 1.0)
-        color_muted = Color(0.460, 0.450, 0.420, 1.0)
-        color_accent = Color(0.780, 0.350, 0.220, 1.0)
-        color_accent_soft = Color(0.900, 0.720, 0.640, 1.0)
-        color_accent_dim = Color(0.900, 0.720, 0.640, 1.0)
-        color_warn = Color(1.000, 0.722, 0.424, 1.0)
-        color_danger = Color(1.000, 0.333, 0.333, 1.0)
-        color_line = Color(0.840, 0.820, 0.760, 1.0)
+        color_card = Color(1.000, 1.000, 1.000, 1.0)
+        color_card_alt = Color(0.910, 0.910, 0.929, 1.0)
+        color_card_hover = Color(0.875, 0.878, 0.902, 1.0)
+        color_text = Color(0.110, 0.110, 0.122, 1.0)
+        color_muted = Color(0.388, 0.388, 0.424, 1.0)
+        color_accent = Color(0.000, 0.478, 1.000, 1.0)
+        color_accent_soft = Color(0.000, 0.478, 1.000, 1.0)
+        color_accent_dim = Color(0.820, 0.902, 1.000, 1.0)
+        color_warn = Color(1.000, 0.584, 0.000, 1.0)
+        color_danger = Color(1.000, 0.231, 0.188, 1.0)
+        color_success = Color(0.196, 0.690, 0.278, 1.0)
+        color_line = Color(0, 0, 0, 0.105)
     else:
-        color_bg = Color(0.095, 0.102, 0.135, 1.0)
+        color_bg = Color(0.055, 0.059, 0.071, 1.0)
         color_game_bg = Color(0, 0, 0, 1)
-        color_card = Color(0.133, 0.139, 0.184, 1.0)
-        color_card_alt = Color(0.176, 0.184, 0.239, 1.0)
-        color_card_hover = Color(0.214, 0.224, 0.290, 1.0)
-        color_text = Color(0.972, 0.972, 0.949, 1.0)
-        color_muted = Color(0.620, 0.650, 0.780, 1.0)
-        color_accent = Color(0.741, 0.576, 0.976, 1.0)
-        color_accent_soft = Color(0.545, 0.914, 0.992, 1.0)
-        color_accent_dim = Color(0.280, 0.235, 0.410, 1.0)
-        color_warn = Color(1.000, 0.722, 0.424, 1.0)
-        color_danger = Color(1.000, 0.333, 0.333, 1.0)
-        color_line = Color(1, 1, 1, 0.105)
+        color_card = Color(0.098, 0.102, 0.118, 1.0)
+        color_card_alt = Color(0.132, 0.137, 0.157, 1.0)
+        color_card_hover = Color(0.170, 0.177, 0.202, 1.0)
+        color_text = Color(0.961, 0.961, 0.973, 1.0)
+        color_muted = Color(0.635, 0.643, 0.682, 1.0)
+        color_accent = Color(0.039, 0.518, 1.000, 1.0)
+        color_accent_soft = Color(0.392, 0.824, 1.000, 1.0)
+        color_accent_dim = Color(0.067, 0.218, 0.369, 1.0)
+        color_warn = Color(1.000, 0.624, 0.039, 1.0)
+        color_danger = Color(1.000, 0.271, 0.227, 1.0)
+        color_success = Color(0.188, 0.820, 0.345, 1.0)
+        color_line = Color(1, 1, 1, 0.090)
 
     if update_theme:
         _apply_ui_font()
@@ -1422,6 +1425,10 @@ func _apply_ui_font() -> void:
     ui_theme.set_color("font_color", "LineEdit", color_text)
     ui_theme.set_color("font_color", "TextEdit", color_text)
     ui_theme.set_color("font_placeholder_color", "LineEdit", color_muted)
+    ui_theme.set_color("font_disabled_color", "Button", _disabled_text_color())
+    ui_theme.set_color("font_color", "CheckButton", color_text)
+    ui_theme.set_color("font_hover_color", "CheckButton", color_text)
+    ui_theme.set_color("font_pressed_color", "CheckButton", color_text)
     ui_theme.set_stylebox("normal", "OptionButton", _panel_style(8, color_card_alt, color_line, 1))
     ui_theme.set_stylebox("hover", "OptionButton", _panel_style(8, color_card_hover, color_accent, 1))
     ui_theme.set_stylebox("pressed", "OptionButton", _panel_style(8, color_accent_dim, color_accent, 1))
@@ -1430,6 +1437,11 @@ func _apply_ui_font() -> void:
     ui_theme.set_stylebox("focus", "LineEdit", _panel_style(8, color_card_hover, color_accent, 2))
     ui_theme.set_stylebox("normal", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.18), color_line, 1))
     ui_theme.set_stylebox("focus", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.24), color_accent, 1))
+    ui_theme.set_stylebox("scroll", "VScrollBar", _scroll_track_style())
+    ui_theme.set_stylebox("grabber", "VScrollBar", _scroll_thumb_style(color_muted.darkened(0.18)))
+    ui_theme.set_stylebox("grabber_highlight", "VScrollBar", _scroll_thumb_style(color_muted))
+    ui_theme.set_stylebox("grabber_pressed", "VScrollBar", _scroll_thumb_style(color_accent))
+    ui_theme.set_constant("minimum_grab_thickness", "VScrollBar", 36)
     theme = ui_theme
 
 func _write_runtime_font(font: FontFile, target_path: String) -> bool:
@@ -3079,6 +3091,24 @@ func _panel_style(radius: int, fill: Color, border: Color, border_width: int = 1
     style.content_margin_top = 16
     style.content_margin_right = 18
     style.content_margin_bottom = 16
+    return style
+
+func _scroll_track_style() -> StyleBoxFlat:
+    var style := StyleBoxFlat.new()
+    style.bg_color = Color(0, 0, 0, 0)
+    style.content_margin_left = 5
+    style.content_margin_right = 5
+    return style
+
+func _scroll_thumb_style(fill: Color) -> StyleBoxFlat:
+    var style := StyleBoxFlat.new()
+    style.bg_color = Color(fill.r, fill.g, fill.b, 0.72)
+    style.corner_radius_top_left = 4
+    style.corner_radius_top_right = 4
+    style.corner_radius_bottom_left = 4
+    style.corner_radius_bottom_right = 4
+    style.expand_margin_left = -3
+    style.expand_margin_right = -3
     return style
 
 func _empty_style() -> StyleBoxEmpty:
