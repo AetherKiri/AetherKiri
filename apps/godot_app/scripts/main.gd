@@ -1264,7 +1264,8 @@ const TOP_ACTION_BUTTON_SIZE := Vector2(138, 60)
 const PILL_ICON_SIZE := Vector2(24, 24)
 const PILL_ICON_VISUAL_OFFSET_Y := 2.0
 const SETTINGS_ACTION_BUTTON_SIZE := Vector2(150, 54)
-const HOME_CARD_SIZE := Vector2(272, 368)
+const HOME_CARD_SIZE := Vector2(252, 346)
+const HOME_CARD_COVER_HEIGHT := 226.0
 
 var color_bg := Color(0.055, 0.059, 0.071, 1.0)
 var color_game_bg := Color(0, 0, 0, 1)
@@ -6229,9 +6230,9 @@ func _game_card(game: Dictionary) -> Button:
     button.clip_contents = true
     button.focus_mode = Control.FOCUS_ALL
     button.text = ""
-    button.add_theme_stylebox_override("normal", _panel_style(8, color_card_alt, color_line, 1))
-    button.add_theme_stylebox_override("hover", _panel_style(8, color_card_hover, color_accent, 1))
-    button.add_theme_stylebox_override("pressed", _panel_style(8, color_accent_dim, color_accent, 1))
+    button.add_theme_stylebox_override("normal", _panel_style(8, color_card, color_line, 1))
+    button.add_theme_stylebox_override("hover", _panel_style(8, color_card, color_line, 1))
+    button.add_theme_stylebox_override("pressed", _panel_style(8, color_card_alt, color_accent, 1))
     button.add_theme_stylebox_override("focus", _focus_outline(8))
     button.pressed.connect(func(): _open_game_detail_with_iap(game))
 
@@ -6241,38 +6242,40 @@ func _game_card(game: Dictionary) -> Button:
     frame.set_anchors_preset(Control.PRESET_FULL_RECT)
     button.add_child(frame)
 
-    var cover_texture := _load_cover_texture(game, Vector2i(int(HOME_CARD_SIZE.x), int(HOME_CARD_SIZE.y)), 8)
+    var cover_texture := _load_cover_texture(
+        game,
+        Vector2i(int(HOME_CARD_SIZE.x), int(HOME_CARD_COVER_HEIGHT)),
+        0
+    )
     if cover_texture != null:
         var cover := TextureRect.new()
         cover.texture = cover_texture
         cover.mouse_filter = Control.MOUSE_FILTER_IGNORE
-        cover.set_anchors_preset(Control.PRESET_FULL_RECT)
+        cover.anchor_right = 1.0
+        cover.offset_bottom = HOME_CARD_COVER_HEIGHT
         cover.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-        cover.stretch_mode = TextureRect.STRETCH_SCALE
+        cover.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
         frame.add_child(cover)
     else:
         var placeholder := PanelContainer.new()
         placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-        placeholder.set_anchors_preset(Control.PRESET_FULL_RECT)
-        placeholder.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
+        placeholder.anchor_right = 1.0
+        placeholder.offset_bottom = HOME_CARD_COVER_HEIGHT
+        placeholder.add_theme_stylebox_override("panel", _panel_style(0, color_card_alt, color_line, 0))
         frame.add_child(placeholder)
 
-        var icon := _centered_icon(ICON_GAMEPAD, Vector2(58, 58), color_accent)
+        var icon := _centered_icon(ICON_GAMEPAD, Vector2(48, 48), color_accent)
         icon.set_anchors_preset(Control.PRESET_FULL_RECT)
-        frame.add_child(icon)
+        placeholder.add_child(icon)
 
-    var shade := PanelContainer.new()
-    shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    shade.anchor_left = 0.0
-    shade.anchor_top = 1.0
-    shade.anchor_right = 1.0
-    shade.anchor_bottom = 1.0
-    shade.offset_left = 0.0
-    shade.offset_top = -118.0
-    shade.offset_right = 0.0
-    shade.offset_bottom = 0.0
-    shade.add_theme_stylebox_override("panel", _panel_style(8, Color(0.0, 0.0, 0.0, 0.62), Color(0, 0, 0, 0), 0))
-    frame.add_child(shade)
+    var info_surface := PanelContainer.new()
+    info_surface.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    info_surface.anchor_top = 1.0
+    info_surface.anchor_right = 1.0
+    info_surface.anchor_bottom = 1.0
+    info_surface.offset_top = HOME_CARD_COVER_HEIGHT - HOME_CARD_SIZE.y
+    info_surface.add_theme_stylebox_override("panel", _panel_style(0, color_card, Color(0, 0, 0, 0), 0))
+    frame.add_child(info_surface)
 
     var text_margin := MarginContainer.new()
     text_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -6281,34 +6284,36 @@ func _game_card(game: Dictionary) -> Button:
     text_margin.anchor_right = 1.0
     text_margin.anchor_bottom = 1.0
     text_margin.offset_left = 0.0
-    text_margin.offset_top = -118.0
+    text_margin.offset_top = HOME_CARD_COVER_HEIGHT - HOME_CARD_SIZE.y
     text_margin.offset_right = 0.0
     text_margin.offset_bottom = 0.0
-    text_margin.add_theme_constant_override("margin_left", 16)
-    text_margin.add_theme_constant_override("margin_top", 18)
-    text_margin.add_theme_constant_override("margin_right", 16)
-    text_margin.add_theme_constant_override("margin_bottom", 16)
+    text_margin.add_theme_constant_override("margin_left", 14)
+    text_margin.add_theme_constant_override("margin_top", 13)
+    text_margin.add_theme_constant_override("margin_right", 14)
+    text_margin.add_theme_constant_override("margin_bottom", 12)
     frame.add_child(text_margin)
 
     var labels := VBoxContainer.new()
     labels.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    labels.add_theme_constant_override("separation", 4)
+    labels.add_theme_constant_override("separation", 6)
     text_margin.add_child(labels)
 
     var title := Label.new()
     title.text = _game_display_title(game)
     title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    title.clip_text = true
-    title.add_theme_font_size_override("font_size", 21)
-    title.add_theme_color_override("font_color", Color.WHITE)
+    title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    title.max_lines_visible = 2
+    title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+    title.add_theme_font_size_override("font_size", 18)
+    title.add_theme_color_override("font_color", color_text)
     labels.add_child(title)
 
     var sub := Label.new()
     sub.text = _game_subtitle(game)
     sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
     sub.clip_text = true
-    sub.add_theme_font_size_override("font_size", 15)
-    sub.add_theme_color_override("font_color", Color(1, 1, 1, 0.72))
+    sub.add_theme_font_size_override("font_size", 13)
+    sub.add_theme_color_override("font_color", color_muted)
     labels.add_child(sub)
 
     var border := PanelContainer.new()
