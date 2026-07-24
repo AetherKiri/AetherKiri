@@ -90,10 +90,10 @@ TEST_CASE("Godot nearest scaled alpha uses the software sampler") {
         0, 0, 0, 255, 255, 255, 255, 255,
         255, 255, 255, 255, 0, 0, 0, 255,
     };
-    std::array<std::uint8_t, 64> destination_pixels{};
+    std::vector<std::uint8_t> destination_pixels(256 * 256 * 4);
     GodotTexture2D src(source_pixels.data(), 8, 2, 2,
                        TVPTextureFormat::RGBA);
-    GodotTexture2D dst(destination_pixels.data(), 16, 4, 4,
+    GodotTexture2D dst(destination_pixels.data(), 256 * 4, 256, 256,
                        TVPTextureFormat::RGBA);
     GodotRenderManager manager;
 
@@ -105,13 +105,13 @@ TEST_CASE("Godot nearest scaled alpha uses the software sampler") {
 
     manager.SetParameterInt(stretch, stNearest);
     manager.OperateRect(
-        method, &dst, &dst, tTVPRect(0, 0, 4, 4),
+        method, &dst, &dst, tTVPRect(0, 0, 256, 256),
         tRenderTexRectArray(&source_element, 1));
     CHECK(g_blend_rect_calls == 0);
 
     manager.SetParameterInt(stretch, stLinear);
     manager.OperateRect(
-        method, &dst, &dst, tTVPRect(0, 0, 4, 4),
+        method, &dst, &dst, tTVPRect(0, 0, 256, 256),
         tRenderTexRectArray(&source_element, 1));
     CHECK(g_blend_rect_calls == 1);
 }
