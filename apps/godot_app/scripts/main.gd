@@ -673,6 +673,9 @@ var loading_panel: PanelContainer
 var game_scroll: ScrollContainer
 var game_list: GridContainer
 var home_actions: HBoxContainer
+var home_header: PanelContainer
+var home_brand: Control
+var home_status: HBoxContainer
 var empty_state: Control
 var save_button: Button
 var bg_rect: ColorRect
@@ -1586,29 +1589,38 @@ func _set_game_background(active: bool) -> void:
 func _layout_home_view(window_size: Vector2) -> void:
     if game_scroll == null or game_list == null:
         return
-    var margin := 40.0
-    var list_top := 188.0
-    var bottom_reserved := 118.0
+    var compact := window_size.x < 760.0
+    var margin := 24.0 if compact else 36.0
+    var header_height := 142.0 if compact else 88.0
+    var list_top := header_height + 20.0
+    var bottom_reserved := 28.0
     var list_width := maxf(260.0, window_size.x - margin * 2.0)
     var list_height := maxf(160.0, window_size.y - list_top - bottom_reserved)
     game_scroll.position = Vector2(margin, list_top)
     game_scroll.size = Vector2(list_width, list_height)
     game_scroll.custom_minimum_size = game_scroll.size
 
-    var gap := 18.0
+    var gap := 16.0
     var columns := maxi(1, int(floor((list_width + gap) / (HOME_CARD_SIZE.x + gap))))
     game_list.columns = columns
     game_list.custom_minimum_size = Vector2(list_width, 0)
 
+    if home_header != null:
+        home_header.size = Vector2(window_size.x, header_height)
+    if home_brand != null:
+        home_brand.position = Vector2(margin, 14.0)
+        home_brand.size = Vector2(maxf(220.0, window_size.x - margin * 2.0), 60.0)
+    if home_status != null:
+        home_status.visible = not compact
     if home_actions != null:
-        home_actions.anchor_left = 1.0
-        home_actions.anchor_top = 1.0
-        home_actions.anchor_right = 1.0
-        home_actions.anchor_bottom = 1.0
-        home_actions.offset_left = -430.0
-        home_actions.offset_top = -96.0
-        home_actions.offset_right = -40.0
-        home_actions.offset_bottom = -36.0
+        home_actions.anchor_left = 0.0 if compact else 1.0
+        home_actions.anchor_top = 0.0
+        home_actions.anchor_right = 0.0 if compact else 1.0
+        home_actions.anchor_bottom = 0.0
+        home_actions.offset_left = margin if compact else -372.0 - margin
+        home_actions.offset_top = 84.0 if compact else 18.0
+        home_actions.offset_right = window_size.x - margin if compact else -margin
+        home_actions.offset_bottom = 128.0 if compact else 70.0
         home_actions.move_to_front()
 
 func _build_home_view() -> void:
@@ -1616,42 +1628,57 @@ func _build_home_view() -> void:
     home_view.set_anchors_preset(Control.PRESET_FULL_RECT)
     shell_root.add_child(home_view)
 
+    home_header = PanelContainer.new()
+    home_header.anchor_right = 1.0
+    home_header.offset_bottom = 88.0
+    home_header.add_theme_stylebox_override("panel", _panel_style(0, color_card, color_line, 1))
+    home_view.add_child(home_header)
+
+    var header_content := Control.new()
+    header_content.set_anchors_preset(Control.PRESET_FULL_RECT)
+    home_header.add_child(header_content)
+
+    home_brand = Control.new()
+    home_brand.position = Vector2(36, 14)
+    home_brand.size = Vector2(600, 60)
+    header_content.add_child(home_brand)
+
     var title := Label.new()
     title.text = "AetherKiri"
-    title.position = Vector2(42, 38)
-    title.add_theme_font_size_override("font_size", 36)
+    title.position = Vector2(0, 0)
+    title.add_theme_font_size_override("font_size", 25)
     title.add_theme_color_override("font_color", color_text)
-    home_view.add_child(title)
+    home_brand.add_child(title)
 
     home_subtitle_label = Label.new()
     home_subtitle_label.text = _t("home.subtitle")
-    home_subtitle_label.position = Vector2(44, 84)
-    home_subtitle_label.add_theme_font_size_override("font_size", 17)
+    home_subtitle_label.position = Vector2(0, 32)
+    home_subtitle_label.add_theme_font_size_override("font_size", 14)
     home_subtitle_label.add_theme_color_override("font_color", color_muted)
-    home_view.add_child(home_subtitle_label)
+    home_brand.add_child(home_subtitle_label)
 
-    var status_pill := PanelContainer.new()
-    status_pill.position = Vector2(42, 122)
-    status_pill.size = Vector2(284, 42)
-    status_pill.add_theme_stylebox_override("panel", _panel_style(8, color_card_alt, color_line, 1))
-    home_view.add_child(status_pill)
+    home_status = HBoxContainer.new()
+    home_status.position = Vector2(250, 8)
+    home_status.size = Vector2(300, 28)
+    home_status.add_theme_constant_override("separation", 9)
+    home_brand.add_child(home_status)
+
+    var ready_dot := ColorRect.new()
+    ready_dot.color = color_success
+    ready_dot.custom_minimum_size = Vector2(8, 8)
+    ready_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    ready_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    home_status.add_child(ready_dot)
+
     home_status_label = Label.new()
     home_status_label.text = _t("home.status")
     home_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    home_status_label.add_theme_font_size_override("font_size", 15)
-    home_status_label.add_theme_color_override("font_color", color_accent_soft)
-    status_pill.add_child(home_status_label)
-
-    var settings_button := _icon_button(ICON_SETTINGS)
-    settings_button.name = "SettingsButton"
-    settings_button.anchor_left = 1.0
-    settings_button.anchor_right = 1.0
-    settings_button.position = Vector2(-100, 42)
-    settings_button.pressed.connect(_show_settings)
-    home_view.add_child(settings_button)
+    home_status_label.add_theme_font_size_override("font_size", 13)
+    home_status_label.add_theme_color_override("font_color", color_muted)
+    home_status.add_child(home_status_label)
 
     game_scroll = ScrollContainer.new()
-    game_scroll.position = Vector2(32, 164)
+    game_scroll.position = Vector2(36, 108)
     game_scroll.size = Vector2(390, 500)
     _configure_shell_scroll(game_scroll)
     home_view.add_child(game_scroll)
@@ -1659,8 +1686,8 @@ func _build_home_view() -> void:
     game_list = GridContainer.new()
     game_list.columns = 1
     game_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    game_list.add_theme_constant_override("h_separation", 18)
-    game_list.add_theme_constant_override("v_separation", 18)
+    game_list.add_theme_constant_override("h_separation", 16)
+    game_list.add_theme_constant_override("v_separation", 16)
     game_scroll.add_child(game_list)
 
     empty_state = VBoxContainer.new()
@@ -1670,46 +1697,57 @@ func _build_home_view() -> void:
     empty_state.anchor_bottom = 0.5
     empty_state.position = Vector2(-260, -120)
     empty_state.size = Vector2(520, 240)
-    empty_state.add_theme_constant_override("separation", 18)
+    empty_state.add_theme_constant_override("separation", 14)
     home_view.add_child(empty_state)
 
-    var empty_icon := _centered_icon(ICON_LIBRARY, Vector2(64, 64), color_accent)
-    empty_icon.custom_minimum_size = Vector2(0, 72)
+    var empty_icon := _centered_icon(ICON_LIBRARY, Vector2(48, 48), color_muted)
+    empty_icon.custom_minimum_size = Vector2(0, 56)
     empty_state.add_child(empty_icon)
 
     empty_title_label = Label.new()
     empty_title_label.text = _t("home.empty_title")
     empty_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    empty_title_label.add_theme_font_size_override("font_size", 28)
+    empty_title_label.add_theme_font_size_override("font_size", 23)
     empty_title_label.add_theme_color_override("font_color", color_text)
     empty_state.add_child(empty_title_label)
 
     empty_help_label = Label.new()
     empty_help_label.text = _empty_help_text()
     empty_help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    empty_help_label.add_theme_font_size_override("font_size", 18)
+    empty_help_label.add_theme_font_size_override("font_size", 15)
     empty_help_label.add_theme_color_override("font_color", color_muted)
     empty_state.add_child(empty_help_label)
 
     home_actions = HBoxContainer.new()
     home_actions.anchor_left = 1.0
-    home_actions.anchor_top = 1.0
+    home_actions.anchor_top = 0.0
     home_actions.anchor_right = 1.0
-    home_actions.anchor_bottom = 1.0
-    home_actions.position = Vector2(-430, -96)
-    home_actions.size = Vector2(390, 60)
-    home_actions.add_theme_constant_override("separation", 12)
-    home_view.add_child(home_actions)
+    home_actions.anchor_bottom = 0.0
+    home_actions.offset_left = -408.0
+    home_actions.offset_top = 18.0
+    home_actions.offset_right = -36.0
+    home_actions.offset_bottom = 70.0
+    home_actions.add_theme_constant_override("separation", 8)
+    header_content.add_child(home_actions)
 
     home_primary_button = _pill_button(_t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"), ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD)
-    home_primary_button.custom_minimum_size = Vector2(154, 56)
+    home_primary_button.custom_minimum_size = Vector2(132, 52)
+    home_primary_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     home_primary_button.pressed.connect(_on_refresh_or_import)
     home_actions.add_child(home_primary_button)
 
-    home_guide_button = _pill_button(_t("home.import_guide"), ICON_HELP)
-    home_guide_button.custom_minimum_size = Vector2(198, 56)
+    home_guide_button = _icon_button(ICON_HELP)
+    home_guide_button.custom_minimum_size = Vector2(52, 52)
+    home_guide_button.tooltip_text = _t("home.import_guide")
     home_guide_button.pressed.connect(_show_import_guide)
     home_actions.add_child(home_guide_button)
+
+    var settings_button := _icon_button(ICON_SETTINGS)
+    settings_button.name = "SettingsButton"
+    settings_button.custom_minimum_size = Vector2(52, 52)
+    settings_button.tooltip_text = _t("settings.title")
+    settings_button.pressed.connect(_show_settings)
+    home_actions.add_child(settings_button)
 
 func _build_settings_view() -> void:
     settings_view = ScrollContainer.new()
