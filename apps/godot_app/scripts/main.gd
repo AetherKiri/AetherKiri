@@ -1054,7 +1054,11 @@ var detail_view: Control
 var detail_scroll: ScrollContainer
 var game_view: Control
 var modal_layer: Control
+var active_modal_scrim: ColorRect
+var active_modal_dialog: Control
 var loading_panel: PanelContainer
+var loading_card: PanelContainer
+var loading_spinner: TextureRect
 var game_scroll: ScrollContainer
 var game_list: GridContainer
 var video_scroll: ScrollContainer
@@ -1575,16 +1579,15 @@ func _build_ui() -> void:
     perf_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
     perf_panel.add_theme_stylebox_override(
         "panel",
-        _panel_style(8, Color(0.025, 0.030, 0.050, 0.78),
-            Color(0.72, 0.82, 1.0, 0.58), 1)
+        ui_tokens.material_panel(true)
     )
     perf_panel.visible = false
     perf_layer.add_child(perf_panel)
 
     perf = Label.new()
     perf.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    perf.add_theme_font_size_override("font_size", 13)
-    perf.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
+    perf.add_theme_font_size_override("font_size", 12)
+    perf.add_theme_color_override("font_color", ui_tokens.text_secondary)
     perf.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     perf_panel.add_child(perf)
 
@@ -2506,11 +2509,9 @@ func _layout_perf_overlay(window_size: Vector2) -> void:
     if perf_panel == null:
         return
     var horizontal_margin := 16.0
-    perf_panel.position = Vector2(horizontal_margin, 12.0)
-    perf_panel.size = Vector2(
-        maxf(240.0, window_size.x - horizontal_margin * 2.0),
-        112.0 if debug_overlay_mode == "detail" else 84.0
-    )
+    var width := minf(760.0, maxf(240.0, window_size.x - horizontal_margin * 2.0))
+    perf_panel.position = Vector2(window_size.x - width - horizontal_margin, 12.0)
+    perf_panel.size = Vector2(width, 108.0 if debug_overlay_mode == "detail" else 76.0)
 
 func _set_perf_visible(visible: bool) -> void:
     if perf_panel != null:
@@ -3303,27 +3304,64 @@ func _build_loading_panel() -> void:
     loading_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
     loading_panel.mouse_filter = Control.MOUSE_FILTER_STOP
     loading_panel.visible = false
-    loading_panel.add_theme_stylebox_override("panel", _panel_style(0, Color(0.060, 0.064, 0.086, 0.97), Color(0, 0, 0, 0), 0))
+    loading_panel.add_theme_stylebox_override(
+        "panel",
+        ui_tokens.panel(Color(ui_tokens.background.r, ui_tokens.background.g, ui_tokens.background.b, 0.92), 0)
+    )
     add_child(loading_panel)
 
-    var margin := MarginContainer.new()
-    margin.add_theme_constant_override("margin_left", 34)
-    margin.add_theme_constant_override("margin_top", 30)
-    margin.add_theme_constant_override("margin_right", 34)
-    margin.add_theme_constant_override("margin_bottom", 30)
-    loading_panel.add_child(margin)
+    var center := CenterContainer.new()
+    loading_panel.add_child(center)
+
+    loading_card = PanelContainer.new()
+    var viewport_width := get_viewport_rect().size.x
+    var preferred_width := 720.0 if ui_log_enabled and not _mobile_runtime() else 460.0
+    loading_card.custom_minimum_size = Vector2(minf(preferred_width, maxf(320.0, viewport_width - 40.0)), 420 if ui_log_enabled and not _mobile_runtime() else 156)
+    loading_card.add_theme_stylebox_override("panel", ui_tokens.material_panel(true))
+    center.add_child(loading_card)
 
     var box := VBoxContainer.new()
     box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-    box.add_theme_constant_override("separation", 16)
-    margin.add_child(box)
+    box.add_theme_constant_override("separation", 14)
+    if not ui_log_enabled or _mobile_runtime():
+        box.alignment = BoxContainer.ALIGNMENT_CENTER
+    loading_card.add_child(box)
+
+    var status_row := HBoxContainer.new()
+    status_row.custom_minimum_size = Vector2(0, 52)
+    status_row.add_theme_constant_override("separation", 14)
+    box.add_child(status_row)
+
+    var spinner_holder := Control.new()
+    spinner_holder.custom_minimum_size = Vector2(32, 32)
+    spinner_holder.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    status_row.add_child(spinner_holder)
+    loading_spinner = _icon_rect(ICON_REFRESH, Vector2(24, 24), ui_tokens.accent)
+    loading_spinner.position = Vector2(4, 4)
+    loading_spinner.size = Vector2(24, 24)
+    loading_spinner.pivot_offset = Vector2(12, 12)
+    spinner_holder.add_child(loading_spinner)
+
+    var loading_labels := VBoxContainer.new()
+    loading_labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    loading_labels.add_theme_constant_override("separation", 1)
+    status_row.add_child(loading_labels)
 
     loading_title_label = Label.new()
     loading_title_label.text = _t("loading.title")
-    loading_title_label.add_theme_font_size_override("font_size", 28)
-    loading_title_label.add_theme_color_override("font_color", color_text)
-    box.add_child(loading_title_label)
+    loading_title_label.add_theme_font_size_override("font_size", 20)
+    loading_title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
+    loading_labels.add_child(loading_title_label)
+    var loading_caption := Label.new()
+    loading_caption.text = selected_backend
+    loading_caption.add_theme_font_size_override("font_size", 12)
+    loading_caption.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    loading_labels.add_child(loading_caption)
+
+    if not ui_motion.reduced_motion:
+        var spinner_tween := loading_spinner.create_tween().set_loops()
+        spinner_tween.tween_property(loading_spinner, "rotation", TAU, 0.85).from(0.0).set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
 
     if ui_log_enabled and not _mobile_runtime():
         log_view = TextEdit.new()
@@ -3333,10 +3371,16 @@ func _build_loading_panel() -> void:
         log_view.editable = false
         log_view.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
         log_view.scroll_fit_content_height = false
-        log_view.add_theme_font_size_override("font_size", 18)
-        log_view.add_theme_color_override("font_color", Color(0.90, 0.92, 0.98, 1))
+        log_view.add_theme_font_size_override("font_size", 13)
+        log_view.add_theme_color_override("font_color", ui_tokens.text_secondary)
         log_view.add_theme_color_override("background_color", Color(0, 0, 0, 0))
         box.add_child(log_view)
+
+func _show_loading_overlay() -> void:
+    loading_panel.visible = true
+    loading_panel.move_to_front()
+    if loading_card != null:
+        ui_motion.reveal(loading_card)
 
 func _panel_style(radius: int, fill: Color, border: Color, border_width: int = 1) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
@@ -4757,6 +4801,8 @@ func _modal_dialog(preferred_size: Vector2, dim_alpha: float = 0.52) -> PanelCon
     modal_layer.move_to_front()
     for child in modal_layer.get_children():
         child.queue_free()
+    active_modal_scrim = null
+    active_modal_dialog = null
 
     var dim := ColorRect.new()
     dim.color = Color(0, 0, 0, dim_alpha)
@@ -4766,7 +4812,7 @@ func _modal_dialog(preferred_size: Vector2, dim_alpha: float = 0.52) -> PanelCon
         var dismiss: bool = event is InputEventMouseButton and event.pressed
         dismiss = dismiss or (event is InputEventScreenTouch and event.pressed)
         if dismiss:
-            modal_layer.visible = false
+            _dismiss_modal()
     )
     modal_layer.add_child(dim)
 
@@ -4782,10 +4828,27 @@ func _modal_dialog(preferred_size: Vector2, dim_alpha: float = 0.52) -> PanelCon
     dialog.anchor_bottom = 0.5
     dialog.position = -dialog_size * 0.5
     dialog.size = dialog_size
-    dialog.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
+    dialog.add_theme_stylebox_override("panel", ui_tokens.material_panel(true))
     modal_layer.add_child(dialog)
+    active_modal_scrim = dim
+    active_modal_dialog = dialog
     ui_motion.modal_in(dim, dialog)
     return dialog
+
+func _dismiss_modal(after: Callable = Callable()) -> void:
+    if modal_layer == null or not modal_layer.visible:
+        if after.is_valid():
+            after.call()
+        return
+    var scrim := active_modal_scrim
+    var dialog := active_modal_dialog
+    ui_motion.modal_out(scrim, dialog, func():
+        modal_layer.visible = false
+        active_modal_scrim = null
+        active_modal_dialog = null
+        if after.is_valid():
+            after.call()
+    )
 
 func _show_import_guide() -> void:
     var guide_title := _t("dialog.import_title")
@@ -4812,7 +4875,7 @@ func _show_import_guide() -> void:
     var ok := _pill_button(_t("dialog.ok"))
     ok.custom_minimum_size = Vector2(140, 52)
     ok.size_flags_horizontal = Control.SIZE_SHRINK_END
-    ok.pressed.connect(func(): modal_layer.visible = false)
+    ok.pressed.connect(_dismiss_modal)
     box.add_child(ok)
 
 func _show_message(message: String) -> void:
@@ -5202,13 +5265,12 @@ func _offer_scrape_after_add(game: Dictionary) -> void:
     no.custom_minimum_size = Vector2(112, 52)
     no.add_theme_font_size_override("font_size", 17)
     no.add_theme_color_override("font_color", color_text)
-    no.pressed.connect(func(): modal_layer.visible = false)
+    no.pressed.connect(_dismiss_modal)
     buttons.add_child(no)
     var yes := _pill_button(_t("dialog.open_detail"))
     yes.custom_minimum_size = Vector2(148, 52)
     yes.pressed.connect(func():
-        modal_layer.visible = false
-        _show_detail(game)
+        _dismiss_modal(func(): _show_detail(game))
     )
     buttons.add_child(yes)
 
@@ -5305,9 +5367,10 @@ func _rename_selected_game() -> void:
     save.pressed.connect(func():
         var new_title := input.text.strip_edges()
         if not new_title.is_empty():
-            modal_layer.visible = false
-            _update_game(path, {"title": new_title})
-            _show_detail(selected_game)
+            _dismiss_modal(func():
+                _update_game(path, {"title": new_title})
+                _show_detail(selected_game)
+            )
     )
     box.add_child(save)
 
@@ -5343,8 +5406,7 @@ func _confirm_remove_selected() -> void:
     var remove := _danger_button(_t("dialog.delete" if deleting_builtin else "dialog.remove"))
     remove.custom_minimum_size = Vector2(148, 52)
     remove.pressed.connect(func():
-        modal_layer.visible = false
-        _remove_game(path)
+        _dismiss_modal(func(): _remove_game(path))
     )
     buttons.add_child(remove)
 
@@ -5380,14 +5442,13 @@ func _show_import_picker() -> void:
     box.add_child(title)
     var dir_button := _detail_action(ICON_LIBRARY, _t("dialog.select_game_dir"))
     dir_button.pressed.connect(func():
-        modal_layer.visible = false
-        _open_import_dialog()
+        _dismiss_modal(func(): _open_import_dialog())
     )
     box.add_child(dir_button)
     var cancel := Button.new()
     cancel.text = _t("dialog.cancel")
     cancel.flat = true
-    cancel.pressed.connect(func(): modal_layer.visible = false)
+    cancel.pressed.connect(_dismiss_modal)
     box.add_child(cancel)
 
 func _web_eval_string(source: String) -> String:
@@ -5624,8 +5685,7 @@ func _show_web_import_picker() -> void:
     if bool(support.get("directory", false)):
         var dir_button := _detail_action(ICON_LIBRARY, _t("dialog.select_local_game_dir"))
         dir_button.pressed.connect(func():
-            modal_layer.visible = false
-            _pick_web_local_game("directory")
+            _dismiss_modal(func(): _pick_web_local_game("directory"))
         )
         box.add_child(dir_button)
 
@@ -5636,16 +5696,17 @@ func _show_web_import_picker() -> void:
         var captured_game := game.duplicate(true)
         var button := _pill_button(_t("dialog.dev_mount", [String(game.get("name", ""))]))
         button.pressed.connect(func():
-            modal_layer.visible = false
-            if not _mount_web_game(captured_game):
-                return
-            _add_game_dictionary(captured_game)
+            _dismiss_modal(func():
+                if not _mount_web_game(captured_game):
+                    return
+                _add_game_dictionary(captured_game)
+            )
         )
         box.add_child(button)
     var cancel := Button.new()
     cancel.text = _t("dialog.cancel")
     cancel.flat = true
-    cancel.pressed.connect(func(): modal_layer.visible = false)
+    cancel.pressed.connect(_dismiss_modal)
     box.add_child(cancel)
 
 func _open_import_dialog() -> void:
@@ -6814,8 +6875,7 @@ func _start_selected_game_after_iap() -> void:
     viewport.visible = true
     viewport.move_to_front()
     game_view.visible = true
-    loading_panel.visible = true
-    loading_panel.move_to_front()
+    _show_loading_overlay()
     _set_perf_visible(show_perf_monitor)
     restart_notice.visible = true
     _on_open_game()
@@ -7332,11 +7392,12 @@ func _show_android_storage_permission_prompt(
     ok.custom_minimum_size = Vector2(160, 52)
     ok.size_flags_horizontal = Control.SIZE_SHRINK_END
     ok.pressed.connect(func():
-        modal_layer.visible = false
-        if after_acknowledged.is_valid():
-            after_acknowledged.call_deferred()
-        else:
-            call_deferred("_request_android_storage_permissions")
+        _dismiss_modal(func():
+            if after_acknowledged.is_valid():
+                after_acknowledged.call_deferred()
+            else:
+                call_deferred("_request_android_storage_permissions")
+        )
     )
     box.add_child(ok)
 
@@ -7499,6 +7560,8 @@ func _capture_ui_after_ready() -> void:
     elif action == "ios_statement":
         _show_settings()
         _show_ios_additional_statement()
+    elif action == "loading":
+        _show_loading_overlay()
     elif action == "detail" and not known_games.is_empty():
         _show_detail(known_games[0])
     elif action == "debug_console" and diagnostic_session != null and diagnostic_session.active:
@@ -9647,7 +9710,7 @@ func _input(event: InputEvent) -> void:
     if event is InputEventKey:
         var shell_key := event as InputEventKey
         if shell_key.pressed and not shell_key.echo and shell_key.keycode == KEY_ESCAPE and modal_layer != null and modal_layer.visible:
-            modal_layer.visible = false
+            _dismiss_modal()
             get_viewport().set_input_as_handled()
             return
     if video_playing and _handle_video_player_input(event):
