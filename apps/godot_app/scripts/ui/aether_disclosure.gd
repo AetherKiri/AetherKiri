@@ -6,7 +6,6 @@ var tokens
 var motion
 var expanded := false
 var chevron: TextureRect
-var rotation_tween: Tween
 
 func setup(design_tokens, motion_system, label: String, chevron_texture: Texture2D, initial_value: bool) -> void:
     tokens = design_tokens
@@ -43,11 +42,8 @@ func set_expanded(value: bool, animate: bool) -> void:
         return
     expanded = value
     var target := PI * 0.5 if expanded else 0.0
-    if rotation_tween != null and rotation_tween.is_valid():
-        rotation_tween.kill()
     if not animate or motion.reduced_motion:
         chevron.rotation = target
     else:
-        rotation_tween = create_tween()
-        rotation_tween.tween_property(chevron, "rotation", target, 0.20).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+        motion.spring_property(chevron, "rotation", target, 0.28, 1.0)
     expanded_changed.emit(expanded)
