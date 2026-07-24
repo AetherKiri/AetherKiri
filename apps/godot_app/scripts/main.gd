@@ -1944,6 +1944,8 @@ func _rebuild_settings_view() -> void:
     var available_size := shell_content.size
     if available_size.x <= 0.0 or available_size.y <= 0.0:
         available_size = get_viewport_rect().size
+    var scroll_bar_width := settings_view.get_v_scroll_bar().get_combined_minimum_size().x
+    available_size.x = maxf(320.0, available_size.x - scroll_bar_width)
     var compact := available_size.x < 720.0
     var gutter := 20 if compact else 32
     var animate_page := settings_animate_next
@@ -1967,9 +1969,9 @@ func _rebuild_settings_view() -> void:
     page.add_theme_constant_override("separation", 24)
     center.add_child(page)
 
-    var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 72)
-    top.add_theme_constant_override("separation", 14)
+    var top: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
+    top.custom_minimum_size = Vector2(0, 124 if compact else 72)
+    top.add_theme_constant_override("separation", 8 if compact else 14)
     page.add_child(top)
 
     var title_stack := VBoxContainer.new()
@@ -1987,12 +1989,17 @@ func _rebuild_settings_view() -> void:
     subtitle.add_theme_color_override("font_color", ui_tokens.text_secondary)
     title_stack.add_child(subtitle)
 
-    save_button = _pill_button(_t("settings.save"), ICON_SAVE)
+    if compact:
+        save_button = _shell_compact_button(ICON_SAVE, _t("settings.save"), _save_settings_draft)
+        ui_widgets.toolbar_button(save_button)
+    else:
+        save_button = _pill_button(_t("settings.save"), ICON_SAVE)
+        save_button.pressed.connect(_save_settings_draft)
     save_button.disabled = not dirty_settings
     _sync_pill_button_content_state(save_button)
-    save_button.custom_minimum_size = Vector2(112, 44)
+    save_button.custom_minimum_size = Vector2(44 if compact else 112, 44)
+    save_button.size_flags_horizontal = Control.SIZE_SHRINK_END if compact else Control.SIZE_SHRINK_CENTER
     save_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    save_button.pressed.connect(_save_settings_draft)
     top.add_child(save_button)
 
     var interface_group := _settings_group(page, _t("settings.section.interface"), ICON_SETTINGS, animate_page, 0.03)
@@ -2947,12 +2954,13 @@ func _show_settings() -> void:
     settings_animate_next = shell_route != "settings"
     _begin_settings_edit()
     _set_game_background(false)
-    _rebuild_settings_view()
     home_view.visible = false
     settings_view.visible = true
     detail_view.visible = false
     modal_layer.visible = false
     _sync_shell_route("settings")
+    _fit_full_rects()
+    call_deferred("_rebuild_settings_view")
 
 func _show_detail(game: Dictionary) -> void:
     _reset_shell_scroll_drag()
