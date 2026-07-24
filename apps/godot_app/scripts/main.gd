@@ -87,6 +87,7 @@ const UI_TEXT := {
         "video.resume": "继续上次播放",
         "video.open_failed": "无法播放该视频：%s",
         "home.status": "Godot Native  /  视觉小说库",
+        "nav.library": "游戏库",
         "home.empty_title": "尚未添加任何游戏",
         "home.refresh": "刷新",
         "home.import": "导入",
@@ -267,6 +268,7 @@ const UI_TEXT := {
         "video.resume": "繼續上次播放",
         "video.open_failed": "無法播放該影片：%s",
         "home.status": "Godot Native  /  視覺小說庫",
+        "nav.library": "遊戲庫",
         "home.empty_title": "尚未加入任何遊戲",
         "home.refresh": "重新整理",
         "home.import": "匯入",
@@ -447,6 +449,7 @@ const UI_TEXT := {
         "video.resume": "Resume playback",
         "video.open_failed": "Could not play this video: %s",
         "home.status": "Godot Native  /  Visual Novel Library",
+        "nav.library": "Library",
         "home.empty_title": "No games added yet",
         "home.refresh": "Refresh",
         "home.import": "Import",
@@ -627,6 +630,7 @@ const UI_TEXT := {
         "video.resume": "続きから再生",
         "video.open_failed": "動画を再生できません：%s",
         "home.status": "Godot Native  /  ビジュアルノベルライブラリ",
+        "nav.library": "ライブラリ",
         "home.empty_title": "ゲームはまだ追加されていません",
         "home.refresh": "更新",
         "home.import": "インポート",
@@ -807,6 +811,7 @@ const UI_TEXT := {
         "video.resume": "이어서 재생",
         "video.open_failed": "비디오를 재생할 수 없습니다: %s",
         "home.status": "Godot Native  /  비주얼 노벨 라이브러리",
+        "nav.library": "라이브러리",
         "home.empty_title": "아직 추가된 게임이 없습니다",
         "home.refresh": "새로고침",
         "home.import": "가져오기",
@@ -1025,6 +1030,16 @@ var log_view = null
 var diagnostic_session = null
 var debug_console = null
 var shell_root: Control
+var shell_content: Control
+var shell_sidebar: PanelContainer
+var shell_compact_header: PanelContainer
+var shell_route_label: Label
+var shell_library_button: Button
+var shell_settings_button: Button
+var shell_compact_library_button: Button
+var shell_compact_settings_button: Button
+var shell_status_label: Label
+var shell_route := "library"
 var home_view: Control
 var settings_view: ScrollContainer
 var detail_view: Control
@@ -1532,6 +1547,7 @@ func _build_ui() -> void:
     shell_root.set_anchors_preset(Control.PRESET_FULL_RECT)
     add_child(shell_root)
 
+    _build_shell_chrome()
     _build_home_view()
     _build_settings_view()
     _build_detail_view()
@@ -1910,6 +1926,199 @@ func _finish_video_seek_gesture(position: Vector2) -> void:
         _set_video_controls_visible(true)
     else:
         _set_video_controls_visible(not video_controls_visible)
+func _build_shell_chrome() -> void:
+    shell_content = Control.new()
+    shell_content.name = "ShellContent"
+    shell_content.set_anchors_preset(Control.PRESET_FULL_RECT)
+    shell_root.add_child(shell_content)
+
+    shell_sidebar = PanelContainer.new()
+    shell_sidebar.name = "ShellSidebar"
+    shell_sidebar.add_theme_stylebox_override("panel", ui_tokens.sidebar_panel())
+    shell_root.add_child(shell_sidebar)
+
+    var sidebar := VBoxContainer.new()
+    sidebar.add_theme_constant_override("separation", 10)
+    shell_sidebar.add_child(sidebar)
+
+    var brand := HBoxContainer.new()
+    brand.custom_minimum_size = Vector2(0, 62)
+    brand.add_theme_constant_override("separation", 12)
+    sidebar.add_child(brand)
+    brand.add_child(_icon_rect(ICON_GAMEPAD, Vector2(30, 30), ui_tokens.accent))
+
+    var brand_labels := VBoxContainer.new()
+    brand_labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    brand_labels.add_theme_constant_override("separation", 1)
+    brand.add_child(brand_labels)
+    var brand_title := Label.new()
+    brand_title.text = "AetherKiri"
+    brand_title.add_theme_font_size_override("font_size", 20)
+    brand_title.add_theme_color_override("font_color", ui_tokens.text_primary)
+    brand_labels.add_child(brand_title)
+    var brand_caption := Label.new()
+    brand_caption.text = _t("home.subtitle")
+    brand_caption.clip_text = true
+    brand_caption.add_theme_font_size_override("font_size", 11)
+    brand_caption.add_theme_color_override("font_color", ui_tokens.text_tertiary)
+    brand_labels.add_child(brand_caption)
+
+    var nav_spacer := Control.new()
+    nav_spacer.custom_minimum_size = Vector2(0, 10)
+    sidebar.add_child(nav_spacer)
+
+    shell_library_button = _shell_nav_button(_t("nav.library"), ICON_LIBRARY, _show_home)
+    sidebar.add_child(shell_library_button)
+    shell_settings_button = _shell_nav_button(_t("settings.title"), ICON_SETTINGS, _show_settings)
+    sidebar.add_child(shell_settings_button)
+
+    var flexible_space := Control.new()
+    flexible_space.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    sidebar.add_child(flexible_space)
+
+    var status := HBoxContainer.new()
+    status.custom_minimum_size = Vector2(0, 34)
+    status.add_theme_constant_override("separation", 9)
+    sidebar.add_child(status)
+    var ready_dot := PanelContainer.new()
+    ready_dot.custom_minimum_size = Vector2(8, 8)
+    ready_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    ready_dot.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.success, 4))
+    status.add_child(ready_dot)
+    shell_status_label = Label.new()
+    shell_status_label.text = selected_backend
+    shell_status_label.clip_text = true
+    shell_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    shell_status_label.add_theme_font_size_override("font_size", 12)
+    shell_status_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    status.add_child(shell_status_label)
+
+    var version := Label.new()
+    version.text = "0.2.0-beta.1"
+    version.add_theme_font_size_override("font_size", 10)
+    version.add_theme_color_override("font_color", ui_tokens.text_tertiary)
+    sidebar.add_child(version)
+
+    shell_compact_header = PanelContainer.new()
+    shell_compact_header.name = "ShellCompactHeader"
+    shell_compact_header.anchor_right = 1.0
+    shell_compact_header.add_theme_stylebox_override(
+        "panel",
+        ui_tokens.panel(ui_tokens.sidebar_material, 0, ui_tokens.separator, 1)
+    )
+    shell_root.add_child(shell_compact_header)
+
+    var compact_margin := MarginContainer.new()
+    compact_margin.add_theme_constant_override("margin_left", 18)
+    compact_margin.add_theme_constant_override("margin_top", 10)
+    compact_margin.add_theme_constant_override("margin_right", 12)
+    compact_margin.add_theme_constant_override("margin_bottom", 10)
+    shell_compact_header.add_child(compact_margin)
+    var compact_row := HBoxContainer.new()
+    compact_row.add_theme_constant_override("separation", 10)
+    compact_margin.add_child(compact_row)
+    compact_row.add_child(_icon_rect(ICON_GAMEPAD, Vector2(25, 25), ui_tokens.accent))
+    shell_route_label = Label.new()
+    shell_route_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    shell_route_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    shell_route_label.add_theme_font_size_override("font_size", 19)
+    shell_route_label.add_theme_color_override("font_color", ui_tokens.text_primary)
+    compact_row.add_child(shell_route_label)
+    shell_compact_library_button = _shell_compact_button(ICON_LIBRARY, _t("nav.library"), _show_home)
+    compact_row.add_child(shell_compact_library_button)
+    shell_compact_settings_button = _shell_compact_button(ICON_SETTINGS, _t("settings.title"), _show_settings)
+    compact_row.add_child(shell_compact_settings_button)
+
+    _sync_shell_route(shell_route)
+
+func _shell_nav_button(text: String, icon_path: String, callback: Callable) -> Button:
+    var button := Button.new()
+    button.text = text
+    button.icon = _load_ui_icon(icon_path)
+    button.expand_icon = true
+    button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+    button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    button.custom_minimum_size = Vector2(0, 48)
+    button.add_theme_constant_override("icon_max_width", 21)
+    button.add_theme_constant_override("h_separation", 11)
+    button.add_theme_font_size_override("font_size", 15)
+    button.focus_mode = Control.FOCUS_ALL
+    button.pressed.connect(callback)
+    return button
+
+func _shell_compact_button(icon_path: String, tooltip: String, callback: Callable) -> Button:
+    var button := Button.new()
+    button.icon = _load_ui_icon(icon_path)
+    button.expand_icon = true
+    button.custom_minimum_size = Vector2(44, 44)
+    button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    button.tooltip_text = tooltip
+    button.add_theme_constant_override("icon_max_width", 22)
+    button.focus_mode = Control.FOCUS_ALL
+    button.pressed.connect(callback)
+    return button
+
+func _sync_shell_route(route: String) -> void:
+    shell_route = route
+    var title := _t("nav.library")
+    if route == "settings":
+        title = _t("settings.title")
+    elif route == "detail":
+        title = _t("detail.eyebrow")
+    if shell_route_label != null:
+        shell_route_label.text = title
+    _apply_shell_nav_state(shell_library_button, route == "library")
+    _apply_shell_nav_state(shell_settings_button, route == "settings")
+    _apply_shell_compact_state(shell_compact_library_button, route == "library")
+    _apply_shell_compact_state(shell_compact_settings_button, route == "settings")
+
+func _apply_shell_nav_state(button: Button, selected: bool) -> void:
+    if button == null:
+        return
+    var foreground: Color = ui_tokens.accent if selected else ui_tokens.text_secondary
+    button.add_theme_color_override("font_color", foreground)
+    button.add_theme_color_override("icon_normal_color", foreground)
+    button.add_theme_color_override("icon_hover_color", ui_tokens.text_primary)
+    button.add_theme_color_override("icon_pressed_color", ui_tokens.accent)
+    _apply_button_style(
+        button,
+        ui_tokens.button_style(ui_tokens.accent_fill if selected else Color.TRANSPARENT),
+        ui_tokens.button_style(ui_tokens.surface_hover),
+        ui_tokens.button_style(ui_tokens.accent_fill),
+    )
+
+func _apply_shell_compact_state(button: Button, selected: bool) -> void:
+    if button == null:
+        return
+    var foreground: Color = ui_tokens.accent if selected else ui_tokens.text_secondary
+    button.add_theme_color_override("icon_normal_color", foreground)
+    button.add_theme_color_override("icon_hover_color", ui_tokens.text_primary)
+    button.add_theme_color_override("icon_pressed_color", ui_tokens.accent)
+    _apply_button_style(
+        button,
+        ui_tokens.button_style(ui_tokens.accent_fill if selected else Color.TRANSPARENT),
+        ui_tokens.button_style(ui_tokens.surface_hover),
+        ui_tokens.button_style(ui_tokens.accent_fill),
+    )
+
+func _layout_shell(window_size: Vector2) -> void:
+    if shell_content == null or shell_sidebar == null or shell_compact_header == null:
+        return
+    var compact := window_size.x < 900.0
+    shell_sidebar.visible = not compact
+    shell_compact_header.visible = compact
+    shell_sidebar.position = Vector2.ZERO
+    shell_sidebar.size = Vector2(ui_tokens.SIDEBAR_WIDTH, window_size.y)
+    shell_compact_header.offset_left = 0.0
+    shell_compact_header.offset_top = 0.0
+    shell_compact_header.offset_right = 0.0
+    shell_compact_header.offset_bottom = ui_tokens.TOOLBAR_HEIGHT
+    shell_content.set_anchors_preset(Control.PRESET_FULL_RECT)
+    shell_content.offset_left = 0.0 if compact else ui_tokens.SIDEBAR_WIDTH
+    shell_content.offset_top = ui_tokens.TOOLBAR_HEIGHT if compact else 0.0
+    shell_content.offset_right = 0.0
+    shell_content.offset_bottom = 0.0
 
 func _load_shell_settings() -> void:
     var cfg := ConfigFile.new()
@@ -2274,7 +2483,13 @@ func _fit_full_rects() -> void:
         control.offset_right = 0.0
         control.offset_bottom = 0.0
     _layout_game_viewport(window_size)
-    _layout_home_view(window_size)
+    _layout_shell(window_size)
+    var compact_shell := window_size.x < 900.0
+    var shell_size := Vector2(
+        window_size.x if compact_shell else window_size.x - ui_tokens.SIDEBAR_WIDTH,
+        window_size.y - (ui_tokens.TOOLBAR_HEIGHT if compact_shell else 0.0)
+    )
+    _layout_home_view(shell_size)
     _layout_perf_overlay(window_size)
 
 func _layout_perf_overlay(window_size: Vector2) -> void:
@@ -2414,7 +2629,7 @@ func _layout_home_view(window_size: Vector2) -> void:
 func _build_home_view() -> void:
     home_view = Control.new()
     home_view.set_anchors_preset(Control.PRESET_FULL_RECT)
-    shell_root.add_child(home_view)
+    shell_content.add_child(home_view)
 
     home_header = PanelContainer.new()
     home_header.anchor_right = 1.0
@@ -2606,7 +2821,7 @@ func _build_settings_view() -> void:
     settings_view.set_anchors_preset(Control.PRESET_FULL_RECT)
     _configure_shell_scroll(settings_view)
     settings_view.visible = false
-    shell_root.add_child(settings_view)
+    shell_content.add_child(settings_view)
 
 func _rebuild_settings_view() -> void:
     for child in settings_view.get_children():
@@ -2744,7 +2959,7 @@ func _build_detail_view() -> void:
     detail_view = Control.new()
     detail_view.set_anchors_preset(Control.PRESET_FULL_RECT)
     detail_view.visible = false
-    shell_root.add_child(detail_view)
+    shell_content.add_child(detail_view)
 
     detail_scroll = ScrollContainer.new()
     detail_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -4107,14 +4322,19 @@ func _rebuild_shell_views_after_style_change() -> void:
     var was_settings := is_instance_valid(settings_view) and settings_view.visible
     var was_detail := is_instance_valid(detail_view) and detail_view.visible
 
-    _remove_shell_view(home_view)
-    _remove_shell_view(settings_view)
-    _remove_shell_view(detail_view)
-
+    _remove_shell_view(shell_root)
+    shell_root = Control.new()
+    shell_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+    add_child(shell_root)
+    _build_shell_chrome()
     _build_home_view()
     _build_settings_view()
     _build_detail_view()
     _fit_full_rects()
+    if modal_layer != null:
+        modal_layer.move_to_front()
+    if loading_panel != null:
+        loading_panel.move_to_front()
 
     if was_settings:
         home_view.visible = false
@@ -4142,6 +4362,15 @@ func _refresh_language_texts() -> void:
         diagnostic_session.refresh_language()
     if debug_console != null:
         debug_console.refresh_language()
+    if is_instance_valid(shell_library_button):
+        shell_library_button.text = _t("nav.library")
+    if is_instance_valid(shell_settings_button):
+        shell_settings_button.text = _t("settings.title")
+    if is_instance_valid(shell_compact_library_button):
+        shell_compact_library_button.tooltip_text = _t("nav.library")
+    if is_instance_valid(shell_compact_settings_button):
+        shell_compact_settings_button.tooltip_text = _t("settings.title")
+    _sync_shell_route(shell_route)
     if is_instance_valid(home_subtitle_label):
         home_subtitle_label.text = _t("home.subtitle")
     if is_instance_valid(home_game_tab):
@@ -4219,6 +4448,7 @@ func _show_home() -> void:
     settings_view.visible = false
     detail_view.visible = false
     modal_layer.visible = false
+    _sync_shell_route("library")
     _refresh_games()
     if home_library_mode == "video":
         _refresh_videos()
@@ -4232,6 +4462,7 @@ func _show_settings() -> void:
     settings_view.visible = true
     detail_view.visible = false
     modal_layer.visible = false
+    _sync_shell_route("settings")
 
 func _show_detail(game: Dictionary) -> void:
     _reset_shell_scroll_drag()
@@ -4241,6 +4472,7 @@ func _show_detail(game: Dictionary) -> void:
     settings_view.visible = false
     detail_view.visible = true
     modal_layer.visible = false
+    _sync_shell_route("detail")
     for child in detail_scroll.get_children():
         child.queue_free()
 
