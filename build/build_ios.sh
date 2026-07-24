@@ -470,7 +470,10 @@ with_ios_only_gdextension() {
 }
 
 echo "==> Building native engine and Godot extension"
-cmake_config_args=(-D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM")
+cmake_config_args=(
+    -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
+    -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
+)
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
     if [[ ! -d "$VCPKG_ROOT/installed/$VCPKG_TRIPLET_DIR" ]]; then
         echo "Error: SKIP_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/$VCPKG_TRIPLET_DIR" >&2

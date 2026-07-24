@@ -169,6 +169,8 @@ private:
     uint64_t vmem_size_ = 0;
     iTVPRenderManager *software_delegate_ = nullptr;
     std::unordered_map<uint32_t, GodotRenderMethod *> method_wrappers_;
+    int stretch_parameter_id_ = -1;
+    int stretch_type_ = 0;
 };
 
 void TVPForceRegisterGodotRenderManager();

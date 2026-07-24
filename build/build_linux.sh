@@ -123,7 +123,9 @@ stage_release_extension_for_editor_scan() {
 }
 
 echo "==> Building Linux engine and Godot extension"
-cmake --preset "$CMAKE_CONFIG_PRESET" -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
+cmake --preset "$CMAKE_CONFIG_PRESET" \
+    -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM" \
+    -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
 cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 
 mkdir -p "$GODOT_BIN_DIR"

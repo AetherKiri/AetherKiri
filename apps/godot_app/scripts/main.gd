@@ -6494,6 +6494,73 @@ func _write_probe_marker(line: String) -> void:
     marker.store_line("%d %s" % [Time.get_ticks_msec(), line])
     marker.flush()
 
+func _kirikiri_virtual_key(event: InputEventKey) -> int:
+    var key_code := int(event.keycode)
+    if key_code == KEY_NONE:
+        key_code = int(event.physical_keycode)
+    match key_code:
+        KEY_BACKSPACE:
+            return 0x08
+        KEY_TAB, KEY_BACKTAB:
+            return 0x09
+        KEY_ENTER, KEY_KP_ENTER:
+            return 0x0D
+        KEY_SHIFT:
+            return 0x10
+        KEY_CTRL:
+            return 0x11
+        KEY_ALT:
+            return 0x12
+        KEY_PAUSE:
+            return 0x13
+        KEY_CAPSLOCK:
+            return 0x14
+        KEY_ESCAPE:
+            return 0x1B
+        KEY_SPACE:
+            return 0x20
+        KEY_PAGEUP:
+            return 0x21
+        KEY_PAGEDOWN:
+            return 0x22
+        KEY_END:
+            return 0x23
+        KEY_HOME:
+            return 0x24
+        KEY_LEFT:
+            return 0x25
+        KEY_UP:
+            return 0x26
+        KEY_RIGHT:
+            return 0x27
+        KEY_DOWN:
+            return 0x28
+        KEY_PRINT:
+            return 0x2C
+        KEY_INSERT:
+            return 0x2D
+        KEY_DELETE:
+            return 0x2E
+        KEY_HELP:
+            return 0x2F
+    if key_code >= KEY_F1 and key_code <= KEY_F24:
+        return 0x70 + key_code - KEY_F1
+    if key_code >= 0x61 and key_code <= 0x7A:
+        return key_code - 0x20
+    return key_code if key_code >= 0 and key_code <= 0xFF else 0
+
+func _kirikiri_key_modifiers(event: InputEventKey) -> int:
+    var modifiers := 0
+    if event.shift_pressed:
+        modifiers |= 0x01
+    if event.alt_pressed:
+        modifiers |= 0x02
+    if event.ctrl_pressed:
+        modifiers |= 0x04
+    if event.echo:
+        modifiers |= 0x80
+    return modifiers
+
 func _input(event: InputEvent) -> void:
     # _input runs before Control GUI dispatch. Keep pointers that begin on the
     # diagnostic action out of the game bridge so Button can receive them.
@@ -6506,7 +6573,12 @@ func _input(event: InputEvent) -> void:
     # before shell Controls can consume it.
     if event is InputEventKey and _can_forward_game_input():
         var key := event as InputEventKey
-        player.send_key_event(key.pressed, key.keycode, key.get_modifiers_mask(), key.unicode)
+        player.send_key_event(
+            key.pressed,
+            _kirikiri_virtual_key(key),
+            _kirikiri_key_modifiers(key),
+            key.unicode
+        )
         get_viewport().set_input_as_handled()
         return
     if _is_game_pointer_event(event):

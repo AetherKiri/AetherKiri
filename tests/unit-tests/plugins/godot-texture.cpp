@@ -3,6 +3,7 @@
 
 #include "godot/GodotGpuBridge.h"
 #include "godot/GodotRenderManager.h"
+#include "LayerBitmapIntf.h"
 
 #include <array>
 #include <cstdint>
@@ -22,6 +23,7 @@ struct TriangleDrawCall {
 };
 
 TriangleDrawCall g_triangle_draw_call;
+int g_blend_rect_calls = 0;
 uint64_t g_next_texture_handle = 1;
 
 uint64_t CreateTestTexture(uint32_t, uint32_t, const void *, uint32_t) {
@@ -56,15 +58,23 @@ bool DrawTestTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     return true;
 }
 
+bool BlendTestRect(uint64_t, uint64_t, const tTVPRect *, const tTVPRect *,
+                   uint32_t, int, uint32_t) {
+    ++g_blend_rect_calls;
+    return true;
+}
+
 class TestGpuBridge {
 public:
     TestGpuBridge() {
         g_triangle_draw_call = {};
+        g_blend_rect_calls = 0;
         g_next_texture_handle = 1;
         TVPGodotGpuBridgeCallbacks callbacks{};
         callbacks.create_rgba = CreateTestTexture;
         callbacks.release_texture = ReleaseTestTexture;
         callbacks.draw_triangles = DrawTestTriangles;
+        callbacks.blend_rect = BlendTestRect;
         callbacks.read_rgba = ReadTestGrayTexture;
         TVPGodotGpuBridgeRegister(&callbacks);
     }
@@ -73,6 +83,38 @@ public:
 };
 
 } // namespace
+
+TEST_CASE("Godot nearest scaled alpha uses the software sampler") {
+    TestGpuBridge bridge;
+    std::array<std::uint8_t, 16> source_pixels = {
+        0, 0, 0, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 0, 0, 0, 255,
+    };
+    std::vector<std::uint8_t> destination_pixels(256 * 256 * 4);
+    GodotTexture2D src(source_pixels.data(), 8, 2, 2,
+                       TVPTextureFormat::RGBA);
+    GodotTexture2D dst(destination_pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    GodotRenderManager manager;
+
+    const int stretch = manager.EnumParameterID("StretchType");
+    REQUIRE(stretch >= 0);
+    iTVPRenderMethod *method = manager.GetRenderMethod("AlphaBlend_d");
+    tRenderTexRectArray::Element source_element(
+        &src, tTVPRect(0, 0, 2, 2));
+
+    manager.SetParameterInt(stretch, stNearest);
+    manager.OperateRect(
+        method, &dst, &dst, tTVPRect(0, 0, 256, 256),
+        tRenderTexRectArray(&source_element, 1));
+    CHECK(g_blend_rect_calls == 0);
+
+    manager.SetParameterInt(stretch, stLinear);
+    manager.OperateRect(
+        method, &dst, &dst, tTVPRect(0, 0, 256, 256),
+        tRenderTexRectArray(&source_element, 1));
+    CHECK(g_blend_rect_calls == 1);
+}
 
 TEST_CASE("Godot textures expose Gray province pixels") {
     std::array<std::uint8_t, 8> pixels = {

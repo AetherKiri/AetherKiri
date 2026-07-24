@@ -164,8 +164,10 @@ bool IsGpuRectFastPathEnabled(const char *name) {
     return false;
 }
 
+constexpr int kDefaultGpuRectMinArea = 32768;
+constexpr int kDefaultAlphaRectMinArea = 32768;
+
 int GpuRectMinArea() {
-    constexpr int kDefaultGpuRectMinArea = 32768;
     static const int min_area = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_RECT_MIN_AREA");
         if (value == nullptr || value[0] == '\0') return kDefaultGpuRectMinArea;
@@ -182,7 +184,6 @@ int GpuRectMinAreaForMethod(const char *name) {
         (std::strcmp(name, "AlphaBlend") == 0 ||
          std::strcmp(name, "AlphaBlend_a") == 0 ||
          std::strcmp(name, "AlphaBlend_d") == 0)) {
-        constexpr int kDefaultAlphaRectMinArea = 32768;
         static const int min_area = []() {
             const char *value =
                 std::getenv("AETHERKIRI_GODOT_GPU_ALPHA_RECT_MIN_AREA");
@@ -983,7 +984,10 @@ bool GodotRenderManager::GetTextureStat(iTVPTexture2D *texture,
 }
 
 int GodotRenderManager::EnumParameterID(const char *name) {
-    return SoftwareDelegate()->EnumParameterID(name);
+    const int id = SoftwareDelegate()->EnumParameterID(name);
+    if(name != nullptr && std::strcmp(name, "StretchType") == 0)
+        stretch_parameter_id_ = id;
+    return id;
 }
 
 void GodotRenderManager::SetParameterUInt(int id, unsigned int Value) {
@@ -991,6 +995,8 @@ void GodotRenderManager::SetParameterUInt(int id, unsigned int Value) {
 }
 
 void GodotRenderManager::SetParameterInt(int id, int Value) {
+    if(id >= 0 && id == stretch_parameter_id_)
+        stretch_type_ = Value;
     SoftwareDelegate()->SetParameterInt(id, Value);
 }
 
@@ -1032,6 +1038,9 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     auto *src3_3 = textures.size() == 3
         ? dynamic_cast<GodotTexture2D *>(textures[2].first)
         : nullptr;
+    const bool nearest_scaled = textures.size() == 1 &&
+        !RectAbsSizeMatches(rctar, textures[0].second) &&
+        (stretch_type_ & stTypeMask) == stNearest;
 
     if (method_name == "Copy" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("Copy") &&
@@ -1052,6 +1061,14 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             src_rc.get_height() == rctar.get_height() &&
             dst->CopyGpuFrom(src, rctar, src_rc)) {
             CountGpuFastPath(method_name);
+            return;
+        }
+        if(nearest_scaled) {
+            CountCopyFallbackReason("scaled_copy_nearest");
+            CountMethodFallback(method);
+            SoftwareDelegate()->OperateRect(delegate_method, tar, reftar,
+                                            rctar, textures);
+            dst->MarkCpuDirty();
             return;
         }
         const bool needs_area_downsample =
@@ -1132,6 +1149,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     }
 
     if (method_name == "AlphaBlend" && dst != nullptr && src != nullptr &&
+        !nearest_scaled &&
         IsGpuRectFastPathEnabled("AlphaBlend") &&
         ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
@@ -1146,6 +1164,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     }
 
     if (method_name == "AlphaBlend_d" && dst != nullptr && src != nullptr &&
+        !nearest_scaled &&
         IsGpuRectFastPathEnabled("AlphaBlend_d") &&
         ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
@@ -1206,7 +1225,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
 
     if ((method_name == "AlphaBlend_a" ||
         method_name == "PerspectiveAlphaBlend_a") &&
-        dst != nullptr && src != nullptr &&
+        dst != nullptr && src != nullptr && !nearest_scaled &&
         IsGpuRectFastPathEnabled("AlphaBlend_a") &&
         ShouldUseGpuRectFastPath(rctar, "AlphaBlend_a", dst, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&

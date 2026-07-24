@@ -2049,7 +2049,11 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
                                 std::vector<char16_t> buffer(bufSize / sizeof(char16_t));
                                 dumpStream->Seek(0, TJS_BS_SEEK_SET);
                                 dumpStream->Read(buffer.data(), bufSize);
+#if defined(_WIN32)
+                                FILE *f = _wfopen(absPath.c_str(), L"wb");
+#else
                                 FILE *f = fopen(absPath.c_str(), "wb");
+#endif
                                 if(f) {
                                     char16_t bom = 0xFEFF;
                                     fwrite(&bom, sizeof(char16_t), 1, f);

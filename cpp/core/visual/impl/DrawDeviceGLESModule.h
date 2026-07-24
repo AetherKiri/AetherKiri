@@ -4,8 +4,10 @@
 #include "DebugIntf.h"
 #include "ScriptMgnIntf.h"
 #include "DrawDevice.h"
-#include <dlfcn.h>
 #include <unordered_map>
+#if !defined(_WIN32)
+#include <dlfcn.h>
+#endif
 
 namespace DrawDeviceGLES {
 
@@ -15,10 +17,14 @@ using ModuleStore = std::unordered_map<uintptr_t, std::unordered_map<ModuleName,
 
 inline tjs_error TryCreateModuleViaKrkrGLES(tTJSVariant *result, tjs_int width,
                                             tjs_int height) {
+#if defined(_WIN32)
+    return TJS_E_MEMBERNOTFOUND;
+#else
     void *sym = dlsym(RTLD_DEFAULT, "TVPKrkrGLESCreateModuleObject");
     if(!sym) return TJS_E_MEMBERNOTFOUND;
     auto fn = reinterpret_cast<CreateKrkrGLESModuleObjectFn>(sym);
     return fn(result, width, height);
+#endif
 }
 
 inline tjs_error ReturnTrueCb(tTJSVariant *result, tjs_int, tTJSVariant **,

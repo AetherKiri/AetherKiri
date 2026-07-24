@@ -13,9 +13,14 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#if defined(_WIN32)
+#define popen _popen
+#define pclose _pclose
+#else
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 #include <vector>
 
 #ifndef TJS_INTF_METHOD
@@ -572,8 +577,13 @@ tjs_error TJS_INTF_METHOD writeEnvValueCb(tTJSVariant *result,
                                           iTJSDispatch2 *) {
     if(numparams < 2)
         return TJS_E_BADPARAMCOUNT;
-    const int rc = setenv(toUtf8(ttstr(*param[0])).c_str(),
-                          toUtf8(ttstr(*param[1])).c_str(), 1);
+    const std::string name = toUtf8(ttstr(*param[0]));
+    const std::string value = toUtf8(ttstr(*param[1]));
+#if defined(_WIN32)
+    const int rc = _putenv_s(name.c_str(), value.c_str());
+#else
+    const int rc = setenv(name.c_str(), value.c_str(), 1);
+#endif
     if(result)
         *result = rc == 0;
     return TJS_S_OK;

@@ -19,7 +19,7 @@ typedef tjs_uint32 DWORD;
 
 typedef unsigned char       *WrtRefT;
 typedef unsigned char const *ReadRefT;
-typedef DWORD                PixelT;
+typedef tjs_uint32           PixelT;
 
 static tjs_uint32 hasImageHint, imageWidthHint, imageHeightHint;
 static tjs_uint32 mainImageBufferHint, mainImageBufferPitchHint, mainImageBufferForWriteHint;
