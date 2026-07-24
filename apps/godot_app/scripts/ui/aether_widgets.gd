@@ -154,15 +154,17 @@ func _set_button_boxes(button: Button, normal: StyleBox, hover: StyleBox, presse
 func _primary_box(fill: Color, elevated: bool) -> StyleBoxFlat:
     var style: StyleBoxFlat = tokens.button_style(fill, Color(1, 1, 1, 0.20), 8)
     style.border_width_bottom = 0
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.34 if elevated else 0.24)
-    style.shadow_size = 10 if elevated else 7
+    var shadow_alpha := (0.34 if elevated else 0.24) if tokens.mode == "dark" else (0.15 if elevated else 0.10)
+    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, shadow_alpha)
+    style.shadow_size = (10 if elevated else 7) if tokens.mode == "dark" else (6 if elevated else 4)
     style.shadow_offset = Vector2(0, 4 if elevated else 3)
     return style
 
 func _control_box(fill: Color, border: Color, elevated: bool) -> StyleBoxFlat:
     var style: StyleBoxFlat = tokens.button_style(fill, border, 8)
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.24 if elevated else 0.12)
-    style.shadow_size = 8 if elevated else 4
+    var shadow_alpha := (0.24 if elevated else 0.12) if tokens.mode == "dark" else (0.09 if elevated else 0.05)
+    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, shadow_alpha)
+    style.shadow_size = (8 if elevated else 4) if tokens.mode == "dark" else (5 if elevated else 2)
     style.shadow_offset = Vector2(0, 3 if elevated else 1)
     return style
 
@@ -174,8 +176,8 @@ func _field_box(focused: bool) -> StyleBoxFlat:
     style.content_margin_top = 9
     style.content_margin_right = 13
     style.content_margin_bottom = 9
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.18)
-    style.shadow_size = 5 if focused else 3
+    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.18 if tokens.mode == "dark" else 0.07)
+    style.shadow_size = (5 if focused else 3) if tokens.mode == "dark" else (3 if focused else 2)
     style.shadow_offset = Vector2(0, 1)
     return style
 

@@ -6485,7 +6485,10 @@ func _game_card(game: Dictionary) -> Button:
     var badge_label := Label.new()
     badge_label.text = _game_type_label(String(game.get("type", "Directory")))
     badge_label.add_theme_font_size_override("font_size", 10)
-    badge_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.90))
+    badge_label.add_theme_color_override(
+        "font_color",
+        Color(1, 1, 1, 0.90) if style_mode == STYLE_DARK else ui_tokens.text_secondary
+    )
     badge.add_child(badge_label)
 
     var play_chip := PanelContainer.new()
