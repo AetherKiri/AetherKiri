@@ -1764,24 +1764,29 @@ func _rebuild_settings_view() -> void:
 
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 40)
-    margin.add_theme_constant_override("margin_top", 24)
-    margin.add_theme_constant_override("margin_right", 40)
-    margin.add_theme_constant_override("margin_bottom", 40)
+    margin.add_theme_constant_override("margin_left", 24)
+    margin.add_theme_constant_override("margin_top", 18)
+    margin.add_theme_constant_override("margin_right", 24)
+    margin.add_theme_constant_override("margin_bottom", 36)
     settings_view.add_child(margin)
 
+    var center := CenterContainer.new()
+    center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    margin.add_child(center)
+
     var page := VBoxContainer.new()
-    page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    page.add_theme_constant_override("separation", 26)
-    margin.add_child(page)
+    page.custom_minimum_size = Vector2(minf(940.0, maxf(320.0, get_viewport_rect().size.x - 64.0)), 0)
+    page.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+    page.add_theme_constant_override("separation", 20)
+    center.add_child(page)
 
     var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 96)
-    top.add_theme_constant_override("separation", 18)
+    top.custom_minimum_size = Vector2(0, 68)
+    top.add_theme_constant_override("separation", 14)
     page.add_child(top)
 
     var back := _icon_button(ICON_HOME)
-    back.custom_minimum_size = TOP_ICON_BUTTON_SIZE
+    back.custom_minimum_size = Vector2(52, 52)
     back.pressed.connect(_show_home)
     top.add_child(back)
 
@@ -1790,14 +1795,14 @@ func _rebuild_settings_view() -> void:
     title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
     title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    title.add_theme_font_size_override("font_size", 30)
+    title.add_theme_font_size_override("font_size", 28)
     title.add_theme_color_override("font_color", color_text)
     top.add_child(title)
 
     save_button = _pill_button(_t("settings.save"), ICON_SAVE)
     save_button.disabled = not dirty_settings
     _sync_pill_button_content_state(save_button)
-    save_button.custom_minimum_size = TOP_ACTION_BUTTON_SIZE
+    save_button.custom_minimum_size = Vector2(124, 52)
     save_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     save_button.pressed.connect(_save_settings_draft)
     top.add_child(save_button)
@@ -2333,43 +2338,50 @@ func _icon_button(icon_path: String) -> Button:
 
 func _section_title(text: String, icon_path: String) -> HBoxContainer:
     var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 34)
-    row.add_theme_constant_override("separation", 10)
-    row.add_child(_icon_rect(icon_path, Vector2(22, 22), color_accent_soft))
+    row.custom_minimum_size = Vector2(0, 28)
+    row.add_theme_constant_override("separation", 8)
+    row.add_child(_icon_rect(icon_path, Vector2(19, 19), color_accent))
     var label := Label.new()
     label.text = text
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    label.add_theme_font_size_override("font_size", 19)
-    label.add_theme_color_override("font_color", color_accent_soft)
+    label.add_theme_font_size_override("font_size", 17)
+    label.add_theme_color_override("font_color", color_muted)
     row.add_child(label)
     return row
 
 func _settings_card() -> VBoxContainer:
     var box := VBoxContainer.new()
     box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    box.add_theme_constant_override("separation", 12)
+    box.add_theme_constant_override("separation", 8)
     return box
 
 func _settings_block(title: String, subtitle: String, control: Control) -> Control:
     var panel := PanelContainer.new()
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
-    var box := VBoxContainer.new()
-    box.custom_minimum_size = Vector2(0, 116)
-    box.add_theme_constant_override("separation", 8)
+    var compact := get_viewport_rect().size.x < 720.0
+    var box: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
+    box.custom_minimum_size = Vector2(0, 114 if compact else 76)
+    box.add_theme_constant_override("separation", 12 if compact else 20)
     panel.add_child(box)
+    var labels := VBoxContainer.new()
+    labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    labels.add_theme_constant_override("separation", 4)
+    box.add_child(labels)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 20)
+    title_label.add_theme_font_size_override("font_size", 18)
     title_label.add_theme_color_override("font_color", color_text)
-    box.add_child(title_label)
+    labels.add_child(title_label)
     if not subtitle.is_empty():
         var sub := Label.new()
         sub.text = subtitle
         sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-        sub.add_theme_font_size_override("font_size", 16)
+        sub.add_theme_font_size_override("font_size", 14)
         sub.add_theme_color_override("font_color", color_muted)
-        box.add_child(sub)
+        labels.add_child(sub)
+    control.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_SHRINK_END
+    control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     box.add_child(control)
     return panel
 
@@ -2378,21 +2390,21 @@ func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: S
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 92)
-    row.add_theme_constant_override("separation", 18)
+    row.custom_minimum_size = Vector2(0, 76)
+    row.add_theme_constant_override("separation", 14)
     panel.add_child(row)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    labels.add_theme_constant_override("separation", 6)
+    labels.add_theme_constant_override("separation", 4)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 20)
+    title_label.add_theme_font_size_override("font_size", 18)
     title_label.add_theme_color_override("font_color", color_text)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = subtitle
     sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    sub.add_theme_font_size_override("font_size", 16)
+    sub.add_theme_font_size_override("font_size", 14)
     sub.add_theme_color_override("font_color", color_muted)
     labels.add_child(sub)
     row.add_child(labels)
@@ -2400,7 +2412,7 @@ func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: S
     var toggle := CheckButton.new()
     toggle.button_pressed = initial
     toggle.focus_mode = Control.FOCUS_ALL
-    toggle.custom_minimum_size = Vector2(92, 54)
+    toggle.custom_minimum_size = Vector2(72, 44)
     toggle.toggled.connect(func(value: bool): _on_setting_toggle(key, value))
     row.add_child(toggle)
     return panel
@@ -2410,20 +2422,20 @@ func _settings_value_row(title: String, value: String) -> Control:
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 64)
+    row.custom_minimum_size = Vector2(0, 52)
     row.add_theme_constant_override("separation", 18)
     panel.add_child(row)
     var label := Label.new()
     label.text = title
     label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    label.add_theme_font_size_override("font_size", 19)
+    label.add_theme_font_size_override("font_size", 17)
     label.add_theme_color_override("font_color", color_text)
     row.add_child(label)
     var value_label := Label.new()
     value_label.text = value
     value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    value_label.add_theme_font_size_override("font_size", 17)
+    value_label.add_theme_font_size_override("font_size", 15)
     value_label.add_theme_color_override("font_color", color_accent)
     row.add_child(value_label)
     return panel
@@ -2433,26 +2445,26 @@ func _settings_fps_row() -> Control:
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 86)
-    row.add_theme_constant_override("separation", 18)
+    row.custom_minimum_size = Vector2(0, 76)
+    row.add_theme_constant_override("separation", 14)
     panel.add_child(row)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     labels.add_theme_constant_override("separation", 6)
     var title_label := Label.new()
     title_label.text = _t("settings.target_fps")
-    title_label.add_theme_font_size_override("font_size", 20)
+    title_label.add_theme_font_size_override("font_size", 18)
     title_label.add_theme_color_override("font_color", color_text)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = _t("settings.target_fps_desc")
-    sub.add_theme_font_size_override("font_size", 16)
+    sub.add_theme_font_size_override("font_size", 14)
     sub.add_theme_color_override("font_color", color_muted)
     labels.add_child(sub)
     row.add_child(labels)
 
     var fps_select := OptionButton.new()
-    fps_select.custom_minimum_size = Vector2(170, 54)
+    fps_select.custom_minimum_size = Vector2(150, 48)
     var options := [60, 80, 90, 120, 144]
     var selected_index := 0
     var draft_target_fps := _settings_draft_int("target_fps", target_fps)
@@ -2470,7 +2482,7 @@ func _settings_fps_row() -> Control:
 
 func _language_select() -> OptionButton:
     var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(360, 58)
+    select.custom_minimum_size = Vector2(300, 48)
     var selected_index := 0
     var draft_language := _normalize_language_mode(_settings_draft_string("language", language_mode))
     for i in range(LANGUAGE_MODES.size()):
@@ -2487,7 +2499,7 @@ func _language_select() -> OptionButton:
 
 func _style_select() -> OptionButton:
     var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(360, 58)
+    select.custom_minimum_size = Vector2(300, 48)
     var selected_index := 0
     var draft_style := _normalize_style_mode(_settings_draft_string("style", style_mode))
     for i in range(STYLE_MODES.size()):
@@ -2504,7 +2516,7 @@ func _style_select() -> OptionButton:
 
 func _upscale_select() -> OptionButton:
     var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(360, 58)
+    select.custom_minimum_size = Vector2(300, 48)
     var options := [
         {"label": "Smooth", "value": "smooth"},
         {"label": "Linear", "value": "linear"},
@@ -2525,7 +2537,7 @@ func _upscale_select() -> OptionButton:
 
 func _surface_mode_select() -> OptionButton:
     var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(360, 58)
+    select.custom_minimum_size = Vector2(300, 48)
     var options := [
         {"label": "Game Native", "value": RENDER_SURFACE_MODE_GAME},
         {"label": "Display Fit", "value": RENDER_SURFACE_MODE_DISPLAY},
@@ -2545,7 +2557,7 @@ func _surface_mode_select() -> OptionButton:
 
 func _plugin_load_mode_select() -> OptionButton:
     var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(360, 58)
+    select.custom_minimum_size = Vector2(300, 48)
     var options := [
         {"label": _t("settings.plugin_load.core"), "value": "krkrsdl3"},
         {"label": _t("settings.plugin_load.all"), "value": "aether_all"},
@@ -2565,7 +2577,7 @@ func _plugin_load_mode_select() -> OptionButton:
 
 func _diagnostic_profile_select() -> OptionButton:
     var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(360, 58)
+    select.custom_minimum_size = Vector2(300, 48)
     var selected_index := 0
     var draft_value := _settings_draft_string("diagnostic_profile", diagnostic_profile)
     for value in DIAGNOSTIC_PROFILES:
@@ -2581,7 +2593,7 @@ func _diagnostic_profile_select() -> OptionButton:
 
 func _debug_overlay_select() -> OptionButton:
     var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(360, 58)
+    select.custom_minimum_size = Vector2(300, 48)
     var selected_index := 0
     var draft_value := _settings_draft_string("debug_overlay_mode", debug_overlay_mode)
     for value in DEBUG_OVERLAY_MODES:
@@ -2603,8 +2615,8 @@ func _segment_button(text: String, selected: bool) -> Button:
     button.toggle_mode = true
     button.button_pressed = selected
     button.focus_mode = Control.FOCUS_ALL
-    button.custom_minimum_size = Vector2(230, 56)
-    button.add_theme_font_size_override("font_size", 18)
+    button.custom_minimum_size = Vector2(180, 48)
+    button.add_theme_font_size_override("font_size", 16)
     button.add_theme_color_override("font_color", color_text)
     var selected_style := _panel_style(8, color_accent_dim, color_accent, 1)
     var selected_hover_style := _panel_style(8, color_accent_dim.lightened(0.06), color_accent_soft, 1)
@@ -3924,7 +3936,7 @@ func _game_card(game: Dictionary) -> Button:
 
     var labels := VBoxContainer.new()
     labels.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    labels.add_theme_constant_override("separation", 6)
+    labels.add_theme_constant_override("separation", 4)
     text_margin.add_child(labels)
 
     var title := Label.new()
