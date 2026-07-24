@@ -4225,34 +4225,50 @@ func _show_detail(game: Dictionary) -> void:
         child.queue_free()
 
     var window_size := get_viewport_rect().size
-    var content := Control.new()
-    var detail_content_height := 1120.0 if _can_configure_launch_file(game) else 960.0
-    var detail_right_width := maxf(760.0, window_size.x - 500.0)
-    content.custom_minimum_size = Vector2(
-        maxf(1280.0, window_size.x),
-        maxf(detail_content_height, window_size.y)
-    )
-    content.mouse_filter = Control.MOUSE_FILTER_PASS
+    var compact := window_size.x < 820.0
+    var content := MarginContainer.new()
+    content.custom_minimum_size = Vector2(maxf(360.0, window_size.x), 0)
+    content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    content.add_theme_constant_override("margin_left", 24 if compact else 48)
+    content.add_theme_constant_override("margin_top", 22)
+    content.add_theme_constant_override("margin_right", 24 if compact else 48)
+    content.add_theme_constant_override("margin_bottom", 42)
     detail_scroll.add_child(content)
 
+    var page := VBoxContainer.new()
+    page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    page.add_theme_constant_override("separation", 26)
+    content.add_child(page)
+
+    var top := HBoxContainer.new()
+    top.add_theme_constant_override("separation", 14)
+    page.add_child(top)
+
     var back := _icon_button(ICON_HOME)
-    back.position = Vector2(36, 34)
+    back.custom_minimum_size = Vector2(52, 52)
+    back.tooltip_text = _t("home.subtitle")
     back.pressed.connect(_show_home)
-    content.add_child(back)
+    top.add_child(back)
 
     var eyebrow := Label.new()
     eyebrow.text = _t("detail.eyebrow")
-    eyebrow.position = Vector2(116, 44)
-    eyebrow.size = Vector2(360, 30)
-    eyebrow.add_theme_font_size_override("font_size", 17)
-    eyebrow.add_theme_color_override("font_color", color_accent_soft)
-    content.add_child(eyebrow)
+    eyebrow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    eyebrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    eyebrow.add_theme_font_size_override("font_size", 18)
+    eyebrow.add_theme_color_override("font_color", color_muted)
+    top.add_child(eyebrow)
+
+    var body: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
+    body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    body.add_theme_constant_override("separation", 32)
+    page.add_child(body)
 
     var cover := PanelContainer.new()
-    cover.position = Vector2(62, 126)
-    cover.size = Vector2(340, 476)
+    cover.custom_minimum_size = Vector2(246, 344) if compact else Vector2(304, 426)
+    cover.size_flags_horizontal = Control.SIZE_SHRINK_CENTER if compact else Control.SIZE_SHRINK_BEGIN
+    cover.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
     cover.add_theme_stylebox_override("panel", _panel_style(8, color_card_alt, color_line, 1))
-    content.add_child(cover)
+    body.add_child(cover)
     var cover_texture := _load_cover_texture(game)
     if cover_texture != null:
         var image := TextureRect.new()
@@ -4264,32 +4280,32 @@ func _show_detail(game: Dictionary) -> void:
         var icon := _centered_icon(ICON_GAMEPAD, Vector2(70, 70), color_accent)
         cover.add_child(icon)
 
+    var information := VBoxContainer.new()
+    information.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    information.add_theme_constant_override("separation", 18)
+    body.add_child(information)
+
     var title := Label.new()
     title.text = _game_display_title(game)
-    title.position = Vector2(440, 124)
-    title.size = Vector2(detail_right_width, 72)
+    title.custom_minimum_size = Vector2(0, 78)
     title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
     title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    title.add_theme_font_size_override("font_size", 36)
+    title.max_lines_visible = 2
+    title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+    title.add_theme_font_size_override("font_size", 32)
     title.add_theme_color_override("font_color", color_text)
-    content.add_child(title)
+    information.add_child(title)
 
     var subtitle := Label.new()
     subtitle.text = _t("detail.runtime_profile", [_game_type_label(String(game.get("type", "Directory")))])
-    subtitle.position = Vector2(444, 194)
-    subtitle.size = Vector2(detail_right_width - 4.0, 28)
-    subtitle.add_theme_font_size_override("font_size", 17)
+    subtitle.add_theme_font_size_override("font_size", 15)
     subtitle.add_theme_color_override("font_color", color_muted)
-    content.add_child(subtitle)
+    information.add_child(subtitle)
 
-    var info_panel := PanelContainer.new()
-    info_panel.position = Vector2(440, 246)
-    info_panel.size = Vector2(detail_right_width, 286)
-    info_panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
-    content.add_child(info_panel)
     var info := VBoxContainer.new()
-    info.add_theme_constant_override("separation", 12)
-    info_panel.add_child(info)
+    info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    info.add_theme_constant_override("separation", 14)
+    information.add_child(info)
     info.add_child(_detail_line(ICON_PAGE, String(game.get("path", ""))))
     info.add_child(_detail_line(ICON_REFRESH, _t("detail.last_played", [_last_played_label(game)])))
     info.add_child(_detail_line(ICON_PERFORMANCE, _t("detail.played", [_format_play_duration(int(game.get("playDurationSeconds", 0)))])))
@@ -4300,35 +4316,44 @@ func _show_detail(game: Dictionary) -> void:
     ))
 
     var start := _pill_button(_t("detail.launch"), ICON_PLAY)
-    start.position = Vector2(440, info_panel.position.y + info_panel.size.y + 28.0)
-    start.size = Vector2(detail_right_width, 70)
+    start.custom_minimum_size = Vector2(0, 60)
+    start.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     start.button_down.connect(func(): _android_input_debug_log("detail launch button_down"))
     start.button_up.connect(func(): _android_input_debug_log("detail launch button_up"))
     start.pressed.connect(func(): _android_input_debug_log("detail launch pressed"))
     start.pressed.connect(_start_selected_game)
-    content.add_child(start)
+    information.add_child(start)
 
-    var tools := VBoxContainer.new()
-    tools.position = Vector2(440, start.position.y + start.size.y + 32.0)
-    tools.size = Vector2(detail_right_width, 390)
+    var tools: BoxContainer = VBoxContainer.new() if compact or _can_configure_launch_file(game) else HBoxContainer.new()
+    tools.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     tools.add_theme_constant_override("separation", 10)
-    content.add_child(tools)
+    information.add_child(tools)
     if _can_configure_launch_file(game):
-        tools.add_child(_detail_action(
+        var set_launch := _detail_action(
             ICON_PLAY,
             _t("detail.set_launch_file"),
             func(): _set_launch_file_for_selected()
-        ))
+        )
+        set_launch.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        tools.add_child(set_launch)
         if not GameLaunchEntry.configured_relative_path(game).is_empty():
-            tools.add_child(_detail_action(
+            var reset_launch := _detail_action(
                 ICON_REFRESH,
                 _t("detail.reset_launch_file"),
                 func(): _reset_launch_file_for_selected()
-            ))
-    tools.add_child(_detail_action(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected()))
-    tools.add_child(_detail_action(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game()))
+            )
+            reset_launch.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+            tools.add_child(reset_launch)
+    var set_cover := _detail_action(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected())
+    set_cover.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    tools.add_child(set_cover)
+    var rename := _detail_action(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game())
+    rename.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    tools.add_child(rename)
     var remove_label := "detail.delete_builtin" if builtin_demo.is_game(game) else "detail.remove"
-    tools.add_child(_detail_action(ICON_DELETE, _t(remove_label), func(): _confirm_remove_selected()))
+    var remove := _detail_action(ICON_DELETE, _t(remove_label), func(): _confirm_remove_selected(), true)
+    remove.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    tools.add_child(remove)
 
 func _detail_line(icon_path: String, text: String) -> HBoxContainer:
     var row := HBoxContainer.new()
@@ -4343,7 +4368,7 @@ func _detail_line(icon_path: String, text: String) -> HBoxContainer:
     row.add_child(label)
     return row
 
-func _detail_action(icon_path: String, text: String, callback: Callable = Callable()) -> Button:
+func _detail_action(icon_path: String, text: String, callback: Callable = Callable(), destructive: bool = false) -> Button:
     var button := Button.new()
     button.text = text
     button.icon = _load_ui_icon(icon_path)
@@ -4356,12 +4381,18 @@ func _detail_action(icon_path: String, text: String, callback: Callable = Callab
     button.add_theme_constant_override("icon_max_width", 26)
     button.add_theme_constant_override("h_separation", 14)
     button.add_theme_font_size_override("font_size", 20)
-    button.add_theme_color_override("font_color", color_text)
+    var foreground := color_danger if destructive else color_text
+    button.add_theme_color_override("font_color", foreground)
+    button.add_theme_color_override("icon_normal_color", foreground)
+    button.add_theme_color_override("icon_hover_color", foreground)
+    button.add_theme_color_override("icon_pressed_color", foreground)
+    var hover_border := color_danger if destructive else color_accent
+    var pressed_fill := Color(color_danger.r, color_danger.g, color_danger.b, 0.14) if destructive else color_accent_dim
     _apply_button_style(
         button,
         _panel_style(8, color_card, color_line, 1),
-        _panel_style(8, color_card_hover, color_accent, 1),
-        _panel_style(8, color_accent_dim, color_accent, 1)
+        _panel_style(8, color_card_hover, hover_border, 1),
+        _panel_style(8, pressed_fill, hover_border, 1)
     )
     if callback.is_valid():
         button.pressed.connect(callback)
