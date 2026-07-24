@@ -38,6 +38,7 @@ const GameLaunchEntry = preload("res://scripts/game_launch_entry.gd")
 const VideoSubtitles = preload("res://scripts/video_subtitles.gd")
 const AetherDesignTokens = preload("res://scripts/ui/aether_design_tokens.gd")
 const AetherMotion = preload("res://scripts/ui/aether_motion.gd")
+const AetherWidgets = preload("res://scripts/ui/aether_widgets.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -1132,6 +1133,7 @@ var ui_icon_cache := {}
 var cover_texture_cache := {}
 var ui_tokens = AetherDesignTokens.new()
 var ui_motion = AetherMotion.new()
+var ui_widgets = AetherWidgets.new(ui_tokens, ui_motion)
 
 var player = null
 var builtin_demo = BuiltinDemo.new()
@@ -2081,31 +2083,12 @@ func _sync_shell_route(route: String) -> void:
 func _apply_shell_nav_state(button: Button, selected: bool) -> void:
     if button == null:
         return
-    var foreground: Color = ui_tokens.accent if selected else ui_tokens.text_secondary
-    button.add_theme_color_override("font_color", foreground)
-    button.add_theme_color_override("icon_normal_color", foreground)
-    button.add_theme_color_override("icon_hover_color", ui_tokens.text_primary)
-    button.add_theme_color_override("icon_pressed_color", ui_tokens.accent)
-    _apply_button_style(
-        button,
-        ui_tokens.button_style(ui_tokens.accent_fill if selected else Color.TRANSPARENT),
-        ui_tokens.button_style(ui_tokens.surface_hover),
-        ui_tokens.button_style(ui_tokens.accent_fill),
-    )
+    ui_widgets.navigation_button(button, selected)
 
 func _apply_shell_compact_state(button: Button, selected: bool) -> void:
     if button == null:
         return
-    var foreground: Color = ui_tokens.accent if selected else ui_tokens.text_secondary
-    button.add_theme_color_override("icon_normal_color", foreground)
-    button.add_theme_color_override("icon_hover_color", ui_tokens.text_primary)
-    button.add_theme_color_override("icon_pressed_color", ui_tokens.accent)
-    _apply_button_style(
-        button,
-        ui_tokens.button_style(ui_tokens.accent_fill if selected else Color.TRANSPARENT),
-        ui_tokens.button_style(ui_tokens.surface_hover),
-        ui_tokens.button_style(ui_tokens.accent_fill),
-    )
+    ui_widgets.toolbar_button(button, selected)
 
 func _layout_shell(window_size: Vector2) -> void:
     if shell_content == null or shell_sidebar == null or shell_compact_header == null:
@@ -2657,13 +2640,7 @@ func _build_home_view() -> void:
     home_primary_button.add_theme_constant_override("icon_max_width", 20)
     home_primary_button.add_theme_constant_override("h_separation", 8)
     home_primary_button.add_theme_font_size_override("font_size", 16)
-    home_primary_button.add_theme_color_override("font_color", Color.WHITE)
-    _apply_button_style(
-        home_primary_button,
-        ui_tokens.button_style(ui_tokens.accent),
-        ui_tokens.button_style(ui_tokens.accent.lightened(0.06)),
-        ui_tokens.button_style(ui_tokens.accent.darkened(0.10))
-    )
+    ui_widgets.primary_button(home_primary_button)
     home_primary_button.pressed.connect(_on_refresh_or_import)
     home_actions.add_child(home_primary_button)
 
@@ -2876,13 +2853,7 @@ func _rebuild_settings_view() -> void:
     advanced_disclosure.custom_minimum_size = Vector2(0, 52)
     advanced_disclosure.add_theme_constant_override("icon_max_width", 18)
     advanced_disclosure.add_theme_font_size_override("font_size", 15)
-    advanced_disclosure.add_theme_color_override("font_color", ui_tokens.text_primary)
-    _apply_button_style(
-        advanced_disclosure,
-        ui_tokens.button_style(Color.TRANSPARENT),
-        ui_tokens.button_style(ui_tokens.surface_hover),
-        ui_tokens.button_style(ui_tokens.accent_fill)
-    )
+    ui_widgets.disclosure_button(advanced_disclosure)
     advanced_disclosure.pressed.connect(func():
         advanced_tool_expanded = not advanced_tool_expanded
         call_deferred("_rebuild_settings_view")
@@ -3717,16 +3688,9 @@ func _pill_button(text: String, icon_path: String = "") -> Button:
     button.clip_contents = true
     button.focus_mode = Control.FOCUS_ALL
     button.add_theme_font_size_override("font_size", 18)
-    button.add_theme_color_override("font_color", Color.WHITE)
     if not icon_path.is_empty():
         _attach_pill_button_content(button, text, icon_path)
-    _apply_button_style(
-        button,
-        _panel_style(8, color_accent, color_accent, 0),
-        _panel_style(8, color_accent.lightened(0.06), color_accent.lightened(0.08), 0),
-        _panel_style(8, color_accent.darkened(0.10), color_accent.darkened(0.10), 0),
-        _pill_disabled_style(8)
-    )
+    ui_widgets.primary_button(button)
     return button
 
 func _attach_pill_button_content(button: Button, text: String, icon_path: String) -> void:
@@ -4102,7 +4066,7 @@ func _language_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _select_language_mode(String(select.get_item_metadata(index)))
     )
-    return select
+    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
 
 func _style_select() -> OptionButton:
     var select := OptionButton.new()
@@ -4119,7 +4083,7 @@ func _style_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _select_style_mode(String(select.get_item_metadata(index)))
     )
-    return select
+    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
 
 func _upscale_select() -> OptionButton:
     var select := OptionButton.new()
@@ -4140,7 +4104,7 @@ func _upscale_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _select_upscale_algorithm(String(select.get_item_metadata(index)))
     )
-    return select
+    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
 
 func _surface_mode_select() -> OptionButton:
     var select := OptionButton.new()
@@ -4160,7 +4124,7 @@ func _surface_mode_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _select_surface_mode(String(select.get_item_metadata(index)))
     )
-    return select
+    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
 
 func _plugin_load_mode_select() -> OptionButton:
     var select := OptionButton.new()
@@ -4180,7 +4144,7 @@ func _plugin_load_mode_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _select_plugin_load_mode(String(select.get_item_metadata(index)))
     )
-    return select
+    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
 
 func _diagnostic_profile_select() -> OptionButton:
     var select := OptionButton.new()
@@ -4196,7 +4160,7 @@ func _diagnostic_profile_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _set_settings_draft_value("diagnostic_profile", String(select.get_item_metadata(index)))
     )
-    return select
+    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
 
 func _debug_overlay_select() -> OptionButton:
     var select := OptionButton.new()
@@ -4212,7 +4176,7 @@ func _debug_overlay_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _set_settings_draft_value("debug_overlay_mode", String(select.get_item_metadata(index)))
     )
-    return select
+    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
 
 func _segment_button(text: String, selected: bool) -> Button:
     var button := Button.new()
@@ -4680,14 +4644,7 @@ func _detail_action(icon_path: String, text: String, callback: Callable = Callab
     button.add_theme_color_override("icon_normal_color", foreground)
     button.add_theme_color_override("icon_hover_color", foreground)
     button.add_theme_color_override("icon_pressed_color", foreground)
-    var hover_border: Color = ui_tokens.danger if destructive else ui_tokens.accent
-    var pressed_fill: Color = Color(ui_tokens.danger.r, ui_tokens.danger.g, ui_tokens.danger.b, 0.14) if destructive else ui_tokens.accent_fill
-    _apply_button_style(
-        button,
-        ui_tokens.button_style(Color.TRANSPARENT, ui_tokens.separator),
-        ui_tokens.button_style(ui_tokens.surface_hover, hover_border),
-        ui_tokens.button_style(pressed_fill, hover_border)
-    )
+    ui_widgets.secondary_button(button, destructive)
     if callback.is_valid():
         button.pressed.connect(callback)
     return button
@@ -5273,6 +5230,7 @@ func _rename_selected_game() -> void:
     var input := LineEdit.new()
     input.text = _game_display_title(selected_game)
     input.custom_minimum_size = Vector2(0, 50)
+    ui_widgets.line_edit(input)
     box.add_child(input)
     var save := _pill_button(_t("settings.save"))
     save.pressed.connect(func():
