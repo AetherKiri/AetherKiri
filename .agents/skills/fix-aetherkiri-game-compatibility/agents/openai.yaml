@@ -1,0 +1,4 @@
+interface:
+  display_name: "AetherKiri Game Compatibility Fix"
+  short_description: "Diagnose, implement, validate, and record game fixes"
+  default_prompt: "Use $fix-aetherkiri-game-compatibility to diagnose and complete this AetherKiri game compatibility fix end to end."
