@@ -15,6 +15,8 @@ const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
 const DiagnosticLocalization = preload("res://scripts/diagnostic_localization.gd")
 const DebugConsole = preload("res://scripts/debug_console.gd")
 const BuiltinDemo = preload("res://scripts/builtin_demo.gd")
+const AetherDesignTokens = preload("res://scripts/ui/aether_design_tokens.gd")
+const AetherMotion = preload("res://scripts/ui/aether_motion.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -718,6 +720,8 @@ var opaque_frame_shader: Shader
 var shown_system_alerts := {}
 var ui_icon_cache := {}
 var cover_texture_cache := {}
+var ui_tokens = AetherDesignTokens.new()
+var ui_motion = AetherMotion.new()
 
 var player = null
 var builtin_demo = BuiltinDemo.new()
@@ -862,6 +866,7 @@ func _normalize_style_mode(value: String) -> String:
 
 func _apply_style_mode(update_theme: bool = true) -> void:
     style_mode = _normalize_style_mode(style_mode)
+    ui_tokens.configure(style_mode)
     if style_mode == STYLE_CLASSIC:
         color_bg = Color(0.961, 0.961, 0.973, 1.0)
         color_game_bg = Color(0, 0, 0, 1)
@@ -2229,6 +2234,7 @@ func _apply_button_style(button: Button, normal: StyleBox, hover: StyleBox, pres
     button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
     button.add_theme_color_override("font_focus_color", button.get_theme_color("font_color"))
     button.add_theme_color_override("font_disabled_color", _disabled_text_color())
+    ui_motion.bind_pressable(button)
 
 func _disabled_text_color() -> Color:
     return Color(1, 1, 1, 0.72) if style_mode == STYLE_DARK else Color(color_text.r, color_text.g, color_text.b, 0.56)
@@ -3012,6 +3018,7 @@ func _modal_dialog(preferred_size: Vector2, dim_alpha: float = 0.52) -> PanelCon
     dialog.size = dialog_size
     dialog.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     modal_layer.add_child(dialog)
+    ui_motion.modal_in(dim, dialog)
     return dialog
 
 func _show_import_guide() -> void:
@@ -3925,6 +3932,7 @@ func _game_card(game: Dictionary) -> Button:
     _set_game_card_border(button, border, false)
     frame.add_child(border)
     button.add_to_group("game_card_buttons")
+    ui_motion.bind_pressable(button)
     button.set_meta("card_border_path", button.get_path_to(border))
     button.mouse_entered.connect(func(): _set_game_card_border(button, border, true))
     button.mouse_exited.connect(func():
