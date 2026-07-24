@@ -39,6 +39,7 @@ const VideoSubtitles = preload("res://scripts/video_subtitles.gd")
 const AetherDesignTokens = preload("res://scripts/ui/aether_design_tokens.gd")
 const AetherMotion = preload("res://scripts/ui/aether_motion.gd")
 const AetherWidgets = preload("res://scripts/ui/aether_widgets.gd")
+const AetherSegmentedControl = preload("res://scripts/ui/aether_segmented_control.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -4178,41 +4179,19 @@ func _debug_overlay_select() -> OptionButton:
     )
     return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
 
-func _segment_button(text: String, selected: bool) -> Button:
-    var button := Button.new()
-    button.text = text
-    button.alignment = HORIZONTAL_ALIGNMENT_CENTER
-    button.clip_text = true
-    button.toggle_mode = true
-    button.button_pressed = selected
-    button.focus_mode = Control.FOCUS_ALL
-    button.custom_minimum_size = Vector2(138, 48)
-    button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    button.add_theme_font_size_override("font_size", 15)
-    button.add_theme_color_override("font_color", ui_tokens.text_primary)
-    var selected_style := ui_tokens.button_style(ui_tokens.accent_fill, ui_tokens.accent)
-    var selected_hover_style := ui_tokens.button_style(ui_tokens.accent_fill.lightened(0.04), ui_tokens.accent)
-    var normal_style := ui_tokens.button_style(ui_tokens.surface_raised, ui_tokens.separator)
-    var normal_hover_style := ui_tokens.button_style(ui_tokens.surface_hover, ui_tokens.accent)
-    _apply_button_style(
-        button,
-        selected_style if selected else normal_style,
-        selected_hover_style if selected else normal_hover_style,
-        selected_style
-    )
-    return button
-
-func _backend_segment() -> HBoxContainer:
-    var row := HBoxContainer.new()
-    row.add_theme_constant_override("separation", 8)
+func _backend_segment() -> Control:
     var draft_backend := _normalize_backend_name(_settings_draft_string("backend", selected_backend))
-    var native := _segment_button("Godot Native", draft_backend != "Debug CPU")
-    native.pressed.connect(func(): _select_backend("Godot Native"))
-    row.add_child(native)
-    var cpu := _segment_button("Debug CPU", draft_backend == "Debug CPU")
-    cpu.pressed.connect(func(): _select_backend("Debug CPU"))
-    row.add_child(cpu)
-    return row
+    var segment = AetherSegmentedControl.new()
+    segment.setup(
+        ui_tokens,
+        ui_motion,
+        PackedStringArray(["Godot Native", "Debug CPU"]),
+        1 if draft_backend == "Debug CPU" else 0
+    )
+    segment.item_selected.connect(func(index: int):
+        _select_backend("Debug CPU" if index == 1 else "Godot Native")
+    )
+    return segment
 
 func _on_setting_toggle(key: String, value: bool) -> void:
     if key == "fps_limit":
@@ -4240,7 +4219,6 @@ func _select_backend(value: String) -> void:
     if index < 0:
         return
     _set_settings_draft_value("backend", BACKENDS[index])
-    call_deferred("_rebuild_settings_view")
 
 func _select_upscale_algorithm(value: String) -> void:
     if not value in ["smooth", "nearest", "linear"]:
