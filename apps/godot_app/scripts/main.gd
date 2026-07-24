@@ -1126,7 +1126,6 @@ var active_game_path := ""
 var active_game_started_msec := 0
 var shell_scroll_drag_states := {}
 var shell_scroll_remainders := {}
-var rounded_card_shader: Shader
 var opaque_frame_shader: Shader
 var shown_system_alerts := {}
 var ui_icon_cache := {}
@@ -1292,8 +1291,6 @@ const BLACK_FRAME_VISIBLE_MIN := 8
 const INITIAL_WINDOW_SIZE := Vector2i(2240, 1260)
 const DEFAULT_UI_DPI_SCALE := 1.35
 const TOUCH_MOUSE_SUPPRESS_MS := 700
-const TOP_ICON_BUTTON_SIZE := Vector2(60, 60)
-const TOP_ACTION_BUTTON_SIZE := Vector2(138, 60)
 const PILL_ICON_SIZE := Vector2(24, 24)
 const PILL_ICON_VISUAL_OFFSET_Y := 2.0
 const SETTINGS_ACTION_BUTTON_SIZE := Vector2(150, 54)
@@ -2074,13 +2071,8 @@ func _shell_compact_button(icon_path: String, tooltip: String, callback: Callabl
 
 func _sync_shell_route(route: String) -> void:
     shell_route = route
-    var title := _t("nav.library")
-    if route == "settings":
-        title = _t("settings.title")
-    elif route == "detail":
-        title = _t("detail.eyebrow")
     if shell_route_label != null:
-        shell_route_label.text = title
+        shell_route_label.text = "AetherKiri"
     _apply_shell_nav_state(shell_library_button, route == "library")
     _apply_shell_nav_state(shell_settings_button, route == "settings")
     _apply_shell_compact_state(shell_compact_library_button, route == "library")
@@ -3439,49 +3431,6 @@ func _focus_outline(radius: int = 8) -> StyleBoxFlat:
     style.expand_margin_bottom = 3
     return style
 
-func _rounded_card_material(rect_size: Vector2 = HOME_CARD_SIZE, radius: float = 8.0) -> ShaderMaterial:
-    if rounded_card_shader == null:
-        rounded_card_shader = Shader.new()
-        rounded_card_shader.code = """
-shader_type canvas_item;
-uniform float radius = 8.0;
-uniform vec2 rect_size = vec2(272.0, 368.0);
-void fragment() {
-    vec4 color = texture(TEXTURE, UV);
-    vec2 p = UV * rect_size;
-    vec2 half_size = rect_size * 0.5;
-    vec2 q = abs(p - half_size) - (half_size - vec2(radius));
-    float d = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
-    color.a *= 1.0 - smoothstep(0.0, 1.5, d);
-    COLOR = color;
-}
-"""
-    var material := ShaderMaterial.new()
-    material.shader = rounded_card_shader
-    material.set_shader_parameter("radius", radius)
-    material.set_shader_parameter("rect_size", rect_size)
-    return material
-
-func _game_card_border_style(active: bool) -> StyleBoxFlat:
-    var style := StyleBoxFlat.new()
-    style.bg_color = Color(0, 0, 0, 0)
-    style.draw_center = false
-    style.border_color = color_accent if active else color_line
-    var width := 3 if active else 1
-    style.border_width_left = width
-    style.border_width_top = width
-    style.border_width_right = width
-    style.border_width_bottom = width
-    style.corner_radius_top_left = 8
-    style.corner_radius_top_right = 8
-    style.corner_radius_bottom_left = 8
-    style.corner_radius_bottom_right = 8
-    return style
-
-func _set_game_card_border(button: Button, border: PanelContainer, active: bool) -> void:
-    border.add_theme_stylebox_override("panel", _game_card_border_style(active))
-    button.set_meta("card_border_active", active)
-
 func _load_ui_icon(icon_path: String):
     if icon_path.is_empty():
         return null
@@ -3623,7 +3572,6 @@ func _update_shell_scroll_drag(key: int, position: Vector2, relative: Vector2) -
     var drag_delta := delta.y if was_dragging else pending_y
     _scroll_container_by(scroll, -drag_delta * SHELL_SCROLL_DRAG_SPEED)
     _cancel_shell_scroll_press(state)
-    _sync_game_card_hover_states(false)
     return true
 
 func _finish_shell_scroll_drag(key: int) -> bool:
@@ -3631,7 +3579,6 @@ func _finish_shell_scroll_drag(key: int) -> bool:
     var dragging := bool(state.get("dragging", false))
     if dragging:
         _cancel_shell_scroll_press(state)
-        _sync_game_card_hover_states(false)
     shell_scroll_drag_states.erase(key)
     return dragging
 
@@ -3640,7 +3587,6 @@ func _reset_shell_scroll_drag() -> void:
         var state: Dictionary = shell_scroll_drag_states.get(key, {})
         _cancel_shell_scroll_press(state)
     shell_scroll_drag_states.clear()
-    _sync_game_card_hover_states(false)
 
 func _cancel_shell_scroll_press(state: Dictionary) -> void:
     get_viewport().gui_release_focus()
@@ -3835,33 +3781,6 @@ func _sync_pill_button_content_state(button: Button) -> void:
     var icon := button.get_node_or_null(icon_path) as TextureRect
     if icon != null:
         icon.modulate = tint
-
-func _icon_button(icon_path: String) -> Button:
-    var button := Button.new()
-    button.text = ""
-    button.alignment = HORIZONTAL_ALIGNMENT_CENTER
-    button.clip_contents = true
-    button.focus_mode = Control.FOCUS_ALL
-    button.custom_minimum_size = TOP_ICON_BUTTON_SIZE
-    button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    button.add_theme_color_override("font_color", color_text)
-    button.add_theme_color_override("font_hover_color", color_text)
-    button.add_theme_color_override("font_pressed_color", color_text)
-    button.add_theme_color_override("font_focus_color", color_text)
-    _apply_button_style(
-        button,
-        _panel_style(8, color_card_alt, color_line, 1),
-        _panel_style(8, color_card_hover, color_accent, 1),
-        _panel_style(8, color_accent_dim, color_accent, 1)
-    )
-
-    var center := CenterContainer.new()
-    center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    center.set_anchors_preset(Control.PRESET_FULL_RECT)
-    button.add_child(center)
-    center.add_child(_icon_rect(icon_path, Vector2(28, 28), color_text))
-    return button
 
 func _section_title(text: String, icon_path: String) -> HBoxContainer:
     var row := HBoxContainer.new()
@@ -4329,14 +4248,6 @@ func _backend_segment() -> HBoxContainer:
     var cpu := _segment_button("Debug CPU", draft_backend == "Debug CPU")
     cpu.pressed.connect(func(): _select_backend("Debug CPU"))
     row.add_child(cpu)
-    return row
-
-func _theme_segment() -> HBoxContainer:
-    var row := HBoxContainer.new()
-    row.add_theme_constant_override("separation", 8)
-    row.add_child(_segment_button(_t("language.system"), true))
-    row.add_child(_segment_button("Dark", false))
-    row.add_child(_segment_button("Light", false))
     return row
 
 func _on_setting_toggle(key: String, value: bool) -> void:
@@ -6808,24 +6719,6 @@ func _mask_corner_pixel(image: Image, x: int, y: int, center: Vector2, radius: f
     color.a *= coverage
     image.set_pixel(x, y, color)
 
-func _sync_game_card_hover_states(allow_hover: bool = true) -> void:
-    if home_view == null or not home_view.visible:
-        return
-    var mouse_pos := get_global_mouse_position()
-    for node in get_tree().get_nodes_in_group("game_card_buttons"):
-        if not is_instance_valid(node) or not (node is Button):
-            continue
-        var button := node as Button
-        if not button.is_visible_in_tree():
-            continue
-        var border_path = button.get_meta("card_border_path", NodePath(""))
-        var border := button.get_node_or_null(border_path) as PanelContainer
-        if border == null:
-            continue
-        var active := allow_hover and (button.has_focus() or button.get_global_rect().has_point(mouse_pos))
-        if bool(button.get_meta("card_border_active", false)) != active:
-            _set_game_card_border(button, border, active)
-
 func _start_selected_game() -> void:
     _android_input_debug_log("_start_selected_game selected=%s" % str(selected_game))
     if not _require_legal_documents_for_media():
@@ -8400,7 +8293,6 @@ func _process(delta: float) -> void:
     _fit_full_rects()
     _process_iap(delta)
     _update_advanced_tool_timeouts()
-    _sync_game_card_hover_states()
     _flush_log_view_if_needed(delta)
     if video_playing:
         _process_video_playback(delta)
@@ -9818,7 +9710,6 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
         if pan_scroll == null:
             return false
         _scroll_container_by(pan_scroll, pan.delta.y * SHELL_SCROLL_TOUCHPAD_SPEED)
-        _sync_game_card_hover_states(false)
         return true
 
     if event is InputEventMouseButton:
