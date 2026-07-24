@@ -1618,11 +1618,13 @@ func _layout_home_view(window_size: Vector2) -> void:
         home_actions.anchor_top = 0.0
         home_actions.anchor_right = 0.0 if compact else 1.0
         home_actions.anchor_bottom = 0.0
-        home_actions.offset_left = margin if compact else -372.0 - margin
+        home_actions.offset_left = margin if compact else -252.0 - margin
         home_actions.offset_top = 84.0 if compact else 18.0
         home_actions.offset_right = window_size.x - margin if compact else -margin
         home_actions.offset_bottom = 128.0 if compact else 70.0
         home_actions.move_to_front()
+    if home_primary_button != null:
+        home_primary_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_SHRINK_END
 
 func _build_home_view() -> void:
     home_view = Control.new()
@@ -1724,7 +1726,7 @@ func _build_home_view() -> void:
     home_actions.anchor_top = 0.0
     home_actions.anchor_right = 1.0
     home_actions.anchor_bottom = 0.0
-    home_actions.offset_left = -408.0
+    home_actions.offset_left = -288.0
     home_actions.offset_top = 18.0
     home_actions.offset_right = -36.0
     home_actions.offset_bottom = 70.0
@@ -1733,7 +1735,7 @@ func _build_home_view() -> void:
 
     home_primary_button = _pill_button(_t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"), ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD)
     home_primary_button.custom_minimum_size = Vector2(132, 52)
-    home_primary_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    home_primary_button.size_flags_horizontal = Control.SIZE_SHRINK_END
     home_primary_button.pressed.connect(_on_refresh_or_import)
     home_actions.add_child(home_primary_button)
 
