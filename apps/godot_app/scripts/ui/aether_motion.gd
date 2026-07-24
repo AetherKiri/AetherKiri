@@ -61,6 +61,21 @@ func modal_in(scrim: CanvasItem, dialog: Control) -> void:
         tween.tween_property(dialog, "scale", Vector2.ONE, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     tween.chain().tween_callback(func(): _finish(dialog))
 
+func reveal(control: Control, delay: float = 0.0) -> void:
+    if control == null or not is_instance_valid(control):
+        return
+    _stop(control)
+    _update_pivot(control)
+    control.modulate.a = 0.0
+    control.scale = Vector2.ONE if reduced_motion else Vector2(0.985, 0.985)
+    var tween := control.create_tween().set_parallel(true)
+    active_tweens[control.get_instance_id()] = tween
+    var duration := 0.12 if reduced_motion else 0.22
+    tween.tween_property(control, "modulate:a", 1.0, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    if not reduced_motion:
+        tween.tween_property(control, "scale", Vector2.ONE, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    tween.chain().tween_callback(func(): _finish(control))
+
 func _press_in(control: Control) -> void:
     if reduced_motion:
         return

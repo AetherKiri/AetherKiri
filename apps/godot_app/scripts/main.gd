@@ -89,6 +89,7 @@ const UI_TEXT := {
         "home.status": "Godot Native  /  视觉小说库",
         "nav.library": "游戏库",
         "home.empty_title": "尚未添加任何游戏",
+        "home.game_count": "%d 个游戏",
         "home.refresh": "刷新",
         "home.import": "导入",
         "home.import_guide": "导入指南",
@@ -270,6 +271,7 @@ const UI_TEXT := {
         "home.status": "Godot Native  /  視覺小說庫",
         "nav.library": "遊戲庫",
         "home.empty_title": "尚未加入任何遊戲",
+        "home.game_count": "%d 個遊戲",
         "home.refresh": "重新整理",
         "home.import": "匯入",
         "home.import_guide": "匯入指南",
@@ -451,6 +453,7 @@ const UI_TEXT := {
         "home.status": "Godot Native  /  Visual Novel Library",
         "nav.library": "Library",
         "home.empty_title": "No games added yet",
+        "home.game_count": "%d games",
         "home.refresh": "Refresh",
         "home.import": "Import",
         "home.import_guide": "Import Guide",
@@ -632,6 +635,7 @@ const UI_TEXT := {
         "home.status": "Godot Native  /  ビジュアルノベルライブラリ",
         "nav.library": "ライブラリ",
         "home.empty_title": "ゲームはまだ追加されていません",
+        "home.game_count": "%d 本のゲーム",
         "home.refresh": "更新",
         "home.import": "インポート",
         "home.import_guide": "インポートガイド",
@@ -813,6 +817,7 @@ const UI_TEXT := {
         "home.status": "Godot Native  /  비주얼 노벨 라이브러리",
         "nav.library": "라이브러리",
         "home.empty_title": "아직 추가된 게임이 없습니다",
+        "home.game_count": "게임 %d개",
         "home.refresh": "새로고침",
         "home.import": "가져오기",
         "home.import_guide": "가져오기 가이드",
@@ -1055,9 +1060,9 @@ var video_empty_state: Control
 var home_game_tab: Button
 var home_video_tab: Button
 var home_actions: HBoxContainer
-var home_header: PanelContainer
-var home_brand: Control
-var home_status: HBoxContainer
+var home_page_margin: MarginContainer
+var home_header_box: BoxContainer
+var home_title_label: Label
 var empty_state: Control
 var save_button: Button
 var bg_rect: ColorRect
@@ -1068,6 +1073,7 @@ var video_empty_title_label: Label
 var video_empty_help_label: Label
 var home_primary_button: Button
 var home_guide_button: Button
+var home_cards_animated_once := false
 var loading_title_label: Label
 var selected_game := {}
 var known_games: Array[Dictionary] = []
@@ -2582,23 +2588,21 @@ func _set_game_background(active: bool) -> void:
     RenderingServer.set_default_clear_color(color)
 
 func _layout_home_view(window_size: Vector2) -> void:
-    if game_scroll == null or game_list == null:
+    if home_page_margin == null or home_header_box == null or game_list == null:
         return
-    var compact := window_size.x < 760.0
-    var margin := 24.0 if compact else 36.0
-    var header_height := 142.0 if compact else 88.0
-    var list_top := header_height + 20.0
-    var bottom_reserved := 28.0
-    var list_width := maxf(260.0, window_size.x - margin * 2.0)
-    var list_height := maxf(160.0, window_size.y - list_top - bottom_reserved)
-    game_scroll.position = Vector2(margin, list_top)
-    game_scroll.size = Vector2(list_width, list_height)
-    game_scroll.custom_minimum_size = game_scroll.size
-    if video_scroll != null:
-        video_scroll.position = Vector2(margin, list_top)
-        video_scroll.size = Vector2(list_width, list_height)
-        video_scroll.custom_minimum_size = video_scroll.size
-    var gap := 16.0
+    var compact := window_size.x < 700.0
+    var margin: float = ui_tokens.PAGE_GUTTER_COMPACT if compact else ui_tokens.PAGE_GUTTER
+    home_page_margin.add_theme_constant_override("margin_left", int(margin))
+    home_page_margin.add_theme_constant_override("margin_top", 20 if compact else 28)
+    home_page_margin.add_theme_constant_override("margin_right", int(margin))
+    home_page_margin.add_theme_constant_override("margin_bottom", 20 if compact else 28)
+    home_header_box.vertical = compact
+    home_header_box.custom_minimum_size = Vector2(0, 112 if compact else 72)
+    home_header_box.add_theme_constant_override("separation", 12 if compact else 24)
+    home_actions.alignment = BoxContainer.ALIGNMENT_BEGIN if compact else BoxContainer.ALIGNMENT_END
+    home_primary_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_SHRINK_END
+    var list_width := maxf(252.0, window_size.x - margin * 2.0)
+    var gap := 18.0
     var columns := maxi(1, int(floor((list_width + gap) / (HOME_CARD_SIZE.x + gap))))
     game_list.columns = columns
     game_list.custom_minimum_size = Vector2(list_width, 0)
@@ -2606,78 +2610,76 @@ func _layout_home_view(window_size: Vector2) -> void:
         video_list.columns = columns
         video_list.custom_minimum_size = Vector2(list_width, 0)
 
-    if home_header != null:
-        home_header.offset_bottom = header_height
-    if home_brand != null:
-        home_brand.position = Vector2(margin, 14.0)
-        home_brand.size = Vector2(maxf(220.0, window_size.x - margin * 2.0), 60.0)
-    if home_status != null:
-        home_status.visible = not compact
-    if home_actions != null:
-        home_actions.anchor_left = 0.0 if compact else 1.0
-        home_actions.anchor_top = 0.0
-        home_actions.anchor_right = 0.0 if compact else 1.0
-        home_actions.anchor_bottom = 0.0
-        home_actions.offset_left = margin if compact else -252.0 - margin
-        home_actions.offset_top = 84.0 if compact else 18.0
-        home_actions.offset_right = window_size.x - margin if compact else -margin
-        home_actions.offset_bottom = 128.0 if compact else 70.0
-        home_actions.move_to_front()
-    if home_primary_button != null:
-        home_primary_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_SHRINK_END
-
 func _build_home_view() -> void:
     home_view = Control.new()
+    home_view.name = "LibraryView"
     home_view.set_anchors_preset(Control.PRESET_FULL_RECT)
     shell_content.add_child(home_view)
 
-    home_header = PanelContainer.new()
-    home_header.anchor_right = 1.0
-    home_header.offset_bottom = 88.0
-    home_header.add_theme_stylebox_override("panel", _panel_style(0, color_card, color_line, 1))
-    home_view.add_child(home_header)
+    home_page_margin = MarginContainer.new()
+    home_page_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+    home_view.add_child(home_page_margin)
 
-    var header_content := Control.new()
-    header_content.set_anchors_preset(Control.PRESET_FULL_RECT)
-    home_header.add_child(header_content)
+    var page := VBoxContainer.new()
+    page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    page.add_theme_constant_override("separation", 20)
+    home_page_margin.add_child(page)
 
-    home_brand = Control.new()
-    home_brand.position = Vector2(36, 14)
-    home_brand.size = Vector2(600, 60)
-    header_content.add_child(home_brand)
+    home_header_box = BoxContainer.new()
+    home_header_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    page.add_child(home_header_box)
 
-    var title := Label.new()
-    title.text = "AetherKiri"
-    title.position = Vector2(0, 0)
-    title.add_theme_font_size_override("font_size", 25)
-    title.add_theme_color_override("font_color", color_text)
-    home_brand.add_child(title)
+    var title_stack := VBoxContainer.new()
+    title_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    title_stack.add_theme_constant_override("separation", 3)
+    home_header_box.add_child(title_stack)
+
+    home_title_label = Label.new()
+    home_title_label.text = _t("nav.library")
+    home_title_label.add_theme_font_size_override("font_size", 31)
+    home_title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
+    title_stack.add_child(home_title_label)
 
     home_subtitle_label = Label.new()
-    home_subtitle_label.text = _t("home.subtitle")
-    home_subtitle_label.position = Vector2(0, 32)
+    home_subtitle_label.text = _t("home.game_count", [0])
     home_subtitle_label.add_theme_font_size_override("font_size", 14)
-    home_subtitle_label.add_theme_color_override("font_color", color_muted)
-    home_brand.add_child(home_subtitle_label)
+    home_subtitle_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    title_stack.add_child(home_subtitle_label)
 
-    home_status = HBoxContainer.new()
-    home_status.position = Vector2(250, 8)
-    home_status.size = Vector2(300, 28)
-    home_status.add_theme_constant_override("separation", 9)
-    home_brand.add_child(home_status)
+    home_actions = HBoxContainer.new()
+    home_actions.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    home_actions.add_theme_constant_override("separation", 8)
+    home_header_box.add_child(home_actions)
 
-    var ready_dot := ColorRect.new()
-    ready_dot.color = color_success
-    ready_dot.custom_minimum_size = Vector2(8, 8)
-    ready_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    ready_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    home_status.add_child(ready_dot)
+    home_primary_button = Button.new()
+    home_primary_button.text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
+    home_primary_button.icon = _load_ui_icon(ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD)
+    home_primary_button.expand_icon = true
+    home_primary_button.custom_minimum_size = Vector2(126, ui_tokens.CONTROL_HEIGHT)
+    home_primary_button.add_theme_constant_override("icon_max_width", 20)
+    home_primary_button.add_theme_constant_override("h_separation", 8)
+    home_primary_button.add_theme_font_size_override("font_size", 16)
+    home_primary_button.add_theme_color_override("font_color", Color.WHITE)
+    _apply_button_style(
+        home_primary_button,
+        ui_tokens.button_style(ui_tokens.accent),
+        ui_tokens.button_style(ui_tokens.accent.lightened(0.06)),
+        ui_tokens.button_style(ui_tokens.accent.darkened(0.10))
+    )
+    home_primary_button.pressed.connect(_on_refresh_or_import)
+    home_actions.add_child(home_primary_button)
+
+    home_guide_button = _shell_compact_button(ICON_HELP, _t("home.import_guide"), _show_import_guide)
+    home_guide_button.custom_minimum_size = Vector2(ui_tokens.CONTROL_HEIGHT, ui_tokens.CONTROL_HEIGHT)
+    _apply_shell_compact_state(home_guide_button, false)
+    home_actions.add_child(home_guide_button)
 
     var tabs := HBoxContainer.new()
-    tabs.position = Vector2(42, 122)
-    tabs.size = Vector2(548, 42)
+    tabs.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    tabs.custom_minimum_size = Vector2(548, 42)
     tabs.add_theme_constant_override("separation", 8)
-    home_view.add_child(tabs)
+    page.add_child(tabs)
     home_game_tab = _library_tab_button(_t("home.status"))
     home_game_tab.custom_minimum_size = Vector2(284, 42)
     home_game_tab.pressed.connect(func(): _select_home_library("game"))
@@ -2687,40 +2689,28 @@ func _build_home_view() -> void:
     home_video_tab.pressed.connect(func(): _select_home_library("video"))
     tabs.add_child(home_video_tab)
 
-    var settings_button := _icon_button(ICON_SETTINGS)
-    settings_button.name = "SettingsButton"
-    settings_button.anchor_left = 1.0
-    settings_button.anchor_right = 1.0
-    settings_button.position = Vector2(-100, 42)
-    settings_button.pressed.connect(_show_settings)
-    home_view.add_child(settings_button)
-
-    home_status_label = Label.new()
-    home_status_label.text = _t("home.status")
-    home_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    home_status_label.add_theme_font_size_override("font_size", 13)
-    home_status_label.add_theme_color_override("font_color", color_muted)
-    home_status.add_child(home_status_label)
+    var library_body := Control.new()
+    library_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    library_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    page.add_child(library_body)
 
     game_scroll = ScrollContainer.new()
-    game_scroll.position = Vector2(36, 108)
-    game_scroll.size = Vector2(390, 500)
+    game_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
     _configure_shell_scroll(game_scroll)
-    home_view.add_child(game_scroll)
+    library_body.add_child(game_scroll)
 
     game_list = GridContainer.new()
     game_list.columns = 1
     game_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    game_list.add_theme_constant_override("h_separation", 16)
-    game_list.add_theme_constant_override("v_separation", 16)
+    game_list.add_theme_constant_override("h_separation", 18)
+    game_list.add_theme_constant_override("v_separation", 18)
     game_scroll.add_child(game_list)
 
     video_scroll = ScrollContainer.new()
-    video_scroll.position = Vector2(32, 164)
-    video_scroll.size = Vector2(390, 500)
+    video_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
     _configure_shell_scroll(video_scroll)
     video_scroll.visible = false
-    home_view.add_child(video_scroll)
+    library_body.add_child(video_scroll)
 
     video_list = GridContainer.new()
     video_list.columns = 1
@@ -2729,92 +2719,66 @@ func _build_home_view() -> void:
     video_list.add_theme_constant_override("v_separation", 18)
     video_scroll.add_child(video_list)
 
-    empty_state = VBoxContainer.new()
-    empty_state.anchor_left = 0.5
-    empty_state.anchor_top = 0.5
-    empty_state.anchor_right = 0.5
-    empty_state.anchor_bottom = 0.5
-    empty_state.position = Vector2(-260, -120)
-    empty_state.size = Vector2(520, 240)
-    empty_state.add_theme_constant_override("separation", 14)
-    home_view.add_child(empty_state)
+    empty_state = CenterContainer.new()
+    empty_state.set_anchors_preset(Control.PRESET_FULL_RECT)
+    empty_state.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    library_body.add_child(empty_state)
 
-    var empty_icon := _centered_icon(ICON_LIBRARY, Vector2(48, 48), color_muted)
+    var empty_box := VBoxContainer.new()
+    empty_box.custom_minimum_size = Vector2(280, 0)
+    empty_box.add_theme_constant_override("separation", 12)
+    empty_state.add_child(empty_box)
+
+    var empty_icon := _centered_icon(ICON_LIBRARY, Vector2(44, 44), ui_tokens.text_tertiary)
     empty_icon.custom_minimum_size = Vector2(0, 56)
-    empty_state.add_child(empty_icon)
+    empty_box.add_child(empty_icon)
 
     empty_title_label = Label.new()
     empty_title_label.text = _t("home.empty_title")
     empty_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    empty_title_label.add_theme_font_size_override("font_size", 23)
-    empty_title_label.add_theme_color_override("font_color", color_text)
-    empty_state.add_child(empty_title_label)
+    empty_title_label.add_theme_font_size_override("font_size", 21)
+    empty_title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
+    empty_box.add_child(empty_title_label)
 
     empty_help_label = Label.new()
     empty_help_label.text = _empty_help_text()
+    empty_help_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     empty_help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    empty_help_label.add_theme_font_size_override("font_size", 15)
-    empty_help_label.add_theme_color_override("font_color", color_muted)
-    empty_state.add_child(empty_help_label)
+    empty_help_label.add_theme_font_size_override("font_size", 14)
+    empty_help_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    empty_box.add_child(empty_help_label)
 
-    video_empty_state = VBoxContainer.new()
-    video_empty_state.anchor_left = 0.5
-    video_empty_state.anchor_top = 0.5
-    video_empty_state.anchor_right = 0.5
-    video_empty_state.anchor_bottom = 0.5
-    video_empty_state.position = Vector2(-300, -120)
-    video_empty_state.size = Vector2(600, 250)
-    video_empty_state.add_theme_constant_override("separation", 18)
+    video_empty_state = CenterContainer.new()
+    video_empty_state.set_anchors_preset(Control.PRESET_FULL_RECT)
+    video_empty_state.mouse_filter = Control.MOUSE_FILTER_IGNORE
     video_empty_state.visible = false
-    home_view.add_child(video_empty_state)
+    library_body.add_child(video_empty_state)
+    var video_empty_box := VBoxContainer.new()
+    video_empty_box.custom_minimum_size = Vector2(300, 0)
+    video_empty_box.add_theme_constant_override("separation", 14)
+    video_empty_state.add_child(video_empty_box)
     var video_empty_icon := _centered_icon(ICON_VIDEO, Vector2(64, 64), color_accent)
     video_empty_icon.custom_minimum_size = Vector2(0, 72)
-    video_empty_state.add_child(video_empty_icon)
+    video_empty_box.add_child(video_empty_icon)
     video_empty_title_label = Label.new()
     video_empty_title_label.text = _t("video.empty_title")
     video_empty_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     video_empty_title_label.add_theme_font_size_override("font_size", 28)
     video_empty_title_label.add_theme_color_override("font_color", color_text)
-    video_empty_state.add_child(video_empty_title_label)
+    video_empty_box.add_child(video_empty_title_label)
     video_empty_help_label = Label.new()
     video_empty_help_label.text = _video_empty_help_text()
     video_empty_help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     video_empty_help_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     video_empty_help_label.add_theme_font_size_override("font_size", 18)
     video_empty_help_label.add_theme_color_override("font_color", color_muted)
-    video_empty_state.add_child(video_empty_help_label)
-
-    home_actions = HBoxContainer.new()
-    home_actions.anchor_left = 1.0
-    home_actions.anchor_top = 0.0
-    home_actions.anchor_right = 1.0
-    home_actions.anchor_bottom = 0.0
-    home_actions.offset_left = -288.0
-    home_actions.offset_top = 18.0
-    home_actions.offset_right = -36.0
-    home_actions.offset_bottom = 70.0
-    home_actions.add_theme_constant_override("separation", 8)
-    header_content.add_child(home_actions)
-
-    home_primary_button = _pill_button(_t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"), ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD)
-    home_primary_button.custom_minimum_size = Vector2(132, 52)
-    home_primary_button.size_flags_horizontal = Control.SIZE_SHRINK_END
-    home_primary_button.pressed.connect(_on_refresh_or_import)
-    home_actions.add_child(home_primary_button)
-
-    home_guide_button = _icon_button(ICON_HELP)
-    home_guide_button.custom_minimum_size = Vector2(52, 52)
-    home_guide_button.tooltip_text = _t("home.import_guide")
-    home_guide_button.pressed.connect(_show_import_guide)
-    home_actions.add_child(home_guide_button)
+    video_empty_box.add_child(video_empty_help_label)
     _apply_home_library_visibility()
+    call_deferred("_animate_home_header")
 
-    var settings_button := _icon_button(ICON_SETTINGS)
-    settings_button.name = "SettingsButton"
-    settings_button.custom_minimum_size = Vector2(52, 52)
-    settings_button.tooltip_text = _t("settings.title")
-    settings_button.pressed.connect(_show_settings)
-    home_actions.add_child(settings_button)
+func _animate_home_header() -> void:
+    if home_header_box != null and is_instance_valid(home_header_box):
+        ui_motion.enter(home_header_box, Vector2(0, 6))
 
 func _build_settings_view() -> void:
     settings_view = ScrollContainer.new()
@@ -4371,8 +4335,10 @@ func _refresh_language_texts() -> void:
     if is_instance_valid(shell_compact_settings_button):
         shell_compact_settings_button.tooltip_text = _t("settings.title")
     _sync_shell_route(shell_route)
+    if is_instance_valid(home_title_label):
+        home_title_label.text = _t("nav.library")
     if is_instance_valid(home_subtitle_label):
-        home_subtitle_label.text = _t("home.subtitle")
+        home_subtitle_label.text = _t("home.game_count", [known_games.size()])
     if is_instance_valid(home_game_tab):
         _set_pill_button_text(home_game_tab, _t("home.status"))
     if is_instance_valid(home_video_tab):
@@ -4389,9 +4355,9 @@ func _refresh_language_texts() -> void:
         var primary_text := _t("video.refresh") if OS.get_name() == "iOS" else _t("video.import")
         if home_library_mode == "game":
             primary_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
-        _set_pill_button_text(home_primary_button, primary_text)
+        home_primary_button.text = primary_text
     if is_instance_valid(home_guide_button):
-        _set_pill_button_text(home_guide_button, _t("video.guide") if home_library_mode == "video" else _t("home.import_guide"))
+        home_guide_button.tooltip_text = _t("video.guide") if home_library_mode == "video" else _t("home.import_guide")
     if is_instance_valid(loading_title_label):
         loading_title_label.text = _t("loading.title")
 
@@ -5590,10 +5556,18 @@ func _refresh_games() -> void:
     if library_changed:
         _sync_web_user_fs("builtin_demo_reconciled")
     known_games = _sorted_games(known_games)
+    if is_instance_valid(home_subtitle_label):
+        home_subtitle_label.text = _t("home.game_count", [known_games.size()])
     for child in game_list.get_children():
         child.queue_free()
-    for game in known_games:
-        game_list.add_child(_game_card(game))
+    var animate_cards := not home_cards_animated_once
+    for index in range(known_games.size()):
+        var card := _game_card(known_games[index])
+        game_list.add_child(card)
+        if animate_cards:
+            ui_motion.reveal(card, minf(float(index) * 0.025, 0.15))
+    if animate_cards and not known_games.is_empty():
+        home_cards_animated_once = true
     _apply_home_library_visibility()
 
 func _refresh_videos() -> void:
