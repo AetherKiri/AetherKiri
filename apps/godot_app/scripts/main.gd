@@ -2818,7 +2818,7 @@ func _rebuild_settings_view() -> void:
     save_button = _pill_button(_t("settings.save"), ICON_SAVE)
     save_button.disabled = not dirty_settings
     _sync_pill_button_content_state(save_button)
-    save_button.custom_minimum_size = Vector2(120, 50)
+    save_button.custom_minimum_size = Vector2(112, 44)
     save_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     save_button.pressed.connect(_save_settings_draft)
     top.add_child(save_button)
@@ -3602,26 +3602,8 @@ func _scroll_container_by(scroll: ScrollContainer, delta: float) -> void:
     else:
         shell_scroll_remainders[scroll_key] = next - float(snapped)
 
-func _apply_button_style(button: Button, normal: StyleBox, hover: StyleBox, pressed: StyleBox, disabled: StyleBox = null) -> void:
-    button.add_theme_stylebox_override("normal", normal)
-    button.add_theme_stylebox_override("hover", hover)
-    button.add_theme_stylebox_override("pressed", pressed)
-    button.add_theme_stylebox_override("focus", _focus_outline(8))
-    if disabled != null:
-        button.add_theme_stylebox_override("disabled", disabled)
-    button.add_theme_color_override("font_hover_color", button.get_theme_color("font_color"))
-    button.add_theme_color_override("font_pressed_color", button.get_theme_color("font_color"))
-    button.add_theme_color_override("font_focus_color", button.get_theme_color("font_color"))
-    button.add_theme_color_override("font_disabled_color", _disabled_text_color())
-    ui_motion.bind_pressable(button)
-
 func _disabled_text_color() -> Color:
-    return Color(1, 1, 1, 0.72) if style_mode == STYLE_DARK else Color(color_text.r, color_text.g, color_text.b, 0.56)
-
-func _pill_disabled_style(radius: int) -> StyleBoxFlat:
-    if style_mode == STYLE_DARK:
-        return _panel_style(radius, Color(0.245, 0.247, 0.263, 1), Color(0.245, 0.247, 0.263, 1), 0)
-    return _panel_style(radius, Color(0.820, 0.820, 0.835, 1), Color(0.820, 0.820, 0.835, 1), 0)
+    return ui_tokens.text_tertiary
 
 func _library_tab_button(text: String) -> Button:
     var button := Button.new()
@@ -3693,7 +3675,7 @@ func _pill_button(text: String, icon_path: String = "") -> Button:
     button.clip_text = true
     button.clip_contents = true
     button.focus_mode = Control.FOCUS_ALL
-    button.add_theme_font_size_override("font_size", 18)
+    button.add_theme_font_size_override("font_size", 15)
     if not icon_path.is_empty():
         _attach_pill_button_content(button, text, icon_path)
     ui_widgets.primary_button(button)
@@ -3726,7 +3708,7 @@ func _attach_pill_button_content(button: Button, text: String, icon_path: String
     label.mouse_filter = Control.MOUSE_FILTER_IGNORE
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    label.add_theme_font_size_override("font_size", 18)
+    label.add_theme_font_size_override("font_size", 15)
     label.add_theme_color_override("font_color", Color.WHITE)
     row.add_child(label)
 
@@ -4021,6 +4003,7 @@ func _settings_fps_row() -> Control:
     fps_select.item_selected.connect(func(index: int):
         _set_settings_draft_value("target_fps", int(fps_select.get_item_metadata(index)))
     )
+    ui_widgets.option_button(fps_select, _load_ui_icon(ICON_CHEVRON_DOWN))
     row.add_child(fps_select)
     return margin
 
@@ -4604,14 +4587,7 @@ func _danger_button(text: String) -> Button:
     button.text = text
     button.focus_mode = Control.FOCUS_ALL
     button.custom_minimum_size = Vector2(132, 52)
-    button.add_theme_font_size_override("font_size", 18)
-    button.add_theme_color_override("font_color", Color.WHITE)
-    _apply_button_style(
-        button,
-        _panel_style(8, color_danger, color_danger, 0),
-        _panel_style(8, color_danger.lightened(0.06), color_danger.lightened(0.06), 0),
-        _panel_style(8, color_danger.darkened(0.10), color_danger.darkened(0.10), 0)
-    )
+    ui_widgets.destructive_button(button)
     return button
 
 func _modal_dialog(preferred_size: Vector2, dim_alpha: float = 0.52) -> PanelContainer:
@@ -5079,10 +5055,8 @@ func _offer_scrape_after_add(game: Dictionary) -> void:
     box.add_child(buttons)
     var no := Button.new()
     no.text = _t("dialog.later")
-    no.flat = true
     no.custom_minimum_size = Vector2(112, 52)
-    no.add_theme_font_size_override("font_size", 17)
-    no.add_theme_color_override("font_color", color_text)
+    ui_widgets.secondary_button(no)
     no.pressed.connect(_dismiss_modal)
     buttons.add_child(no)
     var yes := _pill_button(_t("dialog.open_detail"))
@@ -5266,7 +5240,9 @@ func _show_import_picker() -> void:
     box.add_child(dir_button)
     var cancel := Button.new()
     cancel.text = _t("dialog.cancel")
-    cancel.flat = true
+    cancel.custom_minimum_size = Vector2(108, 44)
+    cancel.size_flags_horizontal = Control.SIZE_SHRINK_END
+    ui_widgets.secondary_button(cancel)
     cancel.pressed.connect(_dismiss_modal)
     box.add_child(cancel)
 
@@ -5524,7 +5500,9 @@ func _show_web_import_picker() -> void:
         box.add_child(button)
     var cancel := Button.new()
     cancel.text = _t("dialog.cancel")
-    cancel.flat = true
+    cancel.custom_minimum_size = Vector2(108, 44)
+    cancel.size_flags_horizontal = Control.SIZE_SHRINK_END
+    ui_widgets.secondary_button(cancel)
     cancel.pressed.connect(_dismiss_modal)
     box.add_child(cancel)
 
@@ -6493,7 +6471,8 @@ func _game_card(game: Dictionary) -> Button:
     var badge := PanelContainer.new()
     badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
     badge.position = Vector2(10, 10)
-    var badge_style := ui_tokens.panel(Color(0.030, 0.032, 0.038, 0.78), 6, Color(1, 1, 1, 0.12), 1)
+    var badge_fill := Color(ui_tokens.glass_material.r, ui_tokens.glass_material.g, ui_tokens.glass_material.b, 0.92)
+    var badge_style := ui_tokens.panel(badge_fill, 6, ui_tokens.highlight, 1)
     badge_style.content_margin_left = 8
     badge_style.content_margin_top = 4
     badge_style.content_margin_right = 8
@@ -6516,10 +6495,12 @@ func _game_card(game: Dictionary) -> Button:
     play_chip.offset_top = -44.0
     play_chip.offset_right = -10.0
     play_chip.offset_bottom = -10.0
-    play_chip.modulate.a = 0.72
-    var play_style := ui_tokens.panel(Color(0.030, 0.032, 0.038, 0.82), 8, Color(1, 1, 1, 0.14), 1)
+    var play_style := ui_tokens.panel(ui_tokens.glass_material, 8, ui_tokens.highlight, 1)
+    play_style.shadow_color = ui_tokens.shadow
+    play_style.shadow_size = 8
+    play_style.shadow_offset = Vector2(0, 3)
     play_chip.add_theme_stylebox_override("panel", play_style)
-    play_chip.add_child(_centered_icon(ICON_PLAY, Vector2(17, 17), Color.WHITE))
+    play_chip.add_child(_centered_icon(ICON_PLAY, Vector2(17, 17), ui_tokens.text_primary))
     cover_host.add_child(play_chip)
 
     var metadata := PanelContainer.new()
@@ -6560,7 +6541,7 @@ func _game_card(game: Dictionary) -> Button:
     sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
 
-    ui_motion.bind_lift(button, play_chip)
+    ui_motion.bind_lift(button, play_chip, 0.0, 1.0)
     return button
 
 func _load_cover_texture(game: Dictionary, target_size: Vector2i = Vector2i.ZERO, radius: int = 0) -> Texture2D:

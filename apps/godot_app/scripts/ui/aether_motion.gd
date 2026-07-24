@@ -29,19 +29,21 @@ func bind_pressable(control: Control) -> void:
                 _press_out(button)
         )
 
-func bind_lift(control: Control, highlight: CanvasItem = null) -> void:
+func bind_lift(control: Control, highlight: CanvasItem = null, rest_alpha: float = 0.0, hover_alpha: float = 1.0) -> void:
     if control == null or control.has_meta("aether_lift_bound"):
         return
     control.set_meta("aether_lift_bound", true)
     control.set_meta("aether_hovered", false)
     _update_pivot(control)
     control.resized.connect(func(): _update_pivot(control))
-    control.mouse_entered.connect(func(): _set_lift_hover(control, highlight, true))
-    control.mouse_exited.connect(func(): _set_lift_hover(control, highlight, false))
-    control.focus_entered.connect(func(): _set_lift_hover(control, highlight, true))
+    if highlight != null:
+        highlight.modulate.a = rest_alpha
+    control.mouse_entered.connect(func(): _set_lift_hover(control, highlight, true, rest_alpha, hover_alpha))
+    control.mouse_exited.connect(func(): _set_lift_hover(control, highlight, false, rest_alpha, hover_alpha))
+    control.focus_entered.connect(func(): _set_lift_hover(control, highlight, true, rest_alpha, hover_alpha))
     control.focus_exited.connect(func():
         if not control.get_global_rect().has_point(control.get_global_mouse_position()):
-            _set_lift_hover(control, highlight, false)
+            _set_lift_hover(control, highlight, false, rest_alpha, hover_alpha)
     )
     if control is BaseButton:
         var button := control as BaseButton
@@ -160,7 +162,7 @@ func _press_out(control: Control) -> void:
         return
     _animate_scale(control, REST_SCALE, PRESS_OUT_DURATION)
 
-func _set_lift_hover(control: Control, highlight: CanvasItem, active: bool) -> void:
+func _set_lift_hover(control: Control, highlight: CanvasItem, active: bool, rest_alpha: float, hover_alpha: float) -> void:
     if control == null or not is_instance_valid(control):
         return
     control.set_meta("aether_hovered", active)
@@ -169,10 +171,10 @@ func _set_lift_hover(control: Control, highlight: CanvasItem, active: bool) -> v
     if highlight == null or not is_instance_valid(highlight):
         return
     if reduced_motion:
-        highlight.modulate.a = 1.0 if active else 0.72
+        highlight.modulate.a = hover_alpha if active else rest_alpha
         return
     var tween := highlight.create_tween()
-    tween.tween_property(highlight, "modulate:a", 1.0 if active else 0.72, 0.16).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    tween.tween_property(highlight, "modulate:a", hover_alpha if active else rest_alpha, 0.16).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
 
 func _animate_scale(control: Control, target: Vector2, duration: float) -> void:
     if control == null or not is_instance_valid(control):
