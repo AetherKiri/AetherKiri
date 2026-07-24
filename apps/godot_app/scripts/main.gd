@@ -3004,6 +3004,7 @@ func _show_detail(game: Dictionary) -> void:
     var available_size := shell_content.size
     if available_size.x <= 0.0 or available_size.y <= 0.0:
         available_size = get_viewport_rect().size
+    available_size.x = maxf(320.0, available_size.x - detail_scroll.get_v_scroll_bar().get_combined_minimum_size().x)
     var compact := available_size.x < 760.0
     var gutter := 20 if compact else 32
 
@@ -3044,80 +3045,132 @@ func _show_detail(game: Dictionary) -> void:
     eyebrow.add_theme_color_override("font_color", ui_tokens.text_secondary)
     top.add_child(eyebrow)
 
-    var body: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
-    body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    body.add_theme_constant_override("separation", 28 if compact else 36)
+    var body := _build_compact_detail(game) if compact else _build_desktop_detail(game)
     page.add_child(body)
 
+    ui_motion.reveal(top)
+    ui_motion.reveal(body, 0.04)
+
+func _build_desktop_detail(game: Dictionary) -> Control:
+    var body := HBoxContainer.new()
+    body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    body.add_theme_constant_override("separation", 32)
+    body.add_child(_detail_cover(game, Vector2(252, 354)))
+
+    var information := VBoxContainer.new()
+    information.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    information.add_theme_constant_override("separation", 14)
+    body.add_child(information)
+    information.add_child(_detail_identity(game, false))
+    information.add_child(_detail_launch_button())
+    information.add_child(_detail_tools())
+    information.add_child(_detail_information_panel(game))
+    information.add_child(_detail_remove_button(game))
+    return body
+
+func _build_compact_detail(game: Dictionary) -> Control:
+    var body := VBoxContainer.new()
+    body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    body.add_theme_constant_override("separation", 14)
+
+    var summary := HBoxContainer.new()
+    summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    summary.add_theme_constant_override("separation", 16)
+    body.add_child(summary)
+    summary.add_child(_detail_cover(game, Vector2(112, 158)))
+
+    var primary := VBoxContainer.new()
+    primary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    primary.add_theme_constant_override("separation", 10)
+    summary.add_child(primary)
+    primary.add_child(_detail_identity(game, true))
+    primary.add_child(_detail_launch_button())
+
+    body.add_child(_detail_tools())
+    body.add_child(_detail_information_panel(game))
+    body.add_child(_detail_remove_button(game))
+    return body
+
+func _detail_cover(game: Dictionary, cover_size: Vector2) -> PanelContainer:
     var cover := PanelContainer.new()
-    cover.custom_minimum_size = Vector2(246, 344) if compact else Vector2(300, 420)
-    cover.size_flags_horizontal = Control.SIZE_SHRINK_CENTER if compact else Control.SIZE_SHRINK_BEGIN
+    cover.clip_contents = true
+    cover.custom_minimum_size = cover_size
+    cover.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
     cover.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-    cover.add_theme_stylebox_override("panel", ui_tokens.material_panel(true))
-    body.add_child(cover)
-    var cover_texture := _load_cover_texture(game)
+    var cover_style := ui_tokens.card_style()
+    cover_style.content_margin_left = 0
+    cover_style.content_margin_top = 0
+    cover_style.content_margin_right = 0
+    cover_style.content_margin_bottom = 0
+    cover.add_theme_stylebox_override("panel", cover_style)
+    var cover_texture := _load_cover_texture(game, Vector2i(int(cover_size.x), int(cover_size.y)), 0)
     if cover_texture != null:
         var image := TextureRect.new()
         image.texture = cover_texture
         image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-        image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+        image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
         cover.add_child(image)
     else:
-        var icon := _centered_icon(ICON_GAMEPAD, Vector2(64, 64), ui_tokens.accent)
+        var icon := _centered_icon(ICON_GAMEPAD, Vector2(48, 48), ui_tokens.accent)
         cover.add_child(icon)
+    return cover
 
-    var information := VBoxContainer.new()
-    information.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    information.add_theme_constant_override("separation", 16)
-    body.add_child(information)
+func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
+    var identity := VBoxContainer.new()
+    identity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    identity.add_theme_constant_override("separation", 6)
 
     var type_label := Label.new()
     type_label.text = _game_type_label(String(game.get("type", "Directory"))).to_upper()
-    type_label.add_theme_font_size_override("font_size", 12)
+    type_label.add_theme_font_size_override("font_size", 11 if compact else 12)
     type_label.add_theme_color_override("font_color", ui_tokens.accent)
-    information.add_child(type_label)
+    identity.add_child(type_label)
 
     var title := Label.new()
     title.text = _game_display_title(game)
-    title.custom_minimum_size = Vector2(0, 72)
+    title.custom_minimum_size = Vector2(0, 64 if compact else 72)
     title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
     title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    title.max_lines_visible = 2
+    title.max_lines_visible = 3 if compact else 2
     title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-    title.add_theme_font_size_override("font_size", 32 if compact else 36)
+    title.add_theme_font_size_override("font_size", 23 if compact else 32)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
-    information.add_child(title)
+    identity.add_child(title)
 
-    var subtitle := Label.new()
-    subtitle.text = _t("detail.runtime_profile", [_game_type_label(String(game.get("type", "Directory")))])
-    subtitle.add_theme_font_size_override("font_size", 14)
-    subtitle.add_theme_color_override("font_color", ui_tokens.text_secondary)
-    information.add_child(subtitle)
+    if not compact:
+        var subtitle := Label.new()
+        subtitle.text = _t("detail.runtime_profile", [_game_type_label(String(game.get("type", "Directory")))])
+        subtitle.add_theme_font_size_override("font_size", 14)
+        subtitle.add_theme_color_override("font_color", ui_tokens.text_secondary)
+        identity.add_child(subtitle)
+    return identity
 
+func _detail_launch_button() -> Button:
     var start := _pill_button(_t("detail.launch"), ICON_PLAY)
-    start.custom_minimum_size = Vector2(0, 56)
+    start.custom_minimum_size = Vector2(0, 52)
     start.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     start.button_down.connect(func(): _android_input_debug_log("detail launch button_down"))
     start.button_up.connect(func(): _android_input_debug_log("detail launch button_up"))
     start.pressed.connect(func(): _android_input_debug_log("detail launch pressed"))
     start.pressed.connect(_start_selected_game)
-    information.add_child(start)
+    return start
 
+func _detail_tools() -> HBoxContainer:
     var tools := HBoxContainer.new()
     tools.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     tools.add_theme_constant_override("separation", 8)
-    information.add_child(tools)
     var set_cover := _detail_action(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected())
     set_cover.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     tools.add_child(set_cover)
     var rename := _detail_action(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game())
     rename.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     tools.add_child(rename)
+    return tools
 
+func _detail_information_panel(game: Dictionary) -> PanelContainer:
     var info_panel := PanelContainer.new()
     info_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     info_panel.add_theme_stylebox_override("panel", ui_tokens.material_panel())
-    information.add_child(info_panel)
     var info := VBoxContainer.new()
     info.add_theme_constant_override("separation", 0)
     info_panel.add_child(info)
@@ -3126,15 +3179,14 @@ func _show_detail(game: Dictionary) -> void:
     info.add_child(_detail_line(ICON_REFRESH, _t("detail.last_played", [_last_played_label(game)])))
     info.add_child(_detail_separator())
     info.add_child(_detail_line(ICON_PERFORMANCE, _t("detail.played", [_format_play_duration(int(game.get("playDurationSeconds", 0)))])))
+    return info_panel
 
+func _detail_remove_button(game: Dictionary) -> Button:
     var remove_label := "detail.delete_builtin" if builtin_demo.is_game(game) else "detail.remove"
     var remove := _detail_action(ICON_DELETE, _t(remove_label), func(): _confirm_remove_selected(), true)
     remove.custom_minimum_size = Vector2(160, 50)
     remove.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-    information.add_child(remove)
-
-    ui_motion.reveal(top)
-    ui_motion.reveal(body, 0.04)
+    return remove
 
 func _detail_line(icon_path: String, text: String) -> HBoxContainer:
     var row := HBoxContainer.new()
