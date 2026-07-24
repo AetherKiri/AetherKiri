@@ -2235,8 +2235,8 @@ func _disabled_text_color() -> Color:
 
 func _pill_disabled_style(radius: int) -> StyleBoxFlat:
     if style_mode == STYLE_DARK:
-        return _panel_style(radius, Color(0.28, 0.30, 0.38, 1), Color(0.28, 0.30, 0.38, 1), 0)
-    return _panel_style(radius, Color(0.78, 0.76, 0.70, 1), Color(0.78, 0.76, 0.70, 1), 0)
+        return _panel_style(radius, Color(0.245, 0.247, 0.263, 1), Color(0.245, 0.247, 0.263, 1), 0)
+    return _panel_style(radius, Color(0.820, 0.820, 0.835, 1), Color(0.820, 0.820, 0.835, 1), 0)
 
 func _pill_button(text: String, icon_path: String = "") -> Button:
     var button := Button.new()
@@ -2245,16 +2245,16 @@ func _pill_button(text: String, icon_path: String = "") -> Button:
     button.clip_text = true
     button.clip_contents = true
     button.focus_mode = Control.FOCUS_ALL
-    button.add_theme_font_size_override("font_size", 20)
+    button.add_theme_font_size_override("font_size", 18)
     button.add_theme_color_override("font_color", Color.WHITE)
     if not icon_path.is_empty():
         _attach_pill_button_content(button, text, icon_path)
     _apply_button_style(
         button,
-        _panel_style(10, color_accent, color_accent, 0),
-        _panel_style(10, color_accent.lightened(0.06), color_accent.lightened(0.08), 0),
-        _panel_style(10, color_accent.darkened(0.10), color_accent.darkened(0.10), 0),
-        _pill_disabled_style(10)
+        _panel_style(8, color_accent, color_accent, 0),
+        _panel_style(8, color_accent.lightened(0.06), color_accent.lightened(0.08), 0),
+        _panel_style(8, color_accent.darkened(0.10), color_accent.darkened(0.10), 0),
+        _pill_disabled_style(8)
     )
     return button
 
@@ -2266,7 +2266,7 @@ func _attach_pill_button_content(button: Button, text: String, icon_path: String
 
     var row := HBoxContainer.new()
     row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    row.add_theme_constant_override("separation", 10)
+    row.add_theme_constant_override("separation", 8)
     center.add_child(row)
 
     var icon_holder := Control.new()
@@ -2285,7 +2285,7 @@ func _attach_pill_button_content(button: Button, text: String, icon_path: String
     label.mouse_filter = Control.MOUSE_FILTER_IGNORE
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    label.add_theme_font_size_override("font_size", 20)
+    label.add_theme_font_size_override("font_size", 18)
     label.add_theme_color_override("font_color", Color.WHITE)
     row.add_child(label)
 
@@ -2965,41 +2965,75 @@ func _detail_action(icon_path: String, text: String, callback: Callable = Callab
         button.pressed.connect(callback)
     return button
 
-func _show_import_guide() -> void:
+func _danger_button(text: String) -> Button:
+    var button := Button.new()
+    button.text = text
+    button.focus_mode = Control.FOCUS_ALL
+    button.custom_minimum_size = Vector2(132, 52)
+    button.add_theme_font_size_override("font_size", 18)
+    button.add_theme_color_override("font_color", Color.WHITE)
+    _apply_button_style(
+        button,
+        _panel_style(8, color_danger, color_danger, 0),
+        _panel_style(8, color_danger.lightened(0.06), color_danger.lightened(0.06), 0),
+        _panel_style(8, color_danger.darkened(0.10), color_danger.darkened(0.10), 0)
+    )
+    return button
+
+func _modal_dialog(preferred_size: Vector2, dim_alpha: float = 0.52) -> PanelContainer:
     modal_layer.visible = true
+    modal_layer.move_to_front()
     for child in modal_layer.get_children():
         child.queue_free()
+
     var dim := ColorRect.new()
-    dim.color = Color(0, 0, 0, 0.55)
+    dim.color = Color(0, 0, 0, dim_alpha)
     dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+    dim.mouse_filter = Control.MOUSE_FILTER_STOP
+    dim.gui_input.connect(func(event: InputEvent):
+        var dismiss: bool = event is InputEventMouseButton and event.pressed
+        dismiss = dismiss or (event is InputEventScreenTouch and event.pressed)
+        if dismiss:
+            modal_layer.visible = false
+    )
     modal_layer.add_child(dim)
 
+    var viewport_size := get_viewport_rect().size
+    var dialog_size := Vector2(
+        minf(preferred_size.x, maxf(320.0, viewport_size.x - 32.0)),
+        minf(preferred_size.y, maxf(220.0, viewport_size.y - 32.0))
+    )
     var dialog := PanelContainer.new()
     dialog.anchor_left = 0.5
     dialog.anchor_top = 0.5
     dialog.anchor_right = 0.5
     dialog.anchor_bottom = 0.5
-    dialog.position = Vector2(-320, -250)
-    dialog.size = Vector2(640, 500)
-    dialog.add_theme_stylebox_override("panel", _panel_style(22, color_card, Color(0, 0, 0, 0.04), 1))
+    dialog.position = -dialog_size * 0.5
+    dialog.size = dialog_size
+    dialog.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     modal_layer.add_child(dialog)
+    return dialog
+
+func _show_import_guide() -> void:
+    var dialog := _modal_dialog(Vector2(640, 440), 0.58)
 
     var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 22)
+    box.add_theme_constant_override("separation", 18)
     dialog.add_child(box)
     var title := Label.new()
     title.text = _t("dialog.import_title")
-    title.add_theme_font_size_override("font_size", 30)
+    title.add_theme_font_size_override("font_size", 26)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var body := Label.new()
     body.text = _t("dialog.import_guide_body")
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    body.add_theme_font_size_override("font_size", 22)
-    body.add_theme_color_override("font_color", color_text)
+    body.add_theme_font_size_override("font_size", 17)
+    body.add_theme_color_override("font_color", color_muted)
     box.add_child(body)
     var ok := _pill_button(_t("dialog.ok"))
-    ok.custom_minimum_size = Vector2(140, 62)
+    ok.custom_minimum_size = Vector2(140, 52)
+    ok.size_flags_horizontal = Control.SIZE_SHRINK_END
     ok.pressed.connect(func(): modal_layer.visible = false)
     box.add_child(ok)
 
@@ -3038,52 +3072,37 @@ func _create_file_dialog(title: String, file_mode: int, filters: PackedStringArr
     return dialog
 
 func _offer_scrape_after_add(game: Dictionary) -> void:
-    modal_layer.visible = true
-    for child in modal_layer.get_children():
-        child.queue_free()
-    var dim := ColorRect.new()
-    dim.color = Color(0, 0, 0, 0.38)
-    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-    modal_layer.add_child(dim)
-    var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.position = Vector2(-280, -150)
-    dialog.size = Vector2(560, 300)
-    dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
-    modal_layer.add_child(dialog)
+    var dialog := _modal_dialog(Vector2(560, 300))
     var box := VBoxContainer.new()
     box.add_theme_constant_override("separation", 18)
     dialog.add_child(box)
     var title := Label.new()
     title.text = _t("dialog.scrape_title")
-    title.add_theme_font_size_override("font_size", 28)
+    title.add_theme_font_size_override("font_size", 24)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var body := Label.new()
     body.text = _t("dialog.scrape_body", [_game_display_title(game)])
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    body.add_theme_font_size_override("font_size", 21)
-    body.add_theme_color_override("font_color", color_text)
+    body.add_theme_font_size_override("font_size", 16)
+    body.add_theme_color_override("font_color", color_muted)
     box.add_child(body)
     var buttons := HBoxContainer.new()
     buttons.add_theme_constant_override("separation", 12)
     buttons.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     buttons.alignment = BoxContainer.ALIGNMENT_END
-    buttons.custom_minimum_size = Vector2(0, 62)
+    buttons.custom_minimum_size = Vector2(0, 52)
     box.add_child(buttons)
     var no := Button.new()
     no.text = _t("dialog.later")
     no.flat = true
-    no.custom_minimum_size = Vector2(112, 62)
-    no.add_theme_font_size_override("font_size", 20)
+    no.custom_minimum_size = Vector2(112, 52)
+    no.add_theme_font_size_override("font_size", 17)
     no.add_theme_color_override("font_color", color_text)
     no.pressed.connect(func(): modal_layer.visible = false)
     buttons.add_child(no)
     var yes := _pill_button(_t("dialog.open_detail"))
-    yes.custom_minimum_size = Vector2(148, 62)
+    yes.custom_minimum_size = Vector2(148, 52)
     yes.pressed.connect(func():
         modal_layer.visible = false
         _show_detail(game)
@@ -3110,33 +3129,18 @@ func _rename_selected_game() -> void:
     var path := String(selected_game.get("path", ""))
     if path.is_empty():
         return
-    modal_layer.visible = true
-    for child in modal_layer.get_children():
-        child.queue_free()
-    var dim := ColorRect.new()
-    dim.color = Color(0, 0, 0, 0.38)
-    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-    modal_layer.add_child(dim)
-    var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.position = Vector2(-280, -150)
-    dialog.size = Vector2(560, 300)
-    dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
-    modal_layer.add_child(dialog)
+    var dialog := _modal_dialog(Vector2(560, 300))
     var box := VBoxContainer.new()
     box.add_theme_constant_override("separation", 18)
     dialog.add_child(box)
     var title := Label.new()
     title.text = _t("dialog.rename")
-    title.add_theme_font_size_override("font_size", 28)
+    title.add_theme_font_size_override("font_size", 24)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var input := LineEdit.new()
     input.text = _game_display_title(selected_game)
-    input.custom_minimum_size = Vector2(460, 52)
+    input.custom_minimum_size = Vector2(0, 50)
     box.add_child(input)
     var save := _pill_button(_t("settings.save"))
     save.pressed.connect(func():
@@ -3153,22 +3157,7 @@ func _confirm_remove_selected() -> void:
     if path.is_empty():
         return
     var deleting_builtin := builtin_demo.is_game(selected_game)
-    modal_layer.visible = true
-    for child in modal_layer.get_children():
-        child.queue_free()
-    var dim := ColorRect.new()
-    dim.color = Color(0, 0, 0, 0.38)
-    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-    modal_layer.add_child(dim)
-    var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.position = Vector2(-280, -140)
-    dialog.size = Vector2(560, 280)
-    dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
-    modal_layer.add_child(dialog)
+    var dialog := _modal_dialog(Vector2(560, 280))
     var box := VBoxContainer.new()
     box.add_theme_constant_override("separation", 18)
     dialog.add_child(box)
@@ -3176,10 +3165,11 @@ func _confirm_remove_selected() -> void:
     var body_key := "dialog.delete_builtin_body" if deleting_builtin else "dialog.remove_body"
     label.text = _t(body_key, [_game_display_title(selected_game)])
     label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    label.add_theme_font_size_override("font_size", 22)
-    label.add_theme_color_override("font_color", color_text)
+    label.add_theme_font_size_override("font_size", 17)
+    label.add_theme_color_override("font_color", color_muted)
     box.add_child(label)
-    var remove := _pill_button(_t("dialog.delete" if deleting_builtin else "dialog.remove"))
+    var remove := _danger_button(_t("dialog.delete" if deleting_builtin else "dialog.remove"))
+    remove.size_flags_horizontal = Control.SIZE_SHRINK_END
     remove.pressed.connect(func():
         modal_layer.visible = false
         _remove_game(path)
@@ -3198,37 +3188,22 @@ func _on_refresh_or_import() -> void:
     _show_import_picker()
 
 func _show_import_picker() -> void:
-    modal_layer.visible = true
-    for child in modal_layer.get_children():
-        child.queue_free()
-    var dim := ColorRect.new()
-    dim.color = Color(0, 0, 0, 0.45)
-    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-    modal_layer.add_child(dim)
-    var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.position = Vector2(-260, -160)
-    dialog.size = Vector2(520, 320)
-    dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
-    modal_layer.add_child(dialog)
+    var dialog := _modal_dialog(Vector2(520, 320))
     var box := VBoxContainer.new()
     box.add_theme_constant_override("separation", 14)
     dialog.add_child(box)
     var title := Label.new()
     title.text = _t("dialog.import_title")
-    title.add_theme_font_size_override("font_size", 28)
+    title.add_theme_font_size_override("font_size", 24)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
-    var dir_button := _pill_button(_t("dialog.select_game_dir"))
+    var dir_button := _detail_action(ICON_LIBRARY, _t("dialog.select_game_dir"))
     dir_button.pressed.connect(func():
         modal_layer.visible = false
         _open_import_dialog(false)
     )
     box.add_child(dir_button)
-    var xp3_button := _pill_button(_t("dialog.select_xp3"))
+    var xp3_button := _detail_action(ICON_PAGE, _t("dialog.select_xp3"))
     xp3_button.pressed.connect(func():
         modal_layer.visible = false
         _open_import_dialog(true)
@@ -3461,33 +3436,18 @@ func _show_web_import_picker() -> void:
         _show_message(_t("message.web_picker_unsupported_long"))
         return
 
-    modal_layer.visible = true
-    for child in modal_layer.get_children():
-        child.queue_free()
-    var dim := ColorRect.new()
-    dim.color = Color(0, 0, 0, 0.45)
-    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-    modal_layer.add_child(dim)
-    var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.position = Vector2(-340, -220)
-    dialog.size = Vector2(680, 440)
-    dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
-    modal_layer.add_child(dialog)
+    var dialog := _modal_dialog(Vector2(680, 440))
     var box := VBoxContainer.new()
     box.add_theme_constant_override("separation", 14)
     dialog.add_child(box)
     var title := Label.new()
     title.text = _t("dialog.import_title")
-    title.add_theme_font_size_override("font_size", 28)
+    title.add_theme_font_size_override("font_size", 24)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
 
     if bool(support.get("directory", false)):
-        var dir_button := _pill_button(_t("dialog.select_local_game_dir"))
+        var dir_button := _detail_action(ICON_LIBRARY, _t("dialog.select_local_game_dir"))
         dir_button.pressed.connect(func():
             modal_layer.visible = false
             _pick_web_local_game("directory")
@@ -3495,7 +3455,7 @@ func _show_web_import_picker() -> void:
         box.add_child(dir_button)
 
     if bool(support.get("archive", false)):
-        var archive_button := _pill_button(_t("dialog.select_xp3"))
+        var archive_button := _detail_action(ICON_PAGE, _t("dialog.select_xp3"))
         archive_button.pressed.connect(func():
             modal_layer.visible = false
             _pick_web_local_game("archive")
@@ -4552,39 +4512,24 @@ func _ensure_android_storage_permission_for_path(path: String) -> bool:
     return false
 
 func _show_android_storage_permission_prompt() -> void:
-    modal_layer.visible = true
-    modal_layer.move_to_front()
-    for child in modal_layer.get_children():
-        child.queue_free()
-    var dim := ColorRect.new()
-    dim.color = Color(0, 0, 0, 0.52)
-    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-    modal_layer.add_child(dim)
-    var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.position = Vector2(-420, -180)
-    dialog.size = Vector2(840, 360)
-    dialog.add_theme_stylebox_override("panel", _panel_style(22, color_card, Color(0, 0, 0, 0.06), 1))
-    modal_layer.add_child(dialog)
+    var dialog := _modal_dialog(Vector2(840, 360), 0.58)
     var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 24)
+    box.add_theme_constant_override("separation", 18)
     dialog.add_child(box)
     var title := Label.new()
     title.text = "AetherKiri"
-    title.add_theme_font_size_override("font_size", 32)
+    title.add_theme_font_size_override("font_size", 26)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var body := Label.new()
     body.text = _t("message.android_storage_permission_required")
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    body.add_theme_font_size_override("font_size", 24)
-    body.add_theme_color_override("font_color", color_text)
+    body.add_theme_font_size_override("font_size", 17)
+    body.add_theme_color_override("font_color", color_muted)
     box.add_child(body)
     var ok := _pill_button(_t("dialog.ok"))
-    ok.custom_minimum_size = Vector2(160, 64)
+    ok.custom_minimum_size = Vector2(160, 52)
+    ok.size_flags_horizontal = Control.SIZE_SHRINK_END
     ok.pressed.connect(func():
         modal_layer.visible = false
         call_deferred("_request_android_storage_permissions")
@@ -6681,6 +6626,12 @@ func _kirikiri_key_modifiers(event: InputEventKey) -> int:
     return modifiers
 
 func _input(event: InputEvent) -> void:
+    if event is InputEventKey:
+        var shell_key := event as InputEventKey
+        if shell_key.pressed and not shell_key.echo and shell_key.keycode == KEY_ESCAPE and modal_layer != null and modal_layer.visible:
+            modal_layer.visible = false
+            get_viewport().set_input_as_handled()
+            return
     # _input runs before Control GUI dispatch. Keep pointers that begin on the
     # diagnostic action out of the game bridge so Button can receive them.
     if debug_console != null and debug_console.routes_pointer(event):
