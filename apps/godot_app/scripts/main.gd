@@ -19,6 +19,7 @@ const AetherDesignTokens = preload("res://scripts/ui/aether_design_tokens.gd")
 const AetherMotion = preload("res://scripts/ui/aether_motion.gd")
 const AetherWidgets = preload("res://scripts/ui/aether_widgets.gd")
 const AetherSegmentedControl = preload("res://scripts/ui/aether_segmented_control.gd")
+const AetherSwitch = preload("res://scripts/ui/aether_switch.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -2581,45 +2582,12 @@ func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: S
     return margin
 
 func _settings_switch(initial: bool, key: String) -> Button:
-    var toggle := Button.new()
-    toggle.text = ""
-    toggle.toggle_mode = true
-    toggle.button_pressed = initial
-    toggle.focus_mode = Control.FOCUS_ALL
-    toggle.custom_minimum_size = Vector2(52, 30)
-    toggle.size_flags_horizontal = Control.SIZE_SHRINK_END
-    toggle.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    toggle.add_theme_stylebox_override("focus", ui_tokens.focus_style(15))
-
-    var knob := PanelContainer.new()
-    knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    knob.size = Vector2(22, 22)
-    var knob_style := ui_tokens.panel(Color.WHITE, 11)
-    knob_style.shadow_color = Color(0, 0, 0, 0.22)
-    knob_style.shadow_size = 4
-    knob_style.shadow_offset = Vector2(0, 2)
-    knob.add_theme_stylebox_override("panel", knob_style)
-    toggle.add_child(knob)
-    _sync_settings_switch(toggle, knob, initial, false)
+    var toggle = AetherSwitch.new()
+    toggle.setup(ui_tokens, ui_motion, initial)
     toggle.toggled.connect(func(value: bool):
-        _sync_settings_switch(toggle, knob, value, true)
         _on_setting_toggle(key, value)
     )
-    ui_motion.bind_pressable(toggle)
     return toggle
-
-func _sync_settings_switch(toggle: Button, knob: PanelContainer, enabled: bool, animate: bool) -> void:
-    var track: Color = ui_tokens.accent if enabled else ui_tokens.surface_hover
-    var hover_track := track.lightened(0.06)
-    toggle.add_theme_stylebox_override("normal", ui_tokens.button_style(track, Color.TRANSPARENT, 15))
-    toggle.add_theme_stylebox_override("hover", ui_tokens.button_style(hover_track, Color.TRANSPARENT, 15))
-    toggle.add_theme_stylebox_override("pressed", ui_tokens.button_style(track.darkened(0.05), Color.TRANSPARENT, 15))
-    var target := Vector2(26, 4) if enabled else Vector2(4, 4)
-    if not animate or ui_motion.reduced_motion:
-        knob.position = target
-        return
-    var tween := knob.create_tween()
-    tween.tween_property(knob, "position", target, 0.18).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
 
 func _settings_value_row(title: String, value: String) -> Control:
     var margin := MarginContainer.new()
