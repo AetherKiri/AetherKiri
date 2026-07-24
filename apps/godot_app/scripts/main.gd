@@ -33,6 +33,8 @@ const ICON_PAGE := UI_ICON_DIR + "page-template.svg"
 const ICON_RENAME := UI_ICON_DIR + "tab-new-24-filled.svg"
 const ICON_PLUGIN := UI_ICON_DIR + "plugin-solid.svg"
 const ICON_BACK := UI_ICON_DIR + "chevron-left.svg"
+const ICON_CHEVRON_RIGHT := UI_ICON_DIR + "chevron-right.svg"
+const ICON_CHEVRON_DOWN := UI_ICON_DIR + "chevron-down.svg"
 const LANG_SYSTEM := "system"
 const LANG_ZH_HANS := "zh_hans"
 const LANG_ZH_HANT := "zh_hant"
@@ -732,6 +734,7 @@ var language_mode := LANG_SYSTEM
 var active_language := LANG_ZH_HANS
 var style_mode := STYLE_DARK
 var dirty_settings := false
+var settings_animate_next := true
 var settings_draft := {}
 var active_game_path := ""
 var active_game_started_msec := 0
@@ -1964,12 +1967,20 @@ func _rebuild_settings_view() -> void:
         settings_view.remove_child(child)
         child.queue_free()
 
+    var available_size := shell_content.size
+    if available_size.x <= 0.0 or available_size.y <= 0.0:
+        available_size = get_viewport_rect().size
+    var compact := available_size.x < 720.0
+    var gutter := 20 if compact else 32
+    var animate_page := settings_animate_next
+    settings_animate_next = false
+
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    margin.add_theme_constant_override("margin_left", 24)
-    margin.add_theme_constant_override("margin_top", 18)
-    margin.add_theme_constant_override("margin_right", 24)
-    margin.add_theme_constant_override("margin_bottom", 36)
+    margin.add_theme_constant_override("margin_left", gutter)
+    margin.add_theme_constant_override("margin_top", 20 if compact else 28)
+    margin.add_theme_constant_override("margin_right", gutter)
+    margin.add_theme_constant_override("margin_bottom", 40)
     settings_view.add_child(margin)
 
     var center := CenterContainer.new()
@@ -1977,92 +1988,95 @@ func _rebuild_settings_view() -> void:
     margin.add_child(center)
 
     var page := VBoxContainer.new()
-    page.custom_minimum_size = Vector2(minf(940.0, maxf(320.0, get_viewport_rect().size.x - 64.0)), 0)
+    page.custom_minimum_size = Vector2(minf(980.0, maxf(320.0, available_size.x - float(gutter * 2))), 0)
     page.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    page.add_theme_constant_override("separation", 20)
+    page.add_theme_constant_override("separation", 24)
     center.add_child(page)
 
     var top := HBoxContainer.new()
-    top.custom_minimum_size = Vector2(0, 68)
+    top.custom_minimum_size = Vector2(0, 72)
     top.add_theme_constant_override("separation", 14)
     page.add_child(top)
 
-    var back := _icon_button(ICON_HOME)
-    back.custom_minimum_size = Vector2(52, 52)
-    back.pressed.connect(_show_home)
-    top.add_child(back)
-
+    var title_stack := VBoxContainer.new()
+    title_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    title_stack.add_theme_constant_override("separation", 2)
+    top.add_child(title_stack)
     var title := Label.new()
     title.text = _t("settings.title")
-    title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-    title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    title.add_theme_font_size_override("font_size", 28)
-    title.add_theme_color_override("font_color", color_text)
-    top.add_child(title)
+    title.add_theme_font_size_override("font_size", 31)
+    title.add_theme_color_override("font_color", ui_tokens.text_primary)
+    title_stack.add_child(title)
+    var subtitle := Label.new()
+    subtitle.text = _t("home.subtitle")
+    subtitle.add_theme_font_size_override("font_size", 13)
+    subtitle.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    title_stack.add_child(subtitle)
 
     save_button = _pill_button(_t("settings.save"), ICON_SAVE)
     save_button.disabled = not dirty_settings
     _sync_pill_button_content_state(save_button)
-    save_button.custom_minimum_size = Vector2(124, 52)
+    save_button.custom_minimum_size = Vector2(120, 50)
     save_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     save_button.pressed.connect(_save_settings_draft)
     top.add_child(save_button)
 
-    page.add_child(_section_title(_t("settings.section.interface"), ICON_SETTINGS))
-    var interface_card := _settings_card()
-    page.add_child(interface_card)
-    interface_card.add_child(_settings_block(_t("settings.language"), _t("settings.language_desc"), _language_select()))
-    interface_card.add_child(_settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select()))
+    var interface_group := _settings_group(page, _t("settings.section.interface"), ICON_SETTINGS, animate_page, 0.03)
+    _add_settings_row(interface_group, _settings_block(_t("settings.language"), _t("settings.language_desc"), _language_select()))
+    _add_settings_row(interface_group, _settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select()))
 
-    page.add_child(_section_title(_t("settings.section.render"), ICON_PERFORMANCE))
-    var render_card := _settings_card()
-    page.add_child(render_card)
-    render_card.add_child(_settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment()))
-    render_card.add_child(_settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select()))
-    render_card.add_child(_settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select()))
-    render_card.add_child(_settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
+    var render_group := _settings_group(page, _t("settings.section.render"), ICON_PERFORMANCE, animate_page, 0.055)
+    _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment()))
+    _add_settings_row(render_group, _settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select()))
+    _add_settings_row(render_group, _settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select()))
+    _add_settings_row(render_group, _settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
     if _settings_draft_bool("fps_limit_enabled", frame_limit_enabled):
-        render_card.add_child(_settings_fps_row())
+        _add_settings_row(render_group, _settings_fps_row())
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        render_card.add_child(_settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
+        _add_settings_row(render_group, _settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
 
-    page.add_child(_section_title(_t("settings.section.diagnostics"), ICON_PERFORMANCE))
-    var diagnostic_card := _settings_card()
-    page.add_child(diagnostic_card)
-    diagnostic_card.add_child(_settings_block(_t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select()))
-    diagnostic_card.add_child(_settings_block(_t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select()))
-    diagnostic_card.add_child(_settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
+    var diagnostic_group := _settings_group(page, _t("settings.section.diagnostics"), ICON_PERFORMANCE, animate_page, 0.08)
+    _add_settings_row(diagnostic_group, _settings_block(_t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select()))
+    _add_settings_row(diagnostic_group, _settings_block(_t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select()))
+    _add_settings_row(diagnostic_group, _settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
 
-    page.add_child(_section_title(_t("settings.section.compatibility"), ICON_PLUGIN))
-    var compatibility_card := _settings_card()
-    page.add_child(compatibility_card)
-    compatibility_card.add_child(_settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select()))
-    compatibility_card.add_child(_settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
+    var compatibility_group := _settings_group(page, _t("settings.section.compatibility"), ICON_PLUGIN, animate_page, 0.105)
+    _add_settings_row(compatibility_group, _settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select()))
+    _add_settings_row(compatibility_group, _settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
 
-    page.add_child(_section_title(_t("settings.section.advanced"), ICON_PLUGIN))
-    var advanced_card := _settings_card()
-    page.add_child(advanced_card)
+    var advanced_group := _settings_group(page, _t("settings.section.advanced"), ICON_PLUGIN, animate_page, 0.13)
     var advanced_disclosure := Button.new()
-    advanced_disclosure.text = ("▼ " if advanced_tool_expanded else "▶ ") + _t("settings.advanced_desc")
+    advanced_disclosure.text = _t("settings.advanced_desc")
+    advanced_disclosure.icon = _load_ui_icon(ICON_CHEVRON_DOWN if advanced_tool_expanded else ICON_CHEVRON_RIGHT)
+    advanced_disclosure.expand_icon = true
+    advanced_disclosure.icon_alignment = HORIZONTAL_ALIGNMENT_RIGHT
     advanced_disclosure.alignment = HORIZONTAL_ALIGNMENT_LEFT
-    advanced_disclosure.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    advanced_disclosure.custom_minimum_size = Vector2(0, 64)
+    advanced_disclosure.custom_minimum_size = Vector2(0, 52)
+    advanced_disclosure.add_theme_constant_override("icon_max_width", 18)
+    advanced_disclosure.add_theme_font_size_override("font_size", 15)
+    advanced_disclosure.add_theme_color_override("font_color", ui_tokens.text_primary)
+    _apply_button_style(
+        advanced_disclosure,
+        ui_tokens.button_style(Color.TRANSPARENT),
+        ui_tokens.button_style(ui_tokens.surface_hover),
+        ui_tokens.button_style(ui_tokens.accent_fill)
+    )
     advanced_disclosure.pressed.connect(func():
         advanced_tool_expanded = not advanced_tool_expanded
         call_deferred("_rebuild_settings_view")
     )
-    advanced_card.add_child(advanced_disclosure)
+    _add_settings_row(advanced_group, advanced_disclosure)
     if advanced_tool_expanded:
-        advanced_card.add_child(_settings_toggle_row(_t("settings.plugin_trace"), _t("settings.plugin_trace_desc"), plugin_trace, "advanced_plugin_trace"))
-        advanced_card.add_child(_settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), trace_log, "advanced_trace_log"))
-        advanced_card.add_child(_settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), console_log_file, "advanced_console_log"))
-        advanced_card.add_child(_settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), export_scripts, "advanced_export_tjs"))
+        _add_settings_row(advanced_group, _settings_toggle_row(_t("settings.plugin_trace"), _t("settings.plugin_trace_desc"), plugin_trace, "advanced_plugin_trace"))
+        _add_settings_row(advanced_group, _settings_toggle_row(_t("settings.trace_log"), _t("settings.trace_log_desc"), trace_log, "advanced_trace_log"))
+        _add_settings_row(advanced_group, _settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), console_log_file, "advanced_console_log"))
+        _add_settings_row(advanced_group, _settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), export_scripts, "advanced_export_tjs"))
 
-    page.add_child(_section_title(_t("settings.section.about"), ICON_HELP))
-    var about_card := _settings_card()
-    page.add_child(about_card)
-    about_card.add_child(_settings_value_row(_t("settings.version"), "0.2.0-beta.1"))
+    var about_group := _settings_group(page, _t("settings.section.about"), ICON_HELP, animate_page, 0.155)
+    _add_settings_row(about_group, _settings_value_row(_t("settings.version"), "0.2.0-beta.1"))
+
+    if animate_page:
+        ui_motion.reveal(top)
 
 func _build_detail_view() -> void:
     detail_view = Control.new()
@@ -2543,126 +2557,192 @@ func _section_title(text: String, icon_path: String) -> HBoxContainer:
     var row := HBoxContainer.new()
     row.custom_minimum_size = Vector2(0, 28)
     row.add_theme_constant_override("separation", 8)
-    row.add_child(_icon_rect(icon_path, Vector2(19, 19), color_accent))
+    row.add_child(_icon_rect(icon_path, Vector2(18, 18), ui_tokens.accent))
     var label := Label.new()
     label.text = text
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     label.add_theme_font_size_override("font_size", 17)
-    label.add_theme_color_override("font_color", color_muted)
+    label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     row.add_child(label)
     return row
 
-func _settings_card() -> VBoxContainer:
-    var box := VBoxContainer.new()
-    box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    box.add_theme_constant_override("separation", 8)
-    return box
-
-func _settings_block(title: String, subtitle: String, control: Control) -> Control:
+func _settings_group(page: VBoxContainer, title: String, icon_path: String, animate: bool, delay: float) -> VBoxContainer:
+    var group := VBoxContainer.new()
+    group.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    group.add_theme_constant_override("separation", 8)
+    page.add_child(group)
+    group.add_child(_section_title(title, icon_path))
     var panel := PanelContainer.new()
     panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
-    var compact := get_viewport_rect().size.x < 720.0
+    panel.add_theme_stylebox_override("panel", ui_tokens.material_panel())
+    group.add_child(panel)
+    var rows := VBoxContainer.new()
+    rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    rows.add_theme_constant_override("separation", 0)
+    panel.add_child(rows)
+    if animate:
+        ui_motion.reveal(group, delay)
+    return rows
+
+func _add_settings_row(group: VBoxContainer, row: Control) -> void:
+    if group.get_child_count() > 0:
+        group.add_child(_detail_separator())
+    group.add_child(row)
+
+func _settings_block(title: String, subtitle: String, control: Control) -> Control:
+    var margin := MarginContainer.new()
+    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    margin.add_theme_constant_override("margin_left", 2)
+    margin.add_theme_constant_override("margin_top", 10)
+    margin.add_theme_constant_override("margin_right", 2)
+    margin.add_theme_constant_override("margin_bottom", 10)
+    var compact := shell_content.size.x < 720.0
     var box: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
-    box.custom_minimum_size = Vector2(0, 114 if compact else 76)
+    box.custom_minimum_size = Vector2(0, 104 if compact else 66)
     box.add_theme_constant_override("separation", 12 if compact else 20)
-    panel.add_child(box)
+    margin.add_child(box)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     labels.add_theme_constant_override("separation", 4)
     box.add_child(labels)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 18)
-    title_label.add_theme_color_override("font_color", color_text)
+    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
     if not subtitle.is_empty():
         var sub := Label.new()
         sub.text = subtitle
         sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-        sub.add_theme_font_size_override("font_size", 14)
-        sub.add_theme_color_override("font_color", color_muted)
+        sub.add_theme_font_size_override("font_size", 13)
+        sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
         labels.add_child(sub)
     control.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_SHRINK_END
     control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     box.add_child(control)
-    return panel
+    return margin
 
 func _settings_toggle_row(title: String, subtitle: String, initial: bool, key: String) -> Control:
-    var panel := PanelContainer.new()
-    panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
+    var margin := MarginContainer.new()
+    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    margin.add_theme_constant_override("margin_left", 2)
+    margin.add_theme_constant_override("margin_top", 10)
+    margin.add_theme_constant_override("margin_right", 2)
+    margin.add_theme_constant_override("margin_bottom", 10)
     var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 76)
+    row.custom_minimum_size = Vector2(0, 62)
     row.add_theme_constant_override("separation", 14)
-    panel.add_child(row)
+    margin.add_child(row)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     labels.add_theme_constant_override("separation", 4)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 18)
-    title_label.add_theme_color_override("font_color", color_text)
+    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = subtitle
     sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    sub.add_theme_font_size_override("font_size", 14)
-    sub.add_theme_color_override("font_color", color_muted)
+    sub.add_theme_font_size_override("font_size", 13)
+    sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
     row.add_child(labels)
 
-    var toggle := CheckButton.new()
+    var toggle := _settings_switch(initial, key)
+    row.add_child(toggle)
+    return margin
+
+func _settings_switch(initial: bool, key: String) -> Button:
+    var toggle := Button.new()
+    toggle.text = ""
+    toggle.toggle_mode = true
     toggle.button_pressed = initial
     toggle.focus_mode = Control.FOCUS_ALL
-    toggle.custom_minimum_size = Vector2(72, 44)
-    toggle.toggled.connect(func(value: bool): _on_setting_toggle(key, value))
-    row.add_child(toggle)
-    return panel
+    toggle.custom_minimum_size = Vector2(52, 30)
+    toggle.size_flags_horizontal = Control.SIZE_SHRINK_END
+    toggle.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    toggle.add_theme_stylebox_override("focus", ui_tokens.focus_style(15))
+
+    var knob := PanelContainer.new()
+    knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    knob.size = Vector2(22, 22)
+    var knob_style := ui_tokens.panel(Color.WHITE, 11)
+    knob_style.shadow_color = Color(0, 0, 0, 0.22)
+    knob_style.shadow_size = 4
+    knob_style.shadow_offset = Vector2(0, 2)
+    knob.add_theme_stylebox_override("panel", knob_style)
+    toggle.add_child(knob)
+    _sync_settings_switch(toggle, knob, initial, false)
+    toggle.toggled.connect(func(value: bool):
+        _sync_settings_switch(toggle, knob, value, true)
+        _on_setting_toggle(key, value)
+    )
+    ui_motion.bind_pressable(toggle)
+    return toggle
+
+func _sync_settings_switch(toggle: Button, knob: PanelContainer, enabled: bool, animate: bool) -> void:
+    var track: Color = ui_tokens.accent if enabled else ui_tokens.surface_hover
+    var hover_track := track.lightened(0.06)
+    toggle.add_theme_stylebox_override("normal", ui_tokens.button_style(track, Color.TRANSPARENT, 15))
+    toggle.add_theme_stylebox_override("hover", ui_tokens.button_style(hover_track, Color.TRANSPARENT, 15))
+    toggle.add_theme_stylebox_override("pressed", ui_tokens.button_style(track.darkened(0.05), Color.TRANSPARENT, 15))
+    var target := Vector2(26, 4) if enabled else Vector2(4, 4)
+    if not animate or ui_motion.reduced_motion:
+        knob.position = target
+        return
+    var tween := knob.create_tween()
+    tween.tween_property(knob, "position", target, 0.18).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
 
 func _settings_value_row(title: String, value: String) -> Control:
-    var panel := PanelContainer.new()
-    panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
+    var margin := MarginContainer.new()
+    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    margin.add_theme_constant_override("margin_left", 2)
+    margin.add_theme_constant_override("margin_top", 8)
+    margin.add_theme_constant_override("margin_right", 2)
+    margin.add_theme_constant_override("margin_bottom", 8)
     var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 52)
+    row.custom_minimum_size = Vector2(0, 44)
     row.add_theme_constant_override("separation", 18)
-    panel.add_child(row)
+    margin.add_child(row)
     var label := Label.new()
     label.text = title
     label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     label.add_theme_font_size_override("font_size", 17)
-    label.add_theme_color_override("font_color", color_text)
+    label.add_theme_color_override("font_color", ui_tokens.text_primary)
     row.add_child(label)
     var value_label := Label.new()
     value_label.text = value
     value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     value_label.add_theme_font_size_override("font_size", 15)
-    value_label.add_theme_color_override("font_color", color_accent)
+    value_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     row.add_child(value_label)
-    return panel
+    return margin
 
 func _settings_fps_row() -> Control:
-    var panel := PanelContainer.new()
-    panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
+    var margin := MarginContainer.new()
+    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    margin.add_theme_constant_override("margin_left", 2)
+    margin.add_theme_constant_override("margin_top", 10)
+    margin.add_theme_constant_override("margin_right", 2)
+    margin.add_theme_constant_override("margin_bottom", 10)
     var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 76)
+    row.custom_minimum_size = Vector2(0, 62)
     row.add_theme_constant_override("separation", 14)
-    panel.add_child(row)
+    margin.add_child(row)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     labels.add_theme_constant_override("separation", 6)
     var title_label := Label.new()
     title_label.text = _t("settings.target_fps")
     title_label.add_theme_font_size_override("font_size", 18)
-    title_label.add_theme_color_override("font_color", color_text)
+    title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = _t("settings.target_fps_desc")
     sub.add_theme_font_size_override("font_size", 14)
-    sub.add_theme_color_override("font_color", color_muted)
+    sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
     row.add_child(labels)
 
@@ -2681,7 +2761,7 @@ func _settings_fps_row() -> Control:
         _set_settings_draft_value("target_fps", int(fps_select.get_item_metadata(index)))
     )
     row.add_child(fps_select)
-    return panel
+    return margin
 
 func _language_select() -> OptionButton:
     var select := OptionButton.new()
@@ -2818,13 +2898,14 @@ func _segment_button(text: String, selected: bool) -> Button:
     button.toggle_mode = true
     button.button_pressed = selected
     button.focus_mode = Control.FOCUS_ALL
-    button.custom_minimum_size = Vector2(180, 48)
-    button.add_theme_font_size_override("font_size", 16)
-    button.add_theme_color_override("font_color", color_text)
-    var selected_style := _panel_style(8, color_accent_dim, color_accent, 1)
-    var selected_hover_style := _panel_style(8, color_accent_dim.lightened(0.06), color_accent_soft, 1)
-    var normal_style := _panel_style(8, color_card_alt, color_line, 1)
-    var normal_hover_style := _panel_style(8, color_card_hover, color_accent, 1)
+    button.custom_minimum_size = Vector2(138, 48)
+    button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    button.add_theme_font_size_override("font_size", 15)
+    button.add_theme_color_override("font_color", ui_tokens.text_primary)
+    var selected_style := ui_tokens.button_style(ui_tokens.accent_fill, ui_tokens.accent)
+    var selected_hover_style := ui_tokens.button_style(ui_tokens.accent_fill.lightened(0.04), ui_tokens.accent)
+    var normal_style := ui_tokens.button_style(ui_tokens.surface_raised, ui_tokens.separator)
+    var normal_hover_style := ui_tokens.button_style(ui_tokens.surface_hover, ui_tokens.accent)
     _apply_button_style(
         button,
         selected_style if selected else normal_style,
@@ -3008,6 +3089,7 @@ func _show_home() -> void:
 
 func _show_settings() -> void:
     _reset_shell_scroll_drag()
+    settings_animate_next = shell_route != "settings"
     _begin_settings_edit()
     _set_game_background(false)
     _rebuild_settings_view()
