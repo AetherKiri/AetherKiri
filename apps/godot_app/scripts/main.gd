@@ -21,6 +21,7 @@ const AetherWidgets = preload("res://scripts/ui/aether_widgets.gd")
 const AetherSegmentedControl = preload("res://scripts/ui/aether_segmented_control.gd")
 const AetherSwitch = preload("res://scripts/ui/aether_switch.gd")
 const AetherDisclosure = preload("res://scripts/ui/aether_disclosure.gd")
+const AetherSelect = preload("res://scripts/ui/aether_select.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -39,6 +40,7 @@ const ICON_PLUGIN := UI_ICON_DIR + "plugin-solid.svg"
 const ICON_BACK := UI_ICON_DIR + "chevron-left.svg"
 const ICON_CHEVRON_RIGHT := UI_ICON_DIR + "chevron-right.svg"
 const ICON_CHEVRON_DOWN := UI_ICON_DIR + "chevron-down.svg"
+const ICON_CHECK := UI_ICON_DIR + "check.svg"
 const LANG_SYSTEM := "system"
 const LANG_ZH_HANS := "zh_hans"
 const LANG_ZH_HANT := "zh_hant"
@@ -2601,6 +2603,17 @@ func _settings_value_row(title: String, value: String) -> Control:
     row.add_child(value_label)
     return margin
 
+func _apple_select(width: float = 300.0):
+    var select = AetherSelect.new()
+    select.setup(
+        ui_tokens,
+        ui_motion,
+        _load_ui_icon(ICON_CHEVRON_DOWN),
+        _load_ui_icon(ICON_CHECK)
+    )
+    select.custom_minimum_size.x = width
+    return select
+
 func _settings_fps_row() -> Control:
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2627,8 +2640,7 @@ func _settings_fps_row() -> Control:
     labels.add_child(sub)
     row.add_child(labels)
 
-    var fps_select := OptionButton.new()
-    fps_select.custom_minimum_size = Vector2(150, 48)
+    var fps_select = _apple_select(150)
     var options := [60, 80, 90, 120, 144]
     var selected_index := 0
     var draft_target_fps := _settings_draft_int("target_fps", target_fps)
@@ -2641,13 +2653,11 @@ func _settings_fps_row() -> Control:
     fps_select.item_selected.connect(func(index: int):
         _set_settings_draft_value("target_fps", int(fps_select.get_item_metadata(index)))
     )
-    ui_widgets.option_button(fps_select, _load_ui_icon(ICON_CHEVRON_DOWN))
     row.add_child(fps_select)
     return margin
 
-func _language_select() -> OptionButton:
-    var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(300, 48)
+func _language_select() -> Control:
+    var select = _apple_select()
     var selected_index := 0
     var draft_language := _normalize_language_mode(_settings_draft_string("language", language_mode))
     for i in range(LANGUAGE_MODES.size()):
@@ -2660,11 +2670,10 @@ func _language_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _select_language_mode(String(select.get_item_metadata(index)))
     )
-    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
+    return select
 
-func _style_select() -> OptionButton:
-    var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(300, 48)
+func _style_select() -> Control:
+    var select = _apple_select()
     var selected_index := 0
     var draft_style := _normalize_style_mode(_settings_draft_string("style", style_mode))
     for i in range(STYLE_MODES.size()):
@@ -2677,11 +2686,10 @@ func _style_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _select_style_mode(String(select.get_item_metadata(index)))
     )
-    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
+    return select
 
-func _upscale_select() -> OptionButton:
-    var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(300, 48)
+func _upscale_select() -> Control:
+    var select = _apple_select()
     var options := [
         {"label": "Smooth", "value": "smooth"},
         {"label": "Linear", "value": "linear"},
@@ -2698,11 +2706,10 @@ func _upscale_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _select_upscale_algorithm(String(select.get_item_metadata(index)))
     )
-    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
+    return select
 
-func _surface_mode_select() -> OptionButton:
-    var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(300, 48)
+func _surface_mode_select() -> Control:
+    var select = _apple_select()
     var options := [
         {"label": "Game Native", "value": RENDER_SURFACE_MODE_GAME},
         {"label": "Display Fit", "value": RENDER_SURFACE_MODE_DISPLAY},
@@ -2718,11 +2725,10 @@ func _surface_mode_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _select_surface_mode(String(select.get_item_metadata(index)))
     )
-    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
+    return select
 
-func _plugin_load_mode_select() -> OptionButton:
-    var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(300, 48)
+func _plugin_load_mode_select() -> Control:
+    var select = _apple_select()
     var options := [
         {"label": _t("settings.plugin_load.core"), "value": "krkrsdl3"},
         {"label": _t("settings.plugin_load.all"), "value": "aether_all"},
@@ -2738,11 +2744,10 @@ func _plugin_load_mode_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _select_plugin_load_mode(String(select.get_item_metadata(index)))
     )
-    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
+    return select
 
-func _diagnostic_profile_select() -> OptionButton:
-    var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(300, 48)
+func _diagnostic_profile_select() -> Control:
+    var select = _apple_select()
     var selected_index := 0
     var draft_value := _settings_draft_string("diagnostic_profile", diagnostic_profile)
     for value in DIAGNOSTIC_PROFILES:
@@ -2754,11 +2759,10 @@ func _diagnostic_profile_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _set_settings_draft_value("diagnostic_profile", String(select.get_item_metadata(index)))
     )
-    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
+    return select
 
-func _debug_overlay_select() -> OptionButton:
-    var select := OptionButton.new()
-    select.custom_minimum_size = Vector2(300, 48)
+func _debug_overlay_select() -> Control:
+    var select = _apple_select()
     var selected_index := 0
     var draft_value := _settings_draft_string("debug_overlay_mode", debug_overlay_mode)
     for value in DEBUG_OVERLAY_MODES:
@@ -2770,7 +2774,7 @@ func _debug_overlay_select() -> OptionButton:
     select.item_selected.connect(func(index: int):
         _set_settings_draft_value("debug_overlay_mode", String(select.get_item_metadata(index)))
     )
-    return ui_widgets.option_button(select, _load_ui_icon(ICON_CHEVRON_DOWN))
+    return select
 
 func _backend_segment() -> Control:
     var draft_backend := _normalize_backend_name(_settings_draft_string("backend", selected_backend))
