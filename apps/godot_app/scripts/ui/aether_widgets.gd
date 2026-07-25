@@ -93,13 +93,18 @@ func floating_action_button(button: Button) -> Button:
     _prepare_button(button, 14)
     button.custom_minimum_size = Vector2(56, 56)
     button.clip_contents = true
+    button.add_theme_font_size_override("font_size", 28)
+    button.add_theme_color_override("font_color", Color.WHITE)
+    button.add_theme_color_override("font_hover_color", Color.WHITE)
+    button.add_theme_color_override("font_pressed_color", Color.WHITE)
+    button.add_theme_color_override("font_focus_color", Color.WHITE)
     for state in ["normal", "hover", "pressed", "focus"]:
         button.add_theme_color_override("icon_%s_color" % state, Color.WHITE)
-    var normal := _fab_box(tokens.accent, 12, Vector2(0, 6))
-    var hover := _fab_box(tokens.accent.lightened(0.045), 16, Vector2(0, 8))
-    var pressed := _fab_box(Color("a9583e"), 5, Vector2(0, 2))
-    var disabled := _fab_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.70), 0, Vector2.ZERO)
-    _set_button_boxes(button, normal, hover, pressed, _focus_box(28), disabled)
+    var normal := _fab_box(tokens.accent)
+    var hover := _fab_box(tokens.accent.lightened(0.045))
+    var pressed := _fab_box(Color("a9583e"))
+    var disabled := _fab_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.70))
+    _set_button_boxes(button, normal, hover, pressed, normal, disabled)
     return button
 
 func navigation_button(button: Button, selected: bool = false) -> Button:
@@ -166,12 +171,8 @@ func _prepare_button(button: Button, font_size: int) -> void:
     button.add_theme_constant_override("h_separation", 8)
     motion.bind_tactile(button)
 
-func _fab_box(fill: Color, shadow_size: int, shadow_offset: Vector2) -> StyleBoxFlat:
-    var style: StyleBoxFlat = tokens.button_style(fill, Color.TRANSPARENT, 28)
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.42)
-    style.shadow_size = shadow_size
-    style.shadow_offset = shadow_offset
-    return style
+func _fab_box(fill: Color) -> StyleBoxFlat:
+    return tokens.button_style(fill, Color.TRANSPARENT, 28)
 
 func _set_button_boxes(button: Button, normal: StyleBox, hover: StyleBox, pressed: StyleBox, focus: StyleBox, disabled: StyleBox) -> void:
     button.add_theme_stylebox_override("normal", normal)

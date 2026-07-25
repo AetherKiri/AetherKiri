@@ -92,8 +92,19 @@ func _run() -> void:
 
     hero.position = Vector2(1120, 180)
     hero.size = Vector2(144, 166)
+    var right_start := Rect2(hero.position, hero.size)
+    var right_target := Rect2(36, 92, 252, 354)
+    var arc_midpoint: Rect2 = motion.hero_arc_rect(right_start, right_target, 0.5)
+    var linear_midpoint := right_start.get_center().lerp(right_target.get_center(), 0.5)
+    if arc_midpoint.get_center().distance_to(linear_midpoint) < 20.0:
+        _fail("right-column hero transition did not follow a visible arc")
+        return
+    var reverse_midpoint: Rect2 = motion.hero_arc_rect(right_target, right_start, 0.5)
+    if not reverse_midpoint.position.is_equal_approx(arc_midpoint.position) or not reverse_midpoint.size.is_equal_approx(arc_midpoint.size):
+        _fail("hero return transition did not retrace the forward arc")
+        return
     var right_column_finished := {"count": 0}
-    motion.hero_rect(hero, Rect2(36, 92, 252, 354), func(): right_column_finished["count"] += 1)
+    motion.hero_rect(hero, right_target, func(): right_column_finished["count"] += 1)
     for _frame in range(90):
         await process_frame
     if not hero.position.is_equal_approx(Vector2(36, 92)) or not hero.size.is_equal_approx(Vector2(252, 354)):

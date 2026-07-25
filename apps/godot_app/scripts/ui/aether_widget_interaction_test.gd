@@ -46,6 +46,14 @@ func _run() -> void:
     if fab.custom_minimum_size != Vector2(56, 56) or fab_style == null or fab_style.corner_radius_top_left != 28:
         _fail("floating action button did not keep its circular 56px geometry")
         return
+    var fab_hover := fab.get_theme_stylebox("hover") as StyleBoxFlat
+    var fab_pressed := fab.get_theme_stylebox("pressed") as StyleBoxFlat
+    if fab_hover == null or fab_pressed == null or fab_style.shadow_size != fab_hover.shadow_size or fab_style.shadow_size != fab_pressed.shadow_size:
+        _fail("floating action button changed shadow geometry between states")
+        return
+    if fab_style.shadow_size != 0:
+        _fail("floating action button introduced an extra shadow layer")
+        return
     if not is_equal_approx(float(fab.get_meta("aether_release_damping", 1.0)), 0.82):
         _fail("floating action button did not receive tactile release physics")
         return
