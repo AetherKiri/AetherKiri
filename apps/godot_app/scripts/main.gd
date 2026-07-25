@@ -5,6 +5,7 @@ const SETTINGS_KEY := "aether_kiri/render_backend"
 const GAME_PATH_KEY := "aether_kiri/game_path"
 const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
+const MOBILE_ORIENTATION_SCHEMA_VERSION := 1
 const UI_FONT := preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
 const BODY_FONT := preload("res://assets/fonts/Inter-Variable.ttf")
 const DISPLAY_FONT := preload("res://assets/fonts/CormorantGaramond-Variable.ttf")
@@ -761,7 +762,7 @@ var known_games: Array[Dictionary] = []
 var show_perf_monitor := true
 var diagnostic_profile := "baseline" if OS.is_debug_build() else "off"
 var debug_overlay_mode := "summary" if OS.is_debug_build() else "off"
-var lock_landscape := true
+var lock_landscape := false
 var frame_limit_enabled := false
 var target_fps := 80
 var plugin_trace := false
@@ -913,8 +914,10 @@ const PILL_ICON_VISUAL_OFFSET_Y := 2.0
 const HOME_TILE_MIN_WIDTH := 340.0
 const HOME_TILE_HEIGHT := 132.0
 const HOME_TILE_COVER_WIDTH := 108.0
-const HOME_ROW_HEIGHT := 104.0
-const HOME_ROW_COVER_WIDTH := 112.0
+const HOME_ROW_HEIGHT := 112.0
+const HOME_ROW_COVER_WIDTH := 116.0
+const HOME_COMPACT_BREAKPOINT := 860.0
+const HOME_PHONE_BREAKPOINT := 520.0
 
 var color_bg := Color(0.055, 0.059, 0.071, 1.0)
 var color_game_bg := Color(0, 0, 0, 1)
@@ -1555,6 +1558,9 @@ func _load_shell_settings() -> void:
     frame_limit_enabled = bool(cfg.get_value("rendering", "fps_limit_enabled", frame_limit_enabled))
     target_fps = int(cfg.get_value("rendering", "target_fps", target_fps))
     lock_landscape = bool(cfg.get_value("rendering", "force_landscape", lock_landscape))
+    var orientation_schema := int(cfg.get_value("rendering", "orientation_schema", 0))
+    if _mobile_runtime() and orientation_schema < MOBILE_ORIENTATION_SCHEMA_VERSION:
+        lock_landscape = false
     plugin_load_mode = String(cfg.get_value("developer", "plugin_load_mode", plugin_load_mode))
     if not plugin_load_mode in ["krkrsdl3", "aether_all"]:
         plugin_load_mode = "krkrsdl3"
@@ -1597,6 +1603,7 @@ func _save_shell_settings() -> void:
     cfg.set_value("rendering", "fps_limit_enabled", frame_limit_enabled)
     cfg.set_value("rendering", "target_fps", target_fps)
     cfg.set_value("rendering", "force_landscape", lock_landscape)
+    cfg.set_value("rendering", "orientation_schema", MOBILE_ORIENTATION_SCHEMA_VERSION)
     cfg.set_value("developer", "plugin_load_mode", plugin_load_mode)
     cfg.set_value("developer", "mock_enabled", mock_enabled)
     cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
@@ -1852,7 +1859,7 @@ func _advanced_snapshot() -> Dictionary:
 
 func _apply_shell_runtime_settings() -> void:
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        var orientation := DisplayServer.SCREEN_LANDSCAPE if lock_landscape else DisplayServer.SCREEN_SENSOR
+        var orientation := DisplayServer.SCREEN_LANDSCAPE if lock_landscape else DisplayServer.SCREEN_PORTRAIT
         DisplayServer.screen_set_orientation(orientation)
 
 func _fit_full_rects() -> void:
@@ -1972,28 +1979,32 @@ func _set_game_background(active: bool) -> void:
 func _layout_home_view(window_size: Vector2) -> void:
     if home_page_margin == null or home_header_box == null or game_list == null:
         return
-    var compact := window_size.x < 700.0
-    var margin: float = ui_tokens.PAGE_GUTTER_COMPACT if compact else ui_tokens.PAGE_GUTTER
+    var compact := window_size.x < HOME_COMPACT_BREAKPOINT
+    var phone := window_size.x < HOME_PHONE_BREAKPOINT
+    var margin: float = 16.0 if phone else (24.0 if compact else ui_tokens.PAGE_GUTTER)
     home_page_margin.add_theme_constant_override("margin_left", int(margin))
-    home_page_margin.add_theme_constant_override("margin_top", 20 if compact else 28)
+    home_page_margin.add_theme_constant_override("margin_top", 16 if phone else (22 if compact else 28))
     home_page_margin.add_theme_constant_override("margin_right", int(margin))
-    home_page_margin.add_theme_constant_override("margin_bottom", 20 if compact else 28)
+    home_page_margin.add_theme_constant_override("margin_bottom", 16 if phone else (22 if compact else 28))
     home_header_box.vertical = false
-    home_header_box.custom_minimum_size = Vector2(0, 72)
-    home_header_box.add_theme_constant_override("separation", 16 if compact else 24)
+    home_header_box.custom_minimum_size = Vector2(0, 62 if phone else (68 if compact else 72))
+    home_header_box.add_theme_constant_override("separation", 12 if phone else (16 if compact else 24))
+    home_title_label.add_theme_font_size_override("font_size", 27 if phone else 31)
+    home_subtitle_label.add_theme_font_size_override("font_size", 13 if phone else 14)
     home_actions.alignment = BoxContainer.ALIGNMENT_END
     home_primary_button.text = "" if OS.get_name() == "iOS" else "+"
     home_primary_button.tooltip_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
     home_primary_button.accessibility_name = home_primary_button.tooltip_text
-    var fab_inset := 14.0 if compact else 20.0
-    home_primary_button.offset_left = -56.0 - fab_inset
-    home_primary_button.offset_top = -56.0 - fab_inset
+    var fab_size := 52.0 if phone else 56.0
+    var fab_inset := 12.0 if phone else (16.0 if compact else 20.0)
+    home_primary_button.offset_left = -fab_size - fab_inset
+    home_primary_button.offset_top = -fab_size - fab_inset
     home_primary_button.offset_right = -fab_inset
     home_primary_button.offset_bottom = -fab_inset
-    home_primary_button.size = Vector2(56, 56)
+    home_primary_button.size = Vector2(fab_size, fab_size)
     var scroll_bar_width := game_scroll.get_v_scroll_bar().get_combined_minimum_size().x
     var list_width := maxf(HOME_TILE_MIN_WIDTH, window_size.x - margin * 2.0 - scroll_bar_width)
-    var gap := 12.0 if compact else 16.0
+    var gap := 10.0 if phone else (14.0 if compact else 16.0)
     var columns := 1 if compact else maxi(1, int(floor((list_width + gap) / (HOME_TILE_MIN_WIDTH + gap))))
     game_list.columns = columns
     game_list.add_theme_constant_override("h_separation", int(gap))
@@ -6139,6 +6150,9 @@ func _apply_global_dpi_scale() -> void:
     var scale := DEFAULT_UI_DPI_SCALE
     if not scale_text.is_empty():
         scale = scale_text.to_float()
+    var window_width := float(DisplayServer.window_get_size().x)
+    if OS.get_name() == "iOS" or OS.get_name() == "Android" or window_width < HOME_COMPACT_BREAKPOINT:
+        scale = 1.0
     scale = clampf(scale, 0.75, 2.0)
     var window := get_window()
     window.content_scale_factor = scale
