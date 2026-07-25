@@ -10,6 +10,9 @@ const PRESS_RESPONSE := 0.16
 const RELEASE_RESPONSE := 0.24
 const HOVER_RESPONSE := 0.26
 const SPRING_STEP := 1.0 / 120.0
+const HERO_DURATION := 0.34
+const HERO_MIN_ARC := 20.0
+const HERO_MAX_ARC := 72.0
 
 var reduced_motion := false
 var active_tweens: Dictionary = {}
@@ -179,15 +182,48 @@ func hero_rect(control: Control, target_rect: Rect2, finished: Callable = Callab
     active_springs.erase(_motion_key(control, "position"))
     active_springs.erase(_motion_key(control, "size"))
     _stop_tweens(control)
-    var tween := control.create_tween().set_parallel(true)
+    var start_rect := Rect2(control.position, control.size)
+    var tween := control.create_tween()
     active_tweens[_tween_key(control, "hero")] = tween
-    tween.tween_property(control, "position", target_rect.position, 0.30).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_IN_OUT)
-    tween.tween_property(control, "size", target_rect.size, 0.30).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_IN_OUT)
-    tween.chain().tween_callback(func():
+    tween.tween_method(
+        func(progress: float):
+            if is_instance_valid(control):
+                var frame := hero_arc_rect(start_rect, target_rect, progress)
+                control.position = frame.position
+                control.size = frame.size,
+        0.0,
+        1.0,
+        HERO_DURATION
+    ).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_IN_OUT)
+    tween.tween_callback(func():
+        if is_instance_valid(control):
+            control.position = target_rect.position
+            control.size = target_rect.size
         _finish_tween(control, "hero")
         if finished.is_valid():
             finished.call()
     )
+
+func hero_arc_rect(start_rect: Rect2, target_rect: Rect2, progress: float) -> Rect2:
+    var t := clampf(progress, 0.0, 1.0)
+    var start_center := start_rect.get_center()
+    var target_center := target_rect.get_center()
+    var delta := target_center - start_center
+    var distance := delta.length()
+    if distance < 0.001:
+        return Rect2(start_rect.position.lerp(target_rect.position, t), start_rect.size.lerp(target_rect.size, t))
+    var arc_height := clampf(distance * 0.12, HERO_MIN_ARC, HERO_MAX_ARC)
+    var control := (start_center + target_center) * 0.5
+    if absf(delta.x) >= absf(delta.y):
+        control.y = minf(start_center.y, target_center.y) - arc_height
+    else:
+        control.x = maxf(start_center.x, target_center.x) + arc_height
+    var one_minus_t := 1.0 - t
+    var center := one_minus_t * one_minus_t * start_center \
+        + 2.0 * one_minus_t * t * control \
+        + t * t * target_center
+    var size := start_rect.size.lerp(target_rect.size, t)
+    return Rect2(center - size * 0.5, size)
 
 func modal_in(scrim: CanvasItem, dialog: Control, background: Control = null) -> void:
     if scrim == null or dialog == null:

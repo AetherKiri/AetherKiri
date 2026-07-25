@@ -2619,7 +2619,7 @@ func _layout_home_view(window_size: Vector2) -> void:
     home_header_box.custom_minimum_size = Vector2(0, 72)
     home_header_box.add_theme_constant_override("separation", 16 if compact else 24)
     home_actions.alignment = BoxContainer.ALIGNMENT_END
-    home_primary_button.text = ""
+    home_primary_button.text = "" if OS.get_name() == "iOS" else "+"
     var primary_tooltip := _t("video.refresh") if OS.get_name() == "iOS" else _t("video.import")
     if home_library_mode == "game":
         primary_tooltip = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
@@ -2747,8 +2747,9 @@ func _build_home_view() -> void:
     library_body.add_child(empty_state)
 
     home_primary_button = Button.new()
-    home_primary_button.text = ""
-    home_primary_button.icon = _load_ui_icon(ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD)
+    var home_action_is_refresh := OS.get_name() == "iOS"
+    home_primary_button.text = "" if home_action_is_refresh else "+"
+    home_primary_button.icon = _load_ui_icon(ICON_REFRESH) if home_action_is_refresh else null
     home_primary_button.expand_icon = true
     home_primary_button.tooltip_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
     home_primary_button.accessibility_name = home_primary_button.tooltip_text
