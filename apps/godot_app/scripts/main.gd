@@ -47,6 +47,7 @@ const AetherSegmentedControl = preload("res://scripts/ui/aether_segmented_contro
 const AetherSwitch = preload("res://scripts/ui/aether_switch.gd")
 const AetherDisclosure = preload("res://scripts/ui/aether_disclosure.gd")
 const AetherSelect = preload("res://scripts/ui/aether_select.gd")
+const AetherDisplayScale = preload("res://scripts/ui/aether_display_scale.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -2177,7 +2178,7 @@ func _apply_shell_compact_state(button: Button, selected: bool) -> void:
     ui_widgets.toolbar_button(button, selected)
 
 func _toggle_sidebar() -> void:
-    if get_viewport_rect().size.x < 900.0:
+    if AetherDisplayScale.use_compact_shell(get_viewport_rect().size):
         return
     var expanding := shell_sidebar_collapsed
     if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
@@ -2268,7 +2269,7 @@ func _apply_sidebar_width(width: float) -> void:
 func _layout_shell(window_size: Vector2) -> void:
     if shell_content == null or shell_sidebar == null or shell_compact_header == null:
         return
-    var compact := window_size.x < 900.0
+    var compact := AetherDisplayScale.use_compact_shell(window_size)
     if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
         shell_sidebar_tween.kill()
         shell_sidebar_animating_expand = false
@@ -2657,7 +2658,7 @@ func _fit_full_rects() -> void:
         control.offset_bottom = 0.0
     _layout_game_viewport(window_size)
     _layout_shell(window_size)
-    var compact_shell := window_size.x < 900.0
+    var compact_shell := AetherDisplayScale.use_compact_shell(window_size)
     var shell_size := Vector2(
         window_size.x if compact_shell else window_size.x - shell_sidebar_layout_width,
         window_size.y - (ui_tokens.TOOLBAR_HEIGHT if compact_shell else 0.0)
@@ -8673,15 +8674,8 @@ func _apply_initial_window_size() -> void:
 
 func _apply_global_dpi_scale() -> void:
     var scale_text := OS.get_environment("AETHERKIRI_UI_DPI_SCALE").strip_edges()
-    var scale := DEFAULT_UI_DPI_SCALE
-    if not scale_text.is_empty():
-        scale = scale_text.to_float()
     var window_size := DisplayServer.window_get_size()
-    var window_width := float(window_size.x)
-    var short_edge := float(mini(window_size.x, window_size.y))
-    if OS.get_name() == "iOS" or OS.get_name() == "Android" or window_width < HOME_COMPACT_BREAKPOINT or short_edge < 900.0:
-        scale = 1.0
-    scale = clampf(scale, 0.75, 2.0)
+    var scale := AetherDisplayScale.ui_scale(OS.get_name(), window_size, DEFAULT_UI_DPI_SCALE, scale_text)
     var window := get_window()
     window.content_scale_factor = scale
 
