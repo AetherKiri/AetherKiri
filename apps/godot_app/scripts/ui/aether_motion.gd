@@ -1,6 +1,7 @@
 extends Node
 
 const PRESS_SCALE := Vector2(0.972, 0.972)
+const TACTILE_PRESS_SCALE := Vector2(0.955, 0.955)
 const HOVER_SCALE := Vector2(1.010, 1.010)
 const REST_SCALE := Vector2.ONE
 const ENTER_OFFSET := Vector2(0, 10)
@@ -113,6 +114,13 @@ func bind_pressable(control: Control) -> void:
             if not button.button_pressed:
                 _press_out(button)
         )
+
+func bind_tactile(control: Control) -> void:
+    if control == null:
+        return
+    control.set_meta("aether_press_scale", TACTILE_PRESS_SCALE)
+    control.set_meta("aether_release_damping", 0.82)
+    bind_pressable(control)
 
 func bind_lift(control: Control, highlight: CanvasItem = null, rest_alpha: float = 0.0, hover_alpha: float = 1.0) -> void:
     if control == null or control.has_meta("aether_lift_bound"):
@@ -283,13 +291,15 @@ func set_visible(control: Control, show: bool) -> void:
 func _press_in(control: Control) -> void:
     if reduced_motion:
         return
-    _animate_scale(control, PRESS_SCALE, PRESS_RESPONSE)
+    var target: Vector2 = control.get_meta("aether_press_scale", PRESS_SCALE)
+    _animate_scale(control, target, PRESS_RESPONSE)
 
 func _press_out(control: Control) -> void:
     if reduced_motion:
         control.scale = REST_SCALE
         return
-    _animate_scale(control, REST_SCALE, RELEASE_RESPONSE)
+    var damping := float(control.get_meta("aether_release_damping", 1.0))
+    _animate_scale(control, REST_SCALE, RELEASE_RESPONSE, damping)
 
 func _set_lift_hover(control: Control, highlight: CanvasItem, active: bool, rest_alpha: float, hover_alpha: float) -> void:
     if control == null or not is_instance_valid(control):
@@ -303,11 +313,11 @@ func _set_lift_hover(control: Control, highlight: CanvasItem, active: bool, rest
         return
     _fade(highlight, hover_alpha if active else rest_alpha, 0.16, "hover")
 
-func _animate_scale(control: Control, target: Vector2, response: float) -> void:
+func _animate_scale(control: Control, target: Vector2, response: float, damping: float = 1.0) -> void:
     if control == null or not is_instance_valid(control):
         return
     _update_pivot(control)
-    spring_property(control, "scale", target, response, 1.0)
+    spring_property(control, "scale", target, response, damping)
 
 func _fade(item: CanvasItem, target: float, duration: float, channel: String, finished: Callable = Callable()) -> void:
     if item == null or not is_instance_valid(item):
