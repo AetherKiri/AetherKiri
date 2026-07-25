@@ -6,6 +6,7 @@ const GAME_PATH_KEY := "aether_kiri/game_path"
 const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const UI_FONT := preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
+const BODY_FONT := preload("res://assets/fonts/Inter-Variable.ttf")
 const DISPLAY_FONT := preload("res://assets/fonts/CormorantGaramond-Variable.ttf")
 const UI_SYMBOL_FONT := preload("res://assets/fonts/aetherkiri-runtime-symbols.ttf")
 const RUNTIME_FONT_DIR := "user://runtime_fonts"
@@ -710,6 +711,7 @@ var shell_sidebar_status: HBoxContainer
 var shell_sidebar_version: Label
 var shell_sidebar_toggle: Button
 var shell_sidebar_collapsed := false
+var shell_sidebar_animating_expand := false
 var shell_sidebar_layout_width := 0.0
 var shell_sidebar_tween: Tween
 var shell_route := "library"
@@ -1080,9 +1082,10 @@ func _mobile_runtime() -> bool:
 func _apply_ui_font() -> void:
     var fallbacks: Array[Font] = [UI_SYMBOL_FONT]
     UI_FONT.set_fallbacks(fallbacks)
-    DISPLAY_FONT.set_fallbacks([UI_FONT, UI_SYMBOL_FONT])
+    BODY_FONT.set_fallbacks([UI_FONT, UI_SYMBOL_FONT])
+    DISPLAY_FONT.set_fallbacks([BODY_FONT, UI_FONT, UI_SYMBOL_FONT])
     var ui_theme := Theme.new()
-    ui_theme.set_default_font(UI_FONT)
+    ui_theme.set_default_font(BODY_FONT)
     ui_theme.set_color("font_color", "Label", color_text)
     ui_theme.set_color("font_color", "Button", color_text)
     ui_theme.set_color("font_color", "OptionButton", color_text)
@@ -1278,9 +1281,16 @@ func _build_shell_chrome() -> void:
     flexible_space.size_flags_vertical = Control.SIZE_EXPAND_FILL
     sidebar.add_child(flexible_space)
 
-    shell_sidebar_toggle = _shell_compact_button(ICON_BACK, _t("nav.collapse_sidebar"), _toggle_sidebar)
+    shell_sidebar_toggle = Button.new()
+    shell_sidebar_toggle.text = "☰"
+    shell_sidebar_toggle.tooltip_text = _t("nav.collapse_sidebar")
+    shell_sidebar_toggle.accessibility_name = shell_sidebar_toggle.tooltip_text
+    shell_sidebar_toggle.custom_minimum_size = Vector2(44, 44)
+    shell_sidebar_toggle.focus_mode = Control.FOCUS_ALL
+    shell_sidebar_toggle.pressed.connect(_toggle_sidebar)
     shell_sidebar_toggle.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
     ui_widgets.toolbar_button(shell_sidebar_toggle)
+    shell_sidebar_toggle.add_theme_font_size_override("font_size", 23)
     sidebar.add_child(shell_sidebar_toggle)
 
     shell_sidebar_status = HBoxContainer.new()
@@ -1379,7 +1389,7 @@ func _sync_shell_route(route: String) -> void:
 func _apply_shell_nav_state(button: Button, selected: bool) -> void:
     if button == null:
         return
-    if shell_sidebar_collapsed:
+    if shell_sidebar_collapsed or shell_sidebar_animating_expand:
         button.custom_minimum_size = Vector2(44, 44)
         button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
         ui_widgets.toolbar_button(button, selected)
@@ -1396,43 +1406,53 @@ func _apply_shell_compact_state(button: Button, selected: bool) -> void:
 func _toggle_sidebar() -> void:
     if get_viewport_rect().size.x < 900.0:
         return
+    var expanding := shell_sidebar_collapsed
     shell_sidebar_collapsed = not shell_sidebar_collapsed
-    _apply_sidebar_presentation(not shell_sidebar_collapsed)
+    shell_sidebar_animating_expand = expanding
+    _apply_sidebar_presentation(false)
     var target_width: float = ui_tokens.SIDEBAR_COLLAPSED_WIDTH if shell_sidebar_collapsed else ui_tokens.SIDEBAR_WIDTH
     if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
         shell_sidebar_tween.kill()
     if ui_motion.reduced_motion:
+        shell_sidebar_animating_expand = false
         _apply_sidebar_width(target_width)
+        _apply_sidebar_presentation(expanding)
         return
     shell_sidebar_tween = shell_sidebar.create_tween()
     shell_sidebar_tween.tween_method(
         _apply_sidebar_width,
         shell_sidebar_layout_width,
         target_width,
-        0.24
+        0.28
     ).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_OUT)
+    shell_sidebar_tween.tween_callback(func():
+        shell_sidebar_animating_expand = false
+        _apply_sidebar_width(target_width)
+        _apply_sidebar_presentation(expanding)
+    )
 
 func _apply_sidebar_presentation(animate_labels: bool) -> void:
     if shell_sidebar_brand_labels == null:
         return
-    shell_sidebar_brand.alignment = BoxContainer.ALIGNMENT_CENTER if shell_sidebar_collapsed else BoxContainer.ALIGNMENT_BEGIN
-    shell_sidebar_brand_labels.visible = not shell_sidebar_collapsed
-    shell_sidebar_status.visible = not shell_sidebar_collapsed
-    shell_sidebar_version.visible = not shell_sidebar_collapsed
-    shell_library_button.text = "" if shell_sidebar_collapsed else _t("nav.library")
-    shell_settings_button.text = "" if shell_sidebar_collapsed else _t("settings.title")
-    shell_library_button.tooltip_text = _t("nav.library") if shell_sidebar_collapsed else ""
-    shell_settings_button.tooltip_text = _t("settings.title") if shell_sidebar_collapsed else ""
-    shell_library_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if shell_sidebar_collapsed else HORIZONTAL_ALIGNMENT_LEFT
-    shell_settings_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if shell_sidebar_collapsed else HORIZONTAL_ALIGNMENT_LEFT
-    shell_library_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if shell_sidebar_collapsed else HORIZONTAL_ALIGNMENT_LEFT
-    shell_settings_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if shell_sidebar_collapsed else HORIZONTAL_ALIGNMENT_LEFT
-    shell_sidebar_toggle.icon = _load_ui_icon(ICON_CHEVRON_RIGHT if shell_sidebar_collapsed else ICON_BACK)
+    var compact_visual := shell_sidebar_collapsed or shell_sidebar_animating_expand
+    shell_sidebar_brand.alignment = BoxContainer.ALIGNMENT_CENTER if compact_visual else BoxContainer.ALIGNMENT_BEGIN
+    shell_sidebar_brand_labels.visible = not compact_visual
+    shell_sidebar_status.visible = not compact_visual
+    shell_sidebar_version.visible = not compact_visual
+    shell_library_button.text = "" if compact_visual else _t("nav.library")
+    shell_settings_button.text = "" if compact_visual else _t("settings.title")
+    shell_library_button.tooltip_text = _t("nav.library") if compact_visual else ""
+    shell_settings_button.tooltip_text = _t("settings.title") if compact_visual else ""
+    shell_library_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
+    shell_settings_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
+    shell_library_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
+    shell_settings_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
+    shell_sidebar_toggle.text = "☰"
     shell_sidebar_toggle.tooltip_text = _t("nav.expand_sidebar") if shell_sidebar_collapsed else _t("nav.collapse_sidebar")
     shell_sidebar_toggle.accessibility_name = shell_sidebar_toggle.tooltip_text
     _apply_shell_nav_state(shell_library_button, shell_route == "library")
     _apply_shell_nav_state(shell_settings_button, shell_route == "settings")
-    if animate_labels and not shell_sidebar_collapsed:
+    if animate_labels and not compact_visual:
         ui_motion.enter(shell_sidebar_brand_labels, Vector2.ZERO, 0.03)
         ui_motion.enter(shell_sidebar_status, Vector2.ZERO, 0.06)
         ui_motion.enter(shell_sidebar_version, Vector2.ZERO, 0.08)
@@ -1452,6 +1472,8 @@ func _layout_shell(window_size: Vector2) -> void:
     var compact := window_size.x < 900.0
     if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
         shell_sidebar_tween.kill()
+        shell_sidebar_animating_expand = false
+        _apply_sidebar_presentation(false)
     shell_sidebar.visible = not compact
     shell_compact_header.visible = compact
     shell_sidebar.position = Vector2.ZERO
