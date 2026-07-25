@@ -21,15 +21,12 @@ func setup(design_tokens, motion_system, labels: PackedStringArray, initial_inde
     var track := PanelContainer.new()
     track.mouse_filter = Control.MOUSE_FILTER_IGNORE
     track.set_anchors_preset(Control.PRESET_FULL_RECT)
-    track.add_theme_stylebox_override("panel", tokens.panel(tokens.background_raised, 8, tokens.separator, 1))
+    track.add_theme_stylebox_override("panel", tokens.panel(tokens.background_raised, 8))
     add_child(track)
 
     indicator = PanelContainer.new()
     indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    var indicator_style: StyleBoxFlat = tokens.panel(tokens.surface_hover, 6, tokens.highlight, 1)
-    indicator_style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.26 if tokens.mode == "dark" else 0.12)
-    indicator_style.shadow_size = 7 if tokens.mode == "dark" else 4
-    indicator_style.shadow_offset = Vector2(0, 2)
+    var indicator_style: StyleBoxFlat = tokens.panel(tokens.surface_hover, 6)
     indicator.add_theme_stylebox_override("panel", indicator_style)
     add_child(indicator)
 
@@ -60,7 +57,7 @@ func setup(design_tokens, motion_system, labels: PackedStringArray, initial_inde
         button.add_theme_color_override("font_pressed_color", tokens.text_primary)
         button.add_theme_color_override("font_focus_color", tokens.text_primary)
         button.add_theme_stylebox_override("normal", tokens.panel(Color.TRANSPARENT, 6))
-        button.add_theme_stylebox_override("hover", tokens.panel(Color(tokens.highlight.r, tokens.highlight.g, tokens.highlight.b, 0.34), 6))
+        button.add_theme_stylebox_override("hover", tokens.panel(tokens.accent_fill, 6))
         button.add_theme_stylebox_override("pressed", tokens.panel(Color.TRANSPARENT, 6))
         button.add_theme_stylebox_override("hover_pressed", tokens.panel(Color.TRANSPARENT, 6))
         button.add_theme_stylebox_override("focus", tokens.focus_style(6))

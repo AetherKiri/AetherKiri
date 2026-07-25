@@ -31,7 +31,6 @@ var success := Color("5db872")
 var warning := Color("d4a017")
 var danger := Color("c64545")
 var separator := Color(1.0, 1.0, 1.0, 0.09)
-var highlight := Color(1.0, 1.0, 1.0, 0.13)
 var shadow := Color(0.0, 0.0, 0.0, 0.34)
 
 func configure(next_mode: String) -> void:
@@ -53,7 +52,6 @@ func configure(next_mode: String) -> void:
         warning = Color("d4a017")
         danger = Color("c64545")
         separator = Color("e6dfd8")
-        highlight = Color(1.0, 1.0, 1.0, 0.58)
         shadow = Color(0.08, 0.08, 0.07, 0.12)
         return
 
@@ -73,7 +71,6 @@ func configure(next_mode: String) -> void:
     warning = Color("d4a017")
     danger = Color("c64545")
     separator = Color(1.0, 1.0, 1.0, 0.09)
-    highlight = Color(1.0, 1.0, 1.0, 0.13)
     shadow = Color(0.0, 0.0, 0.0, 0.34)
 
 func panel(fill: Color, radius: int = RADIUS_MEDIUM, border: Color = Color.TRANSPARENT, border_width: int = 0) -> StyleBoxFlat:
@@ -91,7 +88,7 @@ func panel(fill: Color, radius: int = RADIUS_MEDIUM, border: Color = Color.TRANS
     return style
 
 func material_panel(elevated: bool = false) -> StyleBoxFlat:
-    var style := panel(glass_material if not elevated else surface, RADIUS_MEDIUM, separator, 1)
+    var style := panel(glass_material if not elevated else surface, RADIUS_MEDIUM)
     style.content_margin_left = 16
     style.content_margin_top = 14
     style.content_margin_right = 16
@@ -111,12 +108,10 @@ func card_style(hovered: bool = false, pressed: bool = false) -> StyleBoxFlat:
             surface_raised.b + accent_fill.b * 0.08,
             1.0
         )
-    var border := accent if pressed else separator
-    var style := panel(fill, RADIUS_CARD, border, 1)
-    style.shadow_color = shadow
-    style.shadow_size = 8 if hovered else 3
-    style.shadow_offset = Vector2(0, 3 if hovered else 1)
-    return style
+    return panel(fill, RADIUS_CARD)
+
+func detail_outline_style() -> StyleBoxFlat:
+    return panel(surface, RADIUS_CARD, separator, 1)
 
 func sidebar_panel() -> StyleBoxFlat:
     var style := panel(sidebar_material, 0, separator, 1)

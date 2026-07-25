@@ -240,7 +240,7 @@ func _field_box(fill: Color, border: Color, border_width: int) -> StyleBoxFlat:
     return style
 
 func _popup_box() -> StyleBoxFlat:
-    var style: StyleBoxFlat = tokens.panel(tokens.surface, 8, tokens.highlight, 1)
+    var style: StyleBoxFlat = tokens.panel(tokens.surface, 8)
     style.content_margin_left = MENU_PADDING
     style.content_margin_top = MENU_PADDING
     style.content_margin_right = MENU_PADDING
