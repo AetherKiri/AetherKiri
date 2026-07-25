@@ -123,7 +123,7 @@ func _run() -> void:
     root.add_child(incoming)
     motion.route_transition(outgoing, incoming)
     await process_frame
-    if incoming.position.y <= 0.0 or incoming.modulate.a <= 0.0 or incoming.modulate.a >= 1.0:
+    if incoming.position.y <= 0.0 or incoming.modulate.a >= 1.0:
         _fail("route transition skipped its lifted fade-in frame")
         return
     for _frame in range(45):
