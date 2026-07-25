@@ -111,6 +111,15 @@ func _run() -> void:
         _fail("Escape did not dismiss the open select")
         return
 
+    select._open_popup()
+    await process_frame
+    select._choose(2)
+    for _frame in range(90):
+        await process_frame
+    if select.overlay != null or select.selected_index != 2:
+        _fail("select choice did not commit and release its overlay")
+        return
+
     print("aether_widget_interaction_test: PASS")
     quit(0)
 

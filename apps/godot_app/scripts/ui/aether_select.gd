@@ -2,7 +2,7 @@ extends Button
 
 signal item_selected(index: int)
 
-const CONTROL_HEIGHT := 44.0
+const CONTROL_HEIGHT := 40.0
 const MENU_GAP := 6.0
 const MENU_PADDING := 6.0
 const ITEM_HEIGHT := 40.0
@@ -30,16 +30,16 @@ func setup(design_tokens, motion_system, next_chevron: Texture2D, next_check: Te
     focus_mode = Control.FOCUS_ALL
     alignment = HORIZONTAL_ALIGNMENT_LEFT
     mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-    custom_minimum_size = Vector2(300, CONTROL_HEIGHT)
-    add_theme_font_size_override("font_size", 15)
+    custom_minimum_size = Vector2(220, CONTROL_HEIGHT)
+    add_theme_font_size_override("font_size", 14)
     add_theme_color_override("font_color", tokens.text_primary)
     add_theme_color_override("font_hover_color", tokens.text_primary)
     add_theme_color_override("font_pressed_color", tokens.text_primary)
     add_theme_color_override("font_focus_color", tokens.text_primary)
     add_theme_color_override("font_disabled_color", tokens.text_tertiary)
-    add_theme_stylebox_override("normal", _field_box(tokens.background_raised, tokens.separator, 1))
-    add_theme_stylebox_override("hover", _field_box(tokens.surface_raised, tokens.highlight, 1))
-    add_theme_stylebox_override("pressed", _field_box(tokens.surface_hover, Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.58), 1))
+    add_theme_stylebox_override("normal", _field_box(Color.TRANSPARENT, Color.TRANSPARENT, 0))
+    add_theme_stylebox_override("hover", _field_box(tokens.accent_fill, Color.TRANSPARENT, 0))
+    add_theme_stylebox_override("pressed", _field_box(tokens.accent_fill, Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.42), 1))
     add_theme_stylebox_override("focus", tokens.focus_style(8))
     add_theme_stylebox_override("disabled", _field_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.34), tokens.separator, 1))
 
@@ -189,12 +189,12 @@ func _animate_popup(show: bool) -> void:
         popup_tween.kill()
     if show:
         popup_panel.modulate.a = 0.0
-        popup_panel.scale = Vector2.ONE if motion.reduced_motion else Vector2(0.97, 0.97)
+        popup_panel.scale = Vector2.ONE if motion.reduced_motion else Vector2(0.96, 0.92)
     var duration := 0.12 if motion.reduced_motion else (0.18 if show else 0.14)
     popup_tween = create_tween().set_parallel(true)
     popup_tween.tween_property(popup_panel, "modulate:a", 1.0 if show else 0.0, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not motion.reduced_motion:
-        motion.spring_property(popup_panel, "scale", Vector2.ONE if show else Vector2(0.97, 0.97), 0.28 if show else 0.22, 1.0)
+        motion.spring_property(popup_panel, "scale", Vector2.ONE if show else Vector2(0.96, 0.92), 0.24 if show else 0.18, 1.0)
     if not show:
         popup_tween.chain().tween_callback(_free_overlay)
 
@@ -232,9 +232,7 @@ func _field_box(fill: Color, border: Color, border_width: int) -> StyleBoxFlat:
     var style: StyleBoxFlat = tokens.button_style(fill, border, 8)
     style.content_margin_left = 13
     style.content_margin_right = 42
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.16 if tokens.mode == "dark" else 0.07)
-    style.shadow_size = 4 if tokens.mode == "dark" else 2
-    style.shadow_offset = Vector2(0, 1)
+    style.shadow_color = Color.TRANSPARENT
     style.border_width_left = border_width
     style.border_width_top = border_width
     style.border_width_right = border_width
@@ -242,13 +240,12 @@ func _field_box(fill: Color, border: Color, border_width: int) -> StyleBoxFlat:
     return style
 
 func _popup_box() -> StyleBoxFlat:
-    var fill := Color(tokens.glass_material.r, tokens.glass_material.g, tokens.glass_material.b, 0.98)
-    var style: StyleBoxFlat = tokens.panel(fill, 8, tokens.highlight, 1)
+    var style: StyleBoxFlat = tokens.panel(tokens.surface, 8, tokens.highlight, 1)
     style.content_margin_left = MENU_PADDING
     style.content_margin_top = MENU_PADDING
     style.content_margin_right = MENU_PADDING
     style.content_margin_bottom = MENU_PADDING
     style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.64 if tokens.mode == "dark" else 0.22)
-    style.shadow_size = 24 if tokens.mode == "dark" else 14
-    style.shadow_offset = Vector2(0, 10)
+    style.shadow_size = 18 if tokens.mode == "dark" else 10
+    style.shadow_offset = Vector2(0, 8)
     return style
