@@ -286,6 +286,15 @@ namespace motion::detail {
         // resources is expensive enough to be visible during title animations.
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
             motionSourceBitmapCache;
+        // E-mote atlases are shared by many icon sources. Building the
+        // cross-player bitmap-cache key fingerprints the complete atlas
+        // bytes, so remember that content fingerprint for this runtime
+        // instead of rescanning the same multi-megabyte resource once per
+        // icon. The cache is cleared whenever the active motion changes,
+        // keeping the resource-pointer identity bounded by its snapshot.
+        std::unordered_map<const PSB::PSBResource *,
+                           std::pair<std::uint64_t, std::uint64_t>>
+            motionSourceResourceFingerprintCache;
         struct MotionSourceMetadata {
             int width = 0;
             int height = 0;
@@ -316,6 +325,44 @@ namespace motion::detail {
         std::unordered_map<iTJSDispatch2 *, PresentationRenderCacheEntry>
             presentationRenderCache;
         int presentationRenderReuseSkips = 0;
+        // D3DEmote draws every character through one shared work layer.  A
+        // target-only cache cannot survive the next character overwriting
+        // that layer, so retain this player's completed frame separately.
+        // The bitmap keeps Godot-native GPU contents resident when available.
+        struct EmoteRenderFrameCacheEntry {
+            std::shared_ptr<tTVPBaseBitmap> bitmap;
+            std::string motion;
+            double frame = 0.0;
+            tjs_int canvasWidth = 0;
+            tjs_int canvasHeight = 0;
+            std::size_t commandSignature = 0;
+            std::uint64_t storedUs = 0;
+        };
+        EmoteRenderFrameCacheEntry emoteRenderFrameCache;
+        int emoteRenderFrameReuseSkips = 0;
+        // E-mote rebuilds the render-command vector on every tick, but most
+        // transformed leaves and composite subtrees are unchanged between
+        // ticks. Keep their GPU-backed work layers alive across that rebuild
+        // so animated parts can update without repainting all static parts.
+        struct EmoteCommandOutputCacheEntry {
+            std::size_t leafSignature = 0;
+            std::size_t outputSignature = 0;
+            std::size_t maskSignature = 0;
+            tTJSVariant leafLayer;
+            tTJSVariant composedLayer;
+            tTJSVariant maskLayer;
+            bool leafValid = false;
+            bool outputValid = false;
+            bool maskValid = false;
+            bool leafBuilt = false;
+            bool composedBuilt = false;
+            std::uint64_t lastUseGeneration = 0;
+        };
+        std::unordered_map<std::string, EmoteCommandOutputCacheEntry>
+            emoteCommandOutputCache;
+        std::uint64_t emoteCommandOutputCacheGeneration = 0;
+        std::uint64_t emoteCommandOutputCacheHits = 0;
+        std::uint64_t emoteCommandLeafCacheHits = 0;
         std::array<double, 6> drawAffineMatrix{ 1.0, 0.0, 0.0,
                                                 1.0, 0.0, 0.0 };
         tjs_int nextLayerId = 1;
@@ -342,13 +389,41 @@ namespace motion::detail {
         // Populated after buildNodeTree, queried by sub_6F2228 equivalent.
         std::map<std::string, int> nodeLabelMap;
 
+        struct RenderAncestorReference {
+            std::uintptr_t renderScopeId = 0;
+            int scopedNodeIndex = -1;
+        };
+
         struct PreparedRenderItem {
             int nodeIndex = 0;
+            // Flattened child players remap nodeIndex into one numeric
+            // namespace. Keep the original runtime-local identity as well so
+            // cross-runtime parents can still be resolved after a containing
+            // player is flattened again.
+            std::uintptr_t renderScopeId = 0;
+            int scopedNodeIndex = -1;
+            std::uintptr_t parentRenderScopeId = 0;
+            int scopedParentNodeIndex = -1;
+            // A nested motion can be flattened through more than one Player.
+            // Each reference is the next enclosing composite candidate after
+            // the preceding runtime-local ancestor chain reaches its root.
+            std::vector<RenderAncestorReference> outerRenderAncestorChain;
             std::string nodeLabel;
             tTJSVariant srcRef;
             std::string sourceKey;
+            // Flattened motion children keep source keys such as
+            // `src/tex/0001`, but those keys are local to the PSB that owns
+            // the child. Retain that snapshot so the parent renderer does not
+            // incorrectly resolve every child key against the timeline PSB.
+            std::shared_ptr<MotionSnapshot> sourceMotion;
             bool hasOwnSource = false;
             bool groupOnly = false;
+            // Legacy op-5 stencil containers can omit an explicit mask list.
+            // Their first authored child branch is both visible artwork and
+            // the alpha base for the remaining branches.
+            bool implicitVisibleStencilGroup = false;
+            bool implicitVisibleStencilBase = false;
+            int implicitVisibleStencilGroupNodeIndex = -1;
             bool skipFlag0 = false;
             bool skipFlag1 = false;
             bool clipFlag = false;
@@ -375,11 +450,20 @@ namespace motion::detail {
         };
         struct RenderCommand {
             int nodeIndex = 0;
+            std::uintptr_t renderScopeId = 0;
+            int scopedNodeIndex = -1;
+            std::uintptr_t parentRenderScopeId = 0;
+            int scopedParentNodeIndex = -1;
+            std::vector<RenderAncestorReference> outerRenderAncestorChain;
             std::string nodeLabel;
             tTJSVariant srcRef;
             std::string sourceKey;
+            std::shared_ptr<MotionSnapshot> sourceMotion;
             bool hasOwnSource = false;
             bool groupOnly = false;
+            bool implicitVisibleStencilGroup = false;
+            bool implicitVisibleStencilBase = false;
+            int implicitVisibleStencilGroupNodeIndex = -1;
             // Referenced stencil inputs must be materialized into an
             // off-screen layer even when they would otherwise qualify for the
             // direct-to-target fast path.  Composite groups read that layer's
@@ -390,6 +474,23 @@ namespace motion::detail {
             int itemFlags = 0;
             int parentNodeIndex = -1;
             bool hasRenderParent = false;
+            // A standalone flags-6 carrier without a concrete item+264
+            // target contributes only alpha topology. Its descendants remain
+            // ordinary render items and the carrier itself is never copied
+            // to the colour target.
+            bool alphaMaskOnly = false;
+            // Parentless flags-6 carriers retain hidden mode-6 source layers
+            // as alpha inputs. Ordinary drawable descendants reference the
+            // carrier through differenceAlphaMaskGroupCommandIndices and are
+            // cropped before reaching the presentation target.
+            std::vector<int> differenceAlphaMaskSourceCommandIndices;
+            std::vector<int> differenceAlphaMaskGroupCommandIndices;
+            std::vector<int> differenceAlphaMaskInputCommandIndices;
+            // An authored same-name item+304 pair uses the flags-6
+            // difference operation. A base colour leaf without such a pair
+            // consumes the carrier's combined group+324 alpha as an ordinary
+            // crop instead.
+            int differenceAlphaMaskOperation = 0;
             // A parent viewport can crop a drawable inside the final canvas.
             // Such items need the clip-sized scratch layer; the final target
             // only provides canvas-edge clipping.
@@ -410,6 +511,13 @@ namespace motion::detail {
             int meshType = 0;
             int layerId = 0;
             std::vector<int> childCommandIndices;
+            // A type-12 flags-6 group can modify an authored parent surface.
+            // It is recorded here only when that parent has a concrete render
+            // command. If the parent is merely a source-less transform, the
+            // group remains an independent composite output; mode-6 child
+            // bitmaps inside it are alpha-chain carriers rather than visible
+            // RGB artwork.
+            std::vector<int> stencilModifierCommandIndices;
             std::vector<int> stencilMaskNodeIndices;
             std::vector<int> stencilMaskCommandIndices;
             tTJSVariant leafLayer;
@@ -453,9 +561,16 @@ namespace motion::detail {
 
         void clearMotionBitmapCaches() {
             motionSourceBitmapCache.clear();
+            motionSourceResourceFingerprintCache.clear();
             motionSourceMetadataCache.clear();
             motionPreparedBitmapCache.clear();
             motionPreparedMaterializedKeysBySource.clear();
+            emoteRenderFrameCache = {};
+            emoteRenderFrameReuseSkips = 0;
+            emoteCommandOutputCache.clear();
+            emoteCommandOutputCacheGeneration = 0;
+            emoteCommandOutputCacheHits = 0;
+            emoteCommandLeafCacheHits = 0;
             clearPresentationRenderReuse();
         }
     };

@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-07-21
+Last updated: 2026-07-22
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -42,6 +42,7 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | ワガママハイスペック OC | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, music playback, lock-screen audio recovery, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 淫母マンション～ママは、性処理肉便器～ | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, scene/text rendering, audio playback, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 天色＊アイルノーツ | macOS debug app | Startup, title/menu rendering, continue/load flow, background and character rendering, SD CG transition stability, scene/text rendering, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| NEKOPARA Vol. 1 | macOS debug app | Startup, title/menu rendering, data-load and first-save flow, scene/text rendering, E-mote character rendering and animation, rapid dialogue input, and character-layer click forwarding | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 
 ## How To Add A Game
 

@@ -16,14 +16,7 @@ using namespace motion::internal;
 namespace {
     inline bool motionUpdateDebugEnabled() {
         const char *enabled = std::getenv("AETHERKIRI_MOTION_DEBUG");
-        const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
-        return (enabled && *enabled && std::strcmp(enabled, "0") != 0) ||
-            (debugAll && *debugAll && std::strcmp(debugAll, "0") != 0);
-    }
-
-    inline bool motionUpdateDebugAllEnabled() {
-        const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
-        return debugAll && *debugAll && std::strcmp(debugAll, "0") != 0;
+        return enabled && *enabled && std::strcmp(enabled, "0") != 0;
     }
 
     inline bool emoteRootTraceEnabled() {
@@ -108,6 +101,7 @@ namespace {
         const motion::internal::FrameContentState &s) {
         slot.done = !s.visible;
         slot.src = s.src;
+        slot.motionIcon = s.motionIcon;
         slot.srcList = s.srcList;
         slot.x = s.x; slot.y = s.y; slot.z = s.z;
         slot.ox = s.ox; slot.oy = s.oy;
@@ -151,7 +145,8 @@ namespace {
         if(slot.done != newDone) {
             return true;
         }
-        if(slot.src != state.src || slot.srcList != state.srcList) {
+        if(slot.src != state.src || slot.motionIcon != state.motionIcon ||
+           slot.srcList != state.srcList) {
             return true;
         }
 
@@ -1787,64 +1782,10 @@ namespace motion {
                 }
 
                 if (child._runtime->nodes.empty()) {
-                    if (LOGGER && motionUpdateDebugAllEnabled() &&
-                        _runtime && _runtime->activeMotion &&
-                        (_runtime->activeMotion->path.find("SD") != std::string::npos ||
-                         _runtime->activeMotion->path.find("sd") != std::string::npos)) {
-                        LOGGER->info(
-                            "motion subnode root pending: motion={} parentLabel={} parentIndex={} childMotion={} childLabel={} root=({:.1f},{:.1f},{:.1f}) parentAccum=({:.1f},{:.1f},{:.1f})",
-                            _runtime->activeMotion->path,
-                            parentNode.layerName.empty()
-                                ? std::string("<root>")
-                                : parentNode.layerName,
-                            parentNode.parentIndex,
-                            child._runtime->activeMotion
-                                ? child._runtime->activeMotion->path
-                                : std::string("<none>"),
-                            detail::narrow(child._motionKey),
-                        rootState.posX, rootState.posY, rootState.posZ,
-                        parentNode.accumulated.posX,
-                        parentNode.accumulated.posY,
-                        parentNode.accumulated.posZ);
-                    }
                     return;
                 }
 
                 auto &cr = child._runtime->nodes[0];
-                if (LOGGER && motionUpdateDebugAllEnabled() &&
-                    _runtime && _runtime->activeMotion &&
-                    (_runtime->activeMotion->path.find("SD") != std::string::npos ||
-                     _runtime->activeMotion->path.find("sd") != std::string::npos ||
-                     isYuzuTitlePresentationMotionPath(
-                         _runtime->activeMotion->path))) {
-                    LOGGER->info(
-                        "motion subnode root apply: motion={} parentLabel={} parentIndex={} childMotion={} childLabel={} childNodes={} root=({:.3f},{:.3f},{:.3f}) parentAccum=({:.3f},{:.3f},{:.3f}) parentScale=({:.6f},{:.6f}) parentMatrix=[{:.6f},{:.6f},{:.6f},{:.6f}] rootBefore=({:.3f},{:.3f},{:.3f}) rootScaleBefore=({:.6f},{:.6f}) rootMatrixBefore=[{:.6f},{:.6f},{:.6f},{:.6f}]",
-                        _runtime->activeMotion->path,
-                        parentNode.layerName.empty()
-                            ? std::string("<root>")
-                            : parentNode.layerName,
-                        parentNode.parentIndex,
-                        child._runtime->activeMotion
-                            ? child._runtime->activeMotion->path
-                            : std::string("<none>"),
-                        detail::narrow(child._motionKey),
-                        child._runtime->nodes.size(),
-                        rootState.posX, rootState.posY, rootState.posZ,
-                        parentNode.accumulated.posX,
-                        parentNode.accumulated.posY,
-                        parentNode.accumulated.posZ,
-                        parentNode.accumulated.scaleX,
-                        parentNode.accumulated.scaleY,
-                        parentNode.accumulated.m11,
-                        parentNode.accumulated.m12,
-                        parentNode.accumulated.m21,
-                        parentNode.accumulated.m22,
-                        cr.localState.posX, cr.localState.posY,
-                        cr.localState.posZ,
-                        cr.localState.scaleX, cr.localState.scaleY,
-                        cr.accumulated.m11, cr.accumulated.m12,
-                        cr.accumulated.m21, cr.accumulated.m22);
-                }
                 cr.accumulated.posX = rootState.posX;
                 cr.accumulated.posY = rootState.posY;
                 cr.accumulated.posZ = rootState.posZ;
@@ -2062,10 +2003,16 @@ namespace motion {
                             std::string motionPart;
                             if (slashPos == std::string::npos) {
                                 charaPart = motionRef;
-                                motionPart = motionRef;
+                                motionPart =
+                                    mn.activeSlot().motionIcon.empty()
+                                    ? motionRef
+                                    : mn.activeSlot().motionIcon;
                             } else {
                                 charaPart = motionRef.substr(0, slashPos);
-                                motionPart = motionRef.substr(slashPos + 1);
+                                motionPart =
+                                    mn.activeSlot().motionIcon.empty()
+                                    ? motionRef.substr(slashPos + 1)
+                                    : mn.activeSlot().motionIcon;
                             }
 
                             const int playFlags =
@@ -2076,6 +2023,15 @@ namespace motion {
                                     *_runtime->activeMotion, charaPart,
                                     motionPart, false) != nullptr;
                             if(canReuseCurrentSnapshot) {
+                                // Valid group/icon children remain part of
+                                // the same E-mote project and need its cached
+                                // head/body/timeline modules. Do not share the
+                                // manager for unresolved legacy `src` slots:
+                                // ensureMotionLoaded() would otherwise mistake
+                                // the project's last module for that missing
+                                // child and recursively build the whole PSB.
+                                child._resourceManagerNative =
+                                    _resourceManagerNative;
                                 const bool sameChara =
                                     detail::narrow(child._chara) == charaPart;
                                 child.setChara(detail::widen(charaPart));
@@ -2102,17 +2058,105 @@ namespace motion {
                                     child.playMotionLike_0x6B2284(
                                         motionKey, playFlags);
                                 }
-                            } else if (slashPos == std::string::npos) {
+                            } else if(
+                                shouldSearchCachedMotionComposition(
+                                    motionRef,
+                                    mn.activeSlot().motionIcon)) {
+                                // The group may live in another PSB already
+                                // loaded into this E-mote project (timeline →
+                                // body, body → head). Select the cached module
+                                // that owns this exact group/motion pair. A
+                                // hierarchical src is authoritative even when
+                                // motionIcon is empty; split CG timelines use
+                                // motion/all_parts/全体構造 in exactly that form.
+                                std::shared_ptr<detail::MotionSnapshot>
+                                    composedSnapshot =
+                                        child._runtime &&
+                                        child._runtime->activeMotion &&
+                                        detail::findMotionClip(
+                                            *child._runtime->activeMotion,
+                                            charaPart, motionPart, false)
+                                        ? child._runtime->activeMotion
+                                        : nullptr;
+                                std::uint64_t composedGeneration = 0;
+                                if(!composedSnapshot) {
+                                    for(const auto &entry :
+                                        _resourceManagerNative
+                                            .uniqueCachedModules()) {
+                                        const auto candidate =
+                                            detail::lookupModuleSnapshot(
+                                                entry.module);
+                                        if(!candidate ||
+                                           !detail::findMotionClip(
+                                               *candidate, charaPart,
+                                               motionPart, false)) {
+                                            continue;
+                                        }
+                                        if(!composedSnapshot ||
+                                           entry.loadGeneration >
+                                               composedGeneration) {
+                                            composedSnapshot = candidate;
+                                            composedGeneration =
+                                                entry.loadGeneration;
+                                        }
+                                    }
+                                }
+                                if(composedSnapshot) {
+                                    if(LOGGER &&
+                                       std::getenv(
+                                           "AETHERKIRI_MOTION_DEBUG")) {
+                                        LOGGER->info(
+                                            "motion child bind cached composition: parent={} source={} owner={} clip={} module={}",
+                                            motionPath, src, charaPart,
+                                            motionPart,
+                                            composedSnapshot->path);
+                                    }
+                                    child._resourceManagerNative =
+                                        _resourceManagerNative;
+                                    const auto motionKey =
+                                        detail::widen(motionPart);
+                                    const bool sameChara =
+                                        detail::narrow(child._chara) ==
+                                        charaPart;
+                                    const bool sameSnapshot =
+                                        child._runtime &&
+                                        child._runtime->activeMotion ==
+                                            composedSnapshot;
+                                    const bool sameMotion =
+                                        detail::narrow(child._motionKey) ==
+                                        motionPart;
+                                    const bool hasTimeline =
+                                        child._runtime &&
+                                        child._runtime->timelines.find(
+                                            motionPart) !=
+                                            child._runtime->timelines.end();
+                                    const bool hasBuiltNodes =
+                                        child._runtime &&
+                                        child._runtime->nodesBuilt &&
+                                        child._runtime->nodes.size() > 1;
+                                    if(!sameSnapshot || !sameChara ||
+                                       !sameMotion || !hasTimeline ||
+                                       !hasBuiltNodes) {
+                                        child.setChara(
+                                            detail::widen(charaPart));
+                                        child._motionKey = motionKey;
+                                        child.loadFromSnapshot(
+                                            composedSnapshot);
+                                        child.playMotionLike_0x6B2284(
+                                            motionKey, playFlags);
+                                    }
+                                } else {
+                                    child.setChara(
+                                        detail::widen(charaPart));
+                                    child.onFindMotion(
+                                        detail::widen(motionPart),
+                                        playFlags);
+                                }
+                            } else {
                                 // Single segment: binary sets chara to src itself
                                 // then Player_play with raw src (no "/" prefix)
                                 child.setChara(detail::widen(motionRef));
                                 child.onFindMotion(detail::widen(motionRef),
-                                                   playFlags);
-                            } else {
-                                // Multi-segment: "chara/motion" format
-                                // Binary: setChara(chara), Player_play(motion)
-                                child.setChara(detail::widen(charaPart));
-                                child.onFindMotion(detail::widen(motionPart),
                                                    playFlags);
                             }
                         }
@@ -2733,25 +2777,6 @@ namespace motion {
         root.accumulated.m21 = parentNode.accumulated.m21;
         root.accumulated.m22 = parentNode.accumulated.m22;
         root.accumulated.dirty = true;
-
-        if(LOGGER && motionUpdateDebugAllEnabled() &&
-           _runtime->activeMotion &&
-           (_runtime->activeMotion->path.find("SD") != std::string::npos ||
-            _runtime->activeMotion->path.find("sd") != std::string::npos)) {
-            LOGGER->info(
-                "motion parent root render apply: childMotion={} childLabel={} parentMotion={} parentLabel={} parentIndex={} root=({:.1f},{:.1f},{:.1f}) parentAccum=({:.1f},{:.1f},{:.1f})",
-                _runtime->activeMotion->path, detail::narrow(_motionKey),
-                _motionParentPlayer->_runtime->activeMotion
-                    ? _motionParentPlayer->_runtime->activeMotion->path
-                    : std::string("<none>"),
-                parentNode.layerName.empty()
-                    ? std::string("<root>")
-                    : parentNode.layerName,
-                _motionParentNodeIndex, posX, posY, posZ,
-                parentNode.accumulated.posX,
-                parentNode.accumulated.posY,
-                parentNode.accumulated.posZ);
-        }
 
         return true;
     }
@@ -4192,6 +4217,13 @@ namespace motion {
             entry.nodeLabel = node.layerName;
             entry.hasOwnSource = hasOwnSource;
             entry.groupOnly = needsGroupEntry;
+            entry.implicitVisibleStencilGroup =
+                node.implicitVisibleStencilGroup;
+            entry.implicitVisibleStencilBase =
+                node.implicitVisibleStencilBase;
+            entry.implicitVisibleStencilGroupNodeIndex =
+                node.implicitVisibleStencilGroupNodeIndex;
+            entry.sourceMotion = _runtime->activeMotion;
             if(hasOwnSource) {
                 entry.sourceKey = node.interpolatedCache.src;
                 entry.srcRef = findSource(detail::widen(entry.sourceKey));
@@ -4421,76 +4453,6 @@ namespace motion {
             entries.push_back(std::move(entry));
         }
 
-        if(LOGGER && motionUpdateDebugEnabled() &&
-           (_runtime->activeMotion && motionUpdateDebugAllEnabled())) {
-            const auto &motionPath = _runtime->activeMotion->path;
-            const int frameBucket =
-                static_cast<int>(std::floor(_frameTickCount / 10.0));
-            if(markMotionUpdateDebugLogged(fmt::format(
-                   "prepare-append|{}|{}|{}|{}", motionPath,
-                   static_cast<const void *>(this),
-                   detail::narrow(_motionKey), frameBucket))) {
-                std::ostringstream nodeSummary;
-                const size_t nodeLimit = std::min<size_t>(nodes.size(), 24);
-                for(size_t ni = 0; ni < nodeLimit; ++ni) {
-                    const auto &node = nodes[ni];
-                    if(ni) nodeSummary << ";";
-                    nodeSummary << ni << ":"
-                                << (node.layerName.empty()
-                                        ? std::string("<root>")
-                                        : node.layerName)
-                                << ":t" << node.nodeType
-                                << ":parent=" << node.parentIndex
-                                << ":inherit=0x" << std::hex
-                                << node.inheritFlags << std::dec
-                                << ":act" << (node.accumulated.active ? 1 : 0)
-                                << ":vis" << (node.accumulated.visible ? 1 : 0)
-                                << ":hasSrc" << (node.hasSource ? 1 : 0)
-                                << ":src=" << (node.interpolatedCache.src.empty()
-                                                  ? std::string("<none>")
-                                                  : node.interpolatedCache.src)
-                                << ":draw" << (node.drawFlag ? 1 : 0)
-                                << ":force" << node.forceVisible
-                                << ":frameType" << node.currentFrameType
-                                << ":stencilBase0x" << std::hex
-                                << node.stencilTypeBase << std::dec
-                                << ":stencil0x" << std::hex
-                                << node.stencilType << std::dec
-                                << ":opa" << node.accumulated.opacity
-                                << ":localPos=(" << node.localState.posX << ","
-                                << node.localState.posY << ","
-                                << node.localState.posZ << ")"
-                                << ":localScale=(" << node.localState.scaleX
-                                << "," << node.localState.scaleY << ")"
-                                << ":frameScale=("
-                                << node.interpolatedCache.scaleX << ","
-                                << node.interpolatedCache.scaleY << ")"
-                                << ":accPos=(" << node.accumulated.posX << ","
-                                << node.accumulated.posY << ","
-                                << node.accumulated.posZ << ")"
-                                << ":accScale=(" << node.accumulated.scaleX
-                                << "," << node.accumulated.scaleY << ")"
-                                << ":matrix=[" << node.accumulated.m11 << ","
-                                << node.accumulated.m12 << ","
-                                << node.accumulated.m21 << ","
-                                << node.accumulated.m22 << "]"
-                                << ":clip=" << node.clipW << "x" << node.clipH
-                                << ":origin=(" << node.originX << ","
-                                << node.originY << ")"
-                                << ":bounds=[" << node.bounds[0] << ","
-                                << node.bounds[1] << "," << node.bounds[2]
-                                << "," << node.bounds[3] << "]";
-                }
-                LOGGER->info(
-                    "motion prepare append summary: motion={} player={} motionKey={} frameTick={:.2f} nodes={} entries={} requiredGroups={} skipInactive={} skipType={} skipNoRenderable={} nodes=[{}]",
-                    motionPath, static_cast<const void *>(this),
-                    detail::narrow(_motionKey), _frameTickCount,
-                    nodes.size(), entries.size(),
-                    requiredGroupNodeIndices.size(), skipInactive, skipType,
-                    skipNoRenderableSource, nodeSummary.str());
-            }
-        }
-
         if(entries.empty()) {
             return;
         }
@@ -4499,6 +4461,30 @@ namespace motion {
         entryIndexByNode.reserve(entries.size());
         for(size_t i = 0; i < entries.size(); ++i) {
             entryIndexByNode.emplace(entries[i].nodeIndex, i);
+        }
+
+        // visibleAncestorIndex follows every active structural node in the
+        // native tree, but transform-only nodes do not produce render items.
+        // Collapse those gaps while the local node array is still available
+        // so the later flattened command walk reaches the actual composite
+        // ancestor instead of stopping at a missing command.
+        for(auto &entry : entries) {
+            int ancestorIndex = entry.visibleAncestorIndex;
+            std::unordered_set<int> visitedAncestors;
+            while(ancestorIndex >= 0 &&
+                  ancestorIndex < static_cast<int>(nodes.size()) &&
+                  entryIndexByNode.find(ancestorIndex) ==
+                      entryIndexByNode.end() &&
+                  visitedAncestors.insert(ancestorIndex).second) {
+                ancestorIndex = nodes[ancestorIndex].visibleAncestorIndex;
+            }
+            entry.visibleAncestorIndex =
+                ancestorIndex >= 0 &&
+                        ancestorIndex < static_cast<int>(nodes.size()) &&
+                        entryIndexByNode.find(ancestorIndex) !=
+                            entryIndexByNode.end()
+                    ? ancestorIndex
+                    : -1;
         }
 
         auto unionPaintBox =
@@ -4699,6 +4685,17 @@ namespace motion {
         }
 
         appendPreparedRenderItems();
+        const auto localRenderScopeId = reinterpret_cast<std::uintptr_t>(
+            _runtime.get());
+        for(auto &entry : _runtime->preparedRenderItems) {
+            entry.renderScopeId = localRenderScopeId;
+            entry.scopedNodeIndex = entry.nodeIndex;
+            if(entry.visibleAncestorIndex >= 0) {
+                entry.parentRenderScopeId = localRenderScopeId;
+                entry.scopedParentNodeIndex =
+                    entry.visibleAncestorIndex;
+            }
+        }
 
         auto isValidPreparedPaintBox =
             [](const std::array<float, 4> &box) {
@@ -4863,8 +4860,7 @@ namespace motion {
                 }
 
                 if(LOGGER &&
-                   (motionUpdateDebugAllEnabled() ||
-                    std::getenv("AETHERKIRI_EMOTE_MESH_TRACE")) &&
+                   std::getenv("AETHERKIRI_EMOTE_MESH_TRACE") &&
                    deformedEntries > 0) {
                     LOGGER->info(
                         "[EMOTE_MESH] child external mesh applied: motion={} parentNode={} parentLabel={} childMotion={} chainDepth={} chainFirst={} entries={}",
@@ -5030,16 +5026,6 @@ namespace motion {
                         entry, parentCenterX, parentCenterY,
                         haveParentViewport ? &parentViewport : nullptr);
                 }
-                if(LOGGER && motionUpdateDebugAllEnabled()) {
-                    LOGGER->info(
-                        "motion child center-origin translate: motion={} parentNode={} childMotion={} parentBounds=[{:.1f},{:.1f},{:.1f},{:.1f}] childBounds=[{:.1f},{:.1f},{:.1f},{:.1f}] offset=({:.1f},{:.1f}) entries={}",
-                        motionPath, pending.parentNodeIndex,
-                        pending.childMotionPath, parentBounds[0],
-                        parentBounds[1], parentBounds[2], parentBounds[3],
-                        childBounds[0], childBounds[1], childBounds[2],
-                        childBounds[3], parentCenterX, parentCenterY,
-                        pending.entries.size());
-                }
             };
 
         auto inheritParentClipViewport =
@@ -5142,6 +5128,9 @@ namespace motion {
             if(maxChildNodeIndex >= 0) {
                 const int nodeIndexOffset = nextMergedNodeIndex;
                 for(auto &entry : pending.entries) {
+                    const bool hadScopedRenderParent =
+                        entry.parentRenderScopeId != 0 &&
+                        entry.scopedParentNodeIndex >= 0;
                     if(entry.nodeIndex >= 0) {
                         entry.nodeIndex += nodeIndexOffset;
                     }
@@ -5160,11 +5149,35 @@ namespace motion {
                         // exception and must retain the external parent.
                         entry.visibleAncestorIndex =
                             pending.externalAncestorNodeIndex;
+                        entry.parentRenderScopeId = localRenderScopeId;
+                        entry.scopedParentNodeIndex =
+                            pending.externalAncestorNodeIndex;
+                    }
+                    if(hadScopedRenderParent &&
+                       pending.externalAncestorNodeIndex >= 0) {
+                        const detail::PlayerRuntime::
+                            RenderAncestorReference outerAncestor{
+                                localRenderScopeId,
+                                pending.externalAncestorNodeIndex};
+                        if(entry.outerRenderAncestorChain.empty() ||
+                           entry.outerRenderAncestorChain.back()
+                                   .renderScopeId !=
+                               outerAncestor.renderScopeId ||
+                           entry.outerRenderAncestorChain.back()
+                                   .scopedNodeIndex !=
+                               outerAncestor.scopedNodeIndex) {
+                            entry.outerRenderAncestorChain.push_back(
+                                outerAncestor);
+                        }
                     }
                     for(int &maskNodeIndex : entry.stencilMaskNodeIndices) {
                         if(maskNodeIndex >= 0) {
                             maskNodeIndex += nodeIndexOffset;
                         }
+                    }
+                    if(entry.implicitVisibleStencilGroupNodeIndex >= 0) {
+                        entry.implicitVisibleStencilGroupNodeIndex +=
+                            nodeIndexOffset;
                     }
                 }
                 nextMergedNodeIndex += maxChildNodeIndex + 1;

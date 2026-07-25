@@ -64,6 +64,8 @@ bool CopyRect(uint8_t *dst, int dst_pitch, int dst_width, int dst_height,
 std::mutex g_method_stats_mutex;
 std::unordered_map<std::string, uint64_t> g_method_stats;
 std::atomic<uint64_t> g_texture_create_count{0};
+std::atomic<uint64_t> g_texture_clone_count{0};
+std::atomic<uint64_t> g_texture_resize_count{0};
 std::atomic<uint64_t> g_software_fallback_count{0};
 std::atomic<uint64_t> g_gpu_fastpath_count{0};
 std::atomic<bool> g_gpu_fastpath_enabled{true};
@@ -127,6 +129,7 @@ bool IsGpuRectFastPathEnabled(const char *name) {
     }
     const auto is_default_enabled = [&]() {
         return std::strcmp(name, "FillARGB") == 0 ||
+               std::strcmp(name, "FillMask") == 0 ||
                std::strcmp(name, "Copy") == 0 ||
                std::strcmp(name, "RemoveConstOpacity") == 0 ||
                std::strcmp(name, "AlphaBlend") == 0 ||
@@ -139,6 +142,8 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "UnivTransBlend_d") == 0 ||
                std::strcmp(name, "UnivTransBlend_a") == 0 ||
                std::strcmp(name, "CopyColor") == 0 ||
+               std::strcmp(name, "PsAddBlend") == 0 ||
+               std::strcmp(name, "PsSubBlend") == 0 ||
                std::strcmp(name, "PsScreenBlend") == 0 ||
                std::strcmp(name, "PsMulBlend") == 0;
     };
@@ -736,7 +741,9 @@ bool GodotTexture2D::BlendTrianglesGpuFrom(
         mode != TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A &&
         mode != TVP_GODOT_GPU_BLEND_CONST_ALPHA_D &&
         mode != TVP_GODOT_GPU_BLEND_PS_SCREEN &&
-        mode != TVP_GODOT_GPU_BLEND_PS_MULTIPLY) {
+        mode != TVP_GODOT_GPU_BLEND_PS_MULTIPLY &&
+        mode != TVP_GODOT_GPU_BLEND_PS_ADD &&
+        mode != TVP_GODOT_GPU_BLEND_PS_SUBTRACT) {
         return false;
     }
     return DrawTrianglesGpuFrom(
@@ -810,7 +817,9 @@ bool GodotTexture2D::BlendGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
     if (src == nullptr || gpu_handle_ == 0 || src->gpu_handle_ == 0) {
         return false;
     }
-    if (src == this) {
+    if (src == this &&
+        mode != TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY &&
+        mode != TVP_GODOT_GPU_BLEND_FILL_MASK) {
         return false;
     }
     const auto *bridge = TVPGodotGpuBridgeGet();
@@ -930,6 +939,11 @@ iTVPTexture2D *GodotRenderManager::CreateTexture2D(TJS::tTJSBinaryStream *) {
 iTVPTexture2D *GodotRenderManager::CreateTexture2D(unsigned int neww,
                                                    unsigned int newh,
                                                    iTVPTexture2D *tex) {
+    g_texture_clone_count.fetch_add(1, std::memory_order_relaxed);
+    if (tex == nullptr || tex->GetWidth() != static_cast<tjs_int>(neww) ||
+        tex->GetHeight() != static_cast<tjs_int>(newh)) {
+        g_texture_resize_count.fetch_add(1, std::memory_order_relaxed);
+    }
     auto *ret = new GodotTexture2D(nullptr, 0, neww, newh,
                                   tex != nullptr ? tex->GetFormat()
                                                  : TVPTextureFormat::RGBA);
@@ -938,6 +952,19 @@ iTVPTexture2D *GodotRenderManager::CreateTexture2D(unsigned int neww,
                                std::min<tjs_int>(neww, tex->GetWidth()),
                                std::min<tjs_int>(newh, tex->GetHeight()));
         if (!copy_rc.is_empty()) {
+            // Copy-on-write and grow-only motion scratch layers arrive here
+            // while their newest pixels still live exclusively on the GPU.
+            // Reading scan line zero would synchronously download the entire
+            // Metal texture before uploading it into the replacement texture.
+            // Keep that clone on the ordered GPU queue whenever both textures
+            // use this backend.
+            auto *godot_src = dynamic_cast<GodotTexture2D *>(tex);
+            if (godot_src != nullptr &&
+                ret->EnsureGpuHandle() && godot_src->EnsureGpuHandle() &&
+                godot_src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+                ret->CopyGpuFrom(godot_src, copy_rc, copy_rc)) {
+                return ret;
+            }
             const void *src_pixels = tex->GetScanLineForRead(0);
             if (src_pixels != nullptr) {
                 ret->Update(src_pixels, tex->GetFormat(), tex->GetPitch(),
@@ -1189,6 +1216,36 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         return;
     }
 
+    if (method_name == "PsAddBlend" && dst != nullptr && src != nullptr &&
+        IsGpuRectFastPathEnabled("PsAddBlend") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
+        RectAbsSizeMatches(rctar, textures[0].second) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(src, rctar, textures[0].second,
+                          TVP_GODOT_GPU_BLEND_PS_ADD,
+                          godot_method != nullptr ? godot_method->Opacity() : 255,
+                          0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
+    if (method_name == "PsSubBlend" && dst != nullptr && src != nullptr &&
+        IsGpuRectFastPathEnabled("PsSubBlend") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
+        RectAbsSizeMatches(rctar, textures[0].second) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(src, rctar, textures[0].second,
+                          TVP_GODOT_GPU_BLEND_PS_SUBTRACT,
+                          godot_method != nullptr ? godot_method->Opacity() : 255,
+                          0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
     if (method_name == "PsMulBlend" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("PsMulBlend") &&
         ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
@@ -1273,6 +1330,18 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         dst->EnsureGpuHandle() &&
         dst->ClearGpu(godot_method != nullptr ? godot_method->Color() : 0,
                       rctar)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
+    if (method_name == "FillMask" && dst != nullptr &&
+        IsGpuRectFastPathEnabled("FillMask") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, dst) &&
+        dst->EnsureGpuHandle() &&
+        dst->BlendGpuFrom(dst, rctar, rctar,
+                          TVP_GODOT_GPU_BLEND_FILL_MASK,
+                          godot_method != nullptr ? godot_method->Opacity() : 255,
+                          0)) {
         CountGpuFastPath(method_name);
         return;
     }
@@ -1449,6 +1518,12 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
     } else if (method_name == "PsScreenBlend") {
         blend_mode = TVP_GODOT_GPU_BLEND_PS_SCREEN;
         fast_path_name = "PsScreenBlend";
+    } else if (method_name == "PsAddBlend") {
+        blend_mode = TVP_GODOT_GPU_BLEND_PS_ADD;
+        fast_path_name = "PsAddBlend";
+    } else if (method_name == "PsSubBlend") {
+        blend_mode = TVP_GODOT_GPU_BLEND_PS_SUBTRACT;
+        fast_path_name = "PsSubBlend";
     } else if (method_name == "PsMulBlend") {
         blend_mode = TVP_GODOT_GPU_BLEND_PS_MULTIPLY;
         fast_path_name = "PsMulBlend";
@@ -1498,6 +1573,31 @@ void GodotRenderManager::OperatePerspective(iTVPRenderMethod *method, int nQuads
     }
 }
 
+bool TVPGodotClearMotionScratchInPlace(
+    iTVPBaseBitmap *bitmap, const tTVPRect &rect, uint32_t argb) {
+    if(bitmap == nullptr || !bitmap->Is32BPP() || rect.is_empty()) {
+        return false;
+    }
+    // Layer.assignImages shares the source texture. D3DEmote immediately
+    // reuses its full-window work layer for the next character, so clearing a
+    // still-shared texture in place also clears the character that received
+    // the preceding frame. The scratch is fully repainted; detach without
+    // copying instead of mutating an assignImages destination.
+    bitmap->IndependNoCopy();
+    auto *texture =
+        dynamic_cast<GodotTexture2D *>(bitmap->GetTexture());
+    if(texture == nullptr || !texture->EnsureGpuHandle()) {
+        return false;
+    }
+    // iTVPBaseBitmap::Fill converts script-facing AARRGGBB to the backend's
+    // AABBGGRR byte layout before invoking FillARGB.
+    const uint32_t abgr =
+        (argb & 0xff00ff00u) |
+        ((argb & 0x000000ffu) << 16u) |
+        ((argb & 0x00ff0000u) >> 16u);
+    return texture->ClearGpu(abgr, rect);
+}
+
 bool TVPGodotCompositeAlphaUnionMask(
     iTVPBaseBitmap *dst_bitmap, iTVPBaseBitmap *src_bitmap,
     iTVPBaseBitmap *mask_scratch_bitmap,
@@ -1505,7 +1605,9 @@ bool TVPGodotCompositeAlphaUnionMask(
     const tTVPRect *mask_dst_rects,
     const tTVPRect *mask_src_rects,
     size_t mask_count,
-    bool use_mask_alpha) {
+    bool use_mask_alpha,
+    int width,
+    int height) {
     if(dst_bitmap == nullptr || src_bitmap == nullptr ||
        mask_scratch_bitmap == nullptr || mask_bitmaps == nullptr ||
        mask_dst_rects == nullptr || mask_src_rects == nullptr ||
@@ -1515,20 +1617,22 @@ bool TVPGodotCompositeAlphaUnionMask(
         return false;
     }
 
-    const tTVPRect full_dst(
-        0, 0, static_cast<tjs_int>(dst_bitmap->GetWidth()),
-        static_cast<tjs_int>(dst_bitmap->GetHeight()));
-    const tTVPRect full_src(
-        0, 0, static_cast<tjs_int>(src_bitmap->GetWidth()),
-        static_cast<tjs_int>(src_bitmap->GetHeight()));
-    const tTVPRect full_mask(
-        0, 0, static_cast<tjs_int>(mask_scratch_bitmap->GetWidth()),
-        static_cast<tjs_int>(mask_scratch_bitmap->GetHeight()));
+    if(width <= 0) {
+        width = static_cast<int>(dst_bitmap->GetWidth());
+    }
+    if(height <= 0) {
+        height = static_cast<int>(dst_bitmap->GetHeight());
+    }
+    const tTVPRect full_dst(0, 0, width, height);
+    const tTVPRect full_src(0, 0, width, height);
+    const tTVPRect full_mask(0, 0, width, height);
     if(full_dst.is_empty() || full_src.is_empty() || full_mask.is_empty() ||
-       full_dst.get_width() != full_src.get_width() ||
-       full_dst.get_height() != full_src.get_height() ||
-       full_dst.get_width() != full_mask.get_width() ||
-       full_dst.get_height() != full_mask.get_height()) {
+       full_dst.right > static_cast<tjs_int>(dst_bitmap->GetWidth()) ||
+       full_dst.bottom > static_cast<tjs_int>(dst_bitmap->GetHeight()) ||
+       full_src.right > static_cast<tjs_int>(src_bitmap->GetWidth()) ||
+       full_src.bottom > static_cast<tjs_int>(src_bitmap->GetHeight()) ||
+       full_mask.right > static_cast<tjs_int>(mask_scratch_bitmap->GetWidth()) ||
+       full_mask.bottom > static_cast<tjs_int>(mask_scratch_bitmap->GetHeight())) {
         return false;
     }
 
@@ -1582,9 +1686,87 @@ bool TVPGodotCompositeAlphaUnionMask(
         use_mask_alpha);
 }
 
+bool TVPGodotApplyAlphaMask(
+    iTVPBaseBitmap *dst_bitmap, iTVPBaseBitmap *src_bitmap,
+    const tTVPRect &dst_rect, const tTVPRect &src_rect,
+    int threshold, bool threshold_mask_mode, int item_flags) {
+    if(dst_bitmap == nullptr || src_bitmap == nullptr ||
+       dst_bitmap == src_bitmap || dst_rect.is_empty() || src_rect.is_empty() ||
+       dst_rect.get_width() != src_rect.get_width() ||
+       dst_rect.get_height() != src_rect.get_height()) {
+        return false;
+    }
+    auto *dst = dynamic_cast<GodotTexture2D *>(
+        dst_bitmap->GetTextureForRender(true, &dst_rect));
+    auto *src = dynamic_cast<GodotTexture2D *>(src_bitmap->GetTexture());
+    if(dst == nullptr || src == nullptr ||
+       !RectBoundsInsideTexture(dst_rect, dst) ||
+       !RectBoundsInsideTexture(src_rect, src) ||
+       !dst->EnsureGpuHandle() || !src->EnsureGpuHandle() ||
+       !dst->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+       !src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled())) {
+        return false;
+    }
+    const uint32_t color =
+        static_cast<uint32_t>(item_flags & 0xff) |
+        (static_cast<uint32_t>(threshold_mask_mode ? 1u : 0u) << 8);
+    if(!dst->BlendGpuFrom(
+           src, dst_rect, src_rect,
+           TVP_GODOT_GPU_BLEND_APPLY_ALPHA_MASK,
+           std::clamp(threshold, 0, 255), color)) {
+        return false;
+    }
+    CountGpuFastPath("ApplyAlphaMask");
+    return true;
+}
+
+bool TVPGodotBlendAlphaDWithMask(
+    iTVPBaseBitmap *dst_bitmap, iTVPBaseBitmap *src_bitmap,
+    iTVPBaseBitmap *mask_bitmap, const tTVPRect &dst_rect,
+    const tTVPRect &src_rect, const tTVPRect &mask_rect, int opacity,
+    bool threshold_mask_mode) {
+    if(dst_bitmap == nullptr || src_bitmap == nullptr ||
+       mask_bitmap == nullptr || dst_bitmap == src_bitmap ||
+       dst_bitmap == mask_bitmap || src_bitmap == mask_bitmap ||
+       dst_rect.is_empty() || src_rect.is_empty() || mask_rect.is_empty() ||
+       dst_rect.get_width() != src_rect.get_width() ||
+       dst_rect.get_height() != src_rect.get_height() ||
+       dst_rect.get_width() != mask_rect.get_width() ||
+       dst_rect.get_height() != mask_rect.get_height()) {
+        return false;
+    }
+    auto *dst = dynamic_cast<GodotTexture2D *>(
+        dst_bitmap->GetTextureForRender(true, &dst_rect));
+    auto *src = dynamic_cast<GodotTexture2D *>(src_bitmap->GetTexture());
+    auto *mask = dynamic_cast<GodotTexture2D *>(mask_bitmap->GetTexture());
+    if(dst == nullptr || src == nullptr || mask == nullptr ||
+       !RectBoundsInsideTexture(dst_rect, dst) ||
+       !RectBoundsInsideTexture(src_rect, src) ||
+       !RectBoundsInsideTexture(mask_rect, mask) ||
+       !dst->EnsureGpuHandle() || !src->EnsureGpuHandle() ||
+       !mask->EnsureGpuHandle() ||
+       !dst->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+       !src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+       !mask->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled())) {
+        return false;
+    }
+    const uint32_t mode = threshold_mask_mode
+        ? TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD
+        : TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_MULTIPLY;
+    if(!dst->BlendGpuFrom2(
+           src, mask, dst_rect, src_rect, mask_rect, mode,
+           std::clamp(opacity, 0, 255), 0)) {
+        return false;
+    }
+    CountGpuFastPath("AlphaBlend_d+Mask");
+    return true;
+}
+
 std::string TVPGetGodotRenderManagerFallbackStats() {
     std::vector<std::pair<std::string, uint64_t>> entries;
     uint64_t texture_creates = 0;
+    uint64_t texture_clones = 0;
+    uint64_t texture_resizes = 0;
     uint64_t fallbacks = 0;
     uint64_t gpu_fastpaths = 0;
     std::vector<std::pair<std::string, uint64_t>> gpu_entries;
@@ -1605,6 +1787,8 @@ std::string TVPGetGodotRenderManagerFallbackStats() {
         }
     }
     texture_creates = g_texture_create_count.load(std::memory_order_relaxed);
+    texture_clones = g_texture_clone_count.load(std::memory_order_relaxed);
+    texture_resizes = g_texture_resize_count.load(std::memory_order_relaxed);
     fallbacks = g_software_fallback_count.load(std::memory_order_relaxed);
     gpu_fastpaths = g_gpu_fastpath_count.load(std::memory_order_relaxed);
     std::sort(entries.begin(), entries.end(),
@@ -1620,6 +1804,8 @@ std::string TVPGetGodotRenderManagerFallbackStats() {
         << " gpu_min_area=" << GpuRectMinArea()
         << " gpu_alpha_min_area=" << GpuRectMinAreaForMethod("AlphaBlend")
         << " texture_creates=" << texture_creates
+        << " texture_clones=" << texture_clones
+        << " texture_resizes=" << texture_resizes
         << " hot=[";
     const size_t limit = std::min<size_t>(entries.size(), 8);
     for (size_t i = 0; i < limit; ++i) {

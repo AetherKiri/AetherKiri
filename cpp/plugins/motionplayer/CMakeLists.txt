@@ -21,10 +21,9 @@ target_sources(${PROJECT_NAME} PRIVATE
 )
 
 if(AETHERKIRI_INTERNAL_ENABLED)
-    # The public implementation remains part of every build. The private
-    # package adds only its E-mote controller extension source and registers
-    # it through the public hook; it never replaces this source list.
-    aetherinternal_extend_motionplayer(${PROJECT_NAME})
+    aetherinternal_extend_motionplayer(
+        ${PROJECT_NAME}
+        "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE krkr2plugin)

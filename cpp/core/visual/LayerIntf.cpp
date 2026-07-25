@@ -55,6 +55,7 @@
 #include "ConfigManager/IndividualConfigManager.h"
 #include "vkdefine.h"
 #include "RenderManager.h"
+#include "godot/GodotRenderManager.h"
 #include "FontImpl.h"
 #include "../../plugins/psbfile/PSBMedia.h"
 
@@ -92,11 +93,21 @@ bool TVPFreeUnusedLayerCache = false;
 
 static std::atomic<tjs_int> TVPLayerInstanceCount{0};
 static std::atomic<int64_t> TVPLayerBitmapTotalBytes{0};
+static std::atomic<bool> TVPFullGpuCompletionRequested{false};
 
 tjs_int TVPGetLayerCount() { return TVPLayerInstanceCount.load(std::memory_order_relaxed); }
 tjs_uint64 TVPGetLayerTotalBitmapBytes() {
     auto v = TVPLayerBitmapTotalBytes.load(std::memory_order_relaxed);
     return v > 0 ? static_cast<tjs_uint64>(v) : 0;
+}
+
+void TVPRequestFullGpuCompletion() {
+    TVPFullGpuCompletionRequested.store(true, std::memory_order_release);
+}
+
+static bool TVPConsumeFullGpuCompletionRequest() {
+    return TVPFullGpuCompletionRequested.exchange(
+        false, std::memory_order_acq_rel);
 }
 
 static int64_t TVPCalcMainImageBytes(tTVPBaseTexture *img) {
@@ -4519,6 +4530,7 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
     // assign images
     bool main_changed = false;
     bool province_changed = false;
+    bool shared_gpu_frame_updated = false;
 
     if(src->MainImage) {
         int64_t oldBytes = TVPCalcMainImageBytes(MainImage);
@@ -4532,6 +4544,17 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
                                            std::memory_order_relaxed);
         if(main_changed)
             FontChanged = true; // invalidate font assignment cache
+
+        // Assign() deliberately shares the source texture. A GPU-rendered
+        // scratch layer can therefore keep the same texture object while its
+        // pixels change every frame. Treat that as a new image frame even
+        // though Assign() correctly reports that the object did not change.
+        if(MainImage && MainImage->GetTexture() == src->MainImage->GetTexture()) {
+            if(auto *texture =
+                   dynamic_cast<GodotTexture2D *>(MainImage->GetTexture())) {
+                shared_gpu_frame_updated = texture->HasPendingGpuWrites();
+            }
+        }
     } else if(MainImage) {
         DeallocateImage();
         main_changed = true;
@@ -4549,7 +4572,7 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
         province_changed = true;
     }
 
-    if(!main_changed && !province_changed)
+    if(!main_changed && !province_changed && !shared_gpu_frame_updated)
         return;
 
     if(main_changed && MainImage) {
@@ -4562,8 +4585,54 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
     if(main_changed && MainImage)
         ResetClip(); // cliprect is reset
 
-    if(main_changed)
+    if(main_changed || shared_gpu_frame_updated)
         Update(false); // update
+}
+
+//---------------------------------------------------------------------------
+void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
+    if(!src || src == this) {
+        return;
+    }
+    if(!src->MainImage) {
+        AssignImages(src);
+        return;
+    }
+
+    // D3DEmote renders each character into one full-window scratch layer and
+    // immediately hands that frame to the character layer. AssignImages()
+    // shares the texture, so clearing the scratch for the next character can
+    // overwrite the preceding one. Swap the completed texture into the
+    // destination instead: the destination's old texture becomes an
+    // independent, already-sized buffer for the next scratch render.
+    if(!MainImage) {
+        AllocateDefaultImage();
+    }
+    std::swap(MainImage, src->MainImage);
+    FontChanged = true;
+    src->FontChanged = true;
+
+    if(src->ProvinceImage) {
+        if(ProvinceImage)
+            ProvinceImage->Assign(*src->ProvinceImage);
+        else {
+            ProvinceImage = new tTVPBaseBitmap(*src->ProvinceImage);
+        }
+    } else if(ProvinceImage) {
+        DeallocateProvinceImage();
+    }
+
+    InternalSetImageSize(MainImage->GetWidth(), MainImage->GetHeight());
+    ResetClip();
+    if(src->MainImage) {
+        src->InternalSetImageSize(src->MainImage->GetWidth(),
+                                  src->MainImage->GetHeight());
+        src->ResetClip();
+    }
+
+    ImageModified = true;
+    src->ImageModified = true;
+    Update(false);
 }
 
 //---------------------------------------------------------------------------
@@ -10477,7 +10546,12 @@ void tTJSNI_BaseLayer::InternalComplete2_GPU(tTVPRect updateregion,
     if(Manager)
         Manager->QueryUpdateExcludeRect();
     updateregion.add_offsets(Rect.left, Rect.top);
-    Draw_GPU(drawable, 0, 0, updateregion, false);
+    // Draw_GPU's x/y parameters are the destination position corresponding
+    // to r.left/r.top. Passing (0, 0) is only correct for a full-window rect;
+    // for a dirty rect it moves that strip to the top-left and produces a
+    // visibly torn frame after every click.
+    Draw_GPU(drawable, updateregion.left, updateregion.top,
+             updateregion, false);
 }
 
 //---------------------------------------------------------------------------
@@ -10516,9 +10590,14 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
                 tTVPComplexRect &updateRegion =
                     Manager->GetUpdateRegionForCompletion();
                 if(updateRegion.GetCount() > 0) {
-                    // The Godot final drawable presents a complete frame. Using
-                    // a dirty rect here leaves old pixels around moved layers.
-                    InternalComplete2_GPU(Rect, drawable);
+                    const tTVPRect dirty = updateRegion.GetBound();
+                    // Small text/cursor updates can stay local, but a freshly
+                    // rendered E-mote texture must be composited as one
+                    // complete frame. Otherwise the presented double buffer
+                    // can alternate between old and new character contents.
+                    InternalComplete2_GPU(
+                        TVPConsumeFullGpuCompletionRequest() ? Rect : dirty,
+                        drawable);
                     updateRegion.Clear();
                 }
             } else {
@@ -13078,6 +13157,35 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         return TJS_S_OK;
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ assignImages)
+    //----------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ assignMotionImages) {
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_Layer);
+
+        if(numparams < 1)
+            return TJS_E_BADPARAMCOUNT;
+
+        tTJSNI_BaseLayer *src = nullptr;
+        if(param[0]->Type() != tvtObject)
+            TVPThrowExceptionMessage(TVPSpecifyLayer);
+
+        tTJSVariantClosure clo = param[0]->AsObjectClosureNoAddRef();
+        if(clo.Object) {
+            if(TJS_FAILED(clo.Object->NativeInstanceSupport(
+                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                   (iTJSNativeInstance **)&src)))
+                TVPThrowExceptionMessage(TVPSpecifyLayer);
+        }
+        if(!src)
+            TVPThrowExceptionMessage(TVPSpecifyLayer);
+
+        _this->AssignMotionImages(src);
+        AetherKiriMotionDismissCenteredPresentationHoldOverlaysForLayer(_this);
+        AetherKiriMotionRestoreCenteredPresentationLayer(_this);
+
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_METHOD_DECL(/*func. name*/ assignMotionImages)
     //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ dump) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,

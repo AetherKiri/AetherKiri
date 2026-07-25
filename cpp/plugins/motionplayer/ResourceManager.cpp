@@ -9,12 +9,14 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include <spdlog/spdlog.h>
 
 #include "RuntimeSupport.h"
 #include "StorageIntf.h"
+#include "xp3filter.h"
 
 #define LOGGER spdlog::get("plugin")
 
@@ -231,6 +233,35 @@ motion::ResourceManager::ResourceManager(iTJSDispatch2 *kag,
 
 tjs_int motion::ResourceManager::getEmotePSBDecryptSeed() {
     return _decryptSeed;
+}
+
+bool motion::ResourceManager::applyEmotePSBDecryptFunc(
+    std::uint8_t *data, const std::size_t size) {
+    if(_decryptFunc.Type() != tvtObject ||
+       !_decryptFunc.AsObjectNoAddRef()) {
+        return true;
+    }
+    if(!data || size > std::numeric_limits<unsigned int>::max()) {
+        LOGGER->error(
+            "E-mote PSB decrypt callback received invalid buffer size: {}",
+            size);
+        return false;
+    }
+
+    auto *accessor =
+        new CBinaryAccessor(data, static_cast<unsigned int>(size));
+    tTJSVariant buffer(accessor, accessor);
+    accessor->Release();
+    tTJSVariant length(static_cast<tjs_int64>(size));
+    tTJSVariant *params[] = { &buffer, &length };
+    const auto closure = _decryptFunc.AsObjectClosureNoAddRef();
+    const tjs_error status =
+        closure.FuncCall(0, nullptr, nullptr, nullptr, 2, params, nullptr);
+    if(TJS_FAILED(status)) {
+        LOGGER->error("E-mote PSB decrypt callback failed: {}", status);
+        return false;
+    }
+    return true;
 }
 
 tjs_error motion::ResourceManager::setEmotePSBDecryptSeed(tTJSVariant *,

@@ -1,0 +1,29 @@
+{
+  "name": "tenshi_reboot_name_font_local",
+  "game_path": "",
+  "backend": "Godot Native",
+  "surface_size": [1920, 1080],
+  "window_size": [1600, 900],
+  "coord_size": [1600, 900],
+  "startup_timeout_frames": 2400,
+  "warmup_frames": 210,
+  "after_click_frames": 120,
+  "measure_frames": 1,
+  "export_scripts": false,
+  "actions": [
+    {"type": "click", "label": "skip_1", "pos": [800, 820], "after_frames": 120, "capture": false},
+    {"type": "click", "label": "skip_2", "pos": [800, 820], "after_frames": 120, "capture": false},
+    {"type": "click", "label": "skip_3", "pos": [800, 820], "after_frames": 180},
+    {"type": "click", "label": "continue_game", "pos": [460, 857], "after_frames": 600},
+    {"type": "click", "label": "advance_1", "pos": [800, 820], "after_frames": 120},
+    {"type": "click", "label": "advance_2", "pos": [800, 820], "after_frames": 120},
+    {"type": "click", "label": "advance_3", "pos": [800, 820], "after_frames": 120},
+    {"type": "click", "label": "advance_4", "pos": [800, 820], "after_frames": 120},
+    {"type": "click", "label": "advance_5", "pos": [800, 820], "after_frames": 120},
+    {"type": "click", "label": "advance_6", "pos": [800, 820], "after_frames": 120},
+    {"type": "click", "label": "advance_7", "pos": [800, 820], "after_frames": 120},
+    {"type": "click", "label": "advance_8", "pos": [800, 820], "after_frames": 120},
+    {"type": "click", "label": "advance_9", "pos": [800, 820], "after_frames": 120},
+    {"type": "click", "label": "advance_10", "pos": [800, 820], "after_frames": 120}
+  ]
+}

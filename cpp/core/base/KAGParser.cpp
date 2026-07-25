@@ -162,6 +162,44 @@ bool TVPIsKagRuntimeTagMember(const ttstr &name) {
            name == TJS_W("runCount");
 }
 
+std::vector<ttstr> TVPGetKagTagListAttributeNames(iTJSDispatch2 *tag) {
+    std::vector<ttstr> names;
+    if(!tag)
+        return names;
+
+    tTJSVariant taglist;
+    if(TJS_FAILED(
+           tag->PropGet(0, TJS_W("taglist"), nullptr, &taglist, tag)) ||
+       taglist.Type() != tvtObject)
+        return names;
+
+    iTJSDispatch2 *array = taglist.AsObjectNoAddRef();
+    if(!array)
+        return names;
+
+    tTJSVariant count_value;
+    if(TJS_FAILED(array->PropGet(0, TJS_W("count"), nullptr, &count_value,
+                                 array)))
+        return names;
+
+    const tjs_int count = static_cast<tjs_int>(count_value);
+    for(tjs_int index = 0; index < count; ++index) {
+        tTJSVariant name_value;
+        if(TJS_FAILED(
+               array->PropGetByNum(0, index, &name_value, array)) ||
+           name_value.Type() == tvtVoid)
+            continue;
+
+        ttstr name(name_value);
+        if(TVPIsKagRuntimeTagMember(name) ||
+           std::find(names.begin(), names.end(), name) != names.end())
+            continue;
+        names.push_back(name);
+    }
+
+    return names;
+}
+
 class TVPKagTagListEnumCaller : public tTJSDispatch {
 public:
     explicit TVPKagTagListEnumCaller(std::vector<ttstr> &names)
@@ -1512,6 +1550,12 @@ void tTJSNI_KAGParser::PushMacroArgs(iTJSDispatch2 *args) {
     tTJSVariant src(args, args);
     tTJSVariant *psrc = &src;
     DicAssign->FuncCall(0, nullptr, nullptr, nullptr, 1, &psrc, dsp);
+
+    // Dictionary.assign intentionally skips hidden members. taglist is hidden
+    // parser metadata, so preserve it explicitly for a later "[tag *]"
+    // expansion.
+    if(TVPHasKagTagList(args))
+        TVPSetKagTagList(dsp, TVPGetKagTagListAttributeNames(args));
 }
 
 //---------------------------------------------------------------------------
@@ -2178,6 +2222,7 @@ parse_start:
 
                     if(condition && ExcludeLevel == -1) {
                         set_taglist_from_parsed_attributes();
+                        TVPNotifyKagTagForEnvironmentWorldReset(tagname);
                         if(tagname == TJS_W("endtrans"))
                             TVPArmKagNoTransWaitRepair();
                         trace_returned_tag();
@@ -2515,8 +2560,10 @@ parse_start:
                         LineBufferUsing = true;
 
                         // push macro arguments
-                        if(ismacro)
+                        if(ismacro) {
+                            set_taglist_from_parsed_attributes();
                             PushMacroArgs(DicObj);
+                        }
 
                         break;
                     } else if(tagkind == tag_jump) {
@@ -2696,6 +2743,29 @@ parse_start:
                         tTJSVariant *args[2] = { &src, &clear };
                         DicAssign->FuncCall(0, nullptr, nullptr, nullptr, 2,
                                             args, DicObj);
+
+                        std::vector<ttstr> macro_names =
+                            TVPGetKagTagListAttributeNames(dsp);
+                        if(macro_names.empty() && !TVPHasKagTagList(dsp))
+                            macro_names = TVPCollectKagTagMemberNames(dsp);
+
+                        for(const auto &name : macro_names) {
+                            tTJSVariant value;
+                            if(TJS_FAILED(DicObj->PropGet(
+                                   0, name.c_str(), nullptr, &value, DicObj)))
+                                continue;
+
+                            auto existing = std::find_if(
+                                parsed_attributes.begin(),
+                                parsed_attributes.end(),
+                                [&](const tAttrEntry &entry) {
+                                    return entry.Name == name;
+                                });
+                            if(existing != parsed_attributes.end())
+                                existing->Value = value;
+                            else
+                                parsed_attributes.push_back({ name, value });
+                        }
                     }
                     tTJSVariant tag_val(tagname);
                     DicObj->PropSetByVS(TJS_MEMBERENSURE,

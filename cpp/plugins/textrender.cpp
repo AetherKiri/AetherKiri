@@ -9,6 +9,7 @@
 
 #include "ncbind.hpp"
 #include "FreeTypeFontRasterizer.h"
+#include "FontBaseline.h"
 #include "LayerIntf.h"
 #include "RectItf.h"
 #include "textrender_timing.h"
@@ -601,14 +602,36 @@ EdgeShadowDrawTextCompat(tTJSVariant *result, tjs_int numparams,
   edgeWidth = std::clamp<tjs_int>(edgeWidth, 0, 12);
   textHeight = std::clamp<tjs_int>(textHeight, 8, 128);
 
+  // YuzuSoft's five-argument name renderer draws at y=0 in a dedicated
+  // transparent layer. Source Han-style faces can have negative ink bounds
+  // even though the line baseline is correct, so the layer clip used to cut
+  // off the top strokes. Adjust only this compatibility draw; changing the
+  // global baseline would move message text away from its KAG hit boxes.
+  tTVPRect glyphBounds;
+  bool haveGlyphBounds = false;
+  const tjs_int requestedY = y;
+  if (isNameLayerTextCall) {
+    try {
+      layer->GetFontGlyphDrawRect(ttstr(*param[textIndex]), glyphBounds);
+      y = krkr::font::ClampTextOriginToClipTop(
+          y, glyphBounds.top, edgeWidth, layer->GetClipTop());
+      haveGlyphBounds = true;
+    } catch (...) {
+      // Drawing below still has the same failure handling as before. Bounds
+      // measurement is only used to prevent clipping when it is available.
+    }
+  }
+
   if (std::getenv("AETHERKIRI_TEXT_TRACE") != nullptr) {
     const std::string text = ttstr(*param[textIndex]).AsStdString();
     spdlog::info(
         "textrender EdgeShadowDrawText resolved text=\"{}\" x={} y={} color=0x{:016x} "
-        "edgeColor=0x{:016x} edgeWidth={} textOpacity={} textHeight={} packed={}",
+        "edgeColor=0x{:016x} edgeWidth={} textOpacity={} textHeight={} packed={} "
+        "requestedY={} glyphTop={} clipTop={}",
         text.substr(0, 96), x, y, static_cast<unsigned long long>(color),
         static_cast<unsigned long long>(edgeColor), edgeWidth, textOpacity,
-        textHeight, textRenderIsPackedGradient(color));
+        textHeight, textRenderIsPackedGradient(color), requestedY,
+        haveGlyphBounds ? glyphBounds.top : 0, layer->GetClipTop());
   }
 
   try {

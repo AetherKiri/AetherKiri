@@ -53,11 +53,174 @@ namespace internal {
             return type != ltBinder;
         }
 
+        inline const MotionRenderPolicyV1 *motionRenderPolicy() {
+            const auto *extension = motionPlayerExtension();
+            return extension != nullptr ? extension->renderPolicy : nullptr;
+        }
+
+        inline bool isDifferenceAlphaPassThroughLeaf(
+            bool hasOwnSource,
+            bool groupOnly,
+            int blendMode) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                policy->isDifferenceAlphaPassThroughLeaf != nullptr &&
+                policy->isDifferenceAlphaPassThroughLeaf(
+                    hasOwnSource, groupOnly, blendMode);
+        }
+
+        inline bool isIndependentDifferenceAlphaMaskGroup(
+            bool groupOnly,
+            bool hasExplicitMasks,
+            int itemFlags,
+            bool hasConcreteRenderParent) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                policy->isIndependentDifferenceAlphaMaskGroup != nullptr &&
+                policy->isIndependentDifferenceAlphaMaskGroup(
+                    groupOnly, hasExplicitMasks, itemFlags,
+                    hasConcreteRenderParent);
+        }
+
+        inline bool canReceiveIndependentDifferenceAlphaMask(
+            bool hasOwnSource,
+            bool groupOnly,
+            int blendMode) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                policy->canReceiveIndependentDifferenceAlphaMask != nullptr &&
+                policy->canReceiveIndependentDifferenceAlphaMask(
+                    hasOwnSource, groupOnly, blendMode);
+        }
+
+        inline bool isSyntheticMotionBlankSource(
+            const std::string &sourceKey) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                policy->isSyntheticMotionBlankSource != nullptr &&
+                policy->isSyntheticMotionBlankSource(sourceKey);
+        }
+
+        inline bool isAuthoredDifferenceAlphaPair(
+            const std::string &colourLabel,
+            const std::string &alphaLabel) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                policy->isAuthoredDifferenceAlphaPair != nullptr &&
+                policy->isAuthoredDifferenceAlphaPair(
+                    colourLabel, alphaLabel);
+        }
+
+        inline bool isNestedDifferenceAlphaPair(
+            std::size_t colourCommandIndex,
+            const std::vector<std::size_t> &alphaAncestry) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                policy->isNestedDifferenceAlphaPair != nullptr &&
+                policy->isNestedDifferenceAlphaPair(
+                    colourCommandIndex, alphaAncestry);
+        }
+
+        inline bool isGenericDifferenceAlphaLabel(
+            const std::string &label) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                policy->isGenericDifferenceAlphaLabel != nullptr &&
+                policy->isGenericDifferenceAlphaLabel(label);
+        }
+
+        inline bool isUnambiguousNestedDifferenceAlphaPair(
+            std::size_t nestedPairCount) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                policy->isUnambiguousNestedDifferenceAlphaPair != nullptr &&
+                policy->isUnambiguousNestedDifferenceAlphaPair(
+                    nestedPairCount);
+        }
+
+        inline bool shouldUseCombinedDifferenceAlphaMask(
+            bool hasSelectedPair,
+            std::size_t nestedSourceCount) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                policy->shouldUseCombinedDifferenceAlphaMask != nullptr &&
+                policy->shouldUseCombinedDifferenceAlphaMask(
+                    hasSelectedPair, nestedSourceCount);
+        }
+
+        inline bool shouldRecoverDifferenceAlphaFromRgb(
+            std::size_t alphaPixelCount,
+            std::size_t rgbPixelCount) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                policy->shouldRecoverDifferenceAlphaFromRgb != nullptr &&
+                policy->shouldRecoverDifferenceAlphaFromRgb(
+                    alphaPixelCount, rgbPixelCount);
+        }
+
+        inline std::uint8_t differenceAlphaFromRgb(
+            std::uint8_t blue,
+            std::uint8_t green,
+            std::uint8_t red) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                    policy->differenceAlphaFromRgb != nullptr
+                ? policy->differenceAlphaFromRgb(blue, green, red)
+                : static_cast<std::uint8_t>(0);
+        }
+
+        inline int independentDifferenceAlphaMaskOperation(
+            bool hasAuthoredPair, int groupItemFlags) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                    policy->independentDifferenceAlphaMaskOperation != nullptr
+                ? policy->independentDifferenceAlphaMaskOperation(
+                      hasAuthoredPair, groupItemFlags)
+                : 1;
+        }
+
+        inline std::uint8_t applyMotionAlphaMaskValueLike_0x6AC4E4(
+            std::uint8_t destinationAlpha,
+            std::uint8_t maskAlpha,
+            bool thresholdMaskMode,
+            int operation,
+            std::uint8_t threshold = 64) {
+            const auto *policy = motionRenderPolicy();
+            if(policy != nullptr &&
+               policy->applyMotionAlphaMaskValue != nullptr) {
+                return policy->applyMotionAlphaMaskValue(
+                    destinationAlpha, maskAlpha, thresholdMaskMode,
+                    operation, threshold);
+            }
+            if(operation != 1) {
+                return destinationAlpha;
+            }
+            if(thresholdMaskMode) {
+                return maskAlpha < threshold
+                    ? static_cast<std::uint8_t>(0)
+                    : destinationAlpha;
+            }
+            return static_cast<std::uint8_t>(
+                (static_cast<int>(destinationAlpha) *
+                 static_cast<int>(maskAlpha)) /
+                255);
+        }
+
 
         // Return true if a source path is a motion cross-reference
         // (e.g. "motion/title_bg/char_move"), not an image source.
         inline bool isMotionCrossReference(const std::string &src) {
             return src.rfind("motion/", 0) == 0;
+        }
+
+        inline bool shouldSearchCachedMotionComposition(
+            const std::string &motionRef, const std::string &motionIcon) {
+            const auto *policy = motionRenderPolicy();
+            return policy != nullptr &&
+                    policy->shouldSearchCachedMotionComposition != nullptr
+                ? policy->shouldSearchCachedMotionComposition(
+                      motionRef, motionIcon)
+                : !motionIcon.empty();
         }
 
         inline bool isPsbRLCompressName(const std::optional<std::string> &name) {
@@ -86,14 +249,8 @@ namespace internal {
             const char *enabled = std::getenv("AETHERKIRI_MOTION_DEBUG");
             const bool debugEnabled =
                 enabled && *enabled && std::strcmp(enabled, "0") != 0;
-            const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
-            const bool debugAllEnabled =
-                debugAll && *debugAll && std::strcmp(debugAll, "0") != 0;
-            if(!debugEnabled && !debugAllEnabled) {
+            if(!debugEnabled) {
                 return false;
-            }
-            if(debugAllEnabled) {
-                return true;
             }
             const auto path = psbDebugLowercase(snapshot.path);
             const auto src = psbDebugLowercase(source);
@@ -1247,6 +1404,7 @@ namespace internal {
             bool visible = false;
             int frameType = 0;        // frame["type"] from sub_6926B4: 0/2/3
             std::string src;
+            std::string motionIcon;   // E-mote object-group motion ("icon")
             std::vector<std::string> srcList;  // For particle nodes: array of "chara/motion" paths
             double x = 0.0;
             double y = 0.0;
@@ -1633,6 +1791,24 @@ namespace internal {
                         }
                     }
                     if(!state.srcList.empty()) state.src = state.srcList[0];
+                }
+                const auto icon = psbDictionaryString(content, "icon");
+                if(!icon.empty() && !state.src.empty()) {
+                    if(nodeType == 3) {
+                        // Motion nodes address a named motion inside the
+                        // object group held in src.
+                        state.motionIcon = icon;
+                    } else if(state.src == "blank") {
+                        // E-mote transparent transform sources use
+                        // blank/<width>:<height>:<originX>:<originY>.
+                        state.src += "/" + icon;
+                    } else if(state.src.rfind("src/", 0) == 0) {
+                        state.src += "/" + icon;
+                    } else {
+                        // Image nodes use src as the PSB source group and
+                        // icon as the concrete image within that group.
+                        state.src = "src/" + state.src + "/" + icon;
+                    }
                 }
             }
 
@@ -2149,6 +2325,7 @@ namespace internal {
             // Use src from slot A (or B if A is empty)
             if(state.src.empty() && !slotB.src.empty()) {
                 state.src = slotB.src;
+                state.motionIcon = slotB.motionIcon;
             }
 
             return state;
@@ -2499,6 +2676,140 @@ namespace internal {
                             }
                             if(decoded) {
                                 return resIt->second.get();
+                            }
+                        }
+
+                        // Some E-mote exports (including Maitetsu) pack every
+                        // icon in a group into one RGBA atlas:
+                        //
+                        //   source/<group>/texture/pixel
+                        //
+                        // The icon node then contains only left/top/width/
+                        // height/origin.  Treat the selected atlas rectangle
+                        // as this source's pixel resource.
+                        const auto texturePath =
+                            "source/" + group + "/texture";
+                        const auto atlasPixelPath = texturePath + "/pixel";
+                        const auto atlasIt =
+                            snapshot.resourcesByPath.find(atlasPixelPath);
+                        const auto atlasNode =
+                            navigatePSBPath(snapshot.root, texturePath);
+                        if(atlasIt != snapshot.resourcesByPath.end() &&
+                           atlasIt->second && !atlasIt->second->data.empty() &&
+                           outWidth > 0 && outHeight > 0) {
+                            const auto left = psbDictionaryNumber(
+                                iconNode, "left").value_or(0.0);
+                            const auto top = psbDictionaryNumber(
+                                iconNode, "top").value_or(0.0);
+                            int atlasWidth = atlasNode
+                                ? static_cast<int>(psbDictionaryNumber(
+                                      atlasNode, "width").value_or(0.0))
+                                : 0;
+                            int atlasHeight = atlasNode
+                                ? static_cast<int>(psbDictionaryNumber(
+                                      atlasNode, "height").value_or(0.0))
+                                : 0;
+                            const auto atlasPixels =
+                                atlasIt->second->data.size() / 4u;
+                            if(atlasWidth <= 0 || atlasHeight <= 0) {
+                                const auto squareSide = static_cast<int>(
+                                    std::lround(std::sqrt(
+                                        static_cast<double>(atlasPixels))));
+                                if(squareSide > 0 &&
+                                   static_cast<size_t>(squareSide) *
+                                       static_cast<size_t>(squareSide) ==
+                                       atlasPixels) {
+                                    atlasWidth = squareSide;
+                                    atlasHeight = squareSide;
+                                }
+                            }
+                            const int atlasLeft =
+                                static_cast<int>(std::lround(left));
+                            const int atlasTop =
+                                static_cast<int>(std::lround(top));
+                            if(atlasWidth > 0 && atlasHeight > 0 &&
+                               atlasLeft >= 0 && atlasTop >= 0 &&
+                               atlasLeft + outWidth <= atlasWidth &&
+                               atlasTop + outHeight <= atlasHeight) {
+                                const auto compressStr = atlasNode
+                                    ? psbDictionaryString(
+                                          atlasNode, "compress")
+                                    : std::string{};
+                                if(outResourcePath) {
+                                    *outResourcePath = iconPath +
+                                        fmt::format(
+                                            "/atlas@{},{},{},{}",
+                                            atlasLeft, atlasTop,
+                                            outWidth, outHeight);
+                                }
+                                if(outCompressName) {
+                                    *outCompressName = compressStr;
+                                }
+                                if(!decodePixelData) {
+                                    return atlasIt->second.get();
+                                }
+
+                                std::vector<std::uint8_t> atlasPixelsDecoded;
+                                bool atlasIsBgra = false;
+                                const auto paletteIt =
+                                    snapshot.resourcesByPath.find(
+                                        texturePath + "/pal");
+                                const bool hasPalette =
+                                    paletteIt !=
+                                        snapshot.resourcesByPath.end() &&
+                                    paletteIt->second &&
+                                    !paletteIt->second->data.empty();
+                                const size_t atlasByteCount =
+                                    static_cast<size_t>(atlasWidth) *
+                                    static_cast<size_t>(atlasHeight) * 4u;
+                                const std::vector<std::uint8_t> *atlasData =
+                                    nullptr;
+                                if(!hasPalette &&
+                                   !isPsbRLCompressName(compressStr) &&
+                                   atlasIt->second->data.size() >=
+                                       atlasByteCount) {
+                                    // Raw atlases are common and can be
+                                    // cropped directly. Avoid copying a
+                                    // 4-16 MiB atlas once for every icon.
+                                    atlasData = &atlasIt->second->data;
+                                } else if(decodePsbPixelResource(
+                                              snapshot, texturePath,
+                                              *atlasIt->second,
+                                              atlasWidth, atlasHeight,
+                                              isPsbRLCompressName(
+                                                  compressStr),
+                                              atlasPixelsDecoded,
+                                              &atlasIsBgra)) {
+                                    atlasData = &atlasPixelsDecoded;
+                                }
+                                if(atlasData &&
+                                   atlasData->size() >= atlasByteCount) {
+                                    const size_t rowBytes =
+                                        static_cast<size_t>(outWidth) * 4u;
+                                    decompressedOut.resize(
+                                        rowBytes *
+                                        static_cast<size_t>(outHeight));
+                                    for(int row = 0; row < outHeight; ++row) {
+                                        const auto sourceOffset =
+                                            (static_cast<size_t>(
+                                                 atlasTop + row) *
+                                                 static_cast<size_t>(
+                                                     atlasWidth) +
+                                             static_cast<size_t>(atlasLeft)) *
+                                            4u;
+                                        std::memcpy(
+                                            decompressedOut.data() +
+                                                static_cast<size_t>(row) *
+                                                    rowBytes,
+                                            atlasData->data() +
+                                                sourceOffset,
+                                            rowBytes);
+                                    }
+                                    if(outDecodedIsBgra) {
+                                        *outDecodedIsBgra = atlasIsBgra;
+                                    }
+                                    return atlasIt->second.get();
+                                }
                             }
                         }
                     }

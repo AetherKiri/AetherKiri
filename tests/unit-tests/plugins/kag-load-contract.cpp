@@ -121,6 +121,44 @@ TEST_CASE("late patches preserve registered load hooks") {
           TJS_W("runtime-registration"));
 }
 
+TEST_CASE("late patches recover a skipped load trigger singleton") {
+    ScriptEngineOwner engine;
+    engine->ExecScript(TJS_W(
+        "class loadTrigger {\n"
+        "  var loadHooks = new Dictionary();\n"
+        "  function marker() { return \"original\"; }\n"
+        "}\n"
+        "loadTrigger.instance = new loadTrigger();\n"
+        "loadTrigger.instance.loadHooks.continueHook = \"registered\";\n"));
+
+    tTJSVariant savedHooks;
+    engine->EvalExpression(TVPGetPatchRuntimeRegistryExpression(),
+                           &savedHooks);
+    engine->ExecScript(TJS_W(
+        "class loadTrigger {\n"
+        "  var loadHooks = new Dictionary();\n"
+        "  function marker() { return \"replacement\"; }\n"
+        "}\n"));
+
+    CHECK(evaluateString(engine.operator->(),
+                         TJS_W("typeof loadTrigger.instance")) ==
+          TJS_W("undefined"));
+    engine->ExecScript(TVPGetPatchRuntimeInstanceRecoveryScript());
+
+    tTJSVariant replacementHooks;
+    engine->EvalExpression(TVPGetPatchRuntimeRegistryExpression(),
+                           &replacementHooks);
+    REQUIRE(TVPMergeObjectMembers(replacementHooks.AsObjectNoAddRef(),
+                                  savedHooks.AsObjectNoAddRef()));
+    CHECK(evaluateString(engine.operator->(),
+                         TJS_W("loadTrigger.instance.marker()")) ==
+          TJS_W("replacement"));
+    CHECK(evaluateString(
+              engine.operator->(),
+              TJS_W("loadTrigger.instance.loadHooks.continueHook")) ==
+          TJS_W("registered"));
+}
+
 TEST_CASE("patch prerequisites persist globally across script blocks") {
     ScriptEngineOwner engine;
 

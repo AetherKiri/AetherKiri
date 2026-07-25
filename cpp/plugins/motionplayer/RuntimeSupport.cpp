@@ -5,6 +5,7 @@
 #include "RuntimeSupport.h"
 #include "PsbValueReader.h"
 #include "MotionPlayerExtension.h"
+#include "ResourceManager.h"
 
 #include <algorithm>
 #include <cctype>
@@ -195,59 +196,10 @@ namespace motion::detail {
             if(!enabled || !*enabled || std::strcmp(enabled, "0") == 0) {
                 return false;
             }
-            const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
-            if(debugAll && *debugAll && std::strcmp(debugAll, "0") != 0) {
-                return true;
-            }
             const auto lowered = lowercase(motionPath);
             return lowered.find("title") != std::string::npos ||
                 lowered.find("yuzulogo.mtn") != std::string::npos ||
                 lowered.find("m2logo.mtn") != std::string::npos;
-        }
-
-        std::string describePsbTreeForMotionDebug(
-            const std::shared_ptr<PSB::IPSBValue> &value,
-            const int depth = 0) {
-            if(!value) {
-                return "null";
-            }
-            if(const auto text =
-                   std::dynamic_pointer_cast<PSB::PSBString>(value)) {
-                return '"' + text->value + '"';
-            }
-            if(depth >= 8) {
-                return value->toString();
-            }
-            if(const auto dictionary =
-                   std::dynamic_pointer_cast<PSB::PSBDictionary>(value)) {
-                std::string out = "{";
-                bool first = true;
-                for(const auto &[key, child] : *dictionary) {
-                    if(!first) {
-                        out += ",";
-                    }
-                    out += key;
-                    out += ":";
-                    out += describePsbTreeForMotionDebug(child, depth + 1);
-                    first = false;
-                }
-                out += "}";
-                return out;
-            }
-            if(const auto list =
-                   std::dynamic_pointer_cast<PSB::PSBList>(value)) {
-                std::string out = "[";
-                for(size_t index = 0; index < list->size(); ++index) {
-                    if(index != 0) {
-                        out += ",";
-                    }
-                    out += describePsbTreeForMotionDebug(
-                        (*list)[static_cast<int>(index)], depth + 1);
-                }
-                out += "]";
-                return out;
-            }
-            return value->toString();
         }
 
         bool logoTraceQueryEnabled() {
@@ -1378,6 +1330,11 @@ namespace motion::detail {
                                                   const tjs_int decryptSeed) {
             auto file = std::make_shared<PSB::PSBFile>();
             file->setSeed(decryptSeed);
+            file->setPreParseCallback(
+                [](std::uint8_t *data, const size_t size) {
+                    return ResourceManager::applyEmotePSBDecryptFunc(
+                        data, size);
+                });
             if(!file->loadPSBFile(path)) {
                 LOGGER->error("motion load file: {} failed", path.AsStdString());
                 return nullptr;
@@ -1536,56 +1493,6 @@ namespace motion::detail {
             if(!objectMotionKeys.empty()) {
                 LOGGER->info("motion snapshot object motions: path={} {}",
                              snapshot->path, objectMotionKeys);
-            }
-            const char *debugAll =
-                std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
-            if(debugAll && *debugAll && std::strcmp(debugAll, "0") != 0) {
-                for(const auto &[owner, clips] :
-                    snapshot->clipsByOwnerAndLabel) {
-                    for(const auto &[label, clip] : clips) {
-                        std::vector<std::string> parameterDescriptions;
-                        parameterDescriptions.reserve(clip.parameters.size());
-                        for(size_t parameterIndex = 0;
-                            parameterIndex < clip.parameters.size();
-                            ++parameterIndex) {
-                            const auto &parameter =
-                                clip.parameters[parameterIndex];
-                            parameterDescriptions.push_back(fmt::format(
-                                "{}:{}[{:.3f},{:.3f}] div={:.3f} discrete={}",
-                                parameterIndex, parameter.id,
-                                parameter.rangeBegin, parameter.rangeEnd,
-                                parameter.division,
-                                parameter.discretization ? 1 : 0));
-                        }
-                        LOGGER->info(
-                            "motion snapshot clip: path={} owner={} label={} frames={} loop={} defaultParameter={} parameters=[{}] layers=[{}] sources=[{}]",
-                            snapshot->path, owner, label, clip.totalFrames,
-                            clip.loop ? 1 : 0, clip.defaultParameterIndex,
-                            joinStrings(parameterDescriptions),
-                            joinStrings(clip.layerNames),
-                            joinStrings(clip.sourceCandidates));
-                        const auto debugPath = lowercase(snapshot->path);
-                        if(debugPath.find("title.psb") != std::string::npos &&
-                           ((owner == "char" &&
-                             (label == "show" || label == "normal")) ||
-                            (owner == "TITLE2" && label == "normal"))) {
-                            for(const auto &layerName : clip.layerNames) {
-                                const auto layerIt =
-                                    clip.layersByName.find(layerName);
-                                if(layerIt == clip.layersByName.end()) {
-                                    continue;
-                                }
-                                LOGGER->info(
-                                    "motion snapshot layer tree: path={} owner={} label={} layer={} tree={}",
-                                    snapshot->path, owner, label, layerName,
-                                    describePsbTreeForMotionDebug(
-                                        std::const_pointer_cast<
-                                            PSB::PSBDictionary>(
-                                            layerIt->second)));
-                            }
-                        }
-                    }
-                }
             }
         }
         if(logoChainTraceEnabled(snapshot)) {
