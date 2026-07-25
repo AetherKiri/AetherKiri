@@ -6,6 +6,7 @@ const HOVER_SCALE := Vector2(1.010, 1.010)
 const REST_SCALE := Vector2.ONE
 const ENTER_OFFSET := Vector2(0, 10)
 const ENTER_DURATION := 0.22
+const ROUTE_EXIT_DURATION := 0.14
 const PRESS_RESPONSE := 0.16
 const RELEASE_RESPONSE := 0.24
 const HOVER_RESPONSE := 0.26
@@ -166,7 +167,62 @@ func enter(control: Control, offset: Vector2 = ENTER_OFFSET, delay: float = 0.0)
     tween.chain().tween_callback(func(): _finish_tween(control, "enter"))
 
 func route_in(control: Control, direction: float = 1.0) -> void:
-    enter(control, Vector2(8.0 * direction, 0.0))
+    enter(control, Vector2(0.0, 8.0))
+
+func route_transition(
+    outgoing: Control,
+    incoming: Control,
+    lift: bool = true,
+    finished: Callable = Callable()
+) -> void:
+    if incoming == null or not is_instance_valid(incoming):
+        if finished.is_valid():
+            finished.call()
+        return
+    _stop_tweens(incoming)
+    if outgoing != null and is_instance_valid(outgoing) and outgoing != incoming:
+        _stop_tweens(outgoing)
+    var incoming_rest: Vector2 = incoming.get_meta("aether_route_rest_position", incoming.position)
+    incoming.set_meta("aether_route_rest_position", incoming_rest)
+    incoming.visible = true
+    incoming.modulate.a = 0.0
+    incoming.position = incoming_rest if reduced_motion or not lift else incoming_rest + Vector2(0, 8)
+    var outgoing_rest := Vector2.ZERO
+    if outgoing != null and is_instance_valid(outgoing) and outgoing != incoming:
+        outgoing_rest = outgoing.get_meta("aether_route_rest_position", outgoing.position)
+        outgoing.set_meta("aether_route_rest_position", outgoing_rest)
+        outgoing.visible = true
+    var tween := incoming.create_tween().set_parallel(true)
+    active_tweens[_tween_key(incoming, "route")] = tween
+    if outgoing != null and is_instance_valid(outgoing) and outgoing != incoming:
+        active_tweens[_tween_key(outgoing, "route")] = tween
+        tween.tween_property(outgoing, "modulate:a", 0.0, ROUTE_EXIT_DURATION).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+        if not reduced_motion and lift:
+            tween.tween_property(outgoing, "position", outgoing_rest + Vector2(0, -4), ROUTE_EXIT_DURATION).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    var enter_duration := 0.12 if reduced_motion else ENTER_DURATION
+    tween.tween_property(incoming, "modulate:a", 1.0, enter_duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    if not reduced_motion and lift:
+        tween.tween_property(incoming, "position", incoming_rest, enter_duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    tween.chain().tween_callback(func():
+        incoming.position = incoming_rest
+        incoming.modulate.a = 1.0
+        _finish_tween(incoming, "route")
+        if outgoing != null and is_instance_valid(outgoing) and outgoing != incoming:
+            outgoing.position = outgoing_rest
+            outgoing.modulate.a = 1.0
+            outgoing.visible = false
+            _finish_tween(outgoing, "route")
+        if finished.is_valid():
+            finished.call()
+    )
+
+func settle_route(control: Control, show: bool) -> void:
+    if control == null or not is_instance_valid(control):
+        return
+    _stop_tweens(control)
+    control.position = control.get_meta("aether_route_rest_position", control.position)
+    control.modulate.a = 1.0
+    control.visible = show
 
 func hero_rect(control: Control, target_rect: Rect2, finished: Callable = Callable()) -> void:
     if control == null or not is_instance_valid(control):

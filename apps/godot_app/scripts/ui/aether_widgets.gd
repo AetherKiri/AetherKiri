@@ -172,7 +172,12 @@ func _prepare_button(button: Button, font_size: int) -> void:
     motion.bind_tactile(button)
 
 func _fab_box(fill: Color) -> StyleBoxFlat:
-    return tokens.button_style(fill, Color.TRANSPARENT, 28)
+    var style: StyleBoxFlat = tokens.panel(fill, 999)
+    style.content_margin_left = 0
+    style.content_margin_top = 0
+    style.content_margin_right = 0
+    style.content_margin_bottom = 0
+    return style
 
 func _set_button_boxes(button: Button, normal: StyleBox, hover: StyleBox, pressed: StyleBox, focus: StyleBox, disabled: StyleBox) -> void:
     button.add_theme_stylebox_override("normal", normal)
