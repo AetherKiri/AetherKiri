@@ -1344,7 +1344,7 @@ const HOME_TILE_HEIGHT := 132.0
 const HOME_TILE_COVER_WIDTH := 108.0
 const HOME_ROW_HEIGHT := 112.0
 const HOME_ROW_COVER_WIDTH := 116.0
-const HOME_COMPACT_BREAKPOINT := 860.0
+const HOME_COMPACT_BREAKPOINT := 700.0
 const HOME_PHONE_BREAKPOINT := 520.0
 
 var color_bg := Color(0.055, 0.059, 0.071, 1.0)
@@ -2635,7 +2635,7 @@ func _advanced_snapshot() -> Dictionary:
 
 func _apply_shell_runtime_settings() -> void:
     if OS.get_name() == "iOS" or OS.get_name() == "Android":
-        var orientation := DisplayServer.SCREEN_LANDSCAPE if lock_landscape else DisplayServer.SCREEN_PORTRAIT
+        var orientation := DisplayServer.SCREEN_LANDSCAPE if lock_landscape else DisplayServer.SCREEN_SENSOR
         DisplayServer.screen_set_orientation(orientation)
 
 func _fit_full_rects() -> void:
@@ -2756,7 +2756,7 @@ func _layout_home_view(window_size: Vector2) -> void:
     if home_page_margin == null or home_header_box == null or game_list == null:
         return
     var compact := window_size.x < HOME_COMPACT_BREAKPOINT
-    var phone := window_size.x < HOME_PHONE_BREAKPOINT
+    var phone := minf(window_size.x, window_size.y) < HOME_PHONE_BREAKPOINT
     var margin: float = 16.0 if phone else (24.0 if compact else ui_tokens.PAGE_GUTTER)
     home_page_margin.add_theme_constant_override("margin_left", int(margin))
     home_page_margin.add_theme_constant_override("margin_top", 16 if phone else (22 if compact else 28))
@@ -8690,8 +8690,10 @@ func _apply_global_dpi_scale() -> void:
     var scale := DEFAULT_UI_DPI_SCALE
     if not scale_text.is_empty():
         scale = scale_text.to_float()
-    var window_width := float(DisplayServer.window_get_size().x)
-    if OS.get_name() == "iOS" or OS.get_name() == "Android" or window_width < HOME_COMPACT_BREAKPOINT:
+    var window_size := DisplayServer.window_get_size()
+    var window_width := float(window_size.x)
+    var short_edge := float(mini(window_size.x, window_size.y))
+    if OS.get_name() == "iOS" or OS.get_name() == "Android" or window_width < HOME_COMPACT_BREAKPOINT or short_edge < 900.0:
         scale = 1.0
     scale = clampf(scale, 0.75, 2.0)
     var window := get_window()
