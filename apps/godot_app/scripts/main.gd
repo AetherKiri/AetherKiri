@@ -1104,8 +1104,8 @@ func _apply_ui_font() -> void:
     ui_theme.set_color("font_hover_color", "CheckButton", color_text)
     ui_theme.set_color("font_pressed_color", "CheckButton", color_text)
     ui_theme.set_stylebox("normal", "OptionButton", _panel_style(8, color_card_alt, color_line, 1))
-    ui_theme.set_stylebox("hover", "OptionButton", _panel_style(8, color_card_hover, color_accent, 1))
-    ui_theme.set_stylebox("pressed", "OptionButton", _panel_style(8, color_accent_dim, color_accent, 1))
+    ui_theme.set_stylebox("hover", "OptionButton", _panel_style(8, color_card_hover, Color.TRANSPARENT, 0))
+    ui_theme.set_stylebox("pressed", "OptionButton", _panel_style(8, color_accent_dim, Color.TRANSPARENT, 0))
     ui_theme.set_stylebox("focus", "OptionButton", _focus_outline(8))
     ui_theme.set_stylebox("normal", "LineEdit", _panel_style(8, color_card_alt, color_line, 1))
     ui_theme.set_stylebox("focus", "LineEdit", _panel_style(8, color_card_hover, color_accent, 2))
@@ -3387,7 +3387,7 @@ func _detail_cover(game: Dictionary, cover_size: Vector2) -> PanelContainer:
     cover.custom_minimum_size = cover_size
     cover.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
     cover.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-    var cover_style := ui_tokens.card_style()
+    var cover_style := ui_tokens.detail_outline_style()
     cover_style.content_margin_left = 0
     cover_style.content_margin_top = 0
     cover_style.content_margin_right = 0
@@ -4633,10 +4633,7 @@ func _create_hero_overlay(global_rect: Rect2, texture: Texture2D) -> PanelContai
     hero_overlay.clip_contents = true
     hero_overlay.position = _hero_local_rect(global_rect).position
     hero_overlay.size = global_rect.size
-    var style := ui_tokens.panel(ui_tokens.surface_raised, 8, ui_tokens.highlight, 1)
-    style.shadow_color = ui_tokens.shadow
-    style.shadow_size = 14
-    style.shadow_offset = Vector2(0, 6)
+    var style := ui_tokens.detail_outline_style()
     hero_overlay.add_theme_stylebox_override("panel", style)
     if texture != null:
         var image := TextureRect.new()

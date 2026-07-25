@@ -26,11 +26,18 @@ func _run() -> void:
 
     var card_normal: StyleBoxFlat = tokens.card_style(false, false)
     var card_hover: StyleBoxFlat = tokens.card_style(true, false)
-    if card_normal.border_color != card_hover.border_color or card_normal.border_width_left != 1:
-        _fail("card hover replaced its persistent hairline border")
+    if card_normal.border_width_left != 0 or card_hover.border_width_left != 0:
+        _fail("library card reintroduced a decorative outline")
         return
-    if card_hover.shadow_size - card_normal.shadow_size > 5:
-        _fail("card hover introduced an excessive shadow jump")
+    if card_normal.shadow_size != 0 or card_hover.shadow_size != 0:
+        _fail("library card reintroduced a decorative glow")
+        return
+    var detail_outline: StyleBoxFlat = tokens.detail_outline_style()
+    if detail_outline.border_width_left != 1 or detail_outline.border_color != tokens.separator:
+        _fail("game detail cover lost its dedicated outline")
+        return
+    if tokens.material_panel().border_width_left != 0:
+        _fail("content panel reintroduced a decorative outline")
         return
 
     var primary := Button.new()
@@ -84,6 +91,11 @@ func _run() -> void:
     segmented.position = Vector2(20, 120)
     segmented.size = Vector2(300, 44)
     scene.add_child(segmented)
+    var segmented_track_style := segmented.get_child(0).get_theme_stylebox("panel") as StyleBoxFlat
+    var segmented_indicator_style := segmented.indicator.get_theme_stylebox("panel") as StyleBoxFlat
+    if segmented_track_style.border_width_left != 0 or segmented_indicator_style.border_width_left != 0 or segmented_indicator_style.shadow_size != 0:
+        _fail("segmented control reintroduced a decorative highlight")
+        return
     segmented._layout_indicator(false)
     var segment_start: float = float(segmented.indicator.position.x)
     segmented._select(1, true)

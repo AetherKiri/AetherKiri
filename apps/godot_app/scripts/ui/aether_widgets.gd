@@ -20,7 +20,7 @@ func primary_button(button: Button) -> Button:
     _set_button_boxes(
         button,
         _primary_box(tokens.accent, false),
-        _primary_box(tokens.accent.lightened(0.055), true),
+        _primary_box(tokens.accent.lightened(0.055), false),
         _primary_box(tokens.accent.darkened(0.10), false),
         _focus_box(8),
         _control_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.46), tokens.separator, false)
@@ -37,7 +37,7 @@ func destructive_button(button: Button) -> Button:
     _set_button_boxes(
         button,
         _primary_box(tokens.danger, false),
-        _primary_box(tokens.danger.lightened(0.055), true),
+        _primary_box(tokens.danger.lightened(0.055), false),
         _primary_box(tokens.danger.darkened(0.10), false),
         _focus_box(8),
         _control_box(Color(tokens.danger.r, tokens.danger.g, tokens.danger.b, 0.20), tokens.separator, false)
@@ -57,9 +57,9 @@ func secondary_button(button: Button, destructive: bool = false) -> Button:
     var press_fill := Color(tint.r, tint.g, tint.b, 0.18)
     _set_button_boxes(
         button,
-        _control_box(tokens.glass_material, tokens.separator, false),
-        _control_box(hover_fill, Color(tint.r, tint.g, tint.b, 0.48), true),
-        _control_box(press_fill, Color(tint.r, tint.g, tint.b, 0.72), false),
+        _control_box(tokens.glass_material, Color.TRANSPARENT, false),
+        _control_box(hover_fill, Color.TRANSPARENT, false),
+        _control_box(press_fill, Color.TRANSPARENT, false),
         _focus_box(8),
         _control_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.32), tokens.separator, false)
     )
@@ -82,8 +82,8 @@ func toolbar_button(button: Button, selected: bool = false) -> Button:
     _set_button_boxes(
         button,
         _control_box(tokens.accent_fill if selected else Color.TRANSPARENT, Color.TRANSPARENT, false),
-        _control_box(tokens.surface_hover, tokens.highlight, true),
-        _control_box(tokens.accent_fill, Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.42), false),
+        _control_box(tokens.surface_hover, Color.TRANSPARENT, false),
+        _control_box(tokens.accent_fill, Color.TRANSPARENT, false),
         _focus_box(8),
         _control_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.48), tokens.separator, false)
     )
@@ -187,21 +187,10 @@ func _set_button_boxes(button: Button, normal: StyleBox, hover: StyleBox, presse
     button.add_theme_stylebox_override("disabled", disabled)
 
 func _primary_box(fill: Color, elevated: bool) -> StyleBoxFlat:
-    var style: StyleBoxFlat = tokens.button_style(fill, Color(1, 1, 1, 0.20), 8)
-    style.border_width_bottom = 0
-    var shadow_alpha := (0.34 if elevated else 0.24) if tokens.mode == "dark" else (0.15 if elevated else 0.10)
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, shadow_alpha)
-    style.shadow_size = (10 if elevated else 7) if tokens.mode == "dark" else (6 if elevated else 4)
-    style.shadow_offset = Vector2(0, 4 if elevated else 3)
-    return style
+    return tokens.button_style(fill, Color.TRANSPARENT, 8)
 
 func _control_box(fill: Color, border: Color, elevated: bool) -> StyleBoxFlat:
-    var style: StyleBoxFlat = tokens.button_style(fill, border, 8)
-    var shadow_alpha := (0.24 if elevated else 0.12) if tokens.mode == "dark" else (0.09 if elevated else 0.05)
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, shadow_alpha)
-    style.shadow_size = (8 if elevated else 4) if tokens.mode == "dark" else (5 if elevated else 2)
-    style.shadow_offset = Vector2(0, 3 if elevated else 1)
-    return style
+    return tokens.button_style(fill, border, 8)
 
 func _field_box(focused: bool) -> StyleBoxFlat:
     var border: Color = tokens.accent if focused else tokens.separator
@@ -211,9 +200,6 @@ func _field_box(focused: bool) -> StyleBoxFlat:
     style.content_margin_top = 9
     style.content_margin_right = 13
     style.content_margin_bottom = 9
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.18 if tokens.mode == "dark" else 0.07)
-    style.shadow_size = (5 if focused else 3) if tokens.mode == "dark" else (3 if focused else 2)
-    style.shadow_offset = Vector2(0, 1)
     return style
 
 func _disabled_field_box() -> StyleBoxFlat:
@@ -222,6 +208,4 @@ func _disabled_field_box() -> StyleBoxFlat:
 func _focus_box(radius: int) -> StyleBoxFlat:
     var style: StyleBoxFlat = tokens.focus_style(radius)
     style.border_color = Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.92)
-    style.shadow_color = Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.20)
-    style.shadow_size = 5
     return style
