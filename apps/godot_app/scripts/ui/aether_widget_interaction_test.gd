@@ -39,6 +39,17 @@ func _run() -> void:
         return
     primary.emit_signal("button_up")
 
+    var fab := Button.new()
+    scene.add_child(fab)
+    widgets.floating_action_button(fab)
+    var fab_style := fab.get_theme_stylebox("normal") as StyleBoxFlat
+    if fab.custom_minimum_size != Vector2(56, 56) or fab_style == null or fab_style.corner_radius_top_left != 28:
+        _fail("floating action button did not keep its circular 56px geometry")
+        return
+    if not is_equal_approx(float(fab.get_meta("aether_release_damping", 1.0)), 0.82):
+        _fail("floating action button did not receive tactile release physics")
+        return
+
     var toggle = AetherSwitch.new()
     toggle.setup(tokens, motion, false)
     toggle.position = Vector2(20, 70)

@@ -6,6 +6,7 @@ const GAME_PATH_KEY := "aether_kiri/game_path"
 const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const UI_FONT := preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
+const DISPLAY_FONT := preload("res://assets/fonts/CormorantGaramond-Variable.ttf")
 const UI_SYMBOL_FONT := preload("res://assets/fonts/aetherkiri-runtime-symbols.ttf")
 const RUNTIME_FONT_DIR := "user://runtime_fonts"
 const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
@@ -946,6 +947,20 @@ func _apply_style_mode(update_theme: bool = true) -> void:
         color_success = Color(0.188, 0.820, 0.345, 1.0)
         color_line = Color(1, 1, 1, 0.090)
 
+    color_bg = ui_tokens.background
+    color_card = ui_tokens.surface
+    color_card_alt = ui_tokens.surface_raised
+    color_card_hover = ui_tokens.surface_hover
+    color_text = ui_tokens.text_primary
+    color_muted = ui_tokens.text_secondary
+    color_accent = ui_tokens.accent
+    color_accent_soft = ui_tokens.accent.lightened(0.12)
+    color_accent_dim = ui_tokens.accent_fill
+    color_warn = ui_tokens.warning
+    color_danger = ui_tokens.danger
+    color_success = ui_tokens.success
+    color_line = ui_tokens.separator
+
     if update_theme:
         _apply_ui_font()
     if bg_rect != null:
@@ -1047,6 +1062,7 @@ func _mobile_runtime() -> bool:
 func _apply_ui_font() -> void:
     var fallbacks: Array[Font] = [UI_SYMBOL_FONT]
     UI_FONT.set_fallbacks(fallbacks)
+    DISPLAY_FONT.set_fallbacks([UI_FONT, UI_SYMBOL_FONT])
     var ui_theme := Theme.new()
     ui_theme.set_default_font(UI_FONT)
     ui_theme.set_color("font_color", "Label", color_text)
@@ -1830,12 +1846,11 @@ func _layout_home_view(window_size: Vector2) -> void:
     home_primary_button.text = ""
     home_primary_button.tooltip_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
     home_primary_button.accessibility_name = home_primary_button.tooltip_text
-    home_primary_button.custom_minimum_size = Vector2(48, ui_tokens.CONTROL_HEIGHT)
-    home_primary_button.size_flags_horizontal = Control.SIZE_SHRINK_END
-    if not home_header_layout_initialized or home_header_compact != compact:
-        home_header_compact = compact
-        home_header_layout_initialized = true
-        ui_widgets.primary_button(home_primary_button)
+    var fab_inset := 14.0 if compact else 20.0
+    home_primary_button.offset_left = -56.0 - fab_inset
+    home_primary_button.offset_top = -56.0 - fab_inset
+    home_primary_button.offset_right = -fab_inset
+    home_primary_button.offset_bottom = -fab_inset
     var scroll_bar_width := game_scroll.get_v_scroll_bar().get_combined_minimum_size().x
     var list_width := maxf(HOME_TILE_MIN_WIDTH, window_size.x - margin * 2.0 - scroll_bar_width)
     var gap := 12.0 if compact else 16.0
@@ -1879,6 +1894,7 @@ func _build_home_view() -> void:
 
     home_title_label = Label.new()
     home_title_label.text = _t("nav.library")
+    home_title_label.add_theme_font_override("font", DISPLAY_FONT)
     home_title_label.add_theme_font_size_override("font_size", 31)
     home_title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     title_stack.add_child(home_title_label)
@@ -1893,14 +1909,6 @@ func _build_home_view() -> void:
     home_actions.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     home_actions.add_theme_constant_override("separation", 8)
     home_header_box.add_child(home_actions)
-
-    home_primary_button = _icon_action_button(
-        ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD,
-        _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"),
-        _on_refresh_or_import,
-        true
-    )
-    home_actions.add_child(home_primary_button)
 
     home_guide_button = _shell_compact_button(ICON_HELP, _t("home.import_guide"), _show_import_guide)
     home_guide_button.custom_minimum_size = Vector2(ui_tokens.CONTROL_HEIGHT, ui_tokens.CONTROL_HEIGHT)
@@ -1929,6 +1937,22 @@ func _build_home_view() -> void:
     empty_state.mouse_filter = Control.MOUSE_FILTER_IGNORE
     library_body.add_child(empty_state)
 
+    home_primary_button = Button.new()
+    home_primary_button.text = ""
+    home_primary_button.icon = _load_ui_icon(ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD)
+    home_primary_button.expand_icon = true
+    home_primary_button.tooltip_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
+    home_primary_button.accessibility_name = home_primary_button.tooltip_text
+    home_primary_button.anchor_left = 1.0
+    home_primary_button.anchor_top = 1.0
+    home_primary_button.anchor_right = 1.0
+    home_primary_button.anchor_bottom = 1.0
+    home_primary_button.add_theme_constant_override("icon_max_width", 23)
+    ui_widgets.floating_action_button(home_primary_button)
+    home_primary_button.pressed.connect(_on_refresh_or_import)
+    library_body.add_child(home_primary_button)
+    home_primary_button.move_to_front()
+
     var empty_box := VBoxContainer.new()
     empty_box.custom_minimum_size = Vector2(280, 0)
     empty_box.add_theme_constant_override("separation", 12)
@@ -1952,15 +1976,6 @@ func _build_home_view() -> void:
     empty_help_label.add_theme_font_size_override("font_size", 14)
     empty_help_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     empty_box.add_child(empty_help_label)
-
-    empty_primary_button = _pill_button(
-        _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"),
-        ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD
-    )
-    empty_primary_button.custom_minimum_size = Vector2(164, 48)
-    empty_primary_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-    empty_primary_button.pressed.connect(_on_refresh_or_import)
-    empty_box.add_child(empty_primary_button)
 
     call_deferred("_animate_home_header")
 
@@ -2019,6 +2034,7 @@ func _rebuild_settings_view() -> void:
     top.add_child(title_stack)
     var title := Label.new()
     title.text = _t("settings.title")
+    title.add_theme_font_override("font", DISPLAY_FONT)
     title.add_theme_font_size_override("font_size", 31)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     title_stack.add_child(title)
@@ -3231,6 +3247,7 @@ func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
     title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.max_lines_visible = 3 if compact else 2
     title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+    title.add_theme_font_override("font", DISPLAY_FONT)
     title.add_theme_font_size_override("font_size", 23 if compact else 32)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     identity.add_child(title)
