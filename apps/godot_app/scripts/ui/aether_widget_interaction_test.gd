@@ -43,7 +43,7 @@ func _run() -> void:
     scene.add_child(fab)
     widgets.floating_action_button(fab)
     var fab_style := fab.get_theme_stylebox("normal") as StyleBoxFlat
-    if fab.custom_minimum_size != Vector2(56, 56) or fab_style == null or fab_style.corner_radius_top_left != 28:
+    if fab.custom_minimum_size != Vector2(56, 56) or fab_style == null or fab_style.corner_radius_top_left < 56:
         _fail("floating action button did not keep its circular 56px geometry")
         return
     var fab_hover := fab.get_theme_stylebox("hover") as StyleBoxFlat

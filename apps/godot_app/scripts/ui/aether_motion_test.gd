@@ -114,6 +114,32 @@ func _run() -> void:
         _fail("right-column hero transition did not finish exactly once")
         return
 
+    var outgoing := Control.new()
+    var incoming := Control.new()
+    outgoing.position = Vector2(0, 0)
+    incoming.position = Vector2(0, 0)
+    incoming.visible = false
+    root.add_child(outgoing)
+    root.add_child(incoming)
+    motion.route_transition(outgoing, incoming)
+    await process_frame
+    if incoming.position.y <= 0.0 or incoming.modulate.a <= 0.0 or incoming.modulate.a >= 1.0:
+        _fail("route transition skipped its lifted fade-in frame")
+        return
+    for _frame in range(45):
+        await process_frame
+    if outgoing.visible or not incoming.visible or not incoming.position.is_equal_approx(Vector2.ZERO) or not is_equal_approx(incoming.modulate.a, 1.0):
+        _fail("route transition did not settle both pages")
+        return
+    motion.route_transition(incoming, outgoing)
+    await process_frame
+    motion.route_transition(outgoing, incoming)
+    for _frame in range(45):
+        await process_frame
+    if outgoing.visible or not incoming.visible or not is_equal_approx(incoming.modulate.a, 1.0):
+        _fail("interrupted route transition left a stale page visible")
+        return
+
     print("aether_motion_test: PASS")
     quit(0)
 
