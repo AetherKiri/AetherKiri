@@ -2,6 +2,12 @@
 // Ported from https://github.com/wamsoft/layerExImage
 // Contains code derived from CxImage (Copyright (C) 2001-2011 Davide Pizzolato)
 
+#include "typedefine.h"
+#if defined(_WIN32)
+#undef GetMessage
+#undef max
+#undef min
+#endif
 #include "ncbind.hpp"
 #include <algorithm>
 #include <cmath>

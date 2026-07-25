@@ -630,6 +630,7 @@ public:
 private:
     void FireClick(tjs_int x, tjs_int y);
     void FireButtonClick();
+    bool HasButtonClickTarget();
     void FireDoubleClick(tjs_int x, tjs_int y);
     void FireMouseDown(tjs_int x, tjs_int y, tTVPMouseButton mb,
                        tjs_uint32 flags);

@@ -16,7 +16,7 @@ Godot App Shell
         -> KiriKiri Runtime / Plugins
 ```
 
-当前产品入口是 `apps/godot_app`。Flutter 和 ANGLE 已不属于当前产品架构。
+当前产品入口是 `apps/godot_app`。
 
 ## 渲染架构
 
@@ -44,7 +44,6 @@ CPU 上传只能作为 debug fallback。性能优化应优先落到 Godot Native
 | `tools/` | 开发工具，例如 XP3 工具和插件审计工具。 |
 | `vcpkg/` | 项目使用的本地 vcpkg ports 和 triplets。 |
 | `.devtools/vcpkg/` | 可选本地 vcpkg checkout，已被忽略，可重新生成。 |
-| `docs/` | GitHub Pages 站点文件，不是工程开发文档目录。 |
 | `doc/` | 工程开发文档。开发说明从这里开始读。 |
 
 ## 关键文件作用

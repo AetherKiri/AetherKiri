@@ -1,6 +1,12 @@
 // layerExLongExposure — Long exposure image accumulation for Layer
 // Ported from https://github.com/wamsoft/layerExLongExposure
 
+#include "typedefine.h"
+#if defined(_WIN32)
+#undef GetMessage
+#undef max
+#undef min
+#endif
 #include "ncbind.hpp"
 #include <cstring>
 

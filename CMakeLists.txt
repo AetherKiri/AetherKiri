@@ -105,7 +105,9 @@ if(AETHERKIRI_ENABLE_INTERNAL)
            NOT COMMAND aetherinternal_extend_motionplayer OR
            NOT COMMAND aetherinternal_extend_psbfile OR
            NOT COMMAND aetherinternal_extend_legacy_plugins OR
-           NOT COMMAND aetherinternal_extend_live2d)
+           NOT COMMAND aetherinternal_extend_live2d OR
+           NOT COMMAND aetherinternal_extend_krkr2plugin OR
+           NOT COMMAND aetherinternal_extend_krkr2plugin_tests)
             message(FATAL_ERROR
                 "AetherInternal is present but is incompatible with the "
                 "motionplayer backend contract required by this checkout")

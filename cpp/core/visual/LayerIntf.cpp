@@ -5707,21 +5707,114 @@ void tTJSNI_BaseLayer::FireClick(tjs_int x, tjs_int y) {
 }
 
 //---------------------------------------------------------------------------
+static bool TVPHasLinkButtonProperties(const tTJSVariantClosure &object) {
+    if(!object.Object)
+        return false;
+
+    static ttstr control_owner_name(TJS_W("controlOwner"));
+    static ttstr link_num_name(TJS_W("linkNum"));
+    tTJSVariant control_owner;
+    tTJSVariant link_num;
+    return TJS_SUCCEEDED(object.PropGet(
+               0, control_owner_name.c_str(), control_owner_name.GetHint(),
+               &control_owner, object.ObjThis)) &&
+           control_owner.Type() == tvtObject &&
+           TJS_SUCCEEDED(object.PropGet(0, link_num_name.c_str(),
+                                        link_num_name.GetHint(), &link_num,
+                                        object.ObjThis)) &&
+           link_num.Type() != tvtVoid;
+}
+
+static tTJSVariantClosure
+TVPResolveLayerButtonObject(tTJSNI_BaseLayer *layer) {
+    if(!layer)
+        return tTJSVariantClosure(nullptr, nullptr);
+
+    tTJSVariantClosure owner(layer->GetOwnerNoAddRef(),
+                             layer->GetOwnerNoAddRef());
+    if(TVPHasLinkButtonProperties(owner))
+        return owner;
+
+    tTJSVariantClosure action = layer->GetActionOwnerNoAddRef();
+    if(!action.Object)
+        return owner;
+
+    static ttstr current_name(TJS_W("current"));
+    static ttstr names_name(TJS_W("names"));
+    tTJSVariant current_value;
+    const tjs_error current_hr =
+        action.PropGet(0, current_name.c_str(), current_name.GetHint(),
+                       &current_value, action.ObjThis);
+    if(TJS_FAILED(current_hr) || current_value.Type() != tvtObject) {
+        if(TVPLayerInputTraceEnabled())
+            spdlog::info("LayerIntf button resolve layer={} stage=current hr={} type={}",
+                         layer->GetName().AsStdString(), current_hr,
+                         static_cast<int>(current_value.Type()));
+        return owner;
+    }
+
+    tTJSVariantClosure current = current_value.AsObjectClosureNoAddRef();
+    tTJSVariant names_value;
+    const tjs_error names_hr = current.Object
+                                   ? current.PropGet(
+                                         0, names_name.c_str(),
+                                         names_name.GetHint(), &names_value,
+                                         current.ObjThis)
+                                   : TJS_E_INVALIDOBJECT;
+    if(TJS_FAILED(names_hr) || names_value.Type() != tvtObject) {
+        if(TVPLayerInputTraceEnabled())
+            spdlog::info("LayerIntf button resolve layer={} stage=names hr={} type={}",
+                         layer->GetName().AsStdString(), names_hr,
+                         static_cast<int>(names_value.Type()));
+        return owner;
+    }
+
+    tTJSVariantClosure names = names_value.AsObjectClosureNoAddRef();
+    ttstr layer_name = layer->GetName();
+    tTJSVariant button_value;
+    const tjs_error button_hr = names.Object
+                                    ? names.PropGet(
+                                          0, layer_name.c_str(),
+                                          layer_name.GetHint(), &button_value,
+                                          names.ObjThis)
+                                    : TJS_E_INVALIDOBJECT;
+    if(TJS_FAILED(button_hr) || button_value.Type() != tvtObject) {
+        if(TVPLayerInputTraceEnabled())
+            spdlog::info("LayerIntf button resolve layer={} stage=button hr={} type={}",
+                         layer_name.AsStdString(), button_hr,
+                         static_cast<int>(button_value.Type()));
+        return owner;
+    }
+
+    tTJSVariantClosure button = button_value.AsObjectClosureNoAddRef();
+    const bool valid = TVPHasLinkButtonProperties(button);
+    if(TVPLayerInputTraceEnabled())
+        spdlog::info("LayerIntf button resolve layer={} stage=properties valid={}",
+                     layer_name.AsStdString(), valid ? "yes" : "no");
+    return valid ? button : owner;
+}
+
+bool tTJSNI_BaseLayer::HasButtonClickTarget() {
+    return TVPHasLinkButtonProperties(TVPResolveLayerButtonObject(this));
+}
+
+//---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::FireButtonClick() {
     if(Owner && !Shutdown) {
         TVPLayerRecentEventSource = this;
         TVPLayerEventSourceScope event_source_scope(this);
+        const tTJSVariantClosure button_object =
+            TVPResolveLayerButtonObject(this);
 
         if(TVPLayerInputTraceEnabled()) {
-            tTJSVariantClosure self_object(Owner, Owner);
-            TVPTraceObjectForButtonClick("button.fire", self_object);
+            TVPTraceObjectForButtonClick("button.fire", button_object);
             auto trace_object_property = [&](const tjs_char *property,
                                              const char *label) {
                 ttstr property_name(property);
                 tTJSVariant value;
-                const tjs_error hr = Owner->PropGet(
+                const tjs_error hr = button_object.PropGet(
                     0, property_name.c_str(), property_name.GetHint(), &value,
-                    Owner);
+                    button_object.ObjThis);
                 if(TJS_FAILED(hr) || value.Type() != tvtObject)
                     return;
                 TVPTraceObjectForButtonClick(
@@ -5737,9 +5830,9 @@ void tTJSNI_BaseLayer::FireButtonClick() {
             ttstr property_name(property);
             tTJSVariant expression_value;
             const tjs_error prop_hr =
-                Owner->PropGet(0, property_name.c_str(),
+                button_object.PropGet(0, property_name.c_str(),
                                property_name.GetHint(), &expression_value,
-                               Owner);
+                               button_object.ObjThis);
             if(TJS_FAILED(prop_hr) || expression_value.Type() == tvtVoid) {
                 if(TVPLayerInputTraceEnabled()) {
                     spdlog::info("LayerIntf FireButtonClick {} layer={} hr={} value=<missing>",
@@ -5763,8 +5856,9 @@ void tTJSNI_BaseLayer::FireButtonClick() {
             tTJSVariant eval_result;
             try {
                 const tjs_error eval_hr =
-                    Owner->FuncCall(0, eval_name.c_str(), eval_name.GetHint(),
-                                    &eval_result, 1, args, Owner);
+                    button_object.FuncCall(
+                        0, eval_name.c_str(), eval_name.GetHint(),
+                        &eval_result, 1, args, button_object.ObjThis);
                 if(TVPLayerInputTraceEnabled()) {
                     spdlog::info("LayerIntf FireButtonClick {} layer={} expr={} hr={} result={}",
                                  label, GetName().AsStdString(),
@@ -5877,9 +5971,9 @@ void tTJSNI_BaseLayer::FireButtonClick() {
 
             tTJSVariant control_owner_value;
             const tjs_error control_hr =
-                Owner->PropGet(0, control_owner_name.c_str(),
+                button_object.PropGet(0, control_owner_name.c_str(),
                                control_owner_name.GetHint(),
-                               &control_owner_value, Owner);
+                               &control_owner_value, button_object.ObjThis);
             if(TJS_FAILED(control_hr) ||
                control_owner_value.Type() != tvtObject) {
                 if(TVPLayerInputTraceEnabled()) {
@@ -5893,8 +5987,9 @@ void tTJSNI_BaseLayer::FireButtonClick() {
             tTJSVariant link_num((tjs_int)0);
             tTJSVariant link_num_value;
             const tjs_error link_hr =
-                Owner->PropGet(0, link_num_name.c_str(), link_num_name.GetHint(),
-                               &link_num_value, Owner);
+                button_object.PropGet(0, link_num_name.c_str(),
+                                      link_num_name.GetHint(), &link_num_value,
+                                      button_object.ObjThis);
             if(TJS_SUCCEEDED(link_hr) && link_num_value.Type() != tvtVoid)
                 link_num = link_num_value;
 
@@ -5902,6 +5997,40 @@ void tTJSNI_BaseLayer::FireButtonClick() {
                 control_owner_value.AsObjectClosureNoAddRef();
             if(!control_owner.Object)
                 return false;
+
+            if(TVPLayerInputTraceEnabled()) {
+                static ttstr links_name(TJS_W("links"));
+                tTJSVariant links_value;
+                const tjs_error links_hr = control_owner.PropGet(
+                    0, links_name.c_str(), links_name.GetHint(), &links_value,
+                    control_owner.ObjThis);
+                if(TJS_SUCCEEDED(links_hr) &&
+                   links_value.Type() == tvtObject) {
+                    tTJSVariantClosure links =
+                        links_value.AsObjectClosureNoAddRef();
+                    tTJSVariant link_value;
+                    const tjs_int link_index =
+                        static_cast<tjs_int>(link_num.AsInteger());
+                    const tjs_error item_hr = links.PropGetByNum(
+                        0, link_index, &link_value, links.ObjThis);
+                    if(TJS_SUCCEEDED(item_hr) &&
+                       link_value.Type() == tvtObject) {
+                        TVPTraceObjectForButtonClick(
+                            "button.fire.controlOwner.link",
+                            link_value.AsObjectClosureNoAddRef());
+                    } else {
+                        spdlog::info(
+                            "LayerIntf FireButtonClick link inspect layer={} link={} hr={} type={}",
+                            GetName().AsStdString(), link_index, item_hr,
+                            static_cast<int>(link_value.Type()));
+                    }
+                } else {
+                    spdlog::info(
+                        "LayerIntf FireButtonClick links inspect layer={} hr={} type={}",
+                        GetName().AsStdString(), links_hr,
+                        static_cast<int>(links_value.Type()));
+                }
+            }
 
             tTJSVariant *args[1] = { &link_num };
             tTJSVariant result;
@@ -5952,9 +6081,9 @@ void tTJSNI_BaseLayer::FireButtonClick() {
         static ttstr eval_click_name(TJS_W("_evalOnClick"));
         tTJSVariant eval_result;
         const tjs_error eval_hr =
-            Owner->FuncCall(0, eval_click_name.c_str(),
-                            eval_click_name.GetHint(), &eval_result, 0,
-                            nullptr, Owner);
+            button_object.FuncCall(0, eval_click_name.c_str(),
+                                   eval_click_name.GetHint(), &eval_result, 0,
+                                   nullptr, button_object.ObjThis);
         if(TVPLayerInputTraceEnabled()) {
             spdlog::info("LayerIntf FireButtonClick _evalOnClick layer={} hr={} result={}",
                          GetName().AsStdString(), eval_hr,
@@ -5969,14 +6098,14 @@ void tTJSNI_BaseLayer::FireButtonClick() {
         static ttstr link_num_name(TJS_W("linkNum"));
         tTJSVariant link_num((tjs_int)0);
         tTJSVariant value;
-        if(TJS_SUCCEEDED(Owner->PropGet(0, link_num_name.c_str(),
-                                        link_num_name.GetHint(), &value,
-                                        Owner))) {
+        if(TJS_SUCCEEDED(button_object.PropGet(
+               0, link_num_name.c_str(), link_num_name.GetHint(), &value,
+               button_object.ObjThis))) {
             link_num = value;
         }
         tTJSVariant *args[1] = { &link_num };
-        Owner->FuncCall(0, eventname.c_str(), eventname.GetHint(), nullptr, 1,
-                        args, Owner);
+        button_object.FuncCall(0, eventname.c_str(), eventname.GetHint(),
+                               nullptr, 1, args, button_object.ObjThis);
     }
 }
 

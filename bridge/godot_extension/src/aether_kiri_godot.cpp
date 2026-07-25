@@ -5008,7 +5008,7 @@ public:
         callbacks.blend_rect3 = BridgeBlendRect3;
         callbacks.read_rgba = BridgeReadRgba;
         callbacks.flush = BridgeFlush;
-        TVPGodotGpuBridgeRegister(&callbacks);
+        engine_register_godot_gpu_bridge(&callbacks);
 
         CharString writable_utf8 = writable_path.utf8();
         CharString cache_utf8 = cache_path.utf8();
@@ -6092,7 +6092,7 @@ void DeinitializeAetherKiri(ModuleInitializationLevel level) {
     BridgeFlush();
     ReleaseRemainingGodotGpuTextures();
     ReleaseGodotGpuPipeline();
-    TVPGodotGpuBridgeRegister(nullptr);
+    engine_register_godot_gpu_bridge(nullptr);
 }
 
 } // namespace godot

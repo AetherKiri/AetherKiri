@@ -18,8 +18,7 @@ Godot App Shell
         -> KiriKiri Runtime / Plugins
 ```
 
-The product path is the Godot app in `apps/godot_app`. Flutter and ANGLE are no
-longer part of the product architecture.
+The product path is the Godot app in `apps/godot_app`.
 
 ## Rendering Architecture
 
@@ -48,7 +47,6 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | `tools/` | Developer tools such as XP3 helpers and plugin audit utilities. |
 | `vcpkg/` | Local vcpkg ports and triplets used by this project. |
 | `.devtools/vcpkg/` | Optional local vcpkg checkout. This directory is ignored and can be recreated. |
-| `docs/` | GitHub Pages site files, not engineering documentation. |
 | `doc/` | Engineering documentation. Start here for development notes. |
 
 ## Important Files

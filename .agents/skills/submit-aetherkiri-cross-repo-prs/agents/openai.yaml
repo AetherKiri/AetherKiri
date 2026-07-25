@@ -1,0 +1,4 @@
+interface:
+  display_name: "Submit AetherKiri Cross-Repo PRs"
+  short_description: "Coordinate secure public and Internal pull requests"
+  default_prompt: "Use $submit-aetherkiri-cross-repo-prs to prepare, validate, and submit paired AetherKiri and AetherInternal pull requests without exposing private source."

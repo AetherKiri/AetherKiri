@@ -6,3 +6,5 @@
 // signature. Returns false when the stream uses a different format.
 bool TVPLoadTjsNs0DataPack(tTJSBinaryStream *stream, tTJSVariant *result,
                            const ttstr &outerIv = ttstr());
+
+extern "C" void TVPRegisterTjsNs0DataPackLoader();

@@ -3,6 +3,8 @@ entry_symbol = "aether_kiri_library_init"
 compatibility_minimum = "4.6"
 
 [libraries]
+windows.debug.x86_64 = "res://bin/windows/debug/aether_kiri_godot.dll"
+windows.release.x86_64 = "res://bin/windows/release/aether_kiri_godot.dll"
 ; Linux support is retained in the source tree but is currently disabled.
 ; linux.debug.x86_64 = "res://bin/linux/debug/libaether_kiri_godot.so"
 ; linux.release.x86_64 = "res://bin/linux/release/libaether_kiri_godot.so"
@@ -16,6 +18,12 @@ web.debug.wasm32 = "res://bin/web/debug/aether_kiri_godot.wasm"
 web.release.wasm32 = "res://bin/web/release/aether_kiri_godot.wasm"
 
 [dependencies]
+windows.debug.x86_64 = {
+  "res://bin/windows/debug/engine_api.dll": ""
+}
+windows.release.x86_64 = {
+  "res://bin/windows/release/engine_api.dll": ""
+}
 ; linux.debug.x86_64 = {
 ;   "res://bin/linux/debug/libengine_api.so": ""
 ; }

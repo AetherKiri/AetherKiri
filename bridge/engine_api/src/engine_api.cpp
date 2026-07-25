@@ -67,6 +67,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "visual/impl/WindowImpl.h"
 #include "visual/RenderManager.h"
 #include "visual/godot/GodotRenderManager.h"
+#include "visual/godot/GodotGpuBridge.h"
 #include "psbfile/PSBMedia.h"
 #include "sound/win32/WaveImpl.h"
 #include "sound/win32/WaveMixer.h"
@@ -353,6 +354,7 @@ std::shared_ptr<spdlog::logger> EnsureNamedLogger(const char* name) {
   return spdlog::stdout_color_mt(name);
 }
 
+#if !defined(_WIN32)
 void CrashSignalHandler(int sig, siginfo_t* info, void* context) {
   spdlog::critical("FATAL SIGNAL {} received! fault={}", sig,
                    info ? info->si_addr : nullptr);
@@ -415,6 +417,7 @@ void CrashSignalHandler(int sig, siginfo_t* info, void* context) {
   signal(sig, SIG_DFL);
   raise(sig);
 }
+#endif
 
 void PrintNativeBacktrace(const char* prefix) {
 #if defined(ENGINE_API_HAS_EXECINFO)
@@ -451,6 +454,7 @@ void CrashTerminateHandler() {
 
 void InstallCrashSignalHandlers() {
   std::set_terminate(CrashTerminateHandler);
+#if !defined(_WIN32)
   struct sigaction action {};
   action.sa_sigaction = CrashSignalHandler;
   sigemptyset(&action.sa_mask);
@@ -459,6 +463,7 @@ void InstallCrashSignalHandlers() {
   sigaction(SIGABRT, &action, nullptr);
   sigaction(SIGBUS, &action, nullptr);
   sigaction(SIGFPE, &action, nullptr);
+#endif
 }
 
 void EnsureInternalPluginAnchorsLinked() {
@@ -1499,6 +1504,11 @@ extern std::string TVPEngineApi_GetGlobalException();
 
 extern "C" {
 
+void engine_register_godot_gpu_bridge(const void* callbacks) {
+  TVPGodotGpuBridgeRegister(
+      static_cast<const TVPGodotGpuBridgeCallbacks*>(callbacks));
+}
+
 void TVPEngineApiNotifyWebStartupReady() {
 #if defined(__EMSCRIPTEN__)
   engine_handle_t handle = nullptr;
@@ -2530,11 +2540,15 @@ engine_result_t engine_set_option(engine_handle_t handle,
   if (key == "input_trace") {
     const std::string v(option->value_utf8);
     const bool enabled = (v == "1" || v == "true");
+#if defined(_WIN32)
+    _putenv_s("AETHERKIRI_INPUT_TRACE", enabled ? "1" : "");
+#else
     if (enabled) {
       setenv("AETHERKIRI_INPUT_TRACE", "1", 1);
     } else {
       unsetenv("AETHERKIRI_INPUT_TRACE");
     }
+#endif
     spdlog::info("engine_set_option: input_trace={}", enabled);
     TVPSetCommandLine(ttstr(option->key_utf8).c_str(), ttstr(option->value_utf8));
     ClearHandleErrorLocked(impl);
