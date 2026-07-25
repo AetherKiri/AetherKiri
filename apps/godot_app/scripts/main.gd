@@ -1100,6 +1100,8 @@ var hero_source_rect := Rect2()
 var hero_source_path := ""
 var hero_source_texture: Texture2D
 var hero_overlay: PanelContainer
+var hero_hidden_target: CanvasItem
+var hero_transition_id := 0
 var known_games: Array[Dictionary] = []
 var known_videos: Array[Dictionary] = []
 var home_library_mode := "game"
@@ -6794,14 +6796,14 @@ func _animate_hero_forward(body: Control) -> void:
     if destination.size == Vector2.ZERO:
         ui_motion.reveal(body)
         return
+    _finish_hero_overlay()
     detail_hero_cover.modulate.a = 0.0
+    hero_hidden_target = detail_hero_cover
     ui_motion.reveal(body, 0.02)
     var overlay := _create_hero_overlay(hero_source_rect, hero_source_texture)
-    ui_motion.hero_rect(overlay, _hero_local_rect(destination), func():
-        if is_instance_valid(detail_hero_cover):
-            detail_hero_cover.modulate.a = 1.0
-        _finish_hero_overlay()
-    )
+    var transition_id := hero_transition_id
+    ui_motion.hero_rect(overlay, _hero_local_rect(destination), func(): _complete_hero_overlay(overlay, transition_id, false))
+    _arm_hero_watchdog(overlay, transition_id, false)
 
 func _animate_hero_back(source_rect: Rect2) -> void:
     await get_tree().process_frame
@@ -6815,17 +6817,15 @@ func _animate_hero_back(source_rect: Rect2) -> void:
         _clear_hero_state()
         ui_motion.route_in(home_view, -1.0)
         return
+    _finish_hero_overlay()
     target_cover.modulate.a = 0.0
+    hero_hidden_target = target_cover
     var overlay := _create_hero_overlay(source_rect, hero_source_texture)
-    ui_motion.hero_rect(overlay, _hero_local_rect(target_cover.get_global_rect()), func():
-        if is_instance_valid(target_cover):
-            target_cover.modulate.a = 1.0
-        _finish_hero_overlay()
-        _clear_hero_state()
-    )
+    var transition_id := hero_transition_id
+    ui_motion.hero_rect(overlay, _hero_local_rect(target_cover.get_global_rect()), func(): _complete_hero_overlay(overlay, transition_id, true))
+    _arm_hero_watchdog(overlay, transition_id, true)
 
 func _create_hero_overlay(global_rect: Rect2, texture: Texture2D) -> PanelContainer:
-    _finish_hero_overlay()
     hero_overlay = PanelContainer.new()
     hero_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
     hero_overlay.clip_contents = true
@@ -6860,11 +6860,38 @@ func _find_game_card(path: String) -> Button:
     return null
 
 func _finish_hero_overlay() -> void:
+    hero_transition_id += 1
+    if is_instance_valid(hero_hidden_target):
+        hero_hidden_target.modulate.a = 1.0
+    hero_hidden_target = null
     if is_instance_valid(hero_overlay):
+        hero_overlay.visible = false
         hero_overlay.queue_free()
     hero_overlay = null
-    if is_instance_valid(detail_hero_cover):
-        detail_hero_cover.modulate.a = 1.0
+
+func _complete_hero_overlay(expected_overlay: Control, transition_id: int, clear_state: bool) -> void:
+    if transition_id != hero_transition_id:
+        if is_instance_valid(expected_overlay):
+            expected_overlay.visible = false
+            expected_overlay.queue_free()
+        return
+    if is_instance_valid(hero_hidden_target):
+        hero_hidden_target.modulate.a = 1.0
+    hero_hidden_target = null
+    if is_instance_valid(expected_overlay):
+        expected_overlay.visible = false
+        expected_overlay.queue_free()
+    if hero_overlay == expected_overlay:
+        hero_overlay = null
+    hero_transition_id += 1
+    if clear_state:
+        _clear_hero_state()
+
+func _arm_hero_watchdog(expected_overlay: Control, transition_id: int, clear_state: bool) -> void:
+    get_tree().create_timer(0.55).timeout.connect(
+        func(): _complete_hero_overlay(expected_overlay, transition_id, clear_state),
+        CONNECT_ONE_SHOT
+    )
 
 func _clear_hero_state() -> void:
     hero_source_rect = Rect2()
