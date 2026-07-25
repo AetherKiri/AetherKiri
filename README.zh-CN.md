@@ -108,8 +108,6 @@ Godot 设置页会持久化所选后端。游戏运行中切换后端时会提�
 - 应用图标：`apps/godot_app/assets/icon.png`
 - Godot 项目使用的 SVG 源：`apps/godot_app/assets/icon.svg`
 - 导出图标集合：`apps/godot_app/assets/icons/`
-- 设计源资源：`assets/sharks.svg` 和 `assets/apple_icon_mask.svg`
-
 iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生成 PNG
 尺寸，包括 App Store 图标和启动器图标。
 
