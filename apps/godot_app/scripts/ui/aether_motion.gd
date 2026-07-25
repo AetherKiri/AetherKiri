@@ -168,8 +168,18 @@ func hero_rect(control: Control, target_rect: Rect2, finished: Callable = Callab
         if finished.is_valid():
             finished.call()
         return
-    spring_property(control, "position", target_rect.position, 0.34, 1.0)
-    spring_property(control, "size", target_rect.size, 0.34, 1.0, finished)
+    active_springs.erase(_motion_key(control, "position"))
+    active_springs.erase(_motion_key(control, "size"))
+    _stop_tweens(control)
+    var tween := control.create_tween().set_parallel(true)
+    active_tweens[_tween_key(control, "hero")] = tween
+    tween.tween_property(control, "position", target_rect.position, 0.30).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_IN_OUT)
+    tween.tween_property(control, "size", target_rect.size, 0.30).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_IN_OUT)
+    tween.chain().tween_callback(func():
+        _finish_tween(control, "hero")
+        if finished.is_valid():
+            finished.call()
+    )
 
 func modal_in(scrim: CanvasItem, dialog: Control, background: Control = null) -> void:
     if scrim == null or dialog == null:

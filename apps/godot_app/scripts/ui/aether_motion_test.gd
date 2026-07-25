@@ -82,12 +82,25 @@ func _run() -> void:
     root.add_child(hero)
     var hero_finished := {"value": false}
     motion.hero_rect(hero, Rect2(240, 96, 252, 354), func(): hero_finished["value"] = true)
-    for _frame in range(360):
-        motion._process(1.0 / 120.0)
+    for _frame in range(90):
+        await process_frame
     if not hero.position.is_equal_approx(Vector2(240, 96)) or not hero.size.is_equal_approx(Vector2(252, 354)):
         _fail("hero transition did not settle on the destination rect")
     if not bool(hero_finished["value"]):
         _fail("hero transition did not complete")
+        return
+
+    hero.position = Vector2(1120, 180)
+    hero.size = Vector2(144, 166)
+    var right_column_finished := {"count": 0}
+    motion.hero_rect(hero, Rect2(36, 92, 252, 354), func(): right_column_finished["count"] += 1)
+    for _frame in range(90):
+        await process_frame
+    if not hero.position.is_equal_approx(Vector2(36, 92)) or not hero.size.is_equal_approx(Vector2(252, 354)):
+        _fail("right-column hero transition did not settle on the detail cover")
+        return
+    if int(right_column_finished["count"]) != 1:
+        _fail("right-column hero transition did not finish exactly once")
         return
 
     print("aether_motion_test: PASS")
