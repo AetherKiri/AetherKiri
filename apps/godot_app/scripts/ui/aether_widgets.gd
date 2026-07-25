@@ -192,9 +192,9 @@ func _primary_box(fill: Color, elevated: bool) -> StyleBoxFlat:
 func _control_box(fill: Color, border: Color, elevated: bool) -> StyleBoxFlat:
     return tokens.button_style(fill, border, 8)
 
-func _field_box(focused: bool) -> StyleBoxFlat:
-    var border: Color = tokens.accent if focused else tokens.separator
-    var width := 2 if focused else 1
+func _field_box(_focused: bool) -> StyleBoxFlat:
+    var border: Color = tokens.separator
+    var width := 1
     var style: StyleBoxFlat = tokens.panel(tokens.background_raised, 8, border, width)
     style.content_margin_left = 13
     style.content_margin_top = 9
@@ -206,6 +206,4 @@ func _disabled_field_box() -> StyleBoxFlat:
     return _control_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.34), tokens.separator, false)
 
 func _focus_box(radius: int) -> StyleBoxFlat:
-    var style: StyleBoxFlat = tokens.focus_style(radius)
-    style.border_color = Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.92)
-    return style
+    return tokens.focus_style(radius)

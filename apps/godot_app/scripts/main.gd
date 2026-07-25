@@ -1108,9 +1108,9 @@ func _apply_ui_font() -> void:
     ui_theme.set_stylebox("pressed", "OptionButton", _panel_style(8, color_accent_dim, Color.TRANSPARENT, 0))
     ui_theme.set_stylebox("focus", "OptionButton", _focus_outline(8))
     ui_theme.set_stylebox("normal", "LineEdit", _panel_style(8, color_card_alt, color_line, 1))
-    ui_theme.set_stylebox("focus", "LineEdit", _panel_style(8, color_card_hover, color_accent, 2))
+    ui_theme.set_stylebox("focus", "LineEdit", _panel_style(8, color_card_hover, color_line, 1))
     ui_theme.set_stylebox("normal", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.18), color_line, 1))
-    ui_theme.set_stylebox("focus", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.24), color_accent, 1))
+    ui_theme.set_stylebox("focus", "TextEdit", _panel_style(8, Color(0, 0, 0, 0.24), color_line, 1))
     ui_theme.set_stylebox("scroll", "VScrollBar", _scroll_track_style())
     ui_theme.set_stylebox("grabber", "VScrollBar", _scroll_thumb_style(color_muted.darkened(0.18)))
     ui_theme.set_stylebox("grabber_highlight", "VScrollBar", _scroll_thumb_style(color_muted))
@@ -2435,22 +2435,7 @@ func _empty_style() -> StyleBoxEmpty:
     return StyleBoxEmpty.new()
 
 func _focus_outline(radius: int = 8) -> StyleBoxFlat:
-    var style := StyleBoxFlat.new()
-    style.bg_color = Color(0, 0, 0, 0)
-    style.border_color = color_accent
-    style.border_width_left = 3
-    style.border_width_top = 3
-    style.border_width_right = 3
-    style.border_width_bottom = 3
-    style.corner_radius_top_left = radius
-    style.corner_radius_top_right = radius
-    style.corner_radius_bottom_left = radius
-    style.corner_radius_bottom_right = radius
-    style.expand_margin_left = 3
-    style.expand_margin_top = 3
-    style.expand_margin_right = 3
-    style.expand_margin_bottom = 3
-    return style
+    return _panel_style(radius, color_card_hover, Color.TRANSPARENT, 0)
 
 func _load_ui_icon(icon_path: String):
     if icon_path.is_empty():

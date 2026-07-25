@@ -39,6 +39,10 @@ func _run() -> void:
     if tokens.material_panel().border_width_left != 0:
         _fail("content panel reintroduced a decorative outline")
         return
+    var focus_style: StyleBoxFlat = tokens.focus_style()
+    if focus_style.border_width_left != 0 or focus_style.shadow_size != 0:
+        _fail("keyboard focus reintroduced a decorative highlight")
+        return
 
     var primary := Button.new()
     primary.size = Vector2(160, 44)
