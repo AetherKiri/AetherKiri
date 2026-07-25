@@ -39,7 +39,7 @@ func setup(design_tokens, motion_system, next_chevron: Texture2D, next_check: Te
     add_theme_color_override("font_disabled_color", tokens.text_tertiary)
     add_theme_stylebox_override("normal", _field_box(Color.TRANSPARENT, Color.TRANSPARENT, 0))
     add_theme_stylebox_override("hover", _field_box(tokens.accent_fill, Color.TRANSPARENT, 0))
-    add_theme_stylebox_override("pressed", _field_box(tokens.accent_fill, Color(tokens.accent.r, tokens.accent.g, tokens.accent.b, 0.42), 1))
+    add_theme_stylebox_override("pressed", _field_box(tokens.accent_fill, Color.TRANSPARENT, 0))
     add_theme_stylebox_override("focus", tokens.focus_style(8))
     add_theme_stylebox_override("disabled", _field_box(Color(tokens.surface_raised.r, tokens.surface_raised.g, tokens.surface_raised.b, 0.34), tokens.separator, 1))
 

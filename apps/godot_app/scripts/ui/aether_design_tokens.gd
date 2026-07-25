@@ -133,9 +133,4 @@ func button_style(fill: Color, border: Color = Color.TRANSPARENT, radius: int = 
     return style
 
 func focus_style(radius: int = RADIUS_MEDIUM) -> StyleBoxFlat:
-    var style := panel(Color.TRANSPARENT, radius, accent, 2)
-    style.expand_margin_left = 2
-    style.expand_margin_top = 2
-    style.expand_margin_right = 2
-    style.expand_margin_bottom = 2
-    return style
+    return panel(surface_hover, radius)
