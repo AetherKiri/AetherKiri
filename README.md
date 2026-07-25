@@ -117,8 +117,6 @@ The app icon shown above is the same icon configured by the Godot project:
 - App icon: `apps/godot_app/assets/icon.png`
 - SVG source used by the Godot project: `apps/godot_app/assets/icon.svg`
 - Export icon set: `apps/godot_app/assets/icons/`
-- Design source assets: `assets/sharks.svg` and `assets/apple_icon_mask.svg`
-
 iOS and Android export presets reference the generated PNG sizes under
 `apps/godot_app/assets/icons/`, including App Store and launcher sizes.
 
