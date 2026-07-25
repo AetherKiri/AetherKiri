@@ -911,8 +911,8 @@ const TOUCH_MOUSE_SUPPRESS_MS := 700
 const PILL_ICON_SIZE := Vector2(24, 24)
 const PILL_ICON_VISUAL_OFFSET_Y := 2.0
 const HOME_TILE_MIN_WIDTH := 340.0
-const HOME_TILE_HEIGHT := 166.0
-const HOME_TILE_COVER_WIDTH := 144.0
+const HOME_TILE_HEIGHT := 132.0
+const HOME_TILE_COVER_WIDTH := 108.0
 const HOME_ROW_HEIGHT := 104.0
 const HOME_ROW_COVER_WIDTH := 112.0
 
@@ -4420,39 +4420,54 @@ func _game_card(game: Dictionary) -> Button:
         _build_compact_game_card(button, game)
         ui_motion.bind_lift(button)
     else:
-        var play_affordance := _build_desktop_game_card(button, game)
-        ui_motion.bind_lift(button, play_affordance, 0.0, 1.0)
+        var hover_affordance := _build_desktop_game_card(button, game)
+        ui_motion.bind_lift(button, hover_affordance, 0.42, 1.0)
     return button
 
 func _build_desktop_game_card(button: Button, game: Dictionary) -> CanvasItem:
+    var content_margin := MarginContainer.new()
+    content_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    content_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+    content_margin.add_theme_constant_override("margin_left", 8)
+    content_margin.add_theme_constant_override("margin_top", 8)
+    content_margin.add_theme_constant_override("margin_right", 10)
+    content_margin.add_theme_constant_override("margin_bottom", 8)
+    button.add_child(content_margin)
+
     var frame := HBoxContainer.new()
     frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
     frame.clip_contents = true
-    frame.set_anchors_preset(Control.PRESET_FULL_RECT)
-    frame.add_theme_constant_override("separation", 0)
-    button.add_child(frame)
+    frame.add_theme_constant_override("separation", 12)
+    content_margin.add_child(frame)
 
-    var cover_host := Control.new()
+    var cover_host := PanelContainer.new()
     cover_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    cover_host.custom_minimum_size = Vector2(HOME_TILE_COVER_WIDTH, HOME_TILE_HEIGHT)
+    cover_host.custom_minimum_size = Vector2(HOME_TILE_COVER_WIDTH, HOME_TILE_HEIGHT - 16.0)
     cover_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    cover_host.clip_contents = true
+    cover_host.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.surface_raised, 8))
     frame.add_child(cover_host)
     button.set_meta("hero_cover", cover_host)
-    var play_affordance := _populate_game_card_cover(
+    _populate_game_card_cover(
         cover_host,
         game,
-        Vector2i(int(HOME_TILE_COVER_WIDTH), int(HOME_TILE_HEIGHT)),
-        true
+        Vector2i(int(HOME_TILE_COVER_WIDTH), int(HOME_TILE_HEIGHT - 16.0))
     )
 
     var metadata := PanelContainer.new()
     metadata.mouse_filter = Control.MOUSE_FILTER_IGNORE
     metadata.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     metadata.size_flags_vertical = Control.SIZE_EXPAND_FILL
-    metadata.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.surface, 0))
+    metadata.add_theme_stylebox_override("panel", ui_tokens.panel(Color.TRANSPARENT, 0))
     frame.add_child(metadata)
     _populate_game_card_metadata(metadata, game, false)
-    return play_affordance
+
+    var affordance := CenterContainer.new()
+    affordance.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    affordance.custom_minimum_size = Vector2(22, 0)
+    affordance.add_child(_icon_rect(ICON_CHEVRON_RIGHT, Vector2(15, 15), ui_tokens.text_secondary))
+    frame.add_child(affordance)
+    return affordance
 
 func _build_compact_game_card(button: Button, game: Dictionary) -> void:
     var frame := HBoxContainer.new()
@@ -4471,8 +4486,7 @@ func _build_compact_game_card(button: Button, game: Dictionary) -> void:
     _populate_game_card_cover(
         cover_host,
         game,
-        Vector2i(int(HOME_ROW_COVER_WIDTH), int(HOME_ROW_HEIGHT)),
-        false
+        Vector2i(int(HOME_ROW_COVER_WIDTH), int(HOME_ROW_HEIGHT))
     )
 
     var metadata := PanelContainer.new()
@@ -4489,7 +4503,7 @@ func _build_compact_game_card(button: Button, game: Dictionary) -> void:
     chevron_host.add_child(_icon_rect(ICON_CHEVRON_RIGHT, Vector2(17, 17), ui_tokens.text_tertiary))
     frame.add_child(chevron_host)
 
-func _populate_game_card_cover(cover_host: Control, game: Dictionary, target_size: Vector2i, show_play: bool) -> CanvasItem:
+func _populate_game_card_cover(cover_host: Control, game: Dictionary, target_size: Vector2i) -> void:
     var cover_texture := _load_cover_texture(game, target_size, 0)
     if cover_texture != null:
         var cover := TextureRect.new()
@@ -4503,41 +4517,20 @@ func _populate_game_card_cover(cover_host: Control, game: Dictionary, target_siz
         var placeholder := PanelContainer.new()
         placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
         placeholder.set_anchors_preset(Control.PRESET_FULL_RECT)
-        placeholder.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.surface_raised, 0))
+        placeholder.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.surface_raised, 8 if not home_compact_layout else 0))
         cover_host.add_child(placeholder)
-        var icon_size := Vector2(34, 34) if home_compact_layout else Vector2(40, 40)
+        var icon_size := Vector2(34, 34) if home_compact_layout else Vector2(28, 28)
         var icon := _centered_icon(ICON_GAMEPAD, icon_size, ui_tokens.accent)
         icon.set_anchors_preset(Control.PRESET_FULL_RECT)
         placeholder.add_child(icon)
 
-    if not show_play:
-        return null
-    var play_chip := PanelContainer.new()
-    play_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    play_chip.anchor_left = 1.0
-    play_chip.anchor_top = 1.0
-    play_chip.anchor_right = 1.0
-    play_chip.anchor_bottom = 1.0
-    play_chip.offset_left = -46.0
-    play_chip.offset_top = -46.0
-    play_chip.offset_right = -10.0
-    play_chip.offset_bottom = -10.0
-    var play_style := ui_tokens.panel(ui_tokens.accent, 8)
-    play_style.shadow_color = ui_tokens.shadow
-    play_style.shadow_size = 8
-    play_style.shadow_offset = Vector2(0, 3)
-    play_chip.add_theme_stylebox_override("panel", play_style)
-    play_chip.add_child(_centered_icon(ICON_PLAY, Vector2(17, 17), ui_tokens.text_primary))
-    cover_host.add_child(play_chip)
-    return play_chip
-
 func _populate_game_card_metadata(metadata: PanelContainer, game: Dictionary, compact: bool) -> void:
     var text_margin := MarginContainer.new()
     text_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    text_margin.add_theme_constant_override("margin_left", 14 if compact else 13)
-    text_margin.add_theme_constant_override("margin_top", 13 if compact else 10)
-    text_margin.add_theme_constant_override("margin_right", 8 if compact else 13)
-    text_margin.add_theme_constant_override("margin_bottom", 10)
+    text_margin.add_theme_constant_override("margin_left", 14 if compact else 2)
+    text_margin.add_theme_constant_override("margin_top", 13 if compact else 7)
+    text_margin.add_theme_constant_override("margin_right", 8 if compact else 2)
+    text_margin.add_theme_constant_override("margin_bottom", 10 if compact else 7)
     metadata.add_child(text_margin)
 
     var labels := VBoxContainer.new()
@@ -4550,8 +4543,8 @@ func _populate_game_card_metadata(metadata: PanelContainer, game: Dictionary, co
         var kicker := Label.new()
         kicker.text = _game_type_label(String(game.get("type", "Directory"))).to_upper()
         kicker.mouse_filter = Control.MOUSE_FILTER_IGNORE
-        kicker.add_theme_font_size_override("font_size", 10)
-        kicker.add_theme_color_override("font_color", ui_tokens.accent)
+        kicker.add_theme_font_size_override("font_size", 9)
+        kicker.add_theme_color_override("font_color", ui_tokens.text_tertiary)
         labels.add_child(kicker)
 
     var title := Label.new()
@@ -4560,16 +4553,23 @@ func _populate_game_card_metadata(metadata: PanelContainer, game: Dictionary, co
     title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.max_lines_visible = 2
     title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-    title.custom_minimum_size = Vector2(0, 42 if compact else 38)
-    title.add_theme_font_size_override("font_size", 16 if compact else 16)
+    title.custom_minimum_size = Vector2(0, 42 if compact else 34)
+    title.add_theme_font_override("font", DISPLAY_FONT)
+    title.add_theme_font_size_override("font_size", 16 if compact else 15)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title)
+
+    if not compact:
+        var spacer := Control.new()
+        spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+        labels.add_child(spacer)
 
     var sub := Label.new()
     sub.text = "%s  /  %s" % [_game_type_label(String(game.get("type", "Directory"))), _game_subtitle(game)] if compact else _game_subtitle(game)
     sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
     sub.clip_text = true
-    sub.add_theme_font_size_override("font_size", 12)
+    sub.add_theme_font_size_override("font_size", 12 if compact else 11)
     sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
 
