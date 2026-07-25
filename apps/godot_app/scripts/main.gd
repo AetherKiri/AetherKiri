@@ -27,6 +27,7 @@ const IOS_STATEMENT_KO := "res://legal/ios_app_store_statement_ko.txt"
 const UI_FONT := preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
 const BODY_FONT := preload("res://assets/fonts/Inter-Variable.ttf")
 const DISPLAY_FONT := preload("res://assets/fonts/CormorantGaramond-Variable.ttf")
+const DISPLAY_CJK_FONT := preload("res://assets/fonts/NotoSerifCJKsc-Regular.otf")
 const UI_SYMBOL_FONT := preload("res://assets/fonts/aetherkiri-runtime-symbols.ttf")
 const RUNTIME_FONT_DIR := "user://runtime_fonts"
 const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
@@ -1511,7 +1512,8 @@ func _apply_ui_font() -> void:
     var fallbacks: Array[Font] = [UI_SYMBOL_FONT]
     UI_FONT.set_fallbacks(fallbacks)
     BODY_FONT.set_fallbacks([UI_FONT, UI_SYMBOL_FONT])
-    DISPLAY_FONT.set_fallbacks([BODY_FONT, UI_FONT, UI_SYMBOL_FONT])
+    DISPLAY_CJK_FONT.set_fallbacks([BODY_FONT, UI_FONT, UI_SYMBOL_FONT])
+    DISPLAY_FONT.set_fallbacks([DISPLAY_CJK_FONT, BODY_FONT, UI_FONT, UI_SYMBOL_FONT])
     var ui_theme := Theme.new()
     ui_theme.set_default_font(BODY_FONT)
     ui_theme.set_color("font_color", "Label", color_text)
@@ -2175,12 +2177,31 @@ func _toggle_sidebar() -> void:
     if get_viewport_rect().size.x < 900.0:
         return
     var expanding := shell_sidebar_collapsed
-    shell_sidebar_collapsed = not shell_sidebar_collapsed
-    shell_sidebar_animating_expand = expanding
-    _apply_sidebar_presentation(false)
-    var target_width: float = ui_tokens.SIDEBAR_COLLAPSED_WIDTH if shell_sidebar_collapsed else ui_tokens.SIDEBAR_WIDTH
     if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
         shell_sidebar_tween.kill()
+    _reset_sidebar_item_modulates()
+    shell_sidebar_collapsed = not shell_sidebar_collapsed
+    shell_sidebar_animating_expand = expanding
+    var target_width: float = ui_tokens.SIDEBAR_COLLAPSED_WIDTH if shell_sidebar_collapsed else ui_tokens.SIDEBAR_WIDTH
+    if ui_motion.reduced_motion:
+        shell_sidebar_animating_expand = false
+        _apply_sidebar_width(target_width)
+        _apply_sidebar_presentation(false)
+        return
+    if expanding:
+        _apply_sidebar_presentation(false)
+        _animate_sidebar_width(target_width, true)
+        return
+    shell_sidebar_tween = shell_sidebar.create_tween().set_parallel(true)
+    for item in [shell_sidebar_brand_labels, shell_library_button, shell_settings_button, shell_sidebar_status, shell_sidebar_version]:
+        shell_sidebar_tween.tween_property(item, "modulate:a", 0.0, 0.10).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+    shell_sidebar_tween.chain().tween_callback(func():
+        _apply_sidebar_presentation(false)
+        _reset_sidebar_item_modulates()
+        _animate_sidebar_width(target_width, false)
+    )
+
+func _animate_sidebar_width(target_width: float, expanding: bool) -> void:
     if ui_motion.reduced_motion:
         shell_sidebar_animating_expand = false
         _apply_sidebar_width(target_width)
@@ -2191,13 +2212,18 @@ func _toggle_sidebar() -> void:
         _apply_sidebar_width,
         shell_sidebar_layout_width,
         target_width,
-        0.28
+        0.36
     ).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_OUT)
     shell_sidebar_tween.tween_callback(func():
         shell_sidebar_animating_expand = false
         _apply_sidebar_width(target_width)
         _apply_sidebar_presentation(expanding)
     )
+
+func _reset_sidebar_item_modulates() -> void:
+    for item in [shell_sidebar_brand_labels, shell_library_button, shell_settings_button, shell_sidebar_status, shell_sidebar_version]:
+        if item != null and is_instance_valid(item):
+            item.modulate.a = 1.0
 
 func _apply_sidebar_presentation(animate_labels: bool) -> void:
     if shell_sidebar_brand_labels == null:
@@ -2222,6 +2248,8 @@ func _apply_sidebar_presentation(animate_labels: bool) -> void:
     _apply_shell_nav_state(shell_settings_button, shell_route == "settings")
     if animate_labels and not compact_visual:
         ui_motion.enter(shell_sidebar_brand_labels, Vector2.ZERO, 0.03)
+        ui_motion.enter(shell_library_button, Vector2.ZERO, 0.04)
+        ui_motion.enter(shell_settings_button, Vector2.ZERO, 0.06)
         ui_motion.enter(shell_sidebar_status, Vector2.ZERO, 0.06)
         ui_motion.enter(shell_sidebar_version, Vector2.ZERO, 0.08)
 
@@ -2241,6 +2269,7 @@ func _layout_shell(window_size: Vector2) -> void:
     if shell_sidebar_tween != null and shell_sidebar_tween.is_valid():
         shell_sidebar_tween.kill()
         shell_sidebar_animating_expand = false
+        _reset_sidebar_item_modulates()
         _apply_sidebar_presentation(false)
     shell_sidebar.visible = not compact
     shell_compact_header.visible = compact

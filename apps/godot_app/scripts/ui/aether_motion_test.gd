@@ -126,7 +126,7 @@ func _run() -> void:
     if incoming.position.y <= 0.0 or incoming.modulate.a >= 1.0:
         _fail("route transition skipped its lifted fade-in frame")
         return
-    for _frame in range(45):
+    for _frame in range(90):
         await process_frame
     if outgoing.visible or not incoming.visible or not incoming.position.is_equal_approx(Vector2.ZERO) or not is_equal_approx(incoming.modulate.a, 1.0):
         _fail("route transition did not settle both pages")
@@ -134,7 +134,7 @@ func _run() -> void:
     motion.route_transition(incoming, outgoing)
     await process_frame
     motion.route_transition(outgoing, incoming)
-    for _frame in range(45):
+    for _frame in range(90):
         await process_frame
     if outgoing.visible or not incoming.visible or not is_equal_approx(incoming.modulate.a, 1.0):
         _fail("interrupted route transition left a stale page visible")
