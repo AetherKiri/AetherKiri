@@ -1825,17 +1825,15 @@ func _layout_home_view(window_size: Vector2) -> void:
     home_header_box.custom_minimum_size = Vector2(0, 72)
     home_header_box.add_theme_constant_override("separation", 16 if compact else 24)
     home_actions.alignment = BoxContainer.ALIGNMENT_END
-    home_primary_button.text = "" if compact else (_t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"))
+    home_primary_button.text = ""
     home_primary_button.tooltip_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
-    home_primary_button.custom_minimum_size = Vector2(48 if compact else 126, ui_tokens.CONTROL_HEIGHT)
+    home_primary_button.accessibility_name = home_primary_button.tooltip_text
+    home_primary_button.custom_minimum_size = Vector2(48, ui_tokens.CONTROL_HEIGHT)
     home_primary_button.size_flags_horizontal = Control.SIZE_SHRINK_END
     if not home_header_layout_initialized or home_header_compact != compact:
         home_header_compact = compact
         home_header_layout_initialized = true
-        if compact:
-            ui_widgets.toolbar_button(home_primary_button, true)
-        else:
-            ui_widgets.primary_button(home_primary_button)
+        ui_widgets.primary_button(home_primary_button)
     var scroll_bar_width := game_scroll.get_v_scroll_bar().get_combined_minimum_size().x
     var list_width := maxf(HOME_TILE_MIN_WIDTH, window_size.x - margin * 2.0 - scroll_bar_width)
     var gap := 12.0 if compact else 16.0
@@ -1894,16 +1892,12 @@ func _build_home_view() -> void:
     home_actions.add_theme_constant_override("separation", 8)
     home_header_box.add_child(home_actions)
 
-    home_primary_button = Button.new()
-    home_primary_button.text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
-    home_primary_button.icon = _load_ui_icon(ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD)
-    home_primary_button.expand_icon = true
-    home_primary_button.custom_minimum_size = Vector2(126, ui_tokens.CONTROL_HEIGHT)
-    home_primary_button.add_theme_constant_override("icon_max_width", 20)
-    home_primary_button.add_theme_constant_override("h_separation", 8)
-    home_primary_button.add_theme_font_size_override("font_size", 16)
-    ui_widgets.primary_button(home_primary_button)
-    home_primary_button.pressed.connect(_on_refresh_or_import)
+    home_primary_button = _icon_action_button(
+        ICON_REFRESH if OS.get_name() == "iOS" else ICON_ADD,
+        _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"),
+        _on_refresh_or_import,
+        true
+    )
     home_actions.add_child(home_primary_button)
 
     home_guide_button = _shell_compact_button(ICON_HELP, _t("home.import_guide"), _show_import_guide)
@@ -2032,16 +2026,10 @@ func _rebuild_settings_view() -> void:
     subtitle.add_theme_color_override("font_color", ui_tokens.text_secondary)
     title_stack.add_child(subtitle)
 
-    if compact:
-        save_button = _shell_compact_button(ICON_SAVE, _t("settings.save"), _save_settings_draft)
-        ui_widgets.toolbar_button(save_button)
-    else:
-        save_button = _pill_button(_t("settings.save"), ICON_SAVE)
-        save_button.pressed.connect(_save_settings_draft)
+    save_button = _icon_action_button(ICON_SAVE, _t("settings.save"), _save_settings_draft, true)
     save_button.disabled = not dirty_settings
     _sync_pill_button_content_state(save_button)
-    save_button.custom_minimum_size = Vector2(44 if compact else 112, 44)
-    save_button.size_flags_horizontal = Control.SIZE_SHRINK_END if compact else Control.SIZE_SHRINK_CENTER
+    save_button.size_flags_horizontal = Control.SIZE_SHRINK_END
     save_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     top.add_child(save_button)
 
@@ -2499,6 +2487,36 @@ func _pill_button(text: String, icon_path: String = "") -> Button:
     ui_widgets.primary_button(button)
     return button
 
+func _icon_action_button(
+    icon_path: String,
+    tooltip: String,
+    callback: Callable = Callable(),
+    primary: bool = false,
+    destructive: bool = false,
+    control_size: float = 44.0
+) -> Button:
+    var button := Button.new()
+    button.text = ""
+    button.icon = _load_ui_icon(icon_path)
+    button.expand_icon = true
+    button.tooltip_text = tooltip
+    button.accessibility_name = tooltip
+    button.custom_minimum_size = Vector2(control_size, control_size)
+    button.add_theme_constant_override("icon_max_width", int(control_size * 0.44))
+    if destructive:
+        ui_widgets.toolbar_button(button)
+        for state in ["normal", "hover", "pressed", "focus"]:
+            button.add_theme_color_override("icon_%s_color" % state, ui_tokens.danger)
+    elif primary:
+        ui_widgets.primary_button(button)
+        for state in ["normal", "hover", "pressed", "focus"]:
+            button.add_theme_color_override("icon_%s_color" % state, Color.WHITE)
+    else:
+        ui_widgets.toolbar_button(button)
+    if callback.is_valid():
+        button.pressed.connect(callback)
+    return button
+
 func _attach_pill_button_content(button: Button, text: String, icon_path: String) -> void:
     var center := CenterContainer.new()
     center.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2593,9 +2611,10 @@ func _settings_block(title: String, subtitle: String, control: Control) -> Contr
     margin.add_theme_constant_override("margin_top", 10)
     margin.add_theme_constant_override("margin_right", 2)
     margin.add_theme_constant_override("margin_bottom", 10)
-    var box := VBoxContainer.new()
-    box.custom_minimum_size = Vector2(0, 104)
-    box.add_theme_constant_override("separation", 12)
+    var compact := shell_content.size.x < 760.0
+    var box: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
+    box.custom_minimum_size = Vector2(0, 94 if compact else 68)
+    box.add_theme_constant_override("separation", 12 if compact else 18)
     margin.add_child(box)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2613,7 +2632,7 @@ func _settings_block(title: String, subtitle: String, control: Control) -> Contr
         sub.add_theme_font_size_override("font_size", 13)
         sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
         labels.add_child(sub)
-    control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    control.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_SHRINK_END
     control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     box.add_child(control)
     return margin
@@ -2683,7 +2702,7 @@ func _settings_value_row(title: String, value: String) -> Control:
     row.add_child(value_label)
     return margin
 
-func _apple_select(width: float = 300.0):
+func _apple_select(width: float = 220.0):
     var select = AetherSelect.new()
     select.setup(
         ui_tokens,
@@ -3000,7 +3019,8 @@ func _refresh_language_texts() -> void:
     if is_instance_valid(empty_primary_button):
         _set_pill_button_text(empty_primary_button, _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"))
     if is_instance_valid(home_primary_button):
-        home_primary_button.text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
+        home_primary_button.tooltip_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
+        home_primary_button.accessibility_name = home_primary_button.tooltip_text
     if is_instance_valid(home_guide_button):
         home_guide_button.tooltip_text = _t("home.import_guide")
     if is_instance_valid(loading_title_label):
@@ -3033,6 +3053,8 @@ func _show_home() -> void:
 
 func _show_settings() -> void:
     var previous_route := shell_route
+    _finish_hero_overlay()
+    _clear_hero_state()
     _reset_shell_scroll_drag()
     settings_animate_next = shell_route != "settings"
     _begin_settings_edit()
@@ -3220,24 +3242,20 @@ func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
     return identity
 
 func _detail_launch_button() -> Button:
-    var start := _pill_button(_t("detail.launch"), ICON_PLAY)
-    start.custom_minimum_size = Vector2(0, 52)
-    start.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    var start := _icon_action_button(ICON_PLAY, _t("detail.launch"), _start_selected_game, true, false, 52.0)
+    start.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
     start.button_down.connect(func(): _android_input_debug_log("detail launch button_down"))
     start.button_up.connect(func(): _android_input_debug_log("detail launch button_up"))
     start.pressed.connect(func(): _android_input_debug_log("detail launch pressed"))
-    start.pressed.connect(_start_selected_game)
     return start
 
 func _detail_tools() -> HBoxContainer:
     var tools := HBoxContainer.new()
     tools.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     tools.add_theme_constant_override("separation", 8)
-    var set_cover := _detail_action(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected())
-    set_cover.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    var set_cover := _icon_action_button(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected())
     tools.add_child(set_cover)
-    var rename := _detail_action(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game())
-    rename.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    var rename := _icon_action_button(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game())
     tools.add_child(rename)
     return tools
 
@@ -3257,8 +3275,7 @@ func _detail_information_panel(game: Dictionary) -> PanelContainer:
 
 func _detail_remove_button(game: Dictionary) -> Button:
     var remove_label := "detail.delete_builtin" if builtin_demo.is_game(game) else "detail.remove"
-    var remove := _detail_action(ICON_DELETE, _t(remove_label), func(): _confirm_remove_selected(), true)
-    remove.custom_minimum_size = Vector2(160, 50)
+    var remove := _icon_action_button(ICON_DELETE, _t(remove_label), func(): _confirm_remove_selected(), false, true)
     remove.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
     return remove
 
@@ -3443,14 +3460,24 @@ func _maybe_show_log_alert(line: String) -> void:
         _show_system_alert(alert_message, alert_title)
 
 func _create_file_dialog(title: String, file_mode: int, filters: PackedStringArray = PackedStringArray()) -> FileDialog:
+    _finish_hero_overlay()
     var dialog := FileDialog.new()
     dialog.file_mode = file_mode
     dialog.access = FileDialog.ACCESS_FILESYSTEM
     dialog.use_native_dialog = true
+    dialog.exclusive = true
     dialog.title = title
     for filter in filters:
         dialog.add_filter(filter)
+    dialog.canceled.connect(func(): call_deferred("_release_file_dialog", dialog))
+    dialog.file_selected.connect(func(_path: String): call_deferred("_release_file_dialog", dialog))
+    dialog.dir_selected.connect(func(_path: String): call_deferred("_release_file_dialog", dialog))
+    dialog.files_selected.connect(func(_paths: PackedStringArray): call_deferred("_release_file_dialog", dialog))
     return dialog
+
+func _release_file_dialog(dialog: FileDialog) -> void:
+    if dialog != null and is_instance_valid(dialog):
+        dialog.queue_free()
 
 func _offer_scrape_after_add(game: Dictionary) -> void:
     var dialog := _modal_dialog(Vector2(520, 280))
@@ -4442,6 +4469,8 @@ func _finish_hero_overlay() -> void:
     if is_instance_valid(hero_overlay):
         hero_overlay.queue_free()
     hero_overlay = null
+    if is_instance_valid(detail_hero_cover):
+        detail_hero_cover.modulate.a = 1.0
 
 func _clear_hero_state() -> void:
     hero_source_rect = Rect2()
