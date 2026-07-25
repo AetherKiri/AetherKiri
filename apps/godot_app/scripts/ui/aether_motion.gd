@@ -5,9 +5,9 @@ const TACTILE_PRESS_SCALE := Vector2(0.955, 0.955)
 const HOVER_SCALE := Vector2(1.010, 1.010)
 const REST_SCALE := Vector2.ONE
 const ENTER_OFFSET := Vector2(0, 10)
-const ENTER_DURATION := 0.26
+const ENTER_DURATION := 0.24
 const ROUTE_EXIT_DURATION := 0.18
-const ROUTE_ENTER_DELAY := 0.035
+const ROUTE_ENTER_DELAY := 0.075
 const PRESS_RESPONSE := 0.16
 const RELEASE_RESPONSE := 0.24
 const HOVER_RESPONSE := 0.26
@@ -187,7 +187,7 @@ func route_transition(
     incoming.set_meta("aether_route_rest_position", incoming_rest)
     incoming.visible = true
     incoming.modulate.a = 0.0
-    incoming.position = incoming_rest if reduced_motion or not lift else incoming_rest + Vector2(0, 12)
+    incoming.position = incoming_rest if reduced_motion or not lift else incoming_rest + Vector2(0, 14)
     var outgoing_rest := Vector2.ZERO
     if outgoing != null and is_instance_valid(outgoing) and outgoing != incoming:
         outgoing_rest = outgoing.get_meta("aether_route_rest_position", outgoing.position)
