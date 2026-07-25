@@ -127,7 +127,7 @@ func _open_popup() -> void:
     var menu_height := MENU_PADDING * 2.0 + ITEM_HEIGHT * float(items.size())
     var trigger_rect := get_global_rect()
     var viewport_size := get_viewport_rect().size
-    var menu_width := maxf(size.x, 220.0)
+    var menu_width := minf(maxf(size.x, 220.0), maxf(196.0, viewport_size.x - 24.0))
     var menu_position := Vector2(trigger_rect.position.x, trigger_rect.end.y + MENU_GAP)
     if menu_position.x + menu_width > viewport_size.x - 12.0:
         menu_position.x = viewport_size.x - menu_width - 12.0
@@ -189,12 +189,12 @@ func _animate_popup(show: bool) -> void:
         popup_tween.kill()
     if show:
         popup_panel.modulate.a = 0.0
-        popup_panel.scale = Vector2.ONE if motion.reduced_motion else Vector2(0.96, 0.92)
+        popup_panel.scale = Vector2.ONE if motion.reduced_motion else Vector2(0.98, 0.98)
     var duration := 0.12 if motion.reduced_motion else (0.18 if show else 0.14)
     popup_tween = create_tween().set_parallel(true)
     popup_tween.tween_property(popup_panel, "modulate:a", 1.0 if show else 0.0, duration).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not motion.reduced_motion:
-        motion.spring_property(popup_panel, "scale", Vector2.ONE if show else Vector2(0.96, 0.92), 0.24 if show else 0.18, 1.0)
+        motion.spring_property(popup_panel, "scale", Vector2.ONE if show else Vector2(0.98, 0.98), 0.22 if show else 0.16, 1.0)
     if not show:
         popup_tween.chain().tween_callback(_free_overlay)
 
@@ -245,7 +245,7 @@ func _popup_box() -> StyleBoxFlat:
     style.content_margin_top = MENU_PADDING
     style.content_margin_right = MENU_PADDING
     style.content_margin_bottom = MENU_PADDING
-    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.64 if tokens.mode == "dark" else 0.22)
-    style.shadow_size = 18 if tokens.mode == "dark" else 10
-    style.shadow_offset = Vector2(0, 8)
+    style.shadow_color = Color(tokens.shadow.r, tokens.shadow.g, tokens.shadow.b, 0.32 if tokens.mode == "dark" else 0.14)
+    style.shadow_size = 9 if tokens.mode == "dark" else 6
+    style.shadow_offset = Vector2(0, 4 if tokens.mode == "dark" else 3)
     return style

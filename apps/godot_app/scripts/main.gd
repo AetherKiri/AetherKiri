@@ -2996,8 +2996,13 @@ func _rebuild_settings_view() -> void:
         available_size = get_viewport_rect().size
     var scroll_bar_width := settings_view.get_v_scroll_bar().get_combined_minimum_size().x
     available_size.x = maxf(320.0, available_size.x - scroll_bar_width)
-    var compact := available_size.x < 720.0
+    # The sidebar is already excluded from available_size. Keep two columns only
+    # when both columns have enough room for copy and their controls.
+    var compact := available_size.x < 1140.0
     var gutter := 20 if compact else 32
+    var max_content_width := 760.0 if compact else 1120.0
+    var settings_content_width := minf(max_content_width, maxf(320.0, available_size.x - float(gutter * 2)))
+    var stack_settings_controls := settings_content_width < 640.0
     var animate_page := settings_animate_next
     settings_animate_next = false
 
@@ -3014,7 +3019,7 @@ func _rebuild_settings_view() -> void:
     margin.add_child(center)
 
     var page := VBoxContainer.new()
-    page.custom_minimum_size = Vector2(minf(1120.0, maxf(320.0, available_size.x - float(gutter * 2))), 0)
+    page.custom_minimum_size = Vector2(settings_content_width, 0)
     page.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
     page.add_theme_constant_override("separation", 24)
     center.add_child(page)
@@ -3064,13 +3069,13 @@ func _rebuild_settings_view() -> void:
         groups.add_child(secondary_column)
 
     var interface_group := _settings_group(primary_column, _t("settings.section.interface"), ICON_SETTINGS, animate_page, 0.03)
-    _add_settings_row(interface_group, _settings_block(_t("settings.language"), _t("settings.language_desc"), _language_select()))
-    _add_settings_row(interface_group, _settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select()))
+    _add_settings_row(interface_group, _settings_block(_t("settings.language"), _t("settings.language_desc"), _language_select(), stack_settings_controls))
+    _add_settings_row(interface_group, _settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select(), stack_settings_controls))
 
     var render_group := _settings_group(primary_column, _t("settings.section.render"), ICON_PERFORMANCE, animate_page, 0.055)
-    _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment()))
-    _add_settings_row(render_group, _settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select()))
-    _add_settings_row(render_group, _settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select()))
+    _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
+    _add_settings_row(render_group, _settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select(), stack_settings_controls))
+    _add_settings_row(render_group, _settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select(), stack_settings_controls))
     _add_settings_row(render_group, _settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
     if _settings_draft_bool("fps_limit_enabled", frame_limit_enabled):
         _add_settings_row(render_group, _settings_fps_row())
@@ -3078,12 +3083,12 @@ func _rebuild_settings_view() -> void:
         _add_settings_row(render_group, _settings_toggle_row(_t("settings.landscape"), _t("settings.landscape_desc"), _settings_draft_bool("force_landscape", lock_landscape), "landscape"))
 
     var diagnostic_group := _settings_group(secondary_column, _t("settings.section.diagnostics"), ICON_PERFORMANCE, animate_page, 0.08)
-    _add_settings_row(diagnostic_group, _settings_block(_t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select()))
-    _add_settings_row(diagnostic_group, _settings_block(_t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select()))
+    _add_settings_row(diagnostic_group, _settings_block(_t("settings.diagnostic_profile"), _t("settings.diagnostic_profile_desc"), _diagnostic_profile_select(), stack_settings_controls))
+    _add_settings_row(diagnostic_group, _settings_block(_t("settings.debug_overlay"), _t("settings.debug_overlay_desc"), _debug_overlay_select(), stack_settings_controls))
     _add_settings_row(diagnostic_group, _settings_toggle_row(_t("settings.error_dialog_logs"), _t("settings.error_dialog_logs_desc"), _settings_draft_bool("error_dialog_logs", error_dialog_logs), "error_dialog_logs"))
 
     var compatibility_group := _settings_group(secondary_column, _t("settings.section.compatibility"), ICON_PLUGIN, animate_page, 0.105)
-    _add_settings_row(compatibility_group, _settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select()))
+    _add_settings_row(compatibility_group, _settings_block(_t("settings.plugin_load_mode"), _t("settings.plugin_load_mode_desc"), _plugin_load_mode_select(), stack_settings_controls))
     _add_settings_row(compatibility_group, _settings_toggle_row(_t("settings.mock"), _t("settings.mock_desc"), _settings_draft_bool("mock_enabled", mock_enabled), "mock"))
 
     var advanced_group := _settings_group(secondary_column, _t("settings.section.advanced"), ICON_PLUGIN, animate_page, 0.13)
@@ -4055,17 +4060,16 @@ func _add_settings_row(group: VBoxContainer, row: Control) -> void:
         group.add_child(_detail_separator())
     group.add_child(row)
 
-func _settings_block(title: String, subtitle: String, control: Control) -> Control:
+func _settings_block(title: String, subtitle: String, control: Control, stack_control: bool = false) -> Control:
     var margin := MarginContainer.new()
     margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     margin.add_theme_constant_override("margin_left", 2)
     margin.add_theme_constant_override("margin_top", 10)
     margin.add_theme_constant_override("margin_right", 2)
     margin.add_theme_constant_override("margin_bottom", 10)
-    var compact := shell_content.size.x < 760.0
-    var box: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
-    box.custom_minimum_size = Vector2(0, 94 if compact else 68)
-    box.add_theme_constant_override("separation", 12 if compact else 18)
+    var box: BoxContainer = VBoxContainer.new() if stack_control else HBoxContainer.new()
+    box.custom_minimum_size = Vector2(0, 94 if stack_control else 68)
+    box.add_theme_constant_override("separation", 12 if stack_control else 18)
     margin.add_child(box)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -4083,7 +4087,7 @@ func _settings_block(title: String, subtitle: String, control: Control) -> Contr
         sub.add_theme_font_size_override("font_size", 13)
         sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
         labels.add_child(sub)
-    control.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_SHRINK_END
+    control.size_flags_horizontal = Control.SIZE_EXPAND_FILL if stack_control else Control.SIZE_SHRINK_END
     control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     box.add_child(control)
     return margin

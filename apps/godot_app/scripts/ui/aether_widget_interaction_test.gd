@@ -24,6 +24,15 @@ func _run() -> void:
     root.add_child(motion)
     var widgets = AetherWidgets.new(tokens, motion)
 
+    var card_normal: StyleBoxFlat = tokens.card_style(false, false)
+    var card_hover: StyleBoxFlat = tokens.card_style(true, false)
+    if card_normal.border_color != card_hover.border_color or card_normal.border_width_left != 1:
+        _fail("card hover replaced its persistent hairline border")
+        return
+    if card_hover.shadow_size - card_normal.shadow_size > 5:
+        _fail("card hover introduced an excessive shadow jump")
+        return
+
     var primary := Button.new()
     primary.size = Vector2(160, 44)
     scene.add_child(primary)
@@ -118,6 +127,13 @@ func _run() -> void:
     await process_frame
     if select.popup_panel == null or select.popup_panel.position.y >= select.get_global_rect().position.y:
         _fail("select did not flip above a constrained viewport boundary")
+        return
+    if not is_equal_approx(select.popup_panel.scale.x, select.popup_panel.scale.y):
+        _fail("select popup animation distorted its aspect ratio")
+        return
+    var popup_style := select.popup_panel.get_theme_stylebox("panel") as StyleBoxFlat
+    if popup_style == null or popup_style.shadow_size > 9 or popup_style.shadow_offset.y > 4.0:
+        _fail("select popup introduced an excessive shadow")
         return
 
     var escape := InputEventAction.new()
