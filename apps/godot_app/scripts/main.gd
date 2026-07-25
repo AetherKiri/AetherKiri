@@ -1095,6 +1095,11 @@ var home_header_compact := false
 var home_header_layout_initialized := false
 var loading_title_label: Label
 var selected_game := {}
+var detail_hero_cover: Control
+var hero_source_rect := Rect2()
+var hero_source_path := ""
+var hero_source_texture: Texture2D
+var hero_overlay: PanelContainer
 var known_games: Array[Dictionary] = []
 var known_videos: Array[Dictionary] = []
 var home_library_mode := "game"
@@ -1309,9 +1314,9 @@ const PILL_ICON_VISUAL_OFFSET_Y := 2.0
 const SETTINGS_ACTION_BUTTON_SIZE := Vector2(150, 54)
 const HOME_CARD_SIZE := Vector2(252, 250)
 const HOME_CARD_COVER_HEIGHT := 142.0
-const HOME_TILE_MIN_WIDTH := 220.0
-const HOME_TILE_HEIGHT := 246.0
-const HOME_TILE_COVER_HEIGHT := 144.0
+const HOME_TILE_MIN_WIDTH := 340.0
+const HOME_TILE_HEIGHT := 166.0
+const HOME_TILE_COVER_WIDTH := 144.0
 const HOME_ROW_HEIGHT := 104.0
 const HOME_ROW_COVER_WIDTH := 112.0
 
@@ -4422,6 +4427,8 @@ func _set_home_tab_active(button: Button, active: bool) -> void:
 
 func _show_home() -> void:
     var previous_route := shell_route
+    var returning_from_detail := previous_route == "detail" and not hero_source_path.is_empty()
+    var detail_rect := detail_hero_cover.get_global_rect() if is_instance_valid(detail_hero_cover) else Rect2()
     _reset_shell_scroll_drag()
     _discard_settings_draft()
     _set_game_background(false)
@@ -4433,7 +4440,9 @@ func _show_home() -> void:
     _refresh_games()
     if home_library_mode == "video":
         _refresh_videos()
-    if previous_route != "library":
+    if returning_from_detail:
+        call_deferred("_animate_hero_back", detail_rect)
+    elif previous_route != "library":
         ui_motion.route_in(home_view, -1.0)
 
 func _show_settings() -> void:
@@ -4452,8 +4461,16 @@ func _show_settings() -> void:
     if previous_route != "settings":
         ui_motion.route_in(settings_view, 1.0)
 
-func _show_detail(game: Dictionary) -> void:
+func _show_detail(game: Dictionary, source: Control = null) -> void:
     var previous_route := shell_route
+    var animate_hero := false
+    if source != null and is_instance_valid(source):
+        var source_cover: Control = source.get_meta("hero_cover", null)
+        if source_cover != null and is_instance_valid(source_cover):
+            hero_source_rect = source_cover.get_global_rect()
+            hero_source_path = String(game.get("path", ""))
+            hero_source_texture = _load_cover_texture(game)
+            animate_hero = true
     _reset_shell_scroll_drag()
     _set_game_background(false)
     selected_game = game
@@ -4462,7 +4479,7 @@ func _show_detail(game: Dictionary) -> void:
     detail_view.visible = true
     modal_layer.visible = false
     _sync_shell_route("detail")
-    if previous_route != "detail":
+    if previous_route != "detail" and not animate_hero:
         ui_motion.route_in(detail_view, 1.0)
     for child in detail_scroll.get_children():
         child.queue_free()
@@ -4515,7 +4532,11 @@ func _show_detail(game: Dictionary) -> void:
     page.add_child(body)
 
     ui_motion.reveal(top)
-    ui_motion.reveal(body, 0.04)
+    if animate_hero:
+        body.modulate.a = 0.0
+        call_deferred("_animate_hero_forward", body)
+    else:
+        ui_motion.reveal(body, 0.04)
 
 func _build_desktop_detail(game: Dictionary) -> Control:
     var body := HBoxContainer.new()
@@ -4569,6 +4590,7 @@ func _detail_cover(game: Dictionary, cover_size: Vector2) -> PanelContainer:
     cover_style.content_margin_right = 0
     cover_style.content_margin_bottom = 0
     cover.add_theme_stylebox_override("panel", cover_style)
+    detail_hero_cover = cover
     var cover_texture := _load_cover_texture(game, Vector2i(int(cover_size.x), int(cover_size.y)), 0)
     if cover_texture != null:
         var image := TextureRect.new()
@@ -4934,16 +4956,16 @@ func _begin_iap_checked_access(
 func _begin_iap_checked_launch(kind: String, item: Dictionary) -> bool:
     return _begin_iap_checked_access(kind, item, "launch")
 
-func _open_game_detail_with_iap(game: Dictionary) -> void:
+func _open_game_detail_with_iap(game: Dictionary, source: Control = null) -> void:
     # The first catalog item is always available without purchasing. Other
     # items are authorized before exposing their detail-page actions, then
     # checked again immediately before launch.
     if _iap_item_is_first("game", game):
-        _show_detail(game)
+        _show_detail(game, source)
         return
     if _begin_iap_checked_access("game", game, "detail"):
         return
-    _show_detail(game)
+    _show_detail(game, source)
 
 func _clear_iap_pending_launch() -> void:
     iap_pending_launch.clear()
@@ -6574,7 +6596,8 @@ func _game_card(game: Dictionary) -> Button:
         button.add_theme_stylebox_override("hover", ui_tokens.card_style(true))
         button.add_theme_stylebox_override("pressed", ui_tokens.card_style(true, true))
     button.add_theme_stylebox_override("focus", ui_tokens.focus_style())
-    button.pressed.connect(func(): _open_game_detail_with_iap(game))
+    button.set_meta("game_path", String(game.get("path", "")))
+    button.pressed.connect(func(): _open_game_detail_with_iap(game, button))
 
     if home_compact_layout:
         _build_compact_game_card(button, game)
@@ -6585,7 +6608,7 @@ func _game_card(game: Dictionary) -> Button:
     return button
 
 func _build_desktop_game_card(button: Button, game: Dictionary) -> CanvasItem:
-    var frame := VBoxContainer.new()
+    var frame := HBoxContainer.new()
     frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
     frame.clip_contents = true
     frame.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -6594,19 +6617,21 @@ func _build_desktop_game_card(button: Button, game: Dictionary) -> CanvasItem:
 
     var cover_host := Control.new()
     cover_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    cover_host.custom_minimum_size = Vector2(0, HOME_TILE_COVER_HEIGHT)
-    cover_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    cover_host.custom_minimum_size = Vector2(HOME_TILE_COVER_WIDTH, HOME_TILE_HEIGHT)
+    cover_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
     frame.add_child(cover_host)
+    button.set_meta("hero_cover", cover_host)
     var play_affordance := _populate_game_card_cover(
         cover_host,
         game,
-        Vector2i(int(HOME_TILE_MIN_WIDTH), int(HOME_TILE_COVER_HEIGHT)),
+        Vector2i(int(HOME_TILE_COVER_WIDTH), int(HOME_TILE_HEIGHT)),
         true
     )
 
     var metadata := PanelContainer.new()
     metadata.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    metadata.custom_minimum_size = Vector2(0, HOME_TILE_HEIGHT - HOME_TILE_COVER_HEIGHT)
+    metadata.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    metadata.size_flags_vertical = Control.SIZE_EXPAND_FILL
     metadata.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.surface, 0))
     frame.add_child(metadata)
     _populate_game_card_metadata(metadata, game, false)
@@ -6625,6 +6650,7 @@ func _build_compact_game_card(button: Button, game: Dictionary) -> void:
     cover_host.custom_minimum_size = Vector2(HOME_ROW_COVER_WIDTH, HOME_ROW_HEIGHT)
     cover_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
     frame.add_child(cover_host)
+    button.set_meta("hero_cover", cover_host)
     _populate_game_card_cover(
         cover_host,
         game,
@@ -6667,26 +6693,6 @@ func _populate_game_card_cover(cover_host: Control, game: Dictionary, target_siz
         icon.set_anchors_preset(Control.PRESET_FULL_RECT)
         placeholder.add_child(icon)
 
-    var badge := PanelContainer.new()
-    badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    badge.position = Vector2(9, 9)
-    var badge_fill := Color(ui_tokens.glass_material.r, ui_tokens.glass_material.g, ui_tokens.glass_material.b, 0.94)
-    var badge_style := ui_tokens.panel(badge_fill, 6, ui_tokens.highlight, 1)
-    badge_style.content_margin_left = 7
-    badge_style.content_margin_top = 3
-    badge_style.content_margin_right = 7
-    badge_style.content_margin_bottom = 3
-    badge.add_theme_stylebox_override("panel", badge_style)
-    cover_host.add_child(badge)
-    var badge_label := Label.new()
-    badge_label.text = _game_type_label(String(game.get("type", "Directory")))
-    badge_label.add_theme_font_size_override("font_size", 10)
-    badge_label.add_theme_color_override(
-        "font_color",
-        Color(1, 1, 1, 0.92) if style_mode == STYLE_DARK else ui_tokens.text_secondary
-    )
-    badge.add_child(badge_label)
-
     if not show_play:
         return null
     var play_chip := PanelContainer.new()
@@ -6699,7 +6705,7 @@ func _populate_game_card_cover(cover_host: Control, game: Dictionary, target_siz
     play_chip.offset_top = -46.0
     play_chip.offset_right = -10.0
     play_chip.offset_bottom = -10.0
-    var play_style := ui_tokens.panel(ui_tokens.glass_material, 8, ui_tokens.highlight, 1)
+    var play_style := ui_tokens.panel(ui_tokens.accent, 8)
     play_style.shadow_color = ui_tokens.shadow
     play_style.shadow_size = 8
     play_style.shadow_offset = Vector2(0, 3)
@@ -6720,8 +6726,16 @@ func _populate_game_card_metadata(metadata: PanelContainer, game: Dictionary, co
     var labels := VBoxContainer.new()
     labels.mouse_filter = Control.MOUSE_FILTER_IGNORE
     labels.alignment = BoxContainer.ALIGNMENT_CENTER if compact else BoxContainer.ALIGNMENT_BEGIN
-    labels.add_theme_constant_override("separation", 5 if compact else 3)
+    labels.add_theme_constant_override("separation", 4)
     text_margin.add_child(labels)
+
+    if not compact:
+        var kicker := Label.new()
+        kicker.text = _game_type_label(String(game.get("type", "Directory"))).to_upper()
+        kicker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        kicker.add_theme_font_size_override("font_size", 10)
+        kicker.add_theme_color_override("font_color", ui_tokens.accent)
+        labels.add_child(kicker)
 
     var title := Label.new()
     title.text = _game_display_title(game)
@@ -6729,7 +6743,7 @@ func _populate_game_card_metadata(metadata: PanelContainer, game: Dictionary, co
     title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.max_lines_visible = 2
     title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-    title.custom_minimum_size = Vector2(0, 44 if compact else 42)
+    title.custom_minimum_size = Vector2(0, 42 if compact else 38)
     title.add_theme_font_size_override("font_size", 16 if compact else 16)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title)
@@ -6741,6 +6755,90 @@ func _populate_game_card_metadata(metadata: PanelContainer, game: Dictionary, co
     sub.add_theme_font_size_override("font_size", 12)
     sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
+
+func _animate_hero_forward(body: Control) -> void:
+    if not is_instance_valid(detail_hero_cover) or hero_source_rect.size == Vector2.ZERO:
+        ui_motion.reveal(body)
+        return
+    var destination := detail_hero_cover.get_global_rect()
+    if destination.size == Vector2.ZERO:
+        ui_motion.reveal(body)
+        return
+    detail_hero_cover.modulate.a = 0.0
+    ui_motion.reveal(body, 0.02)
+    var overlay := _create_hero_overlay(hero_source_rect, hero_source_texture)
+    ui_motion.hero_rect(overlay, _hero_local_rect(destination), func():
+        if is_instance_valid(detail_hero_cover):
+            detail_hero_cover.modulate.a = 1.0
+        _finish_hero_overlay()
+    )
+
+func _animate_hero_back(source_rect: Rect2) -> void:
+    await get_tree().process_frame
+    var target_card := _find_game_card(hero_source_path)
+    if target_card == null or not is_instance_valid(target_card) or source_rect.size == Vector2.ZERO:
+        _clear_hero_state()
+        ui_motion.route_in(home_view, -1.0)
+        return
+    var target_cover: Control = target_card.get_meta("hero_cover", null)
+    if target_cover == null or not is_instance_valid(target_cover):
+        _clear_hero_state()
+        ui_motion.route_in(home_view, -1.0)
+        return
+    target_cover.modulate.a = 0.0
+    var overlay := _create_hero_overlay(source_rect, hero_source_texture)
+    ui_motion.hero_rect(overlay, _hero_local_rect(target_cover.get_global_rect()), func():
+        if is_instance_valid(target_cover):
+            target_cover.modulate.a = 1.0
+        _finish_hero_overlay()
+        _clear_hero_state()
+    )
+
+func _create_hero_overlay(global_rect: Rect2, texture: Texture2D) -> PanelContainer:
+    _finish_hero_overlay()
+    hero_overlay = PanelContainer.new()
+    hero_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    hero_overlay.clip_contents = true
+    hero_overlay.position = _hero_local_rect(global_rect).position
+    hero_overlay.size = global_rect.size
+    var style := ui_tokens.panel(ui_tokens.surface_raised, 8, ui_tokens.highlight, 1)
+    style.shadow_color = ui_tokens.shadow
+    style.shadow_size = 14
+    style.shadow_offset = Vector2(0, 6)
+    hero_overlay.add_theme_stylebox_override("panel", style)
+    if texture != null:
+        var image := TextureRect.new()
+        image.texture = texture
+        image.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        image.set_anchors_preset(Control.PRESET_FULL_RECT)
+        image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+        image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+        hero_overlay.add_child(image)
+    else:
+        hero_overlay.add_child(_centered_icon(ICON_GAMEPAD, Vector2(48, 48), ui_tokens.accent))
+    shell_content.add_child(hero_overlay)
+    hero_overlay.move_to_front()
+    return hero_overlay
+
+func _hero_local_rect(global_rect: Rect2) -> Rect2:
+    return Rect2(global_rect.position - shell_content.global_position, global_rect.size)
+
+func _find_game_card(path: String) -> Button:
+    for child in game_list.get_children():
+        if child is Button and not child.is_queued_for_deletion() and String(child.get_meta("game_path", "")) == path:
+            return child as Button
+    return null
+
+func _finish_hero_overlay() -> void:
+    if is_instance_valid(hero_overlay):
+        hero_overlay.queue_free()
+    hero_overlay = null
+
+func _clear_hero_state() -> void:
+    hero_source_rect = Rect2()
+    hero_source_path = ""
+    hero_source_texture = null
+    detail_hero_cover = null
 
 func _load_cover_texture(game: Dictionary, target_size: Vector2i = Vector2i.ZERO, radius: int = 0) -> Texture2D:
     var cover_path := String(game.get("coverPath", ""))

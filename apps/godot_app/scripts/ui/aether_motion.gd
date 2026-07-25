@@ -157,6 +157,20 @@ func enter(control: Control, offset: Vector2 = ENTER_OFFSET, delay: float = 0.0)
 func route_in(control: Control, direction: float = 1.0) -> void:
     enter(control, Vector2(8.0 * direction, 0.0))
 
+func hero_rect(control: Control, target_rect: Rect2, finished: Callable = Callable()) -> void:
+    if control == null or not is_instance_valid(control):
+        if finished.is_valid():
+            finished.call()
+        return
+    if reduced_motion:
+        control.position = target_rect.position
+        control.size = target_rect.size
+        if finished.is_valid():
+            finished.call()
+        return
+    spring_property(control, "position", target_rect.position, 0.34, 1.0)
+    spring_property(control, "size", target_rect.size, 0.34, 1.0, finished)
+
 func modal_in(scrim: CanvasItem, dialog: Control, background: Control = null) -> void:
     if scrim == null or dialog == null:
         return

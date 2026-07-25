@@ -109,11 +109,11 @@ func card_style(hovered: bool = false, pressed: bool = false) -> StyleBoxFlat:
             surface_raised.b + accent_fill.b * 0.08,
             1.0
         )
-    var border := accent if pressed else (highlight if hovered else separator)
+    var border := accent if pressed else (highlight if hovered else Color.TRANSPARENT)
     var style := panel(fill, RADIUS_MEDIUM, border, 1)
     style.shadow_color = shadow
-    style.shadow_size = 18 if hovered else 10
-    style.shadow_offset = Vector2(0, 8 if hovered else 4)
+    style.shadow_size = 14 if hovered else 6
+    style.shadow_offset = Vector2(0, 6 if hovered else 2)
     return style
 
 func sidebar_panel() -> StyleBoxFlat:
