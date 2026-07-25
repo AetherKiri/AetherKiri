@@ -74,6 +74,20 @@ func _run() -> void:
     motion.spring_property(control, "scale", Vector2(0.75, 0.75), 0.32, 0.8)
     if not control.scale.is_equal_approx(Vector2(0.75, 0.75)) or motion.active_springs.has(key):
         _fail("reduced motion did not resolve immediately")
+
+    motion.reduced_motion = false
+    var hero := Control.new()
+    hero.position = Vector2(12, 18)
+    hero.size = Vector2(120, 80)
+    root.add_child(hero)
+    var hero_finished := {"value": false}
+    motion.hero_rect(hero, Rect2(240, 96, 252, 354), func(): hero_finished["value"] = true)
+    for _frame in range(360):
+        motion._process(1.0 / 120.0)
+    if not hero.position.is_equal_approx(Vector2(240, 96)) or not hero.size.is_equal_approx(Vector2(252, 354)):
+        _fail("hero transition did not settle on the destination rect")
+    if not bool(hero_finished["value"]):
+        _fail("hero transition did not complete")
         return
 
     print("aether_motion_test: PASS")
