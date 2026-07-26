@@ -15,7 +15,77 @@
 #include "tjsArray.h"
 #include "tjsBinarySerializer.h"
 #include "tjsDebug.h"
+#include "../base/ScriptMgnIntf.h"
+#include "../base/TextStream.h"
 #include <atomic>
+#include <spdlog/spdlog.h>
+
+namespace {
+
+bool TJSDictionaryStructTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_STRUCT_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+tjs_error TJSLoadDictionaryStructuredText(tTJSVariant *result,
+                                          const ttstr &name,
+                                          const ttstr &mode,
+                                          iTJSDispatch2 *context) {
+    iTJSTextReadStream *stream = TVPCreateTextStreamForRead(name, mode);
+    if(!stream)
+        return TJS_E_INVALIDPARAM;
+
+    ttstr buffer;
+    try {
+        stream->Read(buffer, 0);
+    } catch(...) {
+        stream->Destruct();
+        throw;
+    }
+    stream->Destruct();
+
+    if(TJSDictionaryStructTraceEnabled()) {
+        std::string prefix = buffer.AsStdString();
+        if(prefix.size() > 160)
+            prefix.resize(160);
+        for(char &ch : prefix) {
+            if(ch == '\r' || ch == '\n' || ch == '\t')
+                ch = ' ';
+        }
+        spdlog::info(
+            "Dictionary.loadStruct text-fallback file={} mode={} chars={} "
+            "prefix=\"{}\"",
+            name.AsStdString(), mode.AsStdString(),
+            static_cast<long long>(buffer.length()), prefix);
+    }
+
+    const tjs_int length = buffer.length();
+    tjs_char *top = buffer.AppendBuffer(9);
+    memmove(top + 8, top, sizeof(tjs_char) * length);
+    memcpy(top, TJS_W("(const)["), sizeof(tjs_char) * 8);
+    top[8 + length] = TJS_W(']');
+    buffer.FixLen();
+
+    tTJSVariant values;
+    TVPExecuteExpression(buffer, TVPExtractStorageName(name), 0, context,
+                         &values);
+
+    if(result) {
+        const tTJSVariantClosure closure = values.AsObjectClosureNoAddRef();
+        if(!closure.Object)
+            return TJS_E_INVALIDPARAM;
+        const tjs_error hr = closure.PropGetByNum(TJS_IGNOREPROP, 0, result,
+                                                  nullptr);
+        if(TJS_FAILED(hr))
+            return hr;
+    }
+    return TJS_S_OK;
+}
+
+} // namespace
 
 static std::atomic<int64_t> sTJSDictCreateCount{0};
 static std::atomic<int64_t> sTJSDictDestroyCount{0};
@@ -82,6 +152,10 @@ namespace TJS {
             ttstr mode;
             if(numparams >= 2 && param[1]->Type() != tvtVoid)
                 mode = *param[1];
+            iTJSDispatch2 *context = numparams >= 3 &&
+                    param[2]->Type() != tvtVoid
+                ? param[2]->AsObjectNoAddRef()
+                : nullptr;
 
             tTJSBinaryStream *stream = TJSCreateBinaryStreamForRead(name, mode);
             if(!stream)
@@ -112,6 +186,10 @@ namespace TJS {
                         }
                     }
                 }
+                if(!isbin) {
+                    stream->SetPosition(0);
+                    isbin = TJSLoadStructuredDataPack(stream, result);
+                }
             } catch(...) {
                 delete stream;
                 if(dicfree) {
@@ -124,7 +202,8 @@ namespace TJS {
             delete stream;
             if(isbin)
                 return TJS_S_OK;
-            return TJS_E_INVALIDPARAM;
+            return TJSLoadDictionaryStructuredText(result, name, mode,
+                                                   context);
         }
         TJS_END_NATIVE_STATIC_METHOD_DECL(/*func. name*/ loadStruct)
         //----------------------------------------------------------------------

@@ -610,3 +610,26 @@ bool TVPLoadTjsNs0DataPack(tTJSBinaryStream *stream, tTJSVariant *result,
         *result = value;
     return true;
 }
+
+namespace {
+
+bool loadTjsNs0DataPackWithoutOuterIv(tTJSBinaryStream *stream,
+                                      tTJSVariant *result) {
+    return TVPLoadTjsNs0DataPack(stream, result);
+}
+
+} // namespace
+
+extern "C" void TVPRegisterTjsNs0DataPackLoader() {
+    TJS::TJSSetStructuredDataPackLoader(&loadTjsNs0DataPackWithoutOuterIv);
+}
+
+namespace {
+
+struct TjsNs0DataPackLoaderRegistration {
+    TjsNs0DataPackLoaderRegistration() {
+        TVPRegisterTjsNs0DataPackLoader();
+    }
+} TjsNs0DataPackLoaderRegistrationInstance;
+
+} // namespace
