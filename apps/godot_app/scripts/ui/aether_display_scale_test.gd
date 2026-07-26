@@ -8,6 +8,8 @@ func _init() -> void:
     if not _expect_scale("tablet portrait", AetherDisplayScale.ui_scale("iOS", Vector2i(768, 1024), 1.35), 1.25): return
     if not _expect_scale("tablet landscape", AetherDisplayScale.ui_scale("Android", Vector2i(1024, 768), 1.35), 1.25): return
     if not _expect_scale("large tablet", AetherDisplayScale.ui_scale("iOS", Vector2i(1366, 1024), 1.35), 1.35): return
+    if not _expect_scale("4K tablet", AetherDisplayScale.ui_scale("Android", Vector2i(3840, 2160), 1.35), 2.70): return
+    if not _expect_scale("high-resolution phone", AetherDisplayScale.ui_scale("Android", Vector2i(1440, 3200), 1.35), 3.0): return
     if not _expect_scale("compact desktop", AetherDisplayScale.ui_scale("Windows", Vector2i(1280, 720), 1.35), 1.20): return
     if not _expect_scale("explicit override", AetherDisplayScale.ui_scale("Android", Vector2i(390, 844), 1.35, "1.6"), 1.6): return
 
@@ -19,6 +21,12 @@ func _init() -> void:
         return
     if not AetherDisplayScale.use_compact_shell(Vector2(844, 390)):
         _fail("phone landscape did not select compact navigation")
+        return
+    if AetherDisplayScale.home_columns(2200.0, 340.0, 16.0, false) != 3:
+        _fail("wide tablet grid exceeded three columns")
+        return
+    if AetherDisplayScale.home_columns(2200.0, 340.0, 16.0, true) != 1:
+        _fail("compact grid did not stay single-column")
         return
 
     print("aether_display_scale_test: PASS")

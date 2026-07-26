@@ -2785,7 +2785,7 @@ func _layout_home_view(window_size: Vector2) -> void:
     var scroll_bar_width := game_scroll.get_v_scroll_bar().get_combined_minimum_size().x
     var list_width := maxf(HOME_TILE_MIN_WIDTH, window_size.x - margin * 2.0 - scroll_bar_width)
     var gap := 10.0 if phone else (14.0 if compact else 16.0)
-    var columns := 1 if compact else maxi(1, int(floor((list_width + gap) / (HOME_TILE_MIN_WIDTH + gap))))
+    var columns := AetherDisplayScale.home_columns(list_width, HOME_TILE_MIN_WIDTH, gap, compact)
     game_list.columns = columns
     game_list.add_theme_constant_override("h_separation", int(gap))
     game_list.add_theme_constant_override("v_separation", int(gap if compact else 18.0))
