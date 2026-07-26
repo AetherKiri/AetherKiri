@@ -50,7 +50,7 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | 銃騎士Cutie☆Bullet | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 聖騎士Melty☆Lovers | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 将軍様はお年頃 | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
-| エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, new-game flow, scene/name/dialogue text rendering, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi), yorkyang2333 (yangyork097@gmail.com) | Local game files are not committed. |
+| エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, new-game flow, scene/name/dialogue text rendering, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi), [@yorkyang2333](mailto:yangyork097@gmail.com) | Local game files are not committed. |
 
 ## How To Add A Game
 

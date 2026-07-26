@@ -49,7 +49,7 @@
 | 銃騎士Cutie☆Bullet | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 聖騎士Melty☆Lovers | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 将軍様はお年頃 | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
-| エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、开始游戏流程、场景/角色名/对话文字渲染和基础输入 | 流程验证通过 | [@KYoiRyi](https://github.com/KYoiRyi)、yorkyang2333（yangyork097@gmail.com） | 本地游戏文件不提交到仓库。 |
+| エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、开始游戏流程、场景/角色名/对话文字渲染和基础输入 | 流程验证通过 | [@KYoiRyi](https://github.com/KYoiRyi)、[@yorkyang2333](mailto:yangyork097@gmail.com) | 本地游戏文件不提交到仓库。 |
 
 ## 如何新增游戏
 
