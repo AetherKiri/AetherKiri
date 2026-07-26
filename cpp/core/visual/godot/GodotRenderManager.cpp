@@ -270,37 +270,48 @@ bool RectNeedsAlphaAreaDownsample(const tTVPRect &dst, const tTVPRect &src,
            RectNeedsAreaDownsample(dst, src);
 }
 
-bool TrianglesNeedAreaDownsample(uint32_t triangle_count,
-                                 const tTVPPointD *dst_points,
-                                 const tTVPPointD *src_points) {
+bool TrianglesNeedStrongAreaDownsample(uint32_t triangle_count,
+                                       const tTVPPointD *dst_points,
+                                       const tTVPPointD *src_points) {
     if (triangle_count == 0 || dst_points == nullptr || src_points == nullptr) {
         return false;
     }
-    double dst_left = dst_points[0].x;
-    double dst_right = dst_points[0].x;
-    double dst_top = dst_points[0].y;
-    double dst_bottom = dst_points[0].y;
-    double src_left = src_points[0].x;
-    double src_right = src_points[0].x;
-    double src_top = src_points[0].y;
-    double src_bottom = src_points[0].y;
-    const uint32_t point_count = triangle_count * 3u;
-    for (uint32_t i = 1; i < point_count; ++i) {
-        dst_left = std::min(dst_left, dst_points[i].x);
-        dst_right = std::max(dst_right, dst_points[i].x);
-        dst_top = std::min(dst_top, dst_points[i].y);
-        dst_bottom = std::max(dst_bottom, dst_points[i].y);
-        src_left = std::min(src_left, src_points[i].x);
-        src_right = std::max(src_right, src_points[i].x);
-        src_top = std::min(src_top, src_points[i].y);
-        src_bottom = std::max(src_bottom, src_points[i].y);
+    // Comparing source/destination axis-aligned bounds misclassifies a
+    // rotated surface as downsampled whenever one rotated bound gets shorter.
+    // That sent the common slanted E-mote presentation through the software
+    // rasterizer and forced two full GPU readbacks per frame.  Compare the
+    // corresponding triangle edges instead.  The GPU shader does
+    // alpha-premultiplied bilinear sampling, so reserve the area-filtered CPU
+    // path only for a genuinely strong (>2x along an edge) reduction.
+    constexpr double kStrongDownsampleScale = 0.5;
+    constexpr double kLengthEpsilon = 0.001;
+    for(uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
+        const uint32_t base = triangle * 3u;
+        for(uint32_t edge = 0; edge < 3u; ++edge) {
+            const uint32_t next = (edge + 1u) % 3u;
+            const auto &src0 = src_points[base + edge];
+            const auto &src1 = src_points[base + next];
+            const auto &dst0 = dst_points[base + edge];
+            const auto &dst1 = dst_points[base + next];
+            const double srcDx = src1.x - src0.x;
+            const double srcDy = src1.y - src0.y;
+            const double dstDx = dst1.x - dst0.x;
+            const double dstDy = dst1.y - dst0.y;
+            const double srcLengthSquared = srcDx * srcDx + srcDy * srcDy;
+            if(srcLengthSquared <= kLengthEpsilon * kLengthEpsilon) {
+                continue;
+            }
+            const double dstLengthSquared = dstDx * dstDx + dstDy * dstDy;
+            const double threshold =
+                kStrongDownsampleScale * kStrongDownsampleScale *
+                srcLengthSquared;
+            if(dstLengthSquared + kLengthEpsilon * kLengthEpsilon <
+               threshold) {
+                return true;
+            }
+        }
     }
-    const double dst_w = dst_right - dst_left;
-    const double dst_h = dst_bottom - dst_top;
-    const double src_w = src_right - src_left;
-    const double src_h = src_bottom - src_top;
-    return dst_w > 0.0 && dst_h > 0.0 &&
-           (dst_w + 0.001 < src_w || dst_h + 0.001 < src_h);
+    return false;
 }
 
 bool TrianglesNeedAlphaAreaDownsample(uint32_t triangle_count,
@@ -308,7 +319,8 @@ bool TrianglesNeedAlphaAreaDownsample(uint32_t triangle_count,
                                       const tTVPPointD *src_points,
                                       const GodotTexture2D *texture) {
     return texture != nullptr && texture->HasKnownTransparency() &&
-           TrianglesNeedAreaDownsample(triangle_count, dst_points, src_points);
+           TrianglesNeedStrongAreaDownsample(
+               triangle_count, dst_points, src_points);
 }
 
 bool RectBoundsInsideTexture(const tTVPRect &rc, const GodotTexture2D *texture) {
@@ -1703,6 +1715,85 @@ bool TVPGodotCompositeAlphaUnionMask(
     return dst->DrawMaskedTrianglesGpuFrom(
         src, mask_scratch, 2, full_dst, points, points, points, 255, 0,
         use_mask_alpha);
+}
+
+bool TVPGodotApplyAlphaUnionMask(
+    iTVPBaseBitmap *dst_bitmap, iTVPBaseBitmap *mask_scratch_bitmap,
+    iTVPBaseBitmap *const *mask_bitmaps,
+    const tTVPRect *mask_dst_rects,
+    const tTVPRect *mask_src_rects,
+    size_t mask_count,
+    bool threshold_mask_mode,
+    int item_flags,
+    int width,
+    int height) {
+    if(dst_bitmap == nullptr || mask_scratch_bitmap == nullptr ||
+       mask_bitmaps == nullptr || mask_dst_rects == nullptr ||
+       mask_src_rects == nullptr || mask_count == 0 ||
+       dst_bitmap == mask_scratch_bitmap) {
+        return false;
+    }
+
+    if(width <= 0) {
+        width = static_cast<int>(dst_bitmap->GetWidth());
+    }
+    if(height <= 0) {
+        height = static_cast<int>(dst_bitmap->GetHeight());
+    }
+    const tTVPRect full_rect(0, 0, width, height);
+    if(full_rect.is_empty() ||
+       full_rect.right > static_cast<tjs_int>(dst_bitmap->GetWidth()) ||
+       full_rect.bottom > static_cast<tjs_int>(dst_bitmap->GetHeight()) ||
+       full_rect.right >
+           static_cast<tjs_int>(mask_scratch_bitmap->GetWidth()) ||
+       full_rect.bottom >
+           static_cast<tjs_int>(mask_scratch_bitmap->GetHeight())) {
+        return false;
+    }
+
+    auto *dst = dynamic_cast<GodotTexture2D *>(
+        dst_bitmap->GetTextureForRender(true, &full_rect));
+    auto *mask_scratch = dynamic_cast<GodotTexture2D *>(
+        mask_scratch_bitmap->GetTextureForRender(true, &full_rect));
+    if(dst == nullptr || mask_scratch == nullptr ||
+       !dst->EnsureGpuHandle() || !mask_scratch->EnsureGpuHandle() ||
+       !dst->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+       !mask_scratch->ClearGpu(0x00000000u, full_rect)) {
+        return false;
+    }
+
+    for(size_t i = 0; i < mask_count; ++i) {
+        if(mask_bitmaps[i] == nullptr ||
+           mask_bitmaps[i] == mask_scratch_bitmap ||
+           mask_dst_rects[i].is_empty() ||
+           mask_src_rects[i].is_empty() ||
+           mask_dst_rects[i].get_width() !=
+               mask_src_rects[i].get_width() ||
+           mask_dst_rects[i].get_height() !=
+               mask_src_rects[i].get_height()) {
+            return false;
+        }
+        auto *mask = dynamic_cast<GodotTexture2D *>(
+            mask_bitmaps[i]->GetTexture());
+        if(mask == nullptr || !mask->EnsureGpuHandle() ||
+           !mask->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+           !mask_scratch->BlendGpuFrom(
+               mask, mask_dst_rects[i], mask_src_rects[i],
+               TVP_GODOT_GPU_BLEND_ALPHA_D, 255, 0)) {
+            return false;
+        }
+    }
+
+    const uint32_t color =
+        static_cast<uint32_t>(item_flags & 0xff) |
+        (static_cast<uint32_t>(threshold_mask_mode ? 1u : 0u) << 8);
+    if(!dst->BlendGpuFrom(
+           mask_scratch, full_rect, full_rect,
+           TVP_GODOT_GPU_BLEND_APPLY_ALPHA_MASK, 64, color)) {
+        return false;
+    }
+    CountGpuFastPath("ApplyAlphaUnionMask");
+    return true;
 }
 
 bool TVPGodotApplyAlphaMask(

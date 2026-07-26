@@ -1371,6 +1371,36 @@ namespace motion::detail {
         return nullptr;
     }
 
+    MotionCompositionEntryPoint resolveMotionCompositionEntryPoint(
+        const MotionSnapshot &snapshot,
+        const std::string &fallbackOwner,
+        const std::string &fallbackLabel) {
+        MotionCompositionEntryPoint result{
+            fallbackOwner,
+            fallbackLabel,
+        };
+        // A hierarchical motion source is an explicit reference. When that
+        // exact owner/clip pair exists in the selected companion module, keep
+        // it instead of replacing it with metadata/base. Split CG projects
+        // commonly expose both 全体構造 (the requested character composite)
+        // and タイムライン構造 (the module's default/background entry point).
+        if(findMotionClip(snapshot, fallbackOwner, fallbackLabel, false)) {
+            return result;
+        }
+        const auto base =
+            navigateDictionaryPath(snapshot.root, "metadata/base");
+        const auto authoredOwner =
+            dictionaryString(base, { "chara" }).value_or(std::string{});
+        const auto authoredLabel =
+            dictionaryString(base, { "motion" }).value_or(std::string{});
+        if(!authoredOwner.empty() && !authoredLabel.empty() &&
+           findMotionClip(snapshot, authoredOwner, authoredLabel, false)) {
+            result.owner = authoredOwner;
+            result.label = authoredLabel;
+        }
+        return result;
+    }
+
     std::string narrow(const ttstr &value) { return value.AsStdString(); }
 
     ttstr widen(const std::string &value) { return ttstr{ value }; }

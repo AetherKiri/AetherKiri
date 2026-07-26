@@ -761,7 +761,7 @@ public:
         if(g_host_prefer_gpu_frame && !HasHostVideoOverlayFrame()) {
         if(auto *godot_tex = dynamic_cast<GodotTexture2D *>(tex);
            godot_tex != nullptr && godot_tex->EnsureGpuHandle() &&
-           godot_tex->UploadCpuToGpu()) {
+           godot_tex->UploadCpuToGpu(false)) {
             GodotTexture2D *output_tex =
                 PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
                                            surface_h);
@@ -832,7 +832,7 @@ public:
         if (auto *godot_tex = dynamic_cast<GodotTexture2D *>(tex)) {
             if (g_host_prefer_gpu_frame && !HasHostVideoOverlayFrame() &&
                 godot_tex->EnsureGpuHandle() &&
-                godot_tex->UploadCpuToGpu()) {
+                godot_tex->UploadCpuToGpu(false)) {
                 GodotTexture2D *output_tex =
                     PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
                                                surface_h);
@@ -1206,7 +1206,11 @@ private:
                                                     src_pt)) {
             return nullptr;
         }
-        surface_texture_->UploadCpuToGpu();
+        // The Godot host copies the published texture through a synchronous
+        // bridge operation before presenting it. Keep the scale copy on the
+        // same ordered queue; flushing here split every animated frame into
+        // several Metal submissions without making the frame any safer.
+        surface_texture_->UploadCpuToGpu(false);
         return surface_texture_;
     }
 

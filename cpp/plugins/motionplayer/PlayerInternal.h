@@ -10,6 +10,7 @@
 #include <array>
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
 #include <cmath>
 #include <cstdlib>
 #include "WindowIntf.h"
@@ -2339,54 +2340,148 @@ namespace internal {
         inline FrameContentState
         evaluateLayerContent(const std::shared_ptr<const PSB::PSBDictionary> &layer,
                              double time,
-                             int nodeType) {
+                             int nodeType,
+                             bool collectDebug = false) {
             FrameContentState state;
-            const auto frames = psbDictionaryList(layer, "frameList");
-            if(!frames || frames->size() == 0) {
+            if(!layer) {
+                return state;
+            }
+
+            // Motion PSB dictionaries are immutable after loading. Parsing
+            // their mask-gated frame payloads for every node on every draw
+            // duplicated thousands of dictionary lookups and temporary
+            // vectors in E-mote scenes. Keep a per-update-thread parsed view;
+            // OpenMP workers then read independent caches without a shared
+            // lock. The weak owner prevents a reused raw address from binding
+            // to a previous game's PSB object.
+            struct ParsedLayerKey {
+                const PSB::PSBDictionary *layer = nullptr;
+                int nodeType = 0;
+                bool operator==(const ParsedLayerKey &other) const {
+                    return layer == other.layer && nodeType == other.nodeType;
+                }
+            };
+            struct ParsedLayerKeyHash {
+                size_t operator()(const ParsedLayerKey &key) const {
+                    const auto address =
+                        reinterpret_cast<std::uintptr_t>(key.layer);
+                    return std::hash<std::uintptr_t>{}(address) ^
+                        (std::hash<int>{}(key.nodeType) +
+                         0x9e3779b9u + (address << 6u) + (address >> 2u));
+                }
+            };
+            struct ParsedLayerFrames {
+                std::weak_ptr<const PSB::PSBDictionary> owner;
+                bool hasTransformOrder = false;
+                int transformOrder[4] = {0, 1, 2, 3};
+                std::vector<std::optional<ParsedFrame>> frames;
+            };
+            static thread_local std::unordered_map<
+                ParsedLayerKey, ParsedLayerFrames, ParsedLayerKeyHash>
+                parsedLayerCache;
+
+            const ParsedLayerKey cacheKey{layer.get(), nodeType};
+            auto cacheIt = parsedLayerCache.find(cacheKey);
+            const std::weak_ptr<const PSB::PSBDictionary> requestedOwner =
+                layer;
+            const bool sameCachedOwner =
+                cacheIt != parsedLayerCache.end() &&
+                !cacheIt->second.owner.owner_before(requestedOwner) &&
+                !requestedOwner.owner_before(cacheIt->second.owner);
+            const bool cacheHit =
+                cacheIt != parsedLayerCache.end() && sameCachedOwner;
+            if(!cacheHit) {
+                if(parsedLayerCache.size() > 4096) {
+                    for(auto it = parsedLayerCache.begin();
+                        it != parsedLayerCache.end(); ) {
+                        if(it->second.owner.expired()) {
+                            it = parsedLayerCache.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                }
+
+                ParsedLayerFrames parsed;
+                parsed.owner = layer;
+                if(auto toList = psbDictionaryList(
+                       std::const_pointer_cast<PSB::PSBDictionary>(layer),
+                       "transformOrder")) {
+                    for(int i = 0;
+                        i < 4 && i < static_cast<int>(toList->size()); ++i) {
+                        if(auto value = psbNumberValue((*toList)[i])) {
+                            parsed.transformOrder[i] =
+                                static_cast<int>(*value);
+                        }
+                    }
+                    parsed.hasTransformOrder = true;
+                }
+
+                if(const auto frames =
+                       psbDictionaryList(layer, "frameList")) {
+                    parsed.frames.reserve(frames->size());
+                    for(size_t index = 0; index < frames->size(); ++index) {
+                        const auto frame =
+                            std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                                (*frames)[static_cast<int>(index)]);
+                        if(frame) {
+                            parsed.frames.emplace_back(
+                                parseFrame(frame, nodeType));
+                        } else {
+                            parsed.frames.emplace_back(std::nullopt);
+                        }
+                    }
+                }
+                cacheIt = parsedLayerCache.insert_or_assign(
+                    cacheKey, std::move(parsed)).first;
+            }
+            const auto &parsedLayer = cacheIt->second;
+            if(parsedLayer.frames.empty()) {
                 return state;
             }
 
             // Read transformOrder from layer dict (stored at node+84..96 in libkrkr2.so).
             // sub_699940 uses this to determine the order of Flip/Angle/Zoom/Slant.
-            if(auto toList = psbDictionaryList(
-                   std::const_pointer_cast<PSB::PSBDictionary>(layer),
-                   "transformOrder")) {
-                for(int i = 0; i < 4 && i < static_cast<int>(toList->size()); i++) {
-                    if(auto v = psbNumberValue((*toList)[i]))
-                        state.transformOrder[i] = static_cast<int>(*v);
-                }
+            if(parsedLayer.hasTransformOrder) {
+                std::copy(parsedLayer.transformOrder,
+                          parsedLayer.transformOrder + 4,
+                          state.transformOrder);
                 state.hasTransformOrder = true;
             }
 
             // Step 1: Find active frame (last frame with time <= time)
             int activeIndex = -1;
-            for(size_t index = 0; index < frames->size(); ++index) {
-                const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                    (*frames)[static_cast<int>(index)]);
-                if(!frame) continue;
-                const double frameTime =
-                    psbDictionaryNumber(frame, "time").value_or(0.0);
-                if(frameTime > time) break;
+            for(size_t index = 0;
+                index < parsedLayer.frames.size(); ++index) {
+                if(!parsedLayer.frames[index]) {
+                    continue;
+                }
+                if(parsedLayer.frames[index]->time > time) {
+                    break;
+                }
                 activeIndex = static_cast<int>(index);
             }
 
             if(activeIndex < 0) return state;
-            state.debugEvaluated = true;
-            state.debugActiveIndex = activeIndex;
-
-            const auto activeFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*frames)[activeIndex]);
-            if(!activeFrame) return state;
+            if(collectDebug) {
+                state.debugEvaluated = true;
+                state.debugActiveIndex = activeIndex;
+            }
 
             // Step 2: Parse active frame via sub_6926B4
-            ParsedFrame frameA = parseFrame(activeFrame, nodeType);
-            state.debugFrameATime = frameA.time;
-            state.debugFrameAType = frameA.type;
-            state.debugFrameAInvisible = frameA.invisible;
-            state.debugFrameAOpacity = frameA.slot.opacity;
-            state.debugFrameAScaleX = frameA.slot.scaleX;
-            state.debugFrameAScaleY = frameA.slot.scaleY;
-            state.debugFrameASrc = frameA.slot.src;
+            const auto &frameAOptional =
+                parsedLayer.frames[static_cast<size_t>(activeIndex)];
+            if(!frameAOptional) return state;
+            const ParsedFrame &frameA = *frameAOptional;
+            if(collectDebug) {
+                state.debugFrameATime = frameA.time;
+                state.debugFrameAType = frameA.type;
+                state.debugFrameAInvisible = frameA.invisible;
+                state.debugFrameAOpacity = frameA.slot.opacity;
+                state.debugFrameAScaleX = frameA.slot.scaleX;
+                state.debugFrameAScaleY = frameA.slot.scaleY;
+                state.debugFrameASrc = frameA.slot.src;
+            }
 
             // type=0: node is invisible at this time
             if(frameA.invisible) {
@@ -2401,15 +2496,17 @@ namespace internal {
             state = frameA.slot;
             state.visible = true;
             state.clipStartTime = frameA.time;  // slot+328: frame start time
-            state.debugEvaluated = true;
-            state.debugActiveIndex = activeIndex;
-            state.debugFrameATime = frameA.time;
-            state.debugFrameAType = frameA.type;
-            state.debugFrameAInvisible = frameA.invisible;
-            state.debugFrameAOpacity = frameA.slot.opacity;
-            state.debugFrameAScaleX = frameA.slot.scaleX;
-            state.debugFrameAScaleY = frameA.slot.scaleY;
-            state.debugFrameASrc = frameA.slot.src;
+            if(collectDebug) {
+                state.debugEvaluated = true;
+                state.debugActiveIndex = activeIndex;
+                state.debugFrameATime = frameA.time;
+                state.debugFrameAType = frameA.type;
+                state.debugFrameAInvisible = frameA.invisible;
+                state.debugFrameAOpacity = frameA.slot.opacity;
+                state.debugFrameAScaleX = frameA.slot.scaleX;
+                state.debugFrameAScaleY = frameA.slot.scaleY;
+                state.debugFrameASrc = frameA.slot.src;
+            }
             if(savedHasTO) {
                 std::copy(savedTO, savedTO + 4, state.transformOrder);
                 state.hasTransformOrder = true;
@@ -2422,61 +2519,71 @@ namespace internal {
 
             // type=3: interpolate with next frame's slot
             const int nextIndex = activeIndex + 1;
-            if(nextIndex >= static_cast<int>(frames->size())) {
+            if(nextIndex >= static_cast<int>(parsedLayer.frames.size())) {
                 return state;  // no next frame, just use slot A
             }
-            state.debugNextIndex = nextIndex;
-
-            const auto nextFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*frames)[nextIndex]);
-            if(!nextFrame) return state;
+            if(collectDebug) {
+                state.debugNextIndex = nextIndex;
+            }
 
             // Step 3: Parse next frame via sub_6926B4
-            ParsedFrame frameB = parseFrame(nextFrame, nodeType);
-            state.debugFrameBTime = frameB.time;
-            state.debugFrameBType = frameB.type;
-            state.debugFrameBInvisible = frameB.invisible;
-            state.debugFrameBOpacity = frameB.slot.opacity;
-            state.debugFrameBScaleX = frameB.slot.scaleX;
-            state.debugFrameBScaleY = frameB.slot.scaleY;
-            state.debugFrameBSrc = frameB.slot.src;
-            // Inherit src from slot A if slot B doesn't set one
-            if(frameB.slot.src.empty()) frameB.slot.src = state.src;
-
+            const auto &frameBOptional =
+                parsedLayer.frames[static_cast<size_t>(nextIndex)];
+            if(!frameBOptional) return state;
+            const ParsedFrame &frameB = *frameBOptional;
+            if(collectDebug) {
+                state.debugFrameBTime = frameB.time;
+                state.debugFrameBType = frameB.type;
+                state.debugFrameBInvisible = frameB.invisible;
+                state.debugFrameBOpacity = frameB.slot.opacity;
+                state.debugFrameBScaleX = frameB.slot.scaleX;
+                state.debugFrameBScaleY = frameB.slot.scaleY;
+                state.debugFrameBSrc = frameB.slot.src;
+            }
             // Compute interpolation ratio
             const double duration = frameB.time - frameA.time;
             if(duration <= 0.0) return state;
 
             const double t = std::clamp(
                 (time - frameA.time) / duration, 0.0, 1.0);
-            state.debugInterpT = t;
+            if(collectDebug) {
+                state.debugInterpT = t;
+            }
 
             if(t <= 0.0 || frameB.invisible) {
                 return state;  // at exact start or next is invisible
             }
 
             // Step 4: Interpolate via sub_699AE4
-            state = interpolateSlots(state, frameB.slot, t);
+            if(frameB.slot.src.empty()) {
+                FrameContentState inheritedSlotB = frameB.slot;
+                inheritedSlotB.src = state.src;
+                state = interpolateSlots(state, inheritedSlotB, t);
+            } else {
+                state = interpolateSlots(state, frameB.slot, t);
+            }
             state.visible = true;
-            state.debugEvaluated = true;
-            state.debugActiveIndex = activeIndex;
-            state.debugNextIndex = nextIndex;
-            state.debugFrameATime = frameA.time;
-            state.debugFrameAType = frameA.type;
-            state.debugFrameAInvisible = frameA.invisible;
-            state.debugFrameAOpacity = frameA.slot.opacity;
-            state.debugFrameAScaleX = frameA.slot.scaleX;
-            state.debugFrameAScaleY = frameA.slot.scaleY;
-            state.debugFrameASrc = frameA.slot.src;
-            state.debugFrameBTime = frameB.time;
-            state.debugFrameBType = frameB.type;
-            state.debugFrameBInvisible = frameB.invisible;
-            state.debugFrameBOpacity = frameB.slot.opacity;
-            state.debugFrameBScaleX = frameB.slot.scaleX;
-            state.debugFrameBScaleY = frameB.slot.scaleY;
-            state.debugFrameBSrc = frameB.slot.src;
-            state.debugInterpT = t;
-            state.debugInterpolated = true;
+            if(collectDebug) {
+                state.debugEvaluated = true;
+                state.debugActiveIndex = activeIndex;
+                state.debugNextIndex = nextIndex;
+                state.debugFrameATime = frameA.time;
+                state.debugFrameAType = frameA.type;
+                state.debugFrameAInvisible = frameA.invisible;
+                state.debugFrameAOpacity = frameA.slot.opacity;
+                state.debugFrameAScaleX = frameA.slot.scaleX;
+                state.debugFrameAScaleY = frameA.slot.scaleY;
+                state.debugFrameASrc = frameA.slot.src;
+                state.debugFrameBTime = frameB.time;
+                state.debugFrameBType = frameB.type;
+                state.debugFrameBInvisible = frameB.invisible;
+                state.debugFrameBOpacity = frameB.slot.opacity;
+                state.debugFrameBScaleX = frameB.slot.scaleX;
+                state.debugFrameBScaleY = frameB.slot.scaleY;
+                state.debugFrameBSrc = frameB.slot.src;
+                state.debugInterpT = t;
+                state.debugInterpolated = true;
+            }
 
             if(savedHasTO) {
                 std::copy(savedTO, savedTO + 4, state.transformOrder);

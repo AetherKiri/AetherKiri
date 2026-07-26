@@ -5,6 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -105,6 +107,44 @@ TEST_CASE("motionplayer optional E-mote extension matches build mode") {
 #else
     REQUIRE(extension == nullptr);
 #endif
+}
+
+TEST_CASE("motionplayer honors a split module's authored composition entry point") {
+    motion::detail::MotionSnapshot snapshot;
+    auto root = std::make_shared<PSB::PSBDictionary>();
+    auto metadata = std::make_shared<PSB::PSBDictionary>();
+    auto base = std::make_shared<PSB::PSBDictionary>();
+    base->emplace(
+        "chara", std::make_shared<PSB::PSBString>("all_parts"));
+    base->emplace(
+        "motion", std::make_shared<PSB::PSBString>("タイムライン構造"));
+    metadata->emplace("base", base);
+    root->emplace("metadata", metadata);
+    snapshot.root = root;
+    snapshot.clipsByOwnerAndLabel["all_parts"].emplace(
+        "タイムライン構造", motion::detail::MotionClip{});
+
+    const auto authored =
+        motion::detail::resolveMotionCompositionEntryPoint(
+            snapshot, "all_parts", "全体構造");
+    CHECK(authored.owner == "all_parts");
+    CHECK(authored.label == "タイムライン構造");
+
+    snapshot.clipsByOwnerAndLabel["all_parts"].emplace(
+        "全体構造", motion::detail::MotionClip{});
+    const auto explicitReference =
+        motion::detail::resolveMotionCompositionEntryPoint(
+            snapshot, "all_parts", "全体構造");
+    CHECK(explicitReference.owner == "all_parts");
+    CHECK(explicitReference.label == "全体構造");
+
+    snapshot.clipsByOwnerAndLabel["all_parts"].erase("全体構造");
+    snapshot.clipsByOwnerAndLabel["all_parts"].erase("タイムライン構造");
+    const auto fallback =
+        motion::detail::resolveMotionCompositionEntryPoint(
+            snapshot, "all_parts", "全体構造");
+    CHECK(fallback.owner == "all_parts");
+    CHECK(fallback.label == "全体構造");
 }
 
 #if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
@@ -303,6 +343,80 @@ namespace {
                     nullptr, 1, params, nullptr) == TJS_S_OK);
     }
 
+    class TemporaryEmoteDecryptCallback {
+    public:
+        explicit TemporaryEmoteDecryptCallback(tTJSVariant callback) {
+            tTJSVariant *params[] = { &callback };
+            REQUIRE(motion::ResourceManager::setEmotePSBDecryptFunc(
+                        nullptr, 1, params, nullptr) == TJS_S_OK);
+        }
+
+        ~TemporaryEmoteDecryptCallback() {
+            motion::ResourceManager::setEmotePSBDecryptFunc(
+                nullptr, 0, nullptr, nullptr);
+        }
+    };
+
+    void writeTestU16LE(std::uint8_t *data, const std::uint16_t value) {
+        data[0] = static_cast<std::uint8_t>(value);
+        data[1] = static_cast<std::uint8_t>(value >> 8);
+    }
+
+    void writeTestU32LE(std::uint8_t *data, const std::uint32_t value) {
+        data[0] = static_cast<std::uint8_t>(value);
+        data[1] = static_cast<std::uint8_t>(value >> 8);
+        data[2] = static_cast<std::uint8_t>(value >> 16);
+        data[3] = static_cast<std::uint8_t>(value >> 24);
+    }
+
+    void cryptLegacyEmoteHeader(std::uint8_t *data, const std::size_t count) {
+        std::uint32_t a = 123456789;
+        std::uint32_t b = 362436069;
+        std::uint32_t c = 521288629;
+        std::uint32_t d = 0x13579BDFu;
+        std::uint32_t value = 0;
+        for(std::size_t index = 0; index < count; ++index) {
+            if(value == 0) {
+                const std::uint32_t temp = (a << 11) ^ a;
+                a = b;
+                b = c;
+                c = d;
+                d ^= temp ^ ((temp ^ (d >> 11)) >> 8);
+                value = d;
+            }
+            data[index] ^= static_cast<std::uint8_t>(value);
+            value >>= 8;
+        }
+    }
+
+    class TemporaryAutoPath {
+    public:
+        TemporaryAutoPath() {
+            const auto suffix = std::chrono::steady_clock::now()
+                                    .time_since_epoch()
+                                    .count();
+            path_ = std::filesystem::temp_directory_path() /
+                ("aetherkiri-d3d-emote-" + std::to_string(suffix));
+            std::filesystem::create_directories(path_);
+            storagePath_ = ttstr((path_.string() + "/").c_str());
+            TVPAddAutoPath(storagePath_);
+            TVPClearStorageCaches();
+        }
+
+        ~TemporaryAutoPath() {
+            TVPRemoveAutoPath(storagePath_);
+            TVPClearStorageCaches();
+            std::error_code error;
+            std::filesystem::remove_all(path_, error);
+        }
+
+        const std::filesystem::path &path() const { return path_; }
+
+    private:
+        std::filesystem::path path_;
+        ttstr storagePath_;
+    };
+
     tTJSVariant getProp(const tTJSVariant &object, const tjs_char *name) {
         REQUIRE(object.Type() == tvtObject);
         auto *dispatch = object.AsObjectNoAddRef();
@@ -469,6 +583,97 @@ namespace {
     }
 
 } // namespace
+
+TEST_CASE("storage resolves logical E-mote PSBs to DirectX exports") {
+    ensurePluginRuntime();
+    TemporaryAutoPath autoPath;
+
+    std::ofstream(autoPath.path() / "dx_gallery_body.psb", std::ios::binary)
+        .put('\0');
+    std::ofstream(autoPath.path() / "dxlow_gallery_low.psb", std::ios::binary)
+        .put('\0');
+    std::ofstream(autoPath.path() / "gallery_original.psb", std::ios::binary)
+        .put('\0');
+    TVPClearStorageCaches();
+
+    const auto body = TVPGetPlacedPath(TJS_W("gallery_body.psb"));
+    REQUIRE_FALSE(body.IsEmpty());
+    CHECK(TVPExtractStorageName(body) == TJS_W("dx_gallery_body.psb"));
+    CHECK(TVPIsExistentStorage(TJS_W("gallery_body.psb")));
+
+    const auto low = TVPGetPlacedPath(TJS_W("gallery_low.psb"));
+    REQUIRE_FALSE(low.IsEmpty());
+    CHECK(TVPExtractStorageName(low) == TJS_W("dxlow_gallery_low.psb"));
+
+    const auto original = TVPGetPlacedPath(TJS_W("gallery_original.psb"));
+    REQUIRE_FALSE(original.IsEmpty());
+    CHECK(TVPExtractStorageName(original) == TJS_W("gallery_original.psb"));
+}
+
+TEST_CASE("motionplayer completes legacy decryption for PSB v4 headers") {
+    ensurePluginRuntime();
+
+    tTJSVariant callback;
+    TVPExecuteExpression(TJS_W(
+        "(function(buf, len) {"
+        " var A=123456789, B=362436069, C=521288629, D=324508639;"
+        " var version=buf[4]+(buf[5]<<8);"
+        " var flags=version>2 ? buf[6]+(buf[7]<<8) : 2;"
+        " var V=0, T, off, count;"
+        " if(flags&1) {"
+        "  off=8; count=36;"
+        "  for(var i=0;i<count;++i) {"
+        "   if(!V) {"
+        "    T=(A<<11)^A; T&=0xFFFFFFFF;"
+        "    A=B; B=C; C=D;"
+        "    D^=T^((T^(D>>11))>>8); V=D;"
+        "   }"
+        "   buf[off+i]^=V; V>>=8;"
+        "  }"
+        " }"
+        " if(flags&2) {"
+        "  off=buf[8]|(buf[9]<<8)|(buf[10]<<16)|(buf[11]<<24);"
+        "  var end=buf[24]|(buf[25]<<8)|(buf[26]<<16)|(buf[27]<<24);"
+        "  count=end-off;"
+        "  for(var j=0;j<count;++j) {"
+        "   if(!V) {"
+        "    T=(A<<11)^A; T&=0xFFFFFFFF;"
+        "    A=B; B=C; C=D;"
+        "    D^=T^((T^(D>>11))>>8); V=D;"
+        "   }"
+        "   buf[off+j]^=V; V>>=8;"
+        "  }"
+        " }"
+        "})"), &callback);
+    REQUIRE(callback.Type() == tvtObject);
+    TemporaryEmoteDecryptCallback decryptCallback(callback);
+
+    std::array<std::uint8_t, 128> plaintext{};
+    plaintext[0] = 'P';
+    plaintext[1] = 'S';
+    plaintext[2] = 'B';
+    writeTestU16LE(plaintext.data() + 4, 4);
+    writeTestU16LE(plaintext.data() + 6, 1);
+    writeTestU32LE(plaintext.data() + 8, 56);
+    writeTestU32LE(plaintext.data() + 12, 56);
+    writeTestU32LE(plaintext.data() + 16, 80);
+    writeTestU32LE(plaintext.data() + 20, 84);
+    writeTestU32LE(plaintext.data() + 24, 96);
+    writeTestU32LE(plaintext.data() + 28, 100);
+    writeTestU32LE(plaintext.data() + 32, 104);
+    writeTestU32LE(plaintext.data() + 36, 60);
+    writeTestU32LE(plaintext.data() + 40, 0x12345678);
+    writeTestU32LE(plaintext.data() + 44, 88);
+    writeTestU32LE(plaintext.data() + 48, 92);
+    writeTestU32LE(plaintext.data() + 52, 96);
+
+    auto encrypted = plaintext;
+    cryptLegacyEmoteHeader(encrypted.data() + 8, 48);
+    REQUIRE(motion::ResourceManager::applyEmotePSBDecryptFunc(
+        encrypted.data(), encrypted.size()));
+    CHECK(std::equal(
+        plaintext.begin(), plaintext.begin() + 56, encrypted.begin()));
+}
 
 TEST_CASE("motionplayer maps parameter values across the authored clip span") {
     motion::detail::MotionClip clip;

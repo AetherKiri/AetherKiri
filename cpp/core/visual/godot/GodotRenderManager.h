@@ -202,6 +202,19 @@ bool TVPGodotCompositeAlphaUnionMask(
     int width = -1,
     int height = -1);
 
+// Build the alpha union of one or more mask bitmaps on the GPU, then apply it
+// to an existing destination while preserving destination RGB.
+bool TVPGodotApplyAlphaUnionMask(
+    iTVPBaseBitmap *dst, iTVPBaseBitmap *mask_scratch,
+    iTVPBaseBitmap *const *masks,
+    const tTVPRect *mask_dst_rects,
+    const tTVPRect *mask_src_rects,
+    size_t mask_count,
+    bool threshold_mask_mode,
+    int item_flags,
+    int width = -1,
+    int height = -1);
+
 // Preserve destination RGB and combine only its alpha with source alpha.
 // This is the GPU equivalent of E-mote's sub_6AC4E4 mask loop.
 bool TVPGodotApplyAlphaMask(

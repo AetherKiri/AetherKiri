@@ -9308,74 +9308,131 @@ namespace motion {
                         command.differenceAlphaMaskOperation != 0
                             ? command.differenceAlphaMaskOperation
                             : (group.itemFlags & 3);
-                    for(int destinationY = 0;
-                        destinationY < destinationHeight;
-                        ++destinationY) {
-                        auto *destinationRow =
-                            static_cast<std::uint8_t *>(
-                                destinationBitmap
-                                    ->GetScanLineForWrite(
-                                        destinationY));
-                        const int worldY =
-                            destinationWorldTop +
-                            destinationY;
-                        for(int destinationX = 0;
-                            destinationX < destinationWidth;
-                            ++destinationX) {
-                            const int worldX =
-                                destinationWorldLeft +
-                                destinationX;
-                            int unionAlpha = 0;
-                            for(const auto &surface :
-                                    surfaces) {
-                                if(worldX <
-                                       surface.clipRect[0] ||
-                                   worldY <
-                                       surface.clipRect[1] ||
-                                   worldX >=
-                                       surface.clipRect[2] ||
-                                   worldY >=
-                                       surface.clipRect[3]) {
-                                    continue;
-                                }
-                                const auto *sourceRow =
-                                    static_cast<
-                                        const std::uint8_t *>(
-                                        surface.bitmap
-                                            ->GetScanLine(
-                                                worldY -
-                                                surface
-                                                    .clipRect[1]));
-                                const int sourceAlpha =
-                                    sourceRow[
-                                        (worldX -
-                                         surface.clipRect[0]) *
-                                            4 +
-                                        3];
-                                if(thresholdMaskMode) {
-                                    if(sourceAlpha >= 64) {
-                                        unionAlpha = 255;
-                                        break;
-                                    }
-                                } else {
-                                    unionAlpha +=
-                                        ((255 - unionAlpha) *
-                                         sourceAlpha) /
-                                        255;
-                                }
+                    bool gpuMaskApplied = false;
+                    auto *unionMaskLayerObject =
+                        ensureCommandLayer(command.unionMaskLayer);
+                    auto *unionMaskLayer =
+                        resolveNativeLayer(unionMaskLayerObject);
+                    if(unionMaskLayerObject && unionMaskLayer &&
+                       prepareLayerForRender(
+                           unionMaskLayerObject, destinationWidth,
+                           destinationHeight, 0x00000000)) {
+                        std::vector<iTVPBaseBitmap *> maskBitmaps;
+                        std::vector<tTVPRect> maskDstRects;
+                        std::vector<tTVPRect> maskSrcRects;
+                        maskBitmaps.reserve(surfaces.size());
+                        maskDstRects.reserve(surfaces.size());
+                        maskSrcRects.reserve(surfaces.size());
+                        for(const auto &surface : surfaces) {
+                            const int worldLeft = std::max(
+                                destinationWorldLeft, surface.clipRect[0]);
+                            const int worldTop = std::max(
+                                destinationWorldTop, surface.clipRect[1]);
+                            const int worldRight = std::min(
+                                destinationWorldLeft + destinationWidth,
+                                surface.clipRect[2]);
+                            const int worldBottom = std::min(
+                                destinationWorldTop + destinationHeight,
+                                surface.clipRect[3]);
+                            if(worldLeft >= worldRight ||
+                               worldTop >= worldBottom) {
+                                continue;
                             }
-                            auto &destinationAlpha =
-                                destinationRow[
-                                    destinationX * 4 + 3];
-                            destinationAlpha =
-                                internal::
-                                    applyMotionAlphaMaskValueLike_0x6AC4E4(
-                                        destinationAlpha,
-                                        static_cast<std::uint8_t>(
-                                            unionAlpha),
-                                        thresholdMaskMode,
-                                        maskOperation,
-                                        64);
+                            maskBitmaps.push_back(
+                                const_cast<iTVPBaseBitmap *>(
+                                    static_cast<const iTVPBaseBitmap *>(
+                                        surface.bitmap)));
+                            maskDstRects.emplace_back(
+                                worldLeft - destinationWorldLeft,
+                                worldTop - destinationWorldTop,
+                                worldRight - destinationWorldLeft,
+                                worldBottom - destinationWorldTop);
+                            maskSrcRects.emplace_back(
+                                worldLeft - surface.clipRect[0],
+                                worldTop - surface.clipRect[1],
+                                worldRight - surface.clipRect[0],
+                                worldBottom - surface.clipRect[1]);
+                        }
+                        if(!maskBitmaps.empty()) {
+                            gpuMaskApplied = TVPGodotApplyAlphaUnionMask(
+                                destinationBitmap,
+                                unionMaskLayer->GetMainImage(),
+                                maskBitmaps.data(), maskDstRects.data(),
+                                maskSrcRects.data(), maskBitmaps.size(),
+                                thresholdMaskMode, maskOperation,
+                                destinationWidth, destinationHeight);
+                        }
+                    }
+                    if(!gpuMaskApplied) {
+                        for(int destinationY = 0;
+                            destinationY < destinationHeight;
+                            ++destinationY) {
+                            auto *destinationRow =
+                                static_cast<std::uint8_t *>(
+                                    destinationBitmap
+                                        ->GetScanLineForWrite(
+                                            destinationY));
+                            const int worldY =
+                                destinationWorldTop +
+                                destinationY;
+                            for(int destinationX = 0;
+                                destinationX < destinationWidth;
+                                ++destinationX) {
+                                const int worldX =
+                                    destinationWorldLeft +
+                                    destinationX;
+                                int unionAlpha = 0;
+                                for(const auto &surface :
+                                        surfaces) {
+                                    if(worldX <
+                                           surface.clipRect[0] ||
+                                       worldY <
+                                           surface.clipRect[1] ||
+                                       worldX >=
+                                           surface.clipRect[2] ||
+                                       worldY >=
+                                           surface.clipRect[3]) {
+                                        continue;
+                                    }
+                                    const auto *sourceRow =
+                                        static_cast<
+                                            const std::uint8_t *>(
+                                            surface.bitmap
+                                                ->GetScanLine(
+                                                    worldY -
+                                                    surface
+                                                        .clipRect[1]));
+                                    const int sourceAlpha =
+                                        sourceRow[
+                                            (worldX -
+                                             surface.clipRect[0]) *
+                                                4 +
+                                            3];
+                                    if(thresholdMaskMode) {
+                                        if(sourceAlpha >= 64) {
+                                            unionAlpha = 255;
+                                            break;
+                                        }
+                                    } else {
+                                        unionAlpha +=
+                                            ((255 - unionAlpha) *
+                                             sourceAlpha) /
+                                            255;
+                                    }
+                                }
+                                auto &destinationAlpha =
+                                    destinationRow[
+                                        destinationX * 4 + 3];
+                                destinationAlpha =
+                                    internal::
+                                        applyMotionAlphaMaskValueLike_0x6AC4E4(
+                                            destinationAlpha,
+                                            static_cast<std::uint8_t>(
+                                                unionAlpha),
+                                            thresholdMaskMode,
+                                            maskOperation,
+                                            64);
+                            }
                         }
                     }
                     detail::logoChainTraceLogf(
@@ -9676,6 +9733,8 @@ namespace motion {
                 command.composedLayer =
                     commandCacheEntry->composedLayer;
                 command.maskLayer = commandCacheEntry->maskLayer;
+                command.unionMaskLayer =
+                    commandCacheEntry->unionMaskLayer;
 
                 if(commandCacheEligible[commandIndex] &&
                    commandCacheEntry->outputValid &&
@@ -9738,6 +9797,8 @@ namespace motion {
                 commandCacheEntry->composedLayer =
                     command.composedLayer;
                 commandCacheEntry->maskLayer = command.maskLayer;
+                commandCacheEntry->unionMaskLayer =
+                    command.unionMaskLayer;
                 commandCacheEntry->leafSignature =
                     commandLeafSignatures[commandIndex];
                 commandCacheEntry->outputSignature =
@@ -10206,7 +10267,7 @@ namespace motion {
                 const int dstHeight = clipHeight;
                 const bool thresholdMaskMode = playerStencilType == 0;
                 bool gpuMaskApplied = false;
-                if(!thresholdMaskMode && command.groupOnly &&
+                if(command.groupOnly &&
                    compositeMaskSurfaces.size() > 1) {
                     iTJSDispatch2 *maskScratchLayerObject =
                         ensureCommandLayer(command.maskLayer);
@@ -10263,26 +10324,15 @@ namespace motion {
                         }
                         if(!maskBitmaps.empty()) {
                             gpuMaskApplied =
-                                TVPGodotCompositeAlphaUnionMask(
-                                    leafLayer->GetMainImage(),
+                                TVPGodotApplyAlphaUnionMask(
                                     composedLayer->GetMainImage(),
                                     maskScratchLayer->GetMainImage(),
                                     maskBitmaps.data(), maskDstRects.data(),
                                     maskSrcRects.data(), maskBitmaps.size(),
-                                    compositeMaskOperation == 1,
+                                    thresholdMaskMode,
+                                    compositeMaskOperation,
                                     dstWidth, dstHeight);
                         }
-                    }
-                    if(gpuMaskApplied) {
-                        // The group leaf is a cleared scratch surface.  It now
-                        // contains the masked composite; swap the reusable
-                        // slots so the ordinary output selector returns it.
-                        std::swap(command.leafLayer,
-                                  command.composedLayer);
-                        composedLayerObject =
-                            command.composedLayer.AsObjectNoAddRef();
-                        composedLayer =
-                            resolveNativeLayer(composedLayerObject);
                     }
                 }
 
@@ -10383,7 +10433,35 @@ namespace motion {
             return true;
         };
 
+        std::vector<size_t> executionOrder;
+        executionOrder.reserve(_runtime->renderCommands.size());
         for(size_t i = 0; i < _runtime->renderCommands.size(); ++i) {
+            executionOrder.push_back(i);
+        }
+        if(motionPath.find("日々姫15a.psb") != std::string::npos) {
+            // This Last Run gallery motion authors its full-canvas custom
+            // background after the character root in PSB traversal order.
+            // D3D renders that custom plane first, then the transparent
+            // character composition over it. Preserve every internal
+            // character/mask dependency and only move this independent
+            // top-level background ahead of the root.
+            const auto background = std::find_if(
+                executionOrder.begin(), executionOrder.end(),
+                [&](size_t index) {
+                    const auto &command =
+                        _runtime->renderCommands[index];
+                    return !command.hasRenderParent &&
+                           !command.alphaMaskOnly &&
+                           command.nodeLabel == "■追加パーツ" &&
+                           command.sourceKey == "src/#custom/10";
+                });
+            if(background != executionOrder.end()) {
+                std::rotate(executionOrder.begin(), background,
+                            std::next(background));
+            }
+        }
+
+        for(const size_t i : executionOrder) {
             auto &command = _runtime->renderCommands[i];
             const auto blendMode =
                 resolveBlendOperationModeLike_0x6C7440(command.blendMode);
@@ -10798,6 +10876,21 @@ namespace motion {
         ensureMotionLoaded();
         if(!_runtime->activeMotion) return false;
         const auto motionPath = _runtime->activeMotion->path;
+        adaptor->notePlayerDraw();
+        // Ordinary D3DEmote rendering captures each completed draw batch into
+        // its authored target layer. D3DAffineSourceMotion instead keeps
+        // drawing to the adaptor without ever calling captureCanvas. Detect
+        // that behavior and retain its completed surface in the layer tree.
+        const bool retainD3DPresentation =
+            adaptor->shouldRetainUncapturedPresentation();
+        if(!retainD3DPresentation &&
+           _runtime->d3dPresentationLayer.Type() == tvtObject) {
+            if(auto *presentation = resolveNativeLayer(
+                   _runtime->d3dPresentationLayer.AsObjectNoAddRef())) {
+                presentation->SetVisible(false);
+            }
+            adaptor->setRetainedPresentationLayer(nullptr);
+        }
         detail::logoChainTraceLogf(
             motionPath, "draw.d3d", "0x6D5B90", _clampedEvalTime,
             "adaptorSize={}x{} route=D3DAdaptor_renderFromPlayer",
@@ -10811,7 +10904,8 @@ namespace motion {
         // same dirty gates as the ordinary presentation renderer; otherwise
         // all_parts/全体構造 reaches prepareRenderItems with empty body/head
         // children and only its transparent layout nodes are submitted.
-        const bool parentStateChanged = applyMotionParentRootStateForRender();
+        const bool parentStateChanged =
+            applyMotionParentRootStateForRender();
         if((parentStateChanged || _layersDirty || _emoteDirty) &&
            !_runtime->nodes.empty()) {
             updateLayers();
@@ -10819,11 +10913,13 @@ namespace motion {
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
         adjustPreparedRenderItemsForYuzuPresentation(
-            *_runtime, motionPath, adaptor->getWidth(), adaptor->getHeight());
+            *_runtime, motionPath, adaptor->getWidth(),
+            adaptor->getHeight());
         adjustPreparedRenderItemsForCenteredGameMotion(
-            *_runtime, motionPath, adaptor->getWidth(), adaptor->getHeight(),
-            resolveCenteredGameMotionResolution(_resolution, _tags, _metadata,
-                                                motionPath));
+            *_runtime, motionPath, adaptor->getWidth(),
+            adaptor->getHeight(),
+            resolveCenteredGameMotionResolution(
+                _resolution, _tags, _metadata, motionPath));
 
         iTJSDispatch2 *windowObject = adaptor->getWindowObject();
         iTJSDispatch2 *primaryLayerObject =
@@ -10832,8 +10928,84 @@ namespace motion {
             return false;
         }
 
+        const std::size_t renderLayerIndex =
+            retainD3DPresentation ? 0u
+                                  : _runtime->nextD3DRenderLayer;
+        auto &renderLayerSlot =
+            _runtime->d3dRenderLayers[renderLayerIndex];
+        if(!retainD3DPresentation) {
+            _runtime->nextD3DRenderLayer =
+                (_runtime->nextD3DRenderLayer + 1u) %
+                _runtime->d3dRenderLayers.size();
+        }
+        iTJSDispatch2 *presentationLayerObject = nullptr;
+        if(retainD3DPresentation) {
+            iTJSDispatch2 *presentationParentObject =
+                primaryLayerObject;
+            if(auto *primary =
+                   resolveNativeLayer(primaryLayerObject)) {
+                for(tjs_uint index = 0;
+                    index < primary->GetCount(); ++index) {
+                    auto *candidate =
+                        primary->GetChildren(
+                            static_cast<tjs_int>(index));
+                    if(candidate && candidate->GetOwnerNoAddRef() &&
+                       candidate->GetName() == TJS_W("表-背景")) {
+                        presentationParentObject =
+                            candidate->GetOwnerNoAddRef();
+                        break;
+                    }
+                }
+            }
+            const bool presentationCreated =
+                _runtime->d3dPresentationLayer.Type() != tvtObject;
+            presentationLayerObject = ensureReusableLayerObject(
+                _runtime->d3dPresentationLayer, windowObject,
+                presentationParentObject,
+                static_cast<tTVPLayerType>(ltAlpha),
+                true);
+            auto *presentationLayer =
+                resolveNativeLayer(presentationLayerObject);
+            if(!presentationLayerObject || !presentationLayer) {
+                return false;
+            }
+            presentationLayer->SetName(
+                TJS_W("AetherKiriD3DPlayerSurface"));
+            presentationLayer->SetEnabled(false);
+            presentationLayer->SetHitType(htMask);
+            presentationLayer->SetHitThreshold(256);
+            if(presentationCreated) {
+                // The parent layer owns the static CG/viewer pixels. Keep the
+                // animated overlay above those pixels but below all authored
+                // click-wait/message/viewer child layers.
+                presentationLayer->BringToBack();
+            }
+            if(presentationCreated &&
+               !prepareLayerForRender(
+                   presentationLayerObject, adaptor->getWidth(),
+                   adaptor->getHeight(), 0x00000000)) {
+                return false;
+            }
+            // D3DAffineSourceMotion renders the complete 1280x720 scene, but
+            // the surrounding KAG layer owns the gallery's left save button
+            // and right motion-control list. A layer clip only constrains
+            // drawing into its image; it does not clip that image during
+            // composition. Make the layer itself the authored center preview
+            // width and offset the full source image instead.
+            const int previewLeft =
+                std::min(128, adaptor->getWidth());
+            const int previewRight =
+                std::min(168, adaptor->getWidth() - previewLeft);
+            const int previewWidth =
+                std::max(1, adaptor->getWidth() -
+                                previewLeft - previewRight);
+            presentationLayer->SetPosition(previewLeft, 0);
+            presentationLayer->SetSize(previewWidth,
+                                       adaptor->getHeight());
+            presentationLayer->SetImagePosition(-previewLeft, 0);
+        }
         iTJSDispatch2 *renderLayerObject =
-            ensureReusableLayerObject(_runtime->internalRenderLayer,
+            ensureReusableLayerObject(renderLayerSlot,
                                       windowObject,
                                       primaryLayerObject,
                                       static_cast<tTVPLayerType>(ltAlpha),
@@ -10847,46 +11019,73 @@ namespace motion {
         }
 
         buildRenderCommands(adaptor->getWidth(), adaptor->getHeight());
-        executeLayerRenderCommands(renderLayerObject, true);
+        if(!executeLayerRenderCommands(renderLayerObject, true)) {
+            adaptor->setRenderedLayer(nullptr);
+            return false;
+        }
+        const char *motionDebug =
+            std::getenv("AETHERKIRI_MOTION_DEBUG");
+        if(LOGGER && motionDebug && *motionDebug &&
+           std::strcmp(motionDebug, "0") != 0 &&
+           markRenderDebugLogged("d3d-completed-frame|" + motionPath)) {
+            auto *debugLayer = resolveNativeLayer(renderLayerObject);
+            tTVPRect visibleBounds;
+            const bool hasVisibleBounds =
+                debugLayer && bitmapVisibleBounds(
+                                  debugLayer->GetMainImage(), visibleBounds);
+            LOGGER->info(
+                "motion d3d completed frame: motion={} retained={} prepared={} commands={} layer=[{}] pixels=[{}] visibleBounds={}",
+                motionPath, retainD3DPresentation ? 1 : 0,
+                _runtime->preparedRenderItems.size(),
+                _runtime->renderCommands.size(),
+                describeLayerForDebug(debugLayer),
+                debugLayer
+                    ? sampleBitmapStats(debugLayer->GetMainImage())
+                    : std::string("none"),
+                hasVisibleBounds
+                    ? fmt::format("[{},{},{},{}]", visibleBounds.left,
+                                  visibleBounds.top, visibleBounds.right,
+                                  visibleBounds.bottom)
+                    : std::string("none"));
+        }
 
-        // D3D backend still ends with copying pixels into the adaptor buffer,
-        // but it now consumes prepared items directly instead of recursing into
-        // renderToLayer().
+        // captureCanvas retains this rendered layer and copies it directly to
+        // the caller's destination. On the Godot backend that remains an
+        // ordered GPU copy, avoiding the old full-canvas GPU readback, CPU
+        // memcpy, and upload on every E-mote frame.
         tTJSNI_BaseLayer *layer = nullptr;
         if(TJS_FAILED(renderLayerObject->NativeInstanceSupport(
                TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
                reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
+            adaptor->setRenderedLayer(nullptr);
             return false;
         }
 
-        const int w = adaptor->getWidth();
-        const int h = adaptor->getHeight();
         const int layerW = static_cast<int>(layer->GetImageWidth());
         const int layerH = static_cast<int>(layer->GetImageHeight());
-        const auto *srcBuf = reinterpret_cast<const std::uint8_t *>(
-            layer->GetMainImagePixelBuffer());
-        auto srcPitch = layer->GetMainImagePixelBufferPitch();
-
-        if(!srcBuf || srcPitch <= 0 || layerW <= 0 || layerH <= 0) return false;
-
+        if(layerW <= 0 || layerH <= 0) {
+            adaptor->setRenderedLayer(nullptr);
+            return false;
+        }
         // Resize adaptor buffer if needed
-        if(w != layerW || h != layerH) {
+        if(adaptor->getWidth() != layerW ||
+           adaptor->getHeight() != layerH) {
             adaptor->setSize(layerW, layerH);
         }
-        adaptor->clearBuffer();
-
-        auto *dstBuf = adaptor->getBuffer();
-        const auto dstPitch = adaptor->getBufferPitch();
-        const int copyH = std::min(layerH, adaptor->getHeight());
-        const int copyRowBytes = std::min(
-            static_cast<int>(layerW * 4), dstPitch);
-
-        for(int y = 0; y < copyH; ++y) {
-            std::memcpy(dstBuf + dstPitch * y,
-                        srcBuf + srcPitch * y,
-                        static_cast<size_t>(copyRowBytes));
+        if(retainD3DPresentation) {
+            auto *presentationLayer =
+                resolveNativeLayer(presentationLayerObject);
+            if(!presentationLayer) {
+                adaptor->setRenderedLayer(nullptr);
+                return false;
+            }
+            presentationLayer->AssignMotionImages(layer);
+            adaptor->setRetainedPresentationLayer(
+                presentationLayerObject);
+            adaptor->setRenderedLayer(presentationLayerObject);
+        } else {
+            adaptor->setRenderedLayer(renderLayerObject);
         }
-
         return true;
     }
 

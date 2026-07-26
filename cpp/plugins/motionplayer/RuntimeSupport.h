@@ -277,6 +277,18 @@ namespace motion::detail {
         // Aligned to libkrkr2.so player+696: internal render layer consumed by
         // sub_6CE7D8 / sub_6CE938 style post-draw update.
         tTJSVariant internalRenderLayer;
+        // D3DEmote exposes the completed full-canvas texture to a visible
+        // KiriKiri layer by reference. Repainting that same texture on the
+        // next tick forces a full-size copy-on-write clone. Keep two private
+        // render surfaces per Player so one can remain visible while the
+        // other is cleared and rebuilt.
+        std::array<tTJSVariant, 2> d3dRenderLayers;
+        std::size_t nextD3DRenderLayer = 0;
+        // Stable visible endpoint for D3DAffineSourceMotion scripts that
+        // present Player.draw() directly instead of calling captureCanvas().
+        // AssignMotionImages swaps completed scratch textures into this layer
+        // without copying or sharing the texture repainted on the next tick.
+        tTJSVariant d3dPresentationLayer;
         // Visible presentation surface used by Yuzu/KAG no-separate title
         // motions when the scripted target has full-screen transition children.
         tTJSVariant presentationRenderLayer;
@@ -351,6 +363,7 @@ namespace motion::detail {
             tTJSVariant leafLayer;
             tTJSVariant composedLayer;
             tTJSVariant maskLayer;
+            tTJSVariant unionMaskLayer;
             bool leafValid = false;
             bool outputValid = false;
             bool maskValid = false;
@@ -523,12 +536,26 @@ namespace motion::detail {
             tTJSVariant leafLayer;
             tTJSVariant composedLayer;
             tTJSVariant maskLayer;
+            tTJSVariant unionMaskLayer;
             std::array<int, 4> builtRect{0, 0, 0, 0};
             bool leafBuilt = false;
             bool composedBuilt = false;
             bool executedDirect = false;
         };
         std::vector<PreparedRenderItem> preparedRenderItems;  // player+936/944
+        // Parent motion players propagate a large shared variable table to
+        // every nested E-mote part. Remember the last inherited values so an
+        // unchanged input does not dirty the entire child model again.
+        std::unordered_map<std::string, double> inheritedVariableInputs;
+        // Nested motion players can keep their flattened render description
+        // until either their evaluated layer state or inherited draw affine
+        // changes. Top-level players still rebuild every animated tick.
+        std::uint64_t layerStateGeneration = 0;
+        std::uint64_t preparedLayerStateGeneration = 0;
+        std::array<double, 6> preparedDrawAffineMatrix{
+            1.0, 0.0, 0.0, 1.0, 0.0, 0.0
+        };
+        bool preparedRenderItemsValid = false;
         std::vector<RenderCommand> renderCommands;
 
         // Per-node evaluation time array.
@@ -571,6 +598,9 @@ namespace motion::detail {
             emoteCommandOutputCacheGeneration = 0;
             emoteCommandOutputCacheHits = 0;
             emoteCommandLeafCacheHits = 0;
+            inheritedVariableInputs.clear();
+            preparedRenderItems.clear();
+            preparedRenderItemsValid = false;
             clearPresentationRenderReuse();
         }
     };
@@ -580,6 +610,14 @@ namespace motion::detail {
                                      const std::string &owner,
                                      const std::string &label,
                                      bool allowLabelFallback = true);
+    struct MotionCompositionEntryPoint {
+        std::string owner;
+        std::string label;
+    };
+    MotionCompositionEntryPoint resolveMotionCompositionEntryPoint(
+        const MotionSnapshot &snapshot,
+        const std::string &fallbackOwner,
+        const std::string &fallbackLabel);
 
     std::string narrow(const ttstr &value);
     ttstr widen(const std::string &value);

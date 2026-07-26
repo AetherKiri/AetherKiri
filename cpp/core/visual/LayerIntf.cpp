@@ -16,13 +16,16 @@
 
 #include <atomic>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <spdlog/spdlog.h>
 #ifdef __ANDROID__
@@ -94,6 +97,229 @@ bool TVPFreeUnusedLayerCache = false;
 static std::atomic<tjs_int> TVPLayerInstanceCount{0};
 static std::atomic<int64_t> TVPLayerBitmapTotalBytes{0};
 static std::atomic<bool> TVPFullGpuCompletionRequested{false};
+static std::mutex TVPExchangedKagPageMutex;
+static std::unordered_set<const tTJSNI_BaseLayer *>
+    TVPExchangedHiddenKagPages;
+static std::unordered_map<const tTJSNI_BaseLayer *, bool>
+    TVPKagPageLastObservedVisibility;
+struct TVPHiddenKagAssignmentStreak {
+    std::chrono::steady_clock::time_point last{};
+    std::size_t count = 0;
+};
+static std::unordered_map<const tTJSNI_BaseLayer *,
+                          TVPHiddenKagAssignmentStreak>
+    TVPHiddenKagAssignmentStreaks;
+static std::unordered_set<const tTJSNI_BaseLayer *>
+    TVPMotionSwapAssignmentTargets;
+
+static bool TVPIsKagBackgroundPair(const tTJSNI_BaseLayer *first,
+                                   const tTJSNI_BaseLayer *second) {
+    if(!first || !second) {
+        return false;
+    }
+    return (first->GetName() == TJS_W("表-背景") &&
+            second->GetName() == TJS_W("裏-背景")) ||
+           (first->GetName() == TJS_W("裏-背景") &&
+            second->GetName() == TJS_W("表-背景"));
+}
+
+static bool TVPIsKagTransitionMotionAssignment(
+    const tTJSNI_BaseLayer *target,
+    const tTJSNI_BaseLayer *source) {
+    if(!target || !source || !target->GetVisible() ||
+       !source->GetName().IsEmpty() || source->GetVisible() ||
+       target->GetWidth() != source->GetWidth() ||
+       target->GetHeight() != source->GetHeight()) {
+        return false;
+    }
+
+    const std::string target_name = target->GetName().AsStdString();
+    constexpr const char *transition_prefix = "trans_";
+    if(target_name.rfind(transition_prefix, 0) != 0) {
+        return false;
+    }
+
+    auto *page = target->GetParent();
+    auto *page_root = page ? page->GetParent() : nullptr;
+    if(!page || !page_root || source->GetParent() != page_root) {
+        return false;
+    }
+    for(tjs_uint index = 0; index < page_root->GetCount(); ++index) {
+        auto *candidate =
+            page_root->GetChildren(static_cast<tjs_int>(index));
+        if(candidate != page &&
+           TVPIsKagBackgroundPair(page, candidate)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void TVPClearExchangedKagPageRouting(
+    const tTJSNI_BaseLayer *first,
+    const tTJSNI_BaseLayer *second) {
+    std::lock_guard<std::mutex> lock(TVPExchangedKagPageMutex);
+    TVPExchangedHiddenKagPages.erase(first);
+    TVPExchangedHiddenKagPages.erase(second);
+    TVPHiddenKagAssignmentStreaks.clear();
+}
+
+static tTJSNI_BaseLayer *TVPResolveExchangedKagAssignmentTarget(
+    tTJSNI_BaseLayer *target,
+    tTJSNI_BaseLayer *source) {
+    if(!target || !source || target->GetName().IsEmpty() ||
+       !target->GetVisible() ||
+       !source->GetName().IsEmpty() || source->GetVisible()) {
+        return nullptr;
+    }
+
+    auto *hidden_page = target->GetParent();
+    auto *page_root = hidden_page ? hidden_page->GetParent() : nullptr;
+    if(!hidden_page || !page_root || source->GetParent() != page_root) {
+        return nullptr;
+    }
+
+    const bool page_visible =
+        hidden_page->GetVisible() &&
+        hidden_page->GetParentVisible();
+    bool known_stale = false;
+    {
+        std::lock_guard<std::mutex> lock(TVPExchangedKagPageMutex);
+        auto &last_visible =
+            TVPKagPageLastObservedVisibility[hidden_page];
+        if(page_visible) {
+            last_visible = true;
+            TVPExchangedHiddenKagPages.erase(hidden_page);
+            TVPHiddenKagAssignmentStreaks.erase(target);
+            return nullptr;
+        }
+        if(last_visible) {
+            TVPExchangedHiddenKagPages.insert(hidden_page);
+        }
+        last_visible = false;
+        known_stale =
+            TVPExchangedHiddenKagPages.find(hidden_page) !=
+            TVPExchangedHiddenKagPages.end();
+    }
+
+    tTJSNI_BaseLayer *visible_page = nullptr;
+    for(tjs_uint page_index = 0;
+        page_index < page_root->GetCount(); ++page_index) {
+        auto *candidate_page =
+            page_root->GetChildren(static_cast<tjs_int>(page_index));
+        if(!candidate_page || candidate_page == hidden_page ||
+           !candidate_page->GetVisible() ||
+           !candidate_page->GetParentVisible() ||
+           !TVPIsKagBackgroundPair(hidden_page, candidate_page)) {
+            continue;
+        }
+        visible_page = candidate_page;
+        break;
+    }
+    if(!visible_page) {
+        return nullptr;
+    }
+
+    const auto normalized_layer_name = [](const ttstr &name) {
+        std::string value = name.AsStdString();
+        constexpr const char *transition_prefix = "trans_";
+        if(value.rfind(transition_prefix, 0) == 0) {
+            value.erase(0, std::strlen(transition_prefix));
+        }
+        return value;
+    };
+    const auto target_name =
+        normalized_layer_name(target->GetName());
+    for(tjs_uint child_index = 0;
+        child_index < visible_page->GetCount(); ++child_index) {
+        auto *candidate =
+            visible_page->GetChildren(
+                static_cast<tjs_int>(child_index));
+        if(!candidate || candidate == target ||
+           !candidate->GetVisible() ||
+           !candidate->GetParentVisible() ||
+           normalized_layer_name(candidate->GetName()) != target_name ||
+           candidate->GetWidth() != target->GetWidth() ||
+           candidate->GetHeight() != target->GetHeight()) {
+            continue;
+        }
+        return known_stale ? candidate : nullptr;
+    }
+
+    if(!known_stale) {
+        bool visible_page_has_content_layer = false;
+        for(tjs_uint child_index = 0;
+            child_index < visible_page->GetCount(); ++child_index) {
+            auto *candidate = visible_page->GetChildren(
+                static_cast<tjs_int>(child_index));
+            if(candidate && candidate->GetVisible() &&
+               candidate->GetParentVisible() &&
+               candidate->GetWidth() >= target->GetWidth() / 2 &&
+               candidate->GetHeight() >= target->GetHeight() / 2) {
+                visible_page_has_content_layer = true;
+                break;
+            }
+        }
+        if(visible_page_has_content_layer ||
+           hidden_page->DebugIsInTransition() ||
+           visible_page->DebugIsInTransition()) {
+            std::lock_guard<std::mutex> lock(
+                TVPExchangedKagPageMutex);
+            TVPHiddenKagAssignmentStreaks.erase(target);
+            return nullptr;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        bool persistent_hidden_target = false;
+        {
+            std::lock_guard<std::mutex> lock(
+                TVPExchangedKagPageMutex);
+            auto &streak =
+                TVPHiddenKagAssignmentStreaks[target];
+            if(streak.count == 0 ||
+               now - streak.last >
+                   std::chrono::milliseconds(250)) {
+                streak.count = 0;
+            }
+            streak.last = now;
+            persistent_hidden_target = ++streak.count >= 12;
+        }
+        if(!persistent_hidden_target) {
+            return nullptr;
+        }
+    }
+    // The page exchange can leave a continuously animated KAG layer attached
+    // to the now-hidden page while the visible page contains only message and
+    // click-wait layers. There is no destination to copy into in that shape;
+    // move the authored layer itself to the active page. Preserve its order
+    // so it remains below the page's message/UI children. Subsequent KAG page
+    // exchanges carry the same live layer normally.
+    const auto target_order = target->GetOrderIndex();
+    {
+        std::lock_guard<std::mutex> lock(TVPExchangedKagPageMutex);
+        TVPHiddenKagAssignmentStreaks.erase(target);
+        TVPMotionSwapAssignmentTargets.insert(target);
+    }
+    target->SetParent(visible_page);
+    if(visible_page->GetCount() > 0) {
+        target->SetOrderIndex(
+            std::min<tjs_int>(
+                static_cast<tjs_int>(target_order),
+                static_cast<tjs_int>(visible_page->GetCount() - 1)));
+    }
+    if(auto logger = spdlog::get("plugin")) {
+        const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
+        if(debug && *debug && *debug != '0') {
+            logger->info(
+                "motion reparent stale KAG page target: target={} "
+                "visiblePage={} order={}",
+                target->GetName().AsStdString(),
+                visible_page->GetName().AsStdString(),
+                target->GetOrderIndex());
+        }
+    }
+    return target;
+}
 
 tjs_int TVPGetLayerCount() { return TVPLayerInstanceCount.load(std::memory_order_relaxed); }
 tjs_uint64 TVPGetLayerTotalBitmapBytes() {
@@ -4527,6 +4753,31 @@ void tTJSNI_BaseLayer::AllocateDefaultImage() {
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
+    if(src && src != this && src->GetName().IsEmpty() &&
+       !src->GetVisible()) {
+        bool use_motion_swap =
+            TVPIsKagTransitionMotionAssignment(this, src);
+        {
+            std::lock_guard<std::mutex> lock(
+                TVPExchangedKagPageMutex);
+            use_motion_swap = use_motion_swap ||
+                TVPMotionSwapAssignmentTargets.find(this) !=
+                TVPMotionSwapAssignmentTargets.end();
+        }
+        if(use_motion_swap) {
+            AssignMotionImages(src);
+            return;
+        }
+    }
+    if(auto *visible_target =
+           TVPResolveExchangedKagAssignmentTarget(this, src)) {
+        if(visible_target != this) {
+            visible_target->AssignImages(src);
+            return;
+        }
+        AssignMotionImages(src);
+        return;
+    }
     // assign images
     bool main_changed = false;
     bool province_changed = false;
@@ -4593,6 +4844,13 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
 void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
     if(!src || src == this) {
         return;
+    }
+    if(auto *visible_target =
+           TVPResolveExchangedKagAssignmentTarget(this, src)) {
+        if(visible_target != this) {
+            visible_target->AssignMotionImages(src);
+            return;
+        }
     }
     if(!src->MainImage) {
         AssignImages(src);
@@ -10863,6 +11121,9 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
     if(transsource && transsource->TransSrc == this) {
         TVPThrowExceptionMessage(TVPTransitionMutualSource);
     }
+    if(TVPIsKagBackgroundPair(this, transsource)) {
+        TVPClearExchangedKagPageRouting(this, transsource);
+    }
 
     // pointers which must be released at last...
     iTVPTransHandlerProvider *pro = nullptr;
@@ -10920,10 +11181,7 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
                 : -1;
 
         const bool kag_background_pair =
-            (GetName() == TJS_W("表-背景") &&
-             transsource && transsource->GetName() == TJS_W("裏-背景")) ||
-            (GetName() == TJS_W("裏-背景") &&
-             transsource && transsource->GetName() == TJS_W("表-背景"));
+            TVPIsKagBackgroundPair(this, transsource);
         if(withchildren && kag_background_pair && MainImage &&
            transsource && transsource->MainImage &&
            destLayerWidth > 0 && destLayerHeight > 0 &&

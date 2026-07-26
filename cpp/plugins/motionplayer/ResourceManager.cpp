@@ -6,6 +6,7 @@
 #include "tjsDictionary.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstring>
@@ -196,6 +197,135 @@ namespace {
         }
     }
 
+    std::uint16_t readU16LE(const std::uint8_t *data) {
+        return static_cast<std::uint16_t>(data[0]) |
+            (static_cast<std::uint16_t>(data[1]) << 8);
+    }
+
+    std::uint32_t readU32LE(const std::uint8_t *data) {
+        return static_cast<std::uint32_t>(data[0]) |
+            (static_cast<std::uint32_t>(data[1]) << 8) |
+            (static_cast<std::uint32_t>(data[2]) << 16) |
+            (static_cast<std::uint32_t>(data[3]) << 24);
+    }
+
+    void writeU32LE(std::uint8_t *data, const std::uint32_t value) {
+        data[0] = static_cast<std::uint8_t>(value);
+        data[1] = static_cast<std::uint8_t>(value >> 8);
+        data[2] = static_cast<std::uint8_t>(value >> 16);
+        data[3] = static_cast<std::uint8_t>(value >> 24);
+    }
+
+    bool isPsbHeader(const std::uint8_t *data, const std::size_t size) {
+        return size >= 56 && data[0] == 'P' && data[1] == 'S' &&
+            data[2] == 'B' && data[3] == '\0';
+    }
+
+    bool hasSanePsbV4BaseHeader(const std::uint8_t *data,
+                                const std::size_t size) {
+        if(!isPsbHeader(data, size) || readU16LE(data + 4) < 4) {
+            return false;
+        }
+        const auto headerLength = readU32LE(data + 8);
+        const auto namesOffset = readU32LE(data + 12);
+        const auto entryOffset = readU32LE(data + 36);
+        return headerLength >= 56 && headerLength <= size &&
+            namesOffset >= headerLength && namesOffset < size &&
+            entryOffset >= headerLength && entryOffset < size;
+    }
+
+    bool hasSanePsbV4ExtraOffsets(const std::uint8_t *data,
+                                  const std::size_t size) {
+        const auto offsetsOffset = readU32LE(data + 44);
+        const auto lengthsOffset = readU32LE(data + 48);
+        const auto dataOffset = readU32LE(data + 52);
+        return offsetsOffset >= 56 && offsetsOffset < size &&
+            lengthsOffset >= offsetsOffset && lengthsOffset < size &&
+            dataOffset >= lengthsOffset && dataOffset <= size;
+    }
+
+    bool hasSanePsbV4ExtraHeader(const std::uint8_t *data,
+                                 const std::size_t size) {
+        return hasSanePsbV4BaseHeader(data, size) &&
+            hasSanePsbV4ExtraOffsets(data, size);
+    }
+
+    bool invokeEmoteDecryptClosure(const tTJSVariant &decryptFunc,
+                                   std::uint8_t *data,
+                                   const std::size_t size) {
+        if(!data || size > std::numeric_limits<unsigned int>::max()) {
+            LOGGER->error(
+                "E-mote PSB decrypt callback received invalid buffer size: {}",
+                size);
+            return false;
+        }
+
+        auto *accessor =
+            new CBinaryAccessor(data, static_cast<unsigned int>(size));
+        tTJSVariant buffer(accessor, accessor);
+        accessor->Release();
+        tTJSVariant length(static_cast<tjs_int64>(size));
+        tTJSVariant *params[] = { &buffer, &length };
+        const auto closure = decryptFunc.AsObjectClosureNoAddRef();
+        const tjs_error status =
+            closure.FuncCall(0, nullptr, nullptr, nullptr, 2, params, nullptr);
+        if(TJS_FAILED(status)) {
+            LOGGER->error("E-mote PSB decrypt callback failed: {}", status);
+            return false;
+        }
+        return true;
+    }
+
+    bool recoverLegacyPsbV4ExtraHeader(
+        const tTJSVariant &decryptFunc, std::uint8_t *data,
+        const std::size_t size) {
+        if(!hasSanePsbV4BaseHeader(data, size) ||
+           hasSanePsbV4ExtraHeader(data, size) ||
+           (readU16LE(data + 6) & 1) == 0) {
+            return true;
+        }
+
+        // Older title callbacks decrypt the 36-byte v3 header and leave the
+        // three v4 extra-resource offsets encrypted.  Use the callback itself
+        // as a cipher oracle: first capture its header keystream, then ask its
+        // payload branch to continue at byte 44 with the same cipher state.
+        // This keeps title-specific keys and algorithms inside the callback.
+        std::array<std::uint8_t, 56> keystream{};
+        keystream[0] = 'P';
+        keystream[1] = 'S';
+        keystream[2] = 'B';
+        keystream[4] = 4;
+        keystream[6] = 1;
+        if(!invokeEmoteDecryptClosure(
+               decryptFunc, keystream.data(), keystream.size())) {
+            return false;
+        }
+
+        std::array<std::uint8_t, 56> continuation{};
+        continuation[0] = 'P';
+        continuation[1] = 'S';
+        continuation[2] = 'B';
+        continuation[4] = 4;
+        continuation[6] = 3;
+        std::array<std::uint8_t, 36> desiredHeader{};
+        writeU32LE(desiredHeader.data(), 44);
+        writeU32LE(desiredHeader.data() + 16, 56);
+        for(std::size_t index = 0; index < desiredHeader.size(); ++index) {
+            continuation[8 + index] =
+                desiredHeader[index] ^ keystream[8 + index];
+        }
+        std::copy_n(data + 44, 12, continuation.data() + 44);
+        if(!invokeEmoteDecryptClosure(
+               decryptFunc, continuation.data(), continuation.size()) ||
+           !hasSanePsbV4ExtraOffsets(continuation.data(), size)) {
+            LOGGER->warn(
+                "E-mote PSB v4 extra-resource header remains encrypted");
+            return false;
+        }
+        std::copy_n(continuation.data() + 44, 12, data + 44);
+        return true;
+    }
+
 }
 
 motion::ResourceManager::ResourceManager() : _state(std::make_shared<State>()) {}
@@ -241,27 +371,8 @@ bool motion::ResourceManager::applyEmotePSBDecryptFunc(
        !_decryptFunc.AsObjectNoAddRef()) {
         return true;
     }
-    if(!data || size > std::numeric_limits<unsigned int>::max()) {
-        LOGGER->error(
-            "E-mote PSB decrypt callback received invalid buffer size: {}",
-            size);
-        return false;
-    }
-
-    auto *accessor =
-        new CBinaryAccessor(data, static_cast<unsigned int>(size));
-    tTJSVariant buffer(accessor, accessor);
-    accessor->Release();
-    tTJSVariant length(static_cast<tjs_int64>(size));
-    tTJSVariant *params[] = { &buffer, &length };
-    const auto closure = _decryptFunc.AsObjectClosureNoAddRef();
-    const tjs_error status =
-        closure.FuncCall(0, nullptr, nullptr, nullptr, 2, params, nullptr);
-    if(TJS_FAILED(status)) {
-        LOGGER->error("E-mote PSB decrypt callback failed: {}", status);
-        return false;
-    }
-    return true;
+    return invokeEmoteDecryptClosure(_decryptFunc, data, size) &&
+        recoverLegacyPsbV4ExtraHeader(_decryptFunc, data, size);
 }
 
 tjs_error motion::ResourceManager::setEmotePSBDecryptSeed(tTJSVariant *,
