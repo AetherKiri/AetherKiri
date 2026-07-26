@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-07-25
+Last updated: 2026-07-27
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -45,6 +45,12 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | GINKA | Windows x64 debug app | Import, startup, title/menu rendering, game-data loading, background and character rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 | NEKOPARA Vol. 1 | macOS debug app | Startup, title/menu rendering, data-load and first-save flow, scene/text rendering, E-mote character rendering and animation, rapid dialogue input, and character-layer click forwarding | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | まいてつ -Pure Station- | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, E-mote character rendering and animation, gallery CG navigation/compositing and layer ordering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| まいてつ Last Run!! | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, E-mote character rendering and animation, gallery CG navigation/compositing and layer ordering, audio playback, input stress, and FPS smoke | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 恋騎士 Purely☆Kiss | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 銃騎士Cutie☆Bullet | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 聖騎士Melty☆Lovers | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 将軍様はお年頃 | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, new-game flow, scene/name/dialogue text rendering, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi), yorkyang2333 (yangyork097@gmail.com) | Local game files are not committed. |
 
 ## How To Add A Game
 
