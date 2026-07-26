@@ -66,6 +66,8 @@
 
 #include <atomic>
 #include <cstdlib>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -2627,6 +2629,136 @@ private:
     iTJSDispatch2 *destination_;
 };
 
+class tTVPMergeMissingObjectMembersCallback final : public tTJSDispatch {
+public:
+    explicit tTVPMergeMissingObjectMembersCallback(
+        iTJSDispatch2 *destination) :
+        destination_(destination) {}
+
+    tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                       tTJSVariant *result, tjs_int numparams,
+                       tTJSVariant **param, iTJSDispatch2 *) override {
+        if(numparams < 3)
+            return TJS_E_BADPARAMCOUNT;
+
+        const tjs_uint32 flags =
+            static_cast<tjs_uint32>(param[1]->AsInteger());
+        if(!(flags & TJS_HIDDENMEMBER)) {
+            const ttstr name(*param[0]);
+            tTJSVariant existing;
+            const tjs_error get_error =
+                destination_->PropGet(TJS_IGNOREPROP, name.c_str(), nullptr,
+                                      &existing, destination_);
+            if(get_error == TJS_E_MEMBERNOTFOUND) {
+                const tjs_error set_error = destination_->PropSet(
+                    TJS_MEMBERENSURE | TJS_IGNOREPROP | flags, name.c_str(),
+                    nullptr, param[2], destination_);
+                if(TJS_FAILED(set_error))
+                    return set_error;
+            } else if(TJS_FAILED(get_error)) {
+                return get_error;
+            }
+        }
+        if(result)
+            *result = static_cast<tjs_int>(1);
+        return TJS_S_OK;
+    }
+
+private:
+    iTJSDispatch2 *destination_;
+};
+
+using tTVPGlobalFunctionSnapshot =
+    std::vector<std::pair<ttstr, tTJSVariant>>;
+
+static bool TVPVariantIsFunction(const tTJSVariant &value) {
+    if(value.Type() != tvtObject)
+        return false;
+    const tTJSVariantClosure closure = value.AsObjectClosureNoAddRef();
+    return closure.Object &&
+           closure.IsInstanceOf(0, nullptr, nullptr, TJS_W("Function"),
+                                nullptr) == TJS_S_TRUE;
+}
+
+class tTVPCollectGlobalFunctionsCallback final : public tTJSDispatch {
+public:
+    explicit tTVPCollectGlobalFunctionsCallback(
+        tTVPGlobalFunctionSnapshot &snapshot) :
+        snapshot_(snapshot) {}
+
+    tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                       tTJSVariant *result, tjs_int numparams,
+                       tTJSVariant **param, iTJSDispatch2 *) override {
+        if(numparams < 3)
+            return TJS_E_BADPARAMCOUNT;
+
+        const tjs_uint32 flags =
+            static_cast<tjs_uint32>(param[1]->AsInteger());
+        if(!(flags & TJS_HIDDENMEMBER) &&
+           TVPVariantIsFunction(*param[2])) {
+            snapshot_.emplace_back(ttstr(*param[0]), *param[2]);
+        }
+        if(result)
+            *result = static_cast<tjs_int>(1);
+        return TJS_S_OK;
+    }
+
+private:
+    tTVPGlobalFunctionSnapshot &snapshot_;
+};
+
+static tTVPGlobalFunctionSnapshot TVPCaptureGlobalFunctions() {
+    tTVPGlobalFunctionSnapshot snapshot;
+    tTJS *engine = TVPGetScriptEngine();
+    iTJSDispatch2 *global =
+        engine ? engine->GetGlobalNoAddRef() : nullptr;
+    if(!global)
+        return snapshot;
+
+    auto *callback = new tTVPCollectGlobalFunctionsCallback(snapshot);
+    tTJSVariantClosure closure(callback);
+    try {
+        global->EnumMembers(TJS_IGNOREPROP, &closure, global);
+        callback->Release();
+    } catch(...) {
+        callback->Release();
+        throw;
+    }
+    return snapshot;
+}
+
+static size_t TVPRestoreMissingGlobalFunctionMembers(
+    const tTVPGlobalFunctionSnapshot &snapshot) {
+    tTJS *engine = TVPGetScriptEngine();
+    iTJSDispatch2 *global =
+        engine ? engine->GetGlobalNoAddRef() : nullptr;
+    if(!global)
+        return 0;
+
+    size_t restored_functions = 0;
+    for(const auto &[name, original] : snapshot) {
+        tTJSVariant replacement;
+        if(TJS_FAILED(global->PropGet(TJS_IGNOREPROP, name.c_str(), nullptr,
+                                      &replacement, global)) ||
+           !TVPVariantIsFunction(replacement)) {
+            continue;
+        }
+
+        const tTJSVariantClosure original_closure =
+            original.AsObjectClosureNoAddRef();
+        const tTJSVariantClosure replacement_closure =
+            replacement.AsObjectClosureNoAddRef();
+        if(original_closure.Object == replacement_closure.Object)
+            continue;
+
+        if(TVPMergeMissingObjectMembers(replacement_closure.Object,
+                                       original_closure.Object)) {
+            ++restored_functions;
+        }
+    }
+    return restored_functions;
+}
+
 static bool TVPReadPatchRuntimeRegistry(tTJSVariant &registry) {
     registry.Clear();
     try {
@@ -2669,6 +2801,25 @@ bool TVPMergeObjectMembers(iTJSDispatch2 *destination,
         return false;
 
     auto *callback = new tTVPMergeObjectMembersCallback(destination);
+    tTJSVariantClosure closure(callback);
+    try {
+        const bool merged = TJS_SUCCEEDED(
+            source->EnumMembers(TJS_IGNOREPROP, &closure, source));
+        callback->Release();
+        return merged;
+    } catch(...) {
+        callback->Release();
+        throw;
+    }
+}
+
+bool TVPMergeMissingObjectMembers(iTJSDispatch2 *destination,
+                                  iTJSDispatch2 *source) {
+    if(!destination || !source)
+        return false;
+
+    auto *callback =
+        new tTVPMergeMissingObjectMembersCallback(destination);
     tTJSVariantClosure closure(callback);
     try {
         const bool merged = TJS_SUCCEEDED(
@@ -3144,6 +3295,12 @@ void TVPExecuteStartupScript() {
         ttstr patch = TVPGetAppPath() + "patch.tjs";
         if(TVPIsExistentStorageNoSearch(patch)) {
             TVPInstallPatchWindowPrerequisites();
+            // Root-level compatibility patches run after the framework
+            // startup scripts. If one replaces a global function, retain
+            // nested helpers that the replacement did not redefine while
+            // leaving every member explicitly supplied by the patch intact.
+            const tTVPGlobalFunctionSnapshot savedGlobalFunctions =
+                TVPCaptureGlobalFunctions();
             // A late compatibility patch can replace framework classes and
             // their singleton instances.  Preserve runtime extension hooks
             // registered by game scripts, then merge them into the new
@@ -3155,6 +3312,14 @@ void TVPExecuteStartupScript() {
             try {
                 TVPExecuteStorage(patch);
             } catch(...) {
+            }
+            const size_t restoredFunctionCount =
+                TVPRestoreMissingGlobalFunctionMembers(
+                    savedGlobalFunctions);
+            if(restoredFunctionCount != 0) {
+                spdlog::info(
+                    "Restored missing members on {} late-patched functions",
+                    restoredFunctionCount);
             }
             if(hasSavedRuntimeRegistry) {
                 tTJSVariant replacementRuntimeRegistry;

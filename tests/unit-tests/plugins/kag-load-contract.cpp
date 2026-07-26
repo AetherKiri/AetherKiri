@@ -121,6 +121,41 @@ TEST_CASE("late patches preserve registered load hooks") {
           TJS_W("runtime-registration"));
 }
 
+TEST_CASE("late function patches inherit only members they omit") {
+    ScriptEngineOwner engine;
+    engine->ExecScript(TJS_W(
+        "function originalFunction() {}\n"
+        "originalFunction.originalOnly = function() {\n"
+        "  return \"from-original\";\n"
+        "};\n"
+        "originalFunction.shared = function() {\n"
+        "  return \"original-shared\";\n"
+        "};\n"
+        "function replacementFunction() {}\n"
+        "replacementFunction.patchOnly = \"from-patch\";\n"
+        "replacementFunction.shared = function() {\n"
+        "  return \"patch-shared\";\n"
+        "};\n"));
+
+    tTJSVariant original;
+    tTJSVariant replacement;
+    engine->EvalExpression(TJS_W("originalFunction"), &original);
+    engine->EvalExpression(TJS_W("replacementFunction"), &replacement);
+    REQUIRE(TVPMergeMissingObjectMembers(replacement.AsObjectNoAddRef(),
+                                         original.AsObjectNoAddRef()));
+
+    CHECK(evaluateString(
+              engine.operator->(),
+              TJS_W("replacementFunction.originalOnly()")) ==
+          TJS_W("from-original"));
+    CHECK(evaluateString(engine.operator->(),
+                         TJS_W("replacementFunction.patchOnly")) ==
+          TJS_W("from-patch"));
+    CHECK(evaluateString(engine.operator->(),
+                         TJS_W("replacementFunction.shared()")) ==
+          TJS_W("patch-shared"));
+}
+
 TEST_CASE("late patches recover a skipped load trigger singleton") {
     ScriptEngineOwner engine;
     engine->ExecScript(TJS_W(

@@ -86,6 +86,8 @@ extern const tjs_char *TVPGetPatchRuntimeRegistryExpression();
 extern const tjs_char *TVPGetPatchRuntimeInstanceRecoveryScript();
 extern bool TVPMergeObjectMembers(iTJSDispatch2 *destination,
                                   iTJSDispatch2 *source);
+extern bool TVPMergeMissingObjectMembers(iTJSDispatch2 *destination,
+                                         iTJSDispatch2 *source);
 
 extern void TVPArmKagNoTransWaitRepair();
 
