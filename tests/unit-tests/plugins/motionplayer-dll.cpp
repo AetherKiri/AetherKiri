@@ -169,6 +169,25 @@ TEST_CASE("motion presentation excludes structural binder layers") {
         motion::internal::presentationLayerTypeCanReceivePixels(ltAlpha));
 }
 
+TEST_CASE("motionplayer identifies full-canvas split composition planes") {
+    const std::array<int, 4> canvasRect{0, 0, 1280, 720};
+    const std::array<int, 4> partialRect{20, 0, 1280, 720};
+
+    REQUIRE(motion::internal::isFullCanvasCompositeRenderRoot(
+        true, false, false, 255, canvasRect, 1280, 720));
+    REQUIRE_FALSE(motion::internal::isFullCanvasCompositeRenderRoot(
+        true, true, false, 255, canvasRect, 1280, 720));
+    REQUIRE_FALSE(motion::internal::isFullCanvasCompositeRenderRoot(
+        true, false, false, 255, partialRect, 1280, 720));
+
+    REQUIRE(motion::internal::isFullCanvasDirectRenderPlane(
+        true, false, false, false, 0, 255, canvasRect, 1280, 720));
+    REQUIRE_FALSE(motion::internal::isFullCanvasDirectRenderPlane(
+        true, false, false, false, 16, 255, canvasRect, 1280, 720));
+    REQUIRE_FALSE(motion::internal::isFullCanvasDirectRenderPlane(
+        true, false, false, false, 0, 255, partialRect, 1280, 720));
+}
+
 #if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
 TEST_CASE("motionplayer treats mode-6 difference leaves as pass-through") {
     REQUIRE(motion::internal::isDifferenceAlphaPassThroughLeaf(

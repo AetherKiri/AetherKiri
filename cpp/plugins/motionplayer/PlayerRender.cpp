@@ -10438,26 +10438,67 @@ namespace motion {
         for(size_t i = 0; i < _runtime->renderCommands.size(); ++i) {
             executionOrder.push_back(i);
         }
-        if(motionPath.find("日々姫15a.psb") != std::string::npos) {
-            // This Last Run gallery motion authors its full-canvas custom
-            // background after the character root in PSB traversal order.
-            // D3D renders that custom plane first, then the transparent
-            // character composition over it. Preserve every internal
-            // character/mask dependency and only move this independent
-            // top-level background ahead of the root.
-            const auto background = std::find_if(
-                executionOrder.begin(), executionOrder.end(),
+        int commandCanvasWidth = 0;
+        int commandCanvasHeight = 0;
+        for(const auto &command : _runtime->renderCommands) {
+            commandCanvasWidth =
+                std::max(commandCanvasWidth, command.clipRect[2]);
+            commandCanvasHeight =
+                std::max(commandCanvasHeight, command.clipRect[3]);
+        }
+        // A split motion can flatten one full-canvas composite root followed
+        // by its independent background transform chain. Executing the root
+        // as one off-screen command before the later direct-copy plane would
+        // erase the complete composite. Detect that authored structure rather
+        // than matching a motion, character, label, or source filename, and
+        // place only the terminal canvas plane below the composite root.
+        const auto compositeRoot = std::find_if(
+            executionOrder.begin(), executionOrder.end(),
+            [&](size_t index) {
+                const auto &command = _runtime->renderCommands[index];
+                return internal::isFullCanvasCompositeRenderRoot(
+                    command.groupOnly, command.hasRenderParent,
+                    command.alphaMaskOnly, command.opacity,
+                    command.clipRect, commandCanvasWidth,
+                    commandCanvasHeight);
+            });
+        if(compositeRoot != executionOrder.end()) {
+            const auto &rootCommand =
+                _runtime->renderCommands[*compositeRoot];
+            const auto canvasPlane = std::find_if(
+                std::next(compositeRoot), executionOrder.end(),
                 [&](size_t index) {
-                    const auto &command =
-                        _runtime->renderCommands[index];
-                    return !command.hasRenderParent &&
-                           !command.alphaMaskOnly &&
-                           command.nodeLabel == "■追加パーツ" &&
-                           command.sourceKey == "src/#custom/10";
+                    const auto &command = _runtime->renderCommands[index];
+                    return command.renderScopeId ==
+                               rootCommand.renderScopeId &&
+                        !internal::isSyntheticMotionBlankSource(
+                            command.sourceKey) &&
+                        internal::isFullCanvasDirectRenderPlane(
+                            command.hasOwnSource, command.groupOnly,
+                            command.hasRenderParent, command.alphaMaskOnly,
+                            command.blendMode, command.opacity,
+                            command.clipRect, commandCanvasWidth,
+                            commandCanvasHeight);
                 });
-            if(background != executionOrder.end()) {
-                std::rotate(executionOrder.begin(), background,
-                            std::next(background));
+            if(canvasPlane != executionOrder.end()) {
+                const bool hasOnlyCompositeDependenciesAndBlankTransforms =
+                    std::all_of(
+                        std::next(compositeRoot), canvasPlane,
+                        [&](size_t index) {
+                            const auto &command =
+                                _runtime->renderCommands[index];
+                            return command.hasRenderParent ||
+                                (command.renderScopeId ==
+                                     rootCommand.renderScopeId &&
+                                 !command.groupOnly &&
+                                 !command.alphaMaskOnly &&
+                                 internal::isSyntheticMotionBlankSource(
+                                     command.sourceKey));
+                        });
+                if(hasOnlyCompositeDependenciesAndBlankTransforms) {
+                    std::rotate(compositeRoot, canvasPlane,
+                                std::next(canvasPlane));
+                }
             }
         }
 

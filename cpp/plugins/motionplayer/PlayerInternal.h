@@ -102,6 +102,46 @@ namespace internal {
                 policy->isSyntheticMotionBlankSource(sourceKey);
         }
 
+        inline bool renderClipCoversCanvas(
+            const std::array<int, 4> &clipRect,
+            int canvasWidth,
+            int canvasHeight) {
+            return canvasWidth > 0 && canvasHeight > 0 &&
+                clipRect[0] <= 0 && clipRect[1] <= 0 &&
+                clipRect[2] >= canvasWidth &&
+                clipRect[3] >= canvasHeight;
+        }
+
+        inline bool isFullCanvasCompositeRenderRoot(
+            bool groupOnly,
+            bool hasRenderParent,
+            bool alphaMaskOnly,
+            int opacity,
+            const std::array<int, 4> &clipRect,
+            int canvasWidth,
+            int canvasHeight) {
+            return groupOnly && !hasRenderParent && !alphaMaskOnly &&
+                opacity > 0 &&
+                renderClipCoversCanvas(
+                    clipRect, canvasWidth, canvasHeight);
+        }
+
+        inline bool isFullCanvasDirectRenderPlane(
+            bool hasOwnSource,
+            bool groupOnly,
+            bool hasRenderParent,
+            bool alphaMaskOnly,
+            int blendMode,
+            int opacity,
+            const std::array<int, 4> &clipRect,
+            int canvasWidth,
+            int canvasHeight) {
+            return hasOwnSource && !groupOnly && !hasRenderParent &&
+                !alphaMaskOnly && blendMode == 0 && opacity > 0 &&
+                renderClipCoversCanvas(
+                    clipRect, canvasWidth, canvasHeight);
+        }
+
         inline bool isAuthoredDifferenceAlphaPair(
             const std::string &colourLabel,
             const std::string &alphaLabel) {
