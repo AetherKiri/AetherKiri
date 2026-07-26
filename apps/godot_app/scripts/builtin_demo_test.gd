@@ -26,8 +26,12 @@ func _run() -> void:
     if games.size() != 1 or not demo.is_game(games[0]):
         _fail("first launch did not seed the built-in demo")
         return
-    if _read_bytes(demo.game_path()) != PackedByteArray([1, 2, 3, 4]):
+    if _read_bytes(demo.archive_path()) != PackedByteArray([1, 2, 3, 4]):
         _fail("installed demo does not match the bundled resource")
+        return
+    if String(games[0].get("path", "")) != demo.game_path() or \
+            String(games[0].get("type", "")) != "Directory":
+        _fail("built-in demo does not launch from its isolated install directory")
         return
 
     games[0]["lastPlayed"] = 42
@@ -51,7 +55,7 @@ func _run() -> void:
         PackedStringArray([external_save_dir])
     )
     games = upgraded_demo.reconcile_games(games)
-    if _read_bytes(upgraded_demo.game_path()) != PackedByteArray([9, 8, 7, 6, 5]):
+    if _read_bytes(upgraded_demo.archive_path()) != PackedByteArray([9, 8, 7, 6, 5]):
         _fail("a bundled demo version update did not replace the installed copy")
         return
 
@@ -88,7 +92,7 @@ func _run() -> void:
         9,
         PackedStringArray([external_save_dir])
     )
-    if not restarted_demo.reconcile_games(games).is_empty() or FileAccess.file_exists(restarted_demo.game_path()):
+    if not restarted_demo.reconcile_games(games).is_empty() or FileAccess.file_exists(restarted_demo.archive_path()):
         _fail("deleted demo was restored after restart or upgrade")
         return
     if DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(install_dir)) or \

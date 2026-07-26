@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "id": "aetherkiri-kag3-demo",
-  "version": 1,
+  "version": 4,
   "title": "AetherKiri Demo",
   "developer": "AetherKiri",
   "archive": "data.xp3",
-  "size": 17004622,
-  "sha256": "f93d87ec4b9d00e6405c6daad3398b4be13b675ed78cfb24ad57d6f8c9258b7e",
+  "size": 17461610,
+  "sha256": "a978633968f2de0025c407cb648b08c5aed1e8358d51695f0eef41cc481ef042",
   "languages": ["ja", "en", "zh-Hans", "zh-Hant", "ko"]
 }
