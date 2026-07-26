@@ -770,6 +770,52 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
         }
     }
 
+    if(lower == TJS_W("custom.tjs")) {
+        std::basic_string<tjs_char> source(buffer.c_str(), buffer.GetLen());
+        const std::basic_string<tjs_char> functionMarker(
+            TJS_W("function EdgeShadowDrawText(dt, d,x,y,text,col,opa,aa, "
+                  "s,scol,sw,sx,sy, e,ecol,eemp,eext) {"));
+        const std::basic_string<tjs_char> blockMarker(TJS_W("\tif (d) {"));
+        const std::basic_string<tjs_char> gradientMarker(
+            TJS_W("var grad = MakeGradationLayer"));
+        const std::basic_string<tjs_char> compositeMarker(
+            TJS_W("d.operateRect(x, y, tmp"));
+
+        const auto functionPos = source.find(functionMarker);
+        const auto blockPos = functionPos == std::basic_string<tjs_char>::npos
+            ? std::basic_string<tjs_char>::npos
+            : source.find(blockMarker, functionPos + functionMarker.size());
+        if(blockPos != std::basic_string<tjs_char>::npos) {
+            const auto openPos = source.find(TJS_W('{'), blockPos);
+            size_t blockEnd = std::basic_string<tjs_char>::npos;
+            int depth = 0;
+            for(size_t i = openPos; i < source.size(); ++i) {
+                if(source[i] == TJS_W('{'))
+                    ++depth;
+                else if(source[i] == TJS_W('}') && --depth == 0) {
+                    blockEnd = i + 1;
+                    break;
+                }
+            }
+            const auto gradientPos = source.find(gradientMarker, blockPos);
+            const auto compositePos = source.find(compositeMarker, blockPos);
+            if(blockEnd != std::basic_string<tjs_char>::npos &&
+               gradientPos < blockEnd && compositePos < blockEnd) {
+                const std::basic_string<tjs_char> replacement(
+                    TJS_W("\tif (d) {\r\n"
+                          "\t\tvar h = d.font.getTextHeight(text);\r\n"
+                          "\t\td.drawTextVerticalGradient(x, y, text, "
+                          "0xFFFFFF, col & 0xFFFFFF, opa, aa, h);\r\n"
+                          "\t}"));
+                source.replace(blockPos, blockEnd - blockPos, replacement);
+                buffer = ttstr(source);
+                spdlog::info(
+                    "Applied compatibility patch for native gradient text "
+                    "drawing");
+            }
+        }
+    }
+
     if(lower == TJS_W("mainwindow.tjs")) {
         ttstr patched(buffer);
         patched.Replace(

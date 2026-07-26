@@ -50,6 +50,7 @@
 #include "BitmapIntf.h"
 
 #include "TVPColor.h"
+#include "FontBaseline.h"
 // #include "TVPSysFont.h"
 #include "FontRasterizer.h"
 #include "RectItf.h"
@@ -12375,6 +12376,36 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         return TJS_S_OK;
     }
     TJS_END_NATIVE_METHOD_DECL(/*func. name*/ drawText)
+    //----------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ drawTextVerticalGradient) {
+        TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
+                                /*var. type*/ tTJSNI_Layer);
+        if(numparams < 5)
+            return TJS_E_BADPARAMCOUNT;
+
+        tjs_int y = *param[1];
+        tTVPRect glyphBounds;
+        _this->GetFontGlyphDrawRect(*param[2], glyphBounds);
+        y = krkr::font::ClampTextOriginToClipTop(
+            y, glyphBounds.top, 0, _this->GetClipTop());
+
+        _this->DrawTextVerticalGradient(
+            *param[0], y, *param[2],
+            static_cast<tjs_uint32>((tjs_int64)*param[3]),
+            static_cast<tjs_uint32>((tjs_int64)*param[4]),
+            (numparams >= 6 && param[5]->Type() != tvtVoid)
+                ? (tjs_int)*param[5]
+                : (tjs_int)255,
+            (numparams >= 7 && param[6]->Type() != tvtVoid)
+                ? param[6]->operator bool()
+                : true,
+            (numparams >= 8 && param[7]->Type() != tvtVoid)
+                ? (tjs_int)*param[7]
+                : _this->GetTextHeight(*param[2]));
+
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_METHOD_DECL(/*func. name*/ drawTextVerticalGradient)
     //----------------------------------------------------------------------
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ drawGlyph) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
