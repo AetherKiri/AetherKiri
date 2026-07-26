@@ -163,6 +163,12 @@ void TVPBeforeSystemInit() {
 
     if(TVPIsExistentStorageNoSearchNoNormalize(TVPProjectDir)) {
         TVPProjectDir += TVPArchiveDelimiter;
+        // A bound XP3 executable is both the highest-priority project
+        // archive and a launcher living beside the original game's data
+        // archives. Keep the archive as the current directory so its
+        // startup.tjs wins, while exposing its native parent for probes such
+        // as Storages.isExistentStorage("data.xp3").
+        TVPAddAutoPath(TVPGetAppPath());
     } else {
         TVPProjectDir += TJS_W("/");
         // On platforms with case-sensitive filesystems like Linux and Android, 

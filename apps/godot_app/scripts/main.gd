@@ -15,6 +15,7 @@ const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
 const DiagnosticLocalization = preload("res://scripts/diagnostic_localization.gd")
 const DebugConsole = preload("res://scripts/debug_console.gd")
 const BuiltinDemo = preload("res://scripts/builtin_demo.gd")
+const GameLaunchEntry = preload("res://scripts/game_launch_entry.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -106,6 +107,10 @@ const UI_TEXT := {
         "detail.last_played": "上次游玩：%s",
         "detail.played": "已玩 %s",
         "detail.launch": "启动游戏",
+        "detail.launch_entry": "启动入口：%s",
+        "detail.default_launch_entry": "游戏目录（自动检测）",
+        "detail.set_launch_file": "切换启动文件",
+        "detail.reset_launch_file": "恢复目录自动检测",
         "detail.set_cover": "设置封面",
         "detail.rename": "重命名",
         "detail.remove": "移除游戏",
@@ -126,6 +131,7 @@ const UI_TEXT := {
         "dialog.later": "稍后",
         "dialog.open_detail": "现在设置",
         "dialog.choose_cover": "选择封面图片",
+        "dialog.choose_launch_file": "选择启动文件",
         "dialog.rename": "重命名",
         "dialog.remove_body": "从列表移除「%s」？不会删除磁盘上的游戏文件。",
         "dialog.delete_builtin_body": "删除内置示例「%s」及其本地存档？删除后不会自动恢复。",
@@ -147,6 +153,9 @@ const UI_TEXT := {
         "message.web_picker_unsupported_long": "当前浏览器不支持直接选择本地游戏文件。请使用支持 File System Access 或目录上传的浏览器。",
         "message.android_storage_permission_required": "需要允许 AetherKiri 访问文件系统后才能导入或启动外部游戏。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.path_missing": "游戏路径不存在",
+        "message.launch_file_unsupported": "启动文件只支持 EXE 或 XP3",
+        "message.launch_file_outside_game": "启动文件必须位于当前游戏目录内",
+        "message.launch_file_missing": "启动文件不存在：%s",
         "message.game_exists": "游戏已存在：%s",
         "message.builtin_delete_failed": "删除内置 Demo 时发生错误：%s",
         "alert.error_title": "AetherKiri 错误",
@@ -220,6 +229,10 @@ const UI_TEXT := {
         "detail.last_played": "上次遊玩：%s",
         "detail.played": "已玩 %s",
         "detail.launch": "啟動遊戲",
+        "detail.launch_entry": "啟動入口：%s",
+        "detail.default_launch_entry": "遊戲目錄（自動偵測）",
+        "detail.set_launch_file": "切換啟動檔案",
+        "detail.reset_launch_file": "恢復目錄自動偵測",
         "detail.set_cover": "設定封面",
         "detail.rename": "重新命名",
         "detail.remove": "移除遊戲",
@@ -240,6 +253,7 @@ const UI_TEXT := {
         "dialog.later": "稍後",
         "dialog.open_detail": "現在設定",
         "dialog.choose_cover": "選擇封面圖片",
+        "dialog.choose_launch_file": "選擇啟動檔案",
         "dialog.rename": "重新命名",
         "dialog.remove_body": "要從列表移除「%s」嗎？不會刪除磁碟上的遊戲檔案。",
         "dialog.delete_builtin_body": "要刪除內建示例「%s」及其本機存檔嗎？刪除後不會自動還原。",
@@ -261,6 +275,9 @@ const UI_TEXT := {
         "message.web_picker_unsupported_long": "目前瀏覽器不支援直接選擇本機遊戲檔案。請使用支援 File System Access 或目錄上傳的瀏覽器。",
         "message.android_storage_permission_required": "需要允許 AetherKiri 存取檔案系統後才能匯入或啟動外部遊戲。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.path_missing": "遊戲路徑不存在",
+        "message.launch_file_unsupported": "啟動檔案僅支援 EXE 或 XP3",
+        "message.launch_file_outside_game": "啟動檔案必須位於目前遊戲目錄內",
+        "message.launch_file_missing": "啟動檔案不存在：%s",
         "message.game_exists": "遊戲已存在：%s",
         "message.builtin_delete_failed": "刪除內建 Demo 時發生錯誤：%s",
         "alert.error_title": "AetherKiri 錯誤",
@@ -334,6 +351,10 @@ const UI_TEXT := {
         "detail.last_played": "Last played: %s",
         "detail.played": "Played %s",
         "detail.launch": "Launch Game",
+        "detail.launch_entry": "Launch entry: %s",
+        "detail.default_launch_entry": "Game folder (auto-detect)",
+        "detail.set_launch_file": "Change Launch File",
+        "detail.reset_launch_file": "Restore Folder Auto-detect",
         "detail.set_cover": "Set Cover",
         "detail.rename": "Rename",
         "detail.remove": "Remove Game",
@@ -354,6 +375,7 @@ const UI_TEXT := {
         "dialog.later": "Later",
         "dialog.open_detail": "Set Up Now",
         "dialog.choose_cover": "Choose Cover Image",
+        "dialog.choose_launch_file": "Choose Launch File",
         "dialog.rename": "Rename",
         "dialog.remove_body": "Remove \"%s\" from the list? This will not delete game files from disk.",
         "dialog.delete_builtin_body": "Delete the built-in demo \"%s\" and its local saves? It will not be restored automatically.",
@@ -375,6 +397,9 @@ const UI_TEXT := {
         "message.web_picker_unsupported_long": "This browser cannot directly choose local game files. Use a browser that supports File System Access or directory upload.",
         "message.android_storage_permission_required": "Allow AetherKiri to access the file system before importing or launching external games. Grant file access in the system prompt or permission settings, then try again.",
         "message.path_missing": "Game path does not exist",
+        "message.launch_file_unsupported": "The launch file must be an EXE or XP3 file",
+        "message.launch_file_outside_game": "The launch file must be inside this game folder",
+        "message.launch_file_missing": "Launch file does not exist: %s",
         "message.game_exists": "Game already exists: %s",
         "message.builtin_delete_failed": "Could not completely delete the built-in demo: %s",
         "alert.error_title": "AetherKiri Error",
@@ -448,6 +473,10 @@ const UI_TEXT := {
         "detail.last_played": "前回プレイ：%s",
         "detail.played": "プレイ時間 %s",
         "detail.launch": "ゲームを起動",
+        "detail.launch_entry": "起動エントリ：%s",
+        "detail.default_launch_entry": "ゲームフォルダー（自動検出）",
+        "detail.set_launch_file": "起動ファイルを変更",
+        "detail.reset_launch_file": "フォルダーの自動検出に戻す",
         "detail.set_cover": "カバーを設定",
         "detail.rename": "名前を変更",
         "detail.remove": "ゲームを削除",
@@ -468,6 +497,7 @@ const UI_TEXT := {
         "dialog.later": "あとで",
         "dialog.open_detail": "今すぐ設定",
         "dialog.choose_cover": "カバー画像を選択",
+        "dialog.choose_launch_file": "起動ファイルを選択",
         "dialog.rename": "名前を変更",
         "dialog.remove_body": "「%s」をリストから削除しますか？ディスク上のゲームファイルは削除されません。",
         "dialog.delete_builtin_body": "内蔵デモ「%s」とローカルセーブデータを削除しますか？削除後は自動的に復元されません。",
@@ -489,6 +519,9 @@ const UI_TEXT := {
         "message.web_picker_unsupported_long": "このブラウザーはローカルゲームファイルの直接選択に対応していません。File System Access またはディレクトリアップロード対応ブラウザーを使用してください。",
         "message.android_storage_permission_required": "外部ゲームのインポートまたは起動には、AetherKiri にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.path_missing": "ゲームパスが存在しません",
+        "message.launch_file_unsupported": "起動ファイルは EXE または XP3 のみ対応しています",
+        "message.launch_file_outside_game": "起動ファイルは現在のゲームフォルダー内にある必要があります",
+        "message.launch_file_missing": "起動ファイルが存在しません：%s",
         "message.game_exists": "ゲームは既に存在します：%s",
         "message.builtin_delete_failed": "内蔵デモを完全に削除できませんでした：%s",
         "alert.error_title": "AetherKiri エラー",
@@ -562,6 +595,10 @@ const UI_TEXT := {
         "detail.last_played": "마지막 플레이: %s",
         "detail.played": "플레이 %s",
         "detail.launch": "게임 실행",
+        "detail.launch_entry": "실행 진입점: %s",
+        "detail.default_launch_entry": "게임 폴더(자동 감지)",
+        "detail.set_launch_file": "실행 파일 변경",
+        "detail.reset_launch_file": "폴더 자동 감지 복원",
         "detail.set_cover": "표지 설정",
         "detail.rename": "이름 변경",
         "detail.remove": "게임 제거",
@@ -582,6 +619,7 @@ const UI_TEXT := {
         "dialog.later": "나중에",
         "dialog.open_detail": "지금 설정",
         "dialog.choose_cover": "표지 이미지 선택",
+        "dialog.choose_launch_file": "실행 파일 선택",
         "dialog.rename": "이름 변경",
         "dialog.remove_body": "\"%s\"을(를) 목록에서 제거할까요? 디스크의 게임 파일은 삭제되지 않습니다.",
         "dialog.delete_builtin_body": "내장 데모 \"%s\"와 로컬 저장 데이터를 삭제할까요? 삭제 후에는 자동으로 복원되지 않습니다.",
@@ -603,6 +641,9 @@ const UI_TEXT := {
         "message.web_picker_unsupported_long": "이 브라우저는 로컬 게임 파일을 직접 선택할 수 없습니다. File System Access 또는 디렉터리 업로드를 지원하는 브라우저를 사용하세요.",
         "message.android_storage_permission_required": "외부 게임을 가져오거나 실행하려면 AetherKiri의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.path_missing": "게임 경로가 존재하지 않습니다",
+        "message.launch_file_unsupported": "실행 파일은 EXE 또는 XP3만 지원합니다",
+        "message.launch_file_outside_game": "실행 파일은 현재 게임 폴더 안에 있어야 합니다",
+        "message.launch_file_missing": "실행 파일이 존재하지 않습니다: %s",
         "message.game_exists": "게임이 이미 있습니다: %s",
         "message.builtin_delete_failed": "내장 데모를 완전히 삭제하지 못했습니다: %s",
         "alert.error_title": "AetherKiri 오류",
@@ -2730,7 +2771,11 @@ func _show_detail(game: Dictionary) -> void:
 
     var window_size := get_viewport_rect().size
     var content := Control.new()
-    content.custom_minimum_size = Vector2(maxf(1280.0, window_size.x), maxf(840.0, window_size.y))
+    var detail_content_height := 1040.0 if _can_configure_launch_file(game) else 900.0
+    content.custom_minimum_size = Vector2(
+        maxf(1280.0, window_size.x),
+        maxf(detail_content_height, window_size.y)
+    )
     content.mouse_filter = Control.MOUSE_FILTER_PASS
     detail_scroll.add_child(content)
 
@@ -2783,7 +2828,7 @@ func _show_detail(game: Dictionary) -> void:
 
     var info_panel := PanelContainer.new()
     info_panel.position = Vector2(440, 246)
-    info_panel.size = Vector2(760, 206)
+    info_panel.size = Vector2(760, 246)
     info_panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     content.add_child(info_panel)
     var info := VBoxContainer.new()
@@ -2793,9 +2838,13 @@ func _show_detail(game: Dictionary) -> void:
     info.add_child(_detail_line(ICON_REFRESH, _t("detail.last_played", [_last_played_label(game)])))
     info.add_child(_detail_line(ICON_PERFORMANCE, _t("detail.played", [_format_play_duration(int(game.get("playDurationSeconds", 0)))])))
     info.add_child(_detail_line(ICON_LIBRARY, _game_type_label(String(game.get("type", "Directory")))))
+    info.add_child(_detail_line(
+        ICON_PLAY,
+        _t("detail.launch_entry", [_game_launch_entry_label(game)])
+    ))
 
     var start := _pill_button(_t("detail.launch"), ICON_PLAY)
-    start.position = Vector2(440, 480)
+    start.position = Vector2(440, 520)
     start.size = Vector2(760, 70)
     start.button_down.connect(func(): _android_input_debug_log("detail launch button_down"))
     start.button_up.connect(func(): _android_input_debug_log("detail launch button_up"))
@@ -2804,10 +2853,22 @@ func _show_detail(game: Dictionary) -> void:
     content.add_child(start)
 
     var tools := VBoxContainer.new()
-    tools.position = Vector2(440, 582)
-    tools.size = Vector2(760, 250)
+    tools.position = Vector2(440, 622)
+    tools.size = Vector2(760, 390)
     tools.add_theme_constant_override("separation", 10)
     content.add_child(tools)
+    if _can_configure_launch_file(game):
+        tools.add_child(_detail_action(
+            ICON_PLAY,
+            _t("detail.set_launch_file"),
+            func(): _set_launch_file_for_selected()
+        ))
+        if not GameLaunchEntry.configured_relative_path(game).is_empty():
+            tools.add_child(_detail_action(
+                ICON_REFRESH,
+                _t("detail.reset_launch_file"),
+                func(): _reset_launch_file_for_selected()
+            ))
     tools.add_child(_detail_action(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected()))
     tools.add_child(_detail_action(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game()))
     var remove_label := "detail.delete_builtin" if builtin_demo.is_game(game) else "detail.remove"
@@ -2990,6 +3051,62 @@ func _set_cover_for_selected() -> void:
     )
     add_child(dialog)
     dialog.popup_centered(Vector2i(900, 640))
+
+func _game_launch_entry_label(game: Dictionary) -> String:
+    var relative_path := GameLaunchEntry.configured_relative_path(game)
+    if relative_path.is_empty():
+        return _t("detail.default_launch_entry")
+    return relative_path
+
+func _can_configure_launch_file(game: Dictionary) -> bool:
+    return OS.get_name() != "Web" \
+        and not builtin_demo.is_game(game) \
+        and String(game.get("type", "Directory")).to_lower() == "directory"
+
+func _set_launch_file_for_selected() -> void:
+    var library_path := String(selected_game.get("path", ""))
+    if library_path.is_empty() or not _can_configure_launch_file(selected_game):
+        return
+    var dialog := _create_file_dialog(
+        _t("dialog.choose_launch_file"),
+        FileDialog.FILE_MODE_OPEN_FILE,
+        PackedStringArray(["*.exe,*.EXE,*.xp3,*.XP3;KiriKiri launch file"])
+    )
+    if DirAccess.dir_exists_absolute(library_path):
+        dialog.current_dir = library_path
+    dialog.file_selected.connect(func(selected_path: String):
+        if not GameLaunchEntry.is_supported_file(selected_path):
+            _show_system_alert(
+                _t("message.launch_file_unsupported"),
+                _t("alert.warning_title")
+            )
+            dialog.queue_free()
+            return
+        var relative_path := GameLaunchEntry.relative_path_for_selection(
+            library_path,
+            selected_path
+        )
+        if relative_path.is_empty():
+            _show_system_alert(
+                _t("message.launch_file_outside_game"),
+                _t("alert.warning_title")
+            )
+            dialog.queue_free()
+            return
+        _update_game(library_path, {GameLaunchEntry.FIELD: relative_path})
+        _show_detail(selected_game)
+        dialog.queue_free()
+    )
+    dialog.canceled.connect(func(): dialog.queue_free())
+    add_child(dialog)
+    dialog.popup_centered(Vector2i(900, 640))
+
+func _reset_launch_file_for_selected() -> void:
+    var library_path := String(selected_game.get("path", ""))
+    if library_path.is_empty() or not _can_configure_launch_file(selected_game):
+        return
+    _update_game(library_path, {GameLaunchEntry.FIELD: ""})
+    _show_detail(selected_game)
 
 func _rename_selected_game() -> void:
     var path := String(selected_game.get("path", ""))
@@ -3942,19 +4059,41 @@ func _sync_game_card_hover_states(allow_hover: bool = true) -> void:
 
 func _start_selected_game() -> void:
     _android_input_debug_log("_start_selected_game selected=%s" % str(selected_game))
-    var path := String(selected_game.get("path", ""))
-    if path.is_empty():
+    var library_path := String(selected_game.get("path", ""))
+    if library_path.is_empty():
         return
-    if not _ensure_android_storage_permission_for_path(path):
+    if not _ensure_android_storage_permission_for_path(library_path):
         return
     if not _mount_web_game(selected_game):
         return
-    var played_game := _mark_game_played(path)
+    var raw_launch_file := String(selected_game.get(GameLaunchEntry.FIELD, "")).strip_edges()
+    if not raw_launch_file.is_empty() and not GameLaunchEntry.is_supported_file(raw_launch_file):
+        _show_system_alert(
+            _t("message.launch_file_unsupported"),
+            _t("alert.warning_title")
+        )
+        return
+    var relative_launch_file := GameLaunchEntry.configured_relative_path(selected_game)
+    if not raw_launch_file.is_empty() and relative_launch_file.is_empty():
+        _show_system_alert(
+            _t("message.launch_file_outside_game"),
+            _t("alert.warning_title")
+        )
+        return
+    var launch_path := GameLaunchEntry.resolve(selected_game)
+    if not relative_launch_file.is_empty() and not FileAccess.file_exists(launch_path):
+        _show_system_alert(
+            _t("message.launch_file_missing", [relative_launch_file]),
+            _t("alert.warning_title")
+        )
+        return
+    var played_game := _mark_game_played(library_path)
     if not played_game.is_empty():
         selected_game = played_game
-    active_game_path = path
+    active_game_path = library_path
     active_game_started_msec = Time.get_ticks_msec()
-    game_path.text = path
+    game_path.text = launch_path
+    _write_probe_marker("library_launch root=%s entry=%s" % [library_path, launch_path])
     _set_game_background(true)
     shell_root.visible = false
     viewport.visible = true

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdarg>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -1345,13 +1346,19 @@ engine_result_t OpenGameCore(engine_handle_t handle,
     return s.size() >= suffix.size() &&
            s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
   };
+  std::string lower_game_root_path = normalized_game_root_path;
+  std::transform(lower_game_root_path.begin(),
+                 lower_game_root_path.end(),
+                 lower_game_root_path.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
   const bool looks_like_archive =
-      ends_with(normalized_game_root_path, ".xp3") ||
-      ends_with(normalized_game_root_path, ".XP3") ||
-      ends_with(normalized_game_root_path, ".zip") ||
-      ends_with(normalized_game_root_path, ".ZIP") ||
-      ends_with(normalized_game_root_path, ".7z")  ||
-      ends_with(normalized_game_root_path, ".tar");
+      ends_with(lower_game_root_path, ".xp3") ||
+      ends_with(lower_game_root_path, ".exe") ||
+      ends_with(lower_game_root_path, ".zip") ||
+      ends_with(lower_game_root_path, ".7z")  ||
+      ends_with(lower_game_root_path, ".tar");
   if (!looks_like_archive &&
       !normalized_game_root_path.empty() &&
       normalized_game_root_path.back() != '/' &&
