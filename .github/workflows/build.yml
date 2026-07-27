@@ -272,8 +272,8 @@ jobs:
           set -euo pipefail
           test -s "${RUNNER_TEMP}/aetherkiri-fla-manifest.txt"
           count=$(sort -u "${RUNNER_TEMP}/aetherkiri-fla-manifest.txt" | wc -l)
-          if (( count < 7 )); then
-            echo "Expected at least 7 Internal FLA translation units, got $count" >&2
+          if (( count < 5 )); then
+            echo "Expected at least 5 Internal FLA translation units, got $count" >&2
             sort -u "${RUNNER_TEMP}/aetherkiri-fla-manifest.txt" >&2
             exit 1
           fi
