@@ -13,7 +13,7 @@ vcpkg_extract_source_archive(
         fix-apple-linker-flags.patch
 )
 
-if(VCPKG_TARGET_IS_OSX)
+if(VCPKG_TARGET_IS_OSX OR VCPKG_TARGET_IS_IOS)
     set(LIBARCHIVE_PLATFORM_OPTIONS -DENABLE_WERROR=OFF)
 endif()
 
