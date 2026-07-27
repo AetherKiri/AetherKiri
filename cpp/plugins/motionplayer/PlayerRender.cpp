@@ -2214,6 +2214,39 @@ namespace {
         float refHeight = 0.0f;
         float refArea = 0.0f;
         int refOpacity = -1;
+        const bool useStableBackdropReference =
+            isLogoMotion &&
+            motion::internal::startupLogoMotionUsesStableBackdropReference(
+                motionPath);
+        if(useStableBackdropReference) {
+            for(const auto &entry : runtime.preparedRenderItems) {
+                if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+                   !motion::internal::startupLogoStableBackdropSource(
+                       motionPath, entry.sourceKey)) {
+                    continue;
+                }
+                auto referenceBox = boundsFromRenderCorners(entry.corners);
+                if(!validRenderPaintBox(referenceBox) &&
+                   entry.hasViewport && validRenderPaintBox(entry.viewport)) {
+                    referenceBox = entry.viewport;
+                }
+                if(!validRenderPaintBox(referenceBox) &&
+                   validRenderPaintBox(entry.paintBox)) {
+                    referenceBox = entry.paintBox;
+                }
+                if(!validRenderPaintBox(referenceBox)) {
+                    continue;
+                }
+                const float width = referenceBox[2] - referenceBox[0];
+                const float height = referenceBox[3] - referenceBox[1];
+                const float area = width * height;
+                if(area > refArea) {
+                    refArea = area;
+                    refWidth = width;
+                    refHeight = height;
+                }
+            }
+        }
         auto considerReference =
             [&](const motion::detail::PlayerRuntime::PreparedRenderItem &entry,
                 int referenceKind) {
@@ -2274,13 +2307,18 @@ namespace {
 
         // A title background represents the design stage. A named position
         // node is only local content and must never determine canvas scale.
-        if(isTitleMotion) {
-            for(const auto &entry : runtime.preparedRenderItems) {
-                considerReference(entry, 1);
-            }
-        } else {
-            for(const auto &entry : runtime.preparedRenderItems) {
-                considerReference(entry, 0);
+        // M2's backdrop is presentation fill geometry. Its sibling content
+        // already carries the authored animation scale and must not inherit
+        // the backdrop's canvas-cover scale.
+        if(refWidth <= 0.0f || refHeight <= 0.0f) {
+            if(isTitleMotion) {
+                for(const auto &entry : runtime.preparedRenderItems) {
+                    considerReference(entry, 1);
+                }
+            } else {
+                for(const auto &entry : runtime.preparedRenderItems) {
+                    considerReference(entry, 0);
+                }
             }
         }
         if(refWidth <= 0.0f || refHeight <= 0.0f) {
@@ -2292,8 +2330,15 @@ namespace {
             return;
         }
 
-        const float scaleX = static_cast<float>(canvasWidth) / refWidth;
-        const float scaleY = static_cast<float>(canvasHeight) / refHeight;
+        const auto presentationScale =
+            motion::internal::startupLogoPresentationScale(
+                motionPath,
+                static_cast<float>(canvasWidth),
+                static_cast<float>(canvasHeight),
+                refWidth,
+                refHeight);
+        const float scaleX = presentationScale[0];
+        const float scaleY = presentationScale[1];
         if(LOGGER && shouldDebugTitleRender(motionPath) &&
            markRenderDebugLogged("yuzu-presentation-scale-candidate:" +
                                  motionPath)) {
@@ -2309,8 +2354,9 @@ namespace {
 
         // Both startup logo motions are positioned around the canvas center
         // before presentation scaling. Yuzu may additionally need its
-        // centered authored origin translated first; M2 must not be
-        // translated, but still needs to scale around the canvas center.
+        // centered authored origin translated first. M2 keeps its authored
+        // content size while uniformly covering the canvas with only its
+        // solid backdrop.
         const bool scaleAroundCanvasCenter =
             motion::internal::startupLogoMotionScalesAroundCanvasCenter(
                 motionPath);
@@ -2339,6 +2385,11 @@ namespace {
         };
 
         for(auto &entry : runtime.preparedRenderItems) {
+            if(!motion::internal::
+                   startupLogoPresentationScaleAppliesToSource(
+                       motionPath, entry.sourceKey)) {
+                continue;
+            }
             const bool scaleGeometry =
                 shouldScaleBox(boundsFromRenderCorners(entry.corners));
             if(scaleGeometry) {
@@ -4110,6 +4161,26 @@ namespace {
             }
         }
         return best;
+    }
+
+    bool yuzuTitlePresentationHoldFrameIsResident(
+        tTJSNI_BaseLayer *layer,
+        const std::string &motionPath) {
+        if(!layer) {
+            return false;
+        }
+        const auto &cache = yuzuTitlePresentationHoldCache();
+        const auto exact = cache.find(layer);
+        const bool exactLayer =
+            exact != cache.end() && exact->second.bitmap &&
+            exact->second.motion == motionPath;
+        return motion::internal::yuzuTitlePresentationHoldFrameIsResident(
+            exactLayer,
+            layer->GetVisible(),
+            layer->GetParentVisible(),
+            layer->GetHasImage(),
+            layer->GetMainImage() != nullptr,
+            layer->GetOpacity());
     }
 
     bool restoreYuzuTitlePresentationHoldFrame(
@@ -11418,14 +11489,20 @@ namespace motion {
             yuzuTitlePresentation &&
             hasYuzuTitleOpaqueFinalOverlayFrame(*_runtime);
         if(yuzuTitlePresentation && !yuzuTitleHasRenderableFrame) {
+            const bool residentHeldFrame =
+                _runtime->yuzuTitleFinalFrameRendered &&
+                yuzuTitlePresentationHoldFrameIsResident(
+                    finalNativeLayer, motionPath);
             const bool restoredHeldFrame =
+                !residentHeldFrame &&
                 restoreYuzuTitlePresentationHoldFrame(
                     finalNativeLayer, motionPath, canvasWidth, canvasHeight);
             if(LOGGER && shouldDebugTitleRender(motionPath) &&
                markRenderDebugLogged("presentation-skip-empty:" + motionPath)) {
                 LOGGER->info(
-                    "motion presentation skip empty title frame: motion={} restored={} target=[{}]",
-                    motionPath, restoredHeldFrame ? 1 : 0,
+                    "motion presentation skip empty title frame: motion={} resident={} restored={} target=[{}]",
+                    motionPath, residentHeldFrame ? 1 : 0,
+                    restoredHeldFrame ? 1 : 0,
                     describeLayerForDebug(finalNativeLayer));
             }
             _runtime->clearPresentationRenderReuse();
@@ -11437,14 +11514,19 @@ namespace motion {
         if(yuzuTitlePresentation &&
            _runtime->yuzuTitleFinalFrameRendered &&
            !yuzuTitleHasOpaqueCanvasBaseFrame) {
+            const bool residentHeldFrame =
+                yuzuTitlePresentationHoldFrameIsResident(
+                    finalNativeLayer, motionPath);
             const bool restoredHeldFrame =
+                !residentHeldFrame &&
                 restoreYuzuTitlePresentationHoldFrame(
                     finalNativeLayer, motionPath, canvasWidth, canvasHeight);
             if(LOGGER && shouldDebugTitleRender(motionPath) &&
                markRenderDebugLogged("presentation-skip-tail:" + motionPath)) {
                 LOGGER->info(
-                    "motion presentation skip title tail frame: motion={} restored={} target=[{}]",
-                    motionPath, restoredHeldFrame ? 1 : 0,
+                    "motion presentation skip title tail frame: motion={} resident={} restored={} target=[{}]",
+                    motionPath, residentHeldFrame ? 1 : 0,
+                    restoredHeldFrame ? 1 : 0,
                     describeLayerForDebug(finalNativeLayer));
             }
             _runtime->clearPresentationRenderReuse();

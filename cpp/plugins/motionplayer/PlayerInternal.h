@@ -166,6 +166,61 @@ namespace internal {
                 motionPath.find("m2logo.mtn") != std::string::npos;
         }
 
+        inline bool startupLogoMotionUsesStableBackdropReference(
+            std::string motionPath) {
+            std::transform(motionPath.begin(), motionPath.end(),
+                           motionPath.begin(),
+                           [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            return motionPath.find("m2logo.mtn") != std::string::npos;
+        }
+
+        inline bool startupLogoStableBackdropSource(
+            const std::string &motionPath,
+            std::string sourceKey) {
+            if(!startupLogoMotionUsesStableBackdropReference(motionPath)) {
+                return false;
+            }
+            std::transform(sourceKey.begin(), sourceKey.end(),
+                           sourceKey.begin(),
+                           [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            return sourceKey == "src/logo/icon50" ||
+                sourceKey.find("/logo/icon/icon50") != std::string::npos;
+        }
+
+        inline bool startupLogoPresentationScaleAppliesToSource(
+            const std::string &motionPath,
+            const std::string &sourceKey) {
+            return !startupLogoMotionUsesStableBackdropReference(motionPath) ||
+                startupLogoStableBackdropSource(motionPath, sourceKey);
+        }
+
+        inline std::array<float, 2> startupLogoPresentationScale(
+            std::string motionPath,
+            float canvasWidth,
+            float canvasHeight,
+            float referenceWidth,
+            float referenceHeight) {
+            if(!std::isfinite(canvasWidth) || !std::isfinite(canvasHeight) ||
+               !std::isfinite(referenceWidth) ||
+               !std::isfinite(referenceHeight) ||
+               canvasWidth <= 0.0f || canvasHeight <= 0.0f ||
+               referenceWidth <= 0.0f || referenceHeight <= 0.0f) {
+                return { 1.0f, 1.0f };
+            }
+
+            const float scaleX = canvasWidth / referenceWidth;
+            const float scaleY = canvasHeight / referenceHeight;
+            if(startupLogoMotionUsesStableBackdropReference(motionPath)) {
+                const float coveredScale = std::max(scaleX, scaleY);
+                return { coveredScale, coveredScale };
+            }
+            return { scaleX, scaleY };
+        }
+
         inline bool shouldCaptureYuzuTitlePresentationHoldFrame(
             bool hadHeldFrame,
             bool finalFrameRendered,
@@ -183,6 +238,17 @@ namespace internal {
             bool hasStableComposition,
             bool hasActiveTransientLogo) {
             return hasStableComposition && !hasActiveTransientLogo;
+        }
+
+        inline bool yuzuTitlePresentationHoldFrameIsResident(
+            bool exactLayer,
+            bool layerVisible,
+            bool parentVisible,
+            bool hasImage,
+            bool hasMainImage,
+            int opacity) {
+            return exactLayer && layerVisible && parentVisible && hasImage &&
+                hasMainImage && opacity > 0;
         }
 
         inline bool isFullCanvasCompositeRenderRoot(
@@ -3252,6 +3318,46 @@ namespace internal {
         // with pre-computed positions for the sub_6C7440 render loop.
         // Aligned to libkrkr2.so: full 2x3 affine [m11,m21,m12,m22,tx,ty]
         using Affine2x3 = std::array<double, 6>;
+
+        inline Affine2x3 startupLogoGeometryParentTransform(
+            const std::string &motionPath,
+            const Affine2x3 &parent,
+            int inheritFlags) {
+            if(!startupLogoMotionUsesStableBackdropReference(motionPath) ||
+               (inheritFlags & 0x060) == 0x060) {
+                return parent;
+            }
+
+            const double basisX =
+                std::hypot(parent[0], parent[1]);
+            const double basisY =
+                std::hypot(parent[2], parent[3]);
+            if(!std::isfinite(basisX) || !std::isfinite(basisY) ||
+               basisX <= 1.0e-9 || basisY <= 1.0e-9) {
+                return parent;
+            }
+
+            // A skewed basis cannot be separated into independent authored
+            // X/Y scales without changing its slant. M2's text parent is an
+            // orthogonal uniform-scale transform, so keep the compatibility
+            // correction deliberately narrow.
+            const double basisDot =
+                parent[0] * parent[2] + parent[1] * parent[3];
+            if(std::fabs(basisDot) > basisX * basisY * 1.0e-6) {
+                return parent;
+            }
+
+            Affine2x3 result = parent;
+            if((inheritFlags & 0x020) == 0) {
+                result[0] /= basisX;
+                result[1] /= basisX;
+            }
+            if((inheritFlags & 0x040) == 0) {
+                result[2] /= basisY;
+                result[3] /= basisY;
+            }
+            return result;
+        }
 
         // Compose: result = parent * Translate(lx, ly)
         inline Affine2x3 affineTranslate(const Affine2x3 &p, double lx, double ly) {

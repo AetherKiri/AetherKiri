@@ -171,7 +171,11 @@ TEST_CASE("motion presentation excludes structural binder layers") {
 
 TEST_CASE("startup logo presentation preserves its authored origin") {
     using motion::internal::startupLogoMotionScalesAroundCanvasCenter;
+    using motion::internal::startupLogoMotionUsesStableBackdropReference;
     using motion::internal::startupLogoMotionUsesCenteredOrigin;
+    using motion::internal::startupLogoPresentationScaleAppliesToSource;
+    using motion::internal::startupLogoPresentationScale;
+    using motion::internal::startupLogoStableBackdropSource;
     using motion::internal::startupLogoUsesCenteredOrigin;
 
     constexpr int canvasWidth = 1920;
@@ -207,6 +211,66 @@ TEST_CASE("startup logo presentation preserves its authored origin") {
         "MOTION/M2LOGO.MTN"));
     CHECK_FALSE(startupLogoMotionScalesAroundCanvasCenter(
         "motion/title_bg.mtn"));
+    CHECK(startupLogoMotionUsesStableBackdropReference(
+        "motion/m2logo.mtn"));
+    CHECK(startupLogoMotionUsesStableBackdropReference(
+        "MOTION/M2LOGO.MTN"));
+    CHECK_FALSE(startupLogoMotionUsesStableBackdropReference(
+        "motion/yuzulogo.mtn"));
+    CHECK(startupLogoStableBackdropSource(
+        "motion/m2logo.mtn", "src/logo/icon50"));
+    CHECK_FALSE(startupLogoStableBackdropSource(
+        "motion/m2logo.mtn", "src/logo/main"));
+    CHECK_FALSE(startupLogoStableBackdropSource(
+        "motion/yuzulogo.mtn", "src/logo/icon50"));
+    CHECK(startupLogoPresentationScaleAppliesToSource(
+        "motion/m2logo.mtn", "src/logo/icon50"));
+    CHECK_FALSE(startupLogoPresentationScaleAppliesToSource(
+        "motion/m2logo.mtn", "src/logo/main"));
+    CHECK(startupLogoPresentationScaleAppliesToSource(
+        "motion/yuzulogo.mtn", "src/yuzu/yuzu_mi"));
+    const auto m2Scale = startupLogoPresentationScale(
+        "motion/m2logo.mtn", 1920.0f, 1080.0f, 960.0f, 544.0f);
+    CHECK(m2Scale[0] == Catch::Approx(2.0f));
+    CHECK(m2Scale[1] == Catch::Approx(2.0f));
+    const auto yuzuScale = startupLogoPresentationScale(
+        "motion/yuzulogo.mtn", 1920.0f, 1080.0f, 960.0f, 360.0f);
+    CHECK(yuzuScale[0] == Catch::Approx(2.0f));
+    CHECK(yuzuScale[1] == Catch::Approx(3.0f));
+
+    const motion::internal::Affine2x3 doubledParent{
+        2.0, 0.0, 0.0, 2.0, 120.0, 80.0
+    };
+    const auto independentM2Glyph =
+        motion::internal::startupLogoGeometryParentTransform(
+            "motion/m2logo.mtn", doubledParent, 0x19c);
+    CHECK(independentM2Glyph[0] == Catch::Approx(1.0));
+    CHECK(independentM2Glyph[1] == Catch::Approx(0.0));
+    CHECK(independentM2Glyph[2] == Catch::Approx(0.0));
+    CHECK(independentM2Glyph[3] == Catch::Approx(1.0));
+    CHECK(independentM2Glyph[4] == Catch::Approx(120.0));
+    CHECK(independentM2Glyph[5] == Catch::Approx(80.0));
+
+    const auto inheritedM2Glyph =
+        motion::internal::startupLogoGeometryParentTransform(
+            "motion/m2logo.mtn", doubledParent, 0x1fc);
+    CHECK(inheritedM2Glyph == doubledParent);
+    const auto untouchedYuzuGlyph =
+        motion::internal::startupLogoGeometryParentTransform(
+            "motion/yuzulogo.mtn", doubledParent, 0x19c);
+    CHECK(untouchedYuzuGlyph == doubledParent);
+
+    const motion::internal::Affine2x3 rotatedParent{
+        0.0, 2.0, -3.0, 0.0, 0.0, 0.0
+    };
+    const auto independentRotatedM2Glyph =
+        motion::internal::startupLogoGeometryParentTransform(
+            "motion/m2logo.mtn", rotatedParent, 0x19c);
+    CHECK(independentRotatedM2Glyph[0] == Catch::Approx(0.0));
+    CHECK(independentRotatedM2Glyph[1] == Catch::Approx(1.0));
+    CHECK(independentRotatedM2Glyph[2] == Catch::Approx(-1.0));
+    CHECK(independentRotatedM2Glyph[3] == Catch::Approx(0.0));
+
     CHECK((startupLogoMotionUsesCenteredOrigin("motion/yuzulogo.mtn") &&
            startupLogoUsesCenteredOrigin(
                centeredLogoBounds, canvasWidth, canvasHeight)));
@@ -220,6 +284,7 @@ TEST_CASE("startup logo presentation preserves its authored origin") {
 
 TEST_CASE("title presentation holds its settled overlay") {
     using motion::internal::shouldCaptureYuzuTitlePresentationHoldFrame;
+    using motion::internal::yuzuTitlePresentationHoldFrameIsResident;
     using motion::internal::yuzuTitlePresentationFrameIsStable;
 
     CHECK(shouldCaptureYuzuTitlePresentationHoldFrame(
@@ -241,6 +306,19 @@ TEST_CASE("title presentation holds its settled overlay") {
     CHECK(yuzuTitlePresentationFrameIsStable(true, false));
     CHECK_FALSE(yuzuTitlePresentationFrameIsStable(true, true));
     CHECK_FALSE(yuzuTitlePresentationFrameIsStable(false, false));
+
+    CHECK(yuzuTitlePresentationHoldFrameIsResident(
+        true, true, true, true, true, 255));
+    CHECK_FALSE(yuzuTitlePresentationHoldFrameIsResident(
+        false, true, true, true, true, 255));
+    CHECK_FALSE(yuzuTitlePresentationHoldFrameIsResident(
+        true, false, true, true, true, 255));
+    CHECK_FALSE(yuzuTitlePresentationHoldFrameIsResident(
+        true, true, true, false, true, 255));
+    CHECK_FALSE(yuzuTitlePresentationHoldFrameIsResident(
+        true, true, true, true, false, 255));
+    CHECK_FALSE(yuzuTitlePresentationHoldFrameIsResident(
+        true, true, true, true, true, 0));
 }
 
 TEST_CASE("motionplayer identifies full-canvas split composition planes") {
