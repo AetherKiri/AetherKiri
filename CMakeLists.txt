@@ -117,17 +117,14 @@ if(AETHERKIRI_ENABLE_INTERNAL)
     find_package(AetherInternal CONFIG QUIET
         NO_DEFAULT_PATH)
     if(AetherInternal_FOUND)
-        # API 4 is the current private runtime package used by the protected
-        # mobile builds. API 5 remains accepted for older checkouts. The PSB
-        # and legacy-plugin extensions are optional across these package
-        # generations; core motion/Live2D/KiriKiri hooks are required.
-        if(NOT ((AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 5 AND
-                AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL 3) OR
-               (AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 4 AND
-                AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL 2)) OR
+        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 5 OR
+           NOT AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL
+               AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION OR
            NOT AETHERINTERNAL_REQUIRED_LIVE2D_HOST_API_VERSION EQUAL
                AETHERKIRI_LIVE2D_HOST_API_VERSION OR
            NOT COMMAND aetherinternal_extend_motionplayer OR
+           NOT COMMAND aetherinternal_extend_psbfile OR
+           NOT COMMAND aetherinternal_extend_legacy_plugins OR
            NOT COMMAND aetherinternal_extend_live2d OR
            NOT COMMAND aetherinternal_extend_krkr2plugin OR
            NOT COMMAND aetherinternal_extend_krkr2plugin_tests)
@@ -198,6 +195,38 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/external)
 # build library
 add_subdirectory(${KRKR2CORE_PATH})
 add_subdirectory(${KRKR2PLUGIN_PATH})
+
+# API5 contributes private sources but deliberately does not own the public
+# obfuscation policy. Register them after targets exist so Release builds
+# cannot silently omit the Kagura pass.
+if(AETHERKIRI_INTERNAL_ENABLED AND AETHERKIRI_ENABLE_CODE_OBFUSCATION)
+    if(TARGET motionplayer)
+        file(GLOB_RECURSE AETHERKIRI_INTERNAL_EMOTE_SOURCES CONFIGURE_DEPENDS
+            "${AETHERKIRI_INTERNAL_DIR}/src/emote/*.cpp")
+        if(AETHERKIRI_INTERNAL_EMOTE_SOURCES)
+            aetherkiri_protect_internal_sources(motionplayer
+                ${AETHERKIRI_INTERNAL_EMOTE_SOURCES})
+        endif()
+    endif()
+    if(TARGET psbfile)
+        file(GLOB_RECURSE AETHERKIRI_INTERNAL_PSB_SOURCES CONFIGURE_DEPENDS
+            "${AETHERKIRI_INTERNAL_DIR}/src/psbfile/*.cpp")
+        if(AETHERKIRI_INTERNAL_PSB_SOURCES)
+            aetherkiri_protect_internal_sources(psbfile
+                ${AETHERKIRI_INTERNAL_PSB_SOURCES})
+        endif()
+    endif()
+    if(TARGET krkr2plugin)
+        file(GLOB_RECURSE AETHERKIRI_INTERNAL_PLUGIN_SOURCES CONFIGURE_DEPENDS
+            "${AETHERKIRI_INTERNAL_DIR}/src/plugins/*.cpp"
+            "${AETHERKIRI_INTERNAL_DIR}/src/krkr2_plugins/*.cpp"
+            "${AETHERKIRI_INTERNAL_DIR}/src/live2d/*.cpp")
+        if(AETHERKIRI_INTERNAL_PLUGIN_SOURCES)
+            aetherkiri_protect_internal_sources(krkr2plugin
+                ${AETHERKIRI_INTERNAL_PLUGIN_SOURCES})
+        endif()
+    endif()
+endif()
 
 if(BUILD_ENGINE_API)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api)
