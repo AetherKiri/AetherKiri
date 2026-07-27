@@ -195,6 +195,34 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/external)
 # build library
 add_subdirectory(${KRKR2CORE_PATH})
 add_subdirectory(${KRKR2PLUGIN_PATH})
+
+# AetherInternal's package file contributes sources to the public targets but
+# deliberately owns no protection policy. Register those owned sources here,
+# after the targets have been materialized, so Release builds cannot silently
+# omit the Kagura pass.
+if(AETHERKIRI_INTERNAL_ENABLED AND AETHERKIRI_ENABLE_CODE_OBFUSCATION)
+    file(GLOB_RECURSE AETHERKIRI_INTERNAL_EMOTE_SOURCES CONFIGURE_DEPENDS
+        "${AETHERKIRI_INTERNAL_DIR}/src/emote/*.cpp")
+    file(GLOB_RECURSE AETHERKIRI_INTERNAL_PSB_SOURCES CONFIGURE_DEPENDS
+        "${AETHERKIRI_INTERNAL_DIR}/src/psbfile/*.cpp")
+    file(GLOB_RECURSE AETHERKIRI_INTERNAL_PLUGIN_SOURCES CONFIGURE_DEPENDS
+        "${AETHERKIRI_INTERNAL_DIR}/src/plugins/*.cpp"
+        "${AETHERKIRI_INTERNAL_DIR}/src/krkr2_plugins/*.cpp"
+        "${AETHERKIRI_INTERNAL_DIR}/src/live2d/*.cpp")
+    if(TARGET motionplayer AND AETHERKIRI_INTERNAL_EMOTE_SOURCES)
+        aetherkiri_protect_internal_sources(motionplayer
+            ${AETHERKIRI_INTERNAL_EMOTE_SOURCES})
+    endif()
+    if(TARGET psbfile AND AETHERKIRI_INTERNAL_PSB_SOURCES)
+        aetherkiri_protect_internal_sources(psbfile
+            ${AETHERKIRI_INTERNAL_PSB_SOURCES})
+    endif()
+    if(TARGET krkr2plugin AND AETHERKIRI_INTERNAL_PLUGIN_SOURCES)
+        aetherkiri_protect_internal_sources(krkr2plugin
+            ${AETHERKIRI_INTERNAL_PLUGIN_SOURCES})
+    endif()
+endif()
+
 if(BUILD_ENGINE_API)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api)
 endif()
