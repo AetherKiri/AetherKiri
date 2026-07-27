@@ -82,6 +82,12 @@ option(BUILD_GODOT_EXTENSION "build Godot GDExtension host library" ON)
 option(BUILD_GPU_BRIDGE "build legacy external GPU bridge renderer" OFF)
 option(AETHERKIRI_ENABLE_BINARY_HARDENING
        "hide internal symbols and remove unused native code in release builds" ON)
+option(AETHERKIRI_ENABLE_CODE_OBFUSCATION
+       "obfuscate private Internal translation units in release builds" OFF)
+set(AETHERKIRI_OBFUSCATOR_PLUGIN "" CACHE FILEPATH
+    "path to a Kagura LLVM pass plugin built for the active Clang")
+set(AETHERKIRI_OBFUSCATION_BUILD_ID "local" CACHE STRING
+    "non-secret identifier mixed into deterministic obfuscation output")
 option(AETHERKIRI_ENABLE_INTERNAL
        "enable optional private AetherInternal packages when available" ON)
 set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 2)
@@ -89,6 +95,8 @@ set(AETHERKIRI_LIVE2D_HOST_API_VERSION 1)
 set(AETHERKIRI_INTERNAL_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherInternal"
     CACHE PATH "path to an AetherInternal package checkout")
+
+include(cmake/AetherKiriBinaryProtection.cmake)
 
 set(AETHERKIRI_INTERNAL_ENABLED OFF)
 if(AETHERKIRI_ENABLE_INTERNAL)
