@@ -3,6 +3,11 @@
     "fla": true,
     "bcf": true,
     "str": true,
+    "str_aes": true,
+    "mvo": true,
+    "pe": true,
+    "anti_debug": true,
+    "tamper": true,
     "dwarf": "strip"
   },
   "tuning": {
