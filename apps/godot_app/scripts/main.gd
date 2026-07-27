@@ -11,6 +11,7 @@ const VIDEO_EXTENSIONS := ["mp4", "mkv", "mov", "m4v", "avi", "webm", "flv", "ts
 const SUBTITLE_EXTENSIONS := ["srt", "vtt", "ass", "ssa"]
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const LEGAL_AGREEMENT_VERSION := "2026-07-27.4"
+const IOS_STATEMENT_VERSION := "2026-07-28"
 const LEGAL_AGREEMENT_ZH_HANS := "res://legal/privacy_disclaimer_zh_hans.txt"
 const LEGAL_AGREEMENT_ZH_HANT := "res://legal/privacy_disclaimer_zh_hant.txt"
 const LEGAL_AGREEMENT_EN := "res://legal/privacy_disclaimer_en.txt"
@@ -145,13 +146,15 @@ const UI_TEXT := {
         "settings.ios_statement_desc": "查看 GPLv3、App Store 分发附加许可、源码义务及适用范围",
         "settings.ios_statement_open": "阅读声明",
         "ios_statement.title": "iOS App Store 额外声明",
+        "ios_statement.first_summary": "iOS 首次使用确认（第 2/2 份）。您需要同时同意本声明和隐私与免责协议，才能使用视觉小说与视频功能。",
         "legal.title": "隐私政策与使用免责协议",
         "legal.first_summary": "首次使用前，请阅读并选择是否同意。协议可在「设置 > 关于」中随时查看。",
+        "legal.first_summary_ios": "iOS 首次使用确认（第 1/2 份）。同意本协议后，还需要确认 iOS App Store 额外声明。",
         "legal.accept": "同意并继续",
         "legal.decline": "拒绝",
         "legal.close": "关闭",
         "legal.declined_title": "尚未同意协议",
-        "legal.declined_body": "您已拒绝本协议，Aether 不会开放游戏或视频功能。iOS 不允许应用主动结束自身进程，请从系统应用切换界面关闭本应用；也可以返回重新阅读并选择同意。",
+        "legal.declined_body": "您尚未同意全部必需声明，Aether 不会开放视觉小说或视频功能。iOS 不允许应用主动结束自身进程，请从系统应用切换界面关闭本应用；也可以返回重新阅读并逐项同意。",
         "legal.review_again": "重新阅读",
         "detail.eyebrow": "游戏详情",
         "detail.runtime_profile": "运行配置 / %s",
@@ -299,13 +302,15 @@ const UI_TEXT := {
         "settings.ios_statement_desc": "查看 GPLv3、App Store 發布附加許可、原始碼義務及適用範圍",
         "settings.ios_statement_open": "閱讀聲明",
         "ios_statement.title": "iOS App Store 額外聲明",
+        "ios_statement.first_summary": "iOS 首次使用確認（第 2/2 份）。您需要同時同意本聲明和隱私與免責協議，才能使用視覺小說與影片功能。",
         "legal.title": "隱私政策與使用免責協議",
         "legal.first_summary": "首次使用前，請閱讀並選擇是否同意。協議可在「設定 > 關於」中隨時查看。",
+        "legal.first_summary_ios": "iOS 首次使用確認（第 1/2 份）。同意本協議後，還需要確認 iOS App Store 額外聲明。",
         "legal.accept": "同意並繼續",
         "legal.decline": "拒絕",
         "legal.close": "關閉",
         "legal.declined_title": "尚未同意協議",
-        "legal.declined_body": "您已拒絕本協議，Aether 不會開放遊戲或影片功能。iOS 不允許 App 主動結束自身程序，請從系統 App 切換畫面關閉本 App；也可以返回重新閱讀並選擇同意。",
+        "legal.declined_body": "您尚未同意全部必需聲明，Aether 不會開放視覺小說或影片功能。iOS 不允許 App 主動結束自身程序，請從系統 App 切換畫面關閉本 App；也可以返回重新閱讀並逐項同意。",
         "legal.review_again": "重新閱讀",
         "detail.eyebrow": "遊戲詳情",
         "detail.runtime_profile": "執行設定 / %s",
@@ -453,13 +458,15 @@ const UI_TEXT := {
         "settings.ios_statement_desc": "Review the GPLv3 App Store distribution permission, source obligations, and scope",
         "settings.ios_statement_open": "Read Notice",
         "ios_statement.title": "iOS App Store Additional Permission & Notice",
+        "ios_statement.first_summary": "iOS first-use confirmation (document 2 of 2). You must accept both this notice and the Privacy Policy, Terms & Disclaimer before using visual novel or video features.",
         "legal.title": "Privacy Policy, Terms & Disclaimer",
         "legal.first_summary": "Please read and choose whether to agree before first use. You can review this document later under Settings > About.",
+        "legal.first_summary_ios": "iOS first-use confirmation (document 1 of 2). After accepting this document, you must also accept the iOS App Store notice.",
         "legal.accept": "Agree and Continue",
         "legal.decline": "Decline",
         "legal.close": "Close",
         "legal.declined_title": "Agreement Not Accepted",
-        "legal.declined_body": "You declined the agreement, so Aether will not enable game or video features. iOS does not allow an app to terminate itself; close it from the system app switcher, or return to review and accept the agreement.",
+        "legal.declined_body": "You have not accepted every required document, so Aether will not enable visual novel or video features. iOS does not allow an app to terminate itself; close it from the system app switcher, or return to review and accept each document.",
         "legal.review_again": "Review Again",
         "detail.eyebrow": "Library Detail",
         "detail.runtime_profile": "Runtime profile / %s",
@@ -607,13 +614,15 @@ const UI_TEXT := {
         "settings.ios_statement_desc": "GPLv3、App Store 配布の追加許諾、ソース提供義務および適用範囲を確認します",
         "settings.ios_statement_open": "声明を読む",
         "ios_statement.title": "iOS App Store 追加許諾および声明",
+        "ios_statement.first_summary": "iOS 初回確認（2/2）。ビジュアルノベルおよび動画機能を使用するには、本声明とプライバシー・利用条件・免責事項の両方への同意が必要です。",
         "legal.title": "プライバシーポリシー・利用条件・免責事項",
         "legal.first_summary": "初回利用前に内容を読み、同意するか選択してください。設定 > 情報からいつでも確認できます。",
+        "legal.first_summary_ios": "iOS 初回確認（1/2）。本書への同意後、iOS App Store 追加声明への同意も必要です。",
         "legal.accept": "同意して続ける",
         "legal.decline": "拒否",
         "legal.close": "閉じる",
         "legal.declined_title": "同意されていません",
-        "legal.declined_body": "同意されていないため、ゲームと動画機能は利用できません。iOS では App 自身を終了できません。App スイッチャーから閉じるか、文書を読み直して同意してください。",
+        "legal.declined_body": "必要な文書のすべてに同意されていないため、ビジュアルノベルと動画機能は利用できません。iOS では App 自身を終了できません。App スイッチャーから閉じるか、各文書を読み直して同意してください。",
         "legal.review_again": "もう一度読む",
         "detail.eyebrow": "ゲーム詳細",
         "detail.runtime_profile": "ランタイムプロファイル / %s",
@@ -761,13 +770,15 @@ const UI_TEXT := {
         "settings.ios_statement_desc": "GPLv3, App Store 배포 추가 허가, 소스 제공 의무 및 적용 범위를 확인합니다",
         "settings.ios_statement_open": "고지 읽기",
         "ios_statement.title": "iOS App Store 추가 허가 및 고지",
+        "ios_statement.first_summary": "iOS 최초 확인(2/2). 비주얼 노벨 및 비디오 기능을 사용하려면 이 고지와 개인정보·이용 조건·면책 조항에 모두 동의해야 합니다.",
         "legal.title": "개인정보 처리방침·이용 조건·면책 조항",
         "legal.first_summary": "처음 사용하기 전에 내용을 읽고 동의 여부를 선택해 주세요. 설정 > 정보에서 언제든 다시 볼 수 있습니다.",
+        "legal.first_summary_ios": "iOS 최초 확인(1/2). 이 문서에 동의한 후 iOS App Store 추가 고지에도 동의해야 합니다.",
         "legal.accept": "동의하고 계속",
         "legal.decline": "거부",
         "legal.close": "닫기",
         "legal.declined_title": "약관에 동의하지 않음",
-        "legal.declined_body": "약관을 거부했으므로 게임 및 비디오 기능을 사용할 수 없습니다. iOS에서는 앱이 스스로 종료될 수 없습니다. 앱 전환 화면에서 닫거나 약관을 다시 읽고 동의해 주세요.",
+        "legal.declined_body": "필수 문서에 모두 동의하지 않았으므로 비주얼 노벨 및 비디오 기능을 사용할 수 없습니다. iOS에서는 앱이 스스로 종료될 수 없습니다. 앱 전환 화면에서 닫거나 각 문서를 다시 읽고 동의해 주세요.",
         "legal.review_again": "다시 읽기",
         "detail.eyebrow": "게임 상세",
         "detail.runtime_profile": "런타임 프로필 / %s",
@@ -938,6 +949,8 @@ var active_language := LANG_ZH_HANS
 var style_mode := STYLE_DARK
 var legal_accepted_version := ""
 var legal_accepted_at := 0
+var ios_statement_accepted_version := ""
+var ios_statement_accepted_at := 0
 var legal_gate_completed := false
 var dirty_settings := false
 var settings_draft := {}
@@ -1660,6 +1673,8 @@ func _load_shell_settings() -> void:
     error_dialog_logs = bool(cfg.get_value("developer", "error_dialog_logs", error_dialog_logs))
     legal_accepted_version = String(cfg.get_value("legal", "accepted_version", ""))
     legal_accepted_at = int(cfg.get_value("legal", "accepted_at", 0))
+    ios_statement_accepted_version = String(cfg.get_value("legal", "ios_statement_accepted_version", ""))
+    ios_statement_accepted_at = int(cfg.get_value("legal", "ios_statement_accepted_at", 0))
 
 func _configure_runtime_diagnostics() -> void:
     diagnostics_enabled = _runtime_flag("AETHERKIRI_DIAGNOSTICS")
@@ -1702,6 +1717,8 @@ func _save_shell_settings() -> void:
     cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
     cfg.set_value("legal", "accepted_version", legal_accepted_version)
     cfg.set_value("legal", "accepted_at", legal_accepted_at)
+    cfg.set_value("legal", "ios_statement_accepted_version", ios_statement_accepted_version)
+    cfg.set_value("legal", "ios_statement_accepted_at", ios_statement_accepted_at)
     cfg.save(SETTINGS_FILE)
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
     _apply_engine_options()
@@ -2420,7 +2437,7 @@ func _load_ios_statement_document() -> String:
         return _t("ios_statement.title")
     return file.get_as_text()
 
-func _show_ios_additional_statement() -> void:
+func _show_ios_additional_statement(first_use: bool = false) -> void:
     modal_layer.visible = true
     modal_layer.move_to_front()
     for child in modal_layer.get_children():
@@ -2459,6 +2476,14 @@ func _show_ios_additional_statement() -> void:
     title.add_theme_color_override("font_color", color_text)
     content.add_child(title)
 
+    if first_use:
+        var summary := Label.new()
+        summary.text = _t("ios_statement.first_summary")
+        summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+        summary.add_theme_font_size_override("font_size", 17)
+        summary.add_theme_color_override("font_color", color_accent_soft)
+        content.add_child(summary)
+
     var scroll := ScrollContainer.new()
     scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -2476,11 +2501,46 @@ func _show_ios_additional_statement() -> void:
     statement.add_theme_constant_override("line_spacing", 6)
     scroll.add_child(statement)
 
-    var close := _pill_button(_t("legal.close"))
-    close.custom_minimum_size = Vector2(150, 56)
-    close.size_flags_horizontal = Control.SIZE_SHRINK_END
-    close.pressed.connect(func(): modal_layer.visible = false)
-    content.add_child(close)
+    var buttons := HBoxContainer.new()
+    buttons.alignment = BoxContainer.ALIGNMENT_END
+    buttons.add_theme_constant_override("separation", 14)
+    buttons.custom_minimum_size = Vector2(0, 58)
+    content.add_child(buttons)
+
+    if first_use:
+        var decline := Button.new()
+        decline.text = _t("legal.decline")
+        decline.custom_minimum_size = Vector2(150, 56)
+        decline.add_theme_font_size_override("font_size", 19)
+        decline.add_theme_color_override("font_color", color_text)
+        decline.pressed.connect(_decline_legal_agreement)
+        buttons.add_child(decline)
+
+        var accept := _pill_button(_t("legal.accept"))
+        accept.custom_minimum_size = Vector2(220, 56)
+        accept.pressed.connect(_accept_ios_additional_statement)
+        buttons.add_child(accept)
+    else:
+        var close := _pill_button(_t("legal.close"))
+        close.custom_minimum_size = Vector2(150, 56)
+        close.pressed.connect(func(): modal_layer.visible = false)
+        buttons.add_child(close)
+
+func _effective_legal_platform_name() -> String:
+    var platform_override := String(
+        ProjectSettings.get_setting("aether_kiri/legal_platform_override", "")
+    ).strip_edges()
+    if platform_override == "iOS":
+        return platform_override
+    return OS.get_name()
+
+func _ios_statement_required(platform_name: String = "") -> bool:
+    var effective_platform := platform_name if not platform_name.is_empty() else _effective_legal_platform_name()
+    if effective_platform != "iOS":
+        return false
+    if OS.is_debug_build() and _runtime_flag("AETHERKIRI_BYPASS_LEGAL_GATE"):
+        return false
+    return ios_statement_accepted_version != IOS_STATEMENT_VERSION
 
 func _legal_agreement_required() -> bool:
     if OS.is_debug_build() and _runtime_flag("AETHERKIRI_BYPASS_LEGAL_GATE"):
@@ -2488,6 +2548,29 @@ func _legal_agreement_required() -> bool:
     if OS.get_environment("AETHERKIRI_CAPTURE_UI_ACTION") in ["legal", "legal_declined"]:
         return true
     return legal_accepted_version != LEGAL_AGREEMENT_VERSION
+
+func _next_required_legal_document(platform_name: String = "") -> String:
+    if _legal_agreement_required():
+        return "privacy"
+    if _ios_statement_required(platform_name):
+        return "ios_statement"
+    return ""
+
+func _show_next_required_legal_document() -> bool:
+    match _next_required_legal_document():
+        "privacy":
+            _show_legal_agreement(true)
+            return true
+        "ios_statement":
+            _show_ios_additional_statement(true)
+            return true
+    return false
+
+func _require_legal_documents_for_media() -> bool:
+    if _next_required_legal_document().is_empty():
+        return true
+    _show_next_required_legal_document()
+    return false
 
 func _show_legal_agreement(first_use: bool) -> void:
     modal_layer.visible = true
@@ -2530,7 +2613,11 @@ func _show_legal_agreement(first_use: bool) -> void:
 
     if first_use:
         var summary := Label.new()
-        summary.text = _t("legal.first_summary")
+        summary.text = _t(
+            "legal.first_summary_ios"
+            if _effective_legal_platform_name() == "iOS"
+            else "legal.first_summary"
+        )
         summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
         summary.add_theme_font_size_override("font_size", 17)
         summary.add_theme_color_override("font_color", color_accent_soft)
@@ -2583,13 +2670,30 @@ func _accept_legal_agreement() -> void:
     legal_accepted_at = int(Time.get_unix_time_from_system())
     _save_shell_settings()
     modal_layer.visible = false
+    if _show_next_required_legal_document():
+        return
+    _continue_ready_after_legal_gate()
+
+func _accept_ios_additional_statement() -> void:
+    ios_statement_accepted_version = IOS_STATEMENT_VERSION
+    ios_statement_accepted_at = int(Time.get_unix_time_from_system())
+    _save_shell_settings()
+    modal_layer.visible = false
+    if _show_next_required_legal_document():
+        return
     _continue_ready_after_legal_gate()
 
 func _decline_legal_agreement() -> void:
-    if OS.get_name() == "iOS":
+    if _effective_legal_platform_name() == "iOS":
         _show_legal_declined_screen()
         return
     get_tree().quit(0)
+
+func _review_required_legal_documents() -> void:
+    if _show_next_required_legal_document():
+        return
+    modal_layer.visible = false
+    _continue_ready_after_legal_gate()
 
 func _show_legal_declined_screen() -> void:
     modal_layer.visible = true
@@ -2640,7 +2744,7 @@ func _show_legal_declined_screen() -> void:
     var review := _pill_button(_t("legal.review_again"))
     review.custom_minimum_size = Vector2(180, 56)
     review.size_flags_horizontal = Control.SIZE_SHRINK_END
-    review.pressed.connect(func(): _show_legal_agreement(true))
+    review.pressed.connect(_review_required_legal_documents)
     box.add_child(review)
 
 func _build_loading_panel() -> void:
@@ -3686,7 +3790,8 @@ func _show_detail(game: Dictionary) -> void:
 
     var window_size := get_viewport_rect().size
     var content := Control.new()
-    var detail_content_height := 1040.0 if _can_configure_launch_file(game) else 900.0
+    var detail_content_height := 1120.0 if _can_configure_launch_file(game) else 960.0
+    var detail_right_width := maxf(760.0, window_size.x - 500.0)
     content.custom_minimum_size = Vector2(
         maxf(1280.0, window_size.x),
         maxf(detail_content_height, window_size.y)
@@ -3726,7 +3831,7 @@ func _show_detail(game: Dictionary) -> void:
     var title := Label.new()
     title.text = _game_display_title(game)
     title.position = Vector2(440, 124)
-    title.size = Vector2(760, 72)
+    title.size = Vector2(detail_right_width, 72)
     title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
     title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.add_theme_font_size_override("font_size", 36)
@@ -3736,14 +3841,14 @@ func _show_detail(game: Dictionary) -> void:
     var subtitle := Label.new()
     subtitle.text = _t("detail.runtime_profile", [_game_type_label(String(game.get("type", "Directory")))])
     subtitle.position = Vector2(444, 194)
-    subtitle.size = Vector2(760, 28)
+    subtitle.size = Vector2(detail_right_width - 4.0, 28)
     subtitle.add_theme_font_size_override("font_size", 17)
     subtitle.add_theme_color_override("font_color", color_muted)
     content.add_child(subtitle)
 
     var info_panel := PanelContainer.new()
     info_panel.position = Vector2(440, 246)
-    info_panel.size = Vector2(760, 246)
+    info_panel.size = Vector2(detail_right_width, 286)
     info_panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
     content.add_child(info_panel)
     var info := VBoxContainer.new()
@@ -3759,8 +3864,8 @@ func _show_detail(game: Dictionary) -> void:
     ))
 
     var start := _pill_button(_t("detail.launch"), ICON_PLAY)
-    start.position = Vector2(440, 520)
-    start.size = Vector2(760, 70)
+    start.position = Vector2(440, info_panel.position.y + info_panel.size.y + 28.0)
+    start.size = Vector2(detail_right_width, 70)
     start.button_down.connect(func(): _android_input_debug_log("detail launch button_down"))
     start.button_up.connect(func(): _android_input_debug_log("detail launch button_up"))
     start.pressed.connect(func(): _android_input_debug_log("detail launch pressed"))
@@ -3768,8 +3873,8 @@ func _show_detail(game: Dictionary) -> void:
     content.add_child(start)
 
     var tools := VBoxContainer.new()
-    tools.position = Vector2(440, 622)
-    tools.size = Vector2(760, 390)
+    tools.position = Vector2(440, start.position.y + start.size.y + 32.0)
+    tools.size = Vector2(detail_right_width, 390)
     tools.add_theme_constant_override("separation", 10)
     content.add_child(tools)
     if _can_configure_launch_file(game):
@@ -4825,6 +4930,8 @@ func _store_active_video_progress(finished: bool = false) -> void:
     _save_video_progress_file()
 
 func _open_video_player(video: Dictionary) -> void:
+    if not _require_legal_documents_for_media():
+        return
     var path := String(video.get("path", ""))
     if path.is_empty() or player == null or not _ensure_player_initialized():
         return
@@ -5461,6 +5568,8 @@ func _sync_game_card_hover_states(allow_hover: bool = true) -> void:
 
 func _start_selected_game() -> void:
     _android_input_debug_log("_start_selected_game selected=%s" % str(selected_game))
+    if not _require_legal_documents_for_media():
+        return
     var library_path := String(selected_game.get("path", ""))
     if library_path.is_empty():
         return
@@ -5935,8 +6044,7 @@ func _finish_ready_after_first_frame() -> void:
     video_progress_data = _load_video_progress()
     _refresh_games()
     _refresh_videos()
-    if _legal_agreement_required():
-        _show_legal_agreement(true)
+    if _show_next_required_legal_document():
         if not OS.get_environment("AETHERKIRI_CAPTURE_UI").is_empty():
             call_deferred("_capture_ui_after_ready")
         return
@@ -5944,6 +6052,8 @@ func _finish_ready_after_first_frame() -> void:
 
 func _continue_ready_after_legal_gate() -> void:
     if legal_gate_completed:
+        return
+    if _show_next_required_legal_document():
         return
     legal_gate_completed = true
     call_deferred("_refresh_games_after_web_local_restore")
@@ -7466,6 +7576,8 @@ func _renderer_summary(renderer: String) -> String:
 
 
 func _on_open_game() -> void:
+    if not _require_legal_documents_for_media():
+        return
     var requested_path := game_path.text.strip_edges()
     var path := _resolve_game_path(requested_path)
     if path != requested_path:

@@ -6,6 +6,11 @@ const DOCUMENTS := [
     "res://legal/privacy_disclaimer_en.txt",
     "res://legal/privacy_disclaimer_ja.txt",
     "res://legal/privacy_disclaimer_ko.txt",
+    "res://legal/ios_app_store_statement_zh_hans.txt",
+    "res://legal/ios_app_store_statement_zh_hant.txt",
+    "res://legal/ios_app_store_statement_en.txt",
+    "res://legal/ios_app_store_statement_ja.txt",
+    "res://legal/ios_app_store_statement_ko.txt",
 ]
 
 func _initialize() -> void:
