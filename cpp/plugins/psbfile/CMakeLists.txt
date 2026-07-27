@@ -27,7 +27,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ZLIB::ZLIB
 )
 
-if(AETHERKIRI_INTERNAL_ENABLED)
+if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_psbfile)
     aetherinternal_extend_psbfile(
         ${PROJECT_NAME}
         "${CMAKE_CURRENT_SOURCE_DIR}")

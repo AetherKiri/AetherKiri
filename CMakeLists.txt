@@ -117,14 +117,17 @@ if(AETHERKIRI_ENABLE_INTERNAL)
     find_package(AetherInternal CONFIG QUIET
         NO_DEFAULT_PATH)
     if(AetherInternal_FOUND)
-        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 5 OR
-           NOT AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL
-               AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION OR
+        # API 4 is the current private runtime package used by the protected
+        # mobile builds. API 5 remains accepted for older checkouts. The PSB
+        # and legacy-plugin extensions are optional across these package
+        # generations; core motion/Live2D/KiriKiri hooks are required.
+        if(NOT ((AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 5 AND
+                AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL 3) OR
+               (AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 4 AND
+                AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL 2)) OR
            NOT AETHERINTERNAL_REQUIRED_LIVE2D_HOST_API_VERSION EQUAL
                AETHERKIRI_LIVE2D_HOST_API_VERSION OR
            NOT COMMAND aetherinternal_extend_motionplayer OR
-           NOT COMMAND aetherinternal_extend_psbfile OR
-           NOT COMMAND aetherinternal_extend_legacy_plugins OR
            NOT COMMAND aetherinternal_extend_live2d OR
            NOT COMMAND aetherinternal_extend_krkr2plugin OR
            NOT COMMAND aetherinternal_extend_krkr2plugin_tests)
