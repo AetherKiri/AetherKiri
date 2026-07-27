@@ -66,6 +66,7 @@ if [[ -n "${GITHUB_ENV:-}" ]]; then
     {
         echo "AETHERKIRI_ENABLE_CODE_OBFUSCATION=1"
         echo "AETHERKIRI_OBFUSCATOR_PLUGIN=$plugin_path"
+        echo "AETHERKIRI_KAGURA_SOURCE_DIR=$source_directory"
         echo "CC=${llvm_prefix}/bin/clang"
         echo "CXX=${llvm_prefix}/bin/clang++"
         echo "DYLD_LIBRARY_PATH=${llvm_prefix}/lib:${DYLD_LIBRARY_PATH:-}"
