@@ -323,13 +323,13 @@ Build the debug APK:
 The APK is written to:
 
 ```text
-out/godot/android/debug/AetherKiri-debug.apk
+out/godot/android/debug/Aether-debug.apk
 ```
 
 Install and launch it on a connected device or emulator:
 
 ```bash
-adb install -r out/godot/android/debug/AetherKiri-debug.apk
+adb install -r out/godot/android/debug/Aether-debug.apk
 adb shell monkey -p org.github.krkr2.aetherkiri \
   -c android.intent.category.LAUNCHER 1
 ```
@@ -343,7 +343,7 @@ Build the release APK:
 The release APK is written to:
 
 ```text
-out/godot/android/release/AetherKiri-release.apk
+out/godot/android/release/Aether-release.apk
 ```
 
 The release preset is intentionally unsigned until a project release keystore is
@@ -351,7 +351,7 @@ configured. Sign it before installing or distributing it:
 
 ```bash
 apksigner sign --ks /path/to/release.keystore \
-  out/godot/android/release/AetherKiri-release.apk
+  out/godot/android/release/Aether-release.apk
 ```
 
 On Android, import games through the app UI on platforms with file-system

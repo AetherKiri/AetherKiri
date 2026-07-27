@@ -278,13 +278,13 @@ iOS/iPadOS 上通过“文件”App 将游戏复制到：
 APK 输出到：
 
 ```text
-out/godot/android/debug/AetherKiri-debug.apk
+out/godot/android/debug/Aether-debug.apk
 ```
 
 安装并启动到已连接设备或模拟器：
 
 ```bash
-adb install -r out/godot/android/debug/AetherKiri-debug.apk
+adb install -r out/godot/android/debug/Aether-debug.apk
 adb shell monkey -p org.github.krkr2.aetherkiri \
   -c android.intent.category.LAUNCHER 1
 ```
@@ -298,14 +298,14 @@ adb shell monkey -p org.github.krkr2.aetherkiri \
 Release APK 输出到：
 
 ```text
-out/godot/android/release/AetherKiri-release.apk
+out/godot/android/release/Aether-release.apk
 ```
 
 release preset 在配置项目发布 keystore 之前会保持未签名。安装或分发前需要签名：
 
 ```bash
 apksigner sign --ks /path/to/release.keystore \
-  out/godot/android/release/AetherKiri-release.apk
+  out/godot/android/release/Aether-release.apk
 ```
 
 Android 上，如果平台允许访问文件系统，可通过 App UI 导入游戏；受限设备可将游戏目录复制到
