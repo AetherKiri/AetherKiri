@@ -84,6 +84,8 @@ option(AETHERKIRI_ENABLE_BINARY_HARDENING
        "hide internal symbols and remove unused native code in release builds" ON)
 option(AETHERKIRI_ENABLE_CODE_OBFUSCATION
        "obfuscate private Internal translation units in release builds" OFF)
+option(AETHERKIRI_ENABLE_RUNTIME_PROTECTION
+       "enable Kagura runtime checks in private Internal release code" OFF)
 set(AETHERKIRI_OBFUSCATOR_PLUGIN "" CACHE FILEPATH
     "path to a Kagura LLVM pass plugin built for the active Clang")
 set(AETHERKIRI_KAGURA_SOURCE_DIR "" CACHE PATH
