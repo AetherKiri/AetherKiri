@@ -116,6 +116,10 @@ cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 mkdir -p "$GODOT_BIN_DIR"
 cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.dylib" "$GODOT_BIN_DIR/"
 cp -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.dylib" "$GODOT_BIN_DIR/"
+if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+    strip -S -x "$GODOT_BIN_DIR/libengine_api.dylib"
+    strip -S -x "$GODOT_BIN_DIR/libaether_kiri_godot.dylib"
+fi
 codesign --force --sign - "$GODOT_BIN_DIR/libengine_api.dylib" "$GODOT_BIN_DIR/libaether_kiri_godot.dylib" >/dev/null 2>&1 || true
 
 if [[ ! -x "$GODOT_BIN" ]]; then

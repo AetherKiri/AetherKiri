@@ -425,6 +425,15 @@ package_ios_unsigned_ipa() {
     fi
     echo "==> Building unsigned iOS App ($config_cap) for Sideloading..."
     mkdir -p "$export_dir/build"
+    local release_strip_args=()
+    if [[ "$build_type_lower" == "release" ]]; then
+        release_strip_args=(
+            DEPLOYMENT_POSTPROCESSING=YES
+            STRIP_INSTALLED_PRODUCT=YES
+            COPY_PHASE_STRIP=YES
+            STRIP_STYLE=all
+        )
+    fi
     xcodebuild build \
         -project "$xcodeproj" \
         -scheme AetherKiri \
@@ -433,6 +442,7 @@ package_ios_unsigned_ipa() {
         CODE_SIGN_IDENTITY="" \
         CODE_SIGNING_REQUIRED=NO \
         CODE_SIGNING_ALLOWED=NO \
+        "${release_strip_args[@]}" \
         CONFIGURATION_BUILD_DIR="$export_dir/build"
 
     echo "==> Packaging into unsigned .ipa..."

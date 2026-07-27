@@ -246,6 +246,17 @@ build_abi() {
     mkdir -p "$godot_bin_dir"
     copy_android_so "$cmake_build_dir/bridge/engine_api/libengine_api.so" "$godot_bin_dir/libengine_api.so"
     copy_android_so "$cmake_build_dir/bridge/godot_extension/libaether_kiri_godot.so" "$godot_bin_dir/libaether_kiri_godot.so"
+    if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+        local llvm_strip
+        llvm_strip="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" \
+            -path '*/bin/llvm-strip' -type f -print -quit)"
+        if [[ -z "$llvm_strip" || ! -x "$llvm_strip" ]]; then
+            echo "Error: Android llvm-strip was not found under $ANDROID_NDK_HOME" >&2
+            exit 1
+        fi
+        "$llvm_strip" --strip-unneeded "$godot_bin_dir/libengine_api.so"
+        "$llvm_strip" --strip-unneeded "$godot_bin_dir/libaether_kiri_godot.so"
+    fi
     copy_android_so "$vcpkg_triplet_dir/lib/libSDL2.so" "$godot_bin_dir/libSDL2.so"
     libomp_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/lib/clang/19/lib/linux/aarch64/libomp.so"
     if [[ ! -f "$libomp_path" ]]; then
