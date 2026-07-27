@@ -105,9 +105,13 @@ function(aetherkiri_protect_internal_sources target_name)
             message(FATAL_ERROR
                 "AETHERKIRI_ANDROID_OPT does not exist: ${AETHERKIRI_ANDROID_OPT}")
         endif()
+        if(NOT EXISTS "${AETHERKIRI_ANDROID_LLC}")
+            message(FATAL_ERROR
+                "AETHERKIRI_ANDROID_LLC does not exist: ${AETHERKIRI_ANDROID_LLC}")
+        endif()
         set_property(TARGET "${target_name}" PROPERTY
             CXX_COMPILER_LAUNCHER
-                "${android_launcher};${AETHERKIRI_ANDROID_OPT};${obfuscator_plugin}")
+                "${android_launcher};${AETHERKIRI_ANDROID_LLC};${AETHERKIRI_ANDROID_OPT};${obfuscator_plugin}")
     endif()
 
     foreach(internal_source IN LISTS ARGN)

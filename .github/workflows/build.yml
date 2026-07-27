@@ -177,6 +177,7 @@ jobs:
           ./.github/scripts/build-free-obfuscator.sh \
             "$llvm_prefix" "${RUNNER_TEMP}/kagura"
           echo "AETHERKIRI_ANDROID_OPT=${llvm_prefix}/bin/opt" >> "$GITHUB_ENV"
+          echo "AETHERKIRI_ANDROID_LLC=${llvm_prefix}/bin/llc" >> "$GITHUB_ENV"
           echo "AETHERKIRI_OBFUSCATION_BUILD_ID=${GITHUB_SHA}" >> "$GITHUB_ENV"
 
       - name: Restore vcpkg cache

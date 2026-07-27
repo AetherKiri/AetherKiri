@@ -92,6 +92,8 @@ set(AETHERKIRI_KAGURA_SOURCE_DIR "" CACHE PATH
     "path to the pinned Kagura sources used for its target runtime")
 set(AETHERKIRI_ANDROID_OPT "" CACHE FILEPATH
     "path to the host LLVM opt used for Android Internal FLA")
+set(AETHERKIRI_ANDROID_LLC "" CACHE FILEPATH
+    "path to the host LLVM llc used for Android Internal FLA")
 set(AETHERKIRI_OBFUSCATION_BUILD_ID "local" CACHE STRING
     "non-secret identifier mixed into deterministic obfuscation output")
 option(AETHERKIRI_ENABLE_INTERNAL

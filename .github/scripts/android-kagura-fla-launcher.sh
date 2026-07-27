@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 4 ]]; then
-    echo "Usage: $0 <opt> <plugin> <compiler> <compiler arguments...>" >&2
+if [[ $# -lt 5 ]]; then
+    echo "Usage: $0 <llc> <opt> <plugin> <compiler> <compiler arguments...>" >&2
     exit 2
 fi
 
-opt="$1"
-plugin="$2"
-compiler="$3"
-shift 3
+llc="$1"
+opt="$2"
+plugin="$3"
+compiler="$4"
+shift 4
 original_args=("$@")
 
 source_file=""
@@ -34,15 +35,15 @@ if [[ -z "$source_file" || -z "$object_file" ]]; then
     echo "Kagura FLA launcher could not identify the Internal source or output" >&2
     exit 1
 fi
-if [[ ! -x "$opt" || ! -f "$plugin" ]]; then
-    echo "Kagura FLA tools are unavailable: opt=$opt plugin=$plugin" >&2
+if [[ ! -x "$llc" || ! -x "$opt" || ! -f "$plugin" ]]; then
+    echo "Kagura FLA tools are unavailable: llc=$llc opt=$opt plugin=$plugin" >&2
     exit 1
 fi
 
 temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/aetherkiri-fla.XXXXXX")"
 trap 'rm -rf "$temporary_directory"' EXIT
 input_bitcode="$temporary_directory/input.bc"
-protected_ir="$temporary_directory/protected.ll"
+protected_bitcode="$temporary_directory/protected.bc"
 
 first_stage_args=()
 skip_next=0
@@ -92,7 +93,17 @@ done
 "$compiler" "${first_stage_args[@]}" -emit-llvm -o "$input_bitcode"
 "$opt" --load-pass-plugin="$plugin" \
     -passes='function(kagura-fla)' \
-    "$input_bitcode" -S -o "$protected_ir"
-"$compiler" "${second_stage_args[@]}" -O0 -x ir -c "$protected_ir" -o "$object_file"
+    "$input_bitcode" -o "$protected_bitcode"
+
+target_triple="aarch64-none-linux-android24"
+for argument in "${original_args[@]}"; do
+    if [[ "$argument" == --target=* ]]; then
+        target_triple="${argument#--target=}"
+        break
+    fi
+done
+"$llc" -mtriple="$target_triple" -filetype=obj \
+    -relocation-model=pic -function-sections -data-sections \
+    "$protected_bitcode" -o "$object_file"
 
 echo "[AetherKiri FLA] $normalized_source"
