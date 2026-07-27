@@ -12,12 +12,19 @@ function(aetherkiri_link_kagura_runtime target_name)
     endif()
 
     if(NOT TARGET kagura_runtime)
-        add_subdirectory(
-            "${AETHERKIRI_KAGURA_SOURCE_DIR}/runtime"
-            "${CMAKE_BINARY_DIR}/kagura-runtime"
-            EXCLUDE_FROM_ALL)
+        add_library(kagura_runtime STATIC
+            "${AETHERKIRI_KAGURA_SOURCE_DIR}/runtime/core/aes.c"
+            "${AETHERKIRI_KAGURA_SOURCE_DIR}/runtime/core/zero_buf.c"
+            "${AETHERKIRI_KAGURA_SOURCE_DIR}/runtime/anti_debug/anti_debug.c"
+            "${AETHERKIRI_KAGURA_SOURCE_DIR}/runtime/anti_debug/breakpoint_detection.c"
+            "${AETHERKIRI_KAGURA_SOURCE_DIR}/runtime/anti_debug/hook_detection.c"
+            "${AETHERKIRI_KAGURA_SOURCE_DIR}/runtime/anti_debug/emulator_detection.c"
+            "${AETHERKIRI_KAGURA_SOURCE_DIR}/runtime/ios/jailbreak_detection.c")
         target_include_directories(kagura_runtime PUBLIC
             "${AETHERKIRI_KAGURA_SOURCE_DIR}/include")
+        set_target_properties(kagura_runtime PROPERTIES
+            C_STANDARD 11
+            POSITION_INDEPENDENT_CODE ON)
         if(ANDROID OR (UNIX AND NOT APPLE))
             target_link_libraries(kagura_runtime PUBLIC ${CMAKE_DL_LIBS})
         endif()
