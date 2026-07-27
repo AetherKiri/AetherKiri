@@ -50,6 +50,12 @@ jobs:
           test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
           git submodule status --recursive
 
+      - name: Prepare Kagura runtime protection
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          ./.github/scripts/prepare-kagura-runtime.sh "${RUNNER_TEMP}/kagura"
+
       - name: Install Build Systems
         run: |
           sudo apt-get update
