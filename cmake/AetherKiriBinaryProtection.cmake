@@ -26,6 +26,29 @@ function(aetherkiri_link_kagura_runtime target_name)
     target_link_libraries("${target_name}" PRIVATE kagura_runtime)
 endfunction()
 
+function(aetherkiri_enable_internal_runtime_protection target_name)
+    if(NOT AETHERKIRI_ENABLE_RUNTIME_PROTECTION)
+        return()
+    endif()
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+        return()
+    endif()
+    if(WEB OR EMSCRIPTEN)
+        message(FATAL_ERROR "Kagura runtime protection is unavailable for Web")
+    endif()
+
+    aetherkiri_link_kagura_runtime("${target_name}")
+    foreach(internal_source IN LISTS ARGN)
+        if(NOT EXISTS "${internal_source}")
+            message(FATAL_ERROR
+                "Internal runtime protection source does not exist: "
+                "${internal_source}")
+        endif()
+        set_property(SOURCE "${internal_source}" APPEND PROPERTY
+            COMPILE_DEFINITIONS AETHERKIRI_KAGURA_RUNTIME=1)
+    endforeach()
+endfunction()
+
 function(aetherkiri_protect_internal_sources target_name)
     if(NOT AETHERKIRI_ENABLE_CODE_OBFUSCATION)
         return()
