@@ -42,7 +42,7 @@ fi
 temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/aetherkiri-fla.XXXXXX")"
 trap 'rm -rf "$temporary_directory"' EXIT
 input_bitcode="$temporary_directory/input.bc"
-protected_bitcode="$temporary_directory/protected.bc"
+protected_ir="$temporary_directory/protected.ll"
 
 first_stage_args=()
 skip_next=0
@@ -92,7 +92,7 @@ done
 "$compiler" "${first_stage_args[@]}" -emit-llvm -o "$input_bitcode"
 "$opt" --load-pass-plugin="$plugin" \
     -passes='function(kagura-fla)' \
-    "$input_bitcode" -o "$protected_bitcode"
-"$compiler" "${second_stage_args[@]}" -O0 -c "$protected_bitcode" -o "$object_file"
+    "$input_bitcode" -S -o "$protected_ir"
+"$compiler" "${second_stage_args[@]}" -O0 -x ir -c "$protected_ir" -o "$object_file"
 
 echo "[AetherKiri FLA] $normalized_source"
