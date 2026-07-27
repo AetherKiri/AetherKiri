@@ -129,8 +129,15 @@ function(aetherkiri_protect_internal_sources target_name)
                     "SHELL:-mllvm -kagura-build-id=${AETHERKIRI_OBFUSCATION_BUILD_ID}"
             )
         endif()
-        set_property(SOURCE "${internal_source}" APPEND PROPERTY
-            COMPILE_DEFINITIONS AETHERKIRI_KAGURA_RUNTIME=1)
+        if(ANDROID)
+            set_property(SOURCE "${internal_source}" APPEND PROPERTY
+                COMPILE_DEFINITIONS
+                    AETHERKIRI_KAGURA_RUNTIME=1
+                    AETHERKIRI_KAGURA_FLA=1)
+        else()
+            set_property(SOURCE "${internal_source}" APPEND PROPERTY
+                COMPILE_DEFINITIONS AETHERKIRI_KAGURA_RUNTIME=1)
+        endif()
     endforeach()
 
     message(STATUS
