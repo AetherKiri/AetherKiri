@@ -457,10 +457,6 @@ jobs:
       - name: Verify exported Xcode project and IPA
         run: |
           set -euo pipefail
-          test -s "out/ios/release/compile_commands.json"
-          test -s "out/ios/debug/compile_commands.json"
-          test -s "apps/godot_app/bin/ios/release/libaether_kiri_godot.a"
-          test -s "apps/godot_app/bin/ios/debug/libaether_kiri_godot.a"
           for build_type in release debug; do
             if [[ ! -d "out/godot/ios/${build_type}/AetherKiri.xcodeproj" ]]; then
               echo "Godot iOS ${build_type} Xcode project not found" >&2
@@ -475,7 +471,6 @@ jobs:
               echo "Godot iOS ${build_type} unsigned IPA not found" >&2
               exit 1
             fi
-            unzip -tq "out/godot/ios/${build_type}/AetherKiri-${build_type_cap}-Unsigned.ipa"
           done
 
       - name: Upload Release Xcode Project

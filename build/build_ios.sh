@@ -442,7 +442,7 @@ package_ios_unsigned_ipa() {
         CODE_SIGN_IDENTITY="" \
         CODE_SIGNING_REQUIRED=NO \
         CODE_SIGNING_ALLOWED=NO \
-        ${release_strip_args[@]+"${release_strip_args[@]}"} \
+        "${release_strip_args[@]}" \
         CONFIGURATION_BUILD_DIR="$export_dir/build"
 
     echo "==> Packaging into unsigned .ipa..."
