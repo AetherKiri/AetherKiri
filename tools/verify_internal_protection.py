@@ -8,6 +8,22 @@ PROTECTION_MARKERS = (
     "-fpass-plugin=",
     "-kagura-config=",
     "-kagura-build-id=",
+    "AETHERKIRI_KAGURA_RUNTIME=1",
+)
+
+REQUIRED_PASSES = (
+    "str",
+    "str_aes",
+    "mvo",
+    "pe",
+    "anti_debug",
+    "tamper",
+)
+
+REQUIRED_RUNTIME_SOURCES = (
+    "/runtime/core/aes.c",
+    "/runtime/anti_debug/anti_debug.c",
+    "/runtime/ios/jailbreak_detection.c",
 )
 
 
@@ -31,6 +47,16 @@ def main() -> int:
 
     with args.compile_commands.open("r", encoding="utf-8") as handle:
         entries = json.load(handle)
+
+    policy_path = Path(__file__).resolve().parents[1] / "cmake" / "internal_obfuscation.json"
+    with policy_path.open("r", encoding="utf-8") as handle:
+        policy = json.load(handle)
+    passes = policy.get("passes", {})
+    disabled_passes = [name for name in REQUIRED_PASSES if passes.get(name) is not True]
+    if disabled_passes:
+        raise SystemExit(
+            "required Kagura passes are disabled: " + ", ".join(disabled_passes)
+        )
 
     internal_entries = []
     leaked_entries = []
@@ -57,6 +83,20 @@ def main() -> int:
         raise SystemExit(
             "protection flags leaked into public sources:\n"
             + "\n".join(sorted(set(leaked_entries)))
+        )
+
+    compiled_sources = {
+        str(entry.get("file", "")).replace("\\", "/") for entry in entries
+    }
+    missing_runtime_sources = [
+        suffix
+        for suffix in REQUIRED_RUNTIME_SOURCES
+        if not any(source.endswith(suffix) for source in compiled_sources)
+    ]
+    if missing_runtime_sources:
+        raise SystemExit(
+            "Kagura runtime sources missing from target build:\n"
+            + "\n".join(missing_runtime_sources)
         )
 
     unique_sources = len(set(internal_entries))
