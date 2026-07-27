@@ -52,7 +52,9 @@ function(aetherkiri_enable_internal_runtime_protection target_name)
                 "${internal_source}")
         endif()
         set_property(SOURCE "${internal_source}" APPEND PROPERTY
-            COMPILE_DEFINITIONS AETHERKIRI_KAGURA_RUNTIME=1)
+            COMPILE_DEFINITIONS
+                AETHERKIRI_KAGURA_RUNTIME=1
+                AETHERKIRI_KAGURA_FLA=1)
     endforeach()
 endfunction()
 

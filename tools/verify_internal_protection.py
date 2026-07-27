@@ -12,7 +12,7 @@ PROTECTION_MARKERS = (
 )
 
 ANDROID_FLA_MARKERS = (
-    "android-kagura-fla-launcher.sh",
+    "AETHERKIRI_KAGURA_FLA=1",
     "AETHERKIRI_KAGURA_RUNTIME=1",
 )
 
@@ -88,15 +88,18 @@ def main() -> int:
         has_markers = all(marker in command for marker in required_markers)
         if is_internal_source(source):
             internal_entries.append(source)
-            requires_markers = not args.runtime_only or source.replace(
-                "\\", "/"
-            ).endswith("/src/krkr2_plugins/drawDeviceD2DCompat.cpp")
+            normalized_source = source.replace("\\", "/")
+            if args.fla_only:
+                requires_markers = "/packages/AetherInternal/src/" in normalized_source
+            else:
+                requires_markers = not args.runtime_only or normalized_source.endswith(
+                    "/src/krkr2_plugins/drawDeviceD2DCompat.cpp"
+                )
             if requires_markers and not has_markers:
                 missing_entries.append(source)
         elif any(
             marker in command
             for marker in required_markers
-            if marker != "android-kagura-fla-launcher.sh"
         ):
             leaked_entries.append(source)
 
