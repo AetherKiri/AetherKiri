@@ -63,16 +63,17 @@ jobs:
           test -f packages/AetherInternal/cmake/AetherInternalConfig.cmake
           git submodule status --recursive
 
-      - name: Prepare Kagura runtime protection
-        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
-        run: |
-          set -euo pipefail
-          ./.github/scripts/prepare-kagura-runtime.sh "${RUNNER_TEMP}/kagura"
-
       - name: Install Build Systems
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd ccache jq
+          if [[ "$AETHERKIRI_WITH_INTERNAL" == "true" ]]; then
+            curl --fail --silent --show-error --location \
+              -o "${RUNNER_TEMP}/llvm.sh" https://apt.llvm.org/llvm.sh
+            chmod +x "${RUNNER_TEMP}/llvm.sh"
+            sudo "${RUNNER_TEMP}/llvm.sh" 19
+            sudo apt-get install -y llvm-19-dev lld-19
+          fi
 
       - name: Restore ccache
         id: restore-ccache
@@ -157,6 +158,26 @@ jobs:
             exit 1
           fi
           echo "ANDROID_NDK_HOME=${ndk_root}" >> "$GITHUB_ENV"
+
+      - name: Build Android LLVM obfuscator
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        env:
+          AETHERKIRI_EXPORT_LLVM_COMPILERS: '0'
+        run: |
+          set -euo pipefail
+          llvm_prefix=/usr/lib/llvm-19
+          ndk_clang="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+          host_major="$(${llvm_prefix}/bin/clang --version | sed -n 's/.*clang version \([0-9][0-9]*\).*/\1/p' | head -1)"
+          ndk_major="$(${ndk_clang} --version | sed -n 's/.*clang version \([0-9][0-9]*\).*/\1/p' | head -1)"
+          if [[ -z "$host_major" || "$host_major" != "$ndk_major" ]]; then
+            echo "Android NDK Clang ${ndk_major:-unknown} does not match host LLVM ${host_major:-unknown}" >&2
+            exit 1
+          fi
+          chmod +x ./.github/scripts/android-kagura-fla-launcher.sh
+          ./.github/scripts/build-free-obfuscator.sh \
+            "$llvm_prefix" "${RUNNER_TEMP}/kagura"
+          echo "AETHERKIRI_ANDROID_OPT=${llvm_prefix}/bin/opt" >> "$GITHUB_ENV"
+          echo "AETHERKIRI_OBFUSCATION_BUILD_ID=${GITHUB_SHA}" >> "$GITHUB_ENV"
 
       - name: Restore vcpkg cache
         id: restore-vcpkg
@@ -243,11 +264,11 @@ jobs:
           export NDK_CCACHE=ccache
           ./build.sh android release --jobs=4
 
-      - name: Verify Android Internal runtime protection
+      - name: Verify Android Internal FLA protection
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         run: |
           set -euo pipefail
-          python3 tools/verify_internal_protection.py --runtime-only \
+          python3 tools/verify_internal_protection.py --fla-only \
             out/android/arm64-v8a/release/compile_commands.json
 
       - name: Build Android Debug

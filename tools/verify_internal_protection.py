@@ -11,6 +11,11 @@ PROTECTION_MARKERS = (
     "AETHERKIRI_KAGURA_RUNTIME=1",
 )
 
+ANDROID_FLA_MARKERS = (
+    "android-kagura-fla-launcher.sh",
+    "AETHERKIRI_KAGURA_RUNTIME=1",
+)
+
 REQUIRED_PASSES = (
     "str",
     "str_aes",
@@ -42,11 +47,15 @@ def main() -> int:
         description="Verify source-scoped AetherInternal obfuscation flags"
     )
     parser.add_argument("--runtime-only", action="store_true")
+    parser.add_argument("--fla-only", action="store_true")
     parser.add_argument("compile_commands", type=Path)
     args = parser.parse_args()
 
     with args.compile_commands.open("r", encoding="utf-8") as handle:
         entries = json.load(handle)
+
+    if args.runtime_only and args.fla_only:
+        parser.error("--runtime-only and --fla-only are mutually exclusive")
 
     if not args.runtime_only:
         policy_path = (
@@ -57,9 +66,8 @@ def main() -> int:
         with policy_path.open("r", encoding="utf-8") as handle:
             policy = json.load(handle)
         passes = policy.get("passes", {})
-        disabled_passes = [
-            name for name in REQUIRED_PASSES if passes.get(name) is not True
-        ]
+        required_passes = ("fla",) if args.fla_only else REQUIRED_PASSES
+        disabled_passes = [name for name in required_passes if passes.get(name) is not True]
         if disabled_passes:
             raise SystemExit(
                 "required Kagura passes are disabled: " + ", ".join(disabled_passes)
@@ -71,11 +79,12 @@ def main() -> int:
     for entry in entries:
         source = str(entry.get("file", ""))
         command = entry_command(entry)
-        required_markers = (
-            ("AETHERKIRI_KAGURA_RUNTIME=1",)
-            if args.runtime_only
-            else PROTECTION_MARKERS
-        )
+        if args.runtime_only:
+            required_markers = ("AETHERKIRI_KAGURA_RUNTIME=1",)
+        elif args.fla_only:
+            required_markers = ANDROID_FLA_MARKERS
+        else:
+            required_markers = PROTECTION_MARKERS
         has_markers = all(marker in command for marker in required_markers)
         if is_internal_source(source):
             internal_entries.append(source)
@@ -84,7 +93,11 @@ def main() -> int:
             ).endswith("/src/krkr2_plugins/drawDeviceD2DCompat.cpp")
             if requires_markers and not has_markers:
                 missing_entries.append(source)
-        elif any(marker in command for marker in required_markers):
+        elif any(
+            marker in command
+            for marker in required_markers
+            if marker != "android-kagura-fla-launcher.sh"
+        ):
             leaked_entries.append(source)
 
     if not internal_entries:

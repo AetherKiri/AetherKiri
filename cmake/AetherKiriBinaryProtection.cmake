@@ -71,7 +71,7 @@ function(aetherkiri_protect_internal_sources target_name)
         message(FATAL_ERROR
             "Internal code obfuscation is not supported for Web builds")
     endif()
-    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    if(NOT ANDROID AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         message(FATAL_ERROR
             "Internal code obfuscation requires upstream Clang; "
             "AppleClang and MSVC cannot load the pinned LLVM pass plugin")
@@ -94,17 +94,35 @@ function(aetherkiri_protect_internal_sources target_name)
 
     aetherkiri_link_kagura_runtime("${target_name}")
 
+    if(ANDROID)
+        set(android_launcher
+            "${CMAKE_SOURCE_DIR}/.github/scripts/android-kagura-fla-launcher.sh")
+        if(NOT EXISTS "${android_launcher}")
+            message(FATAL_ERROR
+                "Android Kagura FLA launcher is missing: ${android_launcher}")
+        endif()
+        if(NOT EXISTS "${AETHERKIRI_ANDROID_OPT}")
+            message(FATAL_ERROR
+                "AETHERKIRI_ANDROID_OPT does not exist: ${AETHERKIRI_ANDROID_OPT}")
+        endif()
+        set_property(TARGET "${target_name}" PROPERTY
+            CXX_COMPILER_LAUNCHER
+                "${android_launcher};${AETHERKIRI_ANDROID_OPT};${obfuscator_plugin}")
+    endif()
+
     foreach(internal_source IN LISTS ARGN)
         if(NOT EXISTS "${internal_source}")
             message(FATAL_ERROR
                 "Internal protection source does not exist: ${internal_source}")
         endif()
-        set_property(SOURCE "${internal_source}" APPEND PROPERTY
-            COMPILE_OPTIONS
-                "-fpass-plugin=${obfuscator_plugin}"
-                "SHELL:-mllvm -kagura-config=${obfuscation_policy}"
-                "SHELL:-mllvm -kagura-build-id=${AETHERKIRI_OBFUSCATION_BUILD_ID}"
-        )
+        if(NOT ANDROID)
+            set_property(SOURCE "${internal_source}" APPEND PROPERTY
+                COMPILE_OPTIONS
+                    "-fpass-plugin=${obfuscator_plugin}"
+                    "SHELL:-mllvm -kagura-config=${obfuscation_policy}"
+                    "SHELL:-mllvm -kagura-build-id=${AETHERKIRI_OBFUSCATION_BUILD_ID}"
+            )
+        endif()
         set_property(SOURCE "${internal_source}" APPEND PROPERTY
             COMPILE_DEFINITIONS AETHERKIRI_KAGURA_RUNTIME=1)
     endforeach()

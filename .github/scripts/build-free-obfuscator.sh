@@ -30,6 +30,8 @@ build_directory="${work_directory}/build"
 
 cmake -S "$source_directory" -B "$build_directory" -G Ninja \
     -D CMAKE_BUILD_TYPE=Release \
+    -D CMAKE_C_COMPILER="${llvm_prefix}/bin/clang" \
+    -D CMAKE_CXX_COMPILER="${llvm_prefix}/bin/clang++" \
     -D LLVM_DIR="$($llvm_config --cmakedir)" \
     -D KAGURA_BUILD_TESTS=OFF \
     -D KAGURA_BITCODE_TOOLS=OFF \
@@ -52,9 +54,12 @@ if [[ -n "${GITHUB_ENV:-}" ]]; then
     {
         echo "AETHERKIRI_ENABLE_CODE_OBFUSCATION=1"
         echo "AETHERKIRI_OBFUSCATOR_PLUGIN=$plugin_path"
-        echo "CC=${llvm_prefix}/bin/clang"
-        echo "CXX=${llvm_prefix}/bin/clang++"
         echo "DYLD_LIBRARY_PATH=${llvm_prefix}/lib:${DYLD_LIBRARY_PATH:-}"
+        echo "LD_LIBRARY_PATH=${llvm_prefix}/lib:${LD_LIBRARY_PATH:-}"
+        if [[ "${AETHERKIRI_EXPORT_LLVM_COMPILERS:-1}" == "1" ]]; then
+            echo "CC=${llvm_prefix}/bin/clang"
+            echo "CXX=${llvm_prefix}/bin/clang++"
+        fi
     } >> "$GITHUB_ENV"
 fi
 if [[ -n "${GITHUB_PATH:-}" ]]; then
