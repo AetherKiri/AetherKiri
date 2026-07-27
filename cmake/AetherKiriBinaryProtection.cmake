@@ -75,6 +75,8 @@ function(aetherkiri_protect_internal_sources target_name)
                 "SHELL:-mllvm -kagura-config=${obfuscation_policy}"
                 "SHELL:-mllvm -kagura-build-id=${AETHERKIRI_OBFUSCATION_BUILD_ID}"
         )
+        set_property(SOURCE "${internal_source}" APPEND PROPERTY
+            COMPILE_DEFINITIONS AETHERKIRI_KAGURA_RUNTIME=1)
     endforeach()
 
     message(STATUS
