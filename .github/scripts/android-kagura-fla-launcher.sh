@@ -40,6 +40,10 @@ if [[ ! -x "$llc" || ! -x "$opt" || ! -f "$plugin" ]]; then
     exit 1
 fi
 
+if [[ -n "${AETHERKIRI_FLA_MANIFEST:-}" ]]; then
+    printf '%s\n' "$normalized_source" >> "$AETHERKIRI_FLA_MANIFEST"
+fi
+
 temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/aetherkiri-fla.XXXXXX")"
 trap 'rm -rf "$temporary_directory"' EXIT
 input_bitcode="$temporary_directory/input.bc"
@@ -93,6 +97,7 @@ done
 "$compiler" "${first_stage_args[@]}" -emit-llvm -o "$input_bitcode"
 "$opt" --load-pass-plugin="$plugin" \
     -passes='function(kagura-fla)' \
+    -kagura-metrics \
     "$input_bitcode" -o "$protected_bitcode"
 
 target_triple="aarch64-none-linux-android24"

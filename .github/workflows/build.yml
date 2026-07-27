@@ -256,6 +256,8 @@ jobs:
       - name: Build Android Release
         run: |
           set -euo pipefail
+          export AETHERKIRI_FLA_MANIFEST="${RUNNER_TEMP}/aetherkiri-fla-manifest.txt"
+          : > "$AETHERKIRI_FLA_MANIFEST"
           chmod +x ./build.sh
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -264,9 +266,15 @@ jobs:
 
       - name: Verify Android Internal FLA protection
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
-        continue-on-error: true
         run: |
           set -euo pipefail
+          test -s "${RUNNER_TEMP}/aetherkiri-fla-manifest.txt"
+          count=$(sort -u "${RUNNER_TEMP}/aetherkiri-fla-manifest.txt" | wc -l)
+          if (( count < 7 )); then
+            echo "Expected at least 7 Internal FLA translation units, got $count" >&2
+            sort -u "${RUNNER_TEMP}/aetherkiri-fla-manifest.txt" >&2
+            exit 1
+          fi
           python3 tools/verify_internal_protection.py --fla-only \
             out/android/arm64-v8a/release/compile_commands.json
 

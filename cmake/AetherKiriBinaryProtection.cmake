@@ -127,6 +127,7 @@ function(aetherkiri_protect_internal_sources target_name)
                     "-fpass-plugin=${obfuscator_plugin}"
                     "SHELL:-mllvm -kagura-config=${obfuscation_policy}"
                     "SHELL:-mllvm -kagura-build-id=${AETHERKIRI_OBFUSCATION_BUILD_ID}"
+                    "SHELL:-mllvm -kagura-metrics"
             )
         endif()
         if(ANDROID)
