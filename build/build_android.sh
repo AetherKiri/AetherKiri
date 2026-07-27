@@ -251,7 +251,7 @@ build_abi() {
     if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
         local llvm_strip
         llvm_strip="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" \
-            -path '*/bin/llvm-strip' -type f -print -quit)"
+            -path '*/bin/llvm-strip' -print -quit)"
         if [[ -z "$llvm_strip" || ! -x "$llvm_strip" ]]; then
             echo "Error: Android llvm-strip was not found under $ANDROID_NDK_HOME" >&2
             exit 1
