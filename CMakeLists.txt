@@ -80,6 +80,22 @@ option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
 option(BUILD_ENGINE_API "build engine_api bridge shared library" ON)
 option(BUILD_GODOT_EXTENSION "build Godot GDExtension host library" ON)
 option(BUILD_GPU_BRIDGE "build legacy external GPU bridge renderer" OFF)
+option(AETHERKIRI_ENABLE_BINARY_HARDENING
+       "hide internal symbols and remove unused native code in release builds" ON)
+option(AETHERKIRI_ENABLE_CODE_OBFUSCATION
+       "obfuscate private Internal translation units in release builds" OFF)
+option(AETHERKIRI_ENABLE_RUNTIME_PROTECTION
+       "enable Kagura runtime checks in private Internal release code" OFF)
+set(AETHERKIRI_OBFUSCATOR_PLUGIN "" CACHE FILEPATH
+    "path to a Kagura LLVM pass plugin built for the active Clang")
+set(AETHERKIRI_KAGURA_SOURCE_DIR "" CACHE PATH
+    "path to the pinned Kagura sources used for its target runtime")
+set(AETHERKIRI_ANDROID_OPT "" CACHE FILEPATH
+    "path to the host LLVM opt used for Android Internal FLA")
+set(AETHERKIRI_ANDROID_LLC "" CACHE FILEPATH
+    "path to the host LLVM llc used for Android Internal FLA")
+set(AETHERKIRI_OBFUSCATION_BUILD_ID "local" CACHE STRING
+    "non-secret identifier mixed into deterministic obfuscation output")
 option(AETHERKIRI_ENABLE_INTERNAL
        "enable optional private AetherInternal packages when available" ON)
 set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 3)
@@ -87,6 +103,8 @@ set(AETHERKIRI_LIVE2D_HOST_API_VERSION 1)
 set(AETHERKIRI_INTERNAL_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherInternal"
     CACHE PATH "path to an AetherInternal package checkout")
+
+include(cmake/AetherKiriBinaryProtection.cmake)
 
 set(AETHERKIRI_INTERNAL_ENABLED OFF)
 if(AETHERKIRI_ENABLE_INTERNAL)
@@ -126,12 +144,43 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+if(AETHERKIRI_ENABLE_BINARY_HARDENING)
+    set(CMAKE_C_VISIBILITY_PRESET hidden)
+    set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+    set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+
+    if(NOT MSVC AND NOT (WEB OR EMSCRIPTEN))
+        add_compile_options(
+            "$<$<NOT:$<CONFIG:Debug>>:-ffunction-sections>"
+            "$<$<NOT:$<CONFIG:Debug>>:-fdata-sections>"
+        )
+        if(APPLE)
+            add_link_options(
+                "$<$<NOT:$<CONFIG:Debug>>:-Wl,-dead_strip>"
+                "$<$<NOT:$<CONFIG:Debug>>:-Wl,-x>"
+            )
+        elseif(ANDROID OR UNIX)
+            add_link_options(
+                "$<$<NOT:$<CONFIG:Debug>>:-Wl,--gc-sections>"
+                "$<$<NOT:$<CONFIG:Debug>>:-Wl,--exclude-libs,ALL>"
+            )
+        endif()
+    endif()
+endif()
+
 set(KRKR2CORE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/core)
 set(KRKR2PLUGIN_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins)
 
 if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/EHsc>" "/MP" "/utf-8")
-    add_link_options("/ignore:4099" "/INCREMENTAL" "/DEBUG:FASTLINK")
+    add_link_options(
+        "/ignore:4099"
+        "$<$<CONFIG:Debug>:/INCREMENTAL>"
+        "$<$<CONFIG:Debug>:/DEBUG:FASTLINK>"
+        "$<$<NOT:$<CONFIG:Debug>>:/INCREMENTAL:NO>"
+        "$<$<NOT:$<CONFIG:Debug>>:/OPT:REF>"
+        "$<$<NOT:$<CONFIG:Debug>>:/OPT:ICF>"
+    )
     # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 

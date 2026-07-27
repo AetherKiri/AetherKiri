@@ -204,6 +204,13 @@ build_abi() {
     local cmake_config_args=(
         -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
         -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
+        -D "AETHERKIRI_ENABLE_CODE_OBFUSCATION=${AETHERKIRI_ENABLE_CODE_OBFUSCATION:-OFF}"
+        -D "AETHERKIRI_ENABLE_RUNTIME_PROTECTION=${AETHERKIRI_ENABLE_RUNTIME_PROTECTION:-OFF}"
+        -D "AETHERKIRI_OBFUSCATOR_PLUGIN=${AETHERKIRI_OBFUSCATOR_PLUGIN:-}"
+        -D "AETHERKIRI_KAGURA_SOURCE_DIR=${AETHERKIRI_KAGURA_SOURCE_DIR:-}"
+        -D "AETHERKIRI_ANDROID_OPT=${AETHERKIRI_ANDROID_OPT:-}"
+        -D "AETHERKIRI_ANDROID_LLC=${AETHERKIRI_ANDROID_LLC:-}"
+        -D "AETHERKIRI_OBFUSCATION_BUILD_ID=${AETHERKIRI_OBFUSCATION_BUILD_ID:-local}"
     )
 
     case "$abi" in
@@ -243,6 +250,17 @@ build_abi() {
     mkdir -p "$godot_bin_dir"
     copy_android_so "$cmake_build_dir/bridge/engine_api/libengine_api.so" "$godot_bin_dir/libengine_api.so"
     copy_android_so "$cmake_build_dir/bridge/godot_extension/libaether_kiri_godot.so" "$godot_bin_dir/libaether_kiri_godot.so"
+    if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+        local llvm_strip
+        llvm_strip="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" \
+            -path '*/bin/llvm-strip' -print -quit)"
+        if [[ -z "$llvm_strip" || ! -x "$llvm_strip" ]]; then
+            echo "Error: Android llvm-strip was not found under $ANDROID_NDK_HOME" >&2
+            exit 1
+        fi
+        "$llvm_strip" --strip-unneeded "$godot_bin_dir/libengine_api.so"
+        "$llvm_strip" --strip-unneeded "$godot_bin_dir/libaether_kiri_godot.so"
+    fi
     copy_android_so "$vcpkg_triplet_dir/lib/libSDL2.so" "$godot_bin_dir/libSDL2.so"
     libomp_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/lib/clang/19/lib/linux/aarch64/libomp.so"
     if [[ ! -f "$libomp_path" ]]; then
