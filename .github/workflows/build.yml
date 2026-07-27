@@ -364,9 +364,10 @@ jobs:
           set -euo pipefail
           brew install llvm
           llvm_prefix="$(brew --prefix llvm)"
-          ./.github/scripts/build-free-obfuscator.sh \
+          AETHERKIRI_EXPORT_LLVM_COMPILERS=0 ./.github/scripts/build-free-obfuscator.sh \
             "$llvm_prefix" "${RUNNER_TEMP}/kagura"
           echo "AETHERKIRI_OBFUSCATION_BUILD_ID=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "AETHERKIRI_LLVM_PREFIX=${llvm_prefix}" >> "$GITHUB_ENV"
 
       - name: Install Godot export tools
         run: |
@@ -428,6 +429,8 @@ jobs:
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+          echo "CC=${AETHERKIRI_LLVM_PREFIX}/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=${AETHERKIRI_LLVM_PREFIX}/bin/clang++" >> "$GITHUB_ENV"
 
       - name: Build iOS Release
         run: |
