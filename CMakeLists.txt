@@ -2,10 +2,12 @@ cmake_minimum_required(VERSION 3.28)
 
 find_program(CCACHE_PROGRAM ccache)
 
-if (CCACHE_PROGRAM)
+if (CCACHE_PROGRAM AND NOT DEFINED ENV{AETHERKIRI_FLA_MANIFEST})
     set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
     set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
     message(STATUS "Ccache found: ${CCACHE_PROGRAM}")
+elseif (CCACHE_PROGRAM)
+    message(STATUS "Ccache disabled for the protected FLA translation pass")
 endif ()
 
 add_compile_definitions(
