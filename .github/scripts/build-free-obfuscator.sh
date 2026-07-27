@@ -52,7 +52,9 @@ cmake --build "$build_directory" --target KaguraObfuscator --parallel 4
 
 plugin_path="$(find "$build_directory" -type f \
     \( -name 'libKaguraObfuscator.dylib' \
+       -o -name 'KaguraObfuscator.dylib' \
        -o -name 'libKaguraObfuscator.so' \
+       -o -name 'KaguraObfuscator.so' \
        -o -name 'KaguraObfuscator.dll' \) \
     -print -quit)"
 if [[ -z "$plugin_path" || ! -f "$plugin_path" ]]; then
