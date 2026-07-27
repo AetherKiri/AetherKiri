@@ -13,6 +13,10 @@ vcpkg_extract_source_archive(
         fix-apple-linker-flags.patch
 )
 
+if(VCPKG_TARGET_IS_OSX)
+    set(LIBARCHIVE_PLATFORM_OPTIONS -DENABLE_WERROR=OFF)
+endif()
+
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS
@@ -22,6 +26,7 @@ vcpkg_cmake_configure(
         -DENABLE_CAT=OFF
         -DENABLE_CPIO=OFF
         -DENABLE_UNZIP=OFF
+        ${LIBARCHIVE_PLATFORM_OPTIONS}
 )
 
 vcpkg_cmake_install()
