@@ -86,6 +86,8 @@ option(AETHERKIRI_ENABLE_CODE_OBFUSCATION
        "obfuscate private Internal translation units in release builds" OFF)
 set(AETHERKIRI_OBFUSCATOR_PLUGIN "" CACHE FILEPATH
     "path to a Kagura LLVM pass plugin built for the active Clang")
+set(AETHERKIRI_KAGURA_SOURCE_DIR "" CACHE PATH
+    "path to the pinned Kagura sources used for its target runtime")
 set(AETHERKIRI_OBFUSCATION_BUILD_ID "local" CACHE STRING
     "non-secret identifier mixed into deterministic obfuscation output")
 option(AETHERKIRI_ENABLE_INTERNAL
