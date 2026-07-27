@@ -121,7 +121,7 @@ elif [[ ! -f "$GODOT_EXPORT_TEMPLATE" ]]; then
     echo "Warning: Godot macOS export template missing at $GODOT_EXPORT_TEMPLATE; native libraries were staged only." >&2
 else
     echo "==> Exporting Godot macOS app"
-    GODOT_EXPORT_APP="$PROJECT_ROOT/out/godot/macos/$BUILD_TYPE_LOWER/AetherKiri.app"
+    GODOT_EXPORT_APP="$PROJECT_ROOT/out/godot/macos/$BUILD_TYPE_LOWER/Aether.app"
     mkdir -p "$PROJECT_ROOT/out/godot/macos/$BUILD_TYPE_LOWER"
     rm -rf "$GODOT_EXPORT_APP"
     "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \

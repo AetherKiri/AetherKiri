@@ -1,12 +1,12 @@
-vcpkg_from_github(
-    OUT_SOURCE_PATH SOURCE_PATH
-    REPO ffmpeg/ffmpeg
-    REF "n${VERSION}"
-    SHA512 c3b49fe521d3eb946c130a6ad2d199130483e7c01545e53acef316e4c923f768540057e2c0ce2655aaaafc55872e02f045fe59f5a477d1c5b8985ef14c6bd3df
-    PATCHES
-        0001-android-ffmpeg.patch
-        0001-operand-shr-error.patch
-        0001-fixed-mac.patch
+vcpkg_download_distfile(ARCHIVE
+    URLS "https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz"
+    FILENAME "ffmpeg-${VERSION}.tar.xz"
+    SHA512 b3adc16fe426217bb607da01c4137cee0a9788fc08e077874336db185d2b7287746a7dc94cf0181ea92cd8afcdb06094ee9456e2986112354f84538cb9a5ed0b
+)
+
+vcpkg_extract_source_archive(
+    SOURCE_PATH
+    ARCHIVE "${ARCHIVE}"
 )
 
 if(SOURCE_PATH MATCHES " ")
@@ -14,26 +14,12 @@ if(SOURCE_PATH MATCHES " ")
 endif()
 
 if (VCPKG_TARGET_ARCHITECTURE STREQUAL "x86" OR VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
-    if(VCPKG_HOST_IS_WINDOWS)
-        # FFmpeg 3.3.9 probes NASM with -Werror. NASM 3.x emits a new
-        # implicit-abs-deprecated warning for that probe and is rejected as
-        # "too old", so keep this legacy port on the last compatible series.
-        vcpkg_download_distfile(NASM_ARCHIVE
-            URLS "https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip"
-            FILENAME "nasm-2.16.03-win64.zip"
-            SHA512 22869ceb70ea0e6597fe06abe205b5d5dd66b41fe54dda73d338c488ba6ef13a39158f25b357616bf578752bb112869ef26ad897eb29352e85cf1ecc61a7c07a
-        )
-        vcpkg_extract_source_archive(NASM_ROOT ARCHIVE "${NASM_ARCHIVE}")
-        file(GLOB_RECURSE NASM_EXECUTABLE "${NASM_ROOT}/nasm.exe")
-        list(GET NASM_EXECUTABLE 0 NASM)
-    else()
-        vcpkg_find_acquire_program(NASM)
-    endif()
+    vcpkg_find_acquire_program(NASM)
     get_filename_component(NASM_EXE_PATH "${NASM}" DIRECTORY)
     vcpkg_add_to_path("${NASM_EXE_PATH}")
 endif()
 
-set(OPTIONS "--enable-pic --disable-doc --enable-debug=3 --enable-runtime-cpudetect")
+set(OPTIONS "--enable-pic --disable-doc --enable-debug=3 --enable-runtime-cpudetect --disable-autodetect --enable-iconv")
 
 if(VCPKG_TARGET_IS_MINGW)
     if(VCPKG_TARGET_ARCHITECTURE STREQUAL "x86")
@@ -280,7 +266,7 @@ if (VCPKG_TARGET_IS_IOS)
 endif ()
 
 if (VCPKG_TARGET_IS_IOS AND VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
-    set(OPTIONS "${OPTIONS} --disable-yasm")
+    set(OPTIONS "${OPTIONS} --disable-x86asm")
 endif ()
 
 set(OPTIONS_DEBUG "--disable-optimizations --disable-stripping")

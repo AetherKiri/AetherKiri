@@ -118,13 +118,24 @@ class CAEStreamAL : public IAEStream {
                 bitsPerSample = 16;
                 break;
         }
-        swr_ctx = swr_alloc_set_opts(
-            nullptr, layout, swr_tgtFormat, audioFormat.m_sampleRate, layout,
-            srcFormat, audioFormat.m_sampleRate, 0, nullptr);
+        AVChannelLayout channelLayout{};
+        const int layoutResult =
+            av_channel_layout_from_mask(&channelLayout, layout);
+        const int allocResult = layoutResult < 0
+            ? layoutResult
+            : swr_alloc_set_opts2(
+            &swr_ctx, &channelLayout, swr_tgtFormat, audioFormat.m_sampleRate,
+            &channelLayout, srcFormat, audioFormat.m_sampleRate, 0, nullptr);
+        av_channel_layout_uninit(&channelLayout);
+        if(allocResult < 0 || !swr_ctx)
+            throw new std::runtime_error("could not allocate audio resampler");
+        const int result = swr_init(swr_ctx);
+        if(result < 0) {
+            swr_free(&swr_ctx);
+            throw new std::runtime_error("could not initialize audio resampler");
+        }
         tgt_frameSize = av_get_bytes_per_sample(swr_tgtFormat) *
             m_format.m_channelLayout.Count();
-        int result = swr_init(swr_ctx);
-        assert(swr_ctx && result >= 0);
         return bitsPerSample;
     }
 

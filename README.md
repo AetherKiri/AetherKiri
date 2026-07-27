@@ -483,3 +483,9 @@ CPU is only a diagnostic fallback.
 
 AetherKiri is distributed under GPL-3.0-or-later. See `LICENSE` for the full
 license text. Third-party notices are preserved in `THIRD_PARTY_LICENSES.md`.
+For iOS App Store distribution, `COPYING.iOS` records the limited additional
+permission granted by approving copyright holders solely for the official
+Aether iOS release or a distributor they authorize in writing. Third-party
+forks and derivative apps may not rely on that additional permission. It does
+not grant rights in upstream or third-party material on behalf of other
+copyright holders, or revoke rights already granted by the GPL.

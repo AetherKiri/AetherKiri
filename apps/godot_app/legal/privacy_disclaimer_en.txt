@@ -1,0 +1,83 @@
+Aether Privacy Policy, Terms of Use, and Disclaimer
+
+Version: 2026-07-27.4
+Effective date: July 27, 2026
+
+Welcome to Aether. Aether is an open-source visual-novel runtime and local media management tool. It can read visual novels, local videos, and external subtitles that you import. Please read this document carefully, especially the sections about risk, liability, and intellectual property.
+
+If you are a minor, review this document with a parent or guardian and obtain their permission before use. By selecting “Agree and Continue,” you confirm that you have read, understood, and accepted this document. If you disagree, select “Decline” and stop using the app.
+
+1. Privacy Policy
+
+1.1 Data processed by the app
+
+Aether does not require an account and contains no advertising, user tracking, or developer-operated analytics service. To provide local library, runtime, and playback features, the app processes or stores the following information locally on your device:
+
+- Games, videos, subtitles, cover images, and related files that you select or copy into the app’s directory.
+- File paths, display names, cover references, recent-use timestamps, accumulated play time, and video playback positions.
+- Language, interface, rendering, compatibility, and diagnostic preferences.
+- Saves, caches, and temporary files required for operation.
+- Local logs, performance data, error context, screenshots, or diagnostic archives created when diagnostic features are enabled. Diagnostics may include file names, paths, game titles, rendering information, and error context. Review them before sharing.
+
+1.2 Use of data
+
+This information is used only on your device to display your library, run compatible content, restore settings and playback positions, preserve game progress, troubleshoot errors, and improve local operation. The developer does not proactively upload your imported games, videos, subtitles, saves, logs, or other personal files to a developer server.
+
+1.3 Network access and external content
+
+The core library and local playback functions can operate offline. However, imported game scripts, media, or external links may request network resources, and compatibility interfaces may attempt network access when instructed by imported content. These requests are initiated by content you choose to run and do not mean that the Aether developer is collecting data. Import only content you trust. You are responsible for data charges and for the privacy practices of external services.
+
+1.4 Sharing
+
+The developer does not proactively sell or share your local data. Data leaves your device only when you choose to share, copy, or export files or diagnostics. The recipient you select handles that data under its own privacy practices.
+
+Open-source components used by Aether perform parsing, decoding, rendering, and runtime work locally. The developer does not use those components to proactively transmit your content to their authors.
+
+1.5 File permissions and local security
+
+On iOS, Aether reads content that you place in its Files app directory. On other platforms, it reads relevant locations after you import files or grant the corresponding file permission. Core functionality does not require Contacts, Location, Camera, Microphone, or advertising-tracking access.
+
+iOS file sharing may allow the app directory to be accessed through the Files app or a trusted computer. Protect your device, backups, and exported files. Do not run unknown, modified, or potentially malicious content.
+
+1.6 Retention and deletion
+
+Data remains on your device until you delete the corresponding files, remove library records, clear app data, or uninstall the app. Removing a library record may not delete the original file; delete original files through the Files app or a file manager. Copies, backups, and files shared elsewhere are not automatically deleted when the app is uninstalled. Because the developer does not maintain a user-data server, there is normally no developer-held server copy to delete.
+
+To stop using the app or withdraw your decision to use it, stop use and uninstall it. System file permissions can be revoked in device settings.
+
+2. User Content and Intellectual Property
+
+2.1 Aether does not provide, sell, or license third-party visual novels, videos, subtitles, images, audio, or other works, and it does not verify the source or rights status of content imported by users.
+
+2.2 You must have the legal right or required authorization to import, copy, run, play, modify, or share content, and you must comply with applicable law and the content owner’s license terms.
+
+2.3 You may not use Aether for infringing distribution, piracy, circumvention of effective technological protection measures, unlawful or harmful content, attacks on network systems, or any other illegal activity. Responsibility arising from user content or conduct remains with the person responsible under applicable law.
+
+2.4 Game scripts are executable content. They may read or modify accessible local files, create saves, open links, or make network requests. Aether cannot guarantee that all third-party content is safe, lawful, complete, or compatible with your device.
+
+3. Software and Open-Source Licensing
+
+3.1 Aether is under active development. It does not guarantee compatibility with every game, plug-in, media format, or subtitle, nor exact equivalence with the original platform’s graphics, audio, saves, or script behavior.
+
+3.2 Aether source code is distributed under GNU GPL version 3 or later as stated in the project repository. Third-party components remain subject to their own licenses and notices. This document does not replace, restrict, or expand rights granted by those licenses.
+
+3.3 Third-party engine names, format names, trademarks, and works belong to their respective owners. Unless expressly stated, Aether is not sponsored, endorsed by, or affiliated with the relevant games, engine developers, publishers, or Apple.
+
+4. Risk and Disclaimer
+
+4.1 Use may result in launch failures, compatibility errors, incorrect graphics or audio, subtitle timing errors, reduced performance, heat, battery consumption, crashes, or save/configuration corruption. Keep independent backups of important data.
+
+4.2 Do not import or run files of unknown origin or questionable safety. The Aether developer does not control losses or disputes caused by imported content, third-party links or services, device environments, unofficial modifications, or improper operation.
+
+4.3 To the maximum extent permitted by applicable law, the app is provided “as is” and “as available,” without express or implied warranties of merchantability, fitness for a particular purpose, uninterrupted availability, complete security, or error-free operation. The developer is not liable for indirect, incidental, special, or consequential damages arising from use of or inability to use the app.
+
+4.4 Nothing in this document excludes liability that cannot lawfully be excluded or limits mandatory consumer rights.
+
+5. Updates and Contact
+
+This document may be updated when features, data practices, or legal requirements change. For a material update, the app may show the new version and ask you to review it again. If you do not accept the updated document, stop using the app.
+
+For privacy questions or a good-faith claim that the app or related material infringes your rights, contact the project through its public issue tracker and provide the necessary details:
+https://github.com/AetherKiri/AetherKiri/issues
+
+Selecting “Agree and Continue” confirms that you have read, understood, and accepted this entire document.

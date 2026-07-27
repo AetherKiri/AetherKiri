@@ -4,7 +4,23 @@ const BACKENDS := ["Godot Native", "GPU Bridge", "Debug CPU"]
 const SETTINGS_KEY := "aether_kiri/render_backend"
 const GAME_PATH_KEY := "aether_kiri/game_path"
 const GAME_LIST_FILE := "user://aetherkiri_games.json"
+const VIDEO_LIST_FILE := "user://aetherkiri_videos.json"
+const VIDEO_PROGRESS_FILE := "user://aetherkiri_video_progress.json"
+const VIDEO_HIDDEN_FILE := "user://aetherkiri_hidden_videos.json"
+const VIDEO_EXTENSIONS := ["mp4", "mkv", "mov", "m4v", "avi", "webm", "flv", "ts", "m2ts", "mpeg", "mpg", "wmv"]
+const SUBTITLE_EXTENSIONS := ["srt", "vtt", "ass", "ssa"]
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
+const LEGAL_AGREEMENT_VERSION := "2026-07-27.4"
+const LEGAL_AGREEMENT_ZH_HANS := "res://legal/privacy_disclaimer_zh_hans.txt"
+const LEGAL_AGREEMENT_ZH_HANT := "res://legal/privacy_disclaimer_zh_hant.txt"
+const LEGAL_AGREEMENT_EN := "res://legal/privacy_disclaimer_en.txt"
+const LEGAL_AGREEMENT_JA := "res://legal/privacy_disclaimer_ja.txt"
+const LEGAL_AGREEMENT_KO := "res://legal/privacy_disclaimer_ko.txt"
+const IOS_STATEMENT_ZH_HANS := "res://legal/ios_app_store_statement_zh_hans.txt"
+const IOS_STATEMENT_ZH_HANT := "res://legal/ios_app_store_statement_zh_hant.txt"
+const IOS_STATEMENT_EN := "res://legal/ios_app_store_statement_en.txt"
+const IOS_STATEMENT_JA := "res://legal/ios_app_store_statement_ja.txt"
+const IOS_STATEMENT_KO := "res://legal/ios_app_store_statement_ko.txt"
 const UI_FONT := preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
 const UI_SYMBOL_FONT := preload("res://assets/fonts/aetherkiri-runtime-symbols.ttf")
 const RUNTIME_FONT_DIR := "user://runtime_fonts"
@@ -16,6 +32,7 @@ const DiagnosticLocalization = preload("res://scripts/diagnostic_localization.gd
 const DebugConsole = preload("res://scripts/debug_console.gd")
 const BuiltinDemo = preload("res://scripts/builtin_demo.gd")
 const GameLaunchEntry = preload("res://scripts/game_launch_entry.gd")
+const VideoSubtitles = preload("res://scripts/video_subtitles.gd")
 const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
@@ -25,6 +42,7 @@ const ICON_HELP := UI_ICON_DIR + "help.svg"
 const ICON_LIBRARY := UI_ICON_DIR + "library.svg"
 const ICON_GAMEPAD := UI_ICON_DIR + "gamepad-bold.svg"
 const ICON_PLAY := UI_ICON_DIR + "game-controller.svg"
+const ICON_VIDEO := UI_ICON_DIR + "video.svg"
 const ICON_PERFORMANCE := UI_ICON_DIR + "performance-fill.svg"
 const ICON_HOME := UI_ICON_DIR + "round-home.svg"
 const ICON_DELETE := UI_ICON_DIR + "round-delete-forever.svg"
@@ -43,13 +61,31 @@ const STYLE_CLASSIC := "classic"
 const STYLE_MODES := [STYLE_DARK, STYLE_CLASSIC]
 const UI_TEXT := {
     LANG_ZH_HANS: {
-        "home.subtitle": "KiriKiri2 运行时外壳",
-        "home.status": "Godot Native  /  游戏库",
+        "home.subtitle": "多功能媒体播放器",
+        "video.status": "FFmpeg  /  视频库",
+        "video.empty_title": "Video 文件夹中还没有视频",
+        "video.empty_help_ios": "使用「文件」App 将视频复制到：\n我的 iPhone / iPad > Aether > Video\n支持同名 SRT、VTT、ASS 字幕",
+        "video.empty_help_desktop": "点击「导入视频」添加本地视频；同目录同名字幕会自动载入",
+        "video.import": "导入视频",
+        "video.refresh": "刷新",
+        "video.guide": "使用说明",
+        "video.guide_title": "导入视频",
+        "video.guide_body_ios": "请使用「文件」App 将视频复制到本应用的目录：\n\n1. 打开 iPhone / iPad 上的「文件」App\n2. 前往：我的 iPhone / iPad > Aether > Video\n3. 将视频和同名字幕复制到 Video 目录\n4. 返回本应用，点击「刷新」检测新视频\n\n视频目录：Video/\n字幕支持：SRT、VTT、ASS、SSA",
+        "video.guide_body_desktop": "请将本地视频导入视频库：\n\n1. 点击「导入视频」\n2. 选择需要播放的视频文件\n3. 如需字幕，请将同名字幕放在视频所在目录\n4. 返回视频库即可播放，进度会自动记录\n\n字幕支持：SRT、VTT、ASS、SSA",
+        "video.remove": "移除视频",
+        "video.remove_body": "从视频库移除「%s」？不会删除磁盘上的视频文件，并会清除该视频的播放进度。",
+        "video.back": "返回",
+        "video.pause": "暂停",
+        "video.play": "播放",
+        "video.subtitle_off": "字幕关闭",
+        "video.resume": "继续上次播放",
+        "video.open_failed": "无法播放该视频：%s",
+        "home.status": "Godot Native  /  视觉小说库",
         "home.empty_title": "尚未添加任何游戏",
         "home.refresh": "刷新",
         "home.import": "导入",
         "home.import_guide": "导入指南",
-        "home.empty_help_ios": "使用「文件」App 将游戏文件夹复制到：\n我的 iPhone / iPad > AetherKiri > Games\n然后点击「刷新」",
+        "home.empty_help_ios": "使用「文件」App 将游戏文件夹复制到：\n我的 iPhone / iPad > Aether > Games\n然后点击「刷新」",
         "home.empty_help_web": "点击「导入」选择本地游戏目录或 XP3 文件",
         "home.empty_help_desktop": "点击「导入」选择游戏目录或 XP3 文件",
         "settings.title": "设置",
@@ -86,13 +122,13 @@ const UI_TEXT := {
         "settings.target_fps": "目标帧率",
         "settings.target_fps_desc": "限制 C++ 引擎 tick/render 频率；可选 60–144 FPS",
         "settings.plugin_load_mode": "插件加载模式",
-        "settings.plugin_load_mode_desc": "krkrsdl3 只预加载核心兼容插件；aether_all 保留旧全量注册",
+        "settings.plugin_load_mode_desc": "核心模式只加载常用兼容插件；完整模式保留旧版全量注册",
         "settings.plugin_trace": "插件调用追踪",
         "settings.plugin_trace_desc": "将所有插件原生调用记录到 plugin_trace.log 用于调试",
         "settings.mock": "Mock 绕过",
         "settings.mock_desc": "为缺失插件返回 mock 对象以抑制错误。关闭可暴露真实错误用于调试。",
         "settings.console_log": "控制台日志文件",
-        "settings.console_log_desc": "将引擎控制台日志写入 krkr.console.log 文件",
+        "settings.console_log_desc": "将引擎控制台输出额外写入本地日志文件",
         "settings.trace_log": "追踪日志",
         "settings.trace_log_desc": "启用 spdlog trace 级别详细日志，输出最大调试信息",
         "settings.export_tjs": "导出 TJS 脚本",
@@ -102,18 +138,33 @@ const UI_TEXT := {
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "邮箱",
+        "settings.legal": "隐私与免责协议",
+        "settings.legal_desc": "查看当前版本的隐私政策、使用规则、风险提示与免责声明",
+        "settings.legal_open": "阅读协议",
+        "settings.ios_statement": "iOS App Store 额外声明",
+        "settings.ios_statement_desc": "查看 GPLv3、App Store 分发附加许可、源码义务及适用范围",
+        "settings.ios_statement_open": "阅读声明",
+        "ios_statement.title": "iOS App Store 额外声明",
+        "legal.title": "隐私政策与使用免责协议",
+        "legal.first_summary": "首次使用前，请阅读并选择是否同意。协议可在「设置 > 关于」中随时查看。",
+        "legal.accept": "同意并继续",
+        "legal.decline": "拒绝",
+        "legal.close": "关闭",
+        "legal.declined_title": "尚未同意协议",
+        "legal.declined_body": "您已拒绝本协议，Aether 不会开放游戏或视频功能。iOS 不允许应用主动结束自身进程，请从系统应用切换界面关闭本应用；也可以返回重新阅读并选择同意。",
+        "legal.review_again": "重新阅读",
         "detail.eyebrow": "游戏详情",
         "detail.runtime_profile": "运行配置 / %s",
         "detail.last_played": "上次游玩：%s",
         "detail.played": "已玩 %s",
-        "detail.launch": "启动游戏",
+        "detail.launch": "启动视觉小说",
         "detail.launch_entry": "启动入口：%s",
         "detail.default_launch_entry": "游戏目录（自动检测）",
         "detail.set_launch_file": "切换启动文件",
         "detail.reset_launch_file": "恢复目录自动检测",
         "detail.set_cover": "设置封面",
         "detail.rename": "重命名",
-        "detail.remove": "移除游戏",
+        "detail.remove": "移除视觉小说",
         "detail.delete_builtin": "删除内置 Demo",
         "game.today": "今天",
         "game.days_ago": "%d 天前",
@@ -123,8 +174,8 @@ const UI_TEXT := {
         "game.local": "本地游戏",
         "game.type_directory": "目录",
         "game.type_archive": "归档",
-        "dialog.import_title": "导入游戏",
-        "dialog.import_guide_body": "请使用「文件」App 将游戏文件夹复制到本应用的目录：\n\n1. 打开 iPhone / iPad 上的「文件」App\n2. 前往：我的 iPhone / iPad > AetherKiri > Games\n3. 将游戏文件夹复制到 Games 目录\n4. 返回本应用，点击「刷新」检测新游戏\n\n游戏目录：Games/",
+        "dialog.import_title": "导入视觉小说",
+        "dialog.import_guide_body": "请使用「文件」App 将视觉小说文件夹复制到本应用的目录：\n\n1. 打开 iPhone / iPad 上的「文件」App\n2. 前往：我的 iPhone / iPad > Aether > Games\n3. 将视觉小说文件夹复制到 Games 目录\n4. 返回本应用，点击「刷新」检测新视觉小说\n\n视觉小说目录：Games/",
         "dialog.ok": "知道了",
         "dialog.scrape_title": "完善游戏信息",
         "dialog.scrape_body": "已添加「%s」。要现在设置封面和显示名称吗？",
@@ -133,7 +184,7 @@ const UI_TEXT := {
         "dialog.choose_cover": "选择封面图片",
         "dialog.choose_launch_file": "选择启动文件",
         "dialog.rename": "重命名",
-        "dialog.remove_body": "从列表移除「%s」？不会删除磁盘上的游戏文件。",
+        "dialog.remove_body": "从列表移除「%s」？不会删除磁盘上的视觉小说文件。",
         "dialog.delete_builtin_body": "删除内置示例「%s」及其本地存档？删除后不会自动恢复。",
         "dialog.remove": "移除",
         "dialog.delete": "删除",
@@ -151,27 +202,45 @@ const UI_TEXT := {
         "message.web_game_invalid": "浏览器返回的游戏信息无效",
         "message.web_import_timeout": "本地游戏导入超时",
         "message.web_picker_unsupported_long": "当前浏览器不支持直接选择本地游戏文件。请使用支持 File System Access 或目录上传的浏览器。",
-        "message.android_storage_permission_required": "需要允许 AetherKiri 访问文件系统后才能导入或启动外部游戏。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
+        "message.android_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入或启动外部游戏。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.path_missing": "游戏路径不存在",
         "message.launch_file_unsupported": "启动文件只支持 EXE 或 XP3",
         "message.launch_file_outside_game": "启动文件必须位于当前游戏目录内",
         "message.launch_file_missing": "启动文件不存在：%s",
         "message.game_exists": "游戏已存在：%s",
         "message.builtin_delete_failed": "删除内置 Demo 时发生错误：%s",
-        "alert.error_title": "AetherKiri 错误",
-        "alert.warning_title": "AetherKiri 警告",
+        "alert.error_title": "Aether 错误",
+        "alert.warning_title": "Aether 警告",
         "alert.runtime_class_missing": "运行时扩展加载失败：AetherKiriPlayer 不可用",
         "alert.runtime_create_failed": "运行时扩展加载失败：无法创建 AetherKiriPlayer",
-        "loading.title": "正在启动游戏..."
+        "loading.title": "正在启动视觉小说..."
     },
     LANG_ZH_HANT: {
-        "home.subtitle": "KiriKiri2 執行時外殼",
-        "home.status": "Godot Native  /  遊戲庫",
+        "home.subtitle": "多功能媒體播放器",
+        "video.status": "FFmpeg  /  影片庫",
+        "video.empty_title": "Video 資料夾中還沒有影片",
+        "video.empty_help_ios": "使用「檔案」App 將影片複製到：\n我的 iPhone / iPad > Aether > Video\n支援同名 SRT、VTT、ASS 字幕",
+        "video.empty_help_desktop": "點擊「匯入影片」加入本機影片；同目錄同名字幕會自動載入",
+        "video.import": "匯入影片",
+        "video.refresh": "重新整理",
+        "video.guide": "使用說明",
+        "video.guide_title": "匯入影片",
+        "video.guide_body_ios": "請使用「檔案」App 將影片複製到本 App 的目錄：\n\n1. 開啟 iPhone / iPad 上的「檔案」App\n2. 前往：我的 iPhone / iPad > Aether > Video\n3. 將影片和同名字幕複製到 Video 目錄\n4. 返回本 App，點選「重新整理」偵測新影片\n\n影片目錄：Video/\n字幕支援：SRT、VTT、ASS、SSA",
+        "video.guide_body_desktop": "請將本機影片匯入影片庫：\n\n1. 點選「匯入影片」\n2. 選擇需要播放的影片檔案\n3. 如需字幕，請將同名字幕放在影片所在目錄\n4. 返回影片庫即可播放，進度會自動記錄\n\n字幕支援：SRT、VTT、ASS、SSA",
+        "video.remove": "移除影片",
+        "video.remove_body": "要從影片庫移除「%s」嗎？不會刪除磁碟上的影片檔案，並會清除該影片的播放進度。",
+        "video.back": "返回",
+        "video.pause": "暫停",
+        "video.play": "播放",
+        "video.subtitle_off": "字幕關閉",
+        "video.resume": "繼續上次播放",
+        "video.open_failed": "無法播放該影片：%s",
+        "home.status": "Godot Native  /  視覺小說庫",
         "home.empty_title": "尚未加入任何遊戲",
         "home.refresh": "重新整理",
         "home.import": "匯入",
         "home.import_guide": "匯入指南",
-        "home.empty_help_ios": "使用「檔案」App 將遊戲資料夾複製到：\n我的 iPhone / iPad > AetherKiri > Games\n然後點選「重新整理」",
+        "home.empty_help_ios": "使用「檔案」App 將遊戲資料夾複製到：\n我的 iPhone / iPad > Aether > Games\n然後點選「重新整理」",
         "home.empty_help_web": "點選「匯入」選擇本機遊戲目錄或 XP3 檔案",
         "home.empty_help_desktop": "點選「匯入」選擇遊戲目錄或 XP3 檔案",
         "settings.title": "設定",
@@ -208,13 +277,13 @@ const UI_TEXT := {
         "settings.target_fps": "目標幀率",
         "settings.target_fps_desc": "限制 C++ 引擎 tick/render 頻率；可選 60–144 FPS",
         "settings.plugin_load_mode": "外掛載入模式",
-        "settings.plugin_load_mode_desc": "krkrsdl3 只預載核心相容外掛；aether_all 保留舊版全量註冊",
+        "settings.plugin_load_mode_desc": "核心模式只載入常用相容外掛；完整模式保留舊版全量註冊",
         "settings.plugin_trace": "外掛呼叫追蹤",
         "settings.plugin_trace_desc": "將所有外掛原生呼叫記錄到 plugin_trace.log 以便除錯",
         "settings.mock": "Mock 繞過",
         "settings.mock_desc": "為缺失外掛返回 mock 物件以抑制錯誤。關閉可暴露真實錯誤用於除錯。",
         "settings.console_log": "主控台日誌檔",
-        "settings.console_log_desc": "將引擎主控台日誌寫入 krkr.console.log 檔案",
+        "settings.console_log_desc": "將引擎主控台輸出額外寫入本機日誌檔",
         "settings.trace_log": "追蹤日誌",
         "settings.trace_log_desc": "啟用 spdlog trace 級別詳細日誌，輸出最大除錯資訊",
         "settings.export_tjs": "匯出 TJS 腳本",
@@ -224,18 +293,33 @@ const UI_TEXT := {
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "信箱",
+        "settings.legal": "隱私與免責協議",
+        "settings.legal_desc": "查看目前版本的隱私政策、使用規則、風險提示與免責聲明",
+        "settings.legal_open": "閱讀協議",
+        "settings.ios_statement": "iOS App Store 額外聲明",
+        "settings.ios_statement_desc": "查看 GPLv3、App Store 發布附加許可、原始碼義務及適用範圍",
+        "settings.ios_statement_open": "閱讀聲明",
+        "ios_statement.title": "iOS App Store 額外聲明",
+        "legal.title": "隱私政策與使用免責協議",
+        "legal.first_summary": "首次使用前，請閱讀並選擇是否同意。協議可在「設定 > 關於」中隨時查看。",
+        "legal.accept": "同意並繼續",
+        "legal.decline": "拒絕",
+        "legal.close": "關閉",
+        "legal.declined_title": "尚未同意協議",
+        "legal.declined_body": "您已拒絕本協議，Aether 不會開放遊戲或影片功能。iOS 不允許 App 主動結束自身程序，請從系統 App 切換畫面關閉本 App；也可以返回重新閱讀並選擇同意。",
+        "legal.review_again": "重新閱讀",
         "detail.eyebrow": "遊戲詳情",
         "detail.runtime_profile": "執行設定 / %s",
         "detail.last_played": "上次遊玩：%s",
         "detail.played": "已玩 %s",
-        "detail.launch": "啟動遊戲",
+        "detail.launch": "啟動視覺小說",
         "detail.launch_entry": "啟動入口：%s",
         "detail.default_launch_entry": "遊戲目錄（自動偵測）",
         "detail.set_launch_file": "切換啟動檔案",
         "detail.reset_launch_file": "恢復目錄自動偵測",
         "detail.set_cover": "設定封面",
         "detail.rename": "重新命名",
-        "detail.remove": "移除遊戲",
+        "detail.remove": "移除視覺小說",
         "detail.delete_builtin": "刪除內建 Demo",
         "game.today": "今天",
         "game.days_ago": "%d 天前",
@@ -245,8 +329,8 @@ const UI_TEXT := {
         "game.local": "本機遊戲",
         "game.type_directory": "目錄",
         "game.type_archive": "封存",
-        "dialog.import_title": "匯入遊戲",
-        "dialog.import_guide_body": "請使用「檔案」App 將遊戲資料夾複製到本 App 的目錄：\n\n1. 開啟 iPhone / iPad 上的「檔案」App\n2. 前往：我的 iPhone / iPad > AetherKiri > Games\n3. 將遊戲資料夾複製到 Games 目錄\n4. 返回本 App，點選「重新整理」偵測新遊戲\n\n遊戲目錄：Games/",
+        "dialog.import_title": "匯入視覺小說",
+        "dialog.import_guide_body": "請使用「檔案」App 將視覺小說資料夾複製到本 App 的目錄：\n\n1. 開啟 iPhone / iPad 上的「檔案」App\n2. 前往：我的 iPhone / iPad > Aether > Games\n3. 將視覺小說資料夾複製到 Games 目錄\n4. 返回本 App，點選「重新整理」偵測新視覺小說\n\n視覺小說目錄：Games/",
         "dialog.ok": "知道了",
         "dialog.scrape_title": "完善遊戲資訊",
         "dialog.scrape_body": "已加入「%s」。要現在設定封面和顯示名稱嗎？",
@@ -255,7 +339,7 @@ const UI_TEXT := {
         "dialog.choose_cover": "選擇封面圖片",
         "dialog.choose_launch_file": "選擇啟動檔案",
         "dialog.rename": "重新命名",
-        "dialog.remove_body": "要從列表移除「%s」嗎？不會刪除磁碟上的遊戲檔案。",
+        "dialog.remove_body": "要從列表移除「%s」嗎？不會刪除磁碟上的視覺小說檔案。",
         "dialog.delete_builtin_body": "要刪除內建示例「%s」及其本機存檔嗎？刪除後不會自動還原。",
         "dialog.remove": "移除",
         "dialog.delete": "刪除",
@@ -273,27 +357,45 @@ const UI_TEXT := {
         "message.web_game_invalid": "瀏覽器返回的遊戲資訊無效",
         "message.web_import_timeout": "本機遊戲匯入逾時",
         "message.web_picker_unsupported_long": "目前瀏覽器不支援直接選擇本機遊戲檔案。請使用支援 File System Access 或目錄上傳的瀏覽器。",
-        "message.android_storage_permission_required": "需要允許 AetherKiri 存取檔案系統後才能匯入或啟動外部遊戲。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
+        "message.android_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入或啟動外部遊戲。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.path_missing": "遊戲路徑不存在",
         "message.launch_file_unsupported": "啟動檔案僅支援 EXE 或 XP3",
         "message.launch_file_outside_game": "啟動檔案必須位於目前遊戲目錄內",
         "message.launch_file_missing": "啟動檔案不存在：%s",
         "message.game_exists": "遊戲已存在：%s",
         "message.builtin_delete_failed": "刪除內建 Demo 時發生錯誤：%s",
-        "alert.error_title": "AetherKiri 錯誤",
-        "alert.warning_title": "AetherKiri 警告",
+        "alert.error_title": "Aether 錯誤",
+        "alert.warning_title": "Aether 警告",
         "alert.runtime_class_missing": "執行時擴充載入失敗：AetherKiriPlayer 不可用",
         "alert.runtime_create_failed": "執行時擴充載入失敗：無法建立 AetherKiriPlayer",
-        "loading.title": "正在啟動遊戲..."
+        "loading.title": "正在啟動視覺小說..."
     },
     LANG_EN: {
-        "home.subtitle": "KiriKiri2 runtime shell",
-        "home.status": "Godot Native  /  Library",
+        "home.subtitle": "Multifunction Media Player",
+        "video.status": "FFmpeg  /  Video library",
+        "video.empty_title": "No videos in the Video folder",
+        "video.empty_help_ios": "Copy videos with the Files app to:\nOn My iPhone / iPad > Aether > Video\nMatching SRT, VTT and ASS subtitles are supported",
+        "video.empty_help_desktop": "Import a local video; matching subtitles in the same folder load automatically",
+        "video.import": "Import video",
+        "video.refresh": "Refresh",
+        "video.guide": "How to use",
+        "video.guide_title": "Import Video",
+        "video.guide_body_ios": "Use the Files app to copy videos into this app's directory:\n\n1. Open the Files app on your iPhone / iPad\n2. Go to: On My iPhone / iPad > Aether > Video\n3. Copy videos and matching subtitle files into Video\n4. Return to this app and tap Refresh to detect new videos\n\nVideo directory: Video/\nSubtitles: SRT, VTT, ASS, SSA",
+        "video.guide_body_desktop": "Import a local video into the video library:\n\n1. Click Import Video\n2. Select the video file you want to play\n3. For subtitles, place a matching subtitle file beside the video\n4. Return to the library to play; progress is saved automatically\n\nSubtitles: SRT, VTT, ASS, SSA",
+        "video.remove": "Remove Video",
+        "video.remove_body": "Remove \"%s\" from the video library? The video file will remain on disk, and its playback progress will be cleared.",
+        "video.back": "Back",
+        "video.pause": "Pause",
+        "video.play": "Play",
+        "video.subtitle_off": "Subtitles off",
+        "video.resume": "Resume playback",
+        "video.open_failed": "Could not play this video: %s",
+        "home.status": "Godot Native  /  Visual Novel Library",
         "home.empty_title": "No games added yet",
         "home.refresh": "Refresh",
         "home.import": "Import",
         "home.import_guide": "Import Guide",
-        "home.empty_help_ios": "Use the Files app to copy your game folder to:\nOn My iPhone / iPad > AetherKiri > Games\nThen tap Refresh",
+        "home.empty_help_ios": "Use the Files app to copy your game folder to:\nOn My iPhone / iPad > Aether > Games\nThen tap Refresh",
         "home.empty_help_web": "Tap Import to choose a local game folder or XP3 file",
         "home.empty_help_desktop": "Tap Import to choose a game folder or XP3 file",
         "settings.title": "Settings",
@@ -330,13 +432,13 @@ const UI_TEXT := {
         "settings.target_fps": "Target FPS",
         "settings.target_fps_desc": "Limit the C++ engine tick/render rate; choose 60–144 FPS",
         "settings.plugin_load_mode": "Plugin Load Mode",
-        "settings.plugin_load_mode_desc": "krkrsdl3 only preloads core compatibility plugins; aether_all keeps the legacy full registration path",
+        "settings.plugin_load_mode_desc": "Core mode loads common compatibility plugins only; Full mode keeps the legacy registration path",
         "settings.plugin_trace": "Plugin Call Trace",
         "settings.plugin_trace_desc": "Write all native plugin calls to plugin_trace.log for debugging",
         "settings.mock": "Mock Bypass",
         "settings.mock_desc": "Return mock objects for missing plugins to suppress errors. Disable to expose real errors for debugging.",
         "settings.console_log": "Console Log File",
-        "settings.console_log_desc": "Write engine console output to krkr.console.log",
+        "settings.console_log_desc": "Also write engine console output to a local log file",
         "settings.trace_log": "Trace Log",
         "settings.trace_log_desc": "Enable spdlog trace-level logs for maximum diagnostic output",
         "settings.export_tjs": "Export TJS Scripts",
@@ -346,18 +448,33 @@ const UI_TEXT := {
         "settings.version": "Version",
         "settings.author": "Author",
         "settings.email": "Email",
+        "settings.legal": "Privacy & Disclaimer",
+        "settings.legal_desc": "Read the current privacy policy, terms of use, risk notice, and disclaimer",
+        "settings.legal_open": "Read",
+        "settings.ios_statement": "iOS App Store Notice",
+        "settings.ios_statement_desc": "Review the GPLv3 App Store distribution permission, source obligations, and scope",
+        "settings.ios_statement_open": "Read Notice",
+        "ios_statement.title": "iOS App Store Additional Permission & Notice",
+        "legal.title": "Privacy Policy, Terms & Disclaimer",
+        "legal.first_summary": "Please read and choose whether to agree before first use. You can review this document later under Settings > About.",
+        "legal.accept": "Agree and Continue",
+        "legal.decline": "Decline",
+        "legal.close": "Close",
+        "legal.declined_title": "Agreement Not Accepted",
+        "legal.declined_body": "You declined the agreement, so Aether will not enable game or video features. iOS does not allow an app to terminate itself; close it from the system app switcher, or return to review and accept the agreement.",
+        "legal.review_again": "Review Again",
         "detail.eyebrow": "Library Detail",
         "detail.runtime_profile": "Runtime profile / %s",
         "detail.last_played": "Last played: %s",
         "detail.played": "Played %s",
-        "detail.launch": "Launch Game",
+        "detail.launch": "Launch Visual Novel",
         "detail.launch_entry": "Launch entry: %s",
         "detail.default_launch_entry": "Game folder (auto-detect)",
         "detail.set_launch_file": "Change Launch File",
         "detail.reset_launch_file": "Restore Folder Auto-detect",
         "detail.set_cover": "Set Cover",
         "detail.rename": "Rename",
-        "detail.remove": "Remove Game",
+        "detail.remove": "Remove Visual Novel",
         "detail.delete_builtin": "Delete Built-in Demo",
         "game.today": "Today",
         "game.days_ago": "%d days ago",
@@ -367,8 +484,8 @@ const UI_TEXT := {
         "game.local": "Local Game",
         "game.type_directory": "Directory",
         "game.type_archive": "Archive",
-        "dialog.import_title": "Import Game",
-        "dialog.import_guide_body": "Use the Files app to copy your game folder into this app's directory:\n\n1. Open the Files app on your iPhone / iPad\n2. Go to: On My iPhone / iPad > AetherKiri > Games\n3. Copy the game folder into Games\n4. Return to this app and tap Refresh to detect new games\n\nGame directory: Games/",
+        "dialog.import_title": "Import Visual Novel",
+        "dialog.import_guide_body": "Use the Files app to copy your visual novel folder into this app's directory:\n\n1. Open the Files app on your iPhone / iPad\n2. Go to: On My iPhone / iPad > Aether > Games\n3. Copy the visual novel folder into Games\n4. Return to this app and tap Refresh to detect new visual novels\n\nVisual novel directory: Games/",
         "dialog.ok": "Got it",
         "dialog.scrape_title": "Finish Game Info",
         "dialog.scrape_body": "Added \"%s\". Set the cover art and display name now?",
@@ -377,7 +494,7 @@ const UI_TEXT := {
         "dialog.choose_cover": "Choose Cover Image",
         "dialog.choose_launch_file": "Choose Launch File",
         "dialog.rename": "Rename",
-        "dialog.remove_body": "Remove \"%s\" from the list? This will not delete game files from disk.",
+        "dialog.remove_body": "Remove \"%s\" from the list? This will not delete visual novel files from disk.",
         "dialog.delete_builtin_body": "Delete the built-in demo \"%s\" and its local saves? It will not be restored automatically.",
         "dialog.remove": "Remove",
         "dialog.delete": "Delete",
@@ -395,27 +512,45 @@ const UI_TEXT := {
         "message.web_game_invalid": "The browser returned invalid game information",
         "message.web_import_timeout": "Local game import timed out",
         "message.web_picker_unsupported_long": "This browser cannot directly choose local game files. Use a browser that supports File System Access or directory upload.",
-        "message.android_storage_permission_required": "Allow AetherKiri to access the file system before importing or launching external games. Grant file access in the system prompt or permission settings, then try again.",
+        "message.android_storage_permission_required": "Allow Aether to access the file system before importing or launching external games. Grant file access in the system prompt or permission settings, then try again.",
         "message.path_missing": "Game path does not exist",
         "message.launch_file_unsupported": "The launch file must be an EXE or XP3 file",
         "message.launch_file_outside_game": "The launch file must be inside this game folder",
         "message.launch_file_missing": "Launch file does not exist: %s",
         "message.game_exists": "Game already exists: %s",
         "message.builtin_delete_failed": "Could not completely delete the built-in demo: %s",
-        "alert.error_title": "AetherKiri Error",
-        "alert.warning_title": "AetherKiri Warning",
+        "alert.error_title": "Aether Error",
+        "alert.warning_title": "Aether Warning",
         "alert.runtime_class_missing": "Runtime extension failed to load: AetherKiriPlayer is unavailable",
         "alert.runtime_create_failed": "Runtime extension failed to load: could not create AetherKiriPlayer",
-        "loading.title": "Launching game..."
+        "loading.title": "Launching visual novel..."
     },
     LANG_JA: {
-        "home.subtitle": "KiriKiri2 ランタイムシェル",
-        "home.status": "Godot Native  /  ライブラリ",
+        "home.subtitle": "多機能メディアプレーヤー",
+        "video.status": "FFmpeg  /  ビデオライブラリ",
+        "video.empty_title": "Video フォルダーに動画がありません",
+        "video.empty_help_ios": "「ファイル」App で動画を次へコピー：\nこのiPhone / iPad内 > Aether > Video\n同名の SRT、VTT、ASS 字幕に対応",
+        "video.empty_help_desktop": "ローカル動画を読み込むと、同じフォルダーの同名字幕も自動で読み込みます",
+        "video.import": "動画を読み込む",
+        "video.refresh": "更新",
+        "video.guide": "使い方",
+        "video.guide_title": "動画を読み込む",
+        "video.guide_body_ios": "「ファイル」App で動画をこのアプリのディレクトリにコピーしてください：\n\n1. iPhone / iPad で「ファイル」App を開く\n2. 移動先：この iPhone / iPad 内 > Aether > Video\n3. 動画と同名の字幕を Video にコピー\n4. アプリに戻り、「更新」をタップして新しい動画を検出\n\n動画ディレクトリ：Video/\n字幕：SRT、VTT、ASS、SSA",
+        "video.guide_body_desktop": "ローカル動画をビデオライブラリに読み込みます：\n\n1. 「動画を読み込む」をクリック\n2. 再生する動画ファイルを選択\n3. 字幕を使う場合は、同名の字幕を動画と同じ場所に配置\n4. ライブラリに戻って再生すると、進捗は自動保存されます\n\n字幕：SRT、VTT、ASS、SSA",
+        "video.remove": "動画を削除",
+        "video.remove_body": "「%s」をビデオライブラリから削除しますか？ディスク上の動画ファイルは削除されず、再生進捗は消去されます。",
+        "video.back": "戻る",
+        "video.pause": "一時停止",
+        "video.play": "再生",
+        "video.subtitle_off": "字幕オフ",
+        "video.resume": "続きから再生",
+        "video.open_failed": "動画を再生できません：%s",
+        "home.status": "Godot Native  /  ビジュアルノベルライブラリ",
         "home.empty_title": "ゲームはまだ追加されていません",
         "home.refresh": "更新",
         "home.import": "インポート",
         "home.import_guide": "インポートガイド",
-        "home.empty_help_ios": "「ファイル」App でゲームフォルダーをコピーしてください：\nこの iPhone / iPad 内 > AetherKiri > Games\nその後「更新」をタップします",
+        "home.empty_help_ios": "「ファイル」App でゲームフォルダーをコピーしてください：\nこの iPhone / iPad 内 > Aether > Games\nその後「更新」をタップします",
         "home.empty_help_web": "「インポート」をタップしてローカルゲームフォルダーまたは XP3 ファイルを選択",
         "home.empty_help_desktop": "「インポート」をタップしてゲームフォルダーまたは XP3 ファイルを選択",
         "settings.title": "設定",
@@ -452,13 +587,13 @@ const UI_TEXT := {
         "settings.target_fps": "目標 FPS",
         "settings.target_fps_desc": "C++ エンジンの tick/render 頻度を 60～144 FPS から選択します",
         "settings.plugin_load_mode": "プラグイン読み込みモード",
-        "settings.plugin_load_mode_desc": "krkrsdl3 は互換性用コアプラグインのみプリロードします。aether_all は従来の全登録を維持します",
+        "settings.plugin_load_mode_desc": "コアモードは一般的な互換プラグインのみ、完全モードは従来の全登録経路を使用します",
         "settings.plugin_trace": "プラグイン呼び出し追跡",
         "settings.plugin_trace_desc": "すべてのネイティブプラグイン呼び出しを plugin_trace.log に記録します",
         "settings.mock": "Mock バイパス",
         "settings.mock_desc": "不足プラグインに mock オブジェクトを返してエラーを抑制します。無効にすると実エラーを確認できます。",
         "settings.console_log": "コンソールログファイル",
-        "settings.console_log_desc": "エンジンのコンソールログを krkr.console.log に書き込みます",
+        "settings.console_log_desc": "エンジンのコンソール出力をローカルログファイルにも書き込みます",
         "settings.trace_log": "トレースログ",
         "settings.trace_log_desc": "spdlog の trace レベル詳細ログを有効にします",
         "settings.export_tjs": "TJS スクリプトを書き出す",
@@ -468,18 +603,33 @@ const UI_TEXT := {
         "settings.version": "バージョン",
         "settings.author": "作者",
         "settings.email": "メール",
+        "settings.legal": "プライバシーと免責事項",
+        "settings.legal_desc": "現在のプライバシーポリシー、利用条件、リスクおよび免責事項を確認します",
+        "settings.legal_open": "読む",
+        "settings.ios_statement": "iOS App Store 追加声明",
+        "settings.ios_statement_desc": "GPLv3、App Store 配布の追加許諾、ソース提供義務および適用範囲を確認します",
+        "settings.ios_statement_open": "声明を読む",
+        "ios_statement.title": "iOS App Store 追加許諾および声明",
+        "legal.title": "プライバシーポリシー・利用条件・免責事項",
+        "legal.first_summary": "初回利用前に内容を読み、同意するか選択してください。設定 > 情報からいつでも確認できます。",
+        "legal.accept": "同意して続ける",
+        "legal.decline": "拒否",
+        "legal.close": "閉じる",
+        "legal.declined_title": "同意されていません",
+        "legal.declined_body": "同意されていないため、ゲームと動画機能は利用できません。iOS では App 自身を終了できません。App スイッチャーから閉じるか、文書を読み直して同意してください。",
+        "legal.review_again": "もう一度読む",
         "detail.eyebrow": "ゲーム詳細",
         "detail.runtime_profile": "ランタイムプロファイル / %s",
         "detail.last_played": "前回プレイ：%s",
         "detail.played": "プレイ時間 %s",
-        "detail.launch": "ゲームを起動",
+        "detail.launch": "ビジュアルノベルを起動",
         "detail.launch_entry": "起動エントリ：%s",
         "detail.default_launch_entry": "ゲームフォルダー（自動検出）",
         "detail.set_launch_file": "起動ファイルを変更",
         "detail.reset_launch_file": "フォルダーの自動検出に戻す",
         "detail.set_cover": "カバーを設定",
         "detail.rename": "名前を変更",
-        "detail.remove": "ゲームを削除",
+        "detail.remove": "ビジュアルノベルを削除",
         "detail.delete_builtin": "内蔵デモを削除",
         "game.today": "今日",
         "game.days_ago": "%d 日前",
@@ -489,8 +639,8 @@ const UI_TEXT := {
         "game.local": "ローカルゲーム",
         "game.type_directory": "フォルダー",
         "game.type_archive": "アーカイブ",
-        "dialog.import_title": "ゲームをインポート",
-        "dialog.import_guide_body": "「ファイル」App でゲームフォルダーをこのアプリのディレクトリにコピーしてください：\n\n1. iPhone / iPad で「ファイル」App を開く\n2. 移動先：この iPhone / iPad 内 > AetherKiri > Games\n3. ゲームフォルダーを Games にコピー\n4. アプリに戻り、「更新」をタップして新しいゲームを検出\n\nゲームディレクトリ：Games/",
+        "dialog.import_title": "ビジュアルノベルをインポート",
+        "dialog.import_guide_body": "「ファイル」App でビジュアルノベルのフォルダーをこのアプリのディレクトリにコピーしてください：\n\n1. iPhone / iPad で「ファイル」App を開く\n2. 移動先：この iPhone / iPad 内 > Aether > Games\n3. ビジュアルノベルのフォルダーを Games にコピー\n4. アプリに戻り、「更新」をタップして新しいビジュアルノベルを検出\n\nビジュアルノベルのディレクトリ：Games/",
         "dialog.ok": "了解",
         "dialog.scrape_title": "ゲーム情報を設定",
         "dialog.scrape_body": "「%s」を追加しました。今すぐカバーと表示名を設定しますか？",
@@ -499,7 +649,7 @@ const UI_TEXT := {
         "dialog.choose_cover": "カバー画像を選択",
         "dialog.choose_launch_file": "起動ファイルを選択",
         "dialog.rename": "名前を変更",
-        "dialog.remove_body": "「%s」をリストから削除しますか？ディスク上のゲームファイルは削除されません。",
+        "dialog.remove_body": "「%s」をリストから削除しますか？ディスク上のビジュアルノベルファイルは削除されません。",
         "dialog.delete_builtin_body": "内蔵デモ「%s」とローカルセーブデータを削除しますか？削除後は自動的に復元されません。",
         "dialog.remove": "削除",
         "dialog.delete": "削除",
@@ -517,27 +667,45 @@ const UI_TEXT := {
         "message.web_game_invalid": "ブラウザーから無効なゲーム情報が返されました",
         "message.web_import_timeout": "ローカルゲームのインポートがタイムアウトしました",
         "message.web_picker_unsupported_long": "このブラウザーはローカルゲームファイルの直接選択に対応していません。File System Access またはディレクトリアップロード対応ブラウザーを使用してください。",
-        "message.android_storage_permission_required": "外部ゲームのインポートまたは起動には、AetherKiri にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
+        "message.android_storage_permission_required": "外部ゲームのインポートまたは起動には、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.path_missing": "ゲームパスが存在しません",
         "message.launch_file_unsupported": "起動ファイルは EXE または XP3 のみ対応しています",
         "message.launch_file_outside_game": "起動ファイルは現在のゲームフォルダー内にある必要があります",
         "message.launch_file_missing": "起動ファイルが存在しません：%s",
         "message.game_exists": "ゲームは既に存在します：%s",
         "message.builtin_delete_failed": "内蔵デモを完全に削除できませんでした：%s",
-        "alert.error_title": "AetherKiri エラー",
-        "alert.warning_title": "AetherKiri 警告",
+        "alert.error_title": "Aether エラー",
+        "alert.warning_title": "Aether 警告",
         "alert.runtime_class_missing": "ランタイム拡張の読み込みに失敗しました：AetherKiriPlayer は利用できません",
         "alert.runtime_create_failed": "ランタイム拡張の読み込みに失敗しました：AetherKiriPlayer を作成できません",
-        "loading.title": "ゲームを起動中..."
+        "loading.title": "ビジュアルノベルを起動中..."
     },
     LANG_KO: {
-        "home.subtitle": "KiriKiri2 런타임 셸",
-        "home.status": "Godot Native  /  라이브러리",
+        "home.subtitle": "다기능 미디어 플레이어",
+        "video.status": "FFmpeg  /  비디오 라이브러리",
+        "video.empty_title": "Video 폴더에 비디오가 없습니다",
+        "video.empty_help_ios": "파일 앱에서 비디오를 다음 위치로 복사하세요:\n나의 iPhone / iPad > Aether > Video\n같은 이름의 SRT, VTT, ASS 자막 지원",
+        "video.empty_help_desktop": "로컬 비디오를 가져오면 같은 폴더의 동일한 이름 자막을 자동으로 불러옵니다",
+        "video.import": "비디오 가져오기",
+        "video.refresh": "새로 고침",
+        "video.guide": "사용 방법",
+        "video.guide_title": "비디오 가져오기",
+        "video.guide_body_ios": "파일 앱으로 비디오를 이 앱의 디렉터리에 복사하세요:\n\n1. iPhone / iPad에서 파일 앱을 엽니다\n2. 이동: 나의 iPhone / iPad > Aether > Video\n3. 비디오와 같은 이름의 자막을 Video에 복사합니다\n4. 앱으로 돌아와 새로 고침을 눌러 새 비디오를 감지합니다\n\n비디오 디렉터리: Video/\n자막: SRT, VTT, ASS, SSA",
+        "video.guide_body_desktop": "로컬 비디오를 비디오 라이브러리로 가져옵니다:\n\n1. 비디오 가져오기를 클릭합니다\n2. 재생할 비디오 파일을 선택합니다\n3. 자막이 필요하면 같은 이름의 자막을 비디오 옆에 둡니다\n4. 라이브러리에서 재생하면 진행 위치가 자동 저장됩니다\n\n자막: SRT, VTT, ASS, SSA",
+        "video.remove": "비디오 제거",
+        "video.remove_body": "\"%s\"을(를) 비디오 라이브러리에서 제거할까요? 디스크의 비디오 파일은 삭제되지 않으며 재생 진행 위치는 지워집니다.",
+        "video.back": "뒤로",
+        "video.pause": "일시정지",
+        "video.play": "재생",
+        "video.subtitle_off": "자막 끄기",
+        "video.resume": "이어서 재생",
+        "video.open_failed": "비디오를 재생할 수 없습니다: %s",
+        "home.status": "Godot Native  /  비주얼 노벨 라이브러리",
         "home.empty_title": "아직 추가된 게임이 없습니다",
         "home.refresh": "새로고침",
         "home.import": "가져오기",
         "home.import_guide": "가져오기 가이드",
-        "home.empty_help_ios": "파일 앱으로 게임 폴더를 다음 위치에 복사하세요:\n나의 iPhone / iPad > AetherKiri > Games\n그런 다음 새로고침을 누르세요",
+        "home.empty_help_ios": "파일 앱으로 게임 폴더를 다음 위치에 복사하세요:\n나의 iPhone / iPad > Aether > Games\n그런 다음 새로고침을 누르세요",
         "home.empty_help_web": "가져오기를 눌러 로컬 게임 폴더 또는 XP3 파일을 선택하세요",
         "home.empty_help_desktop": "가져오기를 눌러 게임 폴더 또는 XP3 파일을 선택하세요",
         "settings.title": "설정",
@@ -574,13 +742,13 @@ const UI_TEXT := {
         "settings.target_fps": "목표 FPS",
         "settings.target_fps_desc": "C++ 엔진 tick/render 빈도를 60–144 FPS에서 선택합니다",
         "settings.plugin_load_mode": "플러그인 로드 모드",
-        "settings.plugin_load_mode_desc": "krkrsdl3는 핵심 호환 플러그인만 미리 로드합니다. aether_all은 기존 전체 등록 방식을 유지합니다",
+        "settings.plugin_load_mode_desc": "핵심 모드는 일반 호환 플러그인만 로드하고 전체 모드는 기존 전체 등록 방식을 유지합니다",
         "settings.plugin_trace": "플러그인 호출 추적",
         "settings.plugin_trace_desc": "모든 네이티브 플러그인 호출을 plugin_trace.log에 기록합니다",
         "settings.mock": "Mock 우회",
         "settings.mock_desc": "누락된 플러그인에 mock 객체를 반환해 오류를 억제합니다. 끄면 실제 오류를 확인할 수 있습니다.",
         "settings.console_log": "콘솔 로그 파일",
-        "settings.console_log_desc": "엔진 콘솔 로그를 krkr.console.log 파일에 씁니다",
+        "settings.console_log_desc": "엔진 콘솔 출력을 로컬 로그 파일에도 기록합니다",
         "settings.trace_log": "추적 로그",
         "settings.trace_log_desc": "spdlog trace 레벨 상세 로그를 켜서 최대 디버그 정보를 출력합니다",
         "settings.export_tjs": "TJS 스크립트 내보내기",
@@ -590,18 +758,33 @@ const UI_TEXT := {
         "settings.version": "버전",
         "settings.author": "작성자",
         "settings.email": "이메일",
+        "settings.legal": "개인정보 및 면책 조항",
+        "settings.legal_desc": "현재 개인정보 처리방침, 이용 조건, 위험 고지 및 면책 조항을 확인합니다",
+        "settings.legal_open": "읽기",
+        "settings.ios_statement": "iOS App Store 추가 고지",
+        "settings.ios_statement_desc": "GPLv3, App Store 배포 추가 허가, 소스 제공 의무 및 적용 범위를 확인합니다",
+        "settings.ios_statement_open": "고지 읽기",
+        "ios_statement.title": "iOS App Store 추가 허가 및 고지",
+        "legal.title": "개인정보 처리방침·이용 조건·면책 조항",
+        "legal.first_summary": "처음 사용하기 전에 내용을 읽고 동의 여부를 선택해 주세요. 설정 > 정보에서 언제든 다시 볼 수 있습니다.",
+        "legal.accept": "동의하고 계속",
+        "legal.decline": "거부",
+        "legal.close": "닫기",
+        "legal.declined_title": "약관에 동의하지 않음",
+        "legal.declined_body": "약관을 거부했으므로 게임 및 비디오 기능을 사용할 수 없습니다. iOS에서는 앱이 스스로 종료될 수 없습니다. 앱 전환 화면에서 닫거나 약관을 다시 읽고 동의해 주세요.",
+        "legal.review_again": "다시 읽기",
         "detail.eyebrow": "게임 상세",
         "detail.runtime_profile": "런타임 프로필 / %s",
         "detail.last_played": "마지막 플레이: %s",
         "detail.played": "플레이 %s",
-        "detail.launch": "게임 실행",
+        "detail.launch": "비주얼 노벨 실행",
         "detail.launch_entry": "실행 진입점: %s",
         "detail.default_launch_entry": "게임 폴더(자동 감지)",
         "detail.set_launch_file": "실행 파일 변경",
         "detail.reset_launch_file": "폴더 자동 감지 복원",
         "detail.set_cover": "표지 설정",
         "detail.rename": "이름 변경",
-        "detail.remove": "게임 제거",
+        "detail.remove": "비주얼 노벨 제거",
         "detail.delete_builtin": "내장 데모 삭제",
         "game.today": "오늘",
         "game.days_ago": "%d일 전",
@@ -611,8 +794,8 @@ const UI_TEXT := {
         "game.local": "로컬 게임",
         "game.type_directory": "폴더",
         "game.type_archive": "아카이브",
-        "dialog.import_title": "게임 가져오기",
-        "dialog.import_guide_body": "파일 앱으로 게임 폴더를 이 앱의 디렉터리에 복사하세요:\n\n1. iPhone / iPad에서 파일 앱을 엽니다\n2. 이동: 나의 iPhone / iPad > AetherKiri > Games\n3. 게임 폴더를 Games에 복사합니다\n4. 앱으로 돌아와 새로고침을 눌러 새 게임을 감지합니다\n\n게임 디렉터리: Games/",
+        "dialog.import_title": "비주얼 노벨 가져오기",
+        "dialog.import_guide_body": "파일 앱으로 비주얼 노벨 폴더를 이 앱의 디렉터리에 복사하세요:\n\n1. iPhone / iPad에서 파일 앱을 엽니다\n2. 이동: 나의 iPhone / iPad > Aether > Games\n3. 비주얼 노벨 폴더를 Games에 복사합니다\n4. 앱으로 돌아와 새로고침을 눌러 새 비주얼 노벨을 감지합니다\n\n비주얼 노벨 디렉터리: Games/",
         "dialog.ok": "확인",
         "dialog.scrape_title": "게임 정보 설정",
         "dialog.scrape_body": "\"%s\"을(를) 추가했습니다. 지금 표지와 표시 이름을 설정할까요?",
@@ -621,7 +804,7 @@ const UI_TEXT := {
         "dialog.choose_cover": "표지 이미지 선택",
         "dialog.choose_launch_file": "실행 파일 선택",
         "dialog.rename": "이름 변경",
-        "dialog.remove_body": "\"%s\"을(를) 목록에서 제거할까요? 디스크의 게임 파일은 삭제되지 않습니다.",
+        "dialog.remove_body": "\"%s\"을(를) 목록에서 제거할까요? 디스크의 비주얼 노벨 파일은 삭제되지 않습니다.",
         "dialog.delete_builtin_body": "내장 데모 \"%s\"와 로컬 저장 데이터를 삭제할까요? 삭제 후에는 자동으로 복원되지 않습니다.",
         "dialog.remove": "제거",
         "dialog.delete": "삭제",
@@ -639,22 +822,27 @@ const UI_TEXT := {
         "message.web_game_invalid": "브라우저가 잘못된 게임 정보를 반환했습니다",
         "message.web_import_timeout": "로컬 게임 가져오기 시간 초과",
         "message.web_picker_unsupported_long": "이 브라우저는 로컬 게임 파일을 직접 선택할 수 없습니다. File System Access 또는 디렉터리 업로드를 지원하는 브라우저를 사용하세요.",
-        "message.android_storage_permission_required": "외부 게임을 가져오거나 실행하려면 AetherKiri의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
+        "message.android_storage_permission_required": "외부 게임을 가져오거나 실행하려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.path_missing": "게임 경로가 존재하지 않습니다",
         "message.launch_file_unsupported": "실행 파일은 EXE 또는 XP3만 지원합니다",
         "message.launch_file_outside_game": "실행 파일은 현재 게임 폴더 안에 있어야 합니다",
         "message.launch_file_missing": "실행 파일이 존재하지 않습니다: %s",
         "message.game_exists": "게임이 이미 있습니다: %s",
         "message.builtin_delete_failed": "내장 데모를 완전히 삭제하지 못했습니다: %s",
-        "alert.error_title": "AetherKiri 오류",
-        "alert.warning_title": "AetherKiri 경고",
+        "alert.error_title": "Aether 오류",
+        "alert.warning_title": "Aether 경고",
         "alert.runtime_class_missing": "런타임 확장 로드 실패: AetherKiriPlayer를 사용할 수 없습니다",
         "alert.runtime_create_failed": "런타임 확장 로드 실패: AetherKiriPlayer를 만들 수 없습니다",
-        "loading.title": "게임 실행 중..."
+        "loading.title": "비주얼 노벨 실행 중..."
     }
 }
 
 const ENGINE_RESULT_OK := 0
+const MEDIA_STATUS_PLAYING := 1
+const MEDIA_STATUS_PAUSED := 2
+const MEDIA_STATUS_ENDED := 3
+const VIDEO_CONTROLS_AUTO_HIDE_SEC := 3.0
+const VIDEO_CONTROLS_FADE_SEC := 0.18
 const STARTUP_IDLE := 0
 const STARTUP_RUNNING := 1
 const STARTUP_SUCCEEDED := 2
@@ -713,19 +901,27 @@ var modal_layer: Control
 var loading_panel: PanelContainer
 var game_scroll: ScrollContainer
 var game_list: GridContainer
+var video_scroll: ScrollContainer
+var video_list: GridContainer
+var video_empty_state: Control
+var home_game_tab: Button
+var home_video_tab: Button
 var home_actions: HBoxContainer
 var empty_state: Control
 var save_button: Button
 var bg_rect: ColorRect
 var home_subtitle_label: Label
-var home_status_label: Label
 var empty_title_label: Label
 var empty_help_label: Label
+var video_empty_title_label: Label
+var video_empty_help_label: Label
 var home_primary_button: Button
 var home_guide_button: Button
 var loading_title_label: Label
 var selected_game := {}
 var known_games: Array[Dictionary] = []
+var known_videos: Array[Dictionary] = []
+var home_library_mode := "game"
 var show_perf_monitor := true
 var diagnostic_profile := "baseline" if OS.is_debug_build() else "off"
 var debug_overlay_mode := "summary" if OS.is_debug_build() else "off"
@@ -745,6 +941,9 @@ var diagnostic_env_originals := {}
 var language_mode := LANG_SYSTEM
 var active_language := LANG_ZH_HANS
 var style_mode := STYLE_DARK
+var legal_accepted_version := ""
+var legal_accepted_at := 0
+var legal_gate_completed := false
 var dirty_settings := false
 var settings_draft := {}
 var active_game_path := ""
@@ -765,6 +964,33 @@ var selected_backend := "Godot Native"
 var upscale_algorithm := "smooth"
 var render_surface_mode := "game"
 var game_running := false
+var video_playing := false
+var video_view: Control
+var video_texture: TextureRect
+var video_title_label: Label
+var video_subtitle_label: Label
+var video_top_bar: Control
+var video_controls: Control
+var video_play_button: Button
+var video_progress_slider: HSlider
+var video_time_label: Label
+var video_rate_button: OptionButton
+var video_subtitle_button: OptionButton
+var active_video_path := ""
+var active_video_state := {}
+var active_video_duration := 0.0
+var active_video_was_playing := false
+var active_video_scrubbing := false
+var active_video_end_handled := false
+var video_controls_visible := false
+var video_controls_idle_sec := 0.0
+var video_controls_tween: Tween
+var video_previous_mouse_mode := Input.MOUSE_MODE_VISIBLE
+var active_subtitle_tracks: Array[String] = []
+var active_subtitle_cues: Array[Dictionary] = []
+var active_subtitle_index := 0
+var video_progress_data := {}
+var video_progress_save_accum := 0.0
 var app_lifecycle_paused := false
 var render_errors := 0
 var last_renderer_info_logged := ""
@@ -1121,6 +1347,8 @@ func _build_ui() -> void:
     game_view.visible = false
     add_child(game_view)
 
+    _build_video_view()
+
     shell_root = Control.new()
     shell_root.set_anchors_preset(Control.PRESET_FULL_RECT)
     add_child(shell_root)
@@ -1165,6 +1393,234 @@ func _build_ui() -> void:
     _build_loading_panel()
     _fit_full_rects()
 
+func _build_video_view() -> void:
+    video_view = Control.new()
+    video_view.name = "VideoPlayerView"
+    video_view.set_anchors_preset(Control.PRESET_FULL_RECT)
+    video_view.visible = false
+    add_child(video_view)
+
+    var black := ColorRect.new()
+    black.color = Color.BLACK
+    black.set_anchors_preset(Control.PRESET_FULL_RECT)
+    black.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    video_view.add_child(black)
+
+    video_texture = TextureRect.new()
+    video_texture.set_anchors_preset(Control.PRESET_FULL_RECT)
+    video_texture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+    video_texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+    video_texture.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+    video_texture.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    video_view.add_child(video_texture)
+
+    video_subtitle_label = Label.new()
+    video_subtitle_label.anchor_left = 0.08
+    video_subtitle_label.anchor_top = 1.0
+    video_subtitle_label.anchor_right = 0.92
+    video_subtitle_label.anchor_bottom = 1.0
+    video_subtitle_label.offset_top = -190.0
+    video_subtitle_label.offset_bottom = -42.0
+    video_subtitle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    video_subtitle_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+    video_subtitle_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    video_subtitle_label.add_theme_font_size_override("font_size", 30)
+    video_subtitle_label.add_theme_color_override("font_color", Color.WHITE)
+    video_subtitle_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
+    video_subtitle_label.add_theme_constant_override("shadow_offset_x", 2)
+    video_subtitle_label.add_theme_constant_override("shadow_offset_y", 2)
+    video_subtitle_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    video_view.add_child(video_subtitle_label)
+
+    video_top_bar = PanelContainer.new()
+    video_top_bar.anchor_right = 1.0
+    video_top_bar.offset_bottom = 76.0
+    video_top_bar.add_theme_stylebox_override("panel", _panel_style(0, Color(0.015, 0.018, 0.026, 0.68), Color(0, 0, 0, 0), 0))
+    video_view.add_child(video_top_bar)
+    var top_margin := MarginContainer.new()
+    top_margin.add_theme_constant_override("margin_left", 20)
+    top_margin.add_theme_constant_override("margin_top", 10)
+    top_margin.add_theme_constant_override("margin_right", 24)
+    top_margin.add_theme_constant_override("margin_bottom", 10)
+    video_top_bar.add_child(top_margin)
+    var top_row := HBoxContainer.new()
+    top_row.add_theme_constant_override("separation", 14)
+    top_margin.add_child(top_row)
+    var back := _video_overlay_button("←", 56.0)
+    back.tooltip_text = _t("video.back")
+    back.pressed.connect(_close_video_player)
+    top_row.add_child(back)
+    video_title_label = Label.new()
+    video_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    video_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    video_title_label.clip_text = true
+    video_title_label.add_theme_font_size_override("font_size", 19)
+    video_title_label.add_theme_color_override("font_color", Color.WHITE)
+    top_row.add_child(video_title_label)
+
+    video_controls = PanelContainer.new()
+    video_controls.anchor_top = 1.0
+    video_controls.anchor_right = 1.0
+    video_controls.anchor_bottom = 1.0
+    video_controls.offset_top = -144.0
+    video_controls.add_theme_stylebox_override("panel", _panel_style(0, Color(0.015, 0.018, 0.026, 0.74), Color(0, 0, 0, 0), 0))
+    video_view.add_child(video_controls)
+    var controls_margin := MarginContainer.new()
+    controls_margin.add_theme_constant_override("margin_left", 22)
+    controls_margin.add_theme_constant_override("margin_top", 12)
+    controls_margin.add_theme_constant_override("margin_right", 22)
+    controls_margin.add_theme_constant_override("margin_bottom", 14)
+    video_controls.add_child(controls_margin)
+    var controls_box := VBoxContainer.new()
+    controls_box.add_theme_constant_override("separation", 10)
+    controls_margin.add_child(controls_box)
+
+    var timeline := HBoxContainer.new()
+    timeline.add_theme_constant_override("separation", 14)
+    controls_box.add_child(timeline)
+    video_progress_slider = HSlider.new()
+    video_progress_slider.min_value = 0.0
+    video_progress_slider.max_value = 1.0
+    video_progress_slider.step = 0.1
+    video_progress_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    video_progress_slider.drag_started.connect(func():
+        active_video_scrubbing = true
+        _set_video_controls_visible(true)
+    )
+    video_progress_slider.drag_ended.connect(func(value_changed: bool):
+        active_video_scrubbing = false
+        video_controls_idle_sec = 0.0
+        if value_changed and player != null:
+            player.media_seek(video_progress_slider.value)
+    )
+    timeline.add_child(video_progress_slider)
+    video_time_label = Label.new()
+    video_time_label.custom_minimum_size = Vector2(155, 0)
+    video_time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+    video_time_label.text = "00:00 / 00:00"
+    video_time_label.add_theme_color_override("font_color", Color.WHITE)
+    timeline.add_child(video_time_label)
+
+    var actions := HBoxContainer.new()
+    actions.alignment = BoxContainer.ALIGNMENT_CENTER
+    actions.add_theme_constant_override("separation", 12)
+    controls_box.add_child(actions)
+    var rewind := _video_overlay_button("−10s", 86.0)
+    rewind.pressed.connect(func(): _seek_video_relative(-10.0))
+    actions.add_child(rewind)
+    video_play_button = _video_overlay_button("Ⅱ", 82.0)
+    video_play_button.pressed.connect(_toggle_video_playback)
+    actions.add_child(video_play_button)
+    var forward := _video_overlay_button("+10s", 86.0)
+    forward.pressed.connect(func(): _seek_video_relative(10.0))
+    actions.add_child(forward)
+
+    video_rate_button = OptionButton.new()
+    video_rate_button.custom_minimum_size = Vector2(104, 48)
+    _style_video_option_button(video_rate_button)
+    _configure_video_option_popup(video_rate_button)
+    for rate in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]:
+        video_rate_button.add_item("%sx" % str(rate))
+        video_rate_button.set_item_metadata(video_rate_button.item_count - 1, rate)
+    video_rate_button.select(2)
+    video_rate_button.item_selected.connect(func(index: int):
+        _set_video_controls_visible(true)
+        if player != null:
+            player.media_set_rate(float(video_rate_button.get_item_metadata(index)))
+    )
+    actions.add_child(video_rate_button)
+
+    video_subtitle_button = OptionButton.new()
+    video_subtitle_button.custom_minimum_size = Vector2(180, 48)
+    _style_video_option_button(video_subtitle_button)
+    _configure_video_option_popup(video_subtitle_button)
+    video_subtitle_button.item_selected.connect(_select_video_subtitle)
+    actions.add_child(video_subtitle_button)
+    video_top_bar.visible = false
+    video_controls.visible = false
+
+func _set_video_controls_visible(show: bool, animate: bool = true) -> void:
+    if not is_instance_valid(video_top_bar) or not is_instance_valid(video_controls):
+        return
+    video_controls_idle_sec = 0.0
+    if video_controls_tween != null and video_controls_tween.is_valid():
+        video_controls_tween.kill()
+    video_controls_visible = show
+    _layout_video_subtitles_for_controls(show)
+    if show:
+        video_top_bar.visible = true
+        video_controls.visible = true
+        video_top_bar.mouse_filter = Control.MOUSE_FILTER_STOP
+        video_controls.mouse_filter = Control.MOUSE_FILTER_STOP
+        if video_playing and not _is_touch_platform():
+            Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+    else:
+        video_top_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        video_controls.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    if not animate:
+        video_top_bar.modulate = Color(1, 1, 1, 1.0 if show else 0.0)
+        video_controls.modulate = Color(1, 1, 1, 1.0 if show else 0.0)
+        if not show:
+            _finish_hide_video_controls()
+        return
+    video_controls_tween = create_tween()
+    video_controls_tween.set_parallel(true)
+    video_controls_tween.tween_property(video_top_bar, "modulate:a", 1.0 if show else 0.0, VIDEO_CONTROLS_FADE_SEC)
+    video_controls_tween.tween_property(video_controls, "modulate:a", 1.0 if show else 0.0, VIDEO_CONTROLS_FADE_SEC)
+    if not show:
+        video_controls_tween.chain().tween_callback(_finish_hide_video_controls)
+
+func _finish_hide_video_controls() -> void:
+    if video_controls_visible:
+        return
+    video_top_bar.visible = false
+    video_controls.visible = false
+    if video_playing and not _is_touch_platform():
+        Input.mouse_mode = Input.MOUSE_MODE_HIDDEN
+
+func _layout_video_subtitles_for_controls(controls_shown: bool) -> void:
+    if video_subtitle_label == null:
+        return
+    if controls_shown:
+        video_subtitle_label.offset_top = -286.0
+        video_subtitle_label.offset_bottom = -154.0
+    else:
+        video_subtitle_label.offset_top = -190.0
+        video_subtitle_label.offset_bottom = -42.0
+
+func _video_controls_interacting() -> bool:
+    if active_video_scrubbing:
+        return true
+    if is_instance_valid(video_rate_button) and video_rate_button.get_popup().visible:
+        return true
+    return is_instance_valid(video_subtitle_button) and video_subtitle_button.get_popup().visible
+
+func _process_video_controls(delta: float) -> void:
+    if not video_controls_visible:
+        return
+    if _video_controls_interacting():
+        video_controls_idle_sec = 0.0
+        return
+    if int(active_video_state.get("status", MEDIA_STATUS_PLAYING)) != MEDIA_STATUS_PLAYING:
+        video_controls_idle_sec = 0.0
+        return
+    video_controls_idle_sec += delta
+    if video_controls_idle_sec >= VIDEO_CONTROLS_AUTO_HIDE_SEC:
+        _set_video_controls_visible(false)
+
+func _video_pointer_over_controls(position: Vector2) -> bool:
+    if not video_controls_visible:
+        return false
+    return (
+        is_instance_valid(video_top_bar)
+        and video_top_bar.visible
+        and video_top_bar.get_global_rect().has_point(position)
+    ) or (
+        is_instance_valid(video_controls)
+        and video_controls.visible
+        and video_controls.get_global_rect().has_point(position)
+    )
+
 func _load_shell_settings() -> void:
     var cfg := ConfigFile.new()
     var env_style := _runtime_string("AETHERKIRI_STYLE_MODE", "")
@@ -1207,6 +1663,8 @@ func _load_shell_settings() -> void:
         plugin_load_mode = "krkrsdl3"
     mock_enabled = bool(cfg.get_value("developer", "mock_enabled", mock_enabled))
     error_dialog_logs = bool(cfg.get_value("developer", "error_dialog_logs", error_dialog_logs))
+    legal_accepted_version = String(cfg.get_value("legal", "accepted_version", ""))
+    legal_accepted_at = int(cfg.get_value("legal", "accepted_at", 0))
 
 func _configure_runtime_diagnostics() -> void:
     diagnostics_enabled = _runtime_flag("AETHERKIRI_DIAGNOSTICS")
@@ -1247,6 +1705,8 @@ func _save_shell_settings() -> void:
     cfg.set_value("developer", "plugin_load_mode", plugin_load_mode)
     cfg.set_value("developer", "mock_enabled", mock_enabled)
     cfg.set_value("developer", "error_dialog_logs", error_dialog_logs)
+    cfg.set_value("legal", "accepted_version", legal_accepted_version)
+    cfg.set_value("legal", "accepted_at", legal_accepted_at)
     cfg.save(SETTINGS_FILE)
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
     _apply_engine_options()
@@ -1510,7 +1970,7 @@ func _fit_full_rects() -> void:
     anchor_bottom = 0.0
     position = Vector2.ZERO
     size = window_size
-    var controls: Array[Control] = [bg_rect, game_view, shell_root, home_view, settings_view, detail_view, detail_scroll, modal_layer]
+    var controls: Array[Control] = [bg_rect, game_view, video_view, shell_root, home_view, settings_view, detail_view, detail_scroll, modal_layer]
     for control in controls:
         if control == null:
             continue
@@ -1623,11 +2083,17 @@ func _layout_home_view(window_size: Vector2) -> void:
     game_scroll.position = Vector2(margin, list_top)
     game_scroll.size = Vector2(list_width, list_height)
     game_scroll.custom_minimum_size = game_scroll.size
-
+    if video_scroll != null:
+        video_scroll.position = Vector2(margin, list_top)
+        video_scroll.size = Vector2(list_width, list_height)
+        video_scroll.custom_minimum_size = video_scroll.size
     var gap := 18.0
     var columns := maxi(1, int(floor((list_width + gap) / (HOME_CARD_SIZE.x + gap))))
     game_list.columns = columns
     game_list.custom_minimum_size = Vector2(list_width, 0)
+    if video_list != null:
+        video_list.columns = columns
+        video_list.custom_minimum_size = Vector2(list_width, 0)
 
     if home_actions != null:
         home_actions.anchor_left = 1.0
@@ -1646,7 +2112,7 @@ func _build_home_view() -> void:
     shell_root.add_child(home_view)
 
     var title := Label.new()
-    title.text = "AetherKiri"
+    title.text = "Aether"
     title.position = Vector2(42, 38)
     title.add_theme_font_size_override("font_size", 36)
     title.add_theme_color_override("font_color", color_text)
@@ -1659,17 +2125,19 @@ func _build_home_view() -> void:
     home_subtitle_label.add_theme_color_override("font_color", color_muted)
     home_view.add_child(home_subtitle_label)
 
-    var status_pill := PanelContainer.new()
-    status_pill.position = Vector2(42, 122)
-    status_pill.size = Vector2(284, 42)
-    status_pill.add_theme_stylebox_override("panel", _panel_style(8, color_card_alt, color_line, 1))
-    home_view.add_child(status_pill)
-    home_status_label = Label.new()
-    home_status_label.text = _t("home.status")
-    home_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    home_status_label.add_theme_font_size_override("font_size", 15)
-    home_status_label.add_theme_color_override("font_color", color_accent_soft)
-    status_pill.add_child(home_status_label)
+    var tabs := HBoxContainer.new()
+    tabs.position = Vector2(42, 122)
+    tabs.size = Vector2(548, 42)
+    tabs.add_theme_constant_override("separation", 8)
+    home_view.add_child(tabs)
+    home_game_tab = _library_tab_button(_t("home.status"))
+    home_game_tab.custom_minimum_size = Vector2(284, 42)
+    home_game_tab.pressed.connect(func(): _select_home_library("game"))
+    tabs.add_child(home_game_tab)
+    home_video_tab = _library_tab_button(_t("video.status"))
+    home_video_tab.custom_minimum_size = Vector2(256, 42)
+    home_video_tab.pressed.connect(func(): _select_home_library("video"))
+    tabs.add_child(home_video_tab)
 
     var settings_button := _icon_button(ICON_SETTINGS)
     settings_button.name = "SettingsButton"
@@ -1691,6 +2159,20 @@ func _build_home_view() -> void:
     game_list.add_theme_constant_override("h_separation", 18)
     game_list.add_theme_constant_override("v_separation", 18)
     game_scroll.add_child(game_list)
+
+    video_scroll = ScrollContainer.new()
+    video_scroll.position = Vector2(32, 164)
+    video_scroll.size = Vector2(390, 500)
+    _configure_shell_scroll(video_scroll)
+    video_scroll.visible = false
+    home_view.add_child(video_scroll)
+
+    video_list = GridContainer.new()
+    video_list.columns = 1
+    video_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    video_list.add_theme_constant_override("h_separation", 18)
+    video_list.add_theme_constant_override("v_separation", 18)
+    video_scroll.add_child(video_list)
 
     empty_state = VBoxContainer.new()
     empty_state.anchor_left = 0.5
@@ -1720,6 +2202,33 @@ func _build_home_view() -> void:
     empty_help_label.add_theme_color_override("font_color", color_muted)
     empty_state.add_child(empty_help_label)
 
+    video_empty_state = VBoxContainer.new()
+    video_empty_state.anchor_left = 0.5
+    video_empty_state.anchor_top = 0.5
+    video_empty_state.anchor_right = 0.5
+    video_empty_state.anchor_bottom = 0.5
+    video_empty_state.position = Vector2(-300, -120)
+    video_empty_state.size = Vector2(600, 250)
+    video_empty_state.add_theme_constant_override("separation", 18)
+    video_empty_state.visible = false
+    home_view.add_child(video_empty_state)
+    var video_empty_icon := _centered_icon(ICON_VIDEO, Vector2(64, 64), color_accent)
+    video_empty_icon.custom_minimum_size = Vector2(0, 72)
+    video_empty_state.add_child(video_empty_icon)
+    video_empty_title_label = Label.new()
+    video_empty_title_label.text = _t("video.empty_title")
+    video_empty_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    video_empty_title_label.add_theme_font_size_override("font_size", 28)
+    video_empty_title_label.add_theme_color_override("font_color", color_text)
+    video_empty_state.add_child(video_empty_title_label)
+    video_empty_help_label = Label.new()
+    video_empty_help_label.text = _video_empty_help_text()
+    video_empty_help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    video_empty_help_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    video_empty_help_label.add_theme_font_size_override("font_size", 18)
+    video_empty_help_label.add_theme_color_override("font_color", color_muted)
+    video_empty_state.add_child(video_empty_help_label)
+
     home_actions = HBoxContainer.new()
     home_actions.anchor_left = 1.0
     home_actions.anchor_top = 1.0
@@ -1739,6 +2248,7 @@ func _build_home_view() -> void:
     home_guide_button.custom_minimum_size = Vector2(198, 56)
     home_guide_button.pressed.connect(_show_import_guide)
     home_actions.add_child(home_guide_button)
+    _apply_home_library_visibility()
 
 func _build_settings_view() -> void:
     settings_view = ScrollContainer.new()
@@ -1845,6 +2355,18 @@ func _rebuild_settings_view() -> void:
     page.add_child(_section_title(_t("settings.section.about"), ICON_HELP))
     var about_card := _settings_card()
     page.add_child(about_card)
+    about_card.add_child(_settings_action_row(
+        _t("settings.legal"),
+        _t("settings.legal_desc"),
+        _t("settings.legal_open"),
+        func(): _show_legal_agreement(false)
+    ))
+    about_card.add_child(_settings_action_row(
+        _t("settings.ios_statement"),
+        _t("settings.ios_statement_desc"),
+        _t("settings.ios_statement_open"),
+        _show_ios_additional_statement
+    ))
     about_card.add_child(_settings_value_row(_t("settings.version"), "0.2.0-beta.1"))
 
 func _build_detail_view() -> void:
@@ -1861,8 +2383,270 @@ func _build_detail_view() -> void:
 func _build_modal_layer() -> void:
     modal_layer = Control.new()
     modal_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+    modal_layer.mouse_filter = Control.MOUSE_FILTER_STOP
     modal_layer.visible = false
     add_child(modal_layer)
+
+func _legal_document_path() -> String:
+    match active_language:
+        LANG_ZH_HANS:
+            return LEGAL_AGREEMENT_ZH_HANS
+        LANG_ZH_HANT:
+            return LEGAL_AGREEMENT_ZH_HANT
+        LANG_JA:
+            return LEGAL_AGREEMENT_JA
+        LANG_KO:
+            return LEGAL_AGREEMENT_KO
+        _:
+            return LEGAL_AGREEMENT_EN
+
+func _load_legal_document() -> String:
+    var file := FileAccess.open(_legal_document_path(), FileAccess.READ)
+    if file == null:
+        return _t("legal.title")
+    return file.get_as_text()
+
+func _ios_statement_document_path() -> String:
+    match active_language:
+        LANG_ZH_HANS:
+            return IOS_STATEMENT_ZH_HANS
+        LANG_ZH_HANT:
+            return IOS_STATEMENT_ZH_HANT
+        LANG_JA:
+            return IOS_STATEMENT_JA
+        LANG_KO:
+            return IOS_STATEMENT_KO
+        _:
+            return IOS_STATEMENT_EN
+
+func _load_ios_statement_document() -> String:
+    var file := FileAccess.open(_ios_statement_document_path(), FileAccess.READ)
+    if file == null:
+        return _t("ios_statement.title")
+    return file.get_as_text()
+
+func _show_ios_additional_statement() -> void:
+    modal_layer.visible = true
+    modal_layer.move_to_front()
+    for child in modal_layer.get_children():
+        child.queue_free()
+
+    var dim := ColorRect.new()
+    dim.color = Color(0, 0, 0, 0.68)
+    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+    dim.mouse_filter = Control.MOUSE_FILTER_STOP
+    modal_layer.add_child(dim)
+
+    var dialog := PanelContainer.new()
+    dialog.anchor_left = 0.08
+    dialog.anchor_top = 0.06
+    dialog.anchor_right = 0.92
+    dialog.anchor_bottom = 0.94
+    dialog.add_theme_stylebox_override("panel", _panel_style(22, color_card, color_line, 1))
+    modal_layer.add_child(dialog)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 30)
+    margin.add_theme_constant_override("margin_top", 24)
+    margin.add_theme_constant_override("margin_right", 30)
+    margin.add_theme_constant_override("margin_bottom", 24)
+    dialog.add_child(margin)
+
+    var content := VBoxContainer.new()
+    content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    content.add_theme_constant_override("separation", 16)
+    margin.add_child(content)
+
+    var title := Label.new()
+    title.text = _t("ios_statement.title")
+    title.add_theme_font_size_override("font_size", 30)
+    title.add_theme_color_override("font_color", color_text)
+    content.add_child(title)
+
+    var scroll := ScrollContainer.new()
+    scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+    content.add_child(scroll)
+
+    var statement := Label.new()
+    statement.text = _load_ios_statement_document()
+    statement.custom_minimum_size = Vector2(maxf(420.0, get_viewport_rect().size.x * 0.72), 0)
+    statement.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    statement.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    statement.add_theme_font_size_override("font_size", 17)
+    statement.add_theme_color_override("font_color", color_text)
+    statement.add_theme_constant_override("line_spacing", 6)
+    scroll.add_child(statement)
+
+    var close := _pill_button(_t("legal.close"))
+    close.custom_minimum_size = Vector2(150, 56)
+    close.size_flags_horizontal = Control.SIZE_SHRINK_END
+    close.pressed.connect(func(): modal_layer.visible = false)
+    content.add_child(close)
+
+func _legal_agreement_required() -> bool:
+    if OS.is_debug_build() and _runtime_flag("AETHERKIRI_BYPASS_LEGAL_GATE"):
+        return false
+    if OS.get_environment("AETHERKIRI_CAPTURE_UI_ACTION") in ["legal", "legal_declined"]:
+        return true
+    return legal_accepted_version != LEGAL_AGREEMENT_VERSION
+
+func _show_legal_agreement(first_use: bool) -> void:
+    modal_layer.visible = true
+    modal_layer.move_to_front()
+    for child in modal_layer.get_children():
+        child.queue_free()
+
+    var dim := ColorRect.new()
+    dim.color = Color(0, 0, 0, 0.68)
+    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+    dim.mouse_filter = Control.MOUSE_FILTER_STOP
+    modal_layer.add_child(dim)
+
+    var dialog := PanelContainer.new()
+    dialog.anchor_left = 0.06
+    dialog.anchor_top = 0.04
+    dialog.anchor_right = 0.94
+    dialog.anchor_bottom = 0.96
+    dialog.add_theme_stylebox_override("panel", _panel_style(22, color_card, color_line, 1))
+    modal_layer.add_child(dialog)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 30)
+    margin.add_theme_constant_override("margin_top", 24)
+    margin.add_theme_constant_override("margin_right", 30)
+    margin.add_theme_constant_override("margin_bottom", 24)
+    dialog.add_child(margin)
+
+    var content := VBoxContainer.new()
+    content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    content.add_theme_constant_override("separation", 16)
+    margin.add_child(content)
+
+    var title := Label.new()
+    title.text = _t("legal.title")
+    title.add_theme_font_size_override("font_size", 30)
+    title.add_theme_color_override("font_color", color_text)
+    content.add_child(title)
+
+    if first_use:
+        var summary := Label.new()
+        summary.text = _t("legal.first_summary")
+        summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+        summary.add_theme_font_size_override("font_size", 17)
+        summary.add_theme_color_override("font_color", color_accent_soft)
+        content.add_child(summary)
+
+    var scroll := ScrollContainer.new()
+    scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+    content.add_child(scroll)
+
+    var policy := Label.new()
+    policy.text = _load_legal_document()
+    policy.custom_minimum_size = Vector2(maxf(420.0, get_viewport_rect().size.x * 0.76), 0)
+    policy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    policy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    policy.add_theme_font_size_override("font_size", 17)
+    policy.add_theme_color_override("font_color", color_text)
+    policy.add_theme_constant_override("line_spacing", 6)
+    scroll.add_child(policy)
+
+    var buttons := HBoxContainer.new()
+    buttons.alignment = BoxContainer.ALIGNMENT_END
+    buttons.add_theme_constant_override("separation", 14)
+    buttons.custom_minimum_size = Vector2(0, 58)
+    content.add_child(buttons)
+
+    if first_use:
+        var decline := Button.new()
+        decline.text = _t("legal.decline")
+        decline.custom_minimum_size = Vector2(150, 56)
+        decline.add_theme_font_size_override("font_size", 19)
+        decline.add_theme_color_override("font_color", color_text)
+        decline.pressed.connect(_decline_legal_agreement)
+        buttons.add_child(decline)
+
+        var accept := _pill_button(_t("legal.accept"))
+        accept.custom_minimum_size = Vector2(220, 56)
+        accept.pressed.connect(_accept_legal_agreement)
+        buttons.add_child(accept)
+    else:
+        var close := _pill_button(_t("legal.close"))
+        close.custom_minimum_size = Vector2(150, 56)
+        close.pressed.connect(func(): modal_layer.visible = false)
+        buttons.add_child(close)
+
+func _accept_legal_agreement() -> void:
+    legal_accepted_version = LEGAL_AGREEMENT_VERSION
+    legal_accepted_at = int(Time.get_unix_time_from_system())
+    _save_shell_settings()
+    modal_layer.visible = false
+    _continue_ready_after_legal_gate()
+
+func _decline_legal_agreement() -> void:
+    if OS.get_name() == "iOS":
+        _show_legal_declined_screen()
+        return
+    get_tree().quit(0)
+
+func _show_legal_declined_screen() -> void:
+    modal_layer.visible = true
+    modal_layer.move_to_front()
+    for child in modal_layer.get_children():
+        child.queue_free()
+
+    var dim := ColorRect.new()
+    dim.color = Color(0, 0, 0, 0.82)
+    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+    dim.mouse_filter = Control.MOUSE_FILTER_STOP
+    modal_layer.add_child(dim)
+
+    var dialog := PanelContainer.new()
+    dialog.anchor_left = 0.18
+    dialog.anchor_top = 0.24
+    dialog.anchor_right = 0.82
+    dialog.anchor_bottom = 0.76
+    dialog.add_theme_stylebox_override("panel", _panel_style(22, color_card, color_line, 1))
+    modal_layer.add_child(dialog)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 34)
+    margin.add_theme_constant_override("margin_top", 30)
+    margin.add_theme_constant_override("margin_right", 34)
+    margin.add_theme_constant_override("margin_bottom", 30)
+    dialog.add_child(margin)
+
+    var box := VBoxContainer.new()
+    box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    box.add_theme_constant_override("separation", 22)
+    margin.add_child(box)
+
+    var title := Label.new()
+    title.text = _t("legal.declined_title")
+    title.add_theme_font_size_override("font_size", 30)
+    title.add_theme_color_override("font_color", color_text)
+    box.add_child(title)
+
+    var body := Label.new()
+    body.text = _t("legal.declined_body")
+    body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    body.add_theme_font_size_override("font_size", 20)
+    body.add_theme_color_override("font_color", color_text)
+    box.add_child(body)
+
+    var review := _pill_button(_t("legal.review_again"))
+    review.custom_minimum_size = Vector2(180, 56)
+    review.size_flags_horizontal = Control.SIZE_SHRINK_END
+    review.pressed.connect(func(): _show_legal_agreement(true))
+    box.add_child(review)
 
 func _build_loading_panel() -> void:
     loading_panel = PanelContainer.new()
@@ -2203,6 +2987,63 @@ func _pill_disabled_style(radius: int) -> StyleBoxFlat:
         return _panel_style(radius, Color(0.28, 0.30, 0.38, 1), Color(0.28, 0.30, 0.38, 1), 0)
     return _panel_style(radius, Color(0.78, 0.76, 0.70, 1), Color(0.78, 0.76, 0.70, 1), 0)
 
+func _library_tab_button(text: String) -> Button:
+    var button := Button.new()
+    button.text = text
+    button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    button.clip_text = true
+    button.focus_mode = Control.FOCUS_ALL
+    button.add_theme_font_size_override("font_size", 15)
+    button.add_theme_color_override("font_color", color_accent_soft)
+    button.add_theme_stylebox_override("focus", _focus_outline(8))
+    _set_home_tab_active(button, false)
+    return button
+
+func _video_overlay_button(text: String, min_width: float) -> Button:
+    var button := Button.new()
+    button.text = text
+    button.alignment = HORIZONTAL_ALIGNMENT_CENTER
+    button.clip_text = true
+    button.focus_mode = Control.FOCUS_ALL
+    button.custom_minimum_size = Vector2(min_width, 48)
+    button.add_theme_font_size_override("font_size", 18)
+    button.add_theme_color_override("font_color", Color.WHITE)
+    _apply_button_style(
+        button,
+        _panel_style(18, Color(0.12, 0.13, 0.17, 0.82), Color(1, 1, 1, 0.12), 1),
+        _panel_style(18, Color(0.22, 0.23, 0.28, 0.94), Color(1, 1, 1, 0.28), 1),
+        _panel_style(18, Color(0.32, 0.27, 0.44, 0.96), color_accent, 1)
+    )
+    return button
+
+func _style_video_option_button(button: OptionButton) -> void:
+    button.add_theme_font_size_override("font_size", 17)
+    button.add_theme_color_override("font_color", Color.WHITE)
+    button.add_theme_color_override("font_hover_color", Color.WHITE)
+    button.add_theme_color_override("font_pressed_color", Color.WHITE)
+    button.add_theme_stylebox_override("normal", _panel_style(14, Color(0.12, 0.13, 0.17, 0.82), Color(1, 1, 1, 0.12), 1))
+    button.add_theme_stylebox_override("hover", _panel_style(14, Color(0.22, 0.23, 0.28, 0.94), Color(1, 1, 1, 0.28), 1))
+    button.add_theme_stylebox_override("pressed", _panel_style(14, Color(0.32, 0.27, 0.44, 0.96), color_accent, 1))
+    button.add_theme_stylebox_override("focus", _focus_outline(14))
+
+func _configure_video_option_popup(button: OptionButton) -> void:
+    var popup := button.get_popup()
+    popup.about_to_popup.connect(func():
+        var available_height := maxi(120, int(button.get_global_rect().position.y - 16.0))
+        popup.max_size = Vector2i(0, available_height)
+        call_deferred("_position_video_option_popup_above", button)
+    )
+
+func _position_video_option_popup_above(button: OptionButton) -> void:
+    if not is_instance_valid(button):
+        return
+    var popup := button.get_popup()
+    if not popup.visible:
+        return
+    # OptionButton places the popup directly below itself. Moving it by the
+    # combined button and popup height keeps the menu fully above the bottom bar.
+    popup.position.y -= popup.size.y + int(round(button.size.y))
+
 func _pill_button(text: String, icon_path: String = "") -> Button:
     var button := Button.new()
     button.text = text if icon_path.is_empty() else ""
@@ -2398,6 +3239,36 @@ func _settings_value_row(title: String, value: String) -> Control:
     value_label.add_theme_font_size_override("font_size", 17)
     value_label.add_theme_color_override("font_color", color_accent)
     row.add_child(value_label)
+    return panel
+
+func _settings_action_row(title: String, subtitle: String, action_text: String, action: Callable) -> Control:
+    var panel := PanelContainer.new()
+    panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
+    var row := HBoxContainer.new()
+    row.custom_minimum_size = Vector2(0, 92)
+    row.add_theme_constant_override("separation", 18)
+    panel.add_child(row)
+    var labels := VBoxContainer.new()
+    labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    labels.add_theme_constant_override("separation", 6)
+    row.add_child(labels)
+    var title_label := Label.new()
+    title_label.text = title
+    title_label.add_theme_font_size_override("font_size", 20)
+    title_label.add_theme_color_override("font_color", color_text)
+    labels.add_child(title_label)
+    var sub := Label.new()
+    sub.text = subtitle
+    sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    sub.add_theme_font_size_override("font_size", 16)
+    sub.add_theme_color_override("font_color", color_muted)
+    labels.add_child(sub)
+    var open := _pill_button(action_text)
+    open.custom_minimum_size = Vector2(150, 54)
+    open.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    open.pressed.connect(action)
+    row.add_child(open)
     return panel
 
 func _settings_fps_row() -> Control:
@@ -2718,16 +3589,25 @@ func _refresh_language_texts() -> void:
         debug_console.refresh_language()
     if is_instance_valid(home_subtitle_label):
         home_subtitle_label.text = _t("home.subtitle")
-    if is_instance_valid(home_status_label):
-        home_status_label.text = _t("home.status")
+    if is_instance_valid(home_game_tab):
+        _set_pill_button_text(home_game_tab, _t("home.status"))
+    if is_instance_valid(home_video_tab):
+        _set_pill_button_text(home_video_tab, _t("video.status"))
     if is_instance_valid(empty_title_label):
         empty_title_label.text = _t("home.empty_title")
     if is_instance_valid(empty_help_label):
         empty_help_label.text = _empty_help_text()
+    if is_instance_valid(video_empty_title_label):
+        video_empty_title_label.text = _t("video.empty_title")
+    if is_instance_valid(video_empty_help_label):
+        video_empty_help_label.text = _video_empty_help_text()
     if is_instance_valid(home_primary_button):
-        _set_pill_button_text(home_primary_button, _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"))
+        var primary_text := _t("video.refresh") if OS.get_name() == "iOS" else _t("video.import")
+        if home_library_mode == "game":
+            primary_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
+        _set_pill_button_text(home_primary_button, primary_text)
     if is_instance_valid(home_guide_button):
-        _set_pill_button_text(home_guide_button, _t("home.import_guide"))
+        _set_pill_button_text(home_guide_button, _t("video.guide") if home_library_mode == "video" else _t("home.import_guide"))
     if is_instance_valid(loading_title_label):
         loading_title_label.text = _t("loading.title")
 
@@ -2738,6 +3618,44 @@ func _empty_help_text() -> String:
         return _t("home.empty_help_web")
     return _t("home.empty_help_desktop")
 
+func _video_empty_help_text() -> String:
+    return _t("video.empty_help_ios") if OS.get_name() == "iOS" else _t("video.empty_help_desktop")
+
+func _select_home_library(mode: String) -> void:
+    if not mode in ["game", "video"]:
+        return
+    home_library_mode = mode
+    _apply_home_library_visibility()
+    _refresh_language_texts()
+    if mode == "video":
+        _refresh_videos()
+    else:
+        _refresh_games()
+
+func _apply_home_library_visibility() -> void:
+    var video_mode := home_library_mode == "video"
+    if is_instance_valid(game_scroll):
+        game_scroll.visible = not video_mode and not known_games.is_empty()
+    if is_instance_valid(empty_state):
+        empty_state.visible = not video_mode and known_games.is_empty()
+    if is_instance_valid(video_scroll):
+        video_scroll.visible = video_mode and not known_videos.is_empty()
+    if is_instance_valid(video_empty_state):
+        video_empty_state.visible = video_mode and known_videos.is_empty()
+    if is_instance_valid(home_game_tab):
+        _set_home_tab_active(home_game_tab, not video_mode)
+    if is_instance_valid(home_video_tab):
+        _set_home_tab_active(home_video_tab, video_mode)
+
+func _set_home_tab_active(button: Button, active: bool) -> void:
+    button.disabled = false
+    button.add_theme_stylebox_override("normal", _panel_style(8, color_card_alt, color_line, 1))
+    button.add_theme_stylebox_override("hover", _panel_style(8, color_card_hover, color_accent_soft, 1))
+    button.add_theme_stylebox_override("pressed", _panel_style(8, color_card_alt.darkened(0.08), color_accent_soft, 1))
+    button.add_theme_color_override("font_color", color_accent_soft if active else color_muted)
+    button.add_theme_color_override("font_hover_color", color_accent_soft)
+    button.add_theme_color_override("font_pressed_color", color_accent_soft)
+
 func _show_home() -> void:
     _reset_shell_scroll_drag()
     _discard_settings_draft()
@@ -2747,6 +3665,8 @@ func _show_home() -> void:
     detail_view.visible = false
     modal_layer.visible = false
     _refresh_games()
+    if home_library_mode == "video":
+        _refresh_videos()
 
 func _show_settings() -> void:
     _reset_shell_scroll_drag()
@@ -2912,6 +3832,11 @@ func _detail_action(icon_path: String, text: String, callback: Callable = Callab
     return button
 
 func _show_import_guide() -> void:
+    var guide_title := _t("dialog.import_title")
+    var guide_body := _t("dialog.import_guide_body")
+    if home_library_mode == "video":
+        guide_title = _t("video.guide_title")
+        guide_body = _t("video.guide_body_ios") if OS.get_name() == "iOS" else _t("video.guide_body_desktop")
     modal_layer.visible = true
     for child in modal_layer.get_children():
         child.queue_free()
@@ -2934,12 +3859,12 @@ func _show_import_guide() -> void:
     box.add_theme_constant_override("separation", 22)
     dialog.add_child(box)
     var title := Label.new()
-    title.text = _t("dialog.import_title")
+    title.text = guide_title
     title.add_theme_font_size_override("font_size", 30)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var body := Label.new()
-    body.text = _t("dialog.import_guide_body")
+    body.text = guide_body
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     body.add_theme_font_size_override("font_size", 22)
     body.add_theme_color_override("font_color", color_text)
@@ -2950,14 +3875,14 @@ func _show_import_guide() -> void:
     box.add_child(ok)
 
 func _show_message(message: String) -> void:
-    _show_system_alert(message, "AetherKiri")
+    _show_system_alert(message, "Aether")
 
-func _show_system_alert(message: String, title: String = "AetherKiri") -> void:
+func _show_system_alert(message: String, title: String = "Aether") -> void:
     if message.strip_edges().is_empty():
         return
     OS.alert(message, title)
 
-func _show_system_alert_once(key: String, message: String, title: String = "AetherKiri") -> void:
+func _show_system_alert_once(key: String, message: String, title: String = "Aether") -> void:
     if shown_system_alerts.has(key):
         return
     shown_system_alerts[key] = true
@@ -2969,7 +3894,7 @@ func _maybe_show_log_alert(line: String) -> void:
     if alert_parts.size() > 1:
         var content := alert_parts[1].strip_edges()
         var parts := content.split(" | ", true, 1)
-        var alert_title := parts[0].strip_edges() if parts.size() > 0 else "AetherKiri"
+        var alert_title := parts[0].strip_edges() if parts.size() > 0 else "Aether"
         var alert_message := parts[1].strip_edges() if parts.size() > 1 else ""
         _show_system_alert(alert_message, alert_title)
 
@@ -3070,7 +3995,7 @@ func _set_launch_file_for_selected() -> void:
     var dialog := _create_file_dialog(
         _t("dialog.choose_launch_file"),
         FileDialog.FILE_MODE_OPEN_FILE,
-        PackedStringArray(["*.exe,*.EXE,*.xp3,*.XP3;KiriKiri launch file"])
+        PackedStringArray(["*.exe,*.EXE,*.xp3,*.XP3;Visual novel launch file"])
     )
     if DirAccess.dir_exists_absolute(library_path):
         dialog.current_dir = library_path
@@ -3181,14 +4106,34 @@ func _confirm_remove_selected() -> void:
     label.add_theme_font_size_override("font_size", 22)
     label.add_theme_color_override("font_color", color_text)
     box.add_child(label)
+    var buttons := HBoxContainer.new()
+    buttons.add_theme_constant_override("separation", 12)
+    buttons.alignment = BoxContainer.ALIGNMENT_END
+    buttons.custom_minimum_size = Vector2(0, 62)
+    box.add_child(buttons)
+    var cancel := Button.new()
+    cancel.text = _t("dialog.cancel")
+    cancel.flat = true
+    cancel.custom_minimum_size = Vector2(112, 62)
+    cancel.add_theme_font_size_override("font_size", 20)
+    cancel.add_theme_color_override("font_color", color_text)
+    cancel.pressed.connect(func(): modal_layer.visible = false)
+    buttons.add_child(cancel)
     var remove := _pill_button(_t("dialog.delete" if deleting_builtin else "dialog.remove"))
+    remove.custom_minimum_size = Vector2(148, 62)
     remove.pressed.connect(func():
         modal_layer.visible = false
         _remove_game(path)
     )
-    box.add_child(remove)
+    buttons.add_child(remove)
 
 func _on_refresh_or_import() -> void:
+    if home_library_mode == "video":
+        if OS.get_name() == "iOS":
+            _refresh_videos()
+        else:
+            _open_video_import_dialog()
+        return
     if OS.get_name() == "iOS":
         _refresh_games()
         return
@@ -3526,7 +4471,7 @@ func _show_web_import_picker() -> void:
 func _open_import_dialog(xp3: bool) -> void:
     if not _ensure_android_storage_permission_for_import():
         return
-    var filters := PackedStringArray(["*.xp3,*.XP3;KiriKiri XP3 archive"]) if xp3 else PackedStringArray()
+    var filters := PackedStringArray(["*.xp3,*.XP3;Visual novel resource archive"]) if xp3 else PackedStringArray()
     var dialog := _create_file_dialog(
         _t("dialog.select_xp3") if xp3 else _t("dialog.select_game_dir"),
         FileDialog.FILE_MODE_OPEN_FILE if xp3 else FileDialog.FILE_MODE_OPEN_DIR,
@@ -3555,10 +4500,487 @@ func _refresh_games() -> void:
     known_games = _sorted_games(known_games)
     for child in game_list.get_children():
         child.queue_free()
-    empty_state.visible = known_games.is_empty()
-    game_scroll.visible = not known_games.is_empty()
     for game in known_games:
         game_list.add_child(_game_card(game))
+    _apply_home_library_visibility()
+
+func _refresh_videos() -> void:
+    if video_progress_data.is_empty():
+        video_progress_data = _load_video_progress()
+    known_videos = _load_video_list()
+    if OS.get_name() == "iOS":
+        var video_root := ProjectSettings.globalize_path("user://Video")
+        DirAccess.make_dir_recursive_absolute(video_root)
+        known_videos = _filter_hidden_ios_videos(_scan_video_directory(video_root))
+        _save_video_list(known_videos)
+    known_videos.sort_custom(func(a: Dictionary, b: Dictionary):
+        return String(a.get("name", "")).naturalnocasecmp_to(String(b.get("name", ""))) < 0
+    )
+    if video_list != null:
+        for child in video_list.get_children():
+            child.queue_free()
+        for video in known_videos:
+            video_list.add_child(_video_card(video))
+    _apply_home_library_visibility()
+
+func _load_video_list() -> Array[Dictionary]:
+    var file := FileAccess.open(VIDEO_LIST_FILE, FileAccess.READ)
+    if file == null:
+        return []
+    var parsed = JSON.parse_string(file.get_as_text())
+    if not parsed is Array:
+        return []
+    var videos: Array[Dictionary] = []
+    for item in parsed:
+        if not item is Dictionary:
+            continue
+        var path := String(item.get("path", ""))
+        if FileAccess.file_exists(path) and _is_video_path(path):
+            videos.append(_video_info(path))
+    return videos
+
+func _save_video_list(videos: Array[Dictionary]) -> void:
+    var file := FileAccess.open(VIDEO_LIST_FILE, FileAccess.WRITE)
+    if file != null:
+        file.store_string(JSON.stringify(videos))
+
+func _load_hidden_videos() -> Dictionary:
+    var file := FileAccess.open(VIDEO_HIDDEN_FILE, FileAccess.READ)
+    if file == null:
+        return {}
+    var parsed = JSON.parse_string(file.get_as_text())
+    return parsed if parsed is Dictionary else {}
+
+func _save_hidden_videos(hidden: Dictionary) -> void:
+    var file := FileAccess.open(VIDEO_HIDDEN_FILE, FileAccess.WRITE)
+    if file != null:
+        file.store_string(JSON.stringify(hidden))
+
+func _filter_hidden_ios_videos(videos: Array[Dictionary]) -> Array[Dictionary]:
+    var hidden := _load_hidden_videos()
+    var retained_hidden := {}
+    var visible: Array[Dictionary] = []
+    for video in videos:
+        var path := String(video.get("path", ""))
+        var modified := int(video.get("modified", 0))
+        if int(hidden.get(path, -1)) == modified:
+            retained_hidden[path] = modified
+        else:
+            visible.append(video)
+    if JSON.stringify(retained_hidden) != JSON.stringify(hidden):
+        _save_hidden_videos(retained_hidden)
+    return visible
+
+func _scan_video_directory(root: String) -> Array[Dictionary]:
+    var videos: Array[Dictionary] = []
+    _scan_video_directory_into(root, videos)
+    return videos
+
+func _scan_video_directory_into(root: String, videos: Array[Dictionary]) -> void:
+    var dir := DirAccess.open(root)
+    if dir == null:
+        return
+    dir.list_dir_begin()
+    while true:
+        var name := dir.get_next()
+        if name.is_empty():
+            break
+        if name.begins_with("."):
+            continue
+        var path := root.path_join(name)
+        if dir.current_is_dir():
+            _scan_video_directory_into(path, videos)
+        elif _is_video_path(path):
+            videos.append(_video_info(path))
+    dir.list_dir_end()
+
+func _is_video_path(path: String) -> bool:
+    return path.get_extension().to_lower() in VIDEO_EXTENSIONS
+
+func _video_info(path: String) -> Dictionary:
+    return {
+        "path": path,
+        "name": path.get_file().get_basename(),
+        "fileName": path.get_file(),
+        "modified": FileAccess.get_modified_time(path),
+    }
+
+func _add_video_path(path: String) -> void:
+    var normalized := path.simplify_path()
+    if not FileAccess.file_exists(normalized) or not _is_video_path(normalized):
+        return
+    var videos := _load_video_list()
+    var next: Array[Dictionary] = []
+    for video in videos:
+        if String(video.get("path", "")) != normalized:
+            next.append(video)
+    next.append(_video_info(normalized))
+    _save_video_list(next)
+    _refresh_videos()
+
+func _open_video_import_dialog() -> void:
+    var filters := PackedStringArray([
+        "*.mp4,*.mkv,*.mov,*.m4v,*.avi,*.webm,*.flv,*.ts,*.m2ts,*.mpeg,*.mpg,*.wmv;Video files"
+    ])
+    var dialog := _create_file_dialog(
+        _t("video.import"),
+        FileDialog.FILE_MODE_OPEN_FILE,
+        filters
+    )
+    dialog.file_selected.connect(_add_video_path)
+    add_child(dialog)
+    dialog.popup_centered(Vector2i(900, 640))
+
+func _video_card(video: Dictionary) -> Control:
+    var path := String(video.get("path", ""))
+    var progress: Dictionary = video_progress_data.get(path, {})
+    var position := float(progress.get("position", 0.0))
+    var duration := float(progress.get("duration", 0.0))
+    var detail := String(video.get("fileName", path.get_file()))
+    if position > 1.0:
+        detail = "%s  ·  %s / %s" % [
+            detail,
+            _format_video_time(position),
+            _format_video_time(duration),
+        ]
+
+    var card := Control.new()
+    card.custom_minimum_size = HOME_CARD_SIZE
+
+    var button := Button.new()
+    button.set_anchors_preset(Control.PRESET_FULL_RECT)
+    button.clip_text = true
+    button.clip_contents = true
+    button.focus_mode = Control.FOCUS_ALL
+    button.text = ""
+    button.add_theme_stylebox_override("normal", _panel_style(8, color_card_alt, color_line, 1))
+    button.add_theme_stylebox_override("hover", _panel_style(8, color_card_hover, color_accent, 1))
+    button.add_theme_stylebox_override("pressed", _panel_style(8, color_accent_dim, color_accent, 1))
+    button.add_theme_stylebox_override("focus", _focus_outline(8))
+    var captured := video.duplicate(true)
+    button.pressed.connect(func(): _open_video_player(captured))
+    card.add_child(button)
+
+    var frame := Control.new()
+    frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    frame.clip_contents = true
+    frame.set_anchors_preset(Control.PRESET_FULL_RECT)
+    button.add_child(frame)
+
+    var placeholder := PanelContainer.new()
+    placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    placeholder.set_anchors_preset(Control.PRESET_FULL_RECT)
+    placeholder.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
+    frame.add_child(placeholder)
+
+    var icon := _centered_icon(ICON_VIDEO, Vector2(64, 64), color_accent)
+    icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+    frame.add_child(icon)
+
+    var shade := PanelContainer.new()
+    shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shade.anchor_left = 0.0
+    shade.anchor_top = 1.0
+    shade.anchor_right = 1.0
+    shade.anchor_bottom = 1.0
+    shade.offset_top = -118.0
+    shade.add_theme_stylebox_override("panel", _panel_style(8, Color(0.0, 0.0, 0.0, 0.62), Color(0, 0, 0, 0), 0))
+    frame.add_child(shade)
+
+    var text_margin := MarginContainer.new()
+    text_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    text_margin.anchor_left = 0.0
+    text_margin.anchor_top = 1.0
+    text_margin.anchor_right = 1.0
+    text_margin.anchor_bottom = 1.0
+    text_margin.offset_top = -118.0
+    text_margin.add_theme_constant_override("margin_left", 16)
+    text_margin.add_theme_constant_override("margin_top", 18)
+    text_margin.add_theme_constant_override("margin_right", 16)
+    text_margin.add_theme_constant_override("margin_bottom", 16)
+    frame.add_child(text_margin)
+
+    var labels := VBoxContainer.new()
+    labels.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    labels.add_theme_constant_override("separation", 4)
+    text_margin.add_child(labels)
+
+    var title := Label.new()
+    title.text = String(video.get("name", path.get_file()))
+    title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    title.clip_text = true
+    title.add_theme_font_size_override("font_size", 21)
+    title.add_theme_color_override("font_color", Color.WHITE)
+    labels.add_child(title)
+
+    var sub := Label.new()
+    sub.text = detail
+    sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    sub.clip_text = true
+    sub.add_theme_font_size_override("font_size", 15)
+    sub.add_theme_color_override("font_color", Color(1, 1, 1, 0.72))
+    labels.add_child(sub)
+
+    var border := PanelContainer.new()
+    border.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    border.set_anchors_preset(Control.PRESET_FULL_RECT)
+    _set_game_card_border(button, border, false)
+    frame.add_child(border)
+    button.add_to_group("game_card_buttons")
+    button.set_meta("card_border_path", button.get_path_to(border))
+    button.mouse_entered.connect(func(): _set_game_card_border(button, border, true))
+    button.mouse_exited.connect(func():
+        _set_game_card_border(button, border, button.has_focus())
+    )
+    button.focus_entered.connect(func(): _set_game_card_border(button, border, true))
+    button.focus_exited.connect(func():
+        var still_hovered := button.get_global_rect().has_point(button.get_global_mouse_position())
+        _set_game_card_border(button, border, still_hovered)
+    )
+
+    var remove := _icon_button(ICON_DELETE)
+    remove.anchor_left = 1.0
+    remove.anchor_right = 1.0
+    remove.offset_left = -60.0
+    remove.offset_top = 12.0
+    remove.offset_right = -12.0
+    remove.offset_bottom = 60.0
+    remove.custom_minimum_size = Vector2(48, 48)
+    remove.tooltip_text = _t("video.remove")
+    remove.pressed.connect(func(): _confirm_remove_video(captured))
+    card.add_child(remove)
+    return card
+
+func _confirm_remove_video(video: Dictionary) -> void:
+    var path := String(video.get("path", ""))
+    if path.is_empty():
+        return
+    modal_layer.visible = true
+    for child in modal_layer.get_children():
+        child.queue_free()
+    var dim := ColorRect.new()
+    dim.color = Color(0, 0, 0, 0.38)
+    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+    modal_layer.add_child(dim)
+    var dialog := PanelContainer.new()
+    dialog.anchor_left = 0.5
+    dialog.anchor_top = 0.5
+    dialog.anchor_right = 0.5
+    dialog.anchor_bottom = 0.5
+    dialog.position = Vector2(-280, -140)
+    dialog.size = Vector2(560, 280)
+    dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
+    modal_layer.add_child(dialog)
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 18)
+    dialog.add_child(box)
+    var label := Label.new()
+    label.text = _t("video.remove_body", [String(video.get("name", path.get_file()))])
+    label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    label.add_theme_font_size_override("font_size", 22)
+    label.add_theme_color_override("font_color", color_text)
+    box.add_child(label)
+    var buttons := HBoxContainer.new()
+    buttons.add_theme_constant_override("separation", 12)
+    buttons.alignment = BoxContainer.ALIGNMENT_END
+    buttons.custom_minimum_size = Vector2(0, 62)
+    box.add_child(buttons)
+    var cancel := Button.new()
+    cancel.text = _t("dialog.cancel")
+    cancel.flat = true
+    cancel.custom_minimum_size = Vector2(112, 62)
+    cancel.add_theme_font_size_override("font_size", 20)
+    cancel.add_theme_color_override("font_color", color_text)
+    cancel.pressed.connect(func(): modal_layer.visible = false)
+    buttons.add_child(cancel)
+    var remove := _pill_button(_t("dialog.remove"))
+    remove.custom_minimum_size = Vector2(148, 62)
+    remove.pressed.connect(func():
+        modal_layer.visible = false
+        _remove_video(path)
+    )
+    buttons.add_child(remove)
+
+func _remove_video(path: String) -> void:
+    var videos := _load_video_list()
+    var next: Array[Dictionary] = []
+    for video in videos:
+        if String(video.get("path", "")) != path:
+            next.append(video)
+    _save_video_list(next)
+    if OS.get_name() == "iOS":
+        var hidden := _load_hidden_videos()
+        hidden[path] = int(FileAccess.get_modified_time(path))
+        _save_hidden_videos(hidden)
+    video_progress_data.erase(path)
+    _save_video_progress_file()
+    _refresh_videos()
+
+func _load_video_progress() -> Dictionary:
+    var file := FileAccess.open(VIDEO_PROGRESS_FILE, FileAccess.READ)
+    if file == null:
+        return {}
+    var parsed = JSON.parse_string(file.get_as_text())
+    return parsed if parsed is Dictionary else {}
+
+func _save_video_progress_file() -> void:
+    var file := FileAccess.open(VIDEO_PROGRESS_FILE, FileAccess.WRITE)
+    if file != null:
+        file.store_string(JSON.stringify(video_progress_data))
+
+func _store_active_video_progress(finished: bool = false) -> void:
+    if active_video_path.is_empty():
+        return
+    finished = finished or int(active_video_state.get("status", 0)) == MEDIA_STATUS_ENDED
+    var position := float(active_video_state.get("position", 0.0))
+    var duration := float(active_video_state.get("duration", active_video_duration))
+    if finished or (duration > 0.0 and duration - position < 15.0):
+        video_progress_data.erase(active_video_path)
+    else:
+        video_progress_data[active_video_path] = {
+            "position": position,
+            "duration": duration,
+            "updated": Time.get_unix_time_from_system(),
+        }
+    _save_video_progress_file()
+
+func _open_video_player(video: Dictionary) -> void:
+    var path := String(video.get("path", ""))
+    if path.is_empty() or player == null or not _ensure_player_initialized():
+        return
+    if not bool(player.media_open(path)):
+        _show_message(_t("video.open_failed", [String(player.get_last_error())]))
+        return
+    active_video_path = path
+    active_video_duration = 0.0
+    active_video_state = {}
+    active_video_scrubbing = false
+    active_video_end_handled = false
+    active_video_was_playing = false
+    active_subtitle_index = 0
+    video_progress_save_accum = 0.0
+    video_title_label.text = String(video.get("name", path.get_file()))
+    video_texture.texture = null
+    video_subtitle_label.text = ""
+    video_progress_slider.value = 0.0
+    video_progress_slider.max_value = 1.0
+    video_rate_button.select(2)
+    _load_video_subtitle_tracks(path)
+    shell_root.visible = false
+    video_view.visible = true
+    video_view.move_to_front()
+    video_previous_mouse_mode = Input.mouse_mode
+    video_playing = true
+    _set_video_controls_visible(false, false)
+    player.media_play()
+    var resume: Dictionary = video_progress_data.get(path, {})
+    var resume_position := float(resume.get("position", 0.0))
+    if resume_position > 2.0:
+        player.media_seek(resume_position)
+    _sync_video_play_button(MEDIA_STATUS_PLAYING)
+
+func _close_video_player() -> void:
+    if not video_playing:
+        return
+    _store_active_video_progress()
+    if player != null:
+        player.media_pause()
+        player.media_close()
+    video_playing = false
+    active_video_path = ""
+    active_video_state = {}
+    active_subtitle_tracks.clear()
+    active_subtitle_cues.clear()
+    video_texture.texture = null
+    if video_controls_tween != null and video_controls_tween.is_valid():
+        video_controls_tween.kill()
+    video_controls_visible = false
+    video_controls_idle_sec = 0.0
+    video_top_bar.visible = false
+    video_controls.visible = false
+    video_view.visible = false
+    shell_root.visible = true
+    Input.mouse_mode = video_previous_mouse_mode
+    _show_home()
+
+func _sync_video_play_button(status: int) -> void:
+    if not is_instance_valid(video_play_button):
+        return
+    var playing := status == MEDIA_STATUS_PLAYING
+    video_play_button.text = "Ⅱ" if playing else "▶"
+    video_play_button.tooltip_text = _t("video.pause") if playing else _t("video.play")
+
+func _toggle_video_playback() -> void:
+    if not video_playing or player == null:
+        return
+    _set_video_controls_visible(true)
+    var status := int(active_video_state.get("status", MEDIA_STATUS_PAUSED))
+    if status == MEDIA_STATUS_PLAYING:
+        player.media_pause()
+        _sync_video_play_button(MEDIA_STATUS_PAUSED)
+    else:
+        if status == MEDIA_STATUS_ENDED:
+            player.media_seek(0.0)
+        player.media_play()
+        _sync_video_play_button(MEDIA_STATUS_PLAYING)
+
+func _seek_video_relative(offset: float) -> void:
+    if not video_playing or player == null:
+        return
+    _set_video_controls_visible(true)
+    var position := float(active_video_state.get("position", 0.0))
+    var duration := float(active_video_state.get("duration", active_video_duration))
+    player.media_seek(clampf(position + offset, 0.0, maxf(0.0, duration)))
+
+func _load_video_subtitle_tracks(video_path: String) -> void:
+    active_subtitle_tracks.clear()
+    active_subtitle_cues.clear()
+    video_subtitle_button.clear()
+    video_subtitle_button.add_item(_t("video.subtitle_off"))
+    var directory := video_path.get_base_dir()
+    var stem := video_path.get_file().get_basename()
+    var dir := DirAccess.open(directory)
+    if dir != null:
+        for file_name in dir.get_files():
+            var extension := file_name.get_extension().to_lower()
+            var subtitle_stem := file_name.get_basename()
+            if extension in SUBTITLE_EXTENSIONS and (
+                subtitle_stem == stem or subtitle_stem.begins_with(stem + ".")
+            ):
+                active_subtitle_tracks.append(directory.path_join(file_name))
+    active_subtitle_tracks.sort()
+    for path in active_subtitle_tracks:
+        video_subtitle_button.add_item(path.get_file())
+    video_subtitle_button.select(1 if not active_subtitle_tracks.is_empty() else 0)
+    if not active_subtitle_tracks.is_empty():
+        _select_video_subtitle(1)
+
+func _select_video_subtitle(index: int) -> void:
+    if video_playing:
+        _set_video_controls_visible(true)
+    active_subtitle_cues.clear()
+    active_subtitle_index = 0
+    video_subtitle_label.text = ""
+    if index <= 0 or index > active_subtitle_tracks.size():
+        return
+    active_subtitle_cues = VideoSubtitles.parse_file(active_subtitle_tracks[index - 1])
+
+func _update_video_subtitle(position: float) -> void:
+    if active_subtitle_cues.is_empty():
+        video_subtitle_label.text = ""
+        return
+    var match_info := VideoSubtitles.text_at(active_subtitle_cues, position, active_subtitle_index)
+    active_subtitle_index = int(match_info.get("index", 0))
+    video_subtitle_label.text = String(match_info.get("text", ""))
+
+func _format_video_time(seconds: float) -> String:
+    var total := maxi(0, int(seconds))
+    var hours := total / 3600
+    var minutes := (total % 3600) / 60
+    var secs := total % 60
+    if hours > 0:
+        return "%02d:%02d:%02d" % [hours, minutes, secs]
+    return "%02d:%02d" % [minutes, secs]
 
 func _load_game_list() -> Array[Dictionary]:
     var file := FileAccess.open(GAME_LIST_FILE, FileAccess.READ)
@@ -4530,7 +5952,20 @@ func _finish_ready_after_first_frame() -> void:
 
     _append_log("Debug CPU is a fallback backend and is not part of performance acceptance.")
     _write_probe_marker("ready")
+    video_progress_data = _load_video_progress()
     _refresh_games()
+    _refresh_videos()
+    if _legal_agreement_required():
+        _show_legal_agreement(true)
+        if not OS.get_environment("AETHERKIRI_CAPTURE_UI").is_empty():
+            call_deferred("_capture_ui_after_ready")
+        return
+    _continue_ready_after_legal_gate()
+
+func _continue_ready_after_legal_gate() -> void:
+    if legal_gate_completed:
+        return
+    legal_gate_completed = true
     call_deferred("_refresh_games_after_web_local_restore")
     call_deferred("_auto_start_web_dev_game")
 
@@ -4593,7 +6028,7 @@ func _show_android_storage_permission_prompt() -> void:
     box.add_theme_constant_override("separation", 24)
     dialog.add_child(box)
     var title := Label.new()
-    title.text = "AetherKiri"
+    title.text = "Aether"
     title.add_theme_font_size_override("font_size", 32)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
@@ -4723,12 +6158,44 @@ func _refresh_games_after_web_local_restore() -> void:
 
 func _capture_ui_after_ready() -> void:
     var action := OS.get_environment("AETHERKIRI_CAPTURE_UI_ACTION")
-    if action in ["settings", "settings_diagnostics", "settings_advanced"]:
+    var capture_language := OS.get_environment("AETHERKIRI_CAPTURE_UI_LANGUAGE").strip_edges()
+    if capture_language in [LANG_ZH_HANS, LANG_ZH_HANT, LANG_EN, LANG_JA, LANG_KO]:
+        language_mode = capture_language
+        active_language = capture_language
+        _refresh_language_texts()
+    if action == "legal":
+        _show_legal_agreement(true)
+    elif action == "legal_declined":
+        _show_legal_declined_screen()
+    elif action in ["settings", "settings_diagnostics", "settings_advanced"]:
         if action == "settings_advanced":
             advanced_tool_expanded = true
         _show_settings()
     elif action == "guide":
         _show_import_guide()
+    elif action == "video_guide":
+        _select_home_library("video")
+        _show_import_guide()
+    elif action == "video_remove":
+        _select_home_library("video")
+        if not known_videos.is_empty():
+            _confirm_remove_video(known_videos[0])
+    elif action == "video":
+        _select_home_library("video")
+    elif action in ["video_player", "video_player_controls", "video_player_subtitles"]:
+        var capture_video := OS.get_environment("AETHERKIRI_CAPTURE_UI_VIDEO")
+        if not capture_video.is_empty() and FileAccess.file_exists(capture_video):
+            _open_video_player(_video_info(capture_video))
+        elif not known_videos.is_empty():
+            _open_video_player(known_videos[0])
+        if action in ["video_player_controls", "video_player_subtitles"] and video_playing:
+            _set_video_controls_visible(true, false)
+    elif action == "legal_review":
+        _show_settings()
+        _show_legal_agreement(false)
+    elif action == "ios_statement":
+        _show_settings()
+        _show_ios_additional_statement()
     elif action == "detail" and not known_games.is_empty():
         _show_detail(known_games[0])
     elif action == "debug_console" and diagnostic_session != null and diagnostic_session.active:
@@ -4746,10 +6213,27 @@ func _capture_ui_after_ready() -> void:
             Input.warp_mouse(Vector2(parts[0].to_float(), parts[1].to_float()))
     await get_tree().process_frame
     await get_tree().process_frame
+    if action == "video_player_subtitles" and video_playing:
+        video_subtitle_button.show_popup()
+        await get_tree().process_frame
+    if action in ["video_player", "video_player_controls", "video_player_subtitles"]:
+        var video_wait_sec := 2.5
+        var video_wait_text := OS.get_environment("AETHERKIRI_CAPTURE_UI_VIDEO_WAIT_SEC").strip_edges()
+        if not video_wait_text.is_empty():
+            video_wait_sec = maxf(0.0, video_wait_text.to_float())
+        await get_tree().create_timer(video_wait_sec).timeout
     if action == "settings_diagnostics" and settings_view != null:
         settings_view.scroll_vertical = 1200
     elif action == "settings_advanced" and settings_view != null:
         settings_view.scroll_vertical = int(settings_view.get_v_scroll_bar().max_value)
+    elif action == "video_player_subtitles" and is_instance_valid(video_subtitle_button):
+        var subtitle_popup := video_subtitle_button.get_popup()
+        print("video_subtitle_popup visible=%s position=%s size=%s button_rect=%s" % [
+            subtitle_popup.visible,
+            subtitle_popup.position,
+            subtitle_popup.size,
+            video_subtitle_button.get_global_rect(),
+        ])
     await get_tree().process_frame
     var path := OS.get_environment("AETHERKIRI_CAPTURE_UI")
     var image := get_viewport().get_texture().get_image()
@@ -5491,11 +6975,51 @@ func _apply_global_dpi_scale() -> void:
     var window := get_window()
     window.content_scale_factor = scale
 
+func _process_video_playback(delta: float) -> void:
+    if player == null:
+        return
+    var previous_serial := int(active_video_state.get("frame_serial", -1))
+    var state = player.media_get_state()
+    if not state is Dictionary:
+        return
+    active_video_state = state
+    var duration := float(state.get("duration", 0.0))
+    var position := float(state.get("position", 0.0))
+    if duration > 0.0:
+        active_video_duration = duration
+        video_progress_slider.max_value = duration
+    if not active_video_scrubbing:
+        video_progress_slider.value = clampf(position, 0.0, maxf(1.0, active_video_duration))
+    video_time_label.text = "%s / %s" % [
+        _format_video_time(position),
+        _format_video_time(active_video_duration),
+    ]
+    var serial := int(state.get("frame_serial", 0))
+    if bool(state.get("frame_ready", false)) and serial != previous_serial:
+        var texture = player.media_update_texture()
+        if texture != null:
+            video_texture.texture = texture
+    _update_video_subtitle(position)
+    var status := int(state.get("status", 0))
+    _sync_video_play_button(status)
+    if status == MEDIA_STATUS_ENDED and not active_video_end_handled:
+        active_video_end_handled = true
+        _store_active_video_progress(true)
+    elif status != MEDIA_STATUS_ENDED:
+        active_video_end_handled = false
+    video_progress_save_accum += delta
+    if status != MEDIA_STATUS_ENDED and video_progress_save_accum >= 5.0:
+        video_progress_save_accum = 0.0
+        _store_active_video_progress()
+    _process_video_controls(delta)
+
 func _process(delta: float) -> void:
     _fit_full_rects()
     _update_advanced_tool_timeouts()
     _sync_game_card_hover_states()
     _flush_log_view_if_needed(delta)
+    if video_playing:
+        _process_video_playback(delta)
     var startup_state := cached_startup_state
     if game_running:
         _sync_player_surface_size(false)
@@ -5809,14 +7333,25 @@ func _notification(what: int) -> void:
     if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
         if diagnostic_session != null:
             diagnostic_session.record("godot", "lifecycle", "info", "application_paused", 0, {"notification": what})
+        if video_playing:
+            active_video_was_playing = int(active_video_state.get("status", 0)) == MEDIA_STATUS_PLAYING
+            _store_active_video_progress()
+            player.media_pause()
         _pause_game_for_lifecycle("notification_%d" % what)
         return
     if what == NOTIFICATION_APPLICATION_RESUMED or what == NOTIFICATION_APPLICATION_FOCUS_IN:
         if diagnostic_session != null:
             diagnostic_session.record("godot", "lifecycle", "info", "application_resumed", 0, {"notification": what})
+        if video_playing and active_video_was_playing:
+            player.media_play()
+            active_video_was_playing = false
         _resume_game_for_lifecycle("notification_%d" % what)
         return
     if what == NOTIFICATION_WM_CLOSE_REQUEST:
+        if video_playing:
+            _store_active_video_progress()
+            player.media_close()
+            video_playing = false
         if app_lifecycle_paused:
             player.resume()
             app_lifecycle_paused = false
@@ -6700,7 +8235,57 @@ func _kirikiri_key_modifiers(event: InputEventKey) -> int:
         modifiers |= 0x80
     return modifiers
 
+func _handle_video_player_input(event: InputEvent) -> bool:
+    if event is InputEventKey:
+        var media_key := event as InputEventKey
+        if not media_key.pressed or media_key.echo:
+            return false
+        match media_key.keycode:
+            KEY_ESCAPE:
+                _close_video_player()
+                return true
+            KEY_SPACE:
+                _toggle_video_playback()
+                return true
+            KEY_LEFT:
+                _seek_video_relative(-10.0)
+                return true
+            KEY_RIGHT:
+                _seek_video_relative(10.0)
+                return true
+        return false
+    if event is InputEventMouseMotion:
+        var motion := event as InputEventMouseMotion
+        if motion.relative.length_squared() > 0.25:
+            _set_video_controls_visible(true)
+        return false
+    if event is InputEventScreenDrag:
+        _set_video_controls_visible(true)
+        return false
+    if event is InputEventMouseButton:
+        var mouse_button := event as InputEventMouseButton
+        if not mouse_button.pressed or mouse_button.button_index != MOUSE_BUTTON_LEFT:
+            return false
+        if _video_pointer_over_controls(mouse_button.position):
+            video_controls_idle_sec = 0.0
+            return false
+        _set_video_controls_visible(not video_controls_visible)
+        return true
+    if event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        if not touch.pressed:
+            return false
+        if _video_pointer_over_controls(touch.position):
+            video_controls_idle_sec = 0.0
+            return false
+        _set_video_controls_visible(not video_controls_visible)
+        return true
+    return false
+
 func _input(event: InputEvent) -> void:
+    if video_playing and _handle_video_player_input(event):
+        get_viewport().set_input_as_handled()
+        return
     # _input runs before Control GUI dispatch. Keep pointers that begin on the
     # diagnostic action out of the game bridge so Button can receive them.
     if debug_console != null and debug_console.routes_pointer(event):

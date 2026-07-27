@@ -10,6 +10,7 @@
 #include <cstring>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <new>
 #include <string>
 #include <unordered_set>
@@ -76,6 +77,12 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "engine_options.h"
 #include "PluginCallTracer.hpp"
 #include "PluginImpl.h"
+#include "base/impl/StorageImpl.h"
+#include "movie/ffmpeg/KRMoviePlayer.h"
+
+extern "C" {
+#include "libavformat/avformat.h"
+}
 
 // Mock bypass toggle (defined in tjsVariant.cpp, namespace TJS)
 namespace TJS { void TVPSetMockEnabled(bool enabled); }
@@ -187,6 +194,115 @@ struct engine_handle_s {
     std::string session_id;
     std::deque<std::string> events;
   } diagnostics;
+};
+
+class StandaloneMediaPlayer final : public KRMovie::TVPMoviePlayer {
+ public:
+  StandaloneMediaPlayer() {
+    m_pPlayer->SetCallback([this](KRMovieEvent event, void*) {
+      if (event == KRMovieEvent::Ended) {
+        ended_.store(true);
+      }
+    });
+  }
+
+  ~StandaloneMediaPlayer() override {
+    if (m_pPlayer != nullptr) {
+      m_pPlayer->SetCallback({});
+    }
+    ShutdownPlayer();
+  }
+
+  void Play() override {
+    ended_.store(false);
+    KRMovie::TVPMoviePlayer::Play();
+  }
+
+  bool Open(const char* path_utf8, std::string* error) {
+    if (path_utf8 == nullptr || *path_utf8 == '\0') {
+      if (error != nullptr) *error = "media path is empty";
+      return false;
+    }
+    const ttstr path(path_utf8);
+    IStream* stream = TVPCreateIStream(path, TJS_BS_READ);
+    if (stream == nullptr) {
+      if (error != nullptr) *error = "unable to open media file";
+      return false;
+    }
+    uint64_t size = 0;
+    std::error_code file_size_error;
+    const auto native_size = std::filesystem::file_size(path_utf8,
+                                                        file_size_error);
+    if (!file_size_error) {
+      size = static_cast<uint64_t>(native_size);
+    }
+    const std::string extension = [] (const std::string& value) {
+      const auto dot = value.find_last_of('.');
+      return dot == std::string::npos ? std::string() : value.substr(dot + 1);
+    }(path_utf8);
+    ended_.store(false);
+    if (!m_pPlayer->OpenFromStream(stream, path.c_str(),
+                                    ttstr(extension.c_str()).c_str(), size)) {
+      if (error != nullptr) *error = "FFmpeg could not open this media file";
+      return false;
+    }
+    long width = 0;
+    long height = 0;
+    GetVideoSize(&width, &height);
+    width_ = static_cast<uint32_t>(std::max<long>(0, width));
+    height_ = static_cast<uint32_t>(std::max<long>(0, height));
+    return true;
+  }
+
+  bool UpdateFrame() {
+    if (m_pPlayer == nullptr) return false;
+    BitmapPicture picture;
+    const double clock = m_pPlayer->GetClock() / DVD_TIME_BASE;
+    {
+      std::unique_lock<std::mutex> lock(m_mtxPicture);
+      if (m_usedPicture <= 0 || m_picture[m_curPicture].pts > clock) {
+        return false;
+      }
+      do {
+        picture.MoveFrom(m_picture[m_curPicture]);
+        --m_usedPicture;
+        if (++m_curPicture >= MAX_BUFFER_COUNT) m_curPicture = 0;
+      } while (m_usedPicture > 0 && m_picture[m_curPicture].pts <= clock);
+      m_condPicture.notify_all();
+    }
+    FrameMove();
+    if (picture.rgba == nullptr || picture.width <= 0 || picture.height <= 0) {
+      return false;
+    }
+    width_ = static_cast<uint32_t>(picture.width);
+    height_ = static_cast<uint32_t>(picture.height);
+    const size_t byte_count =
+        static_cast<size_t>(width_) * static_cast<size_t>(height_) * 4u;
+    latest_rgba_.assign(picture.rgba, picture.rgba + byte_count);
+    ++frame_serial_;
+    return true;
+  }
+
+  uint32_t width() const { return width_; }
+  uint32_t height() const { return height_; }
+  uint64_t frame_serial() const { return frame_serial_; }
+  bool frame_ready() const { return !latest_rgba_.empty(); }
+  bool ended() const { return ended_.load(); }
+  const std::vector<uint8_t>& latest_rgba() const { return latest_rgba_; }
+  KRMovie::BasePlayer* player() const { return m_pPlayer; }
+
+ private:
+  std::atomic_bool ended_{false};
+  uint32_t width_ = 0;
+  uint32_t height_ = 0;
+  uint64_t frame_serial_ = 0;
+  std::vector<uint8_t> latest_rgba_;
+};
+
+struct engine_media_handle_s {
+  std::recursive_mutex mutex;
+  engine_handle_t owner = nullptr;
+  std::unique_ptr<StandaloneMediaPlayer> player;
 };
 
 namespace {
@@ -2852,6 +2968,171 @@ engine_result_t engine_read_frame_rgba(engine_handle_t handle,
   return ENGINE_RESULT_OK;
 }
 
+engine_result_t engine_media_open(engine_handle_t engine,
+                                  const char* path_utf8,
+                                  engine_media_handle_t* out_media) {
+  if (path_utf8 == nullptr || *path_utf8 == '\0' || out_media == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media path and output handle are required");
+  }
+  *out_media = nullptr;
+  engine_handle_s* owner = nullptr;
+  {
+    std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+    const auto result = ValidateHandleLocked(engine, &owner);
+    if (result != ENGINE_RESULT_OK) return result;
+  }
+  auto media = std::make_unique<engine_media_handle_s>();
+  media->owner = engine;
+  media->player = std::make_unique<StandaloneMediaPlayer>();
+  std::string error;
+  if (!media->player->Open(path_utf8, &error)) {
+    SetHandleErrorLocked(owner, error.c_str());
+    return ENGINE_RESULT_IO_ERROR;
+  }
+  *out_media = media.release();
+  ClearHandleErrorLocked(owner);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_destroy(engine_media_handle_t media) {
+  if (media == nullptr) return ENGINE_RESULT_OK;
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  {
+    std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+    if (impl->player != nullptr) {
+      impl->player->Stop();
+      impl->player.reset();
+    }
+  }
+  delete impl;
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_play(engine_media_handle_t media) {
+  if (media == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media handle is null");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  impl->player->Play();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_pause(engine_media_handle_t media) {
+  if (media == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media handle is null");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  impl->player->Pause();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_seek(engine_media_handle_t media,
+                                  int64_t position_ms) {
+  if (media == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media handle is null");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  const int64_t duration = impl->player->player()->GetTotalTime();
+  impl->player->SetPosition(static_cast<uint64_t>(
+      std::clamp<int64_t>(position_ms, 0, std::max<int64_t>(0, duration))));
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_set_rate(engine_media_handle_t media,
+                                      double playback_rate) {
+  if (media == nullptr || !std::isfinite(playback_rate) ||
+      playback_rate < 0.5 || playback_rate > 2.0) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "playback rate must be between 0.5 and 2.0");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  impl->player->SetPlayRate(playback_rate);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_get_state(engine_media_handle_t media,
+                                       engine_media_state_t* out_state) {
+  if (media == nullptr || out_state == nullptr ||
+      out_state->struct_size < sizeof(engine_media_state_t)) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media state output is invalid");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  impl->player->UpdateFrame();
+  auto* player = impl->player->player();
+  std::memset(out_state, 0, sizeof(*out_state));
+  out_state->struct_size = sizeof(*out_state);
+  out_state->width = impl->player->width();
+  out_state->height = impl->player->height();
+  out_state->position_ms = player->GetTime();
+  out_state->duration_ms = player->GetTotalTime();
+  out_state->playback_rate = player->GetSpeed();
+  out_state->frame_serial = impl->player->frame_serial();
+  out_state->frame_ready = impl->player->frame_ready() ? 1u : 0u;
+  out_state->seekable = player->CanSeek() ? 1u : 0u;
+  out_state->has_audio = player->GetAudioStreamCount() > 0 ? 1u : 0u;
+  out_state->has_video = player->GetVideoStreamCount() > 0 ? 1u : 0u;
+  if (impl->player->ended()) {
+    out_state->status = ENGINE_MEDIA_STATUS_ENDED;
+  } else if (player->GetSpeed() == 0.0) {
+    out_state->status = ENGINE_MEDIA_STATUS_PAUSED;
+  } else {
+    out_state->status = ENGINE_MEDIA_STATUS_PLAYING;
+  }
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_read_frame_rgba(
+    engine_media_handle_t media, void* out_pixels, size_t out_pixels_size,
+    engine_frame_desc_t* out_frame_desc) {
+  if (media == nullptr || out_pixels == nullptr || out_frame_desc == nullptr ||
+      out_frame_desc->struct_size < sizeof(engine_frame_desc_t)) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media frame output is invalid");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr || !impl->player->frame_ready()) {
+    return ENGINE_RESULT_INVALID_STATE;
+  }
+  const auto& rgba = impl->player->latest_rgba();
+  if (out_pixels_size < rgba.size()) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media frame buffer is too small");
+  }
+  std::memcpy(out_pixels, rgba.data(), rgba.size());
+  std::memset(out_frame_desc, 0, sizeof(*out_frame_desc));
+  out_frame_desc->struct_size = sizeof(*out_frame_desc);
+  out_frame_desc->width = impl->player->width();
+  out_frame_desc->height = impl->player->height();
+  out_frame_desc->stride_bytes = impl->player->width() * 4u;
+  out_frame_desc->pixel_format = ENGINE_PIXEL_FORMAT_RGBA8888;
+  out_frame_desc->frame_serial = impl->player->frame_serial();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
 engine_result_t engine_get_godot_native_frame_texture(
     engine_handle_t handle, uint64_t* out_texture_id, uint32_t* out_width,
     uint32_t* out_height, uint64_t* out_frame_serial) {
@@ -4190,6 +4471,74 @@ engine_result_t engine_read_frame_rgba(engine_handle_t handle,
   impl->last_error.clear();
   SetThreadError(nullptr);
   return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_open(engine_handle_t engine,
+                                  const char* path_utf8,
+                                  engine_media_handle_t* out_media) {
+  (void)engine;
+  (void)path_utf8;
+  if (out_media != nullptr) *out_media = nullptr;
+  return SetThreadErrorAndReturn(
+      ENGINE_RESULT_NOT_SUPPORTED,
+      "standalone media playback is not supported in stub builds");
+}
+
+engine_result_t engine_media_destroy(engine_media_handle_t media) {
+  (void)media;
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_play(engine_media_handle_t media) {
+  (void)media;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
+engine_result_t engine_media_pause(engine_media_handle_t media) {
+  (void)media;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
+engine_result_t engine_media_seek(engine_media_handle_t media,
+                                  int64_t position_ms) {
+  (void)media;
+  (void)position_ms;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
+engine_result_t engine_media_set_rate(engine_media_handle_t media,
+                                      double playback_rate) {
+  (void)media;
+  (void)playback_rate;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
+engine_result_t engine_media_get_state(engine_media_handle_t media,
+                                       engine_media_state_t* out_state) {
+  (void)media;
+  if (out_state != nullptr &&
+      out_state->struct_size >= sizeof(engine_media_state_t)) {
+    std::memset(out_state, 0, sizeof(*out_state));
+    out_state->struct_size = sizeof(*out_state);
+    out_state->status = ENGINE_MEDIA_STATUS_ERROR;
+  }
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
+engine_result_t engine_media_read_frame_rgba(
+    engine_media_handle_t media, void* out_pixels, size_t out_pixels_size,
+    engine_frame_desc_t* out_frame_desc) {
+  (void)media;
+  (void)out_pixels;
+  (void)out_pixels_size;
+  (void)out_frame_desc;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
 }
 
 engine_result_t engine_get_host_native_window(engine_handle_t handle,

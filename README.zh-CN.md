@@ -430,3 +430,4 @@ Godot Native 或 GPU Bridge 达到性能目标。Debug CPU 只作为诊断 fallb
 ## 许可证
 
 AetherKiri 以 GPL-3.0-or-later 分发。完整许可证文本见 `LICENSE`，第三方授权声明保留在 `THIRD_PARTY_LICENSES.md`。
+iOS App Store 分发相关的有限额外许可见 `COPYING.iOS`；该许可仅供 Aether 官方 iOS 版本或版权持有人书面授权的发布者使用，第三方分支及衍生 App 不得援引。该许可仅适用于明确认可声明的版权持有人有权授权的部分，不能代表其他版权持有人授予上游或第三方材料的权利，也不撤销 GPL 已授予的权利。

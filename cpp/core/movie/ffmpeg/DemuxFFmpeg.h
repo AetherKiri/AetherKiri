@@ -2,6 +2,7 @@
 
 #include "Demux.h"
 #include <map>
+#include <memory>
 #include <vector>
 
 extern "C" {
@@ -90,6 +91,17 @@ public:
     InputStream *m_pInput = nullptr;
 
 protected:
+    struct StreamParser {
+        ~StreamParser() {
+            if(parser)
+                av_parser_close(parser);
+            avcodec_free_context(&codecContext);
+        }
+
+        AVCodecParserContext *parser = nullptr;
+        AVCodecContext *codecContext = nullptr;
+    };
+
     friend class CDemuxStreamAudioFFmpeg;
 
     friend class CDemuxStreamVideoFFmpeg;
@@ -130,6 +142,7 @@ protected:
 
     CCriticalSection m_critSection;
     std::map<int, CDemuxStream *> m_streams;
+    std::map<int, std::unique_ptr<StreamParser>> m_parsers;
 
     AVIOContext *m_ioContext;
 

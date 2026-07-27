@@ -105,21 +105,6 @@ int CDVDAudioCodecPassthrough::Decode(uint8_t *pData, int iSize, double dts,
         m_backlogSize -= consumed;
     }
 
-    // get rid of potential side data
-    if(pData) {
-        AVPacket pkt;
-        av_init_packet(&pkt);
-        pkt.data = pData;
-        pkt.size = iSize;
-        int didSplit = av_packet_split_side_data(&pkt);
-        if(didSplit) {
-            skip = iSize - pkt.size;
-            pData = pkt.data;
-            iSize = pkt.size;
-            av_packet_free_side_data(&pkt);
-        }
-    }
-
     if(pData) {
         if(m_currentPts == DVD_NOPTS_VALUE) {
             if(m_nextPts != DVD_NOPTS_VALUE) {

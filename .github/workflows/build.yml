@@ -236,15 +236,15 @@ jobs:
       - name: Verify exported APKs
         run: |
           set -euo pipefail
-          test -f out/godot/android/release/AetherKiri-release.apk
-          test -f out/godot/android/debug/AetherKiri-debug.apk
+          test -f out/godot/android/release/Aether-release.apk
+          test -f out/godot/android/debug/Aether-debug.apk
 
       - name: Upload Release APK
         if: success()
         uses: actions/upload-artifact@v7
         with:
           name: android-release-apk
-          path: out/godot/android/release/AetherKiri-release.apk
+          path: out/godot/android/release/Aether-release.apk
           retention-days: 7
 
       - name: Upload Debug APK
@@ -252,7 +252,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: android-debug-apk
-          path: out/godot/android/debug/AetherKiri-debug.apk
+          path: out/godot/android/debug/Aether-debug.apk
           retention-days: 7
 
       - name: Save vcpkg cache
@@ -390,16 +390,16 @@ jobs:
         run: |
           set -euo pipefail
           for build_type in release debug; do
-            if [[ ! -d "out/godot/ios/${build_type}/AetherKiri.xcodeproj" ]]; then
+            if [[ ! -d "out/godot/ios/${build_type}/Aether.xcodeproj" ]]; then
               echo "Godot iOS ${build_type} Xcode project not found" >&2
               exit 1
             fi
-            if [[ ! -d "out/godot/ios/${build_type}/AetherKiri" ]]; then
+            if [[ ! -d "out/godot/ios/${build_type}/Aether" ]]; then
               echo "Godot iOS ${build_type} project sources not found" >&2
               exit 1
             fi
             build_type_cap="$(echo "${build_type:0:1}" | tr '[:lower:]' '[:upper:]')${build_type:1}"
-            if [[ ! -f "out/godot/ios/${build_type}/AetherKiri-${build_type_cap}-Unsigned.ipa" ]]; then
+            if [[ ! -f "out/godot/ios/${build_type}/Aether-${build_type_cap}-Unsigned.ipa" ]]; then
               echo "Godot iOS ${build_type} unsigned IPA not found" >&2
               exit 1
             fi
@@ -411,8 +411,8 @@ jobs:
         with:
           name: ios-release-xcode-project
           path: |
-            out/godot/ios/release/AetherKiri.xcodeproj
-            out/godot/ios/release/AetherKiri
+            out/godot/ios/release/Aether.xcodeproj
+            out/godot/ios/release/Aether
           retention-days: 7
 
       - name: Upload Debug Xcode Project
@@ -421,8 +421,8 @@ jobs:
         with:
           name: ios-debug-xcode-project
           path: |
-            out/godot/ios/debug/AetherKiri.xcodeproj
-            out/godot/ios/debug/AetherKiri
+            out/godot/ios/debug/Aether.xcodeproj
+            out/godot/ios/debug/Aether
           retention-days: 7
 
       - name: Upload Release Unsigned IPA
@@ -430,7 +430,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ios-release-unsigned-ipa
-          path: out/godot/ios/release/AetherKiri-Release-Unsigned.ipa
+          path: out/godot/ios/release/Aether-Release-Unsigned.ipa
           retention-days: 7
 
       - name: Upload Debug Unsigned IPA
@@ -438,7 +438,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ios-debug-unsigned-ipa
-          path: out/godot/ios/debug/AetherKiri-Debug-Unsigned.ipa
+          path: out/godot/ios/debug/Aether-Debug-Unsigned.ipa
           retention-days: 7
 
       - name: Save vcpkg cache
@@ -595,7 +595,7 @@ jobs:
         run: |
           set -euo pipefail
           for build_type in release debug; do
-            APP_PATH="out/godot/macos/${build_type}/AetherKiri.app"
+            APP_PATH="out/godot/macos/${build_type}/Aether.app"
             if [[ ! -d "$APP_PATH" ]]; then
               echo "Built Godot ${build_type} .app bundle not found: $APP_PATH" >&2
               exit 1
