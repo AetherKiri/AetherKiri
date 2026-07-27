@@ -15,6 +15,7 @@ on:
         options:
           - android
           - all
+          - ios
   workflow_call:
 
 permissions:
@@ -327,7 +328,7 @@ jobs:
 
   ios:
     name: Build iOS App
-    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all'
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'ios'
     runs-on: macos-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -356,6 +357,16 @@ jobs:
           brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+
+      - name: Build free LLVM obfuscator
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          brew install llvm
+          llvm_prefix="$(brew --prefix llvm)"
+          ./.github/scripts/build-free-obfuscator.sh \
+            "$llvm_prefix" "${RUNNER_TEMP}/kagura"
+          echo "AETHERKIRI_OBFUSCATION_BUILD_ID=${GITHUB_SHA}" >> "$GITHUB_ENV"
 
       - name: Install Godot export tools
         run: |
@@ -429,6 +440,14 @@ jobs:
             echo "Godot iOS release export logged script or GDExtension load errors." >&2
             exit 1
           fi
+
+      - name: Verify iOS Internal protection
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          grep -F "Internal code obfuscation:" "${RUNNER_TEMP}/ios-release-build.log"
+          python3 tools/verify_internal_protection.py \
+            out/ios/release/compile_commands.json
 
       - name: Build iOS Debug
         run: |

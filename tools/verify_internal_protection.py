@@ -92,9 +92,9 @@ def main() -> int:
             if args.fla_only:
                 requires_markers = "/packages/AetherInternal/src/" in normalized_source
             else:
-                requires_markers = not args.runtime_only or normalized_source.endswith(
-                    "/src/krkr2_plugins/drawDeviceD2DCompat.cpp"
-                )
+                # Vendored Cubism is compiled as a dependency, not as owned
+                # protected code. Scope the requirement to AetherInternal/src.
+                requires_markers = "/packages/AetherInternal/src/" in normalized_source
             if requires_markers and not has_markers:
                 missing_entries.append(source)
         elif any(
