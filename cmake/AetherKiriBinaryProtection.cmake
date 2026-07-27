@@ -116,7 +116,7 @@ function(aetherkiri_protect_internal_sources target_name)
         # therefore cannot be replaced by that global launcher.
         set_property(TARGET "${target_name}" PROPERTY
             RULE_LAUNCH_COMPILE
-                "${android_launcher};${AETHERKIRI_ANDROID_LLC};${AETHERKIRI_ANDROID_OPT};${obfuscator_plugin}")
+                "${android_launcher}")
     endif()
 
     foreach(internal_source IN LISTS ARGN)

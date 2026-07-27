@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 5 ]]; then
-    echo "Usage: $0 <llc> <opt> <plugin> <compiler> <compiler arguments...>" >&2
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 <compiler> <compiler arguments...>" >&2
     exit 2
 fi
 
-llc="$1"
-opt="$2"
-plugin="$3"
-compiler="$4"
-shift 4
+# CMake/Ninja invokes the launcher as one command. Tool paths are supplied by
+# the workflow environment; accepting the old four-argument form keeps local
+# callers compatible.
+if [[ $# -ge 4 && -x "$1" && -x "$2" && -f "$3" ]]; then
+    llc="$1"
+    opt="$2"
+    plugin="$3"
+    compiler="$4"
+    shift 4
+else
+    llc="${AETHERKIRI_ANDROID_LLC:?AETHERKIRI_ANDROID_LLC is not set}"
+    opt="${AETHERKIRI_ANDROID_OPT:?AETHERKIRI_ANDROID_OPT is not set}"
+    plugin="${AETHERKIRI_OBFUSCATOR_PLUGIN:?AETHERKIRI_OBFUSCATOR_PLUGIN is not set}"
+    compiler="$1"
+    shift
+fi
 original_args=("$@")
 
 source_file=""
