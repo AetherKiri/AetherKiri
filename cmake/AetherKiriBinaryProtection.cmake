@@ -111,8 +111,11 @@ function(aetherkiri_protect_internal_sources target_name)
             message(FATAL_ERROR
                 "AETHERKIRI_ANDROID_LLC does not exist: ${AETHERKIRI_ANDROID_LLC}")
         endif()
+        # CMAKE_CXX_COMPILER_LAUNCHER is initialized globally to ccache by the
+        # top-level project. RULE_LAUNCH_COMPILE is the target rule prefix and
+        # therefore cannot be replaced by that global launcher.
         set_property(TARGET "${target_name}" PROPERTY
-            CXX_COMPILER_LAUNCHER
+            RULE_LAUNCH_COMPILE
                 "${android_launcher};${AETHERKIRI_ANDROID_LLC};${AETHERKIRI_ANDROID_OPT};${obfuscator_plugin}")
     endif()
 
