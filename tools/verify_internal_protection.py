@@ -41,21 +41,29 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Verify source-scoped AetherInternal obfuscation flags"
     )
+    parser.add_argument("--runtime-only", action="store_true")
     parser.add_argument("compile_commands", type=Path)
     args = parser.parse_args()
 
     with args.compile_commands.open("r", encoding="utf-8") as handle:
         entries = json.load(handle)
 
-    policy_path = Path(__file__).resolve().parents[1] / "cmake" / "internal_obfuscation.json"
-    with policy_path.open("r", encoding="utf-8") as handle:
-        policy = json.load(handle)
-    passes = policy.get("passes", {})
-    disabled_passes = [name for name in REQUIRED_PASSES if passes.get(name) is not True]
-    if disabled_passes:
-        raise SystemExit(
-            "required Kagura passes are disabled: " + ", ".join(disabled_passes)
+    if not args.runtime_only:
+        policy_path = (
+            Path(__file__).resolve().parents[1]
+            / "cmake"
+            / "internal_obfuscation.json"
         )
+        with policy_path.open("r", encoding="utf-8") as handle:
+            policy = json.load(handle)
+        passes = policy.get("passes", {})
+        disabled_passes = [
+            name for name in REQUIRED_PASSES if passes.get(name) is not True
+        ]
+        if disabled_passes:
+            raise SystemExit(
+                "required Kagura passes are disabled: " + ", ".join(disabled_passes)
+            )
 
     internal_entries = []
     leaked_entries = []
@@ -63,12 +71,20 @@ def main() -> int:
     for entry in entries:
         source = str(entry.get("file", ""))
         command = entry_command(entry)
-        has_markers = all(marker in command for marker in PROTECTION_MARKERS)
+        required_markers = (
+            ("AETHERKIRI_KAGURA_RUNTIME=1",)
+            if args.runtime_only
+            else PROTECTION_MARKERS
+        )
+        has_markers = all(marker in command for marker in required_markers)
         if is_internal_source(source):
             internal_entries.append(source)
-            if not has_markers:
+            requires_markers = not args.runtime_only or source.replace(
+                "\\", "/"
+            ).endswith("/src/krkr2_plugins/drawDeviceD2DCompat.cpp")
+            if requires_markers and not has_markers:
                 missing_entries.append(source)
-        elif any(marker in command for marker in PROTECTION_MARKERS):
+        elif any(marker in command for marker in required_markers):
             leaked_entries.append(source)
 
     if not internal_entries:
