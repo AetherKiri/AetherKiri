@@ -1,0 +1,22 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 6e9c1f5..d667a81 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -145,8 +145,8 @@ IF (CMAKE_C_COMPILER_ID MATCHES "^GNU$" OR
+   # cmake.org side does not host the manual pages even. Normally we can use
+   # either of the following two, yet neither is supported as of 3.0.2
+   # - check_linker_flag - does not exist
+   # - try_compile - does not support linker flags
+-  IF(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin")
++  IF(NOT APPLE)
+     # Place the functions and data into separate sections, allowing the linker
+     # to garbage collect the unused ones.
+     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffunction-sections -fdata-sections")
+@@ -158,6 +158,6 @@ IF (CMAKE_C_COMPILER_ID MATCHES "^GNU$" OR
+   ELSE()
+     SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-dead_strip")
+     SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-dead_strip")
+-  ENDIF(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin")
++  ENDIF(NOT APPLE)
+ ENDIF (CMAKE_C_COMPILER_ID MATCHES "^GNU$" OR
+        CMAKE_C_COMPILER_ID MATCHES "^Clang$" AND NOT MSVC)
