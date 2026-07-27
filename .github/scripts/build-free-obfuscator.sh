@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly KAGURA_REPOSITORY="https://github.com/ykus4/kagura.git"
 readonly KAGURA_COMMIT="08a424d8c0a43b4a9ead4a137958daf7b7c1a5d2"
 
 if [[ $# -ne 2 ]]; then
@@ -27,20 +26,7 @@ fi
 
 source_directory="${work_directory}/source"
 build_directory="${work_directory}/build"
-mkdir -p "$work_directory"
-
-if [[ ! -d "${source_directory}/.git" ]]; then
-    git clone --filter=blob:none --no-checkout \
-        "$KAGURA_REPOSITORY" "$source_directory"
-fi
-
-git -C "$source_directory" fetch --depth=1 origin "$KAGURA_COMMIT"
-git -C "$source_directory" checkout --detach --force "$KAGURA_COMMIT"
-actual_commit="$(git -C "$source_directory" rev-parse HEAD)"
-if [[ "$actual_commit" != "$KAGURA_COMMIT" ]]; then
-    echo "Kagura checkout mismatch: $actual_commit" >&2
-    exit 1
-fi
+"$(dirname "$0")/prepare-kagura-runtime.sh" "$work_directory"
 
 cmake -S "$source_directory" -B "$build_directory" -G Ninja \
     -D CMAKE_BUILD_TYPE=Release \
@@ -66,7 +52,6 @@ if [[ -n "${GITHUB_ENV:-}" ]]; then
     {
         echo "AETHERKIRI_ENABLE_CODE_OBFUSCATION=1"
         echo "AETHERKIRI_OBFUSCATOR_PLUGIN=$plugin_path"
-        echo "AETHERKIRI_KAGURA_SOURCE_DIR=$source_directory"
         echo "CC=${llvm_prefix}/bin/clang"
         echo "CXX=${llvm_prefix}/bin/clang++"
         echo "DYLD_LIBRARY_PATH=${llvm_prefix}/lib:${DYLD_LIBRARY_PATH:-}"
