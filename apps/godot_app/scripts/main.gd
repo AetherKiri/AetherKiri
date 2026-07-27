@@ -86,8 +86,8 @@ const UI_TEXT := {
         "home.import": "导入",
         "home.import_guide": "导入指南",
         "home.empty_help_ios": "使用「文件」App 将游戏文件夹复制到：\n我的 iPhone / iPad > Aether > Games\n然后点击「刷新」",
-        "home.empty_help_web": "点击「导入」选择本地游戏目录或 XP3 文件",
-        "home.empty_help_desktop": "点击「导入」选择游戏目录或 XP3 文件",
+        "home.empty_help_web": "点击「导入」选择本地视觉小说目录",
+        "home.empty_help_desktop": "点击「导入」选择视觉小说目录",
         "settings.title": "设置",
         "settings.save": "保存",
         "settings.section.interface": "界面",
@@ -190,7 +190,6 @@ const UI_TEXT := {
         "dialog.delete": "删除",
         "dialog.select_game_dir": "选择游戏目录",
         "dialog.select_local_game_dir": "选择本地游戏目录",
-        "dialog.select_xp3": "选择 XP3 文件",
         "dialog.cancel": "取消",
         "dialog.dev_mount": "开发挂载  %s",
         "message.web_manifest_failed": "无法读取 Web 游戏挂载清单",
@@ -241,8 +240,8 @@ const UI_TEXT := {
         "home.import": "匯入",
         "home.import_guide": "匯入指南",
         "home.empty_help_ios": "使用「檔案」App 將遊戲資料夾複製到：\n我的 iPhone / iPad > Aether > Games\n然後點選「重新整理」",
-        "home.empty_help_web": "點選「匯入」選擇本機遊戲目錄或 XP3 檔案",
-        "home.empty_help_desktop": "點選「匯入」選擇遊戲目錄或 XP3 檔案",
+        "home.empty_help_web": "點選「匯入」選擇本機視覺小說目錄",
+        "home.empty_help_desktop": "點選「匯入」選擇視覺小說目錄",
         "settings.title": "設定",
         "settings.save": "儲存",
         "settings.section.interface": "介面",
@@ -345,7 +344,6 @@ const UI_TEXT := {
         "dialog.delete": "刪除",
         "dialog.select_game_dir": "選擇遊戲目錄",
         "dialog.select_local_game_dir": "選擇本機遊戲目錄",
-        "dialog.select_xp3": "選擇 XP3 檔案",
         "dialog.cancel": "取消",
         "dialog.dev_mount": "開發掛載  %s",
         "message.web_manifest_failed": "無法讀取 Web 遊戲掛載清單",
@@ -396,8 +394,8 @@ const UI_TEXT := {
         "home.import": "Import",
         "home.import_guide": "Import Guide",
         "home.empty_help_ios": "Use the Files app to copy your game folder to:\nOn My iPhone / iPad > Aether > Games\nThen tap Refresh",
-        "home.empty_help_web": "Tap Import to choose a local game folder or XP3 file",
-        "home.empty_help_desktop": "Tap Import to choose a game folder or XP3 file",
+        "home.empty_help_web": "Tap Import to choose a local visual novel folder",
+        "home.empty_help_desktop": "Tap Import to choose a visual novel folder",
         "settings.title": "Settings",
         "settings.save": "Save",
         "settings.section.interface": "Interface",
@@ -500,7 +498,6 @@ const UI_TEXT := {
         "dialog.delete": "Delete",
         "dialog.select_game_dir": "Choose Game Folder",
         "dialog.select_local_game_dir": "Choose Local Game Folder",
-        "dialog.select_xp3": "Choose XP3 File",
         "dialog.cancel": "Cancel",
         "dialog.dev_mount": "Dev Mount  %s",
         "message.web_manifest_failed": "Could not read the Web game mount manifest",
@@ -551,8 +548,8 @@ const UI_TEXT := {
         "home.import": "インポート",
         "home.import_guide": "インポートガイド",
         "home.empty_help_ios": "「ファイル」App でゲームフォルダーをコピーしてください：\nこの iPhone / iPad 内 > Aether > Games\nその後「更新」をタップします",
-        "home.empty_help_web": "「インポート」をタップしてローカルゲームフォルダーまたは XP3 ファイルを選択",
-        "home.empty_help_desktop": "「インポート」をタップしてゲームフォルダーまたは XP3 ファイルを選択",
+        "home.empty_help_web": "「インポート」をタップしてローカルのビジュアルノベルフォルダーを選択",
+        "home.empty_help_desktop": "「インポート」をタップしてビジュアルノベルフォルダーを選択",
         "settings.title": "設定",
         "settings.save": "保存",
         "settings.section.interface": "インターフェイス",
@@ -655,7 +652,6 @@ const UI_TEXT := {
         "dialog.delete": "削除",
         "dialog.select_game_dir": "ゲームフォルダーを選択",
         "dialog.select_local_game_dir": "ローカルゲームフォルダーを選択",
-        "dialog.select_xp3": "XP3 ファイルを選択",
         "dialog.cancel": "キャンセル",
         "dialog.dev_mount": "開発マウント  %s",
         "message.web_manifest_failed": "Web ゲームのマウントマニフェストを読み取れません",
@@ -706,8 +702,8 @@ const UI_TEXT := {
         "home.import": "가져오기",
         "home.import_guide": "가져오기 가이드",
         "home.empty_help_ios": "파일 앱으로 게임 폴더를 다음 위치에 복사하세요:\n나의 iPhone / iPad > Aether > Games\n그런 다음 새로고침을 누르세요",
-        "home.empty_help_web": "가져오기를 눌러 로컬 게임 폴더 또는 XP3 파일을 선택하세요",
-        "home.empty_help_desktop": "가져오기를 눌러 게임 폴더 또는 XP3 파일을 선택하세요",
+        "home.empty_help_web": "가져오기를 눌러 로컬 비주얼 노벨 폴더를 선택하세요",
+        "home.empty_help_desktop": "가져오기를 눌러 비주얼 노벨 폴더를 선택하세요",
         "settings.title": "설정",
         "settings.save": "저장",
         "settings.section.interface": "인터페이스",
@@ -810,7 +806,6 @@ const UI_TEXT := {
         "dialog.delete": "삭제",
         "dialog.select_game_dir": "게임 폴더 선택",
         "dialog.select_local_game_dir": "로컬 게임 폴더 선택",
-        "dialog.select_xp3": "XP3 파일 선택",
         "dialog.cancel": "취소",
         "dialog.dev_mount": "개발 마운트  %s",
         "message.web_manifest_failed": "Web 게임 마운트 매니페스트를 읽을 수 없습니다",
@@ -4157,8 +4152,8 @@ func _show_import_picker() -> void:
     dialog.anchor_top = 0.5
     dialog.anchor_right = 0.5
     dialog.anchor_bottom = 0.5
-    dialog.position = Vector2(-260, -160)
-    dialog.size = Vector2(520, 320)
+    dialog.position = Vector2(-260, -130)
+    dialog.size = Vector2(520, 260)
     dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
     modal_layer.add_child(dialog)
     var box := VBoxContainer.new()
@@ -4172,15 +4167,9 @@ func _show_import_picker() -> void:
     var dir_button := _pill_button(_t("dialog.select_game_dir"))
     dir_button.pressed.connect(func():
         modal_layer.visible = false
-        _open_import_dialog(false)
+        _open_import_dialog()
     )
     box.add_child(dir_button)
-    var xp3_button := _pill_button(_t("dialog.select_xp3"))
-    xp3_button.pressed.connect(func():
-        modal_layer.visible = false
-        _open_import_dialog(true)
-    )
-    box.add_child(xp3_button)
     var cancel := Button.new()
     cancel.text = _t("dialog.cancel")
     cancel.flat = true
@@ -4404,7 +4393,7 @@ func _pick_web_local_game(kind: String) -> void:
 func _show_web_import_picker() -> void:
     var support := _web_local_picker_support()
     var dev_games := _web_dev_mounts()
-    if not bool(support.get("directory", false)) and not bool(support.get("archive", false)) and dev_games.is_empty():
+    if not bool(support.get("directory", false)) and dev_games.is_empty():
         _show_message(_t("message.web_picker_unsupported_long"))
         return
 
@@ -4441,14 +4430,6 @@ func _show_web_import_picker() -> void:
         )
         box.add_child(dir_button)
 
-    if bool(support.get("archive", false)):
-        var archive_button := _pill_button(_t("dialog.select_xp3"))
-        archive_button.pressed.connect(func():
-            modal_layer.visible = false
-            _pick_web_local_game("archive")
-        )
-        box.add_child(archive_button)
-
     for item in dev_games:
         if not item is Dictionary:
             continue
@@ -4468,14 +4449,13 @@ func _show_web_import_picker() -> void:
     cancel.pressed.connect(func(): modal_layer.visible = false)
     box.add_child(cancel)
 
-func _open_import_dialog(xp3: bool) -> void:
+func _open_import_dialog() -> void:
     if not _ensure_android_storage_permission_for_import():
         return
-    var filters := PackedStringArray(["*.xp3,*.XP3;Visual novel resource archive"]) if xp3 else PackedStringArray()
     var dialog := _create_file_dialog(
-        _t("dialog.select_xp3") if xp3 else _t("dialog.select_game_dir"),
-        FileDialog.FILE_MODE_OPEN_FILE if xp3 else FileDialog.FILE_MODE_OPEN_DIR,
-        filters
+        _t("dialog.select_game_dir"),
+        FileDialog.FILE_MODE_OPEN_DIR,
+        PackedStringArray()
     )
     dialog.dir_selected.connect(func(path: String):
         _add_game_path(path)
