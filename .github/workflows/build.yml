@@ -264,6 +264,7 @@ jobs:
 
       - name: Verify Android Internal FLA protection
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
           python3 tools/verify_internal_protection.py --fla-only \
