@@ -50,6 +50,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
+          token: ${{ secrets.AETHERKIRI_PAT || github.token }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
@@ -331,6 +332,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
+          token: ${{ secrets.AETHERKIRI_PAT || github.token }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
@@ -518,6 +520,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
+          token: ${{ secrets.AETHERKIRI_PAT || github.token }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
@@ -698,6 +701,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
+          token: ${{ secrets.AETHERKIRI_PAT || github.token }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
