@@ -4,6 +4,9 @@
 //
 #pragma once
 
+#include <chrono>
+#include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 #include <spdlog/spdlog.h>
@@ -64,7 +67,51 @@ namespace motion {
         void registerCaption() {}
         void unloadUnusedTextures() {}
 
-        // captureCanvas: copies internal pixel buffer into a TJS Layer.
+        // Retain the layer produced by Player::renderToD3DAdaptor so
+        // captureCanvas can keep the transfer on the active render backend.
+        // The legacy CPU buffer remains available as a compatibility fallback
+        // for callers that did not render through Player first.
+        void setRenderedLayer(iTJSDispatch2 *layer) {
+            if(layer) {
+                _renderedLayer = tTJSVariant(layer, layer);
+            } else {
+                _renderedLayer.Clear();
+            }
+        }
+
+        // A normal D3DEmote draw batch calls captureCanvas immediately after
+        // one or more Player.draw() calls. D3DAffineSourceMotion presents the
+        // adaptor directly and never captures it. Detect the latter from the
+        // call sequence so presentation does not depend on motion filenames.
+        void notePlayerDraw() {
+            const auto now = std::chrono::steady_clock::now();
+            if(_drawsSinceCapture == 0) {
+                _uncapturedDrawStartedAt = now;
+            }
+            ++_drawsSinceCapture;
+        }
+
+        bool shouldRetainUncapturedPresentation() const {
+            if(_drawsSinceCapture == 0) {
+                return false;
+            }
+            return std::chrono::steady_clock::now() -
+                       _uncapturedDrawStartedAt >=
+                   std::chrono::milliseconds(50);
+        }
+
+        void setRetainedPresentationLayer(iTJSDispatch2 *layer) {
+            if(layer) {
+                _retainedPresentationLayer = tTJSVariant(layer, layer);
+            } else {
+                _retainedPresentationLayer.Clear();
+            }
+        }
+
+        // captureCanvas: copies the most recently rendered image into a TJS
+        // Layer. Godot-backed layers preserve this CopyRect on the ordered GPU
+        // queue instead of downloading the complete canvas and uploading it
+        // again every animation frame.
         tjs_error captureCanvas(tTJSVariant *result, tjs_int numparams,
                                 tTJSVariant **param, iTJSDispatch2 *objthis) {
             if(numparams < 1 || !param[0]) return TJS_E_BADPARAMCOUNT;
@@ -72,11 +119,105 @@ namespace motion {
             iTJSDispatch2 *layerObj = param[0]->AsObjectNoAddRef();
             if(!layerObj) return TJS_E_INVALIDPARAM;
 
+            _drawsSinceCapture = 0;
+            if(_retainedPresentationLayer.Type() == tvtObject) {
+                auto *presentationObj =
+                    _retainedPresentationLayer.AsObjectNoAddRef();
+                tTJSNI_BaseLayer *presentation = nullptr;
+                if(presentationObj &&
+                   TJS_SUCCEEDED(presentationObj->NativeInstanceSupport(
+                       TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                       reinterpret_cast<iTJSNativeInstance **>(
+                           &presentation))) &&
+                   presentation) {
+                    presentation->SetVisible(false);
+                }
+                _retainedPresentationLayer.Clear();
+            }
+
             tTJSNI_BaseLayer *layer = nullptr;
             if(TJS_FAILED(layerObj->NativeInstanceSupport(
                    TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
                    reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
                 return TJS_E_INVALIDPARAM;
+            }
+            if(_renderedLayer.Type() == tvtObject) {
+                auto *renderedLayerObj =
+                    _renderedLayer.AsObjectNoAddRef();
+                tTJSNI_BaseLayer *renderedLayer = nullptr;
+                if(renderedLayerObj &&
+                   TJS_SUCCEEDED(renderedLayerObj->NativeInstanceSupport(
+                       TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                       reinterpret_cast<iTJSNativeInstance **>(
+                           &renderedLayer))) &&
+                   renderedLayer) {
+                    if(!_captureDebugLogged) {
+                        const char *debug =
+                            std::getenv("AETHERKIRI_MOTION_DEBUG");
+                        if(debug && *debug && std::strcmp(debug, "0") != 0) {
+                            const auto describeLayer =
+                                [](tTJSNI_BaseLayer *candidate) {
+                                    if(!candidate) {
+                                        return std::string("<null>");
+                                    }
+                                    const auto *parent =
+                                        candidate->GetParent();
+                                    return fmt::format(
+                                        "ptr={} name={} parentPtr={} parent={} "
+                                        "visible={} parentVisible={} opacity={} "
+                                        "order={} overall={} pos=({}, {}) "
+                                        "size={}x{} imagePos=({}, {}) image={}x{} "
+                                        "hasImage={} type={}",
+                                        static_cast<const void *>(candidate),
+                                        candidate->GetName().AsStdString(),
+                                        static_cast<const void *>(parent),
+                                        parent
+                                            ? parent->GetName().AsStdString()
+                                            : std::string("<none>"),
+                                        candidate->GetVisible() ? 1 : 0,
+                                        candidate->GetParentVisible() ? 1 : 0,
+                                        candidate->GetOpacity(),
+                                        candidate->GetOrderIndex(),
+                                        candidate->GetOverallOrderIndex(),
+                                        candidate->GetLeft(),
+                                        candidate->GetTop(),
+                                        candidate->GetWidth(),
+                                        candidate->GetHeight(),
+                                        candidate->GetImageLeft(),
+                                        candidate->GetImageTop(),
+                                        candidate->GetImageWidth(),
+                                        candidate->GetImageHeight(),
+                                        candidate->GetHasImage() ? 1 : 0,
+                                        static_cast<int>(
+                                            candidate->GetType()));
+                                };
+                            if(auto logger = spdlog::get("plugin")) {
+                                logger->info(
+                                    "motion d3d capture transfer: source=[{}] target=[{}]",
+                                    describeLayer(renderedLayer),
+                                    describeLayer(layer));
+                            }
+                            _captureDebugLogged = true;
+                        }
+                    }
+                    const auto width = static_cast<tjs_uint>(
+                        renderedLayer->GetImageWidth());
+                    const auto height = static_cast<tjs_uint>(
+                        renderedLayer->GetImageHeight());
+                    if(width > 0 && height > 0) {
+                        if(layer != renderedLayer) {
+                            if(!layer->GetHasImage()) layer->SetHasImage(true);
+                            layer->SetImageSize(width, height);
+                            layer->CopyRect(
+                                0, 0, renderedLayer->GetMainImage(), nullptr,
+                                tTVPRect(0, 0, static_cast<tjs_int>(width),
+                                         static_cast<tjs_int>(height)));
+                        }
+                        layer->Update(false);
+                        if(result) *result = *param[0];
+                        return TJS_S_OK;
+                    }
+                }
             }
 
             if(_width <= 0 || _height <= 0 || _buffer.empty()) {
@@ -149,6 +290,11 @@ namespace motion {
         bool _resizable = false;
         bool _alphaOpAdd = false;
         int _clearColor = 0;
+        tTJSVariant _renderedLayer;
+        tTJSVariant _retainedPresentationLayer;
+        std::chrono::steady_clock::time_point _uncapturedDrawStartedAt{};
+        std::size_t _drawsSinceCapture = 0;
+        bool _captureDebugLogged = false;
         std::vector<std::uint8_t> _buffer;
     };
 

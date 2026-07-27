@@ -2,6 +2,7 @@
 
 #include "PSBMedia.h"
 #include "PSBValue.h"
+#include "resources/ImageMetadata.h"
 
 namespace PSB {
 
@@ -67,6 +68,46 @@ namespace PSB {
                 psbMedia, normalizedContainer,
                 std::const_pointer_cast<PSBDictionary>(root), path);
         }
+
+        void registerImageAliasesForContainer(PSBMedia *psbMedia,
+                                              const ttstr &container,
+                                              const PSBFile &file) {
+            if(psbMedia == nullptr || container.IsEmpty() ||
+               file.getType() != PSBType::Motion) {
+                return;
+            }
+
+            auto *handler = file.getTypeHandler();
+            if(handler == nullptr) {
+                return;
+            }
+
+            ttstr normalizedContainer = container;
+            psbMedia->NormalizeDomainName(normalizedContainer);
+            const auto containerKey = normalizedContainer.AsStdString();
+            auto resources = handler->collectResources(file, false);
+            for(auto &metadata : resources) {
+                auto *image = dynamic_cast<ImageMetadata *>(metadata.get());
+                if(image == nullptr) {
+                    continue;
+                }
+                const auto resource = image->getResource();
+                const auto name = image->getName();
+                if(resource == nullptr || name.empty()) {
+                    continue;
+                }
+
+                psbMedia->add(containerKey + "/" + name, resource, image);
+                const auto index = image->getIndex();
+                if(index != UINT32_MAX) {
+                    const auto indexedName = std::to_string(index) + ".tlg";
+                    if(indexedName != name) {
+                        psbMedia->add(containerKey + "/" + indexedName,
+                                      resource, image);
+                    }
+                }
+            }
+        }
     } // namespace
 
     void registerRootResources(const ttstr &container,
@@ -89,10 +130,20 @@ namespace PSB {
 
     void registerRootResources(const ttstr &container, const PSBFile &file) {
         registerRootResources(container, file.getObjects());
+        registerImageAliasesForContainer(GetGlobalPSBMedia(), container, file);
     }
 
     void registerRootResources(const std::vector<ttstr> &containers,
                                const PSBFile &file) {
-        registerRootResources(containers, file.getObjects());
+        initPSBMedia();
+        auto *psbMedia = GetGlobalPSBMedia();
+        if(psbMedia == nullptr) {
+            return;
+        }
+        for(const auto &container : containers) {
+            registerRootResourcesForContainer(psbMedia, container,
+                                              file.getObjects());
+            registerImageAliasesForContainer(psbMedia, container, file);
+        }
     }
 } // namespace PSB

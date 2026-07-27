@@ -369,6 +369,16 @@ static bool TVPGetMotionParameterCompanionInfo(const ttstr &name,
     return true;
 }
 
+static bool TVPIsUnprefixedD3DEmoteStorage(const ttstr &storageName) {
+    const ttstr lower = storageName.AsLowerCase();
+    if(lower.StartsWith(TJS_W("dx_")) ||
+       lower.StartsWith(TJS_W("dxlow_")) ||
+       lower.GetLen() <= 4) {
+        return false;
+    }
+    return lower.SubString(lower.GetLen() - 4, 4) == TJS_W(".psb");
+}
+
 static std::string TVPEscapeTJSStringLiteral(const std::string &value) {
     std::string escaped;
     escaped.reserve(value.size());
@@ -1680,6 +1690,44 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
                 result->AsStdString(), found.AsStdString());
         }
         return found;
+    }
+
+    // Older E-mote scene scripts can route through AffineSourceMotion even
+    // though the package only contains the DirectX-exported PSB. Those
+    // scripts probe the logical, unprefixed name first and, when compiled to
+    // TJS bytecode, cannot be amended by the source-level compatibility
+    // patch. Match libgame's D3D resource lookup by resolving a missing
+    // <name>.psb to dx_<name>.psb (or the low-spec export), while preserving
+    // an actual unprefixed file when one exists.
+    if(TVPIsUnprefixedD3DEmoteStorage(storagename)) {
+        const ttstr storagePath = TVPExtractStoragePath(normalized);
+        const ttstr aliases[] = {
+            ttstr(TJS_W("dx_")) + storagename,
+            ttstr(TJS_W("dxlow_")) + storagename,
+        };
+        for(const auto &alias : aliases) {
+            ttstr found;
+            const ttstr inSamePath = storagePath + alias;
+            if(!inSamePath.IsEmpty() &&
+               TVPIsRealStorageNoSearchNoNormalize(inSamePath)) {
+                found = inSamePath;
+            } else if(ttstr *aliasPath = TVPAutoPathTable.Find(alias)) {
+                found = *aliasPath + alias;
+            }
+            if(found.IsEmpty()) {
+                continue;
+            }
+
+            TVPAutoPathCache.Add(name, found);
+            if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+                spdlog::info(
+                    "StorageTrace d3d-emote-alias request={} short={} "
+                    "alias={} found={}",
+                    name.AsStdString(), storagename.AsStdString(),
+                    alias.AsStdString(), found.AsStdString());
+            }
+            return found;
+        }
     }
 
     if(TVPIsD3DEmoteCompanionScript(name) ||

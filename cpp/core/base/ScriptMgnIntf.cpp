@@ -66,6 +66,8 @@
 
 #include <atomic>
 #include <cstdlib>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -750,6 +752,87 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
         return value && *value && *value != '0';
     }();
 
+    if(lower == TJS_W("messagelayer.tjs")) {
+        ttstr patched(buffer);
+        // This MessageLayer implementation already contains a native
+        // Layer.drawText fallback for outlined text.  On the libgdiplus
+        // backend, its optional drawPathString route can finish without
+        // writing any glyph pixels, leaving the message window empty.
+        // Disable only that optional route and use the script's own fallback.
+        patched.Replace(
+            TJS_W("if (!vertical && edge && antialiased && typeof lay.drawPathString != \"undefined\") {"),
+            TJS_W("if (false && !vertical && edge && antialiased && typeof lay.drawPathString != \"undefined\") {"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info(
+                "Applied compatibility patch for MessageLayer native outlined text drawing");
+        }
+    }
+
+    if(lower == TJS_W("custom.tjs")) {
+        std::basic_string<tjs_char> source(buffer.c_str(), buffer.GetLen());
+        const std::basic_string<tjs_char> functionMarker(
+            TJS_W("function EdgeShadowDrawText(dt, d,x,y,text,col,opa,aa, "
+                  "s,scol,sw,sx,sy, e,ecol,eemp,eext) {"));
+        const std::basic_string<tjs_char> blockMarker(TJS_W("\tif (d) {"));
+        const std::basic_string<tjs_char> gradientMarker(
+            TJS_W("var grad = MakeGradationLayer"));
+        const std::basic_string<tjs_char> compositeMarker(
+            TJS_W("d.operateRect(x, y, tmp"));
+
+        const auto functionPos = source.find(functionMarker);
+        const auto blockPos = functionPos == std::basic_string<tjs_char>::npos
+            ? std::basic_string<tjs_char>::npos
+            : source.find(blockMarker, functionPos + functionMarker.size());
+        if(blockPos != std::basic_string<tjs_char>::npos) {
+            const auto openPos = source.find(TJS_W('{'), blockPos);
+            size_t blockEnd = std::basic_string<tjs_char>::npos;
+            int depth = 0;
+            for(size_t i = openPos; i < source.size(); ++i) {
+                if(source[i] == TJS_W('{'))
+                    ++depth;
+                else if(source[i] == TJS_W('}') && --depth == 0) {
+                    blockEnd = i + 1;
+                    break;
+                }
+            }
+            const auto gradientPos = source.find(gradientMarker, blockPos);
+            const auto compositePos = source.find(compositeMarker, blockPos);
+            if(blockEnd != std::basic_string<tjs_char>::npos &&
+               gradientPos < blockEnd && compositePos < blockEnd) {
+                const std::basic_string<tjs_char> replacement(
+                    TJS_W("\tif (d) {\r\n"
+                          "\t\tvar h = d.font.getTextHeight(text);\r\n"
+                          "\t\td.drawTextVerticalGradient(x, y, text, "
+                          "0xFFFFFF, col & 0xFFFFFF, opa, aa, h);\r\n"
+                          "\t}"));
+                source.replace(blockPos, blockEnd - blockPos, replacement);
+                buffer = ttstr(source);
+                spdlog::info(
+                    "Applied compatibility patch for native gradient text "
+                    "drawing");
+            }
+        }
+    }
+
+    if(lower == TJS_W("mainwindow.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\t\t\tif (elm.language !== void) {\r\n"
+                  "\t\t\t\ttextLanguageType = 0; // 標準\r\n"
+                  "\t\t\t}\r\n"),
+            TJS_W("\t\t\tif (elm.language !== void) {\r\n"
+                  "\t\t\t\ttextLanguageType = elm._aetherKiriLocalizedText ? languageType : 0;\r\n"
+                  "\t\t\t}\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info(
+                "Applied compatibility patch for preselected scene text language");
+        }
+    }
+
     if(lower == TJS_W("standaffinesourcelayer.tjs")) {
         const ttstr from(TJS_W(
             "property _width {\r\n"
@@ -796,6 +879,118 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
         if(patched != buffer) {
             buffer = patched;
             spdlog::info("Applied compatibility patch for D3D source routing and PSB motion classification");
+        }
+    }
+
+    if(lower == TJS_W("affinesourcemotion.tjs")) {
+        ttstr patched(buffer);
+        // Some titles feed the regular AffineSourceMotion path while D3D
+        // motion is enabled, but package only the D3D-prefixed E-mote PSBs.
+        // Resolve the physical storage name without changing _innerStorage,
+        // which remains the title's logical (unprefixed) resource identity.
+        patched.Replace(
+            TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
+                  "\t\t\t\t\tif (s != \"\") {\r\n"
+                  "\t\t\t\t\t\t_motion_manager.unload(s);\r\n"
+                  "\t\t\t\t\t}\r\n"),
+            TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
+                  "\t\t\t\t\tif (s != \"\") {\r\n"
+                  "\t\t\t\t\t\tvar unloadStorage = s;\r\n"
+                  "\t\t\t\t\t\tif (_useD3D && !Storages.isExistentStorage(unloadStorage)) {\r\n"
+                  "\t\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + unloadStorage)) unloadStorage = \"dx_\" + unloadStorage;\r\n"
+                  "\t\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + unloadStorage)) unloadStorage = \"dxlow_\" + unloadStorage;\r\n"
+                  "\t\t\t\t\t\t}\r\n"
+                  "\t\t\t\t\t\t_motion_manager.unload(unloadStorage);\r\n"
+                  "\t\t\t\t\t}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\t\tvar s = create[i];\r\n"
+                  "\t\t\t\tif (s != \"\") {\r\n"
+                  "\t\t\t\t\tif (!Storages.isExistentStorage(s)) {\r\n"
+                  "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
+                  "\t\t\t\t\t} else {\r\n"
+                  "\t\t\t\t\t\ttry {\r\n"
+                  "\t\t\t\t\t\t\tvar obj = _motion_manager.load(s);\r\n"),
+            TJS_W("\t\t\t\tvar s = create[i];\r\n"
+                  "\t\t\t\tif (s != \"\") {\r\n"
+                  "\t\t\t\t\tvar loadStorage = s;\r\n"
+                  "\t\t\t\t\tif (_useD3D && !Storages.isExistentStorage(loadStorage)) {\r\n"
+                  "\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + loadStorage)) loadStorage = \"dx_\" + loadStorage;\r\n"
+                  "\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + loadStorage)) loadStorage = \"dxlow_\" + loadStorage;\r\n"
+                  "\t\t\t\t\t}\r\n"
+                  "\t\t\t\t\tif (!Storages.isExistentStorage(loadStorage)) {\r\n"
+                  "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
+                  "\t\t\t\t\t} else {\r\n"
+                  "\t\t\t\t\t\ttry {\r\n"
+                  "\t\t\t\t\t\t\tvar obj = _motion_manager.load(loadStorage);\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info(
+                "Applied compatibility patch for D3D-prefixed AffineSourceMotion resources");
+        }
+    }
+
+    if(lower == TJS_W("lose_seek.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\t\t}\r\n"
+                  "\t\tresetChapterBadge();\r\n"),
+            TJS_W("\t\t}\r\n"
+                  "\t\tappendChapterTables = [];\r\n"
+                  "\t\tif (typeof global.ForeachAppendFileList == \"Object\") {\r\n"
+                  "\t\t\tForeachAppendFileList(SystemConfig.scnseekConvFile, function(file, tables) {\r\n"
+                  "\t\t\t\ttry {\r\n"
+                  "\t\t\t\t\tvar table = Scripts.evalStorage(file);\r\n"
+                  "\t\t\t\t\tif (table !== void) tables.add(table);\r\n"
+                  "\t\t\t\t} catch (e) {\r\n"
+                  "\t\t\t\t\tDebug.notice(@\"${file}:追加シナリオ情報のロードに失敗:${e.message}\");\r\n"
+                  "\t\t\t\t}\r\n"
+                  "\t\t\t} incontextof global, appendChapterTables);\r\n"
+                  "\t\t}\r\n"
+                  "\t\tresetChapterBadge();\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tvar chapterList;\r\n"),
+            TJS_W("\tvar chapterList;\r\n"
+                  "\tvar appendChapterTables;\r\n"),
+            false);
+        const ttstr getChapterInfoFrom(TJS_W(
+            "\tfunction getChapterInfo(target) {\r\n"
+            "\t\tvar tag = normalizeName(target);\r\n"
+            "\t\tif (tag == \"\") return;\r\n"
+            "\t\tvar rev = chapterRevs[tag];\r\n"
+            "\t\tif (rev != \"\") tag = rev;\r\n"
+            "\t\treturn chapterInfo[tag];\r\n"
+            "\t}"));
+        const ttstr getChapterInfoTo(TJS_W(
+            "\tfunction getChapterInfo(target) {\r\n"
+            "\t\tvar normalized = normalizeName(target);\r\n"
+            "\t\tif (normalized == \"\") return;\r\n"
+            "\t\tvar tag = normalized;\r\n"
+            "\t\tvar rev = chapterRevs[tag];\r\n"
+            "\t\tif (rev != \"\") tag = rev;\r\n"
+            "\t\tvar info = chapterInfo[tag];\r\n"
+            "\t\tif (info !== void) return info;\r\n"
+            "\t\tif (appendChapterTables !== void) {\r\n"
+            "\t\t\tfor (var i = 0, count = appendChapterTables.count; i < count; i++) {\r\n"
+            "\t\t\t\tvar table = appendChapterTables[i];\r\n"
+            "\t\t\t\tif (table === void || table.info === void) continue;\r\n"
+            "\t\t\t\ttag = normalized;\r\n"
+            "\t\t\t\tif (table.revs !== void) {\r\n"
+            "\t\t\t\t\trev = table.revs[tag];\r\n"
+            "\t\t\t\t\tif (rev != \"\") tag = rev;\r\n"
+            "\t\t\t\t}\r\n"
+            "\t\t\t\tinfo = table.info[tag];\r\n"
+            "\t\t\t\tif (info !== void) return info;\r\n"
+            "\t\t\t}\r\n"
+            "\t\t}\r\n"
+            "\t}"));
+        patched.Replace(getChapterInfoFrom, getChapterInfoTo, false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info(
+                "Applied compatibility patch for appended scenario metadata");
         }
     }
 
@@ -1069,6 +1264,15 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
     if(lower == TJS_W("world.tjs")) {
         ttstr patched(buffer);
         patched.Replace(
+            TJS_W("\t\tvar e = createMsgTag(text, lastText);\r\n"),
+            TJS_W("\t\tvar e = createMsgTag(text, lastText);\r\n"
+                  "\t\te._aetherKiriLocalizedText = true if (text.language !== void);\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t\tvar delays = tagconv.convert(text.text);\r\n"),
+            TJS_W("\t\t\tvar delays = tagconv.convert(kag.getLangInfo(text, \"text\"));\r\n"),
+            false);
+        patched.Replace(
             TJS_W("\t\towner[name] = imageSource;\r\n"
                   "\t\towner.calcUpdate();\r\n"),
             TJS_W("\t\towner[name] = imageSource;\r\n"
@@ -1081,7 +1285,8 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             false);
         if(patched != buffer) {
             buffer = patched;
-            spdlog::info("Applied compatibility patch for immediate SD motion presentation");
+            spdlog::info(
+                "Applied compatibility patches for localized scene text and immediate SD motion presentation");
         }
     }
 
@@ -1256,8 +1461,99 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
         }
     }
 
+    if(sceneDebug && lower == TJS_W("mainwindow.tjs")) {
+        ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("    function setCurrentMessageLayerVisible(visible, time) {\r\n"
+                  "\r\n"
+                  "\t\tif (visible) clearFace(0);\r\n"),
+            TJS_W("    function setCurrentMessageLayerVisible(visible, time) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] kag.setCurrentMessageLayerVisible request:${visible} time:${time} currentNum:${currentNum} fore:${fore.messages[currentNum].visible} back:${back.messages[currentNum].visible} hiding:${messageLayerHiding}\"); } catch(e) {}\r\n"
+                  "\r\n"
+                  "\t\tif (visible) clearFace(0);\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\ttextwrite : function(elm)\r\n"
+                  "\t{\r\n"
+                  "\t\ttextWriteEnabled = (elm.enabled !== void) ? +elm.enabled : true;\r\n"),
+            TJS_W("\ttextwrite : function(elm)\r\n"
+                  "\t{\r\n"
+                  "\t\ttextWriteEnabled = (elm.enabled !== void) ? +elm.enabled : true;\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] kag.textwrite enabled:${textWriteEnabled}\"); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("    msgon : function(elm)\r\n"
+                  "\t{\r\n"
+                  "\t\tmsgState = true;\r\n"),
+            TJS_W("    msgon : function(elm)\r\n"
+                  "\t{\r\n"
+                  "\t\tmsgState = true;\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] kag.msgon enter dramatic:${dramaticModeWorking} skipNoDisp:${skipNoDisp} current:${current.visible} hiding:${messageLayerHiding}\"); } catch(e) {}\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\tvar ret = forEachFunctionHook(\"onMsgon\", elm);\r\n"
+                  "\t\tif (ret !== void) {\r\n"
+                  "\t\t\treturn ret;\r\n"),
+            TJS_W("\t\tvar ret = forEachFunctionHook(\"onMsgon\", elm);\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] kag.msgon hook ret:${ret} current:${current.visible} fore:${fore.messages[currentNum].visible} back:${back.messages[currentNum].visible}\"); } catch(e) {}\r\n"
+                  "\t\tif (ret !== void) {\r\n"
+                  "\t\t\treturn ret;\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("    dispname : function(elm)\r\n"
+                  "    {\r\n"
+                  "\t\tforEachEventHook('onPreDispname',,elm);\r\n"),
+            TJS_W("    dispname : function(elm)\r\n"
+                  "    {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] kag.dispname enter name:${elm !== void ? elm.name : void} textWrite:${textWriteEnabled} current:${current.visible} hiding:${messageLayerHiding} skipNoDisp:${skipNoDisp}\"); } catch(e) {}\r\n"
+                  "\t\tforEachEventHook('onPreDispname',,elm);\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("    ch : function(elm)\r\n"
+                  "    {\r\n"
+                  "\t\tif (textLanguageType != languageType) return 0;\r\n"),
+            TJS_W("    ch : function(elm)\r\n"
+                  "    {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] kag.ch text:${elm.text} textWrite:${textWriteEnabled} current:${current.visible} opacity:${current.opacity} hiding:${messageLayerHiding} skipNoDisp:${skipNoDisp}\"); } catch(e) {}\r\n"
+                  "\t\tif (textLanguageType != languageType) return 0;\r\n"),
+            false);
+        if(patched != buffer) {
+            buffer = patched;
+            spdlog::info("Applied scene debug patch for MainWindow message flow");
+        }
+    }
+
     if(sceneDebug && lower == TJS_W("kagenvplayer.tjs")) {
         ttstr patched(buffer);
+        patched.Replace(
+            TJS_W("\tfunction play(elm, skipNoDisp=false) {\r\n"
+                  "\r\n"
+                  "\t\t// 録画再生中\r\n"),
+            TJS_W("\tfunction play(elm, skipNoDisp=false) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] player.play enter scene:${curSceneName} cur:${cur} point:${curPoint} skipNoDisp:${skipNoDisp} rec:${recplaying}\"); } catch(e) {}\r\n"
+                  "\r\n"
+                  "\t\t// 録画再生中\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\t\t// 次の行\r\n"
+                  "\t\tvar obj = getLine(cur++);\r\n"
+                  "\r\n"
+                  "\t\t// シーン終端\r\n"),
+            TJS_W("\t\t// 次の行\r\n"
+                  "\t\tvar obj = getLine(cur++);\r\n"
+                  "\t\ttry {\r\n"
+                  "\t\t\tvar __akObjType = typeof obj;\r\n"
+                  "\t\t\tvar __akObjHead = \"\";\r\n"
+                  "\t\t\tvar __akSavePoint = void;\r\n"
+                  "\t\t\tif (__akObjType == \"Object\") {\r\n"
+                  "\t\t\t\ttry { __akObjHead = obj[0]; } catch(__akHeadE) {}\r\n"
+                  "\t\t\t\ttry { __akSavePoint = obj[SAVE_POINT]; } catch(__akPointE) {}\r\n"
+                  "\t\t\t}\r\n"
+                  "\t\t\tDebug.notice(@\"[AETHERKIRI_SCENE] player.line index:${cur-1} type:${__akObjType} head:${__akObjHead} savePoint:${__akSavePoint}\");\r\n"
+                  "\t\t} catch(e) { Debug.notice(@\"[AETHERKIRI_SCENE] player.line log failed:${e.message}\"); }\r\n"
+                  "\r\n"
+                  "\t\t// シーン終端\r\n"),
+            false);
         patched.Replace(
             TJS_W("\tfunction onRestore(f) {\r\n"
                   "\t\tif (f.scenePlayer !== void) {\r\n"),
@@ -1343,6 +1639,27 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
             TJS_W("\tfunction _updateAll(allData, snap=false) {\r\n"
                   "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] world._updateAll all:${allData !== void} data:${allData !== void && allData.data !== void ? allData.data.count : -1} snap:${snap}\"); } catch(e) {}\r\n"
                   "\t\tif (allData !== void) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction msgonoff(elm, v) {\r\n"
+                  "\t\tif (kag.skipNoDisp) {\r\n"),
+            TJS_W("\tfunction msgonoff(elm, v) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] world.msgonoff v:${v} envTrans:${envTransMode} nofade:${elm.nofade} skipNoDisp:${kag.skipNoDisp} msgVisible:${kag.fore.messages[kag.currentNum].visible}\"); } catch(e) {}\r\n"
+                  "\t\tif (kag.skipNoDisp) {\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction onCurrentMessageVisibleChanged(hidden, page, time) {\r\n"
+                  "\t\tupdateMessageVisible();\r\n"),
+            TJS_W("\tfunction onCurrentMessageVisibleChanged(hidden, page, time) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] world.onCurrentMessageVisibleChanged hidden:${hidden} page:${page} time:${time}\"); } catch(e) {}\r\n"
+                  "\t\tupdateMessageVisible();\r\n"),
+            false);
+        patched.Replace(
+            TJS_W("\tfunction onMessageHiddenStateChanged(hidden, page) {\r\n"
+                  "\t\tupdateMessageVisible();\r\n"),
+            TJS_W("\tfunction onMessageHiddenStateChanged(hidden, page) {\r\n"
+                  "\t\ttry { Debug.notice(@\"[AETHERKIRI_SCENE] world.onMessageHiddenStateChanged hidden:${hidden} page:${page}\"); } catch(e) {}\r\n"
+                  "\t\tupdateMessageVisible();\r\n"),
             false);
         patched.Replace(
             TJS_W("\tfunction update(elm) {\r\n"
@@ -2358,6 +2675,136 @@ private:
     iTJSDispatch2 *destination_;
 };
 
+class tTVPMergeMissingObjectMembersCallback final : public tTJSDispatch {
+public:
+    explicit tTVPMergeMissingObjectMembersCallback(
+        iTJSDispatch2 *destination) :
+        destination_(destination) {}
+
+    tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                       tTJSVariant *result, tjs_int numparams,
+                       tTJSVariant **param, iTJSDispatch2 *) override {
+        if(numparams < 3)
+            return TJS_E_BADPARAMCOUNT;
+
+        const tjs_uint32 flags =
+            static_cast<tjs_uint32>(param[1]->AsInteger());
+        if(!(flags & TJS_HIDDENMEMBER)) {
+            const ttstr name(*param[0]);
+            tTJSVariant existing;
+            const tjs_error get_error =
+                destination_->PropGet(TJS_IGNOREPROP, name.c_str(), nullptr,
+                                      &existing, destination_);
+            if(get_error == TJS_E_MEMBERNOTFOUND) {
+                const tjs_error set_error = destination_->PropSet(
+                    TJS_MEMBERENSURE | TJS_IGNOREPROP | flags, name.c_str(),
+                    nullptr, param[2], destination_);
+                if(TJS_FAILED(set_error))
+                    return set_error;
+            } else if(TJS_FAILED(get_error)) {
+                return get_error;
+            }
+        }
+        if(result)
+            *result = static_cast<tjs_int>(1);
+        return TJS_S_OK;
+    }
+
+private:
+    iTJSDispatch2 *destination_;
+};
+
+using tTVPGlobalFunctionSnapshot =
+    std::vector<std::pair<ttstr, tTJSVariant>>;
+
+static bool TVPVariantIsFunction(const tTJSVariant &value) {
+    if(value.Type() != tvtObject)
+        return false;
+    const tTJSVariantClosure closure = value.AsObjectClosureNoAddRef();
+    return closure.Object &&
+           closure.IsInstanceOf(0, nullptr, nullptr, TJS_W("Function"),
+                                nullptr) == TJS_S_TRUE;
+}
+
+class tTVPCollectGlobalFunctionsCallback final : public tTJSDispatch {
+public:
+    explicit tTVPCollectGlobalFunctionsCallback(
+        tTVPGlobalFunctionSnapshot &snapshot) :
+        snapshot_(snapshot) {}
+
+    tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                       tTJSVariant *result, tjs_int numparams,
+                       tTJSVariant **param, iTJSDispatch2 *) override {
+        if(numparams < 3)
+            return TJS_E_BADPARAMCOUNT;
+
+        const tjs_uint32 flags =
+            static_cast<tjs_uint32>(param[1]->AsInteger());
+        if(!(flags & TJS_HIDDENMEMBER) &&
+           TVPVariantIsFunction(*param[2])) {
+            snapshot_.emplace_back(ttstr(*param[0]), *param[2]);
+        }
+        if(result)
+            *result = static_cast<tjs_int>(1);
+        return TJS_S_OK;
+    }
+
+private:
+    tTVPGlobalFunctionSnapshot &snapshot_;
+};
+
+static tTVPGlobalFunctionSnapshot TVPCaptureGlobalFunctions() {
+    tTVPGlobalFunctionSnapshot snapshot;
+    tTJS *engine = TVPGetScriptEngine();
+    iTJSDispatch2 *global =
+        engine ? engine->GetGlobalNoAddRef() : nullptr;
+    if(!global)
+        return snapshot;
+
+    auto *callback = new tTVPCollectGlobalFunctionsCallback(snapshot);
+    tTJSVariantClosure closure(callback);
+    try {
+        global->EnumMembers(TJS_IGNOREPROP, &closure, global);
+        callback->Release();
+    } catch(...) {
+        callback->Release();
+        throw;
+    }
+    return snapshot;
+}
+
+static size_t TVPRestoreMissingGlobalFunctionMembers(
+    const tTVPGlobalFunctionSnapshot &snapshot) {
+    tTJS *engine = TVPGetScriptEngine();
+    iTJSDispatch2 *global =
+        engine ? engine->GetGlobalNoAddRef() : nullptr;
+    if(!global)
+        return 0;
+
+    size_t restored_functions = 0;
+    for(const auto &[name, original] : snapshot) {
+        tTJSVariant replacement;
+        if(TJS_FAILED(global->PropGet(TJS_IGNOREPROP, name.c_str(), nullptr,
+                                      &replacement, global)) ||
+           !TVPVariantIsFunction(replacement)) {
+            continue;
+        }
+
+        const tTJSVariantClosure original_closure =
+            original.AsObjectClosureNoAddRef();
+        const tTJSVariantClosure replacement_closure =
+            replacement.AsObjectClosureNoAddRef();
+        if(original_closure.Object == replacement_closure.Object)
+            continue;
+
+        if(TVPMergeMissingObjectMembers(replacement_closure.Object,
+                                       original_closure.Object)) {
+            ++restored_functions;
+        }
+    }
+    return restored_functions;
+}
+
 static bool TVPReadPatchRuntimeRegistry(tTJSVariant &registry) {
     registry.Clear();
     try {
@@ -2400,6 +2847,25 @@ bool TVPMergeObjectMembers(iTJSDispatch2 *destination,
         return false;
 
     auto *callback = new tTVPMergeObjectMembersCallback(destination);
+    tTJSVariantClosure closure(callback);
+    try {
+        const bool merged = TJS_SUCCEEDED(
+            source->EnumMembers(TJS_IGNOREPROP, &closure, source));
+        callback->Release();
+        return merged;
+    } catch(...) {
+        callback->Release();
+        throw;
+    }
+}
+
+bool TVPMergeMissingObjectMembers(iTJSDispatch2 *destination,
+                                  iTJSDispatch2 *source) {
+    if(!destination || !source)
+        return false;
+
+    auto *callback =
+        new tTVPMergeMissingObjectMembersCallback(destination);
     tTJSVariantClosure closure(callback);
     try {
         const bool merged = TJS_SUCCEEDED(
@@ -2875,6 +3341,12 @@ void TVPExecuteStartupScript() {
         ttstr patch = TVPGetAppPath() + "patch.tjs";
         if(TVPIsExistentStorageNoSearch(patch)) {
             TVPInstallPatchWindowPrerequisites();
+            // Root-level compatibility patches run after the framework
+            // startup scripts. If one replaces a global function, retain
+            // nested helpers that the replacement did not redefine while
+            // leaving every member explicitly supplied by the patch intact.
+            const tTVPGlobalFunctionSnapshot savedGlobalFunctions =
+                TVPCaptureGlobalFunctions();
             // A late compatibility patch can replace framework classes and
             // their singleton instances.  Preserve runtime extension hooks
             // registered by game scripts, then merge them into the new
@@ -2886,6 +3358,14 @@ void TVPExecuteStartupScript() {
             try {
                 TVPExecuteStorage(patch);
             } catch(...) {
+            }
+            const size_t restoredFunctionCount =
+                TVPRestoreMissingGlobalFunctionMembers(
+                    savedGlobalFunctions);
+            if(restoredFunctionCount != 0) {
+                spdlog::info(
+                    "Restored missing members on {} late-patched functions",
+                    restoredFunctionCount);
             }
             if(hasSavedRuntimeRegistry) {
                 tTJSVariant replacementRuntimeRegistry;

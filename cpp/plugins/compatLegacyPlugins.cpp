@@ -10,6 +10,11 @@
 
 #include <zlib.h>
 
+#if defined(AETHERKIRI_INTERNAL_LEGACY_PLUGINS)
+extern "C" tTJSBinaryStream *
+AetherInternalWrapLz4ReadStream(tTJSBinaryStream *source);
+#endif
+
 #ifndef TJS_INTF_METHOD
 #define TJS_INTF_METHOD
 #endif
@@ -142,7 +147,14 @@ public:
         ttstr path = lzfsInnerPath(name);
         logOnce(TJS_W("lzfs.dll"),
                 TJS_W("mapping lzfs storage to AetherKiri Storage"));
-        return TVPCreateStream(path, flags);
+        auto *source = TVPCreateStream(path, flags);
+        if(!source || (flags & TJS_BS_ACCESS_MASK) != TJS_BS_READ)
+            return source;
+#if defined(AETHERKIRI_INTERNAL_LEGACY_PLUGINS)
+        return AetherInternalWrapLz4ReadStream(source);
+#else
+        return source;
+#endif
     }
 
     void GetListAt(const ttstr &, iTVPStorageLister *) override {}
@@ -163,7 +175,11 @@ void registerLzfsMedia() {
         return;
     gLzfsMedia = new LzfsStorageMedia();
     TVPRegisterStorageMedia(gLzfsMedia);
+#if defined(AETHERKIRI_INTERNAL_LEGACY_PLUGINS)
+    logOnce(TJS_W("lzfs.dll"), TJS_W("registered LZ4 storage media"));
+#else
     logOnce(TJS_W("lzfs.dll"), TJS_W("registered passthrough storage media"));
+#endif
 }
 
 void unregisterLzfsMedia() {

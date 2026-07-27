@@ -5,11 +5,21 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <array>
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <vector>
+
+#if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
+#include <lz4frame.h>
+#endif
 
 #include "motionplayer/EmotePlayer.h"
 #include "motionplayer/MotionPlayerExtension.h"
+#include "motionplayer/MotionNode.h"
+#include "motionplayer/NodeTree.h"
 #include "motionplayer/Player.h"
 #include "motionplayer/PlayerInternal.h"
 #include "motionplayer/ResourceManager.h"
@@ -20,11 +30,62 @@
 #include "SysInitIntf.h"
 #include "SysInitImpl.h"
 #include "psbfile/PSBValue.h"
+#include "psbfile/PSBFile.h"
 #include "test_config.h"
 #include "tjsObject.h"
 
 extern tTJS *TVPScriptEngine;
 extern "C" void TVPRegisterMotionPlayerPluginAnchor();
+
+#if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
+namespace {
+    const bool kPrivateMotionRuntimeRegistered = [] {
+        TVPRegisterMotionPlayerPluginAnchor();
+        return true;
+    }();
+}
+#endif
+
+#if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
+TEST_CASE("PSBFile unwraps LZ4-frame motion resources") {
+    std::ifstream input(
+        TEST_FILES_PATH "/emote/e-mote3.0バニラパジャマa.psb",
+        std::ios::binary | std::ios::ate);
+    REQUIRE(input);
+    const auto inputSize = static_cast<size_t>(input.tellg());
+    REQUIRE(inputSize != 0);
+    input.seekg(0);
+
+    std::vector<std::uint8_t> source(inputSize);
+    input.read(reinterpret_cast<char *>(source.data()),
+               static_cast<std::streamsize>(source.size()));
+    REQUIRE(static_cast<size_t>(input.gcount()) == source.size());
+
+    std::vector<std::uint8_t> compressed(
+        LZ4F_compressFrameBound(source.size(), nullptr));
+    const size_t compressedSize = LZ4F_compressFrame(
+        compressed.data(), compressed.size(), source.data(), source.size(),
+        nullptr);
+    REQUIRE_FALSE(LZ4F_isError(compressedSize));
+    compressed.resize(compressedSize);
+
+    PSB::PSBFile file;
+    file.setSeed(742877301);
+    bool callbackSawDecompressedPsb = false;
+    file.setPreParseCallback(
+        [&callbackSawDecompressedPsb](const std::uint8_t *data,
+                                     const size_t size) {
+            callbackSawDecompressedPsb =
+                size >= 4 && data[0] == 'P' && data[1] == 'S' &&
+                data[2] == 'B' && data[3] == '\0';
+            return callbackSawDecompressedPsb;
+        });
+    REQUIRE(file.loadPSBData(compressed.data(), compressed.size(),
+                             ttstr(TJS_W("lz4-motion.psb"))));
+    REQUIRE(callbackSawDecompressedPsb);
+    REQUIRE(file.getType() == PSB::PSBType::Motion);
+}
+#endif
 
 TEST_CASE("motionplayer optional E-mote extension matches build mode") {
     TVPRegisterMotionPlayerPluginAnchor();
@@ -40,12 +101,64 @@ TEST_CASE("motionplayer optional E-mote extension matches build mode") {
         REQUIRE(extension->hasActivePhysics != nullptr);
         REQUIRE(extension->serializeControlState != nullptr);
         REQUIRE(extension->unserializeControlState != nullptr);
-        REQUIRE(extension->stepAutoBlink != nullptr);
+    REQUIRE(extension->stepAutoBlink != nullptr);
     REQUIRE(extension->stepPhysics != nullptr);
+    REQUIRE(extension->renderPolicy != nullptr);
 #else
     REQUIRE(extension == nullptr);
 #endif
 }
+
+TEST_CASE("motionplayer honors a split module's authored composition entry point") {
+    motion::detail::MotionSnapshot snapshot;
+    auto root = std::make_shared<PSB::PSBDictionary>();
+    auto metadata = std::make_shared<PSB::PSBDictionary>();
+    auto base = std::make_shared<PSB::PSBDictionary>();
+    base->emplace(
+        "chara", std::make_shared<PSB::PSBString>("all_parts"));
+    base->emplace(
+        "motion", std::make_shared<PSB::PSBString>("タイムライン構造"));
+    metadata->emplace("base", base);
+    root->emplace("metadata", metadata);
+    snapshot.root = root;
+    snapshot.clipsByOwnerAndLabel["all_parts"].emplace(
+        "タイムライン構造", motion::detail::MotionClip{});
+
+    const auto authored =
+        motion::detail::resolveMotionCompositionEntryPoint(
+            snapshot, "all_parts", "全体構造");
+    CHECK(authored.owner == "all_parts");
+    CHECK(authored.label == "タイムライン構造");
+
+    snapshot.clipsByOwnerAndLabel["all_parts"].emplace(
+        "全体構造", motion::detail::MotionClip{});
+    const auto explicitReference =
+        motion::detail::resolveMotionCompositionEntryPoint(
+            snapshot, "all_parts", "全体構造");
+    CHECK(explicitReference.owner == "all_parts");
+    CHECK(explicitReference.label == "全体構造");
+
+    snapshot.clipsByOwnerAndLabel["all_parts"].erase("全体構造");
+    snapshot.clipsByOwnerAndLabel["all_parts"].erase("タイムライン構造");
+    const auto fallback =
+        motion::detail::resolveMotionCompositionEntryPoint(
+            snapshot, "all_parts", "全体構造");
+    CHECK(fallback.owner == "all_parts");
+    CHECK(fallback.label == "全体構造");
+}
+
+#if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
+TEST_CASE("motionplayer resolves hierarchical split motions without motion icons") {
+    using motion::internal::shouldSearchCachedMotionComposition;
+
+    REQUIRE(shouldSearchCachedMotionComposition(
+        "all_parts/全体構造", ""));
+    REQUIRE(shouldSearchCachedMotionComposition(
+        "all_parts/背景構造", "全体構造"));
+    REQUIRE_FALSE(shouldSearchCachedMotionComposition(
+        "standalone_motion", ""));
+}
+#endif
 
 TEST_CASE("motion presentation excludes structural binder layers") {
     REQUIRE_FALSE(
@@ -54,6 +167,163 @@ TEST_CASE("motion presentation excludes structural binder layers") {
         motion::internal::presentationLayerTypeCanReceivePixels(ltOpaque));
     REQUIRE(
         motion::internal::presentationLayerTypeCanReceivePixels(ltAlpha));
+}
+
+TEST_CASE("motionplayer identifies full-canvas split composition planes") {
+    const std::array<int, 4> canvasRect{0, 0, 1280, 720};
+    const std::array<int, 4> partialRect{20, 0, 1280, 720};
+
+    REQUIRE(motion::internal::isFullCanvasCompositeRenderRoot(
+        true, false, false, 255, canvasRect, 1280, 720));
+    REQUIRE_FALSE(motion::internal::isFullCanvasCompositeRenderRoot(
+        true, true, false, 255, canvasRect, 1280, 720));
+    REQUIRE_FALSE(motion::internal::isFullCanvasCompositeRenderRoot(
+        true, false, false, 255, partialRect, 1280, 720));
+
+    REQUIRE(motion::internal::isFullCanvasDirectRenderPlane(
+        true, false, false, false, 0, 255, canvasRect, 1280, 720));
+    REQUIRE_FALSE(motion::internal::isFullCanvasDirectRenderPlane(
+        true, false, false, false, 16, 255, canvasRect, 1280, 720));
+    REQUIRE_FALSE(motion::internal::isFullCanvasDirectRenderPlane(
+        true, false, false, false, 0, 255, partialRect, 1280, 720));
+}
+
+#if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
+TEST_CASE("motionplayer treats mode-6 difference leaves as pass-through") {
+    REQUIRE(motion::internal::isDifferenceAlphaPassThroughLeaf(
+        true, false, 22));
+    REQUIRE(motion::internal::isDifferenceAlphaPassThroughLeaf(
+        true, false, 6));
+
+    REQUIRE_FALSE(motion::internal::isDifferenceAlphaPassThroughLeaf(
+        true, false, 16));
+    REQUIRE_FALSE(motion::internal::isDifferenceAlphaPassThroughLeaf(
+        false, false, 22));
+    REQUIRE_FALSE(motion::internal::isDifferenceAlphaPassThroughLeaf(
+        true, true, 22));
+}
+
+TEST_CASE("motionplayer keeps parentless flags-6 groups alpha-only") {
+    REQUIRE(motion::internal::isIndependentDifferenceAlphaMaskGroup(
+        true, false, 6, false));
+    REQUIRE(motion::internal::isIndependentDifferenceAlphaMaskGroup(
+        true, false, 22, false));
+
+    REQUIRE_FALSE(motion::internal::isIndependentDifferenceAlphaMaskGroup(
+        true, false, 6, true));
+    REQUIRE_FALSE(motion::internal::isIndependentDifferenceAlphaMaskGroup(
+        true, true, 6, false));
+    REQUIRE_FALSE(motion::internal::isIndependentDifferenceAlphaMaskGroup(
+        false, false, 6, false));
+    REQUIRE_FALSE(motion::internal::isIndependentDifferenceAlphaMaskGroup(
+        true, false, 5, false));
+}
+
+TEST_CASE("motionplayer applies parentless difference masks only to colour leaves") {
+    REQUIRE(motion::internal::canReceiveIndependentDifferenceAlphaMask(
+        true, false, 16));
+    REQUIRE(motion::internal::canReceiveIndependentDifferenceAlphaMask(
+        true, false, 5));
+
+    REQUIRE_FALSE(motion::internal::canReceiveIndependentDifferenceAlphaMask(
+        true, false, 22));
+    REQUIRE_FALSE(motion::internal::canReceiveIndependentDifferenceAlphaMask(
+        true, true, 16));
+    REQUIRE_FALSE(motion::internal::canReceiveIndependentDifferenceAlphaMask(
+        false, false, 16));
+}
+
+TEST_CASE("motionplayer pairs authored difference-alpha leaves by layer name") {
+    REQUIRE(motion::internal::isAuthoredDifferenceAlphaPair(
+        "fade_t", "fade_t"));
+    REQUIRE_FALSE(motion::internal::isAuthoredDifferenceAlphaPair(
+        "fade_t", "fade_r"));
+    REQUIRE_FALSE(motion::internal::isAuthoredDifferenceAlphaPair(
+        "", ""));
+
+    REQUIRE(motion::internal::isNestedDifferenceAlphaPair(
+        4, std::vector<std::size_t>{8, 7, 4, 1}));
+    REQUIRE_FALSE(motion::internal::isNestedDifferenceAlphaPair(
+        4, std::vector<std::size_t>{8, 7, 1}));
+    REQUIRE(motion::internal::isGenericDifferenceAlphaLabel(
+        "追加パーツ"));
+    REQUIRE(motion::internal::isGenericDifferenceAlphaLabel(
+        "■追加パーツ"));
+    REQUIRE(motion::internal::isGenericDifferenceAlphaLabel(""));
+    REQUIRE_FALSE(motion::internal::isGenericDifferenceAlphaLabel(
+        "■追加パーツ揺れ_fade_s"));
+    REQUIRE(motion::internal::isUnambiguousNestedDifferenceAlphaPair(1));
+    REQUIRE_FALSE(
+        motion::internal::isUnambiguousNestedDifferenceAlphaPair(0));
+    REQUIRE_FALSE(
+        motion::internal::isUnambiguousNestedDifferenceAlphaPair(2));
+
+    REQUIRE(motion::internal::isSyntheticMotionBlankSource(
+        "blank/64:32:12:8"));
+    REQUIRE_FALSE(motion::internal::isSyntheticMotionBlankSource(
+        "src/tex/0074"));
+}
+
+TEST_CASE("motionplayer selects combined masks only for carrier bases") {
+    using motion::internal::shouldUseCombinedDifferenceAlphaMask;
+
+    REQUIRE(shouldUseCombinedDifferenceAlphaMask(false, 2));
+    REQUIRE(shouldUseCombinedDifferenceAlphaMask(false, 3));
+    REQUIRE_FALSE(shouldUseCombinedDifferenceAlphaMask(true, 2));
+    REQUIRE_FALSE(shouldUseCombinedDifferenceAlphaMask(false, 1));
+    REQUIRE_FALSE(shouldUseCombinedDifferenceAlphaMask(false, 0));
+    REQUIRE_FALSE(shouldUseCombinedDifferenceAlphaMask(true, 0));
+}
+
+TEST_CASE("motionplayer flags-6 masks subtract alpha like libgame") {
+    using motion::internal::applyMotionAlphaMaskValueLike_0x6AC4E4;
+    using motion::internal::independentDifferenceAlphaMaskOperation;
+
+    // Same-name liquid/mask pairs use flags=6's reverse-alpha operation.
+    REQUIRE(independentDifferenceAlphaMaskOperation(true, 6) == 2);
+    // The broad base mosaic has no same-name mask and consumes the combined
+    // carrier surface as a normal crop, retaining its right-hand portion.
+    REQUIRE(independentDifferenceAlphaMaskOperation(false, 6) == 1);
+
+    // flags=6 has operation 2 in its low bits: opaque mask pixels remove the
+    // colour layer, while transparent mask pixels retain it.
+    REQUIRE(applyMotionAlphaMaskValueLike_0x6AC4E4(
+                200, 255, true, 2) == 0);
+    REQUIRE(applyMotionAlphaMaskValueLike_0x6AC4E4(
+                200, 0, true, 2) == 200);
+    REQUIRE(applyMotionAlphaMaskValueLike_0x6AC4E4(
+                200, 64, true, 2) == 0);
+    REQUIRE(applyMotionAlphaMaskValueLike_0x6AC4E4(
+                200, 128, false, 2) == 99);
+
+    // Operation 1 remains the ordinary crop branch.
+    REQUIRE(applyMotionAlphaMaskValueLike_0x6AC4E4(
+                200, 255, true, 1) == 200);
+    REQUIRE(applyMotionAlphaMaskValueLike_0x6AC4E4(
+                200, 0, true, 1) == 0);
+    REQUIRE(applyMotionAlphaMaskValueLike_0x6AC4E4(
+                200, 128, false, 1) == 100);
+}
+
+TEST_CASE("motionplayer recovers alpha-empty difference masks from RGB") {
+    using motion::internal::differenceAlphaFromRgb;
+    using motion::internal::shouldRecoverDifferenceAlphaFromRgb;
+
+    REQUIRE(shouldRecoverDifferenceAlphaFromRgb(0, 8));
+    REQUIRE(shouldRecoverDifferenceAlphaFromRgb(0, 4096));
+    REQUIRE_FALSE(shouldRecoverDifferenceAlphaFromRgb(1, 4096));
+    REQUIRE_FALSE(shouldRecoverDifferenceAlphaFromRgb(0, 7));
+
+    REQUIRE(differenceAlphaFromRgb(255, 255, 255) == 255);
+    REQUIRE(differenceAlphaFromRgb(64, 64, 64) == 64);
+    REQUIRE(differenceAlphaFromRgb(32, 96, 48) == 96);
+    REQUIRE(differenceAlphaFromRgb(0, 0, 0) == 0);
+}
+#endif
+
+TEST_CASE("motionplayer keeps Z as ordering depth by default") {
+    motion::Player player;
+    REQUIRE(player.getZFactor() == Catch::Approx(0.0));
 }
 
 namespace {
@@ -91,6 +361,80 @@ namespace {
         REQUIRE(motion::ResourceManager::setEmotePSBDecryptSeed(
                     nullptr, 1, params, nullptr) == TJS_S_OK);
     }
+
+    class TemporaryEmoteDecryptCallback {
+    public:
+        explicit TemporaryEmoteDecryptCallback(tTJSVariant callback) {
+            tTJSVariant *params[] = { &callback };
+            REQUIRE(motion::ResourceManager::setEmotePSBDecryptFunc(
+                        nullptr, 1, params, nullptr) == TJS_S_OK);
+        }
+
+        ~TemporaryEmoteDecryptCallback() {
+            motion::ResourceManager::setEmotePSBDecryptFunc(
+                nullptr, 0, nullptr, nullptr);
+        }
+    };
+
+    void writeTestU16LE(std::uint8_t *data, const std::uint16_t value) {
+        data[0] = static_cast<std::uint8_t>(value);
+        data[1] = static_cast<std::uint8_t>(value >> 8);
+    }
+
+    void writeTestU32LE(std::uint8_t *data, const std::uint32_t value) {
+        data[0] = static_cast<std::uint8_t>(value);
+        data[1] = static_cast<std::uint8_t>(value >> 8);
+        data[2] = static_cast<std::uint8_t>(value >> 16);
+        data[3] = static_cast<std::uint8_t>(value >> 24);
+    }
+
+    void cryptLegacyEmoteHeader(std::uint8_t *data, const std::size_t count) {
+        std::uint32_t a = 123456789;
+        std::uint32_t b = 362436069;
+        std::uint32_t c = 521288629;
+        std::uint32_t d = 0x13579BDFu;
+        std::uint32_t value = 0;
+        for(std::size_t index = 0; index < count; ++index) {
+            if(value == 0) {
+                const std::uint32_t temp = (a << 11) ^ a;
+                a = b;
+                b = c;
+                c = d;
+                d ^= temp ^ ((temp ^ (d >> 11)) >> 8);
+                value = d;
+            }
+            data[index] ^= static_cast<std::uint8_t>(value);
+            value >>= 8;
+        }
+    }
+
+    class TemporaryAutoPath {
+    public:
+        TemporaryAutoPath() {
+            const auto suffix = std::chrono::steady_clock::now()
+                                    .time_since_epoch()
+                                    .count();
+            path_ = std::filesystem::temp_directory_path() /
+                ("aetherkiri-d3d-emote-" + std::to_string(suffix));
+            std::filesystem::create_directories(path_);
+            storagePath_ = ttstr((path_.string() + "/").c_str());
+            TVPAddAutoPath(storagePath_);
+            TVPClearStorageCaches();
+        }
+
+        ~TemporaryAutoPath() {
+            TVPRemoveAutoPath(storagePath_);
+            TVPClearStorageCaches();
+            std::error_code error;
+            std::filesystem::remove_all(path_, error);
+        }
+
+        const std::filesystem::path &path() const { return path_; }
+
+    private:
+        std::filesystem::path path_;
+        ttstr storagePath_;
+    };
 
     tTJSVariant getProp(const tTJSVariant &object, const tjs_char *name) {
         REQUIRE(object.Type() == tvtObject);
@@ -258,6 +602,97 @@ namespace {
     }
 
 } // namespace
+
+TEST_CASE("storage resolves logical E-mote PSBs to DirectX exports") {
+    ensurePluginRuntime();
+    TemporaryAutoPath autoPath;
+
+    std::ofstream(autoPath.path() / "dx_gallery_body.psb", std::ios::binary)
+        .put('\0');
+    std::ofstream(autoPath.path() / "dxlow_gallery_low.psb", std::ios::binary)
+        .put('\0');
+    std::ofstream(autoPath.path() / "gallery_original.psb", std::ios::binary)
+        .put('\0');
+    TVPClearStorageCaches();
+
+    const auto body = TVPGetPlacedPath(TJS_W("gallery_body.psb"));
+    REQUIRE_FALSE(body.IsEmpty());
+    CHECK(TVPExtractStorageName(body) == TJS_W("dx_gallery_body.psb"));
+    CHECK(TVPIsExistentStorage(TJS_W("gallery_body.psb")));
+
+    const auto low = TVPGetPlacedPath(TJS_W("gallery_low.psb"));
+    REQUIRE_FALSE(low.IsEmpty());
+    CHECK(TVPExtractStorageName(low) == TJS_W("dxlow_gallery_low.psb"));
+
+    const auto original = TVPGetPlacedPath(TJS_W("gallery_original.psb"));
+    REQUIRE_FALSE(original.IsEmpty());
+    CHECK(TVPExtractStorageName(original) == TJS_W("gallery_original.psb"));
+}
+
+TEST_CASE("motionplayer completes legacy decryption for PSB v4 headers") {
+    ensurePluginRuntime();
+
+    tTJSVariant callback;
+    TVPExecuteExpression(TJS_W(
+        "(function(buf, len) {"
+        " var A=123456789, B=362436069, C=521288629, D=324508639;"
+        " var version=buf[4]+(buf[5]<<8);"
+        " var flags=version>2 ? buf[6]+(buf[7]<<8) : 2;"
+        " var V=0, T, off, count;"
+        " if(flags&1) {"
+        "  off=8; count=36;"
+        "  for(var i=0;i<count;++i) {"
+        "   if(!V) {"
+        "    T=(A<<11)^A; T&=0xFFFFFFFF;"
+        "    A=B; B=C; C=D;"
+        "    D^=T^((T^(D>>11))>>8); V=D;"
+        "   }"
+        "   buf[off+i]^=V; V>>=8;"
+        "  }"
+        " }"
+        " if(flags&2) {"
+        "  off=buf[8]|(buf[9]<<8)|(buf[10]<<16)|(buf[11]<<24);"
+        "  var end=buf[24]|(buf[25]<<8)|(buf[26]<<16)|(buf[27]<<24);"
+        "  count=end-off;"
+        "  for(var j=0;j<count;++j) {"
+        "   if(!V) {"
+        "    T=(A<<11)^A; T&=0xFFFFFFFF;"
+        "    A=B; B=C; C=D;"
+        "    D^=T^((T^(D>>11))>>8); V=D;"
+        "   }"
+        "   buf[off+j]^=V; V>>=8;"
+        "  }"
+        " }"
+        "})"), &callback);
+    REQUIRE(callback.Type() == tvtObject);
+    TemporaryEmoteDecryptCallback decryptCallback(callback);
+
+    std::array<std::uint8_t, 128> plaintext{};
+    plaintext[0] = 'P';
+    plaintext[1] = 'S';
+    plaintext[2] = 'B';
+    writeTestU16LE(plaintext.data() + 4, 4);
+    writeTestU16LE(plaintext.data() + 6, 1);
+    writeTestU32LE(plaintext.data() + 8, 56);
+    writeTestU32LE(plaintext.data() + 12, 56);
+    writeTestU32LE(plaintext.data() + 16, 80);
+    writeTestU32LE(plaintext.data() + 20, 84);
+    writeTestU32LE(plaintext.data() + 24, 96);
+    writeTestU32LE(plaintext.data() + 28, 100);
+    writeTestU32LE(plaintext.data() + 32, 104);
+    writeTestU32LE(plaintext.data() + 36, 60);
+    writeTestU32LE(plaintext.data() + 40, 0x12345678);
+    writeTestU32LE(plaintext.data() + 44, 88);
+    writeTestU32LE(plaintext.data() + 48, 92);
+    writeTestU32LE(plaintext.data() + 52, 96);
+
+    auto encrypted = plaintext;
+    cryptLegacyEmoteHeader(encrypted.data() + 8, 48);
+    REQUIRE(motion::ResourceManager::applyEmotePSBDecryptFunc(
+        encrypted.data(), encrypted.size()));
+    CHECK(std::equal(
+        plaintext.begin(), plaintext.begin() + 56, encrypted.begin()));
+}
 
 TEST_CASE("motionplayer maps parameter values across the authored clip span") {
     motion::detail::MotionClip clip;
@@ -514,6 +949,49 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
     player.setOuterForce(1.0, 2.0);
 }
 
+#if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
+TEST_CASE("emoteplayer clone preserves render state") {
+    setEmoteSeed();
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("emoteplayer.dll")));
+
+    motion::ResourceManager rm;
+    const auto module = rm.load(motionFixturePath());
+    REQUIRE(module.Type() == tvtObject);
+
+    motion::EmotePlayer player(rm);
+    player.setModule(module);
+    const auto mainCount = player.countMainTimelines();
+    const auto diffCount = player.countDiffTimelines();
+    REQUIRE((mainCount + diffCount) > 0);
+
+    const auto label =
+        mainCount > 0 ? player.getMainTimelineLabelAt(0)
+                      : player.getDiffTimelineLabelAt(0);
+    player.playTimeline(label, motion::TimelinePlayFlagParallel);
+    player.setVariable(TJS_W("clone_dynamic"), 3.5);
+    player.setCoord(100.0, 200.0);
+    player.progress(2000.0 / 60.0);
+    REQUIRE(player.isTimelinePlaying(label));
+
+    const auto clonedVariant = player.clone();
+    REQUIRE(clonedVariant.Type() == tvtObject);
+    auto *cloned =
+        ncbInstanceAdaptor<motion::EmotePlayer>::GetNativeInstance(
+            clonedVariant.AsObjectNoAddRef(), true);
+    REQUIRE(cloned != nullptr);
+
+    REQUIRE(cloned->isTimelinePlaying(label));
+    REQUIRE(cloned->countPlayingTimelines() ==
+            player.countPlayingTimelines());
+    REQUIRE(cloned->getVariable(TJS_W("clone_dynamic")) == 3.5);
+    REQUIRE(cloned->contains(100.0, 200.0));
+    REQUIRE(cloned->getProgress() == Catch::Approx(2.0));
+
+    cloned->progress(1000.0 / 60.0);
+    REQUIRE(cloned->getProgress() == Catch::Approx(3.0));
+}
+#endif
+
 TEST_CASE("motionplayer can play internal logo motion clips") {
     setEmoteSeed();
 
@@ -650,4 +1128,220 @@ TEST_CASE("motionplayer non-loop motion clips finish at sync boundary") {
     REQUIRE_FALSE(autoPlayer.getTimelinePlaying(TJS_W("logo")));
     REQUIRE_FALSE(autoPlayer.getAllplaying());
     REQUIRE(autoPlayer.getProgressCompat() == Catch::Approx(1.0));
+}
+
+TEST_CASE("motionplayer crops E-mote icons from a shared PSB atlas") {
+    auto root = std::make_shared<PSB::PSBDictionary>();
+    auto source = std::make_shared<PSB::PSBDictionary>();
+    auto tex = std::make_shared<PSB::PSBDictionary>();
+    auto icons = std::make_shared<PSB::PSBDictionary>();
+    auto icon = std::make_shared<PSB::PSBDictionary>();
+    auto texture = std::make_shared<PSB::PSBDictionary>();
+    auto pixels = std::make_shared<PSB::PSBResource>();
+
+    icon->emplace("left", std::make_shared<PSB::PSBNumber>(1));
+    icon->emplace("top", std::make_shared<PSB::PSBNumber>(1));
+    icon->emplace("width", std::make_shared<PSB::PSBNumber>(2));
+    icon->emplace("height", std::make_shared<PSB::PSBNumber>(2));
+    icon->emplace("originX", std::make_shared<PSB::PSBNumber>(7));
+    icon->emplace("originY", std::make_shared<PSB::PSBNumber>(9));
+    icons->emplace("part", icon);
+    texture->emplace("width", std::make_shared<PSB::PSBNumber>(4));
+    texture->emplace("height", std::make_shared<PSB::PSBNumber>(4));
+    texture->emplace("pixel", pixels);
+    tex->emplace("icon", icons);
+    tex->emplace("texture", texture);
+    source->emplace("tex", tex);
+    root->emplace("source", source);
+
+    pixels->data.resize(4u * 4u * 4u);
+    for(size_t index = 0; index < 16u; ++index) {
+        pixels->data[index * 4u + 0u] =
+            static_cast<std::uint8_t>(index);
+        pixels->data[index * 4u + 1u] = 0x40;
+        pixels->data[index * 4u + 2u] = 0x80;
+        pixels->data[index * 4u + 3u] = 0xff;
+    }
+
+    motion::detail::MotionSnapshot snapshot;
+    snapshot.path = "unit/shared-atlas.psb";
+    snapshot.root = root;
+    snapshot.resourcesByPath.emplace(
+        "source/tex/texture/pixel", pixels);
+
+    int width = 0;
+    int height = 0;
+    double originX = 0.0;
+    double originY = 0.0;
+    bool decodedIsBgra = true;
+    std::string resourcePath;
+    std::string compressName;
+    std::vector<std::uint8_t> decoded;
+    const auto *resource =
+        motion::internal::findPSBResourceBySourceName(
+            snapshot, "src/tex/part", width, height, decoded,
+            originX, originY, &decodedIsBgra, true,
+            &resourcePath, &compressName);
+
+    REQUIRE(resource == pixels.get());
+    REQUIRE(width == 2);
+    REQUIRE(height == 2);
+    REQUIRE(originX == 7.0);
+    REQUIRE(originY == 9.0);
+    REQUIRE_FALSE(decodedIsBgra);
+    REQUIRE(resourcePath == "source/tex/icon/part/atlas@1,1,2,2");
+    REQUIRE(decoded.size() == 16u);
+    REQUIRE(decoded[0] == 5u);
+    REQUIRE(decoded[4] == 6u);
+    REQUIRE(decoded[8] == 9u);
+    REQUIRE(decoded[12] == 10u);
+}
+
+TEST_CASE("motionplayer combines E-mote source groups with icon names") {
+    auto imageContent = std::make_shared<PSB::PSBDictionary>();
+    imageContent->emplace(
+        "src", std::make_shared<PSB::PSBString>("tex"));
+    imageContent->emplace(
+        "icon", std::make_shared<PSB::PSBString>("0018"));
+    motion::internal::FrameContentState imageState;
+    motion::internal::mergeFrameContent(imageContent, imageState, 0);
+    REQUIRE(imageState.src == "src/tex/0018");
+    REQUIRE(imageState.motionIcon.empty());
+
+    auto motionContent = std::make_shared<PSB::PSBDictionary>();
+    motionContent->emplace(
+        "src", std::make_shared<PSB::PSBString>("頭部差分A"));
+    motionContent->emplace(
+        "icon", std::make_shared<PSB::PSBString>("正面"));
+    motion::internal::FrameContentState motionState;
+    motion::internal::mergeFrameContent(motionContent, motionState, 3);
+    REQUIRE(motionState.src == "頭部差分A");
+    REQUIRE(motionState.motionIcon == "正面");
+
+    auto blankContent = std::make_shared<PSB::PSBDictionary>();
+    blankContent->emplace(
+        "src", std::make_shared<PSB::PSBString>("blank"));
+    blankContent->emplace(
+        "icon",
+        std::make_shared<PSB::PSBString>("64:32:12:8"));
+    motion::internal::FrameContentState blankState;
+    motion::internal::mergeFrameContent(blankContent, blankState, 0);
+    REQUIRE(blankState.src == "blank/64:32:12:8");
+}
+
+#if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
+TEST_CASE("motionplayer classifies legacy visible stencil branches") {
+    TVPRegisterMotionPlayerPluginAnchor();
+    const auto makeLayer =
+        [](const std::string &label, int type,
+           const std::vector<std::shared_ptr<PSB::PSBDictionary>> &children) {
+            auto layer = std::make_shared<PSB::PSBDictionary>();
+            layer->emplace(
+                "label", std::make_shared<PSB::PSBString>(label));
+            layer->emplace(
+                "type", std::make_shared<PSB::PSBNumber>(type));
+            if(!children.empty()) {
+                auto list = std::make_shared<PSB::PSBList>(
+                    children.size());
+                for(const auto &child : children) {
+                    list->push_back(child);
+                }
+                layer->emplace("children", list);
+            }
+            return layer;
+        };
+
+    const auto baseImage = makeLayer("base-image", 0, {});
+    {
+        auto content = std::make_shared<PSB::PSBDictionary>();
+        content->emplace(
+            "src", std::make_shared<PSB::PSBString>("src/tex/0001"));
+        auto frame = std::make_shared<PSB::PSBDictionary>();
+        frame->emplace(
+            "content", content);
+        auto frameList = std::make_shared<PSB::PSBList>(1);
+        frameList->push_back(frame);
+        baseImage->emplace("frameList", frameList);
+    }
+    const auto baseBranch = makeLayer("base-branch", 2, {baseImage});
+    const auto contentImage = makeLayer("content-image", 0, {});
+    const auto contentBranch =
+        makeLayer("content-branch", 2, {contentImage});
+    const auto stencil =
+        makeLayer("stencil", 12, {baseBranch, contentBranch});
+    stencil->emplace(
+        "stencilType", std::make_shared<PSB::PSBNumber>(5));
+
+    motion::detail::MotionSnapshot snapshot;
+    snapshot.path = "unit/legacy-visible-stencil.psb";
+    motion::detail::MotionClip clip;
+    clip.label = "main";
+    clip.orderedLayers.push_back(stencil);
+
+    const auto nodes = motion::detail::buildNodeTree(snapshot, &clip);
+    REQUIRE(nodes.size() == 6);
+    REQUIRE(nodes[1].layerName == "stencil");
+    REQUIRE(nodes[1].implicitVisibleStencilGroup);
+    REQUIRE(nodes[2].implicitVisibleStencilBase);
+    REQUIRE(nodes[3].implicitVisibleStencilBase);
+    REQUIRE(nodes[2].implicitVisibleStencilGroupNodeIndex == 1);
+    REQUIRE(nodes[3].implicitVisibleStencilGroupNodeIndex == 1);
+    REQUIRE_FALSE(nodes[4].implicitVisibleStencilBase);
+    REQUIRE_FALSE(nodes[5].implicitVisibleStencilBase);
+}
+#endif
+
+TEST_CASE("motionplayer ignores empty legacy stencil base branches") {
+    const auto makeLayer =
+        [](const std::string &label, int type,
+           const std::vector<std::shared_ptr<PSB::PSBDictionary>> &children,
+           bool withSource = false) {
+            auto layer = std::make_shared<PSB::PSBDictionary>();
+            layer->emplace(
+                "label", std::make_shared<PSB::PSBString>(label));
+            layer->emplace(
+                "type", std::make_shared<PSB::PSBNumber>(type));
+            if(withSource) {
+                auto content = std::make_shared<PSB::PSBDictionary>();
+                content->emplace(
+                    "src",
+                    std::make_shared<PSB::PSBString>("src/tex/0001"));
+                auto frame = std::make_shared<PSB::PSBDictionary>();
+                frame->emplace(
+                    "content", content);
+                auto frameList = std::make_shared<PSB::PSBList>(1);
+                frameList->push_back(frame);
+                layer->emplace("frameList", frameList);
+            }
+            if(!children.empty()) {
+                auto list = std::make_shared<PSB::PSBList>(
+                    children.size());
+                for(const auto &child : children) {
+                    list->push_back(child);
+                }
+                layer->emplace("children", list);
+            }
+            return layer;
+        };
+
+    const auto emptyLayout = makeLayer("empty-layout", 2, {});
+    const auto contentImage = makeLayer("content-image", 0, {}, true);
+    const auto contentBranch =
+        makeLayer("content-branch", 2, {contentImage});
+    const auto stencil =
+        makeLayer("stencil", 12, {emptyLayout, contentBranch});
+    stencil->emplace(
+        "stencilType", std::make_shared<PSB::PSBNumber>(5));
+
+    motion::detail::MotionSnapshot snapshot;
+    snapshot.path = "unit/empty-legacy-stencil.psb";
+    motion::detail::MotionClip clip;
+    clip.label = "main";
+    clip.orderedLayers.push_back(stencil);
+
+    const auto nodes = motion::detail::buildNodeTree(snapshot, &clip);
+    REQUIRE(nodes.size() == 5);
+    REQUIRE_FALSE(nodes[1].implicitVisibleStencilGroup);
+    REQUIRE_FALSE(nodes[2].implicitVisibleStencilBase);
+    REQUIRE(nodes[2].implicitVisibleStencilGroupNodeIndex == -1);
 }

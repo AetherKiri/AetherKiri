@@ -245,10 +245,12 @@ TEST_CASE("Godot render manager routes affine alpha blends to GPU triangles") {
     const tRenderTexQuadArray textures(&source, 1);
     GodotRenderManager manager;
 
-    const std::array<std::pair<const char *, uint32_t>, 4> methods = {{
+    const std::array<std::pair<const char *, uint32_t>, 6> methods = {{
         {"AlphaBlend", TVP_GODOT_GPU_BLEND_ALPHA},
         {"AlphaBlend_d", TVP_GODOT_GPU_BLEND_ALPHA_D},
         {"PerspectiveAlphaBlend_a", TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A},
+        {"PsAddBlend", TVP_GODOT_GPU_BLEND_PS_ADD},
+        {"PsSubBlend", TVP_GODOT_GPU_BLEND_PS_SUBTRACT},
         {"PsMulBlend", TVP_GODOT_GPU_BLEND_PS_MULTIPLY},
     }};
     for (const auto &[name, expected_mode] : methods) {

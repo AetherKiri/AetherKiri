@@ -1,13 +1,16 @@
 #include "PSBFile.h"
+#include "PSBFileExtension.h"
 
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #if defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
 #define AETHERKIRI_HAS_EXECINFO 1
 #include <execinfo.h>
 #endif
 #include <iostream>
 #include <memory>
+#include <vector>
 #include <zlib.h>
 
 #include "EMoteCTX.h"
@@ -19,6 +22,10 @@ static constexpr size_t kPSBMmapThreshold = 256 * 1024;
 #endif
 
 #define LOGGER spdlog::get("plugin")
+
+#if defined(AETHERKIRI_INTERNAL_PSBFILE)
+extern "C" void AetherInternalRegisterPSBFileRuntime();
+#endif
 
 namespace PSB {
     namespace {
@@ -400,21 +407,43 @@ namespace PSB {
                          ReadU32LE(fileData));
         }
 
-        char sign[4];
-        memcpy(sign, fileData, 4);
-
-        bool isMdf = ((sign[0] & ~0x20) == 'M') &&
-                     ((sign[1] & ~0x20) == 'D') &&
-                     ((sign[2] & ~0x20) == 'F') &&
-                     sign[3] == '\0';
-
-        if(!isMdf &&
-           std::strcmp(sign, PsbSignature) != 0 &&
-           std::strcmp(sign, MflSignature) != 0) {
-            LOGGER->warn("Not a PSB/MDF/MFL file: {}",
-                         sourceName.AsStdString());
-            return false;
+#if defined(AETHERKIRI_INTERNAL_PSBFILE)
+        AetherInternalRegisterPSBFileRuntime();
+#endif
+        std::vector<std::uint8_t> extensionData;
+        const auto *extension = psbFileExtension();
+        if(extension != nullptr &&
+           extension->isCompressedFrame != nullptr &&
+           extension->decompressFrame != nullptr &&
+           extension->isCompressedFrame(fileData, readSize)) {
+            std::string error;
+            if(!extension->decompressFrame(
+                   fileData, readSize, extensionData, error)) {
+                LOGGER->warn("PSB extension decompression failed: {} ({})",
+                             error,
+                             sourceName.AsStdString());
+                return false;
+            }
+            LOGGER->debug("PSB extension decompressed: {} -> {} bytes ({})",
+                          readSize, extensionData.size(),
+                          sourceName.AsStdString());
+            fileData = extensionData.data();
+            readSize = extensionData.size();
+            if(readSize < 9) {
+                LOGGER->warn(
+                    "PSB extension decompressed to invalid size: {} ({})",
+                    readSize, sourceName.AsStdString());
+                return false;
+            }
         }
+
+        char outerSign[4];
+        memcpy(outerSign, fileData, 4);
+
+        const bool isMdf = ((outerSign[0] & ~0x20) == 'M') &&
+                           ((outerSign[1] & ~0x20) == 'D') &&
+                           ((outerSign[2] & ~0x20) == 'F') &&
+                           outerSign[3] == '\0';
 
         size_t psbSize;
         if(isMdf) {
@@ -425,6 +454,11 @@ namespace PSB {
             psbSize = readSize;
         }
 
+        if(psbSize > std::numeric_limits<tjs_uint>::max()) {
+            LOGGER->warn("PSB stream is too large: {} bytes ({})", psbSize,
+                         sourceName.AsStdString());
+            return false;
+        }
         tTVPMemoryStream stream{ nullptr, static_cast<tjs_uint>(psbSize) };
 
         if(isMdf) {
@@ -442,6 +476,29 @@ namespace PSB {
                           readSize, destLen, sourceName.AsStdString());
         } else {
             memcpy(stream.GetInternalBuffer(), fileData, readSize);
+        }
+
+        if(_preParseCallback &&
+           !_preParseCallback(
+               static_cast<std::uint8_t *>(stream.GetInternalBuffer()),
+               psbSize)) {
+            LOGGER->warn("PSB pre-parse callback failed: {}",
+                         sourceName.AsStdString());
+            return false;
+        }
+
+        // Some E-mote titles encrypt the PSB signature along with the rest of
+        // the payload.  The title-provided pre-parse callback must therefore
+        // run before validating the inner PSB/MFL header.  MDF is still
+        // identified from its unencrypted outer wrapper and decompressed
+        // before the callback, matching the buffer the PSB parser consumes.
+        char sign[4];
+        memcpy(sign, stream.GetInternalBuffer(), 4);
+        if(std::memcmp(sign, PsbSignature, sizeof(sign)) != 0 &&
+           std::memcmp(sign, MflSignature, sizeof(sign)) != 0) {
+            LOGGER->warn("Not a PSB/MDF/MFL file: {}",
+                         sourceName.AsStdString());
+            return false;
         }
 
         stream.SetPosition(0);

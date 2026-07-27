@@ -7,6 +7,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     main.cpp
     PSBValue.cpp
     PSBFile.cpp
+    PSBFileExtension.cpp
     PSBMedia.cpp
     PSBMediaRegistry.cpp
     types/PimgType.cpp
@@ -21,4 +22,13 @@ target_sources(${PROJECT_NAME} PRIVATE
 )
 
 find_package(ZLIB REQUIRED)
-target_link_libraries(${PROJECT_NAME} PRIVATE krkr2plugin ZLIB::ZLIB)
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    krkr2plugin
+    ZLIB::ZLIB
+)
+
+if(AETHERKIRI_INTERNAL_ENABLED)
+    aetherinternal_extend_psbfile(
+        ${PROJECT_NAME}
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+endif()

@@ -73,6 +73,12 @@ namespace motion::detail {
         // separate mask-item chain; it is not the same thing as the group's
         // ordinary colour children.
         std::vector<int> stencilCompositeMaskNodeIndices;
+        bool implicitVisibleStencilGroup = false;
+        bool implicitVisibleStencilBase = false;
+        // Owning type-12 node for an implicit visible stencil base. A plain
+        // boolean is ambiguous once nested motion children are flattened:
+        // an outer group must not borrow an inner group's base as its mask.
+        int implicitVisibleStencilGroupNodeIndex = -1;
         bool meshCombineEnabled = false; // node+1963: mesh combines with children
         // libgame.so sub_6B1058 seeds node+52 from the PSB "stencilType".
         // Render-item construction at 0x6C09F4 copies that value verbatim to
@@ -132,6 +138,7 @@ namespace motion::detail {
 
             // Source (slot+36)
             std::string src;
+            std::string motionIcon;
             std::vector<std::string> srcList;
 
             // Position (slot+96..112)

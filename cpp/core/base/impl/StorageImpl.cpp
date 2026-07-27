@@ -619,7 +619,14 @@ bool TVPRemoveFolder(const ttstr &name) {
 // TVPGetAppPath
 //---------------------------------------------------------------------------
 ttstr TVPGetAppPath() {
-    return TVPExtractStoragePath(TVPProjectDir);
+    ttstr project = TVPProjectDir;
+    const tjs_char *archiveDelimiter =
+        TJS_strchr(project.c_str(), TVPArchiveDelimiter);
+    if(archiveDelimiter) {
+        project = project.SubString(
+            0, static_cast<tjs_int>(archiveDelimiter - project.c_str()));
+    }
+    return TVPExtractStoragePath(project);
 }
 //---------------------------------------------------------------------------
 
@@ -1577,27 +1584,95 @@ static bool TVPIsPatchArchiveName(const std::string &name,
     return true;
 }
 
+static bool TVPMountArchiveAutoPaths(const ttstr &archivePath,
+                                     bool priorityArchive,
+                                     const ttstr &description) {
+    tTVPArchive *arc = nullptr;
+    try {
+        arc = TVPOpenArchive(archivePath, true);
+    } catch(...) {
+        TVPAddImportantLog(
+            ttstr(TJS_W("(warn) Failed to open ")) + description +
+            ttstr(TJS_W(" archive: ")) + archivePath);
+        return false;
+    }
+    if(!arc)
+        return false;
+
+    std::set<std::u16string> dirPaths;
+    dirPaths.insert(std::u16string());
+
+    const tjs_uint fileCount = arc->GetCount();
+    for(tjs_uint i = 0; i < fileCount; i++) {
+        ttstr fname = arc->GetName(i);
+        const tjs_char *s = fname.c_str();
+        const tjs_int len = fname.GetLen();
+        for(tjs_int j = 0; j < len; j++) {
+            if(s[j] == TJS_W('/')) {
+                std::u16string d(
+                    reinterpret_cast<const char16_t *>(s),
+                    static_cast<size_t>(j + 1));
+                dirPaths.insert(d);
+            }
+        }
+    }
+    arc->Release();
+
+    tjs_char delimStr[2] = { TVPArchiveDelimiter, 0 };
+    const ttstr archiveBase = archivePath + ttstr(delimStr);
+    for(const auto &d : dirPaths) {
+        const ttstr dirStr(
+            reinterpret_cast<const tjs_char *>(d.c_str()),
+            static_cast<tjs_int>(d.size()));
+        const ttstr autoPath = archiveBase + dirStr;
+        try {
+            TVPAddAutoPath(autoPath);
+            if(priorityArchive)
+                TVPAutoMountedPaths.push_back(
+                    TVPNormalizeStorageName(autoPath));
+        } catch(...) {}
+    }
+
+    TVPAddImportantLog(
+        ttstr(TJS_W("(info) Auto-mounted ")) + description +
+        ttstr(TJS_W(" archive: ")) + archivePath + ttstr(TJS_W(" (")) +
+        ttstr(static_cast<tjs_int>(dirPaths.size())) +
+        ttstr(TJS_W(" dirs, ")) + ttstr(static_cast<tjs_int>(fileCount)) +
+        ttstr(TJS_W(" files)")));
+    return true;
+}
+
 void TVPAutoMountSiblingXP3Archives() {
     // A process may launch more than one title over its lifetime. Never let a
     // package-selected decoder leak into the next project.
     TVPResetBuiltinXP3CxDecoder();
+    TVPAutoMountedPaths.clear();
 
-    if(TVPProjectDir.GetLastChar() != TJS_W('/'))
+    const bool directoryProject =
+        TVPProjectDir.GetLastChar() == TJS_W('/');
+    const bool archiveProject =
+        TVPProjectDir.GetLastChar() == TVPArchiveDelimiter;
+    if(!directoryProject && !archiveProject)
         return;
 
-    // In modern Kirikiri2-Next architecture (e.g., Godot frontend), games are often launched 
-    // by pointing directly to a directory. When TVPProjectDir ends with '/', it means we are 
-    // looking inside the project folder itself, so we should search for sibling XP3 archives 
-    // *inside* this directory, not its parent.
-    ttstr parentStoragePath = TVPProjectDir;
+    // Directory launches scan inside that directory. Archive launches
+    // (including XP3-bound EXEs) scan beside the selected archive so the
+    // embedded launcher can overlay the original game's data archives.
+    ttstr parentStoragePath =
+        directoryProject ? TVPProjectDir : TVPGetAppPath();
     if(parentStoragePath.IsEmpty())
         return;
 
     // For log identification purposes
-    tjs_int len = TVPProjectDir.GetLen();
-    while(len > 0 && TVPProjectDir[len - 1] == TJS_W('/'))
-        len--;
-    ttstr projDir = TVPProjectDir.SubString(0, len);
+    ttstr projDir;
+    if(directoryProject) {
+        tjs_int len = TVPProjectDir.GetLen();
+        while(len > 0 && TVPProjectDir[len - 1] == TJS_W('/'))
+            len--;
+        projDir = TVPProjectDir.SubString(0, len);
+    } else {
+        projDir = TVPProjectDir.SubString(0, TVPProjectDir.GetLen() - 1);
+    }
     ttstr projBaseName = TVPExtractStorageName(projDir);
 
     spdlog::info("AutoMountXP3: TVPProjectDir={}", TVPProjectDir.AsStdString());
@@ -1655,65 +1730,29 @@ void TVPAutoMountSiblingXP3Archives() {
 
     if(xp3Names.empty()) {
         TVPAddImportantLog(TJS_W("(info) No sibling XP3 archives found"));
-        return;
     }
 
     for(const auto &xp3Name : xp3Names) {
+        if(archiveProject &&
+           TVPLowerASCII(xp3Name) ==
+               TVPLowerASCII(projBaseName.AsStdString())) {
+            continue;
+        }
         const bool priorityArchive = TVPIsPatchArchiveName(xp3Name);
         ttstr archivePath = parentStoragePath + ttstr(xp3Name.c_str());
         archivePath = TVPNormalizeStorageName(archivePath);
+        TVPMountArchiveAutoPaths(
+            archivePath, priorityArchive, TJS_W("sibling"));
+    }
 
-        tTVPArchive *arc = nullptr;
-        try {
-            arc = TVPOpenArchive(archivePath, true);
-        } catch(...) {
-            TVPAddImportantLog(
-                ttstr(TJS_W("(warn) Failed to open sibling archive: ")) +
-                archivePath);
-            continue;
-        }
-        if(!arc) continue;
-
-        std::set<std::u16string> dirPaths;
-        dirPaths.insert(std::u16string());
-
-        tjs_uint fileCount = arc->GetCount();
-        for(tjs_uint i = 0; i < fileCount; i++) {
-            ttstr fname = arc->GetName(i);
-            const tjs_char *s = fname.c_str();
-            tjs_int len = fname.GetLen();
-            for(tjs_int j = 0; j < len; j++) {
-                if(s[j] == TJS_W('/')) {
-                    std::u16string d(
-                        reinterpret_cast<const char16_t *>(s),
-                        static_cast<size_t>(j + 1));
-                    dirPaths.insert(d);
-                }
-            }
-        }
-
-        arc->Release();
-
-        tjs_char delimStr[2] = { TVPArchiveDelimiter, 0 };
-        ttstr archiveBase = archivePath + ttstr(delimStr);
-
-        for(const auto &d : dirPaths) {
-            ttstr dirStr(reinterpret_cast<const tjs_char *>(d.c_str()),
-                         static_cast<tjs_int>(d.size()));
-            ttstr autoPath = archiveBase + dirStr;
-            try {
-                TVPAddAutoPath(autoPath);
-                if(priorityArchive)
-                    TVPAutoMountedPaths.push_back(
-                        TVPNormalizeStorageName(autoPath));
-            } catch(...) {}
-        }
-
-        TVPAddImportantLog(
-            ttstr(TJS_W("(info) Auto-mounted sibling archive: ")) +
-            archivePath + ttstr(TJS_W(" (")) +
-            ttstr((tjs_int)dirPaths.size()) + ttstr(TJS_W(" dirs, ")) +
-            ttstr((tjs_int)fileCount) + ttstr(TJS_W(" files)")));
+    if(archiveProject) {
+        // The explicitly selected archive is the executable's resource
+        // overlay. Mount every directory after its siblings so bare-name
+        // lookups (for example scenedata.sdb) resolve to the selected EXE/XP3,
+        // not to an older external patch archive.
+        TVPMountArchiveAutoPaths(
+            TVPNormalizeStorageName(projDir), true,
+            TJS_W("selected project"));
     }
 }
 

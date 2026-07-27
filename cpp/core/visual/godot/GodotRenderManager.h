@@ -179,6 +179,14 @@ std::string TVPGetGodotRenderManagerFallbackStats();
 
 class iTVPBaseBitmap;
 
+// Motion scratch layers are completely repainted before their next use. They
+// can temporarily share a GPU texture with an assignImages destination, where
+// the generic bitmap path would otherwise copy the old texture just to clear
+// it. Detach a shared scratch texture without copying its old pixels, then
+// clear the private texture on the ordered GPU queue.
+bool TVPGodotClearMotionScratchInPlace(
+    iTVPBaseBitmap *bitmap, const tTVPRect &rect, uint32_t argb);
+
 // Compose a source bitmap through the alpha union of one or more mask
 // bitmaps without synchronously reading Metal textures back to the CPU.
 // Destination rectangles are local to mask_scratch/dst; source rectangles
@@ -190,4 +198,34 @@ bool TVPGodotCompositeAlphaUnionMask(
     const tTVPRect *mask_dst_rects,
     const tTVPRect *mask_src_rects,
     size_t mask_count,
-    bool use_mask_alpha);
+    bool use_mask_alpha,
+    int width = -1,
+    int height = -1);
+
+// Build the alpha union of one or more mask bitmaps on the GPU, then apply it
+// to an existing destination while preserving destination RGB.
+bool TVPGodotApplyAlphaUnionMask(
+    iTVPBaseBitmap *dst, iTVPBaseBitmap *mask_scratch,
+    iTVPBaseBitmap *const *masks,
+    const tTVPRect *mask_dst_rects,
+    const tTVPRect *mask_src_rects,
+    size_t mask_count,
+    bool threshold_mask_mode,
+    int item_flags,
+    int width = -1,
+    int height = -1);
+
+// Preserve destination RGB and combine only its alpha with source alpha.
+// This is the GPU equivalent of E-mote's sub_6AC4E4 mask loop.
+bool TVPGodotApplyAlphaMask(
+    iTVPBaseBitmap *dst, iTVPBaseBitmap *src,
+    const tTVPRect &dst_rect, const tTVPRect &src_rect,
+    int threshold, bool threshold_mask_mode, int item_flags);
+
+// Fuse E-mote's positive-alpha stencil and the immediately following
+// AlphaBlend_d composition. This preserves the exact integer alpha formula
+// while avoiding a temporary texture write and a second compute dispatch.
+bool TVPGodotBlendAlphaDWithMask(
+    iTVPBaseBitmap *dst, iTVPBaseBitmap *src, iTVPBaseBitmap *mask,
+    const tTVPRect &dst_rect, const tTVPRect &src_rect,
+    const tTVPRect &mask_rect, int opacity, bool threshold_mask_mode);

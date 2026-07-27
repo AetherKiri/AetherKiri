@@ -4,6 +4,7 @@
 #include "PlayerInternal.h"
 #include "HitTestInternal.h"
 #include "SourceCache.h"
+#include "godot/GodotRenderManager.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -1827,14 +1828,39 @@ namespace motion {
         if(!bitmap || bitmap->GetWidth() <= 0 || bitmap->GetHeight() <= 0) {
             return TJS_S_OK;
         }
+        const auto &cachedEmoteMotion =
+            self->_runtime->emoteRenderFrameCache.motion;
+        // The dx_*_timeline players use one invisible full-window work layer:
+        // clear(), draw(), then assignImages() the result to the character
+        // layer. Once draw() has a GPU-resident frame cache, the intermediate
+        // clear forces a copy-on-write texture change; assigning the same
+        // cached frame back then dirties and recomposes the entire scene.
+        // Cached draw() will either alias the frame unchanged or perform its
+        // own prepareLayerForRender() clear before a real refresh, so this
+        // paired clear is redundant. Restrict the shortcut to in-game dynamic
+        // timelines: title/load-menu E-mote layers rely on standalone clear()
+        // notifications for their state transitions.
+        const bool skipCachedDynamicEmoteWorkLayerClear =
+            self->_runtime->isEmoteMode &&
+            self->_runtime->emoteRenderFrameCache.bitmap &&
+            (cachedEmoteMotion.find("タイムライン.psb") !=
+                 std::string::npos ||
+             cachedEmoteMotion.find("_timeline.psb") !=
+                 std::string::npos);
+        if(skipCachedDynamicEmoteWorkLayerClear) {
+            return TJS_S_OK;
+        }
         const tjs_uint32 color =
             numparams >= 2 && param[1]
                 ? static_cast<tjs_uint32>(param[1]->AsInteger())
                 : 0;
-        bitmap->Fill(
-            tTVPRect(0, 0, static_cast<tjs_int>(bitmap->GetWidth()),
-                     static_cast<tjs_int>(bitmap->GetHeight())),
-            color);
+        const tTVPRect clearRect(
+            0, 0, static_cast<tjs_int>(bitmap->GetWidth()),
+            static_cast<tjs_int>(bitmap->GetHeight()));
+        if(!TVPGodotClearMotionScratchInPlace(
+               bitmap, clearRect, color)) {
+            bitmap->Fill(clearRect, color);
+        }
         layer->Update(false);
         self->_runtime->clearPresentationRenderReuse();
         return TJS_S_OK;

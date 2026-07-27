@@ -112,6 +112,10 @@ if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_live2d)
 else()
     target_sources(${PROJECT_NAME} PRIVATE krkrlive2d_stub.cpp)
 endif()
+if(AETHERKIRI_INTERNAL_ENABLED AND
+   COMMAND aetherinternal_extend_legacy_plugins)
+    aetherinternal_extend_legacy_plugins(${PROJECT_NAME})
+endif()
 
 if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_krkr2plugin)
     aetherinternal_extend_krkr2plugin(${PROJECT_NAME})
