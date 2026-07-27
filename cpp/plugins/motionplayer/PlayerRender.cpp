@@ -659,11 +659,11 @@ namespace {
         return value;
     }
 
-    constexpr const char *kYuzuStartupLogoMotion = "yuzulogo.mtn";
     constexpr const char *kM2StartupLogoMotion = "m2logo.mtn";
 
     bool loweredPathContainsYuzuStartupLogo(const std::string &loweredPath) {
-        return loweredPath.find(kYuzuStartupLogoMotion) != std::string::npos;
+        return motion::internal::startupLogoMotionUsesCenteredOrigin(
+            loweredPath);
     }
 
     bool loweredPathContainsM2StartupLogo(const std::string &loweredPath) {
@@ -731,8 +731,8 @@ namespace {
     }
 
     bool isYuzuStartupLogoMotion(const std::string &motionPath) {
-        const auto motion = renderDebugLowercase(motionPath);
-        return loweredPathContainsYuzuStartupLogo(motion);
+        return motion::internal::startupLogoMotionUsesCenteredOrigin(
+            motionPath);
     }
 
     bool isM2StartupLogoMotion(const std::string &motionPath) {
@@ -741,8 +741,8 @@ namespace {
     }
 
     bool isYuzuLogoPresentationMotion(const std::string &motionPath) {
-        return isM2StartupLogoMotion(motionPath) ||
-            isYuzuStartupLogoMotion(motionPath);
+        return motion::internal::startupLogoMotionScalesAroundCanvasCenter(
+            motionPath);
     }
 
     std::array<int, 4> neutralStartupLogoTint(
@@ -1163,11 +1163,18 @@ namespace {
         bool hasOpaqueBackground = false;
         bool hasOpaqueNumberedComposite = false;
         bool hasOpaqueMainOrLogo = false;
+        bool hasActiveTransientLogo = false;
         for(const auto &entry : runtime.preparedRenderItems) {
             if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
-               entry.opacity < 240 ||
                isYuzuTitleWhiteUtilityLayer("title_bg", entry.nodeLabel,
                                             entry.sourceKey)) {
+                continue;
+            }
+            if(isYuzuTitleLogoLayer(entry.nodeLabel, entry.sourceKey) &&
+               entry.opacity > 0 && (entry.blendMode & 0x0f) != 0) {
+                hasActiveTransientLogo = true;
+            }
+            if(entry.opacity < 240) {
                 continue;
             }
             if(isYuzuTitleBackgroundLayer(entry.nodeLabel, entry.sourceKey)) {
@@ -1189,8 +1196,9 @@ namespace {
                 ++opaqueNormalPresentationItems;
             }
         }
-        return (hasOpaqueBackground && opaqueTitleCharacters >= 3 &&
-                hasOpaqueMainOrLogo) ||
+        const bool hasStableComposition =
+            (hasOpaqueBackground && opaqueTitleCharacters >= 3 &&
+             hasOpaqueMainOrLogo) ||
             // A normal title card commonly starts with its opaque background
             // and character while a white transition is still fading out.
             // That is a useful delta-composition base, but not the terminal
@@ -1198,6 +1206,8 @@ namespace {
             // signal that the card is ready to retain after the motion ends.
             (opaqueNormalPresentationItems >= 2 && hasOpaqueMainOrLogo) ||
             (hasOpaqueNumberedComposite && hasOpaqueMainOrLogo);
+        return motion::internal::yuzuTitlePresentationFrameIsStable(
+            hasStableComposition, hasActiveTransientLogo);
     }
 
     void logYuzuTitlePreparedSummary(
@@ -1740,6 +1750,11 @@ namespace {
         }
         const bool isTitleMotion = isYuzuTitlePresentationMotion(motionPath);
         const bool isLogoMotion = isYuzuLogoPresentationMotion(motionPath);
+        // Yuzu authors its startup motion around (0, 0), while M2 is already
+        // mapped into canvas space. M2 also contains centered helper geometry,
+        // so geometry alone cannot determine the motion-level convention.
+        const bool logoUsesCenteredOrigin =
+            isYuzuStartupLogoMotion(motionPath);
 
         if(isTitleMotion) {
             const bool hasSyntheticIntroLayer = std::any_of(
@@ -1855,12 +1870,13 @@ namespace {
             }
         }
 
-        // Startup logos may arrive either in their legacy centered coordinate
-        // system or already transformed into canvas coordinates. Infer the
-        // convention from prepared geometry instead of always adding half a
-        // canvas, which moves canvas-space logos off the bottom-right edge.
+        // Confirm that Yuzu still has centered authored geometry before
+        // translating it. Never promote M2's centered helper geometry to a
+        // motion-level decision: its full-canvas backdrop is already mapped
+        // to canvas space and another half-canvas translation clips the logo.
         bool usesCenteredPresentationOrigin =
-            isLogoMotion && runtime.yuzuPresentationCenteredOriginConfirmed;
+            logoUsesCenteredOrigin &&
+            runtime.yuzuPresentationCenteredOriginConfirmed;
         float centeredPresentationTranslateX =
             static_cast<float>(canvasWidth) * 0.5f;
         float centeredPresentationTranslateY =
@@ -1995,8 +2011,11 @@ namespace {
                     return;
                 }
                 if(isLogoMotion) {
-                    if(motion::internal::startupLogoUsesCenteredOrigin(
-                           referenceBox, canvasWidth, canvasHeight)) {
+                    const bool needsCanvasCenterTranslation =
+                        logoUsesCenteredOrigin &&
+                        motion::internal::startupLogoUsesCenteredOrigin(
+                            referenceBox, canvasWidth, canvasHeight);
+                    if(needsCanvasCenterTranslation) {
                         usesCenteredPresentationOrigin = true;
                         centeredOriginFromReference = true;
                         runtime.yuzuPresentationCenteredOriginConfirmed = true;
@@ -2288,8 +2307,13 @@ namespace {
             return;
         }
 
+        // Both startup logo motions are positioned around the canvas center
+        // before presentation scaling. Yuzu may additionally need its
+        // centered authored origin translated first; M2 must not be
+        // translated, but still needs to scale around the canvas center.
         const bool scaleAroundCanvasCenter =
-            isLogoMotion && usesCenteredPresentationOrigin;
+            motion::internal::startupLogoMotionScalesAroundCanvasCenter(
+                motionPath);
         const float scaleOriginX =
             scaleAroundCanvasCenter ? static_cast<float>(canvasWidth) * 0.5f
                                     : 0.0f;
@@ -11918,11 +11942,13 @@ namespace motion {
                 findYuzuTitlePresentationHoldFrame(
                     finalNativeLayer, motionPath) != nullptr;
             const bool shouldCaptureTitleFrame =
-                (!hadHeldFrame &&
-                 (yuzuTitleHasOpaqueCanvasBaseFrame ||
-                  yuzuTitleHasStableFrame)) ||
-                (hadHeldFrame && !_runtime->yuzuTitleFinalFrameRendered &&
-                 yuzuTitleHasOpaqueFinalOverlayFrame);
+                motion::internal::
+                    shouldCaptureYuzuTitlePresentationHoldFrame(
+                        hadHeldFrame,
+                        _runtime->yuzuTitleFinalFrameRendered,
+                        yuzuTitleHasOpaqueCanvasBaseFrame,
+                        yuzuTitleHasStableFrame,
+                        yuzuTitleHasOpaqueFinalOverlayFrame);
             if(shouldCaptureTitleFrame) {
                 capturedYuzuTitleFrame =
                     captureYuzuTitlePresentationHoldFrame(
@@ -11932,7 +11958,7 @@ namespace motion {
             }
             if(capturedYuzuTitleFrame &&
                (yuzuTitleHasStableFrame ||
-                (hadHeldFrame && yuzuTitleHasOpaqueFinalOverlayFrame))) {
+                yuzuTitleHasOpaqueFinalOverlayFrame)) {
                 _runtime->yuzuTitleFinalFrameRendered = true;
             }
         }

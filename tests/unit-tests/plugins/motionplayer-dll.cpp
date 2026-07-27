@@ -170,6 +170,8 @@ TEST_CASE("motion presentation excludes structural binder layers") {
 }
 
 TEST_CASE("startup logo presentation preserves its authored origin") {
+    using motion::internal::startupLogoMotionScalesAroundCanvasCenter;
+    using motion::internal::startupLogoMotionUsesCenteredOrigin;
     using motion::internal::startupLogoUsesCenteredOrigin;
 
     constexpr int canvasWidth = 1920;
@@ -192,6 +194,53 @@ TEST_CASE("startup logo presentation preserves its authored origin") {
         { -1.0f, -1.0f, 3.0f, 3.0f }, canvasWidth, canvasHeight));
     CHECK_FALSE(startupLogoUsesCenteredOrigin({ 0.0f, 0.0f, 960.0f, 540.0f },
                                               canvasWidth, canvasHeight));
+
+    const std::array<float, 4> centeredLogoBounds{
+        -960.0f, -540.0f, 960.0f, 540.0f
+    };
+    CHECK(startupLogoMotionUsesCenteredOrigin("motion/yuzulogo.mtn"));
+    CHECK(startupLogoMotionUsesCenteredOrigin("MOTION/YUZULOGO.MTN"));
+    CHECK_FALSE(startupLogoMotionUsesCenteredOrigin("motion/m2logo.mtn"));
+    CHECK(startupLogoMotionScalesAroundCanvasCenter(
+        "motion/yuzulogo.mtn"));
+    CHECK(startupLogoMotionScalesAroundCanvasCenter(
+        "MOTION/M2LOGO.MTN"));
+    CHECK_FALSE(startupLogoMotionScalesAroundCanvasCenter(
+        "motion/title_bg.mtn"));
+    CHECK((startupLogoMotionUsesCenteredOrigin("motion/yuzulogo.mtn") &&
+           startupLogoUsesCenteredOrigin(
+               centeredLogoBounds, canvasWidth, canvasHeight)));
+    CHECK_FALSE((startupLogoMotionUsesCenteredOrigin("motion/m2logo.mtn") &&
+                 startupLogoUsesCenteredOrigin(
+                     centeredLogoBounds, canvasWidth, canvasHeight)));
+    CHECK_FALSE(startupLogoUsesCenteredOrigin(
+        { 0.0f, -8.0f, 1920.0f, 1072.0f },
+        canvasWidth, canvasHeight));
+}
+
+TEST_CASE("title presentation holds its settled overlay") {
+    using motion::internal::shouldCaptureYuzuTitlePresentationHoldFrame;
+    using motion::internal::yuzuTitlePresentationFrameIsStable;
+
+    CHECK(shouldCaptureYuzuTitlePresentationHoldFrame(
+        false, false, true, false, false));
+    CHECK(shouldCaptureYuzuTitlePresentationHoldFrame(
+        false, false, false, true, false));
+    CHECK(shouldCaptureYuzuTitlePresentationHoldFrame(
+        false, false, false, false, true));
+    CHECK_FALSE(shouldCaptureYuzuTitlePresentationHoldFrame(
+        false, false, false, false, false));
+
+    CHECK(shouldCaptureYuzuTitlePresentationHoldFrame(
+        true, false, false, false, true));
+    CHECK_FALSE(shouldCaptureYuzuTitlePresentationHoldFrame(
+        true, true, false, false, true));
+    CHECK_FALSE(shouldCaptureYuzuTitlePresentationHoldFrame(
+        true, false, true, true, false));
+
+    CHECK(yuzuTitlePresentationFrameIsStable(true, false));
+    CHECK_FALSE(yuzuTitlePresentationFrameIsStable(true, true));
+    CHECK_FALSE(yuzuTitlePresentationFrameIsStable(false, false));
 }
 
 TEST_CASE("motionplayer identifies full-canvas split composition planes") {

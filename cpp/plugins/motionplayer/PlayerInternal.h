@@ -145,6 +145,46 @@ namespace internal {
                 std::fabs(centerY) <= centeredToleranceY;
         }
 
+        inline bool startupLogoMotionUsesCenteredOrigin(
+            std::string motionPath) {
+            std::transform(motionPath.begin(), motionPath.end(),
+                           motionPath.begin(),
+                           [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            return motionPath.find("yuzulogo.mtn") != std::string::npos;
+        }
+
+        inline bool startupLogoMotionScalesAroundCanvasCenter(
+            std::string motionPath) {
+            std::transform(motionPath.begin(), motionPath.end(),
+                           motionPath.begin(),
+                           [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            return motionPath.find("yuzulogo.mtn") != std::string::npos ||
+                motionPath.find("m2logo.mtn") != std::string::npos;
+        }
+
+        inline bool shouldCaptureYuzuTitlePresentationHoldFrame(
+            bool hadHeldFrame,
+            bool finalFrameRendered,
+            bool hasOpaqueCanvasBaseFrame,
+            bool hasStableFrame,
+            bool hasOpaqueFinalOverlayFrame) {
+            if(!hadHeldFrame) {
+                return hasOpaqueCanvasBaseFrame || hasStableFrame ||
+                    hasOpaqueFinalOverlayFrame;
+            }
+            return !finalFrameRendered && hasOpaqueFinalOverlayFrame;
+        }
+
+        inline bool yuzuTitlePresentationFrameIsStable(
+            bool hasStableComposition,
+            bool hasActiveTransientLogo) {
+            return hasStableComposition && !hasActiveTransientLogo;
+        }
+
         inline bool isFullCanvasCompositeRenderRoot(
             bool groupOnly,
             bool hasRenderParent,
