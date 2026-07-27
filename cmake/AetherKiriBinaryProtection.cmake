@@ -5,7 +5,7 @@ set(AETHERKIRI_OBFUSCATION_POLICY
 
 function(aetherkiri_link_kagura_runtime target_name)
     if(NOT EXISTS "${AETHERKIRI_KAGURA_SOURCE_DIR}/runtime/CMakeLists.txt" OR
-       NOT EXISTS "${AETHERKIRI_KAGURA_SOURCE_DIR}/include/kagura/runtime.h")
+       NOT EXISTS "${AETHERKIRI_KAGURA_SOURCE_DIR}/runtime/ios/jailbreak_detection.c")
         message(FATAL_ERROR
             "Kagura runtime sources are missing: "
             "${AETHERKIRI_KAGURA_SOURCE_DIR}")
