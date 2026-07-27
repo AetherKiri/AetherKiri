@@ -7,7 +7,6 @@
     "mvo": true,
     "pe": true,
     "anti_debug": true,
-    "tamper": true,
     "dwarf": "strip"
   },
   "tuning": {

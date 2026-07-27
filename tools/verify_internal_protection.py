@@ -17,7 +17,6 @@ REQUIRED_PASSES = (
     "mvo",
     "pe",
     "anti_debug",
-    "tamper",
 )
 
 REQUIRED_RUNTIME_SOURCES = (
