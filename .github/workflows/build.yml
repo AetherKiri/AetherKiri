@@ -230,6 +230,13 @@ jobs:
           export NDK_CCACHE=ccache
           ./build.sh android release --jobs=4
 
+      - name: Verify Android Internal runtime protection
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          python3 tools/verify_internal_protection.py --runtime-only \
+            out/android/arm64-v8a/release/compile_commands.json
+
       - name: Build Android Debug
         run: |
           set -euo pipefail
