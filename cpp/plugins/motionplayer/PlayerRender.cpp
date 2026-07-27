@@ -1855,7 +1855,12 @@ namespace {
             }
         }
 
-        bool usesCenteredPresentationOrigin = isLogoMotion;
+        // Startup logos may arrive either in their legacy centered coordinate
+        // system or already transformed into canvas coordinates. Infer the
+        // convention from prepared geometry instead of always adding half a
+        // canvas, which moves canvas-space logos off the bottom-right edge.
+        bool usesCenteredPresentationOrigin =
+            isLogoMotion && runtime.yuzuPresentationCenteredOriginConfirmed;
         float centeredPresentationTranslateX =
             static_cast<float>(canvasWidth) * 0.5f;
         float centeredPresentationTranslateY =
@@ -1927,7 +1932,11 @@ namespace {
         auto considerCenteredOrigin =
             [&](const motion::detail::PlayerRuntime::PreparedRenderItem &entry,
                 int referenceKind) {
-                if(!entry.drawFlag || entry.opacity <= 0 ||
+                // Logo origin is a motion-level convention. Inspect prepared
+                // stage geometry even before it fades in, then keep a positive
+                // centered-origin decision stable for later animated frames.
+                if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+                   (!isLogoMotion && entry.opacity <= 0) ||
                    isYuzuTitleWhiteUtilityLayer(motionPath, entry.nodeLabel,
                                                 entry.sourceKey)) {
                     return;
@@ -1983,6 +1992,19 @@ namespace {
                     referenceBox = entry.paintBox;
                 }
                 if(!validRenderPaintBox(referenceBox)) {
+                    return;
+                }
+                if(isLogoMotion) {
+                    if(motion::internal::startupLogoUsesCenteredOrigin(
+                           referenceBox, canvasWidth, canvasHeight)) {
+                        usesCenteredPresentationOrigin = true;
+                        centeredOriginFromReference = true;
+                        runtime.yuzuPresentationCenteredOriginConfirmed = true;
+                        runtime.yuzuPresentationTranslateX =
+                            centeredPresentationTranslateX;
+                        runtime.yuzuPresentationTranslateY =
+                            centeredPresentationTranslateY;
+                    }
                     return;
                 }
                 const float width = referenceBox[2] - referenceBox[0];

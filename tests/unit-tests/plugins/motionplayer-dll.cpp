@@ -169,6 +169,31 @@ TEST_CASE("motion presentation excludes structural binder layers") {
         motion::internal::presentationLayerTypeCanReceivePixels(ltAlpha));
 }
 
+TEST_CASE("startup logo presentation preserves its authored origin") {
+    using motion::internal::startupLogoUsesCenteredOrigin;
+
+    constexpr int canvasWidth = 1920;
+    constexpr int canvasHeight = 1080;
+
+    CHECK(startupLogoUsesCenteredOrigin({ -960.0f, -540.0f, 960.0f, 540.0f },
+                                        canvasWidth, canvasHeight));
+    CHECK(startupLogoUsesCenteredOrigin({ -300.0f, -120.0f, 300.0f, 120.0f },
+                                        canvasWidth, canvasHeight));
+    CHECK(startupLogoUsesCenteredOrigin({ -768.0f, -432.0f, 768.0f, 432.0f },
+                                        canvasWidth, canvasHeight));
+
+    CHECK_FALSE(startupLogoUsesCenteredOrigin({ 0.0f, 0.0f, 1920.0f, 1080.0f },
+                                              canvasWidth, canvasHeight));
+    CHECK_FALSE(startupLogoUsesCenteredOrigin(
+        { -1.0f, -1.0f, 1919.0f, 1079.0f }, canvasWidth, canvasHeight));
+    CHECK_FALSE(startupLogoUsesCenteredOrigin(
+        { -8.0f, -4.0f, 192.0f, 96.0f }, canvasWidth, canvasHeight));
+    CHECK_FALSE(startupLogoUsesCenteredOrigin(
+        { -1.0f, -1.0f, 3.0f, 3.0f }, canvasWidth, canvasHeight));
+    CHECK_FALSE(startupLogoUsesCenteredOrigin({ 0.0f, 0.0f, 960.0f, 540.0f },
+                                              canvasWidth, canvasHeight));
+}
+
 TEST_CASE("motionplayer identifies full-canvas split composition planes") {
     const std::array<int, 4> canvasRect{0, 0, 1280, 720};
     const std::array<int, 4> partialRect{20, 0, 1280, 720};

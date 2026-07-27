@@ -112,6 +112,39 @@ namespace internal {
                 clipRect[3] >= canvasHeight;
         }
 
+        inline bool
+        startupLogoUsesCenteredOrigin(const std::array<float, 4> &bounds,
+                                      int canvasWidth, int canvasHeight) {
+            if(canvasWidth <= 0 || canvasHeight <= 0 ||
+               !std::all_of(bounds.begin(), bounds.end(),
+                            [](float value) { return std::isfinite(value); })) {
+                return false;
+            }
+
+            const float width = bounds[2] - bounds[0];
+            const float height = bounds[3] - bounds[1];
+            if(width <= 0.0f || height <= 0.0f) {
+                return false;
+            }
+
+            const bool crossesOrigin = bounds[0] < 0.0f && bounds[1] < 0.0f &&
+                bounds[2] > 0.0f && bounds[3] > 0.0f;
+            if(!crossesOrigin) {
+                return false;
+            }
+
+            const float canvasWidthF = static_cast<float>(canvasWidth);
+            const float canvasHeightF = static_cast<float>(canvasHeight);
+            const float centerX = (bounds[0] + bounds[2]) * 0.5f;
+            const float centerY = (bounds[1] + bounds[3]) * 0.5f;
+            const float centeredToleranceX =
+                std::min(canvasWidthF * 0.1f, width * 0.2f + 1e-3f);
+            const float centeredToleranceY =
+                std::min(canvasHeightF * 0.1f, height * 0.2f + 1e-3f);
+            return std::fabs(centerX) <= centeredToleranceX &&
+                std::fabs(centerY) <= centeredToleranceY;
+        }
+
         inline bool isFullCanvasCompositeRenderRoot(
             bool groupOnly,
             bool hasRenderParent,
