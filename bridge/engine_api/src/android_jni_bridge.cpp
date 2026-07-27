@@ -14,6 +14,7 @@
 #include <android/native_window_jni.h>
 #include <dlfcn.h>
 #include <mutex>
+#include "engine_api.h"
 #include "environ/android/KrkrJniHelper.h"
 
 #define LOG_TAG "krkr2"
@@ -84,7 +85,7 @@ JavaVM* krkr_GetJavaVM() {
     return vm;
 }
 
-JNIEnv* krkr_GetJNIEnv() {
+ENGINE_API_EXPORT JNIEnv* krkr_GetJNIEnv() {
     JavaVM* vm = krkr_GetJavaVM();
     if (!vm) return nullptr;
 
@@ -118,7 +119,7 @@ static std::mutex g_surface_mutex;
 static jobject g_app_context = nullptr;  // global ref
 static std::mutex g_context_mutex;
 
-jobject krkr_GetApplicationContext() {
+ENGINE_API_EXPORT jobject krkr_GetApplicationContext() {
     std::lock_guard<std::mutex> lock(g_context_mutex);
     return g_app_context;
 }
