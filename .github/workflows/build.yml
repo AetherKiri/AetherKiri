@@ -301,6 +301,16 @@ jobs:
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
 
+      - name: Build free LLVM obfuscator
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          brew install llvm
+          llvm_prefix="$(brew --prefix llvm)"
+          ./.github/scripts/build-free-obfuscator.sh \
+            "$llvm_prefix" "${RUNNER_TEMP}/kagura"
+          echo "AETHERKIRI_OBFUSCATION_BUILD_ID=${GITHUB_SHA}" >> "$GITHUB_ENV"
+
       - name: Install Godot export tools
         run: |
           set -euo pipefail
@@ -373,6 +383,14 @@ jobs:
             echo "Godot iOS release export logged script or GDExtension load errors." >&2
             exit 1
           fi
+
+      - name: Verify iOS Internal protection
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          grep -F "Internal code obfuscation:" "${RUNNER_TEMP}/ios-release-build.log"
+          python3 tools/verify_internal_protection.py \
+            out/ios/release/compile_commands.json
 
       - name: Build iOS Debug
         run: |
@@ -487,6 +505,16 @@ jobs:
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
 
+      - name: Build free LLVM obfuscator
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          brew install llvm
+          llvm_prefix="$(brew --prefix llvm)"
+          ./.github/scripts/build-free-obfuscator.sh \
+            "$llvm_prefix" "${RUNNER_TEMP}/kagura"
+          echo "AETHERKIRI_OBFUSCATION_BUILD_ID=${GITHUB_SHA}" >> "$GITHUB_ENV"
+
       - name: Install Godot export tools
         run: |
           set -euo pipefail
@@ -554,7 +582,15 @@ jobs:
           chmod +x ./build.sh
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          ./build.sh macos release --jobs=4
+          ./build.sh macos release --jobs=4 2>&1 | tee "${RUNNER_TEMP}/macos-release-build.log"
+
+      - name: Verify macOS Internal protection
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          set -euo pipefail
+          grep -F "Internal code obfuscation:" "${RUNNER_TEMP}/macos-release-build.log"
+          python3 tools/verify_internal_protection.py \
+            out/macos/release/compile_commands.json
 
       - name: Build macOS Debug
         run: |
