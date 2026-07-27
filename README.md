@@ -14,10 +14,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/macos.yml"><img alt="macOS Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/macos.yml/badge.svg"></a>
-  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/ios.yml"><img alt="iOS Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/ios.yml/badge.svg"></a>
-  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/android.yml"><img alt="Android Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/android.yml/badge.svg"></a>
-  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/web.yml"><img alt="Web Build" src="https://github.com/AetherKiri/AetherKiri/actions/workflows/web.yml/badge.svg"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/build.yml"><img alt="macOS Build" src="https://img.shields.io/github/actions/workflow/status/AetherKiri/AetherKiri/build.yml?branch=main&amp;job=Build%20macOS%20App&amp;label=macOS%20Build"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/build.yml"><img alt="iOS Build" src="https://img.shields.io/github/actions/workflow/status/AetherKiri/AetherKiri/build.yml?branch=main&amp;job=Build%20iOS%20App&amp;label=iOS%20Build"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/build.yml"><img alt="Android Build" src="https://img.shields.io/github/actions/workflow/status/AetherKiri/AetherKiri/build.yml?branch=main&amp;job=Build%20Android%20App&amp;label=Android%20Build"></a>
+  <a href="https://github.com/AetherKiri/AetherKiri/actions/workflows/build.yml"><img alt="Web Build" src="https://img.shields.io/github/actions/workflow/status/AetherKiri/AetherKiri/build.yml?branch=main&amp;job=Build%20Web%20App&amp;label=Web%20Build"></a>
 </p>
 
 <p align="center">
@@ -119,6 +119,17 @@ The app icon shown above is the same icon configured by the Godot project:
 - Export icon set: `apps/godot_app/assets/icons/`
 iOS and Android export presets reference the generated PNG sizes under
 `apps/godot_app/assets/icons/`, including App Store and launcher sizes.
+
+## Runtime Platform Requirements
+
+| Platform | Minimum version | Notes |
+| --- | --- | --- |
+| macOS | macOS 13.0 (Ventura) | The Godot app export is universal, but the current native build triplet is `arm64`; Intel support needs an `x86_64` native build. |
+| iOS / iPadOS | iOS / iPadOS 17.0 | `arm64` devices; `arm64` and `x86_64` simulator builds are available for development. |
+| Android | Android 7.0 (API 24) | The product export currently packages `arm64-v8a` only. |
+| Web | No OS version floor | Requires a browser with WebAssembly SIMD, WebAssembly threads, and `SharedArrayBuffer`, served with cross-origin isolation (COOP/COEP). |
+| Linux | Build from source | No official prebuilt product package; compile the `x86_64` export locally. |
+| Windows | Build from source | No official prebuilt product package; compile the native targets locally. |
 
 ## Requirements
 
