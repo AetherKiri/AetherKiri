@@ -83,12 +83,19 @@ extern const tjs_char *TVPGetStartupPatchPrerequisitesScript();
 extern const tjs_char *TVPGetPatchWindowPrerequisitesScript();
 extern const tjs_char *TVPGetKagLoadContractGuardScript();
 extern const tjs_char *TVPGetPatchRuntimeRegistryExpression();
+extern const tjs_char *TVPGetPatchRuntimeInstanceRecoveryScript();
 extern bool TVPMergeObjectMembers(iTJSDispatch2 *destination,
                                   iTJSDispatch2 *source);
+extern bool TVPMergeMissingObjectMembers(iTJSDispatch2 *destination,
+                                         iTJSDispatch2 *source);
 
 extern void TVPArmKagNoTransWaitRepair();
 
 extern void TVPRepairKagNoTransWait();
+
+extern void TVPNotifyKagTagForEnvironmentWorldReset(const ttstr &tag_name);
+
+extern void TVPRepairKagEnvironmentWorldReset();
 
 TJS_EXP_FUNC_DEF(void, TVPCreateMessageMapFile, (const ttstr &filename));
 

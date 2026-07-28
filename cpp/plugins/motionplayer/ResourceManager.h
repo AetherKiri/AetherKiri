@@ -2,8 +2,9 @@
 // Created by LiDon on 2025/9/15.
 //
 #pragma once
-#include <memory>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -33,6 +34,8 @@ namespace motion {
         };
         [[nodiscard]] std::vector<CachedModuleEntry> uniqueCachedModules() const;
         [[nodiscard]] static tjs_int getEmotePSBDecryptSeed();
+        static bool applyEmotePSBDecryptFunc(std::uint8_t *data,
+                                             std::size_t size);
         [[nodiscard]] static tjs_int getDecryptSeed() {
             return getEmotePSBDecryptSeed();
         }

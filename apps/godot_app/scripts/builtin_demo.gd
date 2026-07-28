@@ -32,6 +32,9 @@ func _init(
         additional_cleanup_dirs.append(DEFAULT_WEB_SAVE_DIR)
 
 func game_path() -> String:
+    return ProjectSettings.globalize_path(install_dir)
+
+func archive_path() -> String:
     return ProjectSettings.globalize_path(install_path)
 
 func is_game(game: Dictionary) -> bool:
@@ -40,7 +43,9 @@ func is_game(game: Dictionary) -> bool:
 func is_path(path: String) -> bool:
     if path.is_empty():
         return false
-    return path.simplify_path() == game_path().simplify_path()
+    var simplified_path := path.simplify_path()
+    return simplified_path == game_path().simplify_path() or \
+            simplified_path == archive_path().simplify_path()
 
 func is_removed() -> bool:
     var state := _load_state()
@@ -126,7 +131,7 @@ func _game_dictionary() -> Dictionary:
     return {
         "name": "AetherKiri Demo",
         "path": game_path(),
-        "type": "Archive",
+        "type": "Directory",
         "lastPlayed": 0,
         "playDurationSeconds": 0,
         "coverPath": "",

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdarg>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -68,6 +69,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "visual/impl/WindowImpl.h"
 #include "visual/RenderManager.h"
 #include "visual/godot/GodotRenderManager.h"
+#include "visual/godot/GodotGpuBridge.h"
 #include "psbfile/PSBMedia.h"
 #include "sound/win32/WaveImpl.h"
 #include "sound/win32/WaveMixer.h"
@@ -354,6 +356,7 @@ std::shared_ptr<spdlog::logger> EnsureNamedLogger(const char* name) {
   return spdlog::stdout_color_mt(name);
 }
 
+#if !defined(_WIN32)
 void CrashSignalHandler(int sig, siginfo_t* info, void* context) {
   spdlog::critical("FATAL SIGNAL {} received! fault={}", sig,
                    info ? info->si_addr : nullptr);
@@ -416,6 +419,7 @@ void CrashSignalHandler(int sig, siginfo_t* info, void* context) {
   signal(sig, SIG_DFL);
   raise(sig);
 }
+#endif
 
 void PrintNativeBacktrace(const char* prefix) {
 #if defined(ENGINE_API_HAS_EXECINFO)
@@ -452,6 +456,7 @@ void CrashTerminateHandler() {
 
 void InstallCrashSignalHandlers() {
   std::set_terminate(CrashTerminateHandler);
+#if !defined(_WIN32)
   struct sigaction action {};
   action.sa_sigaction = CrashSignalHandler;
   sigemptyset(&action.sa_mask);
@@ -460,6 +465,7 @@ void InstallCrashSignalHandlers() {
   sigaction(SIGABRT, &action, nullptr);
   sigaction(SIGBUS, &action, nullptr);
   sigaction(SIGFPE, &action, nullptr);
+#endif
 }
 
 void EnsureInternalPluginAnchorsLinked() {
@@ -1341,13 +1347,19 @@ engine_result_t OpenGameCore(engine_handle_t handle,
     return s.size() >= suffix.size() &&
            s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
   };
+  std::string lower_game_root_path = normalized_game_root_path;
+  std::transform(lower_game_root_path.begin(),
+                 lower_game_root_path.end(),
+                 lower_game_root_path.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
   const bool looks_like_archive =
-      ends_with(normalized_game_root_path, ".xp3") ||
-      ends_with(normalized_game_root_path, ".XP3") ||
-      ends_with(normalized_game_root_path, ".zip") ||
-      ends_with(normalized_game_root_path, ".ZIP") ||
-      ends_with(normalized_game_root_path, ".7z")  ||
-      ends_with(normalized_game_root_path, ".tar");
+      ends_with(lower_game_root_path, ".xp3") ||
+      ends_with(lower_game_root_path, ".exe") ||
+      ends_with(lower_game_root_path, ".zip") ||
+      ends_with(lower_game_root_path, ".7z")  ||
+      ends_with(lower_game_root_path, ".tar");
   if (!looks_like_archive &&
       !normalized_game_root_path.empty() &&
       normalized_game_root_path.back() != '/' &&
@@ -1499,6 +1511,11 @@ void RunOpenGameAsync(engine_handle_t handle,
 extern std::string TVPEngineApi_GetGlobalException();
 
 extern "C" {
+
+void engine_register_godot_gpu_bridge(const void* callbacks) {
+  TVPGodotGpuBridgeRegister(
+      static_cast<const TVPGodotGpuBridgeCallbacks*>(callbacks));
+}
 
 void TVPEngineApiNotifyWebStartupReady() {
 #if defined(__EMSCRIPTEN__)
@@ -2141,6 +2158,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
       loop->CompleteInputFrame();
     }
     TVPRepairKagNoTransWait();
+    TVPRepairKagEnvironmentWorldReset();
   }
   const auto after_application_run = std::chrono::steady_clock::now();
   ::TVPDrawSceneOnce(0);
@@ -2530,11 +2548,15 @@ engine_result_t engine_set_option(engine_handle_t handle,
   if (key == "input_trace") {
     const std::string v(option->value_utf8);
     const bool enabled = (v == "1" || v == "true");
+#if defined(_WIN32)
+    _putenv_s("AETHERKIRI_INPUT_TRACE", enabled ? "1" : "");
+#else
     if (enabled) {
       setenv("AETHERKIRI_INPUT_TRACE", "1", 1);
     } else {
       unsetenv("AETHERKIRI_INPUT_TRACE");
     }
+#endif
     spdlog::info("engine_set_option: input_trace={}", enabled);
     TVPSetCommandLine(ttstr(option->key_utf8).c_str(), ttstr(option->value_utf8));
     ClearHandleErrorLocked(impl);

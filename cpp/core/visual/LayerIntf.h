@@ -26,6 +26,11 @@
 extern bool TVPFreeUnusedLayerCache;
 extern tjs_int TVPGetLayerCount();
 extern tjs_uint64 TVPGetLayerTotalBitmapBytes();
+// E-mote may replace a visible GPU texture without contributing the full
+// character bounds to KiriKiri's normal dirty region. Request one complete
+// window composite after such a replacement; cached/static host frames can
+// continue using the smaller dirty region.
+void TVPRequestFullGpuCompletion();
 
 //---------------------------------------------------------------------------
 // initial bitmap holder ( since tTVPBaseBitmap cannot create empty
@@ -446,6 +451,10 @@ protected:
 
 public:
     void AssignImages(tTJSNI_BaseLayer *src); // assign image content
+    // Transfer a fully repainted motion scratch image without sharing it back
+    // to the scratch layer. The destination's previous image becomes the next
+    // reusable scratch buffer.
+    void AssignMotionImages(tTJSNI_BaseLayer *src);
 
     void AssignMainImage(iTVPBaseBitmap *bmp);
     // assign single main bitmap image. the image size assigned must
@@ -621,6 +630,7 @@ public:
 private:
     void FireClick(tjs_int x, tjs_int y);
     void FireButtonClick();
+    bool HasButtonClickTarget();
     void FireDoubleClick(tjs_int x, tjs_int y);
     void FireMouseDown(tjs_int x, tjs_int y, tTVPMouseButton mb,
                        tjs_uint32 flags);

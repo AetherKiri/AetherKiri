@@ -21,6 +21,8 @@
 
 namespace TJS {
 
+    class tTJSBinaryStream;
+
     //---------------------------------------------------------------------------
     // TJS version
     //---------------------------------------------------------------------------
@@ -31,6 +33,13 @@ namespace TJS {
 
     extern const char TJSCompiledDate[];
     //---------------------------------------------------------------------------
+
+    using tTJSStructuredDataPackLoader =
+        bool (*)(tTJSBinaryStream *stream, tTJSVariant *result);
+
+    void TJSSetStructuredDataPackLoader(tTJSStructuredDataPackLoader loader);
+    bool TJSLoadStructuredDataPack(tTJSBinaryStream *stream,
+                                   tTJSVariant *result);
 
     //---------------------------------------------------------------------------
     // Console output callback interface

@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-07-21
+Last updated: 2026-07-27
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -20,6 +20,10 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 
 | Game | Verified platforms / builds | Verified scope | Result | Verifier | Notes |
 | --- | --- | --- | --- | --- | --- |
+| 恋がさくころ桜どき | Linux x64 release app | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| ましろ色シンフォニー | Linux x64 release app | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| Clover Day's | Linux x64 release app | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| 金色ラブリッチェ -Golden Time- | Linux x64 release app | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 | もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | Web release on Chrome/Vite local server; macOS release app; iOS/iPadOS app build on iPad; Android release APK | Startup, script/plugin loading, title/menu rendering, basic input, continue/save-load route smoke, CJK/symbol font rendering, and IndexedDB-backed userfs persistence behavior on Web | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. Web deployment still requires COOP/COEP headers. Live2D Cubism Core for Web remains an external proprietary runtime and must be supplied separately when a title needs it. |
 | 喫茶ステラと死神の蝶 | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, rapid title background switching/input stress, continue flow, scene/text rendering, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | RIDDLE JOKER | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, title motion/layering, continue flow, scene/text rendering, dialogue input stress, save/load smoke, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
@@ -33,11 +37,20 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | サノバウィッチ | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 千恋＊万花 | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 天使☆騒々 RE-BOOT! | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue flow, scene/text rendering, gallery rendering and animation smoke, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
-| ライムライト・レモネードジャム | macOS release app; iOS/iPadOS release app build on iPad | Startup, title animation and menu rendering, continue/load flow, scene/text rendering, gallery navigation/compositing, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| ライムライト・レモネードジャム | Windows x64 debug app; macOS release app; iOS/iPadOS release app build on iPad | Startup, title animation and menu rendering, continue/load flow, scene/text rendering, gallery navigation/compositing, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer), [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 | ワガママハイスペック | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, music selection/playback, lock-screen audio recovery, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | ワガママハイスペック OC | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, music playback, lock-screen audio recovery, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 淫母マンション～ママは、性処理肉便器～ | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, scene/text rendering, audio playback, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 天色＊アイルノーツ | macOS debug app | Startup, title/menu rendering, continue/load flow, background and character rendering, SD CG transition stability, scene/text rendering, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| GINKA | Windows x64 debug app | Import, startup, title/menu rendering, game-data loading, background and character rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| NEKOPARA Vol. 1 | macOS debug app | Startup, title/menu rendering, data-load and first-save flow, scene/text rendering, E-mote character rendering and animation, rapid dialogue input, and character-layer click forwarding | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| まいてつ -Pure Station- | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, E-mote character rendering and animation, gallery CG navigation/compositing and layer ordering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| まいてつ Last Run!! | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, E-mote character rendering and animation, gallery CG navigation/compositing and layer ordering, audio playback, input stress, and FPS smoke | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 恋騎士 Purely☆Kiss | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 銃騎士Cutie☆Bullet | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 聖騎士Melty☆Lovers | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 将軍様はお年頃 | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, new-game flow, scene/name/dialogue text rendering, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi), [@yorkyang2333](mailto:yangyork097@gmail.com) | Local game files are not committed. |
 
 ## How To Add A Game
 

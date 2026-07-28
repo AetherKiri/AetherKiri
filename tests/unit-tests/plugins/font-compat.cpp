@@ -17,3 +17,15 @@ TEST_CASE("Font exposes KAG3 bundled-font compatibility methods") {
 
     fontClass->Release();
 }
+
+TEST_CASE("Layer exposes the motion scratch transfer method") {
+    iTJSDispatch2 *layerClass = TVPCreateNativeClass_Layer();
+    REQUIRE(layerClass != nullptr);
+
+    tTJSVariant method;
+    REQUIRE(TJS_SUCCEEDED(layerClass->PropGet(
+        0, TJS_W("assignMotionImages"), nullptr, &method, layerClass)));
+    CHECK(method.Type() == tvtObject);
+
+    layerClass->Release();
+}

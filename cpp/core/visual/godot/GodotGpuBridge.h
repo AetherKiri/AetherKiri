@@ -66,6 +66,19 @@ enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_UNIVERSAL_D = 13,
     TVP_GODOT_GPU_BLEND_UNIVERSAL_A = 14,
     TVP_GODOT_GPU_BLEND_PS_MULTIPLY = 15,
+    TVP_GODOT_GPU_BLEND_PS_ADD = 16,
+    TVP_GODOT_GPU_BLEND_PS_SUBTRACT = 17,
+    // Preserve RGB and replace only the destination alpha channel.
+    TVP_GODOT_GPU_BLEND_FILL_MASK = 18,
+    // Apply a source alpha mask to destination alpha while preserving RGB.
+    TVP_GODOT_GPU_BLEND_APPLY_ALPHA_MASK = 19,
+    // Copy all four channels exactly through the queued compute batch.
+    TVP_GODOT_GPU_BLEND_COPY_RGBA = 20,
+    // Apply a positive alpha mask to src1, then AlphaBlend_d it into dst in
+    // one dispatch. src2 supplies the mask alpha.
+    TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_MULTIPLY = 21,
+    // Threshold-mask src1 at alpha 64, then AlphaBlend_d it into dst.
+    TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD = 22,
     // draw_triangles is shared by Cubism (whose low bits describe Cubism
     // colour/alpha modes) and KiriKiri (whose low bits are the modes above).
     // Tag the latter so AlphaBlend/AlphaBlend_d are not mistaken for Cubism

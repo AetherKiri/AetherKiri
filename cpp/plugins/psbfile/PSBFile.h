@@ -1,5 +1,9 @@
 #pragma once
 
+#include <cstdint>
+#include <functional>
+#include <utility>
+
 #include <spdlog/spdlog.h>
 
 #include "tjs.h"
@@ -34,6 +38,11 @@ namespace PSB {
         void loadNames();
 
         void setSeed(int seed) { this->_seed = seed; }
+        using PreParseCallback =
+            std::function<bool(std::uint8_t *, size_t)>;
+        void setPreParseCallback(PreParseCallback callback) {
+            _preParseCallback = std::move(callback);
+        }
 
         /**
          * file type: *.PIMG
@@ -97,6 +106,7 @@ namespace PSB {
 
     private:
         int _seed = 0;
+        PreParseCallback _preParseCallback;
         PSBHeader _header{};
         std::shared_ptr<IPSBValue> _root{};
         PSBType _type{ PSBType::PSB };

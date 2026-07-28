@@ -14,16 +14,50 @@
 using namespace motion::internal;
 
 namespace {
-    inline bool motionUpdateDebugEnabled() {
-        const char *enabled = std::getenv("AETHERKIRI_MOTION_DEBUG");
-        const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
-        return (enabled && *enabled && std::strcmp(enabled, "0") != 0) ||
-            (debugAll && *debugAll && std::strcmp(debugAll, "0") != 0);
+    inline void evaluateMotionBezierPatch(const float *mesh, float u, float v,
+                                          float &outX, float &outY) {
+        const float su = 1.0f - u;
+        const float sv = 1.0f - v;
+        const float bu[4] = {
+            su * su * su,
+            3.0f * su * su * u,
+            3.0f * su * u * u,
+            u * u * u,
+        };
+        const float bv[4] = {
+            sv * sv * sv,
+            3.0f * sv * sv * v,
+            3.0f * sv * v * v,
+            v * v * v,
+        };
+
+        // A bicubic Bernstein patch is separable. Evaluate the four rows
+        // first and then blend those results vertically. This is algebraically
+        // identical to the former 16-control-point loop but avoids forming
+        // and applying 16 two-dimensional weights for every E-mote mesh
+        // vertex and every flattened child corner.
+        float rowX[4];
+        float rowY[4];
+        for(int row = 0; row < 4; ++row) {
+            const float *points = mesh + row * 8;
+            rowX[row] =
+                points[0] * bu[0] + points[2] * bu[1] +
+                points[4] * bu[2] + points[6] * bu[3];
+            rowY[row] =
+                points[1] * bu[0] + points[3] * bu[1] +
+                points[5] * bu[2] + points[7] * bu[3];
+        }
+        outX =
+            rowX[0] * bv[0] + rowX[1] * bv[1] +
+            rowX[2] * bv[2] + rowX[3] * bv[3];
+        outY =
+            rowY[0] * bv[0] + rowY[1] * bv[1] +
+            rowY[2] * bv[2] + rowY[3] * bv[3];
     }
 
-    inline bool motionUpdateDebugAllEnabled() {
-        const char *debugAll = std::getenv("AETHERKIRI_MOTION_DEBUG_ALL");
-        return debugAll && *debugAll && std::strcmp(debugAll, "0") != 0;
+    inline bool motionUpdateDebugEnabled() {
+        const char *enabled = std::getenv("AETHERKIRI_MOTION_DEBUG");
+        return enabled && *enabled && std::strcmp(enabled, "0") != 0;
     }
 
     inline bool emoteRootTraceEnabled() {
@@ -108,6 +142,7 @@ namespace {
         const motion::internal::FrameContentState &s) {
         slot.done = !s.visible;
         slot.src = s.src;
+        slot.motionIcon = s.motionIcon;
         slot.srcList = s.srcList;
         slot.x = s.x; slot.y = s.y; slot.z = s.z;
         slot.ox = s.ox; slot.oy = s.oy;
@@ -151,7 +186,8 @@ namespace {
         if(slot.done != newDone) {
             return true;
         }
-        if(slot.src != state.src || slot.srcList != state.srcList) {
+        if(slot.src != state.src || slot.motionIcon != state.motionIcon ||
+           slot.srcList != state.srcList) {
             return true;
         }
 
@@ -368,6 +404,20 @@ namespace motion {
             for(const auto &[label, value] : _evalResultValues) {
                 effectiveVariables[label] = value;
             }
+            const auto propagateInheritedVariable =
+                [](Player *child, const std::string &label, double value) {
+                    if(!child || !child->_runtime) {
+                        return;
+                    }
+                    auto [it, inserted] =
+                        child->_runtime->inheritedVariableInputs.try_emplace(
+                            label, value);
+                    if(!inserted && it->second == value) {
+                        return;
+                    }
+                    it->second = value;
+                    child->setVariable(detail::widen(label), value);
+                };
             // Bind path-qualified variables to child Players (sub_6C4668
             // equivalent).  Yuzu addresses nested selectors with labels such
             // as `bt_start/select` and `slot01/base/disable`.  Each path
@@ -401,16 +451,15 @@ namespace motion {
                             if(!vn.layerName.empty() &&
                                label.rfind(prefix, 0) == 0 &&
                                label.size() > prefix.size()) {
-                                cp->setVariable(
-                                    detail::widen(label.substr(prefix.size())),
-                                    value);
+                                propagateInheritedVariable(
+                                    cp, label.substr(prefix.size()), value);
                                 continue;
                             }
 
                             if(label.find('/') == std::string::npos) {
-                                cp->setVariable(detail::widen(label), value);
+                                propagateInheritedVariable(cp, label, value);
                             } else if(!hasRoutingNode[label]) {
-                                cp->setVariable(detail::widen(label), value);
+                                propagateInheritedVariable(cp, label, value);
                             }
                         }
                     }
@@ -418,7 +467,7 @@ namespace motion {
                     for (int pi2 = 0; pi2 < vn.getParticleCount(); ++pi2) {
                         if (auto *cp = vn.getParticleChild(pi2)) {
                             for (const auto &[label, value] : effectiveVariables)
-                                cp->setVariable(detail::widen(label), value);
+                                propagateInheritedVariable(cp, label, value);
                         }
                     }
                 }
@@ -433,6 +482,9 @@ namespace motion {
         const std::string motionPath = _runtime->activeMotion
             ? _runtime->activeMotion->path
             : std::string();
+        const auto *activeClip = selectActiveClip();
+        const bool traceFrameSelection =
+            detail::logoChainTraceEnabled(_runtime->activeMotion);
         // === PHASE 2: Main loop — evaluate non-root nodes ===
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
@@ -450,16 +502,16 @@ namespace motion {
             const auto &parent = nodes[parentIdx];
 
             double nodeTime = currentTime;
-            const auto *clip = selectActiveClip();
             int parameterIndex = node.parameterizeIndex;
-            if(parameterIndex < 0 && clip) {
-                parameterIndex = clip->defaultParameterIndex;
+            if(parameterIndex < 0 && activeClip) {
+                parameterIndex = activeClip->defaultParameterIndex;
             }
             if(parameterIndex >= 0) {
-                if(clip && static_cast<size_t>(parameterIndex) <
-                               clip->parameters.size()) {
+                if(activeClip && static_cast<size_t>(parameterIndex) <
+                               activeClip->parameters.size()) {
                     const auto &parameter =
-                        clip->parameters[static_cast<size_t>(parameterIndex)];
+                        activeClip->parameters[
+                            static_cast<size_t>(parameterIndex)];
                     double rawValue = parameter.rangeBegin;
                     // Motion nodes form nested Players, while scripts set
                     // variables on the owning root Player. The native binder
@@ -472,9 +524,9 @@ namespace motion {
                     // well; path-qualified sibling selectors remain isolated
                     // because their leaf parameter name does not match at the
                     // root.
-                    std::unordered_set<const Player *> variableOwners;
+                    size_t ownerDepth = 0;
                     for(const Player *owner = this;
-                        owner && variableOwners.insert(owner).second;
+                        owner && ownerDepth++ < 32;
                         owner = owner->_motionParentPlayer) {
                         if(const auto it =
                                owner->_evalResultValues.find(parameter.id);
@@ -490,15 +542,15 @@ namespace motion {
                         }
                     }
                     nodeTime = detail::parameterizedClipTime(
-                        *clip, parameter, rawValue);
+                        *activeClip, parameter, rawValue);
                 }
             }
 
             // Evaluate this node's interpolated state.
             auto state = evaluateLayerContent(node.psbNode, nodeTime,
-                                              node.nodeType);
-            if(detail::logoChainTraceEnabled(_runtime->activeMotion)
-               && state.debugEvaluated) {
+                                              node.nodeType,
+                                              traceFrameSelection);
+            if(traceFrameSelection && state.debugEvaluated) {
                 detail::logoChainTraceLogf(
                     motionPath, "updateLayers.phase2.framesel", "0x6926B4/0x699AE4",
                     nodeTime,
@@ -541,6 +593,8 @@ namespace motion {
             node.stencilType = node.stencilTypeBase;
 
             // Cache interpolated data for rendering
+            const bool sourceChanged =
+                node.interpolatedCache.src != state.src;
             node.interpolatedCache.src = state.src;
             node.interpolatedCache.srcList = state.srcList;
             node.interpolatedCache.width = state.width;
@@ -614,7 +668,8 @@ namespace motion {
             // pixel dimensions (not state.width/height which are unused).
             // findPSBResourceBySourceName navigates source/<group>/icon/<name>
             // and reads width, height, originX, originY from the icon node.
-            if (!state.src.empty() && _runtime->activeMotion) {
+            if (!state.src.empty() && _runtime->activeMotion &&
+                (sourceChanged || node.clipW <= 0.0 || node.clipH <= 0.0)) {
                 const auto metadata = resolveMotionSourceMetadata(
                     *_runtime, *_runtime->activeMotion, state.src);
                 node.clipW = metadata.width;
@@ -689,27 +744,6 @@ namespace motion {
                 const double normX = (node.accumulated.posX + parent.originX) / pw;
                 const double normY = (node.accumulated.posY + parent.originY) / ph;
 
-                // sub_69B1E8 → sub_6990A0: 4×4 bicubic Bezier patch evaluation.
-                // meshData = 16 control points × 2 floats (X,Y) = 128 bytes at node+2024.
-                // Bernstein basis: bu[i] for u, bv[j] for v, sum(bu[i]*bv[j]*P[i*4+j])
-                // When no mesh vertex data available, use identity (passthrough).
-                auto evalBezierPatch = [](const float *mesh, float u, float v,
-                                          float &outX, float &outY) {
-                    const float su = 1.0f - u, sv = 1.0f - v;
-                    const float bu[4] = {
-                        su*su*su, 3.0f*su*su*u, 3.0f*su*u*u, u*u*u
-                    };
-                    const float bv[4] = {
-                        sv*sv*sv, 3.0f*sv*sv*v, 3.0f*sv*v*v, v*v*v
-                    };
-                    outX = 0; outY = 0;
-                    for (int i = 0; i < 16; ++i) {
-                        float w = bv[i >> 2] * bu[i & 3];
-                        outX += mesh[i * 2] * w;
-                        outY += mesh[i * 2 + 1] * w;
-                    }
-                };
-
                 // Evaluate at normalized coordinates
                 float defX = static_cast<float>(normX);
                 float defY = static_cast<float>(normY);
@@ -717,8 +751,8 @@ namespace motion {
                 // parent.meshControlPoints populated by sub_6BC4F0 vertex computation.
                 if (parent.meshControlPoints.size() >= 32) {
                     // 16-point Bezier patch: evaluate via sub_6990A0
-                    evalBezierPatch(parent.meshControlPoints.data(),
-                                    defX, defY, defX, defY);
+                    evaluateMotionBezierPatch(parent.meshControlPoints.data(),
+                                              defX, defY, defX, defY);
                 }
                 node.accumulated.posX = static_cast<double>(defX) * pw - parent.originX;
                 node.accumulated.posY = static_cast<double>(defY) * ph - parent.originY;
@@ -731,10 +765,14 @@ namespace motion {
                     const float *mp = parent.meshControlPoints.data();
                     float x1, y1, x2, y2, x3, y3, x4, y4;
                     // Sample at 4 nearby points (0x69B030..0x69B094)
-                    evalBezierPatch(mp, defX - eps, defY, x1, y1);
-                    evalBezierPatch(mp, defX + eps, defY, x2, y2);
-                    evalBezierPatch(mp, defX, defY - eps, x3, y3);
-                    evalBezierPatch(mp, defX, defY + eps, x4, y4);
+                    evaluateMotionBezierPatch(
+                        mp, defX - eps, defY, x1, y1);
+                    evaluateMotionBezierPatch(
+                        mp, defX + eps, defY, x2, y2);
+                    evaluateMotionBezierPatch(
+                        mp, defX, defY - eps, x3, y3);
+                    evaluateMotionBezierPatch(
+                        mp, defX, defY + eps, x4, y4);
                     // Average of two orthogonal gradients (0x69B0AC..0x69B0EC)
                     double a1 = std::atan2(
                         static_cast<double>(y3 - y4),
@@ -752,10 +790,14 @@ namespace motion {
                     const float eps = 0.0001f;
                     const float *mp = parent.meshControlPoints.data();
                     float x1, y1, x2, y2, x3, y3, x4, y4;
-                    evalBezierPatch(mp, defX - eps, defY, x1, y1);
-                    evalBezierPatch(mp, defX + eps, defY, x2, y2);
-                    evalBezierPatch(mp, defX, defY - eps, x3, y3);
-                    evalBezierPatch(mp, defX, defY + eps, x4, y4);
+                    evaluateMotionBezierPatch(
+                        mp, defX - eps, defY, x1, y1);
+                    evaluateMotionBezierPatch(
+                        mp, defX + eps, defY, x2, y2);
+                    evaluateMotionBezierPatch(
+                        mp, defX, defY - eps, x3, y3);
+                    evaluateMotionBezierPatch(
+                        mp, defX, defY + eps, x4, y4);
                     // Jacobian area from cross product (0x69B154..0x69B188)
                     double dx1 = x2 - x1, dy1 = y2 - y1;
                     double dx2 = x3 - x4, dy2 = y3 - y4;
@@ -958,13 +1000,37 @@ namespace motion {
                     if (flags & 0x080) node.accumulated.slantX += rootNode.accumulated.slantX;
                     if (flags & 0x100) node.accumulated.slantY += rootNode.accumulated.slantY;
 
-                    // Phase D: Matrix multiply parent × local (0x6BBA24)
+                    // Phase D: Matrix multiply parent × local (0x6BBA24).
+                    // M2's glyph nodes intentionally omit both scale bits:
+                    // their positions follow the 2x parent transform, but
+                    // their image geometry stays at its authored size. The
+                    // position was already transformed above, so remove only
+                    // the omitted orthogonal scale from the geometry matrix.
+                    Affine2x3 parentGeometryAffine = {
+                        parent.accumulated.m11,
+                        parent.accumulated.m21,
+                        parent.accumulated.m12,
+                        parent.accumulated.m22,
+                        0.0,
+                        0.0
+                    };
+                    parentGeometryAffine =
+                        startupLogoGeometryParentTransform(
+                            motionPath, parentGeometryAffine, flags);
                     const double lm11 = localAffine[0], lm21 = localAffine[1];
                     const double lm12 = localAffine[2], lm22 = localAffine[3];
-                    node.accumulated.m11 = parent.accumulated.m11 * lm11 + parent.accumulated.m12 * lm21;
-                    node.accumulated.m21 = parent.accumulated.m21 * lm11 + parent.accumulated.m22 * lm21;
-                    node.accumulated.m12 = parent.accumulated.m11 * lm12 + parent.accumulated.m12 * lm22;
-                    node.accumulated.m22 = parent.accumulated.m21 * lm12 + parent.accumulated.m22 * lm22;
+                    node.accumulated.m11 =
+                        parentGeometryAffine[0] * lm11 +
+                        parentGeometryAffine[2] * lm21;
+                    node.accumulated.m21 =
+                        parentGeometryAffine[1] * lm11 +
+                        parentGeometryAffine[3] * lm21;
+                    node.accumulated.m12 =
+                        parentGeometryAffine[0] * lm12 +
+                        parentGeometryAffine[2] * lm22;
+                    node.accumulated.m22 =
+                        parentGeometryAffine[1] * lm12 +
+                        parentGeometryAffine[3] * lm22;
                 }
             }
         }
@@ -1150,17 +1216,12 @@ namespace motion {
                             cn.meshInvM11 * tx + cn.meshInvM12 * ty);
                         float iy = static_cast<float>(
                             cn.meshInvM21 * tx + cn.meshInvM22 * ty);
-                        // Evaluate bezier patch at normalized coords (sub_69B1E8)
-                        const float *mesh = cn.meshWorldControlPoints.data();
-                        const float su = 1.f - ix, sv = 1.f - iy;
-                        const float bu[4] = {su*su*su, 3.f*su*su*ix, 3.f*su*ix*ix, ix*ix*ix};
-                        const float bv[4] = {sv*sv*sv, 3.f*sv*sv*iy, 3.f*sv*iy*iy, iy*iy*iy};
-                        float ox = 0, oy = 0;
-                        for (int bi = 0; bi < 16; ++bi) {
-                            float w = bv[bi >> 2] * bu[bi & 3];
-                            ox += mesh[bi * 2] * w;
-                            oy += mesh[bi * 2 + 1] * w;
-                        }
+                        // Evaluate bezier patch at normalized coords
+                        // (sub_69B1E8).
+                        float ox = 0.0f;
+                        float oy = 0.0f;
+                        evaluateMotionBezierPatch(
+                            cn.meshWorldControlPoints.data(), ix, iy, ox, oy);
                         px = ox;
                         py = oy;
                     }
@@ -1231,22 +1292,6 @@ namespace motion {
                         vn.meshWorldControlPoints.clear();
                     }
 
-                    auto evalBP = [](const float *mesh, float u, float v,
-                                     float &outX, float &outY) {
-                        const float su = 1.f - u, sv = 1.f - v;
-                        const float bu[4] = {su*su*su, 3.f*su*su*u,
-                                             3.f*su*u*u, u*u*u};
-                        const float bv[4] = {sv*sv*sv, 3.f*sv*sv*v,
-                                             3.f*sv*v*v, v*v*v};
-                        outX = 0.f;
-                        outY = 0.f;
-                        for(int i = 0; i < 16; ++i) {
-                            const float weight = bv[i >> 2] * bu[i & 3];
-                            outX += mesh[i * 2] * weight;
-                            outY += mesh[i * 2 + 1] * weight;
-                        }
-                    };
-
                     if(vn.meshAncestorIndex >= 0 && cw > 0.0 && ch > 0.0) {
                         int divisionSource = ownMesh
                             ? static_cast<int>(vi) : vn.meshAncestorIndex;
@@ -1298,8 +1343,9 @@ namespace motion {
                                 float py = static_cast<float>(
                                     orgY + u * mw21 + v * mw22);
                                 if(ownMesh) {
-                                    evalBP(vn.meshWorldControlPoints.data(),
-                                           u, v, px, py);
+                                    evaluateMotionBezierPatch(
+                                        vn.meshWorldControlPoints.data(),
+                                        u, v, px, py);
                                 }
                                 const size_t point = static_cast<size_t>(
                                     gy * vn.meshDivX + gx) * 2;
@@ -1338,10 +1384,11 @@ namespace motion {
                                     const float v = static_cast<float>(
                                         ancestor.meshInvM21 * x +
                                         ancestor.meshInvM22 * y);
-                                    evalBP(ancestor.meshWorldControlPoints.data(),
-                                           u, v,
-                                           vn.meshRenderPoints[point * 2],
-                                           vn.meshRenderPoints[point * 2 + 1]);
+                                    evaluateMotionBezierPatch(
+                                        ancestor.meshWorldControlPoints.data(),
+                                        u, v,
+                                        vn.meshRenderPoints[point * 2],
+                                        vn.meshRenderPoints[point * 2 + 1]);
                                 }
                                 const float ox = static_cast<float>(cascadeOrgX) +
                                     ancestor.meshInvOffX;
@@ -1354,8 +1401,9 @@ namespace motion {
                                     ancestor.meshInvM21 * ox +
                                     ancestor.meshInvM22 * oy);
                                 float resultX = 0.f, resultY = 0.f;
-                                evalBP(ancestor.meshWorldControlPoints.data(),
-                                       ou, ov, resultX, resultY);
+                                evaluateMotionBezierPatch(
+                                    ancestor.meshWorldControlPoints.data(),
+                                    ou, ov, resultX, resultY);
                                 cascadeOrgX = resultX;
                                 cascadeOrgY = resultY;
                                 _processedMeshVerticesNum += numPts + 1;
@@ -1768,131 +1816,90 @@ namespace motion {
                 const detail::MotionNode &parentNode,
                 const MotionSubNodeRootState &rootState,
                 bool hasAngle,
-                double computedAngle) {
+                double computedAngle) -> bool {
                 if (!child._runtime) {
-                    return;
+                    return false;
                 }
 
-                child._pendingRootX = rootState.posX;
-                child._pendingRootY = rootState.posY;
-                child._pendingRootZ = rootState.posZ;
-                child._hasPendingRootPos = true;
-                child._zFactor = _zFactor;
-                child._runtime->drawAffineMatrix = _runtime->drawAffineMatrix;
-                {
-                    uint32_t packed;
-                    std::memcpy(&packed, &parentNode.colorBytes[0],
-                                sizeof(uint32_t));
-                    child._colorWeightPacked = packed;
-                }
+                bool changed = false;
+                const auto assignIfChanged =
+                    [&](auto &target, const auto &value) {
+                        if(target == value) {
+                            return false;
+                        }
+                        target = value;
+                        changed = true;
+                        return true;
+                    };
+                assignIfChanged(child._pendingRootX, rootState.posX);
+                assignIfChanged(child._pendingRootY, rootState.posY);
+                assignIfChanged(child._pendingRootZ, rootState.posZ);
+                assignIfChanged(child._hasPendingRootPos, true);
+                assignIfChanged(child._zFactor, _zFactor);
+                assignIfChanged(child._runtime->drawAffineMatrix,
+                                _runtime->drawAffineMatrix);
+                uint32_t packed;
+                std::memcpy(&packed, &parentNode.colorBytes[0],
+                            sizeof(uint32_t));
+                assignIfChanged(child._colorWeightPacked, packed);
 
                 if (child._runtime->nodes.empty()) {
-                    if (LOGGER && motionUpdateDebugAllEnabled() &&
-                        _runtime && _runtime->activeMotion &&
-                        (_runtime->activeMotion->path.find("SD") != std::string::npos ||
-                         _runtime->activeMotion->path.find("sd") != std::string::npos)) {
-                        LOGGER->info(
-                            "motion subnode root pending: motion={} parentLabel={} parentIndex={} childMotion={} childLabel={} root=({:.1f},{:.1f},{:.1f}) parentAccum=({:.1f},{:.1f},{:.1f})",
-                            _runtime->activeMotion->path,
-                            parentNode.layerName.empty()
-                                ? std::string("<root>")
-                                : parentNode.layerName,
-                            parentNode.parentIndex,
-                            child._runtime->activeMotion
-                                ? child._runtime->activeMotion->path
-                                : std::string("<none>"),
-                            detail::narrow(child._motionKey),
-                        rootState.posX, rootState.posY, rootState.posZ,
-                        parentNode.accumulated.posX,
-                        parentNode.accumulated.posY,
-                        parentNode.accumulated.posZ);
+                    if(changed) {
+                        child._layersDirty = true;
                     }
-                    return;
+                    return changed;
                 }
 
                 auto &cr = child._runtime->nodes[0];
-                if (LOGGER && motionUpdateDebugAllEnabled() &&
-                    _runtime && _runtime->activeMotion &&
-                    (_runtime->activeMotion->path.find("SD") != std::string::npos ||
-                     _runtime->activeMotion->path.find("sd") != std::string::npos ||
-                     isYuzuTitlePresentationMotionPath(
-                         _runtime->activeMotion->path))) {
-                    LOGGER->info(
-                        "motion subnode root apply: motion={} parentLabel={} parentIndex={} childMotion={} childLabel={} childNodes={} root=({:.3f},{:.3f},{:.3f}) parentAccum=({:.3f},{:.3f},{:.3f}) parentScale=({:.6f},{:.6f}) parentMatrix=[{:.6f},{:.6f},{:.6f},{:.6f}] rootBefore=({:.3f},{:.3f},{:.3f}) rootScaleBefore=({:.6f},{:.6f}) rootMatrixBefore=[{:.6f},{:.6f},{:.6f},{:.6f}]",
-                        _runtime->activeMotion->path,
-                        parentNode.layerName.empty()
-                            ? std::string("<root>")
-                            : parentNode.layerName,
-                        parentNode.parentIndex,
-                        child._runtime->activeMotion
-                            ? child._runtime->activeMotion->path
-                            : std::string("<none>"),
-                        detail::narrow(child._motionKey),
-                        child._runtime->nodes.size(),
-                        rootState.posX, rootState.posY, rootState.posZ,
-                        parentNode.accumulated.posX,
-                        parentNode.accumulated.posY,
-                        parentNode.accumulated.posZ,
-                        parentNode.accumulated.scaleX,
-                        parentNode.accumulated.scaleY,
-                        parentNode.accumulated.m11,
-                        parentNode.accumulated.m12,
-                        parentNode.accumulated.m21,
-                        parentNode.accumulated.m22,
-                        cr.localState.posX, cr.localState.posY,
-                        cr.localState.posZ,
-                        cr.localState.scaleX, cr.localState.scaleY,
-                        cr.accumulated.m11, cr.accumulated.m12,
-                        cr.accumulated.m21, cr.accumulated.m22);
+                bool localChanged = false;
+                const auto assignLocal = [&](auto &target, const auto &value) {
+                    const bool valueChanged = assignIfChanged(target, value);
+                    localChanged = localChanged || valueChanged;
+                };
+                assignLocal(cr.localState.posX, rootState.posX);
+                assignLocal(cr.localState.posY, rootState.posY);
+                assignLocal(cr.localState.posZ, rootState.posZ);
+                assignLocal(cr.localState.flipX,
+                            parentNode.accumulated.flipX);
+                assignLocal(cr.localState.flipY,
+                            parentNode.accumulated.flipY);
+                assignLocal(cr.localState.scaleX,
+                            parentNode.accumulated.scaleX);
+                assignLocal(cr.localState.scaleY,
+                            parentNode.accumulated.scaleY);
+                assignLocal(cr.localState.slantX,
+                            parentNode.accumulated.slantX);
+                assignLocal(cr.localState.slantY,
+                            parentNode.accumulated.slantY);
+                assignLocal(cr.localState.opacity,
+                            parentNode.accumulated.opacity);
+                assignLocal(cr.localState.active,
+                            parentNode.accumulated.active);
+                assignLocal(cr.localState.visible,
+                            parentNode.accumulated.visible);
+                if(localChanged) {
+                    cr.localState.dirty = true;
                 }
-                cr.accumulated.posX = rootState.posX;
-                cr.accumulated.posY = rootState.posY;
-                cr.accumulated.posZ = rootState.posZ;
-                cr.localState.posX = rootState.posX;
-                cr.localState.posY = rootState.posY;
-                cr.localState.posZ = rootState.posZ;
-                cr.localState.flipX = parentNode.accumulated.flipX;
-                cr.localState.flipY = parentNode.accumulated.flipY;
-                cr.localState.scaleX = parentNode.accumulated.scaleX;
-                cr.localState.scaleY = parentNode.accumulated.scaleY;
-                cr.localState.slantX = parentNode.accumulated.slantX;
-                cr.localState.slantY = parentNode.accumulated.slantY;
-                cr.localState.opacity = parentNode.accumulated.opacity;
-                cr.localState.active = parentNode.accumulated.active;
-                cr.localState.visible = parentNode.accumulated.visible;
-                cr.localState.dirty = true;
 
-                // Flip — only write if changed, set dirty (0x6BEA28..0x6BEA54)
-                if (cr.accumulated.flipX != parentNode.accumulated.flipX ||
-                    cr.accumulated.flipY != parentNode.accumulated.flipY) {
-                    cr.accumulated.flipX = parentNode.accumulated.flipX;
-                    cr.accumulated.flipY = parentNode.accumulated.flipY;
-                    cr.accumulated.dirty = true;
-                }
-                // Scale — only write if changed, set dirty (0x6BEA5C..0x6BEA88)
-                if (cr.accumulated.scaleX != parentNode.accumulated.scaleX ||
-                    cr.accumulated.scaleY != parentNode.accumulated.scaleY) {
-                    cr.accumulated.scaleX = parentNode.accumulated.scaleX;
-                    cr.accumulated.scaleY = parentNode.accumulated.scaleY;
-                    cr.accumulated.dirty = true;
-                }
-                // Slant — set dirty if changed (0x6BEB10..0x6BEB3C)
-                if (cr.accumulated.slantX != parentNode.accumulated.slantX ||
-                    cr.accumulated.slantY != parentNode.accumulated.slantY) {
-                    cr.accumulated.slantX = parentNode.accumulated.slantX;
-                    cr.accumulated.slantY = parentNode.accumulated.slantY;
-                    cr.accumulated.dirty = true;
-                }
-                // Opacity — set dirty if changed (0x6BEB40..0x6BEB58)
-                if (cr.accumulated.opacity != parentNode.accumulated.opacity) {
-                    cr.accumulated.opacity = parentNode.accumulated.opacity;
-                    cr.accumulated.dirty = true;
-                }
-                // Active — set dirty if changed (0x6BEB5C..0x6BEB74)
-                if (cr.accumulated.active != parentNode.accumulated.active) {
-                    cr.accumulated.active = parentNode.accumulated.active;
-                    cr.accumulated.dirty = true;
-                }
+                assignIfChanged(cr.accumulated.posX, rootState.posX);
+                assignIfChanged(cr.accumulated.posY, rootState.posY);
+                assignIfChanged(cr.accumulated.posZ, rootState.posZ);
+                assignIfChanged(cr.accumulated.flipX,
+                                parentNode.accumulated.flipX);
+                assignIfChanged(cr.accumulated.flipY,
+                                parentNode.accumulated.flipY);
+                assignIfChanged(cr.accumulated.scaleX,
+                                parentNode.accumulated.scaleX);
+                assignIfChanged(cr.accumulated.scaleY,
+                                parentNode.accumulated.scaleY);
+                assignIfChanged(cr.accumulated.slantX,
+                                parentNode.accumulated.slantX);
+                assignIfChanged(cr.accumulated.slantY,
+                                parentNode.accumulated.slantY);
+                assignIfChanged(cr.accumulated.opacity,
+                                parentNode.accumulated.opacity);
+                assignIfChanged(cr.accumulated.active,
+                                parentNode.accumulated.active);
 
                 // === Angle -> child (0x6BEAA8..0x6BEB08) ===
                 if (hasAngle) {
@@ -1900,20 +1907,19 @@ namespace motion {
                         double k = computedAngle;
                         while (k < 0.0) k += 360.0;
                         while (k >= 360.0) k -= 360.0;
-                    } else if (cr.accumulated.angle != computedAngle) {
-                        cr.accumulated.angle = computedAngle;
-                        cr.accumulated.dirty = true;
+                    } else {
+                        assignIfChanged(cr.accumulated.angle, computedAngle);
                     }
                 }
 
                 // === Matrix propagation (0x6BEB9C..0x6BEC4C) ===
+                double m11 = parentNode.accumulated.m11;
+                double m12 = parentNode.accumulated.m12;
+                double m21 = parentNode.accumulated.m21;
+                double m22 = parentNode.accumulated.m22;
                 if (hasAngle ||
                     computedAngle == parentNode.accumulated.angle ||
                     child._directEdit) {
-                    cr.accumulated.m11 = parentNode.accumulated.m11;
-                    cr.accumulated.m12 = parentNode.accumulated.m12;
-                    cr.accumulated.m21 = parentNode.accumulated.m21;
-                    cr.accumulated.m22 = parentNode.accumulated.m22;
                 } else {
                     double delta =
                         (computedAngle - parentNode.accumulated.angle) *
@@ -1924,22 +1930,32 @@ namespace motion {
                     }
                     const double c = std::cos(delta);
                     const double s = std::sin(delta);
-                    cr.accumulated.m11 =
+                    m11 =
                         c * parentNode.accumulated.m11 +
                         s * parentNode.accumulated.m12;
-                    cr.accumulated.m12 =
+                    m12 =
                         c * parentNode.accumulated.m12 -
                         parentNode.accumulated.m11 * s;
-                    cr.accumulated.m21 =
+                    m21 =
                         c * parentNode.accumulated.m21 +
                         s * parentNode.accumulated.m22;
-                    cr.accumulated.m22 =
+                    m22 =
                         c * parentNode.accumulated.m22 -
                         parentNode.accumulated.m21 * s;
                 }
-                cr.accumulated.dirty = true;
+                assignIfChanged(cr.accumulated.m11, m11);
+                assignIfChanged(cr.accumulated.m12, m12);
+                assignIfChanged(cr.accumulated.m21, m21);
+                assignIfChanged(cr.accumulated.m22, m22);
+                if(changed) {
+                    cr.accumulated.dirty = true;
+                    child._layersDirty = true;
+                }
+                return changed;
             };
 
+        std::vector<Player *> childPlayersNeedingUpdate;
+        childPlayersNeedingUpdate.reserve(nodes.size());
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &mn = nodes[i];
             if (mn.nodeType != 3) continue;
@@ -2062,10 +2078,16 @@ namespace motion {
                             std::string motionPart;
                             if (slashPos == std::string::npos) {
                                 charaPart = motionRef;
-                                motionPart = motionRef;
+                                motionPart =
+                                    mn.activeSlot().motionIcon.empty()
+                                    ? motionRef
+                                    : mn.activeSlot().motionIcon;
                             } else {
                                 charaPart = motionRef.substr(0, slashPos);
-                                motionPart = motionRef.substr(slashPos + 1);
+                                motionPart =
+                                    mn.activeSlot().motionIcon.empty()
+                                    ? motionRef.substr(slashPos + 1)
+                                    : mn.activeSlot().motionIcon;
                             }
 
                             const int playFlags =
@@ -2076,6 +2098,15 @@ namespace motion {
                                     *_runtime->activeMotion, charaPart,
                                     motionPart, false) != nullptr;
                             if(canReuseCurrentSnapshot) {
+                                // Valid group/icon children remain part of
+                                // the same E-mote project and need its cached
+                                // head/body/timeline modules. Do not share the
+                                // manager for unresolved legacy `src` slots:
+                                // ensureMotionLoaded() would otherwise mistake
+                                // the project's last module for that missing
+                                // child and recursively build the whole PSB.
+                                child._resourceManagerNative =
+                                    _resourceManagerNative;
                                 const bool sameChara =
                                     detail::narrow(child._chara) == charaPart;
                                 child.setChara(detail::widen(charaPart));
@@ -2102,17 +2133,111 @@ namespace motion {
                                     child.playMotionLike_0x6B2284(
                                         motionKey, playFlags);
                                 }
-                            } else if (slashPos == std::string::npos) {
+                            } else if(
+                                shouldSearchCachedMotionComposition(
+                                    motionRef,
+                                    mn.activeSlot().motionIcon)) {
+                                // The group may live in another PSB already
+                                // loaded into this E-mote project (timeline →
+                                // body, body → head). Select the cached module
+                                // that owns this exact group/motion pair. A
+                                // hierarchical src is authoritative even when
+                                // motionIcon is empty; split CG timelines use
+                                // motion/all_parts/全体構造 in exactly that form.
+                                std::shared_ptr<detail::MotionSnapshot>
+                                    composedSnapshot =
+                                        child._runtime &&
+                                        child._runtime->activeMotion &&
+                                        detail::findMotionClip(
+                                            *child._runtime->activeMotion,
+                                            charaPart, motionPart, false)
+                                        ? child._runtime->activeMotion
+                                        : nullptr;
+                                std::uint64_t composedGeneration = 0;
+                                if(!composedSnapshot) {
+                                    for(const auto &entry :
+                                        _resourceManagerNative
+                                            .uniqueCachedModules()) {
+                                        const auto candidate =
+                                            detail::lookupModuleSnapshot(
+                                                entry.module);
+                                        if(!candidate ||
+                                           !detail::findMotionClip(
+                                               *candidate, charaPart,
+                                               motionPart, false)) {
+                                            continue;
+                                        }
+                                        if(!composedSnapshot ||
+                                           entry.loadGeneration >
+                                               composedGeneration) {
+                                            composedSnapshot = candidate;
+                                            composedGeneration =
+                                                entry.loadGeneration;
+                                        }
+                                    }
+                                }
+                                if(composedSnapshot) {
+                                    const auto entryPoint =
+                                        detail::
+                                            resolveMotionCompositionEntryPoint(
+                                                *composedSnapshot, charaPart,
+                                                motionPart);
+                                    if(LOGGER &&
+                                       std::getenv(
+                                           "AETHERKIRI_MOTION_DEBUG")) {
+                                        LOGGER->info(
+                                            "motion child bind cached composition: parent={} source={} owner={} clip={} module={}",
+                                            motionPath, src,
+                                            entryPoint.owner,
+                                            entryPoint.label,
+                                            composedSnapshot->path);
+                                    }
+                                    child._resourceManagerNative =
+                                        _resourceManagerNative;
+                                    const auto motionKey =
+                                        detail::widen(entryPoint.label);
+                                    const bool sameChara =
+                                        detail::narrow(child._chara) ==
+                                        entryPoint.owner;
+                                    const bool sameSnapshot =
+                                        child._runtime &&
+                                        child._runtime->activeMotion ==
+                                            composedSnapshot;
+                                    const bool sameMotion =
+                                        detail::narrow(child._motionKey) ==
+                                        entryPoint.label;
+                                    const bool hasTimeline =
+                                        child._runtime &&
+                                        child._runtime->timelines.find(
+                                            entryPoint.label) !=
+                                            child._runtime->timelines.end();
+                                    const bool hasBuiltNodes =
+                                        child._runtime &&
+                                        child._runtime->nodesBuilt &&
+                                        child._runtime->nodes.size() > 1;
+                                    if(!sameSnapshot || !sameChara ||
+                                       !sameMotion || !hasTimeline ||
+                                       !hasBuiltNodes) {
+                                        child.setChara(
+                                            detail::widen(entryPoint.owner));
+                                        child._motionKey = motionKey;
+                                        child.loadFromSnapshot(
+                                            composedSnapshot);
+                                        child.playMotionLike_0x6B2284(
+                                            motionKey, playFlags);
+                                    }
+                                } else {
+                                    child.setChara(
+                                        detail::widen(charaPart));
+                                    child.onFindMotion(
+                                        detail::widen(motionPart),
+                                        playFlags);
+                                }
+                            } else {
                                 // Single segment: binary sets chara to src itself
                                 // then Player_play with raw src (no "/" prefix)
                                 child.setChara(detail::widen(motionRef));
                                 child.onFindMotion(detail::widen(motionRef),
-                                                   playFlags);
-                            } else {
-                                // Multi-segment: "chara/motion" format
-                                // Binary: setChara(chara), Player_play(motion)
-                                child.setChara(detail::widen(charaPart));
-                                child.onFindMotion(detail::widen(motionPart),
                                                    playFlags);
                             }
                         }
@@ -2482,19 +2607,30 @@ namespace motion {
                         renderTime = std::min(renderTime, 70.0);
                     }
 
+                    bool sampledStateChanged =
+                        child._clampedEvalTime != renderTime;
                     child._clampedEvalTime = renderTime;
                     if(child._runtime) {
                         if(auto stateIt = child._runtime->timelines.find(
                                childClip->label);
                            stateIt != child._runtime->timelines.end()) {
-                            stateIt->second.currentTime = renderTime;
-                            stateIt->second.playing = false;
-                            stateIt->second.wasPlaying = false;
+                            auto &state = stateIt->second;
+                            sampledStateChanged =
+                                sampledStateChanged ||
+                                state.currentTime != renderTime ||
+                                state.playing || state.wasPlaying;
+                            state.currentTime = renderTime;
+                            state.playing = false;
+                            state.wasPlaying = false;
                         }
                         const auto playingIt = std::remove(
                             child._runtime->playingTimelineLabels.begin(),
                             child._runtime->playingTimelineLabels.end(),
                             childClip->label);
+                        sampledStateChanged =
+                            sampledStateChanged ||
+                            playingIt !=
+                                child._runtime->playingTimelineLabels.end();
                         child._runtime->playingTimelineLabels.erase(
                             playingIt,
                             child._runtime->playingTimelineLabels.end());
@@ -2505,7 +2641,9 @@ namespace motion {
                     // but independently playing descendants still need the
                     // root tick's delta (button -> selected over/out motion).
                     child._frameLastTime = _frameLastTime;
-                    child._emoteDirty = true;
+                    if(sampledStateChanged) {
+                        child._emoteDirty = true;
+                    }
                 } else {
                     // Looping/standalone children keep their own clock.
                     child.frameProgress(_frameLastTime);
@@ -2642,7 +2780,51 @@ namespace motion {
                     }
                     continue;
                 }
-                child.updateLayers();
+                const bool childNeedsUpdate =
+                    child._noUpdateYet || child._layersDirty ||
+                    child._emoteDirty || child._allplaying ||
+                    child.hasPlayingChildPlayers();
+                if(childNeedsUpdate) {
+                    childPlayersNeedingUpdate.push_back(&child);
+                }
+            }
+        }
+
+        if(childPlayersNeedingUpdate.empty()) {
+            return;
+        }
+
+        int ownershipDepth = 0;
+        for(const Player *ancestor = _motionParentPlayer;
+            ancestor; ancestor = ancestor->_motionParentPlayer) {
+            ++ownershipDepth;
+        }
+        const bool warmedChildren = std::all_of(
+            childPlayersNeedingUpdate.begin(),
+            childPlayersNeedingUpdate.end(),
+            [](const Player *child) {
+                return child && !child->_noUpdateYet && child->_runtime &&
+                    child->_runtime->nodesBuilt &&
+                    !child->_runtime->nodes.empty();
+            });
+        const bool canParallelizeSiblings =
+            _runtime->isEmoteMode && ownershipDepth == 1 &&
+            childPlayersNeedingUpdate.size() >= 2 && warmedChildren &&
+            !detail::logoChainTraceEnabled(_runtime->activeMotion) &&
+            !motionUpdateDebugEnabled();
+        if(canParallelizeSiblings) {
+            const auto childCount =
+                static_cast<std::ptrdiff_t>(
+                    childPlayersNeedingUpdate.size());
+#pragma omp parallel for schedule(static)
+            for(std::ptrdiff_t childIndex = 0;
+                childIndex < childCount; ++childIndex) {
+                childPlayersNeedingUpdate[
+                    static_cast<size_t>(childIndex)]->updateLayers();
+            }
+        } else {
+            for(Player *child : childPlayersNeedingUpdate) {
+                child->updateLayers();
             }
         }
 
@@ -2733,25 +2915,6 @@ namespace motion {
         root.accumulated.m21 = parentNode.accumulated.m21;
         root.accumulated.m22 = parentNode.accumulated.m22;
         root.accumulated.dirty = true;
-
-        if(LOGGER && motionUpdateDebugAllEnabled() &&
-           _runtime->activeMotion &&
-           (_runtime->activeMotion->path.find("SD") != std::string::npos ||
-            _runtime->activeMotion->path.find("sd") != std::string::npos)) {
-            LOGGER->info(
-                "motion parent root render apply: childMotion={} childLabel={} parentMotion={} parentLabel={} parentIndex={} root=({:.1f},{:.1f},{:.1f}) parentAccum=({:.1f},{:.1f},{:.1f})",
-                _runtime->activeMotion->path, detail::narrow(_motionKey),
-                _motionParentPlayer->_runtime->activeMotion
-                    ? _motionParentPlayer->_runtime->activeMotion->path
-                    : std::string("<none>"),
-                parentNode.layerName.empty()
-                    ? std::string("<root>")
-                    : parentNode.layerName,
-                _motionParentNodeIndex, posX, posY, posZ,
-                parentNode.accumulated.posX,
-                parentNode.accumulated.posY,
-                parentNode.accumulated.posZ);
-        }
 
         return true;
     }
@@ -3876,6 +4039,7 @@ namespace motion {
 
         _allplaying = !_runtime->playingTimelineLabels.empty() ||
             shouldReportPlayingChildPlayers();
+        ++_runtime->layerStateGeneration;
         _emoteDirty = false;
         _layersDirty = false;
 
@@ -4086,7 +4250,12 @@ namespace motion {
         const auto &nodes = _runtime->nodes;
         const int bitmask = _runtime->isEmoteMode ? 5193 : 5185;
         const auto &dam = _runtime->drawAffineMatrix;
-        std::unordered_set<int> requiredGroupNodeIndices;
+        // Node indices are dense and local to this Player. Reusing compact
+        // marker arrays avoids constructing thousands of short-lived hash
+        // tables while six or more E-mote characters are prepared each frame.
+        std::vector<std::uint8_t> requiredGroupNodeIndices(nodes.size(), 0);
+        std::vector<std::uint32_t> ancestorVisitMarks(nodes.size(), 0);
+        std::uint32_t ancestorVisitToken = 0;
         int skipInactive = 0;
         int skipType = 0;
         int skipNoRenderableSource = 0;
@@ -4124,11 +4293,16 @@ namespace motion {
             }
             if(!node.hasSource || node.interpolatedCache.src.empty()) continue;
 
-            std::unordered_set<int> visitedAncestors;
+            if(++ancestorVisitToken == 0) {
+                std::fill(ancestorVisitMarks.begin(),
+                          ancestorVisitMarks.end(), 0);
+                ++ancestorVisitToken;
+            }
             for(int ancestorIndex = node.visibleAncestorIndex;
                 ancestorIndex >= 0 &&
                 ancestorIndex < static_cast<int>(nodes.size()); ) {
-                if(!visitedAncestors.insert(ancestorIndex).second) {
+                if(ancestorVisitMarks[ancestorIndex] ==
+                   ancestorVisitToken) {
                     if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG")) {
                         LOGGER->warn(
                             "motion prepare ancestor cycle skipped: motion={} node={} ancestor={}",
@@ -4139,6 +4313,7 @@ namespace motion {
                     }
                     break;
                 }
+                ancestorVisitMarks[ancestorIndex] = ancestorVisitToken;
                 const auto &ancestor = nodes[ancestorIndex];
                 // Type 12 is an off-screen/composite container even when its
                 // own stencil mode is 1 rather than 4.  Its source is the
@@ -4148,13 +4323,14 @@ namespace motion {
                 // overwrite previously rendered nested artwork.
                 const bool isSpecialCompositeParent =
                     ancestor.nodeType == 12 || ancestor.nodeType == 7;
-                const auto inserted = isSpecialCompositeParent
-                    ? requiredGroupNodeIndices.insert(ancestorIndex)
-                    : std::pair<std::unordered_set<int>::iterator, bool>{
-                          requiredGroupNodeIndices.end(), false
-                      };
+                const bool inserted =
+                    isSpecialCompositeParent &&
+                    !requiredGroupNodeIndices[ancestorIndex];
+                if(inserted) {
+                    requiredGroupNodeIndices[ancestorIndex] = 1;
+                }
                 const int nextAncestorIndex = ancestor.visibleAncestorIndex;
-                if(!inserted.second || nextAncestorIndex == ancestorIndex) {
+                if(!inserted || nextAncestorIndex == ancestorIndex) {
                     if(!isSpecialCompositeParent && nextAncestorIndex != ancestorIndex) {
                         ancestorIndex = nextAncestorIndex;
                         continue;
@@ -4174,8 +4350,7 @@ namespace motion {
             const bool hasOwnSource =
                 node.hasSource && !node.interpolatedCache.src.empty();
             const bool needsGroupEntry =
-                requiredGroupNodeIndices.find(static_cast<int>(i)) !=
-                requiredGroupNodeIndices.end();
+                requiredGroupNodeIndices[i] != 0;
             if(!needsGroupEntry &&
                !node.forceVisible &&
                (((1 << node.nodeType) & bitmask) == 0)) {
@@ -4192,6 +4367,13 @@ namespace motion {
             entry.nodeLabel = node.layerName;
             entry.hasOwnSource = hasOwnSource;
             entry.groupOnly = needsGroupEntry;
+            entry.implicitVisibleStencilGroup =
+                node.implicitVisibleStencilGroup;
+            entry.implicitVisibleStencilBase =
+                node.implicitVisibleStencilBase;
+            entry.implicitVisibleStencilGroupNodeIndex =
+                node.implicitVisibleStencilGroupNodeIndex;
+            entry.sourceMotion = _runtime->activeMotion;
             if(hasOwnSource) {
                 entry.sourceKey = node.interpolatedCache.src;
                 entry.srcRef = findSource(detail::widen(entry.sourceKey));
@@ -4421,84 +4603,45 @@ namespace motion {
             entries.push_back(std::move(entry));
         }
 
-        if(LOGGER && motionUpdateDebugEnabled() &&
-           (_runtime->activeMotion && motionUpdateDebugAllEnabled())) {
-            const auto &motionPath = _runtime->activeMotion->path;
-            const int frameBucket =
-                static_cast<int>(std::floor(_frameTickCount / 10.0));
-            if(markMotionUpdateDebugLogged(fmt::format(
-                   "prepare-append|{}|{}|{}|{}", motionPath,
-                   static_cast<const void *>(this),
-                   detail::narrow(_motionKey), frameBucket))) {
-                std::ostringstream nodeSummary;
-                const size_t nodeLimit = std::min<size_t>(nodes.size(), 24);
-                for(size_t ni = 0; ni < nodeLimit; ++ni) {
-                    const auto &node = nodes[ni];
-                    if(ni) nodeSummary << ";";
-                    nodeSummary << ni << ":"
-                                << (node.layerName.empty()
-                                        ? std::string("<root>")
-                                        : node.layerName)
-                                << ":t" << node.nodeType
-                                << ":parent=" << node.parentIndex
-                                << ":inherit=0x" << std::hex
-                                << node.inheritFlags << std::dec
-                                << ":act" << (node.accumulated.active ? 1 : 0)
-                                << ":vis" << (node.accumulated.visible ? 1 : 0)
-                                << ":hasSrc" << (node.hasSource ? 1 : 0)
-                                << ":src=" << (node.interpolatedCache.src.empty()
-                                                  ? std::string("<none>")
-                                                  : node.interpolatedCache.src)
-                                << ":draw" << (node.drawFlag ? 1 : 0)
-                                << ":force" << node.forceVisible
-                                << ":frameType" << node.currentFrameType
-                                << ":stencilBase0x" << std::hex
-                                << node.stencilTypeBase << std::dec
-                                << ":stencil0x" << std::hex
-                                << node.stencilType << std::dec
-                                << ":opa" << node.accumulated.opacity
-                                << ":localPos=(" << node.localState.posX << ","
-                                << node.localState.posY << ","
-                                << node.localState.posZ << ")"
-                                << ":localScale=(" << node.localState.scaleX
-                                << "," << node.localState.scaleY << ")"
-                                << ":frameScale=("
-                                << node.interpolatedCache.scaleX << ","
-                                << node.interpolatedCache.scaleY << ")"
-                                << ":accPos=(" << node.accumulated.posX << ","
-                                << node.accumulated.posY << ","
-                                << node.accumulated.posZ << ")"
-                                << ":accScale=(" << node.accumulated.scaleX
-                                << "," << node.accumulated.scaleY << ")"
-                                << ":matrix=[" << node.accumulated.m11 << ","
-                                << node.accumulated.m12 << ","
-                                << node.accumulated.m21 << ","
-                                << node.accumulated.m22 << "]"
-                                << ":clip=" << node.clipW << "x" << node.clipH
-                                << ":origin=(" << node.originX << ","
-                                << node.originY << ")"
-                                << ":bounds=[" << node.bounds[0] << ","
-                                << node.bounds[1] << "," << node.bounds[2]
-                                << "," << node.bounds[3] << "]";
-                }
-                LOGGER->info(
-                    "motion prepare append summary: motion={} player={} motionKey={} frameTick={:.2f} nodes={} entries={} requiredGroups={} skipInactive={} skipType={} skipNoRenderable={} nodes=[{}]",
-                    motionPath, static_cast<const void *>(this),
-                    detail::narrow(_motionKey), _frameTickCount,
-                    nodes.size(), entries.size(),
-                    requiredGroupNodeIndices.size(), skipInactive, skipType,
-                    skipNoRenderableSource, nodeSummary.str());
-            }
-        }
-
         if(entries.empty()) {
             return;
         }
 
-        std::unordered_map<int, size_t> entryIndexByNode;
-        entryIndexByNode.reserve(entries.size());
+        std::vector<std::ptrdiff_t> entryIndexByNode(nodes.size(), -1);
         for(size_t i = 0; i < entries.size(); ++i) {
-            entryIndexByNode.emplace(entries[i].nodeIndex, i);
+            if(entries[i].nodeIndex >= 0 &&
+               entries[i].nodeIndex < static_cast<int>(nodes.size())) {
+                entryIndexByNode[entries[i].nodeIndex] =
+                    static_cast<std::ptrdiff_t>(i);
+            }
+        }
+
+        // visibleAncestorIndex follows every active structural node in the
+        // native tree, but transform-only nodes do not produce render items.
+        // Collapse those gaps while the local node array is still available
+        // so the later flattened command walk reaches the actual composite
+        // ancestor instead of stopping at a missing command.
+        for(auto &entry : entries) {
+            int ancestorIndex = entry.visibleAncestorIndex;
+            if(++ancestorVisitToken == 0) {
+                std::fill(ancestorVisitMarks.begin(),
+                          ancestorVisitMarks.end(), 0);
+                ++ancestorVisitToken;
+            }
+            while(ancestorIndex >= 0 &&
+                  ancestorIndex < static_cast<int>(nodes.size()) &&
+                  entryIndexByNode[ancestorIndex] < 0 &&
+                  ancestorVisitMarks[ancestorIndex] !=
+                      ancestorVisitToken) {
+                ancestorVisitMarks[ancestorIndex] = ancestorVisitToken;
+                ancestorIndex = nodes[ancestorIndex].visibleAncestorIndex;
+            }
+            entry.visibleAncestorIndex =
+                ancestorIndex >= 0 &&
+                        ancestorIndex < static_cast<int>(nodes.size()) &&
+                        entryIndexByNode[ancestorIndex] >= 0
+                    ? ancestorIndex
+                    : -1;
         }
 
         auto unionPaintBox =
@@ -4520,11 +4663,16 @@ namespace motion {
             };
 
         for(const auto &childEntry : entries) {
-            std::unordered_set<int> visitedAncestors;
+            if(++ancestorVisitToken == 0) {
+                std::fill(ancestorVisitMarks.begin(),
+                          ancestorVisitMarks.end(), 0);
+                ++ancestorVisitToken;
+            }
             for(int ancestorIndex = childEntry.visibleAncestorIndex;
                 ancestorIndex >= 0 &&
                 ancestorIndex < static_cast<int>(nodes.size()); ) {
-                if(!visitedAncestors.insert(ancestorIndex).second) {
+                if(ancestorVisitMarks[ancestorIndex] ==
+                   ancestorVisitToken) {
                     if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG")) {
                         LOGGER->warn(
                             "motion prepare paintBox ancestor cycle skipped: motion={} childNode={} ancestor={}",
@@ -4535,11 +4683,13 @@ namespace motion {
                     }
                     break;
                 }
-                const auto parentIt = entryIndexByNode.find(ancestorIndex);
-                if(parentIt == entryIndexByNode.end()) {
+                ancestorVisitMarks[ancestorIndex] = ancestorVisitToken;
+                const auto parentIndex = entryIndexByNode[ancestorIndex];
+                if(parentIndex < 0) {
                     break;
                 }
-                auto &parentEntry = entries[parentIt->second];
+                auto &parentEntry =
+                    entries[static_cast<size_t>(parentIndex)];
                 const auto &ancestorNode = nodes[parentEntry.nodeIndex];
                 unionPaintBox(parentEntry, childEntry);
                 const int nextAncestorIndex = ancestorNode.visibleAncestorIndex;
@@ -4568,6 +4718,7 @@ namespace motion {
                         s_prepareStack.size());
                 }
                 _runtime->preparedRenderItems.clear();
+                _runtime->preparedRenderItemsValid = false;
                 return false;
             }
         }
@@ -4581,7 +4732,16 @@ namespace motion {
                     s_prepareStack.size());
             }
             _runtime->preparedRenderItems.clear();
+            _runtime->preparedRenderItemsValid = false;
             return false;
+        }
+        if(_motionParentPlayer &&
+           _runtime->preparedRenderItemsValid &&
+           _runtime->preparedLayerStateGeneration ==
+               _runtime->layerStateGeneration &&
+           _runtime->preparedDrawAffineMatrix ==
+               _runtime->drawAffineMatrix) {
+            return !_runtime->preparedRenderItems.empty();
         }
         s_prepareStack.push_back(this);
         struct PrepareStackGuard {
@@ -4589,6 +4749,7 @@ namespace motion {
             ~PrepareStackGuard() { stack.pop_back(); }
         } prepareStackGuard{ s_prepareStack };
 
+        _runtime->preparedRenderItemsValid = false;
         _runtime->preparedRenderItems.clear();
         const auto motionPath =
             _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
@@ -4602,6 +4763,18 @@ namespace motion {
             std::vector<detail::PlayerRuntime::PreparedRenderItem> entries;
         };
         std::vector<PendingChildRenderItems> pendingChildItems;
+        pendingChildItems.reserve(_runtime->nodes.size());
+        std::vector<std::uint32_t> prepareVisitMarks(
+            _runtime->nodes.size(), 0);
+        std::uint32_t prepareVisitToken = 0;
+        auto acquirePrepareVisitToken = [&]() {
+            if(++prepareVisitToken == 0) {
+                std::fill(prepareVisitMarks.begin(),
+                          prepareVisitMarks.end(), 0);
+                ++prepareVisitToken;
+            }
+            return prepareVisitToken;
+        };
 
         auto collectChildEntries = [&](int parentNodeIndex, Player *child) {
             if(!child || !child->_runtime) {
@@ -4620,13 +4793,14 @@ namespace motion {
                parentNodeIndex < static_cast<int>(_runtime->nodes.size())) {
                 const auto &parentNode = _runtime->nodes[parentNodeIndex];
                 int stencilCompositeAncestorIndex = -1;
-                std::unordered_set<int> visitedAncestors;
+                const auto visitToken = acquirePrepareVisitToken();
                 for(int ancestorIndex = parentNode.visibleAncestorIndex;
                     ancestorIndex >= 0 &&
                     ancestorIndex < static_cast<int>(_runtime->nodes.size()); ) {
-                    if(!visitedAncestors.insert(ancestorIndex).second) {
+                    if(prepareVisitMarks[ancestorIndex] == visitToken) {
                         break;
                     }
+                    prepareVisitMarks[ancestorIndex] = visitToken;
                     const auto &ancestor = _runtime->nodes[ancestorIndex];
                     if(ancestor.nodeType == 12) {
                         stencilCompositeAncestorIndex = ancestorIndex;
@@ -4661,16 +4835,19 @@ namespace motion {
             pending.childMotionPath = child->_runtime->activeMotion
                 ? child->_runtime->activeMotion->path
                 : std::string("<none>");
-            pending.entries.insert(
-                pending.entries.end(),
-                std::make_move_iterator(childEntries.begin()),
-                std::make_move_iterator(childEntries.end()));
+            // A nested Player is flattened into this Player's sole output
+            // surface. Transfer the prepared entries instead of deep-copying
+            // every mesh/corner/stencil vector at each ownership level. The
+            // child cache cannot be reused after its entries have moved, so
+            // invalidate it explicitly; a later independent render will
+            // rebuild it from the unchanged layer state.
+            pending.entries = std::move(childEntries);
+            child->_runtime->preparedRenderItemsValid = false;
             detail::logoChainTraceLogf(
                 motionPath, "prepare.childCollect", "0x6F363C",
                 _clampedEvalTime,
                 "parentNodeIndex={} childMotionPath={} collected={}",
                 parentNodeIndex, pending.childMotionPath, pending.entries.size());
-            childEntries.clear();
             pendingChildItems.push_back(std::move(pending));
         };
 
@@ -4699,6 +4876,17 @@ namespace motion {
         }
 
         appendPreparedRenderItems();
+        const auto localRenderScopeId = reinterpret_cast<std::uintptr_t>(
+            _runtime.get());
+        for(auto &entry : _runtime->preparedRenderItems) {
+            entry.renderScopeId = localRenderScopeId;
+            entry.scopedNodeIndex = entry.nodeIndex;
+            if(entry.visibleAncestorIndex >= 0) {
+                entry.parentRenderScopeId = localRenderScopeId;
+                entry.scopedParentNodeIndex =
+                    entry.visibleAncestorIndex;
+            }
+        }
 
         auto isValidPreparedPaintBox =
             [](const std::array<float, 4> &box) {
@@ -4734,10 +4922,14 @@ namespace motion {
                 }
 
                 std::vector<int> meshChain;
-                std::unordered_set<int> visited;
+                meshChain.reserve(8);
+                const auto visitToken = acquirePrepareVisitToken();
                 while(meshWalk >= 0 &&
-                      meshWalk < static_cast<int>(_runtime->nodes.size()) &&
-                      visited.insert(meshWalk).second) {
+                      meshWalk < static_cast<int>(_runtime->nodes.size())) {
+                    if(prepareVisitMarks[meshWalk] == visitToken) {
+                        break;
+                    }
+                    prepareVisitMarks[meshWalk] = visitToken;
                     const auto &ancestor = _runtime->nodes[meshWalk];
                     if(ancestor.hasMeshData &&
                        ancestor.meshWorldControlPoints.size() == 32) {
@@ -4754,27 +4946,6 @@ namespace motion {
                 if(std::fabs(det) <= 1e-12) {
                     return;
                 }
-
-                auto evalBezierPatch = [](const float *mesh, float u, float v,
-                                          float &outX, float &outY) {
-                    const float su = 1.0f - u;
-                    const float sv = 1.0f - v;
-                    const float bu[4] = {
-                        su * su * su, 3.0f * su * su * u,
-                        3.0f * su * u * u, u * u * u
-                    };
-                    const float bv[4] = {
-                        sv * sv * sv, 3.0f * sv * sv * v,
-                        3.0f * sv * v * v, v * v * v
-                    };
-                    outX = 0.0f;
-                    outY = 0.0f;
-                    for(int i = 0; i < 16; ++i) {
-                        const float weight = bv[i >> 2] * bu[i & 3];
-                        outX += mesh[i * 2] * weight;
-                        outY += mesh[i * 2 + 1] * weight;
-                    }
-                };
 
                 auto deformPoint = [&](float &displayX, float &displayY) {
                     const double translatedX =
@@ -4796,7 +4967,7 @@ namespace motion {
                         const float v = static_cast<float>(
                             ancestor.meshInvM21 * x +
                             ancestor.meshInvM22 * y);
-                        evalBezierPatch(
+                        evaluateMotionBezierPatch(
                             ancestor.meshWorldControlPoints.data(), u, v,
                             modelX, modelY);
                     }
@@ -4863,8 +5034,7 @@ namespace motion {
                 }
 
                 if(LOGGER &&
-                   (motionUpdateDebugAllEnabled() ||
-                    std::getenv("AETHERKIRI_EMOTE_MESH_TRACE")) &&
+                   std::getenv("AETHERKIRI_EMOTE_MESH_TRACE") &&
                    deformedEntries > 0) {
                     LOGGER->info(
                         "[EMOTE_MESH] child external mesh applied: motion={} parentNode={} parentLabel={} childMotion={} chainDepth={} chainFirst={} entries={}",
@@ -5030,16 +5200,6 @@ namespace motion {
                         entry, parentCenterX, parentCenterY,
                         haveParentViewport ? &parentViewport : nullptr);
                 }
-                if(LOGGER && motionUpdateDebugAllEnabled()) {
-                    LOGGER->info(
-                        "motion child center-origin translate: motion={} parentNode={} childMotion={} parentBounds=[{:.1f},{:.1f},{:.1f},{:.1f}] childBounds=[{:.1f},{:.1f},{:.1f},{:.1f}] offset=({:.1f},{:.1f}) entries={}",
-                        motionPath, pending.parentNodeIndex,
-                        pending.childMotionPath, parentBounds[0],
-                        parentBounds[1], parentBounds[2], parentBounds[3],
-                        childBounds[0], childBounds[1], childBounds[2],
-                        childBounds[3], parentCenterX, parentCenterY,
-                        pending.entries.size());
-                }
             };
 
         auto inheritParentClipViewport =
@@ -5142,6 +5302,9 @@ namespace motion {
             if(maxChildNodeIndex >= 0) {
                 const int nodeIndexOffset = nextMergedNodeIndex;
                 for(auto &entry : pending.entries) {
+                    const bool hadScopedRenderParent =
+                        entry.parentRenderScopeId != 0 &&
+                        entry.scopedParentNodeIndex >= 0;
                     if(entry.nodeIndex >= 0) {
                         entry.nodeIndex += nodeIndexOffset;
                     }
@@ -5160,11 +5323,35 @@ namespace motion {
                         // exception and must retain the external parent.
                         entry.visibleAncestorIndex =
                             pending.externalAncestorNodeIndex;
+                        entry.parentRenderScopeId = localRenderScopeId;
+                        entry.scopedParentNodeIndex =
+                            pending.externalAncestorNodeIndex;
+                    }
+                    if(hadScopedRenderParent &&
+                       pending.externalAncestorNodeIndex >= 0) {
+                        const detail::PlayerRuntime::
+                            RenderAncestorReference outerAncestor{
+                                localRenderScopeId,
+                                pending.externalAncestorNodeIndex};
+                        if(entry.outerRenderAncestorChain.empty() ||
+                           entry.outerRenderAncestorChain.back()
+                                   .renderScopeId !=
+                               outerAncestor.renderScopeId ||
+                           entry.outerRenderAncestorChain.back()
+                                   .scopedNodeIndex !=
+                               outerAncestor.scopedNodeIndex) {
+                            entry.outerRenderAncestorChain.push_back(
+                                outerAncestor);
+                        }
                     }
                     for(int &maskNodeIndex : entry.stencilMaskNodeIndices) {
                         if(maskNodeIndex >= 0) {
                             maskNodeIndex += nodeIndexOffset;
                         }
+                    }
+                    if(entry.implicitVisibleStencilGroupNodeIndex >= 0) {
+                        entry.implicitVisibleStencilGroupNodeIndex +=
+                            nodeIndexOffset;
                     }
                 }
                 nextMergedNodeIndex += maxChildNodeIndex + 1;
@@ -5195,20 +5382,35 @@ namespace motion {
         // union now so a type-12 off-screen group covers the complete nested
         // iris/highlight surface instead of retaining its 16x16 placeholder
         // bitmap bounds.
-        std::unordered_map<int, size_t> mergedEntryIndexByNode;
-        mergedEntryIndexByNode.reserve(_runtime->preparedRenderItems.size());
+        int maxMergedNodeIndex = -1;
+        for(const auto &entry : _runtime->preparedRenderItems) {
+            maxMergedNodeIndex =
+                std::max(maxMergedNodeIndex, entry.nodeIndex);
+        }
+        std::vector<std::ptrdiff_t> mergedEntryIndexByNode(
+            static_cast<size_t>(maxMergedNodeIndex + 1), -1);
         for(size_t i = 0; i < _runtime->preparedRenderItems.size(); ++i) {
-            mergedEntryIndexByNode.emplace(
-                _runtime->preparedRenderItems[i].nodeIndex, i);
+            const int nodeIndex =
+                _runtime->preparedRenderItems[i].nodeIndex;
+            if(nodeIndex >= 0 &&
+               mergedEntryIndexByNode[static_cast<size_t>(nodeIndex)] < 0) {
+                mergedEntryIndexByNode[static_cast<size_t>(nodeIndex)] =
+                    static_cast<std::ptrdiff_t>(i);
+            }
         }
         for(const auto &childEntry : _runtime->preparedRenderItems) {
-            const auto parentIt = mergedEntryIndexByNode.find(
-                childEntry.visibleAncestorIndex);
-            if(parentIt == mergedEntryIndexByNode.end()) {
+            if(childEntry.visibleAncestorIndex < 0 ||
+               childEntry.visibleAncestorIndex > maxMergedNodeIndex) {
+                continue;
+            }
+            const auto parentIndex = mergedEntryIndexByNode[
+                static_cast<size_t>(childEntry.visibleAncestorIndex)];
+            if(parentIndex < 0) {
                 continue;
             }
             auto &parentEntry =
-                _runtime->preparedRenderItems[parentIt->second];
+                _runtime->preparedRenderItems[
+                    static_cast<size_t>(parentIndex)];
             if(!parentEntry.groupOnly ||
                childEntry.paintBox[2] < childEntry.paintBox[0] ||
                childEntry.paintBox[3] < childEntry.paintBox[1]) {
@@ -5228,19 +5430,28 @@ namespace motion {
                     parentEntry.paintBox[3], childEntry.paintBox[3]);
             }
         }
+        const bool tracePrepareSort =
+            detail::logoChainTraceEnabled(_runtime->activeMotion);
         std::vector<double> beforeSortKeys;
-        beforeSortKeys.reserve(_runtime->preparedRenderItems.size());
-        for(const auto &item : _runtime->preparedRenderItems) {
-            beforeSortKeys.push_back(item.sortKey);
+        if(tracePrepareSort) {
+            beforeSortKeys.reserve(_runtime->preparedRenderItems.size());
+            for(const auto &item : _runtime->preparedRenderItems) {
+                beforeSortKeys.push_back(item.sortKey);
+            }
         }
         // Aligned to sub_6D4F00 (0x6D4F00): compare render-item sort key.
-        std::stable_sort(_runtime->preparedRenderItems.begin(),
-            _runtime->preparedRenderItems.end(),
+        const auto renderItemLess =
             [](const detail::PlayerRuntime::PreparedRenderItem &lhs,
                const detail::PlayerRuntime::PreparedRenderItem &rhs) {
                 return lhs.sortKey < rhs.sortKey;
-            });
-        if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {
+            };
+        if(!std::is_sorted(_runtime->preparedRenderItems.begin(),
+                           _runtime->preparedRenderItems.end(),
+                           renderItemLess)) {
+            std::stable_sort(_runtime->preparedRenderItems.begin(),
+                _runtime->preparedRenderItems.end(), renderItemLess);
+        }
+        if(tracePrepareSort) {
             std::ostringstream beforeSort;
             std::ostringstream afterSort;
             for(size_t i = 0; i < beforeSortKeys.size(); ++i) {
@@ -5258,6 +5469,11 @@ namespace motion {
                 _runtime->preparedRenderItems.size(), beforeSort.str(),
                 afterSort.str());
         }
+        _runtime->preparedLayerStateGeneration =
+            _runtime->layerStateGeneration;
+        _runtime->preparedDrawAffineMatrix =
+            _runtime->drawAffineMatrix;
+        _runtime->preparedRenderItemsValid = true;
         return !_runtime->preparedRenderItems.empty();
     }
 
@@ -5271,13 +5487,24 @@ namespace motion {
         // Root position is already baked into node state during updateLayers.
         const double ofsX = static_cast<double>(_cameraOffsetX);
         const double ofsY = static_cast<double>(_cameraOffsetY);
+        const bool traceTranslate =
+            detail::logoChainTraceEnabled(_runtime->activeMotion);
+        if(ofsX == 0.0 && ofsY == 0.0 && !traceTranslate) {
+            return;
+        }
         const auto motionPath =
             _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
         for(auto &entry : _runtime->preparedRenderItems) {
-            const auto beforeCorners = entry.corners;
-            const auto beforePaintBox = entry.paintBox;
-            const auto beforeViewport = entry.viewport;
-            const auto beforeMeshPoints = entry.meshPoints;
+            std::array<float, 8> beforeCorners{};
+            std::array<float, 4> beforePaintBox{};
+            std::array<float, 4> beforeViewport{};
+            std::vector<float> beforeMeshPoints;
+            if(traceTranslate) {
+                beforeCorners = entry.corners;
+                beforePaintBox = entry.paintBox;
+                beforeViewport = entry.viewport;
+                beforeMeshPoints = entry.meshPoints;
+            }
             for(size_t ci = 0; ci < entry.corners.size(); ci += 2) {
                 entry.corners[ci] =
                     static_cast<float>(static_cast<double>(entry.corners[ci]) + ofsX);
@@ -5304,7 +5531,7 @@ namespace motion {
                 entry.meshPoints[pi + 1] =
                     static_cast<float>(static_cast<double>(entry.meshPoints[pi + 1]) + ofsY);
             }
-            if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {
+            if(traceTranslate) {
                 bool ok = true;
                 for(size_t ci = 0; ci < entry.corners.size(); ci += 2) {
                     if(std::fabs((entry.corners[ci] - beforeCorners[ci]) -

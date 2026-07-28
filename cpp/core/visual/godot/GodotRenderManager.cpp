@@ -28,19 +28,44 @@ int BytesPerPixel(TVPTextureFormat::e format) {
     }
 }
 
-void CopyRect(uint8_t *dst, int dst_pitch, const uint8_t *src, int src_pitch,
-              int bytes_per_pixel, const tTVPRect &rc) {
-    const int width_bytes = std::max(0, rc.get_width()) * bytes_per_pixel;
-    for (int y = rc.top; y < rc.bottom; ++y) {
-        std::memcpy(dst + y * dst_pitch + rc.left * bytes_per_pixel,
-                    src + (y - rc.top) * src_pitch,
-                    static_cast<size_t>(width_bytes));
+bool CopyRect(uint8_t *dst, int dst_pitch, int dst_width, int dst_height,
+              const uint8_t *src, int src_pitch, int bytes_per_pixel,
+              const tTVPRect &rc) {
+    if(dst == nullptr || src == nullptr || dst_pitch <= 0 || src_pitch <= 0 ||
+       dst_width <= 0 || dst_height <= 0 || bytes_per_pixel <= 0 ||
+       rc.right <= rc.left || rc.bottom <= rc.top) {
+        return false;
     }
+
+    const int left = std::max(0, rc.left);
+    const int top = std::max(0, rc.top);
+    const int right = std::min(dst_width, rc.right);
+    const int bottom = std::min(dst_height, rc.bottom);
+    if(left >= right || top >= bottom) {
+        return true;
+    }
+
+    const size_t source_x = static_cast<size_t>(left - rc.left) * bytes_per_pixel;
+    const size_t width_bytes = static_cast<size_t>(right - left) * bytes_per_pixel;
+    if(source_x + width_bytes > static_cast<size_t>(src_pitch) ||
+       static_cast<size_t>(right) * bytes_per_pixel >
+           static_cast<size_t>(dst_pitch)) {
+        return false;
+    }
+    for(int y = top; y < bottom; ++y) {
+        const size_t source_y = static_cast<size_t>(y - rc.top) * src_pitch;
+        const size_t destination_y = static_cast<size_t>(y) * dst_pitch;
+        std::memcpy(dst + destination_y + static_cast<size_t>(left) * bytes_per_pixel,
+                    src + source_y + source_x, width_bytes);
+    }
+    return true;
 }
 
 std::mutex g_method_stats_mutex;
 std::unordered_map<std::string, uint64_t> g_method_stats;
 std::atomic<uint64_t> g_texture_create_count{0};
+std::atomic<uint64_t> g_texture_clone_count{0};
+std::atomic<uint64_t> g_texture_resize_count{0};
 std::atomic<uint64_t> g_software_fallback_count{0};
 std::atomic<uint64_t> g_gpu_fastpath_count{0};
 std::atomic<bool> g_gpu_fastpath_enabled{true};
@@ -104,6 +129,7 @@ bool IsGpuRectFastPathEnabled(const char *name) {
     }
     const auto is_default_enabled = [&]() {
         return std::strcmp(name, "FillARGB") == 0 ||
+               std::strcmp(name, "FillMask") == 0 ||
                std::strcmp(name, "Copy") == 0 ||
                std::strcmp(name, "RemoveConstOpacity") == 0 ||
                std::strcmp(name, "AlphaBlend") == 0 ||
@@ -116,6 +142,8 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "UnivTransBlend_d") == 0 ||
                std::strcmp(name, "UnivTransBlend_a") == 0 ||
                std::strcmp(name, "CopyColor") == 0 ||
+               std::strcmp(name, "PsAddBlend") == 0 ||
+               std::strcmp(name, "PsSubBlend") == 0 ||
                std::strcmp(name, "PsScreenBlend") == 0 ||
                std::strcmp(name, "PsMulBlend") == 0;
     };
@@ -141,8 +169,10 @@ bool IsGpuRectFastPathEnabled(const char *name) {
     return false;
 }
 
+constexpr int kDefaultGpuRectMinArea = 32768;
+constexpr int kDefaultAlphaRectMinArea = 32768;
+
 int GpuRectMinArea() {
-    constexpr int kDefaultGpuRectMinArea = 32768;
     static const int min_area = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_GPU_RECT_MIN_AREA");
         if (value == nullptr || value[0] == '\0') return kDefaultGpuRectMinArea;
@@ -159,7 +189,6 @@ int GpuRectMinAreaForMethod(const char *name) {
         (std::strcmp(name, "AlphaBlend") == 0 ||
          std::strcmp(name, "AlphaBlend_a") == 0 ||
          std::strcmp(name, "AlphaBlend_d") == 0)) {
-        constexpr int kDefaultAlphaRectMinArea = 32768;
         static const int min_area = []() {
             const char *value =
                 std::getenv("AETHERKIRI_GODOT_GPU_ALPHA_RECT_MIN_AREA");
@@ -241,37 +270,48 @@ bool RectNeedsAlphaAreaDownsample(const tTVPRect &dst, const tTVPRect &src,
            RectNeedsAreaDownsample(dst, src);
 }
 
-bool TrianglesNeedAreaDownsample(uint32_t triangle_count,
-                                 const tTVPPointD *dst_points,
-                                 const tTVPPointD *src_points) {
+bool TrianglesNeedStrongAreaDownsample(uint32_t triangle_count,
+                                       const tTVPPointD *dst_points,
+                                       const tTVPPointD *src_points) {
     if (triangle_count == 0 || dst_points == nullptr || src_points == nullptr) {
         return false;
     }
-    double dst_left = dst_points[0].x;
-    double dst_right = dst_points[0].x;
-    double dst_top = dst_points[0].y;
-    double dst_bottom = dst_points[0].y;
-    double src_left = src_points[0].x;
-    double src_right = src_points[0].x;
-    double src_top = src_points[0].y;
-    double src_bottom = src_points[0].y;
-    const uint32_t point_count = triangle_count * 3u;
-    for (uint32_t i = 1; i < point_count; ++i) {
-        dst_left = std::min(dst_left, dst_points[i].x);
-        dst_right = std::max(dst_right, dst_points[i].x);
-        dst_top = std::min(dst_top, dst_points[i].y);
-        dst_bottom = std::max(dst_bottom, dst_points[i].y);
-        src_left = std::min(src_left, src_points[i].x);
-        src_right = std::max(src_right, src_points[i].x);
-        src_top = std::min(src_top, src_points[i].y);
-        src_bottom = std::max(src_bottom, src_points[i].y);
+    // Comparing source/destination axis-aligned bounds misclassifies a
+    // rotated surface as downsampled whenever one rotated bound gets shorter.
+    // That sent the common slanted E-mote presentation through the software
+    // rasterizer and forced two full GPU readbacks per frame.  Compare the
+    // corresponding triangle edges instead.  The GPU shader does
+    // alpha-premultiplied bilinear sampling, so reserve the area-filtered CPU
+    // path only for a genuinely strong (>2x along an edge) reduction.
+    constexpr double kStrongDownsampleScale = 0.5;
+    constexpr double kLengthEpsilon = 0.001;
+    for(uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
+        const uint32_t base = triangle * 3u;
+        for(uint32_t edge = 0; edge < 3u; ++edge) {
+            const uint32_t next = (edge + 1u) % 3u;
+            const auto &src0 = src_points[base + edge];
+            const auto &src1 = src_points[base + next];
+            const auto &dst0 = dst_points[base + edge];
+            const auto &dst1 = dst_points[base + next];
+            const double srcDx = src1.x - src0.x;
+            const double srcDy = src1.y - src0.y;
+            const double dstDx = dst1.x - dst0.x;
+            const double dstDy = dst1.y - dst0.y;
+            const double srcLengthSquared = srcDx * srcDx + srcDy * srcDy;
+            if(srcLengthSquared <= kLengthEpsilon * kLengthEpsilon) {
+                continue;
+            }
+            const double dstLengthSquared = dstDx * dstDx + dstDy * dstDy;
+            const double threshold =
+                kStrongDownsampleScale * kStrongDownsampleScale *
+                srcLengthSquared;
+            if(dstLengthSquared + kLengthEpsilon * kLengthEpsilon <
+               threshold) {
+                return true;
+            }
+        }
     }
-    const double dst_w = dst_right - dst_left;
-    const double dst_h = dst_bottom - dst_top;
-    const double src_w = src_right - src_left;
-    const double src_h = src_bottom - src_top;
-    return dst_w > 0.0 && dst_h > 0.0 &&
-           (dst_w + 0.001 < src_w || dst_h + 0.001 < src_h);
+    return false;
 }
 
 bool TrianglesNeedAlphaAreaDownsample(uint32_t triangle_count,
@@ -279,7 +319,8 @@ bool TrianglesNeedAlphaAreaDownsample(uint32_t triangle_count,
                                       const tTVPPointD *src_points,
                                       const GodotTexture2D *texture) {
     return texture != nullptr && texture->HasKnownTransparency() &&
-           TrianglesNeedAreaDownsample(triangle_count, dst_points, src_points);
+           TrianglesNeedStrongAreaDownsample(
+               triangle_count, dst_points, src_points);
 }
 
 bool RectBoundsInsideTexture(const tTVPRect &rc, const GodotTexture2D *texture) {
@@ -565,6 +606,13 @@ void *GodotTexture2D::GetScanLineForWrite(tjs_uint l) {
 void GodotTexture2D::Update(const void *pixel, TVPTextureFormat::e format,
                             int pitch, const tTVPRect &rc) {
     if (pixel == nullptr) return;
+    const int new_bpp = BytesPerPixel(format);
+    if(format != format_) {
+        ReleaseGpuHandle();
+        format_ = format;
+        pitch_ = Width * new_bpp;
+        pixels_.assign(static_cast<size_t>(pitch_) * Height, 0);
+    }
     const bool full_rect = IsFullTextureRect(rc, Width, Height);
     const bool replace_transient_scratch =
         !full_rect && discard_unwritten_on_partial_update_ &&
@@ -577,11 +625,11 @@ void GodotTexture2D::Update(const void *pixel, TVPTextureFormat::e format,
         }
         EnsureCpuStorage();
     }
-    format_ = format;
-    const int bpp = BytesPerPixel(format_);
-    const int src_pitch = pitch > 0 ? pitch : rc.get_width() * bpp;
-    CopyRect(pixels_.data(), pitch_, static_cast<const uint8_t *>(pixel),
-             src_pitch, bpp, rc);
+    const int src_pitch = pitch > 0 ? pitch : rc.get_width() * new_bpp;
+    const bool copied = CopyRect(pixels_.data(), pitch_, Width, Height,
+                                 static_cast<const uint8_t *>(pixel), src_pitch,
+                                 new_bpp, rc);
+    if (!copied) return;
     if (full_rect) {
         SetOpacityFromPixels(pixels_.data(), pitch_);
     } else {
@@ -706,7 +754,9 @@ bool GodotTexture2D::BlendTrianglesGpuFrom(
         mode != TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A &&
         mode != TVP_GODOT_GPU_BLEND_CONST_ALPHA_D &&
         mode != TVP_GODOT_GPU_BLEND_PS_SCREEN &&
-        mode != TVP_GODOT_GPU_BLEND_PS_MULTIPLY) {
+        mode != TVP_GODOT_GPU_BLEND_PS_MULTIPLY &&
+        mode != TVP_GODOT_GPU_BLEND_PS_ADD &&
+        mode != TVP_GODOT_GPU_BLEND_PS_SUBTRACT) {
         return false;
     }
     return DrawTrianglesGpuFrom(
@@ -780,7 +830,9 @@ bool GodotTexture2D::BlendGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
     if (src == nullptr || gpu_handle_ == 0 || src->gpu_handle_ == 0) {
         return false;
     }
-    if (src == this) {
+    if (src == this &&
+        mode != TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY &&
+        mode != TVP_GODOT_GPU_BLEND_FILL_MASK) {
         return false;
     }
     const auto *bridge = TVPGodotGpuBridgeGet();
@@ -900,6 +952,11 @@ iTVPTexture2D *GodotRenderManager::CreateTexture2D(TJS::tTJSBinaryStream *) {
 iTVPTexture2D *GodotRenderManager::CreateTexture2D(unsigned int neww,
                                                    unsigned int newh,
                                                    iTVPTexture2D *tex) {
+    g_texture_clone_count.fetch_add(1, std::memory_order_relaxed);
+    if (tex == nullptr || tex->GetWidth() != static_cast<tjs_int>(neww) ||
+        tex->GetHeight() != static_cast<tjs_int>(newh)) {
+        g_texture_resize_count.fetch_add(1, std::memory_order_relaxed);
+    }
     auto *ret = new GodotTexture2D(nullptr, 0, neww, newh,
                                   tex != nullptr ? tex->GetFormat()
                                                  : TVPTextureFormat::RGBA);
@@ -908,6 +965,19 @@ iTVPTexture2D *GodotRenderManager::CreateTexture2D(unsigned int neww,
                                std::min<tjs_int>(neww, tex->GetWidth()),
                                std::min<tjs_int>(newh, tex->GetHeight()));
         if (!copy_rc.is_empty()) {
+            // Copy-on-write and grow-only motion scratch layers arrive here
+            // while their newest pixels still live exclusively on the GPU.
+            // Reading scan line zero would synchronously download the entire
+            // Metal texture before uploading it into the replacement texture.
+            // Keep that clone on the ordered GPU queue whenever both textures
+            // use this backend.
+            auto *godot_src = dynamic_cast<GodotTexture2D *>(tex);
+            if (godot_src != nullptr &&
+                ret->EnsureGpuHandle() && godot_src->EnsureGpuHandle() &&
+                godot_src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+                ret->CopyGpuFrom(godot_src, copy_rc, copy_rc)) {
+                return ret;
+            }
             const void *src_pixels = tex->GetScanLineForRead(0);
             if (src_pixels != nullptr) {
                 ret->Update(src_pixels, tex->GetFormat(), tex->GetPitch(),
@@ -953,7 +1023,10 @@ bool GodotRenderManager::GetTextureStat(iTVPTexture2D *texture,
 }
 
 int GodotRenderManager::EnumParameterID(const char *name) {
-    return SoftwareDelegate()->EnumParameterID(name);
+    const int id = SoftwareDelegate()->EnumParameterID(name);
+    if(name != nullptr && std::strcmp(name, "StretchType") == 0)
+        stretch_parameter_id_ = id;
+    return id;
 }
 
 void GodotRenderManager::SetParameterUInt(int id, unsigned int Value) {
@@ -961,6 +1034,8 @@ void GodotRenderManager::SetParameterUInt(int id, unsigned int Value) {
 }
 
 void GodotRenderManager::SetParameterInt(int id, int Value) {
+    if(id >= 0 && id == stretch_parameter_id_)
+        stretch_type_ = Value;
     SoftwareDelegate()->SetParameterInt(id, Value);
 }
 
@@ -1002,6 +1077,9 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     auto *src3_3 = textures.size() == 3
         ? dynamic_cast<GodotTexture2D *>(textures[2].first)
         : nullptr;
+    const bool nearest_scaled = textures.size() == 1 &&
+        !RectAbsSizeMatches(rctar, textures[0].second) &&
+        (stretch_type_ & stTypeMask) == stNearest;
 
     if (method_name == "Copy" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("Copy") &&
@@ -1022,6 +1100,14 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
             src_rc.get_height() == rctar.get_height() &&
             dst->CopyGpuFrom(src, rctar, src_rc)) {
             CountGpuFastPath(method_name);
+            return;
+        }
+        if(nearest_scaled) {
+            CountCopyFallbackReason("scaled_copy_nearest");
+            CountMethodFallback(method);
+            SoftwareDelegate()->OperateRect(delegate_method, tar, reftar,
+                                            rctar, textures);
+            dst->MarkCpuDirty();
             return;
         }
         const bool needs_area_downsample =
@@ -1102,6 +1188,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     }
 
     if (method_name == "AlphaBlend" && dst != nullptr && src != nullptr &&
+        !nearest_scaled &&
         IsGpuRectFastPathEnabled("AlphaBlend") &&
         ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
@@ -1116,6 +1203,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     }
 
     if (method_name == "AlphaBlend_d" && dst != nullptr && src != nullptr &&
+        !nearest_scaled &&
         IsGpuRectFastPathEnabled("AlphaBlend_d") &&
         ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
         RectBoundsInsideTexture(textures[0].second, src) &&
@@ -1159,6 +1247,36 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         return;
     }
 
+    if (method_name == "PsAddBlend" && dst != nullptr && src != nullptr &&
+        IsGpuRectFastPathEnabled("PsAddBlend") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
+        RectAbsSizeMatches(rctar, textures[0].second) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(src, rctar, textures[0].second,
+                          TVP_GODOT_GPU_BLEND_PS_ADD,
+                          godot_method != nullptr ? godot_method->Opacity() : 255,
+                          0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
+    if (method_name == "PsSubBlend" && dst != nullptr && src != nullptr &&
+        IsGpuRectFastPathEnabled("PsSubBlend") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
+        RectAbsSizeMatches(rctar, textures[0].second) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(src, rctar, textures[0].second,
+                          TVP_GODOT_GPU_BLEND_PS_SUBTRACT,
+                          godot_method != nullptr ? godot_method->Opacity() : 255,
+                          0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
     if (method_name == "PsMulBlend" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("PsMulBlend") &&
         ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
@@ -1176,7 +1294,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
 
     if ((method_name == "AlphaBlend_a" ||
         method_name == "PerspectiveAlphaBlend_a") &&
-        dst != nullptr && src != nullptr &&
+        dst != nullptr && src != nullptr && !nearest_scaled &&
         IsGpuRectFastPathEnabled("AlphaBlend_a") &&
         ShouldUseGpuRectFastPath(rctar, "AlphaBlend_a", dst, src) &&
         dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
@@ -1243,6 +1361,18 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         dst->EnsureGpuHandle() &&
         dst->ClearGpu(godot_method != nullptr ? godot_method->Color() : 0,
                       rctar)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
+    if (method_name == "FillMask" && dst != nullptr &&
+        IsGpuRectFastPathEnabled("FillMask") &&
+        ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, dst) &&
+        dst->EnsureGpuHandle() &&
+        dst->BlendGpuFrom(dst, rctar, rctar,
+                          TVP_GODOT_GPU_BLEND_FILL_MASK,
+                          godot_method != nullptr ? godot_method->Opacity() : 255,
+                          0)) {
         CountGpuFastPath(method_name);
         return;
     }
@@ -1419,6 +1549,12 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
     } else if (method_name == "PsScreenBlend") {
         blend_mode = TVP_GODOT_GPU_BLEND_PS_SCREEN;
         fast_path_name = "PsScreenBlend";
+    } else if (method_name == "PsAddBlend") {
+        blend_mode = TVP_GODOT_GPU_BLEND_PS_ADD;
+        fast_path_name = "PsAddBlend";
+    } else if (method_name == "PsSubBlend") {
+        blend_mode = TVP_GODOT_GPU_BLEND_PS_SUBTRACT;
+        fast_path_name = "PsSubBlend";
     } else if (method_name == "PsMulBlend") {
         blend_mode = TVP_GODOT_GPU_BLEND_PS_MULTIPLY;
         fast_path_name = "PsMulBlend";
@@ -1468,6 +1604,31 @@ void GodotRenderManager::OperatePerspective(iTVPRenderMethod *method, int nQuads
     }
 }
 
+bool TVPGodotClearMotionScratchInPlace(
+    iTVPBaseBitmap *bitmap, const tTVPRect &rect, uint32_t argb) {
+    if(bitmap == nullptr || !bitmap->Is32BPP() || rect.is_empty()) {
+        return false;
+    }
+    // Layer.assignImages shares the source texture. D3DEmote immediately
+    // reuses its full-window work layer for the next character, so clearing a
+    // still-shared texture in place also clears the character that received
+    // the preceding frame. The scratch is fully repainted; detach without
+    // copying instead of mutating an assignImages destination.
+    bitmap->IndependNoCopy();
+    auto *texture =
+        dynamic_cast<GodotTexture2D *>(bitmap->GetTexture());
+    if(texture == nullptr || !texture->EnsureGpuHandle()) {
+        return false;
+    }
+    // iTVPBaseBitmap::Fill converts script-facing AARRGGBB to the backend's
+    // AABBGGRR byte layout before invoking FillARGB.
+    const uint32_t abgr =
+        (argb & 0xff00ff00u) |
+        ((argb & 0x000000ffu) << 16u) |
+        ((argb & 0x00ff0000u) >> 16u);
+    return texture->ClearGpu(abgr, rect);
+}
+
 bool TVPGodotCompositeAlphaUnionMask(
     iTVPBaseBitmap *dst_bitmap, iTVPBaseBitmap *src_bitmap,
     iTVPBaseBitmap *mask_scratch_bitmap,
@@ -1475,7 +1636,9 @@ bool TVPGodotCompositeAlphaUnionMask(
     const tTVPRect *mask_dst_rects,
     const tTVPRect *mask_src_rects,
     size_t mask_count,
-    bool use_mask_alpha) {
+    bool use_mask_alpha,
+    int width,
+    int height) {
     if(dst_bitmap == nullptr || src_bitmap == nullptr ||
        mask_scratch_bitmap == nullptr || mask_bitmaps == nullptr ||
        mask_dst_rects == nullptr || mask_src_rects == nullptr ||
@@ -1485,20 +1648,22 @@ bool TVPGodotCompositeAlphaUnionMask(
         return false;
     }
 
-    const tTVPRect full_dst(
-        0, 0, static_cast<tjs_int>(dst_bitmap->GetWidth()),
-        static_cast<tjs_int>(dst_bitmap->GetHeight()));
-    const tTVPRect full_src(
-        0, 0, static_cast<tjs_int>(src_bitmap->GetWidth()),
-        static_cast<tjs_int>(src_bitmap->GetHeight()));
-    const tTVPRect full_mask(
-        0, 0, static_cast<tjs_int>(mask_scratch_bitmap->GetWidth()),
-        static_cast<tjs_int>(mask_scratch_bitmap->GetHeight()));
+    if(width <= 0) {
+        width = static_cast<int>(dst_bitmap->GetWidth());
+    }
+    if(height <= 0) {
+        height = static_cast<int>(dst_bitmap->GetHeight());
+    }
+    const tTVPRect full_dst(0, 0, width, height);
+    const tTVPRect full_src(0, 0, width, height);
+    const tTVPRect full_mask(0, 0, width, height);
     if(full_dst.is_empty() || full_src.is_empty() || full_mask.is_empty() ||
-       full_dst.get_width() != full_src.get_width() ||
-       full_dst.get_height() != full_src.get_height() ||
-       full_dst.get_width() != full_mask.get_width() ||
-       full_dst.get_height() != full_mask.get_height()) {
+       full_dst.right > static_cast<tjs_int>(dst_bitmap->GetWidth()) ||
+       full_dst.bottom > static_cast<tjs_int>(dst_bitmap->GetHeight()) ||
+       full_src.right > static_cast<tjs_int>(src_bitmap->GetWidth()) ||
+       full_src.bottom > static_cast<tjs_int>(src_bitmap->GetHeight()) ||
+       full_mask.right > static_cast<tjs_int>(mask_scratch_bitmap->GetWidth()) ||
+       full_mask.bottom > static_cast<tjs_int>(mask_scratch_bitmap->GetHeight())) {
         return false;
     }
 
@@ -1552,9 +1717,166 @@ bool TVPGodotCompositeAlphaUnionMask(
         use_mask_alpha);
 }
 
+bool TVPGodotApplyAlphaUnionMask(
+    iTVPBaseBitmap *dst_bitmap, iTVPBaseBitmap *mask_scratch_bitmap,
+    iTVPBaseBitmap *const *mask_bitmaps,
+    const tTVPRect *mask_dst_rects,
+    const tTVPRect *mask_src_rects,
+    size_t mask_count,
+    bool threshold_mask_mode,
+    int item_flags,
+    int width,
+    int height) {
+    if(dst_bitmap == nullptr || mask_scratch_bitmap == nullptr ||
+       mask_bitmaps == nullptr || mask_dst_rects == nullptr ||
+       mask_src_rects == nullptr || mask_count == 0 ||
+       dst_bitmap == mask_scratch_bitmap) {
+        return false;
+    }
+
+    if(width <= 0) {
+        width = static_cast<int>(dst_bitmap->GetWidth());
+    }
+    if(height <= 0) {
+        height = static_cast<int>(dst_bitmap->GetHeight());
+    }
+    const tTVPRect full_rect(0, 0, width, height);
+    if(full_rect.is_empty() ||
+       full_rect.right > static_cast<tjs_int>(dst_bitmap->GetWidth()) ||
+       full_rect.bottom > static_cast<tjs_int>(dst_bitmap->GetHeight()) ||
+       full_rect.right >
+           static_cast<tjs_int>(mask_scratch_bitmap->GetWidth()) ||
+       full_rect.bottom >
+           static_cast<tjs_int>(mask_scratch_bitmap->GetHeight())) {
+        return false;
+    }
+
+    auto *dst = dynamic_cast<GodotTexture2D *>(
+        dst_bitmap->GetTextureForRender(true, &full_rect));
+    auto *mask_scratch = dynamic_cast<GodotTexture2D *>(
+        mask_scratch_bitmap->GetTextureForRender(true, &full_rect));
+    if(dst == nullptr || mask_scratch == nullptr ||
+       !dst->EnsureGpuHandle() || !mask_scratch->EnsureGpuHandle() ||
+       !dst->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+       !mask_scratch->ClearGpu(0x00000000u, full_rect)) {
+        return false;
+    }
+
+    for(size_t i = 0; i < mask_count; ++i) {
+        if(mask_bitmaps[i] == nullptr ||
+           mask_bitmaps[i] == mask_scratch_bitmap ||
+           mask_dst_rects[i].is_empty() ||
+           mask_src_rects[i].is_empty() ||
+           mask_dst_rects[i].get_width() !=
+               mask_src_rects[i].get_width() ||
+           mask_dst_rects[i].get_height() !=
+               mask_src_rects[i].get_height()) {
+            return false;
+        }
+        auto *mask = dynamic_cast<GodotTexture2D *>(
+            mask_bitmaps[i]->GetTexture());
+        if(mask == nullptr || !mask->EnsureGpuHandle() ||
+           !mask->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+           !mask_scratch->BlendGpuFrom(
+               mask, mask_dst_rects[i], mask_src_rects[i],
+               TVP_GODOT_GPU_BLEND_ALPHA_D, 255, 0)) {
+            return false;
+        }
+    }
+
+    const uint32_t color =
+        static_cast<uint32_t>(item_flags & 0xff) |
+        (static_cast<uint32_t>(threshold_mask_mode ? 1u : 0u) << 8);
+    if(!dst->BlendGpuFrom(
+           mask_scratch, full_rect, full_rect,
+           TVP_GODOT_GPU_BLEND_APPLY_ALPHA_MASK, 64, color)) {
+        return false;
+    }
+    CountGpuFastPath("ApplyAlphaUnionMask");
+    return true;
+}
+
+bool TVPGodotApplyAlphaMask(
+    iTVPBaseBitmap *dst_bitmap, iTVPBaseBitmap *src_bitmap,
+    const tTVPRect &dst_rect, const tTVPRect &src_rect,
+    int threshold, bool threshold_mask_mode, int item_flags) {
+    if(dst_bitmap == nullptr || src_bitmap == nullptr ||
+       dst_bitmap == src_bitmap || dst_rect.is_empty() || src_rect.is_empty() ||
+       dst_rect.get_width() != src_rect.get_width() ||
+       dst_rect.get_height() != src_rect.get_height()) {
+        return false;
+    }
+    auto *dst = dynamic_cast<GodotTexture2D *>(
+        dst_bitmap->GetTextureForRender(true, &dst_rect));
+    auto *src = dynamic_cast<GodotTexture2D *>(src_bitmap->GetTexture());
+    if(dst == nullptr || src == nullptr ||
+       !RectBoundsInsideTexture(dst_rect, dst) ||
+       !RectBoundsInsideTexture(src_rect, src) ||
+       !dst->EnsureGpuHandle() || !src->EnsureGpuHandle() ||
+       !dst->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+       !src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled())) {
+        return false;
+    }
+    const uint32_t color =
+        static_cast<uint32_t>(item_flags & 0xff) |
+        (static_cast<uint32_t>(threshold_mask_mode ? 1u : 0u) << 8);
+    if(!dst->BlendGpuFrom(
+           src, dst_rect, src_rect,
+           TVP_GODOT_GPU_BLEND_APPLY_ALPHA_MASK,
+           std::clamp(threshold, 0, 255), color)) {
+        return false;
+    }
+    CountGpuFastPath("ApplyAlphaMask");
+    return true;
+}
+
+bool TVPGodotBlendAlphaDWithMask(
+    iTVPBaseBitmap *dst_bitmap, iTVPBaseBitmap *src_bitmap,
+    iTVPBaseBitmap *mask_bitmap, const tTVPRect &dst_rect,
+    const tTVPRect &src_rect, const tTVPRect &mask_rect, int opacity,
+    bool threshold_mask_mode) {
+    if(dst_bitmap == nullptr || src_bitmap == nullptr ||
+       mask_bitmap == nullptr || dst_bitmap == src_bitmap ||
+       dst_bitmap == mask_bitmap || src_bitmap == mask_bitmap ||
+       dst_rect.is_empty() || src_rect.is_empty() || mask_rect.is_empty() ||
+       dst_rect.get_width() != src_rect.get_width() ||
+       dst_rect.get_height() != src_rect.get_height() ||
+       dst_rect.get_width() != mask_rect.get_width() ||
+       dst_rect.get_height() != mask_rect.get_height()) {
+        return false;
+    }
+    auto *dst = dynamic_cast<GodotTexture2D *>(
+        dst_bitmap->GetTextureForRender(true, &dst_rect));
+    auto *src = dynamic_cast<GodotTexture2D *>(src_bitmap->GetTexture());
+    auto *mask = dynamic_cast<GodotTexture2D *>(mask_bitmap->GetTexture());
+    if(dst == nullptr || src == nullptr || mask == nullptr ||
+       !RectBoundsInsideTexture(dst_rect, dst) ||
+       !RectBoundsInsideTexture(src_rect, src) ||
+       !RectBoundsInsideTexture(mask_rect, mask) ||
+       !dst->EnsureGpuHandle() || !src->EnsureGpuHandle() ||
+       !mask->EnsureGpuHandle() ||
+       !dst->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+       !src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) ||
+       !mask->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled())) {
+        return false;
+    }
+    const uint32_t mode = threshold_mask_mode
+        ? TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD
+        : TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_MULTIPLY;
+    if(!dst->BlendGpuFrom2(
+           src, mask, dst_rect, src_rect, mask_rect, mode,
+           std::clamp(opacity, 0, 255), 0)) {
+        return false;
+    }
+    CountGpuFastPath("AlphaBlend_d+Mask");
+    return true;
+}
+
 std::string TVPGetGodotRenderManagerFallbackStats() {
     std::vector<std::pair<std::string, uint64_t>> entries;
     uint64_t texture_creates = 0;
+    uint64_t texture_clones = 0;
+    uint64_t texture_resizes = 0;
     uint64_t fallbacks = 0;
     uint64_t gpu_fastpaths = 0;
     std::vector<std::pair<std::string, uint64_t>> gpu_entries;
@@ -1575,6 +1897,8 @@ std::string TVPGetGodotRenderManagerFallbackStats() {
         }
     }
     texture_creates = g_texture_create_count.load(std::memory_order_relaxed);
+    texture_clones = g_texture_clone_count.load(std::memory_order_relaxed);
+    texture_resizes = g_texture_resize_count.load(std::memory_order_relaxed);
     fallbacks = g_software_fallback_count.load(std::memory_order_relaxed);
     gpu_fastpaths = g_gpu_fastpath_count.load(std::memory_order_relaxed);
     std::sort(entries.begin(), entries.end(),
@@ -1590,6 +1914,8 @@ std::string TVPGetGodotRenderManagerFallbackStats() {
         << " gpu_min_area=" << GpuRectMinArea()
         << " gpu_alpha_min_area=" << GpuRectMinAreaForMethod("AlphaBlend")
         << " texture_creates=" << texture_creates
+        << " texture_clones=" << texture_clones
+        << " texture_resizes=" << texture_resizes
         << " hot=[";
     const size_t limit = std::min<size_t>(entries.size(), 8);
     for (size_t i = 0; i < limit; ++i) {

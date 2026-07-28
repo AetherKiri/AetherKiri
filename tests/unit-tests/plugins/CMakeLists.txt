@@ -32,8 +32,14 @@ target_include_directories(motionplayer-dll PRIVATE
 )
 
 if(AETHERKIRI_INTERNAL_ENABLED)
+    find_package(lz4 CONFIG REQUIRED)
+    target_link_libraries(motionplayer-dll PRIVATE lz4::lz4)
     target_compile_definitions(motionplayer-dll PRIVATE
         AETHERKIRI_EXPECT_INTERNAL_EMOTE=1)
+endif()
+
+if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_krkr2plugin_tests)
+    aetherinternal_extend_krkr2plugin_tests(motionplayer-dll)
 endif()
 
 catch_discover_tests(motionplayer-dll)

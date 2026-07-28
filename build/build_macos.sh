@@ -89,7 +89,10 @@ stage_macos_runtime_fonts() {
 }
 
 echo "==> Building native engine and Godot extension"
-cmake_config_args=(-D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM")
+cmake_config_args=(
+    -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
+    -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
+)
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
     if [[ ! -d "$VCPKG_ROOT/installed/arm64-osx" ]]; then
         echo "Error: SKIP_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/arm64-osx" >&2

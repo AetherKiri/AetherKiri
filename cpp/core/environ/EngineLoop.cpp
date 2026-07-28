@@ -146,8 +146,13 @@ void EngineLoop::Tick(float delta) {
     ::Application->Run();
     CompleteInputFrame();
     TVPRepairKagNoTransWait();
+    TVPRepairKagEnvironmentWorldReset();
     TVPDeliverContinuousEvent();
     iTVPTexture2D::RecycleProcess();
+    // Legacy VideoOverlay layer playback publishes decoded frames from
+    // continuous callbacks. Present after them so those frames are not left
+    // waiting for an unrelated window update or input event.
+    TVPHostForceDrawDeviceShow();
     if (s_postUpdate)
         s_postUpdate();
 }

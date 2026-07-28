@@ -3,6 +3,7 @@
 
 #include "godot/GodotGpuBridge.h"
 #include "godot/GodotRenderManager.h"
+#include "LayerBitmapIntf.h"
 
 #include <array>
 #include <cstdint>
@@ -22,6 +23,7 @@ struct TriangleDrawCall {
 };
 
 TriangleDrawCall g_triangle_draw_call;
+int g_blend_rect_calls = 0;
 uint64_t g_next_texture_handle = 1;
 
 uint64_t CreateTestTexture(uint32_t, uint32_t, const void *, uint32_t) {
@@ -56,15 +58,23 @@ bool DrawTestTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     return true;
 }
 
+bool BlendTestRect(uint64_t, uint64_t, const tTVPRect *, const tTVPRect *,
+                   uint32_t, int, uint32_t) {
+    ++g_blend_rect_calls;
+    return true;
+}
+
 class TestGpuBridge {
 public:
     TestGpuBridge() {
         g_triangle_draw_call = {};
+        g_blend_rect_calls = 0;
         g_next_texture_handle = 1;
         TVPGodotGpuBridgeCallbacks callbacks{};
         callbacks.create_rgba = CreateTestTexture;
         callbacks.release_texture = ReleaseTestTexture;
         callbacks.draw_triangles = DrawTestTriangles;
+        callbacks.blend_rect = BlendTestRect;
         callbacks.read_rgba = ReadTestGrayTexture;
         TVPGodotGpuBridgeRegister(&callbacks);
     }
@@ -73,6 +83,38 @@ public:
 };
 
 } // namespace
+
+TEST_CASE("Godot nearest scaled alpha uses the software sampler") {
+    TestGpuBridge bridge;
+    std::array<std::uint8_t, 16> source_pixels = {
+        0, 0, 0, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 0, 0, 0, 255,
+    };
+    std::vector<std::uint8_t> destination_pixels(256 * 256 * 4);
+    GodotTexture2D src(source_pixels.data(), 8, 2, 2,
+                       TVPTextureFormat::RGBA);
+    GodotTexture2D dst(destination_pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    GodotRenderManager manager;
+
+    const int stretch = manager.EnumParameterID("StretchType");
+    REQUIRE(stretch >= 0);
+    iTVPRenderMethod *method = manager.GetRenderMethod("AlphaBlend_d");
+    tRenderTexRectArray::Element source_element(
+        &src, tTVPRect(0, 0, 2, 2));
+
+    manager.SetParameterInt(stretch, stNearest);
+    manager.OperateRect(
+        method, &dst, &dst, tTVPRect(0, 0, 256, 256),
+        tRenderTexRectArray(&source_element, 1));
+    CHECK(g_blend_rect_calls == 0);
+
+    manager.SetParameterInt(stretch, stLinear);
+    manager.OperateRect(
+        method, &dst, &dst, tTVPRect(0, 0, 256, 256),
+        tRenderTexRectArray(&source_element, 1));
+    CHECK(g_blend_rect_calls == 1);
+}
 
 TEST_CASE("Godot textures expose Gray province pixels") {
     std::array<std::uint8_t, 8> pixels = {
@@ -125,6 +167,35 @@ TEST_CASE("Godot Gray textures extract province pixels after GPU writes") {
     CHECK(row[3] == 0xee);
 }
 
+TEST_CASE("Godot texture updates clip off-texture rectangles") {
+    GodotTexture2D texture(nullptr, 0, 2, 2, TVPTextureFormat::RGBA);
+    const std::array<std::uint8_t, 16> pixels = {
+        1, 0, 0, 255, 2, 0, 0, 255,
+        3, 0, 0, 255, 4, 0, 0, 255,
+    };
+
+    texture.Update(pixels.data(), TVPTextureFormat::RGBA, 8,
+                   tTVPRect(-1, -1, 1, 1));
+
+    CHECK(texture.GetPoint(0, 0) == 0xff000004u);
+    CHECK(texture.GetPoint(1, 0) == 0u);
+    CHECK(texture.GetPoint(0, 1) == 0u);
+}
+
+TEST_CASE("Godot texture updates reallocate when the pixel format changes") {
+    GodotTexture2D texture(nullptr, 0, 2, 1, TVPTextureFormat::Gray);
+    const std::array<std::uint8_t, 8> pixels = {
+        1, 2, 3, 255, 4, 5, 6, 255,
+    };
+
+    texture.Update(pixels.data(), TVPTextureFormat::RGBA, 8,
+                   tTVPRect(0, 0, 2, 1));
+
+    CHECK(texture.GetFormat() == TVPTextureFormat::RGBA);
+    CHECK(texture.GetPitch() == 8);
+    CHECK(texture.GetPoint(1, 0) == 0xff060504u);
+}
+
 TEST_CASE("Godot textures tag Kirikiri triangle blend modes") {
     TestGpuBridge bridge;
     std::array<std::uint8_t, 16> pixels = {
@@ -174,10 +245,12 @@ TEST_CASE("Godot render manager routes affine alpha blends to GPU triangles") {
     const tRenderTexQuadArray textures(&source, 1);
     GodotRenderManager manager;
 
-    const std::array<std::pair<const char *, uint32_t>, 4> methods = {{
+    const std::array<std::pair<const char *, uint32_t>, 6> methods = {{
         {"AlphaBlend", TVP_GODOT_GPU_BLEND_ALPHA},
         {"AlphaBlend_d", TVP_GODOT_GPU_BLEND_ALPHA_D},
         {"PerspectiveAlphaBlend_a", TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A},
+        {"PsAddBlend", TVP_GODOT_GPU_BLEND_PS_ADD},
+        {"PsSubBlend", TVP_GODOT_GPU_BLEND_PS_SUBTRACT},
         {"PsMulBlend", TVP_GODOT_GPU_BLEND_PS_MULTIPLY},
     }};
     for (const auto &[name, expected_mode] : methods) {

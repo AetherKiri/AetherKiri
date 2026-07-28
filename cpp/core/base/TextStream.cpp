@@ -18,7 +18,9 @@
 #include "CharacterSet.h"
 #include "BinaryStream.h"
 
-static std::string G_DefaultReadEncoding = "UTF-8";
+// Legacy KiriKiri scripts without a BOM are traditionally encoded as CP932.
+// UTF-8 remains auto-detected before this fallback is used.
+static std::string G_DefaultReadEncoding = "cp932";
 
 static std::string toUpperAscii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),

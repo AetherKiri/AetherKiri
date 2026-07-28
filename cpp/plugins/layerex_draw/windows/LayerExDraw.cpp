@@ -1,4 +1,3 @@
-#include <atlbase.h>
 #include <windows.h>
 #include <gdiplus.h>
 #include <vector>
@@ -908,9 +907,10 @@ bool Appearance::getLineCap(tTJSVariant &in, LineCap &cap,
 void LayerExDraw::updateRect(RectF &rect) {
     if(updateWhenDraw) {
         // 更新処理
-        tTJSVariant vars[4] = { rect.X, rect.Y, rect.Width, rect.Height };
-        tTJSVariant *varsp[4] = { vars, vars + 1, vars + 2, vars + 3 };
-        _pUpdate(4, varsp);
+        tTVPRect rc((tjs_int)rect.X, (tjs_int)rect.Y,
+                    (tjs_int)(rect.X + rect.Width),
+                    (tjs_int)(rect.Y + rect.Height));
+        _this->Update(rc);
     }
 }
 
@@ -1068,7 +1068,7 @@ void LayerExDraw::clear(ARGB argb) {
         createRecord();
         metaGraphics->Clear(Color(argb));
     }
-    _pUpdate(0, NULL);
+    _this->Update();
 }
 
 /**
@@ -1795,7 +1795,7 @@ bool LayerExDraw::redraw(Image *image) {
                             bounds->Height);
         graphics->SetTransform(&calcTransform);
         delete bounds;
-        _pUpdate(0, NULL);
+        _this->Update();
         return true;
     }
     return false;

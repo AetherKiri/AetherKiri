@@ -301,6 +301,71 @@ TEST_CASE("KAGParserEx getNextTag returns ordered taglist") {
     global->Release();
 }
 
+TEST_CASE("KAGParserEx preserves wildcard macro arguments in returned tags") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll"));
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("KAGParserEx.dll")));
+    tTJSVariant parserClass = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(parserClass.Type() == tvtObject);
+
+    iTJSDispatch2 *parser = nullptr;
+    tTJSVariantClosure parserClosure = parserClass.AsObjectClosureNoAddRef();
+    REQUIRE(TJS_SUCCEEDED(parserClosure.CreateNew(0, nullptr, nullptr, &parser,
+                                                  0, nullptr, nullptr)));
+    REQUIRE(parser != nullptr);
+
+    ScenarioLoadCallback *callback = new ScenarioLoadCallback(
+        TJS_W("[macro name=forward]\n"
+              "[ev fixed=before * tail=after]\n"
+              "[endmacro]\n"
+              "[forward file=ev_cg002_02s.l2d "
+              "motion=ev_mv002_02_00 loop]\n"));
+    tTJSVariant callbackValue(callback, callback);
+    setProp(parser, TJS_W("onScenarioLoad"), callbackValue);
+    setProp(parser, TJS_W("ignoreCR"),
+            tTJSVariant(static_cast<tTVInteger>(1)));
+    callback->Release();
+
+    tTJSVariant storage(TJS_W("memory.ks"));
+    tTJSVariant *loadArgs[] = { &storage };
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(0, TJS_W("loadScenario"), nullptr,
+                                           nullptr, 1, loadArgs, parser)));
+
+    tTJSVariant tag;
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(0, TJS_W("getNextTag"), nullptr,
+                                           &tag, 0, nullptr, parser)));
+    REQUIRE(tag.Type() == tvtObject);
+    CHECK(ttstr(getProp(tag, TJS_W("tagname"))) == TJS_W("ev"));
+    CHECK(ttstr(getProp(tag, TJS_W("fixed"))) == TJS_W("before"));
+    CHECK(ttstr(getProp(tag, TJS_W("file"))) ==
+          TJS_W("ev_cg002_02s.l2d"));
+    CHECK(ttstr(getProp(tag, TJS_W("motion"))) ==
+          TJS_W("ev_mv002_02_00"));
+    CHECK(ttstr(getProp(tag, TJS_W("loop"))) == TJS_W("true"));
+    CHECK(ttstr(getProp(tag, TJS_W("tail"))) == TJS_W("after"));
+
+    const tTJSVariant taglist = getProp(tag, TJS_W("taglist"));
+    REQUIRE(taglist.Type() == tvtObject);
+    CHECK(static_cast<tjs_int>(getProp(taglist, TJS_W("count"))) == 6);
+    CHECK(ttstr(getIndex(taglist, 0)) == TJS_W("tagname"));
+    CHECK(ttstr(getIndex(taglist, 1)) == TJS_W("fixed"));
+    CHECK(ttstr(getIndex(taglist, 2)) == TJS_W("file"));
+    CHECK(ttstr(getIndex(taglist, 3)) == TJS_W("motion"));
+    CHECK(ttstr(getIndex(taglist, 4)) == TJS_W("loop"));
+    CHECK(ttstr(getIndex(taglist, 5)) == TJS_W("tail"));
+
+    parser->Release();
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll")));
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+    global->DeleteMember(0, TJS_W("AetherKiriKAGParserEx"), nullptr, global);
+    global->Release();
+}
+
 TEST_CASE("KAGParserEx copyTag clones tags for conductor queues") {
     ensurePluginRegistryRuntime();
     ncbAutoRegister::UnloadModule(TJS_W("KAGParserEx.dll"));

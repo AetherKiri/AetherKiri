@@ -60,8 +60,8 @@
 #include <regex>
 #include <sstream>
 #include <string>
-#include <vector>
 #include <unordered_map>
+#include <vector>
 #include <mutex>
 
 #if defined(__ANDROID__)
@@ -1045,7 +1045,10 @@ void ApplyGodotGpuBarrier(RenderingDevice *rd) {
 bool IsBatchableBlendOp(const std::shared_ptr<GodotGpuOp> &op) {
     if (op == nullptr) return false;
     if (op->type == GodotGpuOp::Type::Blend) {
-        return op->src != op->dst;
+        return op->src != op->dst ||
+               op->mode == TVP_GODOT_GPU_BLEND_FILL_ARGB ||
+               op->mode == TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY ||
+               op->mode == TVP_GODOT_GPU_BLEND_FILL_MASK;
     }
     if (op->type == GodotGpuOp::Type::Blend2) {
         return op->src != op->dst && op->src2 != op->dst;
@@ -1364,6 +1367,40 @@ uint ps_mul_blend(uint d, uint s, uint opa) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint ps_add_blend(uint d, uint s, uint opa) {
+    uint a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int br = min(dr + int(s & 0xffu), 255);
+    int bg = min(dg + int((s >> 8) & 0xffu), 255);
+    int bb = min(db + int((s >> 16) & 0xffu), 255);
+    uint r = uint(clamp(dr + (((br - dr) * int(a)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((bg - dg) * int(a)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((bb - db) * int(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint ps_sub_blend(uint d, uint s, uint opa) {
+    uint a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int br = max(dr + int(s & 0xffu) - 255, 0);
+    int bg = max(dg + int((s >> 8) & 0xffu) - 255, 0);
+    int bb = max(db + int((s >> 16) & 0xffu) - 255, 0);
+    uint r = uint(clamp(dr + (((br - dr) * int(a)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((bg - dg) * int(a)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((bb - db) * int(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint remove_const_opacity(uint d, uint strength) {
     uint inv_strength = 255u - clamp(strength, 0u, 255u);
     uint a = (((d >> 24) & 0xffu) * inv_strength) >> 8;
@@ -1387,9 +1424,35 @@ void main() {
                     ((uint(pc.color0.w) & 0xffu) << 24);
     } else {
         uint d = pack_u8(vec4_to_u8(imageLoad(dst_img, dst_pos)));
-        uint s = pack_u8(vec4_to_u8(load_src(local)));
         out_color = d;
-        if (pc.rect1.z == 1) {
+        if (pc.rect1.z == 18) {
+        out_color = (d & 0x00ffffffu) | (opa << 24);
+        } else {
+        uint s = pack_u8(vec4_to_u8(load_src(local)));
+        if (pc.rect1.z == 20) {
+        out_color = s;
+        } else if (pc.rect1.z == 19) {
+        uint da = (d >> 24) & 0xffu;
+        uint sa = (s >> 24) & 0xffu;
+        int flags = pc.color0.x;
+        bool threshold_mode = pc.color0.y != 0;
+        uint out_alpha = da;
+        if (flags == 1) {
+            out_alpha = threshold_mode
+                ? (sa < opa ? 0u : da)
+                : ((da * sa) / 255u);
+        } else if (flags == 2) {
+            out_alpha = threshold_mode
+                ? (sa >= opa ? 0u : da)
+                : (((255u - sa) * da) / 255u);
+        } else if (flags == 5 || flags == 6) {
+            out_alpha = threshold_mode
+                ? (sa >= opa ? 255u : da)
+                : (sa + ((255u - sa) * da) / 255u);
+        }
+        out_color = (d & 0x00ffffffu) |
+                    (min(out_alpha, 255u) << 24);
+        } else if (pc.rect1.z == 1) {
         out_color = alpha_blend_hda_o(d, s, opa);
         } else if (pc.rect1.z == 2) {
         out_color = alpha_blend_d(d, s, opa);
@@ -1401,8 +1464,13 @@ void main() {
         out_color = ps_screen_blend(d, s, opa);
         } else if (pc.rect1.z == 15) {
         out_color = ps_mul_blend(d, s, opa);
+        } else if (pc.rect1.z == 16) {
+        out_color = ps_add_blend(d, s, opa);
+        } else if (pc.rect1.z == 17) {
+        out_color = ps_sub_blend(d, s, opa);
         } else if (pc.rect1.z == 8) {
         out_color = remove_const_opacity(d, opa);
+        }
         }
     }
 
@@ -1637,6 +1705,41 @@ uint const_alpha_blend_sd_d(uint s1, uint s2, uint opa_in) {
     return s1_rb | ((s1_g + ((s2_g - s1_g) * alpha >> 8)) & 0xff00u);
 }
 
+uint negative_mul_alpha(uint dest_alpha, uint src_alpha) {
+    return 255u - (((255u - dest_alpha) * (255u - src_alpha)) / 255u);
+}
+
+uint alpha_blend_d(uint d, uint s, uint opa) {
+    uint effective_alpha = (s >> 24) & 0xffu;
+    if (opa == 255u) {
+        if (s <= 0x00ffffffu) {
+            return d;
+        }
+        if (s >= 0xff000000u) {
+            return s;
+        }
+        if (d <= 0x00ffffffu) {
+            return s;
+        }
+    } else {
+        effective_alpha = (effective_alpha * opa) >> 8;
+    }
+
+    uint dest_alpha = (d >> 24) & 0xffu;
+    uint blend_alpha = opacity_on_opacity(dest_alpha, effective_alpha);
+    uint out_alpha = negative_mul_alpha(dest_alpha, effective_alpha);
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int sr = int(s & 0xffu);
+    int sg = int((s >> 8) & 0xffu);
+    int sb = int((s >> 16) & 0xffu);
+    uint r = uint(clamp(dr + (((sr - dr) * int(blend_alpha)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((sg - dg) * int(blend_alpha)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((sb - db) * int(blend_alpha)) >> 8), 0, 255));
+    return (out_alpha << 24) | r | (g << 8) | (b << 16);
+}
+
 void main() {
     ivec2 local = ivec2(gl_GlobalInvocationID.xy);
     if (local.x >= pc.rect1.x || local.y >= pc.rect1.y) {
@@ -1655,6 +1758,15 @@ void main() {
         out_color = const_alpha_blend_sd(s1, s2, opa);
     } else if (pc.rect1.z == 9) {
         out_color = const_alpha_blend_sd_d(s1, s2, opa);
+    } else if (pc.rect1.z == 21 || pc.rect1.z == 22) {
+        uint src_alpha = (s1 >> 24) & 0xffu;
+        uint mask_alpha = (s2 >> 24) & 0xffu;
+        uint masked_alpha = pc.rect1.z == 21
+            ? (src_alpha * mask_alpha) / 255u
+            : (mask_alpha < 64u ? 0u : src_alpha);
+        uint masked_src = (s1 & 0x00ffffffu) | (masked_alpha << 24);
+        uint d = pack_u8(vec4_to_u8(imageLoad(dst_img, dst_pos)));
+        out_color = alpha_blend_d(d, masked_src, opa);
     }
 
     imageStore(dst_img, dst_pos, unpack_u8(out_color));
@@ -2265,6 +2377,40 @@ uint ps_mul_blend(uint d, uint s, uint opa) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint ps_add_blend(uint d, uint s, uint opa) {
+    uint a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int br = min(dr + int(s & 0xffu), 255);
+    int bg = min(dg + int((s >> 8) & 0xffu), 255);
+    int bb = min(db + int((s >> 16) & 0xffu), 255);
+    uint r = uint(clamp(dr + (((br - dr) * int(a)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((bg - dg) * int(a)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((bb - db) * int(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint ps_sub_blend(uint d, uint s, uint opa) {
+    uint a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    int dr = int(d & 0xffu);
+    int dg = int((d >> 8) & 0xffu);
+    int db = int((d >> 16) & 0xffu);
+    int br = max(dr + int(s & 0xffu) - 255, 0);
+    int bg = max(dg + int((s >> 8) & 0xffu) - 255, 0);
+    int bb = max(db + int((s >> 16) & 0xffu) - 255, 0);
+    uint r = uint(clamp(dr + (((br - dr) * int(a)) >> 8), 0, 255));
+    uint g = uint(clamp(dg + (((bg - dg) * int(a)) >> 8), 0, 255));
+    uint b = uint(clamp(db + (((bb - db) * int(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint blend_tvp(uint d, uint s, uint opa, int mode) {
     if (mode == 1) {
         return alpha_blend_hda_o(d, s, opa);
@@ -2286,6 +2432,12 @@ uint blend_tvp(uint d, uint s, uint opa, int mode) {
     }
     if (mode == 15) {
         return ps_mul_blend(d, s, opa);
+    }
+    if (mode == 16) {
+        return ps_add_blend(d, s, opa);
+    }
+    if (mode == 17) {
+        return ps_sub_blend(d, s, opa);
     }
     return d;
 }
@@ -3097,7 +3249,9 @@ bool ExecuteGodotGpuBlend(RenderingDevice *rd,
                           const std::shared_ptr<GodotGpuOp> &op) {
     if (rd == nullptr || op == nullptr) return false;
     if (op->src == op->dst &&
-        op->mode != TVP_GODOT_GPU_BLEND_FILL_ARGB) {
+        op->mode != TVP_GODOT_GPU_BLEND_FILL_ARGB &&
+        op->mode != TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY &&
+        op->mode != TVP_GODOT_GPU_BLEND_FILL_MASK) {
         g_gpu_alias_sources.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
@@ -4715,36 +4869,28 @@ bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {
     if (rect == nullptr) {
         return false;
     }
-    const bool full_rect =
-        rect->left == 0 && rect->top == 0 &&
-        rect->right == static_cast<int>(record.width) &&
-        rect->bottom == static_cast<int>(record.height);
     if (rect->left < 0 || rect->top < 0 ||
         rect->right > static_cast<int>(record.width) ||
         rect->bottom > static_cast<int>(record.height) ||
         rect->right <= rect->left || rect->bottom <= rect->top) {
         return false;
     }
-    const float a = static_cast<float>((argb >> 24) & 0xffu) / 255.0f;
-    const float r = static_cast<float>(argb & 0xffu) / 255.0f;
-    const float g = static_cast<float>((argb >> 8) & 0xffu) / 255.0f;
-    const float b = static_cast<float>((argb >> 16) & 0xffu) / 255.0f;
     auto op = std::make_shared<GodotGpuOp>();
+    // Keep full clears in the same compute list as the E-mote draws that
+    // immediately follow them. RenderingDevice::texture_clear forced the
+    // pending compute batch to end, producing dozens of Metal encoders per
+    // animated frame. The fill shader writes the same RGBA value and already
+    // participates in normal read/write ordering.
+    op->type = GodotGpuOp::Type::Blend;
+    op->src = record.rid;
     op->dst = record.rid;
-    if (full_rect) {
-        op->type = GodotGpuOp::Type::Clear;
-        op->clear_color = Color(r, g, b, a);
-    } else {
-        op->type = GodotGpuOp::Type::Blend;
-        op->src = record.rid;
-        op->dst_pos = Vector3(rect->left, rect->top, 0);
-        op->src_pos = op->dst_pos;
-        op->size = Vector3(rect->right - rect->left,
-                           rect->bottom - rect->top, 1);
-        op->mode = TVP_GODOT_GPU_BLEND_FILL_ARGB;
-        op->opacity = 255;
-        op->color = argb;
-    }
+    op->dst_pos = Vector3(rect->left, rect->top, 0);
+    op->src_pos = op->dst_pos;
+    op->size = Vector3(rect->right - rect->left,
+                       rect->bottom - rect->top, 1);
+    op->mode = TVP_GODOT_GPU_BLEND_FILL_ARGB;
+    op->opacity = 255;
+    op->color = argb;
     return RunGodotGpuOpAsync(op);
 }
 
@@ -4771,12 +4917,20 @@ bool BridgeCopyRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
         return false;
     }
     auto op = std::make_shared<GodotGpuOp>();
-    op->type = dst == src ? GodotGpuOp::Type::CopySelf : GodotGpuOp::Type::Copy;
+    // A non-aliasing copy can run through the same compute list as the E-mote
+    // clears, affine draws, blends and masks surrounding it. texture_copy
+    // otherwise terminates that batch for every child layer, creating hundreds
+    // of Metal submissions per frame. The shader path uses integer imageLoad /
+    // imageStore conversion and copies all RGBA channels exactly.
+    op->type =
+        dst == src ? GodotGpuOp::Type::CopySelf : GodotGpuOp::Type::Blend;
     op->src = src_record.rid;
     op->dst = dst_record.rid;
     op->src_pos = Vector3(src_rect->left, src_rect->top, 0);
     op->dst_pos = Vector3(dst_rect->left, dst_rect->top, 0);
     op->size = Vector3(width, height, 1);
+    op->mode = TVP_GODOT_GPU_BLEND_COPY_RGBA;
+    op->opacity = 255;
     return RunGodotGpuOpAsync(op);
 }
 
@@ -5395,6 +5549,53 @@ uint32_t CpuPsMulBlend(uint32_t d, uint32_t s, int opacity) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint32_t CpuPsAddBlend(uint32_t d, uint32_t s, int opacity) {
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    uint32_t a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    const int dr = static_cast<int>(d & 0xffu);
+    const int dg = static_cast<int>((d >> 8) & 0xffu);
+    const int db = static_cast<int>((d >> 16) & 0xffu);
+    const int br = std::min(dr + static_cast<int>(s & 0xffu), 255);
+    const int bg =
+        std::min(dg + static_cast<int>((s >> 8) & 0xffu), 255);
+    const int bb =
+        std::min(db + static_cast<int>((s >> 16) & 0xffu), 255);
+    const uint32_t r = static_cast<uint32_t>(
+        std::clamp(dr + (((br - dr) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t g = static_cast<uint32_t>(
+        std::clamp(dg + (((bg - dg) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t b = static_cast<uint32_t>(
+        std::clamp(db + (((bb - db) * static_cast<int>(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint32_t CpuPsSubBlend(uint32_t d, uint32_t s, int opacity) {
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    uint32_t a = (s >> 24) & 0xffu;
+    if (opa != 255u) {
+        a = (a * opa) >> 8;
+    }
+    const int dr = static_cast<int>(d & 0xffu);
+    const int dg = static_cast<int>((d >> 8) & 0xffu);
+    const int db = static_cast<int>((d >> 16) & 0xffu);
+    const int br =
+        std::max(dr + static_cast<int>(s & 0xffu) - 255, 0);
+    const int bg =
+        std::max(dg + static_cast<int>((s >> 8) & 0xffu) - 255, 0);
+    const int bb =
+        std::max(db + static_cast<int>((s >> 16) & 0xffu) - 255, 0);
+    const uint32_t r = static_cast<uint32_t>(
+        std::clamp(dr + (((br - dr) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t g = static_cast<uint32_t>(
+        std::clamp(dg + (((bg - dg) * static_cast<int>(a)) >> 8), 0, 255));
+    const uint32_t b = static_cast<uint32_t>(
+        std::clamp(db + (((bb - db) * static_cast<int>(a)) >> 8), 0, 255));
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
 uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
                            int opacity, uint32_t color) {
     switch (mode) {
@@ -5408,6 +5609,11 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
             return CpuFillArgb(d, color);
         case TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY:
             return CpuRemoveConstOpacity(d, opacity);
+        case TVP_GODOT_GPU_BLEND_FILL_MASK:
+            return (d & 0x00ffffffu) |
+                   (static_cast<uint32_t>(std::clamp(opacity, 0, 255)) << 24);
+        case TVP_GODOT_GPU_BLEND_COPY_RGBA:
+            return s;
         case TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A:
             return CpuAlphaBlendA(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_CONST_ALPHA_D:
@@ -5416,18 +5622,37 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
             return CpuPsScreenBlend(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_PS_MULTIPLY:
             return CpuPsMulBlend(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_PS_ADD:
+            return CpuPsAddBlend(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_PS_SUBTRACT:
+            return CpuPsSubBlend(d, s, opacity);
         default:
             return s;
     }
 }
 
-uint32_t CpuBlend2Reference(uint32_t mode, uint32_t src1, uint32_t src2,
-                            int opacity) {
+uint32_t CpuBlend2Reference(uint32_t mode, uint32_t dst, uint32_t src1,
+                            uint32_t src2, int opacity) {
     switch (mode) {
         case TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD:
             return CpuConstAlphaBlendSD(src1, src2, opacity);
         case TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D:
             return CpuConstAlphaBlendSDD(src1, src2, opacity);
+        case TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_MULTIPLY: {
+            const uint32_t src_alpha = (src1 >> 24) & 0xffu;
+            const uint32_t mask_alpha = (src2 >> 24) & 0xffu;
+            const uint32_t masked_src =
+                (src1 & 0x00ffffffu) |
+                (((src_alpha * mask_alpha) / 255u) << 24);
+            return CpuAlphaBlendD(dst, masked_src, opacity);
+        }
+        case TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD: {
+            const uint32_t mask_alpha = (src2 >> 24) & 0xffu;
+            const uint32_t masked_src = mask_alpha < 64u
+                ? (src1 & 0x00ffffffu)
+                : src1;
+            return CpuAlphaBlendD(dst, masked_src, opacity);
+        }
         default:
             return src2;
     }
@@ -5450,6 +5675,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     if (lower == "removeconstopacity" || lower == "remove_const_opacity") {
         return TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY;
     }
+    if (lower == "fillmask" || lower == "fill_mask") {
+        return TVP_GODOT_GPU_BLEND_FILL_MASK;
+    }
     if (lower == "alphablend_a" || lower == "alpha_blend_a") {
         return TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A;
     }
@@ -5462,11 +5690,25 @@ uint32_t BlendModeFromName(const String &mode_name) {
     if (lower == "constalphablend_sd_d" || lower == "const_alpha_blend_sd_d") {
         return TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D;
     }
+    if (lower == "alphablend_d_mask_multiply" ||
+        lower == "alpha_blend_d_mask_multiply") {
+        return TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_MULTIPLY;
+    }
+    if (lower == "alphablend_d_mask_threshold" ||
+        lower == "alpha_blend_d_mask_threshold") {
+        return TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD;
+    }
     if (lower == "psscreenblend" || lower == "ps_screen_blend") {
         return TVP_GODOT_GPU_BLEND_PS_SCREEN;
     }
     if (lower == "psmulblend" || lower == "ps_mul_blend") {
         return TVP_GODOT_GPU_BLEND_PS_MULTIPLY;
+    }
+    if (lower == "psaddblend" || lower == "ps_add_blend") {
+        return TVP_GODOT_GPU_BLEND_PS_ADD;
+    }
+    if (lower == "pssubblend" || lower == "ps_sub_blend") {
+        return TVP_GODOT_GPU_BLEND_PS_SUBTRACT;
     }
     return 0;
 }
@@ -5594,7 +5836,7 @@ public:
         callbacks.blend_rect3 = BridgeBlendRect3;
         callbacks.read_rgba = BridgeReadRgba;
         callbacks.flush = BridgeFlush;
-        TVPGodotGpuBridgeRegister(&callbacks);
+        engine_register_godot_gpu_bridge(&callbacks);
 
         CharString writable_utf8 = writable_path.utf8();
         CharString cache_utf8 = cache_path.utf8();
@@ -6236,7 +6478,9 @@ public:
         Dictionary result;
         const uint32_t mode = BlendModeFromName(mode_name);
         if (mode != TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD &&
-            mode != TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D) {
+            mode != TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D &&
+            mode != TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_MULTIPLY &&
+            mode != TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD) {
             result["ok"] = false;
             result["error"] = "unknown blend2 mode";
             return result;
@@ -6246,7 +6490,7 @@ public:
         constexpr uint32_t kHeight = 8;
         std::vector<uint32_t> src1(kWidth * kHeight);
         std::vector<uint32_t> src2(kWidth * kHeight);
-        std::vector<uint32_t> dst(kWidth * kHeight, 0);
+        std::vector<uint32_t> dst(kWidth * kHeight);
         std::vector<uint32_t> expected(kWidth * kHeight);
         for (uint32_t y = 0; y < kHeight; ++y) {
             for (uint32_t x = 0; x < kWidth; ++x) {
@@ -6259,10 +6503,15 @@ public:
                 const uint32_t r2 = (x * 11u + y * 29u + 97u) & 0xffu;
                 const uint32_t g2 = (x * 47u + y * 19u + 61u) & 0xffu;
                 const uint32_t b2 = (x * 13u + y * 41u + 53u) & 0xffu;
+                const uint32_t ad = (37u + x * 27u + y * 15u) & 0xffu;
+                const uint32_t rd = (x * 17u + y * 31u + 23u) & 0xffu;
+                const uint32_t gd = (x * 41u + y * 11u + 29u) & 0xffu;
+                const uint32_t bd = (x * 7u + y * 37u + 43u) & 0xffu;
                 src1[i] = r1 | (g1 << 8) | (b1 << 16) | (a1 << 24);
                 src2[i] = r2 | (g2 << 8) | (b2 << 16) | (a2 << 24);
-                expected[i] = CpuBlend2Reference(mode, src1[i], src2[i],
-                                                 opacity);
+                dst[i] = rd | (gd << 8) | (bd << 16) | (ad << 24);
+                expected[i] = CpuBlend2Reference(
+                    mode, dst[i], src1[i], src2[i], opacity);
             }
         }
 
@@ -6871,7 +7120,7 @@ void DeinitializeAetherKiri(ModuleInitializationLevel level) {
     BridgeFlush();
     ReleaseRemainingGodotGpuTextures();
     ReleaseGodotGpuPipeline();
-    TVPGodotGpuBridgeRegister(nullptr);
+    engine_register_godot_gpu_bridge(nullptr);
 }
 
 } // namespace godot

@@ -196,6 +196,10 @@ namespace motion {
         typedef ncbInstanceAdaptor<EmotePlayer> AdaptorT;
 
         auto *copy = new EmotePlayer(ResourceManager{});
+        // Native EmoteObject::clone serializes the source Player and
+        // unserializes it into the new Player. Loading only the PSB would
+        // discard active timelines and variables during page cloning.
+        const auto playerState = _player.serialize();
         // Copy EmotePlayer-specific state
         copy->_module = _module;
         copy->_storageKey = _storageKey;
@@ -204,17 +208,10 @@ namespace motion {
         copy->_smoothing = _smoothing;
         copy->_meshDivisionRatio = _meshDivisionRatio;
         copy->_queuing = _queuing;
-        if(_queuing) {
-            copy->_player.enableEmoteAnimatorQueuing();
-        }
         copy->_hairScale = _hairScale;
         copy->_partsScale = _partsScale;
         copy->_bustScale = _bustScale;
         copy->_bodyScale = _bodyScale;
-        copy->_player.setHairScale(_hairScale);
-        copy->_player.setPartsScale(_partsScale);
-        copy->_player.setBustScale(_bustScale);
-        copy->_player.setBodyScale(_bodyScale);
         copy->_progress = _progress;
         copy->_modified = _modified;
         copy->_drawVisible = _drawVisible;
@@ -238,6 +235,20 @@ namespace motion {
         if(snapshot) {
             copy->_player.loadFromSnapshot(snapshot);
         }
+        copy->_player.unserialize(playerState);
+
+        // These wrapper properties are not part of Player::serialize().
+        // Apply them after load/unserialize so model initialization cannot
+        // overwrite the values restored by the outer E-mote wrapper.
+        copy->_player.setVisible(_visible);
+        copy->_player.setEmoteMeshDivisionRatio(_meshDivisionRatio);
+        if(_queuing) {
+            copy->_player.enableEmoteAnimatorQueuing();
+        }
+        copy->_player.setHairScale(_hairScale);
+        copy->_player.setPartsScale(_partsScale);
+        copy->_player.setBustScale(_bustScale);
+        copy->_player.setBodyScale(_bodyScale);
 
         tTJSVariant result;
         if(iTJSDispatch2 *adaptor = AdaptorT::CreateAdaptor(copy)) {

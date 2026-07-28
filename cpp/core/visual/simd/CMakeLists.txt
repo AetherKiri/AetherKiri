@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.19)
 project(tvpgl_simd LANGUAGES CXX)
 
+if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    string(REGEX REPLACE "(^| )[/-]RTC[^ ]*" "" CMAKE_CXX_FLAGS_DEBUG
+           "${CMAKE_CXX_FLAGS_DEBUG}")
+endif()
+
 set(SIMD_PATH ${CMAKE_CURRENT_LIST_DIR})
 set(SIMD_SOURCE_FILES
     ${SIMD_PATH}/tvpgl_simd_init.cpp
@@ -47,5 +52,12 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 # massive performance degradation (~20x slower than scalar C code).
 # This is standard practice for all Highway/SIMD projects.
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    target_compile_options(${PROJECT_NAME} PRIVATE -O2 -g)
+    if(MSVC)
+        # MSVC's Debug defaults include /RTC1, which cannot be combined with
+        # optimization. Keep PDB symbols while disabling runtime checks only
+        # for this performance-critical SIMD target.
+        target_compile_options(${PROJECT_NAME} PRIVATE /O2 /Zi)
+    else()
+        target_compile_options(${PROJECT_NAME} PRIVATE -O2 -g)
+    endif()
 endif()

@@ -31,6 +31,30 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_SCRIPTS_DIR="$SCRIPT_DIR/build"
 
+# Keep the private package opt-in at the build boundary. CI sets
+# AETHERKIRI_WITH_INTERNAL; local builds auto-detect the checked-out package.
+internal_setting="${AETHERKIRI_ENABLE_INTERNAL:-}"
+if [[ -z "$internal_setting" && -n "${AETHERKIRI_WITH_INTERNAL:-}" ]]; then
+    internal_setting="$AETHERKIRI_WITH_INTERNAL"
+fi
+if [[ -z "$internal_setting" ]]; then
+    internal_package_dir="${AETHERKIRI_INTERNAL_DIR:-$SCRIPT_DIR/packages/AetherInternal}"
+    if [[ -f "$internal_package_dir/cmake/AetherInternalConfig.cmake" ]]; then
+        internal_setting="ON"
+    else
+        internal_setting="OFF"
+    fi
+fi
+case "$(printf '%s' "$internal_setting" | tr '[:upper:]' '[:lower:]')" in
+    1|on|true|yes) AETHERKIRI_ENABLE_INTERNAL="ON" ;;
+    0|off|false|no) AETHERKIRI_ENABLE_INTERNAL="OFF" ;;
+    *)
+        echo "[ERROR] AETHERKIRI_ENABLE_INTERNAL must be ON/OFF or true/false, got: $internal_setting" >&2
+        exit 1
+        ;;
+esac
+export AETHERKIRI_ENABLE_INTERNAL
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -53,7 +77,7 @@ show_help() {
     echo "  android    Build Android Godot APK"
     echo "  ios        Build iOS Godot app/export project"
     echo "  macos      Build macOS Godot app"
-    echo "  linux      Not wired yet; placeholder target"
+    echo "  linux      Build Linux Godot app"
     echo "  web        Build Godot Web export with GDExtension side module"
     echo ""
     echo "Options:"
@@ -206,6 +230,11 @@ if [[ "$CLEAN" == true ]]; then
             rm -rf "$SCRIPT_DIR/out/macos/$BUILD_TYPE"
             rm -rf "$SCRIPT_DIR/out/godot/macos/$BUILD_TYPE"
             echo -e "${GREEN}[INFO]${NC} macOS build artifacts cleaned."
+            ;;
+        linux)
+            rm -rf "$SCRIPT_DIR/out/linux/$BUILD_TYPE"
+            rm -rf "$SCRIPT_DIR/out/godot/linux/$BUILD_TYPE"
+            echo -e "${GREEN}[INFO]${NC} Linux build artifacts cleaned."
             ;;
         web)
             rm -rf "$SCRIPT_DIR/out/web/$BUILD_TYPE"

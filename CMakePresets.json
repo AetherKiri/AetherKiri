@@ -75,7 +75,9 @@
         "LINUX": true,
         "VCPKG_TARGET_TRIPLET": "x64-linux",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/vcpkg/triplets",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": true
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "BUILD_TOOLS": false,
+        "ENABLE_TESTS": false
       },
       "condition": {
         "type": "equals",
@@ -107,6 +109,7 @@
       "hidden": true,
       "cacheVariables": {
         "MACOS": true,
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
         "VCPKG_TARGET_TRIPLET": "arm64-osx",
@@ -149,7 +152,7 @@
         "IOS": true,
         "CMAKE_SYSTEM_NAME": "iOS",
         "CMAKE_OSX_ARCHITECTURES": "arm64",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "15.0",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "17.0",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
         "VCPKG_TARGET_TRIPLET": "arm64-ios",

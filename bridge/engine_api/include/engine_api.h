@@ -33,6 +33,10 @@ extern "C" {
 
 typedef struct engine_handle_s* engine_handle_t;
 
+/* Registers host renderer callbacks. The callback table is renderer-specific. */
+ENGINE_API_EXPORT void engine_register_godot_gpu_bridge(
+    const void* callbacks);
+
 typedef enum engine_result_t {
   ENGINE_RESULT_OK = 0,
   ENGINE_RESULT_INVALID_ARGUMENT = -1,

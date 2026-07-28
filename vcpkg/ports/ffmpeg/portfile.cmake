@@ -14,7 +14,21 @@ if(SOURCE_PATH MATCHES " ")
 endif()
 
 if (VCPKG_TARGET_ARCHITECTURE STREQUAL "x86" OR VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
-    vcpkg_find_acquire_program(NASM)
+    if(VCPKG_HOST_IS_WINDOWS)
+        # FFmpeg 3.3.9 probes NASM with -Werror. NASM 3.x emits a new
+        # implicit-abs-deprecated warning for that probe and is rejected as
+        # "too old", so keep this legacy port on the last compatible series.
+        vcpkg_download_distfile(NASM_ARCHIVE
+            URLS "https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip"
+            FILENAME "nasm-2.16.03-win64.zip"
+            SHA512 22869ceb70ea0e6597fe06abe205b5d5dd66b41fe54dda73d338c488ba6ef13a39158f25b357616bf578752bb112869ef26ad897eb29352e85cf1ecc61a7c07a
+        )
+        vcpkg_extract_source_archive(NASM_ROOT ARCHIVE "${NASM_ARCHIVE}")
+        file(GLOB_RECURSE NASM_EXECUTABLE "${NASM_ROOT}/nasm.exe")
+        list(GET NASM_EXECUTABLE 0 NASM)
+    else()
+        vcpkg_find_acquire_program(NASM)
+    endif()
     get_filename_component(NASM_EXE_PATH "${NASM}" DIRECTORY)
     vcpkg_add_to_path("${NASM_EXE_PATH}")
 endif()

@@ -201,7 +201,10 @@ build_abi() {
     local godot_bin_dir
     local vcpkg_triplet_dir
     local libomp_path
-    local cmake_config_args=(-D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM")
+    local cmake_config_args=(
+        -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
+        -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
+    )
 
     case "$abi" in
         arm64-v8a)

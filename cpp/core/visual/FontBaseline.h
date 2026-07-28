@@ -46,4 +46,15 @@ inline int ComputeGlyphOriginY(int lineBaseline, int glyphBearingY) {
     return lineBaseline - glyphBearingY;
 }
 
+// Some script helpers render text at the very top of a small, transparent
+// layer.  A face whose design ascender is taller than its logical line box can
+// legitimately produce a negative glyph top.  Keep the shared line baseline
+// unchanged, but move that one draw far enough into its clip for both the ink
+// and its outline to remain visible.
+inline int ClampTextOriginToClipTop(int originY, int glyphTop,
+                                   int outlineWidth, int clipTop) {
+    const int inkTop = originY + glyphTop - std::max(0, outlineWidth);
+    return inkTop < clipTop ? originY + (clipTop - inkTop) : originY;
+}
+
 } // namespace krkr::font

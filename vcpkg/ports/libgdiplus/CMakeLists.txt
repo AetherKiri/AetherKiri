@@ -61,7 +61,7 @@ check_symbol_exists(FcFini "fontconfig/fontconfig.h" HAVE_FCFINI)
 
 # Pango可选支持
 if(WITH_PANGO)
-    pkg_check_modules(PANGO REQUIRED pango>=1.10)
+    pkg_check_modules(PANGO REQUIRED pango>=1.10 pangocairo>=1.10)
     set(USE_PANGO_RENDERING ON)
     list(APPEND GDIPLUS_LIBS ${PANGO_LIBRARIES})
     list(APPEND GDIPLUS_CFLAGS ${PANGO_CFLAGS})

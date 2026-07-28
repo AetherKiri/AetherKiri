@@ -1229,10 +1229,18 @@ class AffineSourceMotion extends AffineSource, EmoteVariable {
 				target.captureCanvas(work);
 				target.unloadUnusedTextures();
 				_redrawImage(work);
-				(Layer.assignImages incontextof targetLayer)(work);
+				if (typeof Layer.assignMotionImages != "undefined") {
+					(Layer.assignMotionImages incontextof targetLayer)(work);
+				} else {
+					(Layer.assignImages incontextof targetLayer)(work);
+				}
 			} else if (target instanceof "Layer") {
 				_redrawImage(target);
-				(Layer.assignImages incontextof targetLayer)(target);
+				if (typeof Layer.assignMotionImages != "undefined") {
+					(Layer.assignMotionImages incontextof targetLayer)(target);
+				} else {
+					(Layer.assignImages incontextof targetLayer)(target);
+				}
 			}
 			targetLayer.type = targetType;
 		}

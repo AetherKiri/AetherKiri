@@ -1367,6 +1367,11 @@ namespace PSB {
             const auto loadArchive = [&](const tjs_int seed) {
                 auto candidate = std::make_unique<PSBFile>();
                 candidate->setSeed(seed);
+                candidate->setPreParseCallback(
+                    [](std::uint8_t *data, const size_t size) {
+                        return motion::ResourceManager::
+                            applyEmotePSBDecryptFunc(data, size);
+                    });
                 return candidate->loadPSBFile(archivePath)
                     ? std::move(candidate)
                     : std::unique_ptr<PSBFile>{};
