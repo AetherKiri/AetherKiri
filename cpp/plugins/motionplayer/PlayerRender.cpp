@@ -2636,6 +2636,61 @@ namespace {
         }
     }
 
+    // Provider-owned offscreen layer. It deliberately skips KAG Window and
+    // LayerManager construction while retaining Kirikiri's mature bitmap,
+    // affine, blend, mesh and stencil implementations.
+    class HeadlessLayerDispatch final : public tTJSDispatch {
+    public:
+        HeadlessLayerDispatch() : layer_(std::make_unique<tTJSNI_BaseLayer>()) {}
+
+        ~HeadlessLayerDispatch() override {
+            if(layer_) {
+                layer_->Invalidate();
+            }
+        }
+
+        tjs_error PropGet(tjs_uint32, const tjs_char *membername,
+                          tjs_uint32 *, tTJSVariant *result,
+                          iTJSDispatch2 *) override {
+            if(!membername || !result) {
+                return TJS_E_INVALIDPARAM;
+            }
+            if(!TJS_strcmp(membername, TJS_W("layerTreeOwnerInterface"))) {
+                *result = static_cast<tjs_int64>(
+                    reinterpret_cast<tjs_intptr_t>(this));
+                return TJS_S_OK;
+            }
+            if(!TJS_strcmp(membername, TJS_W("primaryLayer"))) {
+                *result = tTJSVariant(this, this);
+                return TJS_S_OK;
+            }
+            return TJS_E_MEMBERNOTFOUND;
+        }
+
+        tjs_error NativeInstanceSupport(tjs_uint32 flag, tjs_int32 classid,
+                                        iTJSNativeInstance **pointer) override {
+            if(flag != TJS_NIS_GETINSTANCE || pointer == nullptr ||
+               classid != tTJSNC_Layer::ClassID) {
+                return TJS_E_FAIL;
+            }
+            *pointer = layer_.get();
+            return TJS_S_OK;
+        }
+
+    private:
+        std::unique_ptr<tTJSNI_BaseLayer> layer_;
+    };
+
+    iTJSDispatch2 *createHeadlessLayerObject() {
+        // engine_api can instantiate Artemis without booting the Kirikiri
+        // window subsystem. A BaseLayer still uses the routed TVPGL software
+        // functions in its constructor, so initialize that routing table
+        // before allocating the first off-screen layer.
+        static std::once_flag tvpglInit;
+        std::call_once(tvpglInit, [] { TVPInitTVPGL(); });
+        return new HeadlessLayerDispatch();
+    }
+
     iTJSDispatch2 *resolveLayerTreeOwnerObject(iTJSDispatch2 *object) {
         if(!object) {
             return nullptr;
@@ -2775,12 +2830,12 @@ namespace {
         iTJSDispatch2 *parentLayerObject) {
         if(layerTreeOwnerVariant.Type() != tvtObject ||
            !layerTreeOwnerVariant.AsObjectNoAddRef()) {
-            return nullptr;
+            return createHeadlessLayerObject();
         }
 
         iTJSDispatch2 *global = TVPGetScriptDispatch();
         if(!global) {
-            return nullptr;
+            return createHeadlessLayerObject();
         }
 
             tTJSVariant layerClassVar;
@@ -2804,13 +2859,13 @@ namespace {
         }
 
         global->Release();
-        return created;
+        return created ? created : createHeadlessLayerObject();
     }
 
     iTJSDispatch2 *createLayerObject(iTJSDispatch2 *layerTreeOwnerObject,
                                      iTJSDispatch2 *parentLayerObject) {
         if(!layerTreeOwnerObject) {
-            return nullptr;
+            return createHeadlessLayerObject();
         }
         tTJSVariant ownerVar(layerTreeOwnerObject, layerTreeOwnerObject);
         return createLayerObjectWithOwnerVariant(ownerVar, parentLayerObject);
@@ -2879,9 +2934,7 @@ namespace {
         tTVPLayerType layerType,
         bool visible,
         bool absoluteOrderMode = false) {
-        if(!parentLayerObject ||
-           layerTreeOwnerVariant.Type() != tvtObject ||
-           !layerTreeOwnerVariant.AsObjectNoAddRef()) {
+        if(!parentLayerObject) {
             return nullptr;
         }
 
@@ -9450,6 +9503,63 @@ namespace motion {
                         static_cast<size_t>(copyRowBytes));
         }
 
+        return true;
+    }
+
+    bool Player::renderToRgba(std::uint8_t *pixels, int width, int height,
+                              int pitch) {
+        if(!pixels || width <= 0 || height <= 0 || pitch < width * 4) {
+            return false;
+        }
+
+        iTJSDispatch2 *target = createHeadlessLayerObject();
+        if(!target) {
+            return false;
+        }
+        struct TargetRelease {
+            iTJSDispatch2 *value;
+            ~TargetRelease() {
+                if(value) value->Release();
+            }
+        } release{target};
+
+        auto *layer = resolveNativeLayer(target);
+        if(!layer) {
+            return false;
+        }
+        layer->SetHasImage(true);
+        layer->SetSize(width, height);
+        layer->SetImageSize(static_cast<tjs_uint>(width),
+                            static_cast<tjs_uint>(height));
+        layer->SetClip(0, 0, width, height);
+        layer->SetVisible(true);
+        if(layer->GetMainImage()) {
+            layer->GetMainImage()->Fill(
+                tTVPRect(0, 0, width, height), 0x00000000);
+        }
+
+        if(!renderToLayer(target, false)) {
+            return false;
+        }
+        const auto *source = reinterpret_cast<const std::uint8_t *>(
+            layer->GetMainImagePixelBuffer());
+        const tjs_int sourcePitch = layer->GetMainImagePixelBufferPitch();
+        if(!source || sourcePitch <= 0) {
+            return false;
+        }
+
+        // Kirikiri's 32-bit bitmap memory is BGRA; engine provider frames use
+        // RGBA. Preserve alpha exactly while swapping the color endpoints.
+        for(int y = 0; y < height; ++y) {
+            const auto *src = source + static_cast<size_t>(sourcePitch) * y;
+            auto *dst = pixels + static_cast<size_t>(pitch) * y;
+            for(int x = 0; x < width; ++x) {
+                dst[x * 4 + 0] = src[x * 4 + 2];
+                dst[x * 4 + 1] = src[x * 4 + 1];
+                dst[x * 4 + 2] = src[x * 4 + 0];
+                dst[x * 4 + 3] = src[x * 4 + 3];
+            }
+        }
         return true;
     }
 

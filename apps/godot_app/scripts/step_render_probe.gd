@@ -1,6 +1,7 @@
 extends SceneTree
 
 const ProbeConfig = preload("res://scripts/probe_config.gd")
+const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
 const STARTUP_SUCCEEDED := 2
 const STARTUP_FAILED := 3
 const POINTER_DOWN := 1
@@ -11,7 +12,6 @@ const POINTER_SCROLL := 4
 var player
 var rect: TextureRect
 var test_config := {}
-var current_surface_size := Vector2i.ZERO
 
 func _initialize() -> void:
     test_config = ProbeConfig.load()
@@ -30,7 +30,11 @@ func _initialize() -> void:
     player = ClassDB.instantiate("AetherKiriPlayer")
     root.add_child(player as Node)
 
-    var user_dir := OS.get_user_data_dir()
+    var user_dir := OS.get_environment("AETHERKIRI_PROBE_USER_DIR").strip_edges()
+    if user_dir.is_empty():
+        user_dir = OS.get_user_data_dir()
+    else:
+        DirAccess.make_dir_recursive_absolute(user_dir)
     var cache_dir := user_dir.path_join("cache")
     DirAccess.make_dir_recursive_absolute(cache_dir)
     if not player.initialize_engine(user_dir, cache_dir):
@@ -55,7 +59,6 @@ func _initialize() -> void:
             player.set_engine_option(String(key), String(engine_options[key]))
     var surface_size: Vector2i = ProbeConfig.surface_size(test_config)
     player.set_surface_size(surface_size.x, surface_size.y)
-    current_surface_size = surface_size
 
     var game_path: String = ProbeConfig.require_game_path(test_config)
     if game_path.is_empty():
@@ -128,6 +131,7 @@ func _save_step(index: int, label: String) -> void:
     var image := _capture_frame_image()
     var path := "/tmp/aetherkiri-step-%02d-%s.png" % [index, label]
     image.save_png(path)
+    var runtime_debug: String = player.get_plugin_debug_info()
     print("step %02d label=%s texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
         index,
         label,
@@ -136,6 +140,8 @@ func _save_step(index: int, label: String) -> void:
         path,
         JSON.stringify(_image_stats(image)),
     ])
+    if not runtime_debug.is_empty():
+        print("step %02d runtime_debug=%s" % [index, runtime_debug])
 
 func _capture_frame_image() -> Image:
     # In headless mode the root viewport can be an opaque white dummy target.
@@ -580,22 +586,10 @@ func _map_window_point(pos: Vector2) -> Vector2:
         _env_int("AETHERKIRI_PROBE_COORD_H", 900)
     ))
     var panel_size := Vector2(coord)
-    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
-    if scale <= 0.0:
-        return Vector2(-1.0, -1.0)
-    var drawn_size := tex_size * scale
-    var offset := (panel_size - drawn_size) * 0.5
-    var inside := pos - offset
-    if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
-        return Vector2(-1.0, -1.0)
-    var texture_point := inside / scale
-    if current_surface_size.x <= 0 or current_surface_size.y <= 0:
-        return texture_point
-    if absf(float(current_surface_size.x) - tex_size.x) <= 0.5 and absf(float(current_surface_size.y) - tex_size.y) <= 0.5:
-        return texture_point
-    return Vector2(
-        texture_point.x * float(current_surface_size.x) / tex_size.x,
-        texture_point.y * float(current_surface_size.y) / tex_size.y
+    return GameInputMapping.map_point(
+        pos,
+        Rect2(Vector2.ZERO, panel_size),
+        tex_size
     )
 
 func _parse_clicks(spec: String) -> Array[Vector2]:

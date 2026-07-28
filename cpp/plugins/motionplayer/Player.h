@@ -341,6 +341,10 @@ namespace motion {
         void copyRect(tTJSVariant args);
         void adjustGamma(tTJSVariant args);
         void draw();
+        // Headless render entry used by runtime providers such as Artemis.
+        // The caller owns an RGBA8 output buffer and no KAG Window is needed.
+        bool renderToRgba(std::uint8_t *pixels, int width, int height,
+                          int pitch);
         void frameProgress(double dt);
         void frameProgressManually(double dt) {
             noteManualProgress();

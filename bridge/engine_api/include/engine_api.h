@@ -26,7 +26,7 @@ extern "C" {
 #endif
 
 /* ABI version: major(8bit), minor(8bit), patch(16bit). */
-#define ENGINE_API_VERSION 0x01020000u
+#define ENGINE_API_VERSION 0x01030000u
 #define ENGINE_API_MAKE_VERSION(major, minor, patch) \
   ((((uint32_t)(major)&0xFFu) << 24u) | (((uint32_t)(minor)&0xFFu) << 16u) | \
    ((uint32_t)(patch)&0xFFFFu))
@@ -142,6 +142,11 @@ typedef enum engine_input_event_type_t {
   ENGINE_INPUT_EVENT_BACK = 8
 } engine_input_event_type_t;
 
+typedef enum engine_text_input_state_flag_t {
+  ENGINE_TEXT_INPUT_STATE_NONE = 0,
+  ENGINE_TEXT_INPUT_STATE_ACTIVE = 1u << 0
+} engine_text_input_state_flag_t;
+
 typedef enum engine_startup_state_t {
   ENGINE_STARTUP_STATE_IDLE = 0,
   ENGINE_STARTUP_STATE_RUNNING = 1,
@@ -187,6 +192,26 @@ ENGINE_API_EXPORT engine_result_t engine_create(const engine_create_desc_t* desc
  * Idempotent: passing a null handle returns ENGINE_RESULT_OK.
  */
 ENGINE_API_EXPORT engine_result_t engine_destroy(engine_handle_t handle);
+
+/*
+ * Retrieves one platform operation emitted by a runtime provider. Requests
+ * are queued across asynchronous startup and must be consumed on the host UI
+ * thread. If no request is pending, out_available is set to zero and the
+ * function returns OK. A too-small output buffer leaves the request queued.
+ */
+ENGINE_API_EXPORT engine_result_t engine_poll_platform_request(
+    engine_handle_t handle, char* operation_buffer,
+    uint32_t operation_buffer_size, char* argument_buffer,
+    uint32_t argument_buffer_size, uint32_t* out_available);
+
+/*
+ * Returns the asynchronous result of a platform request to the active runtime
+ * provider. operation_utf8 must match the request operation; argument_utf8 is
+ * provider-defined UTF-8 data.
+ */
+ENGINE_API_EXPORT engine_result_t engine_submit_platform_response(
+    engine_handle_t handle, const char* operation_utf8,
+    const char* argument_utf8);
 
 /*
  * Opens a game package/root directory.
@@ -249,7 +274,8 @@ ENGINE_API_EXPORT engine_result_t engine_set_option(engine_handle_t handle,
                                                     const engine_option_t* option);
 
 /*
- * Sets logical render surface size in pixels.
+ * Sets the host presentation surface size in pixels. Runtime-specific game
+ * coordinates remain in the game's logical coordinate space.
  * width and height must be greater than zero.
  */
 ENGINE_API_EXPORT engine_result_t engine_set_surface_size(engine_handle_t handle,
@@ -302,6 +328,14 @@ ENGINE_API_EXPORT engine_result_t engine_get_host_native_view(
  */
 ENGINE_API_EXPORT engine_result_t engine_send_input(engine_handle_t handle,
                                                     const engine_input_event_t* event);
+
+/*
+ * Reports whether the active runtime currently expects text input.
+ * Hosts should activate their native IME while ENGINE_TEXT_INPUT_STATE_ACTIVE
+ * is set and deactivate it when the flag clears.
+ */
+ENGINE_API_EXPORT engine_result_t engine_get_text_input_state(
+    engine_handle_t handle, uint32_t* out_state_flags);
 
 /*
  * Exports the current main window menu tree as UTF-8 JSON.

@@ -11,6 +11,7 @@ const RUNTIME_FONT_DIR := "user://runtime_fonts"
 const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
+const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
 const DiagnosticLocalization = preload("res://scripts/diagnostic_localization.gd")
 const DebugConsole = preload("res://scripts/debug_console.gd")
@@ -724,6 +725,8 @@ var selected_backend := "Godot Native"
 var upscale_algorithm := "smooth"
 var render_surface_mode := "game"
 var game_running := false
+var game_text_input_active := false
+var runtime_dialog_input: LineEdit = null
 var app_lifecycle_paused := false
 var render_errors := 0
 var last_renderer_info_logged := ""
@@ -829,7 +832,7 @@ const TOUCH_SINGLE_TAP_DELAY_MS := 90
 const BLACK_FRAME_GUARD_MS := 3200
 const BLACK_FRAME_SAMPLE_INTERVAL_MS := 120
 const BLACK_FRAME_VISIBLE_MIN := 8
-const INITIAL_WINDOW_SIZE := Vector2i(2240, 1260)
+const INITIAL_WINDOW_SIZE := Vector2i(1920, 1080)
 const DEFAULT_UI_DPI_SCALE := 1.35
 const TOUCH_MOUSE_SUPPRESS_MS := 700
 const TOP_ICON_BUTTON_SIZE := Vector2(60, 60)
@@ -3981,6 +3984,7 @@ func _quit_after_runtime_exit() -> void:
     if runtime_exit_cleanup_pending:
         return
     runtime_exit_cleanup_pending = true
+    _set_game_text_input_active(false)
     _clear_game_input_capture()
     _finalize_active_game_session()
     game_running = false
@@ -4345,8 +4349,167 @@ func _create_runtime_player() -> bool:
         _show_system_alert(_t("alert.runtime_create_failed"), _t("alert.error_title"))
         return false
     player = instance
+    if instance.has_signal("platform_request"):
+        instance.connect(
+            "platform_request",
+            Callable(self, "_on_runtime_platform_request")
+        )
     add_child(instance as Node)
     return true
+
+func _parse_platform_form(argument: String) -> Dictionary:
+    var values := {}
+    for field in argument.split("&", false):
+        var separator := field.find("=")
+        var encoded_key := field if separator < 0 else field.left(separator)
+        var encoded_value := "" if separator < 0 else field.substr(separator + 1)
+        var key := encoded_key.replace("+", " ").uri_decode()
+        values[key] = encoded_value.replace("+", " ").uri_decode()
+    return values
+
+func _on_runtime_platform_request(operation: String, argument: String) -> void:
+    if player == null:
+        return
+    if operation == "dialog":
+        _show_runtime_dialog(_parse_platform_form(argument))
+        return
+    if operation == "call_native":
+        player.submit_platform_response("call_native", "result=")
+        return
+    if operation == "purchase":
+        player.submit_platform_response(
+            "purchase",
+            "result=-1&title=&description=&price=&token=" +
+            "&error_response=-1&error_message=" +
+            "In%20App%20Billing%20is%20unavailable"
+        )
+        return
+    _append_log("Unhandled platform request: %s %s" % [operation, argument])
+
+func _show_runtime_dialog(values: Dictionary) -> void:
+    if modal_layer == null or player == null:
+        return
+    _set_game_text_input_active(false)
+    modal_layer.set_meta("runtime_platform_dialog", true)
+    modal_layer.visible = true
+    modal_layer.move_to_front()
+    for child in modal_layer.get_children():
+        child.queue_free()
+
+    var dim := ColorRect.new()
+    dim.color = Color(0, 0, 0, 0.68)
+    dim.mouse_filter = Control.MOUSE_FILTER_STOP
+    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+    modal_layer.add_child(dim)
+
+    var dialog := PanelContainer.new()
+    dialog.anchor_left = 0.5
+    dialog.anchor_top = 0.5
+    dialog.anchor_right = 0.5
+    dialog.anchor_bottom = 0.5
+    dialog.offset_left = -390.0
+    dialog.offset_top = -220.0
+    dialog.offset_right = 390.0
+    dialog.offset_bottom = 220.0
+    dialog.mouse_filter = Control.MOUSE_FILTER_STOP
+    dialog.add_theme_stylebox_override(
+        "panel",
+        _panel_style(20, color_card, color_accent, 2)
+    )
+    modal_layer.add_child(dialog)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 30)
+    margin.add_theme_constant_override("margin_top", 26)
+    margin.add_theme_constant_override("margin_right", 30)
+    margin.add_theme_constant_override("margin_bottom", 26)
+    dialog.add_child(margin)
+
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 20)
+    margin.add_child(box)
+
+    var title := Label.new()
+    title.text = String(values.get("title", ""))
+    title.add_theme_font_size_override("font_size", 30)
+    title.add_theme_color_override("font_color", color_text)
+    box.add_child(title)
+
+    var message := Label.new()
+    message.text = String(values.get("message", ""))
+    message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    message.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    message.add_theme_font_size_override("font_size", 23)
+    message.add_theme_color_override("font_color", color_text)
+    box.add_child(message)
+
+    var text_field := String(values.get("text_field", "0")) == "1"
+    var yes_no := String(values.get("yes_no", "0")) == "1"
+    runtime_dialog_input = null
+    if text_field:
+        runtime_dialog_input = LineEdit.new()
+        runtime_dialog_input.name = "ArtemisDialogInput"
+        runtime_dialog_input.custom_minimum_size = Vector2(0, 68)
+        runtime_dialog_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        runtime_dialog_input.add_theme_font_size_override("font_size", 25)
+        var maximum_characters := int(
+            String(values.get("maximum_characters", "0"))
+        )
+        if maximum_characters > 0:
+            runtime_dialog_input.max_length = maximum_characters
+        box.add_child(runtime_dialog_input)
+
+    var buttons := HBoxContainer.new()
+    buttons.alignment = BoxContainer.ALIGNMENT_END
+    buttons.add_theme_constant_override("separation", 14)
+    box.add_child(buttons)
+
+    if yes_no:
+        var no := _pill_button("No")
+        no.custom_minimum_size = Vector2(150, 60)
+        no.pressed.connect(
+            _complete_runtime_dialog.bind(0, runtime_dialog_input)
+        )
+        buttons.add_child(no)
+
+    var ok := _pill_button("Yes" if yes_no else "OK")
+    ok.custom_minimum_size = Vector2(150, 60)
+    ok.pressed.connect(
+        _complete_runtime_dialog.bind(1, runtime_dialog_input)
+    )
+    buttons.add_child(ok)
+
+    if runtime_dialog_input != null:
+        runtime_dialog_input.text_submitted.connect(
+            func(_text: String):
+                _complete_runtime_dialog(1, runtime_dialog_input)
+        )
+        runtime_dialog_input.call_deferred("grab_focus")
+    else:
+        ok.call_deferred("grab_focus")
+
+func _complete_runtime_dialog(result: int, input: LineEdit) -> void:
+    if modal_layer == null or not bool(
+        modal_layer.get_meta("runtime_platform_dialog", false)
+    ):
+        return
+    var text := input.text if input != null and is_instance_valid(input) else ""
+    modal_layer.set_meta("runtime_platform_dialog", false)
+    modal_layer.visible = false
+    runtime_dialog_input = null
+    if player == null:
+        return
+    var response := "result=%d&text=%s" % [result, text.uri_encode()]
+    var submit_result: int = int(
+        player.submit_platform_response("dialog", response)
+    )
+    if submit_result != ENGINE_RESULT_OK:
+        _append_log(
+            "Dialog response failed: %s %s" % [
+                player.get_last_result(),
+                player.get_last_error(),
+            ]
+        )
 
 func _ensure_player_initialized() -> bool:
     if player == null:
@@ -5312,6 +5475,7 @@ func _probe_image_diff_score(a: Image, b: Image) -> float:
 
 func _probe_cleanup_and_quit(code: int) -> void:
     _write_probe_marker("probe_cleanup code=%d" % code)
+    _set_game_text_input_active(false)
     if player != null:
         viewport.texture = null
         await get_tree().process_frame
@@ -5391,6 +5555,7 @@ func _process(delta: float) -> void:
                 ])
             var tick_start := Time.get_ticks_usec()
             var tick_result: int = int(player.tick(delta))
+            _sync_game_text_input_state()
             var tick_ms := float(Time.get_ticks_usec() - tick_start) / 1000.0
             last_tick_ms = tick_ms
             last_frame_ms = delta * 1000.0
@@ -5421,6 +5586,7 @@ func _process(delta: float) -> void:
                     perf_log_file.store_line(tick_error_line)
                     perf_log_file.flush()
                 game_running = false
+                _set_game_text_input_active(false)
                 _sync_debug_console_state()
                 if diagnostic_session != null:
                     diagnostic_session.set_game_active(false)
@@ -5461,6 +5627,7 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            _set_game_text_input_active(false)
             _sync_debug_console_state()
             if diagnostic_session != null:
                 diagnostic_session.set_game_active(false)
@@ -5677,6 +5844,7 @@ func _notification(what: int) -> void:
         _resume_game_for_lifecycle("notification_%d" % what)
         return
     if what == NOTIFICATION_WM_CLOSE_REQUEST:
+        _set_game_text_input_active(false)
         if app_lifecycle_paused:
             player.resume()
             app_lifecycle_paused = false
@@ -6298,6 +6466,14 @@ func _save_auto_probe_step(index: int, label: String) -> void:
     ]
     _write_probe_marker(line)
     print(line)
+    var runtime_debug: String = player.get_plugin_debug_info()
+    if not runtime_debug.is_empty():
+        var debug_line := "auto_step index=%d runtime_debug=%s" % [
+            index,
+            runtime_debug,
+        ]
+        _write_probe_marker(debug_line)
+        print(debug_line)
     if perf_log_file != null:
         perf_log_file.store_line(line)
         perf_log_file.flush()
@@ -6500,11 +6676,22 @@ func _input(event: InputEvent) -> void:
         return
     if diagnostic_session != null and diagnostic_session.routes_pointer_to_marker(event):
         return
+    # Platform dialogs are real Godot Controls, matching CDialog's host-owned
+    # modal. Leave their events unhandled so LineEdit/Button GUI dispatch owns
+    # them, and never pass the same event through to the game.
+    if modal_layer != null and modal_layer.visible:
+        return
     # KAG [edit] controls own their focus inside the rendered game; Godot does
     # not mirror that focus onto the TextureRect. Forward keyboard input here,
     # before shell Controls can consume it.
     if event is InputEventKey and _can_forward_game_input():
         var key := event as InputEventKey
+        if game_text_input_active and key.pressed and not key.echo and (
+            key.meta_pressed or key.ctrl_pressed
+        ) and key.keycode == KEY_V:
+            player.send_text_input(DisplayServer.clipboard_get())
+            get_viewport().set_input_as_handled()
+            return
         player.send_key_event(key.pressed, key.keycode, key.get_modifiers_mask(), key.unicode)
         get_viewport().set_input_as_handled()
         return
@@ -6635,7 +6822,34 @@ func _on_viewport_input(event: InputEvent) -> void:
 func _can_forward_game_input() -> bool:
     return game_running and viewport.visible and cached_startup_state == STARTUP_SUCCEEDED and (
         loading_panel == null or not loading_panel.visible
+    ) and (
+        modal_layer == null or not modal_layer.visible
     )
+
+func _set_game_text_input_active(active: bool) -> void:
+    if game_text_input_active == active:
+        return
+    game_text_input_active = active
+    var window := get_window()
+    if window == null:
+        return
+    window.set_ime_active(active)
+    if active:
+        window.set_ime_position(Vector2i(
+            int(round(size.x * 0.5)),
+            int(round(size.y * 0.5))
+        ))
+
+func _sync_game_text_input_state() -> void:
+    if modal_layer != null and bool(
+        modal_layer.get_meta("runtime_platform_dialog", false)
+    ):
+        return
+    var active: bool = _can_forward_game_input() and player != null and (
+        player.has_method("is_text_input_active") and
+        bool(player.is_text_input_active())
+    )
+    _set_game_text_input_active(active)
 
 func _is_game_pointer_event(event: InputEvent) -> bool:
     return event is InputEventMouseButton or event is InputEventMouseMotion or event is InputEventScreenTouch or event is InputEventScreenDrag or event is InputEventPanGesture
@@ -7071,27 +7285,16 @@ func _is_touch_platform() -> bool:
 func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2:
     if viewport.texture == null:
         return pos
-    var local_pos := pos - viewport.get_global_rect().position
     var tex_size: Vector2 = Vector2(
         max(1.0, float(viewport.texture.get_width())),
         max(1.0, float(viewport.texture.get_height()))
     )
-    var panel_size: Vector2 = viewport.size
-    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
-    if scale <= 0.0:
-        return Vector2(-1.0, -1.0)
-    var drawn_size: Vector2 = tex_size * scale
-    var offset: Vector2 = (panel_size - drawn_size) * 0.5
-    var inside: Vector2 = local_pos - offset
-    if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
-        if not clamp_to_bounds:
-            return Vector2(-1.0, -1.0)
-        inside = Vector2(
-            clampf(inside.x, 0.0, drawn_size.x),
-            clampf(inside.y, 0.0, drawn_size.y)
-        )
-    var texture_point: Vector2 = inside / scale
-    return _map_texture_input_to_surface(texture_point, tex_size)
+    return GameInputMapping.map_point(
+        pos,
+        viewport.get_global_rect(),
+        tex_size,
+        clamp_to_bounds
+    )
 
 func _map_viewport_delta(delta: Vector2) -> Vector2:
     if viewport.texture == null:
@@ -7100,23 +7303,7 @@ func _map_viewport_delta(delta: Vector2) -> Vector2:
         max(1.0, float(viewport.texture.get_width())),
         max(1.0, float(viewport.texture.get_height()))
     )
-    var panel_size: Vector2 = viewport.size
-    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
-    var texture_delta: Vector2 = delta / max(0.0001, scale)
-    return _map_texture_input_to_surface(texture_delta, tex_size)
-
-func _map_texture_input_to_surface(point: Vector2, texture_size: Vector2) -> Vector2:
-    if current_surface_size.x <= 0 or current_surface_size.y <= 0:
-        return point
-    var surface_size := Vector2(float(current_surface_size.x), float(current_surface_size.y))
-    if texture_size.x <= 0.0 or texture_size.y <= 0.0:
-        return point
-    if absf(surface_size.x - texture_size.x) <= 0.5 and absf(surface_size.y - texture_size.y) <= 0.5:
-        return point
-    return Vector2(
-        point.x * surface_size.x / texture_size.x,
-        point.y * surface_size.y / texture_size.y
-    )
+    return GameInputMapping.map_delta(delta, viewport.size, tex_size)
 
 func _map_mouse_button(button_index: MouseButton) -> int:
     if button_index == MOUSE_BUTTON_RIGHT:

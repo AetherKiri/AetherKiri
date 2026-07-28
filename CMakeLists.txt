@@ -97,13 +97,14 @@ if(AETHERKIRI_ENABLE_INTERNAL)
     find_package(AetherInternal CONFIG QUIET
         NO_DEFAULT_PATH)
     if(AetherInternal_FOUND)
-        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 4 OR
+        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 5 OR
            NOT AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL
                AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION OR
            NOT AETHERINTERNAL_REQUIRED_LIVE2D_HOST_API_VERSION EQUAL
                AETHERKIRI_LIVE2D_HOST_API_VERSION OR
            NOT COMMAND aetherinternal_extend_motionplayer OR
-           NOT COMMAND aetherinternal_extend_live2d)
+           NOT COMMAND aetherinternal_extend_live2d OR
+           NOT COMMAND aetherinternal_extend_artemis)
             message(FATAL_ERROR
                 "AetherInternal is present but is incompatible with the "
                 "motionplayer backend contract required by this checkout")
@@ -113,7 +114,7 @@ if(AETHERKIRI_ENABLE_INTERNAL)
 endif()
 
 if(AETHERKIRI_INTERNAL_ENABLED)
-    message(STATUS "AetherInternal E-mote/Live2D package: enabled")
+    message(STATUS "AetherInternal E-mote/Live2D/Artemis package: enabled")
 else()
     message(STATUS "AetherInternal package: unavailable; using public fallbacks")
 endif()

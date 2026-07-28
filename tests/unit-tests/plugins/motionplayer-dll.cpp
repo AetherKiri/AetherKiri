@@ -514,6 +514,42 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
     player.setOuterForce(1.0, 2.0);
 }
 
+TEST_CASE("emoteplayer renders a PSB into a headless RGBA surface") {
+    setEmoteSeed();
+
+    motion::ResourceManager resources;
+    const auto module = resources.load(motionFixturePath());
+    REQUIRE(module.Type() == tvtObject);
+
+    motion::EmotePlayer player(resources);
+    player.setModule(module);
+    player.show();
+    const auto mainCount = player.countMainTimelines();
+    const auto diffCount = player.countDiffTimelines();
+    REQUIRE((mainCount + diffCount) > 0);
+    const auto timeline =
+        mainCount > 0 ? player.getMainTimelineLabelAt(0)
+                      : player.getDiffTimelineLabelAt(0);
+    player.playTimeline(timeline, motion::TimelinePlayFlagParallel);
+    player.progress(16.6666667);
+
+    constexpr int width = 1280;
+    constexpr int height = 720;
+    std::vector<std::uint8_t> rgba(
+        static_cast<std::size_t>(width) * height * 4u, 0);
+    REQUIRE(player.getPlayer().renderToRgba(
+        rgba.data(), width, height, width * 4));
+
+    std::size_t visiblePixels = 0;
+    std::uint8_t maximumAlpha = 0;
+    for(std::size_t offset = 0; offset < rgba.size(); offset += 4u) {
+        maximumAlpha = std::max(maximumAlpha, rgba[offset + 3u]);
+        if(rgba[offset + 3u] != 0) ++visiblePixels;
+    }
+    REQUIRE(maximumAlpha > 0);
+    REQUIRE(visiblePixels > 100);
+}
+
 TEST_CASE("motionplayer can play internal logo motion clips") {
     setEmoteSeed();
 

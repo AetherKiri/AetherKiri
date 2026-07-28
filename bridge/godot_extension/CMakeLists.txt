@@ -74,6 +74,25 @@ set_target_properties(aether_kiri_godot PROPERTIES
     INSTALL_RPATH "@loader_path"
 )
 
+if(APPLE AND NOT IOS AND TARGET engine_api)
+    # Godot exports the libraries referenced by aether_kiri.gdextension from
+    # apps/godot_app/bin. Keep that staging directory tied to the actual CMake
+    # outputs so an export cannot silently package an older runtime.
+    set(_aetherkiri_macos_godot_bin
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../apps/godot_app/bin/macos/$<LOWER_CASE:$<CONFIG>>")
+    add_custom_command(TARGET aether_kiri_godot POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${_aetherkiri_macos_godot_bin}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:aether_kiri_godot>"
+            "${_aetherkiri_macos_godot_bin}/libaether_kiri_godot.dylib"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:engine_api>"
+            "${_aetherkiri_macos_godot_bin}/libengine_api.dylib"
+        VERBATIM
+    )
+endif()
+
 if(WEB OR EMSCRIPTEN)
     function(aetherkiri_find_web_pic_system_archive out_var archive_name)
         execute_process(

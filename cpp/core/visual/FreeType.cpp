@@ -503,10 +503,15 @@ tTVPCharacterData *tFreeTypeFace::GetGlyphFromCharcode(tjs_char code) {
         // int baseline = (int)(FTFace->height + FTFace->descender) *
         // FTFace->size->metrics.y_ppem / FTFace->units_per_EM;
         // FT_Set_Pixel_Sizes sets the em square, while KAG's font height is
-        // the logical line-box height.  Clamp the face baseline once using
-        // the face descent.  A glyph-specific descent would move the baseline
-        // as punctuation and CJK characters are revealed next to each other.
-        const int baseline = GetLineBaseline();
+        // the logical line-box height.  Fit the rendered glyph, not the
+        // whole face, into that box: CJK name glyphs typically have no
+        // descender, and reserving the face descent clips their top edge.
+        const int glyph_descent = std::max(
+            0, FT_PosToInt(FTFace->glyph->metrics.height -
+                            FTFace->glyph->metrics.horiBearingY));
+        const int baseline = krkr::font::ComputeGlyphBaseline(
+            Height, FTFace->ascender, FTFace->size->metrics.y_ppem,
+            FTFace->units_per_EM, glyph_descent);
 
         glyph_bmp = new tTVPCharacterData(ft_bmp->buffer, ft_bmp->pitch,
                                           FTFace->glyph->bitmap_left,
@@ -556,7 +561,12 @@ bool tFreeTypeFace::GetGlyphRectFromCharcode(tTVPRect &rt, tjs_char code,
     if(!LoadGlyphSlotFromCharcode(code))
         return false;
 
-    const int baseline = GetLineBaseline();
+    const int glyph_descent = std::max(
+        0, FT_PosToInt(FTFace->glyph->metrics.height -
+                        FTFace->glyph->metrics.horiBearingY));
+    const int baseline = krkr::font::ComputeGlyphBaseline(
+        Height, FTFace->ascender, FTFace->size->metrics.y_ppem,
+        FTFace->units_per_EM, glyph_descent);
     /*
     FT_Render_Glyph でレンダリングしないと以下の各値は取得できない
     tjs_int t = baseline - FTFace->glyph->bitmap_top;
