@@ -445,9 +445,8 @@ package_ios_unsigned_ipa() {
             GCC_SYMBOLS_PRIVATE_EXTERN=YES
             GCC_GENERATE_DEBUGGING_SYMBOLS=NO
             STRIP_SWIFT_SYMBOLS=YES
-            LLVM_LTO=YES_THIN
             UNEXPORTED_SYMBOLS_FILE="$PROJECT_ROOT/cmake/ios_unexported_symbols.txt"
-            'OTHER_LDFLAGS=$(inherited) -Wl,-dead_strip -flto=thin'
+            'OTHER_LDFLAGS=$(inherited) -Wl,-dead_strip'
         )
     fi
     xcodebuild build "${xcodebuild_args[@]}"
