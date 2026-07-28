@@ -12,7 +12,6 @@ extern "C" {
 #include "libavfilter/avfilter.h"
 }
 
-#include <mutex>
 #include "MsgIntf.h"
 #include "StorageIntf.h"
 #include "VideoOvlImpl.h"
@@ -21,45 +20,15 @@ extern "C" {
 
 extern std::thread::id TVPMainThreadID;
 
-static int lockmgr(void **arg, AVLockOp op) {
-    auto **mtx = (std::mutex **)arg;
-    switch(op) {
-        case AV_LOCK_CREATE:
-            *mtx = new std::mutex();
-            if(!*mtx)
-                return 1;
-            break;
-        case AV_LOCK_OBTAIN:
-            (*mtx)->lock();
-            break;
-        case AV_LOCK_RELEASE:
-            (*mtx)->unlock();
-            break;
-        case AV_LOCK_DESTROY:
-            delete *mtx;
-            break;
-        default:
-            return 1;
-    }
-    return 0;
-}
-
-static bool FFInitilalized = false;
-
 void TVPInitLibAVCodec() {
-    if(!FFInitilalized) {
-        /* register all codecs, demux and protocols */
-        if(av_lockmgr_register(lockmgr)) {
+    static const bool initialized = [] {
+        if(avformat_network_init() < 0) {
             TVPThrowExceptionMessage(
-                TJS_W("Could not initialize lock manager!"));
+                TJS_W("Could not initialize FFmpeg network support!"));
         }
-        avcodec_register_all();
-        av_register_all();
-        avfilter_register_all();
-        avformat_network_init();
-        //	av_log_set_callback(ff_avutil_log);
-        FFInitilalized = true;
-    }
+        return true;
+    }();
+    (void)initialized;
 }
 
 void GetVideoOverlayObject(tTJSNI_VideoOverlay *callbackwin, IStream *stream,
@@ -137,8 +106,12 @@ bool TVPCheckIsVideoFile(const char *uri) {
     if(stream->GetSize() < bufSize) {
         return false;
     }
+    auto *buffer =
+        (unsigned char *)av_malloc(bufSize + AVPROBE_PADDING_SIZE);
+    if(!buffer)
+        return false;
     AVIOContext *pIOCtx = avio_alloc_context(
-        (unsigned char *)av_malloc(bufSize + AVPROBE_PADDING_SIZE),
+        buffer,
         bufSize, // internal Buffer and its size
         false, // bWriteable (1=true,0=false)
         stream.get(), // user data ; will be passed to our callback
@@ -147,13 +120,19 @@ bool TVPCheckIsVideoFile(const char *uri) {
         nullptr, // Write callback function (not used in this example)
         AVSeekFunc);
     if(!pIOCtx) {
+        av_free(buffer);
         return false;
     }
-    AVInputFormat *fmt = nullptr;
+    const AVInputFormat *fmt = nullptr;
     av_probe_input_buffer2(pIOCtx, &fmt, uri, nullptr, 0, 0);
     bool ret = false;
     if(fmt) {
         AVFormatContext *ic = avformat_alloc_context();
+        if(!ic) {
+            av_freep(&pIOCtx->buffer);
+            avio_context_free(&pIOCtx);
+            return false;
+        }
         ic->interrupt_callback.callback = nullptr;
         ic->interrupt_callback.opaque = nullptr;
         ic->pb = pIOCtx;
@@ -164,9 +143,12 @@ bool TVPCheckIsVideoFile(const char *uri) {
                 if(vid >= 0)
                     ret = true;
             }
+            avformat_close_input(&ic);
+        } else {
+            avformat_free_context(ic);
         }
-        avformat_free_context(ic);
     }
-    av_free(pIOCtx);
+    av_freep(&pIOCtx->buffer);
+    avio_context_free(&pIOCtx);
     return ret;
 }

@@ -1,0 +1,50 @@
+Aether iOS App Store Additional Permission and Notice
+
+Version: 2026-07-28
+Effective date: July 28, 2026
+
+1. Background
+
+Aether is distributed under the GNU General Public License, version 3 or (at your option) any later version (“GPL”). Terms that apply to software distributed through Apple’s App Store may conflict with rights granted by the GPL.
+
+2. Limited additional permission
+
+The Aether copyright holders who expressly approve this notice do not intend such a conflict, by itself, to prevent otherwise GPL-compliant distribution through the App Store. Under section 7 of GPLv3, and only to the extent that each approving copyright holder owns or is authorized to license a covered contribution, that holder permits the contribution to be conveyed as part of the official Aether iOS application through Apple’s App Store, subject to section 7 below.
+
+An approving copyright holder will not assert a GPL violation against such a distribution when the alleged violation results solely from an unavoidable conflict between the GPL and the App Store terms.
+
+3. Conditions that remain in force
+
+This permission applies only when the distributor complies with the GPL in all other respects, including the obligations to:
+
+• provide the complete Corresponding Source for the version distributed;
+• provide the GPL license text and preserve applicable copyright, attribution, modification, and license notices; and
+• comply with the separate licenses and notices of all third-party components.
+
+The public source repository, GPL text, and third-party notices are available at:
+
+https://github.com/AetherKiri/AetherKiri
+https://github.com/AetherKiri/AetherKiri/blob/main/LICENSE
+https://github.com/AetherKiri/AetherKiri/blob/main/THIRD_PARTY_LICENSES.md
+
+4. Scope and third-party rights
+
+This notice binds only a copyright holder who has expressly approved it and only for material that holder is entitled to license. It does not grant, waive, or alter rights in upstream or third-party material on behalf of any other copyright holder. A distributor remains responsible for confirming that every component in the distributed build may lawfully be distributed through the App Store and for obtaining any additional permission required.
+
+5. No license to user content or trademarks
+
+This notice grants no rights to visual novels, videos, subtitles, images, audio, fonts, trademarks, or other content imported by users or supplied by third parties. It does not authorize copyright infringement, circumvention of technological protection measures, or any use prohibited by applicable law.
+
+Apple is not a sponsor of, and does not endorse, Aether. Apple and App Store are trademarks of Apple Inc. This notice provides no warranty and does not replace any mandatory consumer rights.
+
+6. Relationship to the GPL
+
+This document supplies a limited additional permission; it does not replace the GPL. Recipients may remove an additional permission from their copy to the extent allowed by GPLv3 section 7. If a translation conflicts with the English COPYING.iOS file at the repository root, that English file controls.
+
+7. Official distribution only; no third-party reliance
+
+The additional App Store permission in this notice is granted solely for an official Aether iOS release submitted by the Aether project maintainer or by a distributor expressly authorized in writing by an approving copyright holder. It is not granted for any fork, modified build, rebranded app, wrapper, or other app based on Aether that is submitted by another person or entity. A third-party distributor may not rely on this notice and must obtain all permissions independently required from the relevant copyright holders.
+
+Nothing in the GPL or this notice grants a third party rights under trademark law to use the Aether name, icon, logo, or other project branding in an App Store listing, or to imply that a derivative app is an official Aether release.
+
+This section limits only the additional App Store permission offered by this notice. It is not a further restriction on, and does not revoke, rights already granted under the GPL. If the GPL itself permits a particular form of distribution without reliance on this additional permission, this notice does not take that right away.

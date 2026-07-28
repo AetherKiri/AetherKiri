@@ -52,6 +52,8 @@ public:
 
     void SetResampleMode(int mode);
 
+    void SetPlaybackRate(double rate);
+
     void Flush();
 
     void Drain();
@@ -75,6 +77,7 @@ protected:
     unsigned int m_sampeRate;
     int m_iBitsPerSample;
     bool m_bPassthrough;
+    double m_playbackRate;
     CAEChannelInfo m_channelLayout;
     bool m_bPaused;
 

@@ -208,7 +208,7 @@ Android Debug：
 
 ```bash
 ./build.sh android debug --abi=arm64-v8a
-adb install -r out/godot/android/debug/AetherKiri-debug.apk
+adb install -r out/godot/android/debug/Aether-debug.apk
 adb shell monkey -p org.github.krkr2.aetherkiri \
   -c android.intent.category.LAUNCHER 1
 ```

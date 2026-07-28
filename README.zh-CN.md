@@ -278,13 +278,13 @@ iOS/iPadOS 上通过“文件”App 将游戏复制到：
 APK 输出到：
 
 ```text
-out/godot/android/debug/AetherKiri-debug.apk
+out/godot/android/debug/Aether-debug.apk
 ```
 
 安装并启动到已连接设备或模拟器：
 
 ```bash
-adb install -r out/godot/android/debug/AetherKiri-debug.apk
+adb install -r out/godot/android/debug/Aether-debug.apk
 adb shell monkey -p org.github.krkr2.aetherkiri \
   -c android.intent.category.LAUNCHER 1
 ```
@@ -298,14 +298,14 @@ adb shell monkey -p org.github.krkr2.aetherkiri \
 Release APK 输出到：
 
 ```text
-out/godot/android/release/AetherKiri-release.apk
+out/godot/android/release/Aether-release.apk
 ```
 
 release preset 在配置项目发布 keystore 之前会保持未签名。安装或分发前需要签名：
 
 ```bash
 apksigner sign --ks /path/to/release.keystore \
-  out/godot/android/release/AetherKiri-release.apk
+  out/godot/android/release/Aether-release.apk
 ```
 
 Android 上，如果平台允许访问文件系统，可通过 App UI 导入游戏；受限设备可将游戏目录复制到
@@ -441,3 +441,4 @@ Godot Native 或 GPU Bridge 达到性能目标。Debug CPU 只作为诊断 fallb
 ## 许可证
 
 AetherKiri 以 GPL-3.0-or-later 分发。完整许可证文本见 `LICENSE`，第三方授权声明保留在 `THIRD_PARTY_LICENSES.md`。
+iOS App Store 分发相关的有限额外许可见 `COPYING.iOS`；该许可仅供 Aether 官方 iOS 版本或版权持有人书面授权的发布者使用，第三方分支及衍生 App 不得援引。该许可仅适用于明确认可声明的版权持有人有权授权的部分，不能代表其他版权持有人授予上游或第三方材料的权利，也不撤销 GPL 已授予的权利。

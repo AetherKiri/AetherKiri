@@ -14,7 +14,13 @@ game_path=""
 
 [application]
 
-config/name="AetherKiri"
+config/name="Aether"
+config/use_custom_user_dir.macos=true
+config/custom_user_dir_name.macos="Godot/app_userdata/AetherKiri"
+config/use_custom_user_dir.windows=true
+config/custom_user_dir_name.windows="Godot/app_userdata/AetherKiri"
+config/use_custom_user_dir.linux=true
+config/custom_user_dir_name.linux="godot/app_userdata/AetherKiri"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7")
 boot_splash/stretch_mode=0
