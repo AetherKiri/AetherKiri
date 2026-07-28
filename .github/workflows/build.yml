@@ -374,9 +374,10 @@ jobs:
             exit 1
           fi
 
-      - name: Verify iOS Release ABI surface
+      - name: Verify iOS Release optimization and ABI surface
         run: |
           set -euo pipefail
+          grep -F -- '-flto=thin' out/ios/release/compile_commands.json >/dev/null
           release_binary="${RUNNER_TEMP}/AetherKiri-release"
           unzip -p \
             out/godot/ios/release/AetherKiri-Release-Unsigned.ipa \
@@ -404,6 +405,10 @@ jobs:
       - name: Verify exported Xcode project and IPA
         run: |
           set -euo pipefail
+          if grep -F -- '-flto=thin' out/ios/debug/compile_commands.json; then
+            echo "ThinLTO leaked into the iOS Debug build." >&2
+            exit 1
+          fi
           for build_type in release debug; do
             if [[ ! -d "out/godot/ios/${build_type}/AetherKiri.xcodeproj" ]]; then
               echo "Godot iOS ${build_type} Xcode project not found" >&2
