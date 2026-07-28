@@ -659,11 +659,11 @@ namespace {
         return value;
     }
 
-    constexpr const char *kYuzuStartupLogoMotion = "yuzulogo.mtn";
     constexpr const char *kM2StartupLogoMotion = "m2logo.mtn";
 
     bool loweredPathContainsYuzuStartupLogo(const std::string &loweredPath) {
-        return loweredPath.find(kYuzuStartupLogoMotion) != std::string::npos;
+        return motion::internal::startupLogoMotionUsesCenteredOrigin(
+            loweredPath);
     }
 
     bool loweredPathContainsM2StartupLogo(const std::string &loweredPath) {
@@ -731,8 +731,8 @@ namespace {
     }
 
     bool isYuzuStartupLogoMotion(const std::string &motionPath) {
-        const auto motion = renderDebugLowercase(motionPath);
-        return loweredPathContainsYuzuStartupLogo(motion);
+        return motion::internal::startupLogoMotionUsesCenteredOrigin(
+            motionPath);
     }
 
     bool isM2StartupLogoMotion(const std::string &motionPath) {
@@ -741,8 +741,8 @@ namespace {
     }
 
     bool isYuzuLogoPresentationMotion(const std::string &motionPath) {
-        return isM2StartupLogoMotion(motionPath) ||
-            isYuzuStartupLogoMotion(motionPath);
+        return motion::internal::startupLogoMotionScalesAroundCanvasCenter(
+            motionPath);
     }
 
     std::array<int, 4> neutralStartupLogoTint(
@@ -1163,11 +1163,18 @@ namespace {
         bool hasOpaqueBackground = false;
         bool hasOpaqueNumberedComposite = false;
         bool hasOpaqueMainOrLogo = false;
+        bool hasActiveTransientLogo = false;
         for(const auto &entry : runtime.preparedRenderItems) {
             if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
-               entry.opacity < 240 ||
                isYuzuTitleWhiteUtilityLayer("title_bg", entry.nodeLabel,
                                             entry.sourceKey)) {
+                continue;
+            }
+            if(isYuzuTitleLogoLayer(entry.nodeLabel, entry.sourceKey) &&
+               entry.opacity > 0 && (entry.blendMode & 0x0f) != 0) {
+                hasActiveTransientLogo = true;
+            }
+            if(entry.opacity < 240) {
                 continue;
             }
             if(isYuzuTitleBackgroundLayer(entry.nodeLabel, entry.sourceKey)) {
@@ -1189,8 +1196,9 @@ namespace {
                 ++opaqueNormalPresentationItems;
             }
         }
-        return (hasOpaqueBackground && opaqueTitleCharacters >= 3 &&
-                hasOpaqueMainOrLogo) ||
+        const bool hasStableComposition =
+            (hasOpaqueBackground && opaqueTitleCharacters >= 3 &&
+             hasOpaqueMainOrLogo) ||
             // A normal title card commonly starts with its opaque background
             // and character while a white transition is still fading out.
             // That is a useful delta-composition base, but not the terminal
@@ -1198,6 +1206,8 @@ namespace {
             // signal that the card is ready to retain after the motion ends.
             (opaqueNormalPresentationItems >= 2 && hasOpaqueMainOrLogo) ||
             (hasOpaqueNumberedComposite && hasOpaqueMainOrLogo);
+        return motion::internal::yuzuTitlePresentationFrameIsStable(
+            hasStableComposition, hasActiveTransientLogo);
     }
 
     void logYuzuTitlePreparedSummary(
@@ -1740,6 +1750,11 @@ namespace {
         }
         const bool isTitleMotion = isYuzuTitlePresentationMotion(motionPath);
         const bool isLogoMotion = isYuzuLogoPresentationMotion(motionPath);
+        // Yuzu authors its startup motion around (0, 0), while M2 is already
+        // mapped into canvas space. M2 also contains centered helper geometry,
+        // so geometry alone cannot determine the motion-level convention.
+        const bool logoUsesCenteredOrigin =
+            isYuzuStartupLogoMotion(motionPath);
 
         if(isTitleMotion) {
             const bool hasSyntheticIntroLayer = std::any_of(
@@ -1855,7 +1870,13 @@ namespace {
             }
         }
 
-        bool usesCenteredPresentationOrigin = isLogoMotion;
+        // Confirm that Yuzu still has centered authored geometry before
+        // translating it. Never promote M2's centered helper geometry to a
+        // motion-level decision: its full-canvas backdrop is already mapped
+        // to canvas space and another half-canvas translation clips the logo.
+        bool usesCenteredPresentationOrigin =
+            logoUsesCenteredOrigin &&
+            runtime.yuzuPresentationCenteredOriginConfirmed;
         float centeredPresentationTranslateX =
             static_cast<float>(canvasWidth) * 0.5f;
         float centeredPresentationTranslateY =
@@ -1927,7 +1948,11 @@ namespace {
         auto considerCenteredOrigin =
             [&](const motion::detail::PlayerRuntime::PreparedRenderItem &entry,
                 int referenceKind) {
-                if(!entry.drawFlag || entry.opacity <= 0 ||
+                // Logo origin is a motion-level convention. Inspect prepared
+                // stage geometry even before it fades in, then keep a positive
+                // centered-origin decision stable for later animated frames.
+                if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+                   (!isLogoMotion && entry.opacity <= 0) ||
                    isYuzuTitleWhiteUtilityLayer(motionPath, entry.nodeLabel,
                                                 entry.sourceKey)) {
                     return;
@@ -1983,6 +2008,22 @@ namespace {
                     referenceBox = entry.paintBox;
                 }
                 if(!validRenderPaintBox(referenceBox)) {
+                    return;
+                }
+                if(isLogoMotion) {
+                    const bool needsCanvasCenterTranslation =
+                        logoUsesCenteredOrigin &&
+                        motion::internal::startupLogoUsesCenteredOrigin(
+                            referenceBox, canvasWidth, canvasHeight);
+                    if(needsCanvasCenterTranslation) {
+                        usesCenteredPresentationOrigin = true;
+                        centeredOriginFromReference = true;
+                        runtime.yuzuPresentationCenteredOriginConfirmed = true;
+                        runtime.yuzuPresentationTranslateX =
+                            centeredPresentationTranslateX;
+                        runtime.yuzuPresentationTranslateY =
+                            centeredPresentationTranslateY;
+                    }
                     return;
                 }
                 const float width = referenceBox[2] - referenceBox[0];
@@ -2173,6 +2214,39 @@ namespace {
         float refHeight = 0.0f;
         float refArea = 0.0f;
         int refOpacity = -1;
+        const bool useStableBackdropReference =
+            isLogoMotion &&
+            motion::internal::startupLogoMotionUsesStableBackdropReference(
+                motionPath);
+        if(useStableBackdropReference) {
+            for(const auto &entry : runtime.preparedRenderItems) {
+                if(!entry.drawFlag || entry.skipFlag0 || entry.skipFlag1 ||
+                   !motion::internal::startupLogoStableBackdropSource(
+                       motionPath, entry.sourceKey)) {
+                    continue;
+                }
+                auto referenceBox = boundsFromRenderCorners(entry.corners);
+                if(!validRenderPaintBox(referenceBox) &&
+                   entry.hasViewport && validRenderPaintBox(entry.viewport)) {
+                    referenceBox = entry.viewport;
+                }
+                if(!validRenderPaintBox(referenceBox) &&
+                   validRenderPaintBox(entry.paintBox)) {
+                    referenceBox = entry.paintBox;
+                }
+                if(!validRenderPaintBox(referenceBox)) {
+                    continue;
+                }
+                const float width = referenceBox[2] - referenceBox[0];
+                const float height = referenceBox[3] - referenceBox[1];
+                const float area = width * height;
+                if(area > refArea) {
+                    refArea = area;
+                    refWidth = width;
+                    refHeight = height;
+                }
+            }
+        }
         auto considerReference =
             [&](const motion::detail::PlayerRuntime::PreparedRenderItem &entry,
                 int referenceKind) {
@@ -2233,13 +2307,18 @@ namespace {
 
         // A title background represents the design stage. A named position
         // node is only local content and must never determine canvas scale.
-        if(isTitleMotion) {
-            for(const auto &entry : runtime.preparedRenderItems) {
-                considerReference(entry, 1);
-            }
-        } else {
-            for(const auto &entry : runtime.preparedRenderItems) {
-                considerReference(entry, 0);
+        // M2's backdrop is presentation fill geometry. Its sibling content
+        // already carries the authored animation scale and must not inherit
+        // the backdrop's canvas-cover scale.
+        if(refWidth <= 0.0f || refHeight <= 0.0f) {
+            if(isTitleMotion) {
+                for(const auto &entry : runtime.preparedRenderItems) {
+                    considerReference(entry, 1);
+                }
+            } else {
+                for(const auto &entry : runtime.preparedRenderItems) {
+                    considerReference(entry, 0);
+                }
             }
         }
         if(refWidth <= 0.0f || refHeight <= 0.0f) {
@@ -2251,8 +2330,15 @@ namespace {
             return;
         }
 
-        const float scaleX = static_cast<float>(canvasWidth) / refWidth;
-        const float scaleY = static_cast<float>(canvasHeight) / refHeight;
+        const auto presentationScale =
+            motion::internal::startupLogoPresentationScale(
+                motionPath,
+                static_cast<float>(canvasWidth),
+                static_cast<float>(canvasHeight),
+                refWidth,
+                refHeight);
+        const float scaleX = presentationScale[0];
+        const float scaleY = presentationScale[1];
         if(LOGGER && shouldDebugTitleRender(motionPath) &&
            markRenderDebugLogged("yuzu-presentation-scale-candidate:" +
                                  motionPath)) {
@@ -2266,8 +2352,14 @@ namespace {
             return;
         }
 
+        // Both startup logo motions are positioned around the canvas center
+        // before presentation scaling. Yuzu may additionally need its
+        // centered authored origin translated first. M2 keeps its authored
+        // content size while uniformly covering the canvas with only its
+        // solid backdrop.
         const bool scaleAroundCanvasCenter =
-            isLogoMotion && usesCenteredPresentationOrigin;
+            motion::internal::startupLogoMotionScalesAroundCanvasCenter(
+                motionPath);
         const float scaleOriginX =
             scaleAroundCanvasCenter ? static_cast<float>(canvasWidth) * 0.5f
                                     : 0.0f;
@@ -2293,6 +2385,11 @@ namespace {
         };
 
         for(auto &entry : runtime.preparedRenderItems) {
+            if(!motion::internal::
+                   startupLogoPresentationScaleAppliesToSource(
+                       motionPath, entry.sourceKey)) {
+                continue;
+            }
             const bool scaleGeometry =
                 shouldScaleBox(boundsFromRenderCorners(entry.corners));
             if(scaleGeometry) {
@@ -4064,6 +4161,26 @@ namespace {
             }
         }
         return best;
+    }
+
+    bool yuzuTitlePresentationHoldFrameIsResident(
+        tTJSNI_BaseLayer *layer,
+        const std::string &motionPath) {
+        if(!layer) {
+            return false;
+        }
+        const auto &cache = yuzuTitlePresentationHoldCache();
+        const auto exact = cache.find(layer);
+        const bool exactLayer =
+            exact != cache.end() && exact->second.bitmap &&
+            exact->second.motion == motionPath;
+        return motion::internal::yuzuTitlePresentationHoldFrameIsResident(
+            exactLayer,
+            layer->GetVisible(),
+            layer->GetParentVisible(),
+            layer->GetHasImage(),
+            layer->GetMainImage() != nullptr,
+            layer->GetOpacity());
     }
 
     bool restoreYuzuTitlePresentationHoldFrame(
@@ -11372,14 +11489,20 @@ namespace motion {
             yuzuTitlePresentation &&
             hasYuzuTitleOpaqueFinalOverlayFrame(*_runtime);
         if(yuzuTitlePresentation && !yuzuTitleHasRenderableFrame) {
+            const bool residentHeldFrame =
+                _runtime->yuzuTitleFinalFrameRendered &&
+                yuzuTitlePresentationHoldFrameIsResident(
+                    finalNativeLayer, motionPath);
             const bool restoredHeldFrame =
+                !residentHeldFrame &&
                 restoreYuzuTitlePresentationHoldFrame(
                     finalNativeLayer, motionPath, canvasWidth, canvasHeight);
             if(LOGGER && shouldDebugTitleRender(motionPath) &&
                markRenderDebugLogged("presentation-skip-empty:" + motionPath)) {
                 LOGGER->info(
-                    "motion presentation skip empty title frame: motion={} restored={} target=[{}]",
-                    motionPath, restoredHeldFrame ? 1 : 0,
+                    "motion presentation skip empty title frame: motion={} resident={} restored={} target=[{}]",
+                    motionPath, residentHeldFrame ? 1 : 0,
+                    restoredHeldFrame ? 1 : 0,
                     describeLayerForDebug(finalNativeLayer));
             }
             _runtime->clearPresentationRenderReuse();
@@ -11391,14 +11514,19 @@ namespace motion {
         if(yuzuTitlePresentation &&
            _runtime->yuzuTitleFinalFrameRendered &&
            !yuzuTitleHasOpaqueCanvasBaseFrame) {
+            const bool residentHeldFrame =
+                yuzuTitlePresentationHoldFrameIsResident(
+                    finalNativeLayer, motionPath);
             const bool restoredHeldFrame =
+                !residentHeldFrame &&
                 restoreYuzuTitlePresentationHoldFrame(
                     finalNativeLayer, motionPath, canvasWidth, canvasHeight);
             if(LOGGER && shouldDebugTitleRender(motionPath) &&
                markRenderDebugLogged("presentation-skip-tail:" + motionPath)) {
                 LOGGER->info(
-                    "motion presentation skip title tail frame: motion={} restored={} target=[{}]",
-                    motionPath, restoredHeldFrame ? 1 : 0,
+                    "motion presentation skip title tail frame: motion={} resident={} restored={} target=[{}]",
+                    motionPath, residentHeldFrame ? 1 : 0,
+                    restoredHeldFrame ? 1 : 0,
                     describeLayerForDebug(finalNativeLayer));
             }
             _runtime->clearPresentationRenderReuse();
@@ -11896,11 +12024,13 @@ namespace motion {
                 findYuzuTitlePresentationHoldFrame(
                     finalNativeLayer, motionPath) != nullptr;
             const bool shouldCaptureTitleFrame =
-                (!hadHeldFrame &&
-                 (yuzuTitleHasOpaqueCanvasBaseFrame ||
-                  yuzuTitleHasStableFrame)) ||
-                (hadHeldFrame && !_runtime->yuzuTitleFinalFrameRendered &&
-                 yuzuTitleHasOpaqueFinalOverlayFrame);
+                motion::internal::
+                    shouldCaptureYuzuTitlePresentationHoldFrame(
+                        hadHeldFrame,
+                        _runtime->yuzuTitleFinalFrameRendered,
+                        yuzuTitleHasOpaqueCanvasBaseFrame,
+                        yuzuTitleHasStableFrame,
+                        yuzuTitleHasOpaqueFinalOverlayFrame);
             if(shouldCaptureTitleFrame) {
                 capturedYuzuTitleFrame =
                     captureYuzuTitlePresentationHoldFrame(
@@ -11910,7 +12040,7 @@ namespace motion {
             }
             if(capturedYuzuTitleFrame &&
                (yuzuTitleHasStableFrame ||
-                (hadHeldFrame && yuzuTitleHasOpaqueFinalOverlayFrame))) {
+                yuzuTitleHasOpaqueFinalOverlayFrame)) {
                 _runtime->yuzuTitleFinalFrameRendered = true;
             }
         }
