@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one bounded AetherKiri diagnostic reproduction and build a shareable bundle."""
+"""Run one bounded Aether diagnostic reproduction and build a shareable bundle."""
 
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ import webbrowser
 ROOT = Path(__file__).resolve().parents[1]
 OUT_ROOT = ROOT / "out" / "diagnostics"
 ANDROID_PACKAGE = "org.github.krkr2.aetherkiri"
-ANDROID_DIAGNOSTIC_ROOT = "/storage/emulated/0/Documents/AetherKiri/Diagnostics"
+ANDROID_DIAGNOSTIC_ROOT = "/storage/emulated/0/Documents/Aether/Diagnostics"
 IOS_BUNDLE = "com.liuyu.aetherkiri.kr37s"
-MAC_APP_NAME = "AetherKiri"
+MAC_APP_NAME = "Aether"
 PROFILE_CATALOG_PATH = ROOT / "apps/godot_app/config/diagnostic_profiles.json"
 PROFILE_CATALOG = json.loads(PROFILE_CATALOG_PATH.read_text(encoding="utf-8"))
 PROFILES = tuple(item["name"] for item in PROFILE_CATALOG["profiles"])
@@ -281,7 +281,7 @@ def android_prepare(args: argparse.Namespace, bundle: Path, env: dict[str, str])
     del env
     wait_for_android_transport(args)
     if getattr(args, "build_install", False):
-        apk = ROOT / "out/godot/android/debug/AetherKiri-debug.apk"
+        apk = ROOT / "out/godot/android/debug/Aether-debug.apk"
         if not apk.exists():
             raise DiagnoseError(f"Android APK not found: {apk}")
         android_install(args, apk)
@@ -356,7 +356,7 @@ def android_collect(args: argparse.Namespace, bundle: Path, state: dict[str, Any
 
 
 def find_ios_project() -> Path:
-    project = ROOT / "out/godot/ios/debug/AetherKiri.xcodeproj"
+    project = ROOT / "out/godot/ios/debug/Aether.xcodeproj"
     if not project.exists():
         raise DiagnoseError(f"iOS project not found: {project}")
     return project
@@ -366,7 +366,7 @@ def build_ios_app(device: str, simulator: bool) -> Path:
     project = find_ios_project()
     derived = ROOT / "out/diagnostics/.ios-derived"
     command = [
-        "xcodebuild", "-project", str(project), "-scheme", "AetherKiri",
+        "xcodebuild", "-project", str(project), "-scheme", "Aether",
         "-configuration", "Debug", "-derivedDataPath", str(derived),
     ]
     if simulator:
@@ -377,7 +377,7 @@ def build_ios_app(device: str, simulator: bool) -> Path:
     run(command)
     apps = sorted(derived.glob("Build/Products/Debug-*/*.app"), key=lambda p: p.stat().st_mtime)
     if not apps:
-        raise DiagnoseError("xcodebuild completed but no AetherKiri.app was found")
+        raise DiagnoseError("xcodebuild completed but no Aether.app was found")
     return apps[-1]
 
 
@@ -454,12 +454,12 @@ def ios_simulator_collect(args: argparse.Namespace, bundle: Path,
 
 
 def macos_prepare(args: argparse.Namespace, bundle: Path, env: dict[str, str]) -> dict[str, Any]:
-    executable = ROOT / "out/godot/macos/debug/AetherKiri.app/Contents/MacOS/AetherKiri"
+    executable = ROOT / "out/godot/macos/debug/Aether.app/Contents/MacOS/Aether"
     if not executable.exists():
         raise DiagnoseError(f"macOS executable not found: {executable}")
     existing = output(["pgrep", "-x", MAC_APP_NAME], check=False)
     if existing:
-        print("[diagnose] Terminating an existing AetherKiri process before capture.", flush=True)
+        print("[diagnose] Terminating an existing Aether process before capture.", flush=True)
         run(["pkill", "-x", MAC_APP_NAME], check=False)
         time.sleep(1)
     console_file = (bundle / "platform/console.txt").open("wb")
@@ -502,7 +502,7 @@ def macos_collect(args: argparse.Namespace, bundle: Path, state: dict[str, Any])
     started: dt.datetime = state.get("started", dt.datetime.now())
     seconds = max(30, int((dt.datetime.now() - started).total_seconds()) + 10)
     run(["log", "show", "--last", f"{seconds}s", "--style", "compact",
-         "--predicate", 'process == "AetherKiri"'], check=False,
+         "--predicate", 'process == "Aether"'], check=False,
         output_path=bundle / "platform/unified-log.txt")
 
 
@@ -733,7 +733,7 @@ def write_summary(bundle: Path, session: str, platform: str, profile: str) -> No
     screenshots = sorted((bundle / "attachments").glob("screenshot-*.png")) if (bundle / "attachments").exists() else []
     self_checks = [event for event in events if event.get("event") == "diagnostic_self_check"]
     lines = [
-        "# AetherKiri Diagnostic Summary", "",
+        "# Aether Diagnostic Summary", "",
         f"- Session: `{session}`", f"- Platform: `{platform}`", f"- Profile: `{profile}`",
         f"- Structured events: {len(events)}", f"- Issue markers: {len(markers)}",
         f"- Warning/error events: {len(warnings)}", f"- Slow events: {len(spikes)}",

@@ -41,14 +41,14 @@ DemuxPacket *DemuxPacket::Allocate(int iDataSize /*= 0*/) {
              * segfault
              */
             pPacket->pData = (uint8_t *)TJSAlignedAlloc(
-                iDataSize + FF_INPUT_BUFFER_PADDING_SIZE, 4);
+                iDataSize + AV_INPUT_BUFFER_PADDING_SIZE, 4);
             if(!pPacket->pData) {
                 Free(pPacket);
                 return nullptr;
             }
 
             // reset the last 8 bytes to 0;
-            memset(pPacket->pData + iDataSize, 0, FF_INPUT_BUFFER_PADDING_SIZE);
+            memset(pPacket->pData + iDataSize, 0, AV_INPUT_BUFFER_PADDING_SIZE);
         }
 
         // setup defaults

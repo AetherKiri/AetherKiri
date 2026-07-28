@@ -129,14 +129,14 @@ func _cleanup_removed_files() -> Error:
 
 func _game_dictionary() -> Dictionary:
     return {
-        "name": "AetherKiri Demo",
+        "name": "Aether Demo",
         "path": game_path(),
         "type": "Directory",
         "lastPlayed": 0,
         "playDurationSeconds": 0,
         "coverPath": "",
-        "developer": "AetherKiri",
-        "title": "AetherKiri Demo",
+        "developer": "Aether",
+        "title": "Aether Demo",
         "builtinId": DEMO_ID,
         "builtinVersion": version,
     }

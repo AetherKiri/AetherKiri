@@ -1,0 +1,71 @@
+extends SceneTree
+
+const MAIN_SCRIPT := preload("res://scripts/main.gd")
+
+class FakePlayer:
+    extends RefCounted
+
+    var last_seek := -1.0
+
+    func media_seek(position: float) -> void:
+        last_seek = position
+
+func _initialize() -> void:
+    call_deferred("_run")
+
+func _run() -> void:
+    var app = MAIN_SCRIPT.new()
+    root.add_child(app)
+    app.video_view = Control.new()
+    app.video_view.size = Vector2(1000, 600)
+    app.add_child(app.video_view)
+    app.video_top_bar = PanelContainer.new()
+    app.video_controls = PanelContainer.new()
+    app.video_subtitle_label = Label.new()
+    app.video_progress_slider = HSlider.new()
+    app.video_time_label = Label.new()
+    app.video_seek_feedback = PanelContainer.new()
+    app.video_seek_feedback_label = Label.new()
+    app.video_view.add_child(app.video_top_bar)
+    app.video_view.add_child(app.video_controls)
+    app.video_view.add_child(app.video_subtitle_label)
+    app.video_view.add_child(app.video_progress_slider)
+    app.video_view.add_child(app.video_time_label)
+    app.video_view.add_child(app.video_seek_feedback)
+    app.video_seek_feedback.add_child(app.video_seek_feedback_label)
+    app.active_video_state = {
+        "position": 100.0,
+        "duration": 1000.0,
+        "status": 1,
+    }
+    app.active_video_duration = 1000.0
+    app.player = FakePlayer.new()
+
+    app.video_seek_mouse_pressed = true
+    app._begin_video_seek_gesture(Vector2(500, 300))
+    assert(app._update_video_seek_gesture(Vector2(750, 300)))
+    assert(is_equal_approx(app.video_seek_target_position, 125.0))
+    assert(app.video_seek_feedback.visible)
+    app.video_seek_mouse_pressed = false
+    app._finish_video_seek_gesture(Vector2(750, 300))
+    assert(is_equal_approx(app.player.last_seek, 125.0))
+    assert(not app.video_seek_gesture_active)
+    assert(not app.video_seek_feedback.visible)
+
+    app.active_video_state["position"] = 100.0
+    app.video_seek_touch_index = 0
+    app._begin_video_seek_gesture(Vector2(500, 300))
+    assert(app._update_video_seek_gesture(Vector2(300, 300)))
+    assert(is_equal_approx(app.video_seek_target_position, 80.0))
+    app.video_seek_touch_index = -1
+    app._finish_video_seek_gesture(Vector2(300, 300))
+    assert(is_equal_approx(app.player.last_seek, 80.0))
+
+    app._set_video_controls_visible(false, false)
+    app._begin_video_seek_gesture(Vector2(500, 300))
+    app._finish_video_seek_gesture(Vector2(500, 300))
+    assert(app.video_controls_visible)
+
+    app.queue_free()
+    print("VIDEO_SEEK_GESTURE_OK")
+    quit(0)

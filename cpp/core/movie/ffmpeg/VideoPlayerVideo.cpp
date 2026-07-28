@@ -252,7 +252,10 @@ void CVideoPlayerVideo::Process() {
                 continue;
 
             // check if decoder has produced some output
-            m_pVideoCodec->SetCodecControl(DVD_CODEC_CTRL_DRAIN);
+            // A normal queue timeout is not end-of-stream. With the modern
+            // send/receive API, sending a null packet permanently enters drain
+            // mode until the decoder is flushed.
+            m_pVideoCodec->SetCodecControl(0);
             int decoderState = m_pVideoCodec->Decode(
                 nullptr, 0, DVD_NOPTS_VALUE, DVD_NOPTS_VALUE);
             ProcessDecoderOutput(decoderState, frametime, pts);

@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1"]
 
-[node name="AetherKiri" type="Control"]
+[node name="Aether" type="Control"]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0

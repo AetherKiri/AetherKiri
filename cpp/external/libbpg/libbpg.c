@@ -350,7 +350,7 @@ static int hevc_decode_init1(DynBuf *pbuf, AVFrame **pframe,
                              int width, int height, int chroma_format_idc,
                              int bit_depth)
 {
-    AVCodec *codec;
+    const AVCodec *codec;
     AVCodecContext *c;
     AVFrame *frame;
     uint8_t *nal_buf;
@@ -373,14 +373,17 @@ static int hevc_decode_init1(DynBuf *pbuf, AVFrame **pframe,
     if (!c) 
         return -1;
     frame = av_frame_alloc();
-    if (!frame) 
+    if (!frame) {
+        avcodec_free_context(&c);
         return -1;
+    }
     /* for testing: use the MD5 or CRC in SEI to check the decoded bit
        stream. */
     c->err_recognition |= AV_EF_CRCCHECK; 
     /* open it */
     if (avcodec_open2(c, codec, NULL) < 0) {
         av_frame_free(&frame);
+        avcodec_free_context(&c);
         return -1;
     }
     *pc = c;
@@ -392,19 +395,21 @@ static int hevc_write_frame(AVCodecContext *avctx,
                             AVFrame *frame,
                             uint8_t *buf, int buf_len)
 {
-    AVPacket avpkt;
-    int len, got_frame;
+    AVPacket avpkt = { 0 };
+    int ret;
 
-    av_init_packet(&avpkt);
     avpkt.data = (uint8_t *)buf;
     avpkt.size = buf_len;
     /* avoid using uninitialized data */
-    memset(buf + buf_len, 0, FF_INPUT_BUFFER_PADDING_SIZE);
-    len = avcodec_decode_video2(avctx, frame, &got_frame, &avpkt);
-    if (len < 0 || !got_frame)
+    memset(buf + buf_len, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+    av_frame_unref(frame);
+    ret = avcodec_send_packet(avctx, &avpkt);
+    if (ret < 0)
         return -1;
-    else
-        return 0;
+    ret = avcodec_receive_frame(avctx, frame);
+    if (ret < 0)
+        return -1;
+    return 0;
 }
 
 static int hevc_decode_frame_internal(BPGDecoderContext *s,
@@ -476,14 +481,14 @@ static int hevc_decode_frame_internal(BPGDecoderContext *s,
     }
     
     if (s->alpha_dec_ctx) {
-        if (dyn_buf_resize(abuf, abuf->len + FF_INPUT_BUFFER_PADDING_SIZE) < 0)
+        if (dyn_buf_resize(abuf, abuf->len + AV_INPUT_BUFFER_PADDING_SIZE) < 0)
             goto fail;
         ret = hevc_write_frame(s->alpha_dec_ctx, s->alpha_frame, abuf->buf, abuf->len);
         if (ret < 0)
             goto fail;
     }
 
-    if (dyn_buf_resize(cbuf, cbuf->len + FF_INPUT_BUFFER_PADDING_SIZE) < 0)
+    if (dyn_buf_resize(cbuf, cbuf->len + AV_INPUT_BUFFER_PADDING_SIZE) < 0)
         goto fail;
     ret = hevc_write_frame(s->dec_ctx, s->frame, cbuf->buf, cbuf->len);
     if (ret < 0)
@@ -557,16 +562,8 @@ static int hevc_decode_frame(BPGDecoderContext *s,
 
 static void hevc_decode_end(BPGDecoderContext *s)
 {
-    if (s->alpha_dec_ctx) {
-        avcodec_close(s->alpha_dec_ctx);
-        av_free(s->alpha_dec_ctx);
-        s->alpha_dec_ctx = NULL;
-    }
-    if (s->dec_ctx) {
-        avcodec_close(s->dec_ctx);
-        av_free(s->dec_ctx);
-        s->dec_ctx = NULL;
-    }
+    avcodec_free_context(&s->alpha_dec_ctx);
+    avcodec_free_context(&s->dec_ctx);
 }
 
 uint8_t *bpg_decoder_get_data(BPGDecoderContext *img, int *pline_size, int plane)
