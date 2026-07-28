@@ -77,8 +77,19 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Validate Gradle wrappers
+        uses: gradle/actions/wrapper-validation@v6
+        with:
+          # OnscripterYuri pins SDL at da19244f; that revision contains an
+          # upstream-generated wrapper which is not in Gradle's checksum list.
+          allow-checksums: 2c23278a62dc9f96ab11bee897d9f53e6479d6419135e4560ce822a6431df5e5
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          # Validation is performed explicitly above so the pinned SDL wrapper
+          # can be allowed without disabling checks for every other wrapper.
+          validate-wrappers: false
 
       - name: Install Godot export tools
         run: |
