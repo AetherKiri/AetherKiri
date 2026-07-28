@@ -1,0 +1,13 @@
+{
+  "passes": {
+    "fla": true,
+    "bcf": true,
+    "str": true,
+    "dwarf": "strip"
+  },
+  "tuning": {
+    "bcf_prob": 30,
+    "bcf_iter": 1,
+    "seed": 0
+  }
+}

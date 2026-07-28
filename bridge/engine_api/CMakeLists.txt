@@ -22,10 +22,17 @@ endif()
 
 target_compile_features(engine_api PRIVATE cxx_std_17)
 
-if(IOS OR WEB OR EMSCRIPTEN)
-    # iOS static library: ensure symbols are visible when linked into the
-    # Godot host export. Web links this static API into the side module.
+if(WEB OR EMSCRIPTEN)
+    # Web links this static API into the side module and exports its C ABI.
     target_compile_definitions(engine_api PRIVATE ENGINE_API_EXPORT_SYMBOLS)
+elseif(IOS)
+    # The iOS static API is consumed only by the statically linked Godot host.
+    # Keep it out of the final Mach-O dynamic export surface.
+    set_target_properties(engine_api PROPERTIES
+        C_VISIBILITY_PRESET hidden
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN YES
+    )
 else()
     target_compile_definitions(engine_api PRIVATE ENGINE_API_BUILD_SHARED)
 endif()

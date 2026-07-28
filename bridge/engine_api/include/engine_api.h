@@ -14,7 +14,8 @@
 #define ENGINE_API_EXPORT
 #endif
 #else
-#if defined(__GNUC__) && __GNUC__ >= 4
+#if defined(__GNUC__) && __GNUC__ >= 4 && \
+    (defined(ENGINE_API_BUILD_SHARED) || defined(ENGINE_API_EXPORT_SYMBOLS))
 #define ENGINE_API_EXPORT __attribute__((visibility("default")))
 #else
 #define ENGINE_API_EXPORT

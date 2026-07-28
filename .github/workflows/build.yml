@@ -374,6 +374,21 @@ jobs:
             exit 1
           fi
 
+      - name: Verify iOS Release ABI surface
+        run: |
+          set -euo pipefail
+          release_binary="${RUNNER_TEMP}/AetherKiri-release"
+          unzip -p \
+            out/godot/ios/release/AetherKiri-Release-Unsigned.ipa \
+            Payload/AetherKiri.app/AetherKiri > "$release_binary"
+          test -s "$release_binary"
+          exported_symbols="$(xcrun nm -gjU "$release_binary")"
+          if grep -E '^_engine_' <<< "$exported_symbols"; then
+            echo "The private engine C ABI remains dynamically exported." >&2
+            exit 1
+          fi
+          xcrun otool -hv "$release_binary"
+
       - name: Build iOS Debug
         run: |
           set -euo pipefail
