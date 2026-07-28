@@ -128,8 +128,19 @@ extern "C" void aetherkiri_onscripter_configure_video(
 }
 
 #if defined(ANDROID)
+#undef fopen
+#undef mkdir
+
+extern "C" FILE *fopen_ons(const char *path, const char *mode) {
+    return std::fopen(path, mode);
+}
+
 extern "C" int stat_ons(const char *path, struct stat *stat_buffer) {
     return ::stat(path, stat_buffer);
+}
+
+extern "C" int mkdir_ons(const char *path, mode_t mode) {
+    return ::mkdir(path, mode);
 }
 #endif
 

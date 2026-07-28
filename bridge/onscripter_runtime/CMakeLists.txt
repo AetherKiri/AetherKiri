@@ -133,3 +133,7 @@ target_link_libraries(aether_onscripter_runtime PRIVATE engine_api)
 if(UNIX)
     target_link_libraries(aether_onscripter_runtime PUBLIC m)
 endif()
+
+if(ANDROID)
+    target_link_libraries(aether_onscripter_runtime PUBLIC log)
+endif()
