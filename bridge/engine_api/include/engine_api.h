@@ -26,7 +26,7 @@ extern "C" {
 #endif
 
 /* ABI version: major(8bit), minor(8bit), patch(16bit). */
-#define ENGINE_API_VERSION 0x01030000u
+#define ENGINE_API_VERSION 0x01040000u
 #define ENGINE_API_MAKE_VERSION(major, minor, patch) \
   ((((uint32_t)(major)&0xFFu) << 24u) | (((uint32_t)(minor)&0xFFu) << 16u) | \
    ((uint32_t)(patch)&0xFFFFu))
@@ -325,6 +325,23 @@ ENGINE_API_EXPORT engine_result_t engine_media_set_rate(
 
 ENGINE_API_EXPORT engine_result_t engine_media_get_state(
     engine_media_handle_t media, engine_media_state_t* out_state);
+
+/*
+ * Lists embedded text subtitle streams as UTF-8 JSON.
+ * The result is an array of objects containing stream_index, codec, language,
+ * title, and default. Writes bytes written in out_bytes_written.
+ */
+ENGINE_API_EXPORT engine_result_t engine_media_get_subtitle_tracks_json(
+    engine_media_handle_t media, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written);
+
+/*
+ * Extracts one embedded text subtitle stream to an ASS sidecar file.
+ * The stream index must come from engine_media_get_subtitle_tracks_json.
+ */
+ENGINE_API_EXPORT engine_result_t engine_media_extract_subtitle(
+    engine_media_handle_t media, int32_t stream_index,
+    const char* output_path_utf8);
 
 /*
  * Copies the most recent due video frame as tightly packed RGBA8888.

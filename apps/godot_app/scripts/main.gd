@@ -79,6 +79,7 @@ const UI_TEXT := {
         "video.pause": "暂停",
         "video.play": "播放",
         "video.subtitle_off": "字幕关闭",
+        "video.subtitle_embedded": "%s（内嵌）",
         "video.resume": "继续上次播放",
         "video.open_failed": "无法播放该视频：%s",
         "home.status": "Godot Native  /  视觉小说库",
@@ -235,6 +236,7 @@ const UI_TEXT := {
         "video.pause": "暫停",
         "video.play": "播放",
         "video.subtitle_off": "字幕關閉",
+        "video.subtitle_embedded": "%s（內嵌）",
         "video.resume": "繼續上次播放",
         "video.open_failed": "無法播放該影片：%s",
         "home.status": "Godot Native  /  視覺小說庫",
@@ -391,6 +393,7 @@ const UI_TEXT := {
         "video.pause": "Pause",
         "video.play": "Play",
         "video.subtitle_off": "Subtitles off",
+        "video.subtitle_embedded": "%s (embedded)",
         "video.resume": "Resume playback",
         "video.open_failed": "Could not play this video: %s",
         "home.status": "Godot Native  /  Visual Novel Library",
@@ -547,6 +550,7 @@ const UI_TEXT := {
         "video.pause": "一時停止",
         "video.play": "再生",
         "video.subtitle_off": "字幕オフ",
+        "video.subtitle_embedded": "%s（埋め込み）",
         "video.resume": "続きから再生",
         "video.open_failed": "動画を再生できません：%s",
         "home.status": "Godot Native  /  ビジュアルノベルライブラリ",
@@ -703,6 +707,7 @@ const UI_TEXT := {
         "video.pause": "일시정지",
         "video.play": "재생",
         "video.subtitle_off": "자막 끄기",
+        "video.subtitle_embedded": "%s(내장)",
         "video.resume": "이어서 재생",
         "video.open_failed": "비디오를 재생할 수 없습니다: %s",
         "home.status": "Godot Native  /  비주얼 노벨 라이브러리",
@@ -994,7 +999,7 @@ var video_controls_visible := false
 var video_controls_idle_sec := 0.0
 var video_controls_tween: Tween
 var video_previous_mouse_mode := Input.MOUSE_MODE_VISIBLE
-var active_subtitle_tracks: Array[String] = []
+var active_subtitle_tracks: Array[Dictionary] = []
 var active_subtitle_cues: Array[Dictionary] = []
 var active_subtitle_index := 0
 var video_progress_data := {}
@@ -3139,9 +3144,15 @@ func _position_video_option_popup_above(button: OptionButton) -> void:
     var popup := button.get_popup()
     if not popup.visible:
         return
-    # OptionButton places the popup directly below itself. Moving it by the
-    # combined button and popup height keeps the menu fully above the bottom bar.
-    popup.position.y -= popup.size.y + int(round(button.size.y))
+    # Godot may already align the selected row with the OptionButton when it
+    # auto-flips a tall menu above the bottom bar. Subtracting from that
+    # automatic position moves multi-row menus far away. Anchor the popup's
+    # bottom edge directly above the button instead.
+    var button_rect := button.get_global_rect()
+    popup.position.y = maxi(
+        0,
+        int(round(button_rect.position.y)) - popup.size.y - 8
+    )
 
 func _pill_button(text: String, icon_path: String = "") -> Button:
     var button := Button.new()
@@ -5024,6 +5035,7 @@ func _load_video_subtitle_tracks(video_path: String) -> void:
     active_subtitle_cues.clear()
     video_subtitle_button.clear()
     video_subtitle_button.add_item(_t("video.subtitle_off"))
+    var external_track_count := 0
     var directory := video_path.get_base_dir()
     var stem := video_path.get_file().get_basename()
     var dir := DirAccess.open(directory)
@@ -5034,13 +5046,51 @@ func _load_video_subtitle_tracks(video_path: String) -> void:
             if extension in SUBTITLE_EXTENSIONS and (
                 subtitle_stem == stem or subtitle_stem.begins_with(stem + ".")
             ):
-                active_subtitle_tracks.append(directory.path_join(file_name))
-    active_subtitle_tracks.sort()
-    for path in active_subtitle_tracks:
-        video_subtitle_button.add_item(path.get_file())
-    video_subtitle_button.select(1 if not active_subtitle_tracks.is_empty() else 0)
-    if not active_subtitle_tracks.is_empty():
-        _select_video_subtitle(1)
+                active_subtitle_tracks.append({
+                    "kind": "external",
+                    "path": directory.path_join(file_name),
+                    "label": file_name,
+                    "default": false,
+                })
+                external_track_count += 1
+    active_subtitle_tracks.sort_custom(func(left: Dictionary, right: Dictionary):
+        return String(left.get("label", "")) < String(right.get("label", ""))
+    )
+    if player != null and player.has_method("media_get_subtitle_tracks_json"):
+        var embedded_value = JSON.parse_string(
+            String(player.media_get_subtitle_tracks_json())
+        )
+        if embedded_value is Array:
+            for embedded_track in embedded_value:
+                if not embedded_track is Dictionary:
+                    continue
+                var title := String(embedded_track.get("title", "")).strip_edges()
+                var language := String(embedded_track.get("language", "")).strip_edges()
+                var codec := String(embedded_track.get("codec", "text")).to_upper()
+                var track_name := title
+                if track_name.is_empty():
+                    track_name = language if not language.is_empty() else codec
+                active_subtitle_tracks.append({
+                    "kind": "embedded",
+                    "stream_index": int(embedded_track.get("stream_index", -1)),
+                    "label": _t("video.subtitle_embedded", [track_name]),
+                    "default": bool(embedded_track.get("default", false)),
+                })
+    for track in active_subtitle_tracks:
+        video_subtitle_button.add_item(String(track.get("label", "")))
+    var selected_index := 0
+    if external_track_count > 0:
+        selected_index = 1
+    else:
+        for index in active_subtitle_tracks.size():
+            if selected_index == 0:
+                selected_index = index + 1
+            if bool(active_subtitle_tracks[index].get("default", false)):
+                selected_index = index + 1
+                break
+    video_subtitle_button.select(selected_index)
+    if selected_index > 0:
+        _select_video_subtitle(selected_index)
 
 func _select_video_subtitle(index: int) -> void:
     if video_playing:
@@ -5050,7 +5100,23 @@ func _select_video_subtitle(index: int) -> void:
     video_subtitle_label.text = ""
     if index <= 0 or index > active_subtitle_tracks.size():
         return
-    active_subtitle_cues = VideoSubtitles.parse_file(active_subtitle_tracks[index - 1])
+    var track: Dictionary = active_subtitle_tracks[index - 1]
+    if String(track.get("kind", "")) == "external":
+        active_subtitle_cues = VideoSubtitles.parse_file(
+            String(track.get("path", ""))
+        )
+        return
+    if player == null or not player.has_method("media_extract_subtitle"):
+        return
+    var stream_index := int(track.get("stream_index", -1))
+    if stream_index < 0:
+        return
+    var cache_path := ProjectSettings.globalize_path(
+        "user://.aether-embedded-subtitle-%d.ass" % stream_index
+    )
+    if bool(player.media_extract_subtitle(stream_index, cache_path)):
+        active_subtitle_cues = VideoSubtitles.parse_file(cache_path)
+    DirAccess.remove_absolute(cache_path)
 
 func _update_video_subtitle(position: float) -> void:
     if active_subtitle_cues.is_empty():
@@ -6272,13 +6338,22 @@ func _capture_ui_after_ready() -> void:
             _confirm_remove_video(known_videos[0])
     elif action == "video":
         _select_home_library("video")
-    elif action in ["video_player", "video_player_controls", "video_player_subtitles"]:
+    elif action in [
+        "video_player",
+        "video_player_controls",
+        "video_player_rate",
+        "video_player_subtitles",
+    ]:
         var capture_video := OS.get_environment("AETHERKIRI_CAPTURE_UI_VIDEO")
         if not capture_video.is_empty() and FileAccess.file_exists(capture_video):
             _open_video_player(_video_info(capture_video))
         elif not known_videos.is_empty():
             _open_video_player(known_videos[0])
-        if action in ["video_player_controls", "video_player_subtitles"] and video_playing:
+        if action in [
+            "video_player_controls",
+            "video_player_rate",
+            "video_player_subtitles",
+        ] and video_playing:
             _set_video_controls_visible(true, false)
     elif action == "legal_review":
         _show_settings()
@@ -6306,7 +6381,15 @@ func _capture_ui_after_ready() -> void:
     if action == "video_player_subtitles" and video_playing:
         video_subtitle_button.show_popup()
         await get_tree().process_frame
-    if action in ["video_player", "video_player_controls", "video_player_subtitles"]:
+    elif action == "video_player_rate" and video_playing:
+        video_rate_button.show_popup()
+        await get_tree().process_frame
+    if action in [
+        "video_player",
+        "video_player_controls",
+        "video_player_rate",
+        "video_player_subtitles",
+    ]:
         var video_wait_sec := 2.5
         var video_wait_text := OS.get_environment("AETHERKIRI_CAPTURE_UI_VIDEO_WAIT_SEC").strip_edges()
         if not video_wait_text.is_empty():
@@ -6323,6 +6406,14 @@ func _capture_ui_after_ready() -> void:
             subtitle_popup.position,
             subtitle_popup.size,
             video_subtitle_button.get_global_rect(),
+        ])
+    elif action == "video_player_rate" and is_instance_valid(video_rate_button):
+        var rate_popup := video_rate_button.get_popup()
+        print("video_rate_popup visible=%s position=%s size=%s button_rect=%s" % [
+            rate_popup.visible,
+            rate_popup.position,
+            rate_popup.size,
+            video_rate_button.get_global_rect(),
         ])
     await get_tree().process_frame
     var path := OS.get_environment("AETHERKIRI_CAPTURE_UI")

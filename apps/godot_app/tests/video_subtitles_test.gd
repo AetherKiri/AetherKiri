@@ -12,11 +12,20 @@ func _initialize() -> void:
 
     var ass_path := "user://aetherkiri-subtitle-test.ass"
     var ass := FileAccess.open(ass_path, FileAccess.WRITE)
-    ass.store_string("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,{\\i1}ASS\\NLine\n")
+    ass.store_string(
+        "[Events]\n"
+        + "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        + "Dialogue: 6,0:00:02.00,0:00:04.00,Text CN,,0,0,0,,{\\i1}中文\n"
+        + "Dialogue: 5,0:00:02.00,0:00:04.00,Text JP,,0,0,0,,日本語\n"
+        + "Dialogue: 5,0:00:02.00,0:00:04.00,Text JP,,0,0,0,,日本語\n"
+        + "Dialogue: 0,0:00:03.00,0:00:05.00,Signs,,0,0,0,,Overlap\n"
+    )
     ass.close()
     var ass_cues: Array[Dictionary] = VideoSubtitles.parse_file(ass_path)
-    assert(ass_cues.size() == 1)
-    assert(String(VideoSubtitles.text_at(ass_cues, 2.5).get("text")) == "ASS\nLine")
+    assert(ass_cues.size() == 2)
+    assert(String(VideoSubtitles.text_at(ass_cues, 2.5).get("text")) == "中文\n日本語")
+    assert(String(VideoSubtitles.text_at(ass_cues, 3.5).get("text")) == "中文\n日本語\nOverlap")
+    assert(String(VideoSubtitles.text_at(ass_cues, 4.5).get("text")) == "Overlap")
     DirAccess.remove_absolute(ProjectSettings.globalize_path(srt_path))
     DirAccess.remove_absolute(ProjectSettings.globalize_path(ass_path))
     print("VIDEO_SUBTITLES_OK")

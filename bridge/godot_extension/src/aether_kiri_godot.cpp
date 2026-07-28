@@ -5207,6 +5207,34 @@ public:
         return result;
     }
 
+    String media_get_subtitle_tracks_json() {
+        if (media_ == nullptr) return "[]";
+        std::vector<char> buffer(64 * 1024);
+        uint32_t bytes_written = 0;
+        const engine_result_t result =
+            engine_media_get_subtitle_tracks_json(
+                media_, buffer.data(),
+                static_cast<uint32_t>(buffer.size()), &bytes_written);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK || bytes_written == 0) {
+            return "[]";
+        }
+        return String::utf8(buffer.data(), bytes_written);
+    }
+
+    bool media_extract_subtitle(int stream_index,
+                                const String &output_path) {
+        if (media_ == nullptr || stream_index < 0 ||
+            output_path.is_empty()) {
+            return false;
+        }
+        const CharString output_utf8 = output_path.utf8();
+        const engine_result_t result = engine_media_extract_subtitle(
+            media_, stream_index, output_utf8.get_data());
+        update_last_error(result);
+        return result == ENGINE_RESULT_OK;
+    }
+
     Dictionary media_get_state() {
         Dictionary output;
         output["status"] = static_cast<int64_t>(ENGINE_MEDIA_STATUS_IDLE);
@@ -5882,6 +5910,11 @@ protected:
                              &AetherKiriPlayer::media_seek);
         ClassDB::bind_method(D_METHOD("media_set_rate", "playback_rate"),
                              &AetherKiriPlayer::media_set_rate);
+        ClassDB::bind_method(D_METHOD("media_get_subtitle_tracks_json"),
+                             &AetherKiriPlayer::media_get_subtitle_tracks_json);
+        ClassDB::bind_method(D_METHOD("media_extract_subtitle", "stream_index",
+                                      "output_path"),
+                             &AetherKiriPlayer::media_extract_subtitle);
         ClassDB::bind_method(D_METHOD("media_get_state"),
                              &AetherKiriPlayer::media_get_state);
         ClassDB::bind_method(D_METHOD("media_update_texture"),

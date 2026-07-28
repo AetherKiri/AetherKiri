@@ -925,18 +925,28 @@ int CDVDVideoCodecFFmpeg::FilterOpen(const std::string &filters, bool scale) {
         return result;
     }
 
-    if((result = avfilter_graph_create_filter(&m_pFilterOut, outFilter, "out",
-                                              nullptr, nullptr,
-                                              m_pFilterGraph)) < 0) {
+    // Modern FFmpeg no longer allows the buffersink pixel format list to be
+    // changed after the filter has been initialized. Allocate the sink,
+    // configure its accepted formats, and only then initialize it.
+    m_pFilterOut =
+        avfilter_graph_alloc_filter(m_pFilterGraph, outFilter, "out");
+    if(m_pFilterOut == nullptr) {
         //   CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterOpen -
         //   avfilter_graph_create_filter: out");
-        return result;
+        return AVERROR(ENOMEM);
     }
-    if((result = av_opt_set_int_list(m_pFilterOut, "pix_fmts", &m_formats[0],
-                                     AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN)) <
-       0) {
+    const unsigned int formatCount =
+        static_cast<unsigned int>(m_formats.size() - 1);
+    if((result = av_opt_set_array(
+            m_pFilterOut, "pixel_formats", AV_OPT_SEARCH_CHILDREN, 0,
+            formatCount, AV_OPT_TYPE_PIXEL_FMT, m_formats.data())) < 0) {
         //   CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterOpen -
         //   failed settings pix formats");
+        return result;
+    }
+    if((result = avfilter_init_str(m_pFilterOut, nullptr)) < 0) {
+        //   CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::FilterOpen -
+        //   avfilter_init_str: out");
         return result;
     }
 
