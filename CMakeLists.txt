@@ -118,7 +118,7 @@ if(AETHERKIRI_ENABLE_INTERNAL)
 endif()
 
 if(AETHERKIRI_INTERNAL_ENABLED)
-    message(STATUS "AetherInternal E-mote/Live2D/Artemis package: enabled")
+    message(STATUS "AetherInternal E-mote/Live2D package: enabled")
 else()
     message(STATUS "AetherInternal package: unavailable; using public fallbacks")
 endif()
