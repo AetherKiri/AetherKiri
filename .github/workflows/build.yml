@@ -43,6 +43,10 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Initialize public OnscripterYuri package
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: git submodule update --init --depth 1 packages/OnscripterYuri
+
       - name: Verify AetherInternal package
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         run: |
@@ -288,6 +292,10 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Initialize public OnscripterYuri package
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: git submodule update --init --depth 1 packages/OnscripterYuri
+
       - name: Verify AetherInternal package
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         run: |
@@ -474,6 +482,10 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Initialize public OnscripterYuri package
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: git submodule update --init --depth 1 packages/OnscripterYuri
+
       - name: Verify AetherInternal package
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         run: |
@@ -564,6 +576,15 @@ jobs:
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh macos debug --jobs=4
 
+      - name: Run OnscripterYuri Godot smoke test
+        env:
+          AETHERKIRI_SMOKE_GAME: ${{ github.workspace }}/tests/fixtures/onscripter_smoke
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --headless \
+            --path apps/godot_app \
+            --script res://scripts/smoke_test.gd
+
       - name: Run native motionplayer contract tests
         run: |
           set -euo pipefail
@@ -652,6 +673,10 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Initialize public OnscripterYuri package
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: git submodule update --init --depth 1 packages/OnscripterYuri
 
       - name: Verify AetherInternal package
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'

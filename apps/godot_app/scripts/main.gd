@@ -869,6 +869,17 @@ const POINTER_SCROLL := 4
 const POINTER_MOD_LEFT := 0x08
 const POINTER_MOD_RIGHT := 0x10
 const POINTER_MOD_MIDDLE := 0x20
+const RUNTIME_KIRIKIRI := "kirikiri"
+const RUNTIME_ONSCRIPTER := "onscripter"
+const ONSCRIPTER_SCRIPT_MARKERS := [
+    "0.txt",
+    "00.txt",
+    "nscr_sec.dat",
+    "nscript.___",
+    "nscript.dat",
+    "onscript.nt2",
+    "onscript.nt3",
+]
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
 const SHELL_SCROLL_DRAG_SPEED := 1.0
@@ -964,6 +975,7 @@ var dirty_settings := false
 var settings_draft := {}
 var active_game_path := ""
 var active_game_started_msec := 0
+var active_runtime_kind := RUNTIME_KIRIKIRI
 var shell_scroll_drag_states := {}
 var shell_scroll_remainders := {}
 var rounded_card_shader: Shader
@@ -973,6 +985,7 @@ var ui_icon_cache := {}
 var cover_texture_cache := {}
 
 var player = null
+var current_player_runtime_kind := RUNTIME_KIRIKIRI
 var builtin_demo = BuiltinDemo.new()
 var runtime_default_font_path := ""
 var runtime_font_dir_path := ""
@@ -2025,6 +2038,9 @@ func _apply_engine_options() -> void:
     if not runtime_font_dir_path.is_empty():
         player.set_engine_option("font_dir", runtime_font_dir_path)
     player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
+    var onscripter_encoding := OS.get_environment("AETHERKIRI_ONS_ENCODING").strip_edges()
+    if not onscripter_encoding.is_empty():
+        player.set_engine_option("onscripter_encoding", onscripter_encoding)
 
 func _apply_diagnostic_profile_environment(profile_name: String) -> void:
     var catalog := DiagnosticSession.profile_catalog()
@@ -4220,6 +4236,7 @@ func _game_launch_entry_label(game: Dictionary) -> String:
 func _can_configure_launch_file(game: Dictionary) -> bool:
     return OS.get_name() != "Web" \
         and not builtin_demo.is_game(game) \
+        and _game_runtime_kind(String(game.get("path", ""))) != RUNTIME_ONSCRIPTER \
         and String(game.get("type", "Directory")).to_lower() == "directory"
 
 func _set_launch_file_for_selected() -> void:
@@ -5468,7 +5485,23 @@ func _game_info_from_path(path: String) -> Dictionary:
         "coverPath": "",
         "developer": "",
         "title": "",
+        "engine": _game_runtime_kind(path),
     }
+
+func _game_runtime_root(path: String) -> String:
+    var resolved := _resolve_game_path(path)
+    if FileAccess.file_exists(resolved):
+        return resolved.get_base_dir()
+    return resolved
+
+func _game_runtime_kind(path: String) -> String:
+    var root := _game_runtime_root(path)
+    if root.is_empty():
+        return RUNTIME_KIRIKIRI
+    for marker in ONSCRIPTER_SCRIPT_MARKERS:
+        if FileAccess.file_exists(root.path_join(marker)):
+            return RUNTIME_ONSCRIPTER
+    return RUNTIME_KIRIKIRI
 
 func _game_display_title(game: Dictionary) -> String:
     var title := String(game.get("title", ""))
@@ -5769,6 +5802,9 @@ func _start_selected_game() -> void:
         return
     if not _mount_web_game(selected_game):
         return
+    active_runtime_kind = _game_runtime_kind(library_path)
+    if not _switch_runtime_player(active_runtime_kind):
+        return
     var raw_launch_file := String(selected_game.get(GameLaunchEntry.FIELD, "")).strip_edges()
     if not raw_launch_file.is_empty() and not GameLaunchEntry.is_supported_file(raw_launch_file):
         _show_system_alert(
@@ -5783,7 +5819,7 @@ func _start_selected_game() -> void:
             _t("alert.warning_title")
         )
         return
-    var launch_path := GameLaunchEntry.resolve(selected_game)
+    var launch_path := library_path if active_runtime_kind == RUNTIME_ONSCRIPTER else GameLaunchEntry.resolve(selected_game)
     if not relative_launch_file.is_empty() and not FileAccess.file_exists(launch_path):
         _show_system_alert(
             _t("message.launch_file_missing", [relative_launch_file]),
@@ -6173,22 +6209,56 @@ func _on_debug_self_check_requested() -> void:
     checks.append("storage=ok" if writable else "storage=failed")
     debug_console.show_result(_t("debug.result.self_check", [", ".join(checks)]), not writable)
 
-func _create_runtime_player() -> bool:
-    if not ClassDB.class_exists("AetherKiriPlayer"):
-        var message := "AetherKiri runtime extension class is unavailable."
+func _runtime_player_class(runtime_kind: String) -> String:
+    return "AetherOnscripterPlayer" if runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiriPlayer"
+
+func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
+    var player_class_name := _runtime_player_class(runtime_kind)
+    if not ClassDB.class_exists(player_class_name):
+        var message := "%s runtime extension class is unavailable." % player_class_name
         push_error(message)
         _append_log(message)
         _show_system_alert(_t("alert.runtime_class_missing"), _t("alert.error_title"))
         return false
-    var instance: Object = ClassDB.instantiate("AetherKiriPlayer")
+    var instance: Object = ClassDB.instantiate(player_class_name)
     if instance == null or not (instance is Node):
-        var create_message := "AetherKiri runtime extension could not create AetherKiriPlayer."
+        var create_message := "Aether runtime extension could not create %s." % player_class_name
         push_error(create_message)
         _append_log(create_message)
         _show_system_alert(_t("alert.runtime_create_failed"), _t("alert.error_title"))
         return false
     player = instance
+    current_player_runtime_kind = runtime_kind
     add_child(instance as Node)
+    return true
+
+func _switch_runtime_player(runtime_kind: String) -> bool:
+    var normalized := RUNTIME_ONSCRIPTER if runtime_kind == RUNTIME_ONSCRIPTER else RUNTIME_KIRIKIRI
+    if player != null and current_player_runtime_kind == normalized:
+        return true
+    if game_running:
+        _append_log("Cannot switch visual-novel runtimes while a game is running.")
+        return false
+
+    var previous_player = player
+    player = null
+    if previous_player != null:
+        previous_player.destroy_engine()
+        if previous_player is Node:
+            (previous_player as Node).queue_free()
+    if not _create_runtime_player(normalized):
+        return false
+    if not _ensure_player_initialized():
+        return false
+    _apply_backend(false)
+    _apply_engine_options()
+    if diagnostic_session != null:
+        if diagnostic_session.active:
+            diagnostic_session.finish()
+        diagnostic_session.start(player, selected_backend)
+    _append_log("Runtime selected: %s" % (
+        "OnscripterYuri" if normalized == RUNTIME_ONSCRIPTER else "KiriKiri"
+    ))
     return true
 
 func _ensure_player_initialized() -> bool:
@@ -6209,7 +6279,9 @@ func _ensure_player_initialized() -> bool:
         _append_log(init_error_message)
         return false
 
-    _append_log("AetherKiri engine initialized.")
+    _append_log("%s engine initialized." % (
+        "OnscripterYuri" if current_player_runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiri"
+    ))
     return true
 
 func _finish_ready_after_first_frame() -> void:
@@ -6606,6 +6678,12 @@ func _prepare_cli_probe_view(config: Dictionary) -> void:
     _fit_full_rects()
 
 func _probe_open_game(config: Dictionary, target_game_path: String, backend_env: String) -> bool:
+    var runtime_kind := _game_runtime_kind(target_game_path)
+    if not _switch_runtime_player(runtime_kind):
+        _write_probe_marker("probe_open_game runtime_switch_failed kind=%s" % runtime_kind)
+        return false
+    if runtime_kind == RUNTIME_ONSCRIPTER:
+        target_game_path = _game_runtime_root(target_game_path)
     selected_backend = ProbeConfig.backend(config, backend_env)
     if not selected_backend in BACKENDS:
         selected_backend = "Godot Native"
@@ -7777,7 +7855,9 @@ func _renderer_summary(renderer: String) -> String:
     if renderer.is_empty():
         return selected_backend
     var summary := selected_backend
-    if renderer.contains("backend=godot_native"):
+    if renderer.contains("backend=onscripter_yuri"):
+        summary = "OnscripterYuri (Godot Texture)"
+    elif renderer.contains("backend=godot_native"):
         summary = "Godot Native GPU"
     elif renderer.contains("backend=gpu_bridge"):
         summary = "GPU Bridge"
@@ -7807,6 +7887,15 @@ func _on_open_game() -> void:
         render_errors += 1
         _append_log("Game path is empty.")
         return
+
+    var detected_runtime := _game_runtime_kind(path)
+    if not _switch_runtime_player(detected_runtime):
+        render_errors += 1
+        return
+    active_runtime_kind = detected_runtime
+    if detected_runtime == RUNTIME_ONSCRIPTER:
+        path = _game_runtime_root(path)
+        game_path.text = path
 
     if not _ensure_player_initialized():
         return
@@ -8153,7 +8242,15 @@ func _run_auto_probe() -> void:
         get_tree().quit(0)
 
 func _run_startup_click_stream_probe() -> void:
+    var warmup_frames: int = max(
+        0,
+        _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_WARMUP_FRAMES", 0)
+    )
     var frames: int = max(1, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_FRAMES", 240))
+    var post_frames: int = max(
+        0,
+        _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_POST_FRAMES", 0)
+    )
     var clicks_per_frame: int = max(1, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_CLICKS_PER_FRAME", 1))
     var capture_every: int = max(0, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_CAPTURE_EVERY", 60))
     var click_pos: Vector2 = Vector2(
@@ -8165,6 +8262,8 @@ func _run_startup_click_stream_probe() -> void:
     var blocked: int = 0
     var busy: int = 0
     var start_usec: int = Time.get_ticks_usec()
+    for frame_index in range(warmup_frames):
+        await get_tree().process_frame
     for frame_index in range(frames):
         for i in range(clicks_per_frame):
             attempted += 1
@@ -8183,9 +8282,13 @@ func _run_startup_click_stream_probe() -> void:
         if capture_every > 0 and (frame_index % capture_every) == 0:
             _save_startup_click_stream_capture(frame_index)
         await get_tree().process_frame
+    for frame_index in range(post_frames):
+        await get_tree().process_frame
     var elapsed_sec := float(Time.get_ticks_usec() - start_usec) / 1000000.0
-    var line := "startup_click_stream frames=%d clicks_per_frame=%d attempted=%d forwarded=%d blocked=%d busy=%d elapsed_sec=%.3f fps=%.2f renderer=\"%s\" texture=%s size=%dx%d" % [
+    var line := "startup_click_stream warmup_frames=%d frames=%d post_frames=%d clicks_per_frame=%d attempted=%d forwarded=%d blocked=%d busy=%d elapsed_sec=%.3f fps=%.2f renderer=\"%s\" texture=%s size=%dx%d" % [
+        warmup_frames,
         frames,
+        post_frames,
         clicks_per_frame,
         attempted,
         forwarded,
@@ -9244,6 +9347,13 @@ func _map_viewport_delta(delta: Vector2) -> Vector2:
     return _map_texture_input_to_surface(texture_delta, tex_size)
 
 func _map_texture_input_to_surface(point: Vector2, texture_size: Vector2) -> Vector2:
+    # ONScripter always composes and hit-tests at the script's native
+    # resolution. Its set_surface_size implementation intentionally leaves
+    # that surface unchanged, so applying the Godot Display Fit size here
+    # would scale otherwise-correct texture coordinates outside the ONS
+    # button rectangles.
+    if active_runtime_kind == RUNTIME_ONSCRIPTER:
+        return point
     if current_surface_size.x <= 0 or current_surface_size.y <= 0:
         return point
     var surface_size := Vector2(float(current_surface_size.x), float(current_surface_size.y))

@@ -62,6 +62,11 @@ extern jobject krkr_GetApplicationContext();
 #endif
 
 namespace godot {
+
+#if defined(AETHERKIRI_WITH_ONSCRIPTER)
+void InitializeAetherOnscripter(ModuleInitializationLevel level);
+#endif
+
 namespace {
 
 struct GodotGpuTextureRecord {
@@ -6269,6 +6274,9 @@ void InitializeAetherKiri(ModuleInitializationLevel level) {
         return;
     }
     ClassDB::register_class<AetherKiriPlayer>();
+#if defined(AETHERKIRI_WITH_ONSCRIPTER)
+    InitializeAetherOnscripter(level);
+#endif
 }
 
 void DeinitializeAetherKiri(ModuleInitializationLevel level) {

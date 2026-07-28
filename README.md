@@ -5,7 +5,7 @@
 <h1 align="center">AetherKiri</h1>
 
 <p align="center">
-  A Godot-hosted KiriKiri2 runtime with a C++ engine core and native mobile/desktop exports.
+  A Godot-hosted visual-novel runtime for KiriKiri2 and ONScripter games.
 </p>
 
 <p align="center">
@@ -31,10 +31,11 @@
 
 ## Overview
 
-AetherKiri runs KiriKiri2 content inside a Godot 4.7 application shell. The
-runtime is split into a native C++17 engine core, a C ABI bridge, and a Godot
-GDExtension host that owns the product UI, render resources, settings, export
-presets, and platform packaging.
+AetherKiri runs KiriKiri2 and ONScripter content inside a Godot 4.7
+application shell. Native runtimes connect to a Godot GDExtension host that
+owns the product UI, final-frame presentation, input, settings, export
+presets, and platform packaging. The library automatically selects KiriKiri or
+OnscripterYuri from each game's script markers.
 
 The default product renderer is **Godot Native**: engine frames are rendered
 through Godot-owned `RenderingDevice` resources. **GPU Bridge** remains an
@@ -45,9 +46,8 @@ diagnostic fallback only.
 ```text
 Godot App Shell
   -> GDExtension Host
-    -> C ABI Engine API
-      -> C++ Engine Core
-        -> KiriKiri Runtime / Plugins
+    -> KiriKiri C ABI -> C++ Engine Core / Plugins
+    -> OnscripterYuri Host -> SDL Software Compositor
 ```
 
 ## Highlights
@@ -55,6 +55,9 @@ Godot App Shell
 - Godot 4.7 app shell with native GDExtension integration.
 - C++17 KiriKiri2 runtime core with visual, audio, storage, VM, and plugin
   support.
+- OnscripterYuri integration whose composed RGBA frames are displayed by a
+  Godot `ImageTexture`, with Godot pointer, touch, and keyboard input mapped
+  back to ONS events.
 - Export paths for macOS, iOS/iPadOS, Android, and Web.
 - Runtime-selectable render backend with persisted settings.
 - Bundled multilingual KAG3 demo that can be played from the library and
@@ -72,9 +75,11 @@ Godot App Shell
 | `apps/godot_app/` | Godot project, scenes, settings UI, performance/log panel, icons, and export presets. |
 | `bridge/godot_extension/` | Godot native host library entry points. |
 | `bridge/engine_api/` | C ABI used by the host layer to drive the C++ engine. |
+| `bridge/onscripter_runtime/` | Headless OnscripterYuri host, frame capture, and input bridge. |
 | `cpp/core/` | KiriKiri2 runtime, visual system, audio, storage, VM, and plugin support. |
 | `cpp/plugins/` | Bundled native plugin implementations and compatibility stubs. |
 | `packages/AetherInternal/` | Optional private E-mote package submodule; public builds work without it. |
+| `packages/OnscripterYuri/` | Public OnscripterYuri git submodule. |
 | `demos/aetherkiri-kag3/` | Source tree for the built-in AetherKiri KAG3 demo. |
 | `tests/profiles/` | Per-game probe profiles. Committed profiles must not contain machine-local game paths. |
 | `tools/` | Developer and compatibility tools built outside iOS/Android targets. |
@@ -175,6 +180,12 @@ under `out/`; remove a Linux configuration with
 
 ## Build
 
+Initialize the public ONS runtime after cloning:
+
+```bash
+git submodule update --init packages/OnscripterYuri
+```
+
 The public repository builds and runs CI without access to private packages.
 Maintainers with access to the complete E-mote and native Live2D
 implementations can initialize the optional package before building:
@@ -220,6 +231,48 @@ The scripts build the native engine and Godot host library, stage them under
 available. Linux exports include the required vcpkg shared libraries beside
 the executable, so their engine runtime does not depend on the local build
 tree. Android is currently wired for `arm64-v8a`.
+
+## ONScripter Games
+
+Add the game directory to the library as usual. AetherKiri selects
+OnscripterYuri when it finds `0.txt`, `00.txt`, `nscript.dat`,
+`nscr_sec.dat`, `nscript.___`, `onscript.nt2`, or `onscript.nt3`. The engine
+composes at the script's native resolution; AetherKiri uploads the final RGBA
+frame to a Godot texture and presents it through the existing aspect-preserving
+`TextureRect`, without a second native window.
+
+ONS saves are stored under
+`onscripter_saves/<game-name-path-hash>/` in the app's user directory, leaving
+read-only game folders untouched. The default script encoding matches upstream
+and is GBK; set `AETHERKIRI_ONS_ENCODING=gbk|sjis|utf8` to override it. Like
+the existing KiriKiri runtime, one app process owns one visual-novel session;
+restart Aether after a game exits.
+
+The repository includes a minimal ONS render fixture:
+
+```bash
+AETHERKIRI_SMOKE_GAME="$PWD/tests/fixtures/onscripter_smoke" \
+  /Applications/Godot.app/Contents/MacOS/Godot \
+  --headless --path apps/godot_app \
+  --script res://scripts/smoke_test.gd
+```
+
+The ONS `mpegplay`, `avi`, and `movie` commands share AetherKiri's FFmpeg
+media pipeline. `movie click`, `loop`, `pos`, `async`, and `movie stop` are
+implemented; decoded video frames are composited at script coordinates and
+audio is played by the media pipeline. Movies stored in NSA/NS2/SAR archives
+are extracted on demand to the user cache.
+
+To exercise the complete movie-command bridge, place a test video at
+`tests/fixtures/onscripter_movie_smoke/video.avi`, then run:
+
+```bash
+AETHERKIRI_SMOKE_GAME="$PWD/tests/fixtures/onscripter_movie_smoke" \
+AETHERKIRI_SMOKE_EXPECT_SCRIPT_MEDIA=1 \
+  /Applications/Godot.app/Contents/MacOS/Godot \
+  --headless --path apps/godot_app \
+  --script res://scripts/smoke_test.gd
+```
 
 ## Run and Test Artifacts
 

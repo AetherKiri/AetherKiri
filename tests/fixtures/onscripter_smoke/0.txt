@@ -1,0 +1,9 @@
+*define
+caption "AetherKiri ONScripter smoke test"
+deletemenu
+game
+
+*start
+bg "white",1
+delay 30000
+end
