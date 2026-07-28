@@ -223,7 +223,7 @@ void BasePlayer::Play() {
         Create();
 
     if(GetSpeed() == 0)
-        SetSpeed(1 /*m_newPlaySpeed*/);
+        SetSpeed(m_origSpeed > 0 ? m_origSpeed : 1.0);
 }
 
 void BasePlayer::Stop() {
@@ -241,8 +241,10 @@ void BasePlayer::Pause() {
         spdlog::info("MoviePlayer pause file={} player={} speed={}",
                      m_strFileName, static_cast<const void *>(this),
                      GetSpeed());
-    if(GetSpeed() != 0)
+    if(GetSpeed() != 0) {
+        m_origSpeed = GetSpeed();
         SetSpeed(0);
+    }
 }
 
 void BasePlayer::GetVideoSize(long *width, long *height) {
@@ -1584,6 +1586,12 @@ void BasePlayer::HandleMessages() {
             FlushBuffers(false);
         } else if(pMsg->IsType(CDVDMsg::PLAYER_SETSPEED)) {
             int speed = static_cast<CDVDMsgInt *>(pMsg)->m_value;
+            if(VideoTraceEnabled())
+                spdlog::info(
+                    "MoviePlayer apply speed file={} player={} old={} new={}",
+                    m_strFileName, static_cast<const void *>(this),
+                    static_cast<double>(m_playSpeed) / DVD_PLAYSPEED_NORMAL,
+                    static_cast<double>(speed) / DVD_PLAYSPEED_NORMAL);
 
             // correct our current clock, as it would start going
             // wrong otherwise
@@ -1930,6 +1938,10 @@ void BasePlayer::SetSpeed(double speed) {
     if(!CanSeek())
         return;
 
+    if(VideoTraceEnabled())
+        spdlog::info(
+            "MoviePlayer request speed file={} player={} current={} new={}",
+            m_strFileName, static_cast<const void *>(this), GetSpeed(), speed);
     m_newPlaySpeed = speed * DVD_PLAYSPEED_NORMAL;
     SetPlaySpeed(speed * DVD_PLAYSPEED_NORMAL);
 }

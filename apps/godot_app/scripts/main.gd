@@ -854,6 +854,9 @@ const MEDIA_STATUS_PAUSED := 2
 const MEDIA_STATUS_ENDED := 3
 const VIDEO_CONTROLS_AUTO_HIDE_SEC := 3.0
 const VIDEO_CONTROLS_FADE_SEC := 0.18
+const VIDEO_SEEK_DRAG_THRESHOLD := 14.0
+const VIDEO_SEEK_MIN_SPAN_SEC := 30.0
+const VIDEO_SEEK_MAX_SPAN_SEC := 180.0
 const STARTUP_IDLE := 0
 const STARTUP_RUNNING := 1
 const STARTUP_SUCCEEDED := 2
@@ -989,6 +992,8 @@ var video_progress_slider: HSlider
 var video_time_label: Label
 var video_rate_button: OptionButton
 var video_subtitle_button: OptionButton
+var video_seek_feedback: PanelContainer
+var video_seek_feedback_label: Label
 var active_video_path := ""
 var active_video_state := {}
 var active_video_duration := 0.0
@@ -998,6 +1003,13 @@ var active_video_end_handled := false
 var video_controls_visible := false
 var video_controls_idle_sec := 0.0
 var video_controls_tween: Tween
+var video_touch_mouse_suppress_until_msec := 0
+var video_seek_touch_index := -1
+var video_seek_mouse_pressed := false
+var video_seek_gesture_active := false
+var video_seek_start_point := Vector2.ZERO
+var video_seek_start_position := 0.0
+var video_seek_target_position := 0.0
 var video_previous_mouse_mode := Input.MOUSE_MODE_VISIBLE
 var active_subtitle_tracks: Array[Dictionary] = []
 var active_subtitle_cues: Array[Dictionary] = []
@@ -1445,6 +1457,35 @@ func _build_video_view() -> void:
     video_subtitle_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
     video_view.add_child(video_subtitle_label)
 
+    video_seek_feedback = PanelContainer.new()
+    video_seek_feedback.anchor_left = 0.5
+    video_seek_feedback.anchor_top = 0.5
+    video_seek_feedback.anchor_right = 0.5
+    video_seek_feedback.anchor_bottom = 0.5
+    video_seek_feedback.offset_left = -150.0
+    video_seek_feedback.offset_top = -42.0
+    video_seek_feedback.offset_right = 150.0
+    video_seek_feedback.offset_bottom = 42.0
+    video_seek_feedback.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    video_seek_feedback.add_theme_stylebox_override(
+        "panel",
+        _panel_style(
+            14,
+            Color(0.015, 0.018, 0.026, 0.82),
+            Color(1, 1, 1, 0.18),
+            1
+        )
+    )
+    video_seek_feedback.visible = false
+    video_view.add_child(video_seek_feedback)
+    video_seek_feedback_label = Label.new()
+    video_seek_feedback_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    video_seek_feedback_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    video_seek_feedback_label.add_theme_font_size_override("font_size", 23)
+    video_seek_feedback_label.add_theme_color_override("font_color", Color.WHITE)
+    video_seek_feedback_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    video_seek_feedback.add_child(video_seek_feedback_label)
+
     video_top_bar = PanelContainer.new()
     video_top_bar.anchor_right = 1.0
     video_top_bar.offset_bottom = 76.0
@@ -1633,6 +1674,88 @@ func _video_pointer_over_controls(position: Vector2) -> bool:
         and video_controls.visible
         and video_controls.get_global_rect().has_point(position)
     )
+
+func _reset_video_seek_gesture() -> void:
+    video_seek_touch_index = -1
+    video_seek_mouse_pressed = false
+    video_seek_gesture_active = false
+    video_seek_start_point = Vector2.ZERO
+    video_seek_start_position = 0.0
+    video_seek_target_position = 0.0
+    active_video_scrubbing = false
+    if is_instance_valid(video_seek_feedback):
+        video_seek_feedback.visible = false
+
+func _begin_video_seek_gesture(position: Vector2) -> void:
+    video_seek_gesture_active = false
+    video_seek_start_point = position
+    video_seek_start_position = float(active_video_state.get("position", 0.0))
+    video_seek_target_position = video_seek_start_position
+
+func _update_video_seek_gesture(position: Vector2) -> bool:
+    var delta := position - video_seek_start_point
+    var duration := maxf(
+        active_video_duration,
+        float(active_video_state.get("duration", 0.0))
+    )
+    if not video_seek_gesture_active:
+        if absf(delta.x) < VIDEO_SEEK_DRAG_THRESHOLD:
+            return false
+        if absf(delta.x) < absf(delta.y):
+            return false
+        if duration <= 0.0:
+            return false
+        video_seek_gesture_active = true
+        active_video_scrubbing = true
+        _set_video_controls_visible(true)
+        if is_instance_valid(video_seek_feedback):
+            video_seek_feedback.visible = true
+
+    var view_width := maxf(1.0, video_view.size.x)
+    var seek_span := clampf(
+        duration * 0.10,
+        VIDEO_SEEK_MIN_SPAN_SEC,
+        VIDEO_SEEK_MAX_SPAN_SEC
+    )
+    var seek_delta := delta.x / view_width * seek_span
+    video_seek_target_position = clampf(
+        video_seek_start_position + seek_delta,
+        0.0,
+        duration
+    )
+    video_progress_slider.value = video_seek_target_position
+    video_time_label.text = "%s / %s" % [
+        _format_video_time(video_seek_target_position),
+        _format_video_time(duration),
+    ]
+    var rounded_delta := roundi(
+        video_seek_target_position - video_seek_start_position
+    )
+    var delta_text := "+%ds" % rounded_delta
+    if rounded_delta < 0:
+        delta_text = "−%ds" % absi(rounded_delta)
+    elif rounded_delta == 0:
+        delta_text = "0s"
+    video_seek_feedback_label.text = "%s  ·  %s" % [
+        delta_text,
+        _format_video_time(video_seek_target_position),
+    ]
+    video_controls_idle_sec = 0.0
+    return true
+
+func _finish_video_seek_gesture(position: Vector2) -> void:
+    var committed_seek := video_seek_gesture_active
+    var moved := position.distance_to(video_seek_start_point)
+    if committed_seek and player != null:
+        player.media_seek(video_seek_target_position)
+    video_seek_gesture_active = false
+    active_video_scrubbing = false
+    if is_instance_valid(video_seek_feedback):
+        video_seek_feedback.visible = false
+    if committed_seek or moved >= VIDEO_SEEK_DRAG_THRESHOLD:
+        _set_video_controls_visible(true)
+    else:
+        _set_video_controls_visible(not video_controls_visible)
 
 func _load_shell_settings() -> void:
     var cfg := ConfigFile.new()
@@ -4952,7 +5075,7 @@ func _open_video_player(video: Dictionary) -> void:
     active_video_path = path
     active_video_duration = 0.0
     active_video_state = {}
-    active_video_scrubbing = false
+    _reset_video_seek_gesture()
     active_video_end_handled = false
     active_video_was_playing = false
     active_subtitle_index = 0
@@ -4969,6 +5092,7 @@ func _open_video_player(video: Dictionary) -> void:
     video_view.move_to_front()
     video_previous_mouse_mode = Input.mouse_mode
     video_playing = true
+    video_touch_mouse_suppress_until_msec = 0
     _set_video_controls_visible(false, false)
     player.media_play()
     var resume: Dictionary = video_progress_data.get(path, {})
@@ -4994,6 +5118,8 @@ func _close_video_player() -> void:
         video_controls_tween.kill()
     video_controls_visible = false
     video_controls_idle_sec = 0.0
+    video_touch_mouse_suppress_until_msec = 0
+    _reset_video_seek_gesture()
     video_top_bar.visible = false
     video_controls.visible = false
     video_view.visible = false
@@ -7171,10 +7297,11 @@ func _process_video_playback(delta: float) -> void:
         video_progress_slider.max_value = duration
     if not active_video_scrubbing:
         video_progress_slider.value = clampf(position, 0.0, maxf(1.0, active_video_duration))
-    video_time_label.text = "%s / %s" % [
-        _format_video_time(position),
-        _format_video_time(active_video_duration),
-    ]
+    if not video_seek_gesture_active:
+        video_time_label.text = "%s / %s" % [
+            _format_video_time(position),
+            _format_video_time(active_video_duration),
+        ]
     var serial := int(state.get("frame_serial", 0))
     if bool(state.get("frame_ready", false)) and serial != previous_serial:
         var texture = player.media_update_texture()
@@ -8439,29 +8566,60 @@ func _handle_video_player_input(event: InputEvent) -> bool:
         return false
     if event is InputEventMouseMotion:
         var motion := event as InputEventMouseMotion
+        if (
+            video_seek_mouse_pressed
+            and (motion.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0
+        ):
+            _update_video_seek_gesture(motion.position)
+            return true
         if motion.relative.length_squared() > 0.25:
             _set_video_controls_visible(true)
         return false
     if event is InputEventScreenDrag:
-        _set_video_controls_visible(true)
+        var drag := event as InputEventScreenDrag
+        if drag.index == video_seek_touch_index:
+            _update_video_seek_gesture(drag.position)
+            return true
         return false
     if event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
-        if not mouse_button.pressed or mouse_button.button_index != MOUSE_BUTTON_LEFT:
+        if mouse_button.button_index != MOUSE_BUTTON_LEFT:
             return false
-        if _video_pointer_over_controls(mouse_button.position):
-            video_controls_idle_sec = 0.0
+        if mouse_button.pressed:
+            # Godot may synthesize a mouse click immediately after an iOS
+            # touch. The touch owns this gesture, so do not start it twice.
+            if Time.get_ticks_msec() <= video_touch_mouse_suppress_until_msec:
+                video_touch_mouse_suppress_until_msec = 0
+                return true
+            if _video_pointer_over_controls(mouse_button.position):
+                video_controls_idle_sec = 0.0
+                return false
+            video_seek_mouse_pressed = true
+            video_seek_touch_index = -1
+            _begin_video_seek_gesture(mouse_button.position)
+            return true
+        if not video_seek_mouse_pressed:
             return false
-        _set_video_controls_visible(not video_controls_visible)
+        video_seek_mouse_pressed = false
+        _finish_video_seek_gesture(mouse_button.position)
         return true
     if event is InputEventScreenTouch:
         var touch := event as InputEventScreenTouch
-        if not touch.pressed:
+        if touch.pressed:
+            if _video_pointer_over_controls(touch.position):
+                video_controls_idle_sec = 0.0
+                return false
+            video_touch_mouse_suppress_until_msec = (
+                Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
+            )
+            video_seek_touch_index = touch.index
+            video_seek_mouse_pressed = false
+            _begin_video_seek_gesture(touch.position)
+            return true
+        if touch.index != video_seek_touch_index:
             return false
-        if _video_pointer_over_controls(touch.position):
-            video_controls_idle_sec = 0.0
-            return false
-        _set_video_controls_visible(not video_controls_visible)
+        video_seek_touch_index = -1
+        _finish_video_seek_gesture(touch.position)
         return true
     return false
 

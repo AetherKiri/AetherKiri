@@ -53,11 +53,13 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include <spdlog/spdlog.h>
 
 #include "environ/Application.h"
+#include "environ/combase.h"
 #include "environ/Platform.h"
 #include "environ/EngineBootstrap.h"
 #include "environ/EngineLoop.h"
 #include "environ/MainScene.h"
 #include "base/StorageIntf.h"
+#include "base/impl/StorageImpl.h"
 #include "base/ScriptMgnIntf.h"
 #include "base/SysInitIntf.h"
 #include "base/impl/SysInitImpl.h"
@@ -235,7 +237,27 @@ class StandaloneMediaPlayer final : public KRMovie::TVPMoviePlayer {
       return false;
     }
     const ttstr path(path_utf8);
-    IStream* stream = TVPCreateIStream(path, TJS_BS_READ);
+    IStream* stream = nullptr;
+    std::error_code local_file_error;
+    const bool is_local_file =
+        std::filesystem::is_regular_file(path_utf8, local_file_error);
+    if (is_local_file) {
+      try {
+        // Standalone media paths come from the host file picker/library and
+        // are already native absolute paths. Opening them through the TVP
+        // storage normalizer can remap an iOS Documents path against the
+        // current visual-novel root and reject an otherwise readable file.
+        // Keep TVP storage handling as the fallback for archive-backed media,
+        // but bypass normalization for ordinary host files.
+        stream = TVPCreateIStream(
+            new tTVPLocalFileStream(path, path, TJS_BS_READ));
+      } catch (...) {
+        stream = nullptr;
+      }
+    }
+    if (stream == nullptr) {
+      stream = TVPCreateIStream(path, TJS_BS_READ);
+    }
     if (stream == nullptr) {
       if (error != nullptr) *error = "unable to open media file";
       return false;
@@ -252,8 +274,10 @@ class StandaloneMediaPlayer final : public KRMovie::TVPMoviePlayer {
       return dot == std::string::npos ? std::string() : value.substr(dot + 1);
     }(path_utf8);
     ended_.store(false);
-    if (!m_pPlayer->OpenFromStream(stream, path.c_str(),
-                                    ttstr(extension.c_str()).c_str(), size)) {
+    const bool opened = m_pPlayer->OpenFromStream(
+        stream, path.c_str(), ttstr(extension.c_str()).c_str(), size);
+    stream->Release();
+    if (!opened) {
       if (error != nullptr) *error = "FFmpeg could not open this media file";
       return false;
     }

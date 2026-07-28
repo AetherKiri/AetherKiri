@@ -41,16 +41,42 @@ func _run() -> void:
                 break
         await create_timer(0.02).timeout
     player.media_seek(10.0)
-    player.media_set_rate(1.5)
     player.media_play()
-    var control_deadline := Time.get_ticks_msec() + 2000
-    var controls_worked := false
-    while Time.get_ticks_msec() < control_deadline:
-        var control_state: Dictionary = player.media_get_state()
-        if float(control_state.get("position", 0.0)) >= 9.0 and absf(float(control_state.get("rate", 0.0)) - 1.5) < 0.01:
-            controls_worked = true
+    var controls_worked := true
+    var rate_dwell_seconds := 0.15
+    var configured_dwell := OS.get_environment("AETHERKIRI_TEST_RATE_DWELL_SECONDS")
+    if not configured_dwell.is_empty():
+        rate_dwell_seconds = maxf(0.15, configured_dwell.to_float())
+    for expected_rate in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]:
+        player.media_set_rate(expected_rate)
+        var rate_deadline := Time.get_ticks_msec() + 1000
+        var observed_rate := false
+        while Time.get_ticks_msec() < rate_deadline:
+            var control_state: Dictionary = player.media_get_state()
+            if (
+                float(control_state.get("position", 0.0)) >= 9.0
+                and absf(float(control_state.get("rate", 0.0)) - expected_rate) < 0.01
+            ):
+                observed_rate = true
+                break
+            await create_timer(0.02).timeout
+        if not observed_rate:
+            controls_worked = false
+            break
+        await create_timer(rate_dwell_seconds).timeout
+    player.media_set_rate(1.25)
+    player.media_pause()
+    await create_timer(0.1).timeout
+    player.media_play()
+    var resume_deadline := Time.get_ticks_msec() + 1000
+    var resume_kept_rate := false
+    while Time.get_ticks_msec() < resume_deadline:
+        var resume_state: Dictionary = player.media_get_state()
+        if absf(float(resume_state.get("rate", 0.0)) - 1.25) < 0.01:
+            resume_kept_rate = true
             break
         await create_timer(0.02).timeout
+    controls_worked = controls_worked and resume_kept_rate
     player.media_pause()
     player.media_close()
     player.destroy_engine()
