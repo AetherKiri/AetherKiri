@@ -1000,13 +1000,37 @@ namespace motion {
                     if (flags & 0x080) node.accumulated.slantX += rootNode.accumulated.slantX;
                     if (flags & 0x100) node.accumulated.slantY += rootNode.accumulated.slantY;
 
-                    // Phase D: Matrix multiply parent × local (0x6BBA24)
+                    // Phase D: Matrix multiply parent × local (0x6BBA24).
+                    // M2's glyph nodes intentionally omit both scale bits:
+                    // their positions follow the 2x parent transform, but
+                    // their image geometry stays at its authored size. The
+                    // position was already transformed above, so remove only
+                    // the omitted orthogonal scale from the geometry matrix.
+                    Affine2x3 parentGeometryAffine = {
+                        parent.accumulated.m11,
+                        parent.accumulated.m21,
+                        parent.accumulated.m12,
+                        parent.accumulated.m22,
+                        0.0,
+                        0.0
+                    };
+                    parentGeometryAffine =
+                        startupLogoGeometryParentTransform(
+                            motionPath, parentGeometryAffine, flags);
                     const double lm11 = localAffine[0], lm21 = localAffine[1];
                     const double lm12 = localAffine[2], lm22 = localAffine[3];
-                    node.accumulated.m11 = parent.accumulated.m11 * lm11 + parent.accumulated.m12 * lm21;
-                    node.accumulated.m21 = parent.accumulated.m21 * lm11 + parent.accumulated.m22 * lm21;
-                    node.accumulated.m12 = parent.accumulated.m11 * lm12 + parent.accumulated.m12 * lm22;
-                    node.accumulated.m22 = parent.accumulated.m21 * lm12 + parent.accumulated.m22 * lm22;
+                    node.accumulated.m11 =
+                        parentGeometryAffine[0] * lm11 +
+                        parentGeometryAffine[2] * lm21;
+                    node.accumulated.m21 =
+                        parentGeometryAffine[1] * lm11 +
+                        parentGeometryAffine[3] * lm21;
+                    node.accumulated.m12 =
+                        parentGeometryAffine[0] * lm12 +
+                        parentGeometryAffine[2] * lm22;
+                    node.accumulated.m22 =
+                        parentGeometryAffine[1] * lm12 +
+                        parentGeometryAffine[3] * lm22;
                 }
             }
         }

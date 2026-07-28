@@ -169,6 +169,158 @@ TEST_CASE("motion presentation excludes structural binder layers") {
         motion::internal::presentationLayerTypeCanReceivePixels(ltAlpha));
 }
 
+TEST_CASE("startup logo presentation preserves its authored origin") {
+    using motion::internal::startupLogoMotionScalesAroundCanvasCenter;
+    using motion::internal::startupLogoMotionUsesStableBackdropReference;
+    using motion::internal::startupLogoMotionUsesCenteredOrigin;
+    using motion::internal::startupLogoPresentationScaleAppliesToSource;
+    using motion::internal::startupLogoPresentationScale;
+    using motion::internal::startupLogoStableBackdropSource;
+    using motion::internal::startupLogoUsesCenteredOrigin;
+
+    constexpr int canvasWidth = 1920;
+    constexpr int canvasHeight = 1080;
+
+    CHECK(startupLogoUsesCenteredOrigin({ -960.0f, -540.0f, 960.0f, 540.0f },
+                                        canvasWidth, canvasHeight));
+    CHECK(startupLogoUsesCenteredOrigin({ -300.0f, -120.0f, 300.0f, 120.0f },
+                                        canvasWidth, canvasHeight));
+    CHECK(startupLogoUsesCenteredOrigin({ -768.0f, -432.0f, 768.0f, 432.0f },
+                                        canvasWidth, canvasHeight));
+
+    CHECK_FALSE(startupLogoUsesCenteredOrigin({ 0.0f, 0.0f, 1920.0f, 1080.0f },
+                                              canvasWidth, canvasHeight));
+    CHECK_FALSE(startupLogoUsesCenteredOrigin(
+        { -1.0f, -1.0f, 1919.0f, 1079.0f }, canvasWidth, canvasHeight));
+    CHECK_FALSE(startupLogoUsesCenteredOrigin(
+        { -8.0f, -4.0f, 192.0f, 96.0f }, canvasWidth, canvasHeight));
+    CHECK_FALSE(startupLogoUsesCenteredOrigin(
+        { -1.0f, -1.0f, 3.0f, 3.0f }, canvasWidth, canvasHeight));
+    CHECK_FALSE(startupLogoUsesCenteredOrigin({ 0.0f, 0.0f, 960.0f, 540.0f },
+                                              canvasWidth, canvasHeight));
+
+    const std::array<float, 4> centeredLogoBounds{
+        -960.0f, -540.0f, 960.0f, 540.0f
+    };
+    CHECK(startupLogoMotionUsesCenteredOrigin("motion/yuzulogo.mtn"));
+    CHECK(startupLogoMotionUsesCenteredOrigin("MOTION/YUZULOGO.MTN"));
+    CHECK_FALSE(startupLogoMotionUsesCenteredOrigin("motion/m2logo.mtn"));
+    CHECK(startupLogoMotionScalesAroundCanvasCenter(
+        "motion/yuzulogo.mtn"));
+    CHECK(startupLogoMotionScalesAroundCanvasCenter(
+        "MOTION/M2LOGO.MTN"));
+    CHECK_FALSE(startupLogoMotionScalesAroundCanvasCenter(
+        "motion/title_bg.mtn"));
+    CHECK(startupLogoMotionUsesStableBackdropReference(
+        "motion/m2logo.mtn"));
+    CHECK(startupLogoMotionUsesStableBackdropReference(
+        "MOTION/M2LOGO.MTN"));
+    CHECK_FALSE(startupLogoMotionUsesStableBackdropReference(
+        "motion/yuzulogo.mtn"));
+    CHECK(startupLogoStableBackdropSource(
+        "motion/m2logo.mtn", "src/logo/icon50"));
+    CHECK_FALSE(startupLogoStableBackdropSource(
+        "motion/m2logo.mtn", "src/logo/main"));
+    CHECK_FALSE(startupLogoStableBackdropSource(
+        "motion/yuzulogo.mtn", "src/logo/icon50"));
+    CHECK(startupLogoPresentationScaleAppliesToSource(
+        "motion/m2logo.mtn", "src/logo/icon50"));
+    CHECK_FALSE(startupLogoPresentationScaleAppliesToSource(
+        "motion/m2logo.mtn", "src/logo/main"));
+    CHECK(startupLogoPresentationScaleAppliesToSource(
+        "motion/yuzulogo.mtn", "src/yuzu/yuzu_mi"));
+    const auto m2Scale = startupLogoPresentationScale(
+        "motion/m2logo.mtn", 1920.0f, 1080.0f, 960.0f, 544.0f);
+    CHECK(m2Scale[0] == Catch::Approx(2.0f));
+    CHECK(m2Scale[1] == Catch::Approx(2.0f));
+    const auto yuzuScale = startupLogoPresentationScale(
+        "motion/yuzulogo.mtn", 1920.0f, 1080.0f, 960.0f, 360.0f);
+    CHECK(yuzuScale[0] == Catch::Approx(2.0f));
+    CHECK(yuzuScale[1] == Catch::Approx(3.0f));
+
+    const motion::internal::Affine2x3 doubledParent{
+        2.0, 0.0, 0.0, 2.0, 120.0, 80.0
+    };
+    const auto independentM2Glyph =
+        motion::internal::startupLogoGeometryParentTransform(
+            "motion/m2logo.mtn", doubledParent, 0x19c);
+    CHECK(independentM2Glyph[0] == Catch::Approx(1.0));
+    CHECK(independentM2Glyph[1] == Catch::Approx(0.0));
+    CHECK(independentM2Glyph[2] == Catch::Approx(0.0));
+    CHECK(independentM2Glyph[3] == Catch::Approx(1.0));
+    CHECK(independentM2Glyph[4] == Catch::Approx(120.0));
+    CHECK(independentM2Glyph[5] == Catch::Approx(80.0));
+
+    const auto inheritedM2Glyph =
+        motion::internal::startupLogoGeometryParentTransform(
+            "motion/m2logo.mtn", doubledParent, 0x1fc);
+    CHECK(inheritedM2Glyph == doubledParent);
+    const auto untouchedYuzuGlyph =
+        motion::internal::startupLogoGeometryParentTransform(
+            "motion/yuzulogo.mtn", doubledParent, 0x19c);
+    CHECK(untouchedYuzuGlyph == doubledParent);
+
+    const motion::internal::Affine2x3 rotatedParent{
+        0.0, 2.0, -3.0, 0.0, 0.0, 0.0
+    };
+    const auto independentRotatedM2Glyph =
+        motion::internal::startupLogoGeometryParentTransform(
+            "motion/m2logo.mtn", rotatedParent, 0x19c);
+    CHECK(independentRotatedM2Glyph[0] == Catch::Approx(0.0));
+    CHECK(independentRotatedM2Glyph[1] == Catch::Approx(1.0));
+    CHECK(independentRotatedM2Glyph[2] == Catch::Approx(-1.0));
+    CHECK(independentRotatedM2Glyph[3] == Catch::Approx(0.0));
+
+    CHECK((startupLogoMotionUsesCenteredOrigin("motion/yuzulogo.mtn") &&
+           startupLogoUsesCenteredOrigin(
+               centeredLogoBounds, canvasWidth, canvasHeight)));
+    CHECK_FALSE((startupLogoMotionUsesCenteredOrigin("motion/m2logo.mtn") &&
+                 startupLogoUsesCenteredOrigin(
+                     centeredLogoBounds, canvasWidth, canvasHeight)));
+    CHECK_FALSE(startupLogoUsesCenteredOrigin(
+        { 0.0f, -8.0f, 1920.0f, 1072.0f },
+        canvasWidth, canvasHeight));
+}
+
+TEST_CASE("title presentation holds its settled overlay") {
+    using motion::internal::shouldCaptureYuzuTitlePresentationHoldFrame;
+    using motion::internal::yuzuTitlePresentationHoldFrameIsResident;
+    using motion::internal::yuzuTitlePresentationFrameIsStable;
+
+    CHECK(shouldCaptureYuzuTitlePresentationHoldFrame(
+        false, false, true, false, false));
+    CHECK(shouldCaptureYuzuTitlePresentationHoldFrame(
+        false, false, false, true, false));
+    CHECK(shouldCaptureYuzuTitlePresentationHoldFrame(
+        false, false, false, false, true));
+    CHECK_FALSE(shouldCaptureYuzuTitlePresentationHoldFrame(
+        false, false, false, false, false));
+
+    CHECK(shouldCaptureYuzuTitlePresentationHoldFrame(
+        true, false, false, false, true));
+    CHECK_FALSE(shouldCaptureYuzuTitlePresentationHoldFrame(
+        true, true, false, false, true));
+    CHECK_FALSE(shouldCaptureYuzuTitlePresentationHoldFrame(
+        true, false, true, true, false));
+
+    CHECK(yuzuTitlePresentationFrameIsStable(true, false));
+    CHECK_FALSE(yuzuTitlePresentationFrameIsStable(true, true));
+    CHECK_FALSE(yuzuTitlePresentationFrameIsStable(false, false));
+
+    CHECK(yuzuTitlePresentationHoldFrameIsResident(
+        true, true, true, true, true, 255));
+    CHECK_FALSE(yuzuTitlePresentationHoldFrameIsResident(
+        false, true, true, true, true, 255));
+    CHECK_FALSE(yuzuTitlePresentationHoldFrameIsResident(
+        true, false, true, true, true, 255));
+    CHECK_FALSE(yuzuTitlePresentationHoldFrameIsResident(
+        true, true, true, false, true, 255));
+    CHECK_FALSE(yuzuTitlePresentationHoldFrameIsResident(
+        true, true, true, true, false, 255));
+    CHECK_FALSE(yuzuTitlePresentationHoldFrameIsResident(
+        true, true, true, true, true, 0));
+}
+
 TEST_CASE("motionplayer identifies full-canvas split composition planes") {
     const std::array<int, 4> canvasRect{0, 0, 1280, 720};
     const std::array<int, 4> partialRect{20, 0, 1280, 720};
