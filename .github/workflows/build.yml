@@ -780,7 +780,10 @@ jobs:
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh web release --jobs=4 2>&1 | tee "${RUNNER_TEMP}/web-build.log"
-          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/web-build.log"; then
+          # The Linux Godot host scans the enabled Linux extension while exporting
+          # Web, even though this job only stages the Web side module.
+          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/web-build.log" \
+            | grep -Ev "Can't open dynamic library, file not found: '.*/bin/linux/(debug|release)/libaether_kiri_godot\\.so'"; then
             echo "Godot Web export logged script or GDExtension load errors." >&2
             exit 1
           fi
