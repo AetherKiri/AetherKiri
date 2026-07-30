@@ -21,6 +21,9 @@ extern ttstr TVPNativeDataPath;
 
 extern bool TVPProjectDirSelected;
 
+extern bool TVPIsProjectStorageFile(const ttstr &normalizedProjectPath,
+                                    const ttstr &nativeProjectPath);
+
 extern void TVPEnsureDataPathDirectory();
 
 extern bool TVPExecuteUserConfig();

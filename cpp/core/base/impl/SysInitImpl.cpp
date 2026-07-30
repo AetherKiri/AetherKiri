@@ -150,6 +150,20 @@ static tjs_uint64 TVPTotalPhysMemory = 0;
 
 static void TVPInitProgramArgumentsAndDataPath(bool stop_after_datapath_got);
 
+bool TVPIsProjectStorageFile(const ttstr &normalizedProjectPath,
+                             const ttstr &nativeProjectPath) {
+    if(TVPIsExistentStorageNoSearchNoNormalize(normalizedProjectPath))
+        return true;
+
+    // Normalized storage names intentionally fold ASCII case. On a
+    // case-sensitive filesystem (notably an iOS app container), that can make
+    // the initial existence probe miss a valid archive before file media has
+    // recovered the native component casing. The host-provided path still has
+    // the exact on-disk spelling, so use it as a file-only fallback.
+    return !nativeProjectPath.IsEmpty() &&
+        TVPCheckExistentLocalFile(nativeProjectPath);
+}
+
 void TVPBeforeSystemInit() {
     // RegisterDllLoadHook();
     //  register DLL delayed import hook to support _inmm.dll
@@ -161,7 +175,7 @@ void TVPBeforeSystemInit() {
     if(TVPGetCommandLine(TJS_W("-arcdelim"), &v))
         TVPArchiveDelimiter = ttstr(v)[0];
 
-    if(TVPIsExistentStorageNoSearchNoNormalize(TVPProjectDir)) {
+    if(TVPIsProjectStorageFile(TVPProjectDir, TVPNativeProjectDir)) {
         TVPProjectDir += TVPArchiveDelimiter;
         // A bound XP3 executable is both the highest-priority project
         // archive and a launcher living beside the original game's data
