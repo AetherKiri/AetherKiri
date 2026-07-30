@@ -210,8 +210,12 @@ build_ios_sdk_compat_archive() {
     mkdir -p "$work_dir"
     cat > "$source" <<'EOF'
 #import <Foundation/Foundation.h>
+#include <stddef.h>
 
 extern "C" {
+struct hid_device_;
+struct hid_device_info;
+
 extern "C" __attribute__((weak, visibility("default"))) NSString * const CADynamicRangeAutomatic = @"CADynamicRangeAutomatic";
 extern "C" __attribute__((weak, visibility("default"))) NSString * const CADynamicRangeConstrainedHigh = @"CADynamicRangeConstrainedHigh";
 extern "C" __attribute__((weak, visibility("default"))) NSString * const CADynamicRangeHigh = @"CADynamicRangeHigh";
@@ -222,6 +226,19 @@ extern "C" __attribute__((weak, visibility("default"))) NSString * const NSDevic
 extern "C" __attribute__((weak, visibility("default"))) NSString * const NSProcessInfoPerformanceProfileDidChangeNotification = @"NSProcessInfoPerformanceProfileDidChangeNotification";
 extern "C" __attribute__((weak, visibility("default"))) NSString * const NSProcessPerformanceProfileDefault = @"NSProcessPerformanceProfileDefault";
 extern "C" __attribute__((weak, visibility("default"))) NSString * const NSProcessPerformanceProfileSustained = @"NSProcessPerformanceProfileSustained";
+
+// Godot 4.7's SDL HID wrapper references APIs newer than the iOS SDL backend
+// bundled by this branch. Keep the unsupported queries as weak fallbacks so a
+// future SDL implementation can replace them without creating duplicate symbols.
+extern "C" __attribute__((weak, visibility("default"))) struct hid_device_info *PLATFORM_hid_get_device_info(struct hid_device_ *) {
+    return nullptr;
+}
+extern "C" __attribute__((weak, visibility("default"))) int PLATFORM_hid_get_input_report(struct hid_device_ *, unsigned char *, size_t) {
+    return -1;
+}
+extern "C" __attribute__((weak, visibility("default"))) int PLATFORM_hid_get_report_descriptor(struct hid_device_ *, unsigned char *, size_t) {
+    return -1;
+}
 }
 EOF
 
@@ -425,7 +442,7 @@ package_ios_unsigned_ipa() {
     fi
     echo "==> Building unsigned iOS App ($config_cap) for Sideloading..."
     mkdir -p "$export_dir/build"
-    xcodebuild build \
+    local xcodebuild_args=(
         -project "$xcodeproj" \
         -scheme Aether \
         -configuration "$config_cap" \
@@ -434,6 +451,40 @@ package_ios_unsigned_ipa() {
         CODE_SIGNING_REQUIRED=NO \
         CODE_SIGNING_ALLOWED=NO \
         CONFIGURATION_BUILD_DIR="$export_dir/build"
+    )
+    if [[ "$build_type_lower" == "release" ]]; then
+        xcodebuild_args+=(
+            DEPLOYMENT_POSTPROCESSING=YES
+            STRIP_INSTALLED_PRODUCT=YES
+            STRIP_STYLE=all
+            COPY_PHASE_STRIP=YES
+            GCC_GENERATE_DEBUGGING_SYMBOLS=NO
+            STRIP_SWIFT_SYMBOLS=YES
+            DEAD_CODE_STRIPPING=YES
+            GCC_SYMBOLS_PRIVATE_EXTERN=YES
+            UNEXPORTED_SYMBOLS_FILE="$PROJECT_ROOT/cmake/ios_unexported_symbols.txt"
+            'OTHER_LDFLAGS=$(inherited) -Wl,-dead_strip'
+        )
+    else
+        xcodebuild_args+=(
+            DEPLOYMENT_POSTPROCESSING=NO
+            STRIP_INSTALLED_PRODUCT=NO
+            COPY_PHASE_STRIP=NO
+            GCC_GENERATE_DEBUGGING_SYMBOLS=YES
+            DEBUG_INFORMATION_FORMAT=dwarf
+        )
+    fi
+    xcodebuild build "${xcodebuild_args[@]}"
+
+    local app_binary="$export_dir/build/Aether.app/Aether"
+    if [[ ! -f "$app_binary" ]]; then
+        echo "Error: iOS app executable not found: $app_binary" >&2
+        return 1
+    fi
+    if [[ "$build_type_lower" == "release" ]]; then
+        echo "==> Removing non-runtime symbols from iOS Release executable..."
+        "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" macho-executable "$app_binary"
+    fi
 
     echo "==> Packaging into unsigned .ipa..."
     mkdir -p "$export_dir/Payload"
@@ -473,6 +524,9 @@ echo "==> Building native engine and Godot extension"
 cmake_config_args=(
     -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
     -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
+    -D "AETHERKIRI_ENABLE_CODE_OBFUSCATION=${AETHERKIRI_ENABLE_CODE_OBFUSCATION:-OFF}"
+    -D "AETHERKIRI_OBFUSCATOR_PLUGIN=${AETHERKIRI_OBFUSCATOR_PLUGIN:-}"
+    -D "AETHERKIRI_OBFUSCATION_BUILD_ID=${AETHERKIRI_OBFUSCATION_BUILD_ID:-local}"
 )
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
     if [[ ! -d "$VCPKG_ROOT/installed/$VCPKG_TRIPLET_DIR" ]]; then

@@ -1,0 +1,6 @@
+{
+    global:
+        aether_kiri_library_init;
+    local:
+        *;
+};
