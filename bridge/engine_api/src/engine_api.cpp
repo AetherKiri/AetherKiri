@@ -10,6 +10,8 @@
 #include <cstring>
 #include <deque>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <new>
 #include <string>
 #include <unordered_set>
@@ -51,11 +53,13 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include <spdlog/spdlog.h>
 
 #include "environ/Application.h"
+#include "environ/combase.h"
 #include "environ/Platform.h"
 #include "environ/EngineBootstrap.h"
 #include "environ/EngineLoop.h"
 #include "environ/MainScene.h"
 #include "base/StorageIntf.h"
+#include "base/impl/StorageImpl.h"
 #include "base/ScriptMgnIntf.h"
 #include "base/SysInitIntf.h"
 #include "base/impl/SysInitImpl.h"
@@ -76,6 +80,13 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "engine_options.h"
 #include "PluginCallTracer.hpp"
 #include "PluginImpl.h"
+#include "base/impl/StorageImpl.h"
+#include "movie/ffmpeg/KRMoviePlayer.h"
+
+extern "C" {
+#include "libavcodec/avcodec.h"
+#include "libavformat/avformat.h"
+}
 
 // Mock bypass toggle (defined in tjsVariant.cpp, namespace TJS)
 namespace TJS { void TVPSetMockEnabled(bool enabled); }
@@ -187,6 +198,424 @@ struct engine_handle_s {
     std::string session_id;
     std::deque<std::string> events;
   } diagnostics;
+};
+
+class StandaloneMediaPlayer final : public KRMovie::TVPMoviePlayer {
+ public:
+  struct EmbeddedSubtitleTrack {
+    int stream_index = -1;
+    AVCodecID codec_id = AV_CODEC_ID_NONE;
+    std::string codec;
+    std::string language;
+    std::string title;
+    bool is_default = false;
+  };
+
+  StandaloneMediaPlayer() {
+    m_pPlayer->SetCallback([this](KRMovieEvent event, void*) {
+      if (event == KRMovieEvent::Ended) {
+        ended_.store(true);
+      }
+    });
+  }
+
+  ~StandaloneMediaPlayer() override {
+    if (m_pPlayer != nullptr) {
+      m_pPlayer->SetCallback({});
+    }
+    ShutdownPlayer();
+  }
+
+  void Play() override {
+    ended_.store(false);
+    KRMovie::TVPMoviePlayer::Play();
+  }
+
+  bool Open(const char* path_utf8, std::string* error) {
+    if (path_utf8 == nullptr || *path_utf8 == '\0') {
+      if (error != nullptr) *error = "media path is empty";
+      return false;
+    }
+    const ttstr path(path_utf8);
+    IStream* stream = nullptr;
+    std::error_code local_file_error;
+    const bool is_local_file =
+        std::filesystem::is_regular_file(path_utf8, local_file_error);
+    if (is_local_file) {
+      try {
+        // Standalone media paths come from the host file picker/library and
+        // are already native absolute paths. Opening them through the TVP
+        // storage normalizer can remap an iOS Documents path against the
+        // current visual-novel root and reject an otherwise readable file.
+        // Keep TVP storage handling as the fallback for archive-backed media,
+        // but bypass normalization for ordinary host files.
+        stream = TVPCreateIStream(
+            new tTVPLocalFileStream(path, path, TJS_BS_READ));
+      } catch (...) {
+        stream = nullptr;
+      }
+    }
+    if (stream == nullptr) {
+      stream = TVPCreateIStream(path, TJS_BS_READ);
+    }
+    if (stream == nullptr) {
+      if (error != nullptr) *error = "unable to open media file";
+      return false;
+    }
+    uint64_t size = 0;
+    std::error_code file_size_error;
+    const auto native_size = std::filesystem::file_size(path_utf8,
+                                                        file_size_error);
+    if (!file_size_error) {
+      size = static_cast<uint64_t>(native_size);
+    }
+    const std::string extension = [] (const std::string& value) {
+      const auto dot = value.find_last_of('.');
+      return dot == std::string::npos ? std::string() : value.substr(dot + 1);
+    }(path_utf8);
+    ended_.store(false);
+    const bool opened = m_pPlayer->OpenFromStream(
+        stream, path.c_str(), ttstr(extension.c_str()).c_str(), size);
+    stream->Release();
+    if (!opened) {
+      if (error != nullptr) *error = "FFmpeg could not open this media file";
+      return false;
+    }
+    long width = 0;
+    long height = 0;
+    GetVideoSize(&width, &height);
+    width_ = static_cast<uint32_t>(std::max<long>(0, width));
+    height_ = static_cast<uint32_t>(std::max<long>(0, height));
+    media_path_ = path_utf8;
+    ProbeEmbeddedSubtitleTracks();
+    return true;
+  }
+
+  bool UpdateFrame() {
+    if (m_pPlayer == nullptr) return false;
+    BitmapPicture picture;
+    const double clock = m_pPlayer->GetClock() / DVD_TIME_BASE;
+    {
+      std::unique_lock<std::mutex> lock(m_mtxPicture);
+      if (m_usedPicture <= 0 || m_picture[m_curPicture].pts > clock) {
+        return false;
+      }
+      do {
+        picture.MoveFrom(m_picture[m_curPicture]);
+        --m_usedPicture;
+        if (++m_curPicture >= MAX_BUFFER_COUNT) m_curPicture = 0;
+      } while (m_usedPicture > 0 && m_picture[m_curPicture].pts <= clock);
+      m_condPicture.notify_all();
+    }
+    FrameMove();
+    if (picture.rgba == nullptr || picture.width <= 0 || picture.height <= 0) {
+      return false;
+    }
+    width_ = static_cast<uint32_t>(picture.width);
+    height_ = static_cast<uint32_t>(picture.height);
+    const size_t byte_count =
+        static_cast<size_t>(width_) * static_cast<size_t>(height_) * 4u;
+    latest_rgba_.assign(picture.rgba, picture.rgba + byte_count);
+    ++frame_serial_;
+    return true;
+  }
+
+  uint32_t width() const { return width_; }
+  uint32_t height() const { return height_; }
+  uint64_t frame_serial() const { return frame_serial_; }
+  bool frame_ready() const { return !latest_rgba_.empty(); }
+  bool ended() const { return ended_.load(); }
+  const std::vector<uint8_t>& latest_rgba() const { return latest_rgba_; }
+  KRMovie::BasePlayer* player() const { return m_pPlayer; }
+
+  std::string EmbeddedSubtitleTracksJson() const {
+    std::ostringstream json;
+    json << '[';
+    for (size_t index = 0; index < embedded_subtitle_tracks_.size(); ++index) {
+      if (index != 0) json << ',';
+      const auto& track = embedded_subtitle_tracks_[index];
+      json << "{\"stream_index\":" << track.stream_index
+           << ",\"codec\":\"" << EscapeJson(track.codec)
+           << "\",\"language\":\"" << EscapeJson(track.language)
+           << "\",\"title\":\"" << EscapeJson(track.title)
+           << "\",\"default\":" << (track.is_default ? "true" : "false")
+           << '}';
+    }
+    json << ']';
+    return json.str();
+  }
+
+  bool ExtractEmbeddedSubtitle(int stream_index, const char* output_path_utf8,
+                               std::string* error) const {
+    if (output_path_utf8 == nullptr || *output_path_utf8 == '\0') {
+      if (error != nullptr) *error = "subtitle output path is empty";
+      return false;
+    }
+    const auto selected = std::find_if(
+        embedded_subtitle_tracks_.begin(), embedded_subtitle_tracks_.end(),
+        [stream_index](const EmbeddedSubtitleTrack& track) {
+          return track.stream_index == stream_index;
+        });
+    if (selected == embedded_subtitle_tracks_.end()) {
+      if (error != nullptr) *error = "embedded subtitle stream was not found";
+      return false;
+    }
+
+    AVFormatContext* format = nullptr;
+    if (avformat_open_input(&format, media_path_.c_str(), nullptr, nullptr) < 0) {
+      if (error != nullptr) *error = "FFmpeg could not reopen the media file";
+      return false;
+    }
+    const auto close_format = [&format]() {
+      if (format != nullptr) avformat_close_input(&format);
+    };
+    if (avformat_find_stream_info(format, nullptr) < 0 ||
+        stream_index < 0 ||
+        stream_index >= static_cast<int>(format->nb_streams)) {
+      close_format();
+      if (error != nullptr) *error = "FFmpeg could not read subtitle streams";
+      return false;
+    }
+
+    AVStream* stream = format->streams[stream_index];
+    if (stream == nullptr || stream->codecpar == nullptr ||
+        stream->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE ||
+        !IsTextSubtitleCodec(stream->codecpar->codec_id)) {
+      close_format();
+      if (error != nullptr) *error = "subtitle stream is not text based";
+      return false;
+    }
+
+    struct SubtitlePacketCue {
+      int64_t start_ms = 0;
+      int64_t end_ms = 0;
+      std::string payload;
+    };
+    std::vector<SubtitlePacketCue> cues;
+    AVPacket* packet = av_packet_alloc();
+    if (packet == nullptr) {
+      close_format();
+      if (error != nullptr) *error = "unable to allocate subtitle packet";
+      return false;
+    }
+    while (av_read_frame(format, packet) >= 0) {
+      if (packet->stream_index == stream_index && packet->data != nullptr &&
+          packet->size > 0) {
+        const int64_t timestamp =
+            packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
+        if (timestamp != AV_NOPTS_VALUE) {
+          SubtitlePacketCue cue;
+          cue.start_ms = std::max<int64_t>(
+              0, av_rescale_q(timestamp, stream->time_base, AVRational{1, 1000}));
+          const int64_t duration_ms =
+              packet->duration > 0
+                  ? av_rescale_q(packet->duration, stream->time_base,
+                                 AVRational{1, 1000})
+                  : 0;
+          cue.end_ms = cue.start_ms + std::max<int64_t>(0, duration_ms);
+          cue.payload.assign(reinterpret_cast<const char*>(packet->data),
+                             static_cast<size_t>(packet->size));
+          NormalizeSubtitlePayload(&cue.payload);
+          if (!cue.payload.empty()) cues.push_back(std::move(cue));
+        }
+      }
+      av_packet_unref(packet);
+    }
+    av_packet_free(&packet);
+    close_format();
+
+    std::sort(cues.begin(), cues.end(),
+              [](const SubtitlePacketCue& left,
+                 const SubtitlePacketCue& right) {
+                return left.start_ms < right.start_ms;
+              });
+    for (size_t index = 0; index < cues.size(); ++index) {
+      if (cues[index].end_ms <= cues[index].start_ms) {
+        const int64_t next_start =
+            index + 1 < cues.size() ? cues[index + 1].start_ms
+                                    : cues[index].start_ms + 5000;
+        cues[index].end_ms =
+            std::max<int64_t>(cues[index].start_ms + 100,
+                              std::min<int64_t>(next_start,
+                                                cues[index].start_ms + 5000));
+      }
+    }
+
+    std::ofstream output(output_path_utf8, std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) {
+      if (error != nullptr) *error = "unable to create subtitle sidecar";
+      return false;
+    }
+    output << "[Script Info]\n"
+              "ScriptType: v4.00+\n\n"
+              "[Events]\n"
+              "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
+              "MarginV, Effect, Text\n";
+    const bool is_ass = selected->codec_id == AV_CODEC_ID_ASS ||
+                        selected->codec_id == AV_CODEC_ID_SSA;
+    for (const auto& cue : cues) {
+      const std::string start = FormatAssTimestamp(cue.start_ms);
+      const std::string end = FormatAssTimestamp(cue.end_ms);
+      if (is_ass) {
+        output << "Dialogue: "
+               << BuildAssDialogueBody(cue.payload, start, end) << '\n';
+      } else {
+        output << "Dialogue: 0," << start << ',' << end
+               << ",Default,,0,0,0,," << cue.payload << '\n';
+      }
+    }
+    if (!output.good()) {
+      if (error != nullptr) *error = "unable to write subtitle sidecar";
+      return false;
+    }
+    return true;
+  }
+
+ private:
+  static bool IsTextSubtitleCodec(AVCodecID codec_id) {
+    switch (codec_id) {
+      case AV_CODEC_ID_ASS:
+      case AV_CODEC_ID_SSA:
+      case AV_CODEC_ID_SUBRIP:
+      case AV_CODEC_ID_WEBVTT:
+      case AV_CODEC_ID_TEXT:
+      case AV_CODEC_ID_MOV_TEXT:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  static std::string EscapeJson(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    for (const unsigned char character : value) {
+      switch (character) {
+        case '\"': escaped += "\\\""; break;
+        case '\\': escaped += "\\\\"; break;
+        case '\b': escaped += "\\b"; break;
+        case '\f': escaped += "\\f"; break;
+        case '\n': escaped += "\\n"; break;
+        case '\r': escaped += "\\r"; break;
+        case '\t': escaped += "\\t"; break;
+        default:
+          if (character < 0x20u) {
+            char buffer[7] = {};
+            std::snprintf(buffer, sizeof(buffer), "\\u%04x", character);
+            escaped += buffer;
+          } else {
+            escaped.push_back(static_cast<char>(character));
+          }
+      }
+    }
+    return escaped;
+  }
+
+  static void NormalizeSubtitlePayload(std::string* payload) {
+    if (payload == nullptr) return;
+    std::string normalized;
+    normalized.reserve(payload->size());
+    for (size_t index = 0; index < payload->size(); ++index) {
+      const char character = (*payload)[index];
+      if (character == '\0') continue;
+      if (character == '\r' || character == '\n') {
+        if (character == '\r' && index + 1 < payload->size() &&
+            (*payload)[index + 1] == '\n') {
+          ++index;
+        }
+        normalized += "\\N";
+      } else {
+        normalized.push_back(character);
+      }
+    }
+    *payload = std::move(normalized);
+  }
+
+  static std::string FormatAssTimestamp(int64_t milliseconds) {
+    milliseconds = std::max<int64_t>(0, milliseconds);
+    const int64_t total_seconds = milliseconds / 1000;
+    const int64_t centiseconds = (milliseconds % 1000) / 10;
+    const int64_t hours = total_seconds / 3600;
+    const int64_t minutes = (total_seconds % 3600) / 60;
+    const int64_t seconds = total_seconds % 60;
+    char buffer[32] = {};
+    std::snprintf(buffer, sizeof(buffer), "%lld:%02lld:%02lld.%02lld",
+                  static_cast<long long>(hours),
+                  static_cast<long long>(minutes),
+                  static_cast<long long>(seconds),
+                  static_cast<long long>(centiseconds));
+    return buffer;
+  }
+
+  static std::string BuildAssDialogueBody(const std::string& packet_payload,
+                                          const std::string& start,
+                                          const std::string& end) {
+    const size_t read_order_end = packet_payload.find(',');
+    const size_t layer_end =
+        read_order_end == std::string::npos
+            ? std::string::npos
+            : packet_payload.find(',', read_order_end + 1);
+    if (read_order_end == std::string::npos ||
+        layer_end == std::string::npos) {
+      return "0," + start + "," + end + ",Default,,0,0,0,," +
+             packet_payload;
+    }
+    const std::string layer =
+        packet_payload.substr(read_order_end + 1,
+                              layer_end - read_order_end - 1);
+    const std::string remaining = packet_payload.substr(layer_end + 1);
+    return layer + "," + start + "," + end + "," + remaining;
+  }
+
+  void ProbeEmbeddedSubtitleTracks() {
+    embedded_subtitle_tracks_.clear();
+    AVFormatContext* format = nullptr;
+    if (avformat_open_input(&format, media_path_.c_str(), nullptr, nullptr) < 0) {
+      return;
+    }
+    if (avformat_find_stream_info(format, nullptr) < 0) {
+      avformat_close_input(&format);
+      return;
+    }
+    for (unsigned int index = 0; index < format->nb_streams; ++index) {
+      AVStream* stream = format->streams[index];
+      if (stream == nullptr || stream->codecpar == nullptr ||
+          stream->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE ||
+          !IsTextSubtitleCodec(stream->codecpar->codec_id)) {
+        continue;
+      }
+      EmbeddedSubtitleTrack track;
+      track.stream_index = static_cast<int>(index);
+      track.codec_id = stream->codecpar->codec_id;
+      const char* codec_name = avcodec_get_name(track.codec_id);
+      track.codec = codec_name != nullptr ? codec_name : "text";
+      if (const AVDictionaryEntry* language =
+              av_dict_get(stream->metadata, "language", nullptr, 0)) {
+        track.language = language->value != nullptr ? language->value : "";
+      }
+      if (const AVDictionaryEntry* title =
+              av_dict_get(stream->metadata, "title", nullptr, 0)) {
+        track.title = title->value != nullptr ? title->value : "";
+      }
+      track.is_default = (stream->disposition & AV_DISPOSITION_DEFAULT) != 0;
+      embedded_subtitle_tracks_.push_back(std::move(track));
+    }
+    avformat_close_input(&format);
+  }
+
+  std::atomic_bool ended_{false};
+  uint32_t width_ = 0;
+  uint32_t height_ = 0;
+  uint64_t frame_serial_ = 0;
+  std::vector<uint8_t> latest_rgba_;
+  std::string media_path_;
+  std::vector<EmbeddedSubtitleTrack> embedded_subtitle_tracks_;
+};
+
+struct engine_media_handle_s {
+  std::recursive_mutex mutex;
+  engine_handle_t owner = nullptr;
+  std::unique_ptr<StandaloneMediaPlayer> player;
 };
 
 namespace {
@@ -2852,6 +3281,222 @@ engine_result_t engine_read_frame_rgba(engine_handle_t handle,
   return ENGINE_RESULT_OK;
 }
 
+engine_result_t engine_media_open(engine_handle_t engine,
+                                  const char* path_utf8,
+                                  engine_media_handle_t* out_media) {
+  if (path_utf8 == nullptr || *path_utf8 == '\0' || out_media == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media path and output handle are required");
+  }
+  *out_media = nullptr;
+  engine_handle_s* owner = nullptr;
+  {
+    std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+    const auto result = ValidateHandleLocked(engine, &owner);
+    if (result != ENGINE_RESULT_OK) return result;
+  }
+  auto media = std::make_unique<engine_media_handle_s>();
+  media->owner = engine;
+  media->player = std::make_unique<StandaloneMediaPlayer>();
+  std::string error;
+  if (!media->player->Open(path_utf8, &error)) {
+    SetHandleErrorLocked(owner, error.c_str());
+    return ENGINE_RESULT_IO_ERROR;
+  }
+  *out_media = media.release();
+  ClearHandleErrorLocked(owner);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_destroy(engine_media_handle_t media) {
+  if (media == nullptr) return ENGINE_RESULT_OK;
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  {
+    std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+    if (impl->player != nullptr) {
+      impl->player->Stop();
+      impl->player.reset();
+    }
+  }
+  delete impl;
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_play(engine_media_handle_t media) {
+  if (media == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media handle is null");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  impl->player->Play();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_pause(engine_media_handle_t media) {
+  if (media == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media handle is null");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  impl->player->Pause();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_seek(engine_media_handle_t media,
+                                  int64_t position_ms) {
+  if (media == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media handle is null");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  const int64_t duration = impl->player->player()->GetTotalTime();
+  impl->player->SetPosition(static_cast<uint64_t>(
+      std::clamp<int64_t>(position_ms, 0, std::max<int64_t>(0, duration))));
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_set_rate(engine_media_handle_t media,
+                                      double playback_rate) {
+  if (media == nullptr || !std::isfinite(playback_rate) ||
+      playback_rate < 0.5 || playback_rate > 2.0) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "playback rate must be between 0.5 and 2.0");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  impl->player->SetPlayRate(playback_rate);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_get_state(engine_media_handle_t media,
+                                       engine_media_state_t* out_state) {
+  if (media == nullptr || out_state == nullptr ||
+      out_state->struct_size < sizeof(engine_media_state_t)) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media state output is invalid");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  impl->player->UpdateFrame();
+  auto* player = impl->player->player();
+  std::memset(out_state, 0, sizeof(*out_state));
+  out_state->struct_size = sizeof(*out_state);
+  out_state->width = impl->player->width();
+  out_state->height = impl->player->height();
+  out_state->position_ms = player->GetTime();
+  out_state->duration_ms = player->GetTotalTime();
+  out_state->playback_rate = player->GetSpeed();
+  out_state->frame_serial = impl->player->frame_serial();
+  out_state->frame_ready = impl->player->frame_ready() ? 1u : 0u;
+  out_state->seekable = player->CanSeek() ? 1u : 0u;
+  out_state->has_audio = player->GetAudioStreamCount() > 0 ? 1u : 0u;
+  out_state->has_video = player->GetVideoStreamCount() > 0 ? 1u : 0u;
+  if (impl->player->ended()) {
+    out_state->status = ENGINE_MEDIA_STATUS_ENDED;
+  } else if (player->GetSpeed() == 0.0) {
+    out_state->status = ENGINE_MEDIA_STATUS_PAUSED;
+  } else {
+    out_state->status = ENGINE_MEDIA_STATUS_PLAYING;
+  }
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_get_subtitle_tracks_json(
+    engine_media_handle_t media, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written) {
+  if (media == nullptr || out_buffer == nullptr || buffer_size == 0 ||
+      out_bytes_written == nullptr) {
+    return SetThreadErrorAndReturn(
+        ENGINE_RESULT_INVALID_ARGUMENT,
+        "media subtitle track output buffer is invalid");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  const std::string payload = impl->player->EmbeddedSubtitleTracksJson();
+  if (payload.size() + 1u > buffer_size) {
+    *out_bytes_written = 0;
+    out_buffer[0] = '\0';
+    SetHandleErrorLocked(impl->owner,
+                         "media subtitle track output buffer is too small");
+    return ENGINE_RESULT_INVALID_ARGUMENT;
+  }
+  std::memcpy(out_buffer, payload.data(), payload.size());
+  out_buffer[payload.size()] = '\0';
+  *out_bytes_written = static_cast<uint32_t>(payload.size());
+  ClearHandleErrorLocked(impl->owner);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_extract_subtitle(
+    engine_media_handle_t media, int32_t stream_index,
+    const char* output_path_utf8) {
+  if (media == nullptr || stream_index < 0 || output_path_utf8 == nullptr ||
+      *output_path_utf8 == '\0') {
+    return SetThreadErrorAndReturn(
+        ENGINE_RESULT_INVALID_ARGUMENT,
+        "media subtitle stream and output path are required");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr) return ENGINE_RESULT_INVALID_STATE;
+  std::string error;
+  if (!impl->player->ExtractEmbeddedSubtitle(stream_index, output_path_utf8,
+                                             &error)) {
+    SetHandleErrorLocked(impl->owner, error.c_str());
+    return ENGINE_RESULT_IO_ERROR;
+  }
+  ClearHandleErrorLocked(impl->owner);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_read_frame_rgba(
+    engine_media_handle_t media, void* out_pixels, size_t out_pixels_size,
+    engine_frame_desc_t* out_frame_desc) {
+  if (media == nullptr || out_pixels == nullptr || out_frame_desc == nullptr ||
+      out_frame_desc->struct_size < sizeof(engine_frame_desc_t)) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media frame output is invalid");
+  }
+  auto* impl = reinterpret_cast<engine_media_handle_s*>(media);
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->player == nullptr || !impl->player->frame_ready()) {
+    return ENGINE_RESULT_INVALID_STATE;
+  }
+  const auto& rgba = impl->player->latest_rgba();
+  if (out_pixels_size < rgba.size()) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "media frame buffer is too small");
+  }
+  std::memcpy(out_pixels, rgba.data(), rgba.size());
+  std::memset(out_frame_desc, 0, sizeof(*out_frame_desc));
+  out_frame_desc->struct_size = sizeof(*out_frame_desc);
+  out_frame_desc->width = impl->player->width();
+  out_frame_desc->height = impl->player->height();
+  out_frame_desc->stride_bytes = impl->player->width() * 4u;
+  out_frame_desc->pixel_format = ENGINE_PIXEL_FORMAT_RGBA8888;
+  out_frame_desc->frame_serial = impl->player->frame_serial();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
 engine_result_t engine_get_godot_native_frame_texture(
     engine_handle_t handle, uint64_t* out_texture_id, uint32_t* out_width,
     uint32_t* out_height, uint64_t* out_frame_serial) {
@@ -4190,6 +4835,94 @@ engine_result_t engine_read_frame_rgba(engine_handle_t handle,
   impl->last_error.clear();
   SetThreadError(nullptr);
   return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_open(engine_handle_t engine,
+                                  const char* path_utf8,
+                                  engine_media_handle_t* out_media) {
+  (void)engine;
+  (void)path_utf8;
+  if (out_media != nullptr) *out_media = nullptr;
+  return SetThreadErrorAndReturn(
+      ENGINE_RESULT_NOT_SUPPORTED,
+      "standalone media playback is not supported in stub builds");
+}
+
+engine_result_t engine_media_destroy(engine_media_handle_t media) {
+  (void)media;
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_play(engine_media_handle_t media) {
+  (void)media;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
+engine_result_t engine_media_pause(engine_media_handle_t media) {
+  (void)media;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
+engine_result_t engine_media_seek(engine_media_handle_t media,
+                                  int64_t position_ms) {
+  (void)media;
+  (void)position_ms;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
+engine_result_t engine_media_set_rate(engine_media_handle_t media,
+                                      double playback_rate) {
+  (void)media;
+  (void)playback_rate;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
+engine_result_t engine_media_get_state(engine_media_handle_t media,
+                                       engine_media_state_t* out_state) {
+  (void)media;
+  if (out_state != nullptr &&
+      out_state->struct_size >= sizeof(engine_media_state_t)) {
+    std::memset(out_state, 0, sizeof(*out_state));
+    out_state->struct_size = sizeof(*out_state);
+    out_state->status = ENGINE_MEDIA_STATUS_ERROR;
+  }
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
+}
+
+engine_result_t engine_media_get_subtitle_tracks_json(
+    engine_media_handle_t media, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written) {
+  (void)media;
+  if (out_buffer != nullptr && buffer_size > 0) out_buffer[0] = '\0';
+  if (out_bytes_written != nullptr) *out_bytes_written = 0;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media subtitles are unavailable");
+}
+
+engine_result_t engine_media_extract_subtitle(
+    engine_media_handle_t media, int32_t stream_index,
+    const char* output_path_utf8) {
+  (void)media;
+  (void)stream_index;
+  (void)output_path_utf8;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media subtitles are unavailable");
+}
+
+engine_result_t engine_media_read_frame_rgba(
+    engine_media_handle_t media, void* out_pixels, size_t out_pixels_size,
+    engine_frame_desc_t* out_frame_desc) {
+  (void)media;
+  (void)out_pixels;
+  (void)out_pixels_size;
+  (void)out_frame_desc;
+  return SetThreadErrorAndReturn(ENGINE_RESULT_NOT_SUPPORTED,
+                                 "media playback is unavailable");
 }
 
 engine_result_t engine_get_host_native_window(engine_handle_t handle,

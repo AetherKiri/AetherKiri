@@ -9,6 +9,7 @@
 #endif
 
 #include "AEStreamData.h"
+#include <cmath>
 #include <thread>
 
 NS_KRMOVIE_BEGIN
@@ -18,6 +19,7 @@ CDVDAudio::CDVDAudio(CDVDClock *clock) : m_pClock(clock) {
     m_iBitsPerSample = 0;
     m_sampeRate = 0;
     m_bPaused = true;
+    m_playbackRate = 1.0;
     m_playingPts = DVD_NOPTS_VALUE; // silence coverity uninitialized
                                     // warning, is set elsewhere
     m_timeOfPts = 0.0; // silence coverity uninitialized warning, is
@@ -52,6 +54,7 @@ bool CDVDAudio::Create(const DVDAudioFrame &audioframe, AVCodecID codec,
     m_pAudioStream = CAEFactory::MakeStream(format, options, this);
     if(!m_pAudioStream)
         return false;
+    m_pAudioStream->SetPlaybackRate(m_playbackRate);
 
     m_sampeRate = audioframe.format.m_sampleRate;
     m_iBitsPerSample = audioframe.bits_per_sample;
@@ -191,7 +194,7 @@ double CDVDAudio::GetDelay() {
     if(m_pAudioStream)
         delay = m_pAudioStream->GetDelay();
 
-    return delay * DVD_TIME_BASE;
+    return delay * DVD_TIME_BASE * m_playbackRate;
 }
 
 void CDVDAudio::Flush() {
@@ -250,11 +253,11 @@ double CDVDAudio::GetPlayingPts() {
 
     double now = m_pClock->GetAbsoluteClock();
     double diff = now - m_timeOfPts;
-    double cache = GetCacheTime();
+    double cache = DVD_SEC_TO_TIME(GetCacheTime()) * m_playbackRate;
     double played = 0.0;
 
     if(diff < cache)
-        played = diff;
+        played = diff * m_playbackRate;
     else
         played = cache;
 
@@ -276,6 +279,15 @@ void CDVDAudio::SetResampleMode(int mode) {
     if(m_pAudioStream) {
         m_pAudioStream->SetResampleMode(mode);
     }
+}
+
+void CDVDAudio::SetPlaybackRate(double rate) {
+    if(!std::isfinite(rate) || rate < 0.5 || rate > 2.0)
+        return;
+    std::lock_guard<std::recursive_mutex> lock(m_critSection);
+    m_playbackRate = rate;
+    if(m_pAudioStream)
+        m_pAudioStream->SetPlaybackRate(rate);
 }
 
 double CDVDAudio::GetClock() {

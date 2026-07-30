@@ -5,10 +5,10 @@
 #include "AEFactory.h"
 
 NS_KRMOVIE_BEGIN
-// allow audio for slow and fast speeds (but not rewind/fastforward)
+// Standalone media playback exposes pitch-preserving 0.5x-2.0x tempo.
 #define ALLOW_AUDIO(speed)                                                     \
-    ((speed) > 5 * DVD_PLAYSPEED_NORMAL / 10 &&                                \
-     (speed) <= 15 * DVD_PLAYSPEED_NORMAL / 10)
+    ((speed) >= 5 * DVD_PLAYSPEED_NORMAL / 10 &&                               \
+     (speed) <= 2 * DVD_PLAYSPEED_NORMAL)
 
 class CDVDMsgAudioCodecChange : public CDVDMsg {
 public:
@@ -292,6 +292,9 @@ void CVideoPlayerAudio::Process() {
         } else if(pMsg->IsType(CDVDMsg::PLAYER_SETSPEED)) {
             double speed = static_cast<CDVDMsgInt *>(pMsg)->m_value;
 
+            if(speed > DVD_PLAYSPEED_PAUSE)
+                m_dvdAudio.SetPlaybackRate(
+                    speed / DVD_PLAYSPEED_NORMAL);
             if(ALLOW_AUDIO(speed)) {
                 if(speed != m_speed) {
                     if(m_syncState == IDVDStreamPlayer::SYNC_INSYNC)
@@ -452,7 +455,7 @@ void CVideoPlayerAudio::Process() {
                             msg.cachetotal = cachetotal;
                             msg.cachetime = cachetime;
                             msg.timestamp = audioframe.hasTimestamp
-                                ? audioframe.pts
+                                ? audioframe.pts + audioframe.duration
                                 : DVD_NOPTS_VALUE;
                             m_messageParent.Put(new CDVDMsgType<SStartMsg>(
                                 CDVDMsg::PLAYER_STARTED, msg));

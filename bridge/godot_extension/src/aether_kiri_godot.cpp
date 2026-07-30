@@ -5026,6 +5026,7 @@ public:
     }
 
     void destroy_engine() {
+        media_close();
         if (handle_ == nullptr) {
             return;
         }
@@ -5146,6 +5147,165 @@ public:
         const engine_result_t result = engine_resume(handle_);
         update_last_error(result);
         return result;
+    }
+
+    bool media_open(const String &path) {
+        media_close();
+        if (handle_ == nullptr) {
+            last_result_ = "INVALID_STATE";
+            last_error_ = "engine is not initialized";
+            return false;
+        }
+        const CharString path_utf8 = path.utf8();
+        const engine_result_t result =
+            engine_media_open(handle_, path_utf8.get_data(), &media_);
+        update_last_error(result);
+        return result == ENGINE_RESULT_OK;
+    }
+
+    void media_close() {
+        if (media_ != nullptr) {
+            engine_media_destroy(media_);
+            media_ = nullptr;
+        }
+        media_texture_.unref();
+        media_frame_serial_ = UINT64_MAX;
+        media_width_ = 0;
+        media_height_ = 0;
+    }
+
+    int media_play() {
+        if (media_ == nullptr) return ENGINE_RESULT_INVALID_STATE;
+        const engine_result_t result = engine_media_play(media_);
+        update_last_error(result);
+        return result;
+    }
+
+    int media_pause() {
+        if (media_ == nullptr) return ENGINE_RESULT_INVALID_STATE;
+        const engine_result_t result = engine_media_pause(media_);
+        update_last_error(result);
+        return result;
+    }
+
+    int media_seek(double position_seconds) {
+        if (media_ == nullptr || !std::isfinite(position_seconds)) {
+            return ENGINE_RESULT_INVALID_ARGUMENT;
+        }
+        const auto position_ms = static_cast<int64_t>(
+            std::max(0.0, position_seconds) * 1000.0);
+        const engine_result_t result = engine_media_seek(media_, position_ms);
+        update_last_error(result);
+        return result;
+    }
+
+    int media_set_rate(double playback_rate) {
+        if (media_ == nullptr) return ENGINE_RESULT_INVALID_STATE;
+        const engine_result_t result =
+            engine_media_set_rate(media_, playback_rate);
+        update_last_error(result);
+        return result;
+    }
+
+    String media_get_subtitle_tracks_json() {
+        if (media_ == nullptr) return "[]";
+        std::vector<char> buffer(64 * 1024);
+        uint32_t bytes_written = 0;
+        const engine_result_t result =
+            engine_media_get_subtitle_tracks_json(
+                media_, buffer.data(),
+                static_cast<uint32_t>(buffer.size()), &bytes_written);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK || bytes_written == 0) {
+            return "[]";
+        }
+        return String::utf8(buffer.data(), bytes_written);
+    }
+
+    bool media_extract_subtitle(int stream_index,
+                                const String &output_path) {
+        if (media_ == nullptr || stream_index < 0 ||
+            output_path.is_empty()) {
+            return false;
+        }
+        const CharString output_utf8 = output_path.utf8();
+        const engine_result_t result = engine_media_extract_subtitle(
+            media_, stream_index, output_utf8.get_data());
+        update_last_error(result);
+        return result == ENGINE_RESULT_OK;
+    }
+
+    Dictionary media_get_state() {
+        Dictionary output;
+        output["status"] = static_cast<int64_t>(ENGINE_MEDIA_STATUS_IDLE);
+        output["position"] = 0.0;
+        output["duration"] = 0.0;
+        output["rate"] = 1.0;
+        output["width"] = 0;
+        output["height"] = 0;
+        output["frame_serial"] = 0;
+        output["frame_ready"] = false;
+        output["seekable"] = false;
+        output["has_audio"] = false;
+        output["has_video"] = false;
+        if (media_ == nullptr) return output;
+
+        engine_media_state_t state{};
+        state.struct_size = sizeof(state);
+        const engine_result_t result = engine_media_get_state(media_, &state);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK) return output;
+        media_width_ = state.width;
+        media_height_ = state.height;
+        output["status"] = static_cast<int64_t>(state.status);
+        output["position"] = static_cast<double>(state.position_ms) / 1000.0;
+        output["duration"] = static_cast<double>(state.duration_ms) / 1000.0;
+        output["rate"] = state.playback_rate;
+        output["width"] = static_cast<int64_t>(state.width);
+        output["height"] = static_cast<int64_t>(state.height);
+        output["frame_serial"] = static_cast<int64_t>(state.frame_serial);
+        output["frame_ready"] = state.frame_ready != 0;
+        output["seekable"] = state.seekable != 0;
+        output["has_audio"] = state.has_audio != 0;
+        output["has_video"] = state.has_video != 0;
+        return output;
+    }
+
+    Ref<Texture2D> media_update_texture() {
+        if (media_ == nullptr || media_width_ == 0 || media_height_ == 0) {
+            return media_texture_;
+        }
+        const size_t byte_count = static_cast<size_t>(media_width_) *
+                                  static_cast<size_t>(media_height_) * 4u;
+        PackedByteArray rgba;
+        rgba.resize(static_cast<int64_t>(byte_count));
+        engine_frame_desc_t desc{};
+        desc.struct_size = sizeof(desc);
+        const engine_result_t result = engine_media_read_frame_rgba(
+            media_, rgba.ptrw(), byte_count, &desc);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK || desc.width == 0 ||
+            desc.height == 0) {
+            return media_texture_;
+        }
+        if (media_texture_.is_valid() &&
+            media_frame_serial_ == desc.frame_serial) {
+            return media_texture_;
+        }
+        Ref<Image> image = Image::create_from_data(
+            static_cast<int32_t>(desc.width),
+            static_cast<int32_t>(desc.height), false, Image::FORMAT_RGBA8,
+            rgba);
+        if (image.is_null()) return media_texture_;
+        if (media_texture_.is_null() ||
+            media_texture_->get_width() != static_cast<int32_t>(desc.width) ||
+            media_texture_->get_height() != static_cast<int32_t>(desc.height)) {
+            media_texture_ = ImageTexture::create_from_image(image);
+        } else {
+            media_texture_->update(image);
+        }
+        media_frame_serial_ = desc.frame_serial;
+        return media_texture_;
     }
 
     int send_pointer_event(int type, int pointer_id, double x, double y,
@@ -5738,6 +5898,27 @@ protected:
                              &AetherKiriPlayer::tick);
         ClassDB::bind_method(D_METHOD("pause"), &AetherKiriPlayer::pause);
         ClassDB::bind_method(D_METHOD("resume"), &AetherKiriPlayer::resume);
+        ClassDB::bind_method(D_METHOD("media_open", "path"),
+                             &AetherKiriPlayer::media_open);
+        ClassDB::bind_method(D_METHOD("media_close"),
+                             &AetherKiriPlayer::media_close);
+        ClassDB::bind_method(D_METHOD("media_play"),
+                             &AetherKiriPlayer::media_play);
+        ClassDB::bind_method(D_METHOD("media_pause"),
+                             &AetherKiriPlayer::media_pause);
+        ClassDB::bind_method(D_METHOD("media_seek", "position_seconds"),
+                             &AetherKiriPlayer::media_seek);
+        ClassDB::bind_method(D_METHOD("media_set_rate", "playback_rate"),
+                             &AetherKiriPlayer::media_set_rate);
+        ClassDB::bind_method(D_METHOD("media_get_subtitle_tracks_json"),
+                             &AetherKiriPlayer::media_get_subtitle_tracks_json);
+        ClassDB::bind_method(D_METHOD("media_extract_subtitle", "stream_index",
+                                      "output_path"),
+                             &AetherKiriPlayer::media_extract_subtitle);
+        ClassDB::bind_method(D_METHOD("media_get_state"),
+                             &AetherKiriPlayer::media_get_state);
+        ClassDB::bind_method(D_METHOD("media_update_texture"),
+                             &AetherKiriPlayer::media_update_texture);
         ClassDB::bind_method(D_METHOD("send_pointer_event", "type", "pointer_id",
                                       "x", "y", "delta_x", "delta_y", "button",
                                       "modifiers"),
@@ -6054,6 +6235,7 @@ private:
     }
 
     engine_handle_t handle_ = nullptr;
+    engine_media_handle_t media_ = nullptr;
     bool game_open_ = false;
     String backend_ = "Godot Native";
     String last_result_;
@@ -6076,6 +6258,10 @@ private:
     size_t frame_present_current_slot_ = 0;
     uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
+    Ref<ImageTexture> media_texture_;
+    uint64_t media_frame_serial_ = UINT64_MAX;
+    uint32_t media_width_ = 0;
+    uint32_t media_height_ = 0;
 };
 
 void InitializeAetherKiri(ModuleInitializationLevel level) {

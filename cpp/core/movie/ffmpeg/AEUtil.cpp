@@ -641,6 +641,15 @@ uint64_t CAEUtil::GetAVChannel(enum AEChannel aechannel) {
 }
 
 int CAEUtil::GetAVChannelIndex(enum AEChannel aechannel, uint64_t layout) {
-    return av_get_channel_layout_channel_index(layout, GetAVChannel(aechannel));
+    const uint64_t channel = GetAVChannel(aechannel);
+    if(channel == 0 || (channel & (channel - 1)) != 0 ||
+       (layout & channel) == 0)
+        return -1;
+
+    int index = 0;
+    for(uint64_t lowerChannels = layout & (channel - 1); lowerChannels;
+        lowerChannels &= lowerChannels - 1)
+        ++index;
+    return index;
 }
 NS_KRMOVIE_END

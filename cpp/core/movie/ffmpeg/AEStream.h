@@ -134,6 +134,12 @@ public:
     virtual void Flush() = 0;
 
     /**
+     * Changes the PCM playback tempo while preserving pitch.
+     * Implementations that do not support tempo conversion may ignore it.
+     */
+    virtual void SetPlaybackRate(double rate) {}
+
+    /**
      * Return the stream's current volume level
      * @return The volume level between 0.0 and 1.0
      */

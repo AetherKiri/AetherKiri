@@ -11,7 +11,7 @@ const MAX_FILE_BYTES := 4 * 1024 * 1024
 const FLUSH_INTERVAL := 1.0
 const NATIVE_DRAIN_INTERVAL := 0.5
 const LEGACY_REQUEST_FILE := "user://diagnostic-request.json"
-const MOBILE_DIAGNOSTIC_SUBDIR := "AetherKiri/Diagnostics"
+const MOBILE_DIAGNOSTIC_SUBDIR := "Aether/Diagnostics"
 const ANDROID_DOCUMENTS_DIR := "/storage/emulated/0/Documents"
 const PROFILE_CATALOG_FILE := "res://config/diagnostic_profiles.json"
 const MARKER_FEEDBACK_MSEC := 1800
@@ -538,7 +538,7 @@ func summary_text(extra: Dictionary = {}) -> String:
     var status := status_snapshot()
     var frame: Dictionary = status.get("frame_summary", {})
     var lines := PackedStringArray([
-        "AetherKiri diagnostic summary",
+        "Aether diagnostic summary",
         "session: %s" % String(status.get("session", "")),
         "platform: %s" % OS.get_name(),
         "profile: %s" % String(status.get("profile", "off")),

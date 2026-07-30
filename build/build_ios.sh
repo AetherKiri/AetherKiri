@@ -311,7 +311,7 @@ stage_force_load_plugin_archives() {
 verify_exported_simulator_template_arch() {
     local export_root="$1"
     local arch="$2"
-    local libgodot="$export_root/AetherKiri.xcframework/ios-arm64_x86_64-simulator/libgodot.a"
+    local libgodot="$export_root/Aether.xcframework/ios-arm64_x86_64-simulator/libgodot.a"
     local info
 
     if [[ ! -f "$libgodot" ]]; then
@@ -331,7 +331,7 @@ verify_exported_simulator_template_arch() {
 
 stage_ios_runtime_fonts() {
     local export_root="$1"
-    local app_source_dir="$export_root/AetherKiri"
+    local app_source_dir="$export_root/Aether"
     local font_dir="$app_source_dir/fonts"
 
     mkdir -p "$font_dir"
@@ -359,7 +359,7 @@ patch_ios_runtime_font_resources() {
 
     perl -0pi -e 's@(/\* Begin PBXBuildFile section \*/\n)@$1\t\tA3F001000000000000000001 /* default.otf in Resources */ = {isa = PBXBuildFile; fileRef = A3F001000000000000000002 /* default.otf */; };\n\t\tA3F001000000000000000003 /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = A3F001000000000000000004 /* fonts */; };\n@' "$project_file"
     perl -0pi -e 's@(/\* Begin PBXFileReference section \*/\n)@$1\t\tA3F001000000000000000002 /* default.otf */ = {isa = PBXFileReference; lastKnownFileType = file; path = default.otf; sourceTree = "<group>"; };\n\t\tA3F001000000000000000004 /* fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = fonts; sourceTree = "<group>"; };\n@' "$project_file"
-    perl -0pi -e 's@(\t\tD0BCFE4118AEBDA2004A7AAE /\* AetherKiri \*/ = \{\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = \(\n)@$1\t\t\t\tA3F001000000000000000002 /* default.otf */,\n\t\t\t\tA3F001000000000000000004 /* fonts */,\n@' "$project_file"
+    perl -0pi -e 's@(\t\tD0BCFE4118AEBDA2004A7AAE /\* Aether \*/ = \{\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = \(\n)@$1\t\t\t\tA3F001000000000000000002 /* default.otf */,\n\t\t\t\tA3F001000000000000000004 /* fonts */,\n@' "$project_file"
     perl -0pi -e 's@(\t\tD0BCFE3218AEBDA2004A7AAE /\* Resources \*/ = \{\n\t\t\tisa = PBXResourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = \(\n)@$1\t\t\t\tA3F001000000000000000001 /* default.otf in Resources */,\n\t\t\t\tA3F001000000000000000003 /* fonts in Resources */,\n@' "$project_file"
 }
 
@@ -367,16 +367,16 @@ patch_ios_export_project() {
     local project_file="$1/project.pbxproj"
     local export_root
     export_root="$(dirname "$1")"
-    local dummy_cpp="$export_root/AetherKiri/dummy.cpp"
-    local info_plist="$export_root/AetherKiri/AetherKiri-Info.plist"
+    local dummy_cpp="$export_root/Aether/dummy.cpp"
+    local info_plist="$export_root/Aether/Aether-Info.plist"
     local arch="$2"
     local export_build_type="$3"
     local flags
     flags='$(LD_CLASSIC_$(XCODE_VERSION_ACTUAL)) -Wl,-U,_aether_kiri_library_init'
-    flags+=" -Wl,-force_load,AetherKiri/bin/ios/$export_build_type/$IOS_SDK_COMPAT_ARCHIVE"
+    flags+=" -Wl,-force_load,Aether/bin/ios/$export_build_type/$IOS_SDK_COMPAT_ARCHIVE"
     local archive
     for archive in "${FORCE_LOAD_PLUGIN_ARCHIVES[@]}"; do
-        flags+=" -Wl,-force_load,AetherKiri/bin/ios/$export_build_type/$archive"
+        flags+=" -Wl,-force_load,Aether/bin/ios/$export_build_type/$archive"
     done
     flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework Security -framework SystemConfiguration -framework MobileCoreServices'
 
@@ -414,7 +414,7 @@ package_ios_unsigned_ipa() {
     if [[ "$build_type_lower" == "debug" ]]; then
         config_cap="Debug"
     fi
-    local xcodeproj="$export_dir/AetherKiri.xcodeproj"
+    local xcodeproj="$export_dir/Aether.xcodeproj"
     if [[ ! -d "$xcodeproj" ]]; then
         echo "Error: Xcode project not found at $xcodeproj" >&2
         return 1
@@ -427,7 +427,7 @@ package_ios_unsigned_ipa() {
     mkdir -p "$export_dir/build"
     local xcodebuild_args=(
         -project "$xcodeproj" \
-        -scheme AetherKiri \
+        -scheme Aether \
         -configuration "$config_cap" \
         -sdk iphoneos \
         CODE_SIGN_IDENTITY="" \
@@ -463,11 +463,11 @@ package_ios_unsigned_ipa() {
 
     echo "==> Packaging into unsigned .ipa..."
     mkdir -p "$export_dir/Payload"
-    rm -rf "$export_dir/Payload/AetherKiri.app" "$export_dir/AetherKiri-${config_cap}-Unsigned.ipa"
-    cp -R "$export_dir/build/AetherKiri.app" "$export_dir/Payload/"
-    (cd "$export_dir" && zip -qry "AetherKiri-${config_cap}-Unsigned.ipa" Payload)
+    rm -rf "$export_dir/Payload/Aether.app" "$export_dir/Aether-${config_cap}-Unsigned.ipa"
+    cp -R "$export_dir/build/Aether.app" "$export_dir/Payload/"
+    (cd "$export_dir" && zip -qry "Aether-${config_cap}-Unsigned.ipa" Payload)
     rm -rf "$export_dir/Payload" "$export_dir/build"
-    echo "Unsigned IPA created: $export_dir/AetherKiri-${config_cap}-Unsigned.ipa"
+    echo "Unsigned IPA created: $export_dir/Aether-${config_cap}-Unsigned.ipa"
 }
 
 with_ios_only_gdextension() {
@@ -492,7 +492,7 @@ with_ios_only_gdextension() {
     ' "$backup_file" | grep -v '^macos\.' > "$gdextension_file"
 
     "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
-        "$EXPORT_MODE" "$EXPORT_PRESET" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj"
+        "$EXPORT_MODE" "$EXPORT_PRESET" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/Aether.xcodeproj"
 }
 
 echo "==> Building native engine and Godot extension"
@@ -554,13 +554,13 @@ else
     if [[ "$SIMULATOR" == true ]]; then
         verify_exported_simulator_template_arch "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER" "$SIMULATOR_ARCH"
     fi
-    stage_force_load_plugin_archives "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri/bin/ios/$BUILD_TYPE_LOWER"
-    cp -f "$GODOT_BIN_DIR/$IOS_SDK_COMPAT_ARCHIVE" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri/bin/ios/$BUILD_TYPE_LOWER/" 2>/dev/null || true
+    stage_force_load_plugin_archives "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/Aether/bin/ios/$BUILD_TYPE_LOWER"
+    cp -f "$GODOT_BIN_DIR/$IOS_SDK_COMPAT_ARCHIVE" "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/Aether/bin/ios/$BUILD_TYPE_LOWER/" 2>/dev/null || true
     PATCH_ARCH="arm64"
     if [[ "$SIMULATOR" == true ]]; then
         PATCH_ARCH="$SIMULATOR_ARCH"
     fi
-    patch_ios_export_project "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/AetherKiri.xcodeproj" "$PATCH_ARCH" "$BUILD_TYPE_LOWER"
+    patch_ios_export_project "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER/Aether.xcodeproj" "$PATCH_ARCH" "$BUILD_TYPE_LOWER"
     if [[ "$PACKAGE_IPA" == true && "$SIMULATOR" == false ]]; then
         package_ios_unsigned_ipa "$PROJECT_ROOT/out/godot/ios/$BUILD_TYPE_LOWER" "$BUILD_TYPE_LOWER"
     elif [[ "$PACKAGE_IPA" == true && "$SIMULATOR" == true ]]; then

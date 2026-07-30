@@ -31,7 +31,6 @@ static const struct StereoModeConversionMap WmvToInternalStereoModeMap[] = {
     {}
 };
 
-#define FF_MAX_EXTRADATA_SIZE ((1 << 28) - FF_INPUT_BUFFER_PADDING_SIZE)
 #define FFMPEG_FILE_BUFFER_SIZE 32768 // default reading size for ffmpeg
 
 std::string CDemuxStreamAudioFFmpeg::GetStreamName() {
@@ -115,7 +114,7 @@ bool CDVDDemuxFFmpeg::Aborted() {
 
 bool CDVDDemuxFFmpeg::Open(InputStream *pInput, bool streaminfo,
                            bool fileinfo) {
-    AVInputFormat *iformat = nullptr;
+    const AVInputFormat *iformat = nullptr;
     m_streaminfo = streaminfo;
     m_currentPts = DVD_NOPTS_VALUE;
     m_speed = DVD_PLAYSPEED_NORMAL;
@@ -132,6 +131,10 @@ bool CDVDDemuxFFmpeg::Open(InputStream *pInput, bool streaminfo,
 
     // open the demuxer
     m_pFormatContext = avformat_alloc_context();
+    if(!m_pFormatContext) {
+        Dispose();
+        return false;
+    }
     m_pFormatContext->interrupt_callback = int_cb;
 
     // try to abort after 30 seconds
@@ -170,9 +173,18 @@ bool CDVDDemuxFFmpeg::Open(InputStream *pInput, bool streaminfo,
 #endif
     {
         auto *buffer = (unsigned char *)av_malloc(FFMPEG_FILE_BUFFER_SIZE);
+        if(!buffer) {
+            Dispose();
+            return false;
+        }
         m_ioContext =
             avio_alloc_context(buffer, FFMPEG_FILE_BUFFER_SIZE, 0, this,
                                dvd_file_read, nullptr, dvd_file_seek);
+        if(!m_ioContext) {
+            av_free(buffer);
+            Dispose();
+            return false;
+        }
         // 		m_ioContext->max_packet_size =
         // m_pInput->GetBlockSize(); 		if (m_ioContext->max_packet_size)
         // 			m_ioContext->max_packet_size *=
@@ -194,13 +206,14 @@ bool CDVDDemuxFFmpeg::Open(InputStream *pInput, bool streaminfo,
             // contain DTS or IEC 61937 (e.g. ac3-in-wav) and we want
             // to check for those formats.
             if((iformat && strcmp(iformat->name, "wav") == 0)) {
-                AVProbeData pd;
+                AVProbeData pd{};
                 uint8_t probe_buffer[FFMPEG_FILE_BUFFER_SIZE +
                                      AVPROBE_PADDING_SIZE];
 
                 // init probe data
                 pd.buf = probe_buffer;
                 pd.filename = strFile.c_str();
+                pd.mime_type = nullptr;
 
                 // av_probe_input_buffer might have changed the
                 // buffer_size beyond our allocated amount
@@ -232,35 +245,13 @@ bool CDVDDemuxFFmpeg::Open(InputStream *pInput, bool streaminfo,
                     // present, we assume it is PCM audio. AC3 is
                     // always wrapped in iec61937 (ffmpeg "spdif"),
                     // while DTS may be just padded.
-                    AVInputFormat *iformat2;
-                    iformat2 = av_find_input_format("spdif");
-
-                    if(iformat2 &&
-                       iformat2->read_probe(&pd) > AVPROBE_SCORE_MAX / 4) {
-                        iformat = iformat2;
-                    } else {
-                        // not spdif or no spdif demuxer, try dts
-                        iformat2 = av_find_input_format("dts");
-
-                        if(iformat2 &&
-                           iformat2->read_probe(&pd) > AVPROBE_SCORE_MAX / 4) {
-                            iformat = iformat2;
-                            // 						} else
-                            // if (trySPDIFonly)
-                            // 						{
-                            // 							//
-                            // not dts either, return false in case we
-                            // were explicitely
-                            // 							//
-                            // requested to only check for S/PDIF
-                            // padded compressed audio
-                            // CLog::Log(LOGDEBUG,
-                            // "%s - not spdif or dts file,
-                            // fallbacking",
-                            // __FUNCTION__);
-                            // return false;
-                        }
-                    }
+                    int probeScore = AVPROBE_SCORE_MAX / 4;
+                    const AVInputFormat *compressedFormat =
+                        av_probe_input_format2(&pd, 1, &probeScore);
+                    if(compressedFormat && probeScore > AVPROBE_SCORE_MAX / 4 &&
+                       (strcmp(compressedFormat->name, "spdif") == 0 ||
+                        strcmp(compressedFormat->name, "dts") == 0))
+                        iformat = compressedFormat;
                 }
             }
 
@@ -346,15 +337,6 @@ bool CDVDDemuxFFmpeg::Open(InputStream *pInput, bool streaminfo,
     m_bAVI = strcmp(m_pFormatContext->iformat->name, "avi") == 0;
 
     if(m_streaminfo) {
-        for(unsigned int i = 0; i < m_pFormatContext->nb_streams; i++) {
-            AVStream *st = m_pFormatContext->streams[i];
-            if(st->codec->codec_type == AVMEDIA_TYPE_AUDIO &&
-               st->codec->codec_id == AV_CODEC_ID_DTS) {
-                AVCodec *pCodec = avcodec_find_decoder_by_name("dcadec");
-                if(pCodec)
-                    st->codec->codec = pCodec;
-            }
-        }
         /* to speed up dvd switches, only analyse very short */
         // 		if (m_pInput->IsStreamType(DVDSTREAM_TYPE_DVD))
         // 			av_opt_set_int(m_pFormatContext,
@@ -374,7 +356,7 @@ bool CDVDDemuxFFmpeg::Open(InputStream *pInput, bool streaminfo,
                 // m_pInput->IsStreamType(DVDSTREAM_TYPE_BLURAY)
                 // ||
                 (m_pFormatContext->nb_streams == 1 &&
-                 m_pFormatContext->streams[0]->codec->codec_id ==
+                 m_pFormatContext->streams[0]->codecpar->codec_id ==
                      AV_CODEC_ID_AC3) ||
                 m_checkvideo) {
                 // special case, our codecs can still handle it.
@@ -450,12 +432,9 @@ bool CDVDDemuxFFmpeg::Open(InputStream *pInput, bool streaminfo,
 void CDVDDemuxFFmpeg::Dispose() {
     m_pkt.result = -1;
     av_packet_unref(&m_pkt.pkt);
+    m_parsers.clear();
 
     if(m_pFormatContext) {
-        for(unsigned int i = 0; i < m_pFormatContext->nb_streams; i++) {
-            avcodec_close(m_pFormatContext->streams[i]->codec);
-        }
-
         if(m_ioContext && m_pFormatContext->pb &&
            m_pFormatContext->pb != m_ioContext) {
             //	CLog::Log(LOGWARNING, "CDVDDemuxFFmpeg::Dispose -
@@ -468,11 +447,10 @@ void CDVDDemuxFFmpeg::Dispose() {
     }
 
     if(m_ioContext) {
-        av_free(m_ioContext->buffer);
-        av_free(m_ioContext);
+        av_freep(&m_ioContext->buffer);
+        avio_context_free(&m_ioContext);
     }
 
-    m_ioContext = nullptr;
     m_pFormatContext = nullptr;
     m_speed = DVD_PLAYSPEED_NORMAL;
 
@@ -500,6 +478,7 @@ void CDVDDemuxFFmpeg::Flush() {
 
     m_pkt.result = -1;
     av_packet_unref(&m_pkt.pkt);
+    m_parsers.clear();
 
     m_displayTime = 0;
     m_dtsAtDisplayTime = DVD_NOPTS_VALUE;
@@ -818,8 +797,8 @@ DemuxPacket *CDVDDemuxFFmpeg::Read() {
                     bReturnEmpty = true;
 
                 if(pPacket) {
-                    if(m_bMatroska && stream->codec &&
-                       stream->codec->codec_type ==
+                    if(m_bMatroska && stream->codecpar &&
+                       stream->codecpar->codec_type ==
                            AVMEDIA_TYPE_VIDEO) { // matroska can store
                                                  // different
                                                  // timestamps
@@ -828,14 +807,14 @@ DemuxPacket *CDVDDemuxFFmpeg::Read() {
                         // tracks, it is really dts. sadly ffmpeg
                         // sets these two timestamps equal all the
                         // time, so we select it here instead
-                        if(stream->codec->codec_tag == 0)
+                        if(stream->codecpar->codec_tag == 0)
                             m_pkt.pkt.dts = AV_NOPTS_VALUE;
                         else
                             m_pkt.pkt.pts = AV_NOPTS_VALUE;
                     }
 
-                    if(m_bAVI && stream->codec &&
-                       stream->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
+                    if(m_bAVI && stream->codecpar &&
+                       stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
                         // AVI's always have borked pts, specially if
                         // m_pFormatContext->flags includes
                         // AVFMT_FLAG_GENPTS so always use dts
@@ -899,9 +878,9 @@ DemuxPacket *CDVDDemuxFFmpeg::Read() {
                     // check if stream has passed full duration,
                     // needed for live streams
                     bool bAllowDurationExt =
-                        (stream->codec &&
-                         (stream->codec->codec_type == AVMEDIA_TYPE_VIDEO ||
-                          stream->codec->codec_type == AVMEDIA_TYPE_AUDIO));
+                        (stream->codecpar &&
+                         (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO ||
+                          stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO));
                     if(bAllowDurationExt &&
                        m_pkt.pkt.dts != (int64_t)AV_NOPTS_VALUE) {
                         int64_t duration;
@@ -946,7 +925,8 @@ DemuxPacket *CDVDDemuxFFmpeg::Read() {
         if(!stream ||
            stream->pPrivate != m_pFormatContext->streams[pPacket->iStreamId] ||
            stream->codec !=
-               m_pFormatContext->streams[pPacket->iStreamId]->codec->codec_id) {
+               m_pFormatContext->streams[pPacket->iStreamId]
+                   ->codecpar->codec_id) {
             // content has changed, or stream did not yet exist
             stream = AddStream(pPacket->iStreamId);
         }
@@ -955,20 +935,20 @@ DemuxPacket *CDVDDemuxFFmpeg::Read() {
         else if(stream->type == STREAM_AUDIO) {
             if(((CDemuxStreamAudio *)stream)->iChannels !=
                    m_pFormatContext->streams[pPacket->iStreamId]
-                       ->codec->channels ||
+                       ->codecpar->ch_layout.nb_channels ||
                ((CDemuxStreamAudio *)stream)->iSampleRate !=
                    m_pFormatContext->streams[pPacket->iStreamId]
-                       ->codec->sample_rate) {
+                       ->codecpar->sample_rate) {
                 // content has changed
                 stream = AddStream(pPacket->iStreamId);
             }
         } else if(stream->type == STREAM_VIDEO) {
             if(((CDemuxStreamVideo *)stream)->iWidth !=
                    m_pFormatContext->streams[pPacket->iStreamId]
-                       ->codec->width ||
+                       ->codecpar->width ||
                ((CDemuxStreamVideo *)stream)->iHeight !=
                    m_pFormatContext->streams[pPacket->iStreamId]
-                       ->codec->height) {
+                       ->codecpar->height) {
                 // content has changed
                 stream = AddStream(pPacket->iStreamId);
             }
@@ -1086,17 +1066,9 @@ bool CDVDDemuxFFmpeg::SeekByte(int64_t pos) {
 }
 
 void CDVDDemuxFFmpeg::UpdateCurrentPTS() {
+    // AVStream::cur_dts was private demuxer state and is no longer exposed by
+    // modern FFmpeg. The next packet read will establish the current PTS.
     m_currentPts = DVD_NOPTS_VALUE;
-
-    int idx = av_find_default_stream_index(m_pFormatContext);
-    if(idx >= 0) {
-        AVStream *stream = m_pFormatContext->streams[idx];
-        if(stream && stream->cur_dts != (int64_t)AV_NOPTS_VALUE) {
-            double ts = ConvertTimestamp(stream->cur_dts, stream->time_base.den,
-                                         stream->time_base.num);
-            m_currentPts = ts;
-        }
-    }
 }
 
 int CDVDDemuxFFmpeg::GetStreamLength() {
@@ -1150,8 +1122,8 @@ double CDVDDemuxFFmpeg::SelectAspect(AVStream *st, bool &forced) {
     /* if stream aspect is 1:1 or 0:0 use codec aspect */
     if((st->sample_aspect_ratio.den == 1 || st->sample_aspect_ratio.den == 0) &&
        (st->sample_aspect_ratio.num == 1 || st->sample_aspect_ratio.num == 0) &&
-       st->codec->sample_aspect_ratio.num != 0) {
-        return av_q2d(st->codec->sample_aspect_ratio);
+       st->codecpar->sample_aspect_ratio.num != 0) {
+        return av_q2d(st->codecpar->sample_aspect_ratio);
     }
 
     forced = true;
@@ -1216,18 +1188,25 @@ CDemuxStream *CDVDDemuxFFmpeg::AddStream(int streamIdx) {
     if(pStream) {
         CDemuxStream *stream = nullptr;
 
-        switch(pStream->codec->codec_type) {
+        switch(pStream->codecpar->codec_type) {
             case AVMEDIA_TYPE_AUDIO: {
                 auto *st = new CDemuxStreamAudioFFmpeg(this, pStream);
                 stream = st;
-                st->iChannels = pStream->codec->channels;
-                st->iSampleRate = pStream->codec->sample_rate;
-                st->iBlockAlign = pStream->codec->block_align;
-                st->iBitRate = pStream->codec->bit_rate;
-                st->iBitsPerSample = pStream->codec->bits_per_raw_sample;
-                st->iChannelLayout = pStream->codec->channel_layout;
+                st->iChannels = pStream->codecpar->ch_layout.nb_channels;
+                st->iSampleRate = pStream->codecpar->sample_rate;
+                st->iBlockAlign = pStream->codecpar->block_align;
+                st->iBitRate =
+                    static_cast<int>(pStream->codecpar->bit_rate);
+                st->iBitsPerSample =
+                    pStream->codecpar->bits_per_raw_sample;
+                st->iChannelLayout =
+                    pStream->codecpar->ch_layout.order ==
+                        AV_CHANNEL_ORDER_NATIVE
+                    ? pStream->codecpar->ch_layout.u.mask
+                    : 0;
                 if(st->iBitsPerSample == 0)
-                    st->iBitsPerSample = pStream->codec->bits_per_coded_sample;
+                    st->iBitsPerSample =
+                        pStream->codecpar->bits_per_coded_sample;
 
                 if(av_dict_get(pStream->metadata, "title", nullptr, 0))
                     st->m_description =
@@ -1245,10 +1224,11 @@ CDemuxStream *CDVDDemuxFFmpeg::AddStream(int streamIdx) {
                     st->bVFR = false;
 
                 // never trust pts in avi files with h264.
-                if(m_bAVI && pStream->codec->codec_id == AV_CODEC_ID_H264)
+                if(m_bAVI &&
+                   pStream->codecpar->codec_id == AV_CODEC_ID_H264)
                     st->bPTSInvalid = true;
 
-                AVRational r_frame_rate = av_stream_get_r_frame_rate(pStream);
+                AVRational r_frame_rate = pStream->r_frame_rate;
 
                 // average fps is more accurate for mkv files
                 if(m_bMatroska && pStream->avg_frame_rate.den &&
@@ -1263,12 +1243,16 @@ CDemuxStream *CDVDDemuxFFmpeg::AddStream(int streamIdx) {
                     st->iFpsScale = 0;
                 }
 
-                st->iWidth = pStream->codec->width;
-                st->iHeight = pStream->codec->height;
-                st->fAspect = SelectAspect(pStream, st->bForcedAspect) *
-                    pStream->codec->width / pStream->codec->height;
+                st->iWidth = pStream->codecpar->width;
+                st->iHeight = pStream->codecpar->height;
+                st->fAspect = SelectAspect(pStream, st->bForcedAspect);
+                if(pStream->codecpar->height > 0)
+                    st->fAspect *=
+                        static_cast<double>(pStream->codecpar->width) /
+                        pStream->codecpar->height;
                 st->iOrientation = 0;
-                st->iBitsPerPixel = pStream->codec->bits_per_coded_sample;
+                st->iBitsPerPixel =
+                    pStream->codecpar->bits_per_coded_sample;
 
                 AVDictionaryEntry *rtag =
                     av_dict_get(pStream->metadata, "rotate", nullptr, 0);
@@ -1362,10 +1346,10 @@ CDemuxStream *CDVDDemuxFFmpeg::AddStream(int streamIdx) {
             stream->iDuration =
                 (int)((pStream->duration / AV_TIME_BASE) & 0xFFFFFFFF);
 
-        stream->codec = pStream->codec->codec_id;
-        stream->codec_fourcc = pStream->codec->codec_tag;
-        stream->profile = pStream->codec->profile;
-        stream->level = pStream->codec->level;
+        stream->codec = pStream->codecpar->codec_id;
+        stream->codec_fourcc = pStream->codecpar->codec_tag;
+        stream->profile = pStream->codecpar->profile;
+        stream->level = pStream->codecpar->level;
         // stream->realtime = m_pInput->IsRealtime();
         stream->realtime = false;
 
@@ -1402,12 +1386,13 @@ CDemuxStream *CDVDDemuxFFmpeg::AddStream(int streamIdx) {
         if(langTag)
             strncpy(stream->language, langTag->value, 3);
 
-        if(stream->type != STREAM_NONE && pStream->codec->extradata &&
-           pStream->codec->extradata_size > 0) {
-            stream->ExtraSize = pStream->codec->extradata_size;
-            stream->ExtraData = new uint8_t[pStream->codec->extradata_size];
-            memcpy(stream->ExtraData, pStream->codec->extradata,
-                   pStream->codec->extradata_size);
+        if(stream->type != STREAM_NONE && pStream->codecpar->extradata &&
+           pStream->codecpar->extradata_size > 0) {
+            stream->ExtraSize = pStream->codecpar->extradata_size;
+            stream->ExtraData =
+                new uint8_t[pStream->codecpar->extradata_size];
+            memcpy(stream->ExtraData, pStream->codecpar->extradata,
+                   pStream->codecpar->extradata_size);
         }
 
 #ifdef HAVE_LIBBLURAY
@@ -1450,21 +1435,19 @@ std::string CDVDDemuxFFmpeg::GetStreamCodecName(int iStreamId) {
     CDemuxStream *stream = GetStream(iStreamId);
     std::string strName;
     if(stream) {
-#ifdef FF_PROFILE_DTS_HD_MA
         /* use profile to determine the DTS type */
         if(stream->codec == AV_CODEC_ID_DTS) {
-            if(stream->profile == FF_PROFILE_DTS_HD_MA)
+            if(stream->profile == AV_PROFILE_DTS_HD_MA)
                 strName = "dtshd_ma";
-            else if(stream->profile == FF_PROFILE_DTS_HD_HRA)
+            else if(stream->profile == AV_PROFILE_DTS_HD_HRA)
                 strName = "dtshd_hra";
             else
                 strName = "dca";
 
             return strName;
         }
-#endif
 
-        AVCodec *codec = avcodec_find_decoder(stream->codec);
+        const AVCodec *codec = avcodec_find_decoder(stream->codec);
         if(codec)
             strName = codec->name;
     }
@@ -1491,7 +1474,7 @@ bool CDVDDemuxFFmpeg::IsProgramChange() {
         CDemuxStream *stream = GetStream(idx);
         if(!stream)
             return true;
-        if(m_pFormatContext->streams[idx]->codec->codec_id != stream->codec)
+        if(m_pFormatContext->streams[idx]->codecpar->codec_id != stream->codec)
             return true;
     }
     return false;
@@ -1534,79 +1517,43 @@ std::string CDVDDemuxFFmpeg::ConvertCodecToInternalStereoMode(
 
 void CDVDDemuxFFmpeg::ParsePacket(AVPacket *pkt) {
     AVStream *st = m_pFormatContext->streams[pkt->stream_index];
-    CDemuxStream *stream = GetStream(pkt->stream_index);
+    if(!st || st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)
+        return;
 
-    // if the stream is new, tell ffmpeg to parse the stream
-    if(!stream && !st->parser) {
-        st->need_parsing = AVSTREAM_PARSE_FULL;
-    }
-
-    // split extradata
-    if(st->parser && st->parser->parser->split && !st->codec->extradata) {
-        int i = st->parser->parser->split(st->codec, pkt->data, pkt->size);
-        if(i > 0 && i < FF_MAX_EXTRADATA_SIZE) {
-            // Found extradata, fill it in. This will cause
-            // a new stream to be created and used.
-            st->codec->extradata_size = i;
-            st->codec->extradata = (uint8_t *)av_malloc(
-                st->codec->extradata_size + FF_INPUT_BUFFER_PADDING_SIZE);
-            if(st->codec->extradata) {
-                //	CLog::Log(LOGDEBUG, "CDVDDemuxFFmpeg::Read()
-                // fetching
-                // extradata, extradata_size(%d)",
-                // st->codec->extradata_size);
-                memcpy(st->codec->extradata, pkt->data,
-                       st->codec->extradata_size);
-                memset(st->codec->extradata + i, 0,
-                       FF_INPUT_BUFFER_PADDING_SIZE);
-            } else {
-                st->codec->extradata_size = 0;
+    auto parserIt = m_parsers.find(st->index);
+    if(parserIt == m_parsers.end()) {
+        auto parser = std::make_unique<StreamParser>();
+        parser->parser = av_parser_init(st->codecpar->codec_id);
+        const AVCodec *codec = avcodec_find_decoder(st->codecpar->codec_id);
+        if(parser->parser && codec) {
+            parser->codecContext = avcodec_alloc_context3(codec);
+            if(parser->codecContext &&
+               avcodec_parameters_to_context(parser->codecContext,
+                                             st->codecpar) >= 0) {
+                parser->parser->flags |= PARSER_FLAG_COMPLETE_FRAMES;
+                parserIt =
+                    m_parsers.emplace(st->index, std::move(parser)).first;
             }
         }
+        if(parserIt == m_parsers.end())
+            return;
     }
 
-    // for video we need a decoder to get desired information into
-    // codec context
-    if(st->codec->codec_type == AVMEDIA_TYPE_VIDEO && st->codec->extradata &&
-       (!st->codec->width || st->codec->pix_fmt == AV_PIX_FMT_NONE)) {
-        // open a decoder, it will be cleared down by ffmpeg on
-        // closing the stream
-        if(!st->codec->codec) {
-            const AVCodec *codec;
-            AVDictionary *thread_opt = nullptr;
-            codec = avcodec_find_decoder(st->codec->codec_id);
-            // Force thread count to 1 since the h264 decoder will not
-            // extract SPS and PPS to extradata during multi-threaded
-            // decoding
-            av_dict_set(&thread_opt, "threads", "1", 0);
-            int res = avcodec_open2(st->codec, codec, &thread_opt);
-            // 			if (res < 0)
-            // 				CLog::Log(LOGERROR,
-            // "CDVDDemuxFFmpeg::ParsePacket() unable to open codec
-            // %d", res);
-            av_dict_free(&thread_opt);
-        }
+    uint8_t *parsedData = nullptr;
+    int parsedSize = 0;
+    StreamParser &parser = *parserIt->second;
+    const int result = av_parser_parse2(
+        parser.parser, parser.codecContext, &parsedData, &parsedSize, pkt->data,
+        pkt->size, pkt->pts, pkt->dts, pkt->pos);
+    if(result < 0)
+        return;
 
-        // We don't need to actually decode here
-        // we just want to transport SPS data into codec context
-        st->codec->skip_idct = AVDISCARD_ALL;
-        // extradata is not decoded if skip_frame >= AVDISCARD_NONREF
-        //    st->codec->skip_frame = AVDISCARD_ALL;
-        st->codec->skip_loop_filter = AVDISCARD_ALL;
-
-        // We are looking for an IDR frame
-        AVFrame picture;
-        memset(&picture, 0, sizeof(AVFrame));
-        picture.pts = picture.pkt_dts = picture.pkt_pts =
-            picture.best_effort_timestamp = AV_NOPTS_VALUE;
-        picture.pkt_pos = -1;
-        picture.key_frame = 1;
-        picture.format = -1;
-
-        int got_picture = 0;
-        avcodec_decode_video2(st->codec, &picture, &got_picture, pkt);
-        av_frame_unref(&picture);
+    if(parser.parser->width > 0 && parser.parser->height > 0) {
+        st->codecpar->width = parser.parser->width;
+        st->codecpar->height = parser.parser->height;
     }
+    if(parser.parser->format != AV_PIX_FMT_NONE)
+        st->codecpar->format = parser.parser->format;
 }
 
 bool CDVDDemuxFFmpeg::IsVideoReady() {
@@ -1624,8 +1571,8 @@ bool CDVDDemuxFFmpeg::IsVideoReady() {
             i < m_pFormatContext->programs[m_program]->nb_stream_indexes; i++) {
             int idx = m_pFormatContext->programs[m_program]->stream_index[i];
             st = m_pFormatContext->streams[idx];
-            if(st->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
-                if(st->codec->width && st->codec->pix_fmt != AV_PIX_FMT_NONE)
+            if(st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+                if(st->codecpar->width > 0 && st->codecpar->height > 0)
                     return true;
                 hasVideo = true;
             }
@@ -1633,8 +1580,8 @@ bool CDVDDemuxFFmpeg::IsVideoReady() {
     } else {
         for(unsigned int i = 0; i < m_pFormatContext->nb_streams; i++) {
             st = m_pFormatContext->streams[i];
-            if(st->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
-                if(st->codec->width && st->codec->pix_fmt != AV_PIX_FMT_NONE)
+            if(st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+                if(st->codecpar->width > 0 && st->codecpar->height > 0)
                     return true;
                 hasVideo = true;
             }
@@ -1644,15 +1591,7 @@ bool CDVDDemuxFFmpeg::IsVideoReady() {
 }
 
 void CDVDDemuxFFmpeg::ResetVideoStreams() {
-    AVStream *st;
-    for(unsigned int i = 0; i < m_pFormatContext->nb_streams; i++) {
-        st = m_pFormatContext->streams[i];
-        if(st->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
-            av_freep(&st->codec->extradata);
-            st->codec->extradata_size = 0;
-            st->codec->width = 0;
-        }
-    }
+    m_parsers.clear();
 }
 
 NS_KRMOVIE_END

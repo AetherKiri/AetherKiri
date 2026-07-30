@@ -27,12 +27,13 @@ extern "C" {
 #endif
 
 /* ABI version: major(8bit), minor(8bit), patch(16bit). */
-#define ENGINE_API_VERSION 0x01020000u
+#define ENGINE_API_VERSION 0x01040000u
 #define ENGINE_API_MAKE_VERSION(major, minor, patch) \
   ((((uint32_t)(major)&0xFFu) << 24u) | (((uint32_t)(minor)&0xFFu) << 16u) | \
    ((uint32_t)(patch)&0xFFFFu))
 
 typedef struct engine_handle_s* engine_handle_t;
+typedef struct engine_media_handle_s* engine_media_handle_t;
 
 /* Registers host renderer callbacks. The callback table is renderer-specific. */
 ENGINE_API_EXPORT void engine_register_godot_gpu_bridge(
@@ -79,6 +80,31 @@ typedef struct engine_frame_desc_t {
   uint64_t reserved_u64[4];
   void* reserved_ptr[4];
 } engine_frame_desc_t;
+
+typedef enum engine_media_status_t {
+  ENGINE_MEDIA_STATUS_IDLE = 0,
+  ENGINE_MEDIA_STATUS_PLAYING = 1,
+  ENGINE_MEDIA_STATUS_PAUSED = 2,
+  ENGINE_MEDIA_STATUS_ENDED = 3,
+  ENGINE_MEDIA_STATUS_ERROR = 4
+} engine_media_status_t;
+
+typedef struct engine_media_state_t {
+  uint32_t struct_size;
+  uint32_t status;
+  uint32_t width;
+  uint32_t height;
+  int64_t position_ms;
+  int64_t duration_ms;
+  double playback_rate;
+  uint64_t frame_serial;
+  uint32_t frame_ready;
+  uint32_t seekable;
+  uint32_t has_audio;
+  uint32_t has_video;
+  uint64_t reserved_u64[4];
+  void* reserved_ptr[4];
+} engine_media_state_t;
 
 typedef struct engine_memory_stats_t {
   uint32_t struct_size;
@@ -274,6 +300,57 @@ ENGINE_API_EXPORT engine_result_t engine_get_frame_desc(
  */
 ENGINE_API_EXPORT engine_result_t engine_read_frame_rgba(
     engine_handle_t handle, void* out_pixels, size_t out_pixels_size);
+
+/*
+ * Opens a standalone local media file with the runtime FFmpeg pipeline.
+ * Only one host-visible media player is expected to be active at a time.
+ */
+ENGINE_API_EXPORT engine_result_t engine_media_open(
+    engine_handle_t engine, const char* path_utf8,
+    engine_media_handle_t* out_media);
+
+ENGINE_API_EXPORT engine_result_t engine_media_destroy(
+    engine_media_handle_t media);
+
+ENGINE_API_EXPORT engine_result_t engine_media_play(
+    engine_media_handle_t media);
+
+ENGINE_API_EXPORT engine_result_t engine_media_pause(
+    engine_media_handle_t media);
+
+ENGINE_API_EXPORT engine_result_t engine_media_seek(
+    engine_media_handle_t media, int64_t position_ms);
+
+ENGINE_API_EXPORT engine_result_t engine_media_set_rate(
+    engine_media_handle_t media, double playback_rate);
+
+ENGINE_API_EXPORT engine_result_t engine_media_get_state(
+    engine_media_handle_t media, engine_media_state_t* out_state);
+
+/*
+ * Lists embedded text subtitle streams as UTF-8 JSON.
+ * The result is an array of objects containing stream_index, codec, language,
+ * title, and default. Writes bytes written in out_bytes_written.
+ */
+ENGINE_API_EXPORT engine_result_t engine_media_get_subtitle_tracks_json(
+    engine_media_handle_t media, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written);
+
+/*
+ * Extracts one embedded text subtitle stream to an ASS sidecar file.
+ * The stream index must come from engine_media_get_subtitle_tracks_json.
+ */
+ENGINE_API_EXPORT engine_result_t engine_media_extract_subtitle(
+    engine_media_handle_t media, int32_t stream_index,
+    const char* output_path_utf8);
+
+/*
+ * Copies the most recent due video frame as tightly packed RGBA8888.
+ * Call engine_media_get_state first and allocate width * height * 4 bytes.
+ */
+ENGINE_API_EXPORT engine_result_t engine_media_read_frame_rgba(
+    engine_media_handle_t media, void* out_pixels, size_t out_pixels_size,
+    engine_frame_desc_t* out_frame_desc);
 
 /*
  * Gets the current Godot-native GPU texture id for zero-copy display.

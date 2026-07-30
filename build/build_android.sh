@@ -268,7 +268,7 @@ elif [[ ! -f "$GODOT_TEMPLATE_DIR/android_debug.apk" || ! -f "$GODOT_TEMPLATE_DI
 else
     echo "==> Exporting Godot Android APK"
     mkdir -p "$PROJECT_ROOT/out/godot/android/$BUILD_TYPE_LOWER"
-    export_path="$PROJECT_ROOT/out/godot/android/$BUILD_TYPE_LOWER/AetherKiri-$BUILD_TYPE_LOWER.apk"
+    export_path="$PROJECT_ROOT/out/godot/android/$BUILD_TYPE_LOWER/Aether-$BUILD_TYPE_LOWER.apk"
     export_preset="Android ${BUILD_TYPE_CAP}"
     export_mode="--export-debug"
     if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
