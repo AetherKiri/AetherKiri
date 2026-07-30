@@ -2,9 +2,7 @@
 name: Feature request
 about: Suggest an idea for this project
 title: "[Feature Request] "
-labels: bug
-assignees: ''
-type: Bug
+type: Feature
 
 ---
 
