@@ -3,6 +3,61 @@ include_guard(GLOBAL)
 set(AETHERKIRI_OBFUSCATION_POLICY
     "${CMAKE_CURRENT_LIST_DIR}/internal_obfuscation.json")
 
+function(aetherkiri_limit_runtime_exports target_name export_surface)
+    if(NOT TARGET "${target_name}")
+        message(FATAL_ERROR
+            "Cannot protect missing runtime target: ${target_name}")
+    endif()
+
+    if(WEB OR EMSCRIPTEN OR IOS)
+        return()
+    endif()
+
+    if(NOT MSVC)
+        target_compile_options("${target_name}" PRIVATE
+            "$<$<CONFIG:Release>:-fvisibility=hidden>"
+            "$<$<CONFIG:Release>:-fvisibility-inlines-hidden>"
+        )
+    endif()
+
+    if(APPLE)
+        if(export_surface STREQUAL "ENGINE_API")
+            set(export_list
+                "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/engine_api_apple.exports")
+        elseif(export_surface STREQUAL "GODOT_EXTENSION")
+            set(export_list
+                "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/godot_extension_apple.exports")
+        else()
+            message(FATAL_ERROR
+                "Unknown runtime export surface: ${export_surface}")
+        endif()
+        target_link_options("${target_name}" PRIVATE
+            "$<$<CONFIG:Release>:-Wl,-dead_strip>"
+            "$<$<CONFIG:Release>:-Wl,-exported_symbols_list,${export_list}>"
+        )
+        set_property(TARGET "${target_name}" APPEND PROPERTY
+            LINK_DEPENDS "${export_list}")
+    elseif(UNIX)
+        if(export_surface STREQUAL "ENGINE_API")
+            set(version_script
+                "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/engine_api_elf.map")
+        elseif(export_surface STREQUAL "GODOT_EXTENSION")
+            set(version_script
+                "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/godot_extension_elf.map")
+        else()
+            message(FATAL_ERROR
+                "Unknown runtime export surface: ${export_surface}")
+        endif()
+        target_link_options("${target_name}" PRIVATE
+            "$<$<CONFIG:Release>:-Wl,--gc-sections>"
+            "$<$<CONFIG:Release>:-Wl,--version-script=${version_script}>"
+            "$<$<CONFIG:Release>:-Wl,--exclude-libs,ALL>"
+        )
+        set_property(TARGET "${target_name}" APPEND PROPERTY
+            LINK_DEPENDS "${version_script}")
+    endif()
+endfunction()
+
 function(aetherkiri_protect_internal_sources target_name)
     if(NOT AETHERKIRI_ENABLE_CODE_OBFUSCATION)
         return()

@@ -210,8 +210,12 @@ build_ios_sdk_compat_archive() {
     mkdir -p "$work_dir"
     cat > "$source" <<'EOF'
 #import <Foundation/Foundation.h>
+#include <stddef.h>
 
 extern "C" {
+struct hid_device_;
+struct hid_device_info;
+
 extern "C" __attribute__((weak, visibility("default"))) NSString * const CADynamicRangeAutomatic = @"CADynamicRangeAutomatic";
 extern "C" __attribute__((weak, visibility("default"))) NSString * const CADynamicRangeConstrainedHigh = @"CADynamicRangeConstrainedHigh";
 extern "C" __attribute__((weak, visibility("default"))) NSString * const CADynamicRangeHigh = @"CADynamicRangeHigh";
@@ -222,6 +226,19 @@ extern "C" __attribute__((weak, visibility("default"))) NSString * const NSDevic
 extern "C" __attribute__((weak, visibility("default"))) NSString * const NSProcessInfoPerformanceProfileDidChangeNotification = @"NSProcessInfoPerformanceProfileDidChangeNotification";
 extern "C" __attribute__((weak, visibility("default"))) NSString * const NSProcessPerformanceProfileDefault = @"NSProcessPerformanceProfileDefault";
 extern "C" __attribute__((weak, visibility("default"))) NSString * const NSProcessPerformanceProfileSustained = @"NSProcessPerformanceProfileSustained";
+
+// Godot 4.7's SDL HID wrapper references APIs newer than the iOS SDL backend
+// bundled by this branch. Keep the unsupported queries as weak fallbacks so a
+// future SDL implementation can replace them without creating duplicate symbols.
+extern "C" __attribute__((weak, visibility("default"))) struct hid_device_info *PLATFORM_hid_get_device_info(struct hid_device_ *) {
+    return nullptr;
+}
+extern "C" __attribute__((weak, visibility("default"))) int PLATFORM_hid_get_input_report(struct hid_device_ *, unsigned char *, size_t) {
+    return -1;
+}
+extern "C" __attribute__((weak, visibility("default"))) int PLATFORM_hid_get_report_descriptor(struct hid_device_ *, unsigned char *, size_t) {
+    return -1;
+}
 }
 EOF
 
@@ -441,24 +458,32 @@ package_ios_unsigned_ipa() {
             STRIP_INSTALLED_PRODUCT=YES
             STRIP_STYLE=all
             COPY_PHASE_STRIP=YES
-            DEAD_CODE_STRIPPING=YES
-            GCC_SYMBOLS_PRIVATE_EXTERN=YES
             GCC_GENERATE_DEBUGGING_SYMBOLS=NO
             STRIP_SWIFT_SYMBOLS=YES
+            DEAD_CODE_STRIPPING=YES
+            GCC_SYMBOLS_PRIVATE_EXTERN=YES
             UNEXPORTED_SYMBOLS_FILE="$PROJECT_ROOT/cmake/ios_unexported_symbols.txt"
             'OTHER_LDFLAGS=$(inherited) -Wl,-dead_strip'
+        )
+    else
+        xcodebuild_args+=(
+            DEPLOYMENT_POSTPROCESSING=NO
+            STRIP_INSTALLED_PRODUCT=NO
+            COPY_PHASE_STRIP=NO
+            GCC_GENERATE_DEBUGGING_SYMBOLS=YES
+            DEBUG_INFORMATION_FORMAT=dwarf
         )
     fi
     xcodebuild build "${xcodebuild_args[@]}"
 
+    local app_binary="$export_dir/build/Aether.app/Aether"
+    if [[ ! -f "$app_binary" ]]; then
+        echo "Error: iOS app executable not found: $app_binary" >&2
+        return 1
+    fi
     if [[ "$build_type_lower" == "release" ]]; then
-        local app_binary="$export_dir/build/AetherKiri.app/AetherKiri"
-        if [[ ! -f "$app_binary" ]]; then
-            echo "Error: Release app executable not found: $app_binary" >&2
-            return 1
-        fi
         echo "==> Removing non-runtime symbols from iOS Release executable..."
-        xcrun strip -S -x -u -r "$app_binary"
+        "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" macho-executable "$app_binary"
     fi
 
     echo "==> Packaging into unsigned .ipa..."

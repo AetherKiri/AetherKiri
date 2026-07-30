@@ -139,7 +139,14 @@ set(KRKR2PLUGIN_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins)
 
 if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/EHsc>" "/MP" "/utf-8")
-    add_link_options("/ignore:4099" "/INCREMENTAL" "/DEBUG:FASTLINK")
+    add_link_options(
+        "/ignore:4099"
+        "$<$<CONFIG:Debug>:/INCREMENTAL>"
+        "$<$<CONFIG:Debug>:/DEBUG:FASTLINK>"
+        "$<$<CONFIG:Release>:/INCREMENTAL:NO>"
+        "$<$<CONFIG:Release>:/OPT:REF>"
+        "$<$<CONFIG:Release>:/OPT:ICF>"
+    )
     # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 

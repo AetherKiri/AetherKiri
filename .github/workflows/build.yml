@@ -249,14 +249,6 @@ jobs:
           path: out/godot/android/release/Aether-release.apk
           retention-days: 7
 
-      - name: Upload Debug APK
-        if: success()
-        uses: actions/upload-artifact@v7
-        with:
-          name: android-debug-apk
-          path: out/godot/android/debug/Aether-debug.apk
-          retention-days: 7
-
       - name: Save vcpkg cache
         if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
         uses: actions/cache/save@v5
@@ -379,14 +371,18 @@ jobs:
       - name: Verify iOS Release ABI surface
         run: |
           set -euo pipefail
-          release_binary="${RUNNER_TEMP}/AetherKiri-release"
+          release_binary="${RUNNER_TEMP}/Aether-release"
           unzip -p \
-            out/godot/ios/release/AetherKiri-Release-Unsigned.ipa \
-            Payload/AetherKiri.app/AetherKiri > "$release_binary"
+            out/godot/ios/release/Aether-Release-Unsigned.ipa \
+            Payload/Aether.app/Aether > "$release_binary"
           test -s "$release_binary"
           exported_symbols="$(xcrun nm -gjU "$release_binary")"
           if grep -E '^_engine_' <<< "$exported_symbols"; then
             echo "The private engine C ABI remains dynamically exported." >&2
+            exit 1
+          fi
+          if xcrun nm -m "$release_binary" 2>/dev/null | grep -q 'non-external'; then
+            echo "Local symbols remain in the packaged iOS executable." >&2
             exit 1
           fi
           xcrun otool -hv "$release_binary"
@@ -422,40 +418,12 @@ jobs:
             fi
           done
 
-      - name: Upload Release Xcode Project
-        if: success()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ios-release-xcode-project
-          path: |
-            out/godot/ios/release/Aether.xcodeproj
-            out/godot/ios/release/Aether
-          retention-days: 7
-
-      - name: Upload Debug Xcode Project
-        if: success()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ios-debug-xcode-project
-          path: |
-            out/godot/ios/debug/Aether.xcodeproj
-            out/godot/ios/debug/Aether
-          retention-days: 7
-
       - name: Upload Release Unsigned IPA
         if: success()
         uses: actions/upload-artifact@v7
         with:
           name: ios-release-unsigned-ipa
           path: out/godot/ios/release/Aether-Release-Unsigned.ipa
-          retention-days: 7
-
-      - name: Upload Debug Unsigned IPA
-        if: success()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ios-debug-unsigned-ipa
-          path: out/godot/ios/debug/Aether-Debug-Unsigned.ipa
           retention-days: 7
 
       - name: Save vcpkg cache
@@ -618,6 +586,15 @@ jobs:
               exit 1
             fi
             codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+            if [[ "$build_type" == "release" ]]; then
+              while IFS= read -r -d '' runtime_binary; do
+                if file -b "$runtime_binary" | grep -q 'Mach-O' &&
+                   xcrun nm -m "$runtime_binary" 2>/dev/null | grep -q 'non-external'; then
+                  echo "Local symbols remain in packaged macOS Release binary: $runtime_binary" >&2
+                  exit 1
+                fi
+              done < <(find "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Frameworks" -type f -print0)
+            fi
           done
 
       - name: Upload Release App
@@ -626,14 +603,6 @@ jobs:
         with:
           name: macos-release-app
           path: out/godot/macos/release/
-          retention-days: 7
-
-      - name: Upload Debug App
-        if: success()
-        uses: actions/upload-artifact@v7
-        with:
-          name: macos-debug-app
-          path: out/godot/macos/debug/
           retention-days: 7
 
       - name: Save vcpkg cache

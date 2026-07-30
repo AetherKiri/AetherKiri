@@ -1,0 +1,8 @@
+{
+    global:
+        engine_*;
+        JNI_OnLoad;
+        Java_org_github_krkr2_aetherkiri_EngineBridge_*;
+    local:
+        *;
+};

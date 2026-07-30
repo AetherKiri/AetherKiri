@@ -87,6 +87,8 @@ set_target_properties(aether_kiri_godot PROPERTIES
     INSTALL_RPATH "${AETHERKIRI_EXTENSION_RPATH}"
 )
 
+aetherkiri_limit_runtime_exports(aether_kiri_godot GODOT_EXTENSION)
+
 if(WIN32)
     string(TOLOWER "${CMAKE_BUILD_TYPE}" AETHERKIRI_WINDOWS_CONFIG_DIR)
     if(NOT AETHERKIRI_WINDOWS_CONFIG_DIR)

@@ -74,6 +74,8 @@ set_target_properties(engine_api PROPERTIES
     OUTPUT_NAME "engine_api"
 )
 
+aetherkiri_limit_runtime_exports(engine_api ENGINE_API)
+
 if(LINUX)
     # Linux exports bundle the engine and its vcpkg runtime libraries beside
     # the GDExtension. Keep the loader path relative to that bundle.
