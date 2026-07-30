@@ -206,6 +206,7 @@ const UI_TEXT := {
         "message.web_import_timeout": "本地游戏导入超时",
         "message.web_picker_unsupported_long": "当前浏览器不支持直接选择本地游戏文件。请使用支持 File System Access 或目录上传的浏览器。",
         "message.android_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入或启动外部游戏。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
+        "message.android_video_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入视频。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.path_missing": "游戏路径不存在",
         "message.launch_file_unsupported": "启动文件只支持 EXE 或 XP3",
         "message.launch_file_outside_game": "启动文件必须位于当前游戏目录内",
@@ -363,6 +364,7 @@ const UI_TEXT := {
         "message.web_import_timeout": "本機遊戲匯入逾時",
         "message.web_picker_unsupported_long": "目前瀏覽器不支援直接選擇本機遊戲檔案。請使用支援 File System Access 或目錄上傳的瀏覽器。",
         "message.android_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入或啟動外部遊戲。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
+        "message.android_video_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入影片。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.path_missing": "遊戲路徑不存在",
         "message.launch_file_unsupported": "啟動檔案僅支援 EXE 或 XP3",
         "message.launch_file_outside_game": "啟動檔案必須位於目前遊戲目錄內",
@@ -520,6 +522,7 @@ const UI_TEXT := {
         "message.web_import_timeout": "Local game import timed out",
         "message.web_picker_unsupported_long": "This browser cannot directly choose local game files. Use a browser that supports File System Access or directory upload.",
         "message.android_storage_permission_required": "Allow Aether to access the file system before importing or launching external games. Grant file access in the system prompt or permission settings, then try again.",
+        "message.android_video_storage_permission_required": "Allow Aether to access the file system before importing videos. Grant file access in the system prompt or permission settings, then try again.",
         "message.path_missing": "Game path does not exist",
         "message.launch_file_unsupported": "The launch file must be an EXE or XP3 file",
         "message.launch_file_outside_game": "The launch file must be inside this game folder",
@@ -677,6 +680,7 @@ const UI_TEXT := {
         "message.web_import_timeout": "ローカルゲームのインポートがタイムアウトしました",
         "message.web_picker_unsupported_long": "このブラウザーはローカルゲームファイルの直接選択に対応していません。File System Access またはディレクトリアップロード対応ブラウザーを使用してください。",
         "message.android_storage_permission_required": "外部ゲームのインポートまたは起動には、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
+        "message.android_video_storage_permission_required": "動画をインポートするには、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.path_missing": "ゲームパスが存在しません",
         "message.launch_file_unsupported": "起動ファイルは EXE または XP3 のみ対応しています",
         "message.launch_file_outside_game": "起動ファイルは現在のゲームフォルダー内にある必要があります",
@@ -834,6 +838,7 @@ const UI_TEXT := {
         "message.web_import_timeout": "로컬 게임 가져오기 시간 초과",
         "message.web_picker_unsupported_long": "이 브라우저는 로컬 게임 파일을 직접 선택할 수 없습니다. File System Access 또는 디렉터리 업로드를 지원하는 브라우저를 사용하세요.",
         "message.android_storage_permission_required": "외부 게임을 가져오거나 실행하려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
+        "message.android_video_storage_permission_required": "비디오를 가져오려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.path_missing": "게임 경로가 존재하지 않습니다",
         "message.launch_file_unsupported": "실행 파일은 EXE 또는 XP3만 지원합니다",
         "message.launch_file_outside_game": "실행 파일은 현재 게임 폴더 안에 있어야 합니다",
@@ -960,6 +965,7 @@ var legal_accepted_at := 0
 var ios_statement_accepted_version := ""
 var ios_statement_accepted_at := 0
 var legal_gate_completed := false
+var android_video_import_notice_shown := false
 var dirty_settings := false
 var settings_draft := {}
 var active_game_path := ""
@@ -4363,6 +4369,9 @@ func _confirm_remove_selected() -> void:
 
 func _on_refresh_or_import() -> void:
     if home_library_mode == "video":
+        if OS.get_name() == "Android":
+            _open_video_import_dialog()
+            return
         if OS.get_name() == "iOS":
             _refresh_videos()
         else:
@@ -4838,6 +4847,25 @@ func _add_video_path(path: String) -> void:
     _refresh_videos()
 
 func _open_video_import_dialog() -> void:
+    if OS.get_name() == "Android":
+        if not android_video_import_notice_shown:
+            android_video_import_notice_shown = true
+            _show_android_storage_permission_prompt(
+                Callable(self, "_continue_video_import_after_permission_notice"),
+                "message.android_video_storage_permission_required"
+            )
+            return
+        if not _ensure_android_storage_permission_for_import(true):
+            return
+    _show_video_file_dialog()
+
+func _continue_video_import_after_permission_notice() -> void:
+    if not _android_has_external_storage_permission():
+        _request_android_storage_permissions()
+        return
+    _open_video_import_dialog()
+
+func _show_video_file_dialog() -> void:
     var filters := PackedStringArray([
         "*.mp4,*.mkv,*.mov,*.m4v,*.avi,*.webm,*.flv,*.ts,*.m2ts,*.mpeg,*.mpg,*.wmv;Video files"
     ])
@@ -6277,18 +6305,29 @@ func _request_android_storage_permissions() -> void:
             return
     OS.request_permissions()
 
-func _ensure_android_storage_permission_for_import() -> bool:
-    return _ensure_android_storage_permission_for_path("/storage/emulated/0")
+func _ensure_android_storage_permission_for_import(video_import: bool = false) -> bool:
+    var message_key := (
+        "message.android_video_storage_permission_required"
+        if video_import
+        else "message.android_storage_permission_required"
+    )
+    return _ensure_android_storage_permission_for_path("/storage/emulated/0", message_key)
 
-func _ensure_android_storage_permission_for_path(path: String) -> bool:
+func _ensure_android_storage_permission_for_path(
+    path: String,
+    message_key: String = "message.android_storage_permission_required"
+) -> bool:
     if not _android_path_needs_storage_permission(path):
         return true
     if _android_has_external_storage_permission():
         return true
-    _show_android_storage_permission_prompt()
+    _show_android_storage_permission_prompt(Callable(), message_key)
     return false
 
-func _show_android_storage_permission_prompt() -> void:
+func _show_android_storage_permission_prompt(
+    after_acknowledged: Callable = Callable(),
+    message_key: String = "message.android_storage_permission_required"
+) -> void:
     modal_layer.visible = true
     modal_layer.move_to_front()
     for child in modal_layer.get_children():
@@ -6315,7 +6354,7 @@ func _show_android_storage_permission_prompt() -> void:
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var body := Label.new()
-    body.text = _t("message.android_storage_permission_required")
+    body.text = _t(message_key)
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     body.add_theme_font_size_override("font_size", 24)
     body.add_theme_color_override("font_color", color_text)
@@ -6324,7 +6363,10 @@ func _show_android_storage_permission_prompt() -> void:
     ok.custom_minimum_size = Vector2(160, 64)
     ok.pressed.connect(func():
         modal_layer.visible = false
-        call_deferred("_request_android_storage_permissions")
+        if after_acknowledged.is_valid():
+            after_acknowledged.call_deferred()
+        else:
+            call_deferred("_request_android_storage_permissions")
     )
     box.add_child(ok)
 
