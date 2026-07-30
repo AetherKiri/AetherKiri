@@ -74,7 +74,26 @@ if(VCPKG_DETECTED_CMAKE_C_COMPILER)
     get_filename_component(CC_filename "${VCPKG_DETECTED_CMAKE_C_COMPILER}" NAME)
     set(ENV{CC} "${CC_filename}")
     string(APPEND OPTIONS " --cc=${CC_filename}")
-    string(APPEND OPTIONS " --host_cc=${CC_filename}")
+    if(VCPKG_CMAKE_SYSTEM_NAME STREQUAL "Android")
+        if(VCPKG_HOST_IS_OSX)
+            set(FFMPEG_HOST_CC "/usr/bin/clang")
+            if(NOT EXISTS "${FFMPEG_HOST_CC}")
+                message(FATAL_ERROR
+                    "Unable to locate the macOS host compiler for FFmpeg")
+            endif()
+        else()
+            find_program(FFMPEG_HOST_CC
+                NAMES cc gcc clang
+                NO_CMAKE_FIND_ROOT_PATH)
+            if(NOT FFMPEG_HOST_CC)
+                message(FATAL_ERROR
+                    "Unable to locate the host C compiler for FFmpeg")
+            endif()
+        endif()
+        string(APPEND OPTIONS " --host_cc=\"${FFMPEG_HOST_CC}\"")
+    else()
+        string(APPEND OPTIONS " --host_cc=${CC_filename}")
+    endif()
     list(APPEND prog_env "${CC_path}")
 endif()
 

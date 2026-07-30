@@ -257,8 +257,8 @@ build_abi() {
 
     if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
         android_strip_path="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" \
-            -path '*/bin/llvm-strip' -type f -print -quit)"
-        if [[ -z "$android_strip_path" ]]; then
+            -path '*/bin/llvm-strip' \( -type f -o -type l \) -print -quit)"
+        if [[ -z "$android_strip_path" || ! -x "$android_strip_path" ]]; then
             echo "Error: Android llvm-strip not found under $ANDROID_NDK_HOME." >&2
             exit 1
         fi
