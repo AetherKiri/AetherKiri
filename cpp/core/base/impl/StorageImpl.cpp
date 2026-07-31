@@ -680,6 +680,34 @@ bool TVPCheckExistentLocalFolder(const ttstr &name) {
 }
 //---------------------------------------------------------------------------
 
+ttstr TVPGetNativeProjectDirectory(const ttstr &nativeProjectPath) {
+    ttstr path(nativeProjectPath);
+    while(path.GetLen() > 1 &&
+          (path.GetLastChar() == TJS_W('/') ||
+           path.GetLastChar() == TJS_W('\\'))) {
+        path = path.SubString(0, path.GetLen() - 1);
+    }
+    if(!TVPCheckExistentLocalFile(path))
+        return path;
+
+    const tjs_char *text = path.c_str();
+    tjs_int separator = path.GetLen() - 1;
+    while(separator >= 0 && text[separator] != TJS_W('/') &&
+          text[separator] != TJS_W('\\')) {
+        separator--;
+    }
+    if(separator < 0)
+        return TJS_W(".");
+    if(separator == 0)
+        return path.SubString(0, 1);
+#if defined(_WIN32)
+    if(separator == 2 && text[1] == TJS_W(':'))
+        return path.SubString(0, 3);
+#endif
+    return path.SubString(0, separator);
+}
+//---------------------------------------------------------------------------
+
 tTVPArchive *TVPOpenZIPArchive(const ttstr &name, tTJSBinaryStream *st,
                                bool normalizeFileName);
 
