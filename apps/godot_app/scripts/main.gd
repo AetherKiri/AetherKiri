@@ -2513,7 +2513,10 @@ func _rebuild_settings_view() -> void:
         _t("settings.ios_statement_open"),
         _show_ios_additional_statement
     ))
-    about_card.add_child(_settings_value_row(_t("settings.version"), "0.2.0-beta.1"))
+    about_card.add_child(_settings_value_row(
+        _t("settings.version"),
+        str(ProjectSettings.get_setting("application/config/version", "development"))
+    ))
 
 func _build_detail_view() -> void:
     detail_view = Control.new()
