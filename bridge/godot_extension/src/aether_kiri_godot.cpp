@@ -127,7 +127,6 @@ std::atomic<uint64_t> g_gpu_queue_peak{0};
 std::atomic<uint64_t> g_gpu_barriers{0};
 std::atomic<uint64_t> g_gpu_alias_sources{0};
 std::atomic<uint64_t> g_gpu_sync_timeouts{0};
-std::atomic<uint64_t> g_gpu_presentation_syncs{0};
 
 constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
 
@@ -969,9 +968,7 @@ String GetGodotGpuBridgeDebugInfo() {
         << " bridge_blends=" << g_gpu_blend_op_submitted.load(std::memory_order_relaxed)
         << " bridge_barriers=" << g_gpu_barriers.load(std::memory_order_relaxed)
         << " bridge_alias_sources=" << g_gpu_alias_sources.load(std::memory_order_relaxed)
-        << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed)
-        << " bridge_present_syncs="
-        << g_gpu_presentation_syncs.load(std::memory_order_relaxed);
+        << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed);
     return String::utf8(out.str().c_str());
 }
 
@@ -1021,29 +1018,22 @@ bool HazardTrackedBlendBarriersEnabled() {
 bool DeferredGodotGpuDrainEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_GODOT_DEFER_GPU_DRAIN");
-        return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
+        // Deferring operations created on Godot's render thread lets a clear
+        // become visible before the following blends during fast page
+        // transitions on Metal.  Execute those operations immediately by
+        // default; the old batched behavior remains available for profiling
+        // with AETHERKIRI_GODOT_DEFER_GPU_DRAIN=1.
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }
 
-uint64_t GpuPresentationSyncOpThreshold() {
-    static const uint64_t threshold = [] {
-        const char *value =
-            std::getenv("AETHERKIRI_GODOT_PRESENT_SYNC_OPS");
-        if (value == nullptr || value[0] == '\0') {
-            return uint64_t{256};
-        }
-        char *end = nullptr;
-        const unsigned long long parsed = std::strtoull(value, &end, 10);
-        return end != value ? static_cast<uint64_t>(parsed) : uint64_t{256};
-    }();
-    return threshold;
-}
-
 bool ShouldScheduleGodotGpuDrainNow(const std::shared_ptr<GodotGpuOp> &op,
-                                    bool wait) {
-    if (wait || !DeferredGodotGpuDrainEnabled()) return true;
-    return op != nullptr && op->type == GodotGpuOp::Type::Flush;
+                                    bool /*wait*/) {
+    // Wake the render thread on the first queued operation. The scheduled
+    // flag below still coalesces producer-thread bursts into one queue drain.
+    return op != nullptr;
 }
 
 struct GodotGpuPendingWrite {
@@ -6043,8 +6033,6 @@ private:
         frame_present_height_ = 0;
         frame_present_current_slot_ = 0;
         frame_present_serial_ = UINT64_MAX;
-        frame_present_last_gpu_op_submitted_ =
-            g_gpu_op_submitted.load(std::memory_order_relaxed);
         if (frame_texture_backend_ == "godot_native_gpu_presented" ||
             frame_texture_backend_ == "godot_external_presented") {
             frame_texture_backend_ = "none";
@@ -6144,8 +6132,6 @@ private:
         frame_present_height_ = height;
         frame_present_current_slot_ = 0;
         frame_present_serial_ = UINT64_MAX;
-        frame_present_last_gpu_op_submitted_ =
-            g_gpu_op_submitted.load(std::memory_order_relaxed);
         return true;
     }
 
@@ -6175,11 +6161,6 @@ private:
             return Ref<Texture2D>();
         }
 
-        const bool first_present = frame_present_serial_ == UINT64_MAX;
-        const uint64_t submitted_before_present =
-            g_gpu_op_submitted.load(std::memory_order_relaxed);
-        const uint64_t ops_since_last_present =
-            submitted_before_present - frame_present_last_gpu_op_submitted_;
         const size_t next_slot = 1u - frame_present_current_slot_;
         auto op = std::make_shared<GodotGpuOp>();
         op->type = GodotGpuOp::Type::Copy;
@@ -6196,32 +6177,6 @@ private:
             return Ref<Texture2D>();
         }
 
-        // RunGodotGpuOpSync guarantees that the copy was submitted on Godot's
-        // render thread, but it does not wait for Metal to finish the queued
-        // compute work. Normally the display pass naturally trails that work.
-        // A complex page replacement can enqueue thousands of full-surface
-        // blends in one engine tick, however, and Godot may sample the newly
-        // selected presentation slot while its copy is still in flight. Since
-        // presentation textures start cleared, that appears as a brief black
-        // frame even though the completed composition is correct.
-        //
-        // Synchronize only the first presentation and unusually large bursts.
-        // Ordinary animated frames stay asynchronous, while page transitions
-        // never expose a partially completed presentation texture.
-        const uint64_t sync_threshold = GpuPresentationSyncOpThreshold();
-        if (first_present ||
-            (sync_threshold > 0 &&
-             ops_since_last_present >= sync_threshold)) {
-            RenderingServer *server = RenderingServer::get_singleton();
-            if (server != nullptr) {
-                server->force_sync();
-                g_gpu_presentation_syncs.fetch_add(
-                    1, std::memory_order_relaxed);
-            }
-        }
-
-        frame_present_last_gpu_op_submitted_ =
-            g_gpu_op_submitted.load(std::memory_order_relaxed);
         frame_present_current_slot_ = next_slot;
         frame_present_serial_ = serial;
         frame_texture_serial_ = serial;
@@ -6309,7 +6264,6 @@ private:
     uint32_t frame_present_height_ = 0;
     size_t frame_present_current_slot_ = 0;
     uint64_t frame_present_serial_ = UINT64_MAX;
-    uint64_t frame_present_last_gpu_op_submitted_ = 0;
     uint64_t frame_texture_serial_ = UINT64_MAX;
     Ref<ImageTexture> media_texture_;
     uint64_t media_frame_serial_ = UINT64_MAX;
