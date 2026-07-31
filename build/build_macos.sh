@@ -92,6 +92,26 @@ strip_macos_runtime_symbols() {
     "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" macho "$@"
 }
 
+thin_macos_executable_to_arm64() {
+    local executable="$1"
+    local architectures
+    local thinned_executable
+
+    architectures="$(lipo -archs "$executable")"
+    if [[ " $architectures " != *" arm64 "* ]]; then
+        echo "Error: exported macOS executable does not contain arm64: $architectures" >&2
+        exit 1
+    fi
+    if [[ "$architectures" == "arm64" ]]; then
+        return
+    fi
+
+    thinned_executable="${executable}.arm64"
+    lipo "$executable" -thin arm64 -output "$thinned_executable"
+    chmod +x "$thinned_executable"
+    mv -f "$thinned_executable" "$executable"
+}
+
 echo "==> Building native engine and Godot extension"
 cmake_config_args=(
     -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
@@ -140,6 +160,8 @@ else
         stage_macos_runtime_fonts "$GODOT_EXPORT_APP"
         cp -f "$GODOT_BIN_DIR/libengine_api.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
         cp -f "$GODOT_BIN_DIR/libaether_kiri_godot.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
+        echo "==> Thinning exported macOS executable to arm64"
+        thin_macos_executable_to_arm64 "$GODOT_EXPORT_APP/Contents/MacOS/Aether"
         if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
             echo "==> Removing non-runtime symbols from exported macOS Release executable"
             "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" macho-executable \

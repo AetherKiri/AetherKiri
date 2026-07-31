@@ -37,6 +37,12 @@ on:
         required: false
       IOS_PROVISIONING_PROFILE_BASE64:
         required: false
+      MACOS_INSTALLER_CERTIFICATE_BASE64:
+        required: false
+      MACOS_INSTALLER_CERTIFICATE_PASSWORD:
+        required: false
+      MACOS_PROVISIONING_PROFILE_BASE64:
+        required: false
 
 permissions:
   contents: read
@@ -57,6 +63,7 @@ env:
   AETHERKIRI_BUILD_NUMBER: ${{ inputs.release_build_number || github.run_number }}
   AETHERKIRI_BUILD_ATTEMPT: ${{ github.run_attempt }}
   AETHER_IOS_BUNDLE_ID: ${{ secrets.AETHERID || 'com.liuyu.aether.aether' }}
+  AETHER_APP_BUNDLE_ID: ${{ secrets.AETHERID || 'com.liuyu.aether.aether' }}
 
 jobs:
   android:
@@ -357,19 +364,11 @@ jobs:
           [[ -n "$IOS_DISTRIBUTION_CERTIFICATE_BASE64" ]] && configured=$((configured + 1))
           [[ -n "$IOS_DISTRIBUTION_CERTIFICATE_PASSWORD" ]] && configured=$((configured + 1))
           [[ -n "$IOS_PROVISIONING_PROFILE_BASE64" ]] && configured=$((configured + 1))
-          if [[ "$configured" -eq 0 ]]; then
-            echo "IOS_APP_STORE_SIGNING=0" >> "$GITHUB_ENV"
-            {
-              echo "### iOS App Store signing"
-              echo ""
-              echo "Signing secrets are not configured; the Release will contain an unsigned validation IPA only."
-            } >> "$GITHUB_STEP_SUMMARY"
-          elif [[ "$configured" -eq 3 ]]; then
-            echo "IOS_APP_STORE_SIGNING=1" >> "$GITHUB_ENV"
-          else
-            echo "Configure all three iOS signing secrets, or remove all of them." >&2
+          if [[ "$configured" -ne 3 ]]; then
+            echo "Tagged releases require all three iOS App Store signing secrets." >&2
             exit 1
           fi
+          echo "IOS_APP_STORE_SIGNING=1" >> "$GITHUB_ENV"
 
       - name: Verify AetherInternal package
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
@@ -592,6 +591,28 @@ jobs:
             --build-number "$release_build_number" \
             --github-env "$GITHUB_ENV"
 
+      - name: Check Mac App Store signing configuration
+        if: env.AETHERKIRI_RELEASE_VERSION != ''
+        env:
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          MACOS_INSTALLER_CERTIFICATE_BASE64: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_BASE64 }}
+          MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
+          MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          configured=0
+          [[ -n "$IOS_DISTRIBUTION_CERTIFICATE_BASE64" ]] && configured=$((configured + 1))
+          [[ -n "$IOS_DISTRIBUTION_CERTIFICATE_PASSWORD" ]] && configured=$((configured + 1))
+          [[ -n "$MACOS_INSTALLER_CERTIFICATE_BASE64" ]] && configured=$((configured + 1))
+          [[ -n "$MACOS_INSTALLER_CERTIFICATE_PASSWORD" ]] && configured=$((configured + 1))
+          [[ -n "$MACOS_PROVISIONING_PROFILE_BASE64" ]] && configured=$((configured + 1))
+          if [[ "$configured" -ne 5 ]]; then
+            echo "Tagged releases require the Apple Distribution certificate plus all three Mac App Store signing secrets." >&2
+            exit 1
+          fi
+          echo "MACOS_APP_STORE_SIGNING=1" >> "$GITHUB_ENV"
+
       - name: Verify AetherInternal package
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         run: |
@@ -742,12 +763,34 @@ jobs:
             fi
           done
 
+      - name: Package Mac App Store installer
+        if: env.MACOS_APP_STORE_SIGNING == '1'
+        env:
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          MACOS_INSTALLER_CERTIFICATE_BASE64: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_BASE64 }}
+          MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
+          MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
+          AETHER_APPLE_TEAM_ID: 3JL7FE9XQT
+        run: |
+          .github/scripts/package-macos-app-store.sh \
+            out/godot/macos/release/Aether.app \
+            out/godot/macos/app-store
+
       - name: Upload Release App
         if: success()
         uses: actions/upload-artifact@v7
         with:
           name: macos-release-app
           path: out/godot/macos/release/
+          retention-days: 7
+
+      - name: Upload Mac App Store installer
+        if: success() && env.MACOS_APP_STORE_SIGNING == '1'
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-release-app-store-pkg
+          path: out/godot/macos/app-store/Aether-Mac-App-Store.pkg
           retention-days: 7
 
       - name: Save vcpkg cache

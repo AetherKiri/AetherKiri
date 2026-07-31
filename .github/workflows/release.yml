@@ -26,9 +26,63 @@ jobs:
       contents: read
     secrets: inherit
 
+  upload-apple:
+    name: Upload ${{ matrix.label }} to App Store Connect
+    needs: build
+    runs-on: macos-latest
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: iOS
+            platform: ios
+            artifact: ios-release-app-store-ipa
+            package_pattern: '*.ipa'
+          - label: macOS
+            platform: macos
+            artifact: macos-release-app-store-pkg
+            package_pattern: '*.pkg'
+    env:
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+      APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64 }}
+
+    steps:
+      - name: Checkout upload script
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Verify App Store Connect API configuration
+        run: |
+          set -euo pipefail
+          test -n "$APP_STORE_CONNECT_API_KEY_ID"
+          test -n "$APP_STORE_CONNECT_API_ISSUER_ID"
+          test -n "$APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64"
+
+      - name: Download signed ${{ matrix.label }} package
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.artifact }}
+          path: app-store-package
+
+      - name: Upload ${{ matrix.label }} package
+        run: |
+          set -euo pipefail
+          package_path="$(find app-store-package -type f -name '${{ matrix.package_pattern }}' -print -quit)"
+          test -n "$package_path"
+          .github/scripts/upload-app-store-connect.sh \
+            '${{ matrix.platform }}' \
+            "$package_path"
+
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs:
+      - build
+      - upload-apple
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -58,6 +112,10 @@ jobs:
           if [[ -d "$download_dir/ios-release-app-store-ipa" ]]; then
             ios_app_store_ipa="$(find "$download_dir/ios-release-app-store-ipa" -type f -name '*.ipa' -print -quit)"
           fi
+          macos_app_store_pkg=""
+          if [[ -d "$download_dir/macos-release-app-store-pkg" ]]; then
+            macos_app_store_pkg="$(find "$download_dir/macos-release-app-store-pkg" -type f -name '*.pkg' -print -quit)"
+          fi
           test -n "$android_apk"
           test -n "$ios_unsigned_ipa"
           test -d "$download_dir/macos-release-app"
@@ -67,6 +125,9 @@ jobs:
           cp "$ios_unsigned_ipa" "$asset_dir/AetherKiri-${tag}-ios-unsigned.ipa"
           if [[ -n "$ios_app_store_ipa" ]]; then
             cp "$ios_app_store_ipa" "$asset_dir/AetherKiri-${tag}-ios-app-store.ipa"
+          fi
+          if [[ -n "$macos_app_store_pkg" ]]; then
+            cp "$macos_app_store_pkg" "$asset_dir/AetherKiri-${tag}-macos-app-store.pkg"
           fi
 
           (

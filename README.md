@@ -232,21 +232,35 @@ and attempt produce a monotonically increasing Apple build number and Android
 
 The Apple jobs use the GitHub-hosted `macos-latest` image. Tagged iOS builds
 fail early unless the selected Xcode contains the iOS 26 SDK or newer. Regular CI
-continues to produce an unsigned IPA for validation. To also produce the
-App Store-signed IPA, set `AETHERID` to the registered Bundle ID
-`com.liuyu.aether.aether` and configure all three repository Actions secrets:
+continues to produce an unsigned IPA for validation. Tagged releases require
+App Store signing for both Apple platforms. Set `AETHERID` to the registered
+Bundle ID `com.liuyu.aether.aether` and configure these repository Actions
+secrets:
 
 - `IOS_DISTRIBUTION_CERTIFICATE_BASE64`: base64-encoded Apple Distribution
   `.p12` certificate and private key.
 - `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD`: password for that `.p12`.
 - `IOS_PROVISIONING_PROFILE_BASE64`: base64-encoded App Store provisioning
   profile for `com.liuyu.aether.aether` and team `3JL7FE9XQT`.
+- `MACOS_INSTALLER_CERTIFICATE_BASE64`: base64-encoded Mac Installer
+  Distribution `.p12` certificate and private key.
+- `MACOS_INSTALLER_CERTIFICATE_PASSWORD`: password for the Mac installer
+  `.p12`.
+- `MACOS_PROVISIONING_PROFILE_BASE64`: base64-encoded Mac App Store
+  provisioning profile for `com.liuyu.aether.aether` and team `3JL7FE9XQT`.
+- `APP_STORE_CONNECT_API_KEY_ID`: App Store Connect API key ID.
+- `APP_STORE_CONNECT_API_ISSUER_ID`: App Store Connect issuer ID.
+- `APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64`: base64-encoded App Store
+  Connect `AuthKey_*.p8` file.
 
-If all signing secrets are present, the GitHub Release includes
-`AetherKiri-<tag>-ios-app-store.ipa`, ready for upload through Transporter or
-App Store Connect. If none are present, the workflow succeeds with the
-explicitly named unsigned IPA. A partially configured signing setup fails
-instead of silently creating the wrong artifact.
+The macOS App Store package is Apple Silicon-only, enables App Sandbox, and
+allows read-write access to files selected by the user. The Release workflow
+validates and uploads the signed iOS IPA and macOS installer package to App
+Store Connect before publishing the GitHub Release. Apple processes accepted
+uploads asynchronously; selecting the processed builds and submitting them to
+App Review remains a separate App Store Connect operation. Missing or partial
+signing and API credentials fail the tagged release instead of silently
+publishing an unsigned store artifact.
 
 ## Run and Test Artifacts
 
