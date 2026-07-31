@@ -221,6 +221,33 @@ available. Linux exports include the required vcpkg shared libraries beside
 the executable, so their engine runtime does not depend on the local build
 tree. Android is currently wired for `arm64-v8a`.
 
+## Tagged Releases
+
+Pushing a SemVer tag such as `0.3.0` or `0.3.0-beta.1` starts the
+`Release` workflow. The tag, without an optional leading `v`, becomes the
+version shown inside Aether and the Android `versionName`. The numeric SemVer
+core becomes the iOS and macOS marketing version, while the GitHub run number
+and attempt produce a monotonically increasing Apple build number and Android
+`versionCode`.
+
+The Apple jobs use the GitHub-hosted `macos-latest` image. Tagged iOS builds
+fail early unless the selected Xcode contains the iOS 26 SDK or newer. Regular CI
+continues to produce an unsigned IPA for validation. To also produce the
+App Store-signed IPA, set `AETHERID` to the registered Bundle ID
+`com.liuyu.aether.aether` and configure all three repository Actions secrets:
+
+- `IOS_DISTRIBUTION_CERTIFICATE_BASE64`: base64-encoded Apple Distribution
+  `.p12` certificate and private key.
+- `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD`: password for that `.p12`.
+- `IOS_PROVISIONING_PROFILE_BASE64`: base64-encoded App Store provisioning
+  profile for `com.liuyu.aether.aether` and team `3JL7FE9XQT`.
+
+If all signing secrets are present, the GitHub Release includes
+`AetherKiri-<tag>-ios-app-store.ipa`, ready for upload through Transporter or
+App Store Connect. If none are present, the workflow succeeds with the
+explicitly named unsigned IPA. A partially configured signing setup fails
+instead of silently creating the wrong artifact.
+
 ## Run and Test Artifacts
 
 Web builds produce an Emscripten GDExtension side module at

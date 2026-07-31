@@ -18,6 +18,9 @@ jobs:
   build:
     name: Build release artifacts
     uses: ./.github/workflows/build.yml
+    with:
+      release_version: ${{ github.ref_name }}
+      release_build_number: ${{ github.run_number }}
     permissions:
       actions: read
       contents: read
@@ -50,14 +53,21 @@ jobs:
           download_dir="$asset_dir/downloaded"
 
           android_apk="$(find "$download_dir/android-release-apk" -type f -name '*.apk' -print -quit)"
-          ios_ipa="$(find "$download_dir/ios-release-unsigned-ipa" -type f -name '*.ipa' -print -quit)"
+          ios_unsigned_ipa="$(find "$download_dir/ios-release-unsigned-ipa" -type f -name '*.ipa' -print -quit)"
+          ios_app_store_ipa=""
+          if [[ -d "$download_dir/ios-release-app-store-ipa" ]]; then
+            ios_app_store_ipa="$(find "$download_dir/ios-release-app-store-ipa" -type f -name '*.ipa' -print -quit)"
+          fi
           test -n "$android_apk"
-          test -n "$ios_ipa"
+          test -n "$ios_unsigned_ipa"
           test -d "$download_dir/macos-release-app"
           test -d "$download_dir/web-release-export"
 
           cp "$android_apk" "$asset_dir/AetherKiri-${tag}-android.apk"
-          cp "$ios_ipa" "$asset_dir/AetherKiri-${tag}-ios-unsigned.ipa"
+          cp "$ios_unsigned_ipa" "$asset_dir/AetherKiri-${tag}-ios-unsigned.ipa"
+          if [[ -n "$ios_app_store_ipa" ]]; then
+            cp "$ios_app_store_ipa" "$asset_dir/AetherKiri-${tag}-ios-app-store.ipa"
+          fi
 
           (
             cd "$download_dir/macos-release-app"

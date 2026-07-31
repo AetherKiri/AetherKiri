@@ -399,6 +399,10 @@ patch_ios_export_project() {
 
     if [[ -f "$project_file" ]]; then
         FLAGS="$flags" perl -0pi -e 's/OTHER_LDFLAGS = "[^"]*";/"OTHER_LDFLAGS = \"" . $ENV{FLAGS} . "\";"/eg' "$project_file"
+        # Automatic signing archives with a development identity first, then
+        # Xcode re-signs the exported archive for App Store distribution.
+        # Godot's explicit Apple Distribution value conflicts with Automatic.
+        perl -0pi -e 's/CODE_SIGN_IDENTITY = "Apple Distribution";/CODE_SIGN_IDENTITY = "Apple Development";/g' "$project_file"
         if [[ "$arch" == "x86_64" ]]; then
             perl -0pi -e 's/ARCHS = "arm64";/ARCHS = "x86_64";/g' "$project_file"
             perl -0pi -e 's/VALID_ARCHS = "arm64 x86_64";/VALID_ARCHS = "x86_64";/g' "$project_file"

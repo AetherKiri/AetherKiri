@@ -9,6 +9,34 @@ on:
       - 'doc/**'
   workflow_dispatch:
   workflow_call:
+    inputs:
+      release_version:
+        description: SemVer tag injected into every application artifact
+        required: false
+        type: string
+        default: ''
+      release_build_number:
+        description: Base GitHub run number used to derive the store build number
+        required: false
+        type: string
+        default: ''
+    secrets:
+      AETHERSECRET:
+        required: false
+      AETHERID:
+        required: false
+      ANDROID_RELEASE_KEYSTORE_BASE64:
+        required: false
+      ANDROID_RELEASE_KEYSTORE_ALIAS:
+        required: false
+      ANDROID_RELEASE_KEYSTORE_PASSWORD:
+        required: false
+      IOS_DISTRIBUTION_CERTIFICATE_BASE64:
+        required: false
+      IOS_DISTRIBUTION_CERTIFICATE_PASSWORD:
+        required: false
+      IOS_PROVISIONING_PROFILE_BASE64:
+        required: false
 
 permissions:
   contents: read
@@ -25,6 +53,10 @@ env:
   # Forward the checkout decision to build.sh so a stale or partial package
   # checkout cannot accidentally enable private extensions in public builds.
   AETHERKIRI_ENABLE_INTERNAL: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
+  AETHERKIRI_RELEASE_VERSION: ${{ inputs.release_version || '' }}
+  AETHERKIRI_BUILD_NUMBER: ${{ inputs.release_build_number || github.run_number }}
+  AETHERKIRI_BUILD_ATTEMPT: ${{ github.run_attempt }}
+  AETHER_IOS_BUNDLE_ID: ${{ secrets.AETHERID || 'com.liuyu.aether.aether' }}
 
 jobs:
   android:
@@ -44,6 +76,15 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Set application release version
+        if: env.AETHERKIRI_RELEASE_VERSION != ''
+        run: |
+          release_build_number=$((AETHERKIRI_BUILD_NUMBER * 100 + AETHERKIRI_BUILD_ATTEMPT))
+          python3 .github/scripts/set-release-version.py \
+            "$AETHERKIRI_RELEASE_VERSION" \
+            --build-number "$release_build_number" \
+            --github-env "$GITHUB_ENV"
 
       - name: Verify AetherInternal package
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
@@ -282,6 +323,54 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Set application release version
+        if: env.AETHERKIRI_RELEASE_VERSION != ''
+        run: |
+          release_build_number=$((AETHERKIRI_BUILD_NUMBER * 100 + AETHERKIRI_BUILD_ATTEMPT))
+          python3 .github/scripts/set-release-version.py \
+            "$AETHERKIRI_RELEASE_VERSION" \
+            --build-number "$release_build_number" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Verify iOS 26 release toolchain
+        if: env.AETHERKIRI_RELEASE_VERSION != ''
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
+          sdk_major="${sdk_version%%.*}"
+          if ((sdk_major < 26)); then
+            echo "Release builds require the iOS 26 SDK or newer; found $sdk_version." >&2
+            exit 1
+          fi
+          echo "Release will use iOS SDK $sdk_version."
+
+      - name: Check App Store signing configuration
+        if: env.AETHERKIRI_RELEASE_VERSION != ''
+        env:
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          configured=0
+          [[ -n "$IOS_DISTRIBUTION_CERTIFICATE_BASE64" ]] && configured=$((configured + 1))
+          [[ -n "$IOS_DISTRIBUTION_CERTIFICATE_PASSWORD" ]] && configured=$((configured + 1))
+          [[ -n "$IOS_PROVISIONING_PROFILE_BASE64" ]] && configured=$((configured + 1))
+          if [[ "$configured" -eq 0 ]]; then
+            echo "IOS_APP_STORE_SIGNING=0" >> "$GITHUB_ENV"
+            {
+              echo "### iOS App Store signing"
+              echo ""
+              echo "Signing secrets are not configured; the Release will contain an unsigned validation IPA only."
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$configured" -eq 3 ]]; then
+            echo "IOS_APP_STORE_SIGNING=1" >> "$GITHUB_ENV"
+          else
+            echo "Configure all three iOS signing secrets, or remove all of them." >&2
+            exit 1
+          fi
+
       - name: Verify AetherInternal package
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
         run: |
@@ -368,6 +457,18 @@ jobs:
             exit 1
           fi
 
+      - name: Package App Store IPA
+        if: env.IOS_APP_STORE_SIGNING == '1'
+        env:
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          AETHER_APPLE_TEAM_ID: 3JL7FE9XQT
+        run: |
+          .github/scripts/package-ios-app-store.sh \
+            out/godot/ios/release/Aether.xcodeproj \
+            out/godot/ios/release
+
       - name: Verify iOS Release ABI surface
         run: |
           set -euo pipefail
@@ -386,6 +487,21 @@ jobs:
             exit 1
           fi
           xcrun otool -hv "$release_binary"
+          if [[ -n "$AETHERKIRI_RELEASE_VERSION" ]]; then
+            info_plist="${RUNNER_TEMP}/Aether-release-Info.plist"
+            unzip -p \
+              out/godot/ios/release/Aether-Release-Unsigned.ipa \
+              Payload/Aether.app/Info.plist > "$info_plist"
+            actual_bundle_id="$(plutil -extract CFBundleIdentifier raw "$info_plist")"
+            actual_version="$(plutil -extract CFBundleShortVersionString raw "$info_plist")"
+            actual_build="$(plutil -extract CFBundleVersion raw "$info_plist")"
+            if [[ "$actual_bundle_id" != "$AETHER_IOS_BUNDLE_ID" ||
+                  "$actual_version" != "$AETHER_APPLE_VERSION" ||
+                  "$actual_build" != "$AETHER_BUILD_NUMBER" ]]; then
+              echo "The packaged iOS release metadata does not match the tag." >&2
+              exit 1
+            fi
+          fi
 
       - name: Build iOS Debug
         run: |
@@ -426,6 +542,14 @@ jobs:
           path: out/godot/ios/release/Aether-Release-Unsigned.ipa
           retention-days: 7
 
+      - name: Upload App Store IPA
+        if: success() && env.IOS_APP_STORE_SIGNING == '1'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-release-app-store-ipa
+          path: out/godot/ios/release/Aether-App-Store.ipa
+          retention-days: 7
+
       - name: Save vcpkg cache
         if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
         uses: actions/cache/save@v5
@@ -458,6 +582,15 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Set application release version
+        if: env.AETHERKIRI_RELEASE_VERSION != ''
+        run: |
+          release_build_number=$((AETHERKIRI_BUILD_NUMBER * 100 + AETHERKIRI_BUILD_ATTEMPT))
+          python3 .github/scripts/set-release-version.py \
+            "$AETHERKIRI_RELEASE_VERSION" \
+            --build-number "$release_build_number" \
+            --github-env "$GITHUB_ENV"
 
       - name: Verify AetherInternal package
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
@@ -587,6 +720,18 @@ jobs:
             fi
             codesign --verify --deep --strict --verbose=2 "$APP_PATH"
             if [[ "$build_type" == "release" ]]; then
+              if [[ -n "$AETHERKIRI_RELEASE_VERSION" ]]; then
+                info_plist="$APP_PATH/Contents/Info.plist"
+                actual_bundle_id="$(plutil -extract CFBundleIdentifier raw "$info_plist")"
+                actual_version="$(plutil -extract CFBundleShortVersionString raw "$info_plist")"
+                actual_build="$(plutil -extract CFBundleVersion raw "$info_plist")"
+                if [[ "$actual_bundle_id" != "$AETHER_IOS_BUNDLE_ID" ||
+                      "$actual_version" != "$AETHER_APPLE_VERSION" ||
+                      "$actual_build" != "$AETHER_BUILD_NUMBER" ]]; then
+                  echo "The packaged macOS release metadata does not match the tag." >&2
+                  exit 1
+                fi
+              fi
               while IFS= read -r -d '' runtime_binary; do
                 if file -b "$runtime_binary" | grep -q 'Mach-O' &&
                    xcrun nm -m "$runtime_binary" 2>/dev/null | grep -q 'non-external'; then
@@ -638,6 +783,15 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Set application release version
+        if: env.AETHERKIRI_RELEASE_VERSION != ''
+        run: |
+          release_build_number=$((AETHERKIRI_BUILD_NUMBER * 100 + AETHERKIRI_BUILD_ATTEMPT))
+          python3 .github/scripts/set-release-version.py \
+            "$AETHERKIRI_RELEASE_VERSION" \
+            --build-number "$release_build_number" \
+            --github-env "$GITHUB_ENV"
 
       - name: Verify AetherInternal package
         if: env.AETHERKIRI_WITH_INTERNAL == 'true'
