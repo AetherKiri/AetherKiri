@@ -37,6 +37,7 @@
 #include "Application.h"
 #include "RenderManager.h"
 #include "GodotRenderManager.h"
+#include "StorageImpl.h"
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
 #include "krkr_egl_context.h"
 #include <GLES3/gl3.h>
@@ -1469,10 +1470,9 @@ static std::vector<std::string> s_appHomeDirs;
 const std::vector<std::string> &TVPGetApplicationHomeDirectory() {
     if (s_appHomeDirs.empty()) {
         if (!TVPNativeProjectDir.IsEmpty()) {
-            std::string dir = TVPNativeProjectDir.AsNarrowStdString();
-            while (!dir.empty() && dir.back() == '/')
-                dir.pop_back();
-            s_appHomeDirs.push_back(dir);
+            const ttstr dir =
+                TVPGetNativeProjectDirectory(TVPNativeProjectDir);
+            s_appHomeDirs.push_back(dir.AsNarrowStdString());
         } else {
 #if defined(__EMSCRIPTEN__)
             s_appHomeDirs.push_back("/userfs");

@@ -84,7 +84,7 @@ JavaVM* krkr_GetJavaVM() {
     return vm;
 }
 
-JNIEnv* krkr_GetJNIEnv() {
+__attribute__((visibility("default"))) JNIEnv* krkr_GetJNIEnv() {
     JavaVM* vm = krkr_GetJavaVM();
     if (!vm) return nullptr;
 
@@ -118,7 +118,7 @@ static std::mutex g_surface_mutex;
 static jobject g_app_context = nullptr;  // global ref
 static std::mutex g_context_mutex;
 
-jobject krkr_GetApplicationContext() {
+__attribute__((visibility("default"))) jobject krkr_GetApplicationContext() {
     std::lock_guard<std::mutex> lock(g_context_mutex);
     return g_app_context;
 }

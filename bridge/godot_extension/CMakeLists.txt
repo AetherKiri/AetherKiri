@@ -87,6 +87,8 @@ set_target_properties(aether_kiri_godot PROPERTIES
     INSTALL_RPATH "${AETHERKIRI_EXTENSION_RPATH}"
 )
 
+aetherkiri_limit_runtime_exports(aether_kiri_godot GODOT_EXTENSION)
+
 if(APPLE AND NOT IOS AND TARGET engine_api)
     # Godot exports the libraries referenced by aether_kiri.gdextension from
     # apps/godot_app/bin. Keep that staging directory tied to the actual CMake

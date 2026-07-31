@@ -88,6 +88,30 @@ stage_macos_runtime_fonts() {
     fi
 }
 
+strip_macos_runtime_symbols() {
+    "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" macho "$@"
+}
+
+thin_macos_executable_to_arm64() {
+    local executable="$1"
+    local architectures
+    local thinned_executable
+
+    architectures="$(lipo -archs "$executable")"
+    if [[ " $architectures " != *" arm64 "* ]]; then
+        echo "Error: exported macOS executable does not contain arm64: $architectures" >&2
+        exit 1
+    fi
+    if [[ "$architectures" == "arm64" ]]; then
+        return
+    fi
+
+    thinned_executable="${executable}.arm64"
+    lipo "$executable" -thin arm64 -output "$thinned_executable"
+    chmod +x "$thinned_executable"
+    mv -f "$thinned_executable" "$executable"
+}
+
 echo "==> Building native engine and Godot extension"
 cmake_config_args=(
     -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
@@ -113,6 +137,12 @@ cmake --build --preset "$CMAKE_BUILD_PRESET" -- -j"$PARALLEL_JOBS"
 mkdir -p "$GODOT_BIN_DIR"
 cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.dylib" "$GODOT_BIN_DIR/"
 cp -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.dylib" "$GODOT_BIN_DIR/"
+if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+    echo "==> Removing non-runtime symbols from staged macOS Release libraries"
+    strip_macos_runtime_symbols \
+        "$GODOT_BIN_DIR/libengine_api.dylib" \
+        "$GODOT_BIN_DIR/libaether_kiri_godot.dylib"
+fi
 codesign --force --sign - "$GODOT_BIN_DIR/libengine_api.dylib" "$GODOT_BIN_DIR/libaether_kiri_godot.dylib" >/dev/null 2>&1 || true
 
 if [[ ! -x "$GODOT_BIN" ]]; then
@@ -130,6 +160,25 @@ else
         stage_macos_runtime_fonts "$GODOT_EXPORT_APP"
         cp -f "$GODOT_BIN_DIR/libengine_api.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
         cp -f "$GODOT_BIN_DIR/libaether_kiri_godot.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
+        echo "==> Thinning exported macOS executable to arm64"
+        thin_macos_executable_to_arm64 "$GODOT_EXPORT_APP/Contents/MacOS/Aether"
+        if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+            echo "==> Removing non-runtime symbols from exported macOS Release executable"
+            "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" macho-executable \
+                "$GODOT_EXPORT_APP/Contents/MacOS/Aether"
+            runtime_binaries=()
+            while IFS= read -r -d '' runtime_binary; do
+                if file -b "$runtime_binary" | grep -q 'Mach-O'; then
+                    runtime_binaries+=("$runtime_binary")
+                fi
+            done < <(
+                find "$GODOT_EXPORT_APP/Contents/Frameworks" -type f -print0
+            )
+            if ((${#runtime_binaries[@]})); then
+                echo "==> Removing non-runtime symbols from exported macOS Release libraries"
+                strip_macos_runtime_symbols "${runtime_binaries[@]}"
+            fi
+        fi
         codesign --force --sign - \
             "$GODOT_EXPORT_APP/Contents/Frameworks/libengine_api.dylib" \
             "$GODOT_EXPORT_APP/Contents/Frameworks/libaether_kiri_godot.dylib" \

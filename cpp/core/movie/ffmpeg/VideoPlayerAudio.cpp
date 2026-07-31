@@ -455,7 +455,7 @@ void CVideoPlayerAudio::Process() {
                             msg.cachetotal = cachetotal;
                             msg.cachetime = cachetime;
                             msg.timestamp = audioframe.hasTimestamp
-                                ? audioframe.pts
+                                ? audioframe.pts + audioframe.duration
                                 : DVD_NOPTS_VALUE;
                             m_messageParent.Put(new CDVDMsgType<SStartMsg>(
                                 CDVDMsg::PLAYER_STARTED, msg));

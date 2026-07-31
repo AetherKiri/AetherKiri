@@ -51,6 +51,8 @@ public:
 
     virtual tjs_uint GetCurrentPlaySamples() = 0;
 
+    virtual tjs_uint GetPlaybackSampleRate() = 0;
+
     virtual tjs_uint GetLatencySamples() = 0;
 
     virtual float GetLatencySeconds() { return 0; }

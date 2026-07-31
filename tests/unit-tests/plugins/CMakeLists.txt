@@ -14,6 +14,8 @@ add_executable(motionplayer-dll
     godot-texture.cpp
     krkrgles-aliases.cpp
     kag-load-contract.cpp
+    script-compatibility.cpp
+    project-storage.cpp
 )
 
 set(_KRKR2PLUGIN_LINK_ITEM "$<LINK_LIBRARY:WHOLE_ARCHIVE,krkr2plugin>")

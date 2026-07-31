@@ -119,6 +119,7 @@ public:
     SDL_AudioCVT *_cvt = nullptr;
     std::vector<uint8_t> _cvtbuf;
     int _frame_size = 0;
+    int _input_frame_size = 0;
 
     void RecalcVolume() {
         if(_pan > 0) {
@@ -140,8 +141,10 @@ public:
     tjs_uint _sendedFrontBuffer = 0;
     tjs_uint _sendedSamples = 0, _inCachedSamples = 0;
 
-    tTVPSoundBuffer(int framesize, SDL_AudioCVT *cvt) :
-        _frame_size(framesize), _cvt(cvt) {
+    tTVPSoundBuffer(int input_frame_size, int output_frame_size,
+                    SDL_AudioCVT *cvt) :
+        _cvt(cvt), _frame_size(output_frame_size),
+        _input_frame_size(input_frame_size) {
         RecalcVolume();
         if(cvt) {
             _cvtbuf.resize(
@@ -194,7 +197,7 @@ public:
         if(_cvt) {
             std::vector<uint8_t> buffer;
             uint8_t *inbuf = (uint8_t *)_inbuf;
-            int buflen = _frame_size * 2352;
+            int buflen = _input_frame_size * 2352;
             _cvt->len = buflen;
             while(inlen > buflen) { // fill 2352 samples to fit 48k/44.1k
                 memcpy(_cvt->buf, inbuf, buflen);
@@ -236,6 +239,8 @@ public:
     int GetRemainBuffers() override { return _buffers.size(); }
 
     tjs_uint GetCurrentPlaySamples() override;
+
+    tjs_uint GetPlaybackSampleRate() override;
 
     float GetLatencySeconds() override;
 
@@ -337,7 +342,8 @@ public:
         }
 
         tTVPSoundBuffer *s =
-            new tTVPSoundBuffer(fmt.BytesPerSample * fmt.Channels, cvt);
+            new tTVPSoundBuffer(fmt.BytesPerSample * fmt.Channels,
+                                _frame_size, cvt);
         std::lock_guard<std::mutex> lk(_streams_mtx);
         _streams.emplace(s);
         return s;
@@ -375,19 +381,31 @@ tTVPSoundBuffer::~tTVPSoundBuffer() {
 }
 
 tjs_uint tTVPSoundBuffer::GetLatencySamples() {
+    std::lock_guard<std::mutex> lk(_buffer_mtx);
     int32_t samples = TVPAudioRenderer->GetUnprocessedSamples();
-    return samples + _inCachedSamples;
+    return static_cast<tjs_uint>(std::max<int32_t>(samples, 0)) +
+        _inCachedSamples;
 }
 
 tjs_uint tTVPSoundBuffer::GetCurrentPlaySamples() {
+    std::lock_guard<std::mutex> lk(_buffer_mtx);
     int32_t samples = TVPAudioRenderer->GetUnprocessedSamples();
     if(samples > _sendedSamples)
         return 0;
     return _sendedSamples - samples; // -GetLatencySamples();
 }
 
+tjs_uint tTVPSoundBuffer::GetPlaybackSampleRate() {
+    return static_cast<tjs_uint>(
+        std::max(TVPAudioRenderer->GetSpec().freq, 0));
+}
+
 float tTVPSoundBuffer::GetLatencySeconds() {
-    return GetLatencySamples() / TVPAudioRenderer->GetSpec().freq;
+    const int sample_rate = TVPAudioRenderer->GetSpec().freq;
+    if(sample_rate <= 0)
+        return 0.0f;
+    return static_cast<float>(GetLatencySamples()) /
+        static_cast<float>(sample_rate);
 }
 
 void tTVPSoundBuffer::FillBuffer(uint8_t *out, int len) {
@@ -645,7 +663,8 @@ class tTVPSoundBufferAL : public tTVPSoundBuffer {
 
 public:
     tTVPSoundBufferAL(tTVPWaveFormat &desired, int bufcount) :
-        tTVPSoundBuffer(desired.BytesPerSample * desired.Channels, nullptr),
+        tTVPSoundBuffer(desired.BytesPerSample * desired.Channels,
+                        desired.BytesPerSample * desired.Channels, nullptr),
         _bufferCount(bufcount) {
         _bufferIds = new ALuint[bufcount];
         _bufferIds2 = new ALuint[bufcount];
@@ -886,10 +905,15 @@ public:
     }
 
     tjs_uint GetCurrentPlaySamples() override {
+        std::lock_guard<std::mutex> lk(_buffer_mtx);
         TVPEnsureALContext();
         ALint offset = 0;
         alGetSourcei(_alSource, AL_SAMPLE_OFFSET, &offset);
         return _sendedSamples + offset;
+    }
+
+    tjs_uint GetPlaybackSampleRate() override {
+        return static_cast<tjs_uint>(_format.SamplesPerSec);
     }
 
 private:
