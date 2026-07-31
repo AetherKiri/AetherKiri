@@ -2,6 +2,7 @@
 
 #include "tjsCommHead.h"
 #include "SysInitImpl.h"
+#include "StorageImpl.h"
 
 #include <chrono>
 #include <filesystem>
@@ -40,6 +41,8 @@ TEST_CASE("project archive detection falls back to the exact native path") {
 
     CHECK(TVPIsProjectStorageFile(
         TJS_W(""), ttstr(project.path.string())));
+    CHECK(TVPGetNativeProjectDirectory(ttstr(project.path.string())) ==
+          ttstr(project.path.parent_path().string()));
 
     std::error_code error;
     std::filesystem::remove(project.path, error);
@@ -48,4 +51,6 @@ TEST_CASE("project archive detection falls back to the exact native path") {
 
     CHECK_FALSE(TVPIsProjectStorageFile(
         TJS_W(""), ttstr(project.path.string())));
+    CHECK(TVPGetNativeProjectDirectory(ttstr(project.path.string())) ==
+          ttstr(project.path.string()));
 }
