@@ -421,10 +421,18 @@ extern "C" void aether_kiri_swift_builtin_float_force_load(void) {}
 EOF
     fi
     if [[ -f "$info_plist" ]]; then
+        local bluetooth_purpose
+        bluetooth_purpose="Aether uses Bluetooth to connect game controllers that you choose to use."
         /usr/libexec/PlistBuddy -c 'Set :UIFileSharingEnabled true' "$info_plist" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c 'Add :UIFileSharingEnabled bool true' "$info_plist"
         /usr/libexec/PlistBuddy -c 'Set :LSSupportsOpeningDocumentsInPlace true' "$info_plist" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c 'Add :LSSupportsOpeningDocumentsInPlace bool true' "$info_plist"
+        /usr/libexec/PlistBuddy \
+            -c "Set :NSBluetoothAlwaysUsageDescription $bluetooth_purpose" \
+            "$info_plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy \
+                -c "Add :NSBluetoothAlwaysUsageDescription string $bluetooth_purpose" \
+                "$info_plist"
     fi
 }
 
