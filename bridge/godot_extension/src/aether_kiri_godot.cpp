@@ -54,6 +54,17 @@
 #include <vector>
 #include <mutex>
 
+#if defined(__APPLE__)
+extern "C" {
+int32_t aether_storekit_start(const char *product_id);
+uint64_t aether_storekit_refresh_entitlement(const char *product_id);
+uint64_t aether_storekit_purchase(const char *product_id);
+uint64_t aether_storekit_restore(const char *product_id);
+char *aether_storekit_copy_state_json();
+void aether_storekit_free_string(char *value);
+}
+#endif
+
 #if defined(__ANDROID__)
 #include <jni.h>
 
@@ -5877,6 +5888,63 @@ public:
 #endif
     }
 
+    bool iap_start(const String &product_id) const {
+#if defined(__APPLE__)
+        const CharString utf8 = product_id.utf8();
+        return aether_storekit_start(utf8.get_data()) != 0;
+#else
+        (void)product_id;
+        return false;
+#endif
+    }
+
+    int64_t iap_refresh_entitlement(const String &product_id) const {
+#if defined(__APPLE__)
+        const CharString utf8 = product_id.utf8();
+        return static_cast<int64_t>(
+            aether_storekit_refresh_entitlement(utf8.get_data()));
+#else
+        (void)product_id;
+        return 0;
+#endif
+    }
+
+    int64_t iap_purchase(const String &product_id) const {
+#if defined(__APPLE__)
+        const CharString utf8 = product_id.utf8();
+        return static_cast<int64_t>(
+            aether_storekit_purchase(utf8.get_data()));
+#else
+        (void)product_id;
+        return 0;
+#endif
+    }
+
+    int64_t iap_restore(const String &product_id) const {
+#if defined(__APPLE__)
+        const CharString utf8 = product_id.utf8();
+        return static_cast<int64_t>(
+            aether_storekit_restore(utf8.get_data()));
+#else
+        (void)product_id;
+        return 0;
+#endif
+    }
+
+    String iap_get_state_json() const {
+#if defined(__APPLE__)
+        char *json = aether_storekit_copy_state_json();
+        if (json == nullptr) {
+            return "{\"available\":false,\"last_error\":\"StoreKit state unavailable\"}";
+        }
+        const String result = String::utf8(json);
+        aether_storekit_free_string(json);
+        return result;
+#else
+        return "{\"available\":false,\"product_state\":\"unsupported\",\"entitled\":false}";
+#endif
+    }
+
 protected:
     static void _bind_methods() {
         ClassDB::bind_method(D_METHOD("initialize_engine", "writable_path", "cache_path"),
@@ -5971,6 +6039,16 @@ protected:
                              &AetherKiriPlayer::android_has_external_storage_permission);
         ClassDB::bind_method(D_METHOD("android_request_external_storage_permission"),
                              &AetherKiriPlayer::android_request_external_storage_permission);
+        ClassDB::bind_method(D_METHOD("iap_start", "product_id"),
+                             &AetherKiriPlayer::iap_start);
+        ClassDB::bind_method(D_METHOD("iap_refresh_entitlement", "product_id"),
+                             &AetherKiriPlayer::iap_refresh_entitlement);
+        ClassDB::bind_method(D_METHOD("iap_purchase", "product_id"),
+                             &AetherKiriPlayer::iap_purchase);
+        ClassDB::bind_method(D_METHOD("iap_restore", "product_id"),
+                             &AetherKiriPlayer::iap_restore);
+        ClassDB::bind_method(D_METHOD("iap_get_state_json"),
+                             &AetherKiriPlayer::iap_get_state_json);
     }
 
 private:

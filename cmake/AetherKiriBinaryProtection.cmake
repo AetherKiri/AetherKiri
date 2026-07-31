@@ -15,8 +15,8 @@ function(aetherkiri_limit_runtime_exports target_name export_surface)
 
     if(NOT MSVC)
         target_compile_options("${target_name}" PRIVATE
-            "$<$<CONFIG:Release>:-fvisibility=hidden>"
-            "$<$<CONFIG:Release>:-fvisibility-inlines-hidden>"
+            "$<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>>:-fvisibility=hidden>"
+            "$<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>>:-fvisibility-inlines-hidden>"
         )
     endif()
 
@@ -32,8 +32,8 @@ function(aetherkiri_limit_runtime_exports target_name export_surface)
                 "Unknown runtime export surface: ${export_surface}")
         endif()
         target_link_options("${target_name}" PRIVATE
-            "$<$<CONFIG:Release>:-Wl,-dead_strip>"
-            "$<$<CONFIG:Release>:-Wl,-exported_symbols_list,${export_list}>"
+            "$<$<CONFIG:Release>:LINKER:-dead_strip>"
+            "$<$<CONFIG:Release>:LINKER:SHELL:-exported_symbols_list ${export_list}>"
         )
         set_property(TARGET "${target_name}" APPEND PROPERTY
             LINK_DEPENDS "${export_list}")
