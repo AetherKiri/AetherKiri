@@ -138,6 +138,11 @@ if [[ "$wasm_magic" != "0061736d" ]]; then
     exit 1
 fi
 cp -f "$wasm_source" "$GODOT_BIN_DIR/aether_kiri_godot.wasm"
+if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+    echo "==> Removing non-runtime symbols from staged Web Release module"
+    "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" wasm \
+        "$GODOT_BIN_DIR/aether_kiri_godot.wasm"
+fi
 
 debug_template_file="$GODOT_TEMPLATE_DIR/web_dlink_debug.zip"
 release_template_file="$GODOT_TEMPLATE_DIR/web_dlink_release.zip"
@@ -157,6 +162,17 @@ else
         node "$PROJECT_ROOT/build/patch_web_export.mjs" "$export_root"
     else
         echo "Warning: node not found; Web local game mount patch was not applied." >&2
+    fi
+    if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+        web_runtime_modules=()
+        while IFS= read -r -d '' web_runtime_module; do
+            web_runtime_modules+=("$web_runtime_module")
+        done < <(find "$export_root" -maxdepth 2 -type f -name '*.wasm' -print0)
+        if ((${#web_runtime_modules[@]})); then
+            echo "==> Removing non-runtime symbols from exported Web Release modules"
+            "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" wasm \
+                "${web_runtime_modules[@]}"
+        fi
     fi
 fi
 

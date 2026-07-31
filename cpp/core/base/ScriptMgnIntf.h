@@ -84,10 +84,15 @@ extern const tjs_char *TVPGetPatchWindowPrerequisitesScript();
 extern const tjs_char *TVPGetKagLoadContractGuardScript();
 extern const tjs_char *TVPGetPatchRuntimeRegistryExpression();
 extern const tjs_char *TVPGetPatchRuntimeInstanceRecoveryScript();
+extern const tjs_char *TVPGetD3DStandSourcePatchScript();
 extern bool TVPMergeObjectMembers(iTJSDispatch2 *destination,
                                   iTJSDispatch2 *source);
 extern bool TVPMergeMissingObjectMembers(iTJSDispatch2 *destination,
                                          iTJSDispatch2 *source);
+
+// Adds the face-visibility snapshot repair to compatible World._updateAll
+// implementations. The three dependent insertions are applied atomically.
+extern bool TVPPatchWorldRestoreFaceVisibility(ttstr &script);
 
 extern void TVPArmKagNoTransWaitRepair();
 

@@ -1,0 +1,10 @@
+{
+    global:
+        engine_*;
+        JNI_OnLoad;
+        Java_org_github_krkr2_aetherkiri_EngineBridge_*;
+        _Z14krkr_GetJNIEnvv;
+        _Z26krkr_GetApplicationContextv;
+    local:
+        *;
+};

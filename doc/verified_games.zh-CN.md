@@ -2,7 +2,7 @@
 
 [English](verified_games.md)
 
-最后更新：2026-07-27
+最后更新：2026-07-29
 
 本文档记录已经用 AetherKiri 手动 smoke test 或 flow test 过的游戏。它是兼容性记录，
 不代表每条路线、每个视频、每个插件路径或每个存档状态都已经完整验证。
@@ -49,7 +49,10 @@
 | 銃騎士Cutie☆Bullet | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 聖騎士Melty☆Lovers | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 将軍様はお年頃 | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
-| エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、开始游戏流程、场景/角色名/对话文字渲染和基础输入 | 流程验证通过 | [@KYoiRyi](https://github.com/KYoiRyi)、[@yorkyang2333](mailto:yangyork097@gmail.com) | 本地游戏文件不提交到仓库。 |
+| 真愛の百合は赤く染まる | Linux x64 release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、开始游戏流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
+| 死に逝く君、館に芽吹く憎悪 | Linux x64 release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、开始游戏流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
+| 枯れない世界と終わる花 | Linux x64 release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、开始游戏流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
+| エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | Linux x64 release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、开始游戏流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
 
 ## 如何新增游戏
 
