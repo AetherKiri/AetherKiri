@@ -142,6 +142,33 @@ fi
 ditto "$source_app" "$app_store_app"
 cp "$profile_path" "$app_store_app/Contents/embedded.provisionprofile"
 
+# Godot currently exports only LSMinimumSystemVersionByArchitecture. App Store
+# Connect also requires the scalar LSMinimumSystemVersion key, even when the
+# application is intentionally arm64-only. Keep both values aligned with the
+# exported arm64 deployment target before sealing the bundle.
+minimum_system_version="$(
+    plutil -extract LSMinimumSystemVersionByArchitecture.arm64 raw \
+        "$app_store_app/Contents/Info.plist"
+)"
+if [[ -z "$minimum_system_version" ]]; then
+    echo "The macOS application is missing its arm64 deployment target." >&2
+    exit 1
+fi
+/usr/libexec/PlistBuddy \
+    -c "Set :LSMinimumSystemVersion $minimum_system_version" \
+    "$app_store_app/Contents/Info.plist" 2>/dev/null ||
+    /usr/libexec/PlistBuddy \
+        -c "Add :LSMinimumSystemVersion string $minimum_system_version" \
+        "$app_store_app/Contents/Info.plist"
+scalar_system_version="$(
+    plutil -extract LSMinimumSystemVersion raw \
+        "$app_store_app/Contents/Info.plist"
+)"
+if [[ "$scalar_system_version" != "$minimum_system_version" ]]; then
+    echo "The macOS scalar deployment target does not match the arm64 target." >&2
+    exit 1
+fi
+
 # App Store Connect rejects macOS bundles that contain quarantine metadata.
 # Clear extended attributes before signing so the sealed bundle cannot retain
 # download-origin metadata from export templates or cached dependencies.
