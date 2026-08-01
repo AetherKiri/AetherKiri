@@ -71,6 +71,206 @@ bool g_host_prefer_gpu_frame = true;
 tTJSNI_Window *g_host_window_owner = nullptr;
 std::vector<tTJSNI_Window *> g_host_window_owners;
 
+struct HostTextInputState {
+    tTJSNI_Window *owner = nullptr;
+    tTVPImeMode ime_mode = imDisable;
+    bool ime_active = false;
+    bool attention_point_valid = false;
+    tjs_int attention_x = 0;
+    tjs_int attention_y = 0;
+    bool text_available = false;
+    std::string text_utf8;
+    int32_t selection_start = 0;
+    int32_t selection_end = 0;
+};
+
+std::mutex g_host_text_input_mutex;
+HostTextInputState g_host_text_input_state;
+
+bool IsHostTextInputModeActive(tTVPImeMode mode) {
+    return mode != imDisable && mode != imClose;
+}
+
+bool IsHighSurrogate(tjs_char value) {
+    return value >= static_cast<tjs_char>(0xd800) &&
+           value <= static_cast<tjs_char>(0xdbff);
+}
+
+bool IsLowSurrogate(tjs_char value) {
+    return value >= static_cast<tjs_char>(0xdc00) &&
+           value <= static_cast<tjs_char>(0xdfff);
+}
+
+void AppendUtf8Scalar(std::string &out, uint32_t scalar) {
+    if(scalar <= 0x7f) {
+        out.push_back(static_cast<char>(scalar));
+    } else if(scalar <= 0x7ff) {
+        out.push_back(static_cast<char>(0xc0 | (scalar >> 6)));
+        out.push_back(static_cast<char>(0x80 | (scalar & 0x3f)));
+    } else if(scalar <= 0xffff) {
+        out.push_back(static_cast<char>(0xe0 | (scalar >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((scalar >> 6) & 0x3f)));
+        out.push_back(static_cast<char>(0x80 | (scalar & 0x3f)));
+    } else {
+        out.push_back(static_cast<char>(0xf0 | (scalar >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((scalar >> 12) & 0x3f)));
+        out.push_back(static_cast<char>(0x80 | ((scalar >> 6) & 0x3f)));
+        out.push_back(static_cast<char>(0x80 | (scalar & 0x3f)));
+    }
+}
+
+std::string HostTextUtf16ToUtf8(const tjs_char *text, size_t length) {
+    std::string result;
+    result.reserve(length);
+    for(size_t index = 0; index < length; ++index) {
+        uint32_t scalar = static_cast<uint32_t>(text[index]);
+        if(IsHighSurrogate(text[index])) {
+            if(index + 1 < length && IsLowSurrogate(text[index + 1])) {
+                scalar = 0x10000u +
+                         ((static_cast<uint32_t>(text[index]) - 0xd800u)
+                          << 10u) +
+                         (static_cast<uint32_t>(text[index + 1]) - 0xdc00u);
+                ++index;
+            } else {
+                scalar = 0xfffdu;
+            }
+        } else if(IsLowSurrogate(text[index])) {
+            scalar = 0xfffdu;
+        }
+        AppendUtf8Scalar(result, scalar);
+    }
+    return result;
+}
+
+int32_t HostUtf16OffsetToScalar(const tjs_char *text, size_t length,
+                                tTVInteger offset) {
+    size_t boundary = static_cast<size_t>(
+        std::clamp<tTVInteger>(offset, 0, static_cast<tTVInteger>(length)));
+    if(boundary > 0 && boundary < length &&
+       IsHighSurrogate(text[boundary - 1]) && IsLowSurrogate(text[boundary])) {
+        --boundary;
+    }
+
+    int32_t scalar_offset = 0;
+    for(size_t index = 0; index < boundary; ++scalar_offset) {
+        if(IsHighSurrogate(text[index]) && index + 1 < boundary &&
+           IsLowSurrogate(text[index + 1])) {
+            index += 2;
+        } else {
+            ++index;
+        }
+    }
+    return scalar_offset;
+}
+
+bool TryReadHostTextInputContent(iTJSDispatch2 *attention_owner,
+                                 std::string *out_text_utf8,
+                                 int32_t *out_selection_start,
+                                 int32_t *out_selection_end) {
+    if(attention_owner == nullptr || out_text_utf8 == nullptr ||
+       out_selection_start == nullptr || out_selection_end == nullptr) {
+        return false;
+    }
+
+    try {
+        tTJSVariant text_value;
+        if(TJS_FAILED(attention_owner->PropGet(
+               TJS_IGNOREPROP, TJS_W("Edit_text"), nullptr, &text_value,
+               attention_owner)) ||
+           text_value.Type() != tvtString) {
+            return false;
+        }
+
+        const ttstr text(text_value.GetString());
+        const size_t utf16_length = static_cast<size_t>(text.GetLen());
+        tTVInteger caret = static_cast<tTVInteger>(utf16_length);
+        tTVInteger anchor = caret;
+        tTJSVariant caret_value;
+        if(TJS_SUCCEEDED(attention_owner->PropGet(
+               TJS_IGNOREPROP, TJS_W("Edit_selStart"), nullptr, &caret_value,
+               attention_owner)) &&
+           (caret_value.Type() == tvtInteger || caret_value.Type() == tvtReal)) {
+            caret = caret_value.AsInteger();
+        }
+        tTJSVariant anchor_value;
+        if(TJS_SUCCEEDED(attention_owner->PropGet(
+               TJS_IGNOREPROP, TJS_W("Edit_selAnchor"), nullptr,
+               &anchor_value, attention_owner)) &&
+           (anchor_value.Type() == tvtInteger ||
+            anchor_value.Type() == tvtReal)) {
+            anchor = anchor_value.AsInteger();
+        } else {
+            anchor = caret;
+        }
+
+        *out_text_utf8 = HostTextUtf16ToUtf8(text.c_str(), utf16_length);
+        const int32_t caret_scalar =
+            HostUtf16OffsetToScalar(text.c_str(), utf16_length, caret);
+        const int32_t anchor_scalar =
+            HostUtf16OffsetToScalar(text.c_str(), utf16_length, anchor);
+        *out_selection_start = std::min(caret_scalar, anchor_scalar);
+        *out_selection_end = std::max(caret_scalar, anchor_scalar);
+        return true;
+    } catch(...) {
+        return false;
+    }
+}
+
+void AdoptHostTextInputOwnerLocked(tTJSNI_Window *owner) {
+    if(g_host_text_input_state.owner == owner)
+        return;
+    g_host_text_input_state = {};
+    g_host_text_input_state.owner = owner;
+}
+
+void SetHostTextInputMode(tTJSNI_Window *owner, tTVPImeMode mode) {
+    if(owner == nullptr)
+        return;
+    std::lock_guard<std::mutex> lock(g_host_text_input_mutex);
+    AdoptHostTextInputOwnerLocked(owner);
+    const bool ime_active = IsHostTextInputModeActive(mode);
+    if(g_host_text_input_state.owner == owner &&
+       g_host_text_input_state.ime_mode == mode &&
+       g_host_text_input_state.ime_active == ime_active) {
+        return;
+    }
+    g_host_text_input_state.owner = owner;
+    g_host_text_input_state.ime_mode = mode;
+    g_host_text_input_state.ime_active = ime_active;
+}
+
+void SetHostTextInputAttentionPoint(tTJSNI_Window *owner, bool valid,
+                                    tjs_int x = 0, tjs_int y = 0,
+                                    iTJSDispatch2 *attention_owner = nullptr) {
+    if(owner == nullptr)
+        return;
+    std::string text_utf8;
+    int32_t selection_start = 0;
+    int32_t selection_end = 0;
+    const bool text_available = valid && TryReadHostTextInputContent(
+        attention_owner, &text_utf8, &selection_start, &selection_end);
+
+    std::lock_guard<std::mutex> lock(g_host_text_input_mutex);
+    AdoptHostTextInputOwnerLocked(owner);
+    g_host_text_input_state.owner = owner;
+    g_host_text_input_state.attention_point_valid = valid;
+    g_host_text_input_state.attention_x = valid ? x : 0;
+    g_host_text_input_state.attention_y = valid ? y : 0;
+    g_host_text_input_state.text_available = text_available;
+    g_host_text_input_state.text_utf8 =
+        text_available ? std::move(text_utf8) : std::string();
+    g_host_text_input_state.selection_start =
+        text_available ? selection_start : 0;
+    g_host_text_input_state.selection_end = text_available ? selection_end : 0;
+}
+
+void ClearHostTextInputState(tTJSNI_Window *owner) {
+    std::lock_guard<std::mutex> lock(g_host_text_input_mutex);
+    if(g_host_text_input_state.owner != owner)
+        return;
+    g_host_text_input_state = {};
+}
+
 void RegisterHostWindow(tTJSNI_Window *owner) {
     if(owner == nullptr)
         return;
@@ -458,6 +658,54 @@ void ApplyDrawDeviceSurfaceRect(iTVPDrawDevice *dd, const tTVPRect &rect,
 
 }
 
+extern "C" void TVPHostGetTextInputState(uint32_t *ime_active,
+                                          int32_t *ime_mode,
+                                          uint32_t *attention_point_valid,
+                                          int32_t *attention_x,
+                                          int32_t *attention_y,
+                                          uint32_t *text_available,
+                                          uint32_t *text_utf8_bytes,
+                                          int32_t *selection_start,
+                                          int32_t *selection_end) {
+    std::lock_guard<std::mutex> lock(g_host_text_input_mutex);
+    if(ime_active)
+        *ime_active = g_host_text_input_state.ime_active ? 1u : 0u;
+    if(ime_mode)
+        *ime_mode = static_cast<int32_t>(g_host_text_input_state.ime_mode);
+    if(attention_point_valid)
+        *attention_point_valid =
+            g_host_text_input_state.attention_point_valid ? 1u : 0u;
+    if(attention_x)
+        *attention_x = static_cast<int32_t>(g_host_text_input_state.attention_x);
+    if(attention_y)
+        *attention_y = static_cast<int32_t>(g_host_text_input_state.attention_y);
+    if(text_available)
+        *text_available = g_host_text_input_state.text_available ? 1u : 0u;
+    if(text_utf8_bytes)
+        *text_utf8_bytes = static_cast<uint32_t>(
+            std::min<size_t>(g_host_text_input_state.text_utf8.size(),
+                             UINT32_MAX));
+    if(selection_start)
+        *selection_start = g_host_text_input_state.selection_start;
+    if(selection_end)
+        *selection_end = g_host_text_input_state.selection_end;
+}
+
+extern "C" uint32_t TVPHostCopyTextInputText(char *out_buffer,
+                                               uint32_t buffer_size) {
+    if(out_buffer == nullptr || buffer_size == 0)
+        return 0;
+    std::lock_guard<std::mutex> lock(g_host_text_input_mutex);
+    const uint32_t bytes = static_cast<uint32_t>(std::min<size_t>(
+        g_host_text_input_state.text_utf8.size(),
+        static_cast<size_t>(buffer_size - 1)));
+    if(bytes > 0) {
+        std::memcpy(out_buffer, g_host_text_input_state.text_utf8.data(), bytes);
+    }
+    out_buffer[bytes] = '\0';
+    return bytes;
+}
+
 void TVPHostForceDrawDeviceShow() {
     if (g_host_window_owner != nullptr) {
         g_host_window_owner->UpdateContent();
@@ -672,7 +920,15 @@ public:
     void SetHintText(const ttstr &text) override {}
 
     void SetAttentionPoint(tjs_int left, tjs_int top,
-                           const struct tTVPFont *font) override {}
+                           const struct tTVPFont *font,
+                           iTJSDispatch2 *attention_owner) override {
+        SetHostTextInputAttentionPoint(owner_, true, left, top,
+                                       attention_owner);
+    }
+
+    void DisableAttentionPoint() override {
+        SetHostTextInputAttentionPoint(owner_, false);
+    }
 
     void ZoomRectangle(tjs_int &left, tjs_int &top, tjs_int &right,
                        tjs_int &bottom) override {
@@ -1114,9 +1370,13 @@ public:
         return imDisable;
     }
 
-    void SetImeMode(tTVPImeMode mode) override {}
+    void SetImeMode(tTVPImeMode mode) override {
+        SetHostTextInputMode(owner_, mode);
+    }
 
-    void ResetImeMode() override {}
+    void ResetImeMode() override {
+        SetHostTextInputMode(owner_, imDisable);
+    }
 
     void UpdateWindow(tTVPUpdateType type) override {
         // Rendering is driven by engine_tick / engine_read_frame_rgba
@@ -1147,6 +1407,7 @@ private:
     void DetachOwner() {
         if(owner_ == nullptr)
             return;
+        ClearHostTextInputState(owner_);
         UnregisterHostWindow(owner_);
         owner_ = nullptr;
     }

@@ -122,6 +122,55 @@ TEST_CASE("legacy startup drain remains independent") {
   REQUIRE(DrainDiagnostics(handle).find("after-open") != std::string::npos);
 }
 
+TEST_CASE("text input state validates lifecycle and ABI size") {
+  Handle handle;
+  char text[8] = {};
+  uint32_t text_bytes = 0;
+  engine_text_input_state_t state{};
+  state.struct_size = sizeof(state);
+  REQUIRE(engine_get_text_input_state(handle.value, &state) ==
+          ENGINE_RESULT_INVALID_STATE);
+  REQUIRE(engine_copy_text_input_text(handle.value, text, sizeof(text),
+                                      &text_bytes) ==
+          ENGINE_RESULT_INVALID_STATE);
+
+  engine_text_input_state_t too_small{};
+  too_small.struct_size = sizeof(too_small) - 1;
+  REQUIRE(engine_get_text_input_state(handle.value, &too_small) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_get_text_input_state(handle.value, nullptr) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_copy_text_input_text(handle.value, nullptr, sizeof(text),
+                                      &text_bytes) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_copy_text_input_text(handle.value, text, 0, &text_bytes) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+  REQUIRE(engine_copy_text_input_text(handle.value, text, sizeof(text),
+                                      nullptr) ==
+          ENGINE_RESULT_INVALID_ARGUMENT);
+
+  REQUIRE(engine_open_game(handle.value, ".", nullptr) == ENGINE_RESULT_OK);
+  state = {};
+  state.struct_size = sizeof(state);
+  REQUIRE(engine_get_text_input_state(handle.value, &state) == ENGINE_RESULT_OK);
+  REQUIRE(state.struct_size == sizeof(state));
+  REQUIRE(state.ime_active == 0);
+  REQUIRE(state.ime_mode == 0);
+  REQUIRE(state.attention_point_valid == 0);
+  REQUIRE(state.attention_x == 0);
+  REQUIRE(state.attention_y == 0);
+  REQUIRE(state.text_available == 0);
+  REQUIRE(state.text_utf8_bytes == 0);
+  REQUIRE(state.selection_start == 0);
+  REQUIRE(state.selection_end == 0);
+  text[0] = 'x';
+  text_bytes = 99;
+  REQUIRE(engine_copy_text_input_text(handle.value, text, sizeof(text),
+                                      &text_bytes) == ENGINE_RESULT_OK);
+  REQUIRE(text_bytes == 0);
+  REQUIRE(text[0] == '\0');
+}
+
 TEST_CASE("plugin debug snapshot is bounded JSON and validates buffers") {
   Handle handle;
   engine_option_t trace_option{};
