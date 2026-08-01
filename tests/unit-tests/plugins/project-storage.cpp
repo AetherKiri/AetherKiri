@@ -1,13 +1,16 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "tjsCommHead.h"
+#include "ArchiveAutoPathOrder.h"
 #include "SysInitImpl.h"
 #include "StorageImpl.h"
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -30,6 +33,19 @@ public:
 };
 
 } // namespace
+
+TEST_CASE("archive auto paths keep the package root at highest priority") {
+    std::set<std::u16string, tTVPArchiveAutoPathDirectoryLess> directories{
+        u"", u"tools/", u"assets/", u"tools/internal/"};
+
+    const std::vector<std::u16string> ordered(directories.begin(),
+                                               directories.end());
+    REQUIRE(ordered.size() == 4);
+    CHECK(ordered[0] == u"assets/");
+    CHECK(ordered[1] == u"tools/");
+    CHECK(ordered[2] == u"tools/internal/");
+    CHECK(ordered[3].empty());
+}
 
 TEST_CASE("project archive detection falls back to the exact native path") {
     TemporaryProjectPath project;
