@@ -142,10 +142,18 @@ unzip -p "$output_ipa" Payload/Aether.app/Info.plist > "$info_plist"
 actual_bundle_id="$(plutil -extract CFBundleIdentifier raw "$info_plist")"
 actual_marketing_version="$(plutil -extract CFBundleShortVersionString raw "$info_plist")"
 actual_build_number="$(plutil -extract CFBundleVersion raw "$info_plist")"
+bluetooth_purpose="$(
+    plutil -extract NSBluetoothAlwaysUsageDescription raw "$info_plist" \
+        2>/dev/null || true
+)"
 if [[ "$actual_bundle_id" != "$bundle_id" ||
       "$actual_marketing_version" != "$marketing_version" ||
       "$actual_build_number" != "$build_number" ]]; then
     echo "Signed IPA metadata does not match the requested release." >&2
+    exit 1
+fi
+if [[ -z "$bluetooth_purpose" ]]; then
+    echo "Signed IPA is missing NSBluetoothAlwaysUsageDescription." >&2
     exit 1
 fi
 

@@ -395,7 +395,7 @@ patch_ios_export_project() {
     for archive in "${FORCE_LOAD_PLUGIN_ARCHIVES[@]}"; do
         flags+=" -Wl,-force_load,Aether/bin/ios/$export_build_type/$archive"
     done
-    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework Security -framework SystemConfiguration -framework MobileCoreServices'
+    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework Security -framework StoreKit -framework SystemConfiguration -framework MobileCoreServices'
 
     if [[ -f "$project_file" ]]; then
         FLAGS="$flags" perl -0pi -e 's/OTHER_LDFLAGS = "[^"]*";/"OTHER_LDFLAGS = \"" . $ENV{FLAGS} . "\";"/eg' "$project_file"
@@ -421,10 +421,18 @@ extern "C" void aether_kiri_swift_builtin_float_force_load(void) {}
 EOF
     fi
     if [[ -f "$info_plist" ]]; then
+        local bluetooth_purpose
+        bluetooth_purpose="Aether uses Bluetooth to connect game controllers that you choose to use."
         /usr/libexec/PlistBuddy -c 'Set :UIFileSharingEnabled true' "$info_plist" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c 'Add :UIFileSharingEnabled bool true' "$info_plist"
         /usr/libexec/PlistBuddy -c 'Set :LSSupportsOpeningDocumentsInPlace true' "$info_plist" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c 'Add :LSSupportsOpeningDocumentsInPlace bool true' "$info_plist"
+        /usr/libexec/PlistBuddy \
+            -c "Set :NSBluetoothAlwaysUsageDescription $bluetooth_purpose" \
+            "$info_plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy \
+                -c "Add :NSBluetoothAlwaysUsageDescription string $bluetooth_purpose" \
+                "$info_plist"
     fi
 }
 

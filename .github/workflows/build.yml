@@ -486,11 +486,19 @@ jobs:
             exit 1
           fi
           xcrun otool -hv "$release_binary"
+          info_plist="${RUNNER_TEMP}/Aether-release-Info.plist"
+          unzip -p \
+            out/godot/ios/release/Aether-Release-Unsigned.ipa \
+            Payload/Aether.app/Info.plist > "$info_plist"
+          bluetooth_purpose="$(
+            plutil -extract NSBluetoothAlwaysUsageDescription raw "$info_plist" \
+              2>/dev/null || true
+          )"
+          if [[ -z "$bluetooth_purpose" ]]; then
+            echo "The packaged iOS release is missing its Bluetooth purpose string." >&2
+            exit 1
+          fi
           if [[ -n "$AETHERKIRI_RELEASE_VERSION" ]]; then
-            info_plist="${RUNNER_TEMP}/Aether-release-Info.plist"
-            unzip -p \
-              out/godot/ios/release/Aether-Release-Unsigned.ipa \
-              Payload/Aether.app/Info.plist > "$info_plist"
             actual_bundle_id="$(plutil -extract CFBundleIdentifier raw "$info_plist")"
             actual_version="$(plutil -extract CFBundleShortVersionString raw "$info_plist")"
             actual_build="$(plutil -extract CFBundleVersion raw "$info_plist")"

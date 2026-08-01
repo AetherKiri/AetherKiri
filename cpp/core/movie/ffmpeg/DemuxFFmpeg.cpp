@@ -63,7 +63,10 @@ static int dvd_file_read(void *h, uint8_t *buf, int size) {
         return AVERROR_EXIT;
 
     InputStream *pInputStream = static_cast<CDVDDemuxFFmpeg *>(h)->m_pInput;
-    return pInputStream->Read(buf, size);
+    const int result = pInputStream->Read(buf, size);
+    // A zero-length COM read is EOF. FFmpeg custom I/O callbacks must not
+    // return 0 here, or stream probing can retry the read indefinitely.
+    return result == 0 ? AVERROR_EOF : result;
 }
 
 static int64_t dvd_file_seek(void *h, int64_t pos, int whence) {

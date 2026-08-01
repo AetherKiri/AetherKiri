@@ -16,11 +16,11 @@ InputStream::InputStream(IStream *s, std::string filename) :
 InputStream::~InputStream() { m_pSource->Release(); }
 
 int InputStream::Read(uint8_t *buf, int buf_size) {
-    ULONG readed;
+    ULONG readed = 0;
     HRESULT ret = m_pSource->Read(buf, buf_size, &readed);
-    if(ret != S_OK)
+    if(FAILED(ret))
         return -1;
-    return readed;
+    return static_cast<int>(readed);
 }
 
 int64_t InputStream::Seek(int64_t offset, int whence) {
