@@ -247,6 +247,23 @@ TEST_CASE("surface request made before provider selection is replayed") {
   REQUIRE(frame.stride_bytes == 1920u * 4u);
 }
 
+TEST_CASE("standalone media is routed through the legacy host service") {
+  REQUIRE(engine_register_runtime_provider(&kFakeProvider) == ENGINE_RESULT_OK);
+  Handle handle;
+  engine_option_t runtime_option{};
+  runtime_option.key_utf8 = "runtime";
+  runtime_option.value_utf8 = "fake-artemis-test";
+  REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
+  REQUIRE(engine_open_game(handle.value, ".artemis-test", "first.iet") ==
+          ENGINE_RESULT_OK);
+  engine_media_handle_t media = nullptr;
+  REQUIRE(engine_media_open(handle.value, "missing-video.mp4", &media) ==
+          ENGINE_RESULT_NOT_SUPPORTED);
+  REQUIRE(media == nullptr);
+  REQUIRE(std::string(engine_get_last_error(handle.value)) ==
+          "standalone media playback is not supported in stub builds");
+}
+
 TEST_CASE("diagnostic markers are sequenced and JSON escaped") {
   Handle handle;
   Configure(handle);

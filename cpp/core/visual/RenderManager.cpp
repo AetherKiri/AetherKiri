@@ -5071,7 +5071,11 @@ iTVPRenderManager *TVPGetRenderManager() {
         // Prefer command-line option set via engine_set_option
         tTJSVariant val;
         ttstr str;
-        if(TVPGetCommandLine(TJS_W("renderer"), &val)) {
+        // The renderer can be selected through an early engine_set_option.
+        // Do not initialize the legacy application/data path merely to choose
+        // an off-screen renderer for an externally hosted runtime such as
+        // Artemis.
+        if(TVPGetCommandLineNoInit(TJS_W("renderer"), &val)) {
             str = val;
         }
         if(str.IsEmpty()) {

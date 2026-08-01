@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "engine_runtime_provider_registry.h"
 #include "legacy_engine_api.h"
@@ -54,6 +55,8 @@ struct DispatchHandle {
 
 std::recursive_mutex g_dispatch_registry_mutex;
 std::unordered_set<engine_handle_t> g_dispatch_handles;
+std::unordered_map<engine_media_handle_t, engine_handle_t>
+    g_dispatch_media_handles;
 thread_local std::string g_dispatch_thread_error;
 
 #define PROVIDER_HAS(provider, member)                                      \
@@ -109,6 +112,23 @@ void SetProviderError(DispatchHandle* handle, engine_result_t result,
   }
   handle->last_error = provider_error != nullptr && provider_error[0] != '\0'
                            ? provider_error
+                           : fallback;
+  SetThreadError(handle->last_error.c_str());
+}
+
+void SetLegacyError(DispatchHandle* handle, engine_result_t result,
+                    const char* fallback) {
+  if (result == ENGINE_RESULT_OK) {
+    handle->last_error.clear();
+    SetThreadError(nullptr);
+    return;
+  }
+  const char* legacy_error = engine_legacy_get_last_error(handle->legacy);
+  if (legacy_error == nullptr || legacy_error[0] == '\0') {
+    legacy_error = engine_legacy_get_last_error(nullptr);
+  }
+  handle->last_error = legacy_error != nullptr && legacy_error[0] != '\0'
+                           ? legacy_error
                            : fallback;
   SetThreadError(handle->last_error.c_str());
 }
@@ -276,6 +296,28 @@ engine_result_t Route(engine_handle_t public_handle, const char* operation,
   result = provider_call(handle);
   if (result == ENGINE_RESULT_NOT_SUPPORTED) return Unsupported(handle, operation);
   SetProviderError(handle, result, operation);
+  return result;
+}
+
+template <typename LegacyCall>
+engine_result_t RouteMedia(engine_media_handle_t media, const char* operation,
+                           LegacyCall&& legacy_call) {
+  if (media == nullptr) {
+    return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT, "media handle is null");
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(
+      g_dispatch_registry_mutex);
+  const auto found = g_dispatch_media_handles.find(media);
+  if (found == g_dispatch_media_handles.end()) {
+    return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
+                       "media handle is invalid or already destroyed");
+  }
+  DispatchHandle* owner = nullptr;
+  const auto validation = ValidateHandleLocked(found->second, &owner);
+  if (validation != ENGINE_RESULT_OK) return validation;
+  std::lock_guard<std::recursive_mutex> guard(owner->mutex);
+  const auto result = legacy_call(media);
+  SetLegacyError(owner, result, operation);
   return result;
 }
 
@@ -451,12 +493,22 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
     return ENGINE_RESULT_OK;
   }
   DispatchHandle* handle = nullptr;
+  std::vector<engine_media_handle_t> owned_media;
   {
     std::lock_guard<std::recursive_mutex> guard(g_dispatch_registry_mutex);
     const auto found = g_dispatch_handles.find(public_handle);
     if (found == g_dispatch_handles.end()) {
       return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
                          "engine handle is invalid or already destroyed");
+    }
+    for (auto media = g_dispatch_media_handles.begin();
+         media != g_dispatch_media_handles.end();) {
+      if (media->second == public_handle) {
+        owned_media.push_back(media->first);
+        media = g_dispatch_media_handles.erase(media);
+      } else {
+        ++media;
+      }
     }
     g_dispatch_handles.erase(found);
     handle = Cast(public_handle);
@@ -472,10 +524,134 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
     handle->provider->destroy(handle->runtime);
     handle->runtime = nullptr;
   }
+  for (const auto media : owned_media) {
+    engine_legacy_media_destroy(media);
+  }
   const auto result = engine_legacy_destroy(handle->legacy);
   delete handle;
   SetThreadError(nullptr);
   return result;
+}
+
+engine_result_t engine_media_open(engine_handle_t public_handle,
+                                  const char* path_utf8,
+                                  engine_media_handle_t* out_media) {
+  if (path_utf8 == nullptr || path_utf8[0] == '\0' || out_media == nullptr) {
+    return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
+                       "media path and output handle are required");
+  }
+  *out_media = nullptr;
+  std::lock_guard<std::recursive_mutex> registry_guard(
+      g_dispatch_registry_mutex);
+  DispatchHandle* handle = nullptr;
+  const auto validation = ValidateHandleLocked(public_handle, &handle);
+  if (validation != ENGINE_RESULT_OK) return validation;
+  std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+  engine_media_handle_t legacy_media = nullptr;
+  const auto result = engine_legacy_media_open(handle->legacy, path_utf8,
+                                               &legacy_media);
+  SetLegacyError(handle, result, "legacy media player failed to open media");
+  if (result != ENGINE_RESULT_OK) return result;
+  if (legacy_media == nullptr) {
+    handle->last_error = "legacy media player returned an empty handle";
+    SetThreadError(handle->last_error.c_str());
+    return ENGINE_RESULT_INTERNAL_ERROR;
+  }
+  g_dispatch_media_handles.emplace(legacy_media, public_handle);
+  *out_media = legacy_media;
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_media_destroy(engine_media_handle_t media) {
+  if (media == nullptr) {
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+  std::lock_guard<std::recursive_mutex> registry_guard(
+      g_dispatch_registry_mutex);
+  const auto found = g_dispatch_media_handles.find(media);
+  if (found == g_dispatch_media_handles.end()) {
+    return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
+                       "media handle is invalid or already destroyed");
+  }
+  DispatchHandle* owner = nullptr;
+  const auto validation = ValidateHandleLocked(found->second, &owner);
+  if (validation != ENGINE_RESULT_OK) return validation;
+  std::lock_guard<std::recursive_mutex> guard(owner->mutex);
+  const auto result = engine_legacy_media_destroy(media);
+  g_dispatch_media_handles.erase(found);
+  SetLegacyError(owner, result, "legacy media player failed to close media");
+  return result;
+}
+
+engine_result_t engine_media_play(engine_media_handle_t media) {
+  return RouteMedia(media, "legacy media player failed to play media",
+                    [](engine_media_handle_t legacy) {
+                      return engine_legacy_media_play(legacy);
+                    });
+}
+
+engine_result_t engine_media_pause(engine_media_handle_t media) {
+  return RouteMedia(media, "legacy media player failed to pause media",
+                    [](engine_media_handle_t legacy) {
+                      return engine_legacy_media_pause(legacy);
+                    });
+}
+
+engine_result_t engine_media_seek(engine_media_handle_t media,
+                                  int64_t position_ms) {
+  return RouteMedia(media, "legacy media player failed to seek media",
+                    [&](engine_media_handle_t legacy) {
+                      return engine_legacy_media_seek(legacy, position_ms);
+                    });
+}
+
+engine_result_t engine_media_set_rate(engine_media_handle_t media,
+                                      double playback_rate) {
+  return RouteMedia(media, "legacy media player failed to set playback rate",
+                    [&](engine_media_handle_t legacy) {
+                      return engine_legacy_media_set_rate(legacy,
+                                                          playback_rate);
+                    });
+}
+
+engine_result_t engine_media_get_state(engine_media_handle_t media,
+                                       engine_media_state_t* out_state) {
+  return RouteMedia(media, "legacy media player failed to read media state",
+                    [&](engine_media_handle_t legacy) {
+                      return engine_legacy_media_get_state(legacy, out_state);
+                    });
+}
+
+engine_result_t engine_media_get_subtitle_tracks_json(
+    engine_media_handle_t media, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written) {
+  return RouteMedia(
+      media, "legacy media player failed to list subtitle tracks",
+      [&](engine_media_handle_t legacy) {
+        return engine_legacy_media_get_subtitle_tracks_json(
+            legacy, out_buffer, buffer_size, out_bytes_written);
+      });
+}
+
+engine_result_t engine_media_extract_subtitle(
+    engine_media_handle_t media, int32_t stream_index,
+    const char* output_path_utf8) {
+  return RouteMedia(media, "legacy media player failed to extract subtitles",
+                    [&](engine_media_handle_t legacy) {
+                      return engine_legacy_media_extract_subtitle(
+                          legacy, stream_index, output_path_utf8);
+                    });
+}
+
+engine_result_t engine_media_read_frame_rgba(
+    engine_media_handle_t media, void* out_pixels, size_t out_pixels_size,
+    engine_frame_desc_t* out_frame_desc) {
+  return RouteMedia(media, "legacy media player failed to read video frame",
+                    [&](engine_media_handle_t legacy) {
+                      return engine_legacy_media_read_frame_rgba(
+                          legacy, out_pixels, out_pixels_size, out_frame_desc);
+                    });
 }
 
 engine_result_t engine_open_game(engine_handle_t public_handle,

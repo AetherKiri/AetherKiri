@@ -31,6 +31,7 @@
 #include "SysInitImpl.h"
 #include "psbfile/PSBValue.h"
 #include "psbfile/PSBFile.h"
+#include "psbfile/PSBMedia.h"
 #include "test_config.h"
 #include "tjsObject.h"
 
@@ -47,6 +48,28 @@ namespace {
 #endif
 
 #if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
+TEST_CASE("PSB media policy does not initialize a legacy host data path") {
+    // Artemis supplies physical E-mote files directly. Constructing the PSB
+    // resource medium must therefore be safe before a KiriKiri application
+    // or data path exists.
+    REQUIRE(TVPNativeDataPath.IsEmpty());
+    REQUIRE_NOTHROW(PSB::PSBMedia{});
+    REQUIRE(TVPNativeDataPath.IsEmpty());
+}
+
+TEST_CASE("motionplayer provides native randomness without a script host") {
+    REQUIRE(TVPGetScriptEngine() == nullptr);
+    motion::Player player;
+    bool sawNonZero = false;
+    for(int index = 0; index < 8; ++index) {
+        const double value = player.random();
+        REQUIRE(value >= 0.0);
+        REQUIRE(value < 1.0);
+        sawNonZero = sawNonZero || value != 0.0;
+    }
+    REQUIRE(sawNonZero);
+}
+
 TEST_CASE("PSBFile unwraps LZ4-frame motion resources") {
     std::ifstream input(
         TEST_FILES_PATH "/emote/e-mote3.0バニラパジャマa.psb",
