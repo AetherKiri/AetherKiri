@@ -1214,6 +1214,11 @@ var last_forwarded_touch_down_msec := 0
 var last_forwarded_touch_up_msec := 0
 var last_forwarded_touch_move_msec_by_id := {}
 var touch_input_busy_until_msec := 0
+var game_text_input_active := false
+var game_text_input_attention_position := Vector2i(-1, -1)
+var game_text_input_reopen_requested := false
+var game_text_input_last_show_msec := 0
+var game_text_input_suspended := false
 var device_probe_enabled := false
 var follow_texture_surface_size := false
 var present_hold_frames := 0
@@ -1240,6 +1245,7 @@ const TOUCH_DRAG_MIN_INTERVAL_MS := 80
 const TOUCH_DRAG_DISTANCE_THRESHOLD := 18.0
 const TOUCH_BUSY_TICK_MS := 120.0
 const TOUCH_BUSY_SUPPRESS_MS := 0
+const VIRTUAL_KEYBOARD_REOPEN_DELAY_MS := 750
 const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
@@ -7973,6 +7979,7 @@ func _process(delta: float) -> void:
                     perf_log_file.store_line(tick_error_line)
                     perf_log_file.flush()
                 game_running = false
+                _deactivate_game_text_input()
                 _sync_debug_console_state()
                 if diagnostic_session != null:
                     diagnostic_session.set_game_active(false)
@@ -7988,6 +7995,7 @@ func _process(delta: float) -> void:
                         tick_ms,
                         player.get_renderer_info(),
                     ])
+                _sync_game_text_input_state()
                 var update_start := Time.get_ticks_usec()
                 _update_frame()
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
@@ -8013,6 +8021,7 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            _deactivate_game_text_input()
             _sync_debug_console_state()
             if diagnostic_session != null:
                 diagnostic_session.set_game_active(false)
@@ -8252,6 +8261,8 @@ func _notification(what: int) -> void:
         player.destroy_engine()
 
 func _pause_game_for_lifecycle(reason: String) -> void:
+    game_text_input_suspended = true
+    _deactivate_game_text_input()
     if not _is_touch_platform():
         return
     if app_lifecycle_paused or not game_running or cached_startup_state != STARTUP_SUCCEEDED:
@@ -8270,6 +8281,7 @@ func _pause_game_for_lifecycle(reason: String) -> void:
     _log_lifecycle_line("app_paused reason=%s" % reason)
 
 func _resume_game_for_lifecycle(reason: String) -> void:
+    game_text_input_suspended = false
     if not _is_touch_platform():
         return
     if not app_lifecycle_paused:
@@ -8683,6 +8695,7 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
         get_tree().quit(0 if visible > 0 else 2)
 
 func _clear_game_input_capture() -> void:
+    _deactivate_game_text_input()
     active_touch_points.clear()
     active_mouse_buttons.clear()
     suppressed_touch_points.clear()
@@ -9648,6 +9661,8 @@ func _touch_engine_pointer_id(pointer_id: int) -> int:
     return TOUCH_POINTER_ID_OFFSET + pointer_id
 
 func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: float, delta_x: float, delta_y: float, button: int, modifiers: int = 0) -> void:
+    if _is_touch_platform() and event_type == POINTER_DOWN and button == 0:
+        game_text_input_reopen_requested = true
     var result := int(player.send_pointer_event(event_type, pointer_id, x, y, delta_x, delta_y, button, modifiers))
     if _android_input_debug_enabled():
         print("android_input fwd type=%d pid=%d x=%.1f y=%.1f dx=%.1f dy=%.1f button=%d mods=%d result=%d" % [
@@ -9785,6 +9800,139 @@ func _hold_next_present_after_input(frames: int = POST_INPUT_PRESENT_HOLD_FRAMES
 func _is_touch_platform() -> bool:
     var platform := OS.get_name()
     return platform == "iOS" or platform == "Android"
+
+func _deactivate_game_text_input() -> void:
+    if game_text_input_active:
+        if (
+            _is_touch_platform()
+            and DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+        ):
+            DisplayServer.virtual_keyboard_hide()
+        elif DisplayServer.has_feature(DisplayServer.FEATURE_IME):
+            DisplayServer.window_set_ime_active(false)
+    game_text_input_active = false
+    game_text_input_attention_position = Vector2i(-1, -1)
+    game_text_input_reopen_requested = false
+
+func _show_game_virtual_keyboard(attention_position: Vector2i, state: Dictionary) -> void:
+    var existing_text := ""
+    var cursor_start := -1
+    var cursor_end := -1
+    if bool(state.get("text_available", false)):
+        existing_text = String(state.get("text", ""))
+        var text_length := existing_text.length()
+        var selection_start := clampi(
+            int(state.get("selection_start", text_length)), 0, text_length
+        )
+        var selection_end := clampi(
+            int(state.get("selection_end", selection_start)), 0, text_length
+        )
+        cursor_start = mini(selection_start, selection_end)
+        var ordered_end := maxi(selection_start, selection_end)
+        # Godot's mobile backends use -1 to distinguish a caret from a real
+        # selection; Android treats equal start/end as a selection session.
+        if ordered_end != cursor_start:
+            cursor_end = ordered_end
+    DisplayServer.virtual_keyboard_show(
+        existing_text,
+        Rect2(Vector2(attention_position), Vector2.ONE),
+        DisplayServer.KEYBOARD_TYPE_DEFAULT,
+        -1,
+        cursor_start,
+        cursor_end
+    )
+    game_text_input_last_show_msec = Time.get_ticks_msec()
+
+func _sync_game_text_input_state() -> void:
+    if game_text_input_suspended or not _can_forward_game_input():
+        _deactivate_game_text_input()
+        return
+    var state = player.get_text_input_state()
+    if not state is Dictionary or not bool(state.get("available", false)):
+        _deactivate_game_text_input()
+        return
+
+    var attention_valid := bool(state.get("attention_point_valid", false))
+    var ime_active := bool(state.get("ime_active", false))
+    var virtual_keyboard_available := (
+        _is_touch_platform()
+        and DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+    )
+    var desktop_ime_available := (
+        not virtual_keyboard_available
+        and DisplayServer.has_feature(DisplayServer.FEATURE_IME)
+    )
+    # Attention marks an editable KiriKiri layer. imClose/imDisable still need
+    # a mobile soft keyboard for direct (non-composed) text entry.
+    var should_activate := attention_valid and (
+        virtual_keyboard_available or (desktop_ime_available and ime_active)
+    )
+    if not should_activate:
+        _deactivate_game_text_input()
+        return
+
+    var attention_position := game_text_input_attention_position
+    if attention_valid:
+        var surface_point := Vector2(
+            float(state.get("attention_x", 0)),
+            float(state.get("attention_y", 0))
+        )
+        var screen_point := _map_surface_point_to_screen(surface_point)
+        attention_position = Vector2i(roundi(screen_point.x), roundi(screen_point.y))
+    var attention_position_changed := (
+        attention_position != game_text_input_attention_position
+    )
+
+    if not game_text_input_active:
+        if virtual_keyboard_available:
+            _show_game_virtual_keyboard(attention_position, state)
+        elif desktop_ime_available:
+            DisplayServer.window_set_ime_active(true)
+            DisplayServer.window_set_ime_position(attention_position)
+        game_text_input_active = true
+    elif (
+        virtual_keyboard_available
+        and game_text_input_reopen_requested
+        and not DisplayServer.has_hardware_keyboard()
+        and (
+            Time.get_ticks_msec() - game_text_input_last_show_msec
+            >= VIRTUAL_KEYBOARD_REOPEN_DELAY_MS
+        )
+    ):
+        # A game-surface tap is also a caret/selection resync boundary while
+        # the keyboard is already visible.
+        _show_game_virtual_keyboard(attention_position, state)
+    elif desktop_ime_available and attention_position_changed:
+        DisplayServer.window_set_ime_position(attention_position)
+
+    game_text_input_attention_position = attention_position
+    game_text_input_reopen_requested = false
+
+func _map_surface_point_to_screen(point: Vector2) -> Vector2:
+    if viewport == null:
+        return point
+    var local_point := point
+    if viewport.texture != null:
+        var texture_size := Vector2(
+            max(1.0, float(viewport.texture.get_width())),
+            max(1.0, float(viewport.texture.get_height()))
+        )
+        var surface_size := texture_size
+        if current_surface_size.x > 0 and current_surface_size.y > 0:
+            surface_size = Vector2(current_surface_size)
+        var texture_point := Vector2(
+            point.x * texture_size.x / surface_size.x,
+            point.y * texture_size.y / surface_size.y
+        )
+        var panel_size := viewport.size
+        var scale := minf(
+            panel_size.x / texture_size.x,
+            panel_size.y / texture_size.y
+        )
+        var drawn_size := texture_size * scale
+        var offset := (panel_size - drawn_size) * 0.5
+        local_point = offset + texture_point * scale
+    return viewport.get_screen_transform() * local_point
 
 func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2:
     if viewport.texture == null:

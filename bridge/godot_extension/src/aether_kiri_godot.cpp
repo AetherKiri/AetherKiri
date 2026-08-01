@@ -5421,6 +5421,59 @@ public:
         return result;
     }
 
+    Dictionary get_text_input_state() {
+        Dictionary state;
+        state["available"] = false;
+        state["ime_active"] = false;
+        state["ime_mode"] = 0;
+        state["attention_point_valid"] = false;
+        state["attention_x"] = 0;
+        state["attention_y"] = 0;
+        state["text_available"] = false;
+        state["text"] = String();
+        state["selection_start"] = 0;
+        state["selection_end"] = 0;
+        if (handle_ == nullptr) {
+            return state;
+        }
+
+        engine_text_input_state_t native_state{};
+        native_state.struct_size = sizeof(native_state);
+        const engine_result_t result =
+            engine_get_text_input_state(handle_, &native_state);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK) {
+            return state;
+        }
+
+        state["available"] = true;
+        state["ime_active"] = native_state.ime_active != 0;
+        state["ime_mode"] = native_state.ime_mode;
+        state["attention_point_valid"] =
+            native_state.attention_point_valid != 0;
+        state["attention_x"] = native_state.attention_x;
+        state["attention_y"] = native_state.attention_y;
+        state["text_available"] = native_state.text_available != 0;
+        state["selection_start"] = native_state.selection_start;
+        state["selection_end"] = native_state.selection_end;
+        if (native_state.text_available != 0 &&
+            native_state.text_utf8_bytes > 0) {
+            std::vector<char> text_buffer(
+                static_cast<size_t>(native_state.text_utf8_bytes) + 1u, '\0');
+            uint32_t bytes_written = 0;
+            const engine_result_t text_result = engine_copy_text_input_text(
+                handle_, text_buffer.data(),
+                static_cast<uint32_t>(text_buffer.size()), &bytes_written);
+            update_last_error(text_result);
+            if (text_result != ENGINE_RESULT_OK) {
+                state["text_available"] = false;
+                return state;
+            }
+            state["text"] = String::utf8(text_buffer.data(), bytes_written);
+        }
+        return state;
+    }
+
     int get_startup_state() {
         if (handle_ == nullptr) {
             return ENGINE_STARTUP_STATE_IDLE;
@@ -6068,6 +6121,8 @@ protected:
         ClassDB::bind_method(D_METHOD("send_key_event", "pressed", "key_code",
                                       "modifiers", "unicode_codepoint"),
                              &AetherKiriPlayer::send_key_event);
+        ClassDB::bind_method(D_METHOD("get_text_input_state"),
+                             &AetherKiriPlayer::get_text_input_state);
         ClassDB::bind_method(D_METHOD("get_startup_state"),
                              &AetherKiriPlayer::get_startup_state);
         ClassDB::bind_method(D_METHOD("drain_startup_logs"),

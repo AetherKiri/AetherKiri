@@ -1322,7 +1322,8 @@ void tTJSNI_Window::SetAttentionPoint(tTJSNI_BaseLayer *layer, tjs_int l,
             }
         }
 
-        Form->SetAttentionPoint(l, t, font);
+        Form->SetAttentionPoint(
+            l, t, font, layer ? layer->GetOwnerNoAddRef() : nullptr);
     }
 }
 //---------------------------------------------------------------------------
