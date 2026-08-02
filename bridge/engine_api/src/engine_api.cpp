@@ -1056,7 +1056,16 @@ void PushStartupLog(engine_handle_s* impl, const std::string& message) {
 void PushRuntimeSpdlogToStartupQueue(const spdlog::details::log_msg& msg) {
   engine_handle_s* target = nullptr;
   {
-    std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+    // The startup sink can run on decoder/player worker threads.  Never wait
+    // for the engine registry from a log sink: engine_tick may own that mutex
+    // while synchronously joining the very worker that emitted this message.
+    // The regular spdlog sinks still receive the line, so dropping only this
+    // best-effort diagnostics copy is preferable to deadlocking shutdown.
+    std::unique_lock<std::recursive_mutex> registry_guard(
+        g_registry_mutex, std::try_to_lock);
+    if (!registry_guard.owns_lock()) {
+      return;
+    }
     engine_handle_t target_handle = nullptr;
     if (g_runtime_startup_active && g_runtime_startup_owner != nullptr) {
       target_handle = g_runtime_startup_owner;
