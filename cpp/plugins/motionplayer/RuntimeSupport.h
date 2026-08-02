@@ -294,6 +294,13 @@ namespace motion::detail {
         tTJSVariant presentationRenderLayer;
         // Reusable work layer for sub_6C4E28-style per-item local clipping.
         tTJSVariant scratchWorkLayer;
+        // Stable ownerless framebuffer used by the private E-mote bridge's
+        // RGBA export path. Creating and releasing a full-size Godot/Metal
+        // texture on every frame leaves thousands of resources pending on
+        // the render thread and can grow the process footprint by gigabytes
+        // per minute. Keep one surface per Player and resize it only when the
+        // requested export dimensions grow.
+        tTJSVariant headlessRgbaRenderLayer;
         // Source bitmaps decoded for the active motion. Building these from PSB
         // resources is expensive enough to be visible during title animations.
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>

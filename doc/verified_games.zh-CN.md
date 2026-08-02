@@ -46,6 +46,7 @@
 | NEKOPARA Vol. 1 | macOS debug app | 启动、标题/菜单渲染、Data Load 与首个存档读取流程、场景/文字渲染、E-mote 角色立绘与动画、快速推进对话，以及立绘区域点击事件转发 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | まいてつ -Pure Station- | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、E-mote 角色立绘与动画、鉴赏 CG 导航/合成与图层顺序、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | まいてつ Last Run!! | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、E-mote 角色立绘与动画、鉴赏 CG 导航/合成与图层顺序、音频播放、输入压力和 FPS 冒烟 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 冬之吻 | macOS debug app | 启动、标题/菜单渲染、第一个存档读取流程、场景/文字渲染、E-mote 角色合成与眨眼、角色距离/姿势原子切换和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 恋騎士 Purely☆Kiss | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 銃騎士Cutie☆Bullet | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 聖騎士Melty☆Lovers | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |

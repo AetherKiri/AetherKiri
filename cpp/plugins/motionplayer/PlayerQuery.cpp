@@ -628,13 +628,31 @@ namespace motion {
 
     void Player::skipToSync() {
         _layersDirty = true;
-        for(auto &[_, state] : _runtime->timelines) {
+        for(auto &[label, state] : _runtime->timelines) {
+            const auto controlIt = _runtime->activeMotion
+                ? _runtime->activeMotion->timelineControlByLabel.find(label)
+                : decltype(_runtime->activeMotion->timelineControlByLabel.find(
+                      label)){};
+            const bool controlLoop =
+                _runtime->activeMotion &&
+                controlIt !=
+                    _runtime->activeMotion->timelineControlByLabel.end() &&
+                controlIt->second.loopBegin >= 0.0 &&
+                controlIt->second.loopEnd > controlIt->second.loopBegin;
+
+            // Native pass/step consumes one-shot controls, but it must leave
+            // persistent controller loops (for example `ポーズA_通常待機`)
+            // running.  These loops are described by TimelineControlBinding,
+            // not MotionClip::loop, so consulting state.loop alone stops all
+            // authored head/body/hair idle motion at the first scenario
+            // `em:step()` call.
+            if(controlLoop || state.loop) {
+                continue;
+            }
             if(state.totalFrames > 0.0) {
                 state.currentTime = state.totalFrames;
             }
-            if(!state.loop) {
-                state.playing = false;
-            }
+            state.playing = false;
         }
         if(const auto it = std::remove_if(_runtime->playingTimelineLabels.begin(),
                                           _runtime->playingTimelineLabels.end(),
@@ -655,6 +673,45 @@ namespace motion {
         if(!_allplaying) {
             disableAutoProgress();
         }
+
+        // MEmotePlayer::Skip/Step do not stop at timeline control.  The
+        // native routines also call epSkip on every eye, eyebrow, mouth,
+        // selector, transition, and generic variable controller.  In
+        // particular, EPSelectorControl::epSkip resolves the final queued
+        // selector and then skips each option's transition controller.  If we
+        // leave those queues live, a model prepared offscreen by `em:step()`
+        // becomes visible in its neutral selector pose and visibly morphs to
+        // the requested pose (for example, a raised hand flashes before the
+        // authored arm_type=0 pose settles).
+        const auto skipAnimator =
+            [this](const std::string &label, VariableAnimatorState &state) {
+                float value = state.targetValue;
+                if(!state.queue.empty()) {
+                    value = state.queue.back().value;
+                }
+                state.queue.clear();
+                state.active = false;
+                state.currentValue = value;
+                state.startValue = value;
+                state.targetValue = value;
+                state.progress = 1.0f;
+                state.duration = 0.0f;
+                _variableValues[label] = value;
+                ensureEvalResultSlotLike_0x686944(label) = value;
+                _evalResultValues[label] = value;
+            };
+        const auto skipBucket = [&skipAnimator](auto &bucket) {
+            for(auto &[label, state] : bucket) {
+                skipAnimator(label, state);
+            }
+        };
+        skipBucket(_type4ControllerAnimators);
+        skipBucket(_type5ControllerAnimators);
+        skipBucket(_type6ControllerAnimators);
+        skipBucket(_type8ControllerAnimators);
+        skipBucket(_type7ControllerAnimators);
+        skipBucket(_variableAnimators);
+        _emoteDirty = true;
     }
 
     void Player::setStereovisionCameraPosition(double x, double y, double z) {
@@ -693,56 +750,56 @@ namespace motion {
                 easeWeight, _emoteAnimatorFlag ? 1 : 0);
         }
 
-        if(hasBinding) {
-            const auto queueControllerStateLikeBinary =
-                [&](const std::string &targetKey,
-                    VariableAnimatorState &state,
-                    double currentValueInput,
-                    double requestedValue,
-                    double requestedTransition,
-                    double requestedEaseWeight) {
-                    const auto currentValue =
-                        static_cast<float>(currentValueInput);
-                    const auto targetValue =
-                        static_cast<float>(requestedValue);
-                    if(requestedTransition <= 0.0) {
-                        state.queue.clear();
-                        state.active = false;
-                        state.currentValue = targetValue;
-                        state.startValue = targetValue;
-                        state.targetValue = targetValue;
-                        state.progress = 1.0f;
-                        state.duration = 0.0f;
-                        state.weight =
-                            static_cast<float>(requestedEaseWeight);
-                        _variableValues[targetKey] = requestedValue;
-                        ensureEvalResultSlotLike_0x686944(targetKey) =
-                            requestedValue;
-                        _evalResultValues[targetKey] = requestedValue;
-                        return;
-                    }
-
-                    if(!_emoteAnimatorFlag) {
-                        state.queue.clear();
-                        state.active = false;
-                        state.currentValue = currentValue;
-                        state.startValue = currentValue;
-                        state.targetValue = currentValue;
-                        state.progress = 1.0f;
-                        state.duration = 0.0f;
-                    }
-
-                    state.queue.push_back(VariableKeyframe{
-                        targetValue,
-                        static_cast<float>(requestedTransition),
-                        static_cast<float>(requestedEaseWeight),
-                    });
-                    _variableValues[targetKey] = state.currentValue;
+        const auto queueControllerStateLikeBinary =
+            [&](const std::string &targetKey,
+                VariableAnimatorState &state,
+                double currentValueInput,
+                double requestedValue,
+                double requestedTransition,
+                double requestedEaseWeight) {
+                const auto currentValue =
+                    static_cast<float>(currentValueInput);
+                const auto targetValue =
+                    static_cast<float>(requestedValue);
+                if(requestedTransition <= 0.0) {
+                    state.queue.clear();
+                    state.active = false;
+                    state.currentValue = targetValue;
+                    state.startValue = targetValue;
+                    state.targetValue = targetValue;
+                    state.progress = 1.0f;
+                    state.duration = 0.0f;
+                    state.weight =
+                        static_cast<float>(requestedEaseWeight);
+                    _variableValues[targetKey] = requestedValue;
                     ensureEvalResultSlotLike_0x686944(targetKey) =
-                        state.currentValue;
-                    _evalResultValues[targetKey] = state.currentValue;
-                };
+                        requestedValue;
+                    _evalResultValues[targetKey] = requestedValue;
+                    return;
+                }
 
+                if(!_emoteAnimatorFlag) {
+                    state.queue.clear();
+                    state.active = false;
+                    state.currentValue = currentValue;
+                    state.startValue = currentValue;
+                    state.targetValue = currentValue;
+                    state.progress = 1.0f;
+                    state.duration = 0.0f;
+                }
+
+                state.queue.push_back(VariableKeyframe{
+                    targetValue,
+                    static_cast<float>(requestedTransition),
+                    static_cast<float>(requestedEaseWeight),
+                });
+                _variableValues[targetKey] = state.currentValue;
+                ensureEvalResultSlotLike_0x686944(targetKey) =
+                    state.currentValue;
+                _evalResultValues[targetKey] = state.currentValue;
+            };
+
+        if(hasBinding) {
             const auto queueControllerLikeBinary =
                 [&](VariableAnimatorState &state,
                     double requestedValue,
@@ -865,12 +922,28 @@ namespace motion {
             }
         }
 
-        // Aligned to Player_setVariable (0x671228): labels without a controller
-        // binding bypass animator queues and write the eval map immediately.
-        _variableAnimators.erase(key);
-        _variableValues[key] = value;
-        ensureEvalResultSlotLike_0x686944(key) = value;
-        _evalResultValues[key] = value;
+        // Labels without a fixed controller binding use the final generic
+        // animator bucket stepped by Player_progress.  Timeline controls such
+        // as body_UD/body_LR are intentionally sparse and depend on this
+        // transition to turn authored keyframes into continuous idle motion.
+        const auto evalIt = _evalResultValues.find(key);
+        const double currentValue = evalIt != _evalResultValues.end()
+            ? evalIt->second
+            : (_variableValues.count(key)
+                   ? _variableValues[key]
+                   : getVariable(detail::widen(key)));
+        auto [stateIt, inserted] = _variableAnimators.try_emplace(key);
+        if(inserted) {
+            stateIt->second.currentValue =
+                static_cast<float>(currentValue);
+            stateIt->second.startValue =
+                static_cast<float>(currentValue);
+            stateIt->second.targetValue =
+                static_cast<float>(currentValue);
+        }
+        queueControllerStateLikeBinary(
+            key, stateIt->second, currentValue, value, transition,
+            easeWeight);
         _emoteDirty = true;
     }
 
@@ -1198,7 +1271,19 @@ namespace motion {
         const auto key = detail::narrow(label);
         if(const auto it = _runtime->activeMotion->loopTimelines.find(key);
            it != _runtime->activeMotion->loopTimelines.end()) {
-            return it->second;
+            // Some E-mote PSBs expose a generic timeline dictionary whose
+            // optional `loop` field defaults to false, while the authoritative
+            // timelineControl entry carries a valid loop interval.  A false
+            // value here therefore cannot rule out a controller-defined loop.
+            if(it->second) {
+                return true;
+            }
+        }
+        if(const auto it =
+               _runtime->activeMotion->timelineControlByLabel.find(key);
+           it != _runtime->activeMotion->timelineControlByLabel.end()) {
+            return it->second.loopBegin >= 0.0 &&
+                   it->second.loopEnd > it->second.loopBegin;
         }
         return false;
     }

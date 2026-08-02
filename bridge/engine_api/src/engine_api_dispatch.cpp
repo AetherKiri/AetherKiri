@@ -17,8 +17,12 @@
 
 #include "engine_runtime_provider_registry.h"
 #include "legacy_engine_api.h"
+#if defined(ENGINE_API_USE_KRKR2_RUNTIME)
+#include "visual/RenderManager.h"
+#endif
 
-#if defined(AETHERKIRI_INTERNAL_ARTEMIS)
+#if defined(AETHERKIRI_INTERNAL_ARTEMIS) && \
+    defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
 extern "C" void AetherInternalRegisterArtemisRuntime(void);
 #endif
 
@@ -362,7 +366,8 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
                        "engine_create requires non-null desc and out_handle");
   }
   *out_handle = nullptr;
-#if defined(AETHERKIRI_INTERNAL_ARTEMIS)
+#if defined(AETHERKIRI_INTERNAL_ARTEMIS) && \
+    defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
   AetherInternalRegisterArtemisRuntime();
 #endif
   if (desc->struct_size < sizeof(engine_create_desc_t)) {
@@ -771,7 +776,17 @@ engine_result_t engine_tick(engine_handle_t public_handle, uint32_t delta_ms) {
                  return engine_legacy_tick(legacy, delta_ms);
                },
                [&](DispatchHandle* handle) {
-                 return handle->provider->tick(handle->runtime, delta_ms);
+                 const engine_result_t result =
+                     handle->provider->tick(handle->runtime, delta_ms);
+#if defined(ENGINE_API_USE_KRKR2_RUNTIME)
+                 // Provider runtimes bypass the legacy EngineLoop, which is
+                 // normally responsible for draining textures whose intrusive
+                 // reference count reached zero during the frame.  Artemis
+                 // uses the same KiriKiri render manager for E-mote, so leaving
+                 // this queue undrained retains every superseded Metal texture.
+                 iTVPTexture2D::RecycleProcess();
+#endif
+                 return result;
                });
 }
 
@@ -811,7 +826,16 @@ engine_result_t engine_set_option(engine_handle_t public_handle,
       handle->last_error = "runtime option must be set before opening a game";
       return ThreadError(ENGINE_RESULT_INVALID_STATE, handle->last_error.c_str());
     }
-    handle->requested_runtime = Normalize(option->value_utf8);
+    const std::string requested_runtime = Normalize(option->value_utf8);
+#if !defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
+    if (requested_runtime == "artemis") {
+      handle->last_error =
+          "Artemis runtime is available only in internal Debug builds";
+      return ThreadError(ENGINE_RESULT_NOT_SUPPORTED,
+                         handle->last_error.c_str());
+    }
+#endif
+    handle->requested_runtime = requested_runtime;
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;
   }

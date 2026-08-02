@@ -8608,17 +8608,29 @@ namespace motion {
         // distinction instead of treating every colour child as a mask.
         for(auto &command : _runtime->renderCommands) {
             for(const int maskNodeIndex : command.stencilMaskNodeIndices) {
-                if(const auto it = commandIndexByNode.find(maskNodeIndex);
-                   it != commandIndexByNode.end() &&
-                   it->second < _runtime->renderCommands.size() &&
-                   _runtime->renderCommands[it->second].nodeIndex !=
-                       command.nodeIndex) {
+                // Node indices are local to each nested Motion Player. The
+                // flattened E-mote command list contains many duplicate
+                // values (both eyes commonly use node 4/5), so a global
+                // node-index lookup can bind the group to an unrelated mask
+                // from an outer player. Resolve the authored mask inside the
+                // group's render scope, matching the scoped item walk used by
+                // native sub_6C7440.
+                const size_t maskCommandIndex = findCommandIndex(
+                    command.renderScopeId, maskNodeIndex, maskNodeIndex);
+                if(maskCommandIndex < _runtime->renderCommands.size() &&
+                   maskCommandIndex != static_cast<size_t>(
+                       &command - _runtime->renderCommands.data())) {
                     command.stencilMaskCommandIndices.push_back(
-                        static_cast<int>(it->second));
-                    if(command.stencilMaskNodeIndices.size() > 1) {
-                        _runtime->renderCommands[it->second]
-                            .stencilMaskReferenced = true;
-                    }
+                        static_cast<int>(maskCommandIndex));
+                    // Native sub_6C7440 materializes every referenced mask
+                    // into item+304 before the composite consumes it. A
+                    // single mask is not a direct-render special case: E-mote
+                    // eyes commonly author exactly one animated `shirome`
+                    // aperture. Letting that input render directly leaves no
+                    // bitmap for the group and exposes the full circular iris
+                    // throughout the half-closed frames.
+                    _runtime->renderCommands[maskCommandIndex]
+                        .stencilMaskReferenced = true;
                 }
             }
         }
@@ -9208,10 +9220,15 @@ namespace motion {
         const int playerStencilType = _maskMode;
         auto ensureCommandLayer =
             [&](tTJSVariant &slot) -> iTJSDispatch2 * {
+            // Per-command layers are private render targets, not visible
+            // children of the Kirikiri layer tree.  Parenting them to the
+            // primary layer lets that parent retain every transient layer
+            // after renderCommands is rebuilt, and in turn retains each
+            // full-size GPU texture indefinitely.
             return ensureReusableLayerObject(
                 slot,
-                scratchOwner,
-                scratchParent,
+                nullptr,
+                nullptr,
                 static_cast<tTVPLayerType>(ltAlpha),
                 false);
         };
@@ -9267,12 +9284,15 @@ namespace motion {
                 }
                 auto localMeshPoints =
                     buildMeshPoints(command.localMeshPoints, 0.0f, 0.0f);
-                if(command.meshType == 1) {
-                    targetLayer->BezierPatchCopy(
-                        localMeshPoints.data(), command.meshDivX,
-                        command.meshDivY, srcBmp.get(), sourceRect, stLinear,
-                        command.clearEnabled);
-                } else if(command.meshType == 2) {
+                // MMotionRenderManager::EvalBezierPatch produces the final
+                // (divX + 1) x (divY + 1) vertex grid before RenderMesh is
+                // called.  localMeshPoints is that evaluated grid, not the
+                // original sixteen Bezier control points, so both authored
+                // patches and inherited point meshes must use MeshCopy here.
+                // Treating the grid as a new Bezier patch consumes only its
+                // first sixteen vertices and can move the whole image outside
+                // the target (notably E-mote character atlases).
+                if(command.meshType == 1 || command.meshType == 2) {
                     targetLayer->MeshCopy(localMeshPoints.data(),
                                           command.meshDivX, command.meshDivY,
                                           srcBmp.get(), sourceRect, stLinear,
@@ -10776,14 +10796,14 @@ namespace motion {
                                             -0.5f, -0.5f);
                         if(command.meshType == 1) {
                             if(directCopyWithoutOpacity) {
-                                branch = "direct.bezierPatchCopy";
-                                renderLayer->BezierPatchCopy(
+                                branch = "direct.evaluatedBezierMeshCopy";
+                                renderLayer->MeshCopy(
                                     worldMeshPoints.data(), command.meshDivX,
                                     command.meshDivY, srcBmp.get(), sourceRect,
                                     stLinear, command.clearEnabled);
                             } else {
-                                branch = "direct.operateBezierPatch";
-                                renderLayer->OperateBezierPatch(
+                                branch = "direct.operateEvaluatedBezierMesh";
+                                renderLayer->OperateMesh(
                                     worldMeshPoints.data(), command.meshDivX,
                                     command.meshDivY, srcBmp.get(), sourceRect,
                                     blendMode, opa, stLinear,
@@ -11301,36 +11321,67 @@ namespace motion {
     }
 
     bool Player::renderToRgba(std::uint8_t *pixels, int width, int height,
-                              int pitch) {
+                              int pitch,
+                              std::array<int, 4> *visibleBounds,
+                              bool *alphaBoundsKnown,
+                              bool *alphaOpaque) {
         if(!pixels || width <= 0 || height <= 0 || pitch < width * 4) {
             return false;
         }
 
-        iTJSDispatch2 *target = createHeadlessLayerObject();
+        if(visibleBounds) {
+            *visibleBounds = {0, 0, 0, 0};
+        }
+        if(alphaBoundsKnown) {
+            *alphaBoundsKnown = false;
+        }
+        if(alphaOpaque) {
+            *alphaOpaque = false;
+        }
+
+        iTJSDispatch2 *target = ensureReusableLayerObject(
+            _runtime->headlessRgbaRenderLayer,
+            nullptr,
+            nullptr,
+            static_cast<tTVPLayerType>(ltAlpha),
+            false);
         if(!target) {
             return false;
         }
-        struct TargetRelease {
-            iTJSDispatch2 *value;
-            ~TargetRelease() {
-                if(value) value->Release();
-            }
-        } release{target};
 
         auto *layer = resolveNativeLayer(target);
         if(!layer) {
             return false;
         }
-        layer->SetHasImage(true);
-        layer->SetSize(width, height);
-        layer->SetImageSize(static_cast<tjs_uint>(width),
-                            static_cast<tjs_uint>(height));
-        layer->SetClip(0, 0, width, height);
-        layer->SetVisible(true);
-        if(layer->GetMainImage()) {
-            layer->GetMainImage()->Fill(
-                tTVPRect(0, 0, width, height), 0x00000000);
+        if(!prepareLayerForRender(target, width, height, 0x00000000)) {
+            return false;
         }
+
+        // MMotionDevice::ChangeFrameBufferSize calls
+        // MOGLBase::CalcDefault2DCamera before drawing.  The native camera is
+        // an orthographic projection over [-width/2,+width/2] and
+        // [-height/2,+height/2], so E-mote model coordinates are centred in
+        // the framebuffer.  The KiriKiri software-layer path consumes pixel
+        // coordinates directly and therefore needs the equivalent viewport
+        // translation here.  Keep it out of the model/root transform: coord
+        // and scale are evaluated by MMotionPlayer before this camera step.
+        const auto previousDrawAffine = _runtime->drawAffineMatrix;
+        if(_runtime->isEmoteMode) {
+            _runtime->drawAffineMatrix[4] =
+                previousDrawAffine[4] + static_cast<double>(width) * 0.5;
+            _runtime->drawAffineMatrix[5] =
+                previousDrawAffine[5] + static_cast<double>(height) * 0.5;
+            _runtime->preparedRenderItemsValid = false;
+        }
+        struct DrawAffineRestore {
+            detail::PlayerRuntime *runtime;
+            std::array<double, 6> matrix;
+            ~DrawAffineRestore() {
+                if(!runtime) return;
+                runtime->drawAffineMatrix = matrix;
+                runtime->preparedRenderItemsValid = false;
+            }
+        } restoreDrawAffine{_runtime.get(), previousDrawAffine};
 
         if(!renderToLayer(target, false)) {
             return false;
@@ -11344,6 +11395,18 @@ namespace motion {
 
         // Kirikiri's 32-bit bitmap memory is BGRA; engine provider frames use
         // RGBA. Preserve alpha exactly while swapping the color endpoints.
+        // Native Artemis keeps this stage-sized texture on the GPU. Its CPU
+        // replacement also needs the visible rectangle, so derive it during
+        // the unavoidable format copy instead of scanning the 1920x1080 frame
+        // a second time in ArtemisRuntime.
+        int minimumX = width;
+        int minimumY = height;
+        int maximumX = 0;
+        int maximumY = 0;
+        bool anyVisible = false;
+        bool allOpaque = true;
+        const bool inspectAlpha =
+            visibleBounds || alphaBoundsKnown || alphaOpaque;
         for(int y = 0; y < height; ++y) {
             const auto *src = source + static_cast<size_t>(sourcePitch) * y;
             auto *dst = pixels + static_cast<size_t>(pitch) * y;
@@ -11351,8 +11414,28 @@ namespace motion {
                 dst[x * 4 + 0] = src[x * 4 + 2];
                 dst[x * 4 + 1] = src[x * 4 + 1];
                 dst[x * 4 + 2] = src[x * 4 + 0];
-                dst[x * 4 + 3] = src[x * 4 + 3];
+                const std::uint8_t alpha = src[x * 4 + 3];
+                dst[x * 4 + 3] = alpha;
+                if(inspectAlpha) {
+                    allOpaque = allOpaque && alpha == 255;
+                    if(alpha != 0) {
+                        anyVisible = true;
+                        minimumX = std::min(minimumX, x);
+                        minimumY = std::min(minimumY, y);
+                        maximumX = std::max(maximumX, x + 1);
+                        maximumY = std::max(maximumY, y + 1);
+                    }
+                }
             }
+        }
+        if(visibleBounds && anyVisible) {
+            *visibleBounds = {minimumX, minimumY, maximumX, maximumY};
+        }
+        if(alphaBoundsKnown) {
+            *alphaBoundsKnown = true;
+        }
+        if(alphaOpaque) {
+            *alphaOpaque = allOpaque;
         }
         return true;
     }
@@ -13676,6 +13759,7 @@ namespace motion {
             stepControllerBucket(_type6ControllerAnimators, controllerDt);
             stepControllerBucket(_type8ControllerAnimators, controllerDt);
             stepControllerBucket(_type7ControllerAnimators, controllerDt);
+            stepControllerBucket(_variableAnimators, controllerDt);
             refreshFixedControllerEvalOutputsLike_0x67D01C();
             remainingControllerStep -= controllerDt;
         }

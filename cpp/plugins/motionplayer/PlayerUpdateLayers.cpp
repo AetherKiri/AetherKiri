@@ -404,6 +404,19 @@ namespace motion {
             for(const auto &[label, value] : _evalResultValues) {
                 effectiveVariables[label] = value;
             }
+            // sub_6C4668 forwards the owning Player's already-evaluated
+            // controller output into nested Motion Players.  It does not call
+            // Player::setVariable on the child: doing so routes hair/bust/
+            // parts bindings (types 0..2) back into their controller groups,
+            // where the generic value is intentionally ignored.  Keep the
+            // inherited value as a distinct, per-frame input and let it win
+            // over the child's neutral controller state.  This is required
+            // for E-mote mesh physics, waiting-loop body motion, and
+            // voice-driven face_talk to reach the image leaves.
+            for(const auto &[label, value] :
+                _runtime->inheritedVariableInputs) {
+                effectiveVariables[label] = value;
+            }
             const auto propagateInheritedVariable =
                 [](Player *child, const std::string &label, double value) {
                     if(!child || !child->_runtime) {
@@ -416,7 +429,8 @@ namespace motion {
                         return;
                     }
                     it->second = value;
-                    child->setVariable(detail::widen(label), value);
+                    child->_layersDirty = true;
+                    child->_emoteDirty = true;
                 };
             // Bind path-qualified variables to child Players (sub_6C4668
             // equivalent).  Yuzu addresses nested selectors with labels such
@@ -485,6 +499,32 @@ namespace motion {
         const auto *activeClip = selectActiveClip();
         const bool traceFrameSelection =
             detail::logoChainTraceEnabled(_runtime->activeMotion);
+        const auto resolveMotionVariable =
+            [this](const std::string &label, double fallback) {
+                size_t ownerDepth = 0;
+                for(const Player *owner = this;
+                    owner && ownerDepth++ < 32;
+                    owner = owner->_motionParentPlayer) {
+                    if(owner->_runtime) {
+                        if(const auto it =
+                               owner->_runtime->inheritedVariableInputs.find(
+                                   label);
+                           it != owner->_runtime
+                                     ->inheritedVariableInputs.end()) {
+                            return it->second;
+                        }
+                    }
+                    if(const auto it = owner->_evalResultValues.find(label);
+                       it != owner->_evalResultValues.end()) {
+                        return it->second;
+                    }
+                    if(const auto it = owner->_variableValues.find(label);
+                       it != owner->_variableValues.end()) {
+                        return it->second;
+                    }
+                }
+                return fallback;
+            };
         // === PHASE 2: Main loop — evaluate non-root nodes ===
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
@@ -512,7 +552,6 @@ namespace motion {
                     const auto &parameter =
                         activeClip->parameters[
                             static_cast<size_t>(parameterIndex)];
-                    double rawValue = parameter.rangeBegin;
                     // Motion nodes form nested Players, while scripts set
                     // variables on the owning root Player. The native binder
                     // resolves an unqualified parameter through that owner
@@ -524,23 +563,8 @@ namespace motion {
                     // well; path-qualified sibling selectors remain isolated
                     // because their leaf parameter name does not match at the
                     // root.
-                    size_t ownerDepth = 0;
-                    for(const Player *owner = this;
-                        owner && ownerDepth++ < 32;
-                        owner = owner->_motionParentPlayer) {
-                        if(const auto it =
-                               owner->_evalResultValues.find(parameter.id);
-                           it != owner->_evalResultValues.end()) {
-                            rawValue = it->second;
-                            break;
-                        }
-                        if(const auto it =
-                               owner->_variableValues.find(parameter.id);
-                           it != owner->_variableValues.end()) {
-                            rawValue = it->second;
-                            break;
-                        }
-                    }
+                    const double rawValue = resolveMotionVariable(
+                        parameter.id, parameter.rangeBegin);
                     nodeTime = detail::parameterizedClipTime(
                         *activeClip, parameter, rawValue);
                 }
@@ -550,6 +574,14 @@ namespace motion {
             auto state = evaluateLayerContent(node.psbNode, nodeTime,
                                               node.nodeType,
                                               traceFrameSelection);
+            if(!node.meshCombinators.empty()) {
+                if(evaluateMeshCombinators(
+                       node.meshCombinators, resolveMotionVariable,
+                       node.meshControlPoints)) {
+                    state.hasMeshPayload = true;
+                    state.meshControlPoints = node.meshControlPoints;
+                }
+            }
             if(traceFrameSelection && state.debugEvaluated) {
                 detail::logoChainTraceLogf(
                     motionPath, "updateLayers.phase2.framesel", "0x6926B4/0x699AE4",
@@ -2544,6 +2576,16 @@ namespace motion {
                         for(const Player *owner = &child;
                             owner && variableOwners.insert(owner).second;
                             owner = owner->_motionParentPlayer) {
+                            if(owner->_runtime) {
+                                if(const auto it = owner->_runtime
+                                                       ->inheritedVariableInputs
+                                                       .find(parameter.id);
+                                   it != owner->_runtime
+                                             ->inheritedVariableInputs.end()) {
+                                    rawValue = it->second;
+                                    break;
+                                }
+                            }
                             if(const auto it =
                                    owner->_evalResultValues.find(parameter.id);
                                it != owner->_evalResultValues.end()) {
@@ -4982,6 +5024,42 @@ namespace motion {
                     if(!entry.hasOwnSource) {
                         continue;
                     }
+                    // A native nodeType-3 render item owns the child Player's
+                    // completed output surface.  Our single-surface renderer
+                    // flattens that child instead, so the corresponding item
+                    // can have a source selector but no image-sized geometry
+                    // of its own (all four default corners are {0,0}).  Do not
+                    // feed that placeholder through the inherited mesh chain:
+                    // the native StepFrameMotionLayer path applies the chain
+                    // to the child before BuildLayerFrameInfo, never to a
+                    // synthetic zero-sized bitmap.
+                    float cornerMinX = entry.corners[0];
+                    float cornerMaxX = entry.corners[0];
+                    float cornerMinY = entry.corners[1];
+                    float cornerMaxY = entry.corners[1];
+                    for(size_t point = 2;
+                        point + 1 < entry.corners.size(); point += 2) {
+                        cornerMinX = std::min(cornerMinX,
+                                              entry.corners[point]);
+                        cornerMaxX = std::max(cornerMaxX,
+                                              entry.corners[point]);
+                        cornerMinY = std::min(cornerMinY,
+                                              entry.corners[point + 1]);
+                        cornerMaxY = std::max(cornerMaxY,
+                                              entry.corners[point + 1]);
+                    }
+                    const bool hasCornerGeometry =
+                        std::isfinite(cornerMinX) &&
+                        std::isfinite(cornerMaxX) &&
+                        std::isfinite(cornerMinY) &&
+                        std::isfinite(cornerMaxY) &&
+                        cornerMaxX - cornerMinX > 1e-5f &&
+                        cornerMaxY - cornerMinY > 1e-5f;
+                    const bool hasMeshGeometry =
+                        entry.meshPoints.size() >= 6;
+                    if(!hasCornerGeometry && !hasMeshGeometry) {
+                        continue;
+                    }
 
                     // Preserve authored child tessellation when present. For
                     // an affine child leaf, deforming its four corners through
@@ -4994,10 +5072,12 @@ namespace motion {
                         deformPoint(entry.meshPoints[point],
                                     entry.meshPoints[point + 1]);
                     }
-                    for(size_t point = 0;
-                        point + 1 < entry.corners.size(); point += 2) {
-                        deformPoint(entry.corners[point],
-                                    entry.corners[point + 1]);
+                    if(hasCornerGeometry) {
+                        for(size_t point = 0;
+                            point + 1 < entry.corners.size(); point += 2) {
+                            deformPoint(entry.corners[point],
+                                        entry.corners[point + 1]);
+                        }
                     }
 
                     bool haveBounds = false;
@@ -5017,7 +5097,7 @@ namespace motion {
                         includePoint(entry.meshPoints[point],
                                      entry.meshPoints[point + 1]);
                     }
-                    if(!haveBounds) {
+                    if(!haveBounds && hasCornerGeometry) {
                         for(size_t point = 0;
                             point + 1 < entry.corners.size(); point += 2) {
                             includePoint(entry.corners[point],

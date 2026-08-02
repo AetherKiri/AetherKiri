@@ -68,6 +68,13 @@ int32_t FakeProbe(void*, const char* root) {
   return root != nullptr && std::strstr(root, ".artemis-test") != nullptr ? 100 : 0;
 }
 
+int32_t ArtemisGateProbe(void*, const char* root) {
+  return root != nullptr &&
+                 std::strstr(root, ".artemis-debug-gate-test") != nullptr
+             ? 100
+             : 0;
+}
+
 engine_result_t FakeCreate(void*, const engine_runtime_host_v1_t* host,
                            const engine_create_desc_t*, void** out_runtime) {
   if (host == nullptr || out_runtime == nullptr || host->log == nullptr) {
@@ -180,7 +187,42 @@ const engine_runtime_provider_v1_t kFakeProvider = [] {
   return provider;
 }();
 
+const engine_runtime_provider_v1_t kArtemisGateProvider = [] {
+  engine_runtime_provider_v1_t provider = kFakeProvider;
+  provider.runtime_id_utf8 = "artemis";
+  provider.display_name_utf8 = "Artemis Debug gate test provider";
+  provider.probe = ArtemisGateProbe;
+  return provider;
+}();
+
 }  // namespace
+
+TEST_CASE("Artemis runtime availability is restricted to Debug builds") {
+  const engine_result_t registration =
+      engine_register_runtime_provider(&kArtemisGateProvider);
+#if defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
+  REQUIRE(registration == ENGINE_RESULT_OK);
+
+  Handle handle;
+  engine_option_t runtime_option{};
+  runtime_option.key_utf8 = "runtime";
+  runtime_option.value_utf8 = "artemis";
+  REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
+  REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
+                           "first.iet") == ENGINE_RESULT_OK);
+#else
+  REQUIRE(registration == ENGINE_RESULT_NOT_SUPPORTED);
+
+  Handle handle;
+  engine_option_t runtime_option{};
+  runtime_option.key_utf8 = "runtime";
+  runtime_option.value_utf8 = "artemis";
+  REQUIRE(engine_set_option(handle.value, &runtime_option) ==
+          ENGINE_RESULT_NOT_SUPPORTED);
+  REQUIRE(std::string(engine_get_last_error(handle.value)) ==
+          "Artemis runtime is available only in internal Debug builds");
+#endif
+}
 
 TEST_CASE("versioned runtime provider is selected and routed end to end") {
   REQUIRE(engine_register_runtime_provider(&kFakeProvider) == ENGINE_RESULT_OK);

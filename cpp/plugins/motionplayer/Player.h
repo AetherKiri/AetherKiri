@@ -344,7 +344,10 @@ namespace motion {
         // Headless render entry used by runtime providers such as Artemis.
         // The caller owns an RGBA8 output buffer and no KAG Window is needed.
         bool renderToRgba(std::uint8_t *pixels, int width, int height,
-                          int pitch);
+                          int pitch,
+                          std::array<int, 4> *visibleBounds = nullptr,
+                          bool *alphaBoundsKnown = nullptr,
+                          bool *alphaOpaque = nullptr);
         void frameProgress(double dt);
         void frameProgressManually(double dt) {
             noteManualProgress();

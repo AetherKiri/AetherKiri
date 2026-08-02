@@ -634,6 +634,159 @@ namespace internal {
             return false;
         }
 
+        inline std::uint8_t expandPsb5To8(const std::uint16_t value) {
+            return static_cast<std::uint8_t>((value << 3u) | (value >> 2u));
+        }
+
+        inline std::uint8_t expandPsb6To8(const std::uint16_t value) {
+            return static_cast<std::uint8_t>((value << 2u) | (value >> 4u));
+        }
+
+        inline void decodePsbBcColorPalette(
+            const std::uint8_t *block,
+            bool allowDxt1Transparency,
+            std::array<std::array<std::uint8_t, 4>, 4> &palette) {
+            const auto color0 = static_cast<std::uint16_t>(block[0]) |
+                (static_cast<std::uint16_t>(block[1]) << 8u);
+            const auto color1 = static_cast<std::uint16_t>(block[2]) |
+                (static_cast<std::uint16_t>(block[3]) << 8u);
+            const auto decode565 = [](const std::uint16_t value) {
+                return std::array<std::uint8_t, 4>{
+                    expandPsb5To8(static_cast<std::uint16_t>((value >> 11u) & 0x1fu)),
+                    expandPsb6To8(static_cast<std::uint16_t>((value >> 5u) & 0x3fu)),
+                    expandPsb5To8(static_cast<std::uint16_t>(value & 0x1fu)),
+                    0xffu,
+                };
+            };
+            palette[0] = decode565(color0);
+            palette[1] = decode565(color1);
+            if(!allowDxt1Transparency || color0 > color1) {
+                for(size_t channel = 0; channel < 3; ++channel) {
+                    palette[2][channel] = static_cast<std::uint8_t>(
+                        (2u * palette[0][channel] + palette[1][channel]) / 3u);
+                    palette[3][channel] = static_cast<std::uint8_t>(
+                        (palette[0][channel] + 2u * palette[1][channel]) / 3u);
+                }
+                palette[2][3] = 0xffu;
+                palette[3][3] = 0xffu;
+            } else {
+                for(size_t channel = 0; channel < 3; ++channel) {
+                    palette[2][channel] = static_cast<std::uint8_t>(
+                        (palette[0][channel] + palette[1][channel]) / 2u);
+                    palette[3][channel] = 0u;
+                }
+                palette[2][3] = 0xffu;
+                palette[3][3] = 0u;
+            }
+        }
+
+        // Decode only the selected icon rectangle from a BC1/DXT1 or
+        // BC3/DXT5 atlas. E-mote character PSBs commonly keep a 4096x4096
+        // DXT5 texture in source/<group>/texture/pixel and reference small
+        // rectangles from source/<group>/icon/*.
+        inline bool decodePsbBlockCompressedAtlasRegion(
+            const std::vector<std::uint8_t> &compressed,
+            const std::string &formatName,
+            int atlasWidth,
+            int atlasHeight,
+            int left,
+            int top,
+            int width,
+            int height,
+            std::vector<std::uint8_t> &rgbaOut) {
+            const auto format = psbDebugLowercase(formatName);
+            const bool isDxt1 = format == "dxt1" || format == "bc1";
+            const bool isDxt5 = format == "dxt5" || format == "bc3";
+            if((!isDxt1 && !isDxt5) || atlasWidth <= 0 || atlasHeight <= 0 ||
+               left < 0 || top < 0 || width <= 0 || height <= 0 ||
+               left + width > atlasWidth || top + height > atlasHeight) {
+                return false;
+            }
+
+            const size_t blockBytes = isDxt5 ? 16u : 8u;
+            const size_t blocksWide =
+                (static_cast<size_t>(atlasWidth) + 3u) / 4u;
+            const size_t blocksHigh =
+                (static_cast<size_t>(atlasHeight) + 3u) / 4u;
+            if(compressed.size() < blocksWide * blocksHigh * blockBytes) {
+                return false;
+            }
+
+            rgbaOut.assign(static_cast<size_t>(width) *
+                               static_cast<size_t>(height) * 4u,
+                           0u);
+            const int firstBlockX = left / 4;
+            const int firstBlockY = top / 4;
+            const int lastBlockX = (left + width - 1) / 4;
+            const int lastBlockY = (top + height - 1) / 4;
+            for(int blockY = firstBlockY; blockY <= lastBlockY; ++blockY) {
+                for(int blockX = firstBlockX; blockX <= lastBlockX; ++blockX) {
+                    const size_t blockOffset =
+                        (static_cast<size_t>(blockY) * blocksWide +
+                         static_cast<size_t>(blockX)) * blockBytes;
+                    const auto *block = compressed.data() + blockOffset;
+                    const auto *colorBlock = block + (isDxt5 ? 8u : 0u);
+                    std::array<std::array<std::uint8_t, 4>, 4> colors{};
+                    decodePsbBcColorPalette(colorBlock, isDxt1, colors);
+                    const std::uint32_t colorIndices =
+                        static_cast<std::uint32_t>(colorBlock[4]) |
+                        (static_cast<std::uint32_t>(colorBlock[5]) << 8u) |
+                        (static_cast<std::uint32_t>(colorBlock[6]) << 16u) |
+                        (static_cast<std::uint32_t>(colorBlock[7]) << 24u);
+
+                    std::array<std::uint8_t, 8> alphas{};
+                    std::uint64_t alphaIndices = 0;
+                    if(isDxt5) {
+                        alphas[0] = block[0];
+                        alphas[1] = block[1];
+                        if(alphas[0] > alphas[1]) {
+                            for(size_t index = 2; index < 8; ++index) {
+                                alphas[index] = static_cast<std::uint8_t>(
+                                    ((8u - index) * alphas[0] +
+                                     (index - 1u) * alphas[1]) / 7u);
+                            }
+                        } else {
+                            for(size_t index = 2; index < 6; ++index) {
+                                alphas[index] = static_cast<std::uint8_t>(
+                                    ((6u - index) * alphas[0] +
+                                     (index - 1u) * alphas[1]) / 5u);
+                            }
+                            alphas[6] = 0u;
+                            alphas[7] = 0xffu;
+                        }
+                        for(size_t byte = 0; byte < 6; ++byte) {
+                            alphaIndices |= static_cast<std::uint64_t>(
+                                block[2u + byte]) << (8u * byte);
+                        }
+                    }
+
+                    for(int localY = 0; localY < 4; ++localY) {
+                        const int atlasY = blockY * 4 + localY;
+                        if(atlasY < top || atlasY >= top + height) continue;
+                        for(int localX = 0; localX < 4; ++localX) {
+                            const int atlasX = blockX * 4 + localX;
+                            if(atlasX < left || atlasX >= left + width) continue;
+                            const int blockPixel = localY * 4 + localX;
+                            const auto colorIndex = static_cast<size_t>(
+                                (colorIndices >> (2u * blockPixel)) & 0x3u);
+                            const size_t outOffset =
+                                (static_cast<size_t>(atlasY - top) *
+                                     static_cast<size_t>(width) +
+                                 static_cast<size_t>(atlasX - left)) * 4u;
+                            rgbaOut[outOffset + 0u] = colors[colorIndex][0];
+                            rgbaOut[outOffset + 1u] = colors[colorIndex][1];
+                            rgbaOut[outOffset + 2u] = colors[colorIndex][2];
+                            rgbaOut[outOffset + 3u] = isDxt5
+                                ? alphas[static_cast<size_t>(
+                                      (alphaIndices >> (3u * blockPixel)) & 0x7u)]
+                                : colors[colorIndex][3];
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
         constexpr double kMotionFramesPerMillisecond = 60.0 / 1000.0;
 
         inline std::string basenameWithoutExtension(const std::string &value) {
@@ -1717,6 +1870,93 @@ namespace internal {
             return points;
         }
 
+        template<typename ResolveVariable>
+        inline bool evaluateMeshCombinators(
+            std::vector<detail::MotionNode::MeshCombinatorEntry> &entries,
+            ResolveVariable &&resolveVariable,
+            std::vector<float> &controlPoints) {
+            constexpr std::size_t kPatchFloatCount = 32;
+            bool havePatch = false;
+            bool modified = false;
+            for(auto &entry : entries) {
+                if(entry.meshCount <= 0 ||
+                   entry.rawMeshes.size() <
+                       static_cast<std::size_t>(entry.meshCount) *
+                           kPatchFloatCount) {
+                    continue;
+                }
+
+                double neutralValue = entry.rangeBegin;
+                if(entry.meshCount > 1) {
+                    neutralValue +=
+                        (entry.rangeEnd - entry.rangeBegin) *
+                        std::clamp(entry.neutralIndex, 0,
+                                   entry.meshCount - 1) /
+                        static_cast<double>(entry.meshCount - 1);
+                }
+                const double rawValue = resolveVariable(entry.variable,
+                                                        neutralValue);
+                const double range = entry.rangeEnd - entry.rangeBegin;
+                const double normalized = std::abs(range) > 0.0000001
+                    ? std::clamp((rawValue - entry.rangeBegin) / range,
+                                 0.0, 1.0)
+                    : 0.0;
+                const double meshPosition =
+                    normalized * static_cast<double>(entry.meshCount - 1);
+                const float nativeMeshPosition =
+                    static_cast<float>(meshPosition);
+                havePatch = true;
+                // libartemis.so 0x6D9A84 and compatible-v2 0x6DB8A8 use an
+                // exact float comparison here.  The sampled Bezier patch and
+                // its layer sum survive until a controller actually moves.
+                if(entry.sampledPatchValid &&
+                   entry.sampledPosition == nativeMeshPosition) {
+                    continue;
+                }
+                const int meshA = std::clamp(
+                    static_cast<int>(nativeMeshPosition), 0,
+                    entry.meshCount - 1);
+                const int meshB = std::min(meshA + 1,
+                                           entry.meshCount - 1);
+                const float ratio = nativeMeshPosition - meshA;
+                const std::size_t offsetA =
+                    static_cast<std::size_t>(meshA) * kPatchFloatCount;
+                const std::size_t offsetB =
+                    static_cast<std::size_t>(meshB) * kPatchFloatCount;
+                for(std::size_t point = 0; point < kPatchFloatCount;
+                    ++point) {
+                    const double valueA = entry.rawMeshes[offsetA + point];
+                    const double valueB = entry.rawMeshes[offsetB + point];
+                    entry.sampledPatch[point] = static_cast<float>(
+                        valueA * (1.0 - ratio) + valueB * ratio);
+                }
+                entry.sampledPosition = nativeMeshPosition;
+                entry.sampledPatchValid = true;
+                modified = true;
+            }
+            if(!havePatch) {
+                controlPoints.clear();
+                return false;
+            }
+            if(!modified && controlPoints.size() == kPatchFloatCount) {
+                return true;
+            }
+            // The binary chooses SumAllMesh when at least half of a layer's
+            // operators changed and DiffModifiedMesh otherwise.  A portable
+            // node rarely has more than a handful of 32-float contributors;
+            // summing their retained samples gives the same result while
+            // avoiding a second mutable patch and all raw-resource reads.
+            std::array<float, kPatchFloatCount> combined{};
+            for(const auto &entry : entries) {
+                if(!entry.sampledPatchValid) continue;
+                for(std::size_t point = 0; point < kPatchFloatCount; ++point) {
+                    combined[point] += entry.sampledPatch[point];
+                }
+            }
+            controlPoints.assign(combined.begin(), combined.end());
+            return true;
+        }
+
         inline std::optional<double>
         psbDictionaryNumber(const std::shared_ptr<const PSB::PSBDictionary> &dic,
                             const char *key) {
@@ -2691,12 +2931,14 @@ namespace internal {
                 state.hasTransformOrder = true;
             }
 
-            // type=2: static display, no interpolation
-            if(!frameA.interpolate) {
-                return state;
-            }
-
-            // type=3: interpolate with next frame's slot
+            // Frame type belongs to the keyframe being entered.  Native
+            // sub_6926B4 stores the upcoming frame in the second slot and
+            // sub_699AE4 uses that slot's type to decide whether the span
+            // leading into it is interpolated.  Treating type=3 as a property
+            // of frameA delayed every transition by one keyframe: E-mote's
+            // mouth track (0:type2, 12:type3, 60:type3) then held the closed
+            // mouth for values 0..1, so continuous .vol.csv amplitudes such
+            // as 0.36 and 0.72 rendered identically.
             const int nextIndex = activeIndex + 1;
             if(nextIndex >= static_cast<int>(parsedLayer.frames.size())) {
                 return state;  // no next frame, just use slot A
@@ -2720,6 +2962,9 @@ namespace internal {
                 state.debugFrameBSrc = frameB.slot.src;
             }
             // Compute interpolation ratio
+            if(!frameB.interpolate) {
+                return state;
+            }
             const double duration = frameB.time - frameA.time;
             if(duration <= 0.0) return state;
 
@@ -3021,6 +3266,11 @@ namespace internal {
                                     ? psbDictionaryString(
                                           atlasNode, "compress")
                                     : std::string{};
+                                const auto textureType = atlasNode
+                                    ? psbDictionaryString(atlasNode, "type")
+                                    : std::string{};
+                                const auto resourceEncoding = textureType.empty()
+                                    ? compressStr : textureType;
                                 if(outResourcePath) {
                                     *outResourcePath = iconPath +
                                         fmt::format(
@@ -3029,9 +3279,22 @@ namespace internal {
                                             outWidth, outHeight);
                                 }
                                 if(outCompressName) {
-                                    *outCompressName = compressStr;
+                                    *outCompressName = resourceEncoding;
                                 }
                                 if(!decodePixelData) {
+                                    return atlasIt->second.get();
+                                }
+
+                                if(decodePsbBlockCompressedAtlasRegion(
+                                       atlasIt->second->data,
+                                       resourceEncoding,
+                                       atlasWidth, atlasHeight,
+                                       atlasLeft, atlasTop,
+                                       outWidth, outHeight,
+                                       decompressedOut)) {
+                                    if(outDecodedIsBgra) {
+                                        *outDecodedIsBgra = false;
+                                    }
                                     return atlasIt->second.get();
                                 }
 

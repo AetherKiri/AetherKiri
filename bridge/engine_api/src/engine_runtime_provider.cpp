@@ -70,6 +70,12 @@ engine_result_t engine_register_runtime_provider(
   if (runtime_id == "auto" || runtime_id == "kirikiri" || runtime_id == "legacy") {
     return ENGINE_RESULT_INVALID_ARGUMENT;
   }
+#if !defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
+  // Artemis is an internal preview.  This registry-level gate is deliberate:
+  // even a provider linked or injected by mistake cannot make a non-Debug
+  // product recognize an Artemis directory during automatic probing.
+  if (runtime_id == "artemis") return ENGINE_RESULT_NOT_SUPPORTED;
+#endif
 
   std::lock_guard<std::mutex> guard(g_provider_mutex);
   const auto found = std::find_if(

@@ -19,6 +19,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -95,6 +96,27 @@ namespace motion::detail {
         std::vector<float> meshControlPoints;       // node+2024, 16 normalized XY pairs
         std::vector<float> meshRenderPoints;        // node+2048, tessellated world XY pairs
         std::vector<float> meshWorldControlPoints;  // node+2072, 16 world XY pairs
+        // E-mote meshCombinator layers do not author `mesh.bp` in their
+        // frameList. Instead, each controller variable supplies a sequence
+        // of raw 4x4 patches which are sampled and added together at runtime.
+        struct MeshCombinatorEntry {
+            std::string variable;
+            double rangeBegin = 0.0;
+            double rangeEnd = 0.0;
+            int meshCount = 0;
+            int neutralIndex = 0;
+            int meshType = 0;
+            std::vector<float> rawMeshes;
+            // MMeshCombinator::UpdateAllMesh retains the last normalized mesh
+            // position and does not call LerpBezierPatch again until that
+            // position changes.  Keep the sampled contribution beside the
+            // immutable raw meshes so idle controllers do not rebuild it on
+            // every frame.
+            float sampledPosition = std::numeric_limits<float>::quiet_NaN();
+            std::array<float, 32> sampledPatch{};
+            bool sampledPatchValid = false;
+        };
+        std::vector<MeshCombinatorEntry> meshCombinators;
         // node+1968 is a pointer to the inherited mesh chain in libgame.so.
         // It is unrelated to the shape/stencil clip parent tracked below.
         int meshAncestorIndex = -1;
@@ -262,6 +284,12 @@ namespace motion::detail {
         // Player object, created by sub_6B3C78 case 3 via sub_6F1794 (NCB CreateAdaptor).
         // Use getChildPlayer() helper to extract native Player*.
         tTJSVariant childPlayerVar;
+        // Artemis instantiates E-mote players through the native bridge before
+        // motionplayer.dll has necessarily registered its TJS Player class.
+        // Keep the same nested Player alive directly when NCB cannot create
+        // the optional script adaptor; native MMotionPlayer owns its children
+        // directly as well.
+        std::shared_ptr<Player> nativeChildPlayer;
 
         // Particle children for nodeType=4 (Particle).
         // Aligned to libkrkr2.so node+2296: tTJSVariant holding TJS Array of

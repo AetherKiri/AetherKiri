@@ -3802,6 +3802,45 @@ public:
                 OperateRect(method, target, rcdest, src, refrect);
                 return;
             }
+
+            // Native Artemis submits ordinary translated/rotated E-mote
+            // parts as two affine triangles to the GPU. Sending every such
+            // quad through OpenCV allocates a temporary image and runs a full
+            // remap kernel; a character made of a hundred small parts then
+            // spends most of the frame in remap scheduling. The software
+            // renderer already has the equivalent clipped triangle scanner.
+            // Use it for genuine affine parallelograms and keep OpenCV only
+            // for perspective quads that cannot be represented by one affine
+            // transform.
+            if(isSrcRect && checkQuadSquared(dstpt)) {
+                TAffuncFunc affineloop = GetStretchFunction(
+                    static_cast<tTVPRenderMethod_Software *>(method));
+                tjs_int taskNum = std::min<tjs_int>(TVPGetThreadNum(), 2);
+                TVPExecThreadTask(taskNum, [&](int n) {
+                    const int begin = 2 * n / taskNum;
+                    const int end = 2 * (n + 1) / taskNum;
+                    for(int i = begin; i < end; ++i) {
+                        const bool nrot = i & 1;
+                        const tTVPPointD *pt = srcpt + 3 * i;
+                        tTVPRect rc;
+                        if(nrot) { // rt, lb, rb
+                            rc.top = pt[0].y;
+                            rc.right = pt[0].x;
+                            rc.left = pt[1].x;
+                            rc.bottom = pt[1].y;
+                        } else { // lt, rt, lb
+                            rc.top = pt[1].y;
+                            rc.right = pt[1].x;
+                            rc.left = pt[2].x;
+                            rc.bottom = pt[2].y;
+                        }
+                        InternalAffineBlt(rcclip, rc, rc, src, dst,
+                                          dstpt + 3 * i, !nrot, affineloop);
+                    }
+                });
+                return;
+            }
+
             const uint8_t *sdata;
             int spitch = src->GetPitch();
             sdata = (const uint8_t *)src->GetPixelData();

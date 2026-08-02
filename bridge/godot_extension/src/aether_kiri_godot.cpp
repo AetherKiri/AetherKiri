@@ -127,6 +127,10 @@ struct ArtemisGpuShaderRequest {
 std::mutex g_gpu_textures_mutex;
 std::unordered_map<uint64_t, GodotGpuTextureRecord> g_gpu_textures;
 uint64_t g_next_gpu_texture_id = 1;
+std::atomic<uint64_t> g_gpu_textures_created{0};
+std::atomic<uint64_t> g_gpu_textures_released{0};
+std::atomic<uint64_t> g_gpu_texture_bytes_created{0};
+std::atomic<uint64_t> g_gpu_texture_bytes_released{0};
 
 struct GodotGpuOp {
     enum class Type {
@@ -1023,12 +1027,31 @@ void CountGpuOpResult(bool result) {
 
 String GetGodotGpuBridgeDebugInfo() {
     size_t queue_size = 0;
+    size_t texture_count = 0;
+    uint64_t live_texture_bytes = 0;
+    std::unordered_map<uint64_t, size_t> texture_sizes;
     bool scheduled = false;
     {
         std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
         queue_size = g_gpu_op_queue.size();
         scheduled = g_gpu_op_drain_scheduled;
     }
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        texture_count = g_gpu_textures.size();
+        for (const auto &entry : g_gpu_textures) {
+            const auto width = entry.second.width;
+            const auto height = entry.second.height;
+            live_texture_bytes += static_cast<uint64_t>(width) * height * 4u;
+            ++texture_sizes[(static_cast<uint64_t>(width) << 32u) | height];
+        }
+    }
+    std::vector<std::pair<uint64_t, size_t>> common_texture_sizes(
+        texture_sizes.begin(), texture_sizes.end());
+    std::sort(common_texture_sizes.begin(), common_texture_sizes.end(),
+              [](const auto &a, const auto &b) {
+                  return a.second > b.second;
+              });
 
     std::ostringstream out;
     out << " bridge_queue=" << queue_size
@@ -1047,8 +1070,30 @@ String GetGodotGpuBridgeDebugInfo() {
         << " bridge_alias_sources=" << g_gpu_alias_sources.load(std::memory_order_relaxed)
         << " bridge_alpha_d_clear_versions="
         << g_gpu_alpha_d_clear_versions.load(std::memory_order_relaxed)
-        << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed);
-    return String::utf8(out.str().c_str());
+        << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed)
+        << " bridge_textures=" << texture_count
+        << " bridge_texture_live_mb="
+        << (live_texture_bytes / (1024u * 1024u))
+        << " bridge_texture_created="
+        << g_gpu_textures_created.load(std::memory_order_relaxed)
+        << " bridge_texture_released="
+        << g_gpu_textures_released.load(std::memory_order_relaxed)
+        << " bridge_texture_mb_created="
+        << (g_gpu_texture_bytes_created.load(std::memory_order_relaxed) /
+            (1024u * 1024u))
+        << " bridge_texture_mb_released="
+        << (g_gpu_texture_bytes_released.load(std::memory_order_relaxed) /
+            (1024u * 1024u))
+        << " bridge_texture_sizes=";
+    for (size_t i = 0; i < std::min<size_t>(common_texture_sizes.size(), 4u);
+         ++i) {
+        if (i != 0) out << ',';
+         out << static_cast<uint32_t>(common_texture_sizes[i].first >> 32u)
+             << 'x'
+             << static_cast<uint32_t>(common_texture_sizes[i].first)
+             << ':' << common_texture_sizes[i].second;
+     }
+     return String::utf8(out.str().c_str());
 }
 
 void ApplyGodotGpuBarrier(RenderingDevice *rd) {
@@ -4834,6 +4879,10 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
     std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
     const uint64_t id = g_next_gpu_texture_id++;
     g_gpu_textures[id] = record;
+    g_gpu_textures_created.fetch_add(1, std::memory_order_relaxed);
+    g_gpu_texture_bytes_created.fetch_add(
+        static_cast<uint64_t>(width) * height * 4u,
+        std::memory_order_relaxed);
     return id;
 }
 
@@ -4846,6 +4895,10 @@ void BridgeReleaseTexture(uint64_t texture) {
         record = it->second;
         g_gpu_textures.erase(it);
     }
+    g_gpu_textures_released.fetch_add(1, std::memory_order_relaxed);
+    g_gpu_texture_bytes_released.fetch_add(
+        static_cast<uint64_t>(record.width) * record.height * 4u,
+        std::memory_order_relaxed);
     record.texture.unref();
     if (record.rid.is_valid()) {
         auto op = std::make_shared<GodotGpuOp>();
