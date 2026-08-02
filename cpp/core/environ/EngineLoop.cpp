@@ -494,9 +494,22 @@ void EngineLoop::HandleTextInput(const EngineInputEvent& event) {
     auto* win = TVPMainWindow;
     if (!win) return;
 
-    if (event.unicode_codepoint > 0 && event.unicode_codepoint <= 0xFFFF) {
-        const tjs_char ch = static_cast<tjs_char>(event.unicode_codepoint);
-        TVPPostInputEvent(
-            new tTVPOnKeyPressInputEvent(win, ch));
+    const uint32_t codepoint = event.unicode_codepoint;
+    if(codepoint == 0 || codepoint > 0x10FFFF)
+        return;
+
+    // Android's Godot text bridge reports a non-BMP character as two UTF-16
+    // code units, while other hosts can report the complete Unicode scalar.
+    // Preserve either representation for KiriKiri's UTF-16 input events.
+    if(codepoint <= 0xFFFF) {
+        TVPPostInputEvent(new tTVPOnKeyPressInputEvent(
+            win, static_cast<tjs_char>(codepoint)));
+        return;
     }
+
+    const uint32_t scalar = codepoint - 0x10000;
+    const tjs_char high = static_cast<tjs_char>(0xD800 + (scalar >> 10));
+    const tjs_char low = static_cast<tjs_char>(0xDC00 + (scalar & 0x3FF));
+    TVPPostInputEvent(new tTVPOnKeyPressInputEvent(win, high));
+    TVPPostInputEvent(new tTVPOnKeyPressInputEvent(win, low));
 }

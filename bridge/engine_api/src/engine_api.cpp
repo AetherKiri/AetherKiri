@@ -126,6 +126,17 @@ extern "C" bool TVPHostGetLatestGodotGpuFrame(uint64_t* texture,
 extern "C" void TVPHostActivateMainWindow();
 extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height);
 extern "C" void TVPHostSetPreferGpuFrame(bool prefer_gpu_frame);
+extern "C" void TVPHostGetTextInputState(uint32_t* ime_active,
+                                           int32_t* ime_mode,
+                                           uint32_t* attention_point_valid,
+                                           int32_t* attention_x,
+                                           int32_t* attention_y,
+                                           uint32_t* text_available,
+                                           uint32_t* text_utf8_bytes,
+                                           int32_t* selection_start,
+                                           int32_t* selection_end);
+extern "C" uint32_t TVPHostCopyTextInputText(char* out_buffer,
+                                               uint32_t buffer_size);
 
 struct engine_handle_s {
   std::recursive_mutex mutex;
@@ -3705,6 +3716,89 @@ engine_result_t engine_send_input(engine_handle_t handle,
   return ENGINE_RESULT_OK;
 }
 
+engine_result_t engine_get_text_input_state(
+    engine_handle_t handle, engine_text_input_state_t* out_state) {
+  if (out_state == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "out_state is null");
+  }
+  if (out_state->struct_size < sizeof(engine_text_input_state_t)) {
+    return SetThreadErrorAndReturn(
+        ENGINE_RESULT_INVALID_ARGUMENT,
+        "engine_text_input_state_t.struct_size is too small");
+  }
+
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) {
+    return result;
+  }
+
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  result = ValidateHandleThreadLocked(impl);
+  if (result != ENGINE_RESULT_OK) {
+    return result;
+  }
+  if (impl->state != ToStateValue(EngineState::kOpened) &&
+      impl->state != ToStateValue(EngineState::kPaused)) {
+    return SetHandleErrorAndReturnLocked(
+        impl, ENGINE_RESULT_INVALID_STATE,
+        "engine_open_game must succeed before engine_get_text_input_state");
+  }
+
+  engine_text_input_state_t snapshot{};
+  snapshot.struct_size = sizeof(snapshot);
+  TVPHostGetTextInputState(&snapshot.ime_active, &snapshot.ime_mode,
+                           &snapshot.attention_point_valid,
+                           &snapshot.attention_x, &snapshot.attention_y,
+                           &snapshot.text_available,
+                           &snapshot.text_utf8_bytes,
+                           &snapshot.selection_start,
+                           &snapshot.selection_end);
+  *out_state = snapshot;
+  ClearHandleErrorLocked(impl);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_copy_text_input_text(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written) {
+  if (out_buffer == nullptr || buffer_size == 0 ||
+      out_bytes_written == nullptr) {
+    return SetThreadErrorAndReturn(
+        ENGINE_RESULT_INVALID_ARGUMENT,
+        "engine_copy_text_input_text requires a buffer and byte count");
+  }
+  out_buffer[0] = '\0';
+  *out_bytes_written = 0;
+
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) {
+    return result;
+  }
+
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  result = ValidateHandleThreadLocked(impl);
+  if (result != ENGINE_RESULT_OK) {
+    return result;
+  }
+  if (impl->state != ToStateValue(EngineState::kOpened) &&
+      impl->state != ToStateValue(EngineState::kPaused)) {
+    return SetHandleErrorAndReturnLocked(
+        impl, ENGINE_RESULT_INVALID_STATE,
+        "engine_open_game must succeed before engine_copy_text_input_text");
+  }
+
+  *out_bytes_written = TVPHostCopyTextInputText(out_buffer, buffer_size);
+  ClearHandleErrorLocked(impl);
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
 engine_result_t engine_get_main_menu_json(engine_handle_t handle,
                                           char* out_buffer,
                                           uint32_t buffer_size,
@@ -5026,6 +5120,75 @@ engine_result_t engine_send_input(engine_handle_t handle,
     default:
       SetHandleErrorLocked(impl, "unsupported input event type");
       return ENGINE_RESULT_NOT_SUPPORTED;
+  }
+
+  impl->last_error.clear();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_get_text_input_state(
+    engine_handle_t handle, engine_text_input_state_t* out_state) {
+  if (out_state == nullptr) {
+    return SetThreadErrorAndReturn(ENGINE_RESULT_INVALID_ARGUMENT,
+                                   "out_state is null");
+  }
+  if (out_state->struct_size < sizeof(engine_text_input_state_t)) {
+    return SetThreadErrorAndReturn(
+        ENGINE_RESULT_INVALID_ARGUMENT,
+        "engine_text_input_state_t.struct_size is too small");
+  }
+
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) {
+    return result;
+  }
+
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->state != ToStateValue(EngineState::kOpened) &&
+      impl->state != ToStateValue(EngineState::kPaused)) {
+    SetHandleErrorLocked(
+        impl,
+        "engine_open_game must succeed before engine_get_text_input_state");
+    return ENGINE_RESULT_INVALID_STATE;
+  }
+
+  engine_text_input_state_t snapshot{};
+  snapshot.struct_size = sizeof(snapshot);
+  *out_state = snapshot;
+  impl->last_error.clear();
+  SetThreadError(nullptr);
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_copy_text_input_text(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written) {
+  if (out_buffer == nullptr || buffer_size == 0 ||
+      out_bytes_written == nullptr) {
+    return SetThreadErrorAndReturn(
+        ENGINE_RESULT_INVALID_ARGUMENT,
+        "engine_copy_text_input_text requires a buffer and byte count");
+  }
+  out_buffer[0] = '\0';
+  *out_bytes_written = 0;
+
+  std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+  engine_handle_s* impl = nullptr;
+  auto result = ValidateHandleLocked(handle, &impl);
+  if (result != ENGINE_RESULT_OK) {
+    return result;
+  }
+
+  std::lock_guard<std::recursive_mutex> guard(impl->mutex);
+  if (impl->state != ToStateValue(EngineState::kOpened) &&
+      impl->state != ToStateValue(EngineState::kPaused)) {
+    SetHandleErrorLocked(
+        impl,
+        "engine_open_game must succeed before engine_copy_text_input_text");
+    return ENGINE_RESULT_INVALID_STATE;
   }
 
   impl->last_error.clear();

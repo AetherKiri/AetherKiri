@@ -65,6 +65,11 @@ engine_result_t engine_legacy_get_host_native_view(engine_handle_t handle,
                                                    void** out_view_handle);
 engine_result_t engine_legacy_send_input(engine_handle_t handle,
                                          const engine_input_event_t* event);
+engine_result_t engine_legacy_get_text_input_state(
+    engine_handle_t handle, engine_text_input_state_t* out_state);
+engine_result_t engine_legacy_copy_text_input_text(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written);
 engine_result_t engine_legacy_get_main_menu_json(
     engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
     uint32_t* out_bytes_written);

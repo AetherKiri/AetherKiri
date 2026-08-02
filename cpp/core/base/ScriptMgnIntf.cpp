@@ -825,6 +825,154 @@ bool TVPPatchWorldRestoreFaceVisibility(ttstr &script) {
     return true;
 }
 
+tjs_int TVPRepairShiftedNumberedMovieMappings(
+    ttstr &script, tTVPStorageExistenceProbe storageExists) {
+    using ScriptString = std::basic_string<tjs_char>;
+    const auto missing = ScriptString::npos;
+    if(!storageExists)
+        return 0;
+
+    ScriptString source(script.c_str(), script.GetLen());
+    const ScriptString keyPrefix(TJS_W("\"ev_mv"));
+    const ScriptString namePrefix(TJS_W("ev_mv"));
+    const ScriptString finalSuffix(TJS_W("_02_06"));
+    const ScriptString movieSuffix(TJS_W(".mpg"));
+    const ScriptString storageMarker(TJS_W("\"storage\",\""));
+
+    const auto parseFamily = [&](const ScriptString &name,
+                                 int &family,
+                                 size_t &digits) -> bool {
+        if(name.size() <= namePrefix.size() + finalSuffix.size() ||
+           name.compare(0, namePrefix.size(), namePrefix) != 0 ||
+           name.compare(name.size() - finalSuffix.size(), finalSuffix.size(),
+                        finalSuffix) != 0)
+            return false;
+
+        const size_t begin = namePrefix.size();
+        const size_t end = name.size() - finalSuffix.size();
+        family = 0;
+        digits = end - begin;
+        for(size_t i = begin; i < end; ++i) {
+            if(name[i] < TJS_W('0') || name[i] > TJS_W('9'))
+                return false;
+            family = family * 10 + static_cast<int>(name[i] - TJS_W('0'));
+        }
+        return digits > 0;
+    };
+
+    const auto hasIdentityMapping = [&](const ScriptString &name) -> bool {
+        const ScriptString key = ScriptString(TJS_W("\"")) + name +
+            TJS_W("\"");
+        const ScriptString storage = storageMarker + name + movieSuffix +
+            TJS_W("\"");
+        size_t keyPos = 0;
+        while((keyPos = source.find(key, keyPos)) != missing) {
+            const size_t lineEnd = source.find(TJS_W('\n'), keyPos);
+            const size_t storagePos = source.find(storage, keyPos + key.size());
+            if(storagePos != missing &&
+               (lineEnd == missing || storagePos < lineEnd))
+                return true;
+            keyPos += key.size();
+        }
+        return false;
+    };
+
+    struct Correction {
+        size_t position;
+        size_t length;
+        ScriptString logical;
+        ScriptString physical;
+    };
+    std::vector<Correction> corrections;
+
+    size_t keyPos = 0;
+    while((keyPos = source.find(keyPrefix, keyPos)) != missing) {
+        const size_t logicalBegin = keyPos + 1;
+        const size_t logicalEnd = source.find(TJS_W('"'), logicalBegin);
+        if(logicalEnd == missing)
+            break;
+
+        const ScriptString logical =
+            source.substr(logicalBegin, logicalEnd - logicalBegin);
+        int logicalFamily = 0;
+        size_t logicalDigits = 0;
+        if(!parseFamily(logical, logicalFamily, logicalDigits)) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        const size_t lineEnd = source.find(TJS_W('\n'), logicalEnd);
+        const size_t storagePos = source.find(storageMarker, logicalEnd);
+        if(storagePos == missing ||
+           (lineEnd != missing && storagePos >= lineEnd)) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        const size_t physicalBegin = storagePos + storageMarker.size();
+        const size_t physicalEnd = source.find(TJS_W('"'), physicalBegin);
+        if(physicalEnd == missing ||
+           (lineEnd != missing && physicalEnd >= lineEnd)) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        const ScriptString physicalFile =
+            source.substr(physicalBegin, physicalEnd - physicalBegin);
+        if(physicalFile.size() <= movieSuffix.size() ||
+           physicalFile.compare(physicalFile.size() - movieSuffix.size(),
+                                movieSuffix.size(), movieSuffix) != 0) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+        const ScriptString physical = physicalFile.substr(
+            0, physicalFile.size() - movieSuffix.size());
+
+        int physicalFamily = 0;
+        size_t physicalDigits = 0;
+        if(!parseFamily(physical, physicalFamily, physicalDigits) ||
+           logicalDigits != physicalDigits ||
+           logicalFamily != physicalFamily + 1) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        const ScriptString sequencePrefix = logical.substr(
+            0, logical.size() - finalSuffix.size());
+        if(!hasIdentityMapping(sequencePrefix + TJS_W("_02_01")) ||
+           !hasIdentityMapping(sequencePrefix + TJS_W("_02_05"))) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        const ScriptString correctedFile = logical + movieSuffix;
+        if(!storageExists(ttstr(correctedFile))) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        corrections.push_back(
+            { physicalBegin, physicalFile.size(), logical, physical });
+        keyPos = logicalEnd + 1;
+    }
+
+    for(auto it = corrections.rbegin(); it != corrections.rend(); ++it) {
+        const ScriptString correctedFile = it->logical + movieSuffix;
+        source.replace(it->position, it->length, correctedFile);
+        spdlog::info(
+            "Corrected shifted numbered movie mapping: logical={} "
+            "storage={} corrected={}",
+            ttstr(it->logical).AsStdString(),
+            (ttstr(it->physical) + TJS_W(".mpg")).AsStdString(),
+            ttstr(correctedFile).AsStdString());
+    }
+
+    if(corrections.empty())
+        return 0;
+    script = ttstr(source);
+    return static_cast<tjs_int>(corrections.size());
+}
+
 static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                                                ttstr &buffer) {
     const ttstr lower = shortname.AsLowerCase();
@@ -836,6 +984,21 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
         const char *value = std::getenv("AETHERKIRI_SCENE_DEBUG");
         return value && *value && *value != '0';
     }();
+
+    if(lower == TJS_W("envinit.tjs")) {
+        // Compatibility evidence for future per-game scoping:
+        //   Title: もっと！孕ませ！炎のおっぱい異世界おっぱいスパイ学園！
+        //   Pre-patch decoded envinit.tjs (UTF-8, CRLF) SHA-256:
+        //     eb99e1869dd01e81de23b644f1d5e76fd2d47fb8fa666696b7173671084ed854
+        //   Broken mapping anchors:
+        //     ev_mv023_02_06 -> ev_mv022_02_06.mpg
+        //     ev_mv024_02_06 -> ev_mv023_02_06.mpg
+        // The current structural matcher intentionally supports equivalent
+        // data revisions. If it ever conflicts with a deliberate alias, use
+        // this fingerprint/anchor pair to gate a game compatibility profile.
+        TVPRepairShiftedNumberedMovieMappings(buffer,
+                                              TVPIsExistentStorage);
+    }
 
     if(lower == TJS_W("messagelayer.tjs")) {
         ttstr patched(buffer);

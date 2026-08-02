@@ -210,7 +210,10 @@ void FillColor_HWY(tjs_uint32 *dest, tjs_int len, tjs_uint32 color) {
 void FillMask_HWY(tjs_uint32 *dest, tjs_int len, tjs_uint32 mask_val) {
     const hn::ScalableTag<uint32_t> d32;
     const size_t N = hn::Lanes(d32);
-    const auto valpha = hn::Set(d32, mask_val & 0xFF000000);
+    // TVPFillMask accepts an 8-bit opacity value. Expand it into AARRGGBB's
+    // alpha byte just like the scalar implementation.
+    const tjs_uint32 alpha = (mask_val & 0xFFu) << 24u;
+    const auto valpha = hn::Set(d32, alpha);
     const auto vmask_rgb = hn::Set(d32, 0x00FFFFFFu);
 
     tjs_int i = 0;
@@ -220,7 +223,7 @@ void FillMask_HWY(tjs_uint32 *dest, tjs_int len, tjs_uint32 mask_val) {
         hn::StoreU(result, d32, reinterpret_cast<uint32_t*>(dest + i));
     }
     for (; i < len; i++) {
-        dest[i] = (dest[i] & 0x00FFFFFF) | (mask_val & 0xFF000000);
+        dest[i] = (dest[i] & 0x00FFFFFF) | alpha;
     }
 }
 

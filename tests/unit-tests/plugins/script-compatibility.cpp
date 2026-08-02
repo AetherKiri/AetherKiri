@@ -38,7 +38,49 @@ std::size_t countOccurrences(const ttstr &script, const tjs_char *marker) {
     return count;
 }
 
+bool onlyExpectedMovieExists(const ttstr &name) {
+    return name == TJS_W("ev_mv023_02_06.mpg");
+}
+
+bool noMovieExists(const ttstr &) { return false; }
+
 } // namespace
+
+TEST_CASE("Shifted final movie mapping follows a complete numbered sequence") {
+    ttstr script(TJS_W(
+        "\t\"ev_mv022_02_01\" => %[ \"storage\",\"ev_mv022_02_01.mpg\" ],\r\n"
+        "\t\"ev_mv022_02_05\" => %[ \"storage\",\"ev_mv022_02_05.mpg\" ],\r\n"
+        "\t\"ev_mv023_02_06\" => %[ \"storage\",\"ev_mv022_02_06.mpg\" ],\r\n"
+        "\t\"ev_mv023_02_01\" => %[ \"storage\",\"ev_mv023_02_01.mpg\" ],\r\n"
+        "\t\"ev_mv023_02_05\" => %[ \"storage\",\"ev_mv023_02_05.mpg\" ],\r\n"));
+
+    CHECK(TVPRepairShiftedNumberedMovieMappings(
+              script, onlyExpectedMovieExists) == 1);
+    CHECK(script.IndexOf(TJS_W(
+              "\"ev_mv023_02_06\" => %[ \"storage\",\"ev_mv023_02_06.mpg\"")) >= 0);
+    CHECK(script.IndexOf(TJS_W("\"storage\",\"ev_mv022_02_06.mpg\"")) < 0);
+}
+
+TEST_CASE("Shifted final movie mapping requires the corrected asset") {
+    ttstr script(TJS_W(
+        "\"ev_mv023_02_01\" => %[ \"storage\",\"ev_mv023_02_01.mpg\" ],\n"
+        "\"ev_mv023_02_05\" => %[ \"storage\",\"ev_mv023_02_05.mpg\" ],\n"
+        "\"ev_mv023_02_06\" => %[ \"storage\",\"ev_mv022_02_06.mpg\" ],\n"));
+    const ttstr original(script);
+
+    CHECK(TVPRepairShiftedNumberedMovieMappings(script, noMovieExists) == 0);
+    CHECK(script == original);
+}
+
+TEST_CASE("Shifted final movie mapping requires surrounding identity entries") {
+    ttstr script(TJS_W(
+        "\"ev_mv023_02_06\" => %[ \"storage\",\"ev_mv022_02_06.mpg\" ],\n"));
+    const ttstr original(script);
+
+    CHECK(TVPRepairShiftedNumberedMovieMappings(
+              script, onlyExpectedMovieExists) == 0);
+    CHECK(script == original);
+}
 
 TEST_CASE("World face restore patch supports two-argument updateAll") {
     ttstr script(TJS_W(

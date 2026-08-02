@@ -94,6 +94,15 @@ extern bool TVPMergeMissingObjectMembers(iTJSDispatch2 *destination,
 // implementations. The three dependent insertions are applied atomically.
 extern bool TVPPatchWorldRestoreFaceVisibility(ttstr &script);
 
+using tTVPStorageExistenceProbe = bool (*)(const ttstr &name);
+
+// Repairs a narrowly identifiable data-table typo: a numbered movie's final
+// segment points at the previous numbered movie even though the surrounding
+// segments use self-named storage and the self-named final segment exists.
+// Returns the number of corrected mappings.
+extern tjs_int TVPRepairShiftedNumberedMovieMappings(
+    ttstr &script, tTVPStorageExistenceProbe storageExists);
+
 extern void TVPArmKagNoTransWaitRepair();
 
 extern void TVPRepairKagNoTransWait();

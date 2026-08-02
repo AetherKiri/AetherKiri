@@ -90,6 +90,9 @@ struct GodotGpuTextureRecord {
     Ref<Texture2DRD> texture;
     uint32_t width = 0;
     uint32_t height = 0;
+    // AlphaBlend_d dispatches are asynchronous. A following scratch-layer
+    // clear must not rewrite this RID until the queued shader has sampled it.
+    bool requires_alpha_d_clear_version = false;
 };
 
 struct ArtemisGpuShaderImage {
@@ -184,6 +187,7 @@ std::atomic<uint64_t> g_gpu_queue_peak{0};
 std::atomic<uint64_t> g_gpu_barriers{0};
 std::atomic<uint64_t> g_gpu_alias_sources{0};
 std::atomic<uint64_t> g_gpu_sync_timeouts{0};
+std::atomic<uint64_t> g_gpu_alpha_d_clear_versions{0};
 
 constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
 
@@ -1041,6 +1045,8 @@ String GetGodotGpuBridgeDebugInfo() {
         << " bridge_blends=" << g_gpu_blend_op_submitted.load(std::memory_order_relaxed)
         << " bridge_barriers=" << g_gpu_barriers.load(std::memory_order_relaxed)
         << " bridge_alias_sources=" << g_gpu_alias_sources.load(std::memory_order_relaxed)
+        << " bridge_alpha_d_clear_versions="
+        << g_gpu_alpha_d_clear_versions.load(std::memory_order_relaxed)
         << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed);
     return String::utf8(out.str().c_str());
 }
@@ -4893,6 +4899,46 @@ bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {
         rect->right <= rect->left || rect->bottom <= rect->top) {
         return false;
     }
+    const bool full_transparent_clear = argb == 0 && rect->left == 0 &&
+        rect->top == 0 && rect->right == static_cast<int>(record.width) &&
+        rect->bottom == static_cast<int>(record.height);
+    if (full_transparent_clear && record.requires_alpha_d_clear_version) {
+        RenderingDevice *rd = MainRenderingDevice();
+        Ref<RDTextureView> view;
+        view.instantiate();
+        TypedArray<PackedByteArray> initial_data;
+        initial_data.push_back(PackRgbaBytes(
+            nullptr, record.width, record.height, record.width * 4u));
+        RID replacement = rd != nullptr
+            ? rd->texture_create(MakeRgbaTextureFormat(record.width,
+                                                       record.height),
+                                 view, initial_data)
+            : RID();
+        if (replacement.is_valid()) {
+            bool replaced = false;
+            {
+                std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+                auto it = g_gpu_textures.find(texture);
+                if (it != g_gpu_textures.end() &&
+                    it->second.rid == record.rid &&
+                    it->second.requires_alpha_d_clear_version) {
+                    it->second.rid = replacement;
+                    it->second.requires_alpha_d_clear_version = false;
+                    it->second.texture->set_texture_rd_rid(replacement);
+                    replaced = true;
+                }
+            }
+            if (replaced) {
+                g_gpu_alpha_d_clear_versions.fetch_add(
+                    1, std::memory_order_relaxed);
+                auto release = std::make_shared<GodotGpuOp>();
+                release->type = GodotGpuOp::Type::Release;
+                release->dst = record.rid;
+                return RunGodotGpuOpAsync(release);
+            }
+            rd->free_rid(replacement);
+        }
+    }
     auto op = std::make_shared<GodotGpuOp>();
     // Keep full clears in the same compute list as the E-mote draws that
     // immediately follow them. RenderingDevice::texture_clear forced the
@@ -5198,6 +5244,9 @@ bool BridgeBlendRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
         }
         dst_record = dst_it->second;
         src_record = src_it->second;
+        if (mode == TVP_GODOT_GPU_BLEND_ALPHA_D) {
+            src_it->second.requires_alpha_d_clear_version = true;
+        }
     }
     const int width = dst_rect->right - dst_rect->left;
     const int height = dst_rect->bottom - dst_rect->top;
@@ -6239,14 +6288,57 @@ public:
         return result;
     }
 
-    bool is_text_input_active() const {
+    Dictionary get_text_input_state() {
+        Dictionary state;
+        state["available"] = false;
+        state["ime_active"] = false;
+        state["ime_mode"] = 0;
+        state["attention_point_valid"] = false;
+        state["attention_x"] = 0;
+        state["attention_y"] = 0;
+        state["text_available"] = false;
+        state["text"] = String();
+        state["selection_start"] = 0;
+        state["selection_end"] = 0;
         if (handle_ == nullptr) {
-            return false;
+            return state;
         }
-        uint32_t state_flags = ENGINE_TEXT_INPUT_STATE_NONE;
-        return engine_get_text_input_state(handle_, &state_flags) ==
-                   ENGINE_RESULT_OK &&
-               (state_flags & ENGINE_TEXT_INPUT_STATE_ACTIVE) != 0;
+
+        engine_text_input_state_t native_state{};
+        native_state.struct_size = sizeof(native_state);
+        const engine_result_t result =
+            engine_get_text_input_state(handle_, &native_state);
+        update_last_error(result);
+        if (result != ENGINE_RESULT_OK) {
+            return state;
+        }
+
+        state["available"] = true;
+        state["ime_active"] = native_state.ime_active != 0;
+        state["ime_mode"] = native_state.ime_mode;
+        state["attention_point_valid"] =
+            native_state.attention_point_valid != 0;
+        state["attention_x"] = native_state.attention_x;
+        state["attention_y"] = native_state.attention_y;
+        state["text_available"] = native_state.text_available != 0;
+        state["selection_start"] = native_state.selection_start;
+        state["selection_end"] = native_state.selection_end;
+        if (native_state.text_available != 0 &&
+            native_state.text_utf8_bytes > 0) {
+            std::vector<char> text_buffer(
+                static_cast<size_t>(native_state.text_utf8_bytes) + 1u, '\0');
+            uint32_t bytes_written = 0;
+            const engine_result_t text_result = engine_copy_text_input_text(
+                handle_, text_buffer.data(),
+                static_cast<uint32_t>(text_buffer.size()), &bytes_written);
+            update_last_error(text_result);
+            if (text_result != ENGINE_RESULT_OK) {
+                state["text_available"] = false;
+                return state;
+            }
+            state["text"] = String::utf8(text_buffer.data(), bytes_written);
+        }
+        return state;
     }
 
     int get_startup_state() {
@@ -6616,10 +6708,24 @@ public:
         const tTVPRect rect(0, 0, static_cast<int>(kWidth), static_cast<int>(kHeight));
         const bool blended = BridgeBlendRect(dst_texture, src_texture, &rect, &rect,
                                             mode, opacity, 0x7f3366ccu);
+        const bool clear_after_alpha_d =
+            mode != TVP_GODOT_GPU_BLEND_ALPHA_D ||
+            BridgeClearRgba(src_texture, 0, &rect);
         std::vector<uint32_t> actual(kWidth * kHeight);
         const bool read = BridgeReadRgba(dst_texture, actual.data(),
                                          actual.size() * sizeof(uint32_t),
                                          kWidth * sizeof(uint32_t));
+        bool cleared_source_is_zero = true;
+        if (mode == TVP_GODOT_GPU_BLEND_ALPHA_D) {
+            std::vector<uint32_t> cleared_source(kWidth * kHeight, 0xffffffffu);
+            const bool read_cleared_source = BridgeReadRgba(
+                src_texture, cleared_source.data(),
+                cleared_source.size() * sizeof(uint32_t),
+                kWidth * sizeof(uint32_t));
+            cleared_source_is_zero = read_cleared_source &&
+                std::all_of(cleared_source.begin(), cleared_source.end(),
+                            [](uint32_t pixel) { return pixel == 0; });
+        }
         BridgeReleaseTexture(src_texture);
         BridgeReleaseTexture(dst_texture);
 
@@ -6640,11 +6746,14 @@ public:
             }
         }
 
-        result["ok"] = blended && read && mismatches == 0;
+        result["ok"] = blended && clear_after_alpha_d && read &&
+            cleared_source_is_zero && mismatches == 0;
         result["mode"] = mode_name;
         result["opacity"] = opacity;
         result["blended"] = blended;
         result["read"] = read;
+        result["clear_after_alpha_d"] = clear_after_alpha_d;
+        result["cleared_source_is_zero"] = cleared_source_is_zero;
         result["mismatches"] = mismatches;
         result["first_index"] = first_index;
         result["first_expected"] = static_cast<int64_t>(first_expected);
@@ -6971,8 +7080,8 @@ protected:
                              &AetherKiriPlayer::send_key_event);
         ClassDB::bind_method(D_METHOD("send_text_input", "text"),
                              &AetherKiriPlayer::send_text_input);
-        ClassDB::bind_method(D_METHOD("is_text_input_active"),
-                             &AetherKiriPlayer::is_text_input_active);
+        ClassDB::bind_method(D_METHOD("get_text_input_state"),
+                             &AetherKiriPlayer::get_text_input_state);
         ClassDB::bind_method(D_METHOD("get_startup_state"),
                              &AetherKiriPlayer::get_startup_state);
         ClassDB::bind_method(D_METHOD("drain_startup_logs"),

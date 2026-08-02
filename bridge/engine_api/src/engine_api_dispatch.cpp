@@ -954,24 +954,65 @@ engine_result_t engine_send_input(engine_handle_t public_handle,
                });
 }
 
-engine_result_t engine_get_text_input_state(engine_handle_t public_handle,
-                                            uint32_t* out_state_flags) {
-  if (out_state_flags == nullptr) {
+engine_result_t engine_get_text_input_state(
+    engine_handle_t public_handle, engine_text_input_state_t* out_state) {
+  if (out_state == nullptr) {
     return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
                        "text input state output is null");
   }
-  *out_state_flags = ENGINE_TEXT_INPUT_STATE_NONE;
+  if (out_state->struct_size < sizeof(engine_text_input_state_t)) {
+    return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
+                       "engine_text_input_state_t.struct_size is too small");
+  }
   return Route(public_handle, "get_text_input_state",
-               [&](engine_handle_t) {
-                 return ENGINE_RESULT_OK;
+               [&](engine_handle_t legacy) {
+                 return engine_legacy_get_text_input_state(legacy, out_state);
                },
                [&](DispatchHandle* handle) {
+                 engine_text_input_state_t snapshot{};
+                 snapshot.struct_size = sizeof(snapshot);
                  if (!PROVIDER_HAS(handle->provider, get_text_input_state)) {
+                   *out_state = snapshot;
                    return ENGINE_RESULT_OK;
                  }
-                 return handle->provider->get_text_input_state(
-                     handle->runtime, out_state_flags);
+                 uint32_t state_flags = ENGINE_TEXT_INPUT_STATE_NONE;
+                 const engine_result_t result =
+                     handle->provider->get_text_input_state(
+                         handle->runtime, &state_flags);
+                 if (result != ENGINE_RESULT_OK) return result;
+                 if ((state_flags & ENGINE_TEXT_INPUT_STATE_ACTIVE) != 0) {
+                   snapshot.ime_active = 1;
+                   snapshot.attention_point_valid = 1;
+                   snapshot.attention_x = static_cast<int32_t>(
+                       handle->surface_width > 0 ? handle->surface_width / 2u
+                                                 : 640u);
+                   snapshot.attention_y = static_cast<int32_t>(
+                       handle->surface_height > 0 ? handle->surface_height / 2u
+                                                  : 360u);
+                 }
+                 *out_state = snapshot;
+                 return ENGINE_RESULT_OK;
                });
+}
+
+engine_result_t engine_copy_text_input_text(engine_handle_t public_handle,
+                                            char* out_buffer,
+                                            uint32_t buffer_size,
+                                            uint32_t* out_bytes_written) {
+  if (out_buffer == nullptr || buffer_size == 0 ||
+      out_bytes_written == nullptr) {
+    return ThreadError(
+        ENGINE_RESULT_INVALID_ARGUMENT,
+        "engine_copy_text_input_text requires a buffer and byte count");
+  }
+  out_buffer[0] = '\0';
+  *out_bytes_written = 0;
+  return Route(public_handle, "copy_text_input_text",
+               [&](engine_handle_t legacy) {
+                 return engine_legacy_copy_text_input_text(
+                     legacy, out_buffer, buffer_size, out_bytes_written);
+               },
+               [&](DispatchHandle*) { return ENGINE_RESULT_OK; });
 }
 
 engine_result_t engine_get_main_menu_json(engine_handle_t public_handle,
