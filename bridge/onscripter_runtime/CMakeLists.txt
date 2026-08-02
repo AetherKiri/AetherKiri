@@ -114,7 +114,12 @@ else()
 endif()
 
 target_link_libraries(aether_onscripter_runtime
-    PUBLIC
+    # This is a static implementation library. CMake still forwards PRIVATE
+    # link dependencies to final consumers through LINK_ONLY, while keeping
+    # their usage requirements out of the mixed C++/Swift Godot target. In
+    # particular, vcpkg's uuid/uuid.h must not shadow the Apple SDK header
+    # while Swift imports Darwin on iOS and macOS.
+    PRIVATE
         $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
         $<IF:$<TARGET_EXISTS:SDL2_image::SDL2_image>,SDL2_image::SDL2_image,SDL2_image::SDL2_image-static>
         $<IF:$<TARGET_EXISTS:SDL2_mixer::SDL2_mixer>,SDL2_mixer::SDL2_mixer,SDL2_mixer::SDL2_mixer-static>
