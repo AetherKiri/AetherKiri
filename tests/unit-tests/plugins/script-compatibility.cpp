@@ -153,6 +153,33 @@ TEST_CASE("World face restore patch is atomic when an anchor is missing") {
     CHECK(script.IndexOf(TJS_W("__akRestoreFaceVisible")) < 0);
 }
 
+TEST_CASE("AffineSourceMotion D3D storage fallback does not require a missing member") {
+    ttstr script(TJS_W(
+        "\t\t\t\t\tvar s = remove[i];\r\n"
+        "\t\t\t\t\tif (s != \"\") {\r\n"
+        "\t\t\t\t\t\t_motion_manager.unload(s);\r\n"
+        "\t\t\t\t\t}\r\n"
+        "\t\t\t\tvar s = create[i];\r\n"
+        "\t\t\t\tif (s != \"\") {\r\n"
+        "\t\t\t\t\tif (!Storages.isExistentStorage(s)) {\r\n"
+        "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
+        "\t\t\t\t\t} else {\r\n"
+        "\t\t\t\t\t\ttry {\r\n"
+        "\t\t\t\t\t\t\tvar obj = _motion_manager.load(s);\r\n"));
+
+    REQUIRE(TVPPatchAffineSourceMotionStorageFallback(script));
+    CHECK(script.IndexOf(TJS_W("_useD3D")) < 0);
+    CHECK(script.IndexOf(TJS_W(
+              "if (!Storages.isExistentStorage(loadStorage))")) >= 0);
+    CHECK(script.IndexOf(TJS_W(
+              "Storages.isExistentStorage(\"dx_\" + loadStorage)")) >= 0);
+    CHECK(script.IndexOf(TJS_W(
+              "Storages.isExistentStorage(\"dxlow_\" + unloadStorage)")) >= 0);
+    CHECK(script.IndexOf(TJS_W("_motion_manager.load(loadStorage)")) >= 0);
+    CHECK(script.IndexOf(TJS_W("_motion_manager.unload(unloadStorage)")) >= 0);
+    CHECK_FALSE(TVPPatchAffineSourceMotionStorageFallback(script));
+}
+
 TEST_CASE("D3D stand source patch uses the layer affine contract") {
     ScriptEngineOwner engine;
     engine->ExecScript(TJS_W(

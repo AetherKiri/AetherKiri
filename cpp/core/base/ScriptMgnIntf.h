@@ -94,6 +94,11 @@ extern bool TVPMergeMissingObjectMembers(iTJSDispatch2 *destination,
 // implementations. The three dependent insertions are applied atomically.
 extern bool TVPPatchWorldRestoreFaceVisibility(ttstr &script);
 
+// Adds transparent lookup of D3D-prefixed E-mote resources to compatible
+// AffineSourceMotion implementations. The fallback is based solely on the
+// logical resource being absent; these scripts do not expose a _useD3D member.
+extern bool TVPPatchAffineSourceMotionStorageFallback(ttstr &script);
+
 using tTVPStorageExistenceProbe = bool (*)(const ttstr &name);
 
 // Repairs a narrowly identifiable data-table typo: a numbered movie's final
