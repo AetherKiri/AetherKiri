@@ -80,6 +80,9 @@ struct GodotGpuTextureRecord {
     Ref<Texture2DRD> texture;
     uint32_t width = 0;
     uint32_t height = 0;
+    // AlphaBlend_d dispatches are asynchronous. A following scratch-layer
+    // clear must not rewrite this RID until the queued shader has sampled it.
+    bool requires_alpha_d_clear_version = false;
 };
 
 std::mutex g_gpu_textures_mutex;
@@ -138,6 +141,7 @@ std::atomic<uint64_t> g_gpu_queue_peak{0};
 std::atomic<uint64_t> g_gpu_barriers{0};
 std::atomic<uint64_t> g_gpu_alias_sources{0};
 std::atomic<uint64_t> g_gpu_sync_timeouts{0};
+std::atomic<uint64_t> g_gpu_alpha_d_clear_versions{0};
 
 constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
 
@@ -979,6 +983,8 @@ String GetGodotGpuBridgeDebugInfo() {
         << " bridge_blends=" << g_gpu_blend_op_submitted.load(std::memory_order_relaxed)
         << " bridge_barriers=" << g_gpu_barriers.load(std::memory_order_relaxed)
         << " bridge_alias_sources=" << g_gpu_alias_sources.load(std::memory_order_relaxed)
+        << " bridge_alpha_d_clear_versions="
+        << g_gpu_alpha_d_clear_versions.load(std::memory_order_relaxed)
         << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed);
     return String::utf8(out.str().c_str());
 }
@@ -4076,6 +4082,46 @@ bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {
         rect->right <= rect->left || rect->bottom <= rect->top) {
         return false;
     }
+    const bool full_transparent_clear = argb == 0 && rect->left == 0 &&
+        rect->top == 0 && rect->right == static_cast<int>(record.width) &&
+        rect->bottom == static_cast<int>(record.height);
+    if (full_transparent_clear && record.requires_alpha_d_clear_version) {
+        RenderingDevice *rd = MainRenderingDevice();
+        Ref<RDTextureView> view;
+        view.instantiate();
+        TypedArray<PackedByteArray> initial_data;
+        initial_data.push_back(PackRgbaBytes(
+            nullptr, record.width, record.height, record.width * 4u));
+        RID replacement = rd != nullptr
+            ? rd->texture_create(MakeRgbaTextureFormat(record.width,
+                                                       record.height),
+                                 view, initial_data)
+            : RID();
+        if (replacement.is_valid()) {
+            bool replaced = false;
+            {
+                std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+                auto it = g_gpu_textures.find(texture);
+                if (it != g_gpu_textures.end() &&
+                    it->second.rid == record.rid &&
+                    it->second.requires_alpha_d_clear_version) {
+                    it->second.rid = replacement;
+                    it->second.requires_alpha_d_clear_version = false;
+                    it->second.texture->set_texture_rd_rid(replacement);
+                    replaced = true;
+                }
+            }
+            if (replaced) {
+                g_gpu_alpha_d_clear_versions.fetch_add(
+                    1, std::memory_order_relaxed);
+                auto release = std::make_shared<GodotGpuOp>();
+                release->type = GodotGpuOp::Type::Release;
+                release->dst = record.rid;
+                return RunGodotGpuOpAsync(release);
+            }
+            rd->free_rid(replacement);
+        }
+    }
     auto op = std::make_shared<GodotGpuOp>();
     // Keep full clears in the same compute list as the E-mote draws that
     // immediately follow them. RenderingDevice::texture_clear forced the
@@ -4381,6 +4427,9 @@ bool BridgeBlendRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
         }
         dst_record = dst_it->second;
         src_record = src_it->second;
+        if (mode == TVP_GODOT_GPU_BLEND_ALPHA_D) {
+            src_it->second.requires_alpha_d_clear_version = true;
+        }
     }
     const int width = dst_rect->right - dst_rect->left;
     const int height = dst_rect->bottom - dst_rect->top;
@@ -5792,10 +5841,24 @@ public:
         const tTVPRect rect(0, 0, static_cast<int>(kWidth), static_cast<int>(kHeight));
         const bool blended = BridgeBlendRect(dst_texture, src_texture, &rect, &rect,
                                             mode, opacity, 0x7f3366ccu);
+        const bool clear_after_alpha_d =
+            mode != TVP_GODOT_GPU_BLEND_ALPHA_D ||
+            BridgeClearRgba(src_texture, 0, &rect);
         std::vector<uint32_t> actual(kWidth * kHeight);
         const bool read = BridgeReadRgba(dst_texture, actual.data(),
                                          actual.size() * sizeof(uint32_t),
                                          kWidth * sizeof(uint32_t));
+        bool cleared_source_is_zero = true;
+        if (mode == TVP_GODOT_GPU_BLEND_ALPHA_D) {
+            std::vector<uint32_t> cleared_source(kWidth * kHeight, 0xffffffffu);
+            const bool read_cleared_source = BridgeReadRgba(
+                src_texture, cleared_source.data(),
+                cleared_source.size() * sizeof(uint32_t),
+                kWidth * sizeof(uint32_t));
+            cleared_source_is_zero = read_cleared_source &&
+                std::all_of(cleared_source.begin(), cleared_source.end(),
+                            [](uint32_t pixel) { return pixel == 0; });
+        }
         BridgeReleaseTexture(src_texture);
         BridgeReleaseTexture(dst_texture);
 
@@ -5816,11 +5879,14 @@ public:
             }
         }
 
-        result["ok"] = blended && read && mismatches == 0;
+        result["ok"] = blended && clear_after_alpha_d && read &&
+            cleared_source_is_zero && mismatches == 0;
         result["mode"] = mode_name;
         result["opacity"] = opacity;
         result["blended"] = blended;
         result["read"] = read;
+        result["clear_after_alpha_d"] = clear_after_alpha_d;
+        result["cleared_source_is_zero"] = cleared_source_is_zero;
         result["mismatches"] = mismatches;
         result["first_index"] = first_index;
         result["first_expected"] = static_cast<int64_t>(first_expected);

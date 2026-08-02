@@ -19,6 +19,7 @@
 #include <set>
 #include <sys/stat.h>
 #include <vector>
+#include "ArchiveAutoPathOrder.h"
 #include "MsgIntf.h"
 
 #include "StorageImpl.h"
@@ -1627,7 +1628,7 @@ static bool TVPMountArchiveAutoPaths(const ttstr &archivePath,
     if(!arc)
         return false;
 
-    std::set<std::u16string> dirPaths;
+    std::set<std::u16string, tTVPArchiveAutoPathDirectoryLess> dirPaths;
     dirPaths.insert(std::u16string());
 
     const tjs_uint fileCount = arc->GetCount();
