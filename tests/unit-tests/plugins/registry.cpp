@@ -166,6 +166,29 @@ TEST_CASE("first-pass compatibility stubs are registered") {
     }
 }
 
+TEST_CASE("TextRenderBase exposes renderOver as a boolean property") {
+    ensurePluginRegistryRuntime();
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("textrender.dll")));
+
+    tTJSVariant renderClass = getGlobalProp(TJS_W("TextRenderBase"));
+    REQUIRE(renderClass.Type() == tvtObject);
+
+    iTJSDispatch2 *renderer = nullptr;
+    const tTJSVariantClosure renderClosure =
+        renderClass.AsObjectClosureNoAddRef();
+    REQUIRE(TJS_SUCCEEDED(renderClosure.CreateNew(
+        0, nullptr, nullptr, &renderer, 0, nullptr, nullptr)));
+    REQUIRE(renderer != nullptr);
+
+    tTJSVariant renderOver;
+    REQUIRE(TJS_SUCCEEDED(renderer->PropGet(
+        0, TJS_W("renderOver"), nullptr, &renderOver, renderer)));
+    CHECK(renderOver.Type() == tvtInteger);
+    CHECK(static_cast<tjs_int>(renderOver) == 0);
+
+    renderer->Release();
+}
+
 TEST_CASE("void member access stays safe for transient script layers") {
     ensurePluginRegistryRuntime();
 
