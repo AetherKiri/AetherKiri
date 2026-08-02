@@ -3874,12 +3874,10 @@ func _video_overlay_button(text: String, min_width: float) -> Button:
     button.custom_minimum_size = Vector2(min_width, 48)
     button.add_theme_font_size_override("font_size", 18)
     button.add_theme_color_override("font_color", Color.WHITE)
-    _apply_button_style(
-        button,
-        _panel_style(18, Color(0.12, 0.13, 0.17, 0.82), Color(1, 1, 1, 0.12), 1),
-        _panel_style(18, Color(0.22, 0.23, 0.28, 0.94), Color(1, 1, 1, 0.28), 1),
-        _panel_style(18, Color(0.32, 0.27, 0.44, 0.96), color_accent, 1)
-    )
+    button.add_theme_stylebox_override("normal", _panel_style(18, Color(0.12, 0.13, 0.17, 0.82), Color(1, 1, 1, 0.12), 1))
+    button.add_theme_stylebox_override("hover", _panel_style(18, Color(0.22, 0.23, 0.28, 0.94), Color(1, 1, 1, 0.28), 1))
+    button.add_theme_stylebox_override("pressed", _panel_style(18, Color(0.32, 0.27, 0.44, 0.96), color_accent, 1))
+    button.add_theme_stylebox_override("focus", _focus_outline(18))
     return button
 
 func _style_video_option_button(button: OptionButton) -> void:
@@ -6170,24 +6168,16 @@ func _video_card(video: Dictionary) -> Control:
     sub.add_theme_color_override("font_color", Color(1, 1, 1, 0.72))
     labels.add_child(sub)
 
-    var border := PanelContainer.new()
-    border.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    border.set_anchors_preset(Control.PRESET_FULL_RECT)
-    _set_game_card_border(button, border, false)
-    frame.add_child(border)
-    button.add_to_group("game_card_buttons")
-    button.set_meta("card_border_path", button.get_path_to(border))
-    button.mouse_entered.connect(func(): _set_game_card_border(button, border, true))
-    button.mouse_exited.connect(func():
-        _set_game_card_border(button, border, button.has_focus())
-    )
-    button.focus_entered.connect(func(): _set_game_card_border(button, border, true))
-    button.focus_exited.connect(func():
-        var still_hovered := button.get_global_rect().has_point(button.get_global_mouse_position())
-        _set_game_card_border(button, border, still_hovered)
-    )
+    ui_motion.bind_lift(button)
 
-    var remove := _icon_button(ICON_DELETE)
+    var remove := _icon_action_button(
+        ICON_DELETE,
+        _t("video.remove"),
+        func(): _confirm_remove_video(captured),
+        false,
+        true,
+        48.0
+    )
     remove.anchor_left = 1.0
     remove.anchor_right = 1.0
     remove.offset_left = -60.0
@@ -6195,8 +6185,6 @@ func _video_card(video: Dictionary) -> Control:
     remove.offset_right = -12.0
     remove.offset_bottom = 60.0
     remove.custom_minimum_size = Vector2(48, 48)
-    remove.tooltip_text = _t("video.remove")
-    remove.pressed.connect(func(): _confirm_remove_video(captured))
     card.add_child(remove)
     return card
 
