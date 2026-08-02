@@ -26,6 +26,8 @@
 #include <cstdlib>
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
+#include <mach/mach.h>
+#include <mach/task_info.h>
 #include <sys/ucontext.h>
 #endif
 #if defined(__ANDROID__)
@@ -4212,6 +4214,33 @@ engine_result_t engine_get_memory_stats(engine_handle_t handle,
   out_stats->system_free_mb = static_cast<uint32_t>(
       std::max<tjs_int>(0, TVPGetSystemFreeMemory()));
   out_stats->system_total_mb = static_cast<uint32_t>(meminfo.MemTotal / 1024);
+
+  out_stats->process_resident_bytes =
+      static_cast<uint64_t>(out_stats->self_used_mb) * 1024u * 1024u;
+  out_stats->process_physical_footprint_bytes =
+      out_stats->process_resident_bytes;
+  out_stats->process_peak_physical_footprint_bytes =
+      out_stats->process_physical_footprint_bytes;
+#if defined(__APPLE__)
+  task_vm_info_data_t vm_info{};
+  mach_msg_type_number_t vm_info_count = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO,
+                reinterpret_cast<task_info_t>(&vm_info),
+                &vm_info_count) == KERN_SUCCESS) {
+    out_stats->process_resident_bytes = vm_info.resident_size;
+    out_stats->process_physical_footprint_bytes = vm_info.phys_footprint;
+    if (vm_info.ledger_phys_footprint_peak > 0) {
+      out_stats->process_peak_physical_footprint_bytes =
+          static_cast<uint64_t>(vm_info.ledger_phys_footprint_peak);
+    }
+#if TARGET_OS_IPHONE
+    out_stats->process_available_bytes = vm_info.limit_bytes_remaining;
+#endif
+  }
+#endif
+  out_stats->process_peak_physical_footprint_bytes = std::max(
+      out_stats->process_peak_physical_footprint_bytes,
+      out_stats->process_physical_footprint_bytes);
 
   out_stats->graphic_cache_bytes = TVPGetGraphicCacheTotalBytes();
   out_stats->graphic_cache_limit_bytes = TVPGetGraphicCacheLimit();

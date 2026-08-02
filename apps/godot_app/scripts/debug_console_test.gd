@@ -11,7 +11,7 @@ class SnapshotProvider extends RefCounted:
         return {
             "session": {"profile": "baseline", "session": "fixture", "session_dir": "/tmp/fixture", "dropped_events": 0, "markers": 1, "frame_summary": {"p50_ms": 10.0, "p95_ms": 18.0, "p99_ms": 22.0, "max_ms": 25.0}},
             "performance": {"fps": 60.0, "tick_ms": 2.0, "update_ms": 1.0, "frame_ms": 16.6, "renderer": "fixture", "texture": "1280x720", "surface": "1280x720", "fallback": false, "errors": 0, "frame_summary": {"p50_ms": 10.0, "p95_ms": 18.0, "p99_ms": 22.0, "max_ms": 25.0}},
-            "memory": {"current_bytes": 1024, "system_free_bytes": 2048, "system_total_bytes": 4096, "cache_bytes": 256},
+            "memory": {"current_bytes": 1024, "peak_bytes": 1536, "available_bytes": 8192, "system_free_bytes": 2048, "system_total_bytes": 4096, "godot_static_bytes": 512, "gpu_total_bytes": 384, "gpu_texture_bytes": 256, "gpu_buffer_bytes": 128, "cache_bytes": 256},
             "plugins": {"plugin_load_success_count": 1, "loaded_plugins": ["fixture"]},
             "events": [{"sequence": 1, "monotonic_us": 10, "level": "info", "subsystem": "test", "event": "fixture", "duration_us": 0}],
             "logs": ["fixture log"],
@@ -52,7 +52,7 @@ func _run() -> void:
         _fail("captured debug launcher release leaked to the game")
         return
     console.open_drawer()
-    if provider.calls != 1 or not console._overview.text.contains("60.0 FPS"):
+    if provider.calls != 1 or not console._overview.text.contains("60.0 FPS") or not console._overview.text.contains("GPU (est.)"):
         _fail("open drawer did not render the bounded snapshot")
         return
     console.close_drawer()
