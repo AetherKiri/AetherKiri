@@ -451,15 +451,18 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
         return recentAlias;
     }
 
-    const auto loaded = detail::loadPSBVariant(path, _decryptSeed);
+    std::shared_ptr<detail::MotionSnapshot> loadedSnapshot;
+    const auto loaded = detail::loadPSBVariant(
+        path, _decryptSeed, &loadedSnapshot);
     if(loaded.Type() != tvtVoid && _state) {
-        rememberLoadedModule(path, loaded);
+        rememberLoadedModule(path, loaded, std::move(loadedSnapshot));
     }
     return loaded;
 }
 
 void motion::ResourceManager::rememberLoadedModule(
-    ttstr path, const tTJSVariant &loaded) const {
+    ttstr path, const tTJSVariant &loaded,
+    std::shared_ptr<detail::MotionSnapshot> snapshot) const {
     if(loaded.Type() == tvtVoid || !_state) {
         return;
     }
@@ -495,8 +498,31 @@ void motion::ResourceManager::rememberLoadedModule(
     _state->lastLoadedModule = loaded;
     if(loaded.Type() == tvtObject) {
         if(auto *object = loaded.AsObjectNoAddRef()) {
+            if(!snapshot) {
+                snapshot = detail::lookupModuleSnapshot(loaded);
+            }
+            if(snapshot) {
+                _state->cachedSnapshots[object] = std::move(snapshot);
+            }
             _state->moduleLoadGenerations[object] =
                 ++_state->nextLoadGeneration;
+        }
+    }
+
+    for(auto it = _state->cachedSnapshots.begin();
+        it != _state->cachedSnapshots.end();) {
+        const auto object = it->first;
+        const bool referenced = std::any_of(
+            _state->loadedModules.begin(), _state->loadedModules.end(),
+            [object](const auto &entry) {
+                return entry.second.Type() == tvtObject &&
+                    entry.second.AsObjectNoAddRef() == object;
+            });
+        if(!referenced) {
+            _state->moduleLoadGenerations.erase(object);
+            it = _state->cachedSnapshots.erase(it);
+        } else {
+            ++it;
         }
     }
     rememberRecentMotionModule(loaded);
@@ -509,8 +535,28 @@ void motion::ResourceManager::unload(ttstr path) const {
     }
 
     const auto key = path.AsStdString();
-    _state->loadedModules.erase(key);
-    if(_state->lastLoadedPath == key) {
+    const auto loaded = findLoadedModule(path);
+    iTJSDispatch2 *object = loaded.Type() == tvtObject
+        ? loaded.AsObjectNoAddRef()
+        : nullptr;
+    if(object != nullptr) {
+        for(auto it = _state->loadedModules.begin();
+            it != _state->loadedModules.end();) {
+            if(it->second.Type() == tvtObject &&
+               it->second.AsObjectNoAddRef() == object) {
+                it = _state->loadedModules.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        _state->moduleLoadGenerations.erase(object);
+        _state->cachedSnapshots.erase(object);
+    } else {
+        _state->loadedModules.erase(key);
+    }
+    if(_state->lastLoadedPath == key ||
+       (_state->lastLoadedModule.Type() == tvtObject &&
+        _state->lastLoadedModule.AsObjectNoAddRef() == object)) {
         _state->lastLoadedPath.clear();
         _state->lastLoadedModule.Clear();
     }
@@ -524,6 +570,7 @@ void motion::ResourceManager::clearCache() const {
 
     _state->loadedModules.clear();
     _state->moduleLoadGenerations.clear();
+    _state->cachedSnapshots.clear();
     _state->nextLoadGeneration = 0;
     _state->lastLoadedPath.clear();
     _state->lastLoadedModule.Clear();
