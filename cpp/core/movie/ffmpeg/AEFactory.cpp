@@ -55,7 +55,12 @@ class CAEStreamAL : public IAEStream {
     iTVPSoundBuffer *m_impl = nullptr;
     AEAudioFormat m_format;
     IAEClockCallback *m_cbClock;
-    double m_lastPts = 0;
+    double m_playbackStartPts = 0;
+    tjs_uint m_playbackStartSample = 0;
+    bool m_hasPts = false;
+    double m_syncError = 0;
+    unsigned int m_syncErrorTime = 0;
+    Timer m_syncTimer;
     struct SwrContext *swr_ctx = nullptr;
     AVSampleFormat swr_tgtFormat;
     unsigned int src_buffer_count = 0;
@@ -370,16 +375,10 @@ public:
                          unsigned int frames, double pts) override {
         if(!WaitForBufferSlot())
             return 0;
-#if 0
-            if (m_lastPts != 0) {
-                if (std::abs(m_lastPts - pts) > 1000) {
-                    assert(false && "out of sync");
-                }
-            }
-
-            pts += (double)(frames) / m_format.m_sampleRate;
-            m_lastPts = pts;
-#endif
+        const bool startPlaybackClock = !m_hasPts;
+        const tjs_uint startSample = startPlaybackClock
+            ? m_impl->GetCurrentPlaySamples()
+            : 0;
 
         if(swr_ctx) {
             uint32_t srcoff =
@@ -411,24 +410,56 @@ public:
         if(!m_impl->IsPlaying()) { // out of buffer
             m_impl->Play();
         }
+
+        if(startPlaybackClock) {
+            m_playbackStartPts = pts;
+            m_playbackStartSample = startSample;
+            m_hasPts = true;
+            m_syncTimer.Set(250);
+        }
         return frames;
     }
 
     double GetDelay() override { return (double)m_impl->GetLatencySeconds(); }
 
     CAESyncInfo GetSyncInfo() override {
-        CAESyncInfo info; // TODO
-        info.delay = 0;
-        info.error = 0;
-        info.rr = 0;
-        info.errortime = 0;
+        CAESyncInfo info{};
         info.state = CAESyncInfo::SYNC_OFF;
+        if(!m_hasPts || !m_impl || !m_impl->IsPlaying() || !m_cbClock)
+            return info;
+
+        const double delay = std::max(0.0, GetDelay());
+        if(m_syncTimer.IsTimePast()) {
+            const tjs_uint sampleRate = m_impl->GetPlaybackSampleRate();
+            const tjs_uint currentSample = m_impl->GetCurrentPlaySamples();
+            const tjs_uint playedSamples = currentSample >= m_playbackStartSample
+                ? currentSample - m_playbackStartSample
+                : 0;
+            const double playingPts = sampleRate > 0
+                ? m_playbackStartPts +
+                    static_cast<double>(playedSamples) * playback_rate *
+                        1000.0 / sampleRate
+                : m_playbackStartPts;
+            const double error = playingPts - m_cbClock->GetClock();
+            if(std::isfinite(error)) {
+                m_syncError = std::clamp(error, -20.0, 20.0);
+                if(++m_syncErrorTime == 0)
+                    ++m_syncErrorTime;
+                m_syncTimer.Set(250);
+            }
+        }
+        if(m_syncErrorTime == 0)
+            return info;
+
+        info.delay = delay * 1000.0;
+        info.error = m_syncError;
+        info.rr = 1.0;
+        info.errortime = m_syncErrorTime;
+        info.state = CAESyncInfo::SYNC_INSYNC;
         return info;
     }
 
-    double GetCacheTime() override {
-        return 1; // TODO
-    }
+    double GetCacheTime() override { return GetDelay(); }
 
     double GetCacheTotal() override {
         // return std::max(GetDelay(), (double)TVPAL_BUFFER_COUNT);
@@ -445,6 +476,9 @@ public:
     void Flush() override {
         ResetTempoGraph();
         m_impl->Reset();
+        m_hasPts = false;
+        m_syncError = 0;
+        m_syncErrorTime = 0;
     }
 
     void SetPlaybackRate(double rate) override {
@@ -454,8 +488,12 @@ public:
             return;
         playback_rate = rate;
         ResetTempoGraph();
-        if(m_impl)
+        if(m_impl) {
             m_impl->Reset();
+            m_hasPts = false;
+            m_syncError = 0;
+            m_syncErrorTime = 0;
+        }
     }
 
     iTVPSoundBuffer *GetNativeImpl() override { return m_impl; }

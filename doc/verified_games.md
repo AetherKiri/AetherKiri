@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-07-27
+Last updated: 2026-08-02
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -20,11 +20,12 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 
 | Game | Verified platforms / builds | Verified scope | Result | Verifier | Notes |
 | --- | --- | --- | --- | --- | --- |
-| 恋がさくころ桜どき | Linux x64 release app | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| 恋がさくころ桜どき | Linux x64 release app; macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi), [@MadCcc](https://github.com/MadCcc) | Local game files are not committed. |
 | ましろ色シンフォニー | Linux x64 release app | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 | Clover Day's | Linux x64 release app | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
-| 金色ラブリッチェ -Golden Time- | Linux x64 release app | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
-| もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | Web release on Chrome/Vite local server; macOS release app; iOS/iPadOS app build on iPad; Android release APK | Startup, script/plugin loading, title/menu rendering, basic input, continue/save-load route smoke, CJK/symbol font rendering, and IndexedDB-backed userfs persistence behavior on Web | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. Web deployment still requires COOP/COEP headers. Live2D Cubism Core for Web remains an external proprietary runtime and must be supplied separately when a title needs it. |
+| 金色ラブリッチェ -Golden Time- | Linux x64 release app; macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi), [@MadCcc](https://github.com/MadCcc) | Local game files are not committed. |
+| もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | Web release on Chrome/Vite local server; macOS debug and release apps; iOS/iPadOS app build on iPad; Android release APK | Startup, script/plugin loading, title/menu rendering, basic input, continue/save-load route, MPEG-1/MP2 in-scene movie rendering through natural completion on macOS debug, CJK/symbol font rendering, and IndexedDB-backed userfs persistence behavior on Web | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. Web deployment still requires COOP/COEP headers. Live2D Cubism Core for Web remains an external proprietary runtime and must be supplied separately when a title needs it. |
+| もっと！孕ませ！炎のおっぱい異世界おっぱいスパイ学園！ | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 喫茶ステラと死神の蝶 | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, rapid title background switching/input stress, continue flow, scene/text rendering, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | RIDDLE JOKER | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, title motion/layering, continue flow, scene/text rendering, dialogue input stress, save/load smoke, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 9-nine-ここのつここのかここのいろ | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, gallery/movie playback smoke, scene/text rendering, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
@@ -50,7 +51,10 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | 銃騎士Cutie☆Bullet | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 聖騎士Melty☆Lovers | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 将軍様はお年頃 | macOS release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, scene/text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
-| エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, new-game flow, scene/name/dialogue text rendering, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi), [@yorkyang2333](mailto:yangyork097@gmail.com) | Local game files are not committed. |
+| 真愛の百合は赤く染まる | Linux x64 release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, new-game flow, scene/text rendering, audio playback, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| 死に逝く君、館に芽吹く憎悪 | Linux x64 release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, new-game flow, scene/text rendering, audio playback, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| 枯れない世界と終わる花 | Linux x64 release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, new-game flow, scene/text rendering, audio playback, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | Linux x64 release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, new-game flow, scene/text rendering, audio playback, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 
 ## How To Add A Game
 

@@ -10,6 +10,8 @@ const VIDEO_HIDDEN_FILE := "user://aetherkiri_hidden_videos.json"
 const VIDEO_EXTENSIONS := ["mp4", "mkv", "mov", "m4v", "avi", "webm", "flv", "ts", "m2ts", "mpeg", "mpg", "wmv"]
 const SUBTITLE_EXTENSIONS := ["srt", "vtt", "ass", "ssa"]
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
+const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
+const IAP_POLL_INTERVAL_SEC := 0.12
 const LEGAL_AGREEMENT_VERSION := "2026-07-27.4"
 const IOS_STATEMENT_VERSION := "2026-07-28"
 const LEGAL_AGREEMENT_ZH_HANS := "res://legal/privacy_disclaimer_zh_hans.txt"
@@ -96,6 +98,7 @@ const UI_TEXT := {
         "settings.section.render": "渲染",
         "settings.section.developer": "开发者",
         "settings.section.about": "关于",
+        "settings.section.purchases": "内购项目",
         "settings.language": "语言",
         "settings.language_desc": "默认跟随系统；也可以固定为简体中文、繁体中文、英语、日语或韩语",
         "settings.style": "风格",
@@ -140,6 +143,27 @@ const UI_TEXT := {
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "邮箱",
+        "iap.list_limit.title": "目录限制解锁",
+        "iap.list_limit.desc": "永久解锁视觉小说库和视频库中的全部目录项目",
+        "iap.status.purchased": "已购买",
+        "iap.status.not_purchased": "未购买",
+        "iap.status.loading": "正在读取商品信息…",
+        "iap.status.unavailable": "当前无法连接 App Store",
+        "iap.buy": "购买",
+        "iap.restore": "恢复购买",
+        "iap.restore_desc": "使用当前 App Store 账户恢复已购买的非消耗型项目",
+        "iap.restore_action": "恢复",
+        "iap.checking_title": "正在验证购买状态",
+        "iap.checking_body": "正在校验当前 App Store 账户是否已购买目录限制解锁…",
+        "iap.limit_title": "使用上限",
+        "iap.limit_body": "未购买时只能运行列表中的第一项。请点击下方购买按钮解锁目录限制。",
+        "iap.purchase_success": "目录限制已解锁。",
+        "iap.purchase_pending": "购买正在等待批准，批准后可在设置中恢复购买。",
+        "iap.purchase_cancelled": "购买已取消。",
+        "iap.purchase_failed": "购买失败：%s",
+        "iap.restore_success": "购买已恢复，目录限制已解锁。",
+        "iap.restore_none": "当前 App Store 账户没有可恢复的目录限制解锁。",
+        "iap.verify_failed": "无法验证当前 App Store 账户的购买状态：%s",
         "settings.legal": "隐私与免责协议",
         "settings.legal_desc": "查看当前版本的隐私政策、使用规则、风险提示与免责声明",
         "settings.legal_open": "阅读协议",
@@ -206,6 +230,7 @@ const UI_TEXT := {
         "message.web_import_timeout": "本地游戏导入超时",
         "message.web_picker_unsupported_long": "当前浏览器不支持直接选择本地游戏文件。请使用支持 File System Access 或目录上传的浏览器。",
         "message.android_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入或启动外部游戏。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
+        "message.android_video_storage_permission_required": "需要允许 Aether 访问文件系统后才能导入视频。请在系统弹窗或权限设置中授予文件访问权限，然后再试。",
         "message.path_missing": "游戏路径不存在",
         "message.launch_file_unsupported": "启动文件只支持 EXE 或 XP3",
         "message.launch_file_outside_game": "启动文件必须位于当前游戏目录内",
@@ -253,6 +278,7 @@ const UI_TEXT := {
         "settings.section.render": "渲染",
         "settings.section.developer": "開發者",
         "settings.section.about": "關於",
+        "settings.section.purchases": "App 內購買",
         "settings.language": "語言",
         "settings.language_desc": "預設跟隨系統；也可以固定為簡體中文、繁體中文、英語、日語或韓語",
         "settings.style": "風格",
@@ -297,6 +323,27 @@ const UI_TEXT := {
         "settings.version": "版本",
         "settings.author": "作者",
         "settings.email": "信箱",
+        "iap.list_limit.title": "解除目錄限制",
+        "iap.list_limit.desc": "永久解鎖視覺小說庫與影片庫中的所有目錄項目",
+        "iap.status.purchased": "已購買",
+        "iap.status.not_purchased": "尚未購買",
+        "iap.status.loading": "正在載入商品資訊…",
+        "iap.status.unavailable": "目前無法連接 App Store",
+        "iap.buy": "購買",
+        "iap.restore": "恢復購買",
+        "iap.restore_desc": "使用目前的 App Store 帳號恢復已購買的非消耗型項目",
+        "iap.restore_action": "恢復",
+        "iap.checking_title": "正在驗證購買狀態",
+        "iap.checking_body": "正在確認目前的 App Store 帳號是否已購買解除目錄限制…",
+        "iap.limit_title": "使用上限",
+        "iap.limit_body": "尚未購買時只能執行清單中的第一項。請點選下方購買按鈕解除目錄限制。",
+        "iap.purchase_success": "目錄限制已解除。",
+        "iap.purchase_pending": "購買正在等待核准，核准後可在設定中恢復購買。",
+        "iap.purchase_cancelled": "購買已取消。",
+        "iap.purchase_failed": "購買失敗：%s",
+        "iap.restore_success": "購買已恢復，目錄限制已解除。",
+        "iap.restore_none": "目前的 App Store 帳號沒有可恢復的解除目錄限制。",
+        "iap.verify_failed": "無法驗證目前 App Store 帳號的購買狀態：%s",
         "settings.legal": "隱私與免責協議",
         "settings.legal_desc": "查看目前版本的隱私政策、使用規則、風險提示與免責聲明",
         "settings.legal_open": "閱讀協議",
@@ -363,6 +410,7 @@ const UI_TEXT := {
         "message.web_import_timeout": "本機遊戲匯入逾時",
         "message.web_picker_unsupported_long": "目前瀏覽器不支援直接選擇本機遊戲檔案。請使用支援 File System Access 或目錄上傳的瀏覽器。",
         "message.android_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入或啟動外部遊戲。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
+        "message.android_video_storage_permission_required": "需要允許 Aether 存取檔案系統後才能匯入影片。請在系統彈窗或權限設定中授予檔案存取權限，然後再試。",
         "message.path_missing": "遊戲路徑不存在",
         "message.launch_file_unsupported": "啟動檔案僅支援 EXE 或 XP3",
         "message.launch_file_outside_game": "啟動檔案必須位於目前遊戲目錄內",
@@ -410,6 +458,7 @@ const UI_TEXT := {
         "settings.section.render": "Rendering",
         "settings.section.developer": "Developer",
         "settings.section.about": "About",
+        "settings.section.purchases": "In-App Purchases",
         "settings.language": "Language",
         "settings.language_desc": "Defaults to the system language; you can pin Simplified Chinese, Traditional Chinese, English, Japanese, or Korean",
         "settings.style": "Style",
@@ -454,6 +503,27 @@ const UI_TEXT := {
         "settings.version": "Version",
         "settings.author": "Author",
         "settings.email": "Email",
+        "iap.list_limit.title": "Unlock Library Limit",
+        "iap.list_limit.desc": "Permanently unlock every item in the visual novel and video libraries",
+        "iap.status.purchased": "Purchased",
+        "iap.status.not_purchased": "Not purchased",
+        "iap.status.loading": "Loading product information…",
+        "iap.status.unavailable": "The App Store is currently unavailable",
+        "iap.buy": "Purchase",
+        "iap.restore": "Restore Purchases",
+        "iap.restore_desc": "Restore non-consumable purchases for the current App Store account",
+        "iap.restore_action": "Restore",
+        "iap.checking_title": "Verifying Purchase",
+        "iap.checking_body": "Checking whether the current App Store account owns Unlock Library Limit…",
+        "iap.limit_title": "Usage Limit",
+        "iap.limit_body": "Without this purchase, only the first item in each list can run. Purchase below to unlock the library limit.",
+        "iap.purchase_success": "The library limit is unlocked.",
+        "iap.purchase_pending": "The purchase is awaiting approval. You can restore it from Settings after approval.",
+        "iap.purchase_cancelled": "The purchase was cancelled.",
+        "iap.purchase_failed": "Purchase failed: %s",
+        "iap.restore_success": "The purchase was restored and the library limit is unlocked.",
+        "iap.restore_none": "The current App Store account has no Unlock Library Limit purchase to restore.",
+        "iap.verify_failed": "Unable to verify purchases for the current App Store account: %s",
         "settings.legal": "Privacy & Disclaimer",
         "settings.legal_desc": "Read the current privacy policy, terms of use, risk notice, and disclaimer",
         "settings.legal_open": "Read",
@@ -520,6 +590,7 @@ const UI_TEXT := {
         "message.web_import_timeout": "Local game import timed out",
         "message.web_picker_unsupported_long": "This browser cannot directly choose local game files. Use a browser that supports File System Access or directory upload.",
         "message.android_storage_permission_required": "Allow Aether to access the file system before importing or launching external games. Grant file access in the system prompt or permission settings, then try again.",
+        "message.android_video_storage_permission_required": "Allow Aether to access the file system before importing videos. Grant file access in the system prompt or permission settings, then try again.",
         "message.path_missing": "Game path does not exist",
         "message.launch_file_unsupported": "The launch file must be an EXE or XP3 file",
         "message.launch_file_outside_game": "The launch file must be inside this game folder",
@@ -567,6 +638,7 @@ const UI_TEXT := {
         "settings.section.render": "レンダリング",
         "settings.section.developer": "開発者",
         "settings.section.about": "情報",
+        "settings.section.purchases": "アプリ内課金",
         "settings.language": "言語",
         "settings.language_desc": "既定ではシステムに従います。簡体字中国語、繁体字中国語、英語、日本語、韓国語に固定できます",
         "settings.style": "スタイル",
@@ -611,6 +683,27 @@ const UI_TEXT := {
         "settings.version": "バージョン",
         "settings.author": "作者",
         "settings.email": "メール",
+        "iap.list_limit.title": "ライブラリ制限解除",
+        "iap.list_limit.desc": "ビジュアルノベルと動画ライブラリのすべての項目を永久に解除します",
+        "iap.status.purchased": "購入済み",
+        "iap.status.not_purchased": "未購入",
+        "iap.status.loading": "商品情報を読み込み中…",
+        "iap.status.unavailable": "現在 App Store に接続できません",
+        "iap.buy": "購入",
+        "iap.restore": "購入を復元",
+        "iap.restore_desc": "現在の App Store アカウントで購入済みの非消耗型アイテムを復元します",
+        "iap.restore_action": "復元",
+        "iap.checking_title": "購入状況を確認中",
+        "iap.checking_body": "現在の App Store アカウントがライブラリ制限解除を購入済みか確認しています…",
+        "iap.limit_title": "利用上限",
+        "iap.limit_body": "未購入の場合、各リストの最初の項目のみ実行できます。下の購入ボタンから制限を解除してください。",
+        "iap.purchase_success": "ライブラリ制限を解除しました。",
+        "iap.purchase_pending": "購入は承認待ちです。承認後、設定から購入を復元できます。",
+        "iap.purchase_cancelled": "購入をキャンセルしました。",
+        "iap.purchase_failed": "購入に失敗しました：%s",
+        "iap.restore_success": "購入を復元し、ライブラリ制限を解除しました。",
+        "iap.restore_none": "現在の App Store アカウントには復元できるライブラリ制限解除がありません。",
+        "iap.verify_failed": "現在の App Store アカウントの購入状況を確認できません：%s",
         "settings.legal": "プライバシーと免責事項",
         "settings.legal_desc": "現在のプライバシーポリシー、利用条件、リスクおよび免責事項を確認します",
         "settings.legal_open": "読む",
@@ -677,6 +770,7 @@ const UI_TEXT := {
         "message.web_import_timeout": "ローカルゲームのインポートがタイムアウトしました",
         "message.web_picker_unsupported_long": "このブラウザーはローカルゲームファイルの直接選択に対応していません。File System Access またはディレクトリアップロード対応ブラウザーを使用してください。",
         "message.android_storage_permission_required": "外部ゲームのインポートまたは起動には、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
+        "message.android_video_storage_permission_required": "動画をインポートするには、Aether にファイルシステムへのアクセスを許可する必要があります。システムの権限ダイアログまたは設定でファイルアクセスを許可してから、もう一度お試しください。",
         "message.path_missing": "ゲームパスが存在しません",
         "message.launch_file_unsupported": "起動ファイルは EXE または XP3 のみ対応しています",
         "message.launch_file_outside_game": "起動ファイルは現在のゲームフォルダー内にある必要があります",
@@ -724,6 +818,7 @@ const UI_TEXT := {
         "settings.section.render": "렌더링",
         "settings.section.developer": "개발자",
         "settings.section.about": "정보",
+        "settings.section.purchases": "앱 내 구입",
         "settings.language": "언어",
         "settings.language_desc": "기본값은 시스템 언어입니다. 중국어 간체, 중국어 번체, 영어, 일본어, 한국어로 고정할 수 있습니다",
         "settings.style": "스타일",
@@ -768,6 +863,27 @@ const UI_TEXT := {
         "settings.version": "버전",
         "settings.author": "작성자",
         "settings.email": "이메일",
+        "iap.list_limit.title": "라이브러리 제한 해제",
+        "iap.list_limit.desc": "비주얼 노벨 및 동영상 라이브러리의 모든 항목을 영구적으로 해제합니다",
+        "iap.status.purchased": "구입 완료",
+        "iap.status.not_purchased": "구입하지 않음",
+        "iap.status.loading": "상품 정보 불러오는 중…",
+        "iap.status.unavailable": "현재 App Store에 연결할 수 없습니다",
+        "iap.buy": "구입",
+        "iap.restore": "구입 복원",
+        "iap.restore_desc": "현재 App Store 계정의 비소모성 구입 항목을 복원합니다",
+        "iap.restore_action": "복원",
+        "iap.checking_title": "구입 상태 확인 중",
+        "iap.checking_body": "현재 App Store 계정이 라이브러리 제한 해제를 구입했는지 확인하는 중입니다…",
+        "iap.limit_title": "사용 한도",
+        "iap.limit_body": "구입하지 않은 경우 각 목록의 첫 번째 항목만 실행할 수 있습니다. 아래 구입 버튼으로 제한을 해제하세요.",
+        "iap.purchase_success": "라이브러리 제한이 해제되었습니다.",
+        "iap.purchase_pending": "구입 승인을 기다리고 있습니다. 승인 후 설정에서 구입을 복원할 수 있습니다.",
+        "iap.purchase_cancelled": "구입이 취소되었습니다.",
+        "iap.purchase_failed": "구입 실패: %s",
+        "iap.restore_success": "구입이 복원되어 라이브러리 제한이 해제되었습니다.",
+        "iap.restore_none": "현재 App Store 계정에는 복원할 라이브러리 제한 해제 구입이 없습니다.",
+        "iap.verify_failed": "현재 App Store 계정의 구입 상태를 확인할 수 없습니다: %s",
         "settings.legal": "개인정보 및 면책 조항",
         "settings.legal_desc": "현재 개인정보 처리방침, 이용 조건, 위험 고지 및 면책 조항을 확인합니다",
         "settings.legal_open": "읽기",
@@ -834,6 +950,7 @@ const UI_TEXT := {
         "message.web_import_timeout": "로컬 게임 가져오기 시간 초과",
         "message.web_picker_unsupported_long": "이 브라우저는 로컬 게임 파일을 직접 선택할 수 없습니다. File System Access 또는 디렉터리 업로드를 지원하는 브라우저를 사용하세요.",
         "message.android_storage_permission_required": "외부 게임을 가져오거나 실행하려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
+        "message.android_video_storage_permission_required": "비디오를 가져오려면 Aether의 파일 시스템 접근을 허용해야 합니다. 시스템 권한 창 또는 권한 설정에서 파일 접근 권한을 허용한 뒤 다시 시도하세요.",
         "message.path_missing": "게임 경로가 존재하지 않습니다",
         "message.launch_file_unsupported": "실행 파일은 EXE 또는 XP3만 지원합니다",
         "message.launch_file_outside_game": "실행 파일은 현재 게임 폴더 안에 있어야 합니다",
@@ -971,6 +1088,15 @@ var legal_accepted_at := 0
 var ios_statement_accepted_version := ""
 var ios_statement_accepted_at := 0
 var legal_gate_completed := false
+var iap_state := {}
+var iap_last_revision := -1
+var iap_poll_accum := 0.0
+var iap_pending_launch := {}
+var iap_pending_check_id := 0
+var iap_pending_operation_id := 0
+var iap_pending_operation_kind := ""
+var iap_settings_refresh_pending := false
+var android_video_import_notice_shown := false
 var dirty_settings := false
 var settings_draft := {}
 var active_game_path := ""
@@ -1101,6 +1227,11 @@ var last_forwarded_touch_down_msec := 0
 var last_forwarded_touch_up_msec := 0
 var last_forwarded_touch_move_msec_by_id := {}
 var touch_input_busy_until_msec := 0
+var game_text_input_active := false
+var game_text_input_attention_position := Vector2i(-1, -1)
+var game_text_input_reopen_requested := false
+var game_text_input_last_show_msec := 0
+var game_text_input_suspended := false
 var device_probe_enabled := false
 var follow_texture_surface_size := false
 var present_hold_frames := 0
@@ -1127,6 +1258,7 @@ const TOUCH_DRAG_MIN_INTERVAL_MS := 80
 const TOUCH_DRAG_DISTANCE_THRESHOLD := 18.0
 const TOUCH_BUSY_TICK_MS := 120.0
 const TOUCH_BUSY_SUPPRESS_MS := 0
+const VIRTUAL_KEYBOARD_REOPEN_DELAY_MS := 750
 const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
@@ -1141,6 +1273,7 @@ const TOP_ICON_BUTTON_SIZE := Vector2(60, 60)
 const TOP_ACTION_BUTTON_SIZE := Vector2(138, 60)
 const PILL_ICON_SIZE := Vector2(24, 24)
 const PILL_ICON_VISUAL_OFFSET_Y := 2.0
+const SETTINGS_ACTION_BUTTON_SIZE := Vector2(150, 54)
 const HOME_CARD_SIZE := Vector2(272, 368)
 
 var color_bg := Color(0.095, 0.102, 0.135, 1.0)
@@ -2508,6 +2641,18 @@ func _rebuild_settings_view() -> void:
         advanced_card.add_child(_settings_toggle_row(_t("settings.console_log"), _t("settings.console_log_desc"), console_log_file, "advanced_console_log"))
         advanced_card.add_child(_settings_toggle_row(_t("settings.export_tjs"), _t("settings.export_tjs_desc"), export_scripts, "advanced_export_tjs"))
 
+    if _iap_supported_platform():
+        page.add_child(_section_title(_t("settings.section.purchases"), ICON_LIBRARY))
+        var purchase_card := _settings_card()
+        page.add_child(purchase_card)
+        purchase_card.add_child(_settings_iap_product_row())
+        purchase_card.add_child(_settings_action_row(
+            _t("iap.restore"),
+            _t("iap.restore_desc"),
+            _t("iap.restore_action"),
+            func(): _begin_iap_restore()
+        ))
+
     page.add_child(_section_title(_t("settings.section.about"), ICON_HELP))
     var about_card := _settings_card()
     page.add_child(about_card)
@@ -2523,7 +2668,10 @@ func _rebuild_settings_view() -> void:
         _t("settings.ios_statement_open"),
         _show_ios_additional_statement
     ))
-    about_card.add_child(_settings_value_row(_t("settings.version"), "0.2.0-beta.1"))
+    about_card.add_child(_settings_value_row(
+        _t("settings.version"),
+        str(ProjectSettings.get_setting("application/config/version", "development"))
+    ))
 
 func _build_detail_view() -> void:
     detail_view = Control.new()
@@ -3514,11 +3662,76 @@ func _settings_action_row(title: String, subtitle: String, action_text: String, 
     sub.add_theme_color_override("font_color", color_muted)
     labels.add_child(sub)
     var open := _pill_button(action_text)
-    open.custom_minimum_size = Vector2(150, 54)
-    open.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    _configure_settings_action_button(open)
     open.pressed.connect(action)
     row.add_child(open)
     return panel
+
+func _configure_settings_action_button(button: Button) -> void:
+    button.custom_minimum_size = SETTINGS_ACTION_BUTTON_SIZE
+    button.size_flags_horizontal = Control.SIZE_SHRINK_END
+    button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
+func _settings_iap_product_row() -> Control:
+    var panel := PanelContainer.new()
+    panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
+    var row := HBoxContainer.new()
+    row.custom_minimum_size = Vector2(0, 112)
+    row.add_theme_constant_override("separation", 18)
+    panel.add_child(row)
+
+    var labels := VBoxContainer.new()
+    labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    labels.add_theme_constant_override("separation", 6)
+    row.add_child(labels)
+
+    var title_label := Label.new()
+    title_label.text = _t("iap.list_limit.title")
+    title_label.add_theme_font_size_override("font_size", 20)
+    title_label.add_theme_color_override("font_color", color_text)
+    labels.add_child(title_label)
+
+    var description := Label.new()
+    description.text = _t("iap.list_limit.desc")
+    description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    description.add_theme_font_size_override("font_size", 16)
+    description.add_theme_color_override("font_color", color_muted)
+    labels.add_child(description)
+
+    var status := Label.new()
+    status.text = _iap_product_status_text()
+    status.add_theme_font_size_override("font_size", 15)
+    status.add_theme_color_override("font_color", color_accent_soft)
+    labels.add_child(status)
+
+    var entitled := bool(iap_state.get("entitled", false))
+    var product_ready := String(iap_state.get("product_state", "idle")) == "ready"
+    var price := String(iap_state.get("display_price", ""))
+    var action_text := _t("iap.status.purchased") if entitled else _t("iap.buy")
+    if not entitled and not price.is_empty():
+        action_text = "%s  %s" % [_t("iap.buy"), price]
+    var purchase := _pill_button(action_text)
+    _configure_settings_action_button(purchase)
+    purchase.tooltip_text = action_text
+    purchase.disabled = entitled or not product_ready or iap_pending_operation_id > 0
+    _sync_pill_button_content_state(purchase)
+    purchase.pressed.connect(func(): _begin_iap_purchase("settings"))
+    row.add_child(purchase)
+    return panel
+
+func _iap_product_status_text() -> String:
+    if bool(iap_state.get("entitled", false)):
+        return _t("iap.status.purchased")
+    var product_state := String(iap_state.get("product_state", "idle"))
+    if product_state in ["idle", "loading"]:
+        return _t("iap.status.loading")
+    if product_state != "ready":
+        return _t("iap.status.unavailable")
+    var price := String(iap_state.get("display_price", ""))
+    if price.is_empty():
+        return _t("iap.status.not_purchased")
+    return "%s  ·  %s" % [_t("iap.status.not_purchased"), price]
 
 func _settings_fps_row() -> Control:
     var panel := PanelContainer.new()
@@ -4138,6 +4351,331 @@ func _show_system_alert_once(key: String, message: String, title: String = "Aeth
     shown_system_alerts[key] = true
     _show_system_alert(message, title)
 
+func _iap_supported_platform() -> bool:
+    return OS.get_name() in ["iOS", "macOS"]
+
+func _iap_enforcement_enabled() -> bool:
+    # Local/debug artifacts are for compatibility and UI testing. Catalog
+    # enforcement is enabled only in Release/TestFlight/App Store builds.
+    return _iap_supported_platform() and not OS.is_debug_build()
+
+func _initialize_iap() -> void:
+    if not _iap_supported_platform() or player == null:
+        return
+    if not player.has_method("iap_start") or not player.has_method("iap_get_state_json"):
+        iap_state = {
+            "available": false,
+            "product_state": "unsupported",
+            "entitled": false,
+            "last_error": "StoreKit bridge unavailable",
+        }
+        return
+    player.iap_start(IAP_LIST_LIMIT_PRODUCT_ID)
+    # Populate Settings at startup. Launch authorization never trusts this
+    # snapshot and always starts a new entitlement check.
+    player.iap_refresh_entitlement(IAP_LIST_LIMIT_PRODUCT_ID)
+    _read_iap_state()
+
+func _read_iap_state() -> Dictionary:
+    if player == null or not player.has_method("iap_get_state_json"):
+        return iap_state
+    var parsed = JSON.parse_string(String(player.iap_get_state_json()))
+    if parsed is Dictionary:
+        iap_state = parsed
+    return iap_state
+
+func _iap_item_is_first(kind: String, item: Dictionary) -> bool:
+    var items: Array[Dictionary] = known_games if kind == "game" else known_videos
+    if items.is_empty():
+        return false
+    var path := String(item.get("path", ""))
+    return not path.is_empty() and path == String(items[0].get("path", ""))
+
+func _begin_iap_checked_access(
+    kind: String,
+    item: Dictionary,
+    action: String = "launch"
+) -> bool:
+    if not _iap_enforcement_enabled():
+        return false
+    iap_pending_launch = {
+        "kind": kind,
+        "item": item.duplicate(true),
+        "action": action,
+    }
+    if player == null or not player.has_method("iap_refresh_entitlement"):
+        if _iap_item_is_first(kind, item):
+            _run_iap_pending_launch()
+        else:
+            _clear_iap_pending_launch()
+            _show_system_alert(
+                _t("iap.verify_failed", ["StoreKit unavailable"]),
+                _t("iap.checking_title")
+            )
+        return true
+    iap_pending_check_id = int(player.iap_refresh_entitlement(
+        IAP_LIST_LIMIT_PRODUCT_ID
+    ))
+    if iap_pending_check_id <= 0:
+        if _iap_item_is_first(kind, item):
+            _run_iap_pending_launch()
+        else:
+            _clear_iap_pending_launch()
+            _show_system_alert(
+                _t("iap.verify_failed", ["StoreKit request failed"]),
+                _t("iap.checking_title")
+            )
+        return true
+    # Transaction.currentEntitlements reads StoreKit's locally verified
+    # entitlement cache and may refresh it in the background. Keep this launch
+    # authorization silent: only show UI when the selected item is actually
+    # limited or when StoreKit cannot verify its state.
+    return true
+
+func _begin_iap_checked_launch(kind: String, item: Dictionary) -> bool:
+    return _begin_iap_checked_access(kind, item, "launch")
+
+func _open_game_detail_with_iap(game: Dictionary) -> void:
+    # The first catalog item is always available without purchasing. Other
+    # items are authorized before exposing their detail-page actions, then
+    # checked again immediately before launch.
+    if _iap_item_is_first("game", game):
+        _show_detail(game)
+        return
+    if _begin_iap_checked_access("game", game, "detail"):
+        return
+    _show_detail(game)
+
+func _clear_iap_pending_launch() -> void:
+    iap_pending_launch.clear()
+    iap_pending_check_id = 0
+
+func _run_iap_pending_launch() -> void:
+    if iap_pending_launch.is_empty():
+        return
+    var pending := iap_pending_launch.duplicate(true)
+    _clear_iap_pending_launch()
+    modal_layer.visible = false
+    var item: Dictionary = pending.get("item", {})
+    if String(pending.get("action", "launch")) == "detail":
+        _show_detail(item)
+        return
+    if String(pending.get("kind", "")) == "game":
+        selected_game = item
+        _start_selected_game_after_iap()
+    else:
+        _open_video_player_after_iap(item)
+
+func _show_iap_progress_dialog(title_text: String, body_text: String) -> void:
+    _create_iap_modal(title_text, body_text, 660.0, 310.0)
+
+func _show_iap_limit_prompt() -> void:
+    var box := _create_iap_modal(
+        _t("iap.limit_title"),
+        _t("iap.limit_body"),
+        720.0,
+        350.0
+    )
+    var buttons := HBoxContainer.new()
+    buttons.alignment = BoxContainer.ALIGNMENT_END
+    buttons.add_theme_constant_override("separation", 14)
+    buttons.custom_minimum_size = Vector2(0, 64)
+    box.add_child(buttons)
+    var cancel := Button.new()
+    cancel.text = _t("dialog.cancel")
+    cancel.flat = true
+    cancel.custom_minimum_size = Vector2(130, 62)
+    cancel.add_theme_font_size_override("font_size", 20)
+    cancel.add_theme_color_override("font_color", color_text)
+    cancel.pressed.connect(func():
+        _clear_iap_pending_launch()
+        modal_layer.visible = false
+    )
+    buttons.add_child(cancel)
+    var purchase := _pill_button(_iap_purchase_button_text())
+    purchase.custom_minimum_size = Vector2(210, 62)
+    purchase.pressed.connect(func(): _begin_iap_purchase("limit"))
+    buttons.add_child(purchase)
+
+func _create_iap_modal(title_text: String, body_text: String, width: float, height: float) -> VBoxContainer:
+    modal_layer.visible = true
+    modal_layer.move_to_front()
+    for child in modal_layer.get_children():
+        child.queue_free()
+    var dim := ColorRect.new()
+    dim.color = Color(0, 0, 0, 0.52)
+    dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+    modal_layer.add_child(dim)
+    var dialog := PanelContainer.new()
+    dialog.anchor_left = 0.5
+    dialog.anchor_top = 0.5
+    dialog.anchor_right = 0.5
+    dialog.anchor_bottom = 0.5
+    dialog.position = Vector2(-width * 0.5, -height * 0.5)
+    dialog.size = Vector2(width, height)
+    dialog.add_theme_stylebox_override(
+        "panel",
+        _panel_style(22, color_card, Color(0, 0, 0, 0.06), 1)
+    )
+    modal_layer.add_child(dialog)
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 22)
+    dialog.add_child(box)
+    var title := Label.new()
+    title.text = title_text
+    title.add_theme_font_size_override("font_size", 30)
+    title.add_theme_color_override("font_color", color_text)
+    box.add_child(title)
+    var body := Label.new()
+    body.text = body_text
+    body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    body.add_theme_font_size_override("font_size", 21)
+    body.add_theme_color_override("font_color", color_text)
+    box.add_child(body)
+    return box
+
+func _iap_purchase_button_text() -> String:
+    var price := String(iap_state.get("display_price", ""))
+    return _t("iap.buy") if price.is_empty() else "%s  %s" % [_t("iap.buy"), price]
+
+func _begin_iap_purchase(source: String = "settings") -> void:
+    if player == null or not player.has_method("iap_purchase"):
+        _show_system_alert(
+            _t("iap.purchase_failed", ["StoreKit unavailable"]),
+            _t("iap.list_limit.title")
+        )
+        return
+    iap_pending_operation_id = int(player.iap_purchase(
+        IAP_LIST_LIMIT_PRODUCT_ID
+    ))
+    if iap_pending_operation_id <= 0:
+        _show_system_alert(
+            _t("iap.purchase_failed", ["StoreKit request failed"]),
+            _t("iap.list_limit.title")
+        )
+        return
+    iap_pending_operation_kind = "purchase:%s" % source
+    _show_iap_progress_dialog(
+        _t("iap.list_limit.title"),
+        _t("iap.status.loading")
+    )
+
+func _begin_iap_restore() -> void:
+    if player == null or not player.has_method("iap_restore"):
+        _show_system_alert(
+            _t("iap.purchase_failed", ["StoreKit unavailable"]),
+            _t("iap.restore")
+        )
+        return
+    iap_pending_operation_id = int(player.iap_restore(
+        IAP_LIST_LIMIT_PRODUCT_ID
+    ))
+    if iap_pending_operation_id <= 0:
+        _show_system_alert(
+            _t("iap.purchase_failed", ["StoreKit request failed"]),
+            _t("iap.restore")
+        )
+        return
+    iap_pending_operation_kind = "restore"
+    _show_iap_progress_dialog(_t("iap.restore"), _t("iap.status.loading"))
+
+func _process_iap(delta: float) -> void:
+    if not _iap_supported_platform() or player == null:
+        return
+    iap_poll_accum += delta
+    if iap_poll_accum < IAP_POLL_INTERVAL_SEC:
+        return
+    iap_poll_accum = 0.0
+    var previous_revision := iap_last_revision
+    var state := _read_iap_state()
+    iap_last_revision = int(state.get("revision", iap_last_revision))
+
+    if iap_pending_check_id > 0 and int(state.get(
+        "entitlement_check_completed", 0
+    )) >= iap_pending_check_id:
+        _complete_iap_launch_check()
+
+    if iap_pending_operation_id > 0 and int(state.get(
+        "operation_serial", 0
+    )) == iap_pending_operation_id:
+        var operation_state := String(state.get("operation_state", "idle"))
+        if operation_state not in ["idle", "purchasing", "restoring"]:
+            _complete_iap_operation(operation_state)
+
+    if previous_revision != iap_last_revision and is_instance_valid(settings_view) and settings_view.visible:
+        if iap_pending_operation_id <= 0 and not iap_settings_refresh_pending:
+            iap_settings_refresh_pending = true
+            call_deferred("_refresh_iap_settings_view")
+
+func _complete_iap_launch_check() -> void:
+    iap_pending_check_id = 0
+    if iap_pending_launch.is_empty():
+        modal_layer.visible = false
+        return
+    var kind := String(iap_pending_launch.get("kind", ""))
+    var item: Dictionary = iap_pending_launch.get("item", {})
+    if bool(iap_state.get("entitled", false)) or _iap_item_is_first(kind, item):
+        _run_iap_pending_launch()
+        return
+    var entitlement_state := String(iap_state.get("entitlement_state", ""))
+    if entitlement_state == "not_purchased":
+        _show_iap_limit_prompt()
+        return
+    var error := String(iap_state.get("last_error", "")).strip_edges()
+    if error.is_empty():
+        error = entitlement_state
+    _clear_iap_pending_launch()
+    modal_layer.visible = false
+    _show_system_alert(
+        _t("iap.verify_failed", [error]),
+        _t("iap.checking_title")
+    )
+
+func _complete_iap_operation(operation_state: String) -> void:
+    var operation_kind := iap_pending_operation_kind
+    iap_pending_operation_id = 0
+    iap_pending_operation_kind = ""
+    modal_layer.visible = false
+    if operation_state == "purchased":
+        if not iap_pending_launch.is_empty():
+            _run_iap_pending_launch()
+        else:
+            _show_system_alert(
+                _t("iap.purchase_success"),
+                _t("iap.list_limit.title")
+            )
+    elif operation_state == "restored":
+        _show_system_alert(_t("iap.restore_success"), _t("iap.restore"))
+    elif operation_state == "not_purchased" and operation_kind == "restore":
+        _show_system_alert(_t("iap.restore_none"), _t("iap.restore"))
+    elif operation_state == "pending":
+        _clear_iap_pending_launch()
+        _show_system_alert(
+            _t("iap.purchase_pending"),
+            _t("iap.list_limit.title")
+        )
+    elif operation_state == "cancelled":
+        _clear_iap_pending_launch()
+        _show_system_alert(
+            _t("iap.purchase_cancelled"),
+            _t("iap.list_limit.title")
+        )
+    else:
+        _clear_iap_pending_launch()
+        var error := String(iap_state.get("last_error", "")).strip_edges()
+        if error.is_empty():
+            error = operation_state
+        _show_system_alert(
+            _t("iap.purchase_failed", [error]),
+            _t("iap.list_limit.title")
+        )
+
+func _refresh_iap_settings_view() -> void:
+    iap_settings_refresh_pending = false
+    if is_instance_valid(settings_view) and settings_view.visible:
+        _rebuild_settings_view()
+
 func _maybe_show_log_alert(line: String) -> void:
     var message := line.strip_edges()
     var alert_parts := message.split("[ALERT_DIALOG]", true, 1)
@@ -4380,6 +4918,9 @@ func _confirm_remove_selected() -> void:
 
 func _on_refresh_or_import() -> void:
     if home_library_mode == "video":
+        if OS.get_name() == "Android":
+            _open_video_import_dialog()
+            return
         if OS.get_name() == "iOS":
             _refresh_videos()
         else:
@@ -4855,6 +5396,25 @@ func _add_video_path(path: String) -> void:
     _refresh_videos()
 
 func _open_video_import_dialog() -> void:
+    if OS.get_name() == "Android":
+        if not android_video_import_notice_shown:
+            android_video_import_notice_shown = true
+            _show_android_storage_permission_prompt(
+                Callable(self, "_continue_video_import_after_permission_notice"),
+                "message.android_video_storage_permission_required"
+            )
+            return
+        if not _ensure_android_storage_permission_for_import(true):
+            return
+    _show_video_file_dialog()
+
+func _continue_video_import_after_permission_notice() -> void:
+    if not _android_has_external_storage_permission():
+        _request_android_storage_permissions()
+        return
+    _open_video_import_dialog()
+
+func _show_video_file_dialog() -> void:
     var filters := PackedStringArray([
         "*.mp4,*.mkv,*.mov,*.m4v,*.avi,*.webm,*.flv,*.ts,*.m2ts,*.mpeg,*.mpg,*.wmv;Video files"
     ])
@@ -5083,6 +5643,11 @@ func _store_active_video_progress(finished: bool = false) -> void:
 func _open_video_player(video: Dictionary) -> void:
     if not _require_legal_documents_for_media():
         return
+    if _begin_iap_checked_launch("video", video):
+        return
+    _open_video_player_after_iap(video)
+
+func _open_video_player_after_iap(video: Dictionary) -> void:
     var path := String(video.get("path", ""))
     if path.is_empty() or player == null or not _ensure_player_initialized():
         return
@@ -5613,7 +6178,7 @@ func _game_card(game: Dictionary) -> Button:
     button.add_theme_stylebox_override("hover", _panel_style(8, color_card_hover, color_accent, 1))
     button.add_theme_stylebox_override("pressed", _panel_style(8, color_accent_dim, color_accent, 1))
     button.add_theme_stylebox_override("focus", _focus_outline(8))
-    button.pressed.connect(func(): _show_detail(game))
+    button.pressed.connect(func(): _open_game_detail_with_iap(game))
 
     var frame := Control.new()
     frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -5795,6 +6360,11 @@ func _start_selected_game() -> void:
     _android_input_debug_log("_start_selected_game selected=%s" % str(selected_game))
     if not _require_legal_documents_for_media():
         return
+    if _begin_iap_checked_launch("game", selected_game):
+        return
+    _start_selected_game_after_iap()
+
+func _start_selected_game_after_iap() -> void:
     var library_path := String(selected_game.get("path", ""))
     if library_path.is_empty():
         return
@@ -5965,6 +6535,7 @@ func _ready() -> void:
 
     if not _create_runtime_player():
         return
+    _initialize_iap()
 
     diagnostic_session = DiagnosticSession.new()
     add_child(diagnostic_session)
@@ -6349,18 +6920,29 @@ func _request_android_storage_permissions() -> void:
             return
     OS.request_permissions()
 
-func _ensure_android_storage_permission_for_import() -> bool:
-    return _ensure_android_storage_permission_for_path("/storage/emulated/0")
+func _ensure_android_storage_permission_for_import(video_import: bool = false) -> bool:
+    var message_key := (
+        "message.android_video_storage_permission_required"
+        if video_import
+        else "message.android_storage_permission_required"
+    )
+    return _ensure_android_storage_permission_for_path("/storage/emulated/0", message_key)
 
-func _ensure_android_storage_permission_for_path(path: String) -> bool:
+func _ensure_android_storage_permission_for_path(
+    path: String,
+    message_key: String = "message.android_storage_permission_required"
+) -> bool:
     if not _android_path_needs_storage_permission(path):
         return true
     if _android_has_external_storage_permission():
         return true
-    _show_android_storage_permission_prompt()
+    _show_android_storage_permission_prompt(Callable(), message_key)
     return false
 
-func _show_android_storage_permission_prompt() -> void:
+func _show_android_storage_permission_prompt(
+    after_acknowledged: Callable = Callable(),
+    message_key: String = "message.android_storage_permission_required"
+) -> void:
     modal_layer.visible = true
     modal_layer.move_to_front()
     for child in modal_layer.get_children():
@@ -6387,7 +6969,7 @@ func _show_android_storage_permission_prompt() -> void:
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var body := Label.new()
-    body.text = _t("message.android_storage_permission_required")
+    body.text = _t(message_key)
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     body.add_theme_font_size_override("font_size", 24)
     body.add_theme_color_override("font_color", color_text)
@@ -6396,7 +6978,10 @@ func _show_android_storage_permission_prompt() -> void:
     ok.custom_minimum_size = Vector2(160, 64)
     ok.pressed.connect(func():
         modal_layer.visible = false
-        call_deferred("_request_android_storage_permissions")
+        if after_acknowledged.is_valid():
+            after_acknowledged.call_deferred()
+        else:
+            call_deferred("_request_android_storage_permissions")
     )
     box.add_child(ok)
 
@@ -7401,6 +7986,7 @@ func _process_video_playback(delta: float) -> void:
 
 func _process(delta: float) -> void:
     _fit_full_rects()
+    _process_iap(delta)
     _update_advanced_tool_timeouts()
     _sync_game_card_hover_states()
     _flush_log_view_if_needed(delta)
@@ -7471,6 +8057,7 @@ func _process(delta: float) -> void:
                     perf_log_file.store_line(tick_error_line)
                     perf_log_file.flush()
                 game_running = false
+                _deactivate_game_text_input()
                 _sync_debug_console_state()
                 if diagnostic_session != null:
                     diagnostic_session.set_game_active(false)
@@ -7486,6 +8073,7 @@ func _process(delta: float) -> void:
                         tick_ms,
                         player.get_renderer_info(),
                     ])
+                _sync_game_text_input_state()
                 var update_start := Time.get_ticks_usec()
                 _update_frame()
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
@@ -7511,6 +8099,7 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            _deactivate_game_text_input()
             _sync_debug_console_state()
             if diagnostic_session != null:
                 diagnostic_session.set_game_active(false)
@@ -7750,6 +8339,8 @@ func _notification(what: int) -> void:
         player.destroy_engine()
 
 func _pause_game_for_lifecycle(reason: String) -> void:
+    game_text_input_suspended = true
+    _deactivate_game_text_input()
     if not _is_touch_platform():
         return
     if app_lifecycle_paused or not game_running or cached_startup_state != STARTUP_SUCCEEDED:
@@ -7768,6 +8359,7 @@ func _pause_game_for_lifecycle(reason: String) -> void:
     _log_lifecycle_line("app_paused reason=%s" % reason)
 
 func _resume_game_for_lifecycle(reason: String) -> void:
+    game_text_input_suspended = false
     if not _is_touch_platform():
         return
     if not app_lifecycle_paused:
@@ -8192,6 +8784,7 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
         get_tree().quit(0 if visible > 0 else 2)
 
 func _clear_game_input_capture() -> void:
+    _deactivate_game_text_input()
     active_touch_points.clear()
     active_mouse_buttons.clear()
     suppressed_touch_points.clear()
@@ -9171,6 +9764,8 @@ func _touch_engine_pointer_id(pointer_id: int) -> int:
     return TOUCH_POINTER_ID_OFFSET + pointer_id
 
 func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: float, delta_x: float, delta_y: float, button: int, modifiers: int = 0) -> void:
+    if _is_touch_platform() and event_type == POINTER_DOWN and button == 0:
+        game_text_input_reopen_requested = true
     var result := int(player.send_pointer_event(event_type, pointer_id, x, y, delta_x, delta_y, button, modifiers))
     if _android_input_debug_enabled():
         print("android_input fwd type=%d pid=%d x=%.1f y=%.1f dx=%.1f dy=%.1f button=%d mods=%d result=%d" % [
@@ -9308,6 +9903,139 @@ func _hold_next_present_after_input(frames: int = POST_INPUT_PRESENT_HOLD_FRAMES
 func _is_touch_platform() -> bool:
     var platform := OS.get_name()
     return platform == "iOS" or platform == "Android"
+
+func _deactivate_game_text_input() -> void:
+    if game_text_input_active:
+        if (
+            _is_touch_platform()
+            and DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+        ):
+            DisplayServer.virtual_keyboard_hide()
+        elif DisplayServer.has_feature(DisplayServer.FEATURE_IME):
+            DisplayServer.window_set_ime_active(false)
+    game_text_input_active = false
+    game_text_input_attention_position = Vector2i(-1, -1)
+    game_text_input_reopen_requested = false
+
+func _show_game_virtual_keyboard(attention_position: Vector2i, state: Dictionary) -> void:
+    var existing_text := ""
+    var cursor_start := -1
+    var cursor_end := -1
+    if bool(state.get("text_available", false)):
+        existing_text = String(state.get("text", ""))
+        var text_length := existing_text.length()
+        var selection_start := clampi(
+            int(state.get("selection_start", text_length)), 0, text_length
+        )
+        var selection_end := clampi(
+            int(state.get("selection_end", selection_start)), 0, text_length
+        )
+        cursor_start = mini(selection_start, selection_end)
+        var ordered_end := maxi(selection_start, selection_end)
+        # Godot's mobile backends use -1 to distinguish a caret from a real
+        # selection; Android treats equal start/end as a selection session.
+        if ordered_end != cursor_start:
+            cursor_end = ordered_end
+    DisplayServer.virtual_keyboard_show(
+        existing_text,
+        Rect2(Vector2(attention_position), Vector2.ONE),
+        DisplayServer.KEYBOARD_TYPE_DEFAULT,
+        -1,
+        cursor_start,
+        cursor_end
+    )
+    game_text_input_last_show_msec = Time.get_ticks_msec()
+
+func _sync_game_text_input_state() -> void:
+    if game_text_input_suspended or not _can_forward_game_input():
+        _deactivate_game_text_input()
+        return
+    var state = player.get_text_input_state()
+    if not state is Dictionary or not bool(state.get("available", false)):
+        _deactivate_game_text_input()
+        return
+
+    var attention_valid := bool(state.get("attention_point_valid", false))
+    var ime_active := bool(state.get("ime_active", false))
+    var virtual_keyboard_available := (
+        _is_touch_platform()
+        and DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+    )
+    var desktop_ime_available := (
+        not virtual_keyboard_available
+        and DisplayServer.has_feature(DisplayServer.FEATURE_IME)
+    )
+    # Attention marks an editable KiriKiri layer. imClose/imDisable still need
+    # a mobile soft keyboard for direct (non-composed) text entry.
+    var should_activate := attention_valid and (
+        virtual_keyboard_available or (desktop_ime_available and ime_active)
+    )
+    if not should_activate:
+        _deactivate_game_text_input()
+        return
+
+    var attention_position := game_text_input_attention_position
+    if attention_valid:
+        var surface_point := Vector2(
+            float(state.get("attention_x", 0)),
+            float(state.get("attention_y", 0))
+        )
+        var screen_point := _map_surface_point_to_screen(surface_point)
+        attention_position = Vector2i(roundi(screen_point.x), roundi(screen_point.y))
+    var attention_position_changed := (
+        attention_position != game_text_input_attention_position
+    )
+
+    if not game_text_input_active:
+        if virtual_keyboard_available:
+            _show_game_virtual_keyboard(attention_position, state)
+        elif desktop_ime_available:
+            DisplayServer.window_set_ime_active(true)
+            DisplayServer.window_set_ime_position(attention_position)
+        game_text_input_active = true
+    elif (
+        virtual_keyboard_available
+        and game_text_input_reopen_requested
+        and not DisplayServer.has_hardware_keyboard()
+        and (
+            Time.get_ticks_msec() - game_text_input_last_show_msec
+            >= VIRTUAL_KEYBOARD_REOPEN_DELAY_MS
+        )
+    ):
+        # A game-surface tap is also a caret/selection resync boundary while
+        # the keyboard is already visible.
+        _show_game_virtual_keyboard(attention_position, state)
+    elif desktop_ime_available and attention_position_changed:
+        DisplayServer.window_set_ime_position(attention_position)
+
+    game_text_input_attention_position = attention_position
+    game_text_input_reopen_requested = false
+
+func _map_surface_point_to_screen(point: Vector2) -> Vector2:
+    if viewport == null:
+        return point
+    var local_point := point
+    if viewport.texture != null:
+        var texture_size := Vector2(
+            max(1.0, float(viewport.texture.get_width())),
+            max(1.0, float(viewport.texture.get_height()))
+        )
+        var surface_size := texture_size
+        if current_surface_size.x > 0 and current_surface_size.y > 0:
+            surface_size = Vector2(current_surface_size)
+        var texture_point := Vector2(
+            point.x * texture_size.x / surface_size.x,
+            point.y * texture_size.y / surface_size.y
+        )
+        var panel_size := viewport.size
+        var scale := minf(
+            panel_size.x / texture_size.x,
+            panel_size.y / texture_size.y
+        )
+        var drawn_size := texture_size * scale
+        var offset := (panel_size - drawn_size) * 0.5
+        local_point = offset + texture_point * scale
+    return viewport.get_screen_transform() * local_point
 
 func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2:
     if viewport.texture == null:

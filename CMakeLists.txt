@@ -82,6 +82,12 @@ option(BUILD_GODOT_EXTENSION "build Godot GDExtension host library" ON)
 option(BUILD_GPU_BRIDGE "build legacy external GPU bridge renderer" OFF)
 option(AETHERKIRI_ENABLE_ONSCRIPTER
        "enable the bundled OnscripterYuri runtime" ON)
+option(AETHERKIRI_ENABLE_CODE_OBFUSCATION
+       "obfuscate private Internal translation units in release builds" OFF)
+set(AETHERKIRI_OBFUSCATOR_PLUGIN "" CACHE FILEPATH
+    "path to a Kagura LLVM pass plugin built for the active Clang")
+set(AETHERKIRI_OBFUSCATION_BUILD_ID "local" CACHE STRING
+    "non-secret identifier mixed into deterministic obfuscation output")
 option(AETHERKIRI_ENABLE_INTERNAL
        "enable optional private AetherInternal packages when available" ON)
 set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 3)
@@ -89,6 +95,8 @@ set(AETHERKIRI_LIVE2D_HOST_API_VERSION 1)
 set(AETHERKIRI_INTERNAL_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherInternal"
     CACHE PATH "path to an AetherInternal package checkout")
+
+include(cmake/AetherKiriBinaryProtection.cmake)
 
 set(AETHERKIRI_INTERNAL_ENABLED OFF)
 if(AETHERKIRI_ENABLE_INTERNAL)
@@ -133,7 +141,14 @@ set(KRKR2PLUGIN_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins)
 
 if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/EHsc>" "/MP" "/utf-8")
-    add_link_options("/ignore:4099" "/INCREMENTAL" "/DEBUG:FASTLINK")
+    add_link_options(
+        "/ignore:4099"
+        "$<$<CONFIG:Debug>:/INCREMENTAL>"
+        "$<$<CONFIG:Debug>:/DEBUG:FASTLINK>"
+        "$<$<CONFIG:Release>:/INCREMENTAL:NO>"
+        "$<$<CONFIG:Release>:/OPT:REF>"
+        "$<$<CONFIG:Release>:/OPT:ICF>"
+    )
     # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
@@ -146,6 +161,33 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/external)
 # build library
 add_subdirectory(${KRKR2CORE_PATH})
 add_subdirectory(${KRKR2PLUGIN_PATH})
+
+# AetherInternal contributes sources to public targets but does not own the
+# obfuscation policy. Register only package-owned source units for protected
+# iOS Release builds.
+if(IOS AND AETHERKIRI_INTERNAL_ENABLED AND AETHERKIRI_ENABLE_CODE_OBFUSCATION)
+    file(GLOB_RECURSE AETHERKIRI_INTERNAL_EMOTE_SOURCES CONFIGURE_DEPENDS
+        "${AETHERKIRI_INTERNAL_DIR}/src/emote/*.cpp")
+    file(GLOB_RECURSE AETHERKIRI_INTERNAL_PSB_SOURCES CONFIGURE_DEPENDS
+        "${AETHERKIRI_INTERNAL_DIR}/src/psbfile/*.cpp")
+    file(GLOB_RECURSE AETHERKIRI_INTERNAL_PLUGIN_SOURCES CONFIGURE_DEPENDS
+        "${AETHERKIRI_INTERNAL_DIR}/src/plugins/*.cpp"
+        "${AETHERKIRI_INTERNAL_DIR}/src/krkr2_plugins/*.cpp"
+        "${AETHERKIRI_INTERNAL_DIR}/src/live2d/*.cpp")
+    if(TARGET motionplayer AND AETHERKIRI_INTERNAL_EMOTE_SOURCES)
+        aetherkiri_protect_internal_sources(motionplayer
+            ${AETHERKIRI_INTERNAL_EMOTE_SOURCES})
+    endif()
+    if(TARGET psbfile AND AETHERKIRI_INTERNAL_PSB_SOURCES)
+        aetherkiri_protect_internal_sources(psbfile
+            ${AETHERKIRI_INTERNAL_PSB_SOURCES})
+    endif()
+    if(TARGET krkr2plugin AND AETHERKIRI_INTERNAL_PLUGIN_SOURCES)
+        aetherkiri_protect_internal_sources(krkr2plugin
+            ${AETHERKIRI_INTERNAL_PLUGIN_SOURCES})
+    endif()
+endif()
+
 if(BUILD_ENGINE_API)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api)
 endif()

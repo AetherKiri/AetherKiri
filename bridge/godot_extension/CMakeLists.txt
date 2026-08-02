@@ -2,7 +2,75 @@ cmake_minimum_required(VERSION 3.19)
 
 project(aether_kiri_godot LANGUAGES C CXX)
 
+if(APPLE)
+    enable_language(Swift)
+endif()
+
 find_package(unofficial-godot-cpp CONFIG REQUIRED)
+
+if(APPLE)
+    # godot-cpp publishes Clang-specific debug flags without a language guard.
+    # A mixed C++/Swift GDExtension otherwise forwards them to swiftc, which
+    # rejects -gdwarf-4 and -g2.
+    get_target_property(_godot_cpp_apple_compile_options
+        unofficial::godot::cpp INTERFACE_COMPILE_OPTIONS)
+    if(_godot_cpp_apple_compile_options)
+        string(REPLACE "-gdwarf-4"
+            "$<$<COMPILE_LANGUAGE:CXX>:-gdwarf-4>"
+            _godot_cpp_apple_compile_options
+            "${_godot_cpp_apple_compile_options}")
+        string(REPLACE "-g2"
+            "$<$<COMPILE_LANGUAGE:CXX>:-g2>"
+            _godot_cpp_apple_compile_options
+            "${_godot_cpp_apple_compile_options}")
+        set_target_properties(unofficial::godot::cpp PROPERTIES
+            INTERFACE_COMPILE_OPTIONS "${_godot_cpp_apple_compile_options}"
+        )
+    endif()
+
+    # godot-cpp also publishes AppleClang's -Wl spelling for Release strip
+    # options. Use CMake's driver-neutral LINKER spelling so a mixed target
+    # linked by swiftc receives the corresponding -Xlinker arguments.
+    get_target_property(_godot_cpp_apple_link_options
+        unofficial::godot::cpp INTERFACE_LINK_OPTIONS)
+    if(_godot_cpp_apple_link_options)
+        string(REPLACE "-Wl,-S" "LINKER:-S"
+            _godot_cpp_apple_link_options
+            "${_godot_cpp_apple_link_options}")
+        string(REPLACE "-Wl,-x" "LINKER:-x"
+            _godot_cpp_apple_link_options
+            "${_godot_cpp_apple_link_options}")
+        string(REPLACE "-Wl,-dead_strip" "LINKER:-dead_strip"
+            _godot_cpp_apple_link_options
+            "${_godot_cpp_apple_link_options}")
+        set_target_properties(unofficial::godot::cpp PROPERTIES
+            INTERFACE_LINK_OPTIONS "${_godot_cpp_apple_link_options}"
+        )
+    endif()
+
+    # The vcpkg include root published by godot-cpp contains C headers whose
+    # names overlap iOS SDK headers (notably uuid/uuid.h). Passing that root to
+    # Swift breaks the Darwin module under Release whole-module optimization.
+    # Keep all godot-cpp headers scoped to its actual C++ consumer.
+    foreach(_godot_cpp_include_property IN ITEMS
+        INTERFACE_INCLUDE_DIRECTORIES
+        INTERFACE_SYSTEM_INCLUDE_DIRECTORIES)
+        get_target_property(_godot_cpp_apple_include_directories
+            unofficial::godot::cpp ${_godot_cpp_include_property})
+        if(_godot_cpp_apple_include_directories)
+            set(_godot_cpp_cxx_include_directories "")
+            foreach(_godot_cpp_include_directory IN LISTS
+                _godot_cpp_apple_include_directories)
+                list(APPEND _godot_cpp_cxx_include_directories
+                    "$<$<COMPILE_LANGUAGE:CXX>:${_godot_cpp_include_directory}>")
+            endforeach()
+            set_target_properties(unofficial::godot::cpp PROPERTIES
+                ${_godot_cpp_include_property}
+                "${_godot_cpp_cxx_include_directories}"
+            )
+        endif()
+    endforeach()
+endif()
 
 if(WEB OR EMSCRIPTEN)
     get_target_property(_godot_cpp_compile_options unofficial::godot::cpp INTERFACE_COMPILE_OPTIONS)
@@ -42,6 +110,12 @@ else()
     add_library(aether_kiri_godot SHARED ${AETHERKIRI_GODOT_SOURCES})
 endif()
 
+if(APPLE)
+    target_sources(aether_kiri_godot PRIVATE src/apple_storekit.swift)
+    set_property(TARGET aether_kiri_godot PROPERTY Swift_LANGUAGE_VERSION 5)
+    target_link_libraries(aether_kiri_godot PRIVATE "-framework StoreKit")
+endif()
+
 target_compile_features(aether_kiri_godot PRIVATE cxx_std_17)
 if(MSVC)
     set_property(TARGET aether_kiri_godot PROPERTY
@@ -54,11 +128,11 @@ target_compile_definitions(aether_kiri_godot PRIVATE
     $<$<CONFIG:Debug>:DEBUG_ENABLED DEBUG_METHODS_ENABLED HOT_RELOAD_ENABLED>
 )
 target_include_directories(aether_kiri_godot PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../engine_api/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/core/visual/godot
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/core/visual
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/core/tjs2
-    ${CMAKE_BINARY_DIR}/cpp/core/tjs2/gen
+    $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/../engine_api/include>
+    $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/core/visual/godot>
+    $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/core/visual>
+    $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/core/tjs2>
+    $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_BINARY_DIR}/cpp/core/tjs2/gen>
 )
 
 if(TARGET engine_api)
@@ -100,6 +174,8 @@ set_target_properties(aether_kiri_godot PROPERTIES
     BUILD_WITH_INSTALL_RPATH TRUE
     INSTALL_RPATH "${AETHERKIRI_EXTENSION_RPATH}"
 )
+
+aetherkiri_limit_runtime_exports(aether_kiri_godot GODOT_EXTENSION)
 
 if(WIN32)
     string(TOLOWER "${CMAKE_BUILD_TYPE}" AETHERKIRI_WINDOWS_CONFIG_DIR)

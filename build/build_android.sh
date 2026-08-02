@@ -201,6 +201,7 @@ build_abi() {
     local godot_bin_dir
     local vcpkg_triplet_dir
     local libomp_path
+    local android_strip_path
     local cmake_config_args=(
         -D "CMAKE_MAKE_PROGRAM=$CMAKE_MAKE_PROGRAM"
         -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
@@ -253,6 +254,22 @@ build_abi() {
         exit 1
     fi
     copy_android_so "$libomp_path" "$godot_bin_dir/libomp.so"
+
+    if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+        android_strip_path="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" \
+            -path '*/bin/llvm-strip' \( -type f -o -type l \) -print -quit)"
+        if [[ -z "$android_strip_path" || ! -x "$android_strip_path" ]]; then
+            echo "Error: Android llvm-strip not found under $ANDROID_NDK_HOME." >&2
+            exit 1
+        fi
+        echo "==> Removing non-runtime symbols from staged Android Release libraries"
+        AETHERKIRI_STRIP_TOOL="$android_strip_path" \
+            "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" elf \
+            "$godot_bin_dir/libengine_api.so" \
+            "$godot_bin_dir/libaether_kiri_godot.so" \
+            "$godot_bin_dir/libSDL2.so" \
+            "$godot_bin_dir/libomp.so"
+    fi
 }
 
 IFS=',' read -r -a ABI_LIST <<< "$ABIS"

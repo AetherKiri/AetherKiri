@@ -103,6 +103,20 @@ verify_linux_libraries() {
     fi
 }
 
+strip_linux_runtime_symbols() {
+    local binaries=()
+    local binary
+
+    while IFS= read -r -d '' binary; do
+        binaries+=("$binary")
+    done < <(find "$@" -maxdepth 1 -type f \
+        \( -name 'AetherKiri.x86_64' -o -name '*.so' -o -name '*.so.*' \) \
+        -print0)
+    if ((${#binaries[@]})); then
+        "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" elf "${binaries[@]}"
+    fi
+}
+
 stage_export_runtime_libraries() {
     find "$GODOT_BIN_DIR" -maxdepth 1 -type f -name 'lib*.so*' \
         -exec cp -Lf {} "$GODOT_EXPORT_DIR/" \;
@@ -132,6 +146,10 @@ mkdir -p "$GODOT_BIN_DIR"
 cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.so" "$GODOT_BIN_DIR/"
 cp -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.so" "$GODOT_BIN_DIR/"
 stage_vcpkg_runtime_libraries "$GODOT_BIN_DIR/libengine_api.so"
+if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+    echo "==> Removing non-runtime symbols from staged Linux Release libraries"
+    strip_linux_runtime_symbols "$GODOT_BIN_DIR"
+fi
 
 if readelf -d "$GODOT_BIN_DIR/libengine_api.so" | grep -Fq "$CMAKE_BUILD_DIR"; then
     echo "Error: engine API retains a build-directory runtime path." >&2
@@ -160,5 +178,9 @@ echo "==> Exporting Linux Godot application"
     "$GODOT_EXPORT_MODE" "$GODOT_EXPORT_PRESET" "$GODOT_EXPORT_APP"
 
 stage_export_runtime_libraries
+if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+    echo "==> Removing non-runtime symbols from exported Linux Release application"
+    strip_linux_runtime_symbols "$GODOT_EXPORT_DIR"
+fi
 verify_linux_libraries "$GODOT_EXPORT_DIR"
 echo "Linux build output: $GODOT_EXPORT_APP"

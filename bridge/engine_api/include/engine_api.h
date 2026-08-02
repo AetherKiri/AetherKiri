@@ -14,7 +14,8 @@
 #define ENGINE_API_EXPORT
 #endif
 #else
-#if defined(__GNUC__) && __GNUC__ >= 4
+#if defined(__GNUC__) && __GNUC__ >= 4 && \
+    (defined(ENGINE_API_BUILD_SHARED) || defined(ENGINE_API_EXPORT_SYMBOLS))
 #define ENGINE_API_EXPORT __attribute__((visibility("default")))
 #else
 #define ENGINE_API_EXPORT
@@ -26,7 +27,7 @@ extern "C" {
 #endif
 
 /* ABI version: major(8bit), minor(8bit), patch(16bit). */
-#define ENGINE_API_VERSION 0x01040000u
+#define ENGINE_API_VERSION 0x01050000u
 #define ENGINE_API_MAKE_VERSION(major, minor, patch) \
   ((((uint32_t)(major)&0xFFu) << 24u) | (((uint32_t)(minor)&0xFFu) << 16u) | \
    ((uint32_t)(patch)&0xFFFFu))
@@ -196,6 +197,26 @@ typedef struct engine_input_event_t {
   uint64_t reserved_u64[2];
   void* reserved_ptr[2];
 } engine_input_event_t;
+
+/* Host-facing snapshot of the focused KiriKiri text input layer. */
+typedef struct engine_text_input_state_t {
+  uint32_t struct_size;
+  /* Non-zero when the focused layer's IME mode accepts composed input. */
+  uint32_t ime_active;
+  int32_t ime_mode;
+  /* Non-zero when the focused layer publishes an editable caret position. */
+  uint32_t attention_point_valid;
+  int32_t attention_x;
+  int32_t attention_y;
+  /* Backing text is copied separately with engine_copy_text_input_text(). */
+  uint32_t text_available;
+  uint32_t text_utf8_bytes;
+  /* Unicode scalar offsets; equal values mean there is no selection. */
+  int32_t selection_start;
+  int32_t selection_end;
+  uint64_t reserved_u64[2];
+  void* reserved_ptr[4];
+} engine_text_input_state_t;
 
 /*
  * Returns runtime API version in out_api_version.
@@ -383,6 +404,22 @@ ENGINE_API_EXPORT engine_result_t engine_get_host_native_view(
  */
 ENGINE_API_EXPORT engine_result_t engine_send_input(engine_handle_t handle,
                                                     const engine_input_event_t* event);
+
+/*
+ * Gets the current script-visible text input/IME focus state.
+ * out_state->struct_size must be initialized by caller.
+ */
+ENGINE_API_EXPORT engine_result_t engine_get_text_input_state(
+    engine_handle_t handle, engine_text_input_state_t* out_state);
+
+/*
+ * Copies the focused editor's backing text as null-terminated UTF-8.
+ * text_utf8_bytes in engine_text_input_state_t reports the full byte count,
+ * excluding the terminator. A smaller destination is safely truncated.
+ */
+ENGINE_API_EXPORT engine_result_t engine_copy_text_input_text(
+    engine_handle_t handle, char* out_buffer, uint32_t buffer_size,
+    uint32_t* out_bytes_written);
 
 /*
  * Exports the current main window menu tree as UTF-8 JSON.

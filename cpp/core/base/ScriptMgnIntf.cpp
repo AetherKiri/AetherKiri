@@ -740,6 +740,239 @@ void TVPExecuteStorage(const ttstr &name, tTJSVariant *result,
 #include <filesystem>
 #include <tjsByteCodeLoader.h>
 
+bool TVPPatchWorldRestoreFaceVisibility(ttstr &script) {
+    using ScriptString = std::basic_string<tjs_char>;
+    const auto missing = ScriptString::npos;
+    ScriptString source(script.c_str(), script.GetLen());
+
+    const ScriptString functionMarker(TJS_W("function _updateAll("));
+    const auto functionPos = source.find(functionMarker);
+    if(functionPos == missing)
+        return false;
+
+    auto functionEnd = source.find(TJS_W("\n\tfunction "),
+                                   functionPos + functionMarker.size());
+    if(functionEnd == missing)
+        functionEnd = source.size();
+
+    if(source.find(TJS_W("__akRestoreFaceVisible"), functionPos) < functionEnd)
+        return false;
+
+    const ScriptString dataMarker(
+        TJS_W("\t\t\tvar data = allData.data;"));
+    const ScriptString captureMarker(
+        TJS_W("\t\t\t\t\t\tcreate.add(info);"));
+    const ScriptString clearMarker(TJS_W("\t\t\tenvClear(leave);"));
+
+    const auto findUniqueInFunction =
+        [&](const ScriptString &marker) -> ScriptString::size_type {
+        const auto first = source.find(marker, functionPos);
+        if(first == missing || first >= functionEnd)
+            return missing;
+        const auto next = source.find(marker, first + marker.size());
+        if(next != missing && next < functionEnd)
+            return missing;
+        return first;
+    };
+
+    const auto dataPos = findUniqueInFunction(dataMarker);
+    const auto capturePos = findUniqueInFunction(captureMarker);
+    const auto clearPos = findUniqueInFunction(clearMarker);
+    if(dataPos == missing || capturePos == missing || clearPos == missing ||
+       !(dataPos < capturePos && capturePos < clearPos))
+        return false;
+
+    const auto lineEndingAfter =
+        [&](ScriptString::size_type position,
+            const ScriptString &marker) -> ScriptString {
+        const auto after = position + marker.size();
+        if(after + 1 < source.size() && source[after] == TJS_W('\r') &&
+           source[after + 1] == TJS_W('\n'))
+            return ScriptString(TJS_W("\r\n"));
+        if(after < source.size() && source[after] == TJS_W('\n'))
+            return ScriptString(TJS_W("\n"));
+        return {};
+    };
+
+    const ScriptString dataEol = lineEndingAfter(dataPos, dataMarker);
+    const ScriptString captureEol =
+        lineEndingAfter(capturePos, captureMarker);
+    const ScriptString clearEol = lineEndingAfter(clearPos, clearMarker);
+    if(dataEol.empty() || captureEol.empty() || clearEol.empty())
+        return false;
+
+    // Insert from the bottom up so the validated source offsets remain valid.
+    source.insert(clearPos + clearMarker.size() + clearEol.size(),
+                  ScriptString(
+                      TJS_W("\t\t\tif (__akRestoreFaceVisible && typeof "
+                            "this.removeIgnore != \"undefined\") { try { "
+                            "this.removeIgnore(\"face\"); } catch("
+                            "__akFaceIgnoreE) {} }")) +
+                      clearEol);
+    source.insert(capturePos + captureMarker.size() + captureEol.size(),
+                  ScriptString(
+                      TJS_W("\t\t\t\t\t\ttry { if (info[0] == \"face\" && "
+                            "info[2] !== void && (info[2].showmode & 1)) "
+                            "__akRestoreFaceVisible = true; } catch("
+                            "__akFaceRestoreE) {}")) +
+                      captureEol);
+    source.insert(dataPos + dataMarker.size() + dataEol.size(),
+                  ScriptString(
+                      TJS_W("\t\t\tvar __akRestoreFaceVisible = false;")) +
+                      dataEol);
+
+    script = ttstr(source);
+    return true;
+}
+
+tjs_int TVPRepairShiftedNumberedMovieMappings(
+    ttstr &script, tTVPStorageExistenceProbe storageExists) {
+    using ScriptString = std::basic_string<tjs_char>;
+    const auto missing = ScriptString::npos;
+    if(!storageExists)
+        return 0;
+
+    ScriptString source(script.c_str(), script.GetLen());
+    const ScriptString keyPrefix(TJS_W("\"ev_mv"));
+    const ScriptString namePrefix(TJS_W("ev_mv"));
+    const ScriptString finalSuffix(TJS_W("_02_06"));
+    const ScriptString movieSuffix(TJS_W(".mpg"));
+    const ScriptString storageMarker(TJS_W("\"storage\",\""));
+
+    const auto parseFamily = [&](const ScriptString &name,
+                                 int &family,
+                                 size_t &digits) -> bool {
+        if(name.size() <= namePrefix.size() + finalSuffix.size() ||
+           name.compare(0, namePrefix.size(), namePrefix) != 0 ||
+           name.compare(name.size() - finalSuffix.size(), finalSuffix.size(),
+                        finalSuffix) != 0)
+            return false;
+
+        const size_t begin = namePrefix.size();
+        const size_t end = name.size() - finalSuffix.size();
+        family = 0;
+        digits = end - begin;
+        for(size_t i = begin; i < end; ++i) {
+            if(name[i] < TJS_W('0') || name[i] > TJS_W('9'))
+                return false;
+            family = family * 10 + static_cast<int>(name[i] - TJS_W('0'));
+        }
+        return digits > 0;
+    };
+
+    const auto hasIdentityMapping = [&](const ScriptString &name) -> bool {
+        const ScriptString key = ScriptString(TJS_W("\"")) + name +
+            TJS_W("\"");
+        const ScriptString storage = storageMarker + name + movieSuffix +
+            TJS_W("\"");
+        size_t keyPos = 0;
+        while((keyPos = source.find(key, keyPos)) != missing) {
+            const size_t lineEnd = source.find(TJS_W('\n'), keyPos);
+            const size_t storagePos = source.find(storage, keyPos + key.size());
+            if(storagePos != missing &&
+               (lineEnd == missing || storagePos < lineEnd))
+                return true;
+            keyPos += key.size();
+        }
+        return false;
+    };
+
+    struct Correction {
+        size_t position;
+        size_t length;
+        ScriptString logical;
+        ScriptString physical;
+    };
+    std::vector<Correction> corrections;
+
+    size_t keyPos = 0;
+    while((keyPos = source.find(keyPrefix, keyPos)) != missing) {
+        const size_t logicalBegin = keyPos + 1;
+        const size_t logicalEnd = source.find(TJS_W('"'), logicalBegin);
+        if(logicalEnd == missing)
+            break;
+
+        const ScriptString logical =
+            source.substr(logicalBegin, logicalEnd - logicalBegin);
+        int logicalFamily = 0;
+        size_t logicalDigits = 0;
+        if(!parseFamily(logical, logicalFamily, logicalDigits)) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        const size_t lineEnd = source.find(TJS_W('\n'), logicalEnd);
+        const size_t storagePos = source.find(storageMarker, logicalEnd);
+        if(storagePos == missing ||
+           (lineEnd != missing && storagePos >= lineEnd)) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        const size_t physicalBegin = storagePos + storageMarker.size();
+        const size_t physicalEnd = source.find(TJS_W('"'), physicalBegin);
+        if(physicalEnd == missing ||
+           (lineEnd != missing && physicalEnd >= lineEnd)) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        const ScriptString physicalFile =
+            source.substr(physicalBegin, physicalEnd - physicalBegin);
+        if(physicalFile.size() <= movieSuffix.size() ||
+           physicalFile.compare(physicalFile.size() - movieSuffix.size(),
+                                movieSuffix.size(), movieSuffix) != 0) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+        const ScriptString physical = physicalFile.substr(
+            0, physicalFile.size() - movieSuffix.size());
+
+        int physicalFamily = 0;
+        size_t physicalDigits = 0;
+        if(!parseFamily(physical, physicalFamily, physicalDigits) ||
+           logicalDigits != physicalDigits ||
+           logicalFamily != physicalFamily + 1) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        const ScriptString sequencePrefix = logical.substr(
+            0, logical.size() - finalSuffix.size());
+        if(!hasIdentityMapping(sequencePrefix + TJS_W("_02_01")) ||
+           !hasIdentityMapping(sequencePrefix + TJS_W("_02_05"))) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        const ScriptString correctedFile = logical + movieSuffix;
+        if(!storageExists(ttstr(correctedFile))) {
+            keyPos = logicalEnd + 1;
+            continue;
+        }
+
+        corrections.push_back(
+            { physicalBegin, physicalFile.size(), logical, physical });
+        keyPos = logicalEnd + 1;
+    }
+
+    for(auto it = corrections.rbegin(); it != corrections.rend(); ++it) {
+        const ScriptString correctedFile = it->logical + movieSuffix;
+        source.replace(it->position, it->length, correctedFile);
+        spdlog::info(
+            "Corrected shifted numbered movie mapping: logical={} "
+            "storage={} corrected={}",
+            ttstr(it->logical).AsStdString(),
+            (ttstr(it->physical) + TJS_W(".mpg")).AsStdString(),
+            ttstr(correctedFile).AsStdString());
+    }
+
+    if(corrections.empty())
+        return 0;
+    script = ttstr(source);
+    return static_cast<tjs_int>(corrections.size());
+}
+
 static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                                                ttstr &buffer) {
     const ttstr lower = shortname.AsLowerCase();
@@ -751,6 +984,21 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
         const char *value = std::getenv("AETHERKIRI_SCENE_DEBUG");
         return value && *value && *value != '0';
     }();
+
+    if(lower == TJS_W("envinit.tjs")) {
+        // Compatibility evidence for future per-game scoping:
+        //   Title: もっと！孕ませ！炎のおっぱい異世界おっぱいスパイ学園！
+        //   Pre-patch decoded envinit.tjs (UTF-8, CRLF) SHA-256:
+        //     eb99e1869dd01e81de23b644f1d5e76fd2d47fb8fa666696b7173671084ed854
+        //   Broken mapping anchors:
+        //     ev_mv023_02_06 -> ev_mv022_02_06.mpg
+        //     ev_mv024_02_06 -> ev_mv023_02_06.mpg
+        // The current structural matcher intentionally supports equivalent
+        // data revisions. If it ever conflicts with a deliberate alias, use
+        // this fingerprint/anchor pair to gate a game compatibility profile.
+        TVPRepairShiftedNumberedMovieMappings(buffer,
+                                              TVPIsExistentStorage);
+    }
 
     if(lower == TJS_W("messagelayer.tjs")) {
         ttstr patched(buffer);
@@ -1426,35 +1674,17 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                   "\t\tsyncMsgVisibleFromKag();\r\n"
                   "\t\tScripts.foreach(envlayerList, function(id,obj) {\r\n"),
             false);
-        patched.Replace(
-            TJS_W("\tfunction _updateAll(allData, snap=false, restore=true) {\r\n"
-                  "\t\tif (allData !== void) {\r\n"
-                  "\t\t\tvar data = allData.data;\r\n"
-                  "\t\t\tvar leave = %[];\r\n"
-                  "\t\t\tvar create = [];\r\n"),
-            TJS_W("\tfunction _updateAll(allData, snap=false, restore=true) {\r\n"
-                  "\t\tif (allData !== void) {\r\n"
-                  "\t\t\tvar data = allData.data;\r\n"
-                  "\t\t\tvar __akRestoreFaceVisible = false;\r\n"
-                  "\t\t\tvar leave = %[];\r\n"
-                  "\t\t\tvar create = [];\r\n"),
-            false);
-        patched.Replace(
-            TJS_W("\t\t\t\t\t\tcreate.add(info);\r\n"
-                  "\t\t\t\t\t\tvar name = info[0];\r\n"),
-            TJS_W("\t\t\t\t\t\tcreate.add(info);\r\n"
-                  "\t\t\t\t\t\ttry { if (info[0] == \"face\" && info[2] !== void && (info[2].showmode & 1)) __akRestoreFaceVisible = true; } catch(__akFaceRestoreE) {}\r\n"
-                  "\t\t\t\t\t\tvar name = info[0];\r\n"),
-            false);
-        patched.Replace(
-            TJS_W("\t\t\t// 生成するものと同種のもの以外は破棄\r\n"
-                  "\t\t\tenvClear(leave);\r\n"
-                  "\t\t\t// オブジェクト生成\r\n"),
-            TJS_W("\t\t\t// 生成するものと同種のもの以外は破棄\r\n"
-                  "\t\t\tenvClear(leave);\r\n"
-                  "\t\t\tif (__akRestoreFaceVisible && typeof this.removeIgnore != \"undefined\") { try { this.removeIgnore(\"face\"); } catch(__akFaceIgnoreE) {} }\r\n"
-                  "\t\t\t// オブジェクト生成\r\n"),
-            false);
+        const bool patchedFaceRestore =
+            TVPPatchWorldRestoreFaceVisibility(patched);
+        if(!patchedFaceRestore &&
+           patched.IndexOf(TJS_W("function _updateAll(")) >= 0 &&
+           (patched.IndexOf(TJS_W("var data = allData.data;")) >= 0 ||
+            patched.IndexOf(TJS_W("create.add(info);")) >= 0 ||
+            patched.IndexOf(TJS_W("envClear(leave);")) >= 0)) {
+            spdlog::warn(
+                "Skipped atomic World._updateAll face-visibility patch: "
+                "required anchors were incomplete or ambiguous");
+        }
         if(patched != buffer) {
             buffer = patched;
             spdlog::info("Applied compatibility patch for world msgwin visibility restore");
@@ -2137,6 +2367,34 @@ static void TVPExecuteTextScriptWithRecovery(const ttstr &script,
     }
 }
 
+const tjs_char *TVPGetD3DStandSourcePatchScript() {
+    return TJS_W(
+        "(function() {\r\n"
+        "\tif (typeof global.D3DAffineLayer == \"undefined\") return;\r\n"
+        "\tif (typeof global.__aetherKiriD3DStandOrigLoadImages != \"undefined\") return;\r\n"
+        "\tglobal.__aetherKiriD3DStandOrigLoadImages = &global.D3DAffineLayer.loadImages;\r\n"
+        "\tglobal.D3DAffineLayer.loadImages = function(filename, colorKey=clNone, options=void, redraw=false) {\r\n"
+        "\t\tvar sourceInfo = findAffineSource(filename, options);\r\n"
+        "\t\tvar sourceClass = sourceInfo.sourceClass;\r\n"
+        "\t\tvar storage = sourceInfo.storage;\r\n"
+        "\t\tvar ext = sourceInfo.ext;\r\n"
+        "\t\tif (ext != \".STAND\" && ext != \".EVENT\") return (global.__aetherKiriD3DStandOrigLoadImages incontextof this)(filename, colorKey, options, redraw);\r\n"
+        "\t\tif (sourceClass === void) return (global.__aetherKiriD3DStandOrigLoadImages incontextof this)(filename, colorKey, options, redraw);\r\n"
+        "\t\tif (this._image.filename != filename ||\r\n"
+        "\t\t\t(this._image instanceof \"D3DAffineSourcePicture\" && redraw) ||\r\n"
+        "\t\t\t(this._image instanceof \"D3DAffineSourceImage\" && ((sourceClass === void && !redraw) || this._image._sourceClass !== sourceClass))\r\n"
+        "\t\t\t) {\r\n"
+        "\t\t\tinvalidate this._image;\r\n"
+        "\t\t\tthis._image = new D3DAffineSourceImage(this, sourceClass);\r\n"
+        "\t\t\tthis._image.filename = filename;\r\n"
+        "\t\t\tthis._image.loadImages(storage, colorKey, options);\r\n"
+        "\t\t\tif (options !== void) this._image.setOptions(options);\r\n"
+        "\t\t\tthis.calcAffine();\r\n"
+        "\t\t}\r\n"
+        "\t};\r\n"
+        "})();\r\n");
+}
+
 static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
     const ttstr lower = shortname.AsLowerCase();
     const bool patchWorld = lower == TJS_W("world.tjs");
@@ -2233,31 +2491,7 @@ static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
 
     if(patchD3DLayer) try {
         TVPExecuteScript(
-            TJS_W(
-                "(function() {\r\n"
-                "\tif (typeof global.D3DAffineLayer == \"undefined\") return;\r\n"
-                "\tif (typeof global.__aetherKiriD3DStandOrigLoadImages != \"undefined\") return;\r\n"
-                "\tglobal.__aetherKiriD3DStandOrigLoadImages = &global.D3DAffineLayer.loadImages;\r\n"
-                "\tglobal.D3DAffineLayer.loadImages = function(filename, colorKey=clNone, options=void, redraw=false) {\r\n"
-                "\t\tvar sourceInfo = findAffineSource(filename, options);\r\n"
-                "\t\tvar sourceClass = sourceInfo.sourceClass;\r\n"
-                "\t\tvar storage = sourceInfo.storage;\r\n"
-                "\t\tvar ext = sourceInfo.ext;\r\n"
-                "\t\tif (ext != \".STAND\" && ext != \".EVENT\") return (global.__aetherKiriD3DStandOrigLoadImages incontextof this)(filename, colorKey, options, redraw);\r\n"
-                "\t\tif (sourceClass === void) return (global.__aetherKiriD3DStandOrigLoadImages incontextof this)(filename, colorKey, options, redraw);\r\n"
-                "\t\tif (this._image.filename != filename ||\r\n"
-                "\t\t\t(this._image instanceof \"D3DAffineSourcePicture\" && redraw) ||\r\n"
-                "\t\t\t(this._image instanceof \"D3DAffineSourceImage\" && ((sourceClass === void && !redraw) || this._image._sourceClass !== sourceClass))\r\n"
-                "\t\t\t) {\r\n"
-                "\t\t\tinvalidate this._image;\r\n"
-                "\t\t\tthis._image = new D3DAffineSourceImage(this, sourceClass);\r\n"
-                "\t\t\tthis._image.filename = filename;\r\n"
-                "\t\t\tthis._image.loadImages(storage, colorKey, options);\r\n"
-                "\t\t\tif (options !== void) this._image.setOptions(options);\r\n"
-                "\t\t\tthis.calcUpdate();\r\n"
-                "\t\t}\r\n"
-                "\t};\r\n"
-                "})();\r\n"),
+            TVPGetD3DStandSourcePatchScript(),
             TJS_W("AetherKiriD3DStandSourcePatch"), 0, (tTJSVariant *)nullptr);
         spdlog::info(
             "Applied compatibility hook for D3DAffineLayer stand source routing");

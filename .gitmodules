@@ -3,4 +3,4 @@
 	url = git@github.com:AetherKiri/AetherInternal.git
 [submodule "packages/OnscripterYuri"]
 	path = packages/OnscripterYuri
-	url = https://github.com/YuriSizuku/OnscripterYuri.git
+	url = https://github.com/AetherKiri/OnscripterYuri.git

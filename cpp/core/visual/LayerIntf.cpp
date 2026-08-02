@@ -6223,6 +6223,28 @@ void tTJSNI_BaseLayer::FireButtonClick() {
         if(invoke_current_default())
             return;
 
+        // Native KAG button layers dispatch their bound link expression
+        // through the button object first. Calling the control owner's
+        // generic onButtonClick handler before this can report success while
+        // leaving expressions such as Current.cmd("toggleBGSel") untouched.
+        // Keep the owner callback as a compatibility fallback for button
+        // implementations that do not expose _evalOnClick.
+        static ttstr eval_click_name(TJS_W("_evalOnClick"));
+        tTJSVariant eval_result;
+        const tjs_error eval_hr =
+            button_object.FuncCall(0, eval_click_name.c_str(),
+                                   eval_click_name.GetHint(), &eval_result, 0,
+                                   nullptr, button_object.ObjThis);
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf FireButtonClick _evalOnClick layer={} hr={} result={}",
+                         GetName().AsStdString(), eval_hr,
+                         TJS_SUCCEEDED(eval_hr)
+                             ? TVPVariantDebugString(eval_result)
+                             : "<failed>");
+        }
+        if(TJS_SUCCEEDED(eval_hr))
+            return;
+
         auto call_control_owner_button = [&]() -> bool {
             static ttstr control_owner_name(TJS_W("controlOwner"));
             static ttstr link_num_name(TJS_W("linkNum"));
@@ -6335,22 +6357,6 @@ void tTJSNI_BaseLayer::FireButtonClick() {
         };
 
         if(call_control_owner_button())
-            return;
-
-        static ttstr eval_click_name(TJS_W("_evalOnClick"));
-        tTJSVariant eval_result;
-        const tjs_error eval_hr =
-            button_object.FuncCall(0, eval_click_name.c_str(),
-                                   eval_click_name.GetHint(), &eval_result, 0,
-                                   nullptr, button_object.ObjThis);
-        if(TVPLayerInputTraceEnabled()) {
-            spdlog::info("LayerIntf FireButtonClick _evalOnClick layer={} hr={} result={}",
-                         GetName().AsStdString(), eval_hr,
-                         TJS_SUCCEEDED(eval_hr)
-                             ? TVPVariantDebugString(eval_result)
-                             : "<failed>");
-        }
-        if(TJS_SUCCEEDED(eval_hr))
             return;
 
         static ttstr eventname(TJS_W("onButtonClick"));
@@ -11663,7 +11669,7 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
     data.Width = cliprect.get_width();
     data.Height = cliprect.get_height();
 
-    iTVPBaseBitmap *src1bmp;
+    tTVPBaseTexture *src1bmp;
     bool use_cached_transition_frames =
         Owner->TransUpdateType == tutDivisible;
 #ifdef __ANDROID__
@@ -11741,12 +11747,22 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
 
         if(data.Dest == Owner->DestSLP) {
             cr.set_offsets(data.DestLeft, data.DestTop);
+            // Legacy opaque transition methods only define their RGB output;
+            // classic presenters ignored the alpha byte. Alpha-aware child
+            // composition makes that byte observable, so restore the
+            // ltOpaque contract before handing the frame upstream.
+            if(Owner->DisplayType == ltOpaque)
+                dest->FillMask(cr, 255);
             OrgDrawable->DrawCompleted(destrect, dest, cr, type, opacity);
         } else if(data.Dest == data.Src1) {
             cr.set_offsets(data.DestLeft, data.DestTop);
-            OrgDrawable->DrawCompleted(destrect, bmp, cr, type, opacity);
+            if(Owner->DisplayType == ltOpaque)
+                src1bmp->FillMask(cr, 255);
+            OrgDrawable->DrawCompleted(destrect, src1bmp, cr, type, opacity);
         } else if(data.Dest == data.Src2 && Owner->TransSrc) {
             cr.set_offsets(data.DestLeft, data.DestTop);
+            if(Owner->DisplayType == ltOpaque)
+                src->FillMask(cr, 255);
             OrgDrawable->DrawCompleted(destrect, src, cr, type, opacity);
         }
     } catch(...) {
