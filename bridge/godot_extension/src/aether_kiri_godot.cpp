@@ -1040,8 +1040,10 @@ bool DeferredGodotGpuDrainEnabled() {
         // transitions on Metal.  Execute those operations immediately by
         // default; the old batched behavior remains available for profiling
         // with AETHERKIRI_GODOT_DEFER_GPU_DRAIN=1.
-        return value != nullptr && value[0] != '\0' &&
-               std::strcmp(value, "0") != 0;
+        if (value == nullptr || value[0] == '\0') {
+            return TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT;
+        }
+        return std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }
