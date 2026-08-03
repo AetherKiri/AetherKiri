@@ -12367,27 +12367,57 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                                 /*var. type*/ tTJSNI_Layer);
         if(numparams < 4)
             return TJS_E_BADPARAMCOUNT;
-        _this->DrawText(
-            *param[0], *param[1], *param[2],
-            static_cast<tjs_uint32>((tjs_int64)*param[3]),
+
+        const tjs_int x = *param[0];
+        tjs_int y = *param[1];
+        const tjs_uint32 color =
+            static_cast<tjs_uint32>((tjs_int64)*param[3]);
+        const tjs_int opacity =
             (numparams >= 5 && param[4]->Type() != tvtVoid) ? (tjs_int)*param[4]
-                                                            : (tjs_int)255,
+                                                            : (tjs_int)255;
+        const bool antialiased =
             (numparams >= 6 && param[5]->Type() != tvtVoid)
                 ? param[5]->operator bool()
-                : true,
+                : true;
+        const tjs_int shadowLevel =
             (numparams >= 7 && param[6]->Type() != tvtVoid) ? (tjs_int)*param[6]
-                                                            : 0,
+                                                            : 0;
+        const tjs_uint32 shadowColor =
             (numparams >= 8 && param[7]->Type() != tvtVoid)
                 ? static_cast<tjs_uint32>((tjs_int64)*param[7])
-                : 0,
+                : 0;
+        const tjs_int shadowWidth =
             (numparams >= 9 && param[8]->Type() != tvtVoid) ? (tjs_int)*param[8]
-                                                            : 0,
+                                                            : 0;
+        const tjs_int shadowOffsetX =
             (numparams >= 10 && param[9]->Type() != tvtVoid)
                 ? (tjs_int)*param[9]
-                : 0,
+                : 0;
+        const tjs_int shadowOffsetY =
             (numparams >= 11 && param[10]->Type() != tvtVoid)
                 ? (tjs_int)*param[10]
-                : 0);
+                : 0;
+
+        // Some games draw a top-aligned name into a small transparent layer.
+        // Replacement fonts can have ink above the logical line box, so keep
+        // the glyph and its shadow inside the active clip just like the
+        // vertical-gradient text path below does.
+        try {
+            tTVPRect glyphBounds;
+            _this->GetFontGlyphDrawRect(*param[2], glyphBounds);
+            y = krkr::font::ClampTextOriginToClipTop(
+                y, glyphBounds.top,
+                krkr::font::ComputeTextShadowTopPadding(
+                    shadowLevel, shadowWidth, shadowOffsetY),
+                _this->GetClipTop());
+        } catch(...) {
+            // Bounds measurement is best-effort. Preserve the original draw
+            // behavior when the active font cannot report its glyph bounds.
+        }
+
+        _this->DrawText(
+            x, y, *param[2], color, opacity, antialiased, shadowLevel,
+            shadowColor, shadowWidth, shadowOffsetX, shadowOffsetY);
 
         return TJS_S_OK;
     }

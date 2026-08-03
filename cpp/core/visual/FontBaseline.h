@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 namespace krkr::font {
 
@@ -55,6 +56,24 @@ inline int ClampTextOriginToClipTop(int originY, int glyphTop,
                                    int outlineWidth, int clipTop) {
     const int inkTop = originY + glyphTop - std::max(0, outlineWidth);
     return inkTop < clipTop ? originY + (clipTop - inkTop) : originY;
+}
+
+// A blurred shadow grows by shadowWidth in every direction and is then moved
+// by the requested shadow offset.  Return only the extra space needed above
+// the unshadowed glyph; shadows that are moved far enough down need no extra
+// top padding.
+inline int ComputeTextShadowTopPadding(int shadowLevel, int shadowWidth,
+                                       int shadowOffsetY) {
+    if(shadowLevel == 0)
+        return 0;
+
+    const std::int64_t width = std::max<std::int64_t>(
+        -static_cast<std::int64_t>(shadowWidth),
+        static_cast<std::int64_t>(shadowWidth));
+    const std::int64_t padding =
+        std::max<std::int64_t>(0, width - shadowOffsetY);
+    return static_cast<int>(std::min<std::int64_t>(
+        padding, std::numeric_limits<int>::max()));
 }
 
 } // namespace krkr::font
