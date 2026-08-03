@@ -119,7 +119,7 @@ const UI_TEXT := {
         "settings.upscale": "缩放算法",
         "settings.upscale_desc": "外层拉伸画面时使用；Smooth/Linear 会做平滑采样",
         "settings.perf": "性能监控",
-        "settings.perf_desc": "显示帧率和图形 API 信息",
+        "settings.perf_desc": "显示帧率、进程内存、GPU 内存估算和图形 API 信息",
         "settings.fps_limit": "帧率限制",
         "settings.fps_limit_desc": "开启后使用下方目标帧率；关闭时交给显示刷新率",
         "settings.landscape": "锁定横屏",
@@ -299,7 +299,7 @@ const UI_TEXT := {
         "settings.upscale": "縮放演算法",
         "settings.upscale_desc": "外層拉伸畫面時使用；Smooth/Linear 會進行平滑取樣",
         "settings.perf": "效能監控",
-        "settings.perf_desc": "顯示幀率和圖形 API 資訊",
+        "settings.perf_desc": "顯示幀率、程序記憶體、GPU 記憶體估算和圖形 API 資訊",
         "settings.fps_limit": "幀率限制",
         "settings.fps_limit_desc": "開啟後使用下方目標幀率；關閉時交給顯示刷新率",
         "settings.landscape": "鎖定橫向",
@@ -479,7 +479,7 @@ const UI_TEXT := {
         "settings.upscale": "Scaling",
         "settings.upscale_desc": "Used when stretching the outer frame; Smooth/Linear apply filtered sampling",
         "settings.perf": "Performance Monitor",
-        "settings.perf_desc": "Show FPS and graphics API information",
+        "settings.perf_desc": "Show FPS, process memory, estimated GPU memory, and graphics API information",
         "settings.fps_limit": "FPS Limit",
         "settings.fps_limit_desc": "When enabled, use the target FPS below; otherwise follow the display refresh rate",
         "settings.landscape": "Lock Landscape",
@@ -659,7 +659,7 @@ const UI_TEXT := {
         "settings.upscale": "スケーリング",
         "settings.upscale_desc": "外側の画面を引き伸ばすときに使用します。Smooth/Linear は平滑化サンプリングを行います",
         "settings.perf": "パフォーマンス監視",
-        "settings.perf_desc": "FPS とグラフィックス API 情報を表示します",
+        "settings.perf_desc": "FPS、プロセスメモリ、GPU メモリ推定値、グラフィックス API 情報を表示します",
         "settings.fps_limit": "FPS 制限",
         "settings.fps_limit_desc": "有効時は下の目標 FPS を使用します。無効時はディスプレイのリフレッシュレートに従います",
         "settings.landscape": "横向き固定",
@@ -839,7 +839,7 @@ const UI_TEXT := {
         "settings.upscale": "스케일링",
         "settings.upscale_desc": "외부 화면을 늘릴 때 사용합니다. Smooth/Linear는 부드러운 샘플링을 적용합니다",
         "settings.perf": "성능 모니터",
-        "settings.perf_desc": "FPS와 그래픽 API 정보를 표시합니다",
+        "settings.perf_desc": "FPS, 프로세스 메모리, GPU 메모리 추정치와 그래픽 API 정보를 표시합니다",
         "settings.fps_limit": "FPS 제한",
         "settings.fps_limit_desc": "켜면 아래 목표 FPS를 사용하고, 끄면 디스플레이 주사율을 따릅니다",
         "settings.landscape": "가로 방향 고정",
@@ -1160,6 +1160,7 @@ var log_drain_accum := 0.0
 var perf_accum := 0.0
 var perf_log_accum := 0.0
 var state_log_accum := 0.0
+var memory_observed_peak_bytes := 0
 var startup_poll_accum := 0.0
 var cached_startup_state := STARTUP_IDLE
 var runtime_exit_cleanup_pending := false
@@ -2263,7 +2264,7 @@ func _layout_perf_overlay(window_size: Vector2) -> void:
     perf_panel.position = Vector2(horizontal_margin, 12.0)
     perf_panel.size = Vector2(
         maxf(240.0, window_size.x - horizontal_margin * 2.0),
-        112.0 if debug_overlay_mode == "detail" else 84.0
+        136.0 if debug_overlay_mode == "detail" else 104.0
     )
 
 func _set_perf_visible(visible: bool) -> void:
@@ -6563,16 +6564,64 @@ func _sync_debug_console_state() -> void:
     if diagnostic_session != null:
         diagnostic_session.set_game_active(game_running and available and not debug_console.is_open())
 
+func _runtime_memory_snapshot() -> Dictionary:
+    var memory: Dictionary = {}
+    if player != null and player.is_initialized() and player.has_method("get_memory_stats"):
+        memory = (player.get_memory_stats() as Dictionary).duplicate(true)
+    var resident_bytes := int(memory.get(
+        "process_resident_bytes",
+        int(memory.get("self_used_mb", 0)) * 1024 * 1024
+    ))
+    var footprint_bytes := int(memory.get(
+        "process_physical_footprint_bytes",
+        resident_bytes
+    ))
+    var current_bytes := footprint_bytes if footprint_bytes > 0 else resident_bytes
+    memory_observed_peak_bytes = maxi(memory_observed_peak_bytes, current_bytes)
+    var native_peak_bytes := int(memory.get(
+        "process_peak_physical_footprint_bytes",
+        current_bytes
+    ))
+    memory["current_bytes"] = current_bytes
+    memory["peak_bytes"] = maxi(memory_observed_peak_bytes, native_peak_bytes)
+    memory["resident_bytes"] = resident_bytes
+    memory["available_bytes"] = int(memory.get("process_available_bytes", 0))
+    memory["system_free_bytes"] = int(memory.get("system_free_mb", 0)) * 1024 * 1024
+    memory["system_total_bytes"] = int(memory.get("system_total_mb", 0)) * 1024 * 1024
+    memory["godot_static_bytes"] = int(Performance.get_monitor(Performance.MEMORY_STATIC))
+    memory["godot_static_peak_bytes"] = int(Performance.get_monitor(Performance.MEMORY_STATIC_MAX))
+    var gpu_texture_bytes := int(memory.get("gpu_texture_bytes", 0))
+    var gpu_buffer_bytes := int(memory.get("gpu_buffer_bytes", 0))
+    memory["gpu_total_bytes"] = maxi(
+        int(memory.get("gpu_total_bytes", 0)),
+        gpu_texture_bytes + gpu_buffer_bytes
+    )
+    memory["cache_bytes"] = (
+        int(memory.get("graphic_cache_bytes", 0))
+        + int(memory.get("xp3_segment_cache_bytes", 0))
+        + int(memory.get("psb_cache_bytes", 0))
+    )
+    return memory
+
+func _format_monitor_bytes(value: int) -> String:
+    if value <= 0:
+        return "-"
+    if value >= 1024 * 1024 * 1024:
+        return "%.2f GiB" % (float(value) / float(1024 * 1024 * 1024))
+    if value >= 1024 * 1024:
+        return "%.0f MiB" % (float(value) / float(1024 * 1024))
+    if value >= 1024:
+        return "%.0f KiB" % (float(value) / 1024.0)
+    return "%d B" % value
+
 func _diagnostic_marker_context() -> Dictionary:
-    var memory := {}
+    var memory := _runtime_memory_snapshot()
     var plugins := {}
     var renderer := selected_backend
     if player != null and player.is_initialized():
         var renderer_info := String(player.get_renderer_info())
         if not renderer_info.is_empty():
             renderer = renderer_info
-        if player.has_method("get_memory_stats"):
-            memory = player.get_memory_stats()
         if player.has_method("get_plugin_debug_info"):
             var parsed = JSON.parse_string(String(player.get_plugin_debug_info()))
             if parsed is Dictionary:
@@ -6606,7 +6655,7 @@ func _diagnostic_marker_context() -> Dictionary:
 
 func _debug_console_snapshot() -> Dictionary:
     var session: Dictionary = diagnostic_session.status_snapshot() if diagnostic_session != null else {}
-    var memory: Dictionary = {}
+    var memory: Dictionary = _runtime_memory_snapshot()
     var plugins: Dictionary = {}
     var renderer: String = selected_backend
     var texture_backend: String = "-"
@@ -6615,13 +6664,6 @@ func _debug_console_snapshot() -> Dictionary:
         if not renderer_info.is_empty():
             renderer = renderer_info
         texture_backend = String(player.get_frame_texture_backend())
-        if player.has_method("get_memory_stats"):
-            var raw_memory: Dictionary = player.get_memory_stats()
-            memory = raw_memory.duplicate(true)
-            memory["current_bytes"] = int(raw_memory.get("self_used_mb", 0)) * 1024 * 1024
-            memory["system_free_bytes"] = int(raw_memory.get("system_free_mb", 0)) * 1024 * 1024
-            memory["system_total_bytes"] = int(raw_memory.get("system_total_mb", 0)) * 1024 * 1024
-            memory["cache_bytes"] = int(raw_memory.get("graphic_cache_bytes", 0)) + int(raw_memory.get("xp3_segment_cache_bytes", 0)) + int(raw_memory.get("psb_cache_bytes", 0))
         if player.has_method("get_plugin_debug_info"):
             var parsed = JSON.parse_string(String(player.get_plugin_debug_info()))
             if parsed is Dictionary:
@@ -8070,6 +8112,7 @@ func _process(delta: float) -> void:
             return
         var fallback := _renderer_fallback(renderer)
         var texture_backend: String = String(player.get_frame_texture_backend()) if game_running else "none"
+        var memory := _runtime_memory_snapshot()
         var summary_text := "Backend: %s | FPS: %d | Frame: %.2f ms | Texture: %s | Size: %dx%d | Surface: %s %dx%d | Fallback: %s | Errors: %d" % [
             renderer_summary,
             Engine.get_frames_per_second(),
@@ -8082,6 +8125,16 @@ func _process(delta: float) -> void:
             current_surface_size.y,
             fallback,
             render_errors,
+        ]
+        summary_text += "\nMemory: App %s | Peak %s | Headroom %s | Godot %s | GPU(est.) %s (Tex %s / Buf %s) | Cache %s" % [
+            _format_monitor_bytes(int(memory.get("current_bytes", 0))),
+            _format_monitor_bytes(int(memory.get("peak_bytes", 0))),
+            _format_monitor_bytes(int(memory.get("available_bytes", 0))),
+            _format_monitor_bytes(int(memory.get("godot_static_bytes", 0))),
+            _format_monitor_bytes(int(memory.get("gpu_total_bytes", 0))),
+            _format_monitor_bytes(int(memory.get("gpu_texture_bytes", 0))),
+            _format_monitor_bytes(int(memory.get("gpu_buffer_bytes", 0))),
+            _format_monitor_bytes(int(memory.get("cache_bytes", 0))),
         ]
         if debug_overlay_mode == "detail" and diagnostic_session != null:
             var frame_summary: Dictionary = diagnostic_session.latest_frame_summary

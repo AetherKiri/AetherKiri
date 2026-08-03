@@ -630,7 +630,9 @@ namespace motion::detail {
 
     std::shared_ptr<MotionSnapshot> loadMotionSnapshot(const ttstr &path,
                                                        tjs_int decryptSeed);
-    tTJSVariant loadPSBVariant(const ttstr &path, tjs_int decryptSeed);
+    tTJSVariant loadPSBVariant(
+        const ttstr &path, tjs_int decryptSeed,
+        std::shared_ptr<MotionSnapshot> *loadedSnapshot = nullptr);
 
     void registerModuleSnapshot(const tTJSVariant &module,
                                 const std::shared_ptr<MotionSnapshot> &snapshot);

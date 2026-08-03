@@ -1026,6 +1026,53 @@ TEST_CASE("motionplayer draw cache and playback state") {
     REQUIRE(variantCount(player.motionList()) == 0);
 }
 
+TEST_CASE("PSB collection back references do not retain parsed trees") {
+    auto child = std::make_shared<PSB::PSBDictionary>();
+    std::weak_ptr<PSB::PSBDictionary> releasedParent;
+    {
+        auto parent = std::make_shared<PSB::PSBDictionary>();
+        parent->emplace("child", child);
+        child->parent = parent;
+        releasedParent = parent;
+    }
+
+    REQUIRE(releasedParent.expired());
+}
+
+TEST_CASE("motion snapshot registry does not own expired snapshots") {
+    const auto module = motion::detail::makeDictionary({});
+    std::weak_ptr<motion::detail::MotionSnapshot> releasedSnapshot;
+    {
+        auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+        snapshot->moduleValue = module;
+        releasedSnapshot = snapshot;
+        motion::detail::registerModuleSnapshot(module, snapshot);
+        REQUIRE(motion::detail::lookupModuleSnapshot(module) == snapshot);
+    }
+
+    REQUIRE(releasedSnapshot.expired());
+    REQUIRE_FALSE(motion::detail::lookupModuleSnapshot(module));
+}
+
+TEST_CASE("resource manager owns snapshots only while their module is cached") {
+    const auto module = motion::detail::makeDictionary({});
+    auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+    snapshot->path = "memory-lifetime.mtn";
+    snapshot->moduleValue = module;
+    motion::detail::registerModuleSnapshot(module, snapshot);
+
+    std::weak_ptr<motion::detail::MotionSnapshot> releasedSnapshot = snapshot;
+    motion::ResourceManager manager;
+    manager.rememberLoadedModule(
+        ttstr(TJS_W("memory-lifetime.mtn")), module, snapshot);
+    snapshot.reset();
+
+    REQUIRE_FALSE(releasedSnapshot.expired());
+    manager.unload(ttstr(TJS_W("memory-lifetime.mtn")));
+    REQUIRE(releasedSnapshot.expired());
+    REQUIRE(manager.uniqueCachedModuleCount() == 0);
+}
+
 TEST_CASE("emoteplayer timeline state and todo stubs") {
     setEmoteSeed();
 
