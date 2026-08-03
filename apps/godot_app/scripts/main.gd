@@ -1740,7 +1740,7 @@ func _build_video_view() -> void:
     video_subtitle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     video_subtitle_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
     video_subtitle_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    video_subtitle_label.add_theme_font_size_override("font_size", 30)
+    video_subtitle_label.add_theme_font_size_override("font_size", 20 if _mobile_runtime() else 24)
     video_subtitle_label.add_theme_color_override("font_color", Color.WHITE)
     video_subtitle_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.95))
     video_subtitle_label.add_theme_constant_override("shadow_offset_x", 2)
@@ -1772,7 +1772,7 @@ func _build_video_view() -> void:
     video_seek_feedback_label = Label.new()
     video_seek_feedback_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     video_seek_feedback_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    video_seek_feedback_label.add_theme_font_size_override("font_size", 23)
+    video_seek_feedback_label.add_theme_font_size_override("font_size", 17 if _mobile_runtime() else 19)
     video_seek_feedback_label.add_theme_color_override("font_color", Color.WHITE)
     video_seek_feedback_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
     video_seek_feedback.add_child(video_seek_feedback_label)
@@ -1799,7 +1799,7 @@ func _build_video_view() -> void:
     video_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     video_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     video_title_label.clip_text = true
-    video_title_label.add_theme_font_size_override("font_size", 19)
+    video_title_label.add_theme_font_size_override("font_size", 15 if _mobile_runtime() else 16)
     video_title_label.add_theme_color_override("font_color", Color.WHITE)
     top_row.add_child(video_title_label)
 
@@ -3976,7 +3976,7 @@ func _video_overlay_button(text: String, min_width: float) -> Button:
     button.clip_text = true
     button.focus_mode = Control.FOCUS_ALL
     button.custom_minimum_size = Vector2(min_width, 48)
-    button.add_theme_font_size_override("font_size", 18)
+    button.add_theme_font_size_override("font_size", 15)
     button.add_theme_color_override("font_color", Color.WHITE)
     button.add_theme_stylebox_override("normal", _panel_style(18, Color(0.12, 0.13, 0.17, 0.82), Color(1, 1, 1, 0.12), 1))
     button.add_theme_stylebox_override("hover", _panel_style(18, Color(0.22, 0.23, 0.28, 0.94), Color(1, 1, 1, 0.28), 1))
@@ -3985,7 +3985,7 @@ func _video_overlay_button(text: String, min_width: float) -> Button:
     return button
 
 func _style_video_option_button(button: OptionButton) -> void:
-    button.add_theme_font_size_override("font_size", 17)
+    button.add_theme_font_size_override("font_size", 14)
     button.add_theme_color_override("font_color", Color.WHITE)
     button.add_theme_color_override("font_hover_color", Color.WHITE)
     button.add_theme_color_override("font_pressed_color", Color.WHITE)
@@ -6303,7 +6303,7 @@ func _video_card(video: Dictionary) -> Control:
     shade.anchor_top = 1.0
     shade.anchor_right = 1.0
     shade.anchor_bottom = 1.0
-    shade.offset_top = -118.0
+    shade.offset_top = -102.0
     shade.add_theme_stylebox_override("panel", _panel_style(8, Color(0.0, 0.0, 0.0, 0.62), Color(0, 0, 0, 0), 0))
     frame.add_child(shade)
 
@@ -6313,9 +6313,9 @@ func _video_card(video: Dictionary) -> Control:
     text_margin.anchor_top = 1.0
     text_margin.anchor_right = 1.0
     text_margin.anchor_bottom = 1.0
-    text_margin.offset_top = -118.0
+    text_margin.offset_top = -102.0
     text_margin.add_theme_constant_override("margin_left", 16)
-    text_margin.add_theme_constant_override("margin_top", 18)
+    text_margin.add_theme_constant_override("margin_top", 14)
     text_margin.add_theme_constant_override("margin_right", 16)
     text_margin.add_theme_constant_override("margin_bottom", 16)
     frame.add_child(text_margin)
@@ -6329,7 +6329,7 @@ func _video_card(video: Dictionary) -> Control:
     title.text = String(video.get("name", path.get_file()))
     title.mouse_filter = Control.MOUSE_FILTER_IGNORE
     title.clip_text = true
-    title.add_theme_font_size_override("font_size", 21)
+    title.add_theme_font_size_override("font_size", 17)
     title.add_theme_color_override("font_color", Color.WHITE)
     labels.add_child(title)
 
@@ -6337,7 +6337,7 @@ func _video_card(video: Dictionary) -> Control:
     sub.text = detail
     sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
     sub.clip_text = true
-    sub.add_theme_font_size_override("font_size", 15)
+    sub.add_theme_font_size_override("font_size", 13)
     sub.add_theme_color_override("font_color", Color(1, 1, 1, 0.72))
     labels.add_child(sub)
 
