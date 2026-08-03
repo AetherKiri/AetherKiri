@@ -3835,7 +3835,7 @@ func _reset_shell_scroll_drag() -> void:
         _cancel_shell_scroll_press(state)
     shell_scroll_drag_states.clear()
     for key_variant in shell_scroll_tweens.keys():
-        var tween := shell_scroll_tweens.get(key_variant)
+        var tween: Tween = shell_scroll_tweens.get(key_variant) as Tween
         if tween is Tween and tween.is_valid():
             tween.kill()
     shell_scroll_tweens.clear()
@@ -3900,7 +3900,7 @@ func _stop_shell_scroll_tween(scroll: ScrollContainer) -> void:
     if scroll == null or not is_instance_valid(scroll):
         return
     var scroll_key := scroll.get_instance_id()
-    var tween := shell_scroll_tweens.get(scroll_key)
+    var tween: Tween = shell_scroll_tweens.get(scroll_key) as Tween
     if tween is Tween and tween.is_valid():
         tween.kill()
     shell_scroll_tweens.erase(scroll_key)
