@@ -102,6 +102,7 @@ const UI_TEXT := {
         "video.open_failed": "无法播放该视频：%s",
         "home.status": "Godot Native  /  视觉小说库",
         "nav.library": "游戏库",
+        "nav.videos": "视频库",
         "nav.collapse_sidebar": "收起侧边栏",
         "nav.expand_sidebar": "展开侧边栏",
         "home.empty_title": "尚未添加任何游戏",
@@ -286,6 +287,7 @@ const UI_TEXT := {
         "video.open_failed": "無法播放該影片：%s",
         "home.status": "Godot Native  /  視覺小說庫",
         "nav.library": "遊戲庫",
+        "nav.videos": "影片庫",
         "nav.collapse_sidebar": "收合側邊欄",
         "nav.expand_sidebar": "展開側邊欄",
         "home.empty_title": "尚未加入任何遊戲",
@@ -470,6 +472,7 @@ const UI_TEXT := {
         "video.open_failed": "Could not play this video: %s",
         "home.status": "Godot Native  /  Visual Novel Library",
         "nav.library": "Library",
+        "nav.videos": "Videos",
         "nav.collapse_sidebar": "Collapse sidebar",
         "nav.expand_sidebar": "Expand sidebar",
         "home.empty_title": "No games added yet",
@@ -654,6 +657,7 @@ const UI_TEXT := {
         "video.open_failed": "動画を再生できません：%s",
         "home.status": "Godot Native  /  ビジュアルノベルライブラリ",
         "nav.library": "ライブラリ",
+        "nav.videos": "ビデオ",
         "nav.collapse_sidebar": "サイドバーを折りたたむ",
         "nav.expand_sidebar": "サイドバーを展開",
         "home.empty_title": "ゲームはまだ追加されていません",
@@ -838,6 +842,7 @@ const UI_TEXT := {
         "video.open_failed": "비디오를 재생할 수 없습니다: %s",
         "home.status": "Godot Native  /  비주얼 노벨 라이브러리",
         "nav.library": "라이브러리",
+        "nav.videos": "비디오",
         "nav.collapse_sidebar": "사이드바 접기",
         "nav.expand_sidebar": "사이드바 펼치기",
         "home.empty_title": "아직 추가된 게임이 없습니다",
@@ -1064,8 +1069,10 @@ var shell_sidebar: PanelContainer
 var shell_compact_header: PanelContainer
 var shell_route_label: Label
 var shell_library_button: Button
+var shell_video_button: Button
 var shell_settings_button: Button
 var shell_compact_library_button: Button
+var shell_compact_video_button: Button
 var shell_compact_settings_button: Button
 var shell_status_label: Label
 var shell_sidebar_brand: HBoxContainer
@@ -2048,6 +2055,8 @@ func _build_shell_chrome() -> void:
 
     shell_library_button = _shell_nav_button(_t("nav.library"), ICON_LIBRARY, _show_home)
     sidebar.add_child(shell_library_button)
+    shell_video_button = _shell_nav_button(_t("nav.videos"), ICON_VIDEO, _show_video_library)
+    sidebar.add_child(shell_video_button)
     shell_settings_button = _shell_nav_button(_t("settings.title"), ICON_SETTINGS, _show_settings)
     sidebar.add_child(shell_settings_button)
 
@@ -2117,6 +2126,8 @@ func _build_shell_chrome() -> void:
     compact_row.add_child(shell_route_label)
     shell_compact_library_button = _shell_compact_button(ICON_LIBRARY, _t("nav.library"), _show_home)
     compact_row.add_child(shell_compact_library_button)
+    shell_compact_video_button = _shell_compact_button(ICON_VIDEO, _t("nav.videos"), _show_video_library)
+    compact_row.add_child(shell_compact_video_button)
     shell_compact_settings_button = _shell_compact_button(ICON_SETTINGS, _t("settings.title"), _show_settings)
     compact_row.add_child(shell_compact_settings_button)
 
@@ -2156,8 +2167,10 @@ func _sync_shell_route(route: String) -> void:
     if shell_route_label != null:
         shell_route_label.text = "AetherKiri"
     _apply_shell_nav_state(shell_library_button, route == "library")
+    _apply_shell_nav_state(shell_video_button, route == "videos")
     _apply_shell_nav_state(shell_settings_button, route == "settings")
     _apply_shell_compact_state(shell_compact_library_button, route == "library")
+    _apply_shell_compact_state(shell_compact_video_button, route == "videos")
     _apply_shell_compact_state(shell_compact_settings_button, route == "settings")
 
 func _apply_shell_nav_state(button: Button, selected: bool) -> void:
@@ -2197,7 +2210,7 @@ func _toggle_sidebar() -> void:
         _animate_sidebar_width(target_width, true)
         return
     shell_sidebar_tween = shell_sidebar.create_tween().set_parallel(true)
-    for item in [shell_sidebar_brand_labels, shell_library_button, shell_settings_button, shell_sidebar_status, shell_sidebar_version]:
+    for item in [shell_sidebar_brand_labels, shell_library_button, shell_video_button, shell_settings_button, shell_sidebar_status, shell_sidebar_version]:
         shell_sidebar_tween.tween_property(item, "modulate:a", 0.0, 0.10).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     shell_sidebar_tween.chain().tween_callback(func():
         _apply_sidebar_presentation(false)
@@ -2225,7 +2238,7 @@ func _animate_sidebar_width(target_width: float, expanding: bool) -> void:
     )
 
 func _reset_sidebar_item_modulates() -> void:
-    for item in [shell_sidebar_brand_labels, shell_library_button, shell_settings_button, shell_sidebar_status, shell_sidebar_version]:
+    for item in [shell_sidebar_brand_labels, shell_library_button, shell_video_button, shell_settings_button, shell_sidebar_status, shell_sidebar_version]:
         if item != null and is_instance_valid(item):
             item.modulate.a = 1.0
 
@@ -2238,24 +2251,30 @@ func _apply_sidebar_presentation(animate_labels: bool) -> void:
     shell_sidebar_status.visible = not compact_visual
     shell_sidebar_version.visible = not compact_visual
     shell_library_button.text = "" if compact_visual else _t("nav.library")
+    shell_video_button.text = "" if compact_visual else _t("nav.videos")
     shell_settings_button.text = "" if compact_visual else _t("settings.title")
     shell_library_button.tooltip_text = _t("nav.library") if compact_visual else ""
+    shell_video_button.tooltip_text = _t("nav.videos") if compact_visual else ""
     shell_settings_button.tooltip_text = _t("settings.title") if compact_visual else ""
     shell_library_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
+    shell_video_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
     shell_settings_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
     shell_library_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
+    shell_video_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
     shell_settings_button.alignment = HORIZONTAL_ALIGNMENT_CENTER if compact_visual else HORIZONTAL_ALIGNMENT_LEFT
     shell_sidebar_toggle.text = "☰"
     shell_sidebar_toggle.tooltip_text = _t("nav.expand_sidebar") if shell_sidebar_collapsed else _t("nav.collapse_sidebar")
     shell_sidebar_toggle.accessibility_name = shell_sidebar_toggle.tooltip_text
     _apply_shell_nav_state(shell_library_button, shell_route == "library")
+    _apply_shell_nav_state(shell_video_button, shell_route == "videos")
     _apply_shell_nav_state(shell_settings_button, shell_route == "settings")
     if animate_labels and not compact_visual:
         ui_motion.enter(shell_sidebar_brand_labels, Vector2.ZERO, 0.03)
         ui_motion.enter(shell_library_button, Vector2.ZERO, 0.04)
-        ui_motion.enter(shell_settings_button, Vector2.ZERO, 0.06)
-        ui_motion.enter(shell_sidebar_status, Vector2.ZERO, 0.06)
-        ui_motion.enter(shell_sidebar_version, Vector2.ZERO, 0.08)
+        ui_motion.enter(shell_video_button, Vector2.ZERO, 0.06)
+        ui_motion.enter(shell_settings_button, Vector2.ZERO, 0.08)
+        ui_motion.enter(shell_sidebar_status, Vector2.ZERO, 0.08)
+        ui_motion.enter(shell_sidebar_version, Vector2.ZERO, 0.10)
 
 func _apply_sidebar_width(width: float) -> void:
     if shell_sidebar == null or shell_content == null:
@@ -2770,11 +2789,7 @@ func _layout_home_view(window_size: Vector2) -> void:
     home_subtitle_label.add_theme_font_size_override("font_size", 13 if phone else 14)
     home_actions.alignment = BoxContainer.ALIGNMENT_END
     home_primary_button.text = "" if OS.get_name() == "iOS" else "+"
-    var primary_tooltip := _t("video.refresh") if OS.get_name() == "iOS" else _t("video.import")
-    if home_library_mode == "game":
-        primary_tooltip = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
-    home_primary_button.tooltip_text = primary_tooltip
-    home_primary_button.accessibility_name = home_primary_button.tooltip_text
+    _sync_home_action_labels()
     var fab_size := 52.0 if phone else 56.0
     var fab_inset := 12.0 if phone else (16.0 if compact else 20.0)
     home_primary_button.offset_left = -fab_size - fab_inset
@@ -2798,6 +2813,22 @@ func _layout_home_view(window_size: Vector2) -> void:
         home_layout_initialized = true
         if game_list.get_child_count() > 0:
             call_deferred("_refresh_games")
+
+func _sync_home_header_text() -> void:
+    if is_instance_valid(home_title_label):
+        home_title_label.text = _t("nav.videos") if home_library_mode == "video" else _t("nav.library")
+    if is_instance_valid(home_subtitle_label):
+        home_subtitle_label.text = _t("video.status") if home_library_mode == "video" else _t("home.game_count", [known_games.size()])
+
+func _sync_home_action_labels() -> void:
+    if is_instance_valid(home_primary_button):
+        var primary_text := _t("video.refresh") if OS.get_name() == "iOS" else _t("video.import")
+        if home_library_mode == "game":
+            primary_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
+        home_primary_button.tooltip_text = primary_text
+        home_primary_button.accessibility_name = primary_text
+    if is_instance_valid(home_guide_button):
+        home_guide_button.tooltip_text = _t("video.guide") if home_library_mode == "video" else _t("home.import_guide")
 
 func _build_home_view() -> void:
     home_layout_initialized = false
@@ -2848,20 +2879,6 @@ func _build_home_view() -> void:
     home_guide_button.custom_minimum_size = Vector2(ui_tokens.CONTROL_HEIGHT, ui_tokens.CONTROL_HEIGHT)
     _apply_shell_compact_state(home_guide_button, false)
     home_actions.add_child(home_guide_button)
-
-    var tabs := HBoxContainer.new()
-    tabs.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-    tabs.custom_minimum_size = Vector2(548, 42)
-    tabs.add_theme_constant_override("separation", 8)
-    page.add_child(tabs)
-    home_game_tab = _library_tab_button(_t("home.status"))
-    home_game_tab.custom_minimum_size = Vector2(284, 42)
-    home_game_tab.pressed.connect(func(): _select_home_library("game"))
-    tabs.add_child(home_game_tab)
-    home_video_tab = _library_tab_button(_t("video.status"))
-    home_video_tab.custom_minimum_size = Vector2(256, 42)
-    home_video_tab.pressed.connect(func(): _select_home_library("video"))
-    tabs.add_child(home_video_tab)
 
     var library_body := Control.new()
     library_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -4535,19 +4552,20 @@ func _refresh_language_texts() -> void:
         debug_console.refresh_language()
     if is_instance_valid(shell_library_button):
         shell_library_button.text = _t("nav.library")
+    if is_instance_valid(shell_video_button):
+        shell_video_button.text = _t("nav.videos")
     if is_instance_valid(shell_settings_button):
         shell_settings_button.text = _t("settings.title")
     if is_instance_valid(shell_compact_library_button):
         shell_compact_library_button.tooltip_text = _t("nav.library")
+    if is_instance_valid(shell_compact_video_button):
+        shell_compact_video_button.tooltip_text = _t("nav.videos")
     if is_instance_valid(shell_compact_settings_button):
         shell_compact_settings_button.tooltip_text = _t("settings.title")
     if is_instance_valid(shell_sidebar_toggle):
         _apply_sidebar_presentation(false)
     _sync_shell_route(shell_route)
-    if is_instance_valid(home_title_label):
-        home_title_label.text = _t("nav.library")
-    if is_instance_valid(home_subtitle_label):
-        home_subtitle_label.text = _t("home.game_count", [known_games.size()])
+    _sync_home_header_text()
     if is_instance_valid(home_game_tab):
         _set_pill_button_text(home_game_tab, _t("home.status"))
     if is_instance_valid(home_video_tab):
@@ -4562,15 +4580,7 @@ func _refresh_language_texts() -> void:
         video_empty_help_label.text = _video_empty_help_text()
     if is_instance_valid(empty_primary_button):
         _set_pill_button_text(empty_primary_button, _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"))
-    if is_instance_valid(home_primary_button):
-        var primary_text := _t("video.refresh") if OS.get_name() == "iOS" else _t("video.import")
-        if home_library_mode == "game":
-            primary_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
-        home_primary_button.text = "" if home_header_compact else primary_text
-        home_primary_button.tooltip_text = primary_text
-        home_primary_button.accessibility_name = home_primary_button.tooltip_text
-    if is_instance_valid(home_guide_button):
-        home_guide_button.tooltip_text = _t("video.guide") if home_library_mode == "video" else _t("home.import_guide")
+    _sync_home_action_labels()
     if is_instance_valid(loading_title_label):
         loading_title_label.text = _t("loading.title")
 
@@ -4588,6 +4598,7 @@ func _select_home_library(mode: String) -> void:
     if not mode in ["game", "video"]:
         return
     home_library_mode = mode
+    _sync_shell_route("videos" if mode == "video" else "library")
     _apply_home_library_visibility()
     _refresh_language_texts()
     if mode == "video":
@@ -4625,6 +4636,8 @@ func _shell_view_for_route(route: String) -> Control:
             return settings_view
         "detail":
             return detail_view
+        "videos":
+            return home_view
         _:
             return home_view
 
@@ -4643,6 +4656,14 @@ func _animate_shell_route(outgoing: Control, incoming: Control, lift: bool = tru
     ui_motion.route_transition(outgoing, incoming, lift)
 
 func _show_home() -> void:
+    _show_library("game")
+
+func _show_video_library() -> void:
+    _show_library("video")
+
+func _show_library(mode: String) -> void:
+    if not mode in ["game", "video"]:
+        mode = "game"
     var previous_route := shell_route
     var returning_from_detail := previous_route == "detail" and not hero_source_path.is_empty()
     var detail_rect := detail_hero_cover.get_global_rect() if is_instance_valid(detail_hero_cover) else Rect2()
@@ -4651,10 +4672,14 @@ func _show_home() -> void:
     _discard_settings_draft()
     _set_game_background(false)
     modal_layer.visible = false
-    _sync_shell_route("library")
-    _refresh_games()
-    if home_library_mode == "video":
+    home_library_mode = mode
+    _sync_home_header_text()
+    _sync_home_action_labels()
+    _sync_shell_route("videos" if mode == "video" else "library")
+    if mode == "video":
         _refresh_videos()
+    else:
+        _refresh_games()
     if previous_route != "library":
         _animate_shell_route(outgoing, home_view, not returning_from_detail)
     if returning_from_detail:
@@ -5918,8 +5943,7 @@ func _refresh_games() -> void:
     if library_changed:
         _sync_web_user_fs("builtin_demo_reconciled")
     known_games = _sorted_games(known_games)
-    if is_instance_valid(home_subtitle_label):
-        home_subtitle_label.text = _t("home.game_count", [known_games.size()])
+    _sync_home_header_text()
     for child in game_list.get_children():
         child.queue_free()
     var animate_cards := not home_cards_animated_once
@@ -5944,6 +5968,7 @@ func _refresh_videos() -> void:
     known_videos.sort_custom(func(a: Dictionary, b: Dictionary):
         return String(a.get("name", "")).naturalnocasecmp_to(String(b.get("name", ""))) < 0
     )
+    _sync_home_header_text()
     if video_list != null:
         for child in video_list.get_children():
             child.queue_free()
