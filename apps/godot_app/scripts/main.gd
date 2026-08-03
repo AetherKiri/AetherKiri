@@ -3151,12 +3151,13 @@ func _rebuild_settings_view() -> void:
         _t("settings.legal_open"),
         func(): _show_legal_agreement(false)
     ))
-    _add_settings_row(about_group, _settings_action_row(
-        _t("settings.ios_statement"),
-        _t("settings.ios_statement_desc"),
-        _t("settings.ios_statement_open"),
-        _show_ios_additional_statement
-    ))
+    if _effective_legal_platform_name() == "iOS":
+        _add_settings_row(about_group, _settings_action_row(
+            _t("settings.ios_statement"),
+            _t("settings.ios_statement_desc"),
+            _t("settings.ios_statement_open"),
+            _show_ios_additional_statement
+        ))
     _add_settings_row(about_group, _settings_value_row(
         _t("settings.version"),
         str(ProjectSettings.get_setting("application/config/version", "development"))
@@ -4159,33 +4160,37 @@ func _settings_value_row(title: String, value: String) -> Control:
     return margin
 
 func _settings_action_row(title: String, subtitle: String, action_text: String, action: Callable) -> Control:
-    var panel := PanelContainer.new()
-    panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
-    var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 92)
-    row.add_theme_constant_override("separation", 18)
-    panel.add_child(row)
+    var margin := MarginContainer.new()
+    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    margin.add_theme_constant_override("margin_left", 2)
+    margin.add_theme_constant_override("margin_top", 10)
+    margin.add_theme_constant_override("margin_right", 2)
+    margin.add_theme_constant_override("margin_bottom", 10)
+    var compact := shell_content.size.x < 640.0
+    var row: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
+    row.custom_minimum_size = Vector2(0, 126 if compact else 92)
+    row.add_theme_constant_override("separation", 12 if compact else 18)
+    margin.add_child(row)
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     labels.add_theme_constant_override("separation", 6)
     row.add_child(labels)
     var title_label := Label.new()
     title_label.text = title
-    title_label.add_theme_font_size_override("font_size", 20)
-    title_label.add_theme_color_override("font_color", color_text)
+    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
     var sub := Label.new()
     sub.text = subtitle
     sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    sub.add_theme_font_size_override("font_size", 16)
-    sub.add_theme_color_override("font_color", color_muted)
+    sub.add_theme_font_size_override("font_size", 13)
+    sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
     var open := _pill_button(action_text)
     _configure_settings_action_button(open)
     open.pressed.connect(action)
     row.add_child(open)
-    return panel
+    return margin
 
 func _configure_settings_action_button(button: Button) -> void:
     button.custom_minimum_size = SETTINGS_ACTION_BUTTON_SIZE
@@ -4193,13 +4198,17 @@ func _configure_settings_action_button(button: Button) -> void:
     button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
 func _settings_iap_product_row() -> Control:
-    var panel := PanelContainer.new()
-    panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    panel.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
-    var row := HBoxContainer.new()
-    row.custom_minimum_size = Vector2(0, 112)
-    row.add_theme_constant_override("separation", 18)
-    panel.add_child(row)
+    var margin := MarginContainer.new()
+    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    margin.add_theme_constant_override("margin_left", 2)
+    margin.add_theme_constant_override("margin_top", 10)
+    margin.add_theme_constant_override("margin_right", 2)
+    margin.add_theme_constant_override("margin_bottom", 10)
+    var compact := shell_content.size.x < 640.0
+    var row: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
+    row.custom_minimum_size = Vector2(0, 150 if compact else 112)
+    row.add_theme_constant_override("separation", 12 if compact else 18)
+    margin.add_child(row)
 
     var labels := VBoxContainer.new()
     labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -4208,21 +4217,21 @@ func _settings_iap_product_row() -> Control:
 
     var title_label := Label.new()
     title_label.text = _t("iap.list_limit.title")
-    title_label.add_theme_font_size_override("font_size", 20)
-    title_label.add_theme_color_override("font_color", color_text)
+    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title_label)
 
     var description := Label.new()
     description.text = _t("iap.list_limit.desc")
     description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    description.add_theme_font_size_override("font_size", 16)
-    description.add_theme_color_override("font_color", color_muted)
+    description.add_theme_font_size_override("font_size", 13)
+    description.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(description)
 
     var status := Label.new()
     status.text = _iap_product_status_text()
     status.add_theme_font_size_override("font_size", 15)
-    status.add_theme_color_override("font_color", color_accent_soft)
+    status.add_theme_color_override("font_color", ui_tokens.accent)
     labels.add_child(status)
 
     var entitled := bool(iap_state.get("entitled", false))
@@ -4238,7 +4247,7 @@ func _settings_iap_product_row() -> Control:
     _sync_pill_button_content_state(purchase)
     purchase.pressed.connect(func(): _begin_iap_purchase("settings"))
     row.add_child(purchase)
-    return panel
+    return margin
 
 func _iap_product_status_text() -> String:
     if bool(iap_state.get("entitled", false)):
