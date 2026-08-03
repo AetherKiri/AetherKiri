@@ -1389,6 +1389,7 @@ const HOME_ROW_HEIGHT := 112.0
 const HOME_ROW_COVER_WIDTH := 116.0
 const HOME_COMPACT_BREAKPOINT := 700.0
 const HOME_PHONE_BREAKPOINT := 520.0
+const DETAIL_COMPACT_BREAKPOINT := 960.0
 
 var color_bg := Color(0.055, 0.059, 0.071, 1.0)
 var color_game_bg := Color(0, 0, 0, 1)
@@ -4852,7 +4853,7 @@ func _show_detail(game: Dictionary, source: Control = null) -> void:
     if available_size.x <= 0.0 or available_size.y <= 0.0:
         available_size = get_viewport_rect().size
     available_size.x = maxf(320.0, available_size.x - detail_scroll.get_v_scroll_bar().get_combined_minimum_size().x)
-    var compact := available_size.x < 760.0
+    var compact := available_size.x < DETAIL_COMPACT_BREAKPOINT
     var gutter := 20 if compact else 32
 
     var content := MarginContainer.new()
@@ -4913,7 +4914,6 @@ func _build_desktop_detail(game: Dictionary) -> Control:
     information.add_theme_constant_override("separation", 14)
     body.add_child(information)
     information.add_child(_detail_identity(game, false))
-    information.add_child(_detail_launch_button())
     information.add_child(_detail_tools(game))
     information.add_child(_detail_information_panel(game))
     information.add_child(_detail_remove_button(game))
@@ -4935,7 +4935,6 @@ func _build_compact_detail(game: Dictionary) -> Control:
     primary.add_theme_constant_override("separation", 10)
     summary.add_child(primary)
     primary.add_child(_detail_identity(game, true))
-    primary.add_child(_detail_launch_button())
 
     body.add_child(_detail_tools(game))
     body.add_child(_detail_information_panel(game))
@@ -5006,11 +5005,12 @@ func _detail_launch_button() -> Button:
     start.pressed.connect(func(): _android_input_debug_log("detail launch pressed"))
     return start
 
-func _detail_tools(game: Dictionary) -> BoxContainer:
-    var compact := shell_content.size.x < 760.0
-    var tools: BoxContainer = VBoxContainer.new() if compact or _can_configure_launch_file(game) else HBoxContainer.new()
-    tools.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-    tools.add_theme_constant_override("separation", 8)
+func _detail_tools(game: Dictionary) -> FlowContainer:
+    var tools := HFlowContainer.new()
+    tools.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    tools.add_theme_constant_override("h_separation", 8)
+    tools.add_theme_constant_override("v_separation", 8)
+    tools.add_child(_detail_launch_button())
     if _can_configure_launch_file(game):
         var set_launch := _icon_action_button(
             ICON_PLAY,
@@ -5066,7 +5066,7 @@ func _detail_line(icon_path: String, text: String) -> HBoxContainer:
     var label := Label.new()
     label.text = text
     label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    label.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
     label.add_theme_font_size_override("font_size", 14)
     label.add_theme_color_override("font_color", ui_tokens.text_secondary)
     row.add_child(label)
