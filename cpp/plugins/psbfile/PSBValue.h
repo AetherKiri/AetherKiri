@@ -88,7 +88,9 @@ namespace PSB {
     class IPSBCollection;
     class IPSBChild : public IPSBValue {
     public:
-        std::shared_ptr<IPSBCollection> parent;
+        // Collections own their children.  The reverse link must not keep the
+        // complete parsed PSB tree alive after its motion snapshot is evicted.
+        std::weak_ptr<IPSBCollection> parent;
 
         std::string path;
     };
@@ -107,7 +109,9 @@ namespace PSB {
 
     class IPSBSingleton {
     public:
-        std::vector<std::shared_ptr<IPSBCollection>> parents;
+        // Singleton values can be referenced by several collections, but none
+        // of those back-references participate in ownership.
+        std::vector<std::weak_ptr<IPSBCollection>> parents;
     };
 
     struct PSBNull : IPSBValue {

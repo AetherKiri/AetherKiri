@@ -426,6 +426,14 @@ func _render_overview(snapshot: Dictionary) -> void:
     var fallback_enabled: bool = perf.get("fallback", false)
     lines.append(_tf("debug.overview.render", [String(perf.get("texture", "-")), String(perf.get("surface", "-")), _t("debug.value.yes") if fallback_enabled else _t("debug.value.no")]))
     lines.append(_tf("debug.overview.memory", [_bytes(int(memory.get("current_bytes", 0))), _bytes(int(memory.get("system_free_bytes", 0))), _bytes(int(memory.get("system_total_bytes", 0))), _bytes(int(memory.get("cache_bytes", 0)))]))
+    lines.append(_tf("debug.overview.memory_extended", [
+        _bytes(int(memory.get("peak_bytes", 0))),
+        _bytes(int(memory.get("available_bytes", 0))),
+        _bytes(int(memory.get("godot_static_bytes", 0))),
+        _bytes(int(memory.get("gpu_total_bytes", 0))),
+        _bytes(int(memory.get("gpu_texture_bytes", 0))),
+        _bytes(int(memory.get("gpu_buffer_bytes", 0))),
+    ]))
     lines.append("")
     lines.append(_tf("debug.overview.counts", [int(perf.get("errors", 0)), int(session.get("dropped_events", 0)), int(session.get("markers", 0))]))
     lines.append("%s: %s" % [_t("debug.metric.directory"), String(session.get("session_dir", "-"))])
