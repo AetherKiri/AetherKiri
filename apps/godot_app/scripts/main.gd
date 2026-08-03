@@ -1097,6 +1097,7 @@ var shell_content: Control
 var shell_sidebar: PanelContainer
 var shell_compact_header: PanelContainer
 var shell_route_label: Label
+var launch_transition_tween: Tween
 var shell_library_button: Button
 var shell_video_button: Button
 var shell_settings_button: Button
@@ -7330,6 +7331,33 @@ func _start_selected_game() -> void:
         return
     _start_selected_game_after_iap()
 
+func _begin_launch_transition() -> void:
+    if shell_root == null or not is_instance_valid(shell_root):
+        return
+    if launch_transition_tween != null and launch_transition_tween.is_valid():
+        launch_transition_tween.kill()
+    shell_root.visible = true
+    shell_root.modulate.a = 1.0
+    shell_root.scale = Vector2.ONE
+    shell_root.pivot_offset = shell_root.size * 0.5
+    shell_root.move_to_front()
+    if ui_motion.reduced_motion:
+        _finish_launch_transition()
+        return
+    launch_transition_tween = shell_root.create_tween().set_parallel(true)
+    launch_transition_tween.tween_property(shell_root, "modulate:a", 0.0, 0.20).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN)
+    launch_transition_tween.tween_property(shell_root, "scale", Vector2(0.96, 0.96), 0.24).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN)
+    launch_transition_tween.chain().tween_callback(_finish_launch_transition)
+
+func _finish_launch_transition() -> void:
+    launch_transition_tween = null
+    if shell_root == null or not is_instance_valid(shell_root):
+        return
+    shell_root.visible = false
+    shell_root.modulate.a = 1.0
+    shell_root.scale = Vector2.ONE
+    shell_root.pivot_offset = Vector2.ZERO
+
 func _start_selected_game_after_iap() -> void:
     var library_path := String(selected_game.get("path", ""))
     if library_path.is_empty():
@@ -7367,7 +7395,6 @@ func _start_selected_game_after_iap() -> void:
     game_path.text = launch_path
     _write_probe_marker("library_launch root=%s entry=%s" % [library_path, launch_path])
     _set_game_background(true)
-    shell_root.visible = false
     viewport.visible = true
     viewport.move_to_front()
     game_view.visible = true
@@ -7375,6 +7402,12 @@ func _start_selected_game_after_iap() -> void:
     _set_perf_visible(show_perf_monitor)
     restart_notice.visible = true
     _on_open_game()
+    if game_running:
+        _begin_launch_transition()
+    else:
+        _set_game_background(false)
+        viewport.visible = false
+        game_view.visible = false
 
 func _finalize_active_game_session() -> void:
     if active_game_path.is_empty() or active_game_started_msec <= 0:
