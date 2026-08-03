@@ -1033,6 +1033,7 @@ const SHELL_SCROLL_DRAG_SPEED := 1.0
 const SHELL_SCROLL_TOUCHPAD_SPEED := 12.0
 const SHELL_SCROLL_WHEEL_SPEED := 4.0
 const SHELL_SCROLL_WHEEL_STEP := 320.0
+const SHELL_SCROLL_TWEEN_DURATION := 0.18
 const SHELL_SCROLL_MOUSE_KEY := -1
 const SETTINGS_DRAFT_KEYS := [
     "language",
@@ -1176,6 +1177,8 @@ var active_game_path := ""
 var active_game_started_msec := 0
 var shell_scroll_drag_states := {}
 var shell_scroll_remainders := {}
+var shell_scroll_tweens := {}
+var shell_scroll_targets := {}
 var opaque_frame_shader: Shader
 var shown_system_alerts := {}
 var ui_icon_cache := {}
@@ -3735,7 +3738,7 @@ func _nearest_scroll_container(control: Control) -> ScrollContainer:
     return null
 
 func _find_shell_scroll_at_position(position: Vector2) -> ScrollContainer:
-    var scrolls: Array[ScrollContainer] = [settings_view, detail_scroll, game_scroll]
+    var scrolls: Array[ScrollContainer] = [settings_view, detail_scroll, game_scroll, video_scroll]
     for scroll in scrolls:
         if scroll != null and scroll.is_visible_in_tree() and scroll.get_global_rect().has_point(position):
             return scroll
@@ -3773,6 +3776,7 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
     if scroll == null:
         shell_scroll_drag_states.erase(key)
         return
+    _stop_shell_scroll_tween(scroll)
     var control := _control_at_pointer(position)
     var button := _nearest_base_button(control) if control != null else null
     shell_scroll_drag_states[key] = {
@@ -3830,6 +3834,12 @@ func _reset_shell_scroll_drag() -> void:
         var state: Dictionary = shell_scroll_drag_states.get(key, {})
         _cancel_shell_scroll_press(state)
     shell_scroll_drag_states.clear()
+    for key_variant in shell_scroll_tweens.keys():
+        var tween := shell_scroll_tweens.get(key_variant)
+        if tween is Tween and tween.is_valid():
+            tween.kill()
+    shell_scroll_tweens.clear()
+    shell_scroll_targets.clear()
 
 func _cancel_shell_scroll_press(state: Dictionary) -> void:
     get_viewport().gui_release_focus()
@@ -3852,22 +3862,49 @@ func _nearest_base_button(control: Control) -> BaseButton:
         current = current.get_parent()
     return null
 
-func _scroll_container_by(scroll: ScrollContainer, delta: float) -> void:
+func _scroll_container_by(scroll: ScrollContainer, delta: float, smooth: bool = false) -> void:
     var bar := scroll.get_v_scroll_bar()
     if bar == null:
         return
     var scroll_key := scroll.get_instance_id()
     var remainder := float(shell_scroll_remainders.get(scroll_key, 0.0))
-    var next := clampf(float(scroll.scroll_vertical) + remainder + delta, bar.min_value, bar.max_value)
+    var current := float(scroll.scroll_vertical)
+    var base := float(shell_scroll_targets.get(scroll_key, current)) if smooth else current
+    var next := clampf(base + remainder + delta, bar.min_value, bar.max_value)
     var snapped := int(roundf(next))
     snapped = int(clampf(float(snapped), bar.min_value, bar.max_value))
-    scroll.scroll_vertical = snapped
+    if smooth:
+        _stop_shell_scroll_tween(scroll)
+        shell_scroll_targets[scroll_key] = next
+        var tween := scroll.create_tween()
+        shell_scroll_tweens[scroll_key] = tween
+        tween.tween_method(func(value: float):
+            if is_instance_valid(scroll):
+                scroll.scroll_vertical = int(roundf(value))
+        , current, next, SHELL_SCROLL_TWEEN_DURATION).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+        tween.tween_callback(func():
+            shell_scroll_tweens.erase(scroll_key)
+            shell_scroll_targets[scroll_key] = next
+        )
+    else:
+        scroll.scroll_vertical = snapped
+        shell_scroll_targets[scroll_key] = float(snapped)
     var clamped_to_min := is_equal_approx(next, bar.min_value) and delta < 0.0
     var clamped_to_max := is_equal_approx(next, bar.max_value) and delta > 0.0
     if clamped_to_min or clamped_to_max:
         shell_scroll_remainders.erase(scroll_key)
     else:
         shell_scroll_remainders[scroll_key] = next - float(snapped)
+
+func _stop_shell_scroll_tween(scroll: ScrollContainer) -> void:
+    if scroll == null or not is_instance_valid(scroll):
+        return
+    var scroll_key := scroll.get_instance_id()
+    var tween := shell_scroll_tweens.get(scroll_key)
+    if tween is Tween and tween.is_valid():
+        tween.kill()
+    shell_scroll_tweens.erase(scroll_key)
+    shell_scroll_targets[scroll_key] = float(scroll.scroll_vertical)
 
 func _disabled_text_color() -> Color:
     return ui_tokens.text_tertiary
@@ -10137,7 +10174,7 @@ func _input(event: InputEvent) -> void:
         return
 
 func _scroll_detail_by(delta: float) -> void:
-    _scroll_container_by(detail_scroll, delta)
+    _scroll_container_by(detail_scroll, delta, true)
 
 func _handle_shell_scroll_input(event: InputEvent) -> bool:
     if shell_root == null or not shell_root.visible:
@@ -10161,7 +10198,7 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
         var pan_scroll := _find_shell_scroll_at_position(pan.position)
         if pan_scroll == null:
             return false
-        _scroll_container_by(pan_scroll, pan.delta.y * SHELL_SCROLL_TOUCHPAD_SPEED)
+        _scroll_container_by(pan_scroll, pan.delta.y * SHELL_SCROLL_TOUCHPAD_SPEED, true)
         return true
 
     if event is InputEventMouseButton:
@@ -10175,7 +10212,7 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
             var wheel_factor := absf(mouse_button.factor)
             if wheel_factor < 1.0:
                 wheel_factor = 1.0
-            _scroll_container_by(wheel_scroll, wheel_direction * SHELL_SCROLL_WHEEL_STEP * SHELL_SCROLL_WHEEL_SPEED * wheel_factor)
+            _scroll_container_by(wheel_scroll, wheel_direction * SHELL_SCROLL_WHEEL_STEP * SHELL_SCROLL_WHEEL_SPEED * wheel_factor, true)
             return true
         if mouse_button.button_index != MOUSE_BUTTON_LEFT:
             return false
