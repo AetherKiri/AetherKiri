@@ -33,6 +33,17 @@ func _run() -> void:
         _fail("spring did not settle exactly at its target")
         return
 
+    var orphan := Control.new()
+    root.add_child(orphan)
+    motion.spring_property(orphan, "scale", Vector2(0.9, 0.9), 0.32, 1.0)
+    var orphan_key := "%d:scale" % orphan.get_instance_id()
+    orphan.queue_free()
+    await process_frame
+    await process_frame
+    if motion.active_springs.has(orphan_key):
+        _fail("freed spring owner was not retired")
+        return
+
     var loading_panel := Control.new()
     var loading_card := Control.new()
     loading_panel.add_child(loading_card)

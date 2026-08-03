@@ -37,7 +37,10 @@ func _process(delta: float) -> void:
     for key_variant in active_springs.keys():
         var key := String(key_variant)
         var state: Dictionary = active_springs[key]
-        var owner: Object = state.get("owner")
+        # Keep the stored reference untyped until validity is checked. GDScript
+        # raises when assigning a freed Object to a typed local before the
+        # is_instance_valid guard can run.
+        var owner = state.get("owner")
         if owner == null or not is_instance_valid(owner):
             completed.append(key)
             continue
