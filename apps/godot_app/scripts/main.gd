@@ -12,6 +12,7 @@ const SUBTITLE_EXTENSIONS := ["srt", "vtt", "ass", "ssa"]
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_POLL_INTERVAL_SEC := 0.12
+const IAP_DETAIL_AUTHORIZATION_TTL_MS := 30000
 const LEGAL_AGREEMENT_VERSION := "2026-07-27.4"
 const IOS_STATEMENT_VERSION := "2026-07-28"
 const LEGAL_AGREEMENT_ZH_HANS := "res://legal/privacy_disclaimer_zh_hans.txt"
@@ -1194,6 +1195,8 @@ var iap_last_revision := -1
 var iap_poll_accum := 0.0
 var iap_pending_launch := {}
 var iap_pending_check_id := 0
+var iap_detail_authorization_key := ""
+var iap_detail_authorization_until_msec := 0
 var iap_pending_operation_id := 0
 var iap_pending_operation_kind := ""
 var iap_settings_refresh_pending := false
@@ -5270,12 +5273,33 @@ func _iap_item_is_first(kind: String, item: Dictionary) -> bool:
     var path := String(item.get("path", ""))
     return not path.is_empty() and path == String(items[0].get("path", ""))
 
+func _iap_item_authorization_key(kind: String, item: Dictionary) -> String:
+    var path := String(item.get("path", "")).strip_edges()
+    return "" if path.is_empty() else "%s:%s" % [kind, path]
+
+func _consume_iap_detail_authorization(kind: String, item: Dictionary) -> bool:
+    var key := _iap_item_authorization_key(kind, item)
+    var authorized := (
+        not key.is_empty()
+        and key == iap_detail_authorization_key
+        and Time.get_ticks_msec() <= iap_detail_authorization_until_msec
+    )
+    iap_detail_authorization_key = ""
+    iap_detail_authorization_until_msec = 0
+    return authorized
+
 func _begin_iap_checked_access(
     kind: String,
     item: Dictionary,
     action: String = "launch"
 ) -> bool:
     if not _iap_enforcement_enabled():
+        return false
+    # The first item is always outside the paid catalog limit. Avoid making
+    # its button wait for a StoreKit entitlement round trip on every launch.
+    if _iap_item_is_first(kind, item):
+        return false
+    if action == "launch" and _consume_iap_detail_authorization(kind, item):
         return false
     iap_pending_launch = {
         "kind": kind,
@@ -5495,6 +5519,9 @@ func _complete_iap_launch_check() -> void:
     var kind := String(iap_pending_launch.get("kind", ""))
     var item: Dictionary = iap_pending_launch.get("item", {})
     if bool(iap_state.get("entitled", false)) or _iap_item_is_first(kind, item):
+        if String(iap_pending_launch.get("action", "")) == "detail":
+            iap_detail_authorization_key = _iap_item_authorization_key(kind, item)
+            iap_detail_authorization_until_msec = Time.get_ticks_msec() + IAP_DETAIL_AUTHORIZATION_TTL_MS
         _run_iap_pending_launch()
         return
     var entitlement_state := String(iap_state.get("entitlement_state", ""))
