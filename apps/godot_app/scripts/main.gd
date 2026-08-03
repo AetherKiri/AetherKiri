@@ -2964,16 +2964,15 @@ func _build_home_view() -> void:
     home_primary_button = Button.new()
     var home_action_is_refresh := OS.get_name() == "iOS"
     home_primary_button.text = "" if home_action_is_refresh else "+"
-    home_primary_button.icon = _load_ui_icon(ICON_REFRESH) if home_action_is_refresh else null
-    home_primary_button.expand_icon = true
     home_primary_button.tooltip_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
     home_primary_button.accessibility_name = home_primary_button.tooltip_text
     home_primary_button.anchor_left = 1.0
     home_primary_button.anchor_top = 1.0
     home_primary_button.anchor_right = 1.0
     home_primary_button.anchor_bottom = 1.0
-    home_primary_button.add_theme_constant_override("icon_max_width", 23)
     ui_widgets.floating_action_button(home_primary_button)
+    if home_action_is_refresh:
+        _attach_centered_button_icon(home_primary_button, ICON_REFRESH, Vector2(23, 23))
     home_primary_button.pressed.connect(_on_refresh_or_import)
     library_body.add_child(home_primary_button)
     home_primary_button.move_to_front()
@@ -4091,6 +4090,16 @@ func _attach_pill_button_content(button: Button, text: String, icon_path: String
 
     button.set_meta("pill_icon_path", button.get_path_to(icon))
     button.set_meta("pill_label_path", button.get_path_to(label))
+
+func _attach_centered_button_icon(button: Button, icon_path: String, icon_size: Vector2) -> void:
+    var center := CenterContainer.new()
+    center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    center.set_anchors_preset(Control.PRESET_FULL_RECT)
+    button.add_child(center)
+
+    var icon := _icon_rect(icon_path, icon_size, Color.WHITE)
+    icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    center.add_child(icon)
 
 func _set_pill_button_text(button: Button, text: String) -> void:
     var label_path = button.get_meta("pill_label_path", NodePath(""))
