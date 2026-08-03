@@ -7054,7 +7054,8 @@ func _animate_hero_forward(body: Control) -> void:
     ui_motion.reveal(body, 0.02)
     var overlay := _create_hero_overlay(hero_source_rect, hero_source_texture)
     var transition_id := hero_transition_id
-    ui_motion.hero_rect(overlay, _hero_local_rect(destination), func(): _complete_hero_overlay(overlay, transition_id, false))
+    var overlay_ref: WeakRef = weakref(overlay)
+    ui_motion.hero_rect(overlay, _hero_local_rect(destination), func(): _complete_hero_overlay_ref(overlay_ref, transition_id, false))
     _arm_hero_watchdog(overlay, transition_id, false)
 
 func _animate_hero_back(source_rect: Rect2) -> void:
@@ -7076,7 +7077,8 @@ func _animate_hero_back(source_rect: Rect2) -> void:
     hero_hidden_target = target_cover
     var overlay := _create_hero_overlay(source_rect, hero_source_texture)
     var transition_id := hero_transition_id
-    ui_motion.hero_rect(overlay, _hero_local_rect(target_cover.get_global_rect()), func(): _complete_hero_overlay(overlay, transition_id, true))
+    var overlay_ref: WeakRef = weakref(overlay)
+    ui_motion.hero_rect(overlay, _hero_local_rect(target_cover.get_global_rect()), func(): _complete_hero_overlay_ref(overlay_ref, transition_id, true))
     _arm_hero_watchdog(overlay, transition_id, true)
 
 func _create_hero_overlay(global_rect: Rect2, texture: Texture2D) -> PanelContainer:
@@ -7138,9 +7140,14 @@ func _complete_hero_overlay(expected_overlay: Control, transition_id: int, clear
     if clear_state:
         _clear_hero_state()
 
+func _complete_hero_overlay_ref(expected_overlay_ref: WeakRef, transition_id: int, clear_state: bool) -> void:
+    var expected_overlay: Variant = expected_overlay_ref.get_ref()
+    _complete_hero_overlay(expected_overlay, transition_id, clear_state)
+
 func _arm_hero_watchdog(expected_overlay: Control, transition_id: int, clear_state: bool) -> void:
+    var expected_overlay_ref: WeakRef = weakref(expected_overlay)
     get_tree().create_timer(0.55).timeout.connect(
-        func(): _complete_hero_overlay(expected_overlay, transition_id, clear_state),
+        func(): _complete_hero_overlay_ref(expected_overlay_ref, transition_id, clear_state),
         CONNECT_ONE_SHOT
     )
 

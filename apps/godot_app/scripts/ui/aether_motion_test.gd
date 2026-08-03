@@ -44,6 +44,14 @@ func _run() -> void:
         _fail("freed spring owner was not retired")
         return
 
+    var orphan_hero := Control.new()
+    orphan_hero.size = Vector2(80, 80)
+    root.add_child(orphan_hero)
+    motion.hero_rect(orphan_hero, Rect2(120, 120, 160, 160))
+    orphan_hero.queue_free()
+    for _frame in range(4):
+        await process_frame
+
     var loading_panel := Control.new()
     var loading_card := Control.new()
     loading_panel.add_child(loading_card)

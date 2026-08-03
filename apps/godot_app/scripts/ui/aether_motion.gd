@@ -172,13 +172,14 @@ func enter(control: Control, offset: Vector2 = ENTER_OFFSET, delay: float = 0.0)
     control.modulate.a = 0.0
     if not reduced_motion:
         control.position = target_position + offset
+    var enter_key := _tween_key(control, "enter")
     var tween := control.create_tween().set_parallel(true)
-    active_tweens[_tween_key(control, "enter")] = tween
+    active_tweens[enter_key] = tween
     var duration := 0.12 if reduced_motion else ENTER_DURATION
     tween.tween_property(control, "modulate:a", 1.0, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not reduced_motion:
         tween.tween_property(control, "position", target_position, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    tween.chain().tween_callback(func(): _finish_tween(control, "enter"))
+    tween.chain().tween_callback(func(): _finish_tween_key(enter_key))
 
 func route_in(control: Control, direction: float = 1.0) -> void:
     enter(control, Vector2(0.0, 8.0))
@@ -206,10 +207,15 @@ func route_transition(
         outgoing_rest = outgoing.get_meta("aether_route_rest_position", outgoing.position)
         outgoing.set_meta("aether_route_rest_position", outgoing_rest)
         outgoing.visible = true
+    var incoming_ref: WeakRef = weakref(incoming)
+    var incoming_key := _tween_key(incoming, "route")
+    var has_outgoing := outgoing != null and is_instance_valid(outgoing) and outgoing != incoming
+    var outgoing_ref: Variant = weakref(outgoing) if has_outgoing else null
+    var outgoing_key := _tween_key(outgoing, "route") if has_outgoing else ""
     var tween := incoming.create_tween().set_parallel(true)
-    active_tweens[_tween_key(incoming, "route")] = tween
-    if outgoing != null and is_instance_valid(outgoing) and outgoing != incoming:
-        active_tweens[_tween_key(outgoing, "route")] = tween
+    active_tweens[incoming_key] = tween
+    if has_outgoing:
+        active_tweens[outgoing_key] = tween
         tween.tween_property(outgoing, "modulate:a", 0.0, ROUTE_EXIT_DURATION).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
         if not reduced_motion and lift:
             tween.tween_property(outgoing, "position", outgoing_rest + Vector2(0, -6), ROUTE_EXIT_DURATION).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
@@ -219,14 +225,17 @@ func route_transition(
     if not reduced_motion and lift:
         tween.tween_property(incoming, "position", incoming_rest, enter_duration).set_delay(enter_delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     tween.chain().tween_callback(func():
-        incoming.position = incoming_rest
-        incoming.modulate.a = 1.0
-        _finish_tween(incoming, "route")
-        if outgoing != null and is_instance_valid(outgoing) and outgoing != incoming:
-            outgoing.position = outgoing_rest
-            outgoing.modulate.a = 1.0
-            outgoing.visible = false
-            _finish_tween(outgoing, "route")
+        var incoming_control: Variant = incoming_ref.get_ref()
+        if incoming_control != null and is_instance_valid(incoming_control):
+            incoming_control.position = incoming_rest
+            incoming_control.modulate.a = 1.0
+        _finish_tween_key(incoming_key)
+        var outgoing_control: Variant = outgoing_ref.get_ref() if outgoing_ref != null else null
+        if outgoing_control != null and is_instance_valid(outgoing_control):
+            outgoing_control.position = outgoing_rest
+            outgoing_control.modulate.a = 1.0
+            outgoing_control.visible = false
+            _finish_tween_key(outgoing_key)
         if finished.is_valid():
             finished.call()
     )
@@ -254,23 +263,27 @@ func hero_rect(control: Control, target_rect: Rect2, finished: Callable = Callab
     active_springs.erase(_motion_key(control, "size"))
     _stop_tweens(control)
     var start_rect := Rect2(control.position, control.size)
+    var control_ref: WeakRef = weakref(control)
+    var hero_key := _tween_key(control, "hero")
     var tween := control.create_tween()
-    active_tweens[_tween_key(control, "hero")] = tween
+    active_tweens[hero_key] = tween
     tween.tween_method(
         func(progress: float):
-            if is_instance_valid(control):
+            var current_control: Variant = control_ref.get_ref()
+            if current_control != null and is_instance_valid(current_control):
                 var frame := hero_arc_rect(start_rect, target_rect, progress)
-                control.position = frame.position
-                control.size = frame.size,
+                current_control.position = frame.position
+                current_control.size = frame.size,
         0.0,
         1.0,
         HERO_DURATION
     ).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_IN_OUT)
     tween.tween_callback(func():
-        if is_instance_valid(control):
-            control.position = target_rect.position
-            control.size = target_rect.size
-        _finish_tween(control, "hero")
+        var current_control: Variant = control_ref.get_ref()
+        if current_control != null and is_instance_valid(current_control):
+            current_control.position = target_rect.position
+            current_control.size = target_rect.size
+        _finish_tween_key(hero_key)
         if finished.is_valid():
             finished.call()
     )
@@ -353,11 +366,16 @@ func loading_out(panel: Control, card: Control, finished: Callable = Callable())
         return
     if card != null and is_instance_valid(card) and not reduced_motion:
         spring_property(card, "scale", Vector2(0.985, 0.985), 0.22, 1.0)
+    var panel_ref: WeakRef = weakref(panel)
+    var card_ref: Variant = weakref(card) if card != null and is_instance_valid(card) else null
     _fade(panel, 0.0, 0.14 if not reduced_motion else 0.10, "loading", func():
-        panel.visible = false
-        panel.modulate.a = 1.0
-        if card != null and is_instance_valid(card):
-            card.scale = REST_SCALE
+        var panel_control: Variant = panel_ref.get_ref()
+        if panel_control != null and is_instance_valid(panel_control):
+            panel_control.visible = false
+            panel_control.modulate.a = 1.0
+        var card_control: Variant = card_ref.get_ref() if card_ref != null else null
+        if card_control != null and is_instance_valid(card_control):
+            card_control.scale = REST_SCALE
         if finished.is_valid():
             finished.call()
     )
@@ -369,13 +387,14 @@ func reveal(control: Control, delay: float = 0.0) -> void:
     _update_pivot(control)
     control.modulate.a = 0.0
     control.scale = REST_SCALE if reduced_motion else Vector2(0.985, 0.985)
+    var reveal_key := _tween_key(control, "reveal")
     var tween := control.create_tween().set_parallel(true)
-    active_tweens[_tween_key(control, "reveal")] = tween
+    active_tweens[reveal_key] = tween
     var duration := 0.12 if reduced_motion else 0.22
     tween.tween_property(control, "modulate:a", 1.0, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     if not reduced_motion:
         tween.tween_property(control, "scale", REST_SCALE, duration).set_delay(delay).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
-    tween.chain().tween_callback(func(): _finish_tween(control, "reveal"))
+    tween.chain().tween_callback(func(): _finish_tween_key(reveal_key))
 
 func set_visible(control: Control, show: bool) -> void:
     if control == null or not is_instance_valid(control):
@@ -388,11 +407,13 @@ func set_visible(control: Control, show: bool) -> void:
             control.scale = REST_SCALE if reduced_motion else Vector2(0.985, 0.985)
     if not reduced_motion:
         spring_property(control, "scale", REST_SCALE if show else Vector2(0.985, 0.985), 0.28 if show else 0.22, 1.0)
+    var control_ref: WeakRef = weakref(control)
     _fade(control, 1.0 if show else 0.0, 0.18 if show else 0.14, "visibility", func():
-        if not show:
-            control.visible = false
-            control.modulate.a = 1.0
-            control.scale = REST_SCALE
+        var current_control: Variant = control_ref.get_ref()
+        if not show and current_control != null and is_instance_valid(current_control):
+            current_control.visible = false
+            current_control.modulate.a = 1.0
+            current_control.scale = REST_SCALE
     )
 
 func _press_in(control: Control) -> void:
@@ -459,6 +480,9 @@ func _stop_tween_key(key: String) -> void:
     var tween = active_tweens.get(key)
     if tween is Tween and tween.is_valid():
         tween.kill()
+    active_tweens.erase(key)
+
+func _finish_tween_key(key: String) -> void:
     active_tweens.erase(key)
 
 func _finish_tween(owner: Object, channel: String) -> void:
