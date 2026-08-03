@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-08-02
+Last updated: 2026-08-03
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -30,6 +30,9 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | RIDDLE JOKER | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, title motion/layering, continue flow, scene/text rendering, dialogue input stress, save/load smoke, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 9-nine-ここのつここのかここのいろ | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, gallery/movie playback smoke, scene/text rendering, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 9-nine-そらいろそらうたそらのおと | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, gallery/music playback smoke, scene/text rendering, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| PARQUET | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 9-nine- 新章 | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| as:9-nine- ARTEISIA | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | オトメ*ドメイン | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, gallery scene replay flow, compiled PSB scenario label lookup, scene/text rendering, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | もっと！孕ませ！炎のおっぱい異世界おっぱいメイド学園！ | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, continue/load flow, scene/text rendering, voice playback smoke, save/load smoke, exit behavior, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | もっと！孕ませ！炎のおっぱい異世界超エロサキュバス学園！ | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, continue/load flow, scene/text rendering, Live2D rendering smoke, voice playback smoke, save/load smoke, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |

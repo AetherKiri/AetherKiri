@@ -129,7 +129,13 @@ typedef struct engine_memory_stats_t {
   uint32_t autopath_table_entries;
   uint32_t reserved_u32;
 
-  uint64_t reserved_u64[4];
+  /* Process-memory details. On Apple platforms physical_footprint and
+   * available bytes track the values used by the app memory limit. Other
+   * platforms may report resident memory and leave unavailable fields at 0. */
+  uint64_t process_resident_bytes;
+  uint64_t process_physical_footprint_bytes;
+  uint64_t process_peak_physical_footprint_bytes;
+  uint64_t process_available_bytes;
   void* reserved_ptr[4];
 } engine_memory_stats_t;
 

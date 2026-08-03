@@ -6510,6 +6510,14 @@ public:
         output["self_used_mb"] = static_cast<int64_t>(stats.self_used_mb);
         output["system_free_mb"] = static_cast<int64_t>(stats.system_free_mb);
         output["system_total_mb"] = static_cast<int64_t>(stats.system_total_mb);
+        output["process_resident_bytes"] =
+            static_cast<int64_t>(stats.process_resident_bytes);
+        output["process_physical_footprint_bytes"] =
+            static_cast<int64_t>(stats.process_physical_footprint_bytes);
+        output["process_peak_physical_footprint_bytes"] =
+            static_cast<int64_t>(stats.process_peak_physical_footprint_bytes);
+        output["process_available_bytes"] =
+            static_cast<int64_t>(stats.process_available_bytes);
         output["graphic_cache_bytes"] = static_cast<int64_t>(stats.graphic_cache_bytes);
         output["graphic_cache_limit_bytes"] = static_cast<int64_t>(stats.graphic_cache_limit_bytes);
         output["xp3_segment_cache_bytes"] = static_cast<int64_t>(stats.xp3_segment_cache_bytes);
@@ -6523,6 +6531,18 @@ public:
         output["autopath_cache_entries"] = static_cast<int64_t>(stats.autopath_cache_entries);
         output["autopath_cache_limit"] = static_cast<int64_t>(stats.autopath_cache_limit);
         output["autopath_table_entries"] = static_cast<int64_t>(stats.autopath_table_entries);
+        RenderingServer *server = RenderingServer::get_singleton();
+        if (server != nullptr) {
+            output["gpu_texture_bytes"] = static_cast<int64_t>(
+                server->get_rendering_info(
+                    RenderingServer::RENDERING_INFO_TEXTURE_MEM_USED));
+            output["gpu_buffer_bytes"] = static_cast<int64_t>(
+                server->get_rendering_info(
+                    RenderingServer::RENDERING_INFO_BUFFER_MEM_USED));
+            output["gpu_total_bytes"] = static_cast<int64_t>(
+                server->get_rendering_info(
+                    RenderingServer::RENDERING_INFO_VIDEO_MEM_USED));
+        }
         return output;
     }
 

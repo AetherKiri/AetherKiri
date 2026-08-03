@@ -27,6 +27,8 @@
 #include <cstdlib>
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
+#include <mach/mach.h>
+#include <mach/task_info.h>
 #include <sys/ucontext.h>
 #endif
 #if defined(__ANDROID__)
@@ -1057,7 +1059,16 @@ void PushStartupLog(engine_handle_s* impl, const std::string& message) {
 void PushRuntimeSpdlogToStartupQueue(const spdlog::details::log_msg& msg) {
   engine_handle_s* target = nullptr;
   {
-    std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+    // The startup sink can run on decoder/player worker threads.  Never wait
+    // for the engine registry from a log sink: engine_tick may own that mutex
+    // while synchronously joining the very worker that emitted this message.
+    // The regular spdlog sinks still receive the line, so dropping only this
+    // best-effort diagnostics copy is preferable to deadlocking shutdown.
+    std::unique_lock<std::recursive_mutex> registry_guard(
+        g_registry_mutex, std::try_to_lock);
+    if (!registry_guard.owns_lock()) {
+      return;
+    }
     engine_handle_t target_handle = nullptr;
     if (g_runtime_startup_active && g_runtime_startup_owner != nullptr) {
       target_handle = g_runtime_startup_owner;
@@ -4204,6 +4215,33 @@ engine_result_t engine_get_memory_stats(engine_handle_t handle,
   out_stats->system_free_mb = static_cast<uint32_t>(
       std::max<tjs_int>(0, TVPGetSystemFreeMemory()));
   out_stats->system_total_mb = static_cast<uint32_t>(meminfo.MemTotal / 1024);
+
+  out_stats->process_resident_bytes =
+      static_cast<uint64_t>(out_stats->self_used_mb) * 1024u * 1024u;
+  out_stats->process_physical_footprint_bytes =
+      out_stats->process_resident_bytes;
+  out_stats->process_peak_physical_footprint_bytes =
+      out_stats->process_physical_footprint_bytes;
+#if defined(__APPLE__)
+  task_vm_info_data_t vm_info{};
+  mach_msg_type_number_t vm_info_count = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO,
+                reinterpret_cast<task_info_t>(&vm_info),
+                &vm_info_count) == KERN_SUCCESS) {
+    out_stats->process_resident_bytes = vm_info.resident_size;
+    out_stats->process_physical_footprint_bytes = vm_info.phys_footprint;
+    if (vm_info.ledger_phys_footprint_peak > 0) {
+      out_stats->process_peak_physical_footprint_bytes =
+          static_cast<uint64_t>(vm_info.ledger_phys_footprint_peak);
+    }
+#if TARGET_OS_IPHONE
+    out_stats->process_available_bytes = vm_info.limit_bytes_remaining;
+#endif
+  }
+#endif
+  out_stats->process_peak_physical_footprint_bytes = std::max(
+      out_stats->process_peak_physical_footprint_bytes,
+      out_stats->process_physical_footprint_bytes);
 
   out_stats->graphic_cache_bytes = TVPGetGraphicCacheTotalBytes();
   out_stats->graphic_cache_limit_bytes = TVPGetGraphicCacheLimit();
