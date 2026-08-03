@@ -51,3 +51,15 @@ TEST_CASE("top-aligned text keeps negative ink and outlines inside its clip") {
     CHECK(krkr::font::ClampTextOriginToClipTop(0, 0, 1, 0) == 1);
     CHECK(krkr::font::ClampTextOriginToClipTop(8, -4, 0, 3) == 8);
 }
+
+TEST_CASE("text shadow top padding accounts for blur and vertical offset") {
+    CHECK(krkr::font::ComputeTextShadowTopPadding(0, 4, -3) == 0);
+    CHECK(krkr::font::ComputeTextShadowTopPadding(255, 0, 2) == 0);
+    CHECK(krkr::font::ComputeTextShadowTopPadding(128, 3, 1) == 2);
+    CHECK(krkr::font::ComputeTextShadowTopPadding(128, 3, -2) == 5);
+    CHECK(krkr::font::ComputeTextShadowTopPadding(128, -3, 1) == 2);
+
+    const int padding =
+        krkr::font::ComputeTextShadowTopPadding(128, 2, 1);
+    CHECK(krkr::font::ClampTextOriginToClipTop(0, -2, padding, 0) == 3);
+}
