@@ -7518,6 +7518,7 @@ func _ready() -> void:
         ProjectSettings.get_setting(SETTINGS_KEY, "Godot Native")
     ))
     _load_shell_settings()
+    _apply_shell_runtime_settings()
     _configure_runtime_diagnostics()
     var env_backend := _runtime_string("AETHERKIRI_BACKEND", "")
     if not env_backend.is_empty():
@@ -7867,7 +7868,6 @@ func _finish_ready_after_first_frame() -> void:
         _apply_engine_options()
         diagnostic_session.start(player, selected_backend)
         _sync_debug_console_state()
-    _apply_shell_runtime_settings()
     if not cli_probe_script.is_empty():
         if not engine_initialized:
             printerr("initialize_engine failed: %s" % player.get_last_error())
