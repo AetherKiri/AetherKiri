@@ -196,8 +196,9 @@ jobs:
           path: |
             .devtools/vcpkg
             ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-android-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          key: ${{ runner.os }}-android-vcpkg-v2-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/**') }}
           restore-keys: |
+            ${{ runner.os }}-android-vcpkg-v2-
             ${{ runner.os }}-android-vcpkg-
 
       - name: Bootstrap vcpkg
@@ -297,14 +298,18 @@ jobs:
           path: out/godot/android/release/Aether-release.apk
           retention-days: 7
 
+      - name: Remove vcpkg build intermediates
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-hit != 'true'
+        run: .github/scripts/prepare-vcpkg-cache.sh .devtools/vcpkg
+
       - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: |
             .devtools/vcpkg
             ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-android-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          key: ${{ steps.restore-vcpkg.outputs.cache-primary-key }}
 
       - name: Save ccache
         if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
@@ -425,8 +430,9 @@ jobs:
           path: |
             .devtools/vcpkg
             ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-ios-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          key: ${{ runner.os }}-ios-vcpkg-v2-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/**') }}
           restore-keys: |
+            ${{ runner.os }}-ios-vcpkg-v2-
             ${{ runner.os }}-ios-vcpkg-
 
       - name: Bootstrap vcpkg
@@ -557,14 +563,18 @@ jobs:
           path: out/godot/ios/release/Aether-App-Store.ipa
           retention-days: 7
 
+      - name: Remove vcpkg build intermediates
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-hit != 'true'
+        run: .github/scripts/prepare-vcpkg-cache.sh .devtools/vcpkg
+
       - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: |
             .devtools/vcpkg
             ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-ios-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          key: ${{ steps.restore-vcpkg.outputs.cache-primary-key }}
 
       - name: Save ccache
         if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
@@ -676,8 +686,9 @@ jobs:
           path: |
             .devtools/vcpkg
             ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-macos-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          key: ${{ runner.os }}-macos-vcpkg-v2-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/**') }}
           restore-keys: |
+            ${{ runner.os }}-macos-vcpkg-v2-
             ${{ runner.os }}-macos-vcpkg-
 
       - name: Bootstrap vcpkg
@@ -801,14 +812,18 @@ jobs:
           path: out/godot/macos/app-store/Aether-Mac-App-Store.pkg
           retention-days: 7
 
+      - name: Remove vcpkg build intermediates
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-hit != 'true'
+        run: .github/scripts/prepare-vcpkg-cache.sh .devtools/vcpkg
+
       - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: |
             .devtools/vcpkg
             ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-macos-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          key: ${{ steps.restore-vcpkg.outputs.cache-primary-key }}
 
       - name: Save ccache
         if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
@@ -938,8 +953,9 @@ jobs:
           path: |
             .devtools/vcpkg
             ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-web-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          key: ${{ runner.os }}-web-vcpkg-v2-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/**') }}
           restore-keys: |
+            ${{ runner.os }}-web-vcpkg-v2-
             ${{ runner.os }}-web-vcpkg-
 
       - name: Bootstrap vcpkg
@@ -995,14 +1011,18 @@ jobs:
           path: out/godot/web/release
           retention-days: 7
 
+      - name: Remove vcpkg build intermediates
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-hit != 'true'
+        run: .github/scripts/prepare-vcpkg-cache.sh .devtools/vcpkg
+
       - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: |
             .devtools/vcpkg
             ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-web-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
+          key: ${{ steps.restore-vcpkg.outputs.cache-primary-key }}
 
       - name: Save Emscripten cache
         if: success() && github.event_name != 'pull_request' && steps.restore-emsdk.outputs.cache-matched-key == ''
