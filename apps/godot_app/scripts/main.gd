@@ -4885,7 +4885,7 @@ func _detail_launch_button() -> Button:
 func _detail_tools(game: Dictionary) -> BoxContainer:
     var compact := shell_content.size.x < 760.0
     var tools: BoxContainer = VBoxContainer.new() if compact or _can_configure_launch_file(game) else HBoxContainer.new()
-    tools.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    tools.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
     tools.add_theme_constant_override("separation", 8)
     if _can_configure_launch_file(game):
         var set_launch := _icon_action_button(
@@ -4893,7 +4893,7 @@ func _detail_tools(game: Dictionary) -> BoxContainer:
             _t("detail.set_launch_file"),
             func(): _set_launch_file_for_selected()
         )
-        set_launch.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        set_launch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
         tools.add_child(set_launch)
         if not GameLaunchEntry.configured_relative_path(game).is_empty():
             var reset_launch := _icon_action_button(
@@ -4901,10 +4901,10 @@ func _detail_tools(game: Dictionary) -> BoxContainer:
                 _t("detail.reset_launch_file"),
                 func(): _reset_launch_file_for_selected()
             )
-            reset_launch.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+            reset_launch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
             tools.add_child(reset_launch)
     var set_cover := _icon_action_button(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected())
-    set_cover.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    set_cover.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
     tools.add_child(set_cover)
     var rename := _icon_action_button(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game())
     tools.add_child(rename)
