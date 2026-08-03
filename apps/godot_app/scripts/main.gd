@@ -83,7 +83,7 @@ const IOS_UI_SCALE_MODES := ["compact", "comfortable", "standard"]
 const UI_TEXT := {
     LANG_ZH_HANS: {
         "home.subtitle": "多功能媒体播放器",
-        "video.status": "FFmpeg  /  视频库",
+        "video.status": "视频库",
         "video.empty_title": "Video 文件夹中还没有视频",
         "video.empty_help_ios": "使用「文件」App 将视频复制到：\n我的 iPhone / iPad > Aether > Video\n支持同名 SRT、VTT、ASS 字幕",
         "video.empty_help_desktop": "点击「导入视频」添加本地视频；同目录同名字幕会自动载入",
@@ -102,7 +102,7 @@ const UI_TEXT := {
         "video.subtitle_embedded": "%s（内嵌）",
         "video.resume": "继续上次播放",
         "video.open_failed": "无法播放该视频：%s",
-        "home.status": "Godot Native  /  视觉小说库",
+        "home.status": "视觉小说库",
         "nav.library": "游戏库",
         "nav.videos": "视频库",
         "nav.collapse_sidebar": "收起侧边栏",
@@ -273,7 +273,7 @@ const UI_TEXT := {
     },
     LANG_ZH_HANT: {
         "home.subtitle": "多功能媒體播放器",
-        "video.status": "FFmpeg  /  影片庫",
+        "video.status": "影片庫",
         "video.empty_title": "Video 資料夾中還沒有影片",
         "video.empty_help_ios": "使用「檔案」App 將影片複製到：\n我的 iPhone / iPad > Aether > Video\n支援同名 SRT、VTT、ASS 字幕",
         "video.empty_help_desktop": "點擊「匯入影片」加入本機影片；同目錄同名字幕會自動載入",
@@ -292,7 +292,7 @@ const UI_TEXT := {
         "video.subtitle_embedded": "%s（內嵌）",
         "video.resume": "繼續上次播放",
         "video.open_failed": "無法播放該影片：%s",
-        "home.status": "Godot Native  /  視覺小說庫",
+        "home.status": "視覺小說庫",
         "nav.library": "遊戲庫",
         "nav.videos": "影片庫",
         "nav.collapse_sidebar": "收合側邊欄",
@@ -463,7 +463,7 @@ const UI_TEXT := {
     },
     LANG_EN: {
         "home.subtitle": "Multifunction Media Player",
-        "video.status": "FFmpeg  /  Video library",
+        "video.status": "Video Library",
         "video.empty_title": "No videos in the Video folder",
         "video.empty_help_ios": "Copy videos with the Files app to:\nOn My iPhone / iPad > Aether > Video\nMatching SRT, VTT and ASS subtitles are supported",
         "video.empty_help_desktop": "Import a local video; matching subtitles in the same folder load automatically",
@@ -482,7 +482,7 @@ const UI_TEXT := {
         "video.subtitle_embedded": "%s (embedded)",
         "video.resume": "Resume playback",
         "video.open_failed": "Could not play this video: %s",
-        "home.status": "Godot Native  /  Visual Novel Library",
+        "home.status": "Visual Novel Library",
         "nav.library": "Library",
         "nav.videos": "Videos",
         "nav.collapse_sidebar": "Collapse sidebar",
@@ -653,7 +653,7 @@ const UI_TEXT := {
     },
     LANG_JA: {
         "home.subtitle": "多機能メディアプレーヤー",
-        "video.status": "FFmpeg  /  ビデオライブラリ",
+        "video.status": "ビデオライブラリ",
         "video.empty_title": "Video フォルダーに動画がありません",
         "video.empty_help_ios": "「ファイル」App で動画を次へコピー：\nこのiPhone / iPad内 > Aether > Video\n同名の SRT、VTT、ASS 字幕に対応",
         "video.empty_help_desktop": "ローカル動画を読み込むと、同じフォルダーの同名字幕も自動で読み込みます",
@@ -672,7 +672,7 @@ const UI_TEXT := {
         "video.subtitle_embedded": "%s（埋め込み）",
         "video.resume": "続きから再生",
         "video.open_failed": "動画を再生できません：%s",
-        "home.status": "Godot Native  /  ビジュアルノベルライブラリ",
+        "home.status": "ビジュアルノベルライブラリ",
         "nav.library": "ライブラリ",
         "nav.videos": "ビデオ",
         "nav.collapse_sidebar": "サイドバーを折りたたむ",
@@ -843,7 +843,7 @@ const UI_TEXT := {
     },
     LANG_KO: {
         "home.subtitle": "다기능 미디어 플레이어",
-        "video.status": "FFmpeg  /  비디오 라이브러리",
+        "video.status": "비디오 라이브러리",
         "video.empty_title": "Video 폴더에 비디오가 없습니다",
         "video.empty_help_ios": "파일 앱에서 비디오를 다음 위치로 복사하세요:\n나의 iPhone / iPad > Aether > Video\n같은 이름의 SRT, VTT, ASS 자막 지원",
         "video.empty_help_desktop": "로컬 비디오를 가져오면 같은 폴더의 동일한 이름 자막을 자동으로 불러옵니다",
@@ -862,7 +862,7 @@ const UI_TEXT := {
         "video.subtitle_embedded": "%s(내장)",
         "video.resume": "이어서 재생",
         "video.open_failed": "비디오를 재생할 수 없습니다: %s",
-        "home.status": "Godot Native  /  비주얼 노벨 라이브러리",
+        "home.status": "비주얼 노벨 라이브러리",
         "nav.library": "라이브러리",
         "nav.videos": "비디오",
         "nav.collapse_sidebar": "사이드바 접기",
@@ -1104,10 +1104,8 @@ var shell_settings_button: Button
 var shell_compact_library_button: Button
 var shell_compact_video_button: Button
 var shell_compact_settings_button: Button
-var shell_status_label: Label
 var shell_sidebar_brand: HBoxContainer
 var shell_sidebar_brand_labels: VBoxContainer
-var shell_sidebar_status: HBoxContainer
 var shell_sidebar_version: Label
 var shell_sidebar_toggle: Button
 var shell_sidebar_collapsed := false
@@ -2113,23 +2111,6 @@ func _build_shell_chrome() -> void:
     shell_sidebar_toggle.add_theme_font_size_override("font_size", 23)
     sidebar.add_child(shell_sidebar_toggle)
 
-    shell_sidebar_status = HBoxContainer.new()
-    shell_sidebar_status.custom_minimum_size = Vector2(0, 34)
-    shell_sidebar_status.add_theme_constant_override("separation", 9)
-    sidebar.add_child(shell_sidebar_status)
-    var ready_dot := PanelContainer.new()
-    ready_dot.custom_minimum_size = Vector2(8, 8)
-    ready_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-    ready_dot.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.success, 4))
-    shell_sidebar_status.add_child(ready_dot)
-    shell_status_label = Label.new()
-    shell_status_label.text = selected_backend
-    shell_status_label.clip_text = true
-    shell_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    shell_status_label.add_theme_font_size_override("font_size", 12)
-    shell_status_label.add_theme_color_override("font_color", ui_tokens.text_secondary)
-    shell_sidebar_status.add_child(shell_status_label)
-
     shell_sidebar_version = Label.new()
     shell_sidebar_version.text = "0.2.0-beta.1"
     shell_sidebar_version.add_theme_font_size_override("font_size", 10)
@@ -2247,7 +2228,7 @@ func _toggle_sidebar() -> void:
         _animate_sidebar_width(target_width, true)
         return
     shell_sidebar_tween = shell_sidebar.create_tween().set_parallel(true)
-    for item in [shell_sidebar_brand_labels, shell_library_button, shell_video_button, shell_settings_button, shell_sidebar_status, shell_sidebar_version]:
+    for item in [shell_sidebar_brand_labels, shell_library_button, shell_video_button, shell_settings_button, shell_sidebar_version]:
         shell_sidebar_tween.tween_property(item, "modulate:a", 0.0, 0.10).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
     shell_sidebar_tween.chain().tween_callback(func():
         _apply_sidebar_presentation(false)
@@ -2275,7 +2256,7 @@ func _animate_sidebar_width(target_width: float, expanding: bool) -> void:
     )
 
 func _reset_sidebar_item_modulates() -> void:
-    for item in [shell_sidebar_brand_labels, shell_library_button, shell_video_button, shell_settings_button, shell_sidebar_status, shell_sidebar_version]:
+    for item in [shell_sidebar_brand_labels, shell_library_button, shell_video_button, shell_settings_button, shell_sidebar_version]:
         if item != null and is_instance_valid(item):
             item.modulate.a = 1.0
 
@@ -2285,7 +2266,6 @@ func _apply_sidebar_presentation(animate_labels: bool) -> void:
     var compact_visual := shell_sidebar_collapsed or shell_sidebar_animating_expand
     shell_sidebar_brand.alignment = BoxContainer.ALIGNMENT_CENTER if compact_visual else BoxContainer.ALIGNMENT_BEGIN
     shell_sidebar_brand_labels.visible = not compact_visual
-    shell_sidebar_status.visible = not compact_visual
     shell_sidebar_version.visible = not compact_visual
     shell_library_button.text = "" if compact_visual else _t("nav.library")
     shell_video_button.text = "" if compact_visual else _t("nav.videos")
@@ -2310,7 +2290,6 @@ func _apply_sidebar_presentation(animate_labels: bool) -> void:
         ui_motion.enter(shell_library_button, Vector2.ZERO, 0.04)
         ui_motion.enter(shell_video_button, Vector2.ZERO, 0.06)
         ui_motion.enter(shell_settings_button, Vector2.ZERO, 0.08)
-        ui_motion.enter(shell_sidebar_status, Vector2.ZERO, 0.08)
         ui_motion.enter(shell_sidebar_version, Vector2.ZERO, 0.10)
 
 func _apply_sidebar_width(width: float) -> void:
@@ -3649,12 +3628,6 @@ func _build_loading_panel() -> void:
     loading_title_label.add_theme_font_size_override("font_size", 18)
     loading_title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     loading_labels.add_child(loading_title_label)
-    var loading_caption := Label.new()
-    loading_caption.text = selected_backend
-    loading_caption.add_theme_font_size_override("font_size", 13)
-    loading_caption.add_theme_color_override("font_color", ui_tokens.text_secondary)
-    loading_labels.add_child(loading_caption)
-
     if not ui_motion.reduced_motion:
         var spinner_tween := loading_spinner.create_tween().set_loops()
         spinner_tween.tween_property(loading_spinner, "rotation", TAU, 0.85).from(0.0).set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
