@@ -57,6 +57,10 @@ func _run() -> void:
     if primary.scale.x >= 1.0 or primary.scale.x <= motion.PRESS_SCALE.x:
         _fail("button press feedback skipped its intermediate frame")
         return
+    motion.cancel_press(primary)
+    if not primary.scale.is_equal_approx(Vector2.ONE):
+        _fail("cancelled button press left a stale scale")
+        return
     primary.emit_signal("button_up")
 
     var fab := Button.new()

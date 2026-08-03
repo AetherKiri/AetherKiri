@@ -3840,6 +3840,7 @@ func _cancel_shell_scroll_press(state: Dictionary) -> void:
     var button := _nearest_base_button(control)
     if button != null:
         button.release_focus()
+        ui_motion.cancel_press(button)
         if not button.toggle_mode:
             button.set_pressed_no_signal(false)
 

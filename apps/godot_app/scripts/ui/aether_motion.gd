@@ -119,6 +119,10 @@ func bind_pressable(control: Control) -> void:
             if not button.button_pressed:
                 _press_out(button)
         )
+        button.visibility_changed.connect(func():
+            if not button.is_visible_in_tree():
+                cancel_press(button)
+        )
 
 func bind_tactile(control: Control) -> void:
     if control == null:
@@ -126,6 +130,12 @@ func bind_tactile(control: Control) -> void:
     control.set_meta("aether_press_scale", TACTILE_PRESS_SCALE)
     control.set_meta("aether_release_damping", 0.82)
     bind_pressable(control)
+
+func cancel_press(control: Control) -> void:
+    if control == null or not is_instance_valid(control):
+        return
+    active_springs.erase(_motion_key(control, "scale"))
+    control.scale = REST_SCALE
 
 func bind_lift(control: Control, highlight: CanvasItem = null, rest_alpha: float = 0.0, hover_alpha: float = 1.0) -> void:
     if control == null or control.has_meta("aether_lift_bound"):
