@@ -274,15 +274,6 @@ jobs:
           export NDK_CCACHE=ccache
           ./build.sh android release --jobs=4
 
-      - name: Build Android Debug
-        run: |
-          set -euo pipefail
-          chmod +x ./build.sh
-          export CMAKE_C_COMPILER_LAUNCHER=ccache
-          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          export NDK_CCACHE=ccache
-          ./build.sh android debug --jobs=4
-
       - name: Verify exported APKs
         run: |
           set -euo pipefail
@@ -510,18 +501,6 @@ jobs:
             fi
           fi
 
-      - name: Build iOS Debug
-        run: |
-          set -euo pipefail
-          chmod +x ./build.sh
-          export CMAKE_C_COMPILER_LAUNCHER=ccache
-          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          ./build.sh ios debug --jobs=4 --package-ipa 2>&1 | tee "${RUNNER_TEMP}/ios-debug-build.log"
-          if grep -E "SCRIPT ERROR|Failed to load script|Can't open GDExtension|Can't open dynamic library" "${RUNNER_TEMP}/ios-debug-build.log"; then
-            echo "Godot iOS debug export logged script or GDExtension load errors." >&2
-            exit 1
-          fi
-
       - name: Verify exported Xcode project and IPA
         run: |
           set -euo pipefail
@@ -702,14 +681,6 @@ jobs:
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh macos release --jobs=4
-
-      - name: Build macOS Debug
-        run: |
-          set -euo pipefail
-          chmod +x ./build.sh
-          export CMAKE_C_COMPILER_LAUNCHER=ccache
-          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          ./build.sh macos debug --jobs=4
 
       - name: Run native motionplayer contract tests
         run: |
