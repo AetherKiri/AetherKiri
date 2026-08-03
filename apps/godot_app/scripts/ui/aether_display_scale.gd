@@ -12,6 +12,11 @@ const TABLET_SCALE := 1.25
 const LARGE_TABLET_SCALE := 1.35
 const MAX_AUTO_SCALE := 3.0
 const MAX_HOME_COLUMNS := 3
+const IOS_SCALE_FACTORS := {
+    "compact": 0.75,
+    "comfortable": 0.85,
+    "standard": 1.0,
+}
 
 static func ui_scale(platform_name: String, window_size: Vector2i, default_scale: float, override_text: String = "") -> float:
     var requested := override_text.strip_edges()
@@ -33,6 +38,10 @@ static func ui_scale(platform_name: String, window_size: Vector2i, default_scale
     if short_edge < 900.0:
         return COMPACT_DESKTOP_SCALE
     return clampf(default_scale, 0.75, 2.0)
+
+static func apply_ios_scale_mode(auto_scale: float, mode: String) -> float:
+    var factor := float(IOS_SCALE_FACTORS.get(mode, IOS_SCALE_FACTORS["comfortable"]))
+    return clampf(auto_scale * factor, 0.75, MAX_AUTO_SCALE)
 
 static func use_compact_shell(viewport_size: Vector2) -> bool:
     return minf(viewport_size.x, viewport_size.y) < PHONE_SHORT_EDGE or viewport_size.x < COMPACT_SHELL_WIDTH

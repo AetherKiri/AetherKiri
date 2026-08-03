@@ -12,6 +12,10 @@ func _init() -> void:
     if not _expect_scale("high-resolution phone", AetherDisplayScale.ui_scale("Android", Vector2i(1440, 3200), 1.35), 3.0): return
     if not _expect_scale("compact desktop", AetherDisplayScale.ui_scale("Windows", Vector2i(1280, 720), 1.35), 1.20): return
     if not _expect_scale("explicit override", AetherDisplayScale.ui_scale("Android", Vector2i(390, 844), 1.35, "1.6"), 1.6): return
+    if not _expect_scale("iOS compact", AetherDisplayScale.apply_ios_scale_mode(3.0, "compact"), 2.25): return
+    if not _expect_scale("iOS comfortable", AetherDisplayScale.apply_ios_scale_mode(3.0, "comfortable"), 2.55): return
+    if not _expect_scale("iOS standard", AetherDisplayScale.apply_ios_scale_mode(3.0, "standard"), 3.0): return
+    if not _expect_scale("iOS fallback", AetherDisplayScale.apply_ios_scale_mode(3.0, "invalid"), 2.55): return
 
     if AetherDisplayScale.use_compact_shell(Vector2(819, 614)):
         _fail("tablet landscape incorrectly selected compact navigation")

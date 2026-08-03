@@ -78,6 +78,7 @@ const LANGUAGE_MODES := [LANG_SYSTEM, LANG_ZH_HANS, LANG_ZH_HANT, LANG_EN, LANG_
 const STYLE_DARK := "dark"
 const STYLE_CLASSIC := "classic"
 const STYLE_MODES := [STYLE_DARK, STYLE_CLASSIC]
+const IOS_UI_SCALE_MODES := ["compact", "comfortable", "standard"]
 const UI_TEXT := {
     LANG_ZH_HANS: {
         "home.subtitle": "多功能媒体播放器",
@@ -124,6 +125,11 @@ const UI_TEXT := {
         "settings.language_desc": "默认跟随系统；也可以固定为简体中文、繁体中文、英语、日语或韩语",
         "settings.style": "风格",
         "settings.style_desc": "可在当前深色风格和旧版原始浅色风格之间切换",
+        "settings.ui_scale": "界面比例",
+        "settings.ui_scale_desc": "调整 iPhone 和 iPad 上的界面大小，保存后立即生效",
+        "ui_scale.compact": "较小",
+        "ui_scale.comfortable": "合适",
+        "ui_scale.standard": "标准",
         "style.dark": "深色",
         "style.classic": "原始浅色",
         "language.system": "跟随系统",
@@ -309,6 +315,11 @@ const UI_TEXT := {
         "settings.language_desc": "預設跟隨系統；也可以固定為簡體中文、繁體中文、英語、日語或韓語",
         "settings.style": "風格",
         "settings.style_desc": "可在目前深色風格和舊版原始淺色風格之間切換",
+        "settings.ui_scale": "介面比例",
+        "settings.ui_scale_desc": "調整 iPhone 和 iPad 上的介面大小，儲存後立即生效",
+        "ui_scale.compact": "較小",
+        "ui_scale.comfortable": "合適",
+        "ui_scale.standard": "標準",
         "style.dark": "深色",
         "style.classic": "原始淺色",
         "language.system": "跟隨系統",
@@ -494,6 +505,11 @@ const UI_TEXT := {
         "settings.language_desc": "Defaults to the system language; you can pin Simplified Chinese, Traditional Chinese, English, Japanese, or Korean",
         "settings.style": "Style",
         "settings.style_desc": "Switch between the current dark style and the original classic light style",
+        "settings.ui_scale": "Interface Scale",
+        "settings.ui_scale_desc": "Adjust the interface size on iPhone and iPad; applies immediately after saving",
+        "ui_scale.compact": "Smaller",
+        "ui_scale.comfortable": "Comfortable",
+        "ui_scale.standard": "Standard",
         "style.dark": "Dark",
         "style.classic": "Classic Light",
         "language.system": "Follow System",
@@ -679,6 +695,11 @@ const UI_TEXT := {
         "settings.language_desc": "既定ではシステムに従います。簡体字中国語、繁体字中国語、英語、日本語、韓国語に固定できます",
         "settings.style": "スタイル",
         "settings.style_desc": "現在のダークスタイルと旧来のクラシックライトスタイルを切り替えます",
+        "settings.ui_scale": "UI スケール",
+        "settings.ui_scale_desc": "iPhone と iPad の UI サイズを調整します。保存後すぐに反映されます",
+        "ui_scale.compact": "小さめ",
+        "ui_scale.comfortable": "快適",
+        "ui_scale.standard": "標準",
         "style.dark": "ダーク",
         "style.classic": "クラシックライト",
         "language.system": "システムに従う",
@@ -864,6 +885,11 @@ const UI_TEXT := {
         "settings.language_desc": "기본값은 시스템 언어입니다. 중국어 간체, 중국어 번체, 영어, 일본어, 한국어로 고정할 수 있습니다",
         "settings.style": "스타일",
         "settings.style_desc": "현재 다크 스타일과 기존 클래식 라이트 스타일을 전환합니다",
+        "settings.ui_scale": "인터페이스 크기",
+        "settings.ui_scale_desc": "iPhone 및 iPad의 인터페이스 크기를 조절하며 저장 후 즉시 적용됩니다",
+        "ui_scale.compact": "작게",
+        "ui_scale.comfortable": "적당히",
+        "ui_scale.standard": "표준",
         "style.dark": "다크",
         "style.classic": "클래식 라이트",
         "language.system": "시스템 따르기",
@@ -1038,6 +1064,7 @@ const SHELL_SCROLL_MOUSE_KEY := -1
 const SETTINGS_DRAFT_KEYS := [
     "language",
     "style",
+    "ios_ui_scale_mode",
     "backend",
     "upscale_algorithm",
     "surface_mode",
@@ -1156,6 +1183,7 @@ var diagnostic_env_originals := {}
 var language_mode := LANG_SYSTEM
 var active_language := LANG_ZH_HANS
 var style_mode := STYLE_DARK
+var ios_ui_scale_mode := "comfortable"
 var legal_accepted_version := ""
 var legal_accepted_at := 0
 var ios_statement_accepted_version := ""
@@ -2328,6 +2356,9 @@ func _load_shell_settings() -> void:
     language_mode = _normalize_language_mode(String(cfg.get_value("interface", "language", language_mode)))
     _apply_language_mode()
     style_mode = _normalize_style_mode(String(cfg.get_value("interface", "style", style_mode)))
+    ios_ui_scale_mode = String(cfg.get_value("interface", "ios_ui_scale_mode", ios_ui_scale_mode))
+    if not ios_ui_scale_mode in IOS_UI_SCALE_MODES:
+        ios_ui_scale_mode = "comfortable"
     if not env_style.is_empty():
         style_mode = _normalize_style_mode(env_style)
     _apply_style_mode()
@@ -2391,6 +2422,7 @@ func _save_shell_settings() -> void:
     var cfg := ConfigFile.new()
     cfg.set_value("interface", "language", language_mode)
     cfg.set_value("interface", "style", style_mode)
+    cfg.set_value("interface", "ios_ui_scale_mode", ios_ui_scale_mode)
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
     cfg.set_value("rendering", "surface_mode", render_surface_mode)
@@ -2424,6 +2456,7 @@ func _current_settings_snapshot() -> Dictionary:
     return {
         "language": language_mode,
         "style": style_mode,
+        "ios_ui_scale_mode": ios_ui_scale_mode,
         "backend": selected_backend,
         "upscale_algorithm": upscale_algorithm,
         "surface_mode": render_surface_mode,
@@ -2485,6 +2518,9 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
     _apply_language_mode()
     style_mode = _normalize_style_mode(String(snapshot.get("style", style_mode)))
     _apply_style_mode()
+    ios_ui_scale_mode = String(snapshot.get("ios_ui_scale_mode", ios_ui_scale_mode))
+    if not ios_ui_scale_mode in IOS_UI_SCALE_MODES:
+        ios_ui_scale_mode = "comfortable"
 
     selected_backend = _normalize_backend_name(String(snapshot.get("backend", selected_backend)))
     if not selected_backend in BACKENDS:
@@ -2521,6 +2557,7 @@ func _save_settings_draft() -> void:
     var previous_language := language_mode
     var previous_active_language := active_language
     var previous_style := style_mode
+    var previous_ios_ui_scale_mode := ios_ui_scale_mode
     var previous_backend := selected_backend
     var previous_surface_mode := render_surface_mode
     var snapshot := settings_draft.duplicate()
@@ -2528,6 +2565,9 @@ func _save_settings_draft() -> void:
     _apply_settings_snapshot(snapshot)
     _save_shell_settings()
     settings_draft.clear()
+
+    if previous_ios_ui_scale_mode != ios_ui_scale_mode:
+        _apply_global_dpi_scale()
 
     if previous_backend != selected_backend:
         var backend_index := BACKENDS.find(selected_backend)
@@ -3095,6 +3135,8 @@ func _rebuild_settings_view() -> void:
     var interface_group := _settings_group(primary_column, _t("settings.section.interface"), ICON_SETTINGS, animate_page, 0.03)
     _add_settings_row(interface_group, _settings_block(_t("settings.language"), _t("settings.language_desc"), _language_select(), stack_settings_controls))
     _add_settings_row(interface_group, _settings_block(_t("settings.style"), _t("settings.style_desc"), _style_select(), stack_settings_controls))
+    if OS.get_name() == "iOS":
+        _add_settings_row(interface_group, _settings_block(_t("settings.ui_scale"), _t("settings.ui_scale_desc"), _ios_ui_scale_segment(), stack_settings_controls))
 
     var render_group := _settings_group(primary_column, _t("settings.section.render"), ICON_PERFORMANCE, animate_page, 0.055)
     _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
@@ -4387,6 +4429,26 @@ func _style_select() -> Control:
         _select_style_mode(String(select.get_item_metadata(index)))
     )
     return select
+
+func _ios_ui_scale_segment() -> Control:
+    var draft_mode := _settings_draft_string("ios_ui_scale_mode", ios_ui_scale_mode)
+    var selected_index := IOS_UI_SCALE_MODES.find(draft_mode)
+    var segment = AetherSegmentedControl.new()
+    segment.setup(
+        ui_tokens,
+        ui_motion,
+        PackedStringArray([
+            _t("ui_scale.compact"),
+            _t("ui_scale.comfortable"),
+            _t("ui_scale.standard"),
+        ]),
+        maxi(0, selected_index)
+    )
+    segment.item_selected.connect(func(index: int):
+        if index >= 0 and index < IOS_UI_SCALE_MODES.size():
+            _set_settings_draft_value("ios_ui_scale_mode", IOS_UI_SCALE_MODES[index])
+    )
+    return segment
 
 func _upscale_select() -> Control:
     var select = _apple_select()
@@ -8787,6 +8849,11 @@ func _apply_global_dpi_scale() -> void:
     var scale_text := OS.get_environment("AETHERKIRI_UI_DPI_SCALE").strip_edges()
     var window_size := DisplayServer.window_get_size()
     var scale := AetherDisplayScale.ui_scale(OS.get_name(), window_size, DEFAULT_UI_DPI_SCALE, scale_text)
+    if OS.get_name() == "iOS" and scale_text.is_empty():
+        var cfg := ConfigFile.new()
+        if cfg.load(SETTINGS_FILE) == OK:
+            ios_ui_scale_mode = String(cfg.get_value("interface", "ios_ui_scale_mode", ios_ui_scale_mode))
+        scale = AetherDisplayScale.apply_ios_scale_mode(scale, ios_ui_scale_mode)
     var window := get_window()
     window.content_scale_factor = scale
 
