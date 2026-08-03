@@ -444,6 +444,7 @@ namespace motion {
     }
 
     Player::~Player() {
+        discardRenderToRgbaReadback();
         disableAutoProgress();
         disablePresentationHold();
         releaseYuzuSdAutoProgressClaim();

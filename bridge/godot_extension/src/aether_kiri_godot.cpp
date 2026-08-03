@@ -143,6 +143,7 @@ struct GodotGpuOp {
         DrawMaskedTriangles,
         Mosaic,
         Read,
+        ReadAsync,
         Blend,
         Blend2,
         Blend3,
@@ -171,9 +172,20 @@ struct GodotGpuOp {
     uint32_t color = 0xffffffffu;
     bool result = false;
     bool done = false;
+    uint64_t readback_request = 0;
     std::mutex done_mutex;
     std::condition_variable done_cv;
 };
+
+struct GodotGpuReadbackRequest {
+    std::shared_ptr<GodotGpuOp> op;
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
+std::mutex g_gpu_readbacks_mutex;
+std::unordered_map<uint64_t, GodotGpuReadbackRequest> g_gpu_readbacks;
+uint64_t g_next_gpu_readback_id = 1;
 
 std::mutex g_gpu_op_queue_mutex;
 std::deque<std::shared_ptr<GodotGpuOp>> g_gpu_op_queue;
@@ -1142,12 +1154,13 @@ bool HazardTrackedBlendBarriersEnabled() {
 bool DeferredGodotGpuDrainEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_GODOT_DEFER_GPU_DRAIN");
-        // Deferring operations created on Godot's render thread lets a clear
-        // become visible before the following blends during fast page
-        // transitions on Metal.  Execute those operations immediately by
-        // default; the old batched behavior remains available for profiling
-        // with AETHERKIRI_GODOT_DEFER_GPU_DRAIN=1.
-        return value != nullptr && value[0] != '\0' &&
+        // A complete Artemis frame can contain hundreds of ordered compute
+        // operations. Submitting every operation in its own compute list
+        // drops voice-driven E-mote scenes below their authored 60 Hz cadence
+        // on Metal. Queue render-thread operations until the frame flush so
+        // their order and barriers are preserved in one compute list. Keep a
+        // runtime opt-out for regression diagnosis.
+        return value == nullptr || value[0] == '\0' ||
                std::strcmp(value, "0") != 0;
     }();
     return enabled;
@@ -1301,17 +1314,7 @@ vec4 unpack_u8(uint c) {
                 float((c >> 24) & 0xffu)) / 255.0;
 }
 
-vec4 load_src(ivec2 local) {
-    if (pc.color0.z != 1) {
-        return imageLoad(src_img, pc.rect0.zw + local);
-    }
-    ivec2 src_extent = max(pc.color0.xy, ivec2(1));
-    vec2 src_coord = vec2(pc.rect0.zw) +
-        (vec2(local) + vec2(0.5)) * vec2(src_extent) /
-            vec2(max(pc.rect1.xy, ivec2(1))) -
-        vec2(0.5);
-    ivec2 src_min = pc.rect0.zw;
-    ivec2 src_max = src_min + src_extent - ivec2(1);
+vec4 sample_src_premul(vec2 src_coord, ivec2 src_min, ivec2 src_max) {
     ivec2 p0 = clamp(ivec2(floor(src_coord)), src_min, src_max);
     ivec2 p1 = clamp(p0 + ivec2(1), src_min, src_max);
     vec2 f = clamp(fract(src_coord), vec2(0.0), vec2(1.0));
@@ -1323,7 +1326,38 @@ vec4 load_src(ivec2 local) {
     c10.rgb *= c10.a;
     c01.rgb *= c01.a;
     c11.rgb *= c11.a;
-    vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+vec4 load_src(ivec2 local) {
+    if (pc.color0.z != 1) {
+        return imageLoad(src_img, pc.rect0.zw + local);
+    }
+    ivec2 src_extent = max(pc.color0.xy, ivec2(1));
+    vec2 source_step = vec2(src_extent) /
+        vec2(max(pc.rect1.xy, ivec2(1)));
+    vec2 src_coord = vec2(pc.rect0.zw) +
+        (vec2(local) + vec2(0.5)) * source_step - vec2(0.5);
+    ivec2 src_min = pc.rect0.zw;
+    ivec2 src_max = src_min + src_extent - ivec2(1);
+    vec4 premul;
+    if (max(source_step.x, source_step.y) <= 1.0001) {
+        premul = sample_src_premul(src_coord, src_min, src_max);
+    } else {
+        vec2 dx = vec2(source_step.x > 1.0001
+                           ? source_step.x * 0.25
+                           : 0.0,
+                       0.0);
+        vec2 dy = vec2(0.0,
+                       source_step.y > 1.0001
+                           ? source_step.y * 0.25
+                           : 0.0);
+        premul =
+            (sample_src_premul(src_coord - dx - dy, src_min, src_max) +
+             sample_src_premul(src_coord + dx - dy, src_min, src_max) +
+             sample_src_premul(src_coord - dx + dy, src_min, src_max) +
+             sample_src_premul(src_coord + dx + dy, src_min, src_max)) * 0.25;
+    }
     premul.rgb = premul.a > 0.00001 ? premul.rgb / premul.a : vec3(0.0);
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
@@ -1604,17 +1638,7 @@ vec4 unpack_u8(uint c) {
                 float((c >> 24) & 0xffu)) / 255.0;
 }
 
-vec4 load_src(ivec2 local) {
-    if (pc.color0.z != 1) {
-        return imageLoad(src_img, pc.rect0.zw + local);
-    }
-    ivec2 src_extent = max(pc.color0.xy, ivec2(1));
-    vec2 src_coord = vec2(pc.rect0.zw) +
-        (vec2(local) + vec2(0.5)) * vec2(src_extent) /
-            vec2(max(pc.rect1.xy, ivec2(1))) -
-        vec2(0.5);
-    ivec2 src_min = pc.rect0.zw;
-    ivec2 src_max = src_min + src_extent - ivec2(1);
+vec4 sample_src_premul(vec2 src_coord, ivec2 src_min, ivec2 src_max) {
     ivec2 p0 = clamp(ivec2(floor(src_coord)), src_min, src_max);
     ivec2 p1 = clamp(p0 + ivec2(1), src_min, src_max);
     vec2 f = clamp(fract(src_coord), vec2(0.0), vec2(1.0));
@@ -1626,7 +1650,38 @@ vec4 load_src(ivec2 local) {
     c10.rgb *= c10.a;
     c01.rgb *= c01.a;
     c11.rgb *= c11.a;
-    vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+vec4 load_src(ivec2 local) {
+    if (pc.color0.z != 1) {
+        return imageLoad(src_img, pc.rect0.zw + local);
+    }
+    ivec2 src_extent = max(pc.color0.xy, ivec2(1));
+    vec2 source_step = vec2(src_extent) /
+        vec2(max(pc.rect1.xy, ivec2(1)));
+    vec2 src_coord = vec2(pc.rect0.zw) +
+        (vec2(local) + vec2(0.5)) * source_step - vec2(0.5);
+    ivec2 src_min = pc.rect0.zw;
+    ivec2 src_max = src_min + src_extent - ivec2(1);
+    vec4 premul;
+    if (max(source_step.x, source_step.y) <= 1.0001) {
+        premul = sample_src_premul(src_coord, src_min, src_max);
+    } else {
+        vec2 dx = vec2(source_step.x > 1.0001
+                           ? source_step.x * 0.25
+                           : 0.0,
+                       0.0);
+        vec2 dy = vec2(0.0,
+                       source_step.y > 1.0001
+                           ? source_step.y * 0.25
+                           : 0.0);
+        premul =
+            (sample_src_premul(src_coord - dx - dy, src_min, src_max) +
+             sample_src_premul(src_coord + dx - dy, src_min, src_max) +
+             sample_src_premul(src_coord - dx + dy, src_min, src_max) +
+             sample_src_premul(src_coord + dx + dy, src_min, src_max)) * 0.25;
+    }
     premul.rgb = premul.a > 0.00001 ? premul.rgb / premul.a : vec3(0.0);
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
@@ -1985,7 +2040,7 @@ float edge(vec2 a, vec2 b, vec2 p) {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
-vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
+vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
     vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
     ivec2 p0 = ivec2(floor(center_coord));
     ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
@@ -1999,12 +2054,44 @@ vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
     c01.rgb *= c01.a;
     c11.rgb *= c11.a;
     vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
+vec4 straight_from_premul(vec4 premul) {
     if (premul.a > 0.00001) {
         premul.rgb /= premul.a;
     } else {
         premul.rgb = vec3(0.0);
     }
     return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
+vec4 load_minified(ivec2 limit, vec2 edge_coord,
+                    vec2 source_dx, vec2 source_dy) {
+    // A single bilinear lookup aliases alpha edges when an E-mote surface is
+    // presented at a fractional scale (0.5 is common in Artemis games).
+    // Approximate the source footprint with destination-pixel subsamples. Keep the
+    // fast single lookup at 1:1/upscale, and average premultiplied samples so
+    // transparent texels cannot introduce dark colour fringes.
+    float footprint = max(length(source_dx), length(source_dy));
+    if (footprint <= 1.0001) {
+        return straight_from_premul(
+            load_bilinear_premul(limit, edge_coord));
+    }
+    // DXT E-mote atlases contain high-contrast one-pixel line art. At the
+    // authored 0.5 presentation scale a bare bilinear lookup leaves that
+    // content visibly stair-stepped. Sample four bilinear quadrants spanning
+    // the complete reduction footprint. This covers the compressed source
+    // blocks without the cost of a generic 3x3 post-process and retains
+    // premultiplied alpha semantics at silhouette edges.
+    vec2 dx = source_dx * 0.5;
+    vec2 dy = source_dy * 0.5;
+    vec4 premul =
+        load_bilinear_premul(limit, edge_coord - dx - dy) +
+        load_bilinear_premul(limit, edge_coord + dx - dy) +
+        load_bilinear_premul(limit, edge_coord - dx + dy) +
+        load_bilinear_premul(limit, edge_coord + dx + dy);
+    return straight_from_premul(premul * 0.25);
 }
 
 void main() {
@@ -2042,7 +2129,16 @@ void main() {
         float w2 = edge(d0, d1, p) / area;
         if (w0 >= -0.0001 && w1 >= -0.0001 && w2 >= -0.0001) {
             vec2 src_pos_f = v0.zw * w0 + v1.zw * w1 + v2.zw * w2;
-            out_color = load_bilinear(src_limit, src_pos_f);
+            vec2 source10 = v1.zw - v0.zw;
+            vec2 source20 = v2.zw - v0.zw;
+            vec2 source_dx =
+                source10 * ((d0.y - d2.y) / area) +
+                source20 * ((d1.y - d0.y) / area);
+            vec2 source_dy =
+                source10 * ((d2.x - d0.x) / area) +
+                source20 * ((d0.x - d1.x) / area);
+            out_color = load_minified(
+                src_limit, src_pos_f, source_dx, source_dy);
             covered = true;
             // A tessellated surface has a single source sample at a pixel.
             // Stop after the first covering triangle instead of scanning the
@@ -2102,7 +2198,7 @@ float edge(vec2 a, vec2 b, vec2 p) {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
-vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
+vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
     vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
     ivec2 p0 = ivec2(floor(center_coord));
     ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
@@ -2116,6 +2212,24 @@ vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
     c01.rgb *= c01.a;
     c11.rgb *= c11.a;
     vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
+vec4 load_minified(ivec2 limit, vec2 edge_coord,
+                    vec2 source_dx, vec2 source_dy) {
+    float footprint = max(length(source_dx), length(source_dy));
+    vec4 premul;
+    if (footprint <= 1.0001) {
+        premul = load_bilinear_premul(limit, edge_coord);
+    } else {
+        vec2 dx = source_dx * 0.5;
+        vec2 dy = source_dy * 0.5;
+        premul =
+            (load_bilinear_premul(limit, edge_coord - dx - dy) +
+             load_bilinear_premul(limit, edge_coord + dx - dy) +
+             load_bilinear_premul(limit, edge_coord - dx + dy) +
+             load_bilinear_premul(limit, edge_coord + dx + dy)) * 0.25;
+    }
     if (premul.a > 0.00001) {
         premul.rgb /= premul.a;
     } else {
@@ -2551,7 +2665,16 @@ void main() {
         float w2 = edge(d0, d1, p) / area;
         if (w0 >= -0.0001 && w1 >= -0.0001 && w2 >= -0.0001) {
             vec2 src_pos_f = v0.zw * w0 + v1.zw * w1 + v2.zw * w2;
-            vec4 src = load_bilinear(src_limit, src_pos_f);
+            vec2 source10 = v1.zw - v0.zw;
+            vec2 source20 = v2.zw - v0.zw;
+            vec2 source_dx =
+                source10 * ((d0.y - d2.y) / area) +
+                source20 * ((d1.y - d0.y) / area);
+            vec2 source_dy =
+                source10 * ((d2.x - d0.x) / area) +
+                source20 * ((d0.x - d1.x) / area);
+            vec4 src = load_minified(
+                src_limit, src_pos_f, source_dx, source_dy);
             if (tvp_blend) {
                 uint d = pack_u8(vec4_to_u8(dst));
                 uint s = pack_u8(vec4_to_u8(src));
@@ -2644,7 +2767,7 @@ float edge(vec2 a, vec2 b, vec2 p) {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
-vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
+vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
     vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
     ivec2 p0 = ivec2(floor(center_coord));
     ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
@@ -2658,6 +2781,24 @@ vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
     c01.rgb *= c01.a;
     c11.rgb *= c11.a;
     vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
+vec4 load_minified(ivec2 limit, vec2 edge_coord,
+                    vec2 source_dx, vec2 source_dy) {
+    float footprint = max(length(source_dx), length(source_dy));
+    vec4 premul;
+    if (footprint <= 1.0001) {
+        premul = load_bilinear_premul(limit, edge_coord);
+    } else {
+        vec2 dx = source_dx * 0.5;
+        vec2 dy = source_dy * 0.5;
+        premul =
+            (load_bilinear_premul(limit, edge_coord - dx - dy) +
+             load_bilinear_premul(limit, edge_coord + dx - dy) +
+             load_bilinear_premul(limit, edge_coord - dx + dy) +
+             load_bilinear_premul(limit, edge_coord + dx + dy)) * 0.25;
+    }
     if (premul.a > 0.00001) {
         premul.rgb /= premul.a;
     } else {
@@ -2666,7 +2807,7 @@ vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
 
-float load_mask(vec2 edge_coord) {
+float load_mask_bilinear(vec2 edge_coord) {
     ivec2 limit = imageSize(mask_img) - ivec2(1);
     vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
     ivec2 p0 = ivec2(floor(center_coord));
@@ -2678,6 +2819,20 @@ float load_mask(vec2 edge_coord) {
     float a11 = imageLoad(mask_img, p1).a;
     return clamp(mix(mix(a00, a10, f.x), mix(a01, a11, f.x), f.y),
                  0.0, 1.0);
+}
+
+float load_mask_minified(vec2 edge_coord,
+                          vec2 mask_dx, vec2 mask_dy) {
+    float footprint = max(length(mask_dx), length(mask_dy));
+    if (footprint <= 1.0001) {
+        return load_mask_bilinear(edge_coord);
+    }
+    vec2 dx = mask_dx * 0.5;
+    vec2 dy = mask_dy * 0.5;
+    return (load_mask_bilinear(edge_coord - dx - dy) +
+            load_mask_bilinear(edge_coord + dx - dy) +
+            load_mask_bilinear(edge_coord - dx + dy) +
+            load_mask_bilinear(edge_coord + dx + dy)) * 0.25;
 }
 
 vec4 straight_from_premul(vec3 rgb, float a) {
@@ -2900,14 +3055,28 @@ void main() {
             vec2 mask_pos_f = vertex_mask(base, 0) * w0 +
                               vertex_mask(base, 1) * w1 +
                               vertex_mask(base, 2) * w2;
-            float mask_val = 1.0 - load_mask(mask_pos_f);
+            vec2 source10 = vertex_src(base, 1) - vertex_src(base, 0);
+            vec2 source20 = vertex_src(base, 2) - vertex_src(base, 0);
+            vec2 mask10 = vertex_mask(base, 1) - vertex_mask(base, 0);
+            vec2 mask20 = vertex_mask(base, 2) - vertex_mask(base, 0);
+            float dw1dx = (d0.y - d2.y) / area;
+            float dw1dy = (d2.x - d0.x) / area;
+            float dw2dx = (d1.y - d0.y) / area;
+            float dw2dy = (d0.x - d1.x) / area;
+            vec2 source_dx = source10 * dw1dx + source20 * dw2dx;
+            vec2 source_dy = source10 * dw1dy + source20 * dw2dy;
+            vec2 mask_dx = mask10 * dw1dx + mask20 * dw2dx;
+            vec2 mask_dy = mask10 * dw1dy + mask20 * dw2dy;
+            float mask_val = 1.0 - load_mask_minified(
+                mask_pos_f, mask_dx, mask_dy);
             if (inverted_mask) {
                 mask_val = 1.0 - mask_val;
             }
             if (mask_val <= 0.00001) {
                 continue;
             }
-            vec4 src = load_bilinear(src_limit, src_pos_f);
+            vec4 src = load_minified(
+                src_limit, src_pos_f, source_dx, source_dy);
             if (src.g >= 0.70 && src.g > src.r + 0.20 && src.g > src.b + 0.20) {
                 src.a = 0.0;
             }
@@ -3686,6 +3855,11 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
         case GodotGpuOp::Type::Read:
             op->data = rd->texture_get_data(op->src, 0);
             return !op->data.is_empty();
+        case GodotGpuOp::Type::ReadAsync:
+            // Asynchronous reads are submitted by
+            // BeginGodotGpuReadbackOnRenderThread after all preceding writes
+            // in the ordered bridge queue have been drained.
+            return false;
         case GodotGpuOp::Type::Blend:
             return ExecuteGodotGpuBlend(rd, op);
         case GodotGpuOp::Type::Blend2:
@@ -3732,6 +3906,32 @@ void FinishGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool result) {
         op->done = true;
     }
     op->done_cv.notify_one();
+}
+
+void CompleteGodotGpuReadback(PackedByteArray data,
+                              uint64_t completed_request) {
+    std::shared_ptr<GodotGpuOp> completed_op;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        const auto found = g_gpu_readbacks.find(completed_request);
+        if(found == g_gpu_readbacks.end()) return;
+        completed_op = found->second.op;
+    }
+    completed_op->data = std::move(data);
+    FinishGodotGpuOp(completed_op, !completed_op->data.is_empty());
+}
+
+bool BeginGodotGpuReadbackOnRenderThread(
+    RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &op) {
+    if(rd == nullptr || op == nullptr ||
+       op->type != GodotGpuOp::Type::ReadAsync ||
+       op->readback_request == 0) {
+        return false;
+    }
+    return rd->texture_get_data_async(
+               op->src, 0,
+               callable_mp_static(&CompleteGodotGpuReadback)
+                   .bind(op->readback_request)) == OK;
 }
 
 bool IsBatchableTriangleOp(const std::shared_ptr<GodotGpuOp> &op) {
@@ -4036,6 +4236,18 @@ void DrainGodotGpuOpsOnRenderThread() {
 
         flush_compute();
 
+        if(op->type == GodotGpuOp::Type::ReadAsync) {
+            // The readback belongs to the same command stream as the clear,
+            // triangle and blend operations that produced this frame. Submit
+            // it only after those operations have been encoded. Starting it
+            // directly from BridgeBeginReadRgba races Metal and can capture a
+            // transparent or partially composited E-mote surface.
+            if(!BeginGodotGpuReadbackOnRenderThread(rd, op)) {
+                FinishGodotGpuOp(op, false);
+            }
+            continue;
+        }
+
         // Alias blends are executed separately because sampling and writing the
         // same storage image in one dispatch is undefined on Metal/Vulkan.
         FinishGodotGpuOp(op, ExecuteGodotGpuOp(rd, op));
@@ -4058,20 +4270,22 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
         return false;
     }
     if (server->is_on_render_thread()) {
-        if (DeferredGodotGpuDrainEnabled()) {
+        if (DeferredGodotGpuDrainEnabled() ||
+            op->type == GodotGpuOp::Type::ReadAsync) {
             {
                 std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
                 g_gpu_op_queue.push_back(op);
                 UpdateGpuQueuePeak(g_gpu_op_queue.size());
             }
-            if (!wait && op->type != GodotGpuOp::Type::Flush) {
+            if (!wait && op->type != GodotGpuOp::Type::Flush &&
+                op->type != GodotGpuOp::Type::ReadAsync) {
                 return true;
             }
             DrainGodotGpuOpsOnRenderThread();
             return wait ? op->result : true;
         }
         const bool result = ExecuteGodotGpuOp(rd, op);
-        CountGpuOpResult(result);
+        FinishGodotGpuOp(op, result);
         return result;
     }
 
@@ -5092,7 +5306,6 @@ bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     if (width <= 0 || height <= 0 || triangle_count > 64) {
         return false;
     }
-
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::CopyTriangles;
     op->src = src_record.rid;
@@ -5143,7 +5356,6 @@ bool BridgeDrawTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     if (width <= 0 || height <= 0 || triangle_count > 64) {
         return false;
     }
-
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::DrawTriangles;
     op->src = src_record.rid;
@@ -5203,7 +5415,6 @@ bool BridgeDrawMaskedTriangles(uint64_t dst, uint64_t src, uint64_t mask,
     if (width <= 0 || height <= 0 || triangle_count > 64) {
         return false;
     }
-
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::DrawMaskedTriangles;
     op->src = src_record.rid;
@@ -5308,7 +5519,6 @@ bool BridgeBlendRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
     if (width <= 0 || height <= 0 || src_width <= 0 || src_height <= 0) {
         return false;
     }
-
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Blend;
     op->src = src_record.rid;
@@ -5458,6 +5668,82 @@ bool BridgeReadRgba(uint64_t texture, void *out_pixels, size_t out_pixels_size,
                     tight_stride);
     }
     return true;
+}
+
+uint64_t BridgeBeginReadRgba(uint64_t texture) {
+    GodotGpuTextureRecord record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        const auto found = g_gpu_textures.find(texture);
+        if(found == g_gpu_textures.end()) return 0;
+        record = found->second;
+    }
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::ReadAsync;
+    op->src = record.rid;
+    uint64_t request = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        request = g_next_gpu_readback_id++;
+        if(request == 0) request = g_next_gpu_readback_id++;
+        g_gpu_readbacks.emplace(
+            request, GodotGpuReadbackRequest{op, record.width, record.height});
+    }
+    op->readback_request = request;
+    if(!RunGodotGpuOpAsync(op)) {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        g_gpu_readbacks.erase(request);
+        return 0;
+    }
+    return request;
+}
+
+bool BridgePollReadRgba(uint64_t request, void *out_pixels,
+                        size_t out_pixels_size, uint32_t stride_bytes,
+                        bool *ready) {
+    if(ready) *ready = false;
+    if(request == 0 || out_pixels == nullptr) return false;
+    GodotGpuReadbackRequest record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        const auto found = g_gpu_readbacks.find(request);
+        if(found == g_gpu_readbacks.end()) return false;
+        record = found->second;
+    }
+    {
+        std::lock_guard<std::mutex> lock(record.op->done_mutex);
+        if(!record.op->done) return true;
+    }
+    if(ready) *ready = true;
+    const uint32_t tight_stride = record.width * 4u;
+    const uint32_t dst_stride = stride_bytes != 0 ? stride_bytes : tight_stride;
+    const size_t required = static_cast<size_t>(dst_stride) * record.height;
+    bool success = record.op->result && out_pixels_size >= required;
+    if(success) {
+        const uint8_t *source = record.op->data.ptr();
+        success = source != nullptr &&
+            static_cast<size_t>(record.op->data.size()) >=
+                static_cast<size_t>(tight_stride) * record.height;
+        if(success) {
+            auto *destination = static_cast<uint8_t *>(out_pixels);
+            for(uint32_t y = 0; y < record.height; ++y) {
+                std::memcpy(destination + static_cast<size_t>(y) * dst_stride,
+                            source + static_cast<size_t>(y) * tight_stride,
+                            tight_stride);
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        g_gpu_readbacks.erase(request);
+    }
+    return success;
+}
+
+void BridgeDiscardReadRgba(uint64_t request) {
+    if(request == 0) return;
+    std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+    g_gpu_readbacks.erase(request);
 }
 
 bool BridgeFlush() {
@@ -5906,6 +6192,10 @@ void ReleaseGodotGpuPipeline() {
 }
 
 void ReleaseRemainingGodotGpuTextures() {
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        g_gpu_readbacks.clear();
+    }
     std::vector<GodotGpuTextureRecord> records;
     {
         std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
@@ -5955,6 +6245,9 @@ public:
         callbacks.blend_rect2 = BridgeBlendRect2;
         callbacks.blend_rect3 = BridgeBlendRect3;
         callbacks.read_rgba = BridgeReadRgba;
+        callbacks.begin_read_rgba = BridgeBeginReadRgba;
+        callbacks.poll_read_rgba = BridgePollReadRgba;
+        callbacks.discard_read_rgba = BridgeDiscardReadRgba;
         callbacks.flush = BridgeFlush;
         engine_register_godot_gpu_bridge(&callbacks);
 

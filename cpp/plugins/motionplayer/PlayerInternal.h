@@ -2931,14 +2931,18 @@ namespace internal {
                 state.hasTransformOrder = true;
             }
 
-            // Frame type belongs to the keyframe being entered.  Native
-            // sub_6926B4 stores the upcoming frame in the second slot and
-            // sub_699AE4 uses that slot's type to decide whether the span
-            // leading into it is interpolated.  Treating type=3 as a property
-            // of frameA delayed every transition by one keyframe: E-mote's
-            // mouth track (0:type2, 12:type3, 60:type3) then held the closed
-            // mouth for values 0..1, so continuous .vol.csv amplitudes such
-            // as 0.36 and 0.72 rendered identically.
+            // Native ForwardFrame (libartemis.so 0x6B30F0,
+            // compatible-v2 0x6B43E8) toggles LayerInfo::activeSlot before
+            // loading the following frame into the other slot. BuildFrameParam
+            // (0x6B4988 / 0x6B5F7C) then tests activeSlot+241, so type=3 is a
+            // property of frameA and controls the span leaving that frame.
+            // This distinction is visible in E-mote mouth tracks authored as
+            // 0:type2, 12:type3, 60:type3: values below the first mouth
+            // threshold stay closed, then the 12..60 span opens monotonically.
+            if(!frameA.interpolate) {
+                return state;
+            }
+
             const int nextIndex = activeIndex + 1;
             if(nextIndex >= static_cast<int>(parsedLayer.frames.size())) {
                 return state;  // no next frame, just use slot A
@@ -2962,9 +2966,6 @@ namespace internal {
                 state.debugFrameBSrc = frameB.slot.src;
             }
             // Compute interpolation ratio
-            if(!frameB.interpolate) {
-                return state;
-            }
             const double duration = frameB.time - frameA.time;
             if(duration <= 0.0) return state;
 
@@ -3057,7 +3058,10 @@ namespace internal {
             bool *outDecodedIsBgra = nullptr,
             bool decodePixelData = true,
             std::string *outResourcePath = nullptr,
-            std::string *outCompressName = nullptr) {
+            std::string *outCompressName = nullptr,
+            int *outDecodedWidth = nullptr,
+            int *outDecodedHeight = nullptr,
+            std::array<int, 4> *outDecodedSourceRect = nullptr) {
             outWidth = 0;
             outHeight = 0;
             outOriginX = 0.0;
@@ -3071,6 +3075,15 @@ namespace internal {
             }
             if(outCompressName) {
                 outCompressName->clear();
+            }
+            if(outDecodedWidth) {
+                *outDecodedWidth = 0;
+            }
+            if(outDecodedHeight) {
+                *outDecodedHeight = 0;
+            }
+            if(outDecodedSourceRect) {
+                *outDecodedSourceRect = {0, 0, 0, 0};
             }
             if(source.empty() || isMotionCrossReference(source)) {
                 return nullptr;
@@ -3281,6 +3294,55 @@ namespace internal {
                                 if(outCompressName) {
                                     *outCompressName = resourceEncoding;
                                 }
+
+                                // Native MPSBTex keeps the complete atlas
+                                // bound while RenderMesh addresses the icon
+                                // rectangle inside it.  A tightly cropped
+                                // replacement texture clamps its outermost
+                                // texel instead, turning the common 0.5x
+                                // E-mote presentation into a dark, serrated
+                                // silhouette.  Callers which consume the
+                                // decoded layout request a small piece of the
+                                // original atlas gutter and sample only the
+                                // logical icon rectangle within it.
+                                constexpr int kFilterGutter = 2;
+                                const bool preserveFilterGutter =
+                                    outDecodedWidth || outDecodedHeight ||
+                                    outDecodedSourceRect;
+                                const int decodedLeft = preserveFilterGutter
+                                    ? std::max(0, atlasLeft - kFilterGutter)
+                                    : atlasLeft;
+                                const int decodedTop = preserveFilterGutter
+                                    ? std::max(0, atlasTop - kFilterGutter)
+                                    : atlasTop;
+                                const int decodedRight = preserveFilterGutter
+                                    ? std::min(atlasWidth,
+                                               atlasLeft + outWidth +
+                                                   kFilterGutter)
+                                    : atlasLeft + outWidth;
+                                const int decodedBottom = preserveFilterGutter
+                                    ? std::min(atlasHeight,
+                                               atlasTop + outHeight +
+                                                   kFilterGutter)
+                                    : atlasTop + outHeight;
+                                const int decodedWidth =
+                                    decodedRight - decodedLeft;
+                                const int decodedHeight =
+                                    decodedBottom - decodedTop;
+                                const int insetLeft = atlasLeft - decodedLeft;
+                                const int insetTop = atlasTop - decodedTop;
+                                if(outDecodedWidth) {
+                                    *outDecodedWidth = decodedWidth;
+                                }
+                                if(outDecodedHeight) {
+                                    *outDecodedHeight = decodedHeight;
+                                }
+                                if(outDecodedSourceRect) {
+                                    *outDecodedSourceRect = {
+                                        insetLeft, insetTop,
+                                        insetLeft + outWidth,
+                                        insetTop + outHeight};
+                                }
                                 if(!decodePixelData) {
                                     return atlasIt->second.get();
                                 }
@@ -3289,8 +3351,8 @@ namespace internal {
                                        atlasIt->second->data,
                                        resourceEncoding,
                                        atlasWidth, atlasHeight,
-                                       atlasLeft, atlasTop,
-                                       outWidth, outHeight,
+                                       decodedLeft, decodedTop,
+                                       decodedWidth, decodedHeight,
                                        decompressedOut)) {
                                     if(outDecodedIsBgra) {
                                         *outDecodedIsBgra = false;
@@ -3334,17 +3396,17 @@ namespace internal {
                                 if(atlasData &&
                                    atlasData->size() >= atlasByteCount) {
                                     const size_t rowBytes =
-                                        static_cast<size_t>(outWidth) * 4u;
+                                        static_cast<size_t>(decodedWidth) * 4u;
                                     decompressedOut.resize(
                                         rowBytes *
-                                        static_cast<size_t>(outHeight));
-                                    for(int row = 0; row < outHeight; ++row) {
+                                        static_cast<size_t>(decodedHeight));
+                                    for(int row = 0; row < decodedHeight; ++row) {
                                         const auto sourceOffset =
                                             (static_cast<size_t>(
-                                                 atlasTop + row) *
+                                                 decodedTop + row) *
                                                  static_cast<size_t>(
                                                      atlasWidth) +
-                                             static_cast<size_t>(atlasLeft)) *
+                                             static_cast<size_t>(decodedLeft)) *
                                             4u;
                                         std::memcpy(
                                             decompressedOut.data() +

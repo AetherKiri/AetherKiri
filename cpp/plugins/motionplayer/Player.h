@@ -348,6 +348,27 @@ namespace motion {
                           std::array<int, 4> *visibleBounds = nullptr,
                           bool *alphaBoundsKnown = nullptr,
                           bool *alphaOpaque = nullptr);
+        bool renderToRgbaRegion(
+            std::uint8_t *pixels, int stageWidth, int stageHeight,
+            int regionLeft, int regionTop, int regionWidth, int regionHeight,
+            int pitch, std::array<int, 4> *visibleBounds = nullptr,
+            bool *alphaBoundsKnown = nullptr,
+            bool *alphaOpaque = nullptr);
+        bool beginRenderToRgbaRegion(
+            int stageWidth, int stageHeight,
+            int regionLeft, int regionTop, int regionWidth, int regionHeight);
+        bool finishRenderToRgbaRegion(
+            std::uint8_t *pixels, int pitch,
+            std::array<int, 4> *visibleBounds = nullptr,
+            bool *alphaBoundsKnown = nullptr,
+            bool *alphaOpaque = nullptr);
+        bool requestRenderToRgbaReadback();
+        bool pollRenderToRgbaReadback(
+            std::uint8_t *pixels, int pitch, bool *ready,
+            std::array<int, 4> *visibleBounds = nullptr,
+            bool *alphaBoundsKnown = nullptr,
+            bool *alphaOpaque = nullptr);
+        void discardRenderToRgbaReadback();
         void frameProgress(double dt);
         void frameProgressManually(double dt) {
             noteManualProgress();

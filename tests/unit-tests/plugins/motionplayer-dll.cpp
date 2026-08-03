@@ -1356,7 +1356,8 @@ TEST_CASE("emoteplayer applies live mouth controls to rendered image leaves") {
     player.getPlayer().setSpeed(false);
     const auto closed = renderAtTalkValue(0.0);
     const auto lowVoice = renderAtTalkValue(0.36);
-    const auto highVoice = renderAtTalkValue(0.72);
+    const auto thresholdVoice = renderAtTalkValue(0.72);
+    const auto midVoice = renderAtTalkValue(2.0);
     const auto open = renderAtTalkValue(4.0);
     const auto closedAgain = renderAtTalkValue(0.0);
 
@@ -1368,7 +1369,13 @@ TEST_CASE("emoteplayer applies live mouth controls to rendered image leaves") {
         return changed;
     };
     REQUIRE(countChangedBytes(closed, open) > 100);
-    REQUIRE(countChangedBytes(lowVoice, highVoice) > 20);
+    // Native BuildFrameParam applies type=3 to the span leaving the active
+    // frame. The fixture's mouth track starts 0:type2 -> 12:type3, so values
+    // below the first threshold remain at the closed pose instead of moving
+    // forward and then reversing when the input crosses 1.0.
+    REQUIRE(lowVoice == closed);
+    REQUIRE(thresholdVoice == closed);
+    REQUIRE(countChangedBytes(midVoice, open) > 20);
     REQUIRE(closedAgain == closed);
 }
 
@@ -1772,6 +1779,64 @@ TEST_CASE("motionplayer decodes DXT5 E-mote atlas icons") {
         REQUIRE(decoded[pixel * 4u + 2u] == 0u);
         REQUIRE(decoded[pixel * 4u + 3u] == 0xffu);
     }
+}
+
+TEST_CASE("motionplayer retains atlas gutter for filtered E-mote icons") {
+    auto root = std::make_shared<PSB::PSBDictionary>();
+    auto source = std::make_shared<PSB::PSBDictionary>();
+    auto tex = std::make_shared<PSB::PSBDictionary>();
+    auto icons = std::make_shared<PSB::PSBDictionary>();
+    auto icon = std::make_shared<PSB::PSBDictionary>();
+    auto texture = std::make_shared<PSB::PSBDictionary>();
+    auto pixels = std::make_shared<PSB::PSBResource>();
+
+    icon->emplace("left", std::make_shared<PSB::PSBNumber>(2));
+    icon->emplace("top", std::make_shared<PSB::PSBNumber>(2));
+    icon->emplace("width", std::make_shared<PSB::PSBNumber>(2));
+    icon->emplace("height", std::make_shared<PSB::PSBNumber>(2));
+    icons->emplace("part", icon);
+    texture->emplace("width", std::make_shared<PSB::PSBNumber>(6));
+    texture->emplace("height", std::make_shared<PSB::PSBNumber>(6));
+    texture->emplace("pixel", pixels);
+    tex->emplace("icon", icons);
+    tex->emplace("texture", texture);
+    source->emplace("tex", tex);
+    root->emplace("source", source);
+
+    pixels->data.resize(6u * 6u * 4u);
+    for(size_t index = 0; index < 36u; ++index) {
+        pixels->data[index * 4u] = static_cast<std::uint8_t>(index);
+        pixels->data[index * 4u + 3u] = 0xffu;
+    }
+
+    motion::detail::MotionSnapshot snapshot;
+    snapshot.root = root;
+    snapshot.resourcesByPath.emplace(
+        "source/tex/texture/pixel", pixels);
+
+    int width = 0;
+    int height = 0;
+    int decodedWidth = 0;
+    int decodedHeight = 0;
+    std::array<int, 4> sourceRect{};
+    double originX = 0.0;
+    double originY = 0.0;
+    std::vector<std::uint8_t> decoded;
+    const auto *resource =
+        motion::internal::findPSBResourceBySourceName(
+            snapshot, "src/tex/part", width, height, decoded,
+            originX, originY, nullptr, true, nullptr, nullptr,
+            &decodedWidth, &decodedHeight, &sourceRect);
+
+    REQUIRE(resource == pixels.get());
+    REQUIRE(width == 2);
+    REQUIRE(height == 2);
+    REQUIRE(decodedWidth == 6);
+    REQUIRE(decodedHeight == 6);
+    REQUIRE(sourceRect == (std::array<int, 4>{2, 2, 4, 4}));
+    REQUIRE(decoded.size() == 6u * 6u * 4u);
+    REQUIRE(decoded[0] == 0u);
+    REQUIRE(decoded[(2u * 6u + 2u) * 4u] == 14u);
 }
 
 TEST_CASE("motionplayer combines E-mote source groups with icon names") {

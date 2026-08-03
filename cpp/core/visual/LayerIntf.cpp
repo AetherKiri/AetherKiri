@@ -7975,13 +7975,11 @@ void tTJSNI_BaseLayer::MeshCopy(const tTVPPointD *points, tjs_int divx,
             const double u1 = static_cast<double>(x + 1) /
                 static_cast<double>(divx - 1);
 
-            tTVPRect cellRect(
-                static_cast<tjs_int>(std::floor(srcLeft + srcWidth * u0)),
-                static_cast<tjs_int>(std::floor(srcTop + srcHeight * v0)),
-                static_cast<tjs_int>(std::ceil(srcLeft + srcWidth * u1)),
-                static_cast<tjs_int>(std::ceil(srcTop + srcHeight * v1)));
-            if(cellRect.right <= cellRect.left ||
-               cellRect.bottom <= cellRect.top)
+            const double sourceLeft = srcLeft + srcWidth * u0;
+            const double sourceTop = srcTop + srcHeight * v0;
+            const double sourceRight = srcLeft + srcWidth * u1;
+            const double sourceBottom = srcTop + srcHeight * v1;
+            if(sourceRight <= sourceLeft || sourceBottom <= sourceTop)
                 continue;
 
             const auto &p0 = points[y * divx + x];
@@ -7991,18 +7989,12 @@ void tTJSNI_BaseLayer::MeshCopy(const tTVPPointD *points, tjs_int divx,
             destinationPoints.insert(destinationPoints.end(),
                                      {p0, p1, p2, p1, p2, p3});
             sourcePoints.insert(sourcePoints.end(), {
-                {static_cast<double>(cellRect.left),
-                 static_cast<double>(cellRect.top)},
-                {static_cast<double>(cellRect.right),
-                 static_cast<double>(cellRect.top)},
-                {static_cast<double>(cellRect.left),
-                 static_cast<double>(cellRect.bottom)},
-                {static_cast<double>(cellRect.right),
-                 static_cast<double>(cellRect.top)},
-                {static_cast<double>(cellRect.left),
-                 static_cast<double>(cellRect.bottom)},
-                {static_cast<double>(cellRect.right),
-                 static_cast<double>(cellRect.bottom)}
+                {sourceLeft, sourceTop},
+                {sourceRight, sourceTop},
+                {sourceLeft, sourceBottom},
+                {sourceRight, sourceTop},
+                {sourceLeft, sourceBottom},
+                {sourceRight, sourceBottom}
             });
         }
     }
@@ -8794,13 +8786,17 @@ void tTJSNI_BaseLayer::OperateMesh(const tTVPPointD *points, tjs_int divx,
             const double u1 = static_cast<double>(x + 1) /
                 static_cast<double>(divx - 1);
 
-            tTVPRect cellRect(
-                static_cast<tjs_int>(std::floor(srcLeft + srcWidth * u0)),
-                static_cast<tjs_int>(std::floor(srcTop + srcHeight * v0)),
-                static_cast<tjs_int>(std::ceil(srcLeft + srcWidth * u1)),
-                static_cast<tjs_int>(std::ceil(srcTop + srcHeight * v1)));
-            if(cellRect.right <= cellRect.left ||
-               cellRect.bottom <= cellRect.top)
+            // Native MMotionRenderManager feeds one continuous floating-point
+            // UV grid to RenderMesh.  Rounding every cell independently makes
+            // adjacent cells overlap by a source pixel whenever the texture
+            // size is not divisible by the mesh count.  At the common 0.5x
+            // E-mote presentation scale that discontinuity becomes a visible
+            // half-pixel stair-step across hair, facial lines and silhouettes.
+            const double sourceLeft = srcLeft + srcWidth * u0;
+            const double sourceTop = srcTop + srcHeight * v0;
+            const double sourceRight = srcLeft + srcWidth * u1;
+            const double sourceBottom = srcTop + srcHeight * v1;
+            if(sourceRight <= sourceLeft || sourceBottom <= sourceTop)
                 continue;
 
             const auto &p0 = points[y * divx + x];
@@ -8810,18 +8806,12 @@ void tTJSNI_BaseLayer::OperateMesh(const tTVPPointD *points, tjs_int divx,
             destinationPoints.insert(destinationPoints.end(),
                                      {p0, p1, p2, p1, p2, p3});
             sourcePoints.insert(sourcePoints.end(), {
-                {static_cast<double>(cellRect.left),
-                 static_cast<double>(cellRect.top)},
-                {static_cast<double>(cellRect.right),
-                 static_cast<double>(cellRect.top)},
-                {static_cast<double>(cellRect.left),
-                 static_cast<double>(cellRect.bottom)},
-                {static_cast<double>(cellRect.right),
-                 static_cast<double>(cellRect.top)},
-                {static_cast<double>(cellRect.left),
-                 static_cast<double>(cellRect.bottom)},
-                {static_cast<double>(cellRect.right),
-                 static_cast<double>(cellRect.bottom)}
+                {sourceLeft, sourceTop},
+                {sourceRight, sourceTop},
+                {sourceLeft, sourceBottom},
+                {sourceRight, sourceTop},
+                {sourceLeft, sourceBottom},
+                {sourceRight, sourceBottom}
             });
         }
     }

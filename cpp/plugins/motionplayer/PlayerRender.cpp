@@ -6,6 +6,7 @@
 #include "ConfigManager/IndividualConfigManager.h"
 #include "TickCount.h"
 #include "ThreadIntf.h"
+#include "godot/GodotGpuBridge.h"
 #include "godot/GodotRenderManager.h"
 #include <algorithm>
 #include <cctype>
@@ -8741,6 +8742,7 @@ namespace motion {
         const auto profileStartUs =
             profileEnabled ? motionRenderProfileNowUs() : 0;
         auto &baseSourceCache = _runtime->motionSourceBitmapCache;
+        auto &baseSourceRects = _runtime->motionSourceBitmapRects;
         auto &preparedSourceCache = _runtime->motionPreparedBitmapCache;
         auto &materializedKeysBySource =
             _runtime->motionPreparedMaterializedKeysBySource;
@@ -8853,6 +8855,9 @@ namespace motion {
             std::string sourceOrigin("unresolved");
             int width = 0;
             int height = 0;
+            int decodedWidth = 0;
+            int decodedHeight = 0;
+            std::array<int, 4> decodedSourceRect{};
             double originX = 0.0;
             double originY = 0.0;
             std::string resourcePath;
@@ -8865,12 +8870,17 @@ namespace motion {
             const auto *resourceMetadata = findPSBResourceBySourceName(
                 *sourceMotion, command.sourceKey, width, height,
                 decodedPixels, originX, originY, nullptr, false,
-                &resourcePath, &compressName);
+                &resourcePath, &compressName,
+                &decodedWidth, &decodedHeight, &decodedSourceRect);
             if(resourceMetadata && width > 0 && height > 0 &&
                !resourceMetadata->data.empty()) {
+                const int bitmapWidth = decodedWidth > 0
+                    ? decodedWidth : width;
+                const int bitmapHeight = decodedHeight > 0
+                    ? decodedHeight : height;
                 sharedBitmapKey = makeSharedMotionSourceBitmapKey(
                     *sourceMotion, resourcePath, compressName,
-                    width, height,
+                    bitmapWidth, bitmapHeight,
                     *resourceMetadata,
                     _runtime->motionSourceResourceFingerprintCache);
                 srcBmp = findSharedMotionSourceBitmap(sharedBitmapKey);
@@ -8975,7 +8985,9 @@ namespace motion {
                     resource = findPSBResourceBySourceName(
                         *sourceMotion, command.sourceKey,
                         width, height, decodedPixels, originX, originY,
-                        &decodedPixelsAreBgra, true);
+                        &decodedPixelsAreBgra, true,
+                        nullptr, nullptr,
+                        &decodedWidth, &decodedHeight, &decodedSourceRect);
                     if(profileEnabled) {
                         profileStats.psbDecodeUs +=
                             motionRenderProfileNowUs() - decodeStartUs;
@@ -8985,16 +8997,20 @@ namespace motion {
                     const bool sourcePixelsAreBgra = motionSourcePixelsAreBGRA(
                         decodedPixelsAreBgra);
                     if(!srcBmp) {
+                        const int bitmapWidth = decodedWidth > 0
+                            ? decodedWidth : width;
+                        const int bitmapHeight = decodedHeight > 0
+                            ? decodedHeight : height;
                         const auto convertStartUs =
                             profileEnabled ? motionRenderProfileNowUs() : 0;
                         const auto &pixelData = decodedPixels.empty()
                             ? resource->data : decodedPixels;
                         auto bmp = std::make_shared<tTVPBaseBitmap>(
-                            static_cast<tjs_uint>(width),
-                            static_cast<tjs_uint>(height), 32);
+                            static_cast<tjs_uint>(bitmapWidth),
+                            static_cast<tjs_uint>(bitmapHeight), 32);
                         const auto totalPixels =
-                            static_cast<std::size_t>(width) *
-                            static_cast<std::size_t>(height);
+                            static_cast<std::size_t>(bitmapWidth) *
+                            static_cast<std::size_t>(bitmapHeight);
                         const auto validPixels = std::min(
                             pixelData.size() / 4u, totalPixels);
                         // A decoded PSB icon normally covers the complete
@@ -9002,19 +9018,20 @@ namespace motion {
                         // it immediately; retain the clear for truncated
                         // resources where the untouched tail must be alpha 0.
                         if(validPixels < totalPixels) {
-                            bmp->Fill(tTVPRect(0, 0, width, height),
+                            bmp->Fill(tTVPRect(0, 0,
+                                              bitmapWidth, bitmapHeight),
                                       0x00000000);
                         }
                         const auto *src = pixelData.data();
-                        for(int y = 0; y < height; ++y) {
+                        for(int y = 0; y < bitmapHeight; ++y) {
                             const auto rowOffset =
                                 static_cast<std::size_t>(y) *
-                                static_cast<std::size_t>(width);
+                                static_cast<std::size_t>(bitmapWidth);
                             if(rowOffset >= validPixels) {
                                 break;
                             }
                             const auto rowPixels = std::min(
-                                static_cast<std::size_t>(width),
+                                static_cast<std::size_t>(bitmapWidth),
                                 validPixels - rowOffset);
                             auto *row = static_cast<std::uint8_t *>(
                                 bmp->GetScanLineForWrite(
@@ -9041,8 +9058,11 @@ namespace motion {
                         }
                     }
                     sourceOrigin = fmt::format(
-                        "psb:{}:{}x{}:origin=({:.3f},{:.3f}):bgra={}:shared={}",
-                        command.sourceKey, width, height, originX, originY,
+                        "psb:{}:{}x{}:decoded={}x{}:origin=({:.3f},{:.3f}):bgra={}:shared={}",
+                        command.sourceKey, width, height,
+                        decodedWidth > 0 ? decodedWidth : width,
+                        decodedHeight > 0 ? decodedHeight : height,
+                        originX, originY,
                         sourcePixelsAreBgra ? 1 : 0,
                         decodedPixels.empty() ? 1 : 0);
                     if(LOGGER &&
@@ -9068,6 +9088,20 @@ namespace motion {
                 srcBmp ? srcBmp->GetWidth() : 0,
                 srcBmp ? srcBmp->GetHeight() : 0);
 
+            if(srcBmp) {
+                const int bitmapWidth = static_cast<int>(srcBmp->GetWidth());
+                const int bitmapHeight = static_cast<int>(srcBmp->GetHeight());
+                const bool validDecodedRect =
+                    decodedSourceRect[0] >= 0 &&
+                    decodedSourceRect[1] >= 0 &&
+                    decodedSourceRect[2] > decodedSourceRect[0] &&
+                    decodedSourceRect[3] > decodedSourceRect[1] &&
+                    decodedSourceRect[2] <= bitmapWidth &&
+                    decodedSourceRect[3] <= bitmapHeight;
+                baseSourceRects[sourceIdentity] = validDecodedRect
+                    ? decodedSourceRect
+                    : std::array<int, 4>{0, 0, bitmapWidth, bitmapHeight};
+            }
             baseSourceCache.emplace(sourceIdentity, srcBmp);
             if(profileEnabled) {
                 profileStats.baseResolveUs +=
@@ -9216,6 +9250,29 @@ namespace motion {
             }
             return tinted;
         };
+        const auto sourceRectForCommand =
+            [&](const detail::PlayerRuntime::RenderCommand &command,
+                const std::shared_ptr<tTVPBaseBitmap> &bitmap) {
+                if(!bitmap) {
+                    return tTVPRect{};
+                }
+                const auto identity = commandSourceIdentity(command);
+                if(const auto it = baseSourceRects.find(identity);
+                   it != baseSourceRects.end()) {
+                    const auto &rect = it->second;
+                    if(rect[0] >= 0 && rect[1] >= 0 &&
+                       rect[2] > rect[0] && rect[3] > rect[1] &&
+                       rect[2] <= static_cast<int>(bitmap->GetWidth()) &&
+                       rect[3] <= static_cast<int>(bitmap->GetHeight())) {
+                        return tTVPRect(rect[0], rect[1],
+                                       rect[2], rect[3]);
+                    }
+                }
+                return tTVPRect(
+                    0, 0,
+                    static_cast<tjs_int>(bitmap->GetWidth()),
+                    static_cast<tjs_int>(bitmap->GetHeight()));
+            };
 
         const int playerStencilType = _maskMode;
         auto ensureCommandLayer =
@@ -9382,10 +9439,8 @@ namespace motion {
                 if(!maskLayerObject || !maskLayer) {
                     return nullptr;
                 }
-                const tTVPRect sourceRect(
-                    0, 0,
-                    static_cast<tjs_int>(maskBitmap->GetWidth()),
-                    static_cast<tjs_int>(maskBitmap->GetHeight()));
+                const tTVPRect sourceRect =
+                    sourceRectForCommand(maskCommand, maskBitmap);
                 if(!renderCommandSourceToLayer(
                        maskCommand, maskLayerObject, maskLayer,
                        maskBitmap, sourceRect,
@@ -9863,16 +9918,16 @@ namespace motion {
                 return false;
             }
 
-            const tTVPRect sourceRect(
-                0, 0,
-                hasSourceBitmap ? static_cast<tjs_int>(srcBmp->GetWidth()) : 0,
-                hasSourceBitmap ? static_cast<tjs_int>(srcBmp->GetHeight()) : 0);
+            const tTVPRect sourceRect = hasSourceBitmap
+                ? sourceRectForCommand(command, srcBmp)
+                : tTVPRect{};
             if(hasSourceBitmap && logoTraceEnabled) {
                 detail::logoChainTraceCheck(
                     motionPath, "execute.srcRect", "0x6C7440",
                     _clampedEvalTime,
-                    fmt::format("full texture rect exp=[0,0,{},{}]",
-                                srcBmp->GetWidth(), srcBmp->GetHeight()),
+                    fmt::format("logical source rect exp=[{},{},{},{}]",
+                                sourceRect.left, sourceRect.top,
+                                sourceRect.right, sourceRect.bottom),
                     fmt::format("nodeIndex={} act=[{},{},{},{}]",
                                 command.nodeIndex, sourceRect.left,
                                 sourceRect.top, sourceRect.right,
@@ -10725,9 +10780,8 @@ namespace motion {
                    srcBmp->GetHeight() <= 0) {
                     continue;
                 }
-                const tTVPRect sourceRect(
-                    0, 0, static_cast<tjs_int>(srcBmp->GetWidth()),
-                    static_cast<tjs_int>(srcBmp->GetHeight()));
+                const tTVPRect sourceRect =
+                    sourceRectForCommand(command, srcBmp);
                 std::string branch("direct.operateAffine");
                 const bool directCopyWithoutOpacity =
                     ((command.blendMode & 0x0F) == 0) && opa >= 255 &&
@@ -11325,22 +11379,72 @@ namespace motion {
                               std::array<int, 4> *visibleBounds,
                               bool *alphaBoundsKnown,
                               bool *alphaOpaque) {
-        if(!pixels || width <= 0 || height <= 0 || pitch < width * 4) {
+        return renderToRgbaRegion(
+            pixels, width, height, 0, 0, width, height, pitch,
+            visibleBounds, alphaBoundsKnown, alphaOpaque);
+    }
+
+    bool Player::renderToRgbaRegion(
+        std::uint8_t *pixels, int stageWidth, int stageHeight,
+        int regionLeft, int regionTop, int regionWidth, int regionHeight,
+        int pitch, std::array<int, 4> *visibleBounds,
+        bool *alphaBoundsKnown, bool *alphaOpaque) {
+        if(!pixels || pitch < regionWidth * 4 ||
+           !beginRenderToRgbaRegion(
+               stageWidth, stageHeight, regionLeft, regionTop,
+               regionWidth, regionHeight)) {
             return false;
         }
+        return finishRenderToRgbaRegion(
+            pixels, pitch, visibleBounds, alphaBoundsKnown, alphaOpaque);
+    }
 
-        if(visibleBounds) {
-            *visibleBounds = {0, 0, 0, 0};
+    bool Player::beginRenderToRgbaRegion(
+        int stageWidth, int stageHeight,
+        int regionLeft, int regionTop, int regionWidth, int regionHeight) {
+        if(stageWidth <= 0 || stageHeight <= 0 ||
+           regionLeft < 0 || regionTop < 0 || regionWidth <= 0 ||
+           regionHeight <= 0 || regionLeft + regionWidth > stageWidth ||
+           regionTop + regionHeight > stageHeight ||
+           _runtime->headlessRgbaRenderPending) {
+            return false;
         }
-        if(alphaBoundsKnown) {
-            *alphaBoundsKnown = false;
+        const bool fullStage =
+            regionLeft == 0 && regionTop == 0 &&
+            regionWidth == stageWidth && regionHeight == stageHeight;
+        if(fullStage) {
+            for(size_t index = 0;
+                index < _runtime->headlessRgbaReadbackRequests.size();
+                ++index) {
+                if(_runtime->headlessRgbaReadbackRequests[index] != 0 &&
+                   _runtime->headlessRgbaReadbackFullStage[index]) {
+                    return false;
+                }
+            }
         }
-        if(alphaOpaque) {
-            *alphaOpaque = false;
+        int renderSlot = 0;
+        if(!fullStage) {
+            bool used[2] = {false, false};
+            for(size_t index = 0;
+                index < _runtime->headlessRgbaReadbackRequests.size();
+                ++index) {
+                if(_runtime->headlessRgbaReadbackRequests[index] != 0 &&
+                   !_runtime->headlessRgbaReadbackFullStage[index]) {
+                    const int slot =
+                        _runtime->headlessRgbaReadbackSlots[index];
+                    if(slot >= 0 && slot < 2) used[slot] = true;
+                }
+            }
+            renderSlot = !used[0] ? 0 : (!used[1] ? 1 : -1);
+            if(renderSlot < 0) return false;
         }
-
+        auto &renderLayerSlot = fullStage
+            ? _runtime->headlessRgbaRenderLayer
+            : (renderSlot == 0
+                   ? _runtime->headlessRgbaRegionRenderLayer
+                   : _runtime->headlessRgbaRegionRenderLayer2);
         iTJSDispatch2 *target = ensureReusableLayerObject(
-            _runtime->headlessRgbaRenderLayer,
+            renderLayerSlot,
             nullptr,
             nullptr,
             static_cast<tTVPLayerType>(ltAlpha),
@@ -11353,7 +11457,8 @@ namespace motion {
         if(!layer) {
             return false;
         }
-        if(!prepareLayerForRender(target, width, height, 0x00000000)) {
+        if(!prepareLayerForRender(target, regionWidth, regionHeight,
+                                  0x00000000)) {
             return false;
         }
 
@@ -11368,9 +11473,11 @@ namespace motion {
         const auto previousDrawAffine = _runtime->drawAffineMatrix;
         if(_runtime->isEmoteMode) {
             _runtime->drawAffineMatrix[4] =
-                previousDrawAffine[4] + static_cast<double>(width) * 0.5;
+                previousDrawAffine[4] + static_cast<double>(stageWidth) * 0.5 -
+                static_cast<double>(regionLeft);
             _runtime->drawAffineMatrix[5] =
-                previousDrawAffine[5] + static_cast<double>(height) * 0.5;
+                previousDrawAffine[5] + static_cast<double>(stageHeight) * 0.5 -
+                static_cast<double>(regionTop);
             _runtime->preparedRenderItemsValid = false;
         }
         struct DrawAffineRestore {
@@ -11386,6 +11493,47 @@ namespace motion {
         if(!renderToLayer(target, false)) {
             return false;
         }
+        _runtime->headlessRgbaRenderPending = true;
+        _runtime->headlessRgbaPendingFullStage = fullStage;
+        _runtime->headlessRgbaPendingSlot = renderSlot;
+        _runtime->headlessRgbaPendingWidth = regionWidth;
+        _runtime->headlessRgbaPendingHeight = regionHeight;
+        return true;
+    }
+
+    bool Player::finishRenderToRgbaRegion(
+        std::uint8_t *pixels, int pitch,
+        std::array<int, 4> *visibleBounds,
+        bool *alphaBoundsKnown, bool *alphaOpaque) {
+        if(!_runtime->headlessRgbaRenderPending || !pixels) {
+            return false;
+        }
+        const bool fullStage = _runtime->headlessRgbaPendingFullStage;
+        const int regionWidth = _runtime->headlessRgbaPendingWidth;
+        const int regionHeight = _runtime->headlessRgbaPendingHeight;
+        _runtime->headlessRgbaRenderPending = false;
+        if(regionWidth <= 0 || regionHeight <= 0 ||
+           pitch < regionWidth * 4) {
+            return false;
+        }
+        if(visibleBounds) {
+            *visibleBounds = {0, 0, 0, 0};
+        }
+        if(alphaBoundsKnown) {
+            *alphaBoundsKnown = false;
+        }
+        if(alphaOpaque) {
+            *alphaOpaque = false;
+        }
+        auto &renderLayerSlot = fullStage
+            ? _runtime->headlessRgbaRenderLayer
+            : (_runtime->headlessRgbaPendingSlot == 0
+                   ? _runtime->headlessRgbaRegionRenderLayer
+                   : _runtime->headlessRgbaRegionRenderLayer2);
+        auto *layer = resolveNativeLayer(renderLayerSlot.AsObjectNoAddRef());
+        if(!layer) {
+            return false;
+        }
         const auto *source = reinterpret_cast<const std::uint8_t *>(
             layer->GetMainImagePixelBuffer());
         const tjs_int sourcePitch = layer->GetMainImagePixelBufferPitch();
@@ -11399,18 +11547,18 @@ namespace motion {
         // replacement also needs the visible rectangle, so derive it during
         // the unavoidable format copy instead of scanning the 1920x1080 frame
         // a second time in ArtemisRuntime.
-        int minimumX = width;
-        int minimumY = height;
+        int minimumX = regionWidth;
+        int minimumY = regionHeight;
         int maximumX = 0;
         int maximumY = 0;
         bool anyVisible = false;
         bool allOpaque = true;
         const bool inspectAlpha =
             visibleBounds || alphaBoundsKnown || alphaOpaque;
-        for(int y = 0; y < height; ++y) {
+        for(int y = 0; y < regionHeight; ++y) {
             const auto *src = source + static_cast<size_t>(sourcePitch) * y;
             auto *dst = pixels + static_cast<size_t>(pitch) * y;
-            for(int x = 0; x < width; ++x) {
+            for(int x = 0; x < regionWidth; ++x) {
                 dst[x * 4 + 0] = src[x * 4 + 2];
                 dst[x * 4 + 1] = src[x * 4 + 1];
                 dst[x * 4 + 2] = src[x * 4 + 0];
@@ -11438,6 +11586,151 @@ namespace motion {
             *alphaOpaque = allOpaque;
         }
         return true;
+    }
+
+    bool Player::requestRenderToRgbaReadback() {
+        if(!_runtime->headlessRgbaRenderPending ||
+           std::all_of(_runtime->headlessRgbaReadbackRequests.begin(),
+                       _runtime->headlessRgbaReadbackRequests.end(),
+                       [](uint64_t request) { return request != 0; })) {
+            return false;
+        }
+        const bool fullStage = _runtime->headlessRgbaPendingFullStage;
+        const int renderSlot = _runtime->headlessRgbaPendingSlot;
+        auto &renderLayerSlot = fullStage
+            ? _runtime->headlessRgbaRenderLayer
+            : (renderSlot == 0
+                   ? _runtime->headlessRgbaRegionRenderLayer
+                   : _runtime->headlessRgbaRegionRenderLayer2);
+        auto *layer = resolveNativeLayer(renderLayerSlot.AsObjectNoAddRef());
+        auto *image = layer ? layer->GetMainImage() : nullptr;
+        auto *texture = image
+            ? dynamic_cast<GodotTexture2D *>(image->GetTexture())
+            : nullptr;
+        if(!texture) return false;
+        const uint64_t request = texture->BeginGpuReadback();
+        if(request == 0) return false;
+        const auto free = std::find(
+            _runtime->headlessRgbaReadbackRequests.begin(),
+            _runtime->headlessRgbaReadbackRequests.end(), 0u);
+        if(free == _runtime->headlessRgbaReadbackRequests.end()) {
+            texture->DiscardGpuReadback(request);
+            return false;
+        }
+        const size_t index = static_cast<size_t>(std::distance(
+            _runtime->headlessRgbaReadbackRequests.begin(), free));
+        _runtime->headlessRgbaRenderPending = false;
+        _runtime->headlessRgbaReadbackRequests[index] = request;
+        _runtime->headlessRgbaReadbackSequences[index] =
+            _runtime->headlessRgbaNextReadbackSequence++;
+        _runtime->headlessRgbaReadbackFullStage[index] = fullStage;
+        _runtime->headlessRgbaReadbackSlots[index] = renderSlot;
+        _runtime->headlessRgbaReadbackWidths[index] =
+            _runtime->headlessRgbaPendingWidth;
+        _runtime->headlessRgbaReadbackHeights[index] =
+            _runtime->headlessRgbaPendingHeight;
+        return true;
+    }
+
+    bool Player::pollRenderToRgbaReadback(
+        std::uint8_t *pixels, int pitch, bool *ready,
+        std::array<int, 4> *visibleBounds,
+        bool *alphaBoundsKnown, bool *alphaOpaque) {
+        if(ready) *ready = false;
+        size_t requestIndex = _runtime->headlessRgbaReadbackRequests.size();
+        uint64_t oldestSequence = std::numeric_limits<uint64_t>::max();
+        for(size_t index = 0;
+            index < _runtime->headlessRgbaReadbackRequests.size(); ++index) {
+            if(_runtime->headlessRgbaReadbackRequests[index] != 0 &&
+               _runtime->headlessRgbaReadbackSequences[index] <
+                   oldestSequence) {
+                oldestSequence =
+                    _runtime->headlessRgbaReadbackSequences[index];
+                requestIndex = index;
+            }
+        }
+        if(requestIndex == _runtime->headlessRgbaReadbackRequests.size()) {
+            return false;
+        }
+        const uint64_t request =
+            _runtime->headlessRgbaReadbackRequests[requestIndex];
+        const int regionWidth =
+            _runtime->headlessRgbaReadbackWidths[requestIndex];
+        const int regionHeight =
+            _runtime->headlessRgbaReadbackHeights[requestIndex];
+        if(request == 0 || !pixels || regionWidth <= 0 || regionHeight <= 0 ||
+           pitch < regionWidth * 4) {
+            return false;
+        }
+        auto &renderLayerSlot =
+            _runtime->headlessRgbaReadbackFullStage[requestIndex]
+                ? _runtime->headlessRgbaRenderLayer
+                : (_runtime->headlessRgbaReadbackSlots[requestIndex] == 0
+                       ? _runtime->headlessRgbaRegionRenderLayer
+                       : _runtime->headlessRgbaRegionRenderLayer2);
+        auto *layer = resolveNativeLayer(renderLayerSlot.AsObjectNoAddRef());
+        auto *image = layer ? layer->GetMainImage() : nullptr;
+        auto *texture = image
+            ? dynamic_cast<GodotTexture2D *>(image->GetTexture())
+            : nullptr;
+        if(!texture) return false;
+        bool completed = false;
+        const bool success = texture->PollGpuReadback(
+            request, pixels, static_cast<size_t>(pitch) * regionHeight,
+            static_cast<uint32_t>(pitch), &completed);
+        if(!completed) return success;
+        _runtime->headlessRgbaReadbackRequests[requestIndex] = 0;
+        _runtime->headlessRgbaReadbackSequences[requestIndex] = 0;
+        if(ready) *ready = true;
+        if(!success) return false;
+
+        if(visibleBounds) *visibleBounds = {0, 0, 0, 0};
+        if(alphaBoundsKnown) *alphaBoundsKnown = true;
+        int minimumX = regionWidth;
+        int minimumY = regionHeight;
+        int maximumX = 0;
+        int maximumY = 0;
+        bool anyVisible = false;
+        bool allOpaque = true;
+        const bool inspectAlpha =
+            visibleBounds || alphaBoundsKnown || alphaOpaque;
+        for(int y = 0; y < regionHeight; ++y) {
+            auto *row = pixels + static_cast<size_t>(pitch) * y;
+            for(int x = 0; x < regionWidth; ++x) {
+                std::swap(row[x * 4 + 0], row[x * 4 + 2]);
+                if(!inspectAlpha) continue;
+                const std::uint8_t alpha = row[x * 4 + 3];
+                allOpaque = allOpaque && alpha == 255;
+                if(alpha != 0) {
+                    anyVisible = true;
+                    minimumX = std::min(minimumX, x);
+                    minimumY = std::min(minimumY, y);
+                    maximumX = std::max(maximumX, x + 1);
+                    maximumY = std::max(maximumY, y + 1);
+                }
+            }
+        }
+        if(visibleBounds && anyVisible) {
+            *visibleBounds = {minimumX, minimumY, maximumX, maximumY};
+        }
+        if(alphaOpaque) *alphaOpaque = allOpaque;
+        return true;
+    }
+
+    void Player::discardRenderToRgbaReadback() {
+        if(!_runtime) return;
+        const auto *bridge = TVPGodotGpuBridgeGet();
+        for(size_t index = 0;
+            index < _runtime->headlessRgbaReadbackRequests.size(); ++index) {
+            uint64_t &request =
+                _runtime->headlessRgbaReadbackRequests[index];
+            if(request != 0 && bridge && bridge->discard_read_rgba) {
+                bridge->discard_read_rgba(request);
+            }
+            request = 0;
+            _runtime->headlessRgbaReadbackSequences[index] = 0;
+        }
+        _runtime->headlessRgbaRenderPending = false;
     }
 
     bool Player::renderToLayer(iTJSDispatch2 *layerObject, bool skipUpdate) {
@@ -11958,8 +12251,18 @@ namespace motion {
         }
         const auto presentationCommandSignature =
             renderCommandReuseSignature(_runtime->renderCommands);
+        const auto isRuntimeLayerSlot =
+            [renderLayerObject](const tTJSVariant &slot) {
+                return slot.Type() == tvtObject &&
+                       slot.AsObjectNoAddRef() == renderLayerObject;
+            };
+        const bool headlessRgbaExportTarget =
+            isRuntimeLayerSlot(_runtime->headlessRgbaRenderLayer) ||
+            isRuntimeLayerSlot(_runtime->headlessRgbaRegionRenderLayer) ||
+            isRuntimeLayerSlot(_runtime->headlessRgbaRegionRenderLayer2);
         const bool canReuseEmoteRender =
             _runtime->isEmoteMode &&
+            !headlessRgbaExportTarget &&
             renderLayerObject == finalLayerObject &&
             renderLayerObject != nullptr &&
             !usingPresentationTarget &&

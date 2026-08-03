@@ -131,7 +131,9 @@ func _save_step(index: int, label: String) -> void:
     var image := _capture_frame_image()
     var path := "/tmp/aetherkiri-step-%02d-%s.png" % [index, label]
     image.save_png(path)
-    var runtime_debug: String = player.get_plugin_debug_info()
+    var runtime_debug := ""
+    if bool(test_config.get("runtime_debug", true)):
+        runtime_debug = String(player.get_plugin_debug_info())
     print("step %02d label=%s texture_backend=%s renderer=\"%s\" screenshot=%s stats=%s" % [
         index,
         label,
@@ -239,6 +241,42 @@ func _run_actions(step: int) -> int:
             player.send_key_event(false, key_code, int(action.get("modifiers", 0)), 0)
             if label.is_empty() or label == "key":
                 label = "key_%d" % key_code
+        elif kind == "key_hold":
+            var key_code := int(action.get("key_code", 17))
+            var modifiers := int(action.get("modifiers", 0))
+            var frames: int = max(1, int(action.get("frames", 3600)))
+            var sample_every: int = max(1, int(action.get("sample_every_frames", 60)))
+            var duration_ms: int = max(0, int(action.get("duration_ms", 0)))
+            var sample_interval_ms: int = max(1, int(action.get("sample_interval_ms", 1000)))
+            var hold_fps_limit: int = max(0, int(action.get("fps_limit", 0)))
+            if hold_fps_limit > 0:
+                player.set_engine_option("fps_limit", str(hold_fps_limit))
+            player.send_key_event(true, key_code, modifiers, int(action.get("unicode", 0)))
+            player.tick(1.0 / 60.0)
+            _print_memory_sample(label, 0)
+            var advanced := 0
+            if duration_ms > 0:
+                var started_ms := Time.get_ticks_msec()
+                var next_sample_ms := sample_interval_ms
+                while Time.get_ticks_msec() - started_ms < duration_ms:
+                    await _advance(1)
+                    advanced += 1
+                    var elapsed_ms := Time.get_ticks_msec() - started_ms
+                    if elapsed_ms >= next_sample_ms:
+                        _print_memory_sample(label, advanced)
+                        next_sample_ms += sample_interval_ms
+            else:
+                while advanced < frames:
+                    var batch: int = mini(sample_every, frames - advanced)
+                    await _advance(batch)
+                    advanced += batch
+                    _print_memory_sample(label, advanced)
+            player.send_key_event(false, key_code, modifiers, 0)
+            player.tick(1.0 / 60.0)
+            if hold_fps_limit > 0:
+                player.set_engine_option("fps_limit", "0")
+            if label.is_empty() or label == "key_hold":
+                label = "key_hold_%d_%d" % [key_code, advanced]
         elif kind == "repeat_click":
             var pos := ProbeConfig.click_position(action)
             var count: int = max(1, int(action.get("count", 1)))
@@ -284,6 +322,26 @@ func _run_actions(step: int) -> int:
             await _save_step(step, label)
             step += 1
     return step
+
+func _print_memory_sample(label: String, frame: int) -> void:
+    var memory: Dictionary = {}
+    if player.has_method("get_memory_stats"):
+        memory = (player.get_memory_stats() as Dictionary).duplicate(true)
+    var runtime_counts: Dictionary = {}
+    var runtime_debug := String(player.get_plugin_debug_info())
+    if not runtime_debug.is_empty():
+        var parsed = JSON.parse_string(runtime_debug)
+        if parsed is Dictionary:
+            var debug: Dictionary = parsed
+            for key in ["emotePlayers", "emoteLayers", "runtimeJournalEntries", "layers", "cachedSurfaceBytes"]:
+                if debug.has(key):
+                    runtime_counts[key] = debug[key]
+    print("memory_sample label=%s frame=%d memory=%s runtime=%s" % [
+        label,
+        frame,
+        JSON.stringify(memory),
+        JSON.stringify(runtime_counts),
+    ])
 
 func _run_click_stream(step: int, label: String, action: Dictionary) -> int:
     var pos := ProbeConfig.click_position(action)

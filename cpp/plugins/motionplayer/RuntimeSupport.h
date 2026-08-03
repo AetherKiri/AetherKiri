@@ -301,10 +301,36 @@ namespace motion::detail {
         // per minute. Keep one surface per Player and resize it only when the
         // requested export dimensions grow.
         tTJSVariant headlessRgbaRenderLayer;
+        // Cropped Artemis E-mote exports use a separate surface. The first
+        // frame establishes alpha bounds at full-stage size; keeping that
+        // large backing texture would make every later cropped readback pay
+        // for the original 1920x1080 allocation.
+        tTJSVariant headlessRgbaRegionRenderLayer;
+        tTJSVariant headlessRgbaRegionRenderLayer2;
+        // A provider can submit several independent E-mote surfaces before
+        // synchronizing their GPU readbacks, matching Artemis' framebuffer
+        // display pass instead of serially stalling after every player.
+        bool headlessRgbaRenderPending = false;
+        bool headlessRgbaPendingFullStage = false;
+        int headlessRgbaPendingSlot = 0;
+        int headlessRgbaPendingWidth = 0;
+        int headlessRgbaPendingHeight = 0;
+        std::array<uint64_t, 2> headlessRgbaReadbackRequests{};
+        std::array<uint64_t, 2> headlessRgbaReadbackSequences{};
+        std::array<bool, 2> headlessRgbaReadbackFullStage{};
+        std::array<int, 2> headlessRgbaReadbackSlots{};
+        std::array<int, 2> headlessRgbaReadbackWidths{};
+        std::array<int, 2> headlessRgbaReadbackHeights{};
+        uint64_t headlessRgbaNextReadbackSequence = 1;
         // Source bitmaps decoded for the active motion. Building these from PSB
         // resources is expensive enough to be visible during title animations.
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
             motionSourceBitmapCache;
+        // A decoded atlas icon may retain a small filtering gutter around its
+        // logical image.  Keep the sampling rectangle beside the cached
+        // bitmap so prepared/tinted variants use the same coordinates.
+        std::unordered_map<std::string, std::array<int, 4>>
+            motionSourceBitmapRects;
         // E-mote atlases are shared by many icon sources. Building the
         // cross-player bitmap-cache key fingerprints the complete atlas
         // bytes, so remember that content fingerprint for this runtime
@@ -595,6 +621,7 @@ namespace motion::detail {
 
         void clearMotionBitmapCaches() {
             motionSourceBitmapCache.clear();
+            motionSourceBitmapRects.clear();
             motionSourceResourceFingerprintCache.clear();
             motionSourceMetadataCache.clear();
             motionPreparedBitmapCache.clear();
