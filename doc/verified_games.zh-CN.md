@@ -32,8 +32,8 @@
 | PARQUET | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 9-nine- 新章 | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | as:9-nine- ARTEISIA | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
-| 乱れ雪月華 ～儚く散る細雪～ | macOS debug app | 启动、年龄提示与标题/菜单渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
-| 乱れ雪月華 ～月夜の淫舞、狂気の契り～ | macOS debug app | 启动、标题/菜单渲染，以及开始游戏过渡前的基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 乱れ雪月華 ～儚く散る細雪～ | macOS debug app；iOS/iPadOS iPad debug app build | 启动、年龄提示与标题/菜单渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 乱れ雪月華 ～月夜の淫舞、狂気の契り～ | macOS debug app；iOS/iPadOS iPad debug app build | 启动、标题/菜单渲染，以及开始游戏过渡前的基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | オトメ*ドメイン | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、画廊场景回放流程、编译版 PSB 场景标签解析、场景/文字渲染，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | もっと！孕ませ！炎のおっぱい異世界おっぱいメイド学園！ | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、语音播放冒烟、存读档冒烟、退出行为，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | もっと！孕ませ！炎のおっぱい異世界超エロサキュバス学園！ | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、Live2D 渲染冒烟、语音播放冒烟、存读档冒烟，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
