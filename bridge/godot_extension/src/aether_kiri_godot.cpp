@@ -1,5 +1,6 @@
 #include "engine_api.h"
 #include "engine_options.h"
+#include "engine_runtime_provider.h"
 #include "GodotGpuBridge.h"
 #include "ComplexRect.h"
 
@@ -12,6 +13,12 @@
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
+#include <godot_cpp/classes/rd_pipeline_color_blend_state.hpp>
+#include <godot_cpp/classes/rd_pipeline_color_blend_state_attachment.hpp>
+#include <godot_cpp/classes/rd_pipeline_depth_stencil_state.hpp>
+#include <godot_cpp/classes/rd_pipeline_multisample_state.hpp>
+#include <godot_cpp/classes/rd_pipeline_rasterization_state.hpp>
+#include <godot_cpp/classes/rd_sampler_state.hpp>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -46,8 +53,11 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <functional>
+#include <iomanip>
 #include <limits>
 #include <memory>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -85,9 +95,42 @@ struct GodotGpuTextureRecord {
     bool requires_alpha_d_clear_version = false;
 };
 
+struct ArtemisGpuShaderImage {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    std::vector<uint8_t> pixels;
+};
+
+struct ArtemisGpuShaderTexture {
+    std::string name;
+    ArtemisGpuShaderImage image;
+};
+
+struct ArtemisGpuShaderConstant {
+    std::string name;
+    std::vector<float> values;
+};
+
+struct ArtemisGpuShaderRequest {
+    std::string shader_id;
+    std::string fragment_source;
+    ArtemisGpuShaderImage foreground;
+    ArtemisGpuShaderImage mask;
+    bool mask_uses_alpha = false;
+    float alpha = 1.0f;
+    uint32_t color_multiply = 0xffffffffu;
+    std::vector<ArtemisGpuShaderTexture> textures;
+    std::vector<ArtemisGpuShaderConstant> constants;
+    std::string error;
+};
+
 std::mutex g_gpu_textures_mutex;
 std::unordered_map<uint64_t, GodotGpuTextureRecord> g_gpu_textures;
 uint64_t g_next_gpu_texture_id = 1;
+std::atomic<uint64_t> g_gpu_textures_created{0};
+std::atomic<uint64_t> g_gpu_textures_released{0};
+std::atomic<uint64_t> g_gpu_texture_bytes_created{0};
+std::atomic<uint64_t> g_gpu_texture_bytes_released{0};
 
 struct GodotGpuOp {
     enum class Type {
@@ -100,9 +143,11 @@ struct GodotGpuOp {
         DrawMaskedTriangles,
         Mosaic,
         Read,
+        ReadAsync,
         Blend,
         Blend2,
         Blend3,
+        ArtemisShader,
         Release,
         Flush,
     };
@@ -113,6 +158,7 @@ struct GodotGpuOp {
     RID src3;
     RID dst;
     PackedByteArray data;
+    std::shared_ptr<ArtemisGpuShaderRequest> artemis_shader;
     std::vector<float> vertices;
     Color clear_color;
     Vector3 src_pos;
@@ -126,9 +172,20 @@ struct GodotGpuOp {
     uint32_t color = 0xffffffffu;
     bool result = false;
     bool done = false;
+    uint64_t readback_request = 0;
     std::mutex done_mutex;
     std::condition_variable done_cv;
 };
+
+struct GodotGpuReadbackRequest {
+    std::shared_ptr<GodotGpuOp> op;
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
+std::mutex g_gpu_readbacks_mutex;
+std::unordered_map<uint64_t, GodotGpuReadbackRequest> g_gpu_readbacks;
+uint64_t g_next_gpu_readback_id = 1;
 
 std::mutex g_gpu_op_queue_mutex;
 std::deque<std::shared_ptr<GodotGpuOp>> g_gpu_op_queue;
@@ -136,6 +193,11 @@ bool g_gpu_op_drain_scheduled = false;
 std::atomic<uint64_t> g_gpu_op_submitted{0};
 std::atomic<uint64_t> g_gpu_op_completed{0};
 std::atomic<uint64_t> g_gpu_op_failed{0};
+std::atomic<uint64_t> g_gpu_copy_failed{0};
+std::atomic<uint64_t> g_gpu_copy_triangles_failed{0};
+std::atomic<uint64_t> g_gpu_triangle_pipeline_failed{0};
+std::atomic<uint64_t> g_gpu_triangle_buffer_failed{0};
+std::atomic<uint64_t> g_gpu_triangle_uniform_failed{0};
 std::atomic<uint64_t> g_gpu_blend_op_submitted{0};
 std::atomic<uint64_t> g_gpu_queue_peak{0};
 std::atomic<uint64_t> g_gpu_barriers{0};
@@ -827,9 +889,18 @@ struct GodotGpuPipelineState {
     RID mosaic_pipeline;
     RID triangle_vertex_buffer;
     uint32_t triangle_vertex_buffer_capacity = 0;
+    PackedByteArray triangle_vertex_buffer_data;
 };
 
 GodotGpuPipelineState *g_gpu_pipeline_state = nullptr;
+
+struct ArtemisGpuShaderPipeline {
+    RID shader;
+    RID pipeline;
+};
+
+std::unordered_map<std::string, ArtemisGpuShaderPipeline>
+    g_artemis_shader_pipeline_cache;
 
 struct GodotGpuUniformSetKey {
     int64_t shader = 0;
@@ -866,6 +937,8 @@ std::unordered_map<GodotGpuUniformSetKey, RID, GodotGpuUniformSetKeyHash>
     g_gpu_uniform_set_cache;
 
 Ref<RDTextureFormat> MakeRgbaTextureFormat(uint32_t width, uint32_t height);
+bool ExecuteArtemisGpuShader(
+    RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &op);
 
 const char *NormalizeBackend(const String &backend) {
     const String lower = backend.to_lower();
@@ -966,12 +1039,31 @@ void CountGpuOpResult(bool result) {
 
 String GetGodotGpuBridgeDebugInfo() {
     size_t queue_size = 0;
+    size_t texture_count = 0;
+    uint64_t live_texture_bytes = 0;
+    std::unordered_map<uint64_t, size_t> texture_sizes;
     bool scheduled = false;
     {
         std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
         queue_size = g_gpu_op_queue.size();
         scheduled = g_gpu_op_drain_scheduled;
     }
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        texture_count = g_gpu_textures.size();
+        for (const auto &entry : g_gpu_textures) {
+            const auto width = entry.second.width;
+            const auto height = entry.second.height;
+            live_texture_bytes += static_cast<uint64_t>(width) * height * 4u;
+            ++texture_sizes[(static_cast<uint64_t>(width) << 32u) | height];
+        }
+    }
+    std::vector<std::pair<uint64_t, size_t>> common_texture_sizes(
+        texture_sizes.begin(), texture_sizes.end());
+    std::sort(common_texture_sizes.begin(), common_texture_sizes.end(),
+              [](const auto &a, const auto &b) {
+                  return a.second > b.second;
+              });
 
     std::ostringstream out;
     out << " bridge_queue=" << queue_size
@@ -980,13 +1072,40 @@ String GetGodotGpuBridgeDebugInfo() {
         << " bridge_ops=" << g_gpu_op_submitted.load(std::memory_order_relaxed)
         << " bridge_done=" << g_gpu_op_completed.load(std::memory_order_relaxed)
         << " bridge_failed=" << g_gpu_op_failed.load(std::memory_order_relaxed)
+        << " bridge_copy_failed=" << g_gpu_copy_failed.load(std::memory_order_relaxed)
+        << " bridge_tri_failed=" << g_gpu_copy_triangles_failed.load(std::memory_order_relaxed)
+        << " bridge_tri_pipeline_failed=" << g_gpu_triangle_pipeline_failed.load(std::memory_order_relaxed)
+        << " bridge_tri_buffer_failed=" << g_gpu_triangle_buffer_failed.load(std::memory_order_relaxed)
+        << " bridge_tri_uniform_failed=" << g_gpu_triangle_uniform_failed.load(std::memory_order_relaxed)
         << " bridge_blends=" << g_gpu_blend_op_submitted.load(std::memory_order_relaxed)
         << " bridge_barriers=" << g_gpu_barriers.load(std::memory_order_relaxed)
         << " bridge_alias_sources=" << g_gpu_alias_sources.load(std::memory_order_relaxed)
         << " bridge_alpha_d_clear_versions="
         << g_gpu_alpha_d_clear_versions.load(std::memory_order_relaxed)
-        << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed);
-    return String::utf8(out.str().c_str());
+        << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed)
+        << " bridge_textures=" << texture_count
+        << " bridge_texture_live_mb="
+        << (live_texture_bytes / (1024u * 1024u))
+        << " bridge_texture_created="
+        << g_gpu_textures_created.load(std::memory_order_relaxed)
+        << " bridge_texture_released="
+        << g_gpu_textures_released.load(std::memory_order_relaxed)
+        << " bridge_texture_mb_created="
+        << (g_gpu_texture_bytes_created.load(std::memory_order_relaxed) /
+            (1024u * 1024u))
+        << " bridge_texture_mb_released="
+        << (g_gpu_texture_bytes_released.load(std::memory_order_relaxed) /
+            (1024u * 1024u))
+        << " bridge_texture_sizes=";
+    for (size_t i = 0; i < std::min<size_t>(common_texture_sizes.size(), 4u);
+         ++i) {
+        if (i != 0) out << ',';
+         out << static_cast<uint32_t>(common_texture_sizes[i].first >> 32u)
+             << 'x'
+             << static_cast<uint32_t>(common_texture_sizes[i].first)
+             << ':' << common_texture_sizes[i].second;
+     }
+     return String::utf8(out.str().c_str());
 }
 
 void ApplyGodotGpuBarrier(RenderingDevice *rd) {
@@ -1196,17 +1315,7 @@ vec4 unpack_u8(uint c) {
                 float((c >> 24) & 0xffu)) / 255.0;
 }
 
-vec4 load_src(ivec2 local) {
-    if (pc.color0.z != 1) {
-        return imageLoad(src_img, pc.rect0.zw + local);
-    }
-    ivec2 src_extent = max(pc.color0.xy, ivec2(1));
-    vec2 src_coord = vec2(pc.rect0.zw) +
-        (vec2(local) + vec2(0.5)) * vec2(src_extent) /
-            vec2(max(pc.rect1.xy, ivec2(1))) -
-        vec2(0.5);
-    ivec2 src_min = pc.rect0.zw;
-    ivec2 src_max = src_min + src_extent - ivec2(1);
+vec4 sample_src_premul(vec2 src_coord, ivec2 src_min, ivec2 src_max) {
     ivec2 p0 = clamp(ivec2(floor(src_coord)), src_min, src_max);
     ivec2 p1 = clamp(p0 + ivec2(1), src_min, src_max);
     vec2 f = clamp(fract(src_coord), vec2(0.0), vec2(1.0));
@@ -1218,7 +1327,38 @@ vec4 load_src(ivec2 local) {
     c10.rgb *= c10.a;
     c01.rgb *= c01.a;
     c11.rgb *= c11.a;
-    vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+vec4 load_src(ivec2 local) {
+    if (pc.color0.z != 1) {
+        return imageLoad(src_img, pc.rect0.zw + local);
+    }
+    ivec2 src_extent = max(pc.color0.xy, ivec2(1));
+    vec2 source_step = vec2(src_extent) /
+        vec2(max(pc.rect1.xy, ivec2(1)));
+    vec2 src_coord = vec2(pc.rect0.zw) +
+        (vec2(local) + vec2(0.5)) * source_step - vec2(0.5);
+    ivec2 src_min = pc.rect0.zw;
+    ivec2 src_max = src_min + src_extent - ivec2(1);
+    vec4 premul;
+    if (max(source_step.x, source_step.y) <= 1.0001) {
+        premul = sample_src_premul(src_coord, src_min, src_max);
+    } else {
+        vec2 dx = vec2(source_step.x > 1.0001
+                           ? source_step.x * 0.25
+                           : 0.0,
+                       0.0);
+        vec2 dy = vec2(0.0,
+                       source_step.y > 1.0001
+                           ? source_step.y * 0.25
+                           : 0.0);
+        premul =
+            (sample_src_premul(src_coord - dx - dy, src_min, src_max) +
+             sample_src_premul(src_coord + dx - dy, src_min, src_max) +
+             sample_src_premul(src_coord - dx + dy, src_min, src_max) +
+             sample_src_premul(src_coord + dx + dy, src_min, src_max)) * 0.25;
+    }
     premul.rgb = premul.a > 0.00001 ? premul.rgb / premul.a : vec3(0.0);
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
@@ -1499,17 +1639,7 @@ vec4 unpack_u8(uint c) {
                 float((c >> 24) & 0xffu)) / 255.0;
 }
 
-vec4 load_src(ivec2 local) {
-    if (pc.color0.z != 1) {
-        return imageLoad(src_img, pc.rect0.zw + local);
-    }
-    ivec2 src_extent = max(pc.color0.xy, ivec2(1));
-    vec2 src_coord = vec2(pc.rect0.zw) +
-        (vec2(local) + vec2(0.5)) * vec2(src_extent) /
-            vec2(max(pc.rect1.xy, ivec2(1))) -
-        vec2(0.5);
-    ivec2 src_min = pc.rect0.zw;
-    ivec2 src_max = src_min + src_extent - ivec2(1);
+vec4 sample_src_premul(vec2 src_coord, ivec2 src_min, ivec2 src_max) {
     ivec2 p0 = clamp(ivec2(floor(src_coord)), src_min, src_max);
     ivec2 p1 = clamp(p0 + ivec2(1), src_min, src_max);
     vec2 f = clamp(fract(src_coord), vec2(0.0), vec2(1.0));
@@ -1521,7 +1651,38 @@ vec4 load_src(ivec2 local) {
     c10.rgb *= c10.a;
     c01.rgb *= c01.a;
     c11.rgb *= c11.a;
-    vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+vec4 load_src(ivec2 local) {
+    if (pc.color0.z != 1) {
+        return imageLoad(src_img, pc.rect0.zw + local);
+    }
+    ivec2 src_extent = max(pc.color0.xy, ivec2(1));
+    vec2 source_step = vec2(src_extent) /
+        vec2(max(pc.rect1.xy, ivec2(1)));
+    vec2 src_coord = vec2(pc.rect0.zw) +
+        (vec2(local) + vec2(0.5)) * source_step - vec2(0.5);
+    ivec2 src_min = pc.rect0.zw;
+    ivec2 src_max = src_min + src_extent - ivec2(1);
+    vec4 premul;
+    if (max(source_step.x, source_step.y) <= 1.0001) {
+        premul = sample_src_premul(src_coord, src_min, src_max);
+    } else {
+        vec2 dx = vec2(source_step.x > 1.0001
+                           ? source_step.x * 0.25
+                           : 0.0,
+                       0.0);
+        vec2 dy = vec2(0.0,
+                       source_step.y > 1.0001
+                           ? source_step.y * 0.25
+                           : 0.0);
+        premul =
+            (sample_src_premul(src_coord - dx - dy, src_min, src_max) +
+             sample_src_premul(src_coord + dx - dy, src_min, src_max) +
+             sample_src_premul(src_coord - dx + dy, src_min, src_max) +
+             sample_src_premul(src_coord + dx + dy, src_min, src_max)) * 0.25;
+    }
     premul.rgb = premul.a > 0.00001 ? premul.rgb / premul.a : vec3(0.0);
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
@@ -1880,7 +2041,7 @@ float edge(vec2 a, vec2 b, vec2 p) {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
-vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
+vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
     vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
     ivec2 p0 = ivec2(floor(center_coord));
     ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
@@ -1894,12 +2055,44 @@ vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
     c01.rgb *= c01.a;
     c11.rgb *= c11.a;
     vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
+vec4 straight_from_premul(vec4 premul) {
     if (premul.a > 0.00001) {
         premul.rgb /= premul.a;
     } else {
         premul.rgb = vec3(0.0);
     }
     return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
+vec4 load_minified(ivec2 limit, vec2 edge_coord,
+                    vec2 source_dx, vec2 source_dy) {
+    // A single bilinear lookup aliases alpha edges when an E-mote surface is
+    // presented at a fractional scale (0.5 is common in Artemis games).
+    // Approximate the source footprint with destination-pixel subsamples. Keep the
+    // fast single lookup at 1:1/upscale, and average premultiplied samples so
+    // transparent texels cannot introduce dark colour fringes.
+    float footprint = max(length(source_dx), length(source_dy));
+    if (footprint <= 1.0001) {
+        return straight_from_premul(
+            load_bilinear_premul(limit, edge_coord));
+    }
+    // DXT E-mote atlases contain high-contrast one-pixel line art. At the
+    // authored 0.5 presentation scale a bare bilinear lookup leaves that
+    // content visibly stair-stepped. Sample four bilinear quadrants spanning
+    // the complete reduction footprint. This covers the compressed source
+    // blocks without the cost of a generic 3x3 post-process and retains
+    // premultiplied alpha semantics at silhouette edges.
+    vec2 dx = source_dx * 0.5;
+    vec2 dy = source_dy * 0.5;
+    vec4 premul =
+        load_bilinear_premul(limit, edge_coord - dx - dy) +
+        load_bilinear_premul(limit, edge_coord + dx - dy) +
+        load_bilinear_premul(limit, edge_coord - dx + dy) +
+        load_bilinear_premul(limit, edge_coord + dx + dy);
+    return straight_from_premul(premul * 0.25);
 }
 
 void main() {
@@ -1937,7 +2130,16 @@ void main() {
         float w2 = edge(d0, d1, p) / area;
         if (w0 >= -0.0001 && w1 >= -0.0001 && w2 >= -0.0001) {
             vec2 src_pos_f = v0.zw * w0 + v1.zw * w1 + v2.zw * w2;
-            out_color = load_bilinear(src_limit, src_pos_f);
+            vec2 source10 = v1.zw - v0.zw;
+            vec2 source20 = v2.zw - v0.zw;
+            vec2 source_dx =
+                source10 * ((d0.y - d2.y) / area) +
+                source20 * ((d1.y - d0.y) / area);
+            vec2 source_dy =
+                source10 * ((d2.x - d0.x) / area) +
+                source20 * ((d0.x - d1.x) / area);
+            out_color = load_minified(
+                src_limit, src_pos_f, source_dx, source_dy);
             covered = true;
             // A tessellated surface has a single source sample at a pixel.
             // Stop after the first covering triangle instead of scanning the
@@ -1997,7 +2199,7 @@ float edge(vec2 a, vec2 b, vec2 p) {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
-vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
+vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
     vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
     ivec2 p0 = ivec2(floor(center_coord));
     ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
@@ -2011,6 +2213,24 @@ vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
     c01.rgb *= c01.a;
     c11.rgb *= c11.a;
     vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
+vec4 load_minified(ivec2 limit, vec2 edge_coord,
+                    vec2 source_dx, vec2 source_dy) {
+    float footprint = max(length(source_dx), length(source_dy));
+    vec4 premul;
+    if (footprint <= 1.0001) {
+        premul = load_bilinear_premul(limit, edge_coord);
+    } else {
+        vec2 dx = source_dx * 0.5;
+        vec2 dy = source_dy * 0.5;
+        premul =
+            (load_bilinear_premul(limit, edge_coord - dx - dy) +
+             load_bilinear_premul(limit, edge_coord + dx - dy) +
+             load_bilinear_premul(limit, edge_coord - dx + dy) +
+             load_bilinear_premul(limit, edge_coord + dx + dy)) * 0.25;
+    }
     if (premul.a > 0.00001) {
         premul.rgb /= premul.a;
     } else {
@@ -2446,7 +2666,16 @@ void main() {
         float w2 = edge(d0, d1, p) / area;
         if (w0 >= -0.0001 && w1 >= -0.0001 && w2 >= -0.0001) {
             vec2 src_pos_f = v0.zw * w0 + v1.zw * w1 + v2.zw * w2;
-            vec4 src = load_bilinear(src_limit, src_pos_f);
+            vec2 source10 = v1.zw - v0.zw;
+            vec2 source20 = v2.zw - v0.zw;
+            vec2 source_dx =
+                source10 * ((d0.y - d2.y) / area) +
+                source20 * ((d1.y - d0.y) / area);
+            vec2 source_dy =
+                source10 * ((d2.x - d0.x) / area) +
+                source20 * ((d0.x - d1.x) / area);
+            vec4 src = load_minified(
+                src_limit, src_pos_f, source_dx, source_dy);
             if (tvp_blend) {
                 uint d = pack_u8(vec4_to_u8(dst));
                 uint s = pack_u8(vec4_to_u8(src));
@@ -2539,7 +2768,7 @@ float edge(vec2 a, vec2 b, vec2 p) {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
-vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
+vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
     vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
     ivec2 p0 = ivec2(floor(center_coord));
     ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
@@ -2553,6 +2782,24 @@ vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
     c01.rgb *= c01.a;
     c11.rgb *= c11.a;
     vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
+vec4 load_minified(ivec2 limit, vec2 edge_coord,
+                    vec2 source_dx, vec2 source_dy) {
+    float footprint = max(length(source_dx), length(source_dy));
+    vec4 premul;
+    if (footprint <= 1.0001) {
+        premul = load_bilinear_premul(limit, edge_coord);
+    } else {
+        vec2 dx = source_dx * 0.5;
+        vec2 dy = source_dy * 0.5;
+        premul =
+            (load_bilinear_premul(limit, edge_coord - dx - dy) +
+             load_bilinear_premul(limit, edge_coord + dx - dy) +
+             load_bilinear_premul(limit, edge_coord - dx + dy) +
+             load_bilinear_premul(limit, edge_coord + dx + dy)) * 0.25;
+    }
     if (premul.a > 0.00001) {
         premul.rgb /= premul.a;
     } else {
@@ -2561,7 +2808,7 @@ vec4 load_bilinear(ivec2 limit, vec2 edge_coord) {
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
 
-float load_mask(vec2 edge_coord) {
+float load_mask_bilinear(vec2 edge_coord) {
     ivec2 limit = imageSize(mask_img) - ivec2(1);
     vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
     ivec2 p0 = ivec2(floor(center_coord));
@@ -2573,6 +2820,20 @@ float load_mask(vec2 edge_coord) {
     float a11 = imageLoad(mask_img, p1).a;
     return clamp(mix(mix(a00, a10, f.x), mix(a01, a11, f.x), f.y),
                  0.0, 1.0);
+}
+
+float load_mask_minified(vec2 edge_coord,
+                          vec2 mask_dx, vec2 mask_dy) {
+    float footprint = max(length(mask_dx), length(mask_dy));
+    if (footprint <= 1.0001) {
+        return load_mask_bilinear(edge_coord);
+    }
+    vec2 dx = mask_dx * 0.5;
+    vec2 dy = mask_dy * 0.5;
+    return (load_mask_bilinear(edge_coord - dx - dy) +
+            load_mask_bilinear(edge_coord + dx - dy) +
+            load_mask_bilinear(edge_coord - dx + dy) +
+            load_mask_bilinear(edge_coord + dx + dy)) * 0.25;
 }
 
 vec4 straight_from_premul(vec3 rgb, float a) {
@@ -2795,14 +3056,28 @@ void main() {
             vec2 mask_pos_f = vertex_mask(base, 0) * w0 +
                               vertex_mask(base, 1) * w1 +
                               vertex_mask(base, 2) * w2;
-            float mask_val = 1.0 - load_mask(mask_pos_f);
+            vec2 source10 = vertex_src(base, 1) - vertex_src(base, 0);
+            vec2 source20 = vertex_src(base, 2) - vertex_src(base, 0);
+            vec2 mask10 = vertex_mask(base, 1) - vertex_mask(base, 0);
+            vec2 mask20 = vertex_mask(base, 2) - vertex_mask(base, 0);
+            float dw1dx = (d0.y - d2.y) / area;
+            float dw1dy = (d2.x - d0.x) / area;
+            float dw2dx = (d1.y - d0.y) / area;
+            float dw2dy = (d0.x - d1.x) / area;
+            vec2 source_dx = source10 * dw1dx + source20 * dw2dx;
+            vec2 source_dy = source10 * dw1dy + source20 * dw2dy;
+            vec2 mask_dx = mask10 * dw1dx + mask20 * dw2dx;
+            vec2 mask_dy = mask10 * dw1dy + mask20 * dw2dy;
+            float mask_val = 1.0 - load_mask_minified(
+                mask_pos_f, mask_dx, mask_dy);
             if (inverted_mask) {
                 mask_val = 1.0 - mask_val;
             }
             if (mask_val <= 0.00001) {
                 continue;
             }
-            vec4 src = load_bilinear(src_limit, src_pos_f);
+            vec4 src = load_minified(
+                src_limit, src_pos_f, source_dx, source_dy);
             if (src.g >= 0.70 && src.g > src.r + 0.20 && src.g > src.b + 0.20) {
                 src.a = 0.0;
             }
@@ -2936,16 +3211,35 @@ bool UpdateGodotGpuTriangleVertexBuffer(RenderingDevice *rd,
                                         const PackedByteArray &data,
                                         RID &vertex_buffer) {
     vertex_buffer = RID();
-    if (rd == nullptr || g_gpu_pipeline_state == nullptr || data.is_empty()) {
+    if (rd == nullptr || data.is_empty()) {
         return false;
+    }
+    // The batched path uploads vertices before PrepareGodotGpuTriangles()
+    // initializes a shader pipeline. Initialize the shared state here so the
+    // first presentation frame cannot fail indefinitely waiting for some
+    // unrelated GPU operation to create it.
+    if (g_gpu_pipeline_state == nullptr) {
+        g_gpu_pipeline_state = new GodotGpuPipelineState();
     }
     const uint64_t required = static_cast<uint64_t>(data.size());
     if (required > std::numeric_limits<uint32_t>::max()) return false;
 
-    if (!g_gpu_pipeline_state->triangle_vertex_buffer.is_valid() ||
-        g_gpu_pipeline_state->triangle_vertex_buffer_capacity < required) {
-        uint64_t capacity = 64u * 1024u;
-        while (capacity < required) capacity *= 2u;
+    const PackedByteArray &cached =
+        g_gpu_pipeline_state->triangle_vertex_buffer_data;
+    const bool data_unchanged =
+        cached.size() == data.size() &&
+        (data.is_empty() ||
+         std::memcmp(cached.ptr(), data.ptr(),
+                     static_cast<size_t>(data.size())) == 0);
+    if (g_gpu_pipeline_state->triangle_vertex_buffer.is_valid() &&
+        g_gpu_pipeline_state->triangle_vertex_buffer_capacity >= required &&
+        data_unchanged) {
+        vertex_buffer = g_gpu_pipeline_state->triangle_vertex_buffer;
+        return true;
+    }
+
+    const auto recreate_buffer = [&]() -> bool {
+        const uint64_t capacity = required;
         if (capacity > std::numeric_limits<uint32_t>::max()) return false;
 
         // Uniform sets retain the buffer RID, so discard them before replacing
@@ -2955,15 +3249,31 @@ bool UpdateGodotGpuTriangleVertexBuffer(RenderingDevice *rd,
             rd->free_rid(g_gpu_pipeline_state->triangle_vertex_buffer);
         }
         g_gpu_pipeline_state->triangle_vertex_buffer =
-            rd->storage_buffer_create(static_cast<uint32_t>(capacity));
+            rd->storage_buffer_create(static_cast<uint32_t>(capacity), data);
         g_gpu_pipeline_state->triangle_vertex_buffer_capacity =
             g_gpu_pipeline_state->triangle_vertex_buffer.is_valid()
                 ? static_cast<uint32_t>(capacity) : 0;
+        if (!g_gpu_pipeline_state->triangle_vertex_buffer.is_valid()) {
+            g_gpu_pipeline_state->triangle_vertex_buffer_data.clear();
+            return false;
+        }
+        g_gpu_pipeline_state->triangle_vertex_buffer_data = data;
+        return true;
+    };
+
+    if (!g_gpu_pipeline_state->triangle_vertex_buffer.is_valid() ||
+        g_gpu_pipeline_state->triangle_vertex_buffer_capacity < required) {
+        if (!recreate_buffer()) return false;
+    } else if (rd->buffer_update(
+                   g_gpu_pipeline_state->triangle_vertex_buffer, 0,
+                   static_cast<uint32_t>(required), data) == OK) {
+        g_gpu_pipeline_state->triangle_vertex_buffer_data = data;
+    } else if (!recreate_buffer()) {
+        return false;
     }
+
     vertex_buffer = g_gpu_pipeline_state->triangle_vertex_buffer;
-    return vertex_buffer.is_valid() &&
-           rd->buffer_update(vertex_buffer, 0,
-                             static_cast<uint32_t>(required), data) == OK;
+    return vertex_buffer.is_valid();
 }
 
 RID GetCachedBlendUniformSet(RenderingDevice *rd, const RID &shader,
@@ -3260,9 +3570,15 @@ bool PrepareGodotGpuTriangles(RenderingDevice *rd,
     prepared = {};
     if (rd == nullptr || op == nullptr || op->vertices.empty()) return false;
     if (masked) {
-        if (!EnsureDrawMaskedTrianglesPipeline(rd)) return false;
+        if (!EnsureDrawMaskedTrianglesPipeline(rd)) {
+            g_gpu_triangle_pipeline_failed.fetch_add(
+                1, std::memory_order_relaxed);
+            return false;
+        }
     } else if (!(draw ? EnsureDrawTrianglesPipeline(rd)
                       : EnsureCopyTrianglesPipeline(rd))) {
+        g_gpu_triangle_pipeline_failed.fetch_add(
+            1, std::memory_order_relaxed);
         return false;
     }
 
@@ -3280,7 +3596,10 @@ bool PrepareGodotGpuTriangles(RenderingDevice *rd,
             rd->storage_buffer_create(vertex_data.size(), vertex_data);
         prepared.owns_vertex_buffer = prepared.vertex_buffer.is_valid();
     }
-    if (!prepared.vertex_buffer.is_valid()) return false;
+    if (!prepared.vertex_buffer.is_valid()) {
+        g_gpu_triangle_buffer_failed.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
 
     RID sample_src = op->src;
     if (!masked && op->src == op->dst) {
@@ -3340,6 +3659,7 @@ bool PrepareGodotGpuTriangles(RenderingDevice *rd,
         prepared.owns_uniform_set = prepared.uniform_set.is_valid();
     }
     if (!prepared.uniform_set.is_valid()) {
+        g_gpu_triangle_uniform_failed.fetch_add(1, std::memory_order_relaxed);
         FreeGodotGpuPreparedTriangles(rd, prepared);
         return false;
     }
@@ -3536,6 +3856,11 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
         case GodotGpuOp::Type::Read:
             op->data = rd->texture_get_data(op->src, 0);
             return !op->data.is_empty();
+        case GodotGpuOp::Type::ReadAsync:
+            // Asynchronous reads are submitted by
+            // BeginGodotGpuReadbackOnRenderThread after all preceding writes
+            // in the ordered bridge queue have been drained.
+            return false;
         case GodotGpuOp::Type::Blend:
             return ExecuteGodotGpuBlend(rd, op);
         case GodotGpuOp::Type::Blend2:
@@ -3550,6 +3875,8 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             if(ok) ApplyGodotGpuBarrier(rd);
             return ok;
         }
+        case GodotGpuOp::Type::ArtemisShader:
+            return ExecuteArtemisGpuShader(rd, op);
         case GodotGpuOp::Type::Release:
             ClearGodotGpuUniformSetCache(rd);
             rd->free_rid(op->dst);
@@ -3566,12 +3893,46 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
 
 void FinishGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool result) {
     CountGpuOpResult(result);
+    if (!result && op != nullptr) {
+        if (op->type == GodotGpuOp::Type::Copy) {
+            g_gpu_copy_failed.fetch_add(1, std::memory_order_relaxed);
+        } else if (op->type == GodotGpuOp::Type::CopyTriangles) {
+            g_gpu_copy_triangles_failed.fetch_add(
+                1, std::memory_order_relaxed);
+        }
+    }
     {
         std::lock_guard<std::mutex> done_lock(op->done_mutex);
         op->result = result;
         op->done = true;
     }
     op->done_cv.notify_one();
+}
+
+void CompleteGodotGpuReadback(PackedByteArray data,
+                              uint64_t completed_request) {
+    std::shared_ptr<GodotGpuOp> completed_op;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        const auto found = g_gpu_readbacks.find(completed_request);
+        if(found == g_gpu_readbacks.end()) return;
+        completed_op = found->second.op;
+    }
+    completed_op->data = std::move(data);
+    FinishGodotGpuOp(completed_op, !completed_op->data.is_empty());
+}
+
+bool BeginGodotGpuReadbackOnRenderThread(
+    RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &op) {
+    if(rd == nullptr || op == nullptr ||
+       op->type != GodotGpuOp::Type::ReadAsync ||
+       op->readback_request == 0) {
+        return false;
+    }
+    return rd->texture_get_data_async(
+               op->src, 0,
+               callable_mp_static(&CompleteGodotGpuReadback)
+                   .bind(op->readback_request)) == OK;
 }
 
 bool IsBatchableTriangleOp(const std::shared_ptr<GodotGpuOp> &op) {
@@ -3876,6 +4237,18 @@ void DrainGodotGpuOpsOnRenderThread() {
 
         flush_compute();
 
+        if(op->type == GodotGpuOp::Type::ReadAsync) {
+            // The readback belongs to the same command stream as the clear,
+            // triangle and blend operations that produced this frame. Submit
+            // it only after those operations have been encoded. Starting it
+            // directly from BridgeBeginReadRgba races Metal and can capture a
+            // transparent or partially composited E-mote surface.
+            if(!BeginGodotGpuReadbackOnRenderThread(rd, op)) {
+                FinishGodotGpuOp(op, false);
+            }
+            continue;
+        }
+
         // Alias blends are executed separately because sampling and writing the
         // same storage image in one dispatch is undefined on Metal/Vulkan.
         FinishGodotGpuOp(op, ExecuteGodotGpuOp(rd, op));
@@ -3898,20 +4271,22 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
         return false;
     }
     if (server->is_on_render_thread()) {
-        if (DeferredGodotGpuDrainEnabled()) {
+        if (DeferredGodotGpuDrainEnabled() ||
+            op->type == GodotGpuOp::Type::ReadAsync) {
             {
                 std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
                 g_gpu_op_queue.push_back(op);
                 UpdateGpuQueuePeak(g_gpu_op_queue.size());
             }
-            if (!wait && op->type != GodotGpuOp::Type::Flush) {
+            if (!wait && op->type != GodotGpuOp::Type::Flush &&
+                op->type != GodotGpuOp::Type::ReadAsync) {
                 return true;
             }
             DrainGodotGpuOpsOnRenderThread();
             return wait ? op->result : true;
         }
         const bool result = ExecuteGodotGpuOp(rd, op);
-        CountGpuOpResult(result);
+        FinishGodotGpuOp(op, result);
         return result;
     }
 
@@ -3935,7 +4310,11 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
         return true;
     }
     std::unique_lock<std::mutex> done_lock(op->done_mutex);
-    if (!op->done_cv.wait_for(done_lock, kGodotGpuSyncWaitTimeout,
+    const auto wait_timeout =
+        op->type == GodotGpuOp::Type::ArtemisShader
+            ? std::chrono::seconds(10)
+            : kGodotGpuSyncWaitTimeout;
+    if (!op->done_cv.wait_for(done_lock, wait_timeout,
                               [&]() { return op->done; })) {
         g_gpu_sync_timeouts.fetch_add(1, std::memory_order_relaxed);
         return false;
@@ -3993,6 +4372,702 @@ Ref<RDTextureFormat> MakeRgbaTextureFormat(uint32_t width, uint32_t height) {
     return format;
 }
 
+std::string ReplaceShaderMatches(
+    const std::string &input, const std::regex &pattern,
+    const std::function<std::string(const std::smatch &)> &replacement) {
+    std::string output;
+    std::string::const_iterator cursor = input.begin();
+    std::smatch match;
+    while (std::regex_search(cursor, input.end(), match, pattern)) {
+        output.append(cursor, match[0].first);
+        output += replacement(match);
+        cursor = match[0].second;
+    }
+    output.append(cursor, input.end());
+    return output;
+}
+
+std::string ArtemisShaderFloat(float value) {
+    if (!std::isfinite(value)) value = 0.0f;
+    std::ostringstream output;
+    output << std::setprecision(9) << value;
+    std::string text = output.str();
+    if (text.find_first_of(".eE") == std::string::npos) text += ".0";
+    return text;
+}
+
+const ArtemisGpuShaderConstant *FindArtemisShaderConstant(
+    const ArtemisGpuShaderRequest &request, const std::string &name) {
+    for (const auto &constant : request.constants) {
+        if (constant.name == name) return &constant;
+    }
+    return nullptr;
+}
+
+std::vector<float> ArtemisShaderUniformValues(
+    const ArtemisGpuShaderRequest &request, const std::string &name) {
+    if (name == "alpha") return {request.alpha};
+    if (name == "colorMultiply") {
+        return {
+            static_cast<float>((request.color_multiply >> 16u) & 0xffu) /
+                255.0f,
+            static_cast<float>((request.color_multiply >> 8u) & 0xffu) /
+                255.0f,
+            static_cast<float>(request.color_multiply & 0xffu) / 255.0f,
+        };
+    }
+    // These are only consumed by Artemis' built-in transition shader. A
+    // custom layer outside an active transition observes OpenGL's initial
+    // uniform value of zero.
+    if (name == "maskTransitionVague" || name == "maskTransitionStep") {
+        return {0.0f};
+    }
+    const ArtemisGpuShaderConstant *constant =
+        FindArtemisShaderConstant(request, name);
+    return constant != nullptr ? constant->values : std::vector<float>{};
+}
+
+uint32_t ArtemisShaderComponentCount(const std::string &type) {
+    if (type == "vec2" || type == "ivec2" || type == "bvec2") return 2;
+    if (type == "vec3" || type == "ivec3" || type == "bvec3") return 3;
+    if (type == "vec4" || type == "ivec4" || type == "bvec4") return 4;
+    if (type == "mat2") return 4;
+    if (type == "mat3") return 9;
+    if (type == "mat4") return 16;
+    return 1;
+}
+
+std::string ArtemisShaderTypedValue(const std::string &type,
+                                    const std::vector<float> &source_values,
+                                    size_t source_offset = 0) {
+    const uint32_t components = ArtemisShaderComponentCount(type);
+    std::vector<std::string> values;
+    values.reserve(components);
+    for (uint32_t index = 0; index < components; ++index) {
+        const float value =
+            source_offset + index < source_values.size()
+                ? source_values[source_offset + index]
+                : 0.0f;
+        if (type == "int" || type.rfind("ivec", 0) == 0) {
+            values.push_back(std::to_string(static_cast<int32_t>(value)));
+        } else if (type == "bool" || type.rfind("bvec", 0) == 0) {
+            values.push_back(value != 0.0f ? "true" : "false");
+        } else {
+            values.push_back(ArtemisShaderFloat(value));
+        }
+    }
+    if (components == 1) return values.front();
+    std::string output = type + "(";
+    for (size_t index = 0; index < values.size(); ++index) {
+        if (index != 0) output += ", ";
+        output += values[index];
+    }
+    output += ")";
+    return output;
+}
+
+struct ArtemisTranslatedShader {
+    struct Uniform {
+        std::string type;
+        std::string name;
+        uint32_t array_count = 0;
+        uint32_t binding = 0;
+        std::vector<float> values;
+    };
+
+    std::string vertex_source;
+    std::string fragment_source;
+    std::vector<std::string> samplers;
+    std::vector<Uniform> uniforms;
+};
+
+ArtemisTranslatedShader TranslateArtemisFragmentShader(
+    const ArtemisGpuShaderRequest &request) {
+    ArtemisTranslatedShader translated;
+    translated.vertex_source = R"GLSL(#version 450
+layout(location = 0) out vec2 resultCoord0;
+layout(location = 1) out vec2 resultCoord1;
+void main() {
+    vec2 position;
+    if (gl_VertexIndex == 0) {
+        position = vec2(-1.0, -1.0);
+    } else if (gl_VertexIndex == 1) {
+        position = vec2(3.0, -1.0);
+    } else {
+        position = vec2(-1.0, 3.0);
+    }
+    gl_Position = vec4(position, 0.0, 1.0);
+    resultCoord0 = position * 0.5 + vec2(0.5);
+    resultCoord1 = resultCoord0;
+}
+)GLSL";
+
+    std::string source = request.fragment_source;
+    source = std::regex_replace(
+        source, std::regex(R"(^[ \t]*#[ \t]*version[^\r\n]*(?:\r?\n|$))",
+                           std::regex::icase | std::regex::multiline),
+        "");
+    source = std::regex_replace(
+        source,
+        std::regex(R"(^[ \t]*#[ \t]*extension[^\r\n]*(?:\r?\n|$))",
+                   std::regex::icase | std::regex::multiline),
+        "");
+    source = std::regex_replace(
+        source,
+        std::regex(
+            R"(\bprecision\s+(?:lowp|mediump|highp)\s+\w+\s*;)",
+            std::regex::icase),
+        "");
+    source = std::regex_replace(
+        source,
+        std::regex(
+            R"(\bvarying\s+(?:(?:lowp|mediump|highp)\s+)?[^;]+;)",
+            std::regex::icase),
+        "");
+    source = std::regex_replace(
+        source,
+        std::regex(
+            R"(\battribute\s+(?:(?:lowp|mediump|highp)\s+)?[^;]+;)",
+            std::regex::icase),
+        "");
+
+    uint32_t next_binding = 0;
+    const std::regex sampler_pattern(
+        R"(\buniform\s+(?:(?:lowp|mediump|highp)\s+)?sampler2D\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)",
+        std::regex::icase);
+    source = ReplaceShaderMatches(
+        source, sampler_pattern, [&](const std::smatch &match) {
+            const std::string name = match[1].str();
+            translated.samplers.push_back(name);
+            return "layout(set = 0, binding = " +
+                std::to_string(next_binding++) +
+                ") uniform sampler2D " + name + ";";
+        });
+
+    const std::regex uniform_pattern(
+        R"(\buniform\s+(?:(?:lowp|mediump|highp)\s+)?(float|vec2|vec3|vec4|int|ivec2|ivec3|ivec4|bool|bvec2|bvec3|bvec4|mat2|mat3|mat4)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\[\s*([0-9]+)\s*\])?\s*;)",
+        std::regex::icase);
+    source = ReplaceShaderMatches(
+        source, uniform_pattern, [&](const std::smatch &match) {
+            const std::string type = match[1].str();
+            const std::string name = match[2].str();
+            const uint32_t array_count =
+                match[3].matched
+                    ? static_cast<uint32_t>(
+                          std::max(1, std::stoi(match[3].str())))
+                    : 0u;
+            ArtemisTranslatedShader::Uniform uniform;
+            uniform.type = type;
+            uniform.name = name;
+            uniform.array_count = array_count;
+            uniform.binding = next_binding++;
+            uniform.values = ArtemisShaderUniformValues(request, name);
+            translated.uniforms.push_back(std::move(uniform));
+            return "layout(std140, set = 0, binding = " +
+                std::to_string(translated.uniforms.back().binding) +
+                ") uniform ArtemisUniform" +
+                std::to_string(translated.uniforms.size() - 1u) + " { " +
+                type + " " + name +
+                (array_count != 0
+                     ? "[" + std::to_string(array_count) + "]"
+                     : "") +
+                "; };";
+        });
+
+    source = std::regex_replace(source, std::regex(R"(\btexture2D\s*\()"),
+                                "texture(");
+    source = std::regex_replace(
+        source, std::regex(R"(\bgl_FragData\s*\[\s*0\s*\])"),
+        "artemisFragmentColor");
+    source = std::regex_replace(source, std::regex(R"(\bgl_FragColor\b)"),
+                                "artemisFragmentColor");
+
+    translated.fragment_source =
+        "#version 450\n"
+        "layout(location = 0) in vec2 resultCoord0;\n"
+        "layout(location = 1) in vec2 resultCoord1;\n"
+        "layout(location = 0) out vec4 artemisFragmentColor;\n" +
+        source;
+    return translated;
+}
+
+const ArtemisGpuShaderImage *FindArtemisShaderImage(
+    const ArtemisGpuShaderRequest &request, const std::string &name) {
+    if (name == "textureFore") return &request.foreground;
+    if (name == "textureMask") return &request.mask;
+    for (const auto &texture : request.textures) {
+        if (texture.name == name) return &texture.image;
+    }
+    return nullptr;
+}
+
+PackedByteArray PackArtemisShaderImage(
+    const ArtemisGpuShaderImage &image) {
+    PackedByteArray packed;
+    packed.resize(static_cast<int64_t>(image.pixels.size()));
+    if (!image.pixels.empty() && packed.ptrw() != nullptr) {
+        std::memcpy(packed.ptrw(), image.pixels.data(), image.pixels.size());
+    }
+    return packed;
+}
+
+PackedByteArray PackArtemisShaderUniform(
+    const ArtemisTranslatedShader::Uniform &uniform) {
+    const uint32_t components = ArtemisShaderComponentCount(uniform.type);
+    uint32_t element_size = 16;
+    if (uniform.type == "mat2") element_size = 32;
+    if (uniform.type == "mat3") element_size = 48;
+    if (uniform.type == "mat4") element_size = 64;
+    const uint32_t element_count =
+        uniform.array_count != 0 ? uniform.array_count : 1u;
+    PackedByteArray packed;
+    packed.resize(static_cast<int64_t>(element_size) * element_count);
+    uint8_t *bytes = packed.ptrw();
+    if (bytes == nullptr) return packed;
+    std::memset(bytes, 0, static_cast<size_t>(packed.size()));
+
+    const bool integer =
+        uniform.type == "int" || uniform.type.rfind("ivec", 0) == 0;
+    const bool boolean =
+        uniform.type == "bool" || uniform.type.rfind("bvec", 0) == 0;
+    const bool matrix = uniform.type.rfind("mat", 0) == 0;
+    for (uint32_t element = 0; element < element_count; ++element) {
+        const size_t source_base =
+            static_cast<size_t>(element) * components;
+        for (uint32_t component = 0; component < components; ++component) {
+            const float value =
+                source_base + component < uniform.values.size()
+                    ? uniform.values[source_base + component]
+                    : 0.0f;
+            size_t byte_offset =
+                static_cast<size_t>(element) * element_size;
+            if (matrix) {
+                const uint32_t rows =
+                    uniform.type == "mat2"
+                        ? 2u
+                        : (uniform.type == "mat3" ? 3u : 4u);
+                const uint32_t column = component / rows;
+                const uint32_t row = component % rows;
+                byte_offset += static_cast<size_t>(column) * 16u +
+                    static_cast<size_t>(row) * 4u;
+            } else {
+                byte_offset += static_cast<size_t>(component) * 4u;
+            }
+            if (integer || boolean) {
+                const int32_t encoded =
+                    boolean ? (value != 0.0f ? 1 : 0)
+                            : static_cast<int32_t>(value);
+                std::memcpy(bytes + byte_offset, &encoded, sizeof(encoded));
+            } else {
+                const float encoded = std::isfinite(value) ? value : 0.0f;
+                std::memcpy(bytes + byte_offset, &encoded, sizeof(encoded));
+            }
+        }
+    }
+    return packed;
+}
+
+bool ExecuteArtemisGpuShader(
+    RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &op) {
+    if (rd == nullptr || op == nullptr || op->artemis_shader == nullptr) {
+        return false;
+    }
+    ArtemisGpuShaderRequest &request = *op->artemis_shader;
+    if (request.fragment_source.empty() || request.foreground.width == 0 ||
+        request.foreground.height == 0) {
+        request.error = "invalid Artemis fragment shader request";
+        return false;
+    }
+
+    const ArtemisTranslatedShader translated =
+        TranslateArtemisFragmentShader(request);
+
+    std::vector<RID> owned_rids;
+    const auto own = [&](RID rid) {
+        if (rid.is_valid()) owned_rids.push_back(rid);
+        return rid;
+    };
+    const auto cleanup = [&]() {
+        for (auto it = owned_rids.rbegin(); it != owned_rids.rend(); ++it) {
+            rd->free_rid(*it);
+        }
+    };
+
+    Ref<RDTextureView> texture_view;
+    texture_view.instantiate();
+    TypedArray<PackedByteArray> no_data;
+    RID output_texture = own(rd->texture_create(
+        MakeRgbaTextureFormat(request.foreground.width,
+                              request.foreground.height),
+        texture_view, no_data));
+    if (!output_texture.is_valid()) {
+        request.error = "Godot failed to allocate Artemis shader output";
+        cleanup();
+        return false;
+    }
+    TypedArray<RID> framebuffer_textures;
+    framebuffer_textures.push_back(output_texture);
+    RID framebuffer = own(rd->framebuffer_create(framebuffer_textures));
+    if (!framebuffer.is_valid()) {
+        request.error = "Godot failed to create Artemis shader framebuffer";
+        cleanup();
+        return false;
+    }
+
+    RID shader;
+    RID pipeline;
+    const std::string cache_key = request.fragment_source;
+    const auto cached = g_artemis_shader_pipeline_cache.find(cache_key);
+    if (cached != g_artemis_shader_pipeline_cache.end() &&
+        cached->second.shader.is_valid() &&
+        cached->second.pipeline.is_valid()) {
+        shader = cached->second.shader;
+        pipeline = cached->second.pipeline;
+    } else {
+        Ref<RDShaderSource> shader_source;
+        shader_source.instantiate();
+        shader_source->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
+        shader_source->set_stage_source(
+            RenderingDevice::SHADER_STAGE_VERTEX,
+            String::utf8(translated.vertex_source.c_str()));
+        shader_source->set_stage_source(
+            RenderingDevice::SHADER_STAGE_FRAGMENT,
+            String::utf8(translated.fragment_source.c_str()));
+        Ref<RDShaderSPIRV> spirv =
+            rd->shader_compile_spirv_from_source(shader_source);
+        if (spirv.is_null()) {
+            request.error = "Godot failed to compile Artemis shader source";
+            cleanup();
+            return false;
+        }
+        const String vertex_error = spirv->get_stage_compile_error(
+            RenderingDevice::SHADER_STAGE_VERTEX);
+        const String fragment_error = spirv->get_stage_compile_error(
+            RenderingDevice::SHADER_STAGE_FRAGMENT);
+        if (!vertex_error.is_empty() || !fragment_error.is_empty()) {
+            request.error =
+                std::string(vertex_error.utf8().get_data()) +
+                std::string(fragment_error.utf8().get_data());
+            UtilityFunctions::printerr(
+                "Artemis fragment shader compile error [",
+                String::utf8(request.shader_id.c_str()), "]: ",
+                String::utf8(request.error.c_str()));
+            cleanup();
+            return false;
+        }
+        shader = rd->shader_create_from_spirv(
+            spirv,
+            String("Artemis/") + String::utf8(request.shader_id.c_str()));
+        if (!shader.is_valid()) {
+            request.error = "Godot failed to create Artemis fragment shader";
+            cleanup();
+            return false;
+        }
+
+        Ref<RDPipelineRasterizationState> rasterization;
+        rasterization.instantiate();
+        rasterization->set_cull_mode(RenderingDevice::POLYGON_CULL_DISABLED);
+        Ref<RDPipelineMultisampleState> multisample;
+        multisample.instantiate();
+        Ref<RDPipelineDepthStencilState> depth_stencil;
+        depth_stencil.instantiate();
+        Ref<RDPipelineColorBlendStateAttachment> attachment;
+        attachment.instantiate();
+        attachment->set_enable_blend(false);
+        attachment->set_write_r(true);
+        attachment->set_write_g(true);
+        attachment->set_write_b(true);
+        attachment->set_write_a(true);
+        TypedArray<Ref<RDPipelineColorBlendStateAttachment>> attachments;
+        attachments.push_back(attachment);
+        Ref<RDPipelineColorBlendState> color_blend;
+        color_blend.instantiate();
+        color_blend->set_attachments(attachments);
+
+        pipeline = rd->render_pipeline_create(
+            shader, rd->framebuffer_get_format(framebuffer), -1,
+            RenderingDevice::RENDER_PRIMITIVE_TRIANGLES, rasterization,
+            multisample, depth_stencil, color_blend);
+        if (!pipeline.is_valid()) {
+            request.error = "Godot failed to create Artemis shader pipeline";
+            rd->free_rid(shader);
+            cleanup();
+            return false;
+        }
+        g_artemis_shader_pipeline_cache[cache_key] = {shader, pipeline};
+    }
+
+    RID sampler;
+    TypedArray<RDUniform> uniforms;
+    if (!translated.samplers.empty()) {
+        Ref<RDSamplerState> sampler_state;
+        sampler_state.instantiate();
+        sampler_state->set_mag_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
+        sampler_state->set_min_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
+        sampler_state->set_mip_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
+        sampler_state->set_repeat_u(
+            RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
+        sampler_state->set_repeat_v(
+            RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
+        sampler_state->set_repeat_w(
+            RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
+        sampler = own(rd->sampler_create(sampler_state));
+        if (!sampler.is_valid()) {
+            request.error = "Godot failed to create Artemis shader sampler";
+            cleanup();
+            return false;
+        }
+    }
+
+    const ArtemisGpuShaderImage missing_image{
+        1, 1, std::vector<uint8_t>{0, 0, 0, 255}};
+    for (size_t index = 0; index < translated.samplers.size(); ++index) {
+        const ArtemisGpuShaderImage *image =
+            FindArtemisShaderImage(request, translated.samplers[index]);
+        if (image == nullptr || image->width == 0 || image->height == 0 ||
+            image->pixels.size() !=
+                static_cast<size_t>(image->width) * image->height * 4u) {
+            image = &missing_image;
+        }
+        TypedArray<PackedByteArray> initial_data;
+        initial_data.push_back(PackArtemisShaderImage(*image));
+        RID texture = own(rd->texture_create(
+            MakeRgbaTextureFormat(image->width, image->height), texture_view,
+            initial_data));
+        if (!texture.is_valid()) {
+            request.error = "Godot failed to upload Artemis shader texture " +
+                translated.samplers[index];
+            cleanup();
+            return false;
+        }
+        Ref<RDUniform> uniform;
+        uniform.instantiate();
+        uniform->set_uniform_type(
+            RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
+        uniform->set_binding(static_cast<int32_t>(index));
+        uniform->add_id(sampler);
+        uniform->add_id(texture);
+        uniforms.push_back(uniform);
+    }
+    for (const auto &shader_uniform : translated.uniforms) {
+        PackedByteArray data = PackArtemisShaderUniform(shader_uniform);
+        RID buffer = own(rd->uniform_buffer_create(
+            static_cast<uint32_t>(data.size()), data));
+        if (!buffer.is_valid()) {
+            request.error =
+                "Godot failed to upload Artemis shader uniform " +
+                shader_uniform.name;
+            cleanup();
+            return false;
+        }
+        Ref<RDUniform> uniform;
+        uniform.instantiate();
+        uniform->set_uniform_type(
+            RenderingDevice::UNIFORM_TYPE_UNIFORM_BUFFER);
+        uniform->set_binding(static_cast<int32_t>(shader_uniform.binding));
+        uniform->add_id(buffer);
+        uniforms.push_back(uniform);
+    }
+
+    RID uniform_set;
+    if (!translated.samplers.empty() || !translated.uniforms.empty()) {
+        uniform_set = own(rd->uniform_set_create(uniforms, shader, 0));
+        if (!uniform_set.is_valid()) {
+            request.error =
+                "Godot failed to bind Artemis shader texture uniforms";
+            cleanup();
+            return false;
+        }
+    }
+
+    const int64_t draw_list = rd->draw_list_begin(framebuffer);
+    rd->draw_list_bind_render_pipeline(draw_list, pipeline);
+    if (uniform_set.is_valid()) {
+        rd->draw_list_bind_uniform_set(draw_list, uniform_set, 0);
+    }
+    rd->draw_list_draw(draw_list, false, 1, 3);
+    rd->draw_list_end();
+    ApplyGodotGpuBarrier(rd);
+    op->data = rd->texture_get_data(output_texture, 0);
+    const size_t expected_size =
+        static_cast<size_t>(request.foreground.width) *
+        request.foreground.height * 4u;
+    const bool success =
+        static_cast<size_t>(op->data.size()) == expected_size;
+    if (!success) {
+        request.error = "Godot returned an incomplete Artemis shader image";
+    }
+    cleanup();
+    return success;
+}
+
+void WriteArtemisShaderError(const std::string &message, char *error_utf8,
+                             uint32_t error_size) {
+    if (error_utf8 == nullptr || error_size == 0) return;
+    const size_t copy_size =
+        std::min(message.size(), static_cast<size_t>(error_size - 1u));
+    if (copy_size != 0) {
+        std::memcpy(error_utf8, message.data(), copy_size);
+    }
+    error_utf8[copy_size] = '\0';
+}
+
+bool CopyArtemisShaderImage(const engine_runtime_shader_image_v1_t &source,
+                            bool allow_empty, ArtemisGpuShaderImage *output,
+                            std::string *error) {
+    if (output == nullptr) return false;
+    output->width = source.width;
+    output->height = source.height;
+    output->pixels.clear();
+    if (source.width == 0 || source.height == 0) {
+        if (allow_empty && source.width == 0 && source.height == 0) return true;
+        if (error != nullptr) *error = "Artemis shader image is empty";
+        return false;
+    }
+    const uint64_t tight_stride = static_cast<uint64_t>(source.width) * 4u;
+    const uint64_t stride =
+        source.stride_bytes != 0 ? source.stride_bytes : tight_stride;
+    const uint64_t required =
+        (static_cast<uint64_t>(source.height) - 1u) * stride + tight_stride;
+    const uint64_t tight_size =
+        tight_stride * static_cast<uint64_t>(source.height);
+    if (source.pixels_rgba == nullptr || stride < tight_stride ||
+        required > source.pixels_size ||
+        tight_size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        if (error != nullptr) {
+            *error = "Artemis shader image buffer is invalid";
+        }
+        return false;
+    }
+    output->pixels.resize(static_cast<size_t>(tight_size));
+    for (uint32_t y = 0; y < source.height; ++y) {
+        std::memcpy(output->pixels.data() +
+                        static_cast<size_t>(y) *
+                            static_cast<size_t>(tight_stride),
+                    source.pixels_rgba +
+                        static_cast<size_t>(y) *
+                            static_cast<size_t>(stride),
+                    static_cast<size_t>(tight_stride));
+    }
+    return true;
+}
+
+engine_result_t ExecuteArtemisFragmentShader(
+    void *, const engine_runtime_fragment_shader_request_v1_t *native_request,
+    char *error_utf8, uint32_t error_size) {
+    if (native_request == nullptr ||
+        native_request->struct_size <
+            offsetof(engine_runtime_fragment_shader_request_v1_t,
+                     output_pixels_size) +
+                sizeof(native_request->output_pixels_size) ||
+        native_request->api_version !=
+            ENGINE_RUNTIME_FRAGMENT_SHADER_API_VERSION ||
+        native_request->fragment_source_utf8 == nullptr ||
+        native_request->output_pixels_rgba == nullptr) {
+        WriteArtemisShaderError("invalid Artemis shader ABI request",
+                                error_utf8, error_size);
+        return ENGINE_RESULT_INVALID_ARGUMENT;
+    }
+    if (!SupportsGodotRenderingDeviceGpu() || MainRenderingDevice() == nullptr) {
+        WriteArtemisShaderError(
+            "Godot RenderingDevice shader backend is unavailable", error_utf8,
+            error_size);
+        return ENGINE_RESULT_NOT_SUPPORTED;
+    }
+
+    auto request = std::make_shared<ArtemisGpuShaderRequest>();
+    request->shader_id = native_request->shader_id_utf8 != nullptr
+        ? native_request->shader_id_utf8
+        : "";
+    request->fragment_source = native_request->fragment_source_utf8;
+    request->mask_uses_alpha = native_request->mask_uses_alpha != 0;
+    request->alpha = native_request->alpha;
+    request->color_multiply = native_request->color_multiply;
+    if (!CopyArtemisShaderImage(native_request->foreground, false,
+                                &request->foreground, &request->error) ||
+        !CopyArtemisShaderImage(native_request->mask, true, &request->mask,
+                                &request->error)) {
+        WriteArtemisShaderError(request->error, error_utf8, error_size);
+        return ENGINE_RESULT_INVALID_ARGUMENT;
+    }
+    const size_t expected_output_size =
+        static_cast<size_t>(request->foreground.width) *
+        request->foreground.height * 4u;
+    if (native_request->output_pixels_size < expected_output_size) {
+        WriteArtemisShaderError("Artemis shader output buffer is too small",
+                                error_utf8, error_size);
+        return ENGINE_RESULT_INVALID_ARGUMENT;
+    }
+    if (native_request->texture_count != 0 &&
+        native_request->textures == nullptr) {
+        WriteArtemisShaderError("Artemis shader texture array is missing",
+                                error_utf8, error_size);
+        return ENGINE_RESULT_INVALID_ARGUMENT;
+    }
+    if (native_request->constant_count != 0 &&
+        native_request->constants == nullptr) {
+        WriteArtemisShaderError("Artemis shader constant array is missing",
+                                error_utf8, error_size);
+        return ENGINE_RESULT_INVALID_ARGUMENT;
+    }
+
+    request->textures.reserve(native_request->texture_count);
+    for (uint32_t index = 0; index < native_request->texture_count; ++index) {
+        const auto &source = native_request->textures[index];
+        ArtemisGpuShaderTexture texture;
+        texture.name = source.name_utf8 != nullptr ? source.name_utf8 : "";
+        if (texture.name.empty() ||
+            !CopyArtemisShaderImage(source.image, false, &texture.image,
+                                    &request->error)) {
+            if (request->error.empty()) {
+                request->error = "Artemis shader texture name is empty";
+            }
+            WriteArtemisShaderError(request->error, error_utf8, error_size);
+            return ENGINE_RESULT_INVALID_ARGUMENT;
+        }
+        request->textures.push_back(std::move(texture));
+    }
+    request->constants.reserve(native_request->constant_count);
+    for (uint32_t index = 0; index < native_request->constant_count; ++index) {
+        const auto &source = native_request->constants[index];
+        if (source.name_utf8 == nullptr ||
+            (source.value_count != 0 && source.values == nullptr)) {
+            WriteArtemisShaderError(
+                "Artemis shader constant entry is invalid", error_utf8,
+                error_size);
+            return ENGINE_RESULT_INVALID_ARGUMENT;
+        }
+        ArtemisGpuShaderConstant constant;
+        constant.name = source.name_utf8;
+        if (source.value_count != 0) {
+            constant.values.assign(source.values,
+                                   source.values + source.value_count);
+        }
+        request->constants.push_back(std::move(constant));
+    }
+
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::ArtemisShader;
+    op->artemis_shader = request;
+    if (!RunGodotGpuOpSync(op)) {
+        const std::string message = request->error.empty()
+            ? "Godot failed to execute Artemis fragment shader"
+            : request->error;
+        WriteArtemisShaderError(message, error_utf8, error_size);
+        return ENGINE_RESULT_INTERNAL_ERROR;
+    }
+    if (static_cast<size_t>(op->data.size()) != expected_output_size) {
+        WriteArtemisShaderError(
+            "Godot returned an invalid Artemis shader output size", error_utf8,
+            error_size);
+        return ENGINE_RESULT_INTERNAL_ERROR;
+    }
+    std::memcpy(native_request->output_pixels_rgba, op->data.ptr(),
+                expected_output_size);
+    WriteArtemisShaderError("", error_utf8, error_size);
+    return ENGINE_RESULT_OK;
+}
+
 uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
                           uint32_t stride_bytes) {
     RenderingDevice *rd = MainRenderingDevice();
@@ -4019,6 +5094,10 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
     std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
     const uint64_t id = g_next_gpu_texture_id++;
     g_gpu_textures[id] = record;
+    g_gpu_textures_created.fetch_add(1, std::memory_order_relaxed);
+    g_gpu_texture_bytes_created.fetch_add(
+        static_cast<uint64_t>(width) * height * 4u,
+        std::memory_order_relaxed);
     return id;
 }
 
@@ -4031,6 +5110,10 @@ void BridgeReleaseTexture(uint64_t texture) {
         record = it->second;
         g_gpu_textures.erase(it);
     }
+    g_gpu_textures_released.fetch_add(1, std::memory_order_relaxed);
+    g_gpu_texture_bytes_released.fetch_add(
+        static_cast<uint64_t>(record.width) * record.height * 4u,
+        std::memory_order_relaxed);
     record.texture.unref();
     if (record.rid.is_valid()) {
         auto op = std::make_shared<GodotGpuOp>();
@@ -4224,7 +5307,6 @@ bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     if (width <= 0 || height <= 0 || triangle_count > 64) {
         return false;
     }
-
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::CopyTriangles;
     op->src = src_record.rid;
@@ -4275,7 +5357,6 @@ bool BridgeDrawTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     if (width <= 0 || height <= 0 || triangle_count > 64) {
         return false;
     }
-
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::DrawTriangles;
     op->src = src_record.rid;
@@ -4335,7 +5416,6 @@ bool BridgeDrawMaskedTriangles(uint64_t dst, uint64_t src, uint64_t mask,
     if (width <= 0 || height <= 0 || triangle_count > 64) {
         return false;
     }
-
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::DrawMaskedTriangles;
     op->src = src_record.rid;
@@ -4440,7 +5520,6 @@ bool BridgeBlendRect(uint64_t dst, uint64_t src, const tTVPRect *dst_rect,
     if (width <= 0 || height <= 0 || src_width <= 0 || src_height <= 0) {
         return false;
     }
-
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Blend;
     op->src = src_record.rid;
@@ -4590,6 +5669,82 @@ bool BridgeReadRgba(uint64_t texture, void *out_pixels, size_t out_pixels_size,
                     tight_stride);
     }
     return true;
+}
+
+uint64_t BridgeBeginReadRgba(uint64_t texture) {
+    GodotGpuTextureRecord record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        const auto found = g_gpu_textures.find(texture);
+        if(found == g_gpu_textures.end()) return 0;
+        record = found->second;
+    }
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::ReadAsync;
+    op->src = record.rid;
+    uint64_t request = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        request = g_next_gpu_readback_id++;
+        if(request == 0) request = g_next_gpu_readback_id++;
+        g_gpu_readbacks.emplace(
+            request, GodotGpuReadbackRequest{op, record.width, record.height});
+    }
+    op->readback_request = request;
+    if(!RunGodotGpuOpAsync(op)) {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        g_gpu_readbacks.erase(request);
+        return 0;
+    }
+    return request;
+}
+
+bool BridgePollReadRgba(uint64_t request, void *out_pixels,
+                        size_t out_pixels_size, uint32_t stride_bytes,
+                        bool *ready) {
+    if(ready) *ready = false;
+    if(request == 0 || out_pixels == nullptr) return false;
+    GodotGpuReadbackRequest record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        const auto found = g_gpu_readbacks.find(request);
+        if(found == g_gpu_readbacks.end()) return false;
+        record = found->second;
+    }
+    {
+        std::lock_guard<std::mutex> lock(record.op->done_mutex);
+        if(!record.op->done) return true;
+    }
+    if(ready) *ready = true;
+    const uint32_t tight_stride = record.width * 4u;
+    const uint32_t dst_stride = stride_bytes != 0 ? stride_bytes : tight_stride;
+    const size_t required = static_cast<size_t>(dst_stride) * record.height;
+    bool success = record.op->result && out_pixels_size >= required;
+    if(success) {
+        const uint8_t *source = record.op->data.ptr();
+        success = source != nullptr &&
+            static_cast<size_t>(record.op->data.size()) >=
+                static_cast<size_t>(tight_stride) * record.height;
+        if(success) {
+            auto *destination = static_cast<uint8_t *>(out_pixels);
+            for(uint32_t y = 0; y < record.height; ++y) {
+                std::memcpy(destination + static_cast<size_t>(y) * dst_stride,
+                            source + static_cast<size_t>(y) * tight_stride,
+                            tight_stride);
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        g_gpu_readbacks.erase(request);
+    }
+    return success;
+}
+
+void BridgeDiscardReadRgba(uint64_t request) {
+    if(request == 0) return;
+    std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+    g_gpu_readbacks.erase(request);
 }
 
 bool BridgeFlush() {
@@ -4966,8 +6121,19 @@ uint32_t BlendModeFromName(const String &mode_name) {
 }
 
 void ReleaseGodotGpuPipeline() {
-    if (g_gpu_pipeline_state == nullptr) return;
     RenderingDevice *rd = MainRenderingDevice();
+    if (rd != nullptr) {
+        for (const auto &entry : g_artemis_shader_pipeline_cache) {
+            if (entry.second.pipeline.is_valid()) {
+                rd->free_rid(entry.second.pipeline);
+            }
+            if (entry.second.shader.is_valid()) {
+                rd->free_rid(entry.second.shader);
+            }
+        }
+    }
+    g_artemis_shader_pipeline_cache.clear();
+    if (g_gpu_pipeline_state == nullptr) return;
     if (rd != nullptr) {
         ClearGodotGpuUniformSetCache(rd);
         if (g_gpu_pipeline_state->blend_pipeline.is_valid()) {
@@ -5027,6 +6193,10 @@ void ReleaseGodotGpuPipeline() {
 }
 
 void ReleaseRemainingGodotGpuTextures() {
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_readbacks_mutex);
+        g_gpu_readbacks.clear();
+    }
     std::vector<GodotGpuTextureRecord> records;
     {
         std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
@@ -5076,6 +6246,9 @@ public:
         callbacks.blend_rect2 = BridgeBlendRect2;
         callbacks.blend_rect3 = BridgeBlendRect3;
         callbacks.read_rgba = BridgeReadRgba;
+        callbacks.begin_read_rgba = BridgeBeginReadRgba;
+        callbacks.poll_read_rgba = BridgePollReadRgba;
+        callbacks.discard_read_rgba = BridgeDiscardReadRgba;
         callbacks.flush = BridgeFlush;
         engine_register_godot_gpu_bridge(&callbacks);
 
@@ -5099,7 +6272,7 @@ public:
         if (handle_ == nullptr) {
             return;
         }
-        release_rd_texture(false);
+        release_frame_texture();
         const engine_result_t result = engine_destroy(handle_);
         BridgeFlush();
         if (result != ENGINE_RESULT_OK) {
@@ -5162,6 +6335,21 @@ public:
         return result;
     }
 
+    int submit_platform_response(const String &operation,
+                                 const String &argument) {
+        if (handle_ == nullptr) {
+            last_result_ = "INVALID_STATE";
+            last_error_ = "engine is not initialized";
+            return ENGINE_RESULT_INVALID_STATE;
+        }
+        const CharString operation_utf8 = operation.utf8();
+        const CharString argument_utf8 = argument.utf8();
+        const engine_result_t result = engine_submit_platform_response(
+            handle_, operation_utf8.get_data(), argument_utf8.get_data());
+        update_last_error(result);
+        return result;
+    }
+
     int set_surface_size(int width, int height) {
         if (handle_ == nullptr) {
             return ENGINE_RESULT_INVALID_STATE;
@@ -5196,6 +6384,7 @@ public:
         const auto delta_ms = static_cast<uint32_t>(
             std::max(0.0, delta_seconds) * 1000.0);
         const engine_result_t result = engine_tick(handle_, delta_ms);
+        drain_platform_requests();
         update_last_error(result);
         return result;
     }
@@ -5420,6 +6609,29 @@ public:
             unicode_codepoint > 0) {
             event.type = ENGINE_INPUT_EVENT_TEXT_INPUT;
             result = engine_send_input(handle_, &event);
+        }
+        update_last_error(result);
+        return result;
+    }
+
+    int send_text_input(const String& text) {
+        if (handle_ == nullptr) {
+            return ENGINE_RESULT_INVALID_STATE;
+        }
+        engine_result_t result = ENGINE_RESULT_OK;
+        for (int64_t index = 0; index < text.length(); ++index) {
+            const char32_t codepoint = text[index];
+            if (codepoint == 0 || codepoint == U'\r' || codepoint == U'\n') {
+                continue;
+            }
+            engine_input_event_t event{};
+            event.struct_size = sizeof(event);
+            event.type = ENGINE_INPUT_EVENT_TEXT_INPUT;
+            event.unicode_codepoint = static_cast<uint32_t>(codepoint);
+            result = engine_send_input(handle_, &event);
+            if (result != ENGINE_RESULT_OK) {
+                break;
+            }
         }
         update_last_error(result);
         return result;
@@ -6015,6 +7227,93 @@ public:
         return result;
     }
 
+    Dictionary debug_artemis_shader_self_test() {
+        Dictionary result;
+        const std::array<uint8_t, 8> foreground = {
+            255, 0, 0, 255, 0, 255, 0, 255};
+        const std::array<uint8_t, 8> custom_texture = {
+            0, 0, 255, 255, 255, 255, 255, 255};
+        const char *source = R"GLSL(
+precision mediump float;
+varying vec2 resultCoord1;
+uniform sampler2D textureFore;
+uniform sampler2D tintTexture;
+uniform float alpha;
+uniform vec3 colorMultiply;
+uniform float weights[2];
+void main() {
+    vec4 foregroundColor = texture2D(textureFore, resultCoord1);
+    vec4 tintColor = texture2D(tintTexture, resultCoord1);
+    gl_FragColor = vec4(
+        foregroundColor.rgb * colorMultiply * weights[0] +
+            tintColor.rgb * weights[1],
+        foregroundColor.a * alpha);
+}
+)GLSL";
+        engine_runtime_shader_texture_v1_t texture{};
+        texture.name_utf8 = "tintTexture";
+        texture.image = {
+            2, 1, 8, custom_texture.data(), custom_texture.size()};
+        std::array<float, 2> weights = {0.5f, 0.25f};
+        engine_runtime_shader_constant_v1_t constant{};
+        constant.name_utf8 = "weights";
+        constant.values = weights.data();
+        constant.value_count = static_cast<uint32_t>(weights.size());
+        std::array<uint8_t, 8> output{};
+        engine_runtime_fragment_shader_request_v1_t request{};
+        request.struct_size = sizeof(request);
+        request.api_version = ENGINE_RUNTIME_FRAGMENT_SHADER_API_VERSION;
+        request.shader_id_utf8 = "__aether_shader_self_test";
+        request.fragment_source_utf8 = source;
+        request.foreground = {
+            2, 1, 8, foreground.data(), foreground.size()};
+        request.alpha = 0.5f;
+        request.color_multiply = 0x0080ffffu;
+        request.textures = &texture;
+        request.texture_count = 1;
+        request.constants = &constant;
+        request.constant_count = 1;
+        request.output_pixels_rgba = output.data();
+        request.output_pixels_size = output.size();
+        std::array<char, 4096> error{};
+        const engine_result_t first = ExecuteArtemisFragmentShader(
+            nullptr, &request, error.data(),
+            static_cast<uint32_t>(error.size()));
+        const std::array<uint8_t, 8> first_expected = {
+            64, 0, 64, 128, 64, 191, 64, 128};
+        const bool first_pixels =
+            first == ENGINE_RESULT_OK && output == first_expected;
+
+        // Execute the same compiled program with different dynamic uniforms.
+        // This catches accidental compile-time constant substitution in the
+        // cache as well as uniform-buffer packing mistakes.
+        weights = {0.0f, 1.0f};
+        request.alpha = 0.25f;
+        output.fill(0);
+        error.fill(0);
+        const engine_result_t second = ExecuteArtemisFragmentShader(
+            nullptr, &request, error.data(),
+            static_cast<uint32_t>(error.size()));
+        const std::array<uint8_t, 8> second_expected = {
+            0, 0, 255, 64, 255, 255, 255, 64};
+        const bool second_pixels =
+            second == ENGINE_RESULT_OK && output == second_expected;
+
+        PackedByteArray pixels;
+        pixels.resize(output.size());
+        if (pixels.ptrw() != nullptr) {
+            std::memcpy(pixels.ptrw(), output.data(), output.size());
+        }
+        result["ok"] = first_pixels && second_pixels;
+        result["first_result"] = static_cast<int64_t>(first);
+        result["first_pixels_ok"] = first_pixels;
+        result["second_result"] = static_cast<int64_t>(second);
+        result["second_pixels_ok"] = second_pixels;
+        result["pixels"] = pixels;
+        result["error"] = String::utf8(error.data());
+        return result;
+    }
+
     bool android_has_external_storage_permission() const {
 #if defined(__ANDROID__)
         return AndroidHasExternalStoragePermission();
@@ -6108,6 +7407,9 @@ protected:
                              &AetherKiriPlayer::get_render_backend);
         ClassDB::bind_method(D_METHOD("set_engine_option", "key", "value"),
                              &AetherKiriPlayer::set_engine_option);
+        ClassDB::bind_method(
+            D_METHOD("submit_platform_response", "operation", "argument"),
+            &AetherKiriPlayer::submit_platform_response);
         ClassDB::bind_method(D_METHOD("set_surface_size", "width", "height"),
                              &AetherKiriPlayer::set_surface_size);
         ClassDB::bind_method(D_METHOD("open_game", "game_root_path", "async"),
@@ -6145,6 +7447,8 @@ protected:
         ClassDB::bind_method(D_METHOD("send_key_event", "pressed", "key_code",
                                       "modifiers", "unicode_codepoint"),
                              &AetherKiriPlayer::send_key_event);
+        ClassDB::bind_method(D_METHOD("send_text_input", "text"),
+                             &AetherKiriPlayer::send_text_input);
         ClassDB::bind_method(D_METHOD("get_text_input_state"),
                              &AetherKiriPlayer::get_text_input_state);
         ClassDB::bind_method(D_METHOD("get_startup_state"),
@@ -6180,6 +7484,8 @@ protected:
         ClassDB::bind_method(D_METHOD("debug_gpu_blend2_self_test", "mode", "opacity"),
                              &AetherKiriPlayer::debug_gpu_blend2_self_test,
                              DEFVAL(255));
+        ClassDB::bind_method(D_METHOD("debug_artemis_shader_self_test"),
+                             &AetherKiriPlayer::debug_artemis_shader_self_test);
         ClassDB::bind_method(D_METHOD("android_has_external_storage_permission"),
                              &AetherKiriPlayer::android_has_external_storage_permission);
         ClassDB::bind_method(D_METHOD("android_request_external_storage_permission"),
@@ -6194,9 +7500,55 @@ protected:
                              &AetherKiriPlayer::iap_restore);
         ClassDB::bind_method(D_METHOD("iap_get_state_json"),
                              &AetherKiriPlayer::iap_get_state_json);
+        ADD_SIGNAL(MethodInfo(
+            "platform_request",
+            PropertyInfo(Variant::STRING, "operation"),
+            PropertyInfo(Variant::STRING, "argument")));
     }
 
 private:
+    void drain_platform_requests() {
+        std::array<char, 64> operation{};
+        std::array<char, 8192> argument{};
+        for (size_t count = 0; count < 256; ++count) {
+            uint32_t available = 0;
+            const engine_result_t result = engine_poll_platform_request(
+                handle_, operation.data(), static_cast<uint32_t>(operation.size()),
+                argument.data(), static_cast<uint32_t>(argument.size()),
+                &available);
+            if (result != ENGINE_RESULT_OK || available == 0) {
+                return;
+            }
+            const String name = String::utf8(operation.data());
+            const String value = String::utf8(argument.data());
+            if (name == "open_browser") {
+                OS::get_singleton()->shell_open(value);
+            } else if (name == "call_native") {
+                if (has_connections("platform_request")) {
+                    emit_signal("platform_request", name, value);
+                } else {
+                    // Native CPlatform::CallNativeMethod returns an empty
+                    // string when no platform module handles the request.
+                    submit_platform_response(name, "result=");
+                }
+            } else if (name == "purchase") {
+                if (has_connections("platform_request")) {
+                    emit_signal("platform_request", name, value);
+                } else {
+                    // Desktop hosts and mobile shells without a billing
+                    // adapter must complete the native wait deterministically.
+                    submit_platform_response(
+                        name,
+                        "result=-1&title=&description=&price=&token="
+                        "&error_response=-1&error_message="
+                        "In%20App%20Billing%20is%20unavailable");
+                }
+            } else {
+                emit_signal("platform_request", name, value);
+            }
+        }
+    }
+
     RenderingDevice *main_rendering_device() const {
         RenderingServer *server = RenderingServer::get_singleton();
         return server != nullptr ? server->get_rendering_device() : nullptr;
@@ -6499,6 +7851,14 @@ void InitializeAetherKiri(ModuleInitializationLevel level) {
     if (level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
+    const engine_result_t shader_result =
+        engine_set_runtime_fragment_shader_executor(
+            ExecuteArtemisFragmentShader, nullptr);
+    if (shader_result != ENGINE_RESULT_OK) {
+        UtilityFunctions::printerr(
+            "Failed to register Artemis fragment shader backend: ",
+            ResultToString(shader_result));
+    }
     ClassDB::register_class<AetherKiriPlayer>();
 }
 
@@ -6506,6 +7866,7 @@ void DeinitializeAetherKiri(ModuleInitializationLevel level) {
     if (level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
+    engine_set_runtime_fragment_shader_executor(nullptr, nullptr);
     BridgeFlush();
     ReleaseRemainingGodotGpuTextures();
     ReleaseGodotGpuPipeline();

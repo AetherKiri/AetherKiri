@@ -168,3 +168,95 @@ jobs:
           fi
 
           gh release create "$tag" "${assets[@]}" "${release_args[@]}"
+
+  update-version:
+    name: Open repository version update
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          # This job is the only release job allowed to push repository
+          # metadata. The persisted token is scoped to contents: write.
+          persist-credentials: true
+
+      - name: Persist released version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_build_number=$((GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))
+          python3 .github/scripts/set-release-version.py \
+            "$RELEASE_TAG" \
+            --build-number "$release_build_number"
+          python3 .github/scripts/set-release-version.py \
+            "$RELEASE_TAG" \
+            --build-number "$release_build_number" \
+            --check
+
+          version="${RELEASE_TAG#v}"
+          version_files=(
+            apps/godot_app/project.godot
+            apps/godot_app/export_presets.cfg
+          )
+          if git diff --quiet -- "${version_files[@]}"; then
+            echo "Repository version metadata already matches ${version}."
+            exit 0
+          fi
+
+          version_branch="automation/release-version-${version}"
+          git switch --create "$version_branch"
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "${version_files[@]}"
+          git commit -m "chore: update version to ${version}"
+
+          remote_version_sha="$(
+            git ls-remote --heads origin "refs/heads/${version_branch}" |
+              awk 'NR == 1 { print $1 }'
+          )"
+          if [[ -n "$remote_version_sha" ]]; then
+            git push \
+              --force-with-lease="refs/heads/${version_branch}:${remote_version_sha}" \
+              origin "HEAD:refs/heads/${version_branch}"
+          else
+            git push origin "HEAD:refs/heads/${version_branch}"
+          fi
+
+          pr_url="$(
+            gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --base "$DEFAULT_BRANCH" \
+              --head "$version_branch" \
+              --state open \
+              --json url \
+              --jq '.[0].url'
+          )"
+          if [[ -z "$pr_url" ]]; then
+            pr_url="$(
+              gh pr create \
+                --repo "$GITHUB_REPOSITORY" \
+                --base "$DEFAULT_BRANCH" \
+                --head "$version_branch" \
+                --title "chore: update version to ${version}" \
+                --body "Generated automatically after publishing GitHub Release ${RELEASE_TAG}. Updates the checked-in Godot, Apple, and Android version metadata to match the released artifacts."
+            )"
+          fi
+
+          {
+            echo "### Repository version update"
+            echo
+            echo "Created or refreshed ${pr_url} for ${RELEASE_TAG}."
+          } >> "$GITHUB_STEP_SUMMARY"

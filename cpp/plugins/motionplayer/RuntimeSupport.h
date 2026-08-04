@@ -294,10 +294,43 @@ namespace motion::detail {
         tTJSVariant presentationRenderLayer;
         // Reusable work layer for sub_6C4E28-style per-item local clipping.
         tTJSVariant scratchWorkLayer;
+        // Stable ownerless framebuffer used by the private E-mote bridge's
+        // RGBA export path. Creating and releasing a full-size Godot/Metal
+        // texture on every frame leaves thousands of resources pending on
+        // the render thread and can grow the process footprint by gigabytes
+        // per minute. Keep one surface per Player and resize it only when the
+        // requested export dimensions grow.
+        tTJSVariant headlessRgbaRenderLayer;
+        // Cropped Artemis E-mote exports use a separate surface. The first
+        // frame establishes alpha bounds at full-stage size; keeping that
+        // large backing texture would make every later cropped readback pay
+        // for the original 1920x1080 allocation.
+        tTJSVariant headlessRgbaRegionRenderLayer;
+        tTJSVariant headlessRgbaRegionRenderLayer2;
+        // A provider can submit several independent E-mote surfaces before
+        // synchronizing their GPU readbacks, matching Artemis' framebuffer
+        // display pass instead of serially stalling after every player.
+        bool headlessRgbaRenderPending = false;
+        bool headlessRgbaPendingFullStage = false;
+        int headlessRgbaPendingSlot = 0;
+        int headlessRgbaPendingWidth = 0;
+        int headlessRgbaPendingHeight = 0;
+        std::array<uint64_t, 2> headlessRgbaReadbackRequests{};
+        std::array<uint64_t, 2> headlessRgbaReadbackSequences{};
+        std::array<bool, 2> headlessRgbaReadbackFullStage{};
+        std::array<int, 2> headlessRgbaReadbackSlots{};
+        std::array<int, 2> headlessRgbaReadbackWidths{};
+        std::array<int, 2> headlessRgbaReadbackHeights{};
+        uint64_t headlessRgbaNextReadbackSequence = 1;
         // Source bitmaps decoded for the active motion. Building these from PSB
         // resources is expensive enough to be visible during title animations.
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
             motionSourceBitmapCache;
+        // A decoded atlas icon may retain a small filtering gutter around its
+        // logical image.  Keep the sampling rectangle beside the cached
+        // bitmap so prepared/tinted variants use the same coordinates.
+        std::unordered_map<std::string, std::array<int, 4>>
+            motionSourceBitmapRects;
         // E-mote atlases are shared by many icon sources. Building the
         // cross-player bitmap-cache key fingerprints the complete atlas
         // bytes, so remember that content fingerprint for this runtime
@@ -588,6 +621,7 @@ namespace motion::detail {
 
         void clearMotionBitmapCaches() {
             motionSourceBitmapCache.clear();
+            motionSourceBitmapRects.clear();
             motionSourceResourceFingerprintCache.clear();
             motionSourceMetadataCache.clear();
             motionPreparedBitmapCache.clear();
@@ -604,6 +638,93 @@ namespace motion::detail {
             clearPresentationRenderReuse();
         }
     };
+
+    inline std::size_t nativeLayerBufferNodeIndex(
+        std::size_t nodeCount,
+        std::size_t bufferPosition) {
+        return nodeCount - bufferPosition - 1;
+    }
+
+    inline bool tessellatePreparedItemForExternalMesh(
+        PlayerRuntime::PreparedRenderItem &entry,
+        double meshDivisionRatio,
+        int meshDivision) {
+        if(!entry.meshPoints.empty() || entry.meshType != 0) {
+            return false;
+        }
+
+        float minX = entry.corners[0];
+        float maxX = entry.corners[0];
+        float minY = entry.corners[1];
+        float maxY = entry.corners[1];
+        for(std::size_t point = 2;
+            point + 1 < entry.corners.size(); point += 2) {
+            minX = std::min(minX, entry.corners[point]);
+            maxX = std::max(maxX, entry.corners[point]);
+            minY = std::min(minY, entry.corners[point + 1]);
+            maxY = std::max(maxY, entry.corners[point + 1]);
+        }
+        if(!std::isfinite(minX) || !std::isfinite(maxX) ||
+           !std::isfinite(minY) || !std::isfinite(maxY) ||
+           maxX - minX <= 1e-5f || maxY - minY <= 1e-5f) {
+            return false;
+        }
+
+        // libartemis MMotionPlayer::StepFrameMeshChain first expands an
+        // affine child surface into a stable grid whenever a parent Bezier
+        // patch exists. It then transforms every grid vertex through that
+        // patch. Keeping this topology stable even while the patch happens to
+        // be affine avoids a one-frame topology change at blink boundaries.
+        const int divisionTotal = std::clamp(static_cast<int>(
+            meshDivisionRatio * static_cast<double>(std::max(1, meshDivision))),
+            2, 50);
+        const double width = 0.5 * (
+            std::hypot(entry.corners[2] - entry.corners[0],
+                       entry.corners[3] - entry.corners[1]) +
+            std::hypot(entry.corners[4] - entry.corners[6],
+                       entry.corners[5] - entry.corners[7]));
+        const double height = 0.5 * (
+            std::hypot(entry.corners[6] - entry.corners[0],
+                       entry.corners[7] - entry.corners[1]) +
+            std::hypot(entry.corners[4] - entry.corners[2],
+                       entry.corners[5] - entry.corners[3]));
+        const double extent = width + height;
+        int xSegments = extent > 0.0001
+            ? static_cast<int>(
+                  static_cast<double>(divisionTotal) * width / extent)
+            : divisionTotal / 2;
+        xSegments = std::clamp(xSegments, 1, divisionTotal - 1);
+        const int ySegments = divisionTotal - xSegments;
+
+        entry.meshDivX = xSegments + 1;
+        entry.meshDivY = ySegments + 1;
+        entry.meshType = 2;
+        entry.meshPoints.resize(static_cast<std::size_t>(
+            entry.meshDivX * entry.meshDivY * 2));
+        for(int y = 0; y < entry.meshDivY; ++y) {
+            const float v = static_cast<float>(y) /
+                static_cast<float>(entry.meshDivY - 1);
+            for(int x = 0; x < entry.meshDivX; ++x) {
+                const float u = static_cast<float>(x) /
+                    static_cast<float>(entry.meshDivX - 1);
+                const float topX =
+                    entry.corners[0] * (1.f - u) + entry.corners[2] * u;
+                const float topY =
+                    entry.corners[1] * (1.f - u) + entry.corners[3] * u;
+                const float bottomX =
+                    entry.corners[6] * (1.f - u) + entry.corners[4] * u;
+                const float bottomY =
+                    entry.corners[7] * (1.f - u) + entry.corners[5] * u;
+                const std::size_t offset = static_cast<std::size_t>(
+                    (y * entry.meshDivX + x) * 2);
+                entry.meshPoints[offset] =
+                    topX * (1.f - v) + bottomX * v;
+                entry.meshPoints[offset + 1] =
+                    topY * (1.f - v) + bottomY * v;
+            }
+        }
+        return true;
+    }
 
     std::shared_ptr<PlayerRuntime> makePlayerRuntime();
     const MotionClip *findMotionClip(const MotionSnapshot &snapshot,

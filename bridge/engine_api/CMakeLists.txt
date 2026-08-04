@@ -2,22 +2,24 @@ cmake_minimum_required(VERSION 3.16)
 
 project(engine_api LANGUAGES C CXX)
 
+set(ENGINE_API_COMMON_SOURCES
+    src/engine_api.cpp
+    src/engine_api_dispatch.cpp
+    src/engine_runtime_provider.cpp
+)
+
 if(IOS OR WEB OR EMSCRIPTEN)
-    add_library(engine_api STATIC
-        src/engine_api.cpp
-    )
+    add_library(engine_api STATIC ${ENGINE_API_COMMON_SOURCES})
 elseif(ANDROID)
     # On Android, include the JNI entry point (JNI_OnLoad, Surface bridge)
     # directly in engine_api.so so that System.loadLibrary("engine_api")
     # triggers JNI_OnLoad and registers JNI native methods.
     add_library(engine_api SHARED
-        src/engine_api.cpp
+        ${ENGINE_API_COMMON_SOURCES}
         src/android_jni_bridge.cpp
     )
 else()
-    add_library(engine_api SHARED
-        src/engine_api.cpp
-    )
+    add_library(engine_api SHARED ${ENGINE_API_COMMON_SOURCES})
 endif()
 
 target_compile_features(engine_api PRIVATE cxx_std_17)
@@ -39,6 +41,8 @@ endif()
 target_include_directories(engine_api
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 if(TARGET krkr2core AND TARGET krkr2plugin)
@@ -68,6 +72,10 @@ endif()
 
 if(BUILD_GPU_BRIDGE)
     target_compile_definitions(engine_api PRIVATE KRKR_ENABLE_GPU_BRIDGE=1)
+endif()
+
+if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_artemis)
+    aetherinternal_extend_artemis(engine_api)
 endif()
 
 set_target_properties(engine_api PROPERTIES

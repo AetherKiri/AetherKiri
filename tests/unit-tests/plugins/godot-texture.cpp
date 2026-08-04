@@ -30,6 +30,9 @@ enum class GpuCall {
 TriangleDrawCall g_triangle_draw_call;
 int g_blend_rect_calls = 0;
 uint64_t g_next_texture_handle = 1;
+uint64_t g_next_readback_handle = 101;
+uint64_t g_last_discarded_readback = 0;
+bool g_readback_ready = false;
 std::vector<GpuCall> g_gpu_calls;
 
 uint64_t CreateTestTexture(uint32_t, uint32_t, const void *, uint32_t) {
@@ -49,6 +52,29 @@ bool ReadTestGrayTexture(uint64_t, void *out_pixels, size_t out_pixels_size,
     };
     std::memcpy(out_pixels, rgba.data(), rgba.size());
     return true;
+}
+
+uint64_t BeginTestReadback(uint64_t texture) {
+    return texture != 0 ? g_next_readback_handle++ : 0;
+}
+
+bool PollTestReadback(uint64_t request, void *out_pixels,
+                      size_t out_pixels_size, uint32_t stride_bytes,
+                      bool *ready) {
+    if(ready) *ready = g_readback_ready;
+    if(request == 0 || out_pixels == nullptr || !g_readback_ready) {
+        return request != 0 && out_pixels != nullptr;
+    }
+    if(out_pixels_size < 8 || stride_bytes != 8) return false;
+    const std::array<std::uint8_t, 8> rgba = {
+        1, 2, 3, 4, 5, 6, 7, 8,
+    };
+    std::memcpy(out_pixels, rgba.data(), rgba.size());
+    return true;
+}
+
+void DiscardTestReadback(uint64_t request) {
+    g_last_discarded_readback = request;
 }
 
 bool DrawTestTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
@@ -82,6 +108,9 @@ public:
         g_triangle_draw_call = {};
         g_blend_rect_calls = 0;
         g_next_texture_handle = 1;
+        g_next_readback_handle = 101;
+        g_last_discarded_readback = 0;
+        g_readback_ready = false;
         g_gpu_calls.clear();
         TVPGodotGpuBridgeCallbacks callbacks{};
         callbacks.create_rgba = CreateTestTexture;
@@ -89,6 +118,9 @@ public:
         callbacks.draw_triangles = DrawTestTriangles;
         callbacks.blend_rect = BlendTestRect;
         callbacks.read_rgba = ReadTestGrayTexture;
+        callbacks.begin_read_rgba = BeginTestReadback;
+        callbacks.poll_read_rgba = PollTestReadback;
+        callbacks.discard_read_rgba = DiscardTestReadback;
         callbacks.flush = FlushTestGpu;
         TVPGodotGpuBridgeRegister(&callbacks);
     }
@@ -97,6 +129,30 @@ public:
 };
 
 } // namespace
+
+TEST_CASE("Godot textures expose asynchronous GPU readback") {
+    TestGpuBridge bridge;
+    std::array<std::uint8_t, 8> pixels{};
+    GodotTexture2D texture(pixels.data(), 8, 2, 1,
+                           TVPTextureFormat::RGBA);
+    REQUIRE(texture.EnsureGpuHandle());
+
+    const uint64_t request = texture.BeginGpuReadback();
+    REQUIRE(request == 101);
+    bool ready = true;
+    CHECK(texture.PollGpuReadback(request, pixels.data(), pixels.size(), 8,
+                                  &ready));
+    CHECK_FALSE(ready);
+
+    g_readback_ready = true;
+    REQUIRE(texture.PollGpuReadback(request, pixels.data(), pixels.size(), 8,
+                                    &ready));
+    CHECK(ready);
+    CHECK(pixels == std::array<std::uint8_t, 8>{1, 2, 3, 4, 5, 6, 7, 8});
+
+    texture.DiscardGpuReadback(request);
+    CHECK(g_last_discarded_readback == request);
+}
 
 TEST_CASE("Godot nearest scaled alpha uses the software sampler") {
     TestGpuBridge bridge;

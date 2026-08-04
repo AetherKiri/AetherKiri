@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include "D3DEmoteModule.h"
 #include "EmotePlayer.h"
 #include "RuntimeSupport.h"
 #include "ncbind.hpp"
@@ -49,7 +50,10 @@ namespace {
         tTJSVariant base;
         if(TJS_FAILED(metaObj->PropGet(0, TJS_W("base"), nullptr, &base, metaObj)) ||
            base.Type() != tvtObject) {
-            return {};
+            // Standalone E-mote PSBs expose chara/motion directly in
+            // metadata. Companion modules wrap the same dictionary in
+            // metadata.base.
+            base = metadata;
         }
         iTJSDispatch2 *baseObj = base.AsObjectNoAddRef();
         if(!baseObj) {
@@ -105,7 +109,16 @@ namespace {
 namespace motion {
 
     EmotePlayer::EmotePlayer(ResourceManager rm) :
-        _player(std::move(rm)) {}
+        _player(std::move(rm)) {
+        // libartemis.so MOGLBase::BeginCreateMask/PrepareInnerMask use mode
+        // 1 for the antialiased alpha-mask path. D3DEmoteModule exposes that
+        // native default, while a bare Motion Player intentionally defaults
+        // to stencil mode. Propagate the module setting when constructing the
+        // owned player so a half-closed eyelid does not promote the final
+        // translucent mask row to a fully visible strip of iris. The public
+        // per-player maskMode setter can still override this afterwards.
+        _player.setMaskMode(D3DEmoteModule::getMaskMode());
+    }
 
     EmotePlayer::~EmotePlayer() = default;
 

@@ -51,6 +51,11 @@ struct TVPGodotGpuBridgeCallbacks {
                         int opacity, uint32_t color);
     bool (*read_rgba)(uint64_t texture, void *out_pixels,
                       size_t out_pixels_size, uint32_t stride_bytes);
+    uint64_t (*begin_read_rgba)(uint64_t texture);
+    bool (*poll_read_rgba)(uint64_t request, void *out_pixels,
+                           size_t out_pixels_size, uint32_t stride_bytes,
+                           bool *ready);
+    void (*discard_read_rgba)(uint64_t request);
     bool (*flush)();
 };
 

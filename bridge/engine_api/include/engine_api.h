@@ -179,6 +179,11 @@ typedef enum engine_input_event_type_t {
   ENGINE_INPUT_EVENT_BACK = 8
 } engine_input_event_type_t;
 
+typedef enum engine_text_input_state_flag_t {
+  ENGINE_TEXT_INPUT_STATE_NONE = 0,
+  ENGINE_TEXT_INPUT_STATE_ACTIVE = 1u << 0
+} engine_text_input_state_flag_t;
+
 typedef enum engine_startup_state_t {
   ENGINE_STARTUP_STATE_IDLE = 0,
   ENGINE_STARTUP_STATE_RUNNING = 1,
@@ -246,6 +251,26 @@ ENGINE_API_EXPORT engine_result_t engine_create(const engine_create_desc_t* desc
 ENGINE_API_EXPORT engine_result_t engine_destroy(engine_handle_t handle);
 
 /*
+ * Retrieves one platform operation emitted by a runtime provider. Requests
+ * are queued across asynchronous startup and must be consumed on the host UI
+ * thread. If no request is pending, out_available is set to zero and the
+ * function returns OK. A too-small output buffer leaves the request queued.
+ */
+ENGINE_API_EXPORT engine_result_t engine_poll_platform_request(
+    engine_handle_t handle, char* operation_buffer,
+    uint32_t operation_buffer_size, char* argument_buffer,
+    uint32_t argument_buffer_size, uint32_t* out_available);
+
+/*
+ * Returns the asynchronous result of a platform request to the active runtime
+ * provider. operation_utf8 must match the request operation; argument_utf8 is
+ * provider-defined UTF-8 data.
+ */
+ENGINE_API_EXPORT engine_result_t engine_submit_platform_response(
+    engine_handle_t handle, const char* operation_utf8,
+    const char* argument_utf8);
+
+/*
  * Opens a game package/root directory.
  * handle and game_root_path_utf8 must be non-null.
  * startup_script_utf8 may be null to use default startup script.
@@ -306,7 +331,8 @@ ENGINE_API_EXPORT engine_result_t engine_set_option(engine_handle_t handle,
                                                     const engine_option_t* option);
 
 /*
- * Sets logical render surface size in pixels.
+ * Sets the host presentation surface size in pixels. Runtime-specific game
+ * coordinates remain in the game's logical coordinate space.
  * width and height must be greater than zero.
  */
 ENGINE_API_EXPORT engine_result_t engine_set_surface_size(engine_handle_t handle,
