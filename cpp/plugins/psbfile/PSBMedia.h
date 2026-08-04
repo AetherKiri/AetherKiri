@@ -13,6 +13,10 @@
 #include "resources/ImageMetadata.h"
 
 namespace PSB {
+    namespace detail {
+        bool IsSupportedImageHeader(const std::vector<uint8_t> &data);
+    }
+
     struct PSBMediaCacheStats {
         size_t entryCount = 0;
         size_t entryLimit = 0;

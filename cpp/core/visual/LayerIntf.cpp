@@ -61,6 +61,8 @@
 #include "RenderManager.h"
 #include "godot/GodotRenderManager.h"
 #include "FontImpl.h"
+#include "LayerCompletionCoordinates.h"
+#include "PimgCompositeBounds.h"
 #include "../../plugins/psbfile/PSBMedia.h"
 
 extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
@@ -2233,29 +2235,30 @@ static bool TVPLayerLoadPimgComposite(tTJSNI_BaseLayer *layer,
         selected.push_back(found->second);
     }
 
-    int canvasWidth = 0;
-    int canvasHeight = 0;
+    std::vector<TVPLayerInternal::PimgLayerRect> selectedRects;
+    selectedRects.reserve(selected.size());
     for(const auto *entry : selected) {
-        canvasWidth =
-            std::max(canvasWidth, entry->info.left + entry->info.width);
-        canvasHeight =
-            std::max(canvasHeight, entry->info.top + entry->info.height);
-    }
-    if(canvasWidth <= 0 || canvasHeight <= 0) {
-        for(const auto &entry : entries) {
-            canvasWidth =
-                std::max(canvasWidth, entry.info.left + entry.info.width);
-            canvasHeight =
-                std::max(canvasHeight, entry.info.top + entry.info.height);
-        }
-    }
-    if(canvasWidth <= 0 || canvasHeight <= 0) {
-        return false;
+        selectedRects.push_back({entry->info.left, entry->info.top,
+                                 entry->info.width, entry->info.height});
     }
 
-    tTVPBaseBitmap canvas(static_cast<tjs_uint>(canvasWidth),
-                          static_cast<tjs_uint>(canvasHeight), 32);
-    canvas.Fill(tTVPRect(0, 0, canvasWidth, canvasHeight), 0);
+    TVPLayerInternal::PimgCompositeBounds bounds{};
+    if(!TVPLayerInternal::ComputePimgCompositeBounds(selectedRects, bounds)) {
+        std::vector<TVPLayerInternal::PimgLayerRect> fallbackRects;
+        fallbackRects.reserve(entries.size());
+        for(const auto &entry : entries) {
+            fallbackRects.push_back({entry.info.left, entry.info.top,
+                                     entry.info.width, entry.info.height});
+        }
+        if(!TVPLayerInternal::ComputePimgCompositeBounds(fallbackRects,
+                                                         bounds)) {
+            return false;
+        }
+    }
+
+    tTVPBaseBitmap canvas(static_cast<tjs_uint>(bounds.width),
+                          static_cast<tjs_uint>(bounds.height), 32);
+    canvas.Fill(tTVPRect(0, 0, bounds.width, bounds.height), 0);
 
     bool wroteAnyLayer = false;
     iTJSDispatch2 *compositeMeta = nullptr;
@@ -2287,8 +2290,8 @@ static bool TVPLayerLoadPimgComposite(tTJSNI_BaseLayer *layer,
                 std::max(0, std::min(255, info.opacity));
             const tTVPBBBltMethod method =
                 !wroteAnyLayer && opacity == 255 ? bmCopy : bmAlphaOnAlpha;
-            canvas.Blt(info.left, info.top, &source, sourceRect, method, opacity,
-                       false);
+            canvas.Blt(info.left - bounds.left, info.top - bounds.top, &source,
+                       sourceRect, method, opacity, false);
             wroteAnyLayer = true;
         }
 
@@ -2301,9 +2304,9 @@ static bool TVPLayerLoadPimgComposite(tTJSNI_BaseLayer *layer,
 
         layer->AssignMainImageWithUpdate(&canvas);
         spdlog::debug(
-            "Layer.loadImages PIMG composite storage={} archive={} seton={} size={}x{} layers={}",
-            storage.AsStdString(), archive, setonText, canvasWidth, canvasHeight,
-            selected.size());
+            "Layer.loadImages PIMG composite storage={} archive={} seton={} origin={},{} size={}x{} layers={}",
+            storage.AsStdString(), archive, setonText, bounds.left, bounds.top,
+            bounds.width, bounds.height, selected.size());
     } catch(...) {
         if(compositeMeta) {
             compositeMeta->Release();
@@ -10936,15 +10939,24 @@ void tTJSNI_BaseLayer::InternalComplete2(tTVPComplexRect &updateregion,
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::InternalComplete2_GPU(tTVPRect updateregion,
-                                             tTVPDrawable *drawable) {
+                                             tTVPDrawable *drawable,
+                                             bool localDestination) {
     if(Manager)
         Manager->QueryUpdateExcludeRect();
-    updateregion.add_offsets(Rect.left, Rect.top);
-    // Draw_GPU's x/y parameters are the destination position corresponding
-    // to r.left/r.top. Passing (0, 0) is only correct for a full-window rect;
-    // for a dirty rect it moves that strip to the top-left and produces a
-    // visibly torn frame after every click.
-    Draw_GPU(drawable, updateregion.left, updateregion.top,
+    const auto coordinates =
+        TVPLayerInternal::ResolveGpuCompletionCoordinates(
+            updateregion.left, updateregion.top, updateregion.right,
+            updateregion.bottom, Rect.left, Rect.top, localDestination);
+    updateregion.left = coordinates.parentLeft;
+    updateregion.top = coordinates.parentTop;
+    updateregion.right = coordinates.parentRight;
+    updateregion.bottom = coordinates.parentBottom;
+    // Draw_GPU receives its rectangle in the layer's parent coordinates.
+    // A window destination uses those same coordinates. Complete(), however,
+    // renders into a layer-local cache bitmap, so its destination must retain
+    // the unshifted local position even though the source rectangle is shifted
+    // for intersection with this layer's Rect.
+    Draw_GPU(drawable, coordinates.destinationX, coordinates.destinationY,
              updateregion, false);
 }
 
@@ -10958,7 +10970,7 @@ void tTJSNI_BaseLayer::InternalComplete(tTVPComplexRect &updateregion,
     InCompletion = true;
 
     if(IsGPU()) {
-        InternalComplete2_GPU(updateregion.GetBound(), drawable);
+        InternalComplete2_GPU(updateregion.GetBound(), drawable, true);
     } else {
         InternalComplete2(updateregion, drawable);
     }
@@ -10991,11 +11003,11 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
                     // can alternate between old and new character contents.
                     InternalComplete2_GPU(
                         TVPConsumeFullGpuCompletionRequest() ? Rect : dirty,
-                        drawable);
+                        drawable, false);
                     updateRegion.Clear();
                 }
             } else {
-                InternalComplete2_GPU(Rect, drawable);
+                InternalComplete2_GPU(Rect, drawable, false);
             }
         } else {
             InternalComplete2(Manager->GetUpdateRegionForCompletion(),
@@ -12367,27 +12379,57 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                                 /*var. type*/ tTJSNI_Layer);
         if(numparams < 4)
             return TJS_E_BADPARAMCOUNT;
-        _this->DrawText(
-            *param[0], *param[1], *param[2],
-            static_cast<tjs_uint32>((tjs_int64)*param[3]),
+
+        const tjs_int x = *param[0];
+        tjs_int y = *param[1];
+        const tjs_uint32 color =
+            static_cast<tjs_uint32>((tjs_int64)*param[3]);
+        const tjs_int opacity =
             (numparams >= 5 && param[4]->Type() != tvtVoid) ? (tjs_int)*param[4]
-                                                            : (tjs_int)255,
+                                                            : (tjs_int)255;
+        const bool antialiased =
             (numparams >= 6 && param[5]->Type() != tvtVoid)
                 ? param[5]->operator bool()
-                : true,
+                : true;
+        const tjs_int shadowLevel =
             (numparams >= 7 && param[6]->Type() != tvtVoid) ? (tjs_int)*param[6]
-                                                            : 0,
+                                                            : 0;
+        const tjs_uint32 shadowColor =
             (numparams >= 8 && param[7]->Type() != tvtVoid)
                 ? static_cast<tjs_uint32>((tjs_int64)*param[7])
-                : 0,
+                : 0;
+        const tjs_int shadowWidth =
             (numparams >= 9 && param[8]->Type() != tvtVoid) ? (tjs_int)*param[8]
-                                                            : 0,
+                                                            : 0;
+        const tjs_int shadowOffsetX =
             (numparams >= 10 && param[9]->Type() != tvtVoid)
                 ? (tjs_int)*param[9]
-                : 0,
+                : 0;
+        const tjs_int shadowOffsetY =
             (numparams >= 11 && param[10]->Type() != tvtVoid)
                 ? (tjs_int)*param[10]
-                : 0);
+                : 0;
+
+        // Some games draw a top-aligned name into a small transparent layer.
+        // Replacement fonts can have ink above the logical line box, so keep
+        // the glyph and its shadow inside the active clip just like the
+        // vertical-gradient text path below does.
+        try {
+            tTVPRect glyphBounds;
+            _this->GetFontGlyphDrawRect(*param[2], glyphBounds);
+            y = krkr::font::ClampTextOriginToClipTop(
+                y, glyphBounds.top,
+                krkr::font::ComputeTextShadowTopPadding(
+                    shadowLevel, shadowWidth, shadowOffsetY),
+                _this->GetClipTop());
+        } catch(...) {
+            // Bounds measurement is best-effort. Preserve the original draw
+            // behavior when the active font cannot report its glyph bounds.
+        }
+
+        _this->DrawText(
+            x, y, *param[2], color, opacity, antialiased, shadowLevel,
+            shadowColor, shadowWidth, shadowOffsetX, shadowOffsetY);
 
         return TJS_S_OK;
     }

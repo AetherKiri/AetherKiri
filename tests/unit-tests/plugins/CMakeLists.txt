@@ -4,6 +4,7 @@ project(TestPlugins LANGUAGES CXX)
 add_executable(motionplayer-dll
     main.cpp
     motionplayer-dll.cpp
+    psb-media.cpp
     registry.cpp
     kbad-data-pack.cpp
     textrender-timing.cpp

@@ -118,7 +118,10 @@ bool TraceGpuFallback() {
 bool DeferredGodotGpuDrainEnabled() {
     static const bool enabled = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_DEFER_GPU_DRAIN");
-        return value == nullptr || value[0] == '\0' || std::strcmp(value, "0") != 0;
+        if (value == nullptr || value[0] == '\0') {
+            return TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT;
+        }
+        return std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }

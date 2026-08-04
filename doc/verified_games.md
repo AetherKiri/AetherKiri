@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-08-03
+Last updated: 2026-08-04
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -33,6 +33,8 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | PARQUET | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 9-nine- 新章 | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | as:9-nine- ARTEISIA | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 乱れ雪月華 ～儚く散る細雪～ | macOS debug app; iOS/iPadOS debug app build on iPad | Startup, age-warning and title/menu rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 乱れ雪月華 ～月夜の淫舞、狂気の契り～ | macOS debug app; iOS/iPadOS debug app build on iPad | Startup, title/menu rendering, and basic input through the new-game transition | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | オトメ*ドメイン | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, gallery scene replay flow, compiled PSB scenario label lookup, scene/text rendering, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | もっと！孕ませ！炎のおっぱい異世界おっぱいメイド学園！ | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, continue/load flow, scene/text rendering, voice playback smoke, save/load smoke, exit behavior, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | もっと！孕ませ！炎のおっぱい異世界超エロサキュバス学園！ | macOS release app; iOS/iPadOS release app build on iPad; Android release APK | Startup, title/menu rendering, continue/load flow, scene/text rendering, Live2D rendering smoke, voice playback smoke, save/load smoke, and CJK/symbol font rendering | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
