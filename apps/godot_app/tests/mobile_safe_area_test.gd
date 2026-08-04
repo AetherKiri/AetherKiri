@@ -1,0 +1,154 @@
+extends SceneTree
+
+const MAIN_SCRIPT := preload("res://scripts/main.gd")
+
+func _initialize() -> void:
+    var app = MAIN_SCRIPT.new()
+
+    var portrait := app._scaled_display_safe_rect(
+        Vector2(430, 932),
+        Vector2(1179, 2556),
+        Rect2(0, 177, 1179, 2283)
+    )
+    assert(portrait.position.y > 60.0)
+    assert(portrait.size.x == 430.0)
+    assert(portrait.position.y + portrait.size.y < 900.0)
+
+    var landscape := app._scaled_display_safe_rect(
+        Vector2(932, 430),
+        Vector2(2556, 1179),
+        Rect2(177, 0, 2283, 1113)
+    )
+    assert(landscape.position.x > 60.0)
+    assert(landscape.position.x + landscape.size.x < 900.0)
+    assert(landscape.position.y + landscape.size.y < 410.0)
+
+    var ipad_safe_rect := Rect2(0, 24, 1194, 786)
+    var ipad_sidebar_backdrop := app._sidebar_backdrop_rect(
+        Vector2(1194, 834),
+        ipad_safe_rect,
+        232.0
+    )
+    assert(is_equal_approx(ipad_sidebar_backdrop.position.y, -24.0))
+    assert(is_equal_approx(ipad_sidebar_backdrop.end.y, 810.0))
+    assert(is_equal_approx(ipad_sidebar_backdrop.size.x, 232.0))
+
+    var portrait_settings: Dictionary = app._settings_layout_spec(portrait.size)
+    var landscape_settings: Dictionary = app._settings_layout_spec(landscape.size)
+    assert(bool(portrait_settings["stack_controls"]))
+    assert(not bool(landscape_settings["stack_controls"]))
+    assert(float(landscape_settings["content_width"]) > float(portrait_settings["content_width"]))
+
+    var portrait_detail: Dictionary = app._detail_layout_spec(portrait.size)
+    var landscape_detail: Dictionary = app._detail_layout_spec(landscape.size)
+    assert(bool(portrait_detail["compact"]))
+    assert(not bool(portrait_detail["phone_landscape"]))
+    assert(not bool(landscape_detail["compact"]))
+    assert(bool(landscape_detail["phone_landscape"]))
+    assert(float(landscape_detail["content_width"]) > float(portrait_detail["content_width"]))
+    assert(app._home_card_minimum_size(true) == Vector2(340, 112))
+    assert(app._home_card_minimum_size(false) == Vector2(340, 132))
+
+    var portrait_video_controls: Dictionary = app._video_controls_layout_spec(portrait.size)
+    var landscape_video_controls: Dictionary = app._video_controls_layout_spec(landscape.size)
+    assert(bool(portrait_video_controls["phone_portrait"]))
+    assert(not bool(landscape_video_controls["phone_portrait"]))
+    assert(float(portrait_video_controls["transport_width"]) < float(landscape_video_controls["transport_width"]))
+    assert(float(portrait_video_controls["panel_height"]) > float(landscape_video_controls["panel_height"]))
+
+    app._build_video_view()
+    assert(app.video_back_button.text.is_empty())
+    assert(app.video_back_button.get_child_count() > 0)
+    app._apply_video_controls_layout(portrait.size)
+    assert(app.video_action_groups.vertical)
+    assert(app.video_rewind_button.custom_minimum_size == Vector2(70, 42))
+    assert(app.video_rate_button.custom_minimum_size == Vector2(86, 42))
+    assert(app.video_subtitle_button.custom_minimum_size == Vector2(148, 42))
+    app._apply_video_controls_layout(landscape.size)
+    assert(not app.video_action_groups.vertical)
+    assert(app.video_rewind_button.custom_minimum_size == Vector2(86, 48))
+
+    var landscape_controls_panel := app._video_controls_panel_rect(
+        Vector2(932, 430),
+        landscape,
+        float(landscape_video_controls["panel_height"])
+    )
+    assert(is_equal_approx(landscape_controls_panel.end.y, 430.0))
+    assert(is_equal_approx(
+        landscape_controls_panel.position.y,
+        landscape.end.y - float(landscape_video_controls["panel_height"])
+    ))
+
+    var dialog := PanelContainer.new()
+    app._mark_legal_safe_dialog(dialog, false, true)
+    app._layout_safe_dialog(dialog, portrait)
+    var dialog_rect := dialog.get_rect()
+    assert(dialog_rect.position.x >= portrait.position.x)
+    assert(dialog_rect.position.y >= portrait.position.y)
+    assert(dialog_rect.end.x <= portrait.end.x)
+    assert(dialog_rect.end.y <= portrait.end.y)
+
+    assert(app._edge_back_gesture_qualified(
+        Vector2(8, 400),
+        Vector2(120, 410),
+        portrait.size.x
+    ))
+    assert(not app._edge_back_gesture_qualified(
+        Vector2(8, 400),
+        Vector2(45, 520),
+        portrait.size.x
+    ))
+    assert(not app._edge_back_gesture_qualified(
+        Vector2(8, 400),
+        Vector2(120, 410),
+        portrait.size.x,
+        true
+    ))
+
+    var momentum := app._shell_scroll_momentum_spec(2500.0, 120.0, 0.0, 1200.0)
+    assert(bool(momentum["active"]))
+    assert(float(momentum["target"]) > 120.0)
+    assert(float(momentum["duration"]) > 0.0)
+    var stopped_momentum := app._shell_scroll_momentum_spec(50.0, 120.0, 0.0, 1200.0)
+    assert(not bool(stopped_momentum["active"]))
+    var bounded_momentum := app._shell_scroll_momentum_spec(5000.0, 1100.0, 0.0, 1200.0)
+    assert(bool(bounded_momentum["active"]))
+    assert(is_equal_approx(float(bounded_momentum["target"]), 1200.0))
+    assert(is_equal_approx(app._shell_scroll_maximum(0.0, 1800.0, 600.0), 1200.0))
+    assert(is_equal_approx(app._shell_scroll_maximum(20.0, 10.0, 100.0), 20.0))
+
+    var native_scroll_bar := VScrollBar.new()
+    var scroll_bar_child := Control.new()
+    native_scroll_bar.add_child(scroll_bar_child)
+    assert(app._is_scroll_bar_control(native_scroll_bar))
+    assert(app._is_scroll_bar_control(scroll_bar_child))
+    assert(not app._is_scroll_bar_control(dialog))
+
+    var launch_shell := Control.new()
+    launch_shell.visible = true
+    launch_shell.scale = Vector2(0.96, 0.96)
+    launch_shell.modulate.a = 0.25
+    app.shell_root = launch_shell
+    app._begin_launch_transition()
+    assert(not launch_shell.visible)
+    assert(launch_shell.scale == Vector2.ONE)
+    assert(is_equal_approx(launch_shell.modulate.a, 1.0))
+
+    var immediate_loading_panel := Control.new()
+    var immediate_loading_card := Control.new()
+    immediate_loading_panel.add_child(immediate_loading_card)
+    immediate_loading_panel.visible = false
+    immediate_loading_panel.modulate.a = 0.0
+    immediate_loading_card.scale = Vector2(0.5, 0.5)
+    app.ui_motion.loading_in(immediate_loading_panel, immediate_loading_card, true)
+    assert(immediate_loading_panel.visible)
+    assert(is_equal_approx(immediate_loading_panel.modulate.a, 1.0))
+    assert(immediate_loading_card.scale == Vector2.ONE)
+
+    immediate_loading_panel.free()
+    launch_shell.free()
+    native_scroll_bar.free()
+    dialog.free()
+    app.free()
+    print("MOBILE_SAFE_AREA_OK")
+    quit(0)

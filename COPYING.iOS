@@ -1,7 +1,7 @@
-Aether iOS App Store Additional Permission and Notice
+Aether Apple App Store Additional Permission and Notice
 
-Version: 2026-07-28
-Effective date: July 28, 2026
+Version: 2026-08-04
+Effective date: August 4, 2026
 
 1. Background
 
@@ -17,8 +17,8 @@ such a conflict, by itself, to prevent otherwise GPL-compliant distribution
 through the App Store. Under section 7 of GPLv3, and only to the extent that
 each approving copyright holder owns or is authorized to license a covered
 contribution, that holder permits the contribution to be conveyed as part of
-the official Aether iOS application through Apple's App Store, subject to
-section 7 below.
+an official Aether application for iOS or macOS through Apple's App Store,
+subject to section 7 below.
 
 An approving copyright holder will not assert a GPL violation against such a
 distribution when the alleged violation results solely from an unavoidable
@@ -72,8 +72,8 @@ English text, this English text controls.
 7. Official distribution only; no third-party reliance
 
 The additional App Store permission in this notice is granted solely for an
-official Aether iOS release submitted by the Aether project maintainer or by
-a distributor expressly authorized in writing by an approving copyright
+official Aether iOS or macOS release submitted by the Aether project maintainer
+or by a distributor expressly authorized in writing by an approving copyright
 holder. It is not granted for any fork, modified build, rebranded app,
 wrapper, or other app based on Aether that is submitted by another person or
 entity. A third-party distributor may not rely on this notice and must obtain

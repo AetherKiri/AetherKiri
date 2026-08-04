@@ -1,5 +1,6 @@
 extends Control
 
+const APP_DISPLAY_NAME := "Aether"
 const BACKENDS := ["Godot Native", "GPU Bridge", "Debug CPU"]
 const SETTINGS_KEY := "aether_kiri/render_backend"
 const GAME_PATH_KEY := "aether_kiri/game_path"
@@ -14,7 +15,7 @@ const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_POLL_INTERVAL_SEC := 0.12
 const IAP_DETAIL_AUTHORIZATION_TTL_MS := 30000
 const LEGAL_AGREEMENT_VERSION := "2026-07-27.4"
-const IOS_STATEMENT_VERSION := "2026-07-28"
+const IOS_STATEMENT_VERSION := "2026-08-04"
 const LEGAL_AGREEMENT_ZH_HANS := "res://legal/privacy_disclaimer_zh_hans.txt"
 const LEGAL_AGREEMENT_ZH_HANT := "res://legal/privacy_disclaimer_zh_hant.txt"
 const LEGAL_AGREEMENT_EN := "res://legal/privacy_disclaimer_en.txt"
@@ -78,6 +79,7 @@ const LANG_KO := "ko"
 const LANGUAGE_MODES := [LANG_SYSTEM, LANG_ZH_HANS, LANG_ZH_HANT, LANG_EN, LANG_JA, LANG_KO]
 const STYLE_DARK := "dark"
 const STYLE_CLASSIC := "classic"
+const DEFAULT_STYLE_MODE := STYLE_CLASSIC
 const STYLE_MODES := [STYLE_DARK, STYLE_CLASSIC]
 const IOS_UI_SCALE_MODES := ["compact", "comfortable", "standard"]
 const UI_TEXT := {
@@ -101,9 +103,10 @@ const UI_TEXT := {
         "video.subtitle_off": "字幕关闭",
         "video.subtitle_embedded": "%s（内嵌）",
         "video.resume": "继续上次播放",
+        "video.progress": "已播放至 %s / %s",
         "video.open_failed": "无法播放该视频：%s",
         "home.status": "视觉小说库",
-        "nav.library": "游戏库",
+        "nav.library": "视觉小说",
         "nav.videos": "视频库",
         "nav.collapse_sidebar": "收起侧边栏",
         "nav.expand_sidebar": "展开侧边栏",
@@ -195,14 +198,14 @@ const UI_TEXT := {
         "settings.legal": "隐私与免责协议",
         "settings.legal_desc": "查看当前版本的隐私政策、使用规则、风险提示与免责声明",
         "settings.legal_open": "阅读协议",
-        "settings.ios_statement": "iOS App Store 额外声明",
+        "settings.ios_statement": "Apple App Store 额外声明",
         "settings.ios_statement_desc": "查看 GPLv3、App Store 分发附加许可、源码义务及适用范围",
         "settings.ios_statement_open": "阅读声明",
-        "ios_statement.title": "iOS App Store 额外声明",
-        "ios_statement.first_summary": "iOS 首次使用确认（第 2/2 份）。您需要同时同意本声明和隐私与免责协议，才能使用视觉小说与视频功能。",
+        "ios_statement.title": "Apple App Store 额外声明",
+        "ios_statement.first_summary": "Apple 平台首次使用确认（第 2/2 份）。您需要同时同意本声明和隐私与免责协议，才能使用视觉小说与视频功能。",
         "legal.title": "隐私政策与使用免责协议",
         "legal.first_summary": "首次使用前，请阅读并选择是否同意。协议可在「设置 > 关于」中随时查看。",
-        "legal.first_summary_ios": "iOS 首次使用确认（第 1/2 份）。同意本协议后，还需要确认 iOS App Store 额外声明。",
+        "legal.first_summary_ios": "Apple 平台首次使用确认（第 1/2 份）。同意本协议后，还需要确认 Apple App Store 额外声明。",
         "legal.accept": "同意并继续",
         "legal.decline": "拒绝",
         "legal.close": "关闭",
@@ -291,9 +294,10 @@ const UI_TEXT := {
         "video.subtitle_off": "字幕關閉",
         "video.subtitle_embedded": "%s（內嵌）",
         "video.resume": "繼續上次播放",
+        "video.progress": "已播放至 %s / %s",
         "video.open_failed": "無法播放該影片：%s",
         "home.status": "視覺小說庫",
-        "nav.library": "遊戲庫",
+        "nav.library": "視覺小說",
         "nav.videos": "影片庫",
         "nav.collapse_sidebar": "收合側邊欄",
         "nav.expand_sidebar": "展開側邊欄",
@@ -385,14 +389,14 @@ const UI_TEXT := {
         "settings.legal": "隱私與免責協議",
         "settings.legal_desc": "查看目前版本的隱私政策、使用規則、風險提示與免責聲明",
         "settings.legal_open": "閱讀協議",
-        "settings.ios_statement": "iOS App Store 額外聲明",
+        "settings.ios_statement": "Apple App Store 額外聲明",
         "settings.ios_statement_desc": "查看 GPLv3、App Store 發布附加許可、原始碼義務及適用範圍",
         "settings.ios_statement_open": "閱讀聲明",
-        "ios_statement.title": "iOS App Store 額外聲明",
-        "ios_statement.first_summary": "iOS 首次使用確認（第 2/2 份）。您需要同時同意本聲明和隱私與免責協議，才能使用視覺小說與影片功能。",
+        "ios_statement.title": "Apple App Store 額外聲明",
+        "ios_statement.first_summary": "Apple 平台首次使用確認（第 2/2 份）。您需要同時同意本聲明和隱私與免責協議，才能使用視覺小說與影片功能。",
         "legal.title": "隱私政策與使用免責協議",
         "legal.first_summary": "首次使用前，請閱讀並選擇是否同意。協議可在「設定 > 關於」中隨時查看。",
-        "legal.first_summary_ios": "iOS 首次使用確認（第 1/2 份）。同意本協議後，還需要確認 iOS App Store 額外聲明。",
+        "legal.first_summary_ios": "Apple 平台首次使用確認（第 1/2 份）。同意本協議後，還需要確認 Apple App Store 額外聲明。",
         "legal.accept": "同意並繼續",
         "legal.decline": "拒絕",
         "legal.close": "關閉",
@@ -481,9 +485,10 @@ const UI_TEXT := {
         "video.subtitle_off": "Subtitles off",
         "video.subtitle_embedded": "%s (embedded)",
         "video.resume": "Resume playback",
+        "video.progress": "Played to %s / %s",
         "video.open_failed": "Could not play this video: %s",
         "home.status": "Visual Novel Library",
-        "nav.library": "Library",
+        "nav.library": "Visual Novels",
         "nav.videos": "Videos",
         "nav.collapse_sidebar": "Collapse sidebar",
         "nav.expand_sidebar": "Expand sidebar",
@@ -575,14 +580,14 @@ const UI_TEXT := {
         "settings.legal": "Privacy & Disclaimer",
         "settings.legal_desc": "Read the current privacy policy, terms of use, risk notice, and disclaimer",
         "settings.legal_open": "Read",
-        "settings.ios_statement": "iOS App Store Notice",
+        "settings.ios_statement": "Apple App Store Notice",
         "settings.ios_statement_desc": "Review the GPLv3 App Store distribution permission, source obligations, and scope",
         "settings.ios_statement_open": "Read Notice",
-        "ios_statement.title": "iOS App Store Additional Permission & Notice",
-        "ios_statement.first_summary": "iOS first-use confirmation (document 2 of 2). You must accept both this notice and the Privacy Policy, Terms & Disclaimer before using visual novel or video features.",
+        "ios_statement.title": "Apple App Store Additional Permission & Notice",
+        "ios_statement.first_summary": "Apple-platform first-use confirmation (document 2 of 2). You must accept both this notice and the Privacy Policy, Terms & Disclaimer before using visual novel or video features.",
         "legal.title": "Privacy Policy, Terms & Disclaimer",
         "legal.first_summary": "Please read and choose whether to agree before first use. You can review this document later under Settings > About.",
-        "legal.first_summary_ios": "iOS first-use confirmation (document 1 of 2). After accepting this document, you must also accept the iOS App Store notice.",
+        "legal.first_summary_ios": "Apple-platform first-use confirmation (document 1 of 2). After accepting this document, you must also accept the Apple App Store notice.",
         "legal.accept": "Agree and Continue",
         "legal.decline": "Decline",
         "legal.close": "Close",
@@ -671,9 +676,10 @@ const UI_TEXT := {
         "video.subtitle_off": "字幕オフ",
         "video.subtitle_embedded": "%s（埋め込み）",
         "video.resume": "続きから再生",
+        "video.progress": "再生位置 %s / %s",
         "video.open_failed": "動画を再生できません：%s",
         "home.status": "ビジュアルノベルライブラリ",
-        "nav.library": "ライブラリ",
+        "nav.library": "ビジュアルノベル",
         "nav.videos": "ビデオ",
         "nav.collapse_sidebar": "サイドバーを折りたたむ",
         "nav.expand_sidebar": "サイドバーを展開",
@@ -765,14 +771,14 @@ const UI_TEXT := {
         "settings.legal": "プライバシーと免責事項",
         "settings.legal_desc": "現在のプライバシーポリシー、利用条件、リスクおよび免責事項を確認します",
         "settings.legal_open": "読む",
-        "settings.ios_statement": "iOS App Store 追加声明",
+        "settings.ios_statement": "Apple App Store 追加声明",
         "settings.ios_statement_desc": "GPLv3、App Store 配布の追加許諾、ソース提供義務および適用範囲を確認します",
         "settings.ios_statement_open": "声明を読む",
-        "ios_statement.title": "iOS App Store 追加許諾および声明",
-        "ios_statement.first_summary": "iOS 初回確認（2/2）。ビジュアルノベルおよび動画機能を使用するには、本声明とプライバシー・利用条件・免責事項の両方への同意が必要です。",
+        "ios_statement.title": "Apple App Store 追加許諾および声明",
+        "ios_statement.first_summary": "Apple プラットフォーム初回確認（2/2）。ビジュアルノベルおよび動画機能を使用するには、本声明とプライバシー・利用条件・免責事項の両方への同意が必要です。",
         "legal.title": "プライバシーポリシー・利用条件・免責事項",
         "legal.first_summary": "初回利用前に内容を読み、同意するか選択してください。設定 > 情報からいつでも確認できます。",
-        "legal.first_summary_ios": "iOS 初回確認（1/2）。本書への同意後、iOS App Store 追加声明への同意も必要です。",
+        "legal.first_summary_ios": "Apple プラットフォーム初回確認（1/2）。本書への同意後、Apple App Store 追加声明への同意も必要です。",
         "legal.accept": "同意して続ける",
         "legal.decline": "拒否",
         "legal.close": "閉じる",
@@ -861,9 +867,10 @@ const UI_TEXT := {
         "video.subtitle_off": "자막 끄기",
         "video.subtitle_embedded": "%s(내장)",
         "video.resume": "이어서 재생",
+        "video.progress": "재생 위치 %s / %s",
         "video.open_failed": "비디오를 재생할 수 없습니다: %s",
         "home.status": "비주얼 노벨 라이브러리",
-        "nav.library": "라이브러리",
+        "nav.library": "비주얼 노벨",
         "nav.videos": "비디오",
         "nav.collapse_sidebar": "사이드바 접기",
         "nav.expand_sidebar": "사이드바 펼치기",
@@ -955,14 +962,14 @@ const UI_TEXT := {
         "settings.legal": "개인정보 및 면책 조항",
         "settings.legal_desc": "현재 개인정보 처리방침, 이용 조건, 위험 고지 및 면책 조항을 확인합니다",
         "settings.legal_open": "읽기",
-        "settings.ios_statement": "iOS App Store 추가 고지",
+        "settings.ios_statement": "Apple App Store 추가 고지",
         "settings.ios_statement_desc": "GPLv3, App Store 배포 추가 허가, 소스 제공 의무 및 적용 범위를 확인합니다",
         "settings.ios_statement_open": "고지 읽기",
-        "ios_statement.title": "iOS App Store 추가 허가 및 고지",
-        "ios_statement.first_summary": "iOS 최초 확인(2/2). 비주얼 노벨 및 비디오 기능을 사용하려면 이 고지와 개인정보·이용 조건·면책 조항에 모두 동의해야 합니다.",
+        "ios_statement.title": "Apple App Store 추가 허가 및 고지",
+        "ios_statement.first_summary": "Apple 플랫폼 최초 확인(2/2). 비주얼 노벨 및 비디오 기능을 사용하려면 이 고지와 개인정보·이용 조건·면책 조항에 모두 동의해야 합니다.",
         "legal.title": "개인정보 처리방침·이용 조건·면책 조항",
         "legal.first_summary": "처음 사용하기 전에 내용을 읽고 동의 여부를 선택해 주세요. 설정 > 정보에서 언제든 다시 볼 수 있습니다.",
-        "legal.first_summary_ios": "iOS 최초 확인(1/2). 이 문서에 동의한 후 iOS App Store 추가 고지에도 동의해야 합니다.",
+        "legal.first_summary_ios": "Apple 플랫폼 최초 확인(1/2). 이 문서에 동의한 후 Apple App Store 추가 고지에도 동의해야 합니다.",
         "legal.accept": "동의하고 계속",
         "legal.decline": "거부",
         "legal.close": "닫기",
@@ -1061,6 +1068,11 @@ const SHELL_SCROLL_TOUCHPAD_SPEED := 12.0
 const SHELL_SCROLL_WHEEL_SPEED := 4.0
 const SHELL_SCROLL_WHEEL_STEP := 320.0
 const SHELL_SCROLL_TWEEN_DURATION := 0.18
+const SHELL_SCROLL_MOMENTUM_MIN_SPEED := 110.0
+const SHELL_SCROLL_MOMENTUM_MAX_SPEED := 5000.0
+const SHELL_SCROLL_MOMENTUM_DISTANCE_FACTOR := 0.28
+const SHELL_SCROLL_MOMENTUM_MAX_DURATION := 0.85
+const SHELL_SCROLL_MOMENTUM_STALE_MSEC := 140
 const SHELL_SCROLL_MOUSE_KEY := -1
 const SETTINGS_DRAFT_KEYS := [
     "language",
@@ -1093,6 +1105,8 @@ var log_view = null
 var diagnostic_session = null
 var debug_console = null
 var shell_root: Control
+var shell_safe_top_fill: ColorRect
+var shell_sidebar_backdrop: PanelContainer
 var shell_content: Control
 var shell_sidebar: PanelContainer
 var shell_compact_header: PanelContainer
@@ -1122,6 +1136,7 @@ var modal_layer: Control
 var active_modal_scrim: ColorRect
 var active_modal_dialog: Control
 var loading_panel: PanelContainer
+var loading_center: CenterContainer
 var loading_card: PanelContainer
 var loading_spinner: TextureRect
 var loading_hiding := false
@@ -1182,7 +1197,8 @@ var advanced_expiry_msec := {}
 var diagnostic_env_originals := {}
 var language_mode := LANG_SYSTEM
 var active_language := LANG_ZH_HANS
-var style_mode := STYLE_DARK
+var style_mode := DEFAULT_STYLE_MODE
+var display_title_font: FontVariation
 var ios_ui_scale_mode := "comfortable"
 var legal_accepted_version := ""
 var legal_accepted_at := 0
@@ -1203,12 +1219,20 @@ var android_video_import_notice_shown := false
 var dirty_settings := false
 var settings_animate_next := true
 var settings_draft := {}
+var settings_relayout_pending := false
+var settings_relayout_scroll_vertical := 0
+var detail_relayout_pending := false
+var detail_relayout_scroll_vertical := 0
 var active_game_path := ""
 var active_game_started_msec := 0
 var shell_scroll_drag_states := {}
 var shell_scroll_remainders := {}
 var shell_scroll_tweens := {}
 var shell_scroll_targets := {}
+var mobile_edge_back_touch_index := -1
+var mobile_edge_back_start := Vector2.ZERO
+var mobile_edge_back_last := Vector2.ZERO
+var mobile_edge_back_cancelled := false
 var opaque_frame_shader: Shader
 var shown_system_alerts := {}
 var ui_icon_cache := {}
@@ -1231,8 +1255,18 @@ var video_texture: TextureRect
 var video_title_label: Label
 var video_subtitle_label: Label
 var video_top_bar: Control
+var video_top_margin: MarginContainer
+var video_back_button: Button
 var video_controls: Control
+var video_controls_margin: MarginContainer
+var video_controls_box: VBoxContainer
+var video_timeline: HBoxContainer
+var video_action_groups: BoxContainer
+var video_transport_actions: HBoxContainer
+var video_option_actions: HBoxContainer
+var video_rewind_button: Button
 var video_play_button: Button
+var video_forward_button: Button
 var video_progress_slider: HSlider
 var video_time_label: Label
 var video_rate_button: OptionButton
@@ -1242,11 +1276,13 @@ var video_seek_feedback_label: Label
 var active_video_path := ""
 var active_video_state := {}
 var active_video_duration := 0.0
+var video_pending_resume_position := 0.0
 var active_video_was_playing := false
 var active_video_scrubbing := false
 var active_video_end_handled := false
 var video_controls_visible := false
 var video_controls_idle_sec := 0.0
+var video_controls_panel_height := 144.0
 var video_controls_tween: Tween
 var video_touch_mouse_suppress_until_msec := 0
 var video_seek_touch_index := -1
@@ -1376,11 +1412,11 @@ const BLACK_FRAME_VISIBLE_MIN := 8
 const INITIAL_WINDOW_SIZE := Vector2i(2240, 1260)
 const DEFAULT_UI_DPI_SCALE := 1.35
 const TOUCH_MOUSE_SUPPRESS_MS := 700
+const MOBILE_EDGE_BACK_MAX_START_WIDTH := 36.0
+const MOBILE_EDGE_BACK_MIN_TRIGGER_DISTANCE := 64.0
 const PILL_ICON_SIZE := Vector2(24, 24)
 const PILL_ICON_VISUAL_OFFSET_Y := 2.0
 const SETTINGS_ACTION_BUTTON_SIZE := Vector2(150, 54)
-const HOME_CARD_SIZE := Vector2(252, 250)
-const HOME_CARD_COVER_HEIGHT := 142.0
 const HOME_TILE_MIN_WIDTH := 340.0
 const HOME_TILE_HEIGHT := 132.0
 const HOME_TILE_COVER_WIDTH := 108.0
@@ -1406,7 +1442,7 @@ var color_success := Color(0.188, 0.820, 0.345, 1.0)
 var color_line := Color(1, 1, 1, 0.090)
 
 func _normalize_style_mode(value: String) -> String:
-    return value if value in STYLE_MODES else STYLE_DARK
+    return value if value in STYLE_MODES else DEFAULT_STYLE_MODE
 
 func _apply_style_mode(update_theme: bool = true) -> void:
     style_mode = _normalize_style_mode(style_mode)
@@ -1588,6 +1624,17 @@ func _apply_ui_font() -> void:
     ui_theme.set_stylebox("grabber_pressed", "VScrollBar", _scroll_thumb_style(color_accent))
     ui_theme.set_constant("minimum_grab_thickness", "VScrollBar", 36)
     theme = ui_theme
+
+func _game_title_font() -> FontVariation:
+    if display_title_font == null:
+        display_title_font = FontVariation.new()
+        display_title_font.base_font = DISPLAY_FONT
+        var text_server := TextServerManager.get_primary_interface()
+        display_title_font.opentype_features = {
+            text_server.name_to_tag("lnum"): 1,
+            text_server.name_to_tag("onum"): 0,
+        }
+    return display_title_font
 
 func _write_runtime_font(font: FontFile, target_path: String) -> bool:
     # Exported projects remap source font paths to Godot resources, so opening
@@ -1781,19 +1828,23 @@ func _build_video_view() -> void:
     video_top_bar.offset_bottom = 76.0
     video_top_bar.add_theme_stylebox_override("panel", _panel_style(0, Color(0.015, 0.018, 0.026, 0.68), Color(0, 0, 0, 0), 0))
     video_view.add_child(video_top_bar)
-    var top_margin := MarginContainer.new()
-    top_margin.add_theme_constant_override("margin_left", 20)
-    top_margin.add_theme_constant_override("margin_top", 10)
-    top_margin.add_theme_constant_override("margin_right", 24)
-    top_margin.add_theme_constant_override("margin_bottom", 10)
-    video_top_bar.add_child(top_margin)
+    video_top_margin = MarginContainer.new()
+    video_top_margin.add_theme_constant_override("margin_left", 20)
+    video_top_margin.add_theme_constant_override("margin_top", 10)
+    video_top_margin.add_theme_constant_override("margin_right", 24)
+    video_top_margin.add_theme_constant_override("margin_bottom", 10)
+    video_top_bar.add_child(video_top_margin)
     var top_row := HBoxContainer.new()
     top_row.add_theme_constant_override("separation", 14)
-    top_margin.add_child(top_row)
-    var back := _video_overlay_button("←", 56.0)
-    back.tooltip_text = _t("video.back")
-    back.pressed.connect(_close_video_player)
-    top_row.add_child(back)
+    video_top_margin.add_child(top_row)
+    # Use the same vector icon as the rest of the shell. The text glyph could
+    # be clipped vertically by the compact iPhone button/font metrics.
+    video_back_button = _video_overlay_button("", 56.0)
+    _attach_centered_button_icon(video_back_button, ICON_BACK, Vector2(24, 24))
+    video_back_button.tooltip_text = _t("video.back")
+    video_back_button.accessibility_name = _t("video.back")
+    video_back_button.pressed.connect(_close_video_player)
+    top_row.add_child(video_back_button)
     video_title_label = Label.new()
     video_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     video_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -1809,19 +1860,19 @@ func _build_video_view() -> void:
     video_controls.offset_top = -144.0
     video_controls.add_theme_stylebox_override("panel", _panel_style(0, Color(0.015, 0.018, 0.026, 0.74), Color(0, 0, 0, 0), 0))
     video_view.add_child(video_controls)
-    var controls_margin := MarginContainer.new()
-    controls_margin.add_theme_constant_override("margin_left", 22)
-    controls_margin.add_theme_constant_override("margin_top", 12)
-    controls_margin.add_theme_constant_override("margin_right", 22)
-    controls_margin.add_theme_constant_override("margin_bottom", 14)
-    video_controls.add_child(controls_margin)
-    var controls_box := VBoxContainer.new()
-    controls_box.add_theme_constant_override("separation", 10)
-    controls_margin.add_child(controls_box)
+    video_controls_margin = MarginContainer.new()
+    video_controls_margin.add_theme_constant_override("margin_left", 22)
+    video_controls_margin.add_theme_constant_override("margin_top", 12)
+    video_controls_margin.add_theme_constant_override("margin_right", 22)
+    video_controls_margin.add_theme_constant_override("margin_bottom", 14)
+    video_controls.add_child(video_controls_margin)
+    video_controls_box = VBoxContainer.new()
+    video_controls_box.add_theme_constant_override("separation", 10)
+    video_controls_margin.add_child(video_controls_box)
 
-    var timeline := HBoxContainer.new()
-    timeline.add_theme_constant_override("separation", 14)
-    controls_box.add_child(timeline)
+    video_timeline = HBoxContainer.new()
+    video_timeline.add_theme_constant_override("separation", 14)
+    video_controls_box.add_child(video_timeline)
     video_progress_slider = HSlider.new()
     video_progress_slider.min_value = 0.0
     video_progress_slider.max_value = 1.0
@@ -1837,27 +1888,37 @@ func _build_video_view() -> void:
         if value_changed and player != null:
             player.media_seek(video_progress_slider.value)
     )
-    timeline.add_child(video_progress_slider)
+    video_timeline.add_child(video_progress_slider)
     video_time_label = Label.new()
     video_time_label.custom_minimum_size = Vector2(155, 0)
     video_time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
     video_time_label.text = "00:00 / 00:00"
     video_time_label.add_theme_color_override("font_color", Color.WHITE)
-    timeline.add_child(video_time_label)
+    video_timeline.add_child(video_time_label)
 
-    var actions := HBoxContainer.new()
-    actions.alignment = BoxContainer.ALIGNMENT_CENTER
-    actions.add_theme_constant_override("separation", 12)
-    controls_box.add_child(actions)
-    var rewind := _video_overlay_button("−10s", 86.0)
-    rewind.pressed.connect(func(): _seek_video_relative(-10.0))
-    actions.add_child(rewind)
+    video_action_groups = BoxContainer.new()
+    video_action_groups.alignment = BoxContainer.ALIGNMENT_CENTER
+    video_action_groups.add_theme_constant_override("separation", 12)
+    video_controls_box.add_child(video_action_groups)
+
+    video_transport_actions = HBoxContainer.new()
+    video_transport_actions.alignment = BoxContainer.ALIGNMENT_CENTER
+    video_transport_actions.add_theme_constant_override("separation", 12)
+    video_action_groups.add_child(video_transport_actions)
+    video_rewind_button = _video_overlay_button("−10s", 86.0)
+    video_rewind_button.pressed.connect(func(): _seek_video_relative(-10.0))
+    video_transport_actions.add_child(video_rewind_button)
     video_play_button = _video_overlay_button("Ⅱ", 82.0)
     video_play_button.pressed.connect(_toggle_video_playback)
-    actions.add_child(video_play_button)
-    var forward := _video_overlay_button("+10s", 86.0)
-    forward.pressed.connect(func(): _seek_video_relative(10.0))
-    actions.add_child(forward)
+    video_transport_actions.add_child(video_play_button)
+    video_forward_button = _video_overlay_button("+10s", 86.0)
+    video_forward_button.pressed.connect(func(): _seek_video_relative(10.0))
+    video_transport_actions.add_child(video_forward_button)
+
+    video_option_actions = HBoxContainer.new()
+    video_option_actions.alignment = BoxContainer.ALIGNMENT_CENTER
+    video_option_actions.add_theme_constant_override("separation", 12)
+    video_action_groups.add_child(video_option_actions)
 
     video_rate_button = OptionButton.new()
     video_rate_button.custom_minimum_size = Vector2(104, 48)
@@ -1872,16 +1933,87 @@ func _build_video_view() -> void:
         if player != null:
             player.media_set_rate(float(video_rate_button.get_item_metadata(index)))
     )
-    actions.add_child(video_rate_button)
+    video_option_actions.add_child(video_rate_button)
 
     video_subtitle_button = OptionButton.new()
     video_subtitle_button.custom_minimum_size = Vector2(180, 48)
     _style_video_option_button(video_subtitle_button)
     _configure_video_option_popup(video_subtitle_button)
     video_subtitle_button.item_selected.connect(_select_video_subtitle)
-    actions.add_child(video_subtitle_button)
+    video_option_actions.add_child(video_subtitle_button)
     video_top_bar.visible = false
     video_controls.visible = false
+
+func _video_controls_layout_spec(safe_size: Vector2) -> Dictionary:
+    var phone_portrait := safe_size.y > safe_size.x and safe_size.x < HOME_COMPACT_BREAKPOINT
+    return {
+        "phone_portrait": phone_portrait,
+        "top_height": 64.0 if phone_portrait else 76.0,
+        "panel_height": 196.0 if phone_portrait else 144.0,
+        "horizontal_margin": 12 if phone_portrait else 22,
+        "vertical_margin": 10 if phone_portrait else 12,
+        "group_separation": 8 if phone_portrait else 12,
+        "transport_width": 70.0 if phone_portrait else 86.0,
+        "play_width": 66.0 if phone_portrait else 82.0,
+        "rate_width": 86.0 if phone_portrait else 104.0,
+        "subtitle_width": 148.0 if phone_portrait else 180.0,
+        "button_height": 42.0 if phone_portrait else 48.0,
+        "time_width": 108.0 if phone_portrait else 155.0,
+    }
+
+func _apply_video_controls_layout(safe_size: Vector2) -> Dictionary:
+    var spec := _video_controls_layout_spec(safe_size)
+    var phone_portrait: bool = spec["phone_portrait"]
+    video_controls_panel_height = float(spec["panel_height"])
+    if is_instance_valid(video_top_margin):
+        video_top_margin.add_theme_constant_override("margin_left", 12 if phone_portrait else 20)
+        video_top_margin.add_theme_constant_override("margin_top", 8 if phone_portrait else 10)
+        video_top_margin.add_theme_constant_override("margin_right", 12 if phone_portrait else 24)
+        video_top_margin.add_theme_constant_override("margin_bottom", 8 if phone_portrait else 10)
+    if is_instance_valid(video_controls_margin):
+        var horizontal_margin := int(spec["horizontal_margin"])
+        var vertical_margin := int(spec["vertical_margin"])
+        video_controls_margin.add_theme_constant_override("margin_left", horizontal_margin)
+        video_controls_margin.add_theme_constant_override("margin_top", vertical_margin)
+        video_controls_margin.add_theme_constant_override("margin_right", horizontal_margin)
+        video_controls_margin.add_theme_constant_override("margin_bottom", vertical_margin)
+    if is_instance_valid(video_controls_box):
+        video_controls_box.add_theme_constant_override("separation", 8 if phone_portrait else 10)
+    if is_instance_valid(video_timeline):
+        video_timeline.add_theme_constant_override("separation", 8 if phone_portrait else 14)
+    if is_instance_valid(video_action_groups):
+        video_action_groups.vertical = phone_portrait
+        video_action_groups.add_theme_constant_override("separation", int(spec["group_separation"]))
+    if is_instance_valid(video_transport_actions):
+        video_transport_actions.add_theme_constant_override("separation", int(spec["group_separation"]))
+    if is_instance_valid(video_option_actions):
+        video_option_actions.add_theme_constant_override("separation", int(spec["group_separation"]))
+
+    var button_height := float(spec["button_height"])
+    if is_instance_valid(video_back_button):
+        video_back_button.custom_minimum_size = Vector2(48.0 if phone_portrait else 56.0, button_height)
+        video_back_button.add_theme_font_size_override("font_size", 14 if phone_portrait else 15)
+    if is_instance_valid(video_rewind_button):
+        video_rewind_button.custom_minimum_size = Vector2(float(spec["transport_width"]), button_height)
+        video_rewind_button.add_theme_font_size_override("font_size", 14 if phone_portrait else 15)
+    if is_instance_valid(video_play_button):
+        video_play_button.custom_minimum_size = Vector2(float(spec["play_width"]), button_height)
+        video_play_button.add_theme_font_size_override("font_size", 14 if phone_portrait else 15)
+    if is_instance_valid(video_forward_button):
+        video_forward_button.custom_minimum_size = Vector2(float(spec["transport_width"]), button_height)
+        video_forward_button.add_theme_font_size_override("font_size", 14 if phone_portrait else 15)
+    if is_instance_valid(video_rate_button):
+        video_rate_button.custom_minimum_size = Vector2(float(spec["rate_width"]), button_height)
+        video_rate_button.add_theme_font_size_override("font_size", 13 if phone_portrait else 14)
+    if is_instance_valid(video_subtitle_button):
+        video_subtitle_button.custom_minimum_size = Vector2(float(spec["subtitle_width"]), button_height)
+        video_subtitle_button.add_theme_font_size_override("font_size", 13 if phone_portrait else 14)
+    if is_instance_valid(video_time_label):
+        video_time_label.custom_minimum_size = Vector2(float(spec["time_width"]), 0)
+        video_time_label.add_theme_font_size_override("font_size", 12 if phone_portrait else 14)
+    if is_instance_valid(video_title_label):
+        video_title_label.add_theme_font_size_override("font_size", 14 if phone_portrait else (15 if _mobile_runtime() else 16))
+    return spec
 
 func _set_video_controls_visible(show: bool, animate: bool = true) -> void:
     if not is_instance_valid(video_top_bar) or not is_instance_valid(video_controls):
@@ -1925,12 +2057,18 @@ func _finish_hide_video_controls() -> void:
 func _layout_video_subtitles_for_controls(controls_shown: bool) -> void:
     if video_subtitle_label == null:
         return
+    var viewport_size := get_viewport_rect().size
+    var safe_rect := _ui_safe_rect(viewport_size)
+    var bottom_inset := maxf(
+        0.0,
+        viewport_size.y - safe_rect.position.y - safe_rect.size.y
+    )
     if controls_shown:
-        video_subtitle_label.offset_top = -286.0
-        video_subtitle_label.offset_bottom = -154.0
+        video_subtitle_label.offset_bottom = -video_controls_panel_height - 10.0 - bottom_inset
+        video_subtitle_label.offset_top = video_subtitle_label.offset_bottom - 132.0
     else:
-        video_subtitle_label.offset_top = -190.0
-        video_subtitle_label.offset_bottom = -42.0
+        video_subtitle_label.offset_top = -190.0 - bottom_inset
+        video_subtitle_label.offset_bottom = -42.0 - bottom_inset
 
 func _video_controls_interacting() -> bool:
     if active_video_scrubbing:
@@ -2047,6 +2185,18 @@ func _finish_video_seek_gesture(position: Vector2) -> void:
     else:
         _set_video_controls_visible(not video_controls_visible)
 func _build_shell_chrome() -> void:
+    shell_safe_top_fill = ColorRect.new()
+    shell_safe_top_fill.name = "ShellSafeTopFill"
+    shell_safe_top_fill.color = ui_tokens.sidebar_material
+    shell_safe_top_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_root.add_child(shell_safe_top_fill)
+
+    shell_sidebar_backdrop = PanelContainer.new()
+    shell_sidebar_backdrop.name = "ShellSidebarBackdrop"
+    shell_sidebar_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    shell_sidebar_backdrop.add_theme_stylebox_override("panel", ui_tokens.sidebar_panel())
+    shell_root.add_child(shell_sidebar_backdrop)
+
     shell_content = Control.new()
     shell_content.name = "ShellContent"
     shell_content.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -2073,7 +2223,7 @@ func _build_shell_chrome() -> void:
     shell_sidebar_brand_labels.add_theme_constant_override("separation", 1)
     shell_sidebar_brand.add_child(shell_sidebar_brand_labels)
     var brand_title := Label.new()
-    brand_title.text = "AetherKiri"
+    brand_title.text = APP_DISPLAY_NAME
     brand_title.add_theme_font_size_override("font_size", 20)
     brand_title.add_theme_color_override("font_color", ui_tokens.text_primary)
     shell_sidebar_brand_labels.add_child(brand_title)
@@ -2120,10 +2270,11 @@ func _build_shell_chrome() -> void:
     shell_compact_header = PanelContainer.new()
     shell_compact_header.name = "ShellCompactHeader"
     shell_compact_header.anchor_right = 1.0
-    shell_compact_header.add_theme_stylebox_override(
-        "panel",
-        ui_tokens.panel(ui_tokens.sidebar_material, 0, ui_tokens.separator, 1)
-    )
+    var compact_header_style := ui_tokens.panel(ui_tokens.sidebar_material, 0, ui_tokens.separator, 1)
+    compact_header_style.border_width_left = 0
+    compact_header_style.border_width_top = 0
+    compact_header_style.border_width_right = 0
+    shell_compact_header.add_theme_stylebox_override("panel", compact_header_style)
     shell_root.add_child(shell_compact_header)
 
     var compact_margin := MarginContainer.new()
@@ -2183,7 +2334,7 @@ func _shell_compact_button(icon_path: String, tooltip: String, callback: Callabl
 func _sync_shell_route(route: String) -> void:
     shell_route = route
     if shell_route_label != null:
-        shell_route_label.text = "AetherKiri"
+        shell_route_label.text = APP_DISPLAY_NAME
     _apply_shell_nav_state(shell_library_button, route == "library")
     _apply_shell_nav_state(shell_video_button, route == "videos")
     _apply_shell_nav_state(shell_settings_button, route == "settings")
@@ -2296,10 +2447,13 @@ func _apply_sidebar_width(width: float) -> void:
     if shell_sidebar == null or shell_content == null:
         return
     shell_sidebar_layout_width = width
-    var window_size := get_viewport_rect().size
-    shell_sidebar.size = Vector2(width, window_size.y)
+    var layout_size := shell_root.size
+    if layout_size.x <= 0.0 or layout_size.y <= 0.0:
+        layout_size = _ui_safe_rect(get_viewport_rect().size).size
+    shell_sidebar.size = Vector2(width, layout_size.y)
     shell_content.offset_left = width
-    _layout_home_view(Vector2(maxf(0.0, window_size.x - width), window_size.y))
+    _layout_shell_safe_area_fills(get_viewport_rect().size, _ui_safe_rect(get_viewport_rect().size))
+    _layout_home_view(Vector2(maxf(0.0, layout_size.x - width), layout_size.y))
 
 func _layout_shell(window_size: Vector2) -> void:
     if shell_content == null or shell_sidebar == null or shell_compact_header == null:
@@ -2686,8 +2840,178 @@ func _apply_shell_runtime_settings() -> void:
         var orientation := DisplayServer.SCREEN_LANDSCAPE if lock_landscape else DisplayServer.SCREEN_SENSOR
         DisplayServer.screen_set_orientation(orientation)
 
+func _set_game_runtime_orientation(active: bool) -> void:
+    if OS.get_name() != "iOS" and OS.get_name() != "Android":
+        return
+    if active:
+        DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
+    else:
+        _apply_shell_runtime_settings()
+
+func _scaled_display_safe_rect(
+    viewport_size: Vector2,
+    screen_size: Vector2,
+    display_safe_rect: Rect2
+) -> Rect2:
+    var full_rect := Rect2(Vector2.ZERO, viewport_size)
+    if (
+        viewport_size.x <= 0.0
+        or viewport_size.y <= 0.0
+        or screen_size.x <= 0.0
+        or screen_size.y <= 0.0
+        or display_safe_rect.size.x <= 0.0
+        or display_safe_rect.size.y <= 0.0
+    ):
+        return full_rect
+    var scale := Vector2(
+        viewport_size.x / screen_size.x,
+        viewport_size.y / screen_size.y
+    )
+    var position := Vector2(
+        display_safe_rect.position.x * scale.x,
+        display_safe_rect.position.y * scale.y
+    )
+    var safe_size := Vector2(
+        display_safe_rect.size.x * scale.x,
+        display_safe_rect.size.y * scale.y
+    )
+    position.x = clampf(position.x, 0.0, viewport_size.x)
+    position.y = clampf(position.y, 0.0, viewport_size.y)
+    safe_size.x = clampf(safe_size.x, 0.0, viewport_size.x - position.x)
+    safe_size.y = clampf(safe_size.y, 0.0, viewport_size.y - position.y)
+    return Rect2(position, safe_size)
+
+func _ui_safe_rect(viewport_size: Vector2) -> Rect2:
+    var full_rect := Rect2(Vector2.ZERO, viewport_size)
+    if OS.get_name() != "iOS":
+        return full_rect
+    var screen_size := Vector2(DisplayServer.screen_get_size())
+    var display_safe_rect := Rect2(DisplayServer.get_display_safe_area())
+    return _scaled_display_safe_rect(viewport_size, screen_size, display_safe_rect)
+
+func _rect_inside(relative_to: Rect2, left: float, top: float, right: float, bottom: float) -> Rect2:
+    var position := relative_to.position + Vector2(
+        relative_to.size.x * left,
+        relative_to.size.y * top
+    )
+    var end := relative_to.position + Vector2(
+        relative_to.size.x * right,
+        relative_to.size.y * bottom
+    )
+    return Rect2(position, (end - position).max(Vector2.ONE))
+
+func _set_control_rect(control: Control, rect: Rect2) -> void:
+    if control == null:
+        return
+    control.set_anchors_preset(Control.PRESET_TOP_LEFT)
+    control.position = rect.position
+    control.size = rect.size
+
+func _mark_centered_safe_dialog(dialog: Control, preferred_size: Vector2) -> void:
+    dialog.set_meta("aether_safe_dialog_kind", "centered")
+    dialog.set_meta("aether_safe_dialog_size", preferred_size)
+
+func _mark_legal_safe_dialog(dialog: Control, first_use: bool, statement: bool) -> void:
+    dialog.set_meta("aether_safe_dialog_kind", "store" if statement else "privacy")
+    dialog.set_meta("aether_safe_dialog_first_use", first_use)
+
+func _layout_safe_dialog(dialog: Control, safe_rect: Rect2) -> void:
+    var kind := String(dialog.get_meta("aether_safe_dialog_kind", ""))
+    if kind.is_empty():
+        return
+    if kind == "centered":
+        var preferred := Vector2(dialog.get_meta("aether_safe_dialog_size", Vector2(560, 320)))
+        var dialog_size := Vector2(
+            minf(preferred.x, maxf(280.0, safe_rect.size.x - 32.0)),
+            minf(preferred.y, maxf(180.0, safe_rect.size.y - 32.0))
+        )
+        _set_control_rect(dialog, Rect2(safe_rect.get_center() - dialog_size * 0.5, dialog_size))
+        return
+    var compact := safe_rect.size.y > safe_rect.size.x or safe_rect.size.x < 700.0
+    if kind == "declined":
+        _set_control_rect(
+            dialog,
+            _rect_inside(safe_rect, 0.06, 0.14, 0.94, 0.86) if compact else _rect_inside(safe_rect, 0.18, 0.24, 0.82, 0.76)
+        )
+        return
+    var first_use := bool(dialog.get_meta("aether_safe_dialog_first_use", false))
+    if compact and not first_use:
+        _set_control_rect(dialog, _rect_inside(safe_rect, 0.06, 0.10, 0.94, 0.90))
+    elif not first_use and kind == "store":
+        _set_control_rect(dialog, _rect_inside(safe_rect, 0.12, 0.10, 0.88, 0.90))
+    elif not first_use:
+        _set_control_rect(dialog, _rect_inside(safe_rect, 0.10, 0.09, 0.90, 0.91))
+    elif kind == "store":
+        _set_control_rect(
+            dialog,
+            _rect_inside(safe_rect, 0.035, 0.025, 0.965, 0.975) if compact else _rect_inside(safe_rect, 0.08, 0.06, 0.92, 0.94)
+        )
+    else:
+        _set_control_rect(
+            dialog,
+            _rect_inside(safe_rect, 0.035, 0.025, 0.965, 0.975) if compact else _rect_inside(safe_rect, 0.06, 0.04, 0.94, 0.96)
+        )
+
+func _layout_modal_safe_area(safe_rect: Rect2) -> void:
+    if modal_layer == null:
+        return
+    for child in modal_layer.get_children():
+        if child is Control and child.has_meta("aether_safe_dialog_kind"):
+            _layout_safe_dialog(child as Control, safe_rect)
+
+func _layout_video_safe_area(window_size: Vector2, safe_rect: Rect2) -> void:
+    var safe_end := safe_rect.position + safe_rect.size
+    var right_inset := maxf(0.0, window_size.x - safe_end.x)
+    var bottom_inset := maxf(0.0, window_size.y - safe_end.y)
+    var layout_spec := _apply_video_controls_layout(safe_rect.size)
+    var top_height := float(layout_spec["top_height"])
+    var panel_height := float(layout_spec["panel_height"])
+    if is_instance_valid(video_top_bar):
+        video_top_bar.offset_left = safe_rect.position.x
+        video_top_bar.offset_top = safe_rect.position.y
+        video_top_bar.offset_right = -right_inset
+        video_top_bar.offset_bottom = safe_rect.position.y + top_height
+    if is_instance_valid(video_controls):
+        _set_control_rect(
+            video_controls,
+            _video_controls_panel_rect(window_size, safe_rect, panel_height)
+        )
+        if is_instance_valid(video_controls_margin):
+            var vertical_margin := int(layout_spec["vertical_margin"])
+            video_controls_margin.add_theme_constant_override(
+                "margin_bottom",
+                vertical_margin + ceili(bottom_inset)
+            )
+    if is_instance_valid(video_subtitle_label):
+        video_subtitle_label.anchor_left = 0.0
+        video_subtitle_label.anchor_right = 0.0
+        video_subtitle_label.offset_left = safe_rect.position.x + safe_rect.size.x * 0.08
+        video_subtitle_label.offset_right = safe_end.x - safe_rect.size.x * 0.08
+        _layout_video_subtitles_for_controls(video_controls_visible)
+    if is_instance_valid(video_seek_feedback):
+        var feedback_size := Vector2(300.0, 84.0)
+        _set_control_rect(
+            video_seek_feedback,
+            Rect2(safe_rect.get_center() - feedback_size * 0.5, feedback_size)
+        )
+    if is_instance_valid(restart_notice):
+        restart_notice.position = safe_rect.position + Vector2(24, 44)
+
+func _video_controls_panel_rect(
+    window_size: Vector2,
+    safe_rect: Rect2,
+    panel_height: float
+) -> Rect2:
+    var safe_end := safe_rect.position + safe_rect.size
+    var bottom_inset := maxf(0.0, window_size.y - safe_end.y)
+    return Rect2(
+        Vector2(safe_rect.position.x, safe_end.y - panel_height),
+        Vector2(safe_rect.size.x, panel_height + bottom_inset)
+    )
+
 func _fit_full_rects() -> void:
     var window_size := get_viewport_rect().size
+    var safe_rect := _ui_safe_rect(window_size)
     anchor_left = 0.0
     anchor_top = 0.0
     anchor_right = 0.0
@@ -2703,23 +3027,62 @@ func _fit_full_rects() -> void:
         control.offset_top = 0.0
         control.offset_right = 0.0
         control.offset_bottom = 0.0
+    _set_control_rect(shell_root, safe_rect)
+    if is_instance_valid(loading_center):
+        loading_center.set_anchors_preset(Control.PRESET_FULL_RECT)
+        loading_center.offset_left = safe_rect.position.x
+        loading_center.offset_top = safe_rect.position.y
+        loading_center.offset_right = -(window_size.x - safe_rect.position.x - safe_rect.size.x)
+        loading_center.offset_bottom = -(window_size.y - safe_rect.position.y - safe_rect.size.y)
+    _layout_modal_safe_area(safe_rect)
+    _layout_video_safe_area(window_size, safe_rect)
     _layout_game_viewport(window_size)
-    _layout_shell(window_size)
-    var compact_shell := AetherDisplayScale.use_compact_shell(window_size)
+    _layout_shell(safe_rect.size)
+    _layout_shell_safe_area_fills(window_size, safe_rect)
+    var compact_shell := AetherDisplayScale.use_compact_shell(safe_rect.size)
     var shell_size := Vector2(
-        window_size.x if compact_shell else window_size.x - shell_sidebar_layout_width,
-        window_size.y - (ui_tokens.TOOLBAR_HEIGHT if compact_shell else 0.0)
+        safe_rect.size.x if compact_shell else safe_rect.size.x - shell_sidebar_layout_width,
+        safe_rect.size.y - (ui_tokens.TOOLBAR_HEIGHT if compact_shell else 0.0)
     )
     _layout_home_view(shell_size)
-    _layout_perf_overlay(window_size)
+    _layout_perf_overlay(safe_rect)
 
-func _layout_perf_overlay(window_size: Vector2) -> void:
+func _sidebar_backdrop_rect(window_size: Vector2, safe_rect: Rect2, width: float) -> Rect2:
+    return Rect2(
+        Vector2(-safe_rect.position.x, -safe_rect.position.y),
+        Vector2(safe_rect.position.x + width, window_size.y)
+    )
+
+func _layout_shell_safe_area_fills(window_size: Vector2, safe_rect: Rect2) -> void:
+    if not is_instance_valid(shell_safe_top_fill):
+        return
+    var top_inset := maxf(0.0, safe_rect.position.y)
+    var compact_shell := AetherDisplayScale.use_compact_shell(safe_rect.size)
+    shell_safe_top_fill.visible = OS.get_name() == "iOS" and compact_shell and top_inset > 0.0
+    shell_safe_top_fill.color = ui_tokens.sidebar_material
+    if shell_safe_top_fill.visible:
+        # shell_root starts at the safe-area origin. Extending this
+        # non-interactive fill upward colors the status-bar region without
+        # moving app controls into the sensor housing.
+        shell_safe_top_fill.position = Vector2(-safe_rect.position.x, -top_inset)
+        shell_safe_top_fill.size = Vector2(window_size.x, top_inset + 1.0)
+
+    if is_instance_valid(shell_sidebar_backdrop):
+        shell_sidebar_backdrop.visible = OS.get_name() == "iOS" and not compact_shell
+        shell_sidebar_backdrop.add_theme_stylebox_override("panel", ui_tokens.sidebar_panel())
+        if shell_sidebar_backdrop.visible:
+            _set_control_rect(
+                shell_sidebar_backdrop,
+                _sidebar_backdrop_rect(window_size, safe_rect, shell_sidebar_layout_width)
+            )
+
+func _layout_perf_overlay(safe_rect: Rect2) -> void:
     if perf_panel == null:
         return
     var horizontal_margin := 16.0
-    perf_panel.position = Vector2(horizontal_margin, 12.0)
+    perf_panel.position = safe_rect.position + Vector2(horizontal_margin, 12.0)
     perf_panel.size = Vector2(
-        maxf(240.0, window_size.x - horizontal_margin * 2.0),
+        maxf(240.0, safe_rect.size.x - horizontal_margin * 2.0),
         136.0 if debug_overlay_mode == "detail" else 104.0
     )
 
@@ -2818,7 +3181,7 @@ func _layout_home_view(window_size: Vector2) -> void:
     home_title_label.add_theme_font_size_override("font_size", 27 if phone else 31)
     home_subtitle_label.add_theme_font_size_override("font_size", 13 if phone else 14)
     home_actions.alignment = BoxContainer.ALIGNMENT_END
-    home_primary_button.text = "" if OS.get_name() == "iOS" else "+"
+    home_primary_button.text = ""
     _sync_home_action_labels()
     var fab_size := 52.0 if phone else 56.0
     var fab_inset := 12.0 if phone else (16.0 if compact else 20.0)
@@ -2841,7 +3204,9 @@ func _layout_home_view(window_size: Vector2) -> void:
     if not home_layout_initialized or home_compact_layout != compact:
         home_compact_layout = compact
         home_layout_initialized = true
-        if game_list.get_child_count() > 0:
+        if home_library_mode == "video" and video_list != null and video_list.get_child_count() > 0:
+            call_deferred("_refresh_videos")
+        elif game_list.get_child_count() > 0:
             call_deferred("_refresh_games")
 
 func _sync_home_header_text() -> void:
@@ -2947,7 +3312,7 @@ func _build_home_view() -> void:
 
     home_primary_button = Button.new()
     var home_action_is_refresh := OS.get_name() == "iOS"
-    home_primary_button.text = "" if home_action_is_refresh else "+"
+    home_primary_button.text = ""
     home_primary_button.tooltip_text = _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import")
     home_primary_button.accessibility_name = home_primary_button.tooltip_text
     home_primary_button.anchor_left = 1.0
@@ -2955,8 +3320,11 @@ func _build_home_view() -> void:
     home_primary_button.anchor_right = 1.0
     home_primary_button.anchor_bottom = 1.0
     ui_widgets.floating_action_button(home_primary_button)
-    if home_action_is_refresh:
-        _attach_centered_button_icon(home_primary_button, ICON_REFRESH, Vector2(23, 23))
+    _attach_centered_button_icon(
+        home_primary_button,
+        ICON_REFRESH if home_action_is_refresh else ICON_ADD,
+        Vector2(23, 23)
+    )
     home_primary_button.pressed.connect(_on_refresh_or_import)
     library_body.add_child(home_primary_button)
     home_primary_button.move_to_front()
@@ -3033,6 +3401,55 @@ func _build_settings_view() -> void:
     settings_view.visible = false
     shell_content.add_child(settings_view)
 
+func _settings_layout_spec(available_size: Vector2, scroll_bar_width: float = 0.0) -> Dictionary:
+    var measured_size := available_size
+    measured_size.x = maxf(320.0, measured_size.x - scroll_bar_width)
+    # The sidebar is already excluded from measured_size. Keep two columns only
+    # when both columns have enough room for copy and their controls.
+    var compact := measured_size.x < 1140.0
+    var gutter := 20 if compact else 32
+    var max_content_width := 760.0 if compact else 1120.0
+    var content_width := minf(max_content_width, maxf(320.0, measured_size.x - float(gutter * 2)))
+    return {
+        "available_size": measured_size,
+        "compact": compact,
+        "gutter": gutter,
+        "content_width": content_width,
+        "stack_controls": content_width < 640.0,
+    }
+
+func _queue_settings_relayout_after_resize() -> void:
+    if not is_instance_valid(settings_view) or not settings_view.visible:
+        return
+    settings_relayout_scroll_vertical = settings_view.scroll_vertical
+    if settings_relayout_pending:
+        return
+    settings_relayout_pending = true
+    # iOS updates the viewport and safe-area insets in separate layout passes.
+    # Waiting for two deferred calls ensures shell_content has its landscape
+    # dimensions before the settings page chooses its responsive layout.
+    call_deferred("_settle_settings_relayout_after_resize")
+
+func _settle_settings_relayout_after_resize() -> void:
+    call_deferred("_apply_settings_relayout_after_resize")
+
+func _apply_settings_relayout_after_resize() -> void:
+    settings_relayout_pending = false
+    if not is_instance_valid(settings_view) or not settings_view.visible:
+        return
+    var restore_scroll := settings_relayout_scroll_vertical
+    _fit_full_rects()
+    settings_animate_next = false
+    _rebuild_settings_view()
+    call_deferred("_restore_settings_scroll_after_relayout", restore_scroll)
+
+func _restore_settings_scroll_after_relayout(scroll_vertical: int) -> void:
+    if not is_instance_valid(settings_view) or not settings_view.visible:
+        return
+    var scroll_bar := settings_view.get_v_scroll_bar()
+    var maximum_scroll := maxi(0, int(scroll_bar.max_value - scroll_bar.page))
+    settings_view.scroll_vertical = mini(scroll_vertical, maximum_scroll)
+
 func _rebuild_settings_view() -> void:
     for child in settings_view.get_children():
         settings_view.remove_child(child)
@@ -3042,14 +3459,12 @@ func _rebuild_settings_view() -> void:
     if available_size.x <= 0.0 or available_size.y <= 0.0:
         available_size = get_viewport_rect().size
     var scroll_bar_width := settings_view.get_v_scroll_bar().get_combined_minimum_size().x
-    available_size.x = maxf(320.0, available_size.x - scroll_bar_width)
-    # The sidebar is already excluded from available_size. Keep two columns only
-    # when both columns have enough room for copy and their controls.
-    var compact := available_size.x < 1140.0
-    var gutter := 20 if compact else 32
-    var max_content_width := 760.0 if compact else 1120.0
-    var settings_content_width := minf(max_content_width, maxf(320.0, available_size.x - float(gutter * 2)))
-    var stack_settings_controls := settings_content_width < 640.0
+    var layout_spec := _settings_layout_spec(available_size, scroll_bar_width)
+    available_size = layout_spec["available_size"]
+    var compact: bool = layout_spec["compact"]
+    var gutter: int = layout_spec["gutter"]
+    var settings_content_width: float = layout_spec["content_width"]
+    var stack_settings_controls: bool = layout_spec["stack_controls"]
     var animate_page := settings_animate_next
     settings_animate_next = false
 
@@ -3182,7 +3597,7 @@ func _rebuild_settings_view() -> void:
         _t("settings.legal_open"),
         func(): _show_legal_agreement(false)
     ))
-    if _effective_legal_platform_name() == "iOS":
+    if _apple_app_store_platform():
         _add_settings_row(about_group, _settings_action_row(
             _t("settings.ios_statement"),
             _t("settings.ios_statement_desc"),
@@ -3265,30 +3680,32 @@ func _show_ios_additional_statement(first_use: bool = false) -> void:
     dim.mouse_filter = Control.MOUSE_FILTER_STOP
     modal_layer.add_child(dim)
 
+    var viewport_size := get_viewport_rect().size
+    var safe_rect := _ui_safe_rect(viewport_size)
+    var compact := safe_rect.size.y > safe_rect.size.x or safe_rect.size.x < 700.0
     var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.08
-    dialog.anchor_top = 0.06
-    dialog.anchor_right = 0.92
-    dialog.anchor_bottom = 0.94
+    _mark_legal_safe_dialog(dialog, first_use, true)
+    _layout_safe_dialog(dialog, safe_rect)
     dialog.add_theme_stylebox_override("panel", _panel_style(22, color_card, color_line, 1))
     modal_layer.add_child(dialog)
 
     var margin := MarginContainer.new()
-    margin.add_theme_constant_override("margin_left", 30)
-    margin.add_theme_constant_override("margin_top", 24)
-    margin.add_theme_constant_override("margin_right", 30)
-    margin.add_theme_constant_override("margin_bottom", 24)
+    margin.add_theme_constant_override("margin_left", 16 if compact and not first_use else (18 if compact else 30))
+    margin.add_theme_constant_override("margin_top", 16 if compact and not first_use else (18 if compact else 24))
+    margin.add_theme_constant_override("margin_right", 16 if compact and not first_use else (18 if compact else 30))
+    margin.add_theme_constant_override("margin_bottom", 16 if compact and not first_use else (18 if compact else 24))
     dialog.add_child(margin)
 
     var content := VBoxContainer.new()
     content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     content.size_flags_vertical = Control.SIZE_EXPAND_FILL
-    content.add_theme_constant_override("separation", 16)
+    content.add_theme_constant_override("separation", 12 if compact else 16)
     margin.add_child(content)
 
     var title := Label.new()
     title.text = _t("ios_statement.title")
-    title.add_theme_font_size_override("font_size", 30)
+    title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    title.add_theme_font_size_override("font_size", 22 if compact and not first_use else (24 if compact else 30))
     title.add_theme_color_override("font_color", color_text)
     content.add_child(title)
 
@@ -3296,7 +3713,7 @@ func _show_ios_additional_statement(first_use: bool = false) -> void:
         var summary := Label.new()
         summary.text = _t("ios_statement.first_summary")
         summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-        summary.add_theme_font_size_override("font_size", 17)
+        summary.add_theme_font_size_override("font_size", 15 if compact else 17)
         summary.add_theme_color_override("font_color", color_accent_soft)
         content.add_child(summary)
 
@@ -3309,12 +3726,12 @@ func _show_ios_additional_statement(first_use: bool = false) -> void:
 
     var statement := Label.new()
     statement.text = _load_ios_statement_document()
-    statement.custom_minimum_size = Vector2(maxf(420.0, get_viewport_rect().size.x * 0.72), 0)
+    statement.custom_minimum_size = Vector2.ZERO
     statement.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     statement.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    statement.add_theme_font_size_override("font_size", 17)
+    statement.add_theme_font_size_override("font_size", 15 if compact else 17)
     statement.add_theme_color_override("font_color", color_text)
-    statement.add_theme_constant_override("line_spacing", 6)
+    statement.add_theme_constant_override("line_spacing", 4 if compact else 6)
     scroll.add_child(statement)
 
     var buttons := HBoxContainer.new()
@@ -3326,19 +3743,24 @@ func _show_ios_additional_statement(first_use: bool = false) -> void:
     if first_use:
         var decline := Button.new()
         decline.text = _t("legal.decline")
-        decline.custom_minimum_size = Vector2(150, 56)
-        decline.add_theme_font_size_override("font_size", 19)
+        decline.custom_minimum_size = Vector2(0 if compact else 150, 52 if compact else 56)
+        decline.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_FILL
+        decline.size_flags_stretch_ratio = 0.72 if compact else 1.0
+        decline.add_theme_font_size_override("font_size", 16 if compact else 19)
         decline.add_theme_color_override("font_color", color_text)
         decline.pressed.connect(_decline_legal_agreement)
         buttons.add_child(decline)
 
         var accept := _pill_button(_t("legal.accept"))
-        accept.custom_minimum_size = Vector2(220, 56)
+        accept.custom_minimum_size = Vector2(0 if compact else 220, 52 if compact else 56)
+        accept.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_FILL
+        accept.size_flags_stretch_ratio = 1.28 if compact else 1.0
         accept.pressed.connect(_accept_ios_additional_statement)
         buttons.add_child(accept)
     else:
         var close := _pill_button(_t("legal.close"))
-        close.custom_minimum_size = Vector2(150, 56)
+        close.custom_minimum_size = Vector2(136 if compact else 150, 48 if compact else 56)
+        close.size_flags_horizontal = Control.SIZE_SHRINK_END
         close.pressed.connect(func(): modal_layer.visible = false)
         buttons.add_child(close)
 
@@ -3346,13 +3768,16 @@ func _effective_legal_platform_name() -> String:
     var platform_override := String(
         ProjectSettings.get_setting("aether_kiri/legal_platform_override", "")
     ).strip_edges()
-    if platform_override == "iOS":
+    if platform_override in ["iOS", "macOS"]:
         return platform_override
     return OS.get_name()
 
-func _ios_statement_required(platform_name: String = "") -> bool:
+func _apple_app_store_platform(platform_name: String = "") -> bool:
     var effective_platform := platform_name if not platform_name.is_empty() else _effective_legal_platform_name()
-    if effective_platform != "iOS":
+    return effective_platform in ["iOS", "macOS"]
+
+func _ios_statement_required(platform_name: String = "") -> bool:
+    if not _apple_app_store_platform(platform_name):
         return false
     if OS.is_debug_build() and _runtime_flag("AETHERKIRI_BYPASS_LEGAL_GATE"):
         return false
@@ -3400,30 +3825,32 @@ func _show_legal_agreement(first_use: bool) -> void:
     dim.mouse_filter = Control.MOUSE_FILTER_STOP
     modal_layer.add_child(dim)
 
+    var viewport_size := get_viewport_rect().size
+    var safe_rect := _ui_safe_rect(viewport_size)
+    var compact := safe_rect.size.y > safe_rect.size.x or safe_rect.size.x < 700.0
     var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.06
-    dialog.anchor_top = 0.04
-    dialog.anchor_right = 0.94
-    dialog.anchor_bottom = 0.96
+    _mark_legal_safe_dialog(dialog, first_use, false)
+    _layout_safe_dialog(dialog, safe_rect)
     dialog.add_theme_stylebox_override("panel", _panel_style(22, color_card, color_line, 1))
     modal_layer.add_child(dialog)
 
     var margin := MarginContainer.new()
-    margin.add_theme_constant_override("margin_left", 30)
-    margin.add_theme_constant_override("margin_top", 24)
-    margin.add_theme_constant_override("margin_right", 30)
-    margin.add_theme_constant_override("margin_bottom", 24)
+    margin.add_theme_constant_override("margin_left", 16 if compact and not first_use else (18 if compact else 30))
+    margin.add_theme_constant_override("margin_top", 16 if compact and not first_use else (18 if compact else 24))
+    margin.add_theme_constant_override("margin_right", 16 if compact and not first_use else (18 if compact else 30))
+    margin.add_theme_constant_override("margin_bottom", 16 if compact and not first_use else (18 if compact else 24))
     dialog.add_child(margin)
 
     var content := VBoxContainer.new()
     content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     content.size_flags_vertical = Control.SIZE_EXPAND_FILL
-    content.add_theme_constant_override("separation", 16)
+    content.add_theme_constant_override("separation", 12 if compact else 16)
     margin.add_child(content)
 
     var title := Label.new()
     title.text = _t("legal.title")
-    title.add_theme_font_size_override("font_size", 30)
+    title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    title.add_theme_font_size_override("font_size", 22 if compact and not first_use else (24 if compact else 30))
     title.add_theme_color_override("font_color", color_text)
     content.add_child(title)
 
@@ -3431,11 +3858,11 @@ func _show_legal_agreement(first_use: bool) -> void:
         var summary := Label.new()
         summary.text = _t(
             "legal.first_summary_ios"
-            if _effective_legal_platform_name() == "iOS"
+            if _apple_app_store_platform()
             else "legal.first_summary"
         )
         summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-        summary.add_theme_font_size_override("font_size", 17)
+        summary.add_theme_font_size_override("font_size", 15 if compact else 17)
         summary.add_theme_color_override("font_color", color_accent_soft)
         content.add_child(summary)
 
@@ -3448,12 +3875,12 @@ func _show_legal_agreement(first_use: bool) -> void:
 
     var policy := Label.new()
     policy.text = _load_legal_document()
-    policy.custom_minimum_size = Vector2(maxf(420.0, get_viewport_rect().size.x * 0.76), 0)
+    policy.custom_minimum_size = Vector2.ZERO
     policy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     policy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    policy.add_theme_font_size_override("font_size", 17)
+    policy.add_theme_font_size_override("font_size", 15 if compact else 17)
     policy.add_theme_color_override("font_color", color_text)
-    policy.add_theme_constant_override("line_spacing", 6)
+    policy.add_theme_constant_override("line_spacing", 4 if compact else 6)
     scroll.add_child(policy)
 
     var buttons := HBoxContainer.new()
@@ -3465,19 +3892,24 @@ func _show_legal_agreement(first_use: bool) -> void:
     if first_use:
         var decline := Button.new()
         decline.text = _t("legal.decline")
-        decline.custom_minimum_size = Vector2(150, 56)
-        decline.add_theme_font_size_override("font_size", 19)
+        decline.custom_minimum_size = Vector2(0 if compact else 150, 52 if compact else 56)
+        decline.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_FILL
+        decline.size_flags_stretch_ratio = 0.72 if compact else 1.0
+        decline.add_theme_font_size_override("font_size", 16 if compact else 19)
         decline.add_theme_color_override("font_color", color_text)
         decline.pressed.connect(_decline_legal_agreement)
         buttons.add_child(decline)
 
         var accept := _pill_button(_t("legal.accept"))
-        accept.custom_minimum_size = Vector2(220, 56)
+        accept.custom_minimum_size = Vector2(0 if compact else 220, 52 if compact else 56)
+        accept.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_FILL
+        accept.size_flags_stretch_ratio = 1.28 if compact else 1.0
         accept.pressed.connect(_accept_legal_agreement)
         buttons.add_child(accept)
     else:
         var close := _pill_button(_t("legal.close"))
-        close.custom_minimum_size = Vector2(150, 56)
+        close.custom_minimum_size = Vector2(136 if compact else 150, 48 if compact else 56)
+        close.size_flags_horizontal = Control.SIZE_SHRINK_END
         close.pressed.connect(func(): modal_layer.visible = false)
         buttons.add_child(close)
 
@@ -3524,10 +3956,8 @@ func _show_legal_declined_screen() -> void:
     modal_layer.add_child(dim)
 
     var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.18
-    dialog.anchor_top = 0.24
-    dialog.anchor_right = 0.82
-    dialog.anchor_bottom = 0.76
+    dialog.set_meta("aether_safe_dialog_kind", "declined")
+    _layout_safe_dialog(dialog, _ui_safe_rect(get_viewport_rect().size))
     dialog.add_theme_stylebox_override("panel", _panel_style(22, color_card, color_line, 1))
     modal_layer.add_child(dialog)
 
@@ -3575,8 +4005,8 @@ func _build_loading_panel() -> void:
     )
     add_child(loading_panel)
 
-    var center := CenterContainer.new()
-    loading_panel.add_child(center)
+    loading_center = CenterContainer.new()
+    loading_panel.add_child(loading_center)
 
     loading_card = PanelContainer.new()
     var viewport_width := get_viewport_rect().size.x
@@ -3588,7 +4018,7 @@ func _build_loading_panel() -> void:
     loading_style.content_margin_right = 20
     loading_style.content_margin_bottom = 18
     loading_card.add_theme_stylebox_override("panel", loading_style)
-    center.add_child(loading_card)
+    loading_center.add_child(loading_card)
 
     var box := VBoxContainer.new()
     box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -3620,11 +4050,14 @@ func _build_loading_panel() -> void:
 
     var loading_labels := VBoxContainer.new()
     loading_labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    loading_labels.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    loading_labels.alignment = BoxContainer.ALIGNMENT_CENTER
     loading_labels.add_theme_constant_override("separation", 1)
     status_row.add_child(loading_labels)
 
     loading_title_label = Label.new()
     loading_title_label.text = _t("loading.title")
+    loading_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     loading_title_label.add_theme_font_size_override("font_size", 18)
     loading_title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
     loading_labels.add_child(loading_title_label)
@@ -3645,17 +4078,25 @@ func _build_loading_panel() -> void:
         log_view.add_theme_color_override("background_color", Color(0, 0, 0, 0))
         box.add_child(log_view)
 
-func _show_loading_overlay() -> void:
+func _show_loading_overlay(immediate: bool = false) -> void:
     loading_hiding = false
     loading_panel.move_to_front()
     if loading_card != null:
-        ui_motion.loading_in(loading_panel, loading_card)
+        ui_motion.loading_in(loading_panel, loading_card, immediate)
 
-func _hide_loading_overlay() -> void:
-    if loading_panel == null or not loading_panel.visible or loading_hiding:
+func _hide_loading_overlay(finished: Callable = Callable()) -> void:
+    if loading_panel == null or not loading_panel.visible:
+        if finished.is_valid():
+            finished.call()
+        return
+    if loading_hiding:
         return
     loading_hiding = true
-    ui_motion.loading_out(loading_panel, loading_card, func(): loading_hiding = false)
+    ui_motion.loading_out(loading_panel, loading_card, func():
+        loading_hiding = false
+        if finished.is_valid():
+            finished.call()
+    )
 
 func _panel_style(radius: int, fill: Color, border: Color, border_width: int = 1) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
@@ -3805,13 +4246,20 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
         "scroll": scroll,
         "control": control,
         "last": position,
+        "last_motion_msec": Time.get_ticks_msec(),
+        "velocity_y": 0.0,
         "distance": 0.0,
         "pending_y": 0.0,
         "dragging": false,
         "threshold": SHELL_SCROLL_BUTTON_DRAG_THRESHOLD if button != null else SHELL_SCROLL_DRAG_THRESHOLD,
     }
 
-func _update_shell_scroll_drag(key: int, position: Vector2, relative: Vector2) -> bool:
+func _update_shell_scroll_drag(
+    key: int,
+    position: Vector2,
+    relative: Vector2,
+    reported_velocity_y: float = 0.0
+) -> bool:
     var state: Dictionary = shell_scroll_drag_states.get(key, {})
     if state.is_empty():
         _start_shell_scroll_drag(key, position)
@@ -3826,6 +4274,14 @@ func _update_shell_scroll_drag(key: int, position: Vector2, relative: Vector2) -
     var delta := position - last_position
     if delta.is_zero_approx():
         delta = relative
+    var now_msec := Time.get_ticks_msec()
+    var last_motion_msec := int(state.get("last_motion_msec", now_msec))
+    var elapsed_msec := maxi(1, now_msec - last_motion_msec)
+    var estimated_velocity_y := delta.y * 1000.0 / float(elapsed_msec)
+    var sample_velocity_y := reported_velocity_y if absf(reported_velocity_y) > 1.0 else estimated_velocity_y
+    var previous_velocity_y := float(state.get("velocity_y", sample_velocity_y))
+    state["velocity_y"] = lerpf(previous_velocity_y, sample_velocity_y, 0.45)
+    state["last_motion_msec"] = now_msec
     state["last"] = position
     var distance := float(state.get("distance", 0.0)) + absf(delta.y)
     var pending_y := float(state.get("pending_y", 0.0)) + delta.y
@@ -3848,6 +4304,12 @@ func _finish_shell_scroll_drag(key: int) -> bool:
     var dragging := bool(state.get("dragging", false))
     if dragging:
         _cancel_shell_scroll_press(state)
+        var scroll := state.get("scroll") as ScrollContainer
+        var last_motion_msec := int(state.get("last_motion_msec", 0))
+        var velocity_is_fresh := Time.get_ticks_msec() - last_motion_msec <= SHELL_SCROLL_MOMENTUM_STALE_MSEC
+        if key != SHELL_SCROLL_MOUSE_KEY and velocity_is_fresh and scroll != null and is_instance_valid(scroll):
+            var scroll_velocity := -float(state.get("velocity_y", 0.0)) * SHELL_SCROLL_DRAG_SPEED
+            _start_shell_scroll_momentum(scroll, scroll_velocity)
     shell_scroll_drag_states.erase(key)
     return dragging
 
@@ -3884,17 +4346,32 @@ func _nearest_base_button(control: Control) -> BaseButton:
         current = current.get_parent()
     return null
 
+func _is_scroll_bar_control(control: Control) -> bool:
+    var current: Node = control
+    while current != null:
+        if current is ScrollBar:
+            return true
+        current = current.get_parent()
+    return false
+
 func _scroll_container_by(scroll: ScrollContainer, delta: float, smooth: bool = false) -> void:
     var bar := scroll.get_v_scroll_bar()
     if bar == null:
         return
+    var minimum_scroll := bar.min_value
+    var maximum_scroll := _shell_scroll_maximum(bar.min_value, bar.max_value, bar.page)
     var scroll_key := scroll.get_instance_id()
     var remainder := float(shell_scroll_remainders.get(scroll_key, 0.0))
-    var current := float(scroll.scroll_vertical)
-    var base := float(shell_scroll_targets.get(scroll_key, current)) if smooth else current
-    var next := clampf(base + remainder + delta, bar.min_value, bar.max_value)
+    var current := clampf(float(scroll.scroll_vertical), minimum_scroll, maximum_scroll)
+    # ScrollBar.max_value describes the full content extent. The last valid
+    # ScrollContainer position is max_value - page. Keeping an animation target
+    # beyond that real boundary makes the first reverse trackpad gestures appear
+    # to do nothing while they consume the invisible overshoot.
+    var tracked_target := float(shell_scroll_targets.get(scroll_key, current))
+    var base := clampf(tracked_target, minimum_scroll, maximum_scroll) if smooth else current
+    var next := clampf(base + remainder + delta, minimum_scroll, maximum_scroll)
     var snapped := int(roundf(next))
-    snapped = int(clampf(float(snapped), bar.min_value, bar.max_value))
+    snapped = int(clampf(float(snapped), minimum_scroll, maximum_scroll))
     if smooth:
         _stop_shell_scroll_tween(scroll)
         shell_scroll_targets[scroll_key] = next
@@ -3911,8 +4388,8 @@ func _scroll_container_by(scroll: ScrollContainer, delta: float, smooth: bool = 
     else:
         scroll.scroll_vertical = snapped
         shell_scroll_targets[scroll_key] = float(snapped)
-    var clamped_to_min := is_equal_approx(next, bar.min_value) and delta < 0.0
-    var clamped_to_max := is_equal_approx(next, bar.max_value) and delta > 0.0
+    var clamped_to_min := is_equal_approx(next, minimum_scroll) and delta < 0.0
+    var clamped_to_max := is_equal_approx(next, maximum_scroll) and delta > 0.0
     if clamped_to_min or clamped_to_max:
         shell_scroll_remainders.erase(scroll_key)
     else:
@@ -3927,6 +4404,65 @@ func _stop_shell_scroll_tween(scroll: ScrollContainer) -> void:
         tween.kill()
     shell_scroll_tweens.erase(scroll_key)
     shell_scroll_targets[scroll_key] = float(scroll.scroll_vertical)
+
+func _shell_scroll_momentum_spec(
+    scroll_velocity: float,
+    current: float,
+    minimum: float,
+    maximum: float
+) -> Dictionary:
+    var velocity := clampf(
+        scroll_velocity,
+        -SHELL_SCROLL_MOMENTUM_MAX_SPEED,
+        SHELL_SCROLL_MOMENTUM_MAX_SPEED
+    )
+    var speed := absf(velocity)
+    if speed < SHELL_SCROLL_MOMENTUM_MIN_SPEED or maximum <= minimum:
+        return {"active": false, "target": current, "duration": 0.0}
+    var intended_distance := velocity * SHELL_SCROLL_MOMENTUM_DISTANCE_FACTOR
+    var target := clampf(current + intended_distance, minimum, maximum)
+    var actual_distance := target - current
+    if absf(actual_distance) < 1.0:
+        return {"active": false, "target": current, "duration": 0.0}
+    var duration := minf(
+        SHELL_SCROLL_MOMENTUM_MAX_DURATION,
+        0.18 + speed / 7500.0
+    )
+    var boundary_ratio := clampf(absf(actual_distance / intended_distance), 0.0, 1.0)
+    duration = maxf(0.12, duration * sqrt(boundary_ratio))
+    return {"active": true, "target": target, "duration": duration}
+
+func _shell_scroll_maximum(minimum: float, maximum: float, page: float) -> float:
+    return maxf(minimum, maximum - maxf(0.0, page))
+
+func _start_shell_scroll_momentum(scroll: ScrollContainer, scroll_velocity: float) -> void:
+    var bar := scroll.get_v_scroll_bar()
+    if bar == null:
+        return
+    var current := float(scroll.scroll_vertical)
+    var maximum_scroll := _shell_scroll_maximum(bar.min_value, bar.max_value, bar.page)
+    var spec := _shell_scroll_momentum_spec(
+        scroll_velocity,
+        current,
+        bar.min_value,
+        maximum_scroll
+    )
+    if not bool(spec["active"]):
+        return
+    _stop_shell_scroll_tween(scroll)
+    var scroll_key := scroll.get_instance_id()
+    var target := float(spec["target"])
+    shell_scroll_targets[scroll_key] = target
+    var tween := scroll.create_tween()
+    shell_scroll_tweens[scroll_key] = tween
+    tween.tween_method(func(value: float):
+        if is_instance_valid(scroll):
+            scroll.scroll_vertical = int(roundf(value))
+    , current, target, float(spec["duration"])).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+    tween.tween_callback(func():
+        shell_scroll_tweens.erase(scroll_key)
+        shell_scroll_targets[scroll_key] = target
+    )
 
 func _disabled_text_color() -> Color:
     return ui_tokens.text_tertiary
@@ -4033,6 +4569,21 @@ func _icon_action_button(
         ui_widgets.toolbar_button(button)
     if callback.is_valid():
         button.pressed.connect(callback)
+    return button
+
+func _reveal_icon_action_label_on_hover(button: Button, label: String) -> Button:
+    button.tooltip_text = ""
+    button.add_theme_constant_override("h_separation", 8)
+    button.mouse_entered.connect(func(): button.text = label)
+    button.mouse_exited.connect(func():
+        if not button.has_focus():
+            button.text = ""
+    )
+    button.focus_entered.connect(func(): button.text = label)
+    button.focus_exited.connect(func():
+        if not button.is_hovered():
+            button.text = ""
+    )
     return button
 
 func _attach_pill_button_content(button: Button, text: String, icon_path: String) -> void:
@@ -4820,15 +5371,74 @@ func _show_detail(game: Dictionary, source: Control = null) -> void:
         _animate_shell_route(outgoing, detail_view)
     elif previous_route != "detail":
         _animate_shell_route(outgoing, detail_view, false)
+    _rebuild_detail_contents(game, animate_hero, true)
+
+func _detail_layout_spec(available_size: Vector2, scroll_bar_width: float = 0.0) -> Dictionary:
+    var measured_size := available_size
+    measured_size.x = maxf(320.0, measured_size.x - scroll_bar_width)
+    var phone_landscape := (
+        measured_size.x > measured_size.y
+        and measured_size.y < HOME_PHONE_BREAKPOINT
+    )
+    var compact := measured_size.x < DETAIL_COMPACT_BREAKPOINT and not phone_landscape
+    var gutter := 20 if compact or phone_landscape else 32
+    return {
+        "available_size": measured_size,
+        "compact": compact,
+        "phone_landscape": phone_landscape,
+        "gutter": gutter,
+        "content_width": minf(
+            1080.0,
+            maxf(320.0, measured_size.x - float(gutter * 2))
+        ),
+    }
+
+func _queue_detail_relayout_after_resize() -> void:
+    if not is_instance_valid(detail_view) or not detail_view.visible:
+        return
+    detail_relayout_scroll_vertical = detail_scroll.scroll_vertical
+    if detail_relayout_pending:
+        return
+    detail_relayout_pending = true
+    # Match the settings relayout: iOS publishes the rotated viewport and its
+    # new safe-area insets over separate layout passes.
+    call_deferred("_settle_detail_relayout_after_resize")
+
+func _settle_detail_relayout_after_resize() -> void:
+    call_deferred("_apply_detail_relayout_after_resize")
+
+func _apply_detail_relayout_after_resize() -> void:
+    detail_relayout_pending = false
+    if not is_instance_valid(detail_view) or not detail_view.visible or selected_game.is_empty():
+        return
+    var restore_scroll := detail_relayout_scroll_vertical
+    _fit_full_rects()
+    _finish_hero_overlay()
+    _rebuild_detail_contents(selected_game, false, false)
+    call_deferred("_restore_detail_scroll_after_relayout", restore_scroll)
+
+func _restore_detail_scroll_after_relayout(scroll_vertical: int) -> void:
+    if not is_instance_valid(detail_scroll) or not detail_view.visible:
+        return
+    var scroll_bar := detail_scroll.get_v_scroll_bar()
+    var maximum_scroll := maxi(0, int(scroll_bar.max_value - scroll_bar.page))
+    detail_scroll.scroll_vertical = mini(scroll_vertical, maximum_scroll)
+
+func _rebuild_detail_contents(game: Dictionary, animate_hero: bool, animate_content: bool) -> void:
     for child in detail_scroll.get_children():
+        detail_scroll.remove_child(child)
         child.queue_free()
 
     var available_size := shell_content.size
     if available_size.x <= 0.0 or available_size.y <= 0.0:
         available_size = get_viewport_rect().size
-    available_size.x = maxf(320.0, available_size.x - detail_scroll.get_v_scroll_bar().get_combined_minimum_size().x)
-    var compact := available_size.x < DETAIL_COMPACT_BREAKPOINT
-    var gutter := 20 if compact else 32
+    var scroll_bar_width := detail_scroll.get_v_scroll_bar().get_combined_minimum_size().x
+    var layout_spec := _detail_layout_spec(available_size, scroll_bar_width)
+    available_size = layout_spec["available_size"]
+    var compact: bool = layout_spec["compact"]
+    var phone_landscape: bool = layout_spec["phone_landscape"]
+    var gutter: int = layout_spec["gutter"]
+    var detail_content_width: float = layout_spec["content_width"]
 
     var content := MarginContainer.new()
     content.custom_minimum_size = Vector2(maxf(360.0, available_size.x), 0)
@@ -4844,7 +5454,7 @@ func _show_detail(game: Dictionary, source: Control = null) -> void:
     content.add_child(center)
 
     var page := VBoxContainer.new()
-    page.custom_minimum_size = Vector2(minf(1080.0, maxf(320.0, available_size.x - float(gutter * 2))), 0)
+    page.custom_minimum_size = Vector2(detail_content_width, 0)
     page.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
     page.add_theme_constant_override("separation", 24)
     center.add_child(page)
@@ -4867,21 +5477,22 @@ func _show_detail(game: Dictionary, source: Control = null) -> void:
     eyebrow.add_theme_color_override("font_color", ui_tokens.text_secondary)
     top.add_child(eyebrow)
 
-    var body := _build_compact_detail(game) if compact else _build_desktop_detail(game)
+    var body := _build_compact_detail(game) if compact else _build_desktop_detail(game, phone_landscape)
     page.add_child(body)
 
-    ui_motion.reveal(top)
+    if animate_content:
+        ui_motion.reveal(top)
     if animate_hero:
         body.modulate.a = 0.0
         call_deferred("_animate_hero_forward", body)
-    else:
+    elif animate_content:
         ui_motion.reveal(body, 0.04)
 
-func _build_desktop_detail(game: Dictionary) -> Control:
+func _build_desktop_detail(game: Dictionary, phone_landscape: bool = false) -> Control:
     var body := HBoxContainer.new()
     body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    body.add_theme_constant_override("separation", 32)
-    body.add_child(_detail_cover(game, Vector2(252, 354)))
+    body.add_theme_constant_override("separation", 20 if phone_landscape else 32)
+    body.add_child(_detail_cover(game, Vector2(176, 248) if phone_landscape else Vector2(252, 354)))
 
     var information := VBoxContainer.new()
     information.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -4890,7 +5501,6 @@ func _build_desktop_detail(game: Dictionary) -> Control:
     information.add_child(_detail_identity(game, false))
     information.add_child(_detail_tools(game))
     information.add_child(_detail_information_panel(game))
-    information.add_child(_detail_remove_button(game))
     return body
 
 func _build_compact_detail(game: Dictionary) -> Control:
@@ -4912,7 +5522,6 @@ func _build_compact_detail(game: Dictionary) -> Control:
 
     body.add_child(_detail_tools(game))
     body.add_child(_detail_information_panel(game))
-    body.add_child(_detail_remove_button(game))
     return body
 
 func _detail_cover(game: Dictionary, cover_size: Vector2) -> PanelContainer:
@@ -4958,7 +5567,7 @@ func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
     title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     title.max_lines_visible = 3 if compact else 2
     title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-    title.add_theme_font_override("font", DISPLAY_FONT)
+    title.add_theme_font_override("font", _game_title_font())
     title.add_theme_font_size_override("font_size", 23 if compact else 32)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     identity.add_child(title)
@@ -4973,6 +5582,7 @@ func _detail_identity(game: Dictionary, compact: bool) -> VBoxContainer:
 
 func _detail_launch_button() -> Button:
     var start := _icon_action_button(ICON_PLAY, _t("detail.launch"), _start_selected_game, true, false, 52.0)
+    _reveal_icon_action_label_on_hover(start, _t("detail.launch"))
     start.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
     start.button_down.connect(func(): _android_input_debug_log("detail launch button_down"))
     start.button_up.connect(func(): _android_input_debug_log("detail launch button_up"))
@@ -4991,6 +5601,7 @@ func _detail_tools(game: Dictionary) -> FlowContainer:
             _t("detail.set_launch_file"),
             func(): _set_launch_file_for_selected()
         )
+        _reveal_icon_action_label_on_hover(set_launch, _t("detail.set_launch_file"))
         set_launch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
         tools.add_child(set_launch)
         if not GameLaunchEntry.configured_relative_path(game).is_empty():
@@ -4999,13 +5610,17 @@ func _detail_tools(game: Dictionary) -> FlowContainer:
                 _t("detail.reset_launch_file"),
                 func(): _reset_launch_file_for_selected()
             )
+            _reveal_icon_action_label_on_hover(reset_launch, _t("detail.reset_launch_file"))
             reset_launch.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
             tools.add_child(reset_launch)
     var set_cover := _icon_action_button(ICON_PAGE, _t("detail.set_cover"), func(): _set_cover_for_selected())
+    _reveal_icon_action_label_on_hover(set_cover, _t("detail.set_cover"))
     set_cover.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
     tools.add_child(set_cover)
     var rename := _icon_action_button(ICON_RENAME, _t("detail.rename"), func(): _rename_selected_game())
+    _reveal_icon_action_label_on_hover(rename, _t("detail.rename"))
     tools.add_child(rename)
+    tools.add_child(_detail_remove_button(game))
     return tools
 
 func _detail_information_panel(game: Dictionary) -> PanelContainer:
@@ -5029,6 +5644,7 @@ func _detail_information_panel(game: Dictionary) -> PanelContainer:
 func _detail_remove_button(game: Dictionary) -> Button:
     var remove_label := "detail.delete_builtin" if builtin_demo.is_game(game) else "detail.remove"
     var remove := _icon_action_button(ICON_DELETE, _t(remove_label), func(): _confirm_remove_selected(), false, true)
+    _reveal_icon_action_label_on_hover(remove, _t(remove_label))
     remove.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
     return remove
 
@@ -5104,19 +5720,10 @@ func _modal_dialog(preferred_size: Vector2, dim_alpha: float = 0.44) -> PanelCon
     )
     modal_layer.add_child(dim)
 
-    var viewport_size := get_viewport_rect().size
-    var dialog_size := Vector2(
-        minf(preferred_size.x, maxf(280.0, viewport_size.x - 32.0)),
-        minf(preferred_size.y, maxf(180.0, viewport_size.y - 32.0))
-    )
     var dialog := PanelContainer.new()
     dialog.clip_contents = true
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.position = -dialog_size * 0.5
-    dialog.size = dialog_size
+    _mark_centered_safe_dialog(dialog, preferred_size)
+    _layout_safe_dialog(dialog, _ui_safe_rect(get_viewport_rect().size))
     var dialog_style := ui_tokens.material_panel(true)
     dialog_style.content_margin_left = 20
     dialog_style.content_margin_top = 18
@@ -5354,15 +5961,18 @@ func _show_iap_limit_prompt() -> void:
         350.0
     )
     var buttons := HBoxContainer.new()
+    var compact := _ui_safe_rect(get_viewport_rect().size).size.x < 520.0
     buttons.alignment = BoxContainer.ALIGNMENT_END
-    buttons.add_theme_constant_override("separation", 14)
-    buttons.custom_minimum_size = Vector2(0, 64)
+    buttons.add_theme_constant_override("separation", 10 if compact else 14)
+    buttons.custom_minimum_size = Vector2(0, 56 if compact else 64)
     box.add_child(buttons)
     var cancel := Button.new()
     cancel.text = _t("dialog.cancel")
     cancel.flat = true
-    cancel.custom_minimum_size = Vector2(130, 62)
-    cancel.add_theme_font_size_override("font_size", 20)
+    cancel.custom_minimum_size = Vector2(0 if compact else 130, 54 if compact else 62)
+    cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_FILL
+    cancel.size_flags_stretch_ratio = 0.75 if compact else 1.0
+    cancel.add_theme_font_size_override("font_size", 17 if compact else 20)
     cancel.add_theme_color_override("font_color", color_text)
     cancel.pressed.connect(func():
         _clear_iap_pending_launch()
@@ -5370,7 +5980,9 @@ func _show_iap_limit_prompt() -> void:
     )
     buttons.add_child(cancel)
     var purchase := _pill_button(_iap_purchase_button_text())
-    purchase.custom_minimum_size = Vector2(210, 62)
+    purchase.custom_minimum_size = Vector2(0 if compact else 210, 54 if compact else 62)
+    purchase.size_flags_horizontal = Control.SIZE_EXPAND_FILL if compact else Control.SIZE_FILL
+    purchase.size_flags_stretch_ratio = 1.25 if compact else 1.0
     purchase.pressed.connect(func(): _begin_iap_purchase("limit"))
     buttons.add_child(purchase)
 
@@ -5384,30 +5996,28 @@ func _create_iap_modal(title_text: String, body_text: String, width: float, heig
     dim.set_anchors_preset(Control.PRESET_FULL_RECT)
     modal_layer.add_child(dim)
     var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.position = Vector2(-width * 0.5, -height * 0.5)
-    dialog.size = Vector2(width, height)
+    _mark_centered_safe_dialog(dialog, Vector2(width, height))
+    _layout_safe_dialog(dialog, _ui_safe_rect(get_viewport_rect().size))
     dialog.add_theme_stylebox_override(
         "panel",
         _panel_style(22, color_card, Color(0, 0, 0, 0.06), 1)
     )
     modal_layer.add_child(dialog)
     var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 22)
+    var compact := _ui_safe_rect(get_viewport_rect().size).size.x < 520.0
+    box.add_theme_constant_override("separation", 16 if compact else 22)
     dialog.add_child(box)
     var title := Label.new()
     title.text = title_text
-    title.add_theme_font_size_override("font_size", 30)
+    title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    title.add_theme_font_size_override("font_size", 24 if compact else 30)
     title.add_theme_color_override("font_color", color_text)
     box.add_child(title)
     var body := Label.new()
     body.text = body_text
     body.size_flags_vertical = Control.SIZE_EXPAND_FILL
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    body.add_theme_font_size_override("font_size", 21)
+    body.add_theme_font_size_override("font_size", 17 if compact else 21)
     body.add_theme_color_override("font_color", color_text)
     box.add_child(body)
     return box
@@ -5768,7 +6378,7 @@ func _on_refresh_or_import() -> void:
     _show_import_picker()
 
 func _show_import_picker() -> void:
-    var dialog := _modal_dialog(Vector2(480, 300))
+    var dialog := _modal_dialog(Vector2(480, 220))
     var box := _modal_stack(dialog, _t("dialog.import_title"), ICON_ADD)
     var dir_button := _detail_action(ICON_LIBRARY, _t("dialog.select_game_dir"))
     dir_button.pressed.connect(func():
@@ -6232,108 +6842,213 @@ func _video_card(video: Dictionary) -> Control:
     var duration := float(progress.get("duration", 0.0))
     var detail := String(video.get("fileName", path.get_file()))
     if position > 1.0:
-        detail = "%s  ·  %s / %s" % [
+        detail = "%s  ·  %s" % [
             detail,
-            _format_video_time(position),
-            _format_video_time(duration),
+            _t("video.progress", [
+                _format_video_time(position),
+                _format_video_time(duration),
+            ]),
         ]
 
     var card := Control.new()
-    card.custom_minimum_size = HOME_CARD_SIZE
+    card.custom_minimum_size = _home_card_minimum_size(home_compact_layout)
+    card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    card.clip_contents = true
 
     var button := Button.new()
     button.set_anchors_preset(Control.PRESET_FULL_RECT)
-    button.clip_text = true
     button.clip_contents = true
     button.focus_mode = Control.FOCUS_ALL
     button.text = ""
-    button.add_theme_stylebox_override("normal", _panel_style(8, color_card_alt, color_line, 1))
-    button.add_theme_stylebox_override("hover", _panel_style(8, color_card_hover, color_accent, 1))
-    button.add_theme_stylebox_override("pressed", _panel_style(8, color_accent_dim, color_accent, 1))
-    button.add_theme_stylebox_override("focus", _focus_outline(8))
+    _style_home_card_button(button, home_compact_layout)
     var captured := video.duplicate(true)
     button.pressed.connect(func(): _open_video_player(captured))
     card.add_child(button)
 
-    var frame := Control.new()
+    if home_compact_layout:
+        _build_compact_video_card(button, video, detail)
+    else:
+        _build_desktop_video_card(button, video, detail)
+
+    ui_motion.bind_lift(button)
+    _add_video_card_progress(card, position, duration)
+
+    var remove := Button.new()
+    remove.tooltip_text = _t("video.remove")
+    remove.accessibility_name = _t("video.remove")
+    remove.focus_mode = Control.FOCUS_ALL
+    ui_widgets.toolbar_button(remove)
+    _attach_centered_button_icon(remove, ICON_DELETE, Vector2(17, 17))
+    remove.anchor_left = 1.0
+    remove.anchor_top = 0.5
+    remove.anchor_right = 1.0
+    remove.anchor_bottom = 0.5
+    var remove_size := 38.0 if home_compact_layout else 36.0
+    remove.offset_left = -remove_size - (8.0 if home_compact_layout else 10.0)
+    remove.offset_top = -remove_size * 0.5
+    remove.offset_right = -(8.0 if home_compact_layout else 10.0)
+    remove.offset_bottom = remove_size * 0.5
+    remove.custom_minimum_size = Vector2(remove_size, remove_size)
+    remove.pressed.connect(func(): _confirm_remove_video(captured))
+    card.add_child(remove)
+    return card
+
+func _add_video_card_progress(card: Control, position: float, duration: float) -> void:
+    if position <= 1.0 or duration <= 0.0:
+        return
+    var ratio := clampf(position / duration, 0.0, 1.0)
+    var track := ColorRect.new()
+    track.name = "PlaybackProgressTrack"
+    track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    track.color = Color(ui_tokens.text_tertiary, 0.28)
+    track.anchor_top = 1.0
+    track.anchor_right = 1.0
+    track.anchor_bottom = 1.0
+    track.offset_top = -4.0
+    card.add_child(track)
+
+    var fill := ColorRect.new()
+    fill.name = "PlaybackProgressFill"
+    fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    fill.color = ui_tokens.accent
+    fill.anchor_right = ratio
+    fill.anchor_bottom = 1.0
+    track.add_child(fill)
+
+func _build_desktop_video_card(button: Button, video: Dictionary, detail: String) -> void:
+    var content_margin := MarginContainer.new()
+    content_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    content_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+    content_margin.add_theme_constant_override("margin_left", 8)
+    content_margin.add_theme_constant_override("margin_top", 8)
+    content_margin.add_theme_constant_override("margin_right", 10)
+    content_margin.add_theme_constant_override("margin_bottom", 8)
+    button.add_child(content_margin)
+
+    var frame := HBoxContainer.new()
+    frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    frame.clip_contents = true
+    frame.add_theme_constant_override("separation", 12)
+    content_margin.add_child(frame)
+
+    var cover_host := PanelContainer.new()
+    cover_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    cover_host.custom_minimum_size = Vector2(HOME_TILE_COVER_WIDTH, HOME_TILE_HEIGHT - 16.0)
+    cover_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    cover_host.clip_contents = true
+    cover_host.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.surface_raised, 8))
+    frame.add_child(cover_host)
+    _populate_video_card_cover(cover_host, false)
+
+    var metadata := PanelContainer.new()
+    metadata.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    metadata.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    metadata.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    metadata.add_theme_stylebox_override("panel", ui_tokens.panel(Color.TRANSPARENT, 0))
+    frame.add_child(metadata)
+    _populate_video_card_metadata(metadata, video, detail, false)
+
+    var action_space := Control.new()
+    action_space.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    action_space.custom_minimum_size = Vector2(38, 0)
+    frame.add_child(action_space)
+
+func _build_compact_video_card(button: Button, video: Dictionary, detail: String) -> void:
+    var frame := HBoxContainer.new()
     frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
     frame.clip_contents = true
     frame.set_anchors_preset(Control.PRESET_FULL_RECT)
+    frame.add_theme_constant_override("separation", 0)
     button.add_child(frame)
 
+    var cover_host := Control.new()
+    cover_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    cover_host.custom_minimum_size = Vector2(HOME_ROW_COVER_WIDTH, HOME_ROW_HEIGHT)
+    cover_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    frame.add_child(cover_host)
+    _populate_video_card_cover(cover_host, true)
+
+    var metadata := PanelContainer.new()
+    metadata.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    metadata.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    metadata.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    metadata.add_theme_stylebox_override("panel", ui_tokens.panel(ui_tokens.surface, 0))
+    frame.add_child(metadata)
+    _populate_video_card_metadata(metadata, video, detail, true)
+
+    var action_space := Control.new()
+    action_space.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    action_space.custom_minimum_size = Vector2(54, HOME_ROW_HEIGHT)
+    frame.add_child(action_space)
+
+func _populate_video_card_cover(cover_host: Control, compact: bool) -> void:
     var placeholder := PanelContainer.new()
     placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
     placeholder.set_anchors_preset(Control.PRESET_FULL_RECT)
-    placeholder.add_theme_stylebox_override("panel", _panel_style(8, color_card, color_line, 1))
-    frame.add_child(placeholder)
-
-    var icon := _centered_icon(ICON_VIDEO, Vector2(64, 64), color_accent)
+    placeholder.add_theme_stylebox_override(
+        "panel",
+        ui_tokens.panel(ui_tokens.surface_raised, 0 if compact else 8)
+    )
+    cover_host.add_child(placeholder)
+    var icon_size := Vector2(34, 34) if compact else Vector2(28, 28)
+    var icon := _centered_icon(ICON_VIDEO, icon_size, ui_tokens.accent)
     icon.set_anchors_preset(Control.PRESET_FULL_RECT)
-    frame.add_child(icon)
+    placeholder.add_child(icon)
 
-    var shade := PanelContainer.new()
-    shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    shade.anchor_left = 0.0
-    shade.anchor_top = 1.0
-    shade.anchor_right = 1.0
-    shade.anchor_bottom = 1.0
-    shade.offset_top = -102.0
-    shade.add_theme_stylebox_override("panel", _panel_style(8, Color(0.0, 0.0, 0.0, 0.62), Color(0, 0, 0, 0), 0))
-    frame.add_child(shade)
-
+func _populate_video_card_metadata(
+    metadata: PanelContainer,
+    video: Dictionary,
+    detail: String,
+    compact: bool
+) -> void:
     var text_margin := MarginContainer.new()
     text_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    text_margin.anchor_left = 0.0
-    text_margin.anchor_top = 1.0
-    text_margin.anchor_right = 1.0
-    text_margin.anchor_bottom = 1.0
-    text_margin.offset_top = -102.0
-    text_margin.add_theme_constant_override("margin_left", 16)
-    text_margin.add_theme_constant_override("margin_top", 14)
-    text_margin.add_theme_constant_override("margin_right", 16)
-    text_margin.add_theme_constant_override("margin_bottom", 16)
-    frame.add_child(text_margin)
+    text_margin.add_theme_constant_override("margin_left", 14 if compact else 2)
+    text_margin.add_theme_constant_override("margin_top", 13 if compact else 7)
+    text_margin.add_theme_constant_override("margin_right", 8 if compact else 2)
+    text_margin.add_theme_constant_override("margin_bottom", 10 if compact else 7)
+    metadata.add_child(text_margin)
 
     var labels := VBoxContainer.new()
     labels.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    labels.alignment = BoxContainer.ALIGNMENT_CENTER if compact else BoxContainer.ALIGNMENT_BEGIN
     labels.add_theme_constant_override("separation", 4)
     text_margin.add_child(labels)
 
+    if not compact:
+        var kicker := Label.new()
+        var extension := String(video.get("fileName", "")).get_extension().to_upper()
+        kicker.text = extension if not extension.is_empty() else _t("nav.videos").to_upper()
+        kicker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        kicker.add_theme_font_size_override("font_size", 9)
+        kicker.add_theme_color_override("font_color", ui_tokens.text_tertiary)
+        labels.add_child(kicker)
+
     var title := Label.new()
-    title.text = String(video.get("name", path.get_file()))
+    title.text = String(video.get("name", String(video.get("path", "")).get_file()))
     title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    title.clip_text = true
-    title.add_theme_font_size_override("font_size", 17)
-    title.add_theme_color_override("font_color", Color.WHITE)
+    title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    title.max_lines_visible = 2
+    title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+    title.custom_minimum_size = Vector2(0, 42 if compact else 34)
+    title.add_theme_font_override("font", _game_title_font())
+    title.add_theme_font_size_override("font_size", 16 if compact else 15)
+    title.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title)
 
+    if not compact:
+        var spacer := Control.new()
+        spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+        labels.add_child(spacer)
+
     var sub := Label.new()
-    sub.text = detail
+    sub.text = "%s  /  %s" % [_t("nav.videos"), detail] if compact else detail
     sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
     sub.clip_text = true
-    sub.add_theme_font_size_override("font_size", 13)
-    sub.add_theme_color_override("font_color", Color(1, 1, 1, 0.72))
+    sub.add_theme_font_size_override("font_size", 12 if compact else 11)
+    sub.add_theme_color_override("font_color", ui_tokens.text_secondary)
     labels.add_child(sub)
-
-    ui_motion.bind_lift(button)
-
-    var remove := _icon_action_button(
-        ICON_DELETE,
-        _t("video.remove"),
-        func(): _confirm_remove_video(captured),
-        false,
-        true,
-        48.0
-    )
-    remove.anchor_left = 1.0
-    remove.anchor_right = 1.0
-    remove.offset_left = -60.0
-    remove.offset_top = 12.0
-    remove.offset_right = -12.0
-    remove.offset_bottom = 60.0
-    remove.custom_minimum_size = Vector2(48, 48)
-    card.add_child(remove)
-    return card
 
 func _confirm_remove_video(video: Dictionary) -> void:
     var path := String(video.get("path", ""))
@@ -6347,12 +7062,8 @@ func _confirm_remove_video(video: Dictionary) -> void:
     dim.set_anchors_preset(Control.PRESET_FULL_RECT)
     modal_layer.add_child(dim)
     var dialog := PanelContainer.new()
-    dialog.anchor_left = 0.5
-    dialog.anchor_top = 0.5
-    dialog.anchor_right = 0.5
-    dialog.anchor_bottom = 0.5
-    dialog.position = Vector2(-280, -140)
-    dialog.size = Vector2(560, 280)
+    _mark_centered_safe_dialog(dialog, Vector2(560, 280))
+    _layout_safe_dialog(dialog, _ui_safe_rect(get_viewport_rect().size))
     dialog.add_theme_stylebox_override("panel", _panel_style(20, color_card, Color(0, 0, 0, 0.06), 1))
     modal_layer.add_child(dialog)
     var box := VBoxContainer.new()
@@ -6411,6 +7122,7 @@ func _save_video_progress_file() -> void:
     var file := FileAccess.open(VIDEO_PROGRESS_FILE, FileAccess.WRITE)
     if file != null:
         file.store_string(JSON.stringify(video_progress_data))
+        file.flush()
 
 func _store_active_video_progress(finished: bool = false) -> void:
     if active_video_path.is_empty():
@@ -6445,6 +7157,7 @@ func _open_video_player_after_iap(video: Dictionary) -> void:
     active_video_path = path
     active_video_duration = 0.0
     active_video_state = {}
+    video_pending_resume_position = 0.0
     _reset_video_seek_gesture()
     active_video_end_handled = false
     active_video_was_playing = false
@@ -6468,7 +7181,10 @@ func _open_video_player_after_iap(video: Dictionary) -> void:
     var resume: Dictionary = video_progress_data.get(path, {})
     var resume_position := float(resume.get("position", 0.0))
     if resume_position > 2.0:
-        player.media_seek(resume_position)
+        # The native player initially reports a zero duration, so seeking in
+        # this frame would be clamped back to the beginning. Defer the seek
+        # until media metadata reports a seekable stream and a valid duration.
+        video_pending_resume_position = resume_position
     _sync_video_play_button(MEDIA_STATUS_PLAYING)
 
 func _close_video_player() -> void:
@@ -6481,6 +7197,7 @@ func _close_video_player() -> void:
     video_playing = false
     active_video_path = ""
     active_video_state = {}
+    video_pending_resume_position = 0.0
     active_subtitle_tracks.clear()
     active_subtitle_cues.clear()
     video_texture.texture = null
@@ -6495,7 +7212,7 @@ func _close_video_player() -> void:
     video_view.visible = false
     shell_root.visible = true
     Input.mouse_mode = video_previous_mouse_mode
-    _show_home()
+    _show_video_library()
 
 func _sync_video_play_button(status: int) -> void:
     if not is_instance_valid(video_play_button):
@@ -6941,20 +7658,12 @@ func _remove_game(path: String) -> void:
 
 func _game_card(game: Dictionary) -> Button:
     var button := Button.new()
-    button.custom_minimum_size = Vector2(HOME_TILE_MIN_WIDTH, HOME_ROW_HEIGHT if home_compact_layout else HOME_TILE_HEIGHT)
+    button.custom_minimum_size = _home_card_minimum_size(home_compact_layout)
     button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     button.clip_contents = true
     button.focus_mode = Control.FOCUS_ALL
     button.text = ""
-    if home_compact_layout:
-        button.add_theme_stylebox_override("normal", ui_tokens.panel(ui_tokens.surface, 8))
-        button.add_theme_stylebox_override("hover", ui_tokens.panel(ui_tokens.surface_raised, 8))
-        button.add_theme_stylebox_override("pressed", ui_tokens.panel(ui_tokens.surface_hover, 8))
-    else:
-        button.add_theme_stylebox_override("normal", ui_tokens.card_style())
-        button.add_theme_stylebox_override("hover", ui_tokens.card_style(true))
-        button.add_theme_stylebox_override("pressed", ui_tokens.card_style(true, true))
-    button.add_theme_stylebox_override("focus", ui_tokens.focus_style())
+    _style_home_card_button(button, home_compact_layout)
     button.set_meta("game_path", String(game.get("path", "")))
     button.pressed.connect(func(): _open_game_detail_with_iap(game, button))
 
@@ -6965,6 +7674,20 @@ func _game_card(game: Dictionary) -> Button:
         var hover_affordance := _build_desktop_game_card(button, game)
         ui_motion.bind_lift(button, hover_affordance, 0.42, 1.0)
     return button
+
+func _home_card_minimum_size(compact: bool) -> Vector2:
+    return Vector2(HOME_TILE_MIN_WIDTH, HOME_ROW_HEIGHT if compact else HOME_TILE_HEIGHT)
+
+func _style_home_card_button(button: Button, compact: bool) -> void:
+    if compact:
+        button.add_theme_stylebox_override("normal", ui_tokens.panel(ui_tokens.surface, 8))
+        button.add_theme_stylebox_override("hover", ui_tokens.panel(ui_tokens.surface_raised, 8))
+        button.add_theme_stylebox_override("pressed", ui_tokens.panel(ui_tokens.surface_hover, 8))
+    else:
+        button.add_theme_stylebox_override("normal", ui_tokens.card_style())
+        button.add_theme_stylebox_override("hover", ui_tokens.card_style(true))
+        button.add_theme_stylebox_override("pressed", ui_tokens.card_style(true, true))
+    button.add_theme_stylebox_override("focus", ui_tokens.focus_style())
 
 func _build_desktop_game_card(button: Button, game: Dictionary) -> CanvasItem:
     var content_margin := MarginContainer.new()
@@ -7096,7 +7819,7 @@ func _populate_game_card_metadata(metadata: PanelContainer, game: Dictionary, co
     title.max_lines_visible = 2
     title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
     title.custom_minimum_size = Vector2(0, 42 if compact else 34)
-    title.add_theme_font_override("font", DISPLAY_FONT)
+    title.add_theme_font_override("font", _game_title_font())
     title.add_theme_font_size_override("font_size", 16 if compact else 15)
     title.add_theme_color_override("font_color", ui_tokens.text_primary)
     labels.add_child(title)
@@ -7309,18 +8032,10 @@ func _begin_launch_transition() -> void:
         return
     if launch_transition_tween != null and launch_transition_tween.is_valid():
         launch_transition_tween.kill()
-    shell_root.visible = true
-    shell_root.modulate.a = 1.0
-    shell_root.scale = Vector2.ONE
-    shell_root.pivot_offset = shell_root.size * 0.5
-    shell_root.move_to_front()
-    if ui_motion.reduced_motion:
-        _finish_launch_transition()
-        return
-    launch_transition_tween = shell_root.create_tween().set_parallel(true)
-    launch_transition_tween.tween_property(shell_root, "modulate:a", 0.0, 0.20).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN)
-    launch_transition_tween.tween_property(shell_root, "scale", Vector2(0.96, 0.96), 0.24).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN)
-    launch_transition_tween.chain().tween_callback(_finish_launch_transition)
+    # The loading overlay already owns the transition. Scaling the complete
+    # shell after the game background turns black exposes a mixed frame made of
+    # the sidebar, detail page, game viewport, and diagnostics overlay.
+    _finish_launch_transition()
 
 func _finish_launch_transition() -> void:
     launch_transition_tween = null
@@ -7360,6 +8075,7 @@ func _start_selected_game_after_iap() -> void:
             _t("alert.warning_title")
         )
         return
+    _set_game_runtime_orientation(true)
     var played_game := _mark_game_played(library_path)
     if not played_game.is_empty():
         selected_game = played_game
@@ -7371,13 +8087,18 @@ func _start_selected_game_after_iap() -> void:
     viewport.visible = true
     viewport.move_to_front()
     game_view.visible = true
-    _show_loading_overlay()
-    _set_perf_visible(show_perf_monitor)
+    # Publish a fully composed loading frame before the asynchronous runtime can
+    # expose its black/empty first surface. Diagnostics stay hidden until the
+    # first successful game frame replaces this overlay.
+    _set_perf_visible(false)
+    _show_loading_overlay(true)
     restart_notice.visible = true
     _on_open_game()
     if game_running:
         _begin_launch_transition()
     else:
+        _hide_loading_overlay()
+        _set_game_runtime_orientation(false)
         _set_game_background(false)
         viewport.visible = false
         game_view.visible = false
@@ -7919,7 +8640,7 @@ func _show_android_storage_permission_prompt(
     message_key: String = "message.android_storage_permission_required"
 ) -> void:
     var dialog := _modal_dialog(Vector2(640, 320), 0.46)
-    var box := _modal_stack(dialog, "AetherKiri", ICON_LIBRARY)
+    var box := _modal_stack(dialog, APP_DISPLAY_NAME, ICON_LIBRARY)
     var body := Label.new()
     body.text = _t(message_key)
     body.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -8912,6 +9633,8 @@ func _process_video_playback(delta: float) -> void:
     if duration > 0.0:
         active_video_duration = duration
         video_progress_slider.max_value = duration
+    if _apply_pending_video_resume(state):
+        position = float(state.get("position", position))
     if not active_video_scrubbing:
         video_progress_slider.value = clampf(position, 0.0, maxf(1.0, active_video_duration))
     if not video_seek_gesture_active:
@@ -8937,6 +9660,22 @@ func _process_video_playback(delta: float) -> void:
         video_progress_save_accum = 0.0
         _store_active_video_progress()
     _process_video_controls(delta)
+
+func _apply_pending_video_resume(state: Dictionary) -> bool:
+    if video_pending_resume_position <= 2.0 or player == null:
+        return false
+    var duration := float(state.get("duration", 0.0))
+    if duration <= 0.0 or not bool(state.get("seekable", false)):
+        return false
+    var target := clampf(video_pending_resume_position, 0.0, duration)
+    if int(player.media_seek(target)) != ENGINE_RESULT_OK:
+        return false
+    video_pending_resume_position = 0.0
+    state["position"] = target
+    active_video_state = state
+    if video_progress_slider != null:
+        video_progress_slider.value = target
+    return true
 
 func _process(delta: float) -> void:
     _fit_full_rects()
@@ -8966,7 +9705,12 @@ func _process(delta: float) -> void:
             startup_state = cached_startup_state
         if startup_state == STARTUP_SUCCEEDED:
             restart_notice.text = ""
-            _hide_loading_overlay()
+            if loading_panel != null and loading_panel.visible:
+                _hide_loading_overlay(func():
+                    _set_perf_visible(game_running and show_perf_monitor)
+                )
+            else:
+                _set_perf_visible(show_perf_monitor)
             _flush_pending_touch_press_if_ready()
             tick_trace_serial += 1
             tick_trace_active_serial = tick_trace_serial
@@ -9266,6 +10010,8 @@ func _log_input_trace(delta: float, tick_ms: float, update_ms: float) -> void:
 func _notification(what: int) -> void:
     if what == NOTIFICATION_RESIZED:
         _fit_full_rects()
+        _queue_settings_relayout_after_resize()
+        _queue_detail_relayout_after_resize()
         return
     if player == null:
         return
@@ -10258,6 +11004,95 @@ func _handle_video_player_input(event: InputEvent) -> bool:
         return true
     return false
 
+func _reset_mobile_edge_back_gesture() -> void:
+    mobile_edge_back_touch_index = -1
+    mobile_edge_back_start = Vector2.ZERO
+    mobile_edge_back_last = Vector2.ZERO
+    mobile_edge_back_cancelled = false
+
+func _mobile_edge_back_available() -> bool:
+    if not _mobile_runtime() or game_running or video_playing:
+        return false
+    if shell_root == null or not shell_root.visible:
+        return false
+    if modal_layer != null and modal_layer.visible:
+        # The mandatory first-use documents cannot be bypassed by a gesture.
+        return _next_required_legal_document().is_empty()
+    return shell_route in ["detail", "settings"]
+
+func _edge_back_gesture_qualified(
+    start: Vector2,
+    finish: Vector2,
+    available_width: float,
+    cancelled: bool = false
+) -> bool:
+    if cancelled:
+        return false
+    var delta := finish - start
+    var trigger_distance := clampf(
+        available_width * 0.18,
+        MOBILE_EDGE_BACK_MIN_TRIGGER_DISTANCE,
+        110.0
+    )
+    return delta.x >= trigger_distance and delta.x > absf(delta.y) * 1.25
+
+func _perform_mobile_shell_back() -> bool:
+    if modal_layer != null and modal_layer.visible:
+        _dismiss_modal()
+        return true
+    if shell_route == "detail":
+        _show_library("game")
+        return true
+    if shell_route == "settings":
+        _show_library(home_library_mode)
+        return true
+    return false
+
+func _handle_mobile_edge_back_input(event: InputEvent) -> bool:
+    if not _mobile_edge_back_available():
+        _reset_mobile_edge_back_gesture()
+        return false
+    var safe_rect := _ui_safe_rect(get_viewport_rect().size)
+    var start_width := minf(
+        MOBILE_EDGE_BACK_MAX_START_WIDTH,
+        maxf(24.0, safe_rect.size.x * 0.075)
+    )
+    if event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        if touch.pressed:
+            if mobile_edge_back_touch_index >= 0:
+                return false
+            if touch.position.x > safe_rect.position.x + start_width:
+                return false
+            mobile_edge_back_touch_index = touch.index
+            mobile_edge_back_start = touch.position
+            mobile_edge_back_last = touch.position
+            mobile_edge_back_cancelled = false
+            return true
+        if touch.index != mobile_edge_back_touch_index:
+            return false
+        mobile_edge_back_last = touch.position
+        var qualified := _edge_back_gesture_qualified(
+            mobile_edge_back_start,
+            mobile_edge_back_last,
+            safe_rect.size.x,
+            mobile_edge_back_cancelled
+        )
+        _reset_mobile_edge_back_gesture()
+        if qualified:
+            _perform_mobile_shell_back()
+        return true
+    if event is InputEventScreenDrag:
+        var drag := event as InputEventScreenDrag
+        if drag.index != mobile_edge_back_touch_index:
+            return false
+        mobile_edge_back_last = drag.position
+        var delta := mobile_edge_back_last - mobile_edge_back_start
+        if absf(delta.y) > maxf(48.0, absf(delta.x) * 1.1):
+            mobile_edge_back_cancelled = true
+        return true
+    return false
+
 func _input(event: InputEvent) -> void:
     if event is InputEventKey:
         var shell_key := event as InputEventKey
@@ -10327,6 +11162,10 @@ func _input(event: InputEvent) -> void:
             get_viewport().set_input_as_handled()
             return
 
+    if _handle_mobile_edge_back_input(event):
+        get_viewport().set_input_as_handled()
+        return
+
     if _handle_shell_scroll_input(event):
         get_viewport().set_input_as_handled()
         return
@@ -10362,7 +11201,7 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
 
     if event is InputEventScreenDrag:
         var drag := event as InputEventScreenDrag
-        return _update_shell_scroll_drag(drag.index, drag.position, drag.relative)
+        return _update_shell_scroll_drag(drag.index, drag.position, drag.relative, drag.velocity.y)
 
     if event is InputEventPanGesture:
         var pan := event as InputEventPanGesture
@@ -10388,11 +11227,26 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
         if mouse_button.button_index != MOUSE_BUTTON_LEFT:
             return false
         if mouse_button.pressed:
+            # Preserve native scrollbar interaction. Starting the shell's
+            # click-and-drag scrolling here steals the thumb drag before the
+            # ScrollBar can process it, which makes fast navigation impossible.
+            var pointer_control := _control_at_pointer(mouse_button.position)
+            if pointer_control != null and _is_scroll_bar_control(pointer_control):
+                shell_scroll_drag_states.erase(SHELL_SCROLL_MOUSE_KEY)
+                var native_scroll := _find_shell_scroll_at_position(mouse_button.position)
+                if native_scroll != null:
+                    _stop_shell_scroll_tween(native_scroll)
+                return false
             _start_shell_scroll_drag(SHELL_SCROLL_MOUSE_KEY, mouse_button.position)
             return false
         return _finish_shell_scroll_drag(SHELL_SCROLL_MOUSE_KEY)
 
     if event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+        # A mouse drag must have started as a shell-content drag. In particular,
+        # do not lazily create one after a native scrollbar thumb captured the
+        # initial press.
+        if not shell_scroll_drag_states.has(SHELL_SCROLL_MOUSE_KEY):
+            return false
         var motion := event as InputEventMouseMotion
         return _update_shell_scroll_drag(SHELL_SCROLL_MOUSE_KEY, motion.position, motion.relative)
 
