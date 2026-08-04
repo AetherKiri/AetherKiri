@@ -1154,14 +1154,15 @@ bool HazardTrackedBlendBarriersEnabled() {
 bool DeferredGodotGpuDrainEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_GODOT_DEFER_GPU_DRAIN");
-        // A complete Artemis frame can contain hundreds of ordered compute
-        // operations. Submitting every operation in its own compute list
-        // drops voice-driven E-mote scenes below their authored 60 Hz cadence
-        // on Metal. Queue render-thread operations until the frame flush so
-        // their order and barriers are preserved in one compute list. Keep a
-        // runtime opt-out for regression diagnosis.
-        return value == nullptr || value[0] == '\0' ||
-               std::strcmp(value, "0") != 0;
+        // Deferring operations created on Godot's render thread lets a clear
+        // become visible before the following blends during fast page
+        // transitions on Metal.  Execute those operations immediately by
+        // default; the old batched behavior remains available for profiling
+        // with AETHERKIRI_GODOT_DEFER_GPU_DRAIN=1.
+        if (value == nullptr || value[0] == '\0') {
+            return TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT;
+        }
+        return std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }

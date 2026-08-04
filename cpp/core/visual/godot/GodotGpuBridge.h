@@ -6,6 +6,10 @@
 struct tTVPRect;
 struct tTVPPointD;
 
+// Texture synchronization on the producer side and queue execution in the
+// Godot bridge must agree on the unset environment-variable behavior.
+constexpr bool TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT = false;
+
 struct TVPGodotGpuBridgeCallbacks {
     uint64_t (*create_rgba)(uint32_t width, uint32_t height,
                             const void *pixels, uint32_t stride_bytes);

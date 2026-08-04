@@ -22,12 +22,18 @@ struct TriangleDrawCall {
     uint32_t blend_mode = 0;
 };
 
+enum class GpuCall {
+    Flush,
+    Blend,
+};
+
 TriangleDrawCall g_triangle_draw_call;
 int g_blend_rect_calls = 0;
 uint64_t g_next_texture_handle = 1;
 uint64_t g_next_readback_handle = 101;
 uint64_t g_last_discarded_readback = 0;
 bool g_readback_ready = false;
+std::vector<GpuCall> g_gpu_calls;
 
 uint64_t CreateTestTexture(uint32_t, uint32_t, const void *, uint32_t) {
     return g_next_texture_handle++;
@@ -86,7 +92,13 @@ bool DrawTestTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
 
 bool BlendTestRect(uint64_t, uint64_t, const tTVPRect *, const tTVPRect *,
                    uint32_t, int, uint32_t) {
+    g_gpu_calls.push_back(GpuCall::Blend);
     ++g_blend_rect_calls;
+    return true;
+}
+
+bool FlushTestGpu() {
+    g_gpu_calls.push_back(GpuCall::Flush);
     return true;
 }
 
@@ -99,6 +111,7 @@ public:
         g_next_readback_handle = 101;
         g_last_discarded_readback = 0;
         g_readback_ready = false;
+        g_gpu_calls.clear();
         TVPGodotGpuBridgeCallbacks callbacks{};
         callbacks.create_rgba = CreateTestTexture;
         callbacks.release_texture = ReleaseTestTexture;
@@ -108,6 +121,7 @@ public:
         callbacks.begin_read_rgba = BeginTestReadback;
         callbacks.poll_read_rgba = PollTestReadback;
         callbacks.discard_read_rgba = DiscardTestReadback;
+        callbacks.flush = FlushTestGpu;
         TVPGodotGpuBridgeRegister(&callbacks);
     }
 
@@ -170,6 +184,31 @@ TEST_CASE("Godot nearest scaled alpha uses the software sampler") {
         method, &dst, &dst, tTVPRect(0, 0, 256, 256),
         tRenderTexRectArray(&source_element, 1));
     CHECK(g_blend_rect_calls == 1);
+}
+
+TEST_CASE("Godot immediate GPU drain flushes pending alpha sources") {
+    TestGpuBridge bridge;
+    std::vector<std::uint8_t> pixels(256u * 256u * 4u, 0xffu);
+    GodotTexture2D src(pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    GodotTexture2D dst(pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    REQUIRE(src.EnsureGpuHandle());
+    REQUIRE(dst.EnsureGpuHandle());
+    src.MarkGpuDirty();
+
+    GodotRenderManager manager;
+    iTVPRenderMethod *method = manager.GetRenderMethod("AlphaBlend_d");
+    tRenderTexRectArray::Element source_element(
+        &src, tTVPRect(0, 0, 256, 256));
+
+    manager.OperateRect(
+        method, &dst, &dst, tTVPRect(0, 0, 256, 256),
+        tRenderTexRectArray(&source_element, 1));
+
+    REQUIRE(g_gpu_calls.size() == 2);
+    CHECK(g_gpu_calls[0] == GpuCall::Flush);
+    CHECK(g_gpu_calls[1] == GpuCall::Blend);
 }
 
 TEST_CASE("Godot textures expose Gray province pixels") {
