@@ -947,6 +947,53 @@ TEST_CASE("motionplayer maps parameter values across the authored clip span") {
     }
 }
 
+TEST_CASE("motionplayer tessellates nested surfaces before inherited Bezier deformation") {
+    motion::detail::PlayerRuntime::PreparedRenderItem item;
+    item.meshType = 0;
+    item.corners = {
+        10.0f, 20.0f,
+        110.0f, 10.0f,
+        130.0f, 90.0f,
+        0.0f, 100.0f,
+    };
+
+    REQUIRE(motion::detail::tessellatePreparedItemForExternalMesh(
+        item, 1.0, 4));
+    CHECK(item.meshType == 2);
+    CHECK(item.meshDivX == 3);
+    CHECK(item.meshDivY == 3);
+    REQUIRE(item.meshPoints.size() == 18);
+
+    CHECK(item.meshPoints[0] == Catch::Approx(10.0f));
+    CHECK(item.meshPoints[1] == Catch::Approx(20.0f));
+    CHECK(item.meshPoints[8] == Catch::Approx(62.5f));
+    CHECK(item.meshPoints[9] == Catch::Approx(55.0f));
+    CHECK(item.meshPoints[16] == Catch::Approx(130.0f));
+    CHECK(item.meshPoints[17] == Catch::Approx(90.0f));
+
+    const auto stablePoints = item.meshPoints;
+    CHECK_FALSE(motion::detail::tessellatePreparedItemForExternalMesh(
+        item, 1.0, 4));
+    CHECK(item.meshPoints == stablePoints);
+
+    motion::detail::PlayerRuntime::PreparedRenderItem degenerate;
+    degenerate.corners.fill(12.0f);
+    CHECK_FALSE(motion::detail::tessellatePreparedItemForExternalMesh(
+        degenerate, 1.0, 4));
+    CHECK(degenerate.meshPoints.empty());
+    CHECK(degenerate.meshType == 0);
+}
+
+TEST_CASE("motionplayer buffers equal-Z E-mote layers in native reverse order") {
+    constexpr std::size_t nodeCount = 6;
+    std::array<std::size_t, nodeCount> order{};
+    for(std::size_t position = 0; position < nodeCount; ++position) {
+        order[position] = motion::detail::nativeLayerBufferNodeIndex(
+            nodeCount, position);
+    }
+    CHECK(order == (std::array<std::size_t, nodeCount>{5, 4, 3, 2, 1, 0}));
+}
+
 TEST_CASE("motionplayer parses and combines E-mote secondary-motion meshes") {
     const auto &identity = motion::internal::identityMeshControlPoints();
     std::array<float, 32> up = identity;

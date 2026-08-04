@@ -639,6 +639,93 @@ namespace motion::detail {
         }
     };
 
+    inline std::size_t nativeLayerBufferNodeIndex(
+        std::size_t nodeCount,
+        std::size_t bufferPosition) {
+        return nodeCount - bufferPosition - 1;
+    }
+
+    inline bool tessellatePreparedItemForExternalMesh(
+        PlayerRuntime::PreparedRenderItem &entry,
+        double meshDivisionRatio,
+        int meshDivision) {
+        if(!entry.meshPoints.empty() || entry.meshType != 0) {
+            return false;
+        }
+
+        float minX = entry.corners[0];
+        float maxX = entry.corners[0];
+        float minY = entry.corners[1];
+        float maxY = entry.corners[1];
+        for(std::size_t point = 2;
+            point + 1 < entry.corners.size(); point += 2) {
+            minX = std::min(minX, entry.corners[point]);
+            maxX = std::max(maxX, entry.corners[point]);
+            minY = std::min(minY, entry.corners[point + 1]);
+            maxY = std::max(maxY, entry.corners[point + 1]);
+        }
+        if(!std::isfinite(minX) || !std::isfinite(maxX) ||
+           !std::isfinite(minY) || !std::isfinite(maxY) ||
+           maxX - minX <= 1e-5f || maxY - minY <= 1e-5f) {
+            return false;
+        }
+
+        // libartemis MMotionPlayer::StepFrameMeshChain first expands an
+        // affine child surface into a stable grid whenever a parent Bezier
+        // patch exists. It then transforms every grid vertex through that
+        // patch. Keeping this topology stable even while the patch happens to
+        // be affine avoids a one-frame topology change at blink boundaries.
+        const int divisionTotal = std::clamp(static_cast<int>(
+            meshDivisionRatio * static_cast<double>(std::max(1, meshDivision))),
+            2, 50);
+        const double width = 0.5 * (
+            std::hypot(entry.corners[2] - entry.corners[0],
+                       entry.corners[3] - entry.corners[1]) +
+            std::hypot(entry.corners[4] - entry.corners[6],
+                       entry.corners[5] - entry.corners[7]));
+        const double height = 0.5 * (
+            std::hypot(entry.corners[6] - entry.corners[0],
+                       entry.corners[7] - entry.corners[1]) +
+            std::hypot(entry.corners[4] - entry.corners[2],
+                       entry.corners[5] - entry.corners[3]));
+        const double extent = width + height;
+        int xSegments = extent > 0.0001
+            ? static_cast<int>(
+                  static_cast<double>(divisionTotal) * width / extent)
+            : divisionTotal / 2;
+        xSegments = std::clamp(xSegments, 1, divisionTotal - 1);
+        const int ySegments = divisionTotal - xSegments;
+
+        entry.meshDivX = xSegments + 1;
+        entry.meshDivY = ySegments + 1;
+        entry.meshType = 2;
+        entry.meshPoints.resize(static_cast<std::size_t>(
+            entry.meshDivX * entry.meshDivY * 2));
+        for(int y = 0; y < entry.meshDivY; ++y) {
+            const float v = static_cast<float>(y) /
+                static_cast<float>(entry.meshDivY - 1);
+            for(int x = 0; x < entry.meshDivX; ++x) {
+                const float u = static_cast<float>(x) /
+                    static_cast<float>(entry.meshDivX - 1);
+                const float topX =
+                    entry.corners[0] * (1.f - u) + entry.corners[2] * u;
+                const float topY =
+                    entry.corners[1] * (1.f - u) + entry.corners[3] * u;
+                const float bottomX =
+                    entry.corners[6] * (1.f - u) + entry.corners[4] * u;
+                const float bottomY =
+                    entry.corners[7] * (1.f - u) + entry.corners[5] * u;
+                const std::size_t offset = static_cast<std::size_t>(
+                    (y * entry.meshDivX + x) * 2);
+                entry.meshPoints[offset] =
+                    topX * (1.f - v) + bottomX * v;
+                entry.meshPoints[offset + 1] =
+                    topY * (1.f - v) + bottomY * v;
+            }
+        }
+        return true;
+    }
+
     std::shared_ptr<PlayerRuntime> makePlayerRuntime();
     const MotionClip *findMotionClip(const MotionSnapshot &snapshot,
                                      const std::string &owner,

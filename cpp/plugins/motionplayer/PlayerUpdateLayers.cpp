@@ -4383,7 +4383,17 @@ namespace motion {
             }
         }
 
-        for(size_t i = 0; i < nodes.size(); ++i) {
+        // MMotionPlayer::BuildLayerTreeIn (compatible-v2 0x6B26D0) builds the
+        // flat layer array in pre-order. BufferLayerFrameInfoIn (0x6BB690)
+        // then walks that array from the last entry to the first before the
+        // render manager assigns equal-Z frame ids. Preserve that native
+        // buffer order here: E-mote deliberately authors foreground parent
+        // artwork (for example the lower eyelid in `mabuta`) before the eye
+        // contents it must cover.
+        for(size_t bufferPosition = 0;
+            bufferPosition < nodes.size(); ++bufferPosition) {
+            const size_t i = detail::nativeLayerBufferNodeIndex(
+                nodes.size(), bufferPosition);
             const auto &node = nodes[i];
             if(!node.accumulated.active) {
                 ++skipInactive;
@@ -5061,12 +5071,21 @@ namespace motion {
                         continue;
                     }
 
-                    // Preserve authored child tessellation when present. For
-                    // an affine child leaf, deforming its four corners through
-                    // the external patch produces the same local head/face
-                    // orientation while retaining the renderer's fast affine
-                    // path; manufacturing a mesh for every eye/mouth fragment
-                    // multiplies hundreds of tiny GPU submissions per frame.
+                    // Native StepFrameMeshChain keeps an affine child Player
+                    // surface tessellated for the entire lifetime of an
+                    // inherited Bezier patch, then deforms every vertex. Four
+                    // corners cannot carry the eyelid curve to nested iris and
+                    // eye-white layers, and changing topology only after the
+                    // curve becomes nonlinear causes a blink-boundary flash.
+                    const auto &divisionNode =
+                        _runtime->nodes[meshChain.front()];
+                    detail::tessellatePreparedItemForExternalMesh(
+                        entry, _emoteMeshDivisionRatio,
+                        divisionNode.meshDivision);
+
+                    // Preserve authored child tessellation when present and
+                    // the compatibility grid manufactured above when the
+                    // external patch cannot be represented by four corners.
                     for(size_t point = 0;
                         point + 1 < entry.meshPoints.size(); point += 2) {
                         deformPoint(entry.meshPoints[point],
@@ -5342,10 +5361,9 @@ namespace motion {
                 }
             };
 
-        // Merge later siblings first. Child entries receive remapped indices;
-        // if an earlier sibling is merged first, those large child-local
-        // indices can be mistaken for parent indices by the next insertion and
-        // place later children behind a full-screen earlier child.
+        // Native BufferLayerFrameInfoIn walks containing nodes in reverse and
+        // recursively emits a nodeType-3/4 child's buffer at that node's slot.
+        // Process later parent slots first to retain the same recursive order.
         std::stable_sort(
             pendingChildItems.begin(), pendingChildItems.end(),
             [](const PendingChildRenderItems &lhs,
@@ -5439,7 +5457,12 @@ namespace motion {
             auto insertPos = _runtime->preparedRenderItems.end();
             for(auto it = _runtime->preparedRenderItems.begin();
                 it != _runtime->preparedRenderItems.end(); ++it) {
-                if(it->nodeIndex > pending.parentNodeIndex) {
+                // Child node indices are remapped into the containing numeric
+                // namespace. Only a local-scope item can delimit the native
+                // parent slot; otherwise an already-inserted child's large
+                // index would move the next sibling to the wrong side.
+                if(it->renderScopeId == localRenderScopeId &&
+                   it->nodeIndex < pending.parentNodeIndex) {
                     insertPos = it;
                     break;
                 }
