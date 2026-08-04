@@ -11,6 +11,11 @@ endif ()
 add_compile_definitions(
         $<$<CONFIG:Debug>:DEBUG>
         $<$<CONFIG:Debug>:_DEBUG>   # 对于 MSVC 兼容性
+        # Artemis is an internal preview.  Keep the capability tied to the
+        # actual Debug configuration instead of a user-overridable cache
+        # option so Release/RelWithDebInfo/MinSizeRel products cannot enable
+        # it accidentally.
+        $<$<CONFIG:Debug>:AETHERKIRI_ENABLE_ARTEMIS_RUNTIME>
         $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
 )
 
@@ -114,6 +119,7 @@ if(AETHERKIRI_ENABLE_INTERNAL)
            NOT COMMAND aetherinternal_extend_psbfile OR
            NOT COMMAND aetherinternal_extend_legacy_plugins OR
            NOT COMMAND aetherinternal_extend_live2d OR
+           NOT COMMAND aetherinternal_extend_artemis OR
            NOT COMMAND aetherinternal_extend_krkr2plugin OR
            NOT COMMAND aetherinternal_extend_krkr2plugin_tests)
             message(FATAL_ERROR

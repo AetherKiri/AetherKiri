@@ -973,6 +973,57 @@ tjs_int TVPRepairShiftedNumberedMovieMappings(
     return static_cast<tjs_int>(corrections.size());
 }
 
+bool TVPPatchAffineSourceMotionStorageFallback(ttstr &script) {
+    ttstr patched(script);
+
+    // Some titles feed the regular AffineSourceMotion path while packaging
+    // only D3D-prefixed E-mote PSBs. Resolve the physical storage name without
+    // changing _innerStorage, which remains the title's logical identity.
+    // AffineSourceMotion has no _useD3D member, so the safe discriminator is
+    // whether the logical resource itself exists.
+    patched.Replace(
+        TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
+              "\t\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\t\t_motion_manager.unload(s);\r\n"
+              "\t\t\t\t\t}\r\n"),
+        TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
+              "\t\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\t\tvar unloadStorage = s;\r\n"
+              "\t\t\t\t\t\tif (!Storages.isExistentStorage(unloadStorage)) {\r\n"
+              "\t\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + unloadStorage)) unloadStorage = \"dx_\" + unloadStorage;\r\n"
+              "\t\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + unloadStorage)) unloadStorage = \"dxlow_\" + unloadStorage;\r\n"
+              "\t\t\t\t\t\t}\r\n"
+              "\t\t\t\t\t\t_motion_manager.unload(unloadStorage);\r\n"
+              "\t\t\t\t\t}\r\n"),
+        false);
+    patched.Replace(
+        TJS_W("\t\t\t\tvar s = create[i];\r\n"
+              "\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\tif (!Storages.isExistentStorage(s)) {\r\n"
+              "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
+              "\t\t\t\t\t} else {\r\n"
+              "\t\t\t\t\t\ttry {\r\n"
+              "\t\t\t\t\t\t\tvar obj = _motion_manager.load(s);\r\n"),
+        TJS_W("\t\t\t\tvar s = create[i];\r\n"
+              "\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\tvar loadStorage = s;\r\n"
+              "\t\t\t\t\tif (!Storages.isExistentStorage(loadStorage)) {\r\n"
+              "\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + loadStorage)) loadStorage = \"dx_\" + loadStorage;\r\n"
+              "\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + loadStorage)) loadStorage = \"dxlow_\" + loadStorage;\r\n"
+              "\t\t\t\t\t}\r\n"
+              "\t\t\t\t\tif (!Storages.isExistentStorage(loadStorage)) {\r\n"
+              "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
+              "\t\t\t\t\t} else {\r\n"
+              "\t\t\t\t\t\ttry {\r\n"
+              "\t\t\t\t\t\t\tvar obj = _motion_manager.load(loadStorage);\r\n"),
+        false);
+
+    if(patched == script)
+        return false;
+    script = patched;
+    return true;
+}
+
 static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                                                ttstr &buffer) {
     const ttstr lower = shortname.AsLowerCase();
@@ -1131,49 +1182,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
     }
 
     if(lower == TJS_W("affinesourcemotion.tjs")) {
-        ttstr patched(buffer);
-        // Some titles feed the regular AffineSourceMotion path while D3D
-        // motion is enabled, but package only the D3D-prefixed E-mote PSBs.
-        // Resolve the physical storage name without changing _innerStorage,
-        // which remains the title's logical (unprefixed) resource identity.
-        patched.Replace(
-            TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
-                  "\t\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\t\t_motion_manager.unload(s);\r\n"
-                  "\t\t\t\t\t}\r\n"),
-            TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
-                  "\t\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\t\tvar unloadStorage = s;\r\n"
-                  "\t\t\t\t\t\tif (_useD3D && !Storages.isExistentStorage(unloadStorage)) {\r\n"
-                  "\t\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + unloadStorage)) unloadStorage = \"dx_\" + unloadStorage;\r\n"
-                  "\t\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + unloadStorage)) unloadStorage = \"dxlow_\" + unloadStorage;\r\n"
-                  "\t\t\t\t\t\t}\r\n"
-                  "\t\t\t\t\t\t_motion_manager.unload(unloadStorage);\r\n"
-                  "\t\t\t\t\t}\r\n"),
-            false);
-        patched.Replace(
-            TJS_W("\t\t\t\tvar s = create[i];\r\n"
-                  "\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\tif (!Storages.isExistentStorage(s)) {\r\n"
-                  "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
-                  "\t\t\t\t\t} else {\r\n"
-                  "\t\t\t\t\t\ttry {\r\n"
-                  "\t\t\t\t\t\t\tvar obj = _motion_manager.load(s);\r\n"),
-            TJS_W("\t\t\t\tvar s = create[i];\r\n"
-                  "\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\tvar loadStorage = s;\r\n"
-                  "\t\t\t\t\tif (_useD3D && !Storages.isExistentStorage(loadStorage)) {\r\n"
-                  "\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + loadStorage)) loadStorage = \"dx_\" + loadStorage;\r\n"
-                  "\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + loadStorage)) loadStorage = \"dxlow_\" + loadStorage;\r\n"
-                  "\t\t\t\t\t}\r\n"
-                  "\t\t\t\t\tif (!Storages.isExistentStorage(loadStorage)) {\r\n"
-                  "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
-                  "\t\t\t\t\t} else {\r\n"
-                  "\t\t\t\t\t\ttry {\r\n"
-                  "\t\t\t\t\t\t\tvar obj = _motion_manager.load(loadStorage);\r\n"),
-            false);
-        if(patched != buffer) {
-            buffer = patched;
+        if(TVPPatchAffineSourceMotionStorageFallback(buffer)) {
             spdlog::info(
                 "Applied compatibility patch for D3D-prefixed AffineSourceMotion resources");
         }

@@ -163,6 +163,25 @@ set_target_properties(aether_kiri_godot PROPERTIES
 
 aetherkiri_limit_runtime_exports(aether_kiri_godot GODOT_EXTENSION)
 
+if(APPLE AND NOT IOS AND TARGET engine_api)
+    # Godot exports the libraries referenced by aether_kiri.gdextension from
+    # apps/godot_app/bin. Keep that staging directory tied to the actual CMake
+    # outputs so an export cannot silently package an older runtime.
+    set(_aetherkiri_macos_godot_bin
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../apps/godot_app/bin/macos/$<LOWER_CASE:$<CONFIG>>")
+    add_custom_command(TARGET aether_kiri_godot POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${_aetherkiri_macos_godot_bin}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:aether_kiri_godot>"
+            "${_aetherkiri_macos_godot_bin}/libaether_kiri_godot.dylib"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:engine_api>"
+            "${_aetherkiri_macos_godot_bin}/libengine_api.dylib"
+        VERBATIM
+    )
+endif()
+
 if(WIN32)
     string(TOLOWER "${CMAKE_BUILD_TYPE}" AETHERKIRI_WINDOWS_CONFIG_DIR)
     if(NOT AETHERKIRI_WINDOWS_CONFIG_DIR)

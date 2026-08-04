@@ -14,6 +14,7 @@
 
 #include "PlayerInternal.h"
 #include "TickCount.h"
+#include "tjsRandomGenerator.h"
 
 using namespace motion::internal;
 
@@ -42,6 +43,23 @@ namespace {
     std::vector<motion::Player *> g_presentationHoldPlayers;
     MotionPlayerPresentationHoldHook g_presentationHoldHook;
     bool g_presentationHoldHookRegistered = false;
+
+    tTJSVariant createStandaloneRandomGenerator() {
+        // Artemis embeds motionplayer without starting the KiriKiri script
+        // host. Use the same TJS RandomGenerator native class directly so
+        // particle selection and authored random motion retain libkrkr2's
+        // semantics without requiring TVPScriptEngine.
+        static auto *generatorClass = new TJS::tTJSNC_RandomGenerator();
+        iTJSDispatch2 *instance = nullptr;
+        if(TJS_FAILED(generatorClass->CreateNew(
+               0, nullptr, nullptr, &instance, 0, nullptr,
+               generatorClass)) || !instance) {
+            return {};
+        }
+        tTJSVariant result(instance, instance);
+        instance->Release();
+        return result;
+    }
 
     void registerAutoProgressPlayer(motion::Player *player) {
         if(!player) {
@@ -414,12 +432,19 @@ namespace motion {
             TVPExecuteExpression(
                 TJS_W("new Math.RandomGenerator()"),
                 &_tjsRandomGenerator);
-        } catch (...) {
+        } catch(...) {
+            _tjsRandomGenerator = createStandaloneRandomGenerator();
+        }
+        if(_tjsRandomGenerator.Type() != tvtObject) {
+            _tjsRandomGenerator = createStandaloneRandomGenerator();
+        }
+        if(_tjsRandomGenerator.Type() != tvtObject) {
             LOGGER->warn("Player: failed to create Math.RandomGenerator");
         }
     }
 
     Player::~Player() {
+        discardRenderToRgbaReadback();
         disableAutoProgress();
         disablePresentationHold();
         releaseYuzuSdAutoProgressClaim();

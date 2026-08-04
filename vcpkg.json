@@ -19,6 +19,7 @@
     },
     "boost-phoenix",
     "boost-spirit",
+    "curl",
     {
       "name": "breakpad",
       "default-features": false,

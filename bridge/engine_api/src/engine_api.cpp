@@ -1,3 +1,4 @@
+#include "legacy_engine_api_rename.h"
 #include "engine_api.h"
 
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)

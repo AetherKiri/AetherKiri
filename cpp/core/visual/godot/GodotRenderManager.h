@@ -64,6 +64,11 @@ public:
     bool RequiresGpuReadback() const {
         return gpu_handle_ != 0 && !cpu_dirty_ && pixels_.empty();
     }
+    uint64_t BeginGpuReadback() const;
+    bool PollGpuReadback(uint64_t request, void *out_pixels,
+                         size_t out_pixels_size, uint32_t stride_bytes,
+                         bool *ready) const;
+    void DiscardGpuReadback(uint64_t request) const;
     bool EnsureGpuHandle();
     bool ClearGpu(uint32_t rgba, const tTVPRect &rc);
     bool CopyGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,

@@ -543,6 +543,36 @@ bool GodotTexture2D::EnsureGpuHandle() {
     return gpu_handle_ != 0;
 }
 
+uint64_t GodotTexture2D::BeginGpuReadback() const {
+    const auto *bridge = TVPGodotGpuBridgeGet();
+    if(gpu_handle_ == 0 || bridge == nullptr ||
+       bridge->begin_read_rgba == nullptr) {
+        return 0;
+    }
+    return bridge->begin_read_rgba(gpu_handle_);
+}
+
+bool GodotTexture2D::PollGpuReadback(
+    uint64_t request, void *out_pixels, size_t out_pixels_size,
+    uint32_t stride_bytes, bool *ready) const {
+    const auto *bridge = TVPGodotGpuBridgeGet();
+    if(request == 0 || bridge == nullptr ||
+       bridge->poll_read_rgba == nullptr) {
+        if(ready) *ready = false;
+        return false;
+    }
+    return bridge->poll_read_rgba(
+        request, out_pixels, out_pixels_size, stride_bytes, ready);
+}
+
+void GodotTexture2D::DiscardGpuReadback(uint64_t request) const {
+    const auto *bridge = TVPGodotGpuBridgeGet();
+    if(request != 0 && bridge != nullptr &&
+       bridge->discard_read_rgba != nullptr) {
+        bridge->discard_read_rgba(request);
+    }
+}
+
 void GodotTexture2D::ReleaseGpuHandle() {
     if (gpu_handle_ == 0) return;
     const auto *bridge = TVPGodotGpuBridgeGet();
