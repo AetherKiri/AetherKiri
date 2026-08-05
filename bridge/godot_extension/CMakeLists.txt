@@ -105,7 +105,9 @@ endif()
 if(APPLE)
     target_sources(aether_kiri_godot PRIVATE src/apple_storekit.swift)
     set_property(TARGET aether_kiri_godot PROPERTY Swift_LANGUAGE_VERSION 5)
-    target_link_libraries(aether_kiri_godot PRIVATE "-framework StoreKit")
+    target_link_libraries(aether_kiri_godot PRIVATE
+        "-framework Security"
+        "-framework StoreKit")
 endif()
 
 target_compile_features(aether_kiri_godot PRIVATE cxx_std_17)

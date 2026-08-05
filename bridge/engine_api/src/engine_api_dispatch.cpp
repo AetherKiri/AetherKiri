@@ -40,6 +40,11 @@ struct DispatchHandle {
   std::string writable_path;
   std::string cache_path;
   std::string requested_runtime = "auto";
+#if defined(NDEBUG)
+  bool artemis_beta_allowed = false;
+#else
+  bool artemis_beta_allowed = true;
+#endif
   std::unordered_map<std::string, std::string> pending_options;
   uint32_t surface_width = 0;
   uint32_t surface_height = 0;
@@ -141,6 +146,16 @@ engine_result_t Unsupported(DispatchHandle* handle, const char* operation) {
   handle->last_error = std::string("runtime provider does not implement ") + operation;
   SetThreadError(handle->last_error.c_str());
   return ENGINE_RESULT_NOT_SUPPORTED;
+}
+
+engine_result_t CheckArtemisBetaAccess(DispatchHandle* handle) {
+  if (handle->backend != BackendKind::kProvider || handle->provider == nullptr ||
+      Normalize(handle->provider->runtime_id_utf8) != "artemis" ||
+      handle->artemis_beta_allowed) {
+    return ENGINE_RESULT_OK;
+  }
+  handle->last_error = "Artemis runtime requires active beta access";
+  return ThreadError(ENGINE_RESULT_NOT_SUPPORTED, handle->last_error.c_str());
 }
 
 void HostLog(void* user_data, uint32_t level, const char* subsystem,
@@ -677,6 +692,8 @@ engine_result_t engine_open_game(engine_handle_t public_handle,
   }
   result = SelectBackendLocked(handle, game_root_path_utf8);
   if (result != ENGINE_RESULT_OK) return result;
+  result = CheckArtemisBetaAccess(handle);
+  if (result != ENGINE_RESULT_OK) return result;
   if (handle->backend == BackendKind::kLegacy) {
     return engine_legacy_open_game(handle->legacy, game_root_path_utf8,
                                    startup_script_utf8);
@@ -711,6 +728,8 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
                        "an asynchronous startup task already exists");
   }
   result = SelectBackendLocked(handle, game_root_path_utf8);
+  if (result != ENGINE_RESULT_OK) return result;
+  result = CheckArtemisBetaAccess(handle);
   if (result != ENGINE_RESULT_OK) return result;
   if (handle->backend == BackendKind::kLegacy) {
     return engine_legacy_open_game_async(handle->legacy, game_root_path_utf8,
@@ -821,6 +840,13 @@ engine_result_t engine_set_option(engine_handle_t public_handle,
   if (result != ENGINE_RESULT_OK) return result;
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
   const std::string key = Normalize(option->key_utf8);
+  if (key == "artemis_beta_allowed") {
+    const std::string value = Normalize(option->value_utf8);
+    handle->artemis_beta_allowed =
+        value == "1" || value == "true" || value == "yes" || value == "on";
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
   if (key == "runtime") {
     if (handle->backend != BackendKind::kUndecided) {
       handle->last_error = "runtime option must be set before opening a game";

@@ -11,11 +11,10 @@ endif ()
 add_compile_definitions(
         $<$<CONFIG:Debug>:DEBUG>
         $<$<CONFIG:Debug>:_DEBUG>   # 对于 MSVC 兼容性
-        # Artemis is an internal preview.  Keep the capability tied to the
-        # actual Debug configuration instead of a user-overridable cache
-        # option so Release/RelWithDebInfo/MinSizeRel products cannot enable
-        # it accidentally.
-        $<$<CONFIG:Debug>:AETHERKIRI_ENABLE_ARTEMIS_RUNTIME>
+        # Artemis is compiled into Apple Store products as a gated preview.
+        # Debug builds bypass the product gate; Release requires a verified
+        # beta-access grant before the runtime can open a game.
+        AETHERKIRI_ENABLE_ARTEMIS_RUNTIME
         $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
 )
 

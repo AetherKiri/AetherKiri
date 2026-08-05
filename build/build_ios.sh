@@ -431,6 +431,8 @@ EOF
             /usr/libexec/PlistBuddy -c 'Add :UIStatusBarHidden bool false' "$info_plist"
         /usr/libexec/PlistBuddy -c 'Set :UIViewControllerBasedStatusBarAppearance false' "$info_plist" 2>/dev/null || \
             /usr/libexec/PlistBuddy -c 'Add :UIViewControllerBasedStatusBarAppearance bool false' "$info_plist"
+        /usr/libexec/PlistBuddy -c 'Set :SKIncludeConsumableInAppPurchaseHistory true' "$info_plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c 'Add :SKIncludeConsumableInAppPurchaseHistory bool true' "$info_plist"
         /usr/libexec/PlistBuddy \
             -c "Set :NSBluetoothAlwaysUsageDescription $bluetooth_purpose" \
             "$info_plist" 2>/dev/null || \
