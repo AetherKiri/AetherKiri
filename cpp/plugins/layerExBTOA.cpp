@@ -2,6 +2,7 @@
 // Ported from https://github.com/wamsoft/layerExBTOA
 
 #include "ncbind.hpp"
+#include "LayerIntf.h"
 #include <vector>
 
 #ifndef TJS_INTF_METHOD
@@ -32,6 +33,16 @@ static iTJSDispatch2 *getLayerClass(void) {
     tTJSVariant var;
     TVPExecuteExpression(TJS_W("Layer"), &var);
     return var.AsObjectNoAddRef();
+}
+
+static tTJSNI_BaseLayer *GetNativeLayer(iTJSDispatch2 *lay) {
+    tTJSNI_BaseLayer *native = nullptr;
+    if(!lay || TJS_FAILED(lay->NativeInstanceSupport(
+                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                   reinterpret_cast<iTJSNativeInstance **>(&native)))) {
+        return nullptr;
+    }
+    return native;
 }
 
 static bool
@@ -219,6 +230,17 @@ copyBottomBlueToTopAlpha(tTJSVariant *result, tjs_int numparams, tTJSVariant **p
 
 static tjs_error TJS_INTF_METHOD
 fillAlpha(tTJSVariant *result, tjs_int numparams, tTJSVariant **param, iTJSDispatch2 *lay) {
+    // Video layers commonly call fillAlpha after binding an already-opaque
+    // decoder buffer. Asking for the writable pointer first would detach the
+    // shared frame and copy the entire image, twice for dual-layer playback.
+    // The opacity flag is conservative: false also covers unknown content.
+    if(tTJSNI_BaseLayer *native = GetNativeLayer(lay)) {
+        if(tTVPBaseTexture *image = native->GetMainImage();
+           image && image->IsOpaque()) {
+            return TJS_S_OK;
+        }
+    }
+
     WrtRefT dbuf = 0;
     tjs_int32 l, t, dw, dh, dpitch;
     if (!GetClipBufferAndSize(lay, l, t, dw, dh, dbuf, dpitch))

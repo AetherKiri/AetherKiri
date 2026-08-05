@@ -39,6 +39,7 @@
 #include "TVPWindow.h"
 #include "Application.h"
 #include "RenderManager.h"
+#include "GodotGpuBridge.h"
 #include "GodotRenderManager.h"
 #include "StorageImpl.h"
 #if defined(KRKR_ENABLE_GPU_BRIDGE)
@@ -1026,6 +1027,10 @@ public:
                 PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
                                            surface_h);
             if (output_tex == nullptr) output_tex = godot_tex;
+            if (const auto *bridge = TVPGodotGpuBridgeGet();
+                bridge != nullptr && bridge->flush != nullptr) {
+                bridge->flush();
+            }
             if (HostRenderTraceEnabled() && ShouldLogHostRenderTrace()) {
                 spdlog::info(
                     "host_render_trace path=godot_gpu_prefer tex={}x{} surface={}x{} output={}x{}",
@@ -1097,6 +1102,10 @@ public:
                     PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
                                                surface_h);
                 if (output_tex == nullptr) output_tex = godot_tex;
+                if (const auto *bridge = TVPGodotGpuBridgeGet();
+                    bridge != nullptr && bridge->flush != nullptr) {
+                    bridge->flush();
+                }
                 if (HostRenderTraceEnabled() && ShouldLogHostRenderTrace()) {
                     spdlog::info(
                         "host_render_trace path=godot_gpu tex={}x{} surface={}x{} output={}x{}",

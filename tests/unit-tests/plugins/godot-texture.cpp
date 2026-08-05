@@ -200,7 +200,7 @@ TEST_CASE("Godot nearest scaled alpha uses the software sampler") {
     CHECK(g_blend_rect_calls == 1);
 }
 
-TEST_CASE("Godot immediate GPU drain flushes pending alpha sources") {
+TEST_CASE("Godot deferred GPU drain keeps alpha blends in the frame batch") {
     TestGpuBridge bridge;
     std::vector<std::uint8_t> pixels(256u * 256u * 4u, 0xffu);
     GodotTexture2D src(pixels.data(), 256 * 4, 256, 256,
@@ -220,9 +220,8 @@ TEST_CASE("Godot immediate GPU drain flushes pending alpha sources") {
         method, &dst, &dst, tTVPRect(0, 0, 256, 256),
         tRenderTexRectArray(&source_element, 1));
 
-    REQUIRE(g_gpu_calls.size() == 2);
-    CHECK(g_gpu_calls[0] == GpuCall::Flush);
-    CHECK(g_gpu_calls[1] == GpuCall::Blend);
+    REQUIRE(g_gpu_calls.size() == 1);
+    CHECK(g_gpu_calls[0] == GpuCall::Blend);
 }
 
 TEST_CASE("Godot textures expose Gray province pixels") {

@@ -30,7 +30,8 @@
 //---------------------------------------------------------------------------
 /*
         these functions do :
-        replace each %%, %1, %2 into %, p1, p2.
+        replace each %%, %1, %2 into %, p1, p2. The positional printf
+        spellings %1$s and %2$s are accepted by translated message catalogs.
         %1 must appear only once in the message string, otherwise
    internal buffer will overflow. ( %2 must also so )
 */
@@ -50,7 +51,7 @@ ttstr TVPFormatMessage(const tjs_char *msg, const ttstr &p1) {
                 TJS_strcpy(p, p1.c_str());
                 p += p1.GetLen();
                 p--;
-                msg++;
+                msg += msg[2] == TJS_W('$') && msg[3] == TJS_W('s') ? 3 : 1;
                 continue;
             }
         }
@@ -80,14 +81,14 @@ ttstr TVPFormatMessage(const tjs_char *msg, const ttstr &p1, const ttstr &p2) {
                 TJS_strcpy(p, p1.c_str());
                 p += p1.GetLen();
                 p--;
-                msg++;
+                msg += msg[2] == TJS_W('$') && msg[3] == TJS_W('s') ? 3 : 1;
                 continue;
             } else if(msg[1] == TJS_W('2')) {
                 // %2
                 TJS_strcpy(p, p2.c_str());
                 p += p2.GetLen();
                 p--;
-                msg++;
+                msg += msg[2] == TJS_W('$') && msg[3] == TJS_W('s') ? 3 : 1;
                 continue;
             }
         }

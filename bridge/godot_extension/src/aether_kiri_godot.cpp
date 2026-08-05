@@ -1155,11 +1155,9 @@ bool HazardTrackedBlendBarriersEnabled() {
 bool DeferredGodotGpuDrainEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_GODOT_DEFER_GPU_DRAIN");
-        // Deferring operations created on Godot's render thread lets a clear
-        // become visible before the following blends during fast page
-        // transitions on Metal.  Execute those operations immediately by
-        // default; the old batched behavior remains available for profiling
-        // with AETHERKIRI_GODOT_DEFER_GPU_DRAIN=1.
+        // The host publishes an explicit Flush after the complete scene has
+        // been composed, so render-thread operations can remain ordered in a
+        // single frame batch until that boundary.
         if (value == nullptr || value[0] == '\0') {
             return TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT;
         }
@@ -1169,10 +1167,17 @@ bool DeferredGodotGpuDrainEnabled() {
 }
 
 bool ShouldScheduleGodotGpuDrainNow(const std::shared_ptr<GodotGpuOp> &op,
-                                    bool /*wait*/) {
-    // Wake the render thread on the first queued operation. The scheduled
-    // flag below still coalesces producer-thread bursts into one queue drain.
-    return op != nullptr;
+                                    bool wait) {
+    if (op == nullptr) return false;
+    // Frame composition emits a burst of ordered clear/copy/blend operations.
+    // Scheduling on the first operation lets the render thread race that
+    // producer and splits one frame into many tiny compute lists. The host
+    // appends an explicit Flush immediately before publishing the completed
+    // frame, which is the natural point to submit the whole burst together.
+    // Operations which promise a synchronous result must still wake the
+    // render thread immediately.
+    return wait || op->type == GodotGpuOp::Type::Flush ||
+           op->type == GodotGpuOp::Type::ReadAsync;
 }
 
 struct GodotGpuPendingWrite {
@@ -3223,6 +3228,27 @@ void ClearGodotGpuUniformSetCache(RenderingDevice *rd) {
     g_gpu_uniform_set_cache.clear();
 }
 
+void InvalidateGodotGpuUniformSetsForRid(RenderingDevice *rd,
+                                         const RID &resource) {
+    if (!resource.is_valid()) return;
+    const int64_t resource_id = resource.get_id();
+    for (auto it = g_gpu_uniform_set_cache.begin();
+         it != g_gpu_uniform_set_cache.end();) {
+        const GodotGpuUniformSetKey &key = it->first;
+        const bool references_resource =
+            key.rid0 == resource_id || key.rid1 == resource_id ||
+            key.rid2 == resource_id || key.rid3 == resource_id;
+        if (!references_resource) {
+            ++it;
+            continue;
+        }
+        if (rd != nullptr && it->second.is_valid()) {
+            rd->free_rid(it->second);
+        }
+        it = g_gpu_uniform_set_cache.erase(it);
+    }
+}
+
 bool UpdateGodotGpuTriangleVertexBuffer(RenderingDevice *rd,
                                         const PackedByteArray &data,
                                         RID &vertex_buffer) {
@@ -3894,7 +3920,11 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
         case GodotGpuOp::Type::ArtemisShader:
             return ExecuteArtemisGpuShader(rd, op);
         case GodotGpuOp::Type::Release:
-            ClearGodotGpuUniformSetCache(rd);
+            // Uniform sets only become invalid when one of their bound
+            // resources is released. Clearing the entire cache here forces
+            // stable page and transition bindings to be rebuilt for every
+            // short-lived text or motion scratch texture.
+            InvalidateGodotGpuUniformSetsForRid(rd, op->dst);
             rd->free_rid(op->dst);
             return true;
         case GodotGpuOp::Type::Flush:
@@ -5095,7 +5125,15 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
     Ref<RDTextureView> view;
     view.instantiate();
     TypedArray<PackedByteArray> initial_data;
-    initial_data.push_back(PackRgbaBytes(pixels, width, height, stride_bytes));
+    // RenderingDevice can allocate uninitialized storage without an upload.
+    // Most textures created by the layer compositor are blank GPU targets
+    // which are immediately cleared or copied into. Allocating, zeroing and
+    // uploading width*height*4 bytes here made every COW scratch texture a
+    // synchronous CPU-to-GPU transfer before its real contents were written.
+    if (pixels != nullptr) {
+        initial_data.push_back(
+            PackRgbaBytes(pixels, width, height, stride_bytes));
+    }
     RID rid = rd->texture_create(MakeRgbaTextureFormat(width, height), view,
                                  initial_data);
     if (!rid.is_valid()) return 0;
@@ -5114,6 +5152,20 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
     g_gpu_texture_bytes_created.fetch_add(
         static_cast<uint64_t>(width) * height * 4u,
         std::memory_order_relaxed);
+    if (pixels == nullptr) {
+        // texture_create is permitted from the host's engine callback, while
+        // texture_clear is render-thread-only. Queue the initialization before
+        // returning so every later copy/blend observes transparent storage in
+        // the same ordered bridge stream.
+        auto clear = std::make_shared<GodotGpuOp>();
+        clear->type = GodotGpuOp::Type::Clear;
+        clear->dst = rid;
+        clear->clear_color = Color(0.0, 0.0, 0.0, 0.0);
+        if (!RunGodotGpuOpAsync(clear)) {
+            g_gpu_textures.erase(id);
+            return 0;
+        }
+    }
     return id;
 }
 

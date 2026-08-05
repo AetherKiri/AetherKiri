@@ -2,6 +2,7 @@ extends SceneTree
 
 const ProbeConfig = preload("res://scripts/probe_config.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
+const RUNTIME_FONT = preload("res://assets/fonts/aetherkiri-runtime-cjk.otf")
 const STARTUP_SUCCEEDED := 2
 const STARTUP_FAILED := 3
 const POINTER_DOWN := 1
@@ -41,6 +42,11 @@ func _initialize() -> void:
         printerr("initialize_engine failed: %s" % player.get_last_error())
         quit(1)
         return
+
+    var runtime_font_path := _stage_runtime_font(user_dir)
+    if not runtime_font_path.is_empty():
+        player.set_engine_option("default_font", runtime_font_path)
+        player.set_engine_option("font_dir", runtime_font_path.get_base_dir())
 
     var backend: String = ProbeConfig.backend(test_config, "AETHERKIRI_PROBE_BACKEND")
     player.set_render_backend(backend)
@@ -84,11 +90,18 @@ func _initialize() -> void:
         step = await _run_legacy_steps(step)
 
     var measured_frames: int = ProbeConfig.int_value(test_config, "measure_frames", _env_int("AETHERKIRI_PROBE_MEASURE_FRAMES", 120))
-    var start_ticks: int = Time.get_ticks_usec()
-    await _advance(measured_frames)
-    var fps: float = float(measured_frames) / max(0.0001, float(Time.get_ticks_usec() - start_ticks) / 1000000.0)
-    print("step probe fps=%.2f texture_backend=%s renderer=\"%s\" steps=%d output=/tmp/aetherkiri-step-*.png" % [
-        fps,
+    var frame_metrics := await _measure_frames(measured_frames)
+    print("step probe fps=%.2f one_percent_low_fps=%.2f p50_ms=%.2f p95_ms=%.2f p99_ms=%.2f max_ms=%.2f over_16_67=%d over_20=%d over_33_33=%d engine_p95_ms=%.2f texture_backend=%s renderer=\"%s\" steps=%d output=/tmp/aetherkiri-step-*.png" % [
+        float(frame_metrics.get("fps", 0.0)),
+        float(frame_metrics.get("one_percent_low_fps", 0.0)),
+        float(frame_metrics.get("p50_ms", 0.0)),
+        float(frame_metrics.get("p95_ms", 0.0)),
+        float(frame_metrics.get("p99_ms", 0.0)),
+        float(frame_metrics.get("max_ms", 0.0)),
+        int(frame_metrics.get("over_16_67", 0)),
+        int(frame_metrics.get("over_20", 0)),
+        int(frame_metrics.get("over_33_33", 0)),
+        float(frame_metrics.get("engine_p95_ms", 0.0)),
         player.get_frame_texture_backend(),
         player.get_renderer_info(),
         step,
@@ -116,6 +129,20 @@ func _wait_startup() -> bool:
     printerr("startup timed out")
     return false
 
+func _stage_runtime_font(user_dir: String) -> String:
+    var font_data := RUNTIME_FONT.get_data()
+    if font_data.is_empty():
+        return ""
+    var font_dir := user_dir.path_join("runtime_fonts")
+    DirAccess.make_dir_recursive_absolute(font_dir)
+    var font_path := font_dir.path_join("default.otf")
+    var output := FileAccess.open(font_path, FileAccess.WRITE)
+    if output == null:
+        return ""
+    output.store_buffer(font_data)
+    output.flush()
+    return font_path
+
 func _advance(frames: int) -> void:
     for i in range(frames):
         if player.tick(1.0 / 60.0) == 0:
@@ -124,6 +151,60 @@ func _advance(frames: int) -> void:
                 rect.texture = texture
                 rect.queue_redraw()
         await process_frame
+
+func _measure_frames(frames: int) -> Dictionary:
+    var frame_times: Array[float] = []
+    var engine_times: Array[float] = []
+    var start_ticks := Time.get_ticks_usec()
+    for i in range(maxi(frames, 1)):
+        var frame_start := Time.get_ticks_usec()
+        if player.tick(1.0 / 60.0) == 0:
+            var texture: Texture2D = player.update_frame_texture()
+            if texture != null:
+                rect.texture = texture
+                rect.queue_redraw()
+        var engine_end := Time.get_ticks_usec()
+        await process_frame
+        var frame_end := Time.get_ticks_usec()
+        engine_times.append(float(engine_end - frame_start) / 1000.0)
+        frame_times.append(float(frame_end - frame_start) / 1000.0)
+
+    var elapsed_seconds := maxf(
+        0.000001,
+        float(Time.get_ticks_usec() - start_ticks) / 1000000.0
+    )
+    frame_times.sort()
+    engine_times.sort()
+    var worst_count := maxi(1, int(ceil(float(frame_times.size()) * 0.01)))
+    var worst_total_ms := 0.0
+    for index in range(frame_times.size() - worst_count, frame_times.size()):
+        worst_total_ms += frame_times[index]
+
+    return {
+        "fps": float(frame_times.size()) / elapsed_seconds,
+        "one_percent_low_fps": 1000.0 / maxf(0.000001, worst_total_ms / float(worst_count)),
+        "p50_ms": _percentile(frame_times, 0.50),
+        "p95_ms": _percentile(frame_times, 0.95),
+        "p99_ms": _percentile(frame_times, 0.99),
+        "max_ms": frame_times.back(),
+        "over_16_67": _count_over(frame_times, 16.67),
+        "over_20": _count_over(frame_times, 20.0),
+        "over_33_33": _count_over(frame_times, 33.33),
+        "engine_p95_ms": _percentile(engine_times, 0.95),
+    }
+
+func _percentile(sorted_values: Array[float], fraction: float) -> float:
+    if sorted_values.is_empty():
+        return 0.0
+    var index := int(ceil(clampf(fraction, 0.0, 1.0) * sorted_values.size())) - 1
+    return sorted_values[clampi(index, 0, sorted_values.size() - 1)]
+
+func _count_over(sorted_values: Array[float], threshold: float) -> int:
+    var count := 0
+    for value in sorted_values:
+        if value > threshold:
+            count += 1
+    return count
 
 func _save_step(index: int, label: String) -> void:
     await process_frame

@@ -15,6 +15,7 @@ add_executable(motionplayer-dll
     godot-texture.cpp
     krkrgles-aliases.cpp
     kag-load-contract.cpp
+    message-format.cpp
     render-simd.cpp
     transition-policy.cpp
     script-compatibility.cpp

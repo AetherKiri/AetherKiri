@@ -8,7 +8,10 @@ struct tTVPPointD;
 
 // Texture synchronization on the producer side and queue execution in the
 // Godot bridge must agree on the unset environment-variable behavior.
-constexpr bool TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT = false;
+// The host publishes an explicit Flush after completing each frame. Queue
+// render-thread operations until that boundary so one logical frame becomes
+// one ordered compute batch instead of dozens of tiny command lists.
+constexpr bool TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT = true;
 
 struct TVPGodotGpuBridgeCallbacks {
     uint64_t (*create_rgba)(uint32_t width, uint32_t height,

@@ -420,8 +420,8 @@ GodotTexture2D::GodotTexture2D(const void *pixel, int pitch, unsigned int w,
       pitch_(pitch > 0 ? pitch : static_cast<int>(w) * BytesPerPixel(format)),
       discard_unwritten_on_partial_update_(
           (create_flags & RENDER_CREATE_TEXTURE_FLAG_NO_COMPRESS) != 0) {
-    pixels_.resize(static_cast<size_t>(pitch_) * h);
     if (pixel != nullptr) {
+        pixels_.resize(static_cast<size_t>(pitch_) * h);
         const int src_pitch = pitch > 0 ? pitch : pitch_;
         const auto *src = static_cast<const uint8_t *>(pixel);
         for (unsigned int y = 0; y < h; ++y) {
@@ -520,7 +520,6 @@ void GodotTexture2D::CreateGpuHandle(const void *pixel, int pitch) {
     }
     gpu_dirty_ = false;
     cpu_dirty_ = false;
-    if(format_ == TVPTextureFormat::RGBA) DiscardCpuStorage();
 }
 
 bool GodotTexture2D::EnsureGpuHandle() {
@@ -539,7 +538,6 @@ bool GodotTexture2D::EnsureGpuHandle() {
         }
         gpu_dirty_ = false;
         cpu_dirty_ = false;
-        DiscardCpuStorage();
     }
     return gpu_handle_ != 0;
 }
@@ -954,7 +952,6 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
     }
     gpu_dirty_ = false;
     cpu_dirty_ = false;
-    DiscardCpuStorage();
     return true;
 }
 
