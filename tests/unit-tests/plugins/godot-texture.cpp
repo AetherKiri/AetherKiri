@@ -5,10 +5,13 @@
 #include "godot/GodotRenderManager.h"
 #include "LayerBitmapIntf.h"
 #include "LayerIntf.h"
+#include "motionplayer/D3DAdaptor.h"
+#include "../../../bridge/godot_extension/src/GodotGpuBarrierShadowPlanner.h"
 
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -26,6 +29,8 @@ struct TriangleDrawCall {
 enum class GpuCall {
     Flush,
     Blend,
+    BatchBegin,
+    BatchEnd,
 };
 
 TriangleDrawCall g_triangle_draw_call;
@@ -34,6 +39,9 @@ uint64_t g_next_texture_handle = 1;
 uint64_t g_next_readback_handle = 101;
 uint64_t g_last_discarded_readback = 0;
 bool g_readback_ready = false;
+bool g_reject_batch = false;
+bool g_throw_batch_end = false;
+uint64_t g_last_batch_token = 0;
 std::vector<GpuCall> g_gpu_calls;
 
 uint64_t CreateTestTexture(uint32_t, uint32_t, const void *, uint32_t) {
@@ -103,6 +111,20 @@ bool FlushTestGpu() {
     return true;
 }
 
+uint64_t BeginTestGpuBatch() {
+    g_gpu_calls.push_back(GpuCall::BatchBegin);
+    return g_reject_batch ? 0 : 0xabcdu;
+}
+
+bool EndTestGpuBatch(uint64_t token) {
+    g_gpu_calls.push_back(GpuCall::BatchEnd);
+    g_last_batch_token = token;
+    if(g_throw_batch_end) {
+        throw std::runtime_error("test GPU batch end failure");
+    }
+    return token == 0xabcdu;
+}
+
 class TestGpuBridge {
 public:
     TestGpuBridge() {
@@ -112,6 +134,9 @@ public:
         g_next_readback_handle = 101;
         g_last_discarded_readback = 0;
         g_readback_ready = false;
+        g_reject_batch = false;
+        g_throw_batch_end = false;
+        g_last_batch_token = 0;
         g_gpu_calls.clear();
         TVPGodotGpuBridgeCallbacks callbacks{};
         callbacks.create_rgba = CreateTestTexture;
@@ -124,9 +149,19 @@ public:
         callbacks.discard_read_rgba = DiscardTestReadback;
         callbacks.flush = FlushTestGpu;
         TVPGodotGpuBridgeRegister(&callbacks);
+        TVPGodotGpuBatchCallbacks batch_callbacks{};
+        batch_callbacks.struct_size = sizeof(batch_callbacks);
+        batch_callbacks.abi_version =
+            TVP_GODOT_GPU_BATCH_CALLBACKS_ABI_VERSION;
+        batch_callbacks.begin_batch = BeginTestGpuBatch;
+        batch_callbacks.end_batch = EndTestGpuBatch;
+        TVPGodotGpuBatchRegister(&batch_callbacks);
     }
 
-    ~TestGpuBridge() { TVPGodotGpuBridgeRegister(nullptr); }
+    ~TestGpuBridge() {
+        TVPGodotGpuBatchRegister(nullptr);
+        TVPGodotGpuBridgeRegister(nullptr);
+    }
 };
 
 } // namespace
@@ -142,6 +177,106 @@ TEST_CASE("script pixel colors preserve RGB channel order") {
     CHECK(TVPFromActualColor(texture.GetPoint(0, 0)) == 0x00fe0000);
     CHECK(TVPFromActualColor(0xff332211) == 0x00112233);
     CHECK(TVPToActualColor(0x00112233) == 0x00112233);
+}
+
+TEST_CASE("Godot GPU barrier shadow leaves independent resources unordered") {
+    GodotGpuBarrierShadowPlanner planner;
+
+    CHECK_FALSE(planner.record({1}, {2}).barrier);
+    CHECK_FALSE(planner.record({3}, {4}).barrier);
+    CHECK(planner.counters().barriers == 0);
+
+    CHECK(planner.finish());
+    CHECK(planner.counters().barriers == 1);
+    CHECK(planner.counters().raw == 0);
+    CHECK(planner.counters().waw == 0);
+    CHECK(planner.counters().war == 0);
+}
+
+TEST_CASE("Godot GPU barrier shadow classifies whole-RID hazards") {
+    SECTION("read after write") {
+        GodotGpuBarrierShadowPlanner planner;
+        CHECK_FALSE(planner.record({}, {10}).barrier);
+        const auto step = planner.record({10}, {});
+        CHECK(step.barrier);
+        CHECK(step.raw);
+        CHECK_FALSE(step.waw);
+        CHECK_FALSE(step.war);
+        CHECK(planner.counters().raw == 1);
+    }
+
+    SECTION("write after write") {
+        GodotGpuBarrierShadowPlanner planner;
+        CHECK_FALSE(planner.record({}, {10}).barrier);
+        const auto step = planner.record({}, {10});
+        CHECK(step.barrier);
+        CHECK_FALSE(step.raw);
+        CHECK(step.waw);
+        CHECK_FALSE(step.war);
+        CHECK(planner.counters().waw == 1);
+    }
+
+    SECTION("write after read") {
+        GodotGpuBarrierShadowPlanner planner;
+        CHECK_FALSE(planner.record({10}, {}).barrier);
+        const auto step = planner.record({}, {10});
+        CHECK(step.barrier);
+        CHECK_FALSE(step.raw);
+        CHECK_FALSE(step.waw);
+        CHECK(step.war);
+        CHECK(planner.counters().war == 1);
+    }
+}
+
+TEST_CASE("Godot GPU barrier shadow treats fill as write-only") {
+    GodotGpuBarrierShadowPlanner planner;
+
+    // FILL_ARGB contributes only its destination to the write set.
+    CHECK_FALSE(planner.record({}, {21}).barrier);
+    const auto step = planner.record({}, {21});
+    CHECK(step.barrier);
+    CHECK(step.waw);
+    CHECK_FALSE(step.war);
+}
+
+TEST_CASE("Godot GPU barrier shadow resets and finishes epochs") {
+    GodotGpuBarrierShadowPlanner planner;
+
+    CHECK_FALSE(planner.record({31}, {}).barrier);
+    CHECK_FALSE(planner.finish());
+    CHECK_FALSE(planner.has_pending_reads());
+    CHECK_FALSE(planner.has_pending_writes());
+
+    CHECK_FALSE(planner.record({}, {32}).barrier);
+    CHECK(planner.finish());
+    CHECK(planner.counters().barriers == 1);
+
+    CHECK_FALSE(planner.record({}, {33}).barrier);
+    planner.reset();
+    CHECK_FALSE(planner.record({33}, {}).barrier);
+    CHECK_FALSE(planner.finish());
+    CHECK(planner.counters().barriers == 1);
+}
+
+TEST_CASE("Godot GPU barrier planner separates Live2D epochs") {
+    GodotGpuBarrierShadowPlanner planner;
+
+    CHECK_FALSE(planner.record({41}, {42}).barrier);
+    CHECK_FALSE(planner.record({43}, {44}).barrier);
+
+    // Entering Live2D finishes the non-Live2D epoch. Its pending write needs
+    // one final barrier, and Live2D accesses are intentionally not recorded.
+    CHECK(planner.finish());
+    CHECK(planner.counters().barriers == 1);
+
+    // A new non-Live2D epoch may reuse an earlier RID without another hazard
+    // barrier because the boundary barrier already made that write visible.
+    CHECK_FALSE(planner.record({42}, {45}).barrier);
+
+    // Ending the compute list finishes the new epoch exactly once.
+    CHECK(planner.finish());
+    CHECK_FALSE(planner.finish());
+    CHECK(planner.counters().barriers == 2);
 }
 
 TEST_CASE("Godot textures expose asynchronous GPU readback") {
@@ -223,6 +358,174 @@ TEST_CASE("Godot immediate GPU drain flushes pending alpha sources") {
     REQUIRE(g_gpu_calls.size() == 2);
     CHECK(g_gpu_calls[0] == GpuCall::Flush);
     CHECK(g_gpu_calls[1] == GpuCall::Blend);
+}
+
+TEST_CASE("Godot GPU batch scope defers pending alpha source flushes") {
+    TestGpuBridge bridge;
+    std::vector<std::uint8_t> pixels(256u * 256u * 4u, 0xffu);
+    GodotTexture2D src(pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    GodotTexture2D dst(pixels.data(), 256 * 4, 256, 256,
+                       TVPTextureFormat::RGBA);
+    REQUIRE(src.EnsureGpuHandle());
+    REQUIRE(dst.EnsureGpuHandle());
+    src.MarkGpuDirty();
+
+    GodotRenderManager manager;
+    iTVPRenderMethod *method = manager.GetRenderMethod("AlphaBlend_d");
+    tRenderTexRectArray::Element source_element(
+        &src, tTVPRect(0, 0, 256, 256));
+
+    {
+        TVPGodotGpuBatchScope batch;
+        REQUIRE(batch.active());
+        CHECK(TVPGodotGpuBridgeBatchActive());
+        manager.OperateRect(
+            method, &dst, &dst, tTVPRect(0, 0, 256, 256),
+            tRenderTexRectArray(&source_element, 1));
+        REQUIRE(g_gpu_calls.size() == 2);
+        CHECK(g_gpu_calls[0] == GpuCall::BatchBegin);
+        CHECK(g_gpu_calls[1] == GpuCall::Blend);
+    }
+
+    CHECK_FALSE(TVPGodotGpuBridgeBatchActive());
+    REQUIRE(g_gpu_calls.size() == 3);
+    CHECK(g_gpu_calls[2] == GpuCall::BatchEnd);
+    CHECK(g_last_batch_token == 0xabcdu);
+}
+
+TEST_CASE("Godot GPU batch scope finishes exactly once") {
+    TestGpuBridge bridge;
+    TVPGodotGpuBatchScope batch;
+    REQUIRE(batch.active());
+    REQUIRE(batch.finish());
+    REQUIRE(batch.finish());
+    REQUIRE(g_gpu_calls.size() == 2);
+    CHECK(g_gpu_calls[0] == GpuCall::BatchBegin);
+    CHECK(g_gpu_calls[1] == GpuCall::BatchEnd);
+}
+
+TEST_CASE("Godot GPU batch scope destructor contains host exceptions") {
+    TestGpuBridge bridge;
+    g_throw_batch_end = true;
+    {
+        TVPGodotGpuBatchScope batch;
+        REQUIRE(batch.active());
+        CHECK(TVPGodotGpuBridgeBatchActive());
+    }
+    CHECK_FALSE(TVPGodotGpuBridgeBatchActive());
+    REQUIRE(g_gpu_calls.size() == 2);
+    CHECK(g_gpu_calls[0] == GpuCall::BatchBegin);
+    CHECK(g_gpu_calls[1] == GpuCall::BatchEnd);
+}
+
+TEST_CASE("Godot GPU batch scope remains active across nesting") {
+    TestGpuBridge bridge;
+    {
+        TVPGodotGpuBatchScope outer;
+        REQUIRE(outer.active());
+        {
+            TVPGodotGpuBatchScope inner;
+            REQUIRE(inner.active());
+            CHECK(TVPGodotGpuBridgeBatchActive());
+        }
+        CHECK(TVPGodotGpuBridgeBatchActive());
+    }
+    CHECK_FALSE(TVPGodotGpuBridgeBatchActive());
+    REQUIRE(g_gpu_calls.size() == 4);
+    CHECK(g_gpu_calls[0] == GpuCall::BatchBegin);
+    CHECK(g_gpu_calls[1] == GpuCall::BatchBegin);
+    CHECK(g_gpu_calls[2] == GpuCall::BatchEnd);
+    CHECK(g_gpu_calls[3] == GpuCall::BatchEnd);
+}
+
+TEST_CASE("Godot GPU batch scope falls back when unavailable or rejected") {
+    SECTION("callbacks unavailable") {
+        TVPGodotGpuBatchRegister(nullptr);
+        TVPGodotGpuBridgeRegister(nullptr);
+        TVPGodotGpuBatchScope batch;
+        CHECK_FALSE(batch.active());
+        CHECK(batch.finish());
+    }
+
+    SECTION("undersized callback table is rejected") {
+        TVPGodotGpuBatchCallbacks callbacks{};
+        callbacks.struct_size = sizeof(callbacks) - 1;
+        callbacks.abi_version =
+            TVP_GODOT_GPU_BATCH_CALLBACKS_ABI_VERSION;
+        callbacks.begin_batch = BeginTestGpuBatch;
+        callbacks.end_batch = EndTestGpuBatch;
+        TVPGodotGpuBatchRegister(&callbacks);
+        TVPGodotGpuBatchScope batch;
+        CHECK_FALSE(batch.active());
+        CHECK(batch.finish());
+        TVPGodotGpuBatchRegister(nullptr);
+    }
+
+    SECTION("unknown callback ABI is rejected") {
+        TVPGodotGpuBatchCallbacks callbacks{};
+        callbacks.struct_size = sizeof(callbacks);
+        callbacks.abi_version =
+            TVP_GODOT_GPU_BATCH_CALLBACKS_ABI_VERSION + 1;
+        callbacks.begin_batch = BeginTestGpuBatch;
+        callbacks.end_batch = EndTestGpuBatch;
+        TVPGodotGpuBatchRegister(&callbacks);
+        TVPGodotGpuBatchScope batch;
+        CHECK_FALSE(batch.active());
+        CHECK(batch.finish());
+        TVPGodotGpuBatchRegister(nullptr);
+    }
+
+    SECTION("batch rejected") {
+        TestGpuBridge bridge;
+        g_reject_batch = true;
+        TVPGodotGpuBatchScope batch;
+        CHECK_FALSE(batch.active());
+        CHECK(batch.finish());
+        REQUIRE(g_gpu_calls.size() == 1);
+        CHECK(g_gpu_calls[0] == GpuCall::BatchBegin);
+    }
+}
+
+TEST_CASE("D3D adaptor keeps one GPU transaction open across nested draws") {
+    TestGpuBridge bridge;
+    motion::D3DAdaptor adaptor;
+
+    REQUIRE(adaptor.beginGpuBatch());
+    REQUIRE(adaptor.beginGpuBatch());
+    CHECK(TVPGodotGpuBridgeBatchActive());
+    {
+        TVPGodotGpuBatchScope playerDraw;
+        REQUIRE(playerDraw.active());
+        CHECK(TVPGodotGpuBridgeBatchActive());
+    }
+    CHECK(TVPGodotGpuBridgeBatchActive());
+
+    REQUIRE(adaptor.endGpuBatch());
+    CHECK(TVPGodotGpuBridgeBatchActive());
+    REQUIRE(adaptor.endGpuBatch());
+    CHECK_FALSE(TVPGodotGpuBridgeBatchActive());
+    CHECK(adaptor.endGpuBatch());
+
+    REQUIRE(g_gpu_calls.size() == 4);
+    CHECK(g_gpu_calls[0] == GpuCall::BatchBegin);
+    CHECK(g_gpu_calls[1] == GpuCall::BatchBegin);
+    CHECK(g_gpu_calls[2] == GpuCall::BatchEnd);
+    CHECK(g_gpu_calls[3] == GpuCall::BatchEnd);
+}
+
+TEST_CASE("D3D adaptor closes an unfinished GPU transaction on destruction") {
+    TestGpuBridge bridge;
+    {
+        motion::D3DAdaptor adaptor;
+        REQUIRE(adaptor.beginGpuBatch());
+        CHECK(TVPGodotGpuBridgeBatchActive());
+    }
+
+    CHECK_FALSE(TVPGodotGpuBridgeBatchActive());
+    REQUIRE(g_gpu_calls.size() == 2);
+    CHECK(g_gpu_calls[0] == GpuCall::BatchBegin);
+    CHECK(g_gpu_calls[1] == GpuCall::BatchEnd);
 }
 
 TEST_CASE("Godot textures expose Gray province pixels") {

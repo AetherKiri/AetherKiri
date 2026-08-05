@@ -2404,17 +2404,66 @@ const tjs_char *TVPGetD3DStandSourcePatchScript() {
         "})();\r\n");
 }
 
+const tjs_char *TVPGetD3DEmoteGpuBatchPatchScript() {
+    return TJS_W(
+        "(function() {\r\n"
+        "\tif (typeof global.AffineSourceMotion == \"undefined\") return;\r\n"
+        "\tvar klass = global.AffineSourceMotion;\r\n"
+        "\tif (typeof klass.drawAffine == \"undefined\") return;\r\n"
+        "\tif (typeof klass.__aetherKiriOrigDrawAffine != \"undefined\") return;\r\n"
+        "\tklass.__aetherKiriOrigDrawAffine = &klass.drawAffine;\r\n"
+        "\tklass.drawAffine = function(target, mtx, src) {\r\n"
+        "\t\tvar adaptor = void;\r\n"
+        "\t\tvar batchSupported = false;\r\n"
+        "\t\ttry {\r\n"
+        "\t\t\tif (this._useD3D && this._window !== void) {\r\n"
+        "\t\t\t\tadaptor = this._window.motionD3DAdaptor;\r\n"
+        "\t\t\t\tbatchSupported = adaptor !== void && typeof adaptor.beginGpuBatch != \"undefined\" && typeof adaptor.endGpuBatch != \"undefined\";\r\n"
+        "\t\t\t}\r\n"
+        "\t\t} catch(e) {}\r\n"
+        "\t\tvar began = false;\r\n"
+        "\t\tif (batchSupported) {\r\n"
+        "\t\t\ttry { adaptor.beginGpuBatch(); began = true; } catch(e) {}\r\n"
+        "\t\t}\r\n"
+        "\t\tvar result;\r\n"
+        "\t\ttry {\r\n"
+        "\t\t\tresult = this.__aetherKiriOrigDrawAffine(target, mtx, src);\r\n"
+        "\t\t} catch(e) {\r\n"
+        "\t\t\tif (began) try { adaptor.endGpuBatch(); } catch(endError) {}\r\n"
+        "\t\t\tthrow e;\r\n"
+        "\t\t}\r\n"
+        "\t\tif (began) try { adaptor.endGpuBatch(); } catch(endError) {}\r\n"
+        "\t\treturn result;\r\n"
+        "\t};\r\n"
+        "})();\r\n");
+}
+
 static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
     const ttstr lower = shortname.AsLowerCase();
     const bool patchWorld = lower == TJS_W("world.tjs");
     const bool patchD3DLayer = lower == TJS_W("d3d.tjs");
     const bool patchD3DMotion =
         patchD3DLayer || lower == TJS_W("d3daffinesourcemotion.tjs");
+    const bool patchD3DEmote =
+        lower == TJS_W("motion.tjs") || lower == TJS_W("d3demote.tjs") ||
+        lower == TJS_W("affinesourcemotion.tjs");
     const bool patchMessageText = lower == TJS_W("msghack.tjs");
     const bool patchQuickMenu = lower == TJS_W("quickmenu.tjs");
     if(!patchWorld && !patchD3DLayer && !patchD3DMotion &&
-       !patchMessageText && !patchQuickMenu)
+       !patchD3DEmote && !patchMessageText && !patchQuickMenu)
         return;
+
+    if(patchD3DEmote) try {
+        TVPExecuteScript(
+            TVPGetD3DEmoteGpuBatchPatchScript(),
+            TJS_W("AetherKiriD3DEmoteGpuBatchPatch"), 0,
+            (tTJSVariant *)nullptr);
+        spdlog::info(
+            "Applied compatibility hook for D3DEmote GPU transaction batching");
+    } catch(...) {
+        spdlog::warn(
+            "Failed to apply compatibility hook for D3DEmote GPU transaction batching");
+    }
 
     // YuzuSoft quick menus still use the generic cursor SE when their proxied
     // window buttons have no per-control onenter script. Keep that fallback on

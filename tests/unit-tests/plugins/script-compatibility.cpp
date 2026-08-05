@@ -228,3 +228,232 @@ TEST_CASE("D3D stand source patch uses the layer affine contract") {
     CHECK(evaluateInteger(engine.operator->(),
                           TJS_W("standLayer._image.optionsSet")) == 1);
 }
+
+TEST_CASE("D3DEmote GPU transaction hook pairs batches around drawAffine") {
+    ScriptEngineOwner engine;
+    engine->ExecScript(TJS_W(
+        "class TestD3DBatchAdaptor {\n"
+        "  var beginCount = 0;\n"
+        "  var endCount = 0;\n"
+        "  var throwOnBegin = false;\n"
+        "  var throwOnEnd = false;\n"
+        "  function beginGpuBatch() {\n"
+        "    beginCount++;\n"
+        "    if (throwOnBegin) throw new Exception(\"begin failed\");\n"
+        "    return true;\n"
+        "  }\n"
+        "  function endGpuBatch() {\n"
+        "    endCount++;\n"
+        "    if (throwOnEnd) throw new Exception(\"end failed\");\n"
+        "    return true;\n"
+        "  }\n"
+        "}\n"
+        "class AffineSourceMotion {\n"
+        "  var _useD3D = true;\n"
+        "  var _window;\n"
+        "  var shouldThrow = false;\n"
+        "  var calls = 0;\n"
+        "  function AffineSourceMotion() {\n"
+        "    _window = %[motionD3DAdaptor: new TestD3DBatchAdaptor()];\n"
+        "  }\n"
+        "  function drawAffine(target, mtx, src) {\n"
+        "    calls++;\n"
+        "    if (shouldThrow) throw new Exception(\"draw failed\");\n"
+        "    return 42;\n"
+        "  }\n"
+        "}\n"));
+
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("typeof AffineSourceMotion.drawAffine != \"undefined\" ? 1 : 0")) == 1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("typeof AffineSourceMotion.__aetherKiriOrigDrawAffine == \"undefined\" ? 1 : 0")) == 1);
+    REQUIRE_NOTHROW(
+        engine->ExecScript(TVPGetD3DEmoteGpuBatchPatchScript()));
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("typeof AffineSourceMotion.__aetherKiriOrigDrawAffine != \"undefined\" ? 1 : 0")) == 1);
+    REQUIRE_NOTHROW(engine->ExecScript(
+        TJS_W("var batchSource = new AffineSourceMotion();\n")));
+    CHECK(evaluateInteger(engine.operator->(),
+                          TJS_W("batchSource._useD3D ? 1 : 0")) == 1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("typeof batchSource._window.motionD3DAdaptor.beginGpuBatch != \"undefined\" ? 1 : 0")) == 1);
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "var batchResult = batchSource.drawAffine(void, void, void);\n")));
+    CHECK(evaluateInteger(engine.operator->(), TJS_W("batchResult")) == 42);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.beginCount")) == 1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.endCount")) == 1);
+
+    // Reapplying the hook must not nest a second wrapper.
+    REQUIRE_NOTHROW(
+        engine->ExecScript(TVPGetD3DEmoteGpuBatchPatchScript()));
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "batchResult = batchSource.drawAffine(void, void, void);\n")));
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.beginCount")) == 2);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.endCount")) == 2);
+
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "var batchCaught = 0;\n"
+        "batchSource.shouldThrow = true;\n"
+        "try { batchSource.drawAffine(void, void, void); }\n"
+        "catch(e) { batchCaught = 1; }\n")));
+    CHECK(evaluateInteger(engine.operator->(), TJS_W("batchCaught")) == 1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.beginCount")) == 3);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.endCount")) == 3);
+
+    // A failed begin is optional instrumentation and must not suppress the
+    // game's draw call. Since begin did not return, there is no matching end.
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "batchSource.shouldThrow = false;\n"
+        "batchSource._window.motionD3DAdaptor.throwOnBegin = true;\n"
+        "batchResult = batchSource.drawAffine(void, void, void);\n")));
+    CHECK(evaluateInteger(engine.operator->(), TJS_W("batchResult")) == 42);
+    CHECK(evaluateInteger(engine.operator->(), TJS_W("batchSource.calls")) ==
+          4);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.beginCount")) == 4);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.endCount")) == 3);
+
+    // A failed end is also optional instrumentation and must not mask a
+    // successful result from the original draw implementation.
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "batchSource._window.motionD3DAdaptor.throwOnBegin = false;\n"
+        "batchSource._window.motionD3DAdaptor.throwOnEnd = true;\n"
+        "batchResult = batchSource.drawAffine(void, void, void);\n")));
+    CHECK(evaluateInteger(engine.operator->(), TJS_W("batchResult")) == 42);
+    CHECK(evaluateInteger(engine.operator->(), TJS_W("batchSource.calls")) ==
+          5);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.beginCount")) == 5);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.endCount")) == 4);
+
+    // If both the original draw and end fail, callers must still observe the
+    // original draw failure instead of the cleanup failure.
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "var batchCaughtMessage = \"\";\n"
+        "batchSource.shouldThrow = true;\n"
+        "try { batchSource.drawAffine(void, void, void); }\n"
+        "catch(e) { batchCaughtMessage = e.message; }\n")));
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchCaughtMessage == \"draw failed\" ? 1 : 0")) == 1);
+    CHECK(evaluateInteger(engine.operator->(), TJS_W("batchSource.calls")) ==
+          6);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.beginCount")) == 6);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.endCount")) == 5);
+
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "batchSource.shouldThrow = false;\n"
+        "batchSource._window.motionD3DAdaptor.throwOnEnd = false;\n"
+        "batchSource._useD3D = false;\n"
+        "batchSource.drawAffine(void, void, void);\n")));
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.beginCount")) == 6);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("batchSource._window.motionD3DAdaptor.endCount")) == 5);
+}
+
+TEST_CASE("D3DEmote GPU transaction hook follows AffineSourceMotion redefinition") {
+    ScriptEngineOwner engine;
+    engine->ExecScript(TJS_W(
+        "class RedefinitionBatchAdaptor {\n"
+        "  var beginCount = 0;\n"
+        "  var endCount = 0;\n"
+        "  function beginGpuBatch() { beginCount++; }\n"
+        "  function endGpuBatch() { endCount++; }\n"
+        "}\n"
+        "class AffineSourceMotion {\n"
+        "  var _useD3D = true;\n"
+        "  var _window;\n"
+        "  function AffineSourceMotion() {\n"
+        "    _window = %[motionD3DAdaptor: new RedefinitionBatchAdaptor()];\n"
+        "  }\n"
+        "  function drawAffine(target, mtx, src) { return 42; }\n"
+        "}\n"));
+
+    REQUIRE_NOTHROW(engine->ExecScript(TVPGetD3DEmoteGpuBatchPatchScript()));
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "var originalSource = new AffineSourceMotion();\n"
+        "var originalResult = originalSource.drawAffine(void, void, void);\n")));
+    CHECK(evaluateInteger(engine.operator->(), TJS_W("originalResult")) == 42);
+
+    // AffineSourceMotion.tjs can replace the global class after motion.tjs was
+    // loaded. Reapplying the post-load hook must wrap the replacement class,
+    // while the first wrapper keeps calling its own saved implementation.
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "class ReplacementAffineSourceMotion {\n"
+        "  var _useD3D = true;\n"
+        "  var _window;\n"
+        "  function ReplacementAffineSourceMotion() {\n"
+        "    _window = %[motionD3DAdaptor: new RedefinitionBatchAdaptor()];\n"
+        "  }\n"
+        "  function drawAffine(target, mtx, src) { return 84; }\n"
+        "}\n"
+        "global.AffineSourceMotion = ReplacementAffineSourceMotion;\n")));
+    REQUIRE_NOTHROW(engine->ExecScript(TVPGetD3DEmoteGpuBatchPatchScript()));
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "var replacementSource = new AffineSourceMotion();\n"
+        "var replacementResult = replacementSource.drawAffine(void, void, void);\n"
+        "originalResult = originalSource.drawAffine(void, void, void);\n")));
+
+    CHECK(evaluateInteger(engine.operator->(), TJS_W("replacementResult")) ==
+          84);
+    CHECK(evaluateInteger(engine.operator->(), TJS_W("originalResult")) == 42);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("replacementSource._window.motionD3DAdaptor.beginCount")) ==
+          1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("replacementSource._window.motionD3DAdaptor.endCount")) ==
+          1);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("originalSource._window.motionD3DAdaptor.beginCount")) == 2);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("originalSource._window.motionD3DAdaptor.endCount")) == 2);
+
+    // A second affinesourcemotion.tjs-style trigger remains idempotent for the
+    // replacement class rather than nesting another wrapper.
+    REQUIRE_NOTHROW(engine->ExecScript(TVPGetD3DEmoteGpuBatchPatchScript()));
+    REQUIRE_NOTHROW(engine->ExecScript(TJS_W(
+        "replacementResult = replacementSource.drawAffine(void, void, void);\n")));
+    CHECK(evaluateInteger(engine.operator->(), TJS_W("replacementResult")) ==
+          84);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("replacementSource._window.motionD3DAdaptor.beginCount")) ==
+          2);
+    CHECK(evaluateInteger(
+              engine.operator->(),
+              TJS_W("replacementSource._window.motionD3DAdaptor.endCount")) ==
+          2);
+}

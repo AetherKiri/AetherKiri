@@ -580,6 +580,38 @@ namespace motion::detail {
         // every nested E-mote part. Remember the last inherited values so an
         // unchanged input does not dirty the entire child model again.
         std::unordered_map<std::string, double> inheritedVariableInputs;
+        // Layer evaluation overlays persistent, evaluated and inherited
+        // variables on every tick. Retain the union's nodes between ticks so
+        // stable E-mote variable tables update values in place instead of
+        // allocating and destroying two temporary unordered_maps per frame.
+        // The generation excludes labels which disappeared this tick without
+        // requiring the scratch map itself to be cleared.
+        struct EffectiveVariableScratchEntry {
+            double value = 0.0;
+            std::uint64_t generation = 0;
+            bool hasRoutingNode = false;
+        };
+        std::unordered_map<std::string, EffectiveVariableScratchEntry>
+            effectiveVariableScratch;
+        std::uint64_t effectiveVariableScratchGeneration = 0;
+
+        std::uint64_t beginEffectiveVariableScratch() {
+            ++effectiveVariableScratchGeneration;
+            if(effectiveVariableScratchGeneration == 0) {
+                effectiveVariableScratch.clear();
+                effectiveVariableScratchGeneration = 1;
+            }
+            return effectiveVariableScratchGeneration;
+        }
+
+        void setEffectiveVariableScratch(
+            const std::string &label, double value) {
+            auto [it, inserted] = effectiveVariableScratch.try_emplace(label);
+            (void)inserted;
+            it->second.value = value;
+            it->second.generation = effectiveVariableScratchGeneration;
+            it->second.hasRoutingNode = false;
+        }
         // Nested motion players can keep their flattened render description
         // until either their evaluated layer state or inherited draw affine
         // changes. Top-level players still rebuild every animated tick.
@@ -633,6 +665,8 @@ namespace motion::detail {
             emoteCommandOutputCacheHits = 0;
             emoteCommandLeafCacheHits = 0;
             inheritedVariableInputs.clear();
+            effectiveVariableScratch.clear();
+            effectiveVariableScratchGeneration = 0;
             preparedRenderItems.clear();
             preparedRenderItemsValid = false;
             clearPresentationRenderReuse();

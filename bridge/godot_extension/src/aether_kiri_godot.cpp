@@ -2,6 +2,7 @@
 #include "engine_options.h"
 #include "engine_runtime_provider.h"
 #include "GodotGpuBridge.h"
+#include "GodotGpuBarrierShadowPlanner.h"
 #include "ComplexRect.h"
 
 #include <godot_cpp/classes/engine.hpp>
@@ -60,6 +61,7 @@
 #include <regex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 #include <mutex>
@@ -174,6 +176,7 @@ struct GodotGpuOp {
     bool result = false;
     bool done = false;
     uint64_t readback_request = 0;
+    uint64_t queue_sequence = 0;
     std::mutex done_mutex;
     std::condition_variable done_cv;
 };
@@ -191,6 +194,12 @@ uint64_t g_next_gpu_readback_id = 1;
 std::mutex g_gpu_op_queue_mutex;
 std::deque<std::shared_ptr<GodotGpuOp>> g_gpu_op_queue;
 bool g_gpu_op_drain_scheduled = false;
+uint64_t g_next_gpu_op_sequence = 1;
+uint64_t g_last_gpu_op_sequence = 0;
+uint64_t g_gpu_batch_token = 0;
+uint64_t g_next_gpu_batch_token = 1;
+uint32_t g_gpu_batch_depth = 0;
+std::thread::id g_gpu_batch_owner;
 std::atomic<uint64_t> g_gpu_op_submitted{0};
 std::atomic<uint64_t> g_gpu_op_completed{0};
 std::atomic<uint64_t> g_gpu_op_failed{0};
@@ -205,8 +214,41 @@ std::atomic<uint64_t> g_gpu_barriers{0};
 std::atomic<uint64_t> g_gpu_alias_sources{0};
 std::atomic<uint64_t> g_gpu_sync_timeouts{0};
 std::atomic<uint64_t> g_gpu_alpha_d_clear_versions{0};
+std::atomic<uint64_t> g_gpu_batch_started{0};
+std::atomic<uint64_t> g_gpu_batch_ended{0};
+std::atomic<uint64_t> g_gpu_batch_rejected{0};
+std::atomic<uint64_t> g_gpu_batch_ops{0};
+std::atomic<uint64_t> g_gpu_compute_batches{0};
+std::atomic<uint64_t> g_gpu_compute_batch_ops{0};
+std::atomic<uint64_t> g_gpu_nonlive_compute_ops{0};
+std::atomic<uint64_t> g_gpu_nonlive_compute_barriers{0};
+std::atomic<uint64_t> g_gpu_predicted_compute_barriers{0};
+std::atomic<uint64_t> g_gpu_predicted_raw_hazards{0};
+std::atomic<uint64_t> g_gpu_predicted_waw_hazards{0};
+std::atomic<uint64_t> g_gpu_predicted_war_hazards{0};
 
 constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
+
+bool GodotGpuBarrierShadowEnabled() {
+    static const bool enabled = [] {
+        const char *value =
+            std::getenv("AETHERKIRI_GODOT_SHADOW_BARRIERS");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
+
+void UpdateGpuQueuePeak(size_t value);
+
+void EnqueueGodotGpuOpLocked(const std::shared_ptr<GodotGpuOp> &op) {
+    if (op == nullptr) return;
+    uint64_t sequence = g_next_gpu_op_sequence++;
+    if (sequence == 0) sequence = g_next_gpu_op_sequence++;
+    op->queue_sequence = sequence;
+    g_last_gpu_op_sequence = sequence;
+    g_gpu_op_queue.push_back(op);
+    UpdateGpuQueuePeak(g_gpu_op_queue.size());
+}
 
 #if defined(__ANDROID__)
 constexpr int kAndroidFlagActivityNewTask = 0x10000000;
@@ -1044,10 +1086,14 @@ String GetGodotGpuBridgeDebugInfo() {
     uint64_t live_texture_bytes = 0;
     std::unordered_map<uint64_t, size_t> texture_sizes;
     bool scheduled = false;
+    bool batch_active = false;
+    uint32_t batch_depth = 0;
     {
         std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
         queue_size = g_gpu_op_queue.size();
         scheduled = g_gpu_op_drain_scheduled;
+        batch_active = g_gpu_batch_token != 0;
+        batch_depth = g_gpu_batch_depth;
     }
     {
         std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
@@ -1084,6 +1130,28 @@ String GetGodotGpuBridgeDebugInfo() {
         << " bridge_alpha_d_clear_versions="
         << g_gpu_alpha_d_clear_versions.load(std::memory_order_relaxed)
         << " bridge_timeouts=" << g_gpu_sync_timeouts.load(std::memory_order_relaxed)
+        << " bridge_batch_active=" << (batch_active ? 1 : 0)
+        << " bridge_batch_depth=" << batch_depth
+        << " bridge_batches=" << g_gpu_batch_started.load(std::memory_order_relaxed)
+        << " bridge_batch_ends=" << g_gpu_batch_ended.load(std::memory_order_relaxed)
+        << " bridge_batch_rejected=" << g_gpu_batch_rejected.load(std::memory_order_relaxed)
+        << " bridge_batch_ops=" << g_gpu_batch_ops.load(std::memory_order_relaxed)
+        << " bridge_compute_batches=" << g_gpu_compute_batches.load(std::memory_order_relaxed)
+        << " bridge_compute_batch_ops=" << g_gpu_compute_batch_ops.load(std::memory_order_relaxed)
+        << " bridge_nonlive_compute_ops="
+        << g_gpu_nonlive_compute_ops.load(std::memory_order_relaxed)
+        << " bridge_nonlive_compute_barriers="
+        << g_gpu_nonlive_compute_barriers.load(std::memory_order_relaxed)
+        << " bridge_shadow_barriers_enabled="
+        << (GodotGpuBarrierShadowEnabled() ? 1 : 0)
+        << " bridge_predicted_compute_barriers="
+        << g_gpu_predicted_compute_barriers.load(std::memory_order_relaxed)
+        << " bridge_predicted_raw="
+        << g_gpu_predicted_raw_hazards.load(std::memory_order_relaxed)
+        << " bridge_predicted_waw="
+        << g_gpu_predicted_waw_hazards.load(std::memory_order_relaxed)
+        << " bridge_predicted_war="
+        << g_gpu_predicted_war_hazards.load(std::memory_order_relaxed)
         << " bridge_textures=" << texture_count
         << " bridge_texture_live_mb="
         << (live_texture_bytes / (1024u * 1024u))
@@ -3208,6 +3276,27 @@ void ClearGodotGpuUniformSetCache(RenderingDevice *rd) {
     g_gpu_uniform_set_cache.clear();
 }
 
+void InvalidateGodotGpuUniformSetsForResource(RenderingDevice *rd,
+                                              const RID &resource) {
+    if (!resource.is_valid()) return;
+    const int64_t resource_id = resource.get_id();
+    for (auto it = g_gpu_uniform_set_cache.begin();
+         it != g_gpu_uniform_set_cache.end();) {
+        const GodotGpuUniformSetKey &key = it->first;
+        const bool references_resource =
+            key.rid0 == resource_id || key.rid1 == resource_id ||
+            key.rid2 == resource_id || key.rid3 == resource_id;
+        if (!references_resource) {
+            ++it;
+            continue;
+        }
+        if (rd != nullptr && it->second.is_valid()) {
+            rd->free_rid(it->second);
+        }
+        it = g_gpu_uniform_set_cache.erase(it);
+    }
+}
+
 bool UpdateGodotGpuTriangleVertexBuffer(RenderingDevice *rd,
                                         const PackedByteArray &data,
                                         RID &vertex_buffer) {
@@ -3243,10 +3332,11 @@ bool UpdateGodotGpuTriangleVertexBuffer(RenderingDevice *rd,
         const uint64_t capacity = required;
         if (capacity > std::numeric_limits<uint32_t>::max()) return false;
 
-        // Uniform sets retain the buffer RID, so discard them before replacing
-        // the shared buffer. Texture-backed sets are lazily rebuilt as needed.
-        ClearGodotGpuUniformSetCache(rd);
         if (g_gpu_pipeline_state->triangle_vertex_buffer.is_valid()) {
+            // Uniform sets retain the buffer RID. Keep unrelated texture-only
+            // sets alive while replacing this shared vertex buffer.
+            InvalidateGodotGpuUniformSetsForResource(
+                rd, g_gpu_pipeline_state->triangle_vertex_buffer);
             rd->free_rid(g_gpu_pipeline_state->triangle_vertex_buffer);
         }
         g_gpu_pipeline_state->triangle_vertex_buffer =
@@ -3554,8 +3644,16 @@ void FreeGodotGpuPreparedTriangles(RenderingDevice *rd,
     if (prepared.owns_uniform_set && prepared.uniform_set.is_valid()) {
         rd->free_rid(prepared.uniform_set);
     }
-    if (prepared.temp_src.is_valid()) rd->free_rid(prepared.temp_src);
+    if (prepared.temp_src.is_valid()) {
+        // Batched triangle preparation may cache a set containing this
+        // one-operation alias copy. Remove only that dependent set before the
+        // temporary texture goes away.
+        InvalidateGodotGpuUniformSetsForResource(rd, prepared.temp_src);
+        rd->free_rid(prepared.temp_src);
+    }
     if (prepared.owns_vertex_buffer && prepared.vertex_buffer.is_valid()) {
+        InvalidateGodotGpuUniformSetsForResource(rd,
+                                                 prepared.vertex_buffer);
         rd->free_rid(prepared.vertex_buffer);
     }
     prepared = {};
@@ -3879,7 +3977,7 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
         case GodotGpuOp::Type::ArtemisShader:
             return ExecuteArtemisGpuShader(rd, op);
         case GodotGpuOp::Type::Release:
-            ClearGodotGpuUniformSetCache(rd);
+            InvalidateGodotGpuUniformSetsForResource(rd, op->dst);
             rd->free_rid(op->dst);
             return true;
         case GodotGpuOp::Type::Flush:
@@ -3954,6 +4052,44 @@ bool IsLive2DTriangleOp(const std::shared_ptr<GodotGpuOp> &op) {
     if (op->type == GodotGpuOp::Type::DrawMaskedTriangles) return true;
     return op->type == GodotGpuOp::Type::DrawTriangles &&
            (op->color & TVP_GODOT_GPU_BLEND_TVP_OPERATION) == 0;
+}
+
+GodotGpuBarrierShadowPlanner::Step RecordGodotGpuNonLiveShadowAccess(
+    GodotGpuBarrierShadowPlanner &planner, const GodotGpuOp &op) {
+    const int64_t src = op.src.get_id();
+    const int64_t src2 = op.src2.get_id();
+    const int64_t src3 = op.src3.get_id();
+    const int64_t dst = op.dst.get_id();
+    switch (op.type) {
+        case GodotGpuOp::Type::CopyTriangles:
+        case GodotGpuOp::Type::DrawTriangles:
+            return planner.record({src, dst}, {dst});
+        case GodotGpuOp::Type::DrawMaskedTriangles:
+            return planner.record({src, src2, dst}, {dst});
+        case GodotGpuOp::Type::Blend:
+            if (op.mode == TVP_GODOT_GPU_BLEND_FILL_ARGB) {
+                return planner.record({}, {dst});
+            }
+            return planner.record({src, dst}, {dst});
+        case GodotGpuOp::Type::Blend2:
+            return planner.record({src, src2, dst}, {dst});
+        case GodotGpuOp::Type::Blend3:
+            return planner.record({src, src2, src3, dst}, {dst});
+        default:
+            return {};
+    }
+}
+
+void PublishGodotGpuBarrierShadowCounters(
+    const GodotGpuBarrierShadowPlanner::Counters &counters) {
+    g_gpu_predicted_compute_barriers.fetch_add(
+        counters.barriers, std::memory_order_relaxed);
+    g_gpu_predicted_raw_hazards.fetch_add(counters.raw,
+                                          std::memory_order_relaxed);
+    g_gpu_predicted_waw_hazards.fetch_add(counters.waw,
+                                          std::memory_order_relaxed);
+    g_gpu_predicted_war_hazards.fetch_add(counters.war,
+                                          std::memory_order_relaxed);
 }
 
 bool TriangleOpNeedsBarrierBeforeDispatch(
@@ -4098,6 +4234,9 @@ void ExecuteGodotGpuComputeBatch(
     RenderingDevice *rd,
     const std::vector<std::shared_ptr<GodotGpuOp>> &ops) {
     if (ops.empty()) return;
+    g_gpu_compute_batches.fetch_add(1, std::memory_order_relaxed);
+    g_gpu_compute_batch_ops.fetch_add(
+        static_cast<uint64_t>(ops.size()), std::memory_order_relaxed);
     if (rd == nullptr) {
         for (const auto &op : ops) FinishGodotGpuOp(op, false);
         return;
@@ -4151,10 +4290,28 @@ void ExecuteGodotGpuComputeBatch(
 
     std::vector<RID> unused_uniform_sets;
     bool any_dispatched = false;
+    uint64_t nonlive_compute_ops = 0;
+    uint64_t nonlive_compute_barriers = 0;
     std::vector<GodotGpuPendingWrite> live2d_pending_writes;
+    const bool shadow_enabled = GodotGpuBarrierShadowEnabled();
+    std::unique_ptr<GodotGpuBarrierShadowPlanner> nonlive_shadow;
+    if (shadow_enabled) {
+        try {
+            nonlive_shadow =
+                std::make_unique<GodotGpuBarrierShadowPlanner>();
+        } catch (...) {
+            // Optional diagnostics must never affect command submission.
+        }
+    }
     const int64_t compute_list = rd->compute_list_begin();
     for (size_t i = 0; i < ops.size(); ++i) {
         const bool live2d_triangle = IsLive2DTriangleOp(ops[i]);
+        if (live2d_triangle && nonlive_shadow != nullptr) {
+            // Live2D has its own rectangle-aware ordering below. End the
+            // diagnostic whole-RID non-Live2D epoch without changing the
+            // real command list.
+            nonlive_shadow->finish();
+        }
         if (live2d_triangle && TriangleOpNeedsBarrierBeforeDispatch(
                                    *ops[i], live2d_pending_writes)) {
             rd->compute_list_add_barrier(compute_list);
@@ -4163,7 +4320,8 @@ void ExecuteGodotGpuComputeBatch(
             rd->compute_list_add_barrier(compute_list);
             live2d_pending_writes.clear();
         }
-        if (IsBatchableTriangleOp(ops[i])) {
+        const bool batchable_triangle = IsBatchableTriangleOp(ops[i]);
+        if (batchable_triangle) {
             if (results[i]) {
                 DispatchGodotGpuPreparedTriangles(rd, compute_list,
                                                   prepared[i]);
@@ -4192,9 +4350,37 @@ void ExecuteGodotGpuComputeBatch(
             } else {
                 // Keep the more conservative E-mote/TVP behavior: those paths
                 // can expose different RIDs backed by aliased storage.
+                ++nonlive_compute_ops;
                 rd->compute_list_add_barrier(compute_list);
+                ++nonlive_compute_barriers;
+                if (nonlive_shadow != nullptr) {
+                    try {
+                        RecordGodotGpuNonLiveShadowAccess(
+                            *nonlive_shadow, *ops[i]);
+                    } catch (...) {
+                        // Shadow accounting must never alter rendering. If
+                        // its bookkeeping cannot allocate, discard the batch
+                        // sample and keep submitting commands unchanged.
+                        nonlive_shadow.reset();
+                    }
+                }
             }
         }
+    }
+    if (nonlive_shadow != nullptr) {
+        nonlive_shadow->finish();
+        if (shadow_enabled) {
+            PublishGodotGpuBarrierShadowCounters(
+                nonlive_shadow->counters());
+        }
+    }
+    if (nonlive_compute_barriers != 0) {
+        g_gpu_nonlive_compute_barriers.fetch_add(
+            nonlive_compute_barriers, std::memory_order_relaxed);
+    }
+    if (nonlive_compute_ops != 0) {
+        g_gpu_nonlive_compute_ops.fetch_add(
+            nonlive_compute_ops, std::memory_order_relaxed);
     }
     if (!live2d_pending_writes.empty()) {
         rd->compute_list_add_barrier(compute_list);
@@ -4208,7 +4394,8 @@ void ExecuteGodotGpuComputeBatch(
     }
 }
 
-void DrainGodotGpuOpsOnRenderThread() {
+void DrainGodotGpuOpsOnRenderThreadImpl(bool force_batch_drain,
+                                        uint64_t sequence_cutoff = 0) {
     RenderingDevice *rd = MainRenderingDevice();
     std::vector<std::shared_ptr<GodotGpuOp>> compute_batch;
     const auto flush_compute = [&]() {
@@ -4219,8 +4406,23 @@ void DrainGodotGpuOpsOnRenderThread() {
         std::shared_ptr<GodotGpuOp> op;
         {
             std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
-            if (g_gpu_op_queue.empty()) {
+            if (!force_batch_drain && g_gpu_batch_token != 0) {
+                // A callback may already have been posted when the producer
+                // opens a batch. Leave its ordered operations untouched until
+                // the matching end callback releases the gate.
                 g_gpu_op_drain_scheduled = false;
+                break;
+            }
+            if (g_gpu_op_queue.empty()) {
+                if (!force_batch_drain) g_gpu_op_drain_scheduled = false;
+                break;
+            }
+            if (force_batch_drain && sequence_cutoff != 0 &&
+                g_gpu_op_queue.front()->queue_sequence > sequence_cutoff) {
+                // A bounded split/end callback may run after another producer
+                // has already opened its next batch. Never consume operations
+                // beyond the sequence captured by the callback that owns this
+                // drain.
                 break;
             }
             op = g_gpu_op_queue.front();
@@ -4257,6 +4459,14 @@ void DrainGodotGpuOpsOnRenderThread() {
     flush_compute();
 }
 
+void DrainGodotGpuOpsOnRenderThread() {
+    DrainGodotGpuOpsOnRenderThreadImpl(false);
+}
+
+void ForceDrainGodotGpuOpsOnRenderThread(uint64_t sequence_cutoff) {
+    DrainGodotGpuOpsOnRenderThreadImpl(true, sequence_cutoff);
+}
+
 bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
     RenderingServer *server = RenderingServer::get_singleton();
     RenderingDevice *rd = MainRenderingDevice();
@@ -4272,12 +4482,31 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
         return false;
     }
     if (server->is_on_render_thread()) {
+        bool explicit_batch_active = false;
+        uint64_t force_sequence_cutoff = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
+            explicit_batch_active = g_gpu_batch_token != 0;
+            if (explicit_batch_active) {
+                EnqueueGodotGpuOpLocked(op);
+                force_sequence_cutoff = op->queue_sequence;
+                g_gpu_batch_ops.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        if (explicit_batch_active) {
+            if (!wait) return true;
+            // Synchronous reads and shader requests remain legal inside a
+            // producer batch. Force a split so the caller cannot deadlock on
+            // the queue gate. The sequence cutoff prevents a delayed split
+            // from consuming a later producer batch.
+            ForceDrainGodotGpuOpsOnRenderThread(force_sequence_cutoff);
+            return op->result;
+        }
         if (DeferredGodotGpuDrainEnabled() ||
             op->type == GodotGpuOp::Type::ReadAsync) {
             {
                 std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
-                g_gpu_op_queue.push_back(op);
-                UpdateGpuQueuePeak(g_gpu_op_queue.size());
+                EnqueueGodotGpuOpLocked(op);
             }
             if (!wait && op->type != GodotGpuOp::Type::Flush &&
                 op->type != GodotGpuOp::Type::ReadAsync) {
@@ -4292,17 +4521,32 @@ bool RunGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool wait) {
     }
 
     bool should_schedule = false;
+    bool should_force_schedule = false;
+    uint64_t force_sequence_cutoff = 0;
     {
         std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
-        g_gpu_op_queue.push_back(op);
-        UpdateGpuQueuePeak(g_gpu_op_queue.size());
-        if (ShouldScheduleGodotGpuDrainNow(op, wait) &&
+        EnqueueGodotGpuOpLocked(op);
+        force_sequence_cutoff = op->queue_sequence;
+        const bool explicit_batch_active = g_gpu_batch_token != 0;
+        if (explicit_batch_active) {
+            g_gpu_batch_ops.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (explicit_batch_active && wait) {
+            // Do not rely on an earlier normal callback: it may observe the
+            // active gate and return before this synchronous request arrives.
+            should_force_schedule = true;
+        } else if (!explicit_batch_active &&
+                   ShouldScheduleGodotGpuDrainNow(op, wait) &&
             !g_gpu_op_drain_scheduled) {
             g_gpu_op_drain_scheduled = true;
             should_schedule = true;
         }
     }
-    if (should_schedule) {
+    if (should_force_schedule) {
+        server->call_on_render_thread(
+            callable_mp_static(&ForceDrainGodotGpuOpsOnRenderThread)
+                .bind(force_sequence_cutoff));
+    } else if (should_schedule) {
         server->call_on_render_thread(
             callable_mp_static(&DrainGodotGpuOpsOnRenderThread));
     }
@@ -4329,6 +4573,74 @@ bool RunGodotGpuOpAsync(const std::shared_ptr<GodotGpuOp> &op) {
 
 bool RunGodotGpuOpSync(const std::shared_ptr<GodotGpuOp> &op) {
     return RunGodotGpuOp(op, true);
+}
+
+uint64_t BridgeBeginBatch() {
+    RenderingServer *server = RenderingServer::get_singleton();
+    if (server == nullptr || MainRenderingDevice() == nullptr) return 0;
+
+    const auto caller = std::this_thread::get_id();
+    std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
+    if (g_gpu_batch_token != 0) {
+        if (g_gpu_batch_owner != caller) {
+            g_gpu_batch_rejected.fetch_add(1, std::memory_order_relaxed);
+            return 0;
+        }
+        ++g_gpu_batch_depth;
+        return g_gpu_batch_token;
+    }
+
+    uint64_t token = g_next_gpu_batch_token++;
+    if (token == 0) token = g_next_gpu_batch_token++;
+    g_gpu_batch_token = token;
+    g_gpu_batch_depth = 1;
+    g_gpu_batch_owner = caller;
+    g_gpu_batch_started.fetch_add(1, std::memory_order_relaxed);
+    return token;
+}
+
+bool BridgeEndBatch(uint64_t batch_token) {
+    RenderingServer *server = RenderingServer::get_singleton();
+    const bool on_render_thread =
+        server != nullptr && server->is_on_render_thread();
+    bool has_queued_ops = false;
+    bool should_schedule = false;
+    uint64_t batch_sequence_cutoff = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_op_queue_mutex);
+        if (batch_token == 0 || batch_token != g_gpu_batch_token ||
+            g_gpu_batch_owner != std::this_thread::get_id() ||
+            g_gpu_batch_depth == 0) {
+            g_gpu_batch_rejected.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        if (g_gpu_batch_depth > 1) {
+            --g_gpu_batch_depth;
+            return true;
+        }
+
+        g_gpu_batch_token = 0;
+        g_gpu_batch_depth = 0;
+        g_gpu_batch_owner = {};
+        g_gpu_batch_ended.fetch_add(1, std::memory_order_relaxed);
+        has_queued_ops = !g_gpu_op_queue.empty();
+        batch_sequence_cutoff = g_last_gpu_op_sequence;
+        if (has_queued_ops && !on_render_thread && server != nullptr &&
+            !g_gpu_op_drain_scheduled) {
+            g_gpu_op_drain_scheduled = true;
+            should_schedule = true;
+        }
+    }
+
+    if (!has_queued_ops) return true;
+    if (server == nullptr) return false;
+    if (on_render_thread) {
+        ForceDrainGodotGpuOpsOnRenderThread(batch_sequence_cutoff);
+    } else if (should_schedule) {
+        server->call_on_render_thread(
+            callable_mp_static(&DrainGodotGpuOpsOnRenderThread));
+    }
+    return true;
 }
 
 PackedByteArray PackRgbaBytes(const void *pixels, uint32_t width,
@@ -6252,6 +6564,13 @@ public:
         callbacks.discard_read_rgba = BridgeDiscardReadRgba;
         callbacks.flush = BridgeFlush;
         engine_register_godot_gpu_bridge(&callbacks);
+        TVPGodotGpuBatchCallbacks batch_callbacks{};
+        batch_callbacks.struct_size = sizeof(batch_callbacks);
+        batch_callbacks.abi_version =
+            TVP_GODOT_GPU_BATCH_CALLBACKS_ABI_VERSION;
+        batch_callbacks.begin_batch = BridgeBeginBatch;
+        batch_callbacks.end_batch = BridgeEndBatch;
+        engine_register_godot_gpu_batch_bridge(&batch_callbacks);
 
         CharString writable_utf8 = writable_path.utf8();
         CharString cache_utf8 = cache_path.utf8();
@@ -7883,6 +8202,7 @@ void DeinitializeAetherKiri(ModuleInitializationLevel level) {
     BridgeFlush();
     ReleaseRemainingGodotGpuTextures();
     ReleaseGodotGpuPipeline();
+    engine_register_godot_gpu_batch_bridge(nullptr);
     engine_register_godot_gpu_bridge(nullptr);
 }
 

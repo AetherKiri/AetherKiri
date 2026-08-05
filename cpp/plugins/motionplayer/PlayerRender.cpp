@@ -246,8 +246,10 @@ namespace {
     }
 
     std::size_t renderCommandReuseSignature(
-        const std::vector<motion::detail::PlayerRuntime::RenderCommand> &commands) {
+        const std::vector<motion::detail::PlayerRuntime::RenderCommand> &commands,
+        int maskMode) {
         std::size_t seed = commands.size();
+        renderReuseHashCombine(seed, std::hash<int>{}(maskMode));
         for(const auto &command : commands) {
             renderReuseHashCombine(seed, std::hash<int>{}(command.nodeIndex));
             renderReuseHashCombine(
@@ -8712,6 +8714,8 @@ namespace motion {
             }
             return false;
         }
+        TVPGodotGpuBatchScope gpuBatch(
+            _runtime->isEmoteMode && _runtime->renderCommands.size() > 1);
 
         struct RenderProfileStats {
             int baseHits = 0;
@@ -11034,7 +11038,8 @@ namespace motion {
                 static_cast<const void *>(renderLayerObject),
                 static_cast<const void *>(renderLayer),
                 _runtime->renderCommands.size(),
-                renderCommandReuseSignature(_runtime->renderCommands),
+                renderCommandReuseSignature(_runtime->renderCommands,
+                                            _maskMode),
                 profileStats.directOutputs, profileStats.bufferedOutputs,
                 profileStats.commandOutputCacheHits,
                 profileStats.commandLeafCacheHits,
@@ -11053,7 +11058,7 @@ namespace motion {
                 profileStats.tintApplyUs, profileStats.psbMetadataUs,
                 profileStats.psbDecodeUs, profileStats.psbConvertUs);
         }
-        return true;
+        return gpuBatch.finish();
     }
 
     iTJSDispatch2 *Player::resolveSeparateLayerRenderTarget(
@@ -11157,6 +11162,7 @@ namespace motion {
         if(s_inRenderToD3D) return false;
         s_inRenderToD3D = true;
         struct Guard { ~Guard() { s_inRenderToD3D = false; } } guard;
+        adaptor->setRenderedLayer(nullptr);
 
         ensureMotionLoaded();
         if(!_runtime->activeMotion) return false;
@@ -11213,6 +11219,7 @@ namespace motion {
             return false;
         }
 
+        buildRenderCommands(adaptor->getWidth(), adaptor->getHeight());
         const std::size_t renderLayerIndex =
             retainD3DPresentation ? 0u
                                   : _runtime->nextD3DRenderLayer;
@@ -11298,12 +11305,13 @@ namespace motion {
         if(!renderLayerObject) {
             return false;
         }
+        TVPGodotGpuBatchScope d3dGpuBatch(
+            _runtime->isEmoteMode && _runtime->renderCommands.size() > 1);
         if(!prepareLayerForRender(renderLayerObject, adaptor->getWidth(),
                                   adaptor->getHeight(), 0x00000000)) {
             return false;
         }
 
-        buildRenderCommands(adaptor->getWidth(), adaptor->getHeight());
         if(!executeLayerRenderCommands(renderLayerObject, true)) {
             adaptor->setRenderedLayer(nullptr);
             return false;
@@ -11371,7 +11379,7 @@ namespace motion {
         } else {
             adaptor->setRenderedLayer(renderLayerObject);
         }
-        return true;
+        return d3dGpuBatch.finish();
     }
 
     bool Player::renderToRgba(std::uint8_t *pixels, int width, int height,
@@ -12250,7 +12258,8 @@ namespace motion {
                 _runtime->renderCommands.size());
         }
         const auto presentationCommandSignature =
-            renderCommandReuseSignature(_runtime->renderCommands);
+            renderCommandReuseSignature(_runtime->renderCommands,
+                                        _maskMode);
         const auto isRuntimeLayerSlot =
             [renderLayerObject](const tTJSVariant &slot) {
                 return slot.Type() == tvtObject &&

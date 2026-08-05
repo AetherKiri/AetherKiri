@@ -38,6 +38,10 @@ typedef struct engine_media_handle_s* engine_media_handle_t;
 /* Registers host renderer callbacks. The callback table is renderer-specific. */
 ENGINE_API_EXPORT void engine_register_godot_gpu_bridge(
     const void* callbacks);
+/* Registers optional producer-batch callbacks separately so the legacy Godot
+ * GPU callback table remains ABI-stable. */
+ENGINE_API_EXPORT void engine_register_godot_gpu_batch_bridge(
+    const void* callbacks);
 
 typedef enum engine_result_t {
   ENGINE_RESULT_OK = 0,
