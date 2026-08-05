@@ -46,6 +46,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
@@ -59,6 +60,9 @@ env:
   # Forward the checkout decision to build.sh so a stale or partial package
   # checkout cannot accidentally enable private extensions in public builds.
   AETHERKIRI_ENABLE_INTERNAL: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
+  # Trusted same-repository changes may populate the package cache. Fork and
+  # Dependabot pull requests receive read-only package access.
+  AETHERKIRI_VCPKG_CACHE_WRITE: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
   AETHERKIRI_RELEASE_VERSION: ${{ inputs.release_version || '' }}
   AETHERKIRI_BUILD_NUMBER: ${{ inputs.release_build_number || github.run_number }}
   AETHERKIRI_BUILD_ATTEMPT: ${{ github.run_attempt }}
@@ -103,18 +107,21 @@ jobs:
       - name: Install Build Systems
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd ccache jq
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd ccache jq mono-complete
 
       - name: Restore ccache
         id: restore-ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-android-ccache
+          key: ${{ runner.os }}-android-ccache-v2
+          restore-keys: |
+            ${{ runner.os }}-android-ccache-
 
       - name: Setup ccache config
         run: |
-          ccache --max-size=1000M
+          ccache --max-size=400M
+          ccache --cleanup
           ccache -z
 
       - name: Set up Java
@@ -189,17 +196,6 @@ jobs:
           fi
           echo "ANDROID_NDK_HOME=${ndk_root}" >> "$GITHUB_ENV"
 
-      - name: Restore vcpkg cache
-        id: restore-vcpkg
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-android-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-          restore-keys: |
-            ${{ runner.os }}-android-vcpkg-
-
       - name: Bootstrap vcpkg
         run: |
           set -euo pipefail
@@ -214,6 +210,11 @@ jobs:
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure vcpkg binary cache
+        env:
+          VCPKG_PACKAGES_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/configure-vcpkg-binary-cache.sh "$VCPKG_ROOT/vcpkg"
 
       - name: Configure Android signing
         env:
@@ -297,21 +298,12 @@ jobs:
           path: out/godot/android/release/Aether-release.apk
           retention-days: 7
 
-      - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-android-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-
       - name: Save ccache
-        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-android-ccache
+          key: ${{ runner.os }}-android-ccache-v2
 
   ios:
     name: Build iOS App
@@ -379,7 +371,7 @@ jobs:
 
       - name: Install Build Systems
         run: |
-          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache
+          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache mono
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
 
@@ -411,23 +403,15 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ios-ccache
+          key: ${{ runner.os }}-ios-ccache-v2
+          restore-keys: |
+            ${{ runner.os }}-ios-ccache-
 
       - name: Setup ccache config
         run: |
-          ccache --max-size=1000M
+          ccache --max-size=400M
+          ccache --cleanup
           ccache -z
-
-      - name: Restore vcpkg cache
-        id: restore-vcpkg
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-ios-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-          restore-keys: |
-            ${{ runner.os }}-ios-vcpkg-
 
       - name: Bootstrap vcpkg
         run: |
@@ -443,6 +427,11 @@ jobs:
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure vcpkg binary cache
+        env:
+          VCPKG_PACKAGES_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/configure-vcpkg-binary-cache.sh "$VCPKG_ROOT/vcpkg"
 
       - name: Build iOS Release
         run: |
@@ -557,21 +546,12 @@ jobs:
           path: out/godot/ios/release/Aether-App-Store.ipa
           retention-days: 7
 
-      - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-ios-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-
       - name: Save ccache
-        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ios-ccache
+          key: ${{ runner.os }}-ios-ccache-v2
 
   macos:
     name: Build macOS App
@@ -630,7 +610,7 @@ jobs:
 
       - name: Install Build Systems
         run: |
-          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache
+          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache mono
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
 
@@ -662,23 +642,15 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-macos-ccache
+          key: ${{ runner.os }}-macos-ccache-v2
+          restore-keys: |
+            ${{ runner.os }}-macos-ccache-
 
       - name: Setup ccache config
         run: |
-          ccache --max-size=1000M
+          ccache --max-size=400M
+          ccache --cleanup
           ccache -z
-
-      - name: Restore vcpkg cache
-        id: restore-vcpkg
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-macos-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-          restore-keys: |
-            ${{ runner.os }}-macos-vcpkg-
 
       - name: Bootstrap vcpkg
         run: |
@@ -694,6 +666,11 @@ jobs:
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure vcpkg binary cache
+        env:
+          VCPKG_PACKAGES_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/configure-vcpkg-binary-cache.sh "$VCPKG_ROOT/vcpkg"
 
       - name: Build macOS Release
         run: |
@@ -801,21 +778,12 @@ jobs:
           path: out/godot/macos/app-store/Aether-Mac-App-Store.pkg
           retention-days: 7
 
-      - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-macos-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-
       - name: Save ccache
-        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-macos-ccache
+          key: ${{ runner.os }}-macos-ccache-v2
 
   web:
     name: Build Web App
@@ -854,7 +822,7 @@ jobs:
       - name: Install Build Systems
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd ccache jq python3
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd ccache jq python3 mono-complete
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -924,23 +892,15 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-web-ccache
+          key: ${{ runner.os }}-web-ccache-v2
+          restore-keys: |
+            ${{ runner.os }}-web-ccache-
 
       - name: Setup ccache config
         run: |
-          ccache --max-size=1000M
+          ccache --max-size=400M
+          ccache --cleanup
           ccache -z
-
-      - name: Restore vcpkg cache
-        id: restore-vcpkg
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-web-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-          restore-keys: |
-            ${{ runner.os }}-web-vcpkg-
 
       - name: Bootstrap vcpkg
         run: |
@@ -956,6 +916,11 @@ jobs:
             (cd .devtools/vcpkg && ./bootstrap-vcpkg.sh -disableMetrics)
           fi
           echo "VCPKG_ROOT=${GITHUB_WORKSPACE}/.devtools/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure vcpkg binary cache
+        env:
+          VCPKG_PACKAGES_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/configure-vcpkg-binary-cache.sh "$VCPKG_ROOT/vcpkg"
 
       - name: Install npm dependencies
         run: npm ci
@@ -995,15 +960,6 @@ jobs:
           path: out/godot/web/release
           retention-days: 7
 
-      - name: Save vcpkg cache
-        if: success() && github.event_name != 'pull_request' && steps.restore-vcpkg.outputs.cache-matched-key == ''
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .devtools/vcpkg
-            ~/.cache/vcpkg/archives
-          key: ${{ runner.os }}-web-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg/**') }}
-
       - name: Save Emscripten cache
         if: success() && github.event_name != 'pull_request' && steps.restore-emsdk.outputs.cache-matched-key == ''
         uses: actions/cache/save@v5
@@ -1012,8 +968,8 @@ jobs:
           key: ${{ runner.os }}-emsdk-${{ env.EMSDK_VERSION }}
 
       - name: Save ccache
-        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-matched-key == ''
+        if: success() && github.event_name != 'pull_request' && steps.restore-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-web-ccache
+          key: ${{ runner.os }}-web-ccache-v2

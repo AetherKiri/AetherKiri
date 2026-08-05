@@ -146,6 +146,10 @@ bluetooth_purpose="$(
     plutil -extract NSBluetoothAlwaysUsageDescription raw "$info_plist" \
         2>/dev/null || true
 )"
+status_bar_hidden="$(
+    plutil -extract UIStatusBarHidden raw "$info_plist" \
+        2>/dev/null || true
+)"
 if [[ "$actual_bundle_id" != "$bundle_id" ||
       "$actual_marketing_version" != "$marketing_version" ||
       "$actual_build_number" != "$build_number" ]]; then
@@ -154,6 +158,10 @@ if [[ "$actual_bundle_id" != "$bundle_id" ||
 fi
 if [[ -z "$bluetooth_purpose" ]]; then
     echo "Signed IPA is missing NSBluetoothAlwaysUsageDescription." >&2
+    exit 1
+fi
+if [[ "$status_bar_hidden" != "false" ]]; then
+    echo "Signed IPA unexpectedly hides the native iOS status bar." >&2
     exit 1
 fi
 

@@ -6427,6 +6427,7 @@ public:
             media_ = nullptr;
         }
         media_texture_.unref();
+        media_rgba_buffer_ = PackedByteArray();
         media_frame_serial_ = UINT64_MAX;
         media_width_ = 0;
         media_height_ = 0;
@@ -6535,12 +6536,13 @@ public:
         }
         const size_t byte_count = static_cast<size_t>(media_width_) *
                                   static_cast<size_t>(media_height_) * 4u;
-        PackedByteArray rgba;
-        rgba.resize(static_cast<int64_t>(byte_count));
+        if (media_rgba_buffer_.size() != static_cast<int64_t>(byte_count)) {
+            media_rgba_buffer_.resize(static_cast<int64_t>(byte_count));
+        }
         engine_frame_desc_t desc{};
         desc.struct_size = sizeof(desc);
         const engine_result_t result = engine_media_read_frame_rgba(
-            media_, rgba.ptrw(), byte_count, &desc);
+            media_, media_rgba_buffer_.ptrw(), byte_count, &desc);
         update_last_error(result);
         if (result != ENGINE_RESULT_OK || desc.width == 0 ||
             desc.height == 0) {
@@ -6553,7 +6555,7 @@ public:
         Ref<Image> image = Image::create_from_data(
             static_cast<int32_t>(desc.width),
             static_cast<int32_t>(desc.height), false, Image::FORMAT_RGBA8,
-            rgba);
+            media_rgba_buffer_);
         if (image.is_null()) return media_texture_;
         if (media_texture_.is_null() ||
             media_texture_->get_width() != static_cast<int32_t>(desc.width) ||
@@ -7839,6 +7841,7 @@ private:
     uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
     Ref<ImageTexture> media_texture_;
+    PackedByteArray media_rgba_buffer_;
     uint64_t media_frame_serial_ = UINT64_MAX;
     uint32_t media_width_ = 0;
     uint32_t media_height_ = 0;

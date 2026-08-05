@@ -24,6 +24,8 @@ config/use_custom_user_dir.linux=true
 config/custom_user_dir_name.linux="godot/app_userdata/AetherKiri"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7")
+boot_splash/show_image=false
+boot_splash/bg_color=Color(0.055, 0.059, 0.071, 1)
 boot_splash/stretch_mode=0
 config/icon="res://assets/icon.png"
 
@@ -31,8 +33,9 @@ config/icon="res://assets/icon.png"
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
-window/size/window_width_override=1920
-window/size/window_height_override=1080
+window/size/window_width_override=2240
+window/size/window_height_override=1260
+window/handheld/orientation=6
 
 [editor_plugins]
 
