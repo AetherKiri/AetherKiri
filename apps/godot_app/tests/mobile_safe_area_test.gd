@@ -105,6 +105,20 @@ func _initialize() -> void:
         true
     ))
 
+    app.shell_route = "settings"
+    app.dirty_settings = false
+    assert(not app._should_confirm_settings_navigation())
+    app.dirty_settings = true
+    assert(app._should_confirm_settings_navigation())
+    app.shell_route = "library"
+    assert(not app._should_confirm_settings_navigation())
+    for language in ["zh_hans", "zh_hant", "en", "ja", "ko"]:
+        app.active_language = language
+        assert(not String(app._t("settings.unsaved_title")).is_empty())
+        assert(not String(app._t("settings.unsaved_body")).is_empty())
+        assert(not String(app._t("settings.unsaved_discard")).is_empty())
+        assert(not String(app._t("settings.unsaved_close")).is_empty())
+
     var momentum := app._shell_scroll_momentum_spec(2500.0, 120.0, 0.0, 1200.0)
     assert(bool(momentum["active"]))
     assert(float(momentum["target"]) > 120.0)

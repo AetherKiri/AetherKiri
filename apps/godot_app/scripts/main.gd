@@ -121,6 +121,10 @@ const UI_TEXT := {
         "home.empty_help_desktop": "点击「导入」选择视觉小说目录",
         "settings.title": "设置",
         "settings.save": "保存",
+        "settings.unsaved_title": "保存设置？",
+        "settings.unsaved_body": "设置已修改。离开前是否保存这些更改？",
+        "settings.unsaved_discard": "不保存",
+        "settings.unsaved_close": "关闭",
         "settings.section.interface": "界面",
         "settings.section.render": "渲染",
         "settings.section.developer": "开发者",
@@ -312,6 +316,10 @@ const UI_TEXT := {
         "home.empty_help_desktop": "點選「匯入」選擇視覺小說目錄",
         "settings.title": "設定",
         "settings.save": "儲存",
+        "settings.unsaved_title": "儲存設定？",
+        "settings.unsaved_body": "設定已修改。離開前是否儲存這些變更？",
+        "settings.unsaved_discard": "不儲存",
+        "settings.unsaved_close": "關閉",
         "settings.section.interface": "介面",
         "settings.section.render": "渲染",
         "settings.section.developer": "開發者",
@@ -503,6 +511,10 @@ const UI_TEXT := {
         "home.empty_help_desktop": "Tap Import to choose a visual novel folder",
         "settings.title": "Settings",
         "settings.save": "Save",
+        "settings.unsaved_title": "Save settings?",
+        "settings.unsaved_body": "Your settings have changed. Save them before leaving?",
+        "settings.unsaved_discard": "Don't Save",
+        "settings.unsaved_close": "Close",
         "settings.section.interface": "Interface",
         "settings.section.render": "Rendering",
         "settings.section.developer": "Developer",
@@ -694,6 +706,10 @@ const UI_TEXT := {
         "home.empty_help_desktop": "「インポート」をタップしてビジュアルノベルフォルダーを選択",
         "settings.title": "設定",
         "settings.save": "保存",
+        "settings.unsaved_title": "設定を保存しますか？",
+        "settings.unsaved_body": "設定が変更されています。移動する前に保存しますか？",
+        "settings.unsaved_discard": "保存しない",
+        "settings.unsaved_close": "閉じる",
         "settings.section.interface": "インターフェイス",
         "settings.section.render": "レンダリング",
         "settings.section.developer": "開発者",
@@ -885,6 +901,10 @@ const UI_TEXT := {
         "home.empty_help_desktop": "가져오기를 눌러 비주얼 노벨 폴더를 선택하세요",
         "settings.title": "설정",
         "settings.save": "저장",
+        "settings.unsaved_title": "설정을 저장할까요?",
+        "settings.unsaved_body": "설정이 변경되었습니다. 이동하기 전에 저장할까요?",
+        "settings.unsaved_discard": "저장 안 함",
+        "settings.unsaved_close": "닫기",
         "settings.section.interface": "인터페이스",
         "settings.section.render": "렌더링",
         "settings.section.developer": "개발자",
@@ -2625,6 +2645,73 @@ func _discard_settings_draft() -> void:
     settings_draft.clear()
     dirty_settings = false
     _sync_save_button_enabled()
+
+func _should_confirm_settings_navigation() -> bool:
+    return shell_route == "settings" and dirty_settings
+
+func _request_settings_navigation(destination: Callable) -> bool:
+    if not _should_confirm_settings_navigation():
+        return false
+    _show_unsaved_settings_prompt(destination)
+    return true
+
+func _show_unsaved_settings_prompt(destination: Callable) -> void:
+    var dialog := _modal_dialog(Vector2(560, 270), 0.46)
+    var box := _modal_stack(
+        dialog,
+        _t("settings.unsaved_title"),
+        ICON_SAVE
+    )
+
+    var header := box.get_child(0) as HBoxContainer
+    var close := Button.new()
+    close.name = "UnsavedSettingsCloseButton"
+    close.text = "×"
+    close.tooltip_text = _t("settings.unsaved_close")
+    close.accessibility_name = close.tooltip_text
+    close.custom_minimum_size = Vector2(38, 38)
+    close.focus_mode = Control.FOCUS_ALL
+    close.add_theme_font_size_override("font_size", 22)
+    ui_widgets.toolbar_button(close)
+    close.pressed.connect(_dismiss_modal)
+    header.add_child(close)
+
+    var body := Label.new()
+    body.text = _t("settings.unsaved_body")
+    body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    body.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    body.add_theme_font_size_override("font_size", 16)
+    body.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    box.add_child(body)
+
+    var buttons := HBoxContainer.new()
+    buttons.add_theme_constant_override("separation", 12)
+    buttons.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    buttons.alignment = BoxContainer.ALIGNMENT_END
+    buttons.custom_minimum_size = Vector2(0, 48)
+    box.add_child(buttons)
+
+    var discard := Button.new()
+    discard.name = "UnsavedSettingsDiscardButton"
+    discard.text = _t("settings.unsaved_discard")
+    discard.custom_minimum_size = Vector2(132, 48)
+    ui_widgets.secondary_button(discard)
+    discard.pressed.connect(func():
+        _discard_settings_draft()
+        _dismiss_modal(destination)
+    )
+    buttons.add_child(discard)
+
+    var save := _pill_button(_t("settings.save"), ICON_SAVE)
+    save.name = "UnsavedSettingsSaveButton"
+    save.custom_minimum_size = Vector2(132, 48)
+    save.pressed.connect(func():
+        _save_settings_draft()
+        _dismiss_modal(destination)
+    )
+    buttons.add_child(save)
 
 func _sync_save_button_enabled() -> void:
     if save_button != null and is_instance_valid(save_button):
@@ -5316,6 +5403,10 @@ func _show_video_library() -> void:
 func _show_library(mode: String) -> void:
     if not mode in ["game", "video"]:
         mode = "game"
+    if _request_settings_navigation(
+        Callable(self, "_show_library").bind(mode)
+    ):
+        return
     var previous_route := shell_route
     var returning_from_detail := previous_route == "detail" and not hero_source_path.is_empty()
     var detail_rect := detail_hero_cover.get_global_rect() if is_instance_valid(detail_hero_cover) else Rect2()
@@ -5338,6 +5429,8 @@ func _show_library(mode: String) -> void:
         call_deferred("_animate_hero_back", detail_rect)
 
 func _show_settings() -> void:
+    if shell_route == "settings":
+        return
     var previous_route := shell_route
     var outgoing := _stage_shell_route(previous_route, settings_view)
     _finish_hero_overlay()
@@ -5354,6 +5447,10 @@ func _show_settings() -> void:
         _animate_shell_route(outgoing, settings_view)
 
 func _show_detail(game: Dictionary, source: Control = null) -> void:
+    if _request_settings_navigation(
+        Callable(self, "_show_detail").bind(game, source)
+    ):
+        return
     var previous_route := shell_route
     var animate_hero := false
     if source != null and is_instance_valid(source):
