@@ -2725,6 +2725,7 @@ tTJSNI_BaseLayer::tTJSNI_BaseLayer() {
 
 //---------------------------------------------------------------------------
 tTJSNI_BaseLayer::~tTJSNI_BaseLayer() {
+    TransDrawable.ClearSnapshots();
     TVPLayerInstanceCount.fetch_sub(1, std::memory_order_relaxed);
     tTVPTempBitmapHolder::Release();
 }
@@ -9651,17 +9652,14 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
         }
     }
 
-    bool use_cached_transition_frames = TransUpdateType == tutDivisible;
-#ifdef __ANDROID__
-    use_cached_transition_frames = use_cached_transition_frames ||
-        TransUpdateType == tutDivisibleFade;
+    const bool use_cached_transition_frames =
+        TVPTransitionUsesStaticSnapshots(TransUpdateType);
     TransDrawable.SkipSnapshotFrame = false;
     if(InTransition && TransWithChildren && use_cached_transition_frames &&
        TransDrawable.SnapshotWarmupFrames > 0) {
         --TransDrawable.SnapshotWarmupFrames;
         TransDrawable.SkipSnapshotFrame = true;
     }
-#endif
     if(InTransition && TransWithChildren && use_cached_transition_frames &&
        !TransDrawable.SkipSnapshotFrame) {
         // Complete each stable page once. Transition Update() invalidates the
@@ -9678,28 +9676,20 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
                 InTransition = true;
                 throw;
             }
-#ifdef __ANDROID__
             if(completed) {
                 auto *snapshot = new tTVPBaseTexture(*completed);
                 snapshot->Independ();
                 TransDrawable.Src1Bmp = snapshot;
             }
-#else
-            TransDrawable.Src1Bmp = completed;
-#endif
         }
 
         if(TransSrc && !TransDrawable.Src2Bmp) {
             tTVPBaseTexture *completed = TransSrc->Complete();
-#ifdef __ANDROID__
             if(completed) {
                 auto *snapshot = new tTVPBaseTexture(*completed);
                 snapshot->Independ();
                 TransDrawable.Src2Bmp = snapshot;
             }
-#else
-            TransDrawable.Src2Bmp = completed;
-#endif
         }
     }
 
@@ -10150,7 +10140,6 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
         // rearrange pipe line for transition
         if(InTransition && TransWithChildren) {
             TransDrawable.Init(this, target);
-#ifdef __ANDROID__
             // UI scripts can finish hiding/reparenting outgoing controls one
             // event tick after StartTransition. Keep the last presented frame
             // during that tick instead of exposing and freezing the transient
@@ -10165,7 +10154,7 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
             // transition handler below reads Src1Bmp/Src2Bmp, not that freshly
             // composed intermediate. Complex UI screens can otherwise spend
             // 50-126 ms per frame doing work whose result is discarded.
-            if(TransUpdateType == tutDivisibleFade &&
+            if(TVPTransitionUsesStaticSnapshots(TransUpdateType) &&
                TransDrawable.Src1Bmp &&
                (!TransSrc || TransDrawable.Src2Bmp)) {
                 TransDrawable.DrawCompleted(
@@ -10173,7 +10162,6 @@ void tTJSNI_BaseLayer::Draw_GPU(tTVPDrawable *target, int x, int y,
                 CurrentDrawTarget = nullptr;
                 return;
             }
-#endif
             target = &TransDrawable;
         }
         if(GetVisibleChildrenCount() == 0) {
@@ -11331,21 +11319,12 @@ void tTJSNI_BaseLayer::StartTransition(const ttstr &name, bool withchildren,
 
         // set to cache
         TransWithChildren = withchildren;
-#ifdef __ANDROID__
-        delete TransDrawable.Src1Bmp;
-        delete TransDrawable.Src2Bmp;
-#endif
-        TransDrawable.Src1Bmp = nullptr;
-        TransDrawable.Src2Bmp = nullptr;
-#ifdef __ANDROID__
+        TransDrawable.ClearSnapshots();
         // The page scripts have already assembled both transition trees before
         // StartTransition. Waiting one more event tick can catch their own
         // temporary full-screen dimmer at peak opacity and then freeze it into
         // the cached frame for the entire transition.
         TransDrawable.SnapshotWarmupFrames = 0;
-#else
-        TransDrawable.SnapshotWarmupFrames = 0;
-#endif
         TransDrawable.SkipSnapshotFrame = false;
         if(TransWithChildren) {
             IncCacheEnabledCount();
@@ -11435,12 +11414,7 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
         spdlog::trace("[TransTrace] StopTransition type={}", (int)TransType);
         InTransition = false;
         TransCompEventPrevented = false;
-#ifdef __ANDROID__
-        delete TransDrawable.Src1Bmp;
-        delete TransDrawable.Src2Bmp;
-#endif
-        TransDrawable.Src1Bmp = nullptr;
-        TransDrawable.Src2Bmp = nullptr;
+        TransDrawable.ClearSnapshots();
         TransDrawable.SnapshotWarmupFrames = 0;
         TransDrawable.SkipSnapshotFrame = false;
 
@@ -11509,7 +11483,9 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
             TVPTraceLayerTransition("post-transition-completed", this, nullptr);
             static ttstr eventname(TJS_W("onTransitionCompleted"));
 
-            // fire SYNCHRONOUS event of "onTransitionCompleted"
+            // Queue completion for the next event turn. Running page teardown
+            // and the next transition inline with a skip click can otherwise
+            // serialize several full scene changes into one rendered frame.
             tTJSVariant param[2];
             param[0] = tTJSVariant(TransDestObj, TransDestObj);
             if(TransDestObj)
@@ -11518,7 +11494,7 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
             if(TransSrcObj)
                 TransSrcObj->Release(), TransSrcObj = nullptr;
 
-            TVPPostEvent(Owner, Owner, eventname, 0, TVP_EPT_IMMEDIATE, 2,
+            TVPPostEvent(Owner, Owner, eventname, 0, TVP_EPT_POST, 2,
                          param);
         }
 
@@ -11672,12 +11648,8 @@ void tTJSNI_BaseLayer::tTransDrawable::DrawCompleted(const tTVPRect &destrect,
     data.Height = cliprect.get_height();
 
     tTVPBaseTexture *src1bmp;
-    bool use_cached_transition_frames =
-        Owner->TransUpdateType == tutDivisible;
-#ifdef __ANDROID__
-    use_cached_transition_frames = use_cached_transition_frames ||
-        Owner->TransUpdateType == tutDivisibleFade;
-#endif
+    const bool use_cached_transition_frames =
+        TVPTransitionUsesStaticSnapshots(Owner->TransUpdateType);
     if(use_cached_transition_frames)
         src1bmp = Src1Bmp;
     else

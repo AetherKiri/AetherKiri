@@ -140,6 +140,7 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "AlphaBlend_d") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_d") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD") == 0 ||
+               std::strcmp(name, "ConstAlphaBlend_SD_a") == 0 ||
                std::strcmp(name, "ConstAlphaBlend_SD_d") == 0 ||
                std::strcmp(name, "UnivTransBlend") == 0 ||
                std::strcmp(name, "UnivTransBlend_d") == 0 ||
@@ -1423,6 +1424,7 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     }
 
     if ((method_name == "ConstAlphaBlend_SD" ||
+         method_name == "ConstAlphaBlend_SD_a" ||
          method_name == "ConstAlphaBlend_SD_d") &&
         dst != nullptr && src1 != nullptr && src2 != nullptr &&
         IsGpuRectFastPathEnabled(method_name.c_str()) &&
@@ -1431,13 +1433,15 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         RectBoundsInsideTexture(textures[1].second, src2) &&
         dst->EnsureGpuHandle() && src1->EnsureGpuHandle() &&
         src2->EnsureGpuHandle() &&
-        src1->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
-        src2->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        src1->UploadCpuToGpu(false) &&
+        src2->UploadCpuToGpu(false) &&
         dst->BlendGpuFrom2(
             src1, src2, rctar, textures[0].second, textures[1].second,
             method_name == "ConstAlphaBlend_SD_d"
                 ? TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D
-                : TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD,
+                : (method_name == "ConstAlphaBlend_SD_a"
+                       ? TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_A
+                       : TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD),
             godot_method != nullptr ? godot_method->Opacity() : 255, 0)) {
         CountGpuFastPath(method_name);
         return;
@@ -1456,9 +1460,9 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
        RectBoundsInsideTexture(textures[2].second, src3_3) &&
        dst->EnsureGpuHandle() && src3_1->EnsureGpuHandle() &&
        src3_2->EnsureGpuHandle() && src3_3->EnsureGpuHandle() &&
-       src3_1->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
-       src3_2->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
-       src3_3->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+       src3_1->UploadCpuToGpu(false) &&
+       src3_2->UploadCpuToGpu(false) &&
+       src3_3->UploadCpuToGpu(false) &&
        dst->BlendGpuFrom3(
            src3_1, src3_2, src3_3, rctar, textures[0].second,
            textures[1].second, textures[2].second,

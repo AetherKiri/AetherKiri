@@ -81,6 +81,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "sound/win32/WaveMixer.h"
 #include "tjsDebug.h"
 #include "engine_options.h"
+#include "input_dispatch_policy.h"
 #include "PluginCallTracer.hpp"
 #include "PluginImpl.h"
 #include "base/impl/StorageImpl.h"
@@ -2455,6 +2456,12 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
       return SetHandleErrorAndReturnLocked(
           impl, dispatch_result,
           dispatch_error != nullptr ? dispatch_error : "input dispatch failed");
+    }
+    // Deliver at most one complete user action per rendered frame. This keeps
+    // press/move/release ordering intact while preventing queued skip clicks
+    // from synchronously completing and rebuilding several pages in one tick.
+    if (EngineInputCompletesAction(queued_event.type)) {
+      break;
     }
   }
   const auto after_input = std::chrono::steady_clock::now();

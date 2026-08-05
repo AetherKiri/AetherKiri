@@ -16,6 +16,7 @@ add_executable(motionplayer-dll
     krkrgles-aliases.cpp
     kag-load-contract.cpp
     render-simd.cpp
+    transition-policy.cpp
     script-compatibility.cpp
     project-storage.cpp
 )

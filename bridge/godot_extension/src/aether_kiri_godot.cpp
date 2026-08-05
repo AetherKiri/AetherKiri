@@ -1831,6 +1831,19 @@ uint const_alpha_blend_sd_d(uint s1, uint s2, uint opa_in) {
     return s1_rb | ((s1_g + ((s2_g - s1_g) * alpha >> 8)) & 0xff00u);
 }
 
+uint blend_channel(uint s1, uint s2, uint shift, uint opa) {
+    int base = int((s1 >> shift) & 0xffu);
+    int target = int((s2 >> shift) & 0xffu);
+    return uint(base + (((target - base) * int(opa)) >> 8)) & 0xffu;
+}
+
+uint const_alpha_blend_sd_a(uint s1, uint s2, uint opa) {
+    return blend_channel(s1, s2, 0u, opa) |
+           (blend_channel(s1, s2, 8u, opa) << 8) |
+           (blend_channel(s1, s2, 16u, opa) << 16) |
+           (blend_channel(s1, s2, 24u, opa) << 24);
+}
+
 uint negative_mul_alpha(uint dest_alpha, uint src_alpha) {
     return 255u - (((255u - dest_alpha) * (255u - src_alpha)) / 255u);
 }
@@ -1884,6 +1897,8 @@ void main() {
         out_color = const_alpha_blend_sd(s1, s2, opa);
     } else if (pc.rect1.z == 9) {
         out_color = const_alpha_blend_sd_d(s1, s2, opa);
+    } else if (pc.rect1.z == 23) {
+        out_color = const_alpha_blend_sd_a(s1, s2, opa);
     } else if (pc.rect1.z == 21 || pc.rect1.z == 22) {
         uint src_alpha = (s1 >> 24) & 0xffu;
         uint mask_alpha = (s2 >> 24) & 0xffu;
@@ -5898,6 +5913,19 @@ uint32_t CpuConstAlphaBlendSD(uint32_t s1, uint32_t s2, int opacity) {
     return s1_rb | ((s1_g + ((s2_g - s1_g) * opa >> 8)) & 0xff00u);
 }
 
+uint32_t CpuConstAlphaBlendSDA(uint32_t s1, uint32_t s2, int opacity) {
+    const int opa = std::clamp(opacity, 0, 255);
+    uint32_t result = 0;
+    for(uint32_t shift = 0; shift < 32; shift += 8) {
+        const int base = static_cast<int>((s1 >> shift) & 0xffu);
+        const int target = static_cast<int>((s2 >> shift) & 0xffu);
+        const uint32_t channel = static_cast<uint32_t>(
+            base + (((target - base) * opa) >> 8));
+        result |= (channel & 0xffu) << shift;
+    }
+    return result;
+}
+
 uint32_t CpuConstAlphaBlendSDD(uint32_t s1, uint32_t s2, int opacity) {
     uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
     if (opa > 127u) {
@@ -6044,6 +6072,8 @@ uint32_t CpuBlend2Reference(uint32_t mode, uint32_t dst, uint32_t src1,
     switch (mode) {
         case TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD:
             return CpuConstAlphaBlendSD(src1, src2, opacity);
+        case TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_A:
+            return CpuConstAlphaBlendSDA(src1, src2, opacity);
         case TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D:
             return CpuConstAlphaBlendSDD(src1, src2, opacity);
         case TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_MULTIPLY: {
@@ -6094,6 +6124,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
     }
     if (lower == "constalphablend_sd" || lower == "const_alpha_blend_sd") {
         return TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD;
+    }
+    if (lower == "constalphablend_sd_a" || lower == "const_alpha_blend_sd_a") {
+        return TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_A;
     }
     if (lower == "constalphablend_sd_d" || lower == "const_alpha_blend_sd_d") {
         return TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D;
@@ -7163,6 +7196,7 @@ public:
         Dictionary result;
         const uint32_t mode = BlendModeFromName(mode_name);
         if (mode != TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD &&
+            mode != TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_A &&
             mode != TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_D &&
             mode != TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_MULTIPLY &&
             mode != TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD) {
