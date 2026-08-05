@@ -6899,6 +6899,34 @@ public:
             return Ref<Texture2D>();
         }
 
+        // Avoid walking the native texture/provider path on idle host ticks.
+        // A pending presentation copy must still be polled so its completed
+        // double-buffer slot can become visible.
+        if (!frame_present_pending_op_) {
+            Ref<Texture2D> cached;
+            if ((frame_texture_backend_ == "godot_native_gpu_presented" ||
+                 frame_texture_backend_ == "godot_external_presented") &&
+                frame_present_textures_[frame_present_current_slot_].is_valid()) {
+                cached = frame_present_textures_[frame_present_current_slot_];
+            } else if (frame_texture_backend_ == "godot_external_import" &&
+                       frame_imported_texture_.is_valid()) {
+                cached = frame_imported_texture_;
+            } else if (frame_texture_backend_ == "rendering_device" &&
+                       frame_rd_texture_.is_valid()) {
+                cached = frame_rd_texture_;
+            } else if (frame_texture_.is_valid()) {
+                cached = frame_texture_;
+            }
+            if (cached.is_valid()) {
+                uint32_t rendered = 1;
+                if (engine_get_frame_rendered_flag(handle_, &rendered) ==
+                        ENGINE_RESULT_OK &&
+                    rendered == 0) {
+                    return cached;
+                }
+            }
+        }
+
         const std::string normalized_backend = NormalizeBackend(backend_);
         if (normalized_backend == ENGINE_RENDERER_GODOT_NATIVE ||
             normalized_backend == ENGINE_RENDERER_GPU_BRIDGE) {

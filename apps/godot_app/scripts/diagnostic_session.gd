@@ -10,6 +10,7 @@ const MAX_MARKERS := 8
 const MAX_FILE_BYTES := 4 * 1024 * 1024
 const FLUSH_INTERVAL := 1.0
 const NATIVE_DRAIN_INTERVAL := 0.5
+const LOW_FPS_WINDOW_SAMPLES := 2400
 const LEGACY_REQUEST_FILE := "user://diagnostic-request.json"
 const MOBILE_DIAGNOSTIC_SUBDIR := "Aether/Diagnostics"
 const ANDROID_DOCUMENTS_DIR := "/storage/emulated/0/Documents"
@@ -84,6 +85,8 @@ var _flush_accum := 0.0
 var _drain_accum := 0.0
 var _frame_accum := 0.0
 var _frame_samples: PackedFloat64Array = []
+var _low_fps_samples: PackedFloat64Array = []
+var _low_fps_cursor := 0
 var _pending_incidents: Array[Dictionary] = []
 var _overlay: CanvasLayer
 var _marker_button: Button
@@ -282,6 +285,9 @@ func start(runtime_player, renderer: String) -> bool:
     _pending_lines.clear()
     _pending_incidents.clear()
     latest_frame_summary.clear()
+    _frame_samples.clear()
+    _low_fps_samples.clear()
+    _low_fps_cursor = 0
     _next_slow_frame_label = ""
     _snapshot_count = 0
     var catalog := profile_catalog()
@@ -378,6 +384,11 @@ func sample_frame(delta: float, tick_ms: float, update_ms: float,
         return
     var frame_ms := delta * 1000.0
     _frame_samples.append(frame_ms)
+    if _low_fps_samples.size() < LOW_FPS_WINDOW_SAMPLES:
+        _low_fps_samples.append(frame_ms)
+    else:
+        _low_fps_samples[_low_fps_cursor] = frame_ms
+        _low_fps_cursor = (_low_fps_cursor + 1) % LOW_FPS_WINDOW_SAMPLES
     _frame_accum += delta
     var work_ms := tick_ms + update_ms
     if frame_ms >= slow_frame_threshold_ms or work_ms >= slow_frame_threshold_ms:
@@ -717,9 +728,29 @@ func _record_frame_summary(renderer: String, texture_backend: String) -> void:
     for value in samples:
         total += float(value)
     var count := samples.size()
+    var average_ms := total / float(count)
+    var low_samples := Array(_low_fps_samples)
+    low_samples.sort()
+    var low_count := low_samples.size()
+    var one_percent_count := maxi(1, int(ceil(float(low_count) * 0.01)))
+    var point_one_percent_count := maxi(1, int(ceil(float(low_count) * 0.001)))
+    var one_percent_total := 0.0
+    var point_one_percent_total := 0.0
+    for index in range(low_count - one_percent_count, low_count):
+        one_percent_total += float(low_samples[index])
+    for index in range(low_count - point_one_percent_count, low_count):
+        point_one_percent_total += float(low_samples[index])
+    var variance := 0.0
+    for value in samples:
+        var difference := float(value) - average_ms
+        variance += difference * difference
     latest_frame_summary = {
         "count": count,
-        "average_ms": total / float(count),
+        "average_ms": average_ms,
+        "average_fps": 1000.0 / maxf(average_ms, 0.001),
+        "one_percent_low_fps": 1000.0 / maxf(one_percent_total / float(one_percent_count), 0.001),
+        "point_one_percent_low_fps": 1000.0 / maxf(point_one_percent_total / float(point_one_percent_count), 0.001),
+        "jitter_ms": sqrt(variance / float(count)),
         "p50_ms": float(samples[clampi(int(floor((count - 1) * 0.50)), 0, count - 1)]),
         "p95_ms": float(samples[clampi(int(floor((count - 1) * 0.95)), 0, count - 1)]),
         "p99_ms": float(samples[clampi(int(floor((count - 1) * 0.99)), 0, count - 1)]),

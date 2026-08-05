@@ -625,6 +625,7 @@ namespace motion {
         }
 
         _autoProgressLastTick = 0;
+        _autoProgressAccumulatedMs = 0.0;
         _autoProgressHasLastTick = false;
         if(!_autoProgressRegistered) {
             registerAutoProgressPlayer(this);
@@ -639,6 +640,7 @@ namespace motion {
         }
 
         _autoProgressLastTick = 0;
+        _autoProgressAccumulatedMs = 0.0;
         _autoProgressHasLastTick = false;
 
         auto *dispatch = _autoProgressDispatch;
@@ -730,6 +732,7 @@ namespace motion {
     void Player::noteManualProgress() {
         _manualProgressLastTick = TVPGetTickCount();
         _autoProgressLastTick = _manualProgressLastTick;
+        _autoProgressAccumulatedMs = 0.0;
         _autoProgressHasLastTick = true;
     }
 
@@ -995,6 +998,7 @@ namespace motion {
             _allplaying || !_runtime->playingTimelineLabels.empty();
         if(!playing || !_speed) {
             _autoProgressLastTick = tick;
+            _autoProgressAccumulatedMs = 0.0;
             _autoProgressHasLastTick = true;
             if(!playing) {
                 disableAutoProgress();
@@ -1006,6 +1010,7 @@ namespace motion {
         if(_manualProgressLastTick != 0 &&
            tick <= _manualProgressLastTick + 120) {
             _autoProgressLastTick = tick;
+            _autoProgressAccumulatedMs = 0.0;
             _autoProgressHasLastTick = true;
             releaseDispatch();
             return;
@@ -1025,6 +1030,19 @@ namespace motion {
             return;
         }
         deltaMs = std::clamp(deltaMs, 0.0, 100.0);
+        // Continuous callbacks follow the host refresh rate, which can be
+        // 120/144 Hz even though authored MotionPlayer timelines are 60 Hz.
+        // Coalesce those callbacks so node evaluation, command construction,
+        // and GPU dispatch happen once per authored animation interval.
+        _autoProgressAccumulatedMs =
+            std::min(100.0, _autoProgressAccumulatedMs + deltaMs);
+        constexpr double kMotionUpdateIntervalMs = 16.0;
+        if(_autoProgressAccumulatedMs < kMotionUpdateIntervalMs) {
+            releaseDispatch();
+            return;
+        }
+        deltaMs = _autoProgressAccumulatedMs;
+        _autoProgressAccumulatedMs = 0.0;
 
         _runtime->pendingEvents.clear();
         frameProgress(deltaMs * kMotionFramesPerMillisecond);

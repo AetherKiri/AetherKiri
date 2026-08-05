@@ -3213,7 +3213,7 @@ func _layout_perf_overlay(safe_rect: Rect2) -> void:
     )
 
 func _set_perf_visible(visible: bool) -> void:
-    if perf_panel != null:
+    if perf_panel != null and perf_panel.visible != visible:
         perf_panel.visible = visible
 
 func _layout_game_viewport(window_size: Vector2) -> void:
@@ -10185,12 +10185,13 @@ func _process(delta: float) -> void:
             return
 
         startup_poll_accum += delta
-        if cached_startup_state == STARTUP_SUCCEEDED or startup_poll_accum >= STARTUP_POLL_INTERVAL:
+        if cached_startup_state != STARTUP_SUCCEEDED and startup_poll_accum >= STARTUP_POLL_INTERVAL:
             startup_poll_accum = 0.0
             cached_startup_state = player.get_startup_state()
             startup_state = cached_startup_state
         if startup_state == STARTUP_SUCCEEDED:
-            restart_notice.text = ""
+            if not restart_notice.text.is_empty():
+                restart_notice.text = ""
             if loading_panel != null and loading_panel.visible:
                 _hide_loading_overlay(func():
                     _set_perf_visible(game_running and show_perf_monitor)
@@ -10263,13 +10264,12 @@ func _process(delta: float) -> void:
                         tick_ms,
                         player.get_renderer_info(),
                     ])
-                _sync_game_text_input_state()
                 var update_start := Time.get_ticks_usec()
                 _update_frame()
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
                 last_update_ms = update_ms
                 _update_touch_busy_gate(maxf(delta * 1000.0, tick_ms + update_ms))
-                if diagnostic_session != null:
+                if diagnostic_session != null and diagnostic_session.active:
                     diagnostic_session.sample_frame(
                         delta,
                         tick_ms,
@@ -10364,7 +10364,11 @@ func _process(delta: float) -> void:
         ]
         if debug_overlay_mode == "detail" and diagnostic_session != null:
             var frame_summary: Dictionary = diagnostic_session.latest_frame_summary
-            summary_text += "\nTick: %.2f ms | Update: %.2f ms | P50/P95/P99/Max: %.2f / %.2f / %.2f / %.2f ms | Dropped: %d" % [
+            summary_text += "\nAvg: %.1f FPS | 1%% Low: %.1f | 0.1%% Low: %.1f | Jitter: %.2f ms | Tick/Update: %.2f / %.2f ms | P50/P95/P99/Max: %.2f / %.2f / %.2f / %.2f ms | Dropped: %d" % [
+                float(frame_summary.get("average_fps", 0.0)),
+                float(frame_summary.get("one_percent_low_fps", 0.0)),
+                float(frame_summary.get("point_one_percent_low_fps", 0.0)),
+                float(frame_summary.get("jitter_ms", 0.0)),
                 last_tick_ms,
                 last_update_ms,
                 float(frame_summary.get("p50_ms", 0.0)),
@@ -10931,11 +10935,13 @@ func _update_frame() -> void:
     if texture != null:
         if _should_hold_suspect_black_frame():
             return
-        viewport.texture = texture
-        viewport.queue_redraw()
-        last_texture_size = Vector2i(texture.get_width(), texture.get_height())
-        _sync_game_surface_to_texture(last_texture_size)
-        _layout_game_viewport(get_viewport_rect().size)
+        if viewport.texture != texture:
+            viewport.texture = texture
+        var texture_size := Vector2i(texture.get_width(), texture.get_height())
+        if texture_size != last_texture_size:
+            last_texture_size = texture_size
+            _sync_game_surface_to_texture(last_texture_size)
+            _layout_game_viewport(get_viewport_rect().size)
         if not auto_probe_clicks.is_empty() and not auto_probe_running and not auto_probe_done:
             auto_probe_running = true
             call_deferred("_run_auto_probe")

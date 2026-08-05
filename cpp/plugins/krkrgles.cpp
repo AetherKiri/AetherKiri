@@ -1208,6 +1208,8 @@ public:
 
 private:
     bool registered_ = false;
+    bool hasLastTick_ = false;
+    tjs_uint64 lastTick_ = 0;
 };
 
 YuzuMotionRenderHook &GetYuzuMotionRenderHook() {
@@ -1313,7 +1315,8 @@ static void RemoveYuzuMotionRenderable(tjs_int n, tTJSVariant **p,
     if(items.empty()) GetYuzuMotionRenderHook().Stop();
 }
 
-static tjs_int RenderYuzuMotionRenderables(const char *tag) {
+static tjs_int RenderYuzuMotionRenderables(const char *tag,
+                                           bool onlyChanged = false) {
     std::vector<YuzuMotionRenderable> snapshot;
     {
         std::lock_guard<std::mutex> lock(YuzuMotionRenderMutex());
@@ -1328,6 +1331,11 @@ static tjs_int RenderYuzuMotionRenderables(const char *tag) {
         iTJSDispatch2 *layer = item.layer.Type() == tvtObject
             ? item.layer.AsObjectNoAddRef()
             : nullptr;
+        auto *nativePlayer = NativeMotionPlayerFromObject(player);
+        if(onlyChanged && nativePlayer &&
+           !nativePlayer->needsContinuousRender()) {
+            continue;
+        }
         if(!layer && item.player.Type() == tvtObject) {
             layer = ResolveLayerDispatchFromVariant(item.player);
         }
@@ -1339,6 +1347,8 @@ static tjs_int RenderYuzuMotionRenderables(const char *tag) {
 
 void YuzuMotionRenderHook::Start() {
     if(registered_) return;
+    hasLastTick_ = false;
+    lastTick_ = 0;
     TVPAddContinuousEventHook(this);
     registered_ = true;
 }
@@ -1347,10 +1357,19 @@ void YuzuMotionRenderHook::Stop() {
     if(!registered_) return;
     TVPRemoveContinuousEventHook(this);
     registered_ = false;
+    hasLastTick_ = false;
+    lastTick_ = 0;
 }
 
-void YuzuMotionRenderHook::OnContinuousCallback(tjs_uint64) {
-    RenderYuzuMotionRenderables("continuous");
+void YuzuMotionRenderHook::OnContinuousCallback(tjs_uint64 tick) {
+    constexpr tjs_uint64 kMotionRenderIntervalMs = 16u;
+    if(hasLastTick_ && tick >= lastTick_ &&
+       tick - lastTick_ < kMotionRenderIntervalMs) {
+        return;
+    }
+    hasLastTick_ = true;
+    lastTick_ = tick;
+    RenderYuzuMotionRenderables("continuous", true);
 }
 
 } // namespace

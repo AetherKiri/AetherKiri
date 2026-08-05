@@ -155,6 +155,10 @@ namespace motion {
         // breathing and physics) keep allplaying true solely so they continue
         // to receive progress ticks.
         bool getEmoteAnimating() const;
+        bool needsContinuousRender() const {
+            return _layersDirty || _emoteDirty || getPlaying() ||
+                   getEmoteAnimating();
+        }
 
         void setSyncWaiting(bool v) { _syncWaiting = v; }
         bool getSyncWaiting() const { return _syncWaiting; }
@@ -695,6 +699,7 @@ namespace motion {
         iTJSDispatch2 *_autoProgressDispatch = nullptr;
         tjs_uint64 _autoProgressLastTick = 0;
         tjs_uint64 _manualProgressLastTick = 0;
+        double _autoProgressAccumulatedMs = 0.0;
         bool _autoProgressHasLastTick = false;
         bool _autoProgressRegistered = false;
         bool _autoProgressRendering = false;
