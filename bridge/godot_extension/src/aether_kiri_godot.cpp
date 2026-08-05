@@ -7605,6 +7605,11 @@ private:
     }
 
     void release_presentation_textures(bool free_rids) {
+        // A queued copy owns its RIDs and remains ordered ahead of the release
+        // operations below. Drop only our tracking reference here; the GPU op
+        // queue retains the copy until the render thread completes it.
+        frame_present_pending_op_.reset();
+        frame_present_pending_serial_ = UINT64_MAX;
         for (size_t i = 0; i < frame_present_textures_.size(); ++i) {
             frame_present_textures_[i].unref();
             if (frame_present_rids_[i].is_valid()) {
@@ -7731,11 +7736,39 @@ private:
         if (texture_id == 0 || width == 0 || height == 0) {
             return Ref<Texture2D>();
         }
+        if (frame_present_pending_op_) {
+            bool pending_done = false;
+            bool pending_result = false;
+            {
+                std::lock_guard<std::mutex> done_lock(
+                    frame_present_pending_op_->done_mutex);
+                pending_done = frame_present_pending_op_->done;
+                pending_result = frame_present_pending_op_->result;
+            }
+            if (pending_done) {
+                if (pending_result) {
+                    frame_present_current_slot_ = frame_present_pending_slot_;
+                    frame_present_serial_ = frame_present_pending_serial_;
+                }
+                frame_present_pending_op_.reset();
+                frame_present_pending_serial_ = UINT64_MAX;
+            }
+        }
+
         if (frame_present_serial_ == serial &&
             frame_present_width_ == width &&
             frame_present_height_ == height &&
             frame_present_textures_[frame_present_current_slot_].is_valid()) {
             frame_texture_serial_ = serial;
+            frame_texture_backend_ = backend_name;
+            return frame_present_textures_[frame_present_current_slot_];
+        }
+
+        // Keep presenting the last completed slot while the render thread
+        // writes the other one. This preserves the stable-texture behavior
+        // needed by modal dialogs without blocking the game thread every frame.
+        if (frame_present_pending_op_) {
+            frame_texture_serial_ = frame_present_serial_;
             frame_texture_backend_ = backend_name;
             return frame_present_textures_[frame_present_current_slot_];
         }
@@ -7757,17 +7790,26 @@ private:
         op->src_pos = Vector3();
         op->dst_pos = Vector3();
         op->size = Vector3(width, height, 1);
-        if (!RunGodotGpuOpSync(op)) {
-            frame_texture_backend_ = "godot_native_gpu_present_timeout";
-            if (frame_present_textures_[frame_present_current_slot_].is_valid()) {
-                return frame_present_textures_[frame_present_current_slot_];
+        if (frame_present_serial_ == UINT64_MAX) {
+            if (!RunGodotGpuOpSync(op)) {
+                frame_texture_backend_ = "godot_native_gpu_present_timeout";
+                return Ref<Texture2D>();
             }
-            return Ref<Texture2D>();
+            frame_present_current_slot_ = next_slot;
+            frame_present_serial_ = serial;
+            frame_texture_serial_ = serial;
+            frame_texture_backend_ = backend_name;
+            return frame_present_textures_[frame_present_current_slot_];
         }
 
-        frame_present_current_slot_ = next_slot;
-        frame_present_serial_ = serial;
-        frame_texture_serial_ = serial;
+        if (!RunGodotGpuOpAsync(op)) {
+            frame_texture_backend_ = "godot_native_gpu_present_timeout";
+            return frame_present_textures_[frame_present_current_slot_];
+        }
+        frame_present_pending_op_ = std::move(op);
+        frame_present_pending_slot_ = next_slot;
+        frame_present_pending_serial_ = serial;
+        frame_texture_serial_ = frame_present_serial_;
         frame_texture_backend_ = backend_name;
         return frame_present_textures_[frame_present_current_slot_];
     }
@@ -7852,6 +7894,9 @@ private:
     uint32_t frame_present_height_ = 0;
     size_t frame_present_current_slot_ = 0;
     uint64_t frame_present_serial_ = UINT64_MAX;
+    std::shared_ptr<GodotGpuOp> frame_present_pending_op_;
+    size_t frame_present_pending_slot_ = 0;
+    uint64_t frame_present_pending_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
     Ref<ImageTexture> media_texture_;
     PackedByteArray media_rgba_buffer_;

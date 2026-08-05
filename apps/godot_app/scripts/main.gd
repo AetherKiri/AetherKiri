@@ -10166,7 +10166,6 @@ func _apply_pending_video_resume(state: Dictionary) -> bool:
     return true
 
 func _process(delta: float) -> void:
-    _fit_full_rects()
     _process_iap(delta)
     _update_advanced_tool_timeouts()
     _flush_log_view_if_needed(delta)
