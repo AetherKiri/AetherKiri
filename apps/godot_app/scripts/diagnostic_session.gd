@@ -380,8 +380,6 @@ func record(layer: String, subsystem: String, level: String, event: String,
 
 func sample_frame(delta: float, tick_ms: float, update_ms: float,
                   renderer: String, texture_backend: String) -> void:
-    if not active:
-        return
     var frame_ms := delta * 1000.0
     _frame_samples.append(frame_ms)
     if _low_fps_samples.size() < LOW_FPS_WINDOW_SAMPLES:
@@ -391,7 +389,7 @@ func sample_frame(delta: float, tick_ms: float, update_ms: float,
         _low_fps_cursor = (_low_fps_cursor + 1) % LOW_FPS_WINDOW_SAMPLES
     _frame_accum += delta
     var work_ms := tick_ms + update_ms
-    if frame_ms >= slow_frame_threshold_ms or work_ms >= slow_frame_threshold_ms:
+    if active and (frame_ms >= slow_frame_threshold_ms or work_ms >= slow_frame_threshold_ms):
         record("godot", "render", "warning", "host_frame_spike", int(maxf(frame_ms, work_ms) * 1000.0), {
             "frame_ms": frame_ms,
             "tick_ms": tick_ms,

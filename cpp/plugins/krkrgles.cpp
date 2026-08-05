@@ -1316,7 +1316,8 @@ static void RemoveYuzuMotionRenderable(tjs_int n, tTJSVariant **p,
 }
 
 static tjs_int RenderYuzuMotionRenderables(const char *tag,
-                                           bool onlyChanged = false) {
+                                           bool onlyChanged = false,
+                                           tjs_uint64 tick = 0) {
     std::vector<YuzuMotionRenderable> snapshot;
     {
         std::lock_guard<std::mutex> lock(YuzuMotionRenderMutex());
@@ -1334,6 +1335,16 @@ static tjs_int RenderYuzuMotionRenderables(const char *tag,
         auto *nativePlayer = NativeMotionPlayerFromObject(player);
         if(onlyChanged && nativePlayer &&
            !nativePlayer->needsContinuousRender()) {
+            continue;
+        }
+        // Player's auto-progress hook already advances and draws active
+        // timelines. Avoid drawing the same state again from this legacy
+        // compatibility hook; resume it automatically if auto rendering has
+        // not succeeded for several authored frames. The wider window is
+        // intentional: once overloaded, a 24 FPS callback cadence must not
+        // re-enable double rendering and amplify the slowdown.
+        if(onlyChanged && tick != 0 && nativePlayer &&
+           nativePlayer->recentlyRenderedByAutoProgress(tick)) {
             continue;
         }
         if(!layer && item.player.Type() == tvtObject) {
@@ -1369,7 +1380,7 @@ void YuzuMotionRenderHook::OnContinuousCallback(tjs_uint64 tick) {
     }
     hasLastTick_ = true;
     lastTick_ = tick;
-    RenderYuzuMotionRenderables("continuous", true);
+    RenderYuzuMotionRenderables("continuous", true, tick);
 }
 
 } // namespace

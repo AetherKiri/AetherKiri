@@ -379,6 +379,11 @@ namespace motion {
             frameProgress(dt);
         }
         void autoProgressFromContinuousTick(tjs_uint64 tick);
+        bool recentlyRenderedByAutoProgress(tjs_uint64 tick) const {
+            return _autoProgressLastRenderTick != 0 &&
+                tick >= _autoProgressLastRenderTick &&
+                tick - _autoProgressLastRenderTick <= 100;
+        }
         iTJSDispatch2 *getAutoProgressDispatchForCompat() const {
             return _autoProgressDispatch;
         }
@@ -698,6 +703,7 @@ namespace motion {
         bool _busy = false;
         iTJSDispatch2 *_autoProgressDispatch = nullptr;
         tjs_uint64 _autoProgressLastTick = 0;
+        tjs_uint64 _autoProgressLastRenderTick = 0;
         tjs_uint64 _manualProgressLastTick = 0;
         double _autoProgressAccumulatedMs = 0.0;
         bool _autoProgressHasLastTick = false;

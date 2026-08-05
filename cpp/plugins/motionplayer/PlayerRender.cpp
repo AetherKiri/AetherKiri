@@ -98,7 +98,10 @@ namespace {
         const PSB::PSBResource &resource,
         std::unordered_map<
             const PSB::PSBResource *,
-            std::pair<std::uint64_t, std::uint64_t>> &fingerprintCache) {
+            std::pair<std::uint64_t, std::uint64_t>> &) {
+        std::lock_guard<std::mutex> fingerprintLock(
+            snapshot.resourceFingerprintMutex);
+        auto &fingerprintCache = snapshot.resourceFingerprintCache;
         auto fingerprintIt = fingerprintCache.find(&resource);
         if(fingerprintIt == fingerprintCache.end()) {
             std::uint64_t first = 1469598103934665603ull;

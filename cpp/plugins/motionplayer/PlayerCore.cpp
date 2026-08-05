@@ -625,6 +625,7 @@ namespace motion {
         }
 
         _autoProgressLastTick = 0;
+        _autoProgressLastRenderTick = 0;
         _autoProgressAccumulatedMs = 0.0;
         _autoProgressHasLastTick = false;
         if(!_autoProgressRegistered) {
@@ -640,6 +641,7 @@ namespace motion {
         }
 
         _autoProgressLastTick = 0;
+        _autoProgressLastRenderTick = 0;
         _autoProgressAccumulatedMs = 0.0;
         _autoProgressHasLastTick = false;
 
@@ -1165,6 +1167,7 @@ namespace motion {
             }
         }
         if(renderedEndedTimelineFrame) {
+            _autoProgressLastRenderTick = tick;
             // This path already performed the draw that drawCompat normally
             // completes. Commit the held SD frame now so the next continuous
             // tick reuses its child-player tree instead of rebuilding every

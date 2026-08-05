@@ -701,6 +701,7 @@ public:
     m_state.fontScale = v;
     m_fontDirty = true;
     m_layoutDirty = true;
+    m_serializedCharactersValid = false;
   }
   property_accessor_cast(chColor, RgbColor, tjs_int, m_state.chColor);
   property_accessor(rubySize, int, m_state.rubySize);
@@ -791,6 +792,8 @@ private:
   std::vector<CharacterInfo> m_characters{};
   std::vector<CharacterInfo> m_buffer{};
   std::vector<TextRenderKeyWait> m_keyWaits{};
+  tTJSVariant m_serializedCharacters;
+  bool m_serializedCharactersValid = false;
   uint32_t m_mode = 0;
 
   void pushCharacter(tjs_char ch);
@@ -1417,6 +1420,7 @@ void TextRenderBase::flush(bool force) {
   m_characters.insert(m_characters.end(), m_buffer.begin(), m_buffer.end());
   m_buffer.clear();
   m_layoutDirty = true;
+  m_serializedCharactersValid = false;
 }
 
 void TextRenderBase::applyAlignment() {
@@ -1518,9 +1522,13 @@ void TextRenderBase::setOption(tTJSVariant options) {
 
 tTJSVariant TextRenderBase::getCharacters(int start, int end) {
   applyAlignment();
+  const bool requestAll = end < start || (start == 0 && end == 0);
+  if (requestAll && m_serializedCharactersValid) {
+    return m_serializedCharacters;
+  }
   auto array = TJSCreateArrayObject();
 
-  if ((end < start) || (start == 0 && end == 0)) {
+  if (requestAll) {
     for (size_t i = 0, cnt = m_characters.size(); i < cnt; ++i) {
       auto ch = m_characters[i].serialize();
       array->PropSetByNum(TJS_MEMBERENSURE, (tjs_int)i, &ch, array);
@@ -1529,12 +1537,18 @@ tTJSVariant TextRenderBase::getCharacters(int start, int end) {
 
   auto res = tTJSVariant(array, array);
   array->Release();
+  if (requestAll) {
+    m_serializedCharacters = res;
+    m_serializedCharactersValid = true;
+  }
   return res;
 }
 
 void TextRenderBase::clear() {
   m_characters.clear();
   m_buffer.clear();
+  m_serializedCharacters.Clear();
+  m_serializedCharactersValid = false;
   m_state = m_default;
   m_overflow = false;
   m_x = 0;
@@ -1569,6 +1583,7 @@ void TextRenderBase::resetStyle() {
   m_state = m_default;
   m_fontDirty = true;
   m_layoutDirty = true;
+  m_serializedCharactersValid = false;
 }
 
 void TextRenderBase::resetFont() {
@@ -1579,6 +1594,7 @@ void TextRenderBase::resetFont() {
   m_state.fontScale = m_default.fontScale;
   m_fontDirty = true;
   m_layoutDirty = true;
+  m_serializedCharactersValid = false;
 }
 
 tTJSVariant TextRenderBase::getKeyWait() {

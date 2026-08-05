@@ -10269,12 +10269,12 @@ func _process(delta: float) -> void:
                 var update_ms := float(Time.get_ticks_usec() - update_start) / 1000.0
                 last_update_ms = update_ms
                 _update_touch_busy_gate(maxf(delta * 1000.0, tick_ms + update_ms))
-                if diagnostic_session != null and diagnostic_session.active:
+                if diagnostic_session != null:
                     diagnostic_session.sample_frame(
                         delta,
                         tick_ms,
                         update_ms,
-                        player.get_renderer_info(),
+                        selected_backend,
                         player.get_frame_texture_backend()
                     )
                 _log_live_perf(delta, tick_ms, update_ms)

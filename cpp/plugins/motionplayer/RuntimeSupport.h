@@ -11,6 +11,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -223,6 +224,12 @@ namespace motion::detail {
         std::shared_ptr<const PSB::PSBDictionary> root;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBResource>>
             resourcesByPath;
+        // Snapshot instances are shared by every Player created from a loaded
+        // module. Cache atlas fingerprints here so the first frame of each new
+        // menu/effect instance does not hash the same multi-megabyte PSB data.
+        mutable std::mutex resourceFingerprintMutex;
+        mutable std::unordered_map<const PSB::PSBResource *,
+            std::pair<std::uint64_t, std::uint64_t>> resourceFingerprintCache;
         tTJSVariant moduleValue;
         std::vector<std::string> mainTimelineLabels;
         std::vector<std::string> diffTimelineLabels;
