@@ -1421,6 +1421,7 @@ var active_touch_points := {}
 var active_mouse_buttons := {}
 var suppressed_touch_points := {}
 var touch_down_points := {}
+var dragging_touch_points := {}
 var pending_touch_index := -1
 var pending_touch_mapped := Vector2.ZERO
 var pending_touch_down_msec := 0
@@ -10211,14 +10212,20 @@ func _process(delta: float) -> void:
                 ])
             var tick_start := Time.get_ticks_usec()
             var tick_result: int = int(player.tick(delta))
+            # Capture the failing call immediately. Follow-up bridge calls such
+            # as text-input synchronization can succeed and overwrite the
+            # player's shared last-result/last-error fields.
+            var tick_result_name := ""
+            var tick_error_message := ""
+            if tick_result != ENGINE_RESULT_OK:
+                tick_result_name = str(player.get_last_result())
+                tick_error_message = str(player.get_last_error())
             _sync_game_text_input_state()
             var tick_ms := float(Time.get_ticks_usec() - tick_start) / 1000.0
             last_tick_ms = tick_ms
             last_frame_ms = delta * 1000.0
             tick_trace_active_serial = 0
             if tick_result != ENGINE_RESULT_OK:
-                var tick_result_name := str(player.get_last_result())
-                var tick_error_message := str(player.get_last_error())
                 if _is_runtime_exit_error(tick_error_message):
                     var runtime_exit_line := "Game exited: %s %s" % [
                         tick_result_name,
@@ -10977,6 +10984,7 @@ func _clear_game_input_capture() -> void:
     active_mouse_buttons.clear()
     suppressed_touch_points.clear()
     touch_down_points.clear()
+    dragging_touch_points.clear()
     pending_touch_index = -1
     pending_touch_mapped = Vector2.ZERO
     pending_touch_down_msec = 0
@@ -11878,6 +11886,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             suppressed_touch_points.erase(pointer_id)
             active_touch_points.erase(pointer_id)
             touch_down_points.erase(pointer_id)
+            dragging_touch_points.erase(pointer_id)
             _clear_pending_touch_if_matches(pointer_id)
             _trace_input_throttled()
             return true
@@ -11895,8 +11904,15 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         if mapped.x < 0.0 or mapped.y < 0.0:
             mapped = active_touch_points.get(pointer_id, Vector2.ZERO)
         var down_mapped: Vector2 = touch_down_points.get(pointer_id, mapped)
+        if not dragging_touch_points.has(pointer_id):
+            mapped = GameInputMapping.stable_tap_point(
+                down_mapped,
+                mapped,
+                TOUCH_DRAG_DISTANCE_THRESHOLD
+            )
         active_touch_points.erase(pointer_id)
         touch_down_points.erase(pointer_id)
+        dragging_touch_points.erase(pointer_id)
         last_forwarded_touch_move_msec_by_id.erase(pointer_id)
         _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
         last_forwarded_touch_up_msec = Time.get_ticks_msec()
@@ -11927,6 +11943,14 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
                 return false
             mapped = active_touch_points.get(pointer_id, Vector2.ZERO)
         if captured:
+            var down_mapped: Vector2 = touch_down_points.get(pointer_id, mapped)
+            if (
+                not dragging_touch_points.has(pointer_id)
+                and mapped.distance_to(down_mapped) < TOUCH_DRAG_DISTANCE_THRESHOLD
+            ):
+                _trace_input_move_suppressed()
+                return true
+            dragging_touch_points[pointer_id] = true
             active_touch_points[pointer_id] = mapped
             var rel := _map_viewport_delta(drag.relative)
             _send_game_pointer_event(
@@ -11948,6 +11972,7 @@ func _suppress_touch_pointer(pointer_id: int) -> void:
     suppressed_touch_points[pointer_id] = true
     active_touch_points.erase(pointer_id)
     touch_down_points.erase(pointer_id)
+    dragging_touch_points.erase(pointer_id)
     last_forwarded_touch_move_msec_by_id.erase(pointer_id)
     _clear_pending_touch_if_matches(pointer_id)
 
@@ -11955,6 +11980,7 @@ func _set_pending_touch(pointer_id: int, mapped: Vector2) -> void:
     suppressed_touch_points.erase(pointer_id)
     active_touch_points.erase(pointer_id)
     touch_down_points.erase(pointer_id)
+    dragging_touch_points.erase(pointer_id)
     last_forwarded_touch_move_msec_by_id.erase(pointer_id)
     pending_touch_index = pointer_id
     pending_touch_mapped = mapped
@@ -12000,6 +12026,7 @@ func _flush_pending_touch_press(force: bool = false) -> bool:
     suppressed_touch_points.erase(pointer_id)
     active_touch_points[pointer_id] = mapped
     touch_down_points[pointer_id] = mapped
+    dragging_touch_points.erase(pointer_id)
     last_forwarded_touch_down_msec = now
     _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
     _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
@@ -12010,27 +12037,22 @@ func _flush_pending_touch_press(force: bool = false) -> bool:
 
 func _send_pending_touch_click(pointer_id: int, up_mapped: Vector2) -> void:
     var down_mapped := pending_touch_mapped
+    var click_mapped := GameInputMapping.stable_tap_point(
+        down_mapped,
+        up_mapped,
+        TOUCH_DRAG_DISTANCE_THRESHOLD
+    )
     _clear_pending_touch()
     suppressed_touch_points.erase(pointer_id)
     active_touch_points.erase(pointer_id)
     touch_down_points.erase(pointer_id)
+    dragging_touch_points.erase(pointer_id)
     last_forwarded_touch_move_msec_by_id.erase(pointer_id)
 
     last_forwarded_touch_down_msec = Time.get_ticks_msec()
-    _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), down_mapped.x, down_mapped.y, 0.0, 0.0, 0)
-    _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), down_mapped.x, down_mapped.y, 0.0, 0.0, 0)
-    if up_mapped.distance_to(down_mapped) > 0.5:
-        _send_game_pointer_event(
-            POINTER_MOVE,
-            _touch_engine_pointer_id(pointer_id),
-            up_mapped.x,
-            up_mapped.y,
-            up_mapped.x - down_mapped.x,
-            up_mapped.y - down_mapped.y,
-            0,
-            POINTER_MOD_LEFT
-        )
-    _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), up_mapped.x, up_mapped.y, 0.0, 0.0, 0)
+    _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
+    _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
+    _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
     last_forwarded_touch_up_msec = Time.get_ticks_msec()
     _apply_touch_action_cooldown()
     _arm_tick_trace()
@@ -12044,6 +12066,7 @@ func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
         click_mapped = (pending_touch_mapped + mapped) * 0.5
         suppressed_touch_points[first_id] = true
         touch_down_points.erase(first_id)
+        dragging_touch_points.erase(first_id)
         last_forwarded_touch_move_msec_by_id.erase(first_id)
         _clear_pending_touch()
     elif not active_touch_points.is_empty():
@@ -12053,6 +12076,7 @@ func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
         _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(first_id), first_mapped.x, first_mapped.y, 0.0, 0.0, 0)
         active_touch_points.erase(first_id)
         touch_down_points.erase(first_id)
+        dragging_touch_points.erase(first_id)
         last_forwarded_touch_move_msec_by_id.erase(first_id)
         suppressed_touch_points[first_id] = true
         last_forwarded_touch_up_msec = Time.get_ticks_msec()

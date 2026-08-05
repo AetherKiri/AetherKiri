@@ -15,9 +15,14 @@
 #include <utility>
 #include <vector>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include "engine_runtime_provider_registry.h"
 #include "legacy_engine_api.h"
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
+#include "environ/Platform.h"
 #include "visual/RenderManager.h"
 #endif
 
@@ -60,6 +65,7 @@ struct DispatchHandle {
   };
   std::deque<PlatformRequest> platform_requests;
   std::string last_error;
+  bool provider_resume_pending = false;
 };
 
 std::recursive_mutex g_dispatch_registry_mutex;
@@ -67,6 +73,15 @@ std::unordered_set<engine_handle_t> g_dispatch_handles;
 std::unordered_map<engine_media_handle_t, engine_handle_t>
     g_dispatch_media_handles;
 thread_local std::string g_dispatch_thread_error;
+
+bool ActivateProviderAudioSessionForHost() {
+#if defined(__APPLE__) && TARGET_OS_IPHONE && \
+    defined(ENGINE_API_USE_KRKR2_RUNTIME)
+  return TVPActivateAudioSessionForHost();
+#else
+  return true;
+#endif
+}
 
 #define PROVIDER_HAS(provider, member)                                      \
   ((provider) != nullptr &&                                                  \
@@ -795,6 +810,24 @@ engine_result_t engine_tick(engine_handle_t public_handle, uint32_t delta_ms) {
                  return engine_legacy_tick(legacy, delta_ms);
                },
                [&](DispatchHandle* handle) {
+                 if (handle->provider_resume_pending) {
+                   if (!ActivateProviderAudioSessionForHost()) {
+                     // UIApplication may still be foreground-inactive when
+                     // Godot emits APPLICATION_RESUMED. Keep the provider
+                     // paused and retry on the next host tick instead of
+                     // reopening its audio device against an inactive route.
+                     return ENGINE_RESULT_OK;
+                   }
+                   if (!PROVIDER_HAS(handle->provider, resume)) {
+                     return ENGINE_RESULT_NOT_SUPPORTED;
+                   }
+                   const engine_result_t resume_result =
+                       handle->provider->resume(handle->runtime);
+                   if (resume_result != ENGINE_RESULT_OK) {
+                     return resume_result;
+                   }
+                   handle->provider_resume_pending = false;
+                 }
                  const engine_result_t result =
                      handle->provider->tick(handle->runtime, delta_ms);
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
@@ -812,6 +845,7 @@ engine_result_t engine_tick(engine_handle_t public_handle, uint32_t delta_ms) {
 engine_result_t engine_pause(engine_handle_t public_handle) {
   return Route(public_handle, "pause", engine_legacy_pause,
                [](DispatchHandle* handle) {
+                 handle->provider_resume_pending = false;
                  return PROVIDER_HAS(handle->provider, pause)
                             ? handle->provider->pause(handle->runtime)
                             : ENGINE_RESULT_NOT_SUPPORTED;
@@ -821,9 +855,19 @@ engine_result_t engine_pause(engine_handle_t public_handle) {
 engine_result_t engine_resume(engine_handle_t public_handle) {
   return Route(public_handle, "resume", engine_legacy_resume,
                [](DispatchHandle* handle) {
-                 return PROVIDER_HAS(handle->provider, resume)
-                            ? handle->provider->resume(handle->runtime)
-                            : ENGINE_RESULT_NOT_SUPPORTED;
+                 if (!PROVIDER_HAS(handle->provider, resume)) {
+                   return ENGINE_RESULT_NOT_SUPPORTED;
+                 }
+                 if (!ActivateProviderAudioSessionForHost()) {
+                   handle->provider_resume_pending = true;
+                   return ENGINE_RESULT_OK;
+                 }
+                 const engine_result_t result =
+                     handle->provider->resume(handle->runtime);
+                 if (result == ENGINE_RESULT_OK) {
+                   handle->provider_resume_pending = false;
+                 }
+                 return result;
                });
 }
 

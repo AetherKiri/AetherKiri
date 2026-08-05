@@ -642,7 +642,14 @@ namespace motion::detail {
     inline std::size_t nativeLayerBufferNodeIndex(
         std::size_t nodeCount,
         std::size_t bufferPosition) {
-        return nodeCount - bufferPosition - 1;
+        (void)nodeCount;
+        return bufferPosition;
+    }
+
+    inline bool preparedLocalNodeFollowsChildSlot(
+        int localNodeIndex,
+        int childParentNodeIndex) {
+        return localNodeIndex > childParentNodeIndex;
     }
 
     inline bool tessellatePreparedItemForExternalMesh(

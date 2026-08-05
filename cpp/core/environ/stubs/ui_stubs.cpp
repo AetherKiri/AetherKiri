@@ -23,6 +23,9 @@
 #include <chrono>
 #include <mutex>
 #include <sstream>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 #if defined(__EMSCRIPTEN__)
 #include <sys/stat.h>
 #endif
@@ -1727,13 +1730,39 @@ const std::string &TVPGetInternalPreferencePath() {
 // Returns list of directories where the application searches for data files.
 // ---------------------------------------------------------------------------
 static std::vector<std::string> s_appHomeDirs;
+static ttstr s_appHomeProjectPath;
 
 const std::vector<std::string> &TVPGetApplicationHomeDirectory() {
-    if (s_appHomeDirs.empty()) {
+    // Aether can start multiple visual novels in one process. The native
+    // project directory therefore changes without restarting the iOS host.
+    // Keep the application-home snapshot tied to that directory instead of
+    // retaining the first title (or built-in demo) for the process lifetime.
+    if (s_appHomeDirs.empty() ||
+        !(s_appHomeProjectPath == TVPNativeProjectDir)) {
+        s_appHomeDirs.clear();
+        s_appHomeProjectPath = TVPNativeProjectDir;
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+        // iOS stores imported projects and runtime-generated files below the
+        // app's data container, while TVPNativeProjectDir can still identify
+        // the host bundle in this process. Keep the sandbox root available to
+        // file media so normalized absolute paths can recover their exact
+        // on-disk casing without attempting to enumerate from `/`.
+        if (const char *home = std::getenv("HOME"); home && *home) {
+            std::string sandboxHome(home);
+            while (sandboxHome.size() > 1 && sandboxHome.back() == '/') {
+                sandboxHome.pop_back();
+            }
+            s_appHomeDirs.push_back(std::move(sandboxHome));
+        }
+#endif
         if (!TVPNativeProjectDir.IsEmpty()) {
             const ttstr dir =
                 TVPGetNativeProjectDirectory(TVPNativeProjectDir);
-            s_appHomeDirs.push_back(dir.AsNarrowStdString());
+            std::string projectHome = dir.AsNarrowStdString();
+            if (std::find(s_appHomeDirs.begin(), s_appHomeDirs.end(),
+                          projectHome) == s_appHomeDirs.end()) {
+                s_appHomeDirs.push_back(std::move(projectHome));
+            }
         } else {
 #if defined(__EMSCRIPTEN__)
             s_appHomeDirs.push_back("/userfs");

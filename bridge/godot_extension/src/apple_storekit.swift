@@ -550,6 +550,14 @@ private final class AetherStoreKitManager: @unchecked Sendable {
     }
 
     private func loadCoffeeLedger() -> AetherCoffeeLedger {
+#if DEBUG
+        // Local Debug apps are ad-hoc signed, so their designated requirement
+        // changes after every rebuild. Reading a ledger created by the previous
+        // build would make macOS ask for Keychain access each time. Debug does
+        // not enforce beta access, so keep the ledger ephemeral and avoid the
+        // Keychain entirely.
+        return AetherCoffeeLedger()
+#else
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: coffeeKeychainService,
@@ -565,9 +573,15 @@ private final class AetherStoreKitManager: @unchecked Sendable {
             return AetherCoffeeLedger()
         }
         return ledger
+#endif
     }
 
     private func saveCoffeeLedger(_ ledger: AetherCoffeeLedger) {
+#if DEBUG
+        // See loadCoffeeLedger(): Debug entitlement state intentionally lives
+        // only for the current process and must never touch the Keychain.
+        return
+#else
         guard let data = try? JSONEncoder().encode(ledger) else { return }
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -584,6 +598,7 @@ private final class AetherStoreKitManager: @unchecked Sendable {
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             SecItemAdd(addQuery as CFDictionary, nil)
         }
+#endif
     }
 }
 

@@ -984,14 +984,43 @@ TEST_CASE("motionplayer tessellates nested surfaces before inherited Bezier defo
     CHECK(degenerate.meshType == 0);
 }
 
-TEST_CASE("motionplayer buffers equal-Z E-mote layers in native reverse order") {
+TEST_CASE("motionplayer preserves authored equal-Z E-mote layer order") {
     constexpr std::size_t nodeCount = 6;
     std::array<std::size_t, nodeCount> order{};
     for(std::size_t position = 0; position < nodeCount; ++position) {
         order[position] = motion::detail::nativeLayerBufferNodeIndex(
             nodeCount, position);
     }
-    CHECK(order == (std::array<std::size_t, nodeCount>{5, 4, 3, 2, 1, 0}));
+    CHECK(order == (std::array<std::size_t, nodeCount>{0, 1, 2, 3, 4, 5}));
+
+    // Both startup motions from PR #56 author their opaque white backdrop
+    // before the animated logo artwork. Reversing the flat buffer makes the
+    // backdrop the final equal-Z draw and turns the complete animation white.
+    constexpr std::array<std::string_view, 3> yuzuLogoNodes{
+        "src/yuzu/white_box",
+        "src/yuzu/yuzu_logo",
+        "src/yuzu/software",
+    };
+    constexpr std::array<std::string_view, 3> m2LogoNodes{
+        "src/logo/icon50",
+        "src/logo/icon42",
+        "src/bure2/icon1",
+    };
+    CHECK(yuzuLogoNodes[motion::detail::nativeLayerBufferNodeIndex(
+              yuzuLogoNodes.size(), 0)] == "src/yuzu/white_box");
+    CHECK(m2LogoNodes[motion::detail::nativeLayerBufferNodeIndex(
+              m2LogoNodes.size(), 0)] == "src/logo/icon50");
+}
+
+TEST_CASE("motionplayer merges child animation at its authored parent slot") {
+    // A common SD layout authors its opaque mask/background first and then
+    // places animated character children in later nodeType-3 slots. The
+    // child must not be inserted before those earlier local layers or the
+    // background will be drawn last and cover the complete character.
+    CHECK_FALSE(motion::detail::preparedLocalNodeFollowsChildSlot(1, 4));
+    CHECK_FALSE(motion::detail::preparedLocalNodeFollowsChildSlot(2, 4));
+    CHECK_FALSE(motion::detail::preparedLocalNodeFollowsChildSlot(4, 4));
+    CHECK(motion::detail::preparedLocalNodeFollowsChildSlot(5, 4));
 }
 
 TEST_CASE("motionplayer parses and combines E-mote secondary-motion meshes") {

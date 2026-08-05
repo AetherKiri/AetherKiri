@@ -48,3 +48,17 @@ static func map_delta(
         target_size.y / texture_size.y
     )
     return window_delta / maxf(0.0001, scale)
+
+
+# iOS reports sub-pixel finger drift even for an intentional tap. Once the
+# gesture has stayed below the drag threshold, keep its press and release at
+# the original contact point so a hover-driven runtime cannot reinterpret the
+# tap as cursor motion.
+static func stable_tap_point(
+    down_point: Vector2,
+    up_point: Vector2,
+    drag_threshold: float
+) -> Vector2:
+    if up_point.distance_to(down_point) < maxf(0.0, drag_threshold):
+        return down_point
+    return up_point
