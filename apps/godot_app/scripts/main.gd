@@ -10173,7 +10173,6 @@ func _process(delta: float) -> void:
         _process_video_playback(delta)
     var startup_state := cached_startup_state
     if game_running:
-        _sync_player_surface_size(false)
         # Runtime logs also carry control messages such as [ALERT_DIALOG].
         # Drain them even when developer logging is disabled so those messages
         # cannot remain hidden in the native queue.
@@ -10504,6 +10503,8 @@ func _log_input_trace(delta: float, tick_ms: float, update_ms: float) -> void:
 func _notification(what: int) -> void:
     if what == NOTIFICATION_RESIZED:
         _fit_full_rects()
+        if game_running:
+            _sync_player_surface_size(false)
         _queue_settings_relayout_after_resize()
         _queue_detail_relayout_after_resize()
         return
