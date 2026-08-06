@@ -249,47 +249,50 @@ static tTJSNI_BaseLayer *TVPResolveExchangedKagAssignmentTarget(
         return known_stale ? candidate : nullptr;
     }
 
-    if(!known_stale) {
-        bool visible_page_has_content_layer = false;
-        for(tjs_uint child_index = 0;
-            child_index < visible_page->GetCount(); ++child_index) {
-            auto *candidate = visible_page->GetChildren(
-                static_cast<tjs_int>(child_index));
-            if(candidate && candidate->GetVisible() &&
-               candidate->GetParentVisible() &&
-               candidate->GetWidth() >= target->GetWidth() / 2 &&
-               candidate->GetHeight() >= target->GetHeight() / 2) {
-                visible_page_has_content_layer = true;
-                break;
-            }
+    bool visible_page_has_content_layer = false;
+    for(tjs_uint child_index = 0;
+        child_index < visible_page->GetCount(); ++child_index) {
+        auto *candidate = visible_page->GetChildren(
+            static_cast<tjs_int>(child_index));
+        if(candidate && candidate->GetVisible() &&
+           candidate->GetParentVisible() &&
+           candidate->GetWidth() >= target->GetWidth() / 2 &&
+           candidate->GetHeight() >= target->GetHeight() / 2) {
+            visible_page_has_content_layer = true;
+            break;
         }
-        if(visible_page_has_content_layer ||
-           hidden_page->DebugIsInTransition() ||
-           visible_page->DebugIsInTransition()) {
-            std::lock_guard<std::mutex> lock(
-                TVPExchangedKagPageMutex);
-            TVPHiddenKagAssignmentStreaks.erase(target);
-            return nullptr;
-        }
+    }
+    if(visible_page_has_content_layer ||
+       hidden_page->DebugIsInTransition() ||
+       visible_page->DebugIsInTransition()) {
+        std::lock_guard<std::mutex> lock(
+            TVPExchangedKagPageMutex);
+        TVPHiddenKagAssignmentStreaks.erase(target);
+        return nullptr;
+    }
 
-        const auto now = std::chrono::steady_clock::now();
-        bool persistent_hidden_target = false;
-        {
-            std::lock_guard<std::mutex> lock(
-                TVPExchangedKagPageMutex);
-            auto &streak =
-                TVPHiddenKagAssignmentStreaks[target];
-            if(streak.count == 0 ||
-               now - streak.last >
-                   std::chrono::milliseconds(250)) {
-                streak.count = 0;
-            }
-            streak.last = now;
-            persistent_hidden_target = ++streak.count >= 12;
+    // A page can already be marked stale when the script creates a brand-new
+    // layer on it for the next transition.  Moving that layer on its first
+    // AssignImages() leaks the incoming frame onto the visible page for one
+    // present.  Require persistence from the target itself before treating it
+    // as an orphan left behind by a completed page exchange.
+    const auto now = std::chrono::steady_clock::now();
+    bool persistent_hidden_target = false;
+    {
+        std::lock_guard<std::mutex> lock(
+            TVPExchangedKagPageMutex);
+        auto &streak =
+            TVPHiddenKagAssignmentStreaks[target];
+        if(streak.count == 0 ||
+           now - streak.last >
+               std::chrono::milliseconds(250)) {
+            streak.count = 0;
         }
-        if(!persistent_hidden_target) {
-            return nullptr;
-        }
+        streak.last = now;
+        persistent_hidden_target = ++streak.count >= 12;
+    }
+    if(!persistent_hidden_target) {
+        return nullptr;
     }
     // The page exchange can leave a continuously animated KAG layer attached
     // to the now-hidden page while the visible page contains only message and

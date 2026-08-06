@@ -53,6 +53,14 @@ namespace motion::detail {
         bool allowArmNeon);
 }
 
+namespace motion {
+    struct PlayerTestAccess {
+        static void enableAutoProgress(Player &player, iTJSDispatch2 *dispatch) {
+            player.enableAutoProgress(dispatch);
+        }
+    };
+}
+
 #if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
 namespace {
     const bool kPrivateMotionRuntimeRegistered = [] {
@@ -830,6 +838,20 @@ namespace {
 
 } // namespace
 
+TEST_CASE("manual Motion.Player progress owns the playback clock") {
+    motion::Player player;
+    auto *dispatch = new tTJSDispatch();
+    motion::PlayerTestAccess::enableAutoProgress(player, dispatch);
+    CHECK(player.getAutoProgressDispatchForCompat() == dispatch);
+
+    // Even an initial zero-delta refresh means that the script owns this
+    // player's wall clock.  Leaving the continuous callback registered here
+    // double-counts a slow frame when the next script delta arrives.
+    player.frameProgressManually(0.0);
+    CHECK(player.getAutoProgressDispatchForCompat() == nullptr);
+    dispatch->Release();
+}
+
 TEST_CASE("storage resolves logical E-mote PSBs to DirectX exports") {
     ensurePluginRuntime();
     TemporaryAutoPath autoPath;
@@ -1477,6 +1499,21 @@ TEST_CASE("resource manager owns snapshots only while their module is cached") {
     manager.unload(ttstr(TJS_W("memory-lifetime.mtn")));
     REQUIRE(releasedSnapshot.expired());
     REQUIRE(manager.uniqueCachedModuleCount() == 0);
+}
+
+TEST_CASE("resource managers reuse the most recent exact motion module") {
+    setEmoteSeed();
+
+    motion::ResourceManager first;
+    const auto firstModule = first.load(motionFixturePath());
+    REQUIRE(firstModule.Type() == tvtObject);
+
+    motion::ResourceManager second;
+    const auto secondModule = second.load(motionFixturePath());
+    REQUIRE(secondModule.Type() == tvtObject);
+    REQUIRE(secondModule.AsObjectNoAddRef() ==
+            firstModule.AsObjectNoAddRef());
+    REQUIRE(second.uniqueCachedModuleCount() == 1);
 }
 
 TEST_CASE("emoteplayer timeline state and todo stubs") {

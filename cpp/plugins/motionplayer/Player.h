@@ -80,6 +80,7 @@ namespace motion {
 
     class Player {
         friend class ::aetherinternal::EmoteRuntimeExtension;
+        friend struct PlayerTestAccess;
 
     public:
         explicit Player(ResourceManager rm = ResourceManager{});

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "engine_api.h"
+#include "engine_input_queue_gate.h"
 #include "engine_runtime_provider.h"
 
 namespace {
@@ -196,6 +197,42 @@ const engine_runtime_provider_v1_t kArtemisGateProvider = [] {
 }();
 
 }  // namespace
+
+TEST_CASE("primary click queue gate coalesces clicks before the next tick") {
+  aetherkiri::engine_api::PrimaryClickQueueGate gate;
+  engine_input_event_t event{};
+  event.struct_size = sizeof(event);
+  event.button = 0;
+  event.pointer_id = 7;
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE(gate.should_enqueue(event));
+  const engine_input_event_t queued_release = event;
+
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE_FALSE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_MOVE;
+  REQUIRE_FALSE(gate.should_enqueue(event));
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  REQUIRE_FALSE(gate.should_enqueue(event));
+
+  gate.on_dequeued(queued_release);
+  event.type = ENGINE_INPUT_EVENT_POINTER_DOWN;
+  REQUIRE(gate.should_enqueue(event));
+}
+
+TEST_CASE("primary click queue gate preserves secondary pointer releases") {
+  aetherkiri::engine_api::PrimaryClickQueueGate gate;
+  engine_input_event_t event{};
+  event.struct_size = sizeof(event);
+  event.type = ENGINE_INPUT_EVENT_POINTER_UP;
+  event.button = 1;
+
+  REQUIRE(gate.should_enqueue(event));
+}
 
 TEST_CASE("Artemis runtime is compiled but beta-gated in product builds") {
   const engine_result_t registration =

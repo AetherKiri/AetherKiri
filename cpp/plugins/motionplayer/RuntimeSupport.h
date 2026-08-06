@@ -11,6 +11,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -223,6 +224,13 @@ namespace motion::detail {
         std::shared_ptr<const PSB::PSBDictionary> root;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBResource>>
             resourcesByPath;
+        // Immutable PSB resources are shared by every Player bound to this
+        // snapshot. Fingerprinting a multi-megabyte embedded image once per
+        // Player made animated title scenes repeatedly rescan the same bytes.
+        mutable std::mutex sourceFingerprintMutex;
+        mutable std::unordered_map<
+            const PSB::PSBResource *,
+            std::pair<std::uint64_t, std::uint64_t>> sourceFingerprints;
         tTJSVariant moduleValue;
         std::vector<std::string> mainTimelineLabels;
         std::vector<std::string> diffTimelineLabels;
@@ -331,15 +339,18 @@ namespace motion::detail {
         // bitmap so prepared/tinted variants use the same coordinates.
         std::unordered_map<std::string, std::array<int, 4>>
             motionSourceBitmapRects;
-        // E-mote atlases are shared by many icon sources. Building the
-        // cross-player bitmap-cache key fingerprints the complete atlas
-        // bytes, so remember that content fingerprint for this runtime
-        // instead of rescanning the same multi-megabyte resource once per
-        // icon. The cache is cleared whenever the active motion changes,
-        // keeping the resource-pointer identity bounded by its snapshot.
-        std::unordered_map<const PSB::PSBResource *,
-                           std::pair<std::uint64_t, std::uint64_t>>
-            motionSourceResourceFingerprintCache;
+        struct MotionSourceBitmapTraits {
+            bool alphaOnlyKnown = false;
+            bool alphaOnly = false;
+            bool whiteMaskKnown = false;
+            bool whiteMask = false;
+            bool hasWhitePixelsKnown = false;
+            bool hasWhitePixels = false;
+        };
+        // Source classification samples immutable pixels. Cache the result so
+        // color animation does not resample the same bitmap for every tint.
+        std::unordered_map<std::string, MotionSourceBitmapTraits>
+            motionSourceBitmapTraits;
         struct MotionSourceMetadata {
             int width = 0;
             int height = 0;
@@ -654,7 +665,7 @@ namespace motion::detail {
         void clearMotionBitmapCaches() {
             motionSourceBitmapCache.clear();
             motionSourceBitmapRects.clear();
-            motionSourceResourceFingerprintCache.clear();
+            motionSourceBitmapTraits.clear();
             motionSourceMetadataCache.clear();
             motionPreparedBitmapCache.clear();
             motionPreparedMaterializedKeysBySource.clear();
