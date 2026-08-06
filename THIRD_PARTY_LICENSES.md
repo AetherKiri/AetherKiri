@@ -61,6 +61,18 @@ Kirikiri Z 64bit Project Contributors
 Thanks for many libraries to contributors and other supporters that were not
 listed here.
 
+-------------------------------------------------------------------------------
+krkrsdl3 supplemental term
+-------------------------------------------------------------------------------
+The `ExtKAGParser.dll` compatibility implementation is adapted from krkrsdl3.
+Its upstream supplemental redistribution term is preserved here:
+
+When distributing binary files of ported versions of commercial games that run
+on, but were not originally developed with, the KRKRSDL3 software, you must, if
+you have made any modifications to the KRKRSDL3 code itself, make the complete
+and corresponding source code of those modifications publicly available under
+the same terms as this license.
+
 This software is based in part on the work of Independent JPEG Group.
 ------------------------------------------------------------------------------
 libjpeg-turbo

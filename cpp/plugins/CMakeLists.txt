@@ -137,6 +137,7 @@ if(NOT WEB AND NOT EMSCRIPTEN)
 endif()
 add_subdirectory(motionplayer)
 add_subdirectory(kagparserex)
+add_subdirectory(extkagparser)
 
 #add_subdirectory(json)
 #add_subdirectory(steam)
@@ -146,6 +147,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         psbfile
         motionplayer
         kagparserex
+        extkagparser
 #        json steam DrawDeviceForSteam
 )
 if(NOT WEB AND NOT EMSCRIPTEN)
