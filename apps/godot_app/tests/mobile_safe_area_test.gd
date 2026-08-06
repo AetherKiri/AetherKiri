@@ -131,6 +131,24 @@ func _initialize() -> void:
     assert(is_equal_approx(app._shell_scroll_maximum(0.0, 1800.0, 600.0), 1200.0))
     assert(is_equal_approx(app._shell_scroll_maximum(20.0, 10.0, 100.0), 20.0))
 
+    var released_scroll := ScrollContainer.new()
+    var released_control := Button.new()
+    var released_scroll_id := released_scroll.get_instance_id()
+    var released_control_id := released_control.get_instance_id()
+    var released_drag_state := {
+        "scroll_id": released_scroll_id,
+        "control_id": released_control_id,
+    }
+    assert(app._shell_scroll_from_drag_state(released_drag_state) == released_scroll)
+    assert(app._shell_control_from_drag_state(released_drag_state) == released_control)
+    released_scroll.free()
+    released_control.free()
+    assert(app._shell_scroll_from_drag_state(released_drag_state) == null)
+    assert(app._shell_control_from_drag_state(released_drag_state) == null)
+    app.shell_scroll_drag_states[17] = released_drag_state
+    assert(not app._update_shell_scroll_drag(17, Vector2(0, 20), Vector2(0, 20)))
+    assert(not app.shell_scroll_drag_states.has(17))
+
     var native_scroll_bar := VScrollBar.new()
     var scroll_bar_child := Control.new()
     native_scroll_bar.add_child(scroll_bar_child)

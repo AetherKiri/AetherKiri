@@ -487,6 +487,14 @@ jobs:
             echo "The packaged iOS release is missing its Bluetooth purpose string." >&2
             exit 1
           fi
+          uses_non_exempt_encryption="$(
+            plutil -extract ITSAppUsesNonExemptEncryption raw "$info_plist" \
+              2>/dev/null || true
+          )"
+          if [[ "$uses_non_exempt_encryption" != "false" ]]; then
+            echo "The packaged iOS release is missing the exempt-encryption declaration." >&2
+            exit 1
+          fi
           if [[ -n "$AETHERKIRI_RELEASE_VERSION" ]]; then
             actual_bundle_id="$(plutil -extract CFBundleIdentifier raw "$info_plist")"
             actual_version="$(plutil -extract CFBundleShortVersionString raw "$info_plist")"
@@ -726,6 +734,14 @@ jobs:
             fi
             codesign --verify --deep --strict --verbose=2 "$APP_PATH"
             if [[ "$build_type" == "release" ]]; then
+              uses_non_exempt_encryption="$(
+                plutil -extract ITSAppUsesNonExemptEncryption raw "$APP_PATH/Contents/Info.plist" \
+                  2>/dev/null || true
+              )"
+              if [[ "$uses_non_exempt_encryption" != "false" ]]; then
+                echo "The packaged macOS Release is missing the exempt-encryption declaration." >&2
+                exit 1
+              fi
               if [[ -n "$AETHERKIRI_RELEASE_VERSION" ]]; then
                 info_plist="$APP_PATH/Contents/Info.plist"
                 actual_bundle_id="$(plutil -extract CFBundleIdentifier raw "$info_plist")"

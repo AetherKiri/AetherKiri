@@ -103,9 +103,12 @@ else()
 endif()
 
 if(APPLE)
-    target_sources(aether_kiri_godot PRIVATE src/apple_storekit.swift)
+    target_sources(aether_kiri_godot PRIVATE
+        src/apple_native_file_picker.swift
+        src/apple_storekit.swift)
     set_property(TARGET aether_kiri_godot PROPERTY Swift_LANGUAGE_VERSION 5)
     target_link_libraries(aether_kiri_godot PRIVATE
+        "-framework UniformTypeIdentifiers"
         "-framework Security"
         "-framework StoreKit")
 endif()

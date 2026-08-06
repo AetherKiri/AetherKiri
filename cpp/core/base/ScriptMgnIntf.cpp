@@ -25,7 +25,7 @@
 #include "TimerIntf.h"
 #include "EventIntf.h"
 #include "SystemIntf.h"
-#include "PluginIntf.h"
+#include "PluginImpl.h"
 #include "MenuItemIntf.h"
 #include "ClipboardIntf.h"
 #include "MsgIntf.h"
@@ -423,11 +423,14 @@ class tTVPTJSGCCallback : public tTVPCompactEventCallbackIntf {
 // TVPInitScriptEngine
 //---------------------------------------------------------------------------
 static bool TVPScriptEngineInit = false;
+static bool TVPScriptEngineUninit = false;
+static bool TVPScriptEngineCompactHookRegistered = false;
 
 void TVPInitScriptEngine() {
-    if(TVPScriptEngineInit)
+    if(TVPScriptEngineInit && TVPScriptEngine)
         return;
     TVPScriptEngineInit = true;
+    TVPScriptEngineUninit = false;
 
     tTJSVariant val;
 
@@ -576,27 +579,36 @@ void TVPInitScriptEngine() {
     TVPCauseAtInstallExtensionClass(global);
 
     // Garbage Collection Hook
-    TVPAddCompactEventHook(&TVPTJSGCCallback);
+    if(!TVPScriptEngineCompactHookRegistered) {
+        TVPAddCompactEventHook(&TVPTJSGCCallback);
+        TVPScriptEngineCompactHookRegistered = true;
+    }
 }
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
 // TVPUninitScriptEngine
 //---------------------------------------------------------------------------
-static bool TVPScriptEngineUninit = false;
-
 void TVPUninitScriptEngine() {
-    if(TVPScriptEngineUninit)
+    if(TVPScriptEngineUninit && !TVPScriptEngine)
         return;
     TVPScriptEngineUninit = true;
 
+    // Internal ncbind classes retain process-global metadata. Unregister them
+    // while the old global TJS object is still alive, then release the script
+    // engine. Otherwise the next embedded game session either skips plugins
+    // as already loaded or fails their first registration.
+    TVPUnloadInternalPlugins();
+
     // TVPScriptEngine->Shutdown();
-    TVPScriptEngine->Release();
+    if(TVPScriptEngine)
+        TVPScriptEngine->Release();
     /*
         Objects, theirs lives are contolled by reference counter, may
        not be all freed here in some occations.
     */
     TVPScriptEngine = nullptr;
+    TVPScriptEngineInit = false;
 }
 //---------------------------------------------------------------------------
 
@@ -605,7 +617,6 @@ void TVPUninitScriptEngine() {
 //---------------------------------------------------------------------------
 void TVPRestartScriptEngine() {
     TVPUninitScriptEngine();
-    TVPScriptEngineInit = false;
     TVPInitScriptEngine();
 }
 //---------------------------------------------------------------------------

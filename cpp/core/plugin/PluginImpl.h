@@ -187,5 +187,6 @@ bool TVPIsKrkrsdl3PluginLoadMode();
 bool TVPIsAetherAllPluginLoadMode();
 
 void tvpLoadPlugins();
+void TVPUnloadInternalPlugins();
 
 #endif

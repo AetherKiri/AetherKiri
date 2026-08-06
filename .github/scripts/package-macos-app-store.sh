@@ -142,6 +142,24 @@ fi
 ditto "$source_app" "$app_store_app"
 cp "$profile_path" "$app_store_app/Contents/embedded.provisionprofile"
 
+# The Apple release declares only encryption that is exempt from export
+# documentation. Set that policy on the exact bundle that is signed and placed
+# in the installer, even if an older Godot export omitted it.
+/usr/libexec/PlistBuddy \
+    -c 'Set :ITSAppUsesNonExemptEncryption false' \
+    "$app_store_app/Contents/Info.plist" 2>/dev/null ||
+    /usr/libexec/PlistBuddy \
+        -c 'Add :ITSAppUsesNonExemptEncryption bool false' \
+        "$app_store_app/Contents/Info.plist"
+uses_non_exempt_encryption="$(
+    plutil -extract ITSAppUsesNonExemptEncryption raw \
+        "$app_store_app/Contents/Info.plist"
+)"
+if [[ "$uses_non_exempt_encryption" != "false" ]]; then
+    echo "The macOS App Store bundle declares non-exempt encryption." >&2
+    exit 1
+fi
+
 # Godot currently exports only LSMinimumSystemVersionByArchitecture. App Store
 # Connect also requires the scalar LSMinimumSystemVersion key, even when the
 # application is intentionally arm64-only. Keep both values aligned with the
