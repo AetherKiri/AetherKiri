@@ -22,7 +22,6 @@ func _initialize() -> void:
 
     var modes2 := [
         "ConstAlphaBlend_SD",
-        "ConstAlphaBlend_SD_a",
         "ConstAlphaBlend_SD_d",
         "AlphaBlend_d_Mask_Multiply",
         "AlphaBlend_d_Mask_Threshold",

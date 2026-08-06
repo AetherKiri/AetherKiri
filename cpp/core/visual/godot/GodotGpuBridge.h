@@ -91,9 +91,6 @@ enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_MULTIPLY = 21,
     // Threshold-mask src1 at alpha 64, then AlphaBlend_d it into dst.
     TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD = 22,
-    // Linearly interpolate all four source channels. Used by additive-alpha
-    // page fades, where the alpha byte is part of the transition result.
-    TVP_GODOT_GPU_BLEND_CONST_ALPHA_SD_A = 23,
     // draw_triangles is shared by Cubism (whose low bits describe Cubism
     // colour/alpha modes) and KiriKiri (whose low bits are the modes above).
     // Tag the latter so AlphaBlend/AlphaBlend_d are not mistaken for Cubism

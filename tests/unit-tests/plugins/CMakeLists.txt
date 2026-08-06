@@ -17,7 +17,6 @@ add_executable(motionplayer-dll
     kag-load-contract.cpp
     message-format.cpp
     render-simd.cpp
-    transition-policy.cpp
     script-compatibility.cpp
     project-storage.cpp
 )

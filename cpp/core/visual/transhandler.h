@@ -45,10 +45,6 @@ enum tTVPTransUpdateType { tutDivisibleFade, tutDivisible, tutGiveUpdate };
 #ifdef __BORLANDC__
 #pragma option pop
 #endif
-
-constexpr bool TVPTransitionUsesStaticSnapshots(tTVPTransUpdateType type) {
-    return type == tutDivisibleFade || type == tutDivisible;
-}
 /*
         there are two types of transition update method;
         tutDivisibleFade, tutDivisible and tutGiveUpdate.

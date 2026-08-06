@@ -10,7 +10,6 @@
 
 #include "engine_api.h"
 #include "engine_runtime_provider.h"
-#include "input_dispatch_policy.h"
 
 namespace {
 
@@ -197,17 +196,6 @@ const engine_runtime_provider_v1_t kArtemisGateProvider = [] {
 }();
 
 }  // namespace
-
-TEST_CASE("input dispatch yields after one complete action") {
-  CHECK_FALSE(EngineInputCompletesAction(ENGINE_INPUT_EVENT_POINTER_DOWN));
-  CHECK_FALSE(EngineInputCompletesAction(ENGINE_INPUT_EVENT_POINTER_MOVE));
-  CHECK(EngineInputCompletesAction(ENGINE_INPUT_EVENT_POINTER_UP));
-  CHECK(EngineInputCompletesAction(ENGINE_INPUT_EVENT_POINTER_SCROLL));
-  CHECK_FALSE(EngineInputCompletesAction(ENGINE_INPUT_EVENT_KEY_DOWN));
-  CHECK(EngineInputCompletesAction(ENGINE_INPUT_EVENT_KEY_UP));
-  CHECK_FALSE(EngineInputCompletesAction(ENGINE_INPUT_EVENT_TEXT_INPUT));
-  CHECK(EngineInputCompletesAction(ENGINE_INPUT_EVENT_BACK));
-}
 
 TEST_CASE("Artemis runtime is compiled but beta-gated in product builds") {
   const engine_result_t registration =

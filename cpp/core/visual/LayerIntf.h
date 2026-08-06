@@ -1133,13 +1133,6 @@ private:
         int SnapshotWarmupFrames;
         bool SkipSnapshotFrame;
 
-        void ClearSnapshots() {
-            delete Src1Bmp;
-            delete Src2Bmp;
-            Src1Bmp = nullptr;
-            Src2Bmp = nullptr;
-        }
-
         void Init(tTJSNI_BaseLayer *owner, tTVPDrawable *org) {
             Owner = owner;
             OrgDrawable = org;
