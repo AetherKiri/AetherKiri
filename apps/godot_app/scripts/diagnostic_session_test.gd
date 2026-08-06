@@ -116,7 +116,23 @@ func _run() -> void:
         return
 
     diagnostics.record("test", "lifecycle", "warning", "test_warning", 123, {"raw": "/private/game"})
+    diagnostics.record("engine", "lifecycle", "info", "engine_startup_application", 4567, {})
+    diagnostics.record("engine", "render", "warning", "engine_tick_spike", 30000, {"app_us": 25000})
     diagnostics.sample_frame(0.025, 21.0, 2.0, "test-renderer", "test-texture")
+    var diagnostic_status: Dictionary = diagnostics.status_snapshot()
+    if (diagnostic_status.get("startup_events", []) as Array).size() != 1:
+        _fail("startup evidence was not retained outside the rolling event window")
+        return
+    if int((diagnostic_status.get("slowest_events", {}) as Dictionary).get("engine_tick_spike", {}).get("duration_us", 0)) != 30000:
+        _fail("slowest native tick evidence was not retained")
+        return
+    var summary := diagnostics.summary_text({
+        "startup": {"state": "presented", "first_present_ms": 123.0},
+        "performance": {"renderer": "fixture"},
+    })
+    if not summary.contains("first_present=123.00ms") or not summary.contains("engine_tick_spike"):
+        _fail("clipboard summary omitted startup or slow-frame evidence")
+        return
     var native_time := Time.get_ticks_usec()
     fake.native_batches = [
         JSON.stringify({"monotonic_us": native_time, "event": "native_backlog_1"}) + "\n",

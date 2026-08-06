@@ -1376,6 +1376,7 @@ var state_log_accum := 0.0
 var memory_observed_peak_bytes := 0
 var startup_poll_accum := 0.0
 var cached_startup_state := STARTUP_IDLE
+var startup_metrics: Dictionary = {}
 var runtime_exit_cleanup_pending := false
 var perf_log_interval := PERF_LOG_INTERVAL
 var frame_spike_ms := 0.0
@@ -2593,7 +2594,7 @@ func _load_shell_settings() -> void:
 
 func _configure_runtime_diagnostics() -> void:
     diagnostics_enabled = _runtime_flag("AETHERKIRI_DIAGNOSTICS")
-    diagnostics_enabled = diagnostics_enabled or diagnostic_profile != "off"
+    diagnostics_enabled = diagnostics_enabled or _effective_diagnostic_profile() != "off"
     diagnostics_enabled = diagnostics_enabled or DiagnosticSession.external_request_present()
     diagnostics_enabled = diagnostics_enabled or device_probe_enabled
     diagnostics_enabled = diagnostics_enabled or verbose_render_log
@@ -2603,6 +2604,15 @@ func _configure_runtime_diagnostics() -> void:
     diagnostics_enabled = diagnostics_enabled or frame_spike_ms > 0.0
     diagnostics_enabled = diagnostics_enabled or perf_log_file != null
     ui_log_enabled = _runtime_flag("AETHERKIRI_UI_LOG")
+
+func _effective_diagnostic_profile() -> String:
+    if DiagnosticSession.external_request_present():
+        return DiagnosticSession.requested_profile()
+    # The performance overlay and debugger are one diagnostic surface. Enabling
+    # the overlay must also collect the low-cost evidence its DBG drawer shows.
+    if diagnostic_profile == "off" and debug_overlay_mode != "off":
+        return "baseline"
+    return diagnostic_profile
 
 func _normalize_backend_name(value: String) -> String:
     var backend_name := value.strip_edges()
@@ -2641,7 +2651,7 @@ func _save_shell_settings() -> void:
     _apply_engine_options()
     _apply_shell_runtime_settings()
     if diagnostic_session != null:
-        diagnostic_session.apply_preference(diagnostic_profile, player, selected_backend)
+        diagnostic_session.apply_preference(_effective_diagnostic_profile(), player, selected_backend)
         diagnostic_session.set_game_active(game_running)
     _sync_debug_console_state()
     dirty_settings = false
@@ -2870,7 +2880,7 @@ func _apply_engine_options() -> void:
     var effective_plugin_load_mode := _runtime_string("AETHERKIRI_PLUGIN_LOAD_MODE", plugin_load_mode)
     if not effective_plugin_load_mode in ["krkrsdl3", "aether_all"]:
         effective_plugin_load_mode = "krkrsdl3"
-    var effective_diagnostic_profile := DiagnosticSession.requested_profile() if DiagnosticSession.external_request_present() else diagnostic_profile
+    var effective_diagnostic_profile := _effective_diagnostic_profile()
     _apply_diagnostic_profile_environment(effective_diagnostic_profile)
     var effective_plugin_trace := plugin_trace or effective_diagnostic_profile in ["plugin", "full"] or _runtime_flag("AETHERKIRI_PLUGIN_TRACE", false)
     var effective_trace_log := trace_log or effective_diagnostic_profile == "full" or _runtime_flag("AETHERKIRI_TRACE_LOG", false)
@@ -8559,7 +8569,7 @@ func _ready() -> void:
 
     diagnostic_session = DiagnosticSession.new()
     add_child(diagnostic_session)
-    diagnostic_session.configure_preference(diagnostic_profile)
+    diagnostic_session.configure_preference(_effective_diagnostic_profile())
     diagnostic_session.set_translator(func(key: String): return _t(key))
     diagnostic_session.set_marker_context_provider(func(): return _diagnostic_marker_context())
     diagnostic_session.build_overlay(self)
@@ -8613,7 +8623,11 @@ func _setup_debug_console() -> void:
 func _sync_debug_console_state() -> void:
     if debug_console == null:
         return
-    var available: bool = diagnostic_session != null and bool(diagnostic_session.active)
+    var available: bool = (
+        debug_overlay_mode != "off"
+        and diagnostic_session != null
+        and bool(diagnostic_session.active)
+    )
     debug_console.set_available(available)
     debug_console.set_game_active(game_running and available)
     if diagnostic_session != null:
@@ -8705,6 +8719,17 @@ func _diagnostic_marker_context() -> Dictionary:
             "active_pointers": active_touch_points.size(),
         },
         "memory": memory,
+        "startup": startup_metrics.duplicate(true),
+        "system": {
+            "platform": OS.get_name(),
+            "model": OS.get_model_name(),
+            "os_version": OS.get_version(),
+            "locale": OS.get_locale(),
+            "engine_version": Engine.get_version_info(),
+            "debug_build": OS.is_debug_build(),
+            "window_size": get_viewport_rect().size,
+            "screen_scale": DisplayServer.screen_get_scale(DisplayServer.window_get_current_screen()),
+        },
         "plugins": plugins,
     }
 
@@ -8750,6 +8775,17 @@ func _debug_console_snapshot() -> Dictionary:
             "errors": render_errors,
         },
         "memory": memory,
+        "startup": startup_metrics.duplicate(true),
+        "system": {
+            "platform": OS.get_name(),
+            "model": OS.get_model_name(),
+            "os_version": OS.get_version(),
+            "locale": OS.get_locale(),
+            "engine_version": Engine.get_version_info(),
+            "debug_build": OS.is_debug_build(),
+            "window_size": get_viewport_rect().size,
+            "screen_scale": DisplayServer.screen_get_scale(DisplayServer.window_get_current_screen()),
+        },
         "plugins": plugins,
         "events": diagnostic_session.recent_events(100) if diagnostic_session != null else [],
         "logs": Array(log_lines),
@@ -8768,7 +8804,7 @@ func _debug_console_snapshot() -> Dictionary:
             "points": points,
         },
         "advanced": _advanced_snapshot(),
-        "overhead": "high" if plugin_trace or trace_log or diagnostic_profile == "full" else ("medium" if console_log_file or export_scripts or diagnostic_profile not in ["off", "baseline"] else "low"),
+        "overhead": "high" if plugin_trace or trace_log or _effective_diagnostic_profile() == "full" else ("medium" if console_log_file or export_scripts or _effective_diagnostic_profile() not in ["off", "baseline"] else "low"),
     }
 
 func _on_debug_marker_requested(label: String) -> void:
@@ -8813,7 +8849,8 @@ func _on_debug_copy_summary_requested() -> void:
     if diagnostic_session == null or not diagnostic_session.active:
         debug_console.show_result(_t("debug.result.unavailable"), true)
         return
-    DisplayServer.clipboard_set(diagnostic_session.summary_text({"renderer": selected_backend, "errors": render_errors}))
+    var snapshot := _debug_console_snapshot()
+    DisplayServer.clipboard_set(diagnostic_session.summary_text(snapshot))
     debug_console.show_result(_t("debug.result.copied"))
 
 func _on_debug_slow_frame_requested() -> void:
@@ -9047,6 +9084,7 @@ func _finish_ready_after_first_frame() -> void:
     if engine_initialized:
         _apply_backend(false)
         _apply_engine_options()
+        diagnostic_session.configure_preference(_effective_diagnostic_profile())
         diagnostic_session.start(player, selected_backend)
         _sync_debug_console_state()
     if not cli_probe_script.is_empty():
@@ -10190,6 +10228,11 @@ func _process(delta: float) -> void:
             cached_startup_state = player.get_startup_state()
             startup_state = cached_startup_state
         if startup_state == STARTUP_SUCCEEDED:
+            if not startup_metrics.has("runtime_ready_ms"):
+                startup_metrics["state"] = "runtime_ready"
+                _record_startup_milestone("runtime_ready_ms", "game_startup_runtime_ready", {
+                    "poll_interval_ms": STARTUP_POLL_INTERVAL * 1000.0,
+                })
             if not restart_notice.text.is_empty():
                 restart_notice.text = ""
             if loading_panel != null and loading_panel.visible:
@@ -10258,6 +10301,9 @@ func _process(delta: float) -> void:
                     })
                 app_lifecycle_paused = false
             else:
+                _record_startup_milestone("first_tick_ms", "game_startup_first_tick", {
+                    "tick_ms": tick_ms,
+                })
                 if tick_ms >= frame_spike_ms and frame_spike_ms > 0.0:
                     _log_tick_trace("tick_end serial=%d tick_ms=%.2f renderer=\"%s\"" % [
                         tick_trace_serial,
@@ -10282,6 +10328,8 @@ func _process(delta: float) -> void:
                 _log_frame_probe(delta)
                 _log_input_trace(delta, tick_ms, update_ms)
         elif startup_state == STARTUP_FAILED:
+            startup_metrics["state"] = "failed"
+            startup_metrics["failed_ms"] = _startup_elapsed_ms()
             restart_notice.text = "Game startup failed."
             _hide_loading_overlay()
             _set_game_background(false)
@@ -10688,7 +10736,15 @@ func _on_open_game() -> void:
         _append_log("Game path is empty.")
         return
 
+    var startup_begin_usec := Time.get_ticks_usec()
+    startup_metrics = {
+        "state": "preparing",
+        "game": path.trim_suffix("/").get_file(),
+        "requested_at_usec": startup_begin_usec,
+        "async": OS.get_environment("AETHERKIRI_SYNC_OPEN") != "1",
+    }
     if not _ensure_player_initialized():
+        startup_metrics["state"] = "engine_init_failed"
         return
 
     ProjectSettings.set_setting(GAME_PATH_KEY, path)
@@ -10699,10 +10755,15 @@ func _on_open_game() -> void:
     startup_poll_accum = STARTUP_POLL_INTERVAL
 
     var async_open := OS.get_environment("AETHERKIRI_SYNC_OPEN") != "1"
+    var open_dispatch_begin_usec := Time.get_ticks_usec()
+    startup_metrics["shell_prepare_ms"] = float(open_dispatch_begin_usec - startup_begin_usec) / 1000.0
     var result: int = int(player.open_game(path, async_open))
+    startup_metrics["open_dispatch_ms"] = float(Time.get_ticks_usec() - open_dispatch_begin_usec) / 1000.0
     if result != ENGINE_RESULT_OK:
         render_errors += 1
         cached_startup_state = STARTUP_FAILED
+        startup_metrics["state"] = "open_failed"
+        startup_metrics["error"] = String(player.get_last_error())
         _write_probe_marker("open_game_failed result=%s error=%s" % [
             player.get_last_result(),
             player.get_last_error(),
@@ -10715,12 +10776,15 @@ func _on_open_game() -> void:
         return
 
     game_running = true
+    startup_metrics["state"] = "loading"
     if diagnostic_session != null:
         diagnostic_session.set_game_active(true)
         diagnostic_session.record("godot", "lifecycle", "info", "game_open_requested", 0, {
             "path": path,
             "backend": selected_backend,
             "async": async_open,
+            "shell_prepare_ms": startup_metrics.get("shell_prepare_ms", 0.0),
+            "open_dispatch_ms": startup_metrics.get("open_dispatch_ms", 0.0),
         })
     _sync_debug_console_state()
     app_lifecycle_paused = false
@@ -10753,6 +10817,26 @@ func _on_open_game() -> void:
     if startup_click_stream_enabled and not startup_click_stream_running and not startup_click_stream_done:
         startup_click_stream_running = true
         call_deferred("_run_startup_click_stream_probe")
+
+func _startup_elapsed_ms() -> float:
+    var begin_usec := int(startup_metrics.get("requested_at_usec", 0))
+    if begin_usec <= 0:
+        return 0.0
+    return float(Time.get_ticks_usec() - begin_usec) / 1000.0
+
+func _record_startup_milestone(key: String, event: String, fields: Dictionary = {}) -> void:
+    if startup_metrics.is_empty() or startup_metrics.has(key):
+        return
+    var elapsed_ms := _startup_elapsed_ms()
+    startup_metrics[key] = elapsed_ms
+    if diagnostic_session != null and diagnostic_session.active:
+        var event_fields := fields.duplicate(true)
+        event_fields["elapsed_ms"] = elapsed_ms
+        event_fields["game"] = String(startup_metrics.get("game", ""))
+        diagnostic_session.record(
+            "godot", "lifecycle", "info", event, int(elapsed_ms * 1000.0), event_fields
+        )
+        diagnostic_session.flush()
 
 func _desired_render_surface_size() -> Vector2i:
     var base_size := _base_render_surface_size()
@@ -10937,6 +11021,13 @@ func _update_frame() -> void:
             return
         if viewport.texture != texture:
             viewport.texture = texture
+        if not startup_metrics.has("first_present_ms"):
+            startup_metrics["state"] = "presented"
+            _record_startup_milestone("first_present_ms", "game_startup_first_present", {
+                "texture_backend": String(player.get_frame_texture_backend()),
+                "texture_width": texture.get_width(),
+                "texture_height": texture.get_height(),
+            })
         var texture_size := Vector2i(texture.get_width(), texture.get_height())
         if texture_size != last_texture_size:
             last_texture_size = texture_size

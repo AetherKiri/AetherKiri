@@ -1770,6 +1770,7 @@ engine_result_t DispatchInputEventNow(engine_handle_s* impl,
 engine_result_t OpenGameCore(engine_handle_t handle,
                              engine_handle_s* impl,
                              const char* game_root_path_utf8) {
+  const auto startup_begin = std::chrono::steady_clock::now();
   if (game_root_path_utf8 == nullptr || game_root_path_utf8[0] == '\0') {
     return ENGINE_RESULT_INVALID_ARGUMENT;
   }
@@ -1781,6 +1782,10 @@ engine_result_t OpenGameCore(engine_handle_t handle,
     SetHandleErrorLocked(impl, "failed to initialize engine runtime for host mode");
     return ENGINE_RESULT_INTERNAL_ERROR;
   }
+  const auto after_runtime_init = std::chrono::steady_clock::now();
+  PushDiagnosticEvent(impl, "engine", "lifecycle", "info",
+                      "engine_startup_runtime_init",
+                      DurationUs(startup_begin, after_runtime_init));
 
   EnsureRuntimeLoggersInitialized();
   EnsureInternalPluginAnchorsLinked();
@@ -1850,6 +1855,10 @@ engine_result_t OpenGameCore(engine_handle_t handle,
     spdlog::error("engine_open_game: Failed to create log file: {}", e.what());
   }
   spdlog::default_logger()->flush();
+  const auto after_log_setup = std::chrono::steady_clock::now();
+  PushDiagnosticEvent(impl, "engine", "lifecycle", "info",
+                      "engine_startup_log_setup",
+                      DurationUs(after_runtime_init, after_log_setup));
 
   // Remember the path even while tracing is disabled so the in-app debug
   // console can enable a bounded trace after the game has already started.
@@ -1874,6 +1883,8 @@ engine_result_t OpenGameCore(engine_handle_t handle,
     TVPHostSetPreferGpuFrame(prefer_gpu_after_startup);
   };
 
+  const auto application_begin = std::chrono::steady_clock::now();
+  auto application_end = application_begin;
   try {
     spdlog::debug("engine_open_game: calling Application->StartApplication...");
 #if defined(__ANDROID__)
@@ -1882,6 +1893,10 @@ engine_result_t OpenGameCore(engine_handle_t handle,
 #endif
     spdlog::default_logger()->flush();
     Application->StartApplication(ttstr(normalized_game_root_path.c_str()));
+    application_end = std::chrono::steady_clock::now();
+    PushDiagnosticEvent(impl, "engine", "lifecycle", "info",
+                        "engine_startup_application",
+                        DurationUs(application_begin, application_end));
     spdlog::info("engine_open_game: StartApplication returned successfully");
 #if defined(__EMSCRIPTEN__)
     TVPHostActivateMainWindow();
@@ -1912,6 +1927,20 @@ engine_result_t OpenGameCore(engine_handle_t handle,
   }
 
   MarkRuntimeOpenedForHost(handle, impl, nullptr, false);
+  const auto startup_end = std::chrono::steady_clock::now();
+  std::ostringstream startup_fields;
+  startup_fields << "{\"runtime_init_us\":"
+                 << DurationUs(startup_begin, after_runtime_init)
+                 << ",\"log_setup_us\":"
+                 << DurationUs(after_runtime_init, after_log_setup)
+                 << ",\"application_us\":"
+                 << DurationUs(application_begin, application_end)
+                 << ",\"archive\":" << (looks_like_archive ? "true" : "false")
+                 << "}";
+  PushDiagnosticEvent(impl, "engine", "lifecycle", "info",
+                      "engine_startup_complete",
+                      DurationUs(startup_begin, startup_end),
+                      startup_fields.str());
   return ENGINE_RESULT_OK;
 }
 

@@ -417,10 +417,40 @@ func _render_overview(snapshot: Dictionary) -> void:
     var frame: Dictionary = perf.get("frame_summary", {})
     var memory: Dictionary = snapshot.get("memory", {})
     var session: Dictionary = snapshot.get("session", {})
+    var startup: Dictionary = snapshot.get("startup", {})
+    var slowest: Dictionary = session.get("slowest_events", {})
     var lines := PackedStringArray()
     lines.append("%s  %.1f FPS" % [_t("debug.metric.frame"), float(perf.get("fps", 0.0))])
     lines.append(_tf("debug.overview.percentiles", [float(frame.get("p50_ms", 0.0)), float(frame.get("p95_ms", 0.0)), float(frame.get("p99_ms", 0.0)), float(frame.get("max_ms", 0.0))]))
     lines.append(_tf("debug.overview.phases", [float(perf.get("tick_ms", 0.0)), float(perf.get("update_ms", 0.0)), float(perf.get("frame_ms", 0.0))]))
+    lines.append("Startup  state=%s  shell %.1f  dispatch %.1f  runtime %.1f  first tick %.1f  first present %.1f ms" % [
+        String(startup.get("state", "unknown")),
+        float(startup.get("shell_prepare_ms", 0.0)),
+        float(startup.get("open_dispatch_ms", 0.0)),
+        float(startup.get("runtime_ready_ms", 0.0)),
+        float(startup.get("first_tick_ms", 0.0)),
+        float(startup.get("first_present_ms", 0.0)),
+    ])
+    var native_startup := PackedStringArray()
+    for value in session.get("startup_events", []):
+        var startup_event: Dictionary = value
+        var startup_event_name := String(startup_event.get("event", ""))
+        if startup_event_name.begins_with("engine_startup_"):
+            native_startup.append("%s %.1f" % [
+                startup_event_name.trim_prefix("engine_startup_"),
+                float(startup_event.get("duration_us", 0)) / 1000.0,
+            ])
+    if not native_startup.is_empty():
+        lines.append("Native startup (ms)  %s" % "  ".join(native_startup))
+    var worst_tick: Dictionary = slowest.get("engine_tick_spike", {})
+    var worst_fields: Dictionary = worst_tick.get("fields", {})
+    lines.append("Worst tick  total %.1f  app %.1f  draw %.1f  capture %.1f ms  spikes %d" % [
+        float(worst_tick.get("duration_us", 0)) / 1000.0,
+        float(worst_fields.get("app_us", 0)) / 1000.0,
+        float(worst_fields.get("draw_us", 0)) / 1000.0,
+        float(worst_fields.get("capture_us", 0)) / 1000.0,
+        int((session.get("spike_counts", {}) as Dictionary).get("engine_tick_spike", 0)),
+    ])
     lines.append("")
     lines.append("%s: %s" % [_t("debug.metric.renderer"), String(perf.get("renderer", "-"))])
     var fallback_enabled: bool = perf.get("fallback", false)

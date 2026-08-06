@@ -12,7 +12,7 @@ const FLUSH_INTERVAL := 1.0
 const NATIVE_DRAIN_INTERVAL := 0.5
 const LOW_FPS_WINDOW_SAMPLES := 2400
 const LEGACY_REQUEST_FILE := "user://diagnostic-request.json"
-const MOBILE_DIAGNOSTIC_SUBDIR := "Aether/Diagnostics"
+const MOBILE_DIAGNOSTIC_SUBDIR := "AetherKiri/Diagnostics"
 const ANDROID_DOCUMENTS_DIR := "/storage/emulated/0/Documents"
 const PROFILE_CATALOG_FILE := "res://config/diagnostic_profiles.json"
 const MARKER_FEEDBACK_MSEC := 1800
@@ -77,6 +77,9 @@ var started_at_usec := 0
 var total_event_count := 0
 var latest_frame_summary: Dictionary = {}
 var last_action_error := ""
+var startup_events: Array[Dictionary] = []
+var slowest_events: Dictionary = {}
+var spike_counts: Dictionary = {}
 
 var _ring: Array[Dictionary] = []
 var _pending_lines: PackedStringArray = []
@@ -285,6 +288,9 @@ func start(runtime_player, renderer: String) -> bool:
     _pending_lines.clear()
     _pending_incidents.clear()
     latest_frame_summary.clear()
+    startup_events.clear()
+    slowest_events.clear()
+    spike_counts.clear()
     _frame_samples.clear()
     _low_fps_samples.clear()
     _low_fps_cursor = 0
@@ -532,6 +538,9 @@ func status_snapshot() -> Dictionary:
         "max_markers": MAX_MARKERS,
         "slow_frame_armed": not _next_slow_frame_label.is_empty(),
         "frame_summary": latest_frame_summary.duplicate(true),
+        "startup_events": startup_events.duplicate(true),
+        "slowest_events": slowest_events.duplicate(true),
+        "spike_counts": spike_counts.duplicate(true),
     }
 
 func recent_events(limit: int = 50) -> Array[Dictionary]:
@@ -544,24 +553,71 @@ func recent_events(limit: int = 50) -> Array[Dictionary]:
     return output
 
 func summary_text(extra: Dictionary = {}) -> String:
+    _drain_native()
     var status := status_snapshot()
     var frame: Dictionary = status.get("frame_summary", {})
+    var performance: Dictionary = extra.get("performance", {})
+    var memory: Dictionary = extra.get("memory", {})
+    var system: Dictionary = extra.get("system", {})
+    var startup: Dictionary = extra.get("startup", {})
+    var input: Dictionary = extra.get("input", {})
     var lines := PackedStringArray([
-        "Aether diagnostic summary",
+        "Aether diagnostic report",
         "session: %s" % String(status.get("session", "")),
-        "platform: %s" % OS.get_name(),
+        "platform: %s model=%s os=%s locale=%s debug=%s" % [
+            str(system.get("platform", OS.get_name())),
+            str(system.get("model", OS.get_model_name())),
+            str(system.get("os_version", OS.get_version())),
+            str(system.get("locale", OS.get_locale())),
+            str(system.get("debug_build", OS.is_debug_build())),
+        ],
         "profile: %s" % String(status.get("profile", "off")),
         "elapsed: %.1fs" % float(status.get("elapsed_seconds", 0.0)),
         "events: %d (dropped: %d)" % [int(status.get("events", 0)), int(status.get("dropped", 0))],
         "markers: %d" % int(status.get("markers", 0)),
-        "frame p95/max: %.2f / %.2f ms" % [
-            float(frame.get("p95_ms", 0.0)),
-            float(frame.get("max_ms", 0.0)),
+        "startup: state=%s shell=%.2fms dispatch=%.2fms runtime=%.2fms first_tick=%.2fms first_present=%.2fms" % [
+            String(startup.get("state", "unknown")),
+            float(startup.get("shell_prepare_ms", 0.0)),
+            float(startup.get("open_dispatch_ms", 0.0)),
+            float(startup.get("runtime_ready_ms", 0.0)),
+            float(startup.get("first_tick_ms", 0.0)),
+            float(startup.get("first_present_ms", 0.0)),
         ],
+        "frame: fps=%.1f avg=%.1f 1%%low=%.1f 0.1%%low=%.1f p50/p95/p99/max=%.2f/%.2f/%.2f/%.2fms jitter=%.2fms" % [
+            float(performance.get("fps", 0.0)),
+            float(frame.get("average_fps", 0.0)),
+            float(frame.get("one_percent_low_fps", 0.0)),
+            float(frame.get("point_one_percent_low_fps", 0.0)),
+            float(frame.get("p50_ms", 0.0)),
+            float(frame.get("p95_ms", 0.0)),
+            float(frame.get("p99_ms", 0.0)),
+            float(frame.get("max_ms", 0.0)),
+            float(frame.get("jitter_ms", 0.0)),
+        ],
+        "work: tick=%.2fms update=%.2fms frame=%.2fms errors=%d" % [
+            float(performance.get("tick_ms", 0.0)),
+            float(performance.get("update_ms", 0.0)),
+            float(performance.get("frame_ms", 0.0)),
+            int(performance.get("errors", 0)),
+        ],
+        "renderer: %s" % String(performance.get("renderer", "-")),
+        "texture: %s surface=%s" % [String(performance.get("texture", "-")), String(performance.get("surface", "-"))],
+        "memory: current=%d peak=%d available=%d gpu=%d cache=%d" % [
+            int(memory.get("current_bytes", 0)), int(memory.get("peak_bytes", 0)),
+            int(memory.get("available_bytes", 0)), int(memory.get("gpu_total_bytes", 0)),
+            int(memory.get("cache_bytes", 0)),
+        ],
+        "input: received=%d forwarded=%d blocked=%d throttled=%d busy=%d suppressed=%d" % [
+            int(input.get("received", 0)), int(input.get("forwarded", 0)),
+            int(input.get("blocked", 0)), int(input.get("throttled", 0)),
+            int(input.get("busy", 0)), int(input.get("suppressed", 0)),
+        ],
+        "startup_events_json: %s" % JSON.stringify(status.get("startup_events", [])),
+        "slowest_events_json: %s" % JSON.stringify(status.get("slowest_events", {})),
+        "spike_counts_json: %s" % JSON.stringify(status.get("spike_counts", {})),
     ])
-    for key in extra.keys():
-        lines.append("%s: %s" % [String(key), String(extra[key])])
     lines.append("output: %s" % String(status.get("session_dir", "")))
+    lines.append("snapshot_json: %s" % JSON.stringify(extra))
     return "\n".join(lines)
 
 func export_zip() -> String:
@@ -686,6 +742,16 @@ func _notification(what: int) -> void:
 func _accept_event(item: Dictionary, line: String) -> void:
     var now := int(item.get("monotonic_us", Time.get_ticks_usec()))
     total_event_count += 1
+    var event_name := String(item.get("event", ""))
+    if event_name == "game_open_requested" or event_name.begins_with("game_startup_") or event_name.begins_with("engine_startup_"):
+        startup_events.append(item.duplicate(true))
+        if startup_events.size() > 64:
+            startup_events.pop_front()
+    if event_name in ["engine_tick_spike", "host_frame_spike"]:
+        spike_counts[event_name] = int(spike_counts.get(event_name, 0)) + 1
+        var previous: Dictionary = slowest_events.get(event_name, {})
+        if int(item.get("duration_us", 0)) >= int(previous.get("duration_us", -1)):
+            slowest_events[event_name] = item.duplicate(true)
     _ring.append({"monotonic_us": now, "line": line, "event": item.duplicate(true)})
     while _ring.size() > MAX_RING_EVENTS:
         _ring.pop_front()
