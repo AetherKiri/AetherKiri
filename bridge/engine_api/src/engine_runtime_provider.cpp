@@ -121,4 +121,29 @@ engine_result_t engine_get_runtime_provider_id(uint32_t index,
   return ENGINE_RESULT_OK;
 }
 
+int32_t engine_probe_runtime_provider(const char* runtime_id_utf8,
+                                      const char* game_root_path_utf8) {
+  const std::string runtime_id = NormalizeRuntimeId(runtime_id_utf8);
+  if (!IsValidRuntimeId(runtime_id) || game_root_path_utf8 == nullptr ||
+      game_root_path_utf8[0] == '\0') {
+    return -1;
+  }
+  const auto providers = aetherkiri::runtime::SnapshotProviders();
+  const auto found = std::find_if(
+      providers.begin(), providers.end(), [&](const auto& candidate) {
+        return candidate.runtime_id == runtime_id;
+      });
+  if (found == providers.end() || found->api == nullptr ||
+      found->api->probe == nullptr) {
+    return -1;
+  }
+  try {
+    return std::max<int32_t>(
+        0, found->api->probe(found->api->provider_user_data,
+                            game_root_path_utf8));
+  } catch (...) {
+    return 0;
+  }
+}
+
 }  // extern "C"

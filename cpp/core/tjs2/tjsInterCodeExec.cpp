@@ -160,13 +160,10 @@ namespace TJS {
                "convLayerType"))
             return false;
 
-        tTJSScriptBlock *block = ctx->GetBlock();
-        if(!block || !block->GetName())
-            return false;
-        const std::string blockName = ttstr(block->GetName()).AsStdString();
-        if(!TJSCompatContainsAsciiNoCase(blockName, "kagenvimage.tjs"))
-            return false;
-
+        // KAG forks place this conversion helper in different script files
+        // (for example kagenvimage.tjs or world.tjs). The stable contract is
+        // the convLayerType helper itself: integer layer enum values already
+        // are normalized, so reading their pseudo-property must be idempotent.
         *result = layerType;
         return true;
     }

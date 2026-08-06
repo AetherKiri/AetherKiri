@@ -12,6 +12,7 @@ const VIDEO_EXTENSIONS := ["mp4", "mkv", "mov", "m4v", "avi", "webm", "flv", "ts
 const SUBTITLE_EXTENSIONS := ["srt", "vtt", "ass", "ssa"]
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
+const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
 const IAP_POLL_INTERVAL_SEC := 0.12
 const IAP_DETAIL_AUTHORIZATION_TTL_MS := 30000
 const LEGAL_AGREEMENT_VERSION := "2026-07-27.4"
@@ -181,6 +182,12 @@ const UI_TEXT := {
         "settings.email": "邮箱",
         "iap.list_limit.title": "目录限制解锁",
         "iap.list_limit.desc": "永久解锁视觉小说库和视频库中的全部目录项目",
+        "iap.coffee.title": "请作者喝一杯咖啡",
+        "iap.coffee.desc": "可以获得30天的内测功能使用",
+        "iap.coffee.active_until": "内测功能有效期至：%s",
+        "iap.coffee.inactive": "内测功能当前未启用",
+        "iap.coffee.purchase_success": "感谢支持！内测功能有效期至：%s",
+        "iap.artemis_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
         "iap.status.purchased": "已购买",
         "iap.status.not_purchased": "未购买",
         "iap.status.loading": "正在读取商品信息…",
@@ -376,6 +383,12 @@ const UI_TEXT := {
         "settings.email": "信箱",
         "iap.list_limit.title": "解除目錄限制",
         "iap.list_limit.desc": "永久解鎖視覺小說庫與影片庫中的所有目錄項目",
+        "iap.coffee.title": "請作者喝一杯咖啡",
+        "iap.coffee.desc": "可獲得 30 天的測試功能使用權",
+        "iap.coffee.active_until": "測試功能有效期限至：%s",
+        "iap.coffee.inactive": "測試功能目前尚未啟用",
+        "iap.coffee.purchase_success": "感謝支持！測試功能有效期限至：%s",
+        "iap.artemis_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
         "iap.status.purchased": "已購買",
         "iap.status.not_purchased": "尚未購買",
         "iap.status.loading": "正在載入商品資訊…",
@@ -571,6 +584,12 @@ const UI_TEXT := {
         "settings.email": "Email",
         "iap.list_limit.title": "Unlock Library Limit",
         "iap.list_limit.desc": "Permanently unlock every item in the visual novel and video libraries",
+        "iap.coffee.title": "Buy the Author a Coffee",
+        "iap.coffee.desc": "Includes 30 days of access to beta features",
+        "iap.coffee.active_until": "Beta feature access expires: %s",
+        "iap.coffee.inactive": "Beta feature access is not active",
+        "iap.coffee.purchase_success": "Thank you! Beta feature access expires: %s",
+        "iap.artemis_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
         "iap.status.purchased": "Purchased",
         "iap.status.not_purchased": "Not purchased",
         "iap.status.loading": "Loading product information…",
@@ -766,6 +785,12 @@ const UI_TEXT := {
         "settings.email": "メール",
         "iap.list_limit.title": "ライブラリ制限解除",
         "iap.list_limit.desc": "ビジュアルノベルと動画ライブラリのすべての項目を永久に解除します",
+        "iap.coffee.title": "作者にコーヒーを一杯贈る",
+        "iap.coffee.desc": "ベータ機能を30日間利用できます",
+        "iap.coffee.active_until": "ベータ機能の有効期限：%s",
+        "iap.coffee.inactive": "ベータ機能は現在有効ではありません",
+        "iap.coffee.purchase_success": "ご支援ありがとうございます！ベータ機能の有効期限：%s",
+        "iap.artemis_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
         "iap.status.purchased": "購入済み",
         "iap.status.not_purchased": "未購入",
         "iap.status.loading": "商品情報を読み込み中…",
@@ -961,6 +986,12 @@ const UI_TEXT := {
         "settings.email": "이메일",
         "iap.list_limit.title": "라이브러리 제한 해제",
         "iap.list_limit.desc": "비주얼 노벨 및 동영상 라이브러리의 모든 항목을 영구적으로 해제합니다",
+        "iap.coffee.title": "작가에게 커피 한 잔 사주기",
+        "iap.coffee.desc": "베타 기능을 30일 동안 사용할 수 있습니다",
+        "iap.coffee.active_until": "베타 기능 만료일: %s",
+        "iap.coffee.inactive": "베타 기능이 현재 활성화되어 있지 않습니다",
+        "iap.coffee.purchase_success": "후원해 주셔서 감사합니다! 베타 기능 만료일: %s",
+        "iap.artemis_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
         "iap.status.purchased": "구입 완료",
         "iap.status.not_purchased": "구입하지 않음",
         "iap.status.loading": "상품 정보 불러오는 중…",
@@ -1227,7 +1258,9 @@ var ios_statement_accepted_version := ""
 var ios_statement_accepted_at := 0
 var legal_gate_completed := false
 var iap_state := {}
+var iap_coffee_state := {}
 var iap_last_revision := -1
+var iap_coffee_last_revision := -1
 var iap_poll_accum := 0.0
 var iap_pending_launch := {}
 var iap_pending_check_id := 0
@@ -1235,6 +1268,9 @@ var iap_detail_authorization_key := ""
 var iap_detail_authorization_until_msec := 0
 var iap_pending_operation_id := 0
 var iap_pending_operation_kind := ""
+var iap_pending_operation_product_id := ""
+var iap_pending_beta_check_id := 0
+var iap_pending_beta_game := {}
 var iap_settings_refresh_pending := false
 var android_video_import_notice_shown := false
 var dirty_settings := false
@@ -1385,6 +1421,7 @@ var active_touch_points := {}
 var active_mouse_buttons := {}
 var suppressed_touch_points := {}
 var touch_down_points := {}
+var dragging_touch_points := {}
 var pending_touch_index := -1
 var pending_touch_mapped := Vector2.ZERO
 var pending_touch_down_msec := 0
@@ -3672,6 +3709,7 @@ func _rebuild_settings_view() -> void:
     if _iap_supported_platform():
         var purchase_group := _settings_group(secondary_column, _t("settings.section.purchases"), ICON_LIBRARY, animate_page, 0.155)
         _add_settings_row(purchase_group, _settings_iap_product_row())
+        _add_settings_row(purchase_group, _settings_iap_coffee_row())
         _add_settings_row(purchase_group, _settings_action_row(
             _t("iap.restore"),
             _t("iap.restore_desc"),
@@ -4972,6 +5010,75 @@ func _iap_product_status_text() -> String:
         return _t("iap.status.not_purchased")
     return "%s  ·  %s" % [_t("iap.status.not_purchased"), price]
 
+func _settings_iap_coffee_row() -> Control:
+    var margin := MarginContainer.new()
+    margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    margin.add_theme_constant_override("margin_left", 2)
+    margin.add_theme_constant_override("margin_top", 10)
+    margin.add_theme_constant_override("margin_right", 2)
+    margin.add_theme_constant_override("margin_bottom", 10)
+    var compact := shell_content.size.x < 640.0
+    var row: BoxContainer = VBoxContainer.new() if compact else HBoxContainer.new()
+    row.custom_minimum_size = Vector2(0, 150 if compact else 112)
+    row.add_theme_constant_override("separation", 12 if compact else 18)
+    margin.add_child(row)
+
+    var labels := VBoxContainer.new()
+    labels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    labels.add_theme_constant_override("separation", 6)
+    row.add_child(labels)
+
+    var title_label := Label.new()
+    title_label.text = _t("iap.coffee.title")
+    title_label.add_theme_font_size_override("font_size", 16)
+    title_label.add_theme_color_override("font_color", ui_tokens.text_primary)
+    labels.add_child(title_label)
+
+    var description := Label.new()
+    description.text = _t("iap.coffee.desc")
+    description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    description.add_theme_font_size_override("font_size", 13)
+    description.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    labels.add_child(description)
+
+    var status := Label.new()
+    status.text = _iap_coffee_status_text()
+    status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    status.add_theme_font_size_override("font_size", 15)
+    status.add_theme_color_override("font_color", ui_tokens.accent)
+    labels.add_child(status)
+
+    var product_ready := String(iap_coffee_state.get("product_state", "idle")) == "ready"
+    var price := String(iap_coffee_state.get("display_price", ""))
+    var action_text := _t("iap.buy")
+    if not price.is_empty():
+        action_text = "%s  %s" % [_t("iap.buy"), price]
+    var purchase := _pill_button(action_text)
+    _configure_settings_action_button(purchase)
+    purchase.tooltip_text = action_text
+    # This is a consumable product. Keep it purchasable while an earlier
+    # 30-day grant is active so another purchase can extend the expiry.
+    purchase.disabled = not product_ready or iap_pending_operation_id > 0
+    _sync_pill_button_content_state(purchase)
+    purchase.pressed.connect(func():
+        _begin_iap_purchase("settings", IAP_COFFEE_PRODUCT_ID)
+    )
+    row.add_child(purchase)
+    return margin
+
+func _iap_coffee_status_text() -> String:
+    var expiration := String(iap_coffee_state.get(
+        "entitlement_expiration_display", ""
+    )).strip_edges()
+    if bool(iap_coffee_state.get("entitled", false)) and not expiration.is_empty():
+        return _t("iap.coffee.active_until", [expiration])
+    var product_state := String(iap_coffee_state.get("product_state", "idle"))
+    if product_state in ["idle", "loading"]:
+        return _t("iap.status.loading")
+    if product_state != "ready":
+        return _t("iap.status.unavailable")
+    return _t("iap.coffee.inactive")
+
 func _apple_select(width: float = 220.0):
     var select = AetherSelect.new()
     select.setup(
@@ -5931,20 +6038,28 @@ func _initialize_iap() -> void:
             "entitled": false,
             "last_error": "StoreKit bridge unavailable",
         }
+        iap_coffee_state = iap_state.duplicate(true)
+        iap_coffee_state["product_id"] = IAP_COFFEE_PRODUCT_ID
         return
     player.iap_start(IAP_LIST_LIMIT_PRODUCT_ID)
+    player.iap_start(IAP_COFFEE_PRODUCT_ID)
     # Populate Settings at startup. Launch authorization never trusts this
     # snapshot and always starts a new entitlement check.
     player.iap_refresh_entitlement(IAP_LIST_LIMIT_PRODUCT_ID)
-    _read_iap_state()
+    player.iap_refresh_entitlement(IAP_COFFEE_PRODUCT_ID)
+    _read_iap_state(IAP_LIST_LIMIT_PRODUCT_ID)
+    _read_iap_state(IAP_COFFEE_PRODUCT_ID)
 
-func _read_iap_state() -> Dictionary:
+func _read_iap_state(product_id: String = IAP_LIST_LIMIT_PRODUCT_ID) -> Dictionary:
     if player == null or not player.has_method("iap_get_state_json"):
-        return iap_state
-    var parsed = JSON.parse_string(String(player.iap_get_state_json()))
+        return iap_coffee_state if product_id == IAP_COFFEE_PRODUCT_ID else iap_state
+    var parsed = JSON.parse_string(String(player.iap_get_state_json(product_id)))
     if parsed is Dictionary:
-        iap_state = parsed
-    return iap_state
+        if product_id == IAP_COFFEE_PRODUCT_ID:
+            iap_coffee_state = parsed
+        else:
+            iap_state = parsed
+    return iap_coffee_state if product_id == IAP_COFFEE_PRODUCT_ID else iap_state
 
 func _iap_item_is_first(kind: String, item: Dictionary) -> bool:
     var items: Array[Dictionary] = known_games if kind == "game" else known_videos
@@ -6125,25 +6240,32 @@ func _iap_purchase_button_text() -> String:
     var price := String(iap_state.get("display_price", ""))
     return _t("iap.buy") if price.is_empty() else "%s  %s" % [_t("iap.buy"), price]
 
-func _begin_iap_purchase(source: String = "settings") -> void:
+func _begin_iap_purchase(
+    source: String = "settings",
+    product_id: String = IAP_LIST_LIMIT_PRODUCT_ID
+) -> void:
+    var product_title := (
+        _t("iap.coffee.title")
+        if product_id == IAP_COFFEE_PRODUCT_ID
+        else _t("iap.list_limit.title")
+    )
     if player == null or not player.has_method("iap_purchase"):
         _show_system_alert(
             _t("iap.purchase_failed", ["StoreKit unavailable"]),
-            _t("iap.list_limit.title")
+            product_title
         )
         return
-    iap_pending_operation_id = int(player.iap_purchase(
-        IAP_LIST_LIMIT_PRODUCT_ID
-    ))
+    iap_pending_operation_id = int(player.iap_purchase(product_id))
     if iap_pending_operation_id <= 0:
         _show_system_alert(
             _t("iap.purchase_failed", ["StoreKit request failed"]),
-            _t("iap.list_limit.title")
+            product_title
         )
         return
     iap_pending_operation_kind = "purchase:%s" % source
+    iap_pending_operation_product_id = product_id
     _show_iap_progress_dialog(
-        _t("iap.list_limit.title"),
+        product_title,
         _t("iap.status.loading")
     )
 
@@ -6164,6 +6286,7 @@ func _begin_iap_restore() -> void:
         )
         return
     iap_pending_operation_kind = "restore"
+    iap_pending_operation_product_id = IAP_LIST_LIMIT_PRODUCT_ID
     _show_iap_progress_dialog(_t("iap.restore"), _t("iap.status.loading"))
 
 func _process_iap(delta: float) -> void:
@@ -6174,22 +6297,43 @@ func _process_iap(delta: float) -> void:
         return
     iap_poll_accum = 0.0
     var previous_revision := iap_last_revision
-    var state := _read_iap_state()
+    var previous_coffee_revision := iap_coffee_last_revision
+    var state := _read_iap_state(IAP_LIST_LIMIT_PRODUCT_ID)
+    var coffee_state := _read_iap_state(IAP_COFFEE_PRODUCT_ID)
     iap_last_revision = int(state.get("revision", iap_last_revision))
+    iap_coffee_last_revision = int(coffee_state.get(
+        "revision", iap_coffee_last_revision
+    ))
 
     if iap_pending_check_id > 0 and int(state.get(
         "entitlement_check_completed", 0
     )) >= iap_pending_check_id:
         _complete_iap_launch_check()
 
-    if iap_pending_operation_id > 0 and int(state.get(
+    if iap_pending_beta_check_id > 0 and int(coffee_state.get(
+        "entitlement_check_completed", 0
+    )) >= iap_pending_beta_check_id:
+        _complete_artemis_beta_check()
+
+    var operation_state_source := (
+        coffee_state
+        if iap_pending_operation_product_id == IAP_COFFEE_PRODUCT_ID
+        else state
+    )
+    if iap_pending_operation_id > 0 and int(operation_state_source.get(
         "operation_serial", 0
     )) == iap_pending_operation_id:
-        var operation_state := String(state.get("operation_state", "idle"))
+        var operation_state := String(operation_state_source.get(
+            "operation_state", "idle"
+        ))
         if operation_state not in ["idle", "purchasing", "restoring"]:
             _complete_iap_operation(operation_state)
 
-    if previous_revision != iap_last_revision and is_instance_valid(settings_view) and settings_view.visible:
+    var state_changed := (
+        previous_revision != iap_last_revision
+        or previous_coffee_revision != iap_coffee_last_revision
+    )
+    if state_changed and is_instance_valid(settings_view) and settings_view.visible:
         if iap_pending_operation_id <= 0 and not iap_settings_refresh_pending:
             iap_settings_refresh_pending = true
             call_deferred("_refresh_iap_settings_view")
@@ -6223,11 +6367,31 @@ func _complete_iap_launch_check() -> void:
 
 func _complete_iap_operation(operation_state: String) -> void:
     var operation_kind := iap_pending_operation_kind
+    var product_id := iap_pending_operation_product_id
+    var product_state := (
+        iap_coffee_state
+        if product_id == IAP_COFFEE_PRODUCT_ID
+        else iap_state
+    )
+    var product_title := (
+        _t("iap.coffee.title")
+        if product_id == IAP_COFFEE_PRODUCT_ID
+        else _t("iap.list_limit.title")
+    )
     iap_pending_operation_id = 0
     iap_pending_operation_kind = ""
+    iap_pending_operation_product_id = ""
     modal_layer.visible = false
     if operation_state == "purchased":
-        if not iap_pending_launch.is_empty():
+        if product_id == IAP_COFFEE_PRODUCT_ID:
+            var expiration := String(product_state.get(
+                "entitlement_expiration_display", ""
+            )).strip_edges()
+            _show_system_alert(
+                _t("iap.coffee.purchase_success", [expiration]),
+                product_title
+            )
+        elif not iap_pending_launch.is_empty():
             _run_iap_pending_launch()
         else:
             _show_system_alert(
@@ -6239,25 +6403,28 @@ func _complete_iap_operation(operation_state: String) -> void:
     elif operation_state == "not_purchased" and operation_kind == "restore":
         _show_system_alert(_t("iap.restore_none"), _t("iap.restore"))
     elif operation_state == "pending":
-        _clear_iap_pending_launch()
+        if product_id == IAP_LIST_LIMIT_PRODUCT_ID:
+            _clear_iap_pending_launch()
         _show_system_alert(
             _t("iap.purchase_pending"),
-            _t("iap.list_limit.title")
+            product_title
         )
     elif operation_state == "cancelled":
-        _clear_iap_pending_launch()
+        if product_id == IAP_LIST_LIMIT_PRODUCT_ID:
+            _clear_iap_pending_launch()
         _show_system_alert(
             _t("iap.purchase_cancelled"),
-            _t("iap.list_limit.title")
+            product_title
         )
     else:
-        _clear_iap_pending_launch()
-        var error := String(iap_state.get("last_error", "")).strip_edges()
+        if product_id == IAP_LIST_LIMIT_PRODUCT_ID:
+            _clear_iap_pending_launch()
+        var error := String(product_state.get("last_error", "")).strip_edges()
         if error.is_empty():
             error = operation_state
         _show_system_alert(
             _t("iap.purchase_failed", [error]),
-            _t("iap.list_limit.title")
+            product_title
         )
 
 func _refresh_iap_settings_view() -> void:
@@ -8146,6 +8313,67 @@ func _finish_launch_transition() -> void:
     shell_root.pivot_offset = Vector2.ZERO
 
 func _start_selected_game_after_iap() -> void:
+    if player == null:
+        return
+    # Development artifacts intentionally bypass StoreKit so local
+    # compatibility work never depends on a sandbox account or network.
+    if OS.is_debug_build():
+        if player.has_method("set_engine_option"):
+            player.set_engine_option("artemis_beta_allowed", "1")
+        _start_selected_game_after_entitlements()
+        return
+
+    if player.has_method("set_engine_option"):
+        # Reset a grant left on the reusable engine handle before every Release
+        # launch. A fresh verified coffee entitlement enables it again below.
+        player.set_engine_option("artemis_beta_allowed", "0")
+    if not _selected_game_uses_artemis():
+        _start_selected_game_after_entitlements()
+        return
+
+    iap_pending_beta_game = selected_game.duplicate(true)
+    if not _iap_supported_platform() or not player.has_method("iap_refresh_entitlement"):
+        _deny_artemis_beta_launch()
+        return
+    iap_pending_beta_check_id = int(player.iap_refresh_entitlement(
+        IAP_COFFEE_PRODUCT_ID
+    ))
+    if iap_pending_beta_check_id <= 0:
+        _deny_artemis_beta_launch()
+
+func _selected_game_uses_artemis() -> bool:
+    if player == null or not player.has_method("probe_runtime"):
+        return false
+    var library_path := String(selected_game.get("path", "")).strip_edges()
+    if library_path.is_empty():
+        return false
+    return int(player.probe_runtime("artemis", library_path)) > 0
+
+func _complete_artemis_beta_check() -> void:
+    iap_pending_beta_check_id = 0
+    if iap_pending_beta_game.is_empty():
+        return
+    var pending_game: Dictionary = iap_pending_beta_game.duplicate(true)
+    iap_pending_beta_game.clear()
+    if not bool(iap_coffee_state.get("entitled", false)):
+        _deny_artemis_beta_launch()
+        return
+    selected_game = pending_game
+    if player.has_method("set_engine_option"):
+        player.set_engine_option("artemis_beta_allowed", "1")
+    _start_selected_game_after_entitlements()
+
+func _deny_artemis_beta_launch() -> void:
+    iap_pending_beta_check_id = 0
+    iap_pending_beta_game.clear()
+    if player != null and player.has_method("set_engine_option"):
+        player.set_engine_option("artemis_beta_allowed", "0")
+    _show_system_alert(
+        _t("iap.artemis_unavailable"),
+        _t("alert.warning_title")
+    )
+
+func _start_selected_game_after_entitlements() -> void:
     var library_path := String(selected_game.get("path", ""))
     if library_path.is_empty():
         return
@@ -9984,14 +10212,20 @@ func _process(delta: float) -> void:
                 ])
             var tick_start := Time.get_ticks_usec()
             var tick_result: int = int(player.tick(delta))
+            # Capture the failing call immediately. Follow-up bridge calls such
+            # as text-input synchronization can succeed and overwrite the
+            # player's shared last-result/last-error fields.
+            var tick_result_name := ""
+            var tick_error_message := ""
+            if tick_result != ENGINE_RESULT_OK:
+                tick_result_name = str(player.get_last_result())
+                tick_error_message = str(player.get_last_error())
             _sync_game_text_input_state()
             var tick_ms := float(Time.get_ticks_usec() - tick_start) / 1000.0
             last_tick_ms = tick_ms
             last_frame_ms = delta * 1000.0
             tick_trace_active_serial = 0
             if tick_result != ENGINE_RESULT_OK:
-                var tick_result_name := str(player.get_last_result())
-                var tick_error_message := str(player.get_last_error())
                 if _is_runtime_exit_error(tick_error_message):
                     var runtime_exit_line := "Game exited: %s %s" % [
                         tick_result_name,
@@ -10750,6 +10984,7 @@ func _clear_game_input_capture() -> void:
     active_mouse_buttons.clear()
     suppressed_touch_points.clear()
     touch_down_points.clear()
+    dragging_touch_points.clear()
     pending_touch_index = -1
     pending_touch_mapped = Vector2.ZERO
     pending_touch_down_msec = 0
@@ -11651,6 +11886,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             suppressed_touch_points.erase(pointer_id)
             active_touch_points.erase(pointer_id)
             touch_down_points.erase(pointer_id)
+            dragging_touch_points.erase(pointer_id)
             _clear_pending_touch_if_matches(pointer_id)
             _trace_input_throttled()
             return true
@@ -11668,8 +11904,15 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         if mapped.x < 0.0 or mapped.y < 0.0:
             mapped = active_touch_points.get(pointer_id, Vector2.ZERO)
         var down_mapped: Vector2 = touch_down_points.get(pointer_id, mapped)
+        if not dragging_touch_points.has(pointer_id):
+            mapped = GameInputMapping.stable_tap_point(
+                down_mapped,
+                mapped,
+                TOUCH_DRAG_DISTANCE_THRESHOLD
+            )
         active_touch_points.erase(pointer_id)
         touch_down_points.erase(pointer_id)
+        dragging_touch_points.erase(pointer_id)
         last_forwarded_touch_move_msec_by_id.erase(pointer_id)
         _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
         last_forwarded_touch_up_msec = Time.get_ticks_msec()
@@ -11700,6 +11943,14 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
                 return false
             mapped = active_touch_points.get(pointer_id, Vector2.ZERO)
         if captured:
+            var down_mapped: Vector2 = touch_down_points.get(pointer_id, mapped)
+            if (
+                not dragging_touch_points.has(pointer_id)
+                and mapped.distance_to(down_mapped) < TOUCH_DRAG_DISTANCE_THRESHOLD
+            ):
+                _trace_input_move_suppressed()
+                return true
+            dragging_touch_points[pointer_id] = true
             active_touch_points[pointer_id] = mapped
             var rel := _map_viewport_delta(drag.relative)
             _send_game_pointer_event(
@@ -11721,6 +11972,7 @@ func _suppress_touch_pointer(pointer_id: int) -> void:
     suppressed_touch_points[pointer_id] = true
     active_touch_points.erase(pointer_id)
     touch_down_points.erase(pointer_id)
+    dragging_touch_points.erase(pointer_id)
     last_forwarded_touch_move_msec_by_id.erase(pointer_id)
     _clear_pending_touch_if_matches(pointer_id)
 
@@ -11728,6 +11980,7 @@ func _set_pending_touch(pointer_id: int, mapped: Vector2) -> void:
     suppressed_touch_points.erase(pointer_id)
     active_touch_points.erase(pointer_id)
     touch_down_points.erase(pointer_id)
+    dragging_touch_points.erase(pointer_id)
     last_forwarded_touch_move_msec_by_id.erase(pointer_id)
     pending_touch_index = pointer_id
     pending_touch_mapped = mapped
@@ -11773,6 +12026,7 @@ func _flush_pending_touch_press(force: bool = false) -> bool:
     suppressed_touch_points.erase(pointer_id)
     active_touch_points[pointer_id] = mapped
     touch_down_points[pointer_id] = mapped
+    dragging_touch_points.erase(pointer_id)
     last_forwarded_touch_down_msec = now
     _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
     _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
@@ -11783,27 +12037,22 @@ func _flush_pending_touch_press(force: bool = false) -> bool:
 
 func _send_pending_touch_click(pointer_id: int, up_mapped: Vector2) -> void:
     var down_mapped := pending_touch_mapped
+    var click_mapped := GameInputMapping.stable_tap_point(
+        down_mapped,
+        up_mapped,
+        TOUCH_DRAG_DISTANCE_THRESHOLD
+    )
     _clear_pending_touch()
     suppressed_touch_points.erase(pointer_id)
     active_touch_points.erase(pointer_id)
     touch_down_points.erase(pointer_id)
+    dragging_touch_points.erase(pointer_id)
     last_forwarded_touch_move_msec_by_id.erase(pointer_id)
 
     last_forwarded_touch_down_msec = Time.get_ticks_msec()
-    _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), down_mapped.x, down_mapped.y, 0.0, 0.0, 0)
-    _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), down_mapped.x, down_mapped.y, 0.0, 0.0, 0)
-    if up_mapped.distance_to(down_mapped) > 0.5:
-        _send_game_pointer_event(
-            POINTER_MOVE,
-            _touch_engine_pointer_id(pointer_id),
-            up_mapped.x,
-            up_mapped.y,
-            up_mapped.x - down_mapped.x,
-            up_mapped.y - down_mapped.y,
-            0,
-            POINTER_MOD_LEFT
-        )
-    _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), up_mapped.x, up_mapped.y, 0.0, 0.0, 0)
+    _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
+    _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
+    _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
     last_forwarded_touch_up_msec = Time.get_ticks_msec()
     _apply_touch_action_cooldown()
     _arm_tick_trace()
@@ -11817,6 +12066,7 @@ func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
         click_mapped = (pending_touch_mapped + mapped) * 0.5
         suppressed_touch_points[first_id] = true
         touch_down_points.erase(first_id)
+        dragging_touch_points.erase(first_id)
         last_forwarded_touch_move_msec_by_id.erase(first_id)
         _clear_pending_touch()
     elif not active_touch_points.is_empty():
@@ -11826,6 +12076,7 @@ func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
         _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(first_id), first_mapped.x, first_mapped.y, 0.0, 0.0, 0)
         active_touch_points.erase(first_id)
         touch_down_points.erase(first_id)
+        dragging_touch_points.erase(first_id)
         last_forwarded_touch_move_msec_by_id.erase(first_id)
         suppressed_touch_points[first_id] = true
         last_forwarded_touch_up_msec = Time.get_ticks_msec()

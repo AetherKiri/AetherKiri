@@ -1549,21 +1549,29 @@ public:
     void PartialCopy(iTVPTexture2D *dst, tjs_int dx, tjs_int dy,
                      iTVPTexture2D *src, tjs_int sx, tjs_int sy, tjs_int w,
                      tjs_int h, bool backwardCopy) {
-        // 32bpp
-        w *= sizeof(tjs_uint32);
+        assert(dst->GetFormat() == src->GetFormat());
+        const tjs_int pixelSize =
+            dst->GetFormat() == TVPTextureFormat::Gray
+            ? sizeof(tjs_uint8)
+            : sizeof(tjs_uint32);
+        const tjs_int byteWidth = w * pixelSize;
         if(backwardCopy) {
             for(tjs_int y = h - 1; y >= 0; --y) {
-                memmove(((tjs_uint32 *)dst->GetScanLineForWrite(dy + y)) + dx,
-                        ((const tjs_uint32 *)src->GetScanLineForRead(sy + y)) +
-                            sx,
-                        w);
+                memmove(
+                    static_cast<tjs_uint8 *>(
+                        dst->GetScanLineForWrite(dy + y)) + dx * pixelSize,
+                    static_cast<const tjs_uint8 *>(
+                        src->GetScanLineForRead(sy + y)) + sx * pixelSize,
+                    byteWidth);
             }
         } else {
             for(tjs_int y = 0; y < h; ++y) {
-                memmove(((tjs_uint32 *)dst->GetScanLineForWrite(dy + y)) + dx,
-                        ((const tjs_uint32 *)src->GetScanLineForRead(sy + y)) +
-                            sx,
-                        w);
+                memmove(
+                    static_cast<tjs_uint8 *>(
+                        dst->GetScanLineForWrite(dy + y)) + dx * pixelSize,
+                    static_cast<const tjs_uint8 *>(
+                        src->GetScanLineForRead(sy + y)) + sx * pixelSize,
+                    byteWidth);
             }
         }
         // 		tjs_int spitch = p->spitch, dpitch = p->dpitch;

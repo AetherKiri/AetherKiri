@@ -2,20 +2,18 @@
 
 #include "FontBaseline.h"
 
-TEST_CASE("FreeType bitmap baseline fits the rendered glyph") {
-    // A Source Han-style Japanese name glyph has no descender. Reserving the
-    // face descent would set the baseline to 18 and clip a 23 px bearing at
-    // the top of a 24 px message layer. Its own baseline is 23 instead.
-    CHECK(krkr::font::ComputeGlyphBaseline(24, 1160, 24, 1000, 1) == 23);
+TEST_CASE("FreeType line baseline is clamped with face-wide metrics") {
+    // Source Han-style metrics have an ascender larger than the em square.
+    // The face descent reserves room in the 24 px KAG line box.
+    CHECK(krkr::font::ComputeLineBaseline(24, 1160, -288, 24, 1000) == 18);
 
-    // A glyph with a 5 px descender still fits its lower edge into the same
-    // logical KAG line box.
-    CHECK(krkr::font::ComputeGlyphBaseline(24, 1160, 24, 1000, 5) == 19);
+    // Metrics that already fit retain their natural baseline.
+    CHECK(krkr::font::ComputeLineBaseline(24, 800, -200, 24, 1000) == 19);
 }
 
 TEST_CASE("FreeType line baseline handles invalid line and face metrics") {
-    CHECK(krkr::font::ComputeGlyphBaseline(0, 1160, 24, 1000, 1) == 0);
-    CHECK(krkr::font::ComputeGlyphBaseline(24, 1160, 24, 0, 1) == 0);
+    CHECK(krkr::font::ComputeLineBaseline(0, 1160, -288, 24, 1000) == 0);
+    CHECK(krkr::font::ComputeLineBaseline(24, 1160, -288, 24, 0) == 0);
 }
 
 TEST_CASE("fallback glyphs are aligned to the requested face baseline") {

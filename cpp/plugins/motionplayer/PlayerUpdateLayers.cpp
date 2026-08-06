@@ -4383,13 +4383,10 @@ namespace motion {
             }
         }
 
-        // MMotionPlayer::BuildLayerTreeIn (compatible-v2 0x6B26D0) builds the
-        // flat layer array in pre-order. BufferLayerFrameInfoIn (0x6BB690)
-        // then walks that array from the last entry to the first before the
-        // render manager assigns equal-Z frame ids. Preserve that native
-        // buffer order here: E-mote deliberately authors foreground parent
-        // artwork (for example the lower eyelid in `mabuta`) before the eye
-        // contents it must cover.
+        // The runtime node vector is already stored in the authored buffer
+        // order expected by the render manager. Reversing the complete flat
+        // array also reverses unrelated equal-Z surfaces, allowing an opaque
+        // background leaf to cover the SD CG assembled before it.
         for(size_t bufferPosition = 0;
             bufferPosition < nodes.size(); ++bufferPosition) {
             const size_t i = detail::nativeLayerBufferNodeIndex(
@@ -5460,9 +5457,13 @@ namespace motion {
                 // Child node indices are remapped into the containing numeric
                 // namespace. Only a local-scope item can delimit the native
                 // parent slot; otherwise an already-inserted child's large
-                // index would move the next sibling to the wrong side.
+                // index would move the next sibling to the wrong side. The
+                // local buffer preserves authored order, so the child is
+                // emitted at its parent slot: after earlier backdrop/mask
+                // nodes and before the next later local node.
                 if(it->renderScopeId == localRenderScopeId &&
-                   it->nodeIndex < pending.parentNodeIndex) {
+                   detail::preparedLocalNodeFollowsChildSlot(
+                       it->nodeIndex, pending.parentNodeIndex)) {
                     insertPos = it;
                     break;
                 }

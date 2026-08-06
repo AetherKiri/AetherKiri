@@ -83,3 +83,28 @@ TEST_CASE("TJS missing dispatch is independent of compatibility mocks") {
         dispatch)));
     CHECK(call_result.AsInteger() == 42);
 }
+
+TEST_CASE("KAG layer type conversion accepts integer enum values") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_NOTHROW(engine->ExecScript(
+        TJS_W("function convLayerType(value) { return value.type; }\n"
+              "return convLayerType(3);"),
+        &result, nullptr, TJS_W("world.tjs")));
+    CHECK(result.AsInteger() == 3);
+}
+
+TEST_CASE("integer pseudo-property remains scoped to KAG layer conversion") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant result;
+
+    REQUIRE_THROWS(engine->ExecScript(
+        TJS_W("function readType(value) { return value.type; }\n"
+              "return readType(3);"),
+        &result, nullptr, TJS_W("world.tjs")));
+    REQUIRE_THROWS(engine->ExecScript(
+        TJS_W("function convLayerType(value) { return value.type; }\n"
+              "return convLayerType(29);"),
+        &result, nullptr, TJS_W("world.tjs")));
+}

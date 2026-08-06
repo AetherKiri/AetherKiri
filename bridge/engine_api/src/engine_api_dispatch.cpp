@@ -15,9 +15,14 @@
 #include <utility>
 #include <vector>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include "engine_runtime_provider_registry.h"
 #include "legacy_engine_api.h"
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
+#include "environ/Platform.h"
 #include "visual/RenderManager.h"
 #endif
 
@@ -40,6 +45,11 @@ struct DispatchHandle {
   std::string writable_path;
   std::string cache_path;
   std::string requested_runtime = "auto";
+#if defined(NDEBUG)
+  bool artemis_beta_allowed = false;
+#else
+  bool artemis_beta_allowed = true;
+#endif
   std::unordered_map<std::string, std::string> pending_options;
   uint32_t surface_width = 0;
   uint32_t surface_height = 0;
@@ -55,6 +65,7 @@ struct DispatchHandle {
   };
   std::deque<PlatformRequest> platform_requests;
   std::string last_error;
+  bool provider_resume_pending = false;
 };
 
 std::recursive_mutex g_dispatch_registry_mutex;
@@ -62,6 +73,15 @@ std::unordered_set<engine_handle_t> g_dispatch_handles;
 std::unordered_map<engine_media_handle_t, engine_handle_t>
     g_dispatch_media_handles;
 thread_local std::string g_dispatch_thread_error;
+
+bool ActivateProviderAudioSessionForHost() {
+#if defined(__APPLE__) && TARGET_OS_IPHONE && \
+    defined(ENGINE_API_USE_KRKR2_RUNTIME)
+  return TVPActivateAudioSessionForHost();
+#else
+  return true;
+#endif
+}
 
 #define PROVIDER_HAS(provider, member)                                      \
   ((provider) != nullptr &&                                                  \
@@ -141,6 +161,16 @@ engine_result_t Unsupported(DispatchHandle* handle, const char* operation) {
   handle->last_error = std::string("runtime provider does not implement ") + operation;
   SetThreadError(handle->last_error.c_str());
   return ENGINE_RESULT_NOT_SUPPORTED;
+}
+
+engine_result_t CheckArtemisBetaAccess(DispatchHandle* handle) {
+  if (handle->backend != BackendKind::kProvider || handle->provider == nullptr ||
+      Normalize(handle->provider->runtime_id_utf8) != "artemis" ||
+      handle->artemis_beta_allowed) {
+    return ENGINE_RESULT_OK;
+  }
+  handle->last_error = "Artemis runtime requires active beta access";
+  return ThreadError(ENGINE_RESULT_NOT_SUPPORTED, handle->last_error.c_str());
 }
 
 void HostLog(void* user_data, uint32_t level, const char* subsystem,
@@ -677,6 +707,8 @@ engine_result_t engine_open_game(engine_handle_t public_handle,
   }
   result = SelectBackendLocked(handle, game_root_path_utf8);
   if (result != ENGINE_RESULT_OK) return result;
+  result = CheckArtemisBetaAccess(handle);
+  if (result != ENGINE_RESULT_OK) return result;
   if (handle->backend == BackendKind::kLegacy) {
     return engine_legacy_open_game(handle->legacy, game_root_path_utf8,
                                    startup_script_utf8);
@@ -711,6 +743,8 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
                        "an asynchronous startup task already exists");
   }
   result = SelectBackendLocked(handle, game_root_path_utf8);
+  if (result != ENGINE_RESULT_OK) return result;
+  result = CheckArtemisBetaAccess(handle);
   if (result != ENGINE_RESULT_OK) return result;
   if (handle->backend == BackendKind::kLegacy) {
     return engine_legacy_open_game_async(handle->legacy, game_root_path_utf8,
@@ -776,6 +810,24 @@ engine_result_t engine_tick(engine_handle_t public_handle, uint32_t delta_ms) {
                  return engine_legacy_tick(legacy, delta_ms);
                },
                [&](DispatchHandle* handle) {
+                 if (handle->provider_resume_pending) {
+                   if (!ActivateProviderAudioSessionForHost()) {
+                     // UIApplication may still be foreground-inactive when
+                     // Godot emits APPLICATION_RESUMED. Keep the provider
+                     // paused and retry on the next host tick instead of
+                     // reopening its audio device against an inactive route.
+                     return ENGINE_RESULT_OK;
+                   }
+                   if (!PROVIDER_HAS(handle->provider, resume)) {
+                     return ENGINE_RESULT_NOT_SUPPORTED;
+                   }
+                   const engine_result_t resume_result =
+                       handle->provider->resume(handle->runtime);
+                   if (resume_result != ENGINE_RESULT_OK) {
+                     return resume_result;
+                   }
+                   handle->provider_resume_pending = false;
+                 }
                  const engine_result_t result =
                      handle->provider->tick(handle->runtime, delta_ms);
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
@@ -793,6 +845,7 @@ engine_result_t engine_tick(engine_handle_t public_handle, uint32_t delta_ms) {
 engine_result_t engine_pause(engine_handle_t public_handle) {
   return Route(public_handle, "pause", engine_legacy_pause,
                [](DispatchHandle* handle) {
+                 handle->provider_resume_pending = false;
                  return PROVIDER_HAS(handle->provider, pause)
                             ? handle->provider->pause(handle->runtime)
                             : ENGINE_RESULT_NOT_SUPPORTED;
@@ -802,9 +855,19 @@ engine_result_t engine_pause(engine_handle_t public_handle) {
 engine_result_t engine_resume(engine_handle_t public_handle) {
   return Route(public_handle, "resume", engine_legacy_resume,
                [](DispatchHandle* handle) {
-                 return PROVIDER_HAS(handle->provider, resume)
-                            ? handle->provider->resume(handle->runtime)
-                            : ENGINE_RESULT_NOT_SUPPORTED;
+                 if (!PROVIDER_HAS(handle->provider, resume)) {
+                   return ENGINE_RESULT_NOT_SUPPORTED;
+                 }
+                 if (!ActivateProviderAudioSessionForHost()) {
+                   handle->provider_resume_pending = true;
+                   return ENGINE_RESULT_OK;
+                 }
+                 const engine_result_t result =
+                     handle->provider->resume(handle->runtime);
+                 if (result == ENGINE_RESULT_OK) {
+                   handle->provider_resume_pending = false;
+                 }
+                 return result;
                });
 }
 
@@ -821,6 +884,13 @@ engine_result_t engine_set_option(engine_handle_t public_handle,
   if (result != ENGINE_RESULT_OK) return result;
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
   const std::string key = Normalize(option->key_utf8);
+  if (key == "artemis_beta_allowed") {
+    const std::string value = Normalize(option->value_utf8);
+    handle->artemis_beta_allowed =
+        value == "1" || value == "true" || value == "yes" || value == "on";
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
   if (key == "runtime") {
     if (handle->backend != BackendKind::kUndecided) {
       handle->last_error = "runtime option must be set before opening a game";

@@ -158,6 +158,12 @@ else
         "$GODOT_EXPORT_MODE" "$GODOT_EXPORT_PRESET" "$GODOT_EXPORT_APP"
     if [[ -d "$GODOT_EXPORT_APP/Contents/Frameworks" ]]; then
         stage_macos_runtime_fonts "$GODOT_EXPORT_APP"
+        /usr/libexec/PlistBuddy \
+            -c 'Set :SKIncludeConsumableInAppPurchaseHistory true' \
+            "$GODOT_EXPORT_APP/Contents/Info.plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy \
+                -c 'Add :SKIncludeConsumableInAppPurchaseHistory bool true' \
+                "$GODOT_EXPORT_APP/Contents/Info.plist"
         cp -f "$GODOT_BIN_DIR/libengine_api.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
         cp -f "$GODOT_BIN_DIR/libaether_kiri_godot.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
         echo "==> Thinning exported macOS executable to arm64"

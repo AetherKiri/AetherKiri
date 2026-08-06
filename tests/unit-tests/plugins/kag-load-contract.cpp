@@ -156,6 +156,46 @@ TEST_CASE("late function patches inherit only members they omit") {
           TJS_W("patch-shared"));
 }
 
+TEST_CASE("late class patches inherit only members they omit") {
+    ScriptEngineOwner engine;
+    engine->ExecScript(TJS_W(
+        "class OriginalClass {\n"
+        "  function originalOnly() { return \"from-original\"; }\n"
+        "  function helper() { return \"restored-helper\"; }\n"
+        "  function shared() { return \"original-shared\"; }\n"
+        "}\n"
+        "class ReplacementClass {\n"
+        "  function patchOnly() { return \"from-patch\"; }\n"
+        "  function callHelper() { return helper(); }\n"
+        "  function shared() { return \"patch-shared\"; }\n"
+        "}\n"));
+
+    tTJSVariant original;
+    tTJSVariant replacement;
+    engine->EvalExpression(TJS_W("OriginalClass"), &original);
+    engine->EvalExpression(TJS_W("ReplacementClass"), &replacement);
+    REQUIRE(original.AsObjectClosureNoAddRef().IsInstanceOf(
+                0, nullptr, nullptr, TJS_W("Class"), nullptr) == TJS_S_TRUE);
+    REQUIRE(replacement.AsObjectClosureNoAddRef().IsInstanceOf(
+                0, nullptr, nullptr, TJS_W("Class"), nullptr) == TJS_S_TRUE);
+    REQUIRE(TVPMergeMissingObjectMembers(replacement.AsObjectNoAddRef(),
+                                         original.AsObjectNoAddRef()));
+
+    CHECK(evaluateString(
+              engine.operator->(),
+              TJS_W("(new ReplacementClass()).originalOnly()")) ==
+          TJS_W("from-original"));
+    CHECK(evaluateString(engine.operator->(),
+                         TJS_W("(new ReplacementClass()).patchOnly()")) ==
+          TJS_W("from-patch"));
+    CHECK(evaluateString(engine.operator->(),
+                         TJS_W("(new ReplacementClass()).callHelper()")) ==
+          TJS_W("restored-helper"));
+    CHECK(evaluateString(engine.operator->(),
+                         TJS_W("(new ReplacementClass()).shared()")) ==
+          TJS_W("patch-shared"));
+}
+
 TEST_CASE("late patches recover a skipped load trigger singleton") {
     ScriptEngineOwner engine;
     engine->ExecScript(TJS_W(

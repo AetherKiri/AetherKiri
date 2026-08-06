@@ -33,6 +33,20 @@ func _initialize() -> void:
         _fail("window-to-texture mapping is incorrect: %s" % letterboxed)
         return
 
+    var tap_jitter := GameInputMapping.stable_tap_point(
+        Vector2(120, 80), Vector2(127, 88), 18.0
+    )
+    if not tap_jitter.is_equal_approx(Vector2(120, 80)):
+        _fail("tap jitter moved the click point: %s" % tap_jitter)
+        return
+
+    var real_drag := GameInputMapping.stable_tap_point(
+        Vector2(120, 80), Vector2(150, 80), 18.0
+    )
+    if not real_drag.is_equal_approx(Vector2(150, 80)):
+        _fail("real drag lost its release point: %s" % real_drag)
+        return
+
     print("game_input_mapping_test: PASS")
     quit(0)
 

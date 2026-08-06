@@ -31,8 +31,14 @@ tjs_uint32 TVPToActualColor(tjs_uint32 color) {
 }
 //---------------------------------------------------------------------------
 tjs_uint32 TVPFromActualColor(tjs_uint32 color) {
+    // Full-color textures are stored as RGBA bytes. On little-endian hosts,
+    // reading one pixel as a 32-bit value therefore yields 0xAABBGGRR, while
+    // the KiriKiri script API exposes colors as 0xRRGGBB. Convert the raw
+    // texture value back at the script boundary. This is the inverse of the
+    // TVP_REVRGB conversion performed by iTVPBaseBitmap write operations.
     color &= 0xffffff;
-    return color;
+    return ((color & 0xff) << 16) | (color & 0xff00) |
+        ((color & 0xff0000) >> 16);
 }
 //---------------------------------------------------------------------------
 

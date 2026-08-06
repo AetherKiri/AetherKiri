@@ -197,10 +197,9 @@ const engine_runtime_provider_v1_t kArtemisGateProvider = [] {
 
 }  // namespace
 
-TEST_CASE("Artemis runtime availability is restricted to Debug builds") {
+TEST_CASE("Artemis runtime is compiled but beta-gated in product builds") {
   const engine_result_t registration =
       engine_register_runtime_provider(&kArtemisGateProvider);
-#if defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
   REQUIRE(registration == ENGINE_RESULT_OK);
 
   Handle handle;
@@ -208,20 +207,18 @@ TEST_CASE("Artemis runtime availability is restricted to Debug builds") {
   runtime_option.key_utf8 = "runtime";
   runtime_option.value_utf8 = "artemis";
   REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
+#if defined(NDEBUG)
+  REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
+                           "first.iet") == ENGINE_RESULT_NOT_SUPPORTED);
+  REQUIRE(std::string(engine_get_last_error(handle.value)) ==
+          "Artemis runtime requires active beta access");
+  engine_option_t beta_option{};
+  beta_option.key_utf8 = "artemis_beta_allowed";
+  beta_option.value_utf8 = "1";
+  REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
+#endif
   REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
                            "first.iet") == ENGINE_RESULT_OK);
-#else
-  REQUIRE(registration == ENGINE_RESULT_NOT_SUPPORTED);
-
-  Handle handle;
-  engine_option_t runtime_option{};
-  runtime_option.key_utf8 = "runtime";
-  runtime_option.value_utf8 = "artemis";
-  REQUIRE(engine_set_option(handle.value, &runtime_option) ==
-          ENGINE_RESULT_NOT_SUPPORTED);
-  REQUIRE(std::string(engine_get_last_error(handle.value)) ==
-          "Artemis runtime is available only in internal Debug builds");
-#endif
 }
 
 TEST_CASE("versioned runtime provider is selected and routed end to end") {

@@ -71,6 +71,7 @@ uint64_t aether_storekit_refresh_entitlement(const char *product_id);
 uint64_t aether_storekit_purchase(const char *product_id);
 uint64_t aether_storekit_restore(const char *product_id);
 char *aether_storekit_copy_state_json();
+char *aether_storekit_copy_state_json_for_product(const char *product_id);
 void aether_storekit_free_string(char *value);
 }
 #endif
@@ -7373,9 +7374,10 @@ void main() {
 #endif
     }
 
-    String iap_get_state_json() const {
+    String iap_get_state_json(const String &product_id) const {
 #if defined(__APPLE__)
-        char *json = aether_storekit_copy_state_json();
+        const CharString utf8 = product_id.utf8();
+        char *json = aether_storekit_copy_state_json_for_product(utf8.get_data());
         if (json == nullptr) {
             return "{\"available\":false,\"last_error\":\"StoreKit state unavailable\"}";
         }
@@ -7383,8 +7385,17 @@ void main() {
         aether_storekit_free_string(json);
         return result;
 #else
+        (void)product_id;
         return "{\"available\":false,\"product_state\":\"unsupported\",\"entitled\":false}";
 #endif
+    }
+
+    int64_t probe_runtime(const String &runtime_id,
+                          const String &game_root_path) const {
+        const CharString runtime_utf8 = runtime_id.utf8();
+        const CharString path_utf8 = game_root_path.utf8();
+        return static_cast<int64_t>(engine_probe_runtime_provider(
+            runtime_utf8.get_data(), path_utf8.get_data()));
     }
 
 protected:
@@ -7498,8 +7509,10 @@ protected:
                              &AetherKiriPlayer::iap_purchase);
         ClassDB::bind_method(D_METHOD("iap_restore", "product_id"),
                              &AetherKiriPlayer::iap_restore);
-        ClassDB::bind_method(D_METHOD("iap_get_state_json"),
+        ClassDB::bind_method(D_METHOD("iap_get_state_json", "product_id"),
                              &AetherKiriPlayer::iap_get_state_json);
+        ClassDB::bind_method(D_METHOD("probe_runtime", "runtime_id", "game_root_path"),
+                             &AetherKiriPlayer::probe_runtime);
         ADD_SIGNAL(MethodInfo(
             "platform_request",
             PropertyInfo(Variant::STRING, "operation"),

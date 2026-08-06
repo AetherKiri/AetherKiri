@@ -4,6 +4,7 @@
 #include "godot/GodotGpuBridge.h"
 #include "godot/GodotRenderManager.h"
 #include "LayerBitmapIntf.h"
+#include "LayerIntf.h"
 
 #include <array>
 #include <cstdint>
@@ -130,6 +131,19 @@ public:
 
 } // namespace
 
+TEST_CASE("script pixel colors preserve RGB channel order") {
+    const std::array<std::uint8_t, 4> red_pixel = {0xfe, 0x00, 0x00, 0xff};
+    GodotTexture2D texture(red_pixel.data(), 4, 1, 1,
+                           TVPTextureFormat::RGBA);
+
+    // RGBA bytes read as a little-endian integer are 0xAABBGGRR.
+    CHECK(texture.GetPoint(0, 0) == 0xff0000fe);
+    // KiriKiri scripts always observe the documented 0xRRGGBB value.
+    CHECK(TVPFromActualColor(texture.GetPoint(0, 0)) == 0x00fe0000);
+    CHECK(TVPFromActualColor(0xff332211) == 0x00112233);
+    CHECK(TVPToActualColor(0x00112233) == 0x00112233);
+}
+
 TEST_CASE("Godot textures expose asynchronous GPU readback") {
     TestGpuBridge bridge;
     std::array<std::uint8_t, 8> pixels{};
@@ -234,6 +248,38 @@ TEST_CASE("Godot textures expose Gray province pixels") {
     CHECK(row[1] == 0x34);
     CHECK(row[2] == 6);
     CHECK(row[3] == 0xee);
+}
+
+TEST_CASE("Godot DirectCopy preserves Gray texture byte addressing") {
+    std::array<std::uint8_t, 8> source_pixels = {
+        10, 11, 12, 13, 14, 15, 16, 17,
+    };
+    std::array<std::uint8_t, 8> destination_pixels = {
+        90, 91, 92, 93, 94, 95, 96, 97,
+    };
+    GodotTexture2D src(source_pixels.data(), 8, 8, 1,
+                       TVPTextureFormat::Gray);
+    GodotTexture2D dst(destination_pixels.data(), 8, 8, 1,
+                       TVPTextureFormat::Gray);
+    GodotRenderManager manager;
+    iTVPRenderMethod *method = manager.GetRenderMethod("Copy");
+    REQUIRE(method != nullptr);
+    tRenderTexRectArray::Element source_element(
+        &src, tTVPRect(1, 0, 5, 1));
+
+    manager.OperateRect(
+        method, &dst, &dst, tTVPRect(2, 0, 6, 1),
+        tRenderTexRectArray(&source_element, 1));
+
+    const auto *row = static_cast<const std::uint8_t *>(
+        dst.GetScanLineForRead(0));
+    REQUIRE(row != nullptr);
+    CHECK(std::array<std::uint8_t, 8>{
+              row[0], row[1], row[2], row[3],
+              row[4], row[5], row[6], row[7],
+          } == std::array<std::uint8_t, 8>{
+              90, 91, 11, 12, 13, 14, 96, 97,
+          });
 }
 
 TEST_CASE("Godot Gray textures extract province pixels after GPU writes") {

@@ -190,6 +190,12 @@ ENGINE_API_EXPORT engine_result_t engine_get_runtime_provider_id(
     uint32_t index, char* out_buffer, uint32_t buffer_size,
     uint32_t* out_bytes_written);
 
+/* Returns the provider's positive match score, or zero when the named runtime
+ * does not recognize the directory. A negative value reports invalid input or
+ * an unavailable provider. The probe does not create or start a runtime. */
+ENGINE_API_EXPORT int32_t engine_probe_runtime_provider(
+    const char* runtime_id_utf8, const char* game_root_path_utf8);
+
 #if defined(__cplusplus)
 }  /* extern "C" */
 #endif
