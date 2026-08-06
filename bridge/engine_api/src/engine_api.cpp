@@ -1968,6 +1968,11 @@ void engine_register_godot_gpu_bridge(const void* callbacks) {
       static_cast<const TVPGodotGpuBridgeCallbacks*>(callbacks));
 }
 
+void engine_register_godot_gpu_batch_bridge(const void* callbacks) {
+  TVPGodotGpuBatchRegister(
+      static_cast<const TVPGodotGpuBatchCallbacks*>(callbacks));
+}
+
 void TVPEngineApiNotifyWebStartupReady() {
 #if defined(__EMSCRIPTEN__)
   engine_handle_t handle = nullptr;

@@ -116,6 +116,7 @@ bool TraceGpuFallback() {
 }
 
 bool DeferredGodotGpuDrainEnabled() {
+    if (TVPGodotGpuBridgeBatchActive()) return true;
     static const bool enabled = []() {
         const char *value = std::getenv("AETHERKIRI_GODOT_DEFER_GPU_DRAIN");
         if (value == nullptr || value[0] == '\0') {

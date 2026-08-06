@@ -7,6 +7,7 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -39,6 +40,18 @@
 
 extern tTJS *TVPScriptEngine;
 extern "C" void TVPRegisterMotionPlayerPluginAnchor();
+
+namespace motion::detail {
+    std::size_t deformExternalMeshPointsForTesting(
+        float *interleavedPoints,
+        std::size_t pointCount,
+        const double *drawAffine,
+        const double *meshInverseMatrices,
+        const float *meshInverseOffsets,
+        const float *meshControlPoints,
+        std::size_t meshChainSize,
+        bool allowArmNeon);
+}
 
 #if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
 namespace {
@@ -132,6 +145,43 @@ TEST_CASE("motionplayer optional E-mote extension matches build mode") {
 #else
     REQUIRE(extension == nullptr);
 #endif
+}
+
+TEST_CASE("motionplayer reuses effective-variable scratch across frames") {
+    motion::detail::PlayerRuntime runtime;
+
+    const auto firstGeneration = runtime.beginEffectiveVariableScratch();
+    runtime.setEffectiveVariableScratch("face_talk", 0.25);
+    runtime.setEffectiveVariableScratch("face_talk", 0.75);
+    runtime.setEffectiveVariableScratch("slot01/disable", 1.0);
+
+    auto firstFace = runtime.effectiveVariableScratch.find("face_talk");
+    auto firstSlot =
+        runtime.effectiveVariableScratch.find("slot01/disable");
+    REQUIRE(firstFace != runtime.effectiveVariableScratch.end());
+    REQUIRE(firstSlot != runtime.effectiveVariableScratch.end());
+    CHECK(firstFace->second.generation == firstGeneration);
+    CHECK(firstFace->second.value == 0.75);
+    firstFace->second.hasRoutingNode = true;
+    const auto *const faceStorage = &firstFace->second;
+
+    const auto secondGeneration = runtime.beginEffectiveVariableScratch();
+    runtime.setEffectiveVariableScratch("face_talk", 0.5);
+
+    auto secondFace = runtime.effectiveVariableScratch.find("face_talk");
+    REQUIRE(secondFace != runtime.effectiveVariableScratch.end());
+    CHECK(&secondFace->second == faceStorage);
+    CHECK(secondFace->second.generation == secondGeneration);
+    CHECK(secondFace->second.value == 0.5);
+    CHECK_FALSE(secondFace->second.hasRoutingNode);
+    // A label omitted from the new overlay remains allocated for later reuse,
+    // but its old value is not part of the current frame.
+    CHECK(firstSlot->second.generation == firstGeneration);
+    CHECK(firstSlot->second.generation != secondGeneration);
+
+    runtime.clearMotionBitmapCaches();
+    CHECK(runtime.effectiveVariableScratch.empty());
+    CHECK(runtime.effectiveVariableScratchGeneration == 0);
 }
 
 TEST_CASE("motionplayer honors a split module's authored composition entry point") {
@@ -982,6 +1032,169 @@ TEST_CASE("motionplayer tessellates nested surfaces before inherited Bezier defo
         degenerate, 1.0, 4));
     CHECK(degenerate.meshPoints.empty());
     CHECK(degenerate.meshType == 0);
+}
+
+TEST_CASE("motionplayer batches external Bezier mesh chains without changing geometry") {
+    const std::array<double, 6> drawAffine{
+        1.15, 0.08, -0.12, 0.93, 31.0, -17.0
+    };
+    constexpr std::size_t chainSize = 2;
+    const std::array<double, chainSize * 4> inverseMatrices{
+        0.040, 0.003, -0.002, 0.050,
+        0.055, -0.004, 0.003, 0.045
+    };
+    const std::array<float, chainSize * 2> inverseOffsets{
+        2.0f, -1.0f,
+        -0.5f, 1.25f
+    };
+    std::array<float, chainSize * 32> controlPoints{};
+    for(std::size_t chainIndex = 0;
+        chainIndex < chainSize; ++chainIndex) {
+        for(int row = 0; row < 4; ++row) {
+            for(int column = 0; column < 4; ++column) {
+                const float u = static_cast<float>(column) / 3.0f;
+                const float v = static_cast<float>(row) / 3.0f;
+                const std::size_t offset =
+                    chainIndex * 32 +
+                    static_cast<std::size_t>(row * 4 + column) * 2;
+                if(chainIndex == 0) {
+                    controlPoints[offset] =
+                        -10.0f + 22.0f * u + 2.0f * v +
+                        0.7f * u * v;
+                    controlPoints[offset + 1] =
+                        -8.0f + 1.5f * u + 18.0f * v -
+                        0.4f * u * v;
+                } else {
+                    controlPoints[offset] =
+                        3.0f + 14.0f * u - 2.0f * v +
+                        0.5f * u * v;
+                    controlPoints[offset + 1] =
+                        -4.0f + 3.0f * u + 16.0f * v +
+                        0.3f * u * v;
+                }
+            }
+        }
+    }
+
+    const std::vector<float> sourcePoints{
+        18.0f, -23.0f,
+        21.5f, -19.0f,
+        25.0f, -15.5f,
+        28.5f, -12.0f,
+        32.0f, -8.5f,
+        35.5f, -5.0f,
+        39.0f, -1.5f,
+        42.5f, 2.0f,
+        46.0f, 5.5f,
+        49.5f, 9.0f,
+        53.0f, 12.5f,
+    };
+
+    auto evaluateLegacyPatch = [](
+        const float *mesh, float u, float v,
+        float &outX, float &outY) {
+        const float su = 1.0f - u;
+        const float sv = 1.0f - v;
+        const float bu[4] = {
+            su * su * su,
+            3.0f * su * su * u,
+            3.0f * su * u * u,
+            u * u * u,
+        };
+        const float bv[4] = {
+            sv * sv * sv,
+            3.0f * sv * sv * v,
+            3.0f * sv * v * v,
+            v * v * v,
+        };
+        float rowX[4];
+        float rowY[4];
+        for(int row = 0; row < 4; ++row) {
+            const float *points = mesh + row * 8;
+            rowX[row] =
+                points[0] * bu[0] + points[2] * bu[1] +
+                points[4] * bu[2] + points[6] * bu[3];
+            rowY[row] =
+                points[1] * bu[0] + points[3] * bu[1] +
+                points[5] * bu[2] + points[7] * bu[3];
+        }
+        outX =
+            rowX[0] * bv[0] + rowX[1] * bv[1] +
+            rowX[2] * bv[2] + rowX[3] * bv[3];
+        outY =
+            rowY[0] * bv[0] + rowY[1] * bv[1] +
+            rowY[2] * bv[2] + rowY[3] * bv[3];
+    };
+
+    auto legacyPoints = sourcePoints;
+    const double determinant =
+        drawAffine[0] * drawAffine[3] -
+        drawAffine[2] * drawAffine[1];
+    for(std::size_t pointIndex = 0;
+        pointIndex < legacyPoints.size() / 2; ++pointIndex) {
+        const std::size_t offset = pointIndex * 2;
+        const double translatedX =
+            static_cast<double>(legacyPoints[offset]) - drawAffine[4];
+        const double translatedY =
+            static_cast<double>(legacyPoints[offset + 1]) - drawAffine[5];
+        float modelX = static_cast<float>(
+            (drawAffine[3] * translatedX -
+             drawAffine[2] * translatedY) / determinant);
+        float modelY = static_cast<float>(
+            (-drawAffine[1] * translatedX +
+             drawAffine[0] * translatedY) / determinant);
+        for(std::size_t chainIndex = 0;
+            chainIndex < chainSize; ++chainIndex) {
+            const double *matrix =
+                inverseMatrices.data() + chainIndex * 4;
+            const float *inverseOffset =
+                inverseOffsets.data() + chainIndex * 2;
+            const float x = modelX + inverseOffset[0];
+            const float y = modelY + inverseOffset[1];
+            const float u = static_cast<float>(
+                matrix[0] * x + matrix[1] * y);
+            const float v = static_cast<float>(
+                matrix[2] * x + matrix[3] * y);
+            evaluateLegacyPatch(
+                controlPoints.data() + chainIndex * 32,
+                u, v, modelX, modelY);
+        }
+        legacyPoints[offset] = static_cast<float>(
+            drawAffine[0] * modelX + drawAffine[2] * modelY +
+            drawAffine[4]);
+        legacyPoints[offset + 1] = static_cast<float>(
+            drawAffine[1] * modelX + drawAffine[3] * modelY +
+            drawAffine[5]);
+    }
+
+    auto scalarPoints = sourcePoints;
+    CHECK(motion::detail::deformExternalMeshPointsForTesting(
+              scalarPoints.data(), scalarPoints.size() / 2,
+              drawAffine.data(), inverseMatrices.data(),
+              inverseOffsets.data(), controlPoints.data(),
+              chainSize, false) == 0);
+    auto batchedPoints = sourcePoints;
+    const auto vectorBatchCount =
+        motion::detail::deformExternalMeshPointsForTesting(
+            batchedPoints.data(), batchedPoints.size() / 2,
+            drawAffine.data(), inverseMatrices.data(),
+            inverseOffsets.data(), controlPoints.data(),
+            chainSize, true);
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+    CHECK(vectorBatchCount == sourcePoints.size() / 8);
+#else
+    CHECK(vectorBatchCount == 0);
+#endif
+
+    REQUIRE(scalarPoints.size() == legacyPoints.size());
+    REQUIRE(batchedPoints.size() == legacyPoints.size());
+    for(std::size_t index = 0; index < legacyPoints.size(); ++index) {
+        REQUIRE(std::isfinite(legacyPoints[index]));
+        CHECK(scalarPoints[index] ==
+              Catch::Approx(legacyPoints[index]).margin(0.0001));
+        CHECK(batchedPoints[index] ==
+              Catch::Approx(legacyPoints[index]).margin(0.0002));
+    }
 }
 
 TEST_CASE("motionplayer preserves authored equal-Z E-mote layer order") {
