@@ -75,6 +75,10 @@ uint64_t aether_storekit_restore(const char *product_id);
 char *aether_storekit_copy_state_json();
 char *aether_storekit_copy_state_json_for_product(const char *product_id);
 void aether_storekit_free_string(char *value);
+int32_t aether_native_launch_file_picker_present(
+    const char *title, const char *initial_directory);
+char *aether_native_launch_file_picker_copy_result_json();
+void aether_native_launch_file_picker_free_string(char *value);
 }
 #endif
 
@@ -7709,6 +7713,34 @@ void main() {
 #endif
     }
 
+    bool native_launch_file_picker_open(
+            const String &title, const String &initial_directory) const {
+#if defined(__APPLE__)
+        const CharString title_utf8 = title.utf8();
+        const CharString directory_utf8 = initial_directory.utf8();
+        return aether_native_launch_file_picker_present(
+                   title_utf8.get_data(), directory_utf8.get_data()) != 0;
+#else
+        (void)title;
+        (void)initial_directory;
+        return false;
+#endif
+    }
+
+    String native_launch_file_picker_take_result_json() const {
+#if defined(__APPLE__)
+        char *json = aether_native_launch_file_picker_copy_result_json();
+        if (json == nullptr) {
+            return "";
+        }
+        const String result = String::utf8(json);
+        aether_native_launch_file_picker_free_string(json);
+        return result;
+#else
+        return "";
+#endif
+    }
+
     int64_t probe_runtime(const String &runtime_id,
                           const String &game_root_path) const {
         const CharString runtime_utf8 = runtime_id.utf8();
@@ -7830,6 +7862,12 @@ protected:
                              &AetherKiriPlayer::iap_restore);
         ClassDB::bind_method(D_METHOD("iap_get_state_json", "product_id"),
                              &AetherKiriPlayer::iap_get_state_json);
+        ClassDB::bind_method(
+            D_METHOD("native_launch_file_picker_open", "title", "initial_directory"),
+            &AetherKiriPlayer::native_launch_file_picker_open);
+        ClassDB::bind_method(
+            D_METHOD("native_launch_file_picker_take_result_json"),
+            &AetherKiriPlayer::native_launch_file_picker_take_result_json);
         ClassDB::bind_method(D_METHOD("probe_runtime", "runtime_id", "game_root_path"),
                              &AetherKiriPlayer::probe_runtime);
         ADD_SIGNAL(MethodInfo(

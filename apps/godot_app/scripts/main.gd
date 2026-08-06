@@ -1280,6 +1280,8 @@ var settings_relayout_pending := false
 var settings_relayout_scroll_vertical := 0
 var detail_relayout_pending := false
 var detail_relayout_scroll_vertical := 0
+var native_launch_file_picker_pending := false
+var native_launch_file_picker_library_path := ""
 var active_game_path := ""
 var active_game_started_msec := 0
 var shell_scroll_drag_states := {}
@@ -6540,6 +6542,19 @@ func _set_launch_file_for_selected() -> void:
     var library_path := String(selected_game.get("path", ""))
     if library_path.is_empty() or not _can_configure_launch_file(selected_game):
         return
+    _finish_hero_overlay()
+    if OS.get_name() in ["iOS", "macOS"] \
+            and player != null \
+            and player.has_method("native_launch_file_picker_open") \
+            and bool(player.native_launch_file_picker_open(
+                _t("dialog.choose_launch_file"), library_path
+            )):
+        native_launch_file_picker_pending = true
+        native_launch_file_picker_library_path = library_path
+        return
+    _show_launch_file_godot_dialog(library_path)
+
+func _show_launch_file_godot_dialog(library_path: String) -> void:
     var dialog := _create_file_dialog(
         _t("dialog.choose_launch_file"),
         FileDialog.FILE_MODE_OPEN_FILE,
@@ -6548,31 +6563,59 @@ func _set_launch_file_for_selected() -> void:
     if DirAccess.dir_exists_absolute(library_path):
         dialog.current_dir = library_path
     dialog.file_selected.connect(func(selected_path: String):
-        if not GameLaunchEntry.is_supported_file(selected_path):
-            _show_system_alert(
-                _t("message.launch_file_unsupported"),
-                _t("alert.warning_title")
-            )
-            dialog.queue_free()
-            return
-        var relative_path := GameLaunchEntry.relative_path_for_selection(
-            library_path,
-            selected_path
-        )
-        if relative_path.is_empty():
-            _show_system_alert(
-                _t("message.launch_file_outside_game"),
-                _t("alert.warning_title")
-            )
-            dialog.queue_free()
-            return
-        _update_game(library_path, {GameLaunchEntry.FIELD: relative_path})
-        _show_detail(selected_game)
+        _apply_selected_launch_file(library_path, selected_path)
         dialog.queue_free()
     )
     dialog.canceled.connect(func(): dialog.queue_free())
     add_child(dialog)
     dialog.popup_centered(Vector2i(900, 640))
+
+func _apply_selected_launch_file(library_path: String, selected_path: String) -> void:
+    if not GameLaunchEntry.is_supported_file(selected_path):
+        _show_system_alert(
+            _t("message.launch_file_unsupported"),
+            _t("alert.warning_title")
+        )
+        return
+    var relative_path := GameLaunchEntry.relative_path_for_selection(
+        library_path,
+        selected_path
+    )
+    if relative_path.is_empty():
+        _show_system_alert(
+            _t("message.launch_file_outside_game"),
+            _t("alert.warning_title")
+        )
+        return
+    _update_game(library_path, {GameLaunchEntry.FIELD: relative_path})
+    _show_detail(selected_game)
+
+func _poll_native_launch_file_picker() -> void:
+    if not native_launch_file_picker_pending \
+            or player == null \
+            or not player.has_method("native_launch_file_picker_take_result_json"):
+        return
+    var result_json := String(player.native_launch_file_picker_take_result_json())
+    if result_json.is_empty():
+        return
+    var library_path := native_launch_file_picker_library_path
+    native_launch_file_picker_pending = false
+    native_launch_file_picker_library_path = ""
+    var parsed = JSON.parse_string(result_json)
+    if typeof(parsed) != TYPE_DICTIONARY:
+        _show_system_alert(result_json, _t("alert.warning_title"))
+        return
+    var result: Dictionary = parsed
+    match String(result.get("status", "error")):
+        "selected":
+            _apply_selected_launch_file(library_path, String(result.get("path", "")))
+        "cancelled":
+            pass
+        _:
+            _show_system_alert(
+                String(result.get("error", "System file picker failed")),
+                _t("alert.warning_title")
+            )
 
 func _reset_launch_file_for_selected() -> void:
     var library_path := String(selected_game.get("path", ""))
@@ -10184,6 +10227,7 @@ func _apply_pending_video_resume(state: Dictionary) -> bool:
     return true
 
 func _process(delta: float) -> void:
+    _poll_native_launch_file_picker()
     _fit_full_rects()
     _process_iap(delta)
     _update_advanced_tool_timeouts()
