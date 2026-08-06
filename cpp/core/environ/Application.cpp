@@ -617,6 +617,15 @@ void tTVPApplication::ShowException(const ttstr &e) {
     if (result == 1) { // 1 is the 0-indexed position of Copy to Clipboard button
         TVPClipboardSetText(msg);
     }
+    if(TVPHostSuppressProcessExit) {
+        // The host owns the process and can open another title after this
+        // session. Do not run one-shot process shutdown handlers here; mark
+        // this runtime terminated and let engine_destroy perform session
+        // cleanup after the TJS stack has unwound.
+        TVPTerminated = true;
+        TVPTerminateCode = 1;
+        return;
+    }
     TVPSystemUninit();
     TVPExitApplication(0);
 }
@@ -629,6 +638,8 @@ void tTVPApplication::Run() {
 #if defined(__ANDROID__)
             TVPAndroidAppLog("Application::Run terminated branch");
 #endif
+            if(TVPHostSuppressProcessExit)
+                return;
             TVPSystemUninit();
             TVPExitApplication(TVPTerminateCode);
         }

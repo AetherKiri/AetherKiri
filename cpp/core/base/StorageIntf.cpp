@@ -2007,6 +2007,13 @@ void TVPClearStorageCaches() {
     TVPClearXP3SegmentCache();
     TVPClearAutoPathCache();
 }
+
+void TVPResetAutoPathsForGameSession() {
+    tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
+    TVPAutoPathList.clear();
+    TVPClearXP3SegmentCache();
+    TVPClearAutoPathCache();
+}
 //---------------------------------------------------------------------------
 
 void TVPSetAutoPathCacheMaxCount(tjs_uint max_count) {

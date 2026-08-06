@@ -1960,6 +1960,7 @@ void RunOpenGameAsync(engine_handle_t handle,
 }  // namespace
 
 extern std::string TVPEngineApi_GetGlobalException();
+extern void TVPEngineApi_SetGlobalException(const std::string& msg);
 
 extern "C" {
 
@@ -2061,6 +2062,7 @@ engine_result_t engine_destroy(engine_handle_t handle) {
 
   engine_handle_s* impl = nullptr;
   bool owned_runtime = false;
+  bool needs_session_cleanup = false;
   std::thread startup_worker;
 
   {
@@ -2077,6 +2079,13 @@ engine_result_t engine_destroy(engine_handle_t handle) {
     }
 
     owned_runtime = (g_runtime_active && g_runtime_owner == handle);
+    const uint32_t startup_state = GetStartupState(impl);
+    needs_session_cleanup =
+        owned_runtime ||
+        (g_runtime_startup_active && g_runtime_startup_owner == handle) ||
+        startup_state == ENGINE_STARTUP_STATE_RUNNING ||
+        startup_state == ENGINE_STARTUP_STATE_SUCCEEDED ||
+        startup_state == ENGINE_STARTUP_STATE_FAILED;
     if (owned_runtime) {
       g_runtime_active = false;
       g_runtime_owner = nullptr;
@@ -2098,7 +2107,7 @@ engine_result_t engine_destroy(engine_handle_t handle) {
     startup_worker.join();
   }
 
-  if (owned_runtime) {
+  if (needs_session_cleanup) {
     if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
       loop->ResetPointerState();
     }
@@ -2130,10 +2139,21 @@ engine_result_t engine_destroy(engine_handle_t handle) {
     } catch (...) {
       spdlog::warn("engine_destroy: FilterUserMessage ignored unknown exception");
     }
+    try {
+      Application->OnExit();
+      TVPResetAutoPathsForGameSession();
+    } catch (const std::exception& e) {
+      spdlog::warn("engine_destroy: session cleanup ignored exception: {}", e.what());
+    } catch (...) {
+      spdlog::warn("engine_destroy: session cleanup ignored unknown exception");
+    }
 
     // Avoid triggering platform exit() path in the host process.
     TVPTerminated = false;
     TVPTerminateCode = 0;
+    TVPSystemUninitCalled = false;
+    TVPEngineApi_SetGlobalException("");
+    g_runtime_started_once = false;
   }
 
   delete impl;
