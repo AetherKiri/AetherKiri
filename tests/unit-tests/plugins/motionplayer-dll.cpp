@@ -587,7 +587,7 @@ namespace {
 
     class TemporaryAutoPath {
     public:
-        TemporaryAutoPath() {
+        explicit TemporaryAutoPath(bool addImmediately = true) {
             const auto suffix = std::chrono::steady_clock::now()
                                     .time_since_epoch()
                                     .count();
@@ -595,22 +595,33 @@ namespace {
                 ("aetherkiri-d3d-emote-" + std::to_string(suffix));
             std::filesystem::create_directories(path_);
             storagePath_ = ttstr((path_.string() + "/").c_str());
-            TVPAddAutoPath(storagePath_);
-            TVPClearStorageCaches();
+            if(addImmediately) {
+                TVPAddAutoPath(storagePath_);
+                TVPClearStorageCaches();
+                added_ = true;
+            }
         }
 
         ~TemporaryAutoPath() {
-            TVPRemoveAutoPath(storagePath_);
-            TVPClearStorageCaches();
+            if(added_) {
+                TVPRemoveAutoPath(storagePath_);
+                TVPClearStorageCaches();
+            }
             std::error_code error;
             std::filesystem::remove_all(path_, error);
         }
 
         const std::filesystem::path &path() const { return path_; }
 
+        void refresh() {
+            TVPAddAutoPath(storagePath_);
+            added_ = true;
+        }
+
     private:
         std::filesystem::path path_;
         ttstr storagePath_;
+        bool added_ = false;
     };
 
     tTJSVariant getProp(const tTJSVariant &object, const tjs_char *name) {
@@ -804,6 +815,40 @@ TEST_CASE("storage resolves logical E-mote PSBs to DirectX exports") {
     const auto original = TVPGetPlacedPath(TJS_W("gallery_original.psb"));
     REQUIRE_FALSE(original.IsEmpty());
     CHECK(TVPExtractStorageName(original) == TJS_W("gallery_original.psb"));
+}
+
+TEST_CASE("adding an auto path updates an initialized lookup table") {
+    ensurePluginRuntime();
+    TemporaryAutoPath lowerPriority;
+    std::ofstream(lowerPriority.path() / "aether_autopath_priority.bin",
+                  std::ios::binary)
+        .put('L');
+    TVPClearStorageCaches();
+
+    const auto initial =
+        TVPGetPlacedPath(TJS_W("aether_autopath_priority.bin"));
+    REQUIRE_FALSE(initial.IsEmpty());
+    CHECK(TVPNormalizeStorageName(initial).StartsWith(
+        TVPNormalizeStorageName(ttstr(lowerPriority.path().string().c_str()))));
+
+    TemporaryAutoPath higherPriority(false);
+    std::ofstream(higherPriority.path() / "aether_autopath_priority.bin",
+                  std::ios::binary)
+        .put('H');
+    higherPriority.refresh();
+
+    const auto updated =
+        TVPGetPlacedPath(TJS_W("aether_autopath_priority.bin"));
+    REQUIRE_FALSE(updated.IsEmpty());
+    CHECK(TVPNormalizeStorageName(updated).StartsWith(
+        TVPNormalizeStorageName(ttstr(higherPriority.path().string().c_str()))));
+
+    lowerPriority.refresh();
+    const auto reprioritized =
+        TVPGetPlacedPath(TJS_W("aether_autopath_priority.bin"));
+    REQUIRE_FALSE(reprioritized.IsEmpty());
+    CHECK(TVPNormalizeStorageName(reprioritized).StartsWith(
+        TVPNormalizeStorageName(ttstr(lowerPriority.path().string().c_str()))));
 }
 
 TEST_CASE("motionplayer completes legacy decryption for PSB v4 headers") {

@@ -1019,7 +1019,6 @@ void tTVPArchive::AddToHash() {
     tjs_uint i;
     for(i = 0; i < Count; i++) {
         ttstr name = GetName(i);
-        NormalizeInArchiveStorageName(name);
         Hash.Add(name, i);
     }
 }
@@ -1422,6 +1421,8 @@ static ttstr TVPFindExactArchiveAutoPath(const ttstr &normalized) {
     return {};
 }
 
+static tjs_uint TVPIndexAutoPath(const ttstr &path, bool skipUnchanged);
+
 //---------------------------------------------------------------------------
 void TVPAddAutoPath(const ttstr &name) {
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
@@ -1463,7 +1464,12 @@ void TVPAddAutoPath(const ttstr &name) {
             archivedPeers.size(), TVPAutoPathList.size());
     }
 
-    TVPClearAutoPathCache();
+    TVPClearAutoPathSearchCache();
+    if(AutoPathTableInit) {
+        for(const auto &peer : archivedPeers)
+            TVPIndexAutoPath(peer, true);
+        TVPIndexAutoPath(normalized, moved);
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -1479,6 +1485,70 @@ void TVPRemoveAutoPath(const ttstr &name) {
         TVPAutoPathList.erase(i);
 
     TVPClearAutoPathCache();
+}
+
+//---------------------------------------------------------------------------
+static tjs_uint TVPIndexAutoPath(const ttstr &path, bool skipUnchanged) {
+    tjs_uint count = 0;
+    const tjs_char *sharp_pos =
+        TJS_strchr(path.c_str(), TVPArchiveDelimiter);
+    if(sharp_pos) {
+        ttstr arcname(path, (int)(sharp_pos - path.c_str()));
+        ttstr in_arc_name(sharp_pos + 1);
+        tTVPArchive::NormalizeInArchiveStorageName(in_arc_name);
+        const tjs_int in_arc_name_len = in_arc_name.GetLen();
+
+        tTVPArchive *arc = nullptr;
+        try {
+            arc = TVPArchiveCache.Get(arcname);
+        } catch(...) {
+            TVPAddLog(ttstr(TJS_W("(warning) Cannot open archive: ")) + arcname);
+            return 0;
+        }
+        if(!arc) return 0;
+
+        try {
+            const tjs_uint storagecount = arc->GetCount();
+            tjs_int i = arc->GetFirstIndexStartsWith(in_arc_name);
+            if(i != -1) {
+                for(; i < (tjs_int)storagecount; i++) {
+                    ttstr name = arc->GetName(i);
+                    if(!name.StartsWith(in_arc_name)) break;
+                    if(TJS_strchr(name.c_str() + in_arc_name_len,
+                                  TJS_W('/')))
+                        continue;
+
+                    ttstr shortName = TVPExtractStorageName(name);
+                    ttstr *existing = skipUnchanged
+                        ? TVPAutoPathTable.Find(shortName)
+                        : nullptr;
+                    if(!existing || *existing != path)
+                        TVPAutoPathTable.Add(shortName, path);
+                    count++;
+                }
+            }
+        } catch(...) {
+            arc->Release();
+            throw;
+        }
+        arc->Release();
+        return count;
+    }
+
+    class tLister : public iTVPStorageLister {
+    public:
+        std::vector<ttstr> list;
+        void Add(const ttstr &file) override { list.push_back(file); }
+    } lister;
+
+    TVPStorageMediaManager.GetListAt(path, &lister);
+    for(const auto &file : lister.list) {
+        ttstr *existing = skipUnchanged ? TVPAutoPathTable.Find(file) : nullptr;
+        if(!existing || *existing != path)
+            TVPAutoPathTable.Add(file, path);
+        count++;
+    }
+    return count;
 }
 
 //---------------------------------------------------------------------------
@@ -1539,7 +1609,6 @@ static tjs_uint TVPRebuildAutoPathTable() {
                 if(i != -1) {
                     for(; i < (tjs_int)storagecount; i++) {
                         ttstr name = arc->GetName(i);
-                        tTVPArchive::NormalizeInArchiveStorageName(name);
 
                         if(name.StartsWith(in_arc_name)) {
                             if(!TJS_strchr(name.c_str() + in_arc_name_len,

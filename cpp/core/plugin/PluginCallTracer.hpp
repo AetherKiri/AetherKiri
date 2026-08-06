@@ -339,6 +339,7 @@ private:
     std::mutex m_mutex;
     mutable std::mutex m_statsMutex;
     std::atomic<bool> m_enabled{false};
+    std::atomic<uint64_t> m_missingMembers{0};
     bool m_loggerInitialized = false;
     std::atomic<bool> m_shuttingDown{false};
     PluginDebugSnapshot m_stats;

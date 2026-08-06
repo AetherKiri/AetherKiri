@@ -732,6 +732,11 @@ void PluginCallTracer::LogPluginLoad(const std::string &name, bool success,
 void PluginCallTracer::LogMissingMember(const tjs_char *membername,
                                          const char *operation,
                                          iTJSDispatch2 *obj) {
+    m_missingMembers.fetch_add(1, std::memory_order_relaxed);
+    const char *verboseMissing =
+        std::getenv("AETHERKIRI_TRACE_MISSING_MEMBERS");
+    if(!IsEnabled() && !(verboseMissing && *verboseMissing)) return;
+
     tTJSNarrowStringHolder ns(membername);
     std::string className;
     if (obj) {
@@ -746,7 +751,6 @@ void PluginCallTracer::LogMissingMember(const tjs_char *membername,
 
     {
         std::lock_guard<std::mutex> lock(m_statsMutex);
-        ++m_stats.missingMembers;
         std::string item = className.empty() ? std::string{} : className + ".";
         item += ns.operator const char *();
         item += " [";
@@ -768,8 +772,7 @@ void PluginCallTracer::LogMissingMember(const tjs_char *membername,
         }
     }
 
-    const char *verbose_missing = std::getenv("AETHERKIRI_TRACE_MISSING_MEMBERS");
-    if (verbose_missing && *verbose_missing) {
+    if(verboseMissing && *verboseMissing) {
         if (className.empty()) {
             spdlog::debug("TJS missing member {} at {}", ns.operator const char *(), operation);
         } else {
@@ -781,6 +784,8 @@ void PluginCallTracer::LogMissingMember(const tjs_char *membername,
 PluginDebugSnapshot PluginCallTracer::GetDebugSnapshot() const {
     std::lock_guard<std::mutex> lock(m_statsMutex);
     auto snapshot = m_stats;
+    snapshot.missingMembers =
+        m_missingMembers.load(std::memory_order_relaxed);
     snapshot.tracingEnabled = IsEnabled();
     return snapshot;
 }
@@ -788,5 +793,6 @@ PluginDebugSnapshot PluginCallTracer::GetDebugSnapshot() const {
 void PluginCallTracer::ResetDebugStats() {
     std::lock_guard<std::mutex> lock(m_statsMutex);
     m_stats = PluginDebugSnapshot{};
+    m_missingMembers.store(0, std::memory_order_relaxed);
     m_stats.tracingEnabled = IsEnabled();
 }
