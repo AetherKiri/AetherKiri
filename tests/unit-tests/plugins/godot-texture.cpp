@@ -336,6 +336,52 @@ TEST_CASE("Godot texture updates reallocate when the pixel format changes") {
     CHECK(texture.GetPoint(1, 0) == 0xff060504u);
 }
 
+TEST_CASE("Godot uniform textures resize without materializing old pixels") {
+    GodotTexture2D texture(nullptr, 0, 2, 2, TVPTextureFormat::RGBA);
+    const uint32_t color = 0xff563412u;
+
+    REQUIRE(texture.SetUniformColor(color, tTVPRect(0, 0, 2, 2)));
+    REQUIRE(texture.TrySetSizeWithFill(1920, 1080, color));
+
+    CHECK(texture.GetWidth() == 1920);
+    CHECK(texture.GetHeight() == 1080);
+    CHECK(texture.GetPoint(0, 0) == color);
+    CHECK(texture.GetPoint(1919, 1079) == color);
+}
+
+TEST_CASE("Godot uniform resize fast path rejects modified or live GPU textures") {
+    GodotTexture2D modified(nullptr, 0, 2, 2, TVPTextureFormat::RGBA);
+    REQUIRE(modified.SetUniformColor(0xff000000u,
+                                     tTVPRect(0, 0, 2, 2)));
+    modified.SetPoint(0, 0, 0xffffffffu);
+    CHECK_FALSE(modified.TrySetSizeWithFill(4, 4, 0xff000000u));
+
+    TestGpuBridge bridge;
+    GodotTexture2D uploaded(nullptr, 0, 2, 2, TVPTextureFormat::RGBA);
+    REQUIRE(uploaded.EnsureGpuHandle());
+    CHECK_FALSE(uploaded.SetUniformColor(0xff000000u,
+                                         tTVPRect(0, 0, 2, 2)));
+    CHECK_FALSE(uploaded.TrySetSizeWithFill(4, 4, 0u));
+}
+
+TEST_CASE("Godot uniform clones preserve crop and transparent growth semantics") {
+    GodotRenderManager manager;
+    GodotTexture2D source(nullptr, 0, 4, 4, TVPTextureFormat::RGBA);
+    const uint32_t color = 0xff563412u;
+    REQUIRE(source.SetUniformColor(color, tTVPRect(0, 0, 4, 4)));
+
+    iTVPTexture2D *cropped = manager.CreateTexture2D(2, 2, &source);
+    REQUIRE(cropped != nullptr);
+    CHECK(cropped->GetPoint(1, 1) == color);
+    delete cropped;
+
+    iTVPTexture2D *expanded = manager.CreateTexture2D(6, 6, &source);
+    REQUIRE(expanded != nullptr);
+    CHECK(expanded->GetPoint(3, 3) == color);
+    CHECK(expanded->GetPoint(5, 5) == 0u);
+    delete expanded;
+}
+
 TEST_CASE("Godot textures tag Kirikiri triangle blend modes") {
     TestGpuBridge bridge;
     std::array<std::uint8_t, 16> pixels = {

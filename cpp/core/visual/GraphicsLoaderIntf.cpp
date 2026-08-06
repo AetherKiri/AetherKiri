@@ -32,6 +32,7 @@
 #include <mutex>
 #include <thread>
 #include <condition_variable>
+#include <chrono>
 #include <cstdlib>
 #include "Application.h"
 #include "BitmapIntf.h"
@@ -44,6 +45,40 @@
 
 namespace {
 thread_local ttstr TVPCurrentGraphicLoadName;
+
+bool TVPStartupProfileEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_STARTUP_PROFILE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+class TVPScopedGraphicProfile {
+public:
+    explicit TVPScopedGraphicProfile(const ttstr &name)
+        : Enabled(TVPStartupProfileEnabled()) {
+        if(Enabled) {
+            Name = name;
+            Start = std::chrono::steady_clock::now();
+        }
+    }
+
+    ~TVPScopedGraphicProfile() {
+        if(!Enabled) return;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - Start);
+        if(elapsed.count() >= 20) {
+            spdlog::info("StartupProfile graphic elapsed_ms={} name={}",
+                         elapsed.count(), Name.AsStdString());
+        }
+    }
+
+private:
+    bool Enabled;
+    ttstr Name;
+    std::chrono::steady_clock::time_point Start{};
+};
 
 class TVPScopedGraphicLoadName {
 public:
@@ -1967,6 +2002,7 @@ void TVPLoadGraphicProvince(tTVPBaseBitmap *dest, const ttstr &name,
 int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
                    tjs_uint desw, tjs_uint desh, tTVPGraphicLoadMode mode,
                    ttstr *provincename, iTJSDispatch2 **metainfo) {
+    TVPScopedGraphicProfile profile(name);
     // loading with cache management
     ttstr nname = TVPNormalizeStorageName(name);
     tjs_uint32 hash;

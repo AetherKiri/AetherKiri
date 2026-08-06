@@ -52,9 +52,17 @@ public:
     uint32_t GetPoint(int x, int y) override;
     void SetPoint(int x, int y, uint32_t clr) override;
     void SetSize(unsigned int w, unsigned int h) override;
+    bool TrySetSizeWithFill(unsigned int w, unsigned int h,
+                            uint32_t fill) override;
+    bool SetUniformColor(uint32_t color, const tTVPRect &rc);
     bool IsStatic() override { return false; }
     bool IsOpaque() override { return opacity_known_ && opaque_; }
     bool HasKnownTransparency() const { return opacity_known_ && !opaque_; }
+    bool TryGetUniformColor(uint32_t &color) const {
+        if(!uniform_color_known_) return false;
+        color = uniform_color_;
+        return true;
+    }
     krkr::Texture2D *GetAdapterTexture(krkr::Texture2D *origTex) override {
         return origTex;
     }
@@ -128,6 +136,8 @@ private:
     bool cpu_dirty_ = false;
     bool opacity_known_ = false;
     bool opaque_ = false;
+    bool uniform_color_known_ = false;
+    uint32_t uniform_color_ = 0;
     bool discard_unwritten_on_partial_update_ = false;
 };
 

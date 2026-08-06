@@ -123,12 +123,13 @@ void iTVPBaseBitmap::SetSizeWithFill(tjs_uint w, tjs_uint h,
                                      tjs_uint32 fillvalue) {
     // resize, and fill the expanded region with specified value.
 
+    fillvalue = TVP_REVRGB(fillvalue);
+    if(Bitmap->TrySetSizeWithFill(w, h, fillvalue)) return;
+
     tjs_uint orgw = GetWidth();
     tjs_uint orgh = GetHeight();
 
     SetSize(w, h);
-    fillvalue = TVP_REVRGB(fillvalue);
-
     if(w > orgw && h > orgh) {
         // both width and height were expanded
         tTVPRect rect;

@@ -65,11 +65,46 @@
 #endif
 
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <utility>
 #include <vector>
 
 namespace {
+
+bool TVPStartupProfileEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_STARTUP_PROFILE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+class TVPScopedScriptProfile {
+public:
+    explicit TVPScopedScriptProfile(const ttstr &name)
+        : Enabled(TVPStartupProfileEnabled()) {
+        if(Enabled) {
+            Name = name;
+            Start = std::chrono::steady_clock::now();
+        }
+    }
+
+    ~TVPScopedScriptProfile() {
+        if(!Enabled) return;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - Start);
+        if(elapsed.count() >= 20) {
+            spdlog::info("StartupProfile script elapsed_ms={} name={}",
+                         elapsed.count(), Name.AsStdString());
+        }
+    }
+
+private:
+    bool Enabled;
+    ttstr Name;
+    std::chrono::steady_clock::time_point Start{};
+};
 
 // Monotonically records actual entries into the engine's storage executor.
 // Script-side loader wrappers can use this to detect that they returned
@@ -2548,6 +2583,7 @@ static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
 void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
                        tTJSVariant *result, bool isexpression,
                        const tjs_char *modestr) {
+    TVPScopedScriptProfile profile(name);
     // execute storage which contains script
     if(!TVPScriptEngine)
         TVPThrowInternalError;
@@ -2561,7 +2597,6 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
         ttstr val = exportOpt.AsStringNoAddRef();
         doExport = (val == TJS_W("1") || val == TJS_W("true"));
     }
-
     { // for bytecode
         ttstr place(TVPSearchPlacedPath(name));
         ttstr shortname(TVPExtractStorageName(place));

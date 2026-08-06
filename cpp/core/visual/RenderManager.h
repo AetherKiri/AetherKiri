@@ -117,6 +117,13 @@ public:
         Width = w;
         Height = h;
     }
+    virtual bool TrySetSizeWithFill(unsigned int w, unsigned int h,
+                                    uint32_t fill) {
+        (void)w;
+        (void)h;
+        (void)fill;
+        return false;
+    }
 
     virtual TVPTextureFormat::e GetFormat() const = 0;
     virtual const void *GetScanLineForRead(tjs_uint l) { return nullptr; }

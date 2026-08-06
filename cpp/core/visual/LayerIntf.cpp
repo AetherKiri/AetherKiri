@@ -5141,17 +5141,19 @@ void tTJSNI_BaseLayer::ImageLayerSizeChanged() {
     if(!MainImage)
         return;
 
-    if((tjs_int)MainImage->GetWidth() < Rect.get_width()) {
-        ChangeImageSize(Rect.get_width(), MainImage->GetHeight());
+    const tjs_uint target_width = std::max<tjs_uint>(
+        MainImage->GetWidth(), static_cast<tjs_uint>(Rect.get_width()));
+    const tjs_uint target_height = std::max<tjs_uint>(
+        MainImage->GetHeight(), static_cast<tjs_uint>(Rect.get_height()));
+    if(target_width != MainImage->GetWidth() ||
+       target_height != MainImage->GetHeight()) {
+        ChangeImageSize(target_width, target_height);
     }
     if((tjs_int)(MainImage->GetWidth() + ImageLeft) < Rect.get_width()) {
         ImageLeft = Rect.get_width() - MainImage->GetWidth();
         Update();
     }
 
-    if((tjs_int)MainImage->GetHeight() < Rect.get_height()) {
-        ChangeImageSize(MainImage->GetWidth(), Rect.get_height());
-    }
     if((tjs_int)(MainImage->GetHeight() + ImageTop) < Rect.get_height()) {
         ImageTop = Rect.get_height() - MainImage->GetHeight();
         Update();

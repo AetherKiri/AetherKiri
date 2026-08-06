@@ -432,6 +432,8 @@ GodotTexture2D::GodotTexture2D(const void *pixel, int pitch, unsigned int w,
     } else {
         MarkTransparentKnown();
     }
+    uniform_color_known_ = pixel == nullptr;
+    uniform_color_ = 0;
     MarkCpuDirty();
 }
 
@@ -440,7 +442,17 @@ GodotTexture2D::~GodotTexture2D() { ReleaseGpuHandle(); }
 void GodotTexture2D::EnsureCpuStorage() {
     const size_t required = static_cast<size_t>(pitch_) * Height;
     if (pixels_.size() != required) {
-        pixels_.assign(required, 0);
+        pixels_.resize(required);
+        if (uniform_color_known_ && format_ == TVPTextureFormat::RGBA) {
+            auto *words = reinterpret_cast<uint32_t *>(pixels_.data());
+            std::fill(words, words + static_cast<size_t>(Width) * Height,
+                      uniform_color_);
+        } else {
+            std::fill(pixels_.begin(), pixels_.end(),
+                      uniform_color_known_
+                          ? static_cast<uint8_t>(uniform_color_)
+                          : 0);
+        }
     }
 }
 
@@ -517,6 +529,11 @@ void GodotTexture2D::CreateGpuHandle(const void *pixel, int pitch) {
     if (gpu_handle_ == 0) {
         return;
     }
+    if(src == nullptr && uniform_color_known_ && uniform_color_ != 0 &&
+       bridge->clear_rgba != nullptr) {
+        const tTVPRect full_rect(0, 0, Width, Height);
+        bridge->clear_rgba(gpu_handle_, uniform_color_, &full_rect);
+    }
     gpu_dirty_ = false;
     cpu_dirty_ = false;
 }
@@ -583,6 +600,12 @@ void GodotTexture2D::ReleaseGpuHandle() {
 }
 
 void GodotTexture2D::EnsureCpuReadable() {
+    if (uniform_color_known_ && pixels_.empty()) {
+        EnsureCpuStorage();
+        gpu_dirty_ = false;
+        cpu_dirty_ = false;
+        return;
+    }
     if (cpu_dirty_) {
         EnsureCpuStorage();
         return;
@@ -629,6 +652,7 @@ const void *GodotTexture2D::GetScanLineForRead(tjs_uint l) {
 void *GodotTexture2D::GetScanLineForWrite(tjs_uint l) {
     EnsureCpuReadable();
     if (l >= static_cast<tjs_uint>(Height) || pixels_.empty()) return nullptr;
+    uniform_color_known_ = false;
     MarkOpacityUnknown();
     MarkCpuDirty();
     return pixels_.data() + static_cast<size_t>(l) * pitch_;
@@ -661,6 +685,7 @@ void GodotTexture2D::Update(const void *pixel, TVPTextureFormat::e format,
                                  static_cast<const uint8_t *>(pixel), src_pitch,
                                  new_bpp, rc);
     if (!copied) return;
+    uniform_color_known_ = false;
     if (full_rect) {
         SetOpacityFromPixels(pixels_.data(), pitch_);
     } else {
@@ -703,6 +728,7 @@ void GodotTexture2D::SetPoint(int x, int y, uint32_t clr) {
                     &clr, 4);
         MarkOpacityUnknown();
     }
+    uniform_color_known_ = false;
     MarkCpuDirty();
 }
 
@@ -712,8 +738,41 @@ void GodotTexture2D::SetSize(unsigned int w, unsigned int h) {
     Height = static_cast<tjs_int>(h);
     pitch_ = static_cast<int>(w) * BytesPerPixel(format_);
     pixels_.assign(static_cast<size_t>(pitch_) * h, 0);
+    uniform_color_known_ = true;
+    uniform_color_ = 0;
     MarkTransparentKnown();
     MarkCpuDirty();
+}
+
+bool GodotTexture2D::TrySetSizeWithFill(unsigned int w, unsigned int h,
+                                        uint32_t fill) {
+    if (gpu_handle_ != 0 || !uniform_color_known_ || uniform_color_ != fill)
+        return false;
+    ReleaseGpuHandle();
+    Width = static_cast<tjs_int>(w);
+    Height = static_cast<tjs_int>(h);
+    pitch_ = static_cast<int>(w) * BytesPerPixel(format_);
+    pixels_.clear();
+    if (format_ == TVPTextureFormat::RGBA) {
+        ((fill >> 24) & 0xffu) == 0xffu ? MarkOpaqueKnown()
+                                         : MarkTransparentKnown();
+    }
+    MarkCpuDirty();
+    return true;
+}
+
+bool GodotTexture2D::SetUniformColor(uint32_t color, const tTVPRect &rc) {
+    if (gpu_handle_ != 0 || format_ != TVPTextureFormat::RGBA ||
+        !IsFullTextureRect(rc, Width, Height)) {
+        return false;
+    }
+    pixels_.clear();
+    uniform_color_known_ = true;
+    uniform_color_ = color;
+    ((color >> 24) & 0xffu) == 0xffu ? MarkOpaqueKnown()
+                                      : MarkTransparentKnown();
+    MarkCpuDirty();
+    return true;
 }
 
 bool GodotTexture2D::ClearGpu(uint32_t rgba, const tTVPRect &rc) {
@@ -724,9 +783,12 @@ bool GodotTexture2D::ClearGpu(uint32_t rgba, const tTVPRect &rc) {
     gpu_dirty_ = true;
     cpu_dirty_ = false;
     if (IsFullTextureRect(rc, Width, Height)) {
+        uniform_color_known_ = true;
+        uniform_color_ = rgba;
         ((rgba >> 24) & 0xffu) == 0xffu ? MarkOpaqueKnown()
                                          : MarkTransparentKnown();
     } else {
+        uniform_color_known_ = false;
         MarkOpacityUnknown();
     }
     return true;
@@ -748,7 +810,10 @@ bool GodotTexture2D::CopyGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
         IsFullTextureRect(src_rc, src->Width, src->Height)) {
         opacity_known_ = src->opacity_known_;
         opaque_ = src->opaque_;
+        uniform_color_known_ = src->uniform_color_known_;
+        uniform_color_ = src->uniform_color_;
     } else {
+        uniform_color_known_ = false;
         MarkOpacityUnknown();
     }
     return true;
@@ -771,6 +836,7 @@ bool GodotTexture2D::CopyTrianglesGpuFrom(GodotTexture2D *src,
     }
     gpu_dirty_ = true;
     cpu_dirty_ = false;
+    uniform_color_known_ = false;
     MarkOpacityUnknown();
     return true;
 }
@@ -818,6 +884,7 @@ bool GodotTexture2D::DrawTrianglesGpuFrom(GodotTexture2D *src,
     }
     gpu_dirty_ = true;
     cpu_dirty_ = false;
+    uniform_color_known_ = false;
     MarkOpacityUnknown();
     return true;
 }
@@ -851,6 +918,7 @@ bool GodotTexture2D::DrawMaskedTrianglesGpuFrom(
     }
     gpu_dirty_ = true;
     cpu_dirty_ = false;
+    uniform_color_known_ = false;
     MarkOpacityUnknown();
     return true;
 }
@@ -874,6 +942,7 @@ bool GodotTexture2D::BlendGpuFrom(GodotTexture2D *src, const tTVPRect &dst_rc,
     }
     gpu_dirty_ = true;
     cpu_dirty_ = false;
+    uniform_color_known_ = false;
     MarkOpacityUnknown();
     return true;
 }
@@ -896,6 +965,7 @@ bool GodotTexture2D::BlendGpuFrom2(GodotTexture2D *src1, GodotTexture2D *src2,
     }
     gpu_dirty_ = true;
     cpu_dirty_ = false;
+    uniform_color_known_ = false;
     MarkOpacityUnknown();
     return true;
 }
@@ -920,6 +990,7 @@ bool GodotTexture2D::BlendGpuFrom3(
     }
     gpu_dirty_ = true;
     cpu_dirty_ = false;
+    uniform_color_known_ = false;
     MarkOpacityUnknown();
     return true;
 }
@@ -991,6 +1062,21 @@ iTVPTexture2D *GodotRenderManager::CreateTexture2D(unsigned int neww,
                                   tex != nullptr ? tex->GetFormat()
                                                  : TVPTextureFormat::RGBA);
     if (tex != nullptr) {
+        auto *godot_src = dynamic_cast<GodotTexture2D *>(tex);
+        uint32_t uniform_color = 0;
+        if (godot_src != nullptr &&
+            godot_src->TryGetUniformColor(uniform_color) &&
+            (uniform_color == 0 ||
+             (neww <= static_cast<unsigned int>(tex->GetWidth()) &&
+              newh <= static_cast<unsigned int>(tex->GetHeight())))) {
+            if(uniform_color != 0) {
+                ret->SetUniformColor(
+                    uniform_color,
+                    tTVPRect(0, 0, static_cast<tjs_int>(neww),
+                             static_cast<tjs_int>(newh)));
+            }
+            return ret;
+        }
         const tTVPRect copy_rc(0, 0,
                                std::min<tjs_int>(neww, tex->GetWidth()),
                                std::min<tjs_int>(newh, tex->GetHeight()));
@@ -1001,7 +1087,6 @@ iTVPTexture2D *GodotRenderManager::CreateTexture2D(unsigned int neww,
             // Metal texture before uploading it into the replacement texture.
             // Keep that clone on the ordered GPU queue whenever both textures
             // use this backend.
-            auto *godot_src = dynamic_cast<GodotTexture2D *>(tex);
             if (godot_src != nullptr &&
                 ret->EnsureGpuHandle() && godot_src->EnsureGpuHandle() &&
                 godot_src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
@@ -1110,6 +1195,13 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
     const bool nearest_scaled = textures.size() == 1 &&
         !RectAbsSizeMatches(rctar, textures[0].second) &&
         (stretch_type_ & stTypeMask) == stNearest;
+
+    if (method_name == "FillARGB" && dst != nullptr &&
+        dst->SetUniformColor(godot_method != nullptr ? godot_method->Color() : 0,
+                             rctar)) {
+        CountGpuFastPath("FillARGB:Uniform");
+        return;
+    }
 
     if (method_name == "Copy" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("Copy") &&
