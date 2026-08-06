@@ -116,7 +116,7 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 | 平台 | 最低版本 | 说明 |
 | --- | --- | --- |
 | macOS | macOS 13.0（Ventura） | Godot App 导出配置为 Universal，但当前 native 构建 triplet 只有 `arm64`；Intel 支持还需要单独构建 `x86_64` native 产物。 |
-| iOS / iPadOS | iOS / iPadOS 17.0 | 真机为 `arm64`；开发环境可构建 `arm64` 和 `x86_64` 模拟器版本。 |
+| iOS / iPadOS | iOS / iPadOS 16.0 | 真机为 `arm64`；开发环境可构建 `arm64` 和 `x86_64` 模拟器版本。 |
 | Android | Android 7.0（API 24） | 当前产品导出只打包 `arm64-v8a`。 |
 | Web | 不限定操作系统版本 | 浏览器必须支持 WebAssembly SIMD、WebAssembly threads 和 `SharedArrayBuffer`，并通过配置了跨源隔离（COOP/COEP）的 HTTP 服务访问。 |
 | Linux | 需要自行编译 | 没有官方预编译产品包，需要在本地编译 `x86_64` 导出。 |

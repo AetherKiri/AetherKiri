@@ -193,7 +193,7 @@ build_ios_sdk_compat_archive() {
     local triplet="$2"
     local arch="arm64"
     local sdk="iphoneos"
-    local min_flag="-mios-version-min=${IOS_MIN_VERSION:-17.0}"
+    local min_flag="-mios-version-min=${IOS_MIN_VERSION:-16.0}"
     local work_dir="$CMAKE_BUILD_DIR/ios_sdk_compat"
     local source="$work_dir/ios_sdk_compat_symbols.mm"
     local object="$work_dir/ios_sdk_compat_symbols.o"
@@ -201,10 +201,10 @@ build_ios_sdk_compat_archive() {
     if [[ "$triplet" == "x64-ios-simulator" ]]; then
         arch="x86_64"
         sdk="iphonesimulator"
-        min_flag="-mios-simulator-version-min=${IOS_MIN_VERSION:-17.0}"
+        min_flag="-mios-simulator-version-min=${IOS_MIN_VERSION:-16.0}"
     elif [[ "$triplet" == "arm64-ios-simulator" ]]; then
         sdk="iphonesimulator"
-        min_flag="-mios-simulator-version-min=${IOS_MIN_VERSION:-17.0}"
+        min_flag="-mios-simulator-version-min=${IOS_MIN_VERSION:-16.0}"
     fi
 
     mkdir -p "$work_dir"

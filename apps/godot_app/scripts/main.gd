@@ -4370,8 +4370,12 @@ func _start_shell_scroll_drag(key: int, position: Vector2) -> void:
     var control := _control_at_pointer(position)
     var button := _nearest_base_button(control) if control != null else null
     shell_scroll_drag_states[key] = {
-        "scroll": scroll,
-        "control": control,
+        # Controls can be rebuilt between the touch press and the following
+        # drag/release event (for example after changing a settings selector).
+        # Keeping raw Object Variants here leaves a dangling pointer for the
+        # next `as Control`/`as ScrollContainer` cast in optimized builds.
+        "scroll_id": scroll.get_instance_id(),
+        "control_id": control.get_instance_id() if control != null else 0,
         "last": position,
         "last_motion_msec": Time.get_ticks_msec(),
         "velocity_y": 0.0,
@@ -4393,8 +4397,8 @@ func _update_shell_scroll_drag(
         state = shell_scroll_drag_states.get(key, {})
         if state.is_empty():
             return false
-    var scroll := state.get("scroll") as ScrollContainer
-    if scroll == null or not is_instance_valid(scroll) or not scroll.is_visible_in_tree():
+    var scroll := _shell_scroll_from_drag_state(state)
+    if scroll == null or not scroll.is_visible_in_tree():
         shell_scroll_drag_states.erase(key)
         return false
     var last_position := state.get("last", position) as Vector2
@@ -4431,7 +4435,7 @@ func _finish_shell_scroll_drag(key: int) -> bool:
     var dragging := bool(state.get("dragging", false))
     if dragging:
         _cancel_shell_scroll_press(state)
-        var scroll := state.get("scroll") as ScrollContainer
+        var scroll := _shell_scroll_from_drag_state(state)
         var last_motion_msec := int(state.get("last_motion_msec", 0))
         var velocity_is_fresh := Time.get_ticks_msec() - last_motion_msec <= SHELL_SCROLL_MOMENTUM_STALE_MSEC
         if key != SHELL_SCROLL_MOUSE_KEY and velocity_is_fresh and scroll != null and is_instance_valid(scroll):
@@ -4454,8 +4458,8 @@ func _reset_shell_scroll_drag() -> void:
 
 func _cancel_shell_scroll_press(state: Dictionary) -> void:
     get_viewport().gui_release_focus()
-    var control := state.get("control") as Control
-    if control == null or not is_instance_valid(control):
+    var control := _shell_control_from_drag_state(state)
+    if control == null:
         return
     control.release_focus()
     var button := _nearest_base_button(control)
@@ -4464,6 +4468,20 @@ func _cancel_shell_scroll_press(state: Dictionary) -> void:
         ui_motion.cancel_press(button)
         if not button.toggle_mode:
             button.set_pressed_no_signal(false)
+
+func _shell_scroll_from_drag_state(state: Dictionary) -> ScrollContainer:
+    var instance_id := int(state.get("scroll_id", 0))
+    if instance_id <= 0:
+        return null
+    var candidate := instance_from_id(instance_id)
+    return candidate as ScrollContainer if candidate is ScrollContainer else null
+
+func _shell_control_from_drag_state(state: Dictionary) -> Control:
+    var instance_id := int(state.get("control_id", 0))
+    if instance_id <= 0:
+        return null
+    var candidate := instance_from_id(instance_id)
+    return candidate as Control if candidate is Control else null
 
 func _nearest_base_button(control: Control) -> BaseButton:
     var current: Node = control
