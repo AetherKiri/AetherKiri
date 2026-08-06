@@ -16,8 +16,10 @@
 #include <cstring>
 #include <filesystem>
 #include <algorithm>
+#include <mutex>
 #include <set>
 #include <sys/stat.h>
+#include <unordered_map>
 #include <vector>
 #include "ArchiveAutoPathOrder.h"
 #include "MsgIntf.h"
@@ -366,6 +368,112 @@ const tTVPIOSApplicationHomePaths &TVPGetIOSApplicationHomePaths() {
     }
     return cache;
 }
+
+struct tTVPIOSDirectoryEntries {
+    bool readable = false;
+    std::unordered_map<std::string, std::string> names;
+};
+
+enum class tTVPIOSDirectoryLookup {
+    Unavailable,
+    Found,
+    Missing,
+};
+
+static std::mutex TVPIOSDirectoryCacheMutex;
+static std::unordered_map<std::string, tTVPIOSDirectoryEntries>
+    TVPIOSDirectoryCache;
+static constexpr size_t TVPIOSDirectoryCacheLimit = 1024;
+
+// Normalized KiriKiri paths lose ASCII casing. Cache each native directory's
+// folded names so resolving every resource does not enumerate it again.
+static std::string TVPIOSFoldFileName(const char *name) {
+    if(!name || !*name)
+        return {};
+
+    bool ascii = true;
+    std::string asciiFolded;
+    for(const unsigned char *p = reinterpret_cast<const unsigned char *>(name);
+        *p; ++p) {
+        if(*p >= 0x80) {
+            ascii = false;
+            break;
+        }
+        asciiFolded.push_back(static_cast<char>(std::tolower(*p)));
+    }
+    if(ascii)
+        return asciiFolded;
+
+    CFMutableStringRef value = CFStringCreateMutable(kCFAllocatorDefault, 0);
+    if(!value)
+        return {};
+    CFStringRef source = CFStringCreateWithCString(kCFAllocatorDefault, name,
+                                                   kCFStringEncodingUTF8);
+    if(!source) {
+        CFRelease(value);
+        return {};
+    }
+    CFStringAppend(value, source);
+    CFRelease(source);
+    CFStringFold(value, kCFCompareCaseInsensitive | kCFCompareNonliteral,
+                 nullptr);
+    CFStringNormalize(value, kCFStringNormalizationFormC);
+
+    const CFIndex length = CFStringGetLength(value);
+    const CFIndex capacity =
+        CFStringGetMaximumSizeForEncoding(length, kCFStringEncodingUTF8) + 1;
+    std::string result(static_cast<size_t>(capacity), '\0');
+    if(!CFStringGetCString(value, result.data(), capacity,
+                           kCFStringEncodingUTF8)) {
+        result.clear();
+    } else {
+        result.resize(std::strlen(result.c_str()));
+    }
+    CFRelease(value);
+    return result;
+}
+
+static tTVPIOSDirectoryEntries
+TVPReadIOSDirectoryEntries(const std::string &directory) {
+    tTVPIOSDirectoryEntries result;
+    DIR *dir = opendir(directory.c_str());
+    if(!dir)
+        return result;
+    result.readable = true;
+    while(dirent *entry = readdir(dir)) {
+        std::string folded = TVPIOSFoldFileName(entry->d_name);
+        if(!folded.empty())
+            result.names.emplace(std::move(folded), entry->d_name);
+    }
+    closedir(dir);
+    return result;
+}
+
+static tTVPIOSDirectoryLookup
+TVPFindIOSDirectoryEntry(const std::string &directory, const char *requested,
+                         std::string &actual) {
+    const std::string folded = TVPIOSFoldFileName(requested);
+    if(folded.empty())
+        return tTVPIOSDirectoryLookup::Unavailable;
+
+    std::lock_guard<std::mutex> lock(TVPIOSDirectoryCacheMutex);
+    auto directoryIt = TVPIOSDirectoryCache.find(directory);
+    if(directoryIt == TVPIOSDirectoryCache.end()) {
+        if(TVPIOSDirectoryCache.size() >= TVPIOSDirectoryCacheLimit)
+            TVPIOSDirectoryCache.clear();
+        directoryIt =
+            TVPIOSDirectoryCache
+                .emplace(directory, TVPReadIOSDirectoryEntries(directory))
+                .first;
+    }
+    if(!directoryIt->second.readable)
+        return tTVPIOSDirectoryLookup::Unavailable;
+    const auto entryIt = directoryIt->second.names.find(folded);
+    if(entryIt == directoryIt->second.names.end())
+        return tTVPIOSDirectoryLookup::Missing;
+    actual = entryIt->second;
+    return tTVPIOSDirectoryLookup::Found;
+}
 #endif // TARGET_OS_IPHONE
 
 //---------------------------------------------------------------------------
@@ -445,14 +553,22 @@ void tTVPFileMedia::GetLocallyAccessibleName(ttstr &name) {
     {
         std::string prefix = "/";
         prefix += tTJSNarrowStringHolder(ptr).Buf;
-        const auto &applicationHomePaths =
-            TVPGetIOSApplicationHomePaths();
+        const auto &applicationHomePaths = TVPGetIOSApplicationHomePaths();
         const auto &prefixPath = applicationHomePaths.prefixPaths;
         const auto &homeDir = applicationHomePaths.homeDirectories;
-        spdlog::debug("iOS GetLocallyAccessibleName: prefix='{}', homeDir count={}", prefix, homeDir.size());
+        const bool tracePathResolution =
+            spdlog::should_log(spdlog::level::debug);
+        if(tracePathResolution) {
+            spdlog::debug(
+                "iOS GetLocallyAccessibleName: prefix='{}', homeDir count={}",
+                prefix, homeDir.size());
+        }
         for(int i = 0; i < (int)prefixPath.size(); ++i) {
             const std::string &dir = homeDir[i];
-            spdlog::debug("  homeDir[{}]='{}' prefixPath[{}]='{}'", i, dir, i, prefixPath[i].AsNarrowStdString());
+            if(tracePathResolution) {
+                spdlog::debug("  homeDir[{}]='{}' prefixPath[{}]='{}'", i, dir,
+                              i, prefixPath[i].AsNarrowStdString());
+            }
             if(prefix.length() < dir.length())
                 continue;
             std::string actualPrefix = prefix.substr(0, dir.length());
@@ -461,7 +577,12 @@ void tTVPFileMedia::GetLocallyAccessibleName(ttstr &name) {
                 ptr += prefixPath[i].length();
                 while(*ptr && *ptr == TJS_W('/'))
                     ++ptr;
-                spdlog::debug("  iOS prefix matched! newname='{}', remaining ptr='{}'", newname.AsNarrowStdString(), tTJSNarrowStringHolder(ptr).Buf);
+                if(tracePathResolution) {
+                    spdlog::debug("  iOS prefix matched! newname='{}', "
+                                  "remaining ptr='{}'",
+                                  newname.AsNarrowStdString(),
+                                  tTJSNarrowStringHolder(ptr).Buf);
+                }
                 break;
             }
         }
@@ -478,6 +599,23 @@ void tTVPFileMedia::GetLocallyAccessibleName(ttstr &name) {
         while(*ptr_end && *ptr_end == TJS_W('/'))
             ++ptr_end;
         ptr = ptr_end;
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+        std::string directory = newname.AsNarrowStdString();
+        std::string actualName;
+        const auto lookup =
+            TVPFindIOSDirectoryEntry(directory, walker.Buf, actualName);
+        if(lookup == tTVPIOSDirectoryLookup::Found) {
+            newname += "/";
+            newname += actualName.c_str();
+            continue;
+        }
+        if(lookup == tTVPIOSDirectoryLookup::Missing) {
+            newname += "/";
+            newname += ptr_cur;
+            break;
+        }
+#endif
 
         DIR *dirp;
         struct dirent *direntp;
