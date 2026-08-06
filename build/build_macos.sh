@@ -164,6 +164,20 @@ else
             /usr/libexec/PlistBuddy \
                 -c 'Add :SKIncludeConsumableInAppPurchaseHistory bool true' \
                 "$GODOT_EXPORT_APP/Contents/Info.plist"
+        # The Apple release declares only encryption that is exempt from export
+        # documentation. Embed that policy in every macOS bundle so App Store
+        # Connect does not ask the same question on each upload.
+        /usr/libexec/PlistBuddy \
+            -c 'Set :ITSAppUsesNonExemptEncryption false' \
+            "$GODOT_EXPORT_APP/Contents/Info.plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy \
+                -c 'Add :ITSAppUsesNonExemptEncryption bool false' \
+                "$GODOT_EXPORT_APP/Contents/Info.plist"
+        if [[ "$(plutil -extract ITSAppUsesNonExemptEncryption raw \
+            "$GODOT_EXPORT_APP/Contents/Info.plist")" != "false" ]]; then
+            echo "Error: exported macOS app declares non-exempt encryption." >&2
+            exit 1
+        fi
         cp -f "$GODOT_BIN_DIR/libengine_api.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
         cp -f "$GODOT_BIN_DIR/libaether_kiri_godot.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
         echo "==> Thinning exported macOS executable to arm64"
