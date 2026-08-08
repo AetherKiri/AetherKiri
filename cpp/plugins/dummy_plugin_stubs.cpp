@@ -1448,7 +1448,17 @@ static void GlesCompatPostRegist() {
     GlesCompatRenderHook().Start();
 }
 
+static void GlesCompatPreUnregist() {
+    GlesCompatRenderHook().Stop();
+    {
+        std::lock_guard<std::mutex> lock(GlesCompatRenderMutex());
+        GlesCompatRenderables().clear();
+    }
+    g_glesCompatRegisteredLayer = nullptr;
+}
+
 NCB_POST_REGIST_CALLBACK(GlesCompatPostRegist);
+NCB_PRE_UNREGIST_CALLBACK(GlesCompatPreUnregist);
 
 NCB_ATTACH_FUNCTION_WITHTAG(getModule, WindowPassThroughDrawDeviceGlesCompat,
                             Window.PassThroughDrawDevice,

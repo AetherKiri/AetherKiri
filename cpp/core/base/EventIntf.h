@@ -23,6 +23,12 @@ extern void TVPDeliverAllEvents(); // called from (indirectly) the OS
 
 extern bool TVPEventDisabled; // do not write to this variable directly
 
+// Embedded hosts can run more than one title without terminating the host
+// process. Drop every session-owned queued/continuous event before the old
+// TJS world is released so callbacks from that world cannot leak into the
+// next title.
+extern void TVPResetEventsForHostSession();
+
 extern void TVPInvokeEvents();
 
 // implement this in each platform,

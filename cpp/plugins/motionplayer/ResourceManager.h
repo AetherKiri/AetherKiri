@@ -45,6 +45,7 @@ namespace motion {
         [[nodiscard]] static tjs_int getDecryptSeed() {
             return getEmotePSBDecryptSeed();
         }
+        static void resetStaticStateForHostSession();
 
         static tjs_error setEmotePSBDecryptSeed(tTJSVariant *r, tjs_int count,
                                                 tTJSVariant **p,

@@ -14,4 +14,10 @@
 #include "EventIntf.h"
 
 //---------------------------------------------------------------------------
+// Release platform event producer threads for every embedded title session.
+// The legacy AtExit registry only runs once per process and is therefore not
+// sufficient when the host returns to its library and opens another title.
+extern void TVPResetEventPlatformForHostSession();
+
+//---------------------------------------------------------------------------
 #endif

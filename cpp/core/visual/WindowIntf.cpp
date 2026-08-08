@@ -84,6 +84,19 @@ void TVPClearAllWindowInputEvents() {
         (*i)->ClearInputEvents();
     }
 }
+
+//---------------------------------------------------------------------------
+// The embedded host keeps the process alive after System.exit. Script-engine
+// shutdown owns Window invalidation; trying to invalidate the same TJS owner
+// here can recursively finalize a multi-window object graph. Once shutdown is
+// complete, detach any entries retained by script-side reference cycles so a
+// later session never observes an old main window. A surviving native object
+// may unregister itself later; TVPUnregisterWindowToList already tolerates an
+// absent entry.
+void TVPResetWindowRegistryForHostSession() {
+    TVPWindowVector.clear();
+    TVPMainWindow = nullptr;
+}
 //---------------------------------------------------------------------------
 
 #if 0

@@ -1020,8 +1020,16 @@ void tTVPApplication::OnExit() {
 
     delete TVPSystemControl;
     TVPSystemControl = nullptr;
+    TVPSystemControlAlive = false;
 
     CloseConsole();
+}
+
+void tTVPApplication::ResetForHostSession() {
+    tarminate_ = false;
+    application_activating_ = true;
+    _project_startup = false;
+    m_activeEvents.clear();
 }
 
 void tTVPApplication::OnLowMemory() {
