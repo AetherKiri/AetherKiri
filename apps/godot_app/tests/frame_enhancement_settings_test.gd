@@ -8,6 +8,9 @@ func _initialize() -> void:
     var snapshot: Dictionary = app._current_settings_snapshot()
     assert(bool(snapshot.get("frame_enhancement_enabled", false)))
     assert("frame_enhancement_enabled" in app.SETTINGS_DRAFT_KEYS)
+    assert(app.frame_enhancement_mode == "anime4k")
+    assert(String(snapshot.get("frame_enhancement_mode", "")) == "anime4k")
+    assert("frame_enhancement_mode" in app.SETTINGS_DRAFT_KEYS)
     assert(app.output_resolution == "1080p")
     assert(String(snapshot.get("output_resolution", "")) == "1080p")
     assert("output_resolution" in app.SETTINGS_DRAFT_KEYS)
@@ -49,6 +52,19 @@ func _initialize() -> void:
     assert(app._normalize_output_resolution("1440p") == "2k")
     assert(app._normalize_output_resolution("2160p") == "4k")
 
+    snapshot = app._current_settings_snapshot()
+    snapshot["frame_enhancement_mode"] = "fsr1"
+    app._apply_settings_snapshot(snapshot)
+    assert(app.frame_enhancement_mode == "fsr1")
+    snapshot["frame_enhancement_mode"] = "lanczos"
+    app._apply_settings_snapshot(snapshot)
+    assert(app.frame_enhancement_mode == "lanczos")
+    snapshot["frame_enhancement_mode"] = "invalid"
+    app._apply_settings_snapshot(snapshot)
+    assert(app.frame_enhancement_mode == "anime4k")
+    assert(app._normalize_frame_enhancement_mode("auto") == "anime4k")
+    assert(app._normalize_frame_enhancement_mode("bicubic") == "bicubic")
+
     for language in ["zh_hans", "zh_hant", "en", "ja", "ko"]:
         app.active_language = language
         assert(not String(app._t("settings.output_resolution")).is_empty())
@@ -57,6 +73,10 @@ func _initialize() -> void:
         assert(not String(app._t("settings.frame_enhancement")).is_empty())
         assert(not String(app._t("settings.frame_enhancement_desc")).is_empty())
         assert(not String(app._t("settings.frame_enhancement_unavailable_desc")).is_empty())
+        assert(not String(app._t("settings.frame_enhancement_mode")).is_empty())
+        assert(not String(app._t("settings.frame_enhancement_mode_desc")).is_empty())
+        for mode in app.FRAME_ENHANCEMENT_MODES:
+            assert(not String(app._t("settings.frame_enhancement_mode.%s" % mode)).is_empty())
 
     app.free()
     quit(0)

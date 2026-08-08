@@ -7,7 +7,7 @@ func _initialize() -> void:
 
     assert(not player.is_frame_enhancement_built())
     assert(not player.is_frame_enhancement_available())
-    player.set_frame_enhancement_mode("auto")
+    player.set_frame_enhancement_mode("fsr1")
     player.set_frame_enhancement_target_size(1280, 720)
     player.set_frame_enhancement_enabled(true)
 

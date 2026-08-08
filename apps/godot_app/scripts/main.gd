@@ -161,6 +161,12 @@ const UI_TEXT := {
         "settings.frame_enhancement": "画面增强",
         "settings.frame_enhancement_desc": "使用 GPU 修复线条，并按输出分辨率高质量放大；保存后立即生效",
         "settings.frame_enhancement_unavailable_desc": "当前构建或图形设备不支持画面增强；开启后仍会安全使用原始画面",
+        "settings.frame_enhancement_mode": "增强算法",
+        "settings.frame_enhancement_mode_desc": "Anime4K 适合动漫线条；FSR1 更通用；Bicubic 更柔和；Lanczos 更清晰",
+        "settings.frame_enhancement_mode.anime4k": "Anime4K + FSR1（推荐）",
+        "settings.frame_enhancement_mode.fsr1": "FSR1（通用）",
+        "settings.frame_enhancement_mode.bicubic": "Bicubic（柔和）",
+        "settings.frame_enhancement_mode.lanczos": "Lanczos（清晰）",
         "settings.perf": "性能监控",
         "settings.perf_desc": "显示帧率、进程内存、GPU 内存估算和图形 API 信息",
         "settings.fps_limit": "帧率限制",
@@ -368,6 +374,12 @@ const UI_TEXT := {
         "settings.frame_enhancement": "畫面增強",
         "settings.frame_enhancement_desc": "使用 GPU 修復線條，並依輸出解析度高品質放大；儲存後立即生效",
         "settings.frame_enhancement_unavailable_desc": "目前建置或圖形裝置不支援畫面增強；開啟後仍會安全使用原始畫面",
+        "settings.frame_enhancement_mode": "增強演算法",
+        "settings.frame_enhancement_mode_desc": "Anime4K 適合動漫線條；FSR1 較通用；Bicubic 較柔和；Lanczos 較清晰",
+        "settings.frame_enhancement_mode.anime4k": "Anime4K + FSR1（建議）",
+        "settings.frame_enhancement_mode.fsr1": "FSR1（通用）",
+        "settings.frame_enhancement_mode.bicubic": "Bicubic（柔和）",
+        "settings.frame_enhancement_mode.lanczos": "Lanczos（清晰）",
         "settings.perf": "效能監控",
         "settings.perf_desc": "顯示幀率、程序記憶體、GPU 記憶體估算和圖形 API 資訊",
         "settings.fps_limit": "幀率限制",
@@ -575,6 +587,12 @@ const UI_TEXT := {
         "settings.frame_enhancement": "Image Enhancement",
         "settings.frame_enhancement_desc": "Use the GPU to restore lines and upscale to the selected output resolution; applies immediately after saving",
         "settings.frame_enhancement_unavailable_desc": "Image enhancement is unavailable in this build or on this graphics device; the original frame remains safe",
+        "settings.frame_enhancement_mode": "Enhancement Algorithm",
+        "settings.frame_enhancement_mode_desc": "Anime4K targets anime line art; FSR1 is general purpose; Bicubic is softer; Lanczos is sharper",
+        "settings.frame_enhancement_mode.anime4k": "Anime4K + FSR1 (Recommended)",
+        "settings.frame_enhancement_mode.fsr1": "FSR1 (General)",
+        "settings.frame_enhancement_mode.bicubic": "Bicubic (Soft)",
+        "settings.frame_enhancement_mode.lanczos": "Lanczos (Sharp)",
         "settings.perf": "Performance Monitor",
         "settings.perf_desc": "Show FPS, process memory, estimated GPU memory, and graphics API information",
         "settings.fps_limit": "FPS Limit",
@@ -782,6 +800,12 @@ const UI_TEXT := {
         "settings.frame_enhancement": "画質強化",
         "settings.frame_enhancement_desc": "GPU で線を修復し、選択した出力解像度へ高品質に拡大します。保存後すぐに反映されます",
         "settings.frame_enhancement_unavailable_desc": "このビルドまたはグラフィックスデバイスでは画質強化を利用できません。元の映像を安全に表示します",
+        "settings.frame_enhancement_mode": "強化アルゴリズム",
+        "settings.frame_enhancement_mode_desc": "Anime4K はアニメの線画向け、FSR1 は汎用、Bicubic は柔らかく、Lanczos は鮮明です",
+        "settings.frame_enhancement_mode.anime4k": "Anime4K + FSR1（推奨）",
+        "settings.frame_enhancement_mode.fsr1": "FSR1（汎用）",
+        "settings.frame_enhancement_mode.bicubic": "Bicubic（ソフト）",
+        "settings.frame_enhancement_mode.lanczos": "Lanczos（シャープ）",
         "settings.perf": "パフォーマンス監視",
         "settings.perf_desc": "FPS、プロセスメモリ、GPU メモリ推定値、グラフィックス API 情報を表示します",
         "settings.fps_limit": "FPS 制限",
@@ -989,6 +1013,12 @@ const UI_TEXT := {
         "settings.frame_enhancement": "화질 향상",
         "settings.frame_enhancement_desc": "GPU로 선을 복원하고 선택한 출력 해상도로 고품질 확대합니다. 저장 후 즉시 적용됩니다",
         "settings.frame_enhancement_unavailable_desc": "현재 빌드 또는 그래픽 장치에서는 화질 향상을 사용할 수 없습니다. 원본 화면은 안전하게 유지됩니다",
+        "settings.frame_enhancement_mode": "향상 알고리즘",
+        "settings.frame_enhancement_mode_desc": "Anime4K는 애니메이션 선화용, FSR1은 범용, Bicubic은 부드럽고 Lanczos는 선명합니다",
+        "settings.frame_enhancement_mode.anime4k": "Anime4K + FSR1(권장)",
+        "settings.frame_enhancement_mode.fsr1": "FSR1(범용)",
+        "settings.frame_enhancement_mode.bicubic": "Bicubic(부드럽게)",
+        "settings.frame_enhancement_mode.lanczos": "Lanczos(선명하게)",
         "settings.perf": "성능 모니터",
         "settings.perf_desc": "FPS, 프로세스 메모리, GPU 메모리 추정치와 그래픽 API 정보를 표시합니다",
         "settings.fps_limit": "FPS 제한",
@@ -1165,6 +1195,7 @@ const SETTINGS_DRAFT_KEYS := [
     "output_resolution",
     "surface_mode",
     "frame_enhancement_enabled",
+    "frame_enhancement_mode",
     "diagnostic_profile",
     "debug_overlay_mode",
     "fps_limit_enabled",
@@ -1341,6 +1372,7 @@ var upscale_algorithm := "smooth"
 var output_resolution := OUTPUT_RESOLUTION_DEFAULT
 var render_surface_mode := "game"
 var frame_enhancement_enabled := false
+var frame_enhancement_mode := FRAME_ENHANCEMENT_MODE_DEFAULT
 var game_running := false
 var runtime_dialog_input: LineEdit = null
 var video_playing := false
@@ -1490,6 +1522,8 @@ const RENDER_SURFACE_MODE_GAME := "game"
 const RENDER_SURFACE_MODE_DISPLAY := "display"
 const OUTPUT_RESOLUTION_DEFAULT := "1080p"
 const OUTPUT_RESOLUTION_MODES := ["original", "1080p", "2k", "4k"]
+const FRAME_ENHANCEMENT_MODE_DEFAULT := "anime4k"
+const FRAME_ENHANCEMENT_MODES := ["anime4k", "fsr1", "bicubic", "lanczos"]
 const OUTPUT_RESOLUTION_LIMITS := {
     "1080p": Vector2i(1920, 1080),
     "2k": Vector2i(2560, 1440),
@@ -2625,6 +2659,11 @@ func _load_shell_settings() -> void:
         "frame_enhancement_enabled",
         frame_enhancement_enabled
     ))
+    frame_enhancement_mode = _normalize_frame_enhancement_mode(String(cfg.get_value(
+        "rendering",
+        "frame_enhancement_mode",
+        frame_enhancement_mode
+    )))
     var legacy_perf_overlay := bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
     debug_overlay_mode = String(cfg.get_value("diagnostics", "overlay_mode", "summary" if legacy_perf_overlay else "off"))
     if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
@@ -2683,6 +2722,7 @@ func _save_shell_settings() -> void:
     cfg.set_value("rendering", "output_resolution", output_resolution)
     cfg.set_value("rendering", "surface_mode", render_surface_mode)
     cfg.set_value("rendering", "frame_enhancement_enabled", frame_enhancement_enabled)
+    cfg.set_value("rendering", "frame_enhancement_mode", frame_enhancement_mode)
     cfg.set_value("diagnostics", "profile", diagnostic_profile)
     cfg.set_value("diagnostics", "overlay_mode", debug_overlay_mode)
     cfg.set_value("rendering", "fps_limit_enabled", frame_limit_enabled)
@@ -2720,6 +2760,7 @@ func _current_settings_snapshot() -> Dictionary:
         "output_resolution": output_resolution,
         "surface_mode": render_surface_mode,
         "frame_enhancement_enabled": frame_enhancement_enabled,
+        "frame_enhancement_mode": frame_enhancement_mode,
         "diagnostic_profile": diagnostic_profile,
         "debug_overlay_mode": debug_overlay_mode,
         "fps_limit_enabled": frame_limit_enabled,
@@ -2868,6 +2909,10 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
         "frame_enhancement_enabled",
         frame_enhancement_enabled
     ))
+    frame_enhancement_mode = _normalize_frame_enhancement_mode(String(snapshot.get(
+        "frame_enhancement_mode",
+        frame_enhancement_mode
+    )))
     diagnostic_profile = String(snapshot.get("diagnostic_profile", diagnostic_profile))
     if not diagnostic_profile in DIAGNOSTIC_PROFILES:
         diagnostic_profile = "baseline" if OS.is_debug_build() else "off"
@@ -2968,7 +3013,7 @@ func _apply_frame_enhancement_settings() -> void:
         return
     if player.has_method("set_frame_native_output_enabled"):
         player.set_frame_native_output_enabled(output_resolution == "original")
-    player.set_frame_enhancement_mode("auto")
+    player.set_frame_enhancement_mode(frame_enhancement_mode)
     player.set_frame_enhancement_enabled(frame_enhancement_enabled)
 
 func _frame_enhancement_description() -> String:
@@ -3766,6 +3811,13 @@ func _rebuild_settings_view() -> void:
         _settings_draft_bool("frame_enhancement_enabled", frame_enhancement_enabled),
         "frame_enhancement"
     ))
+    if _settings_draft_bool("frame_enhancement_enabled", frame_enhancement_enabled):
+        _add_settings_row(render_group, _settings_block(
+            _t("settings.frame_enhancement_mode"),
+            _t("settings.frame_enhancement_mode_desc"),
+            _frame_enhancement_mode_select(),
+            stack_settings_controls
+        ))
     _add_settings_row(render_group, _settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
     if _settings_draft_bool("fps_limit_enabled", frame_limit_enabled):
         _add_settings_row(render_group, _settings_fps_row())
@@ -5346,6 +5398,24 @@ func _output_resolution_select() -> Control:
     )
     return select
 
+func _frame_enhancement_mode_select() -> Control:
+    var select = _apple_select()
+    var selected_index := 0
+    var draft_mode := _normalize_frame_enhancement_mode(_settings_draft_string(
+        "frame_enhancement_mode",
+        frame_enhancement_mode
+    ))
+    for value in FRAME_ENHANCEMENT_MODES:
+        select.add_item(_t("settings.frame_enhancement_mode.%s" % value))
+        select.set_item_metadata(select.item_count - 1, value)
+        if value == draft_mode:
+            selected_index = select.item_count - 1
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_frame_enhancement_mode(String(select.get_item_metadata(index)))
+    )
+    return select
+
 func _surface_mode_select() -> Control:
     var select = _apple_select()
     var options := [
@@ -5448,7 +5518,7 @@ func _on_setting_toggle(key: String, value: bool) -> void:
         }.get(key, ""))
         if not option.is_empty():
             _set_advanced_tool(option, value)
-    if key == "fps_limit":
+    if key == "fps_limit" or key == "frame_enhancement":
         call_deferred("_rebuild_settings_view")
 
 func _select_backend(value: String) -> void:
@@ -5475,6 +5545,18 @@ func _select_output_resolution(value: String) -> void:
     if normalized != value.strip_edges().to_lower():
         return
     _set_settings_draft_value("output_resolution", normalized)
+
+func _normalize_frame_enhancement_mode(value: String) -> String:
+    var normalized := value.strip_edges().to_lower()
+    if normalized == "auto":
+        normalized = FRAME_ENHANCEMENT_MODE_DEFAULT
+    return normalized if normalized in FRAME_ENHANCEMENT_MODES else FRAME_ENHANCEMENT_MODE_DEFAULT
+
+func _select_frame_enhancement_mode(value: String) -> void:
+    var normalized := _normalize_frame_enhancement_mode(value)
+    if normalized != value.strip_edges().to_lower():
+        return
+    _set_settings_draft_value("frame_enhancement_mode", normalized)
 
 func _default_render_surface_mode() -> String:
     return RENDER_SURFACE_MODE_GAME
@@ -10574,8 +10656,9 @@ func _process(delta: float) -> void:
             var effect_status: Dictionary = player.get_frame_enhancement_status()
             var effect_provider: Dictionary = effect_status.get("provider", {})
             var effect_state := "active" if bool(effect_status.get("active", false)) else ("waiting" if bool(effect_status.get("enabled", false)) else "off")
-            summary_text += "\nEnhancement: %s | Source: %dx%d | Output: %dx%d | Raw: %s | Anime4K runs: %d | Pipeline: %s" % [
+            summary_text += "\nEnhancement: %s | Mode: %s | Source: %dx%d | Output: %dx%d | Raw: %s | Anime4K runs: %d | Pipeline: %s" % [
                 effect_state,
+                frame_enhancement_mode,
                 int(effect_status.get("source_width", 0)),
                 int(effect_status.get("source_height", 0)),
                 last_texture_size.x,

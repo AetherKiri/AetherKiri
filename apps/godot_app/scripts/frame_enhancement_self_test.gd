@@ -22,26 +22,33 @@ func _initialize() -> void:
     var ok := bool(result.get("ok", false))
     for algorithm in expected:
         ok = ok and algorithms.has(algorithm)
-    ok = ok and int(result.get("width", 0)) == 25
-    ok = ok and int(result.get("height", 0)) == 25
+    ok = ok and int(result.get("width", 0)) == 26
+    ok = ok and int(result.get("height", 0)) == 26
     ok = ok and int(result.get("visible_pixels", 0)) > 0
-    ok = ok and int(result.get("opaque_pixels", 0)) == 25 * 25
+    ok = ok and int(result.get("opaque_pixels", 0)) == 26 * 26
     var pipelines: Array = result.get("pipelines", [])
-    ok = ok and pipelines.size() == 3
+    ok = ok and pipelines.size() == 4
+    ok = ok and String(pipelines[0]).contains("protected")
     ok = ok and String(pipelines[0]).contains("fsr1_easu")
-    ok = ok and String(pipelines[1]).contains("bicubic")
-    ok = ok and String(pipelines[2]).contains("lanczos")
+    ok = ok and not String(pipelines[1]).contains("protected")
+    ok = ok and String(pipelines[1]).contains("fsr1_easu")
+    ok = ok and not String(pipelines[2]).contains("protected")
+    ok = ok and String(pipelines[2]).contains("bicubic")
+    ok = ok and not String(pipelines[3]).contains("protected")
+    ok = ok and String(pipelines[3]).contains("lanczos")
     for pipeline in pipelines:
         ok = ok and not String(pipeline).contains("fxaa")
         ok = ok and not String(pipeline).contains("deband")
-        ok = ok and String(pipeline).contains("protected")
         ok = ok and String(pipeline).contains("fsr1_rcas_low")
+    var profiles: Array = provider.get("profiles", [])
+    for profile in ["anime4k", "fsr1", "bicubic", "lanczos"]:
+        ok = ok and profiles.has(profile)
     var default_algorithms: Array = provider.get("default_algorithms", [])
     ok = ok and default_algorithms.has("Anime4K Restore CNN Soft S (detail protected)")
     ok = ok and default_algorithms.has("FSR1 RCAS (low strength)")
-    ok = ok and int(result.get("processed_delta", 0)) == 3
-    ok = ok and int(result.get("anime4k_restore_run_delta", 0)) == 3
-    ok = ok and int(result.get("anime4k_restore_pass_delta", 0)) == 12
+    ok = ok and int(result.get("processed_delta", 0)) == 4
+    ok = ok and int(result.get("anime4k_restore_run_delta", 0)) == 1
+    ok = ok and int(result.get("anime4k_restore_pass_delta", 0)) == 4
 
     var user_root := OS.get_user_data_dir()
     ok = ok and player.initialize_engine(user_root, user_root.path_join("cache"))

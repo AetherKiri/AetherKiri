@@ -7603,8 +7603,9 @@ public:
         String error;
         Array pipelines;
         bool ok = true;
-        const std::array<String, 3> modes = {"auto", "bicubic", "lanczos"};
-        const std::array<uint32_t, 3> target_sizes = {24u, 23u, 25u};
+        const std::array<String, 4> modes = {
+            "anime4k", "fsr1", "bicubic", "lanczos"};
+        const std::array<uint32_t, 4> target_sizes = {24u, 22u, 23u, 26u};
         for (size_t index = 0; index < modes.size(); ++index) {
             request.target_width = target_sizes[index];
             request.target_height = target_sizes[index];
@@ -7638,9 +7639,11 @@ public:
         const int64_t restore_pass_delta = static_cast<int64_t>(
             provider_status.get("anime4k_restore_pass_dispatches", 0)) -
             initial_restore_passes;
-        ok = ok && processed_delta == 3 && cache_hit_delta >= 1 &&
-            restore_run_delta == processed_delta &&
-            restore_pass_delta == restore_run_delta * 4;
+        // Only the Anime4K profile may run Restore, and it must run exactly one
+        // four-pass chain for the frame. The three general scaler profiles must
+        // not invoke Anime4K implicitly.
+        ok = ok && processed_delta == 4 && cache_hit_delta >= 1 &&
+            restore_run_delta == 1 && restore_pass_delta == 4;
 
         int64_t visible_pixels = 0;
         int64_t opaque_pixels = 0;
