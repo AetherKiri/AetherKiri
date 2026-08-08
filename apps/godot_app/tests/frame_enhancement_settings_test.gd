@@ -75,8 +75,13 @@ func _initialize() -> void:
         assert(not String(app._t("settings.frame_enhancement_unavailable_desc")).is_empty())
         assert(not String(app._t("settings.frame_enhancement_mode")).is_empty())
         assert(not String(app._t("settings.frame_enhancement_mode_desc")).is_empty())
+        var public_effect_copy := String(app._t("settings.frame_enhancement_mode_desc")).to_lower()
         for mode in app.FRAME_ENHANCEMENT_MODES:
-            assert(not String(app._t("settings.frame_enhancement_mode.%s" % mode)).is_empty())
+            var effect_label := String(app._t("settings.frame_enhancement_mode.%s" % mode))
+            assert(not effect_label.is_empty())
+            public_effect_copy += " " + effect_label.to_lower()
+        for private_name in ["anime4k", "fsr1", "bicubic", "lanczos"]:
+            assert(not public_effect_copy.contains(private_name))
 
     app.free()
     quit(0)
