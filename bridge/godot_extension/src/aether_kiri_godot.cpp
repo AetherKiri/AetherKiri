@@ -6682,6 +6682,22 @@ public:
         sync_frame_effect_source_mode();
     }
 
+    void set_frame_enhancement_custom_chain(const PackedStringArray &chain) {
+        PackedStringArray normalized;
+        for (int64_t index = 0; index < chain.size(); ++index) {
+            const String algorithm = chain[index].strip_edges().to_lower();
+            if (!algorithm.is_empty()) normalized.push_back(algorithm);
+        }
+        if (normalized == frame_effect_custom_chain_) return;
+        frame_effect_custom_chain_ = normalized;
+        frame_effect_active_ = false;
+        frame_effect_bypass_due_to_error_ = false;
+        if (frame_effect_provider_ != nullptr) {
+            frame_effect_provider_->release(main_rendering_device());
+        }
+        sync_frame_effect_source_mode();
+    }
+
     void set_frame_enhancement_target_size(int width, int height) {
         frame_effect_target_width_ = static_cast<uint32_t>(std::max(0, width));
         frame_effect_target_height_ = static_cast<uint32_t>(std::max(0, height));
@@ -6698,6 +6714,7 @@ public:
         result["enabled"] = frame_effect_enabled_;
         result["active"] = frame_effect_active_;
         result["mode"] = frame_effect_mode_;
+        result["custom_chain"] = frame_effect_custom_chain_;
         result["pipeline"] = frame_effect_pipeline_;
         result["error"] = frame_effect_error_;
         result["source_width"] = static_cast<int64_t>(frame_source_width_);
@@ -7382,6 +7399,7 @@ public:
             : frame_source_height_;
         request.frame_serial = frame_texture_serial_;
         request.mode = frame_effect_mode_;
+        request.custom_chain = frame_effect_custom_chain_;
 
         FrameEffectOutput output;
         String error;
@@ -7795,6 +7813,164 @@ public:
                 String::num_int64(request.target_height));
             exact_resolution_bytes.push_back(exact_pixels.size());
         }
+
+        // Compile and execute every algorithm exposed by the custom-chain UI
+        // as an independent graph. Keeping these tests small avoids combining
+        // multiple fixed 2x stages into an impractically large texture while
+        // still exercising their real Metal pipelines and size semantics.
+        const std::array<String, 16> custom_algorithms = {
+            "anime4k_upscale_s", "anime4k_upscale_l", "anime4k_upscale_vl",
+            "anime4k_restore_s", "anime4k_restore_soft_s",
+            "anime4k_restore_soft_m", "anime4k_restore_l",
+            "anime4k_restore_vl", "fsr1_easu", "fsr1_rcas", "bicubic",
+            "lanczos", "fxaa", "ravu_lite_r2", "cunny_2x4c",
+            "nnedi3_nns16"};
+        const std::array<String, 6> custom_double_algorithms = {
+            "anime4k_upscale_s", "anime4k_upscale_l",
+            "anime4k_upscale_vl", "ravu_lite_r2", "cunny_2x4c",
+            "nnedi3_nns16"};
+        const std::array<String, 3> custom_fit_algorithms = {
+            "fsr1_easu", "bicubic", "lanczos"};
+        Array custom_algorithm_names;
+        Array custom_stage_orders;
+        Array custom_dispatch_counts;
+        request.mode = "custom";
+        for (size_t index = 0; index < custom_algorithms.size(); ++index) {
+            custom_algorithm_names.push_back(custom_algorithms[index]);
+            request.custom_chain.clear();
+            request.custom_chain.push_back(custom_algorithms[index]);
+            const bool doubles = std::find(
+                custom_double_algorithms.begin(), custom_double_algorithms.end(),
+                custom_algorithms[index]) != custom_double_algorithms.end();
+            const bool fits = std::find(
+                custom_fit_algorithms.begin(), custom_fit_algorithms.end(),
+                custom_algorithms[index]) != custom_fit_algorithms.end();
+            request.target_width = doubles ? 32u : (fits ? 23u : 16u);
+            request.target_height = request.target_width;
+            request.frame_serial = static_cast<uint64_t>(200u + index);
+            FrameEffectOutput custom_output;
+            String custom_error;
+            const bool custom_ok = frame_effect_provider_->process(
+                request, &custom_output, &custom_error);
+            if (!custom_error.is_empty()) error = custom_error;
+            RID custom_rid;
+            if (server != nullptr && custom_output.texture.is_valid()) {
+                custom_rid = server->texture_get_rd_texture(
+                    custom_output.texture->get_rid());
+            }
+            PackedByteArray custom_pixels;
+            if (custom_rid.is_valid()) {
+                custom_pixels = rd->texture_get_data(custom_rid, 0);
+            }
+            const int64_t custom_expected_bytes =
+                static_cast<int64_t>(request.target_width) *
+                request.target_height * 4;
+            const bool custom_alpha_ok =
+                custom_pixels.size() == custom_expected_bytes &&
+                custom_pixels.size() >= 4 && custom_pixels[3] == 255 &&
+                custom_pixels[custom_pixels.size() - 1] == 255;
+            ok = ok && custom_ok && custom_output.texture.is_valid() &&
+                custom_output.width == request.target_width &&
+                custom_output.height == request.target_height &&
+                custom_alpha_ok;
+            const Dictionary custom_pass_status =
+                frame_effect_provider_->status().get("chain", Dictionary());
+            const Array custom_order =
+                custom_pass_status.get("stage_order", Array());
+            ok = ok && custom_order.size() == 1 &&
+                custom_order[0] == custom_algorithms[index];
+            custom_stage_orders.push_back(custom_order);
+            custom_dispatch_counts.push_back(
+                custom_pass_status.get("last_dispatch_count", 0));
+        }
+
+        request.custom_chain = PackedStringArray();
+        request.custom_chain.push_back("anime4k_upscale_s");
+        request.custom_chain.push_back("bicubic");
+        request.custom_chain.push_back("anime4k_restore_soft_s");
+        request.custom_chain.push_back("fsr1_rcas");
+        request.target_width = 30u;
+        request.target_height = 30u;
+        request.frame_serial = 300u;
+        FrameEffectOutput ordered_custom_output;
+        String ordered_custom_error;
+        const bool ordered_custom_ok = frame_effect_provider_->process(
+            request, &ordered_custom_output, &ordered_custom_error);
+        if (!ordered_custom_error.is_empty()) error = ordered_custom_error;
+        Dictionary ordered_custom_status =
+            frame_effect_provider_->status().get("chain", Dictionary());
+        const Array ordered_custom_stages =
+            ordered_custom_status.get("stage_order", Array());
+        const Array expected_custom_stages = Array::make(
+            "anime4k_upscale_s", "bicubic",
+            "anime4k_restore_soft_s", "fsr1_rcas");
+        ok = ok && ordered_custom_ok &&
+            ordered_custom_output.texture.is_valid() &&
+            ordered_custom_output.width == 30u &&
+            ordered_custom_output.height == 30u &&
+            ordered_custom_stages == expected_custom_stages;
+
+        const int64_t custom_cache_hits_before = static_cast<int64_t>(
+            ordered_custom_status.get("cache_hits", 0));
+        const int64_t custom_reuse_hits_before = static_cast<int64_t>(
+            ordered_custom_status.get("texture_reuse_hits", 0));
+        FrameEffectOutput custom_cached_output;
+        String custom_cached_error;
+        const bool custom_cached_ok = frame_effect_provider_->process(
+            request, &custom_cached_output, &custom_cached_error);
+        request.frame_serial = 301u;
+        FrameEffectOutput custom_reused_output;
+        String custom_reused_error;
+        const bool custom_reused_ok = frame_effect_provider_->process(
+            request, &custom_reused_output, &custom_reused_error);
+        if (!custom_cached_error.is_empty()) error = custom_cached_error;
+        if (!custom_reused_error.is_empty()) error = custom_reused_error;
+        const Dictionary custom_reused_status =
+            frame_effect_provider_->status().get("chain", Dictionary());
+        const bool custom_cache_verified = custom_cached_ok &&
+            custom_reused_ok &&
+            custom_cached_output.texture == ordered_custom_output.texture &&
+            custom_reused_output.texture != ordered_custom_output.texture &&
+            static_cast<int64_t>(custom_reused_status.get("cache_hits", 0)) ==
+                custom_cache_hits_before + 1 &&
+            static_cast<int64_t>(custom_reused_status.get(
+                "texture_reuse_hits", 0)) == custom_reuse_hits_before + 1;
+        ok = ok && custom_cache_verified;
+
+        // An empty custom list is valid. It receives only the documented
+        // implicit final fit when source and target dimensions differ.
+        request.custom_chain.clear();
+        request.target_width = 24u;
+        request.target_height = 24u;
+        request.frame_serial = 302u;
+        FrameEffectOutput empty_custom_output;
+        String empty_custom_error;
+        const bool empty_custom_ok = frame_effect_provider_->process(
+            request, &empty_custom_output, &empty_custom_error);
+        if (!empty_custom_error.is_empty()) error = empty_custom_error;
+        const Dictionary empty_custom_status =
+            frame_effect_provider_->status().get("chain", Dictionary());
+        const Array empty_custom_stages =
+            empty_custom_status.get("stage_order", Array());
+        ok = ok && empty_custom_ok && empty_custom_output.texture.is_valid() &&
+            empty_custom_stages == Array::make("implicit_output_fit");
+
+        request.custom_chain.push_back("not_an_algorithm");
+        request.frame_serial = 303u;
+        FrameEffectOutput invalid_custom_output;
+        String invalid_custom_error;
+        const bool invalid_custom_ok = frame_effect_provider_->process(
+            request, &invalid_custom_output, &invalid_custom_error);
+        ok = ok && !invalid_custom_ok &&
+            invalid_custom_error.begins_with("unknown_custom_algorithm:");
+
+        const Dictionary final_custom_provider_status =
+            frame_effect_provider_->status();
+        const int64_t custom_pipeline_delta = static_cast<int64_t>(
+            final_custom_provider_status.get("compiled_pipeline_count", 0)) -
+            static_cast<int64_t>(provider_status.get(
+                "compiled_pipeline_count", 0));
+        ok = ok && custom_pipeline_delta == 10;
         result["ok"] = ok;
         result["error"] = error;
         result["width"] = static_cast<int64_t>(output.width);
@@ -7823,6 +7999,14 @@ public:
         result["uniform_set_cache_hit_delta"] = uniform_set_cache_hit_delta;
         result["exact_resolution_sizes"] = exact_resolution_sizes;
         result["exact_resolution_bytes"] = exact_resolution_bytes;
+        result["custom_algorithms"] = custom_algorithm_names;
+        result["custom_stage_orders"] = custom_stage_orders;
+        result["custom_dispatch_counts"] = custom_dispatch_counts;
+        result["ordered_custom_stages"] = ordered_custom_stages;
+        result["empty_custom_stages"] = empty_custom_stages;
+        result["invalid_custom_error"] = invalid_custom_error;
+        result["custom_pipeline_delta"] = custom_pipeline_delta;
+        result["custom_cache_verified"] = custom_cache_verified;
 
         frame_effect_provider_->release(rd);
         frame_effect_provider_->set_enabled(previous_enabled);
@@ -8320,6 +8504,8 @@ protected:
                              &AetherKiriPlayer::set_frame_native_output_enabled);
         ClassDB::bind_method(D_METHOD("set_frame_enhancement_mode", "mode"),
                              &AetherKiriPlayer::set_frame_enhancement_mode);
+        ClassDB::bind_method(D_METHOD("set_frame_enhancement_custom_chain", "chain"),
+                             &AetherKiriPlayer::set_frame_enhancement_custom_chain);
         ClassDB::bind_method(D_METHOD("set_frame_enhancement_target_size", "width", "height"),
                              &AetherKiriPlayer::set_frame_enhancement_target_size);
         ClassDB::bind_method(D_METHOD("get_frame_source_size"),
@@ -8744,6 +8930,7 @@ private:
     bool frame_effect_raw_source_output_ = false;
     bool frame_effect_bypass_due_to_error_ = false;
     String frame_effect_mode_ = "auto";
+    PackedStringArray frame_effect_custom_chain_;
     String frame_effect_pipeline_ = "none";
     String frame_effect_error_;
     uint32_t frame_effect_target_width_ = 0;

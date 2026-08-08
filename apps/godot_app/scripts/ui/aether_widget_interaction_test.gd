@@ -138,15 +138,25 @@ func _run() -> void:
         load("res://assets/ui/icons/chevron-down.svg"),
         load("res://assets/ui/icons/check.svg")
     )
-    for label in ["System", "Simplified Chinese", "Traditional Chinese", "English", "Japanese"]:
-        select.add_item(label)
+    for index in range(20):
+        select.add_item("Option %d" % (index + 1))
     select.position = Vector2(20, 420)
     select.size = Vector2(300, 44)
     scene.add_child(select)
     select._open_popup()
     await process_frame
+    if not select.overlay.is_in_group(select.OVERLAY_INPUT_GROUP):
+        _fail("select overlay did not claim exclusive scroll input")
+        return
+    var popup_scroll := select.popup_panel.get_node("MenuScroll") as ScrollContainer
+    if popup_scroll == null or popup_scroll.mouse_force_pass_scroll_events:
+        _fail("select popup allows wheel events to escape its scroll container")
+        return
     if select.popup_panel == null or select.popup_panel.position.y >= select.get_global_rect().position.y:
         _fail("select did not flip above a constrained viewport boundary")
+        return
+    if select.popup_panel.size.y > scene.size.y - 24.0:
+        _fail("select popup exceeded the viewport instead of scrolling")
         return
     if not is_equal_approx(select.popup_panel.scale.x, select.popup_panel.scale.y):
         _fail("select popup animation distorted its aspect ratio")

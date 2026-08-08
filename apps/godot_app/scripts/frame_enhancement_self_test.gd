@@ -58,10 +58,11 @@ func _initialize() -> void:
         ok = ok and profiles.has(profile)
     for profile in chain_modes:
         ok = ok and profiles.has(profile)
+    ok = ok and profiles.has("custom")
     var default_algorithms: Array = provider.get("default_algorithms", [])
     ok = ok and default_algorithms.has("Anime4K Restore CNN Soft S (detail protected)")
     ok = ok and default_algorithms.has("FSR1 RCAS (low strength)")
-    ok = ok and int(provider.get("version", 0)) == 6
+    ok = ok and int(provider.get("version", 0)) == 7
     ok = ok and String(provider.get("selection_policy", "")) == "user_fixed"
     ok = ok and not bool(provider.get("dynamic_downgrade", true))
     ok = ok and not bool(provider.get("memory_budget_enabled", true))
@@ -148,10 +149,44 @@ func _initialize() -> void:
     ok = ok and result.get("exact_resolution_bytes", []) == [
         8294400, 14745600, 33177600,
     ]
+    var custom_algorithms: Array = result.get("custom_algorithms", [])
+    ok = ok and custom_algorithms == [
+        "anime4k_upscale_s", "anime4k_upscale_l", "anime4k_upscale_vl",
+        "anime4k_restore_s", "anime4k_restore_soft_s",
+        "anime4k_restore_soft_m", "anime4k_restore_l",
+        "anime4k_restore_vl", "fsr1_easu", "fsr1_rcas", "bicubic",
+        "lanczos", "fxaa", "ravu_lite_r2", "cunny_2x4c",
+        "nnedi3_nns16",
+    ]
+    var custom_stage_orders: Array = result.get("custom_stage_orders", [])
+    ok = ok and custom_stage_orders.size() == custom_algorithms.size()
+    for index in range(custom_algorithms.size()):
+        ok = ok and custom_stage_orders[index] == [custom_algorithms[index]]
+    ok = ok and result.get("custom_dispatch_counts", []) == [
+        7, 12, 20, 6, 6, 10, 11, 19, 3, 3, 3, 3, 3, 3, 6, 4,
+    ]
+    ok = ok and result.get("ordered_custom_stages", []) == [
+        "anime4k_upscale_s", "bicubic",
+        "anime4k_restore_soft_s", "fsr1_rcas",
+    ]
+    ok = ok and result.get("empty_custom_stages", []) == ["implicit_output_fit"]
+    ok = ok and String(result.get("invalid_custom_error", "")).begins_with(
+        "unknown_custom_algorithm:"
+    )
+    ok = ok and int(result.get("custom_pipeline_delta", 0)) == 10
+    ok = ok and bool(result.get("custom_cache_verified", false))
 
     var user_root := OS.get_user_data_dir()
     ok = ok and player.initialize_engine(user_root, user_root.path_join("cache"))
     if player.is_initialized():
+        var host_custom_chain := PackedStringArray([
+            "anime4k_upscale_s", "bicubic", "fsr1_rcas",
+        ])
+        player.set_frame_enhancement_custom_chain(host_custom_chain)
+        player.set_frame_enhancement_mode("custom")
+        var custom_host_status: Dictionary = player.get_frame_enhancement_status()
+        ok = ok and String(custom_host_status.get("mode", "")) == "custom"
+        ok = ok and custom_host_status.get("custom_chain", PackedStringArray()) == host_custom_chain
         player.set_frame_native_output_enabled(false)
         player.set_frame_enhancement_enabled(true)
         var enabled_status: Dictionary = player.get_frame_enhancement_status()

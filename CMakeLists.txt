@@ -94,7 +94,7 @@ option(AETHERKIRI_ENABLE_INTERNAL
        "enable optional private AetherInternal packages when available" ON)
 set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 3)
 set(AETHERKIRI_LIVE2D_HOST_API_VERSION 1)
-set(AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION 1)
+set(AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION 2)
 set(AETHERKIRI_INTERNAL_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherInternal"
     CACHE PATH "path to an AetherInternal package checkout")

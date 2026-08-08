@@ -6,6 +6,7 @@ const CONTROL_HEIGHT := 40.0
 const MENU_GAP := 6.0
 const MENU_PADDING := 6.0
 const ITEM_HEIGHT := 40.0
+const OVERLAY_INPUT_GROUP := "aether_select_input_overlay"
 
 var tokens
 var motion
@@ -97,7 +98,9 @@ func _open_popup() -> void:
     overlay.name = "AetherSelectOverlay"
     overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
     overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+    overlay.mouse_force_pass_scroll_events = false
     overlay.z_index = 200
+    overlay.add_to_group(OVERLAY_INPUT_GROUP)
     scene.add_child(overlay)
     overlay.move_to_front()
 
@@ -105,6 +108,7 @@ func _open_popup() -> void:
     dismiss_area.color = Color.TRANSPARENT
     dismiss_area.set_anchors_preset(Control.PRESET_FULL_RECT)
     dismiss_area.mouse_filter = Control.MOUSE_FILTER_STOP
+    dismiss_area.mouse_force_pass_scroll_events = false
     dismiss_area.gui_input.connect(func(event: InputEvent):
         var dismiss: bool = event is InputEventMouseButton and event.pressed
         dismiss = dismiss or (event is InputEventScreenTouch and event.pressed)
@@ -115,19 +119,36 @@ func _open_popup() -> void:
 
     popup_panel = PanelContainer.new()
     popup_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+    popup_panel.mouse_force_pass_scroll_events = false
     popup_panel.add_theme_stylebox_override("panel", _popup_box())
     overlay.add_child(popup_panel)
 
+    var trigger_rect := get_global_rect()
+    var viewport_size := get_viewport_rect().size
+    var desired_menu_height := MENU_PADDING * 2.0 + ITEM_HEIGHT * float(items.size())
+    var menu_height := minf(desired_menu_height, maxf(ITEM_HEIGHT + MENU_PADDING * 2.0, viewport_size.y - 24.0))
+    var menu_width := minf(maxf(size.x, 220.0), maxf(196.0, viewport_size.x - 24.0))
+    var scroll := ScrollContainer.new()
+    scroll.name = "MenuScroll"
+    scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+    # Do not bubble wheel/trackpad events at either scroll boundary. The popup
+    # owns scrolling for as long as it is open.
+    scroll.mouse_force_pass_scroll_events = false
+    scroll.custom_minimum_size = Vector2(
+        0,
+        maxf(ITEM_HEIGHT, menu_height - MENU_PADDING * 2.0)
+    )
+    popup_panel.add_child(scroll)
     var menu := VBoxContainer.new()
+    menu.name = "MenuItems"
+    menu.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    menu.custom_minimum_size = Vector2(0, 0)
     menu.add_theme_constant_override("separation", 0)
-    popup_panel.add_child(menu)
+    scroll.add_child(menu)
     for index in range(items.size()):
         menu.add_child(_menu_item(index))
 
-    var menu_height := MENU_PADDING * 2.0 + ITEM_HEIGHT * float(items.size())
-    var trigger_rect := get_global_rect()
-    var viewport_size := get_viewport_rect().size
-    var menu_width := minf(maxf(size.x, 220.0), maxf(196.0, viewport_size.x - 24.0))
     var menu_position := Vector2(trigger_rect.position.x, trigger_rect.end.y + MENU_GAP)
     if menu_position.x + menu_width > viewport_size.x - 12.0:
         menu_position.x = viewport_size.x - menu_width - 12.0
@@ -208,9 +229,14 @@ func _animate_chevron(open: bool) -> void:
 func _focus_selected_item() -> void:
     if popup_panel == null or not is_instance_valid(popup_panel):
         return
-    var menu := popup_panel.get_child(0)
+    var scroll := popup_panel.get_child(0) as ScrollContainer
+    if scroll == null or scroll.get_child_count() == 0:
+        return
+    var menu := scroll.get_child(0)
     if selected_index >= 0 and selected_index < menu.get_child_count():
-        menu.get_child(selected_index).grab_focus()
+        var selected_control := menu.get_child(selected_index) as Control
+        selected_control.grab_focus()
+        scroll.ensure_control_visible(selected_control)
 
 func _free_overlay() -> void:
     if overlay != null and is_instance_valid(overlay):

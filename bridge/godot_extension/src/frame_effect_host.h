@@ -3,6 +3,7 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/classes/texture2d.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
+#include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/rid.hpp>
 #include <godot_cpp/variant/string.hpp>
 
@@ -11,7 +12,7 @@
 
 namespace godot {
 
-inline constexpr uint32_t AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION = 1;
+inline constexpr uint32_t AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION = 2;
 
 struct FrameEffectRequest {
     RenderingDevice *rendering_device = nullptr;
@@ -22,6 +23,7 @@ struct FrameEffectRequest {
     uint32_t target_height = 0;
     uint64_t frame_serial = 0;
     String mode = "auto";
+    PackedStringArray custom_chain;
 };
 
 struct FrameEffectOutput {
