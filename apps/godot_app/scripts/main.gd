@@ -4,12 +4,21 @@ const APP_DISPLAY_NAME := "Aether"
 const BACKENDS := ["Godot Native", "GPU Bridge", "Debug CPU"]
 const SETTINGS_KEY := "aether_kiri/render_backend"
 const GAME_PATH_KEY := "aether_kiri/game_path"
+const GAME_AUTO_COVER_SCANNED_FIELD := "_autoCoverScanned"
 const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const VIDEO_LIST_FILE := "user://aetherkiri_videos.json"
 const VIDEO_PROGRESS_FILE := "user://aetherkiri_video_progress.json"
 const VIDEO_HIDDEN_FILE := "user://aetherkiri_hidden_videos.json"
+const IMPORT_STATE_FILE := "user://aetherkiri_import_state.cfg"
 const VIDEO_EXTENSIONS := ["mp4", "mkv", "mov", "m4v", "avi", "webm", "flv", "ts", "m2ts", "mpeg", "mpg", "wmv"]
 const SUBTITLE_EXTENSIONS := ["srt", "vtt", "ass", "ssa"]
+const COVER_IMAGE_EXTENSIONS := ["png", "webp", "jpg", "jpeg"]
+# These candidates are deliberately independent of the selected UI language.
+# Prefer cover names across every supported language, then background names.
+const DEFAULT_COVER_BASENAMES := [
+    "cover", "封面", "表紙", "カバー", "표지", "커버",
+    "background", "背景", "배경",
+]
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
@@ -72,6 +81,7 @@ const ICON_BACK := UI_ICON_DIR + "chevron-left.svg"
 const ICON_CHEVRON_RIGHT := UI_ICON_DIR + "chevron-right.svg"
 const ICON_CHEVRON_DOWN := UI_ICON_DIR + "chevron-down.svg"
 const ICON_CHECK := UI_ICON_DIR + "check.svg"
+const ICON_SEARCH := UI_ICON_DIR + "search.svg"
 const LANG_SYSTEM := "system"
 const LANG_ZH_HANS := "zh_hans"
 const LANG_ZH_HANT := "zh_hant"
@@ -114,6 +124,12 @@ const UI_TEXT := {
         "nav.expand_sidebar": "展开侧边栏",
         "home.empty_title": "尚未添加任何游戏",
         "home.game_count": "%d 个游戏",
+        "video.video_count": "%d 个视频",
+        "search.games_placeholder": "搜索视觉小说",
+        "search.videos_placeholder": "搜索视频",
+        "search.filtered_count": "显示 %d / %d",
+        "search.no_results_title": "未找到匹配内容",
+        "search.no_results_help": "请尝试其他关键词或清空搜索框",
         "home.refresh": "刷新",
         "home.import": "导入",
         "home.import_guide": "导入指南",
@@ -278,6 +294,7 @@ const UI_TEXT := {
         "message.launch_file_unsupported": "启动文件只支持 EXE 或 XP3",
         "message.launch_file_outside_game": "启动文件必须位于当前游戏目录内",
         "message.launch_file_missing": "启动文件不存在：%s",
+        "message.cover_file_missing": "无法读取所选封面图片：%s",
         "message.game_exists": "游戏已存在：%s",
         "message.builtin_delete_failed": "删除内置 Demo 时发生错误：%s",
         "alert.error_title": "Aether 错误",
@@ -315,6 +332,12 @@ const UI_TEXT := {
         "nav.expand_sidebar": "展開側邊欄",
         "home.empty_title": "尚未加入任何遊戲",
         "home.game_count": "%d 個遊戲",
+        "video.video_count": "%d 個影片",
+        "search.games_placeholder": "搜尋視覺小說",
+        "search.videos_placeholder": "搜尋影片",
+        "search.filtered_count": "顯示 %d / %d",
+        "search.no_results_title": "找不到相符內容",
+        "search.no_results_help": "請嘗試其他關鍵字或清除搜尋欄",
         "home.refresh": "重新整理",
         "home.import": "匯入",
         "home.import_guide": "匯入指南",
@@ -479,6 +502,7 @@ const UI_TEXT := {
         "message.launch_file_unsupported": "啟動檔案僅支援 EXE 或 XP3",
         "message.launch_file_outside_game": "啟動檔案必須位於目前遊戲目錄內",
         "message.launch_file_missing": "啟動檔案不存在：%s",
+        "message.cover_file_missing": "無法讀取所選封面圖片：%s",
         "message.game_exists": "遊戲已存在：%s",
         "message.builtin_delete_failed": "刪除內建 Demo 時發生錯誤：%s",
         "alert.error_title": "Aether 錯誤",
@@ -516,6 +540,12 @@ const UI_TEXT := {
         "nav.expand_sidebar": "Expand sidebar",
         "home.empty_title": "No games added yet",
         "home.game_count": "%d games",
+        "video.video_count": "%d videos",
+        "search.games_placeholder": "Search visual novels",
+        "search.videos_placeholder": "Search videos",
+        "search.filtered_count": "Showing %d of %d",
+        "search.no_results_title": "No matches found",
+        "search.no_results_help": "Try another keyword or clear the search field",
         "home.refresh": "Refresh",
         "home.import": "Import",
         "home.import_guide": "Import Guide",
@@ -680,6 +710,7 @@ const UI_TEXT := {
         "message.launch_file_unsupported": "The launch file must be an EXE or XP3 file",
         "message.launch_file_outside_game": "The launch file must be inside this game folder",
         "message.launch_file_missing": "Launch file does not exist: %s",
+        "message.cover_file_missing": "Could not read the selected cover image: %s",
         "message.game_exists": "Game already exists: %s",
         "message.builtin_delete_failed": "Could not completely delete the built-in demo: %s",
         "alert.error_title": "Aether Error",
@@ -717,6 +748,12 @@ const UI_TEXT := {
         "nav.expand_sidebar": "サイドバーを展開",
         "home.empty_title": "ゲームはまだ追加されていません",
         "home.game_count": "%d 本のゲーム",
+        "video.video_count": "%d 本のビデオ",
+        "search.games_placeholder": "ビジュアルノベルを検索",
+        "search.videos_placeholder": "ビデオを検索",
+        "search.filtered_count": "%d / %d 件を表示",
+        "search.no_results_title": "一致する項目がありません",
+        "search.no_results_help": "別のキーワードを試すか、検索欄をクリアしてください",
         "home.refresh": "更新",
         "home.import": "インポート",
         "home.import_guide": "インポートガイド",
@@ -881,6 +918,7 @@ const UI_TEXT := {
         "message.launch_file_unsupported": "起動ファイルは EXE または XP3 のみ対応しています",
         "message.launch_file_outside_game": "起動ファイルは現在のゲームフォルダー内にある必要があります",
         "message.launch_file_missing": "起動ファイルが存在しません：%s",
+        "message.cover_file_missing": "選択したカバー画像を読み込めません：%s",
         "message.game_exists": "ゲームは既に存在します：%s",
         "message.builtin_delete_failed": "内蔵デモを完全に削除できませんでした：%s",
         "alert.error_title": "Aether エラー",
@@ -918,6 +956,12 @@ const UI_TEXT := {
         "nav.expand_sidebar": "사이드바 펼치기",
         "home.empty_title": "아직 추가된 게임이 없습니다",
         "home.game_count": "게임 %d개",
+        "video.video_count": "비디오 %d개",
+        "search.games_placeholder": "비주얼 노벨 검색",
+        "search.videos_placeholder": "비디오 검색",
+        "search.filtered_count": "%d / %d 표시",
+        "search.no_results_title": "일치하는 항목이 없습니다",
+        "search.no_results_help": "다른 검색어를 입력하거나 검색창을 비워 보세요",
         "home.refresh": "새로고침",
         "home.import": "가져오기",
         "home.import_guide": "가져오기 가이드",
@@ -1082,6 +1126,7 @@ const UI_TEXT := {
         "message.launch_file_unsupported": "실행 파일은 EXE 또는 XP3만 지원합니다",
         "message.launch_file_outside_game": "실행 파일은 현재 게임 폴더 안에 있어야 합니다",
         "message.launch_file_missing": "실행 파일이 존재하지 않습니다: %s",
+        "message.cover_file_missing": "선택한 표지 이미지를 읽을 수 없습니다: %s",
         "message.game_exists": "게임이 이미 있습니다: %s",
         "message.builtin_delete_failed": "내장 데모를 완전히 삭제하지 못했습니다: %s",
         "alert.error_title": "Aether 오류",
@@ -1203,6 +1248,8 @@ var home_actions: HBoxContainer
 var home_page_margin: MarginContainer
 var home_header_box: BoxContainer
 var home_title_label: Label
+var home_search_host: PanelContainer
+var home_search_input: LineEdit
 var empty_state: Control
 var save_button: Button
 var bg_rect: ColorRect
@@ -1231,6 +1278,10 @@ var hero_transition_id := 0
 var known_games: Array[Dictionary] = []
 var known_videos: Array[Dictionary] = []
 var home_library_mode := "game"
+var home_search_queries := {"game": "", "video": ""}
+var home_search_syncing := false
+var home_filtered_game_count := 0
+var home_filtered_video_count := 0
 var show_perf_monitor := true
 var diagnostic_profile := "baseline" if OS.is_debug_build() else "off"
 var debug_overlay_mode := "summary" if OS.is_debug_build() else "off"
@@ -1282,6 +1333,8 @@ var detail_relayout_pending := false
 var detail_relayout_scroll_vertical := 0
 var native_launch_file_picker_pending := false
 var native_launch_file_picker_library_path := ""
+var native_cover_file_picker_pending := false
+var native_cover_file_picker_library_path := ""
 var active_game_path := ""
 var active_game_started_msec := 0
 var shell_scroll_drag_states := {}
@@ -3308,6 +3361,10 @@ func _layout_home_view(window_size: Vector2) -> void:
     home_header_box.add_theme_constant_override("separation", 12 if phone else (16 if compact else 24))
     home_title_label.add_theme_font_size_override("font_size", 27 if phone else 31)
     home_subtitle_label.add_theme_font_size_override("font_size", 13 if phone else 14)
+    if is_instance_valid(home_search_host):
+        home_search_host.custom_minimum_size.y = 60.0 if phone else 64.0
+    if is_instance_valid(home_search_input):
+        home_search_input.add_theme_font_size_override("font_size", 16 if phone else 17)
     home_actions.alignment = BoxContainer.ALIGNMENT_END
     home_primary_button.text = ""
     _sync_home_action_labels()
@@ -3332,16 +3389,93 @@ func _layout_home_view(window_size: Vector2) -> void:
     if not home_layout_initialized or home_compact_layout != compact:
         home_compact_layout = compact
         home_layout_initialized = true
-        if home_library_mode == "video" and video_list != null and video_list.get_child_count() > 0:
+        if home_library_mode == "video" and not known_videos.is_empty():
             call_deferred("_refresh_videos")
-        elif game_list.get_child_count() > 0:
+        elif not known_games.is_empty():
             call_deferred("_refresh_games")
 
 func _sync_home_header_text() -> void:
     if is_instance_valid(home_title_label):
         home_title_label.text = _t("nav.videos") if home_library_mode == "video" else _t("nav.library")
-    if is_instance_valid(home_subtitle_label):
-        home_subtitle_label.text = _t("video.status") if home_library_mode == "video" else _t("home.game_count", [known_games.size()])
+    _sync_home_search_box()
+    _sync_home_subtitle_text()
+
+func _current_home_search_query() -> String:
+    return String(home_search_queries.get(home_library_mode, "")).strip_edges()
+
+func _sync_home_search_box() -> void:
+    if not is_instance_valid(home_search_input):
+        return
+    home_search_input.placeholder_text = _t(
+        "search.videos_placeholder" if home_library_mode == "video" else "search.games_placeholder"
+    )
+    home_search_input.accessibility_name = home_search_input.placeholder_text
+    var desired_text := String(home_search_queries.get(home_library_mode, ""))
+    if home_search_input.text == desired_text:
+        return
+    home_search_syncing = true
+    home_search_input.text = desired_text
+    home_search_syncing = false
+
+func _sync_home_subtitle_text() -> void:
+    if not is_instance_valid(home_subtitle_label):
+        return
+    var total := known_videos.size() if home_library_mode == "video" else known_games.size()
+    var visible := home_filtered_video_count if home_library_mode == "video" else home_filtered_game_count
+    if _current_home_search_query().is_empty():
+        home_subtitle_label.text = _t(
+            "video.video_count" if home_library_mode == "video" else "home.game_count",
+            [total]
+        )
+    else:
+        home_subtitle_label.text = _t("search.filtered_count", [visible, total])
+
+func _library_search_matches(values: Array, query: String) -> bool:
+    var normalized_query := query.strip_edges().to_lower()
+    if normalized_query.is_empty():
+        return true
+    normalized_query = normalized_query.replace("\t", " ").replace("\n", " ")
+    var haystack_parts := PackedStringArray()
+    for value in values:
+        haystack_parts.append(String(value).to_lower())
+    var haystack := " ".join(haystack_parts)
+    for token in normalized_query.split(" ", false):
+        if not haystack.contains(String(token)):
+            return false
+    return true
+
+func _game_matches_home_search(game: Dictionary, query: String) -> bool:
+    return _library_search_matches([
+        _game_display_title(game),
+        game.get("name", ""),
+        game.get("path", ""),
+        game.get("developer", ""),
+        GameLaunchEntry.configured_relative_path(game),
+    ], query)
+
+func _video_matches_home_search(video: Dictionary, query: String) -> bool:
+    return _library_search_matches([
+        video.get("name", ""),
+        video.get("fileName", ""),
+        video.get("path", ""),
+    ], query)
+
+func _on_home_search_text_changed(value: String) -> void:
+    if home_search_syncing:
+        return
+    home_search_queries[home_library_mode] = value
+    if home_library_mode == "video":
+        _rebuild_video_cards(false)
+    else:
+        _rebuild_game_cards(false)
+
+func _home_search_outer_style() -> StyleBoxFlat:
+    var style := ui_tokens.panel(ui_tokens.background, 29, ui_tokens.separator, 1)
+    style.content_margin_left = 20
+    style.content_margin_top = 4
+    style.content_margin_right = 18
+    style.content_margin_bottom = 4
+    return style
 
 func _sync_home_action_labels() -> void:
     if is_instance_valid(home_primary_button):
@@ -3402,6 +3536,40 @@ func _build_home_view() -> void:
     home_guide_button.custom_minimum_size = Vector2(ui_tokens.CONTROL_HEIGHT, ui_tokens.CONTROL_HEIGHT)
     _apply_shell_compact_state(home_guide_button, false)
     home_actions.add_child(home_guide_button)
+
+    home_search_host = PanelContainer.new()
+    home_search_host.name = "LibrarySearchBar"
+    home_search_host.custom_minimum_size = Vector2(0, 64)
+    home_search_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    home_search_host.add_theme_stylebox_override("panel", _home_search_outer_style())
+    page.add_child(home_search_host)
+
+    var search_row := HBoxContainer.new()
+    search_row.add_theme_constant_override("separation", 12)
+    home_search_host.add_child(search_row)
+
+    var search_icon := _icon_rect(ICON_SEARCH, Vector2(23, 23), ui_tokens.text_secondary)
+    search_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    search_row.add_child(search_icon)
+
+    home_search_input = LineEdit.new()
+    home_search_input.name = "LibrarySearch"
+    home_search_input.clear_button_enabled = true
+    home_search_input.custom_minimum_size = Vector2(0, 44)
+    home_search_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    home_search_input.max_length = 200
+    home_search_input.add_theme_font_size_override("font_size", 17)
+    home_search_input.add_theme_color_override("font_color", ui_tokens.text_primary)
+    home_search_input.add_theme_color_override("font_placeholder_color", ui_tokens.text_secondary)
+    home_search_input.add_theme_color_override("caret_color", ui_tokens.text_primary)
+    home_search_input.caret_blink = true
+    home_search_input.caret_blink_interval = 0.5
+    home_search_input.add_theme_stylebox_override("normal", _empty_style())
+    home_search_input.add_theme_stylebox_override("focus", _empty_style())
+    home_search_input.add_theme_stylebox_override("read_only", _empty_style())
+    home_search_input.text_changed.connect(_on_home_search_text_changed)
+    search_row.add_child(home_search_input)
+    _sync_home_search_box()
 
     var library_body := Control.new()
     library_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -5444,6 +5612,7 @@ func _refresh_language_texts() -> void:
         video_empty_title_label.text = _t("video.empty_title")
     if is_instance_valid(video_empty_help_label):
         video_empty_help_label.text = _video_empty_help_text()
+    _sync_home_empty_state_text()
     if is_instance_valid(empty_primary_button):
         _set_pill_button_text(empty_primary_button, _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"))
     _sync_home_action_labels()
@@ -5475,17 +5644,31 @@ func _select_home_library(mode: String) -> void:
 func _apply_home_library_visibility() -> void:
     var video_mode := home_library_mode == "video"
     if is_instance_valid(game_scroll):
-        game_scroll.visible = not video_mode and not known_games.is_empty()
+        game_scroll.visible = not video_mode and home_filtered_game_count > 0
     if is_instance_valid(empty_state):
-        empty_state.visible = not video_mode and known_games.is_empty()
+        empty_state.visible = not video_mode and home_filtered_game_count == 0
     if is_instance_valid(video_scroll):
-        video_scroll.visible = video_mode and not known_videos.is_empty()
+        video_scroll.visible = video_mode and home_filtered_video_count > 0
     if is_instance_valid(video_empty_state):
-        video_empty_state.visible = video_mode and known_videos.is_empty()
+        video_empty_state.visible = video_mode and home_filtered_video_count == 0
+    _sync_home_empty_state_text()
     if is_instance_valid(home_game_tab):
         _set_home_tab_active(home_game_tab, not video_mode)
     if is_instance_valid(home_video_tab):
         _set_home_tab_active(home_video_tab, video_mode)
+
+func _sync_home_empty_state_text() -> void:
+    var searching := not _current_home_search_query().is_empty()
+    if is_instance_valid(empty_title_label):
+        empty_title_label.text = _t("search.no_results_title") if searching else _t("home.empty_title")
+    if is_instance_valid(empty_help_label):
+        empty_help_label.text = _t("search.no_results_help") if searching else _empty_help_text()
+    if is_instance_valid(empty_primary_button):
+        empty_primary_button.visible = not searching
+    if is_instance_valid(video_empty_title_label):
+        video_empty_title_label.text = _t("search.no_results_title") if searching else _t("video.empty_title")
+    if is_instance_valid(video_empty_help_label):
+        video_empty_help_label.text = _t("search.no_results_help") if searching else _video_empty_help_text()
 
 func _set_home_tab_active(button: Button, active: bool) -> void:
     button.disabled = false
@@ -6515,17 +6698,42 @@ func _set_cover_for_selected() -> void:
     var path := String(selected_game.get("path", ""))
     if path.is_empty():
         return
+    _finish_hero_overlay()
+    if OS.get_name() == "iOS" \
+            and player != null \
+            and player.has_method("native_cover_file_picker_open"):
+        var cover_directory := ProjectSettings.globalize_path("user://Covers")
+        if bool(player.native_cover_file_picker_open(
+                _t("dialog.choose_cover"), path, cover_directory
+        )):
+            native_cover_file_picker_pending = true
+            native_cover_file_picker_library_path = path
+            return
+    _show_cover_godot_dialog(path)
+
+func _show_cover_godot_dialog(path: String) -> void:
     var dialog := _create_file_dialog(
         _t("dialog.choose_cover"),
         FileDialog.FILE_MODE_OPEN_FILE,
         PackedStringArray(["*.png,*.jpg,*.jpeg,*.webp;Image;image/png,image/jpeg,image/webp"])
     )
+    if DirAccess.dir_exists_absolute(path):
+        dialog.current_dir = path
     dialog.file_selected.connect(func(cover_path: String):
-        _update_game(path, {"coverPath": cover_path})
-        _show_detail(selected_game)
+        _apply_selected_cover(path, cover_path)
     )
     add_child(dialog)
     dialog.popup_centered(Vector2i(900, 640))
+
+func _apply_selected_cover(library_path: String, cover_path: String) -> void:
+    if cover_path.is_empty() or not FileAccess.file_exists(cover_path):
+        _show_system_alert(
+            _t("message.cover_file_missing", [cover_path]),
+            _t("alert.warning_title")
+        )
+        return
+    _update_game(library_path, {"coverPath": cover_path})
+    _show_detail(selected_game)
 
 func _game_launch_entry_label(game: Dictionary) -> String:
     var relative_path := GameLaunchEntry.configured_relative_path(game)
@@ -6609,6 +6817,33 @@ func _poll_native_launch_file_picker() -> void:
     match String(result.get("status", "error")):
         "selected":
             _apply_selected_launch_file(library_path, String(result.get("path", "")))
+        "cancelled":
+            pass
+        _:
+            _show_system_alert(
+                String(result.get("error", "System file picker failed")),
+                _t("alert.warning_title")
+            )
+
+func _poll_native_cover_file_picker() -> void:
+    if not native_cover_file_picker_pending \
+            or player == null \
+            or not player.has_method("native_launch_file_picker_take_result_json"):
+        return
+    var result_json := String(player.native_launch_file_picker_take_result_json())
+    if result_json.is_empty():
+        return
+    var library_path := native_cover_file_picker_library_path
+    native_cover_file_picker_pending = false
+    native_cover_file_picker_library_path = ""
+    var parsed = JSON.parse_string(result_json)
+    if typeof(parsed) != TYPE_DICTIONARY:
+        _show_system_alert(result_json, _t("alert.warning_title"))
+        return
+    var result: Dictionary = parsed
+    match String(result.get("status", "error")):
+        "selected":
+            _apply_selected_cover(library_path, String(result.get("path", "")))
         "cancelled":
             pass
         _:
@@ -6981,19 +7216,44 @@ func _open_import_dialog() -> void:
         FileDialog.FILE_MODE_OPEN_DIR,
         PackedStringArray()
     )
+    if OS.get_name() == "macOS":
+        var last_import_directory := _load_last_import_directory()
+        if not last_import_directory.is_empty():
+            dialog.current_dir = last_import_directory
     dialog.dir_selected.connect(func(path: String):
-        _add_game_path(path)
+        if _add_game_path(path):
+            _remember_import_directory(path)
     )
     dialog.file_selected.connect(func(path: String):
-        _add_game_path(path)
+        if _add_game_path(path):
+            _remember_import_directory(path)
     )
     add_child(dialog)
     dialog.popup_centered(Vector2i(900, 640))
+
+func _load_last_import_directory() -> String:
+    var cfg := ConfigFile.new()
+    if cfg.load(IMPORT_STATE_FILE) != OK:
+        return ""
+    var path := String(cfg.get_value("import", "last_directory", ""))
+    return path if DirAccess.dir_exists_absolute(path) else ""
+
+func _remember_import_directory(imported_path: String) -> void:
+    if OS.get_name() != "macOS":
+        return
+    var parent_directory := imported_path.simplify_path().get_base_dir()
+    if not DirAccess.dir_exists_absolute(parent_directory):
+        return
+    var cfg := ConfigFile.new()
+    cfg.set_value("import", "last_directory", parent_directory)
+    cfg.save(IMPORT_STATE_FILE)
 
 func _refresh_games() -> void:
     var loaded_games := _load_game_list()
     known_games = builtin_demo.reconcile_games(loaded_games)
     var library_changed := JSON.stringify(known_games) != JSON.stringify(loaded_games)
+    if _backfill_default_game_covers(known_games):
+        library_changed = true
     if OS.get_name() == "iOS":
         known_games = _scan_ios_games_dir(known_games)
         _save_game_list(known_games)
@@ -7002,17 +7262,28 @@ func _refresh_games() -> void:
     if library_changed:
         _sync_web_user_fs("builtin_demo_reconciled")
     known_games = _sorted_games(known_games)
-    _sync_home_header_text()
+    _rebuild_game_cards(not home_cards_animated_once)
+
+func _rebuild_game_cards(animate_cards: bool = false) -> void:
+    if game_list == null:
+        return
+    var query := String(home_search_queries.get("game", ""))
+    var filtered_games: Array[Dictionary] = []
+    for game in known_games:
+        if _game_matches_home_search(game, query):
+            filtered_games.append(game)
+    home_filtered_game_count = filtered_games.size()
     for child in game_list.get_children():
+        game_list.remove_child(child)
         child.queue_free()
-    var animate_cards := not home_cards_animated_once
-    for index in range(known_games.size()):
-        var card := _game_card(known_games[index])
+    for index in range(filtered_games.size()):
+        var card := _game_card(filtered_games[index])
         game_list.add_child(card)
         if animate_cards:
             ui_motion.reveal(card, minf(float(index) * 0.025, 0.15))
-    if animate_cards and not known_games.is_empty():
+    if animate_cards and not filtered_games.is_empty():
         home_cards_animated_once = true
+    _sync_home_header_text()
     _apply_home_library_visibility()
 
 func _refresh_videos() -> void:
@@ -7027,12 +7298,22 @@ func _refresh_videos() -> void:
     known_videos.sort_custom(func(a: Dictionary, b: Dictionary):
         return String(a.get("name", "")).naturalnocasecmp_to(String(b.get("name", ""))) < 0
     )
-    _sync_home_header_text()
+    _rebuild_video_cards(false)
+
+func _rebuild_video_cards(_animate_cards: bool = false) -> void:
+    var query := String(home_search_queries.get("video", ""))
+    var filtered_videos: Array[Dictionary] = []
+    for video in known_videos:
+        if _video_matches_home_search(video, query):
+            filtered_videos.append(video)
+    home_filtered_video_count = filtered_videos.size()
     if video_list != null:
         for child in video_list.get_children():
+            video_list.remove_child(child)
             child.queue_free()
-        for video in known_videos:
+        for video in filtered_videos:
             video_list.add_child(_video_card(video))
+    _sync_home_header_text()
     _apply_home_library_visibility()
 
 func _load_video_list() -> Array[Dictionary]:
@@ -7873,16 +8154,61 @@ func _game_info_from_path(path: String) -> Dictionary:
     var name := path.get_file()
     if name.to_lower().ends_with(".xp3"):
         name = name.substr(0, name.length() - 4)
+    var default_cover_path := _discover_default_cover_path(path)
     return {
         "name": name,
         "path": path,
         "type": "Archive" if path.to_lower().ends_with(".xp3") else "Directory",
         "lastPlayed": 0,
         "playDurationSeconds": 0,
-        "coverPath": "",
+        "coverPath": default_cover_path,
+        GAME_AUTO_COVER_SCANNED_FIELD: true,
         "developer": "",
         "title": "",
     }
+
+func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
+    var changed := false
+    for index in range(games.size()):
+        var game := games[index]
+        if builtin_demo.is_game(game):
+            continue
+        if bool(game.get(GAME_AUTO_COVER_SCANNED_FIELD, false)):
+            continue
+        if String(game.get("coverPath", "")).is_empty():
+            var discovered_path := _discover_default_cover_path(String(game.get("path", "")))
+            if not discovered_path.is_empty():
+                game["coverPath"] = discovered_path
+        game[GAME_AUTO_COVER_SCANNED_FIELD] = true
+        games[index] = game
+        changed = true
+    return changed
+
+func _discover_default_cover_path(game_path: String) -> String:
+    var directory := game_path
+    if not DirAccess.dir_exists_absolute(directory):
+        directory = game_path.get_base_dir()
+    var dir := DirAccess.open(directory)
+    if dir == null:
+        return ""
+
+    var best_path := ""
+    var best_score := DEFAULT_COVER_BASENAMES.size() * 100 + COVER_IMAGE_EXTENSIONS.size()
+    for file_name in dir.get_files():
+        var extension := file_name.get_extension().to_lower()
+        var extension_priority := COVER_IMAGE_EXTENSIONS.find(extension)
+        if extension_priority < 0:
+            continue
+        var base_name := file_name.get_basename().strip_edges().to_lower()
+        var name_priority := DEFAULT_COVER_BASENAMES.find(base_name)
+        if name_priority < 0:
+            continue
+        var score := name_priority * 100 + extension_priority
+        var candidate_path := directory.path_join(file_name)
+        if score < best_score or (score == best_score and candidate_path < best_path):
+            best_score = score
+            best_path = candidate_path
+    return best_path
 
 func _game_display_title(game: Dictionary) -> String:
     var title := String(game.get("title", ""))
@@ -10233,6 +10559,7 @@ func _apply_pending_video_resume(state: Dictionary) -> bool:
 
 func _process(delta: float) -> void:
     _poll_native_launch_file_picker()
+    _poll_native_cover_file_picker()
     _fit_full_rects()
     _process_iap(delta)
     _update_advanced_tool_timeouts()

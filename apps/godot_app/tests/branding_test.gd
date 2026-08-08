@@ -32,6 +32,24 @@ func _initialize() -> void:
         app.active_language = language
         assert(String(app._t("home.subtitle")) == String(EXPECTED_SUBTITLES[language]))
         assert(String(app._t("nav.library")) == String(EXPECTED_LIBRARY_LABELS[language]))
+        assert(not String(app._t("search.games_placeholder")).is_empty())
+        assert(not String(app._t("search.videos_placeholder")).is_empty())
+        assert(not String(app._t("search.no_results_title")).is_empty())
+    assert(app._library_search_matches(
+        ["Cafe Stella", "/Games/CafeStella"],
+        "cafe stel"
+    ))
+    assert(app._library_search_matches(
+        ["[ANI] BanG Dream!", "episode-03.mkv"],
+        "dream 03"
+    ))
+    assert(not app._library_search_matches(
+        ["Cafe Stella", "/Games/CafeStella"],
+        "nekopara"
+    ))
+    assert(app._is_runtime_exit_error("runtime requested termination"))
+    assert(app._is_runtime_exit_error("runtime has been terminated"))
+    assert(not app._is_runtime_exit_error("unexpected renderer failure"))
     app.free()
     print("BRANDING_OK user_dir=%s" % OS.get_user_data_dir())
     quit(0)
