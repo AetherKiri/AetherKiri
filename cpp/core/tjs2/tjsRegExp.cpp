@@ -99,67 +99,75 @@ namespace TJS {
         // grep thru target string
         bool isreplaceall = (_this->Flags & globalsearch) != 0;
         OnigRegion *region = onig_region_new();
-        const tjs_char *s = target.c_str();
-        const tjs_char *send = s + target.GetLen();
-        int r = onig_search(_this->RegEx, (UChar *)s, (UChar *)send, (UChar *)s,
-                            (UChar *)send, region, ONIG_OPTION_NONE);
-        int offset = 0;
-        if(r >= 0) { // match
-            do {
-                tjs_int pos = region->beg[0] / sizeof(tjs_char);
-                tjs_int end = region->end[0] / sizeof(tjs_char);
-                if(pos > 0) {
-                    res += ttstr(s, pos);
-                }
-                if(!func) {
-                    res += to;
-                } else {
-                    // call the callback function descripted as
-                    // param[1]
-                    tTJSVariant result;
-                    tjs_error hr;
-                    iTJSDispatch2 *array =
-                        tTJSNC_RegExp::GetResultArray(true, s, _this, region);
-                    tTJSVariant arrayval(array, array);
-                    tTJSVariant *param = &arrayval;
-                    if(TJSRegExpTraceEnabled()) {
-                        spdlog::info(
-                            "RegExpTrace callback before regex={} func={} funcThis={} "
-                            "objthis={} array={} matchPos={} matchEnd={} groups={}",
-                            static_cast<void *>(_this),
-                            static_cast<void *>(funcval.Object),
-                            static_cast<void *>(funcval.ObjThis),
-                            static_cast<void *>(objthis), static_cast<void *>(array),
-                            pos, end, region->num_regs);
-                    }
-                    array->Release();
-                    hr = funcval.FuncCall(0, nullptr, nullptr, &result, 1,
-                                          &param, nullptr);
-                    if(TJSRegExpTraceEnabled()) {
-                        spdlog::info("RegExpTrace callback after func={} hr={} resultType={}",
-                                     static_cast<void *>(funcval.Object), hr,
-                                     static_cast<int>(result.Type()));
-                    }
-                    if(TJS_FAILED(hr)) {
-                        onig_region_free(region, 1);
-                        return;
-                    }
-                    result.ToString();
-                    res += result.GetString();
-                }
-                s += end;
-                onig_region_free(region, 0);
-            } while(isreplaceall && s < send &&
-                    onig_search(_this->RegEx, (UChar *)s, (UChar *)send,
+        // 用户 closure（FuncCall）、ttstr 分配、GetResultArray 抛异常时旧实现会
+        // 泄漏 region。主体包 try-catch 在异常路径也释放（krkrz LeakAudit R3-4）。
+        try {
+            const tjs_char *s = target.c_str();
+            const tjs_char *send = s + target.GetLen();
+            int r = onig_search(_this->RegEx, (UChar *)s, (UChar *)send,
                                 (UChar *)s, (UChar *)send, region,
-                                ONIG_OPTION_NONE) >= 0);
-            if(s < send) {
+                                ONIG_OPTION_NONE);
+            int offset = 0;
+            if(r >= 0) { // match
+                do {
+                    tjs_int pos = region->beg[0] / sizeof(tjs_char);
+                    tjs_int end = region->end[0] / sizeof(tjs_char);
+                    if(pos > 0) {
+                        res += ttstr(s, pos);
+                    }
+                    if(!func) {
+                        res += to;
+                    } else {
+                        // call the callback function descripted as
+                        // param[1]
+                        tTJSVariant result;
+                        tjs_error hr;
+                        iTJSDispatch2 *array =
+                            tTJSNC_RegExp::GetResultArray(true, s, _this, region);
+                        tTJSVariant arrayval(array, array);
+                        tTJSVariant *param = &arrayval;
+                        if(TJSRegExpTraceEnabled()) {
+                            spdlog::info(
+                                "RegExpTrace callback before regex={} func={} funcThis={} "
+                                "objthis={} array={} matchPos={} matchEnd={} groups={}",
+                                static_cast<void *>(_this),
+                                static_cast<void *>(funcval.Object),
+                                static_cast<void *>(funcval.ObjThis),
+                                static_cast<void *>(objthis), static_cast<void *>(array),
+                                pos, end, region->num_regs);
+                        }
+                        array->Release();
+                        hr = funcval.FuncCall(0, nullptr, nullptr, &result, 1,
+                                              &param, nullptr);
+                        if(TJSRegExpTraceEnabled()) {
+                            spdlog::info("RegExpTrace callback after func={} hr={} resultType={}",
+                                         static_cast<void *>(funcval.Object), hr,
+                                         static_cast<int>(result.Type()));
+                        }
+                        if(TJS_FAILED(hr)) {
+                            onig_region_free(region, 1);
+                            return;
+                        }
+                        result.ToString();
+                        res += result.GetString();
+                    }
+                    s += end;
+                    onig_region_free(region, 0);
+                } while(isreplaceall && s < send &&
+                        onig_search(_this->RegEx, (UChar *)s, (UChar *)send,
+                                    (UChar *)s, (UChar *)send, region,
+                                    ONIG_OPTION_NONE) >= 0);
+                if(s < send) {
+                    res += ttstr(s, (int)(send - s));
+                }
+            } else {
                 res += ttstr(s, (int)(send - s));
             }
-        } else {
-            res += ttstr(s, (int)(send - s));
+            onig_region_free(region, 1);
+        } catch(...) {
+            onig_region_free(region, 1);
+            throw;
         }
-        onig_region_free(region, 1);
     }
 
     //---------------------------------------------------------------------------
@@ -167,36 +175,45 @@ namespace TJS {
                                tTJSNI_RegExp *_this, bool purgeempty) {
         tjs_uint targlen = target.GetLen();
         OnigRegion *region = onig_region_new();
-        const tjs_char *s = target.c_str();
-        const tjs_char *send = s + targlen;
-        int r = onig_search(_this->RegEx, (UChar *)s, (UChar *)send, (UChar *)s,
-                            (UChar *)send, region, ONIG_OPTION_NONE);
-        int storecount = 0;
-        if(r >= 0) { // match
-            do {
-                int len = region->beg[0] / sizeof(tjs_char);
-                if(!purgeempty || len > 0) {
-                    tTJSVariant val = ttstr(s, len);
+        // ttstr 分配或 array->PropSetByNum 抛异常时旧实现泄漏 region
+        // （krkrz LeakAudit R3-5）。
+        try {
+            const tjs_char *s = target.c_str();
+            const tjs_char *send = s + targlen;
+            int r = onig_search(_this->RegEx, (UChar *)s, (UChar *)send,
+                                (UChar *)s, (UChar *)send, region,
+                                ONIG_OPTION_NONE);
+            int storecount = 0;
+            if(r >= 0) { // match
+                do {
+                    int len = region->beg[0] / sizeof(tjs_char);
+                    if(!purgeempty || len > 0) {
+                        tTJSVariant val = ttstr(s, len);
+                        array->PropSetByNum(TJS_MEMBERENSURE, storecount++,
+                                            &val, array);
+                    }
+                    s += region->end[0] / sizeof(tjs_char);
+                    onig_region_clear(region);
+                } while(onig_search(_this->RegEx, (UChar *)s, (UChar *)send,
+                                    (UChar *)s, (UChar *)send, region,
+                                    ONIG_OPTION_NONE) >= 0);
+                if(!purgeempty || s < send) {
+                    tTJSVariant val = ttstr(s, (int)(send - s));
                     array->PropSetByNum(TJS_MEMBERENSURE, storecount++, &val,
                                         array);
                 }
-                s += region->end[0] / sizeof(tjs_char);
-                onig_region_clear(region);
-            } while(onig_search(_this->RegEx, (UChar *)s, (UChar *)send,
-                                (UChar *)s, (UChar *)send, region,
-                                ONIG_OPTION_NONE) >= 0);
-            if(!purgeempty || s < send) {
+            } else {
                 tTJSVariant val = ttstr(s, (int)(send - s));
                 array->PropSetByNum(TJS_MEMBERENSURE, storecount++, &val,
                                     array);
             }
-        } else {
-            tTJSVariant val = ttstr(s, (int)(send - s));
-            array->PropSetByNum(TJS_MEMBERENSURE, storecount++, &val, array);
+            onig_region_clear(region);
+            onig_region_free(region, 1);
+            return array;
+        } catch(...) {
+            onig_region_free(region, 1);
+            throw;
         }
-        onig_region_clear(region);
-        onig_region_free(region, 1);
-        return array;
     }
 
     //---------------------------------------------------------------------------

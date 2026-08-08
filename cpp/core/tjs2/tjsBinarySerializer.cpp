@@ -331,15 +331,27 @@ namespace TJS {
         if(index > size)
             return nullptr;
 
+        // CreateArray 返回 AddRef 状态（refcount=1）。ReadBasicType/InsertArray
+        // 对非法数据抛异常时，旧实现会泄漏 array 与中间 value（krkrz LeakAudit R3-2）。
         tTJSArrayObject *array = CreateArray(count);
-        for(tjs_uint i = 0; i < count; i++) {
-            tTJSVariant *value = ReadBasicType(buff, size, index);
-            InsertArray(array, i, value);
-            delete value;
+        try {
+            for(tjs_uint i = 0; i < count; i++) {
+                tTJSVariant *value = ReadBasicType(buff, size, index);
+                try {
+                    InsertArray(array, i, value);
+                } catch(...) {
+                    delete value;
+                    throw;
+                }
+                delete value;
+            }
+            auto *ret = new tTJSVariant(array, array);
+            array->Release();
+            return ret;
+        } catch(...) {
+            array->Release();
+            throw;
         }
-        auto *ret = new tTJSVariant(array, array);
-        array->Release();
-        return ret;
     }
 
     tTJSVariant *tTJSBinarySerializer::ReadDictionary(const tjs_uint8 *buff,
@@ -350,75 +362,101 @@ namespace TJS {
             return nullptr;
 
         tTJSDictionaryObject *dic = CreateDictionary(count);
-        for(tjs_uint i = 0; i < count; i++) {
-            tjs_uint8 type = buff[index];
-            index++;
-            // 最初に文字を読む
-            tTJSVariantString *name = nullptr;
-            switch(type) {
-                case TYPE_STRING8: {
-                    if((index + sizeof(tjs_uint8)) > size)
-                        TJS_eTJSError(TJSReadError);
-                    tjs_uint8 len = buff[index];
-                    index++;
-                    if((index + (len * sizeof(tjs_char))) > size)
-                        TJS_eTJSError(TJSReadError);
-                    name = ReadString(buff, len, index);
-                    break;
-                }
-                case TYPE_STRING16: {
-                    if((index + sizeof(tjs_uint16)) > size)
-                        TJS_eTJSError(TJSReadError);
-                    tjs_uint16 len = Read16(buff, index);
-                    if((index + (len * sizeof(tjs_char))) > size)
-                        TJS_eTJSError(TJSReadError);
-                    name = ReadString(buff, len, index);
-                    break;
-                }
-                case TYPE_STRING32: {
-                    if((index + sizeof(tjs_uint32)) > size)
-                        TJS_eTJSError(TJSReadError);
-                    tjs_uint32 len = Read32(buff, index);
-                    if((index + (len * sizeof(tjs_char))) > size)
-                        TJS_eTJSError(TJSReadError);
-                    name = ReadString(buff, len, index);
-                    break;
-                }
-                default:
-                    if(type >= TYPE_FIX_STRING_MIN &&
-                       type <= TYPE_FIX_STRING_MAX) {
-                        tjs_int len = type - TYPE_FIX_STRING_MIN;
-                        if((len * sizeof(tjs_char) + index) > size)
-                            TJS_eTJSError(TJSReadError);
-                        name = ReadString(buff, len, index);
-                    } else { // Dictionary形式の場合、最初に文字列がこないといけない
-                        TJS_eTJSError(TJSReadError);
+        try {
+            for(tjs_uint i = 0; i < count; i++) {
+                tjs_uint8 type = buff[index];
+                index++;
+                // 最初に文字を読む
+                tTJSVariantString *name = nullptr;
+                try {
+                    switch(type) {
+                        case TYPE_STRING8: {
+                            if((index + sizeof(tjs_uint8)) > size)
+                                TJS_eTJSError(TJSReadError);
+                            tjs_uint8 len = buff[index];
+                            index++;
+                            if((index + (len * sizeof(tjs_char))) > size)
+                                TJS_eTJSError(TJSReadError);
+                            name = ReadString(buff, len, index);
+                            break;
+                        }
+                        case TYPE_STRING16: {
+                            if((index + sizeof(tjs_uint16)) > size)
+                                TJS_eTJSError(TJSReadError);
+                            tjs_uint16 len = Read16(buff, index);
+                            if((index + (len * sizeof(tjs_char))) > size)
+                                TJS_eTJSError(TJSReadError);
+                            name = ReadString(buff, len, index);
+                            break;
+                        }
+                        case TYPE_STRING32: {
+                            if((index + sizeof(tjs_uint32)) > size)
+                                TJS_eTJSError(TJSReadError);
+                            tjs_uint32 len = Read32(buff, index);
+                            if((index + (len * sizeof(tjs_char))) > size)
+                                TJS_eTJSError(TJSReadError);
+                            name = ReadString(buff, len, index);
+                            break;
+                        }
+                        default:
+                            if(type >= TYPE_FIX_STRING_MIN &&
+                               type <= TYPE_FIX_STRING_MAX) {
+                                tjs_int len = type - TYPE_FIX_STRING_MIN;
+                                if((len * sizeof(tjs_char) + index) > size)
+                                    TJS_eTJSError(TJSReadError);
+                                name = ReadString(buff, len, index);
+                            } else { // Dictionary形式の場合、最初に文字列がこないといけない
+                                TJS_eTJSError(TJSReadError);
+                            }
+                            break;
                     }
-                    break;
+                    // 次に要素を読む
+                    tTJSVariant *value = ReadBasicType(buff, size, index);
+                    try {
+                        AddDictionary(dic, name, value);
+                    } catch(...) {
+                        delete value;
+                        if(name)
+                            name->Release();
+                        throw;
+                    }
+                    delete value;
+                } catch(...) {
+                    if(name)
+                        name->Release();
+                    throw;
+                }
+                if(name)
+                    name->Release();
             }
-            // 次に要素を読む
-            tTJSVariant *value = ReadBasicType(buff, size, index);
-            AddDictionary(dic, name, value);
-            delete value;
-            if(name)
-                name->Release();
+            auto *ret = new tTJSVariant(dic, dic);
+            dic->Release();
+            return ret;
+        } catch(...) {
+            // ReadString/ReadBasicType/AddDictionary 抛异常时释放 dic（krkrz
+            // LeakAudit R3-3）。
+            dic->Release();
+            throw;
         }
-        auto *ret = new tTJSVariant(dic, dic);
-        dic->Release();
-        return ret;
     }
 
     tTJSVariant *tTJSBinarySerializer::Read(tTJSBinaryStream *stream) {
         tjs_uint64 pos = stream->GetPosition();
         auto size = (tjs_uint)(stream->GetSize() - pos);
         auto *buffstart = new tjs_uint8[size];
-        if(size != stream->Read(buffstart, size)) {
-            TJS_eTJSError(TJSReadError);
+        try {
+            if(size != stream->Read(buffstart, size)) {
+                TJS_eTJSError(TJSReadError);
+            }
+            tjs_uint index = 0;
+            tTJSVariant *ret = ReadBasicType(buffstart, size, index);
+            delete[] buffstart;
+            return ret;
+        } catch(...) {
+            // Read 失败或 ReadBasicType 抛异常时释放临时缓冲（krkrz LeakAudit R3-1）。
+            delete[] buffstart;
+            throw;
         }
-        tjs_uint index = 0;
-        tTJSVariant *ret = ReadBasicType(buffstart, size, index);
-        delete[] buffstart;
-        return ret;
     }
 
 } // namespace TJS
