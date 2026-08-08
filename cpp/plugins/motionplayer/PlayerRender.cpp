@@ -95,20 +95,23 @@ namespace {
         const std::string &compressName,
         int width,
         int height,
-        const PSB::PSBResource &resource,
-        std::unordered_map<
-            const PSB::PSBResource *,
-            std::pair<std::uint64_t, std::uint64_t>> &fingerprintCache) {
-        auto fingerprintIt = fingerprintCache.find(&resource);
-        if(fingerprintIt == fingerprintCache.end()) {
-            std::uint64_t first = 1469598103934665603ull;
-            std::uint64_t second = 0x517cc1b727220a95ull;
-            appendMotionSourceFingerprint(first, second, resource.data);
-            fingerprintIt = fingerprintCache.emplace(
-                &resource, std::make_pair(first, second)).first;
+        const PSB::PSBResource &resource) {
+        std::pair<std::uint64_t, std::uint64_t> fingerprint;
+        {
+            std::lock_guard lock(snapshot.sourceFingerprintMutex);
+            auto fingerprintIt =
+                snapshot.sourceFingerprints.find(&resource);
+            if(fingerprintIt == snapshot.sourceFingerprints.end()) {
+                std::uint64_t first = 1469598103934665603ull;
+                std::uint64_t second = 0x517cc1b727220a95ull;
+                appendMotionSourceFingerprint(first, second, resource.data);
+                fingerprintIt = snapshot.sourceFingerprints.emplace(
+                    &resource, std::make_pair(first, second)).first;
+            }
+            fingerprint = fingerprintIt->second;
         }
-        auto first = fingerprintIt->second.first;
-        auto second = fingerprintIt->second.second;
+        auto first = fingerprint.first;
+        auto second = fingerprint.second;
 
         std::size_t paletteBytes = 0;
         if(resourcePath.size() > 6 &&
@@ -8884,9 +8887,7 @@ namespace motion {
                     ? decodedHeight : height;
                 sharedBitmapKey = makeSharedMotionSourceBitmapKey(
                     *sourceMotion, resourcePath, compressName,
-                    bitmapWidth, bitmapHeight,
-                    *resourceMetadata,
-                    _runtime->motionSourceResourceFingerprintCache);
+                    bitmapWidth, bitmapHeight, *resourceMetadata);
                 srcBmp = findSharedMotionSourceBitmap(sharedBitmapKey);
                 if(profileEnabled) {
                     if(srcBmp) {
@@ -9152,7 +9153,13 @@ namespace motion {
                 return nullptr;
             }
 
-            const bool sourceIsAlphaOnlyMask = bitmapLooksAlphaOnlyMask(*srcBmp);
+            auto &sourceTraits =
+                _runtime->motionSourceBitmapTraits[sourceIdentity];
+            if(!sourceTraits.alphaOnlyKnown) {
+                sourceTraits.alphaOnly = bitmapLooksAlphaOnlyMask(*srcBmp);
+                sourceTraits.alphaOnlyKnown = true;
+            }
+            const bool sourceIsAlphaOnlyMask = sourceTraits.alphaOnly;
             const bool colorsCarryTint =
                 !packedColorsAreDefault(command.packedColors[0],
                                         command.packedColors[1],
@@ -9169,12 +9176,19 @@ namespace motion {
                 isYuzuLogoTextMaskSource(motionPath, command.sourceKey);
             const bool yuzuLogoCompositeSource =
                 isYuzuLogoCompositeSource(motionPath, command.sourceKey);
+            if(yuzuLogoTextSource && !sourceTraits.whiteMaskKnown) {
+                sourceTraits.whiteMask = bitmapLooksWhiteMask(*srcBmp);
+                sourceTraits.whiteMaskKnown = true;
+            }
+            if(yuzuLogoTextSource && !sourceTraits.hasWhitePixelsKnown) {
+                sourceTraits.hasWhitePixels =
+                    bitmapHasWhiteMaskPixels(*srcBmp);
+                sourceTraits.hasWhitePixelsKnown = true;
+            }
             const bool tintDefaultLogoTextMask =
-                yuzuLogoTextSource &&
-                bitmapLooksWhiteMask(*srcBmp);
+                yuzuLogoTextSource && sourceTraits.whiteMask;
             const bool tintDefaultLogoWhitePixels =
-                yuzuLogoTextSource &&
-                bitmapHasWhiteMaskPixels(*srcBmp);
+                yuzuLogoTextSource && sourceTraits.hasWhitePixels;
             const bool tintOnlyWhitePixels =
                 tintDefaultLogoWhitePixels && !sourceIsAlphaOnlyMask;
             const bool tintDefaultNeutralMask =

@@ -626,6 +626,7 @@ namespace motion {
 
         _autoProgressLastTick = 0;
         _autoProgressHasLastTick = false;
+        _manualProgressLastTick = 0;
         if(!_autoProgressRegistered) {
             registerAutoProgressPlayer(this);
             _autoProgressRegistered = true;
@@ -729,8 +730,14 @@ namespace motion {
 
     void Player::noteManualProgress() {
         _manualProgressLastTick = TVPGetTickCount();
-        _autoProgressLastTick = _manualProgressLastTick;
-        _autoProgressHasLastTick = true;
+        // A script-owned Motion.Player clock and the continuous callback must
+        // never advance the same clip.  The old 120 ms grace period let the
+        // automatic clock take over during a slow render, then the script's
+        // next wall-clock delta counted that same interval again.  That made
+        // title animations jump for one frame whenever loading exceeded the
+        // grace period.  A later play() call can explicitly opt the player
+        // back into automatic progression via enableAutoProgress().
+        disableAutoProgress();
     }
 
     std::string Player::beginEndedTimelineRenderHold() {
@@ -999,6 +1006,21 @@ namespace motion {
             if(!playing) {
                 disableAutoProgress();
             }
+            releaseDispatch();
+            return;
+        }
+
+        // Title motions are driven from AffineSourceMotion::_drawAffine.
+        // Their Player can be created and played while the incoming page is
+        // still hidden, before its first progress(0) draw. Keep frame zero
+        // until the script takes ownership so the animation and page
+        // transition begin from the same authored state; noteManualProgress()
+        // then unregisters this fallback clock entirely.
+        if(_manualProgressLastTick == 0 && _runtime->activeMotion &&
+           isYuzuTitlePresentationMotionPath(
+               _runtime->activeMotion->path)) {
+            _autoProgressLastTick = tick;
+            _autoProgressHasLastTick = true;
             releaseDispatch();
             return;
         }

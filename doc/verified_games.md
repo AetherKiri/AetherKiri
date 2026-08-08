@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-08-06
+Last updated: 2026-08-07
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -44,7 +44,7 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | サノバウィッチ | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 千恋＊万花 | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 天使☆騒々 RE-BOOT! | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue flow, scene/text rendering, gallery rendering and animation smoke, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
-| ライムライト・レモネードジャム | Windows x64 debug app; macOS release app; iOS/iPadOS release app build on iPad | Startup, title animation and menu rendering, continue/load flow, scene/text rendering, gallery navigation/compositing, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer), [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| ライムライト・レモネードジャム | Windows x64 debug app; macOS debug and release apps; iOS/iPadOS release app build on iPad | Startup, flicker-free logo-to-title transition, stable title animation and menu rendering, continue/load flow, scene/text rendering, gallery navigation/compositing, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer), [@KYoiRyi](https://github.com/KYoiRyi), [@MadCcc](https://github.com/MadCcc) | Local game files are not committed. |
 | ワガママハイスペック | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, music selection/playback, lock-screen audio recovery, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | ワガママハイスペック OC | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, music playback, lock-screen audio recovery, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 淫母マンション～ママは、性処理肉便器～ | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, scene/text rendering, audio playback, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |

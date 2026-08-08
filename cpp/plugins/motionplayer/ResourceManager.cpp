@@ -185,16 +185,53 @@ namespace {
         return lastLoaded;
     }
 
-    tTJSVariant &recentMotionModule() {
-        static tTJSVariant module;
-        return module;
+    struct RecentMotionModule {
+        tTJSVariant module;
+        std::string placedPath;
+        tjs_int decryptSeed = 0;
+    };
+
+    std::string placedMotionPath(const ttstr &path) {
+        if(path.IsEmpty()) {
+            return {};
+        }
+        const auto placed = TVPGetPlacedPath(path);
+        return lowercase(
+            placed.IsEmpty() ? path.AsStdString() : placed.AsStdString());
+    }
+
+    RecentMotionModule &recentMotionModule() {
+        static RecentMotionModule recent;
+        return recent;
     }
 
     void rememberRecentMotionModule(const tTJSVariant &loaded) {
-        if(loaded.Type() == tvtObject &&
-           motion::detail::lookupModuleSnapshot(loaded)) {
-            recentMotionModule() = loaded;
+        if(loaded.Type() != tvtObject) {
+            return;
         }
+        const auto snapshot = motion::detail::lookupModuleSnapshot(loaded);
+        if(!snapshot || snapshot->path.empty()) {
+            return;
+        }
+        auto &recent = recentMotionModule();
+        recent.module = loaded;
+        recent.placedPath = placedMotionPath(
+            motion::detail::widen(snapshot->path));
+        recent.decryptSeed =
+            motion::ResourceManager::getEmotePSBDecryptSeed();
+    }
+
+    tTJSVariant reuseExactRecentMotionModule(
+        const ttstr &path, const tjs_int decryptSeed) {
+        const auto &recent = recentMotionModule();
+        if(recent.module.Type() != tvtObject ||
+           recent.decryptSeed != decryptSeed ||
+           recent.placedPath.empty() ||
+           recent.placedPath != placedMotionPath(path) ||
+           !motion::detail::lookupModuleSnapshot(recent.module)) {
+            return {};
+        }
+        return recent.module;
     }
 
     std::uint16_t readU16LE(const std::uint8_t *data) {
@@ -436,6 +473,17 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
         return cached;
     }
 
+    // Some KAG layer types construct two independent resource managers for
+    // the same motion during one scene transition. Reuse the most recently
+    // parsed immutable snapshot when both the resolved storage path and
+    // decrypt seed match; otherwise a large PSB is synchronously parsed twice
+    // on the application thread.
+    if(const auto recent = reuseExactRecentMotionModule(path, _decryptSeed);
+       recent.Type() == tvtObject) {
+        rememberLoadedModule(path, recent);
+        return recent;
+    }
+
     const auto alias = _state
         ? fallbackSplitEmoteModule(_state->lastLoadedModule, path)
         : tTJSVariant{};
@@ -445,7 +493,7 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
     }
 
     const auto recentAlias = fallbackSplitEmoteModule(
-        recentMotionModule(), path);
+        recentMotionModule().module, path);
     if(recentAlias.Type() != tvtVoid) {
         rememberLoadedModule(path, recentAlias);
         return recentAlias;

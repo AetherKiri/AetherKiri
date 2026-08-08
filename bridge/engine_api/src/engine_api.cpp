@@ -1,5 +1,6 @@
 #include "legacy_engine_api_rename.h"
 #include "engine_api.h"
+#include "engine_input_queue_gate.h"
 
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
 
@@ -172,6 +173,8 @@ struct engine_handle_s {
   // Input event queue
   struct InputState {
     std::deque<engine_input_event_t> pending_events;
+    aetherkiri::engine_api::PrimaryClickQueueGate primary_click_gate;
+    size_t coalesced_events = 0;
     std::unordered_set<intptr_t> active_pointer_ids;
     bool native_mouse_callbacks_disabled = false;
   } input;
@@ -1213,6 +1216,8 @@ void MarkRuntimeOpenedForHost(engine_handle_t handle,
     impl->frame.ready = false;
     impl->input.active_pointer_ids.clear();
     impl->input.pending_events.clear();
+    impl->input.primary_click_gate.reset();
+    impl->input.coalesced_events = 0;
     impl->state = ToStateValue(EngineState::kOpened);
     ClearHandleErrorLocked(impl);
   }
@@ -2468,9 +2473,12 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
 
   const auto tick_start = std::chrono::steady_clock::now();
   size_t dispatched_inputs = 0;
+  const size_t coalesced_inputs = impl->input.coalesced_events;
+  impl->input.coalesced_events = 0;
   while (!impl->input.pending_events.empty()) {
     const engine_input_event_t queued_event = impl->input.pending_events.front();
     impl->input.pending_events.pop_front();
+    impl->input.primary_click_gate.on_dequeued(queued_event);
     dispatched_inputs += 1;
 
     const char* dispatch_error = nullptr;
@@ -2681,14 +2689,14 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
     }
     spdlog::warn(
         "engine_tick_spike tick={} total_us={} input_us={} app_us={} "
-        "draw_us={} recycle_us={} capture_us={} inputs={} renderer={} "
-        "frame_backend={} suppressed={}",
+        "draw_us={} recycle_us={} capture_us={} inputs={} coalesced_inputs={} "
+        "renderer={} frame_backend={} suppressed={}",
         static_cast<unsigned long long>(impl->tick_count), total_us,
         DurationUs(tick_start, after_input),
         DurationUs(after_input, after_application_run),
         DurationUs(after_application_run, after_draw_scene),
         DurationUs(after_draw_scene, after_recycle),
-        DurationUs(after_recycle, tick_end), dispatched_inputs,
+        DurationUs(after_recycle, tick_end), dispatched_inputs, coalesced_inputs,
         impl->render.renderer, frame_backend,
         static_cast<unsigned long long>(suppressed_slow_frames));
     std::ostringstream fields;
@@ -2699,6 +2707,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
            << ",\"recycle_us\":" << DurationUs(after_draw_scene, after_recycle)
            << ",\"capture_us\":" << DurationUs(after_recycle, tick_end)
            << ",\"inputs\":" << dispatched_inputs
+           << ",\"coalesced_inputs\":" << coalesced_inputs
            << ",\"suppressed\":" << suppressed_slow_frames
            << ",\"renderer\":\"" << JsonEscape(impl->render.renderer)
            << "\",\"frame_backend\":\"" << JsonEscape(frame_backend) << "\"}";
@@ -2845,6 +2854,8 @@ engine_result_t engine_pause(engine_handle_t handle) {
   Application->OnDeactivate();
   impl->input.active_pointer_ids.clear();
   impl->input.pending_events.clear();
+  impl->input.primary_click_gate.reset();
+  impl->input.coalesced_events = 0;
   if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
     loop->ResetPointerState();
   }
@@ -3741,9 +3752,18 @@ engine_result_t engine_send_input(engine_handle_t handle,
     }
   }
 
+  if (!impl->input.primary_click_gate.should_enqueue(*event)) {
+    impl->input.coalesced_events += 1;
+    ClearHandleErrorLocked(impl);
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+
   impl->input.pending_events.push_back(*event);
   constexpr size_t kMaxQueuedInputs = 512;
   if (impl->input.pending_events.size() > kMaxQueuedInputs) {
+    impl->input.primary_click_gate.on_dequeued(
+        impl->input.pending_events.front());
     impl->input.pending_events.pop_front();
   }
 
