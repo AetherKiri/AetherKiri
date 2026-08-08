@@ -14,6 +14,13 @@
 #include "TimerIntf.h"
 
 //---------------------------------------------------------------------------
+// Embedded hosts keep the process alive while replacing the complete TJS
+// world. Stop the timer producer before that world is released; otherwise a
+// pending Timer callback can execute against objects that are being finalized
+// or have already belonged to the previous title.
+extern void TVPResetTimerForHostSession();
+
+//---------------------------------------------------------------------------
 // tTJSNI_Timer : Timer Native Instance
 //---------------------------------------------------------------------------
 class tTVPTimerThread;

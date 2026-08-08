@@ -22,6 +22,8 @@
 
 using namespace motion::internal;
 
+extern "C" void AetherKiriMotionPlayerCoreResetForGameSession();
+
 namespace {
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
@@ -7454,7 +7456,43 @@ namespace {
         return true;
     }
 
+    void resetMotionStateForHostSession() {
+        {
+            auto &cache = sharedMotionSourceBitmapCache();
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            cache.entries.clear();
+            cache.bytes = 0;
+            cache.useCounter = 0;
+        }
+
+        // These caches retain TJS variants and use native Layer addresses as
+        // keys. They must not outlive the TJS world that created them: a later
+        // title can reuse an address and inherit an unrelated presentation
+        // frame, visibility decision, or hit-test layer.
+        globalPresentationRenderCache().clear();
+        yuzuTitlePresentationHoldCache().clear();
+
+        auto &holdCache = centeredPresentationHoldCache();
+        for(auto &cached : holdCache) {
+            releaseCenteredPresentationHoldEntry(cached.first,
+                                                  cached.second);
+        }
+        holdCache.clear();
+
+        auto &messageCache = centeredPresentationMessageUiOverlayCache();
+        for(auto &cached : messageCache) {
+            detachGeneratedCenteredPresentationLayer(
+                cached.second, "AetherKiriCenteredPresentationMessageUi");
+        }
+        messageCache.clear();
+    }
+
 } // namespace
+
+extern "C" void AetherKiriMotionResetForGameSession() {
+    AetherKiriMotionPlayerCoreResetForGameSession();
+    resetMotionStateForHostSession();
+}
 
 extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
     tTJSNI_BaseLayer *layer) {

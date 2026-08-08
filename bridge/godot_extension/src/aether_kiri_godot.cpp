@@ -79,6 +79,9 @@ char *aether_storekit_copy_state_json_for_product(const char *product_id);
 void aether_storekit_free_string(char *value);
 int32_t aether_native_launch_file_picker_present(
     const char *title, const char *initial_directory);
+int32_t aether_native_cover_file_picker_present(
+    const char *title, const char *initial_directory,
+    const char *destination_directory);
 char *aether_native_launch_file_picker_copy_result_json();
 void aether_native_launch_file_picker_free_string(char *value);
 }
@@ -8387,6 +8390,25 @@ void main() {
 #endif
     }
 
+    bool native_cover_file_picker_open(
+            const String &title,
+            const String &initial_directory,
+            const String &destination_directory) const {
+#if defined(__APPLE__)
+        const CharString title_utf8 = title.utf8();
+        const CharString directory_utf8 = initial_directory.utf8();
+        const CharString destination_utf8 = destination_directory.utf8();
+        return aether_native_cover_file_picker_present(
+                   title_utf8.get_data(), directory_utf8.get_data(),
+                   destination_utf8.get_data()) != 0;
+#else
+        (void)title;
+        (void)initial_directory;
+        (void)destination_directory;
+        return false;
+#endif
+    }
+
     String native_launch_file_picker_take_result_json() const {
 #if defined(__APPLE__)
         char *json = aether_native_launch_file_picker_copy_result_json();
@@ -8545,6 +8567,10 @@ protected:
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_open", "title", "initial_directory"),
             &AetherKiriPlayer::native_launch_file_picker_open);
+        ClassDB::bind_method(
+            D_METHOD("native_cover_file_picker_open", "title", "initial_directory",
+                     "destination_directory"),
+            &AetherKiriPlayer::native_cover_file_picker_open);
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_take_result_json"),
             &AetherKiriPlayer::native_launch_file_picker_take_result_json);

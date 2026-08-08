@@ -768,6 +768,42 @@ extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height) {
     g_host_surface_height = height;
 }
 
+extern "C" void TVPHostResetForGameSession() {
+    {
+        std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+        g_host_frame_rgba.clear();
+        g_host_frame_width = 0;
+        g_host_frame_height = 0;
+        g_host_frame_stride = 0;
+        g_host_gpu_texture = 0;
+        g_host_gpu_width = 0;
+        g_host_gpu_height = 0;
+        // Keep serials monotonic so a newly published frame can never be
+        // mistaken for the final frame of the preceding game session.
+        ++g_host_frame_serial;
+        g_host_gpu_serial = g_host_frame_serial;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_host_text_input_mutex);
+        g_host_text_input_state = {};
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_host_video_overlay_mutex);
+        g_host_video_overlay_active = false;
+        g_host_video_overlay_rgba.clear();
+        g_host_video_overlay_width = 0;
+        g_host_video_overlay_height = 0;
+        g_host_video_overlay_left = 0;
+        g_host_video_overlay_top = 0;
+        g_host_video_overlay_right = 0;
+        g_host_video_overlay_bottom = 0;
+    }
+    g_host_window_owner = nullptr;
+    g_host_window_owners.clear();
+    g_postDrawHook = nullptr;
+    spdlog::info("Host render state reset for next game session");
+}
+
 extern "C" bool TVPHostSubmitVideoOverlayFrame(const void *rgba,
                                                 uint32_t width,
                                                 uint32_t height,
@@ -1372,6 +1408,11 @@ public:
     void InvalidateClose() override {
         closing_ = true;
         DetachOwner();
+        // HostWindowLayer is allocated by TVPCreateAndAddWindow and, unlike
+        // the native Win32 form, has no application/window-system owner that
+        // will delete it later. Match the Win32 InvalidateClose contract by
+        // releasing the layer (and its surface texture) immediately.
+        delete this;
     }
 
     bool GetWindowActive() override { return active_; }

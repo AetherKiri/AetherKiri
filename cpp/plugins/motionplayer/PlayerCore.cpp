@@ -258,6 +258,28 @@ namespace {
     }
 }
 
+extern "C" void AetherKiriMotionPlayerCoreResetForGameSession() {
+    {
+        std::lock_guard<std::mutex> lock(g_autoProgressMutex);
+        if(g_autoProgressHookRegistered)
+            TVPRemoveContinuousEventHook(&g_autoProgressHook);
+        g_autoProgressPlayers.clear();
+        g_autoProgressHookRegistered = false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_yuzuSdAutoProgressMutex);
+        g_yuzuSdAutoProgressPlayer = nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_presentationHoldMutex);
+        if(g_presentationHoldHookRegistered)
+            TVPRemoveContinuousEventHook(&g_presentationHoldHook);
+        g_presentationHoldPlayers.clear();
+        g_presentationHoldHookRegistered = false;
+    }
+    motion::ResourceManager::resetStaticStateForHostSession();
+}
+
 namespace motion {
 
     std::vector<tTJSVariant> SnapshotAutoProgressPlayerDispatchesForCompat() {

@@ -26,6 +26,10 @@ extern bool TVPIsProjectStorageFile(const ttstr &normalizedProjectPath,
 
 extern void TVPEnsureDataPathDirectory();
 
+// Clear per-title command-line/data-path state when the engine is embedded in
+// a long-lived host and another title can be opened in the same process.
+extern void TVPResetSystemInitStateForHostSession();
+
 extern bool TVPExecuteUserConfig();
 
 extern bool TVPTerminated;

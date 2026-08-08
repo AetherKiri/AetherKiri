@@ -63,6 +63,8 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "environ/EngineLoop.h"
 #include "environ/MainScene.h"
 #include "base/StorageIntf.h"
+#include "base/EventIntf.h"
+#include "base/impl/EventImpl.h"
 #include "base/impl/StorageImpl.h"
 #include "base/ScriptMgnIntf.h"
 #include "base/SysInitIntf.h"
@@ -74,6 +76,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #endif
 #include "visual/ogl/angle_backend.h"
 #include "visual/impl/WindowImpl.h"
+#include "visual/WindowIntf.h"
 #include "visual/RenderManager.h"
 #include "visual/godot/GodotRenderManager.h"
 #include "visual/godot/GodotGpuBridge.h"
@@ -86,6 +89,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "PluginImpl.h"
 #include "base/impl/StorageImpl.h"
 #include "movie/ffmpeg/KRMoviePlayer.h"
+#include "utils/win32/TimerImpl.h"
 
 extern "C" {
 #include "libavcodec/avcodec.h"
@@ -110,6 +114,7 @@ extern "C" void TVPRegisterLayerExDrawPluginAnchor();
 extern "C" void TVPRegisterKAGParserExPluginAnchor();
 
 extern "C" const char* TJSGetRecentExecArgTrace();
+extern "C" void TJS_CollectOrphanedICCs(bool force);
 extern "C" void TVPRegisterScriptsExPluginAnchor();
 extern "C" void TVPRegisterCSVParserPluginAnchor();
 extern "C" void TVPRegisterFstatPluginAnchor();
@@ -130,6 +135,9 @@ extern "C" void TVPHostActivateMainWindow();
 extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height);
 extern "C" void TVPHostSetPreferGpuFrame(bool prefer_gpu_frame);
 extern "C" void TVPHostSetPublishRawSourceFrame(bool publish_raw_source);
+extern "C" void TVPHostResetForGameSession();
+extern "C" void AetherKiriMotionResetForGameSession();
+extern void TVPClearScnearioCache();
 extern "C" void TVPHostGetTextInputState(uint32_t* ime_active,
                                            int32_t* ime_mode,
                                            uint32_t* attention_point_valid,
@@ -1883,6 +1891,10 @@ engine_result_t OpenGameCore(engine_handle_t handle,
   };
 
   try {
+    // A previous title may have ended through System.exit while its Window
+    // and activation callbacks were still retained by script-side cycles.
+    // Start every embedded session from a process-neutral application state.
+    Application->ResetForHostSession();
     spdlog::debug("engine_open_game: calling Application->StartApplication...");
 #if defined(__ANDROID__)
     AndroidInfoLog("engine_open_game: calling StartApplication('%s')",
@@ -2148,8 +2160,37 @@ engine_result_t engine_destroy(engine_handle_t handle) {
       spdlog::warn("engine_destroy: FilterUserMessage ignored unknown exception");
     }
     try {
+      // Compatibility render caches retain TJS variants and native Layer
+      // addresses. Release them while the old script world is still valid,
+      // then clear the generic Layer routing tables before another title can
+      // reuse those addresses.
+      //
+      // Timer and continuous-event producer threads must be joined first.
+      // Legacy AtExit handlers run only once in an embedded process, so they
+      // cannot protect the second and later End Game -> open title cycles.
+      TVPResetTimerForHostSession();
+      TVPResetEventPlatformForHostSession();
+      AetherKiriMotionResetForGameSession();
+      TVPResetLayerStateForHostSession();
+      TVPResetEventsForHostSession();
+      // Let TJS release and invalidate its own Window graph. Forcing owner
+      // invalidation before script-engine shutdown can recursively finalize a
+      // multi-window title and crash in tTJSCustomObject::Finalize.
       Application->OnExit();
+      // tTJS script blocks can leave intermediate-code contexts in the
+      // process-wide orphan registry while their final Release is deferred.
+      // Never let those contexts (and their captured old-world variants)
+      // survive until a compact event in the next title.
+      TJS_CollectOrphanedICCs(true);
+      TVPResetEventsForHostSession();
+      TVPResetWindowRegistryForHostSession();
+      TVPClearGraphicCache();
+      TVPClearScnearioCache();
+      TVPClearArchiveCache();
+      TVPHostResetForGameSession();
+      Application->ResetForHostSession();
       TVPResetAutoPathsForGameSession();
+      TVPResetSystemInitStateForHostSession();
     } catch (const std::exception& e) {
       spdlog::warn("engine_destroy: session cleanup ignored exception: {}", e.what());
     } catch (...) {

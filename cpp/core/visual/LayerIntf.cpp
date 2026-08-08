@@ -980,6 +980,23 @@ struct tTVPLayerMouseUpContext {
 
 static thread_local tTVPLayerMouseUpContext TVPLayerCurrentMouseUp;
 
+void TVPResetLayerStateForHostSession() {
+    {
+        std::lock_guard<std::mutex> lock(TVPExchangedKagPageMutex);
+        TVPExchangedHiddenKagPages.clear();
+        TVPKagPageLastObservedVisibility.clear();
+        TVPHiddenKagAssignmentStreaks.clear();
+        TVPMotionSwapAssignmentTargets.clear();
+    }
+    TVPFullGpuCompletionRequested.store(false, std::memory_order_release);
+    TVPLayerDrawTraceArmedFlag.store(false, std::memory_order_release);
+    TVPLayerEventSource = nullptr;
+    TVPLayerRecentEventSource = nullptr;
+    TVPCafeStellaSyntheticClickActive = false;
+    TVPLayerLastSaveLoadItemIndex = 0;
+    TVPLayerCurrentMouseUp = {};
+}
+
 class TVPLayerEventSourceScope {
 public:
     explicit TVPLayerEventSourceScope(tTJSNI_BaseLayer *layer)
