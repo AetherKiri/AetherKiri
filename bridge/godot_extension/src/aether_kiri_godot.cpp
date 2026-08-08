@@ -7617,12 +7617,20 @@ public:
         Array allocated_texture_bytes;
         Array allocated_uniform_set_counts;
         Array texture_layouts;
+        Array chain_stage_orders;
+        Array chain_dispatch_counts;
+        Array chain_peak_widths;
+        Array chain_peak_heights;
         bool ok = true;
-        const std::array<String, 7> modes = {
+        const std::array<String, 15> modes = {
             "anime4k", "fsr1", "bicubic", "lanczos",
-            "ravu", "cunny", "nnedi3"};
-        const std::array<uint32_t, 7> target_sizes = {
-            24u, 22u, 23u, 26u, 31u, 30u, 29u};
+            "ravu", "cunny", "nnedi3",
+            "chain_4k_max", "chain_lossless", "chain_ultra",
+            "chain_detail", "chain_balanced", "chain_soft",
+            "chain_light", "chain_basic"};
+        const std::array<uint32_t, 15> target_sizes = {
+            24u, 22u, 23u, 26u, 31u, 30u, 29u,
+            32u, 33u, 34u, 35u, 36u, 37u, 38u, 39u};
         for (size_t index = 0; index < modes.size(); ++index) {
             request.target_width = target_sizes[index];
             request.target_height = target_sizes[index];
@@ -7647,12 +7655,21 @@ public:
             allocated_uniform_set_counts.push_back(
                 pass_status.get("allocated_uniform_set_count", 0));
             texture_layouts.push_back(pass_status.get("texture_layout", ""));
+            const Dictionary chain_status = pass_status.get("chain", Dictionary());
+            chain_stage_orders.push_back(
+                chain_status.get("stage_order", Array()));
+            chain_dispatch_counts.push_back(
+                chain_status.get("last_dispatch_count", 0));
+            chain_peak_widths.push_back(
+                chain_status.get("peak_internal_width", 0));
+            chain_peak_heights.push_back(
+                chain_status.get("peak_internal_height", 0));
             output = pass_output;
         }
         // A new serial with an unchanged source, mode and geometry must reuse
         // the texture graph and persistent uniform sets while still producing
         // a newly double-buffered output frame.
-        request.frame_serial = 8u;
+        request.frame_serial = static_cast<uint64_t>(modes.size() + 1u);
         FrameEffectOutput reused_output;
         String reused_error;
         const bool reuse_ok = frame_effect_provider_->process(
@@ -7693,13 +7710,14 @@ public:
         const int64_t uniform_set_cache_hit_delta = static_cast<int64_t>(
             provider_status.get("uniform_set_cache_hits", 0)) -
             initial_uniform_set_cache_hits;
-        // Only the recommended profile may run Restore, and it must run exactly
-        // one four-pass chain. Each fixed-weight neural profile runs once, with
-        // the final profile running one additional serial for reuse validation.
-        ok = ok && processed_delta == 8 && cache_hit_delta >= 1 &&
+        // The original recommended profile still runs one protected four-pass
+        // restore. The eight new profiles use their separate ordered executor;
+        // the final lightweight chain runs one additional serial to validate
+        // graph/uniform reuse.
+        ok = ok && processed_delta == 16 && cache_hit_delta >= 1 &&
             restore_run_delta == 1 && restore_pass_delta == 4 &&
-            neural_run_delta == 4 && compiled_pipeline_delta == 16 &&
-            pipeline_attempt_delta == 16 &&
+            neural_run_delta == 3 && compiled_pipeline_delta == 95 &&
+            pipeline_attempt_delta == 95 &&
             texture_reuse_delta >= 1 && uniform_set_cache_hit_delta >= 1;
 
         int64_t visible_pixels = 0;
@@ -7726,6 +7744,57 @@ public:
         } else {
             ok = false;
         }
+
+        // Exercise the exact public resolution targets on Metal with the
+        // lightweight ordered chain. This validates real allocation,
+        // dispatch, final RGBA8 conversion, and opaque output at 1080p, 2K,
+        // and 4K without making the self-test run the intentionally extreme
+        // VL supersample graph at full resolution.
+        Array exact_resolution_sizes;
+        Array exact_resolution_bytes;
+        const std::array<Vector2i, 3> exact_targets = {
+            Vector2i(1920, 1080), Vector2i(2560, 1440),
+            Vector2i(3840, 2160)};
+        request.mode = "chain_basic";
+        for (size_t index = 0; index < exact_targets.size(); ++index) {
+            request.target_width = static_cast<uint32_t>(exact_targets[index].x);
+            request.target_height = static_cast<uint32_t>(exact_targets[index].y);
+            request.frame_serial = static_cast<uint64_t>(100u + index);
+            FrameEffectOutput exact_output;
+            String exact_error;
+            const bool exact_ok = frame_effect_provider_->process(
+                request, &exact_output, &exact_error);
+            if (!exact_error.is_empty()) error = exact_error;
+            RID exact_rid;
+            if (server != nullptr && exact_output.texture.is_valid()) {
+                exact_rid = server->texture_get_rd_texture(
+                    exact_output.texture->get_rid());
+            }
+            PackedByteArray exact_pixels;
+            if (exact_rid.is_valid()) {
+                exact_pixels = rd->texture_get_data(exact_rid, 0);
+            }
+            const int64_t exact_expected_bytes =
+                static_cast<int64_t>(request.target_width) *
+                request.target_height * 4;
+            bool exact_opaque = exact_pixels.size() == exact_expected_bytes;
+            if (exact_opaque && exact_pixels.size() >= 4) {
+                const std::array<int64_t, 3> sample_offsets = {
+                    3, (exact_pixels.size() / 8) * 4 + 3,
+                    exact_pixels.size() - 1};
+                for (int64_t sample_offset : sample_offsets) {
+                    exact_opaque = exact_opaque &&
+                        exact_pixels[sample_offset] == 255;
+                }
+            }
+            ok = ok && exact_ok && exact_output.texture.is_valid() &&
+                exact_output.width == request.target_width &&
+                exact_output.height == request.target_height && exact_opaque;
+            exact_resolution_sizes.push_back(
+                String::num_int64(request.target_width) + String("x") +
+                String::num_int64(request.target_height));
+            exact_resolution_bytes.push_back(exact_pixels.size());
+        }
         result["ok"] = ok;
         result["error"] = error;
         result["width"] = static_cast<int64_t>(output.width);
@@ -7737,6 +7806,10 @@ public:
         result["allocated_texture_bytes"] = allocated_texture_bytes;
         result["allocated_uniform_set_counts"] = allocated_uniform_set_counts;
         result["texture_layouts"] = texture_layouts;
+        result["chain_stage_orders"] = chain_stage_orders;
+        result["chain_dispatch_counts"] = chain_dispatch_counts;
+        result["chain_peak_widths"] = chain_peak_widths;
+        result["chain_peak_heights"] = chain_peak_heights;
         result["visible_pixels"] = visible_pixels;
         result["opaque_pixels"] = opaque_pixels;
         result["provider"] = provider_status;
@@ -7748,6 +7821,8 @@ public:
         result["pipeline_compile_attempt_delta"] = pipeline_attempt_delta;
         result["texture_reuse_delta"] = texture_reuse_delta;
         result["uniform_set_cache_hit_delta"] = uniform_set_cache_hit_delta;
+        result["exact_resolution_sizes"] = exact_resolution_sizes;
+        result["exact_resolution_bytes"] = exact_resolution_bytes;
 
         frame_effect_provider_->release(rd);
         frame_effect_provider_->set_enabled(previous_enabled);

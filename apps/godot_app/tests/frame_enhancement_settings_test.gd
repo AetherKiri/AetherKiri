@@ -68,6 +68,11 @@ func _initialize() -> void:
     assert(app.frame_enhancement_mode == "anime4k")
     assert(app._normalize_frame_enhancement_mode("auto") == "anime4k")
     assert(app._normalize_frame_enhancement_mode("bicubic") == "bicubic")
+    for chain_mode in [
+        "chain_4k_max", "chain_lossless", "chain_ultra", "chain_detail",
+        "chain_balanced", "chain_soft", "chain_light", "chain_basic",
+    ]:
+        assert(app._normalize_frame_enhancement_mode(chain_mode) == chain_mode)
 
     for language in ["zh_hans", "zh_hant", "en", "ja", "ko"]:
         app.active_language = language
