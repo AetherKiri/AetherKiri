@@ -7594,6 +7594,8 @@ public:
             initial_provider_status.get("anime4k_restore_runs", 0));
         const int64_t initial_restore_passes = static_cast<int64_t>(
             initial_provider_status.get("anime4k_restore_pass_dispatches", 0));
+        const int64_t initial_neural_runs = static_cast<int64_t>(
+            initial_provider_status.get("neural_upscale_runs", 0));
         const int64_t initial_compiled_pipelines = static_cast<int64_t>(
             initial_provider_status.get("compiled_pipeline_count", 0));
         const int64_t initial_pipeline_attempts = static_cast<int64_t>(
@@ -7616,9 +7618,11 @@ public:
         Array allocated_uniform_set_counts;
         Array texture_layouts;
         bool ok = true;
-        const std::array<String, 4> modes = {
-            "anime4k", "fsr1", "bicubic", "lanczos"};
-        const std::array<uint32_t, 4> target_sizes = {24u, 22u, 23u, 26u};
+        const std::array<String, 7> modes = {
+            "anime4k", "fsr1", "bicubic", "lanczos",
+            "ravu", "cunny", "nnedi3"};
+        const std::array<uint32_t, 7> target_sizes = {
+            24u, 22u, 23u, 26u, 31u, 30u, 29u};
         for (size_t index = 0; index < modes.size(); ++index) {
             request.target_width = target_sizes[index];
             request.target_height = target_sizes[index];
@@ -7648,7 +7652,7 @@ public:
         // A new serial with an unchanged source, mode and geometry must reuse
         // the texture graph and persistent uniform sets while still producing
         // a newly double-buffered output frame.
-        request.frame_serial = 5u;
+        request.frame_serial = 8u;
         FrameEffectOutput reused_output;
         String reused_error;
         const bool reuse_ok = frame_effect_provider_->process(
@@ -7674,6 +7678,9 @@ public:
         const int64_t restore_pass_delta = static_cast<int64_t>(
             provider_status.get("anime4k_restore_pass_dispatches", 0)) -
             initial_restore_passes;
+        const int64_t neural_run_delta = static_cast<int64_t>(
+            provider_status.get("neural_upscale_runs", 0)) -
+            initial_neural_runs;
         const int64_t compiled_pipeline_delta = static_cast<int64_t>(
             provider_status.get("compiled_pipeline_count", 0)) -
             initial_compiled_pipelines;
@@ -7686,12 +7693,13 @@ public:
         const int64_t uniform_set_cache_hit_delta = static_cast<int64_t>(
             provider_status.get("uniform_set_cache_hits", 0)) -
             initial_uniform_set_cache_hits;
-        // Only the Anime4K profile may run Restore, and it must run exactly one
-        // four-pass chain for the frame. The three general scaler profiles must
-        // not invoke Anime4K implicitly.
-        ok = ok && processed_delta == 5 && cache_hit_delta >= 1 &&
+        // Only the recommended profile may run Restore, and it must run exactly
+        // one four-pass chain. Each fixed-weight neural profile runs once, with
+        // the final profile running one additional serial for reuse validation.
+        ok = ok && processed_delta == 8 && cache_hit_delta >= 1 &&
             restore_run_delta == 1 && restore_pass_delta == 4 &&
-            compiled_pipeline_delta == 9 && pipeline_attempt_delta == 9 &&
+            neural_run_delta == 4 && compiled_pipeline_delta == 16 &&
+            pipeline_attempt_delta == 16 &&
             texture_reuse_delta >= 1 && uniform_set_cache_hit_delta >= 1;
 
         int64_t visible_pixels = 0;
@@ -7735,6 +7743,7 @@ public:
         result["processed_delta"] = processed_delta;
         result["anime4k_restore_run_delta"] = restore_run_delta;
         result["anime4k_restore_pass_delta"] = restore_pass_delta;
+        result["neural_upscale_run_delta"] = neural_run_delta;
         result["compiled_pipeline_delta"] = compiled_pipeline_delta;
         result["pipeline_compile_attempt_delta"] = pipeline_attempt_delta;
         result["texture_reuse_delta"] = texture_reuse_delta;

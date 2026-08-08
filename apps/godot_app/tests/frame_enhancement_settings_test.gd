@@ -59,6 +59,10 @@ func _initialize() -> void:
     snapshot["frame_enhancement_mode"] = "lanczos"
     app._apply_settings_snapshot(snapshot)
     assert(app.frame_enhancement_mode == "lanczos")
+    for neural_mode in ["ravu", "cunny", "nnedi3"]:
+        snapshot["frame_enhancement_mode"] = neural_mode
+        app._apply_settings_snapshot(snapshot)
+        assert(app.frame_enhancement_mode == neural_mode)
     snapshot["frame_enhancement_mode"] = "invalid"
     app._apply_settings_snapshot(snapshot)
     assert(app.frame_enhancement_mode == "anime4k")
@@ -80,7 +84,7 @@ func _initialize() -> void:
             var effect_label := String(app._t("settings.frame_enhancement_mode.%s" % mode))
             assert(not effect_label.is_empty())
             public_effect_copy += " " + effect_label.to_lower()
-        for private_name in ["anime4k", "fsr1", "bicubic", "lanczos"]:
+        for private_name in ["anime4k", "fsr1", "bicubic", "lanczos", "ravu", "cunny", "nnedi3"]:
             assert(not public_effect_copy.contains(private_name))
 
     app.free()

@@ -167,6 +167,9 @@ const UI_TEXT := {
         "settings.frame_enhancement_mode.fsr1": "均衡清晰",
         "settings.frame_enhancement_mode.bicubic": "自然柔和",
         "settings.frame_enhancement_mode.lanczos": "锐利细节",
+        "settings.frame_enhancement_mode.ravu": "精细放大",
+        "settings.frame_enhancement_mode.cunny": "纹理增强",
+        "settings.frame_enhancement_mode.nnedi3": "线条平滑",
         "settings.perf": "性能监控",
         "settings.perf_desc": "显示帧率、进程内存、GPU 内存估算和图形 API 信息",
         "settings.fps_limit": "帧率限制",
@@ -380,6 +383,9 @@ const UI_TEXT := {
         "settings.frame_enhancement_mode.fsr1": "均衡清晰",
         "settings.frame_enhancement_mode.bicubic": "自然柔和",
         "settings.frame_enhancement_mode.lanczos": "銳利細節",
+        "settings.frame_enhancement_mode.ravu": "精細放大",
+        "settings.frame_enhancement_mode.cunny": "紋理增強",
+        "settings.frame_enhancement_mode.nnedi3": "線條平滑",
         "settings.perf": "效能監控",
         "settings.perf_desc": "顯示幀率、程序記憶體、GPU 記憶體估算和圖形 API 資訊",
         "settings.fps_limit": "幀率限制",
@@ -593,6 +599,9 @@ const UI_TEXT := {
         "settings.frame_enhancement_mode.fsr1": "Balanced Clarity",
         "settings.frame_enhancement_mode.bicubic": "Natural Softness",
         "settings.frame_enhancement_mode.lanczos": "Crisp Detail",
+        "settings.frame_enhancement_mode.ravu": "Fine Reconstruction",
+        "settings.frame_enhancement_mode.cunny": "Texture Enhancement",
+        "settings.frame_enhancement_mode.nnedi3": "Smooth Lines",
         "settings.perf": "Performance Monitor",
         "settings.perf_desc": "Show FPS, process memory, estimated GPU memory, and graphics API information",
         "settings.fps_limit": "FPS Limit",
@@ -806,6 +815,9 @@ const UI_TEXT := {
         "settings.frame_enhancement_mode.fsr1": "バランス鮮明",
         "settings.frame_enhancement_mode.bicubic": "自然でソフト",
         "settings.frame_enhancement_mode.lanczos": "くっきり細部",
+        "settings.frame_enhancement_mode.ravu": "高精細拡大",
+        "settings.frame_enhancement_mode.cunny": "質感強化",
+        "settings.frame_enhancement_mode.nnedi3": "線をなめらかに",
         "settings.perf": "パフォーマンス監視",
         "settings.perf_desc": "FPS、プロセスメモリ、GPU メモリ推定値、グラフィックス API 情報を表示します",
         "settings.fps_limit": "FPS 制限",
@@ -1019,6 +1031,9 @@ const UI_TEXT := {
         "settings.frame_enhancement_mode.fsr1": "균형 잡힌 선명도",
         "settings.frame_enhancement_mode.bicubic": "자연스러운 부드러움",
         "settings.frame_enhancement_mode.lanczos": "또렷한 디테일",
+        "settings.frame_enhancement_mode.ravu": "정밀 확대",
+        "settings.frame_enhancement_mode.cunny": "텍스처 향상",
+        "settings.frame_enhancement_mode.nnedi3": "선 윤곽 보정",
         "settings.perf": "성능 모니터",
         "settings.perf_desc": "FPS, 프로세스 메모리, GPU 메모리 추정치와 그래픽 API 정보를 표시합니다",
         "settings.fps_limit": "FPS 제한",
@@ -1523,7 +1538,9 @@ const RENDER_SURFACE_MODE_DISPLAY := "display"
 const OUTPUT_RESOLUTION_DEFAULT := "1080p"
 const OUTPUT_RESOLUTION_MODES := ["original", "1080p", "2k", "4k"]
 const FRAME_ENHANCEMENT_MODE_DEFAULT := "anime4k"
-const FRAME_ENHANCEMENT_MODES := ["anime4k", "fsr1", "bicubic", "lanczos"]
+const FRAME_ENHANCEMENT_MODES := [
+    "anime4k", "fsr1", "bicubic", "lanczos", "ravu", "cunny", "nnedi3",
+]
 const OUTPUT_RESOLUTION_LIMITS := {
     "1080p": Vector2i(1920, 1080),
     "2k": Vector2i(2560, 1440),
