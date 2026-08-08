@@ -46,9 +46,32 @@ func _initialize() -> void:
     var default_algorithms: Array = provider.get("default_algorithms", [])
     ok = ok and default_algorithms.has("Anime4K Restore CNN Soft S (detail protected)")
     ok = ok and default_algorithms.has("FSR1 RCAS (low strength)")
-    ok = ok and int(result.get("processed_delta", 0)) == 4
+    ok = ok and int(provider.get("version", 0)) == 4
+    ok = ok and String(provider.get("selection_policy", "")) == "user_fixed"
+    ok = ok and not bool(provider.get("dynamic_downgrade", true))
+    ok = ok and not bool(provider.get("memory_budget_enabled", true))
+    var compiled_pipeline_counts: Array = result.get("compiled_pipeline_counts", [])
+    ok = ok and compiled_pipeline_counts == [7, 7, 8, 9]
+    var allocated_texture_counts: Array = result.get("allocated_texture_counts", [])
+    ok = ok and allocated_texture_counts == [6, 4, 4, 4]
+    var allocated_uniform_set_counts: Array = result.get("allocated_uniform_set_counts", [])
+    ok = ok and allocated_uniform_set_counts == [8, 4, 4, 4]
+    var texture_layouts: Array = result.get("texture_layouts", [])
+    ok = ok and texture_layouts.size() == 4
+    ok = ok and String(texture_layouts[0]).begins_with("restore")
+    for index in range(1, texture_layouts.size()):
+        ok = ok and String(texture_layouts[index]).begins_with("scaler_only")
+    var allocated_texture_bytes: Array = result.get("allocated_texture_bytes", [])
+    ok = ok and allocated_texture_bytes.size() == 4
+    for index in range(1, allocated_texture_bytes.size()):
+        ok = ok and int(allocated_texture_bytes[index]) < int(allocated_texture_bytes[0])
+    ok = ok and int(result.get("processed_delta", 0)) == 5
     ok = ok and int(result.get("anime4k_restore_run_delta", 0)) == 1
     ok = ok and int(result.get("anime4k_restore_pass_delta", 0)) == 4
+    ok = ok and int(result.get("compiled_pipeline_delta", 0)) == 9
+    ok = ok and int(result.get("pipeline_compile_attempt_delta", 0)) == 9
+    ok = ok and int(result.get("texture_reuse_delta", 0)) >= 1
+    ok = ok and int(result.get("uniform_set_cache_hit_delta", 0)) >= 1
 
     var user_root := OS.get_user_data_dir()
     ok = ok and player.initialize_engine(user_root, user_root.path_join("cache"))

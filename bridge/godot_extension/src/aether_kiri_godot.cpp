@@ -7594,6 +7594,14 @@ public:
             initial_provider_status.get("anime4k_restore_runs", 0));
         const int64_t initial_restore_passes = static_cast<int64_t>(
             initial_provider_status.get("anime4k_restore_pass_dispatches", 0));
+        const int64_t initial_compiled_pipelines = static_cast<int64_t>(
+            initial_provider_status.get("compiled_pipeline_count", 0));
+        const int64_t initial_pipeline_attempts = static_cast<int64_t>(
+            initial_provider_status.get("pipeline_compile_attempts", 0));
+        const int64_t initial_texture_reuse_hits = static_cast<int64_t>(
+            initial_provider_status.get("texture_reuse_hits", 0));
+        const int64_t initial_uniform_set_cache_hits = static_cast<int64_t>(
+            initial_provider_status.get("uniform_set_cache_hits", 0));
         FrameEffectRequest request;
         request.rendering_device = rd;
         request.source_texture = source_rid;
@@ -7602,6 +7610,11 @@ public:
         FrameEffectOutput output;
         String error;
         Array pipelines;
+        Array compiled_pipeline_counts;
+        Array allocated_texture_counts;
+        Array allocated_texture_bytes;
+        Array allocated_uniform_set_counts;
+        Array texture_layouts;
         bool ok = true;
         const std::array<String, 4> modes = {
             "anime4k", "fsr1", "bicubic", "lanczos"};
@@ -7620,8 +7633,30 @@ public:
                 pass_output.height == request.target_height;
             if (!pass_error.is_empty()) error = pass_error;
             pipelines.push_back(pass_output.pipeline);
+            const Dictionary pass_status = frame_effect_provider_->status();
+            compiled_pipeline_counts.push_back(
+                pass_status.get("compiled_pipeline_count", 0));
+            allocated_texture_counts.push_back(
+                pass_status.get("allocated_texture_count", 0));
+            allocated_texture_bytes.push_back(
+                pass_status.get("allocated_texture_bytes", 0));
+            allocated_uniform_set_counts.push_back(
+                pass_status.get("allocated_uniform_set_count", 0));
+            texture_layouts.push_back(pass_status.get("texture_layout", ""));
             output = pass_output;
         }
+        // A new serial with an unchanged source, mode and geometry must reuse
+        // the texture graph and persistent uniform sets while still producing
+        // a newly double-buffered output frame.
+        request.frame_serial = 5u;
+        FrameEffectOutput reused_output;
+        String reused_error;
+        const bool reuse_ok = frame_effect_provider_->process(
+            request, &reused_output, &reused_error);
+        ok = ok && reuse_ok && reused_output.texture.is_valid() &&
+            reused_output.texture != output.texture;
+        if (!reused_error.is_empty()) error = reused_error;
+        output = reused_output;
         FrameEffectOutput cached_output;
         String cached_error;
         const bool cache_ok = frame_effect_provider_->process(
@@ -7639,11 +7674,25 @@ public:
         const int64_t restore_pass_delta = static_cast<int64_t>(
             provider_status.get("anime4k_restore_pass_dispatches", 0)) -
             initial_restore_passes;
+        const int64_t compiled_pipeline_delta = static_cast<int64_t>(
+            provider_status.get("compiled_pipeline_count", 0)) -
+            initial_compiled_pipelines;
+        const int64_t pipeline_attempt_delta = static_cast<int64_t>(
+            provider_status.get("pipeline_compile_attempts", 0)) -
+            initial_pipeline_attempts;
+        const int64_t texture_reuse_delta = static_cast<int64_t>(
+            provider_status.get("texture_reuse_hits", 0)) -
+            initial_texture_reuse_hits;
+        const int64_t uniform_set_cache_hit_delta = static_cast<int64_t>(
+            provider_status.get("uniform_set_cache_hits", 0)) -
+            initial_uniform_set_cache_hits;
         // Only the Anime4K profile may run Restore, and it must run exactly one
         // four-pass chain for the frame. The three general scaler profiles must
         // not invoke Anime4K implicitly.
-        ok = ok && processed_delta == 4 && cache_hit_delta >= 1 &&
-            restore_run_delta == 1 && restore_pass_delta == 4;
+        ok = ok && processed_delta == 5 && cache_hit_delta >= 1 &&
+            restore_run_delta == 1 && restore_pass_delta == 4 &&
+            compiled_pipeline_delta == 9 && pipeline_attempt_delta == 9 &&
+            texture_reuse_delta >= 1 && uniform_set_cache_hit_delta >= 1;
 
         int64_t visible_pixels = 0;
         int64_t opaque_pixels = 0;
@@ -7675,12 +7724,21 @@ public:
         result["height"] = static_cast<int64_t>(output.height);
         result["pipeline"] = output.pipeline;
         result["pipelines"] = pipelines;
+        result["compiled_pipeline_counts"] = compiled_pipeline_counts;
+        result["allocated_texture_counts"] = allocated_texture_counts;
+        result["allocated_texture_bytes"] = allocated_texture_bytes;
+        result["allocated_uniform_set_counts"] = allocated_uniform_set_counts;
+        result["texture_layouts"] = texture_layouts;
         result["visible_pixels"] = visible_pixels;
         result["opaque_pixels"] = opaque_pixels;
         result["provider"] = provider_status;
         result["processed_delta"] = processed_delta;
         result["anime4k_restore_run_delta"] = restore_run_delta;
         result["anime4k_restore_pass_delta"] = restore_pass_delta;
+        result["compiled_pipeline_delta"] = compiled_pipeline_delta;
+        result["pipeline_compile_attempt_delta"] = pipeline_attempt_delta;
+        result["texture_reuse_delta"] = texture_reuse_delta;
+        result["uniform_set_cache_hit_delta"] = uniform_set_cache_hit_delta;
 
         frame_effect_provider_->release(rd);
         frame_effect_provider_->set_enabled(previous_enabled);
