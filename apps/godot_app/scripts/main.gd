@@ -155,6 +155,12 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native 按游戏基准画布运行；Display Fit 按设备显示尺寸运行",
         "settings.upscale": "缩放算法",
         "settings.upscale_desc": "外层拉伸画面时使用；Smooth/Linear 会做平滑采样",
+        "settings.output_resolution": "输出分辨率",
+        "settings.output_resolution_desc": "设置外层缩放与画面增强的目标分辨率；较高档位会增加 GPU 和显存占用",
+        "settings.output_resolution.original": "原始",
+        "settings.frame_enhancement": "画面增强",
+        "settings.frame_enhancement_desc": "使用 GPU 修复线条，并按输出分辨率高质量放大；保存后立即生效",
+        "settings.frame_enhancement_unavailable_desc": "当前构建或图形设备不支持画面增强；开启后仍会安全使用原始画面",
         "settings.perf": "性能监控",
         "settings.perf_desc": "显示帧率、进程内存、GPU 内存估算和图形 API 信息",
         "settings.fps_limit": "帧率限制",
@@ -356,6 +362,12 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native 依遊戲基準畫布執行；Display Fit 依裝置顯示尺寸執行",
         "settings.upscale": "縮放演算法",
         "settings.upscale_desc": "外層拉伸畫面時使用；Smooth/Linear 會進行平滑取樣",
+        "settings.output_resolution": "輸出解析度",
+        "settings.output_resolution_desc": "設定外層縮放與畫面增強的目標解析度；較高檔位會增加 GPU 與顯示記憶體用量",
+        "settings.output_resolution.original": "原始",
+        "settings.frame_enhancement": "畫面增強",
+        "settings.frame_enhancement_desc": "使用 GPU 修復線條，並依輸出解析度高品質放大；儲存後立即生效",
+        "settings.frame_enhancement_unavailable_desc": "目前建置或圖形裝置不支援畫面增強；開啟後仍會安全使用原始畫面",
         "settings.perf": "效能監控",
         "settings.perf_desc": "顯示幀率、程序記憶體、GPU 記憶體估算和圖形 API 資訊",
         "settings.fps_limit": "幀率限制",
@@ -557,6 +569,12 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native uses the game's base canvas; Display Fit uses the device display size",
         "settings.upscale": "Scaling",
         "settings.upscale_desc": "Used when stretching the outer frame; Smooth/Linear apply filtered sampling",
+        "settings.output_resolution": "Output Resolution",
+        "settings.output_resolution_desc": "Sets the target for outer scaling and image enhancement; higher tiers use more GPU time and memory",
+        "settings.output_resolution.original": "Original",
+        "settings.frame_enhancement": "Image Enhancement",
+        "settings.frame_enhancement_desc": "Use the GPU to restore lines and upscale to the selected output resolution; applies immediately after saving",
+        "settings.frame_enhancement_unavailable_desc": "Image enhancement is unavailable in this build or on this graphics device; the original frame remains safe",
         "settings.perf": "Performance Monitor",
         "settings.perf_desc": "Show FPS, process memory, estimated GPU memory, and graphics API information",
         "settings.fps_limit": "FPS Limit",
@@ -758,6 +776,12 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native はゲーム基準のキャンバス、Display Fit はデバイス表示サイズで実行します",
         "settings.upscale": "スケーリング",
         "settings.upscale_desc": "外側の画面を引き伸ばすときに使用します。Smooth/Linear は平滑化サンプリングを行います",
+        "settings.output_resolution": "出力解像度",
+        "settings.output_resolution_desc": "外側のスケーリングと画質強化の目標解像度を設定します。高い設定ほど GPU とメモリを多く使用します",
+        "settings.output_resolution.original": "オリジナル",
+        "settings.frame_enhancement": "画質強化",
+        "settings.frame_enhancement_desc": "GPU で線を修復し、選択した出力解像度へ高品質に拡大します。保存後すぐに反映されます",
+        "settings.frame_enhancement_unavailable_desc": "このビルドまたはグラフィックスデバイスでは画質強化を利用できません。元の映像を安全に表示します",
         "settings.perf": "パフォーマンス監視",
         "settings.perf_desc": "FPS、プロセスメモリ、GPU メモリ推定値、グラフィックス API 情報を表示します",
         "settings.fps_limit": "FPS 制限",
@@ -959,6 +983,12 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native는 게임 기준 캔버스를 사용하고 Display Fit은 장치 표시 크기를 사용합니다",
         "settings.upscale": "스케일링",
         "settings.upscale_desc": "외부 화면을 늘릴 때 사용합니다. Smooth/Linear는 부드러운 샘플링을 적용합니다",
+        "settings.output_resolution": "출력 해상도",
+        "settings.output_resolution_desc": "외부 스케일링과 화질 향상의 목표 해상도를 설정합니다. 높은 단계일수록 GPU와 메모리를 더 사용합니다",
+        "settings.output_resolution.original": "원본",
+        "settings.frame_enhancement": "화질 향상",
+        "settings.frame_enhancement_desc": "GPU로 선을 복원하고 선택한 출력 해상도로 고품질 확대합니다. 저장 후 즉시 적용됩니다",
+        "settings.frame_enhancement_unavailable_desc": "현재 빌드 또는 그래픽 장치에서는 화질 향상을 사용할 수 없습니다. 원본 화면은 안전하게 유지됩니다",
         "settings.perf": "성능 모니터",
         "settings.perf_desc": "FPS, 프로세스 메모리, GPU 메모리 추정치와 그래픽 API 정보를 표시합니다",
         "settings.fps_limit": "FPS 제한",
@@ -1132,7 +1162,9 @@ const SETTINGS_DRAFT_KEYS := [
     "ios_ui_scale_mode",
     "backend",
     "upscale_algorithm",
+    "output_resolution",
     "surface_mode",
+    "frame_enhancement_enabled",
     "diagnostic_profile",
     "debug_overlay_mode",
     "fps_limit_enabled",
@@ -1306,7 +1338,9 @@ var runtime_default_font_path := ""
 var runtime_font_dir_path := ""
 var selected_backend := "Godot Native"
 var upscale_algorithm := "smooth"
+var output_resolution := OUTPUT_RESOLUTION_DEFAULT
 var render_surface_mode := "game"
+var frame_enhancement_enabled := false
 var game_running := false
 var runtime_dialog_input: LineEdit = null
 var video_playing := false
@@ -1361,6 +1395,7 @@ var app_lifecycle_paused := false
 var render_errors := 0
 var last_renderer_info_logged := ""
 var last_texture_size := Vector2i.ZERO
+var last_source_texture_size := Vector2i.ZERO
 var capture_after_open_path := ""
 var capture_after_open_done := false
 var capture_after_open_delay_sec := 0.0
@@ -1450,9 +1485,16 @@ const PERF_LOG_INTERVAL := 2.0
 const UI_LOG_FLUSH_INTERVAL := 0.50
 const MAX_LOG_LINES := 240
 const RENDER_SURFACE_SIZE := Vector2i(1920, 1080)
-const RENDER_SURFACE_MAX_SIZE := Vector2i(1920, 1080)
+const RENDER_SURFACE_MAX_SIZE := Vector2i(3840, 2160)
 const RENDER_SURFACE_MODE_GAME := "game"
 const RENDER_SURFACE_MODE_DISPLAY := "display"
+const OUTPUT_RESOLUTION_DEFAULT := "1080p"
+const OUTPUT_RESOLUTION_MODES := ["original", "1080p", "2k", "4k"]
+const OUTPUT_RESOLUTION_LIMITS := {
+    "1080p": Vector2i(1920, 1080),
+    "2k": Vector2i(2560, 1440),
+    "4k": Vector2i(3840, 2160),
+}
 const POST_INPUT_PRESENT_HOLD_FRAMES := 1
 const POST_CLICK_PRESENT_HOLD_FRAMES := 1
 const POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS := 120
@@ -2567,8 +2609,22 @@ func _load_shell_settings() -> void:
         upscale_algorithm = "smooth"
     if not upscale_algorithm in ["smooth", "nearest", "linear"]:
         upscale_algorithm = "smooth"
+    output_resolution = _normalize_output_resolution(String(cfg.get_value(
+        "rendering",
+        "output_resolution",
+        output_resolution
+    )))
+    output_resolution = _normalize_output_resolution(_runtime_string(
+        "AETHERKIRI_OUTPUT_RESOLUTION",
+        output_resolution
+    ))
     render_surface_mode = String(cfg.get_value("rendering", "surface_mode", render_surface_mode))
     _select_config_surface_mode(_runtime_string("AETHERKIRI_SURFACE_MODE", render_surface_mode))
+    frame_enhancement_enabled = bool(cfg.get_value(
+        "rendering",
+        "frame_enhancement_enabled",
+        frame_enhancement_enabled
+    ))
     var legacy_perf_overlay := bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
     debug_overlay_mode = String(cfg.get_value("diagnostics", "overlay_mode", "summary" if legacy_perf_overlay else "off"))
     if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
@@ -2624,7 +2680,9 @@ func _save_shell_settings() -> void:
     cfg.set_value("interface", "ios_ui_scale_mode", ios_ui_scale_mode)
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
+    cfg.set_value("rendering", "output_resolution", output_resolution)
     cfg.set_value("rendering", "surface_mode", render_surface_mode)
+    cfg.set_value("rendering", "frame_enhancement_enabled", frame_enhancement_enabled)
     cfg.set_value("diagnostics", "profile", diagnostic_profile)
     cfg.set_value("diagnostics", "overlay_mode", debug_overlay_mode)
     cfg.set_value("rendering", "fps_limit_enabled", frame_limit_enabled)
@@ -2641,6 +2699,7 @@ func _save_shell_settings() -> void:
     cfg.save(SETTINGS_FILE)
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
     _apply_engine_options()
+    _apply_frame_enhancement_settings()
     _apply_shell_runtime_settings()
     if diagnostic_session != null:
         diagnostic_session.apply_preference(diagnostic_profile, player, selected_backend)
@@ -2658,7 +2717,9 @@ func _current_settings_snapshot() -> Dictionary:
         "ios_ui_scale_mode": ios_ui_scale_mode,
         "backend": selected_backend,
         "upscale_algorithm": upscale_algorithm,
+        "output_resolution": output_resolution,
         "surface_mode": render_surface_mode,
+        "frame_enhancement_enabled": frame_enhancement_enabled,
         "diagnostic_profile": diagnostic_profile,
         "debug_overlay_mode": debug_overlay_mode,
         "fps_limit_enabled": frame_limit_enabled,
@@ -2796,9 +2857,17 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
     if not upscale_algorithm in ["smooth", "nearest", "linear"]:
         upscale_algorithm = "smooth"
     _apply_upscale_algorithm()
+    output_resolution = _normalize_output_resolution(String(snapshot.get(
+        "output_resolution",
+        output_resolution
+    )))
 
     var next_surface_mode := String(snapshot.get("surface_mode", render_surface_mode))
     render_surface_mode = next_surface_mode if next_surface_mode in [RENDER_SURFACE_MODE_GAME, RENDER_SURFACE_MODE_DISPLAY] else _default_render_surface_mode()
+    frame_enhancement_enabled = bool(snapshot.get(
+        "frame_enhancement_enabled",
+        frame_enhancement_enabled
+    ))
     diagnostic_profile = String(snapshot.get("diagnostic_profile", diagnostic_profile))
     if not diagnostic_profile in DIAGNOSTIC_PROFILES:
         diagnostic_profile = "baseline" if OS.is_debug_build() else "off"
@@ -2826,6 +2895,7 @@ func _save_settings_draft() -> void:
     var previous_ios_ui_scale_mode := ios_ui_scale_mode
     var previous_backend := selected_backend
     var previous_surface_mode := render_surface_mode
+    var previous_output_resolution := output_resolution
     var snapshot := settings_draft.duplicate()
 
     _apply_settings_snapshot(snapshot)
@@ -2846,7 +2916,8 @@ func _save_settings_draft() -> void:
             else:
                 _apply_backend(true)
 
-    if previous_surface_mode != render_surface_mode and game_running:
+    if (previous_surface_mode != render_surface_mode or
+            previous_output_resolution != output_resolution) and game_running:
         _sync_player_surface_size(true)
 
     var language_changed := previous_language != language_mode or previous_active_language != active_language
@@ -2891,6 +2962,21 @@ func _apply_engine_options() -> void:
     if not runtime_font_dir_path.is_empty():
         player.set_engine_option("font_dir", runtime_font_dir_path)
     player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
+
+func _apply_frame_enhancement_settings() -> void:
+    if player == null or not player.has_method("set_frame_enhancement_enabled"):
+        return
+    if player.has_method("set_frame_native_output_enabled"):
+        player.set_frame_native_output_enabled(output_resolution == "original")
+    player.set_frame_enhancement_mode("auto")
+    player.set_frame_enhancement_enabled(frame_enhancement_enabled)
+
+func _frame_enhancement_description() -> String:
+    if player == null or not player.has_method("is_frame_enhancement_available"):
+        return _t("settings.frame_enhancement_unavailable_desc")
+    if not bool(player.is_frame_enhancement_available()):
+        return _t("settings.frame_enhancement_unavailable_desc")
+    return _t("settings.frame_enhancement_desc")
 
 func _apply_diagnostic_profile_environment(profile_name: String) -> void:
     var catalog := DiagnosticSession.profile_catalog()
@@ -3668,6 +3754,18 @@ func _rebuild_settings_view() -> void:
     _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
     _add_settings_row(render_group, _settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select(), stack_settings_controls))
     _add_settings_row(render_group, _settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select(), stack_settings_controls))
+    _add_settings_row(render_group, _settings_block(
+        _t("settings.output_resolution"),
+        _t("settings.output_resolution_desc"),
+        _output_resolution_select(),
+        stack_settings_controls
+    ))
+    _add_settings_row(render_group, _settings_toggle_row(
+        _t("settings.frame_enhancement"),
+        _frame_enhancement_description(),
+        _settings_draft_bool("frame_enhancement_enabled", frame_enhancement_enabled),
+        "frame_enhancement"
+    ))
     _add_settings_row(render_group, _settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
     if _settings_draft_bool("fps_limit_enabled", frame_limit_enabled):
         _add_settings_row(render_group, _settings_fps_row())
@@ -5224,6 +5322,30 @@ func _upscale_select() -> Control:
     )
     return select
 
+func _output_resolution_select() -> Control:
+    var select = _apple_select()
+    var options := [
+        {"label": _t("settings.output_resolution.original"), "value": "original"},
+        {"label": "1080p", "value": "1080p"},
+        {"label": "2K (2560×1440)", "value": "2k"},
+        {"label": "4K (3840×2160)", "value": "4k"},
+    ]
+    var selected_index := 0
+    var draft_resolution := _normalize_output_resolution(_settings_draft_string(
+        "output_resolution",
+        output_resolution
+    ))
+    for i in range(options.size()):
+        select.add_item(String(options[i]["label"]))
+        select.set_item_metadata(i, String(options[i]["value"]))
+        if String(options[i]["value"]) == draft_resolution:
+            selected_index = i
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_output_resolution(String(select.get_item_metadata(index)))
+    )
+    return select
+
 func _surface_mode_select() -> Control:
     var select = _apple_select()
     var options := [
@@ -5307,7 +5429,9 @@ func _backend_segment() -> Control:
     return segment
 
 func _on_setting_toggle(key: String, value: bool) -> void:
-    if key == "fps_limit":
+    if key == "frame_enhancement":
+        _set_settings_draft_value("frame_enhancement_enabled", value)
+    elif key == "fps_limit":
         _set_settings_draft_value("fps_limit_enabled", value)
     elif key == "landscape":
         _set_settings_draft_value("force_landscape", value)
@@ -5337,6 +5461,20 @@ func _select_upscale_algorithm(value: String) -> void:
     if not value in ["smooth", "nearest", "linear"]:
         return
     _set_settings_draft_value("upscale_algorithm", value)
+
+func _normalize_output_resolution(value: String) -> String:
+    var normalized := value.strip_edges().to_lower()
+    if normalized == "1440p":
+        normalized = "2k"
+    elif normalized == "2160p":
+        normalized = "4k"
+    return normalized if normalized in OUTPUT_RESOLUTION_MODES else OUTPUT_RESOLUTION_DEFAULT
+
+func _select_output_resolution(value: String) -> void:
+    var normalized := _normalize_output_resolution(value)
+    if normalized != value.strip_edges().to_lower():
+        return
+    _set_settings_draft_value("output_resolution", normalized)
 
 func _default_render_surface_mode() -> String:
     return RENDER_SURFACE_MODE_GAME
@@ -9108,6 +9246,7 @@ func _finish_ready_after_first_frame() -> void:
     if engine_initialized:
         _apply_backend(false)
         _apply_engine_options()
+        _apply_frame_enhancement_settings()
         diagnostic_session.start(player, selected_backend)
         _sync_debug_console_state()
     if not cli_probe_script.is_empty():
@@ -9484,6 +9623,7 @@ func _prepare_cli_probe_view(config: Dictionary) -> void:
     restart_notice.visible = false
     viewport.texture = null
     last_texture_size = Vector2i.ZERO
+    last_source_texture_size = Vector2i.ZERO
     game_running = false
     _sync_debug_console_state()
     _fit_full_rects()
@@ -9543,11 +9683,18 @@ func _probe_tick_and_update() -> bool:
     if present_hold_frames > 0:
         present_hold_frames -= 1
         return true
+    if player.has_method("set_frame_enhancement_target_size"):
+        var enhancement_target := _frame_enhancement_target_size()
+        player.set_frame_enhancement_target_size(enhancement_target.x, enhancement_target.y)
     var texture: Texture2D = player.update_frame_texture()
     if texture != null:
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+        if player.has_method("get_frame_source_size"):
+            var source_size: Vector2i = player.get_frame_source_size()
+            if source_size.x > 0 and source_size.y > 0:
+                last_source_texture_size = source_size
         _layout_game_viewport(get_viewport_rect().size)
     return true
 
@@ -9586,7 +9733,10 @@ func _run_cli_smoke_probe(config: Dictionary, target_game_path: String) -> void:
         return
 
     var texture: Texture2D = player.update_frame_texture()
-    if texture == null or texture.get_width() != width or texture.get_height() != height:
+    var source_size := Vector2i(width, height)
+    if player.has_method("get_frame_source_size"):
+        source_size = player.get_frame_source_size()
+    if texture == null or source_size != Vector2i(width, height):
         printerr("texture update failed backend=%s frame=%dx%d renderer=%s" % [
             backend_name,
             width,
@@ -9803,6 +9953,10 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
         if texture != null:
             viewport.texture = texture
             last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+            if player.has_method("get_frame_source_size"):
+                var source_size: Vector2i = player.get_frame_source_size()
+                if source_size.x > 0 and source_size.y > 0:
+                    last_source_texture_size = source_size
             _layout_game_viewport(viewport.size)
             viewport.queue_redraw()
         var frame_end := Time.get_ticks_usec()
@@ -9958,7 +10112,7 @@ func _probe_send_mapped_scroll(window_pos: Vector2, config: Dictionary, delta_y:
     player.send_pointer_event(POINTER_SCROLL, 0, mapped.x, mapped.y, 0.0, delta_y, 0)
 
 func _probe_map_window_point(pos: Vector2, config: Dictionary) -> Vector2:
-    var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
+    var tex_size := _game_input_texture_size()
     var coord := ProbeConfig.coord_size(config, Vector2i(
         _runtime_int("AETHERKIRI_PROBE_COORD_W", 1600),
         _runtime_int("AETHERKIRI_PROBE_COORD_H", 900)
@@ -10416,6 +10570,20 @@ func _process(delta: float) -> void:
             fallback,
             render_errors,
         ]
+        if game_running and player.has_method("get_frame_enhancement_status"):
+            var effect_status: Dictionary = player.get_frame_enhancement_status()
+            var effect_provider: Dictionary = effect_status.get("provider", {})
+            var effect_state := "active" if bool(effect_status.get("active", false)) else ("waiting" if bool(effect_status.get("enabled", false)) else "off")
+            summary_text += "\nEnhancement: %s | Source: %dx%d | Output: %dx%d | Raw: %s | Anime4K runs: %d | Pipeline: %s" % [
+                effect_state,
+                int(effect_status.get("source_width", 0)),
+                int(effect_status.get("source_height", 0)),
+                last_texture_size.x,
+                last_texture_size.y,
+                "yes" if bool(effect_status.get("raw_source_output", false)) else "no",
+                int(effect_provider.get("anime4k_restore_runs", 0)),
+                String(effect_status.get("pipeline", "none")),
+            ]
         summary_text += "\nMemory: App %s | Peak %s | Headroom %s | Godot %s | GPU(est.) %s (Tex %s / Buf %s) | Cache %s" % [
             _format_monitor_bytes(int(memory.get("current_bytes", 0))),
             _format_monitor_bytes(int(memory.get("peak_bytes", 0))),
@@ -10790,6 +10958,7 @@ func _on_open_game() -> void:
         log_view.text = ""
         log_view.scroll_vertical = 0
     last_texture_size = Vector2i.ZERO
+    last_source_texture_size = Vector2i.ZERO
     present_hold_frames = 0
     capture_after_open_done = false
     capture_after_open_ready_usec = 0
@@ -10814,6 +10983,8 @@ func _on_open_game() -> void:
 
 func _desired_render_surface_size() -> Vector2i:
     var base_size := _base_render_surface_size()
+    if output_resolution != "original":
+        return _frame_output_target_size(base_size)
     if render_surface_mode == RENDER_SURFACE_MODE_GAME:
         return base_size
     var window_size := DisplayServer.window_get_size()
@@ -10841,6 +11012,38 @@ func _desired_render_surface_size() -> Vector2i:
         maxi(1, int(round(float(base_size.x) * scale))),
         maxi(1, int(round(float(base_size.y) * scale)))
     )
+
+func _frame_output_resolution_limit() -> Vector2i:
+    var normalized := _normalize_output_resolution(output_resolution)
+    if normalized == "original":
+        return Vector2i.ZERO
+    var preset: Vector2i = OUTPUT_RESOLUTION_LIMITS.get(
+        normalized,
+        OUTPUT_RESOLUTION_LIMITS[OUTPUT_RESOLUTION_DEFAULT]
+    )
+    return Vector2i(
+        clampi(preset.x, 1, render_surface_max_size.x),
+        clampi(preset.y, 1, render_surface_max_size.y)
+    )
+
+func _fit_frame_size_within(source_size: Vector2i, bounds: Vector2i) -> Vector2i:
+    if bounds.x <= 0 or bounds.y <= 0:
+        return Vector2i.ZERO
+    if source_size.x <= 0 or source_size.y <= 0:
+        return bounds
+    var scale := minf(
+        float(bounds.x) / float(source_size.x),
+        float(bounds.y) / float(source_size.y)
+    )
+    return Vector2i(
+        maxi(1, int(round(float(source_size.x) * scale))),
+        maxi(1, int(round(float(source_size.y) * scale)))
+    )
+
+func _frame_output_target_size(source_size: Vector2i) -> Vector2i:
+    if _normalize_output_resolution(output_resolution) == "original":
+        return source_size
+    return _fit_frame_size_within(source_size, _frame_output_resolution_limit())
 
 func _base_render_surface_size() -> Vector2i:
     return Vector2i(
@@ -10888,6 +11091,7 @@ func _sync_player_surface_size(force: bool) -> void:
         return
     if current_surface_size != target_size:
         last_texture_size = Vector2i.ZERO
+        last_source_texture_size = Vector2i.ZERO
         var window_size := DisplayServer.window_get_size()
         var screen := DisplayServer.window_get_current_screen()
         var base_size := _base_render_surface_size()
@@ -10985,10 +11189,39 @@ func _flush_log_view() -> void:
     log_view.text = "\n".join(log_lines)
     call_deferred("_scroll_log_to_bottom")
 
+func _frame_enhancement_target_size() -> Vector2i:
+    # The resolution selector is the single target for both the engine's
+    # surface scaler and the private enhancement scaler. Restore still runs
+    # once at source size; only EASU/Bicubic/Lanczos sees this target.
+    var source_size := last_source_texture_size
+    if source_size.x <= 0 or source_size.y <= 0:
+        if output_resolution == "original":
+            # A zero target asks the host to use the source texture dimensions,
+            # avoiding a speculative 1080p allocation for the first frame.
+            return Vector2i.ZERO
+        source_size = _base_render_surface_size()
+    return _frame_output_target_size(source_size)
+
+func _game_input_texture_size() -> Vector2:
+    # Frame enhancement may deliberately publish the native 1280x720 image
+    # while the game still owns a 1920x1080 logical surface. Input must follow
+    # the logical surface, not the texture being repaired/upscaled.
+    if current_surface_size.x > 0 and current_surface_size.y > 0:
+        return Vector2(current_surface_size)
+    if last_source_texture_size.x > 0 and last_source_texture_size.y > 0:
+        return Vector2(last_source_texture_size)
+    return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
+
 func _update_frame() -> void:
     if present_hold_frames > 0:
         present_hold_frames -= 1
         return
+    if player.has_method("set_frame_enhancement_target_size"):
+        var enhancement_target := _frame_enhancement_target_size()
+        player.set_frame_enhancement_target_size(
+            enhancement_target.x,
+            enhancement_target.y
+        )
     var texture: Texture2D = player.update_frame_texture()
     if texture != null:
         if _should_hold_suspect_black_frame():
@@ -10996,7 +11229,13 @@ func _update_frame() -> void:
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
-        _sync_game_surface_to_texture(last_texture_size)
+        if player.has_method("get_frame_source_size"):
+            var source_size: Vector2i = player.get_frame_source_size()
+            if source_size.x > 0 and source_size.y > 0:
+                last_source_texture_size = source_size
+        if last_source_texture_size.x <= 0 or last_source_texture_size.y <= 0:
+            last_source_texture_size = last_texture_size
+        _sync_game_surface_to_texture(last_source_texture_size)
         _layout_game_viewport(get_viewport_rect().size)
         if not auto_probe_clicks.is_empty() and not auto_probe_running and not auto_probe_done:
             auto_probe_running = true
@@ -11250,7 +11489,7 @@ func _send_probe_click(window_pos: Vector2) -> void:
     _write_probe_marker("auto_click window=%s mapped=%s" % [window_pos, mapped])
 
 func _map_probe_window_point(pos: Vector2) -> Vector2:
-    var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
+    var tex_size := _game_input_texture_size()
     var panel_size := Vector2(
         float(_runtime_int("AETHERKIRI_AUTO_PROBE_COORD_W", 1600)),
         float(_runtime_int("AETHERKIRI_AUTO_PROBE_COORD_H", 900))
@@ -12434,10 +12673,7 @@ func _map_surface_point_to_screen(point: Vector2) -> Vector2:
 func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2:
     if viewport.texture == null:
         return pos
-    var tex_size: Vector2 = Vector2(
-        max(1.0, float(viewport.texture.get_width())),
-        max(1.0, float(viewport.texture.get_height()))
-    )
+    var tex_size := _game_input_texture_size()
     return GameInputMapping.map_point(
         pos,
         viewport.get_global_rect(),
@@ -12448,10 +12684,7 @@ func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2
 func _map_viewport_delta(delta: Vector2) -> Vector2:
     if viewport.texture == null:
         return delta
-    var tex_size: Vector2 = Vector2(
-        max(1.0, float(viewport.texture.get_width())),
-        max(1.0, float(viewport.texture.get_height()))
-    )
+    var tex_size := _game_input_texture_size()
     return GameInputMapping.map_delta(delta, viewport.size, tex_size)
 
 func _map_mouse_button(button_index: MouseButton) -> int:

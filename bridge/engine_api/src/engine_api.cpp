@@ -129,6 +129,7 @@ extern "C" bool TVPHostGetLatestGodotGpuFrame(uint64_t* texture,
 extern "C" void TVPHostActivateMainWindow();
 extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height);
 extern "C" void TVPHostSetPreferGpuFrame(bool prefer_gpu_frame);
+extern "C" void TVPHostSetPublishRawSourceFrame(bool publish_raw_source);
 extern "C" void TVPHostGetTextInputState(uint32_t* ime_active,
                                            int32_t* ime_mode,
                                            uint32_t* attention_point_valid,
@@ -183,6 +184,7 @@ struct engine_handle_s {
   struct RenderTargetState {
     krkr::AngleBackend angle_backend = krkr::AngleBackend::OpenGLES;
     std::string renderer = ENGINE_RENDERER_GODOT_NATIVE;
+    bool publish_raw_source_frame = false;
     bool iosurface_attached = false;
     bool native_window_attached = false;
   } render;
@@ -1174,6 +1176,7 @@ void StartHostEngineLoop(engine_handle_s* impl) {
     scene->scheduleUpdate();
   }
   TVPHostSetSurfaceSize(impl->frame.surface_width, impl->frame.surface_height);
+  TVPHostSetPublishRawSourceFrame(impl->render.publish_raw_source_frame);
 }
 
 void MarkRuntimeOpenedForHost(engine_handle_t handle,
@@ -2964,6 +2967,23 @@ engine_result_t engine_set_option(engine_handle_t handle,
     TVPSetCommandLine(TJS_W("renderer"), ttstr(renderer).c_str());
     spdlog::info("engine_set_option: renderer={} prefer_gpu_frame={}",
                  renderer, prefer_gpu);
+    ClearHandleErrorLocked(impl);
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+
+  if (key == ENGINE_OPTION_FRAME_OUTPUT) {
+    const std::string value(option->value_utf8);
+    if (value != ENGINE_FRAME_OUTPUT_SURFACE &&
+        value != ENGINE_FRAME_OUTPUT_RAW_SOURCE) {
+      return SetHandleErrorAndReturnLocked(
+          impl, ENGINE_RESULT_INVALID_ARGUMENT,
+          "frame_output must be 'surface' or 'raw_source'");
+    }
+    impl->render.publish_raw_source_frame =
+        value == ENGINE_FRAME_OUTPUT_RAW_SOURCE;
+    TVPHostSetPublishRawSourceFrame(impl->render.publish_raw_source_frame);
+    spdlog::info("engine_set_option: frame_output={}", value);
     ClearHandleErrorLocked(impl);
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;

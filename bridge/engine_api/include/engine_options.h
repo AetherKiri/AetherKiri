@@ -19,6 +19,11 @@
 /** Host-facing render backend selection. */
 #define ENGINE_OPTION_RENDER_BACKEND      "render_backend"
 
+/** Select whether the host receives the logical surface or the unscaled
+ *  game frame. Raw source output is intended for a single downstream GPU
+ *  enhancement/upscale pipeline; it does not change engine input geometry. */
+#define ENGINE_OPTION_FRAME_OUTPUT        "frame_output"
+
 /** Memory profile ("balanced" / "aggressive").
  *  Consumed by the C++ memory governor via TVPGetCommandLine(). */
 #define ENGINE_OPTION_MEMORY_PROFILE      "memory_profile"
@@ -84,6 +89,9 @@
 #define ENGINE_RENDER_BACKEND_GODOT_NATIVE "GodotNative"
 #define ENGINE_RENDER_BACKEND_GPU_BRIDGE   "GpuBridge"
 #define ENGINE_RENDER_BACKEND_DEBUG_CPU    "DebugCpu"
+
+#define ENGINE_FRAME_OUTPUT_SURFACE        "surface"
+#define ENGINE_FRAME_OUTPUT_RAW_SOURCE     "raw_source"
 
 #define ENGINE_MEMORY_PROFILE_BALANCED    "balanced"
 #define ENGINE_MEMORY_PROFILE_AGGRESSIVE  "aggressive"
