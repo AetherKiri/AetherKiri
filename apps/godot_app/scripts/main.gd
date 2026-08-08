@@ -8503,7 +8503,7 @@ func _is_runtime_exit_error(message: String) -> bool:
     var lower := message.to_lower()
     return lower.contains("runtime requested termination") or lower.contains("runtime has been terminated")
 
-func _quit_after_runtime_exit() -> void:
+func _return_to_library_after_runtime_exit() -> void:
     if runtime_exit_cleanup_pending:
         return
     runtime_exit_cleanup_pending = true
@@ -8533,10 +8533,15 @@ func _quit_after_runtime_exit() -> void:
     if player != null:
         player.release_frame_texture()
         player.destroy_engine()
-    if _is_touch_platform():
-        OS.kill(OS.get_process_id())
-        return
-    get_tree().quit(0)
+    last_texture_size = Vector2i.ZERO
+    _set_game_runtime_orientation(false)
+    _set_game_background(false)
+    if shell_root != null:
+        shell_root.visible = true
+    Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+    _show_home()
+    _fit_full_rects()
+    runtime_exit_cleanup_pending = false
 
 func _ready() -> void:
     cli_probe_script = _detect_cli_probe_script()
@@ -10298,7 +10303,7 @@ func _process(delta: float) -> void:
                     if perf_log_file != null:
                         perf_log_file.store_line(runtime_exit_line)
                         perf_log_file.flush()
-                    _quit_after_runtime_exit()
+                    _return_to_library_after_runtime_exit()
                     return
                 render_errors += 1
                 var tick_error_line := "Tick failed: %s %s" % [
@@ -10346,6 +10351,11 @@ func _process(delta: float) -> void:
                 _log_frame_probe(delta)
                 _log_input_trace(delta, tick_ms, update_ms)
         elif startup_state == STARTUP_FAILED:
+            var startup_error_message := str(player.get_last_error())
+            if _is_runtime_exit_error(startup_error_message):
+                _append_log("Game exited during startup: %s" % startup_error_message)
+                _return_to_library_after_runtime_exit()
+                return
             restart_notice.text = "Game startup failed."
             _hide_loading_overlay()
             _set_game_background(false)
@@ -10362,7 +10372,7 @@ func _process(delta: float) -> void:
                 })
             app_lifecycle_paused = false
             render_errors += 1
-            var startup_error := "Startup failed: %s" % player.get_last_error()
+            var startup_error := "Startup failed: %s" % startup_error_message
             _append_log(startup_error)
 
     perf_accum += delta
@@ -10752,6 +10762,10 @@ func _on_open_game() -> void:
     ProjectSettings.set_setting(GAME_PATH_KEY, path)
     _apply_backend(false)
     _apply_engine_options()
+    if diagnostic_session != null:
+        # A natural in-game exit destroys the reusable native engine handle.
+        # Start diagnostics again when the next title recreates that handle.
+        diagnostic_session.start(player, selected_backend)
     _sync_player_surface_size(true)
     cached_startup_state = STARTUP_RUNNING
     startup_poll_accum = STARTUP_POLL_INTERVAL

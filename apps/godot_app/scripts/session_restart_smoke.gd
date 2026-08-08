@@ -10,10 +10,22 @@ func _initialize() -> void:
         quit(2)
         return
 
-    if not await _run_session(game_path, "krkrsdl3", 1):
+    var second_game_path := OS.get_environment("AETHERKIRI_SMOKE_GAME_2").strip_edges()
+    if second_game_path.is_empty():
+        second_game_path = game_path
+
+    var first_plugin_mode := OS.get_environment("AETHERKIRI_SMOKE_PLUGIN_MODE").strip_edges()
+    if not first_plugin_mode in ["krkrsdl3", "aether_all"]:
+        first_plugin_mode = "krkrsdl3"
+
+    var second_plugin_mode := OS.get_environment("AETHERKIRI_SMOKE_PLUGIN_MODE_2").strip_edges()
+    if not second_plugin_mode in ["krkrsdl3", "aether_all"]:
+        second_plugin_mode = first_plugin_mode
+
+    if not await _run_session(game_path, first_plugin_mode, 1):
         quit(1)
         return
-    if not await _run_session(game_path, "aether_all", 2):
+    if not await _run_session(second_game_path, second_plugin_mode, 2):
         quit(1)
         return
 

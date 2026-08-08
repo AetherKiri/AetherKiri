@@ -402,6 +402,11 @@ tjs_int motion::ResourceManager::getEmotePSBDecryptSeed() {
     return _decryptSeed;
 }
 
+void motion::ResourceManager::resetStaticStateForHostSession() {
+    _decryptFunc.Clear();
+    _decryptSeed = 0;
+}
+
 bool motion::ResourceManager::applyEmotePSBDecryptFunc(
     std::uint8_t *data, const std::size_t size) {
     if(_decryptFunc.Type() != tvtObject ||

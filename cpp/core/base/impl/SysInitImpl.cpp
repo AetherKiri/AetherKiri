@@ -568,6 +568,30 @@ static void PushConfigFileOptions(const std::vector<std::string> *options) {
 // Options set via engine_set_option before TVPProgramArguments is initialized
 static std::vector<std::pair<ttstr, ttstr>> TVPEarlySetOptions;
 
+void TVPResetSystemInitStateForHostSession() {
+    // TVPInitProgramArgumentsAndDataPath() was originally process-scoped
+    // because the standalone player only ever opened one title.  Aether keeps
+    // the process alive, so retaining this state makes the next title inherit
+    // the previous title's savedata directory and command-line options.  In
+    // particular, first-run flags can then be read from the wrong game.
+    TVPProgramArguments.clear();
+    TVPEarlySetOptions.clear();
+    TVPProgramArgumentsInit = false;
+    TVPDataPathDirectoryEnsured = false;
+    TVPNativeDataPath = ttstr();
+    TVPDataPath = ttstr();
+    TVPNativeProjectDir = ttstr();
+    TVPProjectDir = ttstr();
+    TVPProjectDirSelected = false;
+    TVPArchiveDelimiter = TJS_W('>');
+
+    // Invalidate any native/script-side command-line cache which survived a
+    // partial shutdown.  Keep the generation monotonic across host sessions.
+    ++TVPCommandLineArgumentGeneration;
+    if(TVPCommandLineArgumentGeneration == 0)
+        TVPCommandLineArgumentGeneration = 1;
+}
+
 static bool TVPFindCommandLineArgument(const tjs_char *name,
                                        tTJSVariant *value) {
     const tjs_int namelen = (tjs_int)TJS_strlen(name);

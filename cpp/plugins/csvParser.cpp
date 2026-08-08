@@ -473,6 +473,16 @@ void InitPlugin_CSVParser() {
     }
 }
 //---------------------------------------------------------------------------
+static void UninitPlugin_CSVParser() {
+    // Array.clear is owned by the current script engine. Retaining this
+    // dispatch across End Game keeps the old TJS world alive and makes the
+    // next registration call through a stale method object.
+    if(ArrayClearMethod) {
+        ArrayClearMethod->Release();
+        ArrayClearMethod = nullptr;
+    }
+}
+
 // extern "C" __declspec(dllexport) HRESULT _stdcall V2Unlink()
 // {
 // 	// - まず、TJS のグローバルオブジェクトを取得する
@@ -490,5 +500,6 @@ void InitPlugin_CSVParser() {
 // }
 
 NCB_PRE_REGIST_CALLBACK(InitPlugin_CSVParser);
+NCB_PRE_UNREGIST_CALLBACK(UninitPlugin_CSVParser);
 
 extern "C" void TVPRegisterCSVParserPluginAnchor() {}

@@ -269,4 +269,13 @@ static void TVPReleaseContinuousHandlerCallLimitThread() {
 static tTVPAtExit
     TVPTimerThreadUninitAtExit(TVP_ATEXIT_PRI_SHUTDOWN,
                                TVPReleaseContinuousHandlerCallLimitThread);
+
+//---------------------------------------------------------------------------
+void TVPResetEventPlatformForHostSession() {
+    TVPEndContinuousEvent();
+    TVPReleaseContinuousHandlerCallLimitThread();
+    TVPEventInvoked = false;
+    TVPBreathing = false;
+    TVPProcessContinuousHandlerEventFlag = false;
+}
 //---------------------------------------------------------------------------
