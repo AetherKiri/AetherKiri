@@ -3304,6 +3304,10 @@ func _apply_engine_options() -> void:
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if effective_trace_log else "0")
     player.set_engine_option("input_trace", "1" if effective_input_trace else "0")
+    # A synchronous Artemis resource load can make the next Godot frame carry
+    # hundreds of milliseconds. Keep visual evolution incremental so authored
+    # E-mote expressions and fades cannot collapse into a one-frame flash.
+    player.set_engine_option("artemis.max_visual_delta_ms", "34")
     var effective_export_scripts := export_scripts or _runtime_flag("AETHERKIRI_EXPORT_SCRIPTS", false)
     player.set_engine_option("export_scripts", "1" if effective_export_scripts else "0")
     if not runtime_default_font_path.is_empty():

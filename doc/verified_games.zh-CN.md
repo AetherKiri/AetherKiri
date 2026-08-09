@@ -58,7 +58,7 @@
 | フユキス | macOS app；iOS/iPadOS iPad app build | 启动、标题/菜单渲染、第一个存档读取流程、场景/文字渲染、E-mote 角色合成与眨眼、角色距离/姿势原子切换和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | アイカギ2 | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | アイカギ3 | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
-| アマカノ3 | macOS debug app；iOS/iPadOS iPad app build（冒烟） | macOS 下启动、继续游戏、第二个存档读取、场景/文字渲染、四角色 E-mote 立绘与动画、连续 20 次对话输入，以及稳定阶段 51–63 FPS；iPad 导入、启动、初始标题/UI 与基础输入 | 流程验证通过（macOS） | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| アマカノ3 | macOS debug app；iOS/iPadOS iPad app build（冒烟） | macOS 下启动、继续游戏、第二和第四个存档读取、场景/文字渲染、四角色 E-mote 立绘与动画、口型、表情/脸红渐变、连续对话输入，以及稳定阶段约 50–63 FPS；iPad 导入、启动、初始标题/UI 与基础输入 | 流程验证通过（macOS） | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | D.C.5 ～ダ・カーポ5～ | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | NUKITASHI | macOS app；iOS/iPadOS iPad app build | 导入、启动、标题/菜单渲染、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | NUKITASHI2 | macOS app；iOS/iPadOS iPad app build | 导入、冷启动 App、启动动画/标题切换、标题/菜单渲染、场景/文字渲染、音频播放和连续触摸输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |

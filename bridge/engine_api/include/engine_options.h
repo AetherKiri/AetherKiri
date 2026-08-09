@@ -24,6 +24,12 @@
  *  enhancement/upscale pipeline; it does not change engine input geometry. */
 #define ENGINE_OPTION_FRAME_OUTPUT        "frame_output"
 
+/** Maximum elapsed time, in milliseconds, applied to one Artemis visual
+ *  update. Zero disables host-side hitch smoothing. Script clocks, audio and
+ *  video continue to use the caller-provided elapsed time. */
+#define ENGINE_OPTION_ARTEMIS_MAX_VISUAL_DELTA_MS \
+  "artemis.max_visual_delta_ms"
+
 /** Memory profile ("balanced" / "aggressive").
  *  Consumed by the C++ memory governor via TVPGetCommandLine(). */
 #define ENGINE_OPTION_MEMORY_PROFILE      "memory_profile"
