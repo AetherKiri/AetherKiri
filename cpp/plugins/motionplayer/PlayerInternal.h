@@ -54,6 +54,30 @@ namespace internal {
             return type != ltBinder;
         }
 
+        inline bool d3dEmoteFrameReuseRouteEligible(
+            bool isEmoteMode,
+            bool retainD3DPresentation,
+            std::size_t commandCount) {
+            return isEmoteMode && !retainD3DPresentation &&
+                commandCount != 0;
+        }
+
+        inline bool d3dEmoteFrameCacheMatches(
+            const detail::PlayerRuntime::EmoteRenderFrameCacheEntry &entry,
+            const std::string &motion,
+            double frame,
+            int canvasWidth,
+            int canvasHeight,
+            std::size_t commandSignature) {
+            return entry.bitmap && entry.motion == motion &&
+                entry.canvasWidth == canvasWidth &&
+                entry.canvasHeight == canvasHeight &&
+                std::fabs(entry.frame - frame) < 0.0001 &&
+                entry.bitmap->GetWidth() == canvasWidth &&
+                entry.bitmap->GetHeight() == canvasHeight &&
+                entry.commandSignature == commandSignature;
+        }
+
         inline const MotionRenderPolicyV1 *motionRenderPolicy() {
             const auto *extension = motionPlayerExtension();
             return extension != nullptr ? extension->renderPolicy : nullptr;

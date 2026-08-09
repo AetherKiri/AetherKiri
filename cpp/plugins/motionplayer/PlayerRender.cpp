@@ -11220,6 +11220,14 @@ namespace motion {
         }
 
         buildRenderCommands(adaptor->getWidth(), adaptor->getHeight());
+        const bool canReuseD3DEmoteRender =
+            motion::internal::d3dEmoteFrameReuseRouteEligible(
+                _runtime->isEmoteMode, retainD3DPresentation,
+                _runtime->renderCommands.size());
+        const auto d3dCommandSignature = canReuseD3DEmoteRender
+            ? renderCommandReuseSignature(_runtime->renderCommands,
+                                          _maskMode)
+            : 0;
         const std::size_t renderLayerIndex =
             retainD3DPresentation ? 0u
                                   : _runtime->nextD3DRenderLayer;
@@ -11305,6 +11313,68 @@ namespace motion {
         if(!renderLayerObject) {
             return false;
         }
+        if(canReuseD3DEmoteRender) {
+            const auto &entry = _runtime->d3dEmoteRenderFrameCache;
+            const bool exactCacheMatch =
+                motion::internal::d3dEmoteFrameCacheMatches(
+                    entry, motionPath, _clampedEvalTime,
+                    adaptor->getWidth(), adaptor->getHeight(),
+                    d3dCommandSignature);
+            auto *cachedLayer = exactCacheMatch
+                ? resolveNativeLayer(renderLayerObject)
+                : nullptr;
+            if(cachedLayer) {
+                if(!cachedLayer->GetHasImage()) {
+                    cachedLayer->SetHasImage(true);
+                }
+                if(cachedLayer->GetImageWidth() < adaptor->getWidth() ||
+                   cachedLayer->GetImageHeight() < adaptor->getHeight()) {
+                    cachedLayer->SetImageSize(
+                        static_cast<tjs_uint>(adaptor->getWidth()),
+                        static_cast<tjs_uint>(adaptor->getHeight()));
+                }
+                if(cachedLayer->GetWidth() != adaptor->getWidth() ||
+                   cachedLayer->GetHeight() != adaptor->getHeight()) {
+                    cachedLayer->SetSize(adaptor->getWidth(),
+                                         adaptor->getHeight());
+                }
+                cachedLayer->SetClip(0, 0, adaptor->getWidth(),
+                                     adaptor->getHeight());
+                // d3dRenderLayers are private scratch surfaces. Keep them
+                // hidden while captureCanvas aliases their texture into the
+                // authored character layer.
+                if(cachedLayer->GetVisible()) {
+                    cachedLayer->SetVisible(false);
+                }
+                auto *cachedImage = cachedLayer->GetMainImage();
+                if(cachedImage &&
+                   cachedImage->GetWidth() == adaptor->getWidth() &&
+                   cachedImage->GetHeight() == adaptor->getHeight()) {
+                    cachedImage->CopyRect(
+                        0, 0, entry.bitmap.get(),
+                        tTVPRect(0, 0, adaptor->getWidth(),
+                                 adaptor->getHeight()));
+                    adaptor->setRenderedLayer(renderLayerObject);
+                    ++_runtime->d3dEmoteRenderFrameReuseSkips;
+                    if(motionRenderProfileEnabled() && LOGGER) {
+                        LOGGER->info(
+                            "motion emote render reuse: motion={} frame={:.2f} target={} canvas={}x{} commands={} signature={:016x} cached_signature={:016x} skips={} reason={} age_us={} route=d3d",
+                            motionPath, _clampedEvalTime,
+                            static_cast<const void *>(renderLayerObject),
+                            adaptor->getWidth(), adaptor->getHeight(),
+                            _runtime->renderCommands.size(),
+                            d3dCommandSignature,
+                            entry.commandSignature,
+                            _runtime->d3dEmoteRenderFrameReuseSkips,
+                            "exact",
+                            motionRenderProfileNowUs() >= entry.storedUs
+                                ? motionRenderProfileNowUs() - entry.storedUs
+                                : 0);
+                    }
+                    return true;
+                }
+            }
+        }
         TVPGodotGpuBatchScope d3dGpuBatch(
             _runtime->isEmoteMode && _runtime->renderCommands.size() > 1);
         if(!prepareLayerForRender(renderLayerObject, adaptor->getWidth(),
@@ -11379,7 +11449,38 @@ namespace motion {
         } else {
             adaptor->setRenderedLayer(renderLayerObject);
         }
-        return d3dGpuBatch.finish();
+        if(!d3dGpuBatch.finish()) {
+            adaptor->setRenderedLayer(nullptr);
+            return false;
+        }
+        if(canReuseD3DEmoteRender) {
+            auto *executedImage = layer->GetMainImage();
+            if(executedImage &&
+               executedImage->GetWidth() == layerW &&
+               executedImage->GetHeight() == layerH) {
+                auto &entry = _runtime->d3dEmoteRenderFrameCache;
+                if(!entry.bitmap ||
+                   entry.bitmap->GetWidth() != layerW ||
+                   entry.bitmap->GetHeight() != layerH) {
+                    entry.bitmap = std::make_shared<tTVPBaseBitmap>(
+                        static_cast<tjs_uint>(layerW),
+                        static_cast<tjs_uint>(layerH), 32);
+                }
+                // Full CopyRect retains the same ordered GPU texture by
+                // reference. An enclosing batch may still own its completion;
+                // no CPU readback or extra synchronization is required here.
+                entry.bitmap->CopyRect(
+                    0, 0, executedImage,
+                    tTVPRect(0, 0, layerW, layerH));
+                entry.motion = motionPath;
+                entry.frame = _clampedEvalTime;
+                entry.canvasWidth = layerW;
+                entry.canvasHeight = layerH;
+                entry.commandSignature = d3dCommandSignature;
+                entry.storedUs = motionRenderProfileNowUs();
+            }
+        }
+        return true;
     }
 
     bool Player::renderToRgba(std::uint8_t *pixels, int width, int height,

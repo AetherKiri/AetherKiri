@@ -370,9 +370,9 @@ namespace motion::detail {
         std::unordered_map<iTJSDispatch2 *, PresentationRenderCacheEntry>
             presentationRenderCache;
         int presentationRenderReuseSkips = 0;
-        // D3DEmote draws every character through one shared work layer.  A
+        // E-mote can draw several characters through shared work layers. A
         // target-only cache cannot survive the next character overwriting
-        // that layer, so retain this player's completed frame separately.
+        // that layer, so retain each player's completed frame separately.
         // The bitmap keeps Godot-native GPU contents resident when available.
         struct EmoteRenderFrameCacheEntry {
             std::shared_ptr<tTVPBaseBitmap> bitmap;
@@ -385,6 +385,12 @@ namespace motion::detail {
         };
         EmoteRenderFrameCacheEntry emoteRenderFrameCache;
         int emoteRenderFrameReuseSkips = 0;
+        // The D3D adaptor route clears to transparent and hands a private
+        // scratch texture to captureCanvas. Keep it separate from the direct
+        // layer route, whose authored target can have a different neutral
+        // color and presentation lifetime.
+        EmoteRenderFrameCacheEntry d3dEmoteRenderFrameCache;
+        int d3dEmoteRenderFrameReuseSkips = 0;
         // E-mote rebuilds the render-command vector on every tick, but most
         // transformed leaves and composite subtrees are unchanged between
         // ticks. Keep their GPU-backed work layers alive across that rebuild
@@ -660,6 +666,8 @@ namespace motion::detail {
             motionPreparedMaterializedKeysBySource.clear();
             emoteRenderFrameCache = {};
             emoteRenderFrameReuseSkips = 0;
+            d3dEmoteRenderFrameCache = {};
+            d3dEmoteRenderFrameReuseSkips = 0;
             emoteCommandOutputCache.clear();
             emoteCommandOutputCacheGeneration = 0;
             emoteCommandOutputCacheHits = 0;
