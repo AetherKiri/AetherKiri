@@ -3063,9 +3063,11 @@ namespace motion {
                     if(child._runtime && ancestor->_runtime &&
                        child._runtime->activeMotion &&
                        ancestor->_runtime->activeMotion &&
-                       child._runtime->activeMotion->path ==
-                           ancestor->_runtime->activeMotion->path &&
-                       child._motionKey == ancestor->_motionKey) {
+                       sameMotionOwnershipIdentity(
+                           child._runtime->activeMotion->path,
+                           child._chara, child._motionKey,
+                           ancestor->_runtime->activeMotion->path,
+                           ancestor->_chara, ancestor->_motionKey)) {
                         cyclicMotionOwnership = true;
                         break;
                     }
@@ -3084,11 +3086,13 @@ namespace motion {
                     child._queuing = false;
                     if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG")) {
                         LOGGER->warn(
-                            "motion child cycle suppressed: parent={} node={} child={} depth={}",
+                            "motion child cycle suppressed: parent={} node={} child={} chara={} motion={} depth={}",
                             motionPath, mn.layerName,
                             child._runtime && child._runtime->activeMotion
                                 ? child._runtime->activeMotion->path
                                 : std::string("<none>"),
+                            detail::narrow(child._chara),
+                            detail::narrow(child._motionKey),
                             ownershipDepth);
                     }
                     continue;
@@ -5611,14 +5615,18 @@ namespace motion {
                 }
             };
 
-        // Native BufferLayerFrameInfoIn walks containing nodes in reverse and
-        // recursively emits a nodeType-3/4 child's buffer at that node's slot.
-        // Process later parent slots first to retain the same recursive order.
+        // The local node buffer and ordinary equal-Z leaves both preserve
+        // authored order. Emit sibling child buffers by that same parent-slot
+        // order before inserting each child at its slot. Reversing only the
+        // child list puts later-authored background motions over earlier
+        // button/character motions even though their local leaves are no
+        // longer reversed.
         std::stable_sort(
             pendingChildItems.begin(), pendingChildItems.end(),
             [](const PendingChildRenderItems &lhs,
                const PendingChildRenderItems &rhs) {
-                return lhs.parentNodeIndex > rhs.parentNodeIndex;
+                return detail::preparedChildParentSlotLess(
+                    lhs.parentNodeIndex, rhs.parentNodeIndex);
             });
 
         int nextMergedNodeIndex = static_cast<int>(_runtime->nodes.size());

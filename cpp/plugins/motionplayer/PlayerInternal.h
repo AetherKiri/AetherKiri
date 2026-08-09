@@ -46,6 +46,23 @@
 namespace motion {
 namespace internal {
 
+        inline bool sameMotionOwnershipIdentity(
+            const std::string &childPath,
+            const ttstr &childChara,
+            const ttstr &childMotion,
+            const std::string &ancestorPath,
+            const ttstr &ancestorChara,
+            const ttstr &ancestorMotion) {
+            // One PSB commonly owns several independent objects whose clips
+            // share generic names such as `show`, `normal`, or `off`.  Those
+            // are valid ownership edges (for example TITLE2/show ->
+            // char/show), not recursion.  A cycle requires the complete
+            // resource/object/clip identity to repeat.
+            return childPath == ancestorPath &&
+                childChara == ancestorChara &&
+                childMotion == ancestorMotion;
+        }
+
         // Binder layers are structural containers. Kirikiri allows them to
         // participate in the layer tree, but drawable-only APIs such as
         // GetImageWidth/SetHasImage must never be used on them.

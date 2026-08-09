@@ -702,6 +702,12 @@ namespace motion::detail {
         return localNodeIndex > childParentNodeIndex;
     }
 
+    inline bool preparedChildParentSlotLess(
+        int lhsParentNodeIndex,
+        int rhsParentNodeIndex) {
+        return lhsParentNodeIndex < rhsParentNodeIndex;
+    }
+
     inline bool tessellatePreparedItemForExternalMesh(
         PlayerRuntime::PreparedRenderItem &entry,
         double meshDivisionRatio,

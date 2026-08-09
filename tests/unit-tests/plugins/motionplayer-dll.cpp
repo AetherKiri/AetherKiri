@@ -1258,6 +1258,15 @@ TEST_CASE("motionplayer merges child animation at its authored parent slot") {
     CHECK(motion::detail::preparedLocalNodeFollowsChildSlot(5, 4));
 }
 
+TEST_CASE("motionplayer preserves authored sibling child order") {
+    // MSGWIN-style layouts author a background child, then its button
+    // children. Reversing sibling child collection paints the background
+    // last and hides every button even though all child textures rendered.
+    CHECK(motion::detail::preparedChildParentSlotLess(1, 3));
+    CHECK(motion::detail::preparedChildParentSlotLess(9, 11));
+    CHECK_FALSE(motion::detail::preparedChildParentSlotLess(11, 9));
+}
+
 TEST_CASE("motionplayer parses and combines E-mote secondary-motion meshes") {
     const auto &identity = motion::internal::identityMeshControlPoints();
     std::array<float, 32> up = identity;
@@ -1403,6 +1412,17 @@ TEST_CASE("motionplayer resource chain and query surface") {
         const auto variableLabel = ttstr(getIndex(variableKeys, 0));
         REQUIRE(player.getVariableFrameList(variableLabel).Type() == tvtObject);
     }
+}
+
+TEST_CASE("motionplayer cycle identity distinguishes objects in one PSB") {
+    const std::string path = "title.psb";
+
+    REQUIRE_FALSE(motion::internal::sameMotionOwnershipIdentity(
+        path, ttstr(TJS_W("char")), ttstr(TJS_W("show")),
+        path, ttstr(TJS_W("TITLE2")), ttstr(TJS_W("show"))));
+    REQUIRE(motion::internal::sameMotionOwnershipIdentity(
+        path, ttstr(TJS_W("char")), ttstr(TJS_W("show")),
+        path, ttstr(TJS_W("char")), ttstr(TJS_W("show"))));
 }
 
 TEST_CASE("motionplayer draw cache and playback state") {
