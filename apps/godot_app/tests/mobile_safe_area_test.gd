@@ -147,6 +147,8 @@ func _initialize() -> void:
     assert(not launch_shell.visible)
     assert(launch_shell.scale == Vector2.ONE)
     assert(is_equal_approx(launch_shell.modulate.a, 1.0))
+    assert(app.LOADING_SPINNER_ROTATION < 0.0)
+    assert(is_equal_approx(absf(app.LOADING_SPINNER_ROTATION), TAU))
 
     var immediate_loading_panel := Control.new()
     var immediate_loading_card := Control.new()

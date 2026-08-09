@@ -56,6 +56,7 @@ const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
 const ICON_REFRESH := UI_ICON_DIR + "arrows-counter-clockwise-fill.svg"
+const LOADING_SPINNER_ROTATION := -TAU
 const ICON_ADD := UI_ICON_DIR + "plus-circle.svg"
 const ICON_HELP := UI_ICON_DIR + "help.svg"
 const ICON_LIBRARY := UI_ICON_DIR + "library.svg"
@@ -4190,7 +4191,11 @@ func _build_loading_panel() -> void:
     loading_labels.add_child(loading_title_label)
     if not ui_motion.reduced_motion:
         var spinner_tween := loading_spinner.create_tween().set_loops()
-        spinner_tween.tween_property(loading_spinner, "rotation", TAU, 0.85).from(0.0).set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
+        # The refresh glyph depicts counter-clockwise motion. Godot's positive
+        # UI rotation is clockwise because the canvas Y axis points down.
+        spinner_tween.tween_property(
+            loading_spinner, "rotation", LOADING_SPINNER_ROTATION, 0.85
+        ).from(0.0).set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
 
     if ui_log_enabled and not _mobile_runtime():
         log_view = TextEdit.new()
