@@ -429,6 +429,11 @@ namespace {
 
     constexpr std::uint64_t kGlobalPresentationReuseTtlUs = 100000;
     constexpr std::uint64_t kGlobalPresentationCopyReuseTtlUs = 100000;
+    // D3DEmote control, physics, and authored timelines continue at the host
+    // tick rate. Only the expensive full-canvas raster publish is capped at
+    // 20 Hz per player; the last completed GPU layer stays resident between
+    // publishes so the window compositor and input can remain responsive.
+    constexpr std::uint64_t kD3DEmoteRasterPublishIntervalUs = 50000;
 
     iTJSDispatch2 *globalPresentationSourceLayerObject(
         GlobalPresentationRenderCacheEntry &entry) {
@@ -11234,6 +11239,35 @@ namespace motion {
             }
             adaptor->setRetainedPresentationLayer(nullptr);
         }
+        const auto rasterNowUs = motionRenderProfileNowUs();
+        if(!retainD3DPresentation && _runtime->isEmoteMode &&
+           _runtime->lastD3DRasterPublishUs != 0 &&
+           rasterNowUs >= _runtime->lastD3DRasterPublishUs &&
+           rasterNowUs - _runtime->lastD3DRasterPublishUs <
+               kD3DEmoteRasterPublishIntervalUs &&
+           _runtime->lastD3DRenderLayer <
+               _runtime->d3dRenderLayers.size()) {
+            auto &lastLayerSlot = _runtime->d3dRenderLayers[
+                _runtime->lastD3DRenderLayer];
+            iTJSDispatch2 *lastLayerObject =
+                lastLayerSlot.Type() == tvtObject
+                    ? lastLayerSlot.AsObjectNoAddRef()
+                    : nullptr;
+            auto *lastLayer = resolveNativeLayer(lastLayerObject);
+            if(lastLayer &&
+               lastLayer->GetImageWidth() == adaptor->getWidth() &&
+               lastLayer->GetImageHeight() == adaptor->getHeight()) {
+                adaptor->setRenderedLayer(lastLayerObject);
+                if(motionRenderProfileEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "motion d3d raster reuse: motion={} layer={} age_us={} interval_us={}",
+                        motionPath, _runtime->lastD3DRenderLayer,
+                        rasterNowUs - _runtime->lastD3DRasterPublishUs,
+                        kD3DEmoteRasterPublishIntervalUs);
+                }
+                return true;
+            }
+        }
         detail::logoChainTraceLogf(
             motionPath, "draw.d3d", "0x6D5B90", _clampedEvalTime,
             "adaptorSize={}x{} route=D3DAdaptor_renderFromPlayer",
@@ -11431,7 +11465,13 @@ namespace motion {
         } else {
             adaptor->setRenderedLayer(renderLayerObject);
         }
-        return d3dGpuBatch.finish();
+        const bool batchFinished = d3dGpuBatch.finish();
+        if(batchFinished && !retainD3DPresentation &&
+           _runtime->isEmoteMode) {
+            _runtime->lastD3DRenderLayer = renderLayerIndex;
+            _runtime->lastD3DRasterPublishUs = motionRenderProfileNowUs();
+        }
+        return batchFinished;
     }
 
     bool Player::renderToRgba(std::uint8_t *pixels, int width, int height,
