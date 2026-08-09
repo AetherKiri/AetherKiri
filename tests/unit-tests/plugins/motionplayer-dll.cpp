@@ -252,6 +252,46 @@ TEST_CASE("motion presentation excludes structural binder layers") {
         motion::internal::presentationLayerTypeCanReceivePixels(ltAlpha));
 }
 
+TEST_CASE("D3D E-mote frame reuse only covers its transparent scratch route") {
+    using motion::internal::d3dEmoteFrameReuseRouteEligible;
+
+    CHECK(d3dEmoteFrameReuseRouteEligible(true, false, 1));
+    CHECK_FALSE(d3dEmoteFrameReuseRouteEligible(false, false, 1));
+    CHECK_FALSE(d3dEmoteFrameReuseRouteEligible(true, true, 1));
+    CHECK_FALSE(d3dEmoteFrameReuseRouteEligible(true, false, 0));
+}
+
+TEST_CASE("D3D E-mote frame cache requires exact render identity") {
+    using motion::internal::d3dEmoteFrameCacheMatches;
+
+    motion::detail::PlayerRuntime::EmoteRenderFrameCacheEntry entry;
+    entry.bitmap = std::make_shared<tTVPBaseBitmap>(2, 3, 32);
+    entry.motion = "emote/vanilla";
+    entry.frame = 12.5;
+    entry.canvasWidth = 2;
+    entry.canvasHeight = 3;
+    entry.commandSignature = 0x1234u;
+
+    CHECK(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.5, 2, 3, 0x1234u));
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/chocola", 12.5, 2, 3, 0x1234u));
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.51, 2, 3, 0x1234u));
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.5, 3, 3, 0x1234u));
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.5, 2, 3, 0x4321u));
+
+    entry.canvasWidth = 4;
+    entry.canvasHeight = 5;
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.5, 4, 5, 0x1234u));
+    entry.bitmap.reset();
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.5, 4, 5, 0x1234u));
+}
+
 TEST_CASE("startup logo presentation preserves its authored origin") {
     using motion::internal::startupLogoMotionScalesAroundCanvasCenter;
     using motion::internal::startupLogoMotionUsesStableBackdropReference;
