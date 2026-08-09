@@ -15,6 +15,7 @@ func _initialize() -> void:
     assert(not bool(status.get("built", true)))
     assert(not bool(status.get("available", true)))
     assert(not bool(status.get("active", true)))
+    assert(not bool(status.get("layer_detail_preservation", true)))
 
     var user_dir := OS.get_user_data_dir()
     assert(player.initialize_engine(user_dir, user_dir.path_join("cache")))
@@ -25,6 +26,9 @@ func _initialize() -> void:
     player.set_frame_native_output_enabled(false)
     var surface_status: Dictionary = player.get_frame_enhancement_status()
     assert(not bool(surface_status.get("raw_source_output", true)))
+    player.set_frame_enhancement_enabled(false)
+    var disabled_status: Dictionary = player.get_frame_enhancement_status()
+    assert(not bool(disabled_status.get("layer_detail_preservation", true)))
     player.destroy_engine()
 
     player.queue_free()

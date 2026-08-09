@@ -188,6 +188,7 @@ struct GodotGpuOp {
     uint32_t mode = 0;
     int opacity = 255;
     uint32_t color = 0xffffffffu;
+    bool preserve_minified_detail = false;
     bool result = false;
     bool done = false;
     uint64_t readback_request = 0;
@@ -220,6 +221,7 @@ std::atomic<uint64_t> g_gpu_op_completed{0};
 std::atomic<uint64_t> g_gpu_op_failed{0};
 std::atomic<uint64_t> g_gpu_copy_failed{0};
 std::atomic<uint64_t> g_gpu_copy_triangles_failed{0};
+std::atomic<uint64_t> g_gpu_detail_minify_ops{0};
 std::atomic<uint64_t> g_gpu_triangle_pipeline_failed{0};
 std::atomic<uint64_t> g_gpu_triangle_buffer_failed{0};
 std::atomic<uint64_t> g_gpu_triangle_uniform_failed{0};
@@ -241,6 +243,9 @@ std::atomic<uint64_t> g_gpu_predicted_compute_barriers{0};
 std::atomic<uint64_t> g_gpu_predicted_raw_hazards{0};
 std::atomic<uint64_t> g_gpu_predicted_waw_hazards{0};
 std::atomic<uint64_t> g_gpu_predicted_war_hazards{0};
+std::atomic_bool g_frame_enhancement_detail_sampling{false};
+
+constexpr uint32_t kGodotGpuPreserveMinifiedDetail = 0x40000000u;
 
 constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
 
@@ -1136,6 +1141,8 @@ String GetGodotGpuBridgeDebugInfo() {
         << " bridge_failed=" << g_gpu_op_failed.load(std::memory_order_relaxed)
         << " bridge_copy_failed=" << g_gpu_copy_failed.load(std::memory_order_relaxed)
         << " bridge_tri_failed=" << g_gpu_copy_triangles_failed.load(std::memory_order_relaxed)
+        << " bridge_detail_minify_ops="
+        << g_gpu_detail_minify_ops.load(std::memory_order_relaxed)
         << " bridge_tri_pipeline_failed=" << g_gpu_triangle_pipeline_failed.load(std::memory_order_relaxed)
         << " bridge_tri_buffer_failed=" << g_gpu_triangle_buffer_failed.load(std::memory_order_relaxed)
         << " bridge_tri_uniform_failed=" << g_gpu_triangle_uniform_failed.load(std::memory_order_relaxed)
@@ -1348,7 +1355,11 @@ PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
                     : static_cast<int32_t>((op.color >> 8) & 0xffu),
         triple_source ? static_cast<int32_t>(op.src3_pos.x) :
         scaled_blend ? 1 :
-        triangles ? static_cast<int32_t>(op.color) :
+        triangles ? static_cast<int32_t>(
+                        op.color |
+                        (op.preserve_minified_detail
+                             ? kGodotGpuPreserveMinifiedDetail
+                             : 0u)) :
         mosaic ? 0 :
         dual_source ? 0 : static_cast<int32_t>((op.color >> 16) & 0xffu),
         triple_source ? static_cast<int32_t>(op.src3_pos.y) :
@@ -2152,7 +2163,8 @@ vec4 straight_from_premul(vec4 premul) {
 }
 
 vec4 load_minified(ivec2 limit, vec2 edge_coord,
-                    vec2 source_dx, vec2 source_dy) {
+                    vec2 source_dx, vec2 source_dy,
+                    bool preserve_detail) {
     // A single bilinear lookup aliases alpha edges when an E-mote surface is
     // presented at a fractional scale (0.5 is common in Artemis games).
     // Approximate the source footprint with destination-pixel subsamples. Keep the
@@ -2162,6 +2174,24 @@ vec4 load_minified(ivec2 limit, vec2 edge_coord,
     if (footprint <= 1.0001) {
         return straight_from_premul(
             load_bilinear_premul(limit, edge_coord));
+    }
+    if (preserve_detail) {
+        // Composite Simpson sampling retains the centre of high-contrast
+        // anime line art while integrating the complete destination-pixel
+        // footprint. This gives a later frame enhancer real eye/hair detail
+        // to restore instead of sharpening an already blurred 2x2 average.
+        vec4 premul = vec4(0.0);
+        for (int y = -1; y <= 1; ++y) {
+            float wy = y == 0 ? 4.0 : 1.0;
+            for (int x = -1; x <= 1; ++x) {
+                float wx = x == 0 ? 4.0 : 1.0;
+                vec2 offset = source_dx * (float(x) * 0.5) +
+                              source_dy * (float(y) * 0.5);
+                premul += load_bilinear_premul(
+                    limit, edge_coord + offset) * (wx * wy);
+            }
+        }
+        return straight_from_premul(premul / 36.0);
     }
     // DXT E-mote atlases contain high-contrast one-pixel line art. At the
     // authored 0.5 presentation scale a bare bilinear lookup leaves that
@@ -2189,6 +2219,8 @@ void main() {
     vec2 p = vec2(dst_pos) + vec2(0.5);
     int tri_count = pc.rect1.z;
     ivec2 src_limit = max(pc.color0.xy - ivec2(1), ivec2(0));
+    bool preserve_detail =
+        (uint(pc.color0.z) & 0x40000000u) != 0u;
     vec4 out_color = imageLoad(dst_img, dst_pos);
     bool covered = false;
 
@@ -2223,7 +2255,8 @@ void main() {
                 source10 * ((d2.x - d0.x) / area) +
                 source20 * ((d0.x - d1.x) / area);
             out_color = load_minified(
-                src_limit, src_pos_f, source_dx, source_dy);
+                src_limit, src_pos_f, source_dx, source_dy,
+                preserve_detail);
             covered = true;
             // A tessellated surface has a single source sample at a pixel.
             // Stop after the first covering triangle instead of scanning the
@@ -2301,11 +2334,25 @@ vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
 }
 
 vec4 load_minified(ivec2 limit, vec2 edge_coord,
-                    vec2 source_dx, vec2 source_dy) {
+                    vec2 source_dx, vec2 source_dy,
+                    bool preserve_detail) {
     float footprint = max(length(source_dx), length(source_dy));
     vec4 premul;
     if (footprint <= 1.0001) {
         premul = load_bilinear_premul(limit, edge_coord);
+    } else if (preserve_detail) {
+        premul = vec4(0.0);
+        for (int y = -1; y <= 1; ++y) {
+            float wy = y == 0 ? 4.0 : 1.0;
+            for (int x = -1; x <= 1; ++x) {
+                float wx = x == 0 ? 4.0 : 1.0;
+                vec2 offset = source_dx * (float(x) * 0.5) +
+                              source_dy * (float(y) * 0.5);
+                premul += load_bilinear_premul(
+                    limit, edge_coord + offset) * (wx * wy);
+            }
+        }
+        premul /= 36.0;
     } else {
         vec2 dx = source_dx * 0.5;
         vec2 dy = source_dy * 0.5;
@@ -2721,7 +2768,9 @@ void main() {
     int tri_count = pc.rect1.z;
     ivec2 src_limit = max(pc.color0.xy - ivec2(1), ivec2(0));
     float opacity = clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
-    int blend_flags = pc.color0.z;
+    bool preserve_detail =
+        (uint(pc.color0.z) & 0x40000000u) != 0u;
+    int blend_flags = int(uint(pc.color0.z) & 0x3fffffffu);
     bool mask_write = (blend_flags & 131072) != 0;
     bool tvp_blend = !mask_write && (blend_flags & 65536) != 0;
     int tvp_blend_mode = blend_flags & 65535;
@@ -2759,7 +2808,8 @@ void main() {
                 source10 * ((d2.x - d0.x) / area) +
                 source20 * ((d0.x - d1.x) / area);
             vec4 src = load_minified(
-                src_limit, src_pos_f, source_dx, source_dy);
+                src_limit, src_pos_f, source_dx, source_dy,
+                preserve_detail);
             if (tvp_blend) {
                 uint d = pack_u8(vec4_to_u8(dst));
                 uint s = pack_u8(vec4_to_u8(src));
@@ -2870,11 +2920,25 @@ vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
 }
 
 vec4 load_minified(ivec2 limit, vec2 edge_coord,
-                    vec2 source_dx, vec2 source_dy) {
+                    vec2 source_dx, vec2 source_dy,
+                    bool preserve_detail) {
     float footprint = max(length(source_dx), length(source_dy));
     vec4 premul;
     if (footprint <= 1.0001) {
         premul = load_bilinear_premul(limit, edge_coord);
+    } else if (preserve_detail) {
+        premul = vec4(0.0);
+        for (int y = -1; y <= 1; ++y) {
+            float wy = y == 0 ? 4.0 : 1.0;
+            for (int x = -1; x <= 1; ++x) {
+                float wx = x == 0 ? 4.0 : 1.0;
+                vec2 offset = source_dx * (float(x) * 0.5) +
+                              source_dy * (float(y) * 0.5);
+                premul += load_bilinear_premul(
+                    limit, edge_coord + offset) * (wx * wy);
+            }
+        }
+        premul /= 36.0;
     } else {
         vec2 dx = source_dx * 0.5;
         vec2 dy = source_dy * 0.5;
@@ -3107,7 +3171,9 @@ void main() {
     int tri_count = pc.rect1.z;
     ivec2 src_limit = max(pc.color0.xy - ivec2(1), ivec2(0));
     float opacity = clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
-    int blend_flags = pc.color0.z;
+    bool preserve_detail =
+        (uint(pc.color0.z) & 0x40000000u) != 0u;
+    int blend_flags = int(uint(pc.color0.z) & 0x3fffffffu);
     bool inverted_mask = (blend_flags & 65536) != 0;
     blend_flags = blend_flags & 65535;
     vec4 dst = imageLoad(dst_img, dst_pos);
@@ -3161,7 +3227,8 @@ void main() {
                 continue;
             }
             vec4 src = load_minified(
-                src_limit, src_pos_f, source_dx, source_dy);
+                src_limit, src_pos_f, source_dx, source_dy,
+                preserve_detail);
             if (src.g >= 0.70 && src.g > src.r + 0.20 && src.g > src.b + 0.20) {
                 src.a = 0.0;
             }
@@ -5610,6 +5677,47 @@ void AppendGodotGpuTriangleBounds(std::vector<float> &vertices,
     vertices.push_back(max_y);
 }
 
+bool ShouldPreserveMinifiedTriangleDetail(uint32_t triangle_count,
+                                          const tTVPPointD *dst_points,
+                                          const tTVPPointD *src_points) {
+    if (!g_frame_enhancement_detail_sampling.load(std::memory_order_acquire) ||
+        triangle_count == 0 || dst_points == nullptr || src_points == nullptr) {
+        return false;
+    }
+
+    // Ignore tiny fractional transforms. The detail path is reserved for a
+    // real reduction, such as a full-resolution character image composited
+    // into a dialogue portrait, so normal 1:1 layers retain the fast path.
+    constexpr double kMinifiedScale = 0.9;
+    constexpr double kLengthEpsilon = 1.0e-6;
+    for (uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
+        const uint32_t base = triangle * 3u;
+        for (uint32_t edge = 0; edge < 3u; ++edge) {
+            const uint32_t next = (edge + 1u) % 3u;
+            const double src_dx = src_points[base + next].x -
+                                  src_points[base + edge].x;
+            const double src_dy = src_points[base + next].y -
+                                  src_points[base + edge].y;
+            const double dst_dx = dst_points[base + next].x -
+                                  dst_points[base + edge].x;
+            const double dst_dy = dst_points[base + next].y -
+                                  dst_points[base + edge].y;
+            const double src_length_squared =
+                src_dx * src_dx + src_dy * src_dy;
+            if (src_length_squared <= kLengthEpsilon * kLengthEpsilon) {
+                continue;
+            }
+            const double dst_length_squared =
+                dst_dx * dst_dx + dst_dy * dst_dy;
+            if (dst_length_squared <
+                kMinifiedScale * kMinifiedScale * src_length_squared) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
                          const tTVPRect *clip_rect,
                          const tTVPPointD *dst_points,
@@ -5644,6 +5752,14 @@ bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     op->size = Vector3(width, height, 1);
     op->src_size = Vector3(src_record.width, src_record.height, 1);
     op->mode = triangle_count;
+    // Copy triangles do not have blend flags. Keep the reserved detail bit
+    // clear unless the enhancement-specific minification path selects it.
+    op->color = 0u;
+    op->preserve_minified_detail = ShouldPreserveMinifiedTriangleDetail(
+        triangle_count, dst_points, src_points);
+    if (op->preserve_minified_detail) {
+        g_gpu_detail_minify_ops.fetch_add(1, std::memory_order_relaxed);
+    }
     op->vertices.reserve(static_cast<size_t>(triangle_count) * 16u);
     for (uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
         const uint32_t vertex_base = triangle * 3u;
@@ -5696,6 +5812,11 @@ bool BridgeDrawTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     op->mode = triangle_count;
     op->opacity = static_cast<int>(std::round(std::clamp(opacity, 0.0f, 1.0f) * 255.0f));
     op->color = blend_mode;
+    op->preserve_minified_detail = ShouldPreserveMinifiedTriangleDetail(
+        triangle_count, dst_points, src_points);
+    if (op->preserve_minified_detail) {
+        g_gpu_detail_minify_ops.fetch_add(1, std::memory_order_relaxed);
+    }
     op->vertices.reserve(static_cast<size_t>(triangle_count) * 16u);
     for (uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
         const uint32_t vertex_base = triangle * 3u;
@@ -5757,6 +5878,11 @@ bool BridgeDrawMaskedTriangles(uint64_t dst, uint64_t src, uint64_t mask,
     op->opacity = static_cast<int>(
         std::round(std::clamp(opacity, 0.0f, 1.0f) * 255.0f));
     op->color = (blend_mode & 0xffffu) | (inverted_mask ? 0x10000u : 0u);
+    op->preserve_minified_detail = ShouldPreserveMinifiedTriangleDetail(
+        triangle_count, dst_points, src_points);
+    if (op->preserve_minified_detail) {
+        g_gpu_detail_minify_ops.fetch_add(1, std::memory_order_relaxed);
+    }
     op->vertices.reserve(static_cast<size_t>(triangle_count) * 22u);
     for (uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
         const uint32_t vertex_base = triangle * 3u;
@@ -6652,6 +6778,9 @@ public:
 
     void set_frame_enhancement_enabled(bool enabled) {
         frame_effect_enabled_ = enabled;
+        g_frame_enhancement_detail_sampling.store(
+            enabled && frame_effect_provider_ != nullptr,
+            std::memory_order_release);
         frame_effect_active_ = false;
         frame_effect_error_ = "";
         frame_effect_bypass_due_to_error_ = false;
@@ -6715,6 +6844,9 @@ public:
         Dictionary result;
         result["built"] = frame_effect_provider_ != nullptr;
         result["enabled"] = frame_effect_enabled_;
+        result["layer_detail_preservation"] =
+            g_frame_enhancement_detail_sampling.load(
+                std::memory_order_acquire);
         result["active"] = frame_effect_active_;
         result["mode"] = frame_effect_mode_;
         result["custom_chain"] = frame_effect_custom_chain_;
