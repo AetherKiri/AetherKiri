@@ -2,7 +2,7 @@
 
 [English](verified_games.md)
 
-最后更新：2026-08-02
+最后更新：2026-08-10
 
 本文档记录已经用 AetherKiri 手动 smoke test 或 flow test 过的游戏。它是兼容性记录，
 不代表每条路线、每个视频、每个插件路径或每个存档状态都已经完整验证。
@@ -21,6 +21,7 @@
 | --- | --- | --- | --- | --- | --- |
 | 恋がさくころ桜どき | Linux x64 release app；macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi)、[@MadCcc](https://github.com/MadCcc) | 本地游戏文件不提交到仓库。 |
 | ましろ色シンフォニー | Linux x64 release app | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
+| ましろ色シンフォニー -Love is pure white- Remake for FHD | macOS app；iOS/iPadOS iPad app build | 导入、启动、标题/菜单渲染、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | Clover Day's | Linux x64 release app | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
 | 金色ラブリッチェ -Golden Time- | Linux x64 release app；macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi)、[@MadCcc](https://github.com/MadCcc) | 本地游戏文件不提交到仓库。 |
 | もっと！孕ませ！炎のおっぱい異世界 おっぱいバニー学園！ | Web release（Chrome，Vite 本地服务器）；macOS debug 和 release app；iOS/iPadOS iPad app build；Android release APK | 启动、脚本/插件加载、标题/菜单渲染、基础输入、继续/存读档流程、macOS debug 下 MPEG-1/MP2 场景内视频渲染并自然播放完成、CJK/符号字体渲染，以及 Web 端 IndexedDB `/userfs` 持久化行为 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。Web 部署仍需要 COOP/COEP 头。需要 Live2D 的游戏仍需单独提供 Web 版 Live2D Cubism Core 专有运行时。 |
@@ -29,6 +30,11 @@
 | RIDDLE JOKER | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、标题动画/图层、继续游戏流程、场景/文字渲染、对话输入压力、存读档冒烟，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 9-nine-ここのつここのかここのいろ | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、画廊/影片播放冒烟、场景/文字渲染，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 9-nine-そらいろそらうたそらのおと | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、画廊/音乐鉴赏播放冒烟、场景/文字渲染，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| PARQUET | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 9-nine- 新章 | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| as:9-nine- ARTEISIA | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 乱れ雪月華 ～儚く散る細雪～ | macOS debug app；iOS/iPadOS iPad debug app build | 启动、年龄提示与标题/菜单渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 乱れ雪月華 ～月夜の淫舞、狂気の契り～ | macOS debug app；iOS/iPadOS iPad debug app build | 启动、标题/菜单渲染，以及开始游戏过渡前的基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | オトメ*ドメイン | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、画廊场景回放流程、编译版 PSB 场景标签解析、场景/文字渲染，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | もっと！孕ませ！炎のおっぱい異世界おっぱいメイド学園！ | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、语音播放冒烟、存读档冒烟、退出行为，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | もっと！孕ませ！炎のおっぱい異世界超エロサキュバス学園！ | macOS release app；iOS/iPadOS iPad release app build；Android release APK | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、Live2D 渲染冒烟、语音播放冒烟、存读档冒烟，以及 CJK/符号字体渲染 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
@@ -37,15 +43,25 @@
 | サノバウィッチ | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 千恋＊万花 | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 天使☆騒々 RE-BOOT! | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续游戏流程、场景/文字渲染、画廊渲染与动画冒烟、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
-| ライムライト・レモネードジャム | Windows x64 debug app；macOS release app；iOS/iPadOS iPad release app build | 启动、标题动画与菜单渲染、继续/读档流程、场景/文字渲染、画廊导航与图像合成、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer)、[@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
+| ライムライト・レモネードジャム | Windows x64 debug app；macOS debug 和 release app；iOS/iPadOS iPad release app build | 启动、无闪帧的 Logo 到标题页切换、稳定的标题动画与菜单渲染、继续/读档流程、场景/文字渲染、画廊导航与图像合成、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer)、[@KYoiRyi](https://github.com/KYoiRyi)、[@MadCcc](https://github.com/MadCcc) | 本地游戏文件不提交到仓库。 |
 | ワガママハイスペック | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、音乐选择与播放、锁屏恢复音频和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | ワガママハイスペック OC | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、音乐播放、锁屏恢复音频和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
-| 淫母マンション～ママは、性処理肉便器～ | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、场景/文字渲染、音频播放和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 淫母マンション～ママは、性処理肉便器～ | macOS debug 和 release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、场景/文字渲染、音频播放、基础输入，以及开启画面增强后的 4:3 继续/菜单流程、悬停和返回按钮坐标对齐 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 天色＊アイルノーツ | macOS debug app | 启动、标题/菜单渲染、继续/读档流程、背景与角色立绘渲染、SD CG 切换稳定性、场景/文字渲染和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | GINKA | Windows x64 debug app | 导入、启动、标题/菜单渲染、游戏数据加载、背景与角色渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
 | NEKOPARA Vol. 1 | macOS debug app | 启动、标题/菜单渲染、Data Load 与首个存档读取流程、场景/文字渲染、E-mote 角色立绘与动画、快速推进对话，以及立绘区域点击事件转发 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| ネコぱら After ラ・ヴレ・ファミーユ | macOS debug app | 启动、标题/菜单渲染、开始游戏流程、场景/文字渲染、E-mote 角色立绘与动画，以及基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| ネコぱらExtra 仔ネコの日の約束 | macOS debug app；iOS/iPadOS iPad debug app build | 导入、启动、标题/菜单渲染、开始游戏流程、场景/文字渲染、无撕裂的 E-mote 角色立绘与动画、420 帧零输入稳定性，以及基础鼠标/触控输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| ネコぱら vol.0 水無月ネコたちの日常！ | macOS debug app | 启动、标题/菜单渲染、开始游戏流程、场景/文字渲染、E-mote 角色立绘与眨眼动画，以及基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | まいてつ -Pure Station- | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、E-mote 角色立绘与动画、鉴赏 CG 导航/合成与图层顺序、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | まいてつ Last Run!! | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、E-mote 角色立绘与动画、鉴赏 CG 导航/合成与图层顺序、音频播放、输入压力和 FPS 冒烟 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| フユキス | macOS app；iOS/iPadOS iPad app build | 启动、标题/菜单渲染、第一个存档读取流程、场景/文字渲染、E-mote 角色合成与眨眼、角色距离/姿势原子切换和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| アイカギ2 | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| アイカギ3 | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| アマカノ3 | macOS debug app；iOS/iPadOS iPad app build（冒烟） | macOS 下启动、继续游戏、第二和第四个存档读取、场景/文字渲染、四角色 E-mote 立绘与动画、口型、表情/脸红渐变、连续对话输入，以及稳定阶段约 50–63 FPS；iPad 导入、启动、初始标题/UI 与基础输入 | 流程验证通过（macOS） | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| D.C.5 ～ダ・カーポ5～ | macOS app；iOS/iPadOS iPad app build | 导入、启动、初始标题/UI 与文本渲染，以及基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| NUKITASHI | macOS app；iOS/iPadOS iPad app build | 导入、启动、标题/菜单渲染、场景/文字渲染、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| NUKITASHI2 | macOS app；iOS/iPadOS iPad app build | 导入、冷启动 App、启动动画/标题切换、标题/菜单渲染、场景/文字渲染、音频播放和连续触摸输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 恋騎士 Purely☆Kiss | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 銃騎士Cutie☆Bullet | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 聖騎士Melty☆Lovers | macOS release app；iOS/iPadOS iPad release app build | 导入、启动、标题/菜单渲染、场景/文字渲染和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |

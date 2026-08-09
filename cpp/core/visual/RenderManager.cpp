@@ -1549,21 +1549,29 @@ public:
     void PartialCopy(iTVPTexture2D *dst, tjs_int dx, tjs_int dy,
                      iTVPTexture2D *src, tjs_int sx, tjs_int sy, tjs_int w,
                      tjs_int h, bool backwardCopy) {
-        // 32bpp
-        w *= sizeof(tjs_uint32);
+        assert(dst->GetFormat() == src->GetFormat());
+        const tjs_int pixelSize =
+            dst->GetFormat() == TVPTextureFormat::Gray
+            ? sizeof(tjs_uint8)
+            : sizeof(tjs_uint32);
+        const tjs_int byteWidth = w * pixelSize;
         if(backwardCopy) {
             for(tjs_int y = h - 1; y >= 0; --y) {
-                memmove(((tjs_uint32 *)dst->GetScanLineForWrite(dy + y)) + dx,
-                        ((const tjs_uint32 *)src->GetScanLineForRead(sy + y)) +
-                            sx,
-                        w);
+                memmove(
+                    static_cast<tjs_uint8 *>(
+                        dst->GetScanLineForWrite(dy + y)) + dx * pixelSize,
+                    static_cast<const tjs_uint8 *>(
+                        src->GetScanLineForRead(sy + y)) + sx * pixelSize,
+                    byteWidth);
             }
         } else {
             for(tjs_int y = 0; y < h; ++y) {
-                memmove(((tjs_uint32 *)dst->GetScanLineForWrite(dy + y)) + dx,
-                        ((const tjs_uint32 *)src->GetScanLineForRead(sy + y)) +
-                            sx,
-                        w);
+                memmove(
+                    static_cast<tjs_uint8 *>(
+                        dst->GetScanLineForWrite(dy + y)) + dx * pixelSize,
+                    static_cast<const tjs_uint8 *>(
+                        src->GetScanLineForRead(sy + y)) + sx * pixelSize,
+                    byteWidth);
             }
         }
         // 		tjs_int spitch = p->spitch, dpitch = p->dpitch;
@@ -3802,6 +3810,45 @@ public:
                 OperateRect(method, target, rcdest, src, refrect);
                 return;
             }
+
+            // Native Artemis submits ordinary translated/rotated E-mote
+            // parts as two affine triangles to the GPU. Sending every such
+            // quad through OpenCV allocates a temporary image and runs a full
+            // remap kernel; a character made of a hundred small parts then
+            // spends most of the frame in remap scheduling. The software
+            // renderer already has the equivalent clipped triangle scanner.
+            // Use it for genuine affine parallelograms and keep OpenCV only
+            // for perspective quads that cannot be represented by one affine
+            // transform.
+            if(isSrcRect && checkQuadSquared(dstpt)) {
+                TAffuncFunc affineloop = GetStretchFunction(
+                    static_cast<tTVPRenderMethod_Software *>(method));
+                tjs_int taskNum = std::min<tjs_int>(TVPGetThreadNum(), 2);
+                TVPExecThreadTask(taskNum, [&](int n) {
+                    const int begin = 2 * n / taskNum;
+                    const int end = 2 * (n + 1) / taskNum;
+                    for(int i = begin; i < end; ++i) {
+                        const bool nrot = i & 1;
+                        const tTVPPointD *pt = srcpt + 3 * i;
+                        tTVPRect rc;
+                        if(nrot) { // rt, lb, rb
+                            rc.top = pt[0].y;
+                            rc.right = pt[0].x;
+                            rc.left = pt[1].x;
+                            rc.bottom = pt[1].y;
+                        } else { // lt, rt, lb
+                            rc.top = pt[1].y;
+                            rc.right = pt[1].x;
+                            rc.left = pt[2].x;
+                            rc.bottom = pt[2].y;
+                        }
+                        InternalAffineBlt(rcclip, rc, rc, src, dst,
+                                          dstpt + 3 * i, !nrot, affineloop);
+                    }
+                });
+                return;
+            }
+
             const uint8_t *sdata;
             int spitch = src->GetPitch();
             sdata = (const uint8_t *)src->GetPixelData();
@@ -5071,7 +5118,11 @@ iTVPRenderManager *TVPGetRenderManager() {
         // Prefer command-line option set via engine_set_option
         tTJSVariant val;
         ttstr str;
-        if(TVPGetCommandLine(TJS_W("renderer"), &val)) {
+        // The renderer can be selected through an early engine_set_option.
+        // Do not initialize the legacy application/data path merely to choose
+        // an off-screen renderer for an externally hosted runtime such as
+        // Artemis.
+        if(TVPGetCommandLineNoInit(TJS_W("renderer"), &val)) {
             str = val;
         }
         if(str.IsEmpty()) {

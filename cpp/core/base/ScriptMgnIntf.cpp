@@ -25,7 +25,7 @@
 #include "TimerIntf.h"
 #include "EventIntf.h"
 #include "SystemIntf.h"
-#include "PluginIntf.h"
+#include "PluginImpl.h"
 #include "MenuItemIntf.h"
 #include "ClipboardIntf.h"
 #include "MsgIntf.h"
@@ -423,11 +423,14 @@ class tTVPTJSGCCallback : public tTVPCompactEventCallbackIntf {
 // TVPInitScriptEngine
 //---------------------------------------------------------------------------
 static bool TVPScriptEngineInit = false;
+static bool TVPScriptEngineUninit = false;
+static bool TVPScriptEngineCompactHookRegistered = false;
 
 void TVPInitScriptEngine() {
-    if(TVPScriptEngineInit)
+    if(TVPScriptEngineInit && TVPScriptEngine)
         return;
     TVPScriptEngineInit = true;
+    TVPScriptEngineUninit = false;
 
     tTJSVariant val;
 
@@ -576,27 +579,36 @@ void TVPInitScriptEngine() {
     TVPCauseAtInstallExtensionClass(global);
 
     // Garbage Collection Hook
-    TVPAddCompactEventHook(&TVPTJSGCCallback);
+    if(!TVPScriptEngineCompactHookRegistered) {
+        TVPAddCompactEventHook(&TVPTJSGCCallback);
+        TVPScriptEngineCompactHookRegistered = true;
+    }
 }
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
 // TVPUninitScriptEngine
 //---------------------------------------------------------------------------
-static bool TVPScriptEngineUninit = false;
-
 void TVPUninitScriptEngine() {
-    if(TVPScriptEngineUninit)
+    if(TVPScriptEngineUninit && !TVPScriptEngine)
         return;
     TVPScriptEngineUninit = true;
 
+    // Internal ncbind classes retain process-global metadata. Unregister them
+    // while the old global TJS object is still alive, then release the script
+    // engine. Otherwise the next embedded game session either skips plugins
+    // as already loaded or fails their first registration.
+    TVPUnloadInternalPlugins();
+
     // TVPScriptEngine->Shutdown();
-    TVPScriptEngine->Release();
+    if(TVPScriptEngine)
+        TVPScriptEngine->Release();
     /*
         Objects, theirs lives are contolled by reference counter, may
        not be all freed here in some occations.
     */
     TVPScriptEngine = nullptr;
+    TVPScriptEngineInit = false;
 }
 //---------------------------------------------------------------------------
 
@@ -605,7 +617,6 @@ void TVPUninitScriptEngine() {
 //---------------------------------------------------------------------------
 void TVPRestartScriptEngine() {
     TVPUninitScriptEngine();
-    TVPScriptEngineInit = false;
     TVPInitScriptEngine();
 }
 //---------------------------------------------------------------------------
@@ -973,6 +984,57 @@ tjs_int TVPRepairShiftedNumberedMovieMappings(
     return static_cast<tjs_int>(corrections.size());
 }
 
+bool TVPPatchAffineSourceMotionStorageFallback(ttstr &script) {
+    ttstr patched(script);
+
+    // Some titles feed the regular AffineSourceMotion path while packaging
+    // only D3D-prefixed E-mote PSBs. Resolve the physical storage name without
+    // changing _innerStorage, which remains the title's logical identity.
+    // AffineSourceMotion has no _useD3D member, so the safe discriminator is
+    // whether the logical resource itself exists.
+    patched.Replace(
+        TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
+              "\t\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\t\t_motion_manager.unload(s);\r\n"
+              "\t\t\t\t\t}\r\n"),
+        TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
+              "\t\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\t\tvar unloadStorage = s;\r\n"
+              "\t\t\t\t\t\tif (!Storages.isExistentStorage(unloadStorage)) {\r\n"
+              "\t\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + unloadStorage)) unloadStorage = \"dx_\" + unloadStorage;\r\n"
+              "\t\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + unloadStorage)) unloadStorage = \"dxlow_\" + unloadStorage;\r\n"
+              "\t\t\t\t\t\t}\r\n"
+              "\t\t\t\t\t\t_motion_manager.unload(unloadStorage);\r\n"
+              "\t\t\t\t\t}\r\n"),
+        false);
+    patched.Replace(
+        TJS_W("\t\t\t\tvar s = create[i];\r\n"
+              "\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\tif (!Storages.isExistentStorage(s)) {\r\n"
+              "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
+              "\t\t\t\t\t} else {\r\n"
+              "\t\t\t\t\t\ttry {\r\n"
+              "\t\t\t\t\t\t\tvar obj = _motion_manager.load(s);\r\n"),
+        TJS_W("\t\t\t\tvar s = create[i];\r\n"
+              "\t\t\t\tif (s != \"\") {\r\n"
+              "\t\t\t\t\tvar loadStorage = s;\r\n"
+              "\t\t\t\t\tif (!Storages.isExistentStorage(loadStorage)) {\r\n"
+              "\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + loadStorage)) loadStorage = \"dx_\" + loadStorage;\r\n"
+              "\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + loadStorage)) loadStorage = \"dxlow_\" + loadStorage;\r\n"
+              "\t\t\t\t\t}\r\n"
+              "\t\t\t\t\tif (!Storages.isExistentStorage(loadStorage)) {\r\n"
+              "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
+              "\t\t\t\t\t} else {\r\n"
+              "\t\t\t\t\t\ttry {\r\n"
+              "\t\t\t\t\t\t\tvar obj = _motion_manager.load(loadStorage);\r\n"),
+        false);
+
+    if(patched == script)
+        return false;
+    script = patched;
+    return true;
+}
+
 static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
                                                ttstr &buffer) {
     const ttstr lower = shortname.AsLowerCase();
@@ -1131,49 +1193,7 @@ static void TVPApplyScriptCompatibilityPatches(const ttstr &shortname,
     }
 
     if(lower == TJS_W("affinesourcemotion.tjs")) {
-        ttstr patched(buffer);
-        // Some titles feed the regular AffineSourceMotion path while D3D
-        // motion is enabled, but package only the D3D-prefixed E-mote PSBs.
-        // Resolve the physical storage name without changing _innerStorage,
-        // which remains the title's logical (unprefixed) resource identity.
-        patched.Replace(
-            TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
-                  "\t\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\t\t_motion_manager.unload(s);\r\n"
-                  "\t\t\t\t\t}\r\n"),
-            TJS_W("\t\t\t\t\tvar s = remove[i];\r\n"
-                  "\t\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\t\tvar unloadStorage = s;\r\n"
-                  "\t\t\t\t\t\tif (_useD3D && !Storages.isExistentStorage(unloadStorage)) {\r\n"
-                  "\t\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + unloadStorage)) unloadStorage = \"dx_\" + unloadStorage;\r\n"
-                  "\t\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + unloadStorage)) unloadStorage = \"dxlow_\" + unloadStorage;\r\n"
-                  "\t\t\t\t\t\t}\r\n"
-                  "\t\t\t\t\t\t_motion_manager.unload(unloadStorage);\r\n"
-                  "\t\t\t\t\t}\r\n"),
-            false);
-        patched.Replace(
-            TJS_W("\t\t\t\tvar s = create[i];\r\n"
-                  "\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\tif (!Storages.isExistentStorage(s)) {\r\n"
-                  "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
-                  "\t\t\t\t\t} else {\r\n"
-                  "\t\t\t\t\t\ttry {\r\n"
-                  "\t\t\t\t\t\t\tvar obj = _motion_manager.load(s);\r\n"),
-            TJS_W("\t\t\t\tvar s = create[i];\r\n"
-                  "\t\t\t\tif (s != \"\") {\r\n"
-                  "\t\t\t\t\tvar loadStorage = s;\r\n"
-                  "\t\t\t\t\tif (_useD3D && !Storages.isExistentStorage(loadStorage)) {\r\n"
-                  "\t\t\t\t\t\tif (Storages.isExistentStorage(\"dx_\" + loadStorage)) loadStorage = \"dx_\" + loadStorage;\r\n"
-                  "\t\t\t\t\t\telse if (Storages.isExistentStorage(\"dxlow_\" + loadStorage)) loadStorage = \"dxlow_\" + loadStorage;\r\n"
-                  "\t\t\t\t\t}\r\n"
-                  "\t\t\t\t\tif (!Storages.isExistentStorage(loadStorage)) {\r\n"
-                  "\t\t\t\t\t\terror(@\"警告:モーション用画像が見つからない:${s}\");\r\n"
-                  "\t\t\t\t\t} else {\r\n"
-                  "\t\t\t\t\t\ttry {\r\n"
-                  "\t\t\t\t\t\t\tvar obj = _motion_manager.load(loadStorage);\r\n"),
-            false);
-        if(patched != buffer) {
-            buffer = patched;
+        if(TVPPatchAffineSourceMotionStorageFallback(buffer)) {
             spdlog::info(
                 "Applied compatibility patch for D3D-prefixed AffineSourceMotion resources");
         }
@@ -2395,17 +2415,66 @@ const tjs_char *TVPGetD3DStandSourcePatchScript() {
         "})();\r\n");
 }
 
+const tjs_char *TVPGetD3DEmoteGpuBatchPatchScript() {
+    return TJS_W(
+        "(function() {\r\n"
+        "\tif (typeof global.AffineSourceMotion == \"undefined\") return;\r\n"
+        "\tvar klass = global.AffineSourceMotion;\r\n"
+        "\tif (typeof klass.drawAffine == \"undefined\") return;\r\n"
+        "\tif (typeof klass.__aetherKiriOrigDrawAffine != \"undefined\") return;\r\n"
+        "\tklass.__aetherKiriOrigDrawAffine = &klass.drawAffine;\r\n"
+        "\tklass.drawAffine = function(target, mtx, src) {\r\n"
+        "\t\tvar adaptor = void;\r\n"
+        "\t\tvar batchSupported = false;\r\n"
+        "\t\ttry {\r\n"
+        "\t\t\tif (this._useD3D && this._window !== void) {\r\n"
+        "\t\t\t\tadaptor = this._window.motionD3DAdaptor;\r\n"
+        "\t\t\t\tbatchSupported = adaptor !== void && typeof adaptor.beginGpuBatch != \"undefined\" && typeof adaptor.endGpuBatch != \"undefined\";\r\n"
+        "\t\t\t}\r\n"
+        "\t\t} catch(e) {}\r\n"
+        "\t\tvar began = false;\r\n"
+        "\t\tif (batchSupported) {\r\n"
+        "\t\t\ttry { adaptor.beginGpuBatch(); began = true; } catch(e) {}\r\n"
+        "\t\t}\r\n"
+        "\t\tvar result;\r\n"
+        "\t\ttry {\r\n"
+        "\t\t\tresult = this.__aetherKiriOrigDrawAffine(target, mtx, src);\r\n"
+        "\t\t} catch(e) {\r\n"
+        "\t\t\tif (began) try { adaptor.endGpuBatch(); } catch(endError) {}\r\n"
+        "\t\t\tthrow e;\r\n"
+        "\t\t}\r\n"
+        "\t\tif (began) try { adaptor.endGpuBatch(); } catch(endError) {}\r\n"
+        "\t\treturn result;\r\n"
+        "\t};\r\n"
+        "})();\r\n");
+}
+
 static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
     const ttstr lower = shortname.AsLowerCase();
     const bool patchWorld = lower == TJS_W("world.tjs");
     const bool patchD3DLayer = lower == TJS_W("d3d.tjs");
     const bool patchD3DMotion =
         patchD3DLayer || lower == TJS_W("d3daffinesourcemotion.tjs");
+    const bool patchD3DEmote =
+        lower == TJS_W("motion.tjs") || lower == TJS_W("d3demote.tjs") ||
+        lower == TJS_W("affinesourcemotion.tjs");
     const bool patchMessageText = lower == TJS_W("msghack.tjs");
     const bool patchQuickMenu = lower == TJS_W("quickmenu.tjs");
     if(!patchWorld && !patchD3DLayer && !patchD3DMotion &&
-       !patchMessageText && !patchQuickMenu)
+       !patchD3DEmote && !patchMessageText && !patchQuickMenu)
         return;
+
+    if(patchD3DEmote) try {
+        TVPExecuteScript(
+            TVPGetD3DEmoteGpuBatchPatchScript(),
+            TJS_W("AetherKiriD3DEmoteGpuBatchPatch"), 0,
+            (tTJSVariant *)nullptr);
+        spdlog::info(
+            "Applied compatibility hook for D3DEmote GPU transaction batching");
+    } catch(...) {
+        spdlog::warn(
+            "Failed to apply compatibility hook for D3DEmote GPU transaction batching");
+    }
 
     // YuzuSoft quick menus still use the generic cursor SE when their proxied
     // window buttons have no per-control onenter script. Keep that fallback on
@@ -2948,22 +3017,37 @@ private:
     iTJSDispatch2 *destination_;
 };
 
-using tTVPGlobalFunctionSnapshot =
+using tTVPGlobalCallableSnapshot =
     std::vector<std::pair<ttstr, tTJSVariant>>;
 
-static bool TVPVariantIsFunction(const tTJSVariant &value) {
+enum class tTVPGlobalCallableKind {
+    None,
+    Function,
+    Class,
+};
+
+static tTVPGlobalCallableKind TVPGetGlobalCallableKind(
+    const tTJSVariant &value) {
     if(value.Type() != tvtObject)
-        return false;
+        return tTVPGlobalCallableKind::None;
     const tTJSVariantClosure closure = value.AsObjectClosureNoAddRef();
-    return closure.Object &&
-           closure.IsInstanceOf(0, nullptr, nullptr, TJS_W("Function"),
-                                nullptr) == TJS_S_TRUE;
+    if(!closure.Object)
+        return tTVPGlobalCallableKind::None;
+    if(closure.IsInstanceOf(0, nullptr, nullptr, TJS_W("Function"),
+                            nullptr) == TJS_S_TRUE) {
+        return tTVPGlobalCallableKind::Function;
+    }
+    if(closure.IsInstanceOf(0, nullptr, nullptr, TJS_W("Class"),
+                            nullptr) == TJS_S_TRUE) {
+        return tTVPGlobalCallableKind::Class;
+    }
+    return tTVPGlobalCallableKind::None;
 }
 
-class tTVPCollectGlobalFunctionsCallback final : public tTJSDispatch {
+class tTVPCollectGlobalCallablesCallback final : public tTJSDispatch {
 public:
-    explicit tTVPCollectGlobalFunctionsCallback(
-        tTVPGlobalFunctionSnapshot &snapshot) :
+    explicit tTVPCollectGlobalCallablesCallback(
+        tTVPGlobalCallableSnapshot &snapshot) :
         snapshot_(snapshot) {}
 
     tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
@@ -2975,7 +3059,8 @@ public:
         const tjs_uint32 flags =
             static_cast<tjs_uint32>(param[1]->AsInteger());
         if(!(flags & TJS_HIDDENMEMBER) &&
-           TVPVariantIsFunction(*param[2])) {
+           TVPGetGlobalCallableKind(*param[2]) !=
+               tTVPGlobalCallableKind::None) {
             snapshot_.emplace_back(ttstr(*param[0]), *param[2]);
         }
         if(result)
@@ -2984,18 +3069,18 @@ public:
     }
 
 private:
-    tTVPGlobalFunctionSnapshot &snapshot_;
+    tTVPGlobalCallableSnapshot &snapshot_;
 };
 
-static tTVPGlobalFunctionSnapshot TVPCaptureGlobalFunctions() {
-    tTVPGlobalFunctionSnapshot snapshot;
+static tTVPGlobalCallableSnapshot TVPCaptureGlobalCallables() {
+    tTVPGlobalCallableSnapshot snapshot;
     tTJS *engine = TVPGetScriptEngine();
     iTJSDispatch2 *global =
         engine ? engine->GetGlobalNoAddRef() : nullptr;
     if(!global)
         return snapshot;
 
-    auto *callback = new tTVPCollectGlobalFunctionsCallback(snapshot);
+    auto *callback = new tTVPCollectGlobalCallablesCallback(snapshot);
     tTJSVariantClosure closure(callback);
     try {
         global->EnumMembers(TJS_IGNOREPROP, &closure, global);
@@ -3007,20 +3092,21 @@ static tTVPGlobalFunctionSnapshot TVPCaptureGlobalFunctions() {
     return snapshot;
 }
 
-static size_t TVPRestoreMissingGlobalFunctionMembers(
-    const tTVPGlobalFunctionSnapshot &snapshot) {
+static size_t TVPRestoreMissingGlobalCallableMembers(
+    const tTVPGlobalCallableSnapshot &snapshot) {
     tTJS *engine = TVPGetScriptEngine();
     iTJSDispatch2 *global =
         engine ? engine->GetGlobalNoAddRef() : nullptr;
     if(!global)
         return 0;
 
-    size_t restored_functions = 0;
+    size_t restored_callables = 0;
     for(const auto &[name, original] : snapshot) {
         tTJSVariant replacement;
         if(TJS_FAILED(global->PropGet(TJS_IGNOREPROP, name.c_str(), nullptr,
                                       &replacement, global)) ||
-           !TVPVariantIsFunction(replacement)) {
+           TVPGetGlobalCallableKind(replacement) !=
+               TVPGetGlobalCallableKind(original)) {
             continue;
         }
 
@@ -3031,12 +3117,22 @@ static size_t TVPRestoreMissingGlobalFunctionMembers(
         if(original_closure.Object == replacement_closure.Object)
             continue;
 
-        if(TVPMergeMissingObjectMembers(replacement_closure.Object,
-                                       original_closure.Object)) {
-            ++restored_functions;
+        try {
+            if(TVPMergeMissingObjectMembers(replacement_closure.Object,
+                                            original_closure.Object)) {
+                ++restored_callables;
+            }
+        } catch(const TJS::eTJS &e) {
+            spdlog::debug(
+                "Skipping incompatible late-patched callable '{}': {}",
+                name.AsStdString(), e.GetMessage().AsStdString());
+        } catch(...) {
+            spdlog::debug(
+                "Skipping incompatible late-patched callable '{}'",
+                name.AsStdString());
         }
     }
-    return restored_functions;
+    return restored_callables;
 }
 
 static bool TVPReadPatchRuntimeRegistry(tTJSVariant &registry) {
@@ -3576,11 +3672,12 @@ void TVPExecuteStartupScript() {
         if(TVPIsExistentStorageNoSearch(patch)) {
             TVPInstallPatchWindowPrerequisites();
             // Root-level compatibility patches run after the framework
-            // startup scripts. If one replaces a global function, retain
-            // nested helpers that the replacement did not redefine while
-            // leaving every member explicitly supplied by the patch intact.
-            const tTVPGlobalFunctionSnapshot savedGlobalFunctions =
-                TVPCaptureGlobalFunctions();
+            // startup scripts. If one replaces a global function or class,
+            // retain nested helpers that the replacement did not redefine
+            // while leaving every member explicitly supplied by the patch
+            // intact.
+            const tTVPGlobalCallableSnapshot savedGlobalCallables =
+                TVPCaptureGlobalCallables();
             // A late compatibility patch can replace framework classes and
             // their singleton instances.  Preserve runtime extension hooks
             // registered by game scripts, then merge them into the new
@@ -3593,13 +3690,13 @@ void TVPExecuteStartupScript() {
                 TVPExecuteStorage(patch);
             } catch(...) {
             }
-            const size_t restoredFunctionCount =
-                TVPRestoreMissingGlobalFunctionMembers(
-                    savedGlobalFunctions);
-            if(restoredFunctionCount != 0) {
+            const size_t restoredCallableCount =
+                TVPRestoreMissingGlobalCallableMembers(
+                    savedGlobalCallables);
+            if(restoredCallableCount != 0) {
                 spdlog::info(
-                    "Restored missing members on {} late-patched functions",
-                    restoredFunctionCount);
+                    "Restored missing members on {} late-patched functions or classes",
+                    restoredCallableCount);
             }
             if(hasSavedRuntimeRegistry) {
                 tTJSVariant replacementRuntimeRegistry;

@@ -73,6 +73,11 @@ TJS_EXP_FUNC_DEF(bool, TVPGetCommandLine,
 // command line parameter format must be "-name=value"
 // returns false if the the parameter is not exist, otherwise
 // sets the value to "value" and returns true.
+TJS_EXP_FUNC_DEF(bool, TVPGetCommandLineNoInit,
+                 (const tjs_char *name, tTJSVariant *value = nullptr));
+// Retrieves an already available command line parameter without initializing
+// the legacy application/data-path state. This is intended for optional
+// policy tuning in components that can also run under another engine host.
 TJS_EXP_FUNC_DEF(tjs_int, TVPGetCommandLineArgumentGeneration, ());
 // retrieves command line argument generation count. you can check
 // whether the command line options has changed, by comparing this

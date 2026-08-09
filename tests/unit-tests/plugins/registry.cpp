@@ -10,10 +10,12 @@
 #include <utility>
 
 extern tTJS *TVPScriptEngine;
+extern "C" void TVPRegisterLayerExDrawPluginAnchor();
 
 namespace {
 
 void ensurePluginRegistryRuntime() {
+    TVPRegisterLayerExDrawPluginAnchor();
     if(TVPGetScriptEngine() == nullptr)
         TVPScriptEngine = new tTJS();
     ncbAutoRegister::AllRegist();
@@ -134,6 +136,7 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("wmrdump.dll"),
         TJS_W("wsh.dll"),
         TJS_W("wumsadp.dll"),
+        TJS_W("wuffmpeg.dll"),
         TJS_W("wuflac.dll"),
         TJS_W("wuopus.dll"),
         TJS_W("layerExAgg.dll"),
@@ -154,6 +157,7 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         TJS_W("lineParser.dll"),
         TJS_W("memfile.dll"),
         TJS_W("minizip.dll"),
+        TJS_W("msbtnhook.dll"),
         TJS_W("qrcode.dll"),
         TJS_W("sqlite3.dll"),
         TJS_W("kirikiroid2.dll"),
@@ -164,6 +168,124 @@ TEST_CASE("first-pass compatibility stubs are registered") {
         INFO(ttstr(module).AsStdString());
         CHECK(ncbAutoRegister::HasModule(module));
     }
+}
+
+TEST_CASE("krkrsdl3 plugin inventory is available") {
+    ensurePluginRegistryRuntime();
+
+    const tjs_char *modules[] = {
+        TJS_W("addfont.dll"),
+        TJS_W("alphamovie.dll"),
+        TJS_W("csvparser.dll"),
+        TJS_W("dirlist.dll"),
+        TJS_W("drawdeviced3d.dll"),
+        TJS_W("emoteplayer.dll"),
+        TJS_W("expat.dll"),
+        TJS_W("extkagparser.dll"),
+        TJS_W("extrans.dll"),
+        TJS_W("fftgraph.dll"),
+        TJS_W("fstat.dll"),
+        TJS_W("getabout.dll"),
+        TJS_W("getsample.dll"),
+        TJS_W("gfxeffect.dll"),
+        TJS_W("json.dll"),
+        TJS_W("kagparserex.dll"),
+        TJS_W("kirikiroid2.dll"),
+        TJS_W("layerexareaaverage.dll"),
+        TJS_W("layerexbtoa.dll"),
+        TJS_W("layerexdraw.dll"),
+        TJS_W("layereximage.dll"),
+        TJS_W("layerexmovie.dll"),
+        TJS_W("layerexraster.dll"),
+        TJS_W("motionplayer.dll"),
+        TJS_W("packinone.dll"),
+        TJS_W("perspective.dll"),
+        TJS_W("psbfile.dll"),
+        TJS_W("savestruct.dll"),
+        TJS_W("scriptsex.dll"),
+        TJS_W("shrinkcopy.dll"),
+        TJS_W("sqlite3.dll"),
+        TJS_W("textrender.dll"),
+        TJS_W("varfile.dll"),
+        TJS_W("win32dialog.dll"),
+        TJS_W("windowex.dll"),
+        TJS_W("wuffmpeg.dll"),
+        TJS_W("wuopus.dll"),
+        TJS_W("wutcwf.dll"),
+        TJS_W("wuvorbis.dll"),
+        TJS_W("xp3filter.dll"),
+    };
+
+    for(const auto *module : modules) {
+        INFO(ttstr(module).AsStdString());
+        CHECK(ncbAutoRegister::HasModule(module));
+    }
+}
+
+TEST_CASE("extNagano transition providers survive a module reload") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("extnagano.dll")));
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("extnagano.dll")));
+    REQUIRE_NOTHROW(
+        ncbAutoRegister::LoadModule(TJS_W("extnagano.dll")));
+}
+
+TEST_CASE("win32dialog exposes portable dialog template styles") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("win32dialog.dll")));
+    tTJSVariant result;
+    TVPGetScriptEngine()->EvalExpression(
+        TJS_W("WIN32Dialog.DS_MODALFRAME | WIN32Dialog.WS_POPUP | "
+              "WIN32Dialog.WS_CAPTION | WIN32Dialog.WS_SYSMENU | "
+              "WIN32Dialog.DS_SETFONT"),
+        &result);
+    CHECK(result.AsInteger() == static_cast<tTVInteger>(0x80c800c0u));
+
+    TVPGetScriptEngine()->EvalExpression(
+        TJS_W("WIN32Dialog.FW_NORMAL == 400 && "
+              "WIN32Dialog.FW_BOLD == 700 && "
+              "WIN32Dialog.ICC_BAR_CLASSES == 4 && "
+              "WIN32Dialog.initCommonControlsEx(WIN32Dialog.ICC_BAR_CLASSES)"),
+        &result);
+    CHECK(result.AsInteger() == 1);
+}
+
+TEST_CASE("msbtnhook exposes portable mouse-hook initialization") {
+    ensurePluginRegistryRuntime();
+    TVPExecuteScript(TJS_W("class Window {}"));
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("msbtnhook.dll")));
+    tTJSVariant result;
+    TVPGetScriptEngine()->EvalExpression(
+        TJS_W("mbXButton1 == 3 && mbXButton2 == 4 && "
+              "Window.startMouseHook()"),
+        &result);
+    CHECK(result.AsInteger() == 1);
+}
+
+TEST_CASE("TextRenderBase exposes renderOver as a boolean property") {
+    ensurePluginRegistryRuntime();
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("textrender.dll")));
+
+    tTJSVariant renderClass = getGlobalProp(TJS_W("TextRenderBase"));
+    REQUIRE(renderClass.Type() == tvtObject);
+
+    iTJSDispatch2 *renderer = nullptr;
+    const tTJSVariantClosure renderClosure =
+        renderClass.AsObjectClosureNoAddRef();
+    REQUIRE(TJS_SUCCEEDED(renderClosure.CreateNew(
+        0, nullptr, nullptr, &renderer, 0, nullptr, nullptr)));
+    REQUIRE(renderer != nullptr);
+
+    tTJSVariant renderOver;
+    REQUIRE(TJS_SUCCEEDED(renderer->PropGet(
+        0, TJS_W("renderOver"), nullptr, &renderOver, renderer)));
+    CHECK(renderOver.Type() == tvtInteger);
+    CHECK(static_cast<tjs_int>(renderOver) == 0);
+
+    renderer->Release();
 }
 
 TEST_CASE("void member access stays safe for transient script layers") {

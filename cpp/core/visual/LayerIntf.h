@@ -26,6 +26,10 @@
 extern bool TVPFreeUnusedLayerCache;
 extern tjs_int TVPGetLayerCount();
 extern tjs_uint64 TVPGetLayerTotalBitmapBytes();
+// Drop compatibility-routing state whose keys are native Layer addresses.
+// Embedded hosts can create another TJS world in the same process, where an
+// allocator may reuse an address from the previous title.
+extern void TVPResetLayerStateForHostSession();
 // E-mote may replace a visible GPU texture without contributing the full
 // character bounds to KiriKiri's normal dirty region. Request one complete
 // window composite after such a replacement; cached/static host frames can
@@ -1060,7 +1064,8 @@ private:
 
     void InternalComplete2(tTVPComplexRect &updateregion,
                            tTVPDrawable *drawable);
-    void InternalComplete2_GPU(tTVPRect updateregion, tTVPDrawable *drawable);
+    void InternalComplete2_GPU(tTVPRect updateregion, tTVPDrawable *drawable,
+                               bool localDestination);
     void InternalComplete(tTVPComplexRect &updateregion,
                           tTVPDrawable *drawable);
     void CompleteForWindow(tTVPDrawable *drawable);

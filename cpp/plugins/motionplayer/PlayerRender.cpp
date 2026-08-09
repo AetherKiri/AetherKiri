@@ -6,6 +6,7 @@
 #include "ConfigManager/IndividualConfigManager.h"
 #include "TickCount.h"
 #include "ThreadIntf.h"
+#include "godot/GodotGpuBridge.h"
 #include "godot/GodotRenderManager.h"
 #include <algorithm>
 #include <cctype>
@@ -16,10 +17,13 @@
 #include <limits>
 #include <mutex>
 #include <set>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
 using namespace motion::internal;
+
+extern "C" void AetherKiriMotionPlayerCoreResetForGameSession();
 
 namespace {
 
@@ -58,6 +62,92 @@ namespace {
                 std::chrono::steady_clock::now().time_since_epoch()).count());
     }
 
+    struct BgraReadbackStats {
+        int minimumX = 0;
+        int minimumY = 0;
+        int maximumX = 0;
+        int maximumY = 0;
+        bool anyVisible = false;
+        bool allOpaque = true;
+    };
+
+    BgraReadbackStats convertBgraReadbackToRgba(
+        const std::uint8_t *source, std::size_t sourceStride,
+        std::uint8_t *destination, std::size_t destinationStride,
+        int width, int height) {
+        BgraReadbackStats result;
+        if(!source || !destination || width <= 0 || height <= 0) {
+            result.allOpaque = false;
+            return result;
+        }
+
+        unsigned workerCount = 1;
+        const std::size_t pixelCount =
+            static_cast<std::size_t>(width) * height;
+        if(pixelCount >= 256u * 1024u && height >= 128) {
+            const unsigned hardware = std::thread::hardware_concurrency();
+            workerCount = std::min<unsigned>(
+                4u, hardware == 0 ? 2u : hardware);
+            workerCount = std::min<unsigned>(
+                workerCount, static_cast<unsigned>(height / 64));
+            workerCount = std::max(1u, workerCount);
+        }
+
+        std::vector<BgraReadbackStats> partial(workerCount);
+        const auto convertRows = [&](unsigned worker) {
+            const int beginY = static_cast<int>(
+                static_cast<std::int64_t>(height) * worker / workerCount);
+            const int endY = static_cast<int>(
+                static_cast<std::int64_t>(height) * (worker + 1u) /
+                workerCount);
+            BgraReadbackStats &stats = partial[worker];
+            stats.minimumX = width;
+            stats.minimumY = height;
+            for(int y = beginY; y < endY; ++y) {
+                const auto *src = source + sourceStride * y;
+                auto *dst = destination + destinationStride * y;
+                for(int x = 0; x < width; ++x) {
+                    const std::uint8_t blue = src[x * 4 + 0];
+                    const std::uint8_t green = src[x * 4 + 1];
+                    const std::uint8_t red = src[x * 4 + 2];
+                    const std::uint8_t alpha = src[x * 4 + 3];
+                    dst[x * 4 + 0] = red;
+                    dst[x * 4 + 1] = green;
+                    dst[x * 4 + 2] = blue;
+                    dst[x * 4 + 3] = alpha;
+                    stats.allOpaque = stats.allOpaque && alpha == 255;
+                    if(alpha == 0) continue;
+                    stats.anyVisible = true;
+                    stats.minimumX = std::min(stats.minimumX, x);
+                    stats.minimumY = std::min(stats.minimumY, y);
+                    stats.maximumX = std::max(stats.maximumX, x + 1);
+                    stats.maximumY = std::max(stats.maximumY, y + 1);
+                }
+            }
+        };
+
+        std::vector<std::thread> workers;
+        workers.reserve(workerCount > 0 ? workerCount - 1u : 0u);
+        for(unsigned worker = 1; worker < workerCount; ++worker) {
+            workers.emplace_back(convertRows, worker);
+        }
+        convertRows(0);
+        for(auto &worker : workers) worker.join();
+
+        result.minimumX = width;
+        result.minimumY = height;
+        for(const auto &stats : partial) {
+            result.allOpaque = result.allOpaque && stats.allOpaque;
+            if(!stats.anyVisible) continue;
+            result.anyVisible = true;
+            result.minimumX = std::min(result.minimumX, stats.minimumX);
+            result.minimumY = std::min(result.minimumY, stats.minimumY);
+            result.maximumX = std::max(result.maximumX, stats.maximumX);
+            result.maximumY = std::max(result.maximumY, stats.maximumY);
+        }
+        return result;
+    }
+
     struct SharedMotionSourceBitmapEntry {
         std::shared_ptr<tTVPBaseBitmap> bitmap;
         std::size_t bytes = 0;
@@ -94,20 +184,23 @@ namespace {
         const std::string &compressName,
         int width,
         int height,
-        const PSB::PSBResource &resource,
-        std::unordered_map<
-            const PSB::PSBResource *,
-            std::pair<std::uint64_t, std::uint64_t>> &fingerprintCache) {
-        auto fingerprintIt = fingerprintCache.find(&resource);
-        if(fingerprintIt == fingerprintCache.end()) {
-            std::uint64_t first = 1469598103934665603ull;
-            std::uint64_t second = 0x517cc1b727220a95ull;
-            appendMotionSourceFingerprint(first, second, resource.data);
-            fingerprintIt = fingerprintCache.emplace(
-                &resource, std::make_pair(first, second)).first;
+        const PSB::PSBResource &resource) {
+        std::pair<std::uint64_t, std::uint64_t> fingerprint;
+        {
+            std::lock_guard lock(snapshot.sourceFingerprintMutex);
+            auto fingerprintIt =
+                snapshot.sourceFingerprints.find(&resource);
+            if(fingerprintIt == snapshot.sourceFingerprints.end()) {
+                std::uint64_t first = 1469598103934665603ull;
+                std::uint64_t second = 0x517cc1b727220a95ull;
+                appendMotionSourceFingerprint(first, second, resource.data);
+                fingerprintIt = snapshot.sourceFingerprints.emplace(
+                    &resource, std::make_pair(first, second)).first;
+            }
+            fingerprint = fingerprintIt->second;
         }
-        auto first = fingerprintIt->second.first;
-        auto second = fingerprintIt->second.second;
+        auto first = fingerprint.first;
+        auto second = fingerprint.second;
 
         std::size_t paletteBytes = 0;
         if(resourcePath.size() > 6 &&
@@ -245,8 +338,10 @@ namespace {
     }
 
     std::size_t renderCommandReuseSignature(
-        const std::vector<motion::detail::PlayerRuntime::RenderCommand> &commands) {
+        const std::vector<motion::detail::PlayerRuntime::RenderCommand> &commands,
+        int maskMode) {
         std::size_t seed = commands.size();
+        renderReuseHashCombine(seed, std::hash<int>{}(maskMode));
         for(const auto &command : commands) {
             renderReuseHashCombine(seed, std::hash<int>{}(command.nodeIndex));
             renderReuseHashCombine(
@@ -421,6 +516,11 @@ namespace {
 
     constexpr std::uint64_t kGlobalPresentationReuseTtlUs = 100000;
     constexpr std::uint64_t kGlobalPresentationCopyReuseTtlUs = 100000;
+    // D3DEmote control, physics, and authored timelines continue at the host
+    // tick rate. Only the expensive full-canvas raster publish is capped at
+    // 20 Hz per player; the last completed GPU layer stays resident between
+    // publishes so the window compositor and input can remain responsive.
+    constexpr std::uint64_t kD3DEmoteRasterPublishIntervalUs = 50000;
 
     iTJSDispatch2 *globalPresentationSourceLayerObject(
         GlobalPresentationRenderCacheEntry &entry) {
@@ -2915,6 +3015,61 @@ namespace {
         }
     }
 
+    // Provider-owned offscreen layer. It deliberately skips KAG Window and
+    // LayerManager construction while retaining Kirikiri's mature bitmap,
+    // affine, blend, mesh and stencil implementations.
+    class HeadlessLayerDispatch final : public tTJSDispatch {
+    public:
+        HeadlessLayerDispatch() : layer_(std::make_unique<tTJSNI_BaseLayer>()) {}
+
+        ~HeadlessLayerDispatch() override {
+            if(layer_) {
+                layer_->Invalidate();
+            }
+        }
+
+        tjs_error PropGet(tjs_uint32, const tjs_char *membername,
+                          tjs_uint32 *, tTJSVariant *result,
+                          iTJSDispatch2 *) override {
+            if(!membername || !result) {
+                return TJS_E_INVALIDPARAM;
+            }
+            if(!TJS_strcmp(membername, TJS_W("layerTreeOwnerInterface"))) {
+                *result = static_cast<tjs_int64>(
+                    reinterpret_cast<tjs_intptr_t>(this));
+                return TJS_S_OK;
+            }
+            if(!TJS_strcmp(membername, TJS_W("primaryLayer"))) {
+                *result = tTJSVariant(this, this);
+                return TJS_S_OK;
+            }
+            return TJS_E_MEMBERNOTFOUND;
+        }
+
+        tjs_error NativeInstanceSupport(tjs_uint32 flag, tjs_int32 classid,
+                                        iTJSNativeInstance **pointer) override {
+            if(flag != TJS_NIS_GETINSTANCE || pointer == nullptr ||
+               classid != tTJSNC_Layer::ClassID) {
+                return TJS_E_FAIL;
+            }
+            *pointer = layer_.get();
+            return TJS_S_OK;
+        }
+
+    private:
+        std::unique_ptr<tTJSNI_BaseLayer> layer_;
+    };
+
+    iTJSDispatch2 *createHeadlessLayerObject() {
+        // engine_api can instantiate Artemis without booting the Kirikiri
+        // window subsystem. A BaseLayer still uses the routed TVPGL software
+        // functions in its constructor, so initialize that routing table
+        // before allocating the first off-screen layer.
+        static std::once_flag tvpglInit;
+        std::call_once(tvpglInit, [] { TVPInitTVPGL(); });
+        return new HeadlessLayerDispatch();
+    }
+
     iTJSDispatch2 *resolveLayerTreeOwnerObject(iTJSDispatch2 *object) {
         if(!object) {
             return nullptr;
@@ -3054,12 +3209,12 @@ namespace {
         iTJSDispatch2 *parentLayerObject) {
         if(layerTreeOwnerVariant.Type() != tvtObject ||
            !layerTreeOwnerVariant.AsObjectNoAddRef()) {
-            return nullptr;
+            return createHeadlessLayerObject();
         }
 
         iTJSDispatch2 *global = TVPGetScriptDispatch();
         if(!global) {
-            return nullptr;
+            return createHeadlessLayerObject();
         }
 
             tTJSVariant layerClassVar;
@@ -3083,13 +3238,13 @@ namespace {
         }
 
         global->Release();
-        return created;
+        return created ? created : createHeadlessLayerObject();
     }
 
     iTJSDispatch2 *createLayerObject(iTJSDispatch2 *layerTreeOwnerObject,
                                      iTJSDispatch2 *parentLayerObject) {
         if(!layerTreeOwnerObject) {
-            return nullptr;
+            return createHeadlessLayerObject();
         }
         tTJSVariant ownerVar(layerTreeOwnerObject, layerTreeOwnerObject);
         return createLayerObjectWithOwnerVariant(ownerVar, parentLayerObject);
@@ -3158,9 +3313,7 @@ namespace {
         tTVPLayerType layerType,
         bool visible,
         bool absoluteOrderMode = false) {
-        if(!parentLayerObject ||
-           layerTreeOwnerVariant.Type() != tvtObject ||
-           !layerTreeOwnerVariant.AsObjectNoAddRef()) {
+        if(!parentLayerObject) {
             return nullptr;
         }
 
@@ -7395,7 +7548,43 @@ namespace {
         return true;
     }
 
+    void resetMotionStateForHostSession() {
+        {
+            auto &cache = sharedMotionSourceBitmapCache();
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            cache.entries.clear();
+            cache.bytes = 0;
+            cache.useCounter = 0;
+        }
+
+        // These caches retain TJS variants and use native Layer addresses as
+        // keys. They must not outlive the TJS world that created them: a later
+        // title can reuse an address and inherit an unrelated presentation
+        // frame, visibility decision, or hit-test layer.
+        globalPresentationRenderCache().clear();
+        yuzuTitlePresentationHoldCache().clear();
+
+        auto &holdCache = centeredPresentationHoldCache();
+        for(auto &cached : holdCache) {
+            releaseCenteredPresentationHoldEntry(cached.first,
+                                                  cached.second);
+        }
+        holdCache.clear();
+
+        auto &messageCache = centeredPresentationMessageUiOverlayCache();
+        for(auto &cached : messageCache) {
+            detachGeneratedCenteredPresentationLayer(
+                cached.second, "AetherKiriCenteredPresentationMessageUi");
+        }
+        messageCache.clear();
+    }
+
 } // namespace
+
+extern "C" void AetherKiriMotionResetForGameSession() {
+    AetherKiriMotionPlayerCoreResetForGameSession();
+    resetMotionStateForHostSession();
+}
 
 extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
     tTJSNI_BaseLayer *layer) {
@@ -8555,17 +8744,29 @@ namespace motion {
         // distinction instead of treating every colour child as a mask.
         for(auto &command : _runtime->renderCommands) {
             for(const int maskNodeIndex : command.stencilMaskNodeIndices) {
-                if(const auto it = commandIndexByNode.find(maskNodeIndex);
-                   it != commandIndexByNode.end() &&
-                   it->second < _runtime->renderCommands.size() &&
-                   _runtime->renderCommands[it->second].nodeIndex !=
-                       command.nodeIndex) {
+                // Node indices are local to each nested Motion Player. The
+                // flattened E-mote command list contains many duplicate
+                // values (both eyes commonly use node 4/5), so a global
+                // node-index lookup can bind the group to an unrelated mask
+                // from an outer player. Resolve the authored mask inside the
+                // group's render scope, matching the scoped item walk used by
+                // native sub_6C7440.
+                const size_t maskCommandIndex = findCommandIndex(
+                    command.renderScopeId, maskNodeIndex, maskNodeIndex);
+                if(maskCommandIndex < _runtime->renderCommands.size() &&
+                   maskCommandIndex != static_cast<size_t>(
+                       &command - _runtime->renderCommands.data())) {
                     command.stencilMaskCommandIndices.push_back(
-                        static_cast<int>(it->second));
-                    if(command.stencilMaskNodeIndices.size() > 1) {
-                        _runtime->renderCommands[it->second]
-                            .stencilMaskReferenced = true;
-                    }
+                        static_cast<int>(maskCommandIndex));
+                    // Native sub_6C7440 materializes every referenced mask
+                    // into item+304 before the composite consumes it. A
+                    // single mask is not a direct-render special case: E-mote
+                    // eyes commonly author exactly one animated `shirome`
+                    // aperture. Letting that input render directly leaves no
+                    // bitmap for the group and exposes the full circular iris
+                    // throughout the half-closed frames.
+                    _runtime->renderCommands[maskCommandIndex]
+                        .stencilMaskReferenced = true;
                 }
             }
         }
@@ -8646,6 +8847,8 @@ namespace motion {
             }
             return false;
         }
+        TVPGodotGpuBatchScope gpuBatch(
+            _runtime->isEmoteMode && _runtime->renderCommands.size() > 1);
 
         struct RenderProfileStats {
             int baseHits = 0;
@@ -8676,6 +8879,7 @@ namespace motion {
         const auto profileStartUs =
             profileEnabled ? motionRenderProfileNowUs() : 0;
         auto &baseSourceCache = _runtime->motionSourceBitmapCache;
+        auto &baseSourceRects = _runtime->motionSourceBitmapRects;
         auto &preparedSourceCache = _runtime->motionPreparedBitmapCache;
         auto &materializedKeysBySource =
             _runtime->motionPreparedMaterializedKeysBySource;
@@ -8788,6 +8992,9 @@ namespace motion {
             std::string sourceOrigin("unresolved");
             int width = 0;
             int height = 0;
+            int decodedWidth = 0;
+            int decodedHeight = 0;
+            std::array<int, 4> decodedSourceRect{};
             double originX = 0.0;
             double originY = 0.0;
             std::string resourcePath;
@@ -8800,14 +9007,17 @@ namespace motion {
             const auto *resourceMetadata = findPSBResourceBySourceName(
                 *sourceMotion, command.sourceKey, width, height,
                 decodedPixels, originX, originY, nullptr, false,
-                &resourcePath, &compressName);
+                &resourcePath, &compressName,
+                &decodedWidth, &decodedHeight, &decodedSourceRect);
             if(resourceMetadata && width > 0 && height > 0 &&
                !resourceMetadata->data.empty()) {
+                const int bitmapWidth = decodedWidth > 0
+                    ? decodedWidth : width;
+                const int bitmapHeight = decodedHeight > 0
+                    ? decodedHeight : height;
                 sharedBitmapKey = makeSharedMotionSourceBitmapKey(
                     *sourceMotion, resourcePath, compressName,
-                    width, height,
-                    *resourceMetadata,
-                    _runtime->motionSourceResourceFingerprintCache);
+                    bitmapWidth, bitmapHeight, *resourceMetadata);
                 srcBmp = findSharedMotionSourceBitmap(sharedBitmapKey);
                 if(profileEnabled) {
                     if(srcBmp) {
@@ -8910,7 +9120,9 @@ namespace motion {
                     resource = findPSBResourceBySourceName(
                         *sourceMotion, command.sourceKey,
                         width, height, decodedPixels, originX, originY,
-                        &decodedPixelsAreBgra, true);
+                        &decodedPixelsAreBgra, true,
+                        nullptr, nullptr,
+                        &decodedWidth, &decodedHeight, &decodedSourceRect);
                     if(profileEnabled) {
                         profileStats.psbDecodeUs +=
                             motionRenderProfileNowUs() - decodeStartUs;
@@ -8920,16 +9132,20 @@ namespace motion {
                     const bool sourcePixelsAreBgra = motionSourcePixelsAreBGRA(
                         decodedPixelsAreBgra);
                     if(!srcBmp) {
+                        const int bitmapWidth = decodedWidth > 0
+                            ? decodedWidth : width;
+                        const int bitmapHeight = decodedHeight > 0
+                            ? decodedHeight : height;
                         const auto convertStartUs =
                             profileEnabled ? motionRenderProfileNowUs() : 0;
                         const auto &pixelData = decodedPixels.empty()
                             ? resource->data : decodedPixels;
                         auto bmp = std::make_shared<tTVPBaseBitmap>(
-                            static_cast<tjs_uint>(width),
-                            static_cast<tjs_uint>(height), 32);
+                            static_cast<tjs_uint>(bitmapWidth),
+                            static_cast<tjs_uint>(bitmapHeight), 32);
                         const auto totalPixels =
-                            static_cast<std::size_t>(width) *
-                            static_cast<std::size_t>(height);
+                            static_cast<std::size_t>(bitmapWidth) *
+                            static_cast<std::size_t>(bitmapHeight);
                         const auto validPixels = std::min(
                             pixelData.size() / 4u, totalPixels);
                         // A decoded PSB icon normally covers the complete
@@ -8937,19 +9153,20 @@ namespace motion {
                         // it immediately; retain the clear for truncated
                         // resources where the untouched tail must be alpha 0.
                         if(validPixels < totalPixels) {
-                            bmp->Fill(tTVPRect(0, 0, width, height),
+                            bmp->Fill(tTVPRect(0, 0,
+                                              bitmapWidth, bitmapHeight),
                                       0x00000000);
                         }
                         const auto *src = pixelData.data();
-                        for(int y = 0; y < height; ++y) {
+                        for(int y = 0; y < bitmapHeight; ++y) {
                             const auto rowOffset =
                                 static_cast<std::size_t>(y) *
-                                static_cast<std::size_t>(width);
+                                static_cast<std::size_t>(bitmapWidth);
                             if(rowOffset >= validPixels) {
                                 break;
                             }
                             const auto rowPixels = std::min(
-                                static_cast<std::size_t>(width),
+                                static_cast<std::size_t>(bitmapWidth),
                                 validPixels - rowOffset);
                             auto *row = static_cast<std::uint8_t *>(
                                 bmp->GetScanLineForWrite(
@@ -8976,8 +9193,11 @@ namespace motion {
                         }
                     }
                     sourceOrigin = fmt::format(
-                        "psb:{}:{}x{}:origin=({:.3f},{:.3f}):bgra={}:shared={}",
-                        command.sourceKey, width, height, originX, originY,
+                        "psb:{}:{}x{}:decoded={}x{}:origin=({:.3f},{:.3f}):bgra={}:shared={}",
+                        command.sourceKey, width, height,
+                        decodedWidth > 0 ? decodedWidth : width,
+                        decodedHeight > 0 ? decodedHeight : height,
+                        originX, originY,
                         sourcePixelsAreBgra ? 1 : 0,
                         decodedPixels.empty() ? 1 : 0);
                     if(LOGGER &&
@@ -9003,6 +9223,20 @@ namespace motion {
                 srcBmp ? srcBmp->GetWidth() : 0,
                 srcBmp ? srcBmp->GetHeight() : 0);
 
+            if(srcBmp) {
+                const int bitmapWidth = static_cast<int>(srcBmp->GetWidth());
+                const int bitmapHeight = static_cast<int>(srcBmp->GetHeight());
+                const bool validDecodedRect =
+                    decodedSourceRect[0] >= 0 &&
+                    decodedSourceRect[1] >= 0 &&
+                    decodedSourceRect[2] > decodedSourceRect[0] &&
+                    decodedSourceRect[3] > decodedSourceRect[1] &&
+                    decodedSourceRect[2] <= bitmapWidth &&
+                    decodedSourceRect[3] <= bitmapHeight;
+                baseSourceRects[sourceIdentity] = validDecodedRect
+                    ? decodedSourceRect
+                    : std::array<int, 4>{0, 0, bitmapWidth, bitmapHeight};
+            }
             baseSourceCache.emplace(sourceIdentity, srcBmp);
             if(profileEnabled) {
                 profileStats.baseResolveUs +=
@@ -9049,7 +9283,13 @@ namespace motion {
                 return nullptr;
             }
 
-            const bool sourceIsAlphaOnlyMask = bitmapLooksAlphaOnlyMask(*srcBmp);
+            auto &sourceTraits =
+                _runtime->motionSourceBitmapTraits[sourceIdentity];
+            if(!sourceTraits.alphaOnlyKnown) {
+                sourceTraits.alphaOnly = bitmapLooksAlphaOnlyMask(*srcBmp);
+                sourceTraits.alphaOnlyKnown = true;
+            }
+            const bool sourceIsAlphaOnlyMask = sourceTraits.alphaOnly;
             const bool colorsCarryTint =
                 !packedColorsAreDefault(command.packedColors[0],
                                         command.packedColors[1],
@@ -9066,12 +9306,19 @@ namespace motion {
                 isYuzuLogoTextMaskSource(motionPath, command.sourceKey);
             const bool yuzuLogoCompositeSource =
                 isYuzuLogoCompositeSource(motionPath, command.sourceKey);
+            if(yuzuLogoTextSource && !sourceTraits.whiteMaskKnown) {
+                sourceTraits.whiteMask = bitmapLooksWhiteMask(*srcBmp);
+                sourceTraits.whiteMaskKnown = true;
+            }
+            if(yuzuLogoTextSource && !sourceTraits.hasWhitePixelsKnown) {
+                sourceTraits.hasWhitePixels =
+                    bitmapHasWhiteMaskPixels(*srcBmp);
+                sourceTraits.hasWhitePixelsKnown = true;
+            }
             const bool tintDefaultLogoTextMask =
-                yuzuLogoTextSource &&
-                bitmapLooksWhiteMask(*srcBmp);
+                yuzuLogoTextSource && sourceTraits.whiteMask;
             const bool tintDefaultLogoWhitePixels =
-                yuzuLogoTextSource &&
-                bitmapHasWhiteMaskPixels(*srcBmp);
+                yuzuLogoTextSource && sourceTraits.hasWhitePixels;
             const bool tintOnlyWhitePixels =
                 tintDefaultLogoWhitePixels && !sourceIsAlphaOnlyMask;
             const bool tintDefaultNeutralMask =
@@ -9151,14 +9398,42 @@ namespace motion {
             }
             return tinted;
         };
+        const auto sourceRectForCommand =
+            [&](const detail::PlayerRuntime::RenderCommand &command,
+                const std::shared_ptr<tTVPBaseBitmap> &bitmap) {
+                if(!bitmap) {
+                    return tTVPRect{};
+                }
+                const auto identity = commandSourceIdentity(command);
+                if(const auto it = baseSourceRects.find(identity);
+                   it != baseSourceRects.end()) {
+                    const auto &rect = it->second;
+                    if(rect[0] >= 0 && rect[1] >= 0 &&
+                       rect[2] > rect[0] && rect[3] > rect[1] &&
+                       rect[2] <= static_cast<int>(bitmap->GetWidth()) &&
+                       rect[3] <= static_cast<int>(bitmap->GetHeight())) {
+                        return tTVPRect(rect[0], rect[1],
+                                       rect[2], rect[3]);
+                    }
+                }
+                return tTVPRect(
+                    0, 0,
+                    static_cast<tjs_int>(bitmap->GetWidth()),
+                    static_cast<tjs_int>(bitmap->GetHeight()));
+            };
 
         const int playerStencilType = _maskMode;
         auto ensureCommandLayer =
             [&](tTJSVariant &slot) -> iTJSDispatch2 * {
+            // Per-command layers are private render targets, not visible
+            // children of the Kirikiri layer tree.  Parenting them to the
+            // primary layer lets that parent retain every transient layer
+            // after renderCommands is rebuilt, and in turn retains each
+            // full-size GPU texture indefinitely.
             return ensureReusableLayerObject(
                 slot,
-                scratchOwner,
-                scratchParent,
+                nullptr,
+                nullptr,
                 static_cast<tTVPLayerType>(ltAlpha),
                 false);
         };
@@ -9214,12 +9489,15 @@ namespace motion {
                 }
                 auto localMeshPoints =
                     buildMeshPoints(command.localMeshPoints, 0.0f, 0.0f);
-                if(command.meshType == 1) {
-                    targetLayer->BezierPatchCopy(
-                        localMeshPoints.data(), command.meshDivX,
-                        command.meshDivY, srcBmp.get(), sourceRect, stLinear,
-                        command.clearEnabled);
-                } else if(command.meshType == 2) {
+                // MMotionRenderManager::EvalBezierPatch produces the final
+                // (divX + 1) x (divY + 1) vertex grid before RenderMesh is
+                // called.  localMeshPoints is that evaluated grid, not the
+                // original sixteen Bezier control points, so both authored
+                // patches and inherited point meshes must use MeshCopy here.
+                // Treating the grid as a new Bezier patch consumes only its
+                // first sixteen vertices and can move the whole image outside
+                // the target (notably E-mote character atlases).
+                if(command.meshType == 1 || command.meshType == 2) {
                     targetLayer->MeshCopy(localMeshPoints.data(),
                                           command.meshDivX, command.meshDivY,
                                           srcBmp.get(), sourceRect, stLinear,
@@ -9309,10 +9587,8 @@ namespace motion {
                 if(!maskLayerObject || !maskLayer) {
                     return nullptr;
                 }
-                const tTVPRect sourceRect(
-                    0, 0,
-                    static_cast<tjs_int>(maskBitmap->GetWidth()),
-                    static_cast<tjs_int>(maskBitmap->GetHeight()));
+                const tTVPRect sourceRect =
+                    sourceRectForCommand(maskCommand, maskBitmap);
                 if(!renderCommandSourceToLayer(
                        maskCommand, maskLayerObject, maskLayer,
                        maskBitmap, sourceRect,
@@ -9790,16 +10066,16 @@ namespace motion {
                 return false;
             }
 
-            const tTVPRect sourceRect(
-                0, 0,
-                hasSourceBitmap ? static_cast<tjs_int>(srcBmp->GetWidth()) : 0,
-                hasSourceBitmap ? static_cast<tjs_int>(srcBmp->GetHeight()) : 0);
+            const tTVPRect sourceRect = hasSourceBitmap
+                ? sourceRectForCommand(command, srcBmp)
+                : tTVPRect{};
             if(hasSourceBitmap && logoTraceEnabled) {
                 detail::logoChainTraceCheck(
                     motionPath, "execute.srcRect", "0x6C7440",
                     _clampedEvalTime,
-                    fmt::format("full texture rect exp=[0,0,{},{}]",
-                                srcBmp->GetWidth(), srcBmp->GetHeight()),
+                    fmt::format("logical source rect exp=[{},{},{},{}]",
+                                sourceRect.left, sourceRect.top,
+                                sourceRect.right, sourceRect.bottom),
                     fmt::format("nodeIndex={} act=[{},{},{},{}]",
                                 command.nodeIndex, sourceRect.left,
                                 sourceRect.top, sourceRect.right,
@@ -10652,9 +10928,8 @@ namespace motion {
                    srcBmp->GetHeight() <= 0) {
                     continue;
                 }
-                const tTVPRect sourceRect(
-                    0, 0, static_cast<tjs_int>(srcBmp->GetWidth()),
-                    static_cast<tjs_int>(srcBmp->GetHeight()));
+                const tTVPRect sourceRect =
+                    sourceRectForCommand(command, srcBmp);
                 std::string branch("direct.operateAffine");
                 const bool directCopyWithoutOpacity =
                     ((command.blendMode & 0x0F) == 0) && opa >= 255 &&
@@ -10723,14 +10998,14 @@ namespace motion {
                                             -0.5f, -0.5f);
                         if(command.meshType == 1) {
                             if(directCopyWithoutOpacity) {
-                                branch = "direct.bezierPatchCopy";
-                                renderLayer->BezierPatchCopy(
+                                branch = "direct.evaluatedBezierMeshCopy";
+                                renderLayer->MeshCopy(
                                     worldMeshPoints.data(), command.meshDivX,
                                     command.meshDivY, srcBmp.get(), sourceRect,
                                     stLinear, command.clearEnabled);
                             } else {
-                                branch = "direct.operateBezierPatch";
-                                renderLayer->OperateBezierPatch(
+                                branch = "direct.operateEvaluatedBezierMesh";
+                                renderLayer->OperateMesh(
                                     worldMeshPoints.data(), command.meshDivX,
                                     command.meshDivY, srcBmp.get(), sourceRect,
                                     blendMode, opa, stLinear,
@@ -10907,7 +11182,8 @@ namespace motion {
                 static_cast<const void *>(renderLayerObject),
                 static_cast<const void *>(renderLayer),
                 _runtime->renderCommands.size(),
-                renderCommandReuseSignature(_runtime->renderCommands),
+                renderCommandReuseSignature(_runtime->renderCommands,
+                                            _maskMode),
                 profileStats.directOutputs, profileStats.bufferedOutputs,
                 profileStats.commandOutputCacheHits,
                 profileStats.commandLeafCacheHits,
@@ -10926,7 +11202,7 @@ namespace motion {
                 profileStats.tintApplyUs, profileStats.psbMetadataUs,
                 profileStats.psbDecodeUs, profileStats.psbConvertUs);
         }
-        return true;
+        return gpuBatch.finish();
     }
 
     iTJSDispatch2 *Player::resolveSeparateLayerRenderTarget(
@@ -11030,6 +11306,7 @@ namespace motion {
         if(s_inRenderToD3D) return false;
         s_inRenderToD3D = true;
         struct Guard { ~Guard() { s_inRenderToD3D = false; } } guard;
+        adaptor->setRenderedLayer(nullptr);
 
         ensureMotionLoaded();
         if(!_runtime->activeMotion) return false;
@@ -11048,6 +11325,35 @@ namespace motion {
                 presentation->SetVisible(false);
             }
             adaptor->setRetainedPresentationLayer(nullptr);
+        }
+        const auto rasterNowUs = motionRenderProfileNowUs();
+        if(!retainD3DPresentation && _runtime->isEmoteMode &&
+           _runtime->lastD3DRasterPublishUs != 0 &&
+           rasterNowUs >= _runtime->lastD3DRasterPublishUs &&
+           rasterNowUs - _runtime->lastD3DRasterPublishUs <
+               kD3DEmoteRasterPublishIntervalUs &&
+           _runtime->lastD3DRenderLayer <
+               _runtime->d3dRenderLayers.size()) {
+            auto &lastLayerSlot = _runtime->d3dRenderLayers[
+                _runtime->lastD3DRenderLayer];
+            iTJSDispatch2 *lastLayerObject =
+                lastLayerSlot.Type() == tvtObject
+                    ? lastLayerSlot.AsObjectNoAddRef()
+                    : nullptr;
+            auto *lastLayer = resolveNativeLayer(lastLayerObject);
+            if(lastLayer &&
+               lastLayer->GetImageWidth() == adaptor->getWidth() &&
+               lastLayer->GetImageHeight() == adaptor->getHeight()) {
+                adaptor->setRenderedLayer(lastLayerObject);
+                if(motionRenderProfileEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "motion d3d raster reuse: motion={} layer={} age_us={} interval_us={}",
+                        motionPath, _runtime->lastD3DRenderLayer,
+                        rasterNowUs - _runtime->lastD3DRasterPublishUs,
+                        kD3DEmoteRasterPublishIntervalUs);
+                }
+                return true;
+            }
         }
         detail::logoChainTraceLogf(
             motionPath, "draw.d3d", "0x6D5B90", _clampedEvalTime,
@@ -11086,6 +11392,15 @@ namespace motion {
             return false;
         }
 
+        buildRenderCommands(adaptor->getWidth(), adaptor->getHeight());
+        const bool canReuseD3DEmoteRender =
+            motion::internal::d3dEmoteFrameReuseRouteEligible(
+                _runtime->isEmoteMode, retainD3DPresentation,
+                _runtime->renderCommands.size());
+        const auto d3dCommandSignature = canReuseD3DEmoteRender
+            ? renderCommandReuseSignature(_runtime->renderCommands,
+                                          _maskMode)
+            : 0;
         const std::size_t renderLayerIndex =
             retainD3DPresentation ? 0u
                                   : _runtime->nextD3DRenderLayer;
@@ -11171,12 +11486,75 @@ namespace motion {
         if(!renderLayerObject) {
             return false;
         }
+        if(canReuseD3DEmoteRender) {
+            const auto &entry = _runtime->d3dEmoteRenderFrameCache;
+            const bool exactCacheMatch =
+                motion::internal::d3dEmoteFrameCacheMatches(
+                    entry, motionPath, _clampedEvalTime,
+                    adaptor->getWidth(), adaptor->getHeight(),
+                    d3dCommandSignature);
+            auto *cachedLayer = exactCacheMatch
+                ? resolveNativeLayer(renderLayerObject)
+                : nullptr;
+            if(cachedLayer) {
+                if(!cachedLayer->GetHasImage()) {
+                    cachedLayer->SetHasImage(true);
+                }
+                if(cachedLayer->GetImageWidth() < adaptor->getWidth() ||
+                   cachedLayer->GetImageHeight() < adaptor->getHeight()) {
+                    cachedLayer->SetImageSize(
+                        static_cast<tjs_uint>(adaptor->getWidth()),
+                        static_cast<tjs_uint>(adaptor->getHeight()));
+                }
+                if(cachedLayer->GetWidth() != adaptor->getWidth() ||
+                   cachedLayer->GetHeight() != adaptor->getHeight()) {
+                    cachedLayer->SetSize(adaptor->getWidth(),
+                                         adaptor->getHeight());
+                }
+                cachedLayer->SetClip(0, 0, adaptor->getWidth(),
+                                     adaptor->getHeight());
+                // d3dRenderLayers are private scratch surfaces. Keep them
+                // hidden while captureCanvas aliases their texture into the
+                // authored character layer.
+                if(cachedLayer->GetVisible()) {
+                    cachedLayer->SetVisible(false);
+                }
+                auto *cachedImage = cachedLayer->GetMainImage();
+                if(cachedImage &&
+                   cachedImage->GetWidth() == adaptor->getWidth() &&
+                   cachedImage->GetHeight() == adaptor->getHeight()) {
+                    cachedImage->CopyRect(
+                        0, 0, entry.bitmap.get(),
+                        tTVPRect(0, 0, adaptor->getWidth(),
+                                 adaptor->getHeight()));
+                    adaptor->setRenderedLayer(renderLayerObject);
+                    ++_runtime->d3dEmoteRenderFrameReuseSkips;
+                    if(motionRenderProfileEnabled() && LOGGER) {
+                        LOGGER->info(
+                            "motion emote render reuse: motion={} frame={:.2f} target={} canvas={}x{} commands={} signature={:016x} cached_signature={:016x} skips={} reason={} age_us={} route=d3d",
+                            motionPath, _clampedEvalTime,
+                            static_cast<const void *>(renderLayerObject),
+                            adaptor->getWidth(), adaptor->getHeight(),
+                            _runtime->renderCommands.size(),
+                            d3dCommandSignature,
+                            entry.commandSignature,
+                            _runtime->d3dEmoteRenderFrameReuseSkips,
+                            "exact",
+                            motionRenderProfileNowUs() >= entry.storedUs
+                                ? motionRenderProfileNowUs() - entry.storedUs
+                                : 0);
+                    }
+                    return true;
+                }
+            }
+        }
+        TVPGodotGpuBatchScope d3dGpuBatch(
+            _runtime->isEmoteMode && _runtime->renderCommands.size() > 1);
         if(!prepareLayerForRender(renderLayerObject, adaptor->getWidth(),
                                   adaptor->getHeight(), 0x00000000)) {
             return false;
         }
 
-        buildRenderCommands(adaptor->getWidth(), adaptor->getHeight());
         if(!executeLayerRenderCommands(renderLayerObject, true)) {
             adaptor->setRenderedLayer(nullptr);
             return false;
@@ -11244,7 +11622,356 @@ namespace motion {
         } else {
             adaptor->setRenderedLayer(renderLayerObject);
         }
+        if(!d3dGpuBatch.finish()) {
+            adaptor->setRenderedLayer(nullptr);
+            return false;
+        }
+        if(canReuseD3DEmoteRender) {
+            auto *executedImage = layer->GetMainImage();
+            if(executedImage &&
+               executedImage->GetWidth() == layerW &&
+               executedImage->GetHeight() == layerH) {
+                auto &entry = _runtime->d3dEmoteRenderFrameCache;
+                if(!entry.bitmap ||
+                   entry.bitmap->GetWidth() != layerW ||
+                   entry.bitmap->GetHeight() != layerH) {
+                    entry.bitmap = std::make_shared<tTVPBaseBitmap>(
+                        static_cast<tjs_uint>(layerW),
+                        static_cast<tjs_uint>(layerH), 32);
+                }
+                // Full CopyRect retains the same ordered GPU texture by
+                // reference. An enclosing batch may still own its completion;
+                // no CPU readback or extra synchronization is required here.
+                entry.bitmap->CopyRect(
+                    0, 0, executedImage,
+                    tTVPRect(0, 0, layerW, layerH));
+                entry.motion = motionPath;
+                entry.frame = _clampedEvalTime;
+                entry.canvasWidth = layerW;
+                entry.canvasHeight = layerH;
+                entry.commandSignature = d3dCommandSignature;
+                entry.storedUs = motionRenderProfileNowUs();
+            }
+        }
+        if(!retainD3DPresentation && _runtime->isEmoteMode) {
+            _runtime->lastD3DRenderLayer = renderLayerIndex;
+            _runtime->lastD3DRasterPublishUs = motionRenderProfileNowUs();
+        }
         return true;
+    }
+
+    bool Player::renderToRgba(std::uint8_t *pixels, int width, int height,
+                              int pitch,
+                              std::array<int, 4> *visibleBounds,
+                              bool *alphaBoundsKnown,
+                              bool *alphaOpaque) {
+        return renderToRgbaRegion(
+            pixels, width, height, 0, 0, width, height, pitch,
+            visibleBounds, alphaBoundsKnown, alphaOpaque);
+    }
+
+    bool Player::renderToRgbaRegion(
+        std::uint8_t *pixels, int stageWidth, int stageHeight,
+        int regionLeft, int regionTop, int regionWidth, int regionHeight,
+        int pitch, std::array<int, 4> *visibleBounds,
+        bool *alphaBoundsKnown, bool *alphaOpaque) {
+        if(!pixels || pitch < regionWidth * 4 ||
+           !beginRenderToRgbaRegion(
+               stageWidth, stageHeight, regionLeft, regionTop,
+               regionWidth, regionHeight)) {
+            return false;
+        }
+        return finishRenderToRgbaRegion(
+            pixels, pitch, visibleBounds, alphaBoundsKnown, alphaOpaque);
+    }
+
+    bool Player::beginRenderToRgbaRegion(
+        int stageWidth, int stageHeight,
+        int regionLeft, int regionTop, int regionWidth, int regionHeight) {
+        if(stageWidth <= 0 || stageHeight <= 0 ||
+           regionLeft < 0 || regionTop < 0 || regionWidth <= 0 ||
+           regionHeight <= 0 || regionLeft + regionWidth > stageWidth ||
+           regionTop + regionHeight > stageHeight ||
+           _runtime->headlessRgbaRenderPending) {
+            return false;
+        }
+        const bool fullStage =
+            regionLeft == 0 && regionTop == 0 &&
+            regionWidth == stageWidth && regionHeight == stageHeight;
+        if(fullStage) {
+            for(size_t index = 0;
+                index < _runtime->headlessRgbaReadbackRequests.size();
+                ++index) {
+                if(_runtime->headlessRgbaReadbackRequests[index] != 0 &&
+                   _runtime->headlessRgbaReadbackFullStage[index]) {
+                    return false;
+                }
+            }
+        }
+        int renderSlot = 0;
+        if(!fullStage) {
+            bool used[2] = {false, false};
+            for(size_t index = 0;
+                index < _runtime->headlessRgbaReadbackRequests.size();
+                ++index) {
+                if(_runtime->headlessRgbaReadbackRequests[index] != 0 &&
+                   !_runtime->headlessRgbaReadbackFullStage[index]) {
+                    const int slot =
+                        _runtime->headlessRgbaReadbackSlots[index];
+                    if(slot >= 0 && slot < 2) used[slot] = true;
+                }
+            }
+            renderSlot = !used[0] ? 0 : (!used[1] ? 1 : -1);
+            if(renderSlot < 0) return false;
+        }
+        auto &renderLayerSlot = fullStage
+            ? _runtime->headlessRgbaRenderLayer
+            : (renderSlot == 0
+                   ? _runtime->headlessRgbaRegionRenderLayer
+                   : _runtime->headlessRgbaRegionRenderLayer2);
+        iTJSDispatch2 *target = ensureReusableLayerObject(
+            renderLayerSlot,
+            nullptr,
+            nullptr,
+            static_cast<tTVPLayerType>(ltAlpha),
+            false);
+        if(!target) {
+            return false;
+        }
+
+        auto *layer = resolveNativeLayer(target);
+        if(!layer) {
+            return false;
+        }
+        if(!prepareLayerForRender(target, regionWidth, regionHeight,
+                                  0x00000000)) {
+            return false;
+        }
+
+        // MMotionDevice::ChangeFrameBufferSize calls
+        // MOGLBase::CalcDefault2DCamera before drawing.  The native camera is
+        // an orthographic projection over [-width/2,+width/2] and
+        // [-height/2,+height/2], so E-mote model coordinates are centred in
+        // the framebuffer.  The KiriKiri software-layer path consumes pixel
+        // coordinates directly and therefore needs the equivalent viewport
+        // translation here.  Keep it out of the model/root transform: coord
+        // and scale are evaluated by MMotionPlayer before this camera step.
+        const auto previousDrawAffine = _runtime->drawAffineMatrix;
+        if(_runtime->isEmoteMode) {
+            _runtime->drawAffineMatrix[4] =
+                previousDrawAffine[4] + static_cast<double>(stageWidth) * 0.5 -
+                static_cast<double>(regionLeft);
+            _runtime->drawAffineMatrix[5] =
+                previousDrawAffine[5] + static_cast<double>(stageHeight) * 0.5 -
+                static_cast<double>(regionTop);
+            _runtime->preparedRenderItemsValid = false;
+        }
+        struct DrawAffineRestore {
+            detail::PlayerRuntime *runtime;
+            std::array<double, 6> matrix;
+            ~DrawAffineRestore() {
+                if(!runtime) return;
+                runtime->drawAffineMatrix = matrix;
+                runtime->preparedRenderItemsValid = false;
+            }
+        } restoreDrawAffine{_runtime.get(), previousDrawAffine};
+
+        if(!renderToLayer(target, false)) {
+            return false;
+        }
+        _runtime->headlessRgbaRenderPending = true;
+        _runtime->headlessRgbaPendingFullStage = fullStage;
+        _runtime->headlessRgbaPendingSlot = renderSlot;
+        _runtime->headlessRgbaPendingWidth = regionWidth;
+        _runtime->headlessRgbaPendingHeight = regionHeight;
+        return true;
+    }
+
+    bool Player::finishRenderToRgbaRegion(
+        std::uint8_t *pixels, int pitch,
+        std::array<int, 4> *visibleBounds,
+        bool *alphaBoundsKnown, bool *alphaOpaque) {
+        if(!_runtime->headlessRgbaRenderPending || !pixels) {
+            return false;
+        }
+        const bool fullStage = _runtime->headlessRgbaPendingFullStage;
+        const int regionWidth = _runtime->headlessRgbaPendingWidth;
+        const int regionHeight = _runtime->headlessRgbaPendingHeight;
+        _runtime->headlessRgbaRenderPending = false;
+        if(regionWidth <= 0 || regionHeight <= 0 ||
+           pitch < regionWidth * 4) {
+            return false;
+        }
+        if(visibleBounds) {
+            *visibleBounds = {0, 0, 0, 0};
+        }
+        if(alphaBoundsKnown) {
+            *alphaBoundsKnown = false;
+        }
+        if(alphaOpaque) {
+            *alphaOpaque = false;
+        }
+        auto &renderLayerSlot = fullStage
+            ? _runtime->headlessRgbaRenderLayer
+            : (_runtime->headlessRgbaPendingSlot == 0
+                   ? _runtime->headlessRgbaRegionRenderLayer
+                   : _runtime->headlessRgbaRegionRenderLayer2);
+        auto *layer = resolveNativeLayer(renderLayerSlot.AsObjectNoAddRef());
+        if(!layer) {
+            return false;
+        }
+        const auto *source = reinterpret_cast<const std::uint8_t *>(
+            layer->GetMainImagePixelBuffer());
+        const tjs_int sourcePitch = layer->GetMainImagePixelBufferPitch();
+        if(!source || sourcePitch <= 0) {
+            return false;
+        }
+
+        // Kirikiri's 32-bit bitmap memory is BGRA; engine provider frames use
+        // RGBA. Preserve alpha exactly while swapping the color endpoints.
+        // Native Artemis keeps this stage-sized texture on the GPU. Its CPU
+        // replacement also needs the visible rectangle, so derive it during
+        // the unavoidable format copy instead of scanning the 1920x1080 frame
+        // a second time in ArtemisRuntime.
+        const auto stats = convertBgraReadbackToRgba(
+            source, static_cast<size_t>(sourcePitch), pixels,
+            static_cast<size_t>(pitch), regionWidth, regionHeight);
+        if(visibleBounds && stats.anyVisible) {
+            *visibleBounds = {stats.minimumX, stats.minimumY,
+                              stats.maximumX, stats.maximumY};
+        }
+        if(alphaBoundsKnown) {
+            *alphaBoundsKnown = true;
+        }
+        if(alphaOpaque) {
+            *alphaOpaque = stats.allOpaque;
+        }
+        return true;
+    }
+
+    bool Player::requestRenderToRgbaReadback() {
+        if(!_runtime->headlessRgbaRenderPending ||
+           std::all_of(_runtime->headlessRgbaReadbackRequests.begin(),
+                       _runtime->headlessRgbaReadbackRequests.end(),
+                       [](uint64_t request) { return request != 0; })) {
+            return false;
+        }
+        const bool fullStage = _runtime->headlessRgbaPendingFullStage;
+        const int renderSlot = _runtime->headlessRgbaPendingSlot;
+        auto &renderLayerSlot = fullStage
+            ? _runtime->headlessRgbaRenderLayer
+            : (renderSlot == 0
+                   ? _runtime->headlessRgbaRegionRenderLayer
+                   : _runtime->headlessRgbaRegionRenderLayer2);
+        auto *layer = resolveNativeLayer(renderLayerSlot.AsObjectNoAddRef());
+        auto *image = layer ? layer->GetMainImage() : nullptr;
+        auto *texture = image
+            ? dynamic_cast<GodotTexture2D *>(image->GetTexture())
+            : nullptr;
+        if(!texture) return false;
+        const uint64_t request = texture->BeginGpuReadback();
+        if(request == 0) return false;
+        const auto free = std::find(
+            _runtime->headlessRgbaReadbackRequests.begin(),
+            _runtime->headlessRgbaReadbackRequests.end(), 0u);
+        if(free == _runtime->headlessRgbaReadbackRequests.end()) {
+            texture->DiscardGpuReadback(request);
+            return false;
+        }
+        const size_t index = static_cast<size_t>(std::distance(
+            _runtime->headlessRgbaReadbackRequests.begin(), free));
+        _runtime->headlessRgbaRenderPending = false;
+        _runtime->headlessRgbaReadbackRequests[index] = request;
+        _runtime->headlessRgbaReadbackSequences[index] =
+            _runtime->headlessRgbaNextReadbackSequence++;
+        _runtime->headlessRgbaReadbackFullStage[index] = fullStage;
+        _runtime->headlessRgbaReadbackSlots[index] = renderSlot;
+        _runtime->headlessRgbaReadbackWidths[index] =
+            _runtime->headlessRgbaPendingWidth;
+        _runtime->headlessRgbaReadbackHeights[index] =
+            _runtime->headlessRgbaPendingHeight;
+        return true;
+    }
+
+    bool Player::pollRenderToRgbaReadback(
+        std::uint8_t *pixels, int pitch, bool *ready,
+        std::array<int, 4> *visibleBounds,
+        bool *alphaBoundsKnown, bool *alphaOpaque) {
+        if(ready) *ready = false;
+        size_t requestIndex = _runtime->headlessRgbaReadbackRequests.size();
+        uint64_t oldestSequence = std::numeric_limits<uint64_t>::max();
+        for(size_t index = 0;
+            index < _runtime->headlessRgbaReadbackRequests.size(); ++index) {
+            if(_runtime->headlessRgbaReadbackRequests[index] != 0 &&
+               _runtime->headlessRgbaReadbackSequences[index] <
+                   oldestSequence) {
+                oldestSequence =
+                    _runtime->headlessRgbaReadbackSequences[index];
+                requestIndex = index;
+            }
+        }
+        if(requestIndex == _runtime->headlessRgbaReadbackRequests.size()) {
+            return false;
+        }
+        const uint64_t request =
+            _runtime->headlessRgbaReadbackRequests[requestIndex];
+        const int regionWidth =
+            _runtime->headlessRgbaReadbackWidths[requestIndex];
+        const int regionHeight =
+            _runtime->headlessRgbaReadbackHeights[requestIndex];
+        if(request == 0 || !pixels || regionWidth <= 0 || regionHeight <= 0 ||
+           pitch < regionWidth * 4) {
+            return false;
+        }
+        auto &renderLayerSlot =
+            _runtime->headlessRgbaReadbackFullStage[requestIndex]
+                ? _runtime->headlessRgbaRenderLayer
+                : (_runtime->headlessRgbaReadbackSlots[requestIndex] == 0
+                       ? _runtime->headlessRgbaRegionRenderLayer
+                       : _runtime->headlessRgbaRegionRenderLayer2);
+        auto *layer = resolveNativeLayer(renderLayerSlot.AsObjectNoAddRef());
+        auto *image = layer ? layer->GetMainImage() : nullptr;
+        auto *texture = image
+            ? dynamic_cast<GodotTexture2D *>(image->GetTexture())
+            : nullptr;
+        if(!texture) return false;
+        bool completed = false;
+        const bool success = texture->PollGpuReadback(
+            request, pixels, static_cast<size_t>(pitch) * regionHeight,
+            static_cast<uint32_t>(pitch), &completed);
+        if(!completed) return success;
+        _runtime->headlessRgbaReadbackRequests[requestIndex] = 0;
+        _runtime->headlessRgbaReadbackSequences[requestIndex] = 0;
+        if(ready) *ready = true;
+        if(!success) return false;
+
+        if(visibleBounds) *visibleBounds = {0, 0, 0, 0};
+        if(alphaBoundsKnown) *alphaBoundsKnown = true;
+        const auto stats = convertBgraReadbackToRgba(
+            pixels, static_cast<size_t>(pitch), pixels,
+            static_cast<size_t>(pitch), regionWidth, regionHeight);
+        if(visibleBounds && stats.anyVisible) {
+            *visibleBounds = {stats.minimumX, stats.minimumY,
+                              stats.maximumX, stats.maximumY};
+        }
+        if(alphaOpaque) *alphaOpaque = stats.allOpaque;
+        return true;
+    }
+
+    void Player::discardRenderToRgbaReadback() {
+        if(!_runtime) return;
+        const auto *bridge = TVPGodotGpuBridgeGet();
+        for(size_t index = 0;
+            index < _runtime->headlessRgbaReadbackRequests.size(); ++index) {
+            uint64_t &request =
+                _runtime->headlessRgbaReadbackRequests[index];
+            if(request != 0 && bridge && bridge->discard_read_rgba) {
+                bridge->discard_read_rgba(request);
+            }
+            request = 0;
+            _runtime->headlessRgbaReadbackSequences[index] = 0;
+        }
+        _runtime->headlessRgbaRenderPending = false;
     }
 
     bool Player::renderToLayer(iTJSDispatch2 *layerObject, bool skipUpdate) {
@@ -11764,9 +12491,20 @@ namespace motion {
                 _runtime->renderCommands.size());
         }
         const auto presentationCommandSignature =
-            renderCommandReuseSignature(_runtime->renderCommands);
+            renderCommandReuseSignature(_runtime->renderCommands,
+                                        _maskMode);
+        const auto isRuntimeLayerSlot =
+            [renderLayerObject](const tTJSVariant &slot) {
+                return slot.Type() == tvtObject &&
+                       slot.AsObjectNoAddRef() == renderLayerObject;
+            };
+        const bool headlessRgbaExportTarget =
+            isRuntimeLayerSlot(_runtime->headlessRgbaRenderLayer) ||
+            isRuntimeLayerSlot(_runtime->headlessRgbaRegionRenderLayer) ||
+            isRuntimeLayerSlot(_runtime->headlessRgbaRegionRenderLayer2);
         const bool canReuseEmoteRender =
             _runtime->isEmoteMode &&
+            !headlessRgbaExportTarget &&
             renderLayerObject == finalLayerObject &&
             renderLayerObject != nullptr &&
             !usingPresentationTarget &&
@@ -13566,6 +14304,7 @@ namespace motion {
             stepControllerBucket(_type6ControllerAnimators, controllerDt);
             stepControllerBucket(_type8ControllerAnimators, controllerDt);
             stepControllerBucket(_type7ControllerAnimators, controllerDt);
+            stepControllerBucket(_variableAnimators, controllerDt);
             refreshFixedControllerEvalOutputsLike_0x67D01C();
             remainingControllerStep -= controllerDt;
         }

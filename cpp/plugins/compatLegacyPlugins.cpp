@@ -535,6 +535,69 @@ static void libglesv2Init() {
 NCB_PRE_REGIST_CALLBACK(libglesv2Init);
 
 // -------------------------------------------------------------------------
+// msbtnhook.dll
+// The original Win32 plug-in translates XBUTTON messages into KiriKiri mouse
+// button events. The host already owns pointer event delivery, while macOS and
+// iOS have no Win32 hook to install. Keep the script-visible button IDs and
+// lifecycle entry point so input-remapping scripts can initialize normally.
+// -------------------------------------------------------------------------
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("msbtnhook.dll")
+
+namespace {
+
+void registerMouseButtonHookCompat() {
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if(!global)
+        return;
+
+    propSet(global, TJS_W("mbXButton1"), tTJSVariant(3));
+    propSet(global, TJS_W("mbXButton2"), tTJSVariant(4));
+
+    tTJSVariant windowClass;
+    if(TJS_SUCCEEDED(global->PropGet(0, TJS_W("Window"), nullptr,
+                                     &windowClass, global)) &&
+       windowClass.Type() == tvtObject && windowClass.AsObjectNoAddRef()) {
+        iTJSDispatch2 *window = windowClass.AsObjectNoAddRef();
+        iTJSDispatch2 *method = TJSCreateNativeClassMethod(returnTrueCb);
+        if(method) {
+            tTJSVariant value(method, method);
+            window->PropSet(TJS_MEMBERENSURE, TJS_W("startMouseHook"),
+                            nullptr, &value, window);
+            method->Release();
+        }
+    }
+
+    global->Release();
+    logOnce(TJS_W("msbtnhook.dll"),
+            TJS_W("host pointer input replaces the Win32 mouse hook"));
+}
+
+void unregisterMouseButtonHookCompat() {
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if(!global)
+        return;
+
+    global->DeleteMember(0, TJS_W("mbXButton1"), nullptr, global);
+    global->DeleteMember(0, TJS_W("mbXButton2"), nullptr, global);
+
+    tTJSVariant windowClass;
+    if(TJS_SUCCEEDED(global->PropGet(0, TJS_W("Window"), nullptr,
+                                     &windowClass, global)) &&
+       windowClass.Type() == tvtObject && windowClass.AsObjectNoAddRef()) {
+        iTJSDispatch2 *window = windowClass.AsObjectNoAddRef();
+        window->DeleteMember(0, TJS_W("startMouseHook"), nullptr, window);
+    }
+    global->Release();
+}
+
+} // namespace
+
+NCB_PRE_REGIST_CALLBACK(registerMouseButtonHookCompat);
+NCB_POST_UNREGIST_CALLBACK(unregisterMouseButtonHookCompat);
+
+// -------------------------------------------------------------------------
 // layeredwindow.dll
 // The original Win32 plug-in submits an already composed BGRA buffer through
 // UpdateLayeredWindow. AetherKiri's host renders the dialog Window's Layer

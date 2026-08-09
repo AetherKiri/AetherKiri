@@ -27,6 +27,7 @@ namespace motion::detail {
         // v15 = *v14 (dispatch ptr from node+1912)
         // if (!v15 || NIS fails || result==0) return nullptr
         // else return *(result+8) (native Player*)
+        if (nativeChildPlayer) return nativeChildPlayer.get();
         if (childPlayerVar.Type() != tvtObject) return nullptr;
         auto *dispatch = childPlayerVar.AsObjectNoAddRef();
         if (!dispatch) return nullptr;

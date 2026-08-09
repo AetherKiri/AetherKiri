@@ -85,6 +85,7 @@ extern const tjs_char *TVPGetKagLoadContractGuardScript();
 extern const tjs_char *TVPGetPatchRuntimeRegistryExpression();
 extern const tjs_char *TVPGetPatchRuntimeInstanceRecoveryScript();
 extern const tjs_char *TVPGetD3DStandSourcePatchScript();
+extern const tjs_char *TVPGetD3DEmoteGpuBatchPatchScript();
 extern bool TVPMergeObjectMembers(iTJSDispatch2 *destination,
                                   iTJSDispatch2 *source);
 extern bool TVPMergeMissingObjectMembers(iTJSDispatch2 *destination,
@@ -93,6 +94,11 @@ extern bool TVPMergeMissingObjectMembers(iTJSDispatch2 *destination,
 // Adds the face-visibility snapshot repair to compatible World._updateAll
 // implementations. The three dependent insertions are applied atomically.
 extern bool TVPPatchWorldRestoreFaceVisibility(ttstr &script);
+
+// Adds transparent lookup of D3D-prefixed E-mote resources to compatible
+// AffineSourceMotion implementations. The fallback is based solely on the
+// logical resource being absent; these scripts do not expose a _useD3D member.
+extern bool TVPPatchAffineSourceMotionStorageFallback(ttstr &script);
 
 using tTVPStorageExistenceProbe = bool (*)(const ttstr &name);
 

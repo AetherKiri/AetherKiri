@@ -14,6 +14,7 @@
 
 #include "PlayerInternal.h"
 #include "TickCount.h"
+#include "tjsRandomGenerator.h"
 
 using namespace motion::internal;
 
@@ -42,6 +43,23 @@ namespace {
     std::vector<motion::Player *> g_presentationHoldPlayers;
     MotionPlayerPresentationHoldHook g_presentationHoldHook;
     bool g_presentationHoldHookRegistered = false;
+
+    tTJSVariant createStandaloneRandomGenerator() {
+        // Artemis embeds motionplayer without starting the KiriKiri script
+        // host. Use the same TJS RandomGenerator native class directly so
+        // particle selection and authored random motion retain libkrkr2's
+        // semantics without requiring TVPScriptEngine.
+        static auto *generatorClass = new TJS::tTJSNC_RandomGenerator();
+        iTJSDispatch2 *instance = nullptr;
+        if(TJS_FAILED(generatorClass->CreateNew(
+               0, nullptr, nullptr, &instance, 0, nullptr,
+               generatorClass)) || !instance) {
+            return {};
+        }
+        tTJSVariant result(instance, instance);
+        instance->Release();
+        return result;
+    }
 
     void registerAutoProgressPlayer(motion::Player *player) {
         if(!player) {
@@ -240,6 +258,28 @@ namespace {
     }
 }
 
+extern "C" void AetherKiriMotionPlayerCoreResetForGameSession() {
+    {
+        std::lock_guard<std::mutex> lock(g_autoProgressMutex);
+        if(g_autoProgressHookRegistered)
+            TVPRemoveContinuousEventHook(&g_autoProgressHook);
+        g_autoProgressPlayers.clear();
+        g_autoProgressHookRegistered = false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_yuzuSdAutoProgressMutex);
+        g_yuzuSdAutoProgressPlayer = nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_presentationHoldMutex);
+        if(g_presentationHoldHookRegistered)
+            TVPRemoveContinuousEventHook(&g_presentationHoldHook);
+        g_presentationHoldPlayers.clear();
+        g_presentationHoldHookRegistered = false;
+    }
+    motion::ResourceManager::resetStaticStateForHostSession();
+}
+
 namespace motion {
 
     std::vector<tTJSVariant> SnapshotAutoProgressPlayerDispatchesForCompat() {
@@ -414,12 +454,19 @@ namespace motion {
             TVPExecuteExpression(
                 TJS_W("new Math.RandomGenerator()"),
                 &_tjsRandomGenerator);
-        } catch (...) {
+        } catch(...) {
+            _tjsRandomGenerator = createStandaloneRandomGenerator();
+        }
+        if(_tjsRandomGenerator.Type() != tvtObject) {
+            _tjsRandomGenerator = createStandaloneRandomGenerator();
+        }
+        if(_tjsRandomGenerator.Type() != tvtObject) {
             LOGGER->warn("Player: failed to create Math.RandomGenerator");
         }
     }
 
     Player::~Player() {
+        discardRenderToRgbaReadback();
         disableAutoProgress();
         disablePresentationHold();
         releaseYuzuSdAutoProgressClaim();
@@ -601,6 +648,7 @@ namespace motion {
 
         _autoProgressLastTick = 0;
         _autoProgressHasLastTick = false;
+        _manualProgressLastTick = 0;
         if(!_autoProgressRegistered) {
             registerAutoProgressPlayer(this);
             _autoProgressRegistered = true;
@@ -704,8 +752,14 @@ namespace motion {
 
     void Player::noteManualProgress() {
         _manualProgressLastTick = TVPGetTickCount();
-        _autoProgressLastTick = _manualProgressLastTick;
-        _autoProgressHasLastTick = true;
+        // A script-owned Motion.Player clock and the continuous callback must
+        // never advance the same clip.  The old 120 ms grace period let the
+        // automatic clock take over during a slow render, then the script's
+        // next wall-clock delta counted that same interval again.  That made
+        // title animations jump for one frame whenever loading exceeded the
+        // grace period.  A later play() call can explicitly opt the player
+        // back into automatic progression via enableAutoProgress().
+        disableAutoProgress();
     }
 
     std::string Player::beginEndedTimelineRenderHold() {
@@ -974,6 +1028,21 @@ namespace motion {
             if(!playing) {
                 disableAutoProgress();
             }
+            releaseDispatch();
+            return;
+        }
+
+        // Title motions are driven from AffineSourceMotion::_drawAffine.
+        // Their Player can be created and played while the incoming page is
+        // still hidden, before its first progress(0) draw. Keep frame zero
+        // until the script takes ownership so the animation and page
+        // transition begin from the same authored state; noteManualProgress()
+        // then unregisters this fallback clock entirely.
+        if(_manualProgressLastTick == 0 && _runtime->activeMotion &&
+           isYuzuTitlePresentationMotionPath(
+               _runtime->activeMotion->path)) {
+            _autoProgressLastTick = tick;
+            _autoProgressHasLastTick = true;
             releaseDispatch();
             return;
         }

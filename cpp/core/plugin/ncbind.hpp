@@ -2163,6 +2163,7 @@ struct ncbAutoRegister {
 	// Aliases share registration state, avoiding duplicate class registration.
 	static void RegisterModuleAlias(NameT alias, NameT canonical);
 	static void LoadAllModules();
+	static void UnloadAllModules();
 protected:
 	virtual void Regist()   const = 0;
 	virtual void Unregist() const = 0;

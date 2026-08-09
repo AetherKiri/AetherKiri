@@ -344,24 +344,27 @@ static int _utf8_strcasecmp_nfc(const char *a, const char *b) {
 #endif
 
 #if defined(__APPLE__) && TARGET_OS_IPHONE
-const std::vector<std::string> &TVPGetApplicationHomeDirectory();
-const std::vector<ttstr> &_getPrefixPath() {
-    static std::vector<ttstr> ret;
-    if(ret.empty()) {
-        for(const std::string &path : TVPGetApplicationHomeDirectory()) {
-            ret.emplace_back(path);
+struct tTVPIOSApplicationHomePaths {
+    std::vector<std::string> sourcePaths;
+    std::vector<ttstr> prefixPaths;
+    std::vector<std::string> homeDirectories;
+};
+
+const tTVPIOSApplicationHomePaths &TVPGetIOSApplicationHomePaths() {
+    static tTVPIOSApplicationHomePaths cache;
+    const auto &sourcePaths = TVPGetApplicationHomeDirectory();
+    if(cache.sourcePaths != sourcePaths) {
+        cache.sourcePaths = sourcePaths;
+        cache.prefixPaths.clear();
+        cache.homeDirectories.clear();
+        cache.prefixPaths.reserve(sourcePaths.size());
+        cache.homeDirectories.reserve(sourcePaths.size());
+        for(const std::string &path : sourcePaths) {
+            cache.prefixPaths.emplace_back(path);
+            cache.homeDirectories.emplace_back(path + "/");
         }
     }
-    return ret;
-}
-const std::vector<std::string> &_getHomeDir() {
-    static std::vector<std::string> ret;
-    if(ret.empty()) {
-        for(const std::string &path : TVPGetApplicationHomeDirectory()) {
-            ret.emplace_back(path + "/");
-        }
-    }
-    return ret;
+    return cache;
 }
 #endif // TARGET_OS_IPHONE
 
@@ -442,8 +445,10 @@ void tTVPFileMedia::GetLocallyAccessibleName(ttstr &name) {
     {
         std::string prefix = "/";
         prefix += tTJSNarrowStringHolder(ptr).Buf;
-        static const std::vector<ttstr> &prefixPath = _getPrefixPath();
-        static const std::vector<std::string> &homeDir = _getHomeDir();
+        const auto &applicationHomePaths =
+            TVPGetIOSApplicationHomePaths();
+        const auto &prefixPath = applicationHomePaths.prefixPaths;
+        const auto &homeDir = applicationHomePaths.homeDirectories;
         spdlog::debug("iOS GetLocallyAccessibleName: prefix='{}', homeDir count={}", prefix, homeDir.size());
         for(int i = 0; i < (int)prefixPath.size(); ++i) {
             const std::string &dir = homeDir[i];

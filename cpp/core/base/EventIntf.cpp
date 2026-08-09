@@ -908,6 +908,28 @@ void TVPRemoveContinuousHandler(tTJSVariantClosure clo) {
         i->Object = i->ObjThis = nullptr;
     }
 }
+
+//---------------------------------------------------------------------------
+// TVPResetEventsForHostSession
+//---------------------------------------------------------------------------
+void TVPResetEventsForHostSession() {
+    TVPDestroyEventQueue();
+    TVPWinUpdateEventQueue.clear();
+    TVPWindowUpdateEventsDelivering = false;
+
+    TVPDestroyContinuousHandlerVector();
+    TVPContinuousEventVector.clear();
+    TVPContinuousEventProcessing = false;
+    TVPProcessContinuousHandlerEventFlag = false;
+    TVPEndContinuousEvent();
+
+    TVPExclusiveEventPosted = false;
+    TVPEventSequenceNumber = 0;
+    TVPEventSequenceNumberToProcess = 0;
+    TVPEventDisabled = false;
+    TVPEventInterrupting = false;
+    TVPEventReceived();
+}
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------

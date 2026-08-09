@@ -120,7 +120,7 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 | 平台 | 最低版本 | 说明 |
 | --- | --- | --- |
 | macOS | macOS 13.0（Ventura） | Godot App 导出配置为 Universal，但当前 native 构建 triplet 只有 `arm64`；Intel 支持还需要单独构建 `x86_64` native 产物。 |
-| iOS / iPadOS | iOS / iPadOS 17.0 | 真机为 `arm64`；开发环境可构建 `arm64` 和 `x86_64` 模拟器版本。 |
+| iOS / iPadOS | iOS / iPadOS 16.0 | 真机为 `arm64`；开发环境可构建 `arm64` 和 `x86_64` 模拟器版本。 |
 | Android | Android 7.0（API 24） | 当前产品导出只打包 `arm64-v8a`。 |
 | Web | 不限定操作系统版本 | 浏览器必须支持 WebAssembly SIMD、WebAssembly threads 和 `SharedArrayBuffer`，并通过配置了跨源隔离（COOP/COEP）的 HTTP 服务访问。 |
 | Linux | 需要自行编译 | 没有官方预编译产品包，需要在本地编译 `x86_64` 导出。 |
@@ -489,4 +489,4 @@ Godot Native 或 GPU Bridge 达到性能目标。Debug CPU 只作为诊断 fallb
 ## 许可证
 
 AetherKiri 以 GPL-3.0-or-later 分发。完整许可证文本见 `LICENSE`，第三方授权声明保留在 `THIRD_PARTY_LICENSES.md`。
-iOS App Store 分发相关的有限额外许可见 `COPYING.iOS`；该许可仅供 Aether 官方 iOS 版本或版权持有人书面授权的发布者使用，第三方分支及衍生 App 不得援引。该许可仅适用于明确认可声明的版权持有人有权授权的部分，不能代表其他版权持有人授予上游或第三方材料的权利，也不撤销 GPL 已授予的权利。
+Apple App Store 分发相关的有限额外许可见 `COPYING.iOS`；该许可仅供 Aether 官方 iOS、macOS 版本或版权持有人书面授权的发布者使用，第三方分支及衍生 App 不得援引。该许可仅适用于明确认可声明的版权持有人有权授权的部分，不能代表其他版权持有人授予上游或第三方材料的权利，也不撤销 GPL 已授予的权利。

@@ -12,6 +12,10 @@
 
 namespace motion {
 
+    namespace detail {
+        struct MotionSnapshot;
+    }
+
     class ResourceManager {
     public:
         ResourceManager();
@@ -22,7 +26,9 @@ namespace motion {
         void unload(ttstr path) const;
         void clearCache() const;
         tTJSVariant getLastLoadedModule() const;
-        void rememberLoadedModule(ttstr path, const tTJSVariant &loaded) const;
+        void rememberLoadedModule(
+            ttstr path, const tTJSVariant &loaded,
+            std::shared_ptr<detail::MotionSnapshot> snapshot = {}) const;
         tTJSVariant findLoaded(ttstr path) const;
         tTJSVariant findLoadedModule(ttstr path) const;
         tTJSVariant findSource(ttstr path) const;
@@ -39,6 +45,7 @@ namespace motion {
         [[nodiscard]] static tjs_int getDecryptSeed() {
             return getEmotePSBDecryptSeed();
         }
+        static void resetStaticStateForHostSession();
 
         static tjs_error setEmotePSBDecryptSeed(tTJSVariant *r, tjs_int count,
                                                 tTJSVariant **p,
@@ -53,6 +60,9 @@ namespace motion {
             std::unordered_map<std::string, tTJSVariant> loadedModules;
             std::unordered_map<iTJSDispatch2 *, std::uint64_t>
                 moduleLoadGenerations;
+            std::unordered_map<
+                iTJSDispatch2 *, std::shared_ptr<detail::MotionSnapshot>>
+                cachedSnapshots;
             std::uint64_t nextLoadGeneration = 0;
             std::string lastLoadedPath;
             tTJSVariant lastLoadedModule;

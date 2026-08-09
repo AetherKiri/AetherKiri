@@ -1695,7 +1695,6 @@ NCB_REGISTER_CLASS(TextRenderBase) {
   NCB_METHOD(renderText);
   NCB_METHOD(resetStyle);
   NCB_METHOD(resetFont);
-  NCB_METHOD(renderOver);
   NCB_METHOD(setFontScale);
   NCB_METHOD(getRect);
 
@@ -1742,6 +1741,10 @@ NCB_REGISTER_CLASS(TextRenderBase) {
 
   NCB_PROPERTY(fontScale, get_fontScale, set_fontScale);
   NCB_PROPERTY(renderCount, get_renderCount, set_renderCount);
+  // The original textrender.dll exposes renderOver as a read-only property.
+  // Registering it as a method makes a property read return a truthy function
+  // object, so callers can incorrectly retry overflowing text forever.
+  NCB_PROPERTY_RO(renderOver, renderOver);
   NCB_PROPERTY_RO(renderDelay, get_renderDelay);
   NCB_PROPERTY_RO(renderLeft, get_renderLeft);
   NCB_PROPERTY_RO(renderTop, get_renderTop);

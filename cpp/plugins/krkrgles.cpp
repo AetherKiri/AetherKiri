@@ -216,6 +216,14 @@ public:
         }
     }
 
+    void Stop() {
+        if(registered_)
+            TVPRemoveContinuousEventHook(this);
+        registered_ = false;
+        installed_ = false;
+        attempts_ = 0;
+    }
+
 private:
     bool registered_ = false;
     bool installed_ = false;
@@ -2537,6 +2545,19 @@ public:
 // NCB Registration
 // ---------------------------------------------------------------------------
 static void KrkrGlesPreRegist() {}
+static void KrkrGlesPreUnregist() {
+    // These are process-static compatibility helpers but every stored player
+    // and layer belongs to one TJS world. Drop them before ncbind releases the
+    // old global object, and reset the hook guards so the next title can
+    // register its own continuous callbacks.
+    g_drawDeviceAliasHook.Stop();
+    GetYuzuMotionRenderHook().Stop();
+    {
+        std::lock_guard<std::mutex> lock(YuzuMotionRenderMutex());
+        YuzuMotionRenderables().clear();
+    }
+    g_registeredLayer = nullptr;
+}
 static void KrkrGlesPostRegist() {
     if (InstallDrawDeviceScriptAliases()) {
         spdlog::info("krkrgles: installed Window draw device aliases");
@@ -2546,6 +2567,7 @@ static void KrkrGlesPostRegist() {
     }
 }
 NCB_PRE_REGIST_CALLBACK(KrkrGlesPreRegist);
+NCB_PRE_UNREGIST_CALLBACK(KrkrGlesPreUnregist);
 NCB_POST_REGIST_CALLBACK(KrkrGlesPostRegist);
 
 NCB_REGISTER_CLASS(GLESModule) {
@@ -2645,6 +2667,10 @@ extern "C" void TVPRegisterKrkrGLESPluginAnchor() {
         TJS_W("krkrgles.dll"),
         ncbAutoRegister::PreRegist,
         &ncbCallbackAutoRegister_PreRegist_KrkrGlesPreRegist_0);
+    ncbAutoRegister::RegisterInternalPluginEntry(
+        TJS_W("krkrgles.dll"),
+        ncbAutoRegister::PreRegist,
+        &ncbCallbackAutoRegister_PreRegist_KrkrGlesPreUnregist_0);
     ncbAutoRegister::RegisterInternalPluginEntry(
         TJS_W("krkrgles.dll"),
         ncbAutoRegister::ClassRegist,

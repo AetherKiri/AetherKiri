@@ -21,6 +21,30 @@
 namespace PSB {
 #define LOGGER spdlog::get("plugin")
 
+    bool detail::IsSupportedImageHeader(const std::vector<uint8_t> &data) {
+        if(data.size() >= 8 && data[0] == 0x89 && data[1] == 0x50 &&
+           data[2] == 0x4e && data[3] == 0x47) {
+            return true;
+        }
+        if(data.size() >= 15 &&
+           memcmp(data.data(), "RIFF", 4) == 0 &&
+           memcmp(data.data() + 8, "WEBPVP8", 7) == 0) {
+            return true;
+        }
+        if(data.size() >= 2 && data[0] == 'B' && data[1] == 'M') {
+            return true;
+        }
+        if(data.size() >= 3 && data[0] == 0xff && data[1] == 0xd8 &&
+           data[2] == 0xff) {
+            return true;
+        }
+        if(data.size() >= 3 && data[0] == 'T' && data[1] == 'L' &&
+           data[2] == 'G') {
+            return true;
+        }
+        return false;
+    }
+
     namespace {
         size_t CalcEntryFootprint(const PSBMedia::CacheEntry &entry) {
             size_t total = entry.resource ? entry.resource->data.size() : 0;
@@ -127,25 +151,6 @@ namespace PSB {
                     path.pop_back();
                 }
             }
-        }
-
-        bool IsSupportedImageHeader(const std::vector<uint8_t> &data) {
-            if(data.size() >= 8 && data[0] == 0x89 && data[1] == 0x50 &&
-               data[2] == 0x4e && data[3] == 0x47) {
-                return true;
-            }
-            if(data.size() >= 2 && data[0] == 'B' && data[1] == 'M') {
-                return true;
-            }
-            if(data.size() >= 3 && data[0] == 0xff && data[1] == 0xd8 &&
-               data[2] == 0xff) {
-                return true;
-            }
-            if(data.size() >= 3 && data[0] == 'T' && data[1] == 'L' &&
-               data[2] == 'G') {
-                return true;
-            }
-            return false;
         }
 
         uint16_t ReadLE16(const uint8_t *src) {
@@ -967,7 +972,7 @@ namespace PSB {
         _ref = 1;
 
         tTJSVariant val;
-        if(TVPGetCommandLine(TJS_W("memory_profile"), &val)) {
+        if(TVPGetCommandLineNoInit(TJS_W("memory_profile"), &val)) {
             ttstr profile = ttstr(val).AsLowerCase();
             if(profile == TJS_W("aggressive") || profile == TJS_W("lowmem")) {
                 _configuredMaxEntryCount = 1024;
@@ -975,14 +980,14 @@ namespace PSB {
             }
         }
 
-        if(TVPGetCommandLine(TJS_W("psb_cache_entries"), &val)) {
+        if(TVPGetCommandLineNoInit(TJS_W("psb_cache_entries"), &val)) {
             const tjs_int configured = static_cast<tjs_int>(val.AsInteger());
             if(configured > 0) {
                 _configuredMaxEntryCount =
                     static_cast<size_t>(configured);
             }
         }
-        if(TVPGetCommandLine(TJS_W("psb_cache_mb"), &val)) {
+        if(TVPGetCommandLineNoInit(TJS_W("psb_cache_mb"), &val)) {
             const tjs_int configured = static_cast<tjs_int>(val.AsInteger());
             if(configured > 0) {
                 _configuredMaxByteSize = static_cast<size_t>(configured) *
@@ -1271,7 +1276,8 @@ namespace PSB {
                 imageInfo.palette.size(), static_cast<int>(imageInfo.compress),
                 res->data.size(), header);
         }
-        if(!convertedImage && hasImageInfo && !IsSupportedImageHeader(res->data)) {
+        if(!convertedImage && hasImageInfo &&
+           !detail::IsSupportedImageHeader(res->data)) {
             convertedImage = BuildBmpFromRaw(imageInfo, res);
             if(LOGGER && IsDebugPSBKey(resolvedKey)) {
                 LOGGER->info(

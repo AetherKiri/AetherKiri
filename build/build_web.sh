@@ -28,6 +28,43 @@ if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
     GODOT_EXPORT_MODE="--export-release"
 fi
 
+with_web_only_gdextension() {
+    local gdextension_file="$GODOT_APP_DIR/aether_kiri.gdextension"
+    local backup_file
+    backup_file="$(mktemp /tmp/aetherkiri-web-gdextension.XXXXXX)"
+
+    cp "$gdextension_file" "$backup_file"
+    restore_gdextension() {
+        trap - RETURN
+        cp "$backup_file" "$gdextension_file"
+        rm -f "$backup_file"
+    }
+    trap restore_gdextension RETURN
+
+    # The Web exporter runs in a Linux Godot editor on CI. Keep the editor from
+    # selecting the host Linux library, which is intentionally not built by the
+    # Web job, while retaining the WebAssembly target entries for the export.
+    if ! awk '
+        BEGIN { skip = 0 }
+        /^\[dependencies\]/ { skip = 1 }
+        /^\[/ && $0 != "[dependencies]" { skip = 0 }
+        skip && /^linux\./ { while (getline line && line !~ /^}/) {} ; next }
+        !skip || !/^linux\./ { print }
+    ' "$backup_file" | grep -v '^linux\.' > "$gdextension_file"; then
+        echo "Error: Failed to prepare the Web-only GDExtension manifest." >&2
+        return 1
+    fi
+
+    local export_status=0
+    if "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
+        "$GODOT_EXPORT_MODE" "$GODOT_EXPORT_PRESET" "$1"; then
+        :
+    else
+        export_status=$?
+    fi
+    return "$export_status"
+}
+
 if [[ -d "$PROJECT_ROOT/.devtools/vcpkg/.git" ]]; then
     export VCPKG_ROOT="$PROJECT_ROOT/.devtools/vcpkg"
 elif [[ -z "${VCPKG_ROOT:-}" ]]; then
@@ -156,8 +193,7 @@ else
     export_root="$PROJECT_ROOT/out/godot/web/$BUILD_TYPE_LOWER"
     export_path="$export_root/index.html"
     mkdir -p "$export_root"
-    "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
-        "$GODOT_EXPORT_MODE" "$GODOT_EXPORT_PRESET" "$export_path"
+    with_web_only_gdextension "$export_path"
     if command -v node >/dev/null; then
         node "$PROJECT_ROOT/build/patch_web_export.mjs" "$export_root"
     else

@@ -4,6 +4,7 @@
 
 #include "tjsVariant.h"
 #include "tjsString.h"
+#include <string>
 #include <vector>
 #include <functional>
 #include <mutex>
@@ -11,6 +12,7 @@
 #include <map>
 
 ttstr ExePath();
+const std::vector<std::string> &TVPGetApplicationHomeDirectory();
 
 // 見通しのよい方法に変更した方が良い
 extern int _argc;
@@ -180,6 +182,7 @@ public:
     void OnDeactivate();
     bool RetryAudioRendererForHost();
     void OnExit();
+    void ResetForHostSession();
     void OnLowMemory();
 
     [[nodiscard]] bool GetActivating() const { return application_activating_; }

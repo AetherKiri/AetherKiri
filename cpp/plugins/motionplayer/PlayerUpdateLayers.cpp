@@ -7,6 +7,12 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#define AETHERKIRI_MOTION_HAS_ARM_NEON 1
+#else
+#define AETHERKIRI_MOTION_HAS_ARM_NEON 0
+#endif
 #ifdef __EMSCRIPTEN__
 #include <wasm_simd128.h>
 #endif
@@ -53,6 +59,210 @@ namespace {
         outY =
             rowY[0] * bv[0] + rowY[1] * bv[1] +
             rowY[2] * bv[2] + rowY[3] * bv[3];
+    }
+
+    struct ExternalMeshTransform {
+        const float *controlPoints = nullptr;
+        double invM11 = 0.0;
+        double invM12 = 0.0;
+        double invM21 = 0.0;
+        double invM22 = 0.0;
+        float invOffX = 0.0f;
+        float invOffY = 0.0f;
+    };
+
+#if AETHERKIRI_MOTION_HAS_ARM_NEON
+    __attribute__((always_inline)) inline void evaluateMotionBezierPatch4(
+        const float *mesh,
+        float32x4_t u,
+        float32x4_t v,
+        float32x4_t &outX,
+        float32x4_t &outY) {
+        const auto one = vdupq_n_f32(1.0f);
+        const auto su = vsubq_f32(one, u);
+        const auto sv = vsubq_f32(one, v);
+        const auto su2 = vmulq_f32(su, su);
+        const auto u2 = vmulq_f32(u, u);
+        const auto sv2 = vmulq_f32(sv, sv);
+        const auto v2 = vmulq_f32(v, v);
+        const auto bu0 = vmulq_f32(su2, su);
+        const auto bu1 = vmulq_n_f32(vmulq_f32(su2, u), 3.0f);
+        const auto bu2 = vmulq_n_f32(vmulq_f32(su, u2), 3.0f);
+        const auto bu3 = vmulq_f32(u2, u);
+        const auto bv0 = vmulq_f32(sv2, sv);
+        const auto bv1 = vmulq_n_f32(vmulq_f32(sv2, v), 3.0f);
+        const auto bv2 = vmulq_n_f32(vmulq_f32(sv, v2), 3.0f);
+        const auto bv3 = vmulq_f32(v2, v);
+
+        float32x4_t rowX = vmulq_n_f32(bu0, mesh[0]);
+        rowX = vmlaq_n_f32(rowX, bu1, mesh[2]);
+        rowX = vmlaq_n_f32(rowX, bu2, mesh[4]);
+        rowX = vmlaq_n_f32(rowX, bu3, mesh[6]);
+        float32x4_t rowY = vmulq_n_f32(bu0, mesh[1]);
+        rowY = vmlaq_n_f32(rowY, bu1, mesh[3]);
+        rowY = vmlaq_n_f32(rowY, bu2, mesh[5]);
+        rowY = vmlaq_n_f32(rowY, bu3, mesh[7]);
+        outX = vmulq_f32(rowX, bv0);
+        outY = vmulq_f32(rowY, bv0);
+
+        rowX = vmulq_n_f32(bu0, mesh[8]);
+        rowX = vmlaq_n_f32(rowX, bu1, mesh[10]);
+        rowX = vmlaq_n_f32(rowX, bu2, mesh[12]);
+        rowX = vmlaq_n_f32(rowX, bu3, mesh[14]);
+        rowY = vmulq_n_f32(bu0, mesh[9]);
+        rowY = vmlaq_n_f32(rowY, bu1, mesh[11]);
+        rowY = vmlaq_n_f32(rowY, bu2, mesh[13]);
+        rowY = vmlaq_n_f32(rowY, bu3, mesh[15]);
+        outX = vmlaq_f32(outX, rowX, bv1);
+        outY = vmlaq_f32(outY, rowY, bv1);
+
+        rowX = vmulq_n_f32(bu0, mesh[16]);
+        rowX = vmlaq_n_f32(rowX, bu1, mesh[18]);
+        rowX = vmlaq_n_f32(rowX, bu2, mesh[20]);
+        rowX = vmlaq_n_f32(rowX, bu3, mesh[22]);
+        rowY = vmulq_n_f32(bu0, mesh[17]);
+        rowY = vmlaq_n_f32(rowY, bu1, mesh[19]);
+        rowY = vmlaq_n_f32(rowY, bu2, mesh[21]);
+        rowY = vmlaq_n_f32(rowY, bu3, mesh[23]);
+        outX = vmlaq_f32(outX, rowX, bv2);
+        outY = vmlaq_f32(outY, rowY, bv2);
+
+        rowX = vmulq_n_f32(bu0, mesh[24]);
+        rowX = vmlaq_n_f32(rowX, bu1, mesh[26]);
+        rowX = vmlaq_n_f32(rowX, bu2, mesh[28]);
+        rowX = vmlaq_n_f32(rowX, bu3, mesh[30]);
+        rowY = vmulq_n_f32(bu0, mesh[25]);
+        rowY = vmlaq_n_f32(rowY, bu1, mesh[27]);
+        rowY = vmlaq_n_f32(rowY, bu2, mesh[29]);
+        rowY = vmlaq_n_f32(rowY, bu3, mesh[31]);
+        outX = vmlaq_f32(outX, rowX, bv3);
+        outY = vmlaq_f32(outY, rowY, bv3);
+    }
+#endif
+
+    inline void deformExternalMeshPoint(
+        float &displayX,
+        float &displayY,
+        const double *drawAffine,
+        double inverseDeterminant,
+        const ExternalMeshTransform *meshChain,
+        std::size_t meshChainSize) {
+        const double translatedX =
+            static_cast<double>(displayX) - drawAffine[4];
+        const double translatedY =
+            static_cast<double>(displayY) - drawAffine[5];
+        float modelX = static_cast<float>(
+            (drawAffine[3] * translatedX -
+             drawAffine[2] * translatedY) * inverseDeterminant);
+        float modelY = static_cast<float>(
+            (-drawAffine[1] * translatedX +
+             drawAffine[0] * translatedY) * inverseDeterminant);
+        for(std::size_t chainIndex = 0;
+            chainIndex < meshChainSize; ++chainIndex) {
+            const auto &transform = meshChain[chainIndex];
+            const float x = modelX + transform.invOffX;
+            const float y = modelY + transform.invOffY;
+            const float u = static_cast<float>(
+                transform.invM11 * x + transform.invM12 * y);
+            const float v = static_cast<float>(
+                transform.invM21 * x + transform.invM22 * y);
+            evaluateMotionBezierPatch(
+                transform.controlPoints, u, v, modelX, modelY);
+        }
+        displayX = static_cast<float>(
+            drawAffine[0] * modelX + drawAffine[2] * modelY +
+            drawAffine[4]);
+        displayY = static_cast<float>(
+            drawAffine[1] * modelX + drawAffine[3] * modelY +
+            drawAffine[5]);
+    }
+
+    std::size_t deformExternalMeshPoints(
+        float *interleavedPoints,
+        std::size_t pointCount,
+        const double *drawAffine,
+        double inverseDeterminant,
+        const ExternalMeshTransform *meshChain,
+        std::size_t meshChainSize,
+        bool allowArmNeon) {
+        if(!interleavedPoints || !drawAffine || !meshChain ||
+           meshChainSize == 0 || pointCount == 0) {
+            return 0;
+        }
+
+        std::size_t pointIndex = 0;
+        std::size_t vectorBatchCount = 0;
+#if AETHERKIRI_MOTION_HAS_ARM_NEON
+        if(allowArmNeon) {
+            alignas(16) float modelX[4];
+            alignas(16) float modelY[4];
+            alignas(16) float patchU[4];
+            alignas(16) float patchV[4];
+            for(; pointIndex + 4 <= pointCount; pointIndex += 4) {
+                for(std::size_t lane = 0; lane < 4; ++lane) {
+                    const std::size_t offset = (pointIndex + lane) * 2;
+                    const double translatedX =
+                        static_cast<double>(interleavedPoints[offset]) -
+                        drawAffine[4];
+                    const double translatedY =
+                        static_cast<double>(interleavedPoints[offset + 1]) -
+                        drawAffine[5];
+                    modelX[lane] = static_cast<float>(
+                        (drawAffine[3] * translatedX -
+                         drawAffine[2] * translatedY) *
+                        inverseDeterminant);
+                    modelY[lane] = static_cast<float>(
+                        (-drawAffine[1] * translatedX +
+                         drawAffine[0] * translatedY) *
+                        inverseDeterminant);
+                }
+
+                for(std::size_t chainIndex = 0;
+                    chainIndex < meshChainSize; ++chainIndex) {
+                    const auto &transform = meshChain[chainIndex];
+                    for(std::size_t lane = 0; lane < 4; ++lane) {
+                        const float x = modelX[lane] + transform.invOffX;
+                        const float y = modelY[lane] + transform.invOffY;
+                        patchU[lane] = static_cast<float>(
+                            transform.invM11 * x +
+                            transform.invM12 * y);
+                        patchV[lane] = static_cast<float>(
+                            transform.invM21 * x +
+                            transform.invM22 * y);
+                    }
+                    float32x4_t nextModelX;
+                    float32x4_t nextModelY;
+                    evaluateMotionBezierPatch4(
+                        transform.controlPoints,
+                        vld1q_f32(patchU), vld1q_f32(patchV),
+                        nextModelX, nextModelY);
+                    vst1q_f32(modelX, nextModelX);
+                    vst1q_f32(modelY, nextModelY);
+                }
+
+                for(std::size_t lane = 0; lane < 4; ++lane) {
+                    const std::size_t offset = (pointIndex + lane) * 2;
+                    interleavedPoints[offset] = static_cast<float>(
+                        drawAffine[0] * modelX[lane] +
+                        drawAffine[2] * modelY[lane] + drawAffine[4]);
+                    interleavedPoints[offset + 1] = static_cast<float>(
+                        drawAffine[1] * modelX[lane] +
+                        drawAffine[3] * modelY[lane] + drawAffine[5]);
+                }
+                ++vectorBatchCount;
+            }
+        }
+#else
+        (void)allowArmNeon;
+#endif
+        for(; pointIndex < pointCount; ++pointIndex) {
+            const std::size_t offset = pointIndex * 2;
+            deformExternalMeshPoint(
+                interleavedPoints[offset], interleavedPoints[offset + 1],
+                drawAffine, inverseDeterminant,
+                meshChain, meshChainSize);
+        }
+        return vectorBatchCount;
     }
 
     inline bool motionUpdateDebugEnabled() {
@@ -218,6 +428,46 @@ namespace {
 } // anonymous namespace
 
 namespace motion {
+
+    namespace detail {
+        std::size_t deformExternalMeshPointsForTesting(
+            float *interleavedPoints,
+            std::size_t pointCount,
+            const double *drawAffine,
+            const double *meshInverseMatrices,
+            const float *meshInverseOffsets,
+            const float *meshControlPoints,
+            std::size_t meshChainSize,
+            bool allowArmNeon) {
+            if(!interleavedPoints || !drawAffine ||
+               !meshInverseMatrices || !meshInverseOffsets ||
+               !meshControlPoints || meshChainSize == 0) {
+                return 0;
+            }
+            const double determinant =
+                drawAffine[0] * drawAffine[3] -
+                drawAffine[2] * drawAffine[1];
+            if(std::fabs(determinant) <= 1e-12) {
+                return 0;
+            }
+
+            std::vector<ExternalMeshTransform> transforms;
+            transforms.reserve(meshChainSize);
+            for(std::size_t index = 0; index < meshChainSize; ++index) {
+                const double *matrix = meshInverseMatrices + index * 4;
+                const float *offset = meshInverseOffsets + index * 2;
+                transforms.push_back({
+                    meshControlPoints + index * 32,
+                    matrix[0], matrix[1], matrix[2], matrix[3],
+                    offset[0], offset[1]
+                });
+            }
+            return deformExternalMeshPoints(
+                interleavedPoints, pointCount, drawAffine,
+                1.0 / determinant, transforms.data(), transforms.size(),
+                allowArmNeon);
+        }
+    }
 
     // Phase 1: Camera velocity, root evaluation, variable interpolation
     void Player::updateLayersPhase1_PreLoop(double currentTime) {
@@ -400,9 +650,26 @@ namespace motion {
             // latter without changing the expression animator's base value.
             // Pass the evaluated value down the motion ownership tree for
             // this frame, falling back to the persistent base variable.
-            auto effectiveVariables = _variableValues;
+            const auto effectiveVariableGeneration =
+                _runtime->beginEffectiveVariableScratch();
+            for(const auto &[label, value] : _variableValues) {
+                _runtime->setEffectiveVariableScratch(label, value);
+            }
             for(const auto &[label, value] : _evalResultValues) {
-                effectiveVariables[label] = value;
+                _runtime->setEffectiveVariableScratch(label, value);
+            }
+            // sub_6C4668 forwards the owning Player's already-evaluated
+            // controller output into nested Motion Players.  It does not call
+            // Player::setVariable on the child: doing so routes hair/bust/
+            // parts bindings (types 0..2) back into their controller groups,
+            // where the generic value is intentionally ignored.  Keep the
+            // inherited value as a distinct, per-frame input and let it win
+            // over the child's neutral controller state.  This is required
+            // for E-mote mesh physics, waiting-loop body motion, and
+            // voice-driven face_talk to reach the image leaves.
+            for(const auto &[label, value] :
+                _runtime->inheritedVariableInputs) {
+                _runtime->setEffectiveVariableScratch(label, value);
             }
             const auto propagateInheritedVariable =
                 [](Player *child, const std::string &label, double value) {
@@ -416,7 +683,8 @@ namespace motion {
                         return;
                     }
                     it->second = value;
-                    child->setVariable(detail::widen(label), value);
+                    child->_layersDirty = true;
+                    child->_emoteDirty = true;
                 };
             // Bind path-qualified variables to child Players (sub_6C4668
             // equivalent).  Yuzu addresses nested selectors with labels such
@@ -426,39 +694,50 @@ namespace motion {
             // reached, then only the remaining suffix belongs to the selected
             // child. This mirrors the native recursive parameter binder while
             // preserving path scope between sibling controls.
-            std::unordered_map<std::string, bool> hasRoutingNode;
-            for(const auto &[label, value] : effectiveVariables) {
+            for(auto &[label, scratch] :
+                _runtime->effectiveVariableScratch) {
+                if(scratch.generation != effectiveVariableGeneration) {
+                    continue;
+                }
                 const auto slash = label.find('/');
                 if(slash == std::string::npos) {
                     continue;
                 }
-                const auto segment = label.substr(0, slash);
                 bool found = false;
                 for(const auto &candidate : nodes) {
                     if(candidate.nodeType == 3 &&
-                       candidate.layerName == segment) {
+                       candidate.layerName.size() == slash &&
+                       label.compare(0, slash, candidate.layerName) == 0) {
                         found = true;
                         break;
                     }
                 }
-                hasRoutingNode.emplace(label, found);
+                scratch.hasRoutingNode = found;
             }
             for (auto &vn : nodes) {
                 if (vn.nodeType == 3) {
                     if (auto *cp = vn.getChildPlayer()) {
-                        const std::string prefix = vn.layerName + "/";
-                        for (const auto &[label, value] : effectiveVariables) {
+                        const auto prefixSize = vn.layerName.size();
+                        for(const auto &[label, scratch] :
+                            _runtime->effectiveVariableScratch) {
+                            if(scratch.generation !=
+                               effectiveVariableGeneration) {
+                                continue;
+                            }
+                            const auto value = scratch.value;
                             if(!vn.layerName.empty() &&
-                               label.rfind(prefix, 0) == 0 &&
-                               label.size() > prefix.size()) {
+                               label.size() > prefixSize + 1 &&
+                               label.compare(0, prefixSize,
+                                             vn.layerName) == 0 &&
+                               label[prefixSize] == '/') {
                                 propagateInheritedVariable(
-                                    cp, label.substr(prefix.size()), value);
+                                    cp, label.substr(prefixSize + 1), value);
                                 continue;
                             }
 
                             if(label.find('/') == std::string::npos) {
                                 propagateInheritedVariable(cp, label, value);
-                            } else if(!hasRoutingNode[label]) {
+                            } else if(!scratch.hasRoutingNode) {
                                 propagateInheritedVariable(cp, label, value);
                             }
                         }
@@ -466,8 +745,14 @@ namespace motion {
                 } else if (vn.nodeType == 4) {
                     for (int pi2 = 0; pi2 < vn.getParticleCount(); ++pi2) {
                         if (auto *cp = vn.getParticleChild(pi2)) {
-                            for (const auto &[label, value] : effectiveVariables)
-                                propagateInheritedVariable(cp, label, value);
+                            for(const auto &[label, scratch] :
+                                _runtime->effectiveVariableScratch) {
+                                if(scratch.generation ==
+                                   effectiveVariableGeneration) {
+                                    propagateInheritedVariable(
+                                        cp, label, scratch.value);
+                                }
+                            }
                         }
                     }
                 }
@@ -485,6 +770,32 @@ namespace motion {
         const auto *activeClip = selectActiveClip();
         const bool traceFrameSelection =
             detail::logoChainTraceEnabled(_runtime->activeMotion);
+        const auto resolveMotionVariable =
+            [this](const std::string &label, double fallback) {
+                size_t ownerDepth = 0;
+                for(const Player *owner = this;
+                    owner && ownerDepth++ < 32;
+                    owner = owner->_motionParentPlayer) {
+                    if(owner->_runtime) {
+                        if(const auto it =
+                               owner->_runtime->inheritedVariableInputs.find(
+                                   label);
+                           it != owner->_runtime
+                                     ->inheritedVariableInputs.end()) {
+                            return it->second;
+                        }
+                    }
+                    if(const auto it = owner->_evalResultValues.find(label);
+                       it != owner->_evalResultValues.end()) {
+                        return it->second;
+                    }
+                    if(const auto it = owner->_variableValues.find(label);
+                       it != owner->_variableValues.end()) {
+                        return it->second;
+                    }
+                }
+                return fallback;
+            };
         // === PHASE 2: Main loop — evaluate non-root nodes ===
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
@@ -512,7 +823,6 @@ namespace motion {
                     const auto &parameter =
                         activeClip->parameters[
                             static_cast<size_t>(parameterIndex)];
-                    double rawValue = parameter.rangeBegin;
                     // Motion nodes form nested Players, while scripts set
                     // variables on the owning root Player. The native binder
                     // resolves an unqualified parameter through that owner
@@ -524,23 +834,8 @@ namespace motion {
                     // well; path-qualified sibling selectors remain isolated
                     // because their leaf parameter name does not match at the
                     // root.
-                    size_t ownerDepth = 0;
-                    for(const Player *owner = this;
-                        owner && ownerDepth++ < 32;
-                        owner = owner->_motionParentPlayer) {
-                        if(const auto it =
-                               owner->_evalResultValues.find(parameter.id);
-                           it != owner->_evalResultValues.end()) {
-                            rawValue = it->second;
-                            break;
-                        }
-                        if(const auto it =
-                               owner->_variableValues.find(parameter.id);
-                           it != owner->_variableValues.end()) {
-                            rawValue = it->second;
-                            break;
-                        }
-                    }
+                    const double rawValue = resolveMotionVariable(
+                        parameter.id, parameter.rangeBegin);
                     nodeTime = detail::parameterizedClipTime(
                         *activeClip, parameter, rawValue);
                 }
@@ -550,6 +845,14 @@ namespace motion {
             auto state = evaluateLayerContent(node.psbNode, nodeTime,
                                               node.nodeType,
                                               traceFrameSelection);
+            if(!node.meshCombinators.empty()) {
+                if(evaluateMeshCombinators(
+                       node.meshCombinators, resolveMotionVariable,
+                       node.meshControlPoints)) {
+                    state.hasMeshPayload = true;
+                    state.meshControlPoints = node.meshControlPoints;
+                }
+            }
             if(traceFrameSelection && state.debugEvaluated) {
                 detail::logoChainTraceLogf(
                     motionPath, "updateLayers.phase2.framesel", "0x6926B4/0x699AE4",
@@ -2544,6 +2847,16 @@ namespace motion {
                         for(const Player *owner = &child;
                             owner && variableOwners.insert(owner).second;
                             owner = owner->_motionParentPlayer) {
+                            if(owner->_runtime) {
+                                if(const auto it = owner->_runtime
+                                                       ->inheritedVariableInputs
+                                                       .find(parameter.id);
+                                   it != owner->_runtime
+                                             ->inheritedVariableInputs.end()) {
+                                    rawValue = it->second;
+                                    break;
+                                }
+                            }
                             if(const auto it =
                                    owner->_evalResultValues.find(parameter.id);
                                it != owner->_evalResultValues.end()) {
@@ -2750,9 +3063,11 @@ namespace motion {
                     if(child._runtime && ancestor->_runtime &&
                        child._runtime->activeMotion &&
                        ancestor->_runtime->activeMotion &&
-                       child._runtime->activeMotion->path ==
-                           ancestor->_runtime->activeMotion->path &&
-                       child._motionKey == ancestor->_motionKey) {
+                       sameMotionOwnershipIdentity(
+                           child._runtime->activeMotion->path,
+                           child._chara, child._motionKey,
+                           ancestor->_runtime->activeMotion->path,
+                           ancestor->_chara, ancestor->_motionKey)) {
                         cyclicMotionOwnership = true;
                         break;
                     }
@@ -2771,11 +3086,13 @@ namespace motion {
                     child._queuing = false;
                     if(LOGGER && std::getenv("AETHERKIRI_MOTION_DEBUG")) {
                         LOGGER->warn(
-                            "motion child cycle suppressed: parent={} node={} child={} depth={}",
+                            "motion child cycle suppressed: parent={} node={} child={} chara={} motion={} depth={}",
                             motionPath, mn.layerName,
                             child._runtime && child._runtime->activeMotion
                                 ? child._runtime->activeMotion->path
                                 : std::string("<none>"),
+                            detail::narrow(child._chara),
+                            detail::narrow(child._motionKey),
                             ownershipDepth);
                     }
                     continue;
@@ -4341,7 +4658,14 @@ namespace motion {
             }
         }
 
-        for(size_t i = 0; i < nodes.size(); ++i) {
+        // The runtime node vector is already stored in the authored buffer
+        // order expected by the render manager. Reversing the complete flat
+        // array also reverses unrelated equal-Z surfaces, allowing an opaque
+        // background leaf to cover the SD CG assembled before it.
+        for(size_t bufferPosition = 0;
+            bufferPosition < nodes.size(); ++bufferPosition) {
+            const size_t i = detail::nativeLayerBufferNodeIndex(
+                nodes.size(), bufferPosition);
             const auto &node = nodes[i];
             if(!node.accumulated.active) {
                 ++skipInactive;
@@ -4946,58 +5270,87 @@ namespace motion {
                 if(std::fabs(det) <= 1e-12) {
                     return;
                 }
-
-                auto deformPoint = [&](float &displayX, float &displayY) {
-                    const double translatedX =
-                        static_cast<double>(displayX) - dam[4];
-                    const double translatedY =
-                        static_cast<double>(displayY) - dam[5];
-                    float modelX = static_cast<float>(
-                        (dam[3] * translatedX - dam[2] * translatedY) / det);
-                    float modelY = static_cast<float>(
-                        (-dam[1] * translatedX + dam[0] * translatedY) / det);
-                    for(const int ancestorIndex : meshChain) {
-                        const auto &ancestor =
-                            _runtime->nodes[ancestorIndex];
-                        const float x = modelX + ancestor.meshInvOffX;
-                        const float y = modelY + ancestor.meshInvOffY;
-                        const float u = static_cast<float>(
-                            ancestor.meshInvM11 * x +
-                            ancestor.meshInvM12 * y);
-                        const float v = static_cast<float>(
-                            ancestor.meshInvM21 * x +
-                            ancestor.meshInvM22 * y);
-                        evaluateMotionBezierPatch(
-                            ancestor.meshWorldControlPoints.data(), u, v,
-                            modelX, modelY);
-                    }
-                    displayX = static_cast<float>(
-                        dam[0] * modelX + dam[2] * modelY + dam[4]);
-                    displayY = static_cast<float>(
-                        dam[1] * modelX + dam[3] * modelY + dam[5]);
-                };
+                const double inverseDeterminant = 1.0 / det;
+                std::vector<ExternalMeshTransform> meshTransforms;
+                meshTransforms.reserve(meshChain.size());
+                for(const int ancestorIndex : meshChain) {
+                    const auto &ancestor =
+                        _runtime->nodes[ancestorIndex];
+                    meshTransforms.push_back({
+                        ancestor.meshWorldControlPoints.data(),
+                        ancestor.meshInvM11, ancestor.meshInvM12,
+                        ancestor.meshInvM21, ancestor.meshInvM22,
+                        ancestor.meshInvOffX, ancestor.meshInvOffY
+                    });
+                }
 
                 size_t deformedEntries = 0;
                 for(auto &entry : pending.entries) {
                     if(!entry.hasOwnSource) {
                         continue;
                     }
-
-                    // Preserve authored child tessellation when present. For
-                    // an affine child leaf, deforming its four corners through
-                    // the external patch produces the same local head/face
-                    // orientation while retaining the renderer's fast affine
-                    // path; manufacturing a mesh for every eye/mouth fragment
-                    // multiplies hundreds of tiny GPU submissions per frame.
-                    for(size_t point = 0;
-                        point + 1 < entry.meshPoints.size(); point += 2) {
-                        deformPoint(entry.meshPoints[point],
-                                    entry.meshPoints[point + 1]);
-                    }
-                    for(size_t point = 0;
+                    // A native nodeType-3 render item owns the child Player's
+                    // completed output surface.  Our single-surface renderer
+                    // flattens that child instead, so the corresponding item
+                    // can have a source selector but no image-sized geometry
+                    // of its own (all four default corners are {0,0}).  Do not
+                    // feed that placeholder through the inherited mesh chain:
+                    // the native StepFrameMotionLayer path applies the chain
+                    // to the child before BuildLayerFrameInfo, never to a
+                    // synthetic zero-sized bitmap.
+                    float cornerMinX = entry.corners[0];
+                    float cornerMaxX = entry.corners[0];
+                    float cornerMinY = entry.corners[1];
+                    float cornerMaxY = entry.corners[1];
+                    for(size_t point = 2;
                         point + 1 < entry.corners.size(); point += 2) {
-                        deformPoint(entry.corners[point],
-                                    entry.corners[point + 1]);
+                        cornerMinX = std::min(cornerMinX,
+                                              entry.corners[point]);
+                        cornerMaxX = std::max(cornerMaxX,
+                                              entry.corners[point]);
+                        cornerMinY = std::min(cornerMinY,
+                                              entry.corners[point + 1]);
+                        cornerMaxY = std::max(cornerMaxY,
+                                              entry.corners[point + 1]);
+                    }
+                    const bool hasCornerGeometry =
+                        std::isfinite(cornerMinX) &&
+                        std::isfinite(cornerMaxX) &&
+                        std::isfinite(cornerMinY) &&
+                        std::isfinite(cornerMaxY) &&
+                        cornerMaxX - cornerMinX > 1e-5f &&
+                        cornerMaxY - cornerMinY > 1e-5f;
+                    const bool hasMeshGeometry =
+                        entry.meshPoints.size() >= 6;
+                    if(!hasCornerGeometry && !hasMeshGeometry) {
+                        continue;
+                    }
+
+                    // Native StepFrameMeshChain keeps an affine child Player
+                    // surface tessellated for the entire lifetime of an
+                    // inherited Bezier patch, then deforms every vertex. Four
+                    // corners cannot carry the eyelid curve to nested iris and
+                    // eye-white layers, and changing topology only after the
+                    // curve becomes nonlinear causes a blink-boundary flash.
+                    const auto &divisionNode =
+                        _runtime->nodes[meshChain.front()];
+                    detail::tessellatePreparedItemForExternalMesh(
+                        entry, _emoteMeshDivisionRatio,
+                        divisionNode.meshDivision);
+
+                    // Preserve authored child tessellation when present and
+                    // the compatibility grid manufactured above when the
+                    // external patch cannot be represented by four corners.
+                    deformExternalMeshPoints(
+                        entry.meshPoints.data(),
+                        entry.meshPoints.size() / 2,
+                        dam.data(), inverseDeterminant,
+                        meshTransforms.data(), meshTransforms.size(), true);
+                    if(hasCornerGeometry) {
+                        deformExternalMeshPoints(
+                            entry.corners.data(), entry.corners.size() / 2,
+                            dam.data(), inverseDeterminant,
+                            meshTransforms.data(), meshTransforms.size(), true);
                     }
 
                     bool haveBounds = false;
@@ -5017,7 +5370,7 @@ namespace motion {
                         includePoint(entry.meshPoints[point],
                                      entry.meshPoints[point + 1]);
                     }
-                    if(!haveBounds) {
+                    if(!haveBounds && hasCornerGeometry) {
                         for(size_t point = 0;
                             point + 1 < entry.corners.size(); point += 2) {
                             includePoint(entry.corners[point],
@@ -5262,15 +5615,18 @@ namespace motion {
                 }
             };
 
-        // Merge later siblings first. Child entries receive remapped indices;
-        // if an earlier sibling is merged first, those large child-local
-        // indices can be mistaken for parent indices by the next insertion and
-        // place later children behind a full-screen earlier child.
+        // The local node buffer and ordinary equal-Z leaves both preserve
+        // authored order. Emit sibling child buffers by that same parent-slot
+        // order before inserting each child at its slot. Reversing only the
+        // child list puts later-authored background motions over earlier
+        // button/character motions even though their local leaves are no
+        // longer reversed.
         std::stable_sort(
             pendingChildItems.begin(), pendingChildItems.end(),
             [](const PendingChildRenderItems &lhs,
                const PendingChildRenderItems &rhs) {
-                return lhs.parentNodeIndex > rhs.parentNodeIndex;
+                return detail::preparedChildParentSlotLess(
+                    lhs.parentNodeIndex, rhs.parentNodeIndex);
             });
 
         int nextMergedNodeIndex = static_cast<int>(_runtime->nodes.size());
@@ -5359,7 +5715,16 @@ namespace motion {
             auto insertPos = _runtime->preparedRenderItems.end();
             for(auto it = _runtime->preparedRenderItems.begin();
                 it != _runtime->preparedRenderItems.end(); ++it) {
-                if(it->nodeIndex > pending.parentNodeIndex) {
+                // Child node indices are remapped into the containing numeric
+                // namespace. Only a local-scope item can delimit the native
+                // parent slot; otherwise an already-inserted child's large
+                // index would move the next sibling to the wrong side. The
+                // local buffer preserves authored order, so the child is
+                // emitted at its parent slot: after earlier backdrop/mask
+                // nodes and before the next later local node.
+                if(it->renderScopeId == localRenderScopeId &&
+                   detail::preparedLocalNodeFollowsChildSlot(
+                       it->nodeIndex, pending.parentNodeIndex)) {
                     insertPos = it;
                     break;
                 }

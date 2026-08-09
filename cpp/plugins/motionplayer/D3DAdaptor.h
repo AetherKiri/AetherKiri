@@ -8,8 +8,10 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <vector>
 #include <spdlog/spdlog.h>
+#include "godot/GodotGpuBridge.h"
 #include "tjs.h"
 #include "LayerIntf.h"
 
@@ -66,6 +68,33 @@ namespace motion {
         void registerBg() {}
         void registerCaption() {}
         void unloadUnusedTextures() {}
+
+        // Keep one explicit bridge batch open across the complete D3DEmote
+        // transaction (draw, capture, redraw, and final layer assignment).
+        // Player's own render scopes nest inside this one without draining.
+        bool beginGpuBatch() {
+            if(_gpuBatchDepth != 0) {
+                ++_gpuBatchDepth;
+                return _gpuBatch && _gpuBatch->active();
+            }
+
+            // Commit the local nesting state only after the scope has been
+            // constructed.  If allocation or the bridge callback throws, a
+            // script-side compatibility wrapper can continue drawing without
+            // leaving this adaptor permanently stuck at depth one.
+            auto batch = std::make_unique<TVPGodotGpuBatchScope>();
+            _gpuBatch = std::move(batch);
+            _gpuBatchDepth = 1;
+            return _gpuBatch->active();
+        }
+
+        bool endGpuBatch() {
+            if(_gpuBatchDepth == 0) return true;
+            if(--_gpuBatchDepth != 0) return true;
+            if(!_gpuBatch) return true;
+            auto batch = std::move(_gpuBatch);
+            return batch->finish();
+        }
 
         // Retain the layer produced by Player::renderToD3DAdaptor so
         // captureCanvas can keep the transfer on the active render backend.
@@ -291,6 +320,8 @@ namespace motion {
         bool _alphaOpAdd = false;
         int _clearColor = 0;
         tTJSVariant _renderedLayer;
+        std::unique_ptr<TVPGodotGpuBatchScope> _gpuBatch;
+        std::uint32_t _gpuBatchDepth = 0;
         tTJSVariant _retainedPresentationLayer;
         std::chrono::steady_clock::time_point _uncapturedDrawStartedAt{};
         std::size_t _drawsSinceCapture = 0;

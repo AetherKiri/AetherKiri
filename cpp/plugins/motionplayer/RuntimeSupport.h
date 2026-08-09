@@ -11,6 +11,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -223,6 +224,13 @@ namespace motion::detail {
         std::shared_ptr<const PSB::PSBDictionary> root;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBResource>>
             resourcesByPath;
+        // Immutable PSB resources are shared by every Player bound to this
+        // snapshot. Fingerprinting a multi-megabyte embedded image once per
+        // Player made animated title scenes repeatedly rescan the same bytes.
+        mutable std::mutex sourceFingerprintMutex;
+        mutable std::unordered_map<
+            const PSB::PSBResource *,
+            std::pair<std::uint64_t, std::uint64_t>> sourceFingerprints;
         tTJSVariant moduleValue;
         std::vector<std::string> mainTimelineLabels;
         std::vector<std::string> diffTimelineLabels;
@@ -284,6 +292,8 @@ namespace motion::detail {
         // other is cleared and rebuilt.
         std::array<tTJSVariant, 2> d3dRenderLayers;
         std::size_t nextD3DRenderLayer = 0;
+        std::size_t lastD3DRenderLayer = 0;
+        std::uint64_t lastD3DRasterPublishUs = 0;
         // Stable visible endpoint for D3DAffineSourceMotion scripts that
         // present Player.draw() directly instead of calling captureCanvas().
         // AssignMotionImages swaps completed scratch textures into this layer
@@ -294,19 +304,55 @@ namespace motion::detail {
         tTJSVariant presentationRenderLayer;
         // Reusable work layer for sub_6C4E28-style per-item local clipping.
         tTJSVariant scratchWorkLayer;
+        // Stable ownerless framebuffer used by the private E-mote bridge's
+        // RGBA export path. Creating and releasing a full-size Godot/Metal
+        // texture on every frame leaves thousands of resources pending on
+        // the render thread and can grow the process footprint by gigabytes
+        // per minute. Keep one surface per Player and resize it only when the
+        // requested export dimensions grow.
+        tTJSVariant headlessRgbaRenderLayer;
+        // Cropped Artemis E-mote exports use a separate surface. The first
+        // frame establishes alpha bounds at full-stage size; keeping that
+        // large backing texture would make every later cropped readback pay
+        // for the original 1920x1080 allocation.
+        tTJSVariant headlessRgbaRegionRenderLayer;
+        tTJSVariant headlessRgbaRegionRenderLayer2;
+        // A provider can submit several independent E-mote surfaces before
+        // synchronizing their GPU readbacks, matching Artemis' framebuffer
+        // display pass instead of serially stalling after every player.
+        bool headlessRgbaRenderPending = false;
+        bool headlessRgbaPendingFullStage = false;
+        int headlessRgbaPendingSlot = 0;
+        int headlessRgbaPendingWidth = 0;
+        int headlessRgbaPendingHeight = 0;
+        std::array<uint64_t, 2> headlessRgbaReadbackRequests{};
+        std::array<uint64_t, 2> headlessRgbaReadbackSequences{};
+        std::array<bool, 2> headlessRgbaReadbackFullStage{};
+        std::array<int, 2> headlessRgbaReadbackSlots{};
+        std::array<int, 2> headlessRgbaReadbackWidths{};
+        std::array<int, 2> headlessRgbaReadbackHeights{};
+        uint64_t headlessRgbaNextReadbackSequence = 1;
         // Source bitmaps decoded for the active motion. Building these from PSB
         // resources is expensive enough to be visible during title animations.
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
             motionSourceBitmapCache;
-        // E-mote atlases are shared by many icon sources. Building the
-        // cross-player bitmap-cache key fingerprints the complete atlas
-        // bytes, so remember that content fingerprint for this runtime
-        // instead of rescanning the same multi-megabyte resource once per
-        // icon. The cache is cleared whenever the active motion changes,
-        // keeping the resource-pointer identity bounded by its snapshot.
-        std::unordered_map<const PSB::PSBResource *,
-                           std::pair<std::uint64_t, std::uint64_t>>
-            motionSourceResourceFingerprintCache;
+        // A decoded atlas icon may retain a small filtering gutter around its
+        // logical image.  Keep the sampling rectangle beside the cached
+        // bitmap so prepared/tinted variants use the same coordinates.
+        std::unordered_map<std::string, std::array<int, 4>>
+            motionSourceBitmapRects;
+        struct MotionSourceBitmapTraits {
+            bool alphaOnlyKnown = false;
+            bool alphaOnly = false;
+            bool whiteMaskKnown = false;
+            bool whiteMask = false;
+            bool hasWhitePixelsKnown = false;
+            bool hasWhitePixels = false;
+        };
+        // Source classification samples immutable pixels. Cache the result so
+        // color animation does not resample the same bitmap for every tint.
+        std::unordered_map<std::string, MotionSourceBitmapTraits>
+            motionSourceBitmapTraits;
         struct MotionSourceMetadata {
             int width = 0;
             int height = 0;
@@ -337,9 +383,9 @@ namespace motion::detail {
         std::unordered_map<iTJSDispatch2 *, PresentationRenderCacheEntry>
             presentationRenderCache;
         int presentationRenderReuseSkips = 0;
-        // D3DEmote draws every character through one shared work layer.  A
+        // E-mote can draw several characters through shared work layers. A
         // target-only cache cannot survive the next character overwriting
-        // that layer, so retain this player's completed frame separately.
+        // that layer, so retain each player's completed frame separately.
         // The bitmap keeps Godot-native GPU contents resident when available.
         struct EmoteRenderFrameCacheEntry {
             std::shared_ptr<tTVPBaseBitmap> bitmap;
@@ -352,6 +398,12 @@ namespace motion::detail {
         };
         EmoteRenderFrameCacheEntry emoteRenderFrameCache;
         int emoteRenderFrameReuseSkips = 0;
+        // The D3D adaptor route clears to transparent and hands a private
+        // scratch texture to captureCanvas. Keep it separate from the direct
+        // layer route, whose authored target can have a different neutral
+        // color and presentation lifetime.
+        EmoteRenderFrameCacheEntry d3dEmoteRenderFrameCache;
+        int d3dEmoteRenderFrameReuseSkips = 0;
         // E-mote rebuilds the render-command vector on every tick, but most
         // transformed leaves and composite subtrees are unchanged between
         // ticks. Keep their GPU-backed work layers alive across that rebuild
@@ -547,6 +599,38 @@ namespace motion::detail {
         // every nested E-mote part. Remember the last inherited values so an
         // unchanged input does not dirty the entire child model again.
         std::unordered_map<std::string, double> inheritedVariableInputs;
+        // Layer evaluation overlays persistent, evaluated and inherited
+        // variables on every tick. Retain the union's nodes between ticks so
+        // stable E-mote variable tables update values in place instead of
+        // allocating and destroying two temporary unordered_maps per frame.
+        // The generation excludes labels which disappeared this tick without
+        // requiring the scratch map itself to be cleared.
+        struct EffectiveVariableScratchEntry {
+            double value = 0.0;
+            std::uint64_t generation = 0;
+            bool hasRoutingNode = false;
+        };
+        std::unordered_map<std::string, EffectiveVariableScratchEntry>
+            effectiveVariableScratch;
+        std::uint64_t effectiveVariableScratchGeneration = 0;
+
+        std::uint64_t beginEffectiveVariableScratch() {
+            ++effectiveVariableScratchGeneration;
+            if(effectiveVariableScratchGeneration == 0) {
+                effectiveVariableScratch.clear();
+                effectiveVariableScratchGeneration = 1;
+            }
+            return effectiveVariableScratchGeneration;
+        }
+
+        void setEffectiveVariableScratch(
+            const std::string &label, double value) {
+            auto [it, inserted] = effectiveVariableScratch.try_emplace(label);
+            (void)inserted;
+            it->second.value = value;
+            it->second.generation = effectiveVariableScratchGeneration;
+            it->second.hasRoutingNode = false;
+        }
         // Nested motion players can keep their flattened render description
         // until either their evaluated layer state or inherited draw affine
         // changes. Top-level players still rebuild every animated tick.
@@ -588,22 +672,130 @@ namespace motion::detail {
 
         void clearMotionBitmapCaches() {
             motionSourceBitmapCache.clear();
-            motionSourceResourceFingerprintCache.clear();
+            motionSourceBitmapRects.clear();
+            motionSourceBitmapTraits.clear();
             motionSourceMetadataCache.clear();
             motionPreparedBitmapCache.clear();
             motionPreparedMaterializedKeysBySource.clear();
             emoteRenderFrameCache = {};
             emoteRenderFrameReuseSkips = 0;
+            d3dEmoteRenderFrameCache = {};
+            d3dEmoteRenderFrameReuseSkips = 0;
             emoteCommandOutputCache.clear();
             emoteCommandOutputCacheGeneration = 0;
             emoteCommandOutputCacheHits = 0;
             emoteCommandLeafCacheHits = 0;
+            nextD3DRenderLayer = 0;
+            lastD3DRenderLayer = 0;
+            lastD3DRasterPublishUs = 0;
             inheritedVariableInputs.clear();
+            effectiveVariableScratch.clear();
+            effectiveVariableScratchGeneration = 0;
             preparedRenderItems.clear();
             preparedRenderItemsValid = false;
             clearPresentationRenderReuse();
         }
     };
+
+    inline std::size_t nativeLayerBufferNodeIndex(
+        std::size_t nodeCount,
+        std::size_t bufferPosition) {
+        (void)nodeCount;
+        return bufferPosition;
+    }
+
+    inline bool preparedLocalNodeFollowsChildSlot(
+        int localNodeIndex,
+        int childParentNodeIndex) {
+        return localNodeIndex > childParentNodeIndex;
+    }
+
+    inline bool preparedChildParentSlotLess(
+        int lhsParentNodeIndex,
+        int rhsParentNodeIndex) {
+        return lhsParentNodeIndex < rhsParentNodeIndex;
+    }
+
+    inline bool tessellatePreparedItemForExternalMesh(
+        PlayerRuntime::PreparedRenderItem &entry,
+        double meshDivisionRatio,
+        int meshDivision) {
+        if(!entry.meshPoints.empty() || entry.meshType != 0) {
+            return false;
+        }
+
+        float minX = entry.corners[0];
+        float maxX = entry.corners[0];
+        float minY = entry.corners[1];
+        float maxY = entry.corners[1];
+        for(std::size_t point = 2;
+            point + 1 < entry.corners.size(); point += 2) {
+            minX = std::min(minX, entry.corners[point]);
+            maxX = std::max(maxX, entry.corners[point]);
+            minY = std::min(minY, entry.corners[point + 1]);
+            maxY = std::max(maxY, entry.corners[point + 1]);
+        }
+        if(!std::isfinite(minX) || !std::isfinite(maxX) ||
+           !std::isfinite(minY) || !std::isfinite(maxY) ||
+           maxX - minX <= 1e-5f || maxY - minY <= 1e-5f) {
+            return false;
+        }
+
+        // libartemis MMotionPlayer::StepFrameMeshChain first expands an
+        // affine child surface into a stable grid whenever a parent Bezier
+        // patch exists. It then transforms every grid vertex through that
+        // patch. Keeping this topology stable even while the patch happens to
+        // be affine avoids a one-frame topology change at blink boundaries.
+        const int divisionTotal = std::clamp(static_cast<int>(
+            meshDivisionRatio * static_cast<double>(std::max(1, meshDivision))),
+            2, 50);
+        const double width = 0.5 * (
+            std::hypot(entry.corners[2] - entry.corners[0],
+                       entry.corners[3] - entry.corners[1]) +
+            std::hypot(entry.corners[4] - entry.corners[6],
+                       entry.corners[5] - entry.corners[7]));
+        const double height = 0.5 * (
+            std::hypot(entry.corners[6] - entry.corners[0],
+                       entry.corners[7] - entry.corners[1]) +
+            std::hypot(entry.corners[4] - entry.corners[2],
+                       entry.corners[5] - entry.corners[3]));
+        const double extent = width + height;
+        int xSegments = extent > 0.0001
+            ? static_cast<int>(
+                  static_cast<double>(divisionTotal) * width / extent)
+            : divisionTotal / 2;
+        xSegments = std::clamp(xSegments, 1, divisionTotal - 1);
+        const int ySegments = divisionTotal - xSegments;
+
+        entry.meshDivX = xSegments + 1;
+        entry.meshDivY = ySegments + 1;
+        entry.meshType = 2;
+        entry.meshPoints.resize(static_cast<std::size_t>(
+            entry.meshDivX * entry.meshDivY * 2));
+        for(int y = 0; y < entry.meshDivY; ++y) {
+            const float v = static_cast<float>(y) /
+                static_cast<float>(entry.meshDivY - 1);
+            for(int x = 0; x < entry.meshDivX; ++x) {
+                const float u = static_cast<float>(x) /
+                    static_cast<float>(entry.meshDivX - 1);
+                const float topX =
+                    entry.corners[0] * (1.f - u) + entry.corners[2] * u;
+                const float topY =
+                    entry.corners[1] * (1.f - u) + entry.corners[3] * u;
+                const float bottomX =
+                    entry.corners[6] * (1.f - u) + entry.corners[4] * u;
+                const float bottomY =
+                    entry.corners[7] * (1.f - u) + entry.corners[5] * u;
+                const std::size_t offset = static_cast<std::size_t>(
+                    (y * entry.meshDivX + x) * 2);
+                entry.meshPoints[offset] =
+                    topX * (1.f - v) + bottomX * v;
+                entry.meshPoints[offset + 1] =
+                    topY * (1.f - v) + bottomY * v;
+            }
+        }
+        return true;
+    }
 
     std::shared_ptr<PlayerRuntime> makePlayerRuntime();
     const MotionClip *findMotionClip(const MotionSnapshot &snapshot,
@@ -630,7 +822,9 @@ namespace motion::detail {
 
     std::shared_ptr<MotionSnapshot> loadMotionSnapshot(const ttstr &path,
                                                        tjs_int decryptSeed);
-    tTJSVariant loadPSBVariant(const ttstr &path, tjs_int decryptSeed);
+    tTJSVariant loadPSBVariant(
+        const ttstr &path, tjs_int decryptSeed,
+        std::shared_ptr<MotionSnapshot> *loadedSnapshot = nullptr);
 
     void registerModuleSnapshot(const tTJSVariant &module,
                                 const std::shared_ptr<MotionSnapshot> &snapshot);

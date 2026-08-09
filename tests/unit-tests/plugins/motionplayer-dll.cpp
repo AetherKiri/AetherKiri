@@ -7,6 +7,8 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -16,6 +18,7 @@
 #include <lz4frame.h>
 #endif
 
+#include "motionplayer/D3DEmoteModule.h"
 #include "motionplayer/EmotePlayer.h"
 #include "motionplayer/MotionPlayerExtension.h"
 #include "motionplayer/MotionNode.h"
@@ -31,11 +34,32 @@
 #include "SysInitImpl.h"
 #include "psbfile/PSBValue.h"
 #include "psbfile/PSBFile.h"
+#include "psbfile/PSBMedia.h"
 #include "test_config.h"
 #include "tjsObject.h"
 
 extern tTJS *TVPScriptEngine;
 extern "C" void TVPRegisterMotionPlayerPluginAnchor();
+
+namespace motion::detail {
+    std::size_t deformExternalMeshPointsForTesting(
+        float *interleavedPoints,
+        std::size_t pointCount,
+        const double *drawAffine,
+        const double *meshInverseMatrices,
+        const float *meshInverseOffsets,
+        const float *meshControlPoints,
+        std::size_t meshChainSize,
+        bool allowArmNeon);
+}
+
+namespace motion {
+    struct PlayerTestAccess {
+        static void enableAutoProgress(Player &player, iTJSDispatch2 *dispatch) {
+            player.enableAutoProgress(dispatch);
+        }
+    };
+}
 
 #if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
 namespace {
@@ -47,6 +71,28 @@ namespace {
 #endif
 
 #if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
+TEST_CASE("PSB media policy does not initialize a legacy host data path") {
+    // Artemis supplies physical E-mote files directly. Constructing the PSB
+    // resource medium must therefore be safe before a KiriKiri application
+    // or data path exists.
+    REQUIRE(TVPNativeDataPath.IsEmpty());
+    REQUIRE_NOTHROW(PSB::PSBMedia{});
+    REQUIRE(TVPNativeDataPath.IsEmpty());
+}
+
+TEST_CASE("motionplayer provides native randomness without a script host") {
+    REQUIRE(TVPGetScriptEngine() == nullptr);
+    motion::Player player;
+    bool sawNonZero = false;
+    for(int index = 0; index < 8; ++index) {
+        const double value = player.random();
+        REQUIRE(value >= 0.0);
+        REQUIRE(value < 1.0);
+        sawNonZero = sawNonZero || value != 0.0;
+    }
+    REQUIRE(sawNonZero);
+}
+
 TEST_CASE("PSBFile unwraps LZ4-frame motion resources") {
     std::ifstream input(
         TEST_FILES_PATH "/emote/e-mote3.0バニラパジャマa.psb",
@@ -109,6 +155,43 @@ TEST_CASE("motionplayer optional E-mote extension matches build mode") {
 #endif
 }
 
+TEST_CASE("motionplayer reuses effective-variable scratch across frames") {
+    motion::detail::PlayerRuntime runtime;
+
+    const auto firstGeneration = runtime.beginEffectiveVariableScratch();
+    runtime.setEffectiveVariableScratch("face_talk", 0.25);
+    runtime.setEffectiveVariableScratch("face_talk", 0.75);
+    runtime.setEffectiveVariableScratch("slot01/disable", 1.0);
+
+    auto firstFace = runtime.effectiveVariableScratch.find("face_talk");
+    auto firstSlot =
+        runtime.effectiveVariableScratch.find("slot01/disable");
+    REQUIRE(firstFace != runtime.effectiveVariableScratch.end());
+    REQUIRE(firstSlot != runtime.effectiveVariableScratch.end());
+    CHECK(firstFace->second.generation == firstGeneration);
+    CHECK(firstFace->second.value == 0.75);
+    firstFace->second.hasRoutingNode = true;
+    const auto *const faceStorage = &firstFace->second;
+
+    const auto secondGeneration = runtime.beginEffectiveVariableScratch();
+    runtime.setEffectiveVariableScratch("face_talk", 0.5);
+
+    auto secondFace = runtime.effectiveVariableScratch.find("face_talk");
+    REQUIRE(secondFace != runtime.effectiveVariableScratch.end());
+    CHECK(&secondFace->second == faceStorage);
+    CHECK(secondFace->second.generation == secondGeneration);
+    CHECK(secondFace->second.value == 0.5);
+    CHECK_FALSE(secondFace->second.hasRoutingNode);
+    // A label omitted from the new overlay remains allocated for later reuse,
+    // but its old value is not part of the current frame.
+    CHECK(firstSlot->second.generation == firstGeneration);
+    CHECK(firstSlot->second.generation != secondGeneration);
+
+    runtime.clearMotionBitmapCaches();
+    CHECK(runtime.effectiveVariableScratch.empty());
+    CHECK(runtime.effectiveVariableScratchGeneration == 0);
+}
+
 TEST_CASE("motionplayer honors a split module's authored composition entry point") {
     motion::detail::MotionSnapshot snapshot;
     auto root = std::make_shared<PSB::PSBDictionary>();
@@ -167,6 +250,46 @@ TEST_CASE("motion presentation excludes structural binder layers") {
         motion::internal::presentationLayerTypeCanReceivePixels(ltOpaque));
     REQUIRE(
         motion::internal::presentationLayerTypeCanReceivePixels(ltAlpha));
+}
+
+TEST_CASE("D3D E-mote frame reuse only covers its transparent scratch route") {
+    using motion::internal::d3dEmoteFrameReuseRouteEligible;
+
+    CHECK(d3dEmoteFrameReuseRouteEligible(true, false, 1));
+    CHECK_FALSE(d3dEmoteFrameReuseRouteEligible(false, false, 1));
+    CHECK_FALSE(d3dEmoteFrameReuseRouteEligible(true, true, 1));
+    CHECK_FALSE(d3dEmoteFrameReuseRouteEligible(true, false, 0));
+}
+
+TEST_CASE("D3D E-mote frame cache requires exact render identity") {
+    using motion::internal::d3dEmoteFrameCacheMatches;
+
+    motion::detail::PlayerRuntime::EmoteRenderFrameCacheEntry entry;
+    entry.bitmap = std::make_shared<tTVPBaseBitmap>(2, 3, 32);
+    entry.motion = "emote/vanilla";
+    entry.frame = 12.5;
+    entry.canvasWidth = 2;
+    entry.canvasHeight = 3;
+    entry.commandSignature = 0x1234u;
+
+    CHECK(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.5, 2, 3, 0x1234u));
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/chocola", 12.5, 2, 3, 0x1234u));
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.51, 2, 3, 0x1234u));
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.5, 3, 3, 0x1234u));
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.5, 2, 3, 0x4321u));
+
+    entry.canvasWidth = 4;
+    entry.canvasHeight = 5;
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.5, 4, 5, 0x1234u));
+    entry.bitmap.reset();
+    CHECK_FALSE(d3dEmoteFrameCacheMatches(
+        entry, "emote/vanilla", 12.5, 4, 5, 0x1234u));
 }
 
 TEST_CASE("startup logo presentation preserves its authored origin") {
@@ -755,6 +878,20 @@ namespace {
 
 } // namespace
 
+TEST_CASE("manual Motion.Player progress owns the playback clock") {
+    motion::Player player;
+    auto *dispatch = new tTJSDispatch();
+    motion::PlayerTestAccess::enableAutoProgress(player, dispatch);
+    CHECK(player.getAutoProgressDispatchForCompat() == dispatch);
+
+    // Even an initial zero-delta refresh means that the script owns this
+    // player's wall clock.  Leaving the continuous callback registered here
+    // double-counts a slow frame when the next script delta arrives.
+    player.frameProgressManually(0.0);
+    CHECK(player.getAutoProgressDispatchForCompat() == nullptr);
+    dispatch->Release();
+}
+
 TEST_CASE("storage resolves logical E-mote PSBs to DirectX exports") {
     ensurePluginRuntime();
     TemporaryAutoPath autoPath;
@@ -922,6 +1059,346 @@ TEST_CASE("motionplayer maps parameter values across the authored clip span") {
     }
 }
 
+TEST_CASE("motionplayer tessellates nested surfaces before inherited Bezier deformation") {
+    motion::detail::PlayerRuntime::PreparedRenderItem item;
+    item.meshType = 0;
+    item.corners = {
+        10.0f, 20.0f,
+        110.0f, 10.0f,
+        130.0f, 90.0f,
+        0.0f, 100.0f,
+    };
+
+    REQUIRE(motion::detail::tessellatePreparedItemForExternalMesh(
+        item, 1.0, 4));
+    CHECK(item.meshType == 2);
+    CHECK(item.meshDivX == 3);
+    CHECK(item.meshDivY == 3);
+    REQUIRE(item.meshPoints.size() == 18);
+
+    CHECK(item.meshPoints[0] == Catch::Approx(10.0f));
+    CHECK(item.meshPoints[1] == Catch::Approx(20.0f));
+    CHECK(item.meshPoints[8] == Catch::Approx(62.5f));
+    CHECK(item.meshPoints[9] == Catch::Approx(55.0f));
+    CHECK(item.meshPoints[16] == Catch::Approx(130.0f));
+    CHECK(item.meshPoints[17] == Catch::Approx(90.0f));
+
+    const auto stablePoints = item.meshPoints;
+    CHECK_FALSE(motion::detail::tessellatePreparedItemForExternalMesh(
+        item, 1.0, 4));
+    CHECK(item.meshPoints == stablePoints);
+
+    motion::detail::PlayerRuntime::PreparedRenderItem degenerate;
+    degenerate.corners.fill(12.0f);
+    CHECK_FALSE(motion::detail::tessellatePreparedItemForExternalMesh(
+        degenerate, 1.0, 4));
+    CHECK(degenerate.meshPoints.empty());
+    CHECK(degenerate.meshType == 0);
+}
+
+TEST_CASE("motionplayer batches external Bezier mesh chains without changing geometry") {
+    const std::array<double, 6> drawAffine{
+        1.15, 0.08, -0.12, 0.93, 31.0, -17.0
+    };
+    constexpr std::size_t chainSize = 2;
+    const std::array<double, chainSize * 4> inverseMatrices{
+        0.040, 0.003, -0.002, 0.050,
+        0.055, -0.004, 0.003, 0.045
+    };
+    const std::array<float, chainSize * 2> inverseOffsets{
+        2.0f, -1.0f,
+        -0.5f, 1.25f
+    };
+    std::array<float, chainSize * 32> controlPoints{};
+    for(std::size_t chainIndex = 0;
+        chainIndex < chainSize; ++chainIndex) {
+        for(int row = 0; row < 4; ++row) {
+            for(int column = 0; column < 4; ++column) {
+                const float u = static_cast<float>(column) / 3.0f;
+                const float v = static_cast<float>(row) / 3.0f;
+                const std::size_t offset =
+                    chainIndex * 32 +
+                    static_cast<std::size_t>(row * 4 + column) * 2;
+                if(chainIndex == 0) {
+                    controlPoints[offset] =
+                        -10.0f + 22.0f * u + 2.0f * v +
+                        0.7f * u * v;
+                    controlPoints[offset + 1] =
+                        -8.0f + 1.5f * u + 18.0f * v -
+                        0.4f * u * v;
+                } else {
+                    controlPoints[offset] =
+                        3.0f + 14.0f * u - 2.0f * v +
+                        0.5f * u * v;
+                    controlPoints[offset + 1] =
+                        -4.0f + 3.0f * u + 16.0f * v +
+                        0.3f * u * v;
+                }
+            }
+        }
+    }
+
+    const std::vector<float> sourcePoints{
+        18.0f, -23.0f,
+        21.5f, -19.0f,
+        25.0f, -15.5f,
+        28.5f, -12.0f,
+        32.0f, -8.5f,
+        35.5f, -5.0f,
+        39.0f, -1.5f,
+        42.5f, 2.0f,
+        46.0f, 5.5f,
+        49.5f, 9.0f,
+        53.0f, 12.5f,
+    };
+
+    auto evaluateLegacyPatch = [](
+        const float *mesh, float u, float v,
+        float &outX, float &outY) {
+        const float su = 1.0f - u;
+        const float sv = 1.0f - v;
+        const float bu[4] = {
+            su * su * su,
+            3.0f * su * su * u,
+            3.0f * su * u * u,
+            u * u * u,
+        };
+        const float bv[4] = {
+            sv * sv * sv,
+            3.0f * sv * sv * v,
+            3.0f * sv * v * v,
+            v * v * v,
+        };
+        float rowX[4];
+        float rowY[4];
+        for(int row = 0; row < 4; ++row) {
+            const float *points = mesh + row * 8;
+            rowX[row] =
+                points[0] * bu[0] + points[2] * bu[1] +
+                points[4] * bu[2] + points[6] * bu[3];
+            rowY[row] =
+                points[1] * bu[0] + points[3] * bu[1] +
+                points[5] * bu[2] + points[7] * bu[3];
+        }
+        outX =
+            rowX[0] * bv[0] + rowX[1] * bv[1] +
+            rowX[2] * bv[2] + rowX[3] * bv[3];
+        outY =
+            rowY[0] * bv[0] + rowY[1] * bv[1] +
+            rowY[2] * bv[2] + rowY[3] * bv[3];
+    };
+
+    auto legacyPoints = sourcePoints;
+    const double determinant =
+        drawAffine[0] * drawAffine[3] -
+        drawAffine[2] * drawAffine[1];
+    for(std::size_t pointIndex = 0;
+        pointIndex < legacyPoints.size() / 2; ++pointIndex) {
+        const std::size_t offset = pointIndex * 2;
+        const double translatedX =
+            static_cast<double>(legacyPoints[offset]) - drawAffine[4];
+        const double translatedY =
+            static_cast<double>(legacyPoints[offset + 1]) - drawAffine[5];
+        float modelX = static_cast<float>(
+            (drawAffine[3] * translatedX -
+             drawAffine[2] * translatedY) / determinant);
+        float modelY = static_cast<float>(
+            (-drawAffine[1] * translatedX +
+             drawAffine[0] * translatedY) / determinant);
+        for(std::size_t chainIndex = 0;
+            chainIndex < chainSize; ++chainIndex) {
+            const double *matrix =
+                inverseMatrices.data() + chainIndex * 4;
+            const float *inverseOffset =
+                inverseOffsets.data() + chainIndex * 2;
+            const float x = modelX + inverseOffset[0];
+            const float y = modelY + inverseOffset[1];
+            const float u = static_cast<float>(
+                matrix[0] * x + matrix[1] * y);
+            const float v = static_cast<float>(
+                matrix[2] * x + matrix[3] * y);
+            evaluateLegacyPatch(
+                controlPoints.data() + chainIndex * 32,
+                u, v, modelX, modelY);
+        }
+        legacyPoints[offset] = static_cast<float>(
+            drawAffine[0] * modelX + drawAffine[2] * modelY +
+            drawAffine[4]);
+        legacyPoints[offset + 1] = static_cast<float>(
+            drawAffine[1] * modelX + drawAffine[3] * modelY +
+            drawAffine[5]);
+    }
+
+    auto scalarPoints = sourcePoints;
+    CHECK(motion::detail::deformExternalMeshPointsForTesting(
+              scalarPoints.data(), scalarPoints.size() / 2,
+              drawAffine.data(), inverseMatrices.data(),
+              inverseOffsets.data(), controlPoints.data(),
+              chainSize, false) == 0);
+    auto batchedPoints = sourcePoints;
+    const auto vectorBatchCount =
+        motion::detail::deformExternalMeshPointsForTesting(
+            batchedPoints.data(), batchedPoints.size() / 2,
+            drawAffine.data(), inverseMatrices.data(),
+            inverseOffsets.data(), controlPoints.data(),
+            chainSize, true);
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+    CHECK(vectorBatchCount == sourcePoints.size() / 8);
+#else
+    CHECK(vectorBatchCount == 0);
+#endif
+
+    REQUIRE(scalarPoints.size() == legacyPoints.size());
+    REQUIRE(batchedPoints.size() == legacyPoints.size());
+    for(std::size_t index = 0; index < legacyPoints.size(); ++index) {
+        REQUIRE(std::isfinite(legacyPoints[index]));
+        CHECK(scalarPoints[index] ==
+              Catch::Approx(legacyPoints[index]).margin(0.0001));
+        CHECK(batchedPoints[index] ==
+              Catch::Approx(legacyPoints[index]).margin(0.0002));
+    }
+}
+
+TEST_CASE("motionplayer preserves authored equal-Z E-mote layer order") {
+    constexpr std::size_t nodeCount = 6;
+    std::array<std::size_t, nodeCount> order{};
+    for(std::size_t position = 0; position < nodeCount; ++position) {
+        order[position] = motion::detail::nativeLayerBufferNodeIndex(
+            nodeCount, position);
+    }
+    CHECK(order == (std::array<std::size_t, nodeCount>{0, 1, 2, 3, 4, 5}));
+
+    // Both startup motions from PR #56 author their opaque white backdrop
+    // before the animated logo artwork. Reversing the flat buffer makes the
+    // backdrop the final equal-Z draw and turns the complete animation white.
+    constexpr std::array<std::string_view, 3> yuzuLogoNodes{
+        "src/yuzu/white_box",
+        "src/yuzu/yuzu_logo",
+        "src/yuzu/software",
+    };
+    constexpr std::array<std::string_view, 3> m2LogoNodes{
+        "src/logo/icon50",
+        "src/logo/icon42",
+        "src/bure2/icon1",
+    };
+    CHECK(yuzuLogoNodes[motion::detail::nativeLayerBufferNodeIndex(
+              yuzuLogoNodes.size(), 0)] == "src/yuzu/white_box");
+    CHECK(m2LogoNodes[motion::detail::nativeLayerBufferNodeIndex(
+              m2LogoNodes.size(), 0)] == "src/logo/icon50");
+}
+
+TEST_CASE("motionplayer merges child animation at its authored parent slot") {
+    // A common SD layout authors its opaque mask/background first and then
+    // places animated character children in later nodeType-3 slots. The
+    // child must not be inserted before those earlier local layers or the
+    // background will be drawn last and cover the complete character.
+    CHECK_FALSE(motion::detail::preparedLocalNodeFollowsChildSlot(1, 4));
+    CHECK_FALSE(motion::detail::preparedLocalNodeFollowsChildSlot(2, 4));
+    CHECK_FALSE(motion::detail::preparedLocalNodeFollowsChildSlot(4, 4));
+    CHECK(motion::detail::preparedLocalNodeFollowsChildSlot(5, 4));
+}
+
+TEST_CASE("motionplayer preserves authored sibling child order") {
+    // MSGWIN-style layouts author a background child, then its button
+    // children. Reversing sibling child collection paints the background
+    // last and hides every button even though all child textures rendered.
+    CHECK(motion::detail::preparedChildParentSlotLess(1, 3));
+    CHECK(motion::detail::preparedChildParentSlotLess(9, 11));
+    CHECK_FALSE(motion::detail::preparedChildParentSlotLess(11, 9));
+}
+
+TEST_CASE("motionplayer parses and combines E-mote secondary-motion meshes") {
+    const auto &identity = motion::internal::identityMeshControlPoints();
+    std::array<float, 32> up = identity;
+    std::array<float, 32> down = identity;
+    for(std::size_t index = 17; index < up.size(); index += 2) {
+        up[index] -= 0.2f;
+        down[index] += 0.2f;
+    }
+
+    std::array<float, 32> left{};
+    std::array<float, 32> centered{};
+    std::array<float, 32> right{};
+    for(std::size_t index = 16; index < left.size(); index += 2) {
+        left[index] = -0.1f;
+        right[index] = 0.1f;
+    }
+
+    const auto makeCombinator = [](
+        const std::string &key,
+        const std::vector<std::array<float, 32>> &meshes,
+        int neutralIndex) {
+        auto variable = std::make_shared<PSB::PSBDictionary>();
+        variable->emplace("key", std::make_shared<PSB::PSBString>(key));
+        variable->emplace("rangeBegin", std::make_shared<PSB::PSBNumber>(-30));
+        variable->emplace("rangeEnd", std::make_shared<PSB::PSBNumber>(30));
+        variable->emplace(
+            "meshCount",
+            std::make_shared<PSB::PSBNumber>(static_cast<int>(meshes.size())));
+
+        auto resource = std::make_shared<PSB::PSBResource>();
+        resource->data.resize(meshes.size() * 32u * sizeof(float));
+        for(std::size_t index = 0; index < meshes.size(); ++index) {
+            std::memcpy(resource->data.data() +
+                            index * 32u * sizeof(float),
+                        meshes[index].data(), 32u * sizeof(float));
+        }
+
+        auto combinator = std::make_shared<PSB::PSBDictionary>();
+        combinator->emplace("variable", variable);
+        combinator->emplace("rawMeshList", resource);
+        combinator->emplace(
+            "neutralIndex", std::make_shared<PSB::PSBNumber>(neutralIndex));
+        combinator->emplace("meshType", std::make_shared<PSB::PSBNumber>(1));
+        return combinator;
+    };
+
+    auto combinatorList = std::make_shared<PSB::PSBList>(2);
+    combinatorList->push_back(makeCombinator(
+        "hair_ud", {up, identity, down}, 1));
+    combinatorList->push_back(makeCombinator(
+        "hair_lr", {left, centered, right}, 1));
+    auto meshCombinator = std::make_shared<PSB::PSBDictionary>();
+    meshCombinator->emplace("combinatorList", combinatorList);
+
+    auto layer = std::make_shared<PSB::PSBDictionary>();
+    layer->emplace("label", std::make_shared<PSB::PSBString>("QUD"));
+    layer->emplace("type", std::make_shared<PSB::PSBNumber>(0));
+    layer->emplace("meshTransform", std::make_shared<PSB::PSBNumber>(1));
+    layer->emplace("meshCombinator", meshCombinator);
+
+    motion::detail::MotionSnapshot snapshot;
+    motion::detail::MotionClip clip;
+    clip.orderedLayers.push_back(layer);
+    auto nodes = motion::detail::buildNodeTree(snapshot, &clip);
+    REQUIRE(nodes.size() == 2);
+    REQUIRE(nodes[1].meshCombinators.size() == 2);
+    REQUIRE(nodes[1].meshCombinators[0].rawMeshes.size() == 96);
+    REQUIRE(nodes[1].meshCombinators[1].variable == "hair_lr");
+
+    std::vector<float> neutral;
+    REQUIRE(motion::internal::evaluateMeshCombinators(
+        nodes[1].meshCombinators,
+        [](const std::string &, double fallback) { return fallback; },
+        neutral));
+    REQUIRE(neutral.size() == identity.size());
+    for(std::size_t index = 0; index < identity.size(); ++index) {
+        REQUIRE(neutral[index] == Catch::Approx(identity[index]));
+    }
+
+    std::vector<float> animated;
+    REQUIRE(motion::internal::evaluateMeshCombinators(
+        nodes[1].meshCombinators,
+        [](const std::string &key, double fallback) {
+            if(key == "hair_ud") return 15.0;
+            if(key == "hair_lr") return -30.0;
+            return fallback;
+        },
+        animated));
+    REQUIRE(animated[30] == Catch::Approx(0.9f));
+    REQUIRE(animated[31] == Catch::Approx(1.1f));
+}
+
 TEST_CASE("motionplayer resource chain and query surface") {
     setEmoteSeed();
 
@@ -977,6 +1454,17 @@ TEST_CASE("motionplayer resource chain and query surface") {
     }
 }
 
+TEST_CASE("motionplayer cycle identity distinguishes objects in one PSB") {
+    const std::string path = "title.psb";
+
+    REQUIRE_FALSE(motion::internal::sameMotionOwnershipIdentity(
+        path, ttstr(TJS_W("char")), ttstr(TJS_W("show")),
+        path, ttstr(TJS_W("TITLE2")), ttstr(TJS_W("show"))));
+    REQUIRE(motion::internal::sameMotionOwnershipIdentity(
+        path, ttstr(TJS_W("char")), ttstr(TJS_W("show")),
+        path, ttstr(TJS_W("char")), ttstr(TJS_W("show"))));
+}
+
 TEST_CASE("motionplayer draw cache and playback state") {
     setEmoteSeed();
 
@@ -1026,6 +1514,68 @@ TEST_CASE("motionplayer draw cache and playback state") {
     REQUIRE(variantCount(player.motionList()) == 0);
 }
 
+TEST_CASE("PSB collection back references do not retain parsed trees") {
+    auto child = std::make_shared<PSB::PSBDictionary>();
+    std::weak_ptr<PSB::PSBDictionary> releasedParent;
+    {
+        auto parent = std::make_shared<PSB::PSBDictionary>();
+        parent->emplace("child", child);
+        child->parent = parent;
+        releasedParent = parent;
+    }
+
+    REQUIRE(releasedParent.expired());
+}
+
+TEST_CASE("motion snapshot registry does not own expired snapshots") {
+    const auto module = motion::detail::makeDictionary({});
+    std::weak_ptr<motion::detail::MotionSnapshot> releasedSnapshot;
+    {
+        auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+        snapshot->moduleValue = module;
+        releasedSnapshot = snapshot;
+        motion::detail::registerModuleSnapshot(module, snapshot);
+        REQUIRE(motion::detail::lookupModuleSnapshot(module) == snapshot);
+    }
+
+    REQUIRE(releasedSnapshot.expired());
+    REQUIRE_FALSE(motion::detail::lookupModuleSnapshot(module));
+}
+
+TEST_CASE("resource manager owns snapshots only while their module is cached") {
+    const auto module = motion::detail::makeDictionary({});
+    auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+    snapshot->path = "memory-lifetime.mtn";
+    snapshot->moduleValue = module;
+    motion::detail::registerModuleSnapshot(module, snapshot);
+
+    std::weak_ptr<motion::detail::MotionSnapshot> releasedSnapshot = snapshot;
+    motion::ResourceManager manager;
+    manager.rememberLoadedModule(
+        ttstr(TJS_W("memory-lifetime.mtn")), module, snapshot);
+    snapshot.reset();
+
+    REQUIRE_FALSE(releasedSnapshot.expired());
+    manager.unload(ttstr(TJS_W("memory-lifetime.mtn")));
+    REQUIRE(releasedSnapshot.expired());
+    REQUIRE(manager.uniqueCachedModuleCount() == 0);
+}
+
+TEST_CASE("resource managers reuse the most recent exact motion module") {
+    setEmoteSeed();
+
+    motion::ResourceManager first;
+    const auto firstModule = first.load(motionFixturePath());
+    REQUIRE(firstModule.Type() == tvtObject);
+
+    motion::ResourceManager second;
+    const auto secondModule = second.load(motionFixturePath());
+    REQUIRE(secondModule.Type() == tvtObject);
+    REQUIRE(secondModule.AsObjectNoAddRef() ==
+            firstModule.AsObjectNoAddRef());
+    REQUIRE(second.uniqueCachedModuleCount() == 1);
+}
+
 TEST_CASE("emoteplayer timeline state and todo stubs") {
     setEmoteSeed();
 
@@ -1034,6 +1584,7 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
     REQUIRE(module.Type() == tvtObject);
 
     motion::EmotePlayer player(rm);
+    REQUIRE(player.getMaskMode() == motion::MaskModeAlpha);
     player.setModule(module);
     REQUIRE(player.getModule().Type() == tvtObject);
 
@@ -1099,6 +1650,119 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
 
     player.assignState();
     player.setOuterForce(1.0, 2.0);
+}
+
+TEST_CASE("emoteplayer renders a PSB into a headless RGBA surface") {
+    setEmoteSeed();
+
+    motion::ResourceManager resources;
+    const auto module = resources.load(motionFixturePath());
+    REQUIRE(module.Type() == tvtObject);
+
+    motion::EmotePlayer player(resources);
+    player.setModule(module);
+    player.show();
+    const auto mainCount = player.countMainTimelines();
+    const auto diffCount = player.countDiffTimelines();
+    REQUIRE((mainCount + diffCount) > 0);
+    const auto timeline =
+        mainCount > 0 ? player.getMainTimelineLabelAt(0)
+                      : player.getDiffTimelineLabelAt(0);
+    player.playTimeline(timeline, motion::TimelinePlayFlagParallel);
+    player.progress(16.6666667);
+
+    constexpr int width = 1280;
+    constexpr int height = 720;
+    std::vector<std::uint8_t> rgba(
+        static_cast<std::size_t>(width) * height * 4u, 0);
+    std::array<int, 4> visibleBounds{0, 0, 0, 0};
+    bool alphaBoundsKnown = false;
+    bool alphaOpaque = true;
+    REQUIRE(player.getPlayer().renderToRgba(
+        rgba.data(), width, height, width * 4,
+        &visibleBounds, &alphaBoundsKnown, &alphaOpaque));
+
+    std::size_t visiblePixels = 0;
+    std::uint8_t maximumAlpha = 0;
+    std::array<int, 4> measuredBounds{width, height, 0, 0};
+    for(int y = 0; y < height; ++y) {
+        for(int x = 0; x < width; ++x) {
+            const auto offset =
+                (static_cast<std::size_t>(y) * width + x) * 4u;
+            maximumAlpha = std::max(maximumAlpha, rgba[offset + 3u]);
+            if(rgba[offset + 3u] == 0) continue;
+            ++visiblePixels;
+            measuredBounds[0] = std::min(measuredBounds[0], x);
+            measuredBounds[1] = std::min(measuredBounds[1], y);
+            measuredBounds[2] = std::max(measuredBounds[2], x + 1);
+            measuredBounds[3] = std::max(measuredBounds[3], y + 1);
+        }
+    }
+    REQUIRE(maximumAlpha > 0);
+    REQUIRE(visiblePixels > 100);
+    REQUIRE(alphaBoundsKnown);
+    REQUIRE_FALSE(alphaOpaque);
+    REQUIRE(visibleBounds == measuredBounds);
+}
+
+TEST_CASE("emoteplayer applies live mouth controls to rendered image leaves") {
+    setEmoteSeed();
+
+    motion::ResourceManager resources;
+    const auto module = resources.load(motionFixturePath());
+    REQUIRE(module.Type() == tvtObject);
+
+    motion::EmotePlayer player(resources);
+    player.setModule(module);
+    player.show();
+    const auto mainCount = player.countMainTimelines();
+    const auto diffCount = player.countDiffTimelines();
+    REQUIRE((mainCount + diffCount) > 0);
+    const auto timeline =
+        mainCount > 0 ? player.getMainTimelineLabelAt(0)
+                      : player.getDiffTimelineLabelAt(0);
+    player.playTimeline(timeline, motion::TimelinePlayFlagParallel);
+    player.progress(16.6666667);
+
+    constexpr int width = 1280;
+    constexpr int height = 720;
+    const auto renderAtTalkValue = [&](double value) {
+        player.setVariable(TJS_W("face_talk"), value, 0.0, 0.0);
+        std::vector<std::uint8_t> rgba(
+            static_cast<std::size_t>(width) * height * 4u, 0);
+        REQUIRE(player.getPlayer().renderToRgba(
+            rgba.data(), width, height, width * 4));
+        return rgba;
+    };
+
+    // Rendering itself must not advance the manually-progressed E-mote
+    // clock.  A changed buffer therefore proves that the live mouth value was
+    // rebound through nested Motion players instead of being left at their
+    // neutral/default parameter.
+    player.getPlayer().setSpeed(false);
+    const auto closed = renderAtTalkValue(0.0);
+    const auto lowVoice = renderAtTalkValue(0.36);
+    const auto thresholdVoice = renderAtTalkValue(0.72);
+    const auto midVoice = renderAtTalkValue(2.0);
+    const auto open = renderAtTalkValue(4.0);
+    const auto closedAgain = renderAtTalkValue(0.0);
+
+    const auto countChangedBytes = [](const auto &left, const auto &right) {
+        std::size_t changed = 0;
+        for(std::size_t index = 0; index < left.size(); ++index) {
+            changed += left[index] != right[index];
+        }
+        return changed;
+    };
+    REQUIRE(countChangedBytes(closed, open) > 100);
+    // Native BuildFrameParam applies type=3 to the span leaving the active
+    // frame. The fixture's mouth track starts 0:type2 -> 12:type3, so values
+    // below the first threshold remain at the closed pose instead of moving
+    // forward and then reversing when the input crosses 1.0.
+    REQUIRE(lowVoice == closed);
+    REQUIRE(thresholdVoice == closed);
+    REQUIRE(countChangedBytes(midVoice, open) > 20);
+    REQUIRE(closedAgain == closed);
 }
 
 #if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
@@ -1282,6 +1946,97 @@ TEST_CASE("motionplayer non-loop motion clips finish at sync boundary") {
     REQUIRE(autoPlayer.getProgressCompat() == Catch::Approx(1.0));
 }
 
+TEST_CASE("motionplayer skip preserves controller-defined idle loops") {
+    auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+    snapshot->path = "unit/emote-idle.psb";
+    snapshot->mainTimelineLabels.push_back("idle");
+    snapshot->timelineTotalFrames["idle"] = 156.0;
+
+    motion::detail::TimelineControlBinding idle;
+    idle.loopBegin = 0.0;
+    idle.loopEnd = 156.0;
+    idle.lastTime = 156.0;
+    snapshot->timelineControlByLabel.emplace("idle", std::move(idle));
+
+    motion::Player player;
+    player.loadFromSnapshot(snapshot);
+    player.playTimeline(TJS_W("idle"), motion::PlayFlagForce);
+    player.frameProgress(12.0);
+    REQUIRE(player.getTimelinePlaying(TJS_W("idle")));
+    REQUIRE(player.getLoopTimeline(TJS_W("idle")));
+
+    player.skipToSync();
+    REQUIRE(player.getTimelinePlaying(TJS_W("idle")));
+    REQUIRE(player.getAllplaying());
+
+    player.frameProgress(160.0);
+    REQUIRE(player.getTimelinePlaying(TJS_W("idle")));
+    REQUIRE(player.getAllplaying());
+}
+
+TEST_CASE("motionplayer skip settles queued selector option transitions") {
+    auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+    snapshot->path = "unit/emote-selector-skip.psb";
+    snapshot->variableLabels = {"arm_type", "arm_down", "arm_up"};
+    snapshot->controllerBindings.emplace(
+        "arm_type",
+        motion::detail::VariableControllerBinding{
+            8, 0, "selectorControl", "label"});
+
+    motion::detail::SelectorControlBinding selector;
+    selector.label = "arm_type";
+    selector.options.push_back({"arm_down", 0.0, 1.0});
+    selector.options.push_back({"arm_up", 0.0, 1.0});
+    snapshot->selectorControls.emplace("arm_type", std::move(selector));
+
+    motion::Player player;
+    player.loadFromSnapshot(snapshot);
+    player.setVariable(TJS_W("arm_type"), 0.0, 15.0, 0.0);
+    REQUIRE(player.getVariable(TJS_W("arm_down")) == Catch::Approx(0.0));
+
+    player.skipToSync();
+    REQUIRE(player.getVariable(TJS_W("arm_type")) == Catch::Approx(0.0));
+    REQUIRE(player.getVariable(TJS_W("arm_down")) == Catch::Approx(1.0));
+    REQUIRE(player.getVariable(TJS_W("arm_up")) == Catch::Approx(0.0));
+}
+
+TEST_CASE("motionplayer interpolates sparse default timeline variables") {
+    auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+    snapshot->path = "unit/emote-default-idle.psb";
+    snapshot->mainTimelineLabels.push_back("idle");
+    snapshot->timelineTotalFrames["idle"] = 60.0;
+    snapshot->variableLabels.push_back("body_UD");
+
+    motion::detail::TimelineControlTrack bodyUd;
+    bodyUd.label = "body_UD";
+    bodyUd.frames.push_back({0.0, false, 10.0f, 1.0});
+    bodyUd.frames.push_back({30.0, false, -10.0f, 1.0});
+    bodyUd.frames.push_back({60.0, false, 10.0f, 1.0});
+
+    motion::detail::TimelineControlBinding idle;
+    idle.loopBegin = 0.0;
+    idle.loopEnd = 60.0;
+    idle.lastTime = 60.0;
+    idle.tracks.push_back(std::move(bodyUd));
+    snapshot->timelineControlByLabel.emplace("idle", std::move(idle));
+
+    motion::Player player;
+    player.loadFromSnapshot(snapshot);
+    player.playTimeline(TJS_W("idle"), 0);
+
+    REQUIRE(player.getVariable(TJS_W("body_UD")) == Catch::Approx(0.0));
+    player.frameProgress(10.0);
+    REQUIRE(player.getVariable(TJS_W("body_UD")) ==
+            Catch::Approx(10.0 / 29.0 * 10.0).margin(0.001));
+    player.frameProgress(19.0);
+    REQUIRE(player.getVariable(TJS_W("body_UD")) == Catch::Approx(10.0));
+
+    player.frameProgress(1.0);
+    const double descending = player.getVariable(TJS_W("body_UD"));
+    REQUIRE(descending < 10.0);
+    REQUIRE(descending > -10.0);
+}
+
 TEST_CASE("motionplayer crops E-mote icons from a shared PSB atlas") {
     auto root = std::make_shared<PSB::PSBDictionary>();
     auto source = std::make_shared<PSB::PSBDictionary>();
@@ -1347,6 +2102,127 @@ TEST_CASE("motionplayer crops E-mote icons from a shared PSB atlas") {
     REQUIRE(decoded[4] == 6u);
     REQUIRE(decoded[8] == 9u);
     REQUIRE(decoded[12] == 10u);
+}
+
+TEST_CASE("motionplayer decodes DXT5 E-mote atlas icons") {
+    auto root = std::make_shared<PSB::PSBDictionary>();
+    auto source = std::make_shared<PSB::PSBDictionary>();
+    auto tex = std::make_shared<PSB::PSBDictionary>();
+    auto icons = std::make_shared<PSB::PSBDictionary>();
+    auto icon = std::make_shared<PSB::PSBDictionary>();
+    auto texture = std::make_shared<PSB::PSBDictionary>();
+    auto pixels = std::make_shared<PSB::PSBResource>();
+
+    icon->emplace("left", std::make_shared<PSB::PSBNumber>(1));
+    icon->emplace("top", std::make_shared<PSB::PSBNumber>(1));
+    icon->emplace("width", std::make_shared<PSB::PSBNumber>(2));
+    icon->emplace("height", std::make_shared<PSB::PSBNumber>(2));
+    icons->emplace("part", icon);
+    texture->emplace("width", std::make_shared<PSB::PSBNumber>(4));
+    texture->emplace("height", std::make_shared<PSB::PSBNumber>(4));
+    texture->emplace("type", std::make_shared<PSB::PSBString>("DXT5"));
+    texture->emplace("pixel", pixels);
+    tex->emplace("icon", icons);
+    tex->emplace("texture", texture);
+    source->emplace("tex", tex);
+    root->emplace("source", source);
+
+    // One BC3/DXT5 block: opaque alpha index 0 and RGB565 red index 0.
+    pixels->data = {
+        0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xf8, 0x1f, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+
+    motion::detail::MotionSnapshot snapshot;
+    snapshot.path = "unit/shared-dxt5-atlas.psb";
+    snapshot.root = root;
+    snapshot.resourcesByPath.emplace(
+        "source/tex/texture/pixel", pixels);
+
+    int width = 0;
+    int height = 0;
+    double originX = 0.0;
+    double originY = 0.0;
+    bool decodedIsBgra = true;
+    std::string resourcePath;
+    std::string compressName;
+    std::vector<std::uint8_t> decoded;
+    const auto *resource =
+        motion::internal::findPSBResourceBySourceName(
+            snapshot, "src/tex/part", width, height, decoded,
+            originX, originY, &decodedIsBgra, true,
+            &resourcePath, &compressName);
+
+    REQUIRE(resource == pixels.get());
+    REQUIRE(width == 2);
+    REQUIRE(height == 2);
+    REQUIRE_FALSE(decodedIsBgra);
+    REQUIRE(compressName == "DXT5");
+    REQUIRE(decoded.size() == 16u);
+    for(size_t pixel = 0; pixel < 4; ++pixel) {
+        REQUIRE(decoded[pixel * 4u + 0u] == 0xffu);
+        REQUIRE(decoded[pixel * 4u + 1u] == 0u);
+        REQUIRE(decoded[pixel * 4u + 2u] == 0u);
+        REQUIRE(decoded[pixel * 4u + 3u] == 0xffu);
+    }
+}
+
+TEST_CASE("motionplayer retains atlas gutter for filtered E-mote icons") {
+    auto root = std::make_shared<PSB::PSBDictionary>();
+    auto source = std::make_shared<PSB::PSBDictionary>();
+    auto tex = std::make_shared<PSB::PSBDictionary>();
+    auto icons = std::make_shared<PSB::PSBDictionary>();
+    auto icon = std::make_shared<PSB::PSBDictionary>();
+    auto texture = std::make_shared<PSB::PSBDictionary>();
+    auto pixels = std::make_shared<PSB::PSBResource>();
+
+    icon->emplace("left", std::make_shared<PSB::PSBNumber>(2));
+    icon->emplace("top", std::make_shared<PSB::PSBNumber>(2));
+    icon->emplace("width", std::make_shared<PSB::PSBNumber>(2));
+    icon->emplace("height", std::make_shared<PSB::PSBNumber>(2));
+    icons->emplace("part", icon);
+    texture->emplace("width", std::make_shared<PSB::PSBNumber>(6));
+    texture->emplace("height", std::make_shared<PSB::PSBNumber>(6));
+    texture->emplace("pixel", pixels);
+    tex->emplace("icon", icons);
+    tex->emplace("texture", texture);
+    source->emplace("tex", tex);
+    root->emplace("source", source);
+
+    pixels->data.resize(6u * 6u * 4u);
+    for(size_t index = 0; index < 36u; ++index) {
+        pixels->data[index * 4u] = static_cast<std::uint8_t>(index);
+        pixels->data[index * 4u + 3u] = 0xffu;
+    }
+
+    motion::detail::MotionSnapshot snapshot;
+    snapshot.root = root;
+    snapshot.resourcesByPath.emplace(
+        "source/tex/texture/pixel", pixels);
+
+    int width = 0;
+    int height = 0;
+    int decodedWidth = 0;
+    int decodedHeight = 0;
+    std::array<int, 4> sourceRect{};
+    double originX = 0.0;
+    double originY = 0.0;
+    std::vector<std::uint8_t> decoded;
+    const auto *resource =
+        motion::internal::findPSBResourceBySourceName(
+            snapshot, "src/tex/part", width, height, decoded,
+            originX, originY, nullptr, true, nullptr, nullptr,
+            &decodedWidth, &decodedHeight, &sourceRect);
+
+    REQUIRE(resource == pixels.get());
+    REQUIRE(width == 2);
+    REQUIRE(height == 2);
+    REQUIRE(decodedWidth == 6);
+    REQUIRE(decodedHeight == 6);
+    REQUIRE(sourceRect == (std::array<int, 4>{2, 2, 4, 4}));
+    REQUIRE(decoded.size() == 6u * 6u * 4u);
+    REQUIRE(decoded[0] == 0u);
+    REQUIRE(decoded[(2u * 6u + 2u) * 4u] == 14u);
 }
 
 TEST_CASE("motionplayer combines E-mote source groups with icon names") {

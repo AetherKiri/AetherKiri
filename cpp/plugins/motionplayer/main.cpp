@@ -113,6 +113,8 @@ NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
     NCB_METHOD(registerBg);
     NCB_METHOD(registerCaption);
     NCB_METHOD(unloadUnusedTextures);
+    NCB_METHOD(beginGpuBatch);
+    NCB_METHOD(endGpuBatch);
     RawCallback(TJS_W("captureCanvas"), &D3DAdaptor::captureCanvasStatic, 0);
     NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(alphaOpAdd, getAlphaOpAdd, setAlphaOpAdd);

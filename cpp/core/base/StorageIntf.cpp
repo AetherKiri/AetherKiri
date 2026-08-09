@@ -27,6 +27,7 @@
 #include "TickCount.h"
 #include "ncbind.hpp"
 #include "UtilStreams.h"
+#include "impl/ArchiveAutoPathOrder.h"
 #include "spdlog/spdlog.h"
 
 #define TVP_DEFAULT_ARCHIVE_CACHE_NUM 128
@@ -1387,14 +1388,38 @@ static bool TVPGetProjectRelativeAutoPath(const ttstr &path,
 
 static bool TVPArchiveAutoPathMatches(const ttstr &path,
                                       const ttstr &relative) {
-    const tjs_char *delimiter =
-        TJS_strchr(path.c_str(), TVPArchiveDelimiter);
-    if(!delimiter)
-        return false;
+    return TVPArchiveAutoPathDirectoryMatches(
+        std::u16string_view(
+            reinterpret_cast<const char16_t *>(path.c_str()),
+            static_cast<size_t>(path.GetLen())),
+        std::u16string_view(
+            reinterpret_cast<const char16_t *>(relative.c_str()),
+            static_cast<size_t>(relative.GetLen())),
+        static_cast<char16_t>(TVPArchiveDelimiter));
+}
 
-    ttstr inArchive(delimiter + 1);
-    tTVPArchive::NormalizeInArchiveStorageName(inArchive);
-    return inArchive == relative;
+static ttstr TVPFindExactArchiveAutoPath(const ttstr &normalized) {
+    ttstr relative;
+    if(!TVPGetProjectRelativeAutoPath(normalized, relative))
+        return {};
+
+    const ttstr relativeDirectory = TVPExtractStoragePath(relative);
+    if(relativeDirectory.IsEmpty())
+        return {};
+
+    const ttstr storageName = TVPExtractStorageName(relative);
+    // Auto paths use Kirikiri's last-added-path-wins ordering.  Preserve it
+    // while restricting candidates to the directory explicitly requested by
+    // the script.
+    for(auto it = TVPAutoPathList.rbegin(); it != TVPAutoPathList.rend();
+        ++it) {
+        if(!TVPArchiveAutoPathMatches(*it, relativeDirectory))
+            continue;
+        const ttstr candidate = *it + storageName;
+        if(TVPIsRealStorageNoSearchNoNormalize(candidate))
+            return candidate;
+    }
+    return {};
 }
 
 //---------------------------------------------------------------------------
@@ -1670,6 +1695,23 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
                          name.AsStdString(), normalized.AsStdString());
         }
         return normalized;
+    }
+
+    // A normalized project-relative path cannot be opened directly when the
+    // project is backed by a sibling XP3.  Before falling back to the legacy
+    // short-name auto-path table, try the same directory inside mounted
+    // archives.  This prevents identically named portrait/standing resources
+    // in different directories from shadowing one another.
+    if(ttstr exactArchivePath = TVPFindExactArchiveAutoPath(normalized);
+       !exactArchivePath.IsEmpty()) {
+        TVPAutoPathCache.Add(name, exactArchivePath);
+        if(TVPStorageTraceEnabled() && TVPStorageTraceName(name)) {
+            spdlog::info(
+                "StorageTrace exact-archive request={} normalized={} found={}",
+                name.AsStdString(), normalized.AsStdString(),
+                exactArchivePath.AsStdString());
+        }
+        return exactArchivePath;
     }
 
     // not found in current folder
@@ -1962,6 +2004,13 @@ tTJSBinaryStream *TVPCreateStream(const ttstr &_name, tjs_uint32 flags) {
 // TVPClearStorageCaches
 //---------------------------------------------------------------------------
 void TVPClearStorageCaches() {
+    TVPClearXP3SegmentCache();
+    TVPClearAutoPathCache();
+}
+
+void TVPResetAutoPathsForGameSession() {
+    tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
+    TVPAutoPathList.clear();
     TVPClearXP3SegmentCache();
     TVPClearAutoPathCache();
 }

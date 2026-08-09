@@ -1,4 +1,6 @@
+#include "legacy_engine_api_rename.h"
 #include "engine_api.h"
+#include "engine_input_queue_gate.h"
 
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
 
@@ -26,6 +28,8 @@
 #include <cstdlib>
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
+#include <mach/mach.h>
+#include <mach/task_info.h>
 #include <sys/ucontext.h>
 #endif
 #if defined(__ANDROID__)
@@ -59,6 +63,8 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "environ/EngineLoop.h"
 #include "environ/MainScene.h"
 #include "base/StorageIntf.h"
+#include "base/EventIntf.h"
+#include "base/impl/EventImpl.h"
 #include "base/impl/StorageImpl.h"
 #include "base/ScriptMgnIntf.h"
 #include "base/SysInitIntf.h"
@@ -70,6 +76,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #endif
 #include "visual/ogl/angle_backend.h"
 #include "visual/impl/WindowImpl.h"
+#include "visual/WindowIntf.h"
 #include "visual/RenderManager.h"
 #include "visual/godot/GodotRenderManager.h"
 #include "visual/godot/GodotGpuBridge.h"
@@ -82,6 +89,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "PluginImpl.h"
 #include "base/impl/StorageImpl.h"
 #include "movie/ffmpeg/KRMoviePlayer.h"
+#include "utils/win32/TimerImpl.h"
 
 extern "C" {
 #include "libavcodec/avcodec.h"
@@ -106,6 +114,7 @@ extern "C" void TVPRegisterLayerExDrawPluginAnchor();
 extern "C" void TVPRegisterKAGParserExPluginAnchor();
 
 extern "C" const char* TJSGetRecentExecArgTrace();
+extern "C" void TJS_CollectOrphanedICCs(bool force);
 extern "C" void TVPRegisterScriptsExPluginAnchor();
 extern "C" void TVPRegisterCSVParserPluginAnchor();
 extern "C" void TVPRegisterFstatPluginAnchor();
@@ -125,6 +134,10 @@ extern "C" bool TVPHostGetLatestGodotGpuFrame(uint64_t* texture,
 extern "C" void TVPHostActivateMainWindow();
 extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height);
 extern "C" void TVPHostSetPreferGpuFrame(bool prefer_gpu_frame);
+extern "C" void TVPHostSetPublishRawSourceFrame(bool publish_raw_source);
+extern "C" void TVPHostResetForGameSession();
+extern "C" void AetherKiriMotionResetForGameSession();
+extern void TVPClearScnearioCache();
 extern "C" void TVPHostGetTextInputState(uint32_t* ime_active,
                                            int32_t* ime_mode,
                                            uint32_t* attention_point_valid,
@@ -169,6 +182,8 @@ struct engine_handle_s {
   // Input event queue
   struct InputState {
     std::deque<engine_input_event_t> pending_events;
+    aetherkiri::engine_api::PrimaryClickQueueGate primary_click_gate;
+    size_t coalesced_events = 0;
     std::unordered_set<intptr_t> active_pointer_ids;
     bool native_mouse_callbacks_disabled = false;
   } input;
@@ -177,6 +192,7 @@ struct engine_handle_s {
   struct RenderTargetState {
     krkr::AngleBackend angle_backend = krkr::AngleBackend::OpenGLES;
     std::string renderer = ENGINE_RENDERER_GODOT_NATIVE;
+    bool publish_raw_source_frame = false;
     bool iosurface_attached = false;
     bool native_window_attached = false;
   } render;
@@ -1056,7 +1072,16 @@ void PushStartupLog(engine_handle_s* impl, const std::string& message) {
 void PushRuntimeSpdlogToStartupQueue(const spdlog::details::log_msg& msg) {
   engine_handle_s* target = nullptr;
   {
-    std::lock_guard<std::recursive_mutex> registry_guard(g_registry_mutex);
+    // The startup sink can run on decoder/player worker threads.  Never wait
+    // for the engine registry from a log sink: engine_tick may own that mutex
+    // while synchronously joining the very worker that emitted this message.
+    // The regular spdlog sinks still receive the line, so dropping only this
+    // best-effort diagnostics copy is preferable to deadlocking shutdown.
+    std::unique_lock<std::recursive_mutex> registry_guard(
+        g_registry_mutex, std::try_to_lock);
+    if (!registry_guard.owns_lock()) {
+      return;
+    }
     engine_handle_t target_handle = nullptr;
     if (g_runtime_startup_active && g_runtime_startup_owner != nullptr) {
       target_handle = g_runtime_startup_owner;
@@ -1159,6 +1184,7 @@ void StartHostEngineLoop(engine_handle_s* impl) {
     scene->scheduleUpdate();
   }
   TVPHostSetSurfaceSize(impl->frame.surface_width, impl->frame.surface_height);
+  TVPHostSetPublishRawSourceFrame(impl->render.publish_raw_source_frame);
 }
 
 void MarkRuntimeOpenedForHost(engine_handle_t handle,
@@ -1201,6 +1227,8 @@ void MarkRuntimeOpenedForHost(engine_handle_t handle,
     impl->frame.ready = false;
     impl->input.active_pointer_ids.clear();
     impl->input.pending_events.clear();
+    impl->input.primary_click_gate.reset();
+    impl->input.coalesced_events = 0;
     impl->state = ToStateValue(EngineState::kOpened);
     ClearHandleErrorLocked(impl);
   }
@@ -1863,6 +1891,10 @@ engine_result_t OpenGameCore(engine_handle_t handle,
   };
 
   try {
+    // A previous title may have ended through System.exit while its Window
+    // and activation callbacks were still retained by script-side cycles.
+    // Start every embedded session from a process-neutral application state.
+    Application->ResetForHostSession();
     spdlog::debug("engine_open_game: calling Application->StartApplication...");
 #if defined(__ANDROID__)
     AndroidInfoLog("engine_open_game: calling StartApplication('%s')",
@@ -1948,12 +1980,18 @@ void RunOpenGameAsync(engine_handle_t handle,
 }  // namespace
 
 extern std::string TVPEngineApi_GetGlobalException();
+extern void TVPEngineApi_SetGlobalException(const std::string& msg);
 
 extern "C" {
 
 void engine_register_godot_gpu_bridge(const void* callbacks) {
   TVPGodotGpuBridgeRegister(
       static_cast<const TVPGodotGpuBridgeCallbacks*>(callbacks));
+}
+
+void engine_register_godot_gpu_batch_bridge(const void* callbacks) {
+  TVPGodotGpuBatchRegister(
+      static_cast<const TVPGodotGpuBatchCallbacks*>(callbacks));
 }
 
 void TVPEngineApiNotifyWebStartupReady() {
@@ -2044,6 +2082,7 @@ engine_result_t engine_destroy(engine_handle_t handle) {
 
   engine_handle_s* impl = nullptr;
   bool owned_runtime = false;
+  bool needs_session_cleanup = false;
   std::thread startup_worker;
 
   {
@@ -2060,6 +2099,13 @@ engine_result_t engine_destroy(engine_handle_t handle) {
     }
 
     owned_runtime = (g_runtime_active && g_runtime_owner == handle);
+    const uint32_t startup_state = GetStartupState(impl);
+    needs_session_cleanup =
+        owned_runtime ||
+        (g_runtime_startup_active && g_runtime_startup_owner == handle) ||
+        startup_state == ENGINE_STARTUP_STATE_RUNNING ||
+        startup_state == ENGINE_STARTUP_STATE_SUCCEEDED ||
+        startup_state == ENGINE_STARTUP_STATE_FAILED;
     if (owned_runtime) {
       g_runtime_active = false;
       g_runtime_owner = nullptr;
@@ -2081,7 +2127,7 @@ engine_result_t engine_destroy(engine_handle_t handle) {
     startup_worker.join();
   }
 
-  if (owned_runtime) {
+  if (needs_session_cleanup) {
     if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
       loop->ResetPointerState();
     }
@@ -2113,10 +2159,50 @@ engine_result_t engine_destroy(engine_handle_t handle) {
     } catch (...) {
       spdlog::warn("engine_destroy: FilterUserMessage ignored unknown exception");
     }
+    try {
+      // Compatibility render caches retain TJS variants and native Layer
+      // addresses. Release them while the old script world is still valid,
+      // then clear the generic Layer routing tables before another title can
+      // reuse those addresses.
+      //
+      // Timer and continuous-event producer threads must be joined first.
+      // Legacy AtExit handlers run only once in an embedded process, so they
+      // cannot protect the second and later End Game -> open title cycles.
+      TVPResetTimerForHostSession();
+      TVPResetEventPlatformForHostSession();
+      AetherKiriMotionResetForGameSession();
+      TVPResetLayerStateForHostSession();
+      TVPResetEventsForHostSession();
+      // Let TJS release and invalidate its own Window graph. Forcing owner
+      // invalidation before script-engine shutdown can recursively finalize a
+      // multi-window title and crash in tTJSCustomObject::Finalize.
+      Application->OnExit();
+      // tTJS script blocks can leave intermediate-code contexts in the
+      // process-wide orphan registry while their final Release is deferred.
+      // Never let those contexts (and their captured old-world variants)
+      // survive until a compact event in the next title.
+      TJS_CollectOrphanedICCs(true);
+      TVPResetEventsForHostSession();
+      TVPResetWindowRegistryForHostSession();
+      TVPClearGraphicCache();
+      TVPClearScnearioCache();
+      TVPClearArchiveCache();
+      TVPHostResetForGameSession();
+      Application->ResetForHostSession();
+      TVPResetAutoPathsForGameSession();
+      TVPResetSystemInitStateForHostSession();
+    } catch (const std::exception& e) {
+      spdlog::warn("engine_destroy: session cleanup ignored exception: {}", e.what());
+    } catch (...) {
+      spdlog::warn("engine_destroy: session cleanup ignored unknown exception");
+    }
 
     // Avoid triggering platform exit() path in the host process.
     TVPTerminated = false;
     TVPTerminateCode = 0;
+    TVPSystemUninitCalled = false;
+    TVPEngineApi_SetGlobalException("");
+    g_runtime_started_once = false;
   }
 
   delete impl;
@@ -2431,9 +2517,12 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
 
   const auto tick_start = std::chrono::steady_clock::now();
   size_t dispatched_inputs = 0;
+  const size_t coalesced_inputs = impl->input.coalesced_events;
+  impl->input.coalesced_events = 0;
   while (!impl->input.pending_events.empty()) {
     const engine_input_event_t queued_event = impl->input.pending_events.front();
     impl->input.pending_events.pop_front();
+    impl->input.primary_click_gate.on_dequeued(queued_event);
     dispatched_inputs += 1;
 
     const char* dispatch_error = nullptr;
@@ -2644,14 +2733,14 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
     }
     spdlog::warn(
         "engine_tick_spike tick={} total_us={} input_us={} app_us={} "
-        "draw_us={} recycle_us={} capture_us={} inputs={} renderer={} "
-        "frame_backend={} suppressed={}",
+        "draw_us={} recycle_us={} capture_us={} inputs={} coalesced_inputs={} "
+        "renderer={} frame_backend={} suppressed={}",
         static_cast<unsigned long long>(impl->tick_count), total_us,
         DurationUs(tick_start, after_input),
         DurationUs(after_input, after_application_run),
         DurationUs(after_application_run, after_draw_scene),
         DurationUs(after_draw_scene, after_recycle),
-        DurationUs(after_recycle, tick_end), dispatched_inputs,
+        DurationUs(after_recycle, tick_end), dispatched_inputs, coalesced_inputs,
         impl->render.renderer, frame_backend,
         static_cast<unsigned long long>(suppressed_slow_frames));
     std::ostringstream fields;
@@ -2662,6 +2751,7 @@ engine_result_t engine_tick(engine_handle_t handle, uint32_t delta_ms) {
            << ",\"recycle_us\":" << DurationUs(after_draw_scene, after_recycle)
            << ",\"capture_us\":" << DurationUs(after_recycle, tick_end)
            << ",\"inputs\":" << dispatched_inputs
+           << ",\"coalesced_inputs\":" << coalesced_inputs
            << ",\"suppressed\":" << suppressed_slow_frames
            << ",\"renderer\":\"" << JsonEscape(impl->render.renderer)
            << "\",\"frame_backend\":\"" << JsonEscape(frame_backend) << "\"}";
@@ -2808,6 +2898,8 @@ engine_result_t engine_pause(engine_handle_t handle) {
   Application->OnDeactivate();
   impl->input.active_pointer_ids.clear();
   impl->input.pending_events.clear();
+  impl->input.primary_click_gate.reset();
+  impl->input.coalesced_events = 0;
   if (auto* loop = EngineLoop::GetInstance(); loop != nullptr) {
     loop->ResetPointerState();
   }
@@ -2916,6 +3008,23 @@ engine_result_t engine_set_option(engine_handle_t handle,
     TVPSetCommandLine(TJS_W("renderer"), ttstr(renderer).c_str());
     spdlog::info("engine_set_option: renderer={} prefer_gpu_frame={}",
                  renderer, prefer_gpu);
+    ClearHandleErrorLocked(impl);
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+
+  if (key == ENGINE_OPTION_FRAME_OUTPUT) {
+    const std::string value(option->value_utf8);
+    if (value != ENGINE_FRAME_OUTPUT_SURFACE &&
+        value != ENGINE_FRAME_OUTPUT_RAW_SOURCE) {
+      return SetHandleErrorAndReturnLocked(
+          impl, ENGINE_RESULT_INVALID_ARGUMENT,
+          "frame_output must be 'surface' or 'raw_source'");
+    }
+    impl->render.publish_raw_source_frame =
+        value == ENGINE_FRAME_OUTPUT_RAW_SOURCE;
+    TVPHostSetPublishRawSourceFrame(impl->render.publish_raw_source_frame);
+    spdlog::info("engine_set_option: frame_output={}", value);
     ClearHandleErrorLocked(impl);
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;
@@ -3704,9 +3813,18 @@ engine_result_t engine_send_input(engine_handle_t handle,
     }
   }
 
+  if (!impl->input.primary_click_gate.should_enqueue(*event)) {
+    impl->input.coalesced_events += 1;
+    ClearHandleErrorLocked(impl);
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+
   impl->input.pending_events.push_back(*event);
   constexpr size_t kMaxQueuedInputs = 512;
   if (impl->input.pending_events.size() > kMaxQueuedInputs) {
+    impl->input.primary_click_gate.on_dequeued(
+        impl->input.pending_events.front());
     impl->input.pending_events.pop_front();
   }
 
@@ -4203,6 +4321,33 @@ engine_result_t engine_get_memory_stats(engine_handle_t handle,
   out_stats->system_free_mb = static_cast<uint32_t>(
       std::max<tjs_int>(0, TVPGetSystemFreeMemory()));
   out_stats->system_total_mb = static_cast<uint32_t>(meminfo.MemTotal / 1024);
+
+  out_stats->process_resident_bytes =
+      static_cast<uint64_t>(out_stats->self_used_mb) * 1024u * 1024u;
+  out_stats->process_physical_footprint_bytes =
+      out_stats->process_resident_bytes;
+  out_stats->process_peak_physical_footprint_bytes =
+      out_stats->process_physical_footprint_bytes;
+#if defined(__APPLE__)
+  task_vm_info_data_t vm_info{};
+  mach_msg_type_number_t vm_info_count = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO,
+                reinterpret_cast<task_info_t>(&vm_info),
+                &vm_info_count) == KERN_SUCCESS) {
+    out_stats->process_resident_bytes = vm_info.resident_size;
+    out_stats->process_physical_footprint_bytes = vm_info.phys_footprint;
+    if (vm_info.ledger_phys_footprint_peak > 0) {
+      out_stats->process_peak_physical_footprint_bytes =
+          static_cast<uint64_t>(vm_info.ledger_phys_footprint_peak);
+    }
+#if TARGET_OS_IPHONE
+    out_stats->process_available_bytes = vm_info.limit_bytes_remaining;
+#endif
+  }
+#endif
+  out_stats->process_peak_physical_footprint_bytes = std::max(
+      out_stats->process_peak_physical_footprint_bytes,
+      out_stats->process_physical_footprint_bytes);
 
   out_stats->graphic_cache_bytes = TVPGetGraphicCacheTotalBytes();
   out_stats->graphic_cache_limit_bytes = TVPGetGraphicCacheLimit();

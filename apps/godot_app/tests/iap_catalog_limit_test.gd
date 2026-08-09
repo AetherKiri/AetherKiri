@@ -41,6 +41,10 @@ func _initialize() -> void:
         assert(not String(app._t("iap.list_limit.title")).is_empty())
         assert(not String(app._t("iap.limit_body")).is_empty())
         assert(not String(app._t("iap.restore")).is_empty())
+        assert(not String(app._t("iap.coffee.title")).is_empty())
+        assert(not String(app._t("iap.coffee.desc")).is_empty())
+        assert(not String(app._t("iap.coffee.active_until", ["2030-01-01"])).is_empty())
+        assert(not String(app._t("iap.artemis_unavailable")).is_empty())
 
     settings_action.free()
     app.modal_layer.free()

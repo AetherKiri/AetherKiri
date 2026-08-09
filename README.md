@@ -130,7 +130,7 @@ iOS and Android export presets reference the generated PNG sizes under
 | Platform | Minimum version | Notes |
 | --- | --- | --- |
 | macOS | macOS 13.0 (Ventura) | The Godot app export is universal, but the current native build triplet is `arm64`; Intel support needs an `x86_64` native build. |
-| iOS / iPadOS | iOS / iPadOS 17.0 | `arm64` devices; `arm64` and `x86_64` simulator builds are available for development. |
+| iOS / iPadOS | iOS / iPadOS 16.0 | `arm64` devices; `arm64` and `x86_64` simulator builds are available for development. |
 | Android | Android 7.0 (API 24) | The product export currently packages `arm64-v8a` only. |
 | Web | No OS version floor | Requires a browser with WebAssembly SIMD, WebAssembly threads, and `SharedArrayBuffer`, served with cross-origin isolation (COOP/COEP). |
 | Linux | Build from source | No official prebuilt product package; compile the `x86_64` export locally. |
@@ -588,9 +588,9 @@ CPU is only a diagnostic fallback.
 
 AetherKiri is distributed under GPL-3.0-or-later. See `LICENSE` for the full
 license text. Third-party notices are preserved in `THIRD_PARTY_LICENSES.md`.
-For iOS App Store distribution, `COPYING.iOS` records the limited additional
+For Apple App Store distribution, `COPYING.iOS` records the limited additional
 permission granted by approving copyright holders solely for the official
-Aether iOS release or a distributor they authorize in writing. Third-party
-forks and derivative apps may not rely on that additional permission. It does
-not grant rights in upstream or third-party material on behalf of other
-copyright holders, or revoke rights already granted by the GPL.
+Aether iOS or macOS release, or a distributor they authorize in writing.
+Third-party forks and derivative apps may not rely on that additional
+permission. It does not grant rights in upstream or third-party material on
+behalf of other copyright holders, or revoke rights already granted by the GPL.

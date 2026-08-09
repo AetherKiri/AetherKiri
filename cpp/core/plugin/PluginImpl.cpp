@@ -685,6 +685,13 @@ void TVPLoadInternalPlugins() {
     PluginCallTracer::Instance().LogRegistrationEnd();
 }
 
+void TVPUnloadInternalPlugins() {
+    ncbAutoRegister::UnloadAllModules();
+    TVPUnregisterProxyFsStub();
+    TVPRegisteredPlugins.clear();
+    TVPAutoLoadPluginCount = 0;
+}
+
 bool TVPLoadInternalPlugin(const ttstr &_name) {
     /* 1. 拿到 ttstr 的原始缓冲区 */
     const tjs_char *src = _name.c_str();

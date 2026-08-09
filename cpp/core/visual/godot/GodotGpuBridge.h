@@ -6,6 +6,10 @@
 struct tTVPRect;
 struct tTVPPointD;
 
+// Texture synchronization on the producer side and queue execution in the
+// Godot bridge must agree on the unset environment-variable behavior.
+constexpr bool TVP_GODOT_DEFER_GPU_DRAIN_DEFAULT = false;
+
 struct TVPGodotGpuBridgeCallbacks {
     uint64_t (*create_rgba)(uint32_t width, uint32_t height,
                             const void *pixels, uint32_t stride_bytes);
@@ -47,8 +51,47 @@ struct TVPGodotGpuBridgeCallbacks {
                         int opacity, uint32_t color);
     bool (*read_rgba)(uint64_t texture, void *out_pixels,
                       size_t out_pixels_size, uint32_t stride_bytes);
+    uint64_t (*begin_read_rgba)(uint64_t texture);
+    bool (*poll_read_rgba)(uint64_t request, void *out_pixels,
+                           size_t out_pixels_size, uint32_t stride_bytes,
+                           bool *ready);
+    void (*discard_read_rgba)(uint64_t request);
     bool (*flush)();
 };
+
+// Keep batch controls in a separate table: TVPGodotGpuBridgeCallbacks predates
+// size/version fields and is copied by value across the engine/GDExtension ABI.
+// Appending fields to that table would make a new engine read past an older
+// extension's allocation when cached components are mixed.
+struct TVPGodotGpuBatchCallbacks {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint64_t (*begin_batch)();
+    bool (*end_batch)(uint64_t batch_token);
+};
+
+constexpr uint32_t TVP_GODOT_GPU_BATCH_CALLBACKS_ABI_VERSION = 1;
+
+// Limits deferred GPU draining to a producer-defined command group.  The
+// bridge callbacks are optional so non-Godot renderers retain their current
+// immediate behavior.
+class TVPGodotGpuBatchScope {
+public:
+    explicit TVPGodotGpuBatchScope(bool enabled = true);
+    ~TVPGodotGpuBatchScope() noexcept;
+
+    TVPGodotGpuBatchScope(const TVPGodotGpuBatchScope &) = delete;
+    TVPGodotGpuBatchScope &operator=(const TVPGodotGpuBatchScope &) = delete;
+
+    bool active() const { return batch_token_ != 0; }
+    bool finish();
+
+private:
+    uint64_t batch_token_ = 0;
+    bool (*end_batch_)(uint64_t batch_token) = nullptr;
+};
+
+bool TVPGodotGpuBridgeBatchActive();
 
 enum TVPGodotGpuBlendMode : uint32_t {
     TVP_GODOT_GPU_BLEND_ALPHA = 1,
@@ -99,3 +142,6 @@ constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_TVP_BLEND =
 extern "C" void TVPGodotGpuBridgeRegister(
     const TVPGodotGpuBridgeCallbacks *callbacks);
 const TVPGodotGpuBridgeCallbacks *TVPGodotGpuBridgeGet();
+extern "C" void TVPGodotGpuBatchRegister(
+    const TVPGodotGpuBatchCallbacks *callbacks);
+const TVPGodotGpuBatchCallbacks *TVPGodotGpuBatchGet();

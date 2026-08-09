@@ -46,12 +46,23 @@ namespace motion::detail {
             return mutex;
         }
 
-        std::unordered_map<const iTJSDispatch2 *, std::shared_ptr<MotionSnapshot>>
+        std::unordered_map<const iTJSDispatch2 *, std::weak_ptr<MotionSnapshot>>
         &snapshotRegistry() {
             static std::unordered_map<const iTJSDispatch2 *,
-                                      std::shared_ptr<MotionSnapshot>>
+                                      std::weak_ptr<MotionSnapshot>>
                 registry;
             return registry;
+        }
+
+        void pruneExpiredSnapshotsLocked() {
+            auto &registry = snapshotRegistry();
+            for(auto it = registry.begin(); it != registry.end();) {
+                if(it->second.expired()) {
+                    it = registry.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
 
         struct LogoChainTraceSession {
@@ -1584,9 +1595,18 @@ namespace motion::detail {
         return snapshot;
     }
 
-    tTJSVariant loadPSBVariant(const ttstr &path, const tjs_int decryptSeed) {
+    tTJSVariant loadPSBVariant(
+        const ttstr &path, const tjs_int decryptSeed,
+        std::shared_ptr<MotionSnapshot> *loadedSnapshot) {
         if(const auto snapshot = loadMotionSnapshot(path, decryptSeed)) {
+            if(loadedSnapshot != nullptr) {
+                *loadedSnapshot = snapshot;
+            }
             return snapshot->moduleValue;
+        }
+
+        if(loadedSnapshot != nullptr) {
+            loadedSnapshot->reset();
         }
 
         const auto file = loadPSBFile(path, decryptSeed);
@@ -1605,6 +1625,7 @@ namespace motion::detail {
         }
 
         std::lock_guard lock(snapshotRegistryMutex());
+        pruneExpiredSnapshotsLocked();
         snapshotRegistry()[module.AsObjectNoAddRef()] = snapshot;
     }
 
@@ -1615,7 +1636,14 @@ namespace motion::detail {
 
         std::lock_guard lock(snapshotRegistryMutex());
         const auto it = snapshotRegistry().find(module.AsObjectNoAddRef());
-        return it != snapshotRegistry().end() ? it->second : nullptr;
+        if(it == snapshotRegistry().end()) {
+            return nullptr;
+        }
+        auto snapshot = it->second.lock();
+        if(!snapshot) {
+            snapshotRegistry().erase(it);
+        }
+        return snapshot;
     }
 
     tTJSVariant makeArray(const std::vector<tTJSVariant> &items) {
