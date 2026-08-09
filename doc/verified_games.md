@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-08-07
+Last updated: 2026-08-09
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -59,7 +59,7 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | フユキス | macOS app; iOS/iPadOS app build on iPad | Startup, title/menu rendering, first-save load flow, scene/text rendering, E-mote character composition and blinking, atomic character-distance/pose changes, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | アイカギ2 | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | アイカギ3 | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
-| アマカノ3 | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| アマカノ3 | macOS debug app; iOS/iPadOS app build on iPad (smoke) | On macOS: startup, continue flow, second-save load, scene/text rendering, four-character E-mote rendering and animation, 20 consecutive dialogue inputs, and stable 51–63 FPS; on iPad: import, startup, initial title/UI, and basic input | Flow verified (macOS) | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | D.C.5 ～ダ・カーポ5～ | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | NUKITASHI | macOS app; iOS/iPadOS app build on iPad | Import, startup, title/menu rendering, scene/text rendering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | NUKITASHI2 | macOS app; iOS/iPadOS app build on iPad | Import, cold app launch, startup animation/title transition, title/menu rendering, scene/text rendering, audio playback, and repeated touch input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
