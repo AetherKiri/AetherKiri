@@ -2671,7 +2671,7 @@ func _build_shell_chrome() -> void:
     sidebar.add_child(shell_sidebar_toggle)
 
     shell_sidebar_version = Label.new()
-    shell_sidebar_version.text = "0.2.0-beta.1"
+    shell_sidebar_version.text = _application_version_text()
     shell_sidebar_version.add_theme_font_size_override("font_size", 10)
     shell_sidebar_version.add_theme_color_override("font_color", ui_tokens.text_tertiary)
     sidebar.add_child(shell_sidebar_version)
@@ -4322,11 +4322,14 @@ func _rebuild_settings_view() -> void:
         ))
     _add_settings_row(about_group, _settings_value_row(
         _t("settings.version"),
-        str(ProjectSettings.get_setting("application/config/version", "development"))
+        _application_version_text()
     ))
 
     if animate_page:
         ui_motion.reveal(top)
+
+func _application_version_text() -> String:
+    return str(ProjectSettings.get_setting("application/config/version", "development"))
 
 func _build_detail_view() -> void:
     detail_view = Control.new()
