@@ -2,7 +2,7 @@
 
 [English](verified_games.md)
 
-最后更新：2026-08-09
+最后更新：2026-08-10
 
 本文档记录已经用 AetherKiri 手动 smoke test 或 flow test 过的游戏。它是兼容性记录，
 不代表每条路线、每个视频、每个插件路径或每个存档状态都已经完整验证。
@@ -46,7 +46,7 @@
 | ライムライト・レモネードジャム | Windows x64 debug app；macOS debug 和 release app；iOS/iPadOS iPad release app build | 启动、无闪帧的 Logo 到标题页切换、稳定的标题动画与菜单渲染、继续/读档流程、场景/文字渲染、画廊导航与图像合成、音频播放和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer)、[@KYoiRyi](https://github.com/KYoiRyi)、[@MadCcc](https://github.com/MadCcc) | 本地游戏文件不提交到仓库。 |
 | ワガママハイスペック | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、音乐选择与播放、锁屏恢复音频和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | ワガママハイスペック OC | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、继续/读档流程、场景/文字渲染、音乐播放、锁屏恢复音频和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
-| 淫母マンション～ママは、性処理肉便器～ | macOS release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、场景/文字渲染、音频播放和基础输入 | 冒烟验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
+| 淫母マンション～ママは、性処理肉便器～ | macOS debug 和 release app；iOS/iPadOS iPad release app build | 启动、标题/菜单渲染、场景/文字渲染、音频播放、基础输入，以及开启画面增强后的 4:3 继续/菜单流程、悬停和返回按钮坐标对齐 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | 天色＊アイルノーツ | macOS debug app | 启动、标题/菜单渲染、继续/读档流程、背景与角色立绘渲染、SD CG 切换稳定性、场景/文字渲染和基础输入 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |
 | GINKA | Windows x64 debug app | 导入、启动、标题/菜单渲染、游戏数据加载、背景与角色渲染，以及基础输入 | 冒烟验证通过 | [@KYoiRyi](https://github.com/KYoiRyi) | 本地游戏文件不提交到仓库。 |
 | NEKOPARA Vol. 1 | macOS debug app | 启动、标题/菜单渲染、Data Load 与首个存档读取流程、场景/文字渲染、E-mote 角色立绘与动画、快速推进对话，以及立绘区域点击事件转发 | 流程验证通过 | [@akitaSummer](https://github.com/akitaSummer) | 本地游戏文件不提交到仓库。 |

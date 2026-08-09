@@ -10951,21 +10951,17 @@ func _probe_send_mapped_scroll(window_pos: Vector2, config: Dictionary, delta_y:
     player.send_pointer_event(POINTER_SCROLL, 0, mapped.x, mapped.y, 0.0, delta_y, 0)
 
 func _probe_map_window_point(pos: Vector2, config: Dictionary) -> Vector2:
-    var tex_size := _game_input_texture_size()
     var coord := ProbeConfig.coord_size(config, Vector2i(
         _runtime_int("AETHERKIRI_PROBE_COORD_W", 1600),
         _runtime_int("AETHERKIRI_PROBE_COORD_H", 900)
     ))
     var panel_size := Vector2(coord)
-    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
-    if scale <= 0.0:
-        return Vector2(-1.0, -1.0)
-    var drawn_size := tex_size * scale
-    var offset := (panel_size - drawn_size) * 0.5
-    var inside := pos - offset
-    if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
-        return Vector2(-1.0, -1.0)
-    return inside / scale
+    return GameInputMapping.map_point_to_surface(
+        pos,
+        Rect2(Vector2.ZERO, panel_size),
+        _game_input_content_size(),
+        _game_input_surface_size()
+    )
 
 func _run_cli_gui_probe(config: Dictionary, target_game_path: String) -> void:
     if not _probe_open_game(config, target_game_path, "AETHERKIRI_RENDER_BACKEND"):
@@ -12052,15 +12048,22 @@ func _frame_enhancement_target_size() -> Vector2i:
         source_size = _base_render_surface_size()
     return _frame_output_target_size(source_size)
 
-func _game_input_texture_size() -> Vector2:
-    # Frame enhancement may deliberately publish the native 1280x720 image
-    # while the game still owns a 1920x1080 logical surface. Input must follow
-    # the logical surface, not the texture being repaired/upscaled.
-    if current_surface_size.x > 0 and current_surface_size.y > 0:
-        return Vector2(current_surface_size)
+func _game_input_content_size() -> Vector2:
+    # With enhancement enabled the host publishes the raw game frame so it is
+    # processed exactly once. This is the aspect ratio actually visible inside
+    # GameViewport and therefore the first coordinate space for pointer input.
     if last_source_texture_size.x > 0 and last_source_texture_size.y > 0:
         return Vector2(last_source_texture_size)
     return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
+
+func _game_input_surface_size() -> Vector2:
+    # The engine API still consumes the runtime surface coordinate space. It
+    # can differ from the raw frame (for example 1920x1080 for an 800x600
+    # layer). DrawDevice stretches that full surface back to the layer, so
+    # input mapping must apply the inverse per-axis scale without letterboxing.
+    if current_surface_size.x > 0 and current_surface_size.y > 0:
+        return Vector2(current_surface_size)
+    return _game_input_content_size()
 
 func _update_frame() -> void:
     if present_hold_frames > 0:
@@ -12339,20 +12342,16 @@ func _send_probe_click(window_pos: Vector2) -> void:
     _write_probe_marker("auto_click window=%s mapped=%s" % [window_pos, mapped])
 
 func _map_probe_window_point(pos: Vector2) -> Vector2:
-    var tex_size := _game_input_texture_size()
     var panel_size := Vector2(
         float(_runtime_int("AETHERKIRI_AUTO_PROBE_COORD_W", 1600)),
         float(_runtime_int("AETHERKIRI_AUTO_PROBE_COORD_H", 900))
     )
-    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
-    if scale <= 0.0:
-        return Vector2(-1.0, -1.0)
-    var drawn_size := tex_size * scale
-    var offset := (panel_size - drawn_size) * 0.5
-    var inside := pos - offset
-    if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
-        return Vector2(-1.0, -1.0)
-    return inside / scale
+    return GameInputMapping.map_point_to_surface(
+        pos,
+        Rect2(Vector2.ZERO, panel_size),
+        _game_input_content_size(),
+        _game_input_surface_size()
+    )
 
 func _frame_stats(frame: Dictionary) -> Dictionary:
     var data: PackedByteArray = frame.get("rgba", PackedByteArray())
@@ -13529,19 +13528,23 @@ func _map_surface_point_to_screen(point: Vector2) -> Vector2:
 func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2:
     if viewport.texture == null:
         return pos
-    var tex_size := _game_input_texture_size()
-    return GameInputMapping.map_point(
+    return GameInputMapping.map_point_to_surface(
         pos,
         viewport.get_global_rect(),
-        tex_size,
+        _game_input_content_size(),
+        _game_input_surface_size(),
         clamp_to_bounds
     )
 
 func _map_viewport_delta(delta: Vector2) -> Vector2:
     if viewport.texture == null:
         return delta
-    var tex_size := _game_input_texture_size()
-    return GameInputMapping.map_delta(delta, viewport.size, tex_size)
+    return GameInputMapping.map_delta_to_surface(
+        delta,
+        viewport.size,
+        _game_input_content_size(),
+        _game_input_surface_size()
+    )
 
 func _map_mouse_button(button_index: MouseButton) -> int:
     if button_index == MOUSE_BUTTON_RIGHT:

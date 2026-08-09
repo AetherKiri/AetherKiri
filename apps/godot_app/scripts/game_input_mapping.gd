@@ -50,6 +50,54 @@ static func map_delta(
     return window_delta / maxf(0.0001, scale)
 
 
+# Frame enhancement presents the game's logical frame directly, while the
+# runtime continues to accept pointer events in its requested surface space.
+# DrawDevice maps that whole surface back to the logical layer independently
+# on each axis, so this conversion must use the exact inverse scale. Applying
+# aspect-fit here would introduce a second set of bars and shift 4:3 input.
+static func map_point_to_surface(
+    window_point: Vector2,
+    target_rect: Rect2,
+    content_size: Vector2,
+    surface_size: Vector2,
+    clamp_to_bounds: bool = false
+) -> Vector2:
+    var content_point := map_point(
+        window_point,
+        target_rect,
+        content_size,
+        clamp_to_bounds
+    )
+    if content_point.x < 0.0 or content_point.y < 0.0:
+        return content_point
+    if surface_size.x <= 0.0 or surface_size.y <= 0.0:
+        return content_point
+    return Vector2(
+        content_point.x * surface_size.x / content_size.x,
+        content_point.y * surface_size.y / content_size.y
+    )
+
+
+static func map_delta_to_surface(
+    window_delta: Vector2,
+    target_size: Vector2,
+    content_size: Vector2,
+    surface_size: Vector2
+) -> Vector2:
+    var content_delta := map_delta(window_delta, target_size, content_size)
+    if (
+        content_size.x <= 0.0
+        or content_size.y <= 0.0
+        or surface_size.x <= 0.0
+        or surface_size.y <= 0.0
+    ):
+        return content_delta
+    return Vector2(
+        content_delta.x * surface_size.x / content_size.x,
+        content_delta.y * surface_size.y / content_size.y
+    )
+
+
 # iOS reports sub-pixel finger drift even for an intentional tap. Once the
 # gesture has stayed below the drag threshold, keep its press and release at
 # the original contact point so a hover-driven runtime cannot reinterpret the

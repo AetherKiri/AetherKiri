@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -47,7 +47,7 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | ライムライト・レモネードジャム | Windows x64 debug app; macOS debug and release apps; iOS/iPadOS release app build on iPad | Startup, flicker-free logo-to-title transition, stable title animation and menu rendering, continue/load flow, scene/text rendering, gallery navigation/compositing, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer), [@KYoiRyi](https://github.com/KYoiRyi), [@MadCcc](https://github.com/MadCcc) | Local game files are not committed. |
 | ワガママハイスペック | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, music selection/playback, lock-screen audio recovery, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | ワガママハイスペック OC | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, continue/load flow, scene/text rendering, music playback, lock-screen audio recovery, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
-| 淫母マンション～ママは、性処理肉便器～ | macOS release app; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, scene/text rendering, audio playback, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| 淫母マンション～ママは、性処理肉便器～ | macOS debug and release apps; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, scene/text rendering, audio playback, basic input, and frame-enhanced 4:3 continue/menu flow with aligned hover and back-button input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 天色＊アイルノーツ | macOS debug app | Startup, title/menu rendering, continue/load flow, background and character rendering, SD CG transition stability, scene/text rendering, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | GINKA | Windows x64 debug app | Import, startup, title/menu rendering, game-data loading, background and character rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 | NEKOPARA Vol. 1 | macOS debug app | Startup, title/menu rendering, data-load and first-save flow, scene/text rendering, E-mote character rendering and animation, rapid dialogue input, and character-layer click forwarding | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |

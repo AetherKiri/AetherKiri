@@ -47,7 +47,8 @@ func _initialize() -> void:
     app.last_source_texture_size = Vector2i(1280, 720)
     app.output_resolution = "1080p"
     assert(app._frame_enhancement_target_size() == Vector2i(1920, 1080))
-    assert(app._game_input_texture_size() == Vector2(1920, 1080))
+    assert(app._game_input_content_size() == Vector2(1280, 720))
+    assert(app._game_input_surface_size() == Vector2(1920, 1080))
     assert(app._desired_render_surface_size() == Vector2i(1920, 1080))
     app.output_resolution = "2k"
     assert(app._frame_enhancement_target_size() == Vector2i(2560, 1440))
@@ -63,10 +64,12 @@ func _initialize() -> void:
     app.last_source_texture_size = Vector2i(1024, 768)
     assert(app._frame_enhancement_target_size() == Vector2i(1440, 1080))
     app.current_surface_size = Vector2i(960, 540)
-    assert(app._game_input_texture_size() == Vector2(960, 540))
+    assert(app._game_input_content_size() == Vector2(1024, 768))
+    assert(app._game_input_surface_size() == Vector2(960, 540))
     app.current_surface_size = Vector2i.ZERO
     app.last_source_texture_size = Vector2i(1280, 720)
-    assert(app._game_input_texture_size() == Vector2(1280, 720))
+    assert(app._game_input_content_size() == Vector2(1280, 720))
+    assert(app._game_input_surface_size() == Vector2(1280, 720))
 
     snapshot = app._current_settings_snapshot()
     snapshot["output_resolution"] = "invalid"
