@@ -4,6 +4,7 @@
 %defines "tjs.tab.hpp"
 %output "tjs.tab.cpp"
 %define api.namespace {TJS}
+%define parse.error verbose
 
 %code top
 {
