@@ -182,6 +182,7 @@ public:
     void OnDeactivate();
     bool RetryAudioRendererForHost();
     void OnExit();
+    void ResetForHostSession();
     void OnLowMemory();
 
     [[nodiscard]] bool GetActivating() const { return application_activating_; }

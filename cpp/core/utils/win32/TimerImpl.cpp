@@ -324,6 +324,14 @@ static tTVPAtExit TVPTimerThreadUninitAtExit(TVP_ATEXIT_PRI_SHUTDOWN,
                                              tTVPTimerThread::Uninit);
 
 //---------------------------------------------------------------------------
+void TVPResetTimerForHostSession() {
+    // Uninit joins the producer thread and deallocates its native event queue.
+    // Timer native instances are invalidated later by TJS shutdown; their
+    // Remove() path is deliberately safe while TVPTimerThread is null.
+    tTVPTimerThread::Uninit();
+}
+
+//---------------------------------------------------------------------------
 void tTVPTimerThread::Add(tTJSNI_Timer *item) {
     // at this point, item->GetEnebled() must be false.
 

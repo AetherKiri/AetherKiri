@@ -33,6 +33,60 @@ func _initialize() -> void:
         _fail("window-to-texture mapping is incorrect: %s" % letterboxed)
         return
 
+    # Regression: frame enhancement publishes a raw 4:3 frame and scales it
+    # to 1440x1080, while the runtime still accepts input on a 1920x1080
+    # surface. DrawDevice maps the entire surface back to its 800x600 layer,
+    # so the visible frame must map across the entire surface on both axes.
+    var enhanced_top_left := GameInputMapping.map_point_to_surface(
+        Vector2(240, 0),
+        Rect2(240, 0, 1440, 1080),
+        Vector2(800, 600),
+        Vector2(1920, 1080)
+    )
+    if not enhanced_top_left.is_equal_approx(Vector2.ZERO):
+        _fail("enhanced 4:3 top-left missed surface origin: %s" % enhanced_top_left)
+        return
+
+    var enhanced_center := GameInputMapping.map_point_to_surface(
+        Vector2(960, 540),
+        Rect2(240, 0, 1440, 1080),
+        Vector2(800, 600),
+        Vector2(1920, 1080)
+    )
+    if not enhanced_center.is_equal_approx(Vector2(960, 540)):
+        _fail("enhanced 4:3 center was rescaled incorrectly: %s" % enhanced_center)
+        return
+
+    var enhanced_bottom_right := GameInputMapping.map_point_to_surface(
+        Vector2(1680, 1080),
+        Rect2(240, 0, 1440, 1080),
+        Vector2(800, 600),
+        Vector2(1920, 1080)
+    )
+    if not enhanced_bottom_right.is_equal_approx(Vector2(1920, 1080)):
+        _fail("enhanced 4:3 bottom-right missed surface edge: %s" % enhanced_bottom_right)
+        return
+
+    var enhanced_delta := GameInputMapping.map_delta_to_surface(
+        Vector2(72, 54),
+        Vector2(720, 540),
+        Vector2(800, 600),
+        Vector2(1920, 1080)
+    )
+    if not enhanced_delta.is_equal_approx(Vector2(192, 108)):
+        _fail("enhanced 4:3 drag delta was rescaled incorrectly: %s" % enhanced_delta)
+        return
+
+    var enhanced_outside := GameInputMapping.map_point_to_surface(
+        Vector2(200, 540),
+        Rect2(240, 0, 1440, 1080),
+        Vector2(800, 600),
+        Vector2(1920, 1080)
+    )
+    if enhanced_outside.x >= 0.0 or enhanced_outside.y >= 0.0:
+        _fail("enhanced 4:3 side bar accepted pointer input: %s" % enhanced_outside)
+        return
+
     var tap_jitter := GameInputMapping.stable_tap_point(
         Vector2(120, 80), Vector2(127, 88), 18.0
     )

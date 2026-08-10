@@ -4,12 +4,21 @@ const APP_DISPLAY_NAME := "Aether"
 const BACKENDS := ["Godot Native", "GPU Bridge", "Debug CPU"]
 const SETTINGS_KEY := "aether_kiri/render_backend"
 const GAME_PATH_KEY := "aether_kiri/game_path"
+const GAME_AUTO_COVER_SCANNED_FIELD := "_autoCoverScanned"
 const GAME_LIST_FILE := "user://aetherkiri_games.json"
 const VIDEO_LIST_FILE := "user://aetherkiri_videos.json"
 const VIDEO_PROGRESS_FILE := "user://aetherkiri_video_progress.json"
 const VIDEO_HIDDEN_FILE := "user://aetherkiri_hidden_videos.json"
+const IMPORT_STATE_FILE := "user://aetherkiri_import_state.cfg"
 const VIDEO_EXTENSIONS := ["mp4", "mkv", "mov", "m4v", "avi", "webm", "flv", "ts", "m2ts", "mpeg", "mpg", "wmv"]
 const SUBTITLE_EXTENSIONS := ["srt", "vtt", "ass", "ssa"]
+const COVER_IMAGE_EXTENSIONS := ["png", "webp", "jpg", "jpeg"]
+# These candidates are deliberately independent of the selected UI language.
+# Prefer cover names across every supported language, then background names.
+const DEFAULT_COVER_BASENAMES := [
+    "cover", "封面", "表紙", "カバー", "표지", "커버",
+    "background", "背景", "배경",
+]
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
@@ -56,6 +65,8 @@ const UI_ICON_DIR := "res://assets/ui/icons/"
 const ICON_SETTINGS := UI_ICON_DIR + "gear-fill.svg"
 const ICON_SAVE := UI_ICON_DIR + "save-fill.svg"
 const ICON_REFRESH := UI_ICON_DIR + "arrows-counter-clockwise-fill.svg"
+const LOADING_SPINNER_ROTATION := TAU
+const LOADING_SPINNER_FLIP_H := true
 const ICON_ADD := UI_ICON_DIR + "plus-circle.svg"
 const ICON_HELP := UI_ICON_DIR + "help.svg"
 const ICON_LIBRARY := UI_ICON_DIR + "library.svg"
@@ -72,6 +83,7 @@ const ICON_BACK := UI_ICON_DIR + "chevron-left.svg"
 const ICON_CHEVRON_RIGHT := UI_ICON_DIR + "chevron-right.svg"
 const ICON_CHEVRON_DOWN := UI_ICON_DIR + "chevron-down.svg"
 const ICON_CHECK := UI_ICON_DIR + "check.svg"
+const ICON_SEARCH := UI_ICON_DIR + "search.svg"
 const LANG_SYSTEM := "system"
 const LANG_ZH_HANS := "zh_hans"
 const LANG_ZH_HANT := "zh_hant"
@@ -114,6 +126,12 @@ const UI_TEXT := {
         "nav.expand_sidebar": "展开侧边栏",
         "home.empty_title": "尚未添加任何游戏",
         "home.game_count": "%d 个游戏",
+        "video.video_count": "%d 个视频",
+        "search.games_placeholder": "搜索视觉小说",
+        "search.videos_placeholder": "搜索视频",
+        "search.filtered_count": "显示 %d / %d",
+        "search.no_results_title": "未找到匹配内容",
+        "search.no_results_help": "请尝试其他关键词或清空搜索框",
         "home.refresh": "刷新",
         "home.import": "导入",
         "home.import_guide": "导入指南",
@@ -155,6 +173,53 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native 按游戏基准画布运行；Display Fit 按设备显示尺寸运行",
         "settings.upscale": "缩放算法",
         "settings.upscale_desc": "外层拉伸画面时使用；Smooth/Linear 会做平滑采样",
+        "settings.output_resolution": "输出分辨率",
+        "settings.output_resolution_desc": "设置外层缩放与画面增强的目标分辨率；较高档位会增加 GPU 和显存占用",
+        "settings.output_resolution.original": "原始",
+        "settings.frame_enhancement": "画面增强",
+        "settings.frame_enhancement_desc": "使用 GPU 修复线条，并按输出分辨率高质量放大；保存后立即生效",
+        "settings.frame_enhancement_unavailable_desc": "当前构建或图形设备不支持画面增强；开启后仍会安全使用原始画面",
+        "settings.frame_enhancement_mode": "增强效果",
+        "settings.frame_enhancement_mode_desc": "选择适合画面的处理风格；推荐模式会优先修复线条与细节",
+        "settings.frame_enhancement_kind.off": "关闭",
+        "settings.frame_enhancement_kind.preset": "预设",
+        "settings.frame_enhancement_kind.custom": "自定义",
+        "settings.frame_enhancement_custom_desc": "算法按列表从上到下执行；2× 重建、目标尺寸缩放和同尺寸修复会保留各自语义",
+        "settings.frame_enhancement_custom_empty": "当前没有算法；添加后会按照列表顺序处理画面。",
+        "settings.frame_enhancement_custom_add": "＋ 添加算法",
+        "settings.frame_enhancement_custom_step": "步骤 %d",
+        "settings.frame_enhancement_custom_remove": "移除这个算法",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_s.desc": "轻量 2× 动漫线条与边缘重建",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_l.desc": "高质量 2× 动漫细节重建",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_vl.desc": "最高质量 2× 动漫细节重建，负载很高",
+        "settings.frame_enhancement_algorithm.anime4k_restore_s.desc": "同尺寸修复模糊线条、噪声和压缩痕迹",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_s.desc": "轻量柔和修复，降低文字和细线过锐风险",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_m.desc": "更深入的柔和修复，兼顾纹理和小字",
+        "settings.frame_enhancement_algorithm.anime4k_restore_l.desc": "高质量同尺寸线条与细节修复",
+        "settings.frame_enhancement_algorithm.anime4k_restore_vl.desc": "最高质量同尺寸修复，负载很高",
+        "settings.frame_enhancement_algorithm.fsr1_easu.desc": "边缘感知缩放到所选输出分辨率",
+        "settings.frame_enhancement_algorithm.fsr1_rcas.desc": "同尺寸自适应锐化，强化放大后的清晰度",
+        "settings.frame_enhancement_algorithm.bicubic.desc": "自然柔和地缩放到所选输出分辨率",
+        "settings.frame_enhancement_algorithm.lanczos.desc": "锐利地缩放到所选输出分辨率",
+        "settings.frame_enhancement_algorithm.fxaa.desc": "同尺寸平滑明显锯齿",
+        "settings.frame_enhancement_algorithm.ravu_lite_r2.desc": "基于方向纹理的轻量 2× 重建",
+        "settings.frame_enhancement_algorithm.cunny_2x4c.desc": "轻量神经网络 2× 纹理重建",
+        "settings.frame_enhancement_algorithm.nnedi3_nns16.desc": "针对线条和斜边的 2× 插值重建",
+        "settings.frame_enhancement_mode.anime4k": "智能修复（推荐）",
+        "settings.frame_enhancement_mode.fsr1": "均衡清晰",
+        "settings.frame_enhancement_mode.bicubic": "自然柔和",
+        "settings.frame_enhancement_mode.lanczos": "锐利细节",
+        "settings.frame_enhancement_mode.ravu": "精细放大",
+        "settings.frame_enhancement_mode.cunny": "纹理增强",
+        "settings.frame_enhancement_mode.nnedi3": "线条平滑",
+        "settings.frame_enhancement_mode.chain_4k_max": "4K 极致（极高负载）",
+        "settings.frame_enhancement_mode.chain_lossless": "无损画质（极高负载）",
+        "settings.frame_enhancement_mode.chain_ultra": "超清平衡（高负载）",
+        "settings.frame_enhancement_mode.chain_detail": "高精细（中高负载）",
+        "settings.frame_enhancement_mode.chain_balanced": "均衡增强（中等负载）",
+        "settings.frame_enhancement_mode.chain_soft": "柔和清晰（推荐，中低负载）",
+        "settings.frame_enhancement_mode.chain_light": "轻量增强（低负载）",
+        "settings.frame_enhancement_mode.chain_basic": "基础增强（最低负载）",
         "settings.perf": "性能监控",
         "settings.perf_desc": "显示帧率、进程内存、GPU 内存估算和图形 API 信息",
         "settings.fps_limit": "帧率限制",
@@ -278,6 +343,7 @@ const UI_TEXT := {
         "message.launch_file_unsupported": "启动文件只支持 EXE 或 XP3",
         "message.launch_file_outside_game": "启动文件必须位于当前游戏目录内",
         "message.launch_file_missing": "启动文件不存在：%s",
+        "message.cover_file_missing": "无法读取所选封面图片：%s",
         "message.game_exists": "游戏已存在：%s",
         "message.builtin_delete_failed": "删除内置 Demo 时发生错误：%s",
         "alert.error_title": "Aether 错误",
@@ -315,6 +381,12 @@ const UI_TEXT := {
         "nav.expand_sidebar": "展開側邊欄",
         "home.empty_title": "尚未加入任何遊戲",
         "home.game_count": "%d 個遊戲",
+        "video.video_count": "%d 個影片",
+        "search.games_placeholder": "搜尋視覺小說",
+        "search.videos_placeholder": "搜尋影片",
+        "search.filtered_count": "顯示 %d / %d",
+        "search.no_results_title": "找不到相符內容",
+        "search.no_results_help": "請嘗試其他關鍵字或清除搜尋欄",
         "home.refresh": "重新整理",
         "home.import": "匯入",
         "home.import_guide": "匯入指南",
@@ -356,6 +428,53 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native 依遊戲基準畫布執行；Display Fit 依裝置顯示尺寸執行",
         "settings.upscale": "縮放演算法",
         "settings.upscale_desc": "外層拉伸畫面時使用；Smooth/Linear 會進行平滑取樣",
+        "settings.output_resolution": "輸出解析度",
+        "settings.output_resolution_desc": "設定外層縮放與畫面增強的目標解析度；較高檔位會增加 GPU 與顯示記憶體用量",
+        "settings.output_resolution.original": "原始",
+        "settings.frame_enhancement": "畫面增強",
+        "settings.frame_enhancement_desc": "使用 GPU 修復線條，並依輸出解析度高品質放大；儲存後立即生效",
+        "settings.frame_enhancement_unavailable_desc": "目前建置或圖形裝置不支援畫面增強；開啟後仍會安全使用原始畫面",
+        "settings.frame_enhancement_mode": "增強效果",
+        "settings.frame_enhancement_mode_desc": "選擇適合畫面的處理風格；建議模式會優先修復線條與細節",
+        "settings.frame_enhancement_kind.off": "關閉",
+        "settings.frame_enhancement_kind.preset": "預設",
+        "settings.frame_enhancement_kind.custom": "自訂",
+        "settings.frame_enhancement_custom_desc": "演算法依清單由上而下執行；2× 重建、目標尺寸縮放與同尺寸修復會保留各自語意",
+        "settings.frame_enhancement_custom_empty": "目前沒有演算法；加入後會依清單順序處理畫面。",
+        "settings.frame_enhancement_custom_add": "＋ 加入演算法",
+        "settings.frame_enhancement_custom_step": "步驟 %d",
+        "settings.frame_enhancement_custom_remove": "移除此演算法",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_s.desc": "輕量 2× 動漫線條與邊緣重建",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_l.desc": "高品質 2× 動漫細節重建",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_vl.desc": "最高品質 2× 動漫細節重建，負載很高",
+        "settings.frame_enhancement_algorithm.anime4k_restore_s.desc": "同尺寸修復模糊線條、雜訊與壓縮痕跡",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_s.desc": "輕量柔和修復，降低文字與細線過銳風險",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_m.desc": "更深入的柔和修復，兼顧紋理與小字",
+        "settings.frame_enhancement_algorithm.anime4k_restore_l.desc": "高品質同尺寸線條與細節修復",
+        "settings.frame_enhancement_algorithm.anime4k_restore_vl.desc": "最高品質同尺寸修復，負載很高",
+        "settings.frame_enhancement_algorithm.fsr1_easu.desc": "邊緣感知縮放至所選輸出解析度",
+        "settings.frame_enhancement_algorithm.fsr1_rcas.desc": "同尺寸自適應銳化，強化放大後的清晰度",
+        "settings.frame_enhancement_algorithm.bicubic.desc": "自然柔和地縮放至所選輸出解析度",
+        "settings.frame_enhancement_algorithm.lanczos.desc": "銳利地縮放至所選輸出解析度",
+        "settings.frame_enhancement_algorithm.fxaa.desc": "同尺寸平滑明顯鋸齒",
+        "settings.frame_enhancement_algorithm.ravu_lite_r2.desc": "以方向紋理進行輕量 2× 重建",
+        "settings.frame_enhancement_algorithm.cunny_2x4c.desc": "輕量神經網路 2× 紋理重建",
+        "settings.frame_enhancement_algorithm.nnedi3_nns16.desc": "針對線條與斜邊的 2× 插值重建",
+        "settings.frame_enhancement_mode.anime4k": "智慧修復（建議）",
+        "settings.frame_enhancement_mode.fsr1": "均衡清晰",
+        "settings.frame_enhancement_mode.bicubic": "自然柔和",
+        "settings.frame_enhancement_mode.lanczos": "銳利細節",
+        "settings.frame_enhancement_mode.ravu": "精細放大",
+        "settings.frame_enhancement_mode.cunny": "紋理增強",
+        "settings.frame_enhancement_mode.nnedi3": "線條平滑",
+        "settings.frame_enhancement_mode.chain_4k_max": "4K 極致（極高負載）",
+        "settings.frame_enhancement_mode.chain_lossless": "無損畫質（極高負載）",
+        "settings.frame_enhancement_mode.chain_ultra": "超清平衡（高負載）",
+        "settings.frame_enhancement_mode.chain_detail": "高精細（中高負載）",
+        "settings.frame_enhancement_mode.chain_balanced": "均衡增強（中等負載）",
+        "settings.frame_enhancement_mode.chain_soft": "柔和清晰（建議，中低負載）",
+        "settings.frame_enhancement_mode.chain_light": "輕量增強（低負載）",
+        "settings.frame_enhancement_mode.chain_basic": "基礎增強（最低負載）",
         "settings.perf": "效能監控",
         "settings.perf_desc": "顯示幀率、程序記憶體、GPU 記憶體估算和圖形 API 資訊",
         "settings.fps_limit": "幀率限制",
@@ -479,6 +598,7 @@ const UI_TEXT := {
         "message.launch_file_unsupported": "啟動檔案僅支援 EXE 或 XP3",
         "message.launch_file_outside_game": "啟動檔案必須位於目前遊戲目錄內",
         "message.launch_file_missing": "啟動檔案不存在：%s",
+        "message.cover_file_missing": "無法讀取所選封面圖片：%s",
         "message.game_exists": "遊戲已存在：%s",
         "message.builtin_delete_failed": "刪除內建 Demo 時發生錯誤：%s",
         "alert.error_title": "Aether 錯誤",
@@ -516,6 +636,12 @@ const UI_TEXT := {
         "nav.expand_sidebar": "Expand sidebar",
         "home.empty_title": "No games added yet",
         "home.game_count": "%d games",
+        "video.video_count": "%d videos",
+        "search.games_placeholder": "Search visual novels",
+        "search.videos_placeholder": "Search videos",
+        "search.filtered_count": "Showing %d of %d",
+        "search.no_results_title": "No matches found",
+        "search.no_results_help": "Try another keyword or clear the search field",
         "home.refresh": "Refresh",
         "home.import": "Import",
         "home.import_guide": "Import Guide",
@@ -557,6 +683,53 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native uses the game's base canvas; Display Fit uses the device display size",
         "settings.upscale": "Scaling",
         "settings.upscale_desc": "Used when stretching the outer frame; Smooth/Linear apply filtered sampling",
+        "settings.output_resolution": "Output Resolution",
+        "settings.output_resolution_desc": "Sets the target for outer scaling and image enhancement; higher tiers use more GPU time and memory",
+        "settings.output_resolution.original": "Original",
+        "settings.frame_enhancement": "Image Enhancement",
+        "settings.frame_enhancement_desc": "Use the GPU to restore lines and upscale to the selected output resolution; applies immediately after saving",
+        "settings.frame_enhancement_unavailable_desc": "Image enhancement is unavailable in this build or on this graphics device; the original frame remains safe",
+        "settings.frame_enhancement_mode": "Enhancement Effect",
+        "settings.frame_enhancement_mode_desc": "Choose a visual style; the recommended effect prioritizes restoring lines and fine detail",
+        "settings.frame_enhancement_kind.off": "Off",
+        "settings.frame_enhancement_kind.preset": "Preset",
+        "settings.frame_enhancement_kind.custom": "Custom",
+        "settings.frame_enhancement_custom_desc": "Algorithms run from top to bottom; 2× reconstruction, target fitting, and same-size restoration keep their defined behavior",
+        "settings.frame_enhancement_custom_empty": "No algorithms yet. Add one to build an ordered processing chain.",
+        "settings.frame_enhancement_custom_add": "+ Add Algorithm",
+        "settings.frame_enhancement_custom_step": "Step %d",
+        "settings.frame_enhancement_custom_remove": "Remove this algorithm",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_s.desc": "Lightweight 2× reconstruction for anime lines and edges",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_l.desc": "High-quality 2× reconstruction for anime detail",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_vl.desc": "Maximum-quality 2× anime reconstruction with very high load",
+        "settings.frame_enhancement_algorithm.anime4k_restore_s.desc": "Same-size repair for blurred lines, noise, and compression artifacts",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_s.desc": "Light soft repair that protects small text and thin lines",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_m.desc": "Deeper soft repair balancing texture detail and small text",
+        "settings.frame_enhancement_algorithm.anime4k_restore_l.desc": "High-quality same-size line and detail restoration",
+        "settings.frame_enhancement_algorithm.anime4k_restore_vl.desc": "Maximum-quality same-size restoration with very high load",
+        "settings.frame_enhancement_algorithm.fsr1_easu.desc": "Edge-adaptive scaling to the selected output resolution",
+        "settings.frame_enhancement_algorithm.fsr1_rcas.desc": "Same-size adaptive sharpening after reconstruction or scaling",
+        "settings.frame_enhancement_algorithm.bicubic.desc": "Natural, soft scaling to the selected output resolution",
+        "settings.frame_enhancement_algorithm.lanczos.desc": "Crisp scaling to the selected output resolution",
+        "settings.frame_enhancement_algorithm.fxaa.desc": "Same-size smoothing of visible jagged edges",
+        "settings.frame_enhancement_algorithm.ravu_lite_r2.desc": "Lightweight direction-aware 2× reconstruction",
+        "settings.frame_enhancement_algorithm.cunny_2x4c.desc": "Light neural 2× texture reconstruction",
+        "settings.frame_enhancement_algorithm.nnedi3_nns16.desc": "2× interpolation focused on lines and diagonal edges",
+        "settings.frame_enhancement_mode.anime4k": "Smart Restore (Recommended)",
+        "settings.frame_enhancement_mode.fsr1": "Balanced Clarity",
+        "settings.frame_enhancement_mode.bicubic": "Natural Softness",
+        "settings.frame_enhancement_mode.lanczos": "Crisp Detail",
+        "settings.frame_enhancement_mode.ravu": "Fine Reconstruction",
+        "settings.frame_enhancement_mode.cunny": "Texture Enhancement",
+        "settings.frame_enhancement_mode.nnedi3": "Smooth Lines",
+        "settings.frame_enhancement_mode.chain_4k_max": "4K Ultimate (Extreme Load)",
+        "settings.frame_enhancement_mode.chain_lossless": "Lossless Detail (Extreme Load)",
+        "settings.frame_enhancement_mode.chain_ultra": "Ultra-Clear Balance (High Load)",
+        "settings.frame_enhancement_mode.chain_detail": "High Definition (Medium-High Load)",
+        "settings.frame_enhancement_mode.chain_balanced": "Balanced Enhancement (Medium Load)",
+        "settings.frame_enhancement_mode.chain_soft": "Soft Clarity (Recommended, Medium-Low Load)",
+        "settings.frame_enhancement_mode.chain_light": "Light Enhancement (Low Load)",
+        "settings.frame_enhancement_mode.chain_basic": "Basic Enhancement (Lowest Load)",
         "settings.perf": "Performance Monitor",
         "settings.perf_desc": "Show FPS, process memory, estimated GPU memory, and graphics API information",
         "settings.fps_limit": "FPS Limit",
@@ -680,6 +853,7 @@ const UI_TEXT := {
         "message.launch_file_unsupported": "The launch file must be an EXE or XP3 file",
         "message.launch_file_outside_game": "The launch file must be inside this game folder",
         "message.launch_file_missing": "Launch file does not exist: %s",
+        "message.cover_file_missing": "Could not read the selected cover image: %s",
         "message.game_exists": "Game already exists: %s",
         "message.builtin_delete_failed": "Could not completely delete the built-in demo: %s",
         "alert.error_title": "Aether Error",
@@ -717,6 +891,12 @@ const UI_TEXT := {
         "nav.expand_sidebar": "サイドバーを展開",
         "home.empty_title": "ゲームはまだ追加されていません",
         "home.game_count": "%d 本のゲーム",
+        "video.video_count": "%d 本のビデオ",
+        "search.games_placeholder": "ビジュアルノベルを検索",
+        "search.videos_placeholder": "ビデオを検索",
+        "search.filtered_count": "%d / %d 件を表示",
+        "search.no_results_title": "一致する項目がありません",
+        "search.no_results_help": "別のキーワードを試すか、検索欄をクリアしてください",
         "home.refresh": "更新",
         "home.import": "インポート",
         "home.import_guide": "インポートガイド",
@@ -758,6 +938,53 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native はゲーム基準のキャンバス、Display Fit はデバイス表示サイズで実行します",
         "settings.upscale": "スケーリング",
         "settings.upscale_desc": "外側の画面を引き伸ばすときに使用します。Smooth/Linear は平滑化サンプリングを行います",
+        "settings.output_resolution": "出力解像度",
+        "settings.output_resolution_desc": "外側のスケーリングと画質強化の目標解像度を設定します。高い設定ほど GPU とメモリを多く使用します",
+        "settings.output_resolution.original": "オリジナル",
+        "settings.frame_enhancement": "画質強化",
+        "settings.frame_enhancement_desc": "GPU で線を修復し、選択した出力解像度へ高品質に拡大します。保存後すぐに反映されます",
+        "settings.frame_enhancement_unavailable_desc": "このビルドまたはグラフィックスデバイスでは画質強化を利用できません。元の映像を安全に表示します",
+        "settings.frame_enhancement_mode": "強化効果",
+        "settings.frame_enhancement_mode_desc": "画面に合う仕上がりを選択します。推奨効果は線と細部の修復を優先します",
+        "settings.frame_enhancement_kind.off": "オフ",
+        "settings.frame_enhancement_kind.preset": "プリセット",
+        "settings.frame_enhancement_kind.custom": "カスタム",
+        "settings.frame_enhancement_custom_desc": "アルゴリズムは上から順に実行され、2× 再構成・出力サイズ調整・同サイズ修復の意味を維持します",
+        "settings.frame_enhancement_custom_empty": "アルゴリズムがありません。追加して処理チェーンを作成できます。",
+        "settings.frame_enhancement_custom_add": "＋ アルゴリズムを追加",
+        "settings.frame_enhancement_custom_step": "ステップ %d",
+        "settings.frame_enhancement_custom_remove": "このアルゴリズムを削除",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_s.desc": "アニメの線と輪郭を軽量に 2× 再構成",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_l.desc": "アニメの細部を高品質に 2× 再構成",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_vl.desc": "最高品質の 2× 再構成。負荷は非常に高め",
+        "settings.frame_enhancement_algorithm.anime4k_restore_s.desc": "ぼやけた線・ノイズ・圧縮跡を同サイズで修復",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_s.desc": "小さい文字と細線を守る軽量で穏やかな修復",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_m.desc": "質感と小さい文字を両立する、より深い穏やかな修復",
+        "settings.frame_enhancement_algorithm.anime4k_restore_l.desc": "線と細部を高品質に同サイズ修復",
+        "settings.frame_enhancement_algorithm.anime4k_restore_vl.desc": "最高品質の同サイズ修復。負荷は非常に高め",
+        "settings.frame_enhancement_algorithm.fsr1_easu.desc": "輪郭を考慮して選択した出力解像度へ拡大縮小",
+        "settings.frame_enhancement_algorithm.fsr1_rcas.desc": "再構成・拡大後を同サイズで適応的に鮮鋭化",
+        "settings.frame_enhancement_algorithm.bicubic.desc": "自然で柔らかく選択した出力解像度へ拡大縮小",
+        "settings.frame_enhancement_algorithm.lanczos.desc": "くっきり選択した出力解像度へ拡大縮小",
+        "settings.frame_enhancement_algorithm.fxaa.desc": "目立つジャギーを同サイズで滑らかに補正",
+        "settings.frame_enhancement_algorithm.ravu_lite_r2.desc": "方向を考慮した軽量 2× 再構成",
+        "settings.frame_enhancement_algorithm.cunny_2x4c.desc": "軽量ニューラル 2× テクスチャ再構成",
+        "settings.frame_enhancement_algorithm.nnedi3_nns16.desc": "線と斜め輪郭を重視した 2× 補間再構成",
+        "settings.frame_enhancement_mode.anime4k": "スマート修復（推奨）",
+        "settings.frame_enhancement_mode.fsr1": "バランス鮮明",
+        "settings.frame_enhancement_mode.bicubic": "自然でソフト",
+        "settings.frame_enhancement_mode.lanczos": "くっきり細部",
+        "settings.frame_enhancement_mode.ravu": "高精細拡大",
+        "settings.frame_enhancement_mode.cunny": "質感強化",
+        "settings.frame_enhancement_mode.nnedi3": "線をなめらかに",
+        "settings.frame_enhancement_mode.chain_4k_max": "4K 極致（極高負荷）",
+        "settings.frame_enhancement_mode.chain_lossless": "ロスレス画質（極高負荷）",
+        "settings.frame_enhancement_mode.chain_ultra": "超鮮明バランス（高負荷）",
+        "settings.frame_enhancement_mode.chain_detail": "高精細（中高負荷）",
+        "settings.frame_enhancement_mode.chain_balanced": "バランス強化（中負荷）",
+        "settings.frame_enhancement_mode.chain_soft": "ソフト鮮明（推奨・中低負荷）",
+        "settings.frame_enhancement_mode.chain_light": "軽量強化（低負荷）",
+        "settings.frame_enhancement_mode.chain_basic": "基本強化（最低負荷）",
         "settings.perf": "パフォーマンス監視",
         "settings.perf_desc": "FPS、プロセスメモリ、GPU メモリ推定値、グラフィックス API 情報を表示します",
         "settings.fps_limit": "FPS 制限",
@@ -881,6 +1108,7 @@ const UI_TEXT := {
         "message.launch_file_unsupported": "起動ファイルは EXE または XP3 のみ対応しています",
         "message.launch_file_outside_game": "起動ファイルは現在のゲームフォルダー内にある必要があります",
         "message.launch_file_missing": "起動ファイルが存在しません：%s",
+        "message.cover_file_missing": "選択したカバー画像を読み込めません：%s",
         "message.game_exists": "ゲームは既に存在します：%s",
         "message.builtin_delete_failed": "内蔵デモを完全に削除できませんでした：%s",
         "alert.error_title": "Aether エラー",
@@ -918,6 +1146,12 @@ const UI_TEXT := {
         "nav.expand_sidebar": "사이드바 펼치기",
         "home.empty_title": "아직 추가된 게임이 없습니다",
         "home.game_count": "게임 %d개",
+        "video.video_count": "비디오 %d개",
+        "search.games_placeholder": "비주얼 노벨 검색",
+        "search.videos_placeholder": "비디오 검색",
+        "search.filtered_count": "%d / %d 표시",
+        "search.no_results_title": "일치하는 항목이 없습니다",
+        "search.no_results_help": "다른 검색어를 입력하거나 검색창을 비워 보세요",
         "home.refresh": "새로고침",
         "home.import": "가져오기",
         "home.import_guide": "가져오기 가이드",
@@ -959,6 +1193,53 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native는 게임 기준 캔버스를 사용하고 Display Fit은 장치 표시 크기를 사용합니다",
         "settings.upscale": "스케일링",
         "settings.upscale_desc": "외부 화면을 늘릴 때 사용합니다. Smooth/Linear는 부드러운 샘플링을 적용합니다",
+        "settings.output_resolution": "출력 해상도",
+        "settings.output_resolution_desc": "외부 스케일링과 화질 향상의 목표 해상도를 설정합니다. 높은 단계일수록 GPU와 메모리를 더 사용합니다",
+        "settings.output_resolution.original": "원본",
+        "settings.frame_enhancement": "화질 향상",
+        "settings.frame_enhancement_desc": "GPU로 선을 복원하고 선택한 출력 해상도로 고품질 확대합니다. 저장 후 즉시 적용됩니다",
+        "settings.frame_enhancement_unavailable_desc": "현재 빌드 또는 그래픽 장치에서는 화질 향상을 사용할 수 없습니다. 원본 화면은 안전하게 유지됩니다",
+        "settings.frame_enhancement_mode": "향상 효과",
+        "settings.frame_enhancement_mode_desc": "화면에 맞는 처리 스타일을 선택합니다. 권장 효과는 선과 세부 복원을 우선합니다",
+        "settings.frame_enhancement_kind.off": "끄기",
+        "settings.frame_enhancement_kind.preset": "프리셋",
+        "settings.frame_enhancement_kind.custom": "사용자 정의",
+        "settings.frame_enhancement_custom_desc": "알고리즘은 위에서 아래 순서로 실행되며 2× 재구성, 출력 크기 조정, 동일 크기 복원의 의미를 유지합니다",
+        "settings.frame_enhancement_custom_empty": "알고리즘이 없습니다. 추가하여 처리 체인을 만들 수 있습니다.",
+        "settings.frame_enhancement_custom_add": "＋ 알고리즘 추가",
+        "settings.frame_enhancement_custom_step": "단계 %d",
+        "settings.frame_enhancement_custom_remove": "이 알고리즘 제거",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_s.desc": "애니메이션 선과 가장자리를 가볍게 2× 재구성",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_l.desc": "애니메이션 디테일을 고품질 2× 재구성",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_vl.desc": "최고 품질 2× 재구성, 매우 높은 부하",
+        "settings.frame_enhancement_algorithm.anime4k_restore_s.desc": "흐린 선, 노이즈, 압축 흔적을 같은 크기로 복원",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_s.desc": "작은 글자와 가는 선을 보호하는 가벼운 부드러운 복원",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_m.desc": "질감과 작은 글자를 균형 있게 살리는 부드러운 복원",
+        "settings.frame_enhancement_algorithm.anime4k_restore_l.desc": "선과 디테일을 고품질로 같은 크기 복원",
+        "settings.frame_enhancement_algorithm.anime4k_restore_vl.desc": "최고 품질 같은 크기 복원, 매우 높은 부하",
+        "settings.frame_enhancement_algorithm.fsr1_easu.desc": "가장자리를 고려해 선택한 출력 해상도로 크기 조정",
+        "settings.frame_enhancement_algorithm.fsr1_rcas.desc": "재구성 또는 확대 후 같은 크기로 적응형 선명화",
+        "settings.frame_enhancement_algorithm.bicubic.desc": "자연스럽고 부드럽게 선택한 출력 해상도로 크기 조정",
+        "settings.frame_enhancement_algorithm.lanczos.desc": "선명하게 선택한 출력 해상도로 크기 조정",
+        "settings.frame_enhancement_algorithm.fxaa.desc": "눈에 띄는 계단 현상을 같은 크기로 부드럽게 처리",
+        "settings.frame_enhancement_algorithm.ravu_lite_r2.desc": "방향성을 고려한 가벼운 2× 재구성",
+        "settings.frame_enhancement_algorithm.cunny_2x4c.desc": "가벼운 신경망 2× 텍스처 재구성",
+        "settings.frame_enhancement_algorithm.nnedi3_nns16.desc": "선과 대각선 가장자리에 초점을 둔 2× 보간 재구성",
+        "settings.frame_enhancement_mode.anime4k": "스마트 복원(권장)",
+        "settings.frame_enhancement_mode.fsr1": "균형 잡힌 선명도",
+        "settings.frame_enhancement_mode.bicubic": "자연스러운 부드러움",
+        "settings.frame_enhancement_mode.lanczos": "또렷한 디테일",
+        "settings.frame_enhancement_mode.ravu": "정밀 확대",
+        "settings.frame_enhancement_mode.cunny": "텍스처 향상",
+        "settings.frame_enhancement_mode.nnedi3": "선 윤곽 보정",
+        "settings.frame_enhancement_mode.chain_4k_max": "4K 최고 화질(극고부하)",
+        "settings.frame_enhancement_mode.chain_lossless": "무손실 화질(극고부하)",
+        "settings.frame_enhancement_mode.chain_ultra": "초고화질 균형(고부하)",
+        "settings.frame_enhancement_mode.chain_detail": "고정밀 화질(중고부하)",
+        "settings.frame_enhancement_mode.chain_balanced": "균형 향상(중간 부하)",
+        "settings.frame_enhancement_mode.chain_soft": "부드러운 선명도(권장, 중저부하)",
+        "settings.frame_enhancement_mode.chain_light": "경량 향상(저부하)",
+        "settings.frame_enhancement_mode.chain_basic": "기본 향상(최저 부하)",
         "settings.perf": "성능 모니터",
         "settings.perf_desc": "FPS, 프로세스 메모리, GPU 메모리 추정치와 그래픽 API 정보를 표시합니다",
         "settings.fps_limit": "FPS 제한",
@@ -1082,6 +1363,7 @@ const UI_TEXT := {
         "message.launch_file_unsupported": "실행 파일은 EXE 또는 XP3만 지원합니다",
         "message.launch_file_outside_game": "실행 파일은 현재 게임 폴더 안에 있어야 합니다",
         "message.launch_file_missing": "실행 파일이 존재하지 않습니다: %s",
+        "message.cover_file_missing": "선택한 표지 이미지를 읽을 수 없습니다: %s",
         "message.game_exists": "게임이 이미 있습니다: %s",
         "message.builtin_delete_failed": "내장 데모를 완전히 삭제하지 못했습니다: %s",
         "alert.error_title": "Aether 오류",
@@ -1113,6 +1395,17 @@ const POINTER_SCROLL := 4
 const POINTER_MOD_LEFT := 0x08
 const POINTER_MOD_RIGHT := 0x10
 const POINTER_MOD_MIDDLE := 0x20
+const RUNTIME_KIRIKIRI := "kirikiri"
+const RUNTIME_ONSCRIPTER := "onscripter"
+const ONSCRIPTER_SCRIPT_MARKERS := [
+    "0.txt",
+    "00.txt",
+    "nscr_sec.dat",
+    "nscript.___",
+    "nscript.dat",
+    "onscript.nt2",
+    "onscript.nt3",
+]
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
 const SHELL_SCROLL_DRAG_SPEED := 1.0
@@ -1132,7 +1425,12 @@ const SETTINGS_DRAFT_KEYS := [
     "ios_ui_scale_mode",
     "backend",
     "upscale_algorithm",
+    "output_resolution",
     "surface_mode",
+    "frame_enhancement_enabled",
+    "frame_enhancement_kind",
+    "frame_enhancement_mode",
+    "frame_enhancement_custom_chain",
     "diagnostic_profile",
     "debug_overlay_mode",
     "fps_limit_enabled",
@@ -1203,6 +1501,8 @@ var home_actions: HBoxContainer
 var home_page_margin: MarginContainer
 var home_header_box: BoxContainer
 var home_title_label: Label
+var home_search_host: PanelContainer
+var home_search_input: LineEdit
 var empty_state: Control
 var save_button: Button
 var bg_rect: ColorRect
@@ -1231,6 +1531,10 @@ var hero_transition_id := 0
 var known_games: Array[Dictionary] = []
 var known_videos: Array[Dictionary] = []
 var home_library_mode := "game"
+var home_search_queries := {"game": "", "video": ""}
+var home_search_syncing := false
+var home_filtered_game_count := 0
+var home_filtered_video_count := 0
 var show_perf_monitor := true
 var diagnostic_profile := "baseline" if OS.is_debug_build() else "off"
 var debug_overlay_mode := "summary" if OS.is_debug_build() else "off"
@@ -1282,8 +1586,11 @@ var detail_relayout_pending := false
 var detail_relayout_scroll_vertical := 0
 var native_launch_file_picker_pending := false
 var native_launch_file_picker_library_path := ""
+var native_cover_file_picker_pending := false
+var native_cover_file_picker_library_path := ""
 var active_game_path := ""
 var active_game_started_msec := 0
+var active_runtime_kind := RUNTIME_KIRIKIRI
 var shell_scroll_drag_states := {}
 var shell_scroll_remainders := {}
 var shell_scroll_tweens := {}
@@ -1301,12 +1608,20 @@ var ui_motion = AetherMotion.new()
 var ui_widgets = AetherWidgets.new(ui_tokens, ui_motion)
 
 var player = null
+var current_player_runtime_kind := RUNTIME_KIRIKIRI
 var builtin_demo = BuiltinDemo.new()
 var runtime_default_font_path := ""
 var runtime_font_dir_path := ""
 var selected_backend := "Godot Native"
 var upscale_algorithm := "smooth"
+var output_resolution := OUTPUT_RESOLUTION_DEFAULT
 var render_surface_mode := "game"
+var frame_enhancement_enabled := false
+var frame_enhancement_kind := "off"
+var frame_enhancement_mode := FRAME_ENHANCEMENT_MODE_DEFAULT
+var frame_enhancement_custom_chain := PackedStringArray([
+    "anime4k_upscale_s", "bicubic", "anime4k_restore_soft_s",
+])
 var game_running := false
 var runtime_dialog_input: LineEdit = null
 var video_playing := false
@@ -1361,6 +1676,7 @@ var app_lifecycle_paused := false
 var render_errors := 0
 var last_renderer_info_logged := ""
 var last_texture_size := Vector2i.ZERO
+var last_source_texture_size := Vector2i.ZERO
 var capture_after_open_path := ""
 var capture_after_open_done := false
 var capture_after_open_delay_sec := 0.0
@@ -1427,6 +1743,7 @@ var dragging_touch_points := {}
 var pending_touch_index := -1
 var pending_touch_mapped := Vector2.ZERO
 var pending_touch_down_msec := 0
+var delayed_ons_touch_releases := {}
 var last_forwarded_touch_down_msec := 0
 var last_forwarded_touch_up_msec := 0
 var last_forwarded_touch_move_msec_by_id := {}
@@ -1450,9 +1767,56 @@ const PERF_LOG_INTERVAL := 2.0
 const UI_LOG_FLUSH_INTERVAL := 0.50
 const MAX_LOG_LINES := 240
 const RENDER_SURFACE_SIZE := Vector2i(1920, 1080)
-const RENDER_SURFACE_MAX_SIZE := Vector2i(1920, 1080)
+const RENDER_SURFACE_MAX_SIZE := Vector2i(3840, 2160)
 const RENDER_SURFACE_MODE_GAME := "game"
 const RENDER_SURFACE_MODE_DISPLAY := "display"
+const OUTPUT_RESOLUTION_DEFAULT := "1080p"
+const OUTPUT_RESOLUTION_MODES := ["original", "1080p", "2k", "4k"]
+const FRAME_ENHANCEMENT_KINDS := ["off", "preset", "custom"]
+const FRAME_ENHANCEMENT_MODE_DEFAULT := "chain_soft"
+const FRAME_ENHANCEMENT_MODES := [
+    "chain_4k_max", "chain_lossless", "chain_ultra", "chain_detail",
+    "chain_balanced", "chain_soft", "chain_light", "chain_basic",
+]
+const FRAME_ENHANCEMENT_PRESET_MODES := [
+    "chain_4k_max", "chain_lossless", "chain_ultra", "chain_detail",
+    "chain_balanced", "chain_soft", "chain_light", "chain_basic",
+]
+const FRAME_ENHANCEMENT_ALGORITHMS := [
+    "anime4k_upscale_s", "anime4k_upscale_l", "anime4k_upscale_vl",
+    "anime4k_restore_s", "anime4k_restore_soft_s", "anime4k_restore_soft_m",
+    "anime4k_restore_l", "anime4k_restore_vl",
+    "fsr1_easu", "fsr1_rcas", "bicubic", "lanczos", "fxaa",
+    "ravu_lite_r2", "cunny_2x4c", "nnedi3_nns16",
+]
+const FRAME_ENHANCEMENT_ALGORITHM_LABELS := {
+    "anime4k_upscale_s": "Anime4K Upscale S",
+    "anime4k_upscale_l": "Anime4K Upscale L",
+    "anime4k_upscale_vl": "Anime4K Upscale VL",
+    "anime4k_restore_s": "Anime4K Restore S",
+    "anime4k_restore_soft_s": "Anime4K Restore Soft S",
+    "anime4k_restore_soft_m": "Anime4K Restore Soft M",
+    "anime4k_restore_l": "Anime4K Restore L",
+    "anime4k_restore_vl": "Anime4K Restore VL",
+    "fsr1_easu": "FSR1 EASU",
+    "fsr1_rcas": "FSR1 RCAS",
+    "bicubic": "Bicubic",
+    "lanczos": "Lanczos",
+    "fxaa": "FXAA",
+    "ravu_lite_r2": "RAVU-Lite R2",
+    "cunny_2x4c": "CuNNy 2x4C",
+    "nnedi3_nns16": "NNEDI3 nns16",
+}
+const FRAME_ENHANCEMENT_CUSTOM_DEFAULT := [
+    "anime4k_upscale_s", "bicubic", "anime4k_restore_soft_s",
+]
+const FRAME_ENHANCEMENT_CUSTOM_MAX_STEPS := 32
+const AETHER_SELECT_OVERLAY_INPUT_GROUP := "aether_select_input_overlay"
+const OUTPUT_RESOLUTION_LIMITS := {
+    "1080p": Vector2i(1920, 1080),
+    "2k": Vector2i(2560, 1440),
+    "4k": Vector2i(3840, 2160),
+}
 const POST_INPUT_PRESENT_HOLD_FRAMES := 1
 const POST_CLICK_PRESENT_HOLD_FRAMES := 1
 const POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS := 120
@@ -1460,6 +1824,7 @@ const TOUCH_TAP_MIN_INTERVAL_MS := 0
 const TOUCH_ACTION_COOLDOWN_MS := 0
 const TOUCH_DRAG_MIN_INTERVAL_MS := 80
 const TOUCH_DRAG_DISTANCE_THRESHOLD := 18.0
+const ONS_TOUCH_CURSOR_DISTANCE_THRESHOLD := 4.0
 const TOUCH_BUSY_TICK_MS := 120.0
 const TOUCH_BUSY_SUPPRESS_MS := 0
 const VIRTUAL_KEYBOARD_REOPEN_DELAY_MS := 750
@@ -1467,6 +1832,8 @@ const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
 const TOUCH_SINGLE_TAP_DELAY_MS := 90
+const ONS_TOUCH_CLICK_HOLD_MS := 48
+const INPUT_DEVICE_ID_EMULATION := -1
 const BLACK_FRAME_GUARD_MS := 3200
 const BLACK_FRAME_SAMPLE_INTERVAL_MS := 120
 const BLACK_FRAME_VISIBLE_MIN := 8
@@ -2323,7 +2690,7 @@ func _build_shell_chrome() -> void:
     sidebar.add_child(shell_sidebar_toggle)
 
     shell_sidebar_version = Label.new()
-    shell_sidebar_version.text = "0.2.0-beta.1"
+    shell_sidebar_version.text = _application_version_text()
     shell_sidebar_version.add_theme_font_size_override("font_size", 10)
     shell_sidebar_version.add_theme_color_override("font_color", ui_tokens.text_tertiary)
     sidebar.add_child(shell_sidebar_version)
@@ -2543,10 +2910,31 @@ func _layout_shell(window_size: Vector2) -> void:
 func _load_shell_settings() -> void:
     var cfg := ConfigFile.new()
     var env_style := _runtime_string("AETHERKIRI_STYLE_MODE", "")
+    var env_frame_enhancement_kind := _runtime_string(
+        "AETHERKIRI_FRAME_ENHANCEMENT_KIND",
+        ""
+    )
+    var env_frame_enhancement_mode := _runtime_string(
+        "AETHERKIRI_FRAME_ENHANCEMENT_MODE",
+        ""
+    )
     if cfg.load(SETTINGS_FILE) != OK:
         var env_surface_mode := _runtime_string("AETHERKIRI_SURFACE_MODE", "")
         if not env_surface_mode.is_empty():
             _select_config_surface_mode(env_surface_mode)
+        output_resolution = _normalize_output_resolution(_runtime_string(
+            "AETHERKIRI_OUTPUT_RESOLUTION",
+            output_resolution
+        ))
+        if not env_frame_enhancement_kind.is_empty():
+            frame_enhancement_kind = _normalize_frame_enhancement_kind(
+                env_frame_enhancement_kind
+            )
+            frame_enhancement_enabled = frame_enhancement_kind != "off"
+        if not env_frame_enhancement_mode.is_empty():
+            frame_enhancement_mode = _normalize_frame_enhancement_mode(
+                env_frame_enhancement_mode
+            )
         _apply_language_mode()
         if not env_style.is_empty():
             style_mode = _normalize_style_mode(env_style)
@@ -2567,8 +2955,49 @@ func _load_shell_settings() -> void:
         upscale_algorithm = "smooth"
     if not upscale_algorithm in ["smooth", "nearest", "linear"]:
         upscale_algorithm = "smooth"
+    output_resolution = _normalize_output_resolution(String(cfg.get_value(
+        "rendering",
+        "output_resolution",
+        output_resolution
+    )))
+    output_resolution = _normalize_output_resolution(_runtime_string(
+        "AETHERKIRI_OUTPUT_RESOLUTION",
+        output_resolution
+    ))
     render_surface_mode = String(cfg.get_value("rendering", "surface_mode", render_surface_mode))
     _select_config_surface_mode(_runtime_string("AETHERKIRI_SURFACE_MODE", render_surface_mode))
+    var legacy_frame_enhancement_enabled := bool(cfg.get_value(
+        "rendering",
+        "frame_enhancement_enabled",
+        frame_enhancement_enabled
+    ))
+    frame_enhancement_kind = _normalize_frame_enhancement_kind(String(cfg.get_value(
+        "rendering",
+        "frame_enhancement_kind",
+        "preset" if legacy_frame_enhancement_enabled else "off"
+    )))
+    frame_enhancement_enabled = frame_enhancement_kind != "off"
+    frame_enhancement_mode = _normalize_frame_enhancement_mode(String(cfg.get_value(
+        "rendering",
+        "frame_enhancement_mode",
+        frame_enhancement_mode
+    )))
+    if not env_frame_enhancement_kind.is_empty():
+        frame_enhancement_kind = _normalize_frame_enhancement_kind(
+            env_frame_enhancement_kind
+        )
+        frame_enhancement_enabled = frame_enhancement_kind != "off"
+    if not env_frame_enhancement_mode.is_empty():
+        frame_enhancement_mode = _normalize_frame_enhancement_mode(
+            env_frame_enhancement_mode
+        )
+    frame_enhancement_custom_chain = _normalize_frame_enhancement_custom_chain(
+        cfg.get_value(
+            "rendering",
+            "frame_enhancement_custom_chain",
+            FRAME_ENHANCEMENT_CUSTOM_DEFAULT
+        )
+    )
     var legacy_perf_overlay := bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
     debug_overlay_mode = String(cfg.get_value("diagnostics", "overlay_mode", "summary" if legacy_perf_overlay else "off"))
     if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
@@ -2624,7 +3053,15 @@ func _save_shell_settings() -> void:
     cfg.set_value("interface", "ios_ui_scale_mode", ios_ui_scale_mode)
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
+    cfg.set_value("rendering", "output_resolution", output_resolution)
     cfg.set_value("rendering", "surface_mode", render_surface_mode)
+    cfg.set_value("rendering", "frame_enhancement_enabled", frame_enhancement_enabled)
+    cfg.set_value("rendering", "frame_enhancement_kind", frame_enhancement_kind)
+    cfg.set_value("rendering", "frame_enhancement_mode", frame_enhancement_mode)
+    cfg.set_value(
+        "rendering", "frame_enhancement_custom_chain",
+        frame_enhancement_custom_chain
+    )
     cfg.set_value("diagnostics", "profile", diagnostic_profile)
     cfg.set_value("diagnostics", "overlay_mode", debug_overlay_mode)
     cfg.set_value("rendering", "fps_limit_enabled", frame_limit_enabled)
@@ -2641,6 +3078,7 @@ func _save_shell_settings() -> void:
     cfg.save(SETTINGS_FILE)
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
     _apply_engine_options()
+    _apply_frame_enhancement_settings()
     _apply_shell_runtime_settings()
     if diagnostic_session != null:
         diagnostic_session.apply_preference(diagnostic_profile, player, selected_backend)
@@ -2658,7 +3096,12 @@ func _current_settings_snapshot() -> Dictionary:
         "ios_ui_scale_mode": ios_ui_scale_mode,
         "backend": selected_backend,
         "upscale_algorithm": upscale_algorithm,
+        "output_resolution": output_resolution,
         "surface_mode": render_surface_mode,
+        "frame_enhancement_enabled": frame_enhancement_enabled,
+        "frame_enhancement_kind": frame_enhancement_kind,
+        "frame_enhancement_mode": frame_enhancement_mode,
+        "frame_enhancement_custom_chain": frame_enhancement_custom_chain.duplicate(),
         "diagnostic_profile": diagnostic_profile,
         "debug_overlay_mode": debug_overlay_mode,
         "fps_limit_enabled": frame_limit_enabled,
@@ -2779,6 +3222,12 @@ func _settings_draft_bool(key: String, fallback: bool) -> bool:
 func _settings_draft_int(key: String, fallback: int) -> int:
     return int(settings_draft.get(key, fallback))
 
+func _settings_draft_custom_chain() -> PackedStringArray:
+    return _normalize_frame_enhancement_custom_chain(settings_draft.get(
+        "frame_enhancement_custom_chain",
+        frame_enhancement_custom_chain
+    ))
+
 func _apply_settings_snapshot(snapshot: Dictionary) -> void:
     language_mode = _normalize_language_mode(String(snapshot.get("language", language_mode)))
     _apply_language_mode()
@@ -2796,9 +3245,27 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
     if not upscale_algorithm in ["smooth", "nearest", "linear"]:
         upscale_algorithm = "smooth"
     _apply_upscale_algorithm()
+    output_resolution = _normalize_output_resolution(String(snapshot.get(
+        "output_resolution",
+        output_resolution
+    )))
 
     var next_surface_mode := String(snapshot.get("surface_mode", render_surface_mode))
     render_surface_mode = next_surface_mode if next_surface_mode in [RENDER_SURFACE_MODE_GAME, RENDER_SURFACE_MODE_DISPLAY] else _default_render_surface_mode()
+    frame_enhancement_kind = _normalize_frame_enhancement_kind(String(snapshot.get(
+        "frame_enhancement_kind",
+        "preset" if bool(snapshot.get(
+            "frame_enhancement_enabled", frame_enhancement_enabled
+        )) else "off"
+    )))
+    frame_enhancement_enabled = frame_enhancement_kind != "off"
+    frame_enhancement_mode = _normalize_frame_enhancement_mode(String(snapshot.get(
+        "frame_enhancement_mode",
+        frame_enhancement_mode
+    )))
+    frame_enhancement_custom_chain = _normalize_frame_enhancement_custom_chain(
+        snapshot.get("frame_enhancement_custom_chain", frame_enhancement_custom_chain)
+    )
     diagnostic_profile = String(snapshot.get("diagnostic_profile", diagnostic_profile))
     if not diagnostic_profile in DIAGNOSTIC_PROFILES:
         diagnostic_profile = "baseline" if OS.is_debug_build() else "off"
@@ -2826,6 +3293,7 @@ func _save_settings_draft() -> void:
     var previous_ios_ui_scale_mode := ios_ui_scale_mode
     var previous_backend := selected_backend
     var previous_surface_mode := render_surface_mode
+    var previous_output_resolution := output_resolution
     var snapshot := settings_draft.duplicate()
 
     _apply_settings_snapshot(snapshot)
@@ -2846,7 +3314,8 @@ func _save_settings_draft() -> void:
             else:
                 _apply_backend(true)
 
-    if previous_surface_mode != render_surface_mode and game_running:
+    if (previous_surface_mode != render_surface_mode or
+            previous_output_resolution != output_resolution) and game_running:
         _sync_player_surface_size(true)
 
     var language_changed := previous_language != language_mode or previous_active_language != active_language
@@ -2884,6 +3353,10 @@ func _apply_engine_options() -> void:
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if effective_trace_log else "0")
     player.set_engine_option("input_trace", "1" if effective_input_trace else "0")
+    # A synchronous Artemis resource load can make the next Godot frame carry
+    # hundreds of milliseconds. Keep visual evolution incremental so authored
+    # E-mote expressions and fades cannot collapse into a one-frame flash.
+    player.set_engine_option("artemis.max_visual_delta_ms", "34")
     var effective_export_scripts := export_scripts or _runtime_flag("AETHERKIRI_EXPORT_SCRIPTS", false)
     player.set_engine_option("export_scripts", "1" if effective_export_scripts else "0")
     if not runtime_default_font_path.is_empty():
@@ -2891,6 +3364,28 @@ func _apply_engine_options() -> void:
     if not runtime_font_dir_path.is_empty():
         player.set_engine_option("font_dir", runtime_font_dir_path)
     player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
+    var onscripter_encoding := OS.get_environment("AETHERKIRI_ONS_ENCODING").strip_edges()
+    if not onscripter_encoding.is_empty():
+        player.set_engine_option("onscripter_encoding", onscripter_encoding)
+
+func _apply_frame_enhancement_settings() -> void:
+    if player == null or not player.has_method("set_frame_enhancement_enabled"):
+        return
+    if player.has_method("set_frame_native_output_enabled"):
+        player.set_frame_native_output_enabled(output_resolution == "original")
+    if player.has_method("set_frame_enhancement_custom_chain"):
+        player.set_frame_enhancement_custom_chain(frame_enhancement_custom_chain)
+    player.set_frame_enhancement_mode(
+        "custom" if frame_enhancement_kind == "custom" else frame_enhancement_mode
+    )
+    player.set_frame_enhancement_enabled(frame_enhancement_kind != "off")
+
+func _frame_enhancement_description() -> String:
+    if player == null or not player.has_method("is_frame_enhancement_available"):
+        return _t("settings.frame_enhancement_unavailable_desc")
+    if not bool(player.is_frame_enhancement_available()):
+        return _t("settings.frame_enhancement_unavailable_desc")
+    return _t("settings.frame_enhancement_desc")
 
 func _apply_diagnostic_profile_environment(profile_name: String) -> void:
     var catalog := DiagnosticSession.profile_catalog()
@@ -3308,6 +3803,10 @@ func _layout_home_view(window_size: Vector2) -> void:
     home_header_box.add_theme_constant_override("separation", 12 if phone else (16 if compact else 24))
     home_title_label.add_theme_font_size_override("font_size", 27 if phone else 31)
     home_subtitle_label.add_theme_font_size_override("font_size", 13 if phone else 14)
+    if is_instance_valid(home_search_host):
+        home_search_host.custom_minimum_size.y = 60.0 if phone else 64.0
+    if is_instance_valid(home_search_input):
+        home_search_input.add_theme_font_size_override("font_size", 16 if phone else 17)
     home_actions.alignment = BoxContainer.ALIGNMENT_END
     home_primary_button.text = ""
     _sync_home_action_labels()
@@ -3332,16 +3831,93 @@ func _layout_home_view(window_size: Vector2) -> void:
     if not home_layout_initialized or home_compact_layout != compact:
         home_compact_layout = compact
         home_layout_initialized = true
-        if home_library_mode == "video" and video_list != null and video_list.get_child_count() > 0:
+        if home_library_mode == "video" and not known_videos.is_empty():
             call_deferred("_refresh_videos")
-        elif game_list.get_child_count() > 0:
+        elif not known_games.is_empty():
             call_deferred("_refresh_games")
 
 func _sync_home_header_text() -> void:
     if is_instance_valid(home_title_label):
         home_title_label.text = _t("nav.videos") if home_library_mode == "video" else _t("nav.library")
-    if is_instance_valid(home_subtitle_label):
-        home_subtitle_label.text = _t("video.status") if home_library_mode == "video" else _t("home.game_count", [known_games.size()])
+    _sync_home_search_box()
+    _sync_home_subtitle_text()
+
+func _current_home_search_query() -> String:
+    return String(home_search_queries.get(home_library_mode, "")).strip_edges()
+
+func _sync_home_search_box() -> void:
+    if not is_instance_valid(home_search_input):
+        return
+    home_search_input.placeholder_text = _t(
+        "search.videos_placeholder" if home_library_mode == "video" else "search.games_placeholder"
+    )
+    home_search_input.accessibility_name = home_search_input.placeholder_text
+    var desired_text := String(home_search_queries.get(home_library_mode, ""))
+    if home_search_input.text == desired_text:
+        return
+    home_search_syncing = true
+    home_search_input.text = desired_text
+    home_search_syncing = false
+
+func _sync_home_subtitle_text() -> void:
+    if not is_instance_valid(home_subtitle_label):
+        return
+    var total := known_videos.size() if home_library_mode == "video" else known_games.size()
+    var visible := home_filtered_video_count if home_library_mode == "video" else home_filtered_game_count
+    if _current_home_search_query().is_empty():
+        home_subtitle_label.text = _t(
+            "video.video_count" if home_library_mode == "video" else "home.game_count",
+            [total]
+        )
+    else:
+        home_subtitle_label.text = _t("search.filtered_count", [visible, total])
+
+func _library_search_matches(values: Array, query: String) -> bool:
+    var normalized_query := query.strip_edges().to_lower()
+    if normalized_query.is_empty():
+        return true
+    normalized_query = normalized_query.replace("\t", " ").replace("\n", " ")
+    var haystack_parts := PackedStringArray()
+    for value in values:
+        haystack_parts.append(String(value).to_lower())
+    var haystack := " ".join(haystack_parts)
+    for token in normalized_query.split(" ", false):
+        if not haystack.contains(String(token)):
+            return false
+    return true
+
+func _game_matches_home_search(game: Dictionary, query: String) -> bool:
+    return _library_search_matches([
+        _game_display_title(game),
+        game.get("name", ""),
+        game.get("path", ""),
+        game.get("developer", ""),
+        GameLaunchEntry.configured_relative_path(game),
+    ], query)
+
+func _video_matches_home_search(video: Dictionary, query: String) -> bool:
+    return _library_search_matches([
+        video.get("name", ""),
+        video.get("fileName", ""),
+        video.get("path", ""),
+    ], query)
+
+func _on_home_search_text_changed(value: String) -> void:
+    if home_search_syncing:
+        return
+    home_search_queries[home_library_mode] = value
+    if home_library_mode == "video":
+        _rebuild_video_cards(false)
+    else:
+        _rebuild_game_cards(false)
+
+func _home_search_outer_style() -> StyleBoxFlat:
+    var style := ui_tokens.panel(ui_tokens.background, 29, ui_tokens.separator, 1)
+    style.content_margin_left = 20
+    style.content_margin_top = 4
+    style.content_margin_right = 18
+    style.content_margin_bottom = 4
+    return style
 
 func _sync_home_action_labels() -> void:
     if is_instance_valid(home_primary_button):
@@ -3402,6 +3978,40 @@ func _build_home_view() -> void:
     home_guide_button.custom_minimum_size = Vector2(ui_tokens.CONTROL_HEIGHT, ui_tokens.CONTROL_HEIGHT)
     _apply_shell_compact_state(home_guide_button, false)
     home_actions.add_child(home_guide_button)
+
+    home_search_host = PanelContainer.new()
+    home_search_host.name = "LibrarySearchBar"
+    home_search_host.custom_minimum_size = Vector2(0, 64)
+    home_search_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    home_search_host.add_theme_stylebox_override("panel", _home_search_outer_style())
+    page.add_child(home_search_host)
+
+    var search_row := HBoxContainer.new()
+    search_row.add_theme_constant_override("separation", 12)
+    home_search_host.add_child(search_row)
+
+    var search_icon := _icon_rect(ICON_SEARCH, Vector2(23, 23), ui_tokens.text_secondary)
+    search_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    search_row.add_child(search_icon)
+
+    home_search_input = LineEdit.new()
+    home_search_input.name = "LibrarySearch"
+    home_search_input.clear_button_enabled = true
+    home_search_input.custom_minimum_size = Vector2(0, 44)
+    home_search_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    home_search_input.max_length = 200
+    home_search_input.add_theme_font_size_override("font_size", 17)
+    home_search_input.add_theme_color_override("font_color", ui_tokens.text_primary)
+    home_search_input.add_theme_color_override("font_placeholder_color", ui_tokens.text_secondary)
+    home_search_input.add_theme_color_override("caret_color", ui_tokens.text_primary)
+    home_search_input.caret_blink = true
+    home_search_input.caret_blink_interval = 0.5
+    home_search_input.add_theme_stylebox_override("normal", _empty_style())
+    home_search_input.add_theme_stylebox_override("focus", _empty_style())
+    home_search_input.add_theme_stylebox_override("read_only", _empty_style())
+    home_search_input.text_changed.connect(_on_home_search_text_changed)
+    search_row.add_child(home_search_input)
+    _sync_home_search_box()
 
     var library_body := Control.new()
     library_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -3668,6 +4278,35 @@ func _rebuild_settings_view() -> void:
     _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
     _add_settings_row(render_group, _settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select(), stack_settings_controls))
     _add_settings_row(render_group, _settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select(), stack_settings_controls))
+    _add_settings_row(render_group, _settings_block(
+        _t("settings.output_resolution"),
+        _t("settings.output_resolution_desc"),
+        _output_resolution_select(),
+        stack_settings_controls
+    ))
+    _add_settings_row(render_group, _settings_block(
+        _t("settings.frame_enhancement"),
+        _frame_enhancement_description(),
+        _frame_enhancement_kind_select(),
+        stack_settings_controls
+    ))
+    var enhancement_kind := _normalize_frame_enhancement_kind(
+        _settings_draft_string("frame_enhancement_kind", frame_enhancement_kind)
+    )
+    if enhancement_kind == "preset":
+        _add_settings_row(render_group, _settings_block(
+            _t("settings.frame_enhancement_mode"),
+            _t("settings.frame_enhancement_mode_desc"),
+            _frame_enhancement_mode_select(),
+            stack_settings_controls
+        ))
+    elif enhancement_kind == "custom":
+        _add_settings_row(render_group, _settings_block(
+            _t("settings.frame_enhancement_mode"),
+            _t("settings.frame_enhancement_custom_desc"),
+            _frame_enhancement_custom_editor(),
+            true
+        ))
     _add_settings_row(render_group, _settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
     if _settings_draft_bool("fps_limit_enabled", frame_limit_enabled):
         _add_settings_row(render_group, _settings_fps_row())
@@ -3735,11 +4374,14 @@ func _rebuild_settings_view() -> void:
         ))
     _add_settings_row(about_group, _settings_value_row(
         _t("settings.version"),
-        str(ProjectSettings.get_setting("application/config/version", "development"))
+        _application_version_text()
     ))
 
     if animate_page:
         ui_motion.reveal(top)
+
+func _application_version_text() -> String:
+    return str(ProjectSettings.get_setting("application/config/version", "development"))
 
 func _build_detail_view() -> void:
     detail_view = Control.new()
@@ -4175,6 +4817,7 @@ func _build_loading_panel() -> void:
     loading_spinner.position = Vector2(12, 12)
     loading_spinner.size = Vector2(20, 20)
     loading_spinner.pivot_offset = Vector2(10, 10)
+    loading_spinner.flip_h = LOADING_SPINNER_FLIP_H
     spinner_holder.add_child(loading_spinner)
 
     var loading_labels := VBoxContainer.new()
@@ -4192,7 +4835,11 @@ func _build_loading_panel() -> void:
     loading_labels.add_child(loading_title_label)
     if not ui_motion.reduced_motion:
         var spinner_tween := loading_spinner.create_tween().set_loops()
-        spinner_tween.tween_property(loading_spinner, "rotation", TAU, 0.85).from(0.0).set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
+        # Mirror the counter-clockwise refresh glyph so it follows this
+        # clockwise loading motion without changing shared refresh icons.
+        spinner_tween.tween_property(
+            loading_spinner, "rotation", LOADING_SPINNER_ROTATION, 0.85
+        ).from(0.0).set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
 
     if ui_log_enabled and not _mobile_runtime():
         log_view = TextEdit.new()
@@ -5224,6 +5871,149 @@ func _upscale_select() -> Control:
     )
     return select
 
+func _output_resolution_select() -> Control:
+    var select = _apple_select()
+    var options := [
+        {"label": _t("settings.output_resolution.original"), "value": "original"},
+        {"label": "1080p", "value": "1080p"},
+        {"label": "2K (2560×1440)", "value": "2k"},
+        {"label": "4K (3840×2160)", "value": "4k"},
+    ]
+    var selected_index := 0
+    var draft_resolution := _normalize_output_resolution(_settings_draft_string(
+        "output_resolution",
+        output_resolution
+    ))
+    for i in range(options.size()):
+        select.add_item(String(options[i]["label"]))
+        select.set_item_metadata(i, String(options[i]["value"]))
+        if String(options[i]["value"]) == draft_resolution:
+            selected_index = i
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_output_resolution(String(select.get_item_metadata(index)))
+    )
+    return select
+
+func _frame_enhancement_mode_select() -> Control:
+    var select = _apple_select()
+    var selected_index := 0
+    var draft_mode := _normalize_frame_enhancement_mode(_settings_draft_string(
+        "frame_enhancement_mode",
+        frame_enhancement_mode
+    ))
+    for value in FRAME_ENHANCEMENT_PRESET_MODES:
+        select.add_item(_t("settings.frame_enhancement_mode.%s" % value))
+        select.set_item_metadata(select.item_count - 1, value)
+        if value == draft_mode:
+            selected_index = select.item_count - 1
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_frame_enhancement_mode(String(select.get_item_metadata(index)))
+    )
+    return select
+
+func _frame_enhancement_kind_select() -> Control:
+    var select = _apple_select()
+    var draft_kind := _normalize_frame_enhancement_kind(_settings_draft_string(
+        "frame_enhancement_kind",
+        frame_enhancement_kind
+    ))
+    var selected_index := 0
+    for kind in FRAME_ENHANCEMENT_KINDS:
+        select.add_item(_t("settings.frame_enhancement_kind.%s" % kind))
+        select.set_item_metadata(select.item_count - 1, kind)
+        if kind == draft_kind:
+            selected_index = select.item_count - 1
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_frame_enhancement_kind(String(select.get_item_metadata(index)))
+    )
+    return select
+
+func _frame_enhancement_custom_editor() -> Control:
+    var editor := VBoxContainer.new()
+    editor.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    editor.add_theme_constant_override("separation", 12)
+    var chain := _settings_draft_custom_chain()
+    if chain.is_empty():
+        var empty := Label.new()
+        empty.text = _t("settings.frame_enhancement_custom_empty")
+        empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+        empty.add_theme_font_size_override("font_size", 13)
+        empty.add_theme_color_override("font_color", ui_tokens.text_secondary)
+        editor.add_child(empty)
+    for index in range(chain.size()):
+        editor.add_child(_frame_enhancement_custom_row(index, chain[index]))
+    var add_button := _pill_button(_t("settings.frame_enhancement_custom_add"))
+    # Clipped Button text is excluded from Godot's minimum-width calculation.
+    # This control shrinks to its content, so give the localized label a real
+    # width and keep it visible instead of leaving only the stylebox margins.
+    add_button.clip_text = false
+    add_button.custom_minimum_size = Vector2(220, 44)
+    add_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    add_button.disabled = chain.size() >= FRAME_ENHANCEMENT_CUSTOM_MAX_STEPS
+    _sync_pill_button_content_state(add_button)
+    add_button.pressed.connect(_add_frame_enhancement_custom_algorithm)
+    editor.add_child(add_button)
+    return editor
+
+func _frame_enhancement_custom_row(index: int, algorithm_id: String) -> Control:
+    var row := HBoxContainer.new()
+    row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    row.custom_minimum_size = Vector2(0, 72)
+    row.add_theme_constant_override("separation", 10)
+    var summary := VBoxContainer.new()
+    summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    summary.add_theme_constant_override("separation", 3)
+    row.add_child(summary)
+    var title := Label.new()
+    title.text = "%s · %s" % [
+        _t("settings.frame_enhancement_custom_step") % (index + 1),
+        String(FRAME_ENHANCEMENT_ALGORITHM_LABELS.get(algorithm_id, algorithm_id)),
+    ]
+    title.add_theme_font_size_override("font_size", 14)
+    title.add_theme_color_override("font_color", ui_tokens.text_primary)
+    summary.add_child(title)
+    var description := Label.new()
+    description.text = _t("settings.frame_enhancement_algorithm.%s.desc" % algorithm_id)
+    description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    description.add_theme_font_size_override("font_size", 12)
+    description.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    summary.add_child(description)
+    var select = _apple_select(250)
+    var selected_index := 0
+    for option_index in range(FRAME_ENHANCEMENT_ALGORITHMS.size()):
+        var option_id: String = FRAME_ENHANCEMENT_ALGORITHMS[option_index]
+        select.add_item(String(FRAME_ENHANCEMENT_ALGORITHM_LABELS[option_id]))
+        select.set_item_metadata(option_index, option_id)
+        if option_id == algorithm_id:
+            selected_index = option_index
+    select.select(selected_index)
+    select.item_selected.connect(func(option_index: int):
+        _select_frame_enhancement_custom_algorithm(
+            index,
+            String(select.get_item_metadata(option_index))
+        )
+    )
+    row.add_child(select)
+    var remove := Button.new()
+    remove.text = "−"
+    remove.tooltip_text = _t("settings.frame_enhancement_custom_remove")
+    remove.accessibility_name = remove.tooltip_text
+    remove.custom_minimum_size = Vector2(40, 40)
+    remove.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    remove.add_theme_font_size_override("font_size", 20)
+    remove.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    remove.add_theme_color_override("font_hover_color", ui_tokens.danger)
+    remove.add_theme_stylebox_override("normal", ui_tokens.button_style(Color.TRANSPARENT, ui_tokens.separator, 8))
+    remove.add_theme_stylebox_override("hover", ui_tokens.button_style(ui_tokens.surface_hover, ui_tokens.danger, 8))
+    remove.add_theme_stylebox_override("pressed", ui_tokens.button_style(ui_tokens.accent_fill, ui_tokens.danger, 8))
+    remove.pressed.connect(func(): _remove_frame_enhancement_custom_algorithm(index))
+    ui_motion.bind_pressable(remove)
+    row.add_child(remove)
+    return row
+
 func _surface_mode_select() -> Control:
     var select = _apple_select()
     var options := [
@@ -5338,6 +6128,90 @@ func _select_upscale_algorithm(value: String) -> void:
         return
     _set_settings_draft_value("upscale_algorithm", value)
 
+func _normalize_output_resolution(value: String) -> String:
+    var normalized := value.strip_edges().to_lower()
+    if normalized == "1440p":
+        normalized = "2k"
+    elif normalized == "2160p":
+        normalized = "4k"
+    return normalized if normalized in OUTPUT_RESOLUTION_MODES else OUTPUT_RESOLUTION_DEFAULT
+
+func _select_output_resolution(value: String) -> void:
+    var normalized := _normalize_output_resolution(value)
+    if normalized != value.strip_edges().to_lower():
+        return
+    _set_settings_draft_value("output_resolution", normalized)
+
+func _normalize_frame_enhancement_mode(value: String) -> String:
+    var normalized := value.strip_edges().to_lower()
+    if normalized == "auto":
+        normalized = FRAME_ENHANCEMENT_MODE_DEFAULT
+    return normalized if normalized in FRAME_ENHANCEMENT_MODES else FRAME_ENHANCEMENT_MODE_DEFAULT
+
+func _normalize_frame_enhancement_kind(value: String) -> String:
+    var normalized := value.strip_edges().to_lower()
+    return normalized if normalized in FRAME_ENHANCEMENT_KINDS else "off"
+
+func _normalize_frame_enhancement_custom_chain(value) -> PackedStringArray:
+    var normalized := PackedStringArray()
+    if not (value is Array or value is PackedStringArray):
+        value = FRAME_ENHANCEMENT_CUSTOM_DEFAULT
+    for entry in value:
+        var algorithm_id := String(entry).strip_edges().to_lower()
+        if algorithm_id in FRAME_ENHANCEMENT_ALGORITHMS:
+            normalized.push_back(algorithm_id)
+        if normalized.size() >= FRAME_ENHANCEMENT_CUSTOM_MAX_STEPS:
+            break
+    return normalized
+
+func _select_frame_enhancement_kind(value: String) -> void:
+    var normalized := _normalize_frame_enhancement_kind(value)
+    if normalized != value.strip_edges().to_lower():
+        return
+    _set_settings_draft_value("frame_enhancement_kind", normalized)
+    _set_settings_draft_value("frame_enhancement_enabled", normalized != "off")
+    call_deferred("_rebuild_settings_after_enhancement_change")
+
+func _select_frame_enhancement_mode(value: String) -> void:
+    var normalized := _normalize_frame_enhancement_mode(value)
+    if normalized != value.strip_edges().to_lower():
+        return
+    _set_settings_draft_value("frame_enhancement_mode", normalized)
+
+func _select_frame_enhancement_custom_algorithm(index: int, value: String) -> void:
+    if not value in FRAME_ENHANCEMENT_ALGORITHMS:
+        return
+    var chain := _settings_draft_custom_chain()
+    if index < 0 or index >= chain.size():
+        return
+    chain[index] = value
+    _set_settings_draft_value("frame_enhancement_custom_chain", chain)
+    call_deferred("_rebuild_settings_after_enhancement_change")
+
+func _add_frame_enhancement_custom_algorithm() -> void:
+    var chain := _settings_draft_custom_chain()
+    if chain.size() >= FRAME_ENHANCEMENT_CUSTOM_MAX_STEPS:
+        return
+    chain.push_back("anime4k_upscale_s")
+    _set_settings_draft_value("frame_enhancement_custom_chain", chain)
+    call_deferred("_rebuild_settings_after_enhancement_change")
+
+func _remove_frame_enhancement_custom_algorithm(index: int) -> void:
+    var chain := _settings_draft_custom_chain()
+    if index < 0 or index >= chain.size():
+        return
+    chain.remove_at(index)
+    _set_settings_draft_value("frame_enhancement_custom_chain", chain)
+    call_deferred("_rebuild_settings_after_enhancement_change")
+
+func _rebuild_settings_after_enhancement_change() -> void:
+    if settings_view == null or not is_instance_valid(settings_view):
+        return
+    var restore_scroll := settings_view.scroll_vertical
+    settings_animate_next = false
+    _rebuild_settings_view()
+    call_deferred("_restore_settings_scroll_after_relayout", restore_scroll)
+
 func _default_render_surface_mode() -> String:
     return RENDER_SURFACE_MODE_GAME
 
@@ -5444,6 +6318,7 @@ func _refresh_language_texts() -> void:
         video_empty_title_label.text = _t("video.empty_title")
     if is_instance_valid(video_empty_help_label):
         video_empty_help_label.text = _video_empty_help_text()
+    _sync_home_empty_state_text()
     if is_instance_valid(empty_primary_button):
         _set_pill_button_text(empty_primary_button, _t("home.refresh") if OS.get_name() == "iOS" else _t("home.import"))
     _sync_home_action_labels()
@@ -5475,17 +6350,31 @@ func _select_home_library(mode: String) -> void:
 func _apply_home_library_visibility() -> void:
     var video_mode := home_library_mode == "video"
     if is_instance_valid(game_scroll):
-        game_scroll.visible = not video_mode and not known_games.is_empty()
+        game_scroll.visible = not video_mode and home_filtered_game_count > 0
     if is_instance_valid(empty_state):
-        empty_state.visible = not video_mode and known_games.is_empty()
+        empty_state.visible = not video_mode and home_filtered_game_count == 0
     if is_instance_valid(video_scroll):
-        video_scroll.visible = video_mode and not known_videos.is_empty()
+        video_scroll.visible = video_mode and home_filtered_video_count > 0
     if is_instance_valid(video_empty_state):
-        video_empty_state.visible = video_mode and known_videos.is_empty()
+        video_empty_state.visible = video_mode and home_filtered_video_count == 0
+    _sync_home_empty_state_text()
     if is_instance_valid(home_game_tab):
         _set_home_tab_active(home_game_tab, not video_mode)
     if is_instance_valid(home_video_tab):
         _set_home_tab_active(home_video_tab, video_mode)
+
+func _sync_home_empty_state_text() -> void:
+    var searching := not _current_home_search_query().is_empty()
+    if is_instance_valid(empty_title_label):
+        empty_title_label.text = _t("search.no_results_title") if searching else _t("home.empty_title")
+    if is_instance_valid(empty_help_label):
+        empty_help_label.text = _t("search.no_results_help") if searching else _empty_help_text()
+    if is_instance_valid(empty_primary_button):
+        empty_primary_button.visible = not searching
+    if is_instance_valid(video_empty_title_label):
+        video_empty_title_label.text = _t("search.no_results_title") if searching else _t("video.empty_title")
+    if is_instance_valid(video_empty_help_label):
+        video_empty_help_label.text = _t("search.no_results_help") if searching else _video_empty_help_text()
 
 func _set_home_tab_active(button: Button, active: bool) -> void:
     button.disabled = false
@@ -6515,17 +7404,42 @@ func _set_cover_for_selected() -> void:
     var path := String(selected_game.get("path", ""))
     if path.is_empty():
         return
+    _finish_hero_overlay()
+    if OS.get_name() == "iOS" \
+            and player != null \
+            and player.has_method("native_cover_file_picker_open"):
+        var cover_directory := ProjectSettings.globalize_path("user://Covers")
+        if bool(player.native_cover_file_picker_open(
+                _t("dialog.choose_cover"), path, cover_directory
+        )):
+            native_cover_file_picker_pending = true
+            native_cover_file_picker_library_path = path
+            return
+    _show_cover_godot_dialog(path)
+
+func _show_cover_godot_dialog(path: String) -> void:
     var dialog := _create_file_dialog(
         _t("dialog.choose_cover"),
         FileDialog.FILE_MODE_OPEN_FILE,
         PackedStringArray(["*.png,*.jpg,*.jpeg,*.webp;Image;image/png,image/jpeg,image/webp"])
     )
+    if DirAccess.dir_exists_absolute(path):
+        dialog.current_dir = path
     dialog.file_selected.connect(func(cover_path: String):
-        _update_game(path, {"coverPath": cover_path})
-        _show_detail(selected_game)
+        _apply_selected_cover(path, cover_path)
     )
     add_child(dialog)
     dialog.popup_centered(Vector2i(900, 640))
+
+func _apply_selected_cover(library_path: String, cover_path: String) -> void:
+    if cover_path.is_empty() or not FileAccess.file_exists(cover_path):
+        _show_system_alert(
+            _t("message.cover_file_missing", [cover_path]),
+            _t("alert.warning_title")
+        )
+        return
+    _update_game(library_path, {"coverPath": cover_path})
+    _show_detail(selected_game)
 
 func _game_launch_entry_label(game: Dictionary) -> String:
     var relative_path := GameLaunchEntry.configured_relative_path(game)
@@ -6536,6 +7450,7 @@ func _game_launch_entry_label(game: Dictionary) -> String:
 func _can_configure_launch_file(game: Dictionary) -> bool:
     return OS.get_name() != "Web" \
         and not builtin_demo.is_game(game) \
+        and _game_runtime_kind(String(game.get("path", ""))) != RUNTIME_ONSCRIPTER \
         and String(game.get("type", "Directory")).to_lower() == "directory"
 
 func _set_launch_file_for_selected() -> void:
@@ -6609,6 +7524,33 @@ func _poll_native_launch_file_picker() -> void:
     match String(result.get("status", "error")):
         "selected":
             _apply_selected_launch_file(library_path, String(result.get("path", "")))
+        "cancelled":
+            pass
+        _:
+            _show_system_alert(
+                String(result.get("error", "System file picker failed")),
+                _t("alert.warning_title")
+            )
+
+func _poll_native_cover_file_picker() -> void:
+    if not native_cover_file_picker_pending \
+            or player == null \
+            or not player.has_method("native_launch_file_picker_take_result_json"):
+        return
+    var result_json := String(player.native_launch_file_picker_take_result_json())
+    if result_json.is_empty():
+        return
+    var library_path := native_cover_file_picker_library_path
+    native_cover_file_picker_pending = false
+    native_cover_file_picker_library_path = ""
+    var parsed = JSON.parse_string(result_json)
+    if typeof(parsed) != TYPE_DICTIONARY:
+        _show_system_alert(result_json, _t("alert.warning_title"))
+        return
+    var result: Dictionary = parsed
+    match String(result.get("status", "error")):
+        "selected":
+            _apply_selected_cover(library_path, String(result.get("path", "")))
         "cancelled":
             pass
         _:
@@ -6981,19 +7923,44 @@ func _open_import_dialog() -> void:
         FileDialog.FILE_MODE_OPEN_DIR,
         PackedStringArray()
     )
+    if OS.get_name() == "macOS":
+        var last_import_directory := _load_last_import_directory()
+        if not last_import_directory.is_empty():
+            dialog.current_dir = last_import_directory
     dialog.dir_selected.connect(func(path: String):
-        _add_game_path(path)
+        if _add_game_path(path):
+            _remember_import_directory(path)
     )
     dialog.file_selected.connect(func(path: String):
-        _add_game_path(path)
+        if _add_game_path(path):
+            _remember_import_directory(path)
     )
     add_child(dialog)
     dialog.popup_centered(Vector2i(900, 640))
+
+func _load_last_import_directory() -> String:
+    var cfg := ConfigFile.new()
+    if cfg.load(IMPORT_STATE_FILE) != OK:
+        return ""
+    var path := String(cfg.get_value("import", "last_directory", ""))
+    return path if DirAccess.dir_exists_absolute(path) else ""
+
+func _remember_import_directory(imported_path: String) -> void:
+    if OS.get_name() != "macOS":
+        return
+    var parent_directory := imported_path.simplify_path().get_base_dir()
+    if not DirAccess.dir_exists_absolute(parent_directory):
+        return
+    var cfg := ConfigFile.new()
+    cfg.set_value("import", "last_directory", parent_directory)
+    cfg.save(IMPORT_STATE_FILE)
 
 func _refresh_games() -> void:
     var loaded_games := _load_game_list()
     known_games = builtin_demo.reconcile_games(loaded_games)
     var library_changed := JSON.stringify(known_games) != JSON.stringify(loaded_games)
+    if _backfill_default_game_covers(known_games):
+        library_changed = true
     if OS.get_name() == "iOS":
         known_games = _scan_ios_games_dir(known_games)
         _save_game_list(known_games)
@@ -7002,17 +7969,28 @@ func _refresh_games() -> void:
     if library_changed:
         _sync_web_user_fs("builtin_demo_reconciled")
     known_games = _sorted_games(known_games)
-    _sync_home_header_text()
+    _rebuild_game_cards(not home_cards_animated_once)
+
+func _rebuild_game_cards(animate_cards: bool = false) -> void:
+    if game_list == null:
+        return
+    var query := String(home_search_queries.get("game", ""))
+    var filtered_games: Array[Dictionary] = []
+    for game in known_games:
+        if _game_matches_home_search(game, query):
+            filtered_games.append(game)
+    home_filtered_game_count = filtered_games.size()
     for child in game_list.get_children():
+        game_list.remove_child(child)
         child.queue_free()
-    var animate_cards := not home_cards_animated_once
-    for index in range(known_games.size()):
-        var card := _game_card(known_games[index])
+    for index in range(filtered_games.size()):
+        var card := _game_card(filtered_games[index])
         game_list.add_child(card)
         if animate_cards:
             ui_motion.reveal(card, minf(float(index) * 0.025, 0.15))
-    if animate_cards and not known_games.is_empty():
+    if animate_cards and not filtered_games.is_empty():
         home_cards_animated_once = true
+    _sync_home_header_text()
     _apply_home_library_visibility()
 
 func _refresh_videos() -> void:
@@ -7027,12 +8005,22 @@ func _refresh_videos() -> void:
     known_videos.sort_custom(func(a: Dictionary, b: Dictionary):
         return String(a.get("name", "")).naturalnocasecmp_to(String(b.get("name", ""))) < 0
     )
-    _sync_home_header_text()
+    _rebuild_video_cards(false)
+
+func _rebuild_video_cards(_animate_cards: bool = false) -> void:
+    var query := String(home_search_queries.get("video", ""))
+    var filtered_videos: Array[Dictionary] = []
+    for video in known_videos:
+        if _video_matches_home_search(video, query):
+            filtered_videos.append(video)
+    home_filtered_video_count = filtered_videos.size()
     if video_list != null:
         for child in video_list.get_children():
+            video_list.remove_child(child)
             child.queue_free()
-        for video in known_videos:
+        for video in filtered_videos:
             video_list.add_child(_video_card(video))
+    _sync_home_header_text()
     _apply_home_library_visibility()
 
 func _load_video_list() -> Array[Dictionary]:
@@ -7873,16 +8861,77 @@ func _game_info_from_path(path: String) -> Dictionary:
     var name := path.get_file()
     if name.to_lower().ends_with(".xp3"):
         name = name.substr(0, name.length() - 4)
+    var default_cover_path := _discover_default_cover_path(path)
     return {
         "name": name,
         "path": path,
         "type": "Archive" if path.to_lower().ends_with(".xp3") else "Directory",
         "lastPlayed": 0,
         "playDurationSeconds": 0,
-        "coverPath": "",
+        "coverPath": default_cover_path,
+        GAME_AUTO_COVER_SCANNED_FIELD: true,
         "developer": "",
         "title": "",
+        "engine": _game_runtime_kind(path),
     }
+
+func _game_runtime_root(path: String) -> String:
+    var resolved := _resolve_game_path(path)
+    if FileAccess.file_exists(resolved):
+        return resolved.get_base_dir()
+    return resolved
+
+func _game_runtime_kind(path: String) -> String:
+    var root := _game_runtime_root(path)
+    if root.is_empty():
+        return RUNTIME_KIRIKIRI
+    for marker in ONSCRIPTER_SCRIPT_MARKERS:
+        if FileAccess.file_exists(root.path_join(marker)):
+            return RUNTIME_ONSCRIPTER
+    return RUNTIME_KIRIKIRI
+
+func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
+    var changed := false
+    for index in range(games.size()):
+        var game := games[index]
+        if builtin_demo.is_game(game):
+            continue
+        if bool(game.get(GAME_AUTO_COVER_SCANNED_FIELD, false)):
+            continue
+        if String(game.get("coverPath", "")).is_empty():
+            var discovered_path := _discover_default_cover_path(String(game.get("path", "")))
+            if not discovered_path.is_empty():
+                game["coverPath"] = discovered_path
+        game[GAME_AUTO_COVER_SCANNED_FIELD] = true
+        games[index] = game
+        changed = true
+    return changed
+
+func _discover_default_cover_path(game_path: String) -> String:
+    var directory := game_path
+    if not DirAccess.dir_exists_absolute(directory):
+        directory = game_path.get_base_dir()
+    var dir := DirAccess.open(directory)
+    if dir == null:
+        return ""
+
+    var best_path := ""
+    var best_score := DEFAULT_COVER_BASENAMES.size() * 100 + COVER_IMAGE_EXTENSIONS.size()
+    for file_name in dir.get_files():
+        var extension := file_name.get_extension().to_lower()
+        var extension_priority := COVER_IMAGE_EXTENSIONS.find(extension)
+        if extension_priority < 0:
+            continue
+        var base_name := file_name.get_basename().strip_edges().to_lower()
+        var name_priority := DEFAULT_COVER_BASENAMES.find(base_name)
+        if name_priority < 0:
+            continue
+        var score := name_priority * 100 + extension_priority
+        var candidate_path := directory.path_join(file_name)
+        if score < best_score or (score == best_score and candidate_path < best_path):
+            best_score = score
+            best_path = candidate_path
+    return best_path
 
 func _game_display_title(game: Dictionary) -> String:
     var title := String(game.get("title", ""))
@@ -8376,19 +9425,40 @@ func _finish_launch_transition() -> void:
 func _start_selected_game_after_iap() -> void:
     if player == null:
         return
+    var library_path := String(selected_game.get("path", "")).strip_edges()
+    if library_path.is_empty():
+        return
+    var selected_runtime_kind := _game_runtime_kind(library_path)
     # Development artifacts intentionally bypass StoreKit so local
     # compatibility work never depends on a sandbox account or network.
     if OS.is_debug_build():
+        if (
+            selected_runtime_kind == RUNTIME_KIRIKIRI
+            and current_player_runtime_kind != RUNTIME_KIRIKIRI
+            and not _switch_runtime_player(RUNTIME_KIRIKIRI)
+        ):
+            return
         if player.has_method("set_engine_option"):
             player.set_engine_option("artemis_beta_allowed", "1")
         _start_selected_game_after_entitlements()
         return
 
+    # StoreKit lives on the KiriKiri host. Return to that host before probing
+    # Artemis or authorizing ONScripter after an earlier ONS game exits.
+    if (
+        current_player_runtime_kind != RUNTIME_KIRIKIRI
+        and not _switch_runtime_player(RUNTIME_KIRIKIRI)
+    ):
+        return
     if player.has_method("set_engine_option"):
         # Reset a grant left on the reusable engine handle before every Release
         # launch. A fresh verified coffee entitlement enables it again below.
         player.set_engine_option("artemis_beta_allowed", "0")
-    if not _selected_game_uses_artemis():
+    var requires_beta_access := (
+        _runtime_requires_beta_access(selected_runtime_kind)
+        or _selected_game_uses_artemis()
+    )
+    if not requires_beta_access:
         _start_selected_game_after_entitlements()
         return
 
@@ -8401,6 +9471,11 @@ func _start_selected_game_after_iap() -> void:
     ))
     if iap_pending_beta_check_id <= 0:
         _deny_artemis_beta_launch()
+
+func _runtime_requires_beta_access(runtime_kind: String) -> bool:
+    # ONS support follows the same release policy as Artemis: unrestricted in
+    # Debug, and gated by an active coffee entitlement in distributed builds.
+    return runtime_kind == RUNTIME_ONSCRIPTER
 
 func _selected_game_uses_artemis() -> bool:
     if player == null or not player.has_method("probe_runtime"):
@@ -8420,7 +9495,11 @@ func _complete_artemis_beta_check() -> void:
         _deny_artemis_beta_launch()
         return
     selected_game = pending_game
-    if player.has_method("set_engine_option"):
+    if (
+        _game_runtime_kind(String(selected_game.get("path", "")))
+        == RUNTIME_KIRIKIRI
+        and player.has_method("set_engine_option")
+    ):
         player.set_engine_option("artemis_beta_allowed", "1")
     _start_selected_game_after_entitlements()
 
@@ -8442,6 +9521,9 @@ func _start_selected_game_after_entitlements() -> void:
         return
     if not _mount_web_game(selected_game):
         return
+    active_runtime_kind = _game_runtime_kind(library_path)
+    if not _switch_runtime_player(active_runtime_kind):
+        return
     var raw_launch_file := String(selected_game.get(GameLaunchEntry.FIELD, "")).strip_edges()
     if not raw_launch_file.is_empty() and not GameLaunchEntry.is_supported_file(raw_launch_file):
         _show_system_alert(
@@ -8456,7 +9538,7 @@ func _start_selected_game_after_entitlements() -> void:
             _t("alert.warning_title")
         )
         return
-    var launch_path := GameLaunchEntry.resolve(selected_game)
+    var launch_path := library_path if active_runtime_kind == RUNTIME_ONSCRIPTER else GameLaunchEntry.resolve(selected_game)
     if not relative_launch_file.is_empty() and not FileAccess.file_exists(launch_path):
         _show_system_alert(
             _t("message.launch_file_missing", [relative_launch_file]),
@@ -8503,7 +9585,7 @@ func _is_runtime_exit_error(message: String) -> bool:
     var lower := message.to_lower()
     return lower.contains("runtime requested termination") or lower.contains("runtime has been terminated")
 
-func _quit_after_runtime_exit() -> void:
+func _return_to_library_after_runtime_exit() -> void:
     if runtime_exit_cleanup_pending:
         return
     runtime_exit_cleanup_pending = true
@@ -8533,10 +9615,15 @@ func _quit_after_runtime_exit() -> void:
     if player != null:
         player.release_frame_texture()
         player.destroy_engine()
-    if _is_touch_platform():
-        OS.kill(OS.get_process_id())
-        return
-    get_tree().quit(0)
+    last_texture_size = Vector2i.ZERO
+    _set_game_runtime_orientation(false)
+    _set_game_background(false)
+    if shell_root != null:
+        shell_root.visible = true
+    Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+    _show_home()
+    _fit_full_rects()
+    runtime_exit_cleanup_pending = false
 
 func _ready() -> void:
     cli_probe_script = _detect_cli_probe_script()
@@ -8902,27 +9989,62 @@ func _on_debug_self_check_requested() -> void:
     checks.append("storage=ok" if writable else "storage=failed")
     debug_console.show_result(_t("debug.result.self_check", [", ".join(checks)]), not writable)
 
-func _create_runtime_player() -> bool:
-    if not ClassDB.class_exists("AetherKiriPlayer"):
-        var message := "AetherKiri runtime extension class is unavailable."
+func _runtime_player_class(runtime_kind: String) -> String:
+    return "AetherOnscripterPlayer" if runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiriPlayer"
+
+func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
+    var player_class_name := _runtime_player_class(runtime_kind)
+    if not ClassDB.class_exists(player_class_name):
+        var message := "%s runtime extension class is unavailable." % player_class_name
         push_error(message)
         _append_log(message)
         _show_system_alert(_t("alert.runtime_class_missing"), _t("alert.error_title"))
         return false
-    var instance: Object = ClassDB.instantiate("AetherKiriPlayer")
+    var instance: Object = ClassDB.instantiate(player_class_name)
     if instance == null or not (instance is Node):
-        var create_message := "AetherKiri runtime extension could not create AetherKiriPlayer."
+        var create_message := "Aether runtime extension could not create %s." % player_class_name
         push_error(create_message)
         _append_log(create_message)
         _show_system_alert(_t("alert.runtime_create_failed"), _t("alert.error_title"))
         return false
     player = instance
+    current_player_runtime_kind = runtime_kind
     if instance.has_signal("platform_request"):
         instance.connect(
             "platform_request",
             Callable(self, "_on_runtime_platform_request")
         )
     add_child(instance as Node)
+    return true
+
+func _switch_runtime_player(runtime_kind: String) -> bool:
+    var normalized := RUNTIME_ONSCRIPTER if runtime_kind == RUNTIME_ONSCRIPTER else RUNTIME_KIRIKIRI
+    if player != null and current_player_runtime_kind == normalized:
+        return true
+    if game_running:
+        _append_log("Cannot switch visual-novel runtimes while a game is running.")
+        return false
+
+    var previous_player = player
+    player = null
+    if previous_player != null:
+        previous_player.destroy_engine()
+        if previous_player is Node:
+            (previous_player as Node).queue_free()
+    if not _create_runtime_player(normalized):
+        return false
+    if not _ensure_player_initialized():
+        return false
+    _apply_backend(false)
+    _apply_engine_options()
+    _apply_frame_enhancement_settings()
+    if diagnostic_session != null:
+        if diagnostic_session.active:
+            diagnostic_session.finish()
+        diagnostic_session.start(player, selected_backend)
+    _append_log("Runtime selected: %s" % (
+        "OnscripterYuri" if normalized == RUNTIME_ONSCRIPTER else "KiriKiri"
+    ))
     return true
 
 func _parse_platform_form(argument: String) -> Dictionary:
@@ -9097,7 +10219,9 @@ func _ensure_player_initialized() -> bool:
         _append_log(init_error_message)
         return false
 
-    _append_log("AetherKiri engine initialized.")
+    _append_log("%s engine initialized." % (
+        "OnscripterYuri" if current_player_runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiri"
+    ))
     return true
 
 func _finish_ready_after_first_frame() -> void:
@@ -9108,6 +10232,7 @@ func _finish_ready_after_first_frame() -> void:
     if engine_initialized:
         _apply_backend(false)
         _apply_engine_options()
+        _apply_frame_enhancement_settings()
         diagnostic_session.start(player, selected_backend)
         _sync_debug_console_state()
     if not cli_probe_script.is_empty():
@@ -9484,11 +10609,18 @@ func _prepare_cli_probe_view(config: Dictionary) -> void:
     restart_notice.visible = false
     viewport.texture = null
     last_texture_size = Vector2i.ZERO
+    last_source_texture_size = Vector2i.ZERO
     game_running = false
     _sync_debug_console_state()
     _fit_full_rects()
 
 func _probe_open_game(config: Dictionary, target_game_path: String, backend_env: String) -> bool:
+    var runtime_kind := _game_runtime_kind(target_game_path)
+    if not _switch_runtime_player(runtime_kind):
+        _write_probe_marker("probe_open_game runtime_switch_failed kind=%s" % runtime_kind)
+        return false
+    if runtime_kind == RUNTIME_ONSCRIPTER:
+        target_game_path = _game_runtime_root(target_game_path)
     selected_backend = ProbeConfig.backend(config, backend_env)
     if not selected_backend in BACKENDS:
         selected_backend = "Godot Native"
@@ -9543,11 +10675,18 @@ func _probe_tick_and_update() -> bool:
     if present_hold_frames > 0:
         present_hold_frames -= 1
         return true
+    if player.has_method("set_frame_enhancement_target_size"):
+        var enhancement_target := _frame_enhancement_target_size()
+        player.set_frame_enhancement_target_size(enhancement_target.x, enhancement_target.y)
     var texture: Texture2D = player.update_frame_texture()
     if texture != null:
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+        if player.has_method("get_frame_source_size"):
+            var source_size: Vector2i = player.get_frame_source_size()
+            if source_size.x > 0 and source_size.y > 0:
+                last_source_texture_size = source_size
         _layout_game_viewport(get_viewport_rect().size)
     return true
 
@@ -9586,7 +10725,10 @@ func _run_cli_smoke_probe(config: Dictionary, target_game_path: String) -> void:
         return
 
     var texture: Texture2D = player.update_frame_texture()
-    if texture == null or texture.get_width() != width or texture.get_height() != height:
+    var source_size := Vector2i(width, height)
+    if player.has_method("get_frame_source_size"):
+        source_size = player.get_frame_source_size()
+    if texture == null or source_size != Vector2i(width, height):
         printerr("texture update failed backend=%s frame=%dx%d renderer=%s" % [
             backend_name,
             width,
@@ -9715,7 +10857,8 @@ func _probe_run_actions(config: Dictionary, step: int) -> int:
                 to,
                 config,
                 max(1, int(action.get("steps", 12))),
-                max(0, int(action.get("per_step_frames", 1)))
+                max(0, int(action.get("per_step_frames", 1))),
+                int(action.get("pointer_id", 0))
             ):
                 continue
             if label.is_empty() or label == "drag":
@@ -9803,6 +10946,10 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
         if texture != null:
             viewport.texture = texture
             last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+            if player.has_method("get_frame_source_size"):
+                var source_size: Vector2i = player.get_frame_source_size()
+                if source_size.x > 0 and source_size.y > 0:
+                    last_source_texture_size = source_size
             _layout_game_viewport(viewport.size)
             viewport.queue_redraw()
         var frame_end := Time.get_ticks_usec()
@@ -9905,7 +11052,8 @@ func _probe_send_mapped_drag(
     to: Vector2,
     config: Dictionary,
     steps: int,
-    per_step_frames: int
+    per_step_frames: int,
+    pointer_id: int = 0
 ) -> bool:
     var mapped_from := _probe_map_window_point(from, config)
     var mapped_to := _probe_map_window_point(to, config)
@@ -9918,9 +11066,9 @@ func _probe_send_mapped_drag(
         ])
         return false
 
-    player.send_pointer_event(POINTER_MOVE, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_MOVE, pointer_id, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
-    player.send_pointer_event(POINTER_DOWN, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_DOWN, pointer_id, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
     _hold_next_present_after_input()
     player.tick(1.0 / 60.0)
 
@@ -9930,7 +11078,7 @@ func _probe_send_mapped_drag(
         var delta := current - previous
         player.send_pointer_event(
             POINTER_MOVE,
-            0,
+            pointer_id,
             current.x,
             current.y,
             delta.x,
@@ -9943,7 +11091,7 @@ func _probe_send_mapped_drag(
         if per_step_frames > 0 and not await _probe_advance(per_step_frames):
             return false
 
-    player.send_pointer_event(POINTER_UP, 0, mapped_to.x, mapped_to.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_UP, pointer_id, mapped_to.x, mapped_to.y, 0.0, 0.0, 0)
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
     player.tick(1.0 / 60.0)
     return true
@@ -9958,21 +11106,17 @@ func _probe_send_mapped_scroll(window_pos: Vector2, config: Dictionary, delta_y:
     player.send_pointer_event(POINTER_SCROLL, 0, mapped.x, mapped.y, 0.0, delta_y, 0)
 
 func _probe_map_window_point(pos: Vector2, config: Dictionary) -> Vector2:
-    var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
     var coord := ProbeConfig.coord_size(config, Vector2i(
         _runtime_int("AETHERKIRI_PROBE_COORD_W", 1600),
         _runtime_int("AETHERKIRI_PROBE_COORD_H", 900)
     ))
     var panel_size := Vector2(coord)
-    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
-    if scale <= 0.0:
-        return Vector2(-1.0, -1.0)
-    var drawn_size := tex_size * scale
-    var offset := (panel_size - drawn_size) * 0.5
-    var inside := pos - offset
-    if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
-        return Vector2(-1.0, -1.0)
-    return inside / scale
+    return GameInputMapping.map_point_to_surface(
+        pos,
+        Rect2(Vector2.ZERO, panel_size),
+        _game_input_content_size(),
+        _game_input_surface_size()
+    )
 
 func _run_cli_gui_probe(config: Dictionary, target_game_path: String) -> void:
     if not _probe_open_game(config, target_game_path, "AETHERKIRI_RENDER_BACKEND"):
@@ -10228,6 +11372,7 @@ func _apply_pending_video_resume(state: Dictionary) -> bool:
 
 func _process(delta: float) -> void:
     _poll_native_launch_file_picker()
+    _poll_native_cover_file_picker()
     _fit_full_rects()
     _process_iap(delta)
     _update_advanced_tool_timeouts()
@@ -10261,6 +11406,7 @@ func _process(delta: float) -> void:
                 )
             else:
                 _set_perf_visible(show_perf_monitor)
+            _flush_delayed_ons_touch_releases()
             _flush_pending_touch_press_if_ready()
             tick_trace_serial += 1
             tick_trace_active_serial = tick_trace_serial
@@ -10298,7 +11444,7 @@ func _process(delta: float) -> void:
                     if perf_log_file != null:
                         perf_log_file.store_line(runtime_exit_line)
                         perf_log_file.flush()
-                    _quit_after_runtime_exit()
+                    _return_to_library_after_runtime_exit()
                     return
                 render_errors += 1
                 var tick_error_line := "Tick failed: %s %s" % [
@@ -10346,6 +11492,11 @@ func _process(delta: float) -> void:
                 _log_frame_probe(delta)
                 _log_input_trace(delta, tick_ms, update_ms)
         elif startup_state == STARTUP_FAILED:
+            var startup_error_message := str(player.get_last_error())
+            if _is_runtime_exit_error(startup_error_message):
+                _append_log("Game exited during startup: %s" % startup_error_message)
+                _return_to_library_after_runtime_exit()
+                return
             restart_notice.text = "Game startup failed."
             _hide_loading_overlay()
             _set_game_background(false)
@@ -10362,7 +11513,7 @@ func _process(delta: float) -> void:
                 })
             app_lifecycle_paused = false
             render_errors += 1
-            var startup_error := "Startup failed: %s" % player.get_last_error()
+            var startup_error := "Startup failed: %s" % startup_error_message
             _append_log(startup_error)
 
     perf_accum += delta
@@ -10416,6 +11567,21 @@ func _process(delta: float) -> void:
             fallback,
             render_errors,
         ]
+        if game_running and player.has_method("get_frame_enhancement_status"):
+            var effect_status: Dictionary = player.get_frame_enhancement_status()
+            var effect_state := "active" if bool(effect_status.get("active", false)) else ("waiting" if bool(effect_status.get("enabled", false)) else "off")
+            var effect_label := _t("settings.frame_enhancement_mode.%s" % frame_enhancement_mode)
+            if frame_enhancement_kind == "custom":
+                effect_label = _t("settings.frame_enhancement_kind.custom")
+            summary_text += "\nEnhancement: %s | Effect: %s | Source: %dx%d | Output: %dx%d | Raw: %s" % [
+                effect_state,
+                effect_label,
+                int(effect_status.get("source_width", 0)),
+                int(effect_status.get("source_height", 0)),
+                last_texture_size.x,
+                last_texture_size.y,
+                "yes" if bool(effect_status.get("raw_source_output", false)) else "no",
+            ]
         summary_text += "\nMemory: App %s | Peak %s | Headroom %s | Godot %s | GPU(est.) %s (Tex %s / Buf %s) | Cache %s" % [
             _format_monitor_bytes(int(memory.get("current_bytes", 0))),
             _format_monitor_bytes(int(memory.get("peak_bytes", 0))),
@@ -10715,7 +11881,9 @@ func _renderer_summary(renderer: String) -> String:
     if renderer.is_empty():
         return selected_backend
     var summary := selected_backend
-    if renderer.contains("backend=godot_native"):
+    if renderer.contains("backend=onscripter_yuri"):
+        summary = "OnscripterYuri (Godot Texture)"
+    elif renderer.contains("backend=godot_native"):
         summary = "Godot Native GPU"
     elif renderer.contains("backend=gpu_bridge"):
         summary = "GPU Bridge"
@@ -10746,12 +11914,25 @@ func _on_open_game() -> void:
         _append_log("Game path is empty.")
         return
 
+    var detected_runtime := _game_runtime_kind(path)
+    if not _switch_runtime_player(detected_runtime):
+        render_errors += 1
+        return
+    active_runtime_kind = detected_runtime
+    if detected_runtime == RUNTIME_ONSCRIPTER:
+        path = _game_runtime_root(path)
+        game_path.text = path
+
     if not _ensure_player_initialized():
         return
 
     ProjectSettings.set_setting(GAME_PATH_KEY, path)
     _apply_backend(false)
     _apply_engine_options()
+    if diagnostic_session != null:
+        # A natural in-game exit destroys the reusable native engine handle.
+        # Start diagnostics again when the next title recreates that handle.
+        diagnostic_session.start(player, selected_backend)
     _sync_player_surface_size(true)
     cached_startup_state = STARTUP_RUNNING
     startup_poll_accum = STARTUP_POLL_INTERVAL
@@ -10790,6 +11971,7 @@ func _on_open_game() -> void:
         log_view.text = ""
         log_view.scroll_vertical = 0
     last_texture_size = Vector2i.ZERO
+    last_source_texture_size = Vector2i.ZERO
     present_hold_frames = 0
     capture_after_open_done = false
     capture_after_open_ready_usec = 0
@@ -10814,6 +11996,8 @@ func _on_open_game() -> void:
 
 func _desired_render_surface_size() -> Vector2i:
     var base_size := _base_render_surface_size()
+    if output_resolution != "original":
+        return _frame_output_target_size(base_size)
     if render_surface_mode == RENDER_SURFACE_MODE_GAME:
         return base_size
     var window_size := DisplayServer.window_get_size()
@@ -10841,6 +12025,38 @@ func _desired_render_surface_size() -> Vector2i:
         maxi(1, int(round(float(base_size.x) * scale))),
         maxi(1, int(round(float(base_size.y) * scale)))
     )
+
+func _frame_output_resolution_limit() -> Vector2i:
+    var normalized := _normalize_output_resolution(output_resolution)
+    if normalized == "original":
+        return Vector2i.ZERO
+    var preset: Vector2i = OUTPUT_RESOLUTION_LIMITS.get(
+        normalized,
+        OUTPUT_RESOLUTION_LIMITS[OUTPUT_RESOLUTION_DEFAULT]
+    )
+    return Vector2i(
+        clampi(preset.x, 1, render_surface_max_size.x),
+        clampi(preset.y, 1, render_surface_max_size.y)
+    )
+
+func _fit_frame_size_within(source_size: Vector2i, bounds: Vector2i) -> Vector2i:
+    if bounds.x <= 0 or bounds.y <= 0:
+        return Vector2i.ZERO
+    if source_size.x <= 0 or source_size.y <= 0:
+        return bounds
+    var scale := minf(
+        float(bounds.x) / float(source_size.x),
+        float(bounds.y) / float(source_size.y)
+    )
+    return Vector2i(
+        maxi(1, int(round(float(source_size.x) * scale))),
+        maxi(1, int(round(float(source_size.y) * scale)))
+    )
+
+func _frame_output_target_size(source_size: Vector2i) -> Vector2i:
+    if _normalize_output_resolution(output_resolution) == "original":
+        return source_size
+    return _fit_frame_size_within(source_size, _frame_output_resolution_limit())
 
 func _base_render_surface_size() -> Vector2i:
     return Vector2i(
@@ -10888,6 +12104,7 @@ func _sync_player_surface_size(force: bool) -> void:
         return
     if current_surface_size != target_size:
         last_texture_size = Vector2i.ZERO
+        last_source_texture_size = Vector2i.ZERO
         var window_size := DisplayServer.window_get_size()
         var screen := DisplayServer.window_get_current_screen()
         var base_size := _base_render_surface_size()
@@ -10985,10 +12202,48 @@ func _flush_log_view() -> void:
     log_view.text = "\n".join(log_lines)
     call_deferred("_scroll_log_to_bottom")
 
+func _frame_enhancement_target_size() -> Vector2i:
+    # The resolution selector is the single target for both the engine's
+    # surface scaler and the private enhancement scaler. Restore still runs
+    # once at source size; only EASU/Bicubic/Lanczos sees this target.
+    var source_size := last_source_texture_size
+    if source_size.x <= 0 or source_size.y <= 0:
+        if output_resolution == "original":
+            # A zero target asks the host to use the source texture dimensions,
+            # avoiding a speculative 1080p allocation for the first frame.
+            return Vector2i.ZERO
+        source_size = _base_render_surface_size()
+    return _frame_output_target_size(source_size)
+
+func _game_input_content_size() -> Vector2:
+    # With enhancement enabled the host publishes the raw game frame so it is
+    # processed exactly once. This is the aspect ratio actually visible inside
+    # GameViewport and therefore the first coordinate space for pointer input.
+    if last_source_texture_size.x > 0 and last_source_texture_size.y > 0:
+        return Vector2(last_source_texture_size)
+    return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
+
+func _game_input_surface_size() -> Vector2:
+    # The engine API still consumes the runtime surface coordinate space. It
+    # can differ from the raw frame (for example 1920x1080 for an 800x600
+    # layer). DrawDevice stretches that full surface back to the layer, so
+    # input mapping must apply the inverse per-axis scale without letterboxing.
+    if active_runtime_kind == RUNTIME_ONSCRIPTER:
+        return _game_input_content_size()
+    if current_surface_size.x > 0 and current_surface_size.y > 0:
+        return Vector2(current_surface_size)
+    return _game_input_content_size()
+
 func _update_frame() -> void:
     if present_hold_frames > 0:
         present_hold_frames -= 1
         return
+    if player.has_method("set_frame_enhancement_target_size"):
+        var enhancement_target := _frame_enhancement_target_size()
+        player.set_frame_enhancement_target_size(
+            enhancement_target.x,
+            enhancement_target.y
+        )
     var texture: Texture2D = player.update_frame_texture()
     if texture != null:
         if _should_hold_suspect_black_frame():
@@ -10996,7 +12251,13 @@ func _update_frame() -> void:
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
-        _sync_game_surface_to_texture(last_texture_size)
+        if player.has_method("get_frame_source_size"):
+            var source_size: Vector2i = player.get_frame_source_size()
+            if source_size.x > 0 and source_size.y > 0:
+                last_source_texture_size = source_size
+        if last_source_texture_size.x <= 0 or last_source_texture_size.y <= 0:
+            last_source_texture_size = last_texture_size
+        _sync_game_surface_to_texture(last_source_texture_size)
         _layout_game_viewport(get_viewport_rect().size)
         if not auto_probe_clicks.is_empty() and not auto_probe_running and not auto_probe_done:
             auto_probe_running = true
@@ -11050,6 +12311,7 @@ func _clear_game_input_capture() -> void:
     pending_touch_index = -1
     pending_touch_mapped = Vector2.ZERO
     pending_touch_down_msec = 0
+    delayed_ons_touch_releases.clear()
     last_forwarded_touch_move_msec_by_id.clear()
     last_forwarded_touch_down_msec = 0
     last_forwarded_touch_up_msec = 0
@@ -11093,7 +12355,15 @@ func _run_auto_probe() -> void:
         get_tree().quit(0)
 
 func _run_startup_click_stream_probe() -> void:
+    var warmup_frames: int = max(
+        0,
+        _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_WARMUP_FRAMES", 0)
+    )
     var frames: int = max(1, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_FRAMES", 240))
+    var post_frames: int = max(
+        0,
+        _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_POST_FRAMES", 0)
+    )
     var clicks_per_frame: int = max(1, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_CLICKS_PER_FRAME", 1))
     var capture_every: int = max(0, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_CAPTURE_EVERY", 60))
     var click_pos: Vector2 = Vector2(
@@ -11105,6 +12375,8 @@ func _run_startup_click_stream_probe() -> void:
     var blocked: int = 0
     var busy: int = 0
     var start_usec: int = Time.get_ticks_usec()
+    for frame_index in range(warmup_frames):
+        await get_tree().process_frame
     for frame_index in range(frames):
         for i in range(clicks_per_frame):
             attempted += 1
@@ -11123,9 +12395,13 @@ func _run_startup_click_stream_probe() -> void:
         if capture_every > 0 and (frame_index % capture_every) == 0:
             _save_startup_click_stream_capture(frame_index)
         await get_tree().process_frame
+    for frame_index in range(post_frames):
+        await get_tree().process_frame
     var elapsed_sec := float(Time.get_ticks_usec() - start_usec) / 1000000.0
-    var line := "startup_click_stream frames=%d clicks_per_frame=%d attempted=%d forwarded=%d blocked=%d busy=%d elapsed_sec=%.3f fps=%.2f renderer=\"%s\" texture=%s size=%dx%d" % [
+    var line := "startup_click_stream warmup_frames=%d frames=%d post_frames=%d clicks_per_frame=%d attempted=%d forwarded=%d blocked=%d busy=%d elapsed_sec=%.3f fps=%.2f renderer=\"%s\" texture=%s size=%dx%d" % [
+        warmup_frames,
         frames,
+        post_frames,
         clicks_per_frame,
         attempted,
         forwarded,
@@ -11250,20 +12526,16 @@ func _send_probe_click(window_pos: Vector2) -> void:
     _write_probe_marker("auto_click window=%s mapped=%s" % [window_pos, mapped])
 
 func _map_probe_window_point(pos: Vector2) -> Vector2:
-    var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
     var panel_size := Vector2(
         float(_runtime_int("AETHERKIRI_AUTO_PROBE_COORD_W", 1600)),
         float(_runtime_int("AETHERKIRI_AUTO_PROBE_COORD_H", 900))
     )
-    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
-    if scale <= 0.0:
-        return Vector2(-1.0, -1.0)
-    var drawn_size := tex_size * scale
-    var offset := (panel_size - drawn_size) * 0.5
-    var inside := pos - offset
-    if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
-        return Vector2(-1.0, -1.0)
-    return inside / scale
+    return GameInputMapping.map_point_to_surface(
+        pos,
+        Rect2(Vector2.ZERO, panel_size),
+        _game_input_content_size(),
+        _game_input_surface_size()
+    )
 
 func _frame_stats(frame: Dictionary) -> Dictionary:
     var data: PackedByteArray = frame.get("rgba", PackedByteArray())
@@ -11660,7 +12932,56 @@ func _handle_mobile_edge_back_input(event: InputEvent) -> bool:
         return true
     return false
 
+func _trace_ios_raw_pointer_event(event: InputEvent) -> void:
+    if OS.get_name() != "iOS" or not input_trace_enabled or not _is_game_pointer_event(event):
+        return
+    if event is InputEventMouseMotion:
+        var motion := event as InputEventMouseMotion
+        if motion.button_mask == 0 and active_mouse_buttons.is_empty():
+            return
+    var position := Vector2.ZERO
+    var phase := "move"
+    var pointer_id := -1
+    if event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        position = touch.position
+        phase = "down" if touch.pressed else "up"
+        pointer_id = touch.index
+    elif event is InputEventScreenDrag:
+        var drag := event as InputEventScreenDrag
+        position = drag.position
+        pointer_id = drag.index
+    elif event is InputEventMouseButton:
+        var button := event as InputEventMouseButton
+        position = button.position
+        phase = "down" if button.pressed else "up"
+        pointer_id = int(button.button_index)
+    elif event is InputEventMouseMotion:
+        position = (event as InputEventMouseMotion).position
+    elif event is InputEventPanGesture:
+        position = (event as InputEventPanGesture).position
+    var line := "ios_raw_input id=%d class=%s phase=%s pointer=%d device=%d pos=%.1f,%.1f game=%s runtime=%s can_forward=%s modal=%s loading=%s" % [
+        event.get_instance_id(),
+        event.get_class(),
+        phase,
+        pointer_id,
+        event.device,
+        position.x,
+        position.y,
+        str(game_running),
+        active_runtime_kind,
+        str(_can_forward_game_input()),
+        str(modal_layer != null and modal_layer.visible),
+        str(loading_panel != null and loading_panel.visible),
+    ]
+    print(line)
+    _write_probe_marker(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+
 func _input(event: InputEvent) -> void:
+    _trace_ios_raw_pointer_event(event)
     if event is InputEventKey:
         var shell_key := event as InputEventKey
         if shell_key.pressed and not shell_key.echo and shell_key.keycode == KEY_ESCAPE and modal_layer != null and modal_layer.visible:
@@ -11769,6 +13090,12 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
         return false
     if modal_layer != null and modal_layer.visible:
         return false
+    # AetherSelect is rendered in a scene-level overlay, outside the settings
+    # ScrollContainer's ancestry. This global shell handler runs before normal
+    # Control GUI dispatch, so it must stand down while that overlay owns the
+    # pointer; otherwise one wheel gesture moves both scroll containers.
+    if get_tree().get_first_node_in_group(AETHER_SELECT_OVERLAY_INPUT_GROUP) != null:
+        return false
 
     if event is InputEventScreenTouch:
         var touch := event as InputEventScreenTouch
@@ -11843,9 +13170,17 @@ func _on_viewport_input(event: InputEvent) -> void:
         get_viewport().set_input_as_handled()
 
 func _can_forward_game_input() -> bool:
-    return game_running and viewport.visible and cached_startup_state == STARTUP_SUCCEEDED and (
-        loading_panel == null or not loading_panel.visible
-    ) and (
+    # ONS marks startup complete before its title transition has necessarily
+    # replaced the first black frame. Let the runtime receive taps during the
+    # loading fade once it is ready; otherwise an invisible/fading overlay can
+    # make the title look unresponsive even though the engine is accepting
+    # events. Other runtimes retain the existing loading-overlay gate.
+    var loading_blocks_input := (
+        active_runtime_kind != RUNTIME_ONSCRIPTER
+        and loading_panel != null
+        and loading_panel.visible
+    )
+    return game_running and viewport.visible and cached_startup_state == STARTUP_SUCCEEDED and not loading_blocks_input and (
         modal_layer == null or not modal_layer.visible
     )
 
@@ -11857,7 +13192,19 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
     _trace_input_received()
     if event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
-        if _is_touch_platform() and mouse_button.button_index != MOUSE_BUTTON_WHEEL_UP and mouse_button.button_index != MOUSE_BUTTON_WHEEL_DOWN:
+        if _is_touch_platform() and mouse_button.device == INPUT_DEVICE_ID_EMULATION:
+            # Godot emits the emulated mouse event before the corresponding
+            # ScreenTouch on iOS. Waiting for ScreenTouch to set a suppression
+            # timestamp is therefore too late and produces two ONS clicks.
+            # Hardware mouse events keep their real device id and still work.
+            _trace_input_throttled()
+            return true
+        var is_touch_mouse_duplicate := (
+            _is_touch_platform()
+            and suppress_mouse_until_msec > 0
+            and Time.get_ticks_msec() <= suppress_mouse_until_msec
+        )
+        if is_touch_mouse_duplicate and mouse_button.button_index != MOUSE_BUTTON_WHEEL_UP and mouse_button.button_index != MOUSE_BUTTON_WHEEL_DOWN:
             _trace_input_throttled()
             return true
         var is_scroll := mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP or mouse_button.button_index == MOUSE_BUTTON_WHEEL_DOWN
@@ -11892,9 +13239,15 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
         return true
     elif event is InputEventMouseMotion:
-        if _is_touch_platform():
-            return true
         var motion := event as InputEventMouseMotion
+        if _is_touch_platform() and motion.device == INPUT_DEVICE_ID_EMULATION:
+            return true
+        if (
+            _is_touch_platform()
+            and suppress_mouse_until_msec > 0
+            and Time.get_ticks_msec() <= suppress_mouse_until_msec
+        ):
+            return true
         var captured := not active_mouse_buttons.is_empty()
         var mapped := _map_viewport_point(motion.position, captured)
         if mapped.x < 0.0 or mapped.y < 0.0:
@@ -11986,6 +13339,12 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         var drag := event as InputEventScreenDrag
         suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
         var pointer_id := drag.index
+        var drag_distance_threshold := TOUCH_DRAG_DISTANCE_THRESHOLD
+        if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
+            # ONS menus are controlled by moving a cursor and activating the
+            # item on release. The generic 18 px drag slop makes that cursor
+            # feel stationary on a touch screen, especially for small menus.
+            drag_distance_threshold = ONS_TOUCH_CURSOR_DISTANCE_THRESHOLD
         if suppressed_touch_points.has(pointer_id):
             _trace_input_throttled()
             return true
@@ -11993,7 +13352,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             var pending_drag_mapped := _map_viewport_point(drag.position, true)
             if pending_drag_mapped.x < 0.0 or pending_drag_mapped.y < 0.0:
                 pending_drag_mapped = pending_touch_mapped
-            if pending_drag_mapped.distance_to(pending_touch_mapped) < TOUCH_DRAG_DISTANCE_THRESHOLD:
+            if pending_drag_mapped.distance_to(pending_touch_mapped) < drag_distance_threshold:
                 _trace_input_move_suppressed()
                 return true
             _flush_pending_touch_press(true)
@@ -12008,13 +13367,19 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             var down_mapped: Vector2 = touch_down_points.get(pointer_id, mapped)
             if (
                 not dragging_touch_points.has(pointer_id)
-                and mapped.distance_to(down_mapped) < TOUCH_DRAG_DISTANCE_THRESHOLD
+                and mapped.distance_to(down_mapped) < drag_distance_threshold
             ):
                 _trace_input_move_suppressed()
                 return true
             dragging_touch_points[pointer_id] = true
             active_touch_points[pointer_id] = mapped
             var rel := _map_viewport_delta(drag.relative)
+            var move_modifiers := POINTER_MOD_LEFT
+            if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
+                # Treat touch-drag as cursor positioning for ONS. Keeping the
+                # left-button modifier set turns it into a mouse drag, which
+                # prevents title-menu hover state from following the finger.
+                move_modifiers = 0
             _send_game_pointer_event(
                 POINTER_MOVE,
                 _touch_engine_pointer_id(pointer_id),
@@ -12023,7 +13388,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
                 rel.x,
                 rel.y,
                 0,
-                POINTER_MOD_LEFT
+                move_modifiers
             )
         else:
             _trace_input_throttled()
@@ -12114,12 +13479,49 @@ func _send_pending_touch_click(pointer_id: int, up_mapped: Vector2) -> void:
     last_forwarded_touch_down_msec = Time.get_ticks_msec()
     _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
     _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
-    _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
-    last_forwarded_touch_up_msec = Time.get_ticks_msec()
-    _apply_touch_action_cooldown()
+    if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
+        # A short tap can be released before the 90 ms gesture-disambiguation
+        # window expires. Sending DOWN and UP from this callback puts both SDL
+        # events in the same frame, which ONS can miss while a timed wait is
+        # changing state. Keep one small, deterministic press pulse instead.
+        delayed_ons_touch_releases[pointer_id] = {
+            "due_msec": Time.get_ticks_msec() + ONS_TOUCH_CLICK_HOLD_MS,
+            "mapped": click_mapped,
+        }
+    else:
+        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
+        last_forwarded_touch_up_msec = Time.get_ticks_msec()
+        _apply_touch_action_cooldown()
     _arm_tick_trace()
     _arm_black_frame_guard()
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
+
+func _flush_delayed_ons_touch_releases() -> void:
+    if delayed_ons_touch_releases.is_empty():
+        return
+    var now := Time.get_ticks_msec()
+    for pointer_id_variant in delayed_ons_touch_releases.keys():
+        var pointer_id := int(pointer_id_variant)
+        var release: Dictionary = delayed_ons_touch_releases.get(pointer_id, {})
+        if now < int(release.get("due_msec", now)):
+            continue
+        delayed_ons_touch_releases.erase(pointer_id)
+        if not game_running or active_runtime_kind != RUNTIME_ONSCRIPTER:
+            continue
+        var mapped: Vector2 = release.get("mapped", Vector2.ZERO)
+        _send_game_pointer_event(
+            POINTER_UP,
+            _touch_engine_pointer_id(pointer_id),
+            mapped.x,
+            mapped.y,
+            0.0,
+            0.0,
+            0
+        )
+        last_forwarded_touch_up_msec = now
+        _apply_touch_action_cooldown()
+        _arm_black_frame_guard()
+        _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
 
 func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
     var click_mapped := mapped
@@ -12187,6 +13589,21 @@ func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: flo
     input_trace_forwarded += 1
     if result != ENGINE_RESULT_OK:
         input_trace_send_failed += 1
+    if input_trace_enabled and event_type in [POINTER_DOWN, POINTER_UP]:
+        var trace_line := "input_event type=%d pid=%d x=%.1f y=%.1f button=%d result=%d loading=%s runtime=%s" % [
+            event_type,
+            pointer_id,
+            x,
+            y,
+            button,
+            result,
+            str(loading_panel != null and loading_panel.visible),
+            active_runtime_kind,
+        ]
+        _write_probe_marker(trace_line)
+        if perf_log_file != null:
+            perf_log_file.store_line(trace_line)
+            perf_log_file.flush()
 
 func _android_input_debug_enabled() -> bool:
     return OS.get_name() == "Android" and input_trace_enabled
@@ -12344,6 +13761,9 @@ func _sync_game_text_input_state() -> void:
     if game_text_input_suspended or not _can_forward_game_input():
         _deactivate_game_text_input()
         return
+    if not player.has_method("get_text_input_state"):
+        _deactivate_game_text_input()
+        return
     var state = player.get_text_input_state()
     if not state is Dictionary or not bool(state.get("available", false)):
         _deactivate_game_text_input()
@@ -12434,25 +13854,23 @@ func _map_surface_point_to_screen(point: Vector2) -> Vector2:
 func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2:
     if viewport.texture == null:
         return pos
-    var tex_size: Vector2 = Vector2(
-        max(1.0, float(viewport.texture.get_width())),
-        max(1.0, float(viewport.texture.get_height()))
-    )
-    return GameInputMapping.map_point(
+    return GameInputMapping.map_point_to_surface(
         pos,
         viewport.get_global_rect(),
-        tex_size,
+        _game_input_content_size(),
+        _game_input_surface_size(),
         clamp_to_bounds
     )
 
 func _map_viewport_delta(delta: Vector2) -> Vector2:
     if viewport.texture == null:
         return delta
-    var tex_size: Vector2 = Vector2(
-        max(1.0, float(viewport.texture.get_width())),
-        max(1.0, float(viewport.texture.get_height()))
+    return GameInputMapping.map_delta_to_surface(
+        delta,
+        viewport.size,
+        _game_input_content_size(),
+        _game_input_surface_size()
     )
-    return GameInputMapping.map_delta(delta, viewport.size, tex_size)
 
 func _map_mouse_button(button_index: MouseButton) -> int:
     if button_index == MOUSE_BUTTON_RIGHT:

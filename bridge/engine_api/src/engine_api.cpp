@@ -63,6 +63,8 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "environ/EngineLoop.h"
 #include "environ/MainScene.h"
 #include "base/StorageIntf.h"
+#include "base/EventIntf.h"
+#include "base/impl/EventImpl.h"
 #include "base/impl/StorageImpl.h"
 #include "base/ScriptMgnIntf.h"
 #include "base/SysInitIntf.h"
@@ -74,6 +76,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #endif
 #include "visual/ogl/angle_backend.h"
 #include "visual/impl/WindowImpl.h"
+#include "visual/WindowIntf.h"
 #include "visual/RenderManager.h"
 #include "visual/godot/GodotRenderManager.h"
 #include "visual/godot/GodotGpuBridge.h"
@@ -86,6 +89,7 @@ void krkr_GetSurfaceDimensions(uint32_t*, uint32_t*);
 #include "PluginImpl.h"
 #include "base/impl/StorageImpl.h"
 #include "movie/ffmpeg/KRMoviePlayer.h"
+#include "utils/win32/TimerImpl.h"
 
 extern "C" {
 #include "libavcodec/avcodec.h"
@@ -110,6 +114,7 @@ extern "C" void TVPRegisterLayerExDrawPluginAnchor();
 extern "C" void TVPRegisterKAGParserExPluginAnchor();
 
 extern "C" const char* TJSGetRecentExecArgTrace();
+extern "C" void TJS_CollectOrphanedICCs(bool force);
 extern "C" void TVPRegisterScriptsExPluginAnchor();
 extern "C" void TVPRegisterCSVParserPluginAnchor();
 extern "C" void TVPRegisterFstatPluginAnchor();
@@ -129,6 +134,10 @@ extern "C" bool TVPHostGetLatestGodotGpuFrame(uint64_t* texture,
 extern "C" void TVPHostActivateMainWindow();
 extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height);
 extern "C" void TVPHostSetPreferGpuFrame(bool prefer_gpu_frame);
+extern "C" void TVPHostSetPublishRawSourceFrame(bool publish_raw_source);
+extern "C" void TVPHostResetForGameSession();
+extern "C" void AetherKiriMotionResetForGameSession();
+extern void TVPClearScnearioCache();
 extern "C" void TVPHostGetTextInputState(uint32_t* ime_active,
                                            int32_t* ime_mode,
                                            uint32_t* attention_point_valid,
@@ -183,6 +192,7 @@ struct engine_handle_s {
   struct RenderTargetState {
     krkr::AngleBackend angle_backend = krkr::AngleBackend::OpenGLES;
     std::string renderer = ENGINE_RENDERER_GODOT_NATIVE;
+    bool publish_raw_source_frame = false;
     bool iosurface_attached = false;
     bool native_window_attached = false;
   } render;
@@ -1174,6 +1184,7 @@ void StartHostEngineLoop(engine_handle_s* impl) {
     scene->scheduleUpdate();
   }
   TVPHostSetSurfaceSize(impl->frame.surface_width, impl->frame.surface_height);
+  TVPHostSetPublishRawSourceFrame(impl->render.publish_raw_source_frame);
 }
 
 void MarkRuntimeOpenedForHost(engine_handle_t handle,
@@ -1880,6 +1891,10 @@ engine_result_t OpenGameCore(engine_handle_t handle,
   };
 
   try {
+    // A previous title may have ended through System.exit while its Window
+    // and activation callbacks were still retained by script-side cycles.
+    // Start every embedded session from a process-neutral application state.
+    Application->ResetForHostSession();
     spdlog::debug("engine_open_game: calling Application->StartApplication...");
 #if defined(__ANDROID__)
     AndroidInfoLog("engine_open_game: calling StartApplication('%s')",
@@ -2145,8 +2160,37 @@ engine_result_t engine_destroy(engine_handle_t handle) {
       spdlog::warn("engine_destroy: FilterUserMessage ignored unknown exception");
     }
     try {
+      // Compatibility render caches retain TJS variants and native Layer
+      // addresses. Release them while the old script world is still valid,
+      // then clear the generic Layer routing tables before another title can
+      // reuse those addresses.
+      //
+      // Timer and continuous-event producer threads must be joined first.
+      // Legacy AtExit handlers run only once in an embedded process, so they
+      // cannot protect the second and later End Game -> open title cycles.
+      TVPResetTimerForHostSession();
+      TVPResetEventPlatformForHostSession();
+      AetherKiriMotionResetForGameSession();
+      TVPResetLayerStateForHostSession();
+      TVPResetEventsForHostSession();
+      // Let TJS release and invalidate its own Window graph. Forcing owner
+      // invalidation before script-engine shutdown can recursively finalize a
+      // multi-window title and crash in tTJSCustomObject::Finalize.
       Application->OnExit();
+      // tTJS script blocks can leave intermediate-code contexts in the
+      // process-wide orphan registry while their final Release is deferred.
+      // Never let those contexts (and their captured old-world variants)
+      // survive until a compact event in the next title.
+      TJS_CollectOrphanedICCs(true);
+      TVPResetEventsForHostSession();
+      TVPResetWindowRegistryForHostSession();
+      TVPClearGraphicCache();
+      TVPClearScnearioCache();
+      TVPClearArchiveCache();
+      TVPHostResetForGameSession();
+      Application->ResetForHostSession();
       TVPResetAutoPathsForGameSession();
+      TVPResetSystemInitStateForHostSession();
     } catch (const std::exception& e) {
       spdlog::warn("engine_destroy: session cleanup ignored exception: {}", e.what());
     } catch (...) {
@@ -2964,6 +3008,23 @@ engine_result_t engine_set_option(engine_handle_t handle,
     TVPSetCommandLine(TJS_W("renderer"), ttstr(renderer).c_str());
     spdlog::info("engine_set_option: renderer={} prefer_gpu_frame={}",
                  renderer, prefer_gpu);
+    ClearHandleErrorLocked(impl);
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+
+  if (key == ENGINE_OPTION_FRAME_OUTPUT) {
+    const std::string value(option->value_utf8);
+    if (value != ENGINE_FRAME_OUTPUT_SURFACE &&
+        value != ENGINE_FRAME_OUTPUT_RAW_SOURCE) {
+      return SetHandleErrorAndReturnLocked(
+          impl, ENGINE_RESULT_INVALID_ARGUMENT,
+          "frame_output must be 'surface' or 'raw_source'");
+    }
+    impl->render.publish_raw_source_frame =
+        value == ENGINE_FRAME_OUTPUT_RAW_SOURCE;
+    TVPHostSetPublishRawSourceFrame(impl->render.publish_raw_source_frame);
+    spdlog::info("engine_set_option: frame_output={}", value);
     ClearHandleErrorLocked(impl);
     SetThreadError(nullptr);
     return ENGINE_RESULT_OK;

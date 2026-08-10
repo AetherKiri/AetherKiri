@@ -94,12 +94,21 @@ if(WEB OR EMSCRIPTEN)
     endif()
 endif()
 
+set(AETHERKIRI_GODOT_SOURCES
+    src/aether_kiri_godot.cpp
+    src/frame_effect_host.cpp
+)
+if(TARGET aether_onscripter_runtime)
+    list(APPEND AETHERKIRI_GODOT_SOURCES
+        src/aether_onscripter_godot.cpp)
+endif()
+
 if(WEB OR EMSCRIPTEN)
-    add_executable(aether_kiri_godot src/aether_kiri_godot.cpp)
+    add_executable(aether_kiri_godot ${AETHERKIRI_GODOT_SOURCES})
 elseif(IOS)
-    add_library(aether_kiri_godot STATIC src/aether_kiri_godot.cpp)
+    add_library(aether_kiri_godot STATIC ${AETHERKIRI_GODOT_SOURCES})
 else()
-    add_library(aether_kiri_godot SHARED src/aether_kiri_godot.cpp)
+    add_library(aether_kiri_godot SHARED ${AETHERKIRI_GODOT_SOURCES})
 endif()
 
 if(APPLE)
@@ -132,8 +141,21 @@ target_include_directories(aether_kiri_godot PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:${CMAKE_BINARY_DIR}/cpp/core/tjs2/gen>
 )
 
+if(AETHERKIRI_INTERNAL_ENABLED AND
+   COMMAND aetherinternal_extend_godot_extension)
+    aetherinternal_extend_godot_extension(
+        aether_kiri_godot
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+endif()
+
 if(TARGET engine_api)
     target_link_libraries(aether_kiri_godot PRIVATE engine_api)
+endif()
+if(TARGET aether_onscripter_runtime)
+    target_link_libraries(aether_kiri_godot PRIVATE
+        aether_onscripter_runtime)
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        AETHERKIRI_WITH_ONSCRIPTER=1)
 endif()
 if(TARGET krkr2plugin)
     if(WEB OR EMSCRIPTEN)

@@ -13,6 +13,7 @@
 
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <atomic>
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -71,6 +72,7 @@ uint64_t g_host_gpu_serial = 0;
 uint32_t g_host_surface_width = 1920;
 uint32_t g_host_surface_height = 1080;
 bool g_host_prefer_gpu_frame = true;
+std::atomic_bool g_host_publish_raw_source_frame{false};
 tTJSNI_Window *g_host_window_owner = nullptr;
 std::vector<tTJSNI_Window *> g_host_window_owners;
 
@@ -738,10 +740,68 @@ extern "C" void TVPHostSetPreferGpuFrame(bool prefer_gpu_frame) {
     }
 }
 
+extern "C" void TVPHostSetPublishRawSourceFrame(bool publish_raw_source) {
+    const bool previous = g_host_publish_raw_source_frame.exchange(
+        publish_raw_source, std::memory_order_acq_rel);
+    if (previous == publish_raw_source) return;
+    // Never let the first frame after a hot switch reuse a texture published
+    // under the other mode. The next draw publishes the correct source.
+    {
+        std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+        g_host_frame_rgba.clear();
+        g_host_frame_width = 0;
+        g_host_frame_height = 0;
+        g_host_frame_stride = 0;
+        g_host_gpu_texture = 0;
+        g_host_gpu_width = 0;
+        g_host_gpu_height = 0;
+        ++g_host_frame_serial;
+        g_host_gpu_serial = g_host_frame_serial;
+    }
+    spdlog::info("Host frame output={}",
+                 publish_raw_source ? "raw_source" : "surface");
+}
+
 extern "C" void TVPHostSetSurfaceSize(uint32_t width, uint32_t height) {
     if(width == 0 || height == 0) return;
     g_host_surface_width = width;
     g_host_surface_height = height;
+}
+
+extern "C" void TVPHostResetForGameSession() {
+    {
+        std::lock_guard<std::mutex> lock(g_host_frame_mutex);
+        g_host_frame_rgba.clear();
+        g_host_frame_width = 0;
+        g_host_frame_height = 0;
+        g_host_frame_stride = 0;
+        g_host_gpu_texture = 0;
+        g_host_gpu_width = 0;
+        g_host_gpu_height = 0;
+        // Keep serials monotonic so a newly published frame can never be
+        // mistaken for the final frame of the preceding game session.
+        ++g_host_frame_serial;
+        g_host_gpu_serial = g_host_frame_serial;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_host_text_input_mutex);
+        g_host_text_input_state = {};
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_host_video_overlay_mutex);
+        g_host_video_overlay_active = false;
+        g_host_video_overlay_rgba.clear();
+        g_host_video_overlay_width = 0;
+        g_host_video_overlay_height = 0;
+        g_host_video_overlay_left = 0;
+        g_host_video_overlay_top = 0;
+        g_host_video_overlay_right = 0;
+        g_host_video_overlay_bottom = 0;
+    }
+    g_host_window_owner = nullptr;
+    g_host_window_owners.clear();
+    g_postDrawHook = nullptr;
+    spdlog::info("Host render state reset for next game session");
 }
 
 extern "C" bool TVPHostSubmitVideoOverlayFrame(const void *rgba,
@@ -1022,15 +1082,19 @@ public:
         if(auto *godot_tex = dynamic_cast<GodotTexture2D *>(tex);
            godot_tex != nullptr && godot_tex->EnsureGpuHandle() &&
            godot_tex->UploadCpuToGpu(false)) {
-            GodotTexture2D *output_tex =
-                PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
-                                           surface_h);
+            const bool publish_raw_source =
+                g_host_publish_raw_source_frame.load(std::memory_order_acquire);
+            GodotTexture2D *output_tex = publish_raw_source
+                ? godot_tex
+                : PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
+                                             surface_h);
             if (output_tex == nullptr) output_tex = godot_tex;
             if (HostRenderTraceEnabled() && ShouldLogHostRenderTrace()) {
                 spdlog::info(
-                    "host_render_trace path=godot_gpu_prefer tex={}x{} surface={}x{} output={}x{}",
+                    "host_render_trace path=godot_gpu_prefer tex={}x{} surface={}x{} output={}x{} frame_output={}",
                     tw, th, surface_w, surface_h, output_tex->GetWidth(),
-                    output_tex->GetHeight());
+                    output_tex->GetHeight(),
+                    publish_raw_source ? "raw_source" : "surface");
             }
             PublishHostGpuFrame(output_tex->GetGodotGpuHandle(),
                                 static_cast<uint32_t>(output_tex->GetWidth()),
@@ -1038,10 +1102,9 @@ public:
 
             auto* dd = owner_->GetDrawDevice();
             if (!dd) return;
-            tTVPRect dest(0, 0, static_cast<tjs_int>(output_tex->GetWidth()),
-                          static_cast<tjs_int>(output_tex->GetHeight()));
-            ApplyDrawDeviceSurfaceRect(dd, dest, dest.get_width(),
-                                       dest.get_height());
+            // Raw publication changes only the host image. Keep the engine's
+            // logical window/input surface unchanged.
+            ApplyDrawDeviceSurfaceRect(dd, surface_rect, surface_w, surface_h);
             if (g_postDrawHook) g_postDrawHook();
             return;
         }
@@ -1093,15 +1156,19 @@ public:
             if (g_host_prefer_gpu_frame && !HasHostVideoOverlayFrame() &&
                 godot_tex->EnsureGpuHandle() &&
                 godot_tex->UploadCpuToGpu(false)) {
-                GodotTexture2D *output_tex =
-                    PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
-                                               surface_h);
+                const bool publish_raw_source =
+                    g_host_publish_raw_source_frame.load(std::memory_order_acquire);
+                GodotTexture2D *output_tex = publish_raw_source
+                    ? godot_tex
+                    : PrepareGodotSurfaceTexture(godot_tex, tw, th, surface_w,
+                                                 surface_h);
                 if (output_tex == nullptr) output_tex = godot_tex;
                 if (HostRenderTraceEnabled() && ShouldLogHostRenderTrace()) {
                     spdlog::info(
-                        "host_render_trace path=godot_gpu tex={}x{} surface={}x{} output={}x{}",
+                        "host_render_trace path=godot_gpu tex={}x{} surface={}x{} output={}x{} frame_output={}",
                         tw, th, surface_w, surface_h, output_tex->GetWidth(),
-                        output_tex->GetHeight());
+                        output_tex->GetHeight(),
+                        publish_raw_source ? "raw_source" : "surface");
                 }
                 PublishHostGpuFrame(
                     output_tex->GetGodotGpuHandle(),
@@ -1341,6 +1408,11 @@ public:
     void InvalidateClose() override {
         closing_ = true;
         DetachOwner();
+        // HostWindowLayer is allocated by TVPCreateAndAddWindow and, unlike
+        // the native Win32 form, has no application/window-system owner that
+        // will delete it later. Match the Win32 InvalidateClose contract by
+        // releasing the layer (and its surface texture) immediately.
+        delete this;
     }
 
     bool GetWindowActive() override { return active_; }

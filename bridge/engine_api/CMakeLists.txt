@@ -78,6 +78,22 @@ if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_artemis)
     aetherinternal_extend_artemis(engine_api)
 endif()
 
+if(TARGET aetherinternal_artemis_lua)
+    set(AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/artemis_lua_symbol_prefix.h")
+    if(MSVC)
+        target_compile_options(aetherinternal_artemis_lua PRIVATE
+            /FI"${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
+        target_compile_options(engine_api PRIVATE
+            /FI"${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
+    else()
+        target_compile_options(aetherinternal_artemis_lua PRIVATE
+            -include "${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
+        target_compile_options(engine_api PRIVATE
+            -include "${AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER}")
+    endif()
+endif()
+
 set_target_properties(engine_api PROPERTIES
     OUTPUT_NAME "engine_api"
 )

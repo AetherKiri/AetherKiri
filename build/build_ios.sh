@@ -55,6 +55,7 @@ RUNTIME_CJK_FONT_SOURCE="$GODOT_APP_DIR/assets/fonts/aetherkiri-runtime-cjk.otf"
 RUNTIME_SYMBOL_FONT_SOURCE="$GODOT_APP_DIR/assets/fonts/aetherkiri-runtime-symbols.ttf"
 PARALLEL_JOBS="${JOBS:-8}"
 FORCE_LOAD_PLUGIN_ARCHIVES=(
+    "libSDL2.a"
     "libkrkr2plugin.a"
     "libkagparserex.a"
     "liblayerExDraw.a"
@@ -64,6 +65,7 @@ FORCE_LOAD_PLUGIN_ARCHIVES=(
     "libpsdparse.a"
 )
 FORCE_LOAD_PLUGIN_SOURCES=(
+    "vcpkg_installed/$VCPKG_TRIPLET_DIR/lib/libSDL2.a"
     "cpp/plugins/libkrkr2plugin.a"
     "cpp/plugins/kagparserex/libkagparserex.a"
     "cpp/plugins/layerex_draw/liblayerExDraw.a"
@@ -257,6 +259,7 @@ combine_ios_static_extension() {
     local godot_cpp_lib=""
     local libs=(
         "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.a"
+        "$CMAKE_BUILD_DIR/bridge/onscripter_runtime/libaether_onscripter_runtime.a"
         "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.a"
         "$CMAKE_BUILD_DIR/cpp/core/base/libcore_base_module.a"
         "$CMAKE_BUILD_DIR/cpp/core/environ/libcore_environ_module.a"

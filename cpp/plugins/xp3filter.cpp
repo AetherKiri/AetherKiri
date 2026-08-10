@@ -309,6 +309,15 @@ struct XP3FilterDecoder {
     tTJSVariantClosure ManagedFilter;
     XP3FilterDecoder() : ManagedDecoder(nullptr), ManagedFilter(nullptr) {}
     ~XP3FilterDecoder() {
+        // tTJSVariantClosure deliberately has no automatic lifetime
+        // management.  Release the functions captured from the per-filter
+        // script world before releasing that world itself.
+        if(ManagedDecoder.Object || ManagedDecoder.ObjThis)
+            ManagedDecoder.Release();
+        ManagedDecoder = tTJSVariantClosure(nullptr);
+        if(ManagedFilter.Object || ManagedFilter.ObjThis)
+            ManagedFilter.Release();
+        ManagedFilter = tTJSVariantClosure(nullptr);
         if(ScriptEngine)
             ScriptEngine->Release();
     }
@@ -538,6 +547,9 @@ tjs_int TVPXP3ArchiveContentFilterWrapper(const ttstr &filepath,
     if(!_ManagedFilterInited)
         return 0;
 
+    // Keep the decoder alive from lookup through the script call. Session
+    // teardown takes the same lock before deleting the decoder pool.
+    std::lock_guard<std::mutex> callLock(_decoder_call_mtx);
     XP3FilterDecoder *decoder = FetchXP3Decoder();
     if(!decoder->ManagedFilter.Object)
         return 0;
@@ -546,12 +558,9 @@ tjs_int TVPXP3ArchiveContentFilterWrapper(const ttstr &filepath,
     tTJSVariant FileSize((tjs_int64)filesize);
     tTJSVariant *vars[] = { &FilePath, &ArcName, &FileSize };
     tTJSVariant result;
-    {
-        std::lock_guard<std::mutex> lk(_decoder_call_mtx);
-        decoder->ManagedFilter.FuncCall(0, nullptr, nullptr, &result,
-                                        sizeof(vars) / sizeof(vars[0]), vars,
-                                        nullptr);
-    }
+    decoder->ManagedFilter.FuncCall(0, nullptr, nullptr, &result,
+                                    sizeof(vars) / sizeof(vars[0]), vars,
+                                    nullptr);
     tjs_int ret = 0;
     if(result.Type() == tvtObject) {
         iTJSDispatch2 *arr = result.AsObjectNoAddRef();
@@ -568,6 +577,8 @@ TVPXP3ArchiveExtractionFilterWrapper(tTVPXP3ExtractionFilterInfo *info,
     if(info->SizeOfSelf != sizeof(tTVPXP3ExtractionFilterInfo))
         TVPThrowExceptionMessage(
             TJS_W("Incompatible tTVPXP3ExtractionFilterInfo size"));
+    // Serialize lookup and invocation with per-session decoder teardown.
+    std::lock_guard<std::mutex> callLock(_decoder_call_mtx);
     XP3FilterDecoder *decoder = FetchXP3Decoder();
     if(decoder->ManagedDecoder.Object) {
         tTJSVariant FileHash = (tjs_int64)info->FileHash;
@@ -585,12 +596,9 @@ TVPXP3ArchiveExtractionFilterWrapper(tTVPXP3ExtractionFilterInfo *info,
                       *pBuffer = (unsigned char *)info->Buffer;
         memcpy(pBackup, info->Buffer, info->BufferSize);
 #endif
-        {
-            std::lock_guard<std::mutex> lk(_decoder_call_mtx);
-            decoder->ManagedDecoder.FuncCall(0, nullptr, nullptr, nullptr,
-                                             sizeof(vars) / sizeof(vars[0]),
-                                             vars, nullptr);
-        }
+        decoder->ManagedDecoder.FuncCall(0, nullptr, nullptr, nullptr,
+                                         sizeof(vars) / sizeof(vars[0]), vars,
+                                         nullptr);
 #if defined(WIN32) && defined(CHECK_CXDEC)
         cxdec_decode(&dec_callback, info->FileHash, info->Offset, pBackup,
                      info->BufferSize);
@@ -605,10 +613,31 @@ TVPXP3ArchiveExtractionFilterWrapper(tTVPXP3ExtractionFilterInfo *info,
     }
 }
 
+static void ResetXP3FilterForHostSession() {
+    // xp3filter.tjs belongs to the selected game, not to the host process.
+    // Disable the process-global callbacks first so no new archive read can
+    // enter an old decoder while it is being released.
+    TVPSetXP3ArchiveExtractionFilter(nullptr);
+    TVPSetXP3ArchiveContentFilter(nullptr);
+
+    std::lock_guard<std::mutex> callLock(_decoder_call_mtx);
+    ClearXP3Decoders();
+    sXP3FilterScript.Clear();
+    _ManagedDecoderInited = false;
+    _ManagedFilterInited = false;
+}
+
 void TVPSetXP3FilterScript(ttstr content) {
     if(sXP3FilterScript != content) {
-        ClearXP3Decoders();
+        TVPSetXP3ArchiveExtractionFilter(nullptr);
+        TVPSetXP3ArchiveContentFilter(nullptr);
+        {
+            std::lock_guard<std::mutex> callLock(_decoder_call_mtx);
+            ClearXP3Decoders();
+        }
         sXP3FilterScript = content;
+        _ManagedDecoderInited = false;
+        _ManagedFilterInited = false;
     }
     if(content.IsEmpty()) {
         TVPSetXP3ArchiveExtractionFilter(nullptr);
@@ -621,6 +650,10 @@ void TVPSetXP3FilterScript(ttstr content) {
 }
 
 static void PostRegistCallback() {
+    // A single Aether process can host several titles. Start every plugin
+    // registration from an empty filter state, including when the previous
+    // title ended abnormally or the next title has no xp3filter.tjs at all.
+    ResetXP3FilterForHostSession();
     ttstr path = TVPGetAppPath() + TJS_W("xp3filter.tjs");
     if(TVPIsExistentStorageNoSearch(path)) {
         iTJSTextReadStream *stream = TVPCreateTextStreamForRead(path, "");
@@ -639,3 +672,4 @@ static void PostRegistCallback() {
 }
 
 NCB_POST_REGIST_CALLBACK(PostRegistCallback);
+NCB_PRE_UNREGIST_CALLBACK(ResetXP3FilterForHostSession);

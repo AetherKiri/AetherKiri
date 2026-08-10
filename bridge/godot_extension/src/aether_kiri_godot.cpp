@@ -4,6 +4,7 @@
 #include "GodotGpuBridge.h"
 #include "GodotGpuBarrierShadowPlanner.h"
 #include "ComplexRect.h"
+#include "frame_effect_host.h"
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/image.hpp>
@@ -41,6 +42,7 @@
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/variant/variant.hpp>
+#include <godot_cpp/variant/vector2i.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -77,6 +79,9 @@ char *aether_storekit_copy_state_json_for_product(const char *product_id);
 void aether_storekit_free_string(char *value);
 int32_t aether_native_launch_file_picker_present(
     const char *title, const char *initial_directory);
+int32_t aether_native_cover_file_picker_present(
+    const char *title, const char *initial_directory,
+    const char *destination_directory);
 char *aether_native_launch_file_picker_copy_result_json();
 void aether_native_launch_file_picker_free_string(char *value);
 }
@@ -90,6 +95,16 @@ extern jobject krkr_GetApplicationContext();
 #endif
 
 namespace godot {
+
+#if defined(AETHERKIRI_WITH_ONSCRIPTER)
+void InitializeAetherOnscripter(ModuleInitializationLevel level);
+#endif
+
+#if defined(AETHERKIRI_INTERNAL_FRAME_EFFECTS)
+void RegisterAetherInternalFrameEffects();
+void UnregisterAetherInternalFrameEffects();
+#endif
+
 namespace {
 
 struct GodotGpuTextureRecord {
@@ -177,6 +192,7 @@ struct GodotGpuOp {
     uint32_t mode = 0;
     int opacity = 255;
     uint32_t color = 0xffffffffu;
+    bool preserve_minified_detail = false;
     bool result = false;
     bool done = false;
     uint64_t readback_request = 0;
@@ -209,6 +225,7 @@ std::atomic<uint64_t> g_gpu_op_completed{0};
 std::atomic<uint64_t> g_gpu_op_failed{0};
 std::atomic<uint64_t> g_gpu_copy_failed{0};
 std::atomic<uint64_t> g_gpu_copy_triangles_failed{0};
+std::atomic<uint64_t> g_gpu_detail_minify_ops{0};
 std::atomic<uint64_t> g_gpu_triangle_pipeline_failed{0};
 std::atomic<uint64_t> g_gpu_triangle_buffer_failed{0};
 std::atomic<uint64_t> g_gpu_triangle_uniform_failed{0};
@@ -230,6 +247,9 @@ std::atomic<uint64_t> g_gpu_predicted_compute_barriers{0};
 std::atomic<uint64_t> g_gpu_predicted_raw_hazards{0};
 std::atomic<uint64_t> g_gpu_predicted_waw_hazards{0};
 std::atomic<uint64_t> g_gpu_predicted_war_hazards{0};
+std::atomic_bool g_frame_enhancement_detail_sampling{false};
+
+constexpr uint32_t kGodotGpuPreserveMinifiedDetail = 0x40000000u;
 
 constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
 
@@ -1125,6 +1145,8 @@ String GetGodotGpuBridgeDebugInfo() {
         << " bridge_failed=" << g_gpu_op_failed.load(std::memory_order_relaxed)
         << " bridge_copy_failed=" << g_gpu_copy_failed.load(std::memory_order_relaxed)
         << " bridge_tri_failed=" << g_gpu_copy_triangles_failed.load(std::memory_order_relaxed)
+        << " bridge_detail_minify_ops="
+        << g_gpu_detail_minify_ops.load(std::memory_order_relaxed)
         << " bridge_tri_pipeline_failed=" << g_gpu_triangle_pipeline_failed.load(std::memory_order_relaxed)
         << " bridge_tri_buffer_failed=" << g_gpu_triangle_buffer_failed.load(std::memory_order_relaxed)
         << " bridge_tri_uniform_failed=" << g_gpu_triangle_uniform_failed.load(std::memory_order_relaxed)
@@ -1337,7 +1359,11 @@ PackedByteArray PackGpuPushConstants(const GodotGpuOp &op) {
                     : static_cast<int32_t>((op.color >> 8) & 0xffu),
         triple_source ? static_cast<int32_t>(op.src3_pos.x) :
         scaled_blend ? 1 :
-        triangles ? static_cast<int32_t>(op.color) :
+        triangles ? static_cast<int32_t>(
+                        op.color |
+                        (op.preserve_minified_detail
+                             ? kGodotGpuPreserveMinifiedDetail
+                             : 0u)) :
         mosaic ? 0 :
         dual_source ? 0 : static_cast<int32_t>((op.color >> 16) & 0xffu),
         triple_source ? static_cast<int32_t>(op.src3_pos.y) :
@@ -2141,7 +2167,8 @@ vec4 straight_from_premul(vec4 premul) {
 }
 
 vec4 load_minified(ivec2 limit, vec2 edge_coord,
-                    vec2 source_dx, vec2 source_dy) {
+                    vec2 source_dx, vec2 source_dy,
+                    bool preserve_detail) {
     // A single bilinear lookup aliases alpha edges when an E-mote surface is
     // presented at a fractional scale (0.5 is common in Artemis games).
     // Approximate the source footprint with destination-pixel subsamples. Keep the
@@ -2151,6 +2178,24 @@ vec4 load_minified(ivec2 limit, vec2 edge_coord,
     if (footprint <= 1.0001) {
         return straight_from_premul(
             load_bilinear_premul(limit, edge_coord));
+    }
+    if (preserve_detail) {
+        // Composite Simpson sampling retains the centre of high-contrast
+        // anime line art while integrating the complete destination-pixel
+        // footprint. This gives a later frame enhancer real eye/hair detail
+        // to restore instead of sharpening an already blurred 2x2 average.
+        vec4 premul = vec4(0.0);
+        for (int y = -1; y <= 1; ++y) {
+            float wy = y == 0 ? 4.0 : 1.0;
+            for (int x = -1; x <= 1; ++x) {
+                float wx = x == 0 ? 4.0 : 1.0;
+                vec2 offset = source_dx * (float(x) * 0.5) +
+                              source_dy * (float(y) * 0.5);
+                premul += load_bilinear_premul(
+                    limit, edge_coord + offset) * (wx * wy);
+            }
+        }
+        return straight_from_premul(premul / 36.0);
     }
     // DXT E-mote atlases contain high-contrast one-pixel line art. At the
     // authored 0.5 presentation scale a bare bilinear lookup leaves that
@@ -2178,6 +2223,8 @@ void main() {
     vec2 p = vec2(dst_pos) + vec2(0.5);
     int tri_count = pc.rect1.z;
     ivec2 src_limit = max(pc.color0.xy - ivec2(1), ivec2(0));
+    bool preserve_detail =
+        (uint(pc.color0.z) & 0x40000000u) != 0u;
     vec4 out_color = imageLoad(dst_img, dst_pos);
     bool covered = false;
 
@@ -2212,7 +2259,8 @@ void main() {
                 source10 * ((d2.x - d0.x) / area) +
                 source20 * ((d0.x - d1.x) / area);
             out_color = load_minified(
-                src_limit, src_pos_f, source_dx, source_dy);
+                src_limit, src_pos_f, source_dx, source_dy,
+                preserve_detail);
             covered = true;
             // A tessellated surface has a single source sample at a pixel.
             // Stop after the first covering triangle instead of scanning the
@@ -2290,11 +2338,25 @@ vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
 }
 
 vec4 load_minified(ivec2 limit, vec2 edge_coord,
-                    vec2 source_dx, vec2 source_dy) {
+                    vec2 source_dx, vec2 source_dy,
+                    bool preserve_detail) {
     float footprint = max(length(source_dx), length(source_dy));
     vec4 premul;
     if (footprint <= 1.0001) {
         premul = load_bilinear_premul(limit, edge_coord);
+    } else if (preserve_detail) {
+        premul = vec4(0.0);
+        for (int y = -1; y <= 1; ++y) {
+            float wy = y == 0 ? 4.0 : 1.0;
+            for (int x = -1; x <= 1; ++x) {
+                float wx = x == 0 ? 4.0 : 1.0;
+                vec2 offset = source_dx * (float(x) * 0.5) +
+                              source_dy * (float(y) * 0.5);
+                premul += load_bilinear_premul(
+                    limit, edge_coord + offset) * (wx * wy);
+            }
+        }
+        premul /= 36.0;
     } else {
         vec2 dx = source_dx * 0.5;
         vec2 dy = source_dy * 0.5;
@@ -2710,7 +2772,9 @@ void main() {
     int tri_count = pc.rect1.z;
     ivec2 src_limit = max(pc.color0.xy - ivec2(1), ivec2(0));
     float opacity = clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
-    int blend_flags = pc.color0.z;
+    bool preserve_detail =
+        (uint(pc.color0.z) & 0x40000000u) != 0u;
+    int blend_flags = int(uint(pc.color0.z) & 0x3fffffffu);
     bool mask_write = (blend_flags & 131072) != 0;
     bool tvp_blend = !mask_write && (blend_flags & 65536) != 0;
     int tvp_blend_mode = blend_flags & 65535;
@@ -2748,7 +2812,8 @@ void main() {
                 source10 * ((d2.x - d0.x) / area) +
                 source20 * ((d0.x - d1.x) / area);
             vec4 src = load_minified(
-                src_limit, src_pos_f, source_dx, source_dy);
+                src_limit, src_pos_f, source_dx, source_dy,
+                preserve_detail);
             if (tvp_blend) {
                 uint d = pack_u8(vec4_to_u8(dst));
                 uint s = pack_u8(vec4_to_u8(src));
@@ -2859,11 +2924,25 @@ vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
 }
 
 vec4 load_minified(ivec2 limit, vec2 edge_coord,
-                    vec2 source_dx, vec2 source_dy) {
+                    vec2 source_dx, vec2 source_dy,
+                    bool preserve_detail) {
     float footprint = max(length(source_dx), length(source_dy));
     vec4 premul;
     if (footprint <= 1.0001) {
         premul = load_bilinear_premul(limit, edge_coord);
+    } else if (preserve_detail) {
+        premul = vec4(0.0);
+        for (int y = -1; y <= 1; ++y) {
+            float wy = y == 0 ? 4.0 : 1.0;
+            for (int x = -1; x <= 1; ++x) {
+                float wx = x == 0 ? 4.0 : 1.0;
+                vec2 offset = source_dx * (float(x) * 0.5) +
+                              source_dy * (float(y) * 0.5);
+                premul += load_bilinear_premul(
+                    limit, edge_coord + offset) * (wx * wy);
+            }
+        }
+        premul /= 36.0;
     } else {
         vec2 dx = source_dx * 0.5;
         vec2 dy = source_dy * 0.5;
@@ -3096,7 +3175,9 @@ void main() {
     int tri_count = pc.rect1.z;
     ivec2 src_limit = max(pc.color0.xy - ivec2(1), ivec2(0));
     float opacity = clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
-    int blend_flags = pc.color0.z;
+    bool preserve_detail =
+        (uint(pc.color0.z) & 0x40000000u) != 0u;
+    int blend_flags = int(uint(pc.color0.z) & 0x3fffffffu);
     bool inverted_mask = (blend_flags & 65536) != 0;
     blend_flags = blend_flags & 65535;
     vec4 dst = imageLoad(dst_img, dst_pos);
@@ -3150,7 +3231,8 @@ void main() {
                 continue;
             }
             vec4 src = load_minified(
-                src_limit, src_pos_f, source_dx, source_dy);
+                src_limit, src_pos_f, source_dx, source_dy,
+                preserve_detail);
             if (src.g >= 0.70 && src.g > src.r + 0.20 && src.g > src.b + 0.20) {
                 src.a = 0.0;
             }
@@ -5599,6 +5681,47 @@ void AppendGodotGpuTriangleBounds(std::vector<float> &vertices,
     vertices.push_back(max_y);
 }
 
+bool ShouldPreserveMinifiedTriangleDetail(uint32_t triangle_count,
+                                          const tTVPPointD *dst_points,
+                                          const tTVPPointD *src_points) {
+    if (!g_frame_enhancement_detail_sampling.load(std::memory_order_acquire) ||
+        triangle_count == 0 || dst_points == nullptr || src_points == nullptr) {
+        return false;
+    }
+
+    // Ignore tiny fractional transforms. The detail path is reserved for a
+    // real reduction, such as a full-resolution character image composited
+    // into a dialogue portrait, so normal 1:1 layers retain the fast path.
+    constexpr double kMinifiedScale = 0.9;
+    constexpr double kLengthEpsilon = 1.0e-6;
+    for (uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
+        const uint32_t base = triangle * 3u;
+        for (uint32_t edge = 0; edge < 3u; ++edge) {
+            const uint32_t next = (edge + 1u) % 3u;
+            const double src_dx = src_points[base + next].x -
+                                  src_points[base + edge].x;
+            const double src_dy = src_points[base + next].y -
+                                  src_points[base + edge].y;
+            const double dst_dx = dst_points[base + next].x -
+                                  dst_points[base + edge].x;
+            const double dst_dy = dst_points[base + next].y -
+                                  dst_points[base + edge].y;
+            const double src_length_squared =
+                src_dx * src_dx + src_dy * src_dy;
+            if (src_length_squared <= kLengthEpsilon * kLengthEpsilon) {
+                continue;
+            }
+            const double dst_length_squared =
+                dst_dx * dst_dx + dst_dy * dst_dy;
+            if (dst_length_squared <
+                kMinifiedScale * kMinifiedScale * src_length_squared) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
                          const tTVPRect *clip_rect,
                          const tTVPPointD *dst_points,
@@ -5633,6 +5756,14 @@ bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     op->size = Vector3(width, height, 1);
     op->src_size = Vector3(src_record.width, src_record.height, 1);
     op->mode = triangle_count;
+    // Copy triangles do not have blend flags. Keep the reserved detail bit
+    // clear unless the enhancement-specific minification path selects it.
+    op->color = 0u;
+    op->preserve_minified_detail = ShouldPreserveMinifiedTriangleDetail(
+        triangle_count, dst_points, src_points);
+    if (op->preserve_minified_detail) {
+        g_gpu_detail_minify_ops.fetch_add(1, std::memory_order_relaxed);
+    }
     op->vertices.reserve(static_cast<size_t>(triangle_count) * 16u);
     for (uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
         const uint32_t vertex_base = triangle * 3u;
@@ -5685,6 +5816,11 @@ bool BridgeDrawTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     op->mode = triangle_count;
     op->opacity = static_cast<int>(std::round(std::clamp(opacity, 0.0f, 1.0f) * 255.0f));
     op->color = blend_mode;
+    op->preserve_minified_detail = ShouldPreserveMinifiedTriangleDetail(
+        triangle_count, dst_points, src_points);
+    if (op->preserve_minified_detail) {
+        g_gpu_detail_minify_ops.fetch_add(1, std::memory_order_relaxed);
+    }
     op->vertices.reserve(static_cast<size_t>(triangle_count) * 16u);
     for (uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
         const uint32_t vertex_base = triangle * 3u;
@@ -5746,6 +5882,11 @@ bool BridgeDrawMaskedTriangles(uint64_t dst, uint64_t src, uint64_t mask,
     op->opacity = static_cast<int>(
         std::round(std::clamp(opacity, 0.0f, 1.0f) * 255.0f));
     op->color = (blend_mode & 0xffffu) | (inverted_mask ? 0x10000u : 0u);
+    op->preserve_minified_detail = ShouldPreserveMinifiedTriangleDetail(
+        triangle_count, dst_points, src_points);
+    if (op->preserve_minified_detail) {
+        g_gpu_detail_minify_ops.fetch_add(1, std::memory_order_relaxed);
+    }
     op->vertices.reserve(static_cast<size_t>(triangle_count) * 22u);
     for (uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
         const uint32_t vertex_base = triangle * 3u;
@@ -6541,7 +6682,8 @@ class AetherKiriPlayer final : public Node {
     GDCLASS(AetherKiriPlayer, Node)
 
 public:
-    AetherKiriPlayer() = default;
+    AetherKiriPlayer()
+        : frame_effect_provider_(CreateFrameEffectProvider()) {}
     ~AetherKiriPlayer() override { destroy_engine(); }
 
     bool initialize_engine(const String &writable_path, const String &cache_path) {
@@ -6588,6 +6730,9 @@ public:
         const engine_result_t result = engine_create(&desc, &handle_);
         last_result_ = ResultToString(result);
         last_error_ = LastError(handle_);
+        if (result == ENGINE_RESULT_OK) {
+            sync_frame_effect_source_mode(true);
+        }
         return result == ENGINE_RESULT_OK;
     }
 
@@ -6608,10 +6753,127 @@ public:
     }
 
     void release_frame_texture() {
+        if (frame_effect_provider_ != nullptr) {
+            frame_effect_provider_->release(main_rendering_device());
+        }
+        frame_effect_active_ = false;
+        frame_effect_pipeline_ = "none";
+        frame_effect_error_ = "";
+        frame_source_width_ = 0;
+        frame_source_height_ = 0;
         release_rd_texture(true);
         release_presentation_textures(true);
         frame_texture_.unref();
         frame_texture_backend_ = "none";
+    }
+
+    bool is_frame_enhancement_built() const {
+        return frame_effect_provider_ != nullptr;
+    }
+
+    bool is_frame_enhancement_available() const {
+        if (frame_effect_provider_ == nullptr) {
+            return false;
+        }
+        String reason;
+        return frame_effect_provider_->is_available(main_rendering_device(),
+                                                     &reason);
+    }
+
+    void set_frame_enhancement_enabled(bool enabled) {
+        frame_effect_enabled_ = enabled;
+        g_frame_enhancement_detail_sampling.store(
+            enabled && frame_effect_provider_ != nullptr,
+            std::memory_order_release);
+        frame_effect_active_ = false;
+        frame_effect_error_ = "";
+        frame_effect_bypass_due_to_error_ = false;
+        if (frame_effect_provider_ == nullptr) {
+            sync_frame_effect_source_mode();
+            return;
+        }
+        frame_effect_provider_->set_enabled(enabled);
+        if (!enabled) {
+            frame_effect_provider_->release(main_rendering_device());
+            frame_effect_pipeline_ = "none";
+        }
+        sync_frame_effect_source_mode();
+    }
+
+    void set_frame_native_output_enabled(bool enabled) {
+        frame_native_output_enabled_ = enabled;
+        sync_frame_effect_source_mode();
+    }
+
+    void set_frame_enhancement_mode(const String &mode) {
+        frame_effect_mode_ = mode.strip_edges().to_lower();
+        if (frame_effect_mode_.is_empty()) {
+            frame_effect_mode_ = "auto";
+        }
+        frame_effect_active_ = false;
+        frame_effect_bypass_due_to_error_ = false;
+        if (frame_effect_provider_ != nullptr) {
+            frame_effect_provider_->set_mode(frame_effect_mode_);
+        }
+        sync_frame_effect_source_mode();
+    }
+
+    void set_frame_enhancement_custom_chain(const PackedStringArray &chain) {
+        PackedStringArray normalized;
+        for (int64_t index = 0; index < chain.size(); ++index) {
+            const String algorithm = chain[index].strip_edges().to_lower();
+            if (!algorithm.is_empty()) normalized.push_back(algorithm);
+        }
+        if (normalized == frame_effect_custom_chain_) return;
+        frame_effect_custom_chain_ = normalized;
+        frame_effect_active_ = false;
+        frame_effect_bypass_due_to_error_ = false;
+        if (frame_effect_provider_ != nullptr) {
+            frame_effect_provider_->release(main_rendering_device());
+        }
+        sync_frame_effect_source_mode();
+    }
+
+    void set_frame_enhancement_target_size(int width, int height) {
+        frame_effect_target_width_ = static_cast<uint32_t>(std::max(0, width));
+        frame_effect_target_height_ = static_cast<uint32_t>(std::max(0, height));
+    }
+
+    Vector2i get_frame_source_size() const {
+        return Vector2i(static_cast<int32_t>(frame_source_width_),
+                        static_cast<int32_t>(frame_source_height_));
+    }
+
+    Dictionary get_frame_enhancement_status() const {
+        Dictionary result;
+        result["built"] = frame_effect_provider_ != nullptr;
+        result["enabled"] = frame_effect_enabled_;
+        result["layer_detail_preservation"] =
+            g_frame_enhancement_detail_sampling.load(
+                std::memory_order_acquire);
+        result["active"] = frame_effect_active_;
+        result["mode"] = frame_effect_mode_;
+        result["custom_chain"] = frame_effect_custom_chain_;
+        result["pipeline"] = frame_effect_pipeline_;
+        result["error"] = frame_effect_error_;
+        result["source_width"] = static_cast<int64_t>(frame_source_width_);
+        result["source_height"] = static_cast<int64_t>(frame_source_height_);
+        result["target_width"] = static_cast<int64_t>(frame_effect_target_width_);
+        result["target_height"] = static_cast<int64_t>(frame_effect_target_height_);
+        result["native_output_requested"] = frame_native_output_enabled_;
+        result["raw_source_output"] = frame_effect_raw_source_output_;
+        result["bypassed_after_error"] = frame_effect_bypass_due_to_error_;
+
+        String reason = "provider_not_built";
+        bool available = false;
+        if (frame_effect_provider_ != nullptr) {
+            available = frame_effect_provider_->is_available(
+                main_rendering_device(), &reason);
+            result["provider"] = frame_effect_provider_->status();
+        }
+        result["available"] = available;
+        result["reason"] = reason;
+        return result;
     }
 
     bool is_initialized() const { return handle_ != nullptr; }
@@ -7218,6 +7480,85 @@ public:
     }
 
     Ref<Texture2D> update_frame_texture() {
+        // A setting can be applied before the RenderingDevice is ready. Retry
+        // only that availability transition; a real processing failure sets
+        // the bypass flag and remains on the safe surface path.
+        if (frame_effect_enabled_ && !frame_effect_bypass_due_to_error_ &&
+            !frame_effect_raw_source_output_) {
+            sync_frame_effect_source_mode();
+        }
+        Ref<Texture2D> source = update_source_frame_texture();
+        if (source.is_null()) {
+            frame_effect_active_ = false;
+            return source;
+        }
+
+        frame_source_width_ = static_cast<uint32_t>(std::max(0, source->get_width()));
+        frame_source_height_ = static_cast<uint32_t>(std::max(0, source->get_height()));
+        frame_effect_active_ = false;
+        if (!frame_effect_enabled_ || frame_effect_provider_ == nullptr ||
+            frame_source_width_ == 0 || frame_source_height_ == 0) {
+            return source;
+        }
+
+        RenderingDevice *rd = main_rendering_device();
+        String unavailable_reason;
+        if (!frame_effect_provider_->is_available(rd, &unavailable_reason)) {
+            frame_effect_error_ = unavailable_reason;
+            frame_effect_bypass_due_to_error_ = true;
+            sync_frame_effect_source_mode();
+            return source;
+        }
+
+        RenderingServer *server = RenderingServer::get_singleton();
+        if (server == nullptr) {
+            frame_effect_error_ = "rendering_server_unavailable";
+            frame_effect_bypass_due_to_error_ = true;
+            sync_frame_effect_source_mode();
+            return source;
+        }
+        const RID source_texture = server->texture_get_rd_texture(source->get_rid());
+        if (!source_texture.is_valid()) {
+            frame_effect_error_ = "source_texture_has_no_rendering_device_rid";
+            frame_effect_bypass_due_to_error_ = true;
+            sync_frame_effect_source_mode();
+            return source;
+        }
+
+        FrameEffectRequest request;
+        request.rendering_device = rd;
+        request.source_texture = source_texture;
+        request.input_width = frame_source_width_;
+        request.input_height = frame_source_height_;
+        request.target_width = frame_effect_target_width_ > 0
+            ? frame_effect_target_width_
+            : frame_source_width_;
+        request.target_height = frame_effect_target_height_ > 0
+            ? frame_effect_target_height_
+            : frame_source_height_;
+        request.frame_serial = frame_texture_serial_;
+        request.mode = frame_effect_mode_;
+        request.custom_chain = frame_effect_custom_chain_;
+
+        FrameEffectOutput output;
+        String error;
+        if (!frame_effect_provider_->process(request, &output, &error) ||
+            output.texture.is_null()) {
+            frame_effect_error_ = error.is_empty()
+                ? String("frame_effect_provider_failed")
+                : error;
+            frame_effect_bypass_due_to_error_ = true;
+            sync_frame_effect_source_mode();
+            return source;
+        }
+
+        frame_effect_active_ = true;
+        frame_effect_pipeline_ = output.pipeline;
+        frame_effect_error_ = "";
+        return output.texture;
+    }
+
+    Ref<Texture2D> update_source_frame_texture() {
         if (handle_ == nullptr) {
             return Ref<Texture2D>();
         }
@@ -7352,6 +7693,464 @@ public:
             frame_texture_backend_ = "image_texture";
         }
         return frame_texture_;
+    }
+
+    Dictionary debug_frame_enhancement_self_test() {
+        Dictionary result;
+        result["built"] = frame_effect_provider_ != nullptr;
+        if (frame_effect_provider_ == nullptr) {
+            result["ok"] = false;
+            result["error"] = "provider_not_built";
+            return result;
+        }
+
+        RenderingDevice *rd = main_rendering_device();
+        String unavailable_reason;
+        if (!frame_effect_provider_->is_available(rd, &unavailable_reason)) {
+            result["ok"] = false;
+            result["error"] = unavailable_reason;
+            return result;
+        }
+
+        constexpr uint32_t kWidth = 16;
+        constexpr uint32_t kHeight = 16;
+        PackedByteArray pixels;
+        pixels.resize(kWidth * kHeight * 4u);
+        uint8_t *bytes = pixels.ptrw();
+        for (uint32_t y = 0; y < kHeight; ++y) {
+            for (uint32_t x = 0; x < kWidth; ++x) {
+                const size_t offset = (static_cast<size_t>(y) * kWidth + x) * 4u;
+                const bool checker = ((x / 4u) + (y / 4u)) % 2u != 0u;
+                bytes[offset + 0u] = checker ? 224u : static_cast<uint8_t>(x * 11u);
+                bytes[offset + 1u] = checker ? 96u : static_cast<uint8_t>(y * 13u);
+                bytes[offset + 2u] = checker ? 32u : 160u;
+                bytes[offset + 3u] = 255u;
+            }
+        }
+
+        Ref<RDTextureView> view;
+        view.instantiate();
+        TypedArray<PackedByteArray> initial_data;
+        initial_data.push_back(pixels);
+        RID source_rid = rd->texture_create(
+            MakeRgbaTextureFormat(kWidth, kHeight), view, initial_data);
+        if (!source_rid.is_valid()) {
+            result["ok"] = false;
+            result["error"] = "source_texture_allocation_failed";
+            return result;
+        }
+
+        const bool previous_enabled = frame_effect_enabled_;
+        frame_effect_provider_->set_enabled(true);
+        const Dictionary initial_provider_status = frame_effect_provider_->status();
+        const int64_t initial_processed_frames = static_cast<int64_t>(
+            initial_provider_status.get("processed_frames", 0));
+        const int64_t initial_cache_hits = static_cast<int64_t>(
+            initial_provider_status.get("cache_hits", 0));
+        const int64_t initial_restore_runs = static_cast<int64_t>(
+            initial_provider_status.get("anime4k_restore_runs", 0));
+        const int64_t initial_restore_passes = static_cast<int64_t>(
+            initial_provider_status.get("anime4k_restore_pass_dispatches", 0));
+        const int64_t initial_neural_runs = static_cast<int64_t>(
+            initial_provider_status.get("neural_upscale_runs", 0));
+        const int64_t initial_compiled_pipelines = static_cast<int64_t>(
+            initial_provider_status.get("compiled_pipeline_count", 0));
+        const int64_t initial_pipeline_attempts = static_cast<int64_t>(
+            initial_provider_status.get("pipeline_compile_attempts", 0));
+        const int64_t initial_texture_reuse_hits = static_cast<int64_t>(
+            initial_provider_status.get("texture_reuse_hits", 0));
+        const int64_t initial_uniform_set_cache_hits = static_cast<int64_t>(
+            initial_provider_status.get("uniform_set_cache_hits", 0));
+        FrameEffectRequest request;
+        request.rendering_device = rd;
+        request.source_texture = source_rid;
+        request.input_width = kWidth;
+        request.input_height = kHeight;
+        FrameEffectOutput output;
+        String error;
+        Array pipelines;
+        Array compiled_pipeline_counts;
+        Array allocated_texture_counts;
+        Array allocated_texture_bytes;
+        Array allocated_uniform_set_counts;
+        Array texture_layouts;
+        Array chain_stage_orders;
+        Array chain_dispatch_counts;
+        Array chain_peak_widths;
+        Array chain_peak_heights;
+        bool ok = true;
+        const std::array<String, 15> modes = {
+            "anime4k", "fsr1", "bicubic", "lanczos",
+            "ravu", "cunny", "nnedi3",
+            "chain_4k_max", "chain_lossless", "chain_ultra",
+            "chain_detail", "chain_balanced", "chain_soft",
+            "chain_light", "chain_basic"};
+        const std::array<uint32_t, 15> target_sizes = {
+            24u, 22u, 23u, 26u, 31u, 30u, 29u,
+            32u, 33u, 34u, 35u, 36u, 37u, 38u, 39u};
+        for (size_t index = 0; index < modes.size(); ++index) {
+            request.target_width = target_sizes[index];
+            request.target_height = target_sizes[index];
+            request.frame_serial = static_cast<uint64_t>(index + 1u);
+            request.mode = modes[index];
+            FrameEffectOutput pass_output;
+            String pass_error;
+            const bool pass_ok = frame_effect_provider_->process(
+                request, &pass_output, &pass_error);
+            ok = ok && pass_ok && pass_output.texture.is_valid() &&
+                pass_output.width == request.target_width &&
+                pass_output.height == request.target_height;
+            if (!pass_error.is_empty()) error = pass_error;
+            pipelines.push_back(pass_output.pipeline);
+            const Dictionary pass_status = frame_effect_provider_->status();
+            compiled_pipeline_counts.push_back(
+                pass_status.get("compiled_pipeline_count", 0));
+            allocated_texture_counts.push_back(
+                pass_status.get("allocated_texture_count", 0));
+            allocated_texture_bytes.push_back(
+                pass_status.get("allocated_texture_bytes", 0));
+            allocated_uniform_set_counts.push_back(
+                pass_status.get("allocated_uniform_set_count", 0));
+            texture_layouts.push_back(pass_status.get("texture_layout", ""));
+            const Dictionary chain_status = pass_status.get("chain", Dictionary());
+            chain_stage_orders.push_back(
+                chain_status.get("stage_order", Array()));
+            chain_dispatch_counts.push_back(
+                chain_status.get("last_dispatch_count", 0));
+            chain_peak_widths.push_back(
+                chain_status.get("peak_internal_width", 0));
+            chain_peak_heights.push_back(
+                chain_status.get("peak_internal_height", 0));
+            output = pass_output;
+        }
+        // A new serial with an unchanged source, mode and geometry must reuse
+        // the texture graph and persistent uniform sets while still producing
+        // a newly double-buffered output frame.
+        request.frame_serial = static_cast<uint64_t>(modes.size() + 1u);
+        FrameEffectOutput reused_output;
+        String reused_error;
+        const bool reuse_ok = frame_effect_provider_->process(
+            request, &reused_output, &reused_error);
+        ok = ok && reuse_ok && reused_output.texture.is_valid() &&
+            reused_output.texture != output.texture;
+        if (!reused_error.is_empty()) error = reused_error;
+        output = reused_output;
+        FrameEffectOutput cached_output;
+        String cached_error;
+        const bool cache_ok = frame_effect_provider_->process(
+            request, &cached_output, &cached_error);
+        ok = ok && cache_ok && cached_output.texture == output.texture;
+        if (!cached_error.is_empty()) error = cached_error;
+
+        const Dictionary provider_status = frame_effect_provider_->status();
+        const int64_t processed_delta = static_cast<int64_t>(
+            provider_status.get("processed_frames", 0)) - initial_processed_frames;
+        const int64_t cache_hit_delta = static_cast<int64_t>(
+            provider_status.get("cache_hits", 0)) - initial_cache_hits;
+        const int64_t restore_run_delta = static_cast<int64_t>(
+            provider_status.get("anime4k_restore_runs", 0)) - initial_restore_runs;
+        const int64_t restore_pass_delta = static_cast<int64_t>(
+            provider_status.get("anime4k_restore_pass_dispatches", 0)) -
+            initial_restore_passes;
+        const int64_t neural_run_delta = static_cast<int64_t>(
+            provider_status.get("neural_upscale_runs", 0)) -
+            initial_neural_runs;
+        const int64_t compiled_pipeline_delta = static_cast<int64_t>(
+            provider_status.get("compiled_pipeline_count", 0)) -
+            initial_compiled_pipelines;
+        const int64_t pipeline_attempt_delta = static_cast<int64_t>(
+            provider_status.get("pipeline_compile_attempts", 0)) -
+            initial_pipeline_attempts;
+        const int64_t texture_reuse_delta = static_cast<int64_t>(
+            provider_status.get("texture_reuse_hits", 0)) -
+            initial_texture_reuse_hits;
+        const int64_t uniform_set_cache_hit_delta = static_cast<int64_t>(
+            provider_status.get("uniform_set_cache_hits", 0)) -
+            initial_uniform_set_cache_hits;
+        // The original recommended profile still runs one protected four-pass
+        // restore. The eight new profiles use their separate ordered executor;
+        // the final lightweight chain runs one additional serial to validate
+        // graph/uniform reuse.
+        ok = ok && processed_delta == 16 && cache_hit_delta >= 1 &&
+            restore_run_delta == 1 && restore_pass_delta == 4 &&
+            neural_run_delta == 3 && compiled_pipeline_delta == 95 &&
+            pipeline_attempt_delta == 95 &&
+            texture_reuse_delta >= 1 && uniform_set_cache_hit_delta >= 1;
+
+        int64_t visible_pixels = 0;
+        int64_t opaque_pixels = 0;
+        RenderingServer *server = RenderingServer::get_singleton();
+        RID output_rid;
+        if (server != nullptr && output.texture.is_valid()) {
+            output_rid = server->texture_get_rd_texture(output.texture->get_rid());
+        }
+        if (output_rid.is_valid()) {
+            const PackedByteArray output_pixels = rd->texture_get_data(output_rid, 0);
+            const int64_t expected_bytes =
+                static_cast<int64_t>(output.width) * output.height * 4;
+            ok = ok && output_pixels.size() == expected_bytes;
+            for (int64_t offset = 0; offset + 3 < output_pixels.size(); offset += 4) {
+                if (output_pixels[offset] > 8 || output_pixels[offset + 1] > 8 ||
+                    output_pixels[offset + 2] > 8) {
+                    ++visible_pixels;
+                }
+                if (output_pixels[offset + 3] == 255) ++opaque_pixels;
+            }
+            ok = ok && visible_pixels > 0 &&
+                opaque_pixels == static_cast<int64_t>(output.width) * output.height;
+        } else {
+            ok = false;
+        }
+
+        // Exercise the exact public resolution targets on Metal with the
+        // lightweight ordered chain. This validates real allocation,
+        // dispatch, final RGBA8 conversion, and opaque output at 1080p, 2K,
+        // and 4K without making the self-test run the intentionally extreme
+        // VL supersample graph at full resolution.
+        Array exact_resolution_sizes;
+        Array exact_resolution_bytes;
+        const std::array<Vector2i, 3> exact_targets = {
+            Vector2i(1920, 1080), Vector2i(2560, 1440),
+            Vector2i(3840, 2160)};
+        request.mode = "chain_basic";
+        for (size_t index = 0; index < exact_targets.size(); ++index) {
+            request.target_width = static_cast<uint32_t>(exact_targets[index].x);
+            request.target_height = static_cast<uint32_t>(exact_targets[index].y);
+            request.frame_serial = static_cast<uint64_t>(100u + index);
+            FrameEffectOutput exact_output;
+            String exact_error;
+            const bool exact_ok = frame_effect_provider_->process(
+                request, &exact_output, &exact_error);
+            if (!exact_error.is_empty()) error = exact_error;
+            RID exact_rid;
+            if (server != nullptr && exact_output.texture.is_valid()) {
+                exact_rid = server->texture_get_rd_texture(
+                    exact_output.texture->get_rid());
+            }
+            PackedByteArray exact_pixels;
+            if (exact_rid.is_valid()) {
+                exact_pixels = rd->texture_get_data(exact_rid, 0);
+            }
+            const int64_t exact_expected_bytes =
+                static_cast<int64_t>(request.target_width) *
+                request.target_height * 4;
+            bool exact_opaque = exact_pixels.size() == exact_expected_bytes;
+            if (exact_opaque && exact_pixels.size() >= 4) {
+                const std::array<int64_t, 3> sample_offsets = {
+                    3, (exact_pixels.size() / 8) * 4 + 3,
+                    exact_pixels.size() - 1};
+                for (int64_t sample_offset : sample_offsets) {
+                    exact_opaque = exact_opaque &&
+                        exact_pixels[sample_offset] == 255;
+                }
+            }
+            ok = ok && exact_ok && exact_output.texture.is_valid() &&
+                exact_output.width == request.target_width &&
+                exact_output.height == request.target_height && exact_opaque;
+            exact_resolution_sizes.push_back(
+                String::num_int64(request.target_width) + String("x") +
+                String::num_int64(request.target_height));
+            exact_resolution_bytes.push_back(exact_pixels.size());
+        }
+
+        // Compile and execute every algorithm exposed by the custom-chain UI
+        // as an independent graph. Keeping these tests small avoids combining
+        // multiple fixed 2x stages into an impractically large texture while
+        // still exercising their real Metal pipelines and size semantics.
+        const std::array<String, 16> custom_algorithms = {
+            "anime4k_upscale_s", "anime4k_upscale_l", "anime4k_upscale_vl",
+            "anime4k_restore_s", "anime4k_restore_soft_s",
+            "anime4k_restore_soft_m", "anime4k_restore_l",
+            "anime4k_restore_vl", "fsr1_easu", "fsr1_rcas", "bicubic",
+            "lanczos", "fxaa", "ravu_lite_r2", "cunny_2x4c",
+            "nnedi3_nns16"};
+        const std::array<String, 6> custom_double_algorithms = {
+            "anime4k_upscale_s", "anime4k_upscale_l",
+            "anime4k_upscale_vl", "ravu_lite_r2", "cunny_2x4c",
+            "nnedi3_nns16"};
+        const std::array<String, 3> custom_fit_algorithms = {
+            "fsr1_easu", "bicubic", "lanczos"};
+        Array custom_algorithm_names;
+        Array custom_stage_orders;
+        Array custom_dispatch_counts;
+        request.mode = "custom";
+        for (size_t index = 0; index < custom_algorithms.size(); ++index) {
+            custom_algorithm_names.push_back(custom_algorithms[index]);
+            request.custom_chain.clear();
+            request.custom_chain.push_back(custom_algorithms[index]);
+            const bool doubles = std::find(
+                custom_double_algorithms.begin(), custom_double_algorithms.end(),
+                custom_algorithms[index]) != custom_double_algorithms.end();
+            const bool fits = std::find(
+                custom_fit_algorithms.begin(), custom_fit_algorithms.end(),
+                custom_algorithms[index]) != custom_fit_algorithms.end();
+            request.target_width = doubles ? 32u : (fits ? 23u : 16u);
+            request.target_height = request.target_width;
+            request.frame_serial = static_cast<uint64_t>(200u + index);
+            FrameEffectOutput custom_output;
+            String custom_error;
+            const bool custom_ok = frame_effect_provider_->process(
+                request, &custom_output, &custom_error);
+            if (!custom_error.is_empty()) error = custom_error;
+            RID custom_rid;
+            if (server != nullptr && custom_output.texture.is_valid()) {
+                custom_rid = server->texture_get_rd_texture(
+                    custom_output.texture->get_rid());
+            }
+            PackedByteArray custom_pixels;
+            if (custom_rid.is_valid()) {
+                custom_pixels = rd->texture_get_data(custom_rid, 0);
+            }
+            const int64_t custom_expected_bytes =
+                static_cast<int64_t>(request.target_width) *
+                request.target_height * 4;
+            const bool custom_alpha_ok =
+                custom_pixels.size() == custom_expected_bytes &&
+                custom_pixels.size() >= 4 && custom_pixels[3] == 255 &&
+                custom_pixels[custom_pixels.size() - 1] == 255;
+            ok = ok && custom_ok && custom_output.texture.is_valid() &&
+                custom_output.width == request.target_width &&
+                custom_output.height == request.target_height &&
+                custom_alpha_ok;
+            const Dictionary custom_pass_status =
+                frame_effect_provider_->status().get("chain", Dictionary());
+            const Array custom_order =
+                custom_pass_status.get("stage_order", Array());
+            ok = ok && custom_order.size() == 1 &&
+                custom_order[0] == custom_algorithms[index];
+            custom_stage_orders.push_back(custom_order);
+            custom_dispatch_counts.push_back(
+                custom_pass_status.get("last_dispatch_count", 0));
+        }
+
+        request.custom_chain = PackedStringArray();
+        request.custom_chain.push_back("anime4k_upscale_s");
+        request.custom_chain.push_back("bicubic");
+        request.custom_chain.push_back("anime4k_restore_soft_s");
+        request.custom_chain.push_back("fsr1_rcas");
+        request.target_width = 30u;
+        request.target_height = 30u;
+        request.frame_serial = 300u;
+        FrameEffectOutput ordered_custom_output;
+        String ordered_custom_error;
+        const bool ordered_custom_ok = frame_effect_provider_->process(
+            request, &ordered_custom_output, &ordered_custom_error);
+        if (!ordered_custom_error.is_empty()) error = ordered_custom_error;
+        Dictionary ordered_custom_status =
+            frame_effect_provider_->status().get("chain", Dictionary());
+        const Array ordered_custom_stages =
+            ordered_custom_status.get("stage_order", Array());
+        const Array expected_custom_stages = Array::make(
+            "anime4k_upscale_s", "bicubic",
+            "anime4k_restore_soft_s", "fsr1_rcas");
+        ok = ok && ordered_custom_ok &&
+            ordered_custom_output.texture.is_valid() &&
+            ordered_custom_output.width == 30u &&
+            ordered_custom_output.height == 30u &&
+            ordered_custom_stages == expected_custom_stages;
+
+        const int64_t custom_cache_hits_before = static_cast<int64_t>(
+            ordered_custom_status.get("cache_hits", 0));
+        const int64_t custom_reuse_hits_before = static_cast<int64_t>(
+            ordered_custom_status.get("texture_reuse_hits", 0));
+        FrameEffectOutput custom_cached_output;
+        String custom_cached_error;
+        const bool custom_cached_ok = frame_effect_provider_->process(
+            request, &custom_cached_output, &custom_cached_error);
+        request.frame_serial = 301u;
+        FrameEffectOutput custom_reused_output;
+        String custom_reused_error;
+        const bool custom_reused_ok = frame_effect_provider_->process(
+            request, &custom_reused_output, &custom_reused_error);
+        if (!custom_cached_error.is_empty()) error = custom_cached_error;
+        if (!custom_reused_error.is_empty()) error = custom_reused_error;
+        const Dictionary custom_reused_status =
+            frame_effect_provider_->status().get("chain", Dictionary());
+        const bool custom_cache_verified = custom_cached_ok &&
+            custom_reused_ok &&
+            custom_cached_output.texture == ordered_custom_output.texture &&
+            custom_reused_output.texture != ordered_custom_output.texture &&
+            static_cast<int64_t>(custom_reused_status.get("cache_hits", 0)) ==
+                custom_cache_hits_before + 1 &&
+            static_cast<int64_t>(custom_reused_status.get(
+                "texture_reuse_hits", 0)) == custom_reuse_hits_before + 1;
+        ok = ok && custom_cache_verified;
+
+        // An empty custom list is valid. It receives only the documented
+        // implicit final fit when source and target dimensions differ.
+        request.custom_chain.clear();
+        request.target_width = 24u;
+        request.target_height = 24u;
+        request.frame_serial = 302u;
+        FrameEffectOutput empty_custom_output;
+        String empty_custom_error;
+        const bool empty_custom_ok = frame_effect_provider_->process(
+            request, &empty_custom_output, &empty_custom_error);
+        if (!empty_custom_error.is_empty()) error = empty_custom_error;
+        const Dictionary empty_custom_status =
+            frame_effect_provider_->status().get("chain", Dictionary());
+        const Array empty_custom_stages =
+            empty_custom_status.get("stage_order", Array());
+        ok = ok && empty_custom_ok && empty_custom_output.texture.is_valid() &&
+            empty_custom_stages == Array::make("implicit_output_fit");
+
+        request.custom_chain.push_back("not_an_algorithm");
+        request.frame_serial = 303u;
+        FrameEffectOutput invalid_custom_output;
+        String invalid_custom_error;
+        const bool invalid_custom_ok = frame_effect_provider_->process(
+            request, &invalid_custom_output, &invalid_custom_error);
+        ok = ok && !invalid_custom_ok &&
+            invalid_custom_error.begins_with("unknown_custom_algorithm:");
+
+        const Dictionary final_custom_provider_status =
+            frame_effect_provider_->status();
+        const int64_t custom_pipeline_delta = static_cast<int64_t>(
+            final_custom_provider_status.get("compiled_pipeline_count", 0)) -
+            static_cast<int64_t>(provider_status.get(
+                "compiled_pipeline_count", 0));
+        ok = ok && custom_pipeline_delta == 10;
+        result["ok"] = ok;
+        result["error"] = error;
+        result["width"] = static_cast<int64_t>(output.width);
+        result["height"] = static_cast<int64_t>(output.height);
+        result["pipeline"] = output.pipeline;
+        result["pipelines"] = pipelines;
+        result["compiled_pipeline_counts"] = compiled_pipeline_counts;
+        result["allocated_texture_counts"] = allocated_texture_counts;
+        result["allocated_texture_bytes"] = allocated_texture_bytes;
+        result["allocated_uniform_set_counts"] = allocated_uniform_set_counts;
+        result["texture_layouts"] = texture_layouts;
+        result["chain_stage_orders"] = chain_stage_orders;
+        result["chain_dispatch_counts"] = chain_dispatch_counts;
+        result["chain_peak_widths"] = chain_peak_widths;
+        result["chain_peak_heights"] = chain_peak_heights;
+        result["visible_pixels"] = visible_pixels;
+        result["opaque_pixels"] = opaque_pixels;
+        result["provider"] = provider_status;
+        result["processed_delta"] = processed_delta;
+        result["anime4k_restore_run_delta"] = restore_run_delta;
+        result["anime4k_restore_pass_delta"] = restore_pass_delta;
+        result["neural_upscale_run_delta"] = neural_run_delta;
+        result["compiled_pipeline_delta"] = compiled_pipeline_delta;
+        result["pipeline_compile_attempt_delta"] = pipeline_attempt_delta;
+        result["texture_reuse_delta"] = texture_reuse_delta;
+        result["uniform_set_cache_hit_delta"] = uniform_set_cache_hit_delta;
+        result["exact_resolution_sizes"] = exact_resolution_sizes;
+        result["exact_resolution_bytes"] = exact_resolution_bytes;
+        result["custom_algorithms"] = custom_algorithm_names;
+        result["custom_stage_orders"] = custom_stage_orders;
+        result["custom_dispatch_counts"] = custom_dispatch_counts;
+        result["ordered_custom_stages"] = ordered_custom_stages;
+        result["empty_custom_stages"] = empty_custom_stages;
+        result["invalid_custom_error"] = invalid_custom_error;
+        result["custom_pipeline_delta"] = custom_pipeline_delta;
+        result["custom_cache_verified"] = custom_cache_verified;
+
+        frame_effect_provider_->release(rd);
+        frame_effect_provider_->set_enabled(previous_enabled);
+        rd->free_rid(source_rid);
+        return result;
     }
 
     Dictionary debug_gpu_blend_self_test(const String &mode_name, int opacity) {
@@ -7727,6 +8526,25 @@ void main() {
 #endif
     }
 
+    bool native_cover_file_picker_open(
+            const String &title,
+            const String &initial_directory,
+            const String &destination_directory) const {
+#if defined(__APPLE__)
+        const CharString title_utf8 = title.utf8();
+        const CharString directory_utf8 = initial_directory.utf8();
+        const CharString destination_utf8 = destination_directory.utf8();
+        return aether_native_cover_file_picker_present(
+                   title_utf8.get_data(), directory_utf8.get_data(),
+                   destination_utf8.get_data()) != 0;
+#else
+        (void)title;
+        (void)initial_directory;
+        (void)destination_directory;
+        return false;
+#endif
+    }
+
     String native_launch_file_picker_take_result_json() const {
 #if defined(__APPLE__)
         char *json = aether_native_launch_file_picker_copy_result_json();
@@ -7834,12 +8652,32 @@ protected:
                              &AetherKiriPlayer::get_plugin_debug_info);
         ClassDB::bind_method(D_METHOD("get_frame_texture_backend"),
                              &AetherKiriPlayer::get_frame_texture_backend);
+        ClassDB::bind_method(D_METHOD("is_frame_enhancement_built"),
+                             &AetherKiriPlayer::is_frame_enhancement_built);
+        ClassDB::bind_method(D_METHOD("is_frame_enhancement_available"),
+                             &AetherKiriPlayer::is_frame_enhancement_available);
+        ClassDB::bind_method(D_METHOD("set_frame_enhancement_enabled", "enabled"),
+                             &AetherKiriPlayer::set_frame_enhancement_enabled);
+        ClassDB::bind_method(D_METHOD("set_frame_native_output_enabled", "enabled"),
+                             &AetherKiriPlayer::set_frame_native_output_enabled);
+        ClassDB::bind_method(D_METHOD("set_frame_enhancement_mode", "mode"),
+                             &AetherKiriPlayer::set_frame_enhancement_mode);
+        ClassDB::bind_method(D_METHOD("set_frame_enhancement_custom_chain", "chain"),
+                             &AetherKiriPlayer::set_frame_enhancement_custom_chain);
+        ClassDB::bind_method(D_METHOD("set_frame_enhancement_target_size", "width", "height"),
+                             &AetherKiriPlayer::set_frame_enhancement_target_size);
+        ClassDB::bind_method(D_METHOD("get_frame_source_size"),
+                             &AetherKiriPlayer::get_frame_source_size);
+        ClassDB::bind_method(D_METHOD("get_frame_enhancement_status"),
+                             &AetherKiriPlayer::get_frame_enhancement_status);
         ClassDB::bind_method(D_METHOD("read_frame_rgba"),
                              &AetherKiriPlayer::read_frame_rgba);
         ClassDB::bind_method(D_METHOD("update_frame_texture"),
                              &AetherKiriPlayer::update_frame_texture);
         ClassDB::bind_method(D_METHOD("release_frame_texture"),
                              &AetherKiriPlayer::release_frame_texture);
+        ClassDB::bind_method(D_METHOD("debug_frame_enhancement_self_test"),
+                             &AetherKiriPlayer::debug_frame_enhancement_self_test);
         ClassDB::bind_method(D_METHOD("debug_gpu_blend_self_test", "mode", "opacity"),
                              &AetherKiriPlayer::debug_gpu_blend_self_test,
                              DEFVAL(255));
@@ -7865,6 +8703,10 @@ protected:
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_open", "title", "initial_directory"),
             &AetherKiriPlayer::native_launch_file_picker_open);
+        ClassDB::bind_method(
+            D_METHOD("native_cover_file_picker_open", "title", "initial_directory",
+                     "destination_directory"),
+            &AetherKiriPlayer::native_cover_file_picker_open);
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_take_result_json"),
             &AetherKiriPlayer::native_launch_file_picker_take_result_json);
@@ -8010,6 +8852,7 @@ private:
             format->set_usage_bits(BitField<RenderingDevice::TextureUsageBits>(
                 RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
                 RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
+                RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
                 RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT |
                 RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
                 RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT));
@@ -8186,6 +9029,38 @@ private:
         last_error_ = LastError(handle_);
     }
 
+    void sync_frame_effect_source_mode(bool force = false) {
+        bool publish_raw_source = frame_native_output_enabled_;
+        if (frame_effect_enabled_ && !frame_effect_bypass_due_to_error_ &&
+            frame_effect_provider_ != nullptr) {
+            String reason;
+            const bool effect_available = frame_effect_provider_->is_available(
+                main_rendering_device(), &reason);
+            publish_raw_source = publish_raw_source || effect_available;
+            if (!effect_available && frame_effect_error_.is_empty()) {
+                frame_effect_error_ = reason;
+            }
+        }
+        if (handle_ == nullptr ||
+            (!force && publish_raw_source == frame_effect_raw_source_output_)) {
+            frame_effect_raw_source_output_ = publish_raw_source;
+            return;
+        }
+
+        engine_option_t option{};
+        option.key_utf8 = ENGINE_OPTION_FRAME_OUTPUT;
+        option.value_utf8 = publish_raw_source
+            ? ENGINE_FRAME_OUTPUT_RAW_SOURCE
+            : ENGINE_FRAME_OUTPUT_SURFACE;
+        const engine_result_t result = engine_set_option(handle_, &option);
+        if (result == ENGINE_RESULT_OK) {
+            frame_effect_raw_source_output_ = publish_raw_source;
+        } else {
+            frame_effect_raw_source_output_ = false;
+            frame_effect_error_ = LastError(handle_);
+        }
+    }
+
     engine_handle_t handle_ = nullptr;
     engine_media_handle_t media_ = nullptr;
     bool game_open_ = false;
@@ -8210,6 +9085,20 @@ private:
     size_t frame_present_current_slot_ = 0;
     uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
+    std::unique_ptr<FrameEffectProvider> frame_effect_provider_;
+    bool frame_effect_enabled_ = false;
+    bool frame_effect_active_ = false;
+    bool frame_native_output_enabled_ = false;
+    bool frame_effect_raw_source_output_ = false;
+    bool frame_effect_bypass_due_to_error_ = false;
+    String frame_effect_mode_ = "auto";
+    PackedStringArray frame_effect_custom_chain_;
+    String frame_effect_pipeline_ = "none";
+    String frame_effect_error_;
+    uint32_t frame_effect_target_width_ = 0;
+    uint32_t frame_effect_target_height_ = 0;
+    uint32_t frame_source_width_ = 0;
+    uint32_t frame_source_height_ = 0;
     Ref<ImageTexture> media_texture_;
     PackedByteArray media_rgba_buffer_;
     uint64_t media_frame_serial_ = UINT64_MAX;
@@ -8221,6 +9110,9 @@ void InitializeAetherKiri(ModuleInitializationLevel level) {
     if (level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
+#if defined(AETHERKIRI_INTERNAL_FRAME_EFFECTS)
+    RegisterAetherInternalFrameEffects();
+#endif
     const engine_result_t shader_result =
         engine_set_runtime_fragment_shader_executor(
             ExecuteArtemisFragmentShader, nullptr);
@@ -8230,6 +9122,9 @@ void InitializeAetherKiri(ModuleInitializationLevel level) {
             ResultToString(shader_result));
     }
     ClassDB::register_class<AetherKiriPlayer>();
+#if defined(AETHERKIRI_WITH_ONSCRIPTER)
+    InitializeAetherOnscripter(level);
+#endif
 }
 
 void DeinitializeAetherKiri(ModuleInitializationLevel level) {
@@ -8242,6 +9137,9 @@ void DeinitializeAetherKiri(ModuleInitializationLevel level) {
     ReleaseGodotGpuPipeline();
     engine_register_godot_gpu_batch_bridge(nullptr);
     engine_register_godot_gpu_bridge(nullptr);
+#if defined(AETHERKIRI_INTERNAL_FRAME_EFFECTS)
+    UnregisterAetherInternalFrameEffects();
+#endif
 }
 
 } // namespace godot

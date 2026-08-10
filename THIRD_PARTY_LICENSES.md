@@ -22,6 +22,21 @@ This distribution includes code from upstream and other projects.
 Their copyright notices and licenses are preserved below.
 
 ----------------------------------------------------------------------------
+OnscripterYuri
+----------------------------------------------------------------------------
+Source: https://github.com/YuriSizuku/OnscripterYuri
+
+Copyright (c) 2001-2018 Ogapee.
+Copyright (c) 2014-2019 jh10001.
+Copyright (c) 2022-2023 YuriSizuku.
+
+The source files integrated by AetherKiri are licensed under the GNU General
+Public License, either version 2 or (at your option) any later version. The
+upstream license text and per-file copyright notices are preserved in
+`packages/OnscripterYuri/`. AetherKiri distributes the combined work under
+GPL-3.0-or-later.
+
+----------------------------------------------------------------------------
 Upstream (KiriKiri2 / Kirikiri Z) and contributors
 ----------------------------------------------------------------------------
 Copyright (c), W.Dee and contributors All rights reserved.

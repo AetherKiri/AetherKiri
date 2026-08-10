@@ -10,12 +10,18 @@ import AppKit
 private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable {
     static let shared = AetherNativeLaunchFilePicker()
 
+    private enum Purpose {
+        case launchFile
+        case coverImage(destinationDirectory: String)
+    }
+
     private let lock = NSLock()
     private var presenting = false
     private var resultJSON: String?
 
 #if os(iOS)
     private var documentPicker: UIDocumentPickerViewController?
+    private var documentPickerPurpose: Purpose = .launchFile
 #elseif os(macOS)
     private var openPanel: NSOpenPanel?
 #endif
@@ -24,7 +30,11 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
         super.init()
     }
 
-    func present(title: String, initialDirectory: String) -> Bool {
+    private func present(
+        title: String,
+        initialDirectory: String,
+        purpose: Purpose
+    ) -> Bool {
         lock.lock()
         guard !presenting else {
             lock.unlock()
@@ -35,9 +45,33 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
         lock.unlock()
 
         DispatchQueue.main.async { [weak self] in
-            self?.presentOnMainThread(title: title, initialDirectory: initialDirectory)
+            self?.presentOnMainThread(
+                title: title,
+                initialDirectory: initialDirectory,
+                purpose: purpose
+            )
         }
         return true
+    }
+
+    func presentLaunchFile(title: String, initialDirectory: String) -> Bool {
+        return present(
+            title: title,
+            initialDirectory: initialDirectory,
+            purpose: .launchFile
+        )
+    }
+
+    func presentCoverImage(
+        title: String,
+        initialDirectory: String,
+        destinationDirectory: String
+    ) -> Bool {
+        return present(
+            title: title,
+            initialDirectory: initialDirectory,
+            purpose: .coverImage(destinationDirectory: destinationDirectory)
+        )
     }
 
     func takeResultJSON() -> UnsafeMutablePointer<CChar>? {
@@ -80,20 +114,73 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
         return URL(fileURLWithPath: path, isDirectory: true)
     }
 
+    private func importedCoverPath(
+        from sourceURL: URL,
+        destinationDirectory: String
+    ) throws -> String {
+        let allowedExtensions = Set(["png", "jpg", "jpeg", "webp"])
+        let fileExtension = sourceURL.pathExtension.lowercased()
+        guard allowedExtensions.contains(fileExtension) else {
+            throw NSError(
+                domain: "AetherNativeFilePicker",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "The selected file is not a supported cover image"]
+            )
+        }
+        guard !destinationDirectory.isEmpty else {
+            throw NSError(
+                domain: "AetherNativeFilePicker",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "The cover image destination is unavailable"]
+            )
+        }
+
+        let destinationRoot = URL(
+            fileURLWithPath: destinationDirectory,
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: destinationRoot,
+            withIntermediateDirectories: true
+        )
+        let destinationURL = destinationRoot.appendingPathComponent(
+            "cover-\(UUID().uuidString).\(fileExtension)",
+            isDirectory: false
+        )
+        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        return destinationURL.standardizedFileURL.path
+    }
+
 #if os(iOS)
-    private func presentOnMainThread(title: String, initialDirectory: String) {
+    private func presentOnMainThread(
+        title: String,
+        initialDirectory: String,
+        purpose: Purpose
+    ) {
         guard let presenter = topViewController() else {
             complete(status: "error", error: "Unable to find a window for the system file picker")
             return
         }
+        let contentTypes: [UTType]
+        switch purpose {
+        case .launchFile:
+            contentTypes = [.data]
+        case .coverImage:
+            contentTypes = [
+                .png,
+                .jpeg,
+                UTType(filenameExtension: "webp"),
+            ].compactMap { $0 }
+        }
         let picker = UIDocumentPickerViewController(
-            forOpeningContentTypes: [.data],
+            forOpeningContentTypes: contentTypes,
             asCopy: false
         )
         picker.delegate = self
         picker.allowsMultipleSelection = false
         picker.modalPresentationStyle = .formSheet
         picker.directoryURL = directoryURL(for: initialDirectory)
+        documentPickerPurpose = purpose
         documentPicker = picker
         presenter.present(picker, animated: true)
     }
@@ -116,31 +203,64 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
         return current
     }
 #elseif os(macOS)
-    private func presentOnMainThread(title: String, initialDirectory: String) {
+    private func presentOnMainThread(
+        title: String,
+        initialDirectory: String,
+        purpose: Purpose
+    ) {
         let panel = NSOpenPanel()
         panel.title = title
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.resolvesAliases = true
-        panel.allowedContentTypes = [
-            UTType(filenameExtension: "exe"),
-            UTType(filenameExtension: "xp3"),
-        ].compactMap { $0 }
+        switch purpose {
+        case .launchFile:
+            panel.allowedContentTypes = [
+                UTType(filenameExtension: "exe"),
+                UTType(filenameExtension: "xp3"),
+            ].compactMap { $0 }
+        case .coverImage:
+            panel.allowedContentTypes = [
+                .png,
+                .jpeg,
+                UTType(filenameExtension: "webp"),
+            ].compactMap { $0 }
+        }
         panel.directoryURL = directoryURL(for: initialDirectory)
         openPanel = panel
         panel.begin { [weak self] response in
             guard let self else { return }
             self.openPanel = nil
             if response == .OK, let url = panel.url {
-                self.complete(status: "selected", path: url.standardizedFileURL.path)
+                switch purpose {
+                case .launchFile:
+                    self.complete(status: "selected", path: url.standardizedFileURL.path)
+                case .coverImage(let destinationDirectory):
+                    do {
+                        let path = try self.importedCoverPath(
+                            from: url,
+                            destinationDirectory: destinationDirectory
+                        )
+                        self.complete(status: "selected", path: path)
+                    } catch {
+                        self.complete(status: "error", error: error.localizedDescription)
+                    }
+                }
             } else {
                 self.complete(status: "cancelled")
             }
         }
     }
 #else
-    private func presentOnMainThread(title: String, initialDirectory: String) {
+    private func presentOnMainThread(
+        title: String,
+        initialDirectory: String,
+        purpose: Purpose
+    ) {
+        _ = title
+        _ = initialDirectory
+        _ = purpose
         complete(status: "error", error: "System file picker is unavailable on this platform")
     }
 #endif
@@ -158,11 +278,25 @@ extension AetherNativeLaunchFilePicker: UIDocumentPickerDelegate {
             return
         }
         let scoped = url.startAccessingSecurityScopedResource()
-        let path = url.standardizedFileURL.path
-        if scoped {
-            url.stopAccessingSecurityScopedResource()
+        defer {
+            if scoped {
+                url.stopAccessingSecurityScopedResource()
+            }
         }
-        complete(status: "selected", path: path)
+        switch documentPickerPurpose {
+        case .launchFile:
+            complete(status: "selected", path: url.standardizedFileURL.path)
+        case .coverImage(let destinationDirectory):
+            do {
+                let path = try importedCoverPath(
+                    from: url,
+                    destinationDirectory: destinationDirectory
+                )
+                complete(status: "selected", path: path)
+            } catch {
+                complete(status: "error", error: error.localizedDescription)
+            }
+        }
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
@@ -179,9 +313,25 @@ public func aetherNativeLaunchFilePickerPresent(
 ) -> Int32 {
     let title = titlePointer.map { String(cString: $0) } ?? ""
     let initialDirectory = initialDirectoryPointer.map { String(cString: $0) } ?? ""
-    return AetherNativeLaunchFilePicker.shared.present(
+    return AetherNativeLaunchFilePicker.shared.presentLaunchFile(
         title: title,
         initialDirectory: initialDirectory
+    ) ? 1 : 0
+}
+
+@_cdecl("aether_native_cover_file_picker_present")
+public func aetherNativeCoverFilePickerPresent(
+    _ titlePointer: UnsafePointer<CChar>?,
+    _ initialDirectoryPointer: UnsafePointer<CChar>?,
+    _ destinationDirectoryPointer: UnsafePointer<CChar>?
+) -> Int32 {
+    let title = titlePointer.map { String(cString: $0) } ?? ""
+    let initialDirectory = initialDirectoryPointer.map { String(cString: $0) } ?? ""
+    let destinationDirectory = destinationDirectoryPointer.map { String(cString: $0) } ?? ""
+    return AetherNativeLaunchFilePicker.shared.presentCoverImage(
+        title: title,
+        initialDirectory: initialDirectory,
+        destinationDirectory: destinationDirectory
     ) ? 1 : 0
 }
 

@@ -9,6 +9,7 @@
       "platform": "linux | windows | osx"
     },
     "boost-iostreams",
+    "bzip2",
     {
       "name": "boost-locale",
       "default-features": false
@@ -49,6 +50,7 @@
       "platform": "!windows & !emscripten"
     },
     "libjpeg-turbo",
+    "lua",
     {
       "name": "libogg",
       "platform": "android"
@@ -87,6 +89,20 @@
     {
       "name": "sdl2",
       "default-features": false
+    },
+    {
+      "name": "sdl2-image",
+      "features": [
+        "libjpeg-turbo",
+        "libwebp"
+      ]
+    },
+    "sdl2-mixer",
+    {
+      "name": "sdl2-ttf",
+      "features": [
+        "harfbuzz"
+      ]
     },
     "spdlog",
     "highway",
