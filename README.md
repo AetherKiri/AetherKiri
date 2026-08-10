@@ -241,9 +241,12 @@ composes at the script's native resolution; AetherKiri uploads the final RGBA
 frame to a Godot texture and presents it through the existing aspect-preserving
 `TextureRect`, without a second native window.
 
-ONS saves are stored under
-`onscripter_saves/<game-name-path-hash>/` in the app's user directory, leaving
-read-only game folders untouched. The default script encoding matches upstream
+ONS saves are stored in the game's `savedata/` directory so they stay with the
+game across app updates or reinstalls whenever the game directory is retained.
+Existing saves from the former app-owned
+`onscripter_saves/<game-name-path-hash>/` location are copied on first launch
+without overwriting files already in `savedata/`. Read-only game folders fall
+back to the app-owned location. The default script encoding matches upstream
 and is GBK; set `AETHERKIRI_ONS_ENCODING=gbk|sjis|utf8` to override it. Like
 the existing KiriKiri runtime, one app process owns one visual-novel session;
 restart Aether after a game exits.

@@ -1,8 +1,15 @@
 #include "onscripter_runtime.h"
 #include "onscripter_presentation.h"
+#include "onscripter_save_storage.h"
 
 #include <SDL.h>
 #include <SDL_mixer.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IOS
+#include <SDL_main.h>
+#endif
+#endif
 #include <engine_api.h>
 
 #include <algorithm>
@@ -26,6 +33,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #if defined(ANDROID)
 #include <sys/stat.h>
@@ -51,9 +59,9 @@ std::string g_stdoutpath = "stdout.txt";
 std::string g_stderrpath = "stderr.txt";
 
 // Upstream built-in layer effects refer to a process-global `ONScripter ons`.
-// Keep the ABI-visible storage without registering a global destructor: the
-// upstream `end` command releases SDL resources and exits before that
-// destructor would normally run.
+// Keep the ABI-visible storage without registering a global destructor. The
+// embedded host mirrors upstream static teardown on the game thread, then can
+// placement-construct a fresh object for a later session.
 union ONScripterGlobalStorage {
     ONScripter value;
 
@@ -67,6 +75,87 @@ namespace {
 
 std::mutex g_present_surface_mutex;
 SDL_Surface *g_present_surface = nullptr;
+
+struct PublishedFrame {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t stride_bytes = 0;
+    uint64_t serial = 0;
+    std::vector<uint8_t> rgba;
+};
+
+// ONScripter builds accumulation_surface incrementally. SDL_LockSurface only
+// controls SDL's pixel access requirements; it is not a cross-thread lock, so
+// copying that live surface from Godot can observe a partially cleared or
+// partially composed frame. Mirror completed dirty regions into an immutable
+// snapshot only at the end of flushDirect, which is the same presentation
+// boundary used by upstream's SDL renderer. Updating every completed region
+// is important: menus and text can be built through several rapid partial
+// flushes and the final flush may happen before the host asks for another
+// frame.
+std::mutex g_published_frame_mutex;
+PublishedFrame g_published_frame;
+uint64_t g_published_frame_serial = 0;
+
+void ResetPublishedFrame() {
+    std::lock_guard<std::mutex> lock(g_published_frame_mutex);
+    g_published_frame = {};
+}
+
+// SDL owns one process-wide event queue. On iOS, Godot's main loop and the
+// embedded ONS thread both consume it, so an event pushed by the bridge can be
+// removed by Godot before ONS sees it. Keep host input in a private queue and
+// let the ONS event loop consume it directly.
+std::mutex g_host_event_mutex;
+std::deque<SDL_Event> g_host_events;
+constexpr size_t kMaxHostEvents = 256;
+
+bool PopHostEvent(SDL_Event *event) {
+    if (event == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_host_event_mutex);
+    if (g_host_events.empty()) {
+        return false;
+    }
+    *event = g_host_events.front();
+    g_host_events.pop_front();
+    return true;
+}
+
+void ClearHostEvents() {
+    std::lock_guard<std::mutex> lock(g_host_event_mutex);
+    g_host_events.clear();
+}
+
+bool PushRuntimeEvent(const SDL_Event &event) {
+#if defined(__APPLE__) && TARGET_OS_IOS
+    std::lock_guard<std::mutex> lock(g_host_event_mutex);
+    // Only the newest cursor position matters until a button/key boundary is
+    // reached. Coalescing keeps a fast finger drag from delaying its release.
+    if (event.type == SDL_MOUSEMOTION && !g_host_events.empty() &&
+        g_host_events.back().type == SDL_MOUSEMOTION) {
+        g_host_events.back() = event;
+        return true;
+    }
+    if (g_host_events.size() >= kMaxHostEvents) {
+        auto motion = std::find_if(
+            g_host_events.begin(), g_host_events.end(),
+            [](const SDL_Event &queued) {
+                return queued.type == SDL_MOUSEMOTION;
+            });
+        if (motion != g_host_events.end()) {
+            g_host_events.erase(motion);
+        } else {
+            g_host_events.pop_front();
+        }
+    }
+    g_host_events.push_back(event);
+    return true;
+#else
+    return SDL_PushEvent(const_cast<SDL_Event *>(&event)) == 1;
+#endif
+}
 
 class EmbeddedMovieHost {
 public:
@@ -83,13 +172,116 @@ EmbeddedMovieHost *g_movie_host = nullptr;
 
 } // namespace
 
+extern "C" int aetherkiri_onscripter_wait_event(SDL_Event *event) {
+#if defined(__APPLE__) && TARGET_OS_IOS
+    // Bound the SDL wait so private host input remains responsive even when
+    // Godot repeatedly wins the race for SDL timer/window events.
+    while (event != nullptr) {
+        if (PopHostEvent(event)) {
+            return 1;
+        }
+        if (SDL_WaitEventTimeout(event, 8) == 1) {
+            return 1;
+        }
+    }
+    return 0;
+#else
+    return event != nullptr ? SDL_WaitEvent(event) : 0;
+#endif
+}
+
 extern "C" void SDLCALL
 aetherkiri_onscripter_free_surface(SDL_Surface *surface) {
     std::lock_guard<std::mutex> lock(g_present_surface_mutex);
     if (surface == g_present_surface) {
         g_present_surface = nullptr;
+        ResetPublishedFrame();
     }
     SDL_FreeSurface(surface);
+}
+
+extern "C" void
+aetherkiri_onscripter_publish_frame(SDL_Surface *surface,
+                                    const SDL_Rect *dirty_rect) {
+    if (surface == nullptr || surface->w <= 0 || surface->h <= 0 ||
+        surface->pixels == nullptr || surface->format == nullptr) {
+        return;
+    }
+
+    const uint32_t width = static_cast<uint32_t>(surface->w);
+    const uint32_t height = static_cast<uint32_t>(surface->h);
+    if (width > std::numeric_limits<uint32_t>::max() / 4u) {
+        return;
+    }
+    const uint32_t stride = width * 4u;
+    if (height > 0 &&
+        static_cast<size_t>(stride) >
+            std::numeric_limits<size_t>::max() / height) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_published_frame_mutex);
+    const bool initialize =
+        g_published_frame.width != width ||
+        g_published_frame.height != height ||
+        g_published_frame.stride_bytes != stride ||
+        g_published_frame.rgba.size() !=
+            static_cast<size_t>(stride) * height;
+
+    int64_t left = 0;
+    int64_t top = 0;
+    int64_t right = surface->w;
+    int64_t bottom = surface->h;
+    if (!initialize && dirty_rect != nullptr) {
+        left = std::max<int64_t>(0, dirty_rect->x);
+        top = std::max<int64_t>(0, dirty_rect->y);
+        right = std::min<int64_t>(
+            surface->w,
+            static_cast<int64_t>(dirty_rect->x) +
+                std::max<int64_t>(0, dirty_rect->w));
+        bottom = std::min<int64_t>(
+            surface->h,
+            static_cast<int64_t>(dirty_rect->y) +
+                std::max<int64_t>(0, dirty_rect->h));
+        if (right <= left || bottom <= top) {
+            return;
+        }
+    }
+
+    std::vector<uint8_t> initialized_rgba;
+    uint8_t *destination = nullptr;
+    if (initialize) {
+        initialized_rgba.resize(static_cast<size_t>(stride) * height);
+        destination = initialized_rgba.data();
+    } else {
+        destination = g_published_frame.rgba.data() +
+            static_cast<size_t>(top) * stride +
+            static_cast<size_t>(left) * 4u;
+    }
+
+    if (SDL_LockSurface(surface) != 0) {
+        return;
+    }
+    const auto *source = static_cast<const uint8_t *>(surface->pixels) +
+        static_cast<size_t>(top) * surface->pitch +
+        static_cast<size_t>(left) * surface->format->BytesPerPixel;
+    const int convert_result = SDL_ConvertPixels(
+        static_cast<int>(right - left), static_cast<int>(bottom - top),
+        surface->format->format, source, surface->pitch,
+        SDL_PIXELFORMAT_RGBA32, destination,
+        static_cast<int>(stride));
+    SDL_UnlockSurface(surface);
+    if (convert_result != 0) {
+        return;
+    }
+
+    if (initialize) {
+        g_published_frame.width = width;
+        g_published_frame.height = height;
+        g_published_frame.stride_bytes = stride;
+        g_published_frame.rgba = std::move(initialized_rgba);
+    }
+    g_published_frame.serial = ++g_published_frame_serial;
 }
 
 extern "C" int aetherkiri_onscripter_play_video(
@@ -379,7 +571,6 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     std::string encoding = "gbk";
     std::string error;
     std::deque<std::string> logs;
-    uint64_t frame_serial = 0;
     engine_handle_t media_engine = nullptr;
     engine_media_handle_t media = nullptr;
     MediaState latest_media_state;
@@ -612,13 +803,13 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     }
 
     bool poll_movie_events(bool click_to_skip) {
-        SDL_Event event{};
-        while (SDL_PollEvent(&event)) {
+        const auto handle_event = [this, click_to_skip](
+                                      const SDL_Event &event) {
             if (event.type == SDL_QUIT) {
                 return true;
             }
             if (!click_to_skip) {
-                continue;
+                return false;
             }
             if (event.type == SDL_MOUSEBUTTONUP) {
                 media_skip_requested.store(true);
@@ -628,6 +819,18 @@ struct Runtime::Impl final : EmbeddedMovieHost {
                     key == SDLK_ESCAPE) {
                     media_skip_requested.store(true);
                 }
+            }
+            return false;
+        };
+        SDL_Event event{};
+        while (PopHostEvent(&event)) {
+            if (handle_event(event)) {
+                return true;
+            }
+        }
+        while (SDL_PollEvent(&event)) {
+            if (handle_event(event)) {
+                return true;
             }
         }
         return false;
@@ -783,11 +986,22 @@ struct Runtime::Impl final : EmbeddedMovieHost {
                             media_rgba.data() + source_offset, 4u);
             }
         }
+        // A movie can advance while the ONS base frame remains unchanged.
+        // Include its serial so frame enhancement never reuses a cached
+        // result from the previous movie image.
+        const uint64_t mixed_serial = frame.serial ^
+            (latest_media_state.frame_serial + 0x9e3779b97f4a7c15ull +
+             (frame.serial << 6u) + (frame.serial >> 2u));
+        frame.serial = mixed_serial &
+            static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+        if (frame.serial == 0) {
+            frame.serial = 1;
+        }
     }
 
     void configure_encoding() {
-        // ONScripter Yuri uses one process-wide converter, matching the
-        // upstream executable and its one-game-per-process lifecycle.
+        // ONScripter Yuri uses one process-wide converter. Replace it before
+        // each embedded session so a later game may choose another encoding.
         if (coding2utf16 != nullptr) {
             delete coding2utf16;
             coding2utf16 = nullptr;
@@ -821,6 +1035,13 @@ struct Runtime::Impl final : EmbeddedMovieHost {
 
     void run_game(fs::path root) {
         try {
+#if defined(__APPLE__) && TARGET_OS_IOS
+            // ONScripter is embedded in Godot, so SDL never owns the iOS
+            // application entry point that normally marks its main setup as
+            // complete. Tell SDL that the existing host has already done so
+            // before ONScripter calls SDL_Init from this runtime thread.
+            SDL_SetMainReady();
+#endif
             SDL_SetHintWithPriority(SDL_HINT_VIDEODRIVER, "dummy",
                                     SDL_HINT_OVERRIDE);
             SDL_SetHintWithPriority(SDL_HINT_RENDER_DRIVER, "software",
@@ -833,23 +1054,46 @@ struct Runtime::Impl final : EmbeddedMovieHost {
             ons->setVsyncOff();
             ons->setArchivePath(root.u8string().c_str());
 
-            const fs::path save_root =
+            const fs::path legacy_save_root =
                 fs::u8path(writable_path) / "onscripter_saves" /
                 StableGameDirectoryName(root);
-            std::error_code error_code;
-            fs::create_directories(save_root, error_code);
-            if (error_code) {
+            const SaveStorageResult save_storage = PrepareSaveStorage(
+                root, legacy_save_root);
+            if (save_storage.directory.empty()) {
                 throw std::runtime_error(
-                    "failed to create save directory: " +
-                    save_root.u8string());
+                    "failed to create a writable ONS save directory: " +
+                    save_storage.warning);
             }
-            ons->setSaveDir(save_root.u8string().c_str());
+            append_log(
+                "[ONScripter Yuri] save directory: " +
+                save_storage.directory.u8string() +
+                (save_storage.using_game_directory
+                    ? " (game savedata)" : " (app fallback)"));
+            if (save_storage.migrated_files > 0) {
+                append_log(
+                    "[ONScripter Yuri] migrated " +
+                    std::to_string(save_storage.migrated_files) +
+                    " existing save file(s)");
+            }
+            if (!save_storage.warning.empty()) {
+                append_log(
+                    "[ONScripter Yuri] save storage warning: " +
+                    save_storage.warning);
+            }
+            ons->setSaveDir(save_storage.directory.u8string().c_str());
+
+            std::error_code error_code;
 
             fs::path font;
             if (!default_font.empty()) {
                 font = fs::u8path(default_font);
             } else if (fs::is_regular_file(root / "default.ttf", error_code)) {
                 font = root / "default.ttf";
+            } else if (fs::is_regular_file(root / "default.TTF", error_code)) {
+                // iOS uses a case-sensitive data volume while the typical
+                // macOS game library does not. Accept the common uppercase
+                // extension used by converted ONS packages.
+                font = root / "default.TTF";
             }
             if (!font.empty()) {
                 ons->setFontFile(font.u8string().c_str());
@@ -936,6 +1180,11 @@ struct Runtime::Impl final : EmbeddedMovieHost {
                     g_present_surface_mutex);
                 g_present_surface = ons->accumulation_surface;
             }
+            // Initialization may have published before the presentation
+            // viewport was resolved. Force one current complete snapshot so
+            // the first Godot frame never falls back to live surface memory.
+            aetherkiri_onscripter_publish_frame(
+                ons->accumulation_surface, nullptr);
             startup.store(StartupState::Succeeded);
             game_open.store(true);
             append_log("[ONScripter Yuri] startup succeeded: " +
@@ -956,6 +1205,16 @@ struct Runtime::Impl final : EmbeddedMovieHost {
             set_error(exception.what());
         } catch (...) {
             set_error("unknown ONScripter Yuri runtime failure");
+        }
+
+        // Upstream terminates the process after `end`, which runs the global
+        // ONScripter destructor through C++ static teardown. The embedded host
+        // converts that exit into HostExit, so mirror the missing teardown
+        // explicitly before another object is placement-constructed in the
+        // same ABI-visible storage.
+        if (ons != nullptr) {
+            ons->~ONScripter();
+            ons = nullptr;
         }
     }
 };
@@ -998,9 +1257,10 @@ void Runtime::shutdown() {
     if (impl_->game_thread.joinable()) {
         SDL_Event event{};
         event.type = SDL_QUIT;
-        SDL_PushEvent(&event);
+        PushRuntimeEvent(event);
         impl_->game_thread.join();
     }
+    ClearHostEvents();
     // Also covers initialization failures which leave the upstream global
     // worker pool alive without reaching ONScripter::quit().
     aetherkiri_onscripter_shutdown_parallel();
@@ -1015,9 +1275,8 @@ void Runtime::shutdown() {
         engine_destroy(impl_->media_engine);
         impl_->media_engine = nullptr;
     }
-    // The upstream `end` path frees SDL resources and then exits without
-    // running the ONScripter destructor. Keep the same lifetime to avoid a
-    // destructor double-free; the product supports one runtime per process.
+    // `run_game` mirrors upstream process teardown and destroys the placement
+    // object on its owning thread before another ONS session can start.
     impl_->ons = nullptr;
     impl_->game_open.store(false);
     impl_->initialized.store(false);
@@ -1044,7 +1303,7 @@ bool Runtime::open_game(const std::string &game_root_path) {
     }
     if (impl_->game_thread.joinable()) {
         impl_->set_error(
-            "ONScripter Yuri already ran in this process; restart Aether before opening another game");
+            "the previous ONScripter Yuri session has not finished shutting down");
         return false;
     }
 
@@ -1065,6 +1324,12 @@ bool Runtime::open_game(const std::string &game_root_path) {
     impl_->presentation_y.store(0);
     impl_->presentation_width.store(0);
     impl_->presentation_height.store(0);
+    {
+        std::lock_guard<std::mutex> surface_lock(g_present_surface_mutex);
+        g_present_surface = nullptr;
+    }
+    ResetPublishedFrame();
+    ClearHostEvents();
     {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         impl_->error.clear();
@@ -1137,7 +1402,7 @@ bool Runtime::send_pointer_event(int type, double x, double y,
         event.wheel.x = static_cast<int>(std::lround(delta_x));
         event.wheel.y = static_cast<int>(std::lround(-delta_y));
         event.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
-        return SDL_PushEvent(&event) == 1;
+        return PushRuntimeEvent(event);
     }
 
     if (type == 2) {
@@ -1163,7 +1428,7 @@ bool Runtime::send_pointer_event(int type, double x, double y,
         if ((modifiers & 0x08) != 0) event.motion.state |= SDL_BUTTON_LMASK;
         if ((modifiers & 0x10) != 0) event.motion.state |= SDL_BUTTON_RMASK;
         if ((modifiers & 0x20) != 0) event.motion.state |= SDL_BUTTON_MMASK;
-        return SDL_PushEvent(&event) == 1;
+        return PushRuntimeEvent(event);
     }
 
     if (type == 1 || type == 3) {
@@ -1187,7 +1452,7 @@ bool Runtime::send_pointer_event(int type, double x, double y,
             motion.motion.x = device_x;
             motion.motion.y = device_y;
             motion.motion.state = 0;
-            if (SDL_PushEvent(&motion) != 1) {
+            if (!PushRuntimeEvent(motion)) {
                 return false;
             }
         }
@@ -1204,7 +1469,7 @@ bool Runtime::send_pointer_event(int type, double x, double y,
             event.button.button = SDL_BUTTON_LEFT;
         }
         event.button.clicks = 1;
-        return SDL_PushEvent(&event) == 1;
+        return PushRuntimeEvent(event);
     }
     return false;
 }
@@ -1232,7 +1497,7 @@ bool Runtime::send_key_event(bool pressed, int key_code, int modifiers,
         event.key.keysym.sym = mapped;
         event.key.keysym.scancode = SDL_GetScancodeFromKey(mapped);
         event.key.keysym.mod = EngineModifiersToSdl(modifiers);
-        sent = SDL_PushEvent(&event) == 1;
+        sent = PushRuntimeEvent(event);
     }
     if (pressed && unicode_codepoint > 0) {
         const std::string text =
@@ -1241,7 +1506,7 @@ bool Runtime::send_key_event(bool pressed, int key_code, int modifiers,
             SDL_Event event{};
             event.type = SDL_TEXTINPUT;
             std::memcpy(event.text.text, text.data(), text.size());
-            sent = SDL_PushEvent(&event) == 1 && sent;
+            sent = PushRuntimeEvent(event) && sent;
         }
     }
     return sent;
@@ -1306,57 +1571,62 @@ bool Runtime::read_frame(Frame &frame) {
     if (!impl_->game_open.load() || impl_->ons == nullptr) {
         return false;
     }
-    // Upstream releases this surface immediately before its `end` command
-    // exits. The forced SDL_FreeSurface shim shares this lock, so Godot can
-    // never copy from a surface while it is being destroyed.
-    std::lock_guard<std::mutex> surface_guard(g_present_surface_mutex);
-    SDL_Surface *surface = g_present_surface;
-    if (surface == nullptr || surface->w <= 0 || surface->h <= 0 ||
-        surface->pixels == nullptr || surface->format == nullptr) {
-        return false;
-    }
+    // Present the latest immutable snapshot assembled from completed ONS
+    // flushes. The ONS thread updates only committed dirty regions, so this
+    // can neither observe an in-progress composition nor miss the tail of a
+    // rapid sequence of menu/text flushes.
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t stride = 0;
+    uint64_t serial = 0;
+    std::vector<uint8_t> rgba;
+    {
+        std::lock_guard<std::mutex> frame_guard(g_published_frame_mutex);
+        if (g_published_frame.width == 0 ||
+            g_published_frame.height == 0 ||
+            g_published_frame.rgba.empty()) {
+            return false;
+        }
 
-    const uint32_t source_width = static_cast<uint32_t>(surface->w);
-    const uint32_t source_height = static_cast<uint32_t>(surface->h);
-    uint32_t crop_x = impl_->presentation_x.load();
-    uint32_t crop_y = impl_->presentation_y.load();
-    uint32_t width = impl_->presentation_width.load();
-    uint32_t height = impl_->presentation_height.load();
-    const bool crop_is_valid =
-        impl_->presentation_source_width.load() == source_width &&
-        impl_->presentation_source_height.load() == source_height &&
-        width > 0 && height > 0 &&
-        crop_x < source_width && crop_y < source_height &&
-        width <= source_width - crop_x &&
-        height <= source_height - crop_y;
-    if (!crop_is_valid) {
-        crop_x = 0;
-        crop_y = 0;
-        width = source_width;
-        height = source_height;
-    }
-    const uint32_t stride = width * 4u;
-    std::vector<uint8_t> rgba(static_cast<size_t>(stride) * height);
-    if (SDL_LockSurface(surface) != 0) {
-        return false;
-    }
-    const auto *source_pixels = static_cast<const uint8_t *>(surface->pixels) +
-        static_cast<size_t>(crop_y) * surface->pitch +
-        static_cast<size_t>(crop_x) * surface->format->BytesPerPixel;
-    const int convert_result = SDL_ConvertPixels(
-        static_cast<int>(width), static_cast<int>(height),
-        surface->format->format, source_pixels,
-        surface->pitch, SDL_PIXELFORMAT_RGBA32, rgba.data(),
-        static_cast<int>(stride));
-    SDL_UnlockSurface(surface);
-    if (convert_result != 0) {
-        return false;
+        const uint32_t source_width = g_published_frame.width;
+        const uint32_t source_height = g_published_frame.height;
+        uint32_t crop_x = impl_->presentation_x.load();
+        uint32_t crop_y = impl_->presentation_y.load();
+        width = impl_->presentation_width.load();
+        height = impl_->presentation_height.load();
+        const bool crop_is_valid =
+            impl_->presentation_source_width.load() == source_width &&
+            impl_->presentation_source_height.load() == source_height &&
+            width > 0 && height > 0 &&
+            crop_x < source_width && crop_y < source_height &&
+            width <= source_width - crop_x &&
+            height <= source_height - crop_y;
+        if (!crop_is_valid) {
+            crop_x = 0;
+            crop_y = 0;
+            width = source_width;
+            height = source_height;
+        }
+        stride = width * 4u;
+        rgba.resize(static_cast<size_t>(stride) * height);
+        for (uint32_t row = 0; row < height; ++row) {
+            const size_t source_offset =
+                static_cast<size_t>(crop_y + row) *
+                    g_published_frame.stride_bytes +
+                static_cast<size_t>(crop_x) * 4u;
+            const size_t destination_offset =
+                static_cast<size_t>(row) * stride;
+            std::memcpy(rgba.data() + destination_offset,
+                        g_published_frame.rgba.data() + source_offset,
+                        stride);
+        }
+        serial = g_published_frame.serial;
     }
 
     frame.width = width;
     frame.height = height;
     frame.stride_bytes = stride;
-    frame.serial = ++impl_->frame_serial;
+    frame.serial = serial;
     frame.rgba = std::move(rgba);
     impl_->overlay_movie(frame);
     return true;

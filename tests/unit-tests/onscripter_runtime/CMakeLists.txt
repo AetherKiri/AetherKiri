@@ -10,3 +10,16 @@ target_link_libraries(onscripter-runtime-presentation
     PRIVATE Catch2::Catch2WithMain)
 
 catch_discover_tests(onscripter-runtime-presentation)
+
+add_executable(onscripter-runtime-save-storage
+    save_storage.cpp
+    ${CMAKE_SOURCE_DIR}/bridge/onscripter_runtime/src/onscripter_save_storage.cpp
+)
+target_compile_features(onscripter-runtime-save-storage PRIVATE cxx_std_17)
+target_include_directories(onscripter-runtime-save-storage PRIVATE
+    ${CMAKE_SOURCE_DIR}/bridge/onscripter_runtime/include
+)
+target_link_libraries(onscripter-runtime-save-storage
+    PRIVATE Catch2::Catch2WithMain)
+
+catch_discover_tests(onscripter-runtime-save-storage)

@@ -28,6 +28,7 @@ aetherkiri_prepare_onscripter_yuri_sources(
     ONSCRIPTER_YURI_BASE_SOURCE
     ONSCRIPTER_YURI_SOUND_SOURCE
     ONSCRIPTER_YURI_COMMAND_SOURCE
+    ONSCRIPTER_YURI_EVENT_SOURCE
     ONSCRIPTER_YURI_PARSER_SOURCE
     ONSCRIPTER_YURI_PARALLEL_SOURCE)
 
@@ -45,7 +46,7 @@ set(ONSCRIPTER_YURI_SOURCES
     "${ONSCRIPTER_YURI_COMMAND_SOURCE}"
     "${ONSCRIPTER_YURI_SOURCE_DIR}/ONScripter_effect.cpp"
     "${ONSCRIPTER_YURI_SOURCE_DIR}/ONScripter_effect_breakup.cpp"
-    "${ONSCRIPTER_YURI_SOURCE_DIR}/ONScripter_event.cpp"
+    "${ONSCRIPTER_YURI_EVENT_SOURCE}"
     "${ONSCRIPTER_YURI_SOURCE_DIR}/ONScripter_file.cpp"
     "${ONSCRIPTER_YURI_SOURCE_DIR}/ONScripter_file2.cpp"
     "${ONSCRIPTER_YURI_SOURCE_DIR}/ONScripter_image.cpp"
@@ -68,6 +69,7 @@ set(ONSCRIPTER_YURI_SOURCES
 
 add_library(aether_onscripter_runtime STATIC
     src/onscripter_runtime.cpp
+    src/onscripter_save_storage.cpp
     ${ONSCRIPTER_YURI_SOURCES}
 )
 
@@ -86,6 +88,7 @@ target_compile_definitions(aether_onscripter_runtime PRIVATE
     USE_PARALLEL
     $<$<PLATFORM_ID:Darwin>:MACOSX>
     $<$<PLATFORM_ID:iOS>:MACOSX>
+    $<$<PLATFORM_ID:iOS>:AETHERKIRI_IOS>
     $<$<PLATFORM_ID:Android>:ANDROID>
     $<$<PLATFORM_ID:Android>:UTF8_FILESYSTEM>
     $<$<PLATFORM_ID:Emscripten>:WEB>

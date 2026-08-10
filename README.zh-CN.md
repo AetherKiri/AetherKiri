@@ -196,8 +196,10 @@ Android 当前只接入了 `arm64-v8a`。
 分辨率合成，最终 RGBA 帧上传到 Godot 纹理并由现有 `TextureRect` 等比显示；
 不会创建第二个原生窗口。
 
-ONS 存档写入应用用户目录下的 `onscripter_saves/<游戏名-路径哈希>/`，不会修改
-只读游戏目录。默认脚本编码与上游一致为 GBK；可用环境变量
+ONS 存档写入对应游戏目录下的 `savedata/`；只要游戏目录本身被保留，更新或
+重新安装应用后存档仍会随游戏保留。首次启动时会把旧版应用目录
+`onscripter_saves/<游戏名-路径哈希>/` 中的存档无覆盖复制到 `savedata/`；游戏
+目录只读时才回退到应用目录。默认脚本编码与上游一致为 GBK；可用环境变量
 `AETHERKIRI_ONS_ENCODING=gbk|sjis|utf8` 覆盖。与现有 KiriKiri 运行时相同，
 一个应用进程只运行一个视觉小说会话；退出游戏后应重新启动 Aether。
 

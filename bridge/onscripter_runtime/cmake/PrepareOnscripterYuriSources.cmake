@@ -1,6 +1,7 @@
 function(aetherkiri_prepare_onscripter_yuri_sources
          upstream_dir generated_dir out_base_source out_sound_source
-         out_command_source out_parser_source out_parallel_source)
+         out_command_source out_event_source out_parser_source
+         out_parallel_source)
     file(MAKE_DIRECTORY "${generated_dir}")
 
     file(READ "${upstream_dir}/ONScripter.cpp" base_source)
@@ -45,6 +46,27 @@ function(aetherkiri_prepare_onscripter_yuri_sources
             "OnscripterYuri SDL shutdown changed; update the embedded-host overlay.")
     endif()
     string(REPLACE "${sdl_shutdown_original}" "${sdl_shutdown_embedded}"
+           base_source "${base_source}")
+
+    set(flush_present_original [=[
+    SDL_RenderPresent(renderer);
+}
+]=])
+    set(flush_present_embedded [=[
+    SDL_RenderPresent(renderer);
+    // The embedded Godot host must never read accumulation_surface while a
+    // later ONS command is composing it. Publish only this fully committed
+    // frame, after the same presentation boundary used by upstream SDL.
+    aetherkiri_onscripter_publish_frame(accumulation_surface, &rect);
+}
+]=])
+    string(FIND "${base_source}" "${flush_present_original}"
+           flush_present_position)
+    if(flush_present_position EQUAL -1)
+        message(FATAL_ERROR
+            "OnscripterYuri flushDirect changed; update the frame-publication overlay.")
+    endif()
+    string(REPLACE "${flush_present_original}" "${flush_present_embedded}"
            base_source "${base_source}")
 
     set(generated_base "${generated_dir}/ONScripter.cpp")
@@ -125,6 +147,127 @@ function(aetherkiri_prepare_onscripter_yuri_sources
 
     set(generated_sound "${generated_dir}/ONScripter_sound.cpp")
     file(WRITE "${generated_sound}" "${sound_source}")
+
+    file(READ "${upstream_dir}/ONScripter_event.cpp" event_source)
+    set(timer_callback_original [=[
+extern "C" Uint32 SDLCALL timerCallback( Uint32 interval, void *param )
+{
+    SDL_RemoveTimer( timer_id );
+    timer_id = 0;
+
+    SDL_Event event;
+    event.type = ONS_TIMER_EVENT;
+    SDL_PushEvent( &event );
+
+    return 0;
+}
+]=])
+    set(timer_callback_embedded [=[
+extern "C" Uint32 SDLCALL timerCallback( Uint32 interval, void *param )
+{
+#if defined(AETHERKIRI_EMBEDDED_HOST) && defined(AETHERKIRI_IOS)
+    // Godot and the embedded ONS runtime share SDL's process-wide event
+    // queue on iOS. Keep retrying the wake event until the ONS wait consumes
+    // it; waitEventSub removes the timer immediately after that happens.
+    SDL_Event event;
+    event.type = ONS_TIMER_EVENT;
+    SDL_PushEvent( &event );
+    return 8;
+#else
+    SDL_RemoveTimer( timer_id );
+    timer_id = 0;
+
+    SDL_Event event;
+    event.type = ONS_TIMER_EVENT;
+    SDL_PushEvent( &event );
+
+    return 0;
+#endif
+}
+]=])
+    string(FIND "${event_source}" "${timer_callback_original}"
+           timer_callback_position)
+    if(timer_callback_position EQUAL -1)
+        message(FATAL_ERROR
+            "OnscripterYuri timer callback changed; update the embedded-host overlay.")
+    endif()
+    string(REPLACE "${timer_callback_original}" "${timer_callback_embedded}"
+           event_source "${event_source}")
+
+    set(wait_event_sub_original [=[
+void ONScripter::waitEventSub(int count)
+{
+    next_time = count;
+    timerEvent(true);
+
+    runEventLoop();
+    removeEvent( ONS_BREAK_EVENT );
+}
+]=])
+    set(wait_event_sub_embedded [=[
+void ONScripter::waitEventSub(int count)
+{
+    next_time = count;
+#if defined(AETHERKIRI_EMBEDDED_HOST) && defined(AETHERKIRI_IOS)
+    // timerEvent(true) implements a zero-duration wait by pushing one
+    // ONS_BREAK_EVENT. Avoid the shared queue for that synchronous case and
+    // reproduce the exact timeout state handled by runEventLoop.
+    if (count == 0) {
+        if (automode_flag || autoclick_time > 0)
+            current_button_state.button = 0;
+        else if (usewheel_flag) {
+            current_button_state.button = -5;
+            sprintf(current_button_state.str, "TIMEOUT");
+        }
+        else {
+            current_button_state.button = -2;
+            sprintf(current_button_state.str, "TIMEOUT");
+        }
+        return;
+    }
+#endif
+    timerEvent(true);
+
+    runEventLoop();
+#if defined(AETHERKIRI_EMBEDDED_HOST) && defined(AETHERKIRI_IOS)
+    if (timer_id) {
+        SDL_RemoveTimer(timer_id);
+        timer_id = 0;
+    }
+#endif
+    removeEvent( ONS_BREAK_EVENT );
+}
+]=])
+    string(FIND "${event_source}" "${wait_event_sub_original}"
+           wait_event_sub_position)
+    if(wait_event_sub_position EQUAL -1)
+        message(FATAL_ERROR
+            "OnscripterYuri waitEventSub changed; update the embedded-host overlay.")
+    endif()
+    string(REPLACE "${wait_event_sub_original}" "${wait_event_sub_embedded}"
+           event_source "${event_source}")
+
+    set(run_event_wait_original [=[
+    while ( SDL_WaitEvent(&event) ) {
+]=])
+    set(run_event_wait_embedded [=[
+#if defined(AETHERKIRI_EMBEDDED_HOST) && defined(AETHERKIRI_IOS)
+    while ( aetherkiri_onscripter_wait_event(&event) ) {
+#else
+    while ( SDL_WaitEvent(&event) ) {
+#endif
+]=])
+    string(FIND "${event_source}" "${run_event_wait_original}"
+           run_event_wait_position)
+    if(run_event_wait_position EQUAL -1)
+        message(FATAL_ERROR
+            "OnscripterYuri event wait changed; update the embedded-host overlay.")
+    endif()
+    string(REPLACE "${run_event_wait_original}" "${run_event_wait_embedded}"
+           event_source "${event_source}")
+
+    set(generated_event "${generated_dir}/ONScripter_event.cpp")
+    file(WRITE "${generated_event}" "${event_source}")
 
     file(READ "${upstream_dir}/ONScripter_command.cpp" command_source)
     set(movie_stop_original [=[
@@ -358,11 +501,16 @@ size_t ScriptParser::loadFileIOBuf( const char *filename )
 
     string(APPEND parallel_source [=[
 
+#include <new>
+
 extern "C" void aetherkiri_onscripter_shutdown_parallel()
 {
-    // Explicit destruction is safe more than once because the embedded
-    // destructor clears its worker array and counters after joining.
+    // A game can return to AetherKiri and another ONS session can start in
+    // the same process. Stop and join every worker before SDL shuts down,
+    // then reconstruct the process-global pool so the next session never
+    // dereferences the cleared worker array.
     parallel::threadPool.~ThreadPool();
+    new (static_cast<void *>(&parallel::threadPool)) parallel::ThreadPool();
 }
 ]=])
     set(generated_parallel "${generated_dir}/Parallel.cpp")
@@ -371,6 +519,7 @@ extern "C" void aetherkiri_onscripter_shutdown_parallel()
     set("${out_base_source}" "${generated_base}" PARENT_SCOPE)
     set("${out_sound_source}" "${generated_sound}" PARENT_SCOPE)
     set("${out_command_source}" "${generated_command}" PARENT_SCOPE)
+    set("${out_event_source}" "${generated_event}" PARENT_SCOPE)
     set("${out_parser_source}" "${generated_parser}" PARENT_SCOPE)
     set("${out_parallel_source}" "${generated_parallel}" PARENT_SCOPE)
 endfunction()

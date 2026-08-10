@@ -1743,6 +1743,7 @@ var dragging_touch_points := {}
 var pending_touch_index := -1
 var pending_touch_mapped := Vector2.ZERO
 var pending_touch_down_msec := 0
+var delayed_ons_touch_releases := {}
 var last_forwarded_touch_down_msec := 0
 var last_forwarded_touch_up_msec := 0
 var last_forwarded_touch_move_msec_by_id := {}
@@ -1823,6 +1824,7 @@ const TOUCH_TAP_MIN_INTERVAL_MS := 0
 const TOUCH_ACTION_COOLDOWN_MS := 0
 const TOUCH_DRAG_MIN_INTERVAL_MS := 80
 const TOUCH_DRAG_DISTANCE_THRESHOLD := 18.0
+const ONS_TOUCH_CURSOR_DISTANCE_THRESHOLD := 4.0
 const TOUCH_BUSY_TICK_MS := 120.0
 const TOUCH_BUSY_SUPPRESS_MS := 0
 const VIRTUAL_KEYBOARD_REOPEN_DELAY_MS := 750
@@ -1830,6 +1832,8 @@ const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
 const TOUCH_SINGLE_TAP_DELAY_MS := 90
+const ONS_TOUCH_CLICK_HOLD_MS := 48
+const INPUT_DEVICE_ID_EMULATION := -1
 const BLACK_FRAME_GUARD_MS := 3200
 const BLACK_FRAME_SAMPLE_INTERVAL_MS := 120
 const BLACK_FRAME_VISIBLE_MIN := 8
@@ -11400,6 +11404,7 @@ func _process(delta: float) -> void:
                 )
             else:
                 _set_perf_visible(show_perf_monitor)
+            _flush_delayed_ons_touch_releases()
             _flush_pending_touch_press_if_ready()
             tick_trace_serial += 1
             tick_trace_active_serial = tick_trace_serial
@@ -12304,6 +12309,7 @@ func _clear_game_input_capture() -> void:
     pending_touch_index = -1
     pending_touch_mapped = Vector2.ZERO
     pending_touch_down_msec = 0
+    delayed_ons_touch_releases.clear()
     last_forwarded_touch_move_msec_by_id.clear()
     last_forwarded_touch_down_msec = 0
     last_forwarded_touch_up_msec = 0
@@ -12924,7 +12930,56 @@ func _handle_mobile_edge_back_input(event: InputEvent) -> bool:
         return true
     return false
 
+func _trace_ios_raw_pointer_event(event: InputEvent) -> void:
+    if OS.get_name() != "iOS" or not input_trace_enabled or not _is_game_pointer_event(event):
+        return
+    if event is InputEventMouseMotion:
+        var motion := event as InputEventMouseMotion
+        if motion.button_mask == 0 and active_mouse_buttons.is_empty():
+            return
+    var position := Vector2.ZERO
+    var phase := "move"
+    var pointer_id := -1
+    if event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        position = touch.position
+        phase = "down" if touch.pressed else "up"
+        pointer_id = touch.index
+    elif event is InputEventScreenDrag:
+        var drag := event as InputEventScreenDrag
+        position = drag.position
+        pointer_id = drag.index
+    elif event is InputEventMouseButton:
+        var button := event as InputEventMouseButton
+        position = button.position
+        phase = "down" if button.pressed else "up"
+        pointer_id = int(button.button_index)
+    elif event is InputEventMouseMotion:
+        position = (event as InputEventMouseMotion).position
+    elif event is InputEventPanGesture:
+        position = (event as InputEventPanGesture).position
+    var line := "ios_raw_input id=%d class=%s phase=%s pointer=%d device=%d pos=%.1f,%.1f game=%s runtime=%s can_forward=%s modal=%s loading=%s" % [
+        event.get_instance_id(),
+        event.get_class(),
+        phase,
+        pointer_id,
+        event.device,
+        position.x,
+        position.y,
+        str(game_running),
+        active_runtime_kind,
+        str(_can_forward_game_input()),
+        str(modal_layer != null and modal_layer.visible),
+        str(loading_panel != null and loading_panel.visible),
+    ]
+    print(line)
+    _write_probe_marker(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+
 func _input(event: InputEvent) -> void:
+    _trace_ios_raw_pointer_event(event)
     if event is InputEventKey:
         var shell_key := event as InputEventKey
         if shell_key.pressed and not shell_key.echo and shell_key.keycode == KEY_ESCAPE and modal_layer != null and modal_layer.visible:
@@ -13113,9 +13168,17 @@ func _on_viewport_input(event: InputEvent) -> void:
         get_viewport().set_input_as_handled()
 
 func _can_forward_game_input() -> bool:
-    return game_running and viewport.visible and cached_startup_state == STARTUP_SUCCEEDED and (
-        loading_panel == null or not loading_panel.visible
-    ) and (
+    # ONS marks startup complete before its title transition has necessarily
+    # replaced the first black frame. Let the runtime receive taps during the
+    # loading fade once it is ready; otherwise an invisible/fading overlay can
+    # make the title look unresponsive even though the engine is accepting
+    # events. Other runtimes retain the existing loading-overlay gate.
+    var loading_blocks_input := (
+        active_runtime_kind != RUNTIME_ONSCRIPTER
+        and loading_panel != null
+        and loading_panel.visible
+    )
+    return game_running and viewport.visible and cached_startup_state == STARTUP_SUCCEEDED and not loading_blocks_input and (
         modal_layer == null or not modal_layer.visible
     )
 
@@ -13127,7 +13190,19 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
     _trace_input_received()
     if event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
-        if _is_touch_platform() and mouse_button.button_index != MOUSE_BUTTON_WHEEL_UP and mouse_button.button_index != MOUSE_BUTTON_WHEEL_DOWN:
+        if _is_touch_platform() and mouse_button.device == INPUT_DEVICE_ID_EMULATION:
+            # Godot emits the emulated mouse event before the corresponding
+            # ScreenTouch on iOS. Waiting for ScreenTouch to set a suppression
+            # timestamp is therefore too late and produces two ONS clicks.
+            # Hardware mouse events keep their real device id and still work.
+            _trace_input_throttled()
+            return true
+        var is_touch_mouse_duplicate := (
+            _is_touch_platform()
+            and suppress_mouse_until_msec > 0
+            and Time.get_ticks_msec() <= suppress_mouse_until_msec
+        )
+        if is_touch_mouse_duplicate and mouse_button.button_index != MOUSE_BUTTON_WHEEL_UP and mouse_button.button_index != MOUSE_BUTTON_WHEEL_DOWN:
             _trace_input_throttled()
             return true
         var is_scroll := mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP or mouse_button.button_index == MOUSE_BUTTON_WHEEL_DOWN
@@ -13162,9 +13237,15 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
         return true
     elif event is InputEventMouseMotion:
-        if _is_touch_platform():
-            return true
         var motion := event as InputEventMouseMotion
+        if _is_touch_platform() and motion.device == INPUT_DEVICE_ID_EMULATION:
+            return true
+        if (
+            _is_touch_platform()
+            and suppress_mouse_until_msec > 0
+            and Time.get_ticks_msec() <= suppress_mouse_until_msec
+        ):
+            return true
         var captured := not active_mouse_buttons.is_empty()
         var mapped := _map_viewport_point(motion.position, captured)
         if mapped.x < 0.0 or mapped.y < 0.0:
@@ -13256,6 +13337,12 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         var drag := event as InputEventScreenDrag
         suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
         var pointer_id := drag.index
+        var drag_distance_threshold := TOUCH_DRAG_DISTANCE_THRESHOLD
+        if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
+            # ONS menus are controlled by moving a cursor and activating the
+            # item on release. The generic 18 px drag slop makes that cursor
+            # feel stationary on a touch screen, especially for small menus.
+            drag_distance_threshold = ONS_TOUCH_CURSOR_DISTANCE_THRESHOLD
         if suppressed_touch_points.has(pointer_id):
             _trace_input_throttled()
             return true
@@ -13263,7 +13350,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             var pending_drag_mapped := _map_viewport_point(drag.position, true)
             if pending_drag_mapped.x < 0.0 or pending_drag_mapped.y < 0.0:
                 pending_drag_mapped = pending_touch_mapped
-            if pending_drag_mapped.distance_to(pending_touch_mapped) < TOUCH_DRAG_DISTANCE_THRESHOLD:
+            if pending_drag_mapped.distance_to(pending_touch_mapped) < drag_distance_threshold:
                 _trace_input_move_suppressed()
                 return true
             _flush_pending_touch_press(true)
@@ -13278,13 +13365,19 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             var down_mapped: Vector2 = touch_down_points.get(pointer_id, mapped)
             if (
                 not dragging_touch_points.has(pointer_id)
-                and mapped.distance_to(down_mapped) < TOUCH_DRAG_DISTANCE_THRESHOLD
+                and mapped.distance_to(down_mapped) < drag_distance_threshold
             ):
                 _trace_input_move_suppressed()
                 return true
             dragging_touch_points[pointer_id] = true
             active_touch_points[pointer_id] = mapped
             var rel := _map_viewport_delta(drag.relative)
+            var move_modifiers := POINTER_MOD_LEFT
+            if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
+                # Treat touch-drag as cursor positioning for ONS. Keeping the
+                # left-button modifier set turns it into a mouse drag, which
+                # prevents title-menu hover state from following the finger.
+                move_modifiers = 0
             _send_game_pointer_event(
                 POINTER_MOVE,
                 _touch_engine_pointer_id(pointer_id),
@@ -13293,7 +13386,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
                 rel.x,
                 rel.y,
                 0,
-                POINTER_MOD_LEFT
+                move_modifiers
             )
         else:
             _trace_input_throttled()
@@ -13384,12 +13477,49 @@ func _send_pending_touch_click(pointer_id: int, up_mapped: Vector2) -> void:
     last_forwarded_touch_down_msec = Time.get_ticks_msec()
     _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
     _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
-    _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
-    last_forwarded_touch_up_msec = Time.get_ticks_msec()
-    _apply_touch_action_cooldown()
+    if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
+        # A short tap can be released before the 90 ms gesture-disambiguation
+        # window expires. Sending DOWN and UP from this callback puts both SDL
+        # events in the same frame, which ONS can miss while a timed wait is
+        # changing state. Keep one small, deterministic press pulse instead.
+        delayed_ons_touch_releases[pointer_id] = {
+            "due_msec": Time.get_ticks_msec() + ONS_TOUCH_CLICK_HOLD_MS,
+            "mapped": click_mapped,
+        }
+    else:
+        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
+        last_forwarded_touch_up_msec = Time.get_ticks_msec()
+        _apply_touch_action_cooldown()
     _arm_tick_trace()
     _arm_black_frame_guard()
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
+
+func _flush_delayed_ons_touch_releases() -> void:
+    if delayed_ons_touch_releases.is_empty():
+        return
+    var now := Time.get_ticks_msec()
+    for pointer_id_variant in delayed_ons_touch_releases.keys():
+        var pointer_id := int(pointer_id_variant)
+        var release: Dictionary = delayed_ons_touch_releases.get(pointer_id, {})
+        if now < int(release.get("due_msec", now)):
+            continue
+        delayed_ons_touch_releases.erase(pointer_id)
+        if not game_running or active_runtime_kind != RUNTIME_ONSCRIPTER:
+            continue
+        var mapped: Vector2 = release.get("mapped", Vector2.ZERO)
+        _send_game_pointer_event(
+            POINTER_UP,
+            _touch_engine_pointer_id(pointer_id),
+            mapped.x,
+            mapped.y,
+            0.0,
+            0.0,
+            0
+        )
+        last_forwarded_touch_up_msec = now
+        _apply_touch_action_cooldown()
+        _arm_black_frame_guard()
+        _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
 
 func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
     var click_mapped := mapped
@@ -13457,6 +13587,21 @@ func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: flo
     input_trace_forwarded += 1
     if result != ENGINE_RESULT_OK:
         input_trace_send_failed += 1
+    if input_trace_enabled and event_type in [POINTER_DOWN, POINTER_UP]:
+        var trace_line := "input_event type=%d pid=%d x=%.1f y=%.1f button=%d result=%d loading=%s runtime=%s" % [
+            event_type,
+            pointer_id,
+            x,
+            y,
+            button,
+            result,
+            str(loading_panel != null and loading_panel.visible),
+            active_runtime_kind,
+        ]
+        _write_probe_marker(trace_line)
+        if perf_log_file != null:
+            perf_log_file.store_line(trace_line)
+            perf_log_file.flush()
 
 func _android_input_debug_enabled() -> bool:
     return OS.get_name() == "Android" and input_trace_enabled
