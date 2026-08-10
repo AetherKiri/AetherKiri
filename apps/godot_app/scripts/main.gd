@@ -16,9 +16,12 @@ const COVER_IMAGE_EXTENSIONS := ["png", "webp", "jpg", "jpeg"]
 # These candidates are deliberately independent of the selected UI language.
 # Prefer cover names across every supported language, then background names.
 const DEFAULT_COVER_BASENAMES := [
-    "cover", "封面", "表紙", "カバー", "표지", "커버",
-    "background", "背景", "배경",
+    "cover", "cover_image", "封面", "封面图", "封面圖片",
+    "表紙", "カバー", "표지", "커버",
+    "background", "background_image", "背景", "背景图", "背景圖片",
+    "壁紙", "배경", "배경화면",
 ]
+const GAME_COVER_PATH_PREFIX := "game://"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
@@ -7436,7 +7439,10 @@ func _apply_selected_cover(library_path: String, cover_path: String) -> void:
             _t("alert.warning_title")
         )
         return
-    _update_game(library_path, {"coverPath": cover_path})
+    _update_game(library_path, {
+        "coverPath": _portable_cover_path(library_path, cover_path),
+        GAME_AUTO_COVER_SCANNED_FIELD: true,
+    })
     _show_detail(selected_game)
 
 func _game_launch_entry_label(game: Dictionary) -> String:
@@ -8690,12 +8696,13 @@ func _save_game_list(games: Array[Dictionary]) -> void:
 func _scan_ios_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
     var root := ProjectSettings.globalize_path("user://Games")
     DirAccess.make_dir_recursive_absolute(root)
-    var by_name := {}
+    var by_entry := _games_by_library_entry(existing, root)
+    var normalized_root := root.simplify_path().trim_suffix("/")
     var next: Array[Dictionary] = []
     for game in existing:
-        var name := _game_display_title(game)
-        by_name[name] = game
-        if not String(game.get("path", "")).begins_with(root) and _path_exists(String(game.get("path", ""))):
+        var existing_path := String(game.get("path", "")).simplify_path()
+        if not existing_path.begins_with(normalized_root + "/") \
+                and _path_exists(existing_path):
             next.append(game)
     var dir := DirAccess.open(root)
     if dir == null:
@@ -8706,11 +8713,20 @@ func _scan_ios_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
         if not entry.begins_with("."):
             var path := root.path_join(entry)
             if dir.current_is_dir() or entry.to_lower().ends_with(".xp3"):
-                var game: Dictionary = by_name.get(entry, _game_info_from_path(path))
+                var game: Dictionary = by_entry.get(entry, _game_info_from_path(path))
                 game["path"] = path
                 next.append(game)
         entry = dir.get_next()
     return _dedupe_games(next)
+
+func _games_by_library_entry(existing: Array[Dictionary], root: String) -> Dictionary:
+    var by_entry := {}
+    var normalized_root := root.simplify_path().trim_suffix("/")
+    for game in existing:
+        var existing_path := String(game.get("path", "")).simplify_path()
+        if existing_path.begins_with(normalized_root + "/"):
+            by_entry[existing_path.get_file()] = game
+    return by_entry
 
 func _add_game_path(path: String) -> bool:
     var resolved_path := _resolve_game_path(path)
@@ -8866,7 +8882,7 @@ func _game_info_from_path(path: String) -> Dictionary:
         "type": "Archive" if path.to_lower().ends_with(".xp3") else "Directory",
         "lastPlayed": 0,
         "playDurationSeconds": 0,
-        "coverPath": default_cover_path,
+        "coverPath": _portable_cover_path(path, default_cover_path),
         GAME_AUTO_COVER_SCANNED_FIELD: true,
         "developer": "",
         "title": "",
@@ -8894,16 +8910,64 @@ func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
         var game := games[index]
         if builtin_demo.is_game(game):
             continue
-        if bool(game.get(GAME_AUTO_COVER_SCANNED_FIELD, false)):
-            continue
-        if String(game.get("coverPath", "")).is_empty():
-            var discovered_path := _discover_default_cover_path(String(game.get("path", "")))
-            if not discovered_path.is_empty():
-                game["coverPath"] = discovered_path
-        game[GAME_AUTO_COVER_SCANNED_FIELD] = true
+        var game_path := String(game.get("path", ""))
+        var stored_cover_path := String(game.get("coverPath", ""))
+        var resolved_cover_path := _resolve_cover_path(game)
+        var next_cover_path := stored_cover_path
+        if not resolved_cover_path.is_empty() \
+                and FileAccess.file_exists(resolved_cover_path):
+            next_cover_path = _portable_cover_path(game_path, resolved_cover_path)
+        else:
+            var discovered_path := _discover_default_cover_path(game_path)
+            next_cover_path = _portable_cover_path(game_path, discovered_path)
+        if next_cover_path != stored_cover_path:
+            game["coverPath"] = next_cover_path
+            changed = true
+        if not bool(game.get(GAME_AUTO_COVER_SCANNED_FIELD, false)):
+            game[GAME_AUTO_COVER_SCANNED_FIELD] = true
+            changed = true
         games[index] = game
-        changed = true
     return changed
+
+func _portable_cover_path(game_path: String, cover_path: String) -> String:
+    var value := cover_path.strip_edges()
+    if value.is_empty() or value.begins_with(GAME_COVER_PATH_PREFIX):
+        return value
+    var absolute_cover := ProjectSettings.globalize_path(value).simplify_path()
+    var game_root := _game_runtime_root(game_path).simplify_path().trim_suffix("/")
+    if not game_root.is_empty() and absolute_cover.begins_with(game_root + "/"):
+        return GAME_COVER_PATH_PREFIX + absolute_cover.substr(game_root.length() + 1)
+    var user_root := ProjectSettings.globalize_path("user://").simplify_path().trim_suffix("/")
+    if absolute_cover.begins_with(user_root + "/"):
+        return "user://" + absolute_cover.substr(user_root.length() + 1)
+    return absolute_cover
+
+func _resolve_cover_path(game: Dictionary) -> String:
+    var stored_path := String(game.get("coverPath", "")).strip_edges()
+    if stored_path.is_empty():
+        return ""
+    if stored_path.begins_with(GAME_COVER_PATH_PREFIX):
+        var relative_path := stored_path.substr(GAME_COVER_PATH_PREFIX.length())
+        return _game_runtime_root(String(game.get("path", ""))).path_join(relative_path).simplify_path()
+    var resolved_path := ProjectSettings.globalize_path(stored_path).simplify_path()
+    if FileAccess.file_exists(resolved_path):
+        return resolved_path
+
+    # Absolute paths stored by an older iOS install contain the previous data
+    # container UUID. Rebase the stable Documents-relative suffix onto the
+    # current sandbox before falling back to automatic discovery.
+    var documents_marker := "/Documents/"
+    var marker_index := resolved_path.find(documents_marker)
+    if marker_index >= 0:
+        var documents_relative := resolved_path.substr(
+            marker_index + documents_marker.length()
+        )
+        var migrated_path := ProjectSettings.globalize_path("user://").path_join(
+            documents_relative
+        ).simplify_path()
+        if FileAccess.file_exists(migrated_path):
+            return migrated_path
+    return resolved_path
 
 func _discover_default_cover_path(game_path: String) -> String:
     var directory := game_path
@@ -9330,7 +9394,7 @@ func _clear_hero_state() -> void:
     detail_hero_cover = null
 
 func _load_cover_texture(game: Dictionary, target_size: Vector2i = Vector2i.ZERO, radius: int = 0) -> Texture2D:
-    var cover_path := String(game.get("coverPath", ""))
+    var cover_path := _resolve_cover_path(game)
     if cover_path.is_empty() or not FileAccess.file_exists(cover_path):
         return null
     var modified := FileAccess.get_modified_time(cover_path)
