@@ -2906,10 +2906,31 @@ func _layout_shell(window_size: Vector2) -> void:
 func _load_shell_settings() -> void:
     var cfg := ConfigFile.new()
     var env_style := _runtime_string("AETHERKIRI_STYLE_MODE", "")
+    var env_frame_enhancement_kind := _runtime_string(
+        "AETHERKIRI_FRAME_ENHANCEMENT_KIND",
+        ""
+    )
+    var env_frame_enhancement_mode := _runtime_string(
+        "AETHERKIRI_FRAME_ENHANCEMENT_MODE",
+        ""
+    )
     if cfg.load(SETTINGS_FILE) != OK:
         var env_surface_mode := _runtime_string("AETHERKIRI_SURFACE_MODE", "")
         if not env_surface_mode.is_empty():
             _select_config_surface_mode(env_surface_mode)
+        output_resolution = _normalize_output_resolution(_runtime_string(
+            "AETHERKIRI_OUTPUT_RESOLUTION",
+            output_resolution
+        ))
+        if not env_frame_enhancement_kind.is_empty():
+            frame_enhancement_kind = _normalize_frame_enhancement_kind(
+                env_frame_enhancement_kind
+            )
+            frame_enhancement_enabled = frame_enhancement_kind != "off"
+        if not env_frame_enhancement_mode.is_empty():
+            frame_enhancement_mode = _normalize_frame_enhancement_mode(
+                env_frame_enhancement_mode
+            )
         _apply_language_mode()
         if not env_style.is_empty():
             style_mode = _normalize_style_mode(env_style)
@@ -2957,6 +2978,15 @@ func _load_shell_settings() -> void:
         "frame_enhancement_mode",
         frame_enhancement_mode
     )))
+    if not env_frame_enhancement_kind.is_empty():
+        frame_enhancement_kind = _normalize_frame_enhancement_kind(
+            env_frame_enhancement_kind
+        )
+        frame_enhancement_enabled = frame_enhancement_kind != "off"
+    if not env_frame_enhancement_mode.is_empty():
+        frame_enhancement_mode = _normalize_frame_enhancement_mode(
+            env_frame_enhancement_mode
+        )
     frame_enhancement_custom_chain = _normalize_frame_enhancement_custom_chain(
         cfg.get_value(
             "rendering",
@@ -9391,19 +9421,40 @@ func _finish_launch_transition() -> void:
 func _start_selected_game_after_iap() -> void:
     if player == null:
         return
+    var library_path := String(selected_game.get("path", "")).strip_edges()
+    if library_path.is_empty():
+        return
+    var selected_runtime_kind := _game_runtime_kind(library_path)
     # Development artifacts intentionally bypass StoreKit so local
     # compatibility work never depends on a sandbox account or network.
     if OS.is_debug_build():
+        if (
+            selected_runtime_kind == RUNTIME_KIRIKIRI
+            and current_player_runtime_kind != RUNTIME_KIRIKIRI
+            and not _switch_runtime_player(RUNTIME_KIRIKIRI)
+        ):
+            return
         if player.has_method("set_engine_option"):
             player.set_engine_option("artemis_beta_allowed", "1")
         _start_selected_game_after_entitlements()
         return
 
+    # StoreKit lives on the KiriKiri host. Return to that host before probing
+    # Artemis or authorizing ONScripter after an earlier ONS game exits.
+    if (
+        current_player_runtime_kind != RUNTIME_KIRIKIRI
+        and not _switch_runtime_player(RUNTIME_KIRIKIRI)
+    ):
+        return
     if player.has_method("set_engine_option"):
         # Reset a grant left on the reusable engine handle before every Release
         # launch. A fresh verified coffee entitlement enables it again below.
         player.set_engine_option("artemis_beta_allowed", "0")
-    if not _selected_game_uses_artemis():
+    var requires_beta_access := (
+        _runtime_requires_beta_access(selected_runtime_kind)
+        or _selected_game_uses_artemis()
+    )
+    if not requires_beta_access:
         _start_selected_game_after_entitlements()
         return
 
@@ -9416,6 +9467,11 @@ func _start_selected_game_after_iap() -> void:
     ))
     if iap_pending_beta_check_id <= 0:
         _deny_artemis_beta_launch()
+
+func _runtime_requires_beta_access(runtime_kind: String) -> bool:
+    # ONS support follows the same release policy as Artemis: unrestricted in
+    # Debug, and gated by an active coffee entitlement in distributed builds.
+    return runtime_kind == RUNTIME_ONSCRIPTER
 
 func _selected_game_uses_artemis() -> bool:
     if player == null or not player.has_method("probe_runtime"):
@@ -9435,7 +9491,11 @@ func _complete_artemis_beta_check() -> void:
         _deny_artemis_beta_launch()
         return
     selected_game = pending_game
-    if player.has_method("set_engine_option"):
+    if (
+        _game_runtime_kind(String(selected_game.get("path", "")))
+        == RUNTIME_KIRIKIRI
+        and player.has_method("set_engine_option")
+    ):
         player.set_engine_option("artemis_beta_allowed", "1")
     _start_selected_game_after_entitlements()
 
@@ -12161,6 +12221,8 @@ func _game_input_surface_size() -> Vector2:
     # can differ from the raw frame (for example 1920x1080 for an 800x600
     # layer). DrawDevice stretches that full surface back to the layer, so
     # input mapping must apply the inverse per-axis scale without letterboxing.
+    if active_runtime_kind == RUNTIME_ONSCRIPTER:
+        return _game_input_content_size()
     if current_surface_size.x > 0 and current_surface_size.y > 0:
         return Vector2(current_surface_size)
     return _game_input_content_size()
@@ -13550,6 +13612,9 @@ func _show_game_virtual_keyboard(attention_position: Vector2i, state: Dictionary
 
 func _sync_game_text_input_state() -> void:
     if game_text_input_suspended or not _can_forward_game_input():
+        _deactivate_game_text_input()
+        return
+    if not player.has_method("get_text_input_state"):
         _deactivate_game_text_input()
         return
     var state = player.get_text_input_state()

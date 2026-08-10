@@ -1,19 +1,29 @@
 #include "onscripter_runtime.h"
+#include "frame_effect_host.h"
 
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/image_texture.hpp>
 #include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/classes/rd_texture_format.hpp>
+#include <godot_cpp/classes/rd_texture_view.hpp>
+#include <godot_cpp/classes/rendering_device.hpp>
+#include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/texture2d.hpp>
+#include <godot_cpp/classes/texture2drd.hpp>
 #include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/string.hpp>
+#include <godot_cpp/variant/typed_array.hpp>
+#include <godot_cpp/variant/vector2i.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <string>
 
 namespace godot {
@@ -28,7 +38,8 @@ class AetherOnscripterPlayer final : public Node {
     GDCLASS(AetherOnscripterPlayer, Node)
 
 public:
-    AetherOnscripterPlayer() = default;
+    AetherOnscripterPlayer()
+        : frame_effect_provider_(CreateFrameEffectProvider()) {}
     ~AetherOnscripterPlayer() override { destroy_engine(); }
 
     bool initialize_engine(const String &writable_path,
@@ -196,9 +207,124 @@ public:
     }
 
     String get_frame_texture_backend() const {
+        if (frame_effect_active_) {
+            return "onscripter_yuri_frame_effect";
+        }
+        if (frame_rd_texture_.is_valid()) {
+            return "onscripter_yuri_rd_texture";
+        }
         return frame_texture_.is_valid()
-            ? String("onscripter_yuri_image_texture")
-            : String("none");
+            ? String("onscripter_yuri_image_texture") : String("none");
+    }
+
+    bool is_frame_enhancement_built() const {
+        return frame_effect_provider_ != nullptr;
+    }
+
+    bool is_frame_enhancement_available() const {
+        if (frame_effect_provider_ == nullptr) {
+            return false;
+        }
+        String reason;
+        return frame_effect_provider_->is_available(main_rendering_device(),
+                                                     &reason);
+    }
+
+    void set_frame_enhancement_enabled(bool enabled) {
+        frame_effect_enabled_ = enabled;
+        frame_effect_active_ = false;
+        frame_effect_error_ = "";
+        frame_effect_bypass_due_to_error_ = false;
+        if (frame_effect_provider_ == nullptr) {
+            return;
+        }
+        frame_effect_provider_->set_enabled(enabled);
+        if (!enabled) {
+            frame_effect_provider_->release(main_rendering_device());
+            frame_effect_pipeline_ = "none";
+        }
+    }
+
+    void set_frame_native_output_enabled(bool enabled) {
+        // ONScripter always publishes the script-native frame. Godot owns the
+        // optional high-resolution effect target and final presentation.
+        frame_native_output_enabled_ = enabled;
+    }
+
+    void set_frame_enhancement_mode(const String &mode) {
+        frame_effect_mode_ = mode.strip_edges().to_lower();
+        if (frame_effect_mode_.is_empty()) {
+            frame_effect_mode_ = "auto";
+        }
+        frame_effect_active_ = false;
+        frame_effect_bypass_due_to_error_ = false;
+        if (frame_effect_provider_ != nullptr) {
+            frame_effect_provider_->set_mode(frame_effect_mode_);
+        }
+    }
+
+    void set_frame_enhancement_custom_chain(const PackedStringArray &chain) {
+        PackedStringArray normalized;
+        for (int64_t index = 0; index < chain.size(); ++index) {
+            const String algorithm = chain[index].strip_edges().to_lower();
+            if (!algorithm.is_empty()) {
+                normalized.push_back(algorithm);
+            }
+        }
+        if (normalized == frame_effect_custom_chain_) {
+            return;
+        }
+        frame_effect_custom_chain_ = normalized;
+        frame_effect_active_ = false;
+        frame_effect_bypass_due_to_error_ = false;
+        if (frame_effect_provider_ != nullptr) {
+            frame_effect_provider_->release(main_rendering_device());
+        }
+    }
+
+    void set_frame_enhancement_target_size(int width, int height) {
+        frame_effect_target_width_ =
+            static_cast<uint32_t>(std::max(0, width));
+        frame_effect_target_height_ =
+            static_cast<uint32_t>(std::max(0, height));
+    }
+
+    Vector2i get_frame_source_size() const {
+        return Vector2i(static_cast<int32_t>(frame_source_width_),
+                        static_cast<int32_t>(frame_source_height_));
+    }
+
+    Dictionary get_frame_enhancement_status() const {
+        Dictionary result;
+        result["built"] = frame_effect_provider_ != nullptr;
+        result["enabled"] = frame_effect_enabled_;
+        result["layer_detail_preservation"] = false;
+        result["active"] = frame_effect_active_;
+        result["mode"] = frame_effect_mode_;
+        result["custom_chain"] = frame_effect_custom_chain_;
+        result["pipeline"] = frame_effect_pipeline_;
+        result["error"] = frame_effect_error_;
+        result["source_width"] = static_cast<int64_t>(frame_source_width_);
+        result["source_height"] = static_cast<int64_t>(frame_source_height_);
+        result["target_width"] =
+            static_cast<int64_t>(frame_effect_target_width_);
+        result["target_height"] =
+            static_cast<int64_t>(frame_effect_target_height_);
+        result["native_output_requested"] = frame_native_output_enabled_;
+        result["raw_source_output"] = true;
+        result["bypassed_after_error"] = frame_effect_bypass_due_to_error_;
+        result["runtime"] = "onscripter";
+
+        String reason = "provider_not_built";
+        bool available = false;
+        if (frame_effect_provider_ != nullptr) {
+            available = frame_effect_provider_->is_available(
+                main_rendering_device(), &reason);
+            result["provider"] = frame_effect_provider_->status();
+        }
+        result["available"] = available;
+        result["reason"] = reason;
+        return result;
     }
 
     Dictionary read_frame_rgba() {
@@ -223,7 +349,7 @@ public:
     Ref<Texture2D> update_frame_texture() {
         aetherkiri::onscripter::Frame frame;
         if (!runtime_.read_frame(frame)) {
-            return frame_texture_;
+            return current_source_texture();
         }
 
         PackedByteArray data;
@@ -231,28 +357,78 @@ public:
         if (!frame.rgba.empty()) {
             std::memcpy(data.ptrw(), frame.rgba.data(), frame.rgba.size());
         }
-        Ref<Image> image = Image::create_from_data(
-            static_cast<int32_t>(frame.width),
-            static_cast<int32_t>(frame.height), false,
-            Image::FORMAT_RGBA8, data);
-        if (image.is_null()) {
-            last_error_ = "Godot could not create an RGBA image for the ONScripter frame";
-            set_result(kResultInvalidState);
-            return frame_texture_;
-        }
-        if (frame_texture_.is_null() ||
-            frame_texture_->get_width() != static_cast<int32_t>(frame.width) ||
-            frame_texture_->get_height() != static_cast<int32_t>(frame.height)) {
-            frame_texture_ = ImageTexture::create_from_image(image);
-        } else {
-            frame_texture_->update(image);
+        Ref<Texture2D> source = update_source_texture(frame, data);
+        if (source.is_null()) {
+            return current_source_texture();
         }
         frame_serial_ = frame.serial;
+        frame_source_width_ = frame.width;
+        frame_source_height_ = frame.height;
+        frame_effect_active_ = false;
+
+        if (!frame_effect_enabled_ || frame_effect_provider_ == nullptr ||
+            frame_effect_bypass_due_to_error_) {
+            set_result(kResultOk);
+            return source;
+        }
+
+        RenderingDevice *rd = main_rendering_device();
+        String unavailable_reason;
+        if (!frame_effect_provider_->is_available(rd, &unavailable_reason)) {
+            frame_effect_error_ = unavailable_reason;
+            frame_effect_bypass_due_to_error_ = true;
+            set_result(kResultOk);
+            return source;
+        }
+        if (!frame_rd_rid_.is_valid()) {
+            frame_effect_error_ = "source_texture_has_no_storage_rid";
+            frame_effect_bypass_due_to_error_ = true;
+            set_result(kResultOk);
+            return source;
+        }
+
+        FrameEffectRequest request;
+        request.rendering_device = rd;
+        request.source_texture = frame_rd_rid_;
+        request.input_width = frame_source_width_;
+        request.input_height = frame_source_height_;
+        request.target_width = frame_effect_target_width_ > 0
+            ? frame_effect_target_width_ : frame_source_width_;
+        request.target_height = frame_effect_target_height_ > 0
+            ? frame_effect_target_height_ : frame_source_height_;
+        request.frame_serial = frame_serial_;
+        request.mode = frame_effect_mode_;
+        request.custom_chain = frame_effect_custom_chain_;
+
+        FrameEffectOutput output;
+        String error;
+        if (!frame_effect_provider_->process(request, &output, &error) ||
+            output.texture.is_null()) {
+            frame_effect_error_ = error.is_empty()
+                ? String("frame_effect_provider_failed") : error;
+            frame_effect_bypass_due_to_error_ = true;
+            set_result(kResultOk);
+            return source;
+        }
+
+        frame_effect_active_ = true;
+        frame_effect_pipeline_ = output.pipeline;
+        frame_effect_error_ = "";
         set_result(kResultOk);
-        return frame_texture_;
+        return output.texture;
     }
 
     void release_frame_texture() {
+        if (frame_effect_provider_ != nullptr) {
+            frame_effect_provider_->release(main_rendering_device());
+        }
+        frame_effect_active_ = false;
+        frame_effect_pipeline_ = "none";
+        frame_effect_error_ = "";
+        frame_effect_bypass_due_to_error_ = false;
+        frame_source_width_ = 0;
+        frame_source_height_ = 0;
+        release_rd_frame_texture();
         frame_texture_.unref();
         frame_serial_ = 0;
     }
@@ -448,6 +624,24 @@ protected:
                              &AetherOnscripterPlayer::get_plugin_debug_info);
         ClassDB::bind_method(D_METHOD("get_frame_texture_backend"),
                              &AetherOnscripterPlayer::get_frame_texture_backend);
+        ClassDB::bind_method(D_METHOD("is_frame_enhancement_built"),
+                             &AetherOnscripterPlayer::is_frame_enhancement_built);
+        ClassDB::bind_method(D_METHOD("is_frame_enhancement_available"),
+                             &AetherOnscripterPlayer::is_frame_enhancement_available);
+        ClassDB::bind_method(D_METHOD("set_frame_enhancement_enabled", "enabled"),
+                             &AetherOnscripterPlayer::set_frame_enhancement_enabled);
+        ClassDB::bind_method(D_METHOD("set_frame_native_output_enabled", "enabled"),
+                             &AetherOnscripterPlayer::set_frame_native_output_enabled);
+        ClassDB::bind_method(D_METHOD("set_frame_enhancement_mode", "mode"),
+                             &AetherOnscripterPlayer::set_frame_enhancement_mode);
+        ClassDB::bind_method(D_METHOD("set_frame_enhancement_custom_chain", "chain"),
+                             &AetherOnscripterPlayer::set_frame_enhancement_custom_chain);
+        ClassDB::bind_method(D_METHOD("set_frame_enhancement_target_size", "width", "height"),
+                             &AetherOnscripterPlayer::set_frame_enhancement_target_size);
+        ClassDB::bind_method(D_METHOD("get_frame_source_size"),
+                             &AetherOnscripterPlayer::get_frame_source_size);
+        ClassDB::bind_method(D_METHOD("get_frame_enhancement_status"),
+                             &AetherOnscripterPlayer::get_frame_enhancement_status);
         ClassDB::bind_method(D_METHOD("read_frame_rgba"),
                              &AetherOnscripterPlayer::read_frame_rgba);
         ClassDB::bind_method(D_METHOD("update_frame_texture"),
@@ -492,6 +686,102 @@ protected:
     }
 
 private:
+    RenderingDevice *main_rendering_device() const {
+        RenderingServer *server = RenderingServer::get_singleton();
+        return server != nullptr ? server->get_rendering_device() : nullptr;
+    }
+
+    Ref<Texture2D> current_source_texture() const {
+        if (frame_rd_texture_.is_valid()) {
+            return frame_rd_texture_;
+        }
+        return frame_texture_;
+    }
+
+    void release_rd_frame_texture() {
+        frame_rd_texture_.unref();
+        if (frame_rd_rid_.is_valid()) {
+            RenderingDevice *rd = main_rendering_device();
+            if (rd != nullptr) {
+                rd->free_rid(frame_rd_rid_);
+            }
+            frame_rd_rid_ = RID();
+        }
+        frame_rd_width_ = 0;
+        frame_rd_height_ = 0;
+    }
+
+    Ref<Texture2D> update_source_texture(
+        const aetherkiri::onscripter::Frame &frame,
+        const PackedByteArray &data) {
+        RenderingDevice *rd = main_rendering_device();
+        if (rd != nullptr) {
+            const bool recreate = !frame_rd_rid_.is_valid() ||
+                frame_rd_width_ != frame.width ||
+                frame_rd_height_ != frame.height;
+            if (recreate) {
+                release_rd_frame_texture();
+                Ref<RDTextureFormat> format;
+                format.instantiate();
+                format->set_format(
+                    RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM);
+                format->set_width(frame.width);
+                format->set_height(frame.height);
+                format->set_depth(1);
+                format->set_array_layers(1);
+                format->set_mipmaps(1);
+                format->set_texture_type(RenderingDevice::TEXTURE_TYPE_2D);
+                format->set_samples(RenderingDevice::TEXTURE_SAMPLES_1);
+                format->set_usage_bits(
+                    BitField<RenderingDevice::TextureUsageBits>(
+                        RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+                        RenderingDevice::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT |
+                        RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
+                        RenderingDevice::TEXTURE_USAGE_CAN_UPDATE_BIT |
+                        RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+                        RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT));
+
+                Ref<RDTextureView> view;
+                view.instantiate();
+                TypedArray<PackedByteArray> initial_data;
+                initial_data.push_back(data);
+                frame_rd_rid_ = rd->texture_create(
+                    format, view, initial_data);
+                if (frame_rd_rid_.is_valid()) {
+                    frame_rd_texture_.instantiate();
+                    frame_rd_texture_->set_texture_rd_rid(frame_rd_rid_);
+                    frame_rd_width_ = frame.width;
+                    frame_rd_height_ = frame.height;
+                }
+            } else if (rd->texture_update(frame_rd_rid_, 0, data) != OK) {
+                release_rd_frame_texture();
+            }
+            if (frame_rd_texture_.is_valid()) {
+                frame_texture_.unref();
+                return frame_rd_texture_;
+            }
+        }
+
+        Ref<Image> image = Image::create_from_data(
+            static_cast<int32_t>(frame.width),
+            static_cast<int32_t>(frame.height), false,
+            Image::FORMAT_RGBA8, data);
+        if (image.is_null()) {
+            last_error_ =
+                "Godot could not create an RGBA image for the ONScripter frame";
+            set_result(kResultInvalidState);
+            return Ref<Texture2D>();
+        }
+        if (frame_texture_.is_null() ||
+            frame_texture_->get_width() != static_cast<int32_t>(frame.width) ||
+            frame_texture_->get_height() != static_cast<int32_t>(frame.height)) {
+            frame_texture_ = ImageTexture::create_from_image(image);
+        } else {
+            frame_texture_->update(image);
+        }
+        return frame_texture_;
+    }
+
     void set_result(int result) {
         switch (result) {
         case kResultOk: last_result_ = "OK"; break;
@@ -511,7 +801,24 @@ private:
     String last_result_ = "OK";
     String last_error_;
     Ref<ImageTexture> frame_texture_;
+    Ref<Texture2DRD> frame_rd_texture_;
+    RID frame_rd_rid_;
+    uint32_t frame_rd_width_ = 0;
+    uint32_t frame_rd_height_ = 0;
     uint64_t frame_serial_ = 0;
+    std::unique_ptr<FrameEffectProvider> frame_effect_provider_;
+    bool frame_effect_enabled_ = false;
+    bool frame_effect_active_ = false;
+    bool frame_native_output_enabled_ = false;
+    bool frame_effect_bypass_due_to_error_ = false;
+    String frame_effect_mode_ = "auto";
+    PackedStringArray frame_effect_custom_chain_;
+    String frame_effect_pipeline_ = "none";
+    String frame_effect_error_;
+    uint32_t frame_effect_target_width_ = 0;
+    uint32_t frame_effect_target_height_ = 0;
+    uint32_t frame_source_width_ = 0;
+    uint32_t frame_source_height_ = 0;
     Ref<ImageTexture> media_texture_;
     uint64_t media_frame_serial_ = UINT64_MAX;
     uint32_t media_width_ = 0;

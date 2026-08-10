@@ -121,6 +121,29 @@ func _initialize() -> void:
         player.set_engine_option("export_scripts", "1")
     var surface_size: Vector2i = ProbeConfig.surface_size(config)
     player.set_surface_size(surface_size.x, surface_size.y)
+    var frame_enhancement_enabled: bool = (
+        ProbeConfig.bool_value(config, "frame_enhancement_enabled", false)
+        and player.has_method("set_frame_enhancement_enabled")
+    )
+    if frame_enhancement_enabled:
+        player.set_frame_native_output_enabled(false)
+        player.set_frame_enhancement_mode(ProbeConfig.string_value(
+            config,
+            "frame_enhancement_mode",
+            "chain_soft"
+        ))
+        if (
+            config.has("frame_enhancement_custom_chain")
+            and config["frame_enhancement_custom_chain"] is Array
+        ):
+            player.set_frame_enhancement_custom_chain(PackedStringArray(
+                config["frame_enhancement_custom_chain"]
+            ))
+        player.set_frame_enhancement_target_size(
+            surface_size.x,
+            surface_size.y
+        )
+        player.set_frame_enhancement_enabled(true)
 
     var result: int = player.open_game(game_path, true)
     if result != 0:
@@ -276,25 +299,6 @@ func _initialize() -> void:
         quit(1)
         return
 
-    var screenshot_path := OS.get_environment(
-        "AETHERKIRI_SMOKE_SCREENSHOT"
-    ).strip_edges()
-    if not screenshot_path.is_empty():
-        var screenshot := Image.create_from_data(
-            width,
-            height,
-            false,
-            Image.FORMAT_RGBA8,
-            frame["rgba"]
-        )
-        var screenshot_error := screenshot.save_png(screenshot_path)
-        if screenshot_error != OK:
-            printerr("failed to save smoke screenshot: %s" % screenshot_path)
-            player.destroy_engine()
-            quit(1)
-            return
-        print("smoke screenshot=%s" % screenshot_path)
-
     if OS.get_environment("AETHERKIRI_SMOKE_EXPECT_SCRIPT_MEDIA") == "1":
         var outside_offset := (10 * width + 10) * 4
         var inside_offset := ((height / 2) * width + (width / 2)) * 4
@@ -318,7 +322,14 @@ func _initialize() -> void:
             return
 
     var texture: Texture2D = player.update_frame_texture()
-    if texture == null or texture.get_width() != width or texture.get_height() != height:
+    var expected_texture_size := (
+        surface_size if frame_enhancement_enabled else Vector2i(width, height)
+    )
+    if (
+        texture == null
+        or texture.get_width() != expected_texture_size.x
+        or texture.get_height() != expected_texture_size.y
+    ):
         printerr("texture update failed backend=%s frame=%dx%d renderer=%s" % [
             backend,
             width,
@@ -328,6 +339,36 @@ func _initialize() -> void:
         player.destroy_engine()
         quit(1)
         return
+
+    var screenshot_path := OS.get_environment(
+        "AETHERKIRI_SMOKE_SCREENSHOT"
+    ).strip_edges()
+    if not screenshot_path.is_empty():
+        var screenshot := texture.get_image() if frame_enhancement_enabled else Image.create_from_data(
+            width,
+            height,
+            false,
+            Image.FORMAT_RGBA8,
+            frame["rgba"]
+        )
+        var screenshot_error := screenshot.save_png(screenshot_path)
+        if screenshot_error != OK:
+            printerr("failed to save smoke screenshot: %s" % screenshot_path)
+            player.destroy_engine()
+            quit(1)
+            return
+        print("smoke screenshot=%s" % screenshot_path)
+
+    if frame_enhancement_enabled:
+        var effect_status: Dictionary = player.get_frame_enhancement_status()
+        if not bool(effect_status.get("active", false)):
+            printerr("frame enhancement did not activate: %s" % [
+                JSON.stringify(effect_status),
+            ])
+            player.destroy_engine()
+            quit(1)
+            return
+        print("smoke frame enhancement=%s" % JSON.stringify(effect_status))
 
     print("smoke ok backend=%s renderer=\"%s\" texture_backend=%s frame=%dx%d texture=%dx%d serial=%d bytes=%d" % [
         backend,

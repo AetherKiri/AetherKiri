@@ -29,6 +29,8 @@ func _initialize() -> void:
     assert(not app._begin_iap_checked_access("game", games[1], "detail"))
     assert(app.iap_pending_launch.is_empty())
     assert(not app.modal_layer.visible)
+    assert(app._runtime_requires_beta_access(app.RUNTIME_ONSCRIPTER))
+    assert(not app._runtime_requires_beta_access(app.RUNTIME_KIRIKIRI))
 
     var settings_action := Button.new()
     app._configure_settings_action_button(settings_action)
