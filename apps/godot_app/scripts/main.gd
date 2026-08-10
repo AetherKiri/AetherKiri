@@ -3891,16 +3891,13 @@ func _game_matches_home_search(game: Dictionary, query: String) -> bool:
     return _library_search_matches([
         _game_display_title(game),
         game.get("name", ""),
-        game.get("path", ""),
         game.get("developer", ""),
-        GameLaunchEntry.configured_relative_path(game),
     ], query)
 
 func _video_matches_home_search(video: Dictionary, query: String) -> bool:
     return _library_search_matches([
         video.get("name", ""),
         video.get("fileName", ""),
-        video.get("path", ""),
     ], query)
 
 func _on_home_search_text_changed(value: String) -> void:
