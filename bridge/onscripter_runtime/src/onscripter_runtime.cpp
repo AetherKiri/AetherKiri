@@ -1,4 +1,5 @@
 #include "onscripter_runtime.h"
+#include "onscripter_presentation.h"
 
 #include <SDL.h>
 #include <SDL_mixer.h>
@@ -16,6 +17,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <new>
 #include <stdexcept>
@@ -201,6 +203,62 @@ bool HasScriptMarker(const fs::path &root) {
     return false;
 }
 
+struct PresentationAspectRatio {
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
+uint32_t ReadPositiveSetting(const std::string &line,
+                             const char *setting_name) {
+    const std::string prefix = std::string(setting_name) + "=";
+    if (line.rfind(prefix, 0) != 0) {
+        return 0;
+    }
+    try {
+        const unsigned long value = std::stoul(line.substr(prefix.size()));
+        return value > 0 &&
+                value <= std::numeric_limits<uint32_t>::max()
+            ? static_cast<uint32_t>(value) : 0;
+    } catch (...) {
+        return 0;
+    }
+}
+
+PresentationAspectRatio ReadPresentationAspectRatio(const fs::path &root) {
+    std::error_code error;
+    if (!fs::is_regular_file(root / "ons.wide", error)) {
+        return {};
+    }
+
+    // This marker is produced by Android ONS packages whose wrapper defaults
+    // to a 16:9 view over a 4:3 NScripter canvas. Respect an accompanying
+    // app_settings.ini override when present.
+    PresentationAspectRatio result{16, 9};
+    std::ifstream settings(root / "app_settings.ini");
+    if (!settings) {
+        return result;
+    }
+    uint32_t configured_width = 0;
+    uint32_t configured_height = 0;
+    std::string line;
+    while (std::getline(settings, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (configured_width == 0) {
+            configured_width = ReadPositiveSetting(line, "VideoXRatio");
+        }
+        if (configured_height == 0) {
+            configured_height = ReadPositiveSetting(line, "VideoYRatio");
+        }
+    }
+    if (configured_width > 0 && configured_height > 0) {
+        result.width = configured_width;
+        result.height = configured_height;
+    }
+    return result;
+}
+
 fs::path NormalizeGameRoot(const std::string &path) {
     fs::path root = fs::u8path(path);
     std::error_code error;
@@ -307,6 +365,12 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     std::atomic<double> input_device_scale_y{1.0};
     std::atomic<int> input_device_offset_x{0};
     std::atomic<int> input_device_offset_y{0};
+    std::atomic<uint32_t> presentation_source_width{0};
+    std::atomic<uint32_t> presentation_source_height{0};
+    std::atomic<uint32_t> presentation_x{0};
+    std::atomic<uint32_t> presentation_y{0};
+    std::atomic<uint32_t> presentation_width{0};
+    std::atomic<uint32_t> presentation_height{0};
     ONScripter *ons = nullptr;
     std::string writable_path;
     std::string cache_path;
@@ -841,6 +905,32 @@ struct Runtime::Impl final : EmbeddedMovieHost {
             input_device_offset_x.store(ons->render_view_rect.x);
             input_device_offset_y.store(ons->render_view_rect.y);
 
+            const uint32_t source_width =
+                static_cast<uint32_t>(ons->accumulation_surface->w);
+            const uint32_t source_height =
+                static_cast<uint32_t>(ons->accumulation_surface->h);
+            const PresentationAspectRatio presentation_aspect =
+                ReadPresentationAspectRatio(root);
+            const PresentationViewport presentation =
+                ResolvePresentationViewport(
+                    source_width, source_height,
+                    presentation_aspect.width, presentation_aspect.height);
+            presentation_source_width.store(source_width);
+            presentation_source_height.store(source_height);
+            presentation_x.store(presentation.x);
+            presentation_y.store(presentation.y);
+            presentation_width.store(presentation.width);
+            presentation_height.store(presentation.height);
+            if (presentation.width != source_width ||
+                presentation.height != source_height) {
+                append_log(
+                    "[ONScripter Yuri] presentation viewport: " +
+                    std::to_string(presentation.width) + "x" +
+                    std::to_string(presentation.height) + " from " +
+                    std::to_string(source_width) + "x" +
+                    std::to_string(source_height));
+            }
+
             {
                 std::lock_guard<std::mutex> surface_lock(
                     g_present_surface_mutex);
@@ -969,6 +1059,12 @@ bool Runtime::open_game(const std::string &game_root_path) {
     impl_->startup.store(StartupState::Running);
     impl_->ended.store(false);
     impl_->stop_requested.store(false);
+    impl_->presentation_source_width.store(0);
+    impl_->presentation_source_height.store(0);
+    impl_->presentation_x.store(0);
+    impl_->presentation_y.store(0);
+    impl_->presentation_width.store(0);
+    impl_->presentation_height.store(0);
     {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         impl_->error.clear();
@@ -1049,12 +1145,16 @@ bool Runtime::send_pointer_event(int type, double x, double y,
             impl_->input_device_scale_x.load();
         const double device_scale_y =
             impl_->input_device_scale_y.load();
+        const double script_x = x + impl_->presentation_x.load();
+        const double script_y = y + impl_->presentation_y.load();
         SDL_Event event{};
         event.type = SDL_MOUSEMOTION;
         event.motion.x = static_cast<int>(std::lround(
-            x * device_scale_x + impl_->input_device_offset_x.load()));
+            script_x * device_scale_x +
+            impl_->input_device_offset_x.load()));
         event.motion.y = static_cast<int>(std::lround(
-            y * device_scale_y + impl_->input_device_offset_y.load()));
+            script_y * device_scale_y +
+            impl_->input_device_offset_y.load()));
         event.motion.xrel = static_cast<int>(std::lround(
             delta_x * device_scale_x));
         event.motion.yrel = static_cast<int>(std::lround(
@@ -1067,11 +1167,13 @@ bool Runtime::send_pointer_event(int type, double x, double y,
     }
 
     if (type == 1 || type == 3) {
+        const double script_x = x + impl_->presentation_x.load();
+        const double script_y = y + impl_->presentation_y.load();
         const int device_x = static_cast<int>(std::lround(
-            x * impl_->input_device_scale_x.load() +
+            script_x * impl_->input_device_scale_x.load() +
             impl_->input_device_offset_x.load()));
         const int device_y = static_cast<int>(std::lround(
-            y * impl_->input_device_scale_y.load() +
+            script_y * impl_->input_device_scale_y.load() +
             impl_->input_device_offset_y.load()));
         // ONScripter resolves a button press through `current_over_button`,
         // which is refreshed by SDL_MOUSEMOTION rather than by the button
@@ -1188,7 +1290,15 @@ std::string Runtime::renderer_info() const {
            << impl_->input_device_scale_y.load()
            << " input_offset="
            << impl_->input_device_offset_x.load() << ","
-           << impl_->input_device_offset_y.load();
+           << impl_->input_device_offset_y.load()
+           << " source="
+           << impl_->presentation_source_width.load() << "x"
+           << impl_->presentation_source_height.load()
+           << " viewport="
+           << impl_->presentation_width.load() << "x"
+           << impl_->presentation_height.load()
+           << "+" << impl_->presentation_x.load()
+           << "+" << impl_->presentation_y.load();
     return output.str();
 }
 
@@ -1206,15 +1316,36 @@ bool Runtime::read_frame(Frame &frame) {
         return false;
     }
 
-    const uint32_t width = static_cast<uint32_t>(surface->w);
-    const uint32_t height = static_cast<uint32_t>(surface->h);
+    const uint32_t source_width = static_cast<uint32_t>(surface->w);
+    const uint32_t source_height = static_cast<uint32_t>(surface->h);
+    uint32_t crop_x = impl_->presentation_x.load();
+    uint32_t crop_y = impl_->presentation_y.load();
+    uint32_t width = impl_->presentation_width.load();
+    uint32_t height = impl_->presentation_height.load();
+    const bool crop_is_valid =
+        impl_->presentation_source_width.load() == source_width &&
+        impl_->presentation_source_height.load() == source_height &&
+        width > 0 && height > 0 &&
+        crop_x < source_width && crop_y < source_height &&
+        width <= source_width - crop_x &&
+        height <= source_height - crop_y;
+    if (!crop_is_valid) {
+        crop_x = 0;
+        crop_y = 0;
+        width = source_width;
+        height = source_height;
+    }
     const uint32_t stride = width * 4u;
     std::vector<uint8_t> rgba(static_cast<size_t>(stride) * height);
     if (SDL_LockSurface(surface) != 0) {
         return false;
     }
+    const auto *source_pixels = static_cast<const uint8_t *>(surface->pixels) +
+        static_cast<size_t>(crop_y) * surface->pitch +
+        static_cast<size_t>(crop_x) * surface->format->BytesPerPixel;
     const int convert_result = SDL_ConvertPixels(
-        surface->w, surface->h, surface->format->format, surface->pixels,
+        static_cast<int>(width), static_cast<int>(height),
+        surface->format->format, source_pixels,
         surface->pitch, SDL_PIXELFORMAT_RGBA32, rgba.data(),
         static_cast<int>(stride));
     SDL_UnlockSurface(surface);
