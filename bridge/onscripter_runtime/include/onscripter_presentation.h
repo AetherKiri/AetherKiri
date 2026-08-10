@@ -40,4 +40,27 @@ constexpr PresentationViewport ResolvePresentationViewport(
     return result;
 }
 
+constexpr uint32_t ResolvePresentationScroll(
+    uint32_t source_height, uint32_t viewport_y,
+    uint32_t viewport_height, uint32_t current_scroll,
+    int32_t delta) {
+    if (source_height == 0 || viewport_height == 0 ||
+        viewport_y >= source_height ||
+        viewport_height > source_height - viewport_y) {
+        return 0;
+    }
+
+    const uint32_t max_scroll =
+        source_height - viewport_y - viewport_height;
+    const int64_t requested =
+        static_cast<int64_t>(current_scroll) + delta;
+    if (requested <= 0) {
+        return 0;
+    }
+    if (requested >= static_cast<int64_t>(max_scroll)) {
+        return max_scroll;
+    }
+    return static_cast<uint32_t>(requested);
+}
+
 } // namespace aetherkiri::onscripter

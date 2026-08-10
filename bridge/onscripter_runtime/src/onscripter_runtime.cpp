@@ -96,6 +96,9 @@ struct PublishedFrame {
 std::mutex g_published_frame_mutex;
 PublishedFrame g_published_frame;
 uint64_t g_published_frame_serial = 0;
+std::atomic<bool> g_system_list_scroll_active{false};
+std::atomic<uint32_t> g_system_list_scroll_y{0};
+std::atomic<uint64_t> g_system_list_view_revision{0};
 
 void ResetPublishedFrame() {
     std::lock_guard<std::mutex> lock(g_published_frame_mutex);
@@ -171,6 +174,18 @@ std::mutex g_movie_host_mutex;
 EmbeddedMovieHost *g_movie_host = nullptr;
 
 } // namespace
+
+extern "C" void aetherkiri_onscripter_begin_system_list_scroll() {
+    g_system_list_scroll_y.store(0);
+    g_system_list_scroll_active.store(true);
+    g_system_list_view_revision.fetch_add(1);
+}
+
+extern "C" void aetherkiri_onscripter_end_system_list_scroll() {
+    g_system_list_scroll_active.store(false);
+    g_system_list_scroll_y.store(0);
+    g_system_list_view_revision.fetch_add(1);
+}
 
 extern "C" int aetherkiri_onscripter_wait_event(SDL_Event *event) {
 #if defined(__APPLE__) && TARGET_OS_IOS
@@ -563,6 +578,8 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     std::atomic<uint32_t> presentation_y{0};
     std::atomic<uint32_t> presentation_width{0};
     std::atomic<uint32_t> presentation_height{0};
+    std::atomic<int> system_list_touch_pointer{-1};
+    std::atomic<bool> system_list_touch_scrolled{false};
     ONScripter *ons = nullptr;
     std::string writable_path;
     std::string cache_path;
@@ -1253,6 +1270,7 @@ void Runtime::shutdown() {
     if (!impl_) {
         return;
     }
+    aetherkiri_onscripter_end_system_list_scroll();
     impl_->stop_requested.store(true);
     if (impl_->game_thread.joinable()) {
         SDL_Event event{};
@@ -1315,6 +1333,9 @@ bool Runtime::open_game(const std::string &game_root_path) {
     }
 
     impl_->game_root = root.u8string();
+    aetherkiri_onscripter_end_system_list_scroll();
+    impl_->system_list_touch_pointer.store(-1);
+    impl_->system_list_touch_scrolled.store(false);
     impl_->startup.store(StartupState::Running);
     impl_->ended.store(false);
     impl_->stop_requested.store(false);
@@ -1383,11 +1404,79 @@ bool Runtime::resume() {
     return true;
 }
 
-bool Runtime::send_pointer_event(int type, double x, double y,
+bool Runtime::send_pointer_event(int type, int pointer_id, double x, double y,
                                  double delta_x, double delta_y, int button,
                                  int modifiers) {
     if (!impl_->game_open.load()) {
         return false;
+    }
+    const auto system_list_max_scroll = [this]() -> uint32_t {
+        if (!g_system_list_scroll_active.load()) {
+            return 0;
+        }
+        const uint32_t source_height =
+            impl_->presentation_source_height.load();
+        const uint32_t viewport_y = impl_->presentation_y.load();
+        const uint32_t viewport_height =
+            impl_->presentation_height.load();
+        if (source_height == 0 || viewport_height == 0 ||
+            viewport_y >= source_height ||
+            viewport_height > source_height - viewport_y) {
+            return 0;
+        }
+        return source_height - viewport_y - viewport_height;
+    };
+    const auto adjust_system_list_scroll =
+        [this, &system_list_max_scroll](int32_t delta) -> bool {
+        const uint32_t max_scroll = system_list_max_scroll();
+        if (max_scroll == 0) {
+            return false;
+        }
+        uint32_t current = g_system_list_scroll_y.load();
+        while (true) {
+            const uint32_t next = ResolvePresentationScroll(
+                impl_->presentation_source_height.load(),
+                impl_->presentation_y.load(),
+                impl_->presentation_height.load(), current, delta);
+            if (next == current) {
+                return true;
+            }
+            if (g_system_list_scroll_y.compare_exchange_weak(
+                    current, next)) {
+                g_system_list_view_revision.fetch_add(1);
+                return true;
+            }
+        }
+    };
+    constexpr int kTouchPointerIdBase = 100000;
+    const bool is_touch_pointer = pointer_id >= kTouchPointerIdBase;
+
+    if (type == 1 && is_touch_pointer &&
+        g_system_list_scroll_active.load()) {
+        impl_->system_list_touch_pointer.store(pointer_id);
+        impl_->system_list_touch_scrolled.store(false);
+    }
+    if (type == 2 && is_touch_pointer &&
+        impl_->system_list_touch_pointer.load() == pointer_id &&
+        g_system_list_scroll_active.load() &&
+        std::abs(delta_y) > std::numeric_limits<double>::epsilon()) {
+        int32_t scroll_delta = static_cast<int32_t>(std::lround(-delta_y));
+        if (scroll_delta == 0) {
+            scroll_delta = delta_y < 0.0 ? 1 : -1;
+        }
+        if (adjust_system_list_scroll(scroll_delta)) {
+            impl_->system_list_touch_scrolled.store(true);
+        }
+    }
+    if (type == 3 && is_touch_pointer &&
+        impl_->system_list_touch_pointer.load() == pointer_id) {
+        impl_->system_list_touch_pointer.store(-1);
+        if (impl_->system_list_touch_scrolled.exchange(false) &&
+            g_system_list_scroll_active.load()) {
+            // A drag scrolls the list; swallowing its release prevents the
+            // slot now underneath the finger from being loaded accidentally.
+            return true;
+        }
     }
     if (type == 3) {
         std::lock_guard<std::mutex> media_lock(impl_->media_mutex);
@@ -1397,6 +1486,15 @@ bool Runtime::send_pointer_event(int type, double x, double y,
         }
     }
     if (type == 4) {
+        int32_t scroll_delta = static_cast<int32_t>(
+            std::lround(delta_y * 40.0));
+        if (scroll_delta == 0 &&
+            std::abs(delta_y) > std::numeric_limits<double>::epsilon()) {
+            scroll_delta = delta_y > 0.0 ? 40 : -40;
+        }
+        if (adjust_system_list_scroll(scroll_delta)) {
+            return true;
+        }
         SDL_Event event{};
         event.type = SDL_MOUSEWHEEL;
         event.wheel.x = static_cast<int>(std::lround(delta_x));
@@ -1411,7 +1509,9 @@ bool Runtime::send_pointer_event(int type, double x, double y,
         const double device_scale_y =
             impl_->input_device_scale_y.load();
         const double script_x = x + impl_->presentation_x.load();
-        const double script_y = y + impl_->presentation_y.load();
+        const double script_y = y + impl_->presentation_y.load() +
+            (g_system_list_scroll_active.load()
+                ? g_system_list_scroll_y.load() : 0);
         SDL_Event event{};
         event.type = SDL_MOUSEMOTION;
         event.motion.x = static_cast<int>(std::lround(
@@ -1433,7 +1533,9 @@ bool Runtime::send_pointer_event(int type, double x, double y,
 
     if (type == 1 || type == 3) {
         const double script_x = x + impl_->presentation_x.load();
-        const double script_y = y + impl_->presentation_y.load();
+        const double script_y = y + impl_->presentation_y.load() +
+            (g_system_list_scroll_active.load()
+                ? g_system_list_scroll_y.load() : 0);
         const int device_x = static_cast<int>(std::lround(
             script_x * impl_->input_device_scale_x.load() +
             impl_->input_device_offset_x.load()));
@@ -1563,7 +1665,9 @@ std::string Runtime::renderer_info() const {
            << impl_->presentation_width.load() << "x"
            << impl_->presentation_height.load()
            << "+" << impl_->presentation_x.load()
-           << "+" << impl_->presentation_y.load();
+           << "+" << (impl_->presentation_y.load() +
+                (g_system_list_scroll_active.load()
+                    ? g_system_list_scroll_y.load() : 0));
     return output.str();
 }
 
@@ -1591,7 +1695,9 @@ bool Runtime::read_frame(Frame &frame) {
         const uint32_t source_width = g_published_frame.width;
         const uint32_t source_height = g_published_frame.height;
         uint32_t crop_x = impl_->presentation_x.load();
-        uint32_t crop_y = impl_->presentation_y.load();
+        uint32_t crop_y = impl_->presentation_y.load() +
+            (g_system_list_scroll_active.load()
+                ? g_system_list_scroll_y.load() : 0);
         width = impl_->presentation_width.load();
         height = impl_->presentation_height.load();
         const bool crop_is_valid =
@@ -1621,6 +1727,15 @@ bool Runtime::read_frame(Frame &frame) {
                         stride);
         }
         serial = g_published_frame.serial;
+        const uint64_t view_revision =
+            g_system_list_view_revision.load();
+        if (view_revision != 0) {
+            serial ^= view_revision + 0x9e3779b97f4a7c15ull +
+                (serial << 6u) + (serial >> 2u);
+            if (serial == 0) {
+                serial = 1;
+            }
+        }
     }
 
     frame.width = width;

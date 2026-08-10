@@ -147,9 +147,8 @@ public:
     int send_pointer_event(int type, int pointer_id, double x, double y,
                            double delta_x, double delta_y, int button,
                            int modifiers = 0) {
-        (void)pointer_id;
         const bool sent = runtime_.send_pointer_event(
-            type, x, y, delta_x, delta_y, button, modifiers);
+            type, pointer_id, x, y, delta_x, delta_y, button, modifiers);
         set_result(sent ? kResultOk : kResultInvalidState);
         return sent ? kResultOk : kResultInvalidState;
     }

@@ -54,7 +54,7 @@ public:
     bool pause();
     bool resume();
 
-    bool send_pointer_event(int type, double x, double y,
+    bool send_pointer_event(int type, int pointer_id, double x, double y,
                             double delta_x, double delta_y, int button,
                             int modifiers);
     bool send_key_event(bool pressed, int key_code, int modifiers,

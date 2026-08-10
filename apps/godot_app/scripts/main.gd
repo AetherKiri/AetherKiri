@@ -10857,7 +10857,8 @@ func _probe_run_actions(config: Dictionary, step: int) -> int:
                 to,
                 config,
                 max(1, int(action.get("steps", 12))),
-                max(0, int(action.get("per_step_frames", 1)))
+                max(0, int(action.get("per_step_frames", 1))),
+                int(action.get("pointer_id", 0))
             ):
                 continue
             if label.is_empty() or label == "drag":
@@ -11051,7 +11052,8 @@ func _probe_send_mapped_drag(
     to: Vector2,
     config: Dictionary,
     steps: int,
-    per_step_frames: int
+    per_step_frames: int,
+    pointer_id: int = 0
 ) -> bool:
     var mapped_from := _probe_map_window_point(from, config)
     var mapped_to := _probe_map_window_point(to, config)
@@ -11064,9 +11066,9 @@ func _probe_send_mapped_drag(
         ])
         return false
 
-    player.send_pointer_event(POINTER_MOVE, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_MOVE, pointer_id, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
-    player.send_pointer_event(POINTER_DOWN, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_DOWN, pointer_id, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
     _hold_next_present_after_input()
     player.tick(1.0 / 60.0)
 
@@ -11076,7 +11078,7 @@ func _probe_send_mapped_drag(
         var delta := current - previous
         player.send_pointer_event(
             POINTER_MOVE,
-            0,
+            pointer_id,
             current.x,
             current.y,
             delta.x,
@@ -11089,7 +11091,7 @@ func _probe_send_mapped_drag(
         if per_step_frames > 0 and not await _probe_advance(per_step_frames):
             return false
 
-    player.send_pointer_event(POINTER_UP, 0, mapped_to.x, mapped_to.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_UP, pointer_id, mapped_to.x, mapped_to.y, 0.0, 0.0, 0)
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
     player.tick(1.0 / 60.0)
     return true
