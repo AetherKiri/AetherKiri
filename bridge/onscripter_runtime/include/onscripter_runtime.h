@@ -7,6 +7,11 @@
 
 namespace aetherkiri::onscripter {
 
+// Registers the ONScripterYuri backend with the shared engine runtime
+// dispatcher. Registration is process-wide and idempotent; hosts should call
+// it before creating their first engine handle.
+void RegisterRuntimeProvider();
+
 enum class StartupState : int {
     Idle = 0,
     Running = 1,

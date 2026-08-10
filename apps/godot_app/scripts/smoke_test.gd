@@ -84,7 +84,7 @@ func _initialize() -> void:
         return
 
     var is_onscripter := _is_onscripter_game(game_path)
-    var player_class_name := "AetherOnscripterPlayer" if is_onscripter else "AetherKiriPlayer"
+    var player_class_name := "AetherRuntimePlayer"
     if not ClassDB.class_exists(player_class_name):
         printerr("%s is unavailable" % player_class_name)
         quit(1)

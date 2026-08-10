@@ -1,7 +1,7 @@
 extends SceneTree
 
 func _initialize() -> void:
-    var player = ClassDB.instantiate("AetherKiriPlayer")
+    var player = ClassDB.instantiate("AetherRuntimePlayer")
     assert(player != null)
     root.add_child(player as Node)
 

@@ -95,13 +95,9 @@ if(WEB OR EMSCRIPTEN)
 endif()
 
 set(AETHERKIRI_GODOT_SOURCES
-    src/aether_kiri_godot.cpp
+    src/aether_runtime_player.cpp
     src/frame_effect_host.cpp
 )
-if(TARGET aether_onscripter_runtime)
-    list(APPEND AETHERKIRI_GODOT_SOURCES
-        src/aether_onscripter_godot.cpp)
-endif()
 
 if(WEB OR EMSCRIPTEN)
     add_executable(aether_kiri_godot ${AETHERKIRI_GODOT_SOURCES})

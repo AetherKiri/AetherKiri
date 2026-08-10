@@ -348,8 +348,8 @@ const UI_TEXT := {
         "message.builtin_delete_failed": "删除内置 Demo 时发生错误：%s",
         "alert.error_title": "Aether 错误",
         "alert.warning_title": "Aether 警告",
-        "alert.runtime_class_missing": "运行时扩展加载失败：AetherKiriPlayer 不可用",
-        "alert.runtime_create_failed": "运行时扩展加载失败：无法创建 AetherKiriPlayer",
+        "alert.runtime_class_missing": "运行时扩展加载失败：AetherRuntimePlayer 不可用",
+        "alert.runtime_create_failed": "运行时扩展加载失败：无法创建 AetherRuntimePlayer",
         "loading.title": "正在启动视觉小说..."
     },
     LANG_ZH_HANT: {
@@ -603,8 +603,8 @@ const UI_TEXT := {
         "message.builtin_delete_failed": "刪除內建 Demo 時發生錯誤：%s",
         "alert.error_title": "Aether 錯誤",
         "alert.warning_title": "Aether 警告",
-        "alert.runtime_class_missing": "執行時擴充載入失敗：AetherKiriPlayer 不可用",
-        "alert.runtime_create_failed": "執行時擴充載入失敗：無法建立 AetherKiriPlayer",
+        "alert.runtime_class_missing": "執行時擴充載入失敗：AetherRuntimePlayer 不可用",
+        "alert.runtime_create_failed": "執行時擴充載入失敗：無法建立 AetherRuntimePlayer",
         "loading.title": "正在啟動視覺小說..."
     },
     LANG_EN: {
@@ -858,8 +858,8 @@ const UI_TEXT := {
         "message.builtin_delete_failed": "Could not completely delete the built-in demo: %s",
         "alert.error_title": "Aether Error",
         "alert.warning_title": "Aether Warning",
-        "alert.runtime_class_missing": "Runtime extension failed to load: AetherKiriPlayer is unavailable",
-        "alert.runtime_create_failed": "Runtime extension failed to load: could not create AetherKiriPlayer",
+        "alert.runtime_class_missing": "Runtime extension failed to load: AetherRuntimePlayer is unavailable",
+        "alert.runtime_create_failed": "Runtime extension failed to load: could not create AetherRuntimePlayer",
         "loading.title": "Launching visual novel..."
     },
     LANG_JA: {
@@ -1113,8 +1113,8 @@ const UI_TEXT := {
         "message.builtin_delete_failed": "内蔵デモを完全に削除できませんでした：%s",
         "alert.error_title": "Aether エラー",
         "alert.warning_title": "Aether 警告",
-        "alert.runtime_class_missing": "ランタイム拡張の読み込みに失敗しました：AetherKiriPlayer は利用できません",
-        "alert.runtime_create_failed": "ランタイム拡張の読み込みに失敗しました：AetherKiriPlayer を作成できません",
+        "alert.runtime_class_missing": "ランタイム拡張の読み込みに失敗しました：AetherRuntimePlayer は利用できません",
+        "alert.runtime_create_failed": "ランタイム拡張の読み込みに失敗しました：AetherRuntimePlayer を作成できません",
         "loading.title": "ビジュアルノベルを起動中..."
     },
     LANG_KO: {
@@ -1368,8 +1368,8 @@ const UI_TEXT := {
         "message.builtin_delete_failed": "내장 데모를 완전히 삭제하지 못했습니다: %s",
         "alert.error_title": "Aether 오류",
         "alert.warning_title": "Aether 경고",
-        "alert.runtime_class_missing": "런타임 확장 로드 실패: AetherKiriPlayer를 사용할 수 없습니다",
-        "alert.runtime_create_failed": "런타임 확장 로드 실패: AetherKiriPlayer를 만들 수 없습니다",
+        "alert.runtime_class_missing": "런타임 확장 로드 실패: AetherRuntimePlayer를 사용할 수 없습니다",
+        "alert.runtime_create_failed": "런타임 확장 로드 실패: AetherRuntimePlayer를 만들 수 없습니다",
         "loading.title": "비주얼 노벨 실행 중..."
     }
 }
@@ -1397,6 +1397,7 @@ const POINTER_MOD_RIGHT := 0x10
 const POINTER_MOD_MIDDLE := 0x20
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
+const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
     "0.txt",
     "00.txt",
@@ -9989,20 +9990,16 @@ func _on_debug_self_check_requested() -> void:
     checks.append("storage=ok" if writable else "storage=failed")
     debug_console.show_result(_t("debug.result.self_check", [", ".join(checks)]), not writable)
 
-func _runtime_player_class(runtime_kind: String) -> String:
-    return "AetherOnscripterPlayer" if runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiriPlayer"
-
 func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
-    var player_class_name := _runtime_player_class(runtime_kind)
-    if not ClassDB.class_exists(player_class_name):
-        var message := "%s runtime extension class is unavailable." % player_class_name
+    if not ClassDB.class_exists(RUNTIME_PLAYER_CLASS):
+        var message := "%s runtime extension class is unavailable." % RUNTIME_PLAYER_CLASS
         push_error(message)
         _append_log(message)
         _show_system_alert(_t("alert.runtime_class_missing"), _t("alert.error_title"))
         return false
-    var instance: Object = ClassDB.instantiate(player_class_name)
+    var instance: Object = ClassDB.instantiate(RUNTIME_PLAYER_CLASS)
     if instance == null or not (instance is Node):
-        var create_message := "Aether runtime extension could not create %s." % player_class_name
+        var create_message := "Aether runtime extension could not create %s." % RUNTIME_PLAYER_CLASS
         push_error(create_message)
         _append_log(create_message)
         _show_system_alert(_t("alert.runtime_create_failed"), _t("alert.error_title"))
@@ -10025,14 +10022,15 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
         _append_log("Cannot switch visual-novel runtimes while a game is running.")
         return false
 
-    var previous_player = player
-    player = null
-    if previous_player != null:
-        previous_player.destroy_engine()
-        if previous_player is Node:
-            (previous_player as Node).queue_free()
-    if not _create_runtime_player(normalized):
-        return false
+    if player == null:
+        if not _create_runtime_player(normalized):
+            return false
+    else:
+        # Runtime implementations live behind one stable Godot-facing player.
+        # Recreate only its engine handle so UI signals, frame effects, and
+        # platform services do not need one Node implementation per backend.
+        player.destroy_engine()
+        current_player_runtime_kind = normalized
     if not _ensure_player_initialized():
         return false
     _apply_backend(false)
@@ -10217,6 +10215,21 @@ func _ensure_player_initialized() -> bool:
             player.get_last_error(),
         ]
         _append_log(init_error_message)
+        return false
+
+    var runtime_id := (
+        RUNTIME_ONSCRIPTER
+        if current_player_runtime_kind == RUNTIME_ONSCRIPTER
+        else "auto"
+    )
+    var runtime_result := int(player.set_engine_option("runtime", runtime_id))
+    if runtime_result != ENGINE_RESULT_OK:
+        render_errors += 1
+        _append_log("Runtime selection failed: %s %s" % [
+            player.get_last_result(),
+            player.get_last_error(),
+        ])
+        player.destroy_engine()
         return false
 
     _append_log("%s engine initialized." % (

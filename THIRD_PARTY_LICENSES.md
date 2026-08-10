@@ -25,6 +25,8 @@ Their copyright notices and licenses are preserved below.
 OnscripterYuri
 ----------------------------------------------------------------------------
 Source: https://github.com/YuriSizuku/OnscripterYuri
+Integration permission and licensing correspondence:
+https://github.com/YuriSizuku/OnscripterYuri/issues/75
 
 Copyright (c) 2001-2018 Ogapee.
 Copyright (c) 2014-2019 jh10001.

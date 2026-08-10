@@ -42,7 +42,7 @@ func _initialize() -> void:
     rect.gui_input.connect(_on_rect_gui_input)
     root.add_child(rect)
 
-    player = ClassDB.instantiate("AetherKiriPlayer")
+    player = ClassDB.instantiate("AetherRuntimePlayer")
     root.add_child(player as Node)
 
     var user_dir := OS.get_user_data_dir()

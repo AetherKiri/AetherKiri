@@ -73,10 +73,12 @@ CPU 上传只能作为 debug fallback。性能优化应优先落到 Godot Native
 | `apps/godot_app/scripts/sequence_perf_probe.gd` | 较长流程 FPS probe。 |
 | `apps/godot_app/scripts/gui_render_probe.gd` | GUI 渲染截图 probe。 |
 | `apps/godot_app/scripts/gpu_blend_self_test.gd` | Godot GPU blend 自测入口。 |
-| `bridge/godot_extension/src/aether_kiri_godot.cpp` | Godot 可见的 `AetherKiriPlayer` 实现和方法绑定。 |
+| `bridge/godot_extension/src/aether_runtime_player.cpp` | Godot 可见的 `AetherRuntimePlayer` 实现和方法绑定。 |
 | `bridge/engine_api/include/engine_api.h` | engine bridge 导出的 C ABI。 |
+| `bridge/engine_api/include/engine_runtime_provider.h` | `AetherRuntimePlayer` 背后的版本化 Runtime Provider ABI；新增引擎实现该接口，不再新增 Godot Player。 |
 | `bridge/engine_api/include/engine_options.h` | host 与 engine 共享的 option key/value。 |
 | `bridge/engine_api/src/engine_api.cpp` | C ABI 实现，负责创建、打开、tick、render 和输入传递。 |
+| `bridge/onscripter_runtime/src/onscripter_runtime_provider.cpp` | ONScripterYuri 到统一 Runtime Provider ABI 的适配器。 |
 | `cpp/core/environ/EngineLoop.*` | 运行时生命周期、tick loop，以及 host input 到 TVP 事件的转换。 |
 | `cpp/core/visual/LayerManager.*` | 图层命中测试、焦点/capture、鼠标/触摸/键盘派发和兼容输入逻辑。 |
 | `cpp/core/visual/impl/DrawDevice.*` | Window/layer 更新与 render manager 之间的 draw device 桥。 |
@@ -294,9 +296,32 @@ Godot shell 对齐旧移动端 app 的主流程：
 6. 游戏启动完成后隐藏 shell，游戏 viewport 全屏显示。
 7. 设置页持久化渲染后端、性能面板、帧率限制、横屏锁定和开发者开关。
 
+## Runtime 架构
+
+Godot 只依赖一个 native class。各 Runtime 不再分别注册 Godot Node，也不
+再重复实现纹理、画面增强、媒体、诊断、StoreKit 和文件选择能力：
+
+```text
+Godot
+  └── AetherRuntimePlayer
+        └── engine API dispatcher
+              ├── KiriRuntime ───── KiriKiri
+              ├── OnsRuntime ────── ONScripterYuri
+              └── A Runtime
+```
+
+`AetherRuntimePlayer` 是稳定的宿主门面。KiriRuntime 对应现有 legacy engine
+API backend；OnsRuntime 和 A Runtime 实现版本化的
+`engine_runtime_provider_v1_t` ABI。后续新增视觉小说引擎必须接入该 ABI，
+不应再增加新的 `Aether*Player` Godot class。dispatcher 负责探测和生命周期
+选择，Player 统一负责 Godot 展示与平台能力。
+
 ## 输入链路
 
-Godot 输入在 `apps/godot_app/scripts/main.gd` 中处理并转发给 `AetherKiriPlayer`，随后通过 `EngineLoop` 转换成 TVP input events。
+Godot 输入在 `apps/godot_app/scripts/main.gd` 中处理并转发给
+`AetherRuntimePlayer`，随后由 engine API dispatcher 发送给当前 Runtime。
+KiriRuntime 通过 `EngineLoop` 转换为 TVP input events；Provider Runtime 则把
+同一套稳定输入 ABI 转换为自己的原生事件。
 
 重要规则：
 

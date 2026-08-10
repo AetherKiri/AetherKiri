@@ -1,9 +1,9 @@
 extends SceneTree
 
 func _initialize() -> void:
-    var player = ClassDB.instantiate("AetherKiriPlayer")
+    var player = ClassDB.instantiate("AetherRuntimePlayer")
     if player == null:
-        printerr("Frame enhancement self-test failed: AetherKiriPlayer is unavailable")
+        printerr("Frame enhancement self-test failed: AetherRuntimePlayer is unavailable")
         quit(1)
         return
     root.add_child(player as Node)
