@@ -416,8 +416,6 @@ namespace TJS {
                         AddDictionary(dic, name, value);
                     } catch(...) {
                         delete value;
-                        if(name)
-                            name->Release();
                         throw;
                     }
                     delete value;
