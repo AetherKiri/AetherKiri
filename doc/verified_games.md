@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-08-10
+Last updated: 2026-08-11
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -71,6 +71,8 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | 死に逝く君、館に芽吹く憎悪 | Linux x64 release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, new-game flow, scene/text rendering, audio playback, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 | 枯れない世界と終わる花 | Linux x64 release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, new-game flow, scene/text rendering, audio playback, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
 | エッチで一途なド田舎兄さまと、古式ゆかしい病弱妹 | Linux x64 release app; iOS/iPadOS release app build on iPad | Import, startup, title/menu rendering, new-game flow, scene/text rendering, audio playback, and basic input | Flow verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| 穢翼のユースティア | macOS debug app; iOS/iPadOS debug app build on iPad | ONS game import, startup, title/menu rendering, new-game and second-save load flows, opening subtitles and transitions, scene/text rendering, audio playback, skip mode, save-list scrolling, and mouse/touch input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Uses the ONScripterYuri runtime. Local game files are not committed. |
+| 美少女万華鏡 -呪われし伝説の少女- | macOS debug app; iOS/iPadOS debug app build on iPad | ONS game import, startup, initial title/menu rendering, scene/text rendering, audio playback, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Uses the ONScripterYuri runtime. Local game files are not committed. |
 
 ## How To Add A Game
 
