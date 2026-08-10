@@ -197,10 +197,20 @@ if(IOS AND AETHERKIRI_INTERNAL_ENABLED AND AETHERKIRI_ENABLE_CODE_OBFUSCATION)
     endif()
 endif()
 
-if(BUILD_ENGINE_API)
+set(AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS OFF)
+if(ENABLE_TESTS AND AETHERKIRI_ENABLE_ONSCRIPTER AND
+   NOT (IOS OR ANDROID OR WEB OR EMSCRIPTEN))
+    # The provider contract links the real ONS runtime and runtime registry.
+    # Keep those targets available in the native test-only configuration used
+    # by CI even when product bridge targets are otherwise disabled.
+    set(AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS ON)
+endif()
+
+if(BUILD_ENGINE_API OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/engine_api)
 endif()
-if(BUILD_GODOT_EXTENSION AND AETHERKIRI_ENABLE_ONSCRIPTER)
+if(AETHERKIRI_ENABLE_ONSCRIPTER AND
+   (BUILD_GODOT_EXTENSION OR AETHERKIRI_BUILD_NATIVE_ONSCRIPTER_TESTS))
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bridge/onscripter_runtime)
 endif()
 if(BUILD_GODOT_EXTENSION)
