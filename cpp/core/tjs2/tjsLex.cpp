@@ -745,6 +745,9 @@ namespace TJS {
         bool leading = true;
         tjs_uint8 cur = 0;
 
+        // parse error 系（TJS_eTJSError）抛异常时释放已累积的 buf
+        // （krkrz LeakAudit R3-6）。
+        try {
         for(; *(*ptr);) {
             switch(TJSSkipComment(ptr)) {
                 case scrEnded:
@@ -811,6 +814,11 @@ namespace TJS {
 
         // error
         TJS_eTJSError(TJSStringParseError);
+        } catch(...) {
+            if(buf)
+                TJS_free(buf);
+            throw;
+        }
 
         return false;
     }

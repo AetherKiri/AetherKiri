@@ -1705,6 +1705,7 @@ TEST_CASE("emoteplayer renders a PSB into a headless RGBA surface") {
     REQUIRE(visibleBounds == measuredBounds);
 }
 
+#if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
 TEST_CASE("emoteplayer applies live mouth controls to rendered image leaves") {
     setEmoteSeed();
 
@@ -1755,15 +1756,20 @@ TEST_CASE("emoteplayer applies live mouth controls to rendered image leaves") {
         return changed;
     };
     REQUIRE(countChangedBytes(closed, open) > 100);
+    const auto closedToLow = countChangedBytes(closed, lowVoice);
+    const auto closedToThreshold = countChangedBytes(closed, thresholdVoice);
+    const auto midToOpen = countChangedBytes(midVoice, open);
+    const auto closedRoundTrip = countChangedBytes(closed, closedAgain);
     // Native BuildFrameParam applies type=3 to the span leaving the active
     // frame. The fixture's mouth track starts 0:type2 -> 12:type3, so values
     // below the first threshold remain at the closed pose instead of moving
     // forward and then reversing when the input crosses 1.0.
-    REQUIRE(lowVoice == closed);
-    REQUIRE(thresholdVoice == closed);
-    REQUIRE(countChangedBytes(midVoice, open) > 20);
-    REQUIRE(closedAgain == closed);
+    REQUIRE(closedToLow == 0);
+    REQUIRE(closedToThreshold == 0);
+    REQUIRE(midToOpen > 20);
+    REQUIRE(closedRoundTrip == 0);
 }
+#endif
 
 #if defined(AETHERKIRI_EXPECT_INTERNAL_EMOTE)
 TEST_CASE("emoteplayer clone preserves render state") {
