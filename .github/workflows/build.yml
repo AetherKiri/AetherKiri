@@ -88,6 +88,10 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Initialize public OnscripterYuri package
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: git submodule update --init --depth 1 packages/OnscripterYuri
+
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
         run: |
@@ -130,8 +134,19 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Validate Gradle wrappers
+        uses: gradle/actions/wrapper-validation@v6
+        with:
+          # OnscripterYuri pins SDL at da19244f; that revision contains an
+          # upstream-generated wrapper which is not in Gradle's checksum list.
+          allow-checksums: 2c23278a62dc9f96ab11bee897d9f53e6479d6419135e4560ce822a6431df5e5
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          # Validation is performed explicitly above so the pinned SDL wrapper
+          # can be allowed without disabling checks for every other wrapper.
+          validate-wrappers: false
 
       - name: Install Godot export tools
         run: |
@@ -321,6 +336,10 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Initialize public OnscripterYuri package
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: git submodule update --init --depth 1 packages/OnscripterYuri
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -578,6 +597,10 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Initialize public OnscripterYuri package
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: git submodule update --init --depth 1 packages/OnscripterYuri
+
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
         run: |
@@ -695,6 +718,15 @@ jobs:
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh macos debug --jobs=4
+
+      - name: Run OnscripterYuri Godot smoke test
+        env:
+          AETHERKIRI_SMOKE_GAME: ${{ github.workspace }}/tests/fixtures/onscripter_smoke
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --headless \
+            --path apps/godot_app \
+            --script res://scripts/smoke_test.gd
 
       - name: Run native motionplayer contract tests
         run: |
@@ -818,6 +850,10 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Initialize public OnscripterYuri package
+        if: env.AETHERKIRI_WITH_INTERNAL != 'true'
+        run: git submodule update --init --depth 1 packages/OnscripterYuri
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''

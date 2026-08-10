@@ -1395,6 +1395,17 @@ const POINTER_SCROLL := 4
 const POINTER_MOD_LEFT := 0x08
 const POINTER_MOD_RIGHT := 0x10
 const POINTER_MOD_MIDDLE := 0x20
+const RUNTIME_KIRIKIRI := "kirikiri"
+const RUNTIME_ONSCRIPTER := "onscripter"
+const ONSCRIPTER_SCRIPT_MARKERS := [
+    "0.txt",
+    "00.txt",
+    "nscr_sec.dat",
+    "nscript.___",
+    "nscript.dat",
+    "onscript.nt2",
+    "onscript.nt3",
+]
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
 const SHELL_SCROLL_DRAG_SPEED := 1.0
@@ -1579,6 +1590,7 @@ var native_cover_file_picker_pending := false
 var native_cover_file_picker_library_path := ""
 var active_game_path := ""
 var active_game_started_msec := 0
+var active_runtime_kind := RUNTIME_KIRIKIRI
 var shell_scroll_drag_states := {}
 var shell_scroll_remainders := {}
 var shell_scroll_tweens := {}
@@ -1596,6 +1608,7 @@ var ui_motion = AetherMotion.new()
 var ui_widgets = AetherWidgets.new(ui_tokens, ui_motion)
 
 var player = null
+var current_player_runtime_kind := RUNTIME_KIRIKIRI
 var builtin_demo = BuiltinDemo.new()
 var runtime_default_font_path := ""
 var runtime_font_dir_path := ""
@@ -1730,6 +1743,7 @@ var dragging_touch_points := {}
 var pending_touch_index := -1
 var pending_touch_mapped := Vector2.ZERO
 var pending_touch_down_msec := 0
+var delayed_ons_touch_releases := {}
 var last_forwarded_touch_down_msec := 0
 var last_forwarded_touch_up_msec := 0
 var last_forwarded_touch_move_msec_by_id := {}
@@ -1810,6 +1824,7 @@ const TOUCH_TAP_MIN_INTERVAL_MS := 0
 const TOUCH_ACTION_COOLDOWN_MS := 0
 const TOUCH_DRAG_MIN_INTERVAL_MS := 80
 const TOUCH_DRAG_DISTANCE_THRESHOLD := 18.0
+const ONS_TOUCH_CURSOR_DISTANCE_THRESHOLD := 4.0
 const TOUCH_BUSY_TICK_MS := 120.0
 const TOUCH_BUSY_SUPPRESS_MS := 0
 const VIRTUAL_KEYBOARD_REOPEN_DELAY_MS := 750
@@ -1817,6 +1832,8 @@ const TOUCH_POINTER_ID_OFFSET := 100000
 const TOUCH_SECONDARY_POINTER_ID := 0
 const TOUCH_SECONDARY_TAP_WINDOW_MS := 180
 const TOUCH_SINGLE_TAP_DELAY_MS := 90
+const ONS_TOUCH_CLICK_HOLD_MS := 48
+const INPUT_DEVICE_ID_EMULATION := -1
 const BLACK_FRAME_GUARD_MS := 3200
 const BLACK_FRAME_SAMPLE_INTERVAL_MS := 120
 const BLACK_FRAME_VISIBLE_MIN := 8
@@ -2893,10 +2910,31 @@ func _layout_shell(window_size: Vector2) -> void:
 func _load_shell_settings() -> void:
     var cfg := ConfigFile.new()
     var env_style := _runtime_string("AETHERKIRI_STYLE_MODE", "")
+    var env_frame_enhancement_kind := _runtime_string(
+        "AETHERKIRI_FRAME_ENHANCEMENT_KIND",
+        ""
+    )
+    var env_frame_enhancement_mode := _runtime_string(
+        "AETHERKIRI_FRAME_ENHANCEMENT_MODE",
+        ""
+    )
     if cfg.load(SETTINGS_FILE) != OK:
         var env_surface_mode := _runtime_string("AETHERKIRI_SURFACE_MODE", "")
         if not env_surface_mode.is_empty():
             _select_config_surface_mode(env_surface_mode)
+        output_resolution = _normalize_output_resolution(_runtime_string(
+            "AETHERKIRI_OUTPUT_RESOLUTION",
+            output_resolution
+        ))
+        if not env_frame_enhancement_kind.is_empty():
+            frame_enhancement_kind = _normalize_frame_enhancement_kind(
+                env_frame_enhancement_kind
+            )
+            frame_enhancement_enabled = frame_enhancement_kind != "off"
+        if not env_frame_enhancement_mode.is_empty():
+            frame_enhancement_mode = _normalize_frame_enhancement_mode(
+                env_frame_enhancement_mode
+            )
         _apply_language_mode()
         if not env_style.is_empty():
             style_mode = _normalize_style_mode(env_style)
@@ -2944,6 +2982,15 @@ func _load_shell_settings() -> void:
         "frame_enhancement_mode",
         frame_enhancement_mode
     )))
+    if not env_frame_enhancement_kind.is_empty():
+        frame_enhancement_kind = _normalize_frame_enhancement_kind(
+            env_frame_enhancement_kind
+        )
+        frame_enhancement_enabled = frame_enhancement_kind != "off"
+    if not env_frame_enhancement_mode.is_empty():
+        frame_enhancement_mode = _normalize_frame_enhancement_mode(
+            env_frame_enhancement_mode
+        )
     frame_enhancement_custom_chain = _normalize_frame_enhancement_custom_chain(
         cfg.get_value(
             "rendering",
@@ -3317,6 +3364,9 @@ func _apply_engine_options() -> void:
     if not runtime_font_dir_path.is_empty():
         player.set_engine_option("font_dir", runtime_font_dir_path)
     player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
+    var onscripter_encoding := OS.get_environment("AETHERKIRI_ONS_ENCODING").strip_edges()
+    if not onscripter_encoding.is_empty():
+        player.set_engine_option("onscripter_encoding", onscripter_encoding)
 
 func _apply_frame_enhancement_settings() -> void:
     if player == null or not player.has_method("set_frame_enhancement_enabled"):
@@ -7400,6 +7450,7 @@ func _game_launch_entry_label(game: Dictionary) -> String:
 func _can_configure_launch_file(game: Dictionary) -> bool:
     return OS.get_name() != "Web" \
         and not builtin_demo.is_game(game) \
+        and _game_runtime_kind(String(game.get("path", ""))) != RUNTIME_ONSCRIPTER \
         and String(game.get("type", "Directory")).to_lower() == "directory"
 
 func _set_launch_file_for_selected() -> void:
@@ -8821,7 +8872,23 @@ func _game_info_from_path(path: String) -> Dictionary:
         GAME_AUTO_COVER_SCANNED_FIELD: true,
         "developer": "",
         "title": "",
+        "engine": _game_runtime_kind(path),
     }
+
+func _game_runtime_root(path: String) -> String:
+    var resolved := _resolve_game_path(path)
+    if FileAccess.file_exists(resolved):
+        return resolved.get_base_dir()
+    return resolved
+
+func _game_runtime_kind(path: String) -> String:
+    var root := _game_runtime_root(path)
+    if root.is_empty():
+        return RUNTIME_KIRIKIRI
+    for marker in ONSCRIPTER_SCRIPT_MARKERS:
+        if FileAccess.file_exists(root.path_join(marker)):
+            return RUNTIME_ONSCRIPTER
+    return RUNTIME_KIRIKIRI
 
 func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
     var changed := false
@@ -9358,19 +9425,40 @@ func _finish_launch_transition() -> void:
 func _start_selected_game_after_iap() -> void:
     if player == null:
         return
+    var library_path := String(selected_game.get("path", "")).strip_edges()
+    if library_path.is_empty():
+        return
+    var selected_runtime_kind := _game_runtime_kind(library_path)
     # Development artifacts intentionally bypass StoreKit so local
     # compatibility work never depends on a sandbox account or network.
     if OS.is_debug_build():
+        if (
+            selected_runtime_kind == RUNTIME_KIRIKIRI
+            and current_player_runtime_kind != RUNTIME_KIRIKIRI
+            and not _switch_runtime_player(RUNTIME_KIRIKIRI)
+        ):
+            return
         if player.has_method("set_engine_option"):
             player.set_engine_option("artemis_beta_allowed", "1")
         _start_selected_game_after_entitlements()
         return
 
+    # StoreKit lives on the KiriKiri host. Return to that host before probing
+    # Artemis or authorizing ONScripter after an earlier ONS game exits.
+    if (
+        current_player_runtime_kind != RUNTIME_KIRIKIRI
+        and not _switch_runtime_player(RUNTIME_KIRIKIRI)
+    ):
+        return
     if player.has_method("set_engine_option"):
         # Reset a grant left on the reusable engine handle before every Release
         # launch. A fresh verified coffee entitlement enables it again below.
         player.set_engine_option("artemis_beta_allowed", "0")
-    if not _selected_game_uses_artemis():
+    var requires_beta_access := (
+        _runtime_requires_beta_access(selected_runtime_kind)
+        or _selected_game_uses_artemis()
+    )
+    if not requires_beta_access:
         _start_selected_game_after_entitlements()
         return
 
@@ -9383,6 +9471,11 @@ func _start_selected_game_after_iap() -> void:
     ))
     if iap_pending_beta_check_id <= 0:
         _deny_artemis_beta_launch()
+
+func _runtime_requires_beta_access(runtime_kind: String) -> bool:
+    # ONS support follows the same release policy as Artemis: unrestricted in
+    # Debug, and gated by an active coffee entitlement in distributed builds.
+    return runtime_kind == RUNTIME_ONSCRIPTER
 
 func _selected_game_uses_artemis() -> bool:
     if player == null or not player.has_method("probe_runtime"):
@@ -9402,7 +9495,11 @@ func _complete_artemis_beta_check() -> void:
         _deny_artemis_beta_launch()
         return
     selected_game = pending_game
-    if player.has_method("set_engine_option"):
+    if (
+        _game_runtime_kind(String(selected_game.get("path", "")))
+        == RUNTIME_KIRIKIRI
+        and player.has_method("set_engine_option")
+    ):
         player.set_engine_option("artemis_beta_allowed", "1")
     _start_selected_game_after_entitlements()
 
@@ -9424,6 +9521,9 @@ func _start_selected_game_after_entitlements() -> void:
         return
     if not _mount_web_game(selected_game):
         return
+    active_runtime_kind = _game_runtime_kind(library_path)
+    if not _switch_runtime_player(active_runtime_kind):
+        return
     var raw_launch_file := String(selected_game.get(GameLaunchEntry.FIELD, "")).strip_edges()
     if not raw_launch_file.is_empty() and not GameLaunchEntry.is_supported_file(raw_launch_file):
         _show_system_alert(
@@ -9438,7 +9538,7 @@ func _start_selected_game_after_entitlements() -> void:
             _t("alert.warning_title")
         )
         return
-    var launch_path := GameLaunchEntry.resolve(selected_game)
+    var launch_path := library_path if active_runtime_kind == RUNTIME_ONSCRIPTER else GameLaunchEntry.resolve(selected_game)
     if not relative_launch_file.is_empty() and not FileAccess.file_exists(launch_path):
         _show_system_alert(
             _t("message.launch_file_missing", [relative_launch_file]),
@@ -9889,27 +9989,62 @@ func _on_debug_self_check_requested() -> void:
     checks.append("storage=ok" if writable else "storage=failed")
     debug_console.show_result(_t("debug.result.self_check", [", ".join(checks)]), not writable)
 
-func _create_runtime_player() -> bool:
-    if not ClassDB.class_exists("AetherKiriPlayer"):
-        var message := "AetherKiri runtime extension class is unavailable."
+func _runtime_player_class(runtime_kind: String) -> String:
+    return "AetherOnscripterPlayer" if runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiriPlayer"
+
+func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
+    var player_class_name := _runtime_player_class(runtime_kind)
+    if not ClassDB.class_exists(player_class_name):
+        var message := "%s runtime extension class is unavailable." % player_class_name
         push_error(message)
         _append_log(message)
         _show_system_alert(_t("alert.runtime_class_missing"), _t("alert.error_title"))
         return false
-    var instance: Object = ClassDB.instantiate("AetherKiriPlayer")
+    var instance: Object = ClassDB.instantiate(player_class_name)
     if instance == null or not (instance is Node):
-        var create_message := "AetherKiri runtime extension could not create AetherKiriPlayer."
+        var create_message := "Aether runtime extension could not create %s." % player_class_name
         push_error(create_message)
         _append_log(create_message)
         _show_system_alert(_t("alert.runtime_create_failed"), _t("alert.error_title"))
         return false
     player = instance
+    current_player_runtime_kind = runtime_kind
     if instance.has_signal("platform_request"):
         instance.connect(
             "platform_request",
             Callable(self, "_on_runtime_platform_request")
         )
     add_child(instance as Node)
+    return true
+
+func _switch_runtime_player(runtime_kind: String) -> bool:
+    var normalized := RUNTIME_ONSCRIPTER if runtime_kind == RUNTIME_ONSCRIPTER else RUNTIME_KIRIKIRI
+    if player != null and current_player_runtime_kind == normalized:
+        return true
+    if game_running:
+        _append_log("Cannot switch visual-novel runtimes while a game is running.")
+        return false
+
+    var previous_player = player
+    player = null
+    if previous_player != null:
+        previous_player.destroy_engine()
+        if previous_player is Node:
+            (previous_player as Node).queue_free()
+    if not _create_runtime_player(normalized):
+        return false
+    if not _ensure_player_initialized():
+        return false
+    _apply_backend(false)
+    _apply_engine_options()
+    _apply_frame_enhancement_settings()
+    if diagnostic_session != null:
+        if diagnostic_session.active:
+            diagnostic_session.finish()
+        diagnostic_session.start(player, selected_backend)
+    _append_log("Runtime selected: %s" % (
+        "OnscripterYuri" if normalized == RUNTIME_ONSCRIPTER else "KiriKiri"
+    ))
     return true
 
 func _parse_platform_form(argument: String) -> Dictionary:
@@ -10084,7 +10219,9 @@ func _ensure_player_initialized() -> bool:
         _append_log(init_error_message)
         return false
 
-    _append_log("AetherKiri engine initialized.")
+    _append_log("%s engine initialized." % (
+        "OnscripterYuri" if current_player_runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiri"
+    ))
     return true
 
 func _finish_ready_after_first_frame() -> void:
@@ -10478,6 +10615,12 @@ func _prepare_cli_probe_view(config: Dictionary) -> void:
     _fit_full_rects()
 
 func _probe_open_game(config: Dictionary, target_game_path: String, backend_env: String) -> bool:
+    var runtime_kind := _game_runtime_kind(target_game_path)
+    if not _switch_runtime_player(runtime_kind):
+        _write_probe_marker("probe_open_game runtime_switch_failed kind=%s" % runtime_kind)
+        return false
+    if runtime_kind == RUNTIME_ONSCRIPTER:
+        target_game_path = _game_runtime_root(target_game_path)
     selected_backend = ProbeConfig.backend(config, backend_env)
     if not selected_backend in BACKENDS:
         selected_backend = "Godot Native"
@@ -10714,7 +10857,8 @@ func _probe_run_actions(config: Dictionary, step: int) -> int:
                 to,
                 config,
                 max(1, int(action.get("steps", 12))),
-                max(0, int(action.get("per_step_frames", 1)))
+                max(0, int(action.get("per_step_frames", 1))),
+                int(action.get("pointer_id", 0))
             ):
                 continue
             if label.is_empty() or label == "drag":
@@ -10908,7 +11052,8 @@ func _probe_send_mapped_drag(
     to: Vector2,
     config: Dictionary,
     steps: int,
-    per_step_frames: int
+    per_step_frames: int,
+    pointer_id: int = 0
 ) -> bool:
     var mapped_from := _probe_map_window_point(from, config)
     var mapped_to := _probe_map_window_point(to, config)
@@ -10921,9 +11066,9 @@ func _probe_send_mapped_drag(
         ])
         return false
 
-    player.send_pointer_event(POINTER_MOVE, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_MOVE, pointer_id, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
-    player.send_pointer_event(POINTER_DOWN, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_DOWN, pointer_id, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
     _hold_next_present_after_input()
     player.tick(1.0 / 60.0)
 
@@ -10933,7 +11078,7 @@ func _probe_send_mapped_drag(
         var delta := current - previous
         player.send_pointer_event(
             POINTER_MOVE,
-            0,
+            pointer_id,
             current.x,
             current.y,
             delta.x,
@@ -10946,7 +11091,7 @@ func _probe_send_mapped_drag(
         if per_step_frames > 0 and not await _probe_advance(per_step_frames):
             return false
 
-    player.send_pointer_event(POINTER_UP, 0, mapped_to.x, mapped_to.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_UP, pointer_id, mapped_to.x, mapped_to.y, 0.0, 0.0, 0)
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
     player.tick(1.0 / 60.0)
     return true
@@ -11261,6 +11406,7 @@ func _process(delta: float) -> void:
                 )
             else:
                 _set_perf_visible(show_perf_monitor)
+            _flush_delayed_ons_touch_releases()
             _flush_pending_touch_press_if_ready()
             tick_trace_serial += 1
             tick_trace_active_serial = tick_trace_serial
@@ -11735,7 +11881,9 @@ func _renderer_summary(renderer: String) -> String:
     if renderer.is_empty():
         return selected_backend
     var summary := selected_backend
-    if renderer.contains("backend=godot_native"):
+    if renderer.contains("backend=onscripter_yuri"):
+        summary = "OnscripterYuri (Godot Texture)"
+    elif renderer.contains("backend=godot_native"):
         summary = "Godot Native GPU"
     elif renderer.contains("backend=gpu_bridge"):
         summary = "GPU Bridge"
@@ -11765,6 +11913,15 @@ func _on_open_game() -> void:
         render_errors += 1
         _append_log("Game path is empty.")
         return
+
+    var detected_runtime := _game_runtime_kind(path)
+    if not _switch_runtime_player(detected_runtime):
+        render_errors += 1
+        return
+    active_runtime_kind = detected_runtime
+    if detected_runtime == RUNTIME_ONSCRIPTER:
+        path = _game_runtime_root(path)
+        game_path.text = path
 
     if not _ensure_player_initialized():
         return
@@ -12071,6 +12228,8 @@ func _game_input_surface_size() -> Vector2:
     # can differ from the raw frame (for example 1920x1080 for an 800x600
     # layer). DrawDevice stretches that full surface back to the layer, so
     # input mapping must apply the inverse per-axis scale without letterboxing.
+    if active_runtime_kind == RUNTIME_ONSCRIPTER:
+        return _game_input_content_size()
     if current_surface_size.x > 0 and current_surface_size.y > 0:
         return Vector2(current_surface_size)
     return _game_input_content_size()
@@ -12152,6 +12311,7 @@ func _clear_game_input_capture() -> void:
     pending_touch_index = -1
     pending_touch_mapped = Vector2.ZERO
     pending_touch_down_msec = 0
+    delayed_ons_touch_releases.clear()
     last_forwarded_touch_move_msec_by_id.clear()
     last_forwarded_touch_down_msec = 0
     last_forwarded_touch_up_msec = 0
@@ -12195,7 +12355,15 @@ func _run_auto_probe() -> void:
         get_tree().quit(0)
 
 func _run_startup_click_stream_probe() -> void:
+    var warmup_frames: int = max(
+        0,
+        _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_WARMUP_FRAMES", 0)
+    )
     var frames: int = max(1, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_FRAMES", 240))
+    var post_frames: int = max(
+        0,
+        _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_POST_FRAMES", 0)
+    )
     var clicks_per_frame: int = max(1, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_CLICKS_PER_FRAME", 1))
     var capture_every: int = max(0, _runtime_int("AETHERKIRI_STARTUP_CLICK_STREAM_CAPTURE_EVERY", 60))
     var click_pos: Vector2 = Vector2(
@@ -12207,6 +12375,8 @@ func _run_startup_click_stream_probe() -> void:
     var blocked: int = 0
     var busy: int = 0
     var start_usec: int = Time.get_ticks_usec()
+    for frame_index in range(warmup_frames):
+        await get_tree().process_frame
     for frame_index in range(frames):
         for i in range(clicks_per_frame):
             attempted += 1
@@ -12225,9 +12395,13 @@ func _run_startup_click_stream_probe() -> void:
         if capture_every > 0 and (frame_index % capture_every) == 0:
             _save_startup_click_stream_capture(frame_index)
         await get_tree().process_frame
+    for frame_index in range(post_frames):
+        await get_tree().process_frame
     var elapsed_sec := float(Time.get_ticks_usec() - start_usec) / 1000000.0
-    var line := "startup_click_stream frames=%d clicks_per_frame=%d attempted=%d forwarded=%d blocked=%d busy=%d elapsed_sec=%.3f fps=%.2f renderer=\"%s\" texture=%s size=%dx%d" % [
+    var line := "startup_click_stream warmup_frames=%d frames=%d post_frames=%d clicks_per_frame=%d attempted=%d forwarded=%d blocked=%d busy=%d elapsed_sec=%.3f fps=%.2f renderer=\"%s\" texture=%s size=%dx%d" % [
+        warmup_frames,
         frames,
+        post_frames,
         clicks_per_frame,
         attempted,
         forwarded,
@@ -12758,7 +12932,56 @@ func _handle_mobile_edge_back_input(event: InputEvent) -> bool:
         return true
     return false
 
+func _trace_ios_raw_pointer_event(event: InputEvent) -> void:
+    if OS.get_name() != "iOS" or not input_trace_enabled or not _is_game_pointer_event(event):
+        return
+    if event is InputEventMouseMotion:
+        var motion := event as InputEventMouseMotion
+        if motion.button_mask == 0 and active_mouse_buttons.is_empty():
+            return
+    var position := Vector2.ZERO
+    var phase := "move"
+    var pointer_id := -1
+    if event is InputEventScreenTouch:
+        var touch := event as InputEventScreenTouch
+        position = touch.position
+        phase = "down" if touch.pressed else "up"
+        pointer_id = touch.index
+    elif event is InputEventScreenDrag:
+        var drag := event as InputEventScreenDrag
+        position = drag.position
+        pointer_id = drag.index
+    elif event is InputEventMouseButton:
+        var button := event as InputEventMouseButton
+        position = button.position
+        phase = "down" if button.pressed else "up"
+        pointer_id = int(button.button_index)
+    elif event is InputEventMouseMotion:
+        position = (event as InputEventMouseMotion).position
+    elif event is InputEventPanGesture:
+        position = (event as InputEventPanGesture).position
+    var line := "ios_raw_input id=%d class=%s phase=%s pointer=%d device=%d pos=%.1f,%.1f game=%s runtime=%s can_forward=%s modal=%s loading=%s" % [
+        event.get_instance_id(),
+        event.get_class(),
+        phase,
+        pointer_id,
+        event.device,
+        position.x,
+        position.y,
+        str(game_running),
+        active_runtime_kind,
+        str(_can_forward_game_input()),
+        str(modal_layer != null and modal_layer.visible),
+        str(loading_panel != null and loading_panel.visible),
+    ]
+    print(line)
+    _write_probe_marker(line)
+    if perf_log_file != null:
+        perf_log_file.store_line(line)
+        perf_log_file.flush()
+
 func _input(event: InputEvent) -> void:
+    _trace_ios_raw_pointer_event(event)
     if event is InputEventKey:
         var shell_key := event as InputEventKey
         if shell_key.pressed and not shell_key.echo and shell_key.keycode == KEY_ESCAPE and modal_layer != null and modal_layer.visible:
@@ -12947,9 +13170,17 @@ func _on_viewport_input(event: InputEvent) -> void:
         get_viewport().set_input_as_handled()
 
 func _can_forward_game_input() -> bool:
-    return game_running and viewport.visible and cached_startup_state == STARTUP_SUCCEEDED and (
-        loading_panel == null or not loading_panel.visible
-    ) and (
+    # ONS marks startup complete before its title transition has necessarily
+    # replaced the first black frame. Let the runtime receive taps during the
+    # loading fade once it is ready; otherwise an invisible/fading overlay can
+    # make the title look unresponsive even though the engine is accepting
+    # events. Other runtimes retain the existing loading-overlay gate.
+    var loading_blocks_input := (
+        active_runtime_kind != RUNTIME_ONSCRIPTER
+        and loading_panel != null
+        and loading_panel.visible
+    )
+    return game_running and viewport.visible and cached_startup_state == STARTUP_SUCCEEDED and not loading_blocks_input and (
         modal_layer == null or not modal_layer.visible
     )
 
@@ -12961,7 +13192,19 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
     _trace_input_received()
     if event is InputEventMouseButton:
         var mouse_button := event as InputEventMouseButton
-        if _is_touch_platform() and mouse_button.button_index != MOUSE_BUTTON_WHEEL_UP and mouse_button.button_index != MOUSE_BUTTON_WHEEL_DOWN:
+        if _is_touch_platform() and mouse_button.device == INPUT_DEVICE_ID_EMULATION:
+            # Godot emits the emulated mouse event before the corresponding
+            # ScreenTouch on iOS. Waiting for ScreenTouch to set a suppression
+            # timestamp is therefore too late and produces two ONS clicks.
+            # Hardware mouse events keep their real device id and still work.
+            _trace_input_throttled()
+            return true
+        var is_touch_mouse_duplicate := (
+            _is_touch_platform()
+            and suppress_mouse_until_msec > 0
+            and Time.get_ticks_msec() <= suppress_mouse_until_msec
+        )
+        if is_touch_mouse_duplicate and mouse_button.button_index != MOUSE_BUTTON_WHEEL_UP and mouse_button.button_index != MOUSE_BUTTON_WHEEL_DOWN:
             _trace_input_throttled()
             return true
         var is_scroll := mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP or mouse_button.button_index == MOUSE_BUTTON_WHEEL_DOWN
@@ -12996,9 +13239,15 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
         return true
     elif event is InputEventMouseMotion:
-        if _is_touch_platform():
-            return true
         var motion := event as InputEventMouseMotion
+        if _is_touch_platform() and motion.device == INPUT_DEVICE_ID_EMULATION:
+            return true
+        if (
+            _is_touch_platform()
+            and suppress_mouse_until_msec > 0
+            and Time.get_ticks_msec() <= suppress_mouse_until_msec
+        ):
+            return true
         var captured := not active_mouse_buttons.is_empty()
         var mapped := _map_viewport_point(motion.position, captured)
         if mapped.x < 0.0 or mapped.y < 0.0:
@@ -13090,6 +13339,12 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
         var drag := event as InputEventScreenDrag
         suppress_mouse_until_msec = Time.get_ticks_msec() + TOUCH_MOUSE_SUPPRESS_MS
         var pointer_id := drag.index
+        var drag_distance_threshold := TOUCH_DRAG_DISTANCE_THRESHOLD
+        if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
+            # ONS menus are controlled by moving a cursor and activating the
+            # item on release. The generic 18 px drag slop makes that cursor
+            # feel stationary on a touch screen, especially for small menus.
+            drag_distance_threshold = ONS_TOUCH_CURSOR_DISTANCE_THRESHOLD
         if suppressed_touch_points.has(pointer_id):
             _trace_input_throttled()
             return true
@@ -13097,7 +13352,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             var pending_drag_mapped := _map_viewport_point(drag.position, true)
             if pending_drag_mapped.x < 0.0 or pending_drag_mapped.y < 0.0:
                 pending_drag_mapped = pending_touch_mapped
-            if pending_drag_mapped.distance_to(pending_touch_mapped) < TOUCH_DRAG_DISTANCE_THRESHOLD:
+            if pending_drag_mapped.distance_to(pending_touch_mapped) < drag_distance_threshold:
                 _trace_input_move_suppressed()
                 return true
             _flush_pending_touch_press(true)
@@ -13112,13 +13367,19 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             var down_mapped: Vector2 = touch_down_points.get(pointer_id, mapped)
             if (
                 not dragging_touch_points.has(pointer_id)
-                and mapped.distance_to(down_mapped) < TOUCH_DRAG_DISTANCE_THRESHOLD
+                and mapped.distance_to(down_mapped) < drag_distance_threshold
             ):
                 _trace_input_move_suppressed()
                 return true
             dragging_touch_points[pointer_id] = true
             active_touch_points[pointer_id] = mapped
             var rel := _map_viewport_delta(drag.relative)
+            var move_modifiers := POINTER_MOD_LEFT
+            if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
+                # Treat touch-drag as cursor positioning for ONS. Keeping the
+                # left-button modifier set turns it into a mouse drag, which
+                # prevents title-menu hover state from following the finger.
+                move_modifiers = 0
             _send_game_pointer_event(
                 POINTER_MOVE,
                 _touch_engine_pointer_id(pointer_id),
@@ -13127,7 +13388,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
                 rel.x,
                 rel.y,
                 0,
-                POINTER_MOD_LEFT
+                move_modifiers
             )
         else:
             _trace_input_throttled()
@@ -13218,12 +13479,49 @@ func _send_pending_touch_click(pointer_id: int, up_mapped: Vector2) -> void:
     last_forwarded_touch_down_msec = Time.get_ticks_msec()
     _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
     _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
-    _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
-    last_forwarded_touch_up_msec = Time.get_ticks_msec()
-    _apply_touch_action_cooldown()
+    if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
+        # A short tap can be released before the 90 ms gesture-disambiguation
+        # window expires. Sending DOWN and UP from this callback puts both SDL
+        # events in the same frame, which ONS can miss while a timed wait is
+        # changing state. Keep one small, deterministic press pulse instead.
+        delayed_ons_touch_releases[pointer_id] = {
+            "due_msec": Time.get_ticks_msec() + ONS_TOUCH_CLICK_HOLD_MS,
+            "mapped": click_mapped,
+        }
+    else:
+        _send_game_pointer_event(POINTER_UP, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
+        last_forwarded_touch_up_msec = Time.get_ticks_msec()
+        _apply_touch_action_cooldown()
     _arm_tick_trace()
     _arm_black_frame_guard()
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
+
+func _flush_delayed_ons_touch_releases() -> void:
+    if delayed_ons_touch_releases.is_empty():
+        return
+    var now := Time.get_ticks_msec()
+    for pointer_id_variant in delayed_ons_touch_releases.keys():
+        var pointer_id := int(pointer_id_variant)
+        var release: Dictionary = delayed_ons_touch_releases.get(pointer_id, {})
+        if now < int(release.get("due_msec", now)):
+            continue
+        delayed_ons_touch_releases.erase(pointer_id)
+        if not game_running or active_runtime_kind != RUNTIME_ONSCRIPTER:
+            continue
+        var mapped: Vector2 = release.get("mapped", Vector2.ZERO)
+        _send_game_pointer_event(
+            POINTER_UP,
+            _touch_engine_pointer_id(pointer_id),
+            mapped.x,
+            mapped.y,
+            0.0,
+            0.0,
+            0
+        )
+        last_forwarded_touch_up_msec = now
+        _apply_touch_action_cooldown()
+        _arm_black_frame_guard()
+        _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
 
 func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
     var click_mapped := mapped
@@ -13291,6 +13589,21 @@ func _send_game_pointer_event(event_type: int, pointer_id: int, x: float, y: flo
     input_trace_forwarded += 1
     if result != ENGINE_RESULT_OK:
         input_trace_send_failed += 1
+    if input_trace_enabled and event_type in [POINTER_DOWN, POINTER_UP]:
+        var trace_line := "input_event type=%d pid=%d x=%.1f y=%.1f button=%d result=%d loading=%s runtime=%s" % [
+            event_type,
+            pointer_id,
+            x,
+            y,
+            button,
+            result,
+            str(loading_panel != null and loading_panel.visible),
+            active_runtime_kind,
+        ]
+        _write_probe_marker(trace_line)
+        if perf_log_file != null:
+            perf_log_file.store_line(trace_line)
+            perf_log_file.flush()
 
 func _android_input_debug_enabled() -> bool:
     return OS.get_name() == "Android" and input_trace_enabled
@@ -13446,6 +13759,9 @@ func _show_game_virtual_keyboard(attention_position: Vector2i, state: Dictionary
 
 func _sync_game_text_input_state() -> void:
     if game_text_input_suspended or not _can_forward_game_input():
+        _deactivate_game_text_input()
+        return
+    if not player.has_method("get_text_input_state"):
         _deactivate_game_text_input()
         return
     var state = player.get_text_input_state()

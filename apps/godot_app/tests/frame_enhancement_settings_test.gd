@@ -66,6 +66,9 @@ func _initialize() -> void:
     app.current_surface_size = Vector2i(960, 540)
     assert(app._game_input_content_size() == Vector2(1024, 768))
     assert(app._game_input_surface_size() == Vector2(960, 540))
+    app.active_runtime_kind = app.RUNTIME_ONSCRIPTER
+    assert(app._game_input_surface_size() == Vector2(1024, 768))
+    app.active_runtime_kind = app.RUNTIME_KIRIKIRI
     app.current_surface_size = Vector2i.ZERO
     app.last_source_texture_size = Vector2i(1280, 720)
     assert(app._game_input_content_size() == Vector2(1280, 720))

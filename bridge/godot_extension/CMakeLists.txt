@@ -96,7 +96,12 @@ endif()
 
 set(AETHERKIRI_GODOT_SOURCES
     src/aether_kiri_godot.cpp
-    src/frame_effect_host.cpp)
+    src/frame_effect_host.cpp
+)
+if(TARGET aether_onscripter_runtime)
+    list(APPEND AETHERKIRI_GODOT_SOURCES
+        src/aether_onscripter_godot.cpp)
+endif()
 
 if(WEB OR EMSCRIPTEN)
     add_executable(aether_kiri_godot ${AETHERKIRI_GODOT_SOURCES})
@@ -145,6 +150,12 @@ endif()
 
 if(TARGET engine_api)
     target_link_libraries(aether_kiri_godot PRIVATE engine_api)
+endif()
+if(TARGET aether_onscripter_runtime)
+    target_link_libraries(aether_kiri_godot PRIVATE
+        aether_onscripter_runtime)
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        AETHERKIRI_WITH_ONSCRIPTER=1)
 endif()
 if(TARGET krkr2plugin)
     if(WEB OR EMSCRIPTEN)

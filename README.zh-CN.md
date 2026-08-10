@@ -5,7 +5,7 @@
 <h1 align="center">AetherKiri</h1>
 
 <p align="center">
-  一个由 Godot 承载、以 C++ 引擎核心驱动的 KiriKiri2 运行时。
+  一个由 Godot 承载、支持 KiriKiri2 与 ONScripter 游戏的视觉小说运行时。
 </p>
 
 <p align="center">
@@ -31,9 +31,10 @@
 
 ## 项目概览
 
-AetherKiri 用 Godot 4.7 作为应用外壳，在其中运行 KiriKiri2 内容。项目由
-C++17 引擎核心、C ABI 桥接层和 Godot GDExtension 宿主组成；Godot 侧负责
-产品 UI、渲染资源、设置页、导出配置和平台打包。
+AetherKiri 用 Godot 4.7 作为应用外壳，在其中运行 KiriKiri2 和 ONScripter
+内容。项目由 C++17 引擎核心、宿主桥接层和 Godot GDExtension 组成；Godot
+侧负责产品 UI、最终帧显示、输入、设置页、导出配置和平台打包。游戏库会根据
+脚本标记自动选择 KiriKiri 或 OnscripterYuri 运行时。
 
 默认产品渲染链路是 **Godot Native**：引擎帧通过 Godot 持有的
 `RenderingDevice` 资源输出。**GPU Bridge** 保留为显式可选的兼容和性能对照
@@ -43,15 +44,16 @@ C++17 引擎核心、C ABI 桥接层和 Godot GDExtension 宿主组成；Godot �
 ```text
 Godot App Shell
   -> GDExtension Host
-    -> C ABI Engine API
-      -> C++ Engine Core
-        -> KiriKiri Runtime / Plugins
+    -> KiriKiri C ABI -> C++ Engine Core / Plugins
+    -> OnscripterYuri Host -> SDL Software Compositor
 ```
 
 ## 亮点
 
 - Godot 4.7 应用外壳，使用原生 GDExtension 集成。
 - C++17 KiriKiri2 运行时核心，覆盖视觉、音频、存储、VM 和插件支持。
+- 集成 OnscripterYuri；合成后的 RGBA 帧由 Godot `ImageTexture` 显示，
+  Godot 的鼠标、触摸和键盘输入会映射回 ONS 事件。
 - 已接入 macOS、iOS/iPadOS、Android 和 Web 导出链路。
 - 可在运行时选择渲染后端，并持久化设置。
 - 随产品内置多语言 KAG3 Demo，可从游戏库直接体验，也可由玩家删除。
@@ -66,9 +68,11 @@ Godot App Shell
 | `apps/godot_app/` | Godot 项目、场景、设置 UI、性能/日志面板、图标和导出配置。 |
 | `bridge/godot_extension/` | Godot 原生宿主库入口。 |
 | `bridge/engine_api/` | 宿主层驱动 C++ 引擎的 C ABI。 |
+| `bridge/onscripter_runtime/` | OnscripterYuri 无窗口宿主、帧读取和输入桥接。 |
 | `cpp/core/` | KiriKiri2 运行时、视觉系统、音频、存储、VM 和插件支持。 |
 | `cpp/plugins/` | 内置 native 插件实现和兼容 stub。 |
 | `packages/AetherInternal/` | 可选的私有 E-mote package submodule；公开版本不依赖它也能构建。 |
+| `packages/OnscripterYuri/` | 公开的 OnscripterYuri git submodule。 |
 | `demos/aetherkiri-kag3/` | AetherKiri 内置 KAG3 Demo 的完整源码。 |
 | `tests/profiles/` | 单游戏 probe profile。提交到仓库的 profile 不能包含机器本地路径。 |
 | `tools/` | 不参与 iOS/Android 目标构建的开发和兼容工具。 |
@@ -141,6 +145,12 @@ iOS 和 Android 导出配置会引用 `apps/godot_app/assets/icons/` 下的生�
 
 ## 构建
 
+首次检出后先初始化公开的 ONS 运行时：
+
+```bash
+git submodule update --init packages/OnscripterYuri
+```
+
 公开仓库在没有私有 package 权限时也可以正常构建并运行 CI。有权限的维护者可在构建前初始化完整 E-mote 实现：
 
 ```bash
@@ -177,6 +187,46 @@ GitHub Actions 的 `Build` workflow 会在可信运行中使用仓库 Secret
 脚本会构建 native engine 和 Godot host library，将产物放到
 `apps/godot_app/bin/`，并在 Godot 可用时运行对应的 Godot export preset。
 Android 当前只接入了 `arm64-v8a`。
+
+## ONScripter 游戏
+
+直接把游戏目录加入游戏库即可。目录中出现 `0.txt`、`00.txt`、
+`nscript.dat`、`nscr_sec.dat`、`nscript.___`、`onscript.nt2` 或
+`onscript.nt3` 时，AetherKiri 会自动选择 OnscripterYuri。引擎以脚本的原始
+分辨率合成，最终 RGBA 帧上传到 Godot 纹理并由现有 `TextureRect` 等比显示；
+不会创建第二个原生窗口。
+
+ONS 存档写入对应游戏目录下的 `savedata/`；只要游戏目录本身被保留，更新或
+重新安装应用后存档仍会随游戏保留。首次启动时会把旧版应用目录
+`onscripter_saves/<游戏名-路径哈希>/` 中的存档无覆盖复制到 `savedata/`；游戏
+目录只读时才回退到应用目录。默认脚本编码与上游一致为 GBK；可用环境变量
+`AETHERKIRI_ONS_ENCODING=gbk|sjis|utf8` 覆盖。与现有 KiriKiri 运行时相同，
+一个应用进程只运行一个视觉小说会话；退出游戏后应重新启动 Aether。
+
+仓库包含一个最小 ONS 渲染测试：
+
+```bash
+AETHERKIRI_SMOKE_GAME="$PWD/tests/fixtures/onscripter_smoke" \
+  /Applications/Godot.app/Contents/MacOS/Godot \
+  --headless --path apps/godot_app \
+  --script res://scripts/smoke_test.gd
+```
+
+ONS 的 `mpegplay`、`avi` 和 `movie` 命令共用 AetherKiri 的 FFmpeg
+媒体管线。`movie` 的 `click`、`loop`、`pos`、`async` 与 `movie stop`
+均已接入；视频帧按脚本坐标叠加到 ONS 最终画面，音轨由媒体管线同步播放。
+NSA/NS2/SAR 中的电影会先按需提取到用户缓存目录，不要求游戏资源必须是松散文件。
+
+需要验证电影命令时，将任意测试视频放到
+`tests/fixtures/onscripter_movie_smoke/video.avi`，然后运行：
+
+```bash
+AETHERKIRI_SMOKE_GAME="$PWD/tests/fixtures/onscripter_movie_smoke" \
+AETHERKIRI_SMOKE_EXPECT_SCRIPT_MEDIA=1 \
+  /Applications/Godot.app/Contents/MacOS/Godot \
+  --headless --path apps/godot_app \
+  --script res://scripts/smoke_test.gd
+```
 
 ## 运行和测试构建产物
 

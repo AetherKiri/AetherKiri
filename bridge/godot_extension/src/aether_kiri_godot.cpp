@@ -96,6 +96,10 @@ extern jobject krkr_GetApplicationContext();
 
 namespace godot {
 
+#if defined(AETHERKIRI_WITH_ONSCRIPTER)
+void InitializeAetherOnscripter(ModuleInitializationLevel level);
+#endif
+
 #if defined(AETHERKIRI_INTERNAL_FRAME_EFFECTS)
 void RegisterAetherInternalFrameEffects();
 void UnregisterAetherInternalFrameEffects();
@@ -9118,6 +9122,9 @@ void InitializeAetherKiri(ModuleInitializationLevel level) {
             ResultToString(shader_result));
     }
     ClassDB::register_class<AetherKiriPlayer>();
+#if defined(AETHERKIRI_WITH_ONSCRIPTER)
+    InitializeAetherOnscripter(level);
+#endif
 }
 
 void DeinitializeAetherKiri(ModuleInitializationLevel level) {

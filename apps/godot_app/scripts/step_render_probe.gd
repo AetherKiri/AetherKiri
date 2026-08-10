@@ -229,7 +229,8 @@ func _run_actions(step: int) -> int:
                 from,
                 to,
                 max(1, int(action.get("steps", 12))),
-                max(0, int(action.get("per_step_frames", 1)))
+                max(0, int(action.get("per_step_frames", 1))),
+                int(action.get("pointer_id", 0))
             ):
                 continue
             if label.is_empty() or label == "drag":
@@ -585,7 +586,7 @@ func _action_point(action: Dictionary, key: String, fallback: Vector2) -> Vector
         return Vector2(float(value.get("x", fallback.x)), float(value.get("y", fallback.y)))
     return fallback
 
-func _send_window_drag(from: Vector2, to: Vector2, steps: int, per_step_frames: int) -> bool:
+func _send_window_drag(from: Vector2, to: Vector2, steps: int, per_step_frames: int, pointer_id: int = 0) -> bool:
     var mapped_from := _map_window_point(from)
     var mapped_to := _map_window_point(to)
     if mapped_from.x < 0.0 or mapped_from.y < 0.0 or mapped_to.x < 0.0 or mapped_to.y < 0.0:
@@ -597,9 +598,9 @@ func _send_window_drag(from: Vector2, to: Vector2, steps: int, per_step_frames: 
         ])
         return false
 
-    player.send_pointer_event(POINTER_MOVE, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_MOVE, pointer_id, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
-    player.send_pointer_event(POINTER_DOWN, 0, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_DOWN, pointer_id, mapped_from.x, mapped_from.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
 
     var previous := mapped_from
@@ -608,7 +609,7 @@ func _send_window_drag(from: Vector2, to: Vector2, steps: int, per_step_frames: 
         var delta := current - previous
         player.send_pointer_event(
             POINTER_MOVE,
-            0,
+            pointer_id,
             current.x,
             current.y,
             delta.x,
@@ -621,7 +622,7 @@ func _send_window_drag(from: Vector2, to: Vector2, steps: int, per_step_frames: 
         if per_step_frames > 0:
             await _advance(per_step_frames)
 
-    player.send_pointer_event(POINTER_UP, 0, mapped_to.x, mapped_to.y, 0.0, 0.0, 0)
+    player.send_pointer_event(POINTER_UP, pointer_id, mapped_to.x, mapped_to.y, 0.0, 0.0, 0)
     player.tick(1.0 / 60.0)
     return true
 
