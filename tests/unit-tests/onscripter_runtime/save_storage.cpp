@@ -18,11 +18,25 @@ std::atomic<uint64_t> g_test_serial{0};
 class TemporaryDirectory {
 public:
     TemporaryDirectory() {
-        path = fs::temp_directory_path() /
-            ("aetherkiri-ons-save-test-" +
-             std::to_string(g_test_serial.fetch_add(1)));
-        fs::remove_all(path);
-        fs::create_directories(path);
+        for (;;) {
+            const fs::path candidate = fs::temp_directory_path() /
+                ("aetherkiri-ons-save-test-" +
+                 std::to_string(g_test_serial.fetch_add(1)));
+            std::error_code error;
+            if (fs::create_directory(candidate, error)) {
+                path = candidate;
+                return;
+            }
+            if (error) {
+                throw fs::filesystem_error(
+                    "cannot create ONS save test directory",
+                    candidate,
+                    error);
+            }
+            // Catch2 discovers each TEST_CASE as a separate process. Another
+            // process may therefore own the same serial; try the next name
+            // without deleting a directory that an active test is using.
+        }
     }
 
     ~TemporaryDirectory() {
