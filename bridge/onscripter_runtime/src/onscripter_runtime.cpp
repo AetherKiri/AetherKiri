@@ -1651,7 +1651,7 @@ std::string Runtime::drain_logs() {
 std::string Runtime::renderer_info() const {
     std::ostringstream output;
     output << "backend=onscripter_yuri host=godot frame=rgba8 "
-              "transport=image_texture media=ffmpeg commands=full "
+              "transport=engine_runtime_provider media=ffmpeg commands=full "
               "input_scale="
            << impl_->input_device_scale_x.load() << "x"
            << impl_->input_device_scale_y.load()

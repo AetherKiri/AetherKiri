@@ -5,7 +5,7 @@
 <h1 align="center">AetherKiri</h1>
 
 <p align="center">
-  A Godot-hosted visual-novel runtime for KiriKiri2 and ONScripter games.
+  A Godot-hosted, extensible multi-runtime platform for visual novels.
 </p>
 
 <p align="center">
@@ -31,11 +31,12 @@
 
 ## Overview
 
-AetherKiri runs KiriKiri2 and ONScripter content inside a Godot 4.7
-application shell. Native runtimes connect to a Godot GDExtension host that
-owns the product UI, final-frame presentation, input, settings, export
-presets, and platform packaging. The library automatically selects KiriKiri or
-OnscripterYuri from each game's script markers.
+AetherKiri is a multi-runtime visual-novel platform inside a Godot 4.7
+application shell. A single `AetherRuntimePlayer` hosts multiple native
+runtimes behind a versioned provider interface, while Godot owns the product
+UI, final-frame presentation, input, settings, export presets, and platform
+packaging. The runtime dispatcher selects KiriRuntime, OnsRuntime, or optional
+A Runtime from each game's markers and capabilities.
 
 The default product renderer is **Godot Native**: engine frames are rendered
 through Godot-owned `RenderingDevice` resources. **GPU Bridge** remains an
@@ -45,14 +46,18 @@ diagnostic fallback only.
 
 ```text
 Godot App Shell
-  -> GDExtension Host
-    -> KiriKiri C ABI -> C++ Engine Core / Plugins
-    -> OnscripterYuri Host -> SDL Software Compositor
+  -> AetherRuntimePlayer
+    -> Runtime Dispatcher
+      -> KiriRuntime -> KiriKiri2 Core / Plugins
+      -> OnsRuntime -> OnscripterYuri
+      -> A Runtime
 ```
 
 ## Highlights
 
 - Godot 4.7 app shell with native GDExtension integration.
+- One stable `AetherRuntimePlayer` and a versioned provider ABI for current and
+  future runtimes.
 - C++17 KiriKiri2 runtime core with visual, audio, storage, VM, and plugin
   support.
 - OnscripterYuri integration whose composed RGBA frames are displayed by a
@@ -233,6 +238,12 @@ the executable, so their engine runtime does not depend on the local build
 tree. Android is currently wired for `arm64-v8a`.
 
 ## ONScripter Games
+
+OnscripterYuri is included as a public Git submodule. The public request and
+commitments concerning integration permission and licensing are recorded in
+[upstream issue #75](https://github.com/YuriSizuku/OnscripterYuri/issues/75).
+The applicable rights remain governed by OnscripterYuri's GPL notices and the
+copyright notices preserved in its source tree.
 
 Add the game directory to the library as usual. AetherKiri selects
 OnscripterYuri when it finds `0.txt`, `00.txt`, `nscript.dat`,

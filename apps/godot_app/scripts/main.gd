@@ -16,9 +16,12 @@ const COVER_IMAGE_EXTENSIONS := ["png", "webp", "jpg", "jpeg"]
 # These candidates are deliberately independent of the selected UI language.
 # Prefer cover names across every supported language, then background names.
 const DEFAULT_COVER_BASENAMES := [
-    "cover", "封面", "表紙", "カバー", "표지", "커버",
-    "background", "背景", "배경",
+    "cover", "cover_image", "封面", "封面图", "封面圖片",
+    "表紙", "カバー", "표지", "커버",
+    "background", "background_image", "背景", "背景图", "背景圖片",
+    "壁紙", "배경", "배경화면",
 ]
+const GAME_COVER_PATH_PREFIX := "game://"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
@@ -348,8 +351,8 @@ const UI_TEXT := {
         "message.builtin_delete_failed": "删除内置 Demo 时发生错误：%s",
         "alert.error_title": "Aether 错误",
         "alert.warning_title": "Aether 警告",
-        "alert.runtime_class_missing": "运行时扩展加载失败：AetherKiriPlayer 不可用",
-        "alert.runtime_create_failed": "运行时扩展加载失败：无法创建 AetherKiriPlayer",
+        "alert.runtime_class_missing": "运行时扩展加载失败：AetherRuntimePlayer 不可用",
+        "alert.runtime_create_failed": "运行时扩展加载失败：无法创建 AetherRuntimePlayer",
         "loading.title": "正在启动视觉小说..."
     },
     LANG_ZH_HANT: {
@@ -603,8 +606,8 @@ const UI_TEXT := {
         "message.builtin_delete_failed": "刪除內建 Demo 時發生錯誤：%s",
         "alert.error_title": "Aether 錯誤",
         "alert.warning_title": "Aether 警告",
-        "alert.runtime_class_missing": "執行時擴充載入失敗：AetherKiriPlayer 不可用",
-        "alert.runtime_create_failed": "執行時擴充載入失敗：無法建立 AetherKiriPlayer",
+        "alert.runtime_class_missing": "執行時擴充載入失敗：AetherRuntimePlayer 不可用",
+        "alert.runtime_create_failed": "執行時擴充載入失敗：無法建立 AetherRuntimePlayer",
         "loading.title": "正在啟動視覺小說..."
     },
     LANG_EN: {
@@ -858,8 +861,8 @@ const UI_TEXT := {
         "message.builtin_delete_failed": "Could not completely delete the built-in demo: %s",
         "alert.error_title": "Aether Error",
         "alert.warning_title": "Aether Warning",
-        "alert.runtime_class_missing": "Runtime extension failed to load: AetherKiriPlayer is unavailable",
-        "alert.runtime_create_failed": "Runtime extension failed to load: could not create AetherKiriPlayer",
+        "alert.runtime_class_missing": "Runtime extension failed to load: AetherRuntimePlayer is unavailable",
+        "alert.runtime_create_failed": "Runtime extension failed to load: could not create AetherRuntimePlayer",
         "loading.title": "Launching visual novel..."
     },
     LANG_JA: {
@@ -1113,8 +1116,8 @@ const UI_TEXT := {
         "message.builtin_delete_failed": "内蔵デモを完全に削除できませんでした：%s",
         "alert.error_title": "Aether エラー",
         "alert.warning_title": "Aether 警告",
-        "alert.runtime_class_missing": "ランタイム拡張の読み込みに失敗しました：AetherKiriPlayer は利用できません",
-        "alert.runtime_create_failed": "ランタイム拡張の読み込みに失敗しました：AetherKiriPlayer を作成できません",
+        "alert.runtime_class_missing": "ランタイム拡張の読み込みに失敗しました：AetherRuntimePlayer は利用できません",
+        "alert.runtime_create_failed": "ランタイム拡張の読み込みに失敗しました：AetherRuntimePlayer を作成できません",
         "loading.title": "ビジュアルノベルを起動中..."
     },
     LANG_KO: {
@@ -1368,8 +1371,8 @@ const UI_TEXT := {
         "message.builtin_delete_failed": "내장 데모를 완전히 삭제하지 못했습니다: %s",
         "alert.error_title": "Aether 오류",
         "alert.warning_title": "Aether 경고",
-        "alert.runtime_class_missing": "런타임 확장 로드 실패: AetherKiriPlayer를 사용할 수 없습니다",
-        "alert.runtime_create_failed": "런타임 확장 로드 실패: AetherKiriPlayer를 만들 수 없습니다",
+        "alert.runtime_class_missing": "런타임 확장 로드 실패: AetherRuntimePlayer를 사용할 수 없습니다",
+        "alert.runtime_create_failed": "런타임 확장 로드 실패: AetherRuntimePlayer를 만들 수 없습니다",
         "loading.title": "비주얼 노벨 실행 중..."
     }
 }
@@ -1397,6 +1400,7 @@ const POINTER_MOD_RIGHT := 0x10
 const POINTER_MOD_MIDDLE := 0x20
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
+const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
     "0.txt",
     "00.txt",
@@ -3890,16 +3894,13 @@ func _game_matches_home_search(game: Dictionary, query: String) -> bool:
     return _library_search_matches([
         _game_display_title(game),
         game.get("name", ""),
-        game.get("path", ""),
         game.get("developer", ""),
-        GameLaunchEntry.configured_relative_path(game),
     ], query)
 
 func _video_matches_home_search(video: Dictionary, query: String) -> bool:
     return _library_search_matches([
         video.get("name", ""),
         video.get("fileName", ""),
-        video.get("path", ""),
     ], query)
 
 func _on_home_search_text_changed(value: String) -> void:
@@ -7438,7 +7439,10 @@ func _apply_selected_cover(library_path: String, cover_path: String) -> void:
             _t("alert.warning_title")
         )
         return
-    _update_game(library_path, {"coverPath": cover_path})
+    _update_game(library_path, {
+        "coverPath": _portable_cover_path(library_path, cover_path),
+        GAME_AUTO_COVER_SCANNED_FIELD: true,
+    })
     _show_detail(selected_game)
 
 func _game_launch_entry_label(game: Dictionary) -> String:
@@ -8692,12 +8696,13 @@ func _save_game_list(games: Array[Dictionary]) -> void:
 func _scan_ios_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
     var root := ProjectSettings.globalize_path("user://Games")
     DirAccess.make_dir_recursive_absolute(root)
-    var by_name := {}
+    var by_entry := _games_by_library_entry(existing, root)
+    var normalized_root := root.simplify_path().trim_suffix("/")
     var next: Array[Dictionary] = []
     for game in existing:
-        var name := _game_display_title(game)
-        by_name[name] = game
-        if not String(game.get("path", "")).begins_with(root) and _path_exists(String(game.get("path", ""))):
+        var existing_path := String(game.get("path", "")).simplify_path()
+        if not existing_path.begins_with(normalized_root + "/") \
+                and _path_exists(existing_path):
             next.append(game)
     var dir := DirAccess.open(root)
     if dir == null:
@@ -8708,11 +8713,20 @@ func _scan_ios_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
         if not entry.begins_with("."):
             var path := root.path_join(entry)
             if dir.current_is_dir() or entry.to_lower().ends_with(".xp3"):
-                var game: Dictionary = by_name.get(entry, _game_info_from_path(path))
+                var game: Dictionary = by_entry.get(entry, _game_info_from_path(path))
                 game["path"] = path
                 next.append(game)
         entry = dir.get_next()
     return _dedupe_games(next)
+
+func _games_by_library_entry(existing: Array[Dictionary], root: String) -> Dictionary:
+    var by_entry := {}
+    var normalized_root := root.simplify_path().trim_suffix("/")
+    for game in existing:
+        var existing_path := String(game.get("path", "")).simplify_path()
+        if existing_path.begins_with(normalized_root + "/"):
+            by_entry[existing_path.get_file()] = game
+    return by_entry
 
 func _add_game_path(path: String) -> bool:
     var resolved_path := _resolve_game_path(path)
@@ -8868,7 +8882,7 @@ func _game_info_from_path(path: String) -> Dictionary:
         "type": "Archive" if path.to_lower().ends_with(".xp3") else "Directory",
         "lastPlayed": 0,
         "playDurationSeconds": 0,
-        "coverPath": default_cover_path,
+        "coverPath": _portable_cover_path(path, default_cover_path),
         GAME_AUTO_COVER_SCANNED_FIELD: true,
         "developer": "",
         "title": "",
@@ -8896,16 +8910,64 @@ func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
         var game := games[index]
         if builtin_demo.is_game(game):
             continue
-        if bool(game.get(GAME_AUTO_COVER_SCANNED_FIELD, false)):
-            continue
-        if String(game.get("coverPath", "")).is_empty():
-            var discovered_path := _discover_default_cover_path(String(game.get("path", "")))
-            if not discovered_path.is_empty():
-                game["coverPath"] = discovered_path
-        game[GAME_AUTO_COVER_SCANNED_FIELD] = true
+        var game_path := String(game.get("path", ""))
+        var stored_cover_path := String(game.get("coverPath", ""))
+        var resolved_cover_path := _resolve_cover_path(game)
+        var next_cover_path := stored_cover_path
+        if not resolved_cover_path.is_empty() \
+                and FileAccess.file_exists(resolved_cover_path):
+            next_cover_path = _portable_cover_path(game_path, resolved_cover_path)
+        else:
+            var discovered_path := _discover_default_cover_path(game_path)
+            next_cover_path = _portable_cover_path(game_path, discovered_path)
+        if next_cover_path != stored_cover_path:
+            game["coverPath"] = next_cover_path
+            changed = true
+        if not bool(game.get(GAME_AUTO_COVER_SCANNED_FIELD, false)):
+            game[GAME_AUTO_COVER_SCANNED_FIELD] = true
+            changed = true
         games[index] = game
-        changed = true
     return changed
+
+func _portable_cover_path(game_path: String, cover_path: String) -> String:
+    var value := cover_path.strip_edges()
+    if value.is_empty() or value.begins_with(GAME_COVER_PATH_PREFIX):
+        return value
+    var absolute_cover := ProjectSettings.globalize_path(value).simplify_path()
+    var game_root := _game_runtime_root(game_path).simplify_path().trim_suffix("/")
+    if not game_root.is_empty() and absolute_cover.begins_with(game_root + "/"):
+        return GAME_COVER_PATH_PREFIX + absolute_cover.substr(game_root.length() + 1)
+    var user_root := ProjectSettings.globalize_path("user://").simplify_path().trim_suffix("/")
+    if absolute_cover.begins_with(user_root + "/"):
+        return "user://" + absolute_cover.substr(user_root.length() + 1)
+    return absolute_cover
+
+func _resolve_cover_path(game: Dictionary) -> String:
+    var stored_path := String(game.get("coverPath", "")).strip_edges()
+    if stored_path.is_empty():
+        return ""
+    if stored_path.begins_with(GAME_COVER_PATH_PREFIX):
+        var relative_path := stored_path.substr(GAME_COVER_PATH_PREFIX.length())
+        return _game_runtime_root(String(game.get("path", ""))).path_join(relative_path).simplify_path()
+    var resolved_path := ProjectSettings.globalize_path(stored_path).simplify_path()
+    if FileAccess.file_exists(resolved_path):
+        return resolved_path
+
+    # Absolute paths stored by an older iOS install contain the previous data
+    # container UUID. Rebase the stable Documents-relative suffix onto the
+    # current sandbox before falling back to automatic discovery.
+    var documents_marker := "/Documents/"
+    var marker_index := resolved_path.find(documents_marker)
+    if marker_index >= 0:
+        var documents_relative := resolved_path.substr(
+            marker_index + documents_marker.length()
+        )
+        var migrated_path := ProjectSettings.globalize_path("user://").path_join(
+            documents_relative
+        ).simplify_path()
+        if FileAccess.file_exists(migrated_path):
+            return migrated_path
+    return resolved_path
 
 func _discover_default_cover_path(game_path: String) -> String:
     var directory := game_path
@@ -9332,7 +9394,7 @@ func _clear_hero_state() -> void:
     detail_hero_cover = null
 
 func _load_cover_texture(game: Dictionary, target_size: Vector2i = Vector2i.ZERO, radius: int = 0) -> Texture2D:
-    var cover_path := String(game.get("coverPath", ""))
+    var cover_path := _resolve_cover_path(game)
     if cover_path.is_empty() or not FileAccess.file_exists(cover_path):
         return null
     var modified := FileAccess.get_modified_time(cover_path)
@@ -9989,20 +10051,16 @@ func _on_debug_self_check_requested() -> void:
     checks.append("storage=ok" if writable else "storage=failed")
     debug_console.show_result(_t("debug.result.self_check", [", ".join(checks)]), not writable)
 
-func _runtime_player_class(runtime_kind: String) -> String:
-    return "AetherOnscripterPlayer" if runtime_kind == RUNTIME_ONSCRIPTER else "AetherKiriPlayer"
-
 func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
-    var player_class_name := _runtime_player_class(runtime_kind)
-    if not ClassDB.class_exists(player_class_name):
-        var message := "%s runtime extension class is unavailable." % player_class_name
+    if not ClassDB.class_exists(RUNTIME_PLAYER_CLASS):
+        var message := "%s runtime extension class is unavailable." % RUNTIME_PLAYER_CLASS
         push_error(message)
         _append_log(message)
         _show_system_alert(_t("alert.runtime_class_missing"), _t("alert.error_title"))
         return false
-    var instance: Object = ClassDB.instantiate(player_class_name)
+    var instance: Object = ClassDB.instantiate(RUNTIME_PLAYER_CLASS)
     if instance == null or not (instance is Node):
-        var create_message := "Aether runtime extension could not create %s." % player_class_name
+        var create_message := "Aether runtime extension could not create %s." % RUNTIME_PLAYER_CLASS
         push_error(create_message)
         _append_log(create_message)
         _show_system_alert(_t("alert.runtime_create_failed"), _t("alert.error_title"))
@@ -10025,14 +10083,15 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
         _append_log("Cannot switch visual-novel runtimes while a game is running.")
         return false
 
-    var previous_player = player
-    player = null
-    if previous_player != null:
-        previous_player.destroy_engine()
-        if previous_player is Node:
-            (previous_player as Node).queue_free()
-    if not _create_runtime_player(normalized):
-        return false
+    if player == null:
+        if not _create_runtime_player(normalized):
+            return false
+    else:
+        # Runtime implementations live behind one stable Godot-facing player.
+        # Recreate only its engine handle so UI signals, frame effects, and
+        # platform services do not need one Node implementation per backend.
+        player.destroy_engine()
+        current_player_runtime_kind = normalized
     if not _ensure_player_initialized():
         return false
     _apply_backend(false)
@@ -10217,6 +10276,21 @@ func _ensure_player_initialized() -> bool:
             player.get_last_error(),
         ]
         _append_log(init_error_message)
+        return false
+
+    var runtime_id := (
+        RUNTIME_ONSCRIPTER
+        if current_player_runtime_kind == RUNTIME_ONSCRIPTER
+        else "auto"
+    )
+    var runtime_result := int(player.set_engine_option("runtime", runtime_id))
+    if runtime_result != ENGINE_RESULT_OK:
+        render_errors += 1
+        _append_log("Runtime selection failed: %s %s" % [
+            player.get_last_result(),
+            player.get_last_error(),
+        ])
+        player.destroy_engine()
         return false
 
     _append_log("%s engine initialized." % (

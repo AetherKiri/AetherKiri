@@ -59,9 +59,7 @@ func _initialize() -> void:
 
 func _run_session(game_path: String, plugin_mode: String, index: int) -> bool:
     var is_onscripter := _is_onscripter_game(game_path)
-    var player_class_name := (
-        "AetherOnscripterPlayer" if is_onscripter else "AetherKiriPlayer"
-    )
+    var player_class_name := "AetherRuntimePlayer"
     if not ClassDB.class_exists(player_class_name):
         printerr("session %d player class is unavailable: %s" % [
             index,

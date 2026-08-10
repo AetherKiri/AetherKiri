@@ -4,3 +4,4 @@
 [submodule "packages/OnscripterYuri"]
 	path = packages/OnscripterYuri
 	url = https://github.com/AetherKiri/OnscripterYuri.git
+	branch = aether-main

@@ -5,6 +5,9 @@
 #include "GodotGpuBarrierShadowPlanner.h"
 #include "ComplexRect.h"
 #include "frame_effect_host.h"
+#if defined(AETHERKIRI_WITH_ONSCRIPTER)
+#include "onscripter_runtime.h"
+#endif
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/image.hpp>
@@ -95,10 +98,6 @@ extern jobject krkr_GetApplicationContext();
 #endif
 
 namespace godot {
-
-#if defined(AETHERKIRI_WITH_ONSCRIPTER)
-void InitializeAetherOnscripter(ModuleInitializationLevel level);
-#endif
 
 #if defined(AETHERKIRI_INTERNAL_FRAME_EFFECTS)
 void RegisterAetherInternalFrameEffects();
@@ -6678,13 +6677,13 @@ void ReleaseRemainingGodotGpuTextures() {
 
 } // namespace
 
-class AetherKiriPlayer final : public Node {
-    GDCLASS(AetherKiriPlayer, Node)
+class AetherRuntimePlayer final : public Node {
+    GDCLASS(AetherRuntimePlayer, Node)
 
 public:
-    AetherKiriPlayer()
+    AetherRuntimePlayer()
         : frame_effect_provider_(CreateFrameEffectProvider()) {}
-    ~AetherKiriPlayer() override { destroy_engine(); }
+    ~AetherRuntimePlayer() override { destroy_engine(); }
 
     bool initialize_engine(const String &writable_path, const String &cache_path) {
         if (handle_ != nullptr) {
@@ -6750,6 +6749,7 @@ public:
         }
         handle_ = nullptr;
         game_open_ = false;
+        runtime_id_ = "auto";
     }
 
     void release_frame_texture() {
@@ -6863,6 +6863,7 @@ public:
         result["native_output_requested"] = frame_native_output_enabled_;
         result["raw_source_output"] = frame_effect_raw_source_output_;
         result["bypassed_after_error"] = frame_effect_bypass_due_to_error_;
+        result["runtime"] = runtime_id_;
 
         String reason = "provider_not_built";
         bool available = false;
@@ -6918,6 +6919,13 @@ public:
         option.value_utf8 = value_utf8.get_data();
         const engine_result_t result = engine_set_option(handle_, &option);
         update_last_error(result);
+        if (result == ENGINE_RESULT_OK &&
+            key.strip_edges().to_lower() == "runtime") {
+            runtime_id_ = value.strip_edges().to_lower();
+            if (runtime_id_.is_empty()) {
+                runtime_id_ = "auto";
+            }
+        }
         return result;
     }
 
@@ -8570,148 +8578,148 @@ void main() {
 protected:
     static void _bind_methods() {
         ClassDB::bind_method(D_METHOD("initialize_engine", "writable_path", "cache_path"),
-                             &AetherKiriPlayer::initialize_engine);
+                             &AetherRuntimePlayer::initialize_engine);
         ClassDB::bind_method(D_METHOD("destroy_engine"),
-                             &AetherKiriPlayer::destroy_engine);
+                             &AetherRuntimePlayer::destroy_engine);
         ClassDB::bind_method(D_METHOD("is_initialized"),
-                             &AetherKiriPlayer::is_initialized);
+                             &AetherRuntimePlayer::is_initialized);
         ClassDB::bind_method(D_METHOD("is_game_open"),
-                             &AetherKiriPlayer::is_game_open);
+                             &AetherRuntimePlayer::is_game_open);
         ClassDB::bind_method(D_METHOD("get_last_result"),
-                             &AetherKiriPlayer::get_last_result);
+                             &AetherRuntimePlayer::get_last_result);
         ClassDB::bind_method(D_METHOD("get_last_error"),
-                             &AetherKiriPlayer::get_last_error);
+                             &AetherRuntimePlayer::get_last_error);
         ClassDB::bind_method(D_METHOD("set_render_backend", "backend"),
-                             &AetherKiriPlayer::set_render_backend);
+                             &AetherRuntimePlayer::set_render_backend);
         ClassDB::bind_method(D_METHOD("get_render_backend"),
-                             &AetherKiriPlayer::get_render_backend);
+                             &AetherRuntimePlayer::get_render_backend);
         ClassDB::bind_method(D_METHOD("set_engine_option", "key", "value"),
-                             &AetherKiriPlayer::set_engine_option);
+                             &AetherRuntimePlayer::set_engine_option);
         ClassDB::bind_method(
             D_METHOD("submit_platform_response", "operation", "argument"),
-            &AetherKiriPlayer::submit_platform_response);
+            &AetherRuntimePlayer::submit_platform_response);
         ClassDB::bind_method(D_METHOD("set_surface_size", "width", "height"),
-                             &AetherKiriPlayer::set_surface_size);
+                             &AetherRuntimePlayer::set_surface_size);
         ClassDB::bind_method(D_METHOD("open_game", "game_root_path", "async"),
-                             &AetherKiriPlayer::open_game, DEFVAL(true));
+                             &AetherRuntimePlayer::open_game, DEFVAL(true));
         ClassDB::bind_method(D_METHOD("tick", "delta_seconds"),
-                             &AetherKiriPlayer::tick);
-        ClassDB::bind_method(D_METHOD("pause"), &AetherKiriPlayer::pause);
-        ClassDB::bind_method(D_METHOD("resume"), &AetherKiriPlayer::resume);
+                             &AetherRuntimePlayer::tick);
+        ClassDB::bind_method(D_METHOD("pause"), &AetherRuntimePlayer::pause);
+        ClassDB::bind_method(D_METHOD("resume"), &AetherRuntimePlayer::resume);
         ClassDB::bind_method(D_METHOD("media_open", "path"),
-                             &AetherKiriPlayer::media_open);
+                             &AetherRuntimePlayer::media_open);
         ClassDB::bind_method(D_METHOD("media_close"),
-                             &AetherKiriPlayer::media_close);
+                             &AetherRuntimePlayer::media_close);
         ClassDB::bind_method(D_METHOD("media_play"),
-                             &AetherKiriPlayer::media_play);
+                             &AetherRuntimePlayer::media_play);
         ClassDB::bind_method(D_METHOD("media_pause"),
-                             &AetherKiriPlayer::media_pause);
+                             &AetherRuntimePlayer::media_pause);
         ClassDB::bind_method(D_METHOD("media_seek", "position_seconds"),
-                             &AetherKiriPlayer::media_seek);
+                             &AetherRuntimePlayer::media_seek);
         ClassDB::bind_method(D_METHOD("media_set_rate", "playback_rate"),
-                             &AetherKiriPlayer::media_set_rate);
+                             &AetherRuntimePlayer::media_set_rate);
         ClassDB::bind_method(D_METHOD("media_get_subtitle_tracks_json"),
-                             &AetherKiriPlayer::media_get_subtitle_tracks_json);
+                             &AetherRuntimePlayer::media_get_subtitle_tracks_json);
         ClassDB::bind_method(D_METHOD("media_extract_subtitle", "stream_index",
                                       "output_path"),
-                             &AetherKiriPlayer::media_extract_subtitle);
+                             &AetherRuntimePlayer::media_extract_subtitle);
         ClassDB::bind_method(D_METHOD("media_get_state"),
-                             &AetherKiriPlayer::media_get_state);
+                             &AetherRuntimePlayer::media_get_state);
         ClassDB::bind_method(D_METHOD("media_update_texture"),
-                             &AetherKiriPlayer::media_update_texture);
+                             &AetherRuntimePlayer::media_update_texture);
         ClassDB::bind_method(D_METHOD("send_pointer_event", "type", "pointer_id",
                                       "x", "y", "delta_x", "delta_y", "button",
                                       "modifiers"),
-                             &AetherKiriPlayer::send_pointer_event,
+                             &AetherRuntimePlayer::send_pointer_event,
                              DEFVAL(0));
         ClassDB::bind_method(D_METHOD("send_key_event", "pressed", "key_code",
                                       "modifiers", "unicode_codepoint"),
-                             &AetherKiriPlayer::send_key_event);
+                             &AetherRuntimePlayer::send_key_event);
         ClassDB::bind_method(D_METHOD("send_text_input", "text"),
-                             &AetherKiriPlayer::send_text_input);
+                             &AetherRuntimePlayer::send_text_input);
         ClassDB::bind_method(D_METHOD("get_text_input_state"),
-                             &AetherKiriPlayer::get_text_input_state);
+                             &AetherRuntimePlayer::get_text_input_state);
         ClassDB::bind_method(D_METHOD("get_startup_state"),
-                             &AetherKiriPlayer::get_startup_state);
+                             &AetherRuntimePlayer::get_startup_state);
         ClassDB::bind_method(D_METHOD("drain_startup_logs"),
-                             &AetherKiriPlayer::drain_startup_logs);
+                             &AetherRuntimePlayer::drain_startup_logs);
         ClassDB::bind_method(D_METHOD("set_diagnostic_config", "enabled",
                                       "session_id", "category_mask",
                                       "slow_frame_threshold_ms", "max_events"),
-                             &AetherKiriPlayer::set_diagnostic_config,
+                             &AetherRuntimePlayer::set_diagnostic_config,
                              DEFVAL(20), DEFVAL(2000));
         ClassDB::bind_method(D_METHOD("mark_diagnostic_event", "label"),
-                             &AetherKiriPlayer::mark_diagnostic_event);
+                             &AetherRuntimePlayer::mark_diagnostic_event);
         ClassDB::bind_method(D_METHOD("drain_diagnostic_events"),
-                             &AetherKiriPlayer::drain_diagnostic_events);
+                             &AetherRuntimePlayer::drain_diagnostic_events);
         ClassDB::bind_method(D_METHOD("get_renderer_info"),
-                             &AetherKiriPlayer::get_renderer_info);
+                             &AetherRuntimePlayer::get_renderer_info);
         ClassDB::bind_method(D_METHOD("get_memory_stats"),
-                             &AetherKiriPlayer::get_memory_stats);
+                             &AetherRuntimePlayer::get_memory_stats);
         ClassDB::bind_method(D_METHOD("get_plugin_debug_info"),
-                             &AetherKiriPlayer::get_plugin_debug_info);
+                             &AetherRuntimePlayer::get_plugin_debug_info);
         ClassDB::bind_method(D_METHOD("get_frame_texture_backend"),
-                             &AetherKiriPlayer::get_frame_texture_backend);
+                             &AetherRuntimePlayer::get_frame_texture_backend);
         ClassDB::bind_method(D_METHOD("is_frame_enhancement_built"),
-                             &AetherKiriPlayer::is_frame_enhancement_built);
+                             &AetherRuntimePlayer::is_frame_enhancement_built);
         ClassDB::bind_method(D_METHOD("is_frame_enhancement_available"),
-                             &AetherKiriPlayer::is_frame_enhancement_available);
+                             &AetherRuntimePlayer::is_frame_enhancement_available);
         ClassDB::bind_method(D_METHOD("set_frame_enhancement_enabled", "enabled"),
-                             &AetherKiriPlayer::set_frame_enhancement_enabled);
+                             &AetherRuntimePlayer::set_frame_enhancement_enabled);
         ClassDB::bind_method(D_METHOD("set_frame_native_output_enabled", "enabled"),
-                             &AetherKiriPlayer::set_frame_native_output_enabled);
+                             &AetherRuntimePlayer::set_frame_native_output_enabled);
         ClassDB::bind_method(D_METHOD("set_frame_enhancement_mode", "mode"),
-                             &AetherKiriPlayer::set_frame_enhancement_mode);
+                             &AetherRuntimePlayer::set_frame_enhancement_mode);
         ClassDB::bind_method(D_METHOD("set_frame_enhancement_custom_chain", "chain"),
-                             &AetherKiriPlayer::set_frame_enhancement_custom_chain);
+                             &AetherRuntimePlayer::set_frame_enhancement_custom_chain);
         ClassDB::bind_method(D_METHOD("set_frame_enhancement_target_size", "width", "height"),
-                             &AetherKiriPlayer::set_frame_enhancement_target_size);
+                             &AetherRuntimePlayer::set_frame_enhancement_target_size);
         ClassDB::bind_method(D_METHOD("get_frame_source_size"),
-                             &AetherKiriPlayer::get_frame_source_size);
+                             &AetherRuntimePlayer::get_frame_source_size);
         ClassDB::bind_method(D_METHOD("get_frame_enhancement_status"),
-                             &AetherKiriPlayer::get_frame_enhancement_status);
+                             &AetherRuntimePlayer::get_frame_enhancement_status);
         ClassDB::bind_method(D_METHOD("read_frame_rgba"),
-                             &AetherKiriPlayer::read_frame_rgba);
+                             &AetherRuntimePlayer::read_frame_rgba);
         ClassDB::bind_method(D_METHOD("update_frame_texture"),
-                             &AetherKiriPlayer::update_frame_texture);
+                             &AetherRuntimePlayer::update_frame_texture);
         ClassDB::bind_method(D_METHOD("release_frame_texture"),
-                             &AetherKiriPlayer::release_frame_texture);
+                             &AetherRuntimePlayer::release_frame_texture);
         ClassDB::bind_method(D_METHOD("debug_frame_enhancement_self_test"),
-                             &AetherKiriPlayer::debug_frame_enhancement_self_test);
+                             &AetherRuntimePlayer::debug_frame_enhancement_self_test);
         ClassDB::bind_method(D_METHOD("debug_gpu_blend_self_test", "mode", "opacity"),
-                             &AetherKiriPlayer::debug_gpu_blend_self_test,
+                             &AetherRuntimePlayer::debug_gpu_blend_self_test,
                              DEFVAL(255));
         ClassDB::bind_method(D_METHOD("debug_gpu_blend2_self_test", "mode", "opacity"),
-                             &AetherKiriPlayer::debug_gpu_blend2_self_test,
+                             &AetherRuntimePlayer::debug_gpu_blend2_self_test,
                              DEFVAL(255));
         ClassDB::bind_method(D_METHOD("debug_artemis_shader_self_test"),
-                             &AetherKiriPlayer::debug_artemis_shader_self_test);
+                             &AetherRuntimePlayer::debug_artemis_shader_self_test);
         ClassDB::bind_method(D_METHOD("android_has_external_storage_permission"),
-                             &AetherKiriPlayer::android_has_external_storage_permission);
+                             &AetherRuntimePlayer::android_has_external_storage_permission);
         ClassDB::bind_method(D_METHOD("android_request_external_storage_permission"),
-                             &AetherKiriPlayer::android_request_external_storage_permission);
+                             &AetherRuntimePlayer::android_request_external_storage_permission);
         ClassDB::bind_method(D_METHOD("iap_start", "product_id"),
-                             &AetherKiriPlayer::iap_start);
+                             &AetherRuntimePlayer::iap_start);
         ClassDB::bind_method(D_METHOD("iap_refresh_entitlement", "product_id"),
-                             &AetherKiriPlayer::iap_refresh_entitlement);
+                             &AetherRuntimePlayer::iap_refresh_entitlement);
         ClassDB::bind_method(D_METHOD("iap_purchase", "product_id"),
-                             &AetherKiriPlayer::iap_purchase);
+                             &AetherRuntimePlayer::iap_purchase);
         ClassDB::bind_method(D_METHOD("iap_restore", "product_id"),
-                             &AetherKiriPlayer::iap_restore);
+                             &AetherRuntimePlayer::iap_restore);
         ClassDB::bind_method(D_METHOD("iap_get_state_json", "product_id"),
-                             &AetherKiriPlayer::iap_get_state_json);
+                             &AetherRuntimePlayer::iap_get_state_json);
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_open", "title", "initial_directory"),
-            &AetherKiriPlayer::native_launch_file_picker_open);
+            &AetherRuntimePlayer::native_launch_file_picker_open);
         ClassDB::bind_method(
             D_METHOD("native_cover_file_picker_open", "title", "initial_directory",
                      "destination_directory"),
-            &AetherKiriPlayer::native_cover_file_picker_open);
+            &AetherRuntimePlayer::native_cover_file_picker_open);
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_take_result_json"),
-            &AetherKiriPlayer::native_launch_file_picker_take_result_json);
+            &AetherRuntimePlayer::native_launch_file_picker_take_result_json);
         ClassDB::bind_method(D_METHOD("probe_runtime", "runtime_id", "game_root_path"),
-                             &AetherKiriPlayer::probe_runtime);
+                             &AetherRuntimePlayer::probe_runtime);
         ADD_SIGNAL(MethodInfo(
             "platform_request",
             PropertyInfo(Variant::STRING, "operation"),
@@ -9068,6 +9076,7 @@ private:
     String last_result_;
     String last_error_;
     String frame_texture_backend_ = "none";
+    String runtime_id_ = "auto";
     Ref<ImageTexture> frame_texture_;
     Ref<Texture2DRD> frame_rd_texture_;
     RID frame_rd_rid_;
@@ -9106,12 +9115,15 @@ private:
     uint32_t media_height_ = 0;
 };
 
-void InitializeAetherKiri(ModuleInitializationLevel level) {
+void InitializeAetherRuntime(ModuleInitializationLevel level) {
     if (level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
 #if defined(AETHERKIRI_INTERNAL_FRAME_EFFECTS)
     RegisterAetherInternalFrameEffects();
+#endif
+#if defined(AETHERKIRI_WITH_ONSCRIPTER)
+    aetherkiri::onscripter::RegisterRuntimeProvider();
 #endif
     const engine_result_t shader_result =
         engine_set_runtime_fragment_shader_executor(
@@ -9121,13 +9133,10 @@ void InitializeAetherKiri(ModuleInitializationLevel level) {
             "Failed to register Artemis fragment shader backend: ",
             ResultToString(shader_result));
     }
-    ClassDB::register_class<AetherKiriPlayer>();
-#if defined(AETHERKIRI_WITH_ONSCRIPTER)
-    InitializeAetherOnscripter(level);
-#endif
+    ClassDB::register_class<AetherRuntimePlayer>();
 }
 
-void DeinitializeAetherKiri(ModuleInitializationLevel level) {
+void DeinitializeAetherRuntime(ModuleInitializationLevel level) {
     if (level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
@@ -9152,8 +9161,8 @@ GDExtensionBool GDE_EXPORT aether_kiri_library_init(
     GDExtensionInitialization *initialization) {
     godot::GDExtensionBinding::InitObject init_obj(
         get_proc_address, library, initialization);
-    init_obj.register_initializer(godot::InitializeAetherKiri);
-    init_obj.register_terminator(godot::DeinitializeAetherKiri);
+    init_obj.register_initializer(godot::InitializeAetherRuntime);
+    init_obj.register_terminator(godot::DeinitializeAetherRuntime);
     init_obj.set_minimum_library_initialization_level(
         godot::MODULE_INITIALIZATION_LEVEL_SCENE);
     return init_obj.init();

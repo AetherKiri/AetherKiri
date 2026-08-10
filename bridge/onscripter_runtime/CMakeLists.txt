@@ -69,6 +69,7 @@ set(ONSCRIPTER_YURI_SOURCES
 
 add_library(aether_onscripter_runtime STATIC
     src/onscripter_runtime.cpp
+    src/onscripter_runtime_provider.cpp
     src/onscripter_save_storage.cpp
     ${ONSCRIPTER_YURI_SOURCES}
 )

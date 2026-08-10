@@ -27,7 +27,7 @@ func _initialize() -> void:
     rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
     root.add_child(rect)
 
-    player = ClassDB.instantiate("AetherKiriPlayer")
+    player = ClassDB.instantiate("AetherRuntimePlayer")
     root.add_child(player as Node)
 
     var user_dir := OS.get_environment("AETHERKIRI_PROBE_USER_DIR").strip_edges()

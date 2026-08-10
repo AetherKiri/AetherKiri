@@ -5,7 +5,7 @@
 <h1 align="center">AetherKiri</h1>
 
 <p align="center">
-  一个由 Godot 承载、支持 KiriKiri2 与 ONScripter 游戏的视觉小说运行时。
+  一个由 Godot 承载、可扩展的多 Runtime 视觉小说平台。
 </p>
 
 <p align="center">
@@ -31,10 +31,11 @@
 
 ## 项目概览
 
-AetherKiri 用 Godot 4.7 作为应用外壳，在其中运行 KiriKiri2 和 ONScripter
-内容。项目由 C++17 引擎核心、宿主桥接层和 Godot GDExtension 组成；Godot
-侧负责产品 UI、最终帧显示、输入、设置页、导出配置和平台打包。游戏库会根据
-脚本标记自动选择 KiriKiri 或 OnscripterYuri 运行时。
+AetherKiri 是一个以 Godot 4.7 为应用外壳的多 Runtime 视觉小说平台。统一的
+`AetherRuntimePlayer` 通过版本化 Provider 接口承载多个原生 Runtime；Godot
+负责产品 UI、最终帧显示、输入、设置页、导出配置和平台打包。Runtime
+Dispatcher 会根据游戏标记和能力选择 KiriRuntime、OnsRuntime 或可选的
+A Runtime。
 
 默认产品渲染链路是 **Godot Native**：引擎帧通过 Godot 持有的
 `RenderingDevice` 资源输出。**GPU Bridge** 保留为显式可选的兼容和性能对照
@@ -43,14 +44,18 @@ AetherKiri 用 Godot 4.7 作为应用外壳，在其中运行 KiriKiri2 和 ONSc
 
 ```text
 Godot App Shell
-  -> GDExtension Host
-    -> KiriKiri C ABI -> C++ Engine Core / Plugins
-    -> OnscripterYuri Host -> SDL Software Compositor
+  -> AetherRuntimePlayer
+    -> Runtime Dispatcher
+      -> KiriRuntime -> KiriKiri2 Core / Plugins
+      -> OnsRuntime -> OnscripterYuri
+      -> A Runtime
 ```
 
 ## 亮点
 
 - Godot 4.7 应用外壳，使用原生 GDExtension 集成。
+- 使用唯一稳定的 `AetherRuntimePlayer` 和版本化 Provider ABI 接入当前及后续
+  Runtime。
 - C++17 KiriKiri2 运行时核心，覆盖视觉、音频、存储、VM 和插件支持。
 - 集成 OnscripterYuri；合成后的 RGBA 帧由 Godot `ImageTexture` 显示，
   Godot 的鼠标、触摸和键盘输入会映射回 ONS 事件。
@@ -189,6 +194,10 @@ GitHub Actions 的 `Build` workflow 会在可信运行中使用仓库 Secret
 Android 当前只接入了 `arm64-v8a`。
 
 ## ONScripter 游戏
+
+OnscripterYuri 以公开 Git submodule 接入。关于集成授权与许可证的公开请求及
+合规承诺记录在[上游 issue #75](https://github.com/YuriSizuku/OnscripterYuri/issues/75)。
+实际使用权仍以 OnscripterYuri 的 GPL 声明以及源码中保留的版权声明为准。
 
 直接把游戏目录加入游戏库即可。目录中出现 `0.txt`、`00.txt`、
 `nscript.dat`、`nscr_sec.dat`、`nscript.___`、`onscript.nt2` 或

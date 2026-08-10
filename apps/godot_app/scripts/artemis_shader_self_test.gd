@@ -1,7 +1,7 @@
 extends SceneTree
 
 func _initialize() -> void:
-    var player = ClassDB.instantiate("AetherKiriPlayer")
+    var player = ClassDB.instantiate("AetherRuntimePlayer")
     root.add_child(player as Node)
     var result: Dictionary = player.debug_artemis_shader_self_test()
     if not bool(result.get("ok", false)):
