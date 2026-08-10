@@ -173,6 +173,53 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native 按游戏基准画布运行；Display Fit 按设备显示尺寸运行",
         "settings.upscale": "缩放算法",
         "settings.upscale_desc": "外层拉伸画面时使用；Smooth/Linear 会做平滑采样",
+        "settings.output_resolution": "输出分辨率",
+        "settings.output_resolution_desc": "设置外层缩放与画面增强的目标分辨率；较高档位会增加 GPU 和显存占用",
+        "settings.output_resolution.original": "原始",
+        "settings.frame_enhancement": "画面增强",
+        "settings.frame_enhancement_desc": "使用 GPU 修复线条，并按输出分辨率高质量放大；保存后立即生效",
+        "settings.frame_enhancement_unavailable_desc": "当前构建或图形设备不支持画面增强；开启后仍会安全使用原始画面",
+        "settings.frame_enhancement_mode": "增强效果",
+        "settings.frame_enhancement_mode_desc": "选择适合画面的处理风格；推荐模式会优先修复线条与细节",
+        "settings.frame_enhancement_kind.off": "关闭",
+        "settings.frame_enhancement_kind.preset": "预设",
+        "settings.frame_enhancement_kind.custom": "自定义",
+        "settings.frame_enhancement_custom_desc": "算法按列表从上到下执行；2× 重建、目标尺寸缩放和同尺寸修复会保留各自语义",
+        "settings.frame_enhancement_custom_empty": "当前没有算法；添加后会按照列表顺序处理画面。",
+        "settings.frame_enhancement_custom_add": "＋ 添加算法",
+        "settings.frame_enhancement_custom_step": "步骤 %d",
+        "settings.frame_enhancement_custom_remove": "移除这个算法",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_s.desc": "轻量 2× 动漫线条与边缘重建",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_l.desc": "高质量 2× 动漫细节重建",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_vl.desc": "最高质量 2× 动漫细节重建，负载很高",
+        "settings.frame_enhancement_algorithm.anime4k_restore_s.desc": "同尺寸修复模糊线条、噪声和压缩痕迹",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_s.desc": "轻量柔和修复，降低文字和细线过锐风险",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_m.desc": "更深入的柔和修复，兼顾纹理和小字",
+        "settings.frame_enhancement_algorithm.anime4k_restore_l.desc": "高质量同尺寸线条与细节修复",
+        "settings.frame_enhancement_algorithm.anime4k_restore_vl.desc": "最高质量同尺寸修复，负载很高",
+        "settings.frame_enhancement_algorithm.fsr1_easu.desc": "边缘感知缩放到所选输出分辨率",
+        "settings.frame_enhancement_algorithm.fsr1_rcas.desc": "同尺寸自适应锐化，强化放大后的清晰度",
+        "settings.frame_enhancement_algorithm.bicubic.desc": "自然柔和地缩放到所选输出分辨率",
+        "settings.frame_enhancement_algorithm.lanczos.desc": "锐利地缩放到所选输出分辨率",
+        "settings.frame_enhancement_algorithm.fxaa.desc": "同尺寸平滑明显锯齿",
+        "settings.frame_enhancement_algorithm.ravu_lite_r2.desc": "基于方向纹理的轻量 2× 重建",
+        "settings.frame_enhancement_algorithm.cunny_2x4c.desc": "轻量神经网络 2× 纹理重建",
+        "settings.frame_enhancement_algorithm.nnedi3_nns16.desc": "针对线条和斜边的 2× 插值重建",
+        "settings.frame_enhancement_mode.anime4k": "智能修复（推荐）",
+        "settings.frame_enhancement_mode.fsr1": "均衡清晰",
+        "settings.frame_enhancement_mode.bicubic": "自然柔和",
+        "settings.frame_enhancement_mode.lanczos": "锐利细节",
+        "settings.frame_enhancement_mode.ravu": "精细放大",
+        "settings.frame_enhancement_mode.cunny": "纹理增强",
+        "settings.frame_enhancement_mode.nnedi3": "线条平滑",
+        "settings.frame_enhancement_mode.chain_4k_max": "4K 极致（极高负载）",
+        "settings.frame_enhancement_mode.chain_lossless": "无损画质（极高负载）",
+        "settings.frame_enhancement_mode.chain_ultra": "超清平衡（高负载）",
+        "settings.frame_enhancement_mode.chain_detail": "高精细（中高负载）",
+        "settings.frame_enhancement_mode.chain_balanced": "均衡增强（中等负载）",
+        "settings.frame_enhancement_mode.chain_soft": "柔和清晰（推荐，中低负载）",
+        "settings.frame_enhancement_mode.chain_light": "轻量增强（低负载）",
+        "settings.frame_enhancement_mode.chain_basic": "基础增强（最低负载）",
         "settings.perf": "性能监控",
         "settings.perf_desc": "显示帧率、进程内存、GPU 内存估算和图形 API 信息",
         "settings.fps_limit": "帧率限制",
@@ -381,6 +428,53 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native 依遊戲基準畫布執行；Display Fit 依裝置顯示尺寸執行",
         "settings.upscale": "縮放演算法",
         "settings.upscale_desc": "外層拉伸畫面時使用；Smooth/Linear 會進行平滑取樣",
+        "settings.output_resolution": "輸出解析度",
+        "settings.output_resolution_desc": "設定外層縮放與畫面增強的目標解析度；較高檔位會增加 GPU 與顯示記憶體用量",
+        "settings.output_resolution.original": "原始",
+        "settings.frame_enhancement": "畫面增強",
+        "settings.frame_enhancement_desc": "使用 GPU 修復線條，並依輸出解析度高品質放大；儲存後立即生效",
+        "settings.frame_enhancement_unavailable_desc": "目前建置或圖形裝置不支援畫面增強；開啟後仍會安全使用原始畫面",
+        "settings.frame_enhancement_mode": "增強效果",
+        "settings.frame_enhancement_mode_desc": "選擇適合畫面的處理風格；建議模式會優先修復線條與細節",
+        "settings.frame_enhancement_kind.off": "關閉",
+        "settings.frame_enhancement_kind.preset": "預設",
+        "settings.frame_enhancement_kind.custom": "自訂",
+        "settings.frame_enhancement_custom_desc": "演算法依清單由上而下執行；2× 重建、目標尺寸縮放與同尺寸修復會保留各自語意",
+        "settings.frame_enhancement_custom_empty": "目前沒有演算法；加入後會依清單順序處理畫面。",
+        "settings.frame_enhancement_custom_add": "＋ 加入演算法",
+        "settings.frame_enhancement_custom_step": "步驟 %d",
+        "settings.frame_enhancement_custom_remove": "移除此演算法",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_s.desc": "輕量 2× 動漫線條與邊緣重建",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_l.desc": "高品質 2× 動漫細節重建",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_vl.desc": "最高品質 2× 動漫細節重建，負載很高",
+        "settings.frame_enhancement_algorithm.anime4k_restore_s.desc": "同尺寸修復模糊線條、雜訊與壓縮痕跡",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_s.desc": "輕量柔和修復，降低文字與細線過銳風險",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_m.desc": "更深入的柔和修復，兼顧紋理與小字",
+        "settings.frame_enhancement_algorithm.anime4k_restore_l.desc": "高品質同尺寸線條與細節修復",
+        "settings.frame_enhancement_algorithm.anime4k_restore_vl.desc": "最高品質同尺寸修復，負載很高",
+        "settings.frame_enhancement_algorithm.fsr1_easu.desc": "邊緣感知縮放至所選輸出解析度",
+        "settings.frame_enhancement_algorithm.fsr1_rcas.desc": "同尺寸自適應銳化，強化放大後的清晰度",
+        "settings.frame_enhancement_algorithm.bicubic.desc": "自然柔和地縮放至所選輸出解析度",
+        "settings.frame_enhancement_algorithm.lanczos.desc": "銳利地縮放至所選輸出解析度",
+        "settings.frame_enhancement_algorithm.fxaa.desc": "同尺寸平滑明顯鋸齒",
+        "settings.frame_enhancement_algorithm.ravu_lite_r2.desc": "以方向紋理進行輕量 2× 重建",
+        "settings.frame_enhancement_algorithm.cunny_2x4c.desc": "輕量神經網路 2× 紋理重建",
+        "settings.frame_enhancement_algorithm.nnedi3_nns16.desc": "針對線條與斜邊的 2× 插值重建",
+        "settings.frame_enhancement_mode.anime4k": "智慧修復（建議）",
+        "settings.frame_enhancement_mode.fsr1": "均衡清晰",
+        "settings.frame_enhancement_mode.bicubic": "自然柔和",
+        "settings.frame_enhancement_mode.lanczos": "銳利細節",
+        "settings.frame_enhancement_mode.ravu": "精細放大",
+        "settings.frame_enhancement_mode.cunny": "紋理增強",
+        "settings.frame_enhancement_mode.nnedi3": "線條平滑",
+        "settings.frame_enhancement_mode.chain_4k_max": "4K 極致（極高負載）",
+        "settings.frame_enhancement_mode.chain_lossless": "無損畫質（極高負載）",
+        "settings.frame_enhancement_mode.chain_ultra": "超清平衡（高負載）",
+        "settings.frame_enhancement_mode.chain_detail": "高精細（中高負載）",
+        "settings.frame_enhancement_mode.chain_balanced": "均衡增強（中等負載）",
+        "settings.frame_enhancement_mode.chain_soft": "柔和清晰（建議，中低負載）",
+        "settings.frame_enhancement_mode.chain_light": "輕量增強（低負載）",
+        "settings.frame_enhancement_mode.chain_basic": "基礎增強（最低負載）",
         "settings.perf": "效能監控",
         "settings.perf_desc": "顯示幀率、程序記憶體、GPU 記憶體估算和圖形 API 資訊",
         "settings.fps_limit": "幀率限制",
@@ -589,6 +683,53 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native uses the game's base canvas; Display Fit uses the device display size",
         "settings.upscale": "Scaling",
         "settings.upscale_desc": "Used when stretching the outer frame; Smooth/Linear apply filtered sampling",
+        "settings.output_resolution": "Output Resolution",
+        "settings.output_resolution_desc": "Sets the target for outer scaling and image enhancement; higher tiers use more GPU time and memory",
+        "settings.output_resolution.original": "Original",
+        "settings.frame_enhancement": "Image Enhancement",
+        "settings.frame_enhancement_desc": "Use the GPU to restore lines and upscale to the selected output resolution; applies immediately after saving",
+        "settings.frame_enhancement_unavailable_desc": "Image enhancement is unavailable in this build or on this graphics device; the original frame remains safe",
+        "settings.frame_enhancement_mode": "Enhancement Effect",
+        "settings.frame_enhancement_mode_desc": "Choose a visual style; the recommended effect prioritizes restoring lines and fine detail",
+        "settings.frame_enhancement_kind.off": "Off",
+        "settings.frame_enhancement_kind.preset": "Preset",
+        "settings.frame_enhancement_kind.custom": "Custom",
+        "settings.frame_enhancement_custom_desc": "Algorithms run from top to bottom; 2× reconstruction, target fitting, and same-size restoration keep their defined behavior",
+        "settings.frame_enhancement_custom_empty": "No algorithms yet. Add one to build an ordered processing chain.",
+        "settings.frame_enhancement_custom_add": "+ Add Algorithm",
+        "settings.frame_enhancement_custom_step": "Step %d",
+        "settings.frame_enhancement_custom_remove": "Remove this algorithm",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_s.desc": "Lightweight 2× reconstruction for anime lines and edges",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_l.desc": "High-quality 2× reconstruction for anime detail",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_vl.desc": "Maximum-quality 2× anime reconstruction with very high load",
+        "settings.frame_enhancement_algorithm.anime4k_restore_s.desc": "Same-size repair for blurred lines, noise, and compression artifacts",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_s.desc": "Light soft repair that protects small text and thin lines",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_m.desc": "Deeper soft repair balancing texture detail and small text",
+        "settings.frame_enhancement_algorithm.anime4k_restore_l.desc": "High-quality same-size line and detail restoration",
+        "settings.frame_enhancement_algorithm.anime4k_restore_vl.desc": "Maximum-quality same-size restoration with very high load",
+        "settings.frame_enhancement_algorithm.fsr1_easu.desc": "Edge-adaptive scaling to the selected output resolution",
+        "settings.frame_enhancement_algorithm.fsr1_rcas.desc": "Same-size adaptive sharpening after reconstruction or scaling",
+        "settings.frame_enhancement_algorithm.bicubic.desc": "Natural, soft scaling to the selected output resolution",
+        "settings.frame_enhancement_algorithm.lanczos.desc": "Crisp scaling to the selected output resolution",
+        "settings.frame_enhancement_algorithm.fxaa.desc": "Same-size smoothing of visible jagged edges",
+        "settings.frame_enhancement_algorithm.ravu_lite_r2.desc": "Lightweight direction-aware 2× reconstruction",
+        "settings.frame_enhancement_algorithm.cunny_2x4c.desc": "Light neural 2× texture reconstruction",
+        "settings.frame_enhancement_algorithm.nnedi3_nns16.desc": "2× interpolation focused on lines and diagonal edges",
+        "settings.frame_enhancement_mode.anime4k": "Smart Restore (Recommended)",
+        "settings.frame_enhancement_mode.fsr1": "Balanced Clarity",
+        "settings.frame_enhancement_mode.bicubic": "Natural Softness",
+        "settings.frame_enhancement_mode.lanczos": "Crisp Detail",
+        "settings.frame_enhancement_mode.ravu": "Fine Reconstruction",
+        "settings.frame_enhancement_mode.cunny": "Texture Enhancement",
+        "settings.frame_enhancement_mode.nnedi3": "Smooth Lines",
+        "settings.frame_enhancement_mode.chain_4k_max": "4K Ultimate (Extreme Load)",
+        "settings.frame_enhancement_mode.chain_lossless": "Lossless Detail (Extreme Load)",
+        "settings.frame_enhancement_mode.chain_ultra": "Ultra-Clear Balance (High Load)",
+        "settings.frame_enhancement_mode.chain_detail": "High Definition (Medium-High Load)",
+        "settings.frame_enhancement_mode.chain_balanced": "Balanced Enhancement (Medium Load)",
+        "settings.frame_enhancement_mode.chain_soft": "Soft Clarity (Recommended, Medium-Low Load)",
+        "settings.frame_enhancement_mode.chain_light": "Light Enhancement (Low Load)",
+        "settings.frame_enhancement_mode.chain_basic": "Basic Enhancement (Lowest Load)",
         "settings.perf": "Performance Monitor",
         "settings.perf_desc": "Show FPS, process memory, estimated GPU memory, and graphics API information",
         "settings.fps_limit": "FPS Limit",
@@ -797,6 +938,53 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native はゲーム基準のキャンバス、Display Fit はデバイス表示サイズで実行します",
         "settings.upscale": "スケーリング",
         "settings.upscale_desc": "外側の画面を引き伸ばすときに使用します。Smooth/Linear は平滑化サンプリングを行います",
+        "settings.output_resolution": "出力解像度",
+        "settings.output_resolution_desc": "外側のスケーリングと画質強化の目標解像度を設定します。高い設定ほど GPU とメモリを多く使用します",
+        "settings.output_resolution.original": "オリジナル",
+        "settings.frame_enhancement": "画質強化",
+        "settings.frame_enhancement_desc": "GPU で線を修復し、選択した出力解像度へ高品質に拡大します。保存後すぐに反映されます",
+        "settings.frame_enhancement_unavailable_desc": "このビルドまたはグラフィックスデバイスでは画質強化を利用できません。元の映像を安全に表示します",
+        "settings.frame_enhancement_mode": "強化効果",
+        "settings.frame_enhancement_mode_desc": "画面に合う仕上がりを選択します。推奨効果は線と細部の修復を優先します",
+        "settings.frame_enhancement_kind.off": "オフ",
+        "settings.frame_enhancement_kind.preset": "プリセット",
+        "settings.frame_enhancement_kind.custom": "カスタム",
+        "settings.frame_enhancement_custom_desc": "アルゴリズムは上から順に実行され、2× 再構成・出力サイズ調整・同サイズ修復の意味を維持します",
+        "settings.frame_enhancement_custom_empty": "アルゴリズムがありません。追加して処理チェーンを作成できます。",
+        "settings.frame_enhancement_custom_add": "＋ アルゴリズムを追加",
+        "settings.frame_enhancement_custom_step": "ステップ %d",
+        "settings.frame_enhancement_custom_remove": "このアルゴリズムを削除",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_s.desc": "アニメの線と輪郭を軽量に 2× 再構成",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_l.desc": "アニメの細部を高品質に 2× 再構成",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_vl.desc": "最高品質の 2× 再構成。負荷は非常に高め",
+        "settings.frame_enhancement_algorithm.anime4k_restore_s.desc": "ぼやけた線・ノイズ・圧縮跡を同サイズで修復",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_s.desc": "小さい文字と細線を守る軽量で穏やかな修復",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_m.desc": "質感と小さい文字を両立する、より深い穏やかな修復",
+        "settings.frame_enhancement_algorithm.anime4k_restore_l.desc": "線と細部を高品質に同サイズ修復",
+        "settings.frame_enhancement_algorithm.anime4k_restore_vl.desc": "最高品質の同サイズ修復。負荷は非常に高め",
+        "settings.frame_enhancement_algorithm.fsr1_easu.desc": "輪郭を考慮して選択した出力解像度へ拡大縮小",
+        "settings.frame_enhancement_algorithm.fsr1_rcas.desc": "再構成・拡大後を同サイズで適応的に鮮鋭化",
+        "settings.frame_enhancement_algorithm.bicubic.desc": "自然で柔らかく選択した出力解像度へ拡大縮小",
+        "settings.frame_enhancement_algorithm.lanczos.desc": "くっきり選択した出力解像度へ拡大縮小",
+        "settings.frame_enhancement_algorithm.fxaa.desc": "目立つジャギーを同サイズで滑らかに補正",
+        "settings.frame_enhancement_algorithm.ravu_lite_r2.desc": "方向を考慮した軽量 2× 再構成",
+        "settings.frame_enhancement_algorithm.cunny_2x4c.desc": "軽量ニューラル 2× テクスチャ再構成",
+        "settings.frame_enhancement_algorithm.nnedi3_nns16.desc": "線と斜め輪郭を重視した 2× 補間再構成",
+        "settings.frame_enhancement_mode.anime4k": "スマート修復（推奨）",
+        "settings.frame_enhancement_mode.fsr1": "バランス鮮明",
+        "settings.frame_enhancement_mode.bicubic": "自然でソフト",
+        "settings.frame_enhancement_mode.lanczos": "くっきり細部",
+        "settings.frame_enhancement_mode.ravu": "高精細拡大",
+        "settings.frame_enhancement_mode.cunny": "質感強化",
+        "settings.frame_enhancement_mode.nnedi3": "線をなめらかに",
+        "settings.frame_enhancement_mode.chain_4k_max": "4K 極致（極高負荷）",
+        "settings.frame_enhancement_mode.chain_lossless": "ロスレス画質（極高負荷）",
+        "settings.frame_enhancement_mode.chain_ultra": "超鮮明バランス（高負荷）",
+        "settings.frame_enhancement_mode.chain_detail": "高精細（中高負荷）",
+        "settings.frame_enhancement_mode.chain_balanced": "バランス強化（中負荷）",
+        "settings.frame_enhancement_mode.chain_soft": "ソフト鮮明（推奨・中低負荷）",
+        "settings.frame_enhancement_mode.chain_light": "軽量強化（低負荷）",
+        "settings.frame_enhancement_mode.chain_basic": "基本強化（最低負荷）",
         "settings.perf": "パフォーマンス監視",
         "settings.perf_desc": "FPS、プロセスメモリ、GPU メモリ推定値、グラフィックス API 情報を表示します",
         "settings.fps_limit": "FPS 制限",
@@ -1005,6 +1193,53 @@ const UI_TEXT := {
         "settings.surface_mode_desc": "Game Native는 게임 기준 캔버스를 사용하고 Display Fit은 장치 표시 크기를 사용합니다",
         "settings.upscale": "스케일링",
         "settings.upscale_desc": "외부 화면을 늘릴 때 사용합니다. Smooth/Linear는 부드러운 샘플링을 적용합니다",
+        "settings.output_resolution": "출력 해상도",
+        "settings.output_resolution_desc": "외부 스케일링과 화질 향상의 목표 해상도를 설정합니다. 높은 단계일수록 GPU와 메모리를 더 사용합니다",
+        "settings.output_resolution.original": "원본",
+        "settings.frame_enhancement": "화질 향상",
+        "settings.frame_enhancement_desc": "GPU로 선을 복원하고 선택한 출력 해상도로 고품질 확대합니다. 저장 후 즉시 적용됩니다",
+        "settings.frame_enhancement_unavailable_desc": "현재 빌드 또는 그래픽 장치에서는 화질 향상을 사용할 수 없습니다. 원본 화면은 안전하게 유지됩니다",
+        "settings.frame_enhancement_mode": "향상 효과",
+        "settings.frame_enhancement_mode_desc": "화면에 맞는 처리 스타일을 선택합니다. 권장 효과는 선과 세부 복원을 우선합니다",
+        "settings.frame_enhancement_kind.off": "끄기",
+        "settings.frame_enhancement_kind.preset": "프리셋",
+        "settings.frame_enhancement_kind.custom": "사용자 정의",
+        "settings.frame_enhancement_custom_desc": "알고리즘은 위에서 아래 순서로 실행되며 2× 재구성, 출력 크기 조정, 동일 크기 복원의 의미를 유지합니다",
+        "settings.frame_enhancement_custom_empty": "알고리즘이 없습니다. 추가하여 처리 체인을 만들 수 있습니다.",
+        "settings.frame_enhancement_custom_add": "＋ 알고리즘 추가",
+        "settings.frame_enhancement_custom_step": "단계 %d",
+        "settings.frame_enhancement_custom_remove": "이 알고리즘 제거",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_s.desc": "애니메이션 선과 가장자리를 가볍게 2× 재구성",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_l.desc": "애니메이션 디테일을 고품질 2× 재구성",
+        "settings.frame_enhancement_algorithm.anime4k_upscale_vl.desc": "최고 품질 2× 재구성, 매우 높은 부하",
+        "settings.frame_enhancement_algorithm.anime4k_restore_s.desc": "흐린 선, 노이즈, 압축 흔적을 같은 크기로 복원",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_s.desc": "작은 글자와 가는 선을 보호하는 가벼운 부드러운 복원",
+        "settings.frame_enhancement_algorithm.anime4k_restore_soft_m.desc": "질감과 작은 글자를 균형 있게 살리는 부드러운 복원",
+        "settings.frame_enhancement_algorithm.anime4k_restore_l.desc": "선과 디테일을 고품질로 같은 크기 복원",
+        "settings.frame_enhancement_algorithm.anime4k_restore_vl.desc": "최고 품질 같은 크기 복원, 매우 높은 부하",
+        "settings.frame_enhancement_algorithm.fsr1_easu.desc": "가장자리를 고려해 선택한 출력 해상도로 크기 조정",
+        "settings.frame_enhancement_algorithm.fsr1_rcas.desc": "재구성 또는 확대 후 같은 크기로 적응형 선명화",
+        "settings.frame_enhancement_algorithm.bicubic.desc": "자연스럽고 부드럽게 선택한 출력 해상도로 크기 조정",
+        "settings.frame_enhancement_algorithm.lanczos.desc": "선명하게 선택한 출력 해상도로 크기 조정",
+        "settings.frame_enhancement_algorithm.fxaa.desc": "눈에 띄는 계단 현상을 같은 크기로 부드럽게 처리",
+        "settings.frame_enhancement_algorithm.ravu_lite_r2.desc": "방향성을 고려한 가벼운 2× 재구성",
+        "settings.frame_enhancement_algorithm.cunny_2x4c.desc": "가벼운 신경망 2× 텍스처 재구성",
+        "settings.frame_enhancement_algorithm.nnedi3_nns16.desc": "선과 대각선 가장자리에 초점을 둔 2× 보간 재구성",
+        "settings.frame_enhancement_mode.anime4k": "스마트 복원(권장)",
+        "settings.frame_enhancement_mode.fsr1": "균형 잡힌 선명도",
+        "settings.frame_enhancement_mode.bicubic": "자연스러운 부드러움",
+        "settings.frame_enhancement_mode.lanczos": "또렷한 디테일",
+        "settings.frame_enhancement_mode.ravu": "정밀 확대",
+        "settings.frame_enhancement_mode.cunny": "텍스처 향상",
+        "settings.frame_enhancement_mode.nnedi3": "선 윤곽 보정",
+        "settings.frame_enhancement_mode.chain_4k_max": "4K 최고 화질(극고부하)",
+        "settings.frame_enhancement_mode.chain_lossless": "무손실 화질(극고부하)",
+        "settings.frame_enhancement_mode.chain_ultra": "초고화질 균형(고부하)",
+        "settings.frame_enhancement_mode.chain_detail": "고정밀 화질(중고부하)",
+        "settings.frame_enhancement_mode.chain_balanced": "균형 향상(중간 부하)",
+        "settings.frame_enhancement_mode.chain_soft": "부드러운 선명도(권장, 중저부하)",
+        "settings.frame_enhancement_mode.chain_light": "경량 향상(저부하)",
+        "settings.frame_enhancement_mode.chain_basic": "기본 향상(최저 부하)",
         "settings.perf": "성능 모니터",
         "settings.perf_desc": "FPS, 프로세스 메모리, GPU 메모리 추정치와 그래픽 API 정보를 표시합니다",
         "settings.fps_limit": "FPS 제한",
@@ -1179,7 +1414,12 @@ const SETTINGS_DRAFT_KEYS := [
     "ios_ui_scale_mode",
     "backend",
     "upscale_algorithm",
+    "output_resolution",
     "surface_mode",
+    "frame_enhancement_enabled",
+    "frame_enhancement_kind",
+    "frame_enhancement_mode",
+    "frame_enhancement_custom_chain",
     "diagnostic_profile",
     "debug_overlay_mode",
     "fps_limit_enabled",
@@ -1361,7 +1601,14 @@ var runtime_default_font_path := ""
 var runtime_font_dir_path := ""
 var selected_backend := "Godot Native"
 var upscale_algorithm := "smooth"
+var output_resolution := OUTPUT_RESOLUTION_DEFAULT
 var render_surface_mode := "game"
+var frame_enhancement_enabled := false
+var frame_enhancement_kind := "off"
+var frame_enhancement_mode := FRAME_ENHANCEMENT_MODE_DEFAULT
+var frame_enhancement_custom_chain := PackedStringArray([
+    "anime4k_upscale_s", "bicubic", "anime4k_restore_soft_s",
+])
 var game_running := false
 var runtime_dialog_input: LineEdit = null
 var video_playing := false
@@ -1416,6 +1663,7 @@ var app_lifecycle_paused := false
 var render_errors := 0
 var last_renderer_info_logged := ""
 var last_texture_size := Vector2i.ZERO
+var last_source_texture_size := Vector2i.ZERO
 var capture_after_open_path := ""
 var capture_after_open_done := false
 var capture_after_open_delay_sec := 0.0
@@ -1505,9 +1753,56 @@ const PERF_LOG_INTERVAL := 2.0
 const UI_LOG_FLUSH_INTERVAL := 0.50
 const MAX_LOG_LINES := 240
 const RENDER_SURFACE_SIZE := Vector2i(1920, 1080)
-const RENDER_SURFACE_MAX_SIZE := Vector2i(1920, 1080)
+const RENDER_SURFACE_MAX_SIZE := Vector2i(3840, 2160)
 const RENDER_SURFACE_MODE_GAME := "game"
 const RENDER_SURFACE_MODE_DISPLAY := "display"
+const OUTPUT_RESOLUTION_DEFAULT := "1080p"
+const OUTPUT_RESOLUTION_MODES := ["original", "1080p", "2k", "4k"]
+const FRAME_ENHANCEMENT_KINDS := ["off", "preset", "custom"]
+const FRAME_ENHANCEMENT_MODE_DEFAULT := "chain_soft"
+const FRAME_ENHANCEMENT_MODES := [
+    "chain_4k_max", "chain_lossless", "chain_ultra", "chain_detail",
+    "chain_balanced", "chain_soft", "chain_light", "chain_basic",
+]
+const FRAME_ENHANCEMENT_PRESET_MODES := [
+    "chain_4k_max", "chain_lossless", "chain_ultra", "chain_detail",
+    "chain_balanced", "chain_soft", "chain_light", "chain_basic",
+]
+const FRAME_ENHANCEMENT_ALGORITHMS := [
+    "anime4k_upscale_s", "anime4k_upscale_l", "anime4k_upscale_vl",
+    "anime4k_restore_s", "anime4k_restore_soft_s", "anime4k_restore_soft_m",
+    "anime4k_restore_l", "anime4k_restore_vl",
+    "fsr1_easu", "fsr1_rcas", "bicubic", "lanczos", "fxaa",
+    "ravu_lite_r2", "cunny_2x4c", "nnedi3_nns16",
+]
+const FRAME_ENHANCEMENT_ALGORITHM_LABELS := {
+    "anime4k_upscale_s": "Anime4K Upscale S",
+    "anime4k_upscale_l": "Anime4K Upscale L",
+    "anime4k_upscale_vl": "Anime4K Upscale VL",
+    "anime4k_restore_s": "Anime4K Restore S",
+    "anime4k_restore_soft_s": "Anime4K Restore Soft S",
+    "anime4k_restore_soft_m": "Anime4K Restore Soft M",
+    "anime4k_restore_l": "Anime4K Restore L",
+    "anime4k_restore_vl": "Anime4K Restore VL",
+    "fsr1_easu": "FSR1 EASU",
+    "fsr1_rcas": "FSR1 RCAS",
+    "bicubic": "Bicubic",
+    "lanczos": "Lanczos",
+    "fxaa": "FXAA",
+    "ravu_lite_r2": "RAVU-Lite R2",
+    "cunny_2x4c": "CuNNy 2x4C",
+    "nnedi3_nns16": "NNEDI3 nns16",
+}
+const FRAME_ENHANCEMENT_CUSTOM_DEFAULT := [
+    "anime4k_upscale_s", "bicubic", "anime4k_restore_soft_s",
+]
+const FRAME_ENHANCEMENT_CUSTOM_MAX_STEPS := 32
+const AETHER_SELECT_OVERLAY_INPUT_GROUP := "aether_select_input_overlay"
+const OUTPUT_RESOLUTION_LIMITS := {
+    "1080p": Vector2i(1920, 1080),
+    "2k": Vector2i(2560, 1440),
+    "4k": Vector2i(3840, 2160),
+}
 const POST_INPUT_PRESENT_HOLD_FRAMES := 1
 const POST_CLICK_PRESENT_HOLD_FRAMES := 1
 const POST_INPUT_PRESENT_HOLD_MIN_INTERVAL_MS := 120
@@ -2378,7 +2673,7 @@ func _build_shell_chrome() -> void:
     sidebar.add_child(shell_sidebar_toggle)
 
     shell_sidebar_version = Label.new()
-    shell_sidebar_version.text = "0.2.0-beta.1"
+    shell_sidebar_version.text = _application_version_text()
     shell_sidebar_version.add_theme_font_size_override("font_size", 10)
     shell_sidebar_version.add_theme_color_override("font_color", ui_tokens.text_tertiary)
     sidebar.add_child(shell_sidebar_version)
@@ -2622,8 +2917,40 @@ func _load_shell_settings() -> void:
         upscale_algorithm = "smooth"
     if not upscale_algorithm in ["smooth", "nearest", "linear"]:
         upscale_algorithm = "smooth"
+    output_resolution = _normalize_output_resolution(String(cfg.get_value(
+        "rendering",
+        "output_resolution",
+        output_resolution
+    )))
+    output_resolution = _normalize_output_resolution(_runtime_string(
+        "AETHERKIRI_OUTPUT_RESOLUTION",
+        output_resolution
+    ))
     render_surface_mode = String(cfg.get_value("rendering", "surface_mode", render_surface_mode))
     _select_config_surface_mode(_runtime_string("AETHERKIRI_SURFACE_MODE", render_surface_mode))
+    var legacy_frame_enhancement_enabled := bool(cfg.get_value(
+        "rendering",
+        "frame_enhancement_enabled",
+        frame_enhancement_enabled
+    ))
+    frame_enhancement_kind = _normalize_frame_enhancement_kind(String(cfg.get_value(
+        "rendering",
+        "frame_enhancement_kind",
+        "preset" if legacy_frame_enhancement_enabled else "off"
+    )))
+    frame_enhancement_enabled = frame_enhancement_kind != "off"
+    frame_enhancement_mode = _normalize_frame_enhancement_mode(String(cfg.get_value(
+        "rendering",
+        "frame_enhancement_mode",
+        frame_enhancement_mode
+    )))
+    frame_enhancement_custom_chain = _normalize_frame_enhancement_custom_chain(
+        cfg.get_value(
+            "rendering",
+            "frame_enhancement_custom_chain",
+            FRAME_ENHANCEMENT_CUSTOM_DEFAULT
+        )
+    )
     var legacy_perf_overlay := bool(cfg.get_value("rendering", "perf_overlay", show_perf_monitor))
     debug_overlay_mode = String(cfg.get_value("diagnostics", "overlay_mode", "summary" if legacy_perf_overlay else "off"))
     if not debug_overlay_mode in DEBUG_OVERLAY_MODES:
@@ -2679,7 +3006,15 @@ func _save_shell_settings() -> void:
     cfg.set_value("interface", "ios_ui_scale_mode", ios_ui_scale_mode)
     cfg.set_value("rendering", "backend", selected_backend)
     cfg.set_value("rendering", "upscale_algorithm", upscale_algorithm)
+    cfg.set_value("rendering", "output_resolution", output_resolution)
     cfg.set_value("rendering", "surface_mode", render_surface_mode)
+    cfg.set_value("rendering", "frame_enhancement_enabled", frame_enhancement_enabled)
+    cfg.set_value("rendering", "frame_enhancement_kind", frame_enhancement_kind)
+    cfg.set_value("rendering", "frame_enhancement_mode", frame_enhancement_mode)
+    cfg.set_value(
+        "rendering", "frame_enhancement_custom_chain",
+        frame_enhancement_custom_chain
+    )
     cfg.set_value("diagnostics", "profile", diagnostic_profile)
     cfg.set_value("diagnostics", "overlay_mode", debug_overlay_mode)
     cfg.set_value("rendering", "fps_limit_enabled", frame_limit_enabled)
@@ -2696,6 +3031,7 @@ func _save_shell_settings() -> void:
     cfg.save(SETTINGS_FILE)
     ProjectSettings.set_setting(SETTINGS_KEY, selected_backend)
     _apply_engine_options()
+    _apply_frame_enhancement_settings()
     _apply_shell_runtime_settings()
     if diagnostic_session != null:
         diagnostic_session.apply_preference(diagnostic_profile, player, selected_backend)
@@ -2713,7 +3049,12 @@ func _current_settings_snapshot() -> Dictionary:
         "ios_ui_scale_mode": ios_ui_scale_mode,
         "backend": selected_backend,
         "upscale_algorithm": upscale_algorithm,
+        "output_resolution": output_resolution,
         "surface_mode": render_surface_mode,
+        "frame_enhancement_enabled": frame_enhancement_enabled,
+        "frame_enhancement_kind": frame_enhancement_kind,
+        "frame_enhancement_mode": frame_enhancement_mode,
+        "frame_enhancement_custom_chain": frame_enhancement_custom_chain.duplicate(),
         "diagnostic_profile": diagnostic_profile,
         "debug_overlay_mode": debug_overlay_mode,
         "fps_limit_enabled": frame_limit_enabled,
@@ -2834,6 +3175,12 @@ func _settings_draft_bool(key: String, fallback: bool) -> bool:
 func _settings_draft_int(key: String, fallback: int) -> int:
     return int(settings_draft.get(key, fallback))
 
+func _settings_draft_custom_chain() -> PackedStringArray:
+    return _normalize_frame_enhancement_custom_chain(settings_draft.get(
+        "frame_enhancement_custom_chain",
+        frame_enhancement_custom_chain
+    ))
+
 func _apply_settings_snapshot(snapshot: Dictionary) -> void:
     language_mode = _normalize_language_mode(String(snapshot.get("language", language_mode)))
     _apply_language_mode()
@@ -2851,9 +3198,27 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
     if not upscale_algorithm in ["smooth", "nearest", "linear"]:
         upscale_algorithm = "smooth"
     _apply_upscale_algorithm()
+    output_resolution = _normalize_output_resolution(String(snapshot.get(
+        "output_resolution",
+        output_resolution
+    )))
 
     var next_surface_mode := String(snapshot.get("surface_mode", render_surface_mode))
     render_surface_mode = next_surface_mode if next_surface_mode in [RENDER_SURFACE_MODE_GAME, RENDER_SURFACE_MODE_DISPLAY] else _default_render_surface_mode()
+    frame_enhancement_kind = _normalize_frame_enhancement_kind(String(snapshot.get(
+        "frame_enhancement_kind",
+        "preset" if bool(snapshot.get(
+            "frame_enhancement_enabled", frame_enhancement_enabled
+        )) else "off"
+    )))
+    frame_enhancement_enabled = frame_enhancement_kind != "off"
+    frame_enhancement_mode = _normalize_frame_enhancement_mode(String(snapshot.get(
+        "frame_enhancement_mode",
+        frame_enhancement_mode
+    )))
+    frame_enhancement_custom_chain = _normalize_frame_enhancement_custom_chain(
+        snapshot.get("frame_enhancement_custom_chain", frame_enhancement_custom_chain)
+    )
     diagnostic_profile = String(snapshot.get("diagnostic_profile", diagnostic_profile))
     if not diagnostic_profile in DIAGNOSTIC_PROFILES:
         diagnostic_profile = "baseline" if OS.is_debug_build() else "off"
@@ -2881,6 +3246,7 @@ func _save_settings_draft() -> void:
     var previous_ios_ui_scale_mode := ios_ui_scale_mode
     var previous_backend := selected_backend
     var previous_surface_mode := render_surface_mode
+    var previous_output_resolution := output_resolution
     var snapshot := settings_draft.duplicate()
 
     _apply_settings_snapshot(snapshot)
@@ -2901,7 +3267,8 @@ func _save_settings_draft() -> void:
             else:
                 _apply_backend(true)
 
-    if previous_surface_mode != render_surface_mode and game_running:
+    if (previous_surface_mode != render_surface_mode or
+            previous_output_resolution != output_resolution) and game_running:
         _sync_player_surface_size(true)
 
     var language_changed := previous_language != language_mode or previous_active_language != active_language
@@ -2939,6 +3306,10 @@ func _apply_engine_options() -> void:
     player.set_engine_option("console_log_file", "1" if console_log_file else "0")
     player.set_engine_option("trace_log", "1" if effective_trace_log else "0")
     player.set_engine_option("input_trace", "1" if effective_input_trace else "0")
+    # A synchronous Artemis resource load can make the next Godot frame carry
+    # hundreds of milliseconds. Keep visual evolution incremental so authored
+    # E-mote expressions and fades cannot collapse into a one-frame flash.
+    player.set_engine_option("artemis.max_visual_delta_ms", "34")
     var effective_export_scripts := export_scripts or _runtime_flag("AETHERKIRI_EXPORT_SCRIPTS", false)
     player.set_engine_option("export_scripts", "1" if effective_export_scripts else "0")
     if not runtime_default_font_path.is_empty():
@@ -2946,6 +3317,25 @@ func _apply_engine_options() -> void:
     if not runtime_font_dir_path.is_empty():
         player.set_engine_option("font_dir", runtime_font_dir_path)
     player.set_engine_option("error_dialog_logs", "1" if error_dialog_logs else "0")
+
+func _apply_frame_enhancement_settings() -> void:
+    if player == null or not player.has_method("set_frame_enhancement_enabled"):
+        return
+    if player.has_method("set_frame_native_output_enabled"):
+        player.set_frame_native_output_enabled(output_resolution == "original")
+    if player.has_method("set_frame_enhancement_custom_chain"):
+        player.set_frame_enhancement_custom_chain(frame_enhancement_custom_chain)
+    player.set_frame_enhancement_mode(
+        "custom" if frame_enhancement_kind == "custom" else frame_enhancement_mode
+    )
+    player.set_frame_enhancement_enabled(frame_enhancement_kind != "off")
+
+func _frame_enhancement_description() -> String:
+    if player == null or not player.has_method("is_frame_enhancement_available"):
+        return _t("settings.frame_enhancement_unavailable_desc")
+    if not bool(player.is_frame_enhancement_available()):
+        return _t("settings.frame_enhancement_unavailable_desc")
+    return _t("settings.frame_enhancement_desc")
 
 func _apply_diagnostic_profile_environment(profile_name: String) -> void:
     var catalog := DiagnosticSession.profile_catalog()
@@ -3838,6 +4228,35 @@ func _rebuild_settings_view() -> void:
     _add_settings_row(render_group, _settings_block(_t("settings.render_backend"), _t("settings.render_backend_desc"), _backend_segment(), stack_settings_controls))
     _add_settings_row(render_group, _settings_block(_t("settings.surface_mode"), _t("settings.surface_mode_desc"), _surface_mode_select(), stack_settings_controls))
     _add_settings_row(render_group, _settings_block(_t("settings.upscale"), _t("settings.upscale_desc"), _upscale_select(), stack_settings_controls))
+    _add_settings_row(render_group, _settings_block(
+        _t("settings.output_resolution"),
+        _t("settings.output_resolution_desc"),
+        _output_resolution_select(),
+        stack_settings_controls
+    ))
+    _add_settings_row(render_group, _settings_block(
+        _t("settings.frame_enhancement"),
+        _frame_enhancement_description(),
+        _frame_enhancement_kind_select(),
+        stack_settings_controls
+    ))
+    var enhancement_kind := _normalize_frame_enhancement_kind(
+        _settings_draft_string("frame_enhancement_kind", frame_enhancement_kind)
+    )
+    if enhancement_kind == "preset":
+        _add_settings_row(render_group, _settings_block(
+            _t("settings.frame_enhancement_mode"),
+            _t("settings.frame_enhancement_mode_desc"),
+            _frame_enhancement_mode_select(),
+            stack_settings_controls
+        ))
+    elif enhancement_kind == "custom":
+        _add_settings_row(render_group, _settings_block(
+            _t("settings.frame_enhancement_mode"),
+            _t("settings.frame_enhancement_custom_desc"),
+            _frame_enhancement_custom_editor(),
+            true
+        ))
     _add_settings_row(render_group, _settings_toggle_row(_t("settings.fps_limit"), _t("settings.fps_limit_desc"), _settings_draft_bool("fps_limit_enabled", frame_limit_enabled), "fps_limit"))
     if _settings_draft_bool("fps_limit_enabled", frame_limit_enabled):
         _add_settings_row(render_group, _settings_fps_row())
@@ -3905,11 +4324,14 @@ func _rebuild_settings_view() -> void:
         ))
     _add_settings_row(about_group, _settings_value_row(
         _t("settings.version"),
-        str(ProjectSettings.get_setting("application/config/version", "development"))
+        _application_version_text()
     ))
 
     if animate_page:
         ui_motion.reveal(top)
+
+func _application_version_text() -> String:
+    return str(ProjectSettings.get_setting("application/config/version", "development"))
 
 func _build_detail_view() -> void:
     detail_view = Control.new()
@@ -5399,6 +5821,149 @@ func _upscale_select() -> Control:
     )
     return select
 
+func _output_resolution_select() -> Control:
+    var select = _apple_select()
+    var options := [
+        {"label": _t("settings.output_resolution.original"), "value": "original"},
+        {"label": "1080p", "value": "1080p"},
+        {"label": "2K (2560×1440)", "value": "2k"},
+        {"label": "4K (3840×2160)", "value": "4k"},
+    ]
+    var selected_index := 0
+    var draft_resolution := _normalize_output_resolution(_settings_draft_string(
+        "output_resolution",
+        output_resolution
+    ))
+    for i in range(options.size()):
+        select.add_item(String(options[i]["label"]))
+        select.set_item_metadata(i, String(options[i]["value"]))
+        if String(options[i]["value"]) == draft_resolution:
+            selected_index = i
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_output_resolution(String(select.get_item_metadata(index)))
+    )
+    return select
+
+func _frame_enhancement_mode_select() -> Control:
+    var select = _apple_select()
+    var selected_index := 0
+    var draft_mode := _normalize_frame_enhancement_mode(_settings_draft_string(
+        "frame_enhancement_mode",
+        frame_enhancement_mode
+    ))
+    for value in FRAME_ENHANCEMENT_PRESET_MODES:
+        select.add_item(_t("settings.frame_enhancement_mode.%s" % value))
+        select.set_item_metadata(select.item_count - 1, value)
+        if value == draft_mode:
+            selected_index = select.item_count - 1
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_frame_enhancement_mode(String(select.get_item_metadata(index)))
+    )
+    return select
+
+func _frame_enhancement_kind_select() -> Control:
+    var select = _apple_select()
+    var draft_kind := _normalize_frame_enhancement_kind(_settings_draft_string(
+        "frame_enhancement_kind",
+        frame_enhancement_kind
+    ))
+    var selected_index := 0
+    for kind in FRAME_ENHANCEMENT_KINDS:
+        select.add_item(_t("settings.frame_enhancement_kind.%s" % kind))
+        select.set_item_metadata(select.item_count - 1, kind)
+        if kind == draft_kind:
+            selected_index = select.item_count - 1
+    select.select(selected_index)
+    select.item_selected.connect(func(index: int):
+        _select_frame_enhancement_kind(String(select.get_item_metadata(index)))
+    )
+    return select
+
+func _frame_enhancement_custom_editor() -> Control:
+    var editor := VBoxContainer.new()
+    editor.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    editor.add_theme_constant_override("separation", 12)
+    var chain := _settings_draft_custom_chain()
+    if chain.is_empty():
+        var empty := Label.new()
+        empty.text = _t("settings.frame_enhancement_custom_empty")
+        empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+        empty.add_theme_font_size_override("font_size", 13)
+        empty.add_theme_color_override("font_color", ui_tokens.text_secondary)
+        editor.add_child(empty)
+    for index in range(chain.size()):
+        editor.add_child(_frame_enhancement_custom_row(index, chain[index]))
+    var add_button := _pill_button(_t("settings.frame_enhancement_custom_add"))
+    # Clipped Button text is excluded from Godot's minimum-width calculation.
+    # This control shrinks to its content, so give the localized label a real
+    # width and keep it visible instead of leaving only the stylebox margins.
+    add_button.clip_text = false
+    add_button.custom_minimum_size = Vector2(220, 44)
+    add_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+    add_button.disabled = chain.size() >= FRAME_ENHANCEMENT_CUSTOM_MAX_STEPS
+    _sync_pill_button_content_state(add_button)
+    add_button.pressed.connect(_add_frame_enhancement_custom_algorithm)
+    editor.add_child(add_button)
+    return editor
+
+func _frame_enhancement_custom_row(index: int, algorithm_id: String) -> Control:
+    var row := HBoxContainer.new()
+    row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    row.custom_minimum_size = Vector2(0, 72)
+    row.add_theme_constant_override("separation", 10)
+    var summary := VBoxContainer.new()
+    summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    summary.add_theme_constant_override("separation", 3)
+    row.add_child(summary)
+    var title := Label.new()
+    title.text = "%s · %s" % [
+        _t("settings.frame_enhancement_custom_step") % (index + 1),
+        String(FRAME_ENHANCEMENT_ALGORITHM_LABELS.get(algorithm_id, algorithm_id)),
+    ]
+    title.add_theme_font_size_override("font_size", 14)
+    title.add_theme_color_override("font_color", ui_tokens.text_primary)
+    summary.add_child(title)
+    var description := Label.new()
+    description.text = _t("settings.frame_enhancement_algorithm.%s.desc" % algorithm_id)
+    description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    description.add_theme_font_size_override("font_size", 12)
+    description.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    summary.add_child(description)
+    var select = _apple_select(250)
+    var selected_index := 0
+    for option_index in range(FRAME_ENHANCEMENT_ALGORITHMS.size()):
+        var option_id: String = FRAME_ENHANCEMENT_ALGORITHMS[option_index]
+        select.add_item(String(FRAME_ENHANCEMENT_ALGORITHM_LABELS[option_id]))
+        select.set_item_metadata(option_index, option_id)
+        if option_id == algorithm_id:
+            selected_index = option_index
+    select.select(selected_index)
+    select.item_selected.connect(func(option_index: int):
+        _select_frame_enhancement_custom_algorithm(
+            index,
+            String(select.get_item_metadata(option_index))
+        )
+    )
+    row.add_child(select)
+    var remove := Button.new()
+    remove.text = "−"
+    remove.tooltip_text = _t("settings.frame_enhancement_custom_remove")
+    remove.accessibility_name = remove.tooltip_text
+    remove.custom_minimum_size = Vector2(40, 40)
+    remove.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    remove.add_theme_font_size_override("font_size", 20)
+    remove.add_theme_color_override("font_color", ui_tokens.text_secondary)
+    remove.add_theme_color_override("font_hover_color", ui_tokens.danger)
+    remove.add_theme_stylebox_override("normal", ui_tokens.button_style(Color.TRANSPARENT, ui_tokens.separator, 8))
+    remove.add_theme_stylebox_override("hover", ui_tokens.button_style(ui_tokens.surface_hover, ui_tokens.danger, 8))
+    remove.add_theme_stylebox_override("pressed", ui_tokens.button_style(ui_tokens.accent_fill, ui_tokens.danger, 8))
+    remove.pressed.connect(func(): _remove_frame_enhancement_custom_algorithm(index))
+    ui_motion.bind_pressable(remove)
+    row.add_child(remove)
+    return row
+
 func _surface_mode_select() -> Control:
     var select = _apple_select()
     var options := [
@@ -5512,6 +6077,90 @@ func _select_upscale_algorithm(value: String) -> void:
     if not value in ["smooth", "nearest", "linear"]:
         return
     _set_settings_draft_value("upscale_algorithm", value)
+
+func _normalize_output_resolution(value: String) -> String:
+    var normalized := value.strip_edges().to_lower()
+    if normalized == "1440p":
+        normalized = "2k"
+    elif normalized == "2160p":
+        normalized = "4k"
+    return normalized if normalized in OUTPUT_RESOLUTION_MODES else OUTPUT_RESOLUTION_DEFAULT
+
+func _select_output_resolution(value: String) -> void:
+    var normalized := _normalize_output_resolution(value)
+    if normalized != value.strip_edges().to_lower():
+        return
+    _set_settings_draft_value("output_resolution", normalized)
+
+func _normalize_frame_enhancement_mode(value: String) -> String:
+    var normalized := value.strip_edges().to_lower()
+    if normalized == "auto":
+        normalized = FRAME_ENHANCEMENT_MODE_DEFAULT
+    return normalized if normalized in FRAME_ENHANCEMENT_MODES else FRAME_ENHANCEMENT_MODE_DEFAULT
+
+func _normalize_frame_enhancement_kind(value: String) -> String:
+    var normalized := value.strip_edges().to_lower()
+    return normalized if normalized in FRAME_ENHANCEMENT_KINDS else "off"
+
+func _normalize_frame_enhancement_custom_chain(value) -> PackedStringArray:
+    var normalized := PackedStringArray()
+    if not (value is Array or value is PackedStringArray):
+        value = FRAME_ENHANCEMENT_CUSTOM_DEFAULT
+    for entry in value:
+        var algorithm_id := String(entry).strip_edges().to_lower()
+        if algorithm_id in FRAME_ENHANCEMENT_ALGORITHMS:
+            normalized.push_back(algorithm_id)
+        if normalized.size() >= FRAME_ENHANCEMENT_CUSTOM_MAX_STEPS:
+            break
+    return normalized
+
+func _select_frame_enhancement_kind(value: String) -> void:
+    var normalized := _normalize_frame_enhancement_kind(value)
+    if normalized != value.strip_edges().to_lower():
+        return
+    _set_settings_draft_value("frame_enhancement_kind", normalized)
+    _set_settings_draft_value("frame_enhancement_enabled", normalized != "off")
+    call_deferred("_rebuild_settings_after_enhancement_change")
+
+func _select_frame_enhancement_mode(value: String) -> void:
+    var normalized := _normalize_frame_enhancement_mode(value)
+    if normalized != value.strip_edges().to_lower():
+        return
+    _set_settings_draft_value("frame_enhancement_mode", normalized)
+
+func _select_frame_enhancement_custom_algorithm(index: int, value: String) -> void:
+    if not value in FRAME_ENHANCEMENT_ALGORITHMS:
+        return
+    var chain := _settings_draft_custom_chain()
+    if index < 0 or index >= chain.size():
+        return
+    chain[index] = value
+    _set_settings_draft_value("frame_enhancement_custom_chain", chain)
+    call_deferred("_rebuild_settings_after_enhancement_change")
+
+func _add_frame_enhancement_custom_algorithm() -> void:
+    var chain := _settings_draft_custom_chain()
+    if chain.size() >= FRAME_ENHANCEMENT_CUSTOM_MAX_STEPS:
+        return
+    chain.push_back("anime4k_upscale_s")
+    _set_settings_draft_value("frame_enhancement_custom_chain", chain)
+    call_deferred("_rebuild_settings_after_enhancement_change")
+
+func _remove_frame_enhancement_custom_algorithm(index: int) -> void:
+    var chain := _settings_draft_custom_chain()
+    if index < 0 or index >= chain.size():
+        return
+    chain.remove_at(index)
+    _set_settings_draft_value("frame_enhancement_custom_chain", chain)
+    call_deferred("_rebuild_settings_after_enhancement_change")
+
+func _rebuild_settings_after_enhancement_change() -> void:
+    if settings_view == null or not is_instance_valid(settings_view):
+        return
+    var restore_scroll := settings_view.scroll_vertical
+    settings_animate_next = false
+    _rebuild_settings_view()
+    call_deferred("_restore_settings_scroll_after_relayout", restore_scroll)
 
 func _default_render_surface_mode() -> String:
     return RENDER_SURFACE_MODE_GAME
@@ -9446,6 +10095,7 @@ func _finish_ready_after_first_frame() -> void:
     if engine_initialized:
         _apply_backend(false)
         _apply_engine_options()
+        _apply_frame_enhancement_settings()
         diagnostic_session.start(player, selected_backend)
         _sync_debug_console_state()
     if not cli_probe_script.is_empty():
@@ -9822,6 +10472,7 @@ func _prepare_cli_probe_view(config: Dictionary) -> void:
     restart_notice.visible = false
     viewport.texture = null
     last_texture_size = Vector2i.ZERO
+    last_source_texture_size = Vector2i.ZERO
     game_running = false
     _sync_debug_console_state()
     _fit_full_rects()
@@ -9881,11 +10532,18 @@ func _probe_tick_and_update() -> bool:
     if present_hold_frames > 0:
         present_hold_frames -= 1
         return true
+    if player.has_method("set_frame_enhancement_target_size"):
+        var enhancement_target := _frame_enhancement_target_size()
+        player.set_frame_enhancement_target_size(enhancement_target.x, enhancement_target.y)
     var texture: Texture2D = player.update_frame_texture()
     if texture != null:
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+        if player.has_method("get_frame_source_size"):
+            var source_size: Vector2i = player.get_frame_source_size()
+            if source_size.x > 0 and source_size.y > 0:
+                last_source_texture_size = source_size
         _layout_game_viewport(get_viewport_rect().size)
     return true
 
@@ -9924,7 +10582,10 @@ func _run_cli_smoke_probe(config: Dictionary, target_game_path: String) -> void:
         return
 
     var texture: Texture2D = player.update_frame_texture()
-    if texture == null or texture.get_width() != width or texture.get_height() != height:
+    var source_size := Vector2i(width, height)
+    if player.has_method("get_frame_source_size"):
+        source_size = player.get_frame_source_size()
+    if texture == null or source_size != Vector2i(width, height):
         printerr("texture update failed backend=%s frame=%dx%d renderer=%s" % [
             backend_name,
             width,
@@ -10141,6 +10802,10 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
         if texture != null:
             viewport.texture = texture
             last_texture_size = Vector2i(texture.get_width(), texture.get_height())
+            if player.has_method("get_frame_source_size"):
+                var source_size: Vector2i = player.get_frame_source_size()
+                if source_size.x > 0 and source_size.y > 0:
+                    last_source_texture_size = source_size
             _layout_game_viewport(viewport.size)
             viewport.queue_redraw()
         var frame_end := Time.get_ticks_usec()
@@ -10296,21 +10961,17 @@ func _probe_send_mapped_scroll(window_pos: Vector2, config: Dictionary, delta_y:
     player.send_pointer_event(POINTER_SCROLL, 0, mapped.x, mapped.y, 0.0, delta_y, 0)
 
 func _probe_map_window_point(pos: Vector2, config: Dictionary) -> Vector2:
-    var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
     var coord := ProbeConfig.coord_size(config, Vector2i(
         _runtime_int("AETHERKIRI_PROBE_COORD_W", 1600),
         _runtime_int("AETHERKIRI_PROBE_COORD_H", 900)
     ))
     var panel_size := Vector2(coord)
-    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
-    if scale <= 0.0:
-        return Vector2(-1.0, -1.0)
-    var drawn_size := tex_size * scale
-    var offset := (panel_size - drawn_size) * 0.5
-    var inside := pos - offset
-    if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
-        return Vector2(-1.0, -1.0)
-    return inside / scale
+    return GameInputMapping.map_point_to_surface(
+        pos,
+        Rect2(Vector2.ZERO, panel_size),
+        _game_input_content_size(),
+        _game_input_surface_size()
+    )
 
 func _run_cli_gui_probe(config: Dictionary, target_game_path: String) -> void:
     if not _probe_open_game(config, target_game_path, "AETHERKIRI_RENDER_BACKEND"):
@@ -10760,6 +11421,21 @@ func _process(delta: float) -> void:
             fallback,
             render_errors,
         ]
+        if game_running and player.has_method("get_frame_enhancement_status"):
+            var effect_status: Dictionary = player.get_frame_enhancement_status()
+            var effect_state := "active" if bool(effect_status.get("active", false)) else ("waiting" if bool(effect_status.get("enabled", false)) else "off")
+            var effect_label := _t("settings.frame_enhancement_mode.%s" % frame_enhancement_mode)
+            if frame_enhancement_kind == "custom":
+                effect_label = _t("settings.frame_enhancement_kind.custom")
+            summary_text += "\nEnhancement: %s | Effect: %s | Source: %dx%d | Output: %dx%d | Raw: %s" % [
+                effect_state,
+                effect_label,
+                int(effect_status.get("source_width", 0)),
+                int(effect_status.get("source_height", 0)),
+                last_texture_size.x,
+                last_texture_size.y,
+                "yes" if bool(effect_status.get("raw_source_output", false)) else "no",
+            ]
         summary_text += "\nMemory: App %s | Peak %s | Headroom %s | Godot %s | GPU(est.) %s (Tex %s / Buf %s) | Cache %s" % [
             _format_monitor_bytes(int(memory.get("current_bytes", 0))),
             _format_monitor_bytes(int(memory.get("peak_bytes", 0))),
@@ -11138,6 +11814,7 @@ func _on_open_game() -> void:
         log_view.text = ""
         log_view.scroll_vertical = 0
     last_texture_size = Vector2i.ZERO
+    last_source_texture_size = Vector2i.ZERO
     present_hold_frames = 0
     capture_after_open_done = false
     capture_after_open_ready_usec = 0
@@ -11162,6 +11839,8 @@ func _on_open_game() -> void:
 
 func _desired_render_surface_size() -> Vector2i:
     var base_size := _base_render_surface_size()
+    if output_resolution != "original":
+        return _frame_output_target_size(base_size)
     if render_surface_mode == RENDER_SURFACE_MODE_GAME:
         return base_size
     var window_size := DisplayServer.window_get_size()
@@ -11189,6 +11868,38 @@ func _desired_render_surface_size() -> Vector2i:
         maxi(1, int(round(float(base_size.x) * scale))),
         maxi(1, int(round(float(base_size.y) * scale)))
     )
+
+func _frame_output_resolution_limit() -> Vector2i:
+    var normalized := _normalize_output_resolution(output_resolution)
+    if normalized == "original":
+        return Vector2i.ZERO
+    var preset: Vector2i = OUTPUT_RESOLUTION_LIMITS.get(
+        normalized,
+        OUTPUT_RESOLUTION_LIMITS[OUTPUT_RESOLUTION_DEFAULT]
+    )
+    return Vector2i(
+        clampi(preset.x, 1, render_surface_max_size.x),
+        clampi(preset.y, 1, render_surface_max_size.y)
+    )
+
+func _fit_frame_size_within(source_size: Vector2i, bounds: Vector2i) -> Vector2i:
+    if bounds.x <= 0 or bounds.y <= 0:
+        return Vector2i.ZERO
+    if source_size.x <= 0 or source_size.y <= 0:
+        return bounds
+    var scale := minf(
+        float(bounds.x) / float(source_size.x),
+        float(bounds.y) / float(source_size.y)
+    )
+    return Vector2i(
+        maxi(1, int(round(float(source_size.x) * scale))),
+        maxi(1, int(round(float(source_size.y) * scale)))
+    )
+
+func _frame_output_target_size(source_size: Vector2i) -> Vector2i:
+    if _normalize_output_resolution(output_resolution) == "original":
+        return source_size
+    return _fit_frame_size_within(source_size, _frame_output_resolution_limit())
 
 func _base_render_surface_size() -> Vector2i:
     return Vector2i(
@@ -11236,6 +11947,7 @@ func _sync_player_surface_size(force: bool) -> void:
         return
     if current_surface_size != target_size:
         last_texture_size = Vector2i.ZERO
+        last_source_texture_size = Vector2i.ZERO
         var window_size := DisplayServer.window_get_size()
         var screen := DisplayServer.window_get_current_screen()
         var base_size := _base_render_surface_size()
@@ -11333,10 +12045,46 @@ func _flush_log_view() -> void:
     log_view.text = "\n".join(log_lines)
     call_deferred("_scroll_log_to_bottom")
 
+func _frame_enhancement_target_size() -> Vector2i:
+    # The resolution selector is the single target for both the engine's
+    # surface scaler and the private enhancement scaler. Restore still runs
+    # once at source size; only EASU/Bicubic/Lanczos sees this target.
+    var source_size := last_source_texture_size
+    if source_size.x <= 0 or source_size.y <= 0:
+        if output_resolution == "original":
+            # A zero target asks the host to use the source texture dimensions,
+            # avoiding a speculative 1080p allocation for the first frame.
+            return Vector2i.ZERO
+        source_size = _base_render_surface_size()
+    return _frame_output_target_size(source_size)
+
+func _game_input_content_size() -> Vector2:
+    # With enhancement enabled the host publishes the raw game frame so it is
+    # processed exactly once. This is the aspect ratio actually visible inside
+    # GameViewport and therefore the first coordinate space for pointer input.
+    if last_source_texture_size.x > 0 and last_source_texture_size.y > 0:
+        return Vector2(last_source_texture_size)
+    return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
+
+func _game_input_surface_size() -> Vector2:
+    # The engine API still consumes the runtime surface coordinate space. It
+    # can differ from the raw frame (for example 1920x1080 for an 800x600
+    # layer). DrawDevice stretches that full surface back to the layer, so
+    # input mapping must apply the inverse per-axis scale without letterboxing.
+    if current_surface_size.x > 0 and current_surface_size.y > 0:
+        return Vector2(current_surface_size)
+    return _game_input_content_size()
+
 func _update_frame() -> void:
     if present_hold_frames > 0:
         present_hold_frames -= 1
         return
+    if player.has_method("set_frame_enhancement_target_size"):
+        var enhancement_target := _frame_enhancement_target_size()
+        player.set_frame_enhancement_target_size(
+            enhancement_target.x,
+            enhancement_target.y
+        )
     var texture: Texture2D = player.update_frame_texture()
     if texture != null:
         if _should_hold_suspect_black_frame():
@@ -11344,7 +12092,13 @@ func _update_frame() -> void:
         viewport.texture = texture
         viewport.queue_redraw()
         last_texture_size = Vector2i(texture.get_width(), texture.get_height())
-        _sync_game_surface_to_texture(last_texture_size)
+        if player.has_method("get_frame_source_size"):
+            var source_size: Vector2i = player.get_frame_source_size()
+            if source_size.x > 0 and source_size.y > 0:
+                last_source_texture_size = source_size
+        if last_source_texture_size.x <= 0 or last_source_texture_size.y <= 0:
+            last_source_texture_size = last_texture_size
+        _sync_game_surface_to_texture(last_source_texture_size)
         _layout_game_viewport(get_viewport_rect().size)
         if not auto_probe_clicks.is_empty() and not auto_probe_running and not auto_probe_done:
             auto_probe_running = true
@@ -11598,20 +12352,16 @@ func _send_probe_click(window_pos: Vector2) -> void:
     _write_probe_marker("auto_click window=%s mapped=%s" % [window_pos, mapped])
 
 func _map_probe_window_point(pos: Vector2) -> Vector2:
-    var tex_size := Vector2(max(1.0, float(last_texture_size.x)), max(1.0, float(last_texture_size.y)))
     var panel_size := Vector2(
         float(_runtime_int("AETHERKIRI_AUTO_PROBE_COORD_W", 1600)),
         float(_runtime_int("AETHERKIRI_AUTO_PROBE_COORD_H", 900))
     )
-    var scale: float = min(panel_size.x / tex_size.x, panel_size.y / tex_size.y)
-    if scale <= 0.0:
-        return Vector2(-1.0, -1.0)
-    var drawn_size := tex_size * scale
-    var offset := (panel_size - drawn_size) * 0.5
-    var inside := pos - offset
-    if inside.x < 0.0 or inside.y < 0.0 or inside.x > drawn_size.x or inside.y > drawn_size.y:
-        return Vector2(-1.0, -1.0)
-    return inside / scale
+    return GameInputMapping.map_point_to_surface(
+        pos,
+        Rect2(Vector2.ZERO, panel_size),
+        _game_input_content_size(),
+        _game_input_surface_size()
+    )
 
 func _frame_stats(frame: Dictionary) -> Dictionary:
     var data: PackedByteArray = frame.get("rgba", PackedByteArray())
@@ -12116,6 +12866,12 @@ func _handle_shell_scroll_input(event: InputEvent) -> bool:
     if shell_root == null or not shell_root.visible:
         return false
     if modal_layer != null and modal_layer.visible:
+        return false
+    # AetherSelect is rendered in a scene-level overlay, outside the settings
+    # ScrollContainer's ancestry. This global shell handler runs before normal
+    # Control GUI dispatch, so it must stand down while that overlay owns the
+    # pointer; otherwise one wheel gesture moves both scroll containers.
+    if get_tree().get_first_node_in_group(AETHER_SELECT_OVERLAY_INPUT_GROUP) != null:
         return false
 
     if event is InputEventScreenTouch:
@@ -12782,25 +13538,23 @@ func _map_surface_point_to_screen(point: Vector2) -> Vector2:
 func _map_viewport_point(pos: Vector2, clamp_to_bounds: bool = false) -> Vector2:
     if viewport.texture == null:
         return pos
-    var tex_size: Vector2 = Vector2(
-        max(1.0, float(viewport.texture.get_width())),
-        max(1.0, float(viewport.texture.get_height()))
-    )
-    return GameInputMapping.map_point(
+    return GameInputMapping.map_point_to_surface(
         pos,
         viewport.get_global_rect(),
-        tex_size,
+        _game_input_content_size(),
+        _game_input_surface_size(),
         clamp_to_bounds
     )
 
 func _map_viewport_delta(delta: Vector2) -> Vector2:
     if viewport.texture == null:
         return delta
-    var tex_size: Vector2 = Vector2(
-        max(1.0, float(viewport.texture.get_width())),
-        max(1.0, float(viewport.texture.get_height()))
+    return GameInputMapping.map_delta_to_surface(
+        delta,
+        viewport.size,
+        _game_input_content_size(),
+        _game_input_surface_size()
     )
-    return GameInputMapping.map_delta(delta, viewport.size, tex_size)
 
 func _map_mouse_button(button_index: MouseButton) -> int:
     if button_index == MOUSE_BUTTON_RIGHT:

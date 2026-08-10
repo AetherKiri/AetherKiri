@@ -292,6 +292,8 @@ namespace motion::detail {
         // other is cleared and rebuilt.
         std::array<tTJSVariant, 2> d3dRenderLayers;
         std::size_t nextD3DRenderLayer = 0;
+        std::size_t lastD3DRenderLayer = 0;
+        std::uint64_t lastD3DRasterPublishUs = 0;
         // Stable visible endpoint for D3DAffineSourceMotion scripts that
         // present Player.draw() directly instead of calling captureCanvas().
         // AssignMotionImages swaps completed scratch textures into this layer
@@ -683,6 +685,9 @@ namespace motion::detail {
             emoteCommandOutputCacheGeneration = 0;
             emoteCommandOutputCacheHits = 0;
             emoteCommandLeafCacheHits = 0;
+            nextD3DRenderLayer = 0;
+            lastD3DRenderLayer = 0;
+            lastD3DRasterPublishUs = 0;
             inheritedVariableInputs.clear();
             effectiveVariableScratch.clear();
             effectiveVariableScratchGeneration = 0;
@@ -703,6 +708,12 @@ namespace motion::detail {
         int localNodeIndex,
         int childParentNodeIndex) {
         return localNodeIndex > childParentNodeIndex;
+    }
+
+    inline bool preparedChildParentSlotLess(
+        int lhsParentNodeIndex,
+        int rhsParentNodeIndex) {
+        return lhsParentNodeIndex < rhsParentNodeIndex;
     }
 
     inline bool tessellatePreparedItemForExternalMesh(

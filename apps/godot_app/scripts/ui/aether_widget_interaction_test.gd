@@ -138,15 +138,58 @@ func _run() -> void:
         load("res://assets/ui/icons/chevron-down.svg"),
         load("res://assets/ui/icons/check.svg")
     )
-    for label in ["System", "Simplified Chinese", "Traditional Chinese", "English", "Japanese"]:
-        select.add_item(label)
+    for index in range(20):
+        select.add_item("Option %d" % (index + 1))
     select.position = Vector2(20, 420)
     select.size = Vector2(300, 44)
     scene.add_child(select)
     select._open_popup()
     await process_frame
+    if not select.overlay.is_in_group(select.OVERLAY_INPUT_GROUP):
+        _fail("select overlay did not claim exclusive scroll input")
+        return
+    var popup_scroll := select.popup_panel.get_node("MenuScroll") as ScrollContainer
+    if popup_scroll == null or popup_scroll.mouse_force_pass_scroll_events:
+        _fail("select popup allows wheel events to escape its scroll container")
+        return
+    if popup_scroll.scroll_deadzone != 0:
+        _fail("select popup retained a touch drag deadzone")
+        return
+    var popup_menu := popup_scroll.get_node("MenuItems") as VBoxContainer
+    if popup_menu == null or popup_menu.get_child_count() != 20:
+        _fail("select popup did not create its menu rows")
+        return
+    for child in popup_menu.get_children():
+        var menu_button := child as Button
+        if menu_button == null or menu_button.mouse_filter != Control.MOUSE_FILTER_PASS:
+            _fail("select menu row blocks touch drags from reaching the scroll container")
+            return
+    var touch_start := popup_scroll.get_global_rect().get_center()
+    var touch := InputEventScreenTouch.new()
+    touch.index = 7
+    touch.position = touch_start
+    touch.pressed = true
+    Input.parse_input_event(touch)
+    await process_frame
+    var drag := InputEventScreenDrag.new()
+    drag.index = 7
+    drag.position = touch_start - Vector2(0, 120)
+    drag.relative = Vector2(0, -120)
+    drag.velocity = Vector2(0, -900)
+    Input.parse_input_event(drag)
+    await process_frame
+    touch.position = drag.position
+    touch.pressed = false
+    Input.parse_input_event(touch)
+    await process_frame
+    if popup_scroll.scroll_vertical <= 0:
+        _fail("select popup ignored a touch drag inside a menu row")
+        return
     if select.popup_panel == null or select.popup_panel.position.y >= select.get_global_rect().position.y:
         _fail("select did not flip above a constrained viewport boundary")
+        return
+    if select.popup_panel.size.y > scene.size.y - 24.0:
+        _fail("select popup exceeded the viewport instead of scrolling")
         return
     if not is_equal_approx(select.popup_panel.scale.x, select.popup_panel.scale.y):
         _fail("select popup animation distorted its aspect ratio")
@@ -168,11 +211,20 @@ func _run() -> void:
 
     select._open_popup()
     await process_frame
-    select._choose(2)
+    var touch_menu := select.popup_menu as VBoxContainer
+    var touch_target := (touch_menu.get_child(2) as Button).get_global_rect().get_center()
+    var tap := InputEventScreenTouch.new()
+    tap.index = 8
+    tap.position = touch_target
+    tap.pressed = true
+    Input.parse_input_event(tap)
+    await process_frame
+    tap.pressed = false
+    Input.parse_input_event(tap)
     for _frame in range(90):
         await process_frame
     if select.overlay != null or select.selected_index != 2:
-        _fail("select choice did not commit and release its overlay")
+        _fail("select touch choice did not commit and release its overlay")
         return
 
     print("aether_widget_interaction_test: PASS")
