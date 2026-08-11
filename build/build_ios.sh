@@ -74,6 +74,15 @@ FORCE_LOAD_PLUGIN_SOURCES=(
     "cpp/plugins/psdfile/libpsdfile.a"
     "cpp/plugins/psdfile/psdparse/libpsdparse.a"
 )
+if [[ "$SIMULATOR" == false ]]; then
+    FORCE_LOAD_PLUGIN_ARCHIVES+=("libemotedriver.a")
+    FORCE_LOAD_PLUGIN_SOURCES+=(
+        "packages/AetherInternal/third_party/emote_sdk/lib/ios/arm64/libemotedriver.a")
+elif [[ "$SIMULATOR_ARCH" == "x86_64" ]]; then
+    FORCE_LOAD_PLUGIN_ARCHIVES+=("libemotedriver.a")
+    FORCE_LOAD_PLUGIN_SOURCES+=(
+        "packages/AetherInternal/third_party/emote_sdk/lib/ios/x86_64-simulator/libemotedriver.a")
+fi
 IOS_SDK_COMPAT_ARCHIVE="libios_sdk_compat_symbols.a"
 
 ensure_vcpkg() {
@@ -322,9 +331,14 @@ combine_ios_static_extension() {
 stage_force_load_plugin_archives() {
     local destination="$1"
     local source
+    local resolved
     mkdir -p "$destination"
     for source in "${FORCE_LOAD_PLUGIN_SOURCES[@]}"; do
-        cp -f "$CMAKE_BUILD_DIR/$source" "$destination/" 2>/dev/null || true
+        resolved="$CMAKE_BUILD_DIR/$source"
+        if [[ ! -f "$resolved" ]]; then
+            resolved="$PROJECT_ROOT/$source"
+        fi
+        cp -f "$resolved" "$destination/" 2>/dev/null || true
     done
 }
 
@@ -398,7 +412,7 @@ patch_ios_export_project() {
     for archive in "${FORCE_LOAD_PLUGIN_ARCHIVES[@]}"; do
         flags+=" -Wl,-force_load,Aether/bin/ios/$export_build_type/$archive"
     done
-    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework Security -framework StoreKit -framework SystemConfiguration -framework MobileCoreServices'
+    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework OpenGLES -framework Security -framework StoreKit -framework SystemConfiguration -framework MobileCoreServices'
 
     if [[ -f "$project_file" ]]; then
         FLAGS="$flags" perl -0pi -e 's/OTHER_LDFLAGS = "[^"]*";/"OTHER_LDFLAGS = \"" . $ENV{FLAGS} . "\";"/eg' "$project_file"
