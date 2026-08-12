@@ -11,6 +11,9 @@
 #if defined(IOS_ENABLED)
 #include "apple_external_texture.h"
 #endif
+#if defined(__ANDROID__)
+#include "android_external_texture.h"
+#endif
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/image.hpp>
@@ -120,6 +123,9 @@ struct GodotGpuTextureRecord {
     // Retained CVPixelBuffer backing an imported Metal texture. It must live
     // until the queued RID release reaches the render thread.
     void *apple_pixel_buffer = nullptr;
+    // Owns the VkImage, imported device memory, and retained AHardwareBuffer
+    // backing an Android shared E-mote texture.
+    void *android_external_texture = nullptr;
 };
 
 struct ArtemisGpuShaderImage {
@@ -176,6 +182,7 @@ struct GodotGpuOp {
         Blend3,
         ArtemisShader,
         ImportApplePixelBuffer,
+        ImportAndroidHardwareBuffer,
         Release,
         Flush,
     };
@@ -4133,11 +4140,66 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             return false;
 #endif
         }
+        case GodotGpuOp::Type::ImportAndroidHardwareBuffer: {
+#if defined(__ANDROID__)
+            if (op->native_image == nullptr || op->native_width == 0 ||
+                op->native_height == 0) {
+                return false;
+            }
+            const uint64_t device = rd->get_driver_resource(
+                RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE, RID(), 0);
+            const uint64_t physical_device = rd->get_driver_resource(
+                RenderingDevice::DRIVER_RESOURCE_PHYSICAL_DEVICE, RID(), 0);
+            void *external_texture = nullptr;
+            const uint64_t native_texture =
+                AetherAndroidCreateVulkanTextureFromHardwareBuffer(
+                    device, physical_device, op->native_image,
+                    op->native_width, op->native_height, &external_texture);
+            if (native_texture == 0 || external_texture == nullptr) {
+                return false;
+            }
+            const RID rid = rd->texture_create_from_extension(
+                RenderingDevice::TEXTURE_TYPE_2D,
+                RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM,
+                RenderingDevice::TEXTURE_SAMPLES_1,
+                BitField<RenderingDevice::TextureUsageBits>(
+                    RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+                    RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT),
+                native_texture, op->native_width, op->native_height, 1, 1);
+            if (!rid.is_valid()) {
+                AetherAndroidReleaseVulkanTexture(external_texture);
+                return false;
+            }
+
+            GodotGpuTextureRecord record;
+            record.rid = rid;
+            record.width = op->native_width;
+            record.height = op->native_height;
+            record.android_external_texture = external_texture;
+            record.texture.instantiate();
+            record.texture->set_texture_rd_rid(rid);
+            {
+                std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+                op->imported_texture = g_next_gpu_texture_id++;
+                g_gpu_textures[op->imported_texture] = record;
+            }
+            g_gpu_textures_created.fetch_add(1, std::memory_order_relaxed);
+            g_gpu_texture_bytes_created.fetch_add(
+                static_cast<uint64_t>(op->native_width) *
+                    op->native_height * 4u,
+                std::memory_order_relaxed);
+            return true;
+#else
+            return false;
+#endif
+        }
         case GodotGpuOp::Type::Release:
             InvalidateGodotGpuUniformSetsForResource(rd, op->dst);
             rd->free_rid(op->dst);
 #if defined(IOS_ENABLED)
             AetherAppleReleasePixelBuffer(op->native_image);
+#elif defined(__ANDROID__)
+            AetherAndroidReleaseVulkanTexture(op->native_image);
 #endif
             return true;
         case GodotGpuOp::Type::Flush:
@@ -5595,6 +5657,28 @@ uint64_t BridgeImportApplePixelBuffer(void *native_image, uint32_t width,
 #endif
 }
 
+uint64_t BridgeImportAndroidHardwareBuffer(void *native_image,
+                                           uint32_t width,
+                                           uint32_t height) {
+#if defined(__ANDROID__)
+    if (native_image == nullptr || width == 0 || height == 0 ||
+        !SupportsGodotRenderingDeviceGpu()) {
+        return 0;
+    }
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::ImportAndroidHardwareBuffer;
+    op->native_image = native_image;
+    op->native_width = width;
+    op->native_height = height;
+    return RunGodotGpuOpSync(op) ? op->imported_texture : 0;
+#else
+    (void)native_image;
+    (void)width;
+    (void)height;
+    return 0;
+#endif
+}
+
 void BridgeReleaseTexture(uint64_t texture) {
     GodotGpuTextureRecord record;
     {
@@ -5613,7 +5697,9 @@ void BridgeReleaseTexture(uint64_t texture) {
         auto op = std::make_shared<GodotGpuOp>();
         op->type = GodotGpuOp::Type::Release;
         op->dst = record.rid;
-        op->native_image = record.apple_pixel_buffer;
+        op->native_image = record.apple_pixel_buffer != nullptr
+            ? record.apple_pixel_buffer
+            : record.android_external_texture;
         // Texture operations are consumed in queue order. Waiting here turns
         // every short-lived E-mote scratch layer into a render-thread round
         // trip; enqueue the release after its last use instead.
@@ -6767,7 +6853,9 @@ void ReleaseRemainingGodotGpuTextures() {
             auto op = std::make_shared<GodotGpuOp>();
             op->type = GodotGpuOp::Type::Release;
             op->dst = record.rid;
-            op->native_image = record.apple_pixel_buffer;
+            op->native_image = record.apple_pixel_buffer != nullptr
+                ? record.apple_pixel_buffer
+                : record.android_external_texture;
             RunGodotGpuOpSync(op);
         }
     }
@@ -6821,6 +6909,8 @@ public:
             TVP_GODOT_GPU_EXTERNAL_TEXTURE_CALLBACKS_ABI_VERSION;
         external_texture_callbacks.import_apple_pixel_buffer =
             BridgeImportApplePixelBuffer;
+        external_texture_callbacks.import_android_hardware_buffer =
+            BridgeImportAndroidHardwareBuffer;
         engine_register_godot_gpu_external_texture_bridge(
             &external_texture_callbacks);
 

@@ -1,5 +1,7 @@
 #include "GodotGpuBridge.h"
 
+#include <cstddef>
+
 namespace {
 TVPGodotGpuBridgeCallbacks g_callbacks{};
 bool g_registered = false;
@@ -54,8 +56,12 @@ extern "C" void TVPGodotGpuExternalTextureRegister(
     const TVPGodotGpuExternalTextureCallbacks *callbacks) {
     g_external_texture_callbacks = {};
     g_external_texture_registered = false;
-    if (callbacks == nullptr ||
-        callbacks->struct_size < sizeof(TVPGodotGpuExternalTextureCallbacks) ||
+    constexpr size_t kV1MinimumSize =
+        offsetof(TVPGodotGpuExternalTextureCallbacks,
+                 prepare_for_native_write) +
+        sizeof(((TVPGodotGpuExternalTextureCallbacks *)nullptr)
+                   ->prepare_for_native_write);
+    if (callbacks == nullptr || callbacks->struct_size < kV1MinimumSize ||
         callbacks->abi_version !=
             TVP_GODOT_GPU_EXTERNAL_TEXTURE_CALLBACKS_ABI_VERSION) {
         return;
@@ -68,8 +74,14 @@ extern "C" void TVPGodotGpuExternalTextureRegister(
         callbacks->import_apple_pixel_buffer;
     g_external_texture_callbacks.prepare_for_native_write =
         callbacks->prepare_for_native_write;
+    if (callbacks->struct_size >=
+        sizeof(TVPGodotGpuExternalTextureCallbacks)) {
+        g_external_texture_callbacks.import_android_hardware_buffer =
+            callbacks->import_android_hardware_buffer;
+    }
     g_external_texture_registered =
-        callbacks->import_apple_pixel_buffer != nullptr;
+        g_external_texture_callbacks.import_apple_pixel_buffer != nullptr ||
+        g_external_texture_callbacks.import_android_hardware_buffer != nullptr;
 }
 
 const TVPGodotGpuExternalTextureCallbacks *

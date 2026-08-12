@@ -128,6 +128,13 @@ if(IOS)
         "-framework Metal")
 endif()
 
+if(ANDROID)
+    target_sources(aether_kiri_godot PRIVATE
+        src/android_external_texture.cpp)
+    target_link_libraries(aether_kiri_godot PRIVATE
+        android vulkan ${CMAKE_DL_LIBS})
+endif()
+
 target_compile_features(aether_kiri_godot PRIVATE cxx_std_17)
 if(MSVC)
     set_property(TARGET aether_kiri_godot PROPERTY
