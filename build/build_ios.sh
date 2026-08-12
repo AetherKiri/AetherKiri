@@ -72,7 +72,7 @@ FORCE_LOAD_PLUGIN_SOURCES=(
     "cpp/plugins/motionplayer/libmotionplayer.a"
     "cpp/plugins/psbfile/libpsbfile.a"
     "cpp/plugins/psdfile/libpsdfile.a"
-    "cpp/plugins/psdfile/psdparse/libpsdparse.a"
+    "cpp/plugins/psdfile/psdparse/psdparse/libpsdparse.a"
 )
 if [[ "$SIMULATOR" == false ]]; then
     FORCE_LOAD_PLUGIN_ARCHIVES+=("libemotedriver.a")
@@ -286,7 +286,7 @@ combine_ios_static_extension() {
         "$CMAKE_BUILD_DIR/cpp/plugins/motionplayer/libmotionplayer.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/psbfile/libpsbfile.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/psdfile/libpsdfile.a"
-        "$CMAKE_BUILD_DIR/cpp/plugins/psdfile/psdparse/libpsdparse.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/psdfile/psdparse/psdparse/libpsdparse.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/libCubismFramework.a"
         "$CMAKE_BUILD_DIR/cpp/external/libbpg/liblibbpg.a"
     )
