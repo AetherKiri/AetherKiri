@@ -1919,6 +1919,14 @@ namespace motion {
 
         const auto previousMatrix = nativeInstance->_runtime->drawAffineMatrix;
         nativeInstance->_runtime->drawAffineMatrix = matrix;
+        nativeInstance->invokeNativeBackend(
+            "setpresentationaffine",
+            {MotionBackendValue::Number(matrix[0]),
+             MotionBackendValue::Number(matrix[1]),
+             MotionBackendValue::Number(matrix[2]),
+             MotionBackendValue::Number(matrix[3]),
+             MotionBackendValue::Number(matrix[4]),
+             MotionBackendValue::Number(matrix[5])});
         const auto motionPath =
             nativeInstance->_runtime && nativeInstance->_runtime->activeMotion
                 ? nativeInstance->_runtime->activeMotion->path
