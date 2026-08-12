@@ -1653,6 +1653,31 @@ namespace motion {
                     state.totalFrames = it->second;
                 }
             }
+
+            // EmotePlayer::play() starts the retained model timeline through
+            // this compatibility entry point (usually `全体構造`).  The SDK
+            // backend owns animation evaluation and rendering, so keeping
+            // that start only in the legacy bookkeeping leaves the SDK model
+            // visible but entirely static: no blink, hair, bust, or body
+            // physics.  Mirror the resolved timeline into the backend.  The
+            // SDK's retained-player contract starts a main timeline with the
+            // parallel bit.  Force playback has already stopped the previous
+            // set above, while fallback labels must coexist just as they do in
+            // the compatibility timeline list.
+            if(_nativeBackend) {
+                const bool nativeStarted = invokeNativeBackend(
+                    "playtimeline",
+                    { MotionBackendValue::String(timelineLabel),
+                      MotionBackendValue::Number(1) });
+                if(emoteTimelineTraceEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "[EMOTE_TIMELINE] native base play motion={} label={} flags=1 started={}",
+                        _runtime->activeMotion
+                            ? _runtime->activeMotion->path
+                            : std::string{},
+                        timelineLabel, nativeStarted ? 1 : 0);
+                }
+            }
         };
 
         bool started = false;
