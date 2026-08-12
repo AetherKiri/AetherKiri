@@ -159,6 +159,9 @@ enum TVPGodotGpuBlendMode : uint32_t {
 // bridge shader can preserve both interpretations without an ABI expansion.
 constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_TVP_BLEND =
     TVP_GODOT_GPU_BLEND_TVP_OPERATION;
+// The source stores premultiplied RGB (native E-mote/OpenGL output). The
+// triangle sampler must not multiply RGB by alpha a second time.
+constexpr uint32_t TVP_GODOT_GPU_TRIANGLE_SOURCE_PREMULTIPLIED = 0x20000000u;
 
 extern "C" void TVPGodotGpuBridgeRegister(
     const TVPGodotGpuBridgeCallbacks *callbacks);

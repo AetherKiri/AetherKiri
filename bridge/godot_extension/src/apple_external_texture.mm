@@ -38,3 +38,11 @@ void AetherAppleReleaseMetalTexture(uint64_t metal_texture) {
       reinterpret_cast<void *>(metal_texture));
   [texture release];
 }
+
+void AetherAppleRetainPixelBuffer(void *pixel_buffer) {
+  if (pixel_buffer != nullptr) CFRetain(pixel_buffer);
+}
+
+void AetherAppleReleasePixelBuffer(void *pixel_buffer) {
+  if (pixel_buffer != nullptr) CFRelease(pixel_buffer);
+}

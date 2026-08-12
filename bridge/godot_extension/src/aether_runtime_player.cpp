@@ -117,6 +117,9 @@ struct GodotGpuTextureRecord {
     // AlphaBlend_d dispatches are asynchronous. A following scratch-layer
     // clear must not rewrite this RID until the queued shader has sampled it.
     bool requires_alpha_d_clear_version = false;
+    // Retained CVPixelBuffer backing an imported Metal texture. It must live
+    // until the queued RID release reaches the render thread.
+    void *apple_pixel_buffer = nullptr;
 };
 
 struct ArtemisGpuShaderImage {
@@ -2327,7 +2330,8 @@ float edge(vec2 a, vec2 b, vec2 p) {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
-vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
+vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord,
+                          bool source_premultiplied) {
     vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
     ivec2 p0 = ivec2(floor(center_coord));
     ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
@@ -2336,21 +2340,24 @@ vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
     vec4 c10 = imageLoad(src_img, ivec2(p1.x, p0.y));
     vec4 c01 = imageLoad(src_img, ivec2(p0.x, p1.y));
     vec4 c11 = imageLoad(src_img, p1);
-    c00.rgb *= c00.a;
-    c10.rgb *= c10.a;
-    c01.rgb *= c01.a;
-    c11.rgb *= c11.a;
+    if (!source_premultiplied) {
+        c00.rgb *= c00.a;
+        c10.rgb *= c10.a;
+        c01.rgb *= c01.a;
+        c11.rgb *= c11.a;
+    }
     vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
 
 vec4 load_minified(ivec2 limit, vec2 edge_coord,
                     vec2 source_dx, vec2 source_dy,
-                    bool preserve_detail) {
+                    bool preserve_detail, bool source_premultiplied) {
     float footprint = max(length(source_dx), length(source_dy));
     vec4 premul;
     if (footprint <= 1.0001) {
-        premul = load_bilinear_premul(limit, edge_coord);
+        premul = load_bilinear_premul(
+            limit, edge_coord, source_premultiplied);
     } else if (preserve_detail) {
         premul = vec4(0.0);
         for (int y = -1; y <= 1; ++y) {
@@ -2360,7 +2367,8 @@ vec4 load_minified(ivec2 limit, vec2 edge_coord,
                 vec2 offset = source_dx * (float(x) * 0.5) +
                               source_dy * (float(y) * 0.5);
                 premul += load_bilinear_premul(
-                    limit, edge_coord + offset) * (wx * wy);
+                    limit, edge_coord + offset,
+                    source_premultiplied) * (wx * wy);
             }
         }
         premul /= 36.0;
@@ -2368,10 +2376,14 @@ vec4 load_minified(ivec2 limit, vec2 edge_coord,
         vec2 dx = source_dx * 0.5;
         vec2 dy = source_dy * 0.5;
         premul =
-            (load_bilinear_premul(limit, edge_coord - dx - dy) +
-             load_bilinear_premul(limit, edge_coord + dx - dy) +
-             load_bilinear_premul(limit, edge_coord - dx + dy) +
-             load_bilinear_premul(limit, edge_coord + dx + dy)) * 0.25;
+            (load_bilinear_premul(
+                 limit, edge_coord - dx - dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord + dx - dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord - dx + dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord + dx + dy, source_premultiplied)) * 0.25;
     }
     if (premul.a > 0.00001) {
         premul.rgb /= premul.a;
@@ -2781,7 +2793,9 @@ void main() {
     float opacity = clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
     bool preserve_detail =
         (uint(pc.color0.z) & 0x40000000u) != 0u;
-    int blend_flags = int(uint(pc.color0.z) & 0x3fffffffu);
+    bool source_premultiplied =
+        (uint(pc.color0.z) & 0x20000000u) != 0u;
+    int blend_flags = int(uint(pc.color0.z) & 0x1fffffffu);
     bool mask_write = (blend_flags & 131072) != 0;
     bool tvp_blend = !mask_write && (blend_flags & 65536) != 0;
     int tvp_blend_mode = blend_flags & 65535;
@@ -2820,7 +2834,7 @@ void main() {
                 source20 * ((d0.x - d1.x) / area);
             vec4 src = load_minified(
                 src_limit, src_pos_f, source_dx, source_dy,
-                preserve_detail);
+                preserve_detail, source_premultiplied);
             if (tvp_blend) {
                 uint d = pack_u8(vec4_to_u8(dst));
                 uint s = pack_u8(vec4_to_u8(src));
@@ -4088,6 +4102,7 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
                 RenderingDevice::TEXTURE_SAMPLES_1,
                 BitField<RenderingDevice::TextureUsageBits>(
                     RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+                    RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
                     RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT),
                 native_texture, op->native_width, op->native_height, 1, 1);
             if (!rid.is_valid()) {
@@ -4099,6 +4114,8 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             record.rid = rid;
             record.width = op->native_width;
             record.height = op->native_height;
+            record.apple_pixel_buffer = op->native_image;
+            AetherAppleRetainPixelBuffer(record.apple_pixel_buffer);
             record.texture.instantiate();
             record.texture->set_texture_rd_rid(rid);
             {
@@ -4119,6 +4136,9 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
         case GodotGpuOp::Type::Release:
             InvalidateGodotGpuUniformSetsForResource(rd, op->dst);
             rd->free_rid(op->dst);
+#if defined(IOS_ENABLED)
+            AetherAppleReleasePixelBuffer(op->native_image);
+#endif
             return true;
         case GodotGpuOp::Type::Flush:
             ApplyGodotGpuBarrier(rd);
@@ -5593,6 +5613,7 @@ void BridgeReleaseTexture(uint64_t texture) {
         auto op = std::make_shared<GodotGpuOp>();
         op->type = GodotGpuOp::Type::Release;
         op->dst = record.rid;
+        op->native_image = record.apple_pixel_buffer;
         // Texture operations are consumed in queue order. Waiting here turns
         // every short-lived E-mote scratch layer into a render-thread round
         // trip; enqueue the release after its last use instead.
@@ -6746,6 +6767,7 @@ void ReleaseRemainingGodotGpuTextures() {
             auto op = std::make_shared<GodotGpuOp>();
             op->type = GodotGpuOp::Type::Release;
             op->dst = record.rid;
+            op->native_image = record.apple_pixel_buffer;
             RunGodotGpuOpSync(op);
         }
     }
@@ -7453,7 +7475,10 @@ public:
         if (handle_ == nullptr) {
             return String();
         }
-        char buffer[512] = {};
+        // Runtime providers are free to include detailed timing fields. Keep
+        // this buffer comfortably above the current Artemis diagnostics so a
+        // successful render path never appears as an empty renderer string.
+        char buffer[8192] = {};
         const engine_result_t result =
             engine_get_renderer_info(handle_, buffer, sizeof(buffer));
         update_last_error(result);

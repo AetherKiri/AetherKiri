@@ -10835,7 +10835,11 @@ func _run_cli_step_probe(config: Dictionary, target_game_path: String) -> void:
     if not await _probe_advance(ProbeConfig.int_value(config, "warmup_frames", _runtime_int("AETHERKIRI_PROBE_WARMUP_FRAMES", 180))):
         await _probe_cleanup_and_quit(1)
         return
-    await _probe_save_step(0, "startup")
+    # GPU-resident frame probes may deliberately avoid readback. On iOS a
+    # startup screenshot otherwise serializes the shared OpenGL/Metal path and
+    # can hide the exact transition the probe is intended to measure.
+    if bool(config.get("capture_startup", true)):
+        await _probe_save_step(0, "startup")
 
     var step := 1
     if config.has("actions") and config["actions"] is Array:

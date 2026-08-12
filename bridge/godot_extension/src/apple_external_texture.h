@@ -9,3 +9,5 @@ uint64_t AetherAppleCreateMetalTextureFromPixelBuffer(
     uint64_t metal_device, void *pixel_buffer, uint32_t width,
     uint32_t height);
 void AetherAppleReleaseMetalTexture(uint64_t metal_texture);
+void AetherAppleRetainPixelBuffer(void *pixel_buffer);
+void AetherAppleReleasePixelBuffer(void *pixel_buffer);
