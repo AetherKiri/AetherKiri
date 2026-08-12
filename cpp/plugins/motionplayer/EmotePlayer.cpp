@@ -249,6 +249,7 @@ namespace motion {
             copy->_player.loadFromSnapshot(snapshot);
         }
         copy->_player.unserialize(playerState);
+        copy->_player.assignNativeBackendState(_player);
 
         // These wrapper properties are not part of Player::serialize().
         // Apply them after load/unserialize so model initialization cannot

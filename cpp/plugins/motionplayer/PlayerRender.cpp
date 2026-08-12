@@ -11974,6 +11974,77 @@ namespace motion {
         _runtime->headlessRgbaRenderPending = false;
     }
 
+    bool Player::renderNativeBackendToLayer(iTJSDispatch2 *layerObject,
+                                            int canvasWidth,
+                                            int canvasHeight,
+                                            bool skipUpdate) {
+        if(!_nativeBackend || !layerObject || canvasWidth <= 0 ||
+           canvasHeight <= 0) {
+            return false;
+        }
+
+        MotionBackendFrame frame;
+        std::string error;
+        if(!_nativeBackend->render(
+               static_cast<std::uint32_t>(canvasWidth),
+               static_cast<std::uint32_t>(canvasHeight), &frame, &error)) {
+            if(LOGGER) {
+                LOGGER->warn("native E-mote render failed: {}", error);
+            }
+            return false;
+        }
+        const auto &rgba = frame.sharedRgba ? *frame.sharedRgba : frame.rgba;
+        const auto expectedBytes = static_cast<std::size_t>(canvasWidth) *
+            static_cast<std::size_t>(canvasHeight) * 4u;
+        if(frame.width != static_cast<std::uint32_t>(canvasWidth) ||
+           frame.height != static_cast<std::uint32_t>(canvasHeight) ||
+           rgba.size() < expectedBytes) {
+            if(LOGGER) {
+                LOGGER->warn(
+                    "native E-mote frame mismatch: got={}x{} bytes={} expected={}x{} bytes={}",
+                    frame.width, frame.height, rgba.size(), canvasWidth,
+                    canvasHeight, expectedBytes);
+            }
+            return false;
+        }
+
+        if(!prepareLayerForRender(layerObject, canvasWidth, canvasHeight,
+                                  0x00000000)) {
+            return false;
+        }
+        auto *layer = resolveNativeLayer(layerObject);
+        auto *bitmap = layer ? layer->GetMainImage() : nullptr;
+        if(!bitmap || bitmap->GetWidth() != canvasWidth ||
+           bitmap->GetHeight() != canvasHeight) {
+            return false;
+        }
+
+        const std::size_t rowBytes = static_cast<std::size_t>(canvasWidth) * 4u;
+        if(!TVPGodotUploadRgbaInPlace(
+               bitmap, rgba.data(), static_cast<std::uint32_t>(rowBytes))) {
+            // Non-Godot render managers retain the compatible CPU path.
+            for(int y = 0; y < canvasHeight; ++y) {
+                const auto *source = rgba.data() +
+                    static_cast<std::size_t>(y) * rowBytes;
+                auto *destination = static_cast<std::uint8_t *>(
+                    bitmap->GetScanLineForWrite(static_cast<tjs_uint>(y)));
+                for(int x = 0; x < canvasWidth; ++x) {
+                    const std::size_t offset = static_cast<std::size_t>(x) * 4u;
+                    destination[offset] = source[offset + 2u];
+                    destination[offset + 1u] = source[offset + 1u];
+                    destination[offset + 2u] = source[offset];
+                    destination[offset + 3u] = source[offset + 3u];
+                }
+            }
+        }
+        if(!skipUpdate) {
+            layer->Update(false);
+        }
+        _runtime->lastCanvas = tTJSVariant(layerObject, layerObject);
+        _emoteDirty = false;
+        return true;
+    }
+
     bool Player::renderToLayer(iTJSDispatch2 *layerObject, bool skipUpdate) {
         if(!layerObject) {
             return false;
@@ -12148,6 +12219,19 @@ namespace motion {
                 finalNativeLayer);
             placeCenteredPresentationBelowMessageUi(
                 finalNativeLayer, "target-select");
+        }
+        if(_nativeBackend) {
+            if(renderNativeBackendToLayer(finalLayerObject, canvasWidth,
+                                          canvasHeight, skipUpdate)) {
+                _runtime->lastCanvas =
+                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                return true;
+            }
+            // A native backend that cannot render this object must not leave
+            // the character blank. Retire it and use the public compatibility
+            // renderer for the remainder of the player's lifetime.
+            _nativeBackend.reset();
+            _nativeBackendSourcePath.clear();
         }
         ensureNodeTreeBuilt();
         const bool parentStateChanged = applyMotionParentRootStateForRender();
@@ -14122,6 +14206,7 @@ namespace motion {
     }
 
     void Player::passTimelinesLike_0x67A100() {
+        invokeNativeBackend("pass");
         if(!_runtime || !_runtime->activeMotion) {
             return;
         }
@@ -14240,6 +14325,17 @@ namespace motion {
         // Aligned to libkrkr2.so Player_progress_inner (0x6C106C):
         // _speed is a bool flag (play/pause). When false, skip progress entirely.
         if(!_speed) {
+            return;
+        }
+        if(_nativeBackend) {
+            _frameLastTime = dt;
+            _frameLoopTime += dt;
+            _loopTime += dt;
+            _frameTickCount += dt;
+            invokeNativeBackend(
+                "progress", { MotionBackendValue::Number(dt) });
+            _layersDirty = false;
+            _emoteDirty = true;
             return;
         }
         _layersDirty = true;

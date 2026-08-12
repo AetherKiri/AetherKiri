@@ -44,6 +44,47 @@ namespace PSB {
                 (static_cast<std::uint32_t>(data[3]) << 24);
         }
 
+        void WriteU16LE(std::uint8_t *data, const std::uint16_t value) {
+            data[0] = static_cast<std::uint8_t>(value);
+            data[1] = static_cast<std::uint8_t>(value >> 8);
+        }
+
+        void WriteU32LE(std::uint8_t *data, const std::uint32_t value) {
+            data[0] = static_cast<std::uint8_t>(value);
+            data[1] = static_cast<std::uint8_t>(value >> 8);
+            data[2] = static_cast<std::uint8_t>(value >> 16);
+            data[3] = static_cast<std::uint8_t>(value >> 24);
+        }
+
+        void NormalizeObjectHeader(std::uint8_t *data, const size_t size,
+                                   const PSBHeader &header) {
+            if(!data || size < header.GetHeaderLength()) {
+                return;
+            }
+            std::memcpy(data, header.signature, sizeof(header.signature));
+            WriteU16LE(data + 4, header.version);
+            // The parser already applied the title's E-mote transform and
+            // seed cipher.  Mark the retained object as plain so a native SDK
+            // does not try to interpret the normalized bytes as encrypted.
+            WriteU16LE(data + 6, 0);
+            WriteU32LE(data + 8, header.offsetEncrypt);
+            WriteU32LE(data + 12, header.offsetNames);
+            WriteU32LE(data + 16, header.offsetStrings);
+            WriteU32LE(data + 20, header.offsetStringsData);
+            WriteU32LE(data + 24, header.offsetChunkOffsets);
+            WriteU32LE(data + 28, header.offsetChunkLengths);
+            WriteU32LE(data + 32, header.offsetChunkData);
+            WriteU32LE(data + 36, header.offsetEntries);
+            if(header.version > 2) {
+                WriteU32LE(data + 40, header.checksum);
+            }
+            if(header.version > 3) {
+                WriteU32LE(data + 44, header.offsetExtraChunkOffsets);
+                WriteU32LE(data + 48, header.offsetExtraChunkLengths);
+                WriteU32LE(data + 52, header.offsetExtraChunkData);
+            }
+        }
+
         void LogPSBStage(const ttstr &filePath, const char *stage) {
             if(IsPSBLoadDebugEnabled()) {
                 LOGGER->info("PSBFile stage: {} ({})", stage,
@@ -70,6 +111,7 @@ namespace PSB {
         extraResources.clear();
 
         _root.reset();
+        _objectImage.reset();
         _header = PSBHeader{};
         _type = PSBType::PSB;
     }
@@ -615,6 +657,14 @@ namespace PSB {
             LOGGER->critical("not support psb file format version > 4");
             return false;
         }
+
+        auto objectImage = std::make_shared<std::vector<std::uint8_t>>(
+            static_cast<const std::uint8_t *>(stream.GetInternalBuffer()),
+            static_cast<const std::uint8_t *>(stream.GetInternalBuffer()) +
+                stream.GetSize());
+        NormalizeObjectHeader(objectImage->data(), objectImage->size(),
+                              _header);
+        _objectImage = std::move(objectImage);
 
         // Pre Load Strings
         LogPSBStage(sourceName, "load string offsets");

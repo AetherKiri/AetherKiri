@@ -364,7 +364,10 @@ namespace motion {
 
     void Player::setOpacity(double v) { _runtime->opacity = v; }
 
-    void Player::setVisible(bool v) { _runtime->visible = v; }
+    void Player::setVisible(bool v) {
+        _runtime->visible = v;
+        invokeNativeBackend(v ? "show" : "hide");
+    }
 
     void Player::setSlant(double v) { _runtime->slant = v; }
 
@@ -627,6 +630,7 @@ namespace motion {
     }
 
     void Player::skipToSync() {
+        invokeNativeBackend("skip");
         _layersDirty = true;
         for(auto &[label, state] : _runtime->timelines) {
             const auto controlIt = _runtime->activeMotion
@@ -956,6 +960,11 @@ namespace motion {
 
         setVariableResolvedWeightLike_0x671228(
             key, value, transition, variableEaseWeightLike_0x671228(ease));
+        invokeNativeBackend(
+            "setvariable", { MotionBackendValue::String(key),
+                              MotionBackendValue::Number(value),
+                              MotionBackendValue::Number(transition),
+                              MotionBackendValue::Number(ease) });
     }
 
     double Player::getVariable(ttstr label) {
@@ -1444,6 +1453,9 @@ namespace motion {
                 it->second, controlIt->second, 0.0);
         }
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        invokeNativeBackend(
+            "playtimeline", { MotionBackendValue::String(key),
+                               MotionBackendValue::Number(flags) });
         if(!_allplaying) {
             disableAutoProgress();
         }
@@ -1486,6 +1498,8 @@ namespace motion {
         }
 
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        invokeNativeBackend(
+            "stoptimeline", { MotionBackendValue::String(key) });
         if(!_allplaying) {
             disableAutoProgress();
         }
@@ -1520,6 +1534,13 @@ namespace motion {
         state.blendAnimator.startValue = static_cast<float>(ratio);
         state.blendAnimator.targetValue = static_cast<float>(ratio);
         state.blendAutoStop = false;
+        invokeNativeBackend(
+            "settimelineblendratio",
+            { MotionBackendValue::String(key),
+              MotionBackendValue::Number(ratio),
+              MotionBackendValue::Number(0.0),
+              MotionBackendValue::Number(0.0),
+              MotionBackendValue::Boolean(false) });
     }
 
     double Player::getTimelineBlendRatio(ttstr label) {
@@ -1542,11 +1563,20 @@ namespace motion {
             setTimelineBlendLike_0x6735AC(key, false, 0.0, 0.0, 0.0);
         }
         setTimelineBlendLike_0x6735AC(key, false, 1.0, duration, 0.0);
+        invokeNativeBackend(
+            "fadeintimeline", { MotionBackendValue::String(key),
+                                 MotionBackendValue::Number(duration),
+                                 MotionBackendValue::Number(0.0) });
     }
 
     void Player::fadeOutTimeline(ttstr label, double duration, tjs_int) {
         setTimelineBlendLike_0x6735AC(detail::narrow(label), true, 0.0,
                                       duration, 0.0);
+        invokeNativeBackend(
+            "fadeouttimeline",
+            { MotionBackendValue::String(detail::narrow(label)),
+              MotionBackendValue::Number(duration),
+              MotionBackendValue::Number(0.0) });
     }
 
     tTJSVariant Player::getPlayingTimelineInfoList() {

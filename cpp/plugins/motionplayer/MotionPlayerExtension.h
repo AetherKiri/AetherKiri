@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "tjs.h"
@@ -20,6 +21,60 @@ namespace motion {
         struct MotionNode;
         struct MotionSnapshot;
     }
+
+    struct MotionBackendValue {
+        enum class Type { Void, Number, Boolean, String };
+
+        Type type = Type::Void;
+        double number = 0.0;
+        bool boolean = false;
+        std::string string;
+
+        static MotionBackendValue Number(double value) {
+            MotionBackendValue result;
+            result.type = Type::Number;
+            result.number = value;
+            return result;
+        }
+        static MotionBackendValue Boolean(bool value) {
+            MotionBackendValue result;
+            result.type = Type::Boolean;
+            result.boolean = value;
+            return result;
+        }
+        static MotionBackendValue String(std::string value) {
+            MotionBackendValue result;
+            result.type = Type::String;
+            result.string = std::move(value);
+            return result;
+        }
+    };
+
+    struct MotionBackendFrame {
+        std::vector<std::uint8_t> rgba;
+        std::shared_ptr<const std::vector<std::uint8_t>> sharedRgba;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        bool alphaPremultiplied = true;
+    };
+
+    // Versioned, SDK-neutral player seam. Private packages may implement it;
+    // public-only builds retain the compatible software renderer.
+    class MotionNativePlayerBackend {
+    public:
+        virtual ~MotionNativePlayerBackend() = default;
+        virtual std::unique_ptr<MotionNativePlayerBackend> clone(
+            std::string *error) const = 0;
+        virtual bool assignState(const MotionNativePlayerBackend &source,
+                                 std::string *error) = 0;
+        virtual bool invoke(const std::string &method,
+                            const std::vector<MotionBackendValue> &arguments,
+                            std::vector<MotionBackendValue> *results,
+                            std::string *error) = 0;
+        virtual bool render(std::uint32_t width, std::uint32_t height,
+                            MotionBackendFrame *frame,
+                            std::string *error) = 0;
+    };
 
     struct MotionRenderPolicyV1 {
         bool (*isDifferenceAlphaPassThroughLeaf)(
@@ -65,7 +120,7 @@ namespace motion {
     // Small, versioned seam for optional motionplayer features.  The public
     // backend remains the only backend; private packages may register focused
     // controller implementations without copying or replacing it.
-    struct MotionPlayerExtensionV2 {
+    struct MotionPlayerExtensionV3 {
         std::uint32_t abiVersion = 0;
         bool (*detectExtendedEmoteMode)(
             const detail::MotionSnapshot &snapshot) = nullptr;
@@ -91,11 +146,14 @@ namespace motion {
         void (*stepAutoBlink)(Player &player, double dt) = nullptr;
         void (*stepPhysics)(Player &player, double dt) = nullptr;
         const MotionRenderPolicyV1 *renderPolicy = nullptr;
+        std::unique_ptr<MotionNativePlayerBackend> (*createNativePlayer)(
+            const detail::MotionSnapshot &snapshot,
+            std::string *error) = nullptr;
     };
 
-    inline constexpr std::uint32_t kMotionPlayerExtensionAbiVersion = 2;
+    inline constexpr std::uint32_t kMotionPlayerExtensionAbiVersion = 3;
 
     bool registerMotionPlayerExtension(
-        const MotionPlayerExtensionV2 *extension);
-    const MotionPlayerExtensionV2 *motionPlayerExtension();
+        const MotionPlayerExtensionV3 *extension);
+    const MotionPlayerExtensionV3 *motionPlayerExtension();
 }

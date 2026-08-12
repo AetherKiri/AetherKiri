@@ -24,7 +24,9 @@ namespace PSB {
 
 namespace motion {
     class D3DAdaptor;
+    class MotionNativePlayerBackend;
     class SeparateLayerAdaptor;
+    struct MotionBackendValue;
 }
 
 namespace aetherinternal {
@@ -135,7 +137,7 @@ namespace motion {
         // to Player+1161, not to the ordinary Motion.Player queuing byte.
         // libgame's generated setters only ever enable this mode (the input
         // value is intentionally ignored).
-        void enableEmoteAnimatorQueuing() { _emoteAnimatorFlag = true; }
+        void enableEmoteAnimatorQueuing();
         bool getEmoteAnimatorQueuing() const { return _emoteAnimatorFlag; }
 
         void setDirectEdit(bool v) { _directEdit = v; }
@@ -517,9 +519,17 @@ namespace motion {
         void setLeft(double v) { setX(v); }
         void setTop(double v) { setY(v); }
         void presentationHoldFromContinuousTick(tjs_uint64 tick);
+        bool assignNativeBackendState(const Player &source);
 
     private:
         bool ensureMotionLoaded();
+        bool invokeNativeBackend(
+            const std::string &method,
+            const std::vector<MotionBackendValue> &arguments = {},
+            std::vector<MotionBackendValue> *results = nullptr);
+        bool renderNativeBackendToLayer(iTJSDispatch2 *layerObject,
+                                        int canvasWidth, int canvasHeight,
+                                        bool skipUpdate);
         void ensureNodeTreeBuilt();
         Player *findLayerNodeForQuery(const std::string &key,
                                       int &nodeIndex);
@@ -638,6 +648,8 @@ namespace motion {
         void updateLayersPhase3_AnchorNode();                 // sub_6C0528
 
         std::shared_ptr<detail::PlayerRuntime> _runtime;
+        std::unique_ptr<MotionNativePlayerBackend> _nativeBackend;
+        std::string _nativeBackendSourcePath;
         ResourceManager _resourceManagerNative;
         int _completionType = 0;
         tTJSVariant _metadata;

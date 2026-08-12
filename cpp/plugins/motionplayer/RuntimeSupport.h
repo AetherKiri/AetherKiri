@@ -221,6 +221,7 @@ namespace motion::detail {
     struct MotionSnapshot {
         std::string path;
         std::shared_ptr<PSB::PSBFile> file;
+        std::shared_ptr<const std::vector<std::uint8_t>> objectImage;
         std::shared_ptr<const PSB::PSBDictionary> root;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBResource>>
             resourcesByPath;
