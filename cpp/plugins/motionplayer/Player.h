@@ -847,6 +847,7 @@ namespace motion {
             std::array<float, 4> rgbaBytes{0.f, 0.f, 0.f, 0.f};
             double transition = 0.0;
             double ease = 0.0;
+            bool explicitlySet = false;
         } _emoteColorState;
 
         struct WindState {

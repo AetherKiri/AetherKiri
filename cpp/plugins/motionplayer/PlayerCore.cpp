@@ -2030,6 +2030,7 @@ namespace motion {
                   { "value", static_cast<tjs_int64>(_emoteColorState.packed) },
                   { "transition", _emoteColorState.transition },
                   { "ease", _emoteColorState.ease },
+                  { "set", _emoteColorState.explicitlySet },
               }) },
             { "r", detail::makeDictionary({
                   { "value", _emoteRotState.value },
@@ -2321,6 +2322,9 @@ namespace motion {
             if(getObjectProperty(value, TJS_W("color"), component) &&
                component.Type() == tvtObject) {
                 double packed = static_cast<double>(_emoteColorState.packed);
+                bool hasExplicitFlag = readBool(
+                    component, TJS_W("set"),
+                    _emoteColorState.explicitlySet);
                 if(readNumber(component, TJS_W("value"), packed)) {
                     _emoteColorState.packed = static_cast<tjs_uint32>(packed);
                     const auto color = _emoteColorState.packed;
@@ -2332,6 +2336,14 @@ namespace motion {
                         static_cast<std::uint8_t>(color));
                     _emoteColorState.rgbaBytes[3] = static_cast<float>(
                         static_cast<std::uint8_t>(color >> 24));
+                }
+                if(!hasExplicitFlag) {
+                    // Older serialized players did not distinguish the
+                    // untouched default value (zero) from an explicit color.
+                    // Treat a non-zero legacy value as authored, while keeping
+                    // the SDK's visible default for untouched players.
+                    _emoteColorState.explicitlySet =
+                        _emoteColorState.packed != 0;
                 }
                 readNumber(component, TJS_W("transition"),
                            _emoteColorState.transition);
@@ -2542,6 +2554,183 @@ namespace motion {
             }
         }
 
+        if(restoredTimelines && _nativeBackend && _runtime->activeMotion) {
+            const auto nativeTimelineLabels = [this](
+                const char *countMethod, const char *labelMethod) {
+                std::vector<MotionBackendValue> countResults;
+                if(!invokeNativeBackend(countMethod, {}, &countResults) ||
+                   countResults.empty() ||
+                   countResults.front().type !=
+                       MotionBackendValue::Type::Number) {
+                    return std::vector<std::string>{};
+                }
+                const int count = std::max(
+                    0, static_cast<int>(countResults.front().number));
+                std::vector<std::string> labels;
+                labels.reserve(static_cast<std::size_t>(count));
+                for(int index = 0; index < count; ++index) {
+                    std::vector<MotionBackendValue> labelResults;
+                    if(invokeNativeBackend(
+                           labelMethod,
+                           {MotionBackendValue::Number(index)},
+                           &labelResults) &&
+                       !labelResults.empty() &&
+                       labelResults.front().type ==
+                           MotionBackendValue::Type::String) {
+                        labels.push_back(labelResults.front().string);
+                    }
+                }
+                return labels;
+            };
+            const auto mainLabels = nativeTimelineLabels(
+                "countmaintimelines", "getmaintimelinelabelat");
+            const auto diffLabels = nativeTimelineLabels(
+                "countdifftimelines", "getdifftimelinelabelat");
+            const auto isNativeLabel = [](const auto &labels,
+                                          const std::string &label) {
+                return std::find(labels.begin(), labels.end(), label) !=
+                    labels.end();
+            };
+            const auto resolveMainLabel = [&mainLabels, &isNativeLabel](
+                const std::string &requested) {
+                if(isNativeLabel(mainLabels, requested)) {
+                    return requested;
+                }
+                constexpr const char *kGeneratedBaseTimeline =
+                    "sample_全自動_test";
+                if(isNativeLabel(mainLabels, kGeneratedBaseTimeline)) {
+                    return std::string(kGeneratedBaseTimeline);
+                }
+                return mainLabels.empty() ? std::string{}
+                                          : mainLabels.front();
+            };
+
+            struct NativeTimelineRestore {
+                std::string label;
+                int flags = 0;
+                double blendRatio = 1.0;
+            };
+            std::vector<NativeTimelineRestore> nativeTimelines;
+            for(const auto &label : _runtime->playingTimelineLabels) {
+                const auto stateIt = _runtime->timelines.find(label);
+                if(stateIt == _runtime->timelines.end() ||
+                   !stateIt->second.playing) {
+                    continue;
+                }
+                std::string nativeLabel;
+                if(isNativeLabel(mainLabels, label) ||
+                   isNativeLabel(diffLabels, label)) {
+                    nativeLabel = label;
+                } else if((stateIt->second.flags & 2) == 0) {
+                    // The compatibility parser can expose the retained root
+                    // clip (for example `全体構造`) instead of the SDK's
+                    // generated main-timeline label.  Serialized native flags
+                    // retain the authoritative distinction: bit 1 marks a
+                    // difference timeline, so a non-difference entry is the
+                    // main timeline and must be resolved through the SDK list.
+                    nativeLabel = resolveMainLabel(label);
+                }
+                if(nativeLabel.empty()) {
+                    continue;
+                }
+                const auto duplicate = std::find_if(
+                    nativeTimelines.begin(), nativeTimelines.end(),
+                    [&nativeLabel](const auto &entry) {
+                        return entry.label == nativeLabel;
+                    });
+                if(duplicate == nativeTimelines.end()) {
+                    nativeTimelines.push_back(NativeTimelineRestore{
+                        nativeLabel, stateIt->second.flags | 1,
+                        stateIt->second.blendRatio});
+                }
+            }
+
+            // D3DEmote.tjs changes model resolution by serializing the old
+            // player, creating a fresh one, and unserializing into it.  The
+            // compatibility state above made getTimelinePlaying() report the
+            // restored waiting loop, but the fresh official SDK player had
+            // never received PlayTimeline.  The script therefore skipped its
+            // own restart and the visible model froze after its initial pose.
+            // Rebuild the SDK timeline set from the restored state atomically.
+            if(!nativeTimelines.empty()) {
+                invokeNativeBackend(
+                    "stoptimeline", {MotionBackendValue::String({})});
+                for(const auto &timeline : nativeTimelines) {
+                    invokeNativeBackend(
+                        "playtimeline",
+                        {MotionBackendValue::String(timeline.label),
+                         MotionBackendValue::Number(timeline.flags)});
+                    invokeNativeBackend(
+                        "settimelineblendratio",
+                        {MotionBackendValue::String(timeline.label),
+                         MotionBackendValue::Number(timeline.blendRatio),
+                         MotionBackendValue::Number(0.0),
+                         MotionBackendValue::Number(0.0),
+                         MotionBackendValue::Boolean(false)});
+                }
+            }
+
+            invokeNativeBackend(
+                "setcoord", {MotionBackendValue::Number(_emoteCoordState.x),
+                              MotionBackendValue::Number(_emoteCoordState.y),
+                              MotionBackendValue::Number(0.0),
+                              MotionBackendValue::Number(0.0)});
+            invokeNativeBackend(
+                "setscale", {MotionBackendValue::Number(_emoteScaleState.value),
+                              MotionBackendValue::Number(0.0),
+                              MotionBackendValue::Number(0.0)});
+            invokeNativeBackend(
+                "setrot", {MotionBackendValue::Number(_emoteRotState.value),
+                            MotionBackendValue::Number(0.0),
+                            MotionBackendValue::Number(0.0)});
+            if(_emoteColorState.explicitlySet) {
+                invokeNativeBackend(
+                    "setcolor",
+                    {MotionBackendValue::Number(_emoteColorState.packed),
+                     MotionBackendValue::Number(0.0),
+                     MotionBackendValue::Number(0.0)});
+            }
+            invokeNativeBackend(
+                "setmeshdivisionratio",
+                {MotionBackendValue::Number(_emoteMeshDivisionRatio)});
+            invokeNativeBackend(
+                "sethairscale", {MotionBackendValue::Number(_hairScale)});
+            invokeNativeBackend(
+                "setpartsscale", {MotionBackendValue::Number(_partsScale)});
+            invokeNativeBackend(
+                "setbustscale", {MotionBackendValue::Number(_bustScale)});
+            if(_emoteAnimatorFlag) {
+                invokeNativeBackend(
+                    "setqueuing", {MotionBackendValue::Boolean(true)});
+            }
+            if(_windState.active) {
+                invokeNativeBackend(
+                    "startwind",
+                    {MotionBackendValue::Number(_windState.minAngle),
+                     MotionBackendValue::Number(_windState.maxAngle),
+                     MotionBackendValue::Number(_windState.amplitude),
+                     MotionBackendValue::Number(_windState.freqX),
+                     MotionBackendValue::Number(_windState.freqY)});
+            }
+            for(const auto &[label, force] :
+                std::initializer_list<std::pair<const char *,
+                                                const OuterForceState &>>{
+                    {"bust", _bustOuterForce},
+                    {"h", _hairOuterForce},
+                    {"parts", _partsOuterForce},
+                }) {
+                if(force.active) {
+                    invokeNativeBackend(
+                        "setouterforce",
+                        {MotionBackendValue::String(label),
+                         MotionBackendValue::Number(force.x),
+                         MotionBackendValue::Number(force.y),
+                         MotionBackendValue::Number(0.0),
+                         MotionBackendValue::Number(0.0)});
+                }
+            }
+        }
+
         _allplaying = !_runtime->playingTimelineLabels.empty();
         _layersDirty = true;
         _emoteDirty = true;
@@ -2613,6 +2802,7 @@ namespace motion {
     void Player::setEmoteColor(tjs_uint32 color, double transition,
                                double ease) {
         _emoteColorState.packed = color;
+        _emoteColorState.explicitlySet = true;
         _emoteColorState.rgbaBytes[0] =
             static_cast<float>(static_cast<std::uint8_t>(color >> 16));
         _emoteColorState.rgbaBytes[1] =

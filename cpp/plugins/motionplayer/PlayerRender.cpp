@@ -11327,7 +11327,8 @@ namespace motion {
             adaptor->setRetainedPresentationLayer(nullptr);
         }
         const auto rasterNowUs = motionRenderProfileNowUs();
-        if(!retainD3DPresentation && _runtime->isEmoteMode &&
+        if(!_nativeBackend && !retainD3DPresentation &&
+           _runtime->isEmoteMode &&
            _runtime->lastD3DRasterPublishUs != 0 &&
            rasterNowUs >= _runtime->lastD3DRasterPublishUs &&
            rasterNowUs - _runtime->lastD3DRasterPublishUs <
@@ -11354,6 +11355,102 @@ namespace motion {
                 }
                 return true;
             }
+        }
+
+        // Kiri's D3DEmote scripts present through D3DAdaptor rather than the
+        // ordinary Layer draw path.  Once an official SDK player owns model
+        // evaluation, routing this branch through the legacy PSB renderer
+        // displays an unchanging compatibility snapshot: the SDK clock moves
+        // but the pixels copied by captureCanvas do not.  Publish the SDK
+        // frame into the adaptor's retained GPU layer so both ordinary
+        // captureCanvas and uncaptured affine presentations consume the same
+        // animated source.
+        if(_nativeBackend) {
+            iTJSDispatch2 *windowObject = adaptor->getWindowObject();
+            iTJSDispatch2 *primaryLayerObject =
+                resolvePrimaryLayerObject(windowObject);
+            if(!primaryLayerObject) {
+                return false;
+            }
+
+            if(retainD3DPresentation) {
+                iTJSDispatch2 *presentationParentObject =
+                    primaryLayerObject;
+                if(auto *primary = resolveNativeLayer(primaryLayerObject)) {
+                    for(tjs_uint index = 0; index < primary->GetCount();
+                        ++index) {
+                        auto *candidate = primary->GetChildren(
+                            static_cast<tjs_int>(index));
+                        if(candidate && candidate->GetOwnerNoAddRef() &&
+                           candidate->GetName() == TJS_W("表-背景")) {
+                            presentationParentObject =
+                                candidate->GetOwnerNoAddRef();
+                            break;
+                        }
+                    }
+                }
+                const bool presentationCreated =
+                    _runtime->d3dPresentationLayer.Type() != tvtObject;
+                iTJSDispatch2 *presentationLayerObject =
+                    ensureReusableLayerObject(
+                        _runtime->d3dPresentationLayer, windowObject,
+                        presentationParentObject,
+                        static_cast<tTVPLayerType>(ltAlpha), true);
+                auto *presentationLayer =
+                    resolveNativeLayer(presentationLayerObject);
+                if(!presentationLayerObject || !presentationLayer ||
+                   !renderNativeBackendToLayer(
+                       presentationLayerObject, adaptor->getWidth(),
+                       adaptor->getHeight(), true)) {
+                    return false;
+                }
+                presentationLayer->SetName(
+                    TJS_W("AetherKiriD3DPlayerSurface"));
+                presentationLayer->SetEnabled(false);
+                presentationLayer->SetHitType(htMask);
+                presentationLayer->SetHitThreshold(256);
+                if(presentationCreated) {
+                    presentationLayer->BringToBack();
+                }
+                const int previewLeft =
+                    std::min(128, adaptor->getWidth());
+                const int previewRight = std::min(
+                    168, adaptor->getWidth() - previewLeft);
+                const int previewWidth = std::max(
+                    1, adaptor->getWidth() - previewLeft - previewRight);
+                presentationLayer->SetPosition(previewLeft, 0);
+                presentationLayer->SetSize(previewWidth,
+                                           adaptor->getHeight());
+                presentationLayer->SetImagePosition(-previewLeft, 0);
+                presentationLayer->SetVisible(true);
+                adaptor->setRetainedPresentationLayer(
+                    presentationLayerObject);
+                adaptor->setRenderedLayer(presentationLayerObject);
+                return true;
+            }
+
+            const std::size_t renderLayerIndex =
+                _runtime->nextD3DRenderLayer;
+            _runtime->nextD3DRenderLayer =
+                (_runtime->nextD3DRenderLayer + 1u) %
+                _runtime->d3dRenderLayers.size();
+            auto &renderLayerSlot =
+                _runtime->d3dRenderLayers[renderLayerIndex];
+            iTJSDispatch2 *renderLayerObject = ensureReusableLayerObject(
+                renderLayerSlot, windowObject, primaryLayerObject,
+                static_cast<tTVPLayerType>(ltAlpha), false);
+            if(!renderLayerObject ||
+               !renderNativeBackendToLayer(
+                   renderLayerObject, adaptor->getWidth(),
+                   adaptor->getHeight(), true)) {
+                adaptor->setRenderedLayer(nullptr);
+                return false;
+            }
+            adaptor->setRenderedLayer(renderLayerObject);
+            _runtime->lastD3DRenderLayer = renderLayerIndex;
+            _runtime->lastD3DRasterPublishUs =
+                motionRenderProfileNowUs();
+            return true;
         }
         detail::logoChainTraceLogf(
             motionPath, "draw.d3d", "0x6D5B90", _clampedEvalTime,
@@ -12007,7 +12104,6 @@ namespace motion {
             }
             return false;
         }
-
         if(!prepareLayerForRender(layerObject, canvasWidth, canvasHeight,
                                   0x00000000)) {
             return false;
@@ -13102,6 +13198,38 @@ namespace motion {
             static_cast<const void *>(renderTarget),
             sla->getAbsolute() ? 1 : 0,
             canvasWidth, canvasHeight);
+
+        // Kiri's E-mote implementation normally presents through
+        // SeparateLayerAdaptor.  When the official SDK owns evaluation, the
+        // legacy PSB command tree is only a compatibility snapshot and does
+        // not contain the SDK's continuously changing blink/breath/hair/body
+        // state.  Render the SDK frame into the SLA private target on every
+        // draw, then keep the adaptor's normal update/presentation steps
+        // below so authored layer placement and clipping remain unchanged.
+        if(_nativeBackend) {
+            if(!renderNativeBackendToLayer(renderTarget, canvasWidth,
+                                            canvasHeight, true)) {
+                detail::logoChainTraceSummary(
+                    motionPath, "renderToSeparateLayerAdaptor",
+                    _clampedEvalTime, "fail=nativeBackendRender");
+                return false;
+            }
+
+            if(isAccurateSlaRenderEnabled()) {
+                updateAccurateSLAAfterDraw(renderTarget);
+            } else if(auto *renderLayer = resolveNativeLayer(renderTarget)) {
+                renderLayer->Update(false);
+            }
+
+            postProcessCenteredGameMotionSeparateLayerPresentation(
+                presentationTarget, renderTarget, motionPath, canvasWidth,
+                canvasHeight);
+            _runtime->lastCanvas = tTJSVariant(renderTarget, renderTarget);
+            detail::logoChainTraceSummary(
+                motionPath, "renderToSeparateLayerAdaptor",
+                _clampedEvalTime, "nativeBackend=1");
+            return true;
+        }
 
         ensureNodeTreeBuilt();
         const bool parentStateChanged = applyMotionParentRootStateForRender();

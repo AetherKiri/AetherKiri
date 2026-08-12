@@ -1665,17 +1665,72 @@ namespace motion {
             // set above, while fallback labels must coexist just as they do in
             // the compatibility timeline list.
             if(_nativeBackend) {
+                const auto nativeTimelineLabels = [&](const char *countMethod,
+                                                      const char *labelMethod) {
+                    std::vector<MotionBackendValue> countResults;
+                    if(!invokeNativeBackend(countMethod, {}, &countResults) ||
+                       countResults.empty() ||
+                       countResults.front().type !=
+                           MotionBackendValue::Type::Number) {
+                        return std::vector<std::string>{};
+                    }
+                    const int count = std::max(
+                        0, static_cast<int>(countResults.front().number));
+                    std::vector<std::string> labels;
+                    labels.reserve(static_cast<std::size_t>(count));
+                    for(int index = 0; index < count; ++index) {
+                        std::vector<MotionBackendValue> labelResults;
+                        if(invokeNativeBackend(
+                               labelMethod,
+                               {MotionBackendValue::Number(index)},
+                               &labelResults) &&
+                           !labelResults.empty() &&
+                           labelResults.front().type ==
+                               MotionBackendValue::Type::String) {
+                            labels.push_back(labelResults.front().string);
+                        }
+                    }
+                    return labels;
+                };
+
+                // Kiri's metadata names the retained model/root clip (most
+                // commonly `全体構造`).  That is an internal clip, not a
+                // public SDK timeline; PlayTimeline deliberately returns no
+                // status, so passing it through appears successful while the
+                // model remains frozen.  Resolve it against the SDK's actual
+                // main-timeline table.  Official E-mote's generated Kiri
+                // models publish `sample_全自動_test` as the base timeline;
+                // it owns automatic blink plus hair/body/bust physics.  Keep
+                // an exact requested main timeline when one exists, then use
+                // the authored first timeline as the general fallback.
+                const auto mainLabels = nativeTimelineLabels(
+                    "countmaintimelines", "getmaintimelinelabelat");
+                std::string nativeTimelineLabel = timelineLabel;
+                if(std::find(mainLabels.begin(), mainLabels.end(),
+                             nativeTimelineLabel) == mainLabels.end()) {
+                    constexpr const char *kGeneratedBaseTimeline =
+                        "sample_全自動_test";
+                    const auto generated = std::find(
+                        mainLabels.begin(), mainLabels.end(),
+                        kGeneratedBaseTimeline);
+                    if(generated != mainLabels.end()) {
+                        nativeTimelineLabel = *generated;
+                    } else if(!mainLabels.empty()) {
+                        nativeTimelineLabel = mainLabels.front();
+                    }
+                }
                 const bool nativeStarted = invokeNativeBackend(
                     "playtimeline",
-                    { MotionBackendValue::String(timelineLabel),
+                    { MotionBackendValue::String(nativeTimelineLabel),
                       MotionBackendValue::Number(1) });
                 if(emoteTimelineTraceEnabled() && LOGGER) {
                     LOGGER->info(
-                        "[EMOTE_TIMELINE] native base play motion={} label={} flags=1 started={}",
+                        "[EMOTE_TIMELINE] native base play motion={} requested={} resolved={} flags=1 started={} main=[{}]",
                         _runtime->activeMotion
                             ? _runtime->activeMotion->path
                             : std::string{},
-                        timelineLabel, nativeStarted ? 1 : 0);
+                        timelineLabel, nativeTimelineLabel,
+                        nativeStarted ? 1 : 0, joinStrings(mainLabels));
                 }
             }
         };
