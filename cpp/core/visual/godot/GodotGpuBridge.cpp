@@ -5,6 +5,8 @@ TVPGodotGpuBridgeCallbacks g_callbacks{};
 bool g_registered = false;
 TVPGodotGpuBatchCallbacks g_batch_callbacks{};
 bool g_batch_registered = false;
+TVPGodotGpuExternalTextureCallbacks g_external_texture_callbacks{};
+bool g_external_texture_registered = false;
 thread_local uint32_t g_batch_scope_depth = 0;
 } // namespace
 
@@ -46,6 +48,34 @@ extern "C" void TVPGodotGpuBatchRegister(
 
 const TVPGodotGpuBatchCallbacks *TVPGodotGpuBatchGet() {
     return g_batch_registered ? &g_batch_callbacks : nullptr;
+}
+
+extern "C" void TVPGodotGpuExternalTextureRegister(
+    const TVPGodotGpuExternalTextureCallbacks *callbacks) {
+    g_external_texture_callbacks = {};
+    g_external_texture_registered = false;
+    if (callbacks == nullptr ||
+        callbacks->struct_size < sizeof(TVPGodotGpuExternalTextureCallbacks) ||
+        callbacks->abi_version !=
+            TVP_GODOT_GPU_EXTERNAL_TEXTURE_CALLBACKS_ABI_VERSION) {
+        return;
+    }
+    g_external_texture_callbacks.struct_size =
+        sizeof(TVPGodotGpuExternalTextureCallbacks);
+    g_external_texture_callbacks.abi_version =
+        TVP_GODOT_GPU_EXTERNAL_TEXTURE_CALLBACKS_ABI_VERSION;
+    g_external_texture_callbacks.import_apple_pixel_buffer =
+        callbacks->import_apple_pixel_buffer;
+    g_external_texture_callbacks.prepare_for_native_write =
+        callbacks->prepare_for_native_write;
+    g_external_texture_registered =
+        callbacks->import_apple_pixel_buffer != nullptr;
+}
+
+const TVPGodotGpuExternalTextureCallbacks *
+TVPGodotGpuExternalTextureGet() {
+    return g_external_texture_registered ? &g_external_texture_callbacks
+                                         : nullptr;
 }
 
 TVPGodotGpuBatchScope::TVPGodotGpuBatchScope(bool enabled) {

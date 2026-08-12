@@ -42,6 +42,11 @@ ENGINE_API_EXPORT void engine_register_godot_gpu_bridge(
  * GPU callback table remains ABI-stable. */
 ENGINE_API_EXPORT void engine_register_godot_gpu_batch_bridge(
     const void* callbacks);
+/* Registers the optional native shared-texture import table. It is kept
+ * separate from the legacy GPU bridge ABI so older private packages remain
+ * binary-safe. */
+ENGINE_API_EXPORT void engine_register_godot_gpu_external_texture_bridge(
+    const void* callbacks);
 
 typedef enum engine_result_t {
   ENGINE_RESULT_OK = 0,

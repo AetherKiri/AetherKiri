@@ -8,6 +8,9 @@
 #if defined(AETHERKIRI_WITH_ONSCRIPTER)
 #include "onscripter_runtime.h"
 #endif
+#if defined(IOS_ENABLED)
+#include "apple_external_texture.h"
+#endif
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/image.hpp>
@@ -169,6 +172,7 @@ struct GodotGpuOp {
         Blend2,
         Blend3,
         ArtemisShader,
+        ImportApplePixelBuffer,
         Release,
         Flush,
     };
@@ -195,6 +199,10 @@ struct GodotGpuOp {
     bool result = false;
     bool done = false;
     uint64_t readback_request = 0;
+    void *native_image = nullptr;
+    uint32_t native_width = 0;
+    uint32_t native_height = 0;
+    uint64_t imported_texture = 0;
     uint64_t queue_sequence = 0;
     std::mutex done_mutex;
     std::condition_variable done_cv;
@@ -4061,6 +4069,53 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
         }
         case GodotGpuOp::Type::ArtemisShader:
             return ExecuteArtemisGpuShader(rd, op);
+        case GodotGpuOp::Type::ImportApplePixelBuffer: {
+#if defined(IOS_ENABLED)
+            if (op->native_image == nullptr || op->native_width == 0 ||
+                op->native_height == 0) {
+                return false;
+            }
+            const uint64_t device = rd->get_driver_resource(
+                RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE, RID(), 0);
+            const uint64_t native_texture =
+                AetherAppleCreateMetalTextureFromPixelBuffer(
+                    device, op->native_image, op->native_width,
+                    op->native_height);
+            if (native_texture == 0) return false;
+            const RID rid = rd->texture_create_from_extension(
+                RenderingDevice::TEXTURE_TYPE_2D,
+                RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM,
+                RenderingDevice::TEXTURE_SAMPLES_1,
+                BitField<RenderingDevice::TextureUsageBits>(
+                    RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+                    RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT),
+                native_texture, op->native_width, op->native_height, 1, 1);
+            if (!rid.is_valid()) {
+                AetherAppleReleaseMetalTexture(native_texture);
+                return false;
+            }
+
+            GodotGpuTextureRecord record;
+            record.rid = rid;
+            record.width = op->native_width;
+            record.height = op->native_height;
+            record.texture.instantiate();
+            record.texture->set_texture_rd_rid(rid);
+            {
+                std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+                op->imported_texture = g_next_gpu_texture_id++;
+                g_gpu_textures[op->imported_texture] = record;
+            }
+            g_gpu_textures_created.fetch_add(1, std::memory_order_relaxed);
+            g_gpu_texture_bytes_created.fetch_add(
+                static_cast<uint64_t>(op->native_width) *
+                    op->native_height * 4u,
+                std::memory_order_relaxed);
+            return true;
+#else
+            return false;
+#endif
+        }
         case GodotGpuOp::Type::Release:
             InvalidateGodotGpuUniformSetsForResource(rd, op->dst);
             rd->free_rid(op->dst);
@@ -5499,6 +5554,27 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
     return id;
 }
 
+uint64_t BridgeImportApplePixelBuffer(void *native_image, uint32_t width,
+                                      uint32_t height) {
+#if defined(IOS_ENABLED)
+    if (native_image == nullptr || width == 0 || height == 0 ||
+        !SupportsGodotRenderingDeviceGpu()) {
+        return 0;
+    }
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::ImportApplePixelBuffer;
+    op->native_image = native_image;
+    op->native_width = width;
+    op->native_height = height;
+    return RunGodotGpuOpSync(op) ? op->imported_texture : 0;
+#else
+    (void)native_image;
+    (void)width;
+    (void)height;
+    return 0;
+#endif
+}
+
 void BridgeReleaseTexture(uint64_t texture) {
     GodotGpuTextureRecord record;
     {
@@ -6716,6 +6792,15 @@ public:
         batch_callbacks.begin_batch = BridgeBeginBatch;
         batch_callbacks.end_batch = BridgeEndBatch;
         engine_register_godot_gpu_batch_bridge(&batch_callbacks);
+        TVPGodotGpuExternalTextureCallbacks external_texture_callbacks{};
+        external_texture_callbacks.struct_size =
+            sizeof(external_texture_callbacks);
+        external_texture_callbacks.abi_version =
+            TVP_GODOT_GPU_EXTERNAL_TEXTURE_CALLBACKS_ABI_VERSION;
+        external_texture_callbacks.import_apple_pixel_buffer =
+            BridgeImportApplePixelBuffer;
+        engine_register_godot_gpu_external_texture_bridge(
+            &external_texture_callbacks);
 
         CharString writable_utf8 = writable_path.utf8();
         CharString cache_utf8 = cache_path.utf8();
@@ -9145,6 +9230,7 @@ void DeinitializeAetherRuntime(ModuleInitializationLevel level) {
     ReleaseRemainingGodotGpuTextures();
     ReleaseGodotGpuPipeline();
     engine_register_godot_gpu_batch_bridge(nullptr);
+    engine_register_godot_gpu_external_texture_bridge(nullptr);
     engine_register_godot_gpu_bridge(nullptr);
 #if defined(AETHERKIRI_INTERNAL_FRAME_EFFECTS)
     UnregisterAetherInternalFrameEffects();

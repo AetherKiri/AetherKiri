@@ -118,6 +118,16 @@ if(APPLE)
         "-framework StoreKit")
 endif()
 
+if(IOS)
+    target_sources(aether_kiri_godot PRIVATE
+        src/apple_external_texture.mm)
+    set_source_files_properties(src/apple_external_texture.mm
+        PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
+    target_link_libraries(aether_kiri_godot PRIVATE
+        "-framework CoreVideo"
+        "-framework Metal")
+endif()
+
 target_compile_features(aether_kiri_godot PRIVATE cxx_std_17)
 if(MSVC)
     set_property(TARGET aether_kiri_godot PROPERTY

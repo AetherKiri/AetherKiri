@@ -72,6 +72,27 @@ struct TVPGodotGpuBatchCallbacks {
 
 constexpr uint32_t TVP_GODOT_GPU_BATCH_CALLBACKS_ABI_VERSION = 1;
 
+// Optional cross-API texture import used by native runtimes which render in
+// their own graphics context. Keep this separate from the original callback
+// table: the latter predates size/version fields and cannot be extended
+// without making mixed public/private builds read past an older allocation.
+struct TVPGodotGpuExternalTextureCallbacks {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    // On Apple platforms native_image is a retained CVPixelBufferRef whose
+    // IOSurface is shared by OpenGL ES and Metal. The callback does not take
+    // ownership; the producer must keep it alive until release_texture.
+    uint64_t (*import_apple_pixel_buffer)(void *native_image,
+                                          uint32_t width,
+                                          uint32_t height);
+    // Optional. Wait until every previously queued Godot use of this texture
+    // has completed before the producer writes the shared IOSurface again.
+    // Producers must use a multi-buffered target when this callback is null.
+    bool (*prepare_for_native_write)(uint64_t texture);
+};
+
+constexpr uint32_t TVP_GODOT_GPU_EXTERNAL_TEXTURE_CALLBACKS_ABI_VERSION = 1;
+
 // Limits deferred GPU draining to a producer-defined command group.  The
 // bridge callbacks are optional so non-Godot renderers retain their current
 // immediate behavior.
@@ -145,3 +166,7 @@ const TVPGodotGpuBridgeCallbacks *TVPGodotGpuBridgeGet();
 extern "C" void TVPGodotGpuBatchRegister(
     const TVPGodotGpuBatchCallbacks *callbacks);
 const TVPGodotGpuBatchCallbacks *TVPGodotGpuBatchGet();
+extern "C" void TVPGodotGpuExternalTextureRegister(
+    const TVPGodotGpuExternalTextureCallbacks *callbacks);
+const TVPGodotGpuExternalTextureCallbacks *
+TVPGodotGpuExternalTextureGet();
