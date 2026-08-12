@@ -1,185 +1,76 @@
 #include "psdclass.h"
-#include "combase.h"
-#ifndef LOAD_MEMORY
 
-#include "psdparse/psdparse.h"
+#include "psdparse.h"
 
-/**
- * Stream 用の Iterator
- */
-class PSDIterator {
+#include <algorithm>
+#include <limits>
+#include <memory>
+#include <mutex>
+
+namespace {
+
+// Adapt a KiriKiri storage stream to psdparse's shared, seekable byte source.
+// StreamReader clones keep this source alive while decoded layer data still
+// references the PSD, so the underlying stream must be owned here as well.
+class TJSBinaryStreamSource final : public psd::StreamReader::Source {
 public:
-    using iterator_category = std::random_access_iterator_tag;
-    using value_type = const unsigned char;
-    using difference_type = std::ptrdiff_t;
-    using pointer = const unsigned char *;
-    using reference = const unsigned char &;
+    TJSBinaryStreamSource(tTJSBinaryStream *stream, size_t total_size) :
+        stream_(stream), total_size_(total_size) {}
 
-    typedef size_t diff_t;
+    ~TJSBinaryStreamSource() override { delete stream_; }
 
-    PSDIterator() : _psd(0), _pos(0), _size(0) {}
+    size_t size() const override { return total_size_; }
 
-    /**
-     * コンストラクタ
-     * @param srream 参照ストリーム
-     * @param begin true なら冒頭、false なら末尾
-     */
-    PSDIterator(PSD *psd, bool begin) : _psd(psd), _pos(0), _size(0) {
-        _size = psd->mStreamSize;
-        _pos = begin ? 0 : _size;
+    size_t read(uint8_t *out, size_t offset, size_t length) override {
+        if(stream_ == nullptr || out == nullptr || offset >= total_size_ ||
+           length == 0) {
+            return 0;
+        }
+
+        const size_t available = total_size_ - offset;
+        const size_t requested = std::min(length, available);
+        const size_t max_read =
+            static_cast<size_t>(std::numeric_limits<tjs_uint>::max());
+        const tjs_uint read_size =
+            static_cast<tjs_uint>(std::min(requested, max_read));
+
+        // Seek and Read form one operation. Parser sub-readers share this
+        // source and may be consumed from different layer decode jobs.
+        std::lock_guard<std::mutex> lock(mutex_);
+        stream_->Seek(static_cast<tjs_int64>(offset), TJS_BS_SEEK_SET);
+        return static_cast<size_t>(stream_->Read(out, read_size));
     }
-
-    // コピーコンストラクタ
-    PSDIterator(const PSDIterator &o) {
-        _psd = o._psd;
-        _pos = o._pos;
-        _size = o._size;
-    }
-
-    // 代入演算子
-    PSDIterator &operator=(const PSDIterator &o) {
-        _psd = o._psd;
-        _pos = o._pos;
-        _size = o._size;
-        return *this;
-    }
-
-    // デストラクタ
-    virtual ~PSDIterator() {}
-
-    // イテレータを進める(前置)
-    PSDIterator &operator++() {
-        _pos++;
-        if(_pos > _size)
-            _pos = _size;
-        return *this;
-    }
-
-    // イテレータを進める（後置)
-    PSDIterator operator++(int) {
-        PSDIterator ret = *this;
-        _pos++;
-        if(_pos > _size)
-            _pos = _size;
-        return ret;
-    }
-
-    PSDIterator &operator+=(diff_t n) {
-        _pos += n;
-        if(_pos > _size)
-            _pos = _size;
-        return *this;
-    }
-
-    PSDIterator operator+(diff_t n) {
-        PSDIterator ret = *this;
-        ret += n;
-        return ret;
-    }
-
-    // イテレータを戻す(前置)
-    PSDIterator &operator--() {
-        _pos--;
-        if(_pos < 0)
-            _pos = 0;
-        return *this;
-    }
-
-    // イテレータを戻す（後置)
-    PSDIterator operator--(int) {
-        PSDIterator ret = *this;
-        _pos--;
-        if(_pos < 0)
-            _pos = 0;
-        return ret;
-    }
-
-    PSDIterator &operator-=(diff_t n) {
-        _pos -= n;
-        if(_pos < 0)
-            _pos = 0;
-        return *this;
-    }
-
-    PSDIterator operator-(diff_t n) {
-        PSDIterator ret = *this;
-        ret -= n;
-        return ret;
-    }
-
-    // 読み取り
-    const unsigned char &operator*() { return _psd->getStreamValue(_pos); }
-
-    void copyToBuffer(uint8_t *buf, int size) {
-        _psd->copyToBuffer(buf, _pos, size);
-        _pos += size;
-    }
-
-    // 差分
-    diff_t operator-(const PSDIterator &b) const {
-        return (diff_t)(_pos - b._pos);
-    }
-
-    // イテレータの一致判定
-    bool operator==(const PSDIterator &o) const { return o._pos == _pos; }
-    // イテレータの一致判定
-    bool operator!=(const PSDIterator &o) const { return o._pos != _pos; }
-
-    bool operator<(const PSDIterator &o) const { return _pos < o._pos; }
-    bool operator>(const PSDIterator &o) const { return _pos > o._pos; }
-    bool operator<=(const PSDIterator &o) const { return _pos <= o._pos; }
-    bool operator>=(const PSDIterator &o) const { return _pos >= o._pos; }
 
 private:
-    PSD *_psd;
-    tTVInteger _size; //< ストリームサイズ保持用
-    tTVInteger _pos; //< 参照位置
+    tTJSBinaryStream *stream_;
+    size_t total_size_;
+    std::mutex mutex_;
 };
 
-namespace psd {
-
-    inline void copyToBuffer(uint8_t *buffer, PSDIterator &cur, int size) {
-        cur.copyToBuffer(buffer, size);
-    }
-
-    inline void getShortLE(uint8_t *buffer, PSDIterator &cur) {
-        cur.copyToBuffer(buffer, 2);
-    }
-
-    inline void getLongLE(uint8_t *buffer, PSDIterator &cur) {
-        cur.copyToBuffer(buffer, 4);
-    }
-
-    inline void getLongLongLE(uint8_t *buffer, PSDIterator &cur) {
-        cur.copyToBuffer(buffer, 8);
-    }
-} // namespace psd
+} // namespace
 
 bool PSD::loadStream(const ttstr &filename) {
     clearData();
-
-    // ストリームのまま
     isLoaded = false;
-    pStream = TVPCreateIStream(filename, TJS_BS_READ);
-    if(pStream) {
 
-        STATSTG stat;
-        pStream->Stat(&stat, STATFLAG_NONAME);
-        mStreamSize = stat.cbSize.QuadPart;
+    tTJSBinaryStream *stream = TVPCreateStream(filename, TJS_BS_READ);
+    if(stream == nullptr) {
+        return false;
+    }
 
-        PSDIterator begin(this, true);
-        PSDIterator end(this, false);
-        psd::Parser<PSDIterator> parser(*this);
-        bool r = parse(begin, end, parser);
-        if(r && begin == end) {
-            dprint("succeeded\n");
-            isLoaded = processParsed();
-        }
-        if(!isLoaded) {
-            clearData();
-        }
+    const tjs_uint64 stream_size = stream->GetSize();
+    if(stream_size == 0 ||
+       stream_size > static_cast<tjs_uint64>(std::numeric_limits<int>::max())) {
+        delete stream;
+        return false;
+    }
+
+    auto source = std::make_shared<TJSBinaryStreamSource>(
+        stream, static_cast<size_t>(stream_size));
+    psd::StreamReader reader(source);
+    isLoaded = loadFromReader(reader);
+    if(!isLoaded) {
+        clearData();
     }
     return isLoaded;
 }
-
-#endif

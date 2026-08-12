@@ -88,9 +88,12 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public OnscripterYuri package
+      - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
-        run: git submodule update --init --depth 1 packages/OnscripterYuri
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -337,9 +340,12 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public OnscripterYuri package
+      - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
-        run: git submodule update --init --depth 1 packages/OnscripterYuri
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -597,9 +603,12 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public OnscripterYuri package
+      - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
-        run: git submodule update --init --depth 1 packages/OnscripterYuri
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -851,9 +860,12 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public OnscripterYuri package
+      - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
-        run: git submodule update --init --depth 1 packages/OnscripterYuri
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''

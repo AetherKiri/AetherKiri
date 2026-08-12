@@ -1,6 +1,7 @@
 #include "PluginStub.h"
 #include "GraphicsLoaderIntf.h"
 #include "MsgIntf.h"
+#include "UtilStreams.h"
 #include "psdclass.h"
 
 using namespace psd;
@@ -85,16 +86,7 @@ public:
  * コンストラクタ
  */
 PSD::PSD(iTJSDispatch2 *objthis) :
-    objthis(objthis)
-#ifdef LOAD_MEMORY
-    ,
-    hBuffer(0)
-#else
-    ,
-    pStream(nullptr), mStreamSize(0), mBufferPos(0), mBufferSize(0)
-#endif
-    ,
-    storageStarted(false) {};
+    objthis(objthis), storageStarted(false) {};
 
 /**
  * デストラクタ
@@ -129,19 +121,8 @@ bool PSD::load(const tjs_char *filename) {
         // 見つからなかったのでローカルパスとみなして読み込む
         psd::PSDFile::load(NarrowString(filename));
     } else {
-#ifdef LOAD_MEMORY
-        if(!wcschr(file.c_str(), '>')) {
-            // ローカルファイルなので直接読み込む
-            TVPGetLocalName(file);
-            psd::PSDFile::load(NarrowString(file));
-        } else {
-            // メモリに読み込んでロード
-            loadMemory(file);
-        }
-#else
         // ストリームとしてロード
         loadStream(file);
-#endif
     }
     if(isLoaded) {
         addToStorage(filename);
@@ -156,11 +137,6 @@ void PSD::clearData() {
     storageStarted = false;
 
     psd::PSDFile::clearData();
-#ifdef LOAD_MEMORY
-    clearMemory();
-#else
-    clearStream();
-#endif
 }
 
 /**
@@ -763,9 +739,12 @@ IStream *PSD::openLayerImage(const ttstr &name) {
             int isize = hsize + sizeof(TVP_WIN_BITMAPINFOHEADER);
             int size = isize + pitch * height;
 
-            // グローバルヒープにBMP画像を作成してストリームとして返す
-            auto *handle = reinterpret_cast<uint8_t *>(malloc(size));
-            if(handle) {
+            // メモリ上にBMP画像を作成してストリームとして返す
+            auto *binary_stream = new tTVPMemoryStream();
+            binary_stream->SetSize(static_cast<tjs_uint>(size));
+            auto *handle = static_cast<uint8_t *>(
+                binary_stream->GetInternalBuffer());
+            if(handle != nullptr) {
 
                 TVP_WIN_BITMAPFILEHEADER bfh{};
                 bfh.bfType = 'B' + ('M' << 8);
@@ -792,9 +771,9 @@ IStream *PSD::openLayerImage(const ttstr &name) {
                               psd::BGRA_LE, -pitch,
                               psd::IMAGE_MODE_MASKEDIMAGE);
 
-                return pStream;
+                return TVPCreateIStream(binary_stream);
             }
-            free(handle);
+            delete binary_stream;
         }
     }
     return nullptr;
