@@ -46,3 +46,14 @@ void AetherAppleRetainPixelBuffer(void *pixel_buffer) {
 void AetherAppleReleasePixelBuffer(void *pixel_buffer) {
   if (pixel_buffer != nullptr) CFRelease(pixel_buffer);
 }
+
+bool AetherAppleWaitForMetalCommandQueue(uint64_t metal_command_queue) {
+  if (metal_command_queue == 0) return false;
+  id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)(
+      reinterpret_cast<void *>(metal_command_queue));
+  id<MTLCommandBuffer> marker = [queue commandBuffer];
+  if (marker == nil) return false;
+  [marker commit];
+  [marker waitUntilCompleted];
+  return marker.status == MTLCommandBufferStatusCompleted;
+}

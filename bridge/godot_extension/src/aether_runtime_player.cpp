@@ -181,6 +181,7 @@ struct GodotGpuOp {
         Blend2,
         Blend3,
         ArtemisShader,
+        PrepareNativeWrite,
         ImportApplePixelBuffer,
         ImportAndroidHardwareBuffer,
         Release,
@@ -1101,7 +1102,8 @@ bool SupportsGodotRenderingDeviceGpu() {
 bool DirectPresentGodotNativeFrameEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_GODOT_DIRECT_PRESENT");
-        return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }
@@ -4090,6 +4092,22 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
         }
         case GodotGpuOp::Type::ArtemisShader:
             return ExecuteArtemisGpuShader(rd, op);
+        case GodotGpuOp::Type::PrepareNativeWrite:
+            // submit()/sync() are only valid for a local RenderingDevice;
+            // Godot's main device rejects them and therefore did not protect
+            // an IOSurface from being rewritten while Metal still sampled it.
+            // Queue an empty marker behind the previous frame on Godot's own
+            // Metal queue instead. This waits for GPU consumption without a
+            // texture readback or CPU-side pixel copy.
+#if defined(IOS_ENABLED)
+            return AetherAppleWaitForMetalCommandQueue(
+                rd->get_driver_resource(
+                    RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE,
+                    RID(), 0));
+#else
+            ApplyGodotGpuBarrier(rd);
+            return true;
+#endif
         case GodotGpuOp::Type::ImportApplePixelBuffer: {
 #if defined(IOS_ENABLED)
             if (op->native_image == nullptr || op->native_width == 0 ||
@@ -4203,6 +4221,10 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
 #endif
             return true;
         case GodotGpuOp::Type::Flush:
+            // The main RenderingDevice is submitted by RenderingServer at the
+            // frame boundary. Calling RenderingDevice::submit() here is both
+            // unnecessary and invalid for that main instance. The barrier is
+            // enough to retain ordering inside Godot's command graph.
             ApplyGodotGpuBarrier(rd);
             return true;
     }
@@ -5657,6 +5679,21 @@ uint64_t BridgeImportApplePixelBuffer(void *native_image, uint32_t width,
 #endif
 }
 
+bool BridgePrepareForNativeWrite(uint64_t texture) {
+    GodotGpuTextureRecord record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        const auto found = g_gpu_textures.find(texture);
+        if (found == g_gpu_textures.end()) return false;
+        record = found->second;
+    }
+    if (!record.rid.is_valid()) return false;
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::PrepareNativeWrite;
+    op->src = record.rid;
+    return RunGodotGpuOpSync(op);
+}
+
 uint64_t BridgeImportAndroidHardwareBuffer(void *native_image,
                                            uint32_t width,
                                            uint32_t height) {
@@ -6390,7 +6427,10 @@ void BridgeDiscardReadRgba(uint64_t request) {
 bool BridgeFlush() {
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Flush;
-    return RunGodotGpuOpAsync(op);
+    // The caller publishes the destination texture immediately after flush.
+    // Wait only until the render thread has encoded and submitted the work;
+    // ExecuteGodotGpuOp intentionally does not call RenderingDevice::sync().
+    return RunGodotGpuOpSync(op);
 }
 
 Ref<Texture2D> ResolveBridgeTexture(uint64_t texture) {
@@ -6909,6 +6949,8 @@ public:
             TVP_GODOT_GPU_EXTERNAL_TEXTURE_CALLBACKS_ABI_VERSION;
         external_texture_callbacks.import_apple_pixel_buffer =
             BridgeImportApplePixelBuffer;
+        external_texture_callbacks.prepare_for_native_write =
+            BridgePrepareForNativeWrite;
         external_texture_callbacks.import_android_hardware_buffer =
             BridgeImportAndroidHardwareBuffer;
         engine_register_godot_gpu_external_texture_bridge(
@@ -9027,6 +9069,9 @@ private:
         frame_present_width_ = 0;
         frame_present_height_ = 0;
         frame_present_current_slot_ = 0;
+        frame_present_pending_slot_ = 0;
+        frame_present_has_current_ = false;
+        frame_present_has_pending_ = false;
         frame_present_serial_ = UINT64_MAX;
         if (frame_texture_backend_ == "godot_native_gpu_presented" ||
             frame_texture_backend_ == "godot_external_presented") {
@@ -9127,6 +9172,9 @@ private:
         frame_present_width_ = width;
         frame_present_height_ = height;
         frame_present_current_slot_ = 0;
+        frame_present_pending_slot_ = 0;
+        frame_present_has_current_ = false;
+        frame_present_has_pending_ = false;
         frame_present_serial_ = UINT64_MAX;
         return true;
     }
@@ -9142,6 +9190,7 @@ private:
         if (frame_present_serial_ == serial &&
             frame_present_width_ == width &&
             frame_present_height_ == height &&
+            frame_present_has_current_ &&
             frame_present_textures_[frame_present_current_slot_].is_valid()) {
             frame_texture_serial_ = serial;
             frame_texture_backend_ = backend_name;
@@ -9157,7 +9206,21 @@ private:
             return Ref<Texture2D>();
         }
 
-        const size_t next_slot = 1u - frame_present_current_slot_;
+        // Promote only the copy encoded for the previous engine frame. Godot
+        // submits its main RenderingDevice at the render-frame boundary; a
+        // texture copied and returned during the same process tick can still
+        // contain its old transparent contents when Canvas samples it. This
+        // one-frame pipeline publishes a slot only after it has crossed a real
+        // RenderingServer submission, while the other slot receives the new
+        // copy. It avoids both CPU readback and illegal main-device submit().
+        if (frame_present_has_pending_) {
+            frame_present_current_slot_ = frame_present_pending_slot_;
+            frame_present_has_current_ = true;
+            frame_present_has_pending_ = false;
+        }
+        const size_t next_slot = frame_present_has_current_
+            ? 1u - frame_present_current_slot_
+            : 0u;
         auto op = std::make_shared<GodotGpuOp>();
         op->type = GodotGpuOp::Type::Copy;
         op->src = source.rid;
@@ -9172,12 +9235,18 @@ private:
             }
             return Ref<Texture2D>();
         }
-
-        frame_present_current_slot_ = next_slot;
+        frame_present_pending_slot_ = next_slot;
+        frame_present_has_pending_ = true;
         frame_present_serial_ = serial;
         frame_texture_serial_ = serial;
         frame_texture_backend_ = backend_name;
-        return frame_present_textures_[frame_present_current_slot_];
+        if (frame_present_has_current_) {
+            return frame_present_textures_[frame_present_current_slot_];
+        }
+        // The first queued slot has not crossed a Godot render boundary yet.
+        // Keep the provider-owned texture for that single startup frame;
+        // subsequent calls use only the completed presentation ring.
+        return source.texture;
     }
 
     Ref<Texture2D> update_imported_gpu_bridge_texture(uint64_t texture_id,
@@ -9292,6 +9361,9 @@ private:
     uint32_t frame_present_width_ = 0;
     uint32_t frame_present_height_ = 0;
     size_t frame_present_current_slot_ = 0;
+    size_t frame_present_pending_slot_ = 0;
+    bool frame_present_has_current_ = false;
+    bool frame_present_has_pending_ = false;
     uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
     std::unique_ptr<FrameEffectProvider> frame_effect_provider_;

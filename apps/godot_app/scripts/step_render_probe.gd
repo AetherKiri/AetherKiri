@@ -146,6 +146,15 @@ func _save_step(index: int, label: String) -> void:
         print("step %02d runtime_debug=%s" % [index, runtime_debug])
 
 func _capture_frame_image() -> Image:
+    # A GPU-direct frame is newer than the renderer's CPU compatibility
+    # snapshot. Read the exact TextureRect source first so screenshots catch
+    # transient crop/placement defects that are visible on screen.
+    if rect.texture != null:
+        var direct_image := rect.texture.get_image()
+        if direct_image != null and direct_image.get_width() > 0 and direct_image.get_height() > 0:
+            if int(_image_stats(direct_image).get("visible", 0)) > 0:
+                return direct_image
+
     # In headless mode the root viewport can be an opaque white dummy target.
     # Read the engine's final RGBA frame first so visual probes inspect the
     # actual KiriKiri composition rather than that dummy viewport.
@@ -157,12 +166,6 @@ func _capture_frame_image() -> Image:
         var frame_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
         if int(_image_stats(frame_image).get("visible", 0)) > 0:
             return frame_image
-
-    if rect.texture != null:
-        var rect_image := rect.texture.get_image()
-        if rect_image != null and rect_image.get_width() > 0 and rect_image.get_height() > 0:
-            if int(_image_stats(rect_image).get("visible", 0)) > 0:
-                return rect_image
 
     var texture := root.get_viewport().get_texture()
     if texture != null:

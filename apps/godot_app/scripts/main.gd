@@ -10985,6 +10985,8 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
 
     var frames: int = max(1, int(action.get("frames", 180)))
     var clicks_per_frame: int = max(0, int(action.get("clicks_per_frame", 1)))
+    var click_every_frames: int = max(1, int(action.get("click_every_frames", 1)))
+    var max_clicks: int = max(0, int(action.get("max_clicks", 0)))
     var capture_every: int = max(0, int(action.get("capture_every", 0)))
     var spike_ms: float = max(0.0, float(action.get("spike_ms", 20.0)))
     var pointer_id: int = int(action.get("pointer_id", TOUCH_POINTER_ID_OFFSET))
@@ -10998,7 +11000,9 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var frame_max := 0.0
     var spikes := 0
     var input_events := 0
+    var clicks_sent := 0
     var measured_frames := 0
+    var stream_start_ticks := Time.get_ticks_usec()
 
     if label.is_empty() or label == "click_stream":
         label = "click_stream_%d_%d_%d" % [frames, int(pos.x), int(pos.y)]
@@ -11008,10 +11012,16 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     for frame_index in range(frames):
         var frame_start := Time.get_ticks_usec()
         var input_start := frame_start
-        for i in range(clicks_per_frame):
+        var click_batch := 0
+        if clicks_per_frame > 0 and (frame_index % click_every_frames) == 0:
+            click_batch = clicks_per_frame
+            if max_clicks > 0:
+                click_batch = mini(click_batch, max_clicks - clicks_sent)
+        for i in range(max(0, click_batch)):
             player.send_pointer_event(POINTER_DOWN, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
             player.send_pointer_event(POINTER_UP, pointer_id, mapped.x, mapped.y, 0.0, 0.0, 0)
             input_events += 2
+            clicks_sent += 1
 
         var after_input := Time.get_ticks_usec()
         var tick_start := after_input
@@ -11049,17 +11059,26 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
             spikes += 1
 
         if capture_every > 0 and (frame_index % capture_every) == 0:
-            await _probe_save_step(step, "%s_f%03d" % [label, frame_index])
+            await _probe_save_step(
+                step,
+                "%s_f%03d" % [label, frame_index],
+                int(action.get("capture_wait_frames", 2))
+            )
             step += 1
         await get_tree().process_frame
 
     var divisor := float(max(1, measured_frames))
-    print("click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d input_events=%d avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+    var elapsed_sec: float = maxf(0.0001, float(Time.get_ticks_usec() - stream_start_ticks) / 1000000.0)
+    var line := "click_stream label=%s frames=%d measured_frames=%d clicks_per_frame=%d click_every_frames=%d max_clicks=%d clicks_sent=%d input_events=%d fps=%.2f avg_input_ms=%.2f max_input_ms=%.2f avg_tick_ms=%.2f max_tick_ms=%.2f avg_update_ms=%.2f max_update_ms=%.2f avg_frame_ms=%.2f max_frame_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
         label,
         frames,
         measured_frames,
         clicks_per_frame,
+        click_every_frames,
+        max_clicks,
+        clicks_sent,
         input_events,
+        float(measured_frames) / elapsed_sec,
         input_total / divisor,
         input_max,
         tick_total / divisor,
@@ -11072,16 +11091,18 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
         spike_ms,
         player.get_frame_texture_backend(),
         player.get_renderer_info(),
-    ])
+    ]
+    print(line)
+    _write_probe_marker(line)
 
     if bool(action.get("capture_final", true)):
         await _probe_save_step(step, "%s_final" % label)
         step += 1
     return step
 
-func _probe_save_step(index: int, label: String) -> void:
-    await get_tree().process_frame
-    await get_tree().process_frame
+func _probe_save_step(index: int, label: String, wait_frames: int = 2) -> void:
+    for ignored in range(max(0, wait_frames)):
+        await get_tree().process_frame
     var image := _probe_capture_image()
     var path := _default_output_path("aetherkiri-step-%02d-%s.png" % [index, label])
     image.save_png(path)
@@ -11302,6 +11323,15 @@ func _probe_send_direct_click(pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, pos.x, pos.y, 0.0, 0.0, 0)
 
 func _probe_capture_image() -> Image:
+    # In GPU-direct mode this is the texture the user actually sees. The CPU
+    # compatibility frame can legitimately lag behind it, so consulting
+    # read_frame_rgba() first would hide one-frame crop and layer corruption.
+    if viewport.texture != null:
+        var direct_image := viewport.texture.get_image()
+        if direct_image != null and direct_image.get_width() > 0 and direct_image.get_height() > 0:
+            if int(_image_stats(direct_image).get("visible", 0)) > 0:
+                return direct_image
+
     # A headless Godot viewport can be an opaque white dummy target. Prefer
     # the engine's composed RGBA frame so CLI regression captures inspect the
     # game output instead of accepting that dummy as a valid screenshot.
@@ -11317,12 +11347,6 @@ func _probe_capture_image() -> Image:
     var texture := get_viewport().get_texture()
     if texture != null:
         var viewport_image := texture.get_image()
-        if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
-            if int(_image_stats(viewport_image).get("visible", 0)) > 0:
-                return viewport_image
-
-    if viewport.texture != null:
-        var viewport_image := viewport.texture.get_image()
         if viewport_image != null and viewport_image.get_width() > 0 and viewport_image.get_height() > 0:
             if int(_image_stats(viewport_image).get("visible", 0)) > 0:
                 return viewport_image

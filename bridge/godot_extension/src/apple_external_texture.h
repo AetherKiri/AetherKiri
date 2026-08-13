@@ -11,3 +11,9 @@ uint64_t AetherAppleCreateMetalTextureFromPixelBuffer(
 void AetherAppleReleaseMetalTexture(uint64_t metal_texture);
 void AetherAppleRetainPixelBuffer(void *pixel_buffer);
 void AetherAppleReleasePixelBuffer(void *pixel_buffer);
+
+// Commits an empty marker to Godot's Metal command queue and waits for it.
+// Every command buffer submitted before the marker is complete when this
+// returns, so a second graphics API can safely rewrite shared IOSurface
+// storage without reading any pixels back through the CPU.
+bool AetherAppleWaitForMetalCommandQueue(uint64_t metal_command_queue);
