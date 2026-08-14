@@ -4,6 +4,7 @@
 #import <Metal/Metal.h>
 
 #include <dlfcn.h>
+#include <mutex>
 
 namespace {
 
@@ -65,12 +66,29 @@ void AetherAppleReleasePixelBuffer(void *pixel_buffer) {
   if (pixel_buffer != nullptr) CFRelease(pixel_buffer);
 }
 
-bool AetherAppleWaitForMetalCommandQueue(uint64_t metal_command_queue) {
+bool AetherApplePollMetalCommandQueue(uint64_t metal_command_queue) {
   id<MTLCommandQueue> queue = ResolveMetalCommandQueue(metal_command_queue);
   if (queue == nil) return false;
-  id<MTLCommandBuffer> marker = [queue commandBuffer];
-  if (marker == nil) return false;
-  [marker commit];
-  [marker waitUntilCompleted];
-  return marker.status == MTLCommandBufferStatusCompleted;
+
+  static std::mutex marker_mutex;
+  static id<MTLCommandBuffer> pending_marker = nil;
+  std::lock_guard<std::mutex> lock(marker_mutex);
+
+  bool previous_completed = false;
+  if (pending_marker != nil) {
+    const MTLCommandBufferStatus status = pending_marker.status;
+    if (status != MTLCommandBufferStatusCompleted &&
+        status != MTLCommandBufferStatusError) {
+      return false;
+    }
+    previous_completed = status == MTLCommandBufferStatusCompleted;
+    [pending_marker release];
+    pending_marker = nil;
+  }
+
+  id<MTLCommandBuffer> next_marker = [queue commandBuffer];
+  if (next_marker == nil) return previous_completed;
+  pending_marker = [next_marker retain];
+  [pending_marker commit];
+  return previous_completed;
 }

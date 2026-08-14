@@ -12,8 +12,8 @@ void AetherAppleReleaseMetalTexture(uint64_t metal_texture);
 void AetherAppleRetainPixelBuffer(void *pixel_buffer);
 void AetherAppleReleasePixelBuffer(void *pixel_buffer);
 
-// Commits an empty marker to Godot's Metal command queue and waits for it.
-// Every command buffer submitted before the marker is complete when this
-// returns, so a second graphics API can safely rewrite shared IOSurface
-// storage without reading any pixels back through the CPU.
-bool AetherAppleWaitForMetalCommandQueue(uint64_t metal_command_queue);
+// Polls an empty marker on Godot's Metal command queue without blocking the
+// caller. A true result proves that every command buffer submitted before the
+// previous marker has completed, so a second graphics API can safely rewrite
+// retired IOSurface storage without reading pixels back through the CPU.
+bool AetherApplePollMetalCommandQueue(uint64_t metal_command_queue);

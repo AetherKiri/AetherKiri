@@ -4099,14 +4099,13 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
         case GodotGpuOp::Type::ArtemisShader:
             return ExecuteArtemisGpuShader(rd, op);
         case GodotGpuOp::Type::PrepareNativeWrite:
-            // submit()/sync() are only valid for a local RenderingDevice;
-            // Godot's main device rejects them and therefore did not protect
-            // an IOSurface from being rewritten while Metal still sampled it.
-            // Queue an empty marker behind the previous frame on Godot's own
-            // Metal queue instead. This waits for GPU consumption without a
-            // texture readback or CPU-side pixel copy.
+            // submit()/sync() are only valid for a local RenderingDevice.
+            // Poll a marker on Godot's Metal queue instead. A target remains
+            // retired while the marker is pending, so the runtime can render
+            // another buffer without blocking the CPU or racing IOSurface
+            // storage still sampled by Metal.
 #if defined(__APPLE__)
-            return AetherAppleWaitForMetalCommandQueue(
+            return AetherApplePollMetalCommandQueue(
                 rd->get_driver_resource(
                     RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE,
                     RID(), 0));
@@ -4286,8 +4285,14 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
 }
 
 void FinishGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool result) {
-    CountGpuOpResult(result);
-    if (!result && op != nullptr) {
+    // PrepareNativeWrite is a non-blocking readiness probe. A false result
+    // means Metal is still consuming the retired IOSurface, not that the GPU
+    // bridge failed; the SDK simply keeps that target retired and tries again.
+    const bool expected_not_ready =
+        !result && op != nullptr &&
+        op->type == GodotGpuOp::Type::PrepareNativeWrite;
+    CountGpuOpResult(result || expected_not_ready);
+    if (!result && !expected_not_ready && op != nullptr) {
         if (op->type == GodotGpuOp::Type::Copy) {
             g_gpu_copy_failed.fetch_add(1, std::memory_order_relaxed);
         } else if (op->type == GodotGpuOp::Type::CopyTriangles) {
@@ -5739,10 +5744,32 @@ bool BridgePrepareForNativeWrite(uint64_t texture) {
         record = found->second;
     }
     if (!record.rid.is_valid()) return false;
+#if defined(__APPLE__) && !defined(IOS_ENABLED)
+    // All SDK surfaces rendered during one Godot display frame were consumed
+    // by the same ordered Metal queue. One completed marker therefore makes
+    // every sufficiently retired surface in this scene batch reusable.
+    Engine *engine = Engine::get_singleton();
+    const uint64_t drawn_frame = engine != nullptr
+        ? static_cast<uint64_t>(engine->get_frames_drawn())
+        : UINT64_MAX;
+    static std::mutex wait_mutex;
+    static uint64_t last_waited_drawn_frame = UINT64_MAX;
+    std::lock_guard<std::mutex> wait_lock(wait_mutex);
+    if (drawn_frame != UINT64_MAX &&
+        drawn_frame == last_waited_drawn_frame) {
+        return true;
+    }
+#endif
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::PrepareNativeWrite;
     op->src = record.rid;
-    return RunGodotGpuOpSync(op);
+    const bool prepared = RunGodotGpuOpSync(op);
+#if defined(__APPLE__) && !defined(IOS_ENABLED)
+    if (prepared && drawn_frame != UINT64_MAX) {
+        last_waited_drawn_frame = drawn_frame;
+    }
+#endif
+    return prepared;
 }
 
 bool BridgePublishNativeWrite(uint64_t texture) {
