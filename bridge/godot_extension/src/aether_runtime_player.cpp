@@ -169,7 +169,6 @@ std::atomic<uint64_t> g_gpu_textures_created{0};
 std::atomic<uint64_t> g_gpu_textures_released{0};
 std::atomic<uint64_t> g_gpu_texture_bytes_created{0};
 std::atomic<uint64_t> g_gpu_texture_bytes_released{0};
-
 struct GodotGpuOp {
     enum class Type {
         Update,
@@ -4164,7 +4163,7 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             Ref<RDTextureFormat> format;
             format.instantiate();
             format->set_texture_type(RenderingDevice::TEXTURE_TYPE_2D);
-            format->set_format(RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM);
+            format->set_format(RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM);
             format->set_width(op->native_width);
             format->set_height(op->native_height);
             format->set_depth(1);
@@ -7913,7 +7912,6 @@ public:
         if (handle_ == nullptr) {
             return Ref<Texture2D>();
         }
-
         const std::string normalized_backend = NormalizeBackend(backend_);
         if (normalized_backend == ENGINE_RENDERER_GODOT_NATIVE ||
             normalized_backend == ENGINE_RENDERER_GPU_BRIDGE) {
