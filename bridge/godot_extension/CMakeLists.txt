@@ -124,10 +124,12 @@ if(APPLE)
 endif()
 
 if(APPLE AND NOT IOS)
+    find_package(VulkanHeaders CONFIG REQUIRED)
     target_sources(aether_kiri_godot PRIVATE
         src/apple_vulkan_external_texture.mm)
     set_source_files_properties(src/apple_vulkan_external_texture.mm
         PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
+    target_link_libraries(aether_kiri_godot PRIVATE Vulkan::Headers)
 endif()
 
 if(ANDROID)

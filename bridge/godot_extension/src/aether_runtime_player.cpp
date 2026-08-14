@@ -126,7 +126,7 @@ struct GodotGpuTextureRecord {
     // Retained CVPixelBuffer backing an imported Metal texture. It must live
     // until the queued RID release reaches the render thread.
     void *apple_pixel_buffer = nullptr;
-    // Owns the IOSurface-to-MoltenVK GPU publisher on macOS.
+    // Owns the VkImage that directly imports the IOSurface on macOS.
     void *apple_vulkan_external_texture = nullptr;
     // Owns the VkImage, imported device memory, and retained AHardwareBuffer
     // backing an Android shared E-mote texture.
@@ -4115,19 +4115,7 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             return true;
 #endif
         case GodotGpuOp::Type::PublishNativeWrite:
-#if defined(__APPLE__) && !defined(IOS_ENABLED)
-            if (op->native_resource == nullptr || !op->dst.is_valid() ||
-                !AetherApplePublishPixelBufferToVulkanTexture(
-                    op->native_resource,
-                    rd->get_driver_resource(
-                        RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE,
-                        RID(), 0))) {
-                return false;
-            }
             return true;
-#else
-            return true;
-#endif
         case GodotGpuOp::Type::ImportApplePixelBuffer: {
 #if defined(__APPLE__)
             if (op->native_image == nullptr || op->native_width == 0 ||
@@ -4160,36 +4148,33 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
 #else
             const uint64_t physical_device = rd->get_driver_resource(
                 RenderingDevice::DRIVER_RESOURCE_PHYSICAL_DEVICE, RID(), 0);
-            Ref<RDTextureFormat> format;
-            format.instantiate();
-            format->set_texture_type(RenderingDevice::TEXTURE_TYPE_2D);
-            format->set_format(RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM);
-            format->set_width(op->native_width);
-            format->set_height(op->native_height);
-            format->set_depth(1);
-            format->set_array_layers(1);
-            format->set_mipmaps(1);
-            format->set_samples(RenderingDevice::TEXTURE_SAMPLES_1);
-            format->set_usage_bits(BitField<RenderingDevice::TextureUsageBits>(
+            const uint64_t command_queue = rd->get_driver_resource(
+                RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE, RID(), 0);
+            const uint32_t queue_family = static_cast<uint32_t>(
+                rd->get_driver_resource(
+                    RenderingDevice::DRIVER_RESOURCE_QUEUE_FAMILY, RID(), 0));
+            const uint64_t native_texture =
+                AetherAppleCreateVulkanTextureFromPixelBuffer(
+                    device, physical_device, command_queue, queue_family,
+                    op->native_image,
+                    op->native_width, op->native_height,
+                    &vulkan_external_texture);
+            if (native_texture == 0 ||
+                vulkan_external_texture == nullptr) {
+                return false;
+            }
+            rid = rd->texture_create_from_extension(
+                RenderingDevice::TEXTURE_TYPE_2D,
+                RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM,
+                RenderingDevice::TEXTURE_SAMPLES_1,
+                BitField<RenderingDevice::TextureUsageBits>(
                 RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
                 RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
                 RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
-                RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT));
-            Ref<RDTextureView> view;
-            view.instantiate();
-            TypedArray<PackedByteArray> initial_data;
-            rid = rd->texture_create(format, view, initial_data);
+                RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT),
+                native_texture, op->native_width, op->native_height, 1, 1);
             if (!rid.is_valid()) {
-                return false;
-            }
-            const uint64_t native_texture = rd->get_driver_resource(
-                RenderingDevice::DRIVER_RESOURCE_TEXTURE, rid, 0);
-            vulkan_external_texture =
-                AetherAppleCreateVulkanTexturePublisher(
-                    device, physical_device, native_texture,
-                    op->native_image, op->native_width, op->native_height);
-            if (vulkan_external_texture == nullptr) {
-                rd->free_rid(rid);
+                AetherAppleReleaseVulkanTexture(vulkan_external_texture);
                 return false;
             }
 #endif
@@ -5769,17 +5754,11 @@ bool BridgePublishNativeWrite(uint64_t texture) {
         if (found == g_gpu_textures.end()) return false;
         record = found->second;
     }
-    if (!record.rid.is_valid() ||
-        record.apple_vulkan_external_texture == nullptr) {
-        return false;
-    }
-    auto op = std::make_shared<GodotGpuOp>();
-    op->type = GodotGpuOp::Type::PublishNativeWrite;
-    op->dst = record.rid;
-    op->native_resource = record.apple_vulkan_external_texture;
-    op->native_width = record.width;
-    op->native_height = record.height;
-    return RunGodotGpuOpSync(op);
+    // The VkImage directly imports the producer's IOSurface. The OpenGL fence
+    // and PrepareForExport() flush make this generation visible; no second
+    // Metal copy or out-of-band write to a MoltenVK-owned texture is needed.
+    return record.rid.is_valid() &&
+           record.apple_vulkan_external_texture != nullptr;
 #else
     (void)texture;
     return true;
@@ -7724,6 +7703,8 @@ public:
                          " godot_driver=" + server->get_current_rendering_driver_name() +
                          " rd_gpu=" + String(SupportsGodotRenderingDeviceGpu() ? "1" : "0");
         }
+        godot_info += " source_query_ms=" + String::num(source_query_ms_, 6) +
+                      " present_copy_ms=" + String::num(present_copy_ms_, 6);
         return String::utf8(buffer) + godot_info + GetGodotGpuBridgeDebugInfo();
     }
 
@@ -7912,6 +7893,8 @@ public:
         if (handle_ == nullptr) {
             return Ref<Texture2D>();
         }
+        source_query_ms_ = 0.0;
+        present_copy_ms_ = 0.0;
         const std::string normalized_backend = NormalizeBackend(backend_);
         if (normalized_backend == ENGINE_RENDERER_GODOT_NATIVE ||
             normalized_backend == ENGINE_RENDERER_GPU_BRIDGE) {
@@ -7919,14 +7902,20 @@ public:
             uint32_t width = 0;
             uint32_t height = 0;
             uint64_t serial = 0;
+            const auto query_started = std::chrono::steady_clock::now();
             engine_result_t gpu_result = engine_get_godot_native_frame_texture(
                 handle_, &texture_id, &width, &height, &serial);
+            source_query_ms_ = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - query_started).count();
             if (gpu_result == ENGINE_RESULT_OK && texture_id != 0) {
                 if (normalized_backend == ENGINE_RENDERER_GPU_BRIDGE) {
+                    const auto present_started = std::chrono::steady_clock::now();
                     Ref<Texture2D> presented_texture =
                         update_presented_bridge_texture(
                             texture_id, width, height, serial,
                             "godot_external_presented");
+                    present_copy_ms_ = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - present_started).count();
                     if (presented_texture.is_valid()) {
                         frame_texture_.unref();
                         release_imported_texture();
@@ -7961,10 +7950,13 @@ public:
                             return native_texture;
                         }
                     }
+                    const auto present_started = std::chrono::steady_clock::now();
                     Ref<Texture2D> presented_texture =
                         update_presented_bridge_texture(
                             texture_id, width, height, serial,
                             "godot_native_gpu_presented");
+                    present_copy_ms_ = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - present_started).count();
                     if (presented_texture.is_valid()) {
                         frame_texture_.unref();
                         release_imported_texture();
@@ -9460,6 +9452,8 @@ private:
     String last_result_;
     String last_error_;
     String frame_texture_backend_ = "none";
+    double source_query_ms_ = 0.0;
+    double present_copy_ms_ = 0.0;
     String runtime_id_ = "auto";
     Ref<ImageTexture> frame_texture_;
     Ref<Texture2DRD> frame_rd_texture_;
