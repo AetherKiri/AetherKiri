@@ -2205,22 +2205,19 @@ vec4 load_minified(ivec2 limit, vec2 edge_coord,
             load_bilinear_premul(limit, edge_coord));
     }
     if (preserve_detail) {
-        // Composite Simpson sampling retains the centre of high-contrast
-        // anime line art while integrating the complete destination-pixel
-        // footprint. This gives a later frame enhancer real eye/hair detail
-        // to restore instead of sharpening an already blurred 2x2 average.
-        vec4 premul = vec4(0.0);
-        for (int y = -1; y <= 1; ++y) {
-            float wy = y == 0 ? 4.0 : 1.0;
-            for (int x = -1; x <= 1; ++x) {
-                float wx = x == 0 ? 4.0 : 1.0;
-                vec2 offset = source_dx * (float(x) * 0.5) +
-                              source_dy * (float(y) * 0.5);
-                premul += load_bilinear_premul(
-                    limit, edge_coord + offset) * (wx * wy);
-            }
-        }
-        return straight_from_premul(premul / 36.0);
+        // Keep half of the weight at the centre for fine eye/hair lines and
+        // use four footprint corners for stable alpha-edge integration. Five
+        // bilinear samples retain the accepted detail while avoiding the 36
+        // image loads required by the previous 3x3 composite filter.
+        vec2 dx = source_dx * 0.5;
+        vec2 dy = source_dy * 0.5;
+        vec4 premul = load_bilinear_premul(limit, edge_coord) * 0.5;
+        premul +=
+            (load_bilinear_premul(limit, edge_coord - dx - dy) +
+             load_bilinear_premul(limit, edge_coord + dx - dy) +
+             load_bilinear_premul(limit, edge_coord - dx + dy) +
+             load_bilinear_premul(limit, edge_coord + dx + dy)) * 0.125;
+        return straight_from_premul(premul);
     }
     // DXT E-mote atlases contain high-contrast one-pixel line art. At the
     // authored 0.5 presentation scale a bare bilinear lookup leaves that
@@ -2374,19 +2371,19 @@ vec4 load_minified(ivec2 limit, vec2 edge_coord,
         premul = load_bilinear_premul(
             limit, edge_coord, source_premultiplied);
     } else if (preserve_detail) {
-        premul = vec4(0.0);
-        for (int y = -1; y <= 1; ++y) {
-            float wy = y == 0 ? 4.0 : 1.0;
-            for (int x = -1; x <= 1; ++x) {
-                float wx = x == 0 ? 4.0 : 1.0;
-                vec2 offset = source_dx * (float(x) * 0.5) +
-                              source_dy * (float(y) * 0.5);
-                premul += load_bilinear_premul(
-                    limit, edge_coord + offset,
-                    source_premultiplied) * (wx * wy);
-            }
-        }
-        premul /= 36.0;
+        vec2 dx = source_dx * 0.5;
+        vec2 dy = source_dy * 0.5;
+        premul = load_bilinear_premul(
+            limit, edge_coord, source_premultiplied) * 0.5;
+        premul +=
+            (load_bilinear_premul(
+                 limit, edge_coord - dx - dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord + dx - dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord - dx + dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord + dx + dy, source_premultiplied)) * 0.125;
     } else {
         vec2 dx = source_dx * 0.5;
         vec2 dy = source_dy * 0.5;
@@ -2967,18 +2964,14 @@ vec4 load_minified(ivec2 limit, vec2 edge_coord,
     if (footprint <= 1.0001) {
         premul = load_bilinear_premul(limit, edge_coord);
     } else if (preserve_detail) {
-        premul = vec4(0.0);
-        for (int y = -1; y <= 1; ++y) {
-            float wy = y == 0 ? 4.0 : 1.0;
-            for (int x = -1; x <= 1; ++x) {
-                float wx = x == 0 ? 4.0 : 1.0;
-                vec2 offset = source_dx * (float(x) * 0.5) +
-                              source_dy * (float(y) * 0.5);
-                premul += load_bilinear_premul(
-                    limit, edge_coord + offset) * (wx * wy);
-            }
-        }
-        premul /= 36.0;
+        vec2 dx = source_dx * 0.5;
+        vec2 dy = source_dy * 0.5;
+        premul = load_bilinear_premul(limit, edge_coord) * 0.5;
+        premul +=
+            (load_bilinear_premul(limit, edge_coord - dx - dy) +
+             load_bilinear_premul(limit, edge_coord + dx - dy) +
+             load_bilinear_premul(limit, edge_coord - dx + dy) +
+             load_bilinear_premul(limit, edge_coord + dx + dy)) * 0.125;
     } else {
         vec2 dx = source_dx * 0.5;
         vec2 dy = source_dy * 0.5;
@@ -6003,9 +5996,13 @@ void AppendGodotGpuTriangleBounds(std::vector<float> &vertices,
 
 bool ShouldPreserveMinifiedTriangleDetail(uint32_t triangle_count,
                                           const tTVPPointD *dst_points,
-                                          const tTVPPointD *src_points) {
-    if (!g_frame_enhancement_detail_sampling.load(std::memory_order_acquire) ||
-        triangle_count == 0 || dst_points == nullptr || src_points == nullptr) {
+                                          const tTVPPointD *src_points,
+                                          bool force_detail_sampling = false) {
+    const bool detail_sampling_enabled =
+        force_detail_sampling ||
+        g_frame_enhancement_detail_sampling.load(std::memory_order_acquire);
+    if (!detail_sampling_enabled || triangle_count == 0 ||
+        dst_points == nullptr || src_points == nullptr) {
         return false;
     }
 
@@ -6136,8 +6133,15 @@ bool BridgeDrawTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     op->mode = triangle_count;
     op->opacity = static_cast<int>(std::round(std::clamp(opacity, 0.0f, 1.0f) * 255.0f));
     op->color = blend_mode;
+    // Official SDK E-mote frames are authored at a larger character canvas
+    // and commonly presented at 0.5x. The generic four-quadrant reduction is
+    // intentionally conservative but softens fine eye and hair line work.
+    // Keep the centre-weighted minification path enabled for these explicitly
+    // tagged premultiplied sources even when global frame enhancement is off.
+    const bool sdk_emote_source =
+        (blend_mode & TVP_GODOT_GPU_TRIANGLE_SOURCE_PREMULTIPLIED) != 0u;
     op->preserve_minified_detail = ShouldPreserveMinifiedTriangleDetail(
-        triangle_count, dst_points, src_points);
+        triangle_count, dst_points, src_points, sdk_emote_source);
     if (op->preserve_minified_detail) {
         g_gpu_detail_minify_ops.fetch_add(1, std::memory_order_relaxed);
     }
