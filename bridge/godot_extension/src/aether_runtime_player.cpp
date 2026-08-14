@@ -5744,7 +5744,7 @@ bool BridgePrepareForNativeWrite(uint64_t texture) {
         record = found->second;
     }
     if (!record.rid.is_valid()) return false;
-#if defined(__APPLE__) && !defined(IOS_ENABLED)
+#if defined(__APPLE__)
     // All SDK surfaces rendered during one Godot display frame were consumed
     // by the same ordered Metal queue. One completed marker therefore makes
     // every sufficiently retired surface in this scene batch reusable.
@@ -5764,7 +5764,7 @@ bool BridgePrepareForNativeWrite(uint64_t texture) {
     op->type = GodotGpuOp::Type::PrepareNativeWrite;
     op->src = record.rid;
     const bool prepared = RunGodotGpuOpSync(op);
-#if defined(__APPLE__) && !defined(IOS_ENABLED)
+#if defined(__APPLE__)
     if (prepared && drawn_frame != UINT64_MAX) {
         last_waited_drawn_frame = drawn_frame;
     }

@@ -10,14 +10,22 @@ namespace {
 
 id<MTLCommandQueue> ResolveMetalCommandQueue(uint64_t command_queue) {
   if (command_queue == 0) return nil;
+#if defined(IOS_ENABLED)
+  // Godot's iOS export uses RenderingDeviceDriverMetal, so
+  // DRIVER_RESOURCE_COMMAND_QUEUE is already an id<MTLCommandQueue>. Passing
+  // it through vkGetMTLCommandQueueMVK corrupts the value (and previously
+  // produced the invalid 0x4 receiver seen on device).
+  return (__bridge id<MTLCommandQueue>)(
+      reinterpret_cast<void *>(command_queue));
+#else
   void *native_queue = reinterpret_cast<void *>(command_queue);
   using GetMetalCommandQueueMvk = void (*)(void *, void **);
   auto get_metal_queue = reinterpret_cast<GetMetalCommandQueueMvk>(
       dlsym(RTLD_DEFAULT, "vkGetMTLCommandQueueMVK"));
-  if (get_metal_queue != nullptr) {
-    get_metal_queue(native_queue, &native_queue);
-  }
+  if (get_metal_queue == nullptr) return nil;
+  get_metal_queue(native_queue, &native_queue);
   return (__bridge id<MTLCommandQueue>)native_queue;
+#endif
 }
 
 }  // namespace
