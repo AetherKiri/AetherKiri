@@ -337,14 +337,31 @@ func _print_memory_sample(label: String, frame: int) -> void:
         var parsed = JSON.parse_string(runtime_debug)
         if parsed is Dictionary:
             var debug: Dictionary = parsed
-            for key in ["emotePlayers", "emoteLayers", "runtimeJournalEntries", "layers", "cachedSurfaceBytes"]:
+            for key in ["emotePlayers", "emoteLayers", "emotePlayerTemplates", "runtimeJournalEntries", "layers", "cachedSurfaceBytes"]:
                 if debug.has(key):
                     runtime_counts[key] = debug[key]
-    print("memory_sample label=%s frame=%d memory=%s runtime=%s" % [
+    var gpu_counts: Dictionary = {}
+    var renderer_info := String(player.get_renderer_info())
+    for field in renderer_info.split(" ", false):
+        var separator := field.find("=")
+        if separator <= 0:
+            continue
+        var key := field.left(separator)
+        if key in [
+            "bridge_textures",
+            "bridge_texture_live_mb",
+            "bridge_texture_created",
+            "bridge_texture_released",
+            "emote_template_hits",
+            "emote_template_misses",
+        ]:
+            gpu_counts[key] = field.substr(separator + 1)
+    print("memory_sample label=%s frame=%d memory=%s runtime=%s gpu=%s" % [
         label,
         frame,
         JSON.stringify(memory),
         JSON.stringify(runtime_counts),
+        JSON.stringify(gpu_counts),
     ])
 
 func _run_click_stream(step: int, label: String, action: Dictionary) -> int:

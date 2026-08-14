@@ -2,6 +2,9 @@ extends RefCounted
 
 const DEBUG_REQUEST_PATH := "user://aetherkiri-probe-request.json"
 
+static var _debug_request_consumed := false
+static var _debug_request_config: Dictionary = {}
+
 static func load() -> Dictionary:
     var inline := OS.get_environment("AETHERKIRI_TEST_CONFIG_JSON")
     if inline.is_empty():
@@ -16,19 +19,40 @@ static func load() -> Dictionary:
     var path := OS.get_environment("AETHERKIRI_TEST_CONFIG")
     if path.is_empty():
         path = OS.get_environment("AETHERKIRI_PROBE_CONFIG")
-    if path.is_empty() and FileAccess.file_exists(DEBUG_REQUEST_PATH):
-        path = DEBUG_REQUEST_PATH
+    var is_debug_request := false
+    if path.is_empty():
+        if _debug_request_consumed:
+            return _debug_request_config
+        if FileAccess.file_exists(DEBUG_REQUEST_PATH):
+            path = DEBUG_REQUEST_PATH
+            is_debug_request = true
     if path.is_empty():
         return {}
     var file := FileAccess.open(path, FileAccess.READ)
     if file == null:
         printerr("test config not found: %s" % path)
+        if is_debug_request:
+            _consume_debug_request({})
         return {}
-    var parsed = JSON.parse_string(file.get_as_text())
+    var contents := file.get_as_text()
+    file.close()
+    var parsed = JSON.parse_string(contents)
     if parsed is Dictionary:
+        if is_debug_request:
+            _consume_debug_request(parsed)
         return parsed
     printerr("test config is not a JSON object: %s" % path)
+    if is_debug_request:
+        _consume_debug_request({})
     return {}
+
+static func _consume_debug_request(config: Dictionary) -> void:
+    _debug_request_config = config
+    _debug_request_consumed = true
+    var absolute_path := ProjectSettings.globalize_path(DEBUG_REQUEST_PATH)
+    var remove_error := DirAccess.remove_absolute(absolute_path)
+    if remove_error != OK and remove_error != ERR_FILE_NOT_FOUND:
+        printerr("could not consume debug request: %s (%d)" % [absolute_path, remove_error])
 
 static func _argument_value(name: String) -> String:
     var args: Array[String] = []
