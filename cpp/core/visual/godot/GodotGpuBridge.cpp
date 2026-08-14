@@ -75,9 +75,19 @@ extern "C" void TVPGodotGpuExternalTextureRegister(
     g_external_texture_callbacks.prepare_for_native_write =
         callbacks->prepare_for_native_write;
     if (callbacks->struct_size >=
-        sizeof(TVPGodotGpuExternalTextureCallbacks)) {
+        offsetof(TVPGodotGpuExternalTextureCallbacks,
+                 publish_native_write)) {
         g_external_texture_callbacks.import_android_hardware_buffer =
             callbacks->import_android_hardware_buffer;
+    }
+    constexpr size_t kPublishFieldSize =
+        offsetof(TVPGodotGpuExternalTextureCallbacks,
+                 publish_native_write) +
+        sizeof(((TVPGodotGpuExternalTextureCallbacks *)nullptr)
+                   ->publish_native_write);
+    if (callbacks->struct_size >= kPublishFieldSize) {
+        g_external_texture_callbacks.publish_native_write =
+            callbacks->publish_native_write;
     }
     g_external_texture_registered =
         g_external_texture_callbacks.import_apple_pixel_buffer != nullptr ||

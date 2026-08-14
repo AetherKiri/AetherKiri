@@ -8,8 +8,11 @@
 #if defined(AETHERKIRI_WITH_ONSCRIPTER)
 #include "onscripter_runtime.h"
 #endif
-#if defined(IOS_ENABLED)
+#if defined(__APPLE__)
 #include "apple_external_texture.h"
+#if !defined(IOS_ENABLED)
+#include "apple_vulkan_external_texture.h"
+#endif
 #endif
 #if defined(__ANDROID__)
 #include "android_external_texture.h"
@@ -123,6 +126,8 @@ struct GodotGpuTextureRecord {
     // Retained CVPixelBuffer backing an imported Metal texture. It must live
     // until the queued RID release reaches the render thread.
     void *apple_pixel_buffer = nullptr;
+    // Owns the IOSurface-to-MoltenVK GPU publisher on macOS.
+    void *apple_vulkan_external_texture = nullptr;
     // Owns the VkImage, imported device memory, and retained AHardwareBuffer
     // backing an Android shared E-mote texture.
     void *android_external_texture = nullptr;
@@ -182,6 +187,7 @@ struct GodotGpuOp {
         Blend3,
         ArtemisShader,
         PrepareNativeWrite,
+        PublishNativeWrite,
         ImportApplePixelBuffer,
         ImportAndroidHardwareBuffer,
         Release,
@@ -211,6 +217,7 @@ struct GodotGpuOp {
     bool done = false;
     uint64_t readback_request = 0;
     void *native_image = nullptr;
+    void *native_resource = nullptr;
     uint32_t native_width = 0;
     uint32_t native_height = 0;
     uint64_t imported_texture = 0;
@@ -4099,7 +4106,7 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             // Queue an empty marker behind the previous frame on Godot's own
             // Metal queue instead. This waits for GPU consumption without a
             // texture readback or CPU-side pixel copy.
-#if defined(IOS_ENABLED)
+#if defined(__APPLE__)
             return AetherAppleWaitForMetalCommandQueue(
                 rd->get_driver_resource(
                     RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE,
@@ -4108,20 +4115,37 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
             ApplyGodotGpuBarrier(rd);
             return true;
 #endif
+        case GodotGpuOp::Type::PublishNativeWrite:
+#if defined(__APPLE__) && !defined(IOS_ENABLED)
+            if (op->native_resource == nullptr || !op->dst.is_valid() ||
+                !AetherApplePublishPixelBufferToVulkanTexture(
+                    op->native_resource,
+                    rd->get_driver_resource(
+                        RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE,
+                        RID(), 0))) {
+                return false;
+            }
+            return true;
+#else
+            return true;
+#endif
         case GodotGpuOp::Type::ImportApplePixelBuffer: {
-#if defined(IOS_ENABLED)
+#if defined(__APPLE__)
             if (op->native_image == nullptr || op->native_width == 0 ||
                 op->native_height == 0) {
                 return false;
             }
             const uint64_t device = rd->get_driver_resource(
                 RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE, RID(), 0);
+            void *vulkan_external_texture = nullptr;
+            RID rid;
+#if defined(IOS_ENABLED)
             const uint64_t native_texture =
                 AetherAppleCreateMetalTextureFromPixelBuffer(
                     device, op->native_image, op->native_width,
                     op->native_height);
             if (native_texture == 0) return false;
-            const RID rid = rd->texture_create_from_extension(
+            rid = rd->texture_create_from_extension(
                 RenderingDevice::TEXTURE_TYPE_2D,
                 RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM,
                 RenderingDevice::TEXTURE_SAMPLES_1,
@@ -4134,12 +4158,49 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
                 AetherAppleReleaseMetalTexture(native_texture);
                 return false;
             }
+#else
+            const uint64_t physical_device = rd->get_driver_resource(
+                RenderingDevice::DRIVER_RESOURCE_PHYSICAL_DEVICE, RID(), 0);
+            Ref<RDTextureFormat> format;
+            format.instantiate();
+            format->set_texture_type(RenderingDevice::TEXTURE_TYPE_2D);
+            format->set_format(RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM);
+            format->set_width(op->native_width);
+            format->set_height(op->native_height);
+            format->set_depth(1);
+            format->set_array_layers(1);
+            format->set_mipmaps(1);
+            format->set_samples(RenderingDevice::TEXTURE_SAMPLES_1);
+            format->set_usage_bits(BitField<RenderingDevice::TextureUsageBits>(
+                RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+                RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
+                RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+                RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT));
+            Ref<RDTextureView> view;
+            view.instantiate();
+            TypedArray<PackedByteArray> initial_data;
+            rid = rd->texture_create(format, view, initial_data);
+            if (!rid.is_valid()) {
+                return false;
+            }
+            const uint64_t native_texture = rd->get_driver_resource(
+                RenderingDevice::DRIVER_RESOURCE_TEXTURE, rid, 0);
+            vulkan_external_texture =
+                AetherAppleCreateVulkanTexturePublisher(
+                    device, physical_device, native_texture,
+                    op->native_image, op->native_width, op->native_height);
+            if (vulkan_external_texture == nullptr) {
+                rd->free_rid(rid);
+                return false;
+            }
+#endif
 
             GodotGpuTextureRecord record;
             record.rid = rid;
             record.width = op->native_width;
             record.height = op->native_height;
             record.apple_pixel_buffer = op->native_image;
+            record.apple_vulkan_external_texture = vulkan_external_texture;
             AetherAppleRetainPixelBuffer(record.apple_pixel_buffer);
             record.texture.instantiate();
             record.texture->set_texture_rd_rid(rid);
@@ -4213,11 +4274,17 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
         }
         case GodotGpuOp::Type::Release:
             InvalidateGodotGpuUniformSetsForResource(rd, op->dst);
-            rd->free_rid(op->dst);
-#if defined(IOS_ENABLED)
+#if defined(__APPLE__)
+            if (op->dst.is_valid()) rd->free_rid(op->dst);
+#if !defined(IOS_ENABLED)
+            AetherAppleReleaseVulkanTexture(op->native_resource);
+#endif
             AetherAppleReleasePixelBuffer(op->native_image);
 #elif defined(__ANDROID__)
-            AetherAndroidReleaseVulkanTexture(op->native_image);
+            AetherAndroidReleaseVulkanTexture(op->native_resource);
+            rd->free_rid(op->dst);
+#else
+            rd->free_rid(op->dst);
 #endif
             return true;
         case GodotGpuOp::Type::Flush:
@@ -5660,7 +5727,7 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
 
 uint64_t BridgeImportApplePixelBuffer(void *native_image, uint32_t width,
                                       uint32_t height) {
-#if defined(IOS_ENABLED)
+#if defined(__APPLE__)
     if (native_image == nullptr || width == 0 || height == 0 ||
         !SupportsGodotRenderingDeviceGpu()) {
         return 0;
@@ -5692,6 +5759,32 @@ bool BridgePrepareForNativeWrite(uint64_t texture) {
     op->type = GodotGpuOp::Type::PrepareNativeWrite;
     op->src = record.rid;
     return RunGodotGpuOpSync(op);
+}
+
+bool BridgePublishNativeWrite(uint64_t texture) {
+#if defined(__APPLE__) && !defined(IOS_ENABLED)
+    GodotGpuTextureRecord record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        const auto found = g_gpu_textures.find(texture);
+        if (found == g_gpu_textures.end()) return false;
+        record = found->second;
+    }
+    if (!record.rid.is_valid() ||
+        record.apple_vulkan_external_texture == nullptr) {
+        return false;
+    }
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::PublishNativeWrite;
+    op->dst = record.rid;
+    op->native_resource = record.apple_vulkan_external_texture;
+    op->native_width = record.width;
+    op->native_height = record.height;
+    return RunGodotGpuOpSync(op);
+#else
+    (void)texture;
+    return true;
+#endif
 }
 
 uint64_t BridgeImportAndroidHardwareBuffer(void *native_image,
@@ -5736,6 +5829,9 @@ void BridgeReleaseTexture(uint64_t texture) {
         op->dst = record.rid;
         op->native_image = record.apple_pixel_buffer != nullptr
             ? record.apple_pixel_buffer
+            : nullptr;
+        op->native_resource = record.apple_vulkan_external_texture != nullptr
+            ? record.apple_vulkan_external_texture
             : record.android_external_texture;
         // Texture operations are consumed in queue order. Waiting here turns
         // every short-lived E-mote scratch layer into a render-thread round
@@ -6895,6 +6991,9 @@ void ReleaseRemainingGodotGpuTextures() {
             op->dst = record.rid;
             op->native_image = record.apple_pixel_buffer != nullptr
                 ? record.apple_pixel_buffer
+                : nullptr;
+            op->native_resource = record.apple_vulkan_external_texture != nullptr
+                ? record.apple_vulkan_external_texture
                 : record.android_external_texture;
             RunGodotGpuOpSync(op);
         }
@@ -6953,6 +7052,8 @@ public:
             BridgePrepareForNativeWrite;
         external_texture_callbacks.import_android_hardware_buffer =
             BridgeImportAndroidHardwareBuffer;
+        external_texture_callbacks.publish_native_write =
+            BridgePublishNativeWrite;
         engine_register_godot_gpu_external_texture_bridge(
             &external_texture_callbacks);
 
@@ -9072,6 +9173,7 @@ private:
         frame_present_pending_slot_ = 0;
         frame_present_has_current_ = false;
         frame_present_has_pending_ = false;
+        frame_present_pending_draw_frame_ = 0;
         frame_present_serial_ = UINT64_MAX;
         if (frame_texture_backend_ == "godot_native_gpu_presented" ||
             frame_texture_backend_ == "godot_external_presented") {
@@ -9168,13 +9270,13 @@ private:
             frame_present_textures_[i].instantiate();
             frame_present_textures_[i]->set_texture_rd_rid(frame_present_rids_[i]);
         }
-
         frame_present_width_ = width;
         frame_present_height_ = height;
         frame_present_current_slot_ = 0;
         frame_present_pending_slot_ = 0;
         frame_present_has_current_ = false;
         frame_present_has_pending_ = false;
+        frame_present_pending_draw_frame_ = 0;
         frame_present_serial_ = UINT64_MAX;
         return true;
     }
@@ -9187,16 +9289,6 @@ private:
         if (texture_id == 0 || width == 0 || height == 0) {
             return Ref<Texture2D>();
         }
-        if (frame_present_serial_ == serial &&
-            frame_present_width_ == width &&
-            frame_present_height_ == height &&
-            frame_present_has_current_ &&
-            frame_present_textures_[frame_present_current_slot_].is_valid()) {
-            frame_texture_serial_ = serial;
-            frame_texture_backend_ = backend_name;
-            return frame_present_textures_[frame_present_current_slot_];
-        }
-
         GodotGpuTextureRecord source;
         if (!ResolveBridgeTextureRecord(texture_id, source) ||
             !source.rid.is_valid()) {
@@ -9205,18 +9297,42 @@ private:
         if (!ensure_presentation_textures(width, height)) {
             return Ref<Texture2D>();
         }
-
-        // Promote only the copy encoded for the previous engine frame. Godot
-        // submits its main RenderingDevice at the render-frame boundary; a
+        // The texture contents can change while the engine serial remains the
+        // same (for example, SDK-driven E-mote idle animation). Always enqueue
+        // the current GPU contents instead of treating the serial as a texture
+        // revision. Promote only the copy encoded for the previous engine
+        // frame. Godot submits its main RenderingDevice at the render-frame
+        // boundary; a
         // texture copied and returned during the same process tick can still
         // contain its old transparent contents when Canvas samples it. This
         // one-frame pipeline publishes a slot only after it has crossed a real
         // RenderingServer submission, while the other slot receives the new
         // copy. It avoids both CPU readback and illegal main-device submit().
+        Engine *engine = Engine::get_singleton();
+        const uint64_t drawn_frame = engine != nullptr
+            ? static_cast<uint64_t>(engine->get_frames_drawn())
+            : 0;
         if (frame_present_has_pending_) {
-            frame_present_current_slot_ = frame_present_pending_slot_;
-            frame_present_has_current_ = true;
-            frame_present_has_pending_ = false;
+            const bool pending_complete =
+                drawn_frame > frame_present_pending_draw_frame_;
+            if (pending_complete) {
+                frame_present_current_slot_ = frame_present_pending_slot_;
+                frame_present_has_current_ = true;
+                frame_present_has_pending_ = false;
+                // The RD storage stays stable while its pixels change. Notify
+                // TextureRect/Canvas explicitly so the already-bound
+                // Texture2DRD is invalidated without replacing the Resource
+                // object that the scene owns.
+                frame_present_textures_[frame_present_current_slot_]
+                    ->emit_changed();
+            } else {
+                frame_texture_serial_ = serial;
+                frame_texture_backend_ = backend_name;
+                if (frame_present_has_current_) {
+                    return frame_present_textures_[frame_present_current_slot_];
+                }
+                return source.texture;
+            }
         }
         const size_t next_slot = frame_present_has_current_
             ? 1u - frame_present_current_slot_
@@ -9237,6 +9353,7 @@ private:
         }
         frame_present_pending_slot_ = next_slot;
         frame_present_has_pending_ = true;
+        frame_present_pending_draw_frame_ = drawn_frame;
         frame_present_serial_ = serial;
         frame_texture_serial_ = serial;
         frame_texture_backend_ = backend_name;
@@ -9364,6 +9481,7 @@ private:
     size_t frame_present_pending_slot_ = 0;
     bool frame_present_has_current_ = false;
     bool frame_present_has_pending_ = false;
+    uint64_t frame_present_pending_draw_frame_ = 0;
     uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
     std::unique_ptr<FrameEffectProvider> frame_effect_provider_;

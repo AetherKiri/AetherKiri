@@ -95,6 +95,10 @@ struct TVPGodotGpuExternalTextureCallbacks {
     uint64_t (*import_android_hardware_buffer)(void *native_image,
                                                 uint32_t width,
                                                 uint32_t height);
+    // Optional publication hook for backends whose native producer and
+    // Godot use different graphics APIs. Called after the producer fence has
+    // completed and before the texture is exposed to Godot composition.
+    bool (*publish_native_write)(uint64_t texture);
 };
 
 constexpr uint32_t TVP_GODOT_GPU_EXTERNAL_TEXTURE_CALLBACKS_ABI_VERSION = 1;

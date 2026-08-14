@@ -3,6 +3,24 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Metal/Metal.h>
 
+#include <dlfcn.h>
+
+namespace {
+
+id<MTLCommandQueue> ResolveMetalCommandQueue(uint64_t command_queue) {
+  if (command_queue == 0) return nil;
+  void *native_queue = reinterpret_cast<void *>(command_queue);
+  using GetMetalCommandQueueMvk = void (*)(void *, void **);
+  auto get_metal_queue = reinterpret_cast<GetMetalCommandQueueMvk>(
+      dlsym(RTLD_DEFAULT, "vkGetMTLCommandQueueMVK"));
+  if (get_metal_queue != nullptr) {
+    get_metal_queue(native_queue, &native_queue);
+  }
+  return (__bridge id<MTLCommandQueue>)native_queue;
+}
+
+}  // namespace
+
 uint64_t AetherAppleCreateMetalTextureFromPixelBuffer(
     uint64_t metal_device, void *pixel_buffer, uint32_t width,
     uint32_t height) {
@@ -48,9 +66,8 @@ void AetherAppleReleasePixelBuffer(void *pixel_buffer) {
 }
 
 bool AetherAppleWaitForMetalCommandQueue(uint64_t metal_command_queue) {
-  if (metal_command_queue == 0) return false;
-  id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)(
-      reinterpret_cast<void *>(metal_command_queue));
+  id<MTLCommandQueue> queue = ResolveMetalCommandQueue(metal_command_queue);
+  if (queue == nil) return false;
   id<MTLCommandBuffer> marker = [queue commandBuffer];
   if (marker == nil) return false;
   [marker commit];
