@@ -1,7 +1,11 @@
 extends RefCounted
 
+const DEBUG_REQUEST_PATH := "user://aetherkiri-probe-request.json"
+
 static func load() -> Dictionary:
     var inline := OS.get_environment("AETHERKIRI_TEST_CONFIG_JSON")
+    if inline.is_empty():
+        inline = _argument_value("--aether-test-config-json")
     if not inline.is_empty():
         var inline_parsed = JSON.parse_string(inline)
         if inline_parsed is Dictionary:
@@ -12,6 +16,8 @@ static func load() -> Dictionary:
     var path := OS.get_environment("AETHERKIRI_TEST_CONFIG")
     if path.is_empty():
         path = OS.get_environment("AETHERKIRI_PROBE_CONFIG")
+    if path.is_empty() and FileAccess.file_exists(DEBUG_REQUEST_PATH):
+        path = DEBUG_REQUEST_PATH
     if path.is_empty():
         return {}
     var file := FileAccess.open(path, FileAccess.READ)
@@ -23,6 +29,21 @@ static func load() -> Dictionary:
         return parsed
     printerr("test config is not a JSON object: %s" % path)
     return {}
+
+static func _argument_value(name: String) -> String:
+    var args: Array[String] = []
+    args.append_array(OS.get_cmdline_args())
+    args.append_array(OS.get_cmdline_user_args())
+    for i in range(args.size()):
+        var arg := String(args[i])
+        if arg == name and i + 1 < args.size():
+            return String(args[i + 1])
+        if arg.begins_with(name + "="):
+            return arg.substr(name.length() + 1)
+    return ""
+
+static func debug_request_path() -> String:
+    return DEBUG_REQUEST_PATH
 
 static func string_value(config: Dictionary, key: String, fallback: String = "") -> String:
     if OS.has_environment(_env_name(key)):

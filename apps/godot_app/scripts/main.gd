@@ -1993,14 +1993,21 @@ func _detect_cli_probe_script() -> String:
     var env_script := _normalize_cli_probe_script(OS.get_environment("AETHERKIRI_CLI_PROBE_SCRIPT"))
     if not env_script.is_empty():
         return env_script
-    var args := OS.get_cmdline_args()
+    var args: Array[String] = []
+    args.append_array(OS.get_cmdline_args())
+    args.append_array(OS.get_cmdline_user_args())
     for i in range(args.size()):
         var arg := String(args[i])
-        if arg == "--script" or arg == "-s":
+        if arg == "--script" or arg == "-s" or arg == "--aether-probe-script":
             if i + 1 < args.size():
                 return _normalize_cli_probe_script(String(args[i + 1]))
         elif arg.begins_with("--script="):
             return _normalize_cli_probe_script(arg.substr("--script=".length()))
+        elif arg.begins_with("--aether-probe-script="):
+            return _normalize_cli_probe_script(arg.substr("--aether-probe-script=".length()))
+    if FileAccess.file_exists(ProbeConfig.debug_request_path()):
+        var request := ProbeConfig.load()
+        return _normalize_cli_probe_script(String(request.get("probe_script", "")))
     return ""
 
 func _normalize_cli_probe_script(path: String) -> String:
@@ -11372,6 +11379,8 @@ func _probe_image_diff_score(a: Image, b: Image) -> float:
 
 func _probe_cleanup_and_quit(code: int) -> void:
     _write_probe_marker("probe_cleanup code=%d" % code)
+    if FileAccess.file_exists(ProbeConfig.debug_request_path()):
+        DirAccess.remove_absolute(ProjectSettings.globalize_path(ProbeConfig.debug_request_path()))
     _deactivate_game_text_input()
     if player != null:
         viewport.texture = null
@@ -12530,7 +12539,7 @@ func _run_startup_click_stream_probe() -> void:
 func _can_write_probe_files() -> bool:
     if OS.get_name() != "iOS":
         return true
-    return _runtime_flag("AETHERKIRI_IOS_FILE_LOG")
+    return not cli_probe_script.is_empty() or _runtime_flag("AETHERKIRI_IOS_FILE_LOG")
 
 func _send_startup_probe_mouse_click(pos: Vector2) -> bool:
     var down := InputEventMouseButton.new()
