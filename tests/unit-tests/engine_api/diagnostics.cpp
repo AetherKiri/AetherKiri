@@ -264,6 +264,26 @@ TEST_CASE("Beta runtime providers require active coffee access") {
       {{"catsystem2", "CatSystem2 runtime requires active beta access"}},
   }};
   for (const auto& runtime : runtimes) {
+    {
+      Handle default_handle;
+      engine_option_t default_runtime_option{};
+      default_runtime_option.key_utf8 = "runtime";
+      default_runtime_option.value_utf8 = runtime[0];
+      REQUIRE(engine_set_option(default_handle.value, &default_runtime_option) ==
+              ENGINE_RESULT_OK);
+#if defined(NDEBUG)
+      REQUIRE(engine_open_game(default_handle.value,
+                               ".artemis-debug-gate-test", "first.iet") ==
+              ENGINE_RESULT_NOT_SUPPORTED);
+      REQUIRE(std::string(engine_get_last_error(default_handle.value)) ==
+              runtime[1]);
+#else
+      REQUIRE(engine_open_game(default_handle.value,
+                               ".artemis-debug-gate-test", "first.iet") ==
+              ENGINE_RESULT_OK);
+#endif
+    }
+
     Handle handle;
     engine_option_t runtime_option{};
     runtime_option.key_utf8 = "runtime";
