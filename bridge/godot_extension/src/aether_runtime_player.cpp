@@ -7968,6 +7968,18 @@ public:
             source_query_ms_ = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - query_started).count();
             if (gpu_result == ENGINE_RESULT_OK && texture_id != 0) {
+                uint32_t presentation_state =
+                    ENGINE_GODOT_PRESENTATION_STATE_NONE;
+                if (engine_get_godot_presentation_state(
+                        handle_, &presentation_state) == ENGINE_RESULT_OK &&
+                    (presentation_state &
+                     ENGINE_GODOT_PRESENTATION_STATE_RESET_HISTORY) != 0) {
+                    // The provider replaced a GPU-composed scene with a CPU
+                    // handoff without changing its logical frame serial.
+                    // Discard the delayed slot so the deleted character is
+                    // not presented once more before the new source.
+                    release_presentation_textures(true);
+                }
                 if (normalized_backend == ENGINE_RENDERER_GPU_BRIDGE) {
                     const auto present_started = std::chrono::steady_clock::now();
                     Ref<Texture2D> presented_texture =

@@ -423,6 +423,13 @@ ENGINE_API_EXPORT engine_result_t engine_get_godot_native_frame_texture(
     engine_handle_t handle, uint64_t* out_texture_id, uint32_t* out_width,
     uint32_t* out_height, uint64_t* out_frame_serial);
 
+/* Runtime-specific state for the most recent Godot-native frame. */
+#define ENGINE_GODOT_PRESENTATION_STATE_NONE 0u
+#define ENGINE_GODOT_PRESENTATION_STATE_RESET_HISTORY (1u << 0)
+
+ENGINE_API_EXPORT engine_result_t engine_get_godot_presentation_state(
+    engine_handle_t handle, uint32_t* out_state_flags);
+
 /*
  * Gets host-native render window handle.
  * On macOS runtime build this is NSWindow*.

@@ -1005,6 +1005,28 @@ engine_result_t engine_get_godot_native_frame_texture(
                });
 }
 
+engine_result_t engine_get_godot_presentation_state(
+    engine_handle_t public_handle, uint32_t* out_state_flags) {
+  if (out_state_flags == nullptr) {
+    return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
+                       "Godot presentation state output is null");
+  }
+  *out_state_flags = ENGINE_GODOT_PRESENTATION_STATE_NONE;
+  return Route(public_handle, "get_godot_presentation_state",
+               [&](engine_handle_t legacy) {
+                 (void)legacy;
+                 return ENGINE_RESULT_OK;
+               },
+               [&](DispatchHandle* handle) {
+                 if (!PROVIDER_HAS(handle->provider,
+                                   get_godot_presentation_state)) {
+                   return ENGINE_RESULT_OK;
+                 }
+                 return handle->provider->get_godot_presentation_state(
+                     handle->runtime, out_state_flags);
+               });
+}
+
 engine_result_t engine_get_host_native_window(engine_handle_t public_handle,
                                               void** out_window_handle) {
   return Route(public_handle, "get_host_native_window",
