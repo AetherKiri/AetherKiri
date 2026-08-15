@@ -97,6 +97,7 @@ option(AETHERKIRI_ENABLE_INTERNAL
 set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 3)
 set(AETHERKIRI_LIVE2D_HOST_API_VERSION 1)
 set(AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION 2)
+set(AETHERKIRI_QLIE_HOST_API_VERSION 1)
 set(AETHERKIRI_INTERNAL_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/packages/AetherInternal"
     CACHE PATH "path to an AetherInternal package checkout")
@@ -112,18 +113,21 @@ if(AETHERKIRI_ENABLE_INTERNAL)
     find_package(AetherInternal CONFIG QUIET
         NO_DEFAULT_PATH)
     if(AetherInternal_FOUND)
-        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 6 OR
+        if(NOT AETHERINTERNAL_PACKAGE_API_VERSION EQUAL 7 OR
            NOT AETHERINTERNAL_REQUIRED_MOTIONPLAYER_API_VERSION EQUAL
                AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION OR
            NOT AETHERINTERNAL_REQUIRED_LIVE2D_HOST_API_VERSION EQUAL
                AETHERKIRI_LIVE2D_HOST_API_VERSION OR
            NOT AETHERINTERNAL_REQUIRED_FRAME_EFFECT_HOST_API_VERSION EQUAL
                AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION OR
+           NOT AETHERINTERNAL_REQUIRED_QLIE_HOST_API_VERSION EQUAL
+               AETHERKIRI_QLIE_HOST_API_VERSION OR
            NOT COMMAND aetherinternal_extend_motionplayer OR
            NOT COMMAND aetherinternal_extend_psbfile OR
            NOT COMMAND aetherinternal_extend_legacy_plugins OR
            NOT COMMAND aetherinternal_extend_live2d OR
            NOT COMMAND aetherinternal_extend_artemis OR
+           NOT COMMAND aetherinternal_extend_qlie OR
            NOT COMMAND aetherinternal_extend_godot_extension OR
            NOT COMMAND aetherinternal_extend_krkr2plugin OR
            NOT COMMAND aetherinternal_extend_krkr2plugin_tests)
@@ -136,7 +140,7 @@ if(AETHERKIRI_ENABLE_INTERNAL)
 endif()
 
 if(AETHERKIRI_INTERNAL_ENABLED)
-    message(STATUS "AetherInternal E-mote/Live2D package: enabled")
+    message(STATUS "AetherInternal E-mote/Live2D/Artemis/QLIE package: enabled")
 else()
     message(STATUS "AetherInternal package: unavailable; using public fallbacks")
 endif()
