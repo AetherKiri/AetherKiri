@@ -58,6 +58,12 @@ namespace motion {
         static void enableAutoProgress(Player &player, iTJSDispatch2 *dispatch) {
             player.enableAutoProgress(dispatch);
         }
+
+        static void setNativeBackend(
+            Player &player,
+            std::unique_ptr<MotionNativePlayerBackend> backend) {
+            player._nativeBackend = std::move(backend);
+        }
     };
 }
 
@@ -169,6 +175,104 @@ TEST_CASE("motionplayer mirrors only exact native E-mote timelines") {
                 "平常", mainLabels, diffLabels) == 1);
     REQUIRE(motion::exactMotionBackendTimelineFlags(
                 "差分用_waiting_loop2", mainLabels, diffLabels) == 3);
+}
+
+TEST_CASE("motionplayer selects only a dedicated native E-mote idle timeline") {
+    CHECK(motion::preferredMotionBackendIdleTimeline({
+              "sample_全自動_test", "差分用_waiting_loop2",
+              "差分用_waiting_loop"}) == "差分用_waiting_loop");
+    CHECK(motion::preferredMotionBackendIdleTimeline({
+              "差分用_waiting_loop3", "差分用_waiting_loop2"}) ==
+          "差分用_waiting_loop3");
+    CHECK(motion::preferredMotionBackendIdleTimeline({
+              "sample_全自動_test", "待機ループ00", "平常"}).empty());
+}
+
+TEST_CASE("motionplayer advances retained controls before native progress") {
+    struct RecordingBackend final : motion::MotionNativePlayerBackend {
+        struct Invocation {
+            std::string method;
+            std::vector<motion::MotionBackendValue> arguments;
+        };
+
+        std::vector<Invocation> invocations;
+
+        std::unique_ptr<motion::MotionNativePlayerBackend> clone(
+            std::string *) const override {
+            return std::make_unique<RecordingBackend>(*this);
+        }
+        bool assignState(const motion::MotionNativePlayerBackend &,
+                         std::string *) override {
+            return true;
+        }
+        bool invoke(
+            const std::string &method,
+            const std::vector<motion::MotionBackendValue> &arguments,
+            std::vector<motion::MotionBackendValue> *,
+            std::string *) override {
+            invocations.push_back({method, arguments});
+            return true;
+        }
+        bool render(std::uint32_t, std::uint32_t,
+                    motion::MotionBackendFrame *, std::string *) override {
+            return true;
+        }
+    };
+
+    auto snapshot = std::make_shared<motion::detail::MotionSnapshot>();
+    snapshot->path = "unit/native-retained-control.psb";
+    snapshot->mainTimelineLabels.push_back("retained_root");
+    snapshot->timelineTotalFrames["retained_root"] = 60.0;
+    snapshot->variableLabels.push_back("body_UD");
+
+    motion::detail::TimelineControlTrack bodyUd;
+    bodyUd.label = "body_UD";
+    bodyUd.frames.push_back({0.0, false, 10.0f, 1.0});
+    bodyUd.frames.push_back({30.0, false, -10.0f, 1.0});
+    bodyUd.frames.push_back({60.0, false, 10.0f, 1.0});
+
+    motion::detail::TimelineControlBinding retainedRoot;
+    retainedRoot.loopBegin = 0.0;
+    retainedRoot.loopEnd = 60.0;
+    retainedRoot.lastTime = 60.0;
+    retainedRoot.tracks.push_back(std::move(bodyUd));
+    snapshot->timelineControlByLabel.emplace(
+        "retained_root", std::move(retainedRoot));
+
+    motion::Player player;
+    player.loadFromSnapshot(snapshot);
+    auto backend = std::make_unique<RecordingBackend>();
+    auto *recording = backend.get();
+    motion::PlayerTestAccess::setNativeBackend(player, std::move(backend));
+    player.playTimeline(TJS_W("retained_root"), 0);
+    recording->invocations.clear();
+
+    player.frameProgress(10.0);
+
+    REQUIRE(recording->invocations.size() == 2);
+    REQUIRE(recording->invocations[0].method == "setvariables");
+    REQUIRE(recording->invocations[1].method == "progress");
+    REQUIRE(recording->invocations[1].arguments.size() == 1);
+    CHECK(recording->invocations[1].arguments[0].number ==
+          Catch::Approx(10.0));
+
+    const auto &variables = recording->invocations[0].arguments;
+    REQUIRE(variables.size() % 2 == 0);
+    bool foundBodyUd = false;
+    for(std::size_t index = 0; index + 1 < variables.size(); index += 2) {
+        if(variables[index].type ==
+               motion::MotionBackendValue::Type::String &&
+           variables[index].string == "body_UD") {
+            REQUIRE(variables[index + 1].type ==
+                    motion::MotionBackendValue::Type::Number);
+            CHECK(variables[index + 1].number ==
+                  Catch::Approx(10.0 / 29.0 * 10.0).margin(0.001));
+            foundBodyUd = true;
+        }
+    }
+    REQUIRE(foundBodyUd);
+    CHECK(player.getVariable(TJS_W("body_UD")) ==
+          Catch::Approx(10.0 / 29.0 * 10.0).margin(0.001));
 }
 
 TEST_CASE("motionplayer validates shared GPU E-mote frame ownership") {

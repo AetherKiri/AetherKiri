@@ -1694,21 +1694,44 @@ namespace motion {
                     "countmaintimelines", "getmaintimelinelabelat");
                 const auto diffLabels = nativeTimelineLabels(
                     "countdifftimelines", "getdifftimelinelabelat");
-                const int nativeFlags = exactMotionBackendTimelineFlags(
+                int nativeFlags = exactMotionBackendTimelineFlags(
                     timelineLabel, mainLabels, diffLabels);
+                std::string nativeLabel = timelineLabel;
+                bool startedAmbientTimeline = false;
+                if(nativeFlags == 0) {
+                    nativeLabel = preferredMotionBackendIdleTimeline(diffLabels);
+                    if(!nativeLabel.empty()) {
+                        nativeFlags = 3;
+                        startedAmbientTimeline = true;
+                    }
+                }
                 const bool nativeStarted = nativeFlags != 0 &&
                     invokeNativeBackend(
                         "playtimeline",
-                        { MotionBackendValue::String(timelineLabel),
+                        { MotionBackendValue::String(nativeLabel),
                           MotionBackendValue::Number(nativeFlags) });
+                if(nativeStarted && startedAmbientTimeline) {
+                    auto &ambientState = _runtime->timelines[nativeLabel];
+                    ambientState.label = nativeLabel;
+                    ambientState.flags = nativeFlags;
+                    ambientState.blendRatio = 1.0;
+                    ambientState.playing = true;
+                    if(std::find(_runtime->playingTimelineLabels.begin(),
+                                 _runtime->playingTimelineLabels.end(),
+                                 nativeLabel) ==
+                       _runtime->playingTimelineLabels.end()) {
+                        _runtime->playingTimelineLabels.push_back(nativeLabel);
+                    }
+                }
                 if(emoteTimelineTraceEnabled() && LOGGER) {
                     LOGGER->info(
-                        "[EMOTE_TIMELINE] native exact play motion={} requested={} mirrored={} flags={} main=[{}] diff=[{}]",
+                        "[EMOTE_TIMELINE] native play motion={} requested={} native={} mirrored={} ambient={} flags={} main=[{}] diff=[{}]",
                         _runtime->activeMotion
                             ? _runtime->activeMotion->path
                             : std::string{},
-                        timelineLabel, nativeStarted ? 1 : 0,
-                        nativeFlags,
+                        timelineLabel, nativeLabel,
+                        nativeStarted ? 1 : 0,
+                        startedAmbientTimeline ? 1 : 0, nativeFlags,
                         joinStrings(mainLabels), joinStrings(diffLabels));
                 }
             }

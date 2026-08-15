@@ -14599,18 +14599,8 @@ namespace motion {
         if(!_speed) {
             return;
         }
-        if(_nativeBackend) {
-            _frameLastTime = dt;
-            _frameLoopTime += dt;
-            _loopTime += dt;
-            _frameTickCount += dt;
-            invokeNativeBackend(
-                "progress", { MotionBackendValue::Number(dt) });
-            _layersDirty = false;
-            _emoteDirty = true;
-            return;
-        }
-        _layersDirty = true;
+        const bool hasNativeBackend = _nativeBackend != nullptr;
+        _layersDirty = !hasNativeBackend;
         if(!_completedEndedTimelineRenderHoldLabel.empty()) {
             const auto stateIt = _runtime->timelines.find(
                 _completedEndedTimelineRenderHoldLabel);
@@ -14638,7 +14628,7 @@ namespace motion {
 
         ensureEmoteControlStateInitialized();
         const auto *extension = motionPlayerExtension();
-        if(extension && extension->hasActivePhysics &&
+        if(!hasNativeBackend && extension && extension->hasActivePhysics &&
            extension->hasActivePhysics(*this)) {
             ensureNodeTreeBuilt();
         }
@@ -14677,10 +14667,36 @@ namespace motion {
             remainingControllerStep -= controllerDt;
         }
 
-        stepAutoBlinkControllersLike_0x660FBC(actualDelta);
+        // The official SDK owns blink and physics for a native player.  Kiri's
+        // retained root/control timeline still has to run, however: it drives
+        // authored pose and visibility variables which are not public SDK
+        // timelines.  Running the compatibility blink/physics solvers as well
+        // would apply those effects twice.
+        if(!hasNativeBackend) {
+            stepAutoBlinkControllersLike_0x660FBC(actualDelta);
+        }
 
         applyEvalResultPostProcessLike_0x67CC9C();
-        stepEmotePhysicsLike_0x678B28(actualDelta);
+        if(hasNativeBackend) {
+            std::vector<MotionBackendValue> variables;
+            variables.reserve(_evalResultValues.size() * 2u);
+            for(const auto &[label, value] : _evalResultValues) {
+                if(label.empty() || !std::isfinite(value)) {
+                    continue;
+                }
+                variables.push_back(MotionBackendValue::String(label));
+                variables.push_back(MotionBackendValue::Number(value));
+            }
+            if(!variables.empty()) {
+                invokeNativeBackend("setvariables", variables);
+            }
+            invokeNativeBackend(
+                "progress", { MotionBackendValue::Number(actualDelta) });
+            _layersDirty = false;
+            _emoteDirty = true;
+        } else {
+            stepEmotePhysicsLike_0x678B28(actualDelta);
+        }
 
         // Camera velocity/friction moved to updateLayers pre-loop (0x6BB360..0x6BB42C)
 

@@ -100,6 +100,35 @@ namespace motion {
         return 0;
     }
 
+    // A retained Kiri model entry point is not a public SDK timeline, but the
+    // SDK object can still expose one dedicated difference timeline for its
+    // ambient body/hair/bust motion. Prefer the unnumbered authored waiting
+    // loop and use a numbered variant only when it is the sole available
+    // choice. This deliberately excludes main/sample timelines, whose demo
+    // sequences cycle expressions and gestures.
+    inline std::string preferredMotionBackendIdleTimeline(
+        const std::vector<std::string> &diffLabels) {
+        std::string numberedFallback;
+        for(const auto &label : diffLabels) {
+            const auto marker = label.find("waiting_loop");
+            if(marker == std::string::npos) {
+                continue;
+            }
+            const auto suffix = marker + std::string("waiting_loop").size();
+            if(suffix == label.size()) {
+                return label;
+            }
+            if(numberedFallback.empty() &&
+               std::all_of(label.begin() + static_cast<std::ptrdiff_t>(suffix),
+                           label.end(), [](unsigned char value) {
+                               return value >= '0' && value <= '9';
+                           })) {
+                numberedFallback = label;
+            }
+        }
+        return numberedFallback;
+    }
+
     // Versioned, SDK-neutral player seam. Private packages may implement it;
     // public-only builds retain the compatible software renderer.
     class MotionNativePlayerBackend {
