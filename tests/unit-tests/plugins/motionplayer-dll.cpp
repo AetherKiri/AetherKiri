@@ -58,6 +58,21 @@ namespace motion {
         static void enableAutoProgress(Player &player, iTJSDispatch2 *dispatch) {
             player.enableAutoProgress(dispatch);
         }
+
+        static std::array<double, 4> calcSyntheticBounds(
+            Player &player,
+            std::vector<detail::MotionNode> nodes) {
+            player._runtime->activeMotion =
+                std::make_shared<detail::MotionSnapshot>();
+            player._runtime->activeMotion->path = "synthetic-bounds.psb";
+            player._runtime->nodes = std::move(nodes);
+            player._runtime->nodesBuilt = true;
+            player._layersDirty = false;
+            player._emoteDirty = false;
+            player.calcBounds();
+            return { player._boundsMinX, player._boundsMinY,
+                     player._boundsMaxX, player._boundsMaxY };
+        }
     };
 }
 
@@ -153,6 +168,42 @@ TEST_CASE("motionplayer optional E-mote extension matches build mode") {
 #else
     REQUIRE(extension == nullptr);
 #endif
+}
+
+TEST_CASE("motionplayer bounds ignore motion container origin") {
+    motion::detail::MotionNode container;
+    container.index = 0;
+    container.nodeType = motion::LayerTypeMotion;
+    container.hasSource = true;
+    container.drawFlag = true;
+    container.accumulated.active = true;
+    container.vertexPosX = 0.0;
+    container.vertexPosY = 0.0;
+
+    motion::detail::MotionNode image;
+    image.index = 1;
+    image.nodeType = motion::LayerTypeObj;
+    image.hasSource = true;
+    image.drawFlag = true;
+    image.accumulated.active = true;
+    image.clipW = 40.0;
+    image.clipH = 20.0;
+    image.vertices[0] = 752.0f;
+    image.vertices[1] = 678.0f;
+    image.vertices[2] = 792.0f;
+    image.vertices[3] = 678.0f;
+    image.vertices[4] = 792.0f;
+    image.vertices[5] = 698.0f;
+    image.vertices[6] = 752.0f;
+    image.vertices[7] = 698.0f;
+
+    motion::Player player;
+    const auto bounds = motion::PlayerTestAccess::calcSyntheticBounds(
+        player, {container, image});
+    REQUIRE(bounds[0] == 752.0);
+    REQUIRE(bounds[1] == 678.0);
+    REQUIRE(bounds[2] == 792.0);
+    REQUIRE(bounds[3] == 698.0);
 }
 
 TEST_CASE("motionplayer reuses effective-variable scratch across frames") {

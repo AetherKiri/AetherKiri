@@ -57,6 +57,7 @@ PARALLEL_JOBS="${JOBS:-8}"
 FORCE_LOAD_PLUGIN_ARCHIVES=(
     "libSDL2.a"
     "libkrkr2plugin.a"
+    "libextkagparser.a"
     "libkagparserex.a"
     "liblayerExDraw.a"
     "libmotionplayer.a"
@@ -67,6 +68,7 @@ FORCE_LOAD_PLUGIN_ARCHIVES=(
 FORCE_LOAD_PLUGIN_SOURCES=(
     "vcpkg_installed/$VCPKG_TRIPLET_DIR/lib/libSDL2.a"
     "cpp/plugins/libkrkr2plugin.a"
+    "cpp/plugins/extkagparser/libextkagparser.a"
     "cpp/plugins/kagparserex/libkagparserex.a"
     "cpp/plugins/layerex_draw/liblayerExDraw.a"
     "cpp/plugins/motionplayer/libmotionplayer.a"
@@ -272,6 +274,7 @@ combine_ios_static_extension() {
         "$CMAKE_BUILD_DIR/cpp/core/visual/libcore_visual_module.a"
         "$CMAKE_BUILD_DIR/cpp/core/visual/simd/libtvpgl_simd.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/libkrkr2plugin.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/extkagparser/libextkagparser.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/kagparserex/libkagparserex.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/layerex_draw/liblayerExDraw.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/motionplayer/libmotionplayer.a"
