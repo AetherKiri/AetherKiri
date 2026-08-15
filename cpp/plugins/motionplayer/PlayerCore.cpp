@@ -1292,10 +1292,29 @@ namespace motion {
     // Sets activeMotion directly from a pre-loaded snapshot, bypassing file I/O.
     // Used by EmotePlayer.setModule() to bridge loaded PSB data into the Player pipeline.
     void Player::loadFromSnapshot(
-        std::shared_ptr<detail::MotionSnapshot> snapshot) {
+        std::shared_ptr<detail::MotionSnapshot> snapshot,
+        std::vector<std::shared_ptr<detail::MotionSnapshot>>
+            nativeObjectSnapshots) {
+        std::string nativeBackendSourcePath = snapshot ? snapshot->path
+                                                       : std::string{};
+        if(!nativeObjectSnapshots.empty()) {
+            nativeBackendSourcePath.clear();
+            for(const auto &objectSnapshot : nativeObjectSnapshots) {
+                if(!objectSnapshot || objectSnapshot->path.empty()) {
+                    continue;
+                }
+                if(!nativeBackendSourcePath.empty()) {
+                    nativeBackendSourcePath += ':';
+                }
+                nativeBackendSourcePath += objectSnapshot->path;
+            }
+            if(nativeBackendSourcePath.empty() && snapshot) {
+                nativeBackendSourcePath = snapshot->path;
+            }
+        }
         const bool reuseNativeBackend =
             snapshot && _nativeBackend &&
-            _nativeBackendSourcePath == snapshot->path;
+            _nativeBackendSourcePath == nativeBackendSourcePath;
         // A newly bound motion starts on its own local timeline.  Motion
         // sub-nodes reuse Player instances while switching between clips
         // such as `select`, `over`, and `out`; carrying the previous clip's
@@ -1350,11 +1369,21 @@ namespace motion {
                        snapshot->objectImage &&
                        !snapshot->objectImage->empty()) {
                         std::string error;
-                        _nativeBackend =
-                            extension->createNativePlayer(*snapshot, &error);
+                        detail::MotionSnapshot nativeRequest;
+                        nativeRequest.path = snapshot->path;
+                        nativeRequest.file = snapshot->file;
+                        nativeRequest.objectImage = snapshot->objectImage;
+                        nativeRequest.root = snapshot->root;
+                        nativeRequest.width = snapshot->width;
+                        nativeRequest.height = snapshot->height;
+                        nativeRequest.nativeObjectSnapshots =
+                            std::move(nativeObjectSnapshots);
+                        _nativeBackend = extension->createNativePlayer(
+                            nativeRequest, &error);
                         if(LOGGER) {
                             if(_nativeBackend) {
-                                _nativeBackendSourcePath = snapshot->path;
+                                _nativeBackendSourcePath =
+                                    nativeBackendSourcePath;
                                 LOGGER->info(
                                     "Kiri E-mote backend: official SDK ({})",
                                     snapshot->path);

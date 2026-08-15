@@ -314,7 +314,10 @@ namespace motion {
         // Load from a pre-loaded snapshot (used by EmotePlayer.setModule)
         // Aligned to libkrkr2.so: EmoteObject_init (sub_67DBAC) sets Player's
         // activeMotion directly from loaded PSB data without file I/O.
-        void loadFromSnapshot(std::shared_ptr<detail::MotionSnapshot> snapshot);
+        void loadFromSnapshot(
+            std::shared_ptr<detail::MotionSnapshot> snapshot,
+            std::vector<std::shared_ptr<detail::MotionSnapshot>>
+                nativeObjectSnapshots = {});
         void bindMotionModuleKey(ttstr storageKey);
         [[nodiscard]] bool hasActiveMotion() const;
 

@@ -223,6 +223,12 @@ namespace motion::detail {
         std::shared_ptr<PSB::PSBFile> file;
         std::shared_ptr<const std::vector<std::uint8_t>> objectImage;
         std::shared_ptr<const PSB::PSBDictionary> root;
+        // A Kiri ResourceManager can build one character from several PSBs
+        // (for example head, costume/body, and timeline modules).  The
+        // public evaluator keeps the selected timeline snapshot as the
+        // primary motion, while a native backend needs the complete ordered
+        // object set that was loaded into that ResourceManager.
+        std::vector<std::shared_ptr<MotionSnapshot>> nativeObjectSnapshots;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBResource>>
             resourcesByPath;
         // Immutable PSB resources are shared by every Player bound to this

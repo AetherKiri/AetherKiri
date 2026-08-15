@@ -104,6 +104,32 @@ namespace {
         }();
         return enabled;
     }
+
+    std::vector<std::shared_ptr<motion::detail::MotionSnapshot>>
+    orderedNativeObjectSnapshots(
+        const std::vector<motion::ResourceManager::CachedModuleEntry>
+            &cached) {
+        std::vector<const motion::ResourceManager::CachedModuleEntry *>
+            ordered;
+        ordered.reserve(cached.size());
+        for(const auto &entry : cached) {
+            ordered.push_back(&entry);
+        }
+        std::sort(ordered.begin(), ordered.end(), [](const auto *left,
+                                                     const auto *right) {
+            return left->loadGeneration < right->loadGeneration;
+        });
+
+        std::vector<std::shared_ptr<motion::detail::MotionSnapshot>> result;
+        result.reserve(ordered.size());
+        for(const auto *entry : ordered) {
+            if(auto snapshot =
+                   motion::detail::lookupModuleSnapshot(entry->module)) {
+                result.push_back(std::move(snapshot));
+            }
+        }
+        return result;
+    }
 } // namespace
 
 namespace motion {
@@ -793,8 +819,17 @@ namespace motion {
                         bestEntry->module, TJS_W("chara"));
                     const ttstr metaMotion = readMetadataBaseField(
                         bestEntry->module, TJS_W("motion"));
-                    _player.bindMotionModuleKey(
-                        ttstr(bestEntry->key.c_str()));
+                    const auto selectedSnapshot =
+                        detail::lookupModuleSnapshot(bestEntry->module);
+                    if(selectedSnapshot) {
+                        _player.setProject(bestEntry->module);
+                        _player.loadFromSnapshot(
+                            selectedSnapshot,
+                            orderedNativeObjectSnapshots(cached));
+                    } else {
+                        _player.bindMotionModuleKey(
+                            ttstr(bestEntry->key.c_str()));
+                    }
                     _storageKey = ttstr(bestEntry->key.c_str());
                     _module = bestEntry->module;
                     _player.setChara(metaChara);
