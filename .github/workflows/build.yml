@@ -136,7 +136,7 @@ jobs:
   android:
     name: Build Android App
     needs: private-runtime-android
-    if: ${{ !cancelled() && (needs.private-runtime-android.result == 'success' || needs.private-runtime-android.result == 'skipped') }}
+    if: ${{ !cancelled() && (needs.private-runtime-android.result == 'success' || (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]'))) }}
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -410,7 +410,7 @@ jobs:
   ios:
     name: Build iOS App
     needs: private-runtime-apple
-    if: ${{ !cancelled() && (needs.private-runtime-apple.result == 'success' || needs.private-runtime-apple.result == 'skipped') }}
+    if: ${{ !cancelled() && (needs.private-runtime-apple.result == 'success' || (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]'))) }}
     runs-on: macos-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -694,7 +694,7 @@ jobs:
   macos:
     name: Build macOS App
     needs: private-runtime-apple
-    if: ${{ !cancelled() && (needs.private-runtime-apple.result == 'success' || needs.private-runtime-apple.result == 'skipped') }}
+    if: ${{ !cancelled() && (needs.private-runtime-apple.result == 'success' || (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]'))) }}
     runs-on: macos-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
