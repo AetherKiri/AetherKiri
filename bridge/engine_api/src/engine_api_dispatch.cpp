@@ -30,6 +30,9 @@
     defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
 extern "C" void AetherInternalRegisterArtemisRuntime(void);
 #endif
+#if defined(AETHERKIRI_INTERNAL_QLIE)
+extern "C" void AetherInternalRegisterQlieRuntime(void);
+#endif
 
 namespace {
 
@@ -399,6 +402,9 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
 #if defined(AETHERKIRI_INTERNAL_ARTEMIS) && \
     defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
   AetherInternalRegisterArtemisRuntime();
+#endif
+#if defined(AETHERKIRI_INTERNAL_QLIE)
+  AetherInternalRegisterQlieRuntime();
 #endif
   if (desc->struct_size < sizeof(engine_create_desc_t)) {
     return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
