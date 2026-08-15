@@ -1,7 +1,14 @@
 extends RefCounted
 
+const DEBUG_REQUEST_PATH := "user://aetherkiri-probe-request.json"
+
+static var _debug_request_consumed := false
+static var _debug_request_config: Dictionary = {}
+
 static func load() -> Dictionary:
     var inline := OS.get_environment("AETHERKIRI_TEST_CONFIG_JSON")
+    if inline.is_empty():
+        inline = _argument_value("--aether-test-config-json")
     if not inline.is_empty():
         var inline_parsed = JSON.parse_string(inline)
         if inline_parsed is Dictionary:
@@ -12,17 +19,55 @@ static func load() -> Dictionary:
     var path := OS.get_environment("AETHERKIRI_TEST_CONFIG")
     if path.is_empty():
         path = OS.get_environment("AETHERKIRI_PROBE_CONFIG")
+    var is_debug_request := false
+    if path.is_empty():
+        if _debug_request_consumed:
+            return _debug_request_config
+        if FileAccess.file_exists(DEBUG_REQUEST_PATH):
+            path = DEBUG_REQUEST_PATH
+            is_debug_request = true
     if path.is_empty():
         return {}
     var file := FileAccess.open(path, FileAccess.READ)
     if file == null:
         printerr("test config not found: %s" % path)
+        if is_debug_request:
+            _consume_debug_request({})
         return {}
-    var parsed = JSON.parse_string(file.get_as_text())
+    var contents := file.get_as_text()
+    file.close()
+    var parsed = JSON.parse_string(contents)
     if parsed is Dictionary:
+        if is_debug_request:
+            _consume_debug_request(parsed)
         return parsed
     printerr("test config is not a JSON object: %s" % path)
+    if is_debug_request:
+        _consume_debug_request({})
     return {}
+
+static func _consume_debug_request(config: Dictionary) -> void:
+    _debug_request_config = config
+    _debug_request_consumed = true
+    var absolute_path := ProjectSettings.globalize_path(DEBUG_REQUEST_PATH)
+    var remove_error := DirAccess.remove_absolute(absolute_path)
+    if remove_error != OK and remove_error != ERR_FILE_NOT_FOUND:
+        printerr("could not consume debug request: %s (%d)" % [absolute_path, remove_error])
+
+static func _argument_value(name: String) -> String:
+    var args: Array[String] = []
+    args.append_array(OS.get_cmdline_args())
+    args.append_array(OS.get_cmdline_user_args())
+    for i in range(args.size()):
+        var arg := String(args[i])
+        if arg == name and i + 1 < args.size():
+            return String(args[i + 1])
+        if arg.begins_with(name + "="):
+            return arg.substr(name.length() + 1)
+    return ""
+
+static func debug_request_path() -> String:
+    return DEBUG_REQUEST_PATH
 
 static func string_value(config: Dictionary, key: String, fallback: String = "") -> String:
     if OS.has_environment(_env_name(key)):

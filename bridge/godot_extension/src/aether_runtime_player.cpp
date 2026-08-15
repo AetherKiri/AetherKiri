@@ -4,9 +4,19 @@
 #include "GodotGpuBridge.h"
 #include "GodotGpuBarrierShadowPlanner.h"
 #include "ComplexRect.h"
+#include "RuntimeTickPacer.h"
 #include "frame_effect_host.h"
 #if defined(AETHERKIRI_WITH_ONSCRIPTER)
 #include "onscripter_runtime.h"
+#endif
+#if defined(__APPLE__)
+#include "apple_external_texture.h"
+#if !defined(IOS_ENABLED)
+#include "apple_vulkan_external_texture.h"
+#endif
+#endif
+#if defined(__ANDROID__)
+#include "android_external_texture.h"
 #endif
 
 #include <godot_cpp/classes/engine.hpp>
@@ -114,6 +124,14 @@ struct GodotGpuTextureRecord {
     // AlphaBlend_d dispatches are asynchronous. A following scratch-layer
     // clear must not rewrite this RID until the queued shader has sampled it.
     bool requires_alpha_d_clear_version = false;
+    // Retained CVPixelBuffer backing an imported Metal texture. It must live
+    // until the queued RID release reaches the render thread.
+    void *apple_pixel_buffer = nullptr;
+    // Owns the VkImage that directly imports the IOSurface on macOS.
+    void *apple_vulkan_external_texture = nullptr;
+    // Owns the VkImage, imported device memory, and retained AHardwareBuffer
+    // backing an Android shared E-mote texture.
+    void *android_external_texture = nullptr;
 };
 
 struct ArtemisGpuShaderImage {
@@ -152,7 +170,6 @@ std::atomic<uint64_t> g_gpu_textures_created{0};
 std::atomic<uint64_t> g_gpu_textures_released{0};
 std::atomic<uint64_t> g_gpu_texture_bytes_created{0};
 std::atomic<uint64_t> g_gpu_texture_bytes_released{0};
-
 struct GodotGpuOp {
     enum class Type {
         Update,
@@ -169,6 +186,10 @@ struct GodotGpuOp {
         Blend2,
         Blend3,
         ArtemisShader,
+        PrepareNativeWrite,
+        PublishNativeWrite,
+        ImportApplePixelBuffer,
+        ImportAndroidHardwareBuffer,
         Release,
         Flush,
     };
@@ -195,6 +216,11 @@ struct GodotGpuOp {
     bool result = false;
     bool done = false;
     uint64_t readback_request = 0;
+    void *native_image = nullptr;
+    void *native_resource = nullptr;
+    uint32_t native_width = 0;
+    uint32_t native_height = 0;
+    uint64_t imported_texture = 0;
     uint64_t queue_sequence = 0;
     std::mutex done_mutex;
     std::condition_variable done_cv;
@@ -1083,7 +1109,8 @@ bool SupportsGodotRenderingDeviceGpu() {
 bool DirectPresentGodotNativeFrameEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_GODOT_DIRECT_PRESENT");
-        return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
     }();
     return enabled;
 }
@@ -2179,22 +2206,19 @@ vec4 load_minified(ivec2 limit, vec2 edge_coord,
             load_bilinear_premul(limit, edge_coord));
     }
     if (preserve_detail) {
-        // Composite Simpson sampling retains the centre of high-contrast
-        // anime line art while integrating the complete destination-pixel
-        // footprint. This gives a later frame enhancer real eye/hair detail
-        // to restore instead of sharpening an already blurred 2x2 average.
-        vec4 premul = vec4(0.0);
-        for (int y = -1; y <= 1; ++y) {
-            float wy = y == 0 ? 4.0 : 1.0;
-            for (int x = -1; x <= 1; ++x) {
-                float wx = x == 0 ? 4.0 : 1.0;
-                vec2 offset = source_dx * (float(x) * 0.5) +
-                              source_dy * (float(y) * 0.5);
-                premul += load_bilinear_premul(
-                    limit, edge_coord + offset) * (wx * wy);
-            }
-        }
-        return straight_from_premul(premul / 36.0);
+        // Keep half of the weight at the centre for fine eye/hair lines and
+        // use four footprint corners for stable alpha-edge integration. Five
+        // bilinear samples retain the accepted detail while avoiding the 36
+        // image loads required by the previous 3x3 composite filter.
+        vec2 dx = source_dx * 0.5;
+        vec2 dy = source_dy * 0.5;
+        vec4 premul = load_bilinear_premul(limit, edge_coord) * 0.5;
+        premul +=
+            (load_bilinear_premul(limit, edge_coord - dx - dy) +
+             load_bilinear_premul(limit, edge_coord + dx - dy) +
+             load_bilinear_premul(limit, edge_coord - dx + dy) +
+             load_bilinear_premul(limit, edge_coord + dx + dy)) * 0.125;
+        return straight_from_premul(premul);
     }
     // DXT E-mote atlases contain high-contrast one-pixel line art. At the
     // authored 0.5 presentation scale a bare bilinear lookup leaves that
@@ -2319,7 +2343,8 @@ float edge(vec2 a, vec2 b, vec2 p) {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
-vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
+vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord,
+                          bool source_premultiplied) {
     vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
     ivec2 p0 = ivec2(floor(center_coord));
     ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
@@ -2328,42 +2353,50 @@ vec4 load_bilinear_premul(ivec2 limit, vec2 edge_coord) {
     vec4 c10 = imageLoad(src_img, ivec2(p1.x, p0.y));
     vec4 c01 = imageLoad(src_img, ivec2(p0.x, p1.y));
     vec4 c11 = imageLoad(src_img, p1);
-    c00.rgb *= c00.a;
-    c10.rgb *= c10.a;
-    c01.rgb *= c01.a;
-    c11.rgb *= c11.a;
+    if (!source_premultiplied) {
+        c00.rgb *= c00.a;
+        c10.rgb *= c10.a;
+        c01.rgb *= c01.a;
+        c11.rgb *= c11.a;
+    }
     vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
     return clamp(premul, vec4(0.0), vec4(1.0));
 }
 
 vec4 load_minified(ivec2 limit, vec2 edge_coord,
                     vec2 source_dx, vec2 source_dy,
-                    bool preserve_detail) {
+                    bool preserve_detail, bool source_premultiplied) {
     float footprint = max(length(source_dx), length(source_dy));
     vec4 premul;
     if (footprint <= 1.0001) {
-        premul = load_bilinear_premul(limit, edge_coord);
+        premul = load_bilinear_premul(
+            limit, edge_coord, source_premultiplied);
     } else if (preserve_detail) {
-        premul = vec4(0.0);
-        for (int y = -1; y <= 1; ++y) {
-            float wy = y == 0 ? 4.0 : 1.0;
-            for (int x = -1; x <= 1; ++x) {
-                float wx = x == 0 ? 4.0 : 1.0;
-                vec2 offset = source_dx * (float(x) * 0.5) +
-                              source_dy * (float(y) * 0.5);
-                premul += load_bilinear_premul(
-                    limit, edge_coord + offset) * (wx * wy);
-            }
-        }
-        premul /= 36.0;
+        vec2 dx = source_dx * 0.5;
+        vec2 dy = source_dy * 0.5;
+        premul = load_bilinear_premul(
+            limit, edge_coord, source_premultiplied) * 0.5;
+        premul +=
+            (load_bilinear_premul(
+                 limit, edge_coord - dx - dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord + dx - dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord - dx + dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord + dx + dy, source_premultiplied)) * 0.125;
     } else {
         vec2 dx = source_dx * 0.5;
         vec2 dy = source_dy * 0.5;
         premul =
-            (load_bilinear_premul(limit, edge_coord - dx - dy) +
-             load_bilinear_premul(limit, edge_coord + dx - dy) +
-             load_bilinear_premul(limit, edge_coord - dx + dy) +
-             load_bilinear_premul(limit, edge_coord + dx + dy)) * 0.25;
+            (load_bilinear_premul(
+                 limit, edge_coord - dx - dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord + dx - dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord - dx + dy, source_premultiplied) +
+             load_bilinear_premul(
+                 limit, edge_coord + dx + dy, source_premultiplied)) * 0.25;
     }
     if (premul.a > 0.00001) {
         premul.rgb /= premul.a;
@@ -2773,7 +2806,9 @@ void main() {
     float opacity = clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
     bool preserve_detail =
         (uint(pc.color0.z) & 0x40000000u) != 0u;
-    int blend_flags = int(uint(pc.color0.z) & 0x3fffffffu);
+    bool source_premultiplied =
+        (uint(pc.color0.z) & 0x20000000u) != 0u;
+    int blend_flags = int(uint(pc.color0.z) & 0x1fffffffu);
     bool mask_write = (blend_flags & 131072) != 0;
     bool tvp_blend = !mask_write && (blend_flags & 65536) != 0;
     int tvp_blend_mode = blend_flags & 65535;
@@ -2812,7 +2847,7 @@ void main() {
                 source20 * ((d0.x - d1.x) / area);
             vec4 src = load_minified(
                 src_limit, src_pos_f, source_dx, source_dy,
-                preserve_detail);
+                preserve_detail, source_premultiplied);
             if (tvp_blend) {
                 uint d = pack_u8(vec4_to_u8(dst));
                 uint s = pack_u8(vec4_to_u8(src));
@@ -2930,18 +2965,14 @@ vec4 load_minified(ivec2 limit, vec2 edge_coord,
     if (footprint <= 1.0001) {
         premul = load_bilinear_premul(limit, edge_coord);
     } else if (preserve_detail) {
-        premul = vec4(0.0);
-        for (int y = -1; y <= 1; ++y) {
-            float wy = y == 0 ? 4.0 : 1.0;
-            for (int x = -1; x <= 1; ++x) {
-                float wx = x == 0 ? 4.0 : 1.0;
-                vec2 offset = source_dx * (float(x) * 0.5) +
-                              source_dy * (float(y) * 0.5);
-                premul += load_bilinear_premul(
-                    limit, edge_coord + offset) * (wx * wy);
-            }
-        }
-        premul /= 36.0;
+        vec2 dx = source_dx * 0.5;
+        vec2 dy = source_dy * 0.5;
+        premul = load_bilinear_premul(limit, edge_coord) * 0.5;
+        premul +=
+            (load_bilinear_premul(limit, edge_coord - dx - dy) +
+             load_bilinear_premul(limit, edge_coord + dx - dy) +
+             load_bilinear_premul(limit, edge_coord - dx + dy) +
+             load_bilinear_premul(limit, edge_coord + dx + dy)) * 0.125;
     } else {
         vec2 dx = source_dx * 0.5;
         vec2 dy = source_dy * 0.5;
@@ -4061,11 +4092,183 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
         }
         case GodotGpuOp::Type::ArtemisShader:
             return ExecuteArtemisGpuShader(rd, op);
+        case GodotGpuOp::Type::PrepareNativeWrite:
+            // submit()/sync() are only valid for a local RenderingDevice.
+            // Poll a marker on Godot's Metal queue instead. A target remains
+            // retired while the marker is pending, so the runtime can render
+            // another buffer without blocking the CPU or racing IOSurface
+            // storage still sampled by Metal.
+#if defined(__APPLE__)
+            return AetherApplePollMetalCommandQueue(
+                rd->get_driver_resource(
+                    RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE,
+                    RID(), 0));
+#else
+            ApplyGodotGpuBarrier(rd);
+            return true;
+#endif
+        case GodotGpuOp::Type::PublishNativeWrite:
+            return true;
+        case GodotGpuOp::Type::ImportApplePixelBuffer: {
+#if defined(__APPLE__)
+            if (op->native_image == nullptr || op->native_width == 0 ||
+                op->native_height == 0) {
+                return false;
+            }
+            const uint64_t device = rd->get_driver_resource(
+                RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE, RID(), 0);
+            void *vulkan_external_texture = nullptr;
+            RID rid;
+#if defined(IOS_ENABLED)
+            const uint64_t native_texture =
+                AetherAppleCreateMetalTextureFromPixelBuffer(
+                    device, op->native_image, op->native_width,
+                    op->native_height);
+            if (native_texture == 0) return false;
+            rid = rd->texture_create_from_extension(
+                RenderingDevice::TEXTURE_TYPE_2D,
+                RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM,
+                RenderingDevice::TEXTURE_SAMPLES_1,
+                BitField<RenderingDevice::TextureUsageBits>(
+                    RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+                    RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
+                    RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT),
+                native_texture, op->native_width, op->native_height, 1, 1);
+            if (!rid.is_valid()) {
+                AetherAppleReleaseMetalTexture(native_texture);
+                return false;
+            }
+#else
+            const uint64_t physical_device = rd->get_driver_resource(
+                RenderingDevice::DRIVER_RESOURCE_PHYSICAL_DEVICE, RID(), 0);
+            const uint64_t command_queue = rd->get_driver_resource(
+                RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE, RID(), 0);
+            const uint32_t queue_family = static_cast<uint32_t>(
+                rd->get_driver_resource(
+                    RenderingDevice::DRIVER_RESOURCE_QUEUE_FAMILY, RID(), 0));
+            const uint64_t native_texture =
+                AetherAppleCreateVulkanTextureFromPixelBuffer(
+                    device, physical_device, command_queue, queue_family,
+                    op->native_image,
+                    op->native_width, op->native_height,
+                    &vulkan_external_texture);
+            if (native_texture == 0 ||
+                vulkan_external_texture == nullptr) {
+                return false;
+            }
+            rid = rd->texture_create_from_extension(
+                RenderingDevice::TEXTURE_TYPE_2D,
+                RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM,
+                RenderingDevice::TEXTURE_SAMPLES_1,
+                BitField<RenderingDevice::TextureUsageBits>(
+                RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+                RenderingDevice::TEXTURE_USAGE_STORAGE_BIT |
+                RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+                RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT),
+                native_texture, op->native_width, op->native_height, 1, 1);
+            if (!rid.is_valid()) {
+                AetherAppleReleaseVulkanTexture(vulkan_external_texture);
+                return false;
+            }
+#endif
+
+            GodotGpuTextureRecord record;
+            record.rid = rid;
+            record.width = op->native_width;
+            record.height = op->native_height;
+            record.apple_pixel_buffer = op->native_image;
+            record.apple_vulkan_external_texture = vulkan_external_texture;
+            AetherAppleRetainPixelBuffer(record.apple_pixel_buffer);
+            record.texture.instantiate();
+            record.texture->set_texture_rd_rid(rid);
+            {
+                std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+                op->imported_texture = g_next_gpu_texture_id++;
+                g_gpu_textures[op->imported_texture] = record;
+            }
+            g_gpu_textures_created.fetch_add(1, std::memory_order_relaxed);
+            g_gpu_texture_bytes_created.fetch_add(
+                static_cast<uint64_t>(op->native_width) *
+                    op->native_height * 4u,
+                std::memory_order_relaxed);
+            return true;
+#else
+            return false;
+#endif
+        }
+        case GodotGpuOp::Type::ImportAndroidHardwareBuffer: {
+#if defined(__ANDROID__)
+            if (op->native_image == nullptr || op->native_width == 0 ||
+                op->native_height == 0) {
+                return false;
+            }
+            const uint64_t device = rd->get_driver_resource(
+                RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE, RID(), 0);
+            const uint64_t physical_device = rd->get_driver_resource(
+                RenderingDevice::DRIVER_RESOURCE_PHYSICAL_DEVICE, RID(), 0);
+            void *external_texture = nullptr;
+            const uint64_t native_texture =
+                AetherAndroidCreateVulkanTextureFromHardwareBuffer(
+                    device, physical_device, op->native_image,
+                    op->native_width, op->native_height, &external_texture);
+            if (native_texture == 0 || external_texture == nullptr) {
+                return false;
+            }
+            const RID rid = rd->texture_create_from_extension(
+                RenderingDevice::TEXTURE_TYPE_2D,
+                RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM,
+                RenderingDevice::TEXTURE_SAMPLES_1,
+                BitField<RenderingDevice::TextureUsageBits>(
+                    RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+                    RenderingDevice::TEXTURE_USAGE_CAN_COPY_FROM_BIT),
+                native_texture, op->native_width, op->native_height, 1, 1);
+            if (!rid.is_valid()) {
+                AetherAndroidReleaseVulkanTexture(external_texture);
+                return false;
+            }
+
+            GodotGpuTextureRecord record;
+            record.rid = rid;
+            record.width = op->native_width;
+            record.height = op->native_height;
+            record.android_external_texture = external_texture;
+            record.texture.instantiate();
+            record.texture->set_texture_rd_rid(rid);
+            {
+                std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+                op->imported_texture = g_next_gpu_texture_id++;
+                g_gpu_textures[op->imported_texture] = record;
+            }
+            g_gpu_textures_created.fetch_add(1, std::memory_order_relaxed);
+            g_gpu_texture_bytes_created.fetch_add(
+                static_cast<uint64_t>(op->native_width) *
+                    op->native_height * 4u,
+                std::memory_order_relaxed);
+            return true;
+#else
+            return false;
+#endif
+        }
         case GodotGpuOp::Type::Release:
             InvalidateGodotGpuUniformSetsForResource(rd, op->dst);
+#if defined(__APPLE__)
+            if (op->dst.is_valid()) rd->free_rid(op->dst);
+#if !defined(IOS_ENABLED)
+            AetherAppleReleaseVulkanTexture(op->native_resource);
+#endif
+            AetherAppleReleasePixelBuffer(op->native_image);
+#elif defined(__ANDROID__)
+            AetherAndroidReleaseVulkanTexture(op->native_resource);
             rd->free_rid(op->dst);
+#else
+            rd->free_rid(op->dst);
+#endif
             return true;
         case GodotGpuOp::Type::Flush:
+            // The main RenderingDevice is submitted by RenderingServer at the
+            // frame boundary. Calling RenderingDevice::submit() here is both
+            // unnecessary and invalid for that main instance. The barrier is
+            // enough to retain ordering inside Godot's command graph.
             ApplyGodotGpuBarrier(rd);
             return true;
     }
@@ -4076,8 +4279,14 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
 }
 
 void FinishGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool result) {
-    CountGpuOpResult(result);
-    if (!result && op != nullptr) {
+    // PrepareNativeWrite is a non-blocking readiness probe. A false result
+    // means Metal is still consuming the retired IOSurface, not that the GPU
+    // bridge failed; the native producer keeps that target retired and retries.
+    const bool expected_not_ready =
+        !result && op != nullptr &&
+        op->type == GodotGpuOp::Type::PrepareNativeWrite;
+    CountGpuOpResult(result || expected_not_ready);
+    if (!result && !expected_not_ready && op != nullptr) {
         if (op->type == GodotGpuOp::Type::Copy) {
             g_gpu_copy_failed.fetch_add(1, std::memory_order_relaxed);
         } else if (op->type == GodotGpuOp::Type::CopyTriangles) {
@@ -5499,6 +5708,106 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
     return id;
 }
 
+uint64_t BridgeImportApplePixelBuffer(void *native_image, uint32_t width,
+                                      uint32_t height) {
+#if defined(__APPLE__)
+    if (native_image == nullptr || width == 0 || height == 0 ||
+        !SupportsGodotRenderingDeviceGpu()) {
+        return 0;
+    }
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::ImportApplePixelBuffer;
+    op->native_image = native_image;
+    op->native_width = width;
+    op->native_height = height;
+    return RunGodotGpuOpSync(op) ? op->imported_texture : 0;
+#else
+    (void)native_image;
+    (void)width;
+    (void)height;
+    return 0;
+#endif
+}
+
+bool BridgePrepareForNativeWrite(uint64_t texture) {
+    GodotGpuTextureRecord record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        const auto found = g_gpu_textures.find(texture);
+        if (found == g_gpu_textures.end()) return false;
+        record = found->second;
+    }
+    if (!record.rid.is_valid()) return false;
+#if defined(__APPLE__)
+    // All native surfaces rendered during one Godot display frame were consumed
+    // by the same ordered Metal queue. One completed marker therefore makes
+    // every sufficiently retired surface in this scene batch reusable.
+    Engine *engine = Engine::get_singleton();
+    const uint64_t drawn_frame = engine != nullptr
+        ? static_cast<uint64_t>(engine->get_frames_drawn())
+        : UINT64_MAX;
+    static std::mutex wait_mutex;
+    static uint64_t last_waited_drawn_frame = UINT64_MAX;
+    std::lock_guard<std::mutex> wait_lock(wait_mutex);
+    if (drawn_frame != UINT64_MAX &&
+        drawn_frame == last_waited_drawn_frame) {
+        return true;
+    }
+#endif
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::PrepareNativeWrite;
+    op->src = record.rid;
+    const bool prepared = RunGodotGpuOpSync(op);
+#if defined(__APPLE__)
+    if (prepared && drawn_frame != UINT64_MAX) {
+        last_waited_drawn_frame = drawn_frame;
+    }
+#endif
+    return prepared;
+}
+
+bool BridgePublishNativeWrite(uint64_t texture) {
+#if defined(__APPLE__) && !defined(IOS_ENABLED)
+    GodotGpuTextureRecord record;
+    {
+        std::lock_guard<std::mutex> lock(g_gpu_textures_mutex);
+        const auto found = g_gpu_textures.find(texture);
+        if (found == g_gpu_textures.end()) return false;
+        record = found->second;
+    }
+    // The VkImage directly imports the producer's IOSurface. The OpenGL fence
+    // and PrepareForExport() flush make this generation visible; no second
+    // Metal copy or out-of-band write to a MoltenVK-owned texture is needed.
+    return record.rid.is_valid() &&
+           record.apple_vulkan_external_texture != nullptr;
+#else
+    (void)texture;
+    return true;
+#endif
+}
+
+uint64_t BridgeImportAndroidHardwareBuffer(void *native_image,
+                                           uint32_t width,
+                                           uint32_t height) {
+#if defined(__ANDROID__)
+    if (native_image == nullptr || width == 0 || height == 0 ||
+        !SupportsGodotRenderingDeviceGpu()) {
+        return 0;
+    }
+    auto op = std::make_shared<GodotGpuOp>();
+    op->type = GodotGpuOp::Type::ImportAndroidHardwareBuffer;
+    op->native_image = native_image;
+    op->native_width = width;
+    op->native_height = height;
+    return RunGodotGpuOpSync(op) ? op->imported_texture : 0;
+#else
+    (void)native_image;
+    (void)width;
+    (void)height;
+    return 0;
+#endif
+}
+
 void BridgeReleaseTexture(uint64_t texture) {
     GodotGpuTextureRecord record;
     {
@@ -5517,6 +5826,12 @@ void BridgeReleaseTexture(uint64_t texture) {
         auto op = std::make_shared<GodotGpuOp>();
         op->type = GodotGpuOp::Type::Release;
         op->dst = record.rid;
+        op->native_image = record.apple_pixel_buffer != nullptr
+            ? record.apple_pixel_buffer
+            : nullptr;
+        op->native_resource = record.apple_vulkan_external_texture != nullptr
+            ? record.apple_vulkan_external_texture
+            : record.android_external_texture;
         // Texture operations are consumed in queue order. Waiting here turns
         // every short-lived E-mote scratch layer into a render-thread round
         // trip; enqueue the release after its last use instead.
@@ -5682,9 +5997,13 @@ void AppendGodotGpuTriangleBounds(std::vector<float> &vertices,
 
 bool ShouldPreserveMinifiedTriangleDetail(uint32_t triangle_count,
                                           const tTVPPointD *dst_points,
-                                          const tTVPPointD *src_points) {
-    if (!g_frame_enhancement_detail_sampling.load(std::memory_order_acquire) ||
-        triangle_count == 0 || dst_points == nullptr || src_points == nullptr) {
+                                          const tTVPPointD *src_points,
+                                          bool force_detail_sampling = false) {
+    const bool detail_sampling_enabled =
+        force_detail_sampling ||
+        g_frame_enhancement_detail_sampling.load(std::memory_order_acquire);
+    if (!detail_sampling_enabled || triangle_count == 0 ||
+        dst_points == nullptr || src_points == nullptr) {
         return false;
     }
 
@@ -5815,8 +6134,14 @@ bool BridgeDrawTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     op->mode = triangle_count;
     op->opacity = static_cast<int>(std::round(std::clamp(opacity, 0.0f, 1.0f) * 255.0f));
     op->color = blend_mode;
+    // Native character frames can use a larger authored canvas and commonly
+    // present at 0.5x. Keep the centre-weighted minification path enabled for
+    // explicitly tagged premultiplied sources so fine eye and hair detail
+    // survives even when global frame enhancement is off.
+    const bool native_character_source =
+        (blend_mode & TVP_GODOT_GPU_TRIANGLE_SOURCE_PREMULTIPLIED) != 0u;
     op->preserve_minified_detail = ShouldPreserveMinifiedTriangleDetail(
-        triangle_count, dst_points, src_points);
+        triangle_count, dst_points, src_points, native_character_source);
     if (op->preserve_minified_detail) {
         g_gpu_detail_minify_ops.fetch_add(1, std::memory_order_relaxed);
     }
@@ -6207,7 +6532,10 @@ void BridgeDiscardReadRgba(uint64_t request) {
 bool BridgeFlush() {
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Flush;
-    return RunGodotGpuOpAsync(op);
+    // The caller publishes the destination texture immediately after flush.
+    // Wait only until the render thread has encoded and submitted the work;
+    // ExecuteGodotGpuOp intentionally does not call RenderingDevice::sync().
+    return RunGodotGpuOpSync(op);
 }
 
 Ref<Texture2D> ResolveBridgeTexture(uint64_t texture) {
@@ -6670,6 +6998,12 @@ void ReleaseRemainingGodotGpuTextures() {
             auto op = std::make_shared<GodotGpuOp>();
             op->type = GodotGpuOp::Type::Release;
             op->dst = record.rid;
+            op->native_image = record.apple_pixel_buffer != nullptr
+                ? record.apple_pixel_buffer
+                : nullptr;
+            op->native_resource = record.apple_vulkan_external_texture != nullptr
+                ? record.apple_vulkan_external_texture
+                : record.android_external_texture;
             RunGodotGpuOpSync(op);
         }
     }
@@ -6716,6 +7050,21 @@ public:
         batch_callbacks.begin_batch = BridgeBeginBatch;
         batch_callbacks.end_batch = BridgeEndBatch;
         engine_register_godot_gpu_batch_bridge(&batch_callbacks);
+        TVPGodotGpuExternalTextureCallbacks external_texture_callbacks{};
+        external_texture_callbacks.struct_size =
+            sizeof(external_texture_callbacks);
+        external_texture_callbacks.abi_version =
+            TVP_GODOT_GPU_EXTERNAL_TEXTURE_CALLBACKS_ABI_VERSION;
+        external_texture_callbacks.import_apple_pixel_buffer =
+            BridgeImportApplePixelBuffer;
+        external_texture_callbacks.prepare_for_native_write =
+            BridgePrepareForNativeWrite;
+        external_texture_callbacks.import_android_hardware_buffer =
+            BridgeImportAndroidHardwareBuffer;
+        external_texture_callbacks.publish_native_write =
+            BridgePublishNativeWrite;
+        engine_register_godot_gpu_external_texture_bridge(
+            &external_texture_callbacks);
 
         CharString writable_utf8 = writable_path.utf8();
         CharString cache_utf8 = cache_path.utf8();
@@ -6737,6 +7086,7 @@ public:
 
     void destroy_engine() {
         media_close();
+        reset_runtime_tick_timing();
         if (handle_ == nullptr) {
             return;
         }
@@ -6862,6 +7212,7 @@ public:
         result["target_height"] = static_cast<int64_t>(frame_effect_target_height_);
         result["native_output_requested"] = frame_native_output_enabled_;
         result["raw_source_output"] = frame_effect_raw_source_output_;
+        result["platform_raw_source"] = platform_prefers_raw_source();
         result["bypassed_after_error"] = frame_effect_bypass_due_to_error_;
         result["runtime"] = runtime_id_;
 
@@ -6925,6 +7276,10 @@ public:
             if (runtime_id_.is_empty()) {
                 runtime_id_ = "auto";
             }
+            // The iOS source-output policy depends on whether this player is
+            // hosting KiriKiri or ONScripter. Refresh the pending frame option
+            // after the runtime selection becomes known.
+            sync_frame_effect_source_mode(true);
         }
         return result;
     }
@@ -6963,10 +7318,18 @@ public:
         }
 
         CharString path_utf8 = game_root_path.utf8();
+        const String normalized_runtime = runtime_id_.strip_edges().to_lower();
+        artemis_logical_frame_pacing_ = normalized_runtime == "artemis" ||
+            (normalized_runtime == "auto" &&
+             engine_probe_runtime_provider("artemis", path_utf8.get_data()) > 0);
+        reset_runtime_tick_timing(false);
         const engine_result_t result = async
             ? engine_open_game_async(handle_, path_utf8.get_data(), nullptr)
             : engine_open_game(handle_, path_utf8.get_data(), nullptr);
         game_open_ = result == ENGINE_RESULT_OK;
+        if (!game_open_) {
+            artemis_logical_frame_pacing_ = false;
+        }
         update_last_error(result);
         return result;
     }
@@ -6975,8 +7338,20 @@ public:
         if (handle_ == nullptr) {
             return ENGINE_RESULT_INVALID_STATE;
         }
-        const auto delta_ms = static_cast<uint32_t>(
-            std::max(0.0, delta_seconds) * 1000.0);
+        double runtime_delta_seconds = std::max(0.0, delta_seconds);
+        if (artemis_logical_frame_pacing_) {
+            const auto step = artemis_logical_frame_pacer_.Advance(
+                runtime_delta_seconds);
+            if (!step.should_tick) {
+                drain_platform_requests();
+                last_result_ = ResultToString(ENGINE_RESULT_OK);
+                last_error_ = "";
+                return ENGINE_RESULT_OK;
+            }
+            runtime_delta_seconds = step.delta_seconds;
+        }
+        const uint32_t delta_ms =
+            runtime_tick_quantizer_.Quantize(runtime_delta_seconds);
         const engine_result_t result = engine_tick(handle_, delta_ms);
         drain_platform_requests();
         update_last_error(result);
@@ -6988,6 +7363,7 @@ public:
             return ENGINE_RESULT_INVALID_STATE;
         }
         const engine_result_t result = engine_pause(handle_);
+        if (result == ENGINE_RESULT_OK) reset_runtime_tick_timing(false);
         update_last_error(result);
         return result;
     }
@@ -6997,6 +7373,7 @@ public:
             return ENGINE_RESULT_INVALID_STATE;
         }
         const engine_result_t result = engine_resume(handle_);
+        if (result == ENGINE_RESULT_OK) reset_runtime_tick_timing(false);
         update_last_error(result);
         return result;
     }
@@ -7368,7 +7745,10 @@ public:
         if (handle_ == nullptr) {
             return String();
         }
-        char buffer[512] = {};
+        // Runtime providers are free to include detailed timing fields. Keep
+        // this buffer comfortably above the current Artemis diagnostics so a
+        // successful render path never appears as an empty renderer string.
+        char buffer[8192] = {};
         const engine_result_t result =
             engine_get_renderer_info(handle_, buffer, sizeof(buffer));
         update_last_error(result);
@@ -7382,6 +7762,8 @@ public:
                          " godot_driver=" + server->get_current_rendering_driver_name() +
                          " rd_gpu=" + String(SupportsGodotRenderingDeviceGpu() ? "1" : "0");
         }
+        godot_info += " source_query_ms=" + String::num(source_query_ms_, 6) +
+                      " present_copy_ms=" + String::num(present_copy_ms_, 6);
         return String::utf8(buffer) + godot_info + GetGodotGpuBridgeDebugInfo();
     }
 
@@ -7570,7 +7952,8 @@ public:
         if (handle_ == nullptr) {
             return Ref<Texture2D>();
         }
-
+        source_query_ms_ = 0.0;
+        present_copy_ms_ = 0.0;
         const std::string normalized_backend = NormalizeBackend(backend_);
         if (normalized_backend == ENGINE_RENDERER_GODOT_NATIVE ||
             normalized_backend == ENGINE_RENDERER_GPU_BRIDGE) {
@@ -7578,14 +7961,32 @@ public:
             uint32_t width = 0;
             uint32_t height = 0;
             uint64_t serial = 0;
+            const auto query_started = std::chrono::steady_clock::now();
             engine_result_t gpu_result = engine_get_godot_native_frame_texture(
                 handle_, &texture_id, &width, &height, &serial);
+            source_query_ms_ = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - query_started).count();
             if (gpu_result == ENGINE_RESULT_OK && texture_id != 0) {
+                uint32_t presentation_state =
+                    ENGINE_GODOT_PRESENTATION_STATE_NONE;
+                if (engine_get_godot_presentation_state(
+                        handle_, &presentation_state) == ENGINE_RESULT_OK &&
+                    (presentation_state &
+                     ENGINE_GODOT_PRESENTATION_STATE_RESET_HISTORY) != 0) {
+                    // The provider replaced a GPU-composed scene with a CPU
+                    // handoff without changing its logical frame serial.
+                    // Discard the delayed slot so the deleted character is
+                    // not presented once more before the new source.
+                    release_presentation_textures(true);
+                }
                 if (normalized_backend == ENGINE_RENDERER_GPU_BRIDGE) {
+                    const auto present_started = std::chrono::steady_clock::now();
                     Ref<Texture2D> presented_texture =
                         update_presented_bridge_texture(
                             texture_id, width, height, serial,
                             "godot_external_presented");
+                    present_copy_ms_ = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - present_started).count();
                     if (presented_texture.is_valid()) {
                         frame_texture_.unref();
                         release_imported_texture();
@@ -7620,10 +8021,13 @@ public:
                             return native_texture;
                         }
                     }
+                    const auto present_started = std::chrono::steady_clock::now();
                     Ref<Texture2D> presented_texture =
                         update_presented_bridge_texture(
                             texture_id, width, height, serial,
                             "godot_native_gpu_presented");
+                    present_copy_ms_ = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - present_started).count();
                     if (presented_texture.is_valid()) {
                         frame_texture_.unref();
                         release_imported_texture();
@@ -8827,6 +9231,10 @@ private:
         frame_present_width_ = 0;
         frame_present_height_ = 0;
         frame_present_current_slot_ = 0;
+        frame_present_pending_slot_ = 0;
+        frame_present_has_current_ = false;
+        frame_present_has_pending_ = false;
+        frame_present_pending_draw_frame_ = 0;
         frame_present_serial_ = UINT64_MAX;
         if (frame_texture_backend_ == "godot_native_gpu_presented" ||
             frame_texture_backend_ == "godot_external_presented") {
@@ -8923,10 +9331,13 @@ private:
             frame_present_textures_[i].instantiate();
             frame_present_textures_[i]->set_texture_rd_rid(frame_present_rids_[i]);
         }
-
         frame_present_width_ = width;
         frame_present_height_ = height;
         frame_present_current_slot_ = 0;
+        frame_present_pending_slot_ = 0;
+        frame_present_has_current_ = false;
+        frame_present_has_pending_ = false;
+        frame_present_pending_draw_frame_ = 0;
         frame_present_serial_ = UINT64_MAX;
         return true;
     }
@@ -8939,15 +9350,6 @@ private:
         if (texture_id == 0 || width == 0 || height == 0) {
             return Ref<Texture2D>();
         }
-        if (frame_present_serial_ == serial &&
-            frame_present_width_ == width &&
-            frame_present_height_ == height &&
-            frame_present_textures_[frame_present_current_slot_].is_valid()) {
-            frame_texture_serial_ = serial;
-            frame_texture_backend_ = backend_name;
-            return frame_present_textures_[frame_present_current_slot_];
-        }
-
         GodotGpuTextureRecord source;
         if (!ResolveBridgeTextureRecord(texture_id, source) ||
             !source.rid.is_valid()) {
@@ -8956,8 +9358,46 @@ private:
         if (!ensure_presentation_textures(width, height)) {
             return Ref<Texture2D>();
         }
-
-        const size_t next_slot = 1u - frame_present_current_slot_;
+        // The texture contents can change while the engine serial remains the
+        // same (for example, native idle animation). Always enqueue
+        // the current GPU contents instead of treating the serial as a texture
+        // revision. Promote only the copy encoded for the previous engine
+        // frame. Godot submits its main RenderingDevice at the render-frame
+        // boundary; a
+        // texture copied and returned during the same process tick can still
+        // contain its old transparent contents when Canvas samples it. This
+        // one-frame pipeline publishes a slot only after it has crossed a real
+        // RenderingServer submission, while the other slot receives the new
+        // copy. It avoids both CPU readback and illegal main-device submit().
+        Engine *engine = Engine::get_singleton();
+        const uint64_t drawn_frame = engine != nullptr
+            ? static_cast<uint64_t>(engine->get_frames_drawn())
+            : 0;
+        if (frame_present_has_pending_) {
+            const bool pending_complete =
+                drawn_frame > frame_present_pending_draw_frame_;
+            if (pending_complete) {
+                frame_present_current_slot_ = frame_present_pending_slot_;
+                frame_present_has_current_ = true;
+                frame_present_has_pending_ = false;
+                // The RD storage stays stable while its pixels change. Notify
+                // TextureRect/Canvas explicitly so the already-bound
+                // Texture2DRD is invalidated without replacing the Resource
+                // object that the scene owns.
+                frame_present_textures_[frame_present_current_slot_]
+                    ->emit_changed();
+            } else {
+                frame_texture_serial_ = serial;
+                frame_texture_backend_ = backend_name;
+                if (frame_present_has_current_) {
+                    return frame_present_textures_[frame_present_current_slot_];
+                }
+                return source.texture;
+            }
+        }
+        const size_t next_slot = frame_present_has_current_
+            ? 1u - frame_present_current_slot_
+            : 0u;
         auto op = std::make_shared<GodotGpuOp>();
         op->type = GodotGpuOp::Type::Copy;
         op->src = source.rid;
@@ -8972,12 +9412,19 @@ private:
             }
             return Ref<Texture2D>();
         }
-
-        frame_present_current_slot_ = next_slot;
+        frame_present_pending_slot_ = next_slot;
+        frame_present_has_pending_ = true;
+        frame_present_pending_draw_frame_ = drawn_frame;
         frame_present_serial_ = serial;
         frame_texture_serial_ = serial;
         frame_texture_backend_ = backend_name;
-        return frame_present_textures_[frame_present_current_slot_];
+        if (frame_present_has_current_) {
+            return frame_present_textures_[frame_present_current_slot_];
+        }
+        // The first queued slot has not crossed a Godot render boundary yet.
+        // Keep the provider-owned texture for that single startup frame;
+        // subsequent calls use only the completed presentation ring.
+        return source.texture;
     }
 
     Ref<Texture2D> update_imported_gpu_bridge_texture(uint64_t texture_id,
@@ -9037,8 +9484,15 @@ private:
         last_error_ = LastError(handle_);
     }
 
+    void reset_runtime_tick_timing(bool clear_artemis_mode = true) {
+        artemis_logical_frame_pacer_.Reset();
+        runtime_tick_quantizer_.Reset();
+        if (clear_artemis_mode) artemis_logical_frame_pacing_ = false;
+    }
+
     void sync_frame_effect_source_mode(bool force = false) {
-        bool publish_raw_source = frame_native_output_enabled_;
+        bool publish_raw_source =
+            frame_native_output_enabled_ || platform_prefers_raw_source();
         if (frame_effect_enabled_ && !frame_effect_bypass_due_to_error_ &&
             frame_effect_provider_ != nullptr) {
             String reason;
@@ -9069,6 +9523,19 @@ private:
         }
     }
 
+    bool platform_prefers_raw_source() const {
+#if defined(IOS_ENABLED)
+        // KiriKiri/Artemis' logical GPU frame is complete, while its extra
+        // scaled surface copy is not reliably sampleable through Metal on iOS.
+        // Let Godot scale the provider-owned source texture, which also avoids
+        // an unnecessary full-resolution GPU pass. ONScripter owns a separate
+        // presentation contract and keeps its existing surface output.
+        return runtime_id_ != "onscripter";
+#else
+        return false;
+#endif
+    }
+
     engine_handle_t handle_ = nullptr;
     engine_media_handle_t media_ = nullptr;
     bool game_open_ = false;
@@ -9076,7 +9543,14 @@ private:
     String last_result_;
     String last_error_;
     String frame_texture_backend_ = "none";
+    double source_query_ms_ = 0.0;
+    double present_copy_ms_ = 0.0;
     String runtime_id_ = "auto";
+    aetherkiri::godot_host::ArtemisLogicalFramePacer
+        artemis_logical_frame_pacer_;
+    aetherkiri::godot_host::RuntimeTickMillisecondQuantizer
+        runtime_tick_quantizer_;
+    bool artemis_logical_frame_pacing_ = false;
     Ref<ImageTexture> frame_texture_;
     Ref<Texture2DRD> frame_rd_texture_;
     RID frame_rd_rid_;
@@ -9092,6 +9566,10 @@ private:
     uint32_t frame_present_width_ = 0;
     uint32_t frame_present_height_ = 0;
     size_t frame_present_current_slot_ = 0;
+    size_t frame_present_pending_slot_ = 0;
+    bool frame_present_has_current_ = false;
+    bool frame_present_has_pending_ = false;
+    uint64_t frame_present_pending_draw_frame_ = 0;
     uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
     std::unique_ptr<FrameEffectProvider> frame_effect_provider_;
@@ -9145,6 +9623,7 @@ void DeinitializeAetherRuntime(ModuleInitializationLevel level) {
     ReleaseRemainingGodotGpuTextures();
     ReleaseGodotGpuPipeline();
     engine_register_godot_gpu_batch_bridge(nullptr);
+    engine_register_godot_gpu_external_texture_bridge(nullptr);
     engine_register_godot_gpu_bridge(nullptr);
 #if defined(AETHERKIRI_INTERNAL_FRAME_EFFECTS)
     UnregisterAetherInternalFrameEffects();

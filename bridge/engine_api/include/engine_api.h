@@ -42,6 +42,11 @@ ENGINE_API_EXPORT void engine_register_godot_gpu_bridge(
  * GPU callback table remains ABI-stable. */
 ENGINE_API_EXPORT void engine_register_godot_gpu_batch_bridge(
     const void* callbacks);
+/* Registers the optional native shared-texture import table. It is kept
+ * separate from the legacy GPU bridge ABI so older private packages remain
+ * binary-safe. */
+ENGINE_API_EXPORT void engine_register_godot_gpu_external_texture_bridge(
+    const void* callbacks);
 
 typedef enum engine_result_t {
   ENGINE_RESULT_OK = 0,
@@ -417,6 +422,13 @@ ENGINE_API_EXPORT engine_result_t engine_media_read_frame_rgba(
 ENGINE_API_EXPORT engine_result_t engine_get_godot_native_frame_texture(
     engine_handle_t handle, uint64_t* out_texture_id, uint32_t* out_width,
     uint32_t* out_height, uint64_t* out_frame_serial);
+
+/* Runtime-specific state for the most recent Godot-native frame. */
+#define ENGINE_GODOT_PRESENTATION_STATE_NONE 0u
+#define ENGINE_GODOT_PRESENTATION_STATE_RESET_HISTORY (1u << 0)
+
+ENGINE_API_EXPORT engine_result_t engine_get_godot_presentation_state(
+    engine_handle_t handle, uint32_t* out_state_flags);
 
 /*
  * Gets host-native render window handle.

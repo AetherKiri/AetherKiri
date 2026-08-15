@@ -11327,7 +11327,8 @@ namespace motion {
             adaptor->setRetainedPresentationLayer(nullptr);
         }
         const auto rasterNowUs = motionRenderProfileNowUs();
-        if(!retainD3DPresentation && _runtime->isEmoteMode &&
+        if(!_nativeBackend && !retainD3DPresentation &&
+           _runtime->isEmoteMode &&
            _runtime->lastD3DRasterPublishUs != 0 &&
            rasterNowUs >= _runtime->lastD3DRasterPublishUs &&
            rasterNowUs - _runtime->lastD3DRasterPublishUs <
@@ -11354,6 +11355,102 @@ namespace motion {
                 }
                 return true;
             }
+        }
+
+        // Kiri's D3DEmote scripts present through D3DAdaptor rather than the
+        // ordinary Layer draw path. Once a native player owns model
+        // evaluation, routing this branch through the legacy PSB renderer
+        // displays an unchanging compatibility snapshot: the native clock moves
+        // but the pixels copied by captureCanvas do not. Publish the native
+        // frame into the adaptor's retained GPU layer so both ordinary
+        // captureCanvas and uncaptured affine presentations consume the same
+        // animated source.
+        if(_nativeBackend) {
+            iTJSDispatch2 *windowObject = adaptor->getWindowObject();
+            iTJSDispatch2 *primaryLayerObject =
+                resolvePrimaryLayerObject(windowObject);
+            if(!primaryLayerObject) {
+                return false;
+            }
+
+            if(retainD3DPresentation) {
+                iTJSDispatch2 *presentationParentObject =
+                    primaryLayerObject;
+                if(auto *primary = resolveNativeLayer(primaryLayerObject)) {
+                    for(tjs_uint index = 0; index < primary->GetCount();
+                        ++index) {
+                        auto *candidate = primary->GetChildren(
+                            static_cast<tjs_int>(index));
+                        if(candidate && candidate->GetOwnerNoAddRef() &&
+                           candidate->GetName() == TJS_W("表-背景")) {
+                            presentationParentObject =
+                                candidate->GetOwnerNoAddRef();
+                            break;
+                        }
+                    }
+                }
+                const bool presentationCreated =
+                    _runtime->d3dPresentationLayer.Type() != tvtObject;
+                iTJSDispatch2 *presentationLayerObject =
+                    ensureReusableLayerObject(
+                        _runtime->d3dPresentationLayer, windowObject,
+                        presentationParentObject,
+                        static_cast<tTVPLayerType>(ltAlpha), true);
+                auto *presentationLayer =
+                    resolveNativeLayer(presentationLayerObject);
+                if(!presentationLayerObject || !presentationLayer ||
+                   !renderNativeBackendToLayer(
+                       presentationLayerObject, adaptor->getWidth(),
+                       adaptor->getHeight(), true)) {
+                    return false;
+                }
+                presentationLayer->SetName(
+                    TJS_W("AetherKiriD3DPlayerSurface"));
+                presentationLayer->SetEnabled(false);
+                presentationLayer->SetHitType(htMask);
+                presentationLayer->SetHitThreshold(256);
+                if(presentationCreated) {
+                    presentationLayer->BringToBack();
+                }
+                const int previewLeft =
+                    std::min(128, adaptor->getWidth());
+                const int previewRight = std::min(
+                    168, adaptor->getWidth() - previewLeft);
+                const int previewWidth = std::max(
+                    1, adaptor->getWidth() - previewLeft - previewRight);
+                presentationLayer->SetPosition(previewLeft, 0);
+                presentationLayer->SetSize(previewWidth,
+                                           adaptor->getHeight());
+                presentationLayer->SetImagePosition(-previewLeft, 0);
+                presentationLayer->SetVisible(true);
+                adaptor->setRetainedPresentationLayer(
+                    presentationLayerObject);
+                adaptor->setRenderedLayer(presentationLayerObject);
+                return true;
+            }
+
+            const std::size_t renderLayerIndex =
+                _runtime->nextD3DRenderLayer;
+            _runtime->nextD3DRenderLayer =
+                (_runtime->nextD3DRenderLayer + 1u) %
+                _runtime->d3dRenderLayers.size();
+            auto &renderLayerSlot =
+                _runtime->d3dRenderLayers[renderLayerIndex];
+            iTJSDispatch2 *renderLayerObject = ensureReusableLayerObject(
+                renderLayerSlot, windowObject, primaryLayerObject,
+                static_cast<tTVPLayerType>(ltAlpha), false);
+            if(!renderLayerObject ||
+               !renderNativeBackendToLayer(
+                   renderLayerObject, adaptor->getWidth(),
+                   adaptor->getHeight(), true)) {
+                adaptor->setRenderedLayer(nullptr);
+                return false;
+            }
+            adaptor->setRenderedLayer(renderLayerObject);
+            _runtime->lastD3DRenderLayer = renderLayerIndex;
+            _runtime->lastD3DRasterPublishUs =
+                motionRenderProfileNowUs();
+            return true;
         }
         detail::logoChainTraceLogf(
             motionPath, "draw.d3d", "0x6D5B90", _clampedEvalTime,
@@ -11974,6 +12071,220 @@ namespace motion {
         _runtime->headlessRgbaRenderPending = false;
     }
 
+    bool Player::renderNativeBackendToLayer(iTJSDispatch2 *layerObject,
+                                            int canvasWidth,
+                                            int canvasHeight,
+                                            bool skipUpdate) {
+        if(!_nativeBackend || !layerObject || canvasWidth <= 0 ||
+           canvasHeight <= 0) {
+            return false;
+        }
+
+        std::string error;
+        if(_nativeBackend->supportsGpuOutput()) {
+            MotionBackendGpuFrame gpuFrame;
+            if(_nativeBackend->renderGpu(
+                   static_cast<std::uint32_t>(canvasWidth),
+                   static_cast<std::uint32_t>(canvasHeight), &gpuFrame,
+                   &error) && gpuFrame.valid()) {
+                const std::uint32_t logicalWidth = gpuFrame.canvasWidth != 0
+                    ? gpuFrame.canvasWidth
+                    : static_cast<std::uint32_t>(canvasWidth);
+                const std::uint32_t logicalHeight = gpuFrame.canvasHeight != 0
+                    ? gpuFrame.canvasHeight
+                    : static_cast<std::uint32_t>(canvasHeight);
+                const std::uint32_t textureWidth = gpuFrame.textureWidth != 0
+                    ? gpuFrame.textureWidth : gpuFrame.frameWidth;
+                const std::uint32_t textureHeight = gpuFrame.textureHeight != 0
+                    ? gpuFrame.textureHeight : gpuFrame.frameHeight;
+                const bool validFrame =
+                    logicalWidth == static_cast<std::uint32_t>(canvasWidth) &&
+                    logicalHeight == static_cast<std::uint32_t>(canvasHeight) &&
+                    gpuFrame.frameLeft <= logicalWidth &&
+                    gpuFrame.frameTop <= logicalHeight &&
+                    gpuFrame.frameWidth <= logicalWidth - gpuFrame.frameLeft &&
+                    gpuFrame.frameHeight <= logicalHeight - gpuFrame.frameTop &&
+                    textureWidth != 0 && textureHeight != 0;
+                if(validFrame && LOGGER &&
+                   std::getenv("AETHERKIRI_EMOTE_GPU_TRACE")) {
+                    static std::uint32_t tracedFrames = 0;
+                    if(tracedFrames < 12) {
+                        ++tracedFrames;
+                        std::size_t visibleSamples = 0;
+                        bool readSucceeded = false;
+                        const auto *gpuBridge = TVPGodotGpuBridgeGet();
+                        constexpr std::size_t kMaximumTraceBytes =
+                            64u * 1024u * 1024u;
+                        const bool traceSizeValid = textureHeight <=
+                            kMaximumTraceBytes / 4u / textureWidth;
+                        const std::size_t traceBytes = traceSizeValid
+                            ? static_cast<std::size_t>(textureWidth) *
+                                textureHeight * 4u
+                            : 0u;
+                        std::vector<std::uint8_t> tracedRgba(traceBytes);
+                        if(gpuBridge && gpuBridge->read_rgba &&
+                           !tracedRgba.empty()) {
+                            readSucceeded = gpuBridge->read_rgba(
+                                gpuFrame.texture, tracedRgba.data(),
+                                tracedRgba.size(), textureWidth * 4u);
+                            if(readSucceeded) {
+                                for(std::size_t offset = 3;
+                                    offset < tracedRgba.size(); offset += 4) {
+                                    if(tracedRgba[offset] != 0) {
+                                        ++visibleSamples;
+                                    }
+                                }
+                            }
+                        }
+                        LOGGER->info(
+                            "[EMOTE_GPU] source={} canvas={}x{} frame=({},{} {}x{}) texture={}x{} premul={} flipped={} read={} visible={}",
+                            gpuFrame.texture, logicalWidth, logicalHeight,
+                            gpuFrame.frameLeft, gpuFrame.frameTop,
+                            gpuFrame.frameWidth, gpuFrame.frameHeight,
+                            textureWidth, textureHeight,
+                            gpuFrame.alphaPremultiplied ? 1 : 0,
+                            gpuFrame.flippedY ? 1 : 0,
+                            readSucceeded ? 1 : 0, visibleSamples);
+                    }
+                }
+                if(validFrame && prepareLayerForRender(
+                       layerObject, canvasWidth, canvasHeight, 0x00000000)) {
+                    auto *layer = resolveNativeLayer(layerObject);
+                    auto *bitmap = layer ? layer->GetMainImage() : nullptr;
+                    // D3DEmote renders into a reusable full-stage work layer
+                    // and then transfers that image to the character layer
+                    // with assignImages.  The transfer shares the texture.
+                    // Detach the work bitmap before clearing it, just like
+                    // TVPGodotUploadRgbaInPlace does for the CPU fallback;
+                    // otherwise the next character/frame clears the texture
+                    // that the preceding character is still presenting.
+                    if(bitmap) bitmap->IndependNoCopy();
+                    auto *texture = bitmap
+                        ? dynamic_cast<GodotTexture2D *>(bitmap->GetTexture())
+                        : nullptr;
+                    const tTVPRect fullRect(0, 0, canvasWidth, canvasHeight);
+                    if(texture && texture->EnsureGpuHandle() &&
+                       texture->ClearGpu(0x00000000u, fullRect)) {
+                        const double left = gpuFrame.frameLeft;
+                        const double top = gpuFrame.frameTop;
+                        const double right = left + gpuFrame.frameWidth;
+                        const double bottom = top + gpuFrame.frameHeight;
+                        double sourceTop = 0.0;
+                        double sourceBottom = textureHeight;
+                        if(gpuFrame.flippedY) {
+                            std::swap(sourceTop, sourceBottom);
+                        }
+                        const tTVPPointD destination[6] = {
+                            {left, top}, {right, top}, {left, bottom},
+                            {right, top}, {left, bottom}, {right, bottom},
+                        };
+                        const tTVPPointD source[6] = {
+                            {0.0, sourceTop},
+                            {static_cast<double>(textureWidth), sourceTop},
+                            {0.0, sourceBottom},
+                            {static_cast<double>(textureWidth), sourceTop},
+                            {0.0, sourceBottom},
+                            {static_cast<double>(textureWidth), sourceBottom},
+                        };
+                        std::uint32_t blendMode =
+                            TVP_GODOT_GPU_TRIANGLE_TVP_BLEND |
+                            // The native frame is copied into a transparent
+                            // intermediate Kiri layer. AlphaBlend preserves
+                            // the destination alpha (HDA), which leaves every
+                            // copied pixel transparent; AlphaBlend_d updates
+                            // both colour and alpha and is equivalent to the
+                            // CPU upload over this freshly cleared target.
+                            TVP_GODOT_GPU_BLEND_ALPHA_D;
+                        if(gpuFrame.alphaPremultiplied) {
+                            blendMode |=
+                                TVP_GODOT_GPU_TRIANGLE_SOURCE_PREMULTIPLIED;
+                        }
+                        if(texture->DrawExternalTrianglesGpuFrom(
+                               gpuFrame.texture, 2, fullRect, destination,
+                               source, 255, blendMode)) {
+                            _runtime->nativeBackendGpuFrameLifetime =
+                                std::move(gpuFrame.lifetime);
+                            ++_runtime->nativeBackendGpuFrameCount;
+                            if(!skipUpdate) layer->Update(false);
+                            _runtime->lastCanvas =
+                                tTJSVariant(layerObject, layerObject);
+                            _emoteDirty = false;
+                            return true;
+                        }
+                    }
+                }
+                error = validFrame
+                    ? "could not compose shared Kiri E-mote texture"
+                    : "invalid shared Kiri E-mote frame metadata";
+            }
+            if(LOGGER && !error.empty()) {
+                LOGGER->warn(
+                    "native E-mote GPU render failed; using CPU fallback: {}",
+                    error);
+            }
+            error.clear();
+        }
+
+        MotionBackendFrame frame;
+        if(!_nativeBackend->render(
+               static_cast<std::uint32_t>(canvasWidth),
+               static_cast<std::uint32_t>(canvasHeight), &frame, &error)) {
+            if(LOGGER) {
+                LOGGER->warn("native E-mote render failed: {}", error);
+            }
+            return false;
+        }
+        const auto &rgba = frame.sharedRgba ? *frame.sharedRgba : frame.rgba;
+        const auto expectedBytes = static_cast<std::size_t>(canvasWidth) *
+            static_cast<std::size_t>(canvasHeight) * 4u;
+        if(frame.width != static_cast<std::uint32_t>(canvasWidth) ||
+           frame.height != static_cast<std::uint32_t>(canvasHeight) ||
+           rgba.size() < expectedBytes) {
+            if(LOGGER) {
+                LOGGER->warn(
+                    "native E-mote frame mismatch: got={}x{} bytes={} expected={}x{} bytes={}",
+                    frame.width, frame.height, rgba.size(), canvasWidth,
+                    canvasHeight, expectedBytes);
+            }
+            return false;
+        }
+        if(!prepareLayerForRender(layerObject, canvasWidth, canvasHeight,
+                                  0x00000000)) {
+            return false;
+        }
+        auto *layer = resolveNativeLayer(layerObject);
+        auto *bitmap = layer ? layer->GetMainImage() : nullptr;
+        if(!bitmap || bitmap->GetWidth() != canvasWidth ||
+           bitmap->GetHeight() != canvasHeight) {
+            return false;
+        }
+
+        const std::size_t rowBytes = static_cast<std::size_t>(canvasWidth) * 4u;
+        if(!TVPGodotUploadRgbaInPlace(
+               bitmap, rgba.data(), static_cast<std::uint32_t>(rowBytes))) {
+            // Non-Godot render managers retain the compatible CPU path.
+            for(int y = 0; y < canvasHeight; ++y) {
+                const auto *source = rgba.data() +
+                    static_cast<std::size_t>(y) * rowBytes;
+                auto *destination = static_cast<std::uint8_t *>(
+                    bitmap->GetScanLineForWrite(static_cast<tjs_uint>(y)));
+                for(int x = 0; x < canvasWidth; ++x) {
+                    const std::size_t offset = static_cast<std::size_t>(x) * 4u;
+                    destination[offset] = source[offset + 2u];
+                    destination[offset + 1u] = source[offset + 1u];
+                    destination[offset + 2u] = source[offset];
+                    destination[offset + 3u] = source[offset + 3u];
+                }
+            }
+        }
+        if(!skipUpdate) {
+            layer->Update(false);
+        }
+        _runtime->lastCanvas = tTJSVariant(layerObject, layerObject);
+        _emoteDirty = false;
+        return true;
+    }
+
     bool Player::renderToLayer(iTJSDispatch2 *layerObject, bool skipUpdate) {
         if(!layerObject) {
             return false;
@@ -12148,6 +12459,19 @@ namespace motion {
                 finalNativeLayer);
             placeCenteredPresentationBelowMessageUi(
                 finalNativeLayer, "target-select");
+        }
+        if(_nativeBackend) {
+            if(renderNativeBackendToLayer(finalLayerObject, canvasWidth,
+                                          canvasHeight, skipUpdate)) {
+                _runtime->lastCanvas =
+                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                return true;
+            }
+            // A native backend that cannot render this object must not leave
+            // the character blank. Retire it and use the public compatibility
+            // renderer for the remainder of the player's lifetime.
+            _nativeBackend.reset();
+            _nativeBackendSourcePath.clear();
         }
         ensureNodeTreeBuilt();
         const bool parentStateChanged = applyMotionParentRootStateForRender();
@@ -13018,6 +13342,38 @@ namespace motion {
             static_cast<const void *>(renderTarget),
             sla->getAbsolute() ? 1 : 0,
             canvasWidth, canvasHeight);
+
+        // Kiri's E-mote implementation normally presents through
+        // SeparateLayerAdaptor. When the native backend owns evaluation, the
+        // legacy PSB command tree is only a compatibility snapshot and does
+        // not contain the native backend's changing blink/breath/hair/body
+        // state. Render the native frame into the SLA private target on every
+        // draw, then keep the adaptor's normal update/presentation steps
+        // below so authored layer placement and clipping remain unchanged.
+        if(_nativeBackend) {
+            if(!renderNativeBackendToLayer(renderTarget, canvasWidth,
+                                            canvasHeight, true)) {
+                detail::logoChainTraceSummary(
+                    motionPath, "renderToSeparateLayerAdaptor",
+                    _clampedEvalTime, "fail=nativeBackendRender");
+                return false;
+            }
+
+            if(isAccurateSlaRenderEnabled()) {
+                updateAccurateSLAAfterDraw(renderTarget);
+            } else if(auto *renderLayer = resolveNativeLayer(renderTarget)) {
+                renderLayer->Update(false);
+            }
+
+            postProcessCenteredGameMotionSeparateLayerPresentation(
+                presentationTarget, renderTarget, motionPath, canvasWidth,
+                canvasHeight);
+            _runtime->lastCanvas = tTJSVariant(renderTarget, renderTarget);
+            detail::logoChainTraceSummary(
+                motionPath, "renderToSeparateLayerAdaptor",
+                _clampedEvalTime, "nativeBackend=1");
+            return true;
+        }
 
         ensureNodeTreeBuilt();
         const bool parentStateChanged = applyMotionParentRootStateForRender();
@@ -14122,6 +14478,7 @@ namespace motion {
     }
 
     void Player::passTimelinesLike_0x67A100() {
+        invokeNativeBackend("pass");
         if(!_runtime || !_runtime->activeMotion) {
             return;
         }
@@ -14242,7 +14599,8 @@ namespace motion {
         if(!_speed) {
             return;
         }
-        _layersDirty = true;
+        const bool hasNativeBackend = _nativeBackend != nullptr;
+        _layersDirty = !hasNativeBackend;
         if(!_completedEndedTimelineRenderHoldLabel.empty()) {
             const auto stateIt = _runtime->timelines.find(
                 _completedEndedTimelineRenderHoldLabel);
@@ -14270,7 +14628,7 @@ namespace motion {
 
         ensureEmoteControlStateInitialized();
         const auto *extension = motionPlayerExtension();
-        if(extension && extension->hasActivePhysics &&
+        if(!hasNativeBackend && extension && extension->hasActivePhysics &&
            extension->hasActivePhysics(*this)) {
             ensureNodeTreeBuilt();
         }
@@ -14309,10 +14667,36 @@ namespace motion {
             remainingControllerStep -= controllerDt;
         }
 
-        stepAutoBlinkControllersLike_0x660FBC(actualDelta);
+        // The native backend owns blink and physics for a native player. Kiri's
+        // retained root/control timeline still has to run, however: it drives
+        // authored pose and visibility variables which are not public native
+        // timelines.  Running the compatibility blink/physics solvers as well
+        // would apply those effects twice.
+        if(!hasNativeBackend) {
+            stepAutoBlinkControllersLike_0x660FBC(actualDelta);
+        }
 
         applyEvalResultPostProcessLike_0x67CC9C();
-        stepEmotePhysicsLike_0x678B28(actualDelta);
+        if(hasNativeBackend) {
+            std::vector<MotionBackendValue> variables;
+            variables.reserve(_evalResultValues.size() * 2u);
+            for(const auto &[label, value] : _evalResultValues) {
+                if(label.empty() || !std::isfinite(value)) {
+                    continue;
+                }
+                variables.push_back(MotionBackendValue::String(label));
+                variables.push_back(MotionBackendValue::Number(value));
+            }
+            if(!variables.empty()) {
+                invokeNativeBackend("setvariables", variables);
+            }
+            invokeNativeBackend(
+                "progress", { MotionBackendValue::Number(actualDelta) });
+            _layersDirty = false;
+            _emoteDirty = true;
+        } else {
+            stepEmotePhysicsLike_0x678B28(actualDelta);
+        }
 
         // Camera velocity/friction moved to updateLayers pre-loop (0x6BB360..0x6BB42C)
 

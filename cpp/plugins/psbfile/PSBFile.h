@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include <spdlog/spdlog.h>
 
@@ -104,11 +106,18 @@ namespace PSB {
 
         PSBType getType() const { return _type; }
 
+        // Exact object image handed to the parser after container
+        // decompression and the title-provided pre-parse transform. Native
+        // E-mote backends consume the same bytes without reopening archives.
+        [[nodiscard]] const std::shared_ptr<const std::vector<std::uint8_t>> &
+        getObjectImage() const { return _objectImage; }
+
     private:
         int _seed = 0;
         PreParseCallback _preParseCallback;
         PSBHeader _header{};
         std::shared_ptr<IPSBValue> _root{};
+        std::shared_ptr<const std::vector<std::uint8_t>> _objectImage;
         PSBType _type{ PSBType::PSB };
 
         PSBType inferType() {

@@ -87,6 +87,10 @@ public:
                               const tTVPPointD *dst_points,
                               const tTVPPointD *src_points, int opacity,
                               uint32_t blend_mode);
+    bool DrawExternalTrianglesGpuFrom(
+        uint64_t source_gpu_handle, uint32_t triangle_count,
+        const tTVPRect &clip_rc, const tTVPPointD *dst_points,
+        const tTVPPointD *src_points, int opacity, uint32_t blend_mode);
     bool DrawMaskedTrianglesGpuFrom(
         GodotTexture2D *src, GodotTexture2D *mask,
         uint32_t triangle_count, const tTVPRect &clip_rc,
@@ -106,6 +110,7 @@ public:
                        const tTVPRect &src3_rc, uint32_t mode, int opacity,
                        uint32_t color);
     bool UploadCpuToGpu(bool flush_pending_gpu_writes = true);
+    bool UpdateGpuRgba(const void *pixels, uint32_t stride_bytes);
     void MarkGpuDirty() { gpu_dirty_ = true; }
     void MarkCpuDirty() { cpu_dirty_ = true; gpu_dirty_ = false; }
     void EnsureCpuReadable();
@@ -191,6 +196,8 @@ class iTVPBaseBitmap;
 // clear the private texture on the ordered GPU queue.
 bool TVPGodotClearMotionScratchInPlace(
     iTVPBaseBitmap *bitmap, const tTVPRect &rect, uint32_t argb);
+bool TVPGodotUploadRgbaInPlace(
+    iTVPBaseBitmap *bitmap, const void *pixels, uint32_t stride_bytes);
 
 // Compose a source bitmap through the alpha union of one or more mask
 // bitmaps without synchronously reading Metal textures back to the CPU.

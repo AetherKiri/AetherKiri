@@ -199,7 +199,9 @@ func _initialize() -> void:
         ok = ok and bool(native_status.get("raw_source_output", false))
         player.set_frame_native_output_enabled(false)
         var surface_status: Dictionary = player.get_frame_enhancement_status()
-        ok = ok and not bool(surface_status.get("raw_source_output", true))
+        ok = ok and bool(surface_status.get("raw_source_output", false)) == bool(
+            surface_status.get("platform_raw_source", false)
+        )
         player.destroy_engine()
 
     player.queue_free()

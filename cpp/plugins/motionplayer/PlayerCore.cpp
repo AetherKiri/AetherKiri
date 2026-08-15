@@ -472,6 +472,44 @@ namespace motion {
         releaseYuzuSdAutoProgressClaim();
     }
 
+    bool Player::invokeNativeBackend(
+        const std::string &method,
+        const std::vector<MotionBackendValue> &arguments,
+        std::vector<MotionBackendValue> *results) {
+        if(!_nativeBackend) {
+            return false;
+        }
+        std::string error;
+        if(_nativeBackend->invoke(method, arguments, results, &error)) {
+            return true;
+        }
+        if(LOGGER) {
+            LOGGER->warn("native motion backend {} failed: {}", method,
+                         error);
+        }
+        return false;
+    }
+
+    bool Player::assignNativeBackendState(const Player &source) {
+        if(!_nativeBackend || !source._nativeBackend) {
+            return false;
+        }
+        std::string error;
+        if(_nativeBackend->assignState(*source._nativeBackend, &error)) {
+            return true;
+        }
+        if(LOGGER) {
+            LOGGER->warn("native E-mote assignState failed: {}", error);
+        }
+        return false;
+    }
+
+    void Player::enableEmoteAnimatorQueuing() {
+        _emoteAnimatorFlag = true;
+        invokeNativeBackend(
+            "setqueuing", { MotionBackendValue::Boolean(true) });
+    }
+
     void Player::claimYuzuSdAutoProgress() {
         if(_motionParentPlayer || !_runtime || !_runtime->activeMotion ||
            !isYuzuSdPresentationMotionPath(_runtime->activeMotion->path)) {
@@ -1254,7 +1292,29 @@ namespace motion {
     // Sets activeMotion directly from a pre-loaded snapshot, bypassing file I/O.
     // Used by EmotePlayer.setModule() to bridge loaded PSB data into the Player pipeline.
     void Player::loadFromSnapshot(
-        std::shared_ptr<detail::MotionSnapshot> snapshot) {
+        std::shared_ptr<detail::MotionSnapshot> snapshot,
+        std::vector<std::shared_ptr<detail::MotionSnapshot>>
+            nativeObjectSnapshots) {
+        std::string nativeBackendSourcePath = snapshot ? snapshot->path
+                                                       : std::string{};
+        if(!nativeObjectSnapshots.empty()) {
+            nativeBackendSourcePath.clear();
+            for(const auto &objectSnapshot : nativeObjectSnapshots) {
+                if(!objectSnapshot || objectSnapshot->path.empty()) {
+                    continue;
+                }
+                if(!nativeBackendSourcePath.empty()) {
+                    nativeBackendSourcePath += ':';
+                }
+                nativeBackendSourcePath += objectSnapshot->path;
+            }
+            if(nativeBackendSourcePath.empty() && snapshot) {
+                nativeBackendSourcePath = snapshot->path;
+            }
+        }
+        const bool reuseNativeBackend =
+            snapshot && _nativeBackend &&
+            _nativeBackendSourcePath == nativeBackendSourcePath;
         // A newly bound motion starts on its own local timeline.  Motion
         // sub-nodes reuse Player instances while switching between clips
         // such as `select`, `over`, and `out`; carrying the previous clip's
@@ -1284,6 +1344,10 @@ namespace motion {
         _mirrorPositiveCache.clear();
         _mirrorNegativeCache.clear();
         _motionExtensionState.reset();
+        if(!reuseNativeBackend) {
+            _nativeBackend.reset();
+            _nativeBackendSourcePath.clear();
+        }
         disableAutoProgress();
 
         if(snapshot) {
@@ -1293,6 +1357,45 @@ namespace motion {
             }
             activateMotion(*_runtime, snapshot);
             syncVariableKeysFromActiveMotion();
+            if(!reuseNativeBackend) {
+                // A native player renders the complete model from
+                // the root. Motion child Players are only an implementation
+                // detail of the public compatibility renderer; attaching a
+                // second full native model to every child multiplies startup and
+                // frame work by the number of authored motion nodes.
+                if(!_motionParentPlayer) {
+                    const auto *extension = motionPlayerExtension();
+                    if(extension && extension->createNativePlayer &&
+                       snapshot->objectImage &&
+                       !snapshot->objectImage->empty()) {
+                        std::string error;
+                        detail::MotionSnapshot nativeRequest;
+                        nativeRequest.path = snapshot->path;
+                        nativeRequest.file = snapshot->file;
+                        nativeRequest.objectImage = snapshot->objectImage;
+                        nativeRequest.root = snapshot->root;
+                        nativeRequest.width = snapshot->width;
+                        nativeRequest.height = snapshot->height;
+                        nativeRequest.nativeObjectSnapshots =
+                            std::move(nativeObjectSnapshots);
+                        _nativeBackend = extension->createNativePlayer(
+                            nativeRequest, &error);
+                        if(LOGGER) {
+                            if(_nativeBackend) {
+                                _nativeBackendSourcePath =
+                                    nativeBackendSourcePath;
+                                LOGGER->info(
+                                    "Kiri native motion backend active ({})",
+                                    snapshot->path);
+                            } else {
+                                LOGGER->warn(
+                                    "Kiri native motion backend unavailable for {}: {}",
+                                    snapshot->path, error);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1956,6 +2059,7 @@ namespace motion {
                   { "value", static_cast<tjs_int64>(_emoteColorState.packed) },
                   { "transition", _emoteColorState.transition },
                   { "ease", _emoteColorState.ease },
+                  { "set", _emoteColorState.explicitlySet },
               }) },
             { "r", detail::makeDictionary({
                   { "value", _emoteRotState.value },
@@ -2247,6 +2351,9 @@ namespace motion {
             if(getObjectProperty(value, TJS_W("color"), component) &&
                component.Type() == tvtObject) {
                 double packed = static_cast<double>(_emoteColorState.packed);
+                bool hasExplicitFlag = readBool(
+                    component, TJS_W("set"),
+                    _emoteColorState.explicitlySet);
                 if(readNumber(component, TJS_W("value"), packed)) {
                     _emoteColorState.packed = static_cast<tjs_uint32>(packed);
                     const auto color = _emoteColorState.packed;
@@ -2258,6 +2365,14 @@ namespace motion {
                         static_cast<std::uint8_t>(color));
                     _emoteColorState.rgbaBytes[3] = static_cast<float>(
                         static_cast<std::uint8_t>(color >> 24));
+                }
+                if(!hasExplicitFlag) {
+                    // Older serialized players did not distinguish the
+                    // untouched default value (zero) from an explicit color.
+                    // Treat a non-zero legacy value as authored, while keeping
+                    // the native backend's visible default for untouched players.
+                    _emoteColorState.explicitlySet =
+                        _emoteColorState.packed != 0;
                 }
                 readNumber(component, TJS_W("transition"),
                            _emoteColorState.transition);
@@ -2468,6 +2583,153 @@ namespace motion {
             }
         }
 
+        if(restoredTimelines && _nativeBackend && _runtime->activeMotion) {
+            const auto nativeTimelineLabels = [this](
+                const char *countMethod, const char *labelMethod) {
+                std::vector<MotionBackendValue> countResults;
+                if(!invokeNativeBackend(countMethod, {}, &countResults) ||
+                   countResults.empty() ||
+                   countResults.front().type !=
+                       MotionBackendValue::Type::Number) {
+                    return std::vector<std::string>{};
+                }
+                const int count = std::max(
+                    0, static_cast<int>(countResults.front().number));
+                std::vector<std::string> labels;
+                labels.reserve(static_cast<std::size_t>(count));
+                for(int index = 0; index < count; ++index) {
+                    std::vector<MotionBackendValue> labelResults;
+                    if(invokeNativeBackend(
+                           labelMethod,
+                           {MotionBackendValue::Number(index)},
+                           &labelResults) &&
+                       !labelResults.empty() &&
+                       labelResults.front().type ==
+                           MotionBackendValue::Type::String) {
+                        labels.push_back(labelResults.front().string);
+                    }
+                }
+                return labels;
+            };
+            const auto mainLabels = nativeTimelineLabels(
+                "countmaintimelines", "getmaintimelinelabelat");
+            const auto diffLabels = nativeTimelineLabels(
+                "countdifftimelines", "getdifftimelinelabelat");
+            struct NativeTimelineRestore {
+                std::string label;
+                int flags = 0;
+                double blendRatio = 1.0;
+            };
+            std::vector<NativeTimelineRestore> nativeTimelines;
+            for(const auto &label : _runtime->playingTimelineLabels) {
+                const auto stateIt = _runtime->timelines.find(label);
+                if(stateIt == _runtime->timelines.end() ||
+                   !stateIt->second.playing) {
+                    continue;
+                }
+                const int nativeFlags = exactMotionBackendTimelineFlags(
+                    label, mainLabels, diffLabels);
+                if(nativeFlags == 0) {
+                    continue;
+                }
+                const auto duplicate = std::find_if(
+                    nativeTimelines.begin(), nativeTimelines.end(),
+                    [&label](const auto &entry) {
+                        return entry.label == label;
+                    });
+                if(duplicate == nativeTimelines.end()) {
+                    nativeTimelines.push_back(NativeTimelineRestore{
+                        label, (stateIt->second.flags & ~3) | nativeFlags,
+                        stateIt->second.blendRatio});
+                }
+            }
+
+            // D3DEmote.tjs changes model resolution by serializing the old
+            // player, creating a fresh one, and unserializing into it.  The
+            // compatibility state above made getTimelinePlaying() report the
+            // restored waiting loop, but the fresh native player had
+            // never received PlayTimeline.  The script therefore skipped its
+            // own restart and the visible model froze after its initial pose.
+            // Rebuild the native timeline set from restored state atomically.
+            if(!nativeTimelines.empty()) {
+                invokeNativeBackend(
+                    "stoptimeline", {MotionBackendValue::String({})});
+                for(const auto &timeline : nativeTimelines) {
+                    invokeNativeBackend(
+                        "playtimeline",
+                        {MotionBackendValue::String(timeline.label),
+                         MotionBackendValue::Number(timeline.flags)});
+                    invokeNativeBackend(
+                        "settimelineblendratio",
+                        {MotionBackendValue::String(timeline.label),
+                         MotionBackendValue::Number(timeline.blendRatio),
+                         MotionBackendValue::Number(0.0),
+                         MotionBackendValue::Number(0.0),
+                         MotionBackendValue::Boolean(false)});
+                }
+            }
+
+            invokeNativeBackend(
+                "setcoord", {MotionBackendValue::Number(_emoteCoordState.x),
+                              MotionBackendValue::Number(_emoteCoordState.y),
+                              MotionBackendValue::Number(0.0),
+                              MotionBackendValue::Number(0.0)});
+            invokeNativeBackend(
+                "setscale", {MotionBackendValue::Number(_emoteScaleState.value),
+                              MotionBackendValue::Number(0.0),
+                              MotionBackendValue::Number(0.0)});
+            invokeNativeBackend(
+                "setrot", {MotionBackendValue::Number(_emoteRotState.value),
+                            MotionBackendValue::Number(0.0),
+                            MotionBackendValue::Number(0.0)});
+            if(_emoteColorState.explicitlySet) {
+                invokeNativeBackend(
+                    "setcolor",
+                    {MotionBackendValue::Number(_emoteColorState.packed),
+                     MotionBackendValue::Number(0.0),
+                     MotionBackendValue::Number(0.0)});
+            }
+            invokeNativeBackend(
+                "setmeshdivisionratio",
+                {MotionBackendValue::Number(_emoteMeshDivisionRatio)});
+            invokeNativeBackend(
+                "sethairscale", {MotionBackendValue::Number(_hairScale)});
+            invokeNativeBackend(
+                "setpartsscale", {MotionBackendValue::Number(_partsScale)});
+            invokeNativeBackend(
+                "setbustscale", {MotionBackendValue::Number(_bustScale)});
+            if(_emoteAnimatorFlag) {
+                invokeNativeBackend(
+                    "setqueuing", {MotionBackendValue::Boolean(true)});
+            }
+            if(_windState.active) {
+                invokeNativeBackend(
+                    "startwind",
+                    {MotionBackendValue::Number(_windState.minAngle),
+                     MotionBackendValue::Number(_windState.maxAngle),
+                     MotionBackendValue::Number(_windState.amplitude),
+                     MotionBackendValue::Number(_windState.freqX),
+                     MotionBackendValue::Number(_windState.freqY)});
+            }
+            for(const auto &[label, force] :
+                std::initializer_list<std::pair<const char *,
+                                                const OuterForceState &>>{
+                    {"bust", _bustOuterForce},
+                    {"h", _hairOuterForce},
+                    {"parts", _partsOuterForce},
+                }) {
+                if(force.active) {
+                    invokeNativeBackend(
+                        "setouterforce",
+                        {MotionBackendValue::String(label),
+                         MotionBackendValue::Number(force.x),
+                         MotionBackendValue::Number(force.y),
+                         MotionBackendValue::Number(0.0),
+                         MotionBackendValue::Number(0.0)});
+                }
+            }
+        }
+
         _allplaying = !_runtime->playingTimelineLabels.empty();
         _layersDirty = true;
         _emoteDirty = true;
@@ -2483,6 +2745,11 @@ namespace motion {
         _emoteCoordState.ease = ease;
         setX(x);
         setY(y);
+        invokeNativeBackend(
+            "setcoord", { MotionBackendValue::Number(x),
+                           MotionBackendValue::Number(y),
+                           MotionBackendValue::Number(transition),
+                           MotionBackendValue::Number(ease) });
         _emoteDirty = true;
     }
 
@@ -2496,6 +2763,10 @@ namespace motion {
         _emoteScaleState.ease = ease;
         _emoteDirty = true;
         _layersDirty = true;
+        invokeNativeBackend(
+            "setscale", { MotionBackendValue::Number(scale),
+                           MotionBackendValue::Number(transition),
+                           MotionBackendValue::Number(ease) });
         if(LOGGER && std::getenv("AETHERKIRI_EMOTE_AFFINE_TRACE") &&
            std::fabs(previousScale - scale) > 1e-7) {
             LOGGER->info(
@@ -2518,6 +2789,10 @@ namespace motion {
         _emoteRotState.ease = ease;
         _emoteDirty = true;
         _layersDirty = true;
+        invokeNativeBackend(
+            "setrot", { MotionBackendValue::Number(rot),
+                         MotionBackendValue::Number(transition),
+                         MotionBackendValue::Number(ease) });
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer_setColor (0x530314):
@@ -2526,6 +2801,7 @@ namespace motion {
     void Player::setEmoteColor(tjs_uint32 color, double transition,
                                double ease) {
         _emoteColorState.packed = color;
+        _emoteColorState.explicitlySet = true;
         _emoteColorState.rgbaBytes[0] =
             static_cast<float>(static_cast<std::uint8_t>(color >> 16));
         _emoteColorState.rgbaBytes[1] =
@@ -2539,6 +2815,10 @@ namespace motion {
         _colorWeightPacked = swapPackedRbLike_0x6CD710(color);
         _emoteDirty = true;
         _layersDirty = true;
+        invokeNativeBackend(
+            "setcolor", { MotionBackendValue::Number(color),
+                           MotionBackendValue::Number(transition),
+                           MotionBackendValue::Number(ease) });
     }
 
     void Player::setMirror(bool mirror) {
@@ -2555,6 +2835,8 @@ namespace motion {
 
     void Player::setEmoteMeshDivisionRatio(double v) {
         _emoteMeshDivisionRatio = v;
+        invokeNativeBackend(
+            "setmeshdivisionratio", { MotionBackendValue::Number(v) });
     }
 
     // Aligned to libkrkr2.so:
@@ -2566,6 +2848,8 @@ namespace motion {
                          _hairScale, s);
         }
         _hairScale = s;
+        invokeNativeBackend("sethairscale",
+                            { MotionBackendValue::Number(s) });
     }
     // sub_681F28: player+1192 = a2
     void Player::setPartsScale(double s) {
@@ -2575,6 +2859,8 @@ namespace motion {
                          _partsScale, s);
         }
         _partsScale = s;
+        invokeNativeBackend("setpartsscale",
+                            { MotionBackendValue::Number(s) });
     }
     // sub_681F30: player+1200 = a2
     void Player::setBustScale(double s) {
@@ -2584,6 +2870,8 @@ namespace motion {
                          _bustScale, s);
         }
         _bustScale = s;
+        invokeNativeBackend("setbustscale",
+                            { MotionBackendValue::Number(s) });
     }
     // player+1176, consumed by sub_678D50 while interpolating the authored
     // point-shape anchor against the camera origin.
@@ -2639,12 +2927,19 @@ namespace motion {
             : 1.0;
         _windState.scaledAmplitude = direction * (absAmplitude / ratio);
         _windState.counter = 0;
+        invokeNativeBackend(
+            "startwind", { MotionBackendValue::Number(minAngle),
+                            MotionBackendValue::Number(maxAngle),
+                            MotionBackendValue::Number(amplitude),
+                            MotionBackendValue::Number(freqX),
+                            MotionBackendValue::Number(freqY) });
         _emoteDirty = true;
     }
 
     // Aligned to sub_681A38: delete wind simulator and clear player+1128.
     void Player::stopWind() {
         _windState = {};
+        invokeNativeBackend("stopwind");
         _emoteDirty = true;
     }
 
@@ -2670,6 +2965,12 @@ namespace motion {
         target->y = y;
         target->transition = transition;
         target->ease = ease;
+        invokeNativeBackend(
+            "setouterforce", { MotionBackendValue::String(key),
+                                MotionBackendValue::Number(x),
+                                MotionBackendValue::Number(y),
+                                MotionBackendValue::Number(transition),
+                                MotionBackendValue::Number(ease) });
         _emoteDirty = true;
     }
 

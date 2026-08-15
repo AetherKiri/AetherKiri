@@ -168,7 +168,10 @@ typedef struct engine_runtime_provider_v1_t {
    */
   engine_result_t (*get_text_input_state)(void* runtime,
                                           uint32_t* out_state_flags);
-  void* reserved_ptr[6];
+  /* Uses one reserved slot without changing this structure's ABI size. */
+  engine_result_t (*get_godot_presentation_state)(
+      void* runtime, uint32_t* out_state_flags);
+  void* reserved_ptr[5];
 } engine_runtime_provider_v1_t;
 
 #define ENGINE_RUNTIME_PROVIDER_V1_MIN_SIZE                              \
