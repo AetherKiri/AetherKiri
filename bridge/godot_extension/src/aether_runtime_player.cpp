@@ -4,6 +4,7 @@
 #include "GodotGpuBridge.h"
 #include "GodotGpuBarrierShadowPlanner.h"
 #include "ComplexRect.h"
+#include "RuntimeTickPacer.h"
 #include "frame_effect_host.h"
 #if defined(AETHERKIRI_WITH_ONSCRIPTER)
 #include "onscripter_runtime.h"
@@ -7086,6 +7087,7 @@ public:
 
     void destroy_engine() {
         media_close();
+        reset_runtime_tick_timing();
         if (handle_ == nullptr) {
             return;
         }
@@ -7317,10 +7319,18 @@ public:
         }
 
         CharString path_utf8 = game_root_path.utf8();
+        const String normalized_runtime = runtime_id_.strip_edges().to_lower();
+        artemis_logical_frame_pacing_ = normalized_runtime == "artemis" ||
+            (normalized_runtime == "auto" &&
+             engine_probe_runtime_provider("artemis", path_utf8.get_data()) > 0);
+        reset_runtime_tick_timing(false);
         const engine_result_t result = async
             ? engine_open_game_async(handle_, path_utf8.get_data(), nullptr)
             : engine_open_game(handle_, path_utf8.get_data(), nullptr);
         game_open_ = result == ENGINE_RESULT_OK;
+        if (!game_open_) {
+            artemis_logical_frame_pacing_ = false;
+        }
         update_last_error(result);
         return result;
     }
@@ -7329,8 +7339,20 @@ public:
         if (handle_ == nullptr) {
             return ENGINE_RESULT_INVALID_STATE;
         }
-        const auto delta_ms = static_cast<uint32_t>(
-            std::max(0.0, delta_seconds) * 1000.0);
+        double runtime_delta_seconds = std::max(0.0, delta_seconds);
+        if (artemis_logical_frame_pacing_) {
+            const auto step = artemis_logical_frame_pacer_.Advance(
+                runtime_delta_seconds);
+            if (!step.should_tick) {
+                drain_platform_requests();
+                last_result_ = ResultToString(ENGINE_RESULT_OK);
+                last_error_ = "";
+                return ENGINE_RESULT_OK;
+            }
+            runtime_delta_seconds = step.delta_seconds;
+        }
+        const uint32_t delta_ms =
+            runtime_tick_quantizer_.Quantize(runtime_delta_seconds);
         const engine_result_t result = engine_tick(handle_, delta_ms);
         drain_platform_requests();
         update_last_error(result);
@@ -7342,6 +7364,7 @@ public:
             return ENGINE_RESULT_INVALID_STATE;
         }
         const engine_result_t result = engine_pause(handle_);
+        if (result == ENGINE_RESULT_OK) reset_runtime_tick_timing(false);
         update_last_error(result);
         return result;
     }
@@ -7351,6 +7374,7 @@ public:
             return ENGINE_RESULT_INVALID_STATE;
         }
         const engine_result_t result = engine_resume(handle_);
+        if (result == ENGINE_RESULT_OK) reset_runtime_tick_timing(false);
         update_last_error(result);
         return result;
     }
@@ -9449,6 +9473,12 @@ private:
         last_error_ = LastError(handle_);
     }
 
+    void reset_runtime_tick_timing(bool clear_artemis_mode = true) {
+        artemis_logical_frame_pacer_.Reset();
+        runtime_tick_quantizer_.Reset();
+        if (clear_artemis_mode) artemis_logical_frame_pacing_ = false;
+    }
+
     void sync_frame_effect_source_mode(bool force = false) {
         bool publish_raw_source =
             frame_native_output_enabled_ || platform_prefers_raw_source();
@@ -9505,6 +9535,11 @@ private:
     double source_query_ms_ = 0.0;
     double present_copy_ms_ = 0.0;
     String runtime_id_ = "auto";
+    aetherkiri::godot_host::ArtemisLogicalFramePacer
+        artemis_logical_frame_pacer_;
+    aetherkiri::godot_host::RuntimeTickMillisecondQuantizer
+        runtime_tick_quantizer_;
+    bool artemis_logical_frame_pacing_ = false;
     Ref<ImageTexture> frame_texture_;
     Ref<Texture2DRD> frame_rd_texture_;
     RID frame_rd_rid_;
