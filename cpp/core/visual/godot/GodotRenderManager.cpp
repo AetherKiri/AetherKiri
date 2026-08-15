@@ -825,6 +825,30 @@ bool GodotTexture2D::DrawTrianglesGpuFrom(GodotTexture2D *src,
     return true;
 }
 
+bool GodotTexture2D::DrawExternalTrianglesGpuFrom(
+    uint64_t source_gpu_handle, uint32_t triangle_count,
+    const tTVPRect &clip_rc, const tTVPPointD *dst_points,
+    const tTVPPointD *src_points, int opacity, uint32_t blend_mode) {
+    if(source_gpu_handle == 0 || source_gpu_handle == gpu_handle_ ||
+       triangle_count == 0 || dst_points == nullptr ||
+       src_points == nullptr || gpu_handle_ == 0) {
+        return false;
+    }
+    const auto *bridge = TVPGodotGpuBridgeGet();
+    if(bridge == nullptr || bridge->draw_triangles == nullptr) return false;
+    const float normalizedOpacity =
+        static_cast<float>(std::clamp(opacity, 0, 255)) / 255.0f;
+    if(!bridge->draw_triangles(
+           gpu_handle_, source_gpu_handle, triangle_count, &clip_rc,
+           dst_points, src_points, normalizedOpacity, blend_mode)) {
+        return false;
+    }
+    gpu_dirty_ = true;
+    cpu_dirty_ = false;
+    MarkOpacityUnknown();
+    return true;
+}
+
 bool GodotTexture2D::DrawMaskedTrianglesGpuFrom(
     GodotTexture2D *src, GodotTexture2D *mask,
     uint32_t triangle_count, const tTVPRect &clip_rc,

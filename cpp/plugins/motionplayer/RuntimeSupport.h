@@ -318,6 +318,11 @@ namespace motion::detail {
         // for the original 1920x1080 allocation.
         tTJSVariant headlessRgbaRegionRenderLayer;
         tTJSVariant headlessRgbaRegionRenderLayer2;
+        // The official SDK imports its IOSurface/AHardwareBuffer as a Godot
+        // texture. Keep the producer lifetime through the next composition so
+        // queued KiriKiri draws never sample a recycled shared image.
+        std::shared_ptr<void> nativeBackendGpuFrameLifetime;
+        std::uint64_t nativeBackendGpuFrameCount = 0;
         // A provider can submit several independent E-mote surfaces before
         // synchronizing their GPU readbacks, matching Artemis' framebuffer
         // display pass instead of serially stalling after every player.
@@ -689,6 +694,8 @@ namespace motion::detail {
             nextD3DRenderLayer = 0;
             lastD3DRenderLayer = 0;
             lastD3DRasterPublishUs = 0;
+            nativeBackendGpuFrameLifetime.reset();
+            nativeBackendGpuFrameCount = 0;
             inheritedVariableInputs.clear();
             effectiveVariableScratch.clear();
             effectiveVariableScratchGeneration = 0;

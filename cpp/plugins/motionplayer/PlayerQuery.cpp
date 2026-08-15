@@ -1654,16 +1654,13 @@ namespace motion {
                 }
             }
 
-            // EmotePlayer::play() starts the retained model timeline through
-            // this compatibility entry point (usually `全体構造`).  The SDK
-            // backend owns animation evaluation and rendering, so keeping
-            // that start only in the legacy bookkeeping leaves the SDK model
-            // visible but entirely static: no blink, hair, bust, or body
-            // physics.  Mirror the resolved timeline into the backend.  The
-            // SDK's retained-player contract starts a main timeline with the
-            // parallel bit.  Force playback has already stopped the previous
-            // set above, while fallback labels must coexist just as they do in
-            // the compatibility timeline list.
+            // Mirror only an exact public SDK timeline. Kiri's retained root
+            // clips (`全体構造` / `タイムライン構造`) are bookkeeping entry
+            // points, not SDK timelines. Mapping one to the first available
+            // main timeline used to select `sample_全自動_test`, which is an
+            // authored demonstration sequence that intentionally cycles every
+            // expression. Blink and physics are independent SDK controllers
+            // and do not require that demo timeline to run.
             if(_nativeBackend) {
                 const auto nativeTimelineLabels = [&](const char *countMethod,
                                                       const char *labelMethod) {
@@ -1693,44 +1690,26 @@ namespace motion {
                     return labels;
                 };
 
-                // Kiri's metadata names the retained model/root clip (most
-                // commonly `全体構造`).  That is an internal clip, not a
-                // public SDK timeline; PlayTimeline deliberately returns no
-                // status, so passing it through appears successful while the
-                // model remains frozen.  Resolve it against the SDK's actual
-                // main-timeline table.  Official E-mote's generated Kiri
-                // models publish `sample_全自動_test` as the base timeline;
-                // it owns automatic blink plus hair/body/bust physics.  Keep
-                // an exact requested main timeline when one exists, then use
-                // the authored first timeline as the general fallback.
                 const auto mainLabels = nativeTimelineLabels(
                     "countmaintimelines", "getmaintimelinelabelat");
-                std::string nativeTimelineLabel = timelineLabel;
-                if(std::find(mainLabels.begin(), mainLabels.end(),
-                             nativeTimelineLabel) == mainLabels.end()) {
-                    constexpr const char *kGeneratedBaseTimeline =
-                        "sample_全自動_test";
-                    const auto generated = std::find(
-                        mainLabels.begin(), mainLabels.end(),
-                        kGeneratedBaseTimeline);
-                    if(generated != mainLabels.end()) {
-                        nativeTimelineLabel = *generated;
-                    } else if(!mainLabels.empty()) {
-                        nativeTimelineLabel = mainLabels.front();
-                    }
-                }
-                const bool nativeStarted = invokeNativeBackend(
-                    "playtimeline",
-                    { MotionBackendValue::String(nativeTimelineLabel),
-                      MotionBackendValue::Number(1) });
+                const auto diffLabels = nativeTimelineLabels(
+                    "countdifftimelines", "getdifftimelinelabelat");
+                const int nativeFlags = exactMotionBackendTimelineFlags(
+                    timelineLabel, mainLabels, diffLabels);
+                const bool nativeStarted = nativeFlags != 0 &&
+                    invokeNativeBackend(
+                        "playtimeline",
+                        { MotionBackendValue::String(timelineLabel),
+                          MotionBackendValue::Number(nativeFlags) });
                 if(emoteTimelineTraceEnabled() && LOGGER) {
                     LOGGER->info(
-                        "[EMOTE_TIMELINE] native base play motion={} requested={} resolved={} flags=1 started={} main=[{}]",
+                        "[EMOTE_TIMELINE] native exact play motion={} requested={} mirrored={} flags={} main=[{}] diff=[{}]",
                         _runtime->activeMotion
                             ? _runtime->activeMotion->path
                             : std::string{},
-                        timelineLabel, nativeTimelineLabel,
-                        nativeStarted ? 1 : 0, joinStrings(mainLabels));
+                        timelineLabel, nativeStarted ? 1 : 0,
+                        nativeFlags,
+                        joinStrings(mainLabels), joinStrings(diffLabels));
                 }
             }
         };

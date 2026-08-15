@@ -155,6 +155,36 @@ TEST_CASE("motionplayer optional E-mote extension matches build mode") {
 #endif
 }
 
+TEST_CASE("motionplayer mirrors only exact native E-mote timelines") {
+    const std::vector<std::string> mainLabels{
+        "sample_全自動_test", "平常"};
+    const std::vector<std::string> diffLabels{
+        "差分用_waiting_loop2"};
+
+    REQUIRE(motion::exactMotionBackendTimelineFlags(
+                "全体構造", mainLabels, diffLabels) == 0);
+    REQUIRE(motion::exactMotionBackendTimelineFlags(
+                "タイムライン構造", mainLabels, diffLabels) == 0);
+    REQUIRE(motion::exactMotionBackendTimelineFlags(
+                "平常", mainLabels, diffLabels) == 1);
+    REQUIRE(motion::exactMotionBackendTimelineFlags(
+                "差分用_waiting_loop2", mainLabels, diffLabels) == 3);
+}
+
+TEST_CASE("motionplayer validates shared GPU E-mote frame ownership") {
+    motion::MotionBackendGpuFrame frame;
+    frame.texture = 7;
+    frame.frameWidth = 1280;
+    frame.frameHeight = 720;
+    REQUIRE_FALSE(frame.valid());
+
+    frame.lifetime = std::make_shared<int>(1);
+    REQUIRE(frame.valid());
+
+    frame.frameWidth = 0;
+    REQUIRE_FALSE(frame.valid());
+}
+
 TEST_CASE("motionplayer reuses effective-variable scratch across frames") {
     motion::detail::PlayerRuntime runtime;
 

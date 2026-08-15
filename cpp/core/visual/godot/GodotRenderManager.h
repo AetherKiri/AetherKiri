@@ -87,6 +87,10 @@ public:
                               const tTVPPointD *dst_points,
                               const tTVPPointD *src_points, int opacity,
                               uint32_t blend_mode);
+    bool DrawExternalTrianglesGpuFrom(
+        uint64_t source_gpu_handle, uint32_t triangle_count,
+        const tTVPRect &clip_rc, const tTVPPointD *dst_points,
+        const tTVPPointD *src_points, int opacity, uint32_t blend_mode);
     bool DrawMaskedTrianglesGpuFrom(
         GodotTexture2D *src, GodotTexture2D *mask,
         uint32_t triangle_count, const tTVPRect &clip_rc,

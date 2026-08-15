@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -58,6 +59,47 @@ namespace motion {
         bool alphaPremultiplied = true;
     };
 
+    // SDK-neutral description of a frame that remains resident in the host
+    // GPU. The producer-owned lifetime keeps the imported shared image alive
+    // until both the backend and KiriKiri composition have moved past it.
+    struct MotionBackendGpuFrame {
+        std::uint64_t texture = 0;
+        std::shared_ptr<void> lifetime;
+        std::uint32_t canvasWidth = 0;
+        std::uint32_t canvasHeight = 0;
+        std::uint32_t frameLeft = 0;
+        std::uint32_t frameTop = 0;
+        std::uint32_t frameWidth = 0;
+        std::uint32_t frameHeight = 0;
+        std::uint32_t textureWidth = 0;
+        std::uint32_t textureHeight = 0;
+        bool alphaPremultiplied = true;
+        bool flippedY = false;
+
+        bool valid() const {
+            return texture != 0 && lifetime != nullptr &&
+                frameWidth != 0 && frameHeight != 0;
+        }
+    };
+
+    // Kiri retained-root clips and SDK public timelines occupy different
+    // namespaces. Return SDK flags only for an exact public label so callers
+    // never substitute an authored demo timeline for an internal root.
+    inline int exactMotionBackendTimelineFlags(
+        const std::string &requested,
+        const std::vector<std::string> &mainLabels,
+        const std::vector<std::string> &diffLabels) {
+        if(std::find(diffLabels.begin(), diffLabels.end(), requested) !=
+           diffLabels.end()) {
+            return 3;
+        }
+        if(std::find(mainLabels.begin(), mainLabels.end(), requested) !=
+           mainLabels.end()) {
+            return 1;
+        }
+        return 0;
+    }
+
     // Versioned, SDK-neutral player seam. Private packages may implement it;
     // public-only builds retain the compatible software renderer.
     class MotionNativePlayerBackend {
@@ -74,6 +116,16 @@ namespace motion {
         virtual bool render(std::uint32_t width, std::uint32_t height,
                             MotionBackendFrame *frame,
                             std::string *error) = 0;
+        virtual bool supportsGpuOutput() const { return false; }
+        virtual bool renderGpu(std::uint32_t width, std::uint32_t height,
+                               MotionBackendGpuFrame *frame,
+                               std::string *error) {
+            (void)width;
+            (void)height;
+            (void)frame;
+            if(error) *error = "native GPU motion output is unavailable";
+            return false;
+        }
     };
 
     struct MotionRenderPolicyV1 {
@@ -120,7 +172,7 @@ namespace motion {
     // Small, versioned seam for optional motionplayer features.  The public
     // backend remains the only backend; private packages may register focused
     // controller implementations without copying or replacing it.
-    struct MotionPlayerExtensionV3 {
+    struct MotionPlayerExtensionV4 {
         std::uint32_t abiVersion = 0;
         bool (*detectExtendedEmoteMode)(
             const detail::MotionSnapshot &snapshot) = nullptr;
@@ -151,9 +203,9 @@ namespace motion {
             std::string *error) = nullptr;
     };
 
-    inline constexpr std::uint32_t kMotionPlayerExtensionAbiVersion = 3;
+    inline constexpr std::uint32_t kMotionPlayerExtensionAbiVersion = 4;
 
     bool registerMotionPlayerExtension(
-        const MotionPlayerExtensionV3 *extension);
-    const MotionPlayerExtensionV3 *motionPlayerExtension();
+        const MotionPlayerExtensionV4 *extension);
+    const MotionPlayerExtensionV4 *motionPlayerExtension();
 }

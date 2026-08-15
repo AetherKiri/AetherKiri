@@ -2586,25 +2586,6 @@ namespace motion {
                 "countmaintimelines", "getmaintimelinelabelat");
             const auto diffLabels = nativeTimelineLabels(
                 "countdifftimelines", "getdifftimelinelabelat");
-            const auto isNativeLabel = [](const auto &labels,
-                                          const std::string &label) {
-                return std::find(labels.begin(), labels.end(), label) !=
-                    labels.end();
-            };
-            const auto resolveMainLabel = [&mainLabels, &isNativeLabel](
-                const std::string &requested) {
-                if(isNativeLabel(mainLabels, requested)) {
-                    return requested;
-                }
-                constexpr const char *kGeneratedBaseTimeline =
-                    "sample_全自動_test";
-                if(isNativeLabel(mainLabels, kGeneratedBaseTimeline)) {
-                    return std::string(kGeneratedBaseTimeline);
-                }
-                return mainLabels.empty() ? std::string{}
-                                          : mainLabels.front();
-            };
-
             struct NativeTimelineRestore {
                 std::string label;
                 int flags = 0;
@@ -2617,30 +2598,19 @@ namespace motion {
                    !stateIt->second.playing) {
                     continue;
                 }
-                std::string nativeLabel;
-                if(isNativeLabel(mainLabels, label) ||
-                   isNativeLabel(diffLabels, label)) {
-                    nativeLabel = label;
-                } else if((stateIt->second.flags & 2) == 0) {
-                    // The compatibility parser can expose the retained root
-                    // clip (for example `全体構造`) instead of the SDK's
-                    // generated main-timeline label.  Serialized native flags
-                    // retain the authoritative distinction: bit 1 marks a
-                    // difference timeline, so a non-difference entry is the
-                    // main timeline and must be resolved through the SDK list.
-                    nativeLabel = resolveMainLabel(label);
-                }
-                if(nativeLabel.empty()) {
+                const int nativeFlags = exactMotionBackendTimelineFlags(
+                    label, mainLabels, diffLabels);
+                if(nativeFlags == 0) {
                     continue;
                 }
                 const auto duplicate = std::find_if(
                     nativeTimelines.begin(), nativeTimelines.end(),
-                    [&nativeLabel](const auto &entry) {
-                        return entry.label == nativeLabel;
+                    [&label](const auto &entry) {
+                        return entry.label == label;
                     });
                 if(duplicate == nativeTimelines.end()) {
                     nativeTimelines.push_back(NativeTimelineRestore{
-                        nativeLabel, stateIt->second.flags | 1,
+                        label, (stateIt->second.flags & ~3) | nativeFlags,
                         stateIt->second.blendRatio});
                 }
             }

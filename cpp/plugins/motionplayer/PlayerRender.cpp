@@ -12080,8 +12080,152 @@ namespace motion {
             return false;
         }
 
-        MotionBackendFrame frame;
         std::string error;
+        if(_nativeBackend->supportsGpuOutput()) {
+            MotionBackendGpuFrame gpuFrame;
+            if(_nativeBackend->renderGpu(
+                   static_cast<std::uint32_t>(canvasWidth),
+                   static_cast<std::uint32_t>(canvasHeight), &gpuFrame,
+                   &error) && gpuFrame.valid()) {
+                const std::uint32_t logicalWidth = gpuFrame.canvasWidth != 0
+                    ? gpuFrame.canvasWidth
+                    : static_cast<std::uint32_t>(canvasWidth);
+                const std::uint32_t logicalHeight = gpuFrame.canvasHeight != 0
+                    ? gpuFrame.canvasHeight
+                    : static_cast<std::uint32_t>(canvasHeight);
+                const std::uint32_t textureWidth = gpuFrame.textureWidth != 0
+                    ? gpuFrame.textureWidth : gpuFrame.frameWidth;
+                const std::uint32_t textureHeight = gpuFrame.textureHeight != 0
+                    ? gpuFrame.textureHeight : gpuFrame.frameHeight;
+                const bool validFrame =
+                    logicalWidth == static_cast<std::uint32_t>(canvasWidth) &&
+                    logicalHeight == static_cast<std::uint32_t>(canvasHeight) &&
+                    gpuFrame.frameLeft <= logicalWidth &&
+                    gpuFrame.frameTop <= logicalHeight &&
+                    gpuFrame.frameWidth <= logicalWidth - gpuFrame.frameLeft &&
+                    gpuFrame.frameHeight <= logicalHeight - gpuFrame.frameTop &&
+                    textureWidth != 0 && textureHeight != 0;
+                if(validFrame && LOGGER &&
+                   std::getenv("AETHERKIRI_EMOTE_GPU_TRACE")) {
+                    static std::uint32_t tracedFrames = 0;
+                    if(tracedFrames < 12) {
+                        ++tracedFrames;
+                        std::size_t visibleSamples = 0;
+                        bool readSucceeded = false;
+                        const auto *gpuBridge = TVPGodotGpuBridgeGet();
+                        constexpr std::size_t kMaximumTraceBytes =
+                            64u * 1024u * 1024u;
+                        const bool traceSizeValid = textureHeight <=
+                            kMaximumTraceBytes / 4u / textureWidth;
+                        const std::size_t traceBytes = traceSizeValid
+                            ? static_cast<std::size_t>(textureWidth) *
+                                textureHeight * 4u
+                            : 0u;
+                        std::vector<std::uint8_t> tracedRgba(traceBytes);
+                        if(gpuBridge && gpuBridge->read_rgba &&
+                           !tracedRgba.empty()) {
+                            readSucceeded = gpuBridge->read_rgba(
+                                gpuFrame.texture, tracedRgba.data(),
+                                tracedRgba.size(), textureWidth * 4u);
+                            if(readSucceeded) {
+                                for(std::size_t offset = 3;
+                                    offset < tracedRgba.size(); offset += 4) {
+                                    if(tracedRgba[offset] != 0) {
+                                        ++visibleSamples;
+                                    }
+                                }
+                            }
+                        }
+                        LOGGER->info(
+                            "[EMOTE_GPU] source={} canvas={}x{} frame=({},{} {}x{}) texture={}x{} premul={} flipped={} read={} visible={}",
+                            gpuFrame.texture, logicalWidth, logicalHeight,
+                            gpuFrame.frameLeft, gpuFrame.frameTop,
+                            gpuFrame.frameWidth, gpuFrame.frameHeight,
+                            textureWidth, textureHeight,
+                            gpuFrame.alphaPremultiplied ? 1 : 0,
+                            gpuFrame.flippedY ? 1 : 0,
+                            readSucceeded ? 1 : 0, visibleSamples);
+                    }
+                }
+                if(validFrame && prepareLayerForRender(
+                       layerObject, canvasWidth, canvasHeight, 0x00000000)) {
+                    auto *layer = resolveNativeLayer(layerObject);
+                    auto *bitmap = layer ? layer->GetMainImage() : nullptr;
+                    // D3DEmote renders into a reusable full-stage work layer
+                    // and then transfers that image to the character layer
+                    // with assignImages.  The transfer shares the texture.
+                    // Detach the work bitmap before clearing it, just like
+                    // TVPGodotUploadRgbaInPlace does for the CPU fallback;
+                    // otherwise the next character/frame clears the texture
+                    // that the preceding character is still presenting.
+                    if(bitmap) bitmap->IndependNoCopy();
+                    auto *texture = bitmap
+                        ? dynamic_cast<GodotTexture2D *>(bitmap->GetTexture())
+                        : nullptr;
+                    const tTVPRect fullRect(0, 0, canvasWidth, canvasHeight);
+                    if(texture && texture->EnsureGpuHandle() &&
+                       texture->ClearGpu(0x00000000u, fullRect)) {
+                        const double left = gpuFrame.frameLeft;
+                        const double top = gpuFrame.frameTop;
+                        const double right = left + gpuFrame.frameWidth;
+                        const double bottom = top + gpuFrame.frameHeight;
+                        double sourceTop = 0.0;
+                        double sourceBottom = textureHeight;
+                        if(gpuFrame.flippedY) {
+                            std::swap(sourceTop, sourceBottom);
+                        }
+                        const tTVPPointD destination[6] = {
+                            {left, top}, {right, top}, {left, bottom},
+                            {right, top}, {left, bottom}, {right, bottom},
+                        };
+                        const tTVPPointD source[6] = {
+                            {0.0, sourceTop},
+                            {static_cast<double>(textureWidth), sourceTop},
+                            {0.0, sourceBottom},
+                            {static_cast<double>(textureWidth), sourceTop},
+                            {0.0, sourceBottom},
+                            {static_cast<double>(textureWidth), sourceBottom},
+                        };
+                        std::uint32_t blendMode =
+                            TVP_GODOT_GPU_TRIANGLE_TVP_BLEND |
+                            // The SDK frame is copied into a transparent
+                            // intermediate Kiri layer. AlphaBlend preserves
+                            // the destination alpha (HDA), which leaves every
+                            // copied pixel transparent; AlphaBlend_d updates
+                            // both colour and alpha and is equivalent to the
+                            // CPU upload over this freshly cleared target.
+                            TVP_GODOT_GPU_BLEND_ALPHA_D;
+                        if(gpuFrame.alphaPremultiplied) {
+                            blendMode |=
+                                TVP_GODOT_GPU_TRIANGLE_SOURCE_PREMULTIPLIED;
+                        }
+                        if(texture->DrawExternalTrianglesGpuFrom(
+                               gpuFrame.texture, 2, fullRect, destination,
+                               source, 255, blendMode)) {
+                            _runtime->nativeBackendGpuFrameLifetime =
+                                std::move(gpuFrame.lifetime);
+                            ++_runtime->nativeBackendGpuFrameCount;
+                            if(!skipUpdate) layer->Update(false);
+                            _runtime->lastCanvas =
+                                tTJSVariant(layerObject, layerObject);
+                            _emoteDirty = false;
+                            return true;
+                        }
+                    }
+                }
+                error = validFrame
+                    ? "could not compose shared Kiri E-mote texture"
+                    : "invalid shared Kiri E-mote frame metadata";
+            }
+            if(LOGGER && !error.empty()) {
+                LOGGER->warn(
+                    "native E-mote GPU render failed; using CPU fallback: {}",
+                    error);
+            }
+            error.clear();
+        }
+
+        MotionBackendFrame frame;
         if(!_nativeBackend->render(
                static_cast<std::uint32_t>(canvasWidth),
                static_cast<std::uint32_t>(canvasHeight), &frame, &error)) {
