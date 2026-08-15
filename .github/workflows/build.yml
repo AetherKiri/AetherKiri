@@ -70,8 +70,73 @@ env:
   AETHER_APP_BUNDLE_ID: ${{ secrets.AETHERID || 'com.liuyu.aether.aether' }}
 
 jobs:
+  private-runtime-apple:
+    name: Prepare private Apple runtime dependencies
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
+    runs-on: macos-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+    steps:
+      - name: Checkout private runtime package
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+          ssh-key: ${{ secrets.AETHERSECRET }}
+          persist-credentials: false
+
+      - name: Resolve private runtime dependency cache
+        id: private-runtime-cache-key
+        run: |
+          key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
+            --platform apple --print-cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private runtime dependencies
+        uses: actions/cache@v5
+        with:
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/apple
+          key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
+
+      - name: Initialize private runtime dependencies
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform apple
+
+  private-runtime-android:
+    name: Prepare private Android runtime dependencies
+    needs: private-runtime-apple
+    if: ${{ !cancelled() && needs.private-runtime-apple.result == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+    steps:
+      - name: Checkout private runtime package
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+          ssh-key: ${{ secrets.AETHERSECRET }}
+          persist-credentials: false
+
+      - name: Resolve private runtime dependency cache
+        id: private-runtime-cache-key
+        run: |
+          key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
+            --platform android --print-cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private runtime dependencies
+        uses: actions/cache@v5
+        with:
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/android
+          key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
+
+      - name: Initialize private runtime dependencies
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform android
+
   android:
     name: Build Android App
+    needs: private-runtime-android
+    if: ${{ !cancelled() && (needs.private-runtime-android.result == 'success' || needs.private-runtime-android.result == 'skipped') }}
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -344,6 +409,8 @@ jobs:
 
   ios:
     name: Build iOS App
+    needs: private-runtime-apple
+    if: ${{ !cancelled() && (needs.private-runtime-apple.result == 'success' || needs.private-runtime-apple.result == 'skipped') }}
     runs-on: macos-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -626,6 +693,8 @@ jobs:
 
   macos:
     name: Build macOS App
+    needs: private-runtime-apple
+    if: ${{ !cancelled() && (needs.private-runtime-apple.result == 'success' || needs.private-runtime-apple.result == 'skipped') }}
     runs-on: macos-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
