@@ -4010,8 +4010,10 @@ void TVPShowScriptException(eTJSScriptError &e) {
         // Application->GetTitle(), mtStop, mbOK );
 
 #ifdef TVP_ENABLE_EXECUTE_AT_EXCEPTION
-        const tjs_char *scriptName = e.GetBlockNoAddRef()->GetName();
-        if(scriptName != nullptr && scriptName[0] != 0) {
+        auto *scriptBlock = e.GetBlockNoAddRef();
+        const tjs_char *scriptName = scriptBlock ? scriptBlock->GetName()
+                                                 : nullptr;
+        if(scriptBlock && scriptName != nullptr && scriptName[0] != 0) {
             ttstr path(scriptName);
             try {
                 ttstr newpath = TVPGetPlacedPath(path);
@@ -4022,9 +4024,9 @@ void TVPShowScriptException(eTJSScriptError &e) {
                 }
                 TVPGetLocalName(path);
                 std::wstring scriptPath(path.AsStdString());
-                tjs_int lineno = 1 +
-                    e.GetBlockNoAddRef()->SrcPosToLine(e.GetPosition()) -
-                    e.GetBlockNoAddRef()->GetLineOffset();
+                tjs_int lineno =
+                    1 + scriptBlock->SrcPosToLine(e.GetPosition()) -
+                    scriptBlock->GetLineOffset();
 
 #if defined(WIN32) && defined(_DEBUG) && !defined(ENABLE_DEBUGGER)
                 // デバッガ実行されている時、Visual Studio
