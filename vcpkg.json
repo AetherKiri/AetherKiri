@@ -68,6 +68,7 @@
     },
     "oniguruma",
     "openal-soft",
+    "openssl",
     {
       "name": "opencv4",
       "default-features": false,

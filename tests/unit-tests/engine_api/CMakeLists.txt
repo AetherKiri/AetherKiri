@@ -13,6 +13,13 @@ target_include_directories(engine-api-diagnostics PRIVATE
     ${CMAKE_SOURCE_DIR}/bridge/engine_api/include
     ${CMAKE_SOURCE_DIR}/bridge/engine_api/src
 )
-target_link_libraries(engine-api-diagnostics PRIVATE Catch2::Catch2WithMain)
+target_link_libraries(engine-api-diagnostics PRIVATE
+    Catch2::Catch2WithMain
+)
+
+if(AETHERKIRI_INTERNAL_ENABLED AND
+   COMMAND aetherinternal_extend_catsystem2_tests)
+    aetherinternal_extend_catsystem2_tests(engine-api-diagnostics)
+endif()
 
 catch_discover_tests(engine-api-diagnostics)

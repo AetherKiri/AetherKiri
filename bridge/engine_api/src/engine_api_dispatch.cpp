@@ -17,6 +17,9 @@
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
+#include <mach/mach.h>
+#include <mach/task_info.h>
+#include <sys/sysctl.h>
 #endif
 
 #include "engine_runtime_provider_registry.h"
@@ -26,6 +29,9 @@
 #include "visual/RenderManager.h"
 #endif
 
+#if defined(AETHERKIRI_INTERNAL_CATSYSTEM2)
+extern "C" void AetherInternalRegisterCatSystem2Runtime(void);
+#endif
 #if defined(AETHERKIRI_INTERNAL_ARTEMIS) && \
     defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
 extern "C" void AetherInternalRegisterArtemisRuntime(void);
@@ -80,6 +86,50 @@ bool ActivateProviderAudioSessionForHost() {
   return TVPActivateAudioSessionForHost();
 #else
   return true;
+#endif
+}
+
+void PopulateHostMemoryStats(engine_memory_stats_t* stats) {
+  if (stats == nullptr) return;
+#if defined(__APPLE__)
+  task_vm_info_data_t vm_info{};
+  mach_msg_type_number_t vm_info_count = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO,
+                reinterpret_cast<task_info_t>(&vm_info),
+                &vm_info_count) == KERN_SUCCESS) {
+    stats->process_resident_bytes = vm_info.resident_size;
+    stats->process_physical_footprint_bytes = vm_info.phys_footprint;
+    stats->process_peak_physical_footprint_bytes = std::max<uint64_t>(
+        stats->process_physical_footprint_bytes,
+        vm_info.ledger_phys_footprint_peak > 0
+            ? static_cast<uint64_t>(vm_info.ledger_phys_footprint_peak)
+            : 0u);
+    if (stats->self_used_mb == 0u && stats->process_resident_bytes != 0u) {
+      stats->self_used_mb = static_cast<uint32_t>(
+          stats->process_resident_bytes / (1024u * 1024u));
+    }
+  }
+
+  uint64_t total_bytes = 0u;
+  size_t total_size = sizeof(total_bytes);
+  if (sysctlbyname("hw.memsize", &total_bytes, &total_size, nullptr, 0) == 0) {
+    stats->system_total_mb =
+        static_cast<uint32_t>(total_bytes / (1024u * 1024u));
+  }
+  const mach_port_t host = mach_host_self();
+  vm_size_t page_size = 0u;
+  vm_statistics64_data_t vm_stats{};
+  mach_msg_type_number_t stats_count = HOST_VM_INFO64_COUNT;
+  if (host_page_size(host, &page_size) == KERN_SUCCESS &&
+      host_statistics64(host, HOST_VM_INFO64,
+                        reinterpret_cast<host_info64_t>(&vm_stats),
+                        &stats_count) == KERN_SUCCESS) {
+    const uint64_t available_pages =
+        static_cast<uint64_t>(vm_stats.free_count) + vm_stats.inactive_count;
+    stats->system_free_mb = static_cast<uint32_t>(
+        available_pages * page_size / (1024u * 1024u));
+  }
+  mach_port_deallocate(mach_task_self(), host);
 #endif
 }
 
@@ -396,6 +446,9 @@ engine_result_t engine_create(const engine_create_desc_t* desc,
                        "engine_create requires non-null desc and out_handle");
   }
   *out_handle = nullptr;
+#if defined(AETHERKIRI_INTERNAL_CATSYSTEM2)
+  AetherInternalRegisterCatSystem2Runtime();
+#endif
 #if defined(AETHERKIRI_INTERNAL_ARTEMIS) && \
     defined(AETHERKIRI_ENABLE_ARTEMIS_RUNTIME)
   AetherInternalRegisterArtemisRuntime();
@@ -1216,10 +1269,22 @@ engine_result_t engine_get_memory_stats(engine_handle_t public_handle,
                  return engine_legacy_get_memory_stats(legacy, out_stats);
                },
                [&](DispatchHandle* handle) {
-                 return PROVIDER_HAS(handle->provider, get_memory_stats)
-                            ? handle->provider->get_memory_stats(handle->runtime,
-                                                                 out_stats)
-                            : ENGINE_RESULT_NOT_SUPPORTED;
+                 if (out_stats == nullptr ||
+                     out_stats->struct_size < sizeof(engine_memory_stats_t)) {
+                   return ENGINE_RESULT_INVALID_ARGUMENT;
+                 }
+                 if (!PROVIDER_HAS(handle->provider, get_memory_stats)) {
+                   return ENGINE_RESULT_NOT_SUPPORTED;
+                 }
+                 std::memset(out_stats, 0, sizeof(*out_stats));
+                 out_stats->struct_size = sizeof(*out_stats);
+                 const engine_result_t result =
+                     handle->provider->get_memory_stats(handle->runtime,
+                                                        out_stats);
+                 if (result == ENGINE_RESULT_OK) {
+                   PopulateHostMemoryStats(out_stats);
+                 }
+                 return result;
                });
 }
 

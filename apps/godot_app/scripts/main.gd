@@ -8805,12 +8805,22 @@ func _path_exists(path: String) -> bool:
     return DirAccess.dir_exists_absolute(candidate) or FileAccess.file_exists(candidate)
 
 func _resolve_game_path(path: String) -> String:
-    var normalized := path.strip_edges()
-    if normalized.is_empty():
-        return normalized
+    # Native file pickers return authoritative filesystem paths.  A trailing
+    # space is a valid filename character on POSIX (and occurs in real game
+    # folders), so try the exact value before treating surrounding whitespace
+    # as accidental user input.
+    var normalized := path
+    if normalized.is_empty() or normalized.strip_edges().is_empty():
+        return ""
     if OS.get_name() == "Android":
         normalized = _android_external_storage_path_from_tree_uri(normalized)
-    if _path_exists(normalized) or OS.get_name() != "iOS":
+    if _path_exists(normalized):
+        return normalized
+
+    var trimmed := normalized.strip_edges()
+    if trimmed != normalized and _path_exists(trimmed):
+        return trimmed
+    if OS.get_name() != "iOS":
         return normalized
 
     var current_root := ProjectSettings.globalize_path("user://Games")
@@ -10201,6 +10211,7 @@ func _show_runtime_dialog(values: Dictionary) -> void:
         runtime_dialog_input.custom_minimum_size = Vector2(0, 68)
         runtime_dialog_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         runtime_dialog_input.add_theme_font_size_override("font_size", 25)
+        runtime_dialog_input.text = String(values.get("text", ""))
         var maximum_characters := int(
             String(values.get("maximum_characters", "0"))
         )
@@ -10214,14 +10225,20 @@ func _show_runtime_dialog(values: Dictionary) -> void:
     box.add_child(buttons)
 
     if yes_no:
-        var no := _pill_button("No")
+        var no_label := String(values.get("no_label", ""))
+        if no_label.is_empty():
+            no_label = _t("debug.value.no")
+        var no := _pill_button(no_label)
         no.custom_minimum_size = Vector2(150, 60)
         no.pressed.connect(
             _complete_runtime_dialog.bind(0, runtime_dialog_input)
         )
         buttons.add_child(no)
 
-    var ok := _pill_button("Yes" if yes_no else "OK")
+    var ok_label := String(values.get("yes_label" if yes_no else "ok_label", ""))
+    if ok_label.is_empty():
+        ok_label = _t("debug.value.yes") if yes_no else _t("dialog.ok")
+    var ok := _pill_button(ok_label)
     ok.custom_minimum_size = Vector2(150, 60)
     ok.pressed.connect(
         _complete_runtime_dialog.bind(1, runtime_dialog_input)
@@ -10234,6 +10251,7 @@ func _show_runtime_dialog(values: Dictionary) -> void:
                 _complete_runtime_dialog(1, runtime_dialog_input)
         )
         runtime_dialog_input.call_deferred("grab_focus")
+        runtime_dialog_input.call_deferred("select_all")
     else:
         ok.call_deferred("grab_focus")
 
@@ -11606,6 +11624,9 @@ func _process(delta: float) -> void:
                 current_surface_size.x,
                 current_surface_size.y,
             ]
+            var runtime_debug := String(player.get_plugin_debug_info())
+            if not runtime_debug.is_empty():
+                state_line += " runtime=%s" % runtime_debug
             print(state_line)
             _write_probe_marker(state_line)
             if perf_log_file != null:
@@ -11976,7 +11997,7 @@ func _renderer_summary(renderer: String) -> String:
 func _on_open_game() -> void:
     if not _require_legal_documents_for_media():
         return
-    var requested_path := game_path.text.strip_edges()
+    var requested_path := game_path.text
     var path := _resolve_game_path(requested_path)
     if path != requested_path:
         _write_probe_marker("open_game remapped_path=%s requested=%s" % [path, requested_path])
@@ -12411,13 +12432,66 @@ func _clear_game_input_capture() -> void:
     black_frame_last_log_msec = 0
 
 func _run_auto_probe() -> void:
+    var awaited_script := _runtime_string("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_SCRIPT")
+    if not awaited_script.is_empty():
+        await _auto_probe_wait_for_runtime_script(awaited_script)
     await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_WARMUP_FRAMES", 180))
     await _save_auto_probe_step(0, "startup")
     var step := 1
     for pos in auto_probe_clicks:
+        _send_probe_motion(pos)
+        await _auto_probe_wait_frames(2)
         _send_probe_click(pos)
-        await _auto_probe_wait_frames(_runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180))
+        var after_click_frames: int = max(1, _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180))
+        var post_click_move_frames: int = clampi(
+            _runtime_int("AETHERKIRI_AUTO_PROBE_POST_CLICK_MOVE_FRAMES", 0),
+            0,
+            after_click_frames - 1
+        )
+        if post_click_move_frames > 0:
+            await _auto_probe_wait_frames(post_click_move_frames)
+            _send_probe_motion(pos + Vector2(2.0, 0.0))
+            await _auto_probe_wait_frames(after_click_frames - post_click_move_frames)
+        else:
+            await _auto_probe_wait_frames(after_click_frames)
         await _save_auto_probe_step(step, "click_%d_%d" % [int(pos.x), int(pos.y)])
+        step += 1
+    var dialog_steps_spec := _runtime_string("AETHERKIRI_AUTO_PROBE_DIALOG_STEPS")
+    var dialog_steps = (
+        JSON.parse_string(dialog_steps_spec)
+        if not dialog_steps_spec.is_empty()
+        else []
+    )
+    if dialog_steps is Array:
+        for value in dialog_steps:
+            var dialog_step: Dictionary = value if value is Dictionary else {}
+            var dialog_result := int(dialog_step.get("result", 1))
+            var dialog_text := String(dialog_step.get("text", ""))
+            var after_dialog_frames := int(dialog_step.get(
+                "after_frames",
+                _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_DIALOG_FRAMES", 180)
+            ))
+            if not await _auto_probe_complete_runtime_dialog(
+                dialog_result, dialog_text, after_dialog_frames
+            ):
+                break
+            await _save_auto_probe_step(step, "dialog_%d" % dialog_result)
+            step += 1
+    var post_dialog_clicks := _parse_click_points(
+        _runtime_string("AETHERKIRI_AUTO_PROBE_POST_DIALOG_CLICKS")
+    )
+    for pos in post_dialog_clicks:
+        _send_probe_motion(pos)
+        await _auto_probe_wait_frames(2)
+        _send_probe_click(pos)
+        await _auto_probe_wait_frames(max(
+            1,
+            _runtime_int("AETHERKIRI_AUTO_PROBE_AFTER_CLICK_FRAMES", 180)
+        ))
+        await _save_auto_probe_step(step, "post_dialog_click_%d_%d" % [
+            int(pos.x),
+            int(pos.y),
+        ])
         step += 1
     auto_probe_done = true
     auto_probe_running = false
@@ -12505,6 +12579,12 @@ func _can_write_probe_files() -> bool:
     return _runtime_flag("AETHERKIRI_IOS_FILE_LOG")
 
 func _send_startup_probe_mouse_click(pos: Vector2) -> bool:
+    var motion := InputEventMouseMotion.new()
+    motion.position = pos
+    motion.global_position = pos
+    motion.relative = Vector2(1.0, 0.0)
+    _handle_game_pointer_event(motion)
+
     var down := InputEventMouseButton.new()
     down.button_index = MOUSE_BUTTON_LEFT
     down.pressed = true
@@ -12547,6 +12627,44 @@ func _auto_probe_wait_frames(frames: int) -> void:
     for i in range(max(1, frames)):
         await get_tree().process_frame
 
+func _auto_probe_wait_for_runtime_script(script_name: String) -> void:
+    var frame_budget: int = max(1, _runtime_int("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_FRAMES", 3600))
+    var required_objects: int = max(0, _runtime_int("AETHERKIRI_AUTO_PROBE_WAIT_RUNTIME_OBJECTS", 0))
+    for i in range(frame_budget):
+        var state = JSON.parse_string(player.get_plugin_debug_info())
+        if state is Dictionary and String(state.get("vmScript", "")) == script_name and int(state.get("fesObjects", 0)) >= required_objects:
+            _write_probe_marker("auto_wait_runtime matched script=%s objects=%d frame=%d" % [
+                script_name,
+                int(state.get("fesObjects", 0)),
+                i,
+            ])
+            return
+        await get_tree().process_frame
+    _write_probe_marker("auto_wait_runtime timeout script=%s frames=%d" % [script_name, frame_budget])
+
+func _auto_probe_complete_runtime_dialog(
+    result: int, text: String, after_frames: int
+) -> bool:
+    var frame_budget: int = max(
+        1, _runtime_int("AETHERKIRI_AUTO_PROBE_DIALOG_WAIT_FRAMES", 1800)
+    )
+    for i in range(frame_budget):
+        if modal_layer != null and bool(
+            modal_layer.get_meta("runtime_platform_dialog", false)
+        ):
+            var input := runtime_dialog_input
+            if input != null and is_instance_valid(input):
+                input.text = text
+            _write_probe_marker(
+                "auto_dialog result=%d text=%s frame=%d" % [result, text, i]
+            )
+            _complete_runtime_dialog(result, input)
+            await _auto_probe_wait_frames(max(1, after_frames))
+            return true
+        await get_tree().process_frame
+    _write_probe_marker("auto_dialog timeout frames=%d" % frame_budget)
+    return false
+
 func _save_auto_probe_step(index: int, label: String) -> void:
     await get_tree().process_frame
     await get_tree().process_frame
@@ -12586,6 +12704,38 @@ func _save_auto_probe_step(index: int, label: String) -> void:
         perf_log_file.flush()
 
 func _send_probe_click(window_pos: Vector2) -> void:
+    if _runtime_flag("AETHERKIRI_AUTO_PROBE_DISPATCH_INPUT"):
+        var motion := InputEventMouseMotion.new()
+        motion.position = window_pos
+        motion.global_position = window_pos
+        motion.relative = Vector2(1.0, 0.0)
+        Input.parse_input_event(motion)
+
+        var down := InputEventMouseButton.new()
+        down.button_index = MOUSE_BUTTON_LEFT
+        down.pressed = true
+        down.position = window_pos
+        down.global_position = window_pos
+        Input.parse_input_event(down)
+
+        var up := InputEventMouseButton.new()
+        up.button_index = MOUSE_BUTTON_LEFT
+        up.pressed = false
+        up.position = window_pos
+        up.global_position = window_pos
+        Input.parse_input_event(up)
+        _write_probe_marker("auto_click window=%s route=input_dispatch" % window_pos)
+        return
+    if _runtime_flag("AETHERKIRI_AUTO_PROBE_ROUTE_GAME_INPUT"):
+        if not _can_forward_game_input():
+            _write_probe_marker("auto_click_blocked window=%s route=game_input" % window_pos)
+            return
+        var forwarded := _send_startup_probe_mouse_click(window_pos)
+        _write_probe_marker("auto_click window=%s route=game_input forwarded=%s" % [
+            window_pos,
+            str(forwarded),
+        ])
+        return
     var mapped := _map_probe_window_point(window_pos)
     if mapped.x < 0.0 or mapped.y < 0.0:
         _write_probe_marker("auto_click_skipped window=%s mapped=%s" % [window_pos, mapped])
@@ -12598,6 +12748,21 @@ func _send_probe_click(window_pos: Vector2) -> void:
     player.send_pointer_event(POINTER_UP, 0, mapped.x, mapped.y, 0.0, 0.0, 0)
     _hold_next_present_after_input(POST_CLICK_PRESENT_HOLD_FRAMES, true)
     _write_probe_marker("auto_click window=%s mapped=%s" % [window_pos, mapped])
+
+func _send_probe_motion(window_pos: Vector2) -> void:
+    var motion := InputEventMouseMotion.new()
+    motion.position = window_pos
+    motion.global_position = window_pos
+    motion.relative = Vector2(2.0, 0.0)
+    if _runtime_flag("AETHERKIRI_AUTO_PROBE_DISPATCH_INPUT"):
+        Input.parse_input_event(motion)
+    elif _runtime_flag("AETHERKIRI_AUTO_PROBE_ROUTE_GAME_INPUT"):
+        _handle_game_pointer_event(motion)
+    else:
+        var mapped := _map_probe_window_point(window_pos)
+        if mapped.x >= 0.0 and mapped.y >= 0.0:
+            player.send_pointer_event(POINTER_MOVE, 0, mapped.x, mapped.y, 2.0, 0.0, 0)
+    _write_probe_marker("auto_motion window=%s" % window_pos)
 
 func _map_probe_window_point(pos: Vector2) -> Vector2:
     var panel_size := Vector2(

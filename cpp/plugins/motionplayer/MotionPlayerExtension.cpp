@@ -5,6 +5,19 @@
 namespace motion {
     namespace {
         std::atomic<const MotionPlayerExtensionV2 *> g_extension{nullptr};
+        thread_local std::uint32_t g_suppressionDepth = 0;
+    }
+
+    ScopedMotionPlayerExtensionSuppression::
+    ScopedMotionPlayerExtensionSuppression() {
+        ++g_suppressionDepth;
+    }
+
+    ScopedMotionPlayerExtensionSuppression::
+    ~ScopedMotionPlayerExtensionSuppression() {
+        if(g_suppressionDepth != 0) {
+            --g_suppressionDepth;
+        }
     }
 
     bool registerMotionPlayerExtension(
@@ -22,6 +35,9 @@ namespace motion {
     }
 
     const MotionPlayerExtensionV2 *motionPlayerExtension() {
+        if(g_suppressionDepth != 0) {
+            return nullptr;
+        }
         return g_extension.load();
     }
 }

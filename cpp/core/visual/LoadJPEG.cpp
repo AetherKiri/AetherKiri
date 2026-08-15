@@ -94,19 +94,24 @@ static void *JPEG_arena_alloc_large(j_common_ptr cinfo, int pool_id, size_t size
 }
 
 static void JPEG_arena_free_pool(j_common_ptr cinfo, int pool_id) {
-    if (TVPDecodeArenaActive()) return;
+    // Arena allocations bypass libjpeg's pool lists.  The original manager
+    // therefore sees only allocations that fell back after the arena cap and
+    // can release those safely while the arena is active.
     sJpegHooks.orig_free_pool(cinfo, pool_id);
 }
 
 static void JPEG_arena_self_destruct(j_common_ptr cinfo) {
     if (TVPDecodeArenaActive()) {
-        // Pool memory lives in the arena — skip free_pool walks.
-        // But the memory manager struct itself was malloc'd by jpeg_create_*,
-        // so we must free it here to avoid a leak.
-        if (cinfo->mem) {
-            free(cinfo->mem);
-            cinfo->mem = nullptr;
-        }
+        // Restore the original vtable before destruction. Its pool lists
+        // contain only fallback allocations; arena-backed pointers were
+        // returned directly by the hooks and are released by arena End().
+        jpeg_memory_mgr *mem = cinfo->mem;
+        if (!mem) return;
+        mem->alloc_small = sJpegHooks.orig_alloc_small;
+        mem->alloc_large = sJpegHooks.orig_alloc_large;
+        mem->free_pool = sJpegHooks.orig_free_pool;
+        mem->self_destruct = sJpegHooks.orig_self_destruct;
+        sJpegHooks.orig_self_destruct(cinfo);
         return;
     }
     sJpegHooks.orig_self_destruct(cinfo);

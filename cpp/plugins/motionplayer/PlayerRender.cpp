@@ -9037,7 +9037,9 @@ namespace motion {
             // scans every PSB resource and performs several archive lookups
             // per icon, even though the exact resource was already found.
             // Keep external lookup only for motions without an embedded icon.
-            const auto resolvedPath = resourceMetadata
+            const auto resolvedPath =
+                (resourceMetadata ||
+                 internal::isSyntheticMotionBlankSource(command.sourceKey))
                 ? ttstr{}
                 : resolveMotionSourcePath(
                       *sourceMotion, command.sourceKey);

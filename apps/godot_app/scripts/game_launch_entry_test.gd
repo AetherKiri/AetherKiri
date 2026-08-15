@@ -72,6 +72,20 @@ func _init() -> void:
         "game.exe",
         "Windows separators"
     )
+    var spaced_root := "/Users/test/游戏/Visual Novel+ "
+    _expect_equal(
+        GameLaunchEntry.resolve({"path": spaced_root}),
+        spaced_root,
+        "trailing-space directory"
+    )
+    _expect_equal(
+        GameLaunchEntry.resolve({
+            "path": spaced_root,
+            GameLaunchEntry.FIELD: "cs2.exe",
+        }),
+        spaced_root.path_join("cs2.exe"),
+        "launch file inside trailing-space directory"
+    )
     if failures == 0:
         print("game_launch_entry_test: PASS")
         quit(0)

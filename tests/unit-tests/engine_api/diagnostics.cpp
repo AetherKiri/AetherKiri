@@ -166,6 +166,16 @@ engine_result_t FakeGetTextInputState(void* runtime,
   return ENGINE_RESULT_OK;
 }
 
+engine_result_t FakeGetMemoryStats(void* runtime,
+                                  engine_memory_stats_t* stats) {
+  if (runtime == nullptr || stats == nullptr ||
+      stats->struct_size < sizeof(engine_memory_stats_t)) {
+    return ENGINE_RESULT_INVALID_ARGUMENT;
+  }
+  stats->graphic_cache_bytes = 4096u;
+  return ENGINE_RESULT_OK;
+}
+
 const engine_runtime_provider_v1_t kFakeProvider = [] {
   engine_runtime_provider_v1_t provider{};
   provider.struct_size = sizeof(provider);
@@ -185,6 +195,7 @@ const engine_runtime_provider_v1_t kFakeProvider = [] {
   provider.get_last_error = FakeLastError;
   provider.submit_platform_response = FakeSubmitPlatformResponse;
   provider.get_text_input_state = FakeGetTextInputState;
+  provider.get_memory_stats = FakeGetMemoryStats;
   return provider;
 }();
 
@@ -325,6 +336,30 @@ TEST_CASE("surface request made before provider selection is replayed") {
   REQUIRE(frame.width == 1920u);
   REQUIRE(frame.height == 1080u);
   REQUIRE(frame.stride_bytes == 1920u * 4u);
+}
+
+TEST_CASE("runtime providers receive host process memory statistics") {
+  REQUIRE(engine_register_runtime_provider(&kFakeProvider) == ENGINE_RESULT_OK);
+  Handle handle;
+  engine_option_t runtime_option{};
+  runtime_option.key_utf8 = "runtime";
+  runtime_option.value_utf8 = "fake-artemis-test";
+  REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
+  REQUIRE(engine_open_game(handle.value, ".artemis-test", "first.iet") ==
+          ENGINE_RESULT_OK);
+
+  engine_memory_stats_t stats{};
+  stats.struct_size = sizeof(stats);
+  REQUIRE(engine_get_memory_stats(handle.value, &stats) == ENGINE_RESULT_OK);
+  CHECK(stats.graphic_cache_bytes == 4096u);
+#if defined(__APPLE__)
+  CHECK(stats.self_used_mb > 0u);
+  CHECK(stats.system_total_mb > 0u);
+  CHECK(stats.process_resident_bytes > 0u);
+  CHECK(stats.process_physical_footprint_bytes > 0u);
+  CHECK(stats.process_peak_physical_footprint_bytes >=
+        stats.process_physical_footprint_bytes);
+#endif
 }
 
 TEST_CASE("standalone media is routed through the legacy host service") {
