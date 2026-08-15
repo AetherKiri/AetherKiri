@@ -4281,7 +4281,7 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
 void FinishGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool result) {
     // PrepareNativeWrite is a non-blocking readiness probe. A false result
     // means Metal is still consuming the retired IOSurface, not that the GPU
-    // bridge failed; the SDK simply keeps that target retired and tries again.
+    // bridge failed; the native producer keeps that target retired and retries.
     const bool expected_not_ready =
         !result && op != nullptr &&
         op->type == GodotGpuOp::Type::PrepareNativeWrite;
@@ -5739,7 +5739,7 @@ bool BridgePrepareForNativeWrite(uint64_t texture) {
     }
     if (!record.rid.is_valid()) return false;
 #if defined(__APPLE__)
-    // All SDK surfaces rendered during one Godot display frame were consumed
+    // All native surfaces rendered during one Godot display frame were consumed
     // by the same ordered Metal queue. One completed marker therefore makes
     // every sufficiently retired surface in this scene batch reusable.
     Engine *engine = Engine::get_singleton();
@@ -6134,15 +6134,14 @@ bool BridgeDrawTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     op->mode = triangle_count;
     op->opacity = static_cast<int>(std::round(std::clamp(opacity, 0.0f, 1.0f) * 255.0f));
     op->color = blend_mode;
-    // Official SDK E-mote frames are authored at a larger character canvas
-    // and commonly presented at 0.5x. The generic four-quadrant reduction is
-    // intentionally conservative but softens fine eye and hair line work.
-    // Keep the centre-weighted minification path enabled for these explicitly
-    // tagged premultiplied sources even when global frame enhancement is off.
-    const bool sdk_emote_source =
+    // Native character frames can use a larger authored canvas and commonly
+    // present at 0.5x. Keep the centre-weighted minification path enabled for
+    // explicitly tagged premultiplied sources so fine eye and hair detail
+    // survives even when global frame enhancement is off.
+    const bool native_character_source =
         (blend_mode & TVP_GODOT_GPU_TRIANGLE_SOURCE_PREMULTIPLIED) != 0u;
     op->preserve_minified_detail = ShouldPreserveMinifiedTriangleDetail(
-        triangle_count, dst_points, src_points, sdk_emote_source);
+        triangle_count, dst_points, src_points, native_character_source);
     if (op->preserve_minified_detail) {
         g_gpu_detail_minify_ops.fetch_add(1, std::memory_order_relaxed);
     }
@@ -9360,7 +9359,7 @@ private:
             return Ref<Texture2D>();
         }
         // The texture contents can change while the engine serial remains the
-        // same (for example, SDK-driven E-mote idle animation). Always enqueue
+        // same (for example, native idle animation). Always enqueue
         // the current GPU contents instead of treating the serial as a texture
         // revision. Promote only the copy encoded for the previous engine
         // frame. Godot submits its main RenderingDevice at the render-frame

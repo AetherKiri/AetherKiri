@@ -59,7 +59,7 @@ namespace motion {
         bool alphaPremultiplied = true;
     };
 
-    // SDK-neutral description of a frame that remains resident in the host
+    // Backend-neutral description of a frame that remains resident in the host
     // GPU. The producer-owned lifetime keeps the imported shared image alive
     // until both the backend and KiriKiri composition have moved past it.
     struct MotionBackendGpuFrame {
@@ -82,8 +82,8 @@ namespace motion {
         }
     };
 
-    // Kiri retained-root clips and SDK public timelines occupy different
-    // namespaces. Return SDK flags only for an exact public label so callers
+    // Kiri retained-root clips and native public timelines occupy different
+    // namespaces. Return native flags only for an exact public label so callers
     // never substitute an authored demo timeline for an internal root.
     inline int exactMotionBackendTimelineFlags(
         const std::string &requested,
@@ -100,8 +100,8 @@ namespace motion {
         return 0;
     }
 
-    // A retained Kiri model entry point is not a public SDK timeline, but the
-    // SDK object can still expose one dedicated difference timeline for its
+    // A retained Kiri model entry point is not a public native timeline, but the
+    // backend can still expose one dedicated difference timeline for its
     // ambient body/hair/bust motion. Prefer the unnumbered authored waiting
     // loop and use a numbered variant only when it is the sole available
     // choice. This deliberately excludes main/sample timelines, whose demo
@@ -129,7 +129,7 @@ namespace motion {
         return numberedFallback;
     }
 
-    // Versioned, SDK-neutral player seam. Private packages may implement it;
+    // Versioned, backend-neutral player seam. Private packages may implement it;
     // public-only builds retain the compatible software renderer.
     class MotionNativePlayerBackend {
     public:

@@ -170,7 +170,7 @@ else
     if [[ "$MACOS_ARCH" == "x86_64" ]]; then
         # The editor must match the staged GDExtension architecture while it
         # scans and exports the project. Godot.app is universal on Apple
-        # Silicon, so select its Rosetta slice for the SDK-backed build.
+        # Silicon, so select its Rosetta slice for this native build.
         godot_export_command=(arch -x86_64 "$GODOT_BIN")
     fi
     mkdir -p "$GODOT_EXPORT_ROOT"

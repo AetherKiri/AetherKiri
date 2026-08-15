@@ -88,6 +88,25 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
+      - name: Resolve private runtime dependency cache
+        id: private-runtime-cache-key
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
+            --platform android --print-cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        uses: actions/cache@v5
+        with:
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/android
+          key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
+
+      - name: Initialize private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform android
+
       - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
         run: |
@@ -339,6 +358,25 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Resolve private runtime dependency cache
+        id: private-runtime-cache-key
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
+            --platform apple --print-cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        uses: actions/cache@v5
+        with:
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/apple
+          key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
+
+      - name: Initialize private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform apple
 
       - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
@@ -602,6 +640,25 @@ jobs:
           submodules: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && 'recursive' || 'false' }}
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
+
+      - name: Resolve private runtime dependency cache
+        id: private-runtime-cache-key
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
+            --platform apple --print-cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        uses: actions/cache@v5
+        with:
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/apple
+          key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
+
+      - name: Initialize private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform apple
 
       - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'

@@ -324,7 +324,7 @@ namespace motion::detail {
         // for the original 1920x1080 allocation.
         tTJSVariant headlessRgbaRegionRenderLayer;
         tTJSVariant headlessRgbaRegionRenderLayer2;
-        // The official SDK imports its IOSurface/AHardwareBuffer as a Godot
+        // The native backend imports its IOSurface/AHardwareBuffer as a Godot
         // texture. Keep the producer lifetime through the next composition so
         // queued KiriKiri draws never sample a recycled shared image.
         std::shared_ptr<void> nativeBackendGpuFrameLifetime;

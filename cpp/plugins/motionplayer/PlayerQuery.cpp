@@ -1654,12 +1654,12 @@ namespace motion {
                 }
             }
 
-            // Mirror only an exact public SDK timeline. Kiri's retained root
+            // Mirror only an exact public native timeline. Kiri's retained root
             // clips (`全体構造` / `タイムライン構造`) are bookkeeping entry
-            // points, not SDK timelines. Mapping one to the first available
+            // points, not native timelines. Mapping one to the first available
             // main timeline used to select `sample_全自動_test`, which is an
             // authored demonstration sequence that intentionally cycles every
-            // expression. Blink and physics are independent SDK controllers
+            // expression. Blink and physics are independent native controllers
             // and do not require that demo timeline to run.
             if(_nativeBackend) {
                 const auto nativeTimelineLabels = [&](const char *countMethod,

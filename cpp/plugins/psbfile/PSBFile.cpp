@@ -64,7 +64,7 @@ namespace PSB {
             std::memcpy(data, header.signature, sizeof(header.signature));
             WriteU16LE(data + 4, header.version);
             // The parser already applied the title's E-mote transform and
-            // seed cipher.  Mark the retained object as plain so a native SDK
+            // seed cipher. Mark the retained object as plain so a native backend
             // does not try to interpret the normalized bytes as encrypted.
             WriteU16LE(data + 6, 0);
             WriteU32LE(data + 8, header.offsetEncrypt);

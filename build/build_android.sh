@@ -295,8 +295,8 @@ else
     macos_host_extension="$GODOT_APP_DIR/bin/macos/$BUILD_TYPE_LOWER/libaether_kiri_godot.dylib"
     if [[ "$(uname -m)" == "arm64" && -f "$macos_host_extension" &&
           "$(lipo -archs "$macos_host_extension" 2>/dev/null || true)" == "x86_64" ]]; then
-        # The official macOS E-mote SDK currently ships only an x86_64
-        # archive. Match the editor process to the staged host extension while
+        # This private native host extension is currently x86_64-only. Match
+        # the editor process to the staged host extension while
         # it imports the project; the exported Android libraries remain arm64.
         godot_export_command=(arch -x86_64 "$GODOT_BIN")
     fi

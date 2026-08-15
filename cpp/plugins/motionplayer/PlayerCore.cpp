@@ -484,7 +484,7 @@ namespace motion {
             return true;
         }
         if(LOGGER) {
-            LOGGER->warn("native E-mote backend {} failed: {}", method,
+            LOGGER->warn("native motion backend {} failed: {}", method,
                          error);
         }
         return false;
@@ -1358,10 +1358,10 @@ namespace motion {
             activateMotion(*_runtime, snapshot);
             syncVariableKeysFromActiveMotion();
             if(!reuseNativeBackend) {
-                // A native SDK player renders the complete E-mote model from
+                // A native player renders the complete model from
                 // the root. Motion child Players are only an implementation
                 // detail of the public compatibility renderer; attaching a
-                // second full SDK model to every child multiplies startup and
+                // second full native model to every child multiplies startup and
                 // frame work by the number of authored motion nodes.
                 if(!_motionParentPlayer) {
                     const auto *extension = motionPlayerExtension();
@@ -1385,11 +1385,11 @@ namespace motion {
                                 _nativeBackendSourcePath =
                                     nativeBackendSourcePath;
                                 LOGGER->info(
-                                    "Kiri E-mote backend: official SDK ({})",
+                                    "Kiri native motion backend active ({})",
                                     snapshot->path);
                             } else {
                                 LOGGER->warn(
-                                    "Kiri E-mote SDK backend unavailable for {}: {}",
+                                    "Kiri native motion backend unavailable for {}: {}",
                                     snapshot->path, error);
                             }
                         }
@@ -2370,7 +2370,7 @@ namespace motion {
                     // Older serialized players did not distinguish the
                     // untouched default value (zero) from an explicit color.
                     // Treat a non-zero legacy value as authored, while keeping
-                    // the SDK's visible default for untouched players.
+                    // the native backend's visible default for untouched players.
                     _emoteColorState.explicitlySet =
                         _emoteColorState.packed != 0;
                 }
@@ -2647,10 +2647,10 @@ namespace motion {
             // D3DEmote.tjs changes model resolution by serializing the old
             // player, creating a fresh one, and unserializing into it.  The
             // compatibility state above made getTimelinePlaying() report the
-            // restored waiting loop, but the fresh official SDK player had
+            // restored waiting loop, but the fresh native player had
             // never received PlayTimeline.  The script therefore skipped its
             // own restart and the visible model froze after its initial pose.
-            // Rebuild the SDK timeline set from the restored state atomically.
+            // Rebuild the native timeline set from restored state atomically.
             if(!nativeTimelines.empty()) {
                 invokeNativeBackend(
                     "stoptimeline", {MotionBackendValue::String({})});

@@ -11358,10 +11358,10 @@ namespace motion {
         }
 
         // Kiri's D3DEmote scripts present through D3DAdaptor rather than the
-        // ordinary Layer draw path.  Once an official SDK player owns model
+        // ordinary Layer draw path. Once a native player owns model
         // evaluation, routing this branch through the legacy PSB renderer
-        // displays an unchanging compatibility snapshot: the SDK clock moves
-        // but the pixels copied by captureCanvas do not.  Publish the SDK
+        // displays an unchanging compatibility snapshot: the native clock moves
+        // but the pixels copied by captureCanvas do not. Publish the native
         // frame into the adaptor's retained GPU layer so both ordinary
         // captureCanvas and uncaptured affine presentations consume the same
         // animated source.
@@ -12188,7 +12188,7 @@ namespace motion {
                         };
                         std::uint32_t blendMode =
                             TVP_GODOT_GPU_TRIANGLE_TVP_BLEND |
-                            // The SDK frame is copied into a transparent
+                            // The native frame is copied into a transparent
                             // intermediate Kiri layer. AlphaBlend preserves
                             // the destination alpha (HDA), which leaves every
                             // copied pixel transparent; AlphaBlend_d updates
@@ -13344,10 +13344,10 @@ namespace motion {
             canvasWidth, canvasHeight);
 
         // Kiri's E-mote implementation normally presents through
-        // SeparateLayerAdaptor.  When the official SDK owns evaluation, the
+        // SeparateLayerAdaptor. When the native backend owns evaluation, the
         // legacy PSB command tree is only a compatibility snapshot and does
-        // not contain the SDK's continuously changing blink/breath/hair/body
-        // state.  Render the SDK frame into the SLA private target on every
+        // not contain the native backend's changing blink/breath/hair/body
+        // state. Render the native frame into the SLA private target on every
         // draw, then keep the adaptor's normal update/presentation steps
         // below so authored layer placement and clipping remain unchanged.
         if(_nativeBackend) {
@@ -14667,9 +14667,9 @@ namespace motion {
             remainingControllerStep -= controllerDt;
         }
 
-        // The official SDK owns blink and physics for a native player.  Kiri's
+        // The native backend owns blink and physics for a native player. Kiri's
         // retained root/control timeline still has to run, however: it drives
-        // authored pose and visibility variables which are not public SDK
+        // authored pose and visibility variables which are not public native
         // timelines.  Running the compatibility blink/physics solvers as well
         // would apply those effects twice.
         if(!hasNativeBackend) {

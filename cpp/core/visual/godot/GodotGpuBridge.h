@@ -90,7 +90,7 @@ struct TVPGodotGpuExternalTextureCallbacks {
     // Producers must use a multi-buffered target when this callback is null.
     bool (*prepare_for_native_write)(uint64_t texture);
     // On Android native_image is an AHardwareBuffer whose storage is shared
-    // by the SDK's OpenGL ES context and Godot's Vulkan RenderingDevice. The
+    // by the producer's OpenGL ES context and Godot's Vulkan RenderingDevice. The
     // callback retains its own buffer reference until release_texture.
     uint64_t (*import_android_hardware_buffer)(void *native_image,
                                                 uint32_t width,

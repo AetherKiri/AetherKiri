@@ -135,7 +135,7 @@ uint64_t AetherAppleCreateVulkanTextureFromPixelBuffer(
 
   // Godot's extension-texture wrapper creates only a VkImageView and assumes
   // the owner has already placed the native VkImage in the layout matching
-  // its declared usage. Establish GENERAL before the SDK first touches the
+  // its declared usage. Establish GENERAL before the producer first touches the
   // IOSurface. Later OpenGL generations replace the pixels, not the layout.
   VkCommandPool command_pool = VK_NULL_HANDLE;
   VkCommandPoolCreateInfo pool_info{};
