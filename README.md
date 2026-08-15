@@ -35,8 +35,8 @@ AetherKiri is a multi-runtime visual-novel platform inside a Godot 4.7
 application shell. A single `AetherRuntimePlayer` hosts multiple native
 runtimes behind a versioned provider interface, while Godot owns the product
 UI, final-frame presentation, input, settings, export presets, and platform
-packaging. The runtime dispatcher selects KiriRuntime, OnsRuntime, or optional
-A Runtime from each game's markers and capabilities.
+packaging. The runtime dispatcher selects KiriRuntime, OnsRuntime, optional
+A Runtime, or C Runtime (CatSystem2) from each game's markers and capabilities.
 
 The default product renderer is **Godot Native**: engine frames are rendered
 through Godot-owned `RenderingDevice` resources. **GPU Bridge** remains an
@@ -51,7 +51,12 @@ Godot App Shell
       -> KiriRuntime -> KiriKiri2 Core / Plugins
       -> OnsRuntime -> OnscripterYuri
       -> A Runtime
+      -> C Runtime -> CatSystem2
 ```
+
+In distributed builds, OnsRuntime, A Runtime, and C Runtime are beta features
+that require an active 30-day coffee entitlement. Debug builds keep these
+runtimes unrestricted for compatibility development and testing.
 
 ## Highlights
 

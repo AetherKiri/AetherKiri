@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-08-11
+Last updated: 2026-08-16
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -59,6 +59,9 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | フユキス | macOS app; iOS/iPadOS app build on iPad | Startup, title/menu rendering, first-save load flow, scene/text rendering, E-mote character composition and blinking, atomic character-distance/pose changes, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | アイカギ2 | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | アイカギ3 | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
+| アマカノ2 | macOS debug app | Startup, title/start/continue flows, name input, scene/text and E-mote character rendering, audio playback, save/load/delete, skip/next/backlog/config controls, extra-mode navigation, and basic input | Flow verified | [@akitasummer](https://github.com/akitasummer) | Uses C Runtime (CatSystem2), which requires active coffee access in distributed builds. Local game files are not committed. |
+| アマカノ2+ | macOS debug app | Startup, heroine selection, continue/load flow, scene/text and character rendering, audio playback, save/load, skip/next, config/title return, CG/recollection/music/heroine modes, and basic input | Flow verified | [@akitasummer](https://github.com/akitasummer) | Uses C Runtime (CatSystem2), which requires active coffee access in distributed builds. Local game files are not committed. |
+| ニュートンと林檎の樹 | macOS debug app | Startup, title/start/load flows, choices, scene/CG/text and character-portrait rendering, audio playback, save/load, next/config/title-return controls, extra CG/recollection flows, and basic input | Flow verified | [@akitasummer](https://github.com/akitasummer) | Uses C Runtime (CatSystem2), which requires active coffee access in distributed builds. Local game files are not committed. |
 | アマカノ3 | macOS debug app; iOS/iPadOS app build on iPad (smoke) | On macOS: startup, continue flow, second- and fourth-save loads, scene/text rendering, four-character E-mote rendering and animation, lip sync, expression/blush transitions, consecutive dialogue input, and stable approximately 50–63 FPS; on iPad: import, startup, initial title/UI, and basic input | Flow verified (macOS) | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | D.C.5 ～ダ・カーポ5～ | macOS app; iOS/iPadOS app build on iPad | Import, startup, initial title/UI and text rendering, and basic input | Smoke verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | NUKITASHI | macOS app; iOS/iPadOS app build on iPad | Import, startup, title/menu rendering, scene/text rendering, audio playback, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |

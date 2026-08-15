@@ -255,7 +255,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "内测功能有效期至：%s",
         "iap.coffee.inactive": "内测功能当前未启用",
         "iap.coffee.purchase_success": "感谢支持！内测功能有效期至：%s",
-        "iap.artemis_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
+        "iap.runtime_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
         "iap.status.purchased": "已购买",
         "iap.status.not_purchased": "未购买",
         "iap.status.loading": "正在读取商品信息…",
@@ -510,7 +510,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "測試功能有效期限至：%s",
         "iap.coffee.inactive": "測試功能目前尚未啟用",
         "iap.coffee.purchase_success": "感謝支持！測試功能有效期限至：%s",
-        "iap.artemis_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
+        "iap.runtime_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
         "iap.status.purchased": "已購買",
         "iap.status.not_purchased": "尚未購買",
         "iap.status.loading": "正在載入商品資訊…",
@@ -765,7 +765,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "Beta feature access expires: %s",
         "iap.coffee.inactive": "Beta feature access is not active",
         "iap.coffee.purchase_success": "Thank you! Beta feature access expires: %s",
-        "iap.artemis_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
+        "iap.runtime_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
         "iap.status.purchased": "Purchased",
         "iap.status.not_purchased": "Not purchased",
         "iap.status.loading": "Loading product information…",
@@ -1020,7 +1020,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "ベータ機能の有効期限：%s",
         "iap.coffee.inactive": "ベータ機能は現在有効ではありません",
         "iap.coffee.purchase_success": "ご支援ありがとうございます！ベータ機能の有効期限：%s",
-        "iap.artemis_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
+        "iap.runtime_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
         "iap.status.purchased": "購入済み",
         "iap.status.not_purchased": "未購入",
         "iap.status.loading": "商品情報を読み込み中…",
@@ -1275,7 +1275,7 @@ const UI_TEXT := {
         "iap.coffee.active_until": "베타 기능 만료일: %s",
         "iap.coffee.inactive": "베타 기능이 현재 활성화되어 있지 않습니다",
         "iap.coffee.purchase_success": "후원해 주셔서 감사합니다! 베타 기능 만료일: %s",
-        "iap.artemis_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
+        "iap.runtime_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
         "iap.status.purchased": "구입 완료",
         "iap.status.not_purchased": "구입하지 않음",
         "iap.status.loading": "상품 정보 불러오는 중…",
@@ -1400,6 +1400,7 @@ const POINTER_MOD_RIGHT := 0x10
 const POINTER_MOD_MIDDLE := 0x20
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
+const BETA_PROVIDER_RUNTIME_IDS := ["artemis", "catsystem2"]
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
     "0.txt",
@@ -7223,7 +7224,7 @@ func _process_iap(delta: float) -> void:
     if iap_pending_beta_check_id > 0 and int(coffee_state.get(
         "entitlement_check_completed", 0
     )) >= iap_pending_beta_check_id:
-        _complete_artemis_beta_check()
+        _complete_runtime_beta_check()
 
     var operation_state_source := (
         coffee_state
@@ -9511,7 +9512,7 @@ func _start_selected_game_after_iap() -> void:
         ):
             return
         if player.has_method("set_engine_option"):
-            player.set_engine_option("artemis_beta_allowed", "1")
+            player.set_engine_option("beta_runtime_allowed", "1")
         _start_selected_game_after_entitlements()
         return
 
@@ -9525,10 +9526,10 @@ func _start_selected_game_after_iap() -> void:
     if player.has_method("set_engine_option"):
         # Reset a grant left on the reusable engine handle before every Release
         # launch. A fresh verified coffee entitlement enables it again below.
-        player.set_engine_option("artemis_beta_allowed", "0")
+        player.set_engine_option("beta_runtime_allowed", "0")
     var requires_beta_access := (
         _runtime_requires_beta_access(selected_runtime_kind)
-        or _selected_game_uses_artemis()
+        or _selected_game_uses_beta_provider()
     )
     if not requires_beta_access:
         _start_selected_game_after_entitlements()
@@ -9536,35 +9537,42 @@ func _start_selected_game_after_iap() -> void:
 
     iap_pending_beta_game = selected_game.duplicate(true)
     if not _iap_supported_platform() or not player.has_method("iap_refresh_entitlement"):
-        _deny_artemis_beta_launch()
+        _deny_runtime_beta_launch()
         return
     iap_pending_beta_check_id = int(player.iap_refresh_entitlement(
         IAP_COFFEE_PRODUCT_ID
     ))
     if iap_pending_beta_check_id <= 0:
-        _deny_artemis_beta_launch()
+        _deny_runtime_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS support follows the same release policy as Artemis: unrestricted in
-    # Debug, and gated by an active coffee entitlement in distributed builds.
+    # ONS support follows the same release policy as provider-based beta
+    # runtimes: unrestricted in Debug, and gated by an active coffee
+    # entitlement in distributed builds.
     return runtime_kind == RUNTIME_ONSCRIPTER
 
-func _selected_game_uses_artemis() -> bool:
+func _provider_runtime_requires_beta_access(runtime_id: String) -> bool:
+    return BETA_PROVIDER_RUNTIME_IDS.has(runtime_id.strip_edges().to_lower())
+
+func _selected_game_uses_beta_provider() -> bool:
     if player == null or not player.has_method("probe_runtime"):
         return false
     var library_path := String(selected_game.get("path", "")).strip_edges()
     if library_path.is_empty():
         return false
-    return int(player.probe_runtime("artemis", library_path)) > 0
+    for runtime_id in BETA_PROVIDER_RUNTIME_IDS:
+        if int(player.probe_runtime(runtime_id, library_path)) > 0:
+            return true
+    return false
 
-func _complete_artemis_beta_check() -> void:
+func _complete_runtime_beta_check() -> void:
     iap_pending_beta_check_id = 0
     if iap_pending_beta_game.is_empty():
         return
     var pending_game: Dictionary = iap_pending_beta_game.duplicate(true)
     iap_pending_beta_game.clear()
     if not bool(iap_coffee_state.get("entitled", false)):
-        _deny_artemis_beta_launch()
+        _deny_runtime_beta_launch()
         return
     selected_game = pending_game
     if (
@@ -9572,16 +9580,16 @@ func _complete_artemis_beta_check() -> void:
         == RUNTIME_KIRIKIRI
         and player.has_method("set_engine_option")
     ):
-        player.set_engine_option("artemis_beta_allowed", "1")
+        player.set_engine_option("beta_runtime_allowed", "1")
     _start_selected_game_after_entitlements()
 
-func _deny_artemis_beta_launch() -> void:
+func _deny_runtime_beta_launch() -> void:
     iap_pending_beta_check_id = 0
     iap_pending_beta_game.clear()
     if player != null and player.has_method("set_engine_option"):
-        player.set_engine_option("artemis_beta_allowed", "0")
+        player.set_engine_option("beta_runtime_allowed", "0")
     _show_system_alert(
-        _t("iap.artemis_unavailable"),
+        _t("iap.runtime_unavailable"),
         _t("alert.warning_title")
     )
 

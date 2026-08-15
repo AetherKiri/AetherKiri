@@ -207,6 +207,14 @@ const engine_runtime_provider_v1_t kArtemisGateProvider = [] {
   return provider;
 }();
 
+const engine_runtime_provider_v1_t kCatSystem2GateProvider = [] {
+  engine_runtime_provider_v1_t provider = kFakeProvider;
+  provider.runtime_id_utf8 = "catsystem2";
+  provider.display_name_utf8 = "CatSystem2 gate test provider";
+  provider.probe = ArtemisGateProbe;
+  return provider;
+}();
+
 }  // namespace
 
 TEST_CASE("primary click queue gate coalesces clicks before the next tick") {
@@ -245,28 +253,36 @@ TEST_CASE("primary click queue gate preserves secondary pointer releases") {
   REQUIRE(gate.should_enqueue(event));
 }
 
-TEST_CASE("Artemis runtime is compiled but beta-gated in product builds") {
-  const engine_result_t registration =
-      engine_register_runtime_provider(&kArtemisGateProvider);
-  REQUIRE(registration == ENGINE_RESULT_OK);
+TEST_CASE("Beta runtime providers require active coffee access") {
+  REQUIRE(engine_register_runtime_provider(&kArtemisGateProvider) ==
+          ENGINE_RESULT_OK);
+  REQUIRE(engine_register_runtime_provider(&kCatSystem2GateProvider) ==
+          ENGINE_RESULT_OK);
 
-  Handle handle;
-  engine_option_t runtime_option{};
-  runtime_option.key_utf8 = "runtime";
-  runtime_option.value_utf8 = "artemis";
-  REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
-#if defined(NDEBUG)
-  REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
-                           "first.iet") == ENGINE_RESULT_NOT_SUPPORTED);
-  REQUIRE(std::string(engine_get_last_error(handle.value)) ==
-          "Artemis runtime requires active beta access");
-  engine_option_t beta_option{};
-  beta_option.key_utf8 = "artemis_beta_allowed";
-  beta_option.value_utf8 = "1";
-  REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
-#endif
-  REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
-                           "first.iet") == ENGINE_RESULT_OK);
+  const std::array<std::array<const char*, 2>, 2> runtimes{{
+      {{"artemis", "Artemis runtime requires active beta access"}},
+      {{"catsystem2", "CatSystem2 runtime requires active beta access"}},
+  }};
+  for (const auto& runtime : runtimes) {
+    Handle handle;
+    engine_option_t runtime_option{};
+    runtime_option.key_utf8 = "runtime";
+    runtime_option.value_utf8 = runtime[0];
+    REQUIRE(engine_set_option(handle.value, &runtime_option) == ENGINE_RESULT_OK);
+
+    engine_option_t beta_option{};
+    beta_option.key_utf8 = "beta_runtime_allowed";
+    beta_option.value_utf8 = "0";
+    REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
+    REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
+                             "first.iet") == ENGINE_RESULT_NOT_SUPPORTED);
+    REQUIRE(std::string(engine_get_last_error(handle.value)) == runtime[1]);
+
+    beta_option.value_utf8 = "1";
+    REQUIRE(engine_set_option(handle.value, &beta_option) == ENGINE_RESULT_OK);
+    REQUIRE(engine_open_game(handle.value, ".artemis-debug-gate-test",
+                             "first.iet") == ENGINE_RESULT_OK);
+  }
 }
 
 TEST_CASE("versioned runtime provider is selected and routed end to end") {
