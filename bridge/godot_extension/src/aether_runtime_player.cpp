@@ -7211,6 +7211,7 @@ public:
         result["target_height"] = static_cast<int64_t>(frame_effect_target_height_);
         result["native_output_requested"] = frame_native_output_enabled_;
         result["raw_source_output"] = frame_effect_raw_source_output_;
+        result["platform_raw_source"] = platform_prefers_raw_source();
         result["bypassed_after_error"] = frame_effect_bypass_due_to_error_;
         result["runtime"] = runtime_id_;
 
@@ -7274,6 +7275,10 @@ public:
             if (runtime_id_.is_empty()) {
                 runtime_id_ = "auto";
             }
+            // The iOS source-output policy depends on whether this player is
+            // hosting KiriKiri or ONScripter. Refresh the pending frame option
+            // after the runtime selection becomes known.
+            sync_frame_effect_source_mode(true);
         }
         return result;
     }
@@ -9445,7 +9450,8 @@ private:
     }
 
     void sync_frame_effect_source_mode(bool force = false) {
-        bool publish_raw_source = frame_native_output_enabled_;
+        bool publish_raw_source =
+            frame_native_output_enabled_ || platform_prefers_raw_source();
         if (frame_effect_enabled_ && !frame_effect_bypass_due_to_error_ &&
             frame_effect_provider_ != nullptr) {
             String reason;
@@ -9474,6 +9480,19 @@ private:
             frame_effect_raw_source_output_ = false;
             frame_effect_error_ = LastError(handle_);
         }
+    }
+
+    bool platform_prefers_raw_source() const {
+#if defined(IOS_ENABLED)
+        // KiriKiri/Artemis' logical GPU frame is complete, while its extra
+        // scaled surface copy is not reliably sampleable through Metal on iOS.
+        // Let Godot scale the provider-owned source texture, which also avoids
+        // an unnecessary full-resolution GPU pass. ONScripter owns a separate
+        // presentation contract and keeps its existing surface output.
+        return runtime_id_ != "onscripter";
+#else
+        return false;
+#endif
     }
 
     engine_handle_t handle_ = nullptr;
