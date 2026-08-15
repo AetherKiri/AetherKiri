@@ -4447,6 +4447,18 @@ namespace motion {
                 continue;
             }
 
+            // Motion and particle nodes are structural containers. Their
+            // source is another Player (or a particle collection), so the
+            // container's own vertex is not rendered geometry. Including its
+            // default (0, 0) point expands child-only button bounds to the
+            // stage origin and makes unrelated clicks hit the button. Native
+            // Motion.Player_calcBounds obtains their extent exclusively from
+            // the child-player merge below.
+            if(node.nodeType == LayerTypeMotion ||
+               node.nodeType == LayerTypeParticle) {
+                continue;
+            }
+
             bool haveNodeBounds = false;
             double minX = 0.0;
             double minY = 0.0;
