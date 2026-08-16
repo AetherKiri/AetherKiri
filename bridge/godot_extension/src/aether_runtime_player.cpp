@@ -268,6 +268,8 @@ std::atomic<uint64_t> g_gpu_compute_batches{0};
 std::atomic<uint64_t> g_gpu_compute_batch_ops{0};
 std::atomic<uint64_t> g_gpu_nonlive_compute_ops{0};
 std::atomic<uint64_t> g_gpu_nonlive_compute_barriers{0};
+std::atomic<uint64_t> g_gpu_live2d_raster_batches{0};
+std::atomic<uint64_t> g_gpu_live2d_raster_ops{0};
 std::atomic<uint64_t> g_gpu_predicted_compute_barriers{0};
 std::atomic<uint64_t> g_gpu_predicted_raw_hazards{0};
 std::atomic<uint64_t> g_gpu_predicted_waw_hazards{0};
@@ -283,6 +285,22 @@ bool GodotGpuBarrierShadowEnabled() {
         const char *value =
             std::getenv("AETHERKIRI_GODOT_SHADOW_BARRIERS");
         return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
+
+bool Live2DHardwareRasterEnabled() {
+    static const bool enabled = [] {
+        const char *value =
+            std::getenv("AETHERKIRI_LIVE2D_HARDWARE_RASTER");
+        if (value != nullptr && value[0] != '\0') {
+            return std::strcmp(value, "0") != 0;
+        }
+#if defined(__APPLE__)
+        return true;
+#else
+        return false;
+#endif
     }();
     return enabled;
 }
@@ -977,6 +995,14 @@ struct GodotGpuPipelineState {
     RID draw_triangles_pipeline;
     RID draw_masked_triangles_shader;
     RID draw_masked_triangles_pipeline;
+    RID live2d_raster_shader;
+    RID live2d_raster_normal_pipeline;
+    RID live2d_raster_add_pipeline;
+    RID live2d_raster_multiply_pipeline;
+    RID live2d_raster_mask_pipeline;
+    RID live2d_raster_sampler;
+    RID live2d_unpremultiply_shader;
+    RID live2d_unpremultiply_pipeline;
     RID mosaic_shader;
     RID mosaic_pipeline;
     RID triangle_vertex_buffer;
@@ -1027,10 +1053,12 @@ struct GodotGpuUniformSetKeyHash {
 
 std::unordered_map<GodotGpuUniformSetKey, RID, GodotGpuUniformSetKeyHash>
     g_gpu_uniform_set_cache;
+std::unordered_map<int64_t, RID> g_live2d_framebuffer_cache;
 
 Ref<RDTextureFormat> MakeRgbaTextureFormat(uint32_t width, uint32_t height);
 bool ExecuteArtemisGpuShader(
     RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &op);
+void FinishGodotGpuOp(const std::shared_ptr<GodotGpuOp> &op, bool result);
 
 const char *NormalizeBackend(const String &backend) {
     const String lower = backend.to_lower();
@@ -1194,6 +1222,12 @@ String GetGodotGpuBridgeDebugInfo() {
         << g_gpu_nonlive_compute_ops.load(std::memory_order_relaxed)
         << " bridge_nonlive_compute_barriers="
         << g_gpu_nonlive_compute_barriers.load(std::memory_order_relaxed)
+        << " bridge_live2d_raster_enabled="
+        << (Live2DHardwareRasterEnabled() ? 1 : 0)
+        << " bridge_live2d_raster_batches="
+        << g_gpu_live2d_raster_batches.load(std::memory_order_relaxed)
+        << " bridge_live2d_raster_ops="
+        << g_gpu_live2d_raster_ops.load(std::memory_order_relaxed)
         << " bridge_shadow_barriers_enabled="
         << (GodotGpuBarrierShadowEnabled() ? 1 : 0)
         << " bridge_predicted_compute_barriers="
@@ -3305,6 +3339,305 @@ void main() {
     return g_gpu_pipeline_state->draw_masked_triangles_pipeline.is_valid();
 }
 
+enum class Live2DRasterBlend {
+    Normal,
+    Add,
+    Multiply,
+    MaskWrite,
+};
+
+constexpr uint32_t kGodotGpuRasterMasked = 0x08000000u;
+
+bool IsLive2DHardwareRasterOp(const std::shared_ptr<GodotGpuOp> &op) {
+    if (!Live2DHardwareRasterEnabled() || op == nullptr ||
+        op->src == op->dst ||
+        (op->type != GodotGpuOp::Type::DrawTriangles &&
+         op->type != GodotGpuOp::Type::DrawMaskedTriangles) ||
+        (op->type == GodotGpuOp::Type::DrawMaskedTriangles &&
+         op->src2 == op->dst)) {
+        return false;
+    }
+    if (op->type == GodotGpuOp::Type::DrawTriangles &&
+        (op->color & TVP_GODOT_GPU_BLEND_TVP_OPERATION) != 0u) {
+        return false;
+    }
+    const bool mask_write =
+        op->type == GodotGpuOp::Type::DrawTriangles &&
+        (op->color & TVP_GODOT_GPU_BLEND_MASK_WRITE) != 0u;
+    const uint32_t flags = op->color & 0xffffu;
+    const uint32_t color_mode = flags & 0xffu;
+    const uint32_t alpha_mode = (flags >> 8u) & 0xffu;
+    return mask_write || (alpha_mode == 0u && color_mode <= 2u);
+}
+
+Live2DRasterBlend Live2DRasterBlendForOp(const GodotGpuOp &op) {
+    if (op.type == GodotGpuOp::Type::DrawTriangles &&
+        (op.color & TVP_GODOT_GPU_BLEND_MASK_WRITE) != 0u) {
+        return Live2DRasterBlend::MaskWrite;
+    }
+    switch (op.color & 0xffu) {
+        case 1u:
+            return Live2DRasterBlend::Add;
+        case 2u:
+            return Live2DRasterBlend::Multiply;
+        default:
+            return Live2DRasterBlend::Normal;
+    }
+}
+
+RID &Live2DRasterPipelineSlot(Live2DRasterBlend blend) {
+    switch (blend) {
+        case Live2DRasterBlend::Add:
+            return g_gpu_pipeline_state->live2d_raster_add_pipeline;
+        case Live2DRasterBlend::Multiply:
+            return g_gpu_pipeline_state->live2d_raster_multiply_pipeline;
+        case Live2DRasterBlend::MaskWrite:
+            return g_gpu_pipeline_state->live2d_raster_mask_pipeline;
+        default:
+            return g_gpu_pipeline_state->live2d_raster_normal_pipeline;
+    }
+}
+
+bool EnsureLive2DRasterShader(RenderingDevice *rd) {
+    if (rd == nullptr) return false;
+    if (g_gpu_pipeline_state == nullptr) {
+        g_gpu_pipeline_state = new GodotGpuPipelineState();
+    }
+    if (g_gpu_pipeline_state->live2d_raster_shader.is_valid() &&
+        g_gpu_pipeline_state->live2d_raster_sampler.is_valid()) {
+        return true;
+    }
+
+    Ref<RDShaderSource> source;
+    source.instantiate();
+    source->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
+    source->set_stage_source(
+        RenderingDevice::SHADER_STAGE_VERTEX,
+        R"GLSL(#version 450
+layout(std430, set = 0, binding = 0) readonly buffer Vertices {
+    float value[];
+} vertices;
+layout(push_constant, std430) uniform Params {
+    ivec4 rect0;
+    ivec4 rect1;
+    ivec4 color0;
+} pc;
+layout(location = 0) out vec2 source_coord;
+layout(location = 1) out vec2 mask_coord;
+
+void main() {
+    int vertex_index = gl_VertexIndex;
+    int triangle = vertex_index / 3;
+    int corner = vertex_index - triangle * 3;
+    bool masked = (uint(pc.color0.z) & 0x08000000u) != 0u;
+    int base = pc.color0.w + triangle * (masked ? 22 : 16) +
+               corner * (masked ? 6 : 4);
+    vec2 destination = vec2(vertices.value[base + 0],
+                            vertices.value[base + 1]);
+    source_coord = vec2(vertices.value[base + 2],
+                        vertices.value[base + 3]);
+    mask_coord = masked
+        ? vec2(vertices.value[base + 4], vertices.value[base + 5])
+        : vec2(0.0);
+    vec2 target_size = max(vec2(pc.rect0.zw), vec2(1.0));
+    vec2 position = vec2(destination.x / target_size.x * 2.0 - 1.0,
+                         destination.y / target_size.y * 2.0 - 1.0);
+    gl_Position = vec4(position, 0.0, 1.0);
+}
+)GLSL");
+    source->set_stage_source(
+        RenderingDevice::SHADER_STAGE_FRAGMENT,
+        R"GLSL(#version 450
+layout(set = 0, binding = 1) uniform sampler2D source_texture;
+layout(set = 0, binding = 2) uniform sampler2D mask_texture;
+layout(push_constant, std430) uniform Params {
+    ivec4 rect0;
+    ivec4 rect1;
+    ivec4 color0;
+} pc;
+layout(location = 0) in vec2 source_coord;
+layout(location = 1) in vec2 mask_coord;
+layout(location = 0) out vec4 fragment_color;
+
+void main() {
+    vec2 source_size = vec2(textureSize(source_texture, 0));
+    vec4 source = texture(source_texture, source_coord / source_size);
+    if (source.g >= 0.70 && source.g > source.r + 0.20 &&
+        source.g > source.b + 0.20) {
+        source.a = 0.0;
+    }
+    float alpha = source.a *
+        clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
+    uint flags = uint(pc.color0.z);
+    if ((flags & 0x08000000u) != 0u) {
+        vec2 mask_size = vec2(textureSize(mask_texture, 0));
+        float mask_value = 1.0 -
+            texture(mask_texture, mask_coord / mask_size).a;
+        if ((flags & 0x00010000u) != 0u) {
+            mask_value = 1.0 - mask_value;
+        }
+        alpha *= clamp(mask_value, 0.0, 1.0);
+    }
+    // The render target remains premultiplied for the whole drawable list.
+    // A single compute pass converts the completed Live2D surface back to the
+    // straight-alpha convention used by the rest of the bridge.
+    fragment_color = vec4(source.rgb * alpha, alpha);
+}
+)GLSL");
+
+    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
+    if (spirv.is_null()) return false;
+    const String vertex_error = spirv->get_stage_compile_error(
+        RenderingDevice::SHADER_STAGE_VERTEX);
+    const String fragment_error = spirv->get_stage_compile_error(
+        RenderingDevice::SHADER_STAGE_FRAGMENT);
+    if (!vertex_error.is_empty() || !fragment_error.is_empty()) {
+        UtilityFunctions::printerr(
+            "Godot Live2D raster shader compile error: ", vertex_error,
+            fragment_error);
+        return false;
+    }
+    g_gpu_pipeline_state->live2d_raster_shader =
+        rd->shader_create_from_spirv(spirv, "AetherKiriLive2DRaster");
+    if (!g_gpu_pipeline_state->live2d_raster_shader.is_valid()) return false;
+
+    Ref<RDSamplerState> sampler_state;
+    sampler_state.instantiate();
+    sampler_state->set_mag_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
+    sampler_state->set_min_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
+    sampler_state->set_mip_filter(RenderingDevice::SAMPLER_FILTER_LINEAR);
+    sampler_state->set_repeat_u(
+        RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
+    sampler_state->set_repeat_v(
+        RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
+    sampler_state->set_repeat_w(
+        RenderingDevice::SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE);
+    g_gpu_pipeline_state->live2d_raster_sampler =
+        rd->sampler_create(sampler_state);
+    return g_gpu_pipeline_state->live2d_raster_sampler.is_valid();
+}
+
+bool EnsureLive2DRasterPipeline(RenderingDevice *rd, const RID &framebuffer,
+                                Live2DRasterBlend blend) {
+    if (!EnsureLive2DRasterShader(rd) || !framebuffer.is_valid()) return false;
+    RID &pipeline = Live2DRasterPipelineSlot(blend);
+    if (pipeline.is_valid()) return true;
+
+    Ref<RDPipelineRasterizationState> rasterization;
+    rasterization.instantiate();
+    rasterization->set_cull_mode(RenderingDevice::POLYGON_CULL_DISABLED);
+    Ref<RDPipelineMultisampleState> multisample;
+    multisample.instantiate();
+    Ref<RDPipelineDepthStencilState> depth_stencil;
+    depth_stencil.instantiate();
+    Ref<RDPipelineColorBlendStateAttachment> attachment;
+    attachment.instantiate();
+    attachment->set_enable_blend(true);
+    attachment->set_color_blend_op(RenderingDevice::BLEND_OP_ADD);
+    attachment->set_alpha_blend_op(RenderingDevice::BLEND_OP_ADD);
+    attachment->set_write_r(blend != Live2DRasterBlend::MaskWrite);
+    attachment->set_write_g(blend != Live2DRasterBlend::MaskWrite);
+    attachment->set_write_b(blend != Live2DRasterBlend::MaskWrite);
+    attachment->set_write_a(true);
+    if (blend == Live2DRasterBlend::Normal) {
+        attachment->set_src_color_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ONE);
+        attachment->set_dst_color_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
+        attachment->set_src_alpha_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ONE);
+        attachment->set_dst_alpha_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
+    } else if (blend == Live2DRasterBlend::Add) {
+        attachment->set_src_color_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ONE);
+        attachment->set_dst_color_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ONE);
+        attachment->set_src_alpha_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ZERO);
+        attachment->set_dst_alpha_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ONE);
+    } else if (blend == Live2DRasterBlend::Multiply) {
+        attachment->set_src_color_blend_factor(
+            RenderingDevice::BLEND_FACTOR_DST_COLOR);
+        attachment->set_dst_color_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
+        attachment->set_src_alpha_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ZERO);
+        attachment->set_dst_alpha_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ONE);
+    } else {
+        attachment->set_src_color_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ZERO);
+        attachment->set_dst_color_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ONE);
+        attachment->set_src_alpha_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ZERO);
+        attachment->set_dst_alpha_blend_factor(
+            RenderingDevice::BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
+    }
+    TypedArray<Ref<RDPipelineColorBlendStateAttachment>> attachments;
+    attachments.push_back(attachment);
+    Ref<RDPipelineColorBlendState> color_blend;
+    color_blend.instantiate();
+    color_blend->set_attachments(attachments);
+    pipeline = rd->render_pipeline_create(
+        g_gpu_pipeline_state->live2d_raster_shader,
+        rd->framebuffer_get_format(framebuffer), -1,
+        RenderingDevice::RENDER_PRIMITIVE_TRIANGLES, rasterization,
+        multisample, depth_stencil, color_blend);
+    return pipeline.is_valid();
+}
+
+bool EnsureLive2DUnpremultiplyPipeline(RenderingDevice *rd) {
+    if (rd == nullptr) return false;
+    if (g_gpu_pipeline_state == nullptr) {
+        g_gpu_pipeline_state = new GodotGpuPipelineState();
+    }
+    if (g_gpu_pipeline_state->live2d_unpremultiply_pipeline.is_valid()) {
+        return true;
+    }
+    Ref<RDShaderSource> source;
+    source.instantiate();
+    source->set_language(RenderingDevice::SHADER_LANGUAGE_GLSL);
+    source->set_stage_source(
+        RenderingDevice::SHADER_STAGE_COMPUTE,
+        R"GLSL(#version 450
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(rgba8, set = 0, binding = 0) uniform image2D target_image;
+layout(push_constant, std430) uniform Params {
+    ivec4 rect;
+} pc;
+void main() {
+    ivec2 local = ivec2(gl_GlobalInvocationID.xy);
+    if (local.x >= pc.rect.z || local.y >= pc.rect.w) return;
+    ivec2 position = pc.rect.xy + local;
+    vec4 color = imageLoad(target_image, position);
+    color.rgb = color.a > 0.00001 ? color.rgb / color.a : vec3(0.0);
+    imageStore(target_image, position, clamp(color, vec4(0.0), vec4(1.0)));
+}
+)GLSL");
+    Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
+    if (spirv.is_null()) return false;
+    const String error = spirv->get_stage_compile_error(
+        RenderingDevice::SHADER_STAGE_COMPUTE);
+    if (!error.is_empty()) {
+        UtilityFunctions::printerr(
+            "Godot Live2D unpremultiply shader compile error: ", error);
+        return false;
+    }
+    g_gpu_pipeline_state->live2d_unpremultiply_shader =
+        rd->shader_create_from_spirv(spirv,
+                                     "AetherKiriLive2DUnpremultiply");
+    if (!g_gpu_pipeline_state->live2d_unpremultiply_shader.is_valid()) {
+        return false;
+    }
+    g_gpu_pipeline_state->live2d_unpremultiply_pipeline =
+        rd->compute_pipeline_create(
+            g_gpu_pipeline_state->live2d_unpremultiply_shader);
+    return g_gpu_pipeline_state->live2d_unpremultiply_pipeline.is_valid();
+}
+
 bool EnsureMosaicPipeline(RenderingDevice *rd) {
     if (rd == nullptr) return false;
     if (g_gpu_pipeline_state == nullptr) {
@@ -3612,6 +3945,282 @@ RID GetCachedTriangleUniformSet(RenderingDevice *rd, const RID &shader,
         g_gpu_uniform_set_cache[key] = uniform_set;
     }
     return uniform_set;
+}
+
+RID GetLive2DFramebuffer(RenderingDevice *rd, const RID &target) {
+    if (rd == nullptr || !target.is_valid()) return RID();
+    const int64_t target_id = target.get_id();
+    const auto found = g_live2d_framebuffer_cache.find(target_id);
+    if (found != g_live2d_framebuffer_cache.end() &&
+        found->second.is_valid()) {
+        return found->second;
+    }
+    TypedArray<RID> attachments;
+    attachments.push_back(target);
+    RID framebuffer = rd->framebuffer_create(attachments);
+    if (framebuffer.is_valid()) {
+        g_live2d_framebuffer_cache[target_id] = framebuffer;
+    }
+    return framebuffer;
+}
+
+void InvalidateLive2DFramebuffer(RenderingDevice *rd, const RID &target) {
+    if (!target.is_valid()) return;
+    const auto found = g_live2d_framebuffer_cache.find(target.get_id());
+    if (found == g_live2d_framebuffer_cache.end()) return;
+    if (rd != nullptr && found->second.is_valid()) {
+        rd->free_rid(found->second);
+    }
+    g_live2d_framebuffer_cache.erase(found);
+}
+
+RID GetCachedLive2DRasterUniformSet(RenderingDevice *rd,
+                                    const RID &vertex_buffer,
+                                    const RID &source,
+                                    const RID &mask) {
+    if (rd == nullptr || g_gpu_pipeline_state == nullptr) return RID();
+    const RID shader = g_gpu_pipeline_state->live2d_raster_shader;
+    const RID sampler = g_gpu_pipeline_state->live2d_raster_sampler;
+    const GodotGpuUniformSetKey key{
+        shader.get_id(), vertex_buffer.get_id(), source.get_id(),
+        mask.get_id(), 0x82u, sampler.get_id()};
+    const auto found = g_gpu_uniform_set_cache.find(key);
+    if (found != g_gpu_uniform_set_cache.end() &&
+        found->second.is_valid()) {
+        return found->second;
+    }
+
+    Ref<RDUniform> vertices;
+    vertices.instantiate();
+    vertices->set_uniform_type(RenderingDevice::UNIFORM_TYPE_STORAGE_BUFFER);
+    vertices->set_binding(0);
+    vertices->add_id(vertex_buffer);
+    Ref<RDUniform> source_texture;
+    source_texture.instantiate();
+    source_texture->set_uniform_type(
+        RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
+    source_texture->set_binding(1);
+    source_texture->add_id(sampler);
+    source_texture->add_id(source);
+    Ref<RDUniform> mask_texture;
+    mask_texture.instantiate();
+    mask_texture->set_uniform_type(
+        RenderingDevice::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE);
+    mask_texture->set_binding(2);
+    mask_texture->add_id(sampler);
+    mask_texture->add_id(mask);
+    TypedArray<RDUniform> uniforms;
+    uniforms.push_back(vertices);
+    uniforms.push_back(source_texture);
+    uniforms.push_back(mask_texture);
+    RID uniform_set = rd->uniform_set_create(uniforms, shader, 0);
+    if (uniform_set.is_valid()) {
+        g_gpu_uniform_set_cache[key] = uniform_set;
+    }
+    return uniform_set;
+}
+
+RID GetCachedLive2DUnpremultiplyUniformSet(RenderingDevice *rd,
+                                           const RID &target) {
+    if (rd == nullptr || g_gpu_pipeline_state == nullptr) return RID();
+    const RID shader = g_gpu_pipeline_state->live2d_unpremultiply_shader;
+    const GodotGpuUniformSetKey key{
+        shader.get_id(), target.get_id(), 0, 0, 0x81u};
+    const auto found = g_gpu_uniform_set_cache.find(key);
+    if (found != g_gpu_uniform_set_cache.end() &&
+        found->second.is_valid()) {
+        return found->second;
+    }
+    Ref<RDUniform> image;
+    image.instantiate();
+    image->set_uniform_type(RenderingDevice::UNIFORM_TYPE_IMAGE);
+    image->set_binding(0);
+    image->add_id(target);
+    TypedArray<RDUniform> uniforms;
+    uniforms.push_back(image);
+    RID uniform_set = rd->uniform_set_create(uniforms, shader, 0);
+    if (uniform_set.is_valid()) {
+        g_gpu_uniform_set_cache[key] = uniform_set;
+    }
+    return uniform_set;
+}
+
+bool UnpremultiplyLive2DRasterTarget(RenderingDevice *rd, const RID &target,
+                                     int left, int top, int right,
+                                     int bottom) {
+    if (right <= left || bottom <= top ||
+        !EnsureLive2DUnpremultiplyPipeline(rd)) {
+        return false;
+    }
+    const RID uniform_set =
+        GetCachedLive2DUnpremultiplyUniformSet(rd, target);
+    if (!uniform_set.is_valid()) return false;
+    int32_t values[4] = {left, top, right - left, bottom - top};
+    PackedByteArray constants;
+    constants.resize(sizeof(values));
+    if (uint8_t *bytes = constants.ptrw()) {
+        std::memcpy(bytes, values, sizeof(values));
+    }
+    const int64_t compute_list = rd->compute_list_begin();
+    rd->compute_list_bind_compute_pipeline(
+        compute_list, g_gpu_pipeline_state->live2d_unpremultiply_pipeline);
+    rd->compute_list_bind_uniform_set(compute_list, uniform_set, 0);
+    rd->compute_list_set_push_constant(compute_list, constants,
+                                       sizeof(values));
+    rd->compute_list_dispatch(
+        compute_list, static_cast<uint32_t>((right - left + 7) / 8),
+        static_cast<uint32_t>((bottom - top + 7) / 8), 1);
+    rd->compute_list_end();
+    ApplyGodotGpuBarrier(rd);
+    return true;
+}
+
+void ExecuteGodotGpuLive2DRasterBatch(
+    RenderingDevice *rd,
+    const std::vector<std::shared_ptr<GodotGpuOp>> &ops) {
+    if (ops.empty()) return;
+    g_gpu_live2d_raster_batches.fetch_add(1, std::memory_order_relaxed);
+    g_gpu_live2d_raster_ops.fetch_add(
+        static_cast<uint64_t>(ops.size()), std::memory_order_relaxed);
+    if (rd == nullptr) {
+        for (const auto &op : ops) FinishGodotGpuOp(op, false);
+        return;
+    }
+
+    std::vector<size_t> float_offsets(ops.size(), 0);
+    std::vector<float> combined_vertices;
+    for (size_t index = 0; index < ops.size(); ++index) {
+        while ((combined_vertices.size() & 3u) != 0u) {
+            combined_vertices.push_back(0.0f);
+        }
+        float_offsets[index] = combined_vertices.size();
+        combined_vertices.insert(combined_vertices.end(),
+                                 ops[index]->vertices.begin(),
+                                 ops[index]->vertices.end());
+    }
+    PackedByteArray vertex_data;
+    vertex_data.resize(static_cast<int64_t>(combined_vertices.size() *
+                                            sizeof(float)));
+    if (uint8_t *bytes = vertex_data.ptrw()) {
+        std::memcpy(bytes, combined_vertices.data(),
+                    combined_vertices.size() * sizeof(float));
+    }
+    RID vertex_buffer;
+    if (!UpdateGodotGpuTriangleVertexBuffer(rd, vertex_data, vertex_buffer) ||
+        !EnsureLive2DRasterShader(rd)) {
+        for (const auto &op : ops) FinishGodotGpuOp(op, false);
+        return;
+    }
+
+    std::vector<bool> results(ops.size(), false);
+    std::vector<RID> raster_uniform_sets(ops.size());
+    std::vector<PackedByteArray> raster_constants(ops.size());
+    size_t group_begin = 0;
+    while (group_begin < ops.size()) {
+        const RID target = ops[group_begin]->dst;
+        const bool mask_write =
+            Live2DRasterBlendForOp(*ops[group_begin]) ==
+            Live2DRasterBlend::MaskWrite;
+        size_t group_end = group_begin + 1u;
+        while (group_end < ops.size() && ops[group_end]->dst == target &&
+               ((Live2DRasterBlendForOp(*ops[group_end]) ==
+                 Live2DRasterBlend::MaskWrite) == mask_write)) {
+            ++group_end;
+        }
+
+        const RID framebuffer = GetLive2DFramebuffer(rd, target);
+        int union_left = std::numeric_limits<int>::max();
+        int union_top = std::numeric_limits<int>::max();
+        int union_right = std::numeric_limits<int>::min();
+        int union_bottom = std::numeric_limits<int>::min();
+        bool drew = false;
+        bool group_ready = framebuffer.is_valid();
+        for (size_t index = group_begin;
+             index < group_end && group_ready; ++index) {
+            const auto &op = ops[index];
+            const Live2DRasterBlend blend = Live2DRasterBlendForOp(*op);
+            if (!EnsureLive2DRasterPipeline(rd, framebuffer, blend)) {
+                group_ready = false;
+                break;
+            }
+            const RID mask =
+                op->type == GodotGpuOp::Type::DrawMaskedTriangles
+                    ? op->src2 : op->src;
+            raster_uniform_sets[index] = GetCachedLive2DRasterUniformSet(
+                rd, vertex_buffer, op->src, mask);
+            if (!raster_uniform_sets[index].is_valid()) {
+                group_ready = false;
+                break;
+            }
+            raster_constants[index] = PackGpuPushConstants(*op);
+            if (uint8_t *bytes = raster_constants[index].ptrw()) {
+                int32_t color_flags = 0;
+                std::memcpy(&color_flags, bytes + 10 * sizeof(int32_t),
+                            sizeof(color_flags));
+                if (op->type == GodotGpuOp::Type::DrawMaskedTriangles) {
+                    color_flags |=
+                        static_cast<int32_t>(kGodotGpuRasterMasked);
+                }
+                const int32_t vertex_offset =
+                    static_cast<int32_t>(float_offsets[index]);
+                std::memcpy(bytes + 10 * sizeof(int32_t), &color_flags,
+                            sizeof(color_flags));
+                std::memcpy(bytes + 11 * sizeof(int32_t), &vertex_offset,
+                            sizeof(vertex_offset));
+            }
+        }
+        int64_t draw_list = -1;
+        if (group_ready) {
+            draw_list = rd->draw_list_begin(framebuffer);
+        }
+        for (size_t index = group_begin;
+             index < group_end && draw_list >= 0; ++index) {
+            const auto &op = ops[index];
+            const Live2DRasterBlend blend = Live2DRasterBlendForOp(*op);
+            rd->draw_list_bind_render_pipeline(
+                draw_list, Live2DRasterPipelineSlot(blend));
+            rd->draw_list_bind_uniform_set(
+                draw_list, raster_uniform_sets[index], 0);
+            rd->draw_list_set_push_constant(
+                draw_list, raster_constants[index], 48);
+            rd->draw_list_enable_scissor(
+                draw_list, Rect2(op->dst_pos.x, op->dst_pos.y,
+                                 op->size.x, op->size.y));
+            rd->draw_list_draw(draw_list, false, 1,
+                               static_cast<uint32_t>(op->mode * 3u));
+            results[index] = true;
+            drew = true;
+            if (!mask_write) {
+                union_left = std::min(
+                    union_left, static_cast<int>(op->dst_pos.x));
+                union_top = std::min(
+                    union_top, static_cast<int>(op->dst_pos.y));
+                union_right = std::max(
+                    union_right,
+                    static_cast<int>(op->dst_pos.x + op->size.x));
+                union_bottom = std::max(
+                    union_bottom,
+                    static_cast<int>(op->dst_pos.y + op->size.y));
+            }
+        }
+        if (draw_list >= 0) {
+            rd->draw_list_end();
+        }
+        if (drew) ApplyGodotGpuBarrier(rd);
+        if (drew && !mask_write &&
+            !UnpremultiplyLive2DRasterTarget(
+                rd, target, union_left, union_top, union_right,
+                union_bottom)) {
+            for (size_t index = group_begin; index < group_end; ++index) {
+                results[index] = false;
+            }
+        }
+        group_begin = group_end;
+    }
+
+    for (size_t index = 0; index < ops.size(); ++index) {
+        FinishGodotGpuOp(ops[index], results[index]);
+    }
 }
 
 bool DispatchGodotGpuBlend(RenderingDevice *rd,
@@ -4250,6 +4859,7 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
 #endif
         }
         case GodotGpuOp::Type::Release:
+            InvalidateLive2DFramebuffer(rd, op->dst);
             InvalidateGodotGpuUniformSetsForResource(rd, op->dst);
 #if defined(__APPLE__)
             if (op->dst.is_valid()) rd->free_rid(op->dst);
@@ -4524,7 +5134,7 @@ void ExecuteGodotGpuBlendBatch(
     }
 }
 
-void ExecuteGodotGpuComputeBatch(
+void ExecuteGodotGpuComputeBatchLegacy(
     RenderingDevice *rd,
     const std::vector<std::shared_ptr<GodotGpuOp>> &ops) {
     if (ops.empty()) return;
@@ -4686,6 +5296,37 @@ void ExecuteGodotGpuComputeBatch(
         FreeGodotGpuPreparedTriangles(rd, prepared[i]);
         FinishGodotGpuOp(ops[i], results[i]);
     }
+}
+
+void ExecuteGodotGpuComputeBatch(
+    RenderingDevice *rd,
+    const std::vector<std::shared_ptr<GodotGpuOp>> &ops) {
+    if (ops.empty()) return;
+    if (!Live2DHardwareRasterEnabled()) {
+        ExecuteGodotGpuComputeBatchLegacy(rd, ops);
+        return;
+    }
+
+    std::vector<std::shared_ptr<GodotGpuOp>> segment;
+    bool segment_is_raster = false;
+    const auto flush_segment = [&]() {
+        if (segment.empty()) return;
+        if (segment_is_raster) {
+            ExecuteGodotGpuLive2DRasterBatch(rd, segment);
+        } else {
+            ExecuteGodotGpuComputeBatchLegacy(rd, segment);
+        }
+        segment.clear();
+    };
+    for (const auto &op : ops) {
+        const bool raster = IsLive2DHardwareRasterOp(op);
+        if (!segment.empty() && raster != segment_is_raster) {
+            flush_segment();
+        }
+        if (segment.empty()) segment_is_raster = raster;
+        segment.push_back(op);
+    }
+    flush_segment();
 }
 
 void DrainGodotGpuOpsOnRenderThreadImpl(bool force_batch_drain,
@@ -6070,7 +6711,7 @@ bool BridgeCopyTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     op->src = src_record.rid;
     op->dst = dst_record.rid;
     op->dst_pos = Vector3(clip_rect->left, clip_rect->top, 0);
-    op->src_pos = Vector3(0, 0, 0);
+    op->src_pos = Vector3(dst_record.width, dst_record.height, 0);
     op->size = Vector3(width, height, 1);
     op->src_size = Vector3(src_record.width, src_record.height, 1);
     op->mode = triangle_count;
@@ -6128,7 +6769,7 @@ bool BridgeDrawTriangles(uint64_t dst, uint64_t src, uint32_t triangle_count,
     op->src = src_record.rid;
     op->dst = dst_record.rid;
     op->dst_pos = Vector3(clip_rect->left, clip_rect->top, 0);
-    op->src_pos = Vector3(0, 0, 0);
+    op->src_pos = Vector3(dst_record.width, dst_record.height, 0);
     op->size = Vector3(width, height, 1);
     op->src_size = Vector3(src_record.width, src_record.height, 1);
     op->mode = triangle_count;
@@ -6199,7 +6840,7 @@ bool BridgeDrawMaskedTriangles(uint64_t dst, uint64_t src, uint64_t mask,
     op->src2 = mask_record.rid;
     op->dst = dst_record.rid;
     op->dst_pos = Vector3(clip_rect->left, clip_rect->top, 0);
-    op->src_pos = Vector3(0, 0, 0);
+    op->src_pos = Vector3(dst_record.width, dst_record.height, 0);
     op->size = Vector3(width, height, 1);
     op->src_size = Vector3(src_record.width, src_record.height, 1);
     op->mode = triangle_count;
@@ -6908,6 +7549,9 @@ uint32_t BlendModeFromName(const String &mode_name) {
 void ReleaseGodotGpuPipeline() {
     RenderingDevice *rd = MainRenderingDevice();
     if (rd != nullptr) {
+        for (const auto &entry : g_live2d_framebuffer_cache) {
+            if (entry.second.is_valid()) rd->free_rid(entry.second);
+        }
         for (const auto &entry : g_artemis_shader_pipeline_cache) {
             if (entry.second.pipeline.is_valid()) {
                 rd->free_rid(entry.second.pipeline);
@@ -6917,6 +7561,7 @@ void ReleaseGodotGpuPipeline() {
             }
         }
     }
+    g_live2d_framebuffer_cache.clear();
     g_artemis_shader_pipeline_cache.clear();
     if (g_gpu_pipeline_state == nullptr) return;
     if (rd != nullptr) {
@@ -6962,6 +7607,33 @@ void ReleaseGodotGpuPipeline() {
         }
         if (g_gpu_pipeline_state->draw_masked_triangles_shader.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->draw_masked_triangles_shader);
+        }
+        if (g_gpu_pipeline_state->live2d_raster_normal_pipeline.is_valid()) {
+            rd->free_rid(
+                g_gpu_pipeline_state->live2d_raster_normal_pipeline);
+        }
+        if (g_gpu_pipeline_state->live2d_raster_add_pipeline.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->live2d_raster_add_pipeline);
+        }
+        if (g_gpu_pipeline_state->live2d_raster_multiply_pipeline.is_valid()) {
+            rd->free_rid(
+                g_gpu_pipeline_state->live2d_raster_multiply_pipeline);
+        }
+        if (g_gpu_pipeline_state->live2d_raster_mask_pipeline.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->live2d_raster_mask_pipeline);
+        }
+        if (g_gpu_pipeline_state->live2d_raster_shader.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->live2d_raster_shader);
+        }
+        if (g_gpu_pipeline_state->live2d_raster_sampler.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->live2d_raster_sampler);
+        }
+        if (g_gpu_pipeline_state->live2d_unpremultiply_pipeline.is_valid()) {
+            rd->free_rid(
+                g_gpu_pipeline_state->live2d_unpremultiply_pipeline);
+        }
+        if (g_gpu_pipeline_state->live2d_unpremultiply_shader.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->live2d_unpremultiply_shader);
         }
         if (g_gpu_pipeline_state->mosaic_pipeline.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->mosaic_pipeline);
