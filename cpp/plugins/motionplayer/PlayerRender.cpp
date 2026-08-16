@@ -7605,12 +7605,17 @@ extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
     if(!centeredGameMotionStablePresentationLayer(layer)) {
         return logReturn("not-centered-stable", false);
     }
+
+    // assignImages also reaches this hook for non-motion GPU layers.  Check
+    // for a restorable frame before sampling pixels: GetPoint() otherwise
+    // forces a synchronous full-texture readback just to discover that the
+    // motion hold cache has no matching entry.
+    auto *entry = findLiveCenteredPresentationHoldEntry(layer);
+    if(!entry) {
+        return logReturn("no-live-entry", false);
+    }
     if(!layer->GetVisible() || layer->GetOpacity() == 0 ||
        !layer->GetParentVisible()) {
-        auto *entry = findLiveCenteredPresentationHoldEntry(layer);
-        if(!entry) {
-            return logReturn("no-live-entry", false);
-        }
         const bool shown = copyCenteredPresentationHoldEntryToOverlay(
             *entry, layer);
         return logReturn(shown ? "overlay-shown" : "overlay-copy-failed",
@@ -7619,11 +7624,6 @@ extern "C" bool AetherKiriMotionRestoreCenteredPresentationLayer(
     if(layer->GetVisible() && layer->GetOpacity() != 0 &&
        motionPresentationLayerHasVisibleSamples(layer)) {
         return logReturn("already-visible", false);
-    }
-
-    auto *entry = findLiveCenteredPresentationHoldEntry(layer);
-    if(!entry) {
-        return logReturn("no-live-entry", false);
     }
 
     const int canvasWidth = std::max<tjs_int>(
