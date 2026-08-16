@@ -572,6 +572,179 @@ TEST_CASE("KAGParserEx preserves existing script KAGParser class") {
     global->Release();
 }
 
+TEST_CASE("ExtKAGParser preserves native local and parameter macro semantics") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("ExtKAGParser.dll"));
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+
+    iTJSDispatch2 *original = TJSCreateDictionaryObject();
+    REQUIRE(original != nullptr);
+    const tTJSVariant originalValue(original, original);
+    setProp(global, TJS_W("KAGParser"), originalValue);
+    original->Release();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("ExtKAGParser.dll")));
+    tTJSVariant parserClass = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(parserClass.Type() == tvtObject);
+    CHECK(parserClass.AsObjectNoAddRef() != original);
+
+    iTJSDispatch2 *parser = nullptr;
+    tTJSVariantClosure parserClosure = parserClass.AsObjectClosureNoAddRef();
+    REQUIRE(TJS_SUCCEEDED(parserClosure.CreateNew(0, nullptr, nullptr, &parser,
+                                                  0, nullptr, nullptr)));
+    REQUIRE(parser != nullptr);
+
+    const tTJSVariant parserValue(parser, parser);
+    CHECK(static_cast<tjs_int>(getProp(parserValue, TJS_W("localVariablesDepth"))) == 1);
+    CHECK(getProp(parserValue, TJS_W("lf")).Type() == tvtObject);
+    CHECK(getProp(parserValue, TJS_W("localVariables")).Type() == tvtObject);
+
+    ScenarioLoadCallback *callback = new ScenarioLoadCallback(
+        TJS_W("[pushlocalvar answer=42]\n"
+              "[probe value=&lf.answer]\n"
+              "[poplocalvar]\n"
+              "[pmacro name=dr id=right]\n"
+              "[pmacro name=dr1 dr=1]\n"
+              "[stc ch=10 dr1]\n"));
+    tTJSVariant callbackValue(callback, callback);
+    setProp(parser, TJS_W("onScenarioLoad"), callbackValue);
+    setProp(parser, TJS_W("ignoreCR"),
+            tTJSVariant(static_cast<tTVInteger>(1)));
+    callback->Release();
+
+    tTJSVariant storage(TJS_W("memory.ks"));
+    tTJSVariant *loadArgs[] = { &storage };
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(0, TJS_W("loadScenario"), nullptr,
+                                           nullptr, 1, loadArgs, parser)));
+
+    tTJSVariant tag;
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(0, TJS_W("getNextTag"), nullptr,
+                                           &tag, 0, nullptr, parser)));
+    REQUIRE(tag.Type() == tvtObject);
+    CHECK(ttstr(getProp(tag, TJS_W("tagname"))) == TJS_W("probe"));
+    CHECK(static_cast<tjs_int>(getProp(tag, TJS_W("value"))) == 42);
+    CHECK(static_cast<tjs_int>(getProp(parserValue, TJS_W("localVariablesDepth"))) == 2);
+
+    tag.Clear();
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(0, TJS_W("getNextTag"), nullptr,
+                                           &tag, 0, nullptr, parser)));
+    REQUIRE(tag.Type() == tvtObject);
+    CHECK(ttstr(getProp(tag, TJS_W("tagname"))) == TJS_W("stc"));
+    CHECK(ttstr(getProp(tag, TJS_W("ch"))) == TJS_W("10"));
+    CHECK(ttstr(getProp(tag, TJS_W("dr"))) == TJS_W("1"));
+    CHECK(getProp(tag, TJS_W("id")).Type() == tvtVoid);
+    CHECK(static_cast<tjs_int>(
+              getProp(parserValue, TJS_W("localVariablesDepth"))) == 1);
+
+    parser->Release();
+    parserClass.Clear();
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("ExtKAGParser.dll")));
+
+    const tTJSVariant restored = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(restored.Type() == tvtObject);
+    CHECK(restored.AsObjectNoAddRef() == original);
+
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+    global->Release();
+}
+
+TEST_CASE("ExtKAGParser restores legacy core parser call frames") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("ExtKAGParser.dll"));
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("ExtKAGParser.dll")));
+    tTJSVariant parserClass = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(parserClass.Type() == tvtObject);
+
+    const ttstr scenario =
+        TJS_W("[call target=*sub]\n"
+              "[after]\n"
+              "[s]\n"
+              "*sub\n"
+              "[inside]\n"
+              "[return]\n");
+
+    auto createParser = [&]() {
+        iTJSDispatch2 *parser = nullptr;
+        tTJSVariantClosure parserClosure = parserClass.AsObjectClosureNoAddRef();
+        REQUIRE(TJS_SUCCEEDED(parserClosure.CreateNew(
+            0, nullptr, nullptr, &parser, 0, nullptr, nullptr)));
+        REQUIRE(parser != nullptr);
+
+        ScenarioLoadCallback *callback = new ScenarioLoadCallback(scenario);
+        tTJSVariant callbackValue(callback, callback);
+        setProp(parser, TJS_W("onScenarioLoad"), callbackValue);
+        setProp(parser, TJS_W("ignoreCR"),
+                tTJSVariant(static_cast<tTVInteger>(1)));
+        callback->Release();
+        return parser;
+    };
+
+    iTJSDispatch2 *sourceParser = createParser();
+    tTJSVariant storage(TJS_W("memory.ks"));
+    tTJSVariant *loadArgs[] = { &storage };
+    REQUIRE(TJS_SUCCEEDED(sourceParser->FuncCall(
+        0, TJS_W("loadScenario"), nullptr, nullptr, 1, loadArgs, sourceParser)));
+
+    tTJSVariant tag;
+    REQUIRE(TJS_SUCCEEDED(sourceParser->FuncCall(
+        0, TJS_W("getNextTag"), nullptr, &tag, 0, nullptr, sourceParser)));
+    REQUIRE(ttstr(getProp(tag, TJS_W("tagname"))) == TJS_W("inside"));
+
+    tTJSVariant legacyState;
+    REQUIRE(TJS_SUCCEEDED(sourceParser->FuncCall(
+        0, TJS_W("store"), nullptr, &legacyState, 0, nullptr, sourceParser)));
+    REQUIRE(legacyState.Type() == tvtObject);
+    iTJSDispatch2 *state = legacyState.AsObjectNoAddRef();
+    REQUIRE(state != nullptr);
+
+    // Match the state shape emitted by Aether's former core KAGParser.
+    state->DeleteMember(0, TJS_W("LocalVariables"), nullptr, state);
+    state->DeleteMember(0, TJS_W("whileStack"), nullptr, state);
+    state->DeleteMember(0, TJS_W("WhileLevelExp"), nullptr, state);
+    state->DeleteMember(0, TJS_W("WhileLevelEach"), nullptr, state);
+    const tTJSVariant callStack = getProp(legacyState, TJS_W("callStack"));
+    const tTJSVariant callFrame = getIndex(callStack, 0);
+    iTJSDispatch2 *frame = callFrame.AsObjectNoAddRef();
+    REQUIRE(frame != nullptr);
+    frame->DeleteMember(0, TJS_W("WhileStackDepth"), nullptr, frame);
+    frame->DeleteMember(0, TJS_W("LocalVariablesCount"), nullptr, frame);
+
+    iTJSDispatch2 *restoredParser = createParser();
+    tTJSVariant *restoreArgs[] = { &legacyState };
+    REQUIRE(TJS_SUCCEEDED(restoredParser->FuncCall(
+        0, TJS_W("restore"), nullptr, nullptr, 1, restoreArgs,
+        restoredParser)));
+
+    tag.Clear();
+    REQUIRE(TJS_SUCCEEDED(restoredParser->FuncCall(
+        0, TJS_W("getNextTag"), nullptr, &tag, 0, nullptr,
+        restoredParser)));
+    REQUIRE(ttstr(getProp(tag, TJS_W("tagname"))) == TJS_W("inside"));
+
+    tag.Clear();
+    REQUIRE(TJS_SUCCEEDED(restoredParser->FuncCall(
+        0, TJS_W("getNextTag"), nullptr, &tag, 0, nullptr,
+        restoredParser)));
+    REQUIRE(ttstr(getProp(tag, TJS_W("tagname"))) == TJS_W("after"));
+    const tTJSVariant restoredValue(restoredParser, restoredParser);
+    CHECK(static_cast<tjs_int>(getProp(
+              restoredValue, TJS_W("localVariablesDepth"))) == 1);
+
+    restoredParser->Release();
+    sourceParser->Release();
+    parserClass.Clear();
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("ExtKAGParser.dll")));
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+    global->Release();
+}
+
 TEST_CASE("extrans registers precise wave transition provider") {
     ensurePluginRegistryRuntime();
     ncbAutoRegister::UnloadModule(TJS_W("extrans.dll"));
