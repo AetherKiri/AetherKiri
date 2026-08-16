@@ -94,7 +94,7 @@ set(AETHERKIRI_OBFUSCATION_BUILD_ID "local" CACHE STRING
     "non-secret identifier mixed into deterministic obfuscation output")
 option(AETHERKIRI_ENABLE_INTERNAL
        "enable optional private AetherInternal packages when available" ON)
-set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 3)
+set(AETHERKIRI_MOTIONPLAYER_BACKEND_API_VERSION 4)
 set(AETHERKIRI_LIVE2D_HOST_API_VERSION 1)
 set(AETHERKIRI_FRAME_EFFECT_HOST_API_VERSION 2)
 set(AETHERKIRI_INTERNAL_DIR

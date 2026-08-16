@@ -5,3 +5,6 @@
 	path = packages/OnscripterYuri
 	url = https://github.com/AetherKiri/OnscripterYuri.git
 	branch = aether-main
+[submodule "packages/psdfile"]
+	path = packages/psdfile
+	url = git@github.com:AetherKiri/psdfile.git

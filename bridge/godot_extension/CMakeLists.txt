@@ -109,13 +109,34 @@ endif()
 
 if(APPLE)
     target_sources(aether_kiri_godot PRIVATE
+        src/apple_external_texture.mm
         src/apple_native_file_picker.swift
         src/apple_storekit.swift)
+    set_source_files_properties(src/apple_external_texture.mm
+        PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
     set_property(TARGET aether_kiri_godot PROPERTY Swift_LANGUAGE_VERSION 5)
     target_link_libraries(aether_kiri_godot PRIVATE
+        "-framework CoreVideo"
+        "-framework Metal"
         "-framework UniformTypeIdentifiers"
         "-framework Security"
         "-framework StoreKit")
+endif()
+
+if(APPLE AND NOT IOS)
+    find_package(VulkanHeaders CONFIG REQUIRED)
+    target_sources(aether_kiri_godot PRIVATE
+        src/apple_vulkan_external_texture.mm)
+    set_source_files_properties(src/apple_vulkan_external_texture.mm
+        PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
+    target_link_libraries(aether_kiri_godot PRIVATE Vulkan::Headers)
+endif()
+
+if(ANDROID)
+    target_sources(aether_kiri_godot PRIVATE
+        src/android_external_texture.cpp)
+    target_link_libraries(aether_kiri_godot PRIVATE
+        android vulkan ${CMAKE_DL_LIBS})
 endif()
 
 target_compile_features(aether_kiri_godot PRIVATE cxx_std_17)

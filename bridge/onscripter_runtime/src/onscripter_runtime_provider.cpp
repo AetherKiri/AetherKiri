@@ -424,6 +424,7 @@ namespace aetherkiri::onscripter {
             {},
             nullptr,
             nullptr,
+            nullptr,
             {}
         };
 

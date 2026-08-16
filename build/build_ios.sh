@@ -74,8 +74,22 @@ FORCE_LOAD_PLUGIN_SOURCES=(
     "cpp/plugins/motionplayer/libmotionplayer.a"
     "cpp/plugins/psbfile/libpsbfile.a"
     "cpp/plugins/psdfile/libpsdfile.a"
-    "cpp/plugins/psdfile/psdparse/libpsdparse.a"
+    "cpp/plugins/psdfile/psdparse/psdparse/libpsdparse.a"
 )
+PRIVATE_RUNTIME_ARCHIVE_LISTER="$PROJECT_ROOT/packages/AetherInternal/tools/list_ios_runtime_archives.sh"
+if [[ -x "$PRIVATE_RUNTIME_ARCHIVE_LISTER" ]]; then
+    private_runtime_target="device"
+    if [[ "$SIMULATOR" == true ]]; then
+        private_runtime_target="simulator-$SIMULATOR_ARCH"
+    fi
+    while IFS=$'\t' read -r archive source; do
+        if [[ -z "$archive" || -z "$source" ]]; then
+            continue
+        fi
+        FORCE_LOAD_PLUGIN_ARCHIVES+=("$archive")
+        FORCE_LOAD_PLUGIN_SOURCES+=("$source")
+    done < <("$PRIVATE_RUNTIME_ARCHIVE_LISTER" "$private_runtime_target")
+fi
 IOS_SDK_COMPAT_ARCHIVE="libios_sdk_compat_symbols.a"
 
 ensure_vcpkg() {
@@ -280,7 +294,7 @@ combine_ios_static_extension() {
         "$CMAKE_BUILD_DIR/cpp/plugins/motionplayer/libmotionplayer.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/psbfile/libpsbfile.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/psdfile/libpsdfile.a"
-        "$CMAKE_BUILD_DIR/cpp/plugins/psdfile/psdparse/libpsdparse.a"
+        "$CMAKE_BUILD_DIR/cpp/plugins/psdfile/psdparse/psdparse/libpsdparse.a"
         "$CMAKE_BUILD_DIR/cpp/plugins/libCubismFramework.a"
         "$CMAKE_BUILD_DIR/cpp/external/libbpg/liblibbpg.a"
     )
@@ -325,9 +339,17 @@ combine_ios_static_extension() {
 stage_force_load_plugin_archives() {
     local destination="$1"
     local source
+    local resolved
     mkdir -p "$destination"
     for source in "${FORCE_LOAD_PLUGIN_SOURCES[@]}"; do
-        cp -f "$CMAKE_BUILD_DIR/$source" "$destination/" 2>/dev/null || true
+        resolved="$source"
+        if [[ ! -f "$resolved" ]]; then
+            resolved="$CMAKE_BUILD_DIR/$source"
+        fi
+        if [[ ! -f "$resolved" ]]; then
+            resolved="$PROJECT_ROOT/$source"
+        fi
+        cp -f "$resolved" "$destination/" 2>/dev/null || true
     done
 }
 
@@ -401,7 +423,7 @@ patch_ios_export_project() {
     for archive in "${FORCE_LOAD_PLUGIN_ARCHIVES[@]}"; do
         flags+=" -Wl,-force_load,Aether/bin/ios/$export_build_type/$archive"
     done
-    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework Security -framework StoreKit -framework SystemConfiguration -framework MobileCoreServices'
+    flags+=' -framework AudioToolbox -framework AVFoundation -framework CoreBluetooth -framework CoreHaptics -framework CoreMedia -framework CoreMotion -framework CoreVideo -framework GameController -framework VideoToolbox -framework CoreGraphics -framework QuartzCore -framework Metal -framework MetalKit -framework OpenGLES -framework Security -framework StoreKit -framework SystemConfiguration -framework MobileCoreServices'
 
     if [[ -f "$project_file" ]]; then
         FLAGS="$flags" perl -0pi -e 's/OTHER_LDFLAGS = "[^"]*";/"OTHER_LDFLAGS = \"" . $ENV{FLAGS} . "\";"/eg' "$project_file"

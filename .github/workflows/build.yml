@@ -88,9 +88,31 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public OnscripterYuri package
+      - name: Resolve private runtime dependency cache
+        id: private-runtime-cache-key
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
+            --platform android --print-cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        uses: actions/cache@v5
+        with:
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/android
+          key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
+
+      - name: Initialize private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform android
+
+      - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
-        run: git submodule update --init --depth 1 packages/OnscripterYuri
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -337,9 +359,31 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public OnscripterYuri package
+      - name: Resolve private runtime dependency cache
+        id: private-runtime-cache-key
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
+            --platform apple --print-cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        uses: actions/cache@v5
+        with:
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/apple
+          key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
+
+      - name: Initialize private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform apple
+
+      - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
-        run: git submodule update --init --depth 1 packages/OnscripterYuri
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -390,7 +434,7 @@ jobs:
 
       - name: Install Build Systems
         run: |
-          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache mono
+          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison nasm ccache mono
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
 
@@ -597,9 +641,31 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public OnscripterYuri package
+      - name: Resolve private runtime dependency cache
+        id: private-runtime-cache-key
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: |
+          key="$(packages/AetherInternal/tools/prepare_ci_dependencies.sh \
+            --platform apple --print-cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        uses: actions/cache@v5
+        with:
+          path: packages/AetherInternal/.ci-cache/runtime-dependencies/apple
+          key: ${{ runner.os }}-${{ steps.private-runtime-cache-key.outputs.key }}
+
+      - name: Initialize private runtime dependencies
+        if: env.AETHERKIRI_WITH_INTERNAL == 'true'
+        run: packages/AetherInternal/tools/prepare_ci_dependencies.sh --platform apple
+
+      - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
-        run: git submodule update --init --depth 1 packages/OnscripterYuri
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''
@@ -641,7 +707,7 @@ jobs:
 
       - name: Install Build Systems
         run: |
-          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison ccache mono
+          brew install cmake ninja pkg-config autoconf automake autoconf-archive libtool gettext coreutils bison nasm ccache mono
           echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
           echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
 
@@ -724,7 +790,7 @@ jobs:
           AETHERKIRI_SMOKE_GAME: ${{ github.workspace }}/tests/fixtures/onscripter_smoke
         run: |
           set -euo pipefail
-          "$GODOT_BIN" --headless \
+          arch -x86_64 "$GODOT_BIN" --headless \
             --path apps/godot_app \
             --script res://scripts/smoke_test.gd
 
@@ -734,14 +800,14 @@ jobs:
           test_build_dir="${GITHUB_WORKSPACE}/out/macos/ci-tests"
           configure_log="${RUNNER_TEMP}/aetherkiri-test-configure.log"
 
-          cmake --preset "MacOS Debug Config" --fresh \
+          cmake --preset "MacOS x64 Debug Config" --fresh \
             -B "$test_build_dir" \
             -D ENABLE_TESTS=ON \
             -D BUILD_TOOLS=OFF \
             -D BUILD_ENGINE_API=OFF \
             -D BUILD_GODOT_EXTENSION=OFF \
             -D VCPKG_MANIFEST_INSTALL=OFF \
-            -D VCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/out/macos/debug/vcpkg_installed" \
+            -D VCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/out/macos-x64/debug/vcpkg_installed" \
             -D CMAKE_C_COMPILER_LAUNCHER=ccache \
             -D CMAKE_CXX_COMPILER_LAUNCHER=ccache \
             2>&1 | tee "$configure_log"
@@ -759,7 +825,7 @@ jobs:
         run: |
           set -euo pipefail
           for build_type in release debug; do
-            APP_PATH="out/godot/macos/${build_type}/Aether.app"
+            APP_PATH="out/godot/macos-x64/${build_type}/Aether.app"
             if [[ ! -d "$APP_PATH" ]]; then
               echo "Built Godot ${build_type} .app bundle not found: $APP_PATH" >&2
               exit 1
@@ -807,7 +873,7 @@ jobs:
           AETHER_APPLE_TEAM_ID: 3JL7FE9XQT
         run: |
           .github/scripts/package-macos-app-store.sh \
-            out/godot/macos/release/Aether.app \
+            out/godot/macos-x64/release/Aether.app \
             out/godot/macos/app-store
 
       - name: Upload Release App
@@ -815,7 +881,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: macos-release-app
-          path: out/godot/macos/release/
+          path: out/godot/macos-x64/release/
           retention-days: 7
 
       - name: Upload Mac App Store installer
@@ -851,9 +917,12 @@ jobs:
           ssh-key: ${{ env.AETHERKIRI_WITH_INTERNAL == 'true' && secrets.AETHERSECRET || '' }}
           persist-credentials: false
 
-      - name: Initialize public OnscripterYuri package
+      - name: Initialize public runtime packages
         if: env.AETHERKIRI_WITH_INTERNAL != 'true'
-        run: git submodule update --init --depth 1 packages/OnscripterYuri
+        run: |
+          git submodule update --init --depth 1 packages/OnscripterYuri
+          git -c submodule.packages/psdfile.url=https://github.com/AetherKiri/psdfile.git \
+            submodule update --init --recursive --depth 1 packages/psdfile
 
       - name: Set application release version
         if: env.AETHERKIRI_RELEASE_VERSION != ''

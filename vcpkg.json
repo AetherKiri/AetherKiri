@@ -109,6 +109,10 @@
     "uchardet",
     "unrar",
     {
+      "name": "vulkan-headers",
+      "platform": "osx"
+    },
+    {
       "name": "vcpkg-cmake",
       "host": true
     },

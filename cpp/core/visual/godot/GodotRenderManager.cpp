@@ -825,6 +825,30 @@ bool GodotTexture2D::DrawTrianglesGpuFrom(GodotTexture2D *src,
     return true;
 }
 
+bool GodotTexture2D::DrawExternalTrianglesGpuFrom(
+    uint64_t source_gpu_handle, uint32_t triangle_count,
+    const tTVPRect &clip_rc, const tTVPPointD *dst_points,
+    const tTVPPointD *src_points, int opacity, uint32_t blend_mode) {
+    if(source_gpu_handle == 0 || source_gpu_handle == gpu_handle_ ||
+       triangle_count == 0 || dst_points == nullptr ||
+       src_points == nullptr || gpu_handle_ == 0) {
+        return false;
+    }
+    const auto *bridge = TVPGodotGpuBridgeGet();
+    if(bridge == nullptr || bridge->draw_triangles == nullptr) return false;
+    const float normalizedOpacity =
+        static_cast<float>(std::clamp(opacity, 0, 255)) / 255.0f;
+    if(!bridge->draw_triangles(
+           gpu_handle_, source_gpu_handle, triangle_count, &clip_rc,
+           dst_points, src_points, normalizedOpacity, blend_mode)) {
+        return false;
+    }
+    gpu_dirty_ = true;
+    cpu_dirty_ = false;
+    MarkOpacityUnknown();
+    return true;
+}
+
 bool GodotTexture2D::DrawMaskedTrianglesGpuFrom(
     GodotTexture2D *src, GodotTexture2D *mask,
     uint32_t triangle_count, const tTVPRect &clip_rc,
@@ -955,6 +979,32 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
     gpu_dirty_ = false;
     cpu_dirty_ = false;
     DiscardCpuStorage();
+    return true;
+}
+
+bool GodotTexture2D::UpdateGpuRgba(const void *pixels,
+                                   uint32_t stride_bytes) {
+    if(format_ != TVPTextureFormat::RGBA || pixels == nullptr ||
+       stride_bytes < static_cast<uint32_t>(Width) * 4u) {
+        return false;
+    }
+    const auto *bridge = TVPGodotGpuBridgeGet();
+    if(bridge == nullptr) return false;
+    if(gpu_handle_ == 0) {
+        CreateGpuHandle(pixels, static_cast<int>(stride_bytes));
+        if(gpu_handle_ == 0) return false;
+    } else {
+        if(bridge->update_rgba == nullptr) return false;
+        const tTVPRect full_rect(0, 0, Width, Height);
+        if(!bridge->update_rgba(gpu_handle_, pixels, stride_bytes,
+                                &full_rect)) {
+            return false;
+        }
+    }
+    gpu_dirty_ = true;
+    cpu_dirty_ = false;
+    DiscardCpuStorage();
+    MarkOpacityUnknown();
     return true;
 }
 
@@ -1661,6 +1711,17 @@ bool TVPGodotClearMotionScratchInPlace(
         ((argb & 0x000000ffu) << 16u) |
         ((argb & 0x00ff0000u) >> 16u);
     return texture->ClearGpu(abgr, rect);
+}
+
+bool TVPGodotUploadRgbaInPlace(iTVPBaseBitmap *bitmap, const void *pixels,
+                               uint32_t stride_bytes) {
+    if(bitmap == nullptr || !bitmap->Is32BPP() || pixels == nullptr) {
+        return false;
+    }
+    bitmap->IndependNoCopy();
+    auto *texture = dynamic_cast<GodotTexture2D *>(bitmap->GetTexture());
+    return texture != nullptr &&
+        texture->UpdateGpuRgba(pixels, stride_bytes);
 }
 
 bool TVPGodotCompositeAlphaUnionMask(

@@ -364,7 +364,10 @@ namespace motion {
 
     void Player::setOpacity(double v) { _runtime->opacity = v; }
 
-    void Player::setVisible(bool v) { _runtime->visible = v; }
+    void Player::setVisible(bool v) {
+        _runtime->visible = v;
+        invokeNativeBackend(v ? "show" : "hide");
+    }
 
     void Player::setSlant(double v) { _runtime->slant = v; }
 
@@ -627,6 +630,7 @@ namespace motion {
     }
 
     void Player::skipToSync() {
+        invokeNativeBackend("skip");
         _layersDirty = true;
         for(auto &[label, state] : _runtime->timelines) {
             const auto controlIt = _runtime->activeMotion
@@ -956,6 +960,11 @@ namespace motion {
 
         setVariableResolvedWeightLike_0x671228(
             key, value, transition, variableEaseWeightLike_0x671228(ease));
+        invokeNativeBackend(
+            "setvariable", { MotionBackendValue::String(key),
+                              MotionBackendValue::Number(value),
+                              MotionBackendValue::Number(transition),
+                              MotionBackendValue::Number(ease) });
     }
 
     double Player::getVariable(ttstr label) {
@@ -1444,6 +1453,9 @@ namespace motion {
                 it->second, controlIt->second, 0.0);
         }
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        invokeNativeBackend(
+            "playtimeline", { MotionBackendValue::String(key),
+                               MotionBackendValue::Number(flags) });
         if(!_allplaying) {
             disableAutoProgress();
         }
@@ -1486,6 +1498,8 @@ namespace motion {
         }
 
         _allplaying = !_runtime->playingTimelineLabels.empty();
+        invokeNativeBackend(
+            "stoptimeline", { MotionBackendValue::String(key) });
         if(!_allplaying) {
             disableAutoProgress();
         }
@@ -1520,6 +1534,13 @@ namespace motion {
         state.blendAnimator.startValue = static_cast<float>(ratio);
         state.blendAnimator.targetValue = static_cast<float>(ratio);
         state.blendAutoStop = false;
+        invokeNativeBackend(
+            "settimelineblendratio",
+            { MotionBackendValue::String(key),
+              MotionBackendValue::Number(ratio),
+              MotionBackendValue::Number(0.0),
+              MotionBackendValue::Number(0.0),
+              MotionBackendValue::Boolean(false) });
     }
 
     double Player::getTimelineBlendRatio(ttstr label) {
@@ -1542,11 +1563,20 @@ namespace motion {
             setTimelineBlendLike_0x6735AC(key, false, 0.0, 0.0, 0.0);
         }
         setTimelineBlendLike_0x6735AC(key, false, 1.0, duration, 0.0);
+        invokeNativeBackend(
+            "fadeintimeline", { MotionBackendValue::String(key),
+                                 MotionBackendValue::Number(duration),
+                                 MotionBackendValue::Number(0.0) });
     }
 
     void Player::fadeOutTimeline(ttstr label, double duration, tjs_int) {
         setTimelineBlendLike_0x6735AC(detail::narrow(label), true, 0.0,
                                       duration, 0.0);
+        invokeNativeBackend(
+            "fadeouttimeline",
+            { MotionBackendValue::String(detail::narrow(label)),
+              MotionBackendValue::Number(duration),
+              MotionBackendValue::Number(0.0) });
     }
 
     tTJSVariant Player::getPlayingTimelineInfoList() {
@@ -1621,6 +1651,88 @@ namespace motion {
                     _runtime->activeMotion->timelineTotalFrames.find(timelineLabel);
                 if(it != _runtime->activeMotion->timelineTotalFrames.end()) {
                     state.totalFrames = it->second;
+                }
+            }
+
+            // Mirror only an exact public native timeline. Kiri's retained root
+            // clips (`全体構造` / `タイムライン構造`) are bookkeeping entry
+            // points, not native timelines. Mapping one to the first available
+            // main timeline used to select `sample_全自動_test`, which is an
+            // authored demonstration sequence that intentionally cycles every
+            // expression. Blink and physics are independent native controllers
+            // and do not require that demo timeline to run.
+            if(_nativeBackend) {
+                const auto nativeTimelineLabels = [&](const char *countMethod,
+                                                      const char *labelMethod) {
+                    std::vector<MotionBackendValue> countResults;
+                    if(!invokeNativeBackend(countMethod, {}, &countResults) ||
+                       countResults.empty() ||
+                       countResults.front().type !=
+                           MotionBackendValue::Type::Number) {
+                        return std::vector<std::string>{};
+                    }
+                    const int count = std::max(
+                        0, static_cast<int>(countResults.front().number));
+                    std::vector<std::string> labels;
+                    labels.reserve(static_cast<std::size_t>(count));
+                    for(int index = 0; index < count; ++index) {
+                        std::vector<MotionBackendValue> labelResults;
+                        if(invokeNativeBackend(
+                               labelMethod,
+                               {MotionBackendValue::Number(index)},
+                               &labelResults) &&
+                           !labelResults.empty() &&
+                           labelResults.front().type ==
+                               MotionBackendValue::Type::String) {
+                            labels.push_back(labelResults.front().string);
+                        }
+                    }
+                    return labels;
+                };
+
+                const auto mainLabels = nativeTimelineLabels(
+                    "countmaintimelines", "getmaintimelinelabelat");
+                const auto diffLabels = nativeTimelineLabels(
+                    "countdifftimelines", "getdifftimelinelabelat");
+                int nativeFlags = exactMotionBackendTimelineFlags(
+                    timelineLabel, mainLabels, diffLabels);
+                std::string nativeLabel = timelineLabel;
+                bool startedAmbientTimeline = false;
+                if(nativeFlags == 0) {
+                    nativeLabel = preferredMotionBackendIdleTimeline(diffLabels);
+                    if(!nativeLabel.empty()) {
+                        nativeFlags = 3;
+                        startedAmbientTimeline = true;
+                    }
+                }
+                const bool nativeStarted = nativeFlags != 0 &&
+                    invokeNativeBackend(
+                        "playtimeline",
+                        { MotionBackendValue::String(nativeLabel),
+                          MotionBackendValue::Number(nativeFlags) });
+                if(nativeStarted && startedAmbientTimeline) {
+                    auto &ambientState = _runtime->timelines[nativeLabel];
+                    ambientState.label = nativeLabel;
+                    ambientState.flags = nativeFlags;
+                    ambientState.blendRatio = 1.0;
+                    ambientState.playing = true;
+                    if(std::find(_runtime->playingTimelineLabels.begin(),
+                                 _runtime->playingTimelineLabels.end(),
+                                 nativeLabel) ==
+                       _runtime->playingTimelineLabels.end()) {
+                        _runtime->playingTimelineLabels.push_back(nativeLabel);
+                    }
+                }
+                if(emoteTimelineTraceEnabled() && LOGGER) {
+                    LOGGER->info(
+                        "[EMOTE_TIMELINE] native play motion={} requested={} native={} mirrored={} ambient={} flags={} main=[{}] diff=[{}]",
+                        _runtime->activeMotion
+                            ? _runtime->activeMotion->path
+                            : std::string{},
+                        timelineLabel, nativeLabel,
+                        nativeStarted ? 1 : 0,
+                        startedAmbientTimeline ? 1 : 0, nativeFlags,
+                        joinStrings(mainLabels), joinStrings(diffLabels));
                 }
             }
         };
@@ -1809,6 +1921,14 @@ namespace motion {
 
         const auto previousMatrix = nativeInstance->_runtime->drawAffineMatrix;
         nativeInstance->_runtime->drawAffineMatrix = matrix;
+        nativeInstance->invokeNativeBackend(
+            "setpresentationaffine",
+            {MotionBackendValue::Number(matrix[0]),
+             MotionBackendValue::Number(matrix[1]),
+             MotionBackendValue::Number(matrix[2]),
+             MotionBackendValue::Number(matrix[3]),
+             MotionBackendValue::Number(matrix[4]),
+             MotionBackendValue::Number(matrix[5])});
         const auto motionPath =
             nativeInstance->_runtime && nativeInstance->_runtime->activeMotion
                 ? nativeInstance->_runtime->activeMotion->path
