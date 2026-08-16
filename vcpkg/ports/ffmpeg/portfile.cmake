@@ -1,12 +1,9 @@
-vcpkg_download_distfile(ARCHIVE
-    URLS "https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz"
-    FILENAME "ffmpeg-${VERSION}.tar.xz"
-    SHA512 b3adc16fe426217bb607da01c4137cee0a9788fc08e077874336db185d2b7287746a7dc94cf0181ea92cd8afcdb06094ee9456e2986112354f84538cb9a5ed0b
-)
-
-vcpkg_extract_source_archive(
-    SOURCE_PATH
-    ARCHIVE "${ARCHIVE}"
+vcpkg_from_github(
+    OUT_SOURCE_PATH SOURCE_PATH
+    REPO FFmpeg/FFmpeg
+    REF "n${VERSION}"
+    SHA512 c72f4062aecc16d8b2b1e8678d5efe3af4cfaa0cc7c0997052248f9e499e60c2463acf07877cf3b78b246ce3e8078cb043e8d97e90a6b50d06af32ff7369a788
+    HEAD_REF master
 )
 
 if(SOURCE_PATH MATCHES " ")

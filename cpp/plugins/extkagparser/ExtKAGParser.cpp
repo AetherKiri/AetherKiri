@@ -66,6 +66,8 @@ const tjs_char* TVPExtKAGMalformedSaveData =
     TJS_W("栞データが異常です。データが破損している可能性があります");
 const tjs_char* TVPExtKAGLabelNotFound =
     TJS_W("シナリオファイル %1 内にラベル %2 が見つかりません");
+const tjs_char* TVPExtKAGLineNotFound =
+    TJS_W("シナリオファイル %1 にライン %2 は存在しません");
 const tjs_char* TVPExtLabelInMacro = TJS_W("ラベルはマクロ中に記述できません");
 const tjs_char* TVPExtKAGInlineScriptNotEnd = TJS_W("[endscript] または @endscript が見つかりません");
 const tjs_char* TVPExtKAGSyntaxError =
@@ -1313,6 +1315,32 @@ void tTJSNI_ExtKAGParser::GoToLabel(const ttstr& name)
                             TJS_W("- - - - - - - - - - - - - - - - - - - - "));
         TVPAddLog(hr);
         TVPAddLog(StorageShortName + TJS_W(" : jumped to : ") + name);
+    }
+
+    BreakConditionAndMacro();
+}
+//---------------------------------------------------------------------------
+void tTJSNI_ExtKAGParser::GoToLine(tjs_int line)
+{
+    if (line < 0 || line >= LineCount)
+        TVPThrowExceptionMessage(TVPExtKAGLineNotFound, StorageName, line);
+
+    Scenario->EnsureLabelCache();
+
+    tjs_int labelline;
+    ttstr labelname;
+    FindNearestLabel(line, labelline, labelname);
+    CurLabel = labelname;
+    CurLine = line;
+    CurPos = 0;
+    LineBufferUsing = false;
+
+    if (DebugLevel >= tkdlSimple)
+    {
+        static ttstr hr(TJS_W("- - - - - - - - - - - - - - - - - - - - ")
+                            TJS_W("- - - - - - - - - - - - - - - - - - - - "));
+        TVPAddLog(hr);
+        TVPAddLog(StorageShortName + TJS_W(" : jumped to line : ") + ttstr(line));
     }
 
     BreakConditionAndMacro();
@@ -3464,6 +3492,16 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ goToLabel)
     return TJS_S_OK;
 }
 TJS_END_NATIVE_METHOD_DECL(/*func. name*/ goToLabel)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ goToLine)
+{
+    TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this, /*var. type*/ tTJSNI_ExtKAGParser);
+    if (numparams < 1)
+        return TJS_E_BADPARAMCOUNT;
+    _this->GoToLine(*param[0]);
+    return TJS_S_OK;
+}
+TJS_END_NATIVE_METHOD_DECL(/*func. name*/ goToLine)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ callLabel)
 {
