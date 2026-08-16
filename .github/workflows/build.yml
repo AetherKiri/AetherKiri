@@ -825,7 +825,7 @@ jobs:
         run: |
           set -euo pipefail
           for build_type in release debug; do
-            APP_PATH="out/godot/macos/${build_type}/Aether.app"
+            APP_PATH="out/godot/macos-x64/${build_type}/Aether.app"
             if [[ ! -d "$APP_PATH" ]]; then
               echo "Built Godot ${build_type} .app bundle not found: $APP_PATH" >&2
               exit 1
@@ -873,7 +873,7 @@ jobs:
           AETHER_APPLE_TEAM_ID: 3JL7FE9XQT
         run: |
           .github/scripts/package-macos-app-store.sh \
-            out/godot/macos/release/Aether.app \
+            out/godot/macos-x64/release/Aether.app \
             out/godot/macos/app-store
 
       - name: Upload Release App
@@ -881,7 +881,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: macos-release-app
-          path: out/godot/macos/release/
+          path: out/godot/macos-x64/release/
           retention-days: 7
 
       - name: Upload Mac App Store installer
