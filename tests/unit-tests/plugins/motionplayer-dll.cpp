@@ -72,6 +72,8 @@ namespace motion {
             player.calcBounds();
             return { player._boundsMinX, player._boundsMinY,
                      player._boundsMaxX, player._boundsMaxY };
+        }
+
         static void setNativeBackend(
             Player &player,
             std::unique_ptr<MotionNativePlayerBackend> backend) {
@@ -208,6 +210,8 @@ TEST_CASE("motionplayer bounds ignore motion container origin") {
     REQUIRE(bounds[1] == 678.0);
     REQUIRE(bounds[2] == 792.0);
     REQUIRE(bounds[3] == 698.0);
+}
+
 TEST_CASE("motionplayer mirrors only exact native E-mote timelines") {
     const std::vector<std::string> mainLabels{
         "sample_全自動_test", "平常"};

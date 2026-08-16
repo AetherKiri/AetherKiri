@@ -800,14 +800,14 @@ jobs:
           test_build_dir="${GITHUB_WORKSPACE}/out/macos/ci-tests"
           configure_log="${RUNNER_TEMP}/aetherkiri-test-configure.log"
 
-          cmake --preset "MacOS Debug Config" --fresh \
+          cmake --preset "MacOS x64 Debug Config" --fresh \
             -B "$test_build_dir" \
             -D ENABLE_TESTS=ON \
             -D BUILD_TOOLS=OFF \
             -D BUILD_ENGINE_API=OFF \
             -D BUILD_GODOT_EXTENSION=OFF \
             -D VCPKG_MANIFEST_INSTALL=OFF \
-            -D VCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/out/macos/debug/vcpkg_installed" \
+            -D VCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/out/macos-x64/debug/vcpkg_installed" \
             -D CMAKE_C_COMPILER_LAUNCHER=ccache \
             -D CMAKE_CXX_COMPILER_LAUNCHER=ccache \
             2>&1 | tee "$configure_log"
