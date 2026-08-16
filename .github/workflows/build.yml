@@ -790,7 +790,7 @@ jobs:
           AETHERKIRI_SMOKE_GAME: ${{ github.workspace }}/tests/fixtures/onscripter_smoke
         run: |
           set -euo pipefail
-          "$GODOT_BIN" --headless \
+          arch -x86_64 "$GODOT_BIN" --headless \
             --path apps/godot_app \
             --script res://scripts/smoke_test.gd
 
