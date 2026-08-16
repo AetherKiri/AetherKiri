@@ -306,6 +306,7 @@ public:
 	void LoadScenario(const ttstr & name);
 	const ttstr & GetStorageName() const { return StorageName; }
 	void GoToLabel(const ttstr &name); // search label and set current position
+	void GoToLine(tjs_int line); // set current position to an absolute zero-based line
 	void GoToStorageAndLabel(const ttstr &storage, const ttstr &label);
 	void CallLabel(const ttstr &name);
 private:

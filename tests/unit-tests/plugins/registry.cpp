@@ -650,6 +650,63 @@ TEST_CASE("ExtKAGParser preserves native local and parameter macro semantics") {
     global->Release();
 }
 
+TEST_CASE("ExtKAGParser jumps to an absolute scenario line") {
+    ensurePluginRegistryRuntime();
+    ncbAutoRegister::UnloadModule(TJS_W("ExtKAGParser.dll"));
+
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    REQUIRE(global != nullptr);
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("ExtKAGParser.dll")));
+    tTJSVariant parserClass = getGlobalProp(TJS_W("KAGParser"));
+    REQUIRE(parserClass.Type() == tvtObject);
+
+    iTJSDispatch2 *parser = nullptr;
+    tTJSVariantClosure parserClosure = parserClass.AsObjectClosureNoAddRef();
+    REQUIRE(TJS_SUCCEEDED(parserClosure.CreateNew(
+        0, nullptr, nullptr, &parser, 0, nullptr, nullptr)));
+    REQUIRE(parser != nullptr);
+
+    ScenarioLoadCallback *callback = new ScenarioLoadCallback(
+        TJS_W("*first\n"
+              "[skip]\n"
+              "[target]\n"
+              "*second|page\n"
+              "[after]\n"));
+    tTJSVariant callbackValue(callback, callback);
+    setProp(parser, TJS_W("onScenarioLoad"), callbackValue);
+    setProp(parser, TJS_W("ignoreCR"),
+            tTJSVariant(static_cast<tTVInteger>(1)));
+    callback->Release();
+
+    tTJSVariant storage(TJS_W("memory.ks"));
+    tTJSVariant *loadArgs[] = { &storage };
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(
+        0, TJS_W("loadScenario"), nullptr, nullptr, 1, loadArgs, parser)));
+
+    tTJSVariant targetLine(static_cast<tTVInteger>(2));
+    tTJSVariant *lineArgs[] = { &targetLine };
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(
+        0, TJS_W("goToLine"), nullptr, nullptr, 1, lineArgs, parser)));
+
+    const tTJSVariant parserValue(parser, parser);
+    CHECK(static_cast<tjs_int>(getProp(parserValue, TJS_W("curLine"))) == 2);
+    CHECK(ttstr(getProp(parserValue, TJS_W("curLabel"))) == TJS_W("*first"));
+
+    tTJSVariant tag;
+    REQUIRE(TJS_SUCCEEDED(parser->FuncCall(
+        0, TJS_W("getNextTag"), nullptr, &tag, 0, nullptr, parser)));
+    REQUIRE(tag.Type() == tvtObject);
+    CHECK(ttstr(getProp(tag, TJS_W("tagname"))) == TJS_W("target"));
+
+    parser->Release();
+    parserClass.Clear();
+    REQUIRE(ncbAutoRegister::UnloadModule(TJS_W("ExtKAGParser.dll")));
+    global->DeleteMember(0, TJS_W("KAGParser"), nullptr, global);
+    global->Release();
+}
+
 TEST_CASE("ExtKAGParser restores legacy core parser call frames") {
     ensurePluginRegistryRuntime();
     ncbAutoRegister::UnloadModule(TJS_W("ExtKAGParser.dll"));
