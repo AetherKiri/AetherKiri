@@ -291,7 +291,16 @@ else
     if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
         export_mode="--export-release"
     fi
-    "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
+    godot_export_command=("$GODOT_BIN")
+    macos_host_extension="$GODOT_APP_DIR/bin/macos/$BUILD_TYPE_LOWER/libaether_kiri_godot.dylib"
+    if [[ "$(uname -m)" == "arm64" && -f "$macos_host_extension" &&
+          "$(lipo -archs "$macos_host_extension" 2>/dev/null || true)" == "x86_64" ]]; then
+        # This private native host extension is currently x86_64-only. Match
+        # the editor process to the staged host extension while
+        # it imports the project; the exported Android libraries remain arm64.
+        godot_export_command=(arch -x86_64 "$GODOT_BIN")
+    fi
+    "${godot_export_command[@]}" --headless --path "$GODOT_APP_DIR" \
         "$export_mode" "$export_preset" "$export_path"
 fi
 

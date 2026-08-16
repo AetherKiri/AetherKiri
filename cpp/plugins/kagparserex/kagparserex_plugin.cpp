@@ -97,20 +97,13 @@ static void UnlinkKAGParserCompatibility() {
     RestoreKAGParserClass();
 }
 
-// Register two compatibility module names:
-// - KAGParserEx.dll (wamsoft)
-// - ExtKAGParser.dll (older scripts)
+// KAGParserEx.dll compatibility uses Aether's extended core parser.  The
+// distinct ExtKAGParser.dll implementation is registered by extkagparser.
 static ncbCallbackAutoRegister g_kagparserex_cb(
     TJS_W("KAGParserEx.dll"), ncbAutoRegister::PreRegist,
     &LinkKAGParserCompatibility, nullptr);
 static ncbCallbackAutoRegister g_kagparserex_unload_cb(
     TJS_W("KAGParserEx.dll"), ncbAutoRegister::PostRegist, nullptr,
-    &UnlinkKAGParserCompatibility);
-static ncbCallbackAutoRegister g_extkagparser_cb(
-    TJS_W("ExtKAGParser.dll"), ncbAutoRegister::PreRegist,
-    &LinkKAGParserCompatibility, nullptr);
-static ncbCallbackAutoRegister g_extkagparser_unload_cb(
-    TJS_W("ExtKAGParser.dll"), ncbAutoRegister::PostRegist, nullptr,
     &UnlinkKAGParserCompatibility);
 
 extern "C" void TVPRegisterKAGParserExPluginAnchor() {}

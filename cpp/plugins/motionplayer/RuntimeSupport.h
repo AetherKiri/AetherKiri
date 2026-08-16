@@ -221,7 +221,14 @@ namespace motion::detail {
     struct MotionSnapshot {
         std::string path;
         std::shared_ptr<PSB::PSBFile> file;
+        std::shared_ptr<const std::vector<std::uint8_t>> objectImage;
         std::shared_ptr<const PSB::PSBDictionary> root;
+        // A Kiri ResourceManager can build one character from several PSBs
+        // (for example head, costume/body, and timeline modules).  The
+        // public evaluator keeps the selected timeline snapshot as the
+        // primary motion, while a native backend needs the complete ordered
+        // object set that was loaded into that ResourceManager.
+        std::vector<std::shared_ptr<MotionSnapshot>> nativeObjectSnapshots;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBResource>>
             resourcesByPath;
         // Immutable PSB resources are shared by every Player bound to this
@@ -317,6 +324,11 @@ namespace motion::detail {
         // for the original 1920x1080 allocation.
         tTJSVariant headlessRgbaRegionRenderLayer;
         tTJSVariant headlessRgbaRegionRenderLayer2;
+        // The native backend imports its IOSurface/AHardwareBuffer as a Godot
+        // texture. Keep the producer lifetime through the next composition so
+        // queued KiriKiri draws never sample a recycled shared image.
+        std::shared_ptr<void> nativeBackendGpuFrameLifetime;
+        std::uint64_t nativeBackendGpuFrameCount = 0;
         // A provider can submit several independent E-mote surfaces before
         // synchronizing their GPU readbacks, matching Artemis' framebuffer
         // display pass instead of serially stalling after every player.
@@ -688,6 +700,8 @@ namespace motion::detail {
             nextD3DRenderLayer = 0;
             lastD3DRenderLayer = 0;
             lastD3DRasterPublishUs = 0;
+            nativeBackendGpuFrameLifetime.reset();
+            nativeBackendGpuFrameCount = 0;
             inheritedVariableInputs.clear();
             effectiveVariableScratch.clear();
             effectiveVariableScratchGeneration = 0;

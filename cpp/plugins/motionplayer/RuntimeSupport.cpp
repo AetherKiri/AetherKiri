@@ -1486,6 +1486,7 @@ namespace motion::detail {
         auto snapshot = std::make_shared<MotionSnapshot>();
         snapshot->path = narrow(path);
         snapshot->file = file;
+        snapshot->objectImage = file->getObjectImage();
         snapshot->root = root;
         snapshot->moduleValue = root->toTJSVal();
         const auto timingModuleBuilt = std::chrono::steady_clock::now();

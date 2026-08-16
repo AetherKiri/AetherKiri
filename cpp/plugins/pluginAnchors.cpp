@@ -1,10 +1,14 @@
 #include "ncbind.hpp"
 
 extern "C" void TVPRegisterKAGParserExPluginAnchor();
+extern "C" void TVPRegisterExtKAGParserPluginAnchor();
 
 namespace {
 
-void linkStaticPluginModules() { TVPRegisterKAGParserExPluginAnchor(); }
+void linkStaticPluginModules() {
+    TVPRegisterKAGParserExPluginAnchor();
+    TVPRegisterExtKAGParserPluginAnchor();
+}
 
 } // namespace
 

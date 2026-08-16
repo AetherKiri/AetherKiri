@@ -4,7 +4,7 @@
 
 namespace motion {
     namespace {
-        std::atomic<const MotionPlayerExtensionV2 *> g_extension{nullptr};
+        std::atomic<const MotionPlayerExtensionV4 *> g_extension{nullptr};
         thread_local std::uint32_t g_suppressionDepth = 0;
     }
 
@@ -21,20 +21,20 @@ namespace motion {
     }
 
     bool registerMotionPlayerExtension(
-        const MotionPlayerExtensionV2 *extension) {
+        const MotionPlayerExtensionV4 *extension) {
         if(!extension ||
            extension->abiVersion != kMotionPlayerExtensionAbiVersion) {
             return false;
         }
 
-        const MotionPlayerExtensionV2 *expected = nullptr;
+        const MotionPlayerExtensionV4 *expected = nullptr;
         if(g_extension.compare_exchange_strong(expected, extension)) {
             return true;
         }
         return expected == extension;
     }
 
-    const MotionPlayerExtensionV2 *motionPlayerExtension() {
+    const MotionPlayerExtensionV4 *motionPlayerExtension() {
         if(g_suppressionDepth != 0) {
             return nullptr;
         }

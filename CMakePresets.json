@@ -146,6 +146,32 @@
       }
     },
     {
+      "name": "MacOS x64 Debug Config",
+      "inherits": "MacOS Config",
+      "binaryDir": "${sourceDir}/out/macos-x64/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_BUILD_TYPE": "debug",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "CMAKE_Swift_COMPILER_TARGET": "x86_64-apple-macosx13.0",
+        "VCPKG_TARGET_TRIPLET": "x64-osx",
+        "CMAKE_C_FLAGS_DEBUG": "-Og -g",
+        "CMAKE_CXX_FLAGS_DEBUG": "-Og -g"
+      }
+    },
+    {
+      "name": "MacOS x64 Release Config",
+      "inherits": "MacOS Config",
+      "binaryDir": "${sourceDir}/out/macos-x64/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_BUILD_TYPE": "release",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "CMAKE_Swift_COMPILER_TARGET": "x86_64-apple-macosx13.0",
+        "VCPKG_TARGET_TRIPLET": "x64-osx"
+      }
+    },
+    {
       "name": "iOS Config",
       "generator": "Ninja",
       "hidden": true,
@@ -315,6 +341,14 @@
     {
       "name": "MacOS Release Build",
       "configurePreset": "MacOS Release Config"
+    },
+    {
+      "name": "MacOS x64 Debug Build",
+      "configurePreset": "MacOS x64 Debug Config"
+    },
+    {
+      "name": "MacOS x64 Release Build",
+      "configurePreset": "MacOS x64 Release Config"
     },
     {
       "name": "iOS Debug Build",

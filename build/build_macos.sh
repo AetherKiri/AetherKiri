@@ -7,9 +7,14 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_TYPE="${1:-debug}"
 BUILD_TYPE_LOWER="$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')"
 BUILD_TYPE_CAP="$(echo "${BUILD_TYPE_LOWER:0:1}" | tr '[:lower:]' '[:upper:]')${BUILD_TYPE_LOWER:1}"
+MACOS_ARCH="${AETHERKIRI_MACOS_ARCH:-x86_64}"
 
 if [[ "$BUILD_TYPE_LOWER" != "debug" && "$BUILD_TYPE_LOWER" != "release" ]]; then
     echo "Error: Invalid build type '$BUILD_TYPE'. Use 'debug' or 'release'." >&2
+    exit 1
+fi
+if [[ "$MACOS_ARCH" != "arm64" && "$MACOS_ARCH" != "x86_64" ]]; then
+    echo "Error: Invalid AETHERKIRI_MACOS_ARCH '$MACOS_ARCH'. Use 'arm64' or 'x86_64'." >&2
     exit 1
 fi
 
@@ -21,6 +26,15 @@ RUNTIME_SYMBOL_FONT_SOURCE="$GODOT_APP_DIR/assets/fonts/aetherkiri-runtime-symbo
 CMAKE_CONFIG_PRESET="MacOS ${BUILD_TYPE_CAP} Config"
 CMAKE_BUILD_PRESET="MacOS ${BUILD_TYPE_CAP} Build"
 CMAKE_BUILD_DIR="$PROJECT_ROOT/out/macos/$BUILD_TYPE_LOWER"
+GODOT_EXPORT_ROOT="$PROJECT_ROOT/out/godot/macos/$BUILD_TYPE_LOWER"
+VCPKG_TRIPLET="arm64-osx"
+if [[ "$MACOS_ARCH" == "x86_64" ]]; then
+    CMAKE_CONFIG_PRESET="MacOS x64 ${BUILD_TYPE_CAP} Config"
+    CMAKE_BUILD_PRESET="MacOS x64 ${BUILD_TYPE_CAP} Build"
+    CMAKE_BUILD_DIR="$PROJECT_ROOT/out/macos-x64/$BUILD_TYPE_LOWER"
+    GODOT_EXPORT_ROOT="$PROJECT_ROOT/out/godot/macos-x64/$BUILD_TYPE_LOWER"
+    VCPKG_TRIPLET="x64-osx"
+fi
 GODOT_BIN_DIR="$GODOT_APP_DIR/bin/macos/$BUILD_TYPE_LOWER"
 GODOT_EXPORT_PRESET="macOS ${BUILD_TYPE_CAP}"
 GODOT_EXPORT_MODE="--export-debug"
@@ -92,22 +106,22 @@ strip_macos_runtime_symbols() {
     "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" macho "$@"
 }
 
-thin_macos_executable_to_arm64() {
+thin_macos_executable_to_arch() {
     local executable="$1"
     local architectures
     local thinned_executable
 
     architectures="$(lipo -archs "$executable")"
-    if [[ " $architectures " != *" arm64 "* ]]; then
-        echo "Error: exported macOS executable does not contain arm64: $architectures" >&2
+    if [[ " $architectures " != *" $MACOS_ARCH "* ]]; then
+        echo "Error: exported macOS executable does not contain $MACOS_ARCH: $architectures" >&2
         exit 1
     fi
-    if [[ "$architectures" == "arm64" ]]; then
+    if [[ "$architectures" == "$MACOS_ARCH" ]]; then
         return
     fi
 
-    thinned_executable="${executable}.arm64"
-    lipo "$executable" -thin arm64 -output "$thinned_executable"
+    thinned_executable="${executable}.${MACOS_ARCH}"
+    lipo "$executable" -thin "$MACOS_ARCH" -output "$thinned_executable"
     chmod +x "$thinned_executable"
     mv -f "$thinned_executable" "$executable"
 }
@@ -118,8 +132,8 @@ cmake_config_args=(
     -D "AETHERKIRI_ENABLE_INTERNAL=${AETHERKIRI_ENABLE_INTERNAL:-ON}"
 )
 if [[ "${SKIP_VCPKG_INSTALL:-}" == "1" ]]; then
-    if [[ ! -d "$VCPKG_ROOT/installed/arm64-osx" ]]; then
-        echo "Error: SKIP_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/arm64-osx" >&2
+    if [[ ! -d "$VCPKG_ROOT/installed/$VCPKG_TRIPLET" ]]; then
+        echo "Error: SKIP_VCPKG_INSTALL=1 but prebuilt vcpkg triplet is missing: $VCPKG_ROOT/installed/$VCPKG_TRIPLET" >&2
         exit 1
     fi
     mkdir -p "$CMAKE_BUILD_DIR"
@@ -151,10 +165,17 @@ elif [[ ! -f "$GODOT_EXPORT_TEMPLATE" ]]; then
     echo "Warning: Godot macOS export template missing at $GODOT_EXPORT_TEMPLATE; native libraries were staged only." >&2
 else
     echo "==> Exporting Godot macOS app"
-    GODOT_EXPORT_APP="$PROJECT_ROOT/out/godot/macos/$BUILD_TYPE_LOWER/Aether.app"
-    mkdir -p "$PROJECT_ROOT/out/godot/macos/$BUILD_TYPE_LOWER"
+    GODOT_EXPORT_APP="$GODOT_EXPORT_ROOT/Aether.app"
+    godot_export_command=("$GODOT_BIN")
+    if [[ "$MACOS_ARCH" == "x86_64" ]]; then
+        # The editor must match the staged GDExtension architecture while it
+        # scans and exports the project. Godot.app is universal on Apple
+        # Silicon, so select its Rosetta slice for this native build.
+        godot_export_command=(arch -x86_64 "$GODOT_BIN")
+    fi
+    mkdir -p "$GODOT_EXPORT_ROOT"
     rm -rf "$GODOT_EXPORT_APP"
-    "$GODOT_BIN" --headless --path "$GODOT_APP_DIR" \
+    "${godot_export_command[@]}" --headless --path "$GODOT_APP_DIR" \
         "$GODOT_EXPORT_MODE" "$GODOT_EXPORT_PRESET" "$GODOT_EXPORT_APP"
     if [[ -d "$GODOT_EXPORT_APP/Contents/Frameworks" ]]; then
         stage_macos_runtime_fonts "$GODOT_EXPORT_APP"
@@ -180,8 +201,8 @@ else
         fi
         cp -f "$GODOT_BIN_DIR/libengine_api.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
         cp -f "$GODOT_BIN_DIR/libaether_kiri_godot.dylib" "$GODOT_EXPORT_APP/Contents/Frameworks/"
-        echo "==> Thinning exported macOS executable to arm64"
-        thin_macos_executable_to_arm64 "$GODOT_EXPORT_APP/Contents/MacOS/Aether"
+        echo "==> Thinning exported macOS executable to $MACOS_ARCH"
+        thin_macos_executable_to_arch "$GODOT_EXPORT_APP/Contents/MacOS/Aether"
         if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
             echo "==> Removing non-runtime symbols from exported macOS Release executable"
             "$PROJECT_ROOT/tools/strip_runtime_symbols.sh" macho-executable \
@@ -208,4 +229,4 @@ else
     fi
 fi
 
-echo "macOS build output: $PROJECT_ROOT/out/godot/macos/$BUILD_TYPE_LOWER"
+echo "macOS build output: $GODOT_EXPORT_ROOT"

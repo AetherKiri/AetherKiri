@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "tjs.h"
+#include "tjsError.h"
+#include "tjsInterCodeGen.h"
 
 #include <memory>
 
@@ -107,4 +109,30 @@ TEST_CASE("integer pseudo-property remains scoped to KAG layer conversion") {
         TJS_W("function convLayerType(value) { return value.type; }\n"
               "return convLayerType(29);"),
         &result, nullptr, TJS_W("world.tjs")));
+}
+
+TEST_CASE(
+    "exceptions from cached expression functions survive orphaned source blocks") {
+    std::unique_ptr<tTJS, TJSReleaser> engine(new tTJS());
+    tTJSVariant function;
+
+    REQUIRE_NOTHROW(engine->EvalExpression(
+        TJS_W("(function() { return 1; })"),
+        &function));
+    REQUIRE(function.Type() == tvtObject);
+
+    tTJSVariantClosure closure = function.AsObjectClosureNoAddRef();
+    REQUIRE(closure.Object != nullptr);
+    auto *context = dynamic_cast<TJS::tTJSInterCodeContext *>(closure.Object);
+    REQUIRE(context != nullptr);
+    engine->CompactScriptCache(3);
+    REQUIRE(context->GetBlock() == nullptr);
+    try {
+        TJS::TJS_eTJSScriptError(TJS_W("orphaned source"), context, 0);
+        FAIL("the script error helper did not throw");
+    } catch(const TJS::eTJSScriptError &error) {
+        CHECK(error.GetBlockNoAddRef() == nullptr);
+        CHECK(TJS_strlen(error.GetBlockName()) == 0);
+        CHECK(error.GetSourceLine() == 0);
+    }
 }

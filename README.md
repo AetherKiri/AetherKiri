@@ -139,7 +139,7 @@ iOS and Android export presets reference the generated PNG sizes under
 
 | Platform | Minimum version | Notes |
 | --- | --- | --- |
-| macOS | macOS 13.0 (Ventura) | The Godot app export is universal, but the current native build triplet is `arm64`; Intel support needs an `x86_64` native build. |
+| macOS | macOS 13.0 (Ventura) | Internal E-mote builds use the official SDK's `x86_64` driver and run under Rosetta on Apple Silicon. |
 | iOS / iPadOS | iOS / iPadOS 16.0 | `arm64` devices; `arm64` and `x86_64` simulator builds are available for development. |
 | Android | Android 7.0 (API 24) | The product export currently packages `arm64-v8a` only. |
 | Web | No OS version floor | Requires a browser with WebAssembly SIMD, WebAssembly threads, and `SharedArrayBuffer`, served with cross-origin isolation (COOP/COEP). |
@@ -150,6 +150,7 @@ iOS and Android export presets reference the generated PNG sizes under
 
 - CMake 3.28+
 - Ninja
+- NASM (required by the native FFmpeg dependency)
 - vcpkg in `.devtools/vcpkg` or available through `VCPKG_ROOT`
 - Godot at `/Applications/Godot.app` or `GODOT_BIN=/path/to/Godot`
 - Xcode for macOS/iOS exports
@@ -162,6 +163,9 @@ iOS and Android export presets reference the generated PNG sizes under
 - Godot Web GDExtension/dlink export templates installed as
   `web_dlink_debug.zip` and `web_dlink_release.zip`.
 - Node.js and npm for the TypeScript/Vite local Web server.
+- The official E-mote SDK for internal Artemis and CatSystem2 E-mote builds.
+  Install it before configuring or testing an internal build with
+  `packages/AetherInternal/tools/install_emote_sdk.sh`.
 
 ### Linux
 
@@ -202,9 +206,14 @@ implementations can initialize the optional package before building:
 
 ```bash
 git submodule update --init packages/AetherInternal
+packages/AetherInternal/tools/install_emote_sdk.sh
 ```
 
-CMake enables it automatically when present. Use
+CMake enables it automatically when present. The installer verifies the SDK
+and writes only Git-ignored files under the private package; do not commit
+those generated headers or archives. On macOS, the official driver is
+`x86_64`-only, so the normal internal command builds that architecture and the
+app runs under Rosetta on Apple Silicon. Use
 `-DAETHERKIRI_ENABLE_INTERNAL=OFF` to test the public fallback, or
 `-DAETHERKIRI_INTERNAL_DIR=/absolute/path/to/AetherInternal` to use a separate
 checkout. Trusted runs of the `Build` GitHub Actions workflow use the
@@ -212,9 +221,12 @@ checkout. Trusted runs of the `Build` GitHub Actions workflow use the
 private submodule recursively. Fork and Dependabot pull requests cannot access
 repository secrets, so those untrusted runs use the public fallback.
 
-The internal package extends the existing public `motionplayer` and
-`krkr2plugin` targets; it does not replace either target or copy their public
-source trees. For E-mote, it registers a small versioned controller extension.
+The internal package extends the existing public `motionplayer`, runtime, and
+`krkr2plugin` targets; it does not replace those targets or copy their public
+source trees. KiriRuntime, Artemis, and CatSystem2 share the official GPU
+E-mote SDK bridge; supported mobile targets retain native shared GPU frames,
+while macOS uses the SDK's asynchronous transfer path across the OpenGL and
+MoltenVK boundary.
 For native Live2D, it contributes the Cubism SDK, `.l2d` loader, motion player,
 and renderer while the public repository keeps the script-compatible fallback
 and generic GPU bridge. Both configurations run the same public tests. A

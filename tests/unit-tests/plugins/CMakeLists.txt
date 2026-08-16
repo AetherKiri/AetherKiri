@@ -13,6 +13,7 @@ add_executable(motionplayer-dll
     font-compat.cpp
     font-baseline.cpp
     godot-texture.cpp
+    godot-runtime-timing.cpp
     krkrgles-aliases.cpp
     kag-load-contract.cpp
     decode-arena.cpp
