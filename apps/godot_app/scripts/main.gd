@@ -10996,6 +10996,7 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var max_clicks: int = max(0, int(action.get("max_clicks", 0)))
     var capture_every: int = max(0, int(action.get("capture_every", 0)))
     var spike_ms: float = max(0.0, float(action.get("spike_ms", 20.0)))
+    var sample_interval_ms: int = max(0, int(action.get("sample_interval_ms", 0)))
     var pointer_id: int = int(action.get("pointer_id", TOUCH_POINTER_ID_OFFSET))
     var input_total := 0.0
     var tick_total := 0.0
@@ -11010,6 +11011,19 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
     var clicks_sent := 0
     var measured_frames := 0
     var stream_start_ticks := Time.get_ticks_usec()
+    var sample_start_ticks := stream_start_ticks
+    var sample_frames := 0
+    var sample_clicks_start := 0
+    var sample_input_total := 0.0
+    var sample_tick_total := 0.0
+    var sample_update_total := 0.0
+    var sample_frame_total := 0.0
+    var sample_input_max := 0.0
+    var sample_tick_max := 0.0
+    var sample_update_max := 0.0
+    var sample_frame_max := 0.0
+    var sample_spikes := 0
+    var sample_index := 0
 
     if label.is_empty() or label == "click_stream":
         label = "click_stream_%d_%d_%d" % [frames, int(pos.x), int(pos.y)]
@@ -11064,6 +11078,16 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
         frame_max = maxf(frame_max, frame_ms)
         if spike_ms > 0.0 and frame_ms >= spike_ms:
             spikes += 1
+            sample_spikes += 1
+        sample_frames += 1
+        sample_input_total += input_ms
+        sample_tick_total += tick_ms
+        sample_update_total += update_ms
+        sample_frame_total += frame_ms
+        sample_input_max = maxf(sample_input_max, input_ms)
+        sample_tick_max = maxf(sample_tick_max, tick_ms)
+        sample_update_max = maxf(sample_update_max, update_ms)
+        sample_frame_max = maxf(sample_frame_max, frame_ms)
 
         if capture_every > 0 and (frame_index % capture_every) == 0:
             await _probe_save_step(
@@ -11073,6 +11097,51 @@ func _probe_run_click_stream(config: Dictionary, step: int, label: String, actio
             )
             step += 1
         await get_tree().process_frame
+        var sample_end_ticks := Time.get_ticks_usec()
+        var sample_elapsed_ms := float(sample_end_ticks - sample_start_ticks) / 1000.0
+        var stream_finished := frame_index + 1 >= frames
+        if sample_interval_ms > 0 and (sample_elapsed_ms >= sample_interval_ms or stream_finished):
+            var sample_divisor := float(max(1, sample_frames))
+            var sample_wait_ms := maxf(
+                0.0,
+                (sample_elapsed_ms - sample_frame_total) / sample_divisor
+            )
+            var sample_line := "click_stream_sample label=%s index=%d frames=%d clicks=%d elapsed_ms=%.2f fps=%.2f avg_input_ms=%.2f avg_tick_ms=%.2f avg_update_ms=%.2f avg_active_ms=%.2f avg_wait_ms=%.2f max_input_ms=%.2f max_tick_ms=%.2f max_update_ms=%.2f max_active_ms=%.2f spikes=%d spike_ms=%.2f texture_backend=%s renderer=\"%s\"" % [
+                label,
+                sample_index,
+                sample_frames,
+                clicks_sent - sample_clicks_start,
+                sample_elapsed_ms,
+                float(sample_frames) * 1000.0 / maxf(0.001, sample_elapsed_ms),
+                sample_input_total / sample_divisor,
+                sample_tick_total / sample_divisor,
+                sample_update_total / sample_divisor,
+                sample_frame_total / sample_divisor,
+                sample_wait_ms,
+                sample_input_max,
+                sample_tick_max,
+                sample_update_max,
+                sample_frame_max,
+                sample_spikes,
+                spike_ms,
+                player.get_frame_texture_backend(),
+                player.get_renderer_info(),
+            ]
+            print(sample_line)
+            _write_probe_marker(sample_line)
+            sample_index += 1
+            sample_start_ticks = sample_end_ticks
+            sample_frames = 0
+            sample_clicks_start = clicks_sent
+            sample_input_total = 0.0
+            sample_tick_total = 0.0
+            sample_update_total = 0.0
+            sample_frame_total = 0.0
+            sample_input_max = 0.0
+            sample_tick_max = 0.0
+            sample_update_max = 0.0
+            sample_frame_max = 0.0
+            sample_spikes = 0
 
     var divisor := float(max(1, measured_frames))
     var elapsed_sec: float = maxf(0.0001, float(Time.get_ticks_usec() - stream_start_ticks) / 1000000.0)
