@@ -4793,6 +4793,17 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
                 rd->get_driver_resource(
                     RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE,
                     RID(), 0));
+#elif defined(__ANDROID__)
+            // Android E-mote frames are written through GLES into an
+            // AHardwareBuffer and sampled by Godot through Vulkan. A plain
+            // bookkeeping barrier does not protect a recycled buffer from a
+            // still-running Vulkan sample, so wait for the consumer queue at
+            // retirement time. Normal frames remain asynchronous and
+            // zero-copy.
+            return AetherAndroidWaitForVulkanQueue(
+                rd->get_driver_resource(
+                    RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE,
+                    RID(), 0));
 #else
             ApplyGodotGpuBarrier(rd);
             return true;
@@ -6460,9 +6471,9 @@ bool BridgePrepareForNativeWrite(uint64_t texture) {
         record = found->second;
     }
     if (!record.rid.is_valid()) return false;
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__ANDROID__)
     // All native surfaces rendered during one Godot display frame were consumed
-    // by the same ordered Metal queue. One completed marker therefore makes
+    // by the same ordered device queue. One completed marker therefore makes
     // every sufficiently retired surface in this scene batch reusable.
     Engine *engine = Engine::get_singleton();
     const uint64_t drawn_frame = engine != nullptr
@@ -6480,7 +6491,7 @@ bool BridgePrepareForNativeWrite(uint64_t texture) {
     op->type = GodotGpuOp::Type::PrepareNativeWrite;
     op->src = record.rid;
     const bool prepared = RunGodotGpuOpSync(op);
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__ANDROID__)
     if (prepared && drawn_frame != UINT64_MAX) {
         last_waited_drawn_frame = drawn_frame;
     }

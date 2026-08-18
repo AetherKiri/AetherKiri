@@ -167,6 +167,16 @@ void AetherAndroidReleaseVulkanTexture(void *resource) {
     ReleaseTexture(static_cast<AndroidExternalTexture *>(resource));
 }
 
+bool AetherAndroidWaitForVulkanQueue(uint64_t vulkan_queue) {
+    if (vulkan_queue == 0) return false;
+    const VkQueue queue = reinterpret_cast<VkQueue>(vulkan_queue);
+    // The producer-side GLES fence only proves that E-mote finished writing
+    // the buffer. It does not prove that Godot's Vulkan sampler has finished
+    // consuming the retired generation. This wait is used only on retirement,
+    // never on the normal per-frame path.
+    return vkQueueWaitIdle(queue) == VK_SUCCESS;
+}
+
 #else
 
 uint64_t AetherAndroidCreateVulkanTextureFromHardwareBuffer(
@@ -175,5 +185,7 @@ uint64_t AetherAndroidCreateVulkanTextureFromHardwareBuffer(
 }
 
 void AetherAndroidReleaseVulkanTexture(void *) {}
+
+bool AetherAndroidWaitForVulkanQueue(uint64_t) { return false; }
 
 #endif
