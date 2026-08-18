@@ -320,6 +320,7 @@ void EnqueueGodotGpuOpLocked(const std::shared_ptr<GodotGpuOp> &op) {
 #if defined(__ANDROID__)
 constexpr int kAndroidFlagActivityNewTask = 0x10000000;
 constexpr int kAndroidPermissionGranted = 0;
+constexpr int kAndroidStoragePermissionRequestCode = 1301;
 
 void AndroidLogPrintf(const char *level, const char *format, ...) {
 #if !defined(NDEBUG)
@@ -765,6 +766,83 @@ bool AndroidHasRuntimePermission(const char *permission) {
     return ok;
 }
 
+bool AndroidRequestRuntimeStoragePermissions() {
+    JNIEnv *env = krkr_GetJNIEnv();
+    if (env == nullptr) {
+        AK_ANDROID_LOGW("storage permission request failed: no JNI env");
+        return false;
+    }
+
+    jobject activity = AndroidGetGodotActivityLocal(env);
+    if (activity == nullptr) {
+        AK_ANDROID_LOGW("storage permission request failed: no activity");
+        return false;
+    }
+
+    jclass activity_class = env->FindClass("android/app/Activity");
+    if (activity_class == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(activity);
+        AK_ANDROID_LOGW("storage permission request failed: Activity unavailable");
+        return false;
+    }
+
+    jmethodID request_permissions = env->GetMethodID(
+        activity_class, "requestPermissions", "([Ljava/lang/String;I)V");
+    jclass string_class = env->FindClass("java/lang/String");
+    if (request_permissions == nullptr || string_class == nullptr) {
+        AndroidClearJniException(env);
+        AndroidDeleteLocalRef(env, string_class);
+        env->DeleteLocalRef(activity_class);
+        env->DeleteLocalRef(activity);
+        AK_ANDROID_LOGW("storage permission request failed: requestPermissions unavailable");
+        return false;
+    }
+
+    constexpr const char *permissions[] = {
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+    };
+    constexpr jsize permission_count =
+        static_cast<jsize>(sizeof(permissions) / sizeof(permissions[0]));
+    jobjectArray permission_array = env->NewObjectArray(
+        permission_count, string_class, nullptr);
+    if (permission_array == nullptr) {
+        AndroidClearJniException(env);
+        env->DeleteLocalRef(string_class);
+        env->DeleteLocalRef(activity_class);
+        env->DeleteLocalRef(activity);
+        AK_ANDROID_LOGW("storage permission request failed: permission array unavailable");
+        return false;
+    }
+
+    for (jsize index = 0; index < permission_count; ++index) {
+        jstring permission = env->NewStringUTF(permissions[index]);
+        if (permission == nullptr) {
+            AndroidClearJniException(env);
+            env->DeleteLocalRef(permission_array);
+            env->DeleteLocalRef(string_class);
+            env->DeleteLocalRef(activity_class);
+            env->DeleteLocalRef(activity);
+            AK_ANDROID_LOGW("storage permission request failed: permission string unavailable");
+            return false;
+        }
+        env->SetObjectArrayElement(permission_array, index, permission);
+        env->DeleteLocalRef(permission);
+    }
+
+    env->CallVoidMethod(activity, request_permissions, permission_array,
+                        kAndroidStoragePermissionRequestCode);
+    const bool ok = !env->ExceptionCheck();
+    AndroidClearJniException(env);
+    env->DeleteLocalRef(permission_array);
+    env->DeleteLocalRef(string_class);
+    env->DeleteLocalRef(activity_class);
+    env->DeleteLocalRef(activity);
+    AK_ANDROID_LOGI("storage permission runtime request result=%d", ok ? 1 : 0);
+    return ok;
+}
+
 bool AndroidHasExternalStoragePermission() {
     const int sdk = AndroidGetSdkInt();
     if (sdk > 0 && sdk < 23) {
@@ -937,8 +1015,8 @@ bool AndroidRequestExternalStoragePermission() {
     const int sdk = AndroidGetSdkInt();
     AK_ANDROID_LOGI("storage permission request sdk=%d", sdk);
     if (sdk > 0 && sdk < 30) {
-        AK_ANDROID_LOGI("storage permission request falling back to runtime permissions");
-        return false;
+        AK_ANDROID_LOGI("storage permission request using runtime permissions");
+        return AndroidRequestRuntimeStoragePermissions();
     }
     if (AndroidHasExternalStoragePermission()) {
         AK_ANDROID_LOGI("storage permission already granted");
