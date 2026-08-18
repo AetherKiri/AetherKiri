@@ -31,6 +31,8 @@ func _initialize() -> void:
     assert(not app.modal_layer.visible)
     assert(app._runtime_requires_beta_access(app.RUNTIME_ONSCRIPTER))
     assert(not app._runtime_requires_beta_access(app.RUNTIME_KIRIKIRI))
+    assert(not app._beta_access_enforcement_enabled("Android"))
+    assert(not app._beta_access_enforcement_enabled("iOS"))
 
     var settings_action := Button.new()
     app._configure_settings_action_button(settings_action)

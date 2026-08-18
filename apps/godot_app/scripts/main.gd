@@ -9579,9 +9579,9 @@ func _start_selected_game_after_iap() -> void:
     if library_path.is_empty():
         return
     var selected_runtime_kind := _game_runtime_kind(library_path)
-    # Development artifacts intentionally bypass StoreKit so local
-    # compatibility work never depends on a sandbox account or network.
-    if OS.is_debug_build():
+    # Development artifacts and Android releases do not use the Apple-only
+    # beta entitlement flow. Keep the Artemis grant enabled for both paths.
+    if not _beta_access_enforcement_enabled():
         if (
             selected_runtime_kind == RUNTIME_KIRIKIRI
             and current_player_runtime_kind != RUNTIME_KIRIKIRI
@@ -9623,9 +9623,14 @@ func _start_selected_game_after_iap() -> void:
         _deny_artemis_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS support follows the same release policy as Artemis: unrestricted in
-    # Debug, and gated by an active coffee entitlement in distributed builds.
+    # ONS support follows the same Apple release policy as Artemis: unrestricted
+    # in Debug and Android builds, and gated by an active coffee entitlement on
+    # iOS and macOS distribution builds.
     return runtime_kind == RUNTIME_ONSCRIPTER
+
+func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
+    var effective_platform := platform_name if not platform_name.is_empty() else OS.get_name()
+    return effective_platform in ["iOS", "macOS"] and not OS.is_debug_build()
 
 func _selected_game_uses_artemis() -> bool:
     if player == null or not player.has_method("probe_runtime"):

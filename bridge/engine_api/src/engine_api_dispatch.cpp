@@ -45,7 +45,7 @@ struct DispatchHandle {
   std::string writable_path;
   std::string cache_path;
   std::string requested_runtime = "auto";
-#if defined(NDEBUG)
+#if defined(NDEBUG) && !defined(__ANDROID__)
   bool artemis_beta_allowed = false;
 #else
   bool artemis_beta_allowed = true;
