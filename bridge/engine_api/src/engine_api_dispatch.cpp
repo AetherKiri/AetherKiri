@@ -19,6 +19,14 @@
 #include <TargetConditionals.h>
 #endif
 
+#if defined(__ANDROID__)
+#include <android/log.h>
+#define AETHER_DISPATCH_DIAG_LOG(message) \
+  __android_log_print(ANDROID_LOG_INFO, "AetherArtemisDiag", "%s", message)
+#else
+#define AETHER_DISPATCH_DIAG_LOG(message) ((void)0)
+#endif
+
 #include "engine_runtime_provider_registry.h"
 #include "legacy_engine_api.h"
 #if defined(ENGINE_API_USE_KRKR2_RUNTIME)
@@ -270,9 +278,11 @@ engine_result_t SelectBackendLocked(DispatchHandle* handle,
   void* runtime = nullptr;
   engine_result_t result = ENGINE_RESULT_INTERNAL_ERROR;
   try {
+    AETHER_DISPATCH_DIAG_LOG("SelectBackend before provider create");
     result = handle->provider->create(handle->provider->provider_user_data,
                                       &handle->host, &handle->create_desc,
                                       &runtime);
+    AETHER_DISPATCH_DIAG_LOG("SelectBackend after provider create");
   } catch (...) {
     result = ENGINE_RESULT_INTERNAL_ERROR;
   }
@@ -714,8 +724,10 @@ engine_result_t engine_open_game(engine_handle_t public_handle,
                                    startup_script_utf8);
   }
   handle->startup_state = ENGINE_STARTUP_STATE_RUNNING;
+  AETHER_DISPATCH_DIAG_LOG("engine_open_game before provider open_game");
   result = handle->provider->open_game(handle->runtime, game_root_path_utf8,
                                        startup_script_utf8);
+  AETHER_DISPATCH_DIAG_LOG("engine_open_game after provider open_game");
   handle->startup_state = result == ENGINE_RESULT_OK
                               ? ENGINE_STARTUP_STATE_SUCCEEDED
                               : ENGINE_STARTUP_STATE_FAILED;
@@ -758,8 +770,10 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
   handle->startup_state = ENGINE_STARTUP_STATE_RUNNING;
   handle->startup_thread = std::thread([handle, root, startup]() {
     const char* startup_value = startup.empty() ? nullptr : startup.c_str();
+    AETHER_DISPATCH_DIAG_LOG("engine_open_game_async before provider open_game");
     const auto open_result = handle->provider->open_game(
         handle->runtime, root.c_str(), startup_value);
+    AETHER_DISPATCH_DIAG_LOG("engine_open_game_async after provider open_game");
     std::lock_guard<std::recursive_mutex> thread_guard(handle->mutex);
     handle->startup_state = open_result == ENGINE_RESULT_OK
                                 ? ENGINE_STARTUP_STATE_SUCCEEDED
