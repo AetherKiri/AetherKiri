@@ -206,6 +206,7 @@ TEST_CASE("krkrsdl3 plugin inventory is available") {
         TJS_W("shrinkcopy.dll"),
         TJS_W("sqlite3.dll"),
         TJS_W("textrender.dll"),
+        TJS_W("util.dll"),
         TJS_W("varfile.dll"),
         TJS_W("win32dialog.dll"),
         TJS_W("windowex.dll"),
@@ -220,6 +221,23 @@ TEST_CASE("krkrsdl3 plugin inventory is available") {
         INFO(ttstr(module).AsStdString());
         CHECK(ncbAutoRegister::HasModule(module));
     }
+}
+
+TEST_CASE("util exposes the original global compatibility functions") {
+    ensurePluginRegistryRuntime();
+
+    REQUIRE(ncbAutoRegister::LoadModule(TJS_W("util.dll")));
+    for(const auto *name : {TJS_W("enumFont"), TJS_W("DeleteFile"),
+                            TJS_W("MoveFile"), TJS_W("GetFileSize"),
+                            TJS_W("enabledIME")}) {
+        INFO(ttstr(name).AsStdString());
+        CHECK(getGlobalProp(name).Type() == tvtObject);
+    }
+
+    tTJSVariant result;
+    TVPGetScriptEngine()->EvalExpression(
+        TJS_W("GetFileSize('__aetherkiri_missing_file__')"), &result);
+    CHECK(result.AsInteger() == -1);
 }
 
 TEST_CASE("extNagano transition providers survive a module reload") {

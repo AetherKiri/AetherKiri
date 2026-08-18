@@ -23,6 +23,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     sqlite/sqlite3.c
     win32dialog.cpp
     dirlist.cpp
+    util.cpp
     csvParser.cpp
     layerExMovie.cpp
     varfile.cpp
