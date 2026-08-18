@@ -1468,6 +1468,7 @@ const POINTER_MOD_CANCEL := 1 << 30
 const KEY_MOD_CONTROL := 0x04
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
+const RUNTIME_MINORI := "minori"
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
     "0.txt",
@@ -9375,6 +9376,9 @@ func _game_runtime_kind(path: String) -> String:
     for marker in ONSCRIPTER_SCRIPT_MARKERS:
         if FileAccess.file_exists(root.path_join(marker)):
             return RUNTIME_ONSCRIPTER
+    if player != null and player.has_method("probe_runtime") \
+            and int(player.probe_runtime(RUNTIME_MINORI, root)) > 0:
+        return RUNTIME_MINORI
     return RUNTIME_KIRIKIRI
 
 func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
@@ -10078,7 +10082,9 @@ func _start_selected_game_after_entitlements() -> void:
             _t("alert.warning_title")
         )
         return
-    var launch_path := library_path if active_runtime_kind == RUNTIME_ONSCRIPTER else GameLaunchEntry.resolve(selected_game)
+    var launch_path := library_path \
+        if active_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI] \
+        else GameLaunchEntry.resolve(selected_game)
     if not relative_launch_file.is_empty() and not FileAccess.file_exists(launch_path):
         _show_system_alert(
             _t("message.launch_file_missing", [relative_launch_file]),
@@ -10558,7 +10564,9 @@ func _create_runtime_player(runtime_kind: String = RUNTIME_KIRIKIRI) -> bool:
     return true
 
 func _switch_runtime_player(runtime_kind: String) -> bool:
-    var normalized := RUNTIME_ONSCRIPTER if runtime_kind == RUNTIME_ONSCRIPTER else RUNTIME_KIRIKIRI
+    var normalized := runtime_kind
+    if normalized != RUNTIME_ONSCRIPTER and normalized != RUNTIME_MINORI:
+        normalized = RUNTIME_KIRIKIRI
     if player != null and current_player_runtime_kind == normalized:
         return true
     if game_running:
@@ -10584,7 +10592,11 @@ func _switch_runtime_player(runtime_kind: String) -> bool:
             diagnostic_session.finish()
         diagnostic_session.start(player, selected_backend)
     _append_log("Runtime selected: %s" % (
-        "OnscripterYuri" if normalized == RUNTIME_ONSCRIPTER else "KiriKiri"
+        "OnscripterYuri"
+        if normalized == RUNTIME_ONSCRIPTER
+        else "MinoriRust"
+        if normalized == RUNTIME_MINORI
+        else "KiriKiri"
     ))
     return true
 
@@ -10601,6 +10613,9 @@ func _parse_platform_form(argument: String) -> Dictionary:
 func _on_runtime_platform_request(operation: String, argument: String) -> void:
     if player == null:
         return
+    if operation == "minori_select":
+        _show_minori_select(argument)
+        return
     if operation == "dialog":
         _show_runtime_dialog(_parse_platform_form(argument))
         return
@@ -10616,6 +10631,41 @@ func _on_runtime_platform_request(operation: String, argument: String) -> void:
         )
         return
     _append_log("Unhandled platform request: %s %s" % [operation, argument])
+
+func _show_minori_select(argument: String) -> void:
+    if modal_layer == null or player == null:
+        return
+    var options := argument.split("\n", false)
+    if options.is_empty() or options.size() > 4:
+        player.submit_platform_response("minori_select", "index=-1")
+        return
+    var dialog := _modal_dialog(Vector2(560, 120 + options.size() * 62), 0.56)
+    if active_modal_scrim != null:
+        for connection in active_modal_scrim.gui_input.get_connections():
+            active_modal_scrim.gui_input.disconnect(connection.callable)
+    var box := VBoxContainer.new()
+    box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    box.alignment = BoxContainer.ALIGNMENT_CENTER
+    box.add_theme_constant_override("separation", 12)
+    dialog.add_child(box)
+    for index in range(options.size()):
+        var selected_index := index
+        var button := _pill_button(options[index])
+        button.custom_minimum_size = Vector2(0, 50)
+        button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        button.pressed.connect(func():
+            _dismiss_modal(func():
+                if player != null:
+                    player.submit_platform_response(
+                        "minori_select", "index=%d" % selected_index
+                    )
+            )
+        )
+        box.add_child(button)
+    var first_button := box.get_child(0) as Button
+    if first_button != null:
+        first_button.grab_focus()
 
 func _show_runtime_dialog(values: Dictionary) -> void:
     if modal_layer == null or player == null:
@@ -10760,11 +10810,9 @@ func _ensure_player_initialized() -> bool:
         _append_log(init_error_message)
         return false
 
-    var runtime_id := (
-        RUNTIME_ONSCRIPTER
-        if current_player_runtime_kind == RUNTIME_ONSCRIPTER
-        else "auto"
-    )
+    var runtime_id := "auto"
+    if current_player_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]:
+        runtime_id = current_player_runtime_kind
     var runtime_result := int(player.set_engine_option("runtime", runtime_id))
     if runtime_result != ENGINE_RESULT_OK:
         render_errors += 1
@@ -13205,10 +13253,8 @@ func _game_input_content_size() -> Vector2:
     return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
 
 func _game_input_surface_size() -> Vector2:
-    # The engine API consumes the runtime surface coordinate space. Artemis
-    # maps that surface to its logical frame with an aspect-fit viewport, so
-    # GameInputMapping mirrors the same letterbox transform before dispatch.
-    if active_runtime_kind == RUNTIME_ONSCRIPTER:
+    # ONS and Minori consume coordinates in their published content space.
+    if active_runtime_kind in [RUNTIME_ONSCRIPTER, RUNTIME_MINORI]:
         return _game_input_content_size()
     if current_surface_size.x > 0 and current_surface_size.y > 0:
         return Vector2(current_surface_size)
@@ -15137,9 +15183,7 @@ func _map_surface_point_to_screen(point: Vector2) -> Vector2:
             max(1.0, float(viewport.texture.get_width())),
             max(1.0, float(viewport.texture.get_height()))
         )
-        var surface_size := texture_size
-        if current_surface_size.x > 0 and current_surface_size.y > 0:
-            surface_size = Vector2(current_surface_size)
+        var surface_size := _game_input_surface_size()
         var texture_point := Vector2(
             point.x * texture_size.x / surface_size.x,
             point.y * texture_size.y / surface_size.y

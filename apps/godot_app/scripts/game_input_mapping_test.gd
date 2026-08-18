@@ -33,6 +33,19 @@ func _initialize() -> void:
         _fail("window-to-texture mapping is incorrect: %s" % letterboxed)
         return
 
+    # Minori publishes a fixed 1280x720 logical frame even when the shell
+    # presents it at 1920x1080. Its hit testing consumes content coordinates,
+    # so a visual title-button click must map back to the original rectangle.
+    var minori_title_click := GameInputMapping.map_point_to_surface(
+        Vector2(1650, 72),
+        Rect2(0, 0, 1920, 1080),
+        Vector2(1280, 720),
+        Vector2(1280, 720)
+    )
+    if not minori_title_click.is_equal_approx(Vector2(1100, 48)):
+        _fail("Minori title click was rescaled to the shell surface: %s" % minori_title_click)
+        return
+
     # Regression: frame enhancement publishes a raw 4:3 frame and scales it
     # to 1440x1080, while Artemis still accepts input on a 1920x1080 surface.
     # Artemis presents the 4:3 logical frame aspect-fit inside that surface,
