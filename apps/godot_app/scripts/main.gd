@@ -1543,6 +1543,9 @@ var show_perf_monitor := true
 var diagnostic_profile := "baseline" if OS.is_debug_build() else "off"
 var debug_overlay_mode := "summary" if OS.is_debug_build() else "off"
 var lock_landscape := false
+var game_runtime_shell_orientation := DisplayServer.SCREEN_SENSOR
+var game_runtime_shell_screen_size := Vector2i.ZERO
+var game_runtime_shell_orientation_captured := false
 var frame_limit_enabled := false
 var target_fps := 80
 var plugin_trace := false
@@ -3474,13 +3477,38 @@ func _apply_shell_runtime_settings() -> void:
         var orientation := DisplayServer.SCREEN_LANDSCAPE if lock_landscape else DisplayServer.SCREEN_SENSOR
         DisplayServer.screen_set_orientation(orientation)
 
+func _game_runtime_restore_orientation(previous_screen_size: Vector2i, fallback: int) -> int:
+    if lock_landscape:
+        return DisplayServer.SCREEN_LANDSCAPE
+    if previous_screen_size.y > previous_screen_size.x:
+        return DisplayServer.SCREEN_PORTRAIT
+    if previous_screen_size.x > previous_screen_size.y:
+        return DisplayServer.SCREEN_LANDSCAPE
+    return fallback
+
 func _set_game_runtime_orientation(active: bool) -> void:
     if OS.get_name() != "iOS" and OS.get_name() != "Android":
         return
     if active:
+        if OS.get_name() == "Android" and not game_runtime_shell_orientation_captured:
+            # Android reports the requested orientation here rather than the
+            # physical display rotation, so retain the current screen size as
+            # the authoritative portrait/landscape state to restore on exit.
+            game_runtime_shell_orientation = DisplayServer.screen_get_orientation()
+            game_runtime_shell_screen_size = DisplayServer.screen_get_size()
+            game_runtime_shell_orientation_captured = true
         DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
     else:
-        _apply_shell_runtime_settings()
+        if OS.get_name() != "Android" or not game_runtime_shell_orientation_captured:
+            _apply_shell_runtime_settings()
+            return
+        var orientation := _game_runtime_restore_orientation(
+            game_runtime_shell_screen_size,
+            game_runtime_shell_orientation
+        )
+        game_runtime_shell_orientation_captured = false
+        game_runtime_shell_screen_size = Vector2i.ZERO
+        DisplayServer.screen_set_orientation(orientation)
 
 func _scaled_display_safe_rect(
     viewport_size: Vector2,
