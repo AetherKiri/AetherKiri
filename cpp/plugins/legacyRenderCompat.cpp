@@ -22,9 +22,10 @@ namespace {
     tjs_int GetInteger(iTJSDispatch2 *object, const tjs_char *name,
                        tjs_int fallback) {
         tTJSVariant value;
-        return GetProperty(object, name, value) && value.Type() != tvtVoid
-            ? static_cast<tjs_int>(value.AsInteger())
-            : fallback;
+        if(!GetProperty(object, name, value) || value.Type() == tvtVoid ||
+           value.Type() == tvtObject || value.Type() == tvtOctet)
+            return fallback;
+        return static_cast<tjs_int>(value.AsInteger());
     }
 
     tjs_int GetObjectInteger(const tTJSVariant &object, const tjs_char *name,
@@ -189,6 +190,11 @@ namespace {
            !GetProperty(options, TJS_W("dest"), destination))
             return TJS_S_OK;
 
+        tTJSNI_BaseLayer *source_layer = GetLayer(source);
+        tTJSNI_BaseLayer *destination_layer = GetLayer(destination);
+        if(source_layer == nullptr || destination_layer == nullptr)
+            return TJS_E_INVALIDOBJECT;
+
         const tjs_int sx = GetInteger(options, TJS_W("sleft"), 0);
         const tjs_int sy = GetInteger(options, TJS_W("stop"), 0);
         const tjs_int sw = GetInteger(
@@ -197,23 +203,19 @@ namespace {
         const tjs_int sh = GetInteger(
             options, TJS_W("sheight"),
             std::max(0, GetObjectInteger(source, TJS_W("height"), 0) - sy));
-        std::array<tTJSVariant, 10> values = {
-            tTJSVariant(GetInteger(options, TJS_W("dleft"), 0)),
-            tTJSVariant(GetInteger(options, TJS_W("dtop"), 0)),
-            tTJSVariant(GetInteger(options, TJS_W("dwidth"), sw)),
-            tTJSVariant(GetInteger(options, TJS_W("dheight"), sh)),
-            source,
-            tTJSVariant(sx),
-            tTJSVariant(sy),
-            tTJSVariant(sw),
-            tTJSVariant(sh),
-            tTJSVariant(1),
-        };
-        std::array<tTJSVariant *, 10> args{};
-        for(std::size_t i = 0; i < values.size(); ++i)
-            args[i] = &values[i];
-        return Invoke(destination.AsObjectNoAddRef(), TJS_W("stretchCopy"),
-                      static_cast<tjs_int>(args.size()), args.data());
+        const tjs_int dx = GetInteger(options, TJS_W("dleft"), 0);
+        const tjs_int dy = GetInteger(options, TJS_W("dtop"), 0);
+        const tjs_int dw = GetInteger(options, TJS_W("dwidth"), sw);
+        const tjs_int dh = GetInteger(options, TJS_W("dheight"), sh);
+        if(sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0)
+            return TJS_S_OK;
+
+        const tTVPRect source_rect(sx, sy, sx + sw, sy + sh);
+        const tTVPRect destination_rect(dx, dy, dx + dw, dy + dh);
+        destination_layer->StretchCopy(destination_rect,
+                                       source_layer->GetMainImage(),
+                                       source_rect, stLinear);
+        return TJS_S_OK;
     }
 
     tjs_error TJS_INTF_METHOD HazeCompat(tTJSVariant *, tjs_int numparams,
