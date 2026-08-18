@@ -62,6 +62,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     packinone.cpp
     clipboardEx.cpp
     compatLegacyPlugins.cpp
+    legacyRenderCompat.cpp
     compatMediaLayerPlugins.cpp
     compatSystemPlugins.cpp
     dummy_plugin_stubs.cpp

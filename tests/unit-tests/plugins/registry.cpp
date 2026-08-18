@@ -178,12 +178,15 @@ TEST_CASE("krkrsdl3 plugin inventory is available") {
         TJS_W("alphamovie.dll"),
         TJS_W("csvparser.dll"),
         TJS_W("dirlist.dll"),
+        TJS_W("drawer.dll"),
         TJS_W("drawdeviced3d.dll"),
         TJS_W("emoteplayer.dll"),
         TJS_W("expat.dll"),
         TJS_W("extkagparser.dll"),
         TJS_W("extrans.dll"),
         TJS_W("fftgraph.dll"),
+        TJS_W("filter.dll"),
+        TJS_W("firespark.dll"),
         TJS_W("fstat.dll"),
         TJS_W("getabout.dll"),
         TJS_W("getsample.dll"),
@@ -204,6 +207,7 @@ TEST_CASE("krkrsdl3 plugin inventory is available") {
         TJS_W("savestruct.dll"),
         TJS_W("scriptsex.dll"),
         TJS_W("shrinkcopy.dll"),
+        TJS_W("slideopen.dll"),
         TJS_W("sqlite3.dll"),
         TJS_W("textrender.dll"),
         TJS_W("util.dll"),
@@ -238,6 +242,45 @@ TEST_CASE("util exposes the original global compatibility functions") {
     TVPGetScriptEngine()->EvalExpression(
         TJS_W("GetFileSize('__aetherkiri_missing_file__')"), &result);
     CHECK(result.AsInteger() == -1);
+}
+
+TEST_CASE("legacy render plugins expose their original global functions") {
+    ensurePluginRegistryRuntime();
+
+    const std::pair<const tjs_char *, const tjs_char *> functions[] = {
+        { TJS_W("drawer.dll"), TJS_W("drawLine") },
+        { TJS_W("drawer.dll"), TJS_W("drawAALine") },
+        { TJS_W("drawer.dll"), TJS_W("drawAATriangle") },
+        { TJS_W("filter.dll"), TJS_W("Smudge") },
+        { TJS_W("filter.dll"), TJS_W("Blur") },
+        { TJS_W("filter.dll"), TJS_W("Lens") },
+        { TJS_W("filter.dll"), TJS_W("InitLens") },
+        { TJS_W("filter.dll"), TJS_W("ReleaseLens") },
+        { TJS_W("filter.dll"), TJS_W("Noise") },
+        { TJS_W("filter.dll"), TJS_W("Contrast") },
+        { TJS_W("filter.dll"), TJS_W("initHaze") },
+        { TJS_W("filter.dll"), TJS_W("doHaze") },
+        { TJS_W("filter.dll"), TJS_W("endHaze") },
+        { TJS_W("filter.dll"), TJS_W("Stretch") },
+        { TJS_W("slideopen.dll"), TJS_W("initSlideOpen") },
+        { TJS_W("slideopen.dll"), TJS_W("drawSlideOpen") },
+        { TJS_W("slideopen.dll"), TJS_W("finishSlideOpen") },
+        { TJS_W("firespark.dll"), TJS_W("initFireSpark") },
+        { TJS_W("firespark.dll"), TJS_W("finishFireSpark") },
+        { TJS_W("firespark.dll"), TJS_W("changeFireSpark") },
+        { TJS_W("firespark.dll"), TJS_W("drawFireSpark") },
+    };
+
+    ttstr loaded;
+    for(const auto &[module, function] : functions) {
+        if(loaded != module) {
+            REQUIRE(ncbAutoRegister::LoadModule(module));
+            loaded = module;
+        }
+        INFO(ttstr(module).AsStdString() + ": " +
+             ttstr(function).AsStdString());
+        CHECK(getGlobalProp(function).Type() == tvtObject);
+    }
 }
 
 TEST_CASE("extNagano transition providers survive a module reload") {
