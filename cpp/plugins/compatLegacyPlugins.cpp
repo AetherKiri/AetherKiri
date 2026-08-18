@@ -509,6 +509,22 @@ static void wuopusInit() {
 NCB_PRE_REGIST_CALLBACK(wuopusInit);
 
 #undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("kropus.dll")
+static void kropusInit() {
+    logOnce(TJS_W("kropus.dll"),
+            TJS_W("Opus streams are handled by the built-in Opus decoder"));
+}
+NCB_PRE_REGIST_CALLBACK(kropusInit);
+
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("KaichoTrans.dll")
+static void kaichoTransInit() {
+    logOnce(TJS_W("KaichoTrans.dll"),
+            TJS_W("Kaicho transition plug-in load is accepted"));
+}
+NCB_PRE_REGIST_CALLBACK(kaichoTransInit);
+
+#undef NCB_MODULE_NAME
 #define NCB_MODULE_NAME TJS_W("wuflac.dll")
 static void wuflacInit() {
     logOnce(TJS_W("wuflac.dll"),

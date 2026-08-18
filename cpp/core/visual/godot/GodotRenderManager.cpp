@@ -146,6 +146,9 @@ bool IsGpuRectFastPathEnabled(const char *name) {
                std::strcmp(name, "UnivTransBlend_d") == 0 ||
                std::strcmp(name, "UnivTransBlend_a") == 0 ||
                std::strcmp(name, "CopyColor") == 0 ||
+               std::strcmp(name, "ApplyColorMap_a") == 0 ||
+               std::strcmp(name, "AdditiveAlphaBlend") == 0 ||
+               std::strcmp(name, "AdditiveAlphaBlend_a") == 0 ||
                std::strcmp(name, "PsAddBlend") == 0 ||
                std::strcmp(name, "PsSubBlend") == 0 ||
                std::strcmp(name, "PsScreenBlend") == 0 ||
@@ -520,7 +523,8 @@ void GodotTexture2D::CreateGpuHandle(const void *pixel, int pitch) {
     }
     gpu_dirty_ = false;
     cpu_dirty_ = false;
-    if(format_ == TVPTextureFormat::RGBA) DiscardCpuStorage();
+    if(format_ == TVPTextureFormat::RGBA && !retain_cpu_shadow_)
+        DiscardCpuStorage();
 }
 
 bool GodotTexture2D::EnsureGpuHandle() {
@@ -529,17 +533,38 @@ bool GodotTexture2D::EnsureGpuHandle() {
     } else if (cpu_dirty_) {
         const auto *bridge = TVPGodotGpuBridgeGet();
         if (bridge == nullptr || bridge->update_rgba == nullptr ||
-            format_ != TVPTextureFormat::RGBA || pixels_.empty()) {
+            pixels_.empty()) {
+            return false;
+        }
+        const void *upload_pixels = pixels_.data();
+        uint32_t upload_pitch = static_cast<uint32_t>(pitch_);
+        std::vector<uint32_t> expanded_gray;
+        if(format_ == TVPTextureFormat::Gray) {
+            expanded_gray.resize(static_cast<size_t>(Width) * Height);
+            for(int y = 0; y < Height; ++y) {
+                const auto *source = pixels_.data() +
+                    static_cast<size_t>(y) * pitch_;
+                auto *destination = expanded_gray.data() +
+                    static_cast<size_t>(y) * Width;
+                for(int x = 0; x < Width; ++x) {
+                    const uint32_t value = source[x];
+                    destination[x] =
+                        value | (value << 8) | (value << 16) | 0xff000000u;
+                }
+            }
+            upload_pixels = expanded_gray.data();
+            upload_pitch = static_cast<uint32_t>(Width) * 4u;
+        } else if(format_ != TVPTextureFormat::RGBA) {
             return false;
         }
         const tTVPRect full_rect(0, 0, Width, Height);
-        if (!bridge->update_rgba(gpu_handle_, pixels_.data(),
-                                 static_cast<uint32_t>(pitch_), &full_rect)) {
+        if (!bridge->update_rgba(gpu_handle_, upload_pixels,
+                                 upload_pitch, &full_rect)) {
             return false;
         }
         gpu_dirty_ = false;
         cpu_dirty_ = false;
-        DiscardCpuStorage();
+        if(!retain_cpu_shadow_) DiscardCpuStorage();
     }
     return gpu_handle_ != 0;
 }
@@ -632,6 +657,7 @@ const void *GodotTexture2D::GetScanLineForRead(tjs_uint l) {
 void *GodotTexture2D::GetScanLineForWrite(tjs_uint l) {
     EnsureCpuReadable();
     if (l >= static_cast<tjs_uint>(Height) || pixels_.empty()) return nullptr;
+    retain_cpu_shadow_ = true;
     MarkOpacityUnknown();
     MarkCpuDirty();
     return pixels_.data() + static_cast<size_t>(l) * pitch_;
@@ -978,7 +1004,7 @@ bool GodotTexture2D::UploadCpuToGpu(bool flush_pending_gpu_writes) {
     }
     gpu_dirty_ = false;
     cpu_dirty_ = false;
-    DiscardCpuStorage();
+    if(!retain_cpu_shadow_) DiscardCpuStorage();
     return true;
 }
 
@@ -1267,6 +1293,39 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
         dst->BlendGpuFrom(src, rctar, textures[0].second,
                           TVP_GODOT_GPU_BLEND_COPY_COLOR, 255, 0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
+    if (method_name == "ApplyColorMap_a" && dst != nullptr && src != nullptr &&
+        IsGpuRectFastPathEnabled("ApplyColorMap_a") &&
+        RectAbsSizeMatches(rctar, textures[0].second) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(
+            src, rctar, textures[0].second,
+            TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A,
+            godot_method != nullptr ? godot_method->Opacity() : 255,
+            godot_method != nullptr ? godot_method->Color() : 0)) {
+        CountGpuFastPath(method_name);
+        return;
+    }
+
+    if ((method_name == "AdditiveAlphaBlend" ||
+         method_name == "AdditiveAlphaBlend_a") &&
+        dst != nullptr && src != nullptr &&
+        IsGpuRectFastPathEnabled(method_name.c_str()) &&
+        RectAbsSizeMatches(rctar, textures[0].second) &&
+        RectBoundsInsideTexture(textures[0].second, src) &&
+        dst->EnsureGpuHandle() && src->EnsureGpuHandle() &&
+        src->UploadCpuToGpu(!DeferredGodotGpuDrainEnabled()) &&
+        dst->BlendGpuFrom(
+            src, rctar, textures[0].second,
+            method_name == "AdditiveAlphaBlend_a"
+                ? TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_A
+                : TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA,
+            godot_method != nullptr ? godot_method->Opacity() : 255, 0)) {
         CountGpuFastPath(method_name);
         return;
     }

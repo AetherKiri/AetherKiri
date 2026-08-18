@@ -1168,6 +1168,14 @@ static iTVPAudioRenderer *CreateAudioRenderer() {
     }
     spdlog::warn("iOS SDL audio renderer unavailable; falling back to OpenAL");
     delete renderer;
+#else
+    renderer = new tTVPAudioRendererSDL;
+    if(renderer->Init()) {
+        spdlog::info("desktop audio renderer selected: SDL");
+        return renderer;
+    }
+    spdlog::warn("desktop SDL audio renderer unavailable; falling back to OpenAL");
+    delete renderer;
 #endif
     renderer = new tTVPAudioRendererAL;
     renderer->Init();

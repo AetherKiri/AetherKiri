@@ -1742,6 +1742,56 @@ uint ps_sub_blend(uint d, uint s, uint opa) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint additive_alpha_blend_hda(uint d, uint s, uint opa) {
+    if (opa != 255u) {
+        uint sr = ((s & 0xffu) * opa) >> 8;
+        uint sg = (((s >> 8) & 0xffu) * opa) >> 8;
+        uint sb = (((s >> 16) & 0xffu) * opa) >> 8;
+        uint sa = (((s >> 24) & 0xffu) * opa) >> 8;
+        s = sr | (sg << 8) | (sb << 16) | (sa << 24);
+    }
+    uint inverse_alpha = ((~s) >> 24) & 0xffu;
+    uint r = min((((d & 0xffu) * inverse_alpha) >> 8) + (s & 0xffu), 255u);
+    uint g = min(((((d >> 8) & 0xffu) * inverse_alpha) >> 8) +
+                 ((s >> 8) & 0xffu), 255u);
+    uint b = min(((((d >> 16) & 0xffu) * inverse_alpha) >> 8) +
+                 ((s >> 16) & 0xffu), 255u);
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint additive_alpha_blend_a(uint d, uint s, uint opa) {
+    if (opa != 255u) {
+        uint sr = ((s & 0xffu) * opa) >> 8;
+        uint sg = (((s >> 8) & 0xffu) * opa) >> 8;
+        uint sb = (((s >> 16) & 0xffu) * opa) >> 8;
+        uint sa = (((s >> 24) & 0xffu) * opa) >> 8;
+        s = sr | (sg << 8) | (sb << 16) | (sa << 24);
+    }
+    uint da = (d >> 24) & 0xffu;
+    uint sa = (s >> 24) & 0xffu;
+    uint out_alpha = da + sa - ((da * sa) >> 8);
+    out_alpha -= out_alpha >> 8;
+    return (additive_alpha_blend_hda(d, s, 255u) & 0x00ffffffu) |
+           (out_alpha << 24);
+}
+
+uint apply_color_map_a(uint d, uint mask, uint opa, uvec3 color) {
+    uint source_alpha = opa == 255u ? mask : ((mask * opa) >> 8);
+    source_alpha -= source_alpha >> 8;
+    uint inverse_alpha = source_alpha ^ 0xffu;
+    uint dest_alpha = (d >> 24) & 0xffu;
+    uint out_alpha = dest_alpha + source_alpha -
+                     ((dest_alpha * source_alpha) >> 8);
+    out_alpha -= out_alpha >> 8;
+    uint r = min((((d & 0xffu) * inverse_alpha) >> 8) +
+                 ((source_alpha * color.r) >> 8), 255u);
+    uint g = min(((((d >> 8) & 0xffu) * inverse_alpha) >> 8) +
+                 ((source_alpha * color.g) >> 8), 255u);
+    uint b = min(((((d >> 16) & 0xffu) * inverse_alpha) >> 8) +
+                 ((source_alpha * color.b) >> 8), 255u);
+    return (out_alpha << 24) | r | (g << 8) | (b << 16);
+}
+
 uint remove_const_opacity(uint d, uint strength) {
     uint inv_strength = 255u - clamp(strength, 0u, 255u);
     uint a = (((d >> 24) & 0xffu) * inv_strength) >> 8;
@@ -1809,6 +1859,14 @@ void main() {
         out_color = ps_add_blend(d, s, opa);
         } else if (pc.rect1.z == 17) {
         out_color = ps_sub_blend(d, s, opa);
+        } else if (pc.rect1.z == 23) {
+        out_color = apply_color_map_a(
+            d, s & 0xffu, opa,
+            uvec3(uint(pc.color0.x), uint(pc.color0.y), uint(pc.color0.z)));
+        } else if (pc.rect1.z == 24) {
+        out_color = additive_alpha_blend_hda(d, s, opa);
+        } else if (pc.rect1.z == 25) {
+        out_color = additive_alpha_blend_a(d, s, opa);
         } else if (pc.rect1.z == 8) {
         out_color = remove_const_opacity(d, opa);
         }
@@ -7507,6 +7565,51 @@ uint32_t CpuPsSubBlend(uint32_t d, uint32_t s, int opacity) {
     return (d & 0xff000000u) | r | (g << 8) | (b << 16);
 }
 
+uint32_t CpuAdditiveAlphaBlendHda(uint32_t d, uint32_t s, int opacity) {
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    if(opa != 255u) {
+        const uint32_t rb = ((s & 0x00ff00ffu) * opa >> 8) & 0x00ff00ffu;
+        const uint32_t ga = ((s >> 8 & 0x00ff00ffu) * opa) & 0xff00ff00u;
+        s = rb | ga;
+    }
+    const uint32_t inverse_alpha = (~s) >> 24;
+    const uint32_t r = std::min(
+        (((d & 0xffu) * inverse_alpha) >> 8) + (s & 0xffu), 255u);
+    const uint32_t g = std::min(
+        (((d >> 8 & 0xffu) * inverse_alpha) >> 8) +
+            (s >> 8 & 0xffu),
+        255u);
+    const uint32_t b = std::min(
+        (((d >> 16 & 0xffu) * inverse_alpha) >> 8) +
+            (s >> 16 & 0xffu),
+        255u);
+    return (d & 0xff000000u) | r | (g << 8) | (b << 16);
+}
+
+uint32_t CpuApplyColorMapA(uint32_t d, uint32_t mask, int opacity,
+                           uint32_t color) {
+    const uint32_t opa = static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+    uint32_t source_alpha = opa == 255u ? mask : ((mask * opa) >> 8);
+    source_alpha -= source_alpha >> 8;
+    const uint32_t inverse_alpha = source_alpha ^ 0xffu;
+    uint32_t out_alpha = ((d >> 24) & 0xffu) + source_alpha -
+                         ((((d >> 24) & 0xffu) * source_alpha) >> 8);
+    out_alpha -= out_alpha >> 8;
+    const uint32_t r = std::min(
+        (((d & 0xffu) * inverse_alpha) >> 8) +
+            ((source_alpha * (color & 0xffu)) >> 8),
+        255u);
+    const uint32_t g = std::min(
+        (((d >> 8 & 0xffu) * inverse_alpha) >> 8) +
+            ((source_alpha * (color >> 8 & 0xffu)) >> 8),
+        255u);
+    const uint32_t b = std::min(
+        (((d >> 16 & 0xffu) * inverse_alpha) >> 8) +
+            ((source_alpha * (color >> 16 & 0xffu)) >> 8),
+        255u);
+    return (out_alpha << 24) | r | (g << 8) | (b << 16);
+}
+
 uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
                            int opacity, uint32_t color) {
     switch (mode) {
@@ -7537,6 +7640,27 @@ uint32_t CpuBlendReference(uint32_t mode, uint32_t d, uint32_t s,
             return CpuPsAddBlend(d, s, opacity);
         case TVP_GODOT_GPU_BLEND_PS_SUBTRACT:
             return CpuPsSubBlend(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A:
+            return CpuApplyColorMapA(d, s & 0xffu, opacity, color);
+        case TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA:
+            return CpuAdditiveAlphaBlendHda(d, s, opacity);
+        case TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_A: {
+            const uint32_t opa =
+                static_cast<uint32_t>(std::clamp(opacity, 0, 255));
+            if(opa != 255u) {
+                const uint32_t rb =
+                    ((s & 0x00ff00ffu) * opa >> 8) & 0x00ff00ffu;
+                const uint32_t ga =
+                    ((s >> 8 & 0x00ff00ffu) * opa) & 0xff00ff00u;
+                s = rb | ga;
+            }
+            const uint32_t da = d >> 24;
+            const uint32_t sa = s >> 24;
+            uint32_t out_alpha = da + sa - ((da * sa) >> 8);
+            out_alpha -= out_alpha >> 8;
+            return (CpuAdditiveAlphaBlendHda(d, s, 255) & 0x00ffffffu) |
+                (out_alpha << 24);
+        }
         default:
             return s;
     }
@@ -7608,6 +7732,16 @@ uint32_t BlendModeFromName(const String &mode_name) {
     if (lower == "alphablend_d_mask_threshold" ||
         lower == "alpha_blend_d_mask_threshold") {
         return TVP_GODOT_GPU_BLEND_ALPHA_D_MASK_THRESHOLD;
+    }
+    if (lower == "additivealphablend_a" ||
+        lower == "additive_alpha_blend_a") {
+        return TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_A;
+    }
+    if (lower == "additivealphablend" || lower == "additive_alpha_blend") {
+        return TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA;
+    }
+    if (lower == "applycolormap_a" || lower == "apply_color_map_a") {
+        return TVP_GODOT_GPU_BLEND_APPLY_COLOR_MAP_A;
     }
     if (lower == "psscreenblend" || lower == "ps_screen_blend") {
         return TVP_GODOT_GPU_BLEND_PS_SCREEN;
