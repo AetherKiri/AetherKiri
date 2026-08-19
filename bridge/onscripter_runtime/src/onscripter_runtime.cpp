@@ -36,6 +36,7 @@
 #include <vector>
 
 #if defined(ANDROID)
+#include <android/log.h>
 #include <sys/stat.h>
 #endif
 
@@ -105,10 +106,10 @@ void ResetPublishedFrame() {
     g_published_frame = {};
 }
 
-// SDL owns one process-wide event queue. On iOS, Godot's main loop and the
-// embedded ONS thread both consume it, so an event pushed by the bridge can be
-// removed by Godot before ONS sees it. Keep host input in a private queue and
-// let the ONS event loop consume it directly.
+// SDL owns one process-wide event queue. Godot and the embedded ONS thread can
+// both consume it on mobile, so an event pushed by the bridge can be removed
+// by Godot before ONS sees it. Keep host input in a private queue and let the
+// ONS event loop consume it directly on every embedded platform.
 std::mutex g_host_event_mutex;
 std::deque<SDL_Event> g_host_events;
 constexpr size_t kMaxHostEvents = 256;
@@ -132,7 +133,6 @@ void ClearHostEvents() {
 }
 
 bool PushRuntimeEvent(const SDL_Event &event) {
-#if defined(__APPLE__) && TARGET_OS_IOS
     std::lock_guard<std::mutex> lock(g_host_event_mutex);
     // Only the newest cursor position matters until a button/key boundary is
     // reached. Coalescing keeps a fast finger drag from delaying its release.
@@ -155,9 +155,6 @@ bool PushRuntimeEvent(const SDL_Event &event) {
     }
     g_host_events.push_back(event);
     return true;
-#else
-    return SDL_PushEvent(const_cast<SDL_Event *>(&event)) == 1;
-#endif
 }
 
 class EmbeddedMovieHost {
@@ -188,21 +185,25 @@ extern "C" void aetherkiri_onscripter_end_system_list_scroll() {
 }
 
 extern "C" int aetherkiri_onscripter_wait_event(SDL_Event *event) {
-#if defined(__APPLE__) && TARGET_OS_IOS
-    // Bound the SDL wait so private host input remains responsive even when
-    // Godot repeatedly wins the race for SDL timer/window events.
     while (event != nullptr) {
+        // Only Runtime::shutdown injects a quit event into the private queue.
+        // SDL's process-wide queue belongs to Godot and can receive lifecycle
+        // SDL_QUIT events while the Android activity is being initialized.
+        // Passing one of those through would make ONScripter run `end`.
         if (PopHostEvent(event)) {
+            if (event->type == SDL_QUIT) {
+                aetherkiri_onscripter_host_exit(0, __FILE__, __LINE__);
+            }
             return 1;
         }
         if (SDL_WaitEventTimeout(event, 8) == 1) {
+            if (event->type == SDL_QUIT) {
+                continue;
+            }
             return 1;
         }
     }
     return 0;
-#else
-    return event != nullptr ? SDL_WaitEvent(event) : 0;
-#endif
 }
 
 extern "C" void SDLCALL
@@ -544,11 +545,33 @@ std::string Utf8FromCodepoint(uint32_t codepoint) {
 
 } // namespace
 
-extern "C" [[noreturn]] void aetherkiri_onscripter_host_exit(int code) {
+extern "C" [[noreturn]] void aetherkiri_onscripter_host_exit(
+    int code, const char *source_file, int source_line) {
+#if defined(ANDROID)
+    __android_log_print(ANDROID_LOG_INFO, "AetherKiriONS",
+                        "embedded exit code=%d source=%s:%d", code,
+                        source_file != nullptr ? source_file : "unknown",
+                        source_line);
+#else
+    (void)source_file;
+    (void)source_line;
+#endif
     throw HostExit{code};
 }
 
 namespace aetherkiri::onscripter {
+
+namespace {
+
+void LogRuntimeEvent(const std::string &message) {
+#if defined(ANDROID)
+    __android_log_write(ANDROID_LOG_INFO, "AetherKiriONS", message.c_str());
+#else
+    (void)message;
+#endif
+}
+
+} // namespace
 
 struct Runtime::Impl final : EmbeddedMovieHost {
     struct MovieConfiguration {
@@ -601,6 +624,7 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     MovieConfiguration active_movie_configuration;
 
     void append_log(std::string message) {
+        LogRuntimeEvent(message);
         std::lock_guard<std::mutex> lock(mutex);
         logs.emplace_back(std::move(message));
         while (logs.size() > 256) {
@@ -609,6 +633,7 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     }
 
     void set_error(std::string message) {
+        LogRuntimeEvent("[ONScripter Yuri] " + message);
         {
             std::lock_guard<std::mutex> lock(mutex);
             error = std::move(message);
@@ -619,6 +644,7 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     }
 
     void set_media_error(std::string message) {
+        LogRuntimeEvent("[ONScripter Yuri media] " + message);
         std::lock_guard<std::mutex> lock(mutex);
         error = std::move(message);
         logs.emplace_back("[ONScripter Yuri media] " + error);
@@ -841,11 +867,20 @@ struct Runtime::Impl final : EmbeddedMovieHost {
         };
         SDL_Event event{};
         while (PopHostEvent(&event)) {
+            // A private SDL_QUIT is Runtime::shutdown waking an active movie.
+            if (event.type == SDL_QUIT) {
+                aetherkiri_onscripter_host_exit(0, __FILE__, __LINE__);
+            }
             if (handle_event(event)) {
                 return true;
             }
         }
         while (SDL_PollEvent(&event)) {
+            // Godot owns SDL's global Android activity events. In particular,
+            // never let a transient SDL_QUIT terminate a script movie/game.
+            if (event.type == SDL_QUIT) {
+                continue;
+            }
             if (handle_event(event)) {
                 return true;
             }
@@ -1052,18 +1087,32 @@ struct Runtime::Impl final : EmbeddedMovieHost {
 
     void run_game(fs::path root) {
         try {
-#if defined(__APPLE__) && TARGET_OS_IOS
-            // ONScripter is embedded in Godot, so SDL never owns the iOS
-            // application entry point that normally marks its main setup as
-            // complete. Tell SDL that the existing host has already done so
-            // before ONScripter calls SDL_Init from this runtime thread.
+            append_log("[ONScripter Yuri] run_game entered: " +
+                       root.u8string());
+#if (defined(__APPLE__) && TARGET_OS_IOS) || defined(ANDROID)
+            // ONScripter is embedded in Godot, so SDL never owns the host
+            // application's entry point that normally marks its main setup
+            // as complete. Tell SDL that the existing host has already done
+            // so before ONScripter calls SDL_Init from this runtime thread.
             SDL_SetMainReady();
 #endif
+#if defined(AETHERKIRI_EMBEDDED_HOST)
+            // ONScripter is embedded in Godot and has no SDL-owned
+            // presentation surface. In particular, never select SDL's
+            // Android backend: it expects SDLActivity/JNI state that Godot
+            // does not provide and can dereference a null JavaVM.
             SDL_SetHintWithPriority(SDL_HINT_VIDEODRIVER, "dummy",
                                     SDL_HINT_OVERRIDE);
             SDL_SetHintWithPriority(SDL_HINT_RENDER_DRIVER, "software",
                                     SDL_HINT_OVERRIDE);
-
+#endif
+#if defined(ANDROID)
+            // Godot owns the Android activity, so SDL's Java AudioTrack
+            // backend has no SDLActivity JNI bindings. Use SDL's native
+            // OpenSL ES backend while retaining the normal ONS mixer path.
+            SDL_SetHintWithPriority(SDL_HINT_AUDIODRIVER, "openslES",
+                                    SDL_HINT_OVERRIDE);
+#endif
             load_game_options(root);
             configure_encoding();
             ons = new (static_cast<void *>(&::ons)) ONScripter();
@@ -1144,8 +1193,12 @@ struct Runtime::Impl final : EmbeddedMovieHost {
                         "failed to restore the process working directory");
                 }
             }
+            append_log("[ONScripter Yuri] script opened");
 
-            if (ons->init() != 0) {
+            const int init_result = ons->init();
+            append_log("[ONScripter Yuri] init returned: " +
+                       std::to_string(init_result));
+            if (init_result != 0) {
                 throw std::runtime_error(
                     "ONScripter Yuri initialization failed; check default.ttf and game assets");
             }
@@ -1206,10 +1259,16 @@ struct Runtime::Impl final : EmbeddedMovieHost {
             game_open.store(true);
             append_log("[ONScripter Yuri] startup succeeded: " +
                        root.u8string());
+            append_log("[ONScripter Yuri] executeLabel entered");
             ons->executeLabel();
+            append_log("[ONScripter Yuri] executeLabel returned");
             ended.store(true);
             game_open.store(false);
         } catch (const HostExit &host_exit) {
+            append_log("[ONScripter Yuri] HostExit code=" +
+                       std::to_string(host_exit.code) +
+                       " stop_requested=" +
+                       std::to_string(stop_requested.load() ? 1 : 0));
             ended.store(true);
             game_open.store(false);
             if (host_exit.code == 0 || stop_requested.load()) {
@@ -1272,6 +1331,8 @@ void Runtime::shutdown() {
     }
     aetherkiri_onscripter_end_system_list_scroll();
     impl_->stop_requested.store(true);
+    impl_->append_log("[ONScripter Yuri] shutdown requested, game_thread=" +
+                      std::to_string(impl_->game_thread.joinable() ? 1 : 0));
     if (impl_->game_thread.joinable()) {
         SDL_Event event{};
         event.type = SDL_QUIT;
@@ -1333,6 +1394,8 @@ bool Runtime::open_game(const std::string &game_root_path) {
     }
 
     impl_->game_root = root.u8string();
+    impl_->append_log("[ONScripter Yuri] open_game queued: " +
+                      impl_->game_root);
     aetherkiri_onscripter_end_system_list_scroll();
     impl_->system_list_touch_pointer.store(-1);
     impl_->system_list_touch_scrolled.store(false);

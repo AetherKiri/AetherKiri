@@ -1426,6 +1426,7 @@ const POINTER_DOWN := 1
 const POINTER_MOVE := 2
 const POINTER_UP := 3
 const POINTER_SCROLL := 4
+const BUTTON_POSITION_MEMORY_PATH := "user://aetherkiri-button-positions.json"
 const POINTER_MOD_LEFT := 0x08
 const POINTER_MOD_RIGHT := 0x10
 const POINTER_MOD_MIDDLE := 0x20
@@ -1720,6 +1721,9 @@ var capture_after_open_done := false
 var capture_after_open_delay_sec := 0.0
 var capture_after_open_ready_usec := 0
 var auto_probe_clicks: Array[Vector2] = []
+var remembered_button_positions: Array[Vector2] = []
+var observed_button_positions: Array[Vector2] = []
+var button_position_memory_key := ""
 var auto_probe_running := false
 var auto_probe_done := false
 var startup_click_stream_enabled := false
@@ -12188,6 +12192,14 @@ func _on_open_game() -> void:
     if detected_runtime == RUNTIME_ONSCRIPTER:
         path = _game_runtime_root(path)
         game_path.text = path
+    _load_button_position_memory(path)
+    if (
+        detected_runtime == RUNTIME_ONSCRIPTER
+        and auto_probe_clicks.is_empty()
+        and _runtime_flag("AETHERKIRI_AUTO_PROBE_REMEMBERED_CLICKS")
+    ):
+        auto_probe_clicks = remembered_button_positions.duplicate()
+        device_probe_enabled = device_probe_enabled or not auto_probe_clicks.is_empty()
 
     if not _ensure_player_initialized():
         return
@@ -12917,6 +12929,51 @@ func _parse_click_points(spec: String) -> Array[Vector2]:
             clicks.push_back(Vector2(float(parts[0]), float(parts[1])))
     return clicks
 
+func _load_button_position_memory(path: String) -> void:
+    button_position_memory_key = path.simplify_path()
+    remembered_button_positions.clear()
+    observed_button_positions.clear()
+    if not FileAccess.file_exists(BUTTON_POSITION_MEMORY_PATH):
+        return
+    var file := FileAccess.open(BUTTON_POSITION_MEMORY_PATH, FileAccess.READ)
+    if file == null:
+        return
+    var parsed = JSON.parse_string(file.get_as_text())
+    file.close()
+    if not parsed is Dictionary:
+        return
+    var raw = parsed.get(button_position_memory_key, [])
+    if not raw is Array:
+        return
+    for item in raw:
+        if item is Array and item.size() >= 2:
+            remembered_button_positions.append(Vector2(float(item[0]), float(item[1])))
+    observed_button_positions = remembered_button_positions.duplicate()
+
+func _remember_button_position(position: Vector2) -> void:
+    if active_runtime_kind != RUNTIME_ONSCRIPTER or button_position_memory_key.is_empty():
+        return
+    if observed_button_positions.size() >= 2:
+        return
+    observed_button_positions.append(position)
+    var memory: Dictionary = {}
+    if FileAccess.file_exists(BUTTON_POSITION_MEMORY_PATH):
+        var existing := FileAccess.open(BUTTON_POSITION_MEMORY_PATH, FileAccess.READ)
+        if existing != null:
+            var parsed = JSON.parse_string(existing.get_as_text())
+            existing.close()
+            if parsed is Dictionary:
+                memory = parsed
+    var saved_positions: Array = []
+    for item in observed_button_positions:
+        saved_positions.append([item.x, item.y])
+    memory[button_position_memory_key] = saved_positions
+    var output := FileAccess.open(BUTTON_POSITION_MEMORY_PATH, FileAccess.WRITE)
+    if output != null:
+        output.store_string(JSON.stringify(memory))
+        output.close()
+    remembered_button_positions = observed_button_positions.duplicate()
+
 func _runtime_string(name: String, fallback: String = "") -> String:
     var value := OS.get_environment(name)
     if not value.is_empty():
@@ -13484,6 +13541,7 @@ func _handle_game_pointer_event(event: InputEvent) -> bool:
             event_type = POINTER_SCROLL
         elif mouse_button.pressed:
             active_mouse_buttons[mouse_button.button_index] = mapped
+            _remember_button_position(mapped)
         else:
             if not captured:
                 _trace_input_throttled()
@@ -13721,6 +13779,7 @@ func _flush_pending_touch_press(force: bool = false) -> bool:
     touch_down_points[pointer_id] = mapped
     dragging_touch_points.erase(pointer_id)
     last_forwarded_touch_down_msec = now
+    _remember_button_position(mapped)
     _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
     _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), mapped.x, mapped.y, 0.0, 0.0, 0)
     _arm_tick_trace()
@@ -13743,6 +13802,7 @@ func _send_pending_touch_click(pointer_id: int, up_mapped: Vector2) -> void:
     last_forwarded_touch_move_msec_by_id.erase(pointer_id)
 
     last_forwarded_touch_down_msec = Time.get_ticks_msec()
+    _remember_button_position(click_mapped)
     _send_game_pointer_event(POINTER_MOVE, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
     _send_game_pointer_event(POINTER_DOWN, _touch_engine_pointer_id(pointer_id), click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
     if _is_touch_platform() and active_runtime_kind == RUNTIME_ONSCRIPTER:
@@ -13812,6 +13872,7 @@ func _send_touch_secondary_click(pointer_id: int, mapped: Vector2) -> void:
         last_forwarded_touch_up_msec = Time.get_ticks_msec()
 
     _suppress_touch_pointer(pointer_id)
+    _remember_button_position(click_mapped)
     _send_game_pointer_event(POINTER_MOVE, TOUCH_SECONDARY_POINTER_ID, click_mapped.x, click_mapped.y, 0.0, 0.0, 0)
     last_forwarded_touch_down_msec = Time.get_ticks_msec()
     _send_game_pointer_event(POINTER_DOWN, TOUCH_SECONDARY_POINTER_ID, click_mapped.x, click_mapped.y, 0.0, 0.0, 1)

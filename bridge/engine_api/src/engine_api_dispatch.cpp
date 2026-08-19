@@ -751,11 +751,16 @@ engine_result_t engine_open_game_async(engine_handle_t public_handle,
   if (result != ENGINE_RESULT_OK) return result;
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
   if (handle->startup_thread.joinable()) {
-    return ThreadError(ENGINE_RESULT_INVALID_STATE,
-                       "an asynchronous startup task already exists");
+    handle->last_error = "an asynchronous startup task already exists";
+    return ThreadError(ENGINE_RESULT_INVALID_STATE, handle->last_error.c_str());
   }
   result = SelectBackendLocked(handle, game_root_path_utf8);
-  if (result != ENGINE_RESULT_OK) return result;
+  if (result != ENGINE_RESULT_OK) {
+    if (handle->last_error.empty()) {
+      handle->last_error = "failed to select a runtime backend";
+    }
+    return ThreadError(result, handle->last_error.c_str());
+  }
   result = CheckArtemisBetaAccess(handle);
   if (result != ENGINE_RESULT_OK) return result;
   if (handle->backend == BackendKind::kLegacy) {
@@ -1315,6 +1320,9 @@ engine_result_t engine_drain_diagnostic_events(engine_handle_t public_handle,
 }
 
 const char* engine_get_last_error(engine_handle_t public_handle) {
+  if (!g_dispatch_thread_error.empty()) {
+    return g_dispatch_thread_error.c_str();
+  }
   if (public_handle == nullptr) return g_dispatch_thread_error.c_str();
   std::lock_guard<std::recursive_mutex> registry_guard(g_dispatch_registry_mutex);
   DispatchHandle* handle = nullptr;

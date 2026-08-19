@@ -26,6 +26,39 @@ function(aetherkiri_prepare_onscripter_yuri_sources
     string(REPLACE "${command_dispatch_original}" "${command_dispatch_embedded}"
            base_source "${base_source}")
 
+    set(gamecontroller_init_original [=[
+#if !defined(IOS)
+#if defined(ANDROID)
+    SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+#endif
+    if(SDL_InitSubSystem( SDL_INIT_GAMECONTROLLER ) == 0)
+        utils::printInfo("Initialize GameController\n");
+    controller = SDL_GameControllerOpen(0);
+    if(controller != NULL)
+        utils::printInfo("GameController found\n");
+#endif
+]=])
+    set(gamecontroller_init_embedded [=[
+#if !defined(IOS) && !defined(AETHERKIRI_EMBEDDED_HOST)
+#if defined(ANDROID)
+    SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+#endif
+    if(SDL_InitSubSystem( SDL_INIT_GAMECONTROLLER ) == 0)
+        utils::printInfo("Initialize GameController\n");
+    controller = SDL_GameControllerOpen(0);
+    if(controller != NULL)
+        utils::printInfo("GameController found\n");
+#endif
+]=])
+    string(FIND "${base_source}" "${gamecontroller_init_original}"
+           gamecontroller_init_position)
+    if(gamecontroller_init_position EQUAL -1)
+        message(FATAL_ERROR
+            "OnscripterYuri game controller initialization changed; update the embedded-host overlay.")
+    endif()
+    string(REPLACE "${gamecontroller_init_original}" "${gamecontroller_init_embedded}"
+           base_source "${base_source}")
+
     set(sdl_shutdown_original [=[
     SDL_DestroyRenderer(renderer);
     SDL_Quit();
@@ -109,6 +142,34 @@ function(aetherkiri_prepare_onscripter_yuri_sources
             "OnscripterYuri playMPEG source changed; update the embedded-host overlay.")
     endif()
     string(REPLACE "${sound_mpeg_original}" "${sound_mpeg_embedded}"
+           sound_source "${sound_source}")
+
+    set(sound_quit_original [=[
+              case SDL_QUIT:
+                ret = 1;
+              case SDL_MOUSEBUTTONUP:
+                done_flag = true;
+                break;
+]=])
+    set(sound_quit_embedded [=[
+#if defined(AETHERKIRI_EMBEDDED_HOST)
+              case SDL_QUIT:
+                break;
+#else
+              case SDL_QUIT:
+                ret = 1;
+              case SDL_MOUSEBUTTONUP:
+                done_flag = true;
+                break;
+#endif
+]=])
+    string(FIND "${sound_source}" "${sound_quit_original}"
+           sound_quit_position)
+    if(sound_quit_position EQUAL -1)
+        message(FATAL_ERROR
+            "OnscripterYuri sound SDL_QUIT handler changed; update the embedded-host overlay.")
+    endif()
+    string(REPLACE "${sound_quit_original}" "${sound_quit_embedded}"
            sound_source "${sound_source}")
 
     set(sound_avi_original [=[
@@ -251,7 +312,7 @@ void ONScripter::waitEventSub(int count)
     while ( SDL_WaitEvent(&event) ) {
 ]=])
     set(run_event_wait_embedded [=[
-#if defined(AETHERKIRI_EMBEDDED_HOST) && defined(AETHERKIRI_IOS)
+#if defined(AETHERKIRI_EMBEDDED_HOST)
     while ( aetherkiri_onscripter_wait_event(&event) ) {
 #else
     while ( SDL_WaitEvent(&event) ) {
@@ -264,6 +325,50 @@ void ONScripter::waitEventSub(int count)
             "OnscripterYuri event wait changed; update the embedded-host overlay.")
     endif()
     string(REPLACE "${run_event_wait_original}" "${run_event_wait_embedded}"
+           event_source "${event_source}")
+
+    set(mouse_event_guard_original [=[
+#if !defined(ANDROID) && !defined(IOS) && !defined(WINRT)
+          case SDL_MOUSEMOTION:
+]=])
+    set(mouse_event_guard_embedded [=[
+// Godot normalizes touch to SDL mouse events before it reaches this embedded
+// runtime. Upstream Android consumes SDL_FINGER* from SDLActivity instead, but
+// that JNI event path is intentionally unavailable inside the Godot host.
+#if defined(AETHERKIRI_EMBEDDED_HOST) || (!defined(ANDROID) && !defined(IOS) && !defined(WINRT))
+          case SDL_MOUSEMOTION:
+]=])
+    string(FIND "${event_source}" "${mouse_event_guard_original}"
+           mouse_event_guard_position)
+    if(mouse_event_guard_position EQUAL -1)
+        message(FATAL_ERROR
+            "OnscripterYuri mouse event guard changed; update the embedded-host overlay.")
+    endif()
+    string(REPLACE "${mouse_event_guard_original}" "${mouse_event_guard_embedded}"
+           event_source "${event_source}")
+
+    set(quit_event_original [=[
+          case SDL_QUIT:
+            endCommand();
+            break;
+]=])
+    set(quit_event_embedded [=[
+#if defined(AETHERKIRI_EMBEDDED_HOST)
+          case SDL_QUIT:
+            break;
+#else
+          case SDL_QUIT:
+            endCommand();
+            break;
+#endif
+]=])
+    string(FIND "${event_source}" "${quit_event_original}"
+           quit_event_position)
+    if(quit_event_position EQUAL -1)
+        message(FATAL_ERROR
+            "OnscripterYuri SDL_QUIT handler changed; update the embedded-host overlay.")
+    endif()
+    string(REPLACE "${quit_event_original}" "${quit_event_embedded}"
            event_source "${event_source}")
 
     set(generated_event "${generated_dir}/ONScripter_event.cpp")
