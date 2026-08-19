@@ -62,7 +62,7 @@ public:
     bool HasGodotGpuHandle() const { return gpu_handle_ != 0; }
     bool HasPendingGpuWrites() const { return gpu_dirty_ && !cpu_dirty_; }
     bool RequiresGpuReadback() const {
-        return gpu_handle_ != 0 && !cpu_dirty_ && pixels_.empty();
+        return gpu_handle_ != 0 && gpu_dirty_ && !cpu_dirty_;
     }
     uint64_t BeginGpuReadback() const;
     bool PollGpuReadback(uint64_t request, void *out_pixels,
@@ -133,6 +133,7 @@ private:
     bool cpu_dirty_ = false;
     bool opacity_known_ = false;
     bool opaque_ = false;
+    bool retain_cpu_shadow_ = false;
     bool discard_unwritten_on_partial_update_ = false;
 };
 

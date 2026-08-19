@@ -2,7 +2,7 @@
 
 [简体中文](verified_games.zh-CN.md)
 
-Last updated: 2026-08-11
+Last updated: 2026-08-19
 
 This document tracks games that have been manually smoke-tested with
 AetherKiri. It is a compatibility notebook, not a guarantee that every route,
@@ -50,6 +50,7 @@ movie, plugin path, or save state in a title has been exhaustively validated.
 | 淫母マンション～ママは、性処理肉便器～ | macOS debug and release apps; iOS/iPadOS release app build on iPad | Startup, title/menu rendering, scene/text rendering, audio playback, basic input, and frame-enhanced 4:3 continue/menu flow with aligned hover and back-button input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | 天色＊アイルノーツ | macOS debug app | Startup, title/menu rendering, continue/load flow, background and character rendering, SD CG transition stability, scene/text rendering, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | GINKA | Windows x64 debug app | Import, startup, title/menu rendering, game-data loading, background and character rendering, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Local game files are not committed. |
+| 恋爱、初邂逅 | Linux x64 debug app | Import, startup, title/menu rendering, new-game transition, scene and dialogue rendering, Opus playback, and basic input | Smoke verified | [@KYoiRyi](https://github.com/KYoiRyi) | Original native plug-ins and local game files are not committed. |
 | NEKOPARA Vol. 1 | macOS debug app | Startup, title/menu rendering, data-load and first-save flow, scene/text rendering, E-mote character rendering and animation, rapid dialogue input, and character-layer click forwarding | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | ネコぱら After ラ・ヴレ・ファミーユ | macOS debug app | Startup, title/menu rendering, new-game flow, scene/text rendering, E-mote character rendering and animation, and basic input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
 | ネコぱらExtra 仔ネコの日の約束 | macOS debug app; iOS/iPadOS debug app build on iPad | Import, startup, title/menu rendering, start-game flow, scene/text rendering, tear-free E-mote character rendering and animation, 420-frame no-input stability, and basic mouse/touch input | Flow verified | [@akitaSummer](https://github.com/akitaSummer) | Local game files are not committed. |
