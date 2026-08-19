@@ -296,7 +296,10 @@ bool Live2DHardwareRasterEnabled() {
         if (value != nullptr && value[0] != '\0') {
             return std::strcmp(value, "0") != 0;
         }
-#if defined(__APPLE__)
+        // Apple and Android both use the Godot RenderingDevice path for Live2D
+        // triangle rasterization. Keep the opt-out available for driver
+        // diagnostics.
+#if defined(__APPLE__) || defined(__ANDROID__)
         return true;
 #else
         return false;

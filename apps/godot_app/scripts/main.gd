@@ -25,6 +25,7 @@ const GAME_COVER_PATH_PREFIX := "game://"
 const SETTINGS_FILE := "user://aetherkiri_settings.cfg"
 const IAP_LIST_LIMIT_PRODUCT_ID := "com.aether.list.limit"
 const IAP_COFFEE_PRODUCT_ID := "com.aether.coffee"
+const ANDROID_COFFEE_URL := "https://qr.alipay.com/fkx108053gol728ayzhec90"
 const IAP_POLL_INTERVAL_SEC := 0.12
 const IAP_DETAIL_AUTHORIZATION_TTL_MS := 30000
 const LEGAL_AGREEMENT_VERSION := "2026-07-27.4"
@@ -255,6 +256,12 @@ const UI_TEXT := {
         "iap.coffee.active_until": "内测功能有效期至：%s",
         "iap.coffee.inactive": "内测功能当前未启用",
         "iap.coffee.purchase_success": "感谢支持！内测功能有效期至：%s",
+        "support.coffee.title": "请作者喝一杯咖啡",
+        "support.coffee.desc": "打开支付宝支持作者，不影响游戏导入或启动",
+        "support.coffee.open": "打开支付宝",
+        "support.coffee.thanks_title": "感谢支持",
+        "support.coffee.thanks": "谢谢你的支持！",
+        "support.coffee.open_failed": "无法打开浏览器，请稍后重试。",
         "iap.artemis_unavailable": "此视觉小说兼容正在测试中，请等待后续支持",
         "iap.status.purchased": "已购买",
         "iap.status.not_purchased": "未购买",
@@ -510,6 +517,12 @@ const UI_TEXT := {
         "iap.coffee.active_until": "測試功能有效期限至：%s",
         "iap.coffee.inactive": "測試功能目前尚未啟用",
         "iap.coffee.purchase_success": "感謝支持！測試功能有效期限至：%s",
+        "support.coffee.title": "請作者喝一杯咖啡",
+        "support.coffee.desc": "開啟支付寶支持作者，不影響遊戲匯入或啟動",
+        "support.coffee.open": "開啟支付寶",
+        "support.coffee.thanks_title": "感謝支持",
+        "support.coffee.thanks": "謝謝你的支持！",
+        "support.coffee.open_failed": "無法開啟瀏覽器，請稍後再試。",
         "iap.artemis_unavailable": "此視覺小說的相容支援仍在測試中，請等待後續支援",
         "iap.status.purchased": "已購買",
         "iap.status.not_purchased": "尚未購買",
@@ -765,6 +778,12 @@ const UI_TEXT := {
         "iap.coffee.active_until": "Beta feature access expires: %s",
         "iap.coffee.inactive": "Beta feature access is not active",
         "iap.coffee.purchase_success": "Thank you! Beta feature access expires: %s",
+        "support.coffee.title": "Buy the Author a Coffee",
+        "support.coffee.desc": "Open Alipay to support the author; game import and launch are unaffected",
+        "support.coffee.open": "Open Alipay",
+        "support.coffee.thanks_title": "Thank You",
+        "support.coffee.thanks": "Thank you for your support!",
+        "support.coffee.open_failed": "Unable to open the browser. Please try again later.",
         "iap.artemis_unavailable": "Compatibility for this visual novel is still being tested. Please wait for a future update.",
         "iap.status.purchased": "Purchased",
         "iap.status.not_purchased": "Not purchased",
@@ -1020,6 +1039,12 @@ const UI_TEXT := {
         "iap.coffee.active_until": "ベータ機能の有効期限：%s",
         "iap.coffee.inactive": "ベータ機能は現在有効ではありません",
         "iap.coffee.purchase_success": "ご支援ありがとうございます！ベータ機能の有効期限：%s",
+        "support.coffee.title": "作者にコーヒーを一杯贈る",
+        "support.coffee.desc": "Alipay を開いて作者を支援します。ゲームの読み込みや起動には影響しません",
+        "support.coffee.open": "Alipay を開く",
+        "support.coffee.thanks_title": "ご支援ありがとうございます",
+        "support.coffee.thanks": "ご支援ありがとうございます！",
+        "support.coffee.open_failed": "ブラウザを開けませんでした。後でもう一度お試しください。",
         "iap.artemis_unavailable": "このビジュアルノベルの互換対応はテスト中です。今後の対応をお待ちください。",
         "iap.status.purchased": "購入済み",
         "iap.status.not_purchased": "未購入",
@@ -1275,6 +1300,12 @@ const UI_TEXT := {
         "iap.coffee.active_until": "베타 기능 만료일: %s",
         "iap.coffee.inactive": "베타 기능이 현재 활성화되어 있지 않습니다",
         "iap.coffee.purchase_success": "후원해 주셔서 감사합니다! 베타 기능 만료일: %s",
+        "support.coffee.title": "작가에게 커피 한 잔 사주기",
+        "support.coffee.desc": "Alipay를 열어 작가를 후원합니다. 게임 가져오기나 실행에는 영향을 주지 않습니다",
+        "support.coffee.open": "Alipay 열기",
+        "support.coffee.thanks_title": "후원해 주셔서 감사합니다",
+        "support.coffee.thanks": "후원해 주셔서 감사합니다!",
+        "support.coffee.open_failed": "브라우저를 열 수 없습니다. 나중에 다시 시도해 주세요.",
         "iap.artemis_unavailable": "이 비주얼 노벨의 호환성은 아직 테스트 중입니다. 추후 지원을 기다려 주세요.",
         "iap.status.purchased": "구입 완료",
         "iap.status.not_purchased": "구입하지 않음",
@@ -1543,6 +1574,9 @@ var show_perf_monitor := true
 var diagnostic_profile := "baseline" if OS.is_debug_build() else "off"
 var debug_overlay_mode := "summary" if OS.is_debug_build() else "off"
 var lock_landscape := false
+var game_runtime_shell_orientation := DisplayServer.SCREEN_SENSOR
+var game_runtime_shell_screen_size := Vector2i.ZERO
+var game_runtime_shell_orientation_captured := false
 var frame_limit_enabled := false
 var target_fps := 80
 var plugin_trace := false
@@ -3474,13 +3508,38 @@ func _apply_shell_runtime_settings() -> void:
         var orientation := DisplayServer.SCREEN_LANDSCAPE if lock_landscape else DisplayServer.SCREEN_SENSOR
         DisplayServer.screen_set_orientation(orientation)
 
+func _game_runtime_restore_orientation(previous_screen_size: Vector2i, fallback: int) -> int:
+    if lock_landscape:
+        return DisplayServer.SCREEN_LANDSCAPE
+    if previous_screen_size.y > previous_screen_size.x:
+        return DisplayServer.SCREEN_PORTRAIT
+    if previous_screen_size.x > previous_screen_size.y:
+        return DisplayServer.SCREEN_LANDSCAPE
+    return fallback
+
 func _set_game_runtime_orientation(active: bool) -> void:
     if OS.get_name() != "iOS" and OS.get_name() != "Android":
         return
     if active:
+        if OS.get_name() == "Android" and not game_runtime_shell_orientation_captured:
+            # Android reports the requested orientation here rather than the
+            # physical display rotation, so retain the current screen size as
+            # the authoritative portrait/landscape state to restore on exit.
+            game_runtime_shell_orientation = DisplayServer.screen_get_orientation()
+            game_runtime_shell_screen_size = DisplayServer.screen_get_size()
+            game_runtime_shell_orientation_captured = true
         DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
     else:
-        _apply_shell_runtime_settings()
+        if OS.get_name() != "Android" or not game_runtime_shell_orientation_captured:
+            _apply_shell_runtime_settings()
+            return
+        var orientation := _game_runtime_restore_orientation(
+            game_runtime_shell_screen_size,
+            game_runtime_shell_orientation
+        )
+        game_runtime_shell_orientation_captured = false
+        game_runtime_shell_screen_size = Vector2i.ZERO
+        DisplayServer.screen_set_orientation(orientation)
 
 func _scaled_display_safe_rect(
     viewport_size: Vector2,
@@ -4367,6 +4426,13 @@ func _rebuild_settings_view() -> void:
         ))
 
     var about_group := _settings_group(secondary_column, _t("settings.section.about"), ICON_HELP, animate_page, 0.18)
+    if OS.get_name() == "Android":
+        _add_settings_row(about_group, _settings_action_row(
+            _t("support.coffee.title"),
+            _t("support.coffee.desc"),
+            _t("support.coffee.open"),
+            _open_android_coffee
+        ))
     _add_settings_row(about_group, _settings_action_row(
         _t("settings.legal"),
         _t("settings.legal_desc"),
@@ -6936,6 +7002,21 @@ func _show_system_alert_once(key: String, message: String, title: String = "Aeth
         return
     shown_system_alerts[key] = true
     _show_system_alert(message, title)
+
+func _open_android_coffee() -> void:
+    if OS.get_name() != "Android":
+        return
+    var result := OS.shell_open(ANDROID_COFFEE_URL)
+    if result == OK:
+        _show_system_alert(
+            _t("support.coffee.thanks"),
+            _t("support.coffee.thanks_title")
+        )
+    else:
+        _show_system_alert(
+            _t("support.coffee.open_failed"),
+            _t("support.coffee.title")
+        )
 
 func _iap_supported_platform() -> bool:
     return OS.get_name() in ["iOS", "macOS"]
