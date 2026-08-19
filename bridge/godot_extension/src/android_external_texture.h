@@ -10,3 +10,7 @@ uint64_t AetherAndroidCreateVulkanTextureFromHardwareBuffer(
     void *hardware_buffer, uint32_t width, uint32_t height,
     void **resource);
 void AetherAndroidReleaseVulkanTexture(void *resource);
+
+// Wait until Godot's Vulkan queue has finished sampling imported
+// AHardwareBuffer-backed images before the producer recycles them.
+bool AetherAndroidWaitForVulkanQueue(uint64_t vulkan_queue);

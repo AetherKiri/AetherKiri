@@ -3,6 +3,7 @@
 #if defined(__ANDROID__)
 
 #include <android/hardware_buffer.h>
+#include <android/log.h>
 #include <dlfcn.h>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_android.h>
@@ -10,6 +11,13 @@
 #include <cstdint>
 
 namespace {
+
+void LogImportFailure(const char *stage, int32_t result = 0,
+                      uint32_t format = 0) {
+    __android_log_print(ANDROID_LOG_WARN, "AetherKiri",
+                        "E-mote AHardwareBuffer import failed stage=%s result=%d format=%u",
+                        stage, static_cast<int>(result), format);
+}
 
 using AcquireHardwareBuffer = void (*)(AHardwareBuffer *);
 using ReleaseHardwareBuffer = void (*)(AHardwareBuffer *);
@@ -98,10 +106,16 @@ uint64_t AetherAndroidCreateVulkanTextureFromHardwareBuffer(
     buffer_properties.sType =
         VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID;
     buffer_properties.pNext = &format_properties;
-    if (get_hardware_buffer_properties(
-            device, texture->hardware_buffer, &buffer_properties) !=
-            VK_SUCCESS ||
-        format_properties.format != VK_FORMAT_R8G8B8A8_UNORM) {
+    const VkResult properties_result = get_hardware_buffer_properties(
+        device, texture->hardware_buffer, &buffer_properties);
+    if (properties_result != VK_SUCCESS) {
+        LogImportFailure("get-hardware-buffer-properties", properties_result);
+        ReleaseTexture(texture);
+        return 0;
+    }
+    if (format_properties.format != VK_FORMAT_R8G8B8A8_UNORM) {
+        LogImportFailure("unsupported-format", VK_SUCCESS,
+                         static_cast<uint32_t>(format_properties.format));
         ReleaseTexture(texture);
         return 0;
     }
@@ -121,13 +135,16 @@ uint64_t AetherAndroidCreateVulkanTextureFromHardwareBuffer(
     image_info.arrayLayers = 1;
     image_info.samples = VK_SAMPLE_COUNT_1_BIT;
     image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
-                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    // The producer is GLES and the Vulkan side only samples the imported
+    // image. Extra usage flags can make vkCreateImage fail on Android
+    // drivers even though the same buffer is valid for sampling.
+    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
     image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (vkCreateImage(device, &image_info, nullptr, &texture->image) !=
-        VK_SUCCESS) {
+    const VkResult create_image_result =
+        vkCreateImage(device, &image_info, nullptr, &texture->image);
+    if (create_image_result != VK_SUCCESS) {
+        LogImportFailure("create-image", create_image_result);
         ReleaseTexture(texture);
         return 0;
     }
@@ -135,6 +152,7 @@ uint64_t AetherAndroidCreateVulkanTextureFromHardwareBuffer(
     const uint32_t memory_type = SelectMemoryType(
         physical_device, buffer_properties.memoryTypeBits);
     if (memory_type == UINT32_MAX) {
+        LogImportFailure("select-memory-type");
         ReleaseTexture(texture);
         return 0;
     }
@@ -151,10 +169,17 @@ uint64_t AetherAndroidCreateVulkanTextureFromHardwareBuffer(
     allocation_info.pNext = &import_info;
     allocation_info.allocationSize = buffer_properties.allocationSize;
     allocation_info.memoryTypeIndex = memory_type;
-    if (vkAllocateMemory(device, &allocation_info, nullptr,
-                         &texture->memory) != VK_SUCCESS ||
-        vkBindImageMemory(device, texture->image, texture->memory, 0) !=
-            VK_SUCCESS) {
+    const VkResult allocate_result = vkAllocateMemory(
+        device, &allocation_info, nullptr, &texture->memory);
+    if (allocate_result != VK_SUCCESS) {
+        LogImportFailure("allocate-memory", allocate_result);
+        ReleaseTexture(texture);
+        return 0;
+    }
+    const VkResult bind_result =
+        vkBindImageMemory(device, texture->image, texture->memory, 0);
+    if (bind_result != VK_SUCCESS) {
+        LogImportFailure("bind-image-memory", bind_result);
         ReleaseTexture(texture);
         return 0;
     }
@@ -167,6 +192,16 @@ void AetherAndroidReleaseVulkanTexture(void *resource) {
     ReleaseTexture(static_cast<AndroidExternalTexture *>(resource));
 }
 
+bool AetherAndroidWaitForVulkanQueue(uint64_t vulkan_queue) {
+    if (vulkan_queue == 0) return false;
+    const VkQueue queue = reinterpret_cast<VkQueue>(vulkan_queue);
+    // The producer-side GLES fence only proves that E-mote finished writing
+    // the buffer. It does not prove that Godot's Vulkan sampler has finished
+    // consuming the retired generation. This wait is used only on retirement,
+    // never on the normal per-frame path.
+    return vkQueueWaitIdle(queue) == VK_SUCCESS;
+}
+
 #else
 
 uint64_t AetherAndroidCreateVulkanTextureFromHardwareBuffer(
@@ -175,5 +210,7 @@ uint64_t AetherAndroidCreateVulkanTextureFromHardwareBuffer(
 }
 
 void AetherAndroidReleaseVulkanTexture(void *) {}
+
+bool AetherAndroidWaitForVulkanQueue(uint64_t) { return false; }
 
 #endif
