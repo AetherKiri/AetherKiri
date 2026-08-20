@@ -472,17 +472,27 @@ bool OpenRecognized(const fs::path &path, const std::string &password,
         if (offset != std::numeric_limits<UInt64>::max())
             candidates.push_back({index, offset});
     }
-    if (candidates.empty()) {
-        const EmbeddedMatch embedded = FindEmbeddedTransport(path, progress);
-        if (embedded.offset != std::numeric_limits<std::uint64_t>::max()) {
+    bool embedded_scanned = false;
+    for (std::size_t candidate_index = 0;;) {
+        if (candidate_index >= candidates.size()) {
+            if (embedded_scanned) break;
+            embedded_scanned = true;
+            const EmbeddedMatch embedded = FindEmbeddedTransport(path, progress);
+            if (embedded.offset == std::numeric_limits<std::uint64_t>::max()) break;
             for (UInt32 index = 0; index < format_count; ++index) {
                 if (FormatName(index) != embedded.format) continue;
-                candidates.push_back({index, embedded.offset});
+                const Candidate candidate{index, embedded.offset};
+                const bool duplicate = std::any_of(candidates.begin(), candidates.end(),
+                    [&](const Candidate &existing) {
+                        return existing.index == candidate.index &&
+                               existing.offset == candidate.offset;
+                    });
+                if (!duplicate) candidates.push_back(candidate);
                 break;
             }
+            continue;
         }
-    }
-    for (const Candidate &candidate : candidates) {
+        const Candidate candidate = candidates[candidate_index++];
         const UInt32 index = candidate.index;
         const std::string format = FormatName(index);
         GUID class_id{};
