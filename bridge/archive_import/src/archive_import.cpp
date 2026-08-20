@@ -119,15 +119,26 @@ std::vector<std::string> FormatExtensions(UInt32 index) {
     return result;
 }
 
-std::uint64_t FindEmbeddedSignature(const fs::path &path, const std::string &format) {
-    std::vector<std::vector<unsigned char>> signatures;
-    if (format == "7z") signatures = {{0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c}};
-    else if (format == "zip") signatures = {{'P', 'K', 0x03, 0x04}, {'P', 'K', 0x05, 0x06}, {'P', 'K', 0x06, 0x06}};
-    else if (format == "rar" || format == "rar5") signatures = {{'R', 'a', 'r', '!', 0x1a, 0x07}};
-    else return std::numeric_limits<std::uint64_t>::max();
+struct EmbeddedMatch {
+    std::uint64_t offset = std::numeric_limits<std::uint64_t>::max();
+    std::string format;
+};
 
+EmbeddedMatch FindEmbeddedTransport(const fs::path &path,
+                                    const ProgressCallback &progress = {}) {
+    const std::vector<std::pair<std::string, std::vector<unsigned char>>> signatures = {
+        {"7z", {0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c}},
+        {"zip", {'P', 'K', 0x03, 0x04}},
+        {"zip", {'P', 'K', 0x05, 0x06}},
+        {"zip", {'P', 'K', 0x06, 0x06}},
+        {"rar", {'R', 'a', 'r', '!', 0x1a, 0x07}},
+        {"rar5", {'R', 'a', 'r', '!', 0x1a, 0x07, 0x01, 0x00}},
+        {"lz4", {0x04, 0x22, 0x4d, 0x18}},
+    };
     std::ifstream input(path, std::ios::binary);
-    if (!input) return std::numeric_limits<std::uint64_t>::max();
+    if (!input) return {};
+    std::error_code size_error;
+    const auto total_size = fs::file_size(path, size_error);
     constexpr std::size_t kChunk = 1024 * 1024;
     constexpr std::size_t kOverlap = 16;
     std::vector<unsigned char> buffer(kChunk + kOverlap);
@@ -141,18 +152,22 @@ std::uint64_t FindEmbeddedSignature(const fs::path &path, const std::string &for
                    static_cast<std::streamsize>(request));
         const std::size_t read = static_cast<std::size_t>(input.gcount());
         const std::size_t available = carried + read;
-        for (const auto &signature : signatures) {
+        for (const auto &entry : signatures) {
             const auto found = std::search(buffer.begin(), buffer.begin() + available,
-                                           signature.begin(), signature.end());
-            if (found != buffer.begin() + available)
-                return absolute - carried + static_cast<std::uint64_t>(found - buffer.begin());
+                                           entry.second.begin(), entry.second.end());
+            if (found != buffer.begin() + available) {
+                return {absolute - carried + static_cast<std::uint64_t>(found - buffer.begin()),
+                        entry.first};
+            }
         }
         if (read == 0) break;
         carried = std::min(kOverlap, available);
         std::copy(buffer.begin() + available - carried, buffer.begin() + available, buffer.begin());
         absolute += read;
+        if (progress) progress(absolute, size_error ? 0 : total_size);
     }
-    return std::numeric_limits<std::uint64_t>::max();
+    if (progress) progress(std::min(absolute, kMaxSignatureScan), size_error ? 0 : total_size);
+    return {};
 }
 
 std::uint64_t FindEmbeddedBytes(const fs::path &path,
@@ -255,12 +270,7 @@ bool HandlerSignatures(UInt32 index, std::vector<std::vector<Byte>> *signatures,
 }
 
 std::string StrongFormat(const fs::path &path) {
-    if (IsLz4Frame(path)) return "lz4";
-    for (const char *format : {"7z", "zip", "rar"}) {
-        if (FindEmbeddedSignature(path, format) != std::numeric_limits<std::uint64_t>::max())
-            return format;
-    }
-    return {};
+    return FindEmbeddedTransport(path).format;
 }
 
 bool ExtractLz4(const fs::path &source, const fs::path &destination,
@@ -383,7 +393,8 @@ struct OpenArchive {
 };
 
 bool OpenRecognized(const fs::path &path, const std::string &password,
-                    OpenArchive *result, std::string *error) {
+                    OpenArchive *result, std::string *error,
+                    const ProgressCallback &progress = {}) {
     std::error_code ec;
     const auto file_size = fs::file_size(path, ec);
     if (ec) {
@@ -420,27 +431,18 @@ bool OpenRecognized(const fs::path &path, const std::string &password,
             GetIsArc(index, &is_arc) == S_OK && is_arc != nullptr &&
             is_arc(header.data(), header.size()) == k_IsArc_Res_YES)
             offset = 0;
-        if (offset == std::numeric_limits<UInt64>::max()) {
-            std::vector<std::vector<Byte>> signatures;
-            UInt32 signature_offset = 0;
-            CPropVariant flags;
-            const bool can_find_signature =
-                GetHandlerProperty2(index, NArchive::NHandlerPropID::kFlags, &flags) == S_OK &&
-                (VariantUInt32(flags) & NArcInfoFlags::kFindSignature) != 0;
-            if (can_find_signature && HandlerSignatures(index, &signatures, &signature_offset)) {
-                for (const auto &signature : signatures) {
-                    const UInt64 found = FindEmbeddedBytes(path, signature);
-                    if (found == std::numeric_limits<UInt64>::max() || found < signature_offset)
-                        continue;
-                    offset = found - signature_offset;
-                    break;
-                }
-            }
-        }
-        if (offset == std::numeric_limits<UInt64>::max())
-            offset = FindEmbeddedSignature(path, format);
         if (offset != std::numeric_limits<UInt64>::max())
             candidates.push_back({index, offset});
+    }
+    if (candidates.empty()) {
+        const EmbeddedMatch embedded = FindEmbeddedTransport(path, progress);
+        if (embedded.offset != std::numeric_limits<std::uint64_t>::max()) {
+            for (UInt32 index = 0; index < format_count; ++index) {
+                if (FormatName(index) != embedded.format) continue;
+                candidates.push_back({index, embedded.offset});
+                break;
+            }
+        }
     }
     for (const Candidate &candidate : candidates) {
         const UInt32 index = candidate.index;
@@ -500,10 +502,10 @@ public:
     ExtractCallback(IInArchive *archive, fs::path destination,
                     fs::path default_entry_name,
                     const ExtractOptions &options, std::uint64_t *total_bytes,
-                    std::uint32_t *total_files)
+                    std::uint32_t *total_files, ProgressCallback progress)
         : archive_(archive), destination_(std::move(destination)),
           default_entry_name_(std::move(default_entry_name)), options_(options),
-          total_bytes_(total_bytes), total_files_(total_files) {}
+          total_bytes_(total_bytes), total_files_(total_files), progress_(std::move(progress)) {}
 
     Z7_COM_UNKNOWN_IMP_2(IArchiveExtractCallback, ICryptoGetTextPassword)
     Z7_IFACE_COM7_IMP(IProgress)
@@ -522,6 +524,8 @@ private:
     std::uint64_t *total_bytes_;
     std::uint32_t *total_files_;
     CMyComPtr<ISequentialOutStream> current_stream_;
+    ProgressCallback progress_;
+    UInt64 progress_total_ = 0;
 };
 
 HRESULT ExtractCallback::SetTotal(UInt64 total) throw() {
@@ -530,10 +534,15 @@ HRESULT ExtractCallback::SetTotal(UInt64 total) throw() {
         error = "Archive expands beyond the configured size limit";
         return E_ABORT;
     }
+    progress_total_ = total;
+    if (progress_) progress_(0, progress_total_);
     return S_OK;
 }
 
-HRESULT ExtractCallback::SetCompleted(const UInt64 *) throw() { return S_OK; }
+HRESULT ExtractCallback::SetCompleted(const UInt64 *completed) throw() {
+    if (progress_ && completed != nullptr) progress_(*completed, progress_total_);
+    return S_OK;
+}
 
 HRESULT ExtractCallback::GetStream(UInt32 index, ISequentialOutStream **out_stream,
                                    Int32 ask_mode) throw() {
@@ -633,12 +642,24 @@ fs::path UniqueDestination(const fs::path &parent, const std::string &stem) {
 
 bool ExtractOne(const fs::path &source, const fs::path &destination,
                 const ExtractOptions &options, ExtractResult *result,
-                std::uint64_t *total_bytes, std::uint32_t *total_files) {
+                std::uint64_t *total_bytes, std::uint32_t *total_files,
+                const ProgressCallback &progress = {}) {
     if (IsLz4Frame(source))
         return ExtractLz4(source, destination, options, result, total_bytes, total_files);
     OpenArchive opened;
     std::string open_error;
-    if (!OpenRecognized(source, options.password, &opened, &open_error)) {
+    ExtractOptions resolved_options = options;
+    std::vector<std::string> passwords = options.passwords;
+    if (passwords.empty()) passwords.push_back(options.password);
+    bool opened_archive = false;
+    for (const std::string &password : passwords) {
+        resolved_options.password = password;
+        if (OpenRecognized(source, password, &opened, &open_error)) {
+            opened_archive = true;
+            break;
+        }
+    }
+    if (!opened_archive) {
         const std::string strong_format = StrongFormat(source);
         if (!strong_format.empty() && strong_format != "lz4") {
             result->password_required =
@@ -657,8 +678,8 @@ bool ExtractOne(const fs::path &source, const fs::path &destination,
         result->error = "Cannot create the extraction destination";
         return false;
     }
-    auto *callback_impl = new ExtractCallback(opened.archive, destination, source.stem(), options,
-                                              total_bytes, total_files);
+    auto *callback_impl = new ExtractCallback(opened.archive, destination, source.stem(), resolved_options,
+                                              total_bytes, total_files, progress);
     CMyComPtr<IArchiveExtractCallback> callback = callback_impl;
     const HRESULT extracted = opened.archive->Extract(nullptr, UINT32_MAX, 0, callback);
     opened.archive->Close();
@@ -675,7 +696,7 @@ bool ExtractOne(const fs::path &source, const fs::path &destination,
 
 }  // namespace
 
-ProbeResult Probe(const std::string &path) {
+ProbeResult Probe(const std::string &path, const ProgressCallback &progress) {
     ProbeResult result;
     const fs::path source = fs::u8path(path);
     if (IsLz4Frame(source)) {
@@ -684,13 +705,13 @@ ProbeResult Probe(const std::string &path) {
         return result;
     }
     OpenArchive opened;
-    if (OpenRecognized(source, {}, &opened, &result.error)) {
+    if (OpenRecognized(source, {}, &opened, &result.error, progress)) {
         result.recognized = true;
         result.encrypted = opened.encrypted;
         result.format = opened.format;
         opened.archive->Close();
     } else {
-        const std::string strong_format = StrongFormat(source);
+        const std::string strong_format = FindEmbeddedTransport(source, progress).format;
         if (!strong_format.empty()) {
             result.recognized = true;
             result.encrypted =
@@ -705,17 +726,19 @@ ProbeResult Probe(const std::string &path) {
 
 ExtractResult ExtractRecursive(const std::string &path,
                                const std::string &destination,
-                               const ExtractOptions &options) {
+                               const ExtractOptions &options,
+                               const ProgressCallback &progress) {
     ExtractResult result;
     const fs::path source = fs::u8path(path);
     const fs::path root = UniqueDestination(fs::u8path(destination), ArchiveStem(source));
     std::uint64_t total_bytes = 0;
     std::uint32_t total_files = 0;
-    if (!ExtractOne(source, root, options, &result, &total_bytes, &total_files)) {
+    if (!ExtractOne(source, root, options, &result, &total_bytes, &total_files, progress)) {
         std::error_code ignored;
         fs::remove_all(root, ignored);
         return result;
     }
+    if (progress) progress(1, 1);
     result.extracted_archives.push_back(source.u8string());
 
     for (std::uint32_t depth = 0;; ++depth) {
@@ -749,7 +772,7 @@ ExtractResult ExtractRecursive(const std::string &path,
             const fs::path nested_destination = UniqueDestination(
                 nested_source.parent_path(), ArchiveStem(nested_source));
             if (!ExtractOne(nested_source, nested_destination, options, &result,
-                            &total_bytes, &total_files)) {
+                            &total_bytes, &total_files, progress)) {
                 std::error_code ignored;
                 fs::remove_all(root, ignored);
                 return result;

@@ -9919,7 +9919,7 @@ void main() {
 
     bool archive_import_begin_probe(const String &path) {
 #if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
-        return start_archive_task(true, path, "", "");
+        return start_archive_task(true, path, "", PackedStringArray());
 #else
         (void)path;
         return false;
@@ -9930,11 +9930,26 @@ void main() {
                                       const String &destination,
                                       const String &password) {
 #if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
-        return start_archive_task(false, path, destination, password);
+        PackedStringArray passwords;
+        passwords.push_back(password);
+        return archive_import_begin_extract_passwords(path, destination, passwords);
 #else
         (void)path;
         (void)destination;
         (void)password;
+        return false;
+#endif
+    }
+
+    bool archive_import_begin_extract_passwords(const String &path,
+                                                const String &destination,
+                                                const PackedStringArray &passwords) {
+#if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
+        return start_archive_task(false, path, destination, passwords);
+#else
+        (void)path;
+        (void)destination;
+        (void)passwords;
         return false;
 #endif
     }
@@ -9970,6 +9985,18 @@ void main() {
         output["ok"] = false;
         output["password_required"] = false;
         output["error"] = "Archive import is unavailable on this platform";
+#endif
+        return output;
+    }
+
+    Dictionary archive_import_get_progress() const {
+        Dictionary output;
+#if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
+        output["completed"] = static_cast<int64_t>(archive_import_progress_completed_.load());
+        output["total"] = static_cast<int64_t>(archive_import_progress_total_.load());
+#else
+        output["completed"] = 0;
+        output["total"] = 0;
 #endif
         return output;
     }
@@ -10129,8 +10156,13 @@ protected:
         ClassDB::bind_method(D_METHOD("archive_import_begin_extract", "path", "destination", "password"),
                              &AetherRuntimePlayer::archive_import_begin_extract,
                              DEFVAL(""));
+        ClassDB::bind_method(
+            D_METHOD("archive_import_begin_extract_passwords", "path", "destination", "passwords"),
+            &AetherRuntimePlayer::archive_import_begin_extract_passwords);
         ClassDB::bind_method(D_METHOD("archive_import_take_result"),
                              &AetherRuntimePlayer::archive_import_take_result);
+        ClassDB::bind_method(D_METHOD("archive_import_get_progress"),
+                             &AetherRuntimePlayer::archive_import_get_progress);
         ADD_SIGNAL(MethodInfo(
             "platform_request",
             PropertyInfo(Variant::STRING, "operation"),
@@ -10139,7 +10171,7 @@ protected:
 
 private:
     bool start_archive_task(bool probe, const String &path,
-                            const String &destination, const String &password) {
+                            const String &destination, const PackedStringArray &passwords) {
 #if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
         if (archive_import_thread_.joinable()) {
             {
@@ -10151,24 +10183,37 @@ private:
         }
         const std::string path_utf8 = path.utf8().get_data();
         const std::string destination_utf8 = destination.utf8().get_data();
-        const std::string password_utf8 = password.utf8().get_data();
+        std::vector<std::string> password_values;
+        password_values.reserve(passwords.size());
+        for (const String &password : passwords)
+            password_values.emplace_back(password.utf8().get_data());
         {
             std::lock_guard<std::mutex> lock(archive_import_mutex_);
             archive_import_running_ = true;
             archive_import_result_ready_ = false;
             archive_import_is_probe_ = probe;
+            archive_import_progress_completed_.store(0);
+            archive_import_progress_total_.store(0);
         }
         archive_import_thread_ = std::thread([this, probe, path_utf8,
-                                               destination_utf8, password_utf8]() {
+                                               destination_utf8, password_values]() {
             if (probe) {
-                auto result = aether::archive_import::Probe(path_utf8);
+                auto result = aether::archive_import::Probe(path_utf8,
+                    [this](std::uint64_t completed, std::uint64_t total) {
+                        archive_import_progress_completed_.store(completed);
+                        archive_import_progress_total_.store(total);
+                    });
                 std::lock_guard<std::mutex> lock(archive_import_mutex_);
                 archive_import_probe_result_ = std::move(result);
             } else {
                 aether::archive_import::ExtractOptions options;
-                options.password = password_utf8;
+                options.passwords = password_values;
                 auto result = aether::archive_import::ExtractRecursive(
-                    path_utf8, destination_utf8, options);
+                    path_utf8, destination_utf8, options,
+                    [this](std::uint64_t completed, std::uint64_t total) {
+                        archive_import_progress_completed_.store(completed);
+                        archive_import_progress_total_.store(total);
+                    });
                 std::lock_guard<std::mutex> lock(archive_import_mutex_);
                 archive_import_extract_result_ = std::move(result);
             }
@@ -10181,7 +10226,7 @@ private:
         (void)probe;
         (void)path;
         (void)destination;
-        (void)password;
+        (void)passwords;
         return false;
 #endif
     }
@@ -10641,6 +10686,8 @@ private:
     bool archive_import_running_ = false;
     bool archive_import_result_ready_ = false;
     bool archive_import_is_probe_ = false;
+    std::atomic<std::uint64_t> archive_import_progress_completed_{0};
+    std::atomic<std::uint64_t> archive_import_progress_total_{0};
     aether::archive_import::ProbeResult archive_import_probe_result_;
     aether::archive_import::ExtractResult archive_import_extract_result_;
 #endif

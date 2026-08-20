@@ -4986,7 +4986,7 @@ func _show_archive_progress(title: String) -> void:
     if loading_progress_bar != null:
         loading_progress_bar.visible = true
         loading_progress_bar.value = 0.0
-        loading_progress_bar.indeterminate = true
+        loading_progress_bar.indeterminate = false
     _show_loading_overlay(true)
 
 func _hide_archive_progress() -> void:
@@ -7841,7 +7841,9 @@ func _probe_archive_import(path: String) -> void:
     archive_import_context = {"path": path}
     _show_archive_progress(_t("archive.progress_probe"))
 
-func _show_archive_extract_confirmation(path: String, probe: Dictionary, password_value: String = "") -> void:
+func _show_archive_extract_confirmation(path: String, probe: Dictionary,
+        password_prompt: bool = false, password_value: String = "",
+        known_passwords: Array[String] = []) -> void:
     var dialog := _modal_dialog(Vector2(620, 390))
     var box := _modal_stack(dialog, _t("dialog.archive_confirm_title"), ICON_PAGE)
     var body := Label.new()
@@ -7850,16 +7852,17 @@ func _show_archive_extract_confirmation(path: String, probe: Dictionary, passwor
     body.size_flags_vertical = Control.SIZE_EXPAND_FILL
     box.add_child(body)
     var password := LineEdit.new()
-    password.placeholder_text = _t("dialog.archive_password")
-    password.secret = true
-    password.text = password_value
-    password.custom_minimum_size = Vector2(0, 48)
-    box.add_child(password)
+    if password_prompt:
+        password.placeholder_text = _t("dialog.archive_password")
+        password.secret = true
+        password.text = password_value
+        password.custom_minimum_size = Vector2(0, 48)
+        box.add_child(password)
     var extract := _pill_button(_t("dialog.archive_extract"))
     extract.custom_minimum_size = Vector2(180, 48)
     extract.pressed.connect(func():
-        var entered_password := password.text
-        _dismiss_modal(func(): _extract_and_import_archive(path, probe, entered_password))
+        var entered_password := password.text if password_prompt else ""
+        _dismiss_modal(func(): _extract_and_import_archive(path, probe, entered_password, known_passwords))
     )
     box.add_child(extract)
 
@@ -7891,12 +7894,16 @@ func _remember_archive_password(password: String) -> void:
     cfg.set_value("archive", "passwords", passwords)
     cfg.save(ARCHIVE_PASSWORDS_FILE)
 
-func _extract_and_import_archive(path: String, probe: Dictionary, password: String) -> void:
+func _extract_and_import_archive(path: String, probe: Dictionary, password: String,
+        known_passwords: Array[String] = []) -> void:
     var games_root := ProjectSettings.globalize_path("user://Games")
     DirAccess.make_dir_recursive_absolute(games_root)
     var candidates: Array[String] = []
     if not password.is_empty():
         candidates.append(password)
+    for known_password in known_passwords:
+        if not known_password.is_empty() and not candidates.has(known_password):
+            candidates.append(known_password)
     candidates.append("")
     for stored in _load_archive_passwords():
         if not candidates.has(stored):
@@ -7907,29 +7914,18 @@ func _extract_and_import_archive(path: String, probe: Dictionary, password: Stri
         "probe": probe,
         "games_root": games_root,
         "candidates": candidates,
-        "index": 0,
-        "used_password": "",
     }
     _start_archive_extract_candidate()
 
 func _start_archive_extract_candidate() -> void:
     if archive_import_operation != "extract" or archive_import_context.is_empty():
         return
-    var candidates: Array = archive_import_context.get("candidates", [])
-    var index := int(archive_import_context.get("index", 0))
-    if index >= candidates.size():
-        archive_import_operation = ""
-        _hide_archive_progress()
-        _show_archive_extract_confirmation(
-            String(archive_import_context.get("path", "")),
-            archive_import_context.get("probe", {}),
-            String(archive_import_context.get("used_password", "")))
-        return
-    var candidate := String(candidates[index])
-    archive_import_context["used_password"] = candidate
-    if not player.archive_import_begin_extract(
+    var candidates := PackedStringArray()
+    for candidate in archive_import_context.get("candidates", []):
+        candidates.append(String(candidate))
+    if not player.archive_import_begin_extract_passwords(
         String(archive_import_context.get("path", "")),
-        String(archive_import_context.get("games_root", "")), candidate):
+        String(archive_import_context.get("games_root", "")), candidates):
         archive_import_operation = ""
         _hide_archive_progress()
         _show_message(_t("message.archive_failed", [_t("message.unknown_error")]))
@@ -7940,6 +7936,15 @@ func _poll_archive_import() -> void:
     if archive_import_operation.is_empty() or player == null:
         return
     var result: Dictionary = player.archive_import_take_result()
+    if loading_progress_bar != null and loading_progress_bar.visible:
+        var progress: Dictionary = player.archive_import_get_progress()
+        var total := float(progress.get("total", 0))
+        var completed := float(progress.get("completed", 0))
+        if total > 0.0:
+            loading_progress_bar.indeterminate = false
+            loading_progress_bar.value = clampf(completed / total * 100.0, 0.0, 100.0)
+        else:
+            loading_progress_bar.indeterminate = true
     if not bool(result.get("ready", false)):
         return
     if archive_import_operation == "probe":
@@ -7954,8 +7959,12 @@ func _poll_archive_import() -> void:
         return
     if not bool(result.get("ok", false)):
         if bool(result.get("password_required", false)):
-            archive_import_context["index"] = int(archive_import_context.get("index", 0)) + 1
-            _start_archive_extract_candidate()
+            archive_import_operation = ""
+            _hide_archive_progress()
+            _show_archive_extract_confirmation(
+                String(archive_import_context.get("path", "")),
+                archive_import_context.get("probe", {}), true, "",
+                archive_import_context.get("candidates", []))
             return
         archive_import_operation = ""
         _hide_archive_progress()
@@ -7963,13 +7972,16 @@ func _poll_archive_import() -> void:
         return
     var output_path := String(result.get("output_path", "")).simplify_path()
     var game_path := _find_importable_game_root(output_path)
+    if game_path.is_empty() and DirAccess.dir_exists_absolute(output_path):
+        game_path = output_path
     archive_import_operation = ""
     _hide_archive_progress()
     if game_path.is_empty():
         _show_message(_t("message.archive_no_game", [output_path]))
         return
     if _add_game_path(game_path):
-        _remember_archive_password(String(archive_import_context.get("used_password", "")))
+        for candidate in archive_import_context.get("candidates", []):
+            _remember_archive_password(String(candidate))
     else:
         _show_message(_t("message.archive_failed", [_t("message.unknown_error")]))
     archive_import_context = {}

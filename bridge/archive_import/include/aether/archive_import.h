@@ -2,9 +2,13 @@
 
 #include <cstdint>
 #include <string>
+#include <functional>
 #include <vector>
 
 namespace aether::archive_import {
+
+using ProgressCallback = std::function<void(std::uint64_t completed,
+                                             std::uint64_t total)>;
 
 struct ProbeResult {
     bool recognized = false;
@@ -15,6 +19,7 @@ struct ProbeResult {
 
 struct ExtractOptions {
     std::string password;
+    std::vector<std::string> passwords;
     std::uint64_t max_total_bytes = UINT64_C(64) * 1024 * 1024 * 1024;
     std::uint32_t max_files = 200000;
     std::uint32_t max_depth = 16;
@@ -29,10 +34,11 @@ struct ExtractResult {
     std::vector<std::string> extracted_archives;
 };
 
-ProbeResult Probe(const std::string &path);
+ProbeResult Probe(const std::string &path,
+                  const ProgressCallback &progress = {});
 ExtractResult ExtractRecursive(const std::string &path,
                                const std::string &destination,
-                               const ExtractOptions &options);
+                               const ExtractOptions &options,
+                               const ProgressCallback &progress = {});
 
 }  // namespace aether::archive_import
-
