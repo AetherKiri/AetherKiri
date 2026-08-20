@@ -12,7 +12,6 @@ const VIDEO_HIDDEN_FILE := "user://aetherkiri_hidden_videos.json"
 const IMPORT_STATE_FILE := "user://aetherkiri_import_state.cfg"
 const ARCHIVE_PASSWORDS_FILE := "user://aetherkiri_archive_passwords.cfg"
 const ARCHIVE_PASSWORD_MAX_COUNT := 24
-const ARCHIVE_PASSWORD_TRIAL_BUDGET_MS := 300
 const VIDEO_EXTENSIONS := ["mp4", "mkv", "mov", "m4v", "avi", "webm", "flv", "ts", "m2ts", "mpeg", "mpg", "wmv"]
 const SUBTITLE_EXTENSIONS := ["srt", "vtt", "ass", "ssa"]
 const COVER_IMAGE_EXTENSIONS := ["png", "webp", "jpg", "jpeg"]
@@ -327,12 +326,15 @@ const UI_TEXT := {
         "dialog.select_archive_file": "选择压缩文件",
         "dialog.select_archive": "选择压缩包或载体文件",
         "dialog.archive_confirm_title": "发现可解压内容",
-        "dialog.archive_confirm_body": "已识别到 %s 格式。是否解压到游戏目录并自动导入？",
+        "dialog.archive_confirm_body": "检测到 %s 内容（文件：“%s”）。是否解压到游戏目录并自动导入？",
         "dialog.archive_password": "密码（如需要）",
         "dialog.archive_extract": "解压并导入",
+        "archive.progress_probe": "正在检测压缩内容...",
+        "archive.progress_extract": "正在解压并查找游戏目录...",
         "message.archive_unavailable": "此平台未提供原生压缩包导入功能",
         "message.archive_unrecognized": "未识别到支持的压缩内容",
         "message.archive_failed": "解压失败：%s",
+        "message.archive_no_game": "解压完成，但没有找到可导入的游戏目录：%s",
         "dialog.import_guide_body": "请使用「文件」App 将视觉小说文件夹复制到本应用的目录：\n\n1. 打开 iPhone / iPad 上的「文件」App\n2. 前往：我的 iPhone / iPad > Aether > Games\n3. 将视觉小说文件夹复制到 Games 目录\n4. 返回本应用，点击「刷新」检测新视觉小说\n\n视觉小说目录：Games/",
         "dialog.ok": "知道了",
         "dialog.scrape_title": "完善游戏信息",
@@ -595,6 +597,8 @@ const UI_TEXT := {
         "game.type_archive": "封存",
         "dialog.import_title": "匯入視覺小說",
         "dialog.select_archive_file": "選擇壓縮檔案",
+        "archive.progress_probe": "正在偵測壓縮內容...",
+        "archive.progress_extract": "正在解壓縮並尋找遊戲目錄...",
         "dialog.import_guide_body": "請使用「檔案」App 將視覺小說資料夾複製到本 App 的目錄：\n\n1. 開啟 iPhone / iPad 上的「檔案」App\n2. 前往：我的 iPhone / iPad > Aether > Games\n3. 將視覺小說資料夾複製到 Games 目錄\n4. 返回本 App，點選「重新整理」偵測新視覺小說\n\n視覺小說目錄：Games/",
         "dialog.ok": "知道了",
         "dialog.scrape_title": "完善遊戲資訊",
@@ -859,12 +863,15 @@ const UI_TEXT := {
         "dialog.select_archive_file": "Choose Archive File",
         "dialog.select_archive": "Choose Archive or Carrier File",
         "dialog.archive_confirm_title": "Extractable Content Found",
-        "dialog.archive_confirm_body": "A supported archive was detected (%s). Extract it into the Games directory and import it?",
+        "dialog.archive_confirm_body": "Detected %s content in \"%s\". Extract it into the Games directory and import it?",
         "dialog.archive_password": "Password (if required)",
         "dialog.archive_extract": "Extract and Import",
+        "archive.progress_probe": "Detecting archive content...",
+        "archive.progress_extract": "Extracting and locating the game folder...",
         "message.archive_unavailable": "Native archive import is unavailable on this platform",
         "message.archive_unrecognized": "No supported archive content was detected",
         "message.archive_failed": "Extraction failed: %s",
+        "message.archive_no_game": "Extraction completed, but no importable game folder was found: %s",
         "dialog.import_guide_body": "Use the Files app to copy your visual novel folder into this app's directory:\n\n1. Open the Files app on your iPhone / iPad\n2. Go to: On My iPhone / iPad > Aether > Games\n3. Copy the visual novel folder into Games\n4. Return to this app and tap Refresh to detect new visual novels\n\nVisual novel directory: Games/",
         "dialog.ok": "Got it",
         "dialog.scrape_title": "Finish Game Info",
@@ -1127,6 +1134,8 @@ const UI_TEXT := {
         "game.type_archive": "アーカイブ",
         "dialog.import_title": "ビジュアルノベルをインポート",
         "dialog.select_archive_file": "圧縮ファイルを選択",
+        "archive.progress_probe": "圧縮データを検出しています...",
+        "archive.progress_extract": "展開してゲームフォルダーを検索しています...",
         "dialog.import_guide_body": "「ファイル」App でビジュアルノベルのフォルダーをこのアプリのディレクトリにコピーしてください：\n\n1. iPhone / iPad で「ファイル」App を開く\n2. 移動先：この iPhone / iPad 内 > Aether > Games\n3. ビジュアルノベルのフォルダーを Games にコピー\n4. アプリに戻り、「更新」をタップして新しいビジュアルノベルを検出\n\nビジュアルノベルのディレクトリ：Games/",
         "dialog.ok": "了解",
         "dialog.scrape_title": "ゲーム情報を設定",
@@ -1389,6 +1398,8 @@ const UI_TEXT := {
         "game.type_archive": "아카이브",
         "dialog.import_title": "비주얼 노벨 가져오기",
         "dialog.select_archive_file": "압축 파일 선택",
+        "archive.progress_probe": "압축 콘텐츠를 확인하는 중...",
+        "archive.progress_extract": "압축을 풀고 게임 폴더를 찾는 중...",
         "dialog.import_guide_body": "파일 앱으로 비주얼 노벨 폴더를 이 앱의 디렉터리에 복사하세요:\n\n1. iPhone / iPad에서 파일 앱을 엽니다\n2. 이동: 나의 iPhone / iPad > Aether > Games\n3. 비주얼 노벨 폴더를 Games에 복사합니다\n4. 앱으로 돌아와 새로고침을 눌러 새 비주얼 노벨을 감지합니다\n\n비주얼 노벨 디렉터리: Games/",
         "dialog.ok": "확인",
         "dialog.scrape_title": "게임 정보 설정",
@@ -1548,6 +1559,7 @@ var loading_panel: PanelContainer
 var loading_center: CenterContainer
 var loading_card: PanelContainer
 var loading_spinner: TextureRect
+var loading_progress_bar: ProgressBar
 var loading_hiding := false
 var game_scroll: ScrollContainer
 var game_list: GridContainer
@@ -1650,6 +1662,8 @@ var native_launch_file_picker_pending := false
 var native_launch_file_picker_library_path := ""
 var native_cover_file_picker_pending := false
 var native_cover_file_picker_library_path := ""
+var archive_import_operation := ""
+var archive_import_context := {}
 var active_game_path := ""
 var active_game_started_msec := 0
 var active_runtime_kind := RUNTIME_KIRIKIRI
@@ -4952,11 +4966,34 @@ func _build_loading_panel() -> void:
         log_view.add_theme_color_override("background_color", Color(0, 0, 0, 0))
         box.add_child(log_view)
 
+    loading_progress_bar = ProgressBar.new()
+    loading_progress_bar.custom_minimum_size = Vector2(0, 8)
+    loading_progress_bar.show_percentage = false
+    loading_progress_bar.indeterminate = true
+    loading_progress_bar.value = 0.0
+    loading_progress_bar.visible = false
+    box.add_child(loading_progress_bar)
+
 func _show_loading_overlay(immediate: bool = false) -> void:
     loading_hiding = false
     loading_panel.move_to_front()
     if loading_card != null:
         ui_motion.loading_in(loading_panel, loading_card, immediate)
+
+func _show_archive_progress(title: String) -> void:
+    if loading_title_label != null:
+        loading_title_label.text = title
+    if loading_progress_bar != null:
+        loading_progress_bar.visible = true
+        loading_progress_bar.value = 0.0
+        loading_progress_bar.indeterminate = true
+    _show_loading_overlay(true)
+
+func _hide_archive_progress() -> void:
+    if loading_progress_bar != null:
+        loading_progress_bar.visible = false
+        loading_progress_bar.indeterminate = false
+    _hide_loading_overlay()
 
 func _hide_loading_overlay(finished: Callable = Callable()) -> void:
     if loading_panel == null or not loading_panel.visible:
@@ -7784,7 +7821,7 @@ func _show_import_picker() -> void:
     box.add_child(cancel)
 
 func _open_archive_import_dialog() -> void:
-    if player == null or not player.has_method("archive_import_probe"):
+    if player == null or not player.has_method("archive_import_begin_probe"):
         _show_message(_t("message.archive_unavailable"))
         return
     var dialog := _create_file_dialog(
@@ -7797,17 +7834,18 @@ func _open_archive_import_dialog() -> void:
     dialog.popup_centered(Vector2i(900, 640))
 
 func _probe_archive_import(path: String) -> void:
-    var probe: Dictionary = player.archive_import_probe(path)
-    if not bool(probe.get("recognized", false)):
-        _show_message(String(probe.get("error", _t("message.archive_unrecognized"))))
+    if not player.archive_import_begin_probe(path):
+        _show_message(_t("message.archive_failed", [_t("message.unknown_error")]))
         return
-    _show_archive_extract_confirmation(path, probe)
+    archive_import_operation = "probe"
+    archive_import_context = {"path": path}
+    _show_archive_progress(_t("archive.progress_probe"))
 
 func _show_archive_extract_confirmation(path: String, probe: Dictionary, password_value: String = "") -> void:
     var dialog := _modal_dialog(Vector2(620, 390))
     var box := _modal_stack(dialog, _t("dialog.archive_confirm_title"), ICON_PAGE)
     var body := Label.new()
-    body.text = _t("dialog.archive_confirm_body", [path.get_file(), String(probe.get("format", "archive")).to_upper()])
+    body.text = _t("dialog.archive_confirm_body", [String(probe.get("format", "archive")).to_upper(), path.get_file()])
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     body.size_flags_vertical = Control.SIZE_EXPAND_FILL
     box.add_child(body)
@@ -7856,26 +7894,122 @@ func _remember_archive_password(password: String) -> void:
 func _extract_and_import_archive(path: String, probe: Dictionary, password: String) -> void:
     var games_root := ProjectSettings.globalize_path("user://Games")
     DirAccess.make_dir_recursive_absolute(games_root)
-    var candidates: Array[String] = [password] if not password.is_empty() else [""] + _load_archive_passwords()
-    var started := Time.get_ticks_usec()
-    var result: Dictionary = {}
-    var used_password := ""
-    for candidate in candidates:
-        if Time.get_ticks_usec() - started >= ARCHIVE_PASSWORD_TRIAL_BUDGET_MS * 1000:
-            break
-        used_password = candidate
-        result = player.archive_import_extract(path, games_root, candidate)
-        if bool(result.get("ok", false)) or not bool(result.get("password_required", false)):
-            break
+    var candidates: Array[String] = []
+    if not password.is_empty():
+        candidates.append(password)
+    candidates.append("")
+    for stored in _load_archive_passwords():
+        if not candidates.has(stored):
+            candidates.append(stored)
+    archive_import_operation = "extract"
+    archive_import_context = {
+        "path": path,
+        "probe": probe,
+        "games_root": games_root,
+        "candidates": candidates,
+        "index": 0,
+        "used_password": "",
+    }
+    _start_archive_extract_candidate()
+
+func _start_archive_extract_candidate() -> void:
+    if archive_import_operation != "extract" or archive_import_context.is_empty():
+        return
+    var candidates: Array = archive_import_context.get("candidates", [])
+    var index := int(archive_import_context.get("index", 0))
+    if index >= candidates.size():
+        archive_import_operation = ""
+        _hide_archive_progress()
+        _show_archive_extract_confirmation(
+            String(archive_import_context.get("path", "")),
+            archive_import_context.get("probe", {}),
+            String(archive_import_context.get("used_password", "")))
+        return
+    var candidate := String(candidates[index])
+    archive_import_context["used_password"] = candidate
+    if not player.archive_import_begin_extract(
+        String(archive_import_context.get("path", "")),
+        String(archive_import_context.get("games_root", "")), candidate):
+        archive_import_operation = ""
+        _hide_archive_progress()
+        _show_message(_t("message.archive_failed", [_t("message.unknown_error")]))
+        return
+    _show_archive_progress(_t("archive.progress_extract"))
+
+func _poll_archive_import() -> void:
+    if archive_import_operation.is_empty() or player == null:
+        return
+    var result: Dictionary = player.archive_import_take_result()
+    if not bool(result.get("ready", false)):
+        return
+    if archive_import_operation == "probe":
+        archive_import_operation = ""
+        _hide_archive_progress()
+        var path := String(archive_import_context.get("path", ""))
+        archive_import_context = {}
+        if not bool(result.get("recognized", false)):
+            _show_message(String(result.get("error", _t("message.archive_unrecognized"))))
+            return
+        _show_archive_extract_confirmation(path, result)
+        return
     if not bool(result.get("ok", false)):
         if bool(result.get("password_required", false)):
-            _show_archive_extract_confirmation(path, probe, password)
-        else:
-            _show_message(_t("message.archive_failed", [String(result.get("error", _t("message.unknown_error")))]))
+            archive_import_context["index"] = int(archive_import_context.get("index", 0)) + 1
+            _start_archive_extract_candidate()
+            return
+        archive_import_operation = ""
+        _hide_archive_progress()
+        _show_message(_t("message.archive_failed", [String(result.get("error", _t("message.unknown_error")))]))
         return
     var output_path := String(result.get("output_path", "")).simplify_path()
-    if not output_path.is_empty() and _add_game_path(output_path):
-        _remember_archive_password(used_password)
+    var game_path := _find_importable_game_root(output_path)
+    archive_import_operation = ""
+    _hide_archive_progress()
+    if game_path.is_empty():
+        _show_message(_t("message.archive_no_game", [output_path]))
+        return
+    if _add_game_path(game_path):
+        _remember_archive_password(String(archive_import_context.get("used_password", "")))
+    else:
+        _show_message(_t("message.archive_failed", [_t("message.unknown_error")]))
+    archive_import_context = {}
+
+func _find_importable_game_root(root: String) -> String:
+    if root.is_empty() or not DirAccess.dir_exists_absolute(root):
+        return ""
+    var queue: Array = [[root, 0]]
+    var best := ""
+    var best_depth := -1
+    var visited := 0
+    while not queue.is_empty() and visited < 4096:
+        var item: Array = queue.pop_front()
+        var current := String(item[0])
+        var depth := int(item[1])
+        visited += 1
+        var dir := DirAccess.open(current)
+        if dir == null:
+            continue
+        var files := dir.get_files()
+        var has_xp3 := false
+        var has_exe := false
+        var has_ons := false
+        var has_system := false
+        for file_name in files:
+            var lower := String(file_name).to_lower()
+            has_xp3 = has_xp3 or lower.ends_with(".xp3")
+            has_exe = has_exe or lower.ends_with(".exe")
+            has_ons = has_ons or lower == "0.txt" or lower == "nscript.dat" or lower == "nscr_sec.dat"
+            has_system = has_system or lower == "system.ini"
+        var system_dir := current.path_join("system")
+        var has_artemis: bool = has_system and FileAccess.file_exists(system_dir.path_join("first.iet"))
+        if (has_xp3 or has_exe or has_ons or has_artemis) and depth >= best_depth:
+            best = current
+            best_depth = depth
+        if depth >= 12:
+            continue
+        for subdir in dir.get_directories():
+            queue.append([current.path_join(String(subdir)), depth + 1])
+    return best
 
 func _web_eval_string(source: String) -> String:
     if OS.get_name() != "Web":
@@ -11757,6 +11891,7 @@ func _apply_pending_video_resume(state: Dictionary) -> bool:
 func _process(delta: float) -> void:
     _poll_native_launch_file_picker()
     _poll_native_cover_file_picker()
+    _poll_archive_import()
     _fit_full_rects()
     _process_iap(delta)
     _update_advanced_tool_timeouts()

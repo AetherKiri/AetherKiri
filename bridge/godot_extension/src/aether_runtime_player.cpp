@@ -7907,7 +7907,10 @@ class AetherRuntimePlayer final : public Node {
 public:
     AetherRuntimePlayer()
         : frame_effect_provider_(CreateFrameEffectProvider()) {}
-    ~AetherRuntimePlayer() override { destroy_engine(); }
+    ~AetherRuntimePlayer() override {
+        join_archive_import_thread();
+        destroy_engine();
+    }
 
     bool initialize_engine(const String &writable_path, const String &cache_path) {
         if (handle_ != nullptr) {
@@ -9914,6 +9917,63 @@ void main() {
         return output;
     }
 
+    bool archive_import_begin_probe(const String &path) {
+#if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
+        return start_archive_task(true, path, "", "");
+#else
+        (void)path;
+        return false;
+#endif
+    }
+
+    bool archive_import_begin_extract(const String &path,
+                                      const String &destination,
+                                      const String &password) {
+#if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
+        return start_archive_task(false, path, destination, password);
+#else
+        (void)path;
+        (void)destination;
+        (void)password;
+        return false;
+#endif
+    }
+
+    Dictionary archive_import_take_result() {
+        Dictionary output;
+#if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
+        std::lock_guard<std::mutex> lock(archive_import_mutex_);
+        output["ready"] = archive_import_result_ready_;
+        if (!archive_import_result_ready_)
+            return output;
+        output["probe"] = archive_import_is_probe_;
+        if (archive_import_is_probe_) {
+            output["recognized"] = archive_import_probe_result_.recognized;
+            output["encrypted"] = archive_import_probe_result_.encrypted;
+            output["format"] = String::utf8(archive_import_probe_result_.format.c_str());
+            output["error"] = String::utf8(archive_import_probe_result_.error.c_str());
+        } else {
+            output["ok"] = archive_import_extract_result_.ok;
+            output["password_required"] = archive_import_extract_result_.password_required;
+            output["output_path"] = String::utf8(archive_import_extract_result_.output_path.c_str());
+            output["format"] = String::utf8(archive_import_extract_result_.format.c_str());
+            output["error"] = String::utf8(archive_import_extract_result_.error.c_str());
+            PackedStringArray archives;
+            for (const auto &archive : archive_import_extract_result_.extracted_archives)
+                archives.push_back(String::utf8(archive.c_str()));
+            output["extracted_archives"] = archives;
+        }
+        archive_import_result_ready_ = false;
+#else
+        output["ready"] = true;
+        output["probe"] = false;
+        output["ok"] = false;
+        output["password_required"] = false;
+        output["error"] = "Archive import is unavailable on this platform";
+#endif
+        return output;
+    }
+
 protected:
     static void _bind_methods() {
         ClassDB::bind_method(D_METHOD("initialize_engine", "writable_path", "cache_path"),
@@ -10064,6 +10124,13 @@ protected:
         ClassDB::bind_method(
             D_METHOD("archive_import_extract", "path", "destination", "password"),
             &AetherRuntimePlayer::archive_import_extract, DEFVAL(""));
+        ClassDB::bind_method(D_METHOD("archive_import_begin_probe", "path"),
+                             &AetherRuntimePlayer::archive_import_begin_probe);
+        ClassDB::bind_method(D_METHOD("archive_import_begin_extract", "path", "destination", "password"),
+                             &AetherRuntimePlayer::archive_import_begin_extract,
+                             DEFVAL(""));
+        ClassDB::bind_method(D_METHOD("archive_import_take_result"),
+                             &AetherRuntimePlayer::archive_import_take_result);
         ADD_SIGNAL(MethodInfo(
             "platform_request",
             PropertyInfo(Variant::STRING, "operation"),
@@ -10071,6 +10138,61 @@ protected:
     }
 
 private:
+    bool start_archive_task(bool probe, const String &path,
+                            const String &destination, const String &password) {
+#if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
+        if (archive_import_thread_.joinable()) {
+            {
+                std::lock_guard<std::mutex> lock(archive_import_mutex_);
+                if (archive_import_running_)
+                    return false;
+            }
+            archive_import_thread_.join();
+        }
+        const std::string path_utf8 = path.utf8().get_data();
+        const std::string destination_utf8 = destination.utf8().get_data();
+        const std::string password_utf8 = password.utf8().get_data();
+        {
+            std::lock_guard<std::mutex> lock(archive_import_mutex_);
+            archive_import_running_ = true;
+            archive_import_result_ready_ = false;
+            archive_import_is_probe_ = probe;
+        }
+        archive_import_thread_ = std::thread([this, probe, path_utf8,
+                                               destination_utf8, password_utf8]() {
+            if (probe) {
+                auto result = aether::archive_import::Probe(path_utf8);
+                std::lock_guard<std::mutex> lock(archive_import_mutex_);
+                archive_import_probe_result_ = std::move(result);
+            } else {
+                aether::archive_import::ExtractOptions options;
+                options.password = password_utf8;
+                auto result = aether::archive_import::ExtractRecursive(
+                    path_utf8, destination_utf8, options);
+                std::lock_guard<std::mutex> lock(archive_import_mutex_);
+                archive_import_extract_result_ = std::move(result);
+            }
+            std::lock_guard<std::mutex> lock(archive_import_mutex_);
+            archive_import_running_ = false;
+            archive_import_result_ready_ = true;
+        });
+        return true;
+#else
+        (void)probe;
+        (void)path;
+        (void)destination;
+        (void)password;
+        return false;
+#endif
+    }
+
+    void join_archive_import_thread() {
+#if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
+        if (archive_import_thread_.joinable())
+            archive_import_thread_.join();
+#endif
+    }
+
     void drain_platform_requests() {
         std::array<char, 64> operation{};
         std::array<char, 8192> argument{};
@@ -10513,6 +10635,15 @@ private:
     uint64_t frame_present_serial_ = UINT64_MAX;
     uint64_t frame_texture_serial_ = UINT64_MAX;
     std::unique_ptr<FrameEffectProvider> frame_effect_provider_;
+#if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
+    std::thread archive_import_thread_;
+    mutable std::mutex archive_import_mutex_;
+    bool archive_import_running_ = false;
+    bool archive_import_result_ready_ = false;
+    bool archive_import_is_probe_ = false;
+    aether::archive_import::ProbeResult archive_import_probe_result_;
+    aether::archive_import::ExtractResult archive_import_extract_result_;
+#endif
     bool frame_effect_enabled_ = false;
     bool frame_effect_active_ = false;
     bool frame_native_output_enabled_ = false;
