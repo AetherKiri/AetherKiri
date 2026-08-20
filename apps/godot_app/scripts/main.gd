@@ -324,6 +324,7 @@ const UI_TEXT := {
         "game.type_directory": "目录",
         "game.type_archive": "归档",
         "dialog.import_title": "导入视觉小说",
+        "dialog.select_archive_file": "选择压缩文件",
         "dialog.select_archive": "选择压缩包或载体文件",
         "dialog.archive_confirm_title": "发现可解压内容",
         "dialog.archive_confirm_body": "已识别到 %s 格式。是否解压到游戏目录并自动导入？",
@@ -593,6 +594,7 @@ const UI_TEXT := {
         "game.type_directory": "目錄",
         "game.type_archive": "封存",
         "dialog.import_title": "匯入視覺小說",
+        "dialog.select_archive_file": "選擇壓縮檔案",
         "dialog.import_guide_body": "請使用「檔案」App 將視覺小說資料夾複製到本 App 的目錄：\n\n1. 開啟 iPhone / iPad 上的「檔案」App\n2. 前往：我的 iPhone / iPad > Aether > Games\n3. 將視覺小說資料夾複製到 Games 目錄\n4. 返回本 App，點選「重新整理」偵測新視覺小說\n\n視覺小說目錄：Games/",
         "dialog.ok": "知道了",
         "dialog.scrape_title": "完善遊戲資訊",
@@ -854,6 +856,7 @@ const UI_TEXT := {
         "game.type_directory": "Directory",
         "game.type_archive": "Archive",
         "dialog.import_title": "Import Visual Novel",
+        "dialog.select_archive_file": "Choose Archive File",
         "dialog.select_archive": "Choose Archive or Carrier File",
         "dialog.archive_confirm_title": "Extractable Content Found",
         "dialog.archive_confirm_body": "A supported archive was detected (%s). Extract it into the Games directory and import it?",
@@ -1123,6 +1126,7 @@ const UI_TEXT := {
         "game.type_directory": "フォルダー",
         "game.type_archive": "アーカイブ",
         "dialog.import_title": "ビジュアルノベルをインポート",
+        "dialog.select_archive_file": "圧縮ファイルを選択",
         "dialog.import_guide_body": "「ファイル」App でビジュアルノベルのフォルダーをこのアプリのディレクトリにコピーしてください：\n\n1. iPhone / iPad で「ファイル」App を開く\n2. 移動先：この iPhone / iPad 内 > Aether > Games\n3. ビジュアルノベルのフォルダーを Games にコピー\n4. アプリに戻り、「更新」をタップして新しいビジュアルノベルを検出\n\nビジュアルノベルのディレクトリ：Games/",
         "dialog.ok": "了解",
         "dialog.scrape_title": "ゲーム情報を設定",
@@ -1384,6 +1388,7 @@ const UI_TEXT := {
         "game.type_directory": "폴더",
         "game.type_archive": "아카이브",
         "dialog.import_title": "비주얼 노벨 가져오기",
+        "dialog.select_archive_file": "압축 파일 선택",
         "dialog.import_guide_body": "파일 앱으로 비주얼 노벨 폴더를 이 앱의 디렉터리에 복사하세요:\n\n1. iPhone / iPad에서 파일 앱을 엽니다\n2. 이동: 나의 iPhone / iPad > Aether > Games\n3. 비주얼 노벨 폴더를 Games에 복사합니다\n4. 앱으로 돌아와 새로고침을 눌러 새 비주얼 노벨을 감지합니다\n\n비주얼 노벨 디렉터리: Games/",
         "dialog.ok": "확인",
         "dialog.scrape_title": "게임 정보 설정",
@@ -7765,7 +7770,7 @@ func _show_import_picker() -> void:
         _dismiss_modal(func(): _open_import_dialog())
     )
     box.add_child(dir_button)
-    var archive_button := _detail_action(ICON_PAGE, _t("dialog.select_archive"))
+    var archive_button := _detail_action(ICON_PAGE, _t("dialog.select_archive_file"))
     archive_button.pressed.connect(func():
         _dismiss_modal(func(): _open_archive_import_dialog())
     )
