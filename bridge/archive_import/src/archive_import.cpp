@@ -124,6 +124,8 @@ struct EmbeddedMatch {
     std::string format;
 };
 
+bool IsValidLz4FrameAt(const fs::path &path, std::uint64_t offset);
+
 EmbeddedMatch FindEmbeddedTransport(const fs::path &path,
                                     const ProgressCallback &progress = {}) {
     const std::vector<std::pair<std::string, std::vector<unsigned char>>> signatures = {
@@ -156,8 +158,10 @@ EmbeddedMatch FindEmbeddedTransport(const fs::path &path,
             const auto found = std::search(buffer.begin(), buffer.begin() + available,
                                            entry.second.begin(), entry.second.end());
             if (found != buffer.begin() + available) {
-                return {absolute - carried + static_cast<std::uint64_t>(found - buffer.begin()),
-                        entry.first};
+                const auto offset = absolute - carried +
+                    static_cast<std::uint64_t>(found - buffer.begin());
+                if (entry.first != "lz4" || IsValidLz4FrameAt(path, offset))
+                    return {offset, entry.first};
             }
         }
         if (read == 0) break;
@@ -201,7 +205,25 @@ std::uint64_t FindEmbeddedBytes(const fs::path &path,
     return std::numeric_limits<std::uint64_t>::max();
 }
 
-std::uint64_t FindLz4Frame(const fs::path &path) {
+bool IsValidLz4FrameAt(const fs::path &path, std::uint64_t offset) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return false;
+    input.seekg(static_cast<std::streamoff>(offset));
+    std::vector<char> header(64 * 1024);
+    input.read(header.data(), static_cast<std::streamsize>(header.size()));
+    const std::size_t size = static_cast<std::size_t>(input.gcount());
+    if (size < sizeof(kLz4FrameMagic)) return false;
+    LZ4F_decompressionContext_t context = nullptr;
+    const size_t created = LZ4F_createDecompressionContext(&context, LZ4F_VERSION);
+    if (LZ4F_isError(created)) return false;
+    LZ4F_frameInfo_t info{};
+    size_t available = size;
+    const size_t decoded = LZ4F_getFrameInfo(context, &info, header.data(), &available);
+    LZ4F_freeDecompressionContext(context);
+    return !LZ4F_isError(decoded);
+}
+
+std::uint64_t FindLz4Frame(const fs::path &path, const ProgressCallback &progress = {}) {
     std::ifstream input(path, std::ios::binary);
     if (!input) return std::numeric_limits<std::uint64_t>::max();
     constexpr std::size_t kChunk = 1024 * 1024;
@@ -221,20 +243,28 @@ std::uint64_t FindLz4Frame(const fs::path &path) {
                 (static_cast<std::uint32_t>(buffer[i + 1]) << 8) |
                 (static_cast<std::uint32_t>(buffer[i + 2]) << 16) |
                 (static_cast<std::uint32_t>(buffer[i + 3]) << 24);
-            if (magic == kLz4FrameMagic)
-                return absolute - carried + i;
+            if (magic == kLz4FrameMagic) {
+                const auto offset = absolute - carried + i;
+                if (IsValidLz4FrameAt(path, offset)) return offset;
+            }
         }
         if (read == 0) break;
         carried = std::min<std::size_t>(3, available);
         std::copy(buffer.begin() + available - carried, buffer.begin() + available,
                   buffer.begin());
         absolute += read;
+        if (progress) {
+            std::error_code size_error;
+            const auto total = fs::file_size(path, size_error);
+            progress(absolute, size_error ? 0 : total);
+        }
     }
     return std::numeric_limits<std::uint64_t>::max();
 }
 
-bool IsLz4Frame(const fs::path &path, std::uint64_t *offset = nullptr) {
-    const std::uint64_t found = FindLz4Frame(path);
+bool IsLz4Frame(const fs::path &path, std::uint64_t *offset = nullptr,
+                const ProgressCallback &progress = {}) {
+    const std::uint64_t found = FindLz4Frame(path, progress);
     if (offset != nullptr) *offset = found;
     return found != std::numeric_limits<std::uint64_t>::max();
 }
@@ -275,9 +305,10 @@ std::string StrongFormat(const fs::path &path) {
 
 bool ExtractLz4(const fs::path &source, const fs::path &destination,
                const ExtractOptions &options, ExtractResult *result,
-               std::uint64_t *total_bytes, std::uint32_t *total_files) {
+               std::uint64_t *total_bytes, std::uint32_t *total_files,
+               const ProgressCallback &progress = {}) {
     std::uint64_t offset = 0;
-    if (!IsLz4Frame(source, &offset)) return false;
+    if (!IsLz4Frame(source, &offset, progress)) return false;
     std::ifstream input(source, std::ios::binary);
     if (!input) { result->error = "Cannot read the selected file"; return false; }
     input.seekg(static_cast<std::streamoff>(offset));
@@ -293,10 +324,17 @@ bool ExtractLz4(const fs::path &source, const fs::path &destination,
     std::vector<char> input_buffer(1024 * 1024), output_buffer(1024 * 1024);
     size_t hint = 1;
     std::uint64_t written = 0;
+    std::uint64_t input_position = offset;
     bool ok = true;
     while (hint != 0 && input) {
         input.read(input_buffer.data(), static_cast<std::streamsize>(input_buffer.size()));
         size_t input_size = static_cast<size_t>(input.gcount());
+        if (progress) {
+            std::error_code size_error;
+            const auto total = fs::file_size(source, size_error);
+            input_position += input_size;
+            progress(input_position, size_error ? 0 : total);
+        }
         const char *cursor = input_buffer.data();
         while (input_size != 0) {
             size_t output_size = output_buffer.size();
@@ -644,8 +682,8 @@ bool ExtractOne(const fs::path &source, const fs::path &destination,
                 const ExtractOptions &options, ExtractResult *result,
                 std::uint64_t *total_bytes, std::uint32_t *total_files,
                 const ProgressCallback &progress = {}) {
-    if (IsLz4Frame(source))
-        return ExtractLz4(source, destination, options, result, total_bytes, total_files);
+    if (IsLz4Frame(source, nullptr, progress))
+        return ExtractLz4(source, destination, options, result, total_bytes, total_files, progress);
     OpenArchive opened;
     std::string open_error;
     ExtractOptions resolved_options = options;
