@@ -174,6 +174,11 @@ if(TARGET aether_onscripter_runtime)
     target_compile_definitions(aether_kiri_godot PRIVATE
         AETHERKIRI_WITH_ONSCRIPTER=1)
 endif()
+if(TARGET aether_archive_import)
+    target_link_libraries(aether_kiri_godot PRIVATE aether_archive_import)
+    target_compile_definitions(aether_kiri_godot PRIVATE
+        AETHERKIRI_WITH_ARCHIVE_IMPORT=1)
+endif()
 if(TARGET krkr2plugin)
     if(WEB OR EMSCRIPTEN)
         # krkr2plugin has cyclic static dependencies with sub-plugin targets.

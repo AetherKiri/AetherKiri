@@ -146,6 +146,7 @@ mkdir -p "$GODOT_BIN_DIR"
 cp -f "$CMAKE_BUILD_DIR/bridge/engine_api/libengine_api.so" "$GODOT_BIN_DIR/"
 cp -f "$CMAKE_BUILD_DIR/bridge/godot_extension/libaether_kiri_godot.so" "$GODOT_BIN_DIR/"
 stage_vcpkg_runtime_libraries "$GODOT_BIN_DIR/libengine_api.so"
+stage_vcpkg_runtime_libraries "$GODOT_BIN_DIR/libaether_kiri_godot.so"
 if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
     echo "==> Removing non-runtime symbols from staged Linux Release libraries"
     strip_linux_runtime_symbols "$GODOT_BIN_DIR"

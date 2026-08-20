@@ -24,10 +24,14 @@ windows.release.x86_64 = {
   "res://bin/windows/release/engine_api.dll": ""
 }
 linux.debug.x86_64 = {
-  "res://bin/linux/debug/libengine_api.so": ""
+  "res://bin/linux/debug/libengine_api.so": "",
+  "res://bin/linux/debug/lib7zip.so": "",
+  "res://bin/linux/debug/liblz4.so.1": ""
 }
 linux.release.x86_64 = {
-  "res://bin/linux/release/libengine_api.so": ""
+  "res://bin/linux/release/libengine_api.so": "",
+  "res://bin/linux/release/lib7zip.so": "",
+  "res://bin/linux/release/liblz4.so.1": ""
 }
 macos.debug = {
   "res://bin/macos/debug/libengine_api.dylib": ""

@@ -6,6 +6,9 @@
 #include "ComplexRect.h"
 #include "RuntimeTickPacer.h"
 #include "frame_effect_host.h"
+#if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
+#include "aether/archive_import.h"
+#endif
 #if defined(AETHERKIRI_WITH_ONSCRIPTER)
 #include "onscripter_runtime.h"
 #endif
@@ -9866,6 +9869,51 @@ void main() {
             runtime_utf8.get_data(), path_utf8.get_data()));
     }
 
+    Dictionary archive_import_probe(const String &path) const {
+        Dictionary output;
+#if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
+        const auto result = aether::archive_import::Probe(path.utf8().get_data());
+        output["recognized"] = result.recognized;
+        output["encrypted"] = result.encrypted;
+        output["format"] = String::utf8(result.format.c_str());
+        output["error"] = String::utf8(result.error.c_str());
+#else
+        output["recognized"] = false;
+        output["encrypted"] = false;
+        output["format"] = "";
+        output["error"] = "Archive import is unavailable on this platform";
+#endif
+        return output;
+    }
+
+    Dictionary archive_import_extract(const String &path,
+                                      const String &destination,
+                                      const String &password) const {
+        Dictionary output;
+#if defined(AETHERKIRI_WITH_ARCHIVE_IMPORT)
+        aether::archive_import::ExtractOptions options;
+        options.password = password.utf8().get_data();
+        const auto result = aether::archive_import::ExtractRecursive(
+            path.utf8().get_data(), destination.utf8().get_data(), options);
+        output["ok"] = result.ok;
+        output["password_required"] = result.password_required;
+        output["output_path"] = String::utf8(result.output_path.c_str());
+        output["format"] = String::utf8(result.format.c_str());
+        output["error"] = String::utf8(result.error.c_str());
+        PackedStringArray archives;
+        for (const auto &archive : result.extracted_archives)
+            archives.push_back(String::utf8(archive.c_str()));
+        output["extracted_archives"] = archives;
+#else
+        output["ok"] = false;
+        output["password_required"] = false;
+        output["output_path"] = "";
+        output["format"] = "";
+        output["error"] = "Archive import is unavailable on this platform";
+#endif
+        return output;
+    }
+
 protected:
     static void _bind_methods() {
         ClassDB::bind_method(D_METHOD("initialize_engine", "writable_path", "cache_path"),
@@ -10011,6 +10059,11 @@ protected:
             &AetherRuntimePlayer::native_launch_file_picker_take_result_json);
         ClassDB::bind_method(D_METHOD("probe_runtime", "runtime_id", "game_root_path"),
                              &AetherRuntimePlayer::probe_runtime);
+        ClassDB::bind_method(D_METHOD("archive_import_probe", "path"),
+                             &AetherRuntimePlayer::archive_import_probe);
+        ClassDB::bind_method(
+            D_METHOD("archive_import_extract", "path", "destination", "password"),
+            &AetherRuntimePlayer::archive_import_extract, DEFVAL(""));
         ADD_SIGNAL(MethodInfo(
             "platform_request",
             PropertyInfo(Variant::STRING, "operation"),

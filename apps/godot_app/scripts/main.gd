@@ -10,6 +10,9 @@ const VIDEO_LIST_FILE := "user://aetherkiri_videos.json"
 const VIDEO_PROGRESS_FILE := "user://aetherkiri_video_progress.json"
 const VIDEO_HIDDEN_FILE := "user://aetherkiri_hidden_videos.json"
 const IMPORT_STATE_FILE := "user://aetherkiri_import_state.cfg"
+const ARCHIVE_PASSWORDS_FILE := "user://aetherkiri_archive_passwords.cfg"
+const ARCHIVE_PASSWORD_MAX_COUNT := 24
+const ARCHIVE_PASSWORD_TRIAL_BUDGET_MS := 300
 const VIDEO_EXTENSIONS := ["mp4", "mkv", "mov", "m4v", "avi", "webm", "flv", "ts", "m2ts", "mpeg", "mpg", "wmv"]
 const SUBTITLE_EXTENSIONS := ["srt", "vtt", "ass", "ssa"]
 const COVER_IMAGE_EXTENSIONS := ["png", "webp", "jpg", "jpeg"]
@@ -321,6 +324,14 @@ const UI_TEXT := {
         "game.type_directory": "目录",
         "game.type_archive": "归档",
         "dialog.import_title": "导入视觉小说",
+        "dialog.select_archive": "选择压缩包或载体文件",
+        "dialog.archive_confirm_title": "发现可解压内容",
+        "dialog.archive_confirm_body": "已识别到 %s 格式。是否解压到游戏目录并自动导入？",
+        "dialog.archive_password": "密码（如需要）",
+        "dialog.archive_extract": "解压并导入",
+        "message.archive_unavailable": "此平台未提供原生压缩包导入功能",
+        "message.archive_unrecognized": "未识别到支持的压缩内容",
+        "message.archive_failed": "解压失败：%s",
         "dialog.import_guide_body": "请使用「文件」App 将视觉小说文件夹复制到本应用的目录：\n\n1. 打开 iPhone / iPad 上的「文件」App\n2. 前往：我的 iPhone / iPad > Aether > Games\n3. 将视觉小说文件夹复制到 Games 目录\n4. 返回本应用，点击「刷新」检测新视觉小说\n\n视觉小说目录：Games/",
         "dialog.ok": "知道了",
         "dialog.scrape_title": "完善游戏信息",
@@ -843,6 +854,14 @@ const UI_TEXT := {
         "game.type_directory": "Directory",
         "game.type_archive": "Archive",
         "dialog.import_title": "Import Visual Novel",
+        "dialog.select_archive": "Choose Archive or Carrier File",
+        "dialog.archive_confirm_title": "Extractable Content Found",
+        "dialog.archive_confirm_body": "A supported archive was detected (%s). Extract it into the Games directory and import it?",
+        "dialog.archive_password": "Password (if required)",
+        "dialog.archive_extract": "Extract and Import",
+        "message.archive_unavailable": "Native archive import is unavailable on this platform",
+        "message.archive_unrecognized": "No supported archive content was detected",
+        "message.archive_failed": "Extraction failed: %s",
         "dialog.import_guide_body": "Use the Files app to copy your visual novel folder into this app's directory:\n\n1. Open the Files app on your iPhone / iPad\n2. Go to: On My iPhone / iPad > Aether > Games\n3. Copy the visual novel folder into Games\n4. Return to this app and tap Refresh to detect new visual novels\n\nVisual novel directory: Games/",
         "dialog.ok": "Got it",
         "dialog.scrape_title": "Finish Game Info",
@@ -7739,13 +7758,18 @@ func _on_refresh_or_import() -> void:
     _show_import_picker()
 
 func _show_import_picker() -> void:
-    var dialog := _modal_dialog(Vector2(480, 220))
+    var dialog := _modal_dialog(Vector2(560, 300))
     var box := _modal_stack(dialog, _t("dialog.import_title"), ICON_ADD)
     var dir_button := _detail_action(ICON_LIBRARY, _t("dialog.select_game_dir"))
     dir_button.pressed.connect(func():
         _dismiss_modal(func(): _open_import_dialog())
     )
     box.add_child(dir_button)
+    var archive_button := _detail_action(ICON_PAGE, _t("dialog.select_archive"))
+    archive_button.pressed.connect(func():
+        _dismiss_modal(func(): _open_archive_import_dialog())
+    )
+    box.add_child(archive_button)
     var cancel := Button.new()
     cancel.text = _t("dialog.cancel")
     cancel.custom_minimum_size = Vector2(108, 44)
@@ -7753,6 +7777,100 @@ func _show_import_picker() -> void:
     ui_widgets.secondary_button(cancel)
     cancel.pressed.connect(_dismiss_modal)
     box.add_child(cancel)
+
+func _open_archive_import_dialog() -> void:
+    if player == null or not player.has_method("archive_import_probe"):
+        _show_message(_t("message.archive_unavailable"))
+        return
+    var dialog := _create_file_dialog(
+        _t("dialog.select_archive"),
+        FileDialog.FILE_MODE_OPEN_FILE,
+        PackedStringArray(["*;" + _t("dialog.select_archive")])
+    )
+    dialog.file_selected.connect(_probe_archive_import)
+    add_child(dialog)
+    dialog.popup_centered(Vector2i(900, 640))
+
+func _probe_archive_import(path: String) -> void:
+    var probe: Dictionary = player.archive_import_probe(path)
+    if not bool(probe.get("recognized", false)):
+        _show_message(String(probe.get("error", _t("message.archive_unrecognized"))))
+        return
+    _show_archive_extract_confirmation(path, probe)
+
+func _show_archive_extract_confirmation(path: String, probe: Dictionary, password_value: String = "") -> void:
+    var dialog := _modal_dialog(Vector2(620, 390))
+    var box := _modal_stack(dialog, _t("dialog.archive_confirm_title"), ICON_PAGE)
+    var body := Label.new()
+    body.text = _t("dialog.archive_confirm_body", [path.get_file(), String(probe.get("format", "archive")).to_upper()])
+    body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    box.add_child(body)
+    var password := LineEdit.new()
+    password.placeholder_text = _t("dialog.archive_password")
+    password.secret = true
+    password.text = password_value
+    password.custom_minimum_size = Vector2(0, 48)
+    box.add_child(password)
+    var extract := _pill_button(_t("dialog.archive_extract"))
+    extract.custom_minimum_size = Vector2(180, 48)
+    extract.pressed.connect(func():
+        var entered_password := password.text
+        _dismiss_modal(func(): _extract_and_import_archive(path, probe, entered_password))
+    )
+    box.add_child(extract)
+
+func _load_archive_passwords() -> Array[String]:
+    var cfg := ConfigFile.new()
+    if cfg.load(ARCHIVE_PASSWORDS_FILE) != OK:
+        return []
+    var stored: Variant = cfg.get_value("archive", "passwords", [])
+    var result: Array[String] = []
+    if stored is Array:
+        for value in stored:
+            var password := String(value)
+            if password.is_empty() or result.has(password):
+                continue
+            result.append(password)
+            if result.size() >= ARCHIVE_PASSWORD_MAX_COUNT:
+                break
+    return result
+
+func _remember_archive_password(password: String) -> void:
+    if password.is_empty():
+        return
+    var passwords := _load_archive_passwords()
+    passwords.erase(password)
+    passwords.push_front(password)
+    if passwords.size() > ARCHIVE_PASSWORD_MAX_COUNT:
+        passwords.resize(ARCHIVE_PASSWORD_MAX_COUNT)
+    var cfg := ConfigFile.new()
+    cfg.set_value("archive", "passwords", passwords)
+    cfg.save(ARCHIVE_PASSWORDS_FILE)
+
+func _extract_and_import_archive(path: String, probe: Dictionary, password: String) -> void:
+    var games_root := ProjectSettings.globalize_path("user://Games")
+    DirAccess.make_dir_recursive_absolute(games_root)
+    var candidates: Array[String] = [password] if not password.is_empty() else [""] + _load_archive_passwords()
+    var started := Time.get_ticks_usec()
+    var result: Dictionary = {}
+    var used_password := ""
+    for candidate in candidates:
+        if Time.get_ticks_usec() - started >= ARCHIVE_PASSWORD_TRIAL_BUDGET_MS * 1000:
+            break
+        used_password = candidate
+        result = player.archive_import_extract(path, games_root, candidate)
+        if bool(result.get("ok", false)) or not bool(result.get("password_required", false)):
+            break
+    if not bool(result.get("ok", false)):
+        if bool(result.get("password_required", false)):
+            _show_archive_extract_confirmation(path, probe, password)
+        else:
+            _show_message(_t("message.archive_failed", [String(result.get("error", _t("message.unknown_error")))]))
+        return
+    var output_path := String(result.get("output_path", "")).simplify_path()
+    if not output_path.is_empty() and _add_game_path(output_path):
+        _remember_archive_password(used_password)
 
 func _web_eval_string(source: String) -> String:
     if OS.get_name() != "Web":

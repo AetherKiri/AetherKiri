@@ -162,6 +162,7 @@ target_sources(7zip PRIVATE
 
     CPP/7zip/Common/CreateCoder.cpp
     CPP/7zip/Common/CWrappers.cpp
+    CPP/7zip/Common/FileStreams.cpp
     CPP/7zip/Common/InBuffer.cpp
     CPP/7zip/Common/InOutTempBuffer.cpp
     CPP/7zip/Common/FilterCoder.cpp
