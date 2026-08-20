@@ -14,7 +14,6 @@ configure_file(${BASE_PATH}/resources/D3DEmote_tjs.cpp.in
                ${BASE_D3DEMOTE_SOURCE} @ONLY)
 
 set(BASE_SOURCE_FILES
-    ${BASE_PATH}/7zArchive.cpp
     ${BASE_PATH}/BinaryStream.cpp
     ${BASE_PATH}/CharacterSet.cpp
     ${BASE_PATH}/EventIntf.cpp
@@ -41,6 +40,10 @@ set(BASE_SOURCE_FILES
     ${BASE_PATH}/impl/MsgImpl.cpp
     ${BASE_D3DEMOTE_SOURCE}
 )
+
+if(NOT (WEB OR EMSCRIPTEN))
+    list(APPEND BASE_SOURCE_FILES ${BASE_PATH}/7zArchive.cpp)
+endif()
 
 set(BASE_HEADERS_DIR
         ${BASE_PATH}/

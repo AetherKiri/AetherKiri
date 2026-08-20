@@ -178,6 +178,22 @@ if(TARGET aether_archive_import)
     target_link_libraries(aether_kiri_godot PRIVATE aether_archive_import)
     target_compile_definitions(aether_kiri_godot PRIVATE
         AETHERKIRI_WITH_ARCHIVE_IMPORT=1)
+    if(IOS)
+        # Godot's iOS exporter links this static extension archive directly
+        # and does not propagate its CMake archive dependencies.
+        find_program(AETHERKIRI_LIBTOOL_EXECUTABLE libtool REQUIRED)
+        set(AETHERKIRI_MERGED_GODOT_ARCHIVE
+            "${CMAKE_CURRENT_BINARY_DIR}/libaether_kiri_godot_merged.a")
+        add_custom_command(TARGET aether_kiri_godot POST_BUILD
+            COMMAND "${AETHERKIRI_LIBTOOL_EXECUTABLE}" -static
+                -o "${AETHERKIRI_MERGED_GODOT_ARCHIVE}"
+                "$<TARGET_FILE:aether_kiri_godot>"
+                "$<TARGET_FILE:aether_archive_import>"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${AETHERKIRI_MERGED_GODOT_ARCHIVE}"
+                "$<TARGET_FILE:aether_kiri_godot>"
+            VERBATIM)
+    endif()
 endif()
 if(TARGET krkr2plugin)
     if(WEB OR EMSCRIPTEN)

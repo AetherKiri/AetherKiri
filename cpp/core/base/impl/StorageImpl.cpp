@@ -717,15 +717,20 @@ ttstr TVPGetNativeProjectDirectory(const ttstr &nativeProjectPath) {
 tTVPArchive *TVPOpenZIPArchive(const ttstr &name, tTJSBinaryStream *st,
                                bool normalizeFileName);
 
+#if !defined(__EMSCRIPTEN__)
 tTVPArchive *TVPOpen7ZArchive(const ttstr &name, tTJSBinaryStream *st,
                               bool normalizeFileName);
+#endif
 
 tTVPArchive *TVPOpenTARArchive(const ttstr &name, tTJSBinaryStream *st,
                                bool normalizeFileName);
 
 static tTVPArchive *(*ArchiveCreators[])(
     const ttstr &name, tTJSBinaryStream *st,
-    bool normalizeFileName) = { TVPOpenZIPArchive, TVPOpen7ZArchive,
+    bool normalizeFileName) = { TVPOpenZIPArchive,
+#if !defined(__EMSCRIPTEN__)
+                                TVPOpen7ZArchive,
+#endif
                                 TVPOpenTARArchive, tTVPXP3Archive::Create };
 
 //---------------------------------------------------------------------------

@@ -12,7 +12,6 @@ set(ENVIRON_SOURCE_FILES
     ${ENVIRON_PATH}/DumpSend.cpp
     ${ENVIRON_PATH}/EngineBootstrap.cpp
     ${ENVIRON_PATH}/EngineLoop.cpp
-    ${ENVIRON_PATH}/XP3ArchiveRepack.cpp
 
     $<$<BOOL:${ANDROID}>:${ENVIRON_PATH}/android/AndroidUtils.cpp>
     $<$<BOOL:${ANDROID}>:${ENVIRON_PATH}/android/KrkrJniHelper.cpp>
@@ -42,6 +41,10 @@ set(ENVIRON_SOURCE_FILES
     ${ENVIRON_PATH}/win32/SystemControl.cpp
 )
 
+if(NOT (WEB OR EMSCRIPTEN))
+    list(APPEND ENVIRON_SOURCE_FILES ${ENVIRON_PATH}/XP3ArchiveRepack.cpp)
+endif()
+
 set(ENVIRON_HEADERS_DIR
     ${ENVIRON_PATH}/
     ${ENVIRON_PATH}/win32
@@ -57,12 +60,15 @@ if(LINUX)
 endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_visual_module core_sound_module core_plugin_module core_movie_module core_utils_module)
 
-find_package(7zip CONFIG REQUIRED)
 find_package(tinyxml2 CONFIG REQUIRED)
 find_package(unofficial-minizip CONFIG REQUIRED)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-        7zip::7zip
         unofficial::minizip::minizip
         tinyxml2::tinyxml2
 )
+
+if(NOT (WEB OR EMSCRIPTEN))
+    find_package(7zip CONFIG REQUIRED)
+    target_link_libraries(${PROJECT_NAME} PRIVATE 7zip::7zip)
+endif()
