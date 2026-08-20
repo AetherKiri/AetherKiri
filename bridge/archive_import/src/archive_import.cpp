@@ -299,16 +299,14 @@ bool HandlerSignatures(UInt32 index, std::vector<std::vector<Byte>> *signatures,
     return !signatures->empty();
 }
 
-std::string StrongFormat(const fs::path &path) {
-    return FindEmbeddedTransport(path).format;
-}
-
 bool ExtractLz4(const fs::path &source, const fs::path &destination,
                const ExtractOptions &options, ExtractResult *result,
                std::uint64_t *total_bytes, std::uint32_t *total_files,
-               const ProgressCallback &progress = {}) {
-    std::uint64_t offset = 0;
-    if (!IsLz4Frame(source, &offset, progress)) return false;
+               const ProgressCallback &progress = {},
+               std::uint64_t offset = std::numeric_limits<std::uint64_t>::max()) {
+    if (offset == std::numeric_limits<std::uint64_t>::max() &&
+        !IsLz4Frame(source, &offset, progress))
+        return false;
     std::ifstream input(source, std::ios::binary);
     if (!input) { result->error = "Cannot read the selected file"; return false; }
     input.seekg(static_cast<std::streamoff>(offset));
@@ -430,9 +428,55 @@ struct OpenArchive {
     bool encrypted = false;
 };
 
+class OffsetInStream final : public IInStream, public CMyUnknownImp {
+public:
+    OffsetInStream(IInStream *stream, UInt64 offset, UInt64 size)
+        : stream_(stream), offset_(offset), size_(size) {}
+
+    Z7_COM_UNKNOWN_IMP_1(IInStream)
+    Z7_IFACE_COM7_IMP(ISequentialInStream)
+    Z7_IFACE_COM7_IMP(IInStream)
+
+private:
+    CMyComPtr<IInStream> stream_;
+    UInt64 offset_ = 0;
+    UInt64 size_ = 0;
+    UInt64 position_ = 0;
+};
+
+HRESULT OffsetInStream::Read(void *data, UInt32 size, UInt32 *processed_size) throw() {
+    if (processed_size != nullptr) *processed_size = 0;
+    const UInt64 remaining = position_ < size_ ? size_ - position_ : 0;
+    const UInt32 request = static_cast<UInt32>(std::min<UInt64>(size, remaining));
+    UInt32 processed = 0;
+    const HRESULT result = stream_->Read(data, request, &processed);
+    position_ += processed;
+    if (processed_size != nullptr) *processed_size = processed;
+    return result;
+}
+
+HRESULT OffsetInStream::Seek(Int64 offset, UInt32 origin, UInt64 *new_position) throw() {
+    Int64 base = 0;
+    if (origin == STREAM_SEEK_CUR) base = static_cast<Int64>(position_);
+    else if (origin == STREAM_SEEK_END) base = static_cast<Int64>(size_);
+    else if (origin != STREAM_SEEK_SET) return STG_E_INVALIDFUNCTION;
+    if (offset < -base) return HRESULT_WIN32_ERROR_NEGATIVE_SEEK;
+    const UInt64 target = static_cast<UInt64>(base + offset);
+    if (target > size_) return HRESULT_WIN32_ERROR_NEGATIVE_SEEK;
+    UInt64 physical = 0;
+    const HRESULT result = stream_->Seek(static_cast<Int64>(offset_ + target),
+                                         STREAM_SEEK_SET, &physical);
+    if (result != S_OK) return result;
+    position_ = target;
+    if (new_position != nullptr) *new_position = target;
+    return S_OK;
+}
+
 bool OpenRecognized(const fs::path &path, const std::string &password,
                     OpenArchive *result, std::string *error,
-                    const ProgressCallback &progress = {}) {
+                    EmbeddedMatch *embedded_match = nullptr,
+                    const ProgressCallback &progress = {},
+                    bool scan_embedded = true) {
     std::error_code ec;
     const auto file_size = fs::file_size(path, ec);
     if (ec) {
@@ -451,6 +495,7 @@ bool OpenRecognized(const fs::path &path, const std::string &password,
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     struct Candidate { UInt32 index; UInt64 offset; };
     std::vector<Candidate> candidates;
+    bool extension_recognized = false;
     std::vector<Byte> header(static_cast<std::size_t>(std::min<std::uint64_t>(file_size, 1024 * 1024)));
     {
         std::ifstream input(path, std::ios::binary);
@@ -462,8 +507,10 @@ bool OpenRecognized(const fs::path &path, const std::string &password,
         if (kTransportFormats.count(format) == 0) continue;
         UInt64 offset = std::numeric_limits<UInt64>::max();
         const auto extensions = FormatExtensions(index);
-        if (std::find(extensions.begin(), extensions.end(), extension) != extensions.end())
+        if (std::find(extensions.begin(), extensions.end(), extension) != extensions.end()) {
             offset = 0;
+            extension_recognized = true;
+        }
         Func_IsArc is_arc = nullptr;
         if (offset == std::numeric_limits<UInt64>::max() && !header.empty() &&
             GetIsArc(index, &is_arc) == S_OK && is_arc != nullptr &&
@@ -472,12 +519,26 @@ bool OpenRecognized(const fs::path &path, const std::string &password,
         if (offset != std::numeric_limits<UInt64>::max())
             candidates.push_back({index, offset});
     }
-    bool embedded_scanned = false;
+    bool embedded_scanned = !scan_embedded;
+    if (scan_embedded && !extension_recognized) {
+        embedded_scanned = true;
+        const EmbeddedMatch embedded = FindEmbeddedTransport(path, progress);
+        if (embedded_match != nullptr) *embedded_match = embedded;
+        if (embedded.offset != std::numeric_limits<std::uint64_t>::max()) {
+            for (UInt32 index = 0; index < format_count; ++index) {
+                if (FormatName(index) == embedded.format) {
+                    candidates.insert(candidates.begin(), {index, embedded.offset});
+                    break;
+                }
+            }
+        }
+    }
     for (std::size_t candidate_index = 0;;) {
         if (candidate_index >= candidates.size()) {
             if (embedded_scanned) break;
             embedded_scanned = true;
             const EmbeddedMatch embedded = FindEmbeddedTransport(path, progress);
+            if (embedded_match != nullptr) *embedded_match = embedded;
             if (embedded.offset == std::numeric_limits<std::uint64_t>::max()) break;
             for (UInt32 index = 0; index < format_count; ++index) {
                 if (FormatName(index) != embedded.format) continue;
@@ -505,15 +566,15 @@ bool OpenRecognized(const fs::path &path, const std::string &password,
         auto *file = new CInFileStream;
         CMyComPtr<IInStream> stream = file;
         if (!file->Open(Utf8ToFileString(path.u8string()))) continue;
-        UInt64 new_position = 0;
-        if (candidate.offset != 0 &&
-            stream->Seek(static_cast<Int64>(candidate.offset), STREAM_SEEK_SET,
-                         &new_position) != S_OK)
-            continue;
+        CMyComPtr<IInStream> archive_stream = stream;
+        if (candidate.offset != 0) {
+            archive_stream = new OffsetInStream(stream, candidate.offset,
+                                                file_size - candidate.offset);
+        }
         auto *callback_impl = new OpenCallback(path, password);
         CMyComPtr<IArchiveOpenCallback> callback = callback_impl;
-        const UInt64 scan = std::min<UInt64>(file_size - candidate.offset, kMaxSignatureScan);
-        const HRESULT opened = archive->Open(stream, &scan, callback);
+        const UInt64 scan = 0;
+        const HRESULT opened = archive->Open(archive_stream, &scan, callback);
         if (opened != S_OK) {
             if (callback_impl->password_requested)
                 *error = "The archive password is missing or incorrect";
@@ -535,7 +596,7 @@ bool OpenRecognized(const fs::path &path, const std::string &password,
             }
         }
         result->archive = archive;
-        result->stream = stream;
+        result->stream = archive_stream;
         result->format = format;
         result->encrypted = encrypted;
         return true;
@@ -692,9 +753,8 @@ bool ExtractOne(const fs::path &source, const fs::path &destination,
                 const ExtractOptions &options, ExtractResult *result,
                 std::uint64_t *total_bytes, std::uint32_t *total_files,
                 const ProgressCallback &progress = {}) {
-    if (IsLz4Frame(source, nullptr, progress))
-        return ExtractLz4(source, destination, options, result, total_bytes, total_files, progress);
     OpenArchive opened;
+    EmbeddedMatch embedded_match;
     std::string open_error;
     ExtractOptions resolved_options = options;
     std::vector<std::string> passwords = options.passwords;
@@ -702,13 +762,17 @@ bool ExtractOne(const fs::path &source, const fs::path &destination,
     bool opened_archive = false;
     for (const std::string &password : passwords) {
         resolved_options.password = password;
-        if (OpenRecognized(source, password, &opened, &open_error)) {
+        if (OpenRecognized(source, password, &opened, &open_error, &embedded_match, progress)) {
             opened_archive = true;
             break;
         }
     }
     if (!opened_archive) {
-        const std::string strong_format = StrongFormat(source);
+        const std::string strong_format = embedded_match.format;
+        if (strong_format == "lz4" && embedded_match.offset != std::numeric_limits<std::uint64_t>::max()) {
+            return ExtractLz4(source, destination, options, result, total_bytes,
+                              total_files, progress, embedded_match.offset);
+        }
         if (!strong_format.empty() && strong_format != "lz4") {
             result->password_required =
                 open_error == "The archive password is missing or incorrect";
@@ -747,19 +811,15 @@ bool ExtractOne(const fs::path &source, const fs::path &destination,
 ProbeResult Probe(const std::string &path, const ProgressCallback &progress) {
     ProbeResult result;
     const fs::path source = fs::u8path(path);
-    if (IsLz4Frame(source)) {
-        result.recognized = true;
-        result.format = "lz4";
-        return result;
-    }
     OpenArchive opened;
-    if (OpenRecognized(source, {}, &opened, &result.error, progress)) {
+    EmbeddedMatch embedded_match;
+    if (OpenRecognized(source, {}, &opened, &result.error, &embedded_match, progress)) {
         result.recognized = true;
         result.encrypted = opened.encrypted;
         result.format = opened.format;
         opened.archive->Close();
     } else {
-        const std::string strong_format = FindEmbeddedTransport(source, progress).format;
+        const std::string strong_format = embedded_match.format;
         if (!strong_format.empty()) {
             result.recognized = true;
             result.encrypted =
@@ -795,16 +855,15 @@ ExtractResult ExtractRecursive(const std::string &path,
         for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
              it != end && !ec; it.increment(ec)) {
             if (!it->is_regular_file(ec)) continue;
-            if (IsLz4Frame(it->path())) {
-                nested.push_back(it->path());
-                continue;
-            }
             OpenArchive probe;
             std::string probe_error;
-            if (OpenRecognized(it->path(), options.password, &probe, &probe_error)) {
+            EmbeddedMatch probe_match;
+            if (OpenRecognized(it->path(), options.password, &probe, &probe_error,
+                               &probe_match, {}, false)) {
                 probe.archive->Close();
                 nested.push_back(it->path());
-            } else if (!StrongFormat(it->path()).empty()) {
+            } else if (!probe_match.format.empty() &&
+                       probe_error == "The archive password is missing or incorrect") {
                 nested.push_back(it->path());
             }
         }
