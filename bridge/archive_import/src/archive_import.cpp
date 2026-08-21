@@ -598,6 +598,11 @@ bool OpenRecognized(const fs::path &path, const std::string &password,
         const Candidate candidate = candidates[candidate_index++];
         const UInt32 index = candidate.index;
         const std::string format = FormatName(index);
+        // Preserve extension-based format information even when opening the
+        // archive fails because its headers require a password. Recursive
+        // scanning uses this marker to queue encrypted nested archives.
+        if (embedded_match != nullptr && candidate.offset == 0)
+            embedded_match->format = format;
         GUID class_id{};
         if (!FormatClassId(index, &class_id)) continue;
 
