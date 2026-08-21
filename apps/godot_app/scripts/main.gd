@@ -8048,7 +8048,7 @@ func _find_importable_game_root(root: String) -> String:
             score += 1
         if has_pfs:
             score += 7
-        if score > 0 and (score > best_score or (score == best_score and depth > best_depth)):
+        if score > 0 and (score > best_score or (score == best_score and (best_depth < 0 or depth < best_depth))):
             best = current
             best_score = score
             best_depth = depth
@@ -9125,6 +9125,10 @@ func _add_game_path(path: String) -> bool:
     if not _path_exists(resolved_path):
         _show_message(_t("message.path_missing"))
         return false
+    if DirAccess.dir_exists_absolute(resolved_path):
+        var game_root := _find_importable_game_root(resolved_path)
+        if not game_root.is_empty() and _path_exists(game_root):
+            resolved_path = game_root
     return _add_game_dictionary(_game_info_from_path(resolved_path))
 
 func _add_game_dictionary(game: Dictionary) -> bool:
