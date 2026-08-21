@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <numeric>
 #include <set>
 #include <system_error>
 #include <vector>
@@ -124,26 +125,65 @@ struct EmbeddedMatch {
     std::string format;
 };
 
+bool HandlerSignatures(UInt32 index, std::vector<std::vector<Byte>> *signatures,
+                       UInt32 *signature_offset);
 bool IsValidLz4FrameAt(const fs::path &path, std::uint64_t offset);
+
+struct TransportSignature {
+    std::string format;
+    std::vector<unsigned char> bytes;
+    UInt32 offset = 0;
+};
+
+const std::vector<TransportSignature> &TransportSignatures() {
+    static const std::vector<TransportSignature> signatures = [] {
+        std::vector<TransportSignature> result;
+        UInt32 format_count = 0;
+        if (GetNumberOfFormats(&format_count) == S_OK) {
+            for (UInt32 index = 0; index < format_count; ++index) {
+                const std::string format = FormatName(index);
+                if (kTransportFormats.count(format) == 0) continue;
+                std::vector<std::vector<Byte>> handler_signatures;
+                UInt32 signature_offset = 0;
+                if (!HandlerSignatures(index, &handler_signatures, &signature_offset))
+                    continue;
+                for (auto &signature : handler_signatures) {
+                    // One- and two-byte markers are too common inside media payloads
+                    // to identify an embedded archive without expensive trial opens.
+                    if (signature.size() < 3) continue;
+                    result.push_back({format,
+                                      std::vector<unsigned char>(signature.begin(),
+                                                                 signature.end()),
+                                      signature_offset});
+                }
+            }
+        }
+        result.push_back({"lz4", {0x04, 0x22, 0x4d, 0x18}, 0});
+        std::stable_sort(result.begin(), result.end(),
+                         [](const TransportSignature &left,
+                            const TransportSignature &right) {
+                             return left.bytes.size() > right.bytes.size();
+                         });
+        return result;
+    }();
+    return signatures;
+}
 
 EmbeddedMatch FindEmbeddedTransport(const fs::path &path,
                                     const ProgressCallback &progress = {}) {
-    const std::vector<std::pair<std::string, std::vector<unsigned char>>> signatures = {
-        {"7z", {0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c}},
-        {"zip", {'P', 'K', 0x03, 0x04}},
-        {"zip", {'P', 'K', 0x05, 0x06}},
-        {"zip", {'P', 'K', 0x06, 0x06}},
-        {"rar", {'R', 'a', 'r', '!', 0x1a, 0x07}},
-        {"rar5", {'R', 'a', 'r', '!', 0x1a, 0x07, 0x01, 0x00}},
-        {"lz4", {0x04, 0x22, 0x4d, 0x18}},
-    };
+    const auto &signatures = TransportSignatures();
     std::ifstream input(path, std::ios::binary);
     if (!input) return {};
     std::error_code size_error;
     const auto total_size = fs::file_size(path, size_error);
     constexpr std::size_t kChunk = 1024 * 1024;
-    constexpr std::size_t kOverlap = 16;
-    std::vector<unsigned char> buffer(kChunk + kOverlap);
+    const std::size_t longest_signature = std::accumulate(
+        signatures.begin(), signatures.end(), std::size_t{0},
+        [](std::size_t longest, const TransportSignature &signature) {
+            return std::max(longest, signature.bytes.size() + signature.offset);
+        });
+    const std::size_t overlap = longest_signature > 1 ? longest_signature - 1 : 0;
+    std::vector<unsigned char> buffer(kChunk + overlap);
     std::size_t carried = 0;
     std::uint64_t absolute = 0;
     while (input && absolute < kMaxSignatureScan) {
@@ -156,16 +196,18 @@ EmbeddedMatch FindEmbeddedTransport(const fs::path &path,
         const std::size_t available = carried + read;
         for (const auto &entry : signatures) {
             const auto found = std::search(buffer.begin(), buffer.begin() + available,
-                                           entry.second.begin(), entry.second.end());
+                                           entry.bytes.begin(), entry.bytes.end());
             if (found != buffer.begin() + available) {
-                const auto offset = absolute - carried +
+                const auto signature_position = absolute - carried +
                     static_cast<std::uint64_t>(found - buffer.begin());
-                if (entry.first != "lz4" || IsValidLz4FrameAt(path, offset))
-                    return {offset, entry.first};
+                if (signature_position < entry.offset) continue;
+                const auto archive_offset = signature_position - entry.offset;
+                if (entry.format != "lz4" || IsValidLz4FrameAt(path, archive_offset))
+                    return {archive_offset, entry.format};
             }
         }
         if (read == 0) break;
-        carried = std::min(kOverlap, available);
+        carried = std::min(overlap, available);
         std::copy(buffer.begin() + available - carried, buffer.begin() + available, buffer.begin());
         absolute += read;
         if (progress) progress(absolute, size_error ? 0 : total_size);
@@ -760,10 +802,13 @@ bool ExtractOne(const fs::path &source, const fs::path &destination,
     std::vector<std::string> passwords = options.passwords;
     if (passwords.empty()) passwords.push_back(options.password);
     bool opened_archive = false;
-    for (const std::string &password : passwords) {
+    std::size_t selected_password = 0;
+    for (std::size_t password_index = 0; password_index < passwords.size(); ++password_index) {
+        const std::string &password = passwords[password_index];
         resolved_options.password = password;
         if (OpenRecognized(source, password, &opened, &open_error, &embedded_match, progress)) {
             opened_archive = true;
+            selected_password = password_index;
             break;
         }
     }
@@ -800,6 +845,21 @@ bool ExtractOne(const fs::path &source, const fs::path &destination,
                                     (opened.encrypted && options.password.empty());
         result->error = callback_impl->error.empty()
             ? "7-Zip failed to extract the archive" : callback_impl->error;
+        // Opening an encrypted archive with an empty or stale password can succeed
+        // for metadata, while extraction fails. Reopen and retry the remaining
+        // candidates so nested password-protected archives do not abort the whole import.
+        if (selected_password + 1 < passwords.size()) {
+            std::error_code retry_ec;
+            fs::remove_all(destination, retry_ec);
+            if (total_bytes != nullptr) *total_bytes = 0;
+            if (total_files != nullptr) *total_files = 0;
+            ExtractOptions retry_options = options;
+            retry_options.passwords.assign(passwords.begin() + selected_password + 1,
+                                           passwords.end());
+            retry_options.password.clear();
+            return ExtractOne(source, destination, retry_options, result,
+                              total_bytes, total_files, progress);
+        }
         return false;
     }
     result->format = opened.format;

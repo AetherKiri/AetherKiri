@@ -7904,10 +7904,10 @@ func _extract_and_import_archive(path: String, probe: Dictionary, password: Stri
     for known_password in known_passwords:
         if not known_password.is_empty() and not candidates.has(known_password):
             candidates.append(known_password)
-    candidates.append("")
     for stored in _load_archive_passwords():
         if not candidates.has(stored):
             candidates.append(stored)
+    candidates.append("")
     archive_import_operation = "extract"
     archive_import_context = {
         "path": path,
@@ -7972,8 +7972,6 @@ func _poll_archive_import() -> void:
         return
     var output_path := String(result.get("output_path", "")).simplify_path()
     var game_path := _find_importable_game_root(output_path)
-    if game_path.is_empty() and DirAccess.dir_exists_absolute(output_path):
-        game_path = output_path
     archive_import_operation = ""
     _hide_archive_progress()
     if game_path.is_empty():
@@ -7991,6 +7989,7 @@ func _find_importable_game_root(root: String) -> String:
         return ""
     var queue: Array = [[root, 0]]
     var best := ""
+    var best_score := -1
     var best_depth := -1
     var visited := 0
     while not queue.is_empty() and visited < 4096:
@@ -8003,19 +8002,42 @@ func _find_importable_game_root(root: String) -> String:
             continue
         var files := dir.get_files()
         var has_xp3 := false
+        var has_pfs := false
         var has_exe := false
         var has_ons := false
         var has_system := false
+        var has_data_xp3 := false
+        var has_bgimage_xp3 := false
         for file_name in files:
             var lower := String(file_name).to_lower()
             has_xp3 = has_xp3 or lower.ends_with(".xp3")
+            has_pfs = has_pfs or lower.ends_with(".pfs") or lower.contains("pfs")
+            has_data_xp3 = has_data_xp3 or lower == "data.xp3"
+            has_bgimage_xp3 = has_bgimage_xp3 or lower == "bgimage.xp3"
             has_exe = has_exe or lower.ends_with(".exe")
             has_ons = has_ons or lower == "0.txt" or lower == "nscript.dat" or lower == "nscr_sec.dat"
+            has_ons = has_ons or lower.contains("onscripter") or lower.contains("onscript")
             has_system = has_system or lower == "system.ini"
         var system_dir := current.path_join("system")
         var has_artemis: bool = has_system and FileAccess.file_exists(system_dir.path_join("first.iet"))
-        if (has_xp3 or has_exe or has_ons or has_artemis) and depth >= best_depth:
+        var score := 0
+        if has_data_xp3:
+            score += 8
+        if has_bgimage_xp3:
+            score += 4
+        if has_exe:
+            score += 6
+        if has_ons:
+            score += 5
+        if has_artemis:
+            score += 5
+        if has_xp3:
+            score += 1
+        if has_pfs:
+            score += 7
+        if score > 0 and (score > best_score or (score == best_score and depth > best_depth)):
             best = current
+            best_score = score
             best_depth = depth
         if depth >= 12:
             continue
