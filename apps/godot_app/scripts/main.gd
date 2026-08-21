@@ -51,6 +51,7 @@ const RUNTIME_DEFAULT_FONT_FILE := "default.otf"
 const RUNTIME_SYMBOL_FONT_FILE := "symbols.ttf"
 const ProbeConfig = preload("res://scripts/probe_config.gd")
 const GameInputMapping = preload("res://scripts/game_input_mapping.gd")
+const OnsVirtualControls = preload("res://scripts/ons_virtual_controls.gd")
 const DiagnosticSession = preload("res://scripts/diagnostic_session.gd")
 const DiagnosticLocalization = preload("res://scripts/diagnostic_localization.gd")
 const DebugConsole = preload("res://scripts/debug_console.gd")
@@ -1518,6 +1519,7 @@ var settings_view: ScrollContainer
 var detail_view: Control
 var detail_scroll: ScrollContainer
 var game_view: Control
+var ons_virtual_controls
 var modal_layer: Control
 var active_modal_scrim: ColorRect
 var active_modal_dialog: Control
@@ -2192,6 +2194,13 @@ func _build_ui() -> void:
     game_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
     game_view.visible = false
     add_child(game_view)
+
+    ons_virtual_controls = OnsVirtualControls.new()
+    add_child(ons_virtual_controls)
+    ons_virtual_controls.setup(ui_tokens)
+    ons_virtual_controls.key_event_requested.connect(
+        _on_ons_virtual_key_event
+    )
 
     _build_video_view()
 
@@ -3744,6 +3753,8 @@ func _fit_full_rects() -> void:
     _layout_modal_safe_area(safe_rect)
     _layout_video_safe_area(window_size, safe_rect)
     _layout_game_viewport(window_size)
+    if ons_virtual_controls != null:
+        ons_virtual_controls.layout(window_size, safe_rect)
     _layout_shell(safe_rect.size)
     _layout_shell_safe_area_fills(window_size, safe_rect)
     var compact_shell := AetherDisplayScale.use_compact_shell(safe_rect.size)
@@ -11810,6 +11821,7 @@ func _process(delta: float) -> void:
     _poll_native_launch_file_picker()
     _poll_native_cover_file_picker()
     _fit_full_rects()
+    _sync_ons_virtual_controls()
     _process_iap(delta)
     _update_advanced_tool_timeouts()
     _flush_log_view_if_needed(delta)
@@ -11834,6 +11846,7 @@ func _process(delta: float) -> void:
             startup_poll_accum = 0.0
             cached_startup_state = player.get_startup_state()
             startup_state = cached_startup_state
+            _sync_ons_virtual_controls()
         if startup_state == STARTUP_SUCCEEDED:
             restart_notice.text = ""
             if loading_panel != null and loading_panel.visible:
@@ -11893,6 +11906,7 @@ func _process(delta: float) -> void:
                     perf_log_file.store_line(tick_error_line)
                     perf_log_file.flush()
                 game_running = false
+                _sync_ons_virtual_controls()
                 _deactivate_game_text_input()
                 _sync_debug_console_state()
                 if diagnostic_session != null:
@@ -11940,6 +11954,7 @@ func _process(delta: float) -> void:
             viewport.visible = false
             game_view.visible = false
             game_running = false
+            _sync_ons_virtual_controls()
             _deactivate_game_text_input()
             _sync_debug_console_state()
             if diagnostic_session != null:
@@ -12755,6 +12770,8 @@ func _capture_main_view(frame_stats: Dictionary) -> void:
         get_tree().quit(0 if visible > 0 else 2)
 
 func _clear_game_input_capture() -> void:
+    if ons_virtual_controls != null:
+        ons_virtual_controls.set_enabled(false)
     _deactivate_game_text_input()
     active_touch_points.clear()
     active_mouse_buttons.clear()
@@ -13495,6 +13512,8 @@ func _input(event: InputEvent) -> void:
         return
     if diagnostic_session != null and diagnostic_session.routes_pointer_to_marker(event):
         return
+    if ons_virtual_controls != null and ons_virtual_controls.routes_pointer(event):
+        return
     # Platform dialogs are real Godot Controls, matching CDialog's host-owned
     # modal. Leave their events unhandled so LineEdit/Button GUI dispatch owns
     # them, and never pass the same event through to the game.
@@ -13681,6 +13700,41 @@ func _can_forward_game_input() -> bool:
     return game_running and viewport.visible and cached_startup_state == STARTUP_SUCCEEDED and not loading_blocks_input and (
         modal_layer == null or not modal_layer.visible
     )
+
+func _sync_ons_virtual_controls() -> void:
+    if ons_virtual_controls == null:
+        return
+    ons_virtual_controls.set_enabled(
+        _is_touch_platform()
+        and active_runtime_kind == RUNTIME_ONSCRIPTER
+        and _can_forward_game_input()
+        and not app_lifecycle_paused
+    )
+
+func _on_ons_virtual_key_event(
+    pressed: bool,
+    key_code: int,
+    modifiers: int
+) -> void:
+    if player == null or active_runtime_kind != RUNTIME_ONSCRIPTER:
+        return
+    if pressed and not _can_forward_game_input():
+        return
+    if not pressed and not game_running:
+        return
+    var result := int(player.send_key_event(pressed, key_code, modifiers, 0))
+    input_trace_forwarded += 1
+    if result != ENGINE_RESULT_OK:
+        input_trace_send_failed += 1
+    if input_trace_enabled:
+        _write_probe_marker(
+            "ons_virtual_key pressed=%s key=0x%02X modifiers=0x%02X result=%d" % [
+                str(pressed),
+                key_code,
+                modifiers,
+                result,
+            ]
+        )
 
 func _is_game_pointer_event(event: InputEvent) -> bool:
     return event is InputEventMouseButton or event is InputEventMouseMotion or event is InputEventScreenTouch or event is InputEventScreenDrag or event is InputEventPanGesture
