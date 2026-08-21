@@ -906,6 +906,8 @@ ExtractResult ExtractRecursive(const std::string &path,
     const fs::path root = UniqueDestination(fs::u8path(destination), ArchiveStem(source));
     std::uint64_t total_bytes = 0;
     std::uint32_t total_files = 0;
+    std::set<std::string> processed_archives;
+    processed_archives.insert(fs::weakly_canonical(source).u8string());
     if (!ExtractOne(source, root, options, &result, &total_bytes, &total_files, progress)) {
         std::error_code ignored;
         fs::remove_all(root, ignored);
@@ -920,6 +922,8 @@ ExtractResult ExtractRecursive(const std::string &path,
         for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
              it != end && !ec; it.increment(ec)) {
             if (!it->is_regular_file(ec)) continue;
+            const std::string candidate_path = fs::weakly_canonical(it->path()).u8string();
+            if (processed_archives.count(candidate_path) != 0) continue;
             OpenArchive probe;
             std::string probe_error;
             EmbeddedMatch probe_match;
@@ -950,6 +954,7 @@ ExtractResult ExtractRecursive(const std::string &path,
                 return result;
             }
             result.extracted_archives.push_back(nested_source.u8string());
+            processed_archives.insert(fs::weakly_canonical(nested_source).u8string());
             fs::remove(nested_source, ec);
             extracted_any = true;
         }

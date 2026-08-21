@@ -7849,7 +7849,7 @@ func _show_archive_extract_confirmation(path: String, probe: Dictionary,
     var body := Label.new()
     body.text = _t("dialog.archive_confirm_body", [String(probe.get("format", "archive")).to_upper(), path.get_file()])
     if password_prompt:
-        body.text += "\n\n" + ("检测到嵌套压缩内容需要密码。输入正确密码后继续，或取消本次导入。" if active_language == LANG_ZH_HANS else "A nested archive requires a password. Enter it to continue, or cancel this import.")
+        body.text += "\n\n" + ("检测到此归档或其中的压缩内容需要密码。输入正确密码后继续，或取消本次导入。" if active_language == LANG_ZH_HANS else "This archive or its contents require a password. Enter it to continue, or cancel this import.")
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     body.size_flags_vertical = Control.SIZE_EXPAND_FILL
     box.add_child(body)
@@ -7963,7 +7963,8 @@ func _poll_archive_import() -> void:
         if not bool(result.get("recognized", false)):
             _show_message(String(result.get("error", _t("message.archive_unrecognized"))))
             return
-        _show_archive_extract_confirmation(path, result)
+        var encrypted := bool(result.get("encrypted", false))
+        _show_archive_extract_confirmation(path, result, encrypted, "", _load_archive_passwords())
         return
     if not bool(result.get("ok", false)):
         if bool(result.get("password_required", false)):
