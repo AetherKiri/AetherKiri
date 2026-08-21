@@ -459,6 +459,11 @@ public:
     // to the scratch layer. The destination's previous image becomes the next
     // reusable scratch buffer.
     void AssignMotionImages(tTJSNI_BaseLayer *src);
+    // Transfer a completed producer image into this display layer and return
+    // this layer's previous image to the producer for its next update. This
+    // keeps streaming producers from writing into a texture already visible
+    // in the layer tree.
+    bool ExchangeMainImage(tTVPBaseTexture *&bitmap);
 
     void AssignMainImage(iTVPBaseBitmap *bmp);
     // assign single main bitmap image. the image size assigned must

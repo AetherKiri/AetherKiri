@@ -4918,6 +4918,30 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
 }
 
 //---------------------------------------------------------------------------
+bool tTJSNI_BaseLayer::ExchangeMainImage(tTVPBaseTexture *&bitmap) {
+    if(!bitmap || MainImage == bitmap)
+        return false;
+    if(!MainImage && _bitmapEvicted)
+        EnsureBitmap();
+    if(!MainImage || MainImage->GetWidth() != bitmap->GetWidth() ||
+       MainImage->GetHeight() != bitmap->GetHeight() ||
+       MainImage->GetBPP() != bitmap->GetBPP()) {
+        return false;
+    }
+
+    // Swap bitmap objects instead of assigning the producer texture. The
+    // producer can then reuse the returned display image without triggering
+    // a full copy-on-write clone of the frame that is currently visible.
+    std::swap(MainImage, bitmap);
+    FontChanged = true;
+    InternalSetImageSize(MainImage->GetWidth(), MainImage->GetHeight());
+    ResetClip();
+    ImageModified = true;
+    Update(false);
+    return true;
+}
+
+//---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::AssignMainImageWithUpdate(iTVPBaseBitmap *bmp) {
     // assign images
     bool main_changed = true;
