@@ -100,6 +100,8 @@ int32_t aether_native_cover_file_picker_present(
     const char *destination_directory);
 char *aether_native_launch_file_picker_copy_result_json();
 void aether_native_launch_file_picker_free_string(char *value);
+char *aether_native_inbox_take_file();
+void aether_native_inbox_free_string(char *value);
 }
 #endif
 
@@ -9864,6 +9866,20 @@ void main() {
 #endif
     }
 
+    String native_inbox_take_file() const {
+#if defined(__APPLE__)
+        char *file = aether_native_inbox_take_file();
+        if (file == nullptr) {
+            return "";
+        }
+        const String result = String::utf8(file);
+        aether_native_inbox_free_string(file);
+        return result;
+#else
+        return "";
+#endif
+    }
+
     int64_t probe_runtime(const String &runtime_id,
                           const String &game_root_path) const {
         const CharString runtime_utf8 = runtime_id.utf8();
@@ -10145,6 +10161,9 @@ protected:
         ClassDB::bind_method(
             D_METHOD("native_launch_file_picker_take_result_json"),
             &AetherRuntimePlayer::native_launch_file_picker_take_result_json);
+        ClassDB::bind_method(
+            D_METHOD("native_inbox_take_file"),
+            &AetherRuntimePlayer::native_inbox_take_file);
         ClassDB::bind_method(D_METHOD("probe_runtime", "runtime_id", "game_root_path"),
                              &AetherRuntimePlayer::probe_runtime);
         ClassDB::bind_method(D_METHOD("archive_import_probe", "path"),

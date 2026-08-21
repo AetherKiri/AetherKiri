@@ -8017,8 +8017,37 @@ func _cleanup_source_archive_if_requested() -> void:
                 DirAccess.remove_absolute(src.path_join(f))
             DirAccess.remove_absolute(src)
 
+func _tree_has_archives(root: String, max_depth: int = 10) -> bool:
+    if root.is_empty() or not DirAccess.dir_exists_absolute(root):
+        return false
+    var archive_extensions := [
+        "7z", "zip", "rar", "tar", "gz", "bz2", "xz", "iso", "001",
+        "mp4", "mkv", "bin", "dat"
+    ]
+    var queue: Array = [[root, 0]]
+    var visited := 0
+    while not queue.is_empty() and visited < 4096:
+        var item: Array = queue.pop_front()
+        var current: String = item[0]
+        var depth: int = item[1]
+        visited += 1
+        var dir := DirAccess.open(current)
+        if dir == null:
+            continue
+        for file_name in dir.get_files():
+            var ext := String(file_name).get_extension().to_lower()
+            if ext in archive_extensions:
+                return true
+        if depth >= max_depth:
+            continue
+        for subdir in dir.get_directories():
+            queue.append([current.path_join(String(subdir)), depth + 1])
+    return false
+
 func _find_importable_game_root(root: String) -> String:
     if root.is_empty() or not DirAccess.dir_exists_absolute(root):
+        return ""
+    if _tree_has_archives(root):
         return ""
     var queue: Array = [[root, 0]]
     var best := ""
@@ -9124,14 +9153,7 @@ func _scan_ios_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
     while not entry.is_empty():
         if not entry.begins_with("."):
             var path := root.path_join(entry)
-            var is_archive := false
-            var ext := entry.get_extension().to_lower()
-            if ext in ["7z", "zip", "rar", "tar", "gz", "bz2", "xz", "iso", "001"]:
-                is_archive = true
-            if is_archive:
-                if archive_import_operation.is_empty():
-                    _probe_archive_import(path, true)
-            elif dir.current_is_dir() or entry.to_lower().ends_with(".xp3"):
+            if dir.current_is_dir() or entry.to_lower().ends_with(".xp3"):
                 var game: Dictionary = by_entry.get(entry, _game_info_from_path(path))
                 game["path"] = path
                 next.append(game)
@@ -9142,11 +9164,42 @@ func _poll_ios_inbox(delta: float) -> void:
     if OS.get_name() != "iOS":
         return
     ios_inbox_poll_accum += delta
-    if ios_inbox_poll_accum < 1.0:
+    if ios_inbox_poll_accum < 0.5:
         return
     ios_inbox_poll_accum = 0.0
     if not archive_import_operation.is_empty():
         return
+
+    # Check incoming URLs forwarded by iOS OpenURL / ShareSheet hook
+    if player != null and player.has_method("native_inbox_take_file"):
+        var incoming_file: String = player.native_inbox_take_file()
+        if not incoming_file.is_empty():
+            var file_path := incoming_file
+            if file_path.begins_with("file://"):
+                file_path = file_path.substr(7).uri_decode()
+            if DirAccess.dir_exists_absolute(file_path):
+                var games_root := ProjectSettings.globalize_path("user://Games")
+                DirAccess.make_dir_recursive_absolute(games_root)
+                var dest := games_root.path_join(file_path.get_file())
+                _copy_dir_recursive(file_path, dest)
+                _delete_dir_recursive(file_path)
+                _add_game_path(dest)
+                return
+            elif FileAccess.file_exists(file_path):
+                var ext := file_path.get_extension().to_lower()
+                if ext in ["7z", "zip", "rar", "tar", "gz", "bz2", "xz", "iso", "001", "mp4", "mkv", "bin", "dat"]:
+                    _probe_archive_import(file_path, true)
+                    return
+                elif ext == "xp3":
+                    var games_root := ProjectSettings.globalize_path("user://Games")
+                    DirAccess.make_dir_recursive_absolute(games_root)
+                    var dest := games_root.path_join(file_path.get_file())
+                    DirAccess.copy_absolute(file_path, dest)
+                    DirAccess.remove_absolute(file_path)
+                    _add_game_path(dest)
+                    return
+
+    # Also scan Documents/Inbox in case system placed it directly without openURL or before start
     var documents := OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
     if documents.is_empty():
         return
@@ -9273,7 +9326,8 @@ func _add_game_dictionary(game: Dictionary) -> bool:
         next.append(final_game)
     _save_game_list(_dedupe_games(next))
     ProjectSettings.set_setting(GAME_PATH_KEY, path)
-    game_path.text = path
+    if game_path != null:
+        game_path.text = path
     _refresh_games()
     if not replaced:
         _offer_scrape_after_add(final_game)

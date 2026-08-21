@@ -18,6 +18,7 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
     private let lock = NSLock()
     private var presenting = false
     private var resultJSON: String?
+    private var pendingInboxFiles: [String] = []
 
 #if os(iOS)
     private var documentPicker: UIDocumentPickerViewController?
@@ -28,6 +29,11 @@ private final class AetherNativeLaunchFilePicker: NSObject, @unchecked Sendable 
 
     private override init() {
         super.init()
+        #if os(iOS)
+        if let gdtClass = NSClassFromString("GDTApplicationDelegate") as AnyObject as? NSObjectProtocol {
+            _ = (gdtClass as AnyObject).perform(NSSelectorFromString("addService:"), with: self)
+        }
+        #endif
     }
 
     private func present(
@@ -303,8 +309,109 @@ extension AetherNativeLaunchFilePicker: UIDocumentPickerDelegate {
         documentPicker = nil
         complete(status: "cancelled")
     }
+
+    @objc(scene:openURLContexts:)
+    public func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        for context in URLContexts {
+            enqueueIncomingURL(context.url)
+        }
+    }
+
+    @objc(application:openURL:options:)
+    public func application(
+        _ app: UIApplication,
+        open url: URL,
+        options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+    ) -> Bool {
+        enqueueIncomingURL(url)
+        return true
+    }
+
+    private func enqueueIncomingURL(_ url: URL) {
+        var isDir: ObjCBool = false
+        let fileManager = FileManager.default
+        let path = url.path
+        guard fileManager.fileExists(atPath: path, isDirectory: &isDir) else {
+            return
+        }
+
+        let accessGranted = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessGranted {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let incomingDir = documentsURL.appendingPathComponent("Incoming", isDirectory: true)
+        try? fileManager.createDirectory(at: incomingDir, withIntermediateDirectories: true, attributes: nil)
+
+        let targetURL = incomingDir.appendingPathComponent(url.lastPathComponent)
+        try? fileManager.removeItem(at: targetURL)
+        do {
+            try fileManager.copyItem(at: url, to: targetURL)
+            lock.lock()
+            pendingInboxFiles.append(targetURL.path)
+            lock.unlock()
+        } catch {
+            // fallback: keep original path if copy fails
+            lock.lock()
+            pendingInboxFiles.append(path)
+            lock.unlock()
+        }
+    }
+
+    private func checkInboxDirectory() {
+        let fileManager = FileManager.default
+        guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let inboxURL = documentsURL.appendingPathComponent("Inbox", isDirectory: true)
+        let incomingURL = documentsURL.appendingPathComponent("Incoming", isDirectory: true)
+        for folderURL in [inboxURL, incomingURL] {
+            guard let contents = try? fileManager.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+                continue
+            }
+            for item in contents {
+                lock.lock()
+                if !pendingInboxFiles.contains(item.path) {
+                    pendingInboxFiles.append(item.path)
+                }
+                lock.unlock()
+            }
+        }
+    }
+
+    func takeInboxFile() -> String? {
+        checkInboxDirectory()
+        lock.lock()
+        defer { lock.unlock() }
+        if pendingInboxFiles.isEmpty {
+            return nil
+        }
+        return pendingInboxFiles.removeFirst()
+    }
 }
 #endif
+
+@_cdecl("aether_native_inbox_take_file")
+public func aetherNativeInboxTakeFile() -> UnsafeMutablePointer<CChar>? {
+    #if os(iOS)
+    guard let file = AetherNativeLaunchFilePicker.shared.takeInboxFile() else {
+        return nil
+    }
+    return strdup(file)
+    #else
+    return nil
+    #endif
+}
+
+@_cdecl("aether_native_inbox_free_string")
+public func aetherNativeInboxFreeString(_ pointer: UnsafeMutablePointer<CChar>?) {
+    free(pointer)
+}
 
 @_cdecl("aether_native_launch_file_picker_present")
 public func aetherNativeLaunchFilePickerPresent(
