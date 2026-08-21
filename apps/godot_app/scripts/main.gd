@@ -7970,9 +7970,13 @@ func _poll_archive_import() -> void:
         if bool(result.get("password_required", false)):
             archive_import_operation = ""
             _hide_archive_progress()
+            var pending_archive := String(result.get("pending_archive", "")).get_file()
+            var retry_probe: Dictionary = archive_import_context.get("probe", {}).duplicate()
+            if not pending_archive.is_empty():
+                retry_probe["format"] = pending_archive.get_extension()
             _show_archive_extract_confirmation(
                 String(archive_import_context.get("path", "")),
-                archive_import_context.get("probe", {}), true, "",
+                retry_probe, true, "",
                 archive_import_context.get("candidates", []))
             return
         archive_import_operation = ""

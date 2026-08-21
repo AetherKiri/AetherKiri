@@ -9973,6 +9973,7 @@ void main() {
             output["output_path"] = String::utf8(archive_import_extract_result_.output_path.c_str());
             output["format"] = String::utf8(archive_import_extract_result_.format.c_str());
             output["error"] = String::utf8(archive_import_extract_result_.error.c_str());
+            output["pending_archive"] = String::utf8(archive_import_extract_result_.pending_archive.c_str());
             PackedStringArray archives;
             for (const auto &archive : archive_import_extract_result_.extracted_archives)
                 archives.push_back(String::utf8(archive.c_str()));

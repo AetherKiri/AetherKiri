@@ -924,6 +924,17 @@ ExtractResult ExtractRecursive(const std::string &path,
             if (!it->is_regular_file(ec)) continue;
             const std::string candidate_path = fs::weakly_canonical(it->path()).u8string();
             if (processed_archives.count(candidate_path) != 0) continue;
+            std::string extension = it->path().extension().u8string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            const bool archive_extension = extension == ".7z" || extension == ".rar" ||
+                extension == ".zip" || extension == ".001" || extension == ".tar" ||
+                extension == ".gz" || extension == ".bz2" || extension == ".xz" ||
+                extension == ".lz4";
+            if (archive_extension) {
+                nested.push_back(it->path());
+                continue;
+            }
             OpenArchive probe;
             std::string probe_error;
             EmbeddedMatch probe_match;
@@ -931,9 +942,11 @@ ExtractResult ExtractRecursive(const std::string &path,
                                &probe_match, {}, false)) {
                 probe.archive->Close();
                 nested.push_back(it->path());
-            } else if (!probe_match.format.empty() &&
-                       probe_error == "The archive password is missing or incorrect") {
-                nested.push_back(it->path());
+            } else {
+                if ((!probe_match.format.empty() &&
+                     probe_error == "The archive password is missing or incorrect") ||
+                    archive_extension)
+                    nested.push_back(it->path());
             }
         }
         if (nested.empty()) break;
@@ -949,6 +962,7 @@ ExtractResult ExtractRecursive(const std::string &path,
                 nested_source.parent_path(), ArchiveStem(nested_source));
             if (!ExtractOne(nested_source, nested_destination, options, &result,
                             &total_bytes, &total_files, progress)) {
+                result.pending_archive = nested_source.u8string();
                 std::error_code ignored;
                 fs::remove_all(root, ignored);
                 return result;

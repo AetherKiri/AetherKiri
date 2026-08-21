@@ -31,6 +31,7 @@ struct ExtractResult {
     std::string output_path;
     std::string format;
     std::string error;
+    std::string pending_archive;
     std::vector<std::string> extracted_archives;
 };
 
