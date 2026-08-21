@@ -1664,6 +1664,8 @@ var native_cover_file_picker_pending := false
 var native_cover_file_picker_library_path := ""
 var archive_import_operation := ""
 var archive_import_context := {}
+var archive_import_cleanup_source_path := ""
+var ios_inbox_poll_accum := 0.0
 var active_game_path := ""
 var active_game_started_msec := 0
 var active_runtime_kind := RUNTIME_KIRIKIRI
@@ -7833,12 +7835,14 @@ func _open_archive_import_dialog() -> void:
     add_child(dialog)
     dialog.popup_centered(Vector2i(900, 640))
 
-func _probe_archive_import(path: String) -> void:
+func _probe_archive_import(path: String, cleanup_source: bool = false) -> void:
     if not player.archive_import_begin_probe(path):
         _show_message(_t("message.archive_failed", [_t("message.unknown_error")]))
         return
     archive_import_operation = "probe"
     archive_import_context = {"path": path}
+    if cleanup_source:
+        archive_import_cleanup_source_path = path
     _show_archive_progress(_t("archive.progress_probe"))
 
 func _show_archive_extract_confirmation(path: String, probe: Dictionary,
@@ -7993,9 +7997,25 @@ func _poll_archive_import() -> void:
     if _add_game_path(game_path):
         for candidate in archive_import_context.get("candidates", []):
             _remember_archive_password(String(candidate))
+        _cleanup_source_archive_if_requested()
     else:
         _show_message(_t("message.archive_failed", [_t("message.unknown_error")]))
     archive_import_context = {}
+
+func _cleanup_source_archive_if_requested() -> void:
+    if archive_import_cleanup_source_path.is_empty():
+        return
+    var src := archive_import_cleanup_source_path
+    archive_import_cleanup_source_path = ""
+    if FileAccess.file_exists(src):
+        DirAccess.remove_absolute(src)
+    elif DirAccess.dir_exists_absolute(src):
+        # If it was an inbox directory
+        var dir := DirAccess.open(src)
+        if dir != null:
+            for f in dir.get_files():
+                DirAccess.remove_absolute(src.path_join(f))
+            DirAccess.remove_absolute(src)
 
 func _find_importable_game_root(root: String) -> String:
     if root.is_empty() or not DirAccess.dir_exists_absolute(root):
@@ -9104,12 +9124,111 @@ func _scan_ios_games_dir(existing: Array[Dictionary]) -> Array[Dictionary]:
     while not entry.is_empty():
         if not entry.begins_with("."):
             var path := root.path_join(entry)
-            if dir.current_is_dir() or entry.to_lower().ends_with(".xp3"):
+            var is_archive := false
+            var ext := entry.get_extension().to_lower()
+            if ext in ["7z", "zip", "rar", "tar", "gz", "bz2", "xz", "iso", "001"]:
+                is_archive = true
+            if is_archive:
+                if archive_import_operation.is_empty():
+                    _probe_archive_import(path, true)
+            elif dir.current_is_dir() or entry.to_lower().ends_with(".xp3"):
                 var game: Dictionary = by_entry.get(entry, _game_info_from_path(path))
                 game["path"] = path
                 next.append(game)
         entry = dir.get_next()
     return _dedupe_games(next)
+
+func _poll_ios_inbox(delta: float) -> void:
+    if OS.get_name() != "iOS":
+        return
+    ios_inbox_poll_accum += delta
+    if ios_inbox_poll_accum < 1.0:
+        return
+    ios_inbox_poll_accum = 0.0
+    if not archive_import_operation.is_empty():
+        return
+    var documents := OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
+    if documents.is_empty():
+        return
+    var inbox := documents.path_join("Inbox")
+    if not DirAccess.dir_exists_absolute(inbox):
+        return
+    var dir := DirAccess.open(inbox)
+    if dir == null:
+        return
+    dir.list_dir_begin()
+    var entry := dir.get_next()
+    while not entry.is_empty():
+        if not entry.begins_with("."):
+            var src_file := inbox.path_join(entry)
+            var ext := entry.get_extension().to_lower()
+            if ext in ["7z", "zip", "rar", "tar", "gz", "bz2", "xz", "iso", "001", "mp4", "mkv", "bin", "dat"]:
+                _probe_archive_import(src_file, true)
+                break
+            elif dir.current_is_dir() or ext == "xp3":
+                # Copy or move game folder/file to user://Games
+                var games_root := ProjectSettings.globalize_path("user://Games")
+                DirAccess.make_dir_recursive_absolute(games_root)
+                var dest := games_root.path_join(entry)
+                if dir.current_is_dir():
+                    _copy_dir_recursive(src_file, dest)
+                    _delete_dir_recursive(src_file)
+                else:
+                    DirAccess.copy_absolute(src_file, dest)
+                    DirAccess.remove_absolute(src_file)
+                _add_game_path(dest)
+                break
+        entry = dir.get_next()
+
+func _copy_dir_recursive(from: String, to: String) -> void:
+    DirAccess.make_dir_recursive_absolute(to)
+    var dir := DirAccess.open(from)
+    if dir == null:
+        return
+    dir.list_dir_begin()
+    var entry := dir.get_next()
+    while not entry.is_empty():
+        if not entry.begins_with("."):
+            var src := from.path_join(entry)
+            var dst := to.path_join(entry)
+            if dir.current_is_dir():
+                _copy_dir_recursive(src, dst)
+            else:
+                DirAccess.copy_absolute(src, dst)
+        entry = dir.get_next()
+
+func _delete_dir_recursive(path: String) -> void:
+    var dir := DirAccess.open(path)
+    if dir == null:
+        return
+    dir.list_dir_begin()
+    var entry := dir.get_next()
+    while not entry.is_empty():
+        if not entry.begins_with("."):
+            var child := path.path_join(entry)
+            if dir.current_is_dir():
+                _delete_dir_recursive(child)
+            else:
+                DirAccess.remove_absolute(child)
+        entry = dir.get_next()
+    DirAccess.remove_absolute(path)
+
+func _on_files_dropped(files: PackedStringArray) -> void:
+    if files.is_empty():
+        return
+    for file in files:
+        var path := String(file).simplify_path()
+        if DirAccess.dir_exists_absolute(path):
+            _add_game_path(path)
+            break
+        elif FileAccess.file_exists(path):
+            var ext := path.get_extension().to_lower()
+            if ext in ["7z", "zip", "rar", "tar", "gz", "bz2", "xz", "iso", "001", "mp4", "mkv", "bin", "dat"]:
+                _probe_archive_import(path, false)
+                break
+            elif ext == "xp3":
+                _add_game_path(path)
+                break
 
 func _games_by_library_entry(existing: Array[Dictionary], root: String) -> Dictionary:
     var by_entry := {}
@@ -10089,6 +10208,7 @@ func _ready() -> void:
     DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_TRANSPARENT, false)
     _apply_initial_window_size()
     _apply_global_dpi_scale()
+    get_viewport().files_dropped.connect(_on_files_dropped)
     get_viewport().transparent_bg = false
     RenderingServer.set_default_clear_color(color_bg)
     var ios_diagnostics_enabled := OS.get_name() == "iOS" and _runtime_flag("AETHERKIRI_IOS_DIAGNOSTICS")
@@ -11943,6 +12063,7 @@ func _process(delta: float) -> void:
     _poll_native_launch_file_picker()
     _poll_native_cover_file_picker()
     _poll_archive_import()
+    _poll_ios_inbox(delta)
     _fit_full_rects()
     _process_iap(delta)
     _update_advanced_tool_timeouts()

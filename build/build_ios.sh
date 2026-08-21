@@ -467,6 +467,33 @@ EOF
             /usr/libexec/PlistBuddy \
                 -c "Add :NSBluetoothAlwaysUsageDescription string $bluetooth_purpose" \
                 "$info_plist"
+        /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleDocumentTypes array" \
+            "$info_plist" 2>/dev/null || true
+        /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleDocumentTypes:0 dict" \
+            "$info_plist" 2>/dev/null || true
+        /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleDocumentTypes:0:CFBundleTypeName string 'All Files'" \
+            "$info_plist" 2>/dev/null || true
+        /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleDocumentTypes:0:CFBundleTypeRole string Viewer" \
+            "$info_plist" 2>/dev/null || true
+        /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleDocumentTypes:0:LSHandlerRank string Alternate" \
+            "$info_plist" 2>/dev/null || true
+        /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes array" \
+            "$info_plist" 2>/dev/null || true
+        /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes:0 string public.data" \
+            "$info_plist" 2>/dev/null || true
+        /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes:1 string public.content" \
+            "$info_plist" 2>/dev/null || true
+        /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes:2 string public.item" \
+            "$info_plist" 2>/dev/null || true
     fi
 }
 
