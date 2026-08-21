@@ -88,7 +88,9 @@ static void extNagano_init() {
     addExtNaganoProvider(TJS_W("book"), TJS_W("crossfade"));
     addExtNaganoProvider(TJS_W("bookLR"), TJS_W("crossfade"));
     addExtNaganoProvider(TJS_W("bookRL"), TJS_W("crossfade"));
-    addExtNaganoProvider(TJS_W("flut" "ter"), TJS_W("universal"));
+    // flutter callers may omit the rule image required by universal.
+    // Crossfade accepts that option set and preserves the transition flow.
+    addExtNaganoProvider(TJS_W("flut" "ter"), TJS_W("crossfade"));
     addExtNaganoProvider(TJS_W("honeyturn"), TJS_W("universal"));
     addExtNaganoProvider(TJS_W("imagewipe"), TJS_W("universal"));
     addExtNaganoProvider(TJS_W("morphing"), TJS_W("crossfade"));
