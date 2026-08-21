@@ -7848,6 +7848,8 @@ func _show_archive_extract_confirmation(path: String, probe: Dictionary,
     var box := _modal_stack(dialog, _t("dialog.archive_confirm_title"), ICON_PAGE)
     var body := Label.new()
     body.text = _t("dialog.archive_confirm_body", [String(probe.get("format", "archive")).to_upper(), path.get_file()])
+    if password_prompt:
+        body.text += "\n\n" + ("检测到嵌套压缩内容需要密码。输入正确密码后继续，或取消本次导入。" if active_language == LANG_ZH_HANS else "A nested archive requires a password. Enter it to continue, or cancel this import.")
     body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     body.size_flags_vertical = Control.SIZE_EXPAND_FILL
     box.add_child(body)
@@ -7865,6 +7867,12 @@ func _show_archive_extract_confirmation(path: String, probe: Dictionary,
         _dismiss_modal(func(): _extract_and_import_archive(path, probe, entered_password, known_passwords))
     )
     box.add_child(extract)
+    if password_prompt:
+        var cancel := Button.new()
+        cancel.text = _t("dialog.cancel")
+        cancel.custom_minimum_size = Vector2(140, 48)
+        cancel.pressed.connect(_dismiss_modal)
+        box.add_child(cancel)
 
 func _load_archive_passwords() -> Array[String]:
     var cfg := ConfigFile.new()
