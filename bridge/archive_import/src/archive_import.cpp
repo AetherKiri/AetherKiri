@@ -57,7 +57,11 @@ UString Utf8ToWide(const std::string &value) {
 }
 
 FString Utf8ToFileString(const std::string &value) {
+#ifdef USE_UNICODE_FSTRING
     return us2fs(Utf8ToWide(value));
+#else
+    return FString(value.c_str());
+#endif
 }
 
 std::string VariantString(const PROPVARIANT &value) {
