@@ -47,7 +47,7 @@
     600
    ],
    "frames": 400,
-   "clicks_per_frame": 1,
+   "clicks_per_frame": 3,
    "label": "advance_story",
    "capture_every": 0,
    "after_frames": 10
