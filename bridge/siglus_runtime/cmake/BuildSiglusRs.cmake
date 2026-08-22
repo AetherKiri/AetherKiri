@@ -160,7 +160,10 @@ function(aetherkiri_add_siglus_rs imported_target)
             set(siglus_ndk_bin
                 "${siglus_ndk_home}/toolchains/llvm/prebuilt/${siglus_ndk_host_tag}/bin")
             if(EXISTS "${siglus_ndk_bin}/clang")
-                set(siglus_ndk_api 24)
+                # android-properties (via winit → android-activity) references
+                # __system_property_read_callback which exists since API 26;
+                # the app minSdk was raised to match (export_presets.cfg).
+                set(siglus_ndk_api 26)
                 # Map the Rust triple to the NDK wrapper naming scheme.
                 set(siglus_cc_name "")
                 set(siglus_cxx_name "")

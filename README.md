@@ -81,10 +81,12 @@ Godot App Shell
 | `bridge/godot_extension/` | Godot native host library entry points. |
 | `bridge/engine_api/` | C ABI used by the host layer to drive the C++ engine. |
 | `bridge/onscripter_runtime/` | Headless OnscripterYuri host, frame capture, and input bridge. |
+| `bridge/siglus_runtime/` | Siglus runtime provider plus build-time overlay (patches + FFI files) applied to the pristine `siglus_rs` sources; see `bridge/siglus_runtime/overlay/`. |
 | `cpp/core/` | KiriKiri2 runtime, visual system, audio, storage, VM, and plugin support. |
 | `cpp/plugins/` | Bundled native plugin implementations and compatibility stubs. |
 | `packages/AetherInternal/` | Optional private E-mote package submodule; public builds work without it. |
 | `packages/OnscripterYuri/` | Public OnscripterYuri git submodule. |
+| `packages/siglus_rs/` | Public siglus_rs (Rust SiglusEngine) git submodule. Kept pristine; AetherKiri-specific changes live in `bridge/siglus_runtime/overlay/`. |
 | `packages/tjs2Decompiler/` | Optional Rust helper for disassembling and analyzing compiled TJS2 bytecode; it is not linked into runtime builds. |
 | `demos/aetherkiri-kag3/` | Source tree for the built-in AetherKiri KAG3 demo. |
 | `tests/profiles/` | Per-game probe profiles. Committed profiles must not contain machine-local game paths. |
@@ -137,7 +139,7 @@ iOS and Android export presets reference the generated PNG sizes under
 | --- | --- | --- |
 | macOS | macOS 13.0 (Ventura) | The Godot app export is universal, but the current native build triplet is `arm64`; Intel support needs an `x86_64` native build. |
 | iOS / iPadOS | iOS / iPadOS 16.0 | `arm64` devices; `arm64` and `x86_64` simulator builds are available for development. |
-| Android | Android 7.0 (API 24) | The product export currently packages `arm64-v8a` only. |
+| Android | Android 8.0 (API 26) | The product export currently packages `arm64-v8a` only. |
 | Web | No OS version floor | Requires a browser with WebAssembly SIMD, WebAssembly threads, and `SharedArrayBuffer`, served with cross-origin isolation (COOP/COEP). |
 | Linux | Build from source | No official prebuilt product package; compile the `x86_64` export locally. |
 | Windows | Build from source | No official prebuilt product package; compile the native targets locally. |
@@ -146,6 +148,10 @@ iOS and Android export presets reference the generated PNG sizes under
 
 - CMake 3.28+
 - Ninja
+- Rust toolchain (rustup) with the `aarch64-linux-android` target installed
+  (`rustup target add aarch64-linux-android`) for the bundled Siglus runtime;
+  iOS/Web Siglus builds additionally need their respective targets. Builds
+  degrade gracefully to “Siglus disabled” when no Rust toolchain is found.
 - vcpkg in `.devtools/vcpkg` or available through `VCPKG_ROOT`
 - Godot at `/Applications/Godot.app` or `GODOT_BIN=/path/to/Godot`
 - Xcode for macOS/iOS exports
