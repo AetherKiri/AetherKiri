@@ -9,6 +9,9 @@
 #if defined(AETHERKIRI_WITH_ONSCRIPTER)
 #include "onscripter_runtime.h"
 #endif
+#if defined(AETHERKIRI_WITH_SIGLUS)
+#include "siglus_runtime.h"
+#endif
 #if defined(__APPLE__)
 #include "apple_external_texture.h"
 #if !defined(IOS_ENABLED)
@@ -11110,6 +11113,9 @@ void InitializeAetherRuntime(ModuleInitializationLevel level) {
 #endif
 #if defined(AETHERKIRI_WITH_ONSCRIPTER)
     aetherkiri::onscripter::RegisterRuntimeProvider();
+#endif
+#if defined(AETHERKIRI_WITH_SIGLUS)
+    aetherkiri::siglus::RegisterRuntimeProvider();
 #endif
     const engine_result_t shader_result =
         engine_set_runtime_fragment_shader_executor(
