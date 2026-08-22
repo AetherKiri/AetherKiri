@@ -228,12 +228,6 @@ target_include_directories(${PROJECT_NAME}
 
 configure_file(config.h.in config.h)
 
-install(TARGETS ${PROJECT_NAME}
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
-)
-
 install(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src/"
     DESTINATION "include/libgdiplus"
     FILES_MATCHING PATTERN "*.h" PATTERN "*.inc"
@@ -241,6 +235,7 @@ install(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src/"
 
 install(
     TARGETS libgdiplus
+    EXPORT libgdiplus-targets
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
