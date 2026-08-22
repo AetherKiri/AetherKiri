@@ -1466,6 +1466,7 @@ const POINTER_MOD_MIDDLE := 0x20
 const POINTER_MOD_CANCEL := 1 << 30
 const RUNTIME_KIRIKIRI := "kirikiri"
 const RUNTIME_ONSCRIPTER := "onscripter"
+const RUNTIME_SIGLUS := "siglus"
 const RUNTIME_PLAYER_CLASS := "AetherRuntimePlayer"
 const ONSCRIPTER_SCRIPT_MARKERS := [
     "0.txt",
@@ -1475,6 +1476,10 @@ const ONSCRIPTER_SCRIPT_MARKERS := [
     "nscript.dat",
     "onscript.nt2",
     "onscript.nt3",
+]
+const SIGLUS_SCRIPT_MARKERS := [
+    "Gameexe.ini",
+    "gameexe.ini",
 ]
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
@@ -9324,6 +9329,9 @@ func _game_runtime_kind(path: String) -> String:
     for marker in ONSCRIPTER_SCRIPT_MARKERS:
         if FileAccess.file_exists(root.path_join(marker)):
             return RUNTIME_ONSCRIPTER
+    for marker in SIGLUS_SCRIPT_MARKERS:
+        if FileAccess.file_exists(root.path_join(marker)):
+            return RUNTIME_SIGLUS
     return RUNTIME_KIRIKIRI
 
 func _backfill_default_game_covers(games: Array[Dictionary]) -> bool:
@@ -9917,7 +9925,7 @@ func _start_selected_game_after_iap() -> void:
     # beta entitlement flow. Keep the Artemis grant enabled for both paths.
     if not _beta_access_enforcement_enabled():
         if (
-            selected_runtime_kind == RUNTIME_KIRIKIRI
+            selected_runtime_kind != RUNTIME_ONSCRIPTER
             and current_player_runtime_kind != RUNTIME_KIRIKIRI
             and not _switch_runtime_player(RUNTIME_KIRIKIRI)
         ):
@@ -9957,10 +9965,10 @@ func _start_selected_game_after_iap() -> void:
         _deny_artemis_beta_launch()
 
 func _runtime_requires_beta_access(runtime_kind: String) -> bool:
-    # ONS support follows the same Apple release policy as Artemis: unrestricted
-    # in Debug and Android builds, and gated by an active coffee entitlement on
-    # iOS and macOS distribution builds.
-    return runtime_kind == RUNTIME_ONSCRIPTER
+    # ONS and Siglus support follow the same Apple release policy as Artemis:
+    # unrestricted in Debug and Android builds, and gated by an active coffee
+    # entitlement on iOS and macOS distribution builds.
+    return runtime_kind == RUNTIME_ONSCRIPTER or runtime_kind == RUNTIME_SIGLUS
 
 func _beta_access_enforcement_enabled(platform_name: String = "") -> bool:
     var effective_platform := platform_name if not platform_name.is_empty() else OS.get_name()
