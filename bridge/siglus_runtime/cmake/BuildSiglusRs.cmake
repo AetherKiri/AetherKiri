@@ -125,6 +125,13 @@ function(aetherkiri_add_siglus_rs imported_target)
             "`git submodule update --init packages/siglus_rs`.")
     endif()
 
+    # The submodule stays pristine: sources are copied into the build tree,
+    # the AetherKiri overlay (new files + git apply patches) is applied there,
+    # and cargo builds from the workspace copy.
+    set(SIGLUS_RS_WORKSPACE "${CMAKE_BINARY_DIR}/siglus-rs-workspace")
+    set(SIGLUS_RS_MANIFEST
+        "${SIGLUS_RS_WORKSPACE}/crates/siglus_scene_vm/Cargo.toml")
+
     set(SIGLUS_CARGO_TARGET_DIR "${CMAKE_BINARY_DIR}/siglus-rs-target")
     set(SIGLUS_STATIC_LIB
         "${SIGLUS_CARGO_TARGET_DIR}/${rust_triple}/${rust_profile}/libsiglus_scene_vm.a")
@@ -206,6 +213,14 @@ function(aetherkiri_add_siglus_rs imported_target)
     # runtime is still being wired behind the stub provider.
     set(SIGLUS_RUSTFLAGS "-C panic=abort")
 
+    add_custom_target(siglus_rs_prepare_workspace
+        COMMAND ${CMAKE_COMMAND}
+            -DSIGLUS_RS_SRC=${SIGLUS_RS_ROOT}
+            -DSIGLUS_RS_WORKSPACE=${SIGLUS_RS_WORKSPACE}
+            -DSIGLUS_OVERLAY_DIR=${CMAKE_CURRENT_SOURCE_DIR}/overlay
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PrepareSiglusRsWorkspace.cmake
+        VERBATIM)
+
     add_custom_target(siglus_rs_cargo_build ALL
         COMMAND ${CMAKE_COMMAND} -E env
             ${SIGLUS_PATH_PREFIX}
@@ -219,7 +234,8 @@ function(aetherkiri_add_siglus_rs imported_target)
                 --crate-type staticlib
         BYPRODUCTS "${SIGLUS_STATIC_LIB}"
         USES_TERMINAL
-        VERBATIM)
+        VERBATIM
+        DEPENDS siglus_rs_prepare_workspace)
 
     add_library(${imported_target} STATIC IMPORTED GLOBAL)
     set_target_properties(${imported_target} PROPERTIES
