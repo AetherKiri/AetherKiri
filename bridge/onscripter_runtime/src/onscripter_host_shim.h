@@ -6,7 +6,8 @@
 #include <SDL.h>
 #include <cstdlib>
 
-extern "C" [[noreturn]] void aetherkiri_onscripter_host_exit(int code);
+extern "C" [[noreturn]] void aetherkiri_onscripter_host_exit(
+    int code, const char *source_file, int source_line);
 extern "C" void SDLCALL
 aetherkiri_onscripter_free_surface(SDL_Surface *surface);
 extern "C" void
@@ -21,5 +22,5 @@ extern "C" void aetherkiri_onscripter_configure_video(
     int has_position, int x, int y, int width, int height,
     int asynchronous);
 
-#define exit aetherkiri_onscripter_host_exit
+#define exit(code) aetherkiri_onscripter_host_exit((code), __FILE__, __LINE__)
 #define SDL_FreeSurface aetherkiri_onscripter_free_surface

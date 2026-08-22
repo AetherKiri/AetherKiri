@@ -102,6 +102,7 @@ void aether_native_launch_file_picker_free_string(char *value);
 
 #if defined(__ANDROID__)
 #include <jni.h>
+#include <android/log.h>
 
 extern JNIEnv* krkr_GetJNIEnv();
 extern jobject krkr_GetApplicationContext();
@@ -115,6 +116,19 @@ void UnregisterAetherInternalFrameEffects();
 #endif
 
 namespace {
+
+#if defined(__ANDROID__)
+void AndroidBridgeLog(const char *format, ...) {
+    char buffer[1024];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    __android_log_write(ANDROID_LOG_INFO, "AetherKiriBridge", buffer);
+}
+#else
+void AndroidBridgeLog(const char *, ...) {}
+#endif
 
 struct GodotGpuTextureRecord {
     RID rid;
@@ -7908,8 +7922,14 @@ public:
 
     bool initialize_engine(const String &writable_path, const String &cache_path) {
         if (handle_ != nullptr) {
+            AndroidBridgeLog("event=initialize_engine_already_initialized runtime=%s",
+                             runtime_id_.utf8().get_data());
             return true;
         }
+
+        AndroidBridgeLog("event=initialize_engine_begin writable=%s cache=%s",
+                         writable_path.utf8().get_data(),
+                         cache_path.utf8().get_data());
 
         TVPGodotGpuBridgeCallbacks callbacks{};
         callbacks.create_rgba = BridgeCreateRgba;
@@ -7968,6 +7988,9 @@ public:
         if (result == ENGINE_RESULT_OK) {
             sync_frame_effect_source_mode(true);
         }
+        AndroidBridgeLog("event=initialize_engine_result result=%s error=%s",
+                         last_result_.utf8().get_data(),
+                         last_error_.utf8().get_data());
         return result == ENGINE_RESULT_OK;
     }
 
@@ -8157,6 +8180,10 @@ public:
         option.value_utf8 = value_utf8.get_data();
         const engine_result_t result = engine_set_option(handle_, &option);
         update_last_error(result);
+        AndroidBridgeLog("event=set_engine_option key=%s value=%s result=%s error=%s",
+                         key_utf8.get_data(), value_utf8.get_data(),
+                         last_result_.utf8().get_data(),
+                         last_error_.utf8().get_data());
         if (result == ENGINE_RESULT_OK &&
             key.strip_edges().to_lower() == "runtime") {
             runtime_id_ = value.strip_edges().to_lower();
@@ -8204,6 +8231,10 @@ public:
             return ENGINE_RESULT_INVALID_STATE;
         }
 
+        AndroidBridgeLog("event=open_game_begin path=%s async=%d runtime=%s",
+                         game_root_path.utf8().get_data(), async ? 1 : 0,
+                         runtime_id_.utf8().get_data());
+
         CharString path_utf8 = game_root_path.utf8();
         const String normalized_runtime = runtime_id_.strip_edges().to_lower();
         artemis_logical_frame_pacing_ = normalized_runtime == "artemis" ||
@@ -8218,6 +8249,9 @@ public:
             artemis_logical_frame_pacing_ = false;
         }
         update_last_error(result);
+        AndroidBridgeLog("event=open_game_result result=%s error=%s game_open=%d",
+                         last_result_.utf8().get_data(),
+                         last_error_.utf8().get_data(), game_open_ ? 1 : 0);
         return result;
     }
 
