@@ -133,7 +133,7 @@ jobs:
       - name: Install Build Systems
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd ccache jq mono-complete
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex curl unzip zip zstd ccache jq mono-complete
 
       - name: Restore ccache
         id: restore-ccache
@@ -770,6 +770,15 @@ jobs:
           VCPKG_PACKAGES_TOKEN: ${{ github.token }}
         run: bash .github/scripts/configure-vcpkg-binary-cache.sh "$VCPKG_ROOT/vcpkg"
 
+      - name: Restore vcpkg source cache
+        id: restore-vcpkg-downloads
+        uses: actions/cache/restore@v5
+        with:
+          path: .devtools/vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('vcpkg-configuration.json', 'vcpkg.json', 'vcpkg/ports/**', 'vcpkg/triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-downloads-
+
       - name: Build macOS Release
         run: |
           set -euo pipefail
@@ -777,6 +786,13 @@ jobs:
           export CMAKE_C_COMPILER_LAUNCHER=ccache
           export CMAKE_CXX_COMPILER_LAUNCHER=ccache
           ./build.sh macos release --jobs=4
+
+      - name: Save vcpkg source cache
+        if: always() && steps.restore-vcpkg-downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .devtools/vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('vcpkg-configuration.json', 'vcpkg.json', 'vcpkg/ports/**', 'vcpkg/triplets/**') }}
 
       - name: Build macOS Debug
         run: |
@@ -944,7 +960,7 @@ jobs:
       - name: Install Build Systems
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config autoconf automake libtool gettext bison flex curl unzip zip zstd ccache jq python3 mono-complete
+          sudo apt-get install -y cmake ninja-build pkg-config autoconf autoconf-archive automake libtool gettext bison flex curl unzip zip zstd ccache jq python3 mono-complete
 
       - name: Set up Node
         uses: actions/setup-node@v6
