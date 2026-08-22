@@ -3047,10 +3047,8 @@ void main() {
                 covered = true;
                 break;
             } else {
-                if (src.g >= 0.70 && src.g > src.r + 0.20 &&
-                    src.g > src.b + 0.20) {
-                    src.a = 0.0;
-                }
+                // Texture alpha is authoritative.  Green is used by some
+                // models as ordinary artwork, not as a runtime chroma key.
                 src.a *= opacity;
                 if (src.a <= 0.00001) {
                     continue;
@@ -3655,10 +3653,7 @@ float load_raster_mask(vec2 edge_coord) {
 
 void main() {
     vec4 source = load_raster_source(source_coord);
-    if (source.g >= 0.70 && source.g > source.r + 0.20 &&
-        source.g > source.b + 0.20) {
-        source.a = 0.0;
-    }
+    // Texture alpha is authoritative; do not chroma-key valid green art.
     float alpha = source.a *
         clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
     uint flags = uint(pc.color0.z);
