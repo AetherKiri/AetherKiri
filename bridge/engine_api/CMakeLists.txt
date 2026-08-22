@@ -78,6 +78,10 @@ if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_artemis)
     aetherinternal_extend_artemis(engine_api)
 endif()
 
+if(AETHERKIRI_INTERNAL_ENABLED AND COMMAND aetherinternal_extend_wa2)
+    aetherinternal_extend_wa2(engine_api)
+endif()
+
 if(TARGET aetherinternal_artemis_lua)
     set(AETHERKIRI_ARTEMIS_LUA_PREFIX_HEADER
         "${CMAKE_CURRENT_SOURCE_DIR}/src/artemis_lua_symbol_prefix.h")
