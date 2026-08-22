@@ -83,24 +83,11 @@ endif()
 find_package(TIFF)
 if(TIFF_FOUND)
     set(HAVE_LIBTIFF ON)
-    # Resolve TIFF::TIFF to plain library paths. The exported libgdiplus
-    # target must not reference TIFF::TIFF because consumers load the
-    # libgdiplus package config without calling find_package(TIFF), which
-    # makes CMake fail with "target TIFF::TIFF was not found".
-    if(TARGET TIFF::TIFF)
-        get_target_property(Z_TIFF_IMPORTED_CONFIGS TIFF::TIFF IMPORTED_CONFIGURATIONS)
-        foreach(Z_TIFF_CONFIG ${Z_TIFF_IMPORTED_CONFIGS})
-            get_target_property(Z_TIFF_LOCATION TIFF::TIFF "IMPORTED_LOCATION_${Z_TIFF_CONFIG}")
-            if(Z_TIFF_LOCATION)
-                list(APPEND GDIPLUS_LIBS "$<$<CONFIG:${Z_TIFF_CONFIG}>:${Z_TIFF_LOCATION}>")
-            endif()
-        endforeach()
-        unset(Z_TIFF_LOCATION)
-        unset(Z_TIFF_CONFIG)
-        unset(Z_TIFF_IMPORTED_CONFIGS)
-    else()
-        list(APPEND GDIPLUS_LIBS ${TIFF_LIBRARIES})
-    endif()
+    # Keep the TIFF::TIFF target reference in the link interface. The
+    # installed libgdiplus-config.cmake calls find_dependency(TIFF) before
+    # loading the exported targets, so consumers get TIFF::TIFF together
+    # with its full transitive dependency chain (lzma, zstd, webp, ...).
+    list(APPEND GDIPLUS_LIBS ${TIFF_LIBRARIES})
     target_include_directories(${PROJECT_NAME} PUBLIC ${TIFF_INCLUDE_DIRS})
 else()
     message(WARNING "TIFF support disabled")
@@ -254,14 +241,25 @@ install(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src/"
 
 install(
     TARGETS libgdiplus
-    EXPORT libgdiplus-config
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
 )
 
 install(
-    EXPORT libgdiplus-config
+    EXPORT libgdiplus-targets
+    FILE libgdiplus-targets.cmake
     DESTINATION share/libgdiplus
     NAMESPACE libgdiplus::
+)
+
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/libgdiplus-config.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/libgdiplus-config.cmake"
+    INSTALL_DESTINATION share/libgdiplus
+)
+install(
+    FILES "${CMAKE_CURRENT_BINARY_DIR}/libgdiplus-config.cmake"
+    DESTINATION share/libgdiplus
 )
