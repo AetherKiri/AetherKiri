@@ -17,6 +17,12 @@
 
 set(SIGLUS_MARKER_FILE "${SIGLUS_RS_WORKSPACE}/.aetherkiri-overlay-stamp")
 
+find_program(SIGLUS_GIT_EXECUTABLE git)
+if(NOT SIGLUS_GIT_EXECUTABLE)
+    message(FATAL_ERROR
+        "siglus_rs overlay requires `git` on PATH to apply patches.")
+endif()
+
 # ---------------------------------------------------------------------------
 # 1. Fingerprint the inputs.
 # ---------------------------------------------------------------------------
@@ -58,6 +64,11 @@ endforeach()
 
 string(SHA512 fingerprint "${fingerprint}")
 
+# Include this script's own content so prepare-logic changes always force a
+# workspace rebuild.
+file(SHA512 "${CMAKE_SCRIPT_MODE_FILE}" self_content_hash)
+set(fingerprint "${fingerprint}${self_content_hash}")
+
 if(EXISTS "${SIGLUS_MARKER_FILE}")
     file(READ "${SIGLUS_MARKER_FILE}" stamped_fingerprint)
     if(stamped_fingerprint STREQUAL fingerprint)
@@ -89,20 +100,34 @@ if(overlay_files)
 endif()
 
 # ---------------------------------------------------------------------------
+# 3b. Neutralize gitignore interference.
+# ---------------------------------------------------------------------------
+# The workspace sits inside the AetherKiri work tree (out/ is ignored there)
+# and carries siglus_rs' own .gitignore files; git apply --no-index silently
+# skips ignored paths. Remove every .gitignore and turn the workspace into
+# its own repository root so patch application is unambiguous.
+file(GLOB_RECURSE workspace_gitignores LIST_DIRECTORIES false
+    "${SIGLUS_RS_WORKSPACE}/.gitignore")
+foreach(f IN LISTS workspace_gitignores)
+    file(REMOVE "${f}")
+endforeach()
+execute_process(
+    COMMAND "${SIGLUS_GIT_EXECUTABLE}" init -q
+    WORKING_DIRECTORY "${SIGLUS_RS_WORKSPACE}"
+    RESULT_VARIABLE init_result)
+if(NOT init_result EQUAL 0)
+    message(FATAL_ERROR "git init failed in ${SIGLUS_RS_WORKSPACE}")
+endif()
+
+# ---------------------------------------------------------------------------
 # 4. Apply patches (verify first so a failed apply never leaves a half-patched
 # workspace behind).
 # ---------------------------------------------------------------------------
-find_program(SIGLUS_GIT_EXECUTABLE git)
-if(NOT SIGLUS_GIT_EXECUTABLE)
-    message(FATAL_ERROR
-        "siglus_rs overlay requires `git` on PATH to apply patches.")
-endif()
-
 foreach(patch IN LISTS overlay_patches)
     get_filename_component(patch_name "${patch}" NAME)
     execute_process(
-        COMMAND "${SIGLUS_GIT_EXECUTABLE}" apply --check --whitespace=nowarn
-                "${patch}"
+        COMMAND "${SIGLUS_GIT_EXECUTABLE}" apply --check
+                --whitespace=nowarn "${patch}"
         WORKING_DIRECTORY "${SIGLUS_RS_WORKSPACE}"
         RESULT_VARIABLE check_result
         ERROR_VARIABLE check_output)
@@ -124,6 +149,16 @@ foreach(patch IN LISTS overlay_patches)
             "failed to apply:\n${apply_output}")
     endif()
     message(STATUS "Applied siglus_rs overlay patch ${patch_name}")
+endforeach()
+
+# file(COPY) preserves source mtimes, which can be older than a previous
+# cargo build in the shared target dir; cargo would then reuse stale artifacts
+# despite changed sources. Bump every file so cargo sees a fresh tree.
+file(GLOB_RECURSE workspace_files LIST_DIRECTORIES false
+    "${SIGLUS_RS_WORKSPACE}/*")
+list(FILTER workspace_files EXCLUDE REGEX "/\\.git/")
+foreach(f IN LISTS workspace_files)
+    file(TOUCH "${f}")
 endforeach()
 
 file(WRITE "${SIGLUS_MARKER_FILE}" "${fingerprint}")

@@ -82,6 +82,8 @@ Native first, then GPU Bridge where native coverage is incomplete.
 | `bridge/engine_api/include/engine_options.h` | Engine option keys/values shared with host code. |
 | `bridge/engine_api/src/engine_api.cpp` | C ABI implementation that creates, opens, ticks, renders, and receives input. |
 | `bridge/onscripter_runtime/src/onscripter_runtime_provider.cpp` | ONScripterYuri adapter for the shared runtime-provider ABI. |
+| `bridge/siglus_runtime/src/siglus_runtime_provider.cpp` | SiglusEngine (siglus_rs) adapter for the shared runtime-provider ABI. |
+| `bridge/siglus_runtime/cmake/PrepareSiglusRsWorkspace.cmake` | Build-time overlay: copies pristine `packages/siglus_rs` into the build tree and applies `bridge/siglus_runtime/overlay/` patches there, keeping the submodule untouched. |
 | `cpp/core/environ/EngineLoop.*` | Main runtime lifecycle, tick loop, and host input conversion into TVP events. |
 | `cpp/core/visual/LayerManager.*` | Layer hit testing, focus/capture, mouse/touch/key dispatch, and compatibility input behavior. |
 | `cpp/core/visual/impl/DrawDevice.*` | Draw device bridge between window/layer updates and render managers. |
@@ -323,11 +325,13 @@ Godot
               ├── OnsRuntime ────── ONScripterYuri
               └── A Runtime
 ```
-
 `AetherRuntimePlayer` is the stable host facade. KiriRuntime is the existing
 legacy engine API backend; OnsRuntime and A Runtime implement the
 versioned `engine_runtime_provider_v1_t` ABI. A new visual-novel engine belongs
 behind that ABI and must not introduce another `Aether*Player` Godot class.
+SiglusEngine games route through the same dispatcher via the `siglus` runtime
+provider (`bridge/siglus_runtime`), which wraps the Rust FFI host built from
+the `packages/siglus_rs` submodule.
 The dispatcher owns probing and lifecycle selection, while the Player owns all
 Godot-specific presentation and platform services.
 
