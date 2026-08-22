@@ -1,0 +1,17 @@
+diff --git a/crates/siglus_scene_vm/src/lib.rs b/crates/siglus_scene_vm/src/lib.rs
+index 879cc68..438782e 100644
+--- a/crates/siglus_scene_vm/src/lib.rs
++++ b/crates/siglus_scene_vm/src/lib.rs
+@@ -48,3 +48,12 @@ pub mod pump_host;
+ pub mod desktop_messagebox;
+ 
+ pub mod display_ffi;
++
++#[cfg(any(
++    target_os = "macos",
++    target_os = "windows",
++    target_os = "linux",
++    target_os = "ios",
++    target_os = "android"
++))]
++pub mod aether_host;

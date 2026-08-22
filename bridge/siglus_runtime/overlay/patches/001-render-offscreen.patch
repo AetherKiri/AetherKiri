@@ -1,0 +1,452 @@
+diff --git a/crates/siglus_scene_vm/src/bin/siglus_engine.rs b/crates/siglus_scene_vm/src/bin/siglus_engine.rs
+index 7ff8f21..a644478 100644
+--- a/crates/siglus_scene_vm/src/bin/siglus_engine.rs
++++ b/crates/siglus_scene_vm/src/bin/siglus_engine.rs
+@@ -1230,7 +1230,12 @@ impl App {
+                 .update_texture(&renderer.device, &renderer.queue, *id, delta);
+         }
+ 
+-        let frame = match renderer.surface.get_current_texture() {
++        let frame = match renderer
++            .surface
++            .as_ref()
++            .expect("siglus_engine uses a windowed renderer")
++            .get_current_texture()
++        {
+             Ok(frame) => frame,
+             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                 renderer.resize(renderer.config.width, renderer.config.height);
+diff --git a/crates/siglus_scene_vm/src/desktop_messagebox.rs b/crates/siglus_scene_vm/src/desktop_messagebox.rs
+index 7fd424c..1b379f9 100644
+--- a/crates/siglus_scene_vm/src/desktop_messagebox.rs
++++ b/crates/siglus_scene_vm/src/desktop_messagebox.rs
+@@ -390,7 +390,13 @@ impl DesktopMessageBoxWindow {
+                 .update_texture(&self.renderer.device, &self.renderer.queue, *id, delta);
+         }
+ 
+-        let frame = match self.renderer.surface.get_current_texture() {
++        let frame = match self
++            .renderer
++            .surface
++            .as_ref()
++            .expect("messagebox preview uses a windowed renderer")
++            .get_current_texture()
++        {
+             Ok(frame) => frame,
+             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                 self.renderer.resize(self.renderer.config.width, self.renderer.config.height);
+diff --git a/crates/siglus_scene_vm/src/render/mod.rs b/crates/siglus_scene_vm/src/render/mod.rs
+index 57dcaae..5700a01 100644
+--- a/crates/siglus_scene_vm/src/render/mod.rs
++++ b/crates/siglus_scene_vm/src/render/mod.rs
+@@ -643,9 +643,64 @@ pub struct SkinnedPoseState {
+     pub world_matrix_count: usize,
+ }
+ 
++#[derive(Debug)]
++pub struct OffscreenTarget {
++    pub color: wgpu::Texture,
++    pub readback: wgpu::Buffer,
++    pub padded_bytes_per_row: u32,
++}
++
++#[derive(Debug)]
++enum RenderTargetSetup {
++    Window(wgpu::Surface<'static>),
++    Offscreen,
++}
++
++fn create_offscreen_target(
++    device: &wgpu::Device,
++    format: wgpu::TextureFormat,
++    width: u32,
++    height: u32,
++) -> OffscreenTarget {
++    let color = device.create_texture(&wgpu::TextureDescriptor {
++        label: Some("siglus-offscreen-color"),
++        size: wgpu::Extent3d {
++            width,
++            height,
++            depth_or_array_layers: 1,
++        },
++        mip_level_count: 1,
++        sample_count: 1,
++        dimension: wgpu::TextureDimension::D2,
++        format,
++        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
++        view_formats: &[],
++    });
++    let bytes_per_pixel = 4u32;
++    let unpadded_bytes_per_row = width.saturating_mul(bytes_per_pixel);
++    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
++    let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
++    let readback = device.create_buffer(&wgpu::BufferDescriptor {
++        label: Some("siglus-offscreen-readback"),
++        size: padded_bytes_per_row as u64 * height as u64,
++        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
++        mapped_at_creation: false,
++    });
++    OffscreenTarget {
++        color,
++        readback,
++        padded_bytes_per_row,
++    }
++}
++
+ #[derive(Debug)]
+ pub struct Renderer {
+-    pub surface: wgpu::Surface<'static>,
++    /// Present target for windowed hosts. `None` when the renderer was built
++    /// for embedded/offscreen hosts that read frames back over the CPU.
++    pub surface: Option<wgpu::Surface<'static>>,
++    /// Offscreen color target plus its readback staging buffer. Set exactly
++    /// when [`Renderer::new_offscreen`] built this renderer.
++    pub offscreen: Option<OffscreenTarget>,
+     pub device: wgpu::Device,
+     pub queue: wgpu::Queue,
+     pub config: wgpu::SurfaceConfiguration,
+@@ -1873,6 +1928,73 @@ impl Renderer {
+         Self::new_from_instance_surface(instance, surface, width, height, scale_factor).await
+     }
+ 
++    /// Build a windowless renderer for embedded hosts. Frames render into an
++    /// internal color texture that can be read back over the CPU via
++    /// [`Renderer::read_offscreen_rgba`]; nothing is ever presented.
++    pub async fn new_offscreen(width: u32, height: u32, scale_factor: f32) -> Result<Self> {
++        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
++        let backends = wgpu::Backends::GL;
++        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++        let backends = wgpu::Backends::all();
++
++        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
++            backends,
++            ..Default::default()
++        });
++
++        // No compatible_surface keeps every backend eligible in headless
++        // contexts (Metal/Vulkan/D3D12 all support texture render targets).
++        let adapter = instance
++            .request_adapter(&wgpu::RequestAdapterOptions {
++                power_preference: wgpu::PowerPreference::HighPerformance,
++                compatible_surface: None,
++                force_fallback_adapter: false,
++            })
++            .await
++            .context("request_adapter(offscreen)")?;
++
++        let (device, queue) = adapter
++            .request_device(
++                &wgpu::DeviceDescriptor {
++                    label: Some("siglus-bg-device"),
++                    required_features: wgpu::Features::empty(),
++                    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
++                    required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
++                    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++                    required_limits: wgpu::Limits::default(),
++                },
++                None,
++            )
++            .await
++            .context("request_device(offscreen)")?;
++
++        // Non-sRGB byte space matches the D3D9-era blending contract of the
++        // original engine (same rationale as the windowed format selection).
++        let format = wgpu::TextureFormat::Rgba8Unorm;
++        let scale_factor = if scale_factor.is_finite() && scale_factor > 0.0 {
++            scale_factor
++        } else {
++            1.0
++        };
++        let config = wgpu::SurfaceConfiguration {
++            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
++            format,
++            width: width.max(1),
++            height: height.max(1),
++            present_mode: wgpu::PresentMode::Fifo,
++            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
++            view_formats: vec![],
++            desired_maximum_frame_latency: 2,
++        };
++        Self::init_common(
++            device,
++            queue,
++            config,
++            scale_factor,
++            RenderTargetSetup::Offscreen,
++        )
++    }
++
+     async fn new_from_instance_surface(
+         instance: wgpu::Instance,
+         surface: wgpu::Surface<'static>,
+@@ -1928,8 +2050,6 @@ impl Renderer {
+         };
+         let width = width.max(1);
+         let height = height.max(1);
+-        let logical_width = ((width as f32) / scale_factor).max(1.0);
+-        let logical_height = ((height as f32) / scale_factor).max(1.0);
+         let alpha_mode = surface_caps
+             .alpha_modes
+             .iter()
+@@ -1953,6 +2073,26 @@ impl Renderer {
+             desired_maximum_frame_latency: 2,
+         };
+         surface.configure(&device, &config);
++        Self::init_common(device, queue, config, scale_factor, RenderTargetSetup::Window(surface))
++    }
++
++    /// Shared pipeline/target construction for both present modes. `setup`
++    /// decides whether frames go to a swapchain surface or an offscreen
++    /// texture with a readback staging buffer.
++    fn init_common(
++        device: wgpu::Device,
++        queue: wgpu::Queue,
++        config: wgpu::SurfaceConfiguration,
++        scale_factor: f32,
++        setup: RenderTargetSetup,
++    ) -> Result<Self> {
++        let scale_factor = if scale_factor.is_finite() && scale_factor > 0.0 {
++            scale_factor
++        } else {
++            1.0
++        };
++        let logical_width = ((config.width as f32) / scale_factor).max(1.0);
++        let logical_height = ((config.height as f32) / scale_factor).max(1.0);
+ 
+         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+             label: Some("siglus-sprite-bgl"),
+@@ -2248,8 +2388,21 @@ impl Renderer {
+ 
+         let surface_viewport = SurfaceViewport::full(config.width, config.height);
+         let emote_compositor = emote::EmoteCompositor::new(&device);
++        let (surface, offscreen) = match setup {
++            RenderTargetSetup::Window(surface) => (Some(surface), None),
++            RenderTargetSetup::Offscreen => (
++                None,
++                Some(create_offscreen_target(
++                    &device,
++                    config.format,
++                    config.width,
++                    config.height,
++                )),
++            ),
++        };
+         Ok(Self {
+             surface,
++            offscreen,
+             device,
+             queue,
+             config,
+@@ -2357,9 +2510,21 @@ impl Renderer {
+         self.surface_viewport = SurfaceViewport::full(width, height);
+         self.config.width = width;
+         self.config.height = height;
+-        self.surface.configure(&self.device, &self.config);
++        if let Some(surface) = self.surface.as_ref() {
++            surface.configure(&self.device, &self.config);
++        }
+         self.surface_depth =
+             create_depth_texture(&self.device, self.config.width, self.config.height);
++        if self.offscreen.is_some() {
++            // Swap in a fresh color texture + staging buffer sized to the new
++            // dimensions; the old ones are dropped with the binding.
++            self.offscreen = Some(create_offscreen_target(
++                &self.device,
++                self.config.format,
++                self.config.width,
++                self.config.height,
++            ));
++        }
+         self.recreate_logical_render_targets();
+     }
+ 
+@@ -2404,8 +2569,14 @@ impl Renderer {
+     }
+ 
+     pub fn render_frame(&mut self, images: &ImageManager, frame_plan: &RenderFrame) -> Result<()> {
+-        let frame = self
++        if self.offscreen.is_some() {
++            return self.render_frame_offscreen(images, frame_plan);
++        }
++        let surface = self
+             .surface
++            .as_ref()
++            .context("render_frame without a surface")?;
++        let frame = surface
+             .get_current_texture()
+             .context("get_current_texture")?;
+         let view = frame
+@@ -2468,6 +2639,173 @@ impl Renderer {
+         Ok(())
+     }
+ 
++    /// Embedded-host twin of [`Renderer::render_frame`]: identical pipeline
++    /// paths, but the final pass writes into the internal offscreen texture
++    /// and a GPU copy stages the result for CPU readback instead of presenting.
++    fn render_frame_offscreen(
++        &mut self,
++        images: &ImageManager,
++        frame_plan: &RenderFrame,
++    ) -> Result<()> {
++        let view = self
++            .offscreen
++            .as_ref()
++            .context("render_frame_offscreen without an offscreen target")?
++            .color
++            .create_view(&wgpu::TextureViewDescriptor::default());
++        self.debug_frame_serial = self.debug_frame_serial.wrapping_add(1);
++        {
++            let mut live_emote_ids = HashSet::new();
++            let mut collect = |sprites: &[RenderSprite]| {
++                for entry in sprites {
++                    if let Some(packet) = entry.sprite.emote_render.as_deref() {
++                        live_emote_ids.insert(packet.render_id);
++                    }
++                }
++            };
++            if let Some(wipe) = frame_plan.wipe.as_ref() {
++                collect(&wipe.under);
++                collect(&wipe.current);
++                collect(&wipe.next);
++                collect(&wipe.over);
++            } else {
++                collect(&frame_plan.sprites);
++            }
++            self.emote_compositor.retain_render_ids(&live_emote_ids);
++        }
++
++        // Same scene-texture routing rule as the windowed path: only sample
++        // the rendered scene when an effect actually needs it, so translucent
++        // blending keeps its direct-to-backbuffer semantics.
++        let needs_scene_texture = frame_plan.wipe.is_some()
++            || frame_plan
++                .sprites
++                .iter()
++                .any(|entry| matches!(entry.sprite.blend, SpriteBlend::Overlay));
++
++        if needs_scene_texture {
++            let final_target = self.render_frame_to_internal(images, frame_plan)?;
++            let blit_range = self.prepare_blit_vertices()?;
++            let mut encoder = self
++                .device
++                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
++                    label: Some("siglus-present-encoder"),
++                });
++            self.render_copy_pass(
++                &mut encoder,
++                ColorTarget::External(&view),
++                final_target,
++                blit_range,
++            )?;
++            self.queue.submit(Some(encoder.finish()));
++        } else {
++            self.render_ordinary_frame_to_surface(images, &frame_plan.sprites, &view)?;
++        }
++
++        self.copy_offscreen_to_readback()
++    }
++
++    fn copy_offscreen_to_readback(&mut self) -> Result<()> {
++        let (width, height) = (self.config.width, self.config.height);
++        // Every operation below only needs shared borrows of `self`, so the
++        // target borrow can stay live across encoder construction.
++        let target = self
++            .offscreen
++            .as_ref()
++            .context("copy_offscreen_to_readback without an offscreen target")?;
++        let mut encoder = self
++            .device
++            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
++                label: Some("siglus-offscreen-readback-encoder"),
++            });
++        encoder.copy_texture_to_buffer(
++            wgpu::ImageCopyTexture {
++                texture: &target.color,
++                mip_level: 0,
++                origin: wgpu::Origin3d::ZERO,
++                aspect: wgpu::TextureAspect::All,
++            },
++            wgpu::ImageCopyBuffer {
++                buffer: &target.readback,
++                layout: wgpu::ImageDataLayout {
++                    offset: 0,
++                    bytes_per_row: Some(target.padded_bytes_per_row),
++                    rows_per_image: Some(height),
++                },
++            },
++            wgpu::Extent3d {
++                width,
++                height,
++                depth_or_array_layers: 1,
++            },
++        );
++        self.queue.submit(Some(encoder.finish()));
++        Ok(())
++    }
++
++    /// Logical size and tightly packed RGBA row stride of the offscreen
++    /// frame. `None` when this renderer presents to a window surface.
++    pub fn offscreen_frame_desc(&self) -> Option<(u32, u32, u32)> {
++        self.offscreen.as_ref().map(|_| {
++            (
++                self.config.width,
++                self.config.height,
++                self.config.width.saturating_mul(4),
++            )
++        })
++    }
++
++    /// Block until the staged frame is available and copy it as tightly
++    /// packed RGBA8 into `out_rgba`. Call after every offscreen
++    /// [`Renderer::render_frame`].
++    pub fn read_offscreen_rgba(&mut self, out_rgba: &mut [u8]) -> Result<()> {
++        let width = self.config.width;
++        let height = self.config.height;
++        let needed = width as usize * height as usize * 4;
++        if out_rgba.len() < needed {
++            anyhow::bail!(
++                "offscreen readback output too small: need {} bytes, got {}",
++                needed,
++                out_rgba.len()
++            );
++        }
++        let buffer_slice = {
++            let target = self
++                .offscreen
++                .as_ref()
++                .context("read_offscreen_rgba without an offscreen target")?;
++            target.readback.slice(..)
++        };
++        let (tx, rx) = std::sync::mpsc::channel();
++        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
++            let _ = tx.send(result);
++        });
++        self.device.poll(wgpu::Maintain::Wait);
++        rx.recv()
++            .context("wait for offscreen readback")?
++            .context("map offscreen readback")?;
++        {
++            let data = buffer_slice.get_mapped_range();
++            let unpadded_bytes_per_row = width as usize * 4;
++            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
++            let padded_bytes_per_row =
++                ((unpadded_bytes_per_row + align - 1) / align) * align;
++            for y in 0..height as usize {
++                let src_offset = y * padded_bytes_per_row;
++                let dst_offset = y * unpadded_bytes_per_row;
++                out_rgba[dst_offset..dst_offset + unpadded_bytes_per_row]
++                    .copy_from_slice(&data[src_offset..src_offset + unpadded_bytes_per_row]);
++            }
++        }
++        drop(buffer_slice);
++        self.offscreen
++            .as_ref()
++            .context("offscreen target dropped during readback")?
++            .readback
++            .unmap();
++        Ok(())
++    }
++
+     fn render_ordinary_frame_to_surface(
+         &mut self,
+         images: &ImageManager,
