@@ -3047,10 +3047,8 @@ void main() {
                 covered = true;
                 break;
             } else {
-                if (src.g >= 0.70 && src.g > src.r + 0.20 &&
-                    src.g > src.b + 0.20) {
-                    src.a = 0.0;
-                }
+                // Texture alpha is authoritative.  Green is used by some
+                // models as ordinary artwork, not as a runtime chroma key.
                 src.a *= opacity;
                 if (src.a <= 0.00001) {
                     continue;
@@ -3612,20 +3610,56 @@ layout(location = 0) in vec2 source_coord;
 layout(location = 1) in vec2 mask_coord;
 layout(location = 0) out vec4 fragment_color;
 
-void main() {
-    vec2 source_size = vec2(textureSize(source_texture, 0));
-    vec4 source = texture(source_texture, source_coord / source_size);
-    if (source.g >= 0.70 && source.g > source.r + 0.20 &&
-        source.g > source.b + 0.20) {
-        source.a = 0.0;
+vec4 load_raster_source(vec2 edge_coord) {
+    // Live2D textures contain large transparent/chroma-keyed regions. A
+    // regular sampler interpolates their hidden RGB values before alpha is
+    // applied, which turns transparent edges into dark/black patches. Match
+    // the compute rasterizer and interpolate in premultiplied-alpha space.
+    ivec2 limit = textureSize(source_texture, 0) - ivec2(1);
+    vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
+    ivec2 p0 = ivec2(floor(center_coord));
+    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
+    vec2 f = clamp(fract(center_coord), vec2(0.0), vec2(1.0));
+    vec4 c00 = texelFetch(source_texture, p0, 0);
+    vec4 c10 = texelFetch(source_texture, ivec2(p1.x, p0.y), 0);
+    vec4 c01 = texelFetch(source_texture, ivec2(p0.x, p1.y), 0);
+    vec4 c11 = texelFetch(source_texture, p1, 0);
+    c00.rgb *= c00.a;
+    c10.rgb *= c10.a;
+    c01.rgb *= c01.a;
+    c11.rgb *= c11.a;
+    vec4 premul = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    if (premul.a > 0.00001) {
+        premul.rgb /= premul.a;
+    } else {
+        premul.rgb = vec3(0.0);
     }
+    return clamp(premul, vec4(0.0), vec4(1.0));
+}
+
+float load_raster_mask(vec2 edge_coord) {
+    ivec2 limit = textureSize(mask_texture, 0) - ivec2(1);
+    vec2 center_coord = clamp(edge_coord - vec2(0.5), vec2(0.0), vec2(limit));
+    ivec2 p0 = ivec2(floor(center_coord));
+    ivec2 p1 = clamp(p0 + ivec2(1), ivec2(0), limit);
+    vec2 f = clamp(fract(center_coord), vec2(0.0), vec2(1.0));
+    float a00 = texelFetch(mask_texture, p0, 0).a;
+    float a10 = texelFetch(mask_texture, ivec2(p1.x, p0.y), 0).a;
+    float a01 = texelFetch(mask_texture, ivec2(p0.x, p1.y), 0).a;
+    float a11 = texelFetch(mask_texture, p1, 0).a;
+    return clamp(mix(mix(a00, a10, f.x), mix(a01, a11, f.x), f.y),
+                  0.0, 1.0);
+}
+
+void main() {
+    vec4 source = load_raster_source(source_coord);
+    // Texture alpha is authoritative; do not chroma-key valid green art.
     float alpha = source.a *
         clamp(float(pc.rect1.w) / 255.0, 0.0, 1.0);
     uint flags = uint(pc.color0.z);
     if ((flags & 0x08000000u) != 0u) {
-        vec2 mask_size = vec2(textureSize(mask_texture, 0));
         float mask_value = 1.0 -
-            texture(mask_texture, mask_coord / mask_size).a;
+            load_raster_mask(mask_coord);
         if ((flags & 0x00010000u) != 0u) {
             mask_value = 1.0 - mask_value;
         }

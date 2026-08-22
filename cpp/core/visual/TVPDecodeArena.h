@@ -27,23 +27,22 @@ class TVPDecodeArena {
     }
 
     bool grow(size_t needed) {
-        size_t newCap = capacity_ ? capacity_ * 2 : kDefaultCapacity;
-        while(newCap < needed && newCap <= kMaxCapacity) newCap *= 2;
-        if(newCap > kMaxCapacity) return false;
-        newCap = roundToPage(newCap);
+        if(needed > kMaxCapacity) return false;
+        if(base_) return capacity_ >= needed;
 
-        uint8_t *newBase = (uint8_t *)mmap(nullptr, newCap,
+        // The decoder libraries retain pointers to their allocation results
+        // (for example, libpng keeps png_struct/png_info pointers while it
+        // parses chunk metadata).  Moving the arena on growth invalidates
+        // those pointers, so reserve one stable mapping for the lifetime of
+        // this decode instead of copying to a new mapping.
+        const size_t mapSize = roundToPage(kMaxCapacity);
+        uint8_t *newBase = (uint8_t *)mmap(nullptr, mapSize,
                                            PROT_READ | PROT_WRITE,
                                            MAP_PRIVATE | MAP_ANON, -1, 0);
         if(newBase == MAP_FAILED) return false;
-
-        if(base_) {
-            if(offset_ > 0) memcpy(newBase, base_, offset_);
-            munmap(base_, capacity_);
-        }
         base_ = newBase;
-        capacity_ = newCap;
-        return true;
+        capacity_ = mapSize;
+        return capacity_ >= needed;
     }
 
 public:
@@ -80,6 +79,13 @@ public:
 
     bool IsActive() const { return active_; }
 
+    bool Owns(const void *ptr) const {
+        if(!base_ || !ptr) return false;
+        const auto address = reinterpret_cast<uintptr_t>(ptr);
+        const auto begin = reinterpret_cast<uintptr_t>(base_);
+        return address >= begin && address < begin + offset_;
+    }
+
     void *Alloc(size_t size) {
         if(!active_) return nullptr;
         size = (size + 15) & ~(size_t)15; // 16-byte align
@@ -106,6 +112,9 @@ inline bool TVPDecodeArenaActive() {
 inline void *TVPDecodeArenaAlloc(size_t size) {
     return TVPDecodeArena::Instance().Alloc(size);
 }
+inline bool TVPDecodeArenaOwns(const void *ptr) {
+    return TVPDecodeArena::Instance().Owns(ptr);
+}
 inline size_t TVPDecodeArenaLastPeak() {
     return TVPDecodeArena::Instance().GetLastPeakBytes();
 }
@@ -116,6 +125,7 @@ inline size_t TVPDecodeArenaLastCount() {
 #else
 inline bool TVPDecodeArenaActive() { return false; }
 inline void *TVPDecodeArenaAlloc(size_t) { return nullptr; }
+inline bool TVPDecodeArenaOwns(const void *) { return false; }
 inline size_t TVPDecodeArenaLastPeak() { return 0; }
 inline size_t TVPDecodeArenaLastCount() { return 0; }
 #endif
