@@ -11,10 +11,35 @@
 
 use std::ffi::{c_char, c_void, CStr};
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::host::{cstr_required, SiglusHost, SiglusHostConfig, SiglusNativeMessageBoxCallback};
 use crate::render::Renderer;
 use crate::runtime::input::VmMouseButton;
+
+/// Debug trace sink: <game_root>/aether_debug.log. Set by siglus_ak_open so
+/// embedded-host bring-up can be followed from `adb shell cat` even when the
+/// Rust log stack has no logcat backend.
+static TRACE_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+fn trace_log(message: &str) {
+    let Ok(path) = TRACE_LOG_PATH.lock() else {
+        return;
+    };
+    let Some(path) = path.as_ref() else {
+        return;
+    };
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(file, "[{now}] {message}");
+    }
+}
+
 
 pub const SIGLUS_AK_FFI_API_VERSION: u32 = 0x0001_0000;
 
@@ -106,20 +131,39 @@ pub unsafe extern "C" fn siglus_ak_open(
             return SIGLUS_AK_INVALID_ARGUMENT;
         }
     };
+    {
+        let root = PathBuf::from(&game_root);
+        if let Ok(mut guard) = TRACE_LOG_PATH.lock() {
+            *guard = Some(root.join("aether_debug.log"));
+        }
+        trace_log(&format!(
+            "=== siglus_ak_open begin ({game_root}) ==="
+        ));
+    }
+    trace_log("renderer: new_offscreen starting");
     let result = (|| -> anyhow::Result<()> {
         let renderer = pollster::block_on(Renderer::new_offscreen(
             width.max(1),
             height.max(1),
             handle.scale_factor,
         ))?;
+        trace_log("renderer: new_offscreen done");
+        trace_log("host: new_with_renderer starting");
         let config = SiglusHostConfig::new(PathBuf::from(game_root));
         let host = pollster::block_on(SiglusHost::new_with_renderer(config, renderer))?;
+        trace_log("host: new_with_renderer done");
         handle.inner = Some(host);
         Ok(())
     })();
     match result {
-        Ok(()) => SIGLUS_AK_OK,
-        Err(e) => handle.record_error(e),
+        Ok(()) => {
+            trace_log("siglus_ak_open OK");
+            SIGLUS_AK_OK
+        }
+        Err(e) => {
+            trace_log(&format!("siglus_ak_open failed: {e:#}"));
+            handle.record_error(e)
+        }
     }
 }
 
@@ -181,10 +225,20 @@ pub unsafe extern "C" fn siglus_ak_step(handle: *mut SiglusAetherHost, dt_ms: u3
         handle.last_error = "no game is open".to_string();
         return SIGLUS_AK_INVALID_STATE;
     };
+    trace_log(&format!("siglus_ak_step enter dt={dt_ms}"));
     match host.step(dt_ms.max(1)) {
-        Ok(false) => SIGLUS_AK_OK,
-        Ok(true) => SIGLUS_AK_EXIT_REQUESTED,
-        Err(e) => handle.record_error(e),
+        Ok(false) => {
+            trace_log("siglus_ak_step OK");
+            SIGLUS_AK_OK
+        }
+        Ok(true) => {
+            trace_log("siglus_ak_step exit requested");
+            SIGLUS_AK_EXIT_REQUESTED
+        }
+        Err(e) => {
+            trace_log(&format!("siglus_ak_step failed: {e:#}"));
+            handle.record_error(e)
+        }
     }
 }
 

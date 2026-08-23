@@ -1480,6 +1480,10 @@ const ONSCRIPTER_SCRIPT_MARKERS := [
 const SIGLUS_SCRIPT_MARKERS := [
     "Gameexe.ini",
     "gameexe.ini",
+    "Gameexe.dat",
+    "gameexe.dat",
+    "Scene.pck",
+    "scene.pck",
 ]
 const SHELL_SCROLL_DRAG_THRESHOLD := 4.0
 const SHELL_SCROLL_BUTTON_DRAG_THRESHOLD := 28.0
