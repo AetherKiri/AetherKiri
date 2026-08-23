@@ -30,9 +30,13 @@ namespace aetherkiri::siglus {
                 if(!std::filesystem::is_directory(root, ec)) {
                     return 0;
                 }
-                // SiglusEngine games are identified by Gameexe.ini at the
-                // game root (both spellings cover case-sensitive hosts).
-                for(const char *name : {"Gameexe.ini", "gameexe.ini"}) {
+                // SiglusEngine games are identified by their data files at
+                // the game root: Gameexe.ini/.dat (the latter is the
+                // encrypted form shipped by many trials/retail builds) and
+                // Scene.pck (unique to Siglus).
+                for(const char *name : {"Gameexe.ini", "gameexe.ini",
+                                         "Gameexe.dat", "gameexe.dat",
+                                         "Scene.pck", "scene.pck"}) {
                     if(std::filesystem::exists(root / name, ec)) {
                         return 90;
                     }
@@ -138,6 +142,11 @@ namespace aetherkiri::siglus {
             }
             const int32_t step = siglus_ak_step(runtime->ak, delta_ms);
             if(step < 0) {
+                const std::string detail = SafeLast(runtime->ak);
+                LogHost(runtime, ENGINE_RUNTIME_LOG_ERROR,
+                        ("siglus_ak_step failed: " +
+                         (detail.empty() ? std::string("(no detail)") : detail))
+                            .c_str());
                 return Fail(runtime->error, step, runtime->ak, "siglus_ak_step");
             }
             if(step == SIGLUS_AK_EXIT_REQUESTED) {
@@ -227,6 +236,12 @@ namespace aetherkiri::siglus {
                 instance->ak, game_root_path_utf8,
                 instance->pending_width, instance->pending_height);
             if(result < 0) {
+                const std::string detail = SafeLast(instance->ak);
+                LogHost(instance, ENGINE_RUNTIME_LOG_ERROR,
+                        (std::string("siglus_ak_open failed for ") +
+                         game_root_path_utf8 + ": " +
+                         (detail.empty() ? std::string("(no detail)") : detail))
+                            .c_str());
                 return Fail(instance->error, result, instance->ak,
                             "siglus_ak_open");
             }
