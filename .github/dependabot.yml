@@ -12,12 +12,14 @@ updates:
       dev-dependencies:
         dependency-type: "development"
     ignore:
-      # Vite 大版本升级可能破坏构建脚本，手动跟进更稳妥
-      - dependency-name: "vite"
+      # 大版本（如 7.x -> 8.x）基本都有接口不一致问题，需要人工评估后手动升级，
+      # 不让 Dependabot 自动开 PR；patch / minor 照常自动更新
+      - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
-  # vcpkg：更新 vcpkg-configuration.json 的 default-registry baseline
-  # 以及 vcpkg.json 中的 version>= 约束（overlay-ports 里的本地 port 不在范围内）
+  # vcpkg：只更新 vcpkg-configuration.json 中 default-registry 的 baseline SHA，
+  # 整体前进所有未 pin 的包；overrides 里的固定版本不会被改动
+  # （overlay-ports 里的本地 port 不在范围内）
   - package-ecosystem: "vcpkg"
     directory: "/"
     schedule:
@@ -38,3 +40,7 @@ updates:
       github-actions:
         patterns:
           - "*"
+    ignore:
+      # Action 的 major 升级（如 v4 -> v5）同样可能有 breaking change，人工评估后手动升
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
