@@ -1,0 +1,109 @@
+name: Vcpkg Baseline Diff
+
+# Dependabot 只会把 default-registry 的 baseline SHA 整体前移，PR 本身看不出
+# 具体动了哪些包。这里对比新旧两个 vcpkg 提交的 versions/baseline.json，
+# 把逐包「原版本 -> 新版本」表格以 sticky 评论贴到 PR 上。
+#
+# Dependabot PR 的 GITHUB_TOKEN 默认只读，但显式声明 permissions 可以提升，
+# 因此无需使用 pull_request_target。
+on:
+  pull_request:
+    paths:
+      - 'vcpkg-configuration.json'
+      - 'vcpkg.json'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  baseline-diff:
+    name: Report port version changes
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Resolve baseline revisions
+        id: baselines
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/contents/vcpkg-configuration.json?ref=${BASE_SHA}" \
+            --jq '.content' | base64 -d > "${RUNNER_TEMP}/base-vcpkg-configuration.json"
+          old="$(jq -r '.["default-registry"].baseline // empty' "${RUNNER_TEMP}/base-vcpkg-configuration.json")"
+          new="$(jq -r '.["default-registry"].baseline // empty' vcpkg-configuration.json)"
+          if [[ -z "$old" || -z "$new" ]]; then
+            echo "default-registry baseline not found in both revisions; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$old" == "$new" ]]; then
+            echo "Baseline unchanged ($old); skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "old=$old"
+            echo "new=$new"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download baseline manifests
+        if: steps.baselines.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLD_SHA: ${{ steps.baselines.outputs.old }}
+          NEW_SHA: ${{ steps.baselines.outputs.new }}
+        run: |
+          set -euo pipefail
+          gh api "repos/microsoft/vcpkg/contents/versions/baseline.json?ref=${OLD_SHA}" \
+            --jq '.content' | base64 -d > "${RUNNER_TEMP}/old-baseline.json"
+          gh api "repos/microsoft/vcpkg/contents/versions/baseline.json?ref=${NEW_SHA}" \
+            --jq '.content' | base64 -d > "${RUNNER_TEMP}/new-baseline.json"
+
+      - name: Build port change report
+        if: steps.baselines.outputs.skip != 'true'
+        env:
+          OLD_SHA: ${{ steps.baselines.outputs.old }}
+          NEW_SHA: ${{ steps.baselines.outputs.new }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/vcpkg-baseline-diff.py \
+            "${RUNNER_TEMP}/old-baseline.json" \
+            "${RUNNER_TEMP}/new-baseline.json" \
+            "$OLD_SHA" "$NEW_SHA" \
+            --output "${RUNNER_TEMP}/baseline-report.md"
+          cat "${RUNNER_TEMP}/baseline-report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update pull request comment
+        if: steps.baselines.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MARKER: '<!-- aetherkiri:vcpkg-baseline-diff -->'
+        run: |
+          set -euo pipefail
+          body="$(cat "${RUNNER_TEMP}/baseline-report.md")"
+          comment_id="$(gh api \
+            --method GET \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --arg marker "$MARKER" \
+            --jq '[.[] | select(.body | startswith($marker))][0].id // empty')"
+          if [[ -n "$comment_id" ]]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+              -f body="$body" >/dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -f body="$body" >/dev/null
+          fi
