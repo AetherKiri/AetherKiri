@@ -83,6 +83,7 @@ jobs:
             "${RUNNER_TEMP}/old-baseline.json" \
             "${RUNNER_TEMP}/new-baseline.json" \
             "$OLD_SHA" "$NEW_SHA" \
+            --manifest vcpkg.json \
             --output-dir "${RUNNER_TEMP}/baseline-report"
           cat "${RUNNER_TEMP}"/baseline-report/*.md >> "$GITHUB_STEP_SUMMARY"
 

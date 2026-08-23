@@ -99,7 +99,7 @@ def split_rows(rows, max_bytes, part_zero_overhead):
     return chunks
 
 
-def render_part(index, total, chunk, summary_line, compare_url):
+def render_part(index, total, chunk, summary_line):
     lines = [MARKER]
     if index == 0:
         lines += ["## vcpkg baseline 变更明细", "", summary_line, ""]
@@ -107,27 +107,39 @@ def render_part(index, total, chunk, summary_line, compare_url):
         lines += [f"## vcpkg baseline 变更明细（续 {index + 1}/{total}）", ""]
     lines += TABLE_HEADER
     lines += chunk
-    lines += ["", compare_url]
     return "\n".join(lines) + "\n"
 
 
-def write_report(old_entries, new_entries, old_sha, new_sha, out_dir, basename, max_bytes):
+def load_manifest_deps(path):
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    names = set()
+    for dep in data.get("dependencies", []):
+        if isinstance(dep, str):
+            names.add(dep)
+        elif isinstance(dep, dict) and dep.get("name"):
+            names.add(dep["name"])
+    for override in data.get("overrides", []):
+        names.discard(override.get("name"))
+    return names
+
+
+def write_report(old_entries, new_entries, old_sha, new_sha, out_dir, basename, max_bytes, manifest=None):
     structured = collect_rows(old_entries, new_entries)
+    if manifest is not None:
+        wanted = load_manifest_deps(manifest)
+        structured = [item for item in structured if item[0] in wanted]
+
     changed = sum(1 for item in structured if item[3] not in ("added", "removed"))
     added = sum(1 for item in structured if item[3] == "added")
     removed = sum(1 for item in structured if item[3] == "removed")
     rows = [format_row(item) for item in structured]
 
     summary_line = (
-        f"Baseline `{old_sha[:7]}` → `{new_sha[:7]}` 共影响 **{len(rows)}** 个 port："
+        f"Baseline `{old_sha[:7]}` → `{new_sha[:7]}` 影响本项目 **{len(rows)}** 个直接依赖："
         f"{changed} 个版本变更、{added} 个新增、{removed} 个移除。"
     )
-    compare_url = (
-        f"> 完整对比见 [microsoft/vcpkg compare]"
-        f"(https://github.com/microsoft/vcpkg/compare/{old_sha}...{new_sha})。"
-    )
-
-    header_probe = len(render_part(0, 1, [], summary_line, compare_url).encode("utf-8"))
+    header_probe = len(render_part(0, 1, [], summary_line).encode("utf-8"))
     chunks = split_rows(rows, max_bytes, header_probe)
 
     out_dir = Path(out_dir)
@@ -137,7 +149,7 @@ def write_report(old_entries, new_entries, old_sha, new_sha, out_dir, basename, 
     total = len(chunks)
     paths = []
     for index, chunk in enumerate(chunks):
-        content = render_part(index, total, chunk, summary_line, compare_url)
+        content = render_part(index, total, chunk, summary_line)
         path = out_dir / f"{basename}-{index + 1:03d}.md"
         path.write_text(content, encoding="utf-8")
         if len(content.encode("utf-8")) > 65000:
@@ -155,6 +167,7 @@ def main():
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--basename", default="vcpkg-baseline-report")
     parser.add_argument("--max-bytes", type=int, default=MAX_BYTES_DEFAULT)
+    parser.add_argument("--manifest", default=None)
     args = parser.parse_args()
 
     write_report(
@@ -165,6 +178,7 @@ def main():
         args.output_dir,
         args.basename,
         args.max_bytes,
+        args.manifest,
     )
 
 
