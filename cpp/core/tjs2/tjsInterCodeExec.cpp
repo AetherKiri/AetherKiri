@@ -118,6 +118,59 @@ namespace TJS {
         return enabled;
     }
 
+    static bool TJSFunctionProfileEnabled() {
+        static const bool enabled = [] {
+            const char *profile =
+                std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+            return profile && *profile && *profile != '0';
+        }();
+        return enabled;
+    }
+
+    static double TJSFunctionProfileSlowMs() {
+        static const double threshold = [] {
+            const char *value =
+                std::getenv("AETHERKIRI_TJS_FUNCTION_SLOW_MS");
+            if(!value || !*value)
+                return 50.0;
+            char *end = nullptr;
+            const double parsed = std::strtod(value, &end);
+            return end != value && parsed > 0.0 ? parsed : 50.0;
+        }();
+        return threshold;
+    }
+
+    class TJSFunctionProfileGuard {
+    public:
+        TJSFunctionProfileGuard(const tTJSInterCodeContext *context,
+                                iTJSDispatch2 *objthis)
+            : Context(context), ObjThis(objthis), Enabled(
+                  TJSFunctionProfileEnabled()),
+              Started(Enabled ? std::chrono::steady_clock::now()
+                               : std::chrono::steady_clock::time_point{}) {}
+
+        ~TJSFunctionProfileGuard() {
+            if(!Enabled || !Context)
+                return;
+            const double elapsedMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - Started).count();
+            if(elapsedMs < TJSFunctionProfileSlowMs())
+                return;
+            if(const auto logger = spdlog::get("core")) {
+                logger->info(
+                    "tjs function profile: desc={} this={} elapsed_ms={:.3f}",
+                    Context->GetShortDescriptionWithClassName().AsStdString(),
+                    static_cast<const void *>(ObjThis), elapsedMs);
+            }
+        }
+
+    private:
+        const tTJSInterCodeContext *Context;
+        iTJSDispatch2 *ObjThis;
+        bool Enabled;
+        std::chrono::steady_clock::time_point Started;
+    };
+
     static char TJSCompatAsciiLower(char ch) {
         return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch - 'A' + 'a') : ch;
     }
@@ -1132,6 +1185,7 @@ namespace TJS {
         if(!GetValidity() || !CodeArea) {
             TJSThrowFrom_tjs_error(TJS_E_INVALIDOBJECT);
         }
+        TJSFunctionProfileGuard functionProfile(this, objthis);
         struct tExecutingContextRefGuard {
             tTJSInterCodeContext *Self;
             iTJSDispatch2 *ObjThis;

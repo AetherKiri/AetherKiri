@@ -11318,13 +11318,77 @@ namespace motion {
         // that behavior and retain its completed surface in the layer tree.
         const bool retainD3DPresentation =
             adaptor->shouldRetainUncapturedPresentation();
-        if(!retainD3DPresentation &&
+        const bool nativePresentationPending =
+            _nativeBackend && !_nativeBackendPresentationReady;
+        if(nativePresentationPending &&
+           adaptor->preparePresentationHoldIfTargetHasImage() &&
+           !_nativeBackendPresentationHoldLogged && LOGGER) {
+            _nativeBackendPresentationHoldLogged = true;
+            LOGGER->info(
+                "native motion presentation hold: source={} reason=awaiting-first-presentation route=target-layer",
+                _nativeBackendSourcePath);
+        }
+        if(nativePresentationPending && !retainD3DPresentation &&
+           !adaptor->getPresentationHold()) {
+            // The first synchronous draw can happen while KAG is still
+            // building the destination page, before its crossfade starts. The
+            // adaptor will inspect the eventual capture target and retain an
+            // existing stable image if one is present; a blank target is still
+            // allowed to receive the first frame normally.
+            adaptor->deferNativePresentationOnce();
+        }
+        if(!retainD3DPresentation && !nativePresentationPending &&
            _runtime->d3dPresentationLayer.Type() == tvtObject) {
             if(auto *presentation = resolveNativeLayer(
                    _runtime->d3dPresentationLayer.AsObjectNoAddRef())) {
                 presentation->SetVisible(false);
             }
             adaptor->setRetainedPresentationLayer(nullptr);
+        }
+        if(nativePresentationPending) {
+            // loadFromSnapshot() has already replaced the backend, but the
+            // new SDK player has not received its first progress/variable
+            // pass yet. Reuse the last completed presentation layer so the
+            // SDK's default pose cannot flash during a cold expression load.
+            if(_runtime->d3dPresentationLayer.Type() == tvtObject) {
+                iTJSDispatch2 *presentationObject =
+                    _runtime->d3dPresentationLayer.AsObjectNoAddRef();
+                if(auto *presentation = resolveNativeLayer(presentationObject);
+                   presentation && presentation->GetHasImage()) {
+                    presentation->SetVisible(true);
+                    adaptor->setRetainedPresentationLayer(presentationObject);
+                    adaptor->setRenderedLayer(presentationObject);
+                    if(!_nativeBackendPresentationHoldLogged && LOGGER) {
+                        _nativeBackendPresentationHoldLogged = true;
+                        LOGGER->info(
+                            "native motion presentation hold: source={} reason=awaiting-first-progress route=retained-layer",
+                            _nativeBackendSourcePath);
+                    }
+                    _nativeBackendPresentationReady = true;
+                    return true;
+                }
+            }
+            if(_runtime->lastD3DRenderLayer <
+               _runtime->d3dRenderLayers.size()) {
+                tTJSVariant &lastLayerSlot = _runtime->d3dRenderLayers[
+                    _runtime->lastD3DRenderLayer];
+                iTJSDispatch2 *lastLayerObject =
+                    lastLayerSlot.Type() == tvtObject
+                        ? lastLayerSlot.AsObjectNoAddRef()
+                        : nullptr;
+                if(auto *lastLayer = resolveNativeLayer(lastLayerObject);
+                   lastLayer && lastLayer->GetHasImage()) {
+                    adaptor->setRenderedLayer(lastLayerObject);
+                    if(!_nativeBackendPresentationHoldLogged && LOGGER) {
+                        _nativeBackendPresentationHoldLogged = true;
+                        LOGGER->info(
+                            "native motion presentation hold: source={} reason=awaiting-first-progress route=last-d3d-layer",
+                            _nativeBackendSourcePath);
+                    }
+                    _nativeBackendPresentationReady = true;
+                    return true;
+                }
+            }
         }
         const auto rasterNowUs = motionRenderProfileNowUs();
         if(!_nativeBackend && !retainD3DPresentation &&
@@ -11426,6 +11490,7 @@ namespace motion {
                 adaptor->setRetainedPresentationLayer(
                     presentationLayerObject);
                 adaptor->setRenderedLayer(presentationLayerObject);
+                _nativeBackendPresentationReady = true;
                 return true;
             }
 
@@ -11450,6 +11515,7 @@ namespace motion {
             _runtime->lastD3DRenderLayer = renderLayerIndex;
             _runtime->lastD3DRasterPublishUs =
                 motionRenderProfileNowUs();
+            _nativeBackendPresentationReady = true;
             return true;
         }
         detail::logoChainTraceLogf(
@@ -12460,11 +12526,29 @@ namespace motion {
             placeCenteredPresentationBelowMessageUi(
                 finalNativeLayer, "target-select");
         }
+        if(_nativeBackend && !_nativeBackendPresentationReady) {
+            // The layer already contains the last stable native frame. Do not
+            // clear and replace it with the SDK's default pose before the
+            // first progress pass applies the new source state.
+            if(finalNativeLayer && finalNativeLayer->GetHasImage()) {
+                _runtime->lastCanvas =
+                    tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                if(!_nativeBackendPresentationHoldLogged && LOGGER) {
+                    _nativeBackendPresentationHoldLogged = true;
+                    LOGGER->info(
+                        "native motion presentation hold: source={} reason=awaiting-first-progress route=layer",
+                        _nativeBackendSourcePath);
+                }
+                _nativeBackendPresentationReady = true;
+                return true;
+            }
+        }
         if(_nativeBackend) {
             if(renderNativeBackendToLayer(finalLayerObject, canvasWidth,
                                           canvasHeight, skipUpdate)) {
                 _runtime->lastCanvas =
                     tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+                _nativeBackendPresentationReady = true;
                 return true;
             }
             // A native backend that cannot render this object must not leave
@@ -12472,6 +12556,8 @@ namespace motion {
             // renderer for the remainder of the player's lifetime.
             _nativeBackend.reset();
             _nativeBackendSourcePath.clear();
+            _nativeBackendPresentationReady = true;
+            _nativeBackendPresentationHoldLogged = false;
         }
         ensureNodeTreeBuilt();
         const bool parentStateChanged = applyMotionParentRootStateForRender();
@@ -14692,6 +14778,11 @@ namespace motion {
             }
             invokeNativeBackend(
                 "progress", { MotionBackendValue::Number(actualDelta) });
+            // The first native frame after a cold source switch must not be
+            // exposed until this progress pass has applied the restored and
+            // authored variables to the new SDK player.  loadFromSnapshot()
+            // leaves the previous presentation visible while this gate is
+            // false, so the next render publishes the intended pose directly.
             _layersDirty = false;
             _emoteDirty = true;
         } else {

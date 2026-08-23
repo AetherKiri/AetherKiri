@@ -137,6 +137,83 @@ namespace motion {
             }
         }
 
+        // AffineSourceMotion draws into the shared adaptor and commits the
+        // completed surface to its authored character layer in TJS. During a
+        // cold native-player replacement, keep that final layer untouched for
+        // the first rendered frame so the SDK's default pose is never
+        // published as a whole-character flash.
+        void setPresentationTarget(tTJSVariant target) {
+            _presentationTarget = target;
+            _presentationHold = false;
+            _presentationProbeLogged = false;
+        }
+
+        void clearPresentationTarget() {
+            _presentationTarget.Clear();
+            _presentationHold = false;
+        }
+
+        bool getPresentationHold() const { return _presentationHold; }
+
+        // A freshly cloned native E-mote player can be drawn once while KAG
+        // is still assembling the destination page. Keep that rendered frame
+        // in the private adaptor surface, but let captureCanvas decide whether
+        // the currently visible authored target already has a stable image.
+        // A hidden page is the destination of the transition and must still
+        // receive the new frame; otherwise the transition source becomes an
+        // empty page and the character disappears before the fade starts.
+        void deferNativePresentationOnce() {
+            _deferNativePresentationOnce = true;
+        }
+
+        bool preparePresentationHoldIfTargetHasImage() {
+            _presentationHold = false;
+            auto logger = spdlog::get("plugin");
+            const char *debug = std::getenv("AETHERKIRI_MOTION_DEBUG");
+            const bool logProbe = debug && *debug && std::strcmp(debug, "0") != 0 &&
+                                  logger && !_presentationProbeLogged;
+            if(_presentationTarget.Type() != tvtObject) {
+                if(logProbe) {
+                    logger->info(
+                        "native motion presentation target probe: targetType={} targetObject=<null> result=no-object",
+                        static_cast<int>(_presentationTarget.Type()));
+                    _presentationProbeLogged = true;
+                }
+                return false;
+            }
+            auto *targetObject = _presentationTarget.AsObjectNoAddRef();
+            tTJSNI_BaseLayer *targetLayer = nullptr;
+            const bool layerResolved = targetObject &&
+                TJS_SUCCEEDED(targetObject->NativeInstanceSupport(
+                    TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                    reinterpret_cast<iTJSNativeInstance **>(&targetLayer))) &&
+                targetLayer;
+            if(logProbe) {
+                logger->info(
+                    "native motion presentation target probe: targetObject={} layerResolved={} layer={} hasImage={} mainImage={} size={}x{} visible={} parentVisible={} result={}",
+                    static_cast<const void *>(targetObject),
+                    layerResolved ? 1 : 0,
+                    static_cast<const void *>(targetLayer),
+                    layerResolved && targetLayer->GetHasImage() ? 1 : 0,
+                    layerResolved && targetLayer->GetMainImage() ? 1 : 0,
+                    layerResolved ? targetLayer->GetImageWidth() : 0,
+                    layerResolved ? targetLayer->GetImageHeight() : 0,
+                    layerResolved && targetLayer->GetVisible() ? 1 : 0,
+                    layerResolved && targetLayer->GetParentVisible() ? 1 : 0,
+                    layerResolved && targetLayer->GetHasImage() &&
+                            targetLayer->GetMainImage()
+                        ? "hold"
+                        : "publish");
+                _presentationProbeLogged = true;
+            }
+            if(!layerResolved) {
+                return false;
+            }
+            _presentationHold = targetLayer->GetHasImage() &&
+                                targetLayer->GetMainImage() != nullptr;
+            return _presentationHold;
+        }
+
         // captureCanvas: copies the most recently rendered image into a TJS
         // Layer. Godot-backed layers preserve this CopyRect on the ordered GPU
         // queue instead of downloading the complete canvas and uploading it
@@ -170,6 +247,9 @@ namespace motion {
                    reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
                 return TJS_E_INVALIDPARAM;
             }
+            const bool deferNativePresentation =
+                _deferNativePresentationOnce;
+            _deferNativePresentationOnce = false;
             if(_renderedLayer.Type() == tvtObject) {
                 auto *renderedLayerObj =
                     _renderedLayer.AsObjectNoAddRef();
@@ -180,6 +260,21 @@ namespace motion {
                        reinterpret_cast<iTJSNativeInstance **>(
                            &renderedLayer))) &&
                    renderedLayer) {
+                    if(deferNativePresentation && layer != renderedLayer &&
+                       layer->GetVisible() && layer->GetParentVisible() &&
+                       layer->GetHasImage() && layer->GetMainImage()) {
+                        if(auto logger = spdlog::get("plugin")) {
+                            logger->info(
+                                "motion d3d capture deferred native first frame: "
+                                "target={} rendered={} size={}x{}",
+                                static_cast<const void *>(layer),
+                                static_cast<const void *>(renderedLayer),
+                                layer->GetImageWidth(),
+                                layer->GetImageHeight());
+                        }
+                        if(result) *result = *param[0];
+                        return TJS_S_OK;
+                    }
                     if(!_captureDebugLogged) {
                         const char *debug =
                             std::getenv("AETHERKIRI_MOTION_DEBUG");
@@ -326,6 +421,10 @@ namespace motion {
         std::chrono::steady_clock::time_point _uncapturedDrawStartedAt{};
         std::size_t _drawsSinceCapture = 0;
         bool _captureDebugLogged = false;
+        tTJSVariant _presentationTarget;
+        bool _presentationHold = false;
+        bool _presentationProbeLogged = false;
+        bool _deferNativePresentationOnce = false;
         std::vector<std::uint8_t> _buffer;
     };
 

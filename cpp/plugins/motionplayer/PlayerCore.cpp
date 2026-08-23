@@ -1347,6 +1347,8 @@ namespace motion {
         if(!reuseNativeBackend) {
             _nativeBackend.reset();
             _nativeBackendSourcePath.clear();
+            _nativeBackendPresentationReady = snapshot == nullptr;
+            _nativeBackendPresentationHoldLogged = false;
         }
         disableAutoProgress();
 
@@ -1380,6 +1382,7 @@ namespace motion {
                             std::move(nativeObjectSnapshots);
                         _nativeBackend = extension->createNativePlayer(
                             nativeRequest, &error);
+                        _nativeBackendPresentationReady = !_nativeBackend;
                         if(LOGGER) {
                             if(_nativeBackend) {
                                 _nativeBackendSourcePath =

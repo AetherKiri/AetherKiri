@@ -115,11 +115,14 @@ NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
     NCB_METHOD(unloadUnusedTextures);
     NCB_METHOD(beginGpuBatch);
     NCB_METHOD(endGpuBatch);
+    NCB_METHOD(setPresentationTarget);
+    NCB_METHOD(clearPresentationTarget);
     RawCallback(TJS_W("captureCanvas"), &D3DAdaptor::captureCanvasStatic, 0);
     NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(alphaOpAdd, getAlphaOpAdd, setAlphaOpAdd);
     NCB_PROPERTY(canvasCaptureEnabled, getCanvasCaptureEnabled, setCanvasCaptureEnabled);
     NCB_PROPERTY(clearEnabled, getClearEnabled, setClearEnabled);
+    NCB_PROPERTY_RO(presentationHold, getPresentationHold);
 }
 
 NCB_REGISTER_CLASS(Player) {

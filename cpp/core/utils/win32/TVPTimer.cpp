@@ -3,6 +3,11 @@
 #include "TVPTimer.h"
 #include "TickCount.h"
 
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <spdlog/spdlog.h>
+
 struct tTVPTimerImpl {
     tTVPTimerImpl *Prev = nullptr, *Next = nullptr;
     TVPTimer *pTimer = nullptr;
@@ -109,6 +114,13 @@ void tTVPTimerImpl::FireNext() {
 void TVPTimer::ProgressAllTimer() {
     uint32_t curTick = TVPGetRoughTickCount32();
     int past = curTick - _timer_idx._idx;
+    static const bool profileEnabled = [] {
+        const char *value = std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+        return value && *value && std::strcmp(value, "0") != 0;
+    }();
+    const auto profileStarted = profileEnabled
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point{};
     for(int i = 0; i < past; ++i) {
         _timer_v1[_timer_idx._idx_v1].FireNext();
         ++_timer_idx._idx;
@@ -172,6 +184,16 @@ void TVPTimer::ProgressAllTimer() {
         p->Next = nullptr;
         p->Set();
         p = next;
+    }
+    if(profileEnabled) {
+        const double elapsedMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - profileStarted).count();
+        if(past >= 20 || elapsedMs >= 5.0) {
+            if(const auto logger = spdlog::get("core")) {
+                logger->info("timer progress profile: past_ms={} elapsed_ms={:.3f}",
+                             past, elapsedMs);
+            }
+        }
     }
 }
 

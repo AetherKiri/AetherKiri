@@ -1746,12 +1746,14 @@ TEST_CASE("resource manager owns snapshots only while their module is cached") {
     REQUIRE(manager.uniqueCachedModuleCount() == 0);
 }
 
-TEST_CASE("resource managers reuse the most recent exact motion module") {
+TEST_CASE("resource managers keep an unloaded motion module warm") {
     setEmoteSeed();
 
     motion::ResourceManager first;
     const auto firstModule = first.load(motionFixturePath());
     REQUIRE(firstModule.Type() == tvtObject);
+    first.unload(motionFixturePath());
+    REQUIRE(first.uniqueCachedModuleCount() == 0);
 
     motion::ResourceManager second;
     const auto secondModule = second.load(motionFixturePath());
@@ -1759,6 +1761,36 @@ TEST_CASE("resource managers reuse the most recent exact motion module") {
     REQUIRE(secondModule.AsObjectNoAddRef() ==
             firstModule.AsObjectNoAddRef());
     REQUIRE(second.uniqueCachedModuleCount() == 1);
+}
+
+TEST_CASE("resource manager warm cache retains multiple motion modules") {
+    motion::ResourceManager::resetStaticStateForHostSession();
+    setEmoteSeed();
+
+    TemporaryAutoPath temporary;
+    const auto firstPath = temporary.path() / "first-motion.psb";
+    const auto secondPath = temporary.path() / "second-motion.psb";
+    std::filesystem::copy_file(
+        motionFixturePath().AsStdString(), firstPath,
+        std::filesystem::copy_options::overwrite_existing);
+    std::filesystem::copy_file(
+        motionFixturePath().AsStdString(), secondPath,
+        std::filesystem::copy_options::overwrite_existing);
+
+    motion::ResourceManager first;
+    const auto firstModule = first.load(ttstr{firstPath.string()});
+    REQUIRE(firstModule.Type() == tvtObject);
+    first.unload(ttstr{firstPath.string()});
+
+    motion::ResourceManager second;
+    REQUIRE(second.load(ttstr{secondPath.string()}).Type() == tvtObject);
+    second.unload(ttstr{secondPath.string()});
+
+    motion::ResourceManager reloaded;
+    const auto reloadedFirst = reloaded.load(ttstr{firstPath.string()});
+    REQUIRE(reloadedFirst.Type() == tvtObject);
+    REQUIRE(reloadedFirst.AsObjectNoAddRef() ==
+            firstModule.AsObjectNoAddRef());
 }
 
 TEST_CASE("emoteplayer timeline state and todo stubs") {
