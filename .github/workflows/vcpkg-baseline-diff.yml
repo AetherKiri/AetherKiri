@@ -83,10 +83,12 @@ jobs:
             "${RUNNER_TEMP}/old-baseline.json" \
             "${RUNNER_TEMP}/new-baseline.json" \
             "$OLD_SHA" "$NEW_SHA" \
-            --output "${RUNNER_TEMP}/baseline-report.md"
-          cat "${RUNNER_TEMP}/baseline-report.md" >> "$GITHUB_STEP_SUMMARY"
+            --output-dir "${RUNNER_TEMP}/baseline-report"
+          cat "${RUNNER_TEMP}"/baseline-report/*.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Update pull request comment
+      # 单条评论有 65536 字符上限，报告按预算分片：逐片原地更新已有评论，
+      # 不够就新增，多余的删除，保证反复 push 后评论数量与分片数一致。
+      - name: Update pull request comments
         if: steps.baselines.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,15 +96,28 @@ jobs:
           MARKER: '<!-- aetherkiri:vcpkg-baseline-diff -->'
         run: |
           set -euo pipefail
-          body="$(cat "${RUNNER_TEMP}/baseline-report.md")"
-          comment_id="$(gh api \
+          shopt -s nullglob
+          parts=( "${RUNNER_TEMP}"/baseline-report/*.md )
+          if (( ${#parts[@]} == 0 )); then
+            echo "No report parts generated." >&2
+            exit 1
+          fi
+          mapfile -t comment_ids < <(gh api \
             --method GET \
             "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            --jq "[.[] | select(.body | startswith(\"${MARKER}\"))][0].id // empty")"
-          if [[ -n "$comment_id" ]]; then
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
-              -f body="$body" >/dev/null
-          else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              -f body="$body" >/dev/null
-          fi
+            --jq "[.[] | select(.body | startswith(\"${MARKER}\"))][].id")
+          total=$(( ${#parts[@]} > ${#comment_ids[@]} ? ${#parts[@]} : ${#comment_ids[@]} ))
+          for ((i = 0; i < total; i++)); do
+            if (( i < ${#parts[@]} )); then
+              body="$(cat "${parts[$i]}")"
+              if (( i < ${#comment_ids[@]} )); then
+                gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_ids[$i]}" \
+                  -f body="$body" >/dev/null
+              else
+                gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+                  -f body="$body" >/dev/null
+              fi
+            else
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_ids[$i]}" >/dev/null
+            fi
+          done

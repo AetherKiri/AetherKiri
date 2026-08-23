@@ -1,9 +1,10 @@
 import argparse
 import json
+from pathlib import Path
 
 
 MARKER = "<!-- aetherkiri:vcpkg-baseline-diff -->"
-MAX_ROWS_DEFAULT = 60
+MAX_BYTES_DEFAULT = 45000
 
 LABELS = {
     "major": "更新（major ⚠️）",
@@ -12,6 +13,11 @@ LABELS = {
     "added": "新增",
     "removed": "移除",
 }
+
+TABLE_HEADER = [
+    "| Port | 原版本 | 新版本 | 变更类型 |",
+    "| --- | --- | --- | --- |",
+]
 
 
 def load_entries(path):
@@ -51,11 +57,7 @@ def classify(old, new):
     return "update"
 
 
-def format_row(port, old, new, kind):
-    return f"| {port} | {old or '-'} | {new or '-'} | {LABELS[kind]} |"
-
-
-def build_report(old_entries, new_entries, old_sha, new_sha, max_rows):
+def collect_rows(old_entries, new_entries):
     changed = []
     for port in sorted(set(old_entries) & set(new_entries)):
         old_v = entry_version(old_entries[port])
@@ -71,29 +73,77 @@ def build_report(old_entries, new_entries, old_sha, new_sha, max_rows):
         + [(p, o, n, "added") for p, o, n in added]
     )
     rows.sort(key=lambda item: (item[3] != "major", item[0]))
+    return rows
 
-    shown = rows[:max_rows]
-    lines = [
-        MARKER,
-        "## vcpkg baseline 变更明细",
-        "",
-        f"Baseline `{old_sha[:7]}` → `{new_sha[:7]}` 共影响 **{len(rows)}** 个 port："
-        f"{len(changed)} 个版本变更、{len(added)} 个新增、{len(removed)} 个移除。",
-        "",
-        "| Port | 原版本 | 新版本 | 变更类型 |",
-        "| --- | --- | --- | --- |",
-    ]
-    lines.extend(format_row(*item) for item in shown)
-    compare_url = f"https://github.com/microsoft/vcpkg/compare/{old_sha}...{new_sha}"
-    if len(rows) > len(shown):
-        lines.append("")
-        lines.append(
-            f"> 还有 {len(rows) - len(shown)} 个 port 未列出，完整列表见 [compare 视图]({compare_url})。"
-        )
+
+def format_row(item):
+    port, old, new, kind = item
+    return f"| {port} | {old or '-'} | {new or '-'} | {LABELS[kind]} |"
+
+
+def split_rows(rows, max_bytes, part_zero_overhead):
+    budget = max_bytes - 512
+    chunks = []
+    current = []
+    current_size = part_zero_overhead
+
+    for row in rows:
+        size = len(row.encode("utf-8")) + 1
+        if current and current_size + size > budget:
+            chunks.append(current)
+            current = []
+            current_size = 512
+        current.append(row)
+        current_size += size
+    chunks.append(current)
+    return chunks
+
+
+def render_part(index, total, chunk, summary_line, compare_url):
+    lines = [MARKER]
+    if index == 0:
+        lines += ["## vcpkg baseline 变更明细", "", summary_line, ""]
     else:
-        lines.append("")
-        lines.append(f"> 完整对比见 [microsoft/vcpkg compare]({compare_url})。")
+        lines += [f"## vcpkg baseline 变更明细（续 {index + 1}/{total}）", ""]
+    lines += TABLE_HEADER
+    lines += chunk
+    lines += ["", compare_url]
     return "\n".join(lines) + "\n"
+
+
+def write_report(old_entries, new_entries, old_sha, new_sha, out_dir, basename, max_bytes):
+    structured = collect_rows(old_entries, new_entries)
+    changed = sum(1 for item in structured if item[3] not in ("added", "removed"))
+    added = sum(1 for item in structured if item[3] == "added")
+    removed = sum(1 for item in structured if item[3] == "removed")
+    rows = [format_row(item) for item in structured]
+
+    summary_line = (
+        f"Baseline `{old_sha[:7]}` → `{new_sha[:7]}` 共影响 **{len(rows)}** 个 port："
+        f"{changed} 个版本变更、{added} 个新增、{removed} 个移除。"
+    )
+    compare_url = (
+        f"> 完整对比见 [microsoft/vcpkg compare]"
+        f"(https://github.com/microsoft/vcpkg/compare/{old_sha}...{new_sha})。"
+    )
+
+    header_probe = len(render_part(0, 1, [], summary_line, compare_url).encode("utf-8"))
+    chunks = split_rows(rows, max_bytes, header_probe)
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for stale in out_dir.glob(f"{basename}-*.md"):
+        stale.unlink()
+    total = len(chunks)
+    paths = []
+    for index, chunk in enumerate(chunks):
+        content = render_part(index, total, chunk, summary_line, compare_url)
+        path = out_dir / f"{basename}-{index + 1:03d}.md"
+        path.write_text(content, encoding="utf-8")
+        if len(content.encode("utf-8")) > 65000:
+            raise SystemExit(f"part {path.name} exceeds GitHub comment limit")
+        paths.append(path)
+    print(f"generated {total} part(s) covering {len(rows)} ports under {out_dir}")
 
 
 def main():
@@ -102,19 +152,20 @@ def main():
     parser.add_argument("new")
     parser.add_argument("old_sha")
     parser.add_argument("new_sha")
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--max-rows", type=int, default=MAX_ROWS_DEFAULT)
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--basename", default="vcpkg-baseline-report")
+    parser.add_argument("--max-bytes", type=int, default=MAX_BYTES_DEFAULT)
     args = parser.parse_args()
 
-    report = build_report(
+    write_report(
         load_entries(args.old),
         load_entries(args.new),
         args.old_sha,
         args.new_sha,
-        args.max_rows,
+        args.output_dir,
+        args.basename,
+        args.max_bytes,
     )
-    with open(args.output, "w", encoding="utf-8") as fh:
-        fh.write(report)
 
 
 if __name__ == "__main__":
