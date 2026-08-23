@@ -1,0 +1,46 @@
+version: 2
+
+updates:
+  # 根目录的 npm 依赖（TypeScript / Vite / @types/node）
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      # 把所有 devDependencies（非安全更新）合并成一个 PR，减少噪音
+      dev-dependencies:
+        dependency-type: "development"
+    ignore:
+      # 大版本（如 7.x -> 8.x）基本都有接口不一致问题，需要人工评估后手动升级，
+      # 不让 Dependabot 自动开 PR；patch / minor 照常自动更新
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # vcpkg：只更新 vcpkg-configuration.json 中 default-registry 的 baseline SHA，
+  # 整体前进所有未 pin 的包；overrides 里的固定版本不会被改动
+  # （overlay-ports 里的本地 port 不在范围内）
+  - package-ecosystem: "vcpkg"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      # baseline 每动一次都要全量重编，合并成一个 PR 减少构建次数
+      vcpkg-ports:
+        patterns:
+          - "*"
+
+  # GitHub Actions 版本升级
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    ignore:
+      # Action 的 major 升级（如 v4 -> v5）同样可能有 breaking change，人工评估后手动升
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

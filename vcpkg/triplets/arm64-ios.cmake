@@ -4,6 +4,7 @@ set(VCPKG_LIBRARY_LINKAGE static)
 set(VCPKG_CMAKE_SYSTEM_NAME iOS)
 set(VCPKG_OSX_DEPLOYMENT_TARGET 16.0)
 set(VCPKG_OSX_ARCHITECTURES arm64)
+set(VCPKG_MESON_CROSS_FILE "${CMAKE_CURRENT_LIST_DIR}/../meson/ios-cross.ini")
 
 # Fix autotools cross-compilation detection for iOS
 # Without this, --host and --build are both aarch64-apple-darwin on Apple Silicon,

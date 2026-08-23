@@ -320,6 +320,22 @@ combine_ios_static_extension() {
         ! -name 'libgodot-cpp*.a' \
         ! -name 'libSDL2main.a' | sort)
 
+    # Some vcpkg ports (e.g. tiff on iOS) install static libraries as
+    # <name>.framework bundles instead of lib<name>.a. Merge their archive
+    # binaries too, otherwise consumers of those ports fail to link.
+    while IFS= read -r framework; do
+        fw_name="$(basename "$framework" .framework)"
+        fw_binary="$framework/Versions/Current/$fw_name"
+        if [[ ! -e "$fw_binary" ]]; then
+            fw_binary="$framework/$fw_name"
+        fi
+        if [[ -f "$fw_binary" && "$(head -c 8 "$fw_binary" 2>/dev/null)" == '!<arch>'* ]]; then
+            libs+=("$fw_binary")
+        else
+            echo "warning: skipping non-static framework: $framework" >&2
+        fi
+    done < <(find "$vcpkg_lib_dir" -maxdepth 1 -name '*.framework' | sort)
+
     local existing_libs=()
     local lib
     for lib in "${libs[@]}"; do
