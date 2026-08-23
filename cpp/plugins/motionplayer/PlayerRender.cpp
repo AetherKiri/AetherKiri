@@ -166,6 +166,31 @@ namespace {
         return cache;
     }
 
+    void clearSharedMotionSourceBitmapCache() {
+        auto &cache = sharedMotionSourceBitmapCache();
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        cache.entries.clear();
+        cache.bytes = 0;
+        cache.useCounter = 0;
+    }
+
+    class MotionPlayerCompactEventCallback final
+        : public tTVPCompactEventCallbackIntf {
+    public:
+        void OnCompact(tjs_int level) override {
+            if(level < TVP_COMPACT_LEVEL_MINIMIZE) {
+                return;
+            }
+            // Drop only process-level warm-cache ownership. Active players
+            // retain their own shared_ptrs until the current frame finishes.
+            clearSharedMotionSourceBitmapCache();
+            motion::ResourceManager::trimStaticStateForMemoryPressure();
+        }
+    };
+
+    MotionPlayerCompactEventCallback g_motionPlayerCompactEventCallback;
+    std::once_flag g_motionPlayerCompactEventHookOnce;
+
     void appendMotionSourceFingerprint(
         std::uint64_t &first,
         std::uint64_t &second,
@@ -256,7 +281,12 @@ namespace {
             cache.bytes += bitmapBytes;
         }
 
-        constexpr std::size_t kSharedBitmapCacheLimit = 256u * 1024u * 1024u;
+        // Keep the process-wide source cache below the size of a typical
+        // full-screen render history. Per-player caches still retain the
+        // active motion, while old source bitmaps are allowed to cold-load
+        // again instead of accumulating alongside GPU layer textures.
+        constexpr std::size_t kSharedBitmapCacheLimit =
+            256u * 1024u * 1024u;
         while(cache.bytes > kSharedBitmapCacheLimit &&
               cache.entries.size() > 1) {
             auto oldest = cache.entries.begin();
@@ -7581,6 +7611,12 @@ namespace {
 
 } // namespace
 
+extern "C" void AetherKiriMotionEnsureCompactEventHook() {
+    std::call_once(g_motionPlayerCompactEventHookOnce, [] {
+        TVPAddCompactEventHook(&g_motionPlayerCompactEventCallback);
+    });
+}
+
 extern "C" void AetherKiriMotionResetForGameSession() {
     AetherKiriMotionPlayerCoreResetForGameSession();
     resetMotionStateForHostSession();
@@ -8859,6 +8895,7 @@ namespace motion {
             int preparedMisses = 0;
             int storageLoads = 0;
             int psbLoads = 0;
+            int sourceColdLoads = 0;
             int tintBuilds = 0;
             int tintEvictions = 0;
             int directOutputs = 0;
@@ -8873,6 +8910,7 @@ namespace motion {
             std::uint64_t psbMetadataUs = 0;
             std::uint64_t psbDecodeUs = 0;
             std::uint64_t psbConvertUs = 0;
+            std::uint64_t sourceColdLoadUs = 0;
         };
         RenderProfileStats profileStats;
         const bool profileEnabled = motionRenderProfileEnabled();
@@ -9002,6 +9040,7 @@ namespace motion {
             std::string sharedBitmapKey;
             std::vector<std::uint8_t> decodedPixels;
             bool decodedPixelsAreBgra = false;
+            bool sourceColdLoad = false;
             const auto metadataStartUs =
                 profileEnabled ? motionRenderProfileNowUs() : 0;
             const auto *resourceMetadata = findPSBResourceBySourceName(
@@ -9024,6 +9063,7 @@ namespace motion {
                         ++profileStats.sharedBitmapHits;
                     } else {
                         ++profileStats.sharedBitmapMisses;
+                        sourceColdLoad = true;
                     }
                 }
             }
@@ -9062,6 +9102,7 @@ namespace motion {
                     TVPLoadGraphic(bmp.get(), loadPath, TVP_clNone, 0, 0,
                                    glmNormal, nullptr, nullptr);
                     if(bmp->GetWidth() > 0 && bmp->GetHeight() > 0) {
+                        sourceColdLoad = true;
                         // LimeLight's numbered title motions address a
                         // 677x288 local logo, while the archive resolves the
                         // same key to a transparent 1920x1080 design-canvas
@@ -9129,6 +9170,7 @@ namespace motion {
                     }
                 }
                 if(resource && width > 0 && height > 0 && !resource->data.empty()) {
+                    sourceColdLoad = true;
                     const bool sourcePixelsAreBgra = motionSourcePixelsAreBGRA(
                         decodedPixelsAreBgra);
                     if(!srcBmp) {
@@ -9222,6 +9264,27 @@ namespace motion {
                 sourceOrigin,
                 srcBmp ? srcBmp->GetWidth() : 0,
                 srcBmp ? srcBmp->GetHeight() : 0);
+
+            if(profileEnabled && LOGGER && sourceColdLoad && srcBmp) {
+                const auto coldLoadUs =
+                    motionRenderProfileNowUs() - resolveStartUs;
+                const double tickFrameMs = _frameLastTime > 0.0
+                    ? _frameLastTime * (1000.0 / 60.0)
+                    : 0.0;
+                const double tickFps = tickFrameMs > 0.0
+                    ? 1000.0 / tickFrameMs
+                    : 0.0;
+                ++profileStats.sourceColdLoads;
+                profileStats.sourceColdLoadUs += coldLoadUs;
+                LOGGER->info(
+                    "motion source cold load: motion={} frame={:.2f} source={} origin={} size={}x{} load_ms={:.2f} tick_frame_ms={:.2f} tick_fps={:.2f} shared_cache={}{}",
+                    motionPath, _clampedEvalTime, command.sourceKey,
+                    sourceOrigin, srcBmp->GetWidth(), srcBmp->GetHeight(),
+                    static_cast<double>(coldLoadUs) / 1000.0,
+                    tickFrameMs, tickFps,
+                    sharedBitmapKey.empty() ? "none" : "miss",
+                    sharedBitmapKey.empty() ? "" : " (cold source cache)");
+            }
 
             if(srcBmp) {
                 const int bitmapWidth = static_cast<int>(srcBmp->GetWidth());
@@ -11170,6 +11233,50 @@ namespace motion {
                 }
                 cache.erase(oldest);
             }
+            // Entry count alone is not a useful memory bound: a composite
+            // command can own a full-canvas GPU layer, while a small icon
+            // command is only a few KiB. Bound retained work surfaces by
+            // their estimated pixel footprint during this periodic pass.
+            const auto layerBytes = [](const tTJSVariant &value) {
+                if(value.Type() != tvtObject) {
+                    return std::size_t{0};
+                }
+                auto *layer = resolveNativeLayer(value.AsObjectNoAddRef());
+                if(!layer || !layer->GetMainImage()) {
+                    return std::size_t{0};
+                }
+                return static_cast<std::size_t>(layer->GetImageWidth()) *
+                    static_cast<std::size_t>(layer->GetImageHeight()) * 4u;
+            };
+            const auto entryBytes = [&](const auto &entry) {
+                // Slots may alias while a composed output is promoted. A
+                // conservative sum intentionally errs toward eviction.
+                return layerBytes(entry.leafLayer) +
+                    layerBytes(entry.composedLayer) +
+                    layerBytes(entry.maskLayer) +
+                    layerBytes(entry.unionMaskLayer);
+            };
+            constexpr std::size_t kCommandOutputCacheLimitBytes =
+                96u * 1024u * 1024u;
+            auto totalBytes = [&]() {
+                std::size_t result = 0;
+                for(const auto &entry : cache) {
+                    result += entryBytes(entry.second);
+                }
+                return result;
+            };
+            while(cache.size() > 1u &&
+                  totalBytes() > kCommandOutputCacheLimitBytes) {
+                auto oldest = cache.begin();
+                for(auto it = std::next(cache.begin());
+                    it != cache.end(); ++it) {
+                    if(it->second.lastUseGeneration <
+                       oldest->second.lastUseGeneration) {
+                        oldest = it;
+                    }
+                }
+                cache.erase(oldest);
+            }
         }
         if(profileEnabled && LOGGER) {
             size_t materializedPreparedEntries = 0;
@@ -11177,7 +11284,7 @@ namespace motion {
                 materializedPreparedEntries += entry.second.size();
             }
             LOGGER->info(
-                "motion render profile: motion={} frame={:.2f} target={} native={} commands={} signature={:016x} outputs=direct:{} buffered:{} cache=command:{}/{} base:{}/{} shared:{}/{} prepared:{}/{} entries=command:{} prepared:{} materialized:{} evictions:{} loads=storage:{} psb:{} tintBuilds={} us=total:{} base:{} prepared:{} tint:{} alloc:{} apply:{} psbMeta:{} psbDecode:{} psbConvert:{}",
+                "motion render profile: motion={} frame={:.2f} target={} native={} commands={} signature={:016x} outputs=direct:{} buffered:{} cache=command:{}/{} base:{}/{} shared:{}/{} prepared:{}/{} entries=command:{} prepared:{} materialized:{} evictions:{} loads=storage:{} psb:{} cold:{} tintBuilds={} us=total:{} base:{} prepared:{} tint:{} alloc:{} apply:{} psbMeta:{} psbDecode:{} psbConvert:{} coldLoad:{}",
                 motionPath, _clampedEvalTime,
                 static_cast<const void *>(renderLayerObject),
                 static_cast<const void *>(renderLayer),
@@ -11195,12 +11302,13 @@ namespace motion {
                 preparedSourceCache.size(), materializedPreparedEntries,
                 profileStats.tintEvictions,
                 profileStats.storageLoads, profileStats.psbLoads,
-                profileStats.tintBuilds,
+                profileStats.sourceColdLoads, profileStats.tintBuilds,
                 motionRenderProfileNowUs() - profileStartUs,
                 profileStats.baseResolveUs, profileStats.preparedResolveUs,
                 profileStats.tintBuildUs, profileStats.tintAllocateUs,
                 profileStats.tintApplyUs, profileStats.psbMetadataUs,
-                profileStats.psbDecodeUs, profileStats.psbConvertUs);
+                profileStats.psbDecodeUs, profileStats.psbConvertUs,
+                profileStats.sourceColdLoadUs);
         }
         return gpuBatch.finish();
     }

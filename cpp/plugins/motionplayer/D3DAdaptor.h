@@ -155,6 +155,12 @@ namespace motion {
 
         bool getPresentationHold() const { return _presentationHold; }
 
+        // True when the most recent captureCanvas call copied an already
+        // rendered layer through the GPU path. D3DEmote can then hand the
+        // captured frame directly to AssignMotionImages; calling the legacy
+        // script-side _redrawImage would redraw the same frame a second time.
+        bool getGpuCapture() const { return _lastCaptureGpu; }
+
         // A freshly cloned native E-mote player can be drawn once while KAG
         // is still assembling the destination page. Keep that rendered frame
         // in the private adaptor surface, but let captureCanvas decide whether
@@ -221,6 +227,12 @@ namespace motion {
         tjs_error captureCanvas(tTJSVariant *result, tjs_int numparams,
                                 tTJSVariant **param, iTJSDispatch2 *objthis) {
             if(numparams < 1 || !param[0]) return TJS_E_BADPARAMCOUNT;
+
+            const bool profileCapture = captureProfileEnabled();
+            _lastCaptureGpu = false;
+            const auto captureStarted =
+                profileCapture ? std::chrono::steady_clock::now()
+                               : std::chrono::steady_clock::time_point{};
 
             iTJSDispatch2 *layerObj = param[0]->AsObjectNoAddRef();
             if(!layerObj) return TJS_E_INVALIDPARAM;
@@ -329,15 +341,34 @@ namespace motion {
                     const auto height = static_cast<tjs_uint>(
                         renderedLayer->GetImageHeight());
                     if(width > 0 && height > 0) {
+                        double copyMs = 0.0;
                         if(layer != renderedLayer) {
                             if(!layer->GetHasImage()) layer->SetHasImage(true);
                             layer->SetImageSize(width, height);
+                            const auto copyStarted =
+                                std::chrono::steady_clock::now();
                             layer->CopyRect(
                                 0, 0, renderedLayer->GetMainImage(), nullptr,
                                 tTVPRect(0, 0, static_cast<tjs_int>(width),
                                          static_cast<tjs_int>(height)));
+                            copyMs = std::chrono::duration<double, std::milli>(
+                                         std::chrono::steady_clock::now() -
+                                         copyStarted)
+                                         .count();
                         }
+                        const auto updateStarted =
+                            std::chrono::steady_clock::now();
                         layer->Update(false);
+                        const double updateMs =
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() -
+                                updateStarted)
+                                .count();
+                        logCaptureProfile(
+                            layer == renderedLayer ? "gpu-same-layer"
+                                                   : "gpu-copy-rect",
+                            width, height, captureStarted, copyMs, updateMs);
+                        _lastCaptureGpu = true;
                         if(result) *result = *param[0];
                         return TJS_S_OK;
                     }
@@ -358,13 +389,25 @@ namespace motion {
             if(!dst || dstPitch <= 0) return TJS_S_OK;
 
             const auto srcPitch = static_cast<tjs_int>(_width * 4);
+            const auto copyStarted = std::chrono::steady_clock::now();
             for(int y = 0; y < _height; ++y) {
                 std::memcpy(dst + dstPitch * y,
                             _buffer.data() + srcPitch * y,
                             static_cast<size_t>(srcPitch));
             }
+            const double copyMs = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() -
+                                      copyStarted)
+                                      .count();
 
+            const auto updateStarted = std::chrono::steady_clock::now();
             layer->Update(false);
+            const double updateMs = std::chrono::duration<double, std::milli>(
+                                        std::chrono::steady_clock::now() -
+                                        updateStarted)
+                                        .count();
+            logCaptureProfile("cpu-buffer-copy", _width, _height,
+                              captureStarted, copyMs, updateMs);
 
             if(result) *result = *param[0];
             return TJS_S_OK;
@@ -397,6 +440,45 @@ namespace motion {
         }
 
     private:
+        static bool captureProfileEnabled() {
+            const char *value =
+                std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+            return value != nullptr && value[0] != '\0' &&
+                   std::strcmp(value, "0") != 0;
+        }
+
+        static double captureProfileSlowMs() {
+            const char *value =
+                std::getenv("AETHERKIRI_MOTION_COPY_SLOW_MS");
+            if(value == nullptr || value[0] == '\0') return 5.0;
+            char *end = nullptr;
+            const double parsed = std::strtod(value, &end);
+            return end != value && parsed > 0.0 ? parsed : 5.0;
+        }
+
+        static void logCaptureProfile(
+            const char *route, uint32_t width, uint32_t height,
+            std::chrono::steady_clock::time_point started, double copyMs,
+            double updateMs) {
+            if(started.time_since_epoch().count() == 0) return;
+            const double totalMs =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - started)
+                    .count();
+            if(totalMs < captureProfileSlowMs() &&
+               copyMs < captureProfileSlowMs() &&
+               updateMs < captureProfileSlowMs()) {
+                return;
+            }
+            if(auto logger = spdlog::get("plugin")) {
+                logger->info(
+                    "motion capture profile: route={} total_ms={:.3f} "
+                    "copy_ms={:.3f} update_ms={:.3f} size={}x{}",
+                    route != nullptr ? route : "unknown", totalMs, copyMs,
+                    updateMs, width, height);
+            }
+        }
+
         void allocBuffer() {
             if(_width > 0 && _height > 0) {
                 _buffer.resize(static_cast<size_t>(_width) * _height * 4, 0);
@@ -423,6 +505,7 @@ namespace motion {
         bool _captureDebugLogged = false;
         tTJSVariant _presentationTarget;
         bool _presentationHold = false;
+        bool _lastCaptureGpu = false;
         bool _presentationProbeLogged = false;
         bool _deferNativePresentationOnce = false;
         std::vector<std::uint8_t> _buffer;

@@ -123,6 +123,17 @@ namespace {
             ? parsed
             : 100.0;
     }
+
+    inline double motionAssignmentProfileSlowMs() {
+        const char *value =
+            std::getenv("AETHERKIRI_MOTION_ASSIGN_SLOW_MS");
+        if(!value || !*value) return 5.0;
+        char *end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        return end != value && std::isfinite(parsed) && parsed > 0.0
+            ? parsed
+            : 5.0;
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -5037,6 +5048,17 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
     if(!src || src == this) {
         return;
     }
+    const bool assignmentProfile = layerCompletionProfileEnabled();
+    const auto assignmentStarted =
+        assignmentProfile ? std::chrono::steady_clock::now()
+                          : std::chrono::steady_clock::time_point{};
+    double prepareMs = 0.0;
+    double detachMs = 0.0;
+    double swapMs = 0.0;
+    double provinceMs = 0.0;
+    double geometryMs = 0.0;
+    double updateMs = 0.0;
+    bool detachedSharedTexture = false;
     const bool assignmentTrace =
         TVPLayerTransitionTraceEnabled() &&
         (GetWidth() >= 512 || GetHeight() >= 512 ||
@@ -5092,7 +5114,11 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
     // destination instead: the destination's old texture becomes an
     // independent, already-sized buffer for the next scratch render.
     if(!MainImage) {
+        const auto prepareStarted = std::chrono::steady_clock::now();
         AllocateDefaultImage();
+        prepareMs += std::chrono::duration<double, std::milli>(
+                         std::chrono::steady_clock::now() - prepareStarted)
+                         .count();
     }
 
     // A character layer may have gone through the legacy AssignImages path
@@ -5104,6 +5130,8 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
     // scratch texture into it.
     if(MainImage && src->MainImage &&
        MainImage->GetTexture() == src->MainImage->GetTexture()) {
+        const auto detachStarted = std::chrono::steady_clock::now();
+        detachedSharedTexture = true;
         auto *oldImage = MainImage;
         const auto width = std::max<tjs_uint>(1, oldImage->GetWidth());
         const auto height = std::max<tjs_uint>(1, oldImage->GetHeight());
@@ -5127,10 +5155,17 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
                 static_cast<const void *>(src),
                 static_cast<const void *>(src->MainImage->GetTexture()));
         }
+        detachMs = std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - detachStarted)
+                       .count();
     }
+    const auto swapStarted = std::chrono::steady_clock::now();
     std::swap(MainImage, src->MainImage);
     FontChanged = true;
     src->FontChanged = true;
+    swapMs = std::chrono::duration<double, std::milli>(
+                 std::chrono::steady_clock::now() - swapStarted)
+                 .count();
 
     // Some games create the visible E-mote destination as an otherwise
     // untouched Layer, whose engine default geometry is 32x32.  Swapping in
@@ -5154,6 +5189,7 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
         SetSize(completedWidth, completedHeight);
     }
 
+    const auto provinceStarted = std::chrono::steady_clock::now();
     if(src->ProvinceImage) {
         if(ProvinceImage)
             ProvinceImage->Assign(*src->ProvinceImage);
@@ -5163,7 +5199,11 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
     } else if(ProvinceImage) {
         DeallocateProvinceImage();
     }
+    provinceMs = std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - provinceStarted)
+                     .count();
 
+    const auto geometryStarted = std::chrono::steady_clock::now();
     InternalSetImageSize(completedWidth, completedHeight);
     ResetClip();
     if(src->MainImage) {
@@ -5174,7 +5214,40 @@ void tTJSNI_BaseLayer::AssignMotionImages(tTJSNI_BaseLayer *src) {
 
     ImageModified = true;
     src->ImageModified = true;
+    geometryMs = std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - geometryStarted)
+                     .count();
+    const auto updateStarted = std::chrono::steady_clock::now();
     Update(false);
+    updateMs = std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - updateStarted)
+                   .count();
+
+    if(assignmentProfile) {
+        const double totalMs = std::chrono::duration<double, std::milli>(
+                                   std::chrono::steady_clock::now() -
+                                   assignmentStarted)
+                                   .count();
+        const double threshold = motionAssignmentProfileSlowMs();
+        if(totalMs >= threshold || prepareMs >= threshold ||
+           detachMs >= threshold || provinceMs >= threshold ||
+           geometryMs >= threshold || updateMs >= threshold) {
+            if(auto logger = spdlog::get("core")) {
+                logger->info(
+                    "motion assign profile: total_ms={:.3f} "
+                    "prepare_ms={:.3f} detach_ms={:.3f} swap_ms={:.3f} "
+                    "province_ms={:.3f} geometry_ms={:.3f} "
+                    "update_ms={:.3f} detached={} target={} "
+                    "target_name={} source={} source_name={} size={}x{}",
+                    totalMs, prepareMs, detachMs, swapMs, provinceMs,
+                    geometryMs, updateMs, detachedSharedTexture ? 1 : 0,
+                    static_cast<const void *>(this), GetName().AsStdString(),
+                    static_cast<const void *>(src),
+                    src->GetName().AsStdString(), completedWidth,
+                    completedHeight);
+            }
+        }
+    }
 }
 
 //---------------------------------------------------------------------------

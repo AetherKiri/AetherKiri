@@ -488,6 +488,10 @@ void motion::ResourceManager::resetStaticStateForHostSession() {
     _decryptSeed = 0;
 }
 
+void motion::ResourceManager::trimStaticStateForMemoryPressure() {
+    clearWarmMotionModuleCache();
+}
+
 bool motion::ResourceManager::applyEmotePSBDecryptFunc(
     std::uint8_t *data, const std::size_t size) {
     if(_decryptFunc.Type() != tvtObject ||

@@ -140,6 +140,20 @@ namespace TJS {
         return threshold;
     }
 
+    struct TJSFunctionProfileFrame {
+        const tTJSInterCodeContext *context = nullptr;
+        iTJSDispatch2 *objthis = nullptr;
+        std::chrono::steady_clock::time_point started{};
+        double childMs = 0.0;
+    };
+
+    // ExecuteAsFunction profiles are inclusive by nature. Keep a per-thread
+    // stack so a slow call can also report its self time and nesting depth;
+    // this is the information needed to distinguish a slow wrapper from the
+    // actual script operation below it without tracing every VM instruction.
+    static thread_local std::vector<TJSFunctionProfileFrame>
+        TJSFunctionProfileStack;
+
     class TJSFunctionProfileGuard {
     public:
         TJSFunctionProfileGuard(const tTJSInterCodeContext *context,
@@ -147,20 +161,42 @@ namespace TJS {
             : Context(context), ObjThis(objthis), Enabled(
                   TJSFunctionProfileEnabled()),
               Started(Enabled ? std::chrono::steady_clock::now()
-                               : std::chrono::steady_clock::time_point{}) {}
+                               : std::chrono::steady_clock::time_point{}),
+              StackIndex(0), Pushed(false) {
+            if(Enabled) {
+                StackIndex = TJSFunctionProfileStack.size();
+                TJSFunctionProfileStack.push_back(
+                    {Context, ObjThis, Started, 0.0});
+                Pushed = true;
+            }
+        }
 
         ~TJSFunctionProfileGuard() {
             if(!Enabled || !Context)
                 return;
             const double elapsedMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - Started).count();
+            double childMs = 0.0;
+            size_t depth = 0;
+            if(Pushed && StackIndex < TJSFunctionProfileStack.size()) {
+                childMs = TJSFunctionProfileStack[StackIndex].childMs;
+                depth = StackIndex;
+                if(StackIndex > 0) {
+                    TJSFunctionProfileStack[StackIndex - 1].childMs +=
+                        elapsedMs;
+                }
+                TJSFunctionProfileStack.pop_back();
+            }
+            const double selfMs = std::max(0.0, elapsedMs - childMs);
             if(elapsedMs < TJSFunctionProfileSlowMs())
                 return;
             if(const auto logger = spdlog::get("core")) {
                 logger->info(
-                    "tjs function profile: desc={} this={} elapsed_ms={:.3f}",
+                    "tjs function profile: desc={} this={} elapsed_ms={:.3f} "
+                    "self_ms={:.3f} child_ms={:.3f} depth={}",
                     Context->GetShortDescriptionWithClassName().AsStdString(),
-                    static_cast<const void *>(ObjThis), elapsedMs);
+                    static_cast<const void *>(ObjThis), elapsedMs, selfMs,
+                    childMs, depth);
             }
         }
 
@@ -169,6 +205,8 @@ namespace TJS {
         iTJSDispatch2 *ObjThis;
         bool Enabled;
         std::chrono::steady_clock::time_point Started;
+        size_t StackIndex;
+        bool Pushed;
     };
 
     static char TJSCompatAsciiLower(char ch) {

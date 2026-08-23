@@ -11881,7 +11881,8 @@ func _log_live_perf(delta: float, tick_ms: float, update_ms: float) -> void:
     if perf_log_accum < perf_log_interval:
         return
     perf_log_accum = 0.0
-    var line := "live_perf fps=%d frame_ms=%.2f tick_ms=%.2f update_ms=%.2f texture=%s size=%dx%d renderer=\"%s\" errors=%d" % [
+    var memory := _runtime_memory_snapshot()
+    var line := "live_perf fps=%d frame_ms=%.2f tick_ms=%.2f update_ms=%.2f texture=%s size=%dx%d renderer=\"%s\" errors=%d app_mb=%d resident_mb=%d gpu_mb=%d gpu_tex_mb=%d cache_mb=%d graphic_cache_mb=%d xp3_cache_mb=%d psb_cache_mb=%d psb_entries=%d" % [
         Engine.get_frames_per_second(),
         delta * 1000.0,
         tick_ms,
@@ -11891,6 +11892,15 @@ func _log_live_perf(delta: float, tick_ms: float, update_ms: float) -> void:
         last_texture_size.y,
         player.get_renderer_info(),
         render_errors,
+        int(memory.get("current_bytes", 0) / (1024 * 1024)),
+        int(memory.get("resident_bytes", 0) / (1024 * 1024)),
+        int(memory.get("gpu_total_bytes", 0) / (1024 * 1024)),
+        int(memory.get("gpu_texture_bytes", 0) / (1024 * 1024)),
+        int(memory.get("cache_bytes", 0) / (1024 * 1024)),
+        int(memory.get("graphic_cache_bytes", 0) / (1024 * 1024)),
+        int(memory.get("xp3_segment_cache_bytes", 0) / (1024 * 1024)),
+        int(memory.get("psb_cache_bytes", 0) / (1024 * 1024)),
+        int(memory.get("psb_cache_entries", 0)),
     ]
     print(line)
     if perf_log_file != null:

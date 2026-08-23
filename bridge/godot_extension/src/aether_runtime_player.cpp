@@ -214,6 +214,10 @@ struct GodotGpuOp {
     RID src3;
     RID dst;
     PackedByteArray data;
+    uint32_t profile_width = 0;
+    uint32_t profile_height = 0;
+    double profile_pack_ms = 0.0;
+    std::chrono::steady_clock::time_point profile_enqueued_at{};
     std::shared_ptr<ArtemisGpuShaderRequest> artemis_shader;
     std::vector<float> vertices;
     Color clear_color;
@@ -293,6 +297,54 @@ std::atomic_bool g_frame_enhancement_detail_sampling{false};
 constexpr uint32_t kGodotGpuPreserveMinifiedDetail = 0x40000000u;
 
 constexpr auto kGodotGpuSyncWaitTimeout = std::chrono::milliseconds(900);
+
+bool GodotGpuTextureProfileEnabled() {
+    static const bool enabled = [] {
+        const char *value =
+            std::getenv("AETHERKIRI_GODOT_TEXTURE_PROFILE");
+        if (value != nullptr && value[0] != '\0') {
+            return std::strcmp(value, "0") != 0;
+        }
+        value = std::getenv("AETHERKIRI_MOTION_RENDER_PROFILE");
+        return value != nullptr && value[0] != '\0' &&
+               std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+double GodotGpuTextureProfileSlowMs() {
+    static const double threshold = [] {
+        const char *value =
+            std::getenv("AETHERKIRI_GODOT_TEXTURE_SLOW_MS");
+        if (value == nullptr || value[0] == '\0') return 5.0;
+        char *end = nullptr;
+        const double parsed = std::strtod(value, &end);
+        return end != value && std::isfinite(parsed) && parsed > 0.0
+                   ? parsed
+                   : 5.0;
+    }();
+    return threshold;
+}
+
+void LogGodotGpuUpdateProfile(const char *phase, uint32_t width,
+                              uint32_t height, size_t bytes, double elapsed_ms,
+                              double pack_ms, double queue_ms, bool result,
+                              bool on_render_thread) {
+    if (!GodotGpuTextureProfileEnabled() ||
+        elapsed_ms < GodotGpuTextureProfileSlowMs()) {
+        return;
+    }
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(3)
+            << "godot gpu update profile: phase="
+            << (phase != nullptr ? phase : "unknown")
+            << " elapsed_ms=" << elapsed_ms << " pack_ms=" << pack_ms
+            << " queue_ms=" << queue_ms << " size=" << width << "x"
+            << height << " bytes=" << bytes << " result="
+            << (result ? 1 : 0) << " render_thread="
+            << (on_render_thread ? 1 : 0);
+    UtilityFunctions::print(String(message.str().c_str()));
+}
 
 bool GodotGpuBarrierShadowEnabled() {
     static const bool enabled = [] {
@@ -4814,10 +4866,28 @@ bool ExecuteGodotGpuOp(RenderingDevice *rd, const std::shared_ptr<GodotGpuOp> &o
     bool result = false;
     bool wrote_texture = false;
     switch (op->type) {
-        case GodotGpuOp::Type::Update:
+        case GodotGpuOp::Type::Update: {
+            const auto update_started = std::chrono::steady_clock::now();
+            const double queue_ms =
+                op->profile_enqueued_at.time_since_epoch().count() != 0
+                    ? std::chrono::duration<double, std::milli>(
+                          update_started - op->profile_enqueued_at)
+                          .count()
+                    : 0.0;
             result = rd->texture_update(op->dst, 0, op->data) == OK;
+            const double update_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - update_started)
+                    .count();
+            RenderingServer *server = RenderingServer::get_singleton();
+            LogGodotGpuUpdateProfile(
+                "texture_update", op->profile_width, op->profile_height,
+                static_cast<size_t>(op->data.size()), update_ms,
+                op->profile_pack_ms, queue_ms, result,
+                server != nullptr && server->is_on_render_thread());
             wrote_texture = true;
             break;
+        }
         case GodotGpuOp::Type::Clear:
             result = rd->texture_clear(op->dst, op->clear_color, 0, 1, 0, 1) == OK;
             wrote_texture = true;
@@ -6682,13 +6752,32 @@ bool BridgeUpdateRgba(uint64_t texture, const void *pixels,
         rect->bottom != static_cast<int>(record.height)) {
         return false;
     }
+    const auto bridge_started = std::chrono::steady_clock::now();
     PackedByteArray data =
         PackRgbaBytes(pixels, record.width, record.height, stride_bytes);
+    const auto packed_at = std::chrono::steady_clock::now();
+    const double pack_ms = std::chrono::duration<double, std::milli>(
+                               packed_at - bridge_started)
+                               .count();
     auto op = std::make_shared<GodotGpuOp>();
     op->type = GodotGpuOp::Type::Update;
     op->dst = record.rid;
     op->data = data;
-    return RunGodotGpuOpAsync(op);
+    op->profile_width = record.width;
+    op->profile_height = record.height;
+    op->profile_pack_ms = pack_ms;
+    op->profile_enqueued_at = packed_at;
+    const bool result = RunGodotGpuOpAsync(op);
+    const double bridge_ms = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() -
+                                 bridge_started)
+                                 .count();
+    RenderingServer *server = RenderingServer::get_singleton();
+    LogGodotGpuUpdateProfile(
+        "bridge_update_rgba", record.width, record.height,
+        static_cast<size_t>(data.size()), bridge_ms, pack_ms, 0.0, result,
+        server != nullptr && server->is_on_render_thread());
+    return result;
 }
 
 bool BridgeClearRgba(uint64_t texture, uint32_t argb, const tTVPRect *rect) {

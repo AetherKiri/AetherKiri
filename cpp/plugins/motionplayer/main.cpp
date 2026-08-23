@@ -123,6 +123,7 @@ NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
     NCB_PROPERTY(canvasCaptureEnabled, getCanvasCaptureEnabled, setCanvasCaptureEnabled);
     NCB_PROPERTY(clearEnabled, getClearEnabled, setClearEnabled);
     NCB_PROPERTY_RO(presentationHold, getPresentationHold);
+    NCB_PROPERTY_RO(gpuCapture, getGpuCapture);
 }
 
 NCB_REGISTER_CLASS(Player) {

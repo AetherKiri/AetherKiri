@@ -18,6 +18,8 @@
 
 using namespace motion::internal;
 
+extern "C" void AetherKiriMotionEnsureCompactEventHook();
+
 namespace {
     class MotionPlayerAutoProgressHook :
         public tTVPContinuousEventCallbackIntf {
@@ -448,6 +450,7 @@ namespace motion {
     Player::Player(ResourceManager rm) :
         _runtime(detail::makePlayerRuntime()),
         _resourceManagerNative(std::move(rm)) {
+        AetherKiriMotionEnsureCompactEventHook();
         // Aligned to sub_6A88CC (0x6A8988): create TJS Math.RandomGenerator
         // and store at player+992. Child Players inherit via sub_6CED30.
         try {

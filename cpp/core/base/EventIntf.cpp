@@ -219,9 +219,10 @@ public:
             if(elapsedMs >= 5.0) {
                 if(const auto logger = spdlog::get("core")) {
                     logger->info(
-                        "event delivery profile: name={} target={} elapsed_ms={:.3f}",
-                        EventName.AsStdString(), static_cast<const void *>(Target),
-                        elapsedMs);
+                        "event delivery profile: name={} tag={} flags={} "
+                        "target={} elapsed_ms={:.3f}",
+                        EventName.AsStdString(), Tag, Flags,
+                        static_cast<const void *>(Target), elapsedMs);
                 }
             }
         }
