@@ -124,11 +124,31 @@ def load_manifest_deps(path):
     return names
 
 
-def write_report(old_entries, new_entries, old_sha, new_sha, out_dir, basename, max_bytes, manifest=None):
+def load_overlay_ports(config_path):
+    config_dir = Path(config_path).resolve().parent
+    with open(config_path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    names = set()
+    for entry in cfg.get("overlay-ports", []):
+        path = Path(entry)
+        if not path.is_absolute():
+            path = config_dir / path
+        if not path.is_dir():
+            continue
+        for child in sorted(path.iterdir()):
+            if child.is_dir() and (child / "vcpkg.json").exists():
+                names.add(child.name)
+    return names
+
+
+def write_report(old_entries, new_entries, old_sha, new_sha, out_dir, basename, max_bytes, manifest=None, config=None):
     structured = collect_rows(old_entries, new_entries)
     if manifest is not None:
         wanted = load_manifest_deps(manifest)
         structured = [item for item in structured if item[0] in wanted]
+    if config is not None:
+        overlaid = load_overlay_ports(config)
+        structured = [item for item in structured if item[0] not in overlaid]
 
     changed = sum(1 for item in structured if item[3] not in ("added", "removed"))
     added = sum(1 for item in structured if item[3] == "added")
@@ -168,6 +188,7 @@ def main():
     parser.add_argument("--basename", default="vcpkg-baseline-report")
     parser.add_argument("--max-bytes", type=int, default=MAX_BYTES_DEFAULT)
     parser.add_argument("--manifest", default=None)
+    parser.add_argument("--config", default=None)
     args = parser.parse_args()
 
     write_report(
@@ -179,6 +200,7 @@ def main():
         args.basename,
         args.max_bytes,
         args.manifest,
+        args.config,
     )
 
 
