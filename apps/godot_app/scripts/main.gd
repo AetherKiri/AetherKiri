@@ -1616,6 +1616,9 @@ var iap_pending_beta_check_id := 0
 var iap_pending_beta_game := {}
 var iap_settings_refresh_pending := false
 var android_video_import_notice_shown := false
+var android_storage_permission_request_active := false
+var android_storage_permission_request_deadline_msec := 0
+var android_storage_permission_request_last_probe_msec := 0
 var dirty_settings := false
 var settings_animate_next := true
 var settings_draft := {}
@@ -7738,6 +7741,8 @@ func _on_refresh_or_import() -> void:
     if OS.get_name() == "Web":
         _show_web_import_picker()
         return
+    if OS.get_name() == "Android":
+        _android_storage_permission_log("add_game_click target=/storage/emulated/0")
     if not _ensure_android_storage_permission_for_import():
         return
     _show_import_picker()
@@ -10455,10 +10460,20 @@ func _continue_ready_after_legal_gate() -> void:
 func _request_android_storage_permissions() -> void:
     if OS.get_name() != "Android":
         return
+    var before := _android_has_external_storage_permission()
+    _android_storage_permission_log("request_begin granted_before=%s" % str(before))
     if player != null and player.has_method("android_request_external_storage_permission"):
-        if bool(player.android_request_external_storage_permission()):
+        var native_result := bool(player.android_request_external_storage_permission())
+        _android_storage_permission_log("request_native dispatched=%s" % str(native_result))
+        if native_result:
+            _begin_android_storage_permission_probe()
             return
-    OS.request_permissions()
+    var godot_result := bool(OS.request_permissions())
+    _android_storage_permission_log("request_godot dispatched=%s" % str(godot_result))
+    if godot_result:
+        _begin_android_storage_permission_probe()
+    else:
+        _android_storage_permission_log("request_failed dispatch=false")
 
 func _ensure_android_storage_permission_for_import(video_import: bool = false) -> bool:
     var message_key := (
@@ -10472,12 +10487,52 @@ func _ensure_android_storage_permission_for_path(
     path: String,
     message_key: String = "message.android_storage_permission_required"
 ) -> bool:
-    if not _android_path_needs_storage_permission(path):
+    var needs_permission := _android_path_needs_storage_permission(path)
+    if not needs_permission:
+        if OS.get_name() == "Android":
+            _android_storage_permission_log(
+                "check path=%s needs=false granted=not_checked" % path
+            )
         return true
-    if _android_has_external_storage_permission():
+    var granted := _android_has_external_storage_permission()
+    _android_storage_permission_log(
+        "check path=%s needs=true granted=%s" % [path, str(granted)]
+    )
+    if granted:
         return true
+    _android_storage_permission_log(
+        "authorization_failed path=%s reason=permission_not_granted" % path
+    )
     _show_android_storage_permission_prompt(Callable(), message_key)
     return false
+
+func _android_storage_permission_log(message: String) -> void:
+    var line := "android storage permission: %s" % message
+    print(line)
+    _append_log(line)
+
+func _begin_android_storage_permission_probe() -> void:
+    android_storage_permission_request_active = true
+    android_storage_permission_request_deadline_msec = Time.get_ticks_msec() + 8000
+    android_storage_permission_request_last_probe_msec = 0
+
+func _poll_android_storage_permission_request() -> void:
+    if not android_storage_permission_request_active or OS.get_name() != "Android":
+        return
+    var now := Time.get_ticks_msec()
+    if android_storage_permission_request_last_probe_msec != 0 and now - android_storage_permission_request_last_probe_msec < 250:
+        return
+    android_storage_permission_request_last_probe_msec = now
+    var granted := _android_has_external_storage_permission()
+    if granted:
+        android_storage_permission_request_active = false
+        _android_storage_permission_log("authorization_granted after_request=true")
+        return
+    if now >= android_storage_permission_request_deadline_msec:
+        android_storage_permission_request_active = false
+        _android_storage_permission_log(
+            "authorization_failed after_request=true timeout_ms=8000"
+        )
 
 func _show_android_storage_permission_prompt(
     after_acknowledged: Callable = Callable(),
@@ -11641,6 +11696,7 @@ func _apply_pending_video_resume(state: Dictionary) -> bool:
     return true
 
 func _process(delta: float) -> void:
+    _poll_android_storage_permission_request()
     _poll_native_launch_file_picker()
     _poll_native_cover_file_picker()
     _fit_full_rects()

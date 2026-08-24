@@ -410,6 +410,31 @@ void AndroidLogPrintf(const char *level, const char *format, ...) {
 #define AK_ANDROID_LOGI(...) AndroidLogPrintf("info", __VA_ARGS__)
 #define AK_ANDROID_LOGW(...) AndroidLogPrintf("warn", __VA_ARGS__)
 
+struct AndroidGodotStoragePermissionState {
+    bool read = false;
+    bool write = false;
+    bool manage = false;
+};
+
+AndroidGodotStoragePermissionState AndroidGetGodotStoragePermissionState() {
+    AndroidGodotStoragePermissionState state;
+    OS *os = OS::get_singleton();
+    if (os == nullptr) {
+        AK_ANDROID_LOGW("storage permission Godot OS unavailable");
+        return state;
+    }
+
+    const PackedStringArray granted = os->get_granted_permissions();
+    state.read = granted.has(String("android.permission.READ_EXTERNAL_STORAGE"));
+    state.write = granted.has(String("android.permission.WRITE_EXTERNAL_STORAGE"));
+    state.manage = granted.has(String("android.permission.MANAGE_EXTERNAL_STORAGE"));
+    AK_ANDROID_LOGI(
+        "storage permission Godot OS state read=%d write=%d manage=%d count=%d",
+        state.read ? 1 : 0, state.write ? 1 : 0, state.manage ? 1 : 0,
+        granted.size());
+    return state;
+}
+
 JavaClassWrapper *AndroidJavaWrapper() {
     JavaClassWrapper *wrapper = JavaClassWrapper::get_singleton();
     if (wrapper == nullptr) {
@@ -588,6 +613,8 @@ void AndroidClearJniException(JNIEnv *env) {
         env->ExceptionClear();
     }
 }
+
+int AndroidGetSdkInt();
 
 void AndroidDeleteLocalRef(JNIEnv *env, jobject ref) {
     if (env != nullptr && ref != nullptr) {
@@ -828,6 +855,8 @@ bool AndroidHasRuntimePermission(const char *permission) {
                                           permission_string);
     const bool ok =
         !env->ExceptionCheck() && result == kAndroidPermissionGranted;
+    AK_ANDROID_LOGI("storage permission check permission=%s result=%d granted=%d",
+                    permission, static_cast<int>(result), ok ? 1 : 0);
     AndroidClearJniException(env);
     env->DeleteLocalRef(permission_string);
     env->DeleteLocalRef(context_class);
@@ -903,6 +932,9 @@ bool AndroidRequestRuntimeStoragePermissions() {
     env->CallVoidMethod(activity, request_permissions, permission_array,
                         kAndroidStoragePermissionRequestCode);
     const bool ok = !env->ExceptionCheck();
+    AK_ANDROID_LOGI(
+        "storage permission runtime request sdk=%d permissions=READ,WRITE dispatched=%d",
+        AndroidGetSdkInt(), ok ? 1 : 0);
     AndroidClearJniException(env);
     env->DeleteLocalRef(permission_array);
     env->DeleteLocalRef(string_class);
@@ -913,13 +945,27 @@ bool AndroidRequestRuntimeStoragePermissions() {
 }
 
 bool AndroidHasExternalStoragePermission() {
+    const AndroidGodotStoragePermissionState godot_state =
+        AndroidGetGodotStoragePermissionState();
+    if (godot_state.read || godot_state.write || godot_state.manage) {
+        AK_ANDROID_LOGI("storage permission effective granted via Godot OS");
+        return true;
+    }
+
     const int sdk = AndroidGetSdkInt();
     if (sdk > 0 && sdk < 23) {
         return true;
     }
     if (sdk > 0 && sdk < 30) {
-        return AndroidHasRuntimePermission(
-            "android.permission.READ_EXTERNAL_STORAGE");
+        AK_ANDROID_LOGI(
+            "storage permission state sdk=%d read=%d write=%d effective_read=0",
+            sdk, godot_state.read ? 1 : 0, godot_state.write ? 1 : 0);
+        return false;
+    }
+    if (sdk <= 0) {
+        AK_ANDROID_LOGW(
+            "storage permission state unavailable: Android SDK/JNI not ready");
+        return false;
     }
 
     const int java_result = AndroidHasExternalStoragePermissionViaGodotJava();
@@ -1081,14 +1127,37 @@ bool AndroidStartSettingsIntent(JNIEnv *env, jobject context, const char *action
 }
 
 bool AndroidRequestExternalStoragePermission() {
+    const AndroidGodotStoragePermissionState before =
+        AndroidGetGodotStoragePermissionState();
+    if (before.read || before.write || before.manage) {
+        AK_ANDROID_LOGI("storage permission already granted");
+        return true;
+    }
+
+    // Calling through Godot's OS keeps this path on the Activity that owns
+    // the current Godot instance. This is important on Android 6-9, where
+    // the extension may be loaded as an ELF dependency and JNI_OnLoad is not
+    // guaranteed to have run for engine_api.so yet.
+    OS *os = OS::get_singleton();
+    if (os != nullptr) {
+        const bool dispatched = os->request_permissions();
+        AK_ANDROID_LOGI(
+            "storage permission request via Godot OS dispatched=%d",
+            dispatched ? 1 : 0);
+        if (dispatched) {
+            const int sdk = AndroidGetSdkInt();
+            if (sdk <= 0 || sdk < 30) {
+                return true;
+            }
+        }
+    }
+
     const int sdk = AndroidGetSdkInt();
     AK_ANDROID_LOGI("storage permission request sdk=%d", sdk);
     if (sdk > 0 && sdk < 30) {
-        AK_ANDROID_LOGI("storage permission request using runtime permissions");
-        return AndroidRequestRuntimeStoragePermissions();
+        return false;
     }
     if (AndroidHasExternalStoragePermission()) {
-        AK_ANDROID_LOGI("storage permission already granted");
         return true;
     }
 
