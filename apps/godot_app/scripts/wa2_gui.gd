@@ -108,6 +108,214 @@ func _poll_movie() -> void:
         _finish_movie()
 
 
+# --- WA2 audio playback pool (docs/M2_REPORT.md §5) --------------------------
+# The runtime translates audio commands into pendingAudio events (absolute
+# extracted file paths + channel/volume/fade); this host owns playback via an
+# AudioStreamPlayer pool and acks each event through
+# set_engine_option("wa2.audio.finished", <seq>). BGM uses a two-player
+# crossfade pair, SE has 4 loop-capable stream channels + a rotating oneshot
+# pool, voice is single-channel with new-line preemption.
+const AUDIO_ONESHOT_COUNT := 8
+
+var bgm_players: Array = []
+var se_players: Array = []
+var oneshot_players: Array = []
+var voice_player: AudioStreamPlayer = null
+var audio_state := {}      # player instance_id -> event state dict
+var audio_acked := {}      # seq -> true (locally consumed)
+var oneshot_cursor := 0
+var audio_host_announced := false
+
+
+func _audio_db(volume: int) -> float:
+    # 256-fixed volume -> linear -> dB (docs/M2_REPORT.md §3.1 formula).
+    var lin: float = clampf(float(volume) / 256.0, 0.0001, 1.0)
+    return linear_to_db(lin)
+
+
+func _player_for_channel(channel: String) -> AudioStreamPlayer:
+    if channel.begins_with("bgm"):
+        var idx := int(channel.substr(3))
+        if idx >= 0 and idx < bgm_players.size():
+            return bgm_players[idx]
+    elif channel.begins_with("se") and channel != "se_oneshot":
+        var idx2 := int(channel.substr(2))
+        if idx2 >= 0 and idx2 < se_players.size():
+            return se_players[idx2]
+    elif channel == "se_oneshot":
+        var p: AudioStreamPlayer = oneshot_players[oneshot_cursor]
+        oneshot_cursor = (oneshot_cursor + 1) % oneshot_players.size()
+        return p
+    elif channel.begins_with("voice"):
+        return voice_player
+    return null
+
+
+func _players_on_channel(channel: String) -> Array:
+    var out: Array = []
+    if channel == "bgm":
+        out += bgm_players
+    elif channel == "se_oneshot":
+        out += oneshot_players
+    else:
+        var p := _player_for_channel(channel)
+        if p != null:
+            out.append(p)
+    return out
+
+
+func _load_audio_stream(path: String) -> AudioStream:
+    var bytes := FileAccess.get_file_as_bytes(path)
+    if bytes.is_empty():
+        printerr("[wa2gui][audio] cannot read path=%s" % path)
+        return null
+    if path.to_lower().ends_with(".ogg"):
+        if ClassDB.class_has_method("AudioStreamOggVorbis", "load_from_buffer"):
+            return AudioStreamOggVorbis.load_from_buffer(bytes)
+    else:
+        if ClassDB.class_has_method("AudioStreamWAV", "load_from_buffer"):
+            return AudioStreamWAV.load_from_buffer(bytes)
+    printerr("[wa2gui][audio] no decoder for path=%s" % path)
+    return null
+
+
+func _ack_audio(seq: int) -> void:
+    if audio_acked.has(seq):
+        return
+    audio_acked[seq] = true
+    if audio_acked.size() > 1024:
+        audio_acked.clear()
+    player.set_engine_option("wa2.audio.finished", str(seq))
+
+
+func _on_audio_finished(p: AudioStreamPlayer) -> void:
+    var st: Dictionary = audio_state.get(p.get_instance_id(), {})
+    if st.is_empty():
+        return
+    if int(st.get("loop", 0)) != 0:
+        p.play()  # host-side loop keeps the runtime queue untouched
+        return
+    _ack_audio(int(st.get("seq", 0)))
+    audio_state.erase(p.get_instance_id())
+
+
+func _handle_audio_event(ev: Dictionary) -> void:
+    var seq := int(ev.get("id", 0))
+    var action := String(ev.get("action", ""))
+    var channel := String(ev.get("channel", ""))
+    match action:
+        "play":
+            var p := _player_for_channel(channel)
+            if p == null:
+                _ack_audio(seq)
+                return
+            var stream := _load_audio_stream(String(ev.get("path", "")))
+            if stream == null:
+                # Treat like the native missing-file path: ack immediately so
+                # VW-style waits never deadlock.
+                _ack_audio(seq)
+                return
+            for other in _players_on_channel(channel):
+                if other != p and audio_state.has(other.get_instance_id()):
+                    # Voice preemption / restart semantics: drop stale state.
+                    audio_state.erase(other.get_instance_id())
+            p.stream = stream
+            var vol := int(ev.get("volume", 255))
+            var fade := int(ev.get("fade", 0))
+            var target_db := _audio_db(vol)
+            var start_db := -60.0 if fade > 0 else target_db
+            p.volume_db = start_db
+            audio_state[p.get_instance_id()] = {
+                "seq": seq, "channel": channel,
+                "loop": int(ev.get("loop", 0)),
+                "from_db": start_db, "to_db": target_db,
+                "t": 0, "dur": maxf(1.0, float(fade)),
+            }
+            p.play()
+            print("[wa2gui][audio] play seq=%d ch=%s vol=%d fade=%d loop=%d path=%s" % [
+                seq, channel, vol, fade, int(ev.get("loop", 0)), ev.get("path", "")])
+            # Finite streams ack through the finished signal (see above).
+        "stop":
+            var fade_stop := int(ev.get("fade", 0))
+            for p2 in _players_on_channel(channel):
+                var sid: int = p2.get_instance_id()
+                var st: Dictionary = audio_state.get(sid, {})
+                if not st.is_empty():
+                    st["to_db"] = -60.0
+                    st["from_db"] = p2.volume_db
+                    st["t"] = 0
+                    st["dur"] = maxf(1.0, float(fade_stop))
+                    st["stopping"] = true
+                    st["fade_frames_left_stop"] = fade_stop
+                    audio_state[sid] = st
+                elif fade_stop <= 0:
+                    p2.stop()
+            _ack_audio(seq)
+            print("[wa2gui][audio] stop seq=%d ch=%s fade=%d" % [seq, channel, fade_stop])
+        "volume":
+            var vol3 := int(ev.get("volume", 255))
+            var fade3 := int(ev.get("fade", 0))
+            for p3 in _players_on_channel(channel):
+                var sid3: int = p3.get_instance_id()
+                var st3: Dictionary = audio_state.get(sid3, {})
+                if st3.is_empty():
+                    continue
+                st3["from_db"] = p3.volume_db
+                st3["to_db"] = _audio_db(vol3)
+                st3["t"] = 0
+                st3["dur"] = maxf(1.0, float(fade3))
+                audio_state[sid3] = st3
+            _ack_audio(seq)
+            print("[wa2gui][audio] volume seq=%d ch=%s vol=%d fade=%d" % [seq, channel, vol3, fade3])
+        _:
+            _ack_audio(seq)
+
+
+func _update_audio_fades() -> void:
+    var finished_stops: Array = []
+    for key in audio_state.keys():
+        var st: Dictionary = audio_state[key]
+        var dur: float = maxf(1.0, float(st.get("dur", 1.0)))
+        var t: float = float(int(st.get("t", 0))) + 1.0
+        var from_db: float = float(st.get("from_db", 0.0))
+        var to_db: float = float(st.get("to_db", 0.0))
+        var node := instance_from_id(key) as AudioStreamPlayer
+        if node == null:
+            audio_state.erase(key)
+            continue
+        node.volume_db = lerpf(from_db, to_db, minf(t / dur, 1.0))
+        st["t"] = int(t)
+        if st.has("stopping") and t >= dur:
+            node.stop()
+            finished_stops.append(key)
+        audio_state[key] = st
+    for key2 in finished_stops:
+        audio_state.erase(key2)
+
+
+func _poll_audio() -> void:
+    if not audio_host_announced:
+        audio_host_announced = true
+        # Announce a live output path: enables the message-engine implicit
+        # voice hold (text never runs ahead of speech, docs/M2_REPORT.md §3.5).
+        player.set_engine_option("wa2.audio.host", "1")
+    var info: String = player.get_plugin_debug_info()
+    if info.is_empty():
+        _update_audio_fades()
+        return
+    var parsed = JSON.parse_string(info)
+    if parsed == null or not (parsed is Dictionary):
+        _update_audio_fades()
+        return
+    var events: Array = parsed.get("pendingAudio", [])
+    for ev in events:
+        if ev is Dictionary:
+            var seq := int(ev.get("id", 0))
+            if not audio_acked.has(seq):
+                _handle_audio_event(ev)
+    _update_audio_fades()
+
+
 class InputBridge extends Control:
     var player = null
     var rect: TextureRect = null
@@ -189,6 +397,25 @@ func _initialize() -> void:
         return
     print("[wa2gui] open_game ok path=%s" % game_path)
 
+    # Audio pool (docs/M2_REPORT.md §5): BGM crossfade pair, 4 SE stream
+    # channels, 8 rotating one-shots, single preemptive voice channel.
+    for i in range(2):
+        var bp := AudioStreamPlayer.new()
+        root.add_child(bp)
+        bgm_players.append(bp)
+    for i in range(4):
+        var sp := AudioStreamPlayer.new()
+        root.add_child(sp)
+        se_players.append(sp)
+    for i in range(AUDIO_ONESHOT_COUNT):
+        var op := AudioStreamPlayer.new()
+        root.add_child(op)
+        oneshot_players.append(op)
+    voice_player = AudioStreamPlayer.new()
+    root.add_child(voice_player)
+    for p in bgm_players + se_players + oneshot_players + [voice_player]:
+        p.finished.connect(_on_audio_finished.bind(p))
+
     bridge = InputBridge.new()
     bridge.player = player
     bridge.rect = rect
@@ -226,6 +453,7 @@ func _run_loop() -> void:
         player.tick(1.0 / 60.0)
         var t1 := Time.get_ticks_usec()
         _poll_movie()
+        _poll_audio()
         var tex: Texture2D = player.update_frame_texture()
         if tex != null:
             rect.texture = tex
