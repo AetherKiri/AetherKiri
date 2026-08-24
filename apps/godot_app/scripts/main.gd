@@ -176,7 +176,7 @@ const UI_TEXT := {
         "settings.surface_mode": "画布尺寸",
         "settings.surface_mode_desc": "Game Native 按游戏基准画布运行；Display Fit 按设备显示尺寸运行",
         "settings.upscale": "缩放算法",
-        "settings.upscale_desc": "外层拉伸画面时使用；Smooth/Linear 会做平滑采样",
+        "settings.upscale_desc": "外层拉伸画面时使用；Bicubic/Lanczos 提供更高质量采样",
         "settings.output_resolution": "输出分辨率",
         "settings.output_resolution_desc": "设置外层缩放与画面增强的目标分辨率；较高档位会增加 GPU 和显存占用",
         "settings.output_resolution.original": "原始",
@@ -437,7 +437,7 @@ const UI_TEXT := {
         "settings.surface_mode": "畫布尺寸",
         "settings.surface_mode_desc": "Game Native 依遊戲基準畫布執行；Display Fit 依裝置顯示尺寸執行",
         "settings.upscale": "縮放演算法",
-        "settings.upscale_desc": "外層拉伸畫面時使用；Smooth/Linear 會進行平滑取樣",
+        "settings.upscale_desc": "外層拉伸畫面時使用；Bicubic/Lanczos 提供更高品質取樣",
         "settings.output_resolution": "輸出解析度",
         "settings.output_resolution_desc": "設定外層縮放與畫面增強的目標解析度；較高檔位會增加 GPU 與顯示記憶體用量",
         "settings.output_resolution.original": "原始",
@@ -698,7 +698,7 @@ const UI_TEXT := {
         "settings.surface_mode": "Canvas Size",
         "settings.surface_mode_desc": "Game Native uses the game's base canvas; Display Fit uses the device display size",
         "settings.upscale": "Scaling",
-        "settings.upscale_desc": "Used when stretching the outer frame; Smooth/Linear apply filtered sampling",
+        "settings.upscale_desc": "Used when stretching the outer frame; Bicubic/Lanczos provide higher-quality filtering",
         "settings.output_resolution": "Output Resolution",
         "settings.output_resolution_desc": "Sets the target for outer scaling and image enhancement; higher tiers use more GPU time and memory",
         "settings.output_resolution.original": "Original",
@@ -959,7 +959,7 @@ const UI_TEXT := {
         "settings.surface_mode": "キャンバスサイズ",
         "settings.surface_mode_desc": "Game Native はゲーム基準のキャンバス、Display Fit はデバイス表示サイズで実行します",
         "settings.upscale": "スケーリング",
-        "settings.upscale_desc": "外側の画面を引き伸ばすときに使用します。Smooth/Linear は平滑化サンプリングを行います",
+        "settings.upscale_desc": "外側の画面を引き伸ばすときに使用します。Bicubic/Lanczos は高品質な補間を行います",
         "settings.output_resolution": "出力解像度",
         "settings.output_resolution_desc": "外側のスケーリングと画質強化の目標解像度を設定します。高い設定ほど GPU とメモリを多く使用します",
         "settings.output_resolution.original": "オリジナル",
@@ -1220,7 +1220,7 @@ const UI_TEXT := {
         "settings.surface_mode": "캔버스 크기",
         "settings.surface_mode_desc": "Game Native는 게임 기준 캔버스를 사용하고 Display Fit은 장치 표시 크기를 사용합니다",
         "settings.upscale": "스케일링",
-        "settings.upscale_desc": "외부 화면을 늘릴 때 사용합니다. Smooth/Linear는 부드러운 샘플링을 적용합니다",
+        "settings.upscale_desc": "외부 화면을 늘릴 때 사용합니다. Bicubic/Lanczos는 고품질 보간을 적용합니다",
         "settings.output_resolution": "출력 해상도",
         "settings.output_resolution_desc": "외부 스케일링과 화질 향상의 목표 해상도를 설정합니다. 높은 단계일수록 GPU와 메모리를 더 사용합니다",
         "settings.output_resolution.original": "원본",
@@ -1642,6 +1642,10 @@ var mobile_edge_back_start := Vector2.ZERO
 var mobile_edge_back_last := Vector2.ZERO
 var mobile_edge_back_cancelled := false
 var opaque_frame_shader: Shader
+var bicubic_frame_shader: Shader
+var lanczos_frame_shader: Shader
+var bicubic_frame_material: ShaderMaterial
+var lanczos_frame_material: ShaderMaterial
 var shown_system_alerts := {}
 var ui_icon_cache := {}
 var cover_texture_cache := {}
@@ -1655,7 +1659,7 @@ var builtin_demo = BuiltinDemo.new()
 var runtime_default_font_path := ""
 var runtime_font_dir_path := ""
 var selected_backend := "Godot Native"
-var upscale_algorithm := "smooth"
+var upscale_algorithm := "bicubic"
 var output_resolution := OUTPUT_RESOLUTION_DEFAULT
 var render_surface_mode := "game"
 var frame_enhancement_enabled := false
@@ -3003,10 +3007,13 @@ func _load_shell_settings() -> void:
     _apply_style_mode()
     selected_backend = _normalize_backend_name(String(cfg.get_value("rendering", "backend", selected_backend)))
     upscale_algorithm = String(cfg.get_value("rendering", "upscale_algorithm", upscale_algorithm))
-    if upscale_algorithm == "sharp" or upscale_algorithm == "nearest":
-        upscale_algorithm = "smooth"
-    if not upscale_algorithm in ["smooth", "nearest", "linear"]:
-        upscale_algorithm = "smooth"
+    # `sharp` was an obsolete alias from the original settings schema. Keep
+    # migrating that value, but do not fold the supported `nearest` mode back
+    # into the default while loading the saved settings.
+    if upscale_algorithm == "sharp":
+        upscale_algorithm = "bicubic"
+    if not upscale_algorithm in ["smooth", "nearest", "linear", "bicubic", "lanczos"]:
+        upscale_algorithm = "bicubic"
     output_resolution = _normalize_output_resolution(String(cfg.get_value(
         "rendering",
         "output_resolution",
@@ -3294,8 +3301,8 @@ func _apply_settings_snapshot(snapshot: Dictionary) -> void:
         selected_backend = "Godot Native"
 
     upscale_algorithm = String(snapshot.get("upscale_algorithm", upscale_algorithm))
-    if not upscale_algorithm in ["smooth", "nearest", "linear"]:
-        upscale_algorithm = "smooth"
+    if not upscale_algorithm in ["smooth", "nearest", "linear", "bicubic", "lanczos"]:
+        upscale_algorithm = "bicubic"
     _apply_upscale_algorithm()
     output_resolution = _normalize_output_resolution(String(snapshot.get(
         "output_resolution",
@@ -3845,16 +3852,117 @@ void fragment() {
     material.shader = opaque_frame_shader
     return material
 
+func _resampling_frame_material(kind: String) -> ShaderMaterial:
+    if kind == "bicubic":
+        if bicubic_frame_material != null:
+            return bicubic_frame_material
+        bicubic_frame_shader = Shader.new()
+        bicubic_frame_shader.code = """
+shader_type canvas_item;
+
+vec4 cubic_weights(float v) {
+    float v2 = v * v;
+    float v3 = v2 * v;
+    return vec4(
+        -0.5 * v3 + v2 - 0.5 * v,
+        1.5 * v3 - 2.5 * v2 + 1.0,
+        -1.5 * v3 + 2.0 * v2 + 0.5 * v,
+        0.5 * v3 - 0.5 * v2
+    );
+}
+
+void fragment() {
+    vec2 texel = TEXTURE_PIXEL_SIZE;
+    vec2 coord = UV / texel - vec2(0.5);
+    vec2 base = floor(coord);
+    vec2 fraction = fract(coord);
+    vec4 weights_x = cubic_weights(fraction.x);
+    vec4 weights_y = cubic_weights(fraction.y);
+    vec4 color = vec4(0.0);
+
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            vec2 sample_uv = (base + vec2(float(x - 1), float(y - 1)) + vec2(0.5)) * texel;
+            sample_uv = clamp(sample_uv, vec2(0.0), vec2(1.0));
+            color += texture(TEXTURE, sample_uv) * weights_x[x] * weights_y[y];
+        }
+    }
+    COLOR = vec4(clamp(color.rgb, vec3(0.0), vec3(1.0)), 1.0);
+}
+"""
+        bicubic_frame_material = ShaderMaterial.new()
+        bicubic_frame_material.shader = bicubic_frame_shader
+        return bicubic_frame_material
+
+    if kind == "lanczos":
+        if lanczos_frame_material != null:
+            return lanczos_frame_material
+        lanczos_frame_shader = Shader.new()
+        lanczos_frame_shader.code = """
+shader_type canvas_item;
+
+const float KERNEL_PI = 3.14159265359;
+
+float sinc(float value) {
+    float distance = abs(value);
+    if (distance < 0.0001) {
+        return 1.0;
+    }
+    return sin(KERNEL_PI * distance) / (KERNEL_PI * distance);
+}
+
+float lanczos_weight(float value) {
+    float distance = abs(value);
+    if (distance >= 3.0) {
+        return 0.0;
+    }
+    return sinc(distance) * sinc(distance / 3.0);
+}
+
+void fragment() {
+    vec2 texel = TEXTURE_PIXEL_SIZE;
+    vec2 coord = UV / texel - vec2(0.5);
+    vec2 base = floor(coord);
+    vec2 fraction = fract(coord);
+    vec4 color = vec4(0.0);
+    float weight_sum = 0.0;
+
+    for (int y = -2; y <= 3; y++) {
+        for (int x = -2; x <= 3; x++) {
+            float weight = lanczos_weight(float(x) - fraction.x) * lanczos_weight(float(y) - fraction.y);
+            vec2 sample_uv = (base + vec2(float(x), float(y)) + vec2(0.5)) * texel;
+            sample_uv = clamp(sample_uv, vec2(0.0), vec2(1.0));
+            color += texture(TEXTURE, sample_uv) * weight;
+            weight_sum += weight;
+        }
+    }
+    color /= max(weight_sum, 0.0001);
+    COLOR = vec4(clamp(color.rgb, vec3(0.0), vec3(1.0)), 1.0);
+}
+"""
+        lanczos_frame_material = ShaderMaterial.new()
+        lanczos_frame_material.shader = lanczos_frame_shader
+        return lanczos_frame_material
+
+    return _opaque_frame_material()
+
 func _apply_upscale_algorithm() -> void:
     if viewport == null:
         return
     match upscale_algorithm:
         "nearest":
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-            viewport.material = _opaque_frame_material()
+            # The opaque presentation shader samples TEXTURE through its own
+            # sampler and can retain linear filtering on some renderers. Use
+            # the native TextureRect path for nearest so the CanvasItem filter
+            # is the actual sampler used by the final presentation pass.
+            viewport.material = null
         "linear", "smooth":
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
             viewport.material = _opaque_frame_material()
+        "bicubic", "lanczos":
+            viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+            viewport.material = _resampling_frame_material(upscale_algorithm)
         _:
             viewport.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
             viewport.material = _opaque_frame_material()
@@ -5938,6 +6046,8 @@ func _upscale_select() -> Control:
         {"label": "Smooth", "value": "smooth"},
         {"label": "Linear", "value": "linear"},
         {"label": "Nearest", "value": "nearest"},
+        {"label": "Bicubic", "value": "bicubic"},
+        {"label": "Lanczos", "value": "lanczos"},
     ]
     var selected_index := 0
     var draft_upscale := _settings_draft_string("upscale_algorithm", upscale_algorithm)
@@ -6205,7 +6315,7 @@ func _select_backend(value: String) -> void:
     _set_settings_draft_value("backend", BACKENDS[index])
 
 func _select_upscale_algorithm(value: String) -> void:
-    if not value in ["smooth", "nearest", "linear"]:
+    if not value in ["smooth", "nearest", "linear", "bicubic", "lanczos"]:
         return
     _set_settings_draft_value("upscale_algorithm", value)
 
@@ -12568,10 +12678,9 @@ func _game_input_content_size() -> Vector2:
     return Vector2(maxi(1, last_texture_size.x), maxi(1, last_texture_size.y))
 
 func _game_input_surface_size() -> Vector2:
-    # The engine API still consumes the runtime surface coordinate space. It
-    # can differ from the raw frame (for example 1920x1080 for an 800x600
-    # layer). DrawDevice stretches that full surface back to the layer, so
-    # input mapping must apply the inverse per-axis scale without letterboxing.
+    # The engine API consumes the runtime surface coordinate space. Artemis
+    # maps that surface to its logical frame with an aspect-fit viewport, so
+    # GameInputMapping mirrors the same letterbox transform before dispatch.
     if active_runtime_kind == RUNTIME_ONSCRIPTER:
         return _game_input_content_size()
     if current_surface_size.x > 0 and current_surface_size.y > 0:

@@ -10709,12 +10709,12 @@ private:
 
     bool platform_prefers_raw_source() const {
 #if defined(IOS_ENABLED)
-        // KiriKiri/Artemis' logical GPU frame is complete, while its extra
-        // scaled surface copy is not reliably sampleable through Metal on iOS.
-        // Let Godot scale the provider-owned source texture, which also avoids
-        // an unnecessary full-resolution GPU pass. ONScripter owns a separate
-        // presentation contract and keeps its existing surface output.
-        return runtime_id_ != "onscripter";
+        // Prefer the configured high-resolution surface on iOS. Keep the
+        // previous raw-source route as an explicit emergency fallback for
+        // devices whose Metal bridge cannot sample the scaled surface.
+        const char *raw_source = std::getenv("AETHERKIRI_IOS_RAW_SOURCE");
+        return raw_source != nullptr && raw_source[0] != '\0' &&
+               std::strcmp(raw_source, "0") != 0;
 #else
         return false;
 #endif
