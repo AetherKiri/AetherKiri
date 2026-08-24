@@ -2118,6 +2118,7 @@ func _normalize_cli_probe_script(path: String) -> String:
         "res://scripts/step_render_probe.gd",
         "res://scripts/gui_render_probe.gd",
         "res://scripts/perf_input_probe.gd",
+        "res://scripts/wa2_gui.gd",
     ]
     for item in known:
         if normalized == item or normalized.ends_with("/" + item.get_file()):
