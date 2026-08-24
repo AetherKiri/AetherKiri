@@ -1867,6 +1867,14 @@ uint remove_const_opacity(uint d, uint strength) {
     return (d & 0x00ffffffu) | (a << 24);
 }
 
+int reflect101_index(int value, int extent) {
+    if (extent <= 1) return 0;
+    int period = (extent - 1) * 2;
+    int wrapped = value % period;
+    if (wrapped < 0) wrapped += period;
+    return wrapped < extent ? wrapped : period - wrapped;
+}
+
 void main() {
     ivec2 local = ivec2(gl_GlobalInvocationID.xy);
     if (local.x >= pc.rect1.x || local.y >= pc.rect1.y) {
@@ -1877,7 +1885,22 @@ void main() {
     uint opa = uint(clamp(pc.rect1.w, 0, 255));
     uint out_color = 0u;
 
-    if (pc.rect1.z == 5) {
+    if (pc.rect1.z == 26) {
+        int radius_x = clamp(pc.rect1.w, 0, 64);
+        int radius_y = clamp(pc.color0.x, 0, 64);
+        ivec2 extent = max(pc.rect1.xy, ivec2(1));
+        vec4 sum = vec4(0.0);
+        int samples = 0;
+        for (int oy = -radius_y; oy <= radius_y; ++oy) {
+            int sy = reflect101_index(local.y + oy, extent.y);
+            for (int ox = -radius_x; ox <= radius_x; ++ox) {
+                int sx = reflect101_index(local.x + ox, extent.x);
+                sum += imageLoad(src_img, pc.rect0.zw + ivec2(sx, sy));
+                ++samples;
+            }
+        }
+        out_color = pack_u8(vec4_to_u8(sum / float(max(samples, 1))));
+    } else if (pc.rect1.z == 5) {
         out_color = (uint(pc.color0.x) & 0xffu) |
                     ((uint(pc.color0.y) & 0xffu) << 8) |
                     ((uint(pc.color0.z) & 0xffu) << 16) |
@@ -4465,7 +4488,8 @@ void ExecuteGodotGpuLive2DRasterBatch(
 bool DispatchGodotGpuBlend(RenderingDevice *rd,
                            const std::shared_ptr<GodotGpuOp> &op,
                            int64_t compute_list,
-                           std::vector<RID> &uniform_sets) {
+                           std::vector<RID> &uniform_sets,
+                           const RID &source_override = RID()) {
     const bool alpha_blend_a = op->mode == TVP_GODOT_GPU_BLEND_ALPHA_BLEND_A;
     if (alpha_blend_a) {
         if (!EnsureAlphaBlendAPipeline(rd)) return false;
@@ -4473,15 +4497,26 @@ bool DispatchGodotGpuBlend(RenderingDevice *rd,
         return false;
     }
 
+    const RID source = source_override.is_valid() ? source_override : op->src;
     RID uniform_set = GetCachedBlendUniformSet(
         rd,
         alpha_blend_a ? g_gpu_pipeline_state->alpha_blend_a_shader
                       : g_gpu_pipeline_state->blend_shader,
-        op->src, op->dst);
+        source, op->dst);
     if (!uniform_set.is_valid()) return false;
     (void)uniform_sets;
 
-    const PackedByteArray push_constants = PackGpuPushConstants(*op);
+    PackedByteArray push_constants = PackGpuPushConstants(*op);
+    if (source_override.is_valid() && op->mode == TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA) {
+        // The alias scratch texture is tightly sized to the source rectangle.
+        // Its local origin replaces the original source texture coordinates.
+        int32_t zero = 0;
+        uint8_t *bytes = push_constants.ptrw();
+        if (bytes != nullptr) {
+            std::memcpy(bytes + 2 * sizeof(int32_t), &zero, sizeof(zero));
+            std::memcpy(bytes + 3 * sizeof(int32_t), &zero, sizeof(zero));
+        }
+    }
     rd->compute_list_bind_compute_pipeline(
         compute_list,
         alpha_blend_a ? g_gpu_pipeline_state->alpha_blend_a_pipeline
@@ -4542,7 +4577,10 @@ bool DispatchGodotGpuBlend3(RenderingDevice *rd,
 bool ExecuteGodotGpuBlend(RenderingDevice *rd,
                           const std::shared_ptr<GodotGpuOp> &op) {
     if (rd == nullptr || op == nullptr) return false;
-    if (op->src == op->dst &&
+    const bool alias_box_blur =
+        op->src == op->dst &&
+        op->mode == TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA;
+    if (op->src == op->dst && !alias_box_blur &&
         op->mode != TVP_GODOT_GPU_BLEND_FILL_ARGB &&
         op->mode != TVP_GODOT_GPU_BLEND_REMOVE_CONST_OPACITY &&
         op->mode != TVP_GODOT_GPU_BLEND_FILL_MASK) {
@@ -4551,8 +4589,26 @@ bool ExecuteGodotGpuBlend(RenderingDevice *rd,
     }
 
     std::vector<RID> uniform_sets;
+    RID alias_source;
+    if (alias_box_blur) {
+        Ref<RDTextureView> view;
+        view.instantiate();
+        TypedArray<PackedByteArray> initial_data;
+        alias_source = rd->texture_create(
+            MakeRgbaTextureFormat(static_cast<uint32_t>(op->size.x),
+                                  static_cast<uint32_t>(op->size.y)),
+            view, initial_data);
+        if (!alias_source.is_valid()) return false;
+        if (rd->texture_copy(op->src, alias_source, op->src_pos, Vector3(),
+                             op->size, 0, 0, 0, 0) != OK) {
+            rd->free_rid(alias_source);
+            return false;
+        }
+        ApplyGodotGpuBarrier(rd);
+    }
     int64_t compute_list = rd->compute_list_begin();
-    const bool ok = DispatchGodotGpuBlend(rd, op, compute_list, uniform_sets);
+    const bool ok = DispatchGodotGpuBlend(
+        rd, op, compute_list, uniform_sets, alias_source);
     if (ok) {
         rd->compute_list_add_barrier(compute_list);
     }
@@ -4562,6 +4618,10 @@ bool ExecuteGodotGpuBlend(RenderingDevice *rd,
     }
     for (const RID &uniform_set : uniform_sets) {
         rd->free_rid(uniform_set);
+    }
+    if (alias_source.is_valid()) {
+        InvalidateGodotGpuUniformSetsForResource(rd, alias_source);
+        rd->free_rid(alias_source);
     }
     return ok;
 }
@@ -6581,12 +6641,23 @@ uint64_t BridgeCreateRgba(uint32_t width, uint32_t height, const void *pixels,
         return 0;
     }
 
+    const auto create_started = std::chrono::steady_clock::now();
     Ref<RDTextureView> view;
     view.instantiate();
     TypedArray<PackedByteArray> initial_data;
     initial_data.push_back(PackRgbaBytes(pixels, width, height, stride_bytes));
     RID rid = rd->texture_create(MakeRgbaTextureFormat(width, height), view,
                                  initial_data);
+    const double create_ms = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() -
+                                 create_started)
+                                 .count();
+    LogGodotGpuUpdateProfile(
+        "texture_create", width, height,
+        static_cast<size_t>(width) * static_cast<size_t>(height) * 4u,
+        create_ms, 0.0, 0.0, rid.is_valid(),
+        RenderingServer::get_singleton() != nullptr &&
+            RenderingServer::get_singleton()->is_on_render_thread());
     if (!rid.is_valid()) return 0;
 
     GodotGpuTextureRecord record;

@@ -158,6 +158,9 @@ enum TVPGodotGpuBlendMode : uint32_t {
     // Composite an additive-alpha source while preserving destination alpha.
     TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA = 24,
     TVP_GODOT_GPU_BLEND_ADDITIVE_ALPHA_A = 25,
+    // Symmetric box blur. The x radius is passed in opacity and the y radius
+    // in the low byte of color; this reuses the stable blend callback ABI.
+    TVP_GODOT_GPU_BLEND_BOX_BLUR_ALPHA = 26,
     // draw_triangles is shared by Cubism (whose low bits describe Cubism
     // colour/alpha modes) and KiriKiri (whose low bits are the modes above).
     // Tag the latter so AlphaBlend/AlphaBlend_d are not mistaken for Cubism
