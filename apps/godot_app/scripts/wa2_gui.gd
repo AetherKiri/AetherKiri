@@ -13,6 +13,100 @@ const SURFACE_H := 720
 var player = null
 var rect: TextureRect = null
 
+# --- SetMovie video overlay (docs/V_REPORT.md §5) ---------------------------
+# The runtime latches kMovie on SetMovie and reports movie_state/movie_id/
+# movie_path through get_renderer_info(); this host drives the FFmpeg channel
+# (media_open/media_play/media_update_texture) and stacks a full-screen
+# TextureRect ABOVE the composed game frame but BELOW the input bridge.
+const MOVIE_STATUS_ENDED := 3   # engine_media_status_t ENDED
+const MOVIE_STATUS_ERROR := 4
+
+var movie_rect: TextureRect = null
+var movie_playing := false
+var movie_failed_token := ""
+
+
+func _decode_percent(v: String) -> String:
+    if not v.contains("%"):
+        return v
+    var bytes := PackedByteArray()
+    var i := 0
+    var n := v.length()
+    while i < n:
+        if v[i] == "%" and i + 2 < n:
+            bytes.append(("0x" + v.substr(i + 1, 2)).hex_to_int())
+            i += 3
+        else:
+            bytes.append(v.unicode_at(i))
+            i += 1
+    return bytes.get_string_from_utf8()
+
+
+func _renderer_fields(info: String) -> Dictionary:
+    var out := {}
+    for token in info.split(" ", false):
+        var eq := token.find("=")
+        if eq > 0:
+            out[token.substr(0, eq)] = token.substr(eq + 1)
+    return out
+
+
+func _close_movie() -> void:
+    player.media_close()
+    movie_rect.visible = false
+    movie_rect.texture = null
+    movie_playing = false
+
+
+func _finish_movie() -> void:
+    # EOF / error path: drop the player first, then release the runtime's
+    # kMovie latch through the provider option channel (idempotent).
+    _close_movie()
+    player.set_engine_option("wa2.movie.finish", "")
+
+
+func _poll_movie() -> void:
+    var fields := _renderer_fields(player.get_renderer_info())
+    var state: String = fields.get("movie_state", "idle")
+    if state != "pending":
+        if movie_playing:
+            # Latch released from inside the runtime (skip click) — stop
+            # pulling frames and restore plain rendering.
+            print("[wa2gui][movie] latch gone -> close media")
+            _close_movie()
+        return
+    var token: String = fields.get("movie_path", "-")
+    var movie_id: String = fields.get("movie_id", "0")
+    if not movie_playing:
+        if token == "-" or token == movie_failed_token:
+            return  # nothing to open (missing file) or already failed once
+        var path := _decode_percent(token)
+        if not player.media_open(path):
+            printerr("[wa2gui][movie] open FAILED path=%s err=%s" % [path, player.get_last_error()])
+            movie_failed_token = token
+            # Treat like the native missing-file case: finish immediately.
+            _finish_movie()
+            return
+        if player.media_play() != 0:
+            printerr("[wa2gui][movie] play FAILED path=%s err=%s" % [path, player.get_last_error()])
+            movie_failed_token = token
+            _finish_movie()
+            return
+        movie_playing = true
+        movie_rect.visible = true
+        print("[wa2gui][movie] playing path=%s id=%s" % [path, movie_id])
+        return
+    # Playing: pull the latest RGBA frame into the overlay texture.
+    var tex: Texture2D = player.media_update_texture()
+    if tex != null:
+        movie_rect.texture = tex
+    var st: Dictionary = player.media_get_state()
+    var status := int(st.get("status", 0))
+    if status == MOVIE_STATUS_ENDED or status == MOVIE_STATUS_ERROR:
+        print("[wa2gui][movie] ended status=%d pos=%.1fs/%.1fs" % [
+            status, float(st.get("position", 0.0)), float(st.get("duration", 0.0))])
+        _finish_movie()
+
 
 class InputBridge extends Control:
     var player = null
@@ -53,6 +147,18 @@ func _initialize() -> void:
     rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
     rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
     root.add_child(rect)
+
+    # Movie overlay: above the composed game frame, below the input bridge
+    # (mouse_filter IGNORE keeps clicks flowing to the runtime, where a press
+    # maps to the movie skip/finish path).
+    movie_rect = TextureRect.new()
+    movie_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+    movie_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+    movie_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+    movie_rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+    movie_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    movie_rect.visible = false
+    root.add_child(movie_rect)
 
     player = ClassDB.instantiate("AetherRuntimePlayer")
     root.add_child(player as Node)
@@ -119,6 +225,7 @@ func _run_loop() -> void:
         var t0 := Time.get_ticks_usec()
         player.tick(1.0 / 60.0)
         var t1 := Time.get_ticks_usec()
+        _poll_movie()
         var tex: Texture2D = player.update_frame_texture()
         if tex != null:
             rect.texture = tex
