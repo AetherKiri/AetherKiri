@@ -178,7 +178,23 @@ namespace TJS {
             "AffineSource",    "AffineMatrix", "AffineLayer",
             "PSDInfo",         "PSBFile",     ".pbd",
             "getStandM",       "getStandF",   "setFaceVis",
-            "setCondVis",      "checkVis"
+            "setCondVis",      "checkVis",
+            // Environment layers use the same KAGEnvImage command path as
+            // ordinary backgrounds. Keep the opt-in scene trace focused on
+            // the stage2 overlay so we can separate a missing script command
+            // from a renderer/compositor failure.
+            "KAGEnvImage",     "KAGEnvImageMapperStage",
+            "stage2",          "envcolor",    "EnvColor",
+            "doImageCommand",  "doCommand",   "setImageFile",
+            "_setImageFile",   "_setOption",  "setStage"
+            ,"LanguageSelectPanel", "ScrollablePulldownBase",
+            "DragScrollGroup", "ScrollableSheetUtil", "drawItemView",
+            "onUiloaded", "uiloadGetRect", "uiloadPartsImage",
+            "reparentItems", "initScrollParams", "resetScrollMax",
+            "getItemButton", "updateItemView", "ownerCallback"
+            ,"uiloadEntry", "uiloadWithFuncTable", "internalUiloadPacked",
+            "uiloadParseMain", "uiloadEvals", "callExtra", "setExtraType",
+            "UIListParser.doLine", "doLine"
         };
         for(const char *pattern : patterns) {
             if(text.find(pattern) != std::string::npos)
@@ -190,13 +206,15 @@ namespace TJS {
     static bool TJSAudioTraceMatches(const std::string &text) {
         if(!TJSAudioTraceEnabled())
             return false;
-        static const char *patterns[] = {
+            static const char *patterns[] = {
             "playRandomSE", "getRandomSE", "playSE",    "playse",
             "Sound",        "sound",       "Voice",     "voice",
             "Wave",         "wave",        "sebuf",     "SEBuf",
             "ona",          "Ona",         "profile",   "Profile",
             "patting",      "dokofera",    "storage",   "Storages",
-        };
+            "flash",        "Flash",        "MoveAction", "beginAction",
+            "stopAction",   "chview",       "chframe",    "chv",
+            };
         for(const char *pattern : patterns) {
             if(text.find(pattern) != std::string::npos)
                 return true;
@@ -240,6 +258,15 @@ namespace TJS {
                text == "voice" || text == "storage" || text == "buf" ||
                text == "array" || text == "profile" || text == "dress" ||
                text == "chara" || text == "scene" ||
+               text == "doCommand" || text == "doImageCommand" ||
+               text == "setImageFile" || text == "_setImageFile" ||
+               text == "_setOption" || text == "setStage" ||
+               text == "setVisible" || text == "setOpacity" ||
+               text == "operateRect" || text == "fillRect" ||
+               text == "drawItemView" || text == "reparentItems" ||
+               text == "initScrollParams" || text == "resetScrollMax" ||
+               text == "uiloadGetRect" || text == "uiloadPartsImage" ||
+               text == "onUiloaded" || text == "ownerCallback" ||
                TJSSceneTraceMatches(text);
     }
 
@@ -456,13 +483,15 @@ namespace TJS {
             ctx->GetShortDescriptionWithClassName().AsStdString();
         const std::string member = name.AsStdString();
         const bool failed = TJS_FAILED(hr);
+        const bool errorImageDiagnostic =
+            TJSSceneTraceEnabled() && member == "errorImage";
         const bool interestingFailure =
             failed && TJSSceneTraceEnabled() && TJSSaveTraceMatches(desc);
         if(!TJSSaveTraceMatches(desc) && !TJSSaveTraceMemberMatches(member) &&
-           !interestingFailure)
+           !interestingFailure && !errorImageDiagnostic)
             return;
         static int logged = 0;
-        if(!interestingFailure && logged >= 16000)
+        if(!interestingFailure && !errorImageDiagnostic && logged >= 16000)
             return;
         ++logged;
         std::string arg_text;
@@ -2049,6 +2078,27 @@ namespace TJS {
 
         tTJSVariantClosure clo = ra_code1->AsObjectClosureNoAddRef();
         tTJSVariant *name = TJS_GET_VM_REG_ADDR(DataArea, code[2]);
+        const bool action_prop_trace = [] {
+            const char *value = std::getenv("AETHERKIRI_ACTION_PROP_TRACE");
+            return value && *value && *value != '0';
+        }();
+        const std::string member_name = name->AsStringNoAddRef()
+                                            ? ttstr(name->AsStringNoAddRef()).AsStdString()
+                                            : std::string();
+        const bool interesting_action_prop =
+            member_name == "opacity" || member_name == "visible" ||
+            member_name == "left" || member_name == "top" ||
+            member_name == "width" || member_name == "height";
+        if(action_prop_trace && interesting_action_prop) {
+            spdlog::info(
+                "ActionProp.direct before desc=\"{}\" name={} targetType={} "
+                "object={} objthis={} value={}",
+                GetShortDescriptionWithClassName().AsStdString(), member_name,
+                static_cast<int>(ra_code1->Type()),
+                static_cast<const void *>(clo.Object),
+                static_cast<const void *>(clo.ObjThis),
+                TJSSaveTraceVariantString(*TJS_GET_VM_REG_ADDR(ra, code[3])));
+        }
         tjs_error hr = clo.PropSetByVS(
             flags, name->AsStringNoAddRef(), TJS_GET_VM_REG_ADDR(ra, code[3]),
             clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
@@ -2059,6 +2109,11 @@ namespace TJS {
                                          : ra[-1].AsObjectNoAddRef());
         TJSTraceSavePropertySet(this, "direct", name->AsStringNoAddRef(),
                                 *TJS_GET_VM_REG_ADDR(ra, code[3]), hr);
+        if(action_prop_trace && interesting_action_prop) {
+            spdlog::info("ActionProp.direct after desc=\"{}\" name={} hr={}",
+                         GetShortDescriptionWithClassName().AsStdString(),
+                         member_name, hr);
+        }
         if(TJS_FAILED(hr))
             TJSThrowFrom_tjs_error(
                 hr, TJS_GET_VM_REG(DataArea, code[2]).GetString());
@@ -3377,6 +3432,22 @@ namespace TJS {
                 // *param[0] = name   *param[1] = flags   *param[2] =
                 // value
                 tjs_uint32 flags = (tjs_int)*param[1];
+                if(const char *trace = std::getenv("AETHERKIRI_AFFINE_TRACE");
+                   trace && *trace && param[0] &&
+                   !TJS_strcmp(param[0]->GetString(), TJS_W("onPaint"))) {
+                    spdlog::info(
+                        "AffineEnum onPaint flags={} valueType={} valueObj={} valueThis={} dest={} isFn={} isClass={}",
+                        flags, static_cast<int>(param[2]->Type()),
+                        static_cast<const void *>(param[2]->AsObjectNoAddRef()),
+                        static_cast<const void *>(param[2]->AsObjectThisNoAddRef()),
+                        static_cast<const void *>(Dest),
+                        param[2]->Type() == tvtObject &&
+                            param[2]->AsObjectClosureNoAddRef().IsInstanceOf(
+                                0, nullptr, nullptr, TJS_W("Function"), nullptr) == TJS_S_TRUE,
+                        param[2]->Type() == tvtObject &&
+                            param[2]->AsObjectClosureNoAddRef().IsInstanceOf(
+                                0, nullptr, nullptr, TJS_W("Class"), nullptr) == TJS_S_TRUE);
+                }
                 if(!(flags & TJS_STATICMEMBER)) {
                     tTJSVariant val = *param[2];
                     if(val.Type() == tvtObject) {
@@ -3407,6 +3478,28 @@ namespace TJS {
         // enumerate members
         tTJSVariantClosure clo(&callback, (iTJSDispatch2 *)nullptr);
         EnumMembers(TJS_IGNOREPROP, &clo, this);
+
+        if(const char *trace = std::getenv("AETHERKIRI_AFFINE_TRACE");
+           trace && *trace && Name && !TJS_strcmp(Name, TJS_W("EnvGraphicLayer")) &&
+           dest) {
+            tTJSVariant onpaint;
+            const tjs_error er = dest->PropGet(
+                TJS_IGNOREPROP, TJS_W("onPaint"), nullptr, &onpaint, dest);
+            const tjs_error valid =
+                dest->IsValid(0, TJS_W("onPaint"), nullptr, dest);
+            std::string fn_class;
+            if(auto *fn = onpaint.AsObjectNoAddRef()) {
+                tTJSVariant fn_name;
+                if(TJS_SUCCEEDED(fn->ClassInstanceInfo(TJS_CII_GET, 0,
+                                                        &fn_name)))
+                    fn_class = ttstr(fn_name).AsStdString();
+            }
+            spdlog::info(
+                "AffineRegister class=EnvGraphicLayer context={} dest={} onPaint_er={} valid={} type={} obj={} fnClass={}",
+                static_cast<const void *>(this), static_cast<const void *>(dest), er,
+                valid, static_cast<int>(onpaint.Type()),
+                static_cast<const void *>(onpaint.AsObjectNoAddRef()), fn_class);
+        }
     }
 //---------------------------------------------------------------------------
 #define TJS_DO_SUPERCLASS_PROXY_BEGIN                                          \
@@ -3463,16 +3556,73 @@ namespace TJS {
             return TJS_S_OK;
         }
 
+        const bool affine_calc_trace = [] (const tjs_char *name) {
+            const char *trace = std::getenv("AETHERKIRI_CALC_TRACE");
+            return trace && *trace && *trace != '0' && name &&
+                   !TJS_strcmp(name, TJS_W("calcImageMatrix"));
+        }(membername);
+        const bool affine_onpaint_trace = [] (const tjs_char *name) {
+            const char *trace = std::getenv("AETHERKIRI_AFFINE_TRACE");
+            return trace && *trace && name &&
+                   !TJS_strcmp(name, TJS_W("onPaint"));
+        }(membername);
+        if(affine_calc_trace) {
+            spdlog::info(
+                "AffineCalcContext enter this={} name={} context={} super={} superPointers={} objthis={} hint={}",
+                static_cast<const void *>(this),
+                Name ? ttstr(Name).AsStdString() : std::string(),
+                static_cast<int>(ContextType),
+                static_cast<const void *>(SuperClassGetter),
+                SuperClassGetter
+                    ? SuperClassGetter->SuperClassGetterPointer.size()
+                    : 0,
+                static_cast<const void *>(objthis), hint ? *hint : 0);
+        }
+        if(affine_onpaint_trace) {
+            tTJSVariant local_value;
+            const tjs_error local_error =
+                PropGet(TJS_IGNOREPROP, membername, hint, &local_value,
+                        objthis);
+            spdlog::info(
+                "AffineContextCall this={} name={} context={} contextName={} localEr={} localType={} localObj={} super={} objthis={}",
+                static_cast<const void *>(this), ttstr(membername).AsStdString(),
+                static_cast<int>(ContextType),
+                Name ? ttstr(Name).AsStdString() : std::string(),
+                local_error, static_cast<int>(local_value.Type()),
+                static_cast<const void *>(local_value.AsObjectNoAddRef()),
+                static_cast<const void *>(SuperClassGetter),
+                static_cast<const void *>(objthis));
+        }
+
         tjs_error hr = inherited::FuncCall(flag, membername, hint, result,
                                            numparams, param, objthis);
+
+        if(affine_calc_trace)
+            spdlog::info("AffineCalcContext local-result this={} hr={} hint={}",
+                         static_cast<const void *>(this), hr,
+                         hint ? *hint : 0);
 
         if(membername != nullptr && hr == TJS_E_MEMBERNOTFOUND &&
            ContextType == ctClass && SuperClassGetter) {
             // look up super class
             TJS_DO_SUPERCLASS_PROXY_BEGIN
+            if(affine_calc_trace)
+                spdlog::info(
+                    "AffineCalcContext proxy this={} getterIndex={} proxy={} proxyThis={}",
+                    static_cast<const void *>(this), *i,
+                    static_cast<const void *>(clo.Object),
+                    static_cast<const void *>(clo.ObjThis));
             hr = clo.FuncCall(flag, membername, hint, result, numparams, param,
                               objthis);
+            if(affine_calc_trace)
+                spdlog::info("AffineCalcContext proxy-result this={} hr={} hint={}",
+                             static_cast<const void *>(this), hr,
+                             hint ? *hint : 0);
             TJS_DO_SUPERCLASS_PROXY_END
+        }
+        if(affine_onpaint_trace) {
+            spdlog::info("AffineContextCallResult this={} hr={}",
+                         static_cast<const void *>(this), hr);
         }
         return hr;
     }

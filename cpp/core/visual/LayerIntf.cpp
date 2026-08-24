@@ -21,6 +21,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -363,6 +364,33 @@ static bool TVPLayerLoadTraceEnabled() {
     return enabled;
 }
 
+static bool TVPAffineTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_AFFINE_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+// Narrow, opt-in tracing for the dark image-error placeholders emitted by
+// game-side PSD/PBD loaders.  Keep this separate from the broad layer trace so
+// a render diagnosis can identify the owning layer without flooding normal
+// runs with every fill/draw operation.
+static bool TVPLayerErrorTraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_LAYER_ERROR_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+static bool TVPLayerErrorTraceTake() {
+    if(!TVPLayerErrorTraceEnabled())
+        return false;
+    static std::atomic<int> count{0};
+    return count.fetch_add(1, std::memory_order_relaxed) < 256;
+}
+
 static bool TVPLayerDebugTake() {
     if(!TVPLayerDebugEnabled()) {
         return false;
@@ -436,14 +464,37 @@ static bool TVPLayerDrawTraceTake() {
 static bool TVPLayerDrawTraceName(const ttstr &name) {
     if(!TVPLayerDrawTraceEnabled())
         return false;
+    if(const char *all = std::getenv("AETHERKIRI_LAYER_DRAW_TRACE_ALL");
+       all && *all && *all != '0')
+        return true;
     const std::string s = name.AsStdString();
     return s.find("表-背景") != std::string::npos ||
+           s.find("メッセージレイヤ") != std::string::npos ||
+           s == "colorframe" || s == "colorbase" || s == "colorover" ||
+           s == "title_bg" || s == "title_logo" ||
            s.find("表メッセージレイヤ1") != std::string::npos ||
            s.find("表メッセージレイヤ2") != std::string::npos ||
            s.find("CG View Layer") != std::string::npos ||
            s == "face" || s == "trans_face" || s == "hide_face" ||
            s == "秀明" || s == "和奏" ||
-           s == "item3" || s == "item6";
+           s == "item3" || s == "item6" ||
+           s == "chflash" || s == "chview" || s == "chframe" ||
+           s == "ev" || s == "trans_ev" ||
+           s == "frame" || s == "truss" ||
+           s == "stage2" ||
+           s.find("mono_") != std::string::npos ||
+           s.find("/02") != std::string::npos ||
+           s.find("<01") != std::string::npos ||
+           s.find("<02") != std::string::npos;
+}
+
+// Diagnostic escape hatch for comparing the renderer with the historical
+// explicit ConvertLayerType() contract.  It is intentionally environment
+// gated so the compatibility build can be tested without carrying a second
+// source variant.
+static bool TVPDisableAutomaticAlphaNormalization() {
+    const char *value = std::getenv("AETHERKIRI_DISABLE_AUTO_ALPHA_CONVERT");
+    return value && *value && *value != '0';
 }
 
 static std::atomic<bool> TVPLayerDrawTraceArmedFlag{false};
@@ -488,6 +539,11 @@ static bool TVPLayerDrawTraceArmed() {
 static bool TVPLayerDrawTraceArmIfNeeded(tTJSNI_BaseLayer *layer) {
     if(TVPLayerDrawTraceArmed())
         return true;
+    if(const char *arm_name = std::getenv("AETHERKIRI_LAYER_DRAW_TRACE_ARM_NAME");
+       arm_name && *arm_name && layer &&
+       layer->GetName().AsStdString() != arm_name) {
+        return false;
+    }
     if(layer && TVPLayerDrawTraceName(layer->GetName())) {
         TVPLayerDrawTraceArmedFlag.store(true, std::memory_order_relaxed);
         spdlog::info("LayerDrawGPU trace armed by focus layer={}",
@@ -508,23 +564,180 @@ static void TVPTraceLayerDrawGpu(const char *event,
                                  const tTVPRect &dest,
                                  const tTVPRect &clip,
                                  tTVPDrawable *target) {
-    if(!layer || !TVPLayerDrawTraceName(layer->GetName()) ||
-       !TVPLayerDrawTraceArmIfNeeded(layer) ||
-       !TVPLayerDrawTraceTake())
+    const char *standDump = std::getenv("AETHERKIRI_DUMP_STAND_LAYERS");
+    const bool standDumpEnabled =
+        standDump && *standDump && *standDump != '0';
+    if(!layer || (!standDumpEnabled &&
+                  (!TVPLayerDrawTraceName(layer->GetName()) ||
+                   !TVPLayerDrawTraceArmIfNeeded(layer) ||
+                   !TVPLayerDrawTraceTake())))
         return;
     spdlog::info(
         "LayerDrawGPU {} layer={} target={} dest=({},{} {}x{}) clip=({},{} {}x{}) "
-        "pos=({}, {}) size={}x{} visible={} opacity={} image={} children={} "
+        "pos=({}, {}) size={}x{} image_pos=({}, {}) visible={} opacity={} image={} children={} "
         "visible_children={} transition={} trans_children={}",
         event, layer->GetName().AsStdString(), static_cast<const void *>(target),
         dest.left, dest.top, dest.get_width(), dest.get_height(), clip.left,
         clip.top, clip.get_width(), clip.get_height(), layer->GetLeft(),
         layer->GetTop(), layer->GetWidth(), layer->GetHeight(),
+        layer->GetImageLeft(), layer->GetImageTop(),
         layer->GetVisible() ? "yes" : "no", layer->GetOpacity(),
         layer->GetMainImage() ? "yes" : "no", layer->GetCount(),
         layer->DebugGetVisibleChildrenCount(),
         layer->DebugIsInTransition() ? "yes" : "no",
         layer->DebugIsTransWithChildren() ? "yes" : "no");
+
+    // Focused one-shot source inspection for compatibility debugging.  The
+    // virtual motion slices are drawn through several temporary layers, so a
+    // load-time sample alone cannot tell us whether a later AssignImages or
+    // cache update restored straight-alpha pixels before composition.
+    if(const char *pixels = std::getenv("AETHERKIRI_LAYER_SOURCE_PIXELS");
+       pixels && *pixels && *pixels != '0' && event &&
+       std::strcmp(event, "begin") == 0 && layer->GetMainImage()) {
+        static std::unordered_set<std::string> sampled_names;
+        const std::string name = layer->GetName().AsStdString();
+        if(sampled_names.insert(name).second) {
+            auto *image = layer->GetMainImage()->GetTexture();
+            if(image) {
+                const tjs_uint width = image->GetWidth();
+                const tjs_uint height = image->GetHeight();
+                const tjs_uint step_x = std::max<tjs_uint>(1, width / 48);
+                const tjs_uint step_y = std::max<tjs_uint>(1, height / 48);
+                tjs_uint min_alpha = 255;
+                tjs_uint max_alpha = 0;
+                tjs_uint zero_alpha_nonzero_rgb = 0;
+                tjs_uint sampled_count = 0;
+                for(tjs_uint sy = 0; sy < height; sy += step_y) {
+                    const auto *row = static_cast<const tjs_uint32 *>(
+                        image->GetScanLineForRead(sy));
+                    if(!row)
+                        continue;
+                    for(tjs_uint sx = 0; sx < width; sx += step_x) {
+                        const tjs_uint32 pixel = row[sx];
+                        const tjs_uint alpha = (pixel >> 24) & 0xff;
+                        min_alpha = std::min(min_alpha, alpha);
+                        max_alpha = std::max(max_alpha, alpha);
+                        if(alpha == 0 && (pixel & 0x00ffffffu) != 0)
+                            ++zero_alpha_nonzero_rgb;
+                        ++sampled_count;
+                    }
+                }
+                spdlog::info(
+                    "LayerDrawGPU source layer={} face={} type={} size={}x{} "
+                    "sampled={} minA={} maxA={} zeroA_nonzeroRGB={} "
+                    "points=[0x{:08x},0x{:08x},0x{:08x}]",
+                    name, static_cast<int>(layer->GetFace()),
+                    ttstr(layer->GetTypeNameString()).AsStdString(), width,
+                    height, sampled_count, min_alpha, max_alpha,
+                    zero_alpha_nonzero_rgb, image->GetPoint(0, 0),
+                    image->GetPoint(static_cast<tjs_int>(width / 2),
+                                    static_cast<tjs_int>(height / 2)),
+                    image->GetPoint(static_cast<tjs_int>(width - 1),
+                                    static_cast<tjs_int>(height - 1)));
+
+                if(const char *dump = std::getenv("AETHERKIRI_LAYER_SOURCE_PPM");
+                   dump && *dump && *dump != '0' && name == dump) {
+                    static std::atomic<bool> dumped{false};
+                    if(!dumped.exchange(true, std::memory_order_relaxed)) {
+                        std::string safeName = name;
+                        for(char &c : safeName) {
+                            if(c == '/' || c == '\\' || c == ':' || c == ' ')
+                                c = '_';
+                        }
+                        std::ofstream out("/tmp/aetherkiri-layer-source-" +
+                                              safeName + ".ppm",
+                                           std::ios::binary);
+                        if(out) {
+                            out << "P6\n" << width << ' ' << height << "\n255\n";
+                            for(tjs_uint y = 0; y < height; ++y) {
+                                const auto *row = static_cast<const tjs_uint32 *>(
+                                    image->GetScanLineForRead(y));
+                                for(tjs_uint x = 0; x < width; ++x) {
+                                    const tjs_uint32 pixel = row ? row[x] : 0;
+                                    const float a = ((pixel >> 24) & 0xff) / 255.0f;
+                                    const float bg = ((x / 64 + y / 64) & 1) ? 0.92f : 0.68f;
+                                    const auto blend = [&](tjs_uint shift) {
+                                        const float c = ((pixel >> shift) & 0xff) / 255.0f;
+                                        return static_cast<unsigned char>(std::clamp(
+                                            (c * a + bg * (1.0f - a)) * 255.0f,
+                                            0.0f, 255.0f));
+                                    };
+                                    const unsigned char rgb[3] = {
+                                        blend(0), blend(8), blend(16)};
+                                    out.write(reinterpret_cast<const char *>(rgb), 3);
+                                }
+                            }
+                            spdlog::info("dumped layer source PPM {}", name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if(const char *dump = std::getenv("AETHERKIRI_DUMP_STAND_LAYERS");
+       dump && *dump && *dump != '0' && event &&
+       std::strcmp(event, "begin") == 0 && layer->GetMainImage()) {
+        const std::string name = layer->GetName().AsStdString();
+        if(name.find("直太") != std::string::npos) {
+            static std::unordered_set<std::string> dumped_names;
+            if(dumped_names.insert(name).second) {
+                std::string label = name;
+                std::replace(label.begin(), label.end(), '/', '_');
+                std::replace(label.begin(), label.end(), '\\', '_');
+                try {
+                    TVPSaveImage(ttstr{"/tmp/aetherkiri-layer-" + label + ".png"},
+                                 TJS_W("png"), layer->GetMainImage(), nullptr);
+                } catch(...) {
+                    spdlog::warn("failed dumping stand layer {}", name);
+                }
+            }
+        }
+    }
+
+    // Temporary diagnostic: sample the source texture at the point where the
+    // GPU draw is entered.  DrawSelf is not always reached through the same
+    // path (e.g. a child can be composed by a temporary target), so sampling
+    // here gives us the actual texture handed to the compositor.
+    if(const char *pixels = std::getenv("AETHERKIRI_MESSAGE_FRAME_PIXELS");
+       pixels && *pixels && *pixels != '0' && event &&
+       std::strcmp(event, "begin") == 0 &&
+       layer->GetName() == TJS_W("colorframe") && layer->GetMainImage()) {
+        static std::atomic<bool> sampled{false};
+        if(!sampled.exchange(true, std::memory_order_relaxed)) {
+            auto *image = layer->GetMainImage()->GetTexture();
+            if(!image)
+                return;
+            const tjs_uint width = image->GetWidth();
+            const tjs_uint height = image->GetHeight();
+            const tjs_uint step_x = std::max<tjs_uint>(1, width / 64);
+            const tjs_uint step_y = std::max<tjs_uint>(1, height / 64);
+            tjs_uint min_alpha = 255;
+            tjs_uint max_alpha = 0;
+            tjs_uint nonzero = 0;
+            for(tjs_uint sy = 0; sy < height; sy += step_y) {
+                const auto *row = static_cast<const tjs_uint32 *>(
+                    image->GetScanLineForRead(sy));
+                if(!row)
+                    continue;
+                for(tjs_uint sx = 0; sx < width; sx += step_x) {
+                    const tjs_uint alpha = (row[sx] >> 24) & 0xff;
+                    min_alpha = std::min(min_alpha, alpha);
+                    max_alpha = std::max(max_alpha, alpha);
+                    if(alpha)
+                        ++nonzero;
+                }
+            }
+            spdlog::info("message-frame draw-source size={}x{} minA={} maxA={} "
+                         "nonzero={} points=[0x{:08x},0x{:08x},0x{:08x}]",
+                         width, height, min_alpha, max_alpha, nonzero,
+                         image->GetPoint(0, 0),
+                         image->GetPoint(static_cast<tjs_int>(width / 2),
+                                         static_cast<tjs_int>(height / 2)),
+                         image->GetPoint(static_cast<tjs_int>(width - 1),
+                                         static_cast<tjs_int>(height - 1)));
+        }
+    }
 }
 
 static void TVPTraceLayerDrawGpuChild(tTJSNI_BaseLayer *parent,
@@ -555,8 +768,173 @@ static void TVPTraceLayerDrawGpuChild(tTJSNI_BaseLayer *parent,
         child ? child->GetWidth() : 0, child ? child->GetHeight() : 0,
         child && child->GetMainImage() ? "yes" : "no",
         child ? child->GetCount() : 0,
-        child ? child->DebugGetVisibleChildrenCount() : 0,
-        child ? child->GetOrderIndex() : 0);
+                 child ? child->DebugGetVisibleChildrenCount() : 0,
+                 child ? child->GetOrderIndex() : 0);
+}
+
+// Stage/clip layers are assembled by KAGEnvImage through a short-lived,
+// unnamed child layer.  Keep the lifecycle trace opt-in: it is useful for
+// distinguishing a missing virtual image from a correctly generated image
+// that is later hidden by the layer-update path, but is far too noisy for the
+// normal renderer log.
+static bool TVPStage2TraceEnabled() {
+    static const bool enabled = [] {
+        const char *value = std::getenv("AETHERKIRI_STAGE2_TRACE");
+        return value && *value && *value != '0';
+    }();
+    return enabled;
+}
+
+static bool TVPStage2Related(tTJSNI_BaseLayer *layer) {
+    if(!layer)
+        return false;
+    tTJSNI_BaseLayer *current = layer;
+    for(int depth = 0; current && depth < 4; ++depth) {
+        if(current->GetName() == TJS_W("stage2"))
+            return true;
+        current = current->GetParent();
+    }
+    return false;
+}
+
+static tjs_uint32 TVPStage2Sample(tTJSNI_BaseLayer *layer,
+                                  tjs_int x, tjs_int y) {
+    if(!layer || !layer->GetMainImage())
+        return 0;
+    auto *image = layer->GetMainImage()->GetTexture();
+    if(!image || x < 0 || y < 0 || static_cast<tjs_uint>(x) >= image->GetWidth() ||
+       static_cast<tjs_uint>(y) >= image->GetHeight())
+        return 0;
+    return image->GetPoint(x, y);
+}
+
+static void TVPTraceStage2Lifecycle(const char *event,
+                                    tTJSNI_BaseLayer *layer,
+                                    const std::string &detail = {}) {
+    if(!TVPStage2TraceEnabled() || !layer || !TVPStage2Related(layer))
+        return;
+    const auto *parent = layer->GetParent();
+    const auto *image = layer->GetMainImage();
+    std::string owner_class;
+    std::string owner_onpaint;
+    if(auto *owner = layer->GetOwnerNoAddRef()) {
+        tTJSVariant class_name;
+        if(TJS_SUCCEEDED(owner->ClassInstanceInfo(TJS_CII_GET, 0,
+                                                   &class_name))) {
+            owner_class = ttstr(class_name).AsStdString();
+        }
+        tTJSVariant onpaint;
+        const tjs_error onpaint_er = owner->PropGet(
+            TJS_IGNOREPROP, TJS_W("onPaint"), nullptr, &onpaint, owner);
+        owner_onpaint = fmt::format("er={} type={}", onpaint_er,
+                                    static_cast<int>(onpaint.Type()));
+    }
+    spdlog::info(
+        "Stage2.lifecycle event={} layer={} ptr={} parent={} visible={} "
+        "nodeVisible={} callPaint={} opacity={} pos=({}, {}) size={}x{} "
+        "image={} tex={} p00=0x{:08x} "
+        "pcenter=0x{:08x} children={} ownerClass={} ownerOnPaint={} detail={}",
+        event ? event : "<unknown>", layer->GetName().AsStdString(),
+        static_cast<const void *>(layer),
+        parent ? parent->GetName().AsStdString() : "<none>",
+        layer->GetVisible() ? "yes" : "no",
+        layer->GetNodeVisible() ? "yes" : "no",
+        layer->GetCallOnPaint() ? "yes" : "no", layer->GetOpacity(),
+        layer->GetLeft(), layer->GetTop(), layer->GetWidth(), layer->GetHeight(),
+        image ? "yes" : "no",
+        static_cast<const void *>(image ? image->GetTexture() : nullptr),
+        TVPStage2Sample(layer, 0, 0),
+        TVPStage2Sample(layer, image ? static_cast<tjs_int>(image->GetWidth() / 2) : 0,
+                        image ? static_cast<tjs_int>(image->GetHeight() / 2) : 0),
+        layer->GetCount(), owner_class, owner_onpaint,
+        detail);
+}
+
+// Focused diagnostic for the settings-page preview/flash layers.  The game
+// creates these layers through the generic UI pack loader, so a stale parent
+// composite can look identical to a missing image.  Keep this opt-in and
+// narrow; it is removed once the cache invalidation path is verified.
+static bool TVPFlashTraceRelated(tTJSNI_BaseLayer *layer) {
+    if(!layer)
+        return false;
+    const char *dialog_trace = std::getenv("AETHERKIRI_DIALOG_TRACE");
+    const bool trace_dialog_layers =
+        dialog_trace && *dialog_trace && *dialog_trace != '0';
+    for(int depth = 0; layer && depth < 3; ++depth) {
+        const std::string name = layer->GetName().AsStdString();
+        if(name == "chflash" || name == "chframe" || name == "chview" ||
+           name.find("メッセージレイヤ1") != std::string::npos ||
+           (trace_dialog_layers &&
+            (name == "PulldownPanelLayer" ||
+             name.find("LanguageSelect") != std::string::npos)))
+            return true;
+        layer = layer->GetParent();
+    }
+    return false;
+}
+
+static bool TVPFlashTraceEnabled() {
+    const char *value = std::getenv("AETHERKIRI_FLASH_TRACE");
+    return value && *value && *value != '0';
+}
+
+static void TVPTraceFlashLifecycle(const char *event,
+                                   tTJSNI_BaseLayer *layer,
+                                   const std::string &detail = {}) {
+    if(!TVPFlashTraceEnabled() || !TVPFlashTraceRelated(layer))
+        return;
+    const auto *parent = layer->GetParent();
+    const auto *image = layer->GetMainImage();
+    const tjs_uint32 p00 = TVPStage2Sample(layer, 0, 0);
+    const tjs_uint32 pc = TVPStage2Sample(
+        layer, image ? static_cast<tjs_int>(image->GetWidth() / 2) : 0,
+        image ? static_cast<tjs_int>(image->GetHeight() / 2) : 0);
+    // The language selector is authored near the lower-left of its 2560x1920
+    // panel (the PBD puts `base` at y=1241).  The old pcenter sample therefore
+    // read an intentionally transparent cell and made a correctly composed
+    // panel look empty.  Keep these points diagnostic-only and opt-in.
+    const tjs_uint32 p_panel_top = TVPStage2Sample(layer, 14, 1175);
+    const tjs_uint32 p_panel_mid = TVPStage2Sample(layer, 200, 1200);
+    const tjs_uint32 p_panel_base = TVPStage2Sample(layer, 14, 1241);
+    const tjs_uint32 p_panel_item = TVPStage2Sample(layer, 200, 1270);
+    const tjs_uint32 p_panel_right = TVPStage2Sample(layer, 400, 1300);
+    spdlog::info(
+        "Flash.lifecycle event={} layer={} ptr={} parent={} visible={} "
+        "owner={} "
+        "nodeVisible={} opacity={} pos=({}, {}) size={}x{} image={} "
+        "p00=0x{:08x} pcenter=0x{:08x} panel=[0x{:08x},0x{:08x},0x{:08x},0x{:08x},0x{:08x}] "
+        "children={} visible_children={} detail={}",
+        event ? event : "<unknown>", layer->GetName().AsStdString(),
+        static_cast<const void *>(layer),
+        parent ? parent->GetName().AsStdString() : "<none>",
+        layer->GetVisible() ? "yes" : "no",
+        static_cast<const void *>(layer->GetOwnerNoAddRef()),
+        layer->GetNodeVisible() ? "yes" : "no",
+        layer->GetOpacity(), layer->GetLeft(), layer->GetTop(), layer->GetWidth(),
+        layer->GetHeight(), image ? "yes" : "no", p00, pc, p_panel_top,
+        p_panel_mid, p_panel_base, p_panel_item, p_panel_right,
+        layer->GetCount(), layer->DebugGetVisibleChildrenCount(), detail);
+}
+
+static bool TVPDialogLayerTraceEnabled(tTJSNI_BaseLayer *layer) {
+    if(!layer)
+        return false;
+    const char *trace = std::getenv("AETHERKIRI_DIALOG_TRACE");
+    if(!trace || !*trace || *trace == '0')
+        return false;
+    for(int depth = 0; layer && depth < 4; ++depth) {
+        const std::string name = layer->GetName().AsStdString();
+        if(name == "PulldownPanelLayer" ||
+           name.find("LanguageSelect") != std::string::npos)
+            return true;
+        layer = layer->GetParent();
+    }
+    return false;
+}
+
+static bool TVPDialogLayerTraceTake() {
+    static std::atomic<int> count{0};
+    return count.fetch_add(1, std::memory_order_relaxed) < 512;
 }
 
 static void TVPTraceLayerInputEvent(const char *event,
@@ -869,9 +1247,13 @@ static void TVPTraceObjectProperty(const char *label,
     spdlog::info("LayerIntf trace {}.{}={}", label, prop_name.AsStdString(),
                  TVPVariantDebugString(value));
     if(value.Type() == tvtObject &&
-       (prop_name == TJS_W("action") || prop_name == TJS_W("onClick") ||
+        (prop_name == TJS_W("action") || prop_name == TJS_W("onClick") ||
         prop_name == TJS_W("current") ||
-        prop_name == TJS_W("controlOwner"))) {
+        prop_name == TJS_W("names") ||
+        prop_name == TJS_W("controlOwner") ||
+        prop_name == TJS_W("button") ||
+        prop_name == TJS_W("_button") ||
+        prop_name == TJS_W("buttonLayer"))) {
         tTJSVariantClosure nested = value.AsObjectClosureNoAddRef();
         if(nested.Object) {
             const std::string nested_label =
@@ -891,6 +1273,9 @@ static void TVPTraceObjectForButtonClick(const char *label,
     TVPTraceObjectProperty(label, object, TJS_W("controlOwner"));
     TVPTraceObjectProperty(label, object, TJS_W("owner"));
     TVPTraceObjectProperty(label, object, TJS_W("parent"));
+    TVPTraceObjectProperty(label, object, TJS_W("button"));
+    TVPTraceObjectProperty(label, object, TJS_W("_button"));
+    TVPTraceObjectProperty(label, object, TJS_W("buttonLayer"));
     TVPTraceObjectProperty(label, object, TJS_W("target"));
     TVPTraceObjectProperty(label, object, TJS_W("eventTarget"));
     TVPTraceObjectProperty(label, object, TJS_W("onclick"));
@@ -2078,6 +2463,45 @@ static bool TVPCafeStellaSourceSizeLooksSaveThumbnail(tjs_uint width,
     return aspect >= 1.65 && aspect <= 1.9;
 }
 
+// PackinOne/ProxyStorage can expose a logical atlas name for which the
+// original game deliberately does not ship a standalone TLG file.  Do not
+// hide a real missing image behind a placeholder, but keep a missing virtual
+// atlas from aborting the whole UI data pack: callers can still create their
+// controls and use their authored geometry while the absent pixels remain
+// transparent.  The size is intentionally bounded and only used when no
+// authored image/fallback exists; concrete storage always wins above.
+static bool TVPLayerNameLooksVirtualPack(const ttstr &name) {
+    std::string storage = TVPExtractStorageName(name).AsStdString();
+    if(storage.empty())
+        storage = name.AsStdString();
+    std::transform(storage.begin(), storage.end(), storage.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    for(const char *extension : {".tlg", ".tlg5", ".tlg6", ".png"}) {
+        const std::size_t length = std::strlen(extension);
+        if(storage.size() > length &&
+           storage.compare(storage.size() - length, length, extension) == 0) {
+            storage.resize(storage.size() - length);
+            break;
+        }
+    }
+    constexpr const char suffix[] = "__pack";
+    // The native loader calls Layer.loadImages with the extensionless logical
+    // name, while the graphic loader probes .tlg/.tlg5/.tlg6 internally.
+    // Accept both spellings, but not an arbitrary filename ending in `pack`.
+    return storage.size() > sizeof(suffix) - 1 &&
+           storage.compare(storage.size() - (sizeof(suffix) - 1),
+                           sizeof(suffix) - 1, suffix) == 0;
+}
+
+static bool TVPLayerUseVirtualPackPlaceholder(const ttstr &name) {
+    const char *value = std::getenv("AETHERKIRI_VIRTUAL_PACK_PLACEHOLDER");
+    if(value && *value == '0')
+        return false;
+    return TVPLayerNameLooksVirtualPack(name);
+}
+
 static bool TVPLayerThumbnailFitEnabled() {
     static const bool enabled = [] {
         const char *value = std::getenv("AETHERKIRI_THUMBNAIL_FIT");
@@ -2951,6 +3375,10 @@ iTVPLayerTreeOwner *tTJSNI_BaseLayer::GetLayerTreeOwner() const {
 //---------------------------------------------------------------------------
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::Join(tTJSNI_BaseLayer *parent) {
+    TVPTraceStage2Lifecycle(
+        "join-before", this,
+        fmt::format("new_parent={}", parent ? parent->GetName().AsStdString()
+                                             : "<none>"));
     if(parent == this)
         TVPThrowExceptionMessage(TVPCannotSetParentSelf);
     if(parent && parent->Manager != Manager)
@@ -2960,6 +3388,7 @@ void tTJSNI_BaseLayer::Join(tTJSNI_BaseLayer *parent) {
     Parent = parent;
     if(Parent)
         parent->AddChild(this);
+    TVPTraceStage2Lifecycle("join-after", this);
 }
 
 //---------------------------------------------------------------------------
@@ -3523,7 +3952,14 @@ void tTJSNI_BaseLayer::RecreateOrderIndex() {
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::SetVisible(bool st) {
-    if(Visible != st) {
+    const bool changed = Visible != st;
+    if(changed)
+        TVPTraceFlashLifecycle(st ? "visible-on-before" : "visible-off-before",
+                               this);
+    if(changed)
+        TVPTraceStage2Lifecycle(st ? "visible-on-before" : "visible-off-before",
+                                this);
+    if(changed) {
         if(IsPrimary() && !st)
             TVPThrowExceptionMessage(TVPCannotSetPrimaryInvisible);
         if(st && _bitmapEvicted)
@@ -3545,10 +3981,30 @@ void tTJSNI_BaseLayer::SetVisible(bool st) {
                 Manager->BlurTree(this); // in input/keyboard focus management
         }
     }
+    if(changed)
+        TVPTraceStage2Lifecycle(st ? "visible-on-after" : "visible-off-after",
+                                this);
+    if(changed)
+        TVPTraceFlashLifecycle(st ? "visible-on-after" : "visible-off-after",
+                               this);
 }
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::SetOpacity(tjs_int opa) {
+    const bool changed = Opacity != opa;
+    if(changed)
+        TVPTraceFlashLifecycle("opacity-before", this,
+                               fmt::format("new={}", opa));
+    if(changed)
+        TVPTraceStage2Lifecycle("opacity-before", this,
+                                fmt::format("new={}", opa));
+    if(const char *trace = std::getenv("AETHERKIRI_MESSAGE_FRAME_TRACE");
+       trace && *trace && *trace != '0' &&
+       (GetName() == TJS_W("colorframe") ||
+        GetName().AsStdString().find("メッセージレイヤ") != std::string::npos)) {
+        spdlog::info("message-frame opacity layer={} old={} new={}",
+                     GetName().AsNarrowStdString(), Opacity, opa);
+    }
     if(Opacity != opa) {
         if(IsPrimary() && opa != 255)
             TVPThrowExceptionMessage(TVPCannotSetPrimaryInvisible);
@@ -3561,6 +4017,10 @@ void tTJSNI_BaseLayer::SetOpacity(tjs_int opa) {
             Parent->NotifyChildrenVisualStateChanged();
         Update();
     }
+    if(changed)
+        TVPTraceStage2Lifecycle("opacity-after", this);
+    if(changed)
+        TVPTraceFlashLifecycle("opacity-after", this);
 }
 
 //---------------------------------------------------------------------------
@@ -4037,6 +4497,17 @@ tTVPBlendOperationMode tTJSNI_BaseLayer::GetOperationModeFromType() const {
 void tTJSNI_BaseLayer::SetType(tTVPLayerType type) {
     // set layer type to "type"
     if(Type != type) {
+        // Keep the bitmap representation in sync with the layer face.  A
+        // number of KiriKiri plug-ins build a layer as an ordinary alpha
+        // layer, copy decoded pixels into it, and only then change its type
+        // to ltAddAlpha.  In that sequence the old implementation changed
+        // the blend mode but left straight-alpha RGB data in the texture;
+        // transparent white pixels consequently became visible as opaque
+        // white blocks.  Remember the old face before UpdateDrawFace() and
+        // normalize only when the type transition really changes the pixel
+        // convention.  This is deliberately layer-generic (not tied to a
+        // particular motion or title resource).
+        const tTVPDrawFace oldDrawFace = DrawFace;
         Type = type;
         switch(Type) {
             case ltBinder:
@@ -4258,6 +4729,49 @@ void tTJSNI_BaseLayer::SetType(tTVPLayerType type) {
                 break;
         }
         NotifyLayerTypeChange();
+
+        if(!TVPDisableAutomaticAlphaNormalization() && MainImage &&
+           oldDrawFace != DrawFace) {
+            if(DrawFace == dfAddAlpha && oldDrawFace == dfAlpha) {
+                if(const char *trace = std::getenv("AETHERKIRI_ALPHA_TRACE");
+                   trace && *trace && *trace != '0') {
+                    spdlog::info("alpha type-convert name={} old={} new={} type={} image={}x{}",
+                                 GetName().AsStdString(),
+                                 TVPLayerDebugDrawFaceName(oldDrawFace),
+                                 TVPLayerDebugDrawFaceName(DrawFace),
+                                 ttstr(GetTypeNameString()).AsStdString(),
+                                 GetImageWidth(),
+                                 GetImageHeight());
+                }
+                MainImage->ConvertAlphaToAddAlpha();
+                ImageModified = true;
+                if(const char *trace = std::getenv("AETHERKIRI_ALPHA_TRACE");
+                   trace && *trace && *trace != '0' && MainImage) {
+                    spdlog::info("alpha type-convert sample name={} p00=0x{:08x} center=0x{:08x} pbr=0x{:08x}",
+                                 GetName().AsStdString(),
+                                 MainImage->GetPoint(0, 0),
+                                 MainImage->GetPoint(
+                                     static_cast<tjs_int>(GetImageWidth() / 2),
+                                     static_cast<tjs_int>(GetImageHeight() / 2)),
+                                 MainImage->GetPoint(
+                                     static_cast<tjs_int>(GetImageWidth() - 1),
+                                     static_cast<tjs_int>(GetImageHeight() - 1)));
+                }
+            } else if(DrawFace == dfAlpha && oldDrawFace == dfAddAlpha) {
+                if(const char *trace = std::getenv("AETHERKIRI_ALPHA_TRACE");
+                   trace && *trace && *trace != '0') {
+                    spdlog::info("alpha type-convert name={} old={} new={} type={} image={}x{}",
+                                 GetName().AsStdString(),
+                                 TVPLayerDebugDrawFaceName(oldDrawFace),
+                                 TVPLayerDebugDrawFaceName(DrawFace),
+                                 ttstr(GetTypeNameString()).AsStdString(),
+                                 GetImageWidth(),
+                                 GetImageHeight());
+                }
+                MainImage->ConvertAddAlphaToAlpha();
+                ImageModified = true;
+            }
+        }
         SetToCreateExposedRegion();
         Update();
     }
@@ -4777,6 +5291,30 @@ void tTJSNI_BaseLayer::AllocateDefaultImage() {
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
+    // KAG's EnvGraphicLayer.copyImage contract flushes a pending onPaint on
+    // the source before copying its image.  Hidden fore/back pages do not
+    // otherwise participate in window completion, so copying immediately can
+    // snapshot the still-transparent allocation instead of the queued affine
+    // image.  Completing just the pending source here mirrors the script
+    // contract and applies to vector, generated-colour and other affine
+    // sources without depending on scene or layer names.
+    if(src && src != this && src->GetCallOnPaint()) {
+        TVPTraceStage2Lifecycle("assign-images-flush-paint-before", src);
+        src->BeforeCompletion();
+        TVPTraceStage2Lifecycle("assign-images-flush-paint-after", src);
+    }
+    if(TVPStage2TraceEnabled() &&
+       (TVPStage2Related(this) || TVPStage2Related(src))) {
+        TVPTraceStage2Lifecycle(
+            "assign-images-before", this,
+            fmt::format("source={} source_visible={} source_image={} source_p00=0x{:08x}",
+                        src ? src->GetName().AsStdString() : "<null>",
+                        src && src->GetVisible() ? "yes" : "no",
+                        src && src->GetMainImage() ? "yes" : "no",
+                        TVPStage2Sample(src, 0, 0)));
+        if(src && src != this)
+            TVPTraceStage2Lifecycle("assign-images-source", src);
+    }
     if(src && src != this && src->GetName().IsEmpty() &&
        !src->GetVisible()) {
         bool use_motion_swap =
@@ -4807,13 +5345,114 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
     bool province_changed = false;
     bool shared_gpu_frame_updated = false;
 
+    // KAG's temporaryLayer is normally named "syslay".  AffineSourceImage
+    // uses it as a scratch surface for generated images (solid colours,
+    // captures and text), then clears/reuses the surface for the next source.
+    // AssignImages historically shared the texture object, which meant that a
+    // target such as a transition/darken layer was silently cleared when the
+    // scratch layer was reused.  Keep the normal sharing behaviour for
+    // persistent layers and detach only this documented scratch surface.
+    const auto is_temporary_source = [](const tTJSNI_BaseLayer *layer) {
+        if(!layer) {
+            return false;
+        }
+        const std::string name = layer->GetName().AsStdString();
+        return name == "syslay" || name.rfind("syslay:", 0) == 0;
+    };
+    const bool copy_temporary_source = src != this && is_temporary_source(src);
+    const bool assignTrace = [] {
+        const char *value = std::getenv("AETHERKIRI_ASSIGN_TRACE");
+        return value && *value && *value != '0';
+    }();
+    if(assignTrace) {
+        static std::atomic<int> assignTraceCount{0};
+        if(assignTraceCount.fetch_add(1, std::memory_order_relaxed) < 4000) {
+            const auto parent_name = [](const tTJSNI_BaseLayer *layer) {
+                return layer && layer->GetParent()
+                    ? layer->GetParent()->GetName().AsStdString()
+                    : std::string("<none>");
+            };
+            const auto sample = [](const tTJSNI_BaseLayer *layer,
+                                   tjs_int x, tjs_int y) -> tjs_uint32 {
+                if(!layer || !layer->MainImage || x < 0 || y < 0 ||
+                   static_cast<tjs_uint>(x) >= layer->MainImage->GetWidth() ||
+                   static_cast<tjs_uint>(y) >= layer->MainImage->GetHeight()) {
+                    return 0;
+                }
+                return layer->MainImage->GetPoint(x, y);
+            };
+            const bool detail = [] {
+                const char *value = std::getenv("AETHERKIRI_ASSIGN_TRACE_DETAIL");
+                return value && *value && *value != '0';
+            }();
+            spdlog::info(
+                "Layer.assign-images target={} source={} same={} targetImage={} sourceImage={} sourceSize={}x{}{}",
+                GetName().AsStdString(), src ? src->GetName().AsStdString() : "<null>",
+                src == this ? "yes" : "no", MainImage ? "yes" : "no",
+                src && src->MainImage ? "yes" : "no",
+                src && src->MainImage ? src->GetImageWidth() : 0,
+                src && src->MainImage ? src->GetImageHeight() : 0,
+                detail && src ? fmt::format(
+                    " targetVisible={} targetParent={} targetOpacity={} "
+                    "sourceVisible={} sourceParent={} sourceOpacity={} "
+                    "targetTex={} sourceTex={} target00=0x{:08x} "
+                    "source00=0x{:08x} sourceCenter=0x{:08x}",
+                    GetVisible() ? "yes" : "no", parent_name(this),
+                    GetOpacity(), src->GetVisible() ? "yes" : "no",
+                    parent_name(src), src->GetOpacity(),
+                    static_cast<const void *>(MainImage ? MainImage->GetTexture() : nullptr),
+                    static_cast<const void *>(src->MainImage ? src->MainImage->GetTexture() : nullptr),
+                    sample(this, 0, 0), sample(src, 0, 0),
+                    sample(src, static_cast<tjs_int>(src->MainImage->GetWidth() / 2),
+                          static_cast<tjs_int>(src->MainImage->GetHeight() / 2)))
+                    : std::string());
+        }
+    }
+
+    const bool alphaTrace = [] {
+        const char *value = std::getenv("AETHERKIRI_ALPHA_TRACE");
+        return value && *value && *value != '0';
+    }();
+
     if(src->MainImage) {
+        const bool convertToAddAlpha = DrawFace == dfAddAlpha &&
+            src->DrawFace != dfAddAlpha;
+        const bool convertToAlpha = DrawFace == dfAlpha &&
+            src->DrawFace == dfAddAlpha;
+        if(alphaTrace && (GetName() == TJS_W("truss") ||
+                          GetName() == TJS_W("frame") ||
+                          src->GetName() == TJS_W("truss") ||
+                          src->GetName() == TJS_W("frame") ||
+                          src->GetWidth() > 1000)) {
+            spdlog::info("alpha assign target={} source={} targetFace={} sourceFace={} targetSize={}x{} sourceSize={}x{} convertAdd={} convertAlpha={}",
+                         GetName().AsStdString(), src->GetName().AsStdString(),
+                         TVPLayerDebugDrawFaceName(DrawFace),
+                         TVPLayerDebugDrawFaceName(src->DrawFace),
+                         GetImageWidth(), GetImageHeight(), src->GetImageWidth(),
+                         src->GetImageHeight(), convertToAddAlpha,
+                         convertToAlpha);
+        }
         int64_t oldBytes = TVPCalcMainImageBytes(MainImage);
         if(MainImage)
             main_changed = MainImage->Assign(*src->MainImage);
         else {
             MainImage = new tTVPBaseTexture(*src->MainImage);
             main_changed = true;
+        }
+
+        if(copy_temporary_source && MainImage &&
+           MainImage->GetTexture() == src->MainImage->GetTexture()) {
+            // Independ() performs a GPU-side copy when the texture is shared;
+            // IndependNoCopy() would lose the generated pixels and is not
+            // appropriate here.
+            MainImage->Independ();
+            main_changed = true;
+            if(assignTrace) {
+                spdlog::info(
+                    "Layer.assign-images detached scratch source={} target={} size={}x{}",
+                    src->GetName().AsStdString(), GetName().AsStdString(),
+                    MainImage->GetWidth(), MainImage->GetHeight());
+            }
         }
         TVPLayerBitmapTotalBytes.fetch_add(TVPCalcMainImageBytes(MainImage) - oldBytes,
                                            std::memory_order_relaxed);
@@ -4829,6 +5468,21 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
                    dynamic_cast<GodotTexture2D *>(MainImage->GetTexture())) {
                 shared_gpu_frame_updated = texture->HasPendingGpuWrites();
             }
+        }
+
+        // KiriKiri's ltAddAlpha layers store premultiplied (additive-alpha)
+        // pixels.  A plain Layer/ltBinder source still contains ordinary
+        // straight-alpha pixels, even when the destination is an
+        // ltAddAlpha layer.  Sharing that texture without converting it makes
+        // transparent white pixels contribute as opaque white in the
+        // additive blend path (notably in motion/foreground compositions).
+        // Convert after Assign(); GetTextureForRender() detaches a shared
+        // texture before modifying it, so the source layer remains intact.
+        if(!TVPDisableAutomaticAlphaNormalization() && MainImage &&
+           convertToAddAlpha) {
+            MainImage->ConvertAlphaToAddAlpha();
+        } else if(MainImage && convertToAlpha) {
+            MainImage->ConvertAddAlphaToAlpha();
         }
     } else if(MainImage) {
         DeallocateImage();
@@ -4862,6 +5516,7 @@ void tTJSNI_BaseLayer::AssignImages(tTJSNI_BaseLayer *src) {
 
     if(main_changed || shared_gpu_frame_updated)
         Update(false); // update
+    TVPTraceStage2Lifecycle("assign-images-after", this);
 }
 
 //---------------------------------------------------------------------------
@@ -4943,6 +5598,11 @@ bool tTJSNI_BaseLayer::ExchangeMainImage(tTVPBaseTexture *&bitmap) {
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::AssignMainImageWithUpdate(iTVPBaseBitmap *bmp) {
+    TVPTraceStage2Lifecycle(
+        "assign-main-before", this,
+        fmt::format("source={}x{} p00=0x{:08x}",
+                    bmp ? bmp->GetWidth() : 0, bmp ? bmp->GetHeight() : 0,
+                    bmp ? bmp->GetPoint(0, 0) : 0));
     // assign images
     bool main_changed = true;
 
@@ -4971,6 +5631,7 @@ void tTJSNI_BaseLayer::AssignMainImageWithUpdate(iTVPBaseBitmap *bmp) {
 
     if(main_changed)
         Update(false); // update
+    TVPTraceStage2Lifecycle("assign-main-after", this);
 }
 
 //---------------------------------------------------------------------------
@@ -5354,6 +6015,9 @@ void tTJSNI_BaseLayer::AssignTexture(iTVPTexture2D *tex) {
 //---------------------------------------------------------------------------
 iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
                                             tjs_uint32 colorkey) {
+    TVPTraceStage2Lifecycle("load-images-before", this,
+                            fmt::format("name={} colorkey=0x{:08x}",
+                                        name.AsStdString(), colorkey));
     // loads image(s) from specified storage.
     // colorkey must be a color that should be transparent, or:
     // 0x 01 ff ff ff (clAdapt) : the color key will be automatically
@@ -5416,25 +6080,129 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
                 ? (ext.IsEmpty() ? name : TVPChopStorageExt(name)) + TJS_W(".png")
                 : name;
         if(!TVPIsExistentStorage(fallback)) {
-            throw;
-        }
+            if(!TVPLayerUseVirtualPackPlaceholder(name))
+                throw;
 
-        if(fallback != name) {
+            // Some native UI compilers publish logical atlases through a
+            // plug-in-owned virtual resource map instead of a physical file.
+            // Give the registered provider the first chance to materialize
+            // that image.  If no provider recognizes it, retain the safe
+            // transparent placeholder used for unsupported virtual packs.
+            if(TVPProvideVirtualGraphic(name, MainImage)) {
+                spdlog::info(
+                    "Layer.loadImages materialized virtual graphic: {} size={}x{}",
+                    name.AsStdString(),
+                    static_cast<unsigned>(MainImage->GetWidth()),
+                    static_cast<unsigned>(MainImage->GetHeight()));
+                load_name = name;
+                if(metainfo) {
+                    metainfo->Release();
+                    metainfo = nullptr;
+                }
+                provincename.Clear();
+            } else {
+
+                // A virtual atlas has no concrete fallback to inspect.
+                // Preserve any dimensions already assigned by the UI loader;
+                // otherwise allocate a bounded transparent canvas large
+                // enough for authored slice coordinates.
+                const tjs_uint existing_width = MainImage->GetWidth();
+                const tjs_uint existing_height = MainImage->GetHeight();
+                const tjs_uint placeholder_width = existing_width <= 32
+                                                       ? 2048
+                                                       : existing_width;
+                const tjs_uint placeholder_height = existing_height <= 32
+                                                        ? 2048
+                                                        : existing_height;
+                spdlog::warn(
+                    "Layer.loadImages transparent placeholder for missing virtual pack: {} existing={}x{} size={}x{}",
+                    name.AsStdString(), static_cast<unsigned>(existing_width),
+                    static_cast<unsigned>(existing_height),
+                    static_cast<unsigned>(placeholder_width),
+                    static_cast<unsigned>(placeholder_height));
+                MainImage->SetSize(placeholder_width, placeholder_height,
+                                   false);
+                MainImage->Fill(tTVPRect(0, 0, placeholder_width,
+                                         placeholder_height), 0x00000000);
+                load_name = name;
+                if(metainfo) {
+                    metainfo->Release();
+                    metainfo = nullptr;
+                }
+                provincename.Clear();
+            }
+        } else {
+            try {
+                load_name = fallback;
+                load_graphic(fallback);
+            } catch(...) {
+                spdlog::warn("Layer.loadImages placeholder for unreadable image: {}",
+                             fallback.AsStdString());
+                MainImage->SetSize(1, 1, false);
+                MainImage->Fill(tTVPRect(0, 0, 1, 1), 0x00000000);
+            }
+        }
+        if(fallback != name && TVPIsExistentStorage(fallback)) {
             spdlog::warn("Layer.loadImages fallback: {} -> {}",
                          name.AsStdString(), fallback.AsStdString());
-        }
-        try {
-            load_name = fallback;
-            load_graphic(fallback);
-        } catch(...) {
-            spdlog::warn("Layer.loadImages placeholder for unreadable image: {}",
-                         fallback.AsStdString());
-            MainImage->SetSize(1, 1, false);
-            MainImage->Fill(tTVPRect(0, 0, 1, 1), 0x00000000);
         }
     }
     TVPLayerBitmapTotalBytes.fetch_add(TVPCalcMainImageBytes(MainImage) - oldBytes,
                                        std::memory_order_relaxed);
+
+    // Images decoded by the storage/PSB loaders are straight-alpha.  When a
+    // caller explicitly loads into an ltAddAlpha layer, normalize the pixel
+    // representation before the first draw.  This is the same conversion
+    // used by ConvertLayerType() and keeps transparent RGB data from leaking
+    // into additive blending.
+    if(!TVPDisableAutomaticAlphaNormalization() && MainImage &&
+       DrawFace == dfAddAlpha) {
+        MainImage->ConvertAlphaToAddAlpha();
+    }
+
+    // One-shot asset inspection for the generic PSB slice path.  This is
+    // intentionally opt-in and is removed after the renderer diagnosis; it
+    // lets us distinguish an opaque source asset from a lost-alpha blit.
+    if(const char *dump = std::getenv("AETHERKIRI_DUMP_MONO_SLICES");
+       dump && *dump && *dump != '0' &&
+       name.AsStdString().find("psb://motion/mono_loop.mtn/") == 0) {
+        static std::atomic<int> dump_index{0};
+        const int index = dump_index.fetch_add(1, std::memory_order_relaxed);
+        if(index < 4) {
+            try {
+                const std::string path =
+                    "/tmp/aetherkiri-mono-slice-" + std::to_string(index) +
+                    ".png";
+                TVPSaveImage(ttstr{path}, TJS_W("png"), MainImage, nullptr);
+                spdlog::info("dumped mono slice {} to {}", name.AsStdString(),
+                             path);
+            } catch(...) {
+                spdlog::warn("failed dumping mono slice {}",
+                             name.AsStdString());
+            }
+        }
+    }
+
+    if(const char *dump = std::getenv("AETHERKIRI_DUMP_IMAGE_LOADS");
+       dump && *dump && *dump != '0' && MainImage) {
+        const std::string wanted = dump;
+        const std::string source = name.AsStdString();
+        if(source.find(wanted) != std::string::npos) {
+            static std::unordered_set<std::string> dumped_names;
+            if(dumped_names.insert(source).second) {
+                std::string label = source;
+                std::replace(label.begin(), label.end(), '/', '_');
+                std::replace(label.begin(), label.end(), '\\', '_');
+                try {
+                    TVPSaveImage(ttstr{"/tmp/aetherkiri-load-" + label + ".png"},
+                                 TJS_W("png"), MainImage, nullptr);
+                    spdlog::info("dumped loaded image {}", source);
+                } catch(...) {
+                    spdlog::warn("failed dumping loaded image {}", source);
+                }
+            }
+        }
+    }
 
     _evictedImageName = name;
     _evictedColorKey = colorkey;
@@ -5484,6 +6252,19 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
         throw;
     }
 
+    TVPTraceStage2Lifecycle(
+        "load-images-after", this,
+        fmt::format("name={} loaded={} size={}x{} p00=0x{:08x} center=0x{:08x}",
+                    name.AsStdString(), load_name.AsStdString(),
+                    MainImage ? MainImage->GetWidth() : 0,
+                    MainImage ? MainImage->GetHeight() : 0,
+                    TVPStage2Sample(this, 0, 0),
+                    TVPStage2Sample(
+                        this,
+                        MainImage ? static_cast<tjs_int>(MainImage->GetWidth() / 2)
+                                  : 0,
+                        MainImage ? static_cast<tjs_int>(MainImage->GetHeight() / 2)
+                                  : 0)));
     return metainfo;
 }
 
@@ -6031,6 +6812,76 @@ static bool TVPHasLinkButtonProperties(const tTJSVariantClosure &object) {
            link_num.Type() != tvtVoid;
 }
 
+// UI page sheets keep the command for a copied button in the logical entry
+// itself (usually current.names[<layer>].exp), rather than on the native
+// layer wrapper.  Keep the lookup deliberately small and side-effect free;
+// this is used by both hit-test routing and the generic onClick fallback.
+static bool TVPReadExplicitLayerExpression(const tTJSVariantClosure &object,
+                                           ttstr *expression = nullptr) {
+    if(!object.Object)
+        return false;
+
+    static ttstr exp_name(TJS_W("exp"));
+    tTJSVariant value;
+    const tjs_error hr = object.PropGet(0, exp_name.c_str(), exp_name.GetHint(),
+                                        &value, object.ObjThis);
+    if(TJS_FAILED(hr) || value.Type() == tvtVoid)
+        return false;
+    try {
+        const ttstr text(value);
+        if(text.IsEmpty())
+            return false;
+        if(expression)
+            *expression = text;
+        return true;
+    } catch(...) {
+        return false;
+    }
+}
+
+static bool TVPHasExplicitLayerExpression(const tTJSVariantClosure &object) {
+    return TVPReadExplicitLayerExpression(object, nullptr);
+}
+
+// UI page sheets keep their logical button objects in `current.names`, while
+// the hit-test layer is often owned by a small native button wrapper stored in
+// the logical object's `button`/`layer` member.  The old resolver only
+// accepted the logical object when it itself exposed controlOwner/linkNum,
+// which made gallery and page-sheet entries receive the generic window
+// onClick event instead of their link callback.  Follow the explicit wrapper
+// properties used by the KAG UI contract, but keep the traversal bounded and
+// side-effect free so arbitrary game objects are never walked.
+static tTJSVariantClosure
+TVPUnwrapLayerButtonObject(const tTJSVariantClosure &candidate,
+                           int depth = 0) {
+    if(!candidate.Object || depth > 2)
+        return tTJSVariantClosure(nullptr, nullptr);
+    if(TVPHasLinkButtonProperties(candidate) ||
+       TVPHasExplicitLayerExpression(candidate))
+        return candidate;
+
+    static const tjs_char *const wrapper_names[] = {
+        TJS_W("button"),       TJS_W("_button"),
+        TJS_W("buttonLayer"),  TJS_W("layer"),
+        TJS_W("nativeButton"), TJS_W("nativeLayer"),
+    };
+    for(const tjs_char *name : wrapper_names) {
+        ttstr property_name(name);
+        tTJSVariant value;
+        if(TJS_FAILED(candidate.PropGet(0, property_name.c_str(),
+                                        property_name.GetHint(), &value,
+                                        candidate.ObjThis)) ||
+           value.Type() != tvtObject)
+            continue;
+        tTJSVariantClosure nested = value.AsObjectClosureNoAddRef();
+        tTJSVariantClosure resolved =
+            TVPUnwrapLayerButtonObject(nested, depth + 1);
+        if(resolved.Object)
+            return resolved;
+    }
+    return tTJSVariantClosure(nullptr, nullptr);
+}
+
 static tTJSVariantClosure
 TVPResolveLayerButtonObject(tTJSNI_BaseLayer *layer) {
     if(!layer)
@@ -6038,8 +6889,9 @@ TVPResolveLayerButtonObject(tTJSNI_BaseLayer *layer) {
 
     tTJSVariantClosure owner(layer->GetOwnerNoAddRef(),
                              layer->GetOwnerNoAddRef());
-    if(TVPHasLinkButtonProperties(owner))
-        return owner;
+    tTJSVariantClosure owner_button = TVPUnwrapLayerButtonObject(owner);
+    if(owner_button.Object)
+        return owner_button;
 
     tTJSVariantClosure action = layer->GetActionOwnerNoAddRef();
     if(!action.Object)
@@ -6093,15 +6945,172 @@ TVPResolveLayerButtonObject(tTJSNI_BaseLayer *layer) {
     }
 
     tTJSVariantClosure button = button_value.AsObjectClosureNoAddRef();
-    const bool valid = TVPHasLinkButtonProperties(button);
+    tTJSVariantClosure resolved = TVPUnwrapLayerButtonObject(button);
+    const bool valid = resolved.Object != nullptr;
     if(TVPLayerInputTraceEnabled())
         spdlog::info("LayerIntf button resolve layer={} stage=properties valid={}",
                      layer_name.AsStdString(), valid ? "yes" : "no");
-    return valid ? button : owner;
+    return valid ? resolved : owner;
 }
 
 bool tTJSNI_BaseLayer::HasButtonClickTarget() {
-    return TVPHasLinkButtonProperties(TVPResolveLayerButtonObject(this));
+    const tTJSVariantClosure button = TVPResolveLayerButtonObject(this);
+    return TVPHasLinkButtonProperties(button) ||
+           TVPHasExplicitLayerExpression(button);
+}
+
+// Resolve the explicit command attached to a page-sheet entry.  The native
+// action owner receives the mouse event, while the entry metadata lives under
+// action.current.names[<layer name>].  Returning the actual metadata object
+// lets FireButtonClick use its normal eval path and avoids game-specific
+// coordinate or command special cases.
+static bool TVPResolveLayerExplicitExpression(tTJSNI_BaseLayer *layer,
+                                               tTJSVariantClosure &object,
+                                               ttstr &expression) {
+    object = tTJSVariantClosure(nullptr, nullptr);
+    expression = ttstr();
+    if(!layer)
+        return false;
+
+    auto try_object = [&](const tTJSVariantClosure &candidate) -> bool {
+        if(!candidate.Object)
+            return false;
+        ttstr candidate_expression;
+        if(!TVPReadExplicitLayerExpression(candidate, &candidate_expression))
+            return false;
+        object = candidate;
+        expression = candidate_expression;
+        return true;
+    };
+
+    const tTJSVariantClosure owner(layer->GetOwnerNoAddRef(),
+                                   layer->GetOwnerNoAddRef());
+    if(try_object(owner))
+        return true;
+
+    const tTJSVariantClosure action = layer->GetActionOwnerNoAddRef();
+    if(try_object(action))
+        return true;
+
+    ttstr layer_name = layer->GetName();
+    auto try_names_entry = [&](const tTJSVariantClosure &names) -> bool {
+        if(!names.Object)
+            return false;
+        tTJSVariant entry_value;
+        const tjs_error entry_hr = names.PropGet(
+            0, layer_name.c_str(), layer_name.GetHint(), &entry_value,
+            names.ObjThis);
+        if(TJS_FAILED(entry_hr) || entry_value.Type() != tvtObject) {
+            if(TVPLayerInputTraceEnabled()) {
+                spdlog::info(
+                    "LayerIntf explicit resolver entry layer={} hr={} type={}",
+                    layer_name.AsStdString(), entry_hr,
+                    static_cast<int>(entry_value.Type()));
+            }
+            return false;
+        }
+        if(TVPLayerInputTraceEnabled()) {
+            spdlog::info("LayerIntf explicit resolver entry layer={} value={}",
+                         layer_name.AsStdString(),
+                         TVPVariantDebugString(entry_value));
+            TVPTraceObjectForButtonClick(
+                "explicit.resolver.entry",
+                entry_value.AsObjectClosureNoAddRef());
+        }
+        return try_object(entry_value.AsObjectClosureNoAddRef());
+    };
+
+    // Depending on which UI wrapper created the layer, the logical `names`
+    // table can be attached directly to the control owner, to `current`, or
+    // one level below `controlOwner`/`store`.  Probe those bounded paths
+    // rather than assuming only action.current.names exists.
+    auto find_in_current_names = [&](const tTJSVariantClosure &root) -> bool {
+        if(!root.Object)
+            return false;
+        if(try_object(root) || try_names_entry(root))
+            return true;
+
+        static const tjs_char *const nested_names[] = {
+            TJS_W("current"), TJS_W("names"), TJS_W("controlOwner"),
+            TJS_W("store"), TJS_W("action"), TJS_W("button"),
+            TJS_W("_button"), TJS_W("layer"),
+        };
+        for(const tjs_char *property : nested_names) {
+            ttstr property_name(property);
+            tTJSVariant nested_value;
+            if(TJS_FAILED(root.PropGet(0, property_name.c_str(),
+                                       property_name.GetHint(), &nested_value,
+                                       root.ObjThis)) ||
+               nested_value.Type() != tvtObject)
+                continue;
+            const tTJSVariantClosure nested =
+                nested_value.AsObjectClosureNoAddRef();
+            if(try_object(nested) || try_names_entry(nested))
+                return true;
+
+            // A control owner often exposes `names` below `current`; probe
+            // that second hop while keeping traversal deterministic.
+            tTJSVariant names_value;
+            static ttstr names_name(TJS_W("names"));
+            if(TJS_SUCCEEDED(nested.PropGet(0, names_name.c_str(),
+                                            names_name.GetHint(),
+                                            &names_value, nested.ObjThis)) &&
+               names_value.Type() == tvtObject &&
+               try_names_entry(names_value.AsObjectClosureNoAddRef()))
+                return true;
+        }
+        return false;
+    };
+
+    if(find_in_current_names(action))
+        return true;
+
+    const tTJSVariantClosure button = TVPResolveLayerButtonObject(layer);
+    if(find_in_current_names(button))
+        return true;
+
+    // A few UI wrappers expose the action owner through an `action` member
+    // instead of returning it directly.  Probe that one level only.
+    if(action.Object) {
+        static ttstr action_name(TJS_W("action"));
+        tTJSVariant action_value;
+        if(TJS_SUCCEEDED(action.PropGet(0, action_name.c_str(),
+                                        action_name.GetHint(), &action_value,
+                                        action.ObjThis)) &&
+           action_value.Type() == tvtObject &&
+           find_in_current_names(action_value.AsObjectClosureNoAddRef()))
+            return true;
+    }
+
+    return false;
+}
+
+static bool TVPEvaluateLayerExplicitExpression(
+    tTJSNI_BaseLayer *layer, const tTJSVariantClosure &object,
+    const ttstr &expression) {
+    if(!layer || !object.Object || expression.IsEmpty())
+        return false;
+
+    static ttstr eval_name(TJS_W("eval"));
+    tTJSVariant expression_arg(expression);
+    tTJSVariant *args[1] = {&expression_arg};
+    tTJSVariant result;
+    try {
+        const tjs_error eval_hr = object.FuncCall(
+            0, eval_name.c_str(), eval_name.GetHint(), &result, 1, args,
+            object.ObjThis);
+        if(TJS_SUCCEEDED(eval_hr))
+            return true;
+    } catch(eTJSScriptError &) {
+    } catch(eTJS &) {
+    } catch(...) {
+    }
+
+    // Plain data objects do not implement eval.  Execute through the current
+    // script owner, which is the same context used by KAG's expression path.
+    result.Clear();
+    return TVPExecuteCafeStellaCurrentExpression(expression, layer, layer, 0,
+                                                  &result);
 }
 
 //---------------------------------------------------------------------------
@@ -6202,6 +7211,30 @@ void tTJSNI_BaseLayer::FireButtonClick() {
             return false;
         };
 
+        // Page-sheet copy buttons keep their command on the logical entry
+        // (`current.names[<layer>].exp`) instead of on the native button
+        // wrapper.  `_evalOnClick` is still present on that wrapper, but for
+        // these entries it is only a no-op bookkeeping hook.  Evaluate the
+        // resolved entry expression before invoking that hook so commands
+        // such as `Current.cmd("changeGroup/0")` are not swallowed.
+        {
+            tTJSVariantClosure expression_object;
+            ttstr expression;
+            if(TVPResolveLayerExplicitExpression(this, expression_object,
+                                                 expression)) {
+                const bool evaluated = TVPEvaluateLayerExplicitExpression(
+                    this, expression_object, expression);
+                if(TVPLayerInputTraceEnabled()) {
+                    spdlog::info(
+                        "LayerIntf FireButtonClick explicit exp layer={} expr={} evaluated={}",
+                        GetName().AsStdString(), expression.AsStdString(),
+                        evaluated ? "yes" : "no");
+                }
+                if(evaluated)
+                    return;
+            }
+        }
+
         if(eval_expression_property(TJS_W("exp"), "exp"))
             return;
 
@@ -6270,27 +7303,49 @@ void tTJSNI_BaseLayer::FireButtonClick() {
         if(invoke_current_default())
             return;
 
-        // Native KAG button layers dispatch their bound link expression
-        // through the button object first. Calling the control owner's
-        // generic onButtonClick handler before this can report success while
-        // leaving expressions such as Current.cmd("toggleBGSel") untouched.
-        // Keep the owner callback as a compatibility fallback for button
-        // implementations that do not expose _evalOnClick.
+        // Native KAG button layers dispatch an inline `onclick` expression
+        // through the button object.  Page-sheet copies are different: their
+        // wrapper still exposes `_evalOnClick`, but `onclick` is void and the
+        // actual command lives in the control owner's `links[linkNum]`
+        // record.  Do not treat that no-op method as a successful dispatch;
+        // let the standard owner callback below process the link instead.
         static ttstr eval_click_name(TJS_W("_evalOnClick"));
-        tTJSVariant eval_result;
-        const tjs_error eval_hr =
-            button_object.FuncCall(0, eval_click_name.c_str(),
-                                   eval_click_name.GetHint(), &eval_result, 0,
-                                   nullptr, button_object.ObjThis);
-        if(TVPLayerInputTraceEnabled()) {
-            spdlog::info("LayerIntf FireButtonClick _evalOnClick layer={} hr={} result={}",
-                         GetName().AsStdString(), eval_hr,
-                         TJS_SUCCEEDED(eval_hr)
-                             ? TVPVariantDebugString(eval_result)
-                             : "<failed>");
+        tTJSVariant onclick_value;
+        static ttstr onclick_name(TJS_W("onclick"));
+        const tjs_error onclick_hr = button_object.PropGet(
+            0, onclick_name.c_str(), onclick_name.GetHint(), &onclick_value,
+            button_object.ObjThis);
+        bool has_inline_click = TJS_SUCCEEDED(onclick_hr) &&
+                                onclick_value.Type() != tvtVoid;
+        if(has_inline_click) {
+            try {
+                has_inline_click = !ttstr(onclick_value).IsEmpty();
+            } catch(...) {
+                has_inline_click = false;
+            }
         }
-        if(TJS_SUCCEEDED(eval_hr))
-            return;
+        if(has_inline_click) {
+            tTJSVariant eval_result;
+            const tjs_error eval_hr =
+                button_object.FuncCall(0, eval_click_name.c_str(),
+                                       eval_click_name.GetHint(), &eval_result,
+                                       0, nullptr, button_object.ObjThis);
+            if(TVPLayerInputTraceEnabled()) {
+                spdlog::info(
+                    "LayerIntf FireButtonClick _evalOnClick layer={} hr={} result={}",
+                    GetName().AsStdString(), eval_hr,
+                    TJS_SUCCEEDED(eval_hr)
+                        ? TVPVariantDebugString(eval_result)
+                        : "<failed>");
+            }
+            if(TJS_SUCCEEDED(eval_hr))
+                return;
+        } else if(TVPLayerInputTraceEnabled()) {
+            spdlog::info(
+                "LayerIntf FireButtonClick _evalOnClick skipped layer={} onclick_hr={} onclick_type={}",
+                GetName().AsStdString(), onclick_hr,
+                static_cast<int>(onclick_value.Type()));
+        }
 
         auto call_control_owner_button = [&]() -> bool {
             static ttstr control_owner_name(TJS_W("controlOwner"));
@@ -6326,38 +7381,74 @@ void tTJSNI_BaseLayer::FireButtonClick() {
             if(!control_owner.Object)
                 return false;
 
-            if(TVPLayerInputTraceEnabled()) {
-                static ttstr links_name(TJS_W("links"));
-                tTJSVariant links_value;
-                const tjs_error links_hr = control_owner.PropGet(
-                    0, links_name.c_str(), links_name.GetHint(), &links_value,
-                    control_owner.ObjThis);
-                if(TJS_SUCCEEDED(links_hr) &&
-                   links_value.Type() == tvtObject) {
-                    tTJSVariantClosure links =
-                        links_value.AsObjectClosureNoAddRef();
-                    tTJSVariant link_value;
-                    const tjs_int link_index =
-                        static_cast<tjs_int>(link_num.AsInteger());
-                    const tjs_error item_hr = links.PropGetByNum(
-                        0, link_index, &link_value, links.ObjThis);
-                    if(TJS_SUCCEEDED(item_hr) &&
-                       link_value.Type() == tvtObject) {
+            // LinkButtonLayerBase stores the actual command in
+            // controlOwner.links[linkNum].exp.  In the native engine the
+            // owner callback evaluates that record, but page-sheet copies in
+            // this game expose a lightweight owner whose callback only
+            // acknowledges the click.  Resolve and execute the link record
+            // here when the wrapper has no inline onclick.  This is the
+            // generic path used by gallery tabs, save/load entries and the
+            // title Continue/Additional buttons; it deliberately does not
+            // special-case any game or link number.
+            static ttstr links_name(TJS_W("links"));
+            tTJSVariant links_value;
+            const tjs_error links_hr = control_owner.PropGet(
+                0, links_name.c_str(), links_name.GetHint(), &links_value,
+                control_owner.ObjThis);
+            tTJSVariantClosure link_object;
+            ttstr link_expression;
+            bool have_link_expression = false;
+            if(TJS_SUCCEEDED(links_hr) && links_value.Type() == tvtObject) {
+                tTJSVariantClosure links =
+                    links_value.AsObjectClosureNoAddRef();
+                tTJSVariant link_value;
+                const tjs_int link_index =
+                    static_cast<tjs_int>(link_num.AsInteger());
+                const tjs_error item_hr = links.PropGetByNum(
+                    0, link_index, &link_value, links.ObjThis);
+                if(TJS_SUCCEEDED(item_hr) &&
+                   link_value.Type() == tvtObject) {
+                    link_object = link_value.AsObjectClosureNoAddRef();
+                    have_link_expression = TVPReadExplicitLayerExpression(
+                        link_object, &link_expression);
+                    if(TVPLayerInputTraceEnabled()) {
                         TVPTraceObjectForButtonClick(
-                            "button.fire.controlOwner.link",
-                            link_value.AsObjectClosureNoAddRef());
-                    } else {
+                            "button.fire.controlOwner.link", link_object);
                         spdlog::info(
-                            "LayerIntf FireButtonClick link inspect layer={} link={} hr={} type={}",
-                            GetName().AsStdString(), link_index, item_hr,
-                            static_cast<int>(link_value.Type()));
+                            "LayerIntf FireButtonClick link inspect layer={} link={} exp={}"
+                            " has_exp={}",
+                            GetName().AsStdString(), link_index,
+                            have_link_expression
+                                ? link_expression.AsStdString()
+                                : "<missing>",
+                            have_link_expression ? "yes" : "no");
                     }
-                } else {
+                } else if(TVPLayerInputTraceEnabled()) {
                     spdlog::info(
-                        "LayerIntf FireButtonClick links inspect layer={} hr={} type={}",
-                        GetName().AsStdString(), links_hr,
-                        static_cast<int>(links_value.Type()));
+                        "LayerIntf FireButtonClick link inspect layer={} link={} hr={} type={}",
+                        GetName().AsStdString(), link_index, item_hr,
+                        static_cast<int>(link_value.Type()));
                 }
+            } else if(TVPLayerInputTraceEnabled()) {
+                spdlog::info(
+                    "LayerIntf FireButtonClick links inspect layer={} hr={} type={}",
+                    GetName().AsStdString(), links_hr,
+                    static_cast<int>(links_value.Type()));
+            }
+
+            if(!has_inline_click && have_link_expression) {
+                const bool evaluated = TVPEvaluateLayerExplicitExpression(
+                    this, link_object, link_expression);
+                if(TVPLayerInputTraceEnabled()) {
+                    spdlog::info(
+                        "LayerIntf FireButtonClick link exp layer={} link={} expr={} evaluated={}",
+                        GetName().AsStdString(),
+                        TVPVariantDebugString(link_num),
+                        link_expression.AsStdString(),
+                        evaluated ? "yes" : "no");
+                }
+                if(evaluated)
+                    return true;
             }
 
             tTJSVariant *args[1] = { &link_num };
@@ -7298,6 +8389,53 @@ bool tTJSNI_BaseLayer::GetBltMethodFromOperationModeAndDrawFace(
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::FillRect(const tTVPRect &rect, tjs_uint32 color) {
+    if(TVPLayerErrorTraceTake() &&
+       (color == static_cast<tjs_uint32>(0x88000000u) ||
+        GetName().AsStdString().find("直太") != std::string::npos)) {
+        const auto *parent = GetParent();
+        spdlog::warn(
+            "Layer.error-placeholder fill layer={} parent={} face={} visible={} rect=({},{} {}x{}) color=0x{:08x} size={}x{}",
+            GetName().AsStdString(),
+            parent ? parent->GetName().AsStdString() : "<none>",
+            static_cast<int>(DrawFace), GetVisible(), rect.left, rect.top,
+            rect.get_width(), rect.get_height(),
+            static_cast<unsigned int>(color), GetImageWidth(),
+            GetImageHeight());
+    }
+    if(const char *trace = std::getenv("AETHERKIRI_MESSAGE_FRAME_TRACE");
+       trace && *trace && *trace != '0' && GetName() == TJS_W("colorframe")) {
+        spdlog::info(
+            "message-frame fill layer={} face={} rect=({},{} {}x{}) color=0x{:08x}",
+            GetName().AsNarrowStdString(), static_cast<int>(DrawFace), rect.left,
+            rect.top, rect.get_width(), rect.get_height(), color);
+    }
+    if(const char *trace = std::getenv("AETHERKIRI_LAYER_FILL_TRACE");
+       trace && *trace && *trace != '0') {
+        const std::string name = GetName().AsStdString();
+        const char *trace_all_value =
+            std::getenv("AETHERKIRI_LAYER_FILL_TRACE_ALL");
+        const bool trace_all = trace_all_value && *trace_all_value &&
+            *trace_all_value != '0';
+        static std::atomic<int> trace_count{0};
+        if(trace_count.load(std::memory_order_relaxed) < 4000 &&
+           (trace_all || name == "stage2" || name == "colorframe" ||
+           name.find("メッセージレイヤ") != std::string::npos ||
+           name == "表-背景")) {
+            trace_count.fetch_add(1, std::memory_order_relaxed);
+            spdlog::info(
+                "Layer.fill-trace name={} face={} type={} rect=({},{} {}x{}) "
+                "color=0x{:08x} neutral=0x{:08x} opacity={} visible={} "
+                "size={}x{} image={} holdAlpha={}",
+                name, static_cast<int>(DrawFace),
+                ttstr(GetTypeNameString()).AsStdString(), rect.left, rect.top,
+                rect.get_width(), rect.get_height(),
+                static_cast<unsigned int>(color),
+                static_cast<unsigned int>(GetNeutralColor()), GetOpacity(),
+                GetVisible() ? "yes" : "no", GetImageWidth(),
+                GetImageHeight(), MainImage ? "yes" : "no",
+                GetHoldAlpha() ? "yes" : "no");
+        }
+    }
     // fill given rectangle with given "color"
     // this method does not do transparent coloring.
 
@@ -7463,6 +8601,18 @@ void tTJSNI_BaseLayer::DrawText(tjs_int x, tjs_int y, const ttstr &text,
                                 tjs_int shadowlevel, tjs_uint32 shadowcolor,
                                 tjs_int shadowwidth, tjs_int shadowofsx,
                                 tjs_int shadowofsy) {
+    if(TVPLayerErrorTraceTake() &&
+       (text.AsStdString().find("直太") != std::string::npos ||
+        GetName().AsStdString().find("直太") != std::string::npos)) {
+        const auto *parent = GetParent();
+        spdlog::warn(
+            "Layer.error-placeholder text layer={} parent={} face={} visible={} pos=({},{}), text={} color=0x{:08x} opa={} size={}x{}",
+            GetName().AsStdString(),
+            parent ? parent->GetName().AsStdString() : "<none>",
+            static_cast<int>(DrawFace), GetVisible(), x, y,
+            text.AsStdString(), static_cast<unsigned int>(color), opa,
+            GetImageWidth(), GetImageHeight());
+    }
     // draw text
     if(!MainImage)
         TVPThrowExceptionMessage(TVPNotDrawableLayerType);
@@ -7613,7 +8763,6 @@ void tTJSNI_BaseLayer::PiledCopy(tjs_int dx, tjs_int dy, tTJSNI_BaseLayer *src,
     tTVPRect rect;
     if(!ClipDestPointAndSrcRect(dx, dy, rect, srcrect))
         return; // out of the clipping rect
-
     src->IncCacheEnabledCount(); // enable cache
     try {
         iTVPBaseBitmap *bmp = src->Complete(rect);
@@ -7653,6 +8802,30 @@ void tTJSNI_BaseLayer::CopyRect(tjs_int dx, tjs_int dy, iTVPBaseBitmap *src,
     tTVPRect rect;
     if(!ClipDestPointAndSrcRect(dx, dy, rect, srcrect))
         return; // out of the clipping rect
+    const bool dialog_trace = TVPDialogLayerTraceEnabled(this) &&
+                              TVPDialogLayerTraceTake();
+    if(dialog_trace) {
+        spdlog::info(
+            "Dialog.copyRect target={} face={} dest=({},{} {}x{}) srcSize={}x{} srcRect=({},{} {}x{}) targetSize={}x{} before=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}]",
+            GetName().AsStdString(), TVPLayerDebugDrawFaceName(DrawFace), dx,
+            dy, rect.get_width(), rect.get_height(),
+            src ? static_cast<int>(src->GetWidth()) : -1,
+            src ? static_cast<int>(src->GetHeight()) : -1, rect.left, rect.top,
+            rect.get_width(), rect.get_height(), GetImageWidth(),
+            GetImageHeight(), TVPStage2Sample(this, dx, dy),
+            TVPStage2Sample(this, dx + rect.get_width() / 2,
+                            dy + rect.get_height() / 2),
+            TVPStage2Sample(this, 14, 1241),
+            TVPStage2Sample(this, 200, 1270));
+    }
+    if(const char *trace = std::getenv("AETHERKIRI_ALPHA_TRACE");
+       trace && *trace && *trace != '0' && src && src->GetWidth() > 1000) {
+        spdlog::info(
+            "alpha copy target={} face={} targetSize={}x{} srcSize={}x{} srcRect={}x{}",
+            GetName().AsStdString(), TVPLayerDebugDrawFaceName(DrawFace),
+            GetImageWidth(), GetImageHeight(), src->GetWidth(),
+            src->GetHeight(), rect.get_width(), rect.get_height());
+    }
     if(TVPLayerDebugShouldLogBitmap(src, rect)) {
         spdlog::info(
             "Layer.copyRect face={} dest=({},{} {}x{}) srcSize={}x{} srcRect=({},{} {}x{})",
@@ -7718,6 +8891,17 @@ void tTJSNI_BaseLayer::CopyRect(tjs_int dx, tjs_int dy, iTVPBaseBitmap *src,
             break;
         case dfAuto:
             break;
+    }
+
+    if(dialog_trace) {
+        spdlog::info(
+            "Dialog.copyRect.after target={} dest=({},{} {}x{}) after=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}]",
+            GetName().AsStdString(), dx, dy, rect.get_width(),
+            rect.get_height(), TVPStage2Sample(this, dx, dy),
+            TVPStage2Sample(this, dx + rect.get_width() / 2,
+                            dy + rect.get_height() / 2),
+            TVPStage2Sample(this, 14, 1241),
+            TVPStage2Sample(this, 200, 1270));
     }
 
     tTVPRect ur = rect;
@@ -8258,6 +9442,22 @@ void tTJSNI_BaseLayer::OperateRect(tjs_int dx, tjs_int dy, iTVPBaseBitmap *src,
     tTVPRect rect;
     if(!ClipDestPointAndSrcRect(dx, dy, rect, srcrect))
         return; // out of the clipping rect
+    const bool dialog_trace = TVPDialogLayerTraceEnabled(this) &&
+                              TVPDialogLayerTraceTake();
+    if(dialog_trace) {
+        spdlog::info(
+            "Dialog.operateRect target={} face={} dest=({},{} {}x{}) srcSize={}x{} srcRect=({},{} {}x{}) targetSize={}x{} before=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}]",
+            GetName().AsStdString(), TVPLayerDebugDrawFaceName(DrawFace), dx,
+            dy, rect.get_width(), rect.get_height(),
+            src ? static_cast<int>(src->GetWidth()) : -1,
+            src ? static_cast<int>(src->GetHeight()) : -1, rect.left, rect.top,
+            rect.get_width(), rect.get_height(), GetImageWidth(),
+            GetImageHeight(), TVPStage2Sample(this, dx, dy),
+            TVPStage2Sample(this, dx + rect.get_width() / 2,
+                            dy + rect.get_height() / 2),
+            TVPStage2Sample(this, 14, 1241),
+            TVPStage2Sample(this, 200, 1270));
+    }
 
     // It does not throw an exception in this case perhaps
     if(mode == omAuto)
@@ -8287,6 +9487,17 @@ void tTJSNI_BaseLayer::OperateRect(tjs_int dx, tjs_int dy, iTVPBaseBitmap *src,
     ImageModified =
         MainImage->Blt(dx, dy, src, rect, met, opacity, HoldAlpha) ||
         ImageModified;
+
+    if(dialog_trace) {
+        spdlog::info(
+            "Dialog.operateRect.after target={} dest=({},{} {}x{}) after=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}]",
+            GetName().AsStdString(), dx, dy, rect.get_width(),
+            rect.get_height(), TVPStage2Sample(this, dx, dy),
+            TVPStage2Sample(this, dx + rect.get_width() / 2,
+                            dy + rect.get_height() / 2),
+            TVPStage2Sample(this, 14, 1241),
+            TVPStage2Sample(this, 200, 1270));
+    }
 
     tTVPRect ur = rect;
     ur.set_offsets(dx, dy);
@@ -9504,6 +10715,16 @@ void tTJSNI_BaseLayer::UpdateChildRegion(tTJSNI_BaseLayer *child,
                                          const tTVPComplexRect &region,
                                          bool tempupdate, bool targvisible,
                                          bool addtoprimary) {
+    if(TVPFlashTraceEnabled() && TVPFlashTraceRelated(child)) {
+        spdlog::info(
+            "Flash.update-child parent={} child={} temp={} target_visible={} "
+            "add_primary={} region_count={} child_visible={} child_opacity={} "
+            "parent_visible_children={}",
+            GetName().AsStdString(), child ? child->GetName().AsStdString() : "<null>",
+            tempupdate ? 1 : 0, targvisible ? 1 : 0, addtoprimary ? 1 : 0,
+            region.GetCount(), child && child->GetVisible() ? 1 : 0,
+            child ? child->GetOpacity() : -1, GetVisibleChildrenCount());
+    }
     // called by child.  add update rect subscribed in "rect"
 
     tTVPRect cr;
@@ -9666,9 +10887,11 @@ void tTJSNI_BaseLayer::BeforeCompletion() {
 
     // fire onPaint
     if(CallOnPaint) {
+        TVPTraceStage2Lifecycle("paint-dispatch-before", this);
         CallOnPaint = false;
         static ttstr eventname(TJS_W("onPaint"));
         TVPPostEvent(Owner, Owner, eventname, 0, TVP_EPT_IMMEDIATE, 0, nullptr);
+        TVPTraceStage2Lifecycle("paint-dispatch-after", this);
     }
 
     // for transition
@@ -10035,6 +11258,50 @@ void tTJSNI_BaseLayer::BltImage(iTVPBaseBitmap *dest,
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::DrawSelf(tTVPDrawable *target, tTVPRect &pr,
                                 tTVPRect &cr) {
+    if(const char *trace = std::getenv("AETHERKIRI_MESSAGE_FRAME_PIXELS");
+       trace && *trace && *trace != '0' && GetName() == TJS_W("colorframe") &&
+       MainImage) {
+        static std::atomic<bool> sampled{false};
+        if(!sampled.exchange(true, std::memory_order_relaxed)) {
+            auto *image = MainImage->GetTexture();
+            if(!image)
+                return;
+            const tjs_uint width = image->GetWidth();
+            const tjs_uint height = image->GetHeight();
+            tjs_uint min_alpha = 255;
+            tjs_uint max_alpha = 0;
+            tjs_uint nonzero = 0;
+            const tjs_uint step_x = std::max<tjs_uint>(1, width / 64);
+            const tjs_uint step_y = std::max<tjs_uint>(1, height / 64);
+            for(tjs_uint y = 0; y < height; y += step_y) {
+                const auto *row = static_cast<const tjs_uint32 *>(
+                    image->GetScanLineForRead(y));
+                if(!row)
+                    continue;
+                for(tjs_uint x = 0; x < width; x += step_x) {
+                    const tjs_uint32 pixel = row[x];
+                    const tjs_uint alpha = (pixel >> 24) & 0xff;
+                    min_alpha = std::min(min_alpha, alpha);
+                    max_alpha = std::max(max_alpha, alpha);
+                    if(alpha)
+                        ++nonzero;
+                }
+            }
+            auto sample = [&](tjs_uint x, tjs_uint y) -> tjs_uint32 {
+                if(x >= width || y >= height)
+                    return 0;
+                const auto *row = static_cast<const tjs_uint32 *>(
+                    image->GetScanLineForRead(y));
+                return row ? row[x] : 0;
+            };
+            spdlog::info(
+                "message-frame pixels size={}x{} minA={} maxA={} nonzero={} "
+                "samples=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}]",
+                width, height, min_alpha, max_alpha, nonzero,
+                sample(width / 2, 0), sample(width / 2, height / 4),
+                sample(width / 2, height / 2), sample(width / 2, height - 1));
+        }
+    }
     if(!MainImage) {
         if(DisplayType == ltOpaque) {
             // fill destination with specified color
@@ -10778,6 +12045,37 @@ void tTJSNI_BaseLayer::DrawCompleted(const tTVPRect &destrect,
                                      tTVPLayerType type, tjs_int opacity) {
     TVPTraceLayerDrawGpu("child-complete-in", this, destrect, cliprect,
                          CurrentDrawTarget);
+    if(const char *trace = std::getenv("AETHERKIRI_COMPOSE_LAYER_TRACE");
+       trace && *trace && *trace != '0' && bmp) {
+        const std::string name = GetName().AsStdString();
+        const bool focused = name.find("メッセージレイヤ") != std::string::npos ||
+            name == "colorframe" || name == "colorbase" ||
+            name == "colorover" || name == "frame" || name == "truss" ||
+            name.find("/02") != std::string::npos ||
+            name.find("<01") != std::string::npos ||
+            name.find("<02") != std::string::npos;
+        if(focused) {
+            static std::atomic<int> count{0};
+            if(count.fetch_add(1, std::memory_order_relaxed) < 3000) {
+                const tjs_int sx = std::clamp(
+                    cliprect.left + cliprect.get_width() / 2, 0,
+                    static_cast<tjs_int>(bmp->GetWidth()) - 1);
+                const tjs_int sy = std::clamp(
+                    cliprect.top + cliprect.get_height() / 2, 0,
+                    static_cast<tjs_int>(bmp->GetHeight()) - 1);
+                spdlog::info(
+                    "LayerCompose layer={} display={} type={} opacity={} "
+                    "dest=({},{} {}x{}) clip=({},{} {}x{}) bmp={}x{} "
+                    "src=0x{:08x}",
+                    name, ttstr(GetTypeNameString()).AsStdString(),
+                    static_cast<int>(type), opacity, destrect.left,
+                    destrect.top, destrect.get_width(), destrect.get_height(),
+                    cliprect.left, cliprect.top, cliprect.get_width(),
+                    cliprect.get_height(), bmp->GetWidth(), bmp->GetHeight(),
+                    bmp->GetPoint(sx, sy));
+            }
+        }
+    }
     // called from children to notify that the image drawing is
     // completed. blend the image to the target unless bmp is the same
     // as UpdateBitmapForChild.
@@ -11035,8 +12333,18 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
                     // rendered E-mote texture must be composited as one
                     // complete frame. Otherwise the presented double buffer
                     // can alternate between old and new character contents.
+                    // Keep an opt-in full-frame diagnostic for hosts where a
+                    // partial completion may expose an invalid cached region.
+                    // This is intentionally environment-gated so normal
+                    // rendering retains the dirty-rectangle fast path.
+                    const char *force_full_env =
+                        std::getenv("AETHERKIRI_FORCE_FULL_FRAME_REDRAW");
+                    const bool force_full =
+                        force_full_env && *force_full_env && *force_full_env != '0';
                     InternalComplete2_GPU(
-                        TVPConsumeFullGpuCompletionRequest() ? Rect : dirty,
+                        (force_full || TVPConsumeFullGpuCompletionRequest())
+                            ? Rect
+                            : dirty,
                         drawable, false);
                     updateRegion.Clear();
                 }
@@ -11519,6 +12827,27 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
             TransSrc->SetPosition(tl, tt);
             this->SetVisible(sv);
             TransSrc->SetVisible(tv);
+
+            // Exchange swaps the layer tree, not the compositor cache.  A
+            // divisible transition has just populated CacheBitmap with the
+            // pre-exchange tree; leaving CacheRecalcRegion empty therefore
+            // presents that stale (often transparent) snapshot as the new
+            // page.  Mark both exchanged roots dirty before releasing the
+            // transition source so the next completion rebuilds their full
+            // composition with the new children and visibility.
+            auto invalidate_exchanged_root = [](tTJSNI_BaseLayer *root) {
+                if(!root || root->Shutdown)
+                    return;
+                tTVPRect full(0, 0, root->Rect.get_width(),
+                              root->Rect.get_height());
+                root->CacheRecalcRegion.Or(full);
+                root->Update(false);
+            };
+            tTJSNI_BaseLayer *exchanged_source = TransSrc;
+            if(exchanged_source)
+                exchanged_source->TransDest = nullptr;
+            invalidate_exchanged_root(this);
+            invalidate_exchanged_root(exchanged_source);
         }
 
         bool transsrcalive = false;
@@ -11865,6 +13194,11 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         tjs_int width = 0;
         tjs_int height = 0;
         TVPGetImageSize(ttstr(*param[0]), width, height);
+        if(const char *trace = std::getenv("AETHERKIRI_VIRTUAL_SIZE_TRACE");
+           trace && *trace && *trace != '0') {
+            spdlog::info("VirtualSizeTrace Layer.fetchImageSize name={} -> {}x{}",
+                         ttstr(*param[0]).AsStdString(), width, height);
+        }
 
         if(result) {
             iTJSDispatch2 *array = TJSCreateArrayObject();
@@ -13061,6 +14395,19 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             mat.d = *param[9];
             mat.tx = *param[10];
             mat.ty = *param[11];
+            if(TVPAffineTraceEnabled()) {
+                const std::string targetName = _this->GetName().AsStdString();
+                spdlog::info(
+                    "Layer.affineCopy call target={} targetPtr={} srcPtr={} "
+                    "srcSize={}x{} rect=({},{} {}x{}) mat=[{},{},{},{},{},{}] "
+                    "type={} clear={}",
+                    targetName, static_cast<const void *>(_this),
+                    static_cast<const void *>(src), src->GetWidth(),
+                    src->GetHeight(), srcrect.left, srcrect.top,
+                    srcrect.get_width(), srcrect.get_height(), mat.a, mat.b,
+                    mat.c, mat.d, mat.tx, mat.ty, static_cast<int>(type),
+                    clear ? 1 : 0);
+            }
             _this->AffineCopy(mat, src, srcrect, type, clear);
         } else {
             // points mode
@@ -13071,6 +14418,19 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
             points[1].y = *param[9];
             points[2].x = *param[10];
             points[2].y = *param[11];
+            if(TVPAffineTraceEnabled()) {
+                const std::string targetName = _this->GetName().AsStdString();
+                spdlog::info(
+                    "Layer.affineCopy call target={} targetPtr={} srcPtr={} "
+                    "srcSize={}x{} rect=({},{} {}x{}) points=[{},{},{},{},{},{}] "
+                    "type={} clear={}",
+                    targetName, static_cast<const void *>(_this),
+                    static_cast<const void *>(src), src->GetWidth(),
+                    src->GetHeight(), srcrect.left, srcrect.top,
+                    srcrect.get_width(), srcrect.get_height(), points[0].x,
+                    points[0].y, points[1].x, points[1].y, points[2].x,
+                    points[2].y, static_cast<int>(type), clear ? 1 : 0);
+            }
             _this->AffineCopy(points, src, srcrect, type, clear);
         }
 
@@ -13787,6 +15147,7 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
                                 /*var. type*/ tTJSNI_Layer);
 
+        TVPLayerEventSourceScope event_source_scope(_this);
         tTJSVariantClosure obj = _this->GetActionOwnerNoAddRef();
         TVPTraceLayerInputEvent("onClick", _this, obj);
         if(obj.Object) {
@@ -13818,6 +15179,27 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                              nullptr);
             TVPTraceLayerActionResult("onClick", _this, hr, result);
             TVPTraceKagState("after onClick action");
+
+            // A copied UI button receives the generic layer action, but its
+            // command is stored in current.names[<layer>].exp.  The native
+            // action path does not expose that metadata, so follow the
+            // original UI contract after dispatching the event.  Restrict
+            // this to a distinct metadata object; wrappers that own their
+            // expression are handled by the regular action implementation.
+            tTJSVariantClosure expression_object;
+            ttstr expression;
+            if(TVPResolveLayerExplicitExpression(_this, expression_object,
+                                                 expression) &&
+               expression_object.Object != obj.Object) {
+                const bool evaluated = TVPEvaluateLayerExplicitExpression(
+                    _this, expression_object, expression);
+                if(TVPLayerInputTraceEnabled()) {
+                    spdlog::info(
+                        "LayerIntf onClick explicit exp fallback layer={} expr={} evaluated={}",
+                        _this->GetName().AsStdString(), expression.AsStdString(),
+                        evaluated ? "yes" : "no");
+                }
+            }
         }
 
         return TJS_S_OK;
@@ -15288,7 +16670,26 @@ TJS_END_NATIVE_PROP_GETTER
 TJS_BEGIN_NATIVE_PROP_SETTER {
     TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
                             /*var. type*/ tTJSNI_Layer);
+    const ttstr old_name = _this->GetName();
     _this->SetName(*param);
+    const bool new_is_chflash =
+        ttstr(*param) == TJS_W("chflash");
+    if(TVPFlashTraceEnabled() &&
+       (new_is_chflash || old_name.IsEmpty() ||
+        old_name == TJS_W("chflash"))) {
+        spdlog::info("Flash.name layer={} ptr={} old={} new={} visible={} "
+                     "opacity={} image={} pcenter=0x{:08x}",
+                     _this->GetName().AsStdString(), static_cast<void *>(_this),
+                     old_name.AsStdString(), _this->GetName().AsStdString(),
+                     _this->GetVisible() ? "yes" : "no", _this->GetOpacity(),
+                     _this->GetMainImage() ? "yes" : "no",
+                     TVPStage2Sample(_this, _this->GetMainImage()
+                                             ? static_cast<tjs_int>(_this->GetMainImage()->GetWidth() / 2)
+                                             : 0,
+                                     _this->GetMainImage()
+                                         ? static_cast<tjs_int>(_this->GetMainImage()->GetHeight() / 2)
+                                         : 0));
+    }
     return TJS_S_OK;
 }
 TJS_END_NATIVE_PROP_SETTER

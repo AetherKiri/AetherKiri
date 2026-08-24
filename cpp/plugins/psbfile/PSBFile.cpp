@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #if defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
 #define AETHERKIRI_HAS_EXECINFO 1
@@ -54,6 +55,82 @@ namespace PSB {
             data[1] = static_cast<std::uint8_t>(value >> 8);
             data[2] = static_cast<std::uint8_t>(value >> 16);
             data[3] = static_cast<std::uint8_t>(value >> 24);
+        }
+
+        // Scenario PSBs are compiled data rather than text.  Keep an
+        // opt-in, bounded tree dump beside the parser so compatibility work
+        // can inspect authored layer commands without changing normal game
+        // behaviour.  This is intentionally disabled unless the caller sets
+        // AETHERKIRI_PSB_DUMP_PATH.
+        void DumpPSBValue(const std::shared_ptr<IPSBValue> &value,
+                          std::ostream &out, const std::string &path,
+                          std::size_t &nodes, const std::size_t maxNodes,
+                          const int depth = 0) {
+            if(!value || nodes++ >= maxNodes) {
+                return;
+            }
+            const auto indent = std::string(static_cast<std::size_t>(depth) * 2,
+                                            ' ');
+            if(auto dict = std::dynamic_pointer_cast<PSBDictionary>(value)) {
+                out << indent << path << " {\n";
+                for(const auto &[key, child] : *dict) {
+                    DumpPSBValue(child, out, path + "." + key, nodes,
+                                 maxNodes, depth + 1);
+                    if(nodes >= maxNodes)
+                        break;
+                }
+                out << indent << "}\n";
+                return;
+            }
+            if(auto list = std::dynamic_pointer_cast<PSBList>(value)) {
+                out << indent << path << " [\n";
+                std::size_t index = 0;
+                for(const auto &child : *list) {
+                    DumpPSBValue(child, out,
+                                 path + "[" + std::to_string(index++) + "]",
+                                 nodes, maxNodes, depth + 1);
+                    if(nodes >= maxNodes)
+                        break;
+                }
+                out << indent << "]\n";
+                return;
+            }
+            std::string repr;
+            try {
+                repr = value->toString();
+            } catch(...) {
+                repr = "<toString threw>";
+            }
+            constexpr std::size_t maxString = 320;
+            if(repr.size() > maxString)
+                repr.resize(maxString), repr += "...";
+            out << indent << path << " = " << repr << "\n";
+        }
+
+        void MaybeDumpPSBTree(const ttstr &sourceName,
+                              const std::shared_ptr<IPSBValue> &root) {
+            const char *dumpPath = std::getenv("AETHERKIRI_PSB_DUMP_PATH");
+            if(!dumpPath || !*dumpPath || !root)
+                return;
+            const char *match = std::getenv("AETHERKIRI_PSB_DUMP_MATCH");
+            const std::string source = sourceName.AsStdString();
+            if(match && *match && source.find(match) == std::string::npos)
+                return;
+            std::size_t maxNodes = 200000;
+            if(const char *limit = std::getenv("AETHERKIRI_PSB_DUMP_MAX_NODES")) {
+                try {
+                    maxNodes = std::max<std::size_t>(1, std::stoull(limit));
+                } catch(...) {
+                }
+            }
+            std::ofstream out(dumpPath, std::ios::app);
+            if(!out)
+                return;
+            out << "\n=== PSB " << source << " type="
+                << static_cast<int>(root->getType()) << " ===\n";
+            std::size_t nodes = 0;
+            DumpPSBValue(root, out, "$", nodes, maxNodes);
+            out << "=== END PSB nodes=" << nodes << " ===\n";
         }
 
         void NormalizeObjectHeader(std::uint8_t *data, const size_t size,
@@ -774,6 +851,7 @@ namespace PSB {
         }
 
         afterLoad();
+        MaybeDumpPSBTree(sourceName, _root);
         if(traceLoad) {
             LOGGER->info(
                 "PSBFile load ok: path={} type={} strings={} resources={} "

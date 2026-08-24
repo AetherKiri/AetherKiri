@@ -1078,6 +1078,7 @@ bool AndroidRequestExternalStoragePermission() {
 struct GodotGpuPipelineState {
     RID blend_shader;
     RID blend_pipeline;
+    RID fill_source_texture;
     RID alpha_blend_a_shader;
     RID alpha_blend_a_pipeline;
     RID blend2_shader;
@@ -4421,11 +4422,32 @@ bool DispatchGodotGpuBlend(RenderingDevice *rd,
         return false;
     }
 
+    RID source = op->src;
+    if (op->mode == TVP_GODOT_GPU_BLEND_FILL_ARGB) {
+        // FillARGB does not sample its source, but the shared blend shader
+        // still declares one. Binding the destination RID as both the
+        // readonly source and writable destination is undefined on
+        // Metal/Vulkan and can leave transparent text surfaces uncleared.
+        // Bind a harmless non-aliased image instead while keeping the clear
+        // in the ordered compute batch.
+        if (!g_gpu_pipeline_state->fill_source_texture.is_valid()) {
+            Ref<RDTextureView> view;
+            view.instantiate();
+            TypedArray<PackedByteArray> initial_data;
+            g_gpu_pipeline_state->fill_source_texture = rd->texture_create(
+                MakeRgbaTextureFormat(1, 1), view, initial_data);
+        }
+        if (!g_gpu_pipeline_state->fill_source_texture.is_valid()) {
+            return false;
+        }
+        source = g_gpu_pipeline_state->fill_source_texture;
+    }
+
     RID uniform_set = GetCachedBlendUniformSet(
         rd,
         alpha_blend_a ? g_gpu_pipeline_state->alpha_blend_a_shader
                       : g_gpu_pipeline_state->blend_shader,
-        op->src, op->dst);
+        source, op->dst);
     if (!uniform_set.is_valid()) return false;
     (void)uniform_sets;
 
@@ -7829,6 +7851,9 @@ void ReleaseGodotGpuPipeline() {
     if (g_gpu_pipeline_state == nullptr) return;
     if (rd != nullptr) {
         ClearGodotGpuUniformSetCache(rd);
+        if (g_gpu_pipeline_state->fill_source_texture.is_valid()) {
+            rd->free_rid(g_gpu_pipeline_state->fill_source_texture);
+        }
         if (g_gpu_pipeline_state->blend_pipeline.is_valid()) {
             rd->free_rid(g_gpu_pipeline_state->blend_pipeline);
         }

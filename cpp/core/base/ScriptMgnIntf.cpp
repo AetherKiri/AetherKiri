@@ -2449,8 +2449,125 @@ const tjs_char *TVPGetD3DEmoteGpuBatchPatchScript() {
         "})();\r\n");
 }
 
+// KAG action.tjs routes animated properties through a script helper named
+// getProperty/setProperty.  In the desktop TJS implementation a function
+// invocation receives an object/global proxy as `this`; probing
+// target.getProperty from that helper can therefore resolve the helper itself
+// through the global fallback instead of reaching a native layer property.
+// That leaves MoveAction values in the script object while the actual layer
+// (opacity/visible/geometry) never changes.  Preserve the original helper for
+// custom action targets, but route layer-like targets through their native
+// property access directly.
+static const tjs_char *TVPGetActionPropertyRoutingPatchScript() {
+    return TJS_W(
+        "(function() {\r\n"
+        "\tif (typeof global.getProperty == \"undefined\" || typeof global.setProperty == \"undefined\") return;\r\n"
+        "\tif (typeof global.__aetherKiriOrigGetProperty != \"undefined\") return;\r\n"
+        "\tglobal.__aetherKiriOrigGetProperty = &global.getProperty;\r\n"
+        "\tglobal.__aetherKiriOrigSetProperty = &global.setProperty;\r\n"
+        "\tglobal.__aetherKiriIsLayerActionTarget = function(target) {\r\n"
+        "\t\ttry {\r\n"
+        "\t\t\tvar type = target.type;\r\n"
+        "\t\t\treturn typeof type == \"Integer\" && type >= 0 && type <= 28;\r\n"
+        "\t\t} catch(e) {}\r\n"
+        "\t\treturn false;\r\n"
+        "\t};\r\n"
+        "\tglobal.getProperty = function(target, name, a2=0, a3=0) {\r\n"
+        "\t\tif (target !== void && name !== void && name.charAt(0) != \"$\" && global.__aetherKiriIsLayerActionTarget(target)) {\r\n"
+        "\t\t\ttry { return target[name]; } catch(e) {}\r\n"
+        "\t\t}\r\n"
+        "\t\treturn (global.__aetherKiriOrigGetProperty incontextof this)(target, name, a2, a3);\r\n"
+        "\t};\r\n"
+        "\tglobal.setProperty = function(target, name, value, a3=0, a4=0) {\r\n"
+        "\t\tif (target !== void && name !== void && name.charAt(0) != \"$\" && global.__aetherKiriIsLayerActionTarget(target)) {\r\n"
+        "\t\t\ttry { target[name] = value; return; } catch(e) {}\r\n"
+        "\t\t}\r\n"
+        "\t\treturn (global.__aetherKiriOrigSetProperty incontextof this)(target, name, value, a3, a4);\r\n"
+        "\t};\r\n"
+        "})();\r\n");
+}
+
+// The game's language selector (and several save/load/option sheets) are
+// constructed through PulldownPanelLayer.  Keep an opt-in trace around the
+// generic panel lifecycle so a failed sheet can be distinguished from a
+// missing image pack.  This is deliberately diagnostic-only; the wrappers
+// return the original result and do not alter panel state.
+static const tjs_char *TVPGetDialogLifecycleTracePatchScript() {
+    return TJS_W(
+        "(function() {\r\n"
+        "\tif (typeof global.ScrollablePulldownBase != \"undefined\" &&\r\n"
+        "\t\ttypeof global.ScrollablePulldownBase.__aetherKiriTraceUiloaded == \"undefined\" &&\r\n"
+        "\t\ttypeof global.ScrollablePulldownBase.onUiloaded != \"undefined\") {\r\n"
+        "\t\tglobal.ScrollablePulldownBase.__aetherKiriTraceUiloaded = &global.ScrollablePulldownBase.onUiloaded;\r\n"
+        "\t\tglobal.ScrollablePulldownBase.onUiloaded = function(a0=void, a1=void) {\r\n"
+        "\t\t\tvar ret = (global.ScrollablePulldownBase.__aetherKiriTraceUiloaded incontextof this)(a0, a1);\r\n"
+        "\t\t\ttry {\r\n"
+        "\t\t\t\tvar n = this.names; var d = this.dragscr;\r\n"
+        "\t\t\t\tvar itemSummary = \"\";\r\n"
+        "\t\t\t\tfor (var i = 0; i < 8; i++) { var key = \"item\" + i; itemSummary += key + \"=\" + (n[key] !== void ? typeof n[key] : \"missing\") + \";\"; }\r\n"
+        "\t\t\t\tif (typeof global.kag != \"undefined\" && typeof global.kag.warning != \"undefined\") global.kag.warning(\"AetherKiri uiloaded name=\" + this.name + \" items=\" + (this.items !== void ? this.items.count : \"missing\") + \" dragscr=\" + (d !== void ? typeof d : \"missing\") + \" names=\" + (n !== void ? typeof n : \"missing\") + \" \" + itemSummary);\r\n"
+        "\t\t\t} catch(e) {}\r\n"
+        "\t\t\treturn ret;\r\n"
+        "\t\t};\r\n"
+        "\t}\r\n"
+        "\tif (typeof global.PulldownPanelLayer != \"undefined\" &&\r\n"
+        "\t\ttypeof global.PulldownPanelLayer.__aetherKiriTraceOpen == \"undefined\") {\r\n"
+        "\t\tglobal.PulldownPanelLayer.__aetherKiriTraceOpen = &global.PulldownPanelLayer.open;\r\n"
+        "\t\tglobal.PulldownPanelLayer.open = function(duration=void) {\r\n"
+        "\t\t\tvar ret = (global.PulldownPanelLayer.__aetherKiriTraceOpen incontextof this)(duration);\r\n"
+        "\t\t\ttry { if (typeof global.kag != \"undefined\" && typeof global.kag.warning != \"undefined\") global.kag.warning(\"AetherKiri panel.open name=\" + this.name + \" visible=\" + this.visible + \" enabled=\" + this.enabled + \" window=\" + typeof this.window + \" panelLayer=\" + typeof this.window.panelLayer); } catch(e) {}\r\n"
+        "\t\t\treturn ret;\r\n"
+        "\t\t};\r\n"
+        "\t}\r\n"
+        "\tif (typeof global.KAGWindow != \"undefined\" &&\r\n"
+        "\t\ttypeof global.KAGWindow.__aetherKiriTraceShowPanel == \"undefined\" &&\r\n"
+        "\t\ttypeof global.KAGWindow.showPanel != \"undefined\") {\r\n"
+        "\t\tglobal.KAGWindow.__aetherKiriTraceShowPanel = &global.KAGWindow.showPanel;\r\n"
+        "\t\tglobal.KAGWindow.showPanel = function(panel, absolute=void) {\r\n"
+        "\t\t\tvar ret = (global.KAGWindow.__aetherKiriTraceShowPanel incontextof this)(panel, absolute);\r\n"
+        "\t\t\ttry { if (typeof global.kag != \"undefined\" && typeof global.kag.warning != \"undefined\") global.kag.warning(\"AetherKiri showPanel panel=\" + typeof panel + \" name=\" + panel.name + \" visible=\" + panel.visible + \" enabled=\" + panel.enabled + \" current=\" + this.panelLayer.name + \" showing=\" + this.panelShowing); } catch(e) {}\r\n"
+        "\t\t\treturn ret;\r\n"
+        "\t\t};\r\n"
+        "\t}\r\n"
+        "\tif (typeof global.uiloadEntry != \"undefined\" &&\r\n"
+        "\t\ttypeof global.__aetherKiriTraceUiloadEntry == \"undefined\") {\r\n"
+        "\t\tglobal.__aetherKiriTraceUiloadEntry = &global.uiloadEntry;\r\n"
+        "\t\tglobal.uiloadEntry = function(a0=void, a1=void, a2=void, a3=void, a4=void, a5=void, a6=void) {\r\n"
+        "\t\t\ttry {\r\n"
+        "\t\t\t\tvar names = (a1 !== void ? a1 : void); var result = (a2 !== void ? a2 : void); var cfg = (a3 !== void ? a3 : void); var evals = (a5 !== void ? a5 : void);\r\n"
+        "\t\t\t\tvar s = \"AetherKiri uiloadEntry names=\" + (names !== void ? names.count : \"missing\") + \" item=\" + (result !== void && result.item !== void ? \"yes\" : \"no\") + \" item0=\" + (result !== void && result.item0 !== void ? \"yes\" : \"no\") + \" evals=\" + (evals !== void ? typeof evals : \"missing\") + \" evalsCount=\" + (evals !== void && evals.count !== void ? evals.count : \"na\") + \" extra=\" + (cfg !== void && cfg.extratype !== void ? typeof cfg.extratype : \"missing\");\r\n"
+        "\t\t\t\tif (typeof global.kag != \"undefined\" && typeof global.kag.warning != \"undefined\") global.kag.warning(s);\r\n"
+        "\t\t\t} catch(e) {}\r\n"
+        "\t\t\treturn (global.__aetherKiriTraceUiloadEntry incontextof this)(a0, a1, a2, a3, a4, a5, a6);\r\n"
+        "\t\t};\r\n"
+        "\t}\r\n"
+        "})();\r\n");
+}
+
 static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
     const ttstr lower = shortname.AsLowerCase();
+    // The stand/utility scripts are bytecode in the affected title.  Keep a
+    // narrowly scoped, opt-in snapshot at the point each block has finished
+    // executing; this distinguishes a missing global registration from a
+    // later class/prototype dispatch failure without changing script state.
+    if((lower == TJS_W("utils.tjs") ||
+        lower == TJS_W("standinformation.tjs") ||
+        lower == TJS_W("world.tjs")) && [] {
+           const char *value = std::getenv("AETHERKIRI_STAND_CONTRACT_TRACE");
+           return value && *value && *value != '0';
+       }()) {
+        try {
+            tTJSVariant snapshot;
+            TVPExecuteExpression(
+                TJS_W("(function(){var g=global;return \"utils=\"+typeof g.loadConfigFile+\",map=\"+typeof g.loadConfigMap+\",find=\"+typeof g.findConfigFiles+\",stand=\"+typeof g.getStandInformation+\",psd=\"+typeof g.getExistPSDImageName+\",SI=\"+typeof g.StandInformation+\",KW=\"+typeof g.KAGWorldPlugin;})()"),
+                &snapshot);
+            spdlog::info("AetherKiri stand contract after {}: {}",
+                         shortname.AsStdString(), ttstr(snapshot).AsStdString());
+        } catch(...) {
+            spdlog::warn("AetherKiri stand contract snapshot failed after {}",
+                         shortname.AsStdString());
+        }
+    }
     const bool patchWorld = lower == TJS_W("world.tjs");
     const bool patchD3DLayer = lower == TJS_W("d3d.tjs");
     const bool patchD3DMotion =
@@ -2460,9 +2577,76 @@ static void TVPApplyPostScriptCompatibilityPatches(const ttstr &shortname) {
         lower == TJS_W("affinesourcemotion.tjs");
     const bool patchMessageText = lower == TJS_W("msghack.tjs");
     const bool patchQuickMenu = lower == TJS_W("quickmenu.tjs");
+    const bool patchSimpleAnim = lower == TJS_W("simpleanim.tjs");
+    const bool patchAction = lower == TJS_W("action.tjs");
+    const bool patchDialogTrace = lower == TJS_W("dialoglayer.tjs") ||
+                                  lower == TJS_W("mainwindow.tjs");
+    const bool patchUiAutoTrace = lower == TJS_W("uiloader.tjs") ||
+                                  lower == TJS_W("saveload.tjs") ||
+                                  lower == TJS_W("uimain.tjs") ||
+                                  ([] {
+                                      const char *trace = std::getenv("AETHERKIRI_DIALOG_TRACE");
+                                      return trace && *trace && *trace != '0';
+                                  })();
     if(!patchWorld && !patchD3DLayer && !patchD3DMotion &&
-       !patchD3DEmote && !patchMessageText && !patchQuickMenu)
+       !patchD3DEmote && !patchMessageText && !patchQuickMenu &&
+       !patchSimpleAnim && !patchAction && !patchDialogTrace &&
+       !patchUiAutoTrace)
         return;
+
+    if(patchDialogTrace || patchUiAutoTrace) {
+        const char *trace = std::getenv("AETHERKIRI_DIALOG_TRACE");
+        if(trace && *trace && *trace != '0') {
+            try {
+                TVPExecuteScript(TVPGetDialogLifecycleTracePatchScript(),
+                                 TJS_W("AetherKiriDialogLifecycleTrace"), 0,
+                                 (tTJSVariant *)nullptr);
+                spdlog::info("Applied opt-in dialog lifecycle trace");
+            } catch(...) {
+                spdlog::warn("Failed to apply dialog lifecycle trace");
+            }
+        }
+    }
+
+    // The title's simpleanim classes are script-defined and are loaded on
+    // demand.  Keep an opt-in snapshot of their class dispatch after the
+    // bytecode has executed; this distinguishes a missing script from a
+    // broken inherited member lookup without affecting normal runs.
+    if(patchSimpleAnim) {
+        const char *trace = std::getenv("AETHERKIRI_SIMPLEANIM_TRACE");
+        if(trace && *trace && *trace != '0') {
+            try {
+                tTJSVariant result;
+                TVPExecuteExpression(
+                    TJS_W("(function(){var a=global.GUIAnimButtonObject;"
+                          "var b=global.GUIAnimButtonObjectBase;"
+                          "var c=global.GUIAnimButtonForMsg;"
+                          "var d=global.SystemButtonLayer;"
+                          "return \"GUI=\"+typeof a+\",setup=\"+"
+                          "typeof a.setup+\",getNum=\"+typeof a.getNum+"
+                          "\",Base=\"+typeof b+\",BaseSetup=\"+"
+                          "typeof b.setup+\",Msg=\"+typeof c+\",MsgPaint=\"+"
+                          "typeof c.onPaint+\",Sys=\"+typeof d+\",SysPaint=\"+"
+                          "typeof d.onPaint;})()"),
+                    &result);
+                spdlog::info("simpleanim dispatch snapshot: {}",
+                             ttstr(result).AsStdString());
+            } catch(...) {
+                spdlog::warn("simpleanim dispatch snapshot failed");
+            }
+        }
+        return;
+    }
+
+    if(patchAction) try {
+        TVPExecuteScript(TVPGetActionPropertyRoutingPatchScript(),
+                         TJS_W("AetherKiriActionPropertyRoutingPatch"), 0,
+                         (tTJSVariant *)nullptr);
+        spdlog::info("Applied compatibility hook for action layer properties");
+    } catch(...) {
+        spdlog::warn(
+            "Failed to apply compatibility hook for action layer properties");
+    }
 
     if(patchD3DEmote) try {
         TVPExecuteScript(

@@ -914,13 +914,18 @@ namespace {
         if(!isYuzuTitlePresentationMotion(motionPath)) {
             return false;
         }
+        const auto label = renderDebugLowercase(nodeLabel);
         const auto source = renderDebugLowercase(sourceKey);
-        if(source != "src/title/white" &&
-           source.find("/title/white") == std::string::npos &&
-           source.find("/white") == std::string::npos) {
-            return false;
-        }
-        return true;
+        // Only the full-canvas solid-white transition layer is a utility
+        // surface.  Authored resources such as "White Gradation|right" and
+        // "White Gradation|bottom" are ordinary translucent presentation
+        // layers; classifying every path containing "/white" as a utility
+        // drops those edge gradients and exposes the transparent render
+        // target as a black border.
+        return label == "white" &&
+            (source == "src/title/white" ||
+             source.find("/title/white") != std::string::npos ||
+             source == "src/normal/white");
     }
 
     bool isYuzuTitleStencilUtilityLayer(const std::string &motionPath,

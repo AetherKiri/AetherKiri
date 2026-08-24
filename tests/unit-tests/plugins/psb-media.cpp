@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "LayerCompletionCoordinates.h"
@@ -28,6 +29,32 @@ TEST_CASE("PSB media preserves small WebP images before raw-pixel fallback") {
         CHECK(encoded.size() > 9 * 3 * 4);
         CHECK(PSB::detail::IsSupportedImageHeader(encoded));
     }
+}
+
+TEST_CASE("PSB media resolves authored motion slices by family and order") {
+    PSB::PSBMedia media;
+    media.addMotionSliceSet(
+        "motion/mono_loop.mtn",
+        {"motion/mono_loop.mtn/1.tlg", "motion/mono_loop.mtn/2.tlg"},
+        1280, 720);
+
+    std::string resolved;
+    REQUIRE(media.resolveMotionSliceStorage("mono_truss.tlg", resolved));
+    CHECK(resolved == "motion/mono_loop.mtn/1.tlg");
+    REQUIRE(media.resolveMotionSliceStorage("mono_frame.tlg", resolved));
+    CHECK(resolved == "motion/mono_loop.mtn/2.tlg");
+
+    // Resolution is stable for repeated calls and does not turn unrelated
+    // bare files into motion aliases.
+    REQUIRE(media.resolveMotionSliceStorage("mono_truss.tlg", resolved));
+    CHECK(resolved == "motion/mono_loop.mtn/1.tlg");
+    int canvasWidth = 0;
+    int canvasHeight = 0;
+    REQUIRE(media.getMotionSliceCanvasSize(
+        "psb://motion/mono_loop.mtn/1.tlg", canvasWidth, canvasHeight));
+    CHECK(canvasWidth == 1280);
+    CHECK(canvasHeight == 720);
+    CHECK_FALSE(media.resolveMotionSliceStorage("other.png", resolved));
 }
 
 TEST_CASE("PIMG composites normalize selected layers to their own bounds") {

@@ -12,6 +12,7 @@
 #include <mutex>
 #include <sstream>
 #include <unordered_map>
+#include <spdlog/spdlog.h>
 
 namespace {
 
@@ -1191,6 +1192,32 @@ void GodotRenderManager::OperateRect(iTVPRenderMethod *method, iTVPTexture2D *ta
         !RectAbsSizeMatches(rctar, textures[0].second) &&
         (stretch_type_ & stTypeMask) == stNearest;
 
+    // The layer-manager draw buffer is consumed through the CPU-visible
+    // bitmap interface after each completion.  GPU rect operations on this
+    // target are especially unsafe when a source aliases the destination:
+    // Metal/Vulkan do not define a read-only image and writable storage image
+    // bound to the same resource.  Keep this one semantic boundary on the
+    // software renderer; regular layer textures retain their GPU fast paths.
+    if (dst != nullptr && dst->IsCpuCompositeTarget()) {
+        if (method_name == "Copy") {
+            CountCopyFallbackReason("cpu_composite_target");
+        }
+        CountMethodFallback(method);
+        SoftwareDelegate()->OperateRect(delegate_method, tar, reftar, rctar,
+                                        textures);
+        dst->MarkCpuDirty();
+        return;
+    }
+
+    if(const char *trace = std::getenv("AETHERKIRI_RECT_TRACE");
+       trace && *trace && *trace != '0' && rctar.get_width() >= 1000 &&
+       rctar.get_height() >= 400) {
+        spdlog::info("rect-op method={} target={} src_count={} rect=({},{} {}x{})",
+                     method_name, static_cast<const void *>(tar), textures.size(),
+                     rctar.left, rctar.top, rctar.get_width(),
+                     rctar.get_height());
+    }
+
     if (method_name == "Copy" && dst != nullptr && src != nullptr &&
         IsGpuRectFastPathEnabled("Copy") &&
         ShouldUseGpuRectFastPath(rctar, method_name.c_str(), dst, src) &&
@@ -1653,6 +1680,14 @@ void GodotRenderManager::OperateTriangles(iTVPRenderMethod *method, int nTriangl
     auto *src = textures.size() == 1
         ? dynamic_cast<GodotTexture2D *>(textures[0].first)
         : nullptr;
+    if (dst != nullptr && dst->IsCpuCompositeTarget()) {
+        CountMethodFallback(method);
+        SoftwareDelegate()->OperateTriangles(
+            godot_method != nullptr ? godot_method->Delegate() : method,
+            nTriangles, target, reftar, rcclip, pttar, textures);
+        dst->MarkCpuDirty();
+        return;
+    }
     if (method_name == "Copy") {
         if (dst != nullptr && src != nullptr &&
             IsGpuRectFastPathEnabled("Copy") &&

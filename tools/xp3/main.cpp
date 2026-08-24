@@ -6,11 +6,17 @@
 
 #include "XP3Archive.h"
 
+// The standalone archive viewer does not start the full TVP environment, but
+// the shared debug logger pulled in by the plugin archive references this
+// query.  Keep the tool self-contained.
+bool TVPIsConsoleLogFileEnabled() { return false; }
+
 namespace fs = std::filesystem;
 
 static constexpr size_t TVP_LOCAL_TEMP_COPY_BLOCK_SIZE = 65536 * 2;
 
-void extractArchive(const std::string &file, const std::string &destDir) {
+void extractArchive(const std::string &file, const std::string &destDir,
+                    const std::string &match, bool listOnly) {
     const std::unique_ptr<tTVPArchive> arc{ TVPOpenArchive(ttstr{ file },
                                                            false) };
     const tjs_uint count = arc->GetCount();
@@ -19,6 +25,13 @@ void extractArchive(const std::string &file, const std::string &destDir) {
 #ifndef _WIN32
         name.Replace(TJS_W('\\'), TJS_W('/'), true);
 #endif
+        const std::string nameString = name.AsNarrowStdString();
+        if(!match.empty() && nameString.find(match) == std::string::npos)
+            continue;
+        if(listOnly) {
+            std::cout << nameString << "\n";
+            continue;
+        }
         const std::unique_ptr<tTJSBinaryStream> src{ arc->CreateStreamByIndex(
             i) };
         const ttstr &destFile = ttstr{ destDir } + name;
@@ -101,6 +114,12 @@ int main(int argc, char *argv[]) {
         .nargs(argparse::nargs_pattern::at_least_one);
 
     program.add_argument("-o", "--output").help("output dir path");
+    program.add_argument("--match")
+        .help("only list/extract entries containing this substring")
+        .default_value(std::string{});
+    program.add_argument("--list")
+        .help("list matching entries without extracting")
+        .flag();
 
     try {
         program.parse_args(argc, argv);
@@ -122,6 +141,9 @@ int main(int argc, char *argv[]) {
         output_dir = program.get<std::string>("-o");
     }
 
+    const auto match = program.get<std::string>("--match");
+    const bool list_only = program.get<bool>("--list");
+
     const auto input_files = program.get<std::vector<std::string>>("files");
     for(const auto &input : input_files) {
         fs::path file(normalizePath(input));
@@ -131,7 +153,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        extractArchive(file.string(), fs::path(normalizePath(output_dir) / fs::path(file.stem().string()) / "").string());
+        extractArchive(file.string(), fs::path(normalizePath(output_dir) / fs::path(file.stem().string()) / "").string(), match, list_only);
     }
 
     return 0;
