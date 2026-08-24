@@ -105,9 +105,37 @@ func _warmup() -> void:
 
 
 func _run_loop() -> void:
+    var acc_tick := 0.0
+    var acc_tex := 0.0
+    var max_tick := 0.0
+    var max_tex := 0.0
+    var frames := 0
+    var last_us := Time.get_ticks_usec()
+    var acc_frame := 0.0
     while true:
+        var now_us := Time.get_ticks_usec()
+        acc_frame += float(now_us - last_us)
+        last_us = now_us
+        var t0 := Time.get_ticks_usec()
         player.tick(1.0 / 60.0)
+        var t1 := Time.get_ticks_usec()
         var tex: Texture2D = player.update_frame_texture()
         if tex != null:
             rect.texture = tex
+        var t2 := Time.get_ticks_usec()
+        acc_tick += float(t1 - t0)
+        acc_tex += float(t2 - t1)
+        max_tick = maxf(max_tick, float(t1 - t0) * 0.001)
+        max_tex = maxf(max_tex, float(t2 - t1) * 0.001)
+        frames += 1
+        if frames % 120 == 0:
+            print("[wa2gui][perf] fps=%.1f frame_avg=%.1fms tick_avg=%.1fms tick_max=%.1fms tex_avg=%.1fms tex_max=%.1fms" % [
+                1000.0 * 120.0 / acc_frame, acc_frame / 120.0,
+                acc_tick / 120.0, max_tick, acc_tex / 120.0, max_tex])
+            print("[wa2gui][rt] %s" % player.get_renderer_info())
+            acc_frame = 0.0
+            acc_tick = 0.0
+            acc_tex = 0.0
+            max_tick = 0.0
+            max_tex = 0.0
         await process_frame
